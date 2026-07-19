@@ -7,6 +7,7 @@
 
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
+import { parseCliArgs } from './cli-args.mts';
 import type { CollaboratorPermissionCache } from './collaborator-permission.mts';
 import {
   collaboratorPermission,
@@ -66,6 +67,32 @@ interface LiveStatusDigestArgs {
   skipClaimCheck?: boolean;
   includeBody?: boolean;
 }
+
+// Flag-spec keys stay the dashed literal on purpose (never bare keys like
+// `issue:`): tests/flag-name-matrix.test.mts scans this file's *compiled*
+// .mjs source text for quoted flag literals such as the --issue spec key
+// below. See cli-args.mts's module header for the full invariant.
+const LIVE_STATUS_DIGEST_FLAG_SPEC = {
+  '--help': { type: 'boolean', short: 'h', default: false },
+  '--issue': { type: 'string' },
+  '--pr': { type: 'string' },
+  '--repo': { type: 'string' },
+  '--dry-run': { type: 'boolean', default: false },
+  '--apply': { type: 'boolean', default: false },
+  '--phase': { type: 'string' },
+  '--claim': { type: 'string' },
+  '--branch': { type: 'string' },
+  '--last-checked': { type: 'string' },
+  '--open-blockers': { type: 'string' },
+  '--next-action': { type: 'string' },
+  '--authoritative-by': { type: 'string' },
+  '--claim-issue': { type: 'string' },
+  '--claim-id': { type: 'string' },
+  '--agent-id': { type: 'string' },
+  '--skip-claim-check': { type: 'boolean', default: false },
+  '--include-body': { type: 'boolean', default: false },
+  '--format': { type: 'string', default: 'json' },
+} as const;
 
 /** Duplicate-digest evidence row in the upsert plan and report. */
 interface LiveStatusDigestDuplicate {
@@ -686,78 +713,85 @@ function writeReport(report: LiveStatusDigestReport, format: string): void {
 }
 
 function parseArgs(argv: string[]): LiveStatusDigestArgs {
-  const parsed: LiveStatusDigestArgs = {
-    format: 'json',
+  // No test in this file asserts the pre-migration message text or the
+  // no-colon "unknown argument X" / "X requires a value" spelling (see
+  // #1451's PR description), so a parse failure adopts the wrapper's
+  // uniform message. The exit-code-2 contract IS preserved: catch the
+  // wrapper's thrown Error here and route it through this file's own
+  // fail() exactly as every other malformed-input path already does.
+  let parsed: ReturnType<typeof parseCliArgs>;
+  try {
+    parsed = parseCliArgs(argv, LIVE_STATUS_DIGEST_FLAG_SPEC);
+  } catch (error) {
+    fail((error as Error).message);
+  }
+  const { values, help } = parsed;
+
+  // The pre-migration readValue() used `!value` (not `=== undefined`), so
+  // an explicit empty-string value was rejected the same as an omitted
+  // flag for EVERY flag in this file. parseCliArgs accepts an empty
+  // string (matching bare node:util parseArgs), so this check restores
+  // that exact uniform pre-migration behavior. The message matches
+  // parseCliArgs' own "missing value for argument: <flag>" phrasing
+  // (Copilot review finding on PR #1467) so an empty-string value and an
+  // omitted/flag-shaped value report the same failure style.
+  const requireNonEmpty = (
+    token: string | undefined,
+    flag: string,
+  ): string | undefined => {
+    if (token === '') {
+      fail(`missing value for argument: ${flag}`);
+    }
+    return token;
   };
 
-  for (let index = 0; index < argv.length; index += 1) {
-    const arg = argv[index];
-    switch (arg) {
-      case '--help':
-      case '-h':
-        parsed.help = true;
-        break;
-      case '--issue':
-        parsed.issue = readValue(argv, ++index, arg);
-        break;
-      case '--pr':
-        parsed.pr = readValue(argv, ++index, arg);
-        break;
-      case '--repo':
-        parsed.repo = readValue(argv, ++index, arg);
-        break;
-      case '--dry-run':
-        parsed.dryRun = true;
-        break;
-      case '--apply':
-        parsed.apply = true;
-        break;
-      case '--phase':
-        parsed.phase = readValue(argv, ++index, arg);
-        break;
-      case '--claim':
-        parsed.claim = readValue(argv, ++index, arg);
-        break;
-      case '--branch':
-        parsed.branch = readValue(argv, ++index, arg);
-        break;
-      case '--last-checked':
-        parsed.lastChecked = readValue(argv, ++index, arg);
-        break;
-      case '--open-blockers':
-        parsed.openBlockers = readValue(argv, ++index, arg);
-        break;
-      case '--next-action':
-        parsed.nextAction = readValue(argv, ++index, arg);
-        break;
-      case '--authoritative-by':
-        parsed.authoritativeBy = readValue(argv, ++index, arg);
-        break;
-      case '--claim-issue':
-        parsed.claimIssue = readValue(argv, ++index, arg);
-        break;
-      case '--claim-id':
-        parsed.claimId = readValue(argv, ++index, arg);
-        break;
-      case '--agent-id':
-        parsed.agentId = readValue(argv, ++index, arg);
-        break;
-      case '--skip-claim-check':
-        parsed.skipClaimCheck = true;
-        break;
-      case '--include-body':
-        parsed.includeBody = true;
-        break;
-      case '--format':
-        parsed.format = readValue(argv, ++index, arg);
-        if (!['json', 'table'].includes(parsed.format)) {
-          fail('--format must be json or table');
-        }
-        break;
-      default:
-        fail(`unknown argument ${arg}`);
-    }
+  const format = requireNonEmpty(values.format as string, '--format') as string;
+  if (!['json', 'table'].includes(format)) {
+    fail('--format must be json or table');
   }
+
+  const parsedArgs: LiveStatusDigestArgs = {
+    format,
+    help,
+    issue: requireNonEmpty(values.issue as string | undefined, '--issue'),
+    pr: requireNonEmpty(values.pr as string | undefined, '--pr'),
+    repo: requireNonEmpty(values.repo as string | undefined, '--repo'),
+    dryRun: values['dry-run'] as boolean,
+    apply: values.apply as boolean,
+    phase: requireNonEmpty(values.phase as string | undefined, '--phase'),
+    claim: requireNonEmpty(values.claim as string | undefined, '--claim'),
+    branch: requireNonEmpty(values.branch as string | undefined, '--branch'),
+    lastChecked: requireNonEmpty(
+      values['last-checked'] as string | undefined,
+      '--last-checked',
+    ),
+    openBlockers: requireNonEmpty(
+      values['open-blockers'] as string | undefined,
+      '--open-blockers',
+    ),
+    nextAction: requireNonEmpty(
+      values['next-action'] as string | undefined,
+      '--next-action',
+    ),
+    authoritativeBy: requireNonEmpty(
+      values['authoritative-by'] as string | undefined,
+      '--authoritative-by',
+    ),
+    claimIssue: requireNonEmpty(
+      values['claim-issue'] as string | undefined,
+      '--claim-issue',
+    ),
+    claimId: requireNonEmpty(
+      values['claim-id'] as string | undefined,
+      '--claim-id',
+    ),
+    agentId: requireNonEmpty(
+      values['agent-id'] as string | undefined,
+      '--agent-id',
+    ),
+    skipClaimCheck: values['skip-claim-check'] as boolean,
+    includeBody: values['include-body'] as boolean,
+  };
 
   for (const flag of [
     ['phase', '--phase'],
@@ -767,22 +801,14 @@ function parseArgs(argv: string[]): LiveStatusDigestArgs {
     ['nextAction', '--next-action'],
     ['authoritativeBy', '--authoritative-by'],
   ] as const) {
-    if (!parsed[flag[0]]) {
-      if (!parsed.help) {
+    if (!parsedArgs[flag[0]]) {
+      if (!parsedArgs.help) {
         fail(`${flag[1]} is required`);
       }
     }
   }
 
-  return parsed;
-}
-
-function readValue(argv: string[], index: number, flag: string): string {
-  const value = argv[index];
-  if (!value || value.startsWith('--')) {
-    fail(`${flag} requires a value`);
-  }
-  return value;
+  return parsedArgs;
 }
 
 function parsePositiveInteger(value: string | undefined, flag: string): number {

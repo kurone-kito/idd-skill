@@ -22,6 +22,8 @@ import { resolve } from 'node:path';
 
 import { ghText } from './gh-exec.mts';
 import {
+  renderActivationNonceMarker,
+  renderAdvisoryRerollMarker,
   renderAdvisoryWaitMarker,
   renderAdvisoryWaitRecoveryMarker,
   renderClaimedByMarker,
@@ -33,10 +35,12 @@ import {
 export const MARKER_TYPES = [
   'claim',
   'unclaim',
+  'activation-nonce',
   'watermark',
   'baseline',
   'advisory',
   'advisory-recovery',
+  'advisory-reroll',
 ] as const;
 
 export type MarkerType = (typeof MARKER_TYPES)[number];
@@ -84,6 +88,13 @@ export function buildMarkerBody(type: string, fields: MarkerFields): string {
         claimId: fields['claim-id'],
         timestamp: fields.timestamp,
       });
+    case 'activation-nonce':
+      return renderActivationNonceMarker({
+        agentId: fields['agent-id'],
+        claimId: fields['claim-id'],
+        nonce: fields.nonce,
+        timestamp: fields.timestamp,
+      });
     case 'watermark':
       return renderReviewWatermarkMarker({
         agentId: fields['agent-id'],
@@ -107,6 +118,12 @@ export function buildMarkerBody(type: string, fields: MarkerFields): string {
       });
     case 'advisory-recovery':
       return renderAdvisoryWaitRecoveryMarker({
+        agentId: fields['agent-id'],
+        headSha: fields['head-sha'],
+        timestamp: fields.timestamp,
+      });
+    case 'advisory-reroll':
+      return renderAdvisoryRerollMarker({
         agentId: fields['agent-id'],
         headSha: fields['head-sha'],
         timestamp: fields.timestamp,
@@ -307,11 +324,13 @@ its claim-revalidation gate before --apply, as the manual POST path it replaces.
 Per-type field flags:
   claim              --agent-id --claim-id --supersedes --timestamp --branch
   unclaim            --agent-id --claim-id --timestamp
+  activation-nonce   --agent-id --claim-id --nonce --timestamp
   watermark          --agent-id --claim-id --head-sha --max-activity-at --total-item-count --ci-completed-at
                      (or --agent-id --claim-id --from-pr <n> [--expected-head-sha <sha>])
   baseline           --agent-id --claim-id --sha
   advisory           --agent-id --head-sha --timestamp
   advisory-recovery  --agent-id --head-sha --timestamp
+  advisory-reroll    --agent-id --head-sha --timestamp
 
 --from-pr forwards optional --trusted-marker-logins / --advisory-bot-logins to
 the snapshot child so its counts match the manual review-activity-snapshot path.

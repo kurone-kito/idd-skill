@@ -53,14 +53,36 @@ your repository installed that companion, its specificity target
 documents these three classes in detail; the terminology here stands
 on its own otherwise.)
 
+Classify models on **two independent axes**, not context size alone:
+
+1. **Context sufficiency** — can the window hold the entry file,
+   `idd-overview-core.instructions.md`, the routed phase file, and tool
+   schemas at once?
+2. **Self-direction capability** — can the model plan and track a
+   multi-turn loop across claim / work / PR / review steps, not merely
+   answer one well-specified prompt?
+
+A large context window does **not** imply self-direction. Field
+experience has included models that clear a 100K+ context bar yet fail
+to drive a multi-step agentic loop without external orchestration.
+Likewise, self-direction and **local runtime speed** on the adopter's
+hardware are separate considerations: a model that clears both
+capability axes can still be impractical if it is too slow on
+CPU-only (or other constrained) local hardware. This guide does not
+pin a normative tokens-per-second floor; operators should measure on
+their own targets.
+
 - **Frontier** and **middle-tier cloud** classes need no additional
   guardrails beyond the rest of this guide; this is the assumed
-  default for every phase file above.
+  default for every phase file above. They are expected to clear both
+  axes under normal operator hardware.
 - **Lightweight local or compact cloud** (the supported low tier):
-  large-context, low-reasoning models such as the phi-4-mini class
-  (roughly 128K context, tool calling supported, but weak adherence to
-  long multi-file instruction sets). Confine this tier to
-  narrowly-scoped roles under operator supervision:
+  models that have **both** sufficient context **and** demonstrated
+  self-direction for contained, fully-specified tasks, but still show
+  weak adherence to long multi-file instruction sets (the phi-4-mini
+  class — roughly 128K context, tool calling supported — is the
+  reference example). Confine this tier to narrowly-scoped roles under
+  operator supervision:
   - executing a single, fully-specified `idd:ready` issue rather than
     Discover's open-ended candidate selection;
   - preferring a deterministic helper command (see
@@ -68,13 +90,24 @@ on its own otherwise.)
     judgment wherever one exists for the current step;
   - drafting output for human review rather than running the
     autonomous merge phases.
-- **Unsupported**: a model whose context window cannot hold the entry
-  file, `idd-overview-core.instructions.md`, the routed phase file, and
-  tool schemas at the same time — the qwen2.5-coder-1.5b class (roughly
-  32K context) is the practical cutoff example. Below this floor, IDD
-  execution is out of scope; such a model can still be a downstream
-  _consumer_ of an artifact this workflow produces, just not an IDD
-  execution agent.
+- **Large-context, non-self-directing** (named out-of-band class):
+  models that clear the context-sufficiency bar but cannot reliably
+  self-direct a multi-turn execution loop. They are **not** admitted
+  into the supported lightweight tier by context size alone. Prefer a
+  harness-orchestrated execution mode for this class (the model stays a
+  step-level worker; the harness owns phase routing, tool selection,
+  and acceptance gates). That path is an open investigation rather than
+  a shipped workflow profile — track the corresponding investigation
+  issue in the repository that filed it (for example
+  [kurone-kito/idd-skill#1555](https://github.com/kurone-kito/idd-skill/issues/1555)
+  in the source repository).
+- **Unsupported (context floor)**: a model whose context window cannot
+  hold the entry file, `idd-overview-core.instructions.md`, the routed
+  phase file, and tool schemas at the same time — the
+  qwen2.5-coder-1.5b class (roughly 32K context) is the practical
+  cutoff example. Below this floor, IDD execution is out of scope; such
+  a model can still be a downstream _consumer_ of an artifact this
+  workflow produces, just not an IDD execution agent.
 
 ### Weak-model guardrails
 
@@ -337,6 +370,17 @@ Running this variant safely requires:
   reports its final result back to the orchestrator instead of
   independently entering F5's Discover step, so Discover/Claim ownership
   stays with the orchestrator alone.
+- **The delegation brief carries the claim token verbatim, nonce
+  included — and the worker actively revalidates it.** The worker
+  adopts the orchestrator's already-verified `{agent-id}` / `{claim-id}`
+  pair as its own for the run (mirroring forced-handoff adopt-verbatim),
+  carrying the orchestrator's current activation nonce rather than
+  minting a new one — a minted nonce would collide with the
+  orchestrator's for the same `{claim-id}` and flag legitimate
+  delegation as a second activation. Before each mutation, the worker
+  recomputes the nonce winner and confirms it still matches the carried
+  value, the same safety check a self-posting session performs. See
+  [Orchestrator delegation](../.github/instructions/idd-claim.instructions.md#orchestrator-delegation).
 - **Serialized worktree/clone lifecycle operations when workers share
   one clone.** Concurrent `git fetch` / `git worktree add` / `git
   worktree remove` / local-`main` updates from the same primary clone

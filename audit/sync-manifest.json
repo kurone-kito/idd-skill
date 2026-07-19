@@ -37,6 +37,13 @@
       "requireSyncPairs": true
     },
     {
+      "id": "idd-lite-instruction-template-set",
+      "sourceGlob": "idd-template/.github/instructions/lite/idd-*.instructions.md",
+      "targetGlob": ".github/instructions/lite/idd-*.instructions.md",
+      "match": "basename",
+      "requireSyncPairs": true
+    },
+    {
       "id": "idd-template-docs-set",
       "sourceGlob": "idd-template/docs/idd-*.md",
       "targetGlob": "docs/idd-*.md",
@@ -168,7 +175,7 @@
         ".github/instructions/idd-overview-core.instructions.md",
         ".github/instructions/idd-suitability.instructions.md"
       ],
-      "limitBytes": 100400
+      "limitBytes": 112700
     },
     {
       "id": "bundle-resume",
@@ -188,7 +195,22 @@
         ".github/instructions/idd-overview-core.instructions.md",
         ".github/instructions/idd-work.instructions.md"
       ],
-      "limitBytes": 41300
+      "limitBytes": 45000
+    },
+    {
+      "id": "bundle-work-lite",
+      "description": "Lite work path (weak-model condensed profile): .github/instructions/lite/idd-work-lite.instructions.md only — self-contained; no overview/appendix. Scaffolding for #1541; files filled when #1542 lands.",
+      "files": [],
+      "limitBytes": 24000
+    },
+    {
+      "id": "bundle-resume-lite",
+      "description": "Lite resume path: idd-resume-lite + idd-resume-stall-lite (helper-first, self-contained).",
+      "files": [
+        ".github/instructions/lite/idd-resume-lite.instructions.md",
+        ".github/instructions/lite/idd-resume-stall-lite.instructions.md"
+      ],
+      "limitBytes": 16000
     },
     {
       "id": "bundle-review",
@@ -202,7 +224,7 @@
         ".github/instructions/idd-review-snapshot.instructions.md",
         ".github/instructions/idd-review-triage.instructions.md"
       ],
-      "limitBytes": 129400
+      "limitBytes": 143000
     },
     {
       "id": "bundle-merge",
@@ -216,7 +238,7 @@
         ".github/instructions/idd-overview-core.instructions.md",
         ".github/instructions/idd-pre-merge.instructions.md"
       ],
-      "limitBytes": 95900
+      "limitBytes": 109600
     }
   ],
   "docBudgetGuard": {
@@ -391,9 +413,21 @@
       "mode": "exact"
     },
     {
+      "id": "idd-resume-lite-instructions",
+      "source": "idd-template/.github/instructions/lite/idd-resume-lite.instructions.md",
+      "target": ".github/instructions/lite/idd-resume-lite.instructions.md",
+      "mode": "exact"
+    },
+    {
       "id": "idd-resume-stall-instructions",
       "source": "idd-template/.github/instructions/idd-resume-stall.instructions.md",
       "target": ".github/instructions/idd-resume-stall.instructions.md",
+      "mode": "exact"
+    },
+    {
+      "id": "idd-resume-stall-lite-instructions",
+      "source": "idd-template/.github/instructions/lite/idd-resume-stall-lite.instructions.md",
+      "target": ".github/instructions/lite/idd-resume-stall-lite.instructions.md",
       "mode": "exact"
     },
     {

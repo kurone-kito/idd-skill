@@ -15,6 +15,7 @@
 
 import { execFileSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
+import { parseCliArgs } from './cli-args.mts';
 
 export type VerifyInstallDepsOutcome =
   | { status: 'present-after-install' }
@@ -37,6 +38,23 @@ export function classifyInstallDepsOutcome(
     ? { status: 'recovered-after-retry' }
     : { status: 'missing-after-retry' };
 }
+
+// Flag-spec keys stay the dashed literal on purpose (never bare keys like
+// `key-binary:`): tests/flag-name-matrix.test.mts scans this file's
+// *compiled* .mjs source text for quoted flag literals such as the
+// --key-binary spec key below. See cli-args.mts's module header for the
+// full invariant.
+//
+// Declared here, above the import.meta.main trigger below, rather than
+// alongside parseArgs further down: the trigger calls runCli() ->
+// parseArgs() synchronously at module-evaluation time, and a `const`
+// declared after that point is still in the temporal dead zone when the
+// trigger fires.
+const VERIFY_INSTALL_DEPS_FLAG_SPEC = {
+  '--key-binary': { type: 'string' },
+  '--install-command': { type: 'string' },
+  '--help': { type: 'boolean', short: 'h' },
+} as const;
 
 if (import.meta.main) {
   runCli();
@@ -126,39 +144,12 @@ interface ParsedArgs {
 }
 
 function parseArgs(argv: string[]): ParsedArgs {
-  const parsed: ParsedArgs = {
-    keyBinary: null,
-    installCommand: null,
-    help: false,
+  const { values, help } = parseCliArgs(argv, VERIFY_INSTALL_DEPS_FLAG_SPEC);
+  return {
+    keyBinary: (values['key-binary'] as string | undefined) ?? null,
+    installCommand: (values['install-command'] as string | undefined) ?? null,
+    help,
   };
-
-  for (let index = 0; index < argv.length; index += 1) {
-    const token = argv[index];
-    const value = argv[index + 1];
-    const requireValue = (): string => {
-      if (value === undefined || value.startsWith('--')) {
-        throw new Error(`missing value for argument: ${token}`);
-      }
-      return value;
-    };
-    if (token === '--key-binary') {
-      parsed.keyBinary = requireValue();
-      index += 1;
-      continue;
-    }
-    if (token === '--install-command') {
-      parsed.installCommand = requireValue();
-      index += 1;
-      continue;
-    }
-    if (token === '--help' || token === '-h') {
-      parsed.help = true;
-      continue;
-    }
-    throw new Error(`unknown argument: ${token}`);
-  }
-
-  return parsed;
 }
 
 function printHelp(): void {

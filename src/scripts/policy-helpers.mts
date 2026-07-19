@@ -81,6 +81,7 @@ interface RawConfig {
     blockedByHumanLabelName?: unknown;
     needsDecisionLabelName?: unknown;
   };
+  mergeGate?: { soloCodeownerAdminFallback?: unknown };
 }
 
 const HELPER_RUNTIME_PROFILES = new Set([
@@ -118,6 +119,16 @@ const LEGACY_ADVISORY_CAP_ROUTE_ALIASES = new Map([
 // of normalizePolicyConfig(...).ciWait (see #1359).
 const CI_RERUN_POLICIES = new Set(['rerun-once', 'hold']);
 const LABEL_FRESHNESS_MODES = new Set(['presence-only', 'event-freshness']);
+// #1521: `auto-admin-retry` is the distributed default (F3 retries once with
+// `--admin` when the Gate checklist is fully green, the only merge-command
+// failure is the self-CODEOWNER "base branch policy prohibits the merge"
+// error, and the topology fact proves the PR author is the sole eligible
+// codeowner). `hold-and-report` opts a repository into the pre-#1521
+// unconditional hold-and-report behavior instead.
+const MERGE_GATE_SOLO_CODEOWNER_ADMIN_FALLBACK_MODES = new Set([
+  'auto-admin-retry',
+  'hold-and-report',
+]);
 const ISO_DURATION_RE =
   /^P(?=\d|T\d)(?:\d+D)?(?:T(?=\d)(?:\d+H)?(?:\d+M)?(?:\d+S)?)?$/;
 const ADVISORY_WHOLE_MINUTE_DURATION_RE =
@@ -210,6 +221,10 @@ export const POLICY_DEFAULTS = Object.freeze({
     roadmapLabelName: 'roadmap',
     blockedByHumanLabelName: 'status:blocked-by-human',
     needsDecisionLabelName: 'status:needs-decision',
+  }),
+  // Added in #1521 (solo-CODEOWNER autonomous `--admin` merge fallback).
+  mergeGate: Object.freeze({
+    soloCodeownerAdminFallback: 'auto-admin-retry',
   }),
 });
 
@@ -497,6 +512,13 @@ export function normalizePolicyConfig(config: unknown) {
         POLICY_DEFAULTS.labels.needsDecisionLabelName,
       ),
     },
+    mergeGate: {
+      soloCodeownerAdminFallback: parseEnum(
+        c?.mergeGate?.soloCodeownerAdminFallback,
+        MERGE_GATE_SOLO_CODEOWNER_ADMIN_FALLBACK_MODES,
+        POLICY_DEFAULTS.mergeGate.soloCodeownerAdminFallback,
+      ),
+    },
   };
 }
 
@@ -602,8 +624,34 @@ export function selectDesyncedIndex(token: unknown, bandSize: unknown): number {
   return (hash >>> 0) % size;
 }
 
-function clone<T>(value: T): T {
-  return JSON.parse(JSON.stringify(value));
+/**
+ * Deep-clone helper for this module's own trusted defaults (#1449).
+ *
+ * Exported only so its equivalence can be unit-tested directly; every
+ * production call site stays inside this file. `structuredClone` (global
+ * since Node 17, well below this repo's `^22.22.2 || >=24` floor) replaces
+ * the previous `JSON.parse(JSON.stringify(value))` round-trip.
+ * `structuredClone` differs from a JSON round-trip on several axes —
+ * non-exhaustively: it throws on functions; it preserves `Date`, `Map`,
+ * and `undefined`-valued keys that JSON drops or converts; and it also
+ * diverges on `BigInt`, `RegExp`, typed arrays, and `NaN`/`Infinity`/`-0`
+ * normalization. This list is deliberately not treated as exhaustive —
+ * what matters for this swap is not enumerating every divergence axis,
+ * but that `POLICY_DEFAULTS` (below) never contains a value on *any* of
+ * them. All 8 call sites in this file were enumerated before making this
+ * swap: `normalizePolicyConfig`'s `clone(POLICY_DEFAULTS)`, plus 7 calls
+ * across `parsePositiveIntegerArray` and `parseCheckSelectors`, which
+ * only ever clone `POLICY_DEFAULTS` itself or one of its own frozen
+ * sub-arrays (`discover.legacyRoots`, `ciGate.externalChecks.advisory`,
+ * `.waivable` — all `[]`). `POLICY_DEFAULTS` is a plain, deeply-frozen
+ * literal of strings, finite numbers, booleans, and empty arrays only —
+ * no function, `Date`, `Map`, `BigInt`, `RegExp`, typed array, exotic
+ * number, or `undefined`-valued property appears anywhere in it, so none
+ * of `structuredClone`'s divergences from a JSON round-trip is ever
+ * exercised by a real caller (Copilot review, #1463).
+ */
+export function clone<T>(value: T): T {
+  return structuredClone(value);
 }
 
 function _firstString(...values: unknown[]): string {

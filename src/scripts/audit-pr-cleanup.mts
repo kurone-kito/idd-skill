@@ -9,6 +9,7 @@ import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import type { CleanupReport } from './audit-pr-cleanup-summary.mts';
 import { computeReportSummary } from './audit-pr-cleanup-summary.mts';
+import { parseCliArgs } from './cli-args.mts';
 import type { CollaboratorPermissionCache } from './collaborator-permission.mts';
 import {
   isAuthorizedForcedHandoffActor,
@@ -178,6 +179,23 @@ interface CleanupArgs {
   agentId?: string;
   skipClaimCheck?: boolean;
 }
+
+// Flag-spec keys stay the dashed literal on purpose (never bare keys like
+// `pr:`): tests/flag-name-matrix.test.mts scans this file's *compiled*
+// .mjs source text for quoted flag literals such as the --pr spec key
+// below. See cli-args.mts's module header for the full invariant.
+const AUDIT_PR_CLEANUP_FLAG_SPEC = {
+  '--help': { type: 'boolean', short: 'h', default: false },
+  '--pr': { type: 'string' },
+  '--repo': { type: 'string' },
+  '--dry-run': { type: 'boolean', default: false },
+  '--apply': { type: 'boolean', default: false },
+  '--format': { type: 'string', default: 'json' },
+  '--claim-issue': { type: 'string' },
+  '--claim-id': { type: 'string' },
+  '--agent-id': { type: 'string' },
+  '--skip-claim-check': { type: 'boolean', default: false },
+} as const;
 
 const TRUSTED_MARKER_PERMISSIONS = new Set(['admin', 'maintain', 'write']);
 const trustedMarkerAuthorCache = new Map<string, boolean>();
@@ -1543,61 +1561,69 @@ function printRows(label: string, rows: ReportRow[]): void {
 }
 
 function parseArgs(argv: string[]): CleanupArgs {
-  const parsed: CleanupArgs = {
-    format: 'json',
+  // No test in this file asserts the pre-migration message text or the
+  // no-colon "unknown argument X" / "X requires a value" spelling (see
+  // #1451's PR description), so a parse failure adopts the wrapper's
+  // uniform message. The exit-code-2 contract IS preserved: catch the
+  // wrapper's thrown Error here and route it through this file's own
+  // fail() exactly as every other malformed-input path already does.
+  let parsed: ReturnType<typeof parseCliArgs>;
+  try {
+    parsed = parseCliArgs(argv, AUDIT_PR_CLEANUP_FLAG_SPEC);
+  } catch (error) {
+    fail((error as Error).message);
+  }
+  const { values, help } = parsed;
+
+  // The pre-migration readValue() used `!value` (not `=== undefined`), so
+  // an explicit empty-string value was rejected the same as an omitted
+  // flag for EVERY flag in this file. parseCliArgs accepts an empty
+  // string (matching bare node:util parseArgs), so this check restores
+  // that exact uniform pre-migration behavior. The message matches
+  // parseCliArgs' own "missing value for argument: <flag>" phrasing
+  // (Copilot review finding on PR #1467) so an empty-string value and an
+  // omitted/flag-shaped value report the same failure style.
+  const requireNonEmpty = (
+    token: string | undefined,
+    flag: string,
+  ): string | undefined => {
+    if (token === '') {
+      fail(`missing value for argument: ${flag}`);
+    }
+    return token;
   };
 
-  for (let index = 0; index < argv.length; index += 1) {
-    const arg = argv[index];
-    switch (arg) {
-      case '--help':
-      case '-h':
-        parsed.help = true;
-        break;
-      case '--pr':
-        parsed.pr = readValue(argv, ++index, arg);
-        break;
-      case '--repo':
-        parsed.repo = readValue(argv, ++index, arg);
-        break;
-      case '--dry-run':
-        parsed.dryRun = true;
-        break;
-      case '--apply':
-        parsed.apply = true;
-        break;
-      case '--format':
-        parsed.format = readValue(argv, ++index, arg);
-        if (!['json', 'table'].includes(parsed.format)) {
-          fail('--format must be json or table');
-        }
-        break;
-      case '--claim-issue':
-        parsed.claimIssue = readValue(argv, ++index, arg);
-        break;
-      case '--claim-id':
-        parsed.claimId = readValue(argv, ++index, arg);
-        break;
-      case '--agent-id':
-        parsed.agentId = readValue(argv, ++index, arg);
-        break;
-      case '--skip-claim-check':
-        parsed.skipClaimCheck = true;
-        break;
-      default:
-        fail(`unknown argument ${arg}`);
-    }
+  const pr = requireNonEmpty(values.pr as string | undefined, '--pr');
+  const repo = requireNonEmpty(values.repo as string | undefined, '--repo');
+  const format = requireNonEmpty(values.format as string, '--format') as string;
+  if (!['json', 'table'].includes(format)) {
+    fail('--format must be json or table');
   }
+  const claimIssue = requireNonEmpty(
+    values['claim-issue'] as string | undefined,
+    '--claim-issue',
+  );
+  const claimId = requireNonEmpty(
+    values['claim-id'] as string | undefined,
+    '--claim-id',
+  );
+  const agentId = requireNonEmpty(
+    values['agent-id'] as string | undefined,
+    '--agent-id',
+  );
 
-  return parsed;
-}
-
-function readValue(argv: string[], index: number, flag: string): string {
-  const value = argv[index];
-  if (!value || value.startsWith('--')) {
-    fail(`${flag} requires a value`);
-  }
-  return value;
+  return {
+    format,
+    help,
+    pr,
+    repo,
+    dryRun: values['dry-run'] as boolean,
+    apply: values.apply as boolean,
+    claimIssue,
+    claimId,
+    agentId,
+    skipClaimCheck: values['skip-claim-check'] as boolean,
+  };
 }
 
 function parsePositiveInteger(value: string, flag: string): number {

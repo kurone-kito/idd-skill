@@ -1,5 +1,8 @@
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
+import { join } from 'node:path';
 import { test } from 'node:test';
+import { fileURLToPath } from 'node:url';
 
 import {
   checkPathAItem,
@@ -7,6 +10,39 @@ import {
   classifyMarker,
   verifyDispositions,
 } from '../src/scripts/review-disposition-verify.mts';
+
+const REPO_ROOT = fileURLToPath(new URL('../', import.meta.url));
+const CLI_PATH = join(REPO_ROOT, 'scripts/review-disposition-verify.mjs');
+
+/** Run the built CLI and return its trimmed stdout. */
+function runCli(args: string[]): string {
+  return execFileSync(process.execPath, [CLI_PATH, ...args], {
+    encoding: 'utf8',
+    timeout: 60_000,
+  }).trim();
+}
+
+/** Run the built CLI expecting a non-zero exit, and return its stderr. */
+function runCliExpectFailure(args: string[]): {
+  status: number;
+  stderr: string;
+} {
+  try {
+    execFileSync(process.execPath, [CLI_PATH, ...args], {
+      encoding: 'utf8',
+      timeout: 60_000,
+    });
+    throw new Error('expected the CLI to exit non-zero, but it succeeded');
+  } catch (error) {
+    const status = (error as { status?: number }).status;
+    const stderr = String((error as { stderr?: unknown }).stderr ?? '');
+    assert.ok(
+      typeof status === 'number' && status !== 0,
+      `expected a non-zero exit status, got ${String(status)}`,
+    );
+    return { status: status as number, stderr };
+  }
+}
 
 // ─── classifyMarker ───────────────────────────────────────────────────────────
 
@@ -454,4 +490,55 @@ test('verifyDispositions: unknown path → fail item', () => {
 test('verifyDispositions: throws on non-array input', () => {
   assert.throws(() => verifyDispositions(null), TypeError);
   assert.throws(() => verifyDispositions({ items: [] }), TypeError);
+});
+
+// ─── CLI parsing (#1501: migrated onto the shared parseCliArgs wrapper) ───────
+
+test('CLI: a correct --items invocation matches verifyDispositions directly', () => {
+  const items = [
+    {
+      id: 'p1',
+      path: 'A',
+      type: 'regular_comment',
+      decision: 'accepted',
+      markerReply: null,
+      threadResolved: null,
+    },
+  ];
+  const expected = `${JSON.stringify(verifyDispositions(items), null, 2)}\n`;
+  const actual = execFileSync(
+    process.execPath,
+    [CLI_PATH, '--items', JSON.stringify(items)],
+    { encoding: 'utf8', timeout: 60_000 },
+  );
+  assert.equal(actual, expected);
+});
+
+test('CLI: missing --items value exits non-zero', () => {
+  const { stderr } = runCliExpectFailure(['--items']);
+  assert.match(stderr, /missing value for argument: --items/);
+});
+
+test('CLI: a flag-shaped --items value exits non-zero', () => {
+  const { stderr } = runCliExpectFailure(['--items', '--help']);
+  assert.match(stderr, /missing value for argument: --items/);
+});
+
+test('CLI: an unknown flag exits non-zero', () => {
+  const { stderr } = runCliExpectFailure(['--bogus']);
+  assert.match(stderr, /unknown argument: --bogus/);
+});
+
+test('CLI: --items is required when omitted entirely', () => {
+  const { stderr } = runCliExpectFailure([]);
+  assert.match(stderr, /--items is required/);
+});
+
+test('CLI: --help prints usage and exits 0', () => {
+  const output = runCli(['--help']);
+  assert.match(output, /^Usage:/);
+  assert.match(
+    output,
+    /node scripts\/review-disposition-verify\.mjs --items '<json>' \[--help\]/,
+  );
 });

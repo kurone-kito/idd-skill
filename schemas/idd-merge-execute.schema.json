@@ -14,7 +14,8 @@
     "blockers",
     "mergeCommand",
     "merged",
-    "mergeResult"
+    "mergeResult",
+    "adminFallbackUsed"
   ],
   "properties": {
     "protocolVersion": {
@@ -64,6 +65,10 @@
     },
     "mergeResult": {
       "type": "string"
+    },
+    "adminFallbackUsed": {
+      "type": "boolean",
+      "description": "#1521: true only when the plain merge command failed with the self-CODEOWNER \"base branch policy prohibits the merge\" error and this run retried with --admin (successfully or not). False for every other path, including a successful plain merge and a merge failure not eligible for the fallback."
     }
   },
   "additionalProperties": false

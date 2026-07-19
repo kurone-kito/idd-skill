@@ -1,25 +1,25 @@
 # IDD — Pre-Merge Conditions Phase (F1–F2)
 
-Read this file after the E-phase branch-sync check confirms no
-synchronization is required, or when returning to merge gate checks
-after a sync cycle. It covers a final read-only branch-state check
-(F1) and the full pre-merge condition checklist (F2).
+Read this file after the E-phase branch-sync check confirms no sync is
+required, or when returning to merge gate checks after a sync cycle.
+Covers the read-only branch-state check (F1) and pre-merge checklist
+(F2).
 
-This phase includes a repository-specific GitHub Copilot advisory review
-gate. Even when another local agent is driving the workflow, follow it
-because the dependency is on GitHub review state, not on the local CLI.
+This phase includes a repo-specific GitHub Copilot advisory review
+gate. Follow it under any local agent — the dependency is on GitHub
+review state, not the local CLI.
 
-The merge-gate timing defaults referenced by F2 are named in
-[IDD policy constants](../../docs/policy-constants.md). Use that inventory
-for the canonical values, not as a behavior override.
+F2's merge-gate timing defaults are named in
+[IDD policy constants](../../docs/policy-constants.md) — canonical,
+not an override.
 
 Before any F-phase mutating action, apply the
 [shared claim revalidation gate](idd-overview-core.instructions.md#claim-revalidation-gate).
 
-After a forced handoff on an open PR, the successor must rebuild review
-state through E1/E2 under its own `{claim-id}` before merge-bound
-routing continues. A live status digest or prior-claim operational
-marker is UI or audit context only; it cannot satisfy review currency,
+After a forced handoff on an open PR, the successor must rebuild
+review state through E1/E2 under its own `{claim-id}` before
+merge-bound routing continues. A live status digest or prior-claim
+marker is UI/audit context only — it cannot satisfy review currency,
 claim ownership, advisory wait, or CI gates.
 
 When all F2 conditions are satisfied, proceed to
@@ -33,7 +33,11 @@ Read the current branch state. When helper runtime is enabled, call:
 Otherwise read the state directly:
 
 ```sh
-gh pr view {pr-number} --json mergeable,mergeStateStatus
+gh pr view {pr-number} --json mergeable,mergeStateStatus,headRefOid,baseRefName
+git fetch --no-tags origin {base-branch}
+git merge-base {pr-head-sha} FETCH_HEAD
+# vs: git rev-parse FETCH_HEAD; mismatch/unresolvable (undetermined) =
+# baseAdvancedSinceMergeBase: true below (best-effort, no deepen-retry)
 ```
 
 This check is read-only — F1 does not rebase, merge, or push.
@@ -44,9 +48,10 @@ This check is read-only — F1 does not rebase, merge, or push.
   `baseAdvancedSinceMergeBase: true`, prefer a fresh CI result over an
   old green check (base may have moved since the merge-base).
 - **`behind-no-conflict`** when branch protection or recorded repository
-  policy requires an up-to-date head, or **`content-conflict`**
-  (`mergeable` is `CONFLICTING`): return to the E-phase branch-sync check
-  in `idd-review-triage.instructions.md`. Before returning, update the PR
+  policy requires an up-to-date head, or unreadable/ambiguous (fails
+  closed per the shared default), or **`content-conflict`** (`mergeable`
+  is `CONFLICTING`): return to the E-phase branch-sync check in
+  `idd-review-triage.instructions.md`. Before returning, update the PR
   live status digest with `Phase: F1 sync-required`, the branch state in
   `Open blockers`, and `Next action: E-phase branch-sync`.
 - **`computing`** (`syncRecommendation` is `recheck`): `mergeable` is
@@ -65,24 +70,22 @@ This check is read-only — F1 does not rebase, merge, or push.
 
 ## F2 — Pre-merge condition check
 
-Verify **all** of the conditions below. Each condition states the
-evidence it requires and where to route on failure; the F2 snapshot
-at the end of this section records the final activity-universe values
-that the handoff phase consumes.
+Verify **all** conditions below; each states its required evidence and
+failure route. The F2 snapshot at the end records the final
+activity-universe values the handoff phase consumes.
 
-Do not treat "one bot says clean" as sufficient evidence. The
-condition checks must cover the full activity universe (human
-reviewers plus advisory bot surfaces such as Copilot, CodeRabbit,
-Codex connectors, and CI bots).
+Do not treat "one bot says clean" as sufficient evidence — checks must
+cover the full activity universe (human reviewers plus advisory bot
+surfaces such as Copilot, CodeRabbit, Codex connectors, and CI bots).
 
-When the repository configures non-Copilot `advisoryBotLogins` (for
-example CodeRabbit or a Codex connector), the advisory-wait window does
-**not** cover those bots (`idd-advisory-wait.instructions.md` — that
-window is Copilot-only). F2/F3 MUST NOT merge on a bare CI-green signal:
-the **Review currency** check below must confirm a fresh activity
-snapshot whose `review-watermark` covers the latest activity timestamp,
-so a non-Copilot finding that lands shortly after CI completes still
-returns the workflow to E1 instead of merging over it.
+When the repository configures non-Copilot `advisoryBotLogins` (e.g.
+CodeRabbit or a Codex connector), the advisory-wait window does
+**not** cover those bots (`idd-advisory-wait.instructions.md` —
+Copilot-only). F2/F3 MUST NOT merge on a bare CI-green signal: the
+**Review currency** check below must confirm a fresh snapshot whose
+`review-watermark` covers the latest activity timestamp, so a
+non-Copilot finding landing shortly after CI still returns the
+workflow to E1 instead of merging over it.
 
 - **Review currency** (live re-fetch required, freshness gate): read the
   most recent `<!-- review-watermark: {agent-id} {claim-id} … -->`
@@ -280,8 +283,9 @@ returns the workflow to E1 instead of merging over it.
   review threads, not a judgment call): run `node
   scripts/advisory-convergence.mjs --pr {pr-number} --assert` (or the
   profile-selected `idd-advisory-convergence` command). A non-zero exit
-  is a hard merge block — route to E1/E4 using the printed `reasons`; a
-  zero exit (`ready: true`) satisfies this condition.
+  is a hard merge block — route to E1/E4 (check **AW6** first when
+  `sameHeadReroll.eligible`) using the `reasons`; a zero exit
+  (`ready: true`) satisfies this condition.
   Separately, require `dispositionEvidence.missingRegularComments.length
   == 0` (ad hoc advisory-bot or reviewer comments outside a review
   thread, which the helper above does not cover); treat absent,
@@ -301,9 +305,8 @@ condition is satisfied, do **not** edit the digest before F3; carry the
 F2 snapshot forward unchanged so the final F3 freshness check can use
 the same activity universe.
 
-Note: `required_approvals` is fetched at runtime from the ruleset. The
-practical blockers are `CHANGES_REQUESTED` states and missing CODEOWNER
-approvals only. When all conditions above are satisfied, record the
+Note: `required_approvals` is ruleset-fetched; only `CHANGES_REQUESTED`
+and missing CODEOWNER approvals block. When satisfied, record the
 live-fetch result as the **F2 snapshot**: the current PR HEAD SHA
 (`{f2-head-SHA}`), the highest `updatedAt` across all fetched items
 (`{f2-max-activity-updatedAt}`, written as `none` if the snapshot is

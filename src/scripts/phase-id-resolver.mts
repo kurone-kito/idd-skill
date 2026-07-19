@@ -19,6 +19,8 @@
 //     so bare `A` is intentionally non-canonical (it resolves to
 //     `unknown_phase_id`) rather than being added here.
 
+import { parseCliArgs } from './cli-args.mts';
+
 const DEFAULT_CANONICAL_PHASE_IDS = [
   'A0',
   'A0_O',
@@ -94,6 +96,22 @@ interface CreateResolverOptions {
   canonicalPhaseIds?: string[];
   legacyAliases?: Record<string, string[] | string>;
 }
+
+// Flag-spec keys stay the dashed literal on purpose (never bare keys like
+// `phase-id:`): tests/flag-name-matrix.test.mts scans this file's *compiled*
+// .mjs source text for quoted flag literals such as the --phase-id spec key
+// below. See cli-args.mts's module header for the full invariant.
+//
+// Declared here, above the import.meta.main trigger below, rather than
+// alongside parseArgs further down: the trigger calls runCli() ->
+// parseArgs() synchronously at module-evaluation time, and a `const`
+// declared after that point is still in the temporal dead zone when the
+// trigger fires.
+const PHASE_ID_RESOLVER_FLAG_SPEC = {
+  '--phase-id': { type: 'string' },
+  '--verbose': { type: 'boolean', default: false },
+  '--help': { type: 'boolean', short: 'h' },
+} as const;
 
 if (import.meta.main) {
   runCli();
@@ -288,38 +306,16 @@ function parseArgs(argv: string[]): {
   verbose: boolean;
   help: boolean;
 } {
-  const parsed = {
-    phaseId: '',
-    verbose: false,
-    help: false,
+  const { values, help } = parseCliArgs(argv, PHASE_ID_RESOLVER_FLAG_SPEC);
+  return {
+    // Defaulting to '' (not left undefined) matches the pre-migration
+    // shape exactly: an omitted --phase-id and an explicit --phase-id ''
+    // both read back as '', and runCli's existing `!args.phaseId` check
+    // already treats both the same way (required-but-missing).
+    phaseId: (values['phase-id'] as string | undefined) ?? '',
+    verbose: values.verbose as boolean,
+    help,
   };
-
-  for (let index = 0; index < argv.length; index += 1) {
-    const token = argv[index];
-    const value = argv[index + 1];
-    const requireValue = (): string => {
-      if (value === undefined || String(value).startsWith('--')) {
-        throw new Error(`missing value for argument: ${token}`);
-      }
-      return value;
-    };
-    if (token === '--phase-id') {
-      parsed.phaseId = requireValue();
-      index += 1;
-      continue;
-    }
-    if (token === '--verbose') {
-      parsed.verbose = true;
-      continue;
-    }
-    if (token === '--help' || token === '-h') {
-      parsed.help = true;
-      continue;
-    }
-    throw new Error(`unknown argument: ${token}`);
-  }
-
-  return parsed;
 }
 
 function printHelp(): void {

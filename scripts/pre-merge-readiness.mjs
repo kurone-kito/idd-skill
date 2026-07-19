@@ -10,6 +10,7 @@ import {
   readAdvisoryPrimaryBotLogin,
   readAdvisoryWaitPolicy,
 } from './advisory-wait-policy.mjs';
+import { parseCliArgs } from './cli-args.mjs';
 import {
   isAuthorizedForcedHandoffActor,
   readForcedHandoffAuthorityPolicy,
@@ -37,6 +38,110 @@ import {
   resolveTrustedMarkerActors,
   selectCodeownersText,
 } from './protocol-helpers.mjs';
+
+// GitHub's GraphQL `DateTime` scalar can't be null, so a `CheckRun` that
+// has not completed yet (and a `StatusContext`, which has no completedAt
+// field at all) reports this zero-value sentinel instead -- the same
+// convention `gh pr checks` already surfaces and `isCompletedCiTimestamp`
+// (protocol-helpers.mts) already treats as "not completed".
+const ZERO_SENTINEL_TIMESTAMP = '0001-01-01T00:00:00Z';
+// The commit-status `state` GraphQL enum (`StatusState`) has its own
+// 5-value vocabulary (`EXPECTED`, `ERROR`, `FAILURE`, `PENDING`,
+// `SUCCESS`; confirmed via schema introspection -- an earlier version of
+// this comment underclaimed 4, missing `EXPECTED`) that only partly
+// overlaps the check-run vocabulary `classifyCiChecks` understands
+// (`FAILURE`, `CANCELLED`, `QUEUED`, `IN_PROGRESS`, `WAITING`, `SUCCESS`,
+// `SKIPPED`, `NEUTRAL`, `NOT_APPLICABLE`, ...). `SUCCESS` and `FAILURE`
+// already coincide, but the other three have no direct match -- left
+// unmapped, each would silently fall into `classifyCiChecks`'s `unknown`
+// bucket instead of the `failed` / `pending` bucket a caller actually
+// needs (PR review finding, #1483: `gh pr checks`'s prior flattened read
+// normalized both vocabularies into one `state` field; this
+// data-source swap makes normalizing them this module's own
+// responsibility). Map every divergent token onto its check-run
+// equivalent before classification ever sees it: `ERROR` (a distinct
+// "reporting error" state, not `FAILURE`) maps to `FAILURE`; `PENDING`
+// (still running) and `EXPECTED` (a required status check configured for
+// this ref but not yet reported at all -- also still "not done", not a
+// failure) both map to `IN_PROGRESS`. This is always a "still failing" /
+// "still running" outcome, never a false pass, so even an unmapped
+// future commit-status token would only ever fail closed into `unknown`,
+// not `success`.
+const STATUS_CONTEXT_STATE_ALIASES = {
+  ERROR: 'FAILURE',
+  PENDING: 'IN_PROGRESS',
+  EXPECTED: 'IN_PROGRESS',
+};
+/**
+ * Normalize one raw `statusCheckRollup` entry into the `CheckPayload`
+ * shape `classifyCiChecks` / `summarizeRequiredChecks` expect (#1483).
+ *
+ * `state` is derived to match what `gh pr checks --json state` already
+ * reported for the same underlying data (verified empirically against
+ * this repository's own live PRs across `SUCCESS` / `FAILURE` /
+ * `IN_PROGRESS`): a completed check-run reports its `conclusion` (falling
+ * back to `UNKNOWN` if absent); an incomplete one reports its raw `status`
+ * (`QUEUED` / `IN_PROGRESS` / `WAITING`, also falling back to `UNKNOWN` if
+ * absent -- a missing status is never silently coerced to an empty
+ * string, which `classifyCiChecks` would not recognize as any known
+ * bucket); a legacy commit-status reports its `state`, translated through
+ * `STATUS_CONTEXT_STATE_ALIASES` for the three tokens with no direct
+ * check-run equivalent. This keeps classification behavior identical to
+ * before #1483 for every single-producer case that existed pre-#1483 --
+ * only the producer-identity discriminator (`type` / `workflowName`) and
+ * the commit-status vocabulary mapping are new.
+ */
+export function normalizeStatusCheckRollupEntry(entry) {
+  if (String(entry?.__typename ?? '').trim() === 'StatusContext') {
+    const rawState = String(entry?.state ?? '')
+      .trim()
+      .toUpperCase();
+    return {
+      name: String(entry?.context ?? '').trim(),
+      state: STATUS_CONTEXT_STATE_ALIASES[rawState] ?? rawState,
+      completedAt: String(entry?.completedAt ?? ZERO_SENTINEL_TIMESTAMP),
+      type: 'status-context',
+      workflowName: '',
+    };
+  }
+  const status = String(entry?.status ?? '')
+    .trim()
+    .toUpperCase();
+  const conclusion = String(entry?.conclusion ?? '')
+    .trim()
+    .toUpperCase();
+  return {
+    name: String(entry?.name ?? '').trim(),
+    state:
+      status === 'COMPLETED' ? conclusion || 'UNKNOWN' : status || 'UNKNOWN',
+    completedAt: String(entry?.completedAt ?? ZERO_SENTINEL_TIMESTAMP),
+    type: 'check-run',
+    workflowName: String(entry?.workflowName ?? '').trim(),
+  };
+}
+// Flag-spec keys stay the dashed literal on purpose (never bare keys like
+// `pr:`): tests/flag-name-matrix.test.mts scans this file's *compiled*
+// .mjs source text for quoted flag literals such as the --pr spec key
+// below. See cli-args.mts's module header for the full invariant. Both the
+// canonical and deprecated spellings of the claim/agent-id flags are
+// declared as separate spec entries (strict parseArgs requires every
+// accepted flag to be declared) -- flag-name-matrix.test.mts's deprecated-
+// alias tests scan for exactly these quoted literals.
+const PRE_MERGE_READINESS_FLAG_SPEC = {
+  '--pr': { type: 'string' },
+  '--claim-issue': { type: 'string' },
+  '--owner': { type: 'string' },
+  '--repo': { type: 'string' },
+  '--trusted-marker-logins': { type: 'string' },
+  '--idd-agent-logins': { type: 'string' },
+  '--advisory-bot-logins': { type: 'string' },
+  '--claim-id': { type: 'string' },
+  '--expected-claim-id': { type: 'string' },
+  '--agent-id': { type: 'string' },
+  '--expected-agent-id': { type: 'string' },
+  '--now': { type: 'string' },
+  '--help': { type: 'boolean', short: 'h' },
+};
 /**
  * Fetch live GitHub state for the PR + claim issue and build the
  * read-only pre-merge readiness report. Shared by this CLI and the
@@ -45,6 +150,14 @@ import {
  */
 export function collectPreMergeReadiness(argv) {
   const args = parseArgs(argv);
+  // --help used to exit from inside the parseArgs token loop; relocated
+  // here (the wrapper's help path) per #1451. Same external contract: the
+  // sole caller (idd-merge-execute.mts) never passes --help, so this is a
+  // pure relocation, not a behavior change.
+  if (args.help) {
+    printHelp();
+    process.exit(0);
+  }
   if (!args.prNumber) {
     throw new Error('missing required --pr <number> argument');
   }
@@ -92,7 +205,11 @@ export function collectPreMergeReadiness(argv) {
     '-R',
     repoRef,
     '--json',
-    'headRefOid,baseRefName,url,author,reviewDecision',
+    // #1513: `mergeable,mergeStateStatus` added to this existing call (no
+    // new network round-trip) so the branch-currency gate below can pair a
+    // live `BEHIND` state with the up-to-date-head requirement resolved
+    // from `branchRules`/`branchProtection`.
+    'headRefOid,baseRefName,url,author,reviewDecision,statusCheckRollup,mergeable,mergeStateStatus',
     '--jq',
     '.',
   ]);
@@ -101,20 +218,21 @@ export function collectPreMergeReadiness(argv) {
   const prUrl = String(pr.url ?? '');
   const prAuthorLogin = String(pr.author?.login ?? '').toLowerCase();
   const reviewDecision = String(pr.reviewDecision ?? '');
+  const mergeable = String(pr.mergeable ?? '');
+  const mergeStateStatus = String(pr.mergeStateStatus ?? '');
   const encodedBaseRefName = encodeURIComponent(baseRefName);
-  const checks = ghJson(
-    [
-      'pr',
-      'checks',
-      String(args.prNumber),
-      '-R',
-      repoRef,
-      '--json',
-      'name,state,completedAt',
-      '--jq',
-      '.',
-    ],
-    { allowStatuses: [1, 8] },
+  // #1483: sourced from the same `gh pr view` call above (the
+  // `statusCheckRollup` field), not a separate `gh pr checks` call --
+  // `statusCheckRollup`'s GraphQL union already tags each entry with a
+  // real producer identity (`__typename`: `CheckRun` vs. `StatusContext`,
+  // plus `workflowName` for check-runs), which a flattened `gh pr checks`
+  // read cannot expose. Joining two separately-fetched lists by name would
+  // reintroduce the exact ambiguity this fix removes (confirmed live: two
+  // successive calls a few seconds apart returned different check-run
+  // counts for the same PR), so this is the single source of truth for
+  // both the check identity and its dedup discriminator.
+  const checks = (pr.statusCheckRollup ?? []).map(
+    normalizeStatusCheckRollupEntry,
   );
   const trustEmptyProtectionReads = readTrustEmptyProtectionReads();
   const branchRulesRead = fetchGovernanceJson(
@@ -181,7 +299,10 @@ export function collectPreMergeReadiness(argv) {
     .map((file) => String(file.filename ?? ''))
     .filter(Boolean);
   const codeownersText = fetchCodeownersText(owner, repo, baseRefName);
-  const eligibleCodeownerUserLogins = resolveEligibleCodeownerUserLogins(
+  const {
+    eligible: eligibleCodeownerUserLogins,
+    unreadable: eligibleCodeownerUserLoginsUnreadable,
+  } = resolveEligibleCodeownerUserLogins(
     owner,
     repo,
     resolveCodeownersForFiles(codeownersText, changedFiles).codeownerUserLogins,
@@ -256,7 +377,10 @@ export function collectPreMergeReadiness(argv) {
       changedFiles,
       codeownersText,
       eligibleCodeownerUserLogins,
+      eligibleCodeownerUserLoginsUnreadable,
       reviewDecision,
+      mergeStateStatus,
+      mergeable,
     },
     {
       now: args.now || new Date().toISOString().replace('.000Z', 'Z'),
@@ -312,107 +436,117 @@ function warnDeprecatedFlag(deprecated, canonical) {
     `warning: ${deprecated} is deprecated; use ${canonical} instead.\n`,
   );
 }
-export function parseArgs(argv) {
-  const parsed = {
-    prNumber: null,
-    claimIssueNumber: null,
-    owner: '',
-    repo: '',
-    trustedMarkerLogins: '',
-    iddAgentLogins: '',
-    advisoryBotLogins: '',
-    expectedClaimId: '',
-    expectedAgentId: '',
-    now: '',
-  };
-  for (let index = 0; index < argv.length; index += 1) {
-    const token = argv[index];
-    const value = argv[index + 1];
-    // Reject a missing value (undefined) or a flag-shaped value so that
-    // `--pr --json` fails fast instead of consuming `--json` as the value.
-    const requireValue = () => {
-      if (value === undefined || String(value).startsWith('--')) {
-        throw new Error(`missing value for argument: ${token}`);
-      }
-      return value;
-    };
-    // Positive-integer guard shared by both numeric flags below.
-    const requirePositiveInteger = () => {
-      const raw = requireValue();
-      if (!/^[1-9]\d*$/.test(raw)) {
-        throw new Error(`invalid ${token} value: ${raw}`);
-      }
-      return Number(raw);
-    };
-    if (token === '--pr') {
-      parsed.prNumber = requirePositiveInteger();
-      index += 1;
-      continue;
+/**
+ * Find `flag`'s last occurrence in `argv`, recognizing both the
+ * two-token form (`--flag value`) and the single-token `--flag=value`
+ * form `parseCliArgs` also accepts. A plain `argv.lastIndexOf(flag)`
+ * only matches the exact bare token, so `--claim-id=1` would silently
+ * fail to count as an occurrence of `--claim-id` (Copilot review
+ * finding on this PR) -- checked here via an exact match OR a
+ * `${flag}=` prefix match, scanning from the end so the first hit is
+ * the true last occurrence.
+ */
+function findLastFlagOccurrenceIndex(argv, flag) {
+  const equalsPrefix = `${flag}=`;
+  for (let index = argv.length - 1; index >= 0; index -= 1) {
+    if (argv[index] === flag || argv[index].startsWith(equalsPrefix)) {
+      return index;
     }
-    if (token === '--claim-issue') {
-      parsed.claimIssueNumber = requirePositiveInteger();
-      index += 1;
-      continue;
-    }
-    if (token === '--owner') {
-      parsed.owner = requireValue();
-      index += 1;
-      continue;
-    }
-    if (token === '--repo') {
-      parsed.repo = requireValue();
-      index += 1;
-      continue;
-    }
-    if (token === '--trusted-marker-logins') {
-      parsed.trustedMarkerLogins = requireValue();
-      index += 1;
-      continue;
-    }
-    if (token === '--idd-agent-logins') {
-      parsed.iddAgentLogins = requireValue();
-      index += 1;
-      continue;
-    }
-    if (token === '--advisory-bot-logins') {
-      parsed.advisoryBotLogins = requireValue();
-      index += 1;
-      continue;
-    }
-    if (token === '--claim-id') {
-      parsed.expectedClaimId = requireValue();
-      index += 1;
-      continue;
-    }
-    if (token === '--expected-claim-id') {
-      warnDeprecatedFlag('--expected-claim-id', '--claim-id');
-      parsed.expectedClaimId = requireValue();
-      index += 1;
-      continue;
-    }
-    if (token === '--agent-id') {
-      parsed.expectedAgentId = requireValue();
-      index += 1;
-      continue;
-    }
-    if (token === '--expected-agent-id') {
-      warnDeprecatedFlag('--expected-agent-id', '--agent-id');
-      parsed.expectedAgentId = requireValue();
-      index += 1;
-      continue;
-    }
-    if (token === '--now') {
-      parsed.now = requireValue();
-      index += 1;
-      continue;
-    }
-    if (token === '--help' || token === '-h') {
-      printHelp();
-      process.exit(0);
-    }
-    throw new Error(`unknown argument: ${token}`);
   }
-  return parsed;
+  return -1;
+}
+/**
+ * Resolve a canonical/deprecated flag pair using the pre-migration
+ * token-loop's exact assignment-order semantics: each occurrence
+ * overwrote the same field as the loop walked argv left to right, so
+ * whichever flag's LAST occurrence comes later in argv wins -- not
+ * "canonical always wins" -- when both spellings are given together.
+ * `-1` (never given) sorts before any real index, so an absent flag
+ * never wins against one that was actually passed.
+ */
+function resolveLastGivenAlias(
+  argv,
+  canonicalFlag,
+  canonicalValue,
+  deprecatedFlag,
+  deprecatedValue,
+) {
+  if (canonicalValue === undefined) {
+    return deprecatedValue;
+  }
+  if (deprecatedValue === undefined) {
+    return canonicalValue;
+  }
+  const lastCanonicalIndex = findLastFlagOccurrenceIndex(argv, canonicalFlag);
+  const lastDeprecatedIndex = findLastFlagOccurrenceIndex(argv, deprecatedFlag);
+  return lastDeprecatedIndex > lastCanonicalIndex
+    ? deprecatedValue
+    : canonicalValue;
+}
+export function parseArgs(argv) {
+  const { values, help } = parseCliArgs(argv, PRE_MERGE_READINESS_FLAG_SPEC);
+  // Positive-integer guard shared by both numeric flags, preserving each
+  // flag's own custom "invalid <flag> value: <raw>" message (test-locked
+  // in tests/pre-merge-readiness.test.mts) rather than the wrapper's
+  // generic message.
+  const requirePositiveInteger = (token, flagName) => {
+    if (token === undefined) {
+      return null;
+    }
+    if (!/^[1-9]\d*$/.test(token)) {
+      throw new Error(`invalid ${flagName} value: ${token}`);
+    }
+    return Number(token);
+  };
+  // Deprecated aliases: both spellings are declared flags (see the spec
+  // above). warnDeprecatedFlag fires whenever the deprecated spelling is
+  // present at all, matching the pre-migration per-token loop exactly
+  // (which warned unconditionally the moment the deprecated token was
+  // seen, regardless of whether the canonical spelling also appeared).
+  // When BOTH spellings are given together, resolveLastGivenAlias below
+  // replicates the pre-migration token-loop's assignment-order semantics
+  // exactly: whichever flag's token appears LAST in argv wins (Codex
+  // review finding on this PR -- an earlier draft always preferred the
+  // canonical spelling here, which silently diverged from the original
+  // "last write wins" contract for this specific double-flag case).
+  const claimId = resolveLastGivenAlias(
+    argv,
+    '--claim-id',
+    values['claim-id'],
+    '--expected-claim-id',
+    values['expected-claim-id'],
+  );
+  const expectedClaimIdToken = values['expected-claim-id'];
+  if (expectedClaimIdToken !== undefined) {
+    warnDeprecatedFlag('--expected-claim-id', '--claim-id');
+  }
+  const agentId = resolveLastGivenAlias(
+    argv,
+    '--agent-id',
+    values['agent-id'],
+    '--expected-agent-id',
+    values['expected-agent-id'],
+  );
+  const expectedAgentIdToken = values['expected-agent-id'];
+  if (expectedAgentIdToken !== undefined) {
+    warnDeprecatedFlag('--expected-agent-id', '--agent-id');
+  }
+  return {
+    prNumber: requirePositiveInteger(values.pr, '--pr'),
+    claimIssueNumber: requirePositiveInteger(
+      values['claim-issue'],
+      '--claim-issue',
+    ),
+    owner: values.owner ?? '',
+    repo: values.repo ?? '',
+    trustedMarkerLogins: values['trusted-marker-logins'] ?? '',
+    iddAgentLogins: values['idd-agent-logins'] ?? '',
+    advisoryBotLogins: values['advisory-bot-logins'] ?? '',
+    expectedClaimId: claimId ?? '',
+    expectedAgentId: agentId ?? '',
+    now: values.now ?? '',
+    help,
+  };
 }
 function printHelp() {
   process.stdout.write(`Usage:
@@ -497,9 +631,19 @@ function resolveTrustedCollaboratorMarkerLogins(owner, repo, comments) {
     );
   });
 }
-function resolveEligibleCodeownerUserLogins(owner, repo, logins) {
-  return normalizeTrustedMarkerLogins(logins).filter((login) => {
-    const permission = safeGhText(
+/**
+ * Exported for direct unit testing (matching this file's established
+ * `fetchBranchRulesets`/`fetchGovernanceJson` injectable-fetch pattern) --
+ * `fetchPermission` defaults to the real live `gh api .../permission` call
+ * and is overridden in tests to simulate a 404 vs. a transient failure
+ * without mocking `execFileSync`.
+ */
+export function resolveEligibleCodeownerUserLogins(
+  owner,
+  repo,
+  logins,
+  fetchPermission = (login) =>
+    ghText(
       [
         'api',
         `repos/${owner}/${repo}/collaborators/${encodeURIComponent(login)}/permission`,
@@ -507,13 +651,34 @@ function resolveEligibleCodeownerUserLogins(owner, repo, logins) {
         '.permission',
       ],
       GH_TEXT_LOOP_OPTIONS,
-    ).toLowerCase();
+    ),
+) {
+  let unreadable = false;
+  const eligible = normalizeTrustedMarkerLogins(logins).filter((login) => {
+    let permission;
+    try {
+      permission = fetchPermission(login).toLowerCase();
+    } catch (error) {
+      // A 404 means this login genuinely has no collaborator record on
+      // this repository (e.g. a stale CODEOWNERS entry for someone who
+      // was removed) -- the pre-#1521 behavior of excluding it is correct
+      // and unchanged. Any OTHER failure (403 permission denial, 5xx,
+      // timeout, network) cannot be told apart from "genuinely not a
+      // collaborator" by the caller, so it must not silently narrow the
+      // eligible set the same way -- flag `unreadable` instead.
+      if (deriveGhHttpStatus(error) === 404) {
+        return false;
+      }
+      unreadable = true;
+      return false;
+    }
     return (
       permission === 'admin' ||
       permission === 'maintain' ||
       permission === 'write'
     );
   });
+  return { eligible, unreadable };
 }
 function fetchCodeownersText(owner, repo, ref) {
   const payloads = ['.github/CODEOWNERS', 'CODEOWNERS', 'docs/CODEOWNERS'].map(

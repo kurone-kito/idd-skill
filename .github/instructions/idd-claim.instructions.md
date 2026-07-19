@@ -353,6 +353,33 @@ by the same no-wrapping principle: it must not be wrapped in a code fence
 or other block-level markdown either, or the disposition-evidence gate
 will not recognize it.
 
+**Also post an [activation-nonce marker](#activation-nonce-format)** for
+every fresh `{claim-id}` this section generates (fresh claim, takeover, or
+legacy migration) — not on a plain heartbeat, which reuses the existing
+`{claim-id}`.
+
+## Activation-nonce format
+
+Post this alongside every claim **activation** — fresh claim, takeover,
+legacy migration, or forced-handoff adopt-verbatim (see _Claim
+verification_ below); never skip it for any activation path:
+
+```markdown
+<!-- activation-nonce: {agent-id} {claim-id} {nonce} {ISO8601-timestamp} -->
+
+_{agent-id}: claim activation nonce — IDD automation marker. Do not edit._
+```
+
+`{nonce}` is a fresh opaque token; record it locally alongside `{agent-id}`
+/ `{claim-id}`. When 2+ trusted markers exist for one `{claim-id}` (a
+collision), the winner is the lexicographically earliest `{nonce}`
+(mirrors the `{claim-id}` same-second tie-break in _Claim verification_).
+No marker posted for a `{claim-id}` means no comparison, never a mismatch.
+When helper runtime is enabled, post it with
+`post-idd-marker --type activation-nonce --target issue <number> --apply`
+(agent-id / claim-id / nonce / timestamp fields; see
+`docs/idd-helper-scripts.md`).
+
 ## Heartbeat posting
 
 When posting a heartbeat (i.e., when the issue is already claimed by this current
@@ -386,6 +413,11 @@ race-safe checks below:
 4. Verify no trusted competing `claimed-by` with a different
    `{claim-id}` appears in a strictly later `created_at` second than
    your claim event.
+5. If you posted an [activation-nonce marker](#activation-nonce-format) for
+   this `{claim-id}`, recompute its winner and verify it equals yours. This
+   catches a second session that adopted the identical `{claim-id}` via
+   forced-handoff, where steps 1–4 see nothing to disagree about (both
+   `{claim-id}`s genuinely match). No marker posted: treat as passed.
 
 If any check fails, treat the claim as contested. Return to Discover
 using the same selection mode that produced this target and pick the
@@ -404,7 +436,17 @@ When the new claim came from forced-handoff recovery, the verified
 of the run — including `--agent-id` and `--claim-id` at F2/F3's
 `pre-merge-readiness` — instead of minting a fresh claim-id or keeping your
 own native agent-id; no separate `claimed-by supersedes: none` post is
-required for the transfer itself. `new-agent-id` defaults to the _displaced_
+required for the transfer itself. **Adopt-verbatim is still an
+activation**: post your own [activation-nonce marker](#activation-nonce-format)
+for `new-claim-id` too — the one path where nothing else distinguishes two
+sessions that both silently adopted the same pair (kurone-kito/idd-skill#1480).
+Then verify it the same way step 5 above does: wait `claim.verifySettleDelay`,
+recompute the nonce winner for `new-claim-id`, and confirm it is yours — the
+only nonce check that actually fires here, since posting no `claimed-by`
+means this path never enters _Claim verification_ above. On mismatch, treat
+the claim as contested and return to Discover, exactly as the "If any check
+fails" clause above.
+`new-agent-id` defaults to the _displaced_
 claim's own agent-id, not the successor's: Claim-state parsing rule 6 ignores
 a `claimed-by` whose `{claim-id}` matches the active claim but whose
 `{agent-id}` differs, so an invented native agent-id silently fails every
@@ -426,6 +468,32 @@ pair, as above; or **release-then-fresh** — post `unclaimed-by` for the
 sticky pair (and, to be safe, the displaced original pair too) using each
 pair's exact recorded `{agent-id}` / `{claim-id}`, then post a fresh
 `claimed-by supersedes: none` with a self-chosen pair.
+
+### Orchestrator delegation
+
+An orchestrating session that has itself posted and verified a claim's
+`{agent-id}` / `{claim-id}` pair may delegate that pair verbatim to an
+isolated subagent worker as part of the worker's delegation brief. The
+worker adopts both fields verbatim as its own claim token for the rest
+of its run — mirroring adopt-verbatim above — instead of minting a
+fresh claim or being treated as claim-less; see the ownership-proof
+exception in [Claim-state parsing](#claim-state-parsing). No separate
+`claimed-by` post is required for the delegation itself.
+
+**Carry the nonce, don't mint one — and still revalidate it.** The
+brief must also carry the orchestrator's current activation nonce
+verbatim. A worker that mints its own nonce for the same `{claim-id}`
+creates the exact two-nonce collision that step 5 above exists to
+catch, flagging legitimate delegation as a second activation. Carrying
+rather than minting avoids that false collision, but the worker still
+performs the Claim revalidation gate's nonce check
+(`idd-overview-core.instructions.md`) using the carried value in place
+of a self-posted one: before each mutation, recompute the nonce winner
+for the `{claim-id}` and confirm it still equals the carried nonce. A
+different winner (for example, a later forced-handoff adopt-verbatim
+collision the orchestrator never saw) means the worker is no longer
+the winning activation, even though the `{claim-id}` still matches —
+treat that the same as any other lost claim.
 
 ### Hide displaced claim chain on takeover
 
@@ -477,6 +545,33 @@ check that every later mutation must satisfy. See the
 for the full algorithm (stop and report if a mutation would run from
 the primary worktree while the active claim names a non-`main`
 implementation branch).
+
+### Worktree-local lock file (same-machine collision)
+
+A same-machine fast path complementing the cross-machine claim check
+above. Acquire once the B1 worktree exists (before the first mutation),
+then re-run alongside every later pre-mutation check:
+`node scripts/claim-lock.mjs --acquire --worktree <path> --agent-id
+{agent-id} --claim-id {claim-id}`.
+
+A matching `{claim-id}` re-acquires as a read-only check (no write, no
+GitHub round-trip). A
+different `{claim-id}` is always a collision, regardless of lock age —
+run `resume-claim-routing.mjs --issue <n> --fresh-claim-gate`:
+if the result is `already-claimed` for a different active claim, stop
+(claim lost); if the active claim's `{claim-id}` is the current claim,
+the current session owns the GitHub claim and may retry the local lock
+with `--takeover`; `claimable`/`stale-reclaimable` also retries with
+`--takeover` after the claim transition is complete. If that helper is
+unavailable or its output is malformed, fall back to this file's written
+Claim-state parsing rules below to determine the same verdict before
+retrying. No release step:
+`git worktree remove` at F4
+deletes the lock with the worktree, so a crashed session's leftover lock
+resolves the same way (collision, then an authorized takeover once
+GitHub confirms it stale). Same-machine complement only — see
+`docs/idd-helper-scripts.md`'s Worktree-local claim lock entry for
+detail.
 
 Then continue to `idd-work.instructions.md`.
 
@@ -549,7 +644,11 @@ the active `{claim-id}` before this check, continue with that same token
 and use heartbeats; do not post a fresh takeover claim. If the session
 cannot prove ownership of the active `{claim-id}`, the active claim is
 treated as owned by another live session until it is released or stale,
-even when `{agent-id}` matches.
+even when `{agent-id}` matches. **Exception**: a worker that received
+the pair through a documented
+[orchestrator delegation](#orchestrator-delegation) is treated as
+having proven ownership through the orchestrator's own recorded
+verification, not as an unproven "even when `{agent-id}` matches" case.
 Self-signed forced-handoff markers from the same identity never
 transfer ownership: rule 7 rejects them unless the author is itself
 an authorized maintainer.

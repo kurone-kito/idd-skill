@@ -80,7 +80,29 @@ merges:
   audit trail and should be used only after IDD's branch freshness, CI,
   review, advisory, unresolved-thread, and claim gates pass. Prefer this
   over broad `always` or `exempt` bypass unless a maintainer explicitly
-  accepts the wider risk.
+  accepts the wider risk. In observed practice, this scoped bypass alone
+  may not make a plain `gh pr merge` call succeed for a solo-maintainer
+  repository's self-approval deadlock: GitHub can still reject the merge
+  with "the base branch policy prohibits the merge" and suggest
+  `--admin`, a stronger repository-admin privilege escalation than this
+  bypass mode grants. kurone-kito/idd-skill#1493 decided (maintainer
+  decision) that F3 may retry once with `--admin` automatically when
+  this exact failure is the only reported blocker against a fully green
+  Gate checklist — this is the **distributed default**
+  (`mergeGate.soloCodeownerAdminFallback: "auto-admin-retry"`, the
+  behavior when the key is absent) as of kurone-kito/idd-skill#1521. The
+  retry is gated on a proven **solo-CODEOWNER topology fact**
+  (`reviewerStates.codeownerSelfApproval.prAuthorIsSoleEligibleCodeowner
+  === true`), not merely on `status: "clear"`: a genuinely outstanding
+  review from a different, non-author codeowner reports that field as
+  `false` and always falls through to hold-and-report instead, even in a
+  repository that also configures this bypass mode for its merge-capable
+  actor. A repository may opt into the pre-#1521 unconditional
+  hold-and-report behavior instead by setting
+  `mergeGate.soloCodeownerAdminFallback: "hold-and-report"` in
+  `.github/idd/config.json`. See `idd-merge.instructions.md` F3 for the
+  full decision tree and kurone-kito/idd-skill#1494 for the originally
+  observed gap.
 - **Deliberate CODEOWNERS policy change**: narrow CODEOWNERS coverage,
   add another eligible owner, or move a repository to `human_merge` when
   human review is the intended gate. Treat this as a repository policy

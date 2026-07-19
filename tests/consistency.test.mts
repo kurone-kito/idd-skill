@@ -4,6 +4,7 @@ import { join, relative } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
+import { ADVISORY_CONVERGENCE_CHECK_SELECTOR } from '../src/scripts/advisory-convergence.mts';
 import {
   collectDocBudgetDriftViolations,
   collectDuplicateSyncPairTargets,
@@ -304,15 +305,22 @@ test('instruction size budget excludes the generated-from banner from the measur
 
 const DOC_BUDGET_SIZE = {
   alwaysLoadedLimitBytes: 20_000,
-  phaseLimitBytes: 32_200,
+  phaseLimitBytes: 35_500,
 };
-const DOC_BUDGET_BUNDLES = [{ limitBytes: 100_400 }, { limitBytes: 43_300 }];
+// Keep representative of live audit/sync-manifest.json bundleBudgets
+// (standard + lite independent ceilings currently on main).
+const DOC_BUDGET_BUNDLES = [
+  { limitBytes: 112_700 },
+  { limitBytes: 45_000 },
+  { limitBytes: 24_000 },
+  { limitBytes: 16_000 },
+];
 
 test('doc budget guard passes when documented values match the manifest', () => {
   const texts: Record<string, string> = {
-    'README.md': '| Phase | 32,200 bytes |\n| Always | 20,000 bytes |',
+    'README.md': '| Phase | 35,500 bytes |\n| Always | 20,000 bytes |',
     // a hardcoded bundle value that still matches the manifest is allowed
-    'strategy.md': 'discovery bundle is 100,400 bytes',
+    'strategy.md': 'discovery bundle is 112,700 bytes',
     // a doc that reads limits live via jq carries no number → never flagged
     'jq.md':
       "read the live values with jq '.bundleBudgets' audit/sync-manifest.json",
@@ -336,7 +344,7 @@ test('doc budget guard flags a value that drifted from every manifest budget', (
   assert.equal(result.errors.length, 1);
   assert.match(
     result.errors[0],
-    /doc-budget-drift: README\.md states 30,000 bytes, which is not a current sync-manifest budget value \(valid: 20000, 32200, 43300, 100400\)/,
+    /doc-budget-drift: README\.md states 30,000 bytes, which is not a current sync-manifest budget value \(valid: 16000, 20000, 24000, 35500, 45000, 112700\)/,
   );
 });
 
@@ -532,6 +540,9 @@ test('policy normalization provides default-safe values and supports aliases', (
       blockedByHumanLabelName: 'status:blocked-by-human',
       needsDecisionLabelName: 'status:needs-decision',
     },
+    mergeGate: {
+      soloCodeownerAdminFallback: 'auto-admin-retry',
+    },
   });
 
   const defaultPolicy = normalizePolicyConfig(null);
@@ -617,6 +628,9 @@ test('policy normalization provides default-safe values and supports aliases', (
         blockedByHumanLabelName: 'blocked:human',
         needsDecisionLabelName: 'needs:decision',
       },
+      mergeGate: {
+        soloCodeownerAdminFallback: 'hold-and-report',
+      },
     }),
     {
       issueScope: 'orphan-first',
@@ -689,6 +703,9 @@ test('policy normalization provides default-safe values and supports aliases', (
         roadmapLabelName: 'epic',
         blockedByHumanLabelName: 'blocked:human',
         needsDecisionLabelName: 'needs:decision',
+      },
+      mergeGate: {
+        soloCodeownerAdminFallback: 'hold-and-report',
       },
     },
   );
@@ -1001,6 +1018,30 @@ test('package.json version stays aligned with iddVersion in the shipped and temp
         `(${config.iddVersion}) in ${configPath}`,
     );
   }
+});
+
+test('#1512: this repository opts into the advisory-convergence maintainer-waiver backstop, while the distributed template config stays disabled', () => {
+  const repoPolicy = normalizePolicyConfig(readJson('.github/idd/config.json'));
+  assert.equal(
+    repoPolicy.ciGate.externalCheckWaivers.mode,
+    'maintainer-authorized',
+  );
+  assert.ok(
+    repoPolicy.ciGate.externalChecks.waivable.some(
+      (entry) =>
+        entry.selector === ADVISORY_CONVERGENCE_CHECK_SELECTOR &&
+        entry.matchMode === 'exact',
+    ),
+    `expected ${ADVISORY_CONVERGENCE_CHECK_SELECTOR} to be registered under ` +
+      'ciGate.externalChecks.waivable with matchMode "exact" (not a ' +
+      'broader glob) in .github/idd/config.json',
+  );
+
+  const templatePolicy = normalizePolicyConfig(
+    readJson('idd-template/.github/idd/config.json'),
+  );
+  assert.equal(templatePolicy.ciGate.externalCheckWaivers.mode, 'disabled');
+  assert.deepEqual(templatePolicy.ciGate.externalChecks.waivable, []);
 });
 
 test('collectDuplicateSyncPairTargets flags repeated targets and ignores unique ones', () => {

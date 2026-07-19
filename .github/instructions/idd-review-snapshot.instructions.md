@@ -44,6 +44,7 @@ prefixes and whose GitHub author is a trusted marker actor per
 - `advisory-wait:`
 - `advisory-wait-recovery:`
 - `<!-- advisory-wait:`
+- `advisory-reroll:`
 
 Do not exclude marker-shaped comments from untrusted authors. Keep them
 in the snapshot/ReviewItems_snapshot and report them as suspicious
@@ -168,7 +169,9 @@ reject bodies that consist entirely of HTML comments; this format
 includes visible text so that is not an issue, but the HTTP `POST` path
 is still recommended for reliability (`curl` with
 `-H "Content-Type: application/json"` and
-`-d '{"body":"<!-- ... -->\n\n_note_"}'`). The post-idd-marker helper
+`-d '{"body":"<!-- ... -->\n\n_note_"}'`). For `gh api` specifically
+(not `curl`), `-f` also treats a leading `@` as a literal character —
+only `-F` reads `@file` contents. The post-idd-marker helper
 referenced above performs exactly this JSON `POST` under `--apply`.
 
 On resume or restart, read the latest

@@ -9,6 +9,12 @@ import {
   normalizeAdvisoryWaitRuntimeOptions,
 } from './advisory-wait-policy.mjs';
 
+// Re-exported so callers that already import advisory-bot-identity helpers
+// from this façade (merged-pr-feedback-sweep.mts,
+// disposition-non-review-notices.mts) can get the shared default-logins list
+// from the same module instead of reaching into advisory-wait-policy.mts
+// directly.
+export { DEFAULT_ADVISORY_BOT_LOGINS } from './advisory-wait-policy.mjs';
 // Façade re-export (wave 1 of the protocol-helpers split; see #1209): every
 // marker render/parse primitive now lives in the marker-helpers module.
 // Re-exporting it here keeps every existing call site importing from
@@ -1108,10 +1114,35 @@ export function advisoryBotIdentityToken(login) {
     .toLowerCase()
     .replace(/\[bot\]$/, '');
 }
-// True when a non-review-notice disposition body names the given advisory bot's
-// GitHub login, so the gate can attribute a carry-forward to exactly one bot
-// even when several advisory bots are configured. Fail-closed: an empty token or
-// a disposition that does not contain the login carries nothing forward.
+// Captures the span where a bot login structurally appears in each canonical
+// disposition template `dispositionNamesAdvisoryBot` recognizes -- between the
+// marker (tolerating the same single interior-punctuation variant as
+// `DISPOSITION_REJECTED_PREFIX_RE` / `DISPOSITION_ACCEPTED_PREFIX_RE`) and the
+// phrase that names the template. Non-greedy so a body with the phrase
+// appearing once still captures the shortest, correct span. The `^` anchor
+// applies after the caller's `trimStart()` below, so it tolerates leading
+// whitespace the same way `isNonReviewNoticeDisposition` /
+// `isReviewSummaryDisposition` already do -- not the stricter, untrimmed
+// marker-first-bytes contract `isDispositionComment` enforces -- so this
+// never matches a marker quoted mid-prose, but a leading blank line or space
+// before the marker does not defeat it either.
+const REJECTED_NOTICE_LOGIN_SPAN_RE =
+  /^\*\*Rejected[.!:]?\*\*\s+—\s+([\s\S]*?)\s+did not review HEAD\b/i;
+const ACCEPTED_SUMMARY_LOGIN_SPAN_RE =
+  /^\*\*Accepted[.!:]?\*\*\s+—\s+([\s\S]*?)\s+summary walkthrough\b/i;
+// True when a non-review-notice or summary-walkthrough disposition body names
+// the given advisory bot's GitHub login, so the gate can attribute a
+// carry-forward to exactly one bot even when several advisory bots are
+// configured. Matches only within the anchored span where a canonical
+// template places the bot login -- never a whole-body substring search --
+// so a bot whose identity token equals a word from the template's own fixed
+// text (e.g. "review", "head", or the #1482 "issuecomment" suffix) cannot
+// falsely match a disposition naming a different bot. A body naming several
+// bots in one span (a disposition that improperly covers more than one
+// notice) still matches each of them, matching the existing 1:1 consumption
+// contract at the call sites. Fail-closed: an empty token, or a disposition
+// body that does not structurally match either canonical template, names no
+// bot.
 export function dispositionNamesAdvisoryBot(
   dispositionBody,
   noticeAuthorLogin,
@@ -1120,9 +1151,14 @@ export function dispositionNamesAdvisoryBot(
   if (!token) {
     return false;
   }
-  return String(dispositionBody ?? '')
-    .toLowerCase()
-    .includes(token);
+  const body = String(dispositionBody ?? '').trimStart();
+  const span =
+    REJECTED_NOTICE_LOGIN_SPAN_RE.exec(body)?.[1] ??
+    ACCEPTED_SUMMARY_LOGIN_SPAN_RE.exec(body)?.[1];
+  if (span === undefined) {
+    return false;
+  }
+  return span.toLowerCase().includes(token);
 }
 // #1182 Match trusted machine advisory dispositions to the advisory-bot stickies
 // they address, so a disposition posted by a trusted-marker actor who is NOT a
@@ -1233,17 +1269,175 @@ function matchTrustedAdvisoryStickyDispositions(
   }
   return dispositionedStickyIndexes;
 }
+/**
+ * Parse a check's `completedAt` into epoch milliseconds, or `null` when it
+ * is missing, not a valid ISO 8601 timestamp, or the `0001-01-01T00:00:00Z`
+ * zero-value sentinel some GitHub API surfaces (e.g. `gh pr checks`) report
+ * for a check that has not actually completed — see `isCompletedCiTimestamp`,
+ * this file's existing convention for the same sentinel. A still-running
+ * instance's `completedAt` reads as one of these three "not completed"
+ * shapes until it finishes.
+ */
+function parseCompletedAt(value) {
+  const timestamp = String(value ?? '');
+  return isCompletedCiTimestamp(timestamp) ? Date.parse(timestamp) : null;
+}
+/**
+ * Tie-break precedence for two check-run instances that complete at the
+ * same (or an equally unusable) instant. `FAILURE` always wins (rank 0):
+ * a same-instant tie must never hide a real failure behind ordering
+ * happenstance (the exact regression `classifyCiChecks`'s unconditional
+ * "any FAILURE anywhere" rule existed to prevent, and not a case a rerun
+ * can plausibly land in — GitHub `completedAt` has only second resolution,
+ * and a rerun must trigger, queue, and execute before it can complete,
+ * which practically never lands in the exact same recorded second as the
+ * run it supersedes). `CANCELLED` always loses (rank 2): a cancelled run
+ * reached no real verdict, so it defers to any conclusion that did.
+ * Every other state — including pending states, which practically never
+ * reach this tie path since they have no completed timestamp to tie on —
+ * shares the middle rank (1).
+ */
+function ciStateTieRank(state) {
+  if (state === 'FAILURE') return 0;
+  if (state === 'CANCELLED') return 2;
+  return 1;
+}
+/**
+ * True when `candidate` should replace `current` as the representative
+ * instance for one check name. A still-incomplete instance (per
+ * `parseCompletedAt`) always wins over an already-completed one:
+ * completion can only happen after creation, so a live rerun can never be
+ * older than the finished run it supersedes — this mirrors GitHub's own
+ * latest-per-context semantics, under which an in-progress required check
+ * leaves the branch not-clean rather than falling back to a stale
+ * completed verdict. Once both sides have completed, the most recently
+ * completed one wins.
+ *
+ * A tie (equal completedAt, or both sides missing/unparseable) never
+ * resolves by input order — two independent runs can genuinely complete
+ * within the same recorded second. It resolves by `ciStateTieRank`
+ * instead; a residual tie within the same rank (e.g. `SUCCESS` vs.
+ * `NEUTRAL`, both rank 1) falls back to comparing the state strings
+ * themselves, which depends only on the two values being compared, never
+ * on which one the caller happened to list first — so the whole
+ * selection is fully deterministic regardless of input order.
+ */
+function isNewerCheckInstance(candidate, current) {
+  const candidateAt = parseCompletedAt(candidate.completedAt);
+  const currentAt = parseCompletedAt(current.completedAt);
+  if (candidateAt !== null && currentAt !== null && candidateAt !== currentAt) {
+    return candidateAt > currentAt;
+  }
+  if ((candidateAt !== null) !== (currentAt !== null)) {
+    // Exactly one side has a usable timestamp. The side still missing one
+    // is never older than a completed side — a live rerun cannot have
+    // started before the finished run it supersedes — so the incomplete
+    // side always wins here.
+    return candidateAt === null;
+  }
+  const candidateRank = ciStateTieRank(candidate.state);
+  const currentRank = ciStateTieRank(current.state);
+  if (candidateRank !== currentRank) {
+    return candidateRank < currentRank;
+  }
+  return candidate.state !== current.state && candidate.state < current.state;
+}
+/**
+ * Reduce a group of check-run instances that share one grouping key
+ * (typically a check name) to the single instance that represents the
+ * current truth for that key. See `isNewerCheckInstance` for the
+ * selection rule. Exported so other same-name dedup call sites (e.g.
+ * `ci-wait-state.mts`'s `buildCiWaitStateSummary`, #1478) can reuse this
+ * tie-break instead of maintaining an independent copy. `group` is
+ * always non-empty in every current caller (each group comes from
+ * bucketing a non-empty input list by key), so the seedless `reduce`
+ * below never hits its empty-array throw path.
+ */
+export function selectLatestCheckInstance(group) {
+  return group.reduce((latest, candidate) =>
+    isNewerCheckInstance(candidate, latest) ? candidate : latest,
+  );
+}
+/**
+ * Reduce a check-run list to a single representative instance per
+ * `(name, type, workflowName)` group, matching GitHub's own
+ * required-status-check semantics: only the latest run for a given
+ * producer governs, so a stale instance (e.g. a cancelled or failed run
+ * superseded by a later successful rerun) can never outvote the current,
+ * authoritative one from the *same* producer.
+ *
+ * A missing or empty `name` carries no identity to dedupe against, so
+ * each such entry gets its own singleton group instead of collapsing
+ * every unnamed check together — otherwise an unrelated unnamed failure
+ * could be discarded in favor of an unrelated unnamed success that
+ * merely happens to also lack a name.
+ *
+ * `type` (e.g. `'check-run'` vs. `'status-context'`) and `workflowName`
+ * are an optional producer-identity discriminator (#1483): two entries
+ * that share a `name` but differ on either one are never assumed to be
+ * reruns of each other (e.g. a check-run and a legacy commit-status, or
+ * two check-runs from different Actions workflows, that happen to share
+ * a display name both survive instead of one discarding the other). When
+ * `type`/`workflowName` are absent on every entry sharing a `name` (the
+ * pre-#1483 data shape, still produced by hand-built fixtures and any
+ * caller that predates the discriminator), there is no conflicting
+ * signal to split on, so the group dedupes by `name` alone exactly as
+ * #1471 established -- this keeps every pre-#1483 caller and test
+ * behavior-identical.
+ *
+ * Residual known limitation: two genuinely independent producers that
+ * share both a `name` and a `type` and both lack a `workflowName` (e.g.
+ * two different non-Actions GitHub Apps that each post a check-run
+ * directly, rather than through a workflow) remain indistinguishable
+ * here and will still be grouped together. Closing that fully needs a
+ * stronger producer identity (e.g. the owning GitHub App) than
+ * `gh`/GraphQL's `statusCheckRollup` exposes today; `ci-wait-state.mts`'s
+ * own `(checkName, workflowName)` key has the identical accepted gap.
+ */
+function selectLatestCheckPerName(checks) {
+  // A Map already iterates in first-insertion order, so grouping into one
+  // is enough to preserve stable output order with no separate order array
+  // (see the same pattern in `findDuplicateBasenames` in audit-docs.mts).
+  const groups = new Map();
+  let unnamedCount = 0;
+  for (const check of checks) {
+    if (!check.name) {
+      groups.set(`\0unnamed:${unnamedCount++}`, [check]);
+      continue;
+    }
+    const type = check.type ? String(check.type).trim() : '';
+    const workflowName = check.workflowName
+      ? String(check.workflowName).trim()
+      : '';
+    const key = `${String(check.name)}\0${type}\0${workflowName}`;
+    const group = groups.get(key);
+    if (group) {
+      group.push(check);
+    } else {
+      groups.set(key, [check]);
+    }
+  }
+  return [...groups.values()].map((group) => selectLatestCheckInstance(group));
+}
 export function classifyCiChecks(checks) {
   const normalized = checks.map((check) => ({
     name: check.name,
     state: String(check.state ?? '').toUpperCase(),
     completedAt: check.completedAt ?? null,
+    type: check.type ?? null,
+    workflowName: check.workflowName ?? null,
   }));
-  const failed = normalized.filter((check) => check.state === 'FAILURE');
+  // GitHub can report several check-run instances that share the same
+  // check `name` (a manual or automatic re-run leaves the earlier instance
+  // in the fetched list alongside the new one). Reduce to one instance per
+  // name before classifying pass/fail/pending, so a stale instance never
+  // outvotes the current one for the same name (see #1471).
+  const deduped = selectLatestCheckPerName(normalized);
+  const failed = deduped.filter((check) => check.state === 'FAILURE');
   if (failed.length > 0) {
     return { status: 'failed', failed };
   }
-  const pending = normalized.filter((check) => {
+  const pending = deduped.filter((check) => {
     return (
       check.state === 'QUEUED' ||
       check.state === 'IN_PROGRESS' ||
@@ -1253,15 +1447,15 @@ export function classifyCiChecks(checks) {
   if (pending.length > 0) {
     return { status: 'pending', pending };
   }
-  const passing = normalized.filter((check) => {
+  const passing = deduped.filter((check) => {
     return ['SUCCESS', 'SKIPPED', 'NEUTRAL', 'NOT_APPLICABLE'].includes(
       check.state,
     );
   });
   return {
-    status: passing.length === normalized.length ? 'success' : 'unknown',
+    status: passing.length === deduped.length ? 'success' : 'unknown',
     passing,
-    unknown: normalized.filter((check) => !passing.includes(check)),
+    unknown: deduped.filter((check) => !passing.includes(check)),
   };
 }
 /**
@@ -2773,6 +2967,78 @@ export function summarizeBranchReviewRequirements(
     requiredCheckNames: [...requiredCheckNames].sort(),
   };
 }
+/**
+ * #1513: resolve whether the base branch's protection or ruleset requires
+ * an up-to-date head before merge, and pair that with the PR's live
+ * `mergeStateStatus` / `mergeable`. Neither `pre-merge-readiness.mts` nor
+ * `idd-merge-execute.mts` previously read this at all -- a live `BEHIND`
+ * PR could report `ready: true` right up to the uncaught `gh pr merge`
+ * rejection (the field incident this issue documents).
+ *
+ * Resolution order mirrors `summarizeRequiredChecks`'s existing
+ * ruleset-then-classic precedence: a ruleset's `required_status_checks`
+ * rule carries `strict_required_status_checks_policy` (confirmed
+ * empirically against this repository's own `main`: classic protection
+ * returns a genuine 404 "Branch not protected", while
+ * `rules/branches/main` returns this field as `true`); classic
+ * protection's equivalent field is `required_status_checks.strict`. When
+ * neither source resolves `true` AND the branch-protection/ruleset reads
+ * were unreadable (a masked 403-as-404, see `protectionReadsUnreadable`
+ * in `pre-merge-readiness.mts`), fail closed per
+ * `idd-overview-core.instructions.md`'s fail-closed default: assume the
+ * requirement is present rather than silently reporting "no requirement."
+ * Only a genuinely readable "no rule found" resolves to `none`.
+ *
+ * Strict `=== true` checks throughout (not `Boolean(...)` coercion) per
+ * the write-side mutation-helper critique lens
+ * (`idd-overview-appendix.instructions.md`): a non-boolean or missing
+ * value must never be silently coerced into "requirement satisfied."
+ */
+export function summarizeBranchCurrency(
+  branchRules = [],
+  branchProtection = {},
+  options = {},
+) {
+  // #1513 (Copilot/Codex review on PR #1538): GitHub's ruleset docs state
+  // `strict_required_status_checks_policy` "will not take effect unless at
+  // least one status check is enabled" -- confirmed against
+  // https://docs.github.com/en/rest/repos/rules. Treating the flag alone as
+  // authoritative would false-positive block a BEHIND PR under an
+  // empty-required-check ruleset that GitHub itself would allow to merge, so
+  // also require a non-empty required-check list (reusing the same
+  // extraction `summarizeRequiredChecks` already uses for check names).
+  // Classic branch protection's `required_status_checks.strict` carries no
+  // equivalent documented caveat, so it is left unconditional.
+  const rulesetRequires = (branchRules ?? []).some(
+    (rule) =>
+      rule?.type === 'required_status_checks' &&
+      rule.parameters?.strict_required_status_checks_policy === true &&
+      summarizeRequiredCheckMetadata(rule.parameters ?? {}).names.length > 0,
+  );
+  const classicRequires =
+    branchProtection.required_status_checks?.strict === true;
+  let requiresUpToDateHead;
+  let requiresUpToDateHeadSource;
+  if (rulesetRequires) {
+    requiresUpToDateHead = true;
+    requiresUpToDateHeadSource = 'ruleset';
+  } else if (classicRequires) {
+    requiresUpToDateHead = true;
+    requiresUpToDateHeadSource = 'classic-protection';
+  } else if (options.protectionReadsUnreadable === true) {
+    requiresUpToDateHead = true;
+    requiresUpToDateHeadSource = 'unreadable-fail-closed';
+  } else {
+    requiresUpToDateHead = false;
+    requiresUpToDateHeadSource = 'none';
+  }
+  return {
+    mergeStateStatus: String(options.mergeStateStatus ?? '').toUpperCase(),
+    mergeable: String(options.mergeable ?? '').toUpperCase(),
+    requiresUpToDateHead,
+    requiresUpToDateHeadSource,
+  };
+}
 export function summarizeRequiredChecks(
   checks = [],
   branchRules = [],
@@ -2814,6 +3080,11 @@ export function summarizeRequiredChecks(
       state,
       completedAt: String(check.completedAt ?? ''),
       coveredByWaiver,
+      // Producer-identity discriminator (#1483); see `CheckLike` and
+      // `selectLatestCheckPerName` for how it disambiguates a same-name
+      // rerun from a genuinely independent, differently-sourced check.
+      type: check.type ? String(check.type) : '',
+      workflowName: check.workflowName ? String(check.workflowName).trim() : '',
     };
   });
   const matchedRequiredChecks = normalizedChecks.filter((check) =>
@@ -2958,6 +3229,7 @@ export function summarizeReviewerStates(
     codeownersText = '',
     changedFiles = [],
     eligibleCodeownerUserLogins = null,
+    eligibleCodeownerUserLoginsUnreadable = false,
     advisoryBotLogins = [],
     prAuthorLogin = '',
     viewerLogin = '',
@@ -3066,6 +3338,7 @@ export function summarizeReviewerStates(
       eligibleCodeownerUserLogins === null
         ? null
         : [...eligibleCodeownerUsers].sort(),
+    eligibleCodeownerUserLoginsUnreadable,
     codeownerTeamSlugs: codeowners.codeownerTeamSlugs,
     codeownerEmailAddresses: codeowners.codeownerEmailAddresses,
     prAuthorLogin,
@@ -3121,6 +3394,7 @@ function summarizeCodeownerSelfApproval({
   hasExplicitCodeownerMatches,
   codeownerUserLogins = [],
   eligibleCodeownerUserLogins = null,
+  eligibleCodeownerUserLoginsUnreadable = false,
   codeownerTeamSlugs = [],
   codeownerEmailAddresses = [],
   prAuthorLogin = '',
@@ -3193,6 +3467,44 @@ function summarizeCodeownerSelfApproval({
       ? bypass.mode
       : 'pull_request'
     : 'none';
+  // Hoisted above `base` (moved up from its original position further down,
+  // right before the `deadlock` branch that also consumes it) so the #1521
+  // `prAuthorIsSoleEligibleCodeowner` field below can reuse this exact
+  // expression instead of recomputing an equivalent one. Pure and
+  // side-effect-free, so hoisting it earlier changes nothing about the
+  // later branches that also read it.
+  const allDirectUsersAreAuthor =
+    eligibleDirectCodeownerUserLogins.length > 0 &&
+    eligibleDirectCodeownerUserLogins.every(
+      (login) => login === normalizedAuthor,
+    );
+  // #1521: additive topology fact, computed independently of `status` /
+  // `applicableBypassDetected` below and exposed on every branch (not just
+  // the `deadlock` one). This is the ONLY safe discriminator an F3 caller
+  // may use to gate an automatic `--admin` retry: `status: 'clear'` alone
+  // (whether via `applicableBypassDetected` or `hasNonAuthorDirectUser`
+  // further down) does NOT prove the PR author is the sole codeowner --
+  // `applicableBypassDetected` fires whenever a bypass actor is configured
+  // for the viewer, regardless of whether a genuinely distinct non-author
+  // codeowner's review is separately outstanding. Deliberately NOT folded
+  // into `status`/`reason` themselves (that general gate intentionally
+  // keeps its existing pass/fail shape for every adopter repo -- see the
+  // #1521 review discussion); a caller that needs the narrow self-deadlock
+  // fact must check this field explicitly alongside `status`/`reason`.
+  //
+  // Requires `!eligibleCodeownerUserLoginsUnreadable` (Codex review, #1521):
+  // `eligibleDirectCodeownerUserLogins` can be silently NARROWED by a
+  // transient permission-lookup failure for some OTHER direct codeowner
+  // (see `resolveEligibleCodeownerUserLogins` in pre-merge-readiness.mts),
+  // which would make the author look like the sole eligible codeowner even
+  // though a real co-owner's eligibility simply could not be confirmed.
+  // Fail closed rather than trust a possibly-incomplete narrowed set.
+  const prAuthorIsSoleEligibleCodeowner =
+    Boolean(normalizedAuthor) &&
+    normalizedCodeownerTeamSlugs.length === 0 &&
+    normalizedCodeownerEmailAddresses.length === 0 &&
+    !eligibleCodeownerUserLoginsUnreadable &&
+    allDirectUsersAreAuthor;
   const base = {
     status: 'not_applicable',
     reason: 'codeowner-review-not-required',
@@ -3210,6 +3522,14 @@ function summarizeCodeownerSelfApproval({
     // to `clear` on its own -- but downgrades a would-be certain `deadlock`
     // below to the already-documented `possible_deadlock`.
     rulesetBypassUnreadable: bypass.unreadable,
+    prAuthorIsSoleEligibleCodeowner,
+    // #1521: true when at least one direct-user codeowner's
+    // collaborator-permission lookup was unreadable (see
+    // `prAuthorIsSoleEligibleCodeowner` above). Diagnostic only, mirroring
+    // `rulesetBypassUnreadable`'s shape -- never flips `status` on its own.
+    codeownerEligibilityUnreadable: Boolean(
+      eligibleCodeownerUserLoginsUnreadable,
+    ),
   };
   if (!requireCodeOwnerReview) {
     return base;
@@ -3243,11 +3563,8 @@ function summarizeCodeownerSelfApproval({
       reason: 'pr-author-unknown',
     };
   }
-  const allDirectUsersAreAuthor =
-    eligibleDirectCodeownerUserLogins.length > 0 &&
-    eligibleDirectCodeownerUserLogins.every(
-      (login) => login === normalizedAuthor,
-    );
+  // `allDirectUsersAreAuthor` is computed above (hoisted next to
+  // `prAuthorIsSoleEligibleCodeowner` in `base`); reused here unchanged.
   const hasNonAuthorDirectUser = eligibleDirectCodeownerUserLogins.some(
     (login) => login !== normalizedAuthor,
   );
@@ -3751,6 +4068,26 @@ export function computePreMergeReadinessBlockers(report) {
       detail: `dispositionEvidence.route is "${dispositionRoute || 'missing'}" (expected "proceed"), blockingCount=${dispositionBlockingCount} (expected 0)`,
     });
   }
+  // #1513: fail closed on a missing/garbled `requiresUpToDateHead` -- only
+  // an explicit `false` counts as "not required" (matching every gate
+  // above's fail-closed promise); an absent/non-boolean value defaults to
+  // "required." Scoped to the literal `BEHIND` value only: `UNKNOWN`/null
+  // is the async-still-computing state that `idd-pre-merge.instructions.md`
+  // F1 and `idd-review-triage.instructions.md`'s E-phase branch-sync check
+  // already re-poll as transient, not terminal -- out of this gate's scope.
+  // Every other non-BEHIND `gh pr merge` rejection is caught by
+  // `idd-merge-execute.mts`'s `deps.mergePr` try/catch instead.
+  const branchCurrency = preMergeAsRecord(report.branchCurrency);
+  const requiresUpToDateHead = branchCurrency.requiresUpToDateHead !== false;
+  const mergeStateStatus = String(
+    branchCurrency.mergeStateStatus ?? '',
+  ).toUpperCase();
+  if (requiresUpToDateHead && mergeStateStatus === 'BEHIND') {
+    blockers.push({
+      gate: 'branch-currency',
+      detail: `mergeStateStatus is "BEHIND" and the base branch requires an up-to-date head before merge (requiresUpToDateHeadSource="${String(branchCurrency.requiresUpToDateHeadSource ?? 'unknown')}")`,
+    });
+  }
   return blockers;
 }
 export function buildPreMergeReadinessSummary(
@@ -3771,7 +4108,10 @@ export function buildPreMergeReadinessSummary(
     changedFiles = [],
     codeownersText = '',
     eligibleCodeownerUserLogins = null,
+    eligibleCodeownerUserLoginsUnreadable = false,
     reviewDecision = '',
+    mergeStateStatus = '',
+    mergeable = '',
   },
   options = {},
 ) {
@@ -3797,6 +4137,15 @@ export function buildPreMergeReadinessSummary(
   const branchReviewRequirements = summarizeBranchReviewRequirements(
     branchRules,
     branchProtection,
+  );
+  const branchCurrency = summarizeBranchCurrency(
+    branchRules,
+    branchProtection,
+    {
+      mergeStateStatus,
+      mergeable,
+      protectionReadsUnreadable,
+    },
   );
   const liveSnapshot = buildActivitySnapshotSummary(
     {
@@ -3856,6 +4205,7 @@ export function buildPreMergeReadinessSummary(
     codeownersText,
     changedFiles,
     eligibleCodeownerUserLogins,
+    eligibleCodeownerUserLoginsUnreadable,
     advisoryBotLogins,
     prAuthorLogin,
     viewerLogin: options.viewerLogin,
@@ -3980,6 +4330,7 @@ export function buildPreMergeReadinessSummary(
     ci,
     claim,
     waiverEvidence,
+    branchCurrency,
   };
   if (dispositionEvidence) {
     summary.dispositionEvidence = dispositionEvidence;

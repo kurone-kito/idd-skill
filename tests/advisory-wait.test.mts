@@ -40,6 +40,380 @@ test('classifies CI check states for advisory wait decisions', () => {
   assert.equal(classifyCiChecks(ciSkippedNeutral).status, 'success');
 });
 
+// #1471: `classifyCiChecks` must dedupe multiple check-run instances that
+// share the same `name` down to the latest one before classifying, instead
+// of letting a stale instance for that name outvote the current one.
+test('classifyCiChecks: a stale cancelled-only instance is superseded by a later success for the same name', () => {
+  // Without dedup this shape misclassifies as 'unknown' (the stale
+  // CANCELLED instance is neither failing nor passing on its own), not
+  // 'failed' — a distinct branch from the FAILURE-triggered repro below.
+  const checks = [
+    {
+      name: 'idd-advisory-convergence',
+      state: 'CANCELLED',
+      completedAt: '2026-07-17T15:59:36Z',
+    },
+    {
+      name: 'idd-advisory-convergence',
+      state: 'SUCCESS',
+      completedAt: '2026-07-17T16:25:47Z',
+    },
+  ];
+  assert.equal(classifyCiChecks(checks).status, 'success');
+});
+
+test('classifyCiChecks: a genuinely failing latest instance still fails despite older passing instances', () => {
+  // Guards against an over-broad fix that ignores any failure anywhere in
+  // the list — this must stay 'failed' because the latest instance for the
+  // name is the one that failed.
+  const checks = [
+    {
+      name: 'idd-advisory-convergence',
+      state: 'SUCCESS',
+      completedAt: '2026-07-17T15:00:00Z',
+    },
+    {
+      name: 'idd-advisory-convergence',
+      state: 'SUCCESS',
+      completedAt: '2026-07-17T15:30:00Z',
+    },
+    {
+      name: 'idd-advisory-convergence',
+      state: 'FAILURE',
+      completedAt: '2026-07-17T16:00:00Z',
+    },
+  ];
+  assert.equal(classifyCiChecks(checks).status, 'failed');
+});
+
+test('classifyCiChecks: PR #1434 four-instance repro (2 cancelled, 1 failure, 1 success) classifies success', () => {
+  const checks = [
+    {
+      name: 'idd-advisory-convergence',
+      state: 'CANCELLED',
+      completedAt: '2026-07-17T15:59:36Z',
+    },
+    {
+      name: 'idd-advisory-convergence',
+      state: 'CANCELLED',
+      completedAt: '2026-07-17T15:59:51Z',
+    },
+    {
+      name: 'idd-advisory-convergence',
+      state: 'FAILURE',
+      completedAt: '2026-07-17T16:00:06Z',
+    },
+    {
+      name: 'idd-advisory-convergence',
+      state: 'SUCCESS',
+      completedAt: '2026-07-17T16:25:47Z',
+    },
+  ];
+  assert.equal(classifyCiChecks(checks).status, 'success');
+});
+
+test('classifyCiChecks: an in-progress rerun is not shadowed by an older completed success for the same name', () => {
+  // The mirror-image failure mode: a live rerun (no completedAt yet) must
+  // win over a stale completed SUCCESS for the same name, matching
+  // GitHub's own semantics where an in-progress required check leaves the
+  // branch not-clean rather than falling back to an old passing verdict.
+  const checks = [
+    {
+      name: 'idd-advisory-convergence',
+      state: 'SUCCESS',
+      completedAt: '2026-07-17T16:00:06Z',
+    },
+    {
+      name: 'idd-advisory-convergence',
+      state: 'IN_PROGRESS',
+      completedAt: null,
+    },
+  ];
+  assert.equal(classifyCiChecks(checks).status, 'pending');
+});
+
+test('classifyCiChecks: a same-instant failure/success tie for one name still fails, regardless of input order', () => {
+  // A tie must never resolve by raw input array order — two independent
+  // runs can genuinely complete within the same recorded second, and this
+  // dedup must never let ordering happenstance hide a real failure behind
+  // a same-instant success.
+  const tiedAt = '2026-07-17T16:00:06Z';
+  const failureFirst = [
+    { name: 'flaky', state: 'FAILURE', completedAt: tiedAt },
+    { name: 'flaky', state: 'SUCCESS', completedAt: tiedAt },
+  ];
+  const successFirst = [
+    { name: 'flaky', state: 'SUCCESS', completedAt: tiedAt },
+    { name: 'flaky', state: 'FAILURE', completedAt: tiedAt },
+  ];
+  assert.equal(classifyCiChecks(failureFirst).status, 'failed');
+  assert.equal(classifyCiChecks(successFirst).status, 'failed');
+});
+
+test('classifyCiChecks: a same-instant cancelled/success tie for one name prefers success, regardless of input order', () => {
+  const tiedAt = '2026-07-17T16:00:06Z';
+  const cancelledFirst = [
+    { name: 'flaky', state: 'CANCELLED', completedAt: tiedAt },
+    { name: 'flaky', state: 'SUCCESS', completedAt: tiedAt },
+  ];
+  const successFirst = [
+    { name: 'flaky', state: 'SUCCESS', completedAt: tiedAt },
+    { name: 'flaky', state: 'CANCELLED', completedAt: tiedAt },
+  ];
+  assert.equal(classifyCiChecks(cancelledFirst).status, 'success');
+  assert.equal(classifyCiChecks(successFirst).status, 'success');
+});
+
+test('classifyCiChecks: a same-instant tie between two non-failure/non-cancelled states is deterministic regardless of input order', () => {
+  // PR review finding: the reducer previously kept whichever instance
+  // was listed first for any tie not involving FAILURE or CANCELLED
+  // (e.g. SUCCESS vs NEUTRAL), so input order still mattered even
+  // though it never flipped `.status` for this particular pairing (both
+  // are pass-equivalent). Assert full order-independence anyway, since
+  // a future passing-vs-non-passing tie (e.g. SUCCESS vs ACTION_REQUIRED)
+  // would otherwise inherit the same order dependence and could flip
+  // `.status`.
+  const tiedAt = '2026-07-17T16:00:06Z';
+  const successFirst = [
+    { name: 'flaky', state: 'SUCCESS', completedAt: tiedAt },
+    { name: 'flaky', state: 'NEUTRAL', completedAt: tiedAt },
+  ];
+  const neutralFirst = [
+    { name: 'flaky', state: 'NEUTRAL', completedAt: tiedAt },
+    { name: 'flaky', state: 'SUCCESS', completedAt: tiedAt },
+  ];
+  assert.equal(classifyCiChecks(successFirst).status, 'success');
+  assert.equal(classifyCiChecks(neutralFirst).status, 'success');
+  const successAndActionRequiredFirst = [
+    { name: 'gated', state: 'SUCCESS', completedAt: tiedAt },
+    { name: 'gated', state: 'ACTION_REQUIRED', completedAt: tiedAt },
+  ];
+  const actionRequiredFirst = [
+    { name: 'gated', state: 'ACTION_REQUIRED', completedAt: tiedAt },
+    { name: 'gated', state: 'SUCCESS', completedAt: tiedAt },
+  ];
+  assert.equal(
+    classifyCiChecks(successAndActionRequiredFirst).status,
+    classifyCiChecks(actionRequiredFirst).status,
+  );
+});
+
+test('classifyCiChecks: a pending rerun carrying the zero-value completedAt sentinel is not shadowed by a stale success', () => {
+  // PR review finding (P1): gh pr checks (and similar API surfaces)
+  // report `0001-01-01T00:00:00Z` -- Go's zero Time value -- as
+  // `completedAt` for a check that has not actually completed, rather
+  // than omitting the field. That string is a syntactically valid ISO
+  // timestamp, so treating validity alone as "has this check completed"
+  // let a stale completed SUCCESS outrank a currently-pending rerun
+  // carrying the sentinel, silently discarding the fact that a new run
+  // is in flight for that same check name.
+  const checks = [
+    {
+      name: 'idd-advisory-convergence',
+      state: 'SUCCESS',
+      completedAt: '2026-07-17T16:00:06Z',
+    },
+    {
+      name: 'idd-advisory-convergence',
+      state: 'IN_PROGRESS',
+      completedAt: '0001-01-01T00:00:00Z',
+    },
+  ];
+  assert.equal(classifyCiChecks(checks).status, 'pending');
+});
+
+test('classifyCiChecks: two check-run entries with no name are never collapsed into one group', () => {
+  // PR review finding: grouping by `String(check.name ?? '')` collapses
+  // every missing/empty-name entry into a single bucket, so an unrelated
+  // unnamed failure could be discarded in favor of an unrelated unnamed
+  // success sharing no real identity with it.
+  const checks = [
+    { name: '', state: 'FAILURE', completedAt: '2026-07-17T16:00:06Z' },
+    { name: '', state: 'SUCCESS', completedAt: '2026-07-17T16:25:47Z' },
+  ];
+  assert.equal(classifyCiChecks(checks).status, 'failed');
+});
+
+// #1483: `classifyCiChecks` must not conflate two independently-sourced
+// checks that happen to share a display `name` -- e.g. a GitHub Actions
+// check-run and a legacy commit-status, or two check-runs from different
+// workflows -- by also grouping on the `type` / `workflowName` producer
+// discriminator (see `selectLatestCheckPerName` in protocol-helpers.mts).
+test('classifyCiChecks: two same-name instances sharing type and workflowName still dedupe to the latest (no #1471 regression)', () => {
+  const checks = [
+    {
+      name: 'idd-advisory-convergence',
+      state: 'CANCELLED',
+      completedAt: '2026-07-18T03:45:56Z',
+      type: 'check-run',
+      workflowName: 'IDD advisory-convergence gate',
+    },
+    {
+      name: 'idd-advisory-convergence',
+      state: 'SUCCESS',
+      completedAt: '2026-07-18T03:47:01Z',
+      type: 'check-run',
+      workflowName: 'IDD advisory-convergence gate',
+    },
+  ];
+  assert.equal(classifyCiChecks(checks).status, 'success');
+});
+
+test('classifyCiChecks: a check-run and a same-named commit-status never dedupe -- the commit-status FAILURE is never hidden by the check-run SUCCESS', () => {
+  // The issue's own motivating example: a check-run and a legacy commit
+  // status can report under an identical name/context string while being
+  // genuinely independent. `type` differs here ('check-run' vs.
+  // 'status-context'), so both must survive as separate groups.
+  const checks = [
+    {
+      name: 'build',
+      state: 'FAILURE',
+      completedAt: '2026-07-18T03:45:56Z',
+      type: 'status-context',
+      workflowName: '',
+    },
+    {
+      name: 'build',
+      state: 'SUCCESS',
+      completedAt: '2026-07-18T03:47:01Z',
+      type: 'check-run',
+      workflowName: 'Some Workflow',
+    },
+  ];
+  const result = classifyCiChecks(checks);
+  assert.equal(result.status, 'failed');
+  assert.ok(
+    result.failed?.some(
+      (check) => check.type === 'status-context' && check.state === 'FAILURE',
+    ),
+    'the commit-status FAILURE must be present in the failed list',
+  );
+});
+
+test('classifyCiChecks: two check-runs sharing a name from different workflows never dedupe', () => {
+  // Same `type` ('check-run') on both sides, but a different `workflowName`
+  // is just as strong a producer-conflict signal as a different `type`.
+  const checks = [
+    {
+      name: 'build',
+      state: 'FAILURE',
+      completedAt: '2026-07-18T03:45:56Z',
+      type: 'check-run',
+      workflowName: 'Workflow A',
+    },
+    {
+      name: 'build',
+      state: 'SUCCESS',
+      completedAt: '2026-07-18T03:47:01Z',
+      type: 'check-run',
+      workflowName: 'Workflow B',
+    },
+  ];
+  assert.equal(classifyCiChecks(checks).status, 'failed');
+});
+
+test('classifyCiChecks: same type, one entry with a workflowName and one without, same name -- never dedupe', () => {
+  // A narrower variant of the check-run/commit-status split: both entries
+  // are `type: 'check-run'` here, but only one carries a `workflowName`
+  // (e.g. an Actions-routed job vs. a check-run posted directly by a
+  // non-Actions GitHub App under the same display name). Presence vs.
+  // absence of workflowName is itself a producer-conflict signal, just
+  // like two differing non-empty values.
+  const checks = [
+    {
+      name: 'build',
+      state: 'FAILURE',
+      completedAt: '2026-07-18T03:45:56Z',
+      type: 'check-run',
+      workflowName: '',
+    },
+    {
+      name: 'build',
+      state: 'SUCCESS',
+      completedAt: '2026-07-18T03:47:01Z',
+      type: 'check-run',
+      workflowName: 'Some Workflow',
+    },
+  ];
+  const result = classifyCiChecks(checks);
+  assert.equal(result.status, 'failed');
+  assert.ok(
+    result.failed?.some(
+      (check) => check.workflowName === '' && check.state === 'FAILURE',
+    ),
+    'the workflowName-less FAILURE must be present in the failed list',
+  );
+});
+
+test('classifyCiChecks: the (name, type, workflowName) dedup key is deterministic regardless of input order', () => {
+  const checkRun = {
+    name: 'idd-advisory-convergence',
+    state: 'CANCELLED',
+    completedAt: '2026-07-18T03:45:56Z',
+    type: 'check-run',
+    workflowName: 'IDD advisory-convergence gate',
+  };
+  const rerun = {
+    ...checkRun,
+    state: 'SUCCESS',
+    completedAt: '2026-07-18T03:47:01Z',
+  };
+  const statusContext = {
+    name: 'idd-advisory-convergence',
+    state: 'FAILURE',
+    completedAt: '2026-07-18T03:46:00Z',
+    type: 'status-context',
+    workflowName: '',
+  };
+  const checkRunFirst = [checkRun, rerun, statusContext];
+  const statusContextFirst = [statusContext, rerun, checkRun];
+  const reversed = [statusContext, checkRun, rerun];
+  assert.equal(classifyCiChecks(checkRunFirst).status, 'failed');
+  assert.equal(classifyCiChecks(statusContextFirst).status, 'failed');
+  assert.equal(classifyCiChecks(reversed).status, 'failed');
+  // The check-run pair (same type + workflowName) must still dedupe to its
+  // latest (SUCCESS) instance regardless of order -- only the independent
+  // status-context FAILURE is what makes the overall result 'failed'.
+  for (const input of [checkRunFirst, statusContextFirst, reversed]) {
+    const checkRunEntries = classifyCiChecks(input).failed?.filter(
+      (check) => check.type === 'check-run',
+    );
+    assert.equal(
+      checkRunEntries?.length,
+      0,
+      'the check-run pair must dedupe to its passing latest instance, not appear in failed',
+    );
+  }
+});
+
+test('classifyCiChecks: characterization -- two same-name, same-type entries that both lack a workflowName still dedupe (accepted residual limitation)', () => {
+  // Documents the deliberately-accepted residual gap: without a real
+  // producer identity (e.g. the owning GitHub App) for two check-runs
+  // that are not routed through any Actions workflow, they remain
+  // indistinguishable from reruns of one another -- matching
+  // ci-wait-state.mts's own accepted `(checkName, workflowName)` gap. This
+  // is also what keeps every pre-#1483 `classifyCiChecks` caller (which
+  // never sets `type`/`workflowName` at all) behavior-identical: those
+  // callers hit this exact same uniformly-absent path.
+  const checks = [
+    {
+      name: 'legacy-check',
+      state: 'FAILURE',
+      completedAt: '2026-07-18T03:45:56Z',
+      type: 'check-run',
+      workflowName: '',
+    },
+    {
+      name: 'legacy-check',
+      state: 'SUCCESS',
+      completedAt: '2026-07-18T03:47:01Z',
+      type: 'check-run',
+      workflowName: '',
+    },
+  ];
+  assert.equal(classifyCiChecks(checks).status, 'success');
+});
+
 test('detects operational marker prefixes', () => {
   assert.equal(
     operationalMarkerPrefix(

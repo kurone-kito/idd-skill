@@ -22,10 +22,12 @@
 //   read time, so a caller polling in a loop can detect the branch moving
 //   out from under an in-flight wait.
 import { execFileSync } from 'node:child_process';
+import { parseCliArgs } from './cli-args.mjs';
 import { ghText } from './gh-exec.mjs';
 import { deriveGhHttpStatus } from './gh-http-status.mjs';
 import {
   parsePaginatedGhNdjson,
+  selectLatestCheckInstance,
   summarizeBranchReviewRequirements,
 } from './protocol-helpers.mjs';
 
@@ -60,6 +62,25 @@ const FAILURE_STATES = new Set([
   // failing required check would misleadingly read as "unknown".
   'ERROR',
 ]);
+// Flag-spec keys stay the dashed literal on purpose (never bare keys like
+// `pr:`): tests/flag-name-matrix.test.mts scans this file's *compiled*
+// .mjs source text for quoted flag literals such as the --pr spec key
+// below. See cli-args.mts's module header for the full invariant. (This
+// comment deliberately avoids writing that key inside matching quote
+// marks, so it cannot itself satisfy the scan if the real key is ever
+// renamed -- see #1446's PR description for why that matters.)
+//
+// Declared here, above the import.meta.main trigger below, rather than
+// alongside parseArgs further down: the trigger calls main() ->
+// parseArgs() synchronously at module-evaluation time, and a `const`
+// declared after that point is still in the temporal dead zone when the
+// trigger fires (see ci-wait-policy.mts's identical note).
+const CI_WAIT_STATE_FLAG_SPEC = {
+  '--pr': { type: 'string' },
+  '--owner': { type: 'string', default: '' },
+  '--repo': { type: 'string', default: '' },
+  '--help': { type: 'boolean', short: 'h' },
+};
 if (import.meta.main) {
   main();
 }
@@ -68,6 +89,10 @@ if (import.meta.main) {
 // `gh` call.
 function main() {
   const args = parseArgs(process.argv.slice(2));
+  if (args.help) {
+    printHelp();
+    process.exit(0);
+  }
   if (!args.prNumber) {
     // parseArgs normalizes both an absent --pr and an invalid one (e.g.
     // `--pr 0` or `--pr foo`) to null, so "missing" alone would misreport an
@@ -192,6 +217,137 @@ function bucketState(state) {
   if (SUCCESS_STATES.has(state)) return 'success';
   return 'unknown';
 }
+/**
+ * Reduce `entries` to one representative per `checkName`, matching the
+ * per-name dedup #1471 added to `classifyCiChecks` in
+ * `protocol-helpers.mts`: GitHub can report several check-run instances
+ * sharing one required check name (a manual or automatic rerun leaves the
+ * earlier instance in the fetched rollup alongside the new one), and only
+ * the latest instance per name should govern pass/fail/pending (#1478).
+ * Reuses the exported `selectLatestCheckInstance` for the actual
+ * same-name reduction (still-incomplete wins over completed; else latest
+ * `completedAt` wins; a same-instant tie prefers `FAILURE`, then
+ * non-`CANCELLED`) so this file does not maintain a second,
+ * independently-drifting copy of that tie-break logic. Only the
+ * name-keyed grouping below is local to this file, because
+ * `CiWaitCheckEntry` uses `checkName` where `protocol-helpers.mts`'s
+ * `CheckLike` uses `name`.
+ *
+ * `selectLatestCheckInstance`'s shared `ciStateTieRank` special-cases only
+ * the two literal strings `'FAILURE'` and `'CANCELLED'`; every other raw
+ * state -- including this file's own wider `FAILURE_STATES` additions
+ * `TIMED_OUT`, `ACTION_REQUIRED`, `STARTUP_FAILURE`, `STALE`, and `ERROR`
+ * -- falls into the shared tie-break's generic rank-1 bucket, where a
+ * same-instant tie against a success-family state resolves by raw
+ * lexicographic string comparison instead of "the failure should win"
+ * (#1504). Rather than widening `ciStateTieRank` itself -- shared,
+ * upstream of `classifyCiChecks`, and out of scope for this fix -- see
+ * `selectLatestCheckEntry` for how each group applies a tie-break-only
+ * state normalization that stays entirely local to this file.
+ *
+ * Deliberately keyed by `checkName` alone, not the `(checkName,
+ * workflowName)` pair this file otherwise disambiguates entries by (see
+ * the module header): GitHub's own required-status-check gate matches by
+ * check name alone, independent of which workflow produced a given
+ * instance, so any rerun whose `workflowName` happens to differ from the
+ * instance it supersedes would not be deduped under a workflow-qualified
+ * key, leaving the defect only partially fixed. (The live PR #1434
+ * reproduction this fix targets happens to share one `workflowName`
+ * across every instance, so a composite key would also fix that specific
+ * case -- but not the general one, and not as directly as matching
+ * GitHub's own name-only semantics.) `required` itself is already
+ * computed by `checkName` alone (see `normalizeCheckEntry`), so this
+ * does not newly conflate anything the required-checks rollup did not
+ * already conflate. Two genuinely independent, same-named required
+ * checks that happen to complete in the same instant remain an accepted
+ * limitation shared with `classifyCiChecks` (tracked in #1483).
+ *
+ * `entries` itself may be empty (e.g. no required check has been
+ * reported yet), in which case `groups` simply ends up with zero
+ * entries. What is guaranteed is that every group `selectLatestCheckEntry`
+ * receives has at least one member: a group is only ever created by
+ * pushing the entry that introduced its key (see the `Map` construction
+ * below), so the seedless `reduce` inside `selectLatestCheckInstance`
+ * never runs on an empty array.
+ */
+function selectLatestCheckEntryPerName(entries) {
+  const groups = new Map();
+  for (const entry of entries) {
+    const group = groups.get(entry.checkName);
+    if (group) {
+      group.push(entry);
+    } else {
+      groups.set(entry.checkName, [entry]);
+    }
+  }
+  return [...groups.values()].map((group) => selectLatestCheckEntry(group));
+}
+/**
+ * Reduce one name-keyed group to its representative instance via the
+ * shared `selectLatestCheckInstance`, using a *tie-break-only* normalized
+ * state (#1504) so this file's wider `FAILURE_STATES` vocabulary still
+ * wins a same-instant tie against a success-family state, the same way a
+ * literal `FAILURE` conclusion already does. `entry.state` itself is never
+ * mutated: each group member is wrapped with `tieBreakState(entry)` for
+ * selection purposes only, and the winning wrapper is unwrapped back to
+ * its original `entry` before returning, so the returned `CiWaitCheckEntry`
+ * always carries its real, unmodified `state`.
+ *
+ * Sorted by the original `entry.state` (ascending) before wrapping, so a
+ * same-instant tie between two *distinct* raw states that both normalize
+ * to the same tie-break state (e.g. `TIMED_OUT` and `STARTUP_FAILURE`,
+ * both normalized to `'FAILURE'`) still resolves deterministically
+ * (Copilot review, PR #1530). Without the sort, `selectLatestCheckInstance`'s
+ * last-resort comparison (`candidate.state !== current.state && ...`) sees
+ * two *equal* normalized states and always keeps whichever entry
+ * `reduce` saw first -- an input-order artifact, not a value-based choice.
+ * Pre-fix, distinct raw states made that same comparison a genuine
+ * lexicographic argmin, independent of input order; sorting restores
+ * exactly that: `reduce` starts from (and keeps) the lexicographically
+ * smallest raw state whenever normalized states tie. This sort changes
+ * nothing else -- the `completedAt`-primary and rank-primary comparisons
+ * in `isNewerCheckInstance` are already order-independent.
+ *
+ * Exported (like `protocol-helpers.mts`'s own `selectLatestCheckInstance`)
+ * so the determinism property above is directly unit-testable: the winning
+ * *raw* instance's identity is not observable through
+ * `buildCiWaitStateSummary`'s public return shape at all -- `checks` there
+ * is the raw, not-deduped list, and `requiredChecks` only exposes aggregate
+ * pass/fail booleans that stay identical regardless of which same-rank
+ * instance wins a tie.
+ */
+export function selectLatestCheckEntry(group) {
+  const sorted = [...group].sort((a, b) =>
+    a.state < b.state ? -1 : a.state > b.state ? 1 : 0,
+  );
+  const winner = selectLatestCheckInstance(
+    sorted.map((entry) => ({
+      entry,
+      state: tieBreakState(entry),
+      completedAt: entry.completedAt,
+    })),
+  );
+  return winner.entry;
+}
+/**
+ * The state the shared tie-break in `selectLatestCheckInstance` should
+ * compare for `entry`, which is not always `entry.state` itself (#1504).
+ * `CANCELLED` is left as `CANCELLED`: a cancelled run reached no verdict,
+ * so it must keep losing a same-instant tie exactly as it does today.
+ * Every other entry already bucketed as `status === 'failure'` by
+ * `bucketState` -- the literal `FAILURE` conclusion plus this file's wider
+ * `FAILURE_STATES` additions (`TIMED_OUT`, `ACTION_REQUIRED`,
+ * `STARTUP_FAILURE`, `STALE`, the StatusContext-only `ERROR`) -- normalizes
+ * to the literal `'FAILURE'` so `ciStateTieRank` ranks it 0 (always wins)
+ * instead of falling into its generic rank-1 bucket. Every non-failure
+ * entry (success, pending, unknown) is returned unchanged: the existing
+ * lexicographic fallback within that shared rank is correct as-is and out
+ * of scope for this fix.
+ */
+function tieBreakState(entry) {
+  if (entry.state === 'CANCELLED') return 'CANCELLED';
+  return entry.status === 'failure' ? 'FAILURE' : entry.state;
+}
 function buildRequiredChecksRollup(
   checks,
   requiredCheckNameSet,
@@ -222,18 +378,26 @@ function buildRequiredChecksRollup(
   const presentNames = new Set(requiredEntries.map((check) => check.checkName));
   const missingNames = names.filter((name) => !presentNames.has(name));
   const allRequiredPresent = missingNames.length === 0;
-  const anyRequiredFailing = requiredEntries.some(
+  // #1478: dedupe multiple check-run instances sharing one required check
+  // name down to the latest instance before classifying, so a stale
+  // CANCELLED/FAILURE instance never outvotes a later SUCCESS for the
+  // same name (the identical defect shape #1471 fixed in
+  // classifyCiChecks). presentNames/missingNames/allRequiredPresent above
+  // are unaffected: they only test *presence* by name via a Set, which is
+  // already naturally deduped.
+  const dedupedRequiredEntries = selectLatestCheckEntryPerName(requiredEntries);
+  const anyRequiredFailing = dedupedRequiredEntries.some(
     (check) => check.status === 'failure',
   );
-  const anyRequiredPending = requiredEntries.some(
+  const anyRequiredPending = dedupedRequiredEntries.some(
     (check) => check.status === 'pending',
   );
-  const anyRequiredUnknown = requiredEntries.some(
+  const anyRequiredUnknown = dedupedRequiredEntries.some(
     (check) => check.status === 'unknown',
   );
   const namedChecksPassing =
     allRequiredPresent &&
-    requiredEntries.every((check) => check.status === 'success');
+    dedupedRequiredEntries.every((check) => check.status === 'success');
   let status;
   if (!allRequiredPresent) {
     status = 'missing';
@@ -266,40 +430,32 @@ function buildRequiredChecksRollup(
     status,
   };
 }
-function parseArgs(argv) {
-  const parsed = {
-    prNumber: null,
-    owner: '',
-    repo: '',
+/**
+ * Restores this file's pre-#1450 permissive `Number.parseInt` contract:
+ * `Number.parseInt` accepts trailing-garbage ("42abc" -> 42) and
+ * leading-zero ("007" -> 7) tokens the same way the original hand-rolled
+ * `Number.parseInt(value ?? '', 10)` always did, then the original's own
+ * `!Number.isInteger(...) || (... ?? 0) < 1` post-check collapses an
+ * invalid or absent value to `null`. `cli-args.mts`'s
+ * `parseCanonicalIntegerOrNull` is a poor substitute: its canonical-pattern
+ * regex rejects those same permissive tokens outright, which is a real
+ * contract change a CodeRabbit review on PR #1466 caught -- #1450's
+ * acceptance criteria protect the post-parse integer contract as-is, only
+ * flag *syntax* (missing/flag-shaped values, unknown flags) is meant to
+ * tighten.
+ */
+function parseLenientPositiveIntegerOrNull(token) {
+  const value = Number.parseInt(token ?? '', 10);
+  return Number.isInteger(value) && value >= 1 ? value : null;
+}
+export function parseArgs(argv) {
+  const { values, help } = parseCliArgs(argv, CI_WAIT_STATE_FLAG_SPEC);
+  return {
+    prNumber: parseLenientPositiveIntegerOrNull(values.pr),
+    owner: values.owner,
+    repo: values.repo,
+    help,
   };
-  for (let index = 0; index < argv.length; index += 1) {
-    const token = argv[index];
-    const value = argv[index + 1];
-    if (token === '--pr') {
-      parsed.prNumber = Number.parseInt(value ?? '', 10);
-      index += 1;
-      continue;
-    }
-    if (token === '--owner') {
-      parsed.owner = value ?? '';
-      index += 1;
-      continue;
-    }
-    if (token === '--repo') {
-      parsed.repo = value ?? '';
-      index += 1;
-      continue;
-    }
-    if (token === '--help' || token === '-h') {
-      printHelp();
-      process.exit(0);
-    }
-    throw new Error(`unknown argument: ${token}`);
-  }
-  if (!Number.isInteger(parsed.prNumber) || (parsed.prNumber ?? 0) < 1) {
-    parsed.prNumber = null;
-  }
-  return parsed;
 }
 /**
  * `gh api <path>`, tolerating a genuine 404 (unprotected branch / no active
@@ -338,7 +494,7 @@ function ghApiJsonOr404Empty(path, paginate) {
 }
 function printHelp() {
   process.stdout.write(`Usage:
-  node scripts/ci-wait-state.mjs --pr <number> [--owner <owner>] [--repo <repo>]
+  node scripts/ci-wait-state.mjs --pr <number> [--owner <owner>] [--repo <repo>] [--help]
 
 Single-shot, read-only D-phase CI snapshot: per-check status keyed by
 (checkName, workflowName), the live headRefOid, and a top-level

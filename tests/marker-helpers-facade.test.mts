@@ -16,6 +16,8 @@ const SAMPLE_NAMES = [
   'parseReleaseComment',
   'renderClaimedByMarker',
   'renderUnclaimedByMarker',
+  'renderActivationNonceMarker',
+  'parseActivationNonceComment',
   'renderReviewWatermarkMarker',
   'renderReviewBaselineMarker',
   'renderAdvisoryWaitMarker',

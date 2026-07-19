@@ -10,8 +10,13 @@
 // marker's exactly-one/coherent-value rule, its cross-field agreement with
 // the configured blocked-by-human label, markerPrefix consistency across
 // every authoring marker, the declared shape's required section headings,
-// the roadmap-id/blocked-by dependency-marker rules, and visible/hidden
-// line agreement for the suitability and effort footers.
+// the roadmap-id/blocked-by dependency-marker rules, visible/hidden line
+// agreement for the suitability and effort footers, and an advisory
+// warning-severity check that flags an issue/PR reference used near
+// coordination language (e.g. "before", "once", "requires") with no
+// corresponding Blocked-by/Depends-on/task-list dependency encoding. The
+// advisory check never fails the report or changes the exit code — see
+// checkProseOnlyDependency.
 //
 // All marker value parsing is delegated to the existing
 // autopilot-suitability.mts / effort.mts / marker-regex.mts /
@@ -23,14 +28,19 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import type { AutopilotSuitabilityMarkerDetection } from './autopilot-suitability.mts';
 import { parseAutopilotSuitabilityMarker } from './autopilot-suitability.mts';
-import { extractBlockedByRoadmapMarkers } from './discover-readiness-check.mts';
+import { parseCliArgs } from './cli-args.mts';
+import {
+  extractBlockedByIssueNumbers,
+  extractBlockedByRoadmapMarkers,
+  extractDependencyIssueNumbers,
+} from './discover-readiness-check.mts';
 import { extractRoadmapMarkerId } from './discover-roadmap-graph.mts';
 import type { EffortMarkerDetection } from './effort.mts';
 import { parseEffortMarker } from './effort.mts';
 import type { IddConfig } from './idd-config.mts';
 import { loadIddConfig } from './idd-config.mts';
 import { stripMarkdownCodeRegions } from './markdown-code.mts';
-import { createMarkerRegex } from './marker-regex.mts';
+import { createMarkerRegex, escapeRegex } from './marker-regex.mts';
 import { normalizePolicyConfig, POLICY_DEFAULTS } from './policy-helpers.mts';
 
 const DEFAULT_MARKER_PREFIX = 'idd-skill';
@@ -53,6 +63,16 @@ export interface AuditFinding {
   name: string;
   result: 'pass' | 'fail';
   detail: string;
+  /**
+   * Present only on the advisory `prose-dependency` check when it flags a
+   * possible unencoded dependency. Deliberately separate from `result`
+   * (which stays `'pass'` for this check in every case): an advisory
+   * finding must never flip {@link AuditReport.passed} to `false` or change
+   * the CLI exit code, and keeping it a distinct optional field makes that
+   * true by construction instead of relying on a special case in the
+   * `passed` aggregation below.
+   */
+  severity?: 'warning';
 }
 
 /** Full audit report for one drafted issue body. */
@@ -77,6 +97,36 @@ export interface AuditOptions {
   labels?: readonly string[];
   /** Defaults to `POLICY_DEFAULTS.labels.blockedByHumanLabelName`. */
   blockedByHumanLabelName?: string;
+  /**
+   * The repository the drafted body belongs to, as `owner/repo` (matching
+   * the `GITHUB_REPOSITORY` env var's own format). Used only by the
+   * advisory `prose-dependency` check to tell a local issue/PR reference
+   * from a cross-repo one: the encodings it recommends (`Blocked by #N` /
+   * `Depends on #N`) are inherently local, so a cross-repo reference would
+   * otherwise get the same, actively-wrong advice.
+   *
+   * The two reference forms this option affects default in **opposite**
+   * directions when it is omitted:
+   *
+   * - **Full-URL / Markdown-link-to-a-full-URL** references: every match
+   *   is still treated as flaggable (the pre-#1399-fix default), since a
+   *   bare `owner/repo` cannot be inferred from the body text alone.
+   * - **`owner/repo#N` shorthand** references: every match is excluded
+   *   (never flagged), since this shorthand was never recognized at all
+   *   before this option existed — there is no legacy "flag by default"
+   *   behavior to preserve, and a shorthand naming an unconfirmed repo is
+   *   not assumed local.
+   *
+   * In both forms, an explicit `currentRepo` that case-insensitively
+   * matches the reference's `owner/repo` always flags it (subject to the
+   * existing dependency-marker exclusion), and one that differs always
+   * excludes it.
+   *
+   * An empty or whitespace-only value is normalized to `undefined` before
+   * this comparison runs, so it is treated the same as omitting this
+   * option entirely — never as a known, non-matching repo.
+   */
+  currentRepo?: string;
 }
 
 interface HeadingRequirement {
@@ -105,6 +155,166 @@ const SHAPE_HEADING_REQUIREMENTS: Record<
   ],
 };
 
+// Coordination-language keywords that, alongside an unencoded issue/PR
+// reference in the same sentence, suggest the reference is being used as a
+// prose-only start-blocking dependency instead of the required `Blocked by`
+// / `Depends on` / task-list encoding. Deliberately broad (an advisory
+// check can tolerate false positives; the author "consciously confirms" per
+// the contract) rather than an exhaustive parse of every possible phrasing.
+const PROSE_DEPENDENCY_KEYWORDS = [
+  'before',
+  'after',
+  'once',
+  'until',
+  'predates',
+  'gate',
+  'gated',
+  'requires',
+  'lands first',
+] as const;
+
+// Matches a Markdown link whose target is a full GitHub issue/PR URL (e.g.
+// `[PR #1391](https://github.com/owner/repo/pull/1391)`), a bare `#123`
+// issue/PR reference, a bare full GitHub issue/PR URL, or a local
+// `owner/repo#123` shorthand — in that order, capturing each URL/shorthand
+// alternative's owner and repo so callers can tell a local reference from
+// a cross-repo one (see `currentRepo` handling in checkProseOnlyDependency
+// below). The Markdown-link alternative is tried (and, being anchored at
+// the label's own `[`, wins) first specifically so that a cross-repo
+// link's *label* text — which often repeats the same `#N` the URL already
+// names, e.g. the `#1391` above — is consumed as part of that one link
+// match rather than separately re-matched by the bare-`#` alternative and
+// misread as a local reference once the link's URL itself is correctly
+// filtered out as cross-repo. Between the issue/PR number and the link's
+// closing `)`, the Markdown-link alternative also tolerates an optional
+// trailing `/`, an optional URL fragment (`#issuecomment-123`), and an
+// optional quoted title (`"..."` or `'...'`) — each bounded tightly enough
+// (a matching quote character, or a fragment charset that excludes `)`,
+// quotes, and whitespace) that none of them can consume past the link's
+// real closing paren the way a naive `.*\)` would. Without this, any of
+// those three trailing forms would break the Markdown-link match and let
+// the label's own bare `#N` leak through to the bare-`#` alternative
+// below, reintroducing the label-leak false positive the Markdown-link
+// alternative exists to prevent. `#` alone (as in an ATX heading) never
+// matches without trailing digits. The bare-`#` alternative excludes a `#`
+// immediately preceded by a word character or `/` (a negative lookbehind),
+// so cross-repo shorthand like `other/repo#123` does not match on its
+// trailing `#123` — a cross-repo reference cannot be encoded with this
+// repository's local `Blocked by` / `Depends on` markers, so flagging it
+// here would be misleading rather than actionable. The final `owner/repo#N`
+// shorthand alternative recognizes that same shape as a *distinct*,
+// dedicated match (rather than leaving it permanently unmatched) so
+// checkProseOnlyDependency can apply the currentRepo comparison to it —
+// flagging it only when the shorthand names the current repository (see
+// the `currentRepo` JSDoc on `AuditOptions` for the reversed-default-
+// polarity rationale). It reuses the bare-`#` alternative's own
+// `(?<![\w/])` lookbehind so it, too, only starts matching at a natural
+// token boundary rather than mid-path (e.g. inside a 3-segment
+// slash-separated path that happens to end in `#123`).
+//
+// The quoted-title sub-pattern tolerates a backslash-escaped quote
+// matching the title's own delimiter (`\"` inside a `"..."` title, or
+// `\'` inside a `'...'` title) as content instead of letting it close the
+// title early: `(?:\\.|[^"\\\n])*` (and the single-quote equivalent)
+// tries consuming a backslash plus the character right after it as one
+// unit before falling back to "any character that is not the quote, a
+// backslash, or a newline", so an escaped quote is never mistaken for the
+// real closing delimiter. Without this, a title like `"reviewed
+// \"API\""` would close at the first escaped quote, leave the rest of
+// the title as unconsumed content before the link's real closing paren,
+// fail the whole Markdown-link alternative, and re-leak the label's own
+// bare `#N` to the bare-`#` alternative — the same failure mode the
+// trailing-content tolerances above already guard against, just
+// triggered by escaping instead of an unhandled trailing shape.
+//
+// The character class excludes a literal backslash (not just the quote
+// and newline) so the two alternatives never overlap on the same input
+// character: `\\.` is the only alternative that can ever consume a `\`,
+// and the class-based alternative is the only one that can consume
+// anything else. A version that let the class also match a bare `\`
+// (`[^"\n]` alone) would let the engine choose, for every backslash in a
+// run of them, between pairing it with the next character via `\\.` or
+// consuming it alone via the class — an ambiguity that multiplies
+// combinatorially (Fibonacci-many partitions of an N-backslash run) and
+// causes catastrophic backtracking once the overall match fails, i.e.
+// exponential-time behavior on a long run of backslashes with no closing
+// quote (confirmed empirically: a ~30-character adversarial input took
+// several seconds under the ambiguous form; a ~10,000-character one
+// resolves in under a millisecond after excluding the backslash from the
+// class). This is the standard non-overlapping idiom for a
+// backslash-escaped quoted string and applies to both quote styles.
+const ISSUE_OR_PR_REFERENCE_PATTERN =
+  /\[[^\]\n]*\]\(https:\/\/github\.com\/([\w.-]+)\/([\w.-]+)\/(?:issues|pull)\/(\d+)(?:\/)?(?:#[^)\s"']+)?(?:\s+(?:"(?:\\.|[^"\\\n])*"|'(?:\\.|[^'\\\n])*'))?\)|(?<![\w/])#(\d+)\b|https:\/\/github\.com\/([\w.-]+)\/([\w.-]+)\/(?:issues|pull)\/(\d+)\b|(?<![\w/])([\w.-]+)\/([\w.-]+)#(\d+)\b/gi;
+
+// Matches a Markdown list item marker at the start of a line (unordered
+// `-`/`*`/`+`, or ordered `1.`/`1)`), optionally indented and optionally
+// followed by a task-list checkbox. Captures the leading indentation
+// (group 1) so splitIntoListItemBlocks can tell a deeper-indented
+// nested/child marker from a new marker at the same or shallower
+// indentation as the currently open node at that depth in its
+// indentation-ancestry stack — see that function for how the two are
+// told apart. Declared here (before the CLI entry
+// block below), not next to splitIntoSentences/splitIntoListItemBlocks
+// that use it, because those are hoisted function declarations but this
+// is a module-level `const` — declaring it after the entry block would be
+// a TDZ risk under the CLI path, which calls main() synchronously at this
+// point in module evaluation (see tests/cli-entry-smoke.test.mts).
+const LIST_ITEM_MARKER_PATTERN = /^(\s*)(?:[-*+]|\d+[.)])\s+/;
+
+// A continuation line (no list-item marker of its own) has no
+// LIST_ITEM_MARKER_PATTERN capture group to read an indentation from,
+// unlike a marker line — its own leading whitespace has to be measured
+// directly (see `lineIndentColumn`, used by splitIntoListItemBlocks's
+// continuation-line branch, #1476). Declared here for the same
+// TDZ reason as LIST_ITEM_MARKER_PATTERN immediately above: this is a
+// module-level `const` reached by the same synchronous CLI call path,
+// not a hoisted function declaration.
+const LEADING_WHITESPACE_PATTERN = /^\s*/;
+
+// Matches a Markdown reference-style link *usage*: `[text][ref]`, where a
+// separate `[ref]: <target>` definition (matched by
+// LINK_REFERENCE_DEFINITION_PATTERN below) supplies the actual target
+// elsewhere in the document — commonly far from the usage, so this is
+// resolved as a whole-document pre-processing step (see
+// resolveReferenceStyleLinks) rather than as a fifth alternative inside
+// ISSUE_OR_PR_REFERENCE_PATTERN, which cannot look outside its own match
+// to find the target. The ref label must be non-empty — this
+// deliberately excludes the shortcut forms `[text][]` and bare `[text]`
+// (which would resolve the ref from the label text itself); only the
+// explicit-ref shape named in issue #1472 is in scope here. Same
+// TDZ-avoidance placement rationale as LIST_ITEM_MARKER_PATTERN above.
+const REFERENCE_STYLE_LINK_USAGE_PATTERN = /\[([^\]\n]*)\]\[([^\]\n]+)\]/g;
+
+// Matches a Markdown link reference definition line: optionally indented
+// (up to 3 spaces, per CommonMark), `[label]: target`, with the target
+// read up to the first whitespace. An optional title on the same
+// definition line (e.g. `[ref]: <url> "title"`) is intentionally not
+// captured — only the destination matters for resolving a reference-style
+// link to a GitHub issue/PR URL.
+const LINK_REFERENCE_DEFINITION_PATTERN = /^ {0,3}\[([^\]\n]+)\]:\s*(\S+)/gm;
+
+// Flag-spec keys stay the dashed literal on purpose (never bare keys like
+// `shape:`): tests/flag-name-matrix.test.mts scans this file's *compiled*
+// .mjs source text for quoted flag literals such as the --shape spec key
+// below. See cli-args.mts's module header for the full invariant.
+//
+// Declared here, above the import.meta.main trigger below, rather than
+// alongside parseArgs further down: the trigger calls main() ->
+// parseArgs() synchronously at module-evaluation time, and a `const`
+// declared after that point is still in the temporal dead zone when the
+// trigger fires.
+const AUDIT_AUTHORED_ISSUE_FLAG_SPEC = {
+  '--help': { type: 'boolean', short: 'h', default: false },
+  '--shape': { type: 'string' },
+  '--body-file': { type: 'string' },
+  '--stdin': { type: 'boolean', default: false },
+  '--marker-prefix': { type: 'string' },
+  '--config': { type: 'string' },
+  '--current-repo': { type: 'string' },
+  '--label': { type: 'string', multiple: true },
+  '--format': { type: 'string', default: 'json' },
+} as const;
+
 if (import.meta.main) {
   main();
 }
@@ -113,7 +323,10 @@ if (import.meta.main) {
  * Audit a drafted issue body against the issue-authoring contract's
  * structural expectations for the declared shape. Every check runs
  * independently (no short-circuit), so one report surfaces every problem
- * at once instead of stopping at the first failure.
+ * at once instead of stopping at the first failure. One check
+ * (`prose-dependency`) is advisory-only: it always reports `result:
+ * 'pass'` and only ever adds a `severity: 'warning'` marker plus detail,
+ * so it never affects `passed` or the caller's exit code.
  */
 export function auditAuthoredIssue(
   body: unknown,
@@ -158,6 +371,7 @@ export function auditAuthoredIssue(
     checkDependencyMarkerRule(text, markerPrefix, shape),
     checkSuitabilityVisibleLineAgreement(text, markerPrefix, suitability),
     checkEffortVisibleLineAgreement(text, markerPrefix),
+    checkProseOnlyDependency(text, normalizeCurrentRepo(options.currentRepo)),
   ];
 
   return {
@@ -474,6 +688,518 @@ function checkEffortVisibleLineAgreement(
   );
 }
 
+// An empty or whitespace-only currentRepo (reachable via an explicit
+// `--current-repo ''`, or an environment where `$GITHUB_REPOSITORY`
+// resolves to an empty string) must be treated the same as it being
+// unset. Without this, `currentRepo !== undefined` is true for `''`, but
+// `${owner}/${repo}` built from a regex match is never empty, so it can
+// never equal `''` — every full-URL/cross-repo-shorthand match would then
+// be silently treated as "known and different" (cross-repo) and excluded,
+// even when the reference is actually local. Returning the *trimmed*
+// value (not the original) when it is non-empty is a free, strictly more
+// correct bonus: a currentRepo with stray leading/trailing whitespace
+// would otherwise never case-insensitively equal a match's own untrimmed
+// `owner/repo` either.
+function normalizeCurrentRepo(
+  currentRepo: string | undefined,
+): string | undefined {
+  if (currentRepo === undefined) {
+    return undefined;
+  }
+  const trimmed = currentRepo.trim();
+  return trimmed.length === 0 ? undefined : trimmed;
+}
+
+function checkProseOnlyDependency(
+  text: string,
+  currentRepo: string | undefined,
+): AuditFinding {
+  const id = 'prose-dependency';
+  const name =
+    'Advisory: issue/PR references near coordination language should use a dependency marker';
+  // Numbers already covered by a real machine-readable dependency encoding
+  // (Blocked by / Depends on / task-list) are never flagged, regardless of
+  // nearby prose — the whole point of this check is to catch references
+  // that carry *no* such encoding.
+  const encoded = new Set([
+    ...extractBlockedByIssueNumbers(text),
+    ...extractDependencyIssueNumbers(text),
+  ]);
+  const keywordPattern = new RegExp(
+    `\\b(?:${PROSE_DEPENDENCY_KEYWORDS.map(escapeRegex).join('|')})\\b`,
+    'i',
+  );
+  const flagged = new Set<number>();
+  // Resolve reference-style Markdown links (`[text][ref]` + a separate
+  // `[ref]: target` definition elsewhere in the body) to the equivalent
+  // inline-link shape before splitting into paragraphs/sentences, so the
+  // existing Markdown-link alternative below — and its currentRepo /
+  // trailing-content handling — recognizes it with no duplicated matching
+  // logic. Scoped to this check only; other checks keep using `text`.
+  const resolvedText = resolveReferenceStyleLinks(text);
+  for (const paragraph of splitIntoParagraphs(resolvedText)) {
+    for (const sentence of splitIntoSentences(paragraph)) {
+      // Scope proximity to one sentence, not the whole paragraph: a long
+      // paragraph can legitimately combine an unrelated coordination word
+      // with a pure breadcrumb reference (e.g. "Part of roadmap (#1386)."
+      // followed by an unrelated "... before it correctly held ..." later
+      // in the same paragraph). Paragraph-level scoping would falsely flag
+      // the breadcrumb; sentence-level scoping does not.
+      if (!keywordPattern.test(sentence)) {
+        continue;
+      }
+      for (const match of sentence.matchAll(ISSUE_OR_PR_REFERENCE_PATTERN)) {
+        const [
+          ,
+          linkOwner,
+          linkRepo,
+          linkNumber,
+          bareNumber,
+          urlOwner,
+          urlRepo,
+          urlNumber,
+          shorthandOwner,
+          shorthandRepo,
+          shorthandNumber,
+        ] = match;
+        // Whichever of the two URL-bearing alternatives matched (a
+        // Markdown-link target or a bare URL) supplies the owner/repo/number
+        // trio; only one of the two can be present for a given match. A URL
+        // match with a known currentRepo that points elsewhere is a
+        // cross-repo reference: the Blocked by / Depends on markers this
+        // check recommends are inherently local, so flagging it here would
+        // be actively misleading rather than merely a nuisance false
+        // positive. Skip it entirely — for the Markdown-link alternative,
+        // this also discards any bare `#N` the link's own label repeated,
+        // since that label text was consumed as part of this same match and
+        // never separately visited by the bare-`#` alternative. When
+        // currentRepo is unknown, keep the prior behavior of flagging a
+        // full-URL match by default rather than guessing — though, like
+        // any match, it is still suppressed below if its number coincides
+        // with one already captured by a local Blocked-by/Depends-on/
+        // task-list marker elsewhere in the body.
+        const owner = linkOwner ?? urlOwner;
+        const repo = linkRepo ?? urlRepo;
+        if (
+          owner !== undefined &&
+          currentRepo !== undefined &&
+          `${owner}/${repo}`.toLowerCase() !== currentRepo.toLowerCase()
+        ) {
+          continue;
+        }
+        // The owner/repo#N shorthand alternative uses the *opposite*
+        // default from the URL-bearing alternatives above: it is excluded
+        // unless currentRepo is both known and a case-insensitive match.
+        // Unlike a full URL (which was always flaggable pre-#1399), this
+        // shorthand was never recognized at all before this alternative
+        // existed, so there is no prior "flag by default" behavior to
+        // preserve when locality can't be confirmed — see the
+        // `currentRepo` JSDoc on `AuditOptions`.
+        if (
+          shorthandOwner !== undefined &&
+          (currentRepo === undefined ||
+            `${shorthandOwner}/${shorthandRepo}`.toLowerCase() !==
+              currentRepo.toLowerCase())
+        ) {
+          continue;
+        }
+        const numberText =
+          bareNumber ?? linkNumber ?? urlNumber ?? shorthandNumber;
+        const number = Number.parseInt(numberText, 10);
+        if (!encoded.has(number)) {
+          flagged.add(number);
+        }
+      }
+    }
+  }
+  if (flagged.size === 0) {
+    return pass(
+      id,
+      name,
+      'no unencoded issue/PR reference found near coordination language',
+    );
+  }
+  const refs = [...flagged]
+    .sort((left, right) => left - right)
+    .map((number) => `#${number}`)
+    .join(', ');
+  return {
+    id,
+    name,
+    result: 'pass',
+    severity: 'warning',
+    detail:
+      `possible prose-only dependency on ${refs} — convert to a Blocked ` +
+      'by / Depends on marker, or confirm this is a breadcrumb reference ' +
+      'only',
+  };
+}
+
+// CommonMark reference labels are compared case-insensitively after
+// collapsing internal whitespace and trimming, so `[Upstream PR]` and
+// `[upstream  pr]` refer to the same definition.
+function normalizeLinkReferenceLabel(label: string): string {
+  return label.trim().toLowerCase().replace(/\s+/g, ' ');
+}
+
+// CommonMark §6.6 allows a reference definition's destination to be
+// wrapped in angle brackets (`[ref]: <https://...>`), captured verbatim
+// (brackets included) by LINK_REFERENCE_DEFINITION_PATTERN's `\S+`.
+// Without unwrapping, resolveReferenceStyleLinks would rewrite a usage to
+// `[text](<https://...>)`, which ISSUE_OR_PR_REFERENCE_PATTERN's
+// Markdown-link alternative does not recognize (it expects the URL
+// immediately after the opening paren, no angle brackets) — silently
+// leaving the reference-style link unresolved and re-leaking the label's
+// bare `#N` to the bare-`#` alternative, the same failure mode item 1
+// exists to prevent.
+function unwrapAngleBracketDestination(target: string): string {
+  return target.startsWith('<') && target.endsWith('>')
+    ? target.slice(1, -1)
+    : target;
+}
+
+/**
+ * Resolves every `[text][ref]` reference-style link usage in `text`
+ * against its `[ref]: target` definition — which may appear anywhere else
+ * in the document, commonly far from the usage — by rewriting the usage
+ * to the equivalent inline-link shape `[text](target)`. A usage whose ref
+ * does not resolve to any definition is left unchanged: it falls through
+ * to the bare-`#` alternative like any other unrecognized bracket shape,
+ * the same fallback that already applies today. Duplicate labels keep the
+ * first definition, matching CommonMark's rule for duplicate link
+ * reference definitions.
+ */
+function resolveReferenceStyleLinks(text: string): string {
+  const definitions = new Map<string, string>();
+  for (const match of text.matchAll(LINK_REFERENCE_DEFINITION_PATTERN)) {
+    const key = normalizeLinkReferenceLabel(match[1]);
+    if (!definitions.has(key)) {
+      definitions.set(key, unwrapAngleBracketDestination(match[2]));
+    }
+  }
+  if (definitions.size === 0) {
+    return text;
+  }
+  return text.replace(
+    REFERENCE_STYLE_LINK_USAGE_PATTERN,
+    (whole: string, label: string, ref: string) => {
+      const target = definitions.get(normalizeLinkReferenceLabel(ref));
+      return target === undefined ? whole : `[${label}](${target})`;
+    },
+  );
+}
+
+// Exactly one blank line between two lines of content is two newline
+// characters (the left line's own terminator, then the blank line's
+// own terminator). Two or more blank lines means three or more, which
+// splitIntoParagraphs deliberately treats as a harder break -- see its
+// own doc comment.
+function isSingleBlankLine(separator: string): boolean {
+  return (separator.match(/\n/g)?.length ?? 0) === 2;
+}
+
+// Once any list-item marker line appears in a blank-line-free run of
+// text, only a *later* marker line can close its node in
+// splitIntoListItemBlocks's own stack bookkeeping (a continuation line
+// never does). So, structurally, the *last* marker line anywhere in such
+// a run is necessarily still open at the run's end, and that marker's
+// own indentation is a cheap proxy for "the indentation of whatever node
+// is still open right before the blank line" -- without re-running the
+// full ancestry-stack simulation just to find out.
+//
+// That structural fact is not the same as the list still being open in
+// the Markdown a human reader sees, though (found on this PR's own
+// review, Codex): a marker followed by unindented plain prose --
+// `- Before merging\n  - child\nIndependent prose` -- reads as the list
+// having ended before the blank line, even though the algorithm's stack
+// still shows a node open (the trailing prose is a continuation line
+// attached via the ancestry walk, not a marker, so nothing closes it).
+// CommonMark's own lazy-continuation rule technically disagrees --
+// "Independent prose" is absorbed into "child"'s own paragraph rather
+// than ending the list -- but that is a well-known surprising edge case
+// that misleads readers (this PR's own Codex review included) far more
+// often than it helps them, so this heuristic follows the visual
+// reading over the stricter spec rule. Bridging across the blank line
+// in that shape would scope "Before" onto a reference in the next chunk
+// that a human author would not expect it to reach. Rather than trying
+// to fully re-derive CommonMark's real list-termination semantics,
+// require the last marker line to *be* the run's last line -- any
+// trailing continuation line makes "is this list still open" ambiguous
+// enough that refusing to bridge (a missed advisory, not a false one)
+// is the safer default, matching the same
+// prefer-a-miss-over-a-false-positive stance the indentation guard below
+// already takes for a too-deep right-hand marker.
+//
+// Returns undefined when `text` has no marker line at all, or when a
+// continuation line follows the last marker line.
+function lastListItemMarkerIndent(text: string): number | undefined {
+  const lines = text.split('\n');
+  let lastMarkerIndex = -1;
+  let lastMarkerIndent: number | undefined;
+  for (let index = 0; index < lines.length; index += 1) {
+    const marker = LIST_ITEM_MARKER_PATTERN.exec(lines[index]);
+    if (marker !== null) {
+      lastMarkerIndex = index;
+      lastMarkerIndent = indentColumnWidth(marker[1]);
+    }
+  }
+  return lastMarkerIndex === lines.length - 1 ? lastMarkerIndent : undefined;
+}
+
+// Two adjacent blank-line-delimited chunks bridge into one loose-list
+// paragraph only when the right chunk's first marker is no deeper than
+// whatever is still open at the end of the left chunk -- a same-depth
+// sibling continuation, or a resumption at a shallower ancestor's own
+// level, both legitimate loose-list shapes that splitIntoListItemBlocks's
+// existing same-or-shallower sibling-closing logic already re-separates
+// correctly when they are not actually related. A *strictly deeper*
+// right-hand marker is refused: bridging it would invent a parent/child
+// relationship across a blank line the source never expressed -- for
+// example a punctuation-free, keyword-bearing checklist item directly
+// followed by an unrelated, more-indented bullet, which would otherwise
+// flatten into one false-positive "sentence" (see #1476).
+function isBridgeableLooseListBoundary(
+  left: string,
+  separator: string,
+  right: string,
+): boolean {
+  if (!isSingleBlankLine(separator)) {
+    return false;
+  }
+  const leftTailIndent = lastListItemMarkerIndent(left);
+  if (leftTailIndent === undefined) {
+    return false;
+  }
+  const rightMarker = LIST_ITEM_MARKER_PATTERN.exec(right.split('\n')[0] ?? '');
+  return (
+    rightMarker !== null && indentColumnWidth(rightMarker[1]) <= leftTailIndent
+  );
+}
+
+/**
+ * Splits `text` into paragraphs the same way as `text.split(/\n\s*\n/)`,
+ * except that two adjacent blank-line-delimited chunks are re-joined
+ * into one paragraph when the blank line between them sits inside what
+ * reads as a single loose Markdown list (see `isBridgeableLooseListBoundary`
+ * and #1476). Without this, a loose list -- its sibling items separated
+ * by a blank line, which is ordinary, valid CommonMark -- silently loses
+ * every earlier sibling's ancestor-scoped coordination language the
+ * moment `splitIntoListItemBlocks` runs on each paragraph independently.
+ *
+ * The blank line itself is preserved verbatim in the merged text rather
+ * than dropped: `splitIntoListItemBlocks` treats it like any other
+ * continuation line (no marker of its own), which never closes a node,
+ * so it is inert other than contributing a single collapsed space once
+ * `splitIntoSentences` later flattens the block.
+ *
+ * Merge decisions fold left-to-right against the *running accumulator*,
+ * not the original first chunk, so a loose list of three or more sibling
+ * items (blank line before the second, blank line before the third, and
+ * so on) keeps bridging correctly -- each decision re-derives the
+ * accumulator's own trailing indentation from whatever has already been
+ * merged in.
+ */
+function splitIntoParagraphs(text: string): string[] {
+  const parts = text.split(/(\n\s*\n)/);
+  const paragraphs: string[] = [];
+  let current = parts[0] ?? '';
+  for (let index = 1; index < parts.length; index += 2) {
+    const separator = parts[index] ?? '';
+    const next = parts[index + 1] ?? '';
+    if (isBridgeableLooseListBoundary(current, separator, next)) {
+      current += separator + next;
+    } else {
+      paragraphs.push(current);
+      current = next;
+    }
+  }
+  paragraphs.push(current);
+  return paragraphs;
+}
+
+/**
+ * Split a paragraph into sentences on `.`/`!`/`?` followed by whitespace,
+ * after collapsing internal newlines to spaces (so a sentence that wraps
+ * across a Markdown soft line break is still scoped as one sentence). This
+ * is intentionally simple — good enough to separate two independent
+ * clauses sharing one paragraph, not a full natural-language sentence
+ * boundary detector.
+ *
+ * Markdown list items are treated as hard sentence boundaries first,
+ * *before* that whitespace-collapsing step: a tight list (items with no
+ * blank line between them) is one `\n\s*\n`-delimited "paragraph" to the
+ * caller, so collapsing every newline to a space would otherwise merge
+ * separate bullets that lack terminal punctuation into a single
+ * "sentence" — reintroducing exactly the false-positive risk this
+ * sentence-level scoping exists to avoid (e.g. a pure breadcrumb bullet
+ * conflated with a sibling bullet's unrelated coordination language).
+ */
+function splitIntoSentences(paragraph: string): string[] {
+  return splitIntoListItemBlocks(paragraph).flatMap((block) => {
+    const flattened = block.replace(/\s+/g, ' ').trim();
+    return flattened.length === 0 ? [] : flattened.split(/(?<=[.!?])\s+/);
+  });
+}
+
+// CommonMark expands a tab to the next column that is a multiple of 4
+// when it participates in block structure (e.g. list-item indentation),
+// rather than counting as a single character. Comparing raw
+// `.length` would undercount a tab-indented marker's effective depth,
+// wrongly treating a tab-indented nested child as shallower than (or
+// equal to) a same-or-deeper space-indented parent and starting a new
+// block instead of keeping the child scoped with its parent — the same
+// loss-of-parent-scope splitIntoListItemBlocks exists to prevent, just
+// triggered by mixed tab/space indentation instead of an indentation
+// depth mismatch.
+function indentColumnWidth(indent: string): number {
+  let column = 0;
+  for (const char of indent) {
+    column = char === '\t' ? (Math.floor(column / 4) + 1) * 4 : column + 1;
+  }
+  return column;
+}
+
+function lineIndentColumn(line: string): number {
+  return indentColumnWidth(LEADING_WHITESPACE_PATTERN.exec(line)?.[0] ?? '');
+}
+
+// One open Markdown list-item node in splitIntoListItemBlocks's
+// indentation-ancestry stack. `lines` accumulates the node's own marker
+// line plus any soft-wrapped continuation lines that belong directly to
+// it (before any deeper child of its own begins). `hasChild` records
+// whether a deeper node was ever pushed on top of this one — see
+// splitIntoListItemBlocks for why that suppresses this node's own
+// standalone block.
+interface ListItemNode {
+  indent: number;
+  lines: string[];
+  hasChild: boolean;
+}
+
+/**
+ * Split a paragraph into blocks at each Markdown list item boundary, while
+ * still joining a soft-wrapped continuation line (one with no list marker
+ * of its own) onto the item it continues. A paragraph with no list items
+ * at all yields exactly one block spanning every line, preserving prior
+ * behavior for plain prose.
+ *
+ * Tracks a full indentation-ancestry stack of open `ListItemNode`s rather
+ * than a single most-recently-seen marker indentation (see issue #1474):
+ * a marker line strictly *deeper* than the stack's top is pushed as a new
+ * child node, nested under it. A marker at the *same or shallower*
+ * indentation pops nodes off the stack — closing each one — until the top
+ * is strictly shallower (or the stack empties), then pushes the new
+ * marker as a fresh node at that level.
+ *
+ * Closing a node emits it as its own block *only when it never acquired a
+ * child* (a leaf): the block is that leaf's still-open ancestors' own
+ * lines (root through parent, in document order) followed by the leaf's
+ * own lines. A node that did acquire a child is never emitted standalone
+ * — its own lines already appear as the ancestor prefix of every one of
+ * its descendant leaf blocks, so nothing is lost. Net effect: every
+ * root-to-leaf path down the tree emits exactly one block containing
+ * every node on that path, and every node lies on at least one such path.
+ * That scopes a parent bullet's coordination language together with
+ * *every* nested child's reference at any depth — not only the first
+ * child under a given parent, fixing the residual gap #1472 left behind
+ * — while same-depth sibling bullets never share a leaf block with each
+ * other, preserving the original tight-list sentence-conflation fix this
+ * function exists for.
+ *
+ * Lines seen before any node has opened (a plain-prose preamble, or an
+ * entire paragraph with no markers at all) accumulate in a separate
+ * `preamble` buffer rather than the stack — there is no ancestor above
+ * pre-first-marker prose to scope it with. `preamble` is flushed as its
+ * own standalone block as soon as the first marker line opens a node
+ * (preserving the existing behavior that leading prose never merges with
+ * the first list item), or as the paragraph's sole block if no marker
+ * ever appears.
+ *
+ * Two further gaps in the same area, both distinct from the
+ * marker-ancestry scoping above, were closed by #1476: a continuation
+ * line resuming at an ancestor's own indentation after a deeper child
+ * has already opened is now attributed to that ancestor rather than the
+ * deepest open child (see the ancestry walk in the continuation-line
+ * branch below, using `lineIndentColumn`), and a loose list — sibling
+ * items separated by a blank line — no longer resets scope at the
+ * paragraph boundary, because its caller (`checkProseOnlyDependency`)
+ * now bridges a single blank line between two loose-list chunks via
+ * `splitIntoParagraphs` before this function ever runs.
+ */
+function splitIntoListItemBlocks(paragraph: string): string[] {
+  const blocks: string[] = [];
+  const stack: ListItemNode[] = [];
+  let preamble: string[] = [];
+
+  const closeNode = (node: ListItemNode) => {
+    if (node.hasChild) {
+      return;
+    }
+    const ancestorLines = stack.flatMap((ancestor) => ancestor.lines);
+    blocks.push([...ancestorLines, ...node.lines].join('\n'));
+  };
+
+  for (const line of paragraph.split('\n')) {
+    const marker = LIST_ITEM_MARKER_PATTERN.exec(line);
+    const indent = marker === null ? null : indentColumnWidth(marker[1]);
+    if (indent === null) {
+      // Continuation line: attach to the deepest open node whose own
+      // indentation is strictly less than this line's own indentation --
+      // the innermost node this line still reads as nested inside of. A
+      // continuation at or above an already-open child's own marker
+      // indentation is not deep enough to be that child's content; walk
+      // up the ancestry until a strictly shallower owner is found,
+      // falling back to the shallowest (root) node when none is
+      // strictly shallower (#1476: this is what lets a continuation
+      // that resumes at an ancestor's own indentation, after a deeper
+      // child already opened, land on that ancestor instead of
+      // unconditionally on the deepest open child). A continuation
+      // genuinely deeper than every open node still resolves at the
+      // first (deepest) comparison, so the normal, unambiguous case is
+      // unchanged. When no node is open yet, keep attaching to the
+      // pre-first-marker preamble.
+      const top = stack.at(-1);
+      if (top === undefined) {
+        preamble.push(line);
+        continue;
+      }
+      const ownIndent = lineIndentColumn(line);
+      const owner =
+        stack.findLast((node) => node.indent < ownIndent) ?? stack[0];
+      owner.lines.push(line);
+      continue;
+    }
+    // A same-or-shallower marker closes every open node at this depth or
+    // deeper — one level at a time — before the new marker starts its own
+    // node, mirroring the original single-value comparison per stack
+    // level instead of once against a single flattened scalar.
+    for (
+      let top = stack.at(-1);
+      top !== undefined && indent <= top.indent;
+      top = stack.at(-1)
+    ) {
+      stack.pop();
+      closeNode(top);
+    }
+    const parent = stack.at(-1);
+    if (parent !== undefined) {
+      parent.hasChild = true;
+    } else if (preamble.length > 0) {
+      blocks.push(preamble.join('\n'));
+      preamble = [];
+    }
+    stack.push({ indent, lines: [line], hasChild: false });
+  }
+  for (let top = stack.at(-1); top !== undefined; top = stack.at(-1)) {
+    stack.pop();
+    closeNode(top);
+  }
+  if (preamble.length > 0) {
+    blocks.push(preamble.join('\n'));
+  }
+  return blocks;
+}
+
 function countMarkerOccurrences(
   text: string,
   markerPrefix: string,
@@ -559,6 +1285,7 @@ interface CliArgs {
   configPath?: string;
   labels: string[];
   format: string;
+  currentRepo?: string;
 }
 
 function main(): void {
@@ -591,6 +1318,12 @@ function main(): void {
     markerPrefix,
     labels: args.labels,
     blockedByHumanLabelName: policy.blockedByHumanLabelName,
+    // Explicit --current-repo wins; otherwise fall back to the
+    // GITHUB_REPOSITORY env var GitHub Actions sets automatically, so CI
+    // usage narrows cross-repo URL false positives with no extra flag.
+    // undefined (neither present) keeps the pre-#1399-fix default of
+    // flagging every full-URL reference.
+    currentRepo: args.currentRepo ?? process.env.GITHUB_REPOSITORY,
   });
 
   writeReport(report, args.format);
@@ -657,9 +1390,16 @@ function writeReport(report: AuditReport, format: string): void {
     console.log(
       `shape=${report.shape} markerPrefix=${report.markerPrefix} passed=${report.passed}`,
     );
-    console.log(['id', 'result', 'detail'].join('\t'));
+    console.log(['id', 'result', 'severity', 'detail'].join('\t'));
     for (const finding of report.findings) {
-      console.log([finding.id, finding.result, finding.detail].join('\t'));
+      console.log(
+        [
+          finding.id,
+          finding.result,
+          finding.severity ?? '',
+          finding.detail,
+        ].join('\t'),
+      );
     }
     return;
   }
@@ -667,53 +1407,36 @@ function writeReport(report: AuditReport, format: string): void {
 }
 
 function parseArgs(argv: string[]): CliArgs {
-  const parsed: CliArgs = { labels: [], format: 'json' };
+  // No test in this file asserts the pre-migration message text or the
+  // no-colon "unknown argument X" / "X requires a value" spelling (see
+  // #1451's PR description), so a parse failure adopts the wrapper's
+  // uniform message. The exit-code-2 contract IS preserved: catch the
+  // wrapper's thrown Error here and route it through this file's own
+  // fail_() exactly as every other malformed-input path already does.
+  let parsed: ReturnType<typeof parseCliArgs>;
+  try {
+    parsed = parseCliArgs(argv, AUDIT_AUTHORED_ISSUE_FLAG_SPEC);
+  } catch (error) {
+    fail_((error as Error).message);
+  }
+  const { values, help } = parsed;
 
-  for (let index = 0; index < argv.length; index += 1) {
-    const arg = argv[index];
-    switch (arg) {
-      case '--help':
-      case '-h':
-        parsed.help = true;
-        break;
-      case '--shape':
-        parsed.shape = readValue(argv, ++index, arg);
-        break;
-      case '--body-file':
-        parsed.bodyFile = readValue(argv, ++index, arg);
-        break;
-      case '--stdin':
-        parsed.stdin = true;
-        break;
-      case '--marker-prefix':
-        parsed.markerPrefix = readValue(argv, ++index, arg);
-        break;
-      case '--config':
-        parsed.configPath = readValue(argv, ++index, arg);
-        break;
-      case '--label':
-        parsed.labels.push(readValue(argv, ++index, arg));
-        break;
-      case '--format':
-        parsed.format = readValue(argv, ++index, arg);
-        if (!['json', 'table'].includes(parsed.format)) {
-          fail_('--format must be json or table');
-        }
-        break;
-      default:
-        fail_(`unknown argument ${arg}`);
-    }
+  const format = values.format as string;
+  if (!['json', 'table'].includes(format)) {
+    fail_('--format must be json or table');
   }
 
-  return parsed;
-}
-
-function readValue(argv: string[], index: number, flag: string): string {
-  const value = argv[index];
-  if (value === undefined || value.startsWith('--')) {
-    fail_(`${flag} requires a value`);
-  }
-  return value;
+  return {
+    help,
+    shape: values.shape as string | undefined,
+    bodyFile: values['body-file'] as string | undefined,
+    stdin: values.stdin as boolean,
+    markerPrefix: values['marker-prefix'] as string | undefined,
+    configPath: values.config as string | undefined,
+    currentRepo: values['current-repo'] as string | undefined,
+    labels: (values.label as string[] | undefined) ?? [],
+    format,
+  };
 }
 
 function printUsage(): void {
@@ -724,9 +1447,12 @@ contract's structural expectations (skills/issue-authoring/references/
 contract.md): the autopilot-suitability marker, its cross-field
 status:blocked-by-human agreement, markerPrefix consistency, required
 section headings for the declared shape, the roadmap-id/blocked-by
-dependency-marker rules, and visible/hidden suitability+effort line
-agreement. Exits 0 when every check passes, 1 when any check fails, 2 on
-a usage error.
+dependency-marker rules, visible/hidden suitability+effort line
+agreement, and an advisory (warning-severity only) check that flags an
+issue/PR reference used near coordination language with no corresponding
+dependency marker. Exits 0 when every check passes, 1 when any check
+fails, 2 on a usage error; the advisory check never affects the exit
+code.
 
 Options:
   --shape <orphan|roadmap|child>   declared issue shape (required)
@@ -737,6 +1463,9 @@ Options:
   --label <name>                   a label currently applied/proposed on the issue
                                     (repeatable; used for the suitability=1
                                     cross-field check)
+  --current-repo <owner/repo>      this repository, for the prose-dependency check
+                                    to recognize a full-URL issue/PR reference as
+                                    cross-repo (default: $GITHUB_REPOSITORY)
   --format <json|table>            output format (default: json)
   --help                           show this help
 `);

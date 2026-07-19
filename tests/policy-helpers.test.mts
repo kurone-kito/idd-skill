@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
 import {
+  clone,
   getReviewEscalationChangesRequestedPolicy,
   normalizePolicyConfig,
   POLICY_DEFAULTS,
@@ -89,6 +90,43 @@ test('ciWait.rerunPolicy defaults to rerun-once and accepts hold', () => {
     normalizePolicyConfig({ ciWait: { rerunPolicy: 'rerun-forever' } }).ciWait
       .rerunPolicy,
     'rerun-once',
+  );
+});
+
+test('mergeGate.soloCodeownerAdminFallback defaults to auto-admin-retry and accepts hold-and-report (#1521)', () => {
+  assert.equal(
+    POLICY_DEFAULTS.mergeGate.soloCodeownerAdminFallback,
+    'auto-admin-retry',
+  );
+  assert.equal(
+    normalizePolicyConfig({}).mergeGate.soloCodeownerAdminFallback,
+    'auto-admin-retry',
+  );
+  assert.equal(
+    normalizePolicyConfig({
+      mergeGate: { soloCodeownerAdminFallback: 'hold-and-report' },
+    }).mergeGate.soloCodeownerAdminFallback,
+    'hold-and-report',
+  );
+  assert.equal(
+    normalizePolicyConfig({
+      mergeGate: { soloCodeownerAdminFallback: 'auto-admin-retry' },
+    }).mergeGate.soloCodeownerAdminFallback,
+    'auto-admin-retry',
+  );
+  // An unrecognized value falls back to POLICY_DEFAULTS, matching every
+  // other enum field normalizePolicyConfig parses (e.g. ciWait.rerunPolicy
+  // above) -- it does NOT silently coerce to 'hold-and-report'. A malformed
+  // `mergeGate.soloCodeownerAdminFallback` in `.github/idd/config.json` is
+  // caught earlier by schema validation (`idd-doctor`/config-schema checks
+  // against policy.schema.json's enum), which is the actual safety net
+  // against an operator typo; this parser's job is only to never crash on
+  // a technically-invalid-but-parseable config.
+  assert.equal(
+    normalizePolicyConfig({
+      mergeGate: { soloCodeownerAdminFallback: 'always-admin' },
+    }).mergeGate.soloCodeownerAdminFallback,
+    'auto-admin-retry',
   );
 });
 
@@ -237,4 +275,53 @@ test('selectDesyncedIndex spreads distinct session tokens across the band', () =
     indices.size > 1,
     `expected distinct tokens to spread across the band, got ${[...indices]}`,
   );
+});
+
+// #1449: clone() swapped from JSON.parse(JSON.stringify(value)) to
+// structuredClone(value). Two-level coverage — a direct clone() assertion
+// showing structuredClone preserves an undefined-valued key would only
+// prove clone's *isolated* behavior changed, not that callers are
+// unaffected. The caller-level test below is the actual proof: the only
+// production path that reaches clone(POLICY_DEFAULTS) is
+// normalizePolicyConfig's invalid-input branch, and POLICY_DEFAULTS itself
+// has no undefined/Date/Map/function property anywhere, so that path's
+// observed output is unchanged.
+test('normalizePolicyConfig falls back to a structural copy of POLICY_DEFAULTS on invalid input', () => {
+  // typeof null === 'object', so null hits the same `clone(POLICY_DEFAULTS)`
+  // branch as an array or a non-object primitive.
+  assert.deepEqual(normalizePolicyConfig(null), POLICY_DEFAULTS);
+  assert.deepEqual(normalizePolicyConfig([]), POLICY_DEFAULTS);
+  assert.deepEqual(normalizePolicyConfig('bogus'), POLICY_DEFAULTS);
+  // Reference inequality is the actual copy-semantics claim in this test's
+  // name: deepEqual alone would also pass if clone() were a no-op identity
+  // function returning POLICY_DEFAULTS itself (Copilot review, #1463). Each
+  // call must also return its own independent object, not the frozen
+  // singleton or a shared instance across calls.
+  assert.notEqual(normalizePolicyConfig(null), POLICY_DEFAULTS);
+  assert.notEqual(normalizePolicyConfig(null), normalizePolicyConfig(null));
+});
+
+test('clone() deep-copies independently of the source, including through undefined-valued keys', () => {
+  const source: { a: number; b: undefined; nested: { c: unknown } } = {
+    a: 1,
+    b: undefined,
+    nested: { c: 2 },
+  };
+  const copy = clone(source);
+
+  // Deep independence is the property every real caller relies on
+  // (parsePositiveIntegerArray / parseCheckSelectors hand the clone back
+  // to callers who may mutate it): mutating the clone must never reach
+  // the source.
+  (copy.nested as { c: unknown }).c = 'mutated';
+  assert.equal(source.nested.c, 2);
+
+  // structuredClone preserves an undefined-valued key where the old
+  // JSON.parse(JSON.stringify(...)) round-trip silently dropped it — this
+  // is a genuine, intentional behavior change of clone() in isolation.
+  // No real call site is affected: every production call clones either
+  // POLICY_DEFAULTS or one of its own frozen sub-arrays, none of which
+  // ever contains an undefined-valued key (see the clone() doc comment).
+  assert.equal('b' in copy, true);
+  assert.equal(copy.b, undefined);
 });

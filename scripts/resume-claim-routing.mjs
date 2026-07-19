@@ -7,6 +7,7 @@
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
+import { parseCliArgs } from './cli-args.mjs';
 import { isAuthorizedForcedHandoffActor } from './collaborator-permission.mjs';
 import { GH_TEXT_LOOP_TIMEOUT_OPTIONS, ghText } from './gh-exec.mjs';
 import { normalizePolicyConfig } from './policy-helpers.mjs';
@@ -15,6 +16,7 @@ import {
   DEFAULT_STALE_AGE_MS,
   isStaleByAge,
   normalizeLinkedPrReference,
+  parseActivationNonceComment,
   parseClaimComment,
   resolveActiveClaim,
 } from './protocol-helpers.mjs';
@@ -23,6 +25,30 @@ const LEGACY_CLAIM_PATTERN =
   /^<!--\s*claimed-by:\s+(\S+)\s+(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z)\s+branch:\s+([^\s>]+)\s*-->(?:\s*|\s*\n\s*_[^\n]*\bIDD\b[^\n]*_\s*)$/i;
 const LEGACY_RELEASE_PATTERN =
   /^<!--\s*unclaimed-by:\s+(\S+)\s+(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z)\s*-->(?:\s*|\s*\n\s*_[^\n]*\bIDD\b[^\n]*_\s*)$/i;
+// Flag-spec keys stay the dashed literal on purpose (never bare keys like
+// `issue:`): tests/flag-name-matrix.test.mts scans this file's *compiled*
+// .mjs source text for quoted flag literals such as the --issue spec key
+// below. See cli-args.mts's module header for the full invariant.
+//
+// Declared here, above the import.meta.main trigger below, rather than
+// alongside parseArgs further down: the trigger calls runCli() ->
+// parseArgs() synchronously at module-evaluation time, and a `const`
+// declared after that point is still in the temporal dead zone when the
+// trigger fires.
+const RESUME_CLAIM_ROUTING_FLAG_SPEC = {
+  '--issue': { type: 'string' },
+  '--owner': { type: 'string' },
+  '--repo': { type: 'string' },
+  '--token': { type: 'string' },
+  '--claim-id': { type: 'string' },
+  '--nonce': { type: 'string' },
+  '--now': { type: 'string' },
+  '--policy': { type: 'string' },
+  '--stale-age-ms': { type: 'string' },
+  '--trusted-marker-logins': { type: 'string' },
+  '--fresh-claim-gate': { type: 'boolean', default: false },
+  '--help': { type: 'boolean', short: 'h' },
+};
 if (import.meta.main) {
   runCli();
 }
@@ -80,6 +106,10 @@ export function evaluateResumeClaimRouting(input, options = {}) {
   const laterCompetingClaim = state.activeClaim
     ? findLaterCompetingClaim(events, state.activeClaim)
     : null;
+  const activationNonceWinner = state.activeClaim
+    ? findActivationNonceWinner(events, state.activeClaim.claimId)
+    : null;
+  const nonceChecked = normalizeToken(input.nonce);
   const warnings = [...state.warnings];
   let routeState = 'unclaimed';
   let action = 're_claim';
@@ -111,9 +141,26 @@ export function evaluateResumeClaimRouting(input, options = {}) {
     action = 'stop';
     reason = 'later-competing-claim';
   } else if (claimIdChecked && claimIdChecked === state.activeClaim.claimId) {
-    routeState = 'already_owned';
-    action = 'keep';
-    reason = 'claim-id-match';
+    // The claim-id matches, but claim-id alone cannot distinguish a second,
+    // independent activation of the same id (the sticky forced-handoff
+    // adopt-verbatim collision #1522 exists to catch) -- so when both a
+    // local nonce and a trusted activation-nonce winner are available,
+    // require them to agree too. Either side being absent (no nonce posted
+    // yet, or this caller never opted in) skips the comparison and keeps
+    // the claim-id-only outcome, matching pre-#1522 behavior exactly.
+    if (
+      activationNonceWinner !== null &&
+      nonceChecked &&
+      activationNonceWinner !== nonceChecked
+    ) {
+      routeState = 'disputed';
+      action = 'stop';
+      reason = 'activation-nonce-mismatch';
+    } else {
+      routeState = 'already_owned';
+      action = 'keep';
+      reason = 'claim-id-match';
+    }
   } else if (claimIdChecked && sameSecondContenders.includes(claimIdChecked)) {
     routeState = 'disputed';
     action = 'stop';
@@ -159,6 +206,7 @@ export function evaluateResumeClaimRouting(input, options = {}) {
       legacy_claim_seen: state.mode === 'legacy-only',
       same_second_contenders: sameSecondContenders,
       later_competing_claim: laterCompetingClaim,
+      activation_nonce_winner: activationNonceWinner,
     },
   };
 }
@@ -279,6 +327,7 @@ function runCli() {
     {
       events: routingEvents,
       claimId: args.claimId,
+      nonce: args.nonce || undefined,
       staleAgeMs,
       now: args.now || undefined,
     },
@@ -478,6 +527,25 @@ function findLaterCompetingClaim(events, activeClaim) {
     created_at: contenders[0].createdAt,
   };
 }
+/**
+ * Resolve the winning activation nonce among trusted `activation-nonce`
+ * events for `claimId`: the lexicographically earliest nonce (`.sort()`),
+ * mirroring how `findSameSecondContenders` above already sorts colliding
+ * claim-ids the same way. This is a pure function of the
+ * observed nonce *set* (not post order or timestamp), so two sessions that
+ * both activated the same claim-id compute the identical winner once each
+ * has re-read the same trusted comment stream. Returns `null` when no
+ * trusted `activation-nonce` marker exists for `claimId` -- callers must
+ * treat that as "no comparison possible," not a mismatch (#1522 AC3).
+ */
+function findActivationNonceWinner(events, claimId) {
+  const nonces = events
+    .map((event) => parseActivationNonceComment(event.body, event.createdAt))
+    .filter((marker) => Boolean(marker) && marker?.claimId === claimId)
+    .map((marker) => marker.nonce)
+    .sort();
+  return nonces.length > 0 ? nonces[0] : null;
+}
 function parseLegacyClaimComment(body, createdAt) {
   const match = String(body ?? '')
     .trimEnd()
@@ -541,94 +609,53 @@ function compareEvents(left, right) {
   return compareIso(left.createdAt, right.createdAt);
 }
 function parseArgs(argv) {
-  const parsed = {
-    issue: null,
-    owner: '',
-    repo: '',
-    token: '',
-    claimId: '',
-    now: '',
-    policy: '',
-    staleAgeMs: 0,
-    trustedMarkerLogins: '',
-    freshClaimGate: false,
-    help: false,
+  const { values, help } = parseCliArgs(argv, RESUME_CLAIM_ROUTING_FLAG_SPEC);
+  const issueToken = values.issue;
+  const staleAgeMsToken = values['stale-age-ms'];
+  return {
+    // Both --issue and --stale-age-ms are kept as lenient Number.parseInt
+    // (not the canonical-integer helper), matching the pre-migration
+    // contract exactly: --issue is re-validated by this file's own
+    // "!Number.isInteger(args.issue) || (args.issue ?? 0) <= 0" post-check
+    // (in runCli, unchanged), and --stale-age-ms already flows through
+    // normalizeStaleAgeMs()'s own fail-safe (falls back to
+    // DEFAULT_STALE_AGE_MS on any non-finite / non-positive value) --
+    // tightening either at this layer would be an untested, out-of-scope
+    // behavior change for this behavior-preserving migration (see #1451).
+    issue: issueToken === undefined ? null : Number.parseInt(issueToken, 10),
+    owner: values.owner ?? '',
+    repo: values.repo ?? '',
+    token: values.token ?? '',
+    claimId: values['claim-id'] ?? '',
+    nonce: values.nonce ?? '',
+    now: values.now ?? '',
+    policy: values.policy ?? '',
+    staleAgeMs:
+      staleAgeMsToken === undefined ? 0 : Number.parseInt(staleAgeMsToken, 10),
+    trustedMarkerLogins: values['trusted-marker-logins'] ?? '',
+    freshClaimGate: values['fresh-claim-gate'],
+    help,
   };
-  for (let index = 0; index < argv.length; index += 1) {
-    const token = argv[index];
-    const value = argv[index + 1];
-    const requireValue = () => {
-      if (value === undefined || String(value).startsWith('--')) {
-        throw new Error(`missing value for argument: ${token}`);
-      }
-      return value;
-    };
-    if (token === '--issue') {
-      parsed.issue = Number.parseInt(String(requireValue()), 10);
-      index += 1;
-      continue;
-    }
-    if (token === '--owner') {
-      parsed.owner = requireValue();
-      index += 1;
-      continue;
-    }
-    if (token === '--repo') {
-      parsed.repo = requireValue();
-      index += 1;
-      continue;
-    }
-    if (token === '--token') {
-      parsed.token = requireValue();
-      index += 1;
-      continue;
-    }
-    if (token === '--claim-id') {
-      parsed.claimId = requireValue();
-      index += 1;
-      continue;
-    }
-    if (token === '--now') {
-      parsed.now = requireValue();
-      index += 1;
-      continue;
-    }
-    if (token === '--policy') {
-      parsed.policy = requireValue();
-      index += 1;
-      continue;
-    }
-    if (token === '--stale-age-ms') {
-      parsed.staleAgeMs = Number.parseInt(String(requireValue()), 10);
-      index += 1;
-      continue;
-    }
-    if (token === '--trusted-marker-logins') {
-      parsed.trustedMarkerLogins = requireValue();
-      index += 1;
-      continue;
-    }
-    if (token === '--fresh-claim-gate') {
-      parsed.freshClaimGate = true;
-      continue;
-    }
-    if (token === '--help' || token === '-h') {
-      parsed.help = true;
-      continue;
-    }
-    throw new Error(`unknown argument: ${token}`);
-  }
-  return parsed;
 }
 function printHelp() {
   process.stdout.write(`Usage:
-  node scripts/resume-claim-routing.mjs --issue <number> [--owner <owner>] [--repo <repo>] [--token <token>] [--claim-id <token>] [--now <ISO8601>] [--policy <path>] [--stale-age-ms <ms>] [--trusted-marker-logins "<a,b,...>"] [--fresh-claim-gate]
+  node scripts/resume-claim-routing.mjs --issue <number> [--owner <owner>] [--repo <repo>] [--token <token>] [--claim-id <token>] [--nonce <token>] [--now <ISO8601>] [--policy <path>] [--stale-age-ms <ms>] [--trusted-marker-logins "<a,b,...>"] [--fresh-claim-gate]
 
   --fresh-claim-gate  emit the write-side A5(c) claimability verdict for the
                       issue from current marker state, ignoring --claim-id (a
                       fresh claim owns none yet). Run it on a fresh fetch
                       immediately before the claim write; it re-uses the same
                       resolver so claim-state logic never forks.
+  --nonce <token>     this session's own recorded activation-nonce (#1522):
+                      when --claim-id matches the active claim, also require
+                      it to equal the winning trusted <!-- activation-nonce:
+                      --> marker for that claim-id (lexicographically
+                      earliest nonce among however many were posted). A
+                      mismatch means a second, independent session activated
+                      the identical claim-id -- routes to "disputed" the same
+                      as a later-competing-claim loss. Omit --nonce, or leave
+                      the claim-id's nonce not posted, to skip the comparison
+                      (unchanged pre-#1522 behavior).
 
 Output (selected fields; the JSON also carries repository / issue / policy /
 warnings / evidence):
@@ -637,6 +664,7 @@ warnings / evidence):
   "action": "re_claim|takeover|keep|stop",
   "reason": "...",
   "active_claim": {"agent_id":"...","claim_id":"...","created_at":"...","branch":"..."} | null,
+  "evidence": {"...": "...", "activation_nonce_winner": "..."|null},
   "fresh_claim_gate": {"verdict":"claimable|already-claimed|stale-reclaimable","winning_claim_id":"..."|null}  // only with --fresh-claim-gate
 }
 `);

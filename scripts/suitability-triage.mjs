@@ -7,9 +7,81 @@
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
+import { parseCliArgs } from './cli-args.mjs';
+import {
+  DEFAULT_BUNDLE_IDS,
+  DEFAULT_EXTRA_FILES,
+  DEFAULT_MANIFEST_PATH,
+  ghJson as ghJsonArray,
+  normalizeContentionPath,
+  parseCandidateFiles,
+  resolveHighContentionFiles,
+} from './discover-shared-file-overlap.mjs';
 import { GH_TEXT_LOOP_TIMEOUT_OPTIONS, ghText } from './gh-exec.mjs';
 import { normalizePolicyConfig, POLICY_DEFAULTS } from './policy-helpers.mjs';
 
+/** Upper bound on the #1484 bounded merged-PR scan (mirrors B2.0's own
+ * documented `gh pr list --limit 50`). */
+const MERGED_PR_SCAN_LIMIT = 50;
+/**
+ * Wall-clock budget for the #1484 merged-PR file-overlap scan (CodeRabbit
+ * review finding on this PR): up to MERGED_PR_SCAN_LIMIT sequential
+ * `gh pr view` calls at 30s each could otherwise take ~25 minutes in the
+ * worst case (a degraded/rate-limited GitHub API). Stop early and return
+ * whatever has been collected once this budget elapses, rather than
+ * blocking the whole A4.5 evaluation on a slow scan. Referenced from inside
+ * `fetchMergedPrFileOverlapEvidence`, which the `import.meta.main` trigger
+ * below can reach synchronously, so this must stay declared above that
+ * trigger for the same temporal-dead-zone reason as `CLOSED_BY_MERGED_PR_QUERY`.
+ */
+const MERGED_PR_SCAN_DEADLINE_MS = 2 * 60 * 1000;
+/**
+ * GraphQL query for the closed-by-merged-PR read (#1484), bounded to the
+ * first 50 closing-PR references. A later page could theoretically hold an
+ * additional MERGED reference this misses, but that only makes the tier
+ * under-detect (fall back to the weak heuristic) rather than over-detect --
+ * the safe fail direction for a check that must never fail TOWARD a false
+ * positive, so a full pagination loop (as `idd-roadmap-audit-execute.mts`'s
+ * `hasOpenClosingPr` implements for its own different, block-a-close use
+ * case) is not required here. Declared here, above the `import.meta.main`
+ * trigger below, rather than alongside the other #1484 CLI glue further
+ * down: the trigger calls `runCli()` synchronously at module-evaluation
+ * time, and a `const` declared after that point is still in the temporal
+ * dead zone when the trigger fires (see `discover-shared-file-overlap.mts`'s
+ * identical note on its own flag-spec constant).
+ */
+const CLOSED_BY_MERGED_PR_QUERY = `query($owner:String!,$repo:String!,$number:Int!){
+  repository(owner:$owner,name:$repo){
+    issue(number:$number){
+      state
+      closedByPullRequestsReferences(first:50){
+        nodes { number state }
+      }
+    }
+  }
+}`;
+// Flag-spec keys stay the dashed literal on purpose (never bare keys like
+// `issue:`): tests/flag-name-matrix.test.mts scans this file's *compiled*
+// .mjs source text for quoted flag literals such as the --issue spec key
+// below. See cli-args.mts's module header for the full invariant. (This
+// comment deliberately avoids writing that key inside matching quote
+// marks, so it cannot itself satisfy the scan if the real key is ever
+// renamed -- see #1446's PR description for why that matters.)
+//
+// Declared here, above the import.meta.main trigger below, rather than
+// alongside parseArgs further down: the trigger calls runCli() ->
+// parseArgs() synchronously at module-evaluation time, and a `const`
+// declared after that point is still in the temporal dead zone when the
+// trigger fires (see ci-wait-policy.mts's identical note).
+const SUITABILITY_TRIAGE_FLAG_SPEC = {
+  '--issue': { type: 'string' },
+  '--token': { type: 'string', default: '' },
+  '--owner': { type: 'string', default: '' },
+  '--repo': { type: 'string', default: '' },
+  '--policy': { type: 'string', default: '' },
+  '--verbose': { type: 'boolean', default: false },
+  '--help': { type: 'boolean', short: 'h' },
+};
 const CHECKS = [
   {
     id: 'repository_fit',
@@ -137,6 +209,12 @@ export function evaluateSuitability(issue, options = {}) {
     needsDecisionLabelName: normalizeConfiguredLabelName(
       options.needsDecisionLabelName,
       POLICY_DEFAULTS.labels.needsDecisionLabelName,
+    ),
+    highConfidenceDuplicate: normalizeHighConfidenceDuplicateInput(
+      options.highConfidenceDuplicate,
+    ),
+    highConfidenceCollectionDegraded: Boolean(
+      options.highConfidenceCollectionDegraded,
     ),
   };
   const checks = [];
@@ -327,8 +405,108 @@ export function checkTrustSafety(context) {
     evidence: 'No trust/safety blockers detected.',
   };
 }
+/**
+ * High-confidence Check 4 tier (#1484): evaluate the mechanical B2.0-style
+ * signals -- a merged closing-PR reference on the candidate issue itself, or
+ * a merged PR that already changed one of the issue's own declared
+ * `## Candidate files` (excluding high-contention/shared files, which many
+ * unrelated issues touch and so are not on their own high-confidence
+ * evidence that THIS issue was superseded). Returns `null` -- never a
+ * synthesized verdict of its own -- whenever no strong signal fires, so the
+ * caller falls through to the existing weak title/declaration heuristic
+ * unchanged. This is the fail-safe contract the issue requires: never fail
+ * TOWARD a false high-confidence flag. `input` may be `undefined` (evidence
+ * not collected by the caller) or a partially malformed shape; both degrade
+ * to "no verdict" rather than a crash or a false hit.
+ */
+export function evaluateHighConfidenceDuplicate(input) {
+  if (!input) {
+    return null;
+  }
+  const closedByMergedPrNumbers = (
+    Array.isArray(input.closedByMergedPrNumbers)
+      ? input.closedByMergedPrNumbers
+      : []
+  ).filter((n) => Number.isInteger(n) && n > 0);
+  if (closedByMergedPrNumbers.length > 0) {
+    return {
+      pass: false,
+      evidence: `High-confidence duplicate: issue is already referenced by merged closing PR(s) #${closedByMergedPrNumbers.join(', #')} (closedByPullRequestsReferences).`,
+    };
+  }
+  const highContention = new Set(
+    (Array.isArray(input.highContentionFiles)
+      ? input.highContentionFiles
+      : []
+    ).map((file) => normalizeContentionPath(file)),
+  );
+  const candidateFiles = [
+    ...new Set(
+      (Array.isArray(input.candidateFiles) ? input.candidateFiles : [])
+        .map((file) => normalizeContentionPath(file))
+        .filter((file) => file.length > 0 && !highContention.has(file)),
+    ),
+  ];
+  if (candidateFiles.length === 0) {
+    return null;
+  }
+  const candidateSet = new Set(candidateFiles);
+  const mergedPrs = Array.isArray(input.mergedPrs) ? input.mergedPrs : [];
+  for (const raw of mergedPrs) {
+    const pr = raw ?? {};
+    const number = Number(pr.number);
+    if (!Number.isInteger(number) || number <= 0) {
+      continue;
+    }
+    const files = Array.isArray(pr.files) ? pr.files : [];
+    const overlap = [
+      ...new Set(files.map((file) => normalizeContentionPath(file))),
+    ].filter((file) => candidateSet.has(file));
+    if (overlap.length > 0) {
+      const mergedAt = String(pr.mergedAt ?? '');
+      return {
+        pass: false,
+        evidence: `High-confidence duplicate: merged PR #${number}${mergedAt ? ` (merged ${mergedAt})` : ''} already changed candidate file(s): ${overlap.sort().join(', ')}.`,
+      };
+    }
+  }
+  return null;
+}
 export function checkDuplicateOrSuperseded(context) {
+  const highConfidence = evaluateHighConfidenceDuplicate(
+    context.highConfidenceDuplicate,
+  );
+  if (highConfidence) {
+    return highConfidence;
+  }
   const { issue, duplicateCandidates } = context;
+  // #1484 (Codex P2 review finding): a genuine high-confidence
+  // evidence-collection failure -- not "checked, found nothing" -- degrades
+  // to exact-title matching ONLY, per the documented "Timeout on duplicate
+  // detection... fall back to exact title match only" Edge Case. Skips the
+  // free-text declaration scan and the near-duplicate fuzzy (>80%
+  // Levenshtein) check entirely: a merely similarly-titled but genuinely
+  // distinct issue must never read as a false duplicate just because
+  // evidence collection broke.
+  if (context.highConfidenceCollectionDegraded) {
+    const degradedExactTitle = normalizeText(issue.title);
+    const degradedExactMatch = duplicateCandidates.find(
+      (candidate) =>
+        candidate.number !== issue.number &&
+        normalizeText(candidate.title) === degradedExactTitle,
+    );
+    if (degradedExactMatch) {
+      return {
+        pass: false,
+        evidence: `Exact-title duplicate found: #${degradedExactMatch.number}`,
+      };
+    }
+    return {
+      pass: true,
+      evidence:
+        'High-confidence evidence collection failed; degraded to exact-title match only per the documented "Timeout on duplicate detection" Edge Case. No exact-title duplicate found.',
+    };
+  }
   const body = issue.body;
   const declarations = [...body.matchAll(DUPLICATE_DECLARATION_PATTERN)];
   for (const declaration of declarations) {
@@ -592,11 +770,104 @@ function runCli() {
   const issue = fetchIssue(repoRef, args.issue);
   const duplicateCandidates = fetchDuplicateCandidates(repoRef, issue);
   const labelsPolicy = normalizePolicyConfig(loadPolicy(args.policy)).labels;
+  // #1484: high-confidence Check 4 tier evidence. The two mechanical signals
+  // (closedByPullRequestsReferences, and the same-candidate-files merged-PR
+  // scan) are collected in two SEPARATE try/catch blocks (CodeRabbit review
+  // finding on this PR): an earlier version wrapped both in one block, so a
+  // failure collecting the second signal discarded an already-successful
+  // first signal too. Each block's own failure is recorded independently in
+  // `collectionWarnings` and degrades only that one signal to empty/absent
+  // -- never silently reported as "no evidence" (that would mask a
+  // genuinely broken collector as a clean pass), and never discarding a
+  // sibling signal that already collected cleanly. `gh`/API fetch failures
+  // in either block are always recorded here; a manifest-unavailable
+  // same-candidate-files skip is a distinct, deliberate degradation
+  // documented on `loadHighContentionFiles` itself, not a fetch failure, so
+  // it is not added to this list (Copilot review finding on this PR: an
+  // earlier comment overclaimed that every degradation path surfaces here).
+  // This is also why an uncaught failure no longer aborts the entire
+  // 7-check evaluation (Codex review finding on this PR) -- this tier is an
+  // optional enhancement layered onto Check 4, and Check 4's own documented
+  // Edge Case ("Timeout on duplicate detection... fall back to exact title
+  // match only") already anticipates exactly this degradation.
+  const collectionWarnings = [];
+  let closedByMergedPrNumbers = [];
+  try {
+    closedByMergedPrNumbers = fetchClosedByMergedPrNumbers(
+      owner,
+      repo,
+      args.issue,
+    );
+  } catch (error) {
+    collectionWarnings.push(
+      `closedByPullRequestsReferences: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+  let candidateFiles = [];
+  let highContentionFiles = [];
+  let mergedPrs = [];
+  try {
+    candidateFiles = parseCandidateFiles(issue.body);
+    // Only resolve the high-contention exclusion set (a file read + JSON
+    // parse) when there is a '## Candidate files' section to check it
+    // against -- most issues have none, and the result would otherwise be
+    // discarded.
+    const resolvedHighContentionFiles =
+      candidateFiles.length > 0 ? loadHighContentionFiles() : null;
+    const shouldScanMergedPrs =
+      candidateFiles.length > 0 &&
+      resolvedHighContentionFiles !== null &&
+      issue.createdAt.length > 0;
+    highContentionFiles = resolvedHighContentionFiles ?? [];
+    if (candidateFiles.length > 0 && resolvedHighContentionFiles === null) {
+      // Codex P2 review finding: an unreadable/missing high-contention
+      // manifest silently skipped the same-candidate-files scan without
+      // recording a warning -- but from Check 4's perspective this is the
+      // same class of "high-confidence evidence could not be collected" as
+      // a genuine gh/API failure, and must degrade the same way (exact
+      // title match only), not let the full weak heuristic run.
+      collectionWarnings.push(
+        'same-candidate-files scan: high-contention manifest unavailable, skipping the scan',
+      );
+    }
+    if (shouldScanMergedPrs) {
+      const scanResult = fetchMergedPrFileOverlapEvidence(
+        repoRef,
+        issue.createdAt,
+      );
+      mergedPrs = scanResult.mergedPrs;
+      if (scanResult.truncatedByDeadline) {
+        // Codex P2 review finding: a deadline-truncated scan returns
+        // normally (not a throw), so it must record its own warning here --
+        // otherwise Check 4 would run the full weak heuristic on
+        // incomplete evidence instead of degrading to exact-title-only.
+        collectionWarnings.push(
+          'same-candidate-files scan: truncated by MERGED_PR_SCAN_DEADLINE_MS before scanning every merged PR in the window',
+        );
+      }
+    } else {
+      mergedPrs = [];
+    }
+  } catch (error) {
+    collectionWarnings.push(
+      `same-candidate-files scan: ${error instanceof Error ? error.message : String(error)}`,
+    );
+    candidateFiles = [];
+    mergedPrs = [];
+  }
+  const highConfidenceDuplicate = {
+    closedByMergedPrNumbers,
+    candidateFiles,
+    highContentionFiles,
+    mergedPrs,
+  };
   const result = evaluateSuitability(issue, {
     repository: { owner, repo },
     duplicateCandidates,
     blockedByHumanLabelName: labelsPolicy.blockedByHumanLabelName,
     needsDecisionLabelName: labelsPolicy.needsDecisionLabelName,
+    highConfidenceDuplicate,
+    highConfidenceCollectionDegraded: collectionWarnings.length > 0,
   });
   const output = {
     repository: { owner, repo },
@@ -609,6 +880,9 @@ function runCli() {
     passed: result.passed,
     outcome: result.outcome,
     failedCheck: result.failedCheck,
+    ...(collectionWarnings.length > 0
+      ? { highConfidenceDuplicateCollectionWarnings: collectionWarnings }
+      : {}),
     checks: args.verbose
       ? result.checks
       : result.checks.map((check) => ({
@@ -619,55 +893,38 @@ function runCli() {
   };
   process.stdout.write(`${JSON.stringify(output, null, 2)}\n`);
 }
-function parseArgs(argv) {
-  const parsed = {
-    issue: null,
-    token: '',
-    owner: '',
-    repo: '',
-    policy: '',
-    verbose: false,
-    help: false,
+/**
+ * Restores this file's pre-#1450 permissive `Number.parseInt` contract:
+ * absent resolves to `null` (the original `issue: null` default, never
+ * overwritten when `--issue` is absent); present feeds the raw token
+ * straight to `Number.parseInt`, which accepts trailing-garbage ("42abc"
+ * -> 42) and leading-zero ("007" -> 7) tokens the same way the original
+ * hand-rolled `Number.parseInt(String(value ?? ''), 10)` always did.
+ * `cli-args.mts`'s `parseCanonicalIntegerOrNull` is a poor substitute
+ * here: its canonical-pattern regex rejects those same tokens outright,
+ * which is a real contract change a CodeRabbit review on PR #1466 caught
+ * -- #1450's acceptance criteria protect the post-parse integer contract
+ * as-is, only flag *syntax* (missing/flag-shaped values, unknown flags)
+ * is meant to tighten. This file's own `args.issue === null ||
+ * !Number.isInteger(args.issue) || args.issue <= 0` use-site guard
+ * already treats `NaN` (an invalid parseInt result) the same as `null`,
+ * so this restores the exact original resolved value, not just an
+ * equivalent downstream verdict.
+ */
+function parseLenientIntegerOrNull(token) {
+  return token === undefined ? null : Number.parseInt(token, 10);
+}
+export function parseArgs(argv) {
+  const { values, help } = parseCliArgs(argv, SUITABILITY_TRIAGE_FLAG_SPEC);
+  return {
+    issue: parseLenientIntegerOrNull(values.issue),
+    token: values.token,
+    owner: values.owner,
+    repo: values.repo,
+    policy: values.policy,
+    verbose: values.verbose,
+    help,
   };
-  for (let index = 0; index < argv.length; index += 1) {
-    const token = argv[index];
-    const value = argv[index + 1];
-    if (token === '--issue') {
-      parsed.issue = Number.parseInt(String(value ?? ''), 10);
-      index += 1;
-      continue;
-    }
-    if (token === '--owner') {
-      parsed.owner = value ?? '';
-      index += 1;
-      continue;
-    }
-    if (token === '--token') {
-      parsed.token = value ?? '';
-      index += 1;
-      continue;
-    }
-    if (token === '--repo') {
-      parsed.repo = value ?? '';
-      index += 1;
-      continue;
-    }
-    if (token === '--policy') {
-      parsed.policy = value ?? '';
-      index += 1;
-      continue;
-    }
-    if (token === '--verbose') {
-      parsed.verbose = true;
-      continue;
-    }
-    if (token === '--help' || token === '-h') {
-      parsed.help = true;
-      continue;
-    }
-    throw new Error(`unknown argument: ${token}`);
-  }
-  return parsed;
 }
 /**
  * Load and parse `.github/idd/config.json` (or `--policy <path>` when given),
@@ -693,7 +950,7 @@ function loadPolicy(policyPath) {
 }
 function printHelp() {
   process.stdout.write(`Usage:
-  node scripts/suitability-triage.mjs --issue <number> [--token <token>] [--owner <owner>] [--repo <repo>] [--policy <path>] [--verbose]
+  node scripts/suitability-triage.mjs --issue <number> [--token <token>] [--owner <owner>] [--repo <repo>] [--policy <path>] [--verbose] [--help]
 
 Output schema:
 {
@@ -715,7 +972,61 @@ function normalizeIssue(issue) {
     state: String(i.state ?? ''),
     labels: normalizeLabels(i.labels),
     url: String(i.url ?? i.html_url ?? ''),
+    createdAt: String(i.created_at ?? ''),
   };
+}
+/**
+ * Normalize the `evaluateSuitability` options-boundary input for #1484's
+ * high-confidence tier. Returns `undefined` for anything that isn't a
+ * plausible object (existing callers that don't know about this field never
+ * pass it, which must resolve to "absent", not an empty-but-present shape --
+ * `evaluateHighConfidenceDuplicate` special-cases `undefined` for exactly
+ * this reason). Every array field defaults to `[]` on a malformed shape.
+ */
+function normalizeHighConfidenceDuplicateInput(raw) {
+  if (!raw || typeof raw !== 'object') {
+    return undefined;
+  }
+  const r = raw;
+  return {
+    closedByMergedPrNumbers: normalizePositiveIntArray(
+      r.closedByMergedPrNumbers,
+    ),
+    candidateFiles: normalizeStringArray(r.candidateFiles),
+    highContentionFiles: normalizeStringArray(r.highContentionFiles),
+    mergedPrs: normalizeHighConfidenceMergedPrs(r.mergedPrs),
+  };
+}
+function normalizePositiveIntArray(value) {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value
+    .map((entry) => Number(entry))
+    .filter((entry) => Number.isInteger(entry) && entry > 0);
+}
+function normalizeStringArray(value) {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value
+    .map((entry) => String(entry ?? ''))
+    .filter((entry) => entry.length > 0);
+}
+function normalizeHighConfidenceMergedPrs(value) {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value
+    .map((entry) => {
+      const e = entry ?? {};
+      return {
+        number: Number(e.number),
+        mergedAt: String(e.mergedAt ?? ''),
+        files: normalizeStringArray(e.files),
+      };
+    })
+    .filter((entry) => Number.isInteger(entry.number) && entry.number > 0);
 }
 /**
  * Resolve one configured `labels.*` name (#1273), falling back to the given
@@ -787,6 +1098,238 @@ function fetchDuplicateCandidates(repoRef, issue) {
     `search/issues?q=${encodeURIComponent(query)}&per_page=50`,
   ]);
   return normalizeDuplicateCandidates(payload.items ?? []);
+}
+// --- #1484: high-confidence Check 4 tier CLI glue ---------------------------
+// Read-only: every function below only ever calls `gh api graphql` (with a
+// `query` operation, never `mutation`), `gh pr list`, or `gh pr view` (no
+// -X/--method, no issue/PR mutation subcommand).
+// #1484 is detect-only by design; do not add a mutating gh call here -- a
+// later gated-close follow-up (#1485) is a separate, human-gated change.
+// The argv-builders are exported so tests can assert the exact read-only
+// verb without shelling out (a compiled-text grep for mutating verb
+// literals would miss a `gh api ... -X POST`-shaped mutation, since none of
+// this file's own calls use one).
+/**
+ * Argv for the closed-by-merged-PR read. Uses `gh api graphql` rather than
+ * `gh issue view --json closedByPullRequestsReferences`: the latter's
+ * REST-shimmed shape carries no per-PR `state`, and the connection includes
+ * OPEN (not yet merged) PRs, not only merged ones -- confirmed empirically
+ * against this repo's own issue #1489 (OPEN) / PR #1497 (OPEN), and matches
+ * `idd-roadmap-audit-execute.mts`'s documented note that the field "returns
+ * merged PRs even with `includeClosedPrs:false`" (i.e. state alone
+ * determines relevance, not that flag). Filtering to `state === 'MERGED'`
+ * happens in `fetchClosedByMergedPrNumbers` below, after this fetch --
+ * without it, an issue with only an in-progress unmerged closing PR would
+ * wrongly read as "already referenced by a merged closing PR".
+ */
+export function buildClosedByMergedPrArgs(owner, repo, issueNumber) {
+  return [
+    'api',
+    'graphql',
+    '-f',
+    `query=${CLOSED_BY_MERGED_PR_QUERY}`,
+    '-f',
+    `owner=${owner}`,
+    '-f',
+    `repo=${repo}`,
+    '-F',
+    `number=${issueNumber}`,
+  ];
+}
+/** Argv for the bounded merged-PR list scan (mirrors B2.0's own documented
+ * `gh pr list --search "merged:>=<since>"` shape). */
+export function buildMergedPrListArgs(repoRef, sinceIso) {
+  return [
+    'pr',
+    'list',
+    '--repo',
+    repoRef,
+    '--state',
+    'merged',
+    '--search',
+    `merged:>=${sinceIso}`,
+    '--json',
+    'number,mergedAt',
+    '--limit',
+    String(MERGED_PR_SCAN_LIMIT),
+  ];
+}
+/** Argv for one merged PR's changed-file list. */
+export function buildPrFilesArgs(repoRef, prNumber) {
+  return [
+    'pr',
+    'view',
+    String(prNumber),
+    '--repo',
+    repoRef,
+    '--json',
+    'files',
+    '--jq',
+    '.files[].path',
+  ];
+}
+/**
+ * Fetch the candidate issue's own merged closing-PR references. Throws (via
+ * `runGh`, no try/catch here) on a `gh` error rather than silently reading a
+ * broken fetch as "no evidence" -- the latter would make a real duplicate
+ * look clean. The caller (`runCli`) wraps this in its own try/catch,
+ * separate from the same-candidate-files scan's try/catch below (Copilot
+ * review finding on this PR: an earlier version described both as sharing
+ * one try/catch, which stopped being accurate once they were split so a
+ * failure in one signal's collection couldn't discard an already-successful
+ * sibling), so a failure here degrades the optional high-confidence tier
+ * (Check 4's own documented "Timeout on duplicate detection... fall back to
+ * exact title match only" Edge Case) without aborting the other six checks
+ * (Codex review finding on this PR: an earlier version let this throw
+ * uncaught all the way out of `runCli`, crashing the whole evaluation).
+ *
+ * Also requires the candidate issue's own current `state` to be `CLOSED`,
+ * mirroring B2.0's identical gate on this same signal
+ * (`idd-work.instructions.md`'s "Closed-by-a-merged-PR signal": `select(.state
+ * == "CLOSED")`). `closedByPullRequestsReferences` is not cleared when an
+ * issue is reopened, so without this gate a reopened issue with genuine
+ * remaining work would still show its old merged closing PR and get
+ * misclassified as a completed duplicate (Codex review finding on this PR).
+ */
+function fetchClosedByMergedPrNumbers(owner, repo, issueNumber) {
+  const parsed = ghJson(buildClosedByMergedPrArgs(owner, repo, issueNumber));
+  // `gh api graphql` exits non-zero (throwing via runGh) on a schema-level
+  // query error, but a GraphQL response can also return HTTP 200 with a
+  // non-empty top-level `errors` array alongside partial/null `data` (a
+  // resolver-level failure on a nullable field) -- verified empirically
+  // that gh's own exit code does not always catch this shape. Treating that
+  // silently as "no evidence" would suppress a real collection failure
+  // (Copilot review finding on this PR); throw explicitly so the caller's
+  // try/catch records it in `collectionWarnings` instead.
+  if (Array.isArray(parsed.errors) && parsed.errors.length > 0) {
+    throw new Error(
+      `closedByPullRequestsReferences GraphQL response returned errors: ${JSON.stringify(parsed.errors)}`,
+    );
+  }
+  if (String(parsed.data?.repository?.issue?.state ?? '') !== 'CLOSED') {
+    return [];
+  }
+  const nodes =
+    parsed.data?.repository?.issue?.closedByPullRequestsReferences?.nodes ?? [];
+  return nodes
+    .filter((node) => String(node?.state ?? '') === 'MERGED')
+    .map((node) => Number.parseInt(String(node?.number ?? ''), 10))
+    .filter((n) => Number.isInteger(n) && n > 0);
+}
+/**
+ * Bounded two-step merged-PR file-overlap scan (list, then per-PR file
+ * list), mirroring B2.0's own documented commands exactly rather than a new
+ * query shape. A malformed list entry (non-positive-integer or absent
+ * `number`) is skipped rather than shelled out to `gh pr view` (Copilot
+ * review finding on this PR: `ghJsonArray` intentionally returns
+ * `unknown[]`, so an unexpected API shape should degrade this one entry,
+ * not become a hard `gh pr view NaN`/`gh pr view 0` failure). Also stops
+ * early, returning whatever has been collected so far plus
+ * `truncatedByDeadline: true`, once `MERGED_PR_SCAN_DEADLINE_MS` elapses
+ * (CodeRabbit review finding on this PR: up to `MERGED_PR_SCAN_LIMIT`
+ * sequential `gh pr view` calls with no overall cap could otherwise run for
+ * tens of minutes under a degraded/rate-limited GitHub API). The
+ * `truncatedByDeadline` flag matters because this early exit returns
+ * normally rather than throwing (Codex P2 review finding on this PR): an
+ * earlier version left the caller unable to distinguish "scanned
+ * everything, found nothing" from "gave up partway through", so a
+ * deadline-truncated scan silently ran the FULL weak heuristic (including
+ * the near-duplicate fuzzy match) on incomplete evidence instead of
+ * degrading to the documented exact-title-only fallback the way a thrown
+ * `gh` error already does. A genuine `gh` error on a well-formed entry
+ * still throws -- the caller (`runCli`) wraps this and its sibling fetch in
+ * a separate try/catch so that surfaces as the same documented Check 4 Edge
+ * Case fallback for just this signal, without discarding the other.
+ */
+function fetchMergedPrFileOverlapEvidence(repoRef, sinceIso) {
+  const list = ghJsonArray(buildMergedPrListArgs(repoRef, sinceIso));
+  const mergedPrs = [];
+  const deadline = Date.now() + MERGED_PR_SCAN_DEADLINE_MS;
+  let truncatedByDeadline = false;
+  for (const entry of list) {
+    if (Date.now() >= deadline) {
+      truncatedByDeadline = true;
+      break;
+    }
+    const pr = entry ?? {};
+    const number = Number.parseInt(String(pr.number ?? ''), 10);
+    if (!Number.isInteger(number) || number <= 0) {
+      continue;
+    }
+    const files = runGh(buildPrFilesArgs(repoRef, number))
+      .split('\n')
+      .map((line) => line.trim())
+      .filter(Boolean);
+    mergedPrs.push({ number, mergedAt: String(pr.mergedAt ?? ''), files });
+  }
+  return { mergedPrs, truncatedByDeadline };
+}
+/**
+ * Resolve the high-contention exclusion set the same way A4 Step 2's
+ * `discover-shared-file-overlap` does, so the #1484 same-candidate-files
+ * signal never treats a broadly-shared bundle/manifest file as
+ * high-confidence evidence on its own. Returns `null` (not `[]`) when the
+ * manifest cannot be loaded, so `runCli` can skip the same-candidate-files
+ * scan entirely in that case rather than proceeding with zero exclusions --
+ * an empty exclusion set would make that signal MORE permissive, which is
+ * the wrong fail direction for "never fail toward a false high-confidence
+ * flag". `runCli` also records this as a `collectionWarnings` entry (Codex
+ * P2 review finding on this PR): from Check 4's perspective, "manifest
+ * unavailable" and "gh/API fetch failed" are the same class of "evidence
+ * could not be collected" and must degrade the weak-heuristic fallback the
+ * same way. `closedByPullRequestsReferences` is a separate, independent
+ * signal and is unaffected by either fallback.
+ */
+function loadHighContentionFiles() {
+  try {
+    const manifest = JSON.parse(
+      readFileSync(resolve(process.cwd(), DEFAULT_MANIFEST_PATH), 'utf8'),
+    );
+    // Codex P2 review finding: a manifest that parses but lacks usable
+    // `bundleBudgets` entries for one or both target bundle IDs (an empty
+    // object, or an older schema) doesn't throw here -- `resolveHighContentionFiles`
+    // degrades gracefully to just `DEFAULT_EXTRA_FILES` for A4 Step 2's own,
+    // lower-stakes de-prioritization use. But for this tier, an incomplete
+    // exclusion set can miss a genuinely high-contention file, so a shared
+    // bundle/instruction file could be misread as specific overlap evidence
+    // -- exactly the false high-confidence flag Check 4 must never produce.
+    // Require both configured bundle IDs to actually resolve before
+    // accepting the set; otherwise treat it the same as an unreadable
+    // manifest (return null, which the caller already records as a
+    // collection warning and degrades to exact-title-only).
+    const bundles = manifest?.bundleBudgets;
+    if (!Array.isArray(bundles)) {
+      return null;
+    }
+    const nonEmptyFilesBundleIds = new Set(
+      bundles
+        .filter((bundle) => {
+          const files = bundle?.files;
+          return Array.isArray(files) && files.length > 0;
+        })
+        .map((bundle) => String(bundle?.id ?? '')),
+    );
+    // Codex P2 review finding: a bundle entry whose id matched but whose
+    // `files` was missing, non-array, or empty passed the id-only check
+    // above yet still let `resolveHighContentionFiles` silently omit that
+    // bundle's real shared files -- the same false-flag risk as a missing
+    // bundle id entirely, so it must degrade the same way.
+    const allBundleIdsResolved = DEFAULT_BUNDLE_IDS.every((id) =>
+      nonEmptyFilesBundleIds.has(id),
+    );
+    if (!allBundleIdsResolved) {
+      return null;
+    }
+    return [
+      ...resolveHighContentionFiles({
+        manifest,
+        bundleIds: DEFAULT_BUNDLE_IDS,
+        extraFiles: DEFAULT_EXTRA_FILES,
+      }),
+    ];
+  } catch {
+    return null;
+  }
 }
 function ghJson(args) {
   return JSON.parse(runGh(args).trim() || '{}');

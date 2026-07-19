@@ -7,8 +7,12 @@ import { test } from 'node:test';
 
 import {
   classifyBranchConflictState,
+  MERGE_BASE_FETCH_STEPS,
   parseArgs,
   parseConflictFiles,
+  parseGitFetchOrigin,
+  resolveFetchOrigin,
+  resolveMergeBaseWithRetry,
 } from '../src/scripts/branch-conflict-state.mts';
 
 type ClassifyOptions = NonNullable<
@@ -85,6 +89,130 @@ function createTwoCommitRepo(): { dir: string; older: string; newer: string } {
   const newer = git(['rev-parse', 'HEAD']);
   sharedTwoCommitRepo = { dir, older, newer };
   return sharedTwoCommitRepo;
+}
+
+/** Runs a git command with signing forced off. These fixture repos are
+ * throwaway temp directories, not real project history, so there is
+ * nothing to sign -- and this repository's own ambient global
+ * `commit.gpgsign=true` would otherwise make every fixture commit attempt a
+ * real GPG signature, which can hang or fail on pinentry/gpg-agent
+ * contention under concurrent local sessions (observed directly: a first
+ * attempt at this fixture failed with `gpg: signing failed: timeout` from
+ * exactly this cause). `-c commit.gpgsign=false` overrides the ambient
+ * config for this invocation only, without touching any real repository or
+ * user config. */
+function gitNoSign(dir: string, args: string[]): string {
+  return execFileSync('git', ['-c', 'commit.gpgsign=false', ...args], {
+    cwd: dir,
+    encoding: 'utf8',
+  }).trim();
+}
+
+let sharedUpstreamRepo: {
+  dir: string;
+  branch: string;
+  commits: string[];
+} | null = null;
+
+/**
+ * Builds (once, memoized) a real "upstream" repo with several sequential
+ * commits -- oldest first in the returned `commits` array. Immutable after
+ * creation (nothing below ever fetches into or otherwise mutates this
+ * directory), so sharing one instance across tests is safe.
+ */
+function createUpstreamRepo(): {
+  dir: string;
+  branch: string;
+  commits: string[];
+} {
+  if (sharedUpstreamRepo) return sharedUpstreamRepo;
+  const dir = mkdtempSync(join(tmpdir(), 'idd-branch-conflict-upstream-'));
+  gitNoSign(dir, ['init', '-q']);
+  gitNoSign(dir, ['config', 'user.email', 'test@example.invalid']);
+  gitNoSign(dir, ['config', 'user.name', 'Test']);
+  const commits: string[] = [];
+  for (let i = 0; i < 6; i += 1) {
+    writeFileSync(join(dir, `f${i}.txt`), `${i}\n`);
+    gitNoSign(dir, ['add', `f${i}.txt`]);
+    gitNoSign(dir, ['commit', '-q', '-m', `commit ${i}`]);
+    commits.push(gitNoSign(dir, ['rev-parse', 'HEAD']));
+  }
+  const branch = gitNoSign(dir, ['rev-parse', '--abbrev-ref', 'HEAD']);
+  sharedUpstreamRepo = { dir, branch, commits };
+  return sharedUpstreamRepo;
+}
+
+/**
+ * Creates a **fresh** (never memoized/shared) genuine `--depth=1` shallow
+ * clone of the upstream repo, so each caller can deepen its own clone
+ * without order-coupling to any other test. `git clone` wires the clone's
+ * `origin` remote to the upstream directory automatically, so
+ * `fetchShallowFixtureStep` can fetch progressively more history straight
+ * from that local path -- exercising real shallow-git `--deepen` semantics
+ * with the exact {@link MERGE_BASE_FETCH_STEPS} args `tryFetchBase` uses in
+ * production, with no network access. Only `tryFetchBase`'s own HTTPS
+ * remote-URL resolution is bypassed (a local path is not a resolvable host
+ * per `resolveFetchOrigin`), matching this file's existing convention of
+ * never letting a test reach a live network fetch (see the "unresolvable
+ * merge-base" test's `baseRefName: ''` short-circuit, and `tryFetchBase`'s
+ * own doc comment).
+ *
+ * A plain filesystem path clone silently **ignores** `--depth` ("--depth is
+ * ignored in local clones; use file:// instead"). `--no-local` is used
+ * instead of a `file://` URL: it forces the same non-optimized transfer
+ * path a real remote would use (so `--depth` takes effect) without
+ * constructing a URL by string interpolation, which could break if
+ * `upstreamDir` contains characters that need URL escaping (e.g. spaces).
+ */
+function createFreshShallowClone(upstreamDir: string): string {
+  const shallowDir = mkdtempSync(
+    join(tmpdir(), 'idd-branch-conflict-shallow-'),
+  );
+  execFileSync(
+    'git',
+    ['clone', '-q', '--depth=1', '--no-local', upstreamDir, shallowDir],
+    { encoding: 'utf8' },
+  );
+  return shallowDir;
+}
+
+/** Real `git fetch --no-tags <fetchArgs> origin <branch>` against the
+ * shallow clone's own `origin` remote (the local upstream directory) --
+ * the same invocation shape as `tryFetchBase`, minus its HTTPS remote-URL
+ * resolution. Returns whether the fetch itself succeeded, mirroring
+ * `tryFetchBase`'s own return contract for {@link resolveMergeBaseWithRetry}. */
+function fetchShallowFixtureStep(
+  shallowDir: string,
+  branch: string,
+  fetchArgs: readonly string[],
+): boolean {
+  try {
+    execFileSync(
+      'git',
+      ['fetch', '--no-tags', ...fetchArgs, 'origin', branch],
+      { cwd: shallowDir, encoding: 'utf8', stdio: 'ignore' },
+    );
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Read-only local `git merge-base` lookup mirroring the production
+ * `gitText` helper's contract exactly: swallow any git failure (missing
+ * object, unrelated history, etc.) and return `''` rather than throwing, so
+ * `resolveMergeBaseWithRetry`'s `lookupMergeBase` callback never needs its
+ * own try/catch at each call site. */
+function mergeBaseText(dir: string, a: string, b: string): string {
+  try {
+    return execFileSync('git', ['merge-base', a, b], {
+      cwd: dir,
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+    }).trim();
+  } catch {
+    return '';
+  }
 }
 
 test('classifyBranchConflictState: clean PR returns clean state', async () => {
@@ -394,6 +522,115 @@ test('classifyBranchConflictState: CLEAN with an unresolvable merge-base reports
   );
 });
 
+// #1519: tryFetchBase's single --depth=1 fetch could not expose a common
+// ancestor from a genuinely shallow checkout or missing base history.
+// resolveMergeBaseWithRetry is the extracted, directly-testable bounded
+// retry loop that now backs computeMergeBase; the "deepened-success" test
+// below exercises it against a *real* shallow git clone (fresh, not shared,
+// so it can be safely deepened) so that path is proven with genuine
+// shallow-git semantics, not just callback call-counts.
+
+test('resolveMergeBaseWithRetry: a genuinely shallow checkout resolves after a deepening fetch', () => {
+  const { dir: upstreamDir, branch, commits } = createUpstreamRepo();
+  const shallowDir = createFreshShallowClone(upstreamDir);
+  assert.equal(
+    execFileSync('git', ['rev-parse', '--is-shallow-repository'], {
+      cwd: shallowDir,
+      encoding: 'utf8',
+    }).trim(),
+    'true',
+    'fixture setup bug: the clone must genuinely be shallow for this test to mean anything',
+  );
+  // commits[0] is the oldest (root) commit -- several generations behind the
+  // shallow clone's sole local commit (the tip, commits[commits.length - 1]).
+  // A depth=1 clone cannot see it yet, so the initial local merge-base
+  // lookup (and the first --depth=1 step, already satisfied by the clone)
+  // both fail; a later --deepen step must widen far enough to expose it.
+  const headSha = commits[commits.length - 1];
+  const baseSha = commits[0];
+  const widenedSteps: number[] = [];
+  const result = resolveMergeBaseWithRetry(
+    () => mergeBaseText(shallowDir, headSha, baseSha),
+    (step) => {
+      widenedSteps.push(step);
+      return fetchShallowFixtureStep(
+        shallowDir,
+        branch,
+        MERGE_BASE_FETCH_STEPS[step],
+      );
+    },
+    MERGE_BASE_FETCH_STEPS.length,
+  );
+  assert.equal(result, baseSha);
+  assert.ok(
+    widenedSteps.length >= 1 &&
+      widenedSteps.length < MERGE_BASE_FETCH_STEPS.length,
+    `expected resolution after a deepening step and before exhausting the cap, got ${JSON.stringify(widenedSteps)}`,
+  );
+});
+
+test('resolveMergeBaseWithRetry: still reports undetermined (null) after exhausting the bounded retry', () => {
+  const { dir: upstreamDir, commits } = createUpstreamRepo();
+  const headSha = commits[commits.length - 1];
+  // A syntactically valid but nonexistent object: never resolvable no
+  // matter how much history is available, so this deterministically covers
+  // the true "exhausted the cap" path -- every bounded attempt reports a
+  // successful widen, yet the lookup never resolves -- distinct from the
+  // pre-existing baseRefName: '' short-circuit test above (which breaks on
+  // the very first step instead of exhausting all of them). `widenHistory`
+  // is a trivial stub here (always succeeds) because the scenario under
+  // test is retry-cap exhaustion, not deepening mechanics -- that is
+  // already covered by the real-clone test above.
+  const unreachableSha = 'f'.repeat(40);
+  const widenedSteps: number[] = [];
+  const result = resolveMergeBaseWithRetry(
+    () => mergeBaseText(upstreamDir, headSha, unreachableSha),
+    (step) => {
+      widenedSteps.push(step);
+      return true;
+    },
+    MERGE_BASE_FETCH_STEPS.length,
+  );
+  assert.equal(result, null);
+  assert.deepEqual(
+    widenedSteps,
+    MERGE_BASE_FETCH_STEPS.map((_, i) => i),
+    'expected every bounded step to be attempted before giving up',
+  );
+});
+
+test('resolveMergeBaseWithRetry: stops immediately when widenHistory cannot help, without exhausting the cap', () => {
+  // Pure control-flow coverage (no git involved): mirrors tryFetchBase
+  // returning false for a structurally-impossible fetch (missing base ref,
+  // or missing owner/repo) -- retrying further would just repeat the same
+  // no-op, so the loop must not call widenHistory again after a false.
+  let widenCalls = 0;
+  const result = resolveMergeBaseWithRetry(
+    () => '',
+    () => {
+      widenCalls += 1;
+      return false;
+    },
+    3,
+  );
+  assert.equal(result, null);
+  assert.equal(widenCalls, 1);
+});
+
+test('resolveMergeBaseWithRetry: never calls widenHistory when the first lookup already resolves', () => {
+  let widenCalls = 0;
+  const result = resolveMergeBaseWithRetry(
+    () => 'already-resolved-sha',
+    () => {
+      widenCalls += 1;
+      return true;
+    },
+    3,
+  );
+  assert.equal(result, 'already-resolved-sha');
+  assert.equal(widenCalls, 0);
+});
+
 test('classifyBranchConflictState: published is true when head SHA is present', async () => {
   const fixture = loadFixture('clean');
   const result = await classifyBranchConflictState(fixture.prData.number, {
@@ -412,6 +649,204 @@ test('classifyBranchConflictState: published is false when head SHA is absent', 
     _testPrData: fixture.prData,
   });
   assert.equal(result.published, false);
+});
+
+// #1454: tryFetchBase hardcoded `https://github.com/...` as the base-ref
+// fetch fallback remote, breaking (or worse, silently mis-targeting) GHES
+// checkouts. parseGitFetchOrigin / resolveFetchOrigin are the extracted,
+// independently unit-testable pieces of that fix. Both findings below
+// (HTTP-scheme preservation, username-less scp-like remotes) came from an
+// independent Codex review pass on the PR.
+
+test('parseGitFetchOrigin: extracts scheme+host from an HTTPS GHES remote, preserving a non-default port', () => {
+  assert.deepEqual(
+    parseGitFetchOrigin('https://ghes.example.com:8443/owner/repo.git'),
+    { scheme: 'https', host: 'ghes.example.com:8443' },
+  );
+});
+
+test('parseGitFetchOrigin: preserves http (not https) for a plain HTTP GHES remote', () => {
+  // An http://-only GHES instance (no TLS) must stay http: silently
+  // upgrading to https on the same port would target a port that is not
+  // serving TLS, and the fetch would fail even though the configured
+  // remote is reachable over plain HTTP.
+  assert.deepEqual(
+    parseGitFetchOrigin('http://ghes.example.com:8080/owner/repo.git'),
+    { scheme: 'http', host: 'ghes.example.com:8080' },
+  );
+});
+
+test('parseGitFetchOrigin: strips embedded credentials from an actions/checkout-style origin, keeping only the host', () => {
+  // actions/checkout writes `origin` as
+  // `https://x-access-token:<token>@host/owner/repo` -- the real-world CI
+  // shape this fix targets. URL() parses the token into userinfo, not the
+  // host, so it never leaks into the constructed fetch URL.
+  assert.deepEqual(
+    parseGitFetchOrigin(
+      'https://x-access-token:ghs_abc123@ghes.example.com/owner/repo',
+    ),
+    { scheme: 'https', host: 'ghes.example.com' },
+  );
+});
+
+test('parseGitFetchOrigin: returns null for an ssh:// origin instead of guessing an HTTPS host', () => {
+  // An ssh:// hostname is sometimes an SSH-only alias with no HTTPS
+  // service of its own -- guessing wrong would regress a
+  // previously-working github.com fallback into a broken fetch, so this
+  // signal is unusable rather than guessed at (see the dedicated
+  // ssh.github.com regression test below for the concrete case this
+  // protects against).
+  assert.equal(
+    parseGitFetchOrigin('ssh://git@ghes.example.com:2222/owner/repo.git'),
+    null,
+  );
+});
+
+test("parseGitFetchOrigin: returns null for GitHub's documented SSH-over-443 endpoint, not a broken HTTPS host", () => {
+  // ssh.github.com is GitHub's own documented alias for SSH traffic over
+  // the HTTPS port (firewall traversal); it accepts SSH, not HTTPS, on
+  // that hostname. Before #1454, this checkout shape already worked via
+  // the hardcoded github.com default -- treating the ssh:// origin's
+  // hostname as reusable for HTTPS would have silently regressed it to
+  // an unreachable https://ssh.github.com fetch (found by Codex review on
+  // PR #1470).
+  assert.equal(
+    parseGitFetchOrigin('ssh://git@ssh.github.com:443/owner/repo.git'),
+    null,
+  );
+});
+
+test('parseGitFetchOrigin: extracts host from the scp-like SSH shorthand with a username', () => {
+  assert.deepEqual(parseGitFetchOrigin('git@ghes.example.com:owner/repo.git'), {
+    scheme: 'https',
+    host: 'ghes.example.com',
+  });
+});
+
+test('parseGitFetchOrigin: extracts host from the scp-like SSH shorthand without a username', () => {
+  // Git's documented scp-like URL form is `[user@]host:path` -- the
+  // username is optional, so a bare `ghes.example.com:owner/repo.git`
+  // (no `user@` prefix) is a valid, real-world GHES remote.
+  assert.deepEqual(parseGitFetchOrigin('ghes.example.com:owner/repo.git'), {
+    scheme: 'https',
+    host: 'ghes.example.com',
+  });
+});
+
+test('parseGitFetchOrigin: extracts a bracketed IPv6 host from the scp-like shorthand', () => {
+  // The generic scp-like host pattern stops at the first colon, which
+  // would otherwise truncate an IPv6 literal (`[2001:db8::1]`) to
+  // `[2001`; the bracketed form must be matched before the generic one.
+  assert.deepEqual(parseGitFetchOrigin('git@[2001:db8::1]:owner/repo.git'), {
+    scheme: 'https',
+    host: '[2001:db8::1]',
+  });
+});
+
+test('parseGitFetchOrigin: extracts github.com from the pre-existing HTTPS form, lowercased', () => {
+  assert.deepEqual(parseGitFetchOrigin('https://GitHub.com/owner/repo.git'), {
+    scheme: 'https',
+    host: 'github.com',
+  });
+});
+
+test('parseGitFetchOrigin: returns null for empty or whitespace-only input', () => {
+  assert.equal(parseGitFetchOrigin(''), null);
+  assert.equal(parseGitFetchOrigin('   '), null);
+});
+
+test('parseGitFetchOrigin: returns null for a host-less file:// URL', () => {
+  assert.equal(parseGitFetchOrigin('file:///some/local/path.git'), null);
+});
+
+test('parseGitFetchOrigin: returns null for an unparseable, scheme-less, colon-less string', () => {
+  assert.equal(parseGitFetchOrigin('not a url'), null);
+});
+
+test('parseGitFetchOrigin: returns null for a Windows-style local path, not the drive letter as a host', () => {
+  // A single-character "host" (`C:\Users\...`, `C:repo.git`) is almost
+  // certainly a Windows drive letter, never a real git host -- excluded
+  // explicitly rather than by requiring a `user@` prefix, since that
+  // would also reject the valid username-less scp-like form covered
+  // above.
+  assert.equal(parseGitFetchOrigin('C:\\Users\\foo\\repo.git'), null);
+  assert.equal(parseGitFetchOrigin('C:repo.git'), null);
+});
+
+test('resolveFetchOrigin: regression -- resolves to https://github.com when GH_HOST is unset and origin does not resolve', () => {
+  // Existing github.com-hosted behavior must stay unchanged. Injecting an
+  // empty-returning reader exercises the literal `github.com` fallback
+  // constant directly, rather than incidentally depending on whatever
+  // this checkout's own real `origin` remote happens to be.
+  assert.deepEqual(resolveFetchOrigin({}, { readOriginUrl: () => '' }), {
+    scheme: 'https',
+    host: 'github.com',
+  });
+});
+
+test('resolveFetchOrigin: honors a GH_HOST override to a non-github.com host, always as https', () => {
+  assert.deepEqual(
+    resolveFetchOrigin(
+      { GH_HOST: 'ghes.example.com' },
+      { readOriginUrl: () => '' },
+    ),
+    { scheme: 'https', host: 'ghes.example.com' },
+  );
+});
+
+test('resolveFetchOrigin: lowercases a mixed-case GH_HOST for consistency with the origin-derived path', () => {
+  assert.deepEqual(
+    resolveFetchOrigin(
+      { GH_HOST: 'GHES.Example.COM' },
+      { readOriginUrl: () => '' },
+    ),
+    { scheme: 'https', host: 'ghes.example.com' },
+  );
+});
+
+test('resolveFetchOrigin: falls back to a non-github.com origin remote when GH_HOST is unset', () => {
+  assert.deepEqual(
+    resolveFetchOrigin(
+      {},
+      { readOriginUrl: () => 'http://ghes.example.com/owner/repo.git' },
+    ),
+    { scheme: 'http', host: 'ghes.example.com' },
+  );
+});
+
+test('resolveFetchOrigin: falls through to the github.com default for an ssh:// origin, not a guessed host', () => {
+  // End-to-end confirmation of the ssh.github.com regression fix: an
+  // ssh:// origin (unresolvable per parseGitFetchOrigin) must not block
+  // or corrupt resolution -- it falls through to the same github.com
+  // default as no origin at all, exactly matching this checkout shape's
+  // pre-#1454 behavior.
+  assert.deepEqual(
+    resolveFetchOrigin(
+      {},
+      { readOriginUrl: () => 'ssh://git@ssh.github.com:443/owner/repo.git' },
+    ),
+    { scheme: 'https', host: 'github.com' },
+  );
+});
+
+test('resolveFetchOrigin: GH_HOST takes precedence over a resolvable non-github.com origin', () => {
+  assert.deepEqual(
+    resolveFetchOrigin(
+      { GH_HOST: 'override.example.com' },
+      { readOriginUrl: () => 'https://ghes.example.com/owner/repo.git' },
+    ),
+    { scheme: 'https', host: 'override.example.com' },
+  );
+});
+
+test('resolveFetchOrigin: a whitespace-only GH_HOST is ignored, falling through to origin resolution', () => {
+  assert.deepEqual(
+    resolveFetchOrigin(
+      { GH_HOST: '   ' },
+      { readOriginUrl: () => 'https://ghes.example.com/owner/repo.git' },
+    ),
+    { scheme: 'https', host: 'ghes.example.com' },
+  );
 });
 
 test('parseArgs: valid --pr parses to a positive-integer string', () => {

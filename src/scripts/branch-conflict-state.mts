@@ -7,6 +7,7 @@
 
 import { execFileSync, spawnSync } from 'node:child_process';
 
+import { parseCliArgs } from './cli-args.mts';
 import { ghText } from './gh-exec.mts';
 
 interface PrData {
@@ -68,6 +69,48 @@ const BASE_ADVANCED_BLIND_SPOT_NOTE =
   'pinned to a merge-ref computed at an earlier trigger time. Consider ' +
   're-validating against current base before relying on a pre-existing ' +
   'green check.';
+
+// Flag-spec keys stay the dashed literal on purpose (never bare keys like
+// `pr:`): tests/flag-name-matrix.test.mts scans this file's *compiled*
+// .mjs source text for quoted flag literals such as the --pr spec key
+// below. See cli-args.mts's module header for the full invariant.
+const BRANCH_CONFLICT_STATE_FLAG_SPEC = {
+  '--pr': { type: 'string' },
+  '--owner': { type: 'string' },
+  '--repo': { type: 'string' },
+  '--help': { type: 'boolean', short: 'h' },
+} as const;
+
+/**
+ * Bounded fetch-depth escalation steps tried by {@link computeMergeBase}'s
+ * retry loop, in order. The first step (`--depth=1`) matches the
+ * pre-existing single-shallow-fetch behavior byte-for-byte, so a checkout
+ * that already resolves after one shallow fetch performs exactly the same
+ * single extra fetch call as before this retry loop existed (#1519's "no
+ * regression for the common case" requirement). Each later step widens
+ * local history via `git fetch --deepen=<n>` -- relative to the current
+ * shallow boundary, so repeated calls compose instead of re-fetching the
+ * same fixed `--depth=N` -- instead of retrying forever. Three total
+ * attempts mirrors the bounded-retry shape F1's `computing` re-poll budget
+ * already uses elsewhere in this codebase (`idd-pre-merge.instructions.md`).
+ *
+ * Exported so tests can fetch with these exact args against a hermetic
+ * local fixture remote (see `tests/branch-conflict-state.test.mts`'s
+ * shallow-checkout fixture) instead of a hand-copied duplicate that could
+ * silently drift from what `tryFetchBase` actually runs in production.
+ *
+ * Declared here, above the CLI entry block below, rather than next to
+ * {@link computeMergeBase} that actually uses it: the entry block's
+ * top-level `await` parks module evaluation there on the CLI path, so a
+ * module-level `const` declared textually after it would still be in its
+ * temporal dead zone the first time a helper reads it (see
+ * `tests/cli-entry-smoke.test.mts`'s module-eval-order guard, #1447).
+ */
+export const MERGE_BASE_FETCH_STEPS: readonly (readonly string[])[] = [
+  ['--depth=1'],
+  ['--deepen=20'],
+  ['--deepen=200'],
+];
 
 if (import.meta.main) {
   const args = parseArgs(process.argv.slice(2));
@@ -349,13 +392,43 @@ function deriveBranchState({
 }
 
 /**
- * Read-only local `git merge-base` lookup, falling back to a shallow fetch
- * of the base ref when the base commit is not yet present locally (e.g. a
- * shallow CI checkout that only has the PR head). Returns `null` when the
- * merge-base still cannot be resolved after the fallback fetch; callers
- * decide how to report that indeterminate outcome, since "conflict probe"
- * and "base-advancement" callers need different diagnostics wording for the
- * same underlying null.
+ * Bounded merge-base resolution retry used by {@link computeMergeBase}: call
+ * `lookupMergeBase()`, and on an empty result, call `widenHistory(stepIndex)`
+ * before each subsequent lookup -- stopping as soon as a merge-base
+ * resolves, `widenHistory` reports it could not widen history (e.g. no
+ * fetchable base ref, or the fetch itself failed, so a deeper attempt would
+ * not plausibly help either), or `stepCount` attempts are exhausted.
+ *
+ * Exported so the retry-loop and attempt-cap shape itself stays directly
+ * unit-testable (both the deepened-success and still-undetermined paths)
+ * independent of `tryFetchBase`'s own remote-URL assembly and real `git
+ * fetch` call, which stay deliberately untested at their call site (see
+ * `tryFetchBase`'s doc comment) -- matching this file's existing
+ * hermetic-test convention of never letting a test reach a live network
+ * fetch.
+ */
+export function resolveMergeBaseWithRetry(
+  lookupMergeBase: () => string,
+  widenHistory: (stepIndex: number) => boolean,
+  stepCount: number,
+): string | null {
+  let mergeBase = lookupMergeBase();
+  for (let step = 0; !mergeBase && step < stepCount; step += 1) {
+    if (!widenHistory(step)) break;
+    mergeBase = lookupMergeBase();
+  }
+  return mergeBase || null;
+}
+
+/**
+ * Read-only local `git merge-base` lookup, falling back to a bounded,
+ * progressively deeper fetch of the base ref when the base commit is not
+ * yet present locally (e.g. a shallow CI checkout that only has the PR
+ * head, or an agent worktree that has not fetched recent base history).
+ * Returns `null` when the merge-base still cannot be resolved after
+ * exhausting {@link MERGE_BASE_FETCH_STEPS}; callers decide how to report
+ * that indeterminate outcome, since "conflict probe" and "base-advancement"
+ * callers need different diagnostics wording for the same underlying null.
  */
 function computeMergeBase(
   prHeadSha: string,
@@ -365,12 +438,12 @@ function computeMergeBase(
   repo: string | undefined,
   notes: string[],
 ): string | null {
-  let mergeBase = gitText(['merge-base', prHeadSha, prBaseSha]);
-  if (!mergeBase) {
-    tryFetchBase(prBaseRef, owner, repo, notes);
-    mergeBase = gitText(['merge-base', prHeadSha, prBaseSha]);
-  }
-  return mergeBase || null;
+  return resolveMergeBaseWithRetry(
+    () => gitText(['merge-base', prHeadSha, prBaseSha]),
+    (step) =>
+      tryFetchBase(prBaseRef, owner, repo, notes, MERGE_BASE_FETCH_STEPS[step]),
+    MERGE_BASE_FETCH_STEPS.length,
+  );
 }
 
 /**
@@ -468,33 +541,195 @@ function probeConflictFilesReadOnly(
   }
 }
 
+/** Injectable evidence reader for {@link resolveFetchOrigin}, so host
+ * resolution stays unit-testable without shelling out to git or mutating
+ * `process.env`. Mirrors the `OnboardEvidenceReaders` convention in
+ * `idd-onboard.mts`. */
+export interface FetchHostReaders {
+  /** Returns the local checkout's `origin` remote URL, or `''` when
+   * unavailable. Defaults to `git remote get-url origin`. */
+  readOriginUrl?: () => string;
+}
+
+/** Default `origin` URL reader: `git remote get-url origin` in the current
+ * working directory (this file's other git probes are likewise un-scoped
+ * to a `-C <dir>`, since they always run from inside the target checkout).
+ * `gitText` already swallows any git failure and returns `''`. */
+function readOriginRemoteUrl(): string {
+  return gitText(['remote', 'get-url', 'origin']);
+}
+
+/**
+ * The scheme + host (plus `:port` when meaningful) to use for the
+ * `tryFetchBase` fallback fetch URL. `tryFetchBase` always performs an
+ * anonymous, credential-helper-backed fetch (never SSH), so `scheme` is
+ * only ever `http` or `https` — including when the source signal was the
+ * scp-like SSH shorthand, which carries no scheme of its own.
+ */
+export interface FetchOrigin {
+  scheme: 'http' | 'https';
+  host: string;
+}
+
+/**
+ * Parse the scheme and host (hostname, plus `:port` when meaningful) from
+ * a git remote URL. Supports the `http://` / `https://` URL-scheme forms
+ * (parseable by the WHATWG URL parser) and the scp-like SSH shorthand
+ * (`[user@]host:path`, which has no `://` scheme and is not
+ * `URL`-parseable; per git's own URL syntax the `user@` prefix is
+ * optional, e.g. a bare `ghes.example.com:owner/repo.git` is valid).
+ *
+ * The returned `scheme` always matches an `http://` or `https://` origin's
+ * own scheme — an `http://`-only GHES instance (no TLS, e.g. behind a
+ * private network boundary) must stay `http`, since silently upgrading to
+ * `https` on the same port would target a port that is not serving TLS
+ * and the fetch would fail; that origin's port is preserved too, since it
+ * is directly reusable here.
+ *
+ * An `ssh://` URL-scheme origin (or any other non-`http(s)` scheme)
+ * deliberately returns `null` rather than reusing its hostname: an SSH
+ * hostname is sometimes an alias with no HTTPS service of its own —
+ * GitHub's own documented `ssh.github.com` (used for SSH-over-443
+ * firewall traversal) accepts SSH, not HTTPS, on that hostname, and a
+ * local `~/.ssh/config` `Host` alias may not resolve via DNS at all.
+ * Guessing wrong here would regress a previously-working `github.com`
+ * fallback into a broken fetch, so this signal is treated as unusable
+ * rather than guessed at. The scp-like shorthand keeps reusing its host,
+ * since that syntax has no port field of its own and is therefore not
+ * used for GitHub's SSH-over-443 workaround in practice — the same
+ * hostname is the overwhelmingly common real-world case for a GHES
+ * remote's SSH and HTTPS endpoints.
+ *
+ * Returns `null` for empty, unparseable, or host-less input (e.g. a
+ * `file://` URL, whose `hostname` is `''`) so callers fall back to
+ * another signal. The host is lowercased for consistent comparison —
+ * DNS/HTTP hosts are case-insensitive.
+ */
+export function parseGitFetchOrigin(url: string): FetchOrigin | null {
+  const trimmed = url.trim();
+  if (!trimmed) return null;
+  if (trimmed.includes('://')) {
+    try {
+      const parsed = new URL(trimmed);
+      if (!parsed.hostname) return null;
+      if (parsed.protocol === 'http:') {
+        return { scheme: 'http', host: parsed.host.toLowerCase() };
+      }
+      if (parsed.protocol === 'https:') {
+        return { scheme: 'https', host: parsed.host.toLowerCase() };
+      }
+      // ssh:// (or any other scheme): no reusable host -- see the doc
+      // comment above.
+      return null;
+    } catch {
+      return null;
+    }
+  }
+  // scp-like shorthand: [user@]host:path (no scheme, so URL() can't parse
+  // it). A single-character "host" is excluded rather than requiring
+  // `user@`: git's own scp-like syntax makes the username optional (a
+  // real GHES remote can validly omit it), but no real git host is a
+  // single letter, so this is almost always a Windows drive-letter path
+  // (`C:\Users\...`, `C:repo.git`) rather than a real host.
+  //
+  // A bracketed IPv6 literal host (`[2001:db8::1]`) is matched before the
+  // generic host pattern: IPv6 literals contain colons of their own, so
+  // the generic `[^:/\s]+` alternative would otherwise stop at the first
+  // one and capture only a truncated fragment (e.g. `[2001`).
+  const scpMatch = trimmed.match(/^(?:[^@\s]+@)?(\[[^\]\s]+\]|[^:/\s]+):/);
+  const host = scpMatch?.[1];
+  return host && host.length > 1
+    ? { scheme: 'https', host: host.toLowerCase() }
+    : null;
+}
+
+/**
+ * Resolve the scheme + host to use for the read-only base-ref fetch
+ * fallback in {@link tryFetchBase}, instead of hardcoding
+ * `https://github.com` (#1454) — a GitHub Enterprise Server (GHES)
+ * checkout must fetch from its own host, or the fallback silently targets
+ * an unrelated github.com repo of the same owner/repo name (or just
+ * fails outright). Preference order:
+ *
+ * 1. The `GH_HOST` environment variable — the same override `gh` itself
+ *    honors — when set and non-blank. `GH_HOST` never carries a scheme,
+ *    so this always resolves to `https` (the same assumption `gh` itself
+ *    makes for its own HTTPS operations).
+ * 2. The scheme and host parsed from the local checkout's `origin`
+ *    remote URL. This assumes the fetch-worthy remote is named `origin`,
+ *    the conventional default for a single-remote checkout; an unusual
+ *    multi-remote checkout that names its GHES remote something else
+ *    falls through to (3).
+ * 3. `https://github.com`, the pre-existing default, when neither signal
+ *    resolves.
+ */
+export function resolveFetchOrigin(
+  env: NodeJS.ProcessEnv = process.env,
+  readers: FetchHostReaders = {},
+): FetchOrigin {
+  const ghHost = env.GH_HOST?.trim();
+  // Lowercased for consistency with the origin-derived path below (DNS/HTTP
+  // hosts are case-insensitive either way, so this does not change fetch
+  // behavior -- only comparison/display consistency).
+  if (ghHost) return { scheme: 'https', host: ghHost.toLowerCase() };
+  const readOriginUrl = readers.readOriginUrl ?? readOriginRemoteUrl;
+  return (
+    parseGitFetchOrigin(readOriginUrl()) ?? {
+      scheme: 'https',
+      host: 'github.com',
+    }
+  );
+}
+
+/**
+ * Attempt one fetch of the base ref at the given depth/deepen args, for
+ * {@link computeMergeBase}'s bounded retry loop (via {@link
+ * resolveMergeBaseWithRetry}). Returns `true` when the `git fetch` call
+ * itself succeeded, so the caller's retry loop knows a deeper next step
+ * could plausibly still help; returns `false` when preconditions
+ * (`prBaseRef`, `owner`, `repo`) are missing, or when the fetch itself
+ * failed (network, auth, unknown ref, etc.) -- in either case a further
+ * attempt against the same unreachable/absent target would not change the
+ * outcome, so the caller should stop immediately rather than repeat the
+ * same failure (and its `notes` entry) across every remaining step.
+ */
 function tryFetchBase(
   prBaseRef: string,
   owner: string | undefined,
   repo: string | undefined,
   notes: string[],
-): void {
-  if (!prBaseRef) return;
+  fetchArgs: readonly string[],
+): boolean {
+  if (!prBaseRef) return false;
   if (!owner || !repo) {
     notes.push(
       'Skipped base-ref fetch fallback: owner/repo not provided; merge-base probe may be incomplete.',
     );
-    return;
+    return false;
   }
   try {
-    const remote = `https://github.com/${owner}/${repo}.git`;
+    // resolveFetchOrigin()'s own branching (GH_HOST / origin-remote /
+    // default) is unit-tested directly; this URL-assembly line and the
+    // real `git fetch` below stay deliberately untested at this call
+    // site, matching this file's existing test-suite convention of never
+    // letting a test reach a live network fetch (see the "unresolvable
+    // merge-base" test's `baseRefName: ''` short-circuit).
+    const { scheme, host } = resolveFetchOrigin();
+    const remote = `${scheme}://${host}/${owner}/${repo}.git`;
     execFileSync(
       'git',
-      ['fetch', '--no-tags', '--depth=1', remote, prBaseRef],
+      ['fetch', '--no-tags', ...fetchArgs, remote, prBaseRef],
       {
         stdio: 'ignore',
         encoding: 'utf8',
       },
     );
+    return true;
   } catch {
     notes.push(
-      `Could not fetch base ref ${prBaseRef}; merge-base probe may be incomplete.`,
+      `Could not fetch base ref ${prBaseRef} (git fetch ${fetchArgs.join(' ')}); merge-base probe may be incomplete.`,
     );
+    return false;
   }
 }
 
@@ -571,49 +806,26 @@ export function parseArgs(argv: string[]): {
   owner: string | null;
   repo: string | null;
 } {
-  const args: {
-    help: boolean;
-    prNumber: string | null;
-    owner: string | null;
-    repo: string | null;
-  } = { help: false, prNumber: null, owner: null, repo: null };
-  for (let i = 0; i < argv.length; i++) {
-    const token = argv[i];
-    const value = argv[i + 1];
-    // Reject a missing value (undefined) or a flag-shaped value so that
-    // `--pr --json` fails fast instead of consuming `--json` as the value.
-    const requireValue = (): string => {
-      if (value === undefined || String(value).startsWith('--')) {
-        throw new Error(`missing value for argument: ${token}`);
-      }
-      return value;
-    };
-    if (token === '--help' || token === '-h') {
-      args.help = true;
-      continue;
+  const { values, help } = parseCliArgs(argv, BRANCH_CONFLICT_STATE_FLAG_SPEC);
+  // --pr stays a canonical-positive-integer STRING (not a parsed number):
+  // the caller passes it straight through to classifyBranchConflictState /
+  // gh invocations as text, and tests/branch-conflict-state.test.mts
+  // asserts this exact string-typed contract. Kept as a manual regex check
+  // (not the canonical-integer helper) so the return type stays a string.
+  const rawPr = values.pr as string | undefined;
+  let prNumber: string | null = null;
+  if (rawPr !== undefined) {
+    if (!/^[1-9]\d*$/.test(rawPr)) {
+      throw new Error(`invalid --pr value: ${rawPr}`);
     }
-    if (token === '--pr') {
-      const raw = requireValue();
-      if (!/^[1-9]\d*$/.test(raw)) {
-        throw new Error(`invalid --pr value: ${raw}`);
-      }
-      args.prNumber = raw;
-      i++;
-      continue;
-    }
-    if (token === '--owner') {
-      args.owner = requireValue();
-      i++;
-      continue;
-    }
-    if (token === '--repo') {
-      args.repo = requireValue();
-      i++;
-      continue;
-    }
-    throw new Error(`unknown argument: ${token}`);
+    prNumber = rawPr;
   }
-  return args;
+  return {
+    help,
+    prNumber,
+    owner: (values.owner as string | undefined) ?? null,
+    repo: (values.repo as string | undefined) ?? null,
+  };
 }
 
 function printUsage(): void {

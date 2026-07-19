@@ -99,3 +99,86 @@ test('a genuinely protected branch reports protectionReadsUnreadable: false even
   const r = summarize([{ name: 'lint', state: 'SUCCESS' }], protectedRules);
   assert.equal(r.protectionReadsUnreadable, false);
 });
+
+// #1471: a stale check-run instance for a name must not falsely block
+// pre-merge readiness once a later instance for that same name converged.
+test('unprotected: presentRunConclusion reflects the latest instance, not a stale instance sharing its name', () => {
+  const r = summarize(
+    [
+      {
+        name: 'idd-advisory-convergence',
+        state: 'CANCELLED',
+        completedAt: '2026-07-17T15:59:36Z',
+      },
+      {
+        name: 'idd-advisory-convergence',
+        state: 'CANCELLED',
+        completedAt: '2026-07-17T15:59:51Z',
+      },
+      {
+        name: 'idd-advisory-convergence',
+        state: 'FAILURE',
+        completedAt: '2026-07-17T16:00:06Z',
+      },
+      {
+        name: 'idd-advisory-convergence',
+        state: 'SUCCESS',
+        completedAt: '2026-07-17T16:25:47Z',
+      },
+    ],
+    [],
+  );
+  assert.equal(r.presentRunConclusion, 'all-passing');
+});
+
+test('protected branch: requiredChecksPassing is true when the required check’s latest instance succeeded despite older cancelled/failure instances', () => {
+  // An end-to-end variant of the PR #1434 / issue #1431 real-world
+  // reproduction, exercised here through summarizeRequiredChecks against
+  // protectedRules' required 'lint' check (see the exact four-instance
+  // idd-advisory-convergence repro, name included, in
+  // advisory-wait.test.mts): a stale cancelled/failure rollup superseded
+  // by the latest success must not report a false CI blocker once GitHub
+  // itself has converged.
+  const r = summarize(
+    [
+      {
+        name: 'lint',
+        state: 'CANCELLED',
+        completedAt: '2026-07-17T15:59:36Z',
+      },
+      { name: 'lint', state: 'FAILURE', completedAt: '2026-07-17T16:00:06Z' },
+      { name: 'lint', state: 'SUCCESS', completedAt: '2026-07-17T16:25:47Z' },
+    ],
+    protectedRules,
+  );
+  assert.equal(r.requiredChecksPassing, true);
+  assert.equal(r.status, 'success');
+});
+
+// #1483: summarizeRequiredChecks must inherit classifyCiChecks's producer-
+// identity discriminator, so a required check name is never falsely
+// reported as passing because an independently-sourced entry sharing that
+// name reported success.
+test('protected branch: requiredChecksPassing stays false when a same-named commit-status success cannot supersede the check-run FAILURE (different producers, #1483)', () => {
+  const r = summarize(
+    [
+      {
+        name: 'lint',
+        state: 'FAILURE',
+        completedAt: '2026-07-17T16:00:06Z',
+        type: 'check-run',
+        workflowName: 'Linting workflow',
+      },
+      {
+        name: 'lint',
+        state: 'SUCCESS',
+        completedAt: '2026-07-17T16:25:47Z',
+        type: 'status-context',
+        workflowName: '',
+      },
+    ],
+    protectedRules,
+  );
+  assert.equal(r.requiredChecksPassing, false);
+  assert.equal(r.status, 'failed');
+});

@@ -16,6 +16,7 @@
     "pending",
     "deadline",
     "waiver",
+    "sameHeadReroll",
     "converged",
     "waived",
     "ready",
@@ -103,6 +104,28 @@
         "checkSelector": { "type": "string" },
         "activeClaimId": { "type": "string" },
         "validCount": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "sameHeadReroll": {
+      "type": "object",
+      "required": [
+        "eligible",
+        "count",
+        "cap",
+        "exhausted",
+        "latestAt",
+        "inFlight",
+        "requestable"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "eligible": { "type": "boolean" },
+        "count": { "type": "integer", "minimum": 0 },
+        "cap": { "type": "integer", "minimum": 1 },
+        "exhausted": { "type": "boolean" },
+        "latestAt": { "type": "string" },
+        "inFlight": { "type": "boolean" },
+        "requestable": { "type": "boolean" }
       }
     },
     "converged": {

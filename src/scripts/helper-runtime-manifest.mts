@@ -7,6 +7,7 @@
 
 import { existsSync, readFileSync } from 'node:fs';
 import { dirname, relative, resolve } from 'node:path';
+import { parseCliArgs } from './cli-args.mts';
 
 // Resolve the package root by walking up to the nearest package.json.
 // This is location-independent, so it returns the same root whether this
@@ -246,6 +247,15 @@ const HELPER_COMMANDS: HelperCommand[] = [
       'Evaluate the A5(a) issue-author approval gate against issue state.',
   },
   {
+    id: 'claim-lock',
+    scriptName: 'idd:claim-lock',
+    binName: 'idd-claim-lock',
+    entryPath: 'scripts/claim-lock.mjs',
+    vendoredCommand: 'node scripts/claim-lock.mjs',
+    description:
+      'Acquire, reacquire, or inspect a worktree-local same-machine claim lock.',
+  },
+  {
     id: 'discover-orphan-filter',
     scriptName: 'idd:discover-orphan-filter',
     binName: 'idd-discover-orphan-filter',
@@ -409,6 +419,15 @@ const HELPER_COMMANDS: HelperCommand[] = [
     contractPaths: ['schemas/pre-merge-readiness.schema.json'],
   },
   {
+    id: 'rerun-advisory-convergence',
+    scriptName: 'idd:rerun-advisory-convergence',
+    binName: 'idd-rerun-advisory-convergence',
+    entryPath: 'scripts/rerun-advisory-convergence.mjs',
+    vendoredCommand: 'node scripts/rerun-advisory-convergence.mjs',
+    description:
+      'Read-only: diagnose every idd-advisory-convergence check-run instance for a PR HEAD and print the ordered gh run rerun recovery plan.',
+  },
+  {
     id: 'resolve-review-thread',
     scriptName: 'idd:resolve-review-thread',
     binName: 'idd-resolve-review-thread',
@@ -491,6 +510,24 @@ const HELPER_COMMANDS: HelperCommand[] = [
       'Evaluate A4.5 suitability checks and map deterministic outcomes.',
   },
 ];
+
+// Flag-spec keys stay the dashed literal on purpose (never bare keys like
+// `profile:`): tests/flag-name-matrix.test.mts scans this file's *compiled*
+// .mjs source text for quoted flag literals such as the --profile spec key
+// below. See cli-args.mts's module header for the full invariant.
+//
+// Declared here, above the import.meta.main trigger below, rather than
+// alongside parseArgs further down: the trigger calls parseArgs()
+// synchronously at module-evaluation time, and a `const` declared after
+// that point is still in the temporal dead zone when the trigger fires.
+const HELPER_RUNTIME_MANIFEST_FLAG_SPEC = {
+  '--help': { type: 'boolean', short: 'h' },
+  '--profile': { type: 'string' },
+  '--from-profile': { type: 'string' },
+  '--package-manager': { type: 'string' },
+  '--package-spec': { type: 'string' },
+  '--target-root': { type: 'string' },
+} as const;
 
 if (import.meta.main) {
   const args = parseArgs(process.argv.slice(2));
@@ -947,59 +984,18 @@ function buildPackageManagerInstallCommand(
 }
 
 function parseArgs(argv: string[]): ManifestArgs {
-  const parsed: ManifestArgs = {
-    help: false,
-    profile: '',
-    fromProfile: '',
-    packageManager: '',
-    packageSpec: '',
-    targetRoot: '',
+  const { values, help } = parseCliArgs(
+    argv,
+    HELPER_RUNTIME_MANIFEST_FLAG_SPEC,
+  );
+  return {
+    help,
+    profile: (values.profile as string | undefined) ?? '',
+    fromProfile: (values['from-profile'] as string | undefined) ?? '',
+    packageManager: (values['package-manager'] as string | undefined) ?? '',
+    packageSpec: (values['package-spec'] as string | undefined) ?? '',
+    targetRoot: (values['target-root'] as string | undefined) ?? '',
   };
-
-  for (let index = 0; index < argv.length; index += 1) {
-    const token = argv[index];
-    const value = argv[index + 1];
-    const requireValue = (): string => {
-      if (value === undefined || value.startsWith('--')) {
-        throw new Error(`missing value for argument: ${token}`);
-      }
-      return value;
-    };
-
-    if (token === '--help' || token === '-h') {
-      parsed.help = true;
-      continue;
-    }
-    if (token === '--profile') {
-      parsed.profile = requireValue();
-      index += 1;
-      continue;
-    }
-    if (token === '--from-profile') {
-      parsed.fromProfile = requireValue();
-      index += 1;
-      continue;
-    }
-    if (token === '--package-manager') {
-      parsed.packageManager = requireValue();
-      index += 1;
-      continue;
-    }
-    if (token === '--package-spec') {
-      parsed.packageSpec = requireValue();
-      index += 1;
-      continue;
-    }
-    if (token === '--target-root') {
-      parsed.targetRoot = requireValue();
-      index += 1;
-      continue;
-    }
-
-    throw new Error(`unknown argument: ${token}`);
-  }
-
-  return parsed;
 }
 
 function printHelp(): void {

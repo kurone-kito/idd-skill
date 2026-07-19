@@ -252,6 +252,20 @@ The check also self-heals on the next non-bot trigger -- a push, or a
 not a regular PR comment, since the workflow does not subscribe to
 `issue_comment`.
 
+**Helper-first**: prints this diagnosis and ordered rerun plan, read-only.
+
+```sh
+# source repo / vendored-node profile
+node scripts/rerun-advisory-convergence.mjs --pr <n>
+
+# package-manager / ephemeral-npx profile
+<profile-selected-rerun-advisory-convergence-command> --pr <n>
+```
+
+Resolve `<profile-selected-rerun-advisory-convergence-command>` from
+`docs/idd-helper-scripts.md`; do not hardcode `node scripts/...` for
+non-vendored profiles.
+
 ## Interpretation
 
 <!-- dprint-ignore-start -->

@@ -135,10 +135,12 @@ Before any mutating action in F3, apply the
    `--apply`: when `ready`, it re-fetches the head SHA and re-validates
    the claim immediately before merging, fails closed (no merge) on head
    drift or lost claim, and runs the merge commit bound to the validated
-   head (never squash/rebase). The gate checklist and decision table
-   below stay canonical: if the helper is unavailable, its output is
-   invalid, or its evidence conflicts with live GitHub state, discard it
-   and use the manual gate + merge steps in this section.
+   head (never squash/rebase). On a plain-merge failure it also applies
+   step 5's solo-CODEOWNER `--admin` fallback decision itself (recorded in
+   the verdict's `adminFallbackUsed` field) — the gate checklist and
+   decision table below stay canonical: if the helper is unavailable, its
+   output is invalid, or its evidence conflicts with live GitHub state,
+   discard it and use the manual gate + merge steps in this section.
 
    **Gate checklist** — confirm every field before merging; all must hold,
    and any unmet or unknown field is a NO-GO (fail closed — stop, do not
@@ -184,6 +186,64 @@ Before any mutating action in F3, apply the
    SHA. This post-merge digest update is not a merge gate and must not
    happen before the successful merge command.
 5. If merge fails:
+   - `gh pr merge --merge` fails with "the base branch policy
+     prohibits the merge" despite a passing Gate checklist and a
+     configured pull-request-only bypass actor → that scoped bypass
+     alone may not clear a solo-maintainer self-approval deadlock (see
+     `docs/permissions.md`'s "Pull-request-only ruleset bypass").
+     First check `mergeGate.soloCodeownerAdminFallback` in
+     `.github/idd/config.json`:
+     - `"hold-and-report"` (opt-in) → keep the pre-#1521 behavior: do
+       not retry the plain command or add `--admin`; post a hold
+       comment with the GitHub error text and stop for a maintainer
+       decision (kurone-kito/idd-skill#1493).
+     - Anything else, including the key absent (the distributed
+       default, `"auto-admin-retry"`) → retry exactly once with
+       `--admin`, bound to the same validated head, **only when every
+       one of these holds** (the multi-CODEOWNER safety property from
+       kurone-kito/idd-skill#1521, required before this default ships):
+       the Gate checklist (step 4) was fully green; the merge
+       command's only reported failure is this exact GitHub error
+       against a configured pull-request-only (or wider) bypass actor;
+       and the `pre-merge-readiness` / `idd-merge-execute` report's
+       `reviewerStates.codeownerSelfApproval` has `status: "clear"`
+       with `reason` `"pull-request-bypass-available"` or
+       `"ruleset-bypass-available"` **and**
+       `prAuthorIsSoleEligibleCodeowner: true` **and**
+       `codeownerEligibilityUnreadable: false` — proving the PR author
+       is the sole eligible codeowner (no team or email codeowners,
+       every eligible direct-user codeowner is the author, and every
+       direct-user codeowner's collaborator-permission lookup actually
+       succeeded). A genuinely outstanding review from any other
+       codeowner reports `prAuthorIsSoleEligibleCodeowner: false` even
+       when `status` is still `"clear"` via the bypass-actor carve-out,
+       and a transient/auth/rate-limit failure while reading a
+       non-author codeowner's permission reports
+       `codeownerEligibilityUnreadable: true` rather than silently
+       narrowing the eligible set — both register as their own unmet
+       condition and never trigger this retry. See
+       [`docs/idd-helper-scripts.md`](../../docs/idd-helper-scripts.md#merge-execution-f3)
+       for the field contract; `idd-merge-execute.mjs --apply` applies
+       this check automatically, re-validates the SAME gate and
+       eligibility fact a second time immediately before the `--admin`
+       call itself (not just once beforehand — `--admin` bypasses the
+       entire ruleset, so a blocker that appeared in the interim must
+       still abort it). It also requires a fresh GitHub merge state of
+       `mergeable: "MERGEABLE"` with `mergeStateStatus` settled to
+       `"CLEAN"` or `"BEHIND"`; blocked, unknown, or unreadable merge
+       state never qualifies for an administrator bypass. The helper
+       records the outcome in the verdict's `adminFallbackUsed` field.
+
+       ```sh
+       gh pr merge {pr-number} --merge --match-head-commit "${PR_HEAD_SHA_F3}" --admin
+       ```
+
+       On success, continue the normal post-merge digest update
+       exactly as after a successful plain merge (step 4). If any
+       condition above does not hold, or the `--admin` retry also
+       fails, post a hold comment with the GitHub error text(s) and
+       stop for a maintainer decision (kurone-kito/idd-skill#1493,
+       #1494) — the same hold-and-report outcome as the opt-in tier.
    - Base branch updated or conflict → return to
      `idd-pre-merge.instructions.md` F1
    - CI condition no longer met → return to

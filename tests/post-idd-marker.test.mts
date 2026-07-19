@@ -14,6 +14,7 @@ import {
 } from '../src/scripts/post-idd-marker.mts';
 import {
   operationalMarkerPrefix,
+  parseActivationNonceComment,
   parseClaimComment,
   parseReleaseComment,
   parseReviewWatermarkComment,
@@ -56,6 +57,18 @@ test('buildMarkerBody renders the exact unclaim body', () => {
       timestamp: TS,
     }),
     '<!-- unclaimed-by: claude-417b737f c3009f22b5f6 2026-06-17T09:47:08Z -->\n\n_claude-417b737f: issue claim released — IDD automation marker. Do not edit._',
+  );
+});
+
+test('buildMarkerBody renders the exact activation-nonce body (reuses renderActivationNonceMarker)', () => {
+  assert.equal(
+    buildMarkerBody('activation-nonce', {
+      'agent-id': 'claude-417b737f',
+      'claim-id': 'c3009f22b5f6',
+      nonce: 'n-9f6885e3',
+      timestamp: TS,
+    }),
+    '<!-- activation-nonce: claude-417b737f c3009f22b5f6 n-9f6885e3 2026-06-17T09:47:08Z -->\n\n_claude-417b737f: claim activation nonce — IDD automation marker. Do not edit._',
   );
 });
 
@@ -102,6 +115,18 @@ test('buildMarkerBody renders advisory markers as plain text with no visible not
     `advisory-wait-recovery: claude-417b737f ${SHA} ${TS}`,
   );
   assert.doesNotMatch(recovery, /<!--/);
+
+  // #1511: bounded same-HEAD advisory reroll marker -- same plain-text
+  // shape, distinct prefix (never counted toward advisory-wait's
+  // REQUEST_CAP).
+  const reroll = buildMarkerBody('advisory-reroll', {
+    'agent-id': 'claude-417b737f',
+    'head-sha': SHA,
+    timestamp: TS,
+  });
+  assert.equal(reroll, `advisory-reroll: claude-417b737f ${SHA} ${TS}`);
+  assert.doesNotMatch(reroll, /<!--/);
+  assert.doesNotMatch(reroll, /\n/);
 });
 
 test('buildMarkerBody normalizes an upper-case head SHA for advisory markers', () => {
@@ -148,6 +173,22 @@ test('unclaim body round-trips through parseReleaseComment', () => {
   assert.deepEqual(parseReleaseComment(body), {
     agentId: 'claude-417b737f',
     claimId: 'c3009f22b5f6',
+  });
+});
+
+test('activation-nonce body round-trips through parseActivationNonceComment', () => {
+  const body = buildMarkerBody('activation-nonce', {
+    'agent-id': 'claude-417b737f',
+    'claim-id': 'c3009f22b5f6',
+    nonce: 'n-9f6885e3',
+    timestamp: TS,
+  });
+  assert.equal(operationalMarkerPrefix(body), '<!-- activation-nonce:');
+  assert.deepEqual(parseActivationNonceComment(body, CREATED_AT), {
+    agentId: 'claude-417b737f',
+    claimId: 'c3009f22b5f6',
+    nonce: 'n-9f6885e3',
+    createdAt: CREATED_AT,
   });
 });
 
@@ -225,18 +266,30 @@ test('buildMarkerBody throws on an invalid field set (renderer validation)', () 
     () => buildMarkerBody('unclaim', { 'agent-id': 'a', 'claim-id': 'c' }),
     /invalid unclaimed-by marker payload/,
   );
+  // Missing nonce for an activation-nonce marker.
+  assert.throws(
+    () =>
+      buildMarkerBody('activation-nonce', {
+        'agent-id': 'a',
+        'claim-id': 'c',
+        timestamp: TS,
+      }),
+    /invalid activation-nonce marker payload/,
+  );
 });
 
-test('MARKER_TYPES lists exactly the six supported types', () => {
+test('MARKER_TYPES lists exactly the eight supported types', () => {
   assert.deepEqual(
     [...MARKER_TYPES],
     [
       'claim',
       'unclaim',
+      'activation-nonce',
       'watermark',
       'baseline',
       'advisory',
       'advisory-recovery',
+      'advisory-reroll',
     ],
   );
 });
@@ -284,6 +337,17 @@ test('a dry-run envelope validates against the schema', () => {
     target: 'pr',
     number: 1047,
     body: `advisory-wait: a ${SHA} ${TS}`,
+  };
+  assert.deepEqual(validate(envelope, schema), []);
+});
+
+test('an advisory-reroll envelope validates against the schema (PR #1517 review)', () => {
+  const envelope = {
+    mode: 'dry-run',
+    type: 'advisory-reroll',
+    target: 'pr',
+    number: 1047,
+    body: `advisory-reroll: a ${SHA} ${TS}`,
   };
   assert.deepEqual(validate(envelope, schema), []);
 });

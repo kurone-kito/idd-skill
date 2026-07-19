@@ -15,10 +15,12 @@
       "enum": [
         "claim",
         "unclaim",
+        "activation-nonce",
         "watermark",
         "baseline",
         "advisory",
-        "advisory-recovery"
+        "advisory-recovery",
+        "advisory-reroll"
       ]
     },
     "target": {

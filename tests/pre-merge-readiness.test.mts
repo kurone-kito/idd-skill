@@ -4,7 +4,9 @@ import { test } from 'node:test';
 import {
   fetchBranchRulesets,
   fetchGovernanceJson,
+  normalizeStatusCheckRollupEntry,
   parseArgs,
+  resolveEligibleCodeownerUserLogins,
   resolveToleratedGhFailure,
 } from '../src/scripts/pre-merge-readiness.mts';
 import {
@@ -12,6 +14,7 @@ import {
   buildAdvisoryWaitSummary,
   buildPreMergeReadinessSummary,
   CODERABBIT_SUMMARY_MARKER,
+  classifyCiChecks,
   classifyRegularBotComment,
   computePreMergeReadinessBlockers,
   deriveIddAgentLogins,
@@ -25,6 +28,7 @@ import {
   resolveRulesetDetailPath,
   selectCodeownersText,
   summarizeAdvisoryWaitMarkers,
+  summarizeBranchCurrency,
   summarizeClaimValidation,
   summarizeDispositionEvidenceForGate,
   summarizeExternalCheckWaivers,
@@ -539,6 +543,8 @@ test('self-CODEOWNER diagnostic reports deadlock without bypass', () => {
     bypassMode: 'none',
     currentUserCanBypass: 'never',
     rulesetBypassUnreadable: false,
+    prAuthorIsSoleEligibleCodeowner: true,
+    codeownerEligibilityUnreadable: false,
   });
 });
 
@@ -578,6 +584,8 @@ test('self-CODEOWNER diagnostic downgrades a certain deadlock to possible_deadlo
     bypassMode: 'none',
     currentUserCanBypass: 'unknown',
     rulesetBypassUnreadable: true,
+    prAuthorIsSoleEligibleCodeowner: true,
+    codeownerEligibilityUnreadable: false,
   });
 });
 
@@ -848,6 +856,303 @@ test('self-CODEOWNER diagnostic clears when pull-request bypass is available', (
   );
   assert.equal(summary.codeownerSelfApproval.bypassDetected, true);
   assert.equal(summary.codeownerSelfApproval.bypassMode, 'pull_request');
+  // #1521: the genuine solo-CODEOWNER-deadlock topology -- the only shape
+  // an F3 auto-`--admin` retry may key on.
+  assert.equal(
+    summary.codeownerSelfApproval.prAuthorIsSoleEligibleCodeowner,
+    true,
+  );
+});
+
+// #1521 multi-CODEOWNER safety property (required by the issue's
+// acceptance criteria before the auto-`--admin` retry may become the
+// distributed default): a genuinely outstanding review from a DIFFERENT,
+// non-author codeowner must never be indistinguishable from the solo-author
+// self-approval deadlock, even though both report `status: 'clear'` here
+// (the general gate intentionally keeps its existing shape -- see the
+// `applicableBypassDetected` branch in `summarizeCodeownerSelfApproval`,
+// which fires before the non-author-owner check runs and is unaffected by
+// this test). `prAuthorIsSoleEligibleCodeowner` is the narrow, additive
+// discriminator: it is `false` here specifically because a real non-author
+// codeowner exists, so a caller gating the retry on this field (in addition
+// to `status`/`reason`) never fires while that owner's review is
+// genuinely outstanding.
+test('#1521: a non-author codeowner is not folded into the self-CODEOWNER-deadlock topology even when a bypass actor is also configured', () => {
+  const summary = summarizeReviewerStates([], {
+    branchRules: [
+      {
+        type: 'pull_request',
+        ruleset_id: 1,
+        parameters: { require_code_owner_review: true },
+      },
+    ],
+    branchRulesets: [
+      {
+        id: 1,
+        current_user_can_bypass: 'pull_requests_only',
+        bypass_actors: [
+          {
+            actor_id: 44661432,
+            actor_type: 'User',
+            bypass_mode: 'pull_request',
+          },
+        ],
+      },
+    ],
+    codeownersText: '* @author @reviewer\n',
+    changedFiles: ['README.md'],
+    prAuthorLogin: 'author',
+  });
+
+  // Unchanged general-gate shape: the bypass-detected branch still resolves
+  // first, exactly as it does in the solo-owner case above.
+  assert.equal(summary.codeownerSelfApproval.status, 'clear');
+  assert.equal(
+    summary.codeownerSelfApproval.reason,
+    'pull-request-bypass-available',
+  );
+  // The safety-critical discriminator: a real non-author codeowner
+  // (`reviewer`) exists, so this is NOT the self-approval deadlock.
+  assert.equal(
+    summary.codeownerSelfApproval.prAuthorIsSoleEligibleCodeowner,
+    false,
+  );
+});
+
+test('#1521: a team codeowner alongside an author-only direct match is not a sole-eligible-codeowner topology', () => {
+  const summary = summarizeReviewerStates([], {
+    branchRules: [
+      {
+        type: 'pull_request',
+        ruleset_id: 1,
+        parameters: { require_code_owner_review: true },
+      },
+    ],
+    branchRulesets: [
+      {
+        id: 1,
+        current_user_can_bypass: 'pull_requests_only',
+        bypass_actors: [
+          {
+            actor_id: 44661432,
+            actor_type: 'User',
+            bypass_mode: 'pull_request',
+          },
+        ],
+      },
+    ],
+    codeownersText: '* @author @org/reviewers\n',
+    changedFiles: ['README.md'],
+    prAuthorLogin: 'author',
+  });
+
+  assert.equal(summary.codeownerSelfApproval.status, 'clear');
+  assert.equal(
+    summary.codeownerSelfApproval.reason,
+    'pull-request-bypass-available',
+  );
+  assert.equal(
+    summary.codeownerSelfApproval.prAuthorIsSoleEligibleCodeowner,
+    false,
+  );
+});
+
+test('#1521: the sole-eligible-codeowner topology fact is exposed regardless of eligibility narrowing', () => {
+  const summary = summarizeReviewerStates([], {
+    branchRules: [
+      {
+        type: 'pull_request',
+        parameters: { require_code_owner_review: true },
+      },
+    ],
+    branchRulesets: [{ current_user_can_bypass: 'never', bypass_actors: [] }],
+    codeownersText: '* @author @outside-user\n',
+    changedFiles: ['README.md'],
+    eligibleCodeownerUserLogins: ['author'],
+    prAuthorLogin: 'author',
+  });
+
+  assert.equal(summary.codeownerSelfApproval.status, 'deadlock');
+  assert.equal(
+    summary.codeownerSelfApproval.prAuthorIsSoleEligibleCodeowner,
+    true,
+  );
+});
+
+// #1521 (Codex review on PR #1537): a transient/auth/rate-limit failure
+// while reading a non-author codeowner's collaborator permission must
+// never silently narrow the eligible set the same way a genuine 404
+// ("not a collaborator") does -- doing so would make the PR author look
+// like the sole eligible codeowner while a real co-owner's eligibility
+// simply could not be confirmed.
+test('resolveEligibleCodeownerUserLogins excludes a login on a genuine 404 (not a collaborator)', () => {
+  const result = resolveEligibleCodeownerUserLogins(
+    'o',
+    'r',
+    ['author', 'reviewer'],
+    (login) => {
+      if (login === 'author') {
+        return 'write';
+      }
+      throw Object.assign(new Error('Command failed'), {
+        stderr: 'gh: Not Found (HTTP 404)',
+      });
+    },
+  );
+  assert.deepEqual(result.eligible, ['author']);
+  assert.equal(result.unreadable, false);
+});
+
+test('resolveEligibleCodeownerUserLogins flags unreadable on a transient failure instead of silently excluding the login', () => {
+  const result = resolveEligibleCodeownerUserLogins(
+    'o',
+    'r',
+    ['author', 'reviewer'],
+    (login) => {
+      if (login === 'author') {
+        return 'write';
+      }
+      // 403 (rate limit / permission), not 404 -- cannot be told apart
+      // from "genuinely not a collaborator" by the caller.
+      throw Object.assign(new Error('Command failed'), {
+        stderr: 'gh: API rate limit exceeded (HTTP 403)',
+      });
+    },
+  );
+  // 'reviewer' is still excluded from the eligible list (the caller has
+  // no proof it IS eligible), but `unreadable: true` distinguishes this
+  // from the genuine-404 case above.
+  assert.deepEqual(result.eligible, ['author']);
+  assert.equal(result.unreadable, true);
+});
+
+test('resolveEligibleCodeownerUserLogins flags unreadable on a network/timeout failure with no HTTP status at all', () => {
+  const result = resolveEligibleCodeownerUserLogins(
+    'o',
+    'r',
+    ['author', 'reviewer'],
+    (login) => {
+      if (login === 'author') {
+        return 'write';
+      }
+      throw Object.assign(new Error('Command failed'), {
+        stderr: 'connect ETIMEDOUT 140.82.0.0:443',
+      });
+    },
+  );
+  assert.deepEqual(result.eligible, ['author']);
+  assert.equal(result.unreadable, true);
+});
+
+test('resolveEligibleCodeownerUserLogins is readable (unreadable: false) when every lookup succeeds or 404s', () => {
+  const result = resolveEligibleCodeownerUserLogins(
+    'o',
+    'r',
+    ['author', 'former-owner'],
+    (login) => {
+      if (login === 'author') {
+        return 'write';
+      }
+      throw Object.assign(new Error('Command failed'), {
+        stderr: 'gh: Not Found (HTTP 404)',
+      });
+    },
+  );
+  assert.deepEqual(result.eligible, ['author']);
+  assert.equal(result.unreadable, false);
+});
+
+// #1521 crux: even though a narrowed eligible set makes the author LOOK
+// like the sole eligible codeowner (exactly the shape the earlier
+// solo-owner test asserts `true` for), `eligibleCodeownerUserLoginsUnreadable`
+// must force `prAuthorIsSoleEligibleCodeowner` to `false` -- the multi-
+// CODEOWNER safety property must hold even when the reason a co-owner
+// looks absent is an unreadable lookup, not a genuine absence.
+test('#1521: prAuthorIsSoleEligibleCodeowner is false when eligibility narrowing was unreadable, even with an otherwise-solo-looking set', () => {
+  const summary = summarizeReviewerStates([], {
+    branchRules: [
+      {
+        type: 'pull_request',
+        ruleset_id: 1,
+        parameters: { require_code_owner_review: true },
+      },
+    ],
+    branchRulesets: [
+      {
+        id: 1,
+        current_user_can_bypass: 'pull_requests_only',
+        bypass_actors: [
+          {
+            actor_id: 44661432,
+            actor_type: 'User',
+            bypass_mode: 'pull_request',
+          },
+        ],
+      },
+    ],
+    codeownersText: '* @author @reviewer\n',
+    changedFiles: ['README.md'],
+    // As far as the (incomplete) eligible set can tell, only 'author' is
+    // eligible -- this is the exact shape that otherwise reads as the
+    // genuine solo-owner deadlock.
+    eligibleCodeownerUserLogins: ['author'],
+    eligibleCodeownerUserLoginsUnreadable: true,
+    prAuthorLogin: 'author',
+  });
+
+  // The general gate is unaffected -- still 'clear' via the bypass actor,
+  // matching every adopter repo's existing behavior.
+  assert.equal(summary.codeownerSelfApproval.status, 'clear');
+  assert.equal(
+    summary.codeownerSelfApproval.reason,
+    'pull-request-bypass-available',
+  );
+  // The safety-critical discriminator fails closed on the unreadable flag.
+  assert.equal(
+    summary.codeownerSelfApproval.prAuthorIsSoleEligibleCodeowner,
+    false,
+  );
+  assert.equal(
+    summary.codeownerSelfApproval.codeownerEligibilityUnreadable,
+    true,
+  );
+});
+
+test('#1521: codeownerEligibilityUnreadable defaults to false and does not affect the true solo-owner case', () => {
+  const summary = summarizeReviewerStates([], {
+    branchRules: [
+      {
+        type: 'pull_request',
+        ruleset_id: 1,
+        parameters: { require_code_owner_review: true },
+      },
+    ],
+    branchRulesets: [
+      {
+        id: 1,
+        current_user_can_bypass: 'pull_requests_only',
+        bypass_actors: [
+          {
+            actor_id: 44661432,
+            actor_type: 'User',
+            bypass_mode: 'pull_request',
+          },
+        ],
+      },
+    ],
+    codeownersText: '* @author\n',
+    changedFiles: ['README.md'],
+    prAuthorLogin: 'author',
+  });
+
+  assert.equal(
+    summary.codeownerSelfApproval.codeownerEligibilityUnreadable,
+    false,
+  );
+  assert.equal(
+    summary.codeownerSelfApproval.prAuthorIsSoleEligibleCodeowner,
+    true,
+  );
 });
 
 test('self-CODEOWNER diagnostic clears when an always ruleset bypass is available', () => {
@@ -1285,6 +1590,25 @@ test('mixed-precision timestamps compare by time instead of string order', () =>
     ]),
     'new',
   );
+});
+
+test('summarizeAdvisoryWaitMarkers: an advisory-reroll: marker (#1511) is never counted -- separate marker family, distinct from REQUEST_CAP', () => {
+  const headSha = 'a'.repeat(40);
+  const summary = summarizeAdvisoryWaitMarkers(
+    [
+      {
+        body: `advisory-reroll: kurone-kito ${headSha} 2026-05-12T00:00:00Z`,
+        createdAt: '2026-05-12T00:00:00Z',
+        author: { login: 'kurone-kito' },
+      },
+    ],
+    headSha,
+    ['kurone-kito'],
+  );
+  assert.equal(summary.sameHeadMarkerCount, 0);
+  assert.equal(summary.sameHeadMarkerPresent, false);
+  assert.equal(summary.requestMarkerCount, 0);
+  assert.equal(summary.earliestSameHeadAt, '');
 });
 
 test('latest gating reviews compare timestamps by parsed time', () => {
@@ -4736,6 +5060,173 @@ test('resolveToleratedGhFailure ignores non-JSON allowStatuses stdout and falls 
   );
 });
 
+// #1483: normalizeStatusCheckRollupEntry replaced the old `gh pr checks`
+// data source with `statusCheckRollup`, so its output must stay behaviorally
+// identical to what `gh pr checks --json name,state,completedAt` reported
+// for the same underlying data (verified empirically against this
+// repository's own live PRs before this change shipped) while also
+// surfacing the new `type` / `workflowName` producer-identity fields.
+test('normalizeStatusCheckRollupEntry: a completed CheckRun reports its conclusion as state', () => {
+  const result = normalizeStatusCheckRollupEntry({
+    __typename: 'CheckRun',
+    name: 'idd-advisory-convergence',
+    status: 'COMPLETED',
+    conclusion: 'SUCCESS',
+    completedAt: '2026-07-18T03:47:01Z',
+    workflowName: 'IDD advisory-convergence gate',
+  });
+  assert.deepEqual(result, {
+    name: 'idd-advisory-convergence',
+    state: 'SUCCESS',
+    completedAt: '2026-07-18T03:47:01Z',
+    type: 'check-run',
+    workflowName: 'IDD advisory-convergence gate',
+  });
+});
+
+test('normalizeStatusCheckRollupEntry: an in-progress CheckRun reports its raw status as state, not a stale conclusion', () => {
+  const result = normalizeStatusCheckRollupEntry({
+    __typename: 'CheckRun',
+    name: 'lint',
+    status: 'IN_PROGRESS',
+    conclusion: '',
+    completedAt: '0001-01-01T00:00:00Z',
+    workflowName: 'Linting workflow',
+  });
+  assert.equal(result.state, 'IN_PROGRESS');
+  assert.equal(result.completedAt, '0001-01-01T00:00:00Z');
+  assert.equal(result.type, 'check-run');
+});
+
+test('normalizeStatusCheckRollupEntry: a StatusContext reports its own state and name from context, with no workflowName', () => {
+  const result = normalizeStatusCheckRollupEntry({
+    __typename: 'StatusContext',
+    context: 'CodeRabbit',
+    state: 'success',
+  });
+  assert.deepEqual(result, {
+    name: 'CodeRabbit',
+    state: 'SUCCESS',
+    completedAt: '0001-01-01T00:00:00Z',
+    type: 'status-context',
+    workflowName: '',
+  });
+});
+
+test('normalizeStatusCheckRollupEntry: a StatusContext with no completedAt field defaults to the zero-value sentinel', () => {
+  // StatusContext has no completedAt in the GraphQL schema at all (only
+  // CheckRun does); the entry omits the field entirely rather than sending
+  // an empty string, so this covers the `?? ZERO_SENTINEL_TIMESTAMP`
+  // fallback path distinctly from an entry that sends `completedAt: ''`.
+  const result = normalizeStatusCheckRollupEntry({
+    __typename: 'StatusContext',
+    context: 'some-legacy-status',
+    state: 'PENDING',
+  });
+  assert.equal(result.completedAt, '0001-01-01T00:00:00Z');
+});
+
+// PR #1506 review findings (Copilot, on #1483's implementation): the
+// commit-status vocabulary (`error`/`failure`/`pending`/`success`) only
+// partly overlaps the check-run vocabulary `classifyCiChecks` understands.
+// `gh pr checks`'s prior flattened read normalized both vocabularies into
+// one `state` field; this data-source swap makes that this module's own
+// responsibility, so cover the two divergent tokens explicitly.
+test('normalizeStatusCheckRollupEntry: a StatusContext ERROR normalizes to FAILURE, not an unrecognized state', () => {
+  const result = normalizeStatusCheckRollupEntry({
+    __typename: 'StatusContext',
+    context: 'legacy-ci',
+    state: 'error',
+  });
+  assert.equal(result.state, 'FAILURE');
+});
+
+test('normalizeStatusCheckRollupEntry: a StatusContext PENDING normalizes to IN_PROGRESS, not an unrecognized state', () => {
+  const result = normalizeStatusCheckRollupEntry({
+    __typename: 'StatusContext',
+    context: 'legacy-ci',
+    state: 'pending',
+  });
+  assert.equal(result.state, 'IN_PROGRESS');
+});
+
+// E10 follow-up (this PR's own critique pass): the commit-status `state`
+// GraphQL enum (`StatusState`) actually has 5 members, not the 4 the
+// original fix accounted for -- `EXPECTED` (a required status check
+// configured for this ref but not yet reported at all) is also still
+// "not done", not a failure, so it maps the same way PENDING does.
+test('normalizeStatusCheckRollupEntry: a StatusContext EXPECTED normalizes to IN_PROGRESS, not an unrecognized state', () => {
+  const result = normalizeStatusCheckRollupEntry({
+    __typename: 'StatusContext',
+    context: 'legacy-ci',
+    state: 'expected',
+  });
+  assert.equal(result.state, 'IN_PROGRESS');
+});
+
+test('normalizeStatusCheckRollupEntry: a StatusContext ERROR reaches classifyCiChecks as a genuine failure, end to end', () => {
+  // The isolated mapping test above only proves the translation table
+  // works; this proves the translated value actually makes
+  // classifyCiChecks treat it as failing rather than silently landing in
+  // its 'unknown' bucket (unrecognized state literals fall through every
+  // bucket check).
+  const normalized = normalizeStatusCheckRollupEntry({
+    __typename: 'StatusContext',
+    context: 'legacy-ci',
+    state: 'error',
+  });
+  assert.equal(classifyCiChecks([normalized]).status, 'failed');
+});
+
+test('normalizeStatusCheckRollupEntry: a CheckRun with no status field at all defaults to UNKNOWN, not an empty string', () => {
+  // Distinct from the existing "in-progress" test: this entry omits
+  // `status` entirely (a malformed/unexpected entry), which previously
+  // fell through to state: '' -- a value classifyCiChecks does not
+  // recognize as any bucket, unlike the explicit 'UNKNOWN' fallback the
+  // completed-with-no-conclusion branch already had.
+  const result = normalizeStatusCheckRollupEntry({
+    __typename: 'CheckRun',
+    name: 'malformed-entry',
+  });
+  assert.equal(result.state, 'UNKNOWN');
+});
+
+test('normalizeStatusCheckRollupEntry: whitespace-padded fields are trimmed consistently', () => {
+  const checkRun = normalizeStatusCheckRollupEntry({
+    __typename: 'CheckRun',
+    name: '  padded-name  ',
+    status: '  COMPLETED  ',
+    conclusion: '  SUCCESS  ',
+    workflowName: '  Some Workflow  ',
+  });
+  assert.equal(checkRun.name, 'padded-name');
+  assert.equal(checkRun.state, 'SUCCESS');
+  assert.equal(checkRun.workflowName, 'Some Workflow');
+
+  const statusContext = normalizeStatusCheckRollupEntry({
+    __typename: 'StatusContext',
+    context: '  padded-context  ',
+    state: '  success  ',
+  });
+  assert.equal(statusContext.name, 'padded-context');
+  assert.equal(statusContext.state, 'SUCCESS');
+});
+
+test('normalizeStatusCheckRollupEntry: an unrecognized __typename falls back to the CheckRun shape', () => {
+  // Mirrors ci-wait-state.mts's own "StatusContext, else check-run" branch
+  // structure: any future GraphQL union member normalizes as a check-run
+  // rather than being silently dropped.
+  const result = normalizeStatusCheckRollupEntry({
+    __typename: 'SomeFutureUnionMember',
+    name: 'future-check',
+    status: 'COMPLETED',
+    conclusion: 'NEUTRAL',
+    completedAt: '2026-07-18T00:00:00Z',
+  });
+  assert.equal(result.type, 'check-run');
+  assert.equal(result.state, 'NEUTRAL');
+});
+
 test('parseArgs: valid --pr / --claim-issue parse to positive integers', () => {
   const args = parseArgs(['--pr', '1082', '--claim-issue', '1076']);
   assert.equal(args.prNumber, 1082);
@@ -4961,6 +5452,192 @@ test('buildPreMergeReadinessSummary reports the real blocking cause, not the unr
     /codeownerSelfApproval\.status="possible_deadlock"/,
   );
   assert.doesNotMatch(reviewBlocker?.detail ?? '', /ruleset detail unreadable/);
+});
+
+// #1513: branch-currency (up-to-date-head) evidence and gate.
+test('summarizeBranchCurrency: a ruleset strict_required_status_checks_policy resolves requiresUpToDateHead via "ruleset"', () => {
+  const result = summarizeBranchCurrency(
+    [
+      {
+        type: 'required_status_checks',
+        parameters: {
+          strict_required_status_checks_policy: true,
+          required_status_checks: [{ context: 'lint' }],
+        },
+      },
+    ],
+    {},
+    { mergeStateStatus: 'behind', mergeable: 'mergeable' },
+  );
+  assert.equal(result.requiresUpToDateHead, true);
+  assert.equal(result.requiresUpToDateHeadSource, 'ruleset');
+  // Raw GitHub enum values are normalized to uppercase.
+  assert.equal(result.mergeStateStatus, 'BEHIND');
+  assert.equal(result.mergeable, 'MERGEABLE');
+});
+
+// #1513 (Copilot/Codex review on PR #1538): GitHub's ruleset docs state
+// strict_required_status_checks_policy "will not take effect unless at
+// least one status check is enabled" -- an empty required-check list must
+// not resolve requiresUpToDateHead via the ruleset path even when the
+// strict flag itself is true, or a BEHIND PR under that empty-check
+// ruleset would be falsely blocked when GitHub would actually allow it.
+test('summarizeBranchCurrency: a ruleset strict flag with an EMPTY required-check list does not set requiresUpToDateHead', () => {
+  const result = summarizeBranchCurrency(
+    [
+      {
+        type: 'required_status_checks',
+        parameters: {
+          strict_required_status_checks_policy: true,
+          required_status_checks: [],
+        },
+      },
+    ],
+    {},
+    { protectionReadsUnreadable: false },
+  );
+  assert.equal(result.requiresUpToDateHead, false);
+  assert.equal(result.requiresUpToDateHeadSource, 'none');
+});
+
+test('summarizeBranchCurrency: classic protection required_status_checks.strict resolves via "classic-protection"', () => {
+  const result = summarizeBranchCurrency(
+    [],
+    { required_status_checks: { strict: true } },
+    {},
+  );
+  assert.equal(result.requiresUpToDateHead, true);
+  assert.equal(result.requiresUpToDateHeadSource, 'classic-protection');
+});
+
+test('summarizeBranchCurrency: a readable "no rule found" resolves requiresUpToDateHead to false, source "none"', () => {
+  const result = summarizeBranchCurrency(
+    [{ type: 'required_status_checks', parameters: {} }],
+    { required_status_checks: {} },
+    { protectionReadsUnreadable: false },
+  );
+  assert.equal(result.requiresUpToDateHead, false);
+  assert.equal(result.requiresUpToDateHeadSource, 'none');
+});
+
+test('summarizeBranchCurrency: an unreadable protection/ruleset read fails closed to requiresUpToDateHead=true', () => {
+  const result = summarizeBranchCurrency(
+    [],
+    {},
+    {
+      protectionReadsUnreadable: true,
+    },
+  );
+  assert.equal(result.requiresUpToDateHead, true);
+  assert.equal(result.requiresUpToDateHeadSource, 'unreadable-fail-closed');
+});
+
+test('summarizeBranchCurrency: a non-boolean strict-flag value is never coerced true (strict === true check)', () => {
+  const result = summarizeBranchCurrency(
+    [
+      {
+        type: 'required_status_checks',
+        parameters: { strict_required_status_checks_policy: 'true' },
+      },
+    ],
+    { required_status_checks: { strict: 1 } },
+    { protectionReadsUnreadable: false },
+  );
+  assert.equal(result.requiresUpToDateHead, false);
+  assert.equal(result.requiresUpToDateHeadSource, 'none');
+});
+
+// End-to-end regression, confirmed-ruleset path: this repository's own live
+// `main` (verified via `gh api repos/kurone-kito/idd-skill/rules/branches/main`)
+// resolves via this exact branch -- a readable ruleset carrying
+// `strict_required_status_checks_policy: true` -- not the unreadable-fail-closed
+// path below. Covering both end to end (not just summarizeBranchCurrency in
+// isolation) guards against a wiring slip where branchRules/mergeStateStatus
+// never actually reach summarizeBranchCurrency inside buildPreMergeReadinessSummary.
+test('buildPreMergeReadinessSummary: a confirmed ruleset requirement + live BEHIND blocks on branch-currency', () => {
+  const fixture = readJson('fixtures/pre-merge-readiness/clean.json');
+  const branchRules = (
+    fixture.input.branchRules as Record<string, unknown>[]
+  ).map((rule) =>
+    rule.type === 'required_status_checks'
+      ? {
+          ...rule,
+          parameters: {
+            ...(rule.parameters as Record<string, unknown>),
+            strict_required_status_checks_policy: true,
+          },
+        }
+      : rule,
+  );
+  const summary = buildPreMergeReadinessSummary(
+    {
+      ...fixture.input,
+      branchRules,
+      mergeStateStatus: 'BEHIND',
+      mergeable: 'MERGEABLE',
+    },
+    { ...fixture.options, includeDispositionEvidence: true },
+  );
+  const branchCurrency = summary.branchCurrency as Record<string, unknown>;
+  assert.equal(branchCurrency.requiresUpToDateHead, true);
+  assert.equal(branchCurrency.requiresUpToDateHeadSource, 'ruleset');
+  assert.deepEqual(summary.blockers, computePreMergeReadinessBlockers(summary));
+  assert.deepEqual(
+    (summary.blockers as { gate: string }[]).map((b) => b.gate),
+    ['branch-currency'],
+  );
+  assert.equal(summary.ready, false);
+});
+
+// End-to-end regression, unreadable-fail-closed path: this is the exact
+// field-evidence shape from the issue -- `mergeStateStatus: BEHIND`,
+// `mergeable: MERGEABLE`, and a protection/ruleset read that could not be
+// confirmed at all (not merely a rule that was read but found absent).
+test('buildPreMergeReadinessSummary: BEHIND + unreadable protection/ruleset reads fails closed to a branch-currency blocker', () => {
+  const fixture = readJson('fixtures/pre-merge-readiness/clean.json');
+  const branchRules = (fixture.input.branchRules as { type: string }[]).filter(
+    (rule) => rule.type !== 'required_status_checks',
+  );
+  const summary = buildPreMergeReadinessSummary(
+    {
+      ...fixture.input,
+      branchRules,
+      protectionReadsUnreadable: true,
+      mergeStateStatus: 'BEHIND',
+      mergeable: 'MERGEABLE',
+    },
+    { ...fixture.options, includeDispositionEvidence: true },
+  );
+  const branchCurrency = summary.branchCurrency as Record<string, unknown>;
+  assert.equal(branchCurrency.requiresUpToDateHead, true);
+  assert.equal(
+    branchCurrency.requiresUpToDateHeadSource,
+    'unreadable-fail-closed',
+  );
+  assert.deepEqual(summary.blockers, computePreMergeReadinessBlockers(summary));
+  const blockerGates = (summary.blockers as { gate: string }[]).map(
+    (b) => b.gate,
+  );
+  assert.ok(blockerGates.includes('branch-currency'));
+  assert.equal(summary.ready, false);
+});
+
+test('buildPreMergeReadinessSummary: BEHIND with no up-to-date-head requirement does not block on branch-currency', () => {
+  const fixture = readJson('fixtures/pre-merge-readiness/clean.json');
+  const summary = buildPreMergeReadinessSummary(
+    {
+      ...fixture.input,
+      mergeStateStatus: 'BEHIND',
+      mergeable: 'MERGEABLE',
+    },
+    { ...fixture.options, includeDispositionEvidence: true },
+  );
+  const branchCurrency = summary.branchCurrency as Record<string, unknown>;
+  assert.equal(branchCurrency.requiresUpToDateHead, false);
+  const blockerGates = (summary.blockers as { gate: string }[]).map(
+    (b) => b.gate,
+  );
+  assert.ok(!blockerGates.includes('branch-currency'));
 });
 
 test('a trusted machine-disposition clears the notice/summary in both merge gates without promoting the author to a global IDD agent (#1182)', () => {

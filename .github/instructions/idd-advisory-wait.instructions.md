@@ -339,3 +339,10 @@ this hold and stop:
 > Advisory-wait marker for HEAD `{PR_HEAD_SHA}` is missing during
 > polling. Unable to compute elapsed time. A maintainer must verify the
 > Copilot advisory-wait state before this phase can safely continue.
+
+## AW6 — Same-HEAD advisory reroll
+
+F2-only (`#1511`) on `sameHeadReroll.eligible`; see
+`idd-helper-scripts.md`. `requestable`: post+request
+`advisory-reroll:`, poll (not E14's loop). `inFlight`: poll only.
+Else F2's route; `!inFlight`: E1.
