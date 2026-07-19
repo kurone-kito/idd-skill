@@ -302,7 +302,9 @@ const defaultDeps: MergeExecuteDeps = {
           );
         }
         config = JSON.parse(
-          Buffer.from(encodedConfig, 'base64').toString('utf8'),
+          Buffer.from(encodedConfig.replace(/\n/g, ''), 'base64').toString(
+            'utf8',
+          ),
         ) as IddConfig;
       } catch (error) {
         // The config file is optional. A confirmed Contents-API 404 means
