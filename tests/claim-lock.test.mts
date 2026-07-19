@@ -3,6 +3,7 @@ import { execFile, execFileSync } from 'node:child_process';
 import {
   chmodSync,
   existsSync,
+  mkdirSync,
   mkdtempSync,
   readFileSync,
   rmSync,
@@ -326,6 +327,30 @@ test('check: reports a malformed lock body as present+malformed, without throwin
     assert.equal(check.present, true);
     assert.equal(check.malformed, true);
     assert.equal(check.holder, undefined);
+  } finally {
+    teardown(fixture);
+  }
+});
+
+test('check/acquire: an unreadable lock path is a malformed collision', () => {
+  const fixture = setupLinkedWorktree();
+  try {
+    const path = resolveClaimLockPath(fixture.worktree);
+    mkdirSync(path);
+
+    const check = checkClaimLock(fixture.worktree);
+    assert.equal(check.present, true);
+    assert.equal(check.malformed, true);
+    assert.equal(check.holder, undefined);
+
+    const collision = acquireClaimLock(
+      fixture.worktree,
+      'agent-b',
+      'claim-b',
+      false,
+    );
+    assert.equal(collision.mode, 'collision');
+    assert.equal(collision.holder, undefined);
   } finally {
     teardown(fixture);
   }

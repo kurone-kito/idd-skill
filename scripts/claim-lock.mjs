@@ -115,7 +115,11 @@ function readLock(path) {
     if (error.code === 'ENOENT') {
       return { status: 'absent' };
     }
-    throw error;
+    // Any other read failure means the path cannot be trusted as absent or
+    // valid (for example EACCES/EPERM, EISDIR, or a transient filesystem
+    // error). Fail closed as malformed so callers take the collision path
+    // instead of silently bypassing a lock they cannot inspect.
+    return { status: 'malformed' };
   }
   let parsed;
   try {
