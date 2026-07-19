@@ -16,6 +16,7 @@
     "idd-ci-wait-policy": "./bin/idd-ci-wait-policy.mjs",
     "idd-ci-wait-state": "./bin/idd-ci-wait-state.mjs",
     "idd-claim-approval-gate": "./bin/idd-claim-approval-gate.mjs",
+    "idd-claim-lock": "./bin/idd-claim-lock.mjs",
     "idd-discover-orphan-filter": "./bin/idd-discover-orphan-filter.mjs",
     "idd-discover-readiness-check": "./bin/idd-discover-readiness-check.mjs",
     "idd-discover-roadmap-graph": "./bin/idd-discover-roadmap-graph.mjs",

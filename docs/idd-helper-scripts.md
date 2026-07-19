@@ -897,6 +897,52 @@ Interpretation rules:
   and linked-issue exceptions do not yet have a supported helper
   contract
 
+### Worktree-local claim lock
+
+- Source repo / vendored-node commands:
+  `node scripts/claim-lock.mjs --acquire --worktree <path> --agent-id <id>
+  --claim-id <id> [--takeover]`
+  and `node scripts/claim-lock.mjs --check --worktree <path>`
+- Package-manager / ephemeral-npx command: use the profile-selected
+  `idd:claim-lock` command from the helper runtime manifest wiring above
+- Same-machine fast path complementing the cross-machine claim check (see
+  the [worktree-local lock file](../.github/instructions/idd-claim.instructions.md#worktree-local-lock-file-same-machine-collision)
+  subsection of `idd-claim.instructions.md` for the full protocol)
+- Before removing an existing linked worktree, acquire/check its lock and
+  resolve any collision through the current claim. A worktree must not be
+  removed while another claim still holds its lock.
+- WorkTrunk pre-start install hooks run before `wt switch --create` returns;
+  configure the hook to acquire the lock as its first command, before the
+  install. Under `package-manager`, the new worktree's bin may not exist
+  until that install completes, so invoke a pre-install-available helper
+  from the primary worktree with the new path as its explicit target, or
+  use the helper-free exclusive file-create fallback. If neither is
+  available, disable the automatic install and acquire the lock immediately
+  after worktree creation.
+- Stable `--acquire` `mode` values: `acquired` (fresh create, a read-only
+  same-`claim-id` reacquire that writes nothing, or an authorized
+  `--takeover` override — disambiguated by the optional `reacquired` /
+  `forcedTakeover` boolean fields) or `collision` (a different `claim-id`
+  already holds the lock, or the existing path is malformed/unreadable —
+  retry with `--takeover` only after
+  `resume-claim-routing.mjs --fresh-claim-gate` authorizes it). A `holder`
+  snapshot of the previous occupant is reported on **both** a plain
+  `collision` and an authorized takeover, not only on takeover.
+- The `--acquire` CLI exits `0` only for `acquired` and exits `2` for
+  `collision`, so a hook can safely chain installation or another mutation
+  with `&&`; `--check` remains read-only and exits `0` for a reported state.
+- `--check` reports `{ path, present, holder?, malformed? }` read-only,
+  never creating, mutating, or deleting the lock; `malformed: true` means
+  a lock file exists but could not be parsed as a well-formed lock body
+- Deliberately has no local staleness judgment (no PID-liveness check):
+  the process invoking this CLI exits the moment the call returns, so a
+  recorded PID would never usefully represent a live competing session.
+  The configured GitHub `claim-stale-age` stays the sole staleness
+  authority; this lock only ever reports `collision` or acquires.
+- No explicit release verb: the lock lives inside the worktree's own
+  private git-admin directory (`git rev-parse --absolute-git-dir`), so
+  `git worktree remove` at F4 deletes it together with the worktree
+
 ### Canonical branch name
 
 - Source repo / vendored-node command:

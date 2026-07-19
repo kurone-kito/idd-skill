@@ -42,10 +42,26 @@ Before creating, check for local conflicts in this order:
    the issue branch. See Anti-patterns below.
 
 2. Run `git worktree list` — if a worktree for the branch already
-   exists, either reuse it (takeover) or remove it first using the exact
-   path shown in the list: `git worktree remove <path-from-list>`. (Must
+   exists, inspect and acquire its worktree-local claim lock before
+   reusing or removing it. Run the profile-selected claim-lock helper
+   against the exact path shown in the list with the current
+   `{agent-id}` / `{claim-id}`: `node scripts/claim-lock.mjs` in the
+   source/vendored runtime, or `idd-claim-lock` / `idd:claim-lock` in
+   imported package-manager runtimes;
+   do not run `git worktree remove` while the lock check is still a
+   collision. Resolve a collision through the Claim-state rule in
+   `idd-claim.instructions.md`, and only remove the exact path after the
+   current claim is authorized to take it over. If reusing it, keep the
+   acquired lock. If removing it, recreate the path and acquire the new
+   worktree's lock again before any install or other mutation. (Must
    remove the worktree before deleting the branch — git prevents
    deleting a branch checked out in a worktree.)
+
+   If `git worktree list --porcelain` marks the entry `prunable` and its
+   path is already absent, there is no live worktree to protect. Clean
+   that exact stale entry with `git worktree remove --force
+   <path-from-list>`, then continue; this is the only removal exception
+   before a lock check.
 3. Run `git branch --list {branch-name}` — if the branch still exists
    locally after step 2, check whether it is an inheritable branch
    (claim takeover). If it is inheritable, reuse it. If it is not
@@ -118,12 +134,50 @@ If WorkTrunk is not available, choose the correct case:
 | Takeover — neither local nor remote (rare) | treat as fresh claim; preserve the inherited branch name |
 <!-- dprint-ignore-end -->
 
+For manual `git worktree add` and WorkTrunk without an install hook,
+immediately after the worktree exists — **before Step 3** —, acquire
+the [worktree-local lock file](idd-claim.instructions.md#worktree-local-lock-file-same-machine-collision).
+`install-deps` below can itself write into the worktree and run lifecycle
+hooks, so acquiring the lock only after it (or only after the B1
+self-check below) would leave that install unprotected.
+
+WorkTrunk runs a configured pre-start hook before the create command
+returns. If that hook installs dependencies, its **first** command must
+acquire the lock for the new worktree with the current `{agent-id}` /
+`{claim-id}`, and only then run the install command. In the
+`package-manager` profile, do not assume the new worktree's
+`idd:claim-lock` bin is available before that install: invoke a
+pre-install-available helper from the primary worktree with the new path
+as its explicit `--worktree` target, or use the helper-free exclusive
+file-create fallback below. Acquiring the lock after `wt switch --create`
+returns is too late for that hook. If the pre-start hook cannot acquire
+the lock from an already-available helper or fallback, do not use the
+automatic install hook; create the worktree without it and follow the
+manual lock-then-install path above.
+
+For the `instructions-only` profile, which has no helper runtime, use
+this helper-free fallback before the first mutation. Resolve the private
+admin directory with `git -C <worktree> rev-parse --absolute-git-dir`,
+then atomically create an `idd-claim.lock` file there with an exclusive
+file-create API (`open(..., O_CREAT|O_EXCL)` on POSIX, or the platform
+equivalent such as PowerShell `FileMode.CreateNew`). Write the same JSON
+holder shape used by the helper (`agentId`, `claimId`, and `acquiredAt`)
+to that file. If creation reports that the path already exists, treat it
+as a collision. A matching holder may re-acquire; a missing, malformed,
+or unreadable holder is a collision. The manual path must never delete or
+override a different holder: stop and enable a helper runtime for an
+authorized takeover. Because both profiles use `idd-claim.lock`, a
+helper-runtime session and an instructions-only session share one local
+lock namespace. Removing the worktree at F4 removes this file with its
+private admin directory.
+
 **Step 3 — Install deps**: after worktree creation, ensure dependencies
 are installed:
 
 - **WorkTrunk with a pre-start install hook** (e.g.,
-  `[pre-start].install` in `.config/wt.toml`): dependencies are
-  installed automatically — skip this step.
+  `[pre-start].install` in `.config/wt.toml`): The hook must acquire the
+  lock before installing, as described above; after the hook succeeds,
+  skip this step.
 - **Manual `git worktree add` or WorkTrunk without a hook**: `cd` into
   the newly created worktree, then run **install-deps**.
 

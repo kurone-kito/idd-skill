@@ -188,7 +188,7 @@
         ".github/instructions/idd-overview-core.instructions.md",
         ".github/instructions/idd-work.instructions.md"
       ],
-      "limitBytes": 41300
+      "limitBytes": 45000
     },
     {
       "id": "bundle-review",
