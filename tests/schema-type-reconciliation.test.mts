@@ -179,6 +179,7 @@ interface PolicyConfigFile {
   markerTrustAllowCollaboratorMarkers?: boolean;
   allowCollaboratorMarkers?: boolean;
   advisoryWait?: {
+    convergenceScope?: 'all-prs' | 'idd-claimed';
     requestCap?: number;
     pendingWindow?: string;
     settledWindow?: string;
@@ -800,6 +801,7 @@ const policyConfigFixture = {
   },
   markerTrust: { allowCollaboratorMarkers: false },
   advisoryWait: {
+    convergenceScope: 'all-prs',
     requestCap: 30,
     pendingWindow: 'PT30M',
     settledWindow: 'PT10M',

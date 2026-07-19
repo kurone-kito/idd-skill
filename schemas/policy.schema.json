@@ -239,6 +239,11 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
+        "convergenceScope": {
+          "type": "string",
+          "enum": ["all-prs", "idd-claimed"],
+          "description": "Controls whether advisory convergence applies to every PR or only verified IDD-owned PRs. Invalid values are rejected and normalized back to all-prs."
+        },
         "requestCap": {
           "type": "integer",
           "minimum": 1

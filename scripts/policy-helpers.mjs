@@ -22,6 +22,7 @@ const APPROVAL_ACTOR_POLICIES = new Set([
 ]);
 const FORCED_HANDOFF_MODES = new Set(['disabled', 'human-gated']);
 const ADVISORY_CAP_ROUTES = new Set(['phase-specific', 'hold']);
+const ADVISORY_CONVERGENCE_SCOPES = new Set(['all-prs', 'idd-claimed']);
 const SELECTION_DESYNC_MODES = new Set(['off', 'session-offset']);
 const EXTERNAL_CHECK_WAIVER_MODES = new Set([
   'disabled',
@@ -86,6 +87,7 @@ export const POLICY_DEFAULTS = Object.freeze({
     settledWindow: 'PT10M',
     pollInterval: 'PT2M',
     capExhaustedRoute: 'phase-specific',
+    convergenceScope: 'all-prs',
   }),
   ciWait: Object.freeze({
     runningTimeout: 'PT30M',
@@ -288,6 +290,11 @@ export function normalizePolicyConfig(config) {
       capExhaustedRoute: parseAdvisoryCapRoute(
         c?.advisoryWait?.capExhaustedRoute,
         POLICY_DEFAULTS.advisoryWait.capExhaustedRoute,
+      ),
+      convergenceScope: parseEnum(
+        c?.advisoryWait?.convergenceScope,
+        ADVISORY_CONVERGENCE_SCOPES,
+        POLICY_DEFAULTS.advisoryWait.convergenceScope,
       ),
     },
     ciWait: {
