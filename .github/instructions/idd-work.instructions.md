@@ -56,6 +56,12 @@ Before creating, check for local conflicts in this order:
    worktree's lock again before any install or other mutation. (Must
    remove the worktree before deleting the branch — git prevents
    deleting a branch checked out in a worktree.)
+
+   If `git worktree list --porcelain` marks the entry `prunable` and its
+   path is already absent, there is no live worktree to protect. Clean
+   that exact stale entry with `git worktree remove --force
+   <path-from-list>`, then continue; this is the only removal exception
+   before a lock check.
 3. Run `git branch --list {branch-name}` — if the branch still exists
    locally after step 2, check whether it is an inheritable branch
    (claim takeover). If it is inheritable, reuse it. If it is not
@@ -143,6 +149,19 @@ after `wt switch --create` returns is too late for that hook. If the
 pre-start hook cannot be changed to acquire the lock first, do not use
 the automatic install hook; create the worktree without it and follow the
 manual lock-then-install path above.
+
+For the `instructions-only` profile, which has no helper runtime, use
+this helper-free fallback before the first mutation. Resolve the private
+admin directory with `git -C <worktree> rev-parse --absolute-git-dir`,
+then atomically create an `idd-claim.lock.manual` directory there with
+`mkdir` (or the platform-equivalent exclusive directory-create API).
+If creation reports that the directory already exists, treat it as a
+collision. After creation, write a small `holder.json` containing the
+current `{agent-id}` and `{claim-id}` inside the directory. A matching
+holder may re-acquire; a missing or malformed holder is a collision.
+The manual path must never delete or override a different holder: stop
+and enable a helper runtime for an authorized takeover. Removing the
+worktree at F4 removes this directory with its private admin directory.
 
 **Step 3 — Install deps**: after worktree creation, ensure dependencies
 are installed:
