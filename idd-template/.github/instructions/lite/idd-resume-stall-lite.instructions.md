@@ -53,8 +53,9 @@ Require **no** external progress in the last 30 minutes:
 - no CI `queued` / `in_progress`;
 - no new review/comment/CI completion activity.
 
-Helper fields to read: `quiet_window_met`, `reason`, `latest_activity`,
-`has_heartbeat_in_window`, `has_ci_running`, `has_branch_tip_movement`.
+Helper fields to read: top-level `quiet_window_met`, `reason`,
+`latest_activity`; nested under `evidence`: `has_heartbeat_in_window`,
+`has_ci_running`, `has_branch_tip_movement`.
 
 | Result                                                         | Action                                                 |
 | -------------------------------------------------------------- | ------------------------------------------------------ |
