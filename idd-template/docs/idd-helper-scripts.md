@@ -907,16 +907,17 @@ Interpretation rules:
 - Same-machine fast path complementing the cross-machine claim check (see
   the [worktree-local lock file](../.github/instructions/idd-claim.instructions.md#worktree-local-lock-file-same-machine-collision)
   subsection of `idd-claim.instructions.md` for the full protocol)
-- Stable `--acquire` `mode` values: `acquired` (fresh create, idempotent
-  same-`claim-id` reacquire, or an authorized `--takeover` override —
-  disambiguated by the optional `reacquired` / `forcedTakeover` boolean
-  fields plus a `holder` snapshot on takeover), `collision` (a different
-  `claim-id` already holds the lock — retry with `--takeover` only after
-  `resume-claim-routing.mjs --fresh-claim-gate` authorizes it), or
-  `contended` (lost a bounded number of concurrent-overwrite races — retry
-  the whole command)
-- `--check` reports `{ path, present, holder? }` read-only, never
-  creating, mutating, or deleting the lock
+- Stable `--acquire` `mode` values: `acquired` (fresh create, a read-only
+  same-`claim-id` reacquire that writes nothing, or an authorized
+  `--takeover` override — disambiguated by the optional `reacquired` /
+  `forcedTakeover` boolean fields) or `collision` (a different `claim-id`
+  already holds the lock — retry with `--takeover` only after
+  `resume-claim-routing.mjs --fresh-claim-gate` authorizes it). A `holder`
+  snapshot of the previous occupant is reported on **both** a plain
+  `collision` and an authorized takeover, not only on takeover.
+- `--check` reports `{ path, present, holder?, malformed? }` read-only,
+  never creating, mutating, or deleting the lock; `malformed: true` means
+  a lock file exists but could not be parsed as a well-formed lock body
 - Deliberately has no local staleness judgment (no PID-liveness check):
   the process invoking this CLI exits the moment the call returns, so a
   recorded PID would never usefully represent a live competing session.

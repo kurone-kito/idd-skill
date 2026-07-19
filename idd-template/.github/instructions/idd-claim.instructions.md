@@ -481,7 +481,8 @@ then re-run alongside every later pre-mutation check:
 `node scripts/claim-lock.mjs --acquire --worktree <path> --agent-id
 {agent-id} --claim-id {claim-id}`.
 
-A matching `{claim-id}` re-acquires locally (no GitHub round-trip). A
+A matching `{claim-id}` re-acquires as a read-only check (no write, no
+GitHub round-trip). A
 different `{claim-id}` is always a collision, regardless of lock age —
 run `resume-claim-routing.mjs --issue <n> --fresh-claim-gate`:
 `already-claimed` stops (claim lost); `claimable`/`stale-reclaimable`

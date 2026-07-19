@@ -19,13 +19,34 @@
 // defeat the very collision this lock exists to catch. See `## Claim
 // revalidation gate` in idd-overview-core.instructions.md for the full
 // protocol this helper implements (#1523).
+//
+// Re-acquiring a matching claim-id is read-only (no write at all): a
+// same-claim-id "reacquire" only needs to confirm nobody else took over,
+// never to refresh anything on disk (`acquiredAt` is audit-only -- no code
+// path here reads it back to make a decision). An earlier revision deleted
+// and recreated the file on every reacquire, which opened a window where an
+// unrelated, unauthorized different-claim-id session could slip through a
+// fresh `wx` create as if nobody held the lock -- exactly the collision
+// this lock exists to catch. Making reacquire read-only removes that window
+// entirely on the common fast path. The only path that still writes over an
+// existing lock is an authorized `--takeover`, and it replaces the file via
+// a same-directory temp-write + `renameSync` rather than unlink-then-create,
+// so the lock path is never briefly absent for that path either.
+//
+// This lock intentionally does not try to perfectly serialize two
+// concurrent authorized takeovers of the same worktree -- that is a much
+// narrower race than the collision above, and the claim revalidation gate
+// (re-reading the GitHub claim-id before every mutation, independent of this
+// lock) is the real authority there: GitHub claim parsing is deterministic,
+// so only one concurrent takeover's claim-id can actually be the active one,
+// regardless of what this local lock file happens to contain.
 import { execFileSync } from 'node:child_process';
-import { readFileSync, unlinkSync, writeFileSync } from 'node:fs';
+import { readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { parseCliArgs } from './cli-args.mjs';
 
 const CLAIM_LOCK_FILE_NAME = 'idd-claim.lock';
-const MAX_OVERWRITE_ATTEMPTS = 5;
+const MAX_RETRY_ATTEMPTS = 5;
 const CLAIM_LOCK_FLAG_SPEC = {
   '--acquire': { type: 'boolean' },
   '--check': { type: 'boolean' },
@@ -93,65 +114,66 @@ function renderLockBody(agentId, claimId) {
   return JSON.stringify(body);
 }
 /**
- * Overwrite `path` with a freshly-rendered lock body, atomically: delete the
- * existing file (ignoring `ENOENT` — another session may have already
- * cleaned it up) then create with `wx` (`O_CREAT|O_EXCL`) so a concurrent
- * overwriter racing the same decision is detected instead of silently
- * clobbered. Returns `true` on success, `false` when the inner create lost
- * a race (caller re-reads and re-decides rather than retrying blindly).
+ * Replace `path` with a freshly-rendered lock body without ever leaving it
+ * absent: write to a same-directory temp file, then `renameSync` it onto
+ * `path`. POSIX `rename` onto an existing target is atomic — readers always
+ * see the old or the new content, never a missing file or a partial write —
+ * so an unrelated session's fresh `wx` create can never slip through the
+ * gap the earlier unlink-then-create design left open. The temp file must
+ * live in the same directory as `path` (a cross-filesystem rename is not
+ * atomic and can silently fall back to copy+delete); the `finally` cleans it
+ * up if `renameSync` itself throws, so a failed replace never leaks it.
  */
-function tryAtomicOverwrite(path, agentId, claimId) {
+function overwriteLockAtomically(path, agentId, claimId) {
+  const tmpPath = `${path}.tmp-${process.pid}-${Math.random().toString(36).slice(2)}`;
+  writeFileSync(tmpPath, renderLockBody(agentId, claimId), { flag: 'wx' });
   try {
-    unlinkSync(path);
-  } catch (error) {
-    if (error.code !== 'ENOENT') {
-      throw error;
+    renameSync(tmpPath, path);
+  } finally {
+    // Best-effort cleanup only: a successful rename already moved tmpPath
+    // away (this is a no-op ENOENT), and a failed rename's own error is
+    // what the caller needs to see, so any cleanup failure here is
+    // deliberately swallowed rather than masking that original error.
+    try {
+      unlinkSync(tmpPath);
+    } catch {
+      // ignore
     }
-  }
-  try {
-    writeFileSync(path, renderLockBody(agentId, claimId), { flag: 'wx' });
-    return true;
-  } catch (error) {
-    if (error.code === 'EEXIST') {
-      return false;
-    }
-    throw error;
   }
 }
 /**
  * Acquire (or idempotently re-acquire) the worktree-local claim lock.
  * Safe to call before every mutation, not just once at worktree creation.
  *
- * A matching `claimId` always re-acquires purely locally (the fast path —
- * no GitHub round-trip). A different `claimId` is always a `collision`
- * unless `takeover` is set, regardless of how long the lock has existed:
- * GitHub's 24h claim-stale-age is the sole staleness authority, so the
- * caller must independently re-verify live claim state (e.g.
+ * A matching `claimId` is a pure read: it confirms nobody else holds the
+ * lock and returns `acquired`/`reacquired` without writing anything (the
+ * fast path — no GitHub round-trip, and no window where the lock briefly
+ * disappears). A different `claimId` is always a `collision` unless
+ * `takeover` is set, regardless of how long the lock has existed: GitHub's
+ * 24h claim-stale-age is the sole staleness authority, so the caller must
+ * independently re-verify live claim state (e.g.
  * `resume-claim-routing.mjs --fresh-claim-gate`) before retrying with
  * `takeover: true`.
  */
 export function acquireClaimLock(worktree, agentId, claimId, takeover) {
   const path = resolveClaimLockPath(worktree);
-  for (let attempt = 0; attempt < MAX_OVERWRITE_ATTEMPTS; attempt += 1) {
-    try {
-      writeFileSync(path, renderLockBody(agentId, claimId), { flag: 'wx' });
-      return { mode: 'acquired', path };
-    } catch (error) {
-      if (error.code !== 'EEXIST') {
-        throw error;
-      }
-    }
+  for (let attempt = 0; attempt < MAX_RETRY_ATTEMPTS; attempt += 1) {
     const read = readLock(path);
-    if (read.status === 'absent') {
-      // Raced with a concurrent release/prune between the failed create
-      // and this read; loop around to retry the create.
-      continue;
-    }
     if (read.status === 'present' && read.lock.claimId === claimId) {
-      if (tryAtomicOverwrite(path, agentId, claimId)) {
-        return { mode: 'acquired', path, reacquired: true };
+      return { mode: 'acquired', path, reacquired: true };
+    }
+    if (read.status === 'absent') {
+      try {
+        writeFileSync(path, renderLockBody(agentId, claimId), { flag: 'wx' });
+        return { mode: 'acquired', path };
+      } catch (error) {
+        if (error.code !== 'EEXIST') {
+          throw error;
+        }
+        // Raced with a concurrent fresh acquire between the read above and
+        // this create; loop around to re-read and re-decide.
+        continue;
       }
-      continue;
     }
     // Either a different claim-id, or a malformed body whose holder can't
     // be determined safely: always a same-machine collision either way.
@@ -161,11 +183,11 @@ export function acquireClaimLock(worktree, agentId, claimId, takeover) {
     if (!takeover) {
       return { mode: 'collision', path, holder };
     }
-    if (tryAtomicOverwrite(path, agentId, claimId)) {
-      return { mode: 'acquired', path, forcedTakeover: true, holder };
-    }
+    overwriteLockAtomically(path, agentId, claimId);
+    return { mode: 'acquired', path, forcedTakeover: true, holder };
   }
-  return { mode: 'contended', path };
+  // Exhausted retries on the narrow absent-then-raced-create loop above.
+  return { mode: 'collision', path };
 }
 /** Read-only lock inspection: never creates, mutates, or deletes the lock. */
 export function checkClaimLock(worktree) {
@@ -233,15 +255,18 @@ cross-machine activation-nonce claim check. Resolves the lock file inside
 the worktree -- no separate release step is needed.
 
 --acquire is idempotent for a matching --claim-id: it re-acquires
-(refreshes the lock) purely locally, with no GitHub round-trip -- this is
-the fast path used before every mutation. A different --claim-id is always
-reported as a collision, regardless of how old the existing lock is: this
-helper never judges staleness locally. Pass --takeover only after
-independently re-verifying live GitHub claim state (e.g. via
-\`resume-claim-routing.mjs --fresh-claim-gate\` reporting \`claimable\` or
-\`stale-reclaimable\`) to override a collision.
+(confirms nobody else holds it) as a pure read, with no write and no GitHub
+round-trip -- this is the fast path used before every mutation. A different
+--claim-id is always reported as a collision, regardless of how old the
+existing lock is: this helper never judges staleness locally. Pass
+--takeover only after independently re-verifying live GitHub claim state
+(e.g. via \`resume-claim-routing.mjs --fresh-claim-gate\` reporting
+\`claimable\` or \`stale-reclaimable\`) to override a collision; \`holder\`
+in the JSON output reports the previous occupant on both a plain collision
+and an authorized takeover.
 
 --check is read-only: it reports the current lock state without creating,
-mutating, or deleting anything.
+mutating, or deleting anything. \`malformed: true\` means a lock file
+exists but could not be parsed as a well-formed lock body.
 `);
 }

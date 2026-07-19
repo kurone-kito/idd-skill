@@ -5,6 +5,7 @@ import {
   mkdtempSync,
   readFileSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from 'node:fs';
 import { devNull, tmpdir } from 'node:os';
@@ -116,7 +117,7 @@ test('acquire: lock-acquired — fresh acquire succeeds with no prior lock', () 
   }
 });
 
-test('acquire: same claim-id re-acquires purely locally (fast path), refreshing the lock', () => {
+test('acquire: same claim-id re-acquires purely locally (fast path), confirming without writing', () => {
   const fixture = setupLinkedWorktree();
   try {
     const first = acquireClaimLock(
@@ -138,6 +139,43 @@ test('acquire: same claim-id re-acquires purely locally (fast path), refreshing 
 
     const check = checkClaimLock(fixture.worktree);
     assert.equal(check.holder?.claimId, 'claim-a');
+  } finally {
+    teardown(fixture);
+  }
+});
+
+test('acquire: a same-claim-id reacquire performs no destructive write — the lock file is never removed or replaced (regression for the Codex-reported unlink-then-create race)', () => {
+  const fixture = setupLinkedWorktree();
+  try {
+    const first = acquireClaimLock(
+      fixture.worktree,
+      'agent-a',
+      'claim-a',
+      false,
+    );
+    assert.equal(first.mode, 'acquired');
+
+    const path = resolveClaimLockPath(fixture.worktree);
+    const before = statSync(path);
+    const bodyBefore = readFileSync(path, 'utf8');
+
+    const second = acquireClaimLock(
+      fixture.worktree,
+      'agent-a',
+      'claim-a',
+      false,
+    );
+    assert.equal(second.mode, 'acquired');
+    assert.equal(second.reacquired, true);
+
+    const after = statSync(path);
+    // Same inode means the file was never unlinked/recreated -- a
+    // destructive reacquire would allocate a new inode. If the file had
+    // been deleted and recreated, a competing session's fresh `wx` create
+    // could have raced into the gap; an unchanged inode proves that gap
+    // never opened.
+    assert.equal(after.ino, before.ino);
+    assert.equal(readFileSync(path, 'utf8'), bodyBefore);
   } finally {
     teardown(fixture);
   }
@@ -267,8 +305,9 @@ test('acquire: N concurrent forced-takeovers never corrupt the lock — every wr
   // small JSON payload, even a non-atomic `writeFileSync` (no `wx`) rarely
   // produces a torn/truncated write in practice, so a single race window
   // alone would not reliably distinguish this implementation from a naive
-  // one. Atomicity itself is guaranteed by `tryAtomicOverwrite`'s
-  // unlink-then-`wx`-create pattern (reviewed in `src/scripts/claim-lock.mts`);
+  // one. Atomicity itself is guaranteed by `overwriteLockAtomically`'s
+  // same-directory temp-write + `renameSync` pattern (reviewed in
+  // `src/scripts/claim-lock.mts`);
   // this test's job is only to catch a regression that corrupts the file
   // or crashes a concurrent writer, exercised across enough concurrent
   // takeovers to make a genuine interleaving bug likely to surface.

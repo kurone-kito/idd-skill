@@ -118,6 +118,12 @@ If WorkTrunk is not available, choose the correct case:
 | Takeover — neither local nor remote (rare) | treat as fresh claim; preserve the inherited branch name |
 <!-- dprint-ignore-end -->
 
+Immediately after the worktree exists — **before Step 3** —, acquire the
+[worktree-local lock file](idd-claim.instructions.md#worktree-local-lock-file-same-machine-collision).
+`install-deps` below can itself write into the worktree and run lifecycle
+hooks, so acquiring the lock only after it (or only after the B1
+self-check below) would leave that install unprotected.
+
 **Step 3 — Install deps**: after worktree creation, ensure dependencies
 are installed:
 
@@ -154,10 +160,6 @@ check failed; do not continue to B2 from the primary worktree. Repair
 by removing the misplaced branch from the primary worktree (after
 confirming no work is lost) and recreating the sibling worktree
 through the Worktree creation steps above.
-
-Once the self-check passes, acquire the
-[worktree-local lock file](idd-claim.instructions.md#worktree-local-lock-file-same-machine-collision)
-before the first mutation in this worktree.
 
 ## B2 — Create and refine plan
 
