@@ -503,7 +503,9 @@
             "bypassDetected",
             "bypassMode",
             "currentUserCanBypass",
-            "rulesetBypassUnreadable"
+            "rulesetBypassUnreadable",
+            "prAuthorIsSoleEligibleCodeowner",
+            "codeownerEligibilityUnreadable"
           ],
           "additionalProperties": false,
           "properties": {
@@ -569,6 +571,14 @@
             },
             "rulesetBypassUnreadable": {
               "type": "boolean"
+            },
+            "prAuthorIsSoleEligibleCodeowner": {
+              "type": "boolean",
+              "description": "True only when the PR author is the sole eligible direct-user codeowner (no team codeowners, no email codeowners, at least one eligible direct-user codeowner, and every eligible direct-user codeowner equals the author). This is the narrow self-CODEOWNER-deadlock topology fact; a 'clear' status/reason alone does not imply it, because the bypass-detected and non-author-owner-available branches can both report 'clear' without checking this condition."
+            },
+            "codeownerEligibilityUnreadable": {
+              "type": "boolean",
+              "description": "True when at least one direct-user codeowner's collaborator-permission lookup failed for a reason other than \"not a collaborator\" (403/5xx/network/timeout). When true, prAuthorIsSoleEligibleCodeowner is forced to false regardless of what the (possibly incomplete) eligible set otherwise computed, because a transient lookup failure for a genuinely eligible non-author codeowner must never be silently treated the same as that codeowner having no write access at all."
             }
           }
         },

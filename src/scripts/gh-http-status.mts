@@ -44,7 +44,19 @@ export function deriveGhHttpStatus(error: unknown): number | null {
   return null;
 }
 
-function ghErrorText(error: unknown): string {
+/**
+ * Extract the most useful diagnostic text from a failed `gh` invocation (an
+ * `execFileSync`-shaped error): stderr first (where `gh` writes most error
+ * explanations), then stdout, then the generic Error message, joined so a
+ * caller's pattern match sees every available detail regardless of which
+ * stream `gh` used. Coerces any non-null value via `String(...)` (not a
+ * strict `typeof === 'string'` check) so a `Buffer`-valued stream — e.g. an
+ * `execFileSync` call made without `{ encoding: 'utf8' }` — still yields
+ * readable text instead of being silently dropped. Exported for reuse by
+ * other `gh`-invoking helpers (e.g. `idd-merge-execute.mts`'s solo-CODEOWNER
+ * `--admin` fallback, #1521) instead of each hand-rolling its own copy.
+ */
+export function ghErrorText(error: unknown): string {
   if (!error || typeof error !== 'object') {
     return '';
   }

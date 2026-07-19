@@ -346,6 +346,51 @@ test('policy schema rejects an unknown worktreeGuard subkey', () => {
   );
 });
 
+test('policy schema accepts the mergeGate.soloCodeownerAdminFallback opt-in object (#1521)', () => {
+  const schema = loadJson('schemas/policy.schema.json');
+  const instance = JSON.parse(
+    JSON.stringify(loadJson('fixtures/schemas/policy.valid.json')),
+  );
+  instance.mergeGate = { soloCodeownerAdminFallback: 'hold-and-report' };
+  assert.deepEqual(validate(instance, schema), []);
+});
+
+test('policy schema accepts missing mergeGate (runtime normalization supplies the default) (#1521)', () => {
+  const schema = loadJson('schemas/policy.schema.json');
+  const instance = JSON.parse(
+    JSON.stringify(loadJson('fixtures/schemas/policy.valid.json')),
+  );
+  delete instance.mergeGate;
+  assert.deepEqual(validate(instance, schema), []);
+});
+
+test('policy schema rejects an unknown mergeGate subkey (#1521)', () => {
+  const schema = loadJson('schemas/policy.schema.json');
+  const instance = JSON.parse(
+    JSON.stringify(loadJson('fixtures/schemas/policy.valid.json')),
+  );
+  instance.mergeGate = {
+    soloCodeownerAdminFallback: 'auto-admin-retry',
+    bogus: 1,
+  };
+  assert.ok(
+    validate(instance, schema).length > 0,
+    'expected an unknown mergeGate subkey to be rejected',
+  );
+});
+
+test('policy schema rejects an invalid mergeGate.soloCodeownerAdminFallback value (#1521)', () => {
+  const schema = loadJson('schemas/policy.schema.json');
+  const instance = JSON.parse(
+    JSON.stringify(loadJson('fixtures/schemas/policy.valid.json')),
+  );
+  instance.mergeGate = { soloCodeownerAdminFallback: 'always-admin' };
+  assert.ok(
+    validate(instance, schema).length > 0,
+    'expected an unrecognized soloCodeownerAdminFallback value to be rejected',
+  );
+});
+
 test('policy schema rejects a whitespace-only branchPatterns entry', () => {
   const schema = loadJson('schemas/policy.schema.json');
   const instance = JSON.parse(

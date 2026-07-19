@@ -514,6 +514,17 @@
           "minLength": 1
         }
       }
+    },
+    "mergeGate": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "soloCodeownerAdminFallback": {
+          "type": "string",
+          "enum": ["auto-admin-retry", "hold-and-report"],
+          "description": "Distributed default `auto-admin-retry`: F3 retries once with `gh pr merge --admin` when the Gate checklist is fully green, the only merge-command failure is the self-CODEOWNER \"base branch policy prohibits the merge\" error, and the PR author is proven to be the sole eligible codeowner. `hold-and-report` opts into the pre-#1521 behavior: F3 always stops and posts a hold comment on this error instead of retrying."
+        }
+      }
     }
   },
   "patternProperties": {

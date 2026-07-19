@@ -93,6 +93,43 @@ test('ciWait.rerunPolicy defaults to rerun-once and accepts hold', () => {
   );
 });
 
+test('mergeGate.soloCodeownerAdminFallback defaults to auto-admin-retry and accepts hold-and-report (#1521)', () => {
+  assert.equal(
+    POLICY_DEFAULTS.mergeGate.soloCodeownerAdminFallback,
+    'auto-admin-retry',
+  );
+  assert.equal(
+    normalizePolicyConfig({}).mergeGate.soloCodeownerAdminFallback,
+    'auto-admin-retry',
+  );
+  assert.equal(
+    normalizePolicyConfig({
+      mergeGate: { soloCodeownerAdminFallback: 'hold-and-report' },
+    }).mergeGate.soloCodeownerAdminFallback,
+    'hold-and-report',
+  );
+  assert.equal(
+    normalizePolicyConfig({
+      mergeGate: { soloCodeownerAdminFallback: 'auto-admin-retry' },
+    }).mergeGate.soloCodeownerAdminFallback,
+    'auto-admin-retry',
+  );
+  // An unrecognized value falls back to POLICY_DEFAULTS, matching every
+  // other enum field normalizePolicyConfig parses (e.g. ciWait.rerunPolicy
+  // above) -- it does NOT silently coerce to 'hold-and-report'. A malformed
+  // `mergeGate.soloCodeownerAdminFallback` in `.github/idd/config.json` is
+  // caught earlier by schema validation (`idd-doctor`/config-schema checks
+  // against policy.schema.json's enum), which is the actual safety net
+  // against an operator typo; this parser's job is only to never crash on
+  // a technically-invalid-but-parseable config.
+  assert.equal(
+    normalizePolicyConfig({
+      mergeGate: { soloCodeownerAdminFallback: 'always-admin' },
+    }).mergeGate.soloCodeownerAdminFallback,
+    'auto-admin-retry',
+  );
+});
+
 test('parseIsoDurationToMs parses supported ISO durations', () => {
   assert.equal(parseIsoDurationToMs('PT5S'), 5000);
   assert.equal(parseIsoDurationToMs('PT2H'), 2 * 60 * 60 * 1000);

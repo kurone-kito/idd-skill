@@ -216,7 +216,7 @@
         ".github/instructions/idd-overview-core.instructions.md",
         ".github/instructions/idd-pre-merge.instructions.md"
       ],
-      "limitBytes": 107300
+      "limitBytes": 109600
     }
   ],
   "docBudgetGuard": {

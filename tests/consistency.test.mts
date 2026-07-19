@@ -533,6 +533,9 @@ test('policy normalization provides default-safe values and supports aliases', (
       blockedByHumanLabelName: 'status:blocked-by-human',
       needsDecisionLabelName: 'status:needs-decision',
     },
+    mergeGate: {
+      soloCodeownerAdminFallback: 'auto-admin-retry',
+    },
   });
 
   const defaultPolicy = normalizePolicyConfig(null);
@@ -618,6 +621,9 @@ test('policy normalization provides default-safe values and supports aliases', (
         blockedByHumanLabelName: 'blocked:human',
         needsDecisionLabelName: 'needs:decision',
       },
+      mergeGate: {
+        soloCodeownerAdminFallback: 'hold-and-report',
+      },
     }),
     {
       issueScope: 'orphan-first',
@@ -690,6 +696,9 @@ test('policy normalization provides default-safe values and supports aliases', (
         roadmapLabelName: 'epic',
         blockedByHumanLabelName: 'blocked:human',
         needsDecisionLabelName: 'needs:decision',
+      },
+      mergeGate: {
+        soloCodeownerAdminFallback: 'hold-and-report',
       },
     },
   );

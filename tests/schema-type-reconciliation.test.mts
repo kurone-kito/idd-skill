@@ -232,6 +232,9 @@ interface PolicyConfigFile {
     blockedByHumanLabelName?: string;
     needsDecisionLabelName?: string;
   };
+  mergeGate?: {
+    soloCodeownerAdminFallback?: 'auto-admin-retry' | 'hold-and-report';
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -326,6 +329,7 @@ export const iddMergeExecuteKeys = [
   'mergeCommand',
   'merged',
   'mergeResult',
+  'adminFallbackUsed',
 ] as const satisfies readonly (keyof IddMergeExecuteVerdict)[];
 
 export const iddRoadmapAuditExecuteKeys = [
@@ -414,6 +418,7 @@ export const policyConfigKeys = [
   'autopilotSuitability',
   'worktreeGuard',
   'labels',
+  'mergeGate',
 ] as const satisfies readonly (keyof PolicyConfigFile)[];
 
 // PreMergeReadinessReport is index-signature typed (its summary builder
@@ -733,6 +738,7 @@ const iddMergeExecuteFixture = {
     'gh pr merge 994 --merge --match-head-commit 0123456789abcdef0123456789abcdef01234567',
   merged: false,
   mergeResult: '',
+  adminFallbackUsed: false,
 } satisfies IddMergeExecuteVerdict;
 
 const iddRoadmapAuditExecuteFixture = {
@@ -847,6 +853,7 @@ const policyConfigFixture = {
     blockedByHumanLabelName: 'status:blocked-by-human',
     needsDecisionLabelName: 'status:needs-decision',
   },
+  mergeGate: { soloCodeownerAdminFallback: 'auto-admin-retry' },
 } satisfies PolicyConfigFile;
 
 const preMergeReadinessFixture = {
@@ -943,6 +950,8 @@ const preMergeReadinessFixture = {
       bypassMode: 'none',
       currentUserCanBypass: 'never',
       rulesetBypassUnreadable: false,
+      prAuthorIsSoleEligibleCodeowner: false,
+      codeownerEligibilityUnreadable: false,
     },
     humanChangesRequestedCount: 0,
     blockingChangesRequestedLogins: [],
