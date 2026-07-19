@@ -314,7 +314,8 @@ generated pair rather than a third _kind_ of surface:
   proposes; a future follow-up could investigate a mechanical
   semantic-parity check, but this design does not assume one exists.
 
-**Status (scaffolding live).** [#1541](https://github.com/kurone-kito/idd-skill/issues/1541)
+**Status (scaffolding live).**
+[#1541](https://github.com/kurone-kito/idd-skill/issues/1541)
 wired the audit surface before any lite content exists:
 
 - `fileSets` entry `idd-lite-instruction-template-set` —
@@ -341,7 +342,8 @@ pass. Titles and one-line scopes only — filing them is out of scope for
 this design issue.
 
 - **~~Wire sync-manifest drift control for lite instruction files~~** —
-  **done in [#1541](https://github.com/kurone-kito/idd-skill/issues/1541)**
+  **done in**
+  [#1541](https://github.com/kurone-kito/idd-skill/issues/1541)
   (see [Drift control](#drift-control) status note). The `fileSets` and
   `bundle-work-lite` scaffolding is live; per-file `syncPairs` still
   arrive with each later content track.
