@@ -919,10 +919,14 @@ Interpretation rules:
   same-`claim-id` reacquire that writes nothing, or an authorized
   `--takeover` override — disambiguated by the optional `reacquired` /
   `forcedTakeover` boolean fields) or `collision` (a different `claim-id`
-  already holds the lock — retry with `--takeover` only after
+  already holds the lock, or the existing path is malformed/unreadable —
+  retry with `--takeover` only after
   `resume-claim-routing.mjs --fresh-claim-gate` authorizes it). A `holder`
   snapshot of the previous occupant is reported on **both** a plain
   `collision` and an authorized takeover, not only on takeover.
+- The `--acquire` CLI exits `0` only for `acquired` and exits `2` for
+  `collision`, so a hook can safely chain installation or another mutation
+  with `&&`; `--check` remains read-only and exits `0` for a reported state.
 - `--check` reports `{ path, present, holder?, malformed? }` read-only,
   never creating, mutating, or deleting the lock; `malformed: true` means
   a lock file exists but could not be parsed as a well-formed lock body
@@ -930,7 +934,7 @@ Interpretation rules:
   the process invoking this CLI exits the moment the call returns, so a
   recorded PID would never usefully represent a live competing session.
   the configured GitHub `claim-stale-age` stays the sole staleness authority; this
-  lock only ever reports `collision` or acquires
+  lock only ever reports `collision` or acquires.
 - No explicit release verb: the lock lives inside the worktree's own
   private git-admin directory (`git rev-parse --absolute-git-dir`), so
   `git worktree remove` at F4 deletes it together with the worktree

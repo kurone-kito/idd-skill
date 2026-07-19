@@ -153,15 +153,18 @@ manual lock-then-install path above.
 For the `instructions-only` profile, which has no helper runtime, use
 this helper-free fallback before the first mutation. Resolve the private
 admin directory with `git -C <worktree> rev-parse --absolute-git-dir`,
-then atomically create an `idd-claim.lock.manual` directory there with
-`mkdir` (or the platform-equivalent exclusive directory-create API).
-If creation reports that the directory already exists, treat it as a
-collision. After creation, write a small `holder.json` containing the
-current `{agent-id}` and `{claim-id}` inside the directory. A matching
-holder may re-acquire; a missing or malformed holder is a collision.
-The manual path must never delete or override a different holder: stop
-and enable a helper runtime for an authorized takeover. Removing the
-worktree at F4 removes this directory with its private admin directory.
+then atomically create an `idd-claim.lock` file there with an exclusive
+file-create API (`open(..., O_CREAT|O_EXCL)` on POSIX, or the platform
+equivalent such as PowerShell `FileMode.CreateNew`). Write the same JSON
+holder shape used by the helper (`agentId`, `claimId`, and `acquiredAt`)
+to that file. If creation reports that the path already exists, treat it
+as a collision. A matching holder may re-acquire; a missing, malformed,
+or unreadable holder is a collision. The manual path must never delete or
+override a different holder: stop and enable a helper runtime for an
+authorized takeover. Because both profiles use `idd-claim.lock`, a
+helper-runtime session and an instructions-only session share one local
+lock namespace. Removing the worktree at F4 removes this file with its
+private admin directory.
 
 **Step 3 — Install deps**: after worktree creation, ensure dependencies
 are installed:

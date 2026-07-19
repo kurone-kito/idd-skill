@@ -380,6 +380,9 @@ function runCli(): void {
     args.takeover,
   );
   process.stdout.write(`${JSON.stringify(outcome)}\n`);
+  if (outcome.mode === 'collision') {
+    process.exitCode = 2;
+  }
 }
 
 function printHelp(): void {

@@ -61,10 +61,7 @@ function setupLinkedWorktree(): { primary: string; worktree: string } {
   git(primary, ['init', '-b', 'main']);
   git(primary, ['config', 'user.email', 'test@example.com']);
   git(primary, ['config', 'user.name', 'Test']);
-  execFileSync('sh', ['-c', 'echo seed > seed.txt'], {
-    cwd: primary,
-    env: fixtureEnv(),
-  });
+  writeFileSync(join(primary, 'seed.txt'), 'seed\n');
   git(primary, ['add', 'seed.txt']);
   git(primary, ['commit', '-m', 'seed']);
 
@@ -312,6 +309,39 @@ test('acquire: a malformed lock body is treated as a collision, never silently o
     );
     assert.equal(takeover.mode, 'acquired');
     assert.equal(takeover.forcedTakeover, true);
+  } finally {
+    teardown(fixture);
+  }
+});
+
+test('CLI: acquire collision exits non-zero after printing the collision outcome', async () => {
+  const fixture = setupLinkedWorktree();
+  try {
+    const first = acquireClaimLock(
+      fixture.worktree,
+      'agent-a',
+      'claim-a',
+      false,
+    );
+    assert.equal(first.mode, 'acquired');
+
+    await assert.rejects(
+      execFileAsync(process.execPath, [
+        CLI_PATH,
+        '--acquire',
+        '--worktree',
+        fixture.worktree,
+        '--agent-id',
+        'agent-b',
+        '--claim-id',
+        'claim-b',
+      ]),
+      (error: NodeJS.ErrnoException & { stdout?: string }) => {
+        assert.equal(error.code, 2);
+        assert.equal(JSON.parse(error.stdout ?? '').mode, 'collision');
+        return true;
+      },
+    );
   } finally {
     teardown(fixture);
   }
