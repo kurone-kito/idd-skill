@@ -55,9 +55,9 @@ When **trigger (a)** (zero A3.5-reaching candidates) and the orphan
 fallback both yield nothing, discovery lands in the A3 decision tree,
 exactly as the zero-reach-A3.5 case did before. **Trigger (b)** instead
 reports and stops (not an abort): roadmap candidates reached A4, so the
-A3 tree's A2/A3-empty reports would misdescribe the exhaustion. The
-fallback is also scoped to roadmap traversal (A2→A3→A4) — the A0-T
-explicit-target gate keeps its own no-fallback stop.
+A3 tree's A2/A3-empty reports would misdescribe the exhaustion.
+Triggers (a) and (b) are scoped to roadmap traversal (A2→A3→A4) — the
+A0-T explicit-target gate keeps its own no-fallback stop.
 
 **Trigger (c)** closes a third gap, one step earlier than (a)/(b):
 triggers (a) and (b) both presuppose A1 already found a roadmap to
