@@ -52,14 +52,15 @@ request, or other GitHub side effect, confirm all of the following:
    path with the profile-selected `claim-lock` helper before reuse or removal.
 7. If the claim-lock check collides, stop.
 8. If `git worktree list --porcelain` marks the entry `prunable` and its path
-   is already absent, remove that stale entry and continue.
+   is already absent, remove that stale entry with `git worktree remove --force
+   <path-from-list>` and continue.
 9. If the target path exists but is not listed in `git worktree list`, stop for
    manual cleanup.
 10. Create the sibling worktree at `../<repo-name>.<normalized-branch>`.
 11. Define `normalized-branch` as the branch name with each `/` replaced by
     `-`.
 12. Use WorkTrunk if available.
-13. In automation, use the current `wt switch --create` verb.
+13. In automation, use `wt switch --create -x true`.
 14. Do not use `wt new`.
 15. If WorkTrunk uses a pre-start install hook, its first command must acquire
     the worktree lock before it installs anything.
@@ -69,9 +70,9 @@ request, or other GitHub side effect, confirm all of the following:
 18. If WorkTrunk is unavailable and this is a takeover, use `git worktree add
     <path> <branch-name>` with the local branch.
 19. If WorkTrunk is unavailable and only the remote branch exists, run `git
-    fetch origin <branch>`.
+    fetch origin <branch-name>`.
 20. If WorkTrunk is unavailable and only the remote branch exists, use `git
-    worktree add <path> -b <branch-name> origin/<branch>`.
+    worktree add <path> -b <branch-name> origin/<branch-name>`.
 21. For manual `git worktree add` or WorkTrunk without a hook, acquire the
     worktree lock with the profile-selected `claim-lock` helper immediately
     after creation and before any install or other mutation.
