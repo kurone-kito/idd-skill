@@ -120,6 +120,23 @@ When a lightweight-tier model runs any part of this loop:
   profile, following the documented Markdown / `gh` / `jq` procedure
   directly is the normal, supported path for this tier too, not a stop
   condition.
+- Narrow the question before adding judges: when a weak model has to
+  judge semantic quality, ask a narrow, falsifiable check instead of an
+  open-ended review. The failure mode is correlated bias, not
+  independent noise, so majority voting does not repair it; keep the
+  result advisory, not veto-bearing.
+- Parse structured output leniently with a bounded retry: for fixed
+  formats, strip common Markdown wrappers, require at least one
+  discriminating field, normalize and de-duplicate the results, and
+  retry once with a short example before treating the attempt as failed.
+  This applies only to weak-model output readers and does not change the
+  byte-exact marker verification used for published IDD markers.
+- See the condensed execution-loop instruction profile roadmap
+  (`docs/weak-model-lite-profile-design.md`, #1539) for the E9-E15
+  upstream-triage boundary; the E4 narrow-rubric result is recorded
+  there as future nuance, not as a scope change here. This note does not
+  change #909/#1342 or `idd-review-triage.instructions.md`'s
+  lite-profile exclusion.
 - Do not run the autonomous merge phases (F3 onward) on this tier. See
   the merge-policy recommendation for weak-model sessions at
   <https://github.com/kurone-kito/idd-skill/blob/main/idd-template/docs/onboarding/policy-decisions.md#merge-policy>.
