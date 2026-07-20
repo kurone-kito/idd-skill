@@ -38,8 +38,9 @@ request, or other GitHub side effect, confirm all of the following:
 
 ## B1 — Create worktree
 
-1. On the primary worktree, fetch `origin/main` and confirm local `main` has
-   no unpushed commits. If it does, stop.
+1. On the primary worktree, fetch `origin/main`, confirm local `main` has no
+   unpushed commits, then fast-forward it with `git merge --ff-only
+   origin/main`. If local `main` has unpushed commits, stop.
 2. Reuse the existing branch name verbatim for takeover. Do not invent a new
    slug.
 3. If a local branch or sibling worktree already exists, treat it as inheritable
@@ -87,8 +88,9 @@ request, or other GitHub side effect, confirm all of the following:
 6. If `fix-validate` changes files, stage and commit them before continuing.
 7. If validation fails in files this diff did not touch, suspect baseline drift
    or a stale install before blaming the change.
-8. If a touched test fails once locally but passes in isolation while hosted CI
-   is green, trust the hosted result and stop chasing it as a regression.
+8. If a test this diff did not touch fails once locally but passes in isolation
+   while hosted CI is green, trust the hosted result and stop chasing it as a
+   regression.
 9. If B3 or C must stop for a hold, post the hold reason, update the digest,
    and stop.
 
