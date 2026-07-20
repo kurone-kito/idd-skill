@@ -55,13 +55,14 @@ request, or other GitHub side effect, confirm all of the following:
    manual cleanup.
 5. Create the sibling worktree at `../<repo-name>.<normalized-branch>`, where
    `normalized-branch` replaces each `/` in the branch name with `-`.
-6. Use WorkTrunk if available. In automation, make it exit cleanly (for example
-   `-x true`). If WorkTrunk uses a pre-start install hook, that hook's first
-   command must acquire the worktree lock before it installs anything; if it
-   cannot, create the worktree without the hook and use the manual lock-then-
-   install path below. If WorkTrunk is unavailable, use `git worktree add` with
-   `origin/main` for a fresh claim, the local branch for a takeover, or
-   `origin/<branch>` when only the remote branch exists.
+6. Use WorkTrunk if available. In automation, use the current `wt switch
+   --create` verb and make it exit cleanly (for example `-x true`); do not use
+   the removed `wt new` subcommand. If WorkTrunk uses a pre-start install hook,
+   that hook's first command must acquire the worktree lock before it installs
+   anything; if it cannot, create the worktree without the hook and use the
+   manual lock-then-install path below. If WorkTrunk is unavailable, use `git
+   worktree add` with `origin/main` for a fresh claim, the local branch for a
+   takeover, or `origin/<branch>` when only the remote branch exists.
 7. For manual `git worktree add` or WorkTrunk without a hook, acquire the
    worktree lock with the profile-selected `claim-lock` helper immediately
    after creation and before any install or other mutation.
