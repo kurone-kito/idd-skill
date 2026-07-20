@@ -41,38 +41,39 @@ request, or other GitHub side effect, confirm all of the following:
 1. On the primary worktree, run `git fetch origin main`.
 2. On the primary worktree, confirm local `main` has no unpushed commits.
 3. Fast-forward local `main` with `git merge --ff-only origin/main`.
-4. Reuse the existing branch name verbatim for takeover.
-5. If a local branch or sibling worktree already exists, inspect that exact
+4. Keep the primary worktree on `main` throughout B1.
+5. Reuse the existing branch name verbatim for takeover.
+6. If a local branch or sibling worktree already exists, inspect that exact
    path with the profile-selected `claim-lock` helper before reuse or removal.
-6. If the claim-lock check collides, stop.
-7. If `git worktree list --porcelain` marks the entry `prunable` and its path
+7. If the claim-lock check collides, stop.
+8. If `git worktree list --porcelain` marks the entry `prunable` and its path
    is already absent, remove that stale entry and continue.
-8. If the target path exists but is not listed in `git worktree list`, stop for
+9. If the target path exists but is not listed in `git worktree list`, stop for
    manual cleanup.
-9. Create the sibling worktree at `../<repo-name>.<normalized-branch>`.
-10. Define `normalized-branch` as the branch name with each `/` replaced by
+10. Create the sibling worktree at `../<repo-name>.<normalized-branch>`.
+11. Define `normalized-branch` as the branch name with each `/` replaced by
     `-`.
-11. Use WorkTrunk if available.
-12. In automation, use the current `wt switch --create` verb.
-13. Do not use `wt new`.
-14. If WorkTrunk uses a pre-start install hook, its first command must acquire
+12. Use WorkTrunk if available.
+13. In automation, use the current `wt switch --create` verb.
+14. Do not use `wt new`.
+15. If WorkTrunk uses a pre-start install hook, its first command must acquire
     the worktree lock before it installs anything.
-15. If the hook cannot acquire the lock, create the worktree without the hook.
-16. If WorkTrunk is unavailable, use `git worktree add` with `origin/main` for
-    a fresh claim.
-17. If WorkTrunk is unavailable and this is a takeover, use `git worktree add`
-    with the local branch.
-18. If WorkTrunk is unavailable and only the remote branch exists, run
-    `git fetch origin <branch>`.
-19. If WorkTrunk is unavailable and only the remote branch exists, use `git
-    worktree add` with `origin/<branch>`.
-20. For manual `git worktree add` or WorkTrunk without a hook, acquire the
+16. If the hook cannot acquire the lock, create the worktree without the hook.
+17. If WorkTrunk is unavailable, use `git worktree add <path> -b <branch-name>
+    origin/main` for a fresh claim.
+18. If WorkTrunk is unavailable and this is a takeover, use `git worktree add
+    <path> <branch-name>` with the local branch.
+19. If WorkTrunk is unavailable and only the remote branch exists, run `git
+    fetch origin <branch>`.
+20. If WorkTrunk is unavailable and only the remote branch exists, use `git
+    worktree add <path> -b <branch-name> origin/<branch>`.
+21. For manual `git worktree add` or WorkTrunk without a hook, acquire the
     worktree lock with the profile-selected `claim-lock` helper immediately
     after creation and before any install or other mutation.
-21. Run `install-deps` on the manual/no-hook path.
-22. Verify `main` still points to `main`.
-23. Verify `git worktree list` shows the new path.
-24. Verify the current directory is the new sibling worktree.
+22. Run `install-deps` on the manual/no-hook path.
+23. Verify the primary worktree's HEAD is still on `main`.
+24. Verify `git worktree list` shows the new path.
+25. Verify the current directory is the new sibling worktree.
 
 ## B2 — Create and refine plan
 
