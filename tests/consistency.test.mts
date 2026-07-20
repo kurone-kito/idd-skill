@@ -487,6 +487,7 @@ test('policy normalization provides default-safe values and supports aliases', (
       allowCollaboratorMarkers: false,
     },
     advisoryWait: {
+      convergenceScope: 'all-prs',
       requestCap: 30,
       pendingWindow: 'PT30M',
       settledWindow: 'PT10M',
@@ -575,6 +576,7 @@ test('policy normalization provides default-safe values and supports aliases', (
       'forced-handoff-authority': 'all-write-permission-actors',
       markerTrustAllowCollaboratorMarkers: true,
       advisoryWait: {
+        convergenceScope: 'all-prs',
         requestCap: 5,
         pendingWindow: 'PT40M',
         settledWindow: 'PT11M',
@@ -651,6 +653,7 @@ test('policy normalization provides default-safe values and supports aliases', (
         allowCollaboratorMarkers: true,
       },
       advisoryWait: {
+        convergenceScope: 'all-prs',
         requestCap: 5,
         pendingWindow: 'PT40M',
         settledWindow: 'PT11M',
@@ -749,6 +752,7 @@ test('policy normalization provides default-safe values and supports aliases', (
       },
     }).advisoryWait,
     {
+      convergenceScope: 'all-prs',
       requestCap: 30,
       pendingWindow: 'PT30M',
       settledWindow: 'PT10M',

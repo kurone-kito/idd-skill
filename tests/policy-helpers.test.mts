@@ -31,6 +31,26 @@ test('issueScope defaults to roadmap-first and accepts all values', () => {
   );
 });
 
+test('advisoryWait.convergenceScope defaults to all-prs and accepts idd-claimed', () => {
+  assert.equal(POLICY_DEFAULTS.advisoryWait.convergenceScope, 'all-prs');
+  assert.equal(
+    normalizePolicyConfig({}).advisoryWait.convergenceScope,
+    'all-prs',
+  );
+  assert.equal(
+    normalizePolicyConfig({
+      advisoryWait: { convergenceScope: 'idd-claimed' },
+    }).advisoryWait.convergenceScope,
+    'idd-claimed',
+  );
+  assert.equal(
+    normalizePolicyConfig({
+      advisoryWait: { convergenceScope: 'bogus' },
+    }).advisoryWait.convergenceScope,
+    'all-prs',
+  );
+});
+
 test('POLICY_DEFAULTS.labels exposes the three reserved label name defaults', () => {
   // Additive only (#1272): POLICY_DEFAULTS carries the literal defaults,
   // and normalizePolicyConfig normalizes this namespace too (for shape

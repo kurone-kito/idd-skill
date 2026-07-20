@@ -5,6 +5,11 @@
   "prHeadSha": "",
   "now": "2026-07-11T12:00:00Z",
   "primaryBotLogin": "copilot",
+  "applicability": {
+    "scope": "all-prs",
+    "status": "applicable",
+    "reason": "all-prs"
+  },
   "review": {
     "found": false,
     "commitId": "",
