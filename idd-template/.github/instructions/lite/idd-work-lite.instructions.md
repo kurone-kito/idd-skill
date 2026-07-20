@@ -43,13 +43,15 @@ request, or other GitHub side effect, confirm all of the following:
 3. Fast-forward local `main` with `git merge --ff-only origin/main`.
 4. Keep the primary worktree on `main` throughout B1.
 5. Reuse the existing branch name verbatim for takeover.
-6. If a sibling worktree already exists, inspect that exact path with the
-   profile-selected `claim-lock` helper before reuse or removal.
+6. Run `git worktree list` (and `git worktree list --porcelain` when checking
+   prunable entries). If a sibling worktree already exists, inspect that exact
+   path with the profile-selected `claim-lock` helper before reuse or removal.
 7. Run `git branch --list {branch-name}`. If the branch exists locally, reuse it
    only when it is an inheritable takeover branch; otherwise delete it with
    `git branch -d {branch-name}`.
 8. If deletion is refused, check whether a remote branch or open PR exists for
-   this branch. If not, stop for manual cleanup.
+   this branch. If so, treat it as inheritable and reuse it. If not, stop for
+   manual cleanup.
 9. If `git worktree list --porcelain` marks the entry `prunable` and its path
    is already absent, remove that stale entry with `git worktree remove --force
     <path-from-list>` and continue.
@@ -59,7 +61,7 @@ request, or other GitHub side effect, confirm all of the following:
 12. Define `normalized-branch` as the branch name with each `/` replaced by
     `-`.
 13. Use WorkTrunk if available.
-14. In automation, use `wt switch --create -x true`.
+14. In automation, use `wt switch --create -b main <branch-name> -x true`.
 15. Do not use `wt new`.
 16. If WorkTrunk uses a pre-start install hook, its first command must acquire
     the worktree lock before it installs anything.
@@ -113,8 +115,8 @@ hold until a maintainer addendum resolves it.
 2. If code already landed before that checkpoint was noticed, disclose the
    ordering deviation on the issue.
 3. Post the plan retroactively.
-4. Critique the completed diff.
-5. Implement the plan.
+4. Implement the plan.
+5. Critique the completed diff.
 6. Run `fix-validate` before each commit.
 7. Keep commits atomic.
 8. If `fix-validate` changes files, stage and commit them before continuing.
@@ -140,10 +142,11 @@ hold until a maintainer addendum resolves it.
 
 ### C2 — Check for issues
 
-1. If the critique pass reports zero issues, check the `fix-validate` floor.
-2. If the critique pass reports one or more issues, continue to C3.
+1. If the critique pass reports one or more issues, continue to C3.
+2. Otherwise, if the critique pass reports zero issues, check the `fix-validate`
+   floor.
 3. If the floor has not passed, continue to C5 to repair validation.
-4. If the floor has passed, skip to `idd-pr-submit.instructions.md`.
+4. If the floor has passed, read `idd-pr-submit.instructions.md` next.
 
 ### C3 — Score issues
 
@@ -155,10 +158,10 @@ hold until a maintainer addendum resolves it.
 
 1. Accept high issues.
 2. If accepted issues remain and the floor has not passed, continue to C5.
-3. If no accepted issues remain and the floor has passed, skip to
-   `idd-pr-submit.instructions.md`.
-4. If only low accepted issues remain after 3 loops and the floor has passed,
-   skip to `idd-pr-submit.instructions.md`.
+3. Otherwise, if no accepted issues remain and the floor has passed, read
+   `idd-pr-submit.instructions.md` next.
+4. Otherwise, if only low accepted issues remain after 3 loops and the floor
+   has passed, read `idd-pr-submit.instructions.md` next.
 5. Otherwise continue to C5.
 
 ### C5 — Fix accepted issues
