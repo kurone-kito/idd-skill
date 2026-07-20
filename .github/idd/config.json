@@ -30,6 +30,9 @@
   },
   "issueScope": "roadmap-first",
   "orphanFirstPolicy": "none",
+  "advisoryWait": {
+    "convergenceScope": "idd-claimed"
+  },
   "discover": {
     "selectionDesync": "session-offset"
   },
