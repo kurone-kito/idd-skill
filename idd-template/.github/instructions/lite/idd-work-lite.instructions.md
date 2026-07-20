@@ -38,51 +38,56 @@ request, or other GitHub side effect, confirm all of the following:
 
 ## B1 — Create worktree
 
-1. On the primary worktree, fetch `origin/main`, confirm local `main` has no
-   unpushed commits, then fast-forward it with `git merge --ff-only
-   origin/main`. Keep the primary worktree on `main` throughout B1. If local
-   `main` has unpushed commits, stop.
-2. Reuse the existing branch name verbatim for takeover. Do not invent a new
-   slug.
-3. If a local branch or sibling worktree already exists, treat it as inheritable
-   only when the claim state or remote PR state says so. Before reusing or
-   removing the existing worktree, inspect that exact path with the profile-
-   selected `claim-lock` helper and stop on collision. If it is an unexpected
-   leftover, remove it only after confirming no remote branch or open PR is tied
-   to it. If `git worktree list --porcelain` marks the entry `prunable` and its
-   path is already absent, remove that stale entry and continue.
-4. If the target path exists but is not listed in `git worktree list`, stop for
+1. On the primary worktree, run `git fetch origin main`.
+2. On the primary worktree, confirm local `main` has no unpushed commits.
+3. Fast-forward local `main` with `git merge --ff-only origin/main`.
+4. Reuse the existing branch name verbatim for takeover.
+5. If a local branch or sibling worktree already exists, inspect that exact
+   path with the profile-selected `claim-lock` helper before reuse or removal.
+6. If the claim-lock check collides, stop.
+7. If `git worktree list --porcelain` marks the entry `prunable` and its path
+   is already absent, remove that stale entry and continue.
+8. If the target path exists but is not listed in `git worktree list`, stop for
    manual cleanup.
-5. Create the sibling worktree at `../<repo-name>.<normalized-branch>`, where
-   `normalized-branch` replaces each `/` in the branch name with `-`.
-6. Use WorkTrunk if available. In automation, use the current `wt switch
-   --create` verb and make it exit cleanly (for example `-x true`); do not use
-   the removed `wt new` subcommand. If WorkTrunk uses a pre-start install hook,
-   that hook's first command must acquire the worktree lock before it installs
-   anything; if it cannot, create the worktree without the hook and use the
-   manual lock-then-install path below. If WorkTrunk is unavailable, use `git
-   worktree add` with `origin/main` for a fresh claim, the local branch for a
-   takeover, or `origin/<branch>` when only the remote branch exists.
-7. For manual `git worktree add` or WorkTrunk without a hook, acquire the
-   worktree lock with the profile-selected `claim-lock` helper immediately
-   after creation and before any install or other mutation.
-8. Run `install-deps` on the manual/no-hook path.
-9. Verify `main` still points to `main`, `git worktree list` shows the new
-   path, and the current directory is the new sibling worktree.
+9. Create the sibling worktree at `../<repo-name>.<normalized-branch>`.
+10. Define `normalized-branch` as the branch name with each `/` replaced by
+    `-`.
+11. Use WorkTrunk if available.
+12. In automation, use the current `wt switch --create` verb.
+13. Do not use `wt new`.
+14. If WorkTrunk uses a pre-start install hook, its first command must acquire
+    the worktree lock before it installs anything.
+15. If the hook cannot acquire the lock, create the worktree without the hook.
+16. If WorkTrunk is unavailable, use `git worktree add` with `origin/main` for
+    a fresh claim.
+17. If WorkTrunk is unavailable and this is a takeover, use `git worktree add`
+    with the local branch.
+18. If WorkTrunk is unavailable and only the remote branch exists, run
+    `git fetch origin <branch>`.
+19. If WorkTrunk is unavailable and only the remote branch exists, use `git
+    worktree add` with `origin/<branch>`.
+20. For manual `git worktree add` or WorkTrunk without a hook, acquire the
+    worktree lock with the profile-selected `claim-lock` helper immediately
+    after creation and before any install or other mutation.
+21. Run `install-deps` on the manual/no-hook path.
+22. Verify `main` still points to `main`.
+23. Verify `git worktree list` shows the new path.
+24. Verify the current directory is the new sibling worktree.
 
 ## B2 — Create and refine plan
 
-1. Fetch `origin/main`.
-2. Re-read the issue and do the cheap supersession check before drafting code:
-   if a merged PR already closed the issue, stop; if a merged PR since the claim
-   time already touched a scoped candidate file, verify the acceptance criteria
-   on current `main`, then close the issue with a comment referencing the
-   superseding PR when they already hold.
-3. Draft an issue comment plan for the exact change set.
-4. Run a critique pass on the plan.
-5. Post the refined final plan as a follow-up or update to the same issue
+1. Run `git fetch origin main`.
+2. Re-read the issue and do the cheap supersession check.
+3. If a merged PR already closed the issue, stop.
+4. If a merged PR since the claim time already touched a scoped candidate file,
+   verify the acceptance criteria on current `main`.
+5. If the criteria already hold, close the issue with a comment referencing the
+   superseding PR.
+6. Draft an issue comment plan for the exact change set.
+7. Run a critique pass on the plan.
+8. Post the refined final plan as a follow-up or update to the same issue
    comment.
-6. After the final plan comment, update the live status digest to `B2 planned`,
+9. After the final plan comment, update the live status digest to `B2 planned`,
    `Open blockers: none` unless the plan found a blocker, `Next action: B3
    implement`, and `Authoritative by` pointing at the claim and plan comment.
 
@@ -91,57 +96,67 @@ request, or other GitHub side effect, confirm all of the following:
 1. Before the first implementation edit, confirm the final B2 plan comment
    exists on the issue.
 2. If code already landed before that checkpoint was noticed, disclose the
-   ordering deviation on the issue, post the plan retroactively, and critique
-   the completed diff.
-3. Implement the plan.
-4. Run `fix-validate` before each commit.
-5. Keep commits atomic.
-6. If `fix-validate` changes files, stage and commit them before continuing.
-7. If validation fails in files this diff did not touch, suspect baseline drift
-   or a stale install before blaming the change.
-8. If a test this diff did not touch fails once locally but passes in isolation
-   while hosted CI is green, trust the hosted result and stop chasing it as a
-   regression.
-9. If B3 or C must stop for a hold, post the hold reason, update the digest,
-   and stop.
+   ordering deviation on the issue.
+3. Post the plan retroactively.
+4. Critique the completed diff.
+5. Implement the plan.
+6. Run `fix-validate` before each commit.
+7. Keep commits atomic.
+8. If `fix-validate` changes files, stage and commit them before continuing.
+9. If validation fails in files this diff did not touch, suspect baseline
+   drift or a stale install before blaming the change.
+10. If a test this diff did not touch fails once locally but passes in
+    isolation while hosted CI is green, trust the hosted result and stop
+    chasing it as a regression.
+11. When consolidating a wrapper function used at multiple call sites into one
+    shared function, check whether any call site's old delegate path added
+    options or behavior the shared function does not replicate.
+12. If B3 or C must stop for a hold, post the hold reason, update the digest,
+    and stop.
 
 ## C — Self-review
 
 ### C1 — Critique pass
 
-Run a critique pass on the branch diff. Ask whether the implementation is
-correct, whether the issue's requirements are satisfied, whether coverage is
-adequate, and whether any other problems exist.
+1. Run a critique pass on the branch diff.
+2. Ask whether the implementation is correct, whether the issue's requirements
+   are satisfied, whether coverage is adequate, and whether any other problems
+   exist.
 
 ### C2 — Check for issues
 
-If the critique pass reports zero issues and the `fix-validate` floor has
-passed, skip to `idd-pr-submit.instructions.md`. If it reports zero issues and
-the floor has not passed, continue to C5. If it reports one or more issues,
-continue to C3.
+1. If the critique pass reports zero issues, check the `fix-validate` floor.
+2. If the critique pass reports one or more issues, continue to C3.
+3. If the floor has not passed, continue to C5 to repair validation.
+4. If the floor has passed, skip to `idd-pr-submit.instructions.md`.
 
 ### C3 — Score issues
 
-- High: safety, correctness, requirement violations, CI stability.
-- Medium: judge by context.
-- Low: minor improvements unrelated to PR intent.
+1. Treat high issues as safety, correctness, requirement, or CI blockers.
+2. Treat medium issues by context.
+3. Treat low issues as minor improvements unrelated to PR intent.
 
 ### C4 — Accept / Reject and loop check
 
-- High issues are accepted.
-- If accepted issues remain and the floor has not passed, continue to C5.
-- If no accepted issues remain and the floor has passed, skip to
-  `idd-pr-submit.instructions.md`.
-- If only low accepted issues remain after 3 loops and the floor has passed,
-  skip to `idd-pr-submit.instructions.md`.
-- Otherwise continue to C5.
+1. Accept high issues.
+2. If accepted issues remain and the floor has not passed, continue to C5.
+3. If no accepted issues remain and the floor has passed, skip to
+   `idd-pr-submit.instructions.md`.
+4. If only low accepted issues remain after 3 loops and the floor has passed,
+   skip to `idd-pr-submit.instructions.md`.
+5. Otherwise continue to C5.
 
 ### C5 — Fix accepted issues
 
-Fix the accepted issues, then rerun `fix-validate`. If anything changed, commit
-atomically.
+1. Run `fix-validate`.
+2. If the floor still has not passed and there are no accepted issues, stop
+   and ask.
+3. Fix the accepted issues.
+4. Rerun `fix-validate`.
+5. If anything changed, commit atomically.
 
 ### C6 — Return to C1
 
-Repeat the critique loop until it is clean and the diff passes `fix-validate`.
-Do not widen scope into review triage or merge phases from this file.
+1. Repeat the critique loop until it is clean.
+2. Treat the low-issue three-loop exit as clean once the floor has passed.
+3. Do not widen scope into review triage or merge phases from this file.
