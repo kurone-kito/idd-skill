@@ -49,7 +49,8 @@ request, or other GitHub side effect, confirm all of the following:
    removing the existing worktree, inspect that exact path with the profile-
    selected `claim-lock` helper and stop on collision. If it is an unexpected
    leftover, remove it only after confirming no remote branch or open PR is tied
-   to it.
+   to it. If `git worktree list --porcelain` marks the entry `prunable` and its
+   path is already absent, remove that stale entry and continue.
 4. If the target path exists but is not listed in `git worktree list`, stop for
    manual cleanup.
 5. Create the sibling worktree at `../<repo-name>.<normalized-branch>`, where
@@ -70,7 +71,8 @@ request, or other GitHub side effect, confirm all of the following:
 2. Re-read the issue and do the cheap supersession check before drafting code:
    if a merged PR already closed the issue, stop; if a merged PR since the claim
    time already touched a scoped candidate file, verify the acceptance criteria
-   on current `main` and stop when they already hold.
+   on current `main`, then close the issue with a comment referencing the
+   superseding PR when they already hold.
 3. Draft an issue comment plan for the exact change set.
 4. Run a critique pass on the plan.
 5. Post the refined final plan as a follow-up or update to the same issue
@@ -109,7 +111,9 @@ adequate, and whether any other problems exist.
 ### C2 — Check for issues
 
 If the critique pass reports zero issues and the `fix-validate` floor has
-passed, continue. If it reports one or more issues, continue to C3.
+passed, skip to `idd-pr-submit.instructions.md`. If it reports zero issues and
+the floor has not passed, continue to C5. If it reports one or more issues,
+continue to C3.
 
 ### C3 — Score issues
 
@@ -121,9 +125,10 @@ passed, continue. If it reports one or more issues, continue to C3.
 
 - High issues are accepted.
 - If accepted issues remain and the floor has not passed, continue to C5.
-- If no accepted issues remain and the floor has passed, continue.
+- If no accepted issues remain and the floor has passed, skip to
+  `idd-pr-submit.instructions.md`.
 - If only low accepted issues remain after 3 loops and the floor has passed,
-  continue.
+  skip to `idd-pr-submit.instructions.md`.
 - Otherwise continue to C5.
 
 ### C5 — Fix accepted issues
