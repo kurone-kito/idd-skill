@@ -43,43 +43,48 @@ request, or other GitHub side effect, confirm all of the following:
 3. Fast-forward local `main` with `git merge --ff-only origin/main`.
 4. Keep the primary worktree on `main` throughout B1.
 5. Reuse the existing branch name verbatim for takeover.
-6. If a local branch or sibling worktree already exists, inspect that exact
-   path with the profile-selected `claim-lock` helper before reuse or removal.
-7. If the claim-lock check collides, stop.
-8. If `git worktree list --porcelain` marks the entry `prunable` and its path
+6. If a sibling worktree already exists, inspect that exact path with the
+   profile-selected `claim-lock` helper before reuse or removal.
+7. Run `git branch --list {branch-name}`. If the branch exists locally, reuse it
+   only when it is an inheritable takeover branch; otherwise delete it with
+   `git branch -d {branch-name}`.
+8. If deletion is refused, check whether a remote branch or open PR exists for
+   this branch. If not, stop for manual cleanup.
+9. If `git worktree list --porcelain` marks the entry `prunable` and its path
    is already absent, remove that stale entry with `git worktree remove --force
-   <path-from-list>` and continue.
-9. If the target path exists but is not listed in `git worktree list`, stop for
-   manual cleanup.
-10. Create the sibling worktree at `../<repo-name>.<normalized-branch>`.
-11. Define `normalized-branch` as the branch name with each `/` replaced by
+    <path-from-list>` and continue.
+10. If the target path exists but is not listed in `git worktree list`, stop for
+    manual cleanup.
+11. Create the sibling worktree at `../<repo-name>.<normalized-branch>`.
+12. Define `normalized-branch` as the branch name with each `/` replaced by
     `-`.
-12. Use WorkTrunk if available.
-13. In automation, use `wt switch --create -x true`.
-14. Do not use `wt new`.
-15. If WorkTrunk uses a pre-start install hook, its first command must acquire
+13. Use WorkTrunk if available.
+14. In automation, use `wt switch --create -x true`.
+15. Do not use `wt new`.
+16. If WorkTrunk uses a pre-start install hook, its first command must acquire
     the worktree lock before it installs anything.
-16. If the hook cannot acquire the lock, create the worktree without the hook.
-17. If WorkTrunk is unavailable, use `git worktree add <path> -b <branch-name>
-    origin/main` for a fresh claim.
-18. If WorkTrunk is unavailable and this is a takeover, use `git worktree add
-    <path> <branch-name>` with the local branch.
-19. If WorkTrunk is unavailable and only the remote branch exists, run `git
-    fetch origin <branch-name>`.
-20. If WorkTrunk is unavailable and only the remote branch exists, use `git
-    worktree add <path> -b <branch-name> origin/<branch-name>`.
-21. For manual `git worktree add` or WorkTrunk without a hook, acquire the
+17. If the hook cannot acquire the lock, create the worktree without the hook.
+18. If WorkTrunk is unavailable, use `git worktree add <path> -b <branch-name>
+     origin/main` for a fresh claim.
+19. If WorkTrunk is unavailable and this is a takeover, use `git worktree add
+     <path> <branch-name>` with the local branch.
+20. If WorkTrunk is unavailable and only the remote branch exists, run `git
+     fetch origin <branch-name>`.
+21. If WorkTrunk is unavailable and only the remote branch exists, use `git
+     worktree add <path> -b <branch-name> origin/<branch-name>`.
+22. For manual `git worktree add` or WorkTrunk without a hook, acquire the
     worktree lock with the profile-selected `claim-lock` helper immediately
     after creation and before any install or other mutation.
-22. Run `install-deps` on the manual/no-hook path.
-23. Verify the primary worktree's HEAD is still on `main`.
-24. Verify `git worktree list` shows the new path.
-25. Verify the current directory is the new sibling worktree.
+23. Run `install-deps` on the manual/no-hook path.
+24. Verify the primary worktree's HEAD is still on `main`.
+25. Verify `git worktree list` shows the new path.
+26. Verify the current directory is the new sibling worktree.
 
 ## B2 — Create and refine plan
 
 1. Run `git fetch origin main`.
-2. Re-read the issue and do the cheap supersession check.
+2. Re-read the issue and do the cheap supersession check. Treat a title-only
+   match as no hit.
 3. If a merged PR already closed the issue, stop.
 4. If a merged PR since the claim time already touched a scoped candidate file,
    verify the acceptance criteria on current `main`.
@@ -92,6 +97,14 @@ request, or other GitHub side effect, confirm all of the following:
 9. After the final plan comment, update the live status digest to `B2 planned`,
    `Open blockers: none` unless the plan found a blocker, `Next action: B3
    implement`, and `Authoritative by` pointing at the claim and plan comment.
+
+## B2.1 — Premise verification
+
+If the issue is a decision-transcription issue — it records or restates a prior
+human decision whose rationale asserts a checkable fact about shipped behavior —
+verify that fact against the prior change's actual code or docs before drafting
+the plan. If the prior change or the asserted fact cannot be verified, stop and
+hold until a maintainer addendum resolves it.
 
 ## B3 — Implement
 
