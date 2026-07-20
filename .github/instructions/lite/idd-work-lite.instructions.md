@@ -45,22 +45,26 @@ request, or other GitHub side effect, confirm all of the following:
 
 1. On the primary worktree, fetch `origin/main`, confirm local `main` has no
    unpushed commits, then fast-forward it with `git merge --ff-only
-   origin/main`. If local `main` has unpushed commits, stop.
+   origin/main`. Keep the primary worktree on `main` throughout B1. If local
+   `main` has unpushed commits, stop.
 2. Reuse the existing branch name verbatim for takeover. Do not invent a new
    slug.
 3. If a local branch or sibling worktree already exists, treat it as inheritable
-   only when the claim state or remote PR state says so. If it is an unexpected
+   only when the claim state or remote PR state says so. Before reusing or
+   removing the existing worktree, inspect that exact path with the profile-
+   selected `claim-lock` helper and stop on collision. If it is an unexpected
    leftover, remove it only after confirming no remote branch or open PR is tied
    to it.
 4. If the target path exists but is not listed in `git worktree list`, stop for
    manual cleanup.
-5. Create the sibling worktree at `../<repo-name>.<normalized-branch>`.
+5. Create the sibling worktree at `../<repo-name>.<normalized-branch>`, where
+   `normalized-branch` replaces each `/` in the branch name with `-`.
 6. Use WorkTrunk if available. In automation, make it exit cleanly (for example
    `-x true`). If WorkTrunk is unavailable, use `git worktree add` with
    `origin/main` for a fresh claim, the local branch for a takeover, or
    `origin/<branch>` when only the remote branch exists.
-7. Acquire the worktree lock immediately after creation and before any install
-   or other mutation.
+7. Acquire the worktree lock with the profile-selected `claim-lock` helper
+   immediately after creation and before any install or other mutation.
 8. Run `install-deps`.
 9. Verify `main` still points to `main`, `git worktree list` shows the new
    path, and the current directory is the new sibling worktree.
