@@ -529,19 +529,20 @@ Route based on `branchState` from the helper (or `mergeable` /
    commits).
 6. Return to `idd-review-snapshot.instructions.md` (E1).
 
-## Merge-main livelock under fast-moving main
+## Merge-main livelock under fast-moving `main`
 
 Under heavy concurrent-session load, `main` can advance again before
 one full {sync path → E1 → F1/F2} cycle finishes, re-triggering
 `behind-no-conflict` next pass; naive repetition never reaches F3.
 
-**Rule**: post the watermark as the **last** action before attempting
-the merge, every pass. Anything after it (a CI rerun settling, a new
-disposition reply, another `main` advance) re-stales it and the merge
-fails closed on `review-currency` regardless of CI color — re-post
-before retrying. Same CI-completion precondition as E1 Step 2
-(`idd-review-snapshot.instructions.md`); it is just easy to satisfy
-once early in a multi-pass loop and assume it still holds later.
+**Rule**: post the watermark as the **last** action before the F3
+`idd-merge-execute.mjs --apply` attempt, every pass. Anything after it
+(a CI rerun settling, a new disposition reply, another `main` advance)
+re-stales it and `--apply` fails closed on `review-currency`
+regardless of CI color — re-post before retrying. Same CI-completion
+precondition as E1 Step 2 (`idd-review-snapshot.instructions.md`); it
+is just easy to satisfy once early in a multi-pass loop and assume it
+still holds by the time `--apply` runs.
 
 ## Zero-Accepted-PATH-A advisory re-review gate
 
