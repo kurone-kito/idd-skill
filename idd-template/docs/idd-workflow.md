@@ -308,9 +308,11 @@ The F1-F2 and F2.5 rows cover a **partial** slice of their standard
 files only: the lite F1-F2 file covers just F1's read-only branch
 check and reading the `pre-merge-readiness` helper verdict, never the
 standard file's written prose fallback; the lite F2.5 file covers
-just the handoff-stop outcome, never autonomous-merge routing. Both
-still fall back to their standard file for the excluded sub-case
-within the same phase.
+just the handoff-stop outcome, never autonomous-merge routing.
+Neither falls back to the standard file for its excluded sub-case
+within the same phase — both instead treat that sub-case as a
+stop-and-ask condition (a broken/missing helper for F1-F2; anything
+but the handoff-stop outcome for F2.5).
 
 `idd-ci.instructions.md` and `idd-advisory-wait.instructions.md` are
 shared helper files, not phases of their own; a lite caller is meant
