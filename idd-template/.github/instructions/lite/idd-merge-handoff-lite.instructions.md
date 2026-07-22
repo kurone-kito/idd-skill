@@ -19,10 +19,23 @@ this profile regardless of policy. If the repository is
 
 ## Pre-mutation guard
 
-Before posting the handoff comment, confirm the active claim still
-uses this session's `{claim-id}`. If it is missing, released, or held
-by a different `{claim-id}` (even under the same agent id), the claim
-was lost — stop per the condition above without posting.
+Before posting the handoff comment, confirm all of the following:
+
+1. The active claim still uses this session's `{claim-id}`. If it is
+   missing, released, or held by a different `{claim-id}` (even under
+   the same agent id), the claim was lost — stop per the condition
+   above without posting.
+2. If this session posted an activation nonce for the current claim,
+   confirm it still wins (no later trusted marker for this claim id
+   won the tie-break instead).
+3. Acquire the worktree-local claim lock with the profile-selected
+   `claim-lock` helper (`node scripts/claim-lock.mjs --acquire
+   --worktree <this-worktree-path> --agent-id <id> --claim-id <id>`, or
+   the package-manager-profile `idd:claim-lock` command with the same
+   arguments — resolve the exact command from
+   `docs/idd-helper-scripts.md` if unsure). A `collision` result is
+   fail-closed: stop rather than proceed.
+4. If any check fails, stop.
 
 ## F2.5 — Draft and post the handoff comment
 
