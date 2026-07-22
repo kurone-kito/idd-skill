@@ -29,7 +29,6 @@ repository is `instructions-only`, use the standard work instructions instead.
 - The claim-lock helper reports a collision (a different claim id already
   holds the worktree lock).
 - The worktree is dirty and ownership is unclear.
-- The final B2 plan comment does not exist before B3.
 - Multiple PRs match the claim branch.
 
 ## Pre-mutation guard
@@ -50,7 +49,10 @@ request, or other GitHub side effect, confirm all of the following:
 3. If step 2 outputs any lines, stop and report: local `main` has unpushed
    commits. Do not force-reset `main`.
 4. Fast-forward local `main` with `git merge --ff-only origin/main`.
-5. Keep the primary worktree on `main` throughout B1.
+5. Keep the primary worktree on `main` throughout B1. Do not use
+   `git switch -c <branch-name>`, `git checkout -b <branch-name>`, or a
+   standalone `git branch <branch-name>` followed by in-place commits in the
+   primary worktree — each of these violates this rule.
 6. Reuse the existing branch name verbatim for takeover.
 7. Run `git worktree list` (and `git worktree list --porcelain` when checking
    prunable entries). If a sibling worktree already exists, inspect that exact
@@ -62,10 +64,10 @@ request, or other GitHub side effect, confirm all of the following:
    only when it is an inheritable takeover branch; otherwise delete it with
    `git branch -d {branch-name}`.
 10. If deletion is refused, check whether a remote branch or open PR exists for
-    this branch. If so, treat it as inheritable and reuse it. If not, stop for
-    manual cleanup.
-11. If the target path exists but is not listed in `git worktree list`, stop for
-    manual cleanup.
+    this branch. If so, treat it as inheritable and reuse it. If not, post a
+    hold comment and stop for manual cleanup.
+11. If the target path exists but is not listed in `git worktree list`, stop
+    and report for manual cleanup.
 12. Create the sibling worktree at `../<repo-name>.<normalized-branch>`.
 13. Define `normalized-branch` as the branch name with each `/` replaced by
     `-`.
@@ -86,17 +88,20 @@ request, or other GitHub side effect, confirm all of the following:
     `git fetch origin <branch-name>`.
 23. If WorkTrunk is unavailable and only the remote branch exists, use
     `git worktree add <path> -b <branch-name> origin/<branch-name>`.
-24. For manual `git worktree add` or WorkTrunk without a hook, acquire the
+24. If WorkTrunk is unavailable and neither a local nor a remote branch
+    exists (rare), treat it as a fresh claim while preserving the inherited
+    branch name.
+25. For manual `git worktree add` or WorkTrunk without a hook, acquire the
     worktree lock with the profile-selected `claim-lock` helper immediately
     after creation and before any install or other mutation.
-25. Run `install-deps` on the manual/no-hook path.
-26. Verify the primary worktree's HEAD is still on `main`.
-27. Verify `git worktree list` shows the new path.
-28. Verify the current directory is the new sibling worktree.
-29. If any of steps 26-28 fails, the worktree-creation contract is violated:
+26. Run `install-deps` on the manual/no-hook path.
+27. Verify the primary worktree's HEAD is still on `main`.
+28. Verify `git worktree list` shows the new path.
+29. Verify the current directory is the new sibling worktree.
+30. If any of steps 27-29 fails, the worktree-creation contract is violated:
     stop, post a hold note naming the failed check, and do not continue to
     B2 from the primary worktree.
-30. Repair a contract violation by removing the misplaced branch from the
+31. Repair a contract violation by removing the misplaced branch from the
     primary worktree, after confirming no work is lost, then recreate the
     sibling worktree from step 12.
 
@@ -134,24 +139,27 @@ addendum resolves it.
 
 1. Before the first implementation edit, confirm the final B2 plan comment
    exists on the issue.
-2. If code already landed before that checkpoint was noticed, disclose the
+2. If it does not exist, stop and return to B2 to post it.
+3. If code already landed before that checkpoint was noticed, disclose the
    ordering deviation on the issue.
-3. Post the plan retroactively.
-4. Implement the plan.
-5. Critique the completed diff.
-6. Run `fix-validate` before each commit.
-7. Keep commits atomic.
-8. If `fix-validate` changes files, stage and commit them before continuing.
-9. If validation fails in files this diff did not touch, suspect baseline
-   drift or a stale install before blaming the change.
-10. If a test this diff did not touch fails once locally but passes in
+4. Post the plan retroactively.
+5. Implement the plan.
+6. Critique the completed diff.
+7. Run `fix-validate` before each commit.
+8. Keep commits atomic.
+9. If `fix-validate` changes files, stage and commit them before continuing.
+10. If validation fails in files this diff did not touch, suspect baseline
+    drift or a stale install before blaming the change; verify with a fresh
+    `install-deps` run in a clean worktree or a fresh-vs-stale
+    `node_modules` comparison before assuming the failure traces to this diff.
+11. If a test this diff did not touch fails once locally but passes in
     isolation while hosted CI is green, trust the hosted result and stop
     chasing it as a regression. This does not waive the `fix-validate` /
     `pre-push-validate` requirements.
-11. When consolidating a wrapper function used at multiple call sites into one
+12. When consolidating a wrapper function used at multiple call sites into one
     shared function, check whether any call site's old delegate path added
     options or behavior the shared function does not replicate.
-12. If B3 or C must stop for a hold, post the hold reason, update the digest,
+13. If B3 or C must stop for a hold, post the hold reason, update the digest,
     and stop.
 
 ## C — Self-review
