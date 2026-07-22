@@ -214,10 +214,13 @@ unit-tested, anticipating Resume Step 1 wiring — but the documented Resume
 Step 1 invocation (`idd-resume.instructions.md`) never threads either flag
 through, and a resumed process has no local memory of which nonce was its
 own to compare against in the first place. That cold-recovery design
-(kurone-kito/idd-skill#1529), plus the still-unwired merge write-gate
-(`summarizeClaimValidation`, kurone-kito/idd-skill#1528), are natural
-fast-follows (the same shared parse/render primitives already support them)
-— not silent design gaps.
+(kurone-kito/idd-skill#1529) is a natural fast-follow (the same shared
+parse/render primitives already support it) — not a silent design gap.
+The merge write-gate half landed separately: `summarizeClaimValidation`
+(`protocol-helpers.mts`) now shares the same `findActivationNonceWinner`
+primitive via `pre-merge-readiness.mjs`'s `--nonce` flag
+(kurone-kito/idd-skill#1528), closing the one AC-adjacent surface #1522
+deliberately deferred.
 
 ## Advisory wait
 

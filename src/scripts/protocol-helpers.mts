@@ -31,6 +31,7 @@ import type {
   ParsedReviewWatermark,
 } from './marker-helpers.mts';
 import {
+  findActivationNonceWinner,
   IDD_AGENT_DERIVED_MARKERS,
   isValidIsoTimestamp,
   operationalMarkerPrefix,
@@ -4881,6 +4882,15 @@ export function summarizeClaimValidation(
     prFirstCommitAt?: string | null;
     expectedClaimId?: unknown;
     expectedAgentId?: unknown;
+    // #1528: this session's own recorded activation-nonce (#1522), so the
+    // merge-time write-gate can detect a second, independent activation of
+    // the same claim-id -- the sticky forced-handoff adopt-verbatim
+    // collision -- the same way resume-claim-routing.mts's A5(c) resume
+    // check already does. Omitted (or no trusted activation-nonce marker
+    // exists for the active claim-id) skips the comparison entirely,
+    // keeping the claim-id/agent-id-only outcome (#1522 AC3, backward
+    // compatible with every caller that predates this option).
+    expectedNonce?: unknown;
     isTrustedAuthor?: (login: string) => boolean;
     forcedHandoffEnabled?: boolean;
     isForcedHandoffEnabled?: (
@@ -4958,6 +4968,8 @@ export function summarizeClaimValidation(
     isStale: resolveStalePredicate(options.staleAgeMs),
   });
 
+  const expectedNonce = String(options.expectedNonce ?? '').trim();
+
   let reason = 'match';
   if (!activeClaim) {
     reason = 'missing-active-claim';
@@ -4965,6 +4977,28 @@ export function summarizeClaimValidation(
     reason = 'claim-id-mismatch';
   } else if (expectedAgentId && activeClaim.agentId !== expectedAgentId) {
     reason = 'agent-id-mismatch';
+  } else if (expectedClaimId && expectedNonce) {
+    // #1528: mirrors evaluateResumeClaimRouting's activation-nonce-mismatch
+    // check (resume-claim-routing.mts) -- only meaningful once claim-id and
+    // agent-id already match, since claim-id alone cannot distinguish a
+    // second, independent activation of the same id. Computed lazily, here,
+    // so every pre-#1528 caller that never passes expectedNonce (the
+    // default) pays no parsing/sorting cost for it. Trust-filter first
+    // (findActivationNonceWinner does no author checks of its own), matching
+    // how the resume-side caller pre-filters before calling the same shared
+    // primitive.
+    const activationNonceWinner = findActivationNonceWinner(
+      claimEvents.filter((event) =>
+        trustedAuthorPredicate(event.author?.login ?? event.user?.login ?? ''),
+      ),
+      activeClaim.claimId,
+    );
+    if (
+      activationNonceWinner !== null &&
+      activationNonceWinner !== expectedNonce
+    ) {
+      reason = 'activation-nonce-mismatch';
+    }
   }
 
   return {
@@ -5261,6 +5295,10 @@ export function buildPreMergeReadinessSummary(
     prAuthorLogin?: string | null;
     expectedClaimId?: unknown;
     expectedAgentId?: unknown;
+    // #1528: forwarded to summarizeClaimValidation's activation-nonce
+    // collision check below. Omitted by every caller that predates this
+    // option (unchanged pre-#1528 behavior).
+    expectedNonce?: unknown;
     viewerLogin?: string | null;
     viewerTeamSlugs?: unknown[];
     viewerAppSlug?: string | null;
@@ -5430,6 +5468,7 @@ export function buildPreMergeReadinessSummary(
     isForcedHandoffEnabled: options.isForcedHandoffEnabled,
     expectedClaimId: options.expectedClaimId,
     expectedAgentId: options.expectedAgentId,
+    expectedNonce: options.expectedNonce,
     staleAgeMs: options.staleAgeMs,
   });
   const waivableCheckSelectors = options.waivableCheckSelectors ?? null;
