@@ -33,6 +33,9 @@ layout.
 - Avoid hard-coded repository file counts in docs unless the number is
   mechanically maintained. If count-based wording is necessary, update
   every mirrored reference in the same commit.
+- When documentation or instruction text names an anti-pattern or
+  failure mode, cite the observed incident per
+  [docs/idd-design-rationale.md](../docs/idd-design-rationale.md#cite-the-observed-incident).
 - If uncertainties, concerns, or other implementation issues arise while
   running in Agent mode, promptly switch to Plan mode and ask the user
   questions. In such cases, provide one or more recommended response

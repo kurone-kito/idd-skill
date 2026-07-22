@@ -419,6 +419,7 @@ docs/idd-comment-minimization.md
 docs/idd-resume-detail.md
 docs/idd-advisory-wait-shell-fallback.md
 docs/idd-design-rationale.md
+docs/idd-concept-ownership.md
 docs/permissions.md
 docs/getting-started.md
 docs/concepts.md
@@ -500,6 +501,7 @@ for FILE in \
   "docs/idd-resume-detail.md" \
   "docs/idd-advisory-wait-shell-fallback.md" \
   "docs/idd-design-rationale.md" \
+  "docs/idd-concept-ownership.md" \
   "docs/permissions.md" \
   "docs/getting-started.md" \
   "docs/concepts.md" \
@@ -589,6 +591,7 @@ for FILE in \
   "docs/idd-resume-detail.md" \
   "docs/idd-advisory-wait-shell-fallback.md" \
   "docs/idd-design-rationale.md" \
+  "docs/idd-concept-ownership.md" \
   "docs/permissions.md" \
   "docs/getting-started.md" \
   "docs/concepts.md" \
