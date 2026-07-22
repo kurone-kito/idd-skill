@@ -253,8 +253,10 @@ its handoff point with no one left to act on the result.
 `headRefOid`. On every later poll in this same wait, compare the fresh
 `headRefOid` against that recorded value. If it differs, someone pushed
 to this branch while waiting — stop per the condition above rather than
-proceeding to E1 on results for a HEAD this session never validated;
-re-enter D4 from the top to record the new HEAD and start waiting again.
+proceeding to E1 on results for a HEAD this session never validated. Do
+not resume this wait on its own initiative: a fresh D4 entry over the
+new HEAD is a decision for whoever resolves the stop, not an automatic
+continuation.
 
 1. Use the profile-selected **ci-wait-policy** helper to resolve the
    running/generation timeouts and the rerun budget:
@@ -307,7 +309,7 @@ re-enter D4 from the top to record the new HEAD and start waiting again.
    (`checkName` plus `url`, the run to rerun) and apply ci-wait-policy's
    `rerunPolicy` (default `rerun-once`) — if this is the first timeout
    for this wait and the policy allows a rerun, rerun that specific
-   stalled check once (`gh run rerun <run-id-from-url> --failed`) and
+   stalled check once (`gh run rerun --failed <run-id-from-url>`) and
    resume polling; if the timeout recurs after that rerun, or the
    policy is `hold`, stop per the condition above and post a hold note
    rather than polling
@@ -321,7 +323,7 @@ re-enter D4 from the top to record the new HEAD and start waiting again.
    downstream of D4.
    - If a maintainer has posted a valid external-check waiver for this
      exact HEAD: rerun the `idd-advisory-convergence` check once (`gh
-     run rerun <run-id> --failed`, using the run id from `checks[]`'s
+     run rerun --failed <run-id>`, using the run id from `checks[]`'s
      entry for it) so it re-evaluates and reflects the waiver, then
      re-read `requiredChecks.status` once more. If it is now `success`,
      go to step 7. If it is still non-passing after that one rerun,
