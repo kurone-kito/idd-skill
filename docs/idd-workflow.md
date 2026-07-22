@@ -147,6 +147,24 @@ When a lightweight-tier model runs any part of this loop:
   self-critique is truly independent is the kind of fragile runtime
   self-detection a weak model could get wrong, so it applies uniformly
   regardless of declared model tier.
+- **Acceptance-check rigor**: any per-unit acceptance check gating
+  weak-tier generated output should include multiple boundary cases,
+  explicit assertions, and a timeout — the timeout specifically is
+  what turns an infinite loop into a caught failure instead of a hang.
+  A narrow check (one or two cases) can let a fragile generation with a
+  real defect pass undetected.
+- **Clean-artifact generation**: a generation prompt driving weak-tier
+  output should instruct the model to produce a clean, importable
+  artifact — the target definitions and needed imports only — and
+  explicitly forbid embedding the acceptance test, assertions, prints,
+  or a self-invoking entrypoint block (Python's `__main__` guard, for
+  example), and forbid importing the artifact under construction. The
+  acceptance check itself — the literal test code, assertions, and
+  expected outputs, as distinct from the behavioral acceptance
+  criteria described in the prompt —
+  must never be shown to the generating model, since a weak model that
+  sees the test tends to reproduce it inline rather than keeping the
+  two separated.
 
 These tiers are practical operating guidance, not a new enforced
 runtime gate: `.github/instructions/idd-suitability.instructions.md`'s
