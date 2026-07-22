@@ -228,9 +228,16 @@ loop instead of returning to this D1 rebase path.
 1. Fetch the PR body: `gh pr view {pr-number} --json body --jq '.body'`.
 2. Strip fenced code blocks, inline-code spans, and block-quoted lines
    from the body.
-3. Search the remaining plain text for `(?im)\b(close[sd]?|fix(e[sd])?|
-   resolve[sd]?)\s+#<N>\b` for the claimed issue number `<N>` — matching
-   case-insensitively (`Closes`, `CLOSES`, and `closes` all count).
+3. Search the remaining plain text for the claimed issue number `<N>`
+   with this pattern, kept on one line (do not reflow it — a line break
+   inside the alternation would silently break the `resolve` branch):
+
+   ```text
+   (?im)\b(close[sd]?|fix(e[sd])?|resolve[sd]?)\s+#<N>\b
+   ```
+
+   Matching case-insensitively (`Closes`, `CLOSES`, and `closes` all
+   count).
 4. If no match: edit the PR body to add a correctly placed plain-text
    closing line, then repeat steps 1-3 once. If it still fails, stop and
    post a hold note citing the PR URL.
