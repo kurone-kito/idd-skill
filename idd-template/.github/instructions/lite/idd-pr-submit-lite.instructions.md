@@ -31,9 +31,10 @@ session already claimed and implemented. If the repository is
   (after the `recheck` retry budget in D1 step 1, if applicable) — this
   lite file only covers the pre-first-push rebase; the post-publication
   merge-based resync (or a closer live-state read) is out of its scope.
-  (A pushed branch with **no** open PR yet is not this case: skip
-  straight to D3. An open PR with `syncRecommendation: none` is not this
-  case either: skip straight to D4.)
+  (A pushed branch with **no** open PR yet is not this case: push any
+  unpushed local commits, then skip straight to D3. An open PR with
+  `syncRecommendation: none` is not this case either: run D3.5's check,
+  then skip straight to D4.)
 - D1's rebase hits a content conflict this session cannot resolve
   mechanically.
 - After D1, `git branch --show-current` is empty (detached HEAD) and one
@@ -98,8 +99,12 @@ This section's rebase only applies **before the branch's first push**.
    literal `null` can be misread as a real PR number instead of "no
    open PR").
    - No output (empty): D2's push already happened in an earlier,
-     interrupted session — skip the rest of D1 (nothing to rebase) and
-     go straight to D3 (create the PR).
+     interrupted session. `git fetch origin {branch-name}`, then check
+     `git log --oneline origin/{branch-name}..HEAD` — if it lists any
+     commit, this or an earlier session committed more work after that
+     push without pushing it; push those commits now (a normal push,
+     not force) before continuing. Either way, skip the rest of D1
+     (nothing to rebase) and go straight to D3 (create the PR).
    - An open PR exists: read its `syncRecommendation` with the
      profile-selected branch-conflict-state helper —
      `node scripts/branch-conflict-state.mjs --pr <pr-number>`, or the
@@ -113,7 +118,11 @@ This section's rebase only applies **before the branch's first push**.
      protection requiring an up-to-date head) rather than treating every
      non-`CLEAN` state the same:
      - `syncRecommendation: "none"`: D1-D3 already happened in an
-       earlier session; skip straight to D4 (wait for CI).
+       earlier session. Run D3.5's closing-keyword check first — it is
+       idempotent even if an earlier session already verified it, and
+       a session that crashed between D3 and D3.5 would otherwise
+       never get the keyword verified — then continue to D4 (wait for
+       CI).
      - `syncRecommendation: "recheck"` (mergeability still computing):
        re-run the helper after a short wait, up to 3 attempts; only a
        result still `"recheck"` after that budget falls through to stop
@@ -154,8 +163,8 @@ This section's rebase only applies **before the branch's first push**.
    already resolved.
 7. After the **entire** rebase completes (not per-conflict, mid-rebase):
    if any file was hand-edited during conflict resolution, run
-   **fix-validate** now, against the final rebased state. Then verify
-   both:
+   **fix-validate** now, against the final rebased state, and commit
+   any resulting changes before continuing. Then verify both:
    - `git branch --show-current` is non-empty (HEAD is not detached).
    - The expected local commit appears in `git log --oneline
      origin/main..HEAD` (not local `main`, which this file never
@@ -267,6 +276,23 @@ not resume this wait on its own initiative: a fresh D4 entry over the
 new HEAD is a decision for whoever resolves the stop, not an automatic
 continuation.
 
+**Duplicate check instances**: the state helper's `checks[]` array can
+hold more than one entry for the same `checkName` — a rerun leaves the
+earlier instance in place alongside the fresh one, and this raw array
+is not pre-deduped for callers. It is keyed by `(checkName,
+workflowName)` so two independent checks sharing a display name across
+workflows stay distinct. Before evaluating `checks[]` below (steps 3,
+5, and 6 all read it): for a **`required`** entry (steps 5 and 6's own
+set), reduce by `checkName` alone — the required-check gate itself
+matches by name alone, and a rerun's `workflowName` can differ from
+the run it supersedes. For a **non-required** entry (step 3's
+fallback), reduce by the full `(checkName, workflowName)` pair
+instead, to avoid conflating independent checks. Either way: an entry
+with no `completedAt` (still in flight) always outranks one that has
+completed, regardless of `startedAt` — a live rerun can never be older
+than the run it supersedes. Once both have completed, the later
+`completedAt` wins.
+
 1. Use the profile-selected **ci-wait-policy** helper to resolve the
    running/generation timeouts and the rerun budget:
    `node scripts/ci-wait-policy.mjs`, or the package-manager-profile
@@ -289,43 +315,66 @@ continuation.
    `checks[]` array (every check present for this HEAD, not just
    required ones) and its per-check `status`: every entry `success` →
    proceed to step 7; any entry `pending` or `unknown` → continue at
-   step 6 (poll again — `unknown` isn't a settled result yet, so treat
-   it like `pending`); any entry `failure` → stop per the condition
-   above; `checks[]` itself empty (no CI ran at all for this HEAD) →
-   stop per the condition above.
+   step 6, which applies its timeout math to every entry this route
+   names, not only `required` ones (poll again — `unknown` isn't a
+   settled result yet, so treat it like `pending`); any entry `failure`
+   → stop per the condition above; `checks[]` itself empty (no CI ran
+   at all for this HEAD) → stop per the condition above.
 4. **`source-pinned`** (a ruleset or integration-pinned required check
    exists but cannot be enumerated by name): always stop per the
    condition above — this is a real gating check, never treat it like
    `no-required-checks`.
-5. **`failing`**: in the same helper's `checks[]` array, check every
-   entry where `required` is true and its `checkName` field (not
-   `name`, which this array does not have) is not
-   `idd-advisory-convergence`. If **all** of those are `success`,
-   `idd-advisory-convergence` is the sole non-passing required check —
-   go to step 8's exception instead of stopping here. If **any** of
-   those is not yet `success` (whether `failing` or still
-   `pending`/`missing`/`unknown`), that does not qualify: stop per the
-   condition above rather than continuing to poll (fixing or rerunning
-   it is outside this file's mechanical scope).
+5. **`failing`**: check every `checks[]` entry where `required` is
+   true and its `checkName` is not `idd-advisory-convergence`
+   (`requiredChecks.missingNames` is always empty for this status —
+   see step 6's `missing` route for that case). If **all** are
+   `success`, `idd-advisory-convergence` is the sole non-passing
+   required check — go to step 8's exception instead of stopping
+   here. If **any** has `status: "failure"`, stop per the condition
+   above (outside this file's mechanical scope to fix or rerun).
+   Otherwise — none failed, but at least one is still
+   `pending`/`unknown` — apply step 6's timeout/on-timeout handling to
+   just those unsettled entries, never `idd-advisory-convergence`
+   itself (already completed), then re-read this step once they
+   settle.
 6. **`pending`** or **`missing`** (an expected required check has not
-   posted a result yet): keep polling until `success`, `failing`, or a
-   timeout. **Determine timeout from server timestamps, not a client
-   clock estimate**: for each still-non-`success` required entry in
-   `checks[]`, compare its own `startedAt` (or, if absent, this wait's
-   first poll time) against the current server time; once elapsed
-   exceeds ci-wait-policy's `runningTimeout` (or `generationTimeout` if
-   the check has not appeared at all yet), that check has timed out.
-   **On timeout**: identify the stalled check from its `checks[]` entry
-   (`checkName` plus `url`, the run to rerun) and apply ci-wait-policy's
-   `rerunPolicy` (default `rerun-once`) — if this is the first timeout
-   for this wait and the policy allows a rerun, rerun that specific
-   stalled check once as a **whole-run rerun, not `--failed`**
-   (`gh run rerun <run-id-from-url>`) — a stalled check has no failed
-   jobs to selectively rerun, only a run that never finished — and
-   resume polling; if the timeout recurs after that rerun, or the
-   policy is `hold`, stop per the condition above and post a hold note
-   rather than polling
-   indefinitely.
+   posted a result yet), or any `pending`/`unknown` entry reached via
+   step 3's fallback: keep polling until `success`, `failing`, or a
+   timeout. Entries to evaluate: for this direct route,
+   every still-non-`success` required entry, plus each name in
+   `requiredChecks.missingNames` (a required check with no `checks[]`
+   entry at all); for step 3's fallback, every still-non-`success`
+   entry regardless of `required` (a `no-required-checks` repository
+   marks none `required`). **Determine
+   timeout from server timestamps, not a client clock estimate**: the
+   helper always reports `startedAt` as a string, empty when absent —
+   test for non-empty, not merely present. If it is non-empty, elapsed
+   is server time minus `startedAt`, timed out past ci-wait-policy's
+   `runningTimeout`. If it is empty (queued) or the entry is a
+   `missingNames` name with no `checks[]` entry at all, elapsed is
+   server time minus this wait's own first poll time, timed out past
+   `generationTimeout` instead — its running-timeout has not begun.
+   **On timeout**: identify the stalled check (`checkName` plus `url`
+   if present). No case below has a run `gh run rerun` can target
+   unless the entry has both `type: "check-run"` and a non-empty
+   `url` — stop per the condition above and post a hold note naming
+   the check for any of: it is a `missingNames` name with no
+   `checks[]` entry at all (so no `url` either); its entry has `type:
+   "status-context"` (a Commit-Status), whose `url` points at an
+   external target rather than an Actions run; or its entry has `type:
+   "check-run"` but an empty `url` (the upstream `detailsUrl` was
+   itself absent). Otherwise resolve the rerun
+   decision from the
+   run's own history: `gh run view <run-id-from-url> --json attempt` —
+   GitHub's `attempt` starts at `1` for a never-rerun run, so pass
+   `attempt - 1` as `<count>` to `node scripts/ci-wait-policy.mjs
+   --rerun-count <count>`, never this wait's own memory. If it allows
+   a rerun, rerun that check once as a **whole-run rerun, not
+   `--failed`** (`gh run rerun <run-id-from-url>`) — a stalled check
+   has no failed jobs to selectively rerun, only a run that never
+   finished — and resume polling. If it is `hold`, or the timeout
+   recurs after a rerun, stop per the condition above and post a hold
+   note.
 7. **`success`**: proceed to `idd-review-snapshot.instructions.md` (E1).
 8. **Exception**: if `idd-advisory-convergence` is the only
    non-passing required check, and that check's own run-log JSON verdict
@@ -333,13 +382,28 @@ continuation.
    disposition or actionable item count on the latest review), this is
    not a CI-wait state — it turns green only after E-phase disposition,
    downstream of D4.
+   - **Bot-gated `action_required`**: if instead `idd-advisory-convergence`
+     is stuck at `action_required` from a gated bot-triggered run (for
+     example Copilot's review event) pending approval, this is a
+     stalled run, not a downstream-of-D4 state. A rerun of the gated
+     run itself keeps the original actor's privileges and re-enters
+     `action_required`, and `checks[]` carries no actor/event field to
+     tell which instance is safe to rerun instead — use the
+     profile-selected **rerun-advisory-convergence** helper
+     (`node scripts/rerun-advisory-convergence.mjs --pr <pr-number>`,
+     read-only) to classify every instance and print the exact `gh run
+     rerun` command for the rerun-eligible one, run that command
+     verbatim, then resume step 6's polling for this one check.
    - If a maintainer has posted a valid external-check waiver for this
      exact HEAD: rerun the `idd-advisory-convergence` check once (`gh
      run rerun --failed <run-id>`, using the run id from `checks[]`'s
      entry for it) so it re-evaluates and reflects the waiver, then
-     re-read `requiredChecks.status` once more. If it is now `success`,
-     go to step 7. If it is still non-passing after that one rerun,
-     stop per the condition above — do not rerun a second time.
+     resume step 6's normal polling for this one check instead of
+     reading `requiredChecks.status` a single time immediately — a
+     fresh rerun is asynchronous and commonly still `pending` right
+     after it starts. If it settles to `success`, go to step 7. If
+     step 6's own timeout elapses while it is still non-passing, stop
+     per the condition above — do not rerun a second time.
    - Absent a valid waiver for this HEAD: exit CI-wait now and proceed
      directly to E1. This never relaxes the
      merge gate: the check stays required, and F2 re-verifies it

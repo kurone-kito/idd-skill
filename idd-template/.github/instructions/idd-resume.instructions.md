@@ -140,7 +140,8 @@ sub-procedure and run **install-deps** as specified there.
 | no             | no            | clean, unpushed            | → D1     |
 | no             | no            | clean, no unpushed         | → B2     |
 
-Section numbers §W1–§W8 are detail entries in `docs/idd-resume-detail.md`.
+Section numbers §W1–§W8 and §FH are detail entries in
+`docs/idd-resume-detail.md`.
 
 After routing, refresh the digest only when the route materially changes what
 a human should expect next (e.g., `Phase: resume → B3`, `Phase: resume → D1`,
