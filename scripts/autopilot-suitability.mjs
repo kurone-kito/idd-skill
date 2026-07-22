@@ -55,9 +55,10 @@ export function parseAutopilotSuitabilityMarker(
     'gi',
   );
   const text = stripMarkdownCodeRegions(String(body ?? ''));
-  // Stream matches with regex.exec so an untrusted, marker-heavy body
-  // stays O(1) memory (no per-match arrays), and fail fast on the first
-  // invalid token or first value that conflicts with an earlier one.
+  // Stream matches with regex.exec instead of matchAll so an untrusted,
+  // marker-heavy body avoids per-match array allocation, and fail fast
+  // on the first invalid token or first value that conflicts with an
+  // earlier one.
   let present = false;
   let value = null;
   let match = regex.exec(text);
