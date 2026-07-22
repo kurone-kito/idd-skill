@@ -348,13 +348,17 @@ requesting the review, then poll (not E14's loop). `inFlight`: poll only.
 Else F2's route; `!inFlight`: E1.
 
 ```text
-advisory-reroll: {agent-id} {head-SHA} {ISO8601-requested-at}
+advisory-reroll: {agent-id} {PR_HEAD_SHA} {ISO8601-requested-at}
 ```
 
-Plain text, no HTML comment — matching `advisory-wait:`'s shape, not
-`advisory-wait-recovery:`'s. When helper runtime is enabled, render and
-POST this marker with the profile-selected post-idd-marker command —
-`--type advisory-reroll --target pr <pr-number> --agent-id <id>
---head-sha <PR_HEAD_SHA> --timestamp <ISO8601> --apply`; the manual JSON
-`POST` stays the fallback. Fail closed to a hold (mirroring AW3-R) if the
-marker cannot be posted or verified.
+Plain text, no HTML comment — matching both `advisory-wait:`'s and
+`advisory-wait-recovery:`'s shape. When helper runtime is enabled, render
+and POST this marker with the profile-selected post-idd-marker command:
+
+```sh
+post-idd-marker --type advisory-reroll --target pr <pr-number> \
+  --agent-id <id> --head-sha <PR_HEAD_SHA> --timestamp <ISO8601> --apply
+```
+
+The manual JSON `POST` stays the fallback. Fail closed to a hold
+(mirroring AW3-R) if the marker cannot be posted or verified.
