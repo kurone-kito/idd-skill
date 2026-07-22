@@ -355,5 +355,7 @@ post-idd-marker --type advisory-reroll --target pr <pr-number> \
   --agent-id <id> --head-sha <PR_HEAD_SHA> --timestamp <ISO8601> --apply
 ```
 
-The manual JSON `POST` stays the fallback. Fail closed to a hold
-(mirroring AW3-R) if the marker cannot be posted or verified.
+The manual JSON `POST` stays the fallback. If the marker cannot be
+posted or verified, fail closed to AW4's **Recovery failed** hold
+template and stop (mirroring AW3-R's identical routing on the same
+failure).
