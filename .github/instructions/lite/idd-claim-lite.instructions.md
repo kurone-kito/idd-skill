@@ -29,6 +29,15 @@ not claim**. There is no fallback issue to select.
    That is the sole path where the tables below are the primary
    control surface.
 
+Every `node scripts/<name>.mjs` command below is the **source-repo /
+vendored-node** invocation form. Under `package-manager` /
+`ephemeral-npx` profiles, `scripts/` is not vendored into the repo —
+resolve each command's profile-selected equivalent from
+`docs/idd-helper-scripts.md` instead of running the vendored form
+verbatim. A helper genuinely missing on the active profile is itself a
+missing-helper case under rule 1 above (stop and ask), not a reason to
+fall through to the written tables.
+
 ## Stop-and-ask
 
 Stop and ask the operator when:
@@ -198,13 +207,18 @@ inheritable per the table above.
 
 ## Claim execution
 
-Skip step 4 (the `claimed-by` post) in two cases: pre-check (c) found
-this session already owns the claim — keep the recorded
-`{claim-id}`/branch, no new post; or this is forced-handoff
-adopt-verbatim — the handoff marker itself already performed the
-transfer, so no separate `claimed-by` post is required or allowed. In
-either skip case, still run step 5 (activation-nonce) for a fresh
-activation.
+Skip step 4 (the `claimed-by` post) in two cases, and treat them
+differently for step 5:
+
+- **Pre-check (c) found this session already owns the claim**: this is
+  a continuation, not a fresh activation — keep the recorded
+  `{claim-id}`/branch, post no new `claimed-by` **and no new
+  activation-nonce**. Skip straight to Claim verification (or Heartbeat
+  posting if you are extending the stale clock).
+- **Forced-handoff adopt-verbatim**: the handoff marker itself already
+  performed the transfer, so no separate `claimed-by` post is required
+  or allowed — but this **is** a fresh activation, so still run step 5
+  (activation-nonce) for it.
 
 1. **Branch name**: takeover/forced-handoff → reuse the exact
    inherited branch verbatim, never recompute. Fresh claim → use the
@@ -320,9 +334,14 @@ node scripts/claim-lock.mjs --acquire --worktree <path> \
 ```
 
 A matching `{claim-id}` re-acquires as a read-only check. A different
-`{claim-id}` is always a collision — re-run the pre-check (c) helper;
-only retry with `--takeover` when it reports `claimable` or
-`stale-reclaimable` for **your** claim. No release step: `git worktree
+`{claim-id}` is always a collision — re-run the pre-check (c) helper.
+Retry with `--takeover` in any of these cases: the verdict is
+`claimable` or `stale-reclaimable`; or the verdict is `already-claimed`
+but its `winning_claim_id` **equals your own current `{claim-id}`**
+(you still genuinely own the GitHub claim — only the local lock file
+drifted, e.g. after a crash or worktree recreation). An `already-claimed`
+verdict naming a **different** claim-id is a real collision — stop, the
+claim was lost. No release step: `git worktree
 remove` at F4 deletes the lock with the worktree.
 
 Then continue to `idd-work-lite.instructions.md` (or

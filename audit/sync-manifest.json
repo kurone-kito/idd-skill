@@ -218,7 +218,7 @@
       "files": [
         ".github/instructions/lite/idd-claim-lite.instructions.md"
       ],
-      "limitBytes": 16200
+      "limitBytes": 17300
     },
     {
       "id": "bundle-review",
