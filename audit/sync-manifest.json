@@ -226,8 +226,8 @@
       "id": "bundle-pre-merge-lite",
       "description": "Lite pre-merge path: idd-pre-merge-lite + idd-merge-handoff-lite (helper-read-only F1/F2, handoff-stop F2.5; self-contained).",
       "files": [
-        ".github/instructions/lite/idd-pre-merge-lite.instructions.md",
-        ".github/instructions/lite/idd-merge-handoff-lite.instructions.md"
+        ".github/instructions/lite/idd-merge-handoff-lite.instructions.md",
+        ".github/instructions/lite/idd-pre-merge-lite.instructions.md"
       ],
       "limitBytes": 16000
     },
@@ -382,6 +382,12 @@
       "mode": "exact"
     },
     {
+      "id": "idd-merge-handoff-lite-instructions",
+      "source": "idd-template/.github/instructions/lite/idd-merge-handoff-lite.instructions.md",
+      "target": ".github/instructions/lite/idd-merge-handoff-lite.instructions.md",
+      "mode": "exact"
+    },
+    {
       "id": "idd-merge-instructions",
       "source": "idd-template/.github/instructions/idd-merge.instructions.md",
       "target": ".github/instructions/idd-merge.instructions.md",
@@ -443,12 +449,6 @@
       "id": "idd-pre-merge-lite-instructions",
       "source": "idd-template/.github/instructions/lite/idd-pre-merge-lite.instructions.md",
       "target": ".github/instructions/lite/idd-pre-merge-lite.instructions.md",
-      "mode": "exact"
-    },
-    {
-      "id": "idd-merge-handoff-lite-instructions",
-      "source": "idd-template/.github/instructions/lite/idd-merge-handoff-lite.instructions.md",
-      "target": ".github/instructions/lite/idd-merge-handoff-lite.instructions.md",
       "mode": "exact"
     },
     {
