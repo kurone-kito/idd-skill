@@ -418,7 +418,7 @@ Reasoning:
   spiral failure mode in a genuine attempt with a comparably weak model,
   suggesting the PoC's failure mode does not generalize as broadly as
   the field evidence suggests.
-- The E4-E8 / F2 judgment-gate uncoverage turns out to block enough of a
+- The E4-E8 / F2 judgment-gate coverage gap turns out to block enough of a
   real single-issue pass that a harness saves too little wall-clock or
   reliability over the standard weak-tier guardrails alone to justify the
   added coordination overhead (Section 4).
