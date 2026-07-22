@@ -62,10 +62,15 @@ reviewer request, or other GitHub side effect, confirm all of the
 following:
 
 1. The active claim still uses this session's claim id.
-2. The current directory is the sibling worktree for the claimed branch.
-3. `git branch --show-current` equals the claimed branch.
-4. The worktree-local claim lock is held.
-5. If any check fails, stop.
+2. If this session posted an activation nonce for the current claim,
+   confirm it still wins (no later trusted marker for this claim id
+   won the tie-break instead).
+3. The current directory is the sibling worktree for the claimed branch.
+4. `git branch --show-current` equals the claimed branch.
+5. Acquire the worktree-local claim lock with the profile-selected
+   `claim-lock` helper, passing the current agent id and claim id. A
+   `collision` result is fail-closed: stop rather than proceed.
+6. If any check fails, stop.
 
 ## D1 — Sync main before first push
 
