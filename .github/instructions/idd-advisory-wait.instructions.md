@@ -315,12 +315,30 @@ and that HEAD has not moved since this attempt started; either failure
 aborts without mutating or counting a cycle — discard state and restart
 from E1 against the new HEAD.
 
-1. **Remove** the stale request (E14's gh-then-REST fallback). If it
-   fails because the bot is no longer pending, re-run AW1-AW3 and
+1. **Remove** the stale request, gh-then-REST (`{primary-advisory-bot}` /
+   `{primary-advisory-bot-rest-login}` substitution per
+   `idd-review-fix.instructions.md`'s E14 **Primary advisory bot** section):
+
+   ```sh
+   gh pr edit {pr-number} --remove-reviewer "@{primary-advisory-bot}"
+   # on a GraphQL login-resolution failure:
+   gh api repos/{owner}/{repo}/pulls/{pr-number}/requested_reviewers \
+     -X DELETE -f "reviewers[]={primary-advisory-bot-rest-login}"
+   ```
+
+   If it fails because the bot is no longer pending, re-run AW1-AW3 and
    re-evaluate `staleRequestRecovery` fresh; any other failure posts the
    `AW4` pending-refresh-failed hold and stops — no cycle counted.
 2. **Verify** removal and current HEAD before proceeding.
-3. **Request** Copilot again, same gh-then-REST fallback.
+3. **Request** Copilot again, same gh-then-REST fallback:
+
+   ```sh
+   gh pr edit {pr-number} --add-reviewer "@{primary-advisory-bot}"
+   # on a GraphQL login-resolution failure:
+   gh api repos/{owner}/{repo}/pulls/{pr-number}/requested_reviewers \
+     -X POST -f "reviewers[]={primary-advisory-bot-rest-login}"
+   ```
+
 4. **Verify association**: re-fetch the PR timeline and confirm the
    fresh request's `review_requested` now follows HEAD's `committed`
    event (the same proof `COPILOT_PENDING_COVERS_HEAD` uses). If not yet
