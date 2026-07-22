@@ -37,15 +37,8 @@ made).
 - The active claim is ambiguous, disputed, or lost.
 - A required helper is missing, fails, returns invalid JSON, or
   disagrees with live state.
-- `review-activity-snapshot` or the watermark post-idd-marker call fails
-  closed on a head-SHA mismatch more than once in a row for the same E1
-  attempt (the branch is moving faster than this session can snapshot
-  it).
 - The claim-lock helper reports a collision (a different claim id
   already holds the worktree lock).
-- Step 2's fail-closed head-SHA guard keeps refusing to post the
-  watermark because the branch keeps moving between snapshot and post —
-  stop and ask instead of looping Step 1 re-snapshots indefinitely.
 
 ## Pre-mutation guard
 
@@ -215,8 +208,8 @@ already persisted as reviewer-visible comments.
 
 After the critique pass completes, post a new baseline: `node
 scripts/post-idd-marker.mjs --type baseline --target pr {pr-number}
---agent-id <id> --claim-id <id> --sha {current-head-sha} --apply`, or
-the package-manager equivalent. Rendered body:
+--agent-id <id> --claim-id <id> --sha {head-SHA} --apply`, or the
+package-manager equivalent. Rendered body:
 
 ```markdown
 <!-- review-baseline: {agent-id} {claim-id} {SHA} -->
