@@ -372,3 +372,31 @@ adopter demand for skill-form delivery with a concrete use case the
 routing table does not already serve. A project that reaches this same
 conclusion independently should record it here rather than re-running
 the investigation.
+
+## Documentation conventions
+
+### Cite the observed incident
+
+kurone-kito/idd-skill#1596 adopted this convention after observing that
+`mew-ton/soloscrum` cites a concrete incident for each entry in its
+anti-pattern lists (for example, "Observed 2026-05-09 on issues 8 and
+9" in that project's own tracker — not this repository's). A citation
+raises the authority of a documented prohibition for
+both humans and weak models — the rule reads as field evidence, not
+authorial preference — and lets a later session check whether the
+cited incident still motivates the rule.
+
+When documentation or instruction text names an anti-pattern or
+failure mode, cite the concrete incident that motivated it: a date
+plus an issue or PR reference, when one exists. When no such incident
+exists — the rule is preventive rather than a response to something
+that already happened — say so explicitly, using the phrase
+"preventive; no observed incident yet", so the absence of a citation
+reads as a deliberate statement rather than an omission.
+
+The convention applies **forward**, to new or edited passages only.
+Retrofitting an existing passage with a citation is in scope on
+budget-exempt `docs/` surfaces, but out of scope for
+`.github/instructions/` files — do not edit an instruction file
+solely to add a citation; those bundle budgets already sit near their
+ceiling (see the headroom review in kurone-kito/idd-skill#1525).
