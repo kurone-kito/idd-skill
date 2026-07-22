@@ -35,9 +35,9 @@ case under rule 1 (stop and ask), not a reason to fall through.
 `{agent-id}` is a tool/agent identifier shared across concurrent
 sessions of the same agent type — pick or confirm one before the first
 command below that needs it (Claim execution step 4 at the latest).
-Append a unique session token for auditability (e.g.,
-`copilot-8122ca35`). `{agent-id}` alone is never ownership proof;
-`{claim-id}` is the authoritative token.
+Appending a unique session token is recommended for auditability
+(e.g., `copilot-8122ca35`), not required. `{agent-id}` alone is never
+ownership proof; `{claim-id}` is the authoritative token.
 
 ## Stop-and-ask
 
@@ -131,7 +131,9 @@ the nonce tie-break cannot pass as `already_owned`; omit it otherwise.
 (resume/heartbeat continuation), skip to Claim verification (or
 Heartbeat). If it was omitted (first-time forced-handoff entry, not
 yet activated by you), go to Claim execution step 5 (post your own
-activation-nonce for `newClaimId`) first, then Claim verification.
+activation-nonce for `newClaimId`) first, then Claim verification's
+**Forced-handoff adopt-verbatim** case (step 5's settle-delay + nonce
+recompute only).
 
 **Otherwise** (no recorded `{claim-id}` and no matching forced-handoff
 evidence), run the write-gate helper immediately before the claim
