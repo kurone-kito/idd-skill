@@ -21,18 +21,24 @@ This file only executes triage dispositions someone else already made.
 It never classifies, scores severity, or decides Accept/Reject itself —
 those are E4-E8 judgment calls, excluded from every lite profile.
 
-1. Before fixing anything, confirm every item this round acts on already
-   carries an `**Accepted**` or `**Rejected**` disposition from a prior
-   E4-E8 pass.
-2. If an item has no recorded disposition, stop and ask. Do not
-   triage it yourself, and do not guess its severity.
-3. Only act on items already marked `**Accepted**`. Leave `**Rejected**`
-   items alone.
+1. Before fixing anything, confirm every item from ReviewItems_snapshot
+   this round acts on already carries an `**Accepted**` or
+   `**Rejected**` disposition from a prior E4-E8 pass.
+2. If a ReviewItems_snapshot item has no recorded disposition, stop and
+   ask. Do not triage it yourself, and do not guess its severity.
+3. Only act on ReviewItems_snapshot items already marked `**Accepted**`.
+   Leave `**Rejected**` items alone.
+4. This boundary covers ReviewItems_snapshot items only — the ones E9
+   fixes and E13 replies to. It does not cover E10's own critique
+   findings (E10 fixes those directly, per its own step, the same
+   self-review loop every phase uses) or E12's bounded cross-round
+   batching allowance (which explicitly permits folding in untriaged,
+   bot-sourced comments under its own separate conditions).
 
 ## Stop-and-ask conditions
 
-- An item with no recorded E4-E8 disposition is in scope for this round
-  (see Upstream-triage boundary).
+- A ReviewItems_snapshot item with no recorded E4-E8 disposition is in
+  scope for this round (see Upstream-triage boundary).
 - The active claim is ambiguous, disputed, or lost.
 - A required helper is missing, fails, or disagrees with live state.
 - E10's critique loop repeats the same Accepted findings for more than
@@ -43,7 +49,10 @@ those are E4-E8 judgment calls, excluded from every lite profile.
   `CHANGES_REQUESTED` reviewer and no explicit operator confirmation
   exists to merge `main` into the feature branch anyway.
 - A CI failure is neither clearly code-caused nor recognized
-  infra-flaky/pre-existing.
+  infra-flaky/pre-existing, **except** the sole-failing
+  `idd-advisory-convergence` check with `pending: false` and outstanding
+  review reasons — that case routes to E1 per E15 step 9, not
+  stop-and-ask.
 - Advisory-wait reaches `HOLD`, `CAP_EXHAUSTED` with a `hold` route, or a
   pending-refresh-failed state.
 
@@ -217,9 +226,11 @@ other GitHub side effect, confirm all of the following:
      {ISO8601-requested-at}` as plain text, not an HTML comment. Then go
      to the polling loop below.
    - No same-head marker exists and the request count has reached the
-     cap: if the configured cap-exhausted route is `hold`, post a hold
-     comment and stop; otherwise (the default) apply step 10 below (the
-     secondary-bot check) first, then continue to E15.
+     cap: apply step 10 below (the secondary-bot check) first — it is a
+     non-gating supplement that fires on cap exhaustion independent of
+     the cap-exhausted route. Then, if the configured cap-exhausted
+     route is `hold`, post a hold comment and stop; otherwise (the
+     default) continue to E15.
    - A same-head marker exists and `COPILOT_PENDING` is true: if
      elapsed time since the marker is at least the configured pending
      window, apply step 10 below (the secondary-bot check) first, then
@@ -228,10 +239,14 @@ other GitHub side effect, confirm all of the following:
      elapsed time is at least the configured settled window, apply
      step 10 below (the secondary-bot check) first, then continue to
      E15; otherwise go to the polling loop below.
-5. The default primary advisory bot is Copilot (`copilot` for the
-   add/remove-reviewer login, `copilot-pull-request-reviewer[bot]` for
-   the REST fallback login). A repository may configure a different bot
-   in `advisoryWait.primaryBotLogin`.
+5. The default primary advisory bot is Copilot: use `copilot` for
+   `{primary-advisory-bot}` (the add/remove-reviewer login) and
+   `copilot-pull-request-reviewer[bot]` for
+   `{primary-advisory-bot-rest-login}` (the REST fallback login). A
+   repository may configure a different bot in
+   `advisoryWait.primaryBotLogin` — when it does, use that configured
+   login for **both** placeholders, since a configured login is already
+   the real account login.
 6. Whenever this step posts an advisory request marker, recovery
    marker, or hold comment, update the digest with the current advisory
    state, that marker or comment as `Authoritative by`, and the next

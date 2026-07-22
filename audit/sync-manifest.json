@@ -224,11 +224,11 @@
     },
     {
       "id": "bundle-review-fix-lite",
-      "description": "Lite review-fix path (weak-model condensed profile): .github/instructions/lite/idd-review-fix-lite.instructions.md only — self-contained; no overview/appendix.",
+      "description": "Lite review-fix path (weak-model condensed profile): .github/instructions/lite/idd-review-fix-lite.instructions.md only — no overview/appendix; control flow is fully inlined, with single-hop command-syntax references to idd-advisory-wait.instructions.md and idd-ci.instructions.md per content principle 3.",
       "files": [
         ".github/instructions/lite/idd-review-fix-lite.instructions.md"
       ],
-      "limitBytes": 18500
+      "limitBytes": 20000
     },
     {
       "id": "bundle-review",
