@@ -130,7 +130,7 @@ On helper-enabled profiles, run `resume-route-selection.mjs --issue <N>`
 | `D1`                   | `idd-pr-submit-lite.instructions.md`, from D1 (sync/push/open PR)                     |
 | `D4`                   | `idd-pr-submit-lite.instructions.md`, D4 section only (CI wait) — do not re-run D1-D3 |
 | `E1` / `E15` / `Esync` | Review snapshot / CI wait / branch-sync                                               |
-| `F1` / `F2`            | Pre-merge                                                                             |
+| `F1` / `F2`            | `idd-pre-merge-lite.instructions.md`, from the top (covers both F1 and F2)            |
 | `stop`                 | STOP — report helper `reason`                                                         |
 
 Before any mutation after routing: re-validate claim ownership, PR HEAD,

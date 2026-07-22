@@ -412,6 +412,14 @@ recording template you will apply in Step 3.
 .github/instructions/idd-merge.instructions.md
 .github/instructions/idd-resume.instructions.md
 .github/instructions/idd-resume-stall.instructions.md
+.github/instructions/lite/idd-claim-lite.instructions.md
+.github/instructions/lite/idd-work-lite.instructions.md
+.github/instructions/lite/idd-pr-submit-lite.instructions.md
+.github/instructions/lite/idd-pre-merge-lite.instructions.md
+.github/instructions/lite/idd-merge-handoff-lite.instructions.md
+.github/instructions/lite/idd-review-fix-lite.instructions.md
+.github/instructions/lite/idd-resume-lite.instructions.md
+.github/instructions/lite/idd-resume-stall-lite.instructions.md
 docs/idd-workflow.md
 docs/idd-review-policy-profiles.md
 docs/idd-helper-scripts.md
@@ -495,6 +503,14 @@ for FILE in \
   ".github/instructions/idd-merge.instructions.md" \
   ".github/instructions/idd-resume.instructions.md" \
   ".github/instructions/idd-resume-stall.instructions.md" \
+  ".github/instructions/lite/idd-claim-lite.instructions.md" \
+  ".github/instructions/lite/idd-work-lite.instructions.md" \
+  ".github/instructions/lite/idd-pr-submit-lite.instructions.md" \
+  ".github/instructions/lite/idd-pre-merge-lite.instructions.md" \
+  ".github/instructions/lite/idd-merge-handoff-lite.instructions.md" \
+  ".github/instructions/lite/idd-review-fix-lite.instructions.md" \
+  ".github/instructions/lite/idd-resume-lite.instructions.md" \
+  ".github/instructions/lite/idd-resume-stall-lite.instructions.md" \
   "docs/idd-workflow.md" \
   "docs/idd-review-policy-profiles.md" \
   "docs/idd-helper-scripts.md" \
@@ -586,6 +602,14 @@ for FILE in \
   ".github/instructions/idd-merge.instructions.md" \
   ".github/instructions/idd-resume.instructions.md" \
   ".github/instructions/idd-resume-stall.instructions.md" \
+  ".github/instructions/lite/idd-claim-lite.instructions.md" \
+  ".github/instructions/lite/idd-work-lite.instructions.md" \
+  ".github/instructions/lite/idd-pr-submit-lite.instructions.md" \
+  ".github/instructions/lite/idd-pre-merge-lite.instructions.md" \
+  ".github/instructions/lite/idd-merge-handoff-lite.instructions.md" \
+  ".github/instructions/lite/idd-review-fix-lite.instructions.md" \
+  ".github/instructions/lite/idd-resume-lite.instructions.md" \
+  ".github/instructions/lite/idd-resume-stall-lite.instructions.md" \
   "docs/idd-workflow.md" \
   "docs/idd-review-policy-profiles.md" \
   "docs/idd-helper-scripts.md" \

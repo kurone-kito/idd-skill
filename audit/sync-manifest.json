@@ -61,6 +61,7 @@
         "idd-template/.github/idd/*.json",
         "idd-template/.githooks/*",
         "idd-template/.github/instructions/idd-*.instructions.md",
+        "idd-template/.github/instructions/lite/idd-*.instructions.md",
         "idd-template/docs/idd-*.md",
         "idd-template/docs/permissions.md",
         "idd-template/docs/getting-started.md",
@@ -94,6 +95,14 @@
         "idd-template/.github/instructions/idd-merge.instructions.md",
         "idd-template/.github/instructions/idd-resume.instructions.md",
         "idd-template/.github/instructions/idd-resume-stall.instructions.md",
+        "idd-template/.github/instructions/lite/idd-claim-lite.instructions.md",
+        "idd-template/.github/instructions/lite/idd-work-lite.instructions.md",
+        "idd-template/.github/instructions/lite/idd-pr-submit-lite.instructions.md",
+        "idd-template/.github/instructions/lite/idd-pre-merge-lite.instructions.md",
+        "idd-template/.github/instructions/lite/idd-merge-handoff-lite.instructions.md",
+        "idd-template/.github/instructions/lite/idd-review-fix-lite.instructions.md",
+        "idd-template/.github/instructions/lite/idd-resume-lite.instructions.md",
+        "idd-template/.github/instructions/lite/idd-resume-stall-lite.instructions.md",
         "idd-template/docs/idd-workflow.md",
         "idd-template/docs/idd-review-policy-profiles.md",
         "idd-template/docs/idd-helper-scripts.md",
@@ -225,12 +234,13 @@
       "limitBytes": 19500
     },
     {
-      "id": "bundle-review-fix-lite",
-      "description": "Lite review-fix path (weak-model condensed profile): .github/instructions/lite/idd-review-fix-lite.instructions.md only — no overview/appendix; control flow is fully inlined, with single-hop command-syntax references to idd-advisory-wait.instructions.md and idd-ci.instructions.md per content principle 3.",
+      "id": "bundle-pre-merge-lite",
+      "description": "Lite pre-merge path: idd-pre-merge-lite + idd-merge-handoff-lite (helper-read-only F1/F2, handoff-stop F2.5; self-contained).",
       "files": [
-        ".github/instructions/lite/idd-review-fix-lite.instructions.md"
+        ".github/instructions/lite/idd-merge-handoff-lite.instructions.md",
+        ".github/instructions/lite/idd-pre-merge-lite.instructions.md"
       ],
-      "limitBytes": 21000
+      "limitBytes": 16000
     },
     {
       "id": "bundle-pr-submit-lite",
@@ -239,6 +249,14 @@
         ".github/instructions/lite/idd-pr-submit-lite.instructions.md"
       ],
       "limitBytes": 22000
+    },
+    {
+      "id": "bundle-review-fix-lite",
+      "description": "Lite review-fix path (weak-model condensed profile): .github/instructions/lite/idd-review-fix-lite.instructions.md only — no overview/appendix; control flow is fully inlined, with single-hop command-syntax references to idd-advisory-wait.instructions.md and idd-ci.instructions.md per content principle 3.",
+      "files": [
+        ".github/instructions/lite/idd-review-fix-lite.instructions.md"
+      ],
+      "limitBytes": 21000
     },
     {
       "id": "bundle-review",
@@ -395,6 +413,12 @@
       "mode": "exact"
     },
     {
+      "id": "idd-merge-handoff-lite-instructions",
+      "source": "idd-template/.github/instructions/lite/idd-merge-handoff-lite.instructions.md",
+      "target": ".github/instructions/lite/idd-merge-handoff-lite.instructions.md",
+      "mode": "exact"
+    },
+    {
       "id": "idd-merge-instructions",
       "source": "idd-template/.github/instructions/idd-merge.instructions.md",
       "target": ".github/instructions/idd-merge.instructions.md",
@@ -450,6 +474,12 @@
       "id": "idd-pre-merge-instructions",
       "source": "idd-template/.github/instructions/idd-pre-merge.instructions.md",
       "target": ".github/instructions/idd-pre-merge.instructions.md",
+      "mode": "exact"
+    },
+    {
+      "id": "idd-pre-merge-lite-instructions",
+      "source": "idd-template/.github/instructions/lite/idd-pre-merge-lite.instructions.md",
+      "target": ".github/instructions/lite/idd-pre-merge-lite.instructions.md",
       "mode": "exact"
     },
     {

@@ -14,9 +14,9 @@ import { normalizePolicyConfig } from './policy-helpers.mjs';
 import {
   buildForcedHandoffEnableGate,
   DEFAULT_STALE_AGE_MS,
+  findActivationNonceWinner,
   isStaleByAge,
   normalizeLinkedPrReference,
-  parseActivationNonceComment,
   parseClaimComment,
   resolveActiveClaim,
 } from './protocol-helpers.mjs';
@@ -527,25 +527,10 @@ function findLaterCompetingClaim(events, activeClaim) {
     created_at: contenders[0].createdAt,
   };
 }
-/**
- * Resolve the winning activation nonce among trusted `activation-nonce`
- * events for `claimId`: the lexicographically earliest nonce (`.sort()`),
- * mirroring how `findSameSecondContenders` above already sorts colliding
- * claim-ids the same way. This is a pure function of the
- * observed nonce *set* (not post order or timestamp), so two sessions that
- * both activated the same claim-id compute the identical winner once each
- * has re-read the same trusted comment stream. Returns `null` when no
- * trusted `activation-nonce` marker exists for `claimId` -- callers must
- * treat that as "no comparison possible," not a mismatch (#1522 AC3).
- */
-function findActivationNonceWinner(events, claimId) {
-  const nonces = events
-    .map((event) => parseActivationNonceComment(event.body, event.createdAt))
-    .filter((marker) => Boolean(marker) && marker?.claimId === claimId)
-    .map((marker) => marker.nonce)
-    .sort();
-  return nonces.length > 0 ? nonces[0] : null;
-}
+// `findActivationNonceWinner` moved to marker-helpers.mts (#1528) so the
+// F2/F3 merge-time write-gate (`summarizeClaimValidation` in
+// protocol-helpers.mts) can share the identical primitive instead of
+// forking its own copy. Imported above from './protocol-helpers.mts'.
 function parseLegacyClaimComment(body, createdAt) {
   const match = String(body ?? '')
     .trimEnd()
