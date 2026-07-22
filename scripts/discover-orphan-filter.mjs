@@ -17,7 +17,11 @@ import {
   parseAutopilotSuitability,
   rankAndRouteBySuitability,
 } from './autopilot-suitability.mjs';
-import { extractBlockedByIssueNumbers } from './discover-readiness-check.mjs';
+import {
+  extractBlockedByIssueNumbers,
+  extractDependencyIssueNumbers,
+  isParentEpicIssue,
+} from './discover-readiness-check.mjs';
 import {
   annotateLeafClaimState,
   buildClaimStateResolution,
@@ -96,12 +100,26 @@ export function classifyIssue(issue, options) {
       details: authoringLabelName,
     };
   }
-  const refs = extractBlockedByReferences(body);
-  if (refs.length === 0) {
+  // Two independent reference families, matching A3's own dependency check
+  // in `discover-readiness-check.mts` (#1536): visible `Blocked by #NNN`
+  // lines (a hard sequential dependency, no exemption) and `Depends on
+  // #NNN` / task-list dependency references (which exempt an open parent
+  // epic / aggregate issue, mirroring `isParentEpicIssue`). A0-O passes
+  // survivors directly to A3.5 and skips A3 entirely, so without this
+  // second family a helper-driven run could select an orphan whose only
+  // open blocker is a dependency reference, even though the roadmap path
+  // would already filter it out. `Blocked by` is checked first (matching
+  // the original single-list order) so an issue that carries both kinds
+  // reports the same `blocked_by_open_reference` / `unresolvable_reference`
+  // reason it always has when that reference alone already blocks.
+  const blockedRefs = extractBlockedByReferences(body);
+  const dependencyRefs = extractDependencyIssueNumbers(body);
+  if (blockedRefs.length === 0 && dependencyRefs.length === 0) {
     return { orphan: true, reason: 'orphan' };
   }
   const unresolved = [];
-  for (const ref of refs) {
+  let anyReferenceNonBlocking = false;
+  for (const ref of blockedRefs) {
     const state = resolveIssueState(
       ref,
       options.issueStateByNumber,
@@ -116,16 +134,65 @@ export function classifyIssue(issue, options) {
     }
     if (state === 'UNRESOLVABLE') {
       unresolved.push(ref);
+    } else {
+      anyReferenceNonBlocking = true;
+    }
+  }
+  for (const ref of dependencyRefs) {
+    const state = resolveIssueState(
+      ref,
+      options.issueStateByNumber,
+      options.fetchIssueStateByNumber,
+    );
+    if ((state ?? '').toUpperCase() === 'OPEN') {
+      if (isDependencyEpicExempt(ref, options)) {
+        anyReferenceNonBlocking = true;
+        continue;
+      }
+      return {
+        orphan: false,
+        reason: 'open_dependency_reference',
+        details: ref,
+      };
+    }
+    if (state === 'UNRESOLVABLE') {
+      unresolved.push(ref);
+    } else {
+      anyReferenceNonBlocking = true;
     }
   }
   if (unresolved.length > 0) {
     return {
       orphan: false,
       reason: 'unresolvable_reference',
-      details: unresolved,
+      details: [...new Set(unresolved)],
     };
   }
-  return { orphan: true, reason: 'blocked_references_closed' };
+  return anyReferenceNonBlocking
+    ? { orphan: true, reason: 'blocked_references_closed' }
+    : { orphan: true, reason: 'orphan' };
+}
+/**
+ * Resolve whether an **open** dependency reference is exempt as a parent
+ * epic / aggregate issue (#1536), reusing `isParentEpicIssue` from
+ * `discover-readiness-check.mts` rather than re-implementing the exemption.
+ * Only ever consulted for `Depends on` / task-list references, never for
+ * `Blocked by` references, matching A3's asymmetry. Fails closed (not
+ * exempt) when `openIssueDetailsByNumber` is absent or does not carry the
+ * referenced issue's details.
+ */
+function isDependencyEpicExempt(ref, options) {
+  const detail = options.openIssueDetailsByNumber?.get(ref);
+  if (!detail) {
+    return false;
+  }
+  return isParentEpicIssue(
+    {
+      title: String(detail.title ?? ''),
+      labels: new Set(normalizeLabels(detail.labels)),
+    },
+    normalizeRoadmapLabelName(options.roadmapLabelName),
+  );
 }
 export async function filterOrphanIssues(issues, options = {}) {
   const issueStateByNumber = new Map(options.issueStateByNumber ?? []);
@@ -139,11 +206,25 @@ export async function filterOrphanIssues(issues, options = {}) {
     blocked_label: [],
     authoring_label: [],
     blocked_by_open_reference: [],
+    open_dependency_reference: [],
     unresolvable_reference: [],
   };
   const orphans = [];
   const unresolvable = [];
   const warnings = [];
+  // Self-batch lookup for the dependency parent-epic exemption (#1536): in
+  // the CLI wiring `issues` is always the full open-issue batch
+  // (`fetchOpenIssues`), so any `Depends on` / task-list reference that
+  // resolves OPEN is guaranteed to already be present here — zero extra
+  // GitHub API calls. A reference outside this batch (e.g. a partial list
+  // passed directly to `filterOrphanIssues`, such as in a test) fails
+  // closed via `isDependencyEpicExempt`'s own absent-entry handling.
+  const openIssueDetailsByNumber = new Map(
+    issues.map((candidate) => [
+      candidate.number,
+      { title: candidate.title, labels: candidate.labels },
+    ]),
+  );
   for (const issue of issues) {
     const result = classifyIssue(issue, {
       issueStateByNumber,
@@ -152,6 +233,8 @@ export async function filterOrphanIssues(issues, options = {}) {
       authoringLabelName: options.authoringLabelName,
       blockedByHumanLabelName: options.blockedByHumanLabelName,
       needsDecisionLabelName: options.needsDecisionLabelName,
+      roadmapLabelName: options.roadmapLabelName,
+      openIssueDetailsByNumber,
     });
     if (result.reason === 'unresolvable_reference') {
       for (const number of result.details ?? []) {
@@ -322,6 +405,7 @@ async function runCli() {
     authoringStaleAgeMs: policy.authoringStaleAgeMs,
     blockedByHumanLabelName: policy.blockedByHumanLabelName,
     needsDecisionLabelName: policy.needsDecisionLabelName,
+    roadmapLabelName: policy.roadmapLabelName,
     autopilotSuitabilityFloor: policy.autopilotSuitabilityFloor,
     autopilotSuitabilityEnabled: policy.autopilotSuitabilityEnabled,
     autopilot: args.autopilot,
@@ -442,12 +526,25 @@ Output schema:
     "blocked_label": [...],
     "authoring_label": [...],
     "blocked_by_open_reference": [...],
+    "open_dependency_reference": [...],
     "unresolvable_reference": [...]
   },
   "unresolvable": [{"issue": 1, "reference": 2, "reason": "issue-not-found-or-inaccessible"}],
   "warnings": [{"issueNumber": 1, "message": "Warning: ..."}],
   "counts": {"scanned": 0, "orphans": 0, "routed_to_human": 0, "filtered": {...}, "unresolvable": 0}
 }
+
+"filtered.open_dependency_reference" (#1536) mirrors A3's own dependency
+check in discover-readiness-check.mjs: a candidate whose body contains an
+open "Depends on #NNN" line or an open task-list "- [ ] #NNN" reference is
+excluded, UNLESS that referenced issue is itself a parent epic / aggregate
+issue (title starting with "roadmap", or carrying the configured roadmap
+label) -- matching A3's exemption exactly. This exemption never applies to
+"Blocked by #NNN" references (filtered.blocked_by_open_reference), which
+stay a hard sequential dependency with no exemption. An unresolvable
+dependency reference (issue not found or inaccessible) is treated as
+blocking, the same fail-safe "unresolvable_reference" applies to an
+unresolvable "Blocked by" reference.
 
 orphans are always ranked by authored autopilot-suitability score (high
 first; equal scores tie-break by lowest issue number). With --autopilot
@@ -499,6 +596,7 @@ function loadPolicy(policyPath) {
       authoringStaleAgeMs: authoringPolicy.staleAgeMs,
       blockedByHumanLabelName: labelsPolicy.blockedByHumanLabelName,
       needsDecisionLabelName: labelsPolicy.needsDecisionLabelName,
+      roadmapLabelName: labelsPolicy.roadmapLabelName,
       autopilotSuitabilityFloor: resolveAutopilotSuitabilityFloor(config),
       autopilotSuitabilityEnabled: resolveAutopilotSuitabilityEnabled(config),
       // Passed through verbatim (raw, un-normalized) for
@@ -519,6 +617,7 @@ function loadPolicy(policyPath) {
       authoringStaleAgeMs: authoringPolicy.staleAgeMs,
       blockedByHumanLabelName: labelsPolicy.blockedByHumanLabelName,
       needsDecisionLabelName: labelsPolicy.needsDecisionLabelName,
+      roadmapLabelName: labelsPolicy.roadmapLabelName,
       autopilotSuitabilityFloor: DEFAULT_AUTOPILOT_SUITABILITY_FLOOR,
       autopilotSuitabilityEnabled: true,
       // No config was readable, so buildClaimStateResolution falls back to
@@ -664,6 +763,16 @@ function normalizeNeedsDecisionLabelName(labelName) {
   return typeof labelName === 'string' && labelName.length > 0
     ? labelName
     : POLICY_DEFAULTS.labels.needsDecisionLabelName;
+}
+/**
+ * Resolve the configured `labels.roadmapLabelName` for the dependency
+ * parent-epic exemption (#1536), following this file's established
+ * defensive-default pattern for the other configurable label names.
+ */
+function normalizeRoadmapLabelName(labelName) {
+  return typeof labelName === 'string' && labelName.length > 0
+    ? labelName
+    : POLICY_DEFAULTS.labels.roadmapLabelName;
 }
 function fetchOpenIssues(repoRef) {
   const issues = [];
