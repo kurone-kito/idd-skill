@@ -87,6 +87,21 @@ Copilot-only). F2/F3 MUST NOT merge on a bare CI-green signal: the
 non-Copilot finding landing shortly after CI still returns the
 workflow to E1 instead of merging over it.
 
+**Nonce passthrough**: when invoking the readiness collector below
+(directly, or via the documented merge-gate helper reference), pass
+`--nonce {nonce}` — this session's own locally-recorded activation-nonce
+from claim time (`idd-claim.instructions.md`'s activation-nonce format) —
+alongside `--claim-id`. This extends the same activation-nonce collision
+detection that `idd-claim.instructions.md`'s Claim verification step 5
+already performs at claim time (for a live session's own claim or
+adopt-verbatim) to the merge-time write-gate too — a distinct case from
+Resume-phase cold recovery, which does not yet thread `--nonce` (see
+`docs/idd-design-rationale.md`'s "Scope for #1522" note and
+kurone-kito/idd-skill#1529).
+Omitting `--nonce` silently skips the merge-time comparison rather than
+failing closed, so pass it whenever a nonce was recorded for the active
+claim.
+
 - **Review currency** (live re-fetch required, freshness gate): read the
   most recent `<!-- review-watermark: {agent-id} {claim-id} … -->`
   comment whose embedded `{claim-id}` matches the current active claim
