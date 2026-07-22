@@ -220,7 +220,12 @@ The merge write-gate half landed separately: `summarizeClaimValidation`
 (`protocol-helpers.mts`) now shares the same `findActivationNonceWinner`
 primitive via `pre-merge-readiness.mjs`'s `--nonce` flag
 (kurone-kito/idd-skill#1528), closing the one AC-adjacent surface #1522
-deliberately deferred.
+deliberately deferred. The instruction-level half landed separately too:
+`idd-pre-merge.instructions.md`'s F2 now instructs the session to pass
+its own locally-recorded activation-nonce as `--nonce` when invoking the
+readiness collector (kurone-kito/idd-skill#1615), so the merge-time
+write-gate's comparison is no longer a documented-but-unreachable
+no-op.
 
 ## Advisory wait
 

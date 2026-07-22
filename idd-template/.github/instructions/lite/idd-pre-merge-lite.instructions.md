@@ -69,11 +69,15 @@ This check never rebases, merges, or pushes.
    scripts/pre-merge-readiness.mjs --pr <pr-number> --claim-issue
    <issue-number> --claim-id <claim-id> --trusted-marker-logins
    <trusted-login-1>,<trusted-login-2>` (add `--agent-id <agent-id>` if
-   known — it tightens the claim check but is optional), or the
-   package-manager-profile `idd:pre-merge-readiness` command (resolve
-   the exact command from `docs/idd-helper-scripts.md` if unsure). This
-   is the same helper the standard F2 treats as the authoritative
-   source for the merge decision.
+   known — it tightens the claim check but is optional; add `--nonce
+   <nonce>` too, this session's own locally-recorded activation-nonce
+   from claim time, whenever one was recorded for the active claim —
+   omitting it silently skips the merge-time activation-nonce
+   comparison), or the package-manager-profile
+   `idd:pre-merge-readiness` command (resolve the exact command from
+   `docs/idd-helper-scripts.md` if unsure). This is the same helper the
+   standard F2 treats as the authoritative source for the merge
+   decision.
 2. If the helper fails, returns invalid or incomplete JSON (missing any
    of the required top-level fields listed in
    `schemas/pre-merge-readiness.schema.json`), or its evidence disagrees
