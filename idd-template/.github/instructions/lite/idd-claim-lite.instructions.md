@@ -192,8 +192,9 @@ self-signed hijack where a displaced session spoofs a different
 authorized under `forcedHandoff.authorityPolicy`; `forcedHandoff.mode`
 is `human-gated`; `oldAgentId` / `oldClaimId` / `branch` all match
 the active claim; and, when an open PR already backs this claim, the
-marker's evidence is scoped to that PR (`issue-plus-pr`, naming it) —
-an issue-only handoff is not enough once a PR exists. On success, the
+marker's evidence has `contextScope` of `issue-plus-pr` with `linkedPr`
+naming that PR — an issue-only handoff is not enough once a PR exists.
+On success, the
 successor claim is **sticky**: adopt
 `newAgentId` / `newClaimId` **verbatim** as your own for the rest of
 the run (do not mint a fresh pair), and still post your own
