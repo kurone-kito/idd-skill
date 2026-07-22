@@ -23,6 +23,7 @@ import type { TrustedMarkerActorResolution } from './protocol-helpers.mts';
 import {
   buildAdvisoryWaitSummary,
   compareIsoTimestamps,
+  computeCopilotPendingCoversHead,
   isValidIsoTimestamp,
   normalizeTrustedMarkerLogins,
   parseAdvisoryRecoveryComment,
@@ -313,6 +314,174 @@ export function buildCopilotRecoverySummary(
   };
 }
 
+/**
+ * `#1571` bounded stale-request recovery classification: whether the current
+ * pending Copilot request should be recovered (removed and re-requested) by
+ * an E14/F2 caller right now. Pure and network-free -- takes already-computed
+ * evidence (the shared AW1-AW3 fields plus the `#1572` recovery-cycle budget)
+ * and returns a decision only; it performs no `gh` mutation itself. Deliberately
+ * distinct from the pre-existing `RECOVERY_NEEDED` outcome (`AW3-R` in
+ * idd-advisory-wait.instructions.md), which anchors a missing same-head marker
+ * for a request the timeline already PROVES covers the current HEAD -- this
+ * function targets the opposite, unproven-coverage case PR #1562 identified
+ * (`copilotPendingCoversHead: false`), where the pending request itself may be
+ * stale and mutating it (remove + re-request) is the correct recovery.
+ */
+export interface StaleRequestRecoveryAction {
+  /**
+   * `'attempt'` -- the pending request is unproven for the current HEAD, no
+   * same-head marker anchors it yet, and recovery-cycle budget remains: an
+   * E14/F2 caller may run the bounded remove/re-request/verify/mark cycle
+   * (`AW3-S`).
+   * `'cap-exhausted'` -- the same unproven condition holds, but the
+   * independent recovery-cycle cap (`#1572`) is already exhausted for this
+   * HEAD: do not remove or re-request; fall back to the ordinary
+   * `CAP_EXHAUSTED_ROUTE` handling instead.
+   * `'not-applicable'` -- no stale-request recovery decision applies (no
+   * claim-bound evidence, not pending, request is already proven to cover
+   * HEAD, or a same-head marker already anchors the clock).
+   */
+  action: 'attempt' | 'cap-exhausted' | 'not-applicable';
+  /** Machine-readable reason for `action`. */
+  reason: string;
+}
+
+const STALE_REQUEST_RECOVERY_REASONS = {
+  activeClaimNotProvided: 'active-claim-not-provided',
+  notPending: 'not-pending',
+  sameHeadMarkerPresent: 'same-head-marker-present',
+  provenCoversHead: 'proven-covers-head',
+  capExhausted: 'recovery-cap-exhausted',
+  attemptEligible: 'recovery-attempt-eligible',
+} as const;
+
+export function evaluateStaleRequestRecoveryAction(input: {
+  copilotPending: boolean;
+  copilotPendingCoversHead: boolean;
+  sameHeadMarkerPresent: boolean;
+  remainingBudget: number;
+  /**
+   * Mirrors {@link CopilotRecoverySummary.activeClaimProvided}: `true` only
+   * when the caller supplied both `--claim-id` and `--agent-id` so the
+   * recovery-cycle budget in `remainingBudget` is actually derived from
+   * claim-bound marker evidence, not just defaulted to the full cap. AW3-S
+   * requires claim binding to authorize a mutation (kurone-kito/idd-skill#1645
+   * review); omitting this check would let an unbound `remainingBudget`
+   * (which reads as the full cap when no evidence was ever counted) produce
+   * `"attempt"` without proof no cycle has already run.
+   */
+  activeClaimProvided: boolean;
+}): StaleRequestRecoveryAction {
+  if (!input.activeClaimProvided) {
+    return {
+      action: 'not-applicable',
+      reason: STALE_REQUEST_RECOVERY_REASONS.activeClaimNotProvided,
+    };
+  }
+  if (!input.copilotPending) {
+    return {
+      action: 'not-applicable',
+      reason: STALE_REQUEST_RECOVERY_REASONS.notPending,
+    };
+  }
+  // A same-head marker (ordinary `advisory-wait:` OR a prior recovery cycle's
+  // `advisory-wait-recovery:`) already anchors this HEAD's clock -- mirrors
+  // evaluateAdvisoryWaitOutcome's own `!sameHeadMarkerPresent` gate for both
+  // its RECOVERY_NEEDED and REQUEST_NEEDED/CAP_EXHAUSTED branches, so this
+  // classifier never contradicts the shared outcome machine's routing.
+  if (input.sameHeadMarkerPresent) {
+    return {
+      action: 'not-applicable',
+      reason: STALE_REQUEST_RECOVERY_REASONS.sameHeadMarkerPresent,
+    };
+  }
+  if (input.copilotPendingCoversHead) {
+    return {
+      action: 'not-applicable',
+      reason: STALE_REQUEST_RECOVERY_REASONS.provenCoversHead,
+    };
+  }
+  if (input.remainingBudget <= 0) {
+    return {
+      action: 'cap-exhausted',
+      reason: STALE_REQUEST_RECOVERY_REASONS.capExhausted,
+    };
+  }
+  return {
+    action: 'attempt',
+    reason: STALE_REQUEST_RECOVERY_REASONS.attemptEligible,
+  };
+}
+
+/**
+ * `#1571` head-race guard: a pure, string-normalized comparison an E14/F2
+ * caller must re-run immediately before every mutating step of the bounded
+ * recovery cycle (removal, re-request, association verification, marker
+ * post) -- see `idd-advisory-wait.instructions.md`'s `AW3-S`. A `true` result
+ * means either the branch moved between the last-known HEAD and this check,
+ * or a comparison side is missing or not a full 40-hex commit SHA (fails
+ * closed on ambiguous evidence the same way an equal-but-abbreviated or
+ * equal-but-empty pair would otherwise misread as "unchanged"): the caller
+ * must abort the current attempt without mutating or counting a cycle, and
+ * restart evaluation fresh (return to E1) against the new HEAD.
+ */
+export function detectRecoveryHeadRace(
+  expectedHeadSha: string,
+  currentHeadSha: string,
+): boolean {
+  const expected = String(expectedHeadSha ?? '')
+    .trim()
+    .toLowerCase();
+  const current = String(currentHeadSha ?? '')
+    .trim()
+    .toLowerCase();
+  // Fail closed on missing OR ambiguous evidence: a comparison side that is
+  // empty, or that is not a full 40-hex commit SHA (e.g. an abbreviated
+  // SHA), is not proof HEAD is stable -- even when both sides are identical
+  // non-full-SHA strings, so a naive equality would misread it as
+  // "unchanged". Treating either case as "no race" would let a recovery
+  // mutation proceed on an unresolved or ambiguous HEAD value
+  // (kurone-kito/idd-skill#1645 review).
+  const fullShaPattern = /^[0-9a-f]{40}$/;
+  if (!fullShaPattern.test(expected) || !fullShaPattern.test(current)) {
+    return true;
+  }
+  return expected !== current;
+}
+
+/** Minimal timeline event shape consumed by {@link verifyRecoveryRequestCoversHead}. */
+interface RecoveryTimelineEventLike {
+  event?: string | null;
+  sha?: string | null;
+  commit_id?: string | null;
+  requested_reviewer?: { login?: string | null } | null;
+}
+
+/**
+ * `#1571` post-mutation association proof: after a recovery cycle's
+ * remove-then-re-request completes, re-fetch the PR timeline for the current
+ * HEAD and call this to verify the fresh request is provably associated with
+ * it (a `review_requested` event for the configured primary bot strictly
+ * after the current HEAD's `committed` event) before posting the bound
+ * `advisory-recovery` marker. Delegates to the same proof
+ * {@link evaluateStaleRequestRecoveryAction}'s caller uses to detect
+ * staleness in the first place (`computeCopilotPendingCoversHead`) -- reusing
+ * one proof for both directions keeps them from silently diverging. Returns
+ * `false` (fails closed, do not post the marker or count a cycle) on missing
+ * or ambiguous timeline evidence, exactly like the staleness check.
+ */
+export function verifyRecoveryRequestCoversHead(
+  timelineEvents: RecoveryTimelineEventLike[],
+  prHeadSha: string,
+  primaryBotLogin?: string,
+): boolean {
+  return computeCopilotPendingCoversHead(
+    timelineEvents,
+    prHeadSha,
+    primaryBotLogin,
+  );
+}
+
 function normalizePositiveIntegerOption(
   value: unknown,
   fallback: number,
@@ -339,6 +508,7 @@ export type AdvisoryWaitStateReport = ReturnType<
   trustedMarkerActors: string[];
   trustedMarkerActorsSource: TrustedMarkerActorResolution['source'];
   copilotRecovery: CopilotRecoverySummary;
+  staleRequestRecovery: StaleRequestRecoveryAction;
 };
 
 // Flag-spec keys stay the dashed literal on purpose (never bare keys like
@@ -492,6 +662,18 @@ function main(): void {
     },
   );
 
+  // #1571: bounded stale-request recovery eligibility, derived from the
+  // already-computed AW1-AW3 evidence (summary) plus the #1572 recovery-cycle
+  // budget (copilotRecovery). See evaluateStaleRequestRecoveryAction's own
+  // doc comment for why this is independent of RECOVERY_NEEDED/AW3-R.
+  const staleRequestRecovery = evaluateStaleRequestRecoveryAction({
+    copilotPending: summary.copilotPending,
+    copilotPendingCoversHead: summary.copilotPendingCoversHead,
+    sameHeadMarkerPresent: summary.sameHeadMarkerPresent,
+    remainingBudget: copilotRecovery.remainingBudget,
+    activeClaimProvided: copilotRecovery.activeClaimProvided,
+  });
+
   process.stdout.write(
     `${JSON.stringify(
       {
@@ -499,6 +681,7 @@ function main(): void {
         trustedMarkerActors: configuredTrustedActors,
         trustedMarkerActorsSource,
         copilotRecovery,
+        staleRequestRecovery,
       },
       null,
       2,

@@ -274,30 +274,9 @@ real account login.
      if `CAP_EXHAUSTED_ROUTE` is `hold`, post the hold comment from
      **AW4** and stop. Otherwise (`phase-specific`, the default), skip
      the advisory wait entirely and proceed directly to E15.
-   - **REQUEST_NEEDED** (`COPILOT_PENDING` is `"false"`, or
-     `COPILOT_PENDING` is `"true"` but current-head coverage is not
-     proven; request cap < `REQUEST_CAP`): request the primary advisory
-     bot's review and immediately post a plain-text marker. If
-     `COPILOT_PENDING` is `"true"` in this branch, first remove the
-     stale/unproven pending reviewer request:
-
-     ```sh
-     gh pr edit {pr-number} --remove-reviewer "@{primary-advisory-bot}"
-     ```
-
-     On a GraphQL login-resolution failure (see above), retry via REST
-     instead:
-
-     ```sh
-     gh api repos/{owner}/{repo}/pulls/{pr-number}/requested_reviewers \
-       -X DELETE -f "reviewers[]={primary-advisory-bot-rest-login}"
-     ```
-
-     If removal fails because the bot is no longer pending, re-run
-     AW1–AW3. If removal fails for any other reason, post the AW4
-     pending-refresh-failed hold comment and stop. After removal
-     succeeds, request the primary advisory bot's review the same
-     gh-then-REST way:
+   - **REQUEST_NEEDED**, `COPILOT_PENDING` is `"false"` (request cap <
+     `REQUEST_CAP`): request the primary advisory bot's review and
+     immediately post a plain-text marker:
 
      ```sh
      gh pr edit {pr-number} --add-reviewer "@{primary-advisory-bot}"
@@ -312,8 +291,22 @@ real account login.
 
      Use `PR_HEAD_SHA` as `{head-SHA}`. Post as plain text, not an HTML
      comment block.
-   - **WAIT**, or after a **REQUEST_NEEDED** or **RECOVERY_NEEDED**
-     marker is posted: enter the active polling loop below.
+   - **REQUEST_NEEDED**, `COPILOT_PENDING` is `"true"` (current-head
+     coverage is not proven — the stale/unproven pending request PR
+     #1562 identified): consult **`AW3-S`**'s `staleRequestRecovery`
+     classification (`idd-advisory-wait.instructions.md`) before doing
+     anything else:
+     - `"attempt"` → run **AW3-S**'s bounded remove/re-request/verify/mark
+       recovery cycle (independently capped; do **not** use the plain
+       `advisory-wait:` marker or the ordinary `REQUEST_CAP` for this
+       sub-case).
+     - `"cap-exhausted"` → do not remove or re-request; handle exactly
+       like **CAP_EXHAUSTED** below (`CAP_EXHAUSTED_ROUTE`).
+     - `"not-applicable"` → a same-head marker already anchors this HEAD;
+       fall through to the polling loop below unchanged.
+   - **WAIT**, or after a **REQUEST_NEEDED** or **RECOVERY_NEEDED** marker,
+     or an **AW3-S** recovery marker, is posted: enter the active polling
+     loop below.
 5. **Optional secondary advisory bot (non-gating).** When the helper reports
    `secondaryRequestNeeded: true` — or, in the shell fallback, when AW3 yields
    **CAP_EXHAUSTED** or a stalled / rate-limited **SATISFIED** (closed by the

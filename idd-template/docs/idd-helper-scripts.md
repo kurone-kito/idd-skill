@@ -1106,6 +1106,16 @@ Interpretation rules:
   `pendingWindowMinutes`, `settledWindowMinutes`,
   `pollIntervalMinutes`, `capExhaustedRoute`, and
   `trustedMarkerSummary`
+- Optional `--claim-id <id> --agent-id <id>` (kurone-kito/idd-skill#1572):
+  when both are supplied, binds two independent, claim/HEAD-scoped
+  evidence objects to the active claim: `copilotRecovery` (the terminal
+  `COPILOT_UNAVAILABLE` stall-recovery state) and `staleRequestRecovery`
+  (kurone-kito/idd-skill#1571; `AW3-S`'s bounded stale-request recovery
+  eligibility — `attempt` / `cap-exhausted` / `not-applicable`). Omitting
+  either flag leaves `copilotRecovery.state` at `NOT_TERMINAL` and makes
+  the recovery-cycle budget read as the full un-decremented cap — always
+  pass both when consulting `staleRequestRecovery` for a mutation
+  decision (see `idd-advisory-wait.instructions.md`'s `AW3-S`).
 
 ### CI wait policy resolution
 
