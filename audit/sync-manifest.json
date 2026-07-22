@@ -199,8 +199,10 @@
     },
     {
       "id": "bundle-work-lite",
-      "description": "Lite work path (weak-model condensed profile): .github/instructions/lite/idd-work-lite.instructions.md only — self-contained; no overview/appendix. Scaffolding for #1541; files filled when #1542 lands.",
-      "files": [],
+      "description": "Lite work path (weak-model condensed profile): .github/instructions/lite/idd-work-lite.instructions.md only — self-contained; no overview/appendix.",
+      "files": [
+        ".github/instructions/lite/idd-work-lite.instructions.md"
+      ],
       "limitBytes": 24000
     },
     {
@@ -497,6 +499,12 @@
           "to": "idd-skill"
         }
       ]
+    },
+    {
+      "id": "idd-work-lite-instructions",
+      "source": "idd-template/.github/instructions/lite/idd-work-lite.instructions.md",
+      "target": ".github/instructions/lite/idd-work-lite.instructions.md",
+      "mode": "exact"
     },
     {
       "id": "idd-workflow-doc",
