@@ -357,13 +357,18 @@ allow/deny split, softened as described below.
 
 ### What the baseline allows
 
-- **Read-only `git` queries**: `status`, `diff`, `log`, `show`,
-  `branch --list` / `--show-current` / `-a` / `-v`, `worktree list`,
-  `rev-parse`, `fetch`, `remote -v` / `remote show`, and `blame`.
-  Mutating `git` commands (`commit`, `push`, `worktree add`/`remove`,
-  branch creation) are deliberately **not** in the baseline; they stay
-  behind the normal permission prompt, or a session may layer them into
-  its own `.claude/settings.local.json`.
+- **Read-only and non-destructive `git` queries**: `status`, `diff`,
+  `log`, `show`, `branch --list` / `--show-current` / `-a` / `-v`,
+  `worktree list`, `rev-parse`, `remote -v` / `remote show`, and
+  `blame` are pure reads. `fetch` is the one deliberate exception: it
+  downloads objects and updates local remote-tracking refs
+  (`refs/remotes/<remote>/*`), so it is not strictly read-only, but it
+  never touches the working tree, the index, or a local branch
+  pointer, and is always safe to re-run. Mutating `git` commands
+  (`commit`, `push`, `worktree add`/`remove`, branch creation) are
+  deliberately **not** in the baseline; they stay behind the normal
+  permission prompt, or a session may layer them into its own
+  `.claude/settings.local.json`.
 - **Read-only and reversible `gh` operations**: issue/PR viewing,
   listing, diffing, and CI-check reads; issue and PR comment/edit;
   label changes; PR review and PR creation; `gh search`; `gh repo
