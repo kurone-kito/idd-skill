@@ -211,6 +211,11 @@ claim.
   GitHub removes a reviewer from `requested_reviewers` when they submit
   a review OR when the request is manually cancelled — either counts as
   no longer pending for merge purposes.
+
+  **Terminal Copilot unavailability**: not gated above — see
+  [Terminal routing](idd-advisory-wait.instructions.md#terminal-routing-1570).
+  An unwaived `copilot-terminal-unavailable` in `blockers[]` stops here
+  with that section's hold, regardless of the above.
 - **CI**: Current PR head SHA has all required CI checks generated and
   all passing (→ run CI wait per `idd-ci.instructions.md` using the
   same resolved `ciWait.runningTimeout`, `ciWait.generationTimeout`, and
