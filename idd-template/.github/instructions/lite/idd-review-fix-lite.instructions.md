@@ -32,8 +32,9 @@ those are E4-E8 judgment calls, excluded from every lite profile.
    fixes and E13 replies to. It does not cover E10's own critique
    findings (E10 fixes those directly, per its own step, the same
    self-review loop every phase uses) or E12's bounded cross-round
-   batching allowance (which explicitly permits folding in untriaged,
-   bot-sourced comments under its own separate conditions).
+   batching allowance (which explicitly permits folding in bot-sourced
+   comments not yet gone through triage, under its own separate
+   conditions).
 
 ## Stop-and-ask conditions
 
