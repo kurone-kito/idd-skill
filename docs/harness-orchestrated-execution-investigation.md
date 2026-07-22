@@ -67,11 +67,13 @@ during this investigation, not merely re-stated from the issue body:
 1. **Millisecond- vs second-precision timestamps.** `renderClaimedByMarker`
    in `src/scripts/marker-helpers.mts` calls
    `normalizeSecondPrecisionIsoTimestamp`, which enforces the exact regex
-   `/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/` (`src/scripts/marker-helpers.mts:1006`)
+   `/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/` (`src/scripts/marker-helpers.mts:1041`
+   as of this writing — re-check with `grep -n` before citing, since this
+   file's line numbers shift as unrelated helpers land)
    — a literal `Z` immediately after the seconds field, with no room for a
    `.mmm` fractional-second suffix. When the timestamp fails that check,
    `renderClaimedByMarker` throws `invalid claimed-by marker payload`
-   (`src/scripts/marker-helpers.mts:615`). JavaScript's
+   (`src/scripts/marker-helpers.mts:650` as of this writing). JavaScript's
    `new Date().toISOString()` — the obvious hand-rolled choice — always
    emits millisecond precision, so a naive reimplementation trips this
    exact throw on every call, not on an edge case.
