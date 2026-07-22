@@ -87,7 +87,11 @@ once this precondition is satisfied, continue to Step 1.
    --pr {pr-number} --trusted-marker-logins
    "<trusted-login-1>,<trusted-login-2>"`, or the package-manager
    equivalent (resolve from `docs/idd-helper-scripts.md`). This is the
-   Step 2 watermark's data source, not a triage tool.
+   Step 2 watermark's data source, not a triage tool. The helper emits
+   both `latestCiCompletedAt` and `latestPassingCiCompletedAt`;
+   `{latest-ci-completed-at}` is always the latter — the latest
+   _passing_ (or treated-as-passed) completion, never the latest
+   completion regardless of outcome.
 3. Independently fetch, in one pass before applying any filter: every
    review thread (resolved or not — paginate until `hasNextPage` is
    `false`, never stop at a fixed page size), every review body
