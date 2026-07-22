@@ -129,11 +129,13 @@ let sharedUpstreamRepo: {
  * *same* already-shallow ref works, already covered by the pre-existing
  * "deepened-success" test).
  *
- * HEAD is restored to `branch` (the main line) before returning:
- * `createFreshShallowClone` below clones whatever branch is currently
- * checked out here (no explicit `--branch`), and the pre-existing
- * "deepened-success" test depends on that default being the main line, not
- * `featureBranch`.
+ * `featureBranch` is built in a separate, temporary `git worktree` rather
+ * than by checking it out directly in `dir` (add commits, then checkout
+ * back to `branch`): `dir`'s own HEAD/working tree never has to leave
+ * `branch` at any point this way, so there is no window -- even a
+ * same-process one -- where a concurrent reader of `dir` (or a future test
+ * added to this file) could observe it mid-switch. The scratch worktree is
+ * removed again once `featureBranch`'s commits exist as a plain ref.
  *
  * Immutable after creation (nothing below ever fetches into or otherwise
  * mutates this directory), so sharing one instance across tests is safe.
@@ -160,15 +162,31 @@ function createUpstreamRepo(): {
   const branch = gitNoSign(dir, ['rev-parse', '--abbrev-ref', 'HEAD']);
 
   const featureBranch = 'feature';
-  gitNoSign(dir, ['checkout', '-q', '-b', featureBranch, commits[2]]);
+  const featureWorktreeDir = mkdtempSync(
+    join(tmpdir(), 'idd-branch-conflict-feature-wt-'),
+  );
+  gitNoSign(dir, [
+    'worktree',
+    'add',
+    '-q',
+    featureWorktreeDir,
+    '-b',
+    featureBranch,
+    commits[2],
+  ]);
   const featureCommits: string[] = [];
   for (let i = 0; i < 3; i += 1) {
-    writeFileSync(join(dir, `g${i}.txt`), `${i}\n`);
-    gitNoSign(dir, ['add', `g${i}.txt`]);
-    gitNoSign(dir, ['commit', '-q', '-m', `feature commit ${i}`]);
-    featureCommits.push(gitNoSign(dir, ['rev-parse', 'HEAD']));
+    writeFileSync(join(featureWorktreeDir, `g${i}.txt`), `${i}\n`);
+    gitNoSign(featureWorktreeDir, ['add', `g${i}.txt`]);
+    gitNoSign(featureWorktreeDir, [
+      'commit',
+      '-q',
+      '-m',
+      `feature commit ${i}`,
+    ]);
+    featureCommits.push(gitNoSign(featureWorktreeDir, ['rev-parse', 'HEAD']));
   }
-  gitNoSign(dir, ['checkout', '-q', branch]);
+  gitNoSign(dir, ['worktree', 'remove', '--force', featureWorktreeDir]);
 
   sharedUpstreamRepo = { dir, branch, commits, featureBranch, featureCommits };
   return sharedUpstreamRepo;
@@ -622,20 +640,28 @@ test('resolveMergeBaseWithRetry: a genuinely shallow checkout resolves after a d
 // the same underlying shallow-git mechanism against a *real* local fixture,
 // mirroring tryFetchHead's exact fetch shape without going through its own
 // (deliberately untested, per its doc comment) network-URL assembly.
+//
+// The widen step below explicitly deepens *both* `branch` (the base line)
+// and `featureBranch` (standing in for the PR head) at every retry step --
+// mirroring computeMergeBase's actual combined step (`baseFetched ||
+// headFetched`) exactly, rather than deepening only one side and relying on
+// git's shallow-boundary bookkeeping to have incidentally widened the
+// other. Each explicit `--deepen` targets its own named ref directly, so
+// this does not depend on any cross-ref widening side effect.
 
-test('resolveMergeBaseWithRetry: a genuinely shallow PR head, entirely absent locally, resolves after deepening the head-side ref', () => {
+test('resolveMergeBaseWithRetry: a genuinely shallow PR head, entirely absent locally, resolves once both sides are deepened', () => {
   const {
     dir: upstreamDir,
+    branch,
     commits,
     featureBranch,
     featureCommits,
   } = createUpstreamRepo();
-  // A --depth=1 clone of the *base* branch only -- this checkout already
-  // has the base ref (mirroring a checkout that already benefits from
-  // #1519's base-ref retry), but has never fetched featureBranch (standing
-  // in for the PR head's own ref/remote) at all: the head commit is not
-  // merely shallow, it is completely absent from the local object
-  // database, the exact #1535 gap.
+  // A --depth=1 clone of the *base* branch only -- this checkout has the
+  // base ref's tip, but has never fetched featureBranch (standing in for
+  // the PR head's own ref/remote) at all: the head commit is not merely
+  // shallow, it is completely absent from the local object database, the
+  // exact #1535 gap.
   const shallowDir = createFreshShallowClone(upstreamDir);
   const headSha = featureCommits[featureCommits.length - 1];
   const baseSha = commits[commits.length - 1];
@@ -649,22 +675,30 @@ test('resolveMergeBaseWithRetry: a genuinely shallow PR head, entirely absent lo
     () => mergeBaseText(shallowDir, headSha, baseSha),
     (step) => {
       widenedSteps.push(step);
-      // Mirrors tryFetchHead: fetch/deepen the head-side ref (here,
-      // featureBranch stands in for refs/pull/<prNumber>/head) at the same
-      // escalating depth/deepen args tryFetchBase already uses for the
-      // base side.
-      return fetchShallowFixtureStep(
+      const fetchArgs = MERGE_BASE_FETCH_STEPS[step];
+      // Mirrors computeMergeBase's real combined widen step: attempt both
+      // tryFetchBase's shape (deepen `branch`) and tryFetchHead's shape
+      // (deepen `featureBranch`) at the same escalating depth/deepen args,
+      // widening if either succeeds.
+      const baseWidened = fetchShallowFixtureStep(
+        shallowDir,
+        branch,
+        fetchArgs,
+      );
+      const headWidened = fetchShallowFixtureStep(
         shallowDir,
         featureBranch,
-        MERGE_BASE_FETCH_STEPS[step],
+        fetchArgs,
       );
+      return baseWidened || headWidened;
     },
     MERGE_BASE_FETCH_STEPS.length,
   );
   // The true shared ancestor is commits[2] (where featureBranch forked from
-  // the main line) -- reachable only once the head-side ref is deepened far
-  // enough to expose it, since a first depth=1 fetch of featureBranch only
-  // brings its own tip commit with no parent history yet.
+  // the main line) -- reachable only once *both* sides are deepened enough
+  // to expose it: a first depth=1 fetch of featureBranch only brings its
+  // own tip commit with no parent history yet, and baseSha's own shallow
+  // boundary must also widen back far enough to reach commits[2].
   assert.equal(result, commits[2]);
   assert.ok(
     widenedSteps.length >= 1 &&
