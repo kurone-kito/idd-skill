@@ -33,9 +33,9 @@ was lost — stop per the condition above without posting.
    - The active `{claim-id}`.
    - If `ready` is `true`: the merge command candidate, for the
      operator or a stronger-tier session to review and run —
-     `gh pr merge {pr-number} --merge --match-head-commit "{head-SHA}"`
-     (using the pre-merge-readiness helper's `prHeadSha`, not a locally
-     re-derived value).
+     `gh pr merge {pr-number} --merge --match-head-commit "{prHeadSha}"`
+     (using the recorded `prHeadSha` value from F2, not a locally
+     re-derived SHA).
 2. Post the comment.
 3. Stop. Do not run `gh pr merge`, `idd-merge-execute.mjs`, or any
    other command that would merge, close, or otherwise mutate the PR

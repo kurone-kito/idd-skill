@@ -32,8 +32,8 @@ lite file has no written-table fallback of its own.
   step 1, if applicable), or is unavailable, fails, or disagrees with
   live state.
 - The pre-merge-readiness helper is missing, fails, returns invalid or
-  incomplete JSON (missing `ready` or `blockers`), or disagrees with
-  live GitHub state.
+  incomplete JSON (missing `ready`, `blockers`, or `prHeadSha`), or
+  disagrees with live GitHub state.
 - The repository is `instructions-only`.
 
 ## F1 — Branch-state check (read-only)
@@ -70,18 +70,20 @@ This check never rebases, merges, or pushes.
    is the same helper the standard F2 treats as the authoritative
    source for the merge decision.
 2. If the helper fails, returns invalid or incomplete JSON (missing
-   `ready` or `blockers`), or its evidence disagrees with
+   `ready`, `blockers`, or `prHeadSha`), or its evidence disagrees with
    directly-observable live GitHub state (for example, the claim is
    obviously lost): stop per the condition above. Do not discard the
    helper output and fall back to live-fetch-plus-prose judgment — that
    fallback is the judgment-heavy part the standard file allows and
    this lite file deliberately excludes.
-3. Otherwise, record the verdict (`ready` and, if `ready` is `false`,
-   every entry in `blockers[]` — each a `gate` name plus a `detail`
-   string) exactly as the helper reports it. Do not interpret, re-route,
-   or attempt to remedy individual blockers yourself (for example,
-   waiting out a `ci` or `advisory-wait` blocker, or returning to E1 for
-   a `review-currency` or `disposition-evidence` blocker) — that
+3. Otherwise, record the verdict exactly as the helper reports it:
+   `prHeadSha` (F2.5 needs this exact value for its merge command
+   candidate — never re-derive it locally), `ready`, and, if `ready` is
+   `false`, every entry in `blockers[]` — each a `gate` name plus a
+   `detail` string. Do not interpret, re-route, or attempt to remedy
+   individual blockers yourself (for example, waiting out a `ci` or
+   `advisory-wait` blocker, or returning to E1 for a `review-currency`
+   or `disposition-evidence` blocker) — that
    per-blocker routing is exactly the standard file's prose-heavy part
    this lite file excludes.
 4. Proceed to `idd-merge-handoff-lite.instructions.md` (F2.5) with this
