@@ -329,15 +329,14 @@ continuation.
    posted a result yet), or any `pending`/`unknown` entry reached via
    step 3's fallback: keep polling until `success`, `failing`, or a
    timeout. Evaluate every still-non-`success` entry the reaching route
-   named — required entries for this route, every `checks[]` entry for
-   step 3's fallback (a `no-required-checks` repository marks none
-   `required`, so filtering on that field there would evaluate
-   nothing). **Determine timeout
-   from server timestamps, not a client clock estimate**: if the entry
-   has a `startedAt`, elapsed is server time minus `startedAt`, timed
-   out past ci-wait-policy's `runningTimeout`. If it has no `startedAt`
-   (queued, not yet running) or is missing from `checks[]` entirely (a
-   required check that has not posted anything at all), elapsed is
+   named, plus each name in `requiredChecks.missingNames` (a required
+   check with no `checks[]` entry at all) — required `checks[]` entries
+   for this route, every entry for step 3's fallback (a
+   `no-required-checks` repository marks none `required`). **Determine
+   timeout from server timestamps, not a client clock estimate**: if
+   the entry has a `startedAt`, elapsed is server time minus
+   `startedAt`, timed out past ci-wait-policy's `runningTimeout`. If it
+   has no `startedAt` (queued) or is a `missingNames` entry, elapsed is
    server time minus this wait's own first poll time, timed out past
    `generationTimeout` instead — its running-timeout has not begun.
    **On timeout**: identify the stalled check (`checkName` plus `url`
