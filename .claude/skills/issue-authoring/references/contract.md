@@ -786,11 +786,24 @@ Effort is distinct from the autopilot-suitability score: suitability
 captures _autonomy_ (can an agent finish unattended), while effort
 captures _size_ (a fully-autonomous issue can still be large).
 
-| Hint | Meaning | Typical signals                                                                                     |
-| ---- | ------- | --------------------------------------------------------------------------------------------------- |
-| S    | Small   | One module / a few files; a single reviewable change; little or no review back-and-forth expected   |
-| M    | Medium  | A helper plus its callers, or one instruction surface with mirrors and tests                        |
-| L    | Large   | A new helper family, multi-file instruction rewrites, or work that tends to span many review rounds |
+| Hint         | Scope                                                                                             | Uncertainty                                                                                        | Example signals                                                                                     |
+| ------------ | ------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
+| **S** Small  | Touches one module or a small, contained file set                                                 | Little to no open design decision remains once the plan is drafted                                 | One module / a few files; a single reviewable change; little or no review back-and-forth expected   |
+| **M** Medium | Touches a helper plus its callers, or one instruction surface together with its mirrors and tests | At most one open design decision remains, resolvable during planning without a separate hold       | A helper plus its callers, or one instruction surface with mirrors and tests                        |
+| **L** Large  | Touches a new helper family, or spans a multi-file rewrite across several instruction surfaces    | Two or more open design decisions remain, or one decision whose resolution could reshape the scope | A new helper family, multi-file instruction rewrites, or work that tends to span many review rounds |
+
+**Calibration note.** Observed agent token usage or wall-clock duration
+from previously completed issues may be used to sanity-check a chosen
+band, but those are calibration observations only, never the unit
+itself: model speed shifts release to release, and concurrent agent
+runs distort wall-clock comparison. Do not anchor a hint to a specific
+token count or duration.
+
+**Mis-scope routing.** An estimate that does not fit even the `L`
+row's scope-and-uncertainty definition is a mis-scope smell: the draft
+likely bundles multiple intents. Return to
+[Decompose and Draft](#2-decompose-and-draft) and split at intent level
+instead of publishing one oversized issue labeled `L`.
 
 The hint is recorded as a **footer at the end of the issue body** — a
 visible line paired with a hidden, prefix-aware machine marker, beside
