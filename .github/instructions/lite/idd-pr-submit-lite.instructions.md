@@ -75,8 +75,12 @@ following:
    auto-relocate.
 4. `git branch --show-current` equals the claimed branch.
 5. Acquire the worktree-local claim lock with the profile-selected
-   `claim-lock` helper, passing the current agent id and claim id. A
-   `collision` result is fail-closed: stop rather than proceed.
+   `claim-lock` helper (`node scripts/claim-lock.mjs --acquire
+   --worktree <this-worktree-path> --agent-id <id> --claim-id <id>`, or
+   the package-manager-profile `idd:claim-lock` command with the same
+   arguments — resolve the exact command from
+   `docs/idd-helper-scripts.md` if unsure). A `collision` result is
+   fail-closed: stop rather than proceed.
 6. If any check fails, stop.
 
 ## D1 — Sync main before first push
@@ -231,13 +235,19 @@ session/turn; otherwise a backgrounded wait can strand the session past
 its handoff point with no one left to act on the result.
 
 1. Use the profile-selected **ci-wait-policy** helper to resolve the
-   running/generation timeouts and the rerun budget. This helper is
-   read-only and does not poll CI itself.
+   running/generation timeouts and the rerun budget:
+   `node scripts/ci-wait-policy.mjs`, or the package-manager-profile
+   `idd:ci-wait-policy` command (resolve the exact command from
+   `docs/idd-helper-scripts.md` if unsure). This helper is read-only and
+   does not poll CI itself.
 2. Use the profile-selected **ci-wait-state** helper for the actual
-   required-check snapshot (poll it again on each wait iteration) and
-   read its `requiredChecks.status` field: `success`, `pending`,
-   `failing`, `missing`, `no-required-checks`, or `source-pinned`. If
-   either helper is unavailable, fails, or disagrees with live GitHub
+   required-check snapshot (poll it again on each wait iteration):
+   `node scripts/ci-wait-state.mjs --pr <pr-number>`, or the
+   package-manager-profile `idd:ci-wait-state` command (same
+   `docs/idd-helper-scripts.md` resolution as above). Read its
+   `requiredChecks.status` field: `success`, `pending`, `failing`,
+   `missing`, `no-required-checks`, or `source-pinned`. If either helper
+   is unavailable, fails, or disagrees with live GitHub
    state, stop and ask — do not re-derive branch-protection or ruleset
    rules by hand.
 3. **`no-required-checks`**: a repository can legitimately have no
