@@ -221,7 +221,7 @@ const OPERATIONAL_MARKERS: OperationalMarker[] = [
     // recovery-cycle evidence (excluded from counting/anchoring).
     label: 'advisory-wait-recovery:',
     pattern:
-      /^advisory-wait-recovery:\s+\S+\s+[0-9a-f]{40}\s+\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z(?:\s+claim:\S+\s+attempt:\d+)?\s*$/,
+      /^advisory-wait-recovery:\s+\S+\s+[0-9a-f]{40}\s+\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z(?:\s+claim:\S+\s+attempt:[1-9]\d*)?\s*$/,
   },
   {
     label: '<!-- advisory-wait:',
@@ -251,7 +251,7 @@ const OPERATIONAL_MARKERS: OperationalMarker[] = [
     // routing tracks).
     label: 'copilot-unavailable:',
     pattern:
-      /^copilot-unavailable:\s+\S+\s+[0-9a-f]{40}\s+\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z\s+claim:\S+\s+attempt:\d+\s*$/,
+      /^copilot-unavailable:\s+\S+\s+[0-9a-f]{40}\s+\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z\s+claim:\S+\s+attempt:[1-9]\d*\s*$/,
   },
   {
     label: '<!-- forced-handoff:',
@@ -1060,7 +1060,12 @@ function parseBoundAdvisoryEvidenceMarker(
       // recognized as an operational marker but rejected here (or vice
       // versa). `ISO8601_UTC_PATTERN` itself has no fractional-seconds
       // slot, so it is not reused for this group.
-      `^${prefix}:\\s+(\\S+)\\s+([0-9a-f]{40})\\s+(\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?Z)\\s+claim:(\\S+)\\s+attempt:(\\d+)\\s*$`,
+      // attempt requires a positive integer ([1-9]\d*, no leading zero,
+      // no zero) -- matching OPERATIONAL_MARKERS' recognizer patterns
+      // exactly, so `attempt:0` is rejected structurally by BOTH the
+      // recognizer and the parser instead of being recognized as a
+      // well-formed marker here and then discarded post-parse.
+      `^${prefix}:\\s+(\\S+)\\s+([0-9a-f]{40})\\s+(\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?Z)\\s+claim:(\\S+)\\s+attempt:([1-9]\\d*)\\s*$`,
     ),
   );
   if (!match) {
@@ -1068,6 +1073,9 @@ function parseBoundAdvisoryEvidenceMarker(
   }
   const attempt = Number.parseInt(match[5], 10);
   if (!Number.isSafeInteger(attempt) || attempt < 1) {
+    // Unreachable given the regex above already excludes 0 and non-digits;
+    // kept as defense-in-depth against a future regex edit that widens the
+    // attempt group without updating this guard.
     return null;
   }
   return {

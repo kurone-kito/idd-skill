@@ -434,6 +434,25 @@ test('a fractional-second embedded timestamp is recognized identically by operat
   );
 });
 
+test('attempt:0 is rejected by both operationalMarkerPrefix and the parse helpers, for both bound marker types', () => {
+  // OPERATIONAL_MARKERS' recognizer patterns and parseBoundAdvisoryEvidenceMarker
+  // must agree on requiring a POSITIVE integer attempt -- otherwise a
+  // structurally invalid attempt:0 body would be recognized as a
+  // well-formed operational marker by the recognizer, then silently
+  // rejected by the parser, an inconsistency flagged by Copilot review on
+  // PR #1644 (#1572).
+  const recoveryZero = `advisory-wait-recovery: claude-417b737f ${SHA} ${TS} claim:clm-9f6885e3 attempt:0`;
+  assert.equal(operationalMarkerPrefix(recoveryZero), null);
+  assert.equal(parseAdvisoryRecoveryComment(recoveryZero, CREATED_AT), null);
+
+  const unavailableZero = `copilot-unavailable: claude-417b737f ${SHA} ${TS} claim:clm-9f6885e3 attempt:0`;
+  assert.equal(operationalMarkerPrefix(unavailableZero), null);
+  assert.equal(
+    parseCopilotUnavailableComment(unavailableZero, CREATED_AT),
+    null,
+  );
+});
+
 test('copilot-unavailable envelope validates against the post-idd-marker schema', () => {
   const body = buildMarkerBody('copilot-unavailable', {
     'agent-id': 'a',
