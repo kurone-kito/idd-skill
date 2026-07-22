@@ -97,10 +97,12 @@
         "idd-template/docs/idd-workflow.md",
         "idd-template/docs/idd-review-policy-profiles.md",
         "idd-template/docs/idd-helper-scripts.md",
+        "idd-template/docs/idd-autonomy-contract.md",
         "idd-template/docs/idd-comment-minimization.md",
         "idd-template/docs/idd-resume-detail.md",
         "idd-template/docs/idd-advisory-wait-shell-fallback.md",
         "idd-template/docs/idd-design-rationale.md",
+        "idd-template/docs/idd-concept-ownership.md",
         "idd-template/docs/permissions.md",
         "idd-template/docs/getting-started.md",
         "idd-template/docs/concepts.md",
@@ -240,6 +242,14 @@
       "limitBytes": 22000
     },
     {
+      "id": "bundle-review-fix-lite",
+      "description": "Lite review-fix path (weak-model condensed profile): .github/instructions/lite/idd-review-fix-lite.instructions.md only — no overview/appendix; control flow is fully inlined, with single-hop command-syntax references to idd-advisory-wait.instructions.md and idd-ci.instructions.md per content principle 3.",
+      "files": [
+        ".github/instructions/lite/idd-review-fix-lite.instructions.md"
+      ],
+      "limitBytes": 21000
+    },
+    {
       "id": "bundle-review",
       "description": "Review path: idd-overview-core + idd-overview-appendix + idd-review-snapshot + idd-review-triage + idd-review-fix + idd-advisory-wait + idd-ci",
       "files": [
@@ -334,6 +344,12 @@
       "mode": "exact"
     },
     {
+      "id": "idd-autonomy-contract-doc",
+      "source": "idd-template/docs/idd-autonomy-contract.md",
+      "target": "docs/idd-autonomy-contract.md",
+      "mode": "exact"
+    },
+    {
       "id": "idd-ci-instructions",
       "source": "idd-template/.github/instructions/idd-ci.instructions.md",
       "target": ".github/instructions/idd-ci.instructions.md",
@@ -355,6 +371,12 @@
       "id": "idd-comment-minimization-doc",
       "source": "idd-template/docs/idd-comment-minimization.md",
       "target": "docs/idd-comment-minimization.md",
+      "mode": "exact"
+    },
+    {
+      "id": "idd-concept-ownership-doc",
+      "source": "idd-template/docs/idd-concept-ownership.md",
+      "target": "docs/idd-concept-ownership.md",
       "mode": "exact"
     },
     {
@@ -485,6 +507,12 @@
       "id": "idd-review-fix-instructions",
       "source": "idd-template/.github/instructions/idd-review-fix.instructions.md",
       "target": ".github/instructions/idd-review-fix.instructions.md",
+      "mode": "exact"
+    },
+    {
+      "id": "idd-review-fix-lite-instructions",
+      "source": "idd-template/.github/instructions/lite/idd-review-fix-lite.instructions.md",
+      "target": ".github/instructions/lite/idd-review-fix-lite.instructions.md",
       "mode": "exact"
     },
     {
