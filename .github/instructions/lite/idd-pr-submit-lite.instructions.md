@@ -15,6 +15,10 @@ session already claimed and implemented. If the repository is
 - Helper-enabled profiles: when a step names a helper or command set, use
   it. If a required helper is missing, fails, or disagrees with live
   state, stop and ask. Do not fall back silently to prose.
+- **Command sets**: `fix-validate` and `pre-push-validate` (named below)
+  are read from `.github/idd/config.json`'s `commands` mapping. If that
+  file is missing or the command set cannot be read, stop and ask rather
+  than guessing a command.
 - `instructions-only`: do not use this lite file; use
   `idd-pr-submit.instructions.md` instead.
 - Any mismatch between this file and the standard PR-submit phase is a
@@ -43,7 +47,11 @@ session already claimed and implemented. If the repository is
   ruleset reads are unreadable, or `ci-wait-state`'s
   `requiredChecks.status` reports `no-required-checks` and that has not
   been confirmed as expected for this repository, or `source-pinned`).
-- Any required check reaches a failing terminal state.
+- Any required check other than `idd-advisory-convergence` reaches a
+  failing terminal state, or `idd-advisory-convergence` is failing
+  without satisfying D4 step 7's exception.
+- D2's push needs `--force-with-lease` outside the one named exception
+  below.
 
 ## Pre-mutation guard
 
@@ -110,10 +118,13 @@ loop instead of returning to this D1 rebase path.
    (even under the same agent id), the claim was lost — stop.
 2. Run **pre-push-validate**.
 3. Push the branch. Use a normal push on first publication. Use
-   `--force-with-lease` only when recovering an already-published branch
-   under an explicit, repository-permitted force-push exception that
-   already required a rebase; otherwise use the merge-based sync path
-   instead.
+   `--force-with-lease` only when every one of these holds: the branch
+   is already published, a repository policy explicitly permits a
+   force-push exception here, and this exact exception already required
+   a rebase. If any of those does not hold, stop per the condition
+   above — do not push with `--force-with-lease` and do not continue in
+   this lite flow; the merge-based resync path is out of this file's
+   scope.
 
 ## D3 — Create PR
 
@@ -182,10 +193,12 @@ timeouts. Use both, not either alone.
    integration-pinned required check exists but cannot be enumerated by
    name): stop per the condition above rather than silently treating
    either as a pass.
-4. **`failing`**: a required check other than `idd-advisory-convergence`
-   reached a genuine failing terminal state — stop per the condition
-   above rather than continuing to poll (fixing or rerunning it is
-   outside this file's mechanical scope).
+4. **`failing`**: check whether `idd-advisory-convergence` is the
+   **only** failing required check. If so, go to step 7's exception
+   instead of stopping here. Otherwise (any other required check is
+   failing, with or without `idd-advisory-convergence` also failing),
+   stop per the condition above rather than continuing to poll (fixing
+   or rerunning it is outside this file's mechanical scope).
 5. **`pending`** or **`missing`** (an expected required check has not
    posted a result yet): keep polling until `success`, `failing`, or the
    ci-wait-policy timeout is reached.
