@@ -13,6 +13,13 @@ export const DEFAULT_ADVISORY_PENDING_WINDOW_MINUTES = 30;
 export const DEFAULT_ADVISORY_SETTLED_WINDOW_MINUTES = 10;
 export const DEFAULT_ADVISORY_POLL_INTERVAL_MINUTES = 2;
 export const DEFAULT_ADVISORY_PRIMARY_BOT_LOGIN = 'copilot';
+// #1571: the default primary bot's GraphQL login (`copilot`) and its REST
+// `requested_reviewers` account login differ -- `gh pr edit --add-reviewer`/
+// `--remove-reviewer` resolve bot logins via GraphQL and some `gh` versions
+// reject the bot login outright, so E14 falls back to this REST identity
+// (see idd-review-fix.instructions.md's gh-then-REST fallback).
+export const DEFAULT_ADVISORY_PRIMARY_BOT_REST_LOGIN =
+  'copilot-pull-request-reviewer[bot]';
 // Shared last-resort fallback for the plural `advisoryBotLogins` config key
 // (distinct from the singular primary-bot-login default above): used by both
 // `merged-pr-feedback-sweep.mts` and `disposition-non-review-notices.mts` so
@@ -147,6 +154,26 @@ export function readAdvisoryPrimaryBotLogin(
   } catch {
     return DEFAULT_ADVISORY_PRIMARY_BOT_LOGIN;
   }
+}
+
+/**
+ * Resolve the REST API identity for the configured primary advisory bot
+ * (#1571), used only when the `gh pr edit --add-reviewer` /
+ * `--remove-reviewer` GraphQL mutation fails to resolve a bot login (E14's
+ * documented gh-then-REST fallback; see
+ * idd-review-fix.instructions.md#e14). For the default Copilot bot, the REST
+ * identity differs from the GraphQL login; a configured non-default bot's
+ * REST login equals its GraphQL login, since a configured login is already a
+ * real account login. Pure and fails closed to the default REST login when
+ * `primaryBotLogin` is blank.
+ */
+export function resolveAdvisoryBotRestLogin(
+  primaryBotLogin: string = DEFAULT_ADVISORY_PRIMARY_BOT_LOGIN,
+): string {
+  const normalized = normalizeConfiguredPrimaryBotLogin(primaryBotLogin);
+  return normalized === DEFAULT_ADVISORY_PRIMARY_BOT_LOGIN
+    ? DEFAULT_ADVISORY_PRIMARY_BOT_REST_LOGIN
+    : normalized;
 }
 
 /**
