@@ -284,12 +284,18 @@ continuation.
 **Duplicate check instances**: the state helper's `checks[]` array can
 hold more than one entry for the same `checkName` — a rerun leaves the
 earlier instance in place alongside the fresh one, and this raw array
-is not pre-deduped for callers. Before evaluating `checks[]` below
-(steps 3, 5, and 6 all read it), first reduce it to one entry per
-`checkName`: an entry with no `completedAt` (still in flight) always
-outranks one that has completed, regardless of either entry's
-`startedAt` — a live rerun can never be older than the finished run it
-supersedes. Once both entries have completed, the one with the later
+is not pre-deduped for callers. It is keyed by `(checkName,
+workflowName)` so two independent checks sharing a display name across
+workflows stay distinct. Before evaluating `checks[]` below (steps 3,
+5, and 6 all read it): for a **`required`** entry (steps 5 and 6's own
+set), reduce by `checkName` alone — the required-check gate itself
+matches by name alone, and a rerun's `workflowName` can differ from
+the run it supersedes. For a **non-required** entry (step 3's
+fallback), reduce by the full `(checkName, workflowName)` pair
+instead, to avoid conflating independent checks. Either way: an entry
+with no `completedAt` (still in flight) always outranks one that has
+completed, regardless of `startedAt` — a live rerun can never be older
+than the run it supersedes. Once both have completed, the later
 `completedAt` wins.
 
 1. Use the profile-selected **ci-wait-policy** helper to resolve the
@@ -343,19 +349,21 @@ supersedes. Once both entries have completed, the one with the later
    entry at all); for step 3's fallback, every still-non-`success`
    entry regardless of `required` (a `no-required-checks` repository
    marks none `required`). **Determine
-   timeout from server timestamps, not a client clock estimate**: if
-   the entry has a `startedAt`, elapsed is server time minus
-   `startedAt`, timed out past ci-wait-policy's `runningTimeout`. If it
-   has no `startedAt` (queued) or is a `missingNames` entry, elapsed is
+   timeout from server timestamps, not a client clock estimate**: the
+   helper always reports `startedAt` as a string, empty when absent —
+   test for non-empty, not merely present. If it is non-empty, elapsed
+   is server time minus `startedAt`, timed out past ci-wait-policy's
+   `runningTimeout`. If it is empty (queued) or the entry is a
+   `missingNames` name with no `checks[]` entry at all, elapsed is
    server time minus this wait's own first poll time, timed out past
    `generationTimeout` instead — its running-timeout has not begun.
    **On timeout**: identify the stalled check (`checkName` plus `url`
    if present). Two cases have no run `gh run rerun` can target — stop
    per the condition above and post a hold note naming the check for
-   either: the check has no `url` at all (a required check absent from
-   `checks[]` entirely, i.e. a `missingNames` entry), or its `url` is a
-   Commit-Status (`status-context`) entry pointing at an external
-   target rather than an Actions run. Otherwise resolve the rerun
+   either: it is a `missingNames` name with no `checks[]` entry at all
+   (so no `url` either), or its `checks[]` entry has `type:
+   "status-context"` (a Commit-Status), whose `url` points at an
+   external target rather than an Actions run. Otherwise resolve the rerun
    decision from the
    run's own history: `gh run view <run-id-from-url> --json attempt` —
    GitHub's `attempt` starts at `1` for a never-rerun run, so pass
@@ -379,9 +387,13 @@ supersedes. Once both entries have completed, the one with the later
      example Copilot's review event) pending approval, this is a
      stalled run, not a downstream-of-D4 state. A rerun of the gated
      run itself keeps the original actor's privileges and re-enters
-     `action_required` — instead `gh run rerun` the existing **non-bot**
-     `pull_request`-triggered run for this HEAD, per `rerunPolicy`,
-     then resume step 6's polling for this one check.
+     `action_required`, and `checks[]` carries no actor/event field to
+     tell which instance is safe to rerun instead — use the
+     profile-selected **rerun-advisory-convergence** helper
+     (`node scripts/rerun-advisory-convergence.mjs --pr <pr-number>`,
+     read-only) to classify every instance and print the exact `gh run
+     rerun` command for the rerun-eligible one, run that command
+     verbatim, then resume step 6's polling for this one check.
    - If a maintainer has posted a valid external-check waiver for this
      exact HEAD: rerun the `idd-advisory-convergence` check once (`gh
      run rerun --failed <run-id>`, using the run id from `checks[]`'s
