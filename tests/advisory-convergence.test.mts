@@ -1630,12 +1630,15 @@ test('late Copilot review recovery: a fresh clean review landing on HEAD clears 
 // --- collectors by design (see each file's own module-header claim); this
 // --- is a static assertion that they stay that way.
 test('#1570 AC6: touched read-only helper sources never contain a `pr merge --admin` invocation', () => {
-  // Matches the actual command shape (`merge` and `--admin` as same-line
-  // tokens), not a bare `--admin` substring -- so prose or documentation
-  // that merely mentions the flag (e.g. explaining why it must not be
-  // used) cannot false-positive this guard. Reviewed per Copilot's #1570
-  // finding (PR #1646).
-  const forbiddenInvocation = /\bmerge\b[^\n]*--admin\b/i;
+  // Matches the actual invocation shape (`pr merge` together with
+  // `--admin` on the same line, in either order), not a bare `--admin`
+  // substring or a bare `merge` + `--admin` pairing -- so prose that
+  // mentions either token alone, or an unrelated command that happens to
+  // use both words, cannot false-positive this guard. Tightened twice
+  // per Copilot's #1570 findings on PR #1646 (first: bare substring;
+  // second: bare `merge`/`--admin` pairing without requiring `pr merge`).
+  const forbiddenInvocation =
+    /\bpr\s+merge\b[^\n]*--admin\b|--admin\b[^\n]*\bpr\s+merge\b/i;
   const readFile = (path: string) =>
     readFileSync(new URL(path, import.meta.url), 'utf8');
   for (const path of [
