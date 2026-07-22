@@ -97,6 +97,7 @@
         "idd-template/docs/idd-workflow.md",
         "idd-template/docs/idd-review-policy-profiles.md",
         "idd-template/docs/idd-helper-scripts.md",
+        "idd-template/docs/idd-autonomy-contract.md",
         "idd-template/docs/idd-comment-minimization.md",
         "idd-template/docs/idd-resume-detail.md",
         "idd-template/docs/idd-advisory-wait-shell-fallback.md",
@@ -322,6 +323,12 @@
       "id": "idd-advisory-wait-shell-fallback-doc",
       "source": "idd-template/docs/idd-advisory-wait-shell-fallback.md",
       "target": "docs/idd-advisory-wait-shell-fallback.md",
+      "mode": "exact"
+    },
+    {
+      "id": "idd-autonomy-contract-doc",
+      "source": "idd-template/docs/idd-autonomy-contract.md",
+      "target": "docs/idd-autonomy-contract.md",
       "mode": "exact"
     },
     {
