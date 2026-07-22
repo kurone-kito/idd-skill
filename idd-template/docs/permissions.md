@@ -392,14 +392,23 @@ allow/deny split, softened as described below.
   template counterpart omits it so an imported baseline never hands a
   freshly onboarded, possibly `human_merge` repository an unattended
   merge allowance.
-- **`gh api` is deliberately not in this baseline's allowlist at
-  all**, in either copy — see
+- **`gh api` is deliberately not in this baseline's allowlist as a
+  direct `Bash(gh api …)` invocation**, in either copy — see
   [The `gh api` DELETE-verb (and flag-position) trap](#the-gh-api-delete-verb-and-flag-position-trap)
   below for why a scoped `gh api` allow could not be made safe with
-  Claude Code's prefix-only matching. `gh api` calls stay behind the
-  normal permission prompt; add a narrow, single-purpose exact-match
-  entry yourself only for a specific, fully-written-out invocation you
-  have reviewed, never a trailing-wildcard form.
+  Claude Code's prefix-only matching. A directly-typed `gh api` command
+  therefore stays behind the normal permission prompt. This does
+  **not** mean every `gh api` call in the loop is prompted: several of
+  the allowlisted `scripts`/`bin` helpers (below) call `gh api`
+  internally as an implementation detail — the permission check gates
+  the top-level Bash command, not what that command's own subprocess
+  does — so those calls run without a separate prompt. The boundary
+  this baseline draws is between a reviewed, single-purpose wrapper
+  script making a specific REST call and an agent constructing an ad
+  hoc `gh api` invocation itself; it is not a guarantee that no REST
+  traffic happens without a prompt. Add a narrow, single-purpose
+  exact-match entry yourself only for a specific, fully-written-out
+  direct invocation you have reviewed, never a trailing-wildcard form.
 - **The helper-script surfaces under `scripts/` and `bin/`**
   (`Bash(node scripts/*)`, `Bash(node bin/*)`). These wrapper commands
   give IDD's helper-backed evidence collectors (see
