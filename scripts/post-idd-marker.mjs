@@ -299,6 +299,8 @@ Per-type field flags:
 both binds the marker to the active claim and an attempt number for
 recovery-cycle accounting (advisory-wait-state.mjs); passing neither renders
 the legacy 3-field form the shipped AW3-R recovery flow already posts.
+Passing only ONE of the two throws (half-bound, ambiguous) -- always pass
+both together or neither.
 copilot-unavailable is a brand-new terminal marker with no legacy form, so
 all five fields are required.
 
