@@ -118,7 +118,6 @@ export function classifyIssue(issue, options) {
     return { orphan: true, reason: 'orphan' };
   }
   const unresolved = [];
-  let anyReferenceNonBlocking = false;
   for (const ref of blockedRefs) {
     const state = resolveIssueState(
       ref,
@@ -134,8 +133,6 @@ export function classifyIssue(issue, options) {
     }
     if (state === 'UNRESOLVABLE') {
       unresolved.push(ref);
-    } else {
-      anyReferenceNonBlocking = true;
     }
   }
   for (const ref of dependencyRefs) {
@@ -146,7 +143,6 @@ export function classifyIssue(issue, options) {
     );
     if ((state ?? '').toUpperCase() === 'OPEN') {
       if (isDependencyEpicExempt(ref, options)) {
-        anyReferenceNonBlocking = true;
         continue;
       }
       return {
@@ -157,8 +153,6 @@ export function classifyIssue(issue, options) {
     }
     if (state === 'UNRESOLVABLE') {
       unresolved.push(ref);
-    } else {
-      anyReferenceNonBlocking = true;
     }
   }
   if (unresolved.length > 0) {
@@ -168,9 +162,11 @@ export function classifyIssue(issue, options) {
       details: [...new Set(unresolved)],
     };
   }
-  return anyReferenceNonBlocking
-    ? { orphan: true, reason: 'blocked_references_closed' }
-    : { orphan: true, reason: 'orphan' };
+  // Reaching here means blockedRefs/dependencyRefs was non-empty (the
+  // earlier both-empty check already returned `orphan`) and every ref
+  // resolved to a non-open, non-unresolvable state (closed, or an
+  // exempt open parent epic) -- never "no refs at all" again.
+  return { orphan: true, reason: 'blocked_references_closed' };
 }
 /**
  * Resolve whether an **open** dependency reference is exempt as a parent
