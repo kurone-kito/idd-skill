@@ -224,6 +224,14 @@
       "limitBytes": 19500
     },
     {
+      "id": "bundle-review-fix-lite",
+      "description": "Lite review-fix path (weak-model condensed profile): .github/instructions/lite/idd-review-fix-lite.instructions.md only — no overview/appendix; control flow is fully inlined, with single-hop command-syntax references to idd-advisory-wait.instructions.md and idd-ci.instructions.md per content principle 3.",
+      "files": [
+        ".github/instructions/lite/idd-review-fix-lite.instructions.md"
+      ],
+      "limitBytes": 21000
+    },
+    {
       "id": "bundle-pr-submit-lite",
       "description": "Lite PR-submit path (weak-model condensed profile): .github/instructions/lite/idd-pr-submit-lite.instructions.md only — self-contained; no overview/appendix.",
       "files": [
@@ -471,6 +479,12 @@
       "id": "idd-review-fix-instructions",
       "source": "idd-template/.github/instructions/idd-review-fix.instructions.md",
       "target": ".github/instructions/idd-review-fix.instructions.md",
+      "mode": "exact"
+    },
+    {
+      "id": "idd-review-fix-lite-instructions",
+      "source": "idd-template/.github/instructions/lite/idd-review-fix-lite.instructions.md",
+      "target": ".github/instructions/lite/idd-review-fix-lite.instructions.md",
       "mode": "exact"
     },
     {
