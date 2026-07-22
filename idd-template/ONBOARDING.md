@@ -415,6 +415,7 @@ recording template you will apply in Step 3.
 .github/instructions/lite/idd-claim-lite.instructions.md
 .github/instructions/lite/idd-work-lite.instructions.md
 .github/instructions/lite/idd-pr-submit-lite.instructions.md
+.github/instructions/lite/idd-review-snapshot-lite.instructions.md
 .github/instructions/lite/idd-pre-merge-lite.instructions.md
 .github/instructions/lite/idd-merge-handoff-lite.instructions.md
 .github/instructions/lite/idd-review-fix-lite.instructions.md
@@ -506,6 +507,7 @@ for FILE in \
   ".github/instructions/lite/idd-claim-lite.instructions.md" \
   ".github/instructions/lite/idd-work-lite.instructions.md" \
   ".github/instructions/lite/idd-pr-submit-lite.instructions.md" \
+  ".github/instructions/lite/idd-review-snapshot-lite.instructions.md" \
   ".github/instructions/lite/idd-pre-merge-lite.instructions.md" \
   ".github/instructions/lite/idd-merge-handoff-lite.instructions.md" \
   ".github/instructions/lite/idd-review-fix-lite.instructions.md" \
@@ -605,6 +607,7 @@ for FILE in \
   ".github/instructions/lite/idd-claim-lite.instructions.md" \
   ".github/instructions/lite/idd-work-lite.instructions.md" \
   ".github/instructions/lite/idd-pr-submit-lite.instructions.md" \
+  ".github/instructions/lite/idd-review-snapshot-lite.instructions.md" \
   ".github/instructions/lite/idd-pre-merge-lite.instructions.md" \
   ".github/instructions/lite/idd-merge-handoff-lite.instructions.md" \
   ".github/instructions/lite/idd-review-fix-lite.instructions.md" \
