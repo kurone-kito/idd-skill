@@ -232,7 +232,7 @@
       "files": [
         ".github/instructions/lite/idd-claim-lite.instructions.md"
       ],
-      "limitBytes": 19500
+      "limitBytes": 21000
     },
     {
       "id": "bundle-pre-merge-lite",

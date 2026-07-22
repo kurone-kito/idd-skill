@@ -32,6 +32,13 @@ resolve each command's profile-selected equivalent from
 verbatim. A helper missing on the active profile is a missing-helper
 case under rule 1 (stop and ask), not a reason to fall through.
 
+`{agent-id}` is a tool/agent identifier shared across concurrent
+sessions of the same agent type — pick or confirm one before the first
+command below that needs it (Claim execution step 4 at the latest).
+Appending a unique session token is recommended for auditability
+(e.g., `copilot-8122ca35`), not required. `{agent-id}` alone is never
+ownership proof; `{claim-id}` is the authoritative token.
+
 ## Stop-and-ask
 
 Stop and ask the operator when:
@@ -117,8 +124,16 @@ the nonce tie-break cannot pass as `already_owned`; omit it otherwise.
 
 | Top-level `state` / `action` | Meaning                                                           |
 | ---------------------------- | ----------------------------------------------------------------- |
-| `already_owned` / `keep`     | Confirmed yours — skip to Claim verification (or Heartbeat)       |
+| `already_owned` / `keep`     | Confirmed — see the two cases below                               |
 | anything else                | Not yours — forced-handoff: Stop-and-ask; else fall through below |
+
+`already_owned`/`keep` splits in two: if `--nonce` was passed above
+(resume/heartbeat continuation), skip to Claim verification (or
+Heartbeat). If it was omitted (first-time forced-handoff entry, not
+yet activated by you), go to Claim execution step 5 (post your own
+activation-nonce for `newClaimId`) first, then Claim verification's
+**Forced-handoff adopt-verbatim** case (step 5's settle-delay + nonce
+recompute only).
 
 **Otherwise** (no recorded `{claim-id}` and no matching forced-handoff
 evidence), run the write-gate helper immediately before the claim
@@ -175,8 +190,12 @@ equals the marker's `forcedBy` field — this blocks a same-identity
 self-signed hijack where a displaced session spoofs a different
 `forcedBy` name while posting the marker itself; that author is
 authorized under `forcedHandoff.authorityPolicy`; `forcedHandoff.mode`
-is `human-gated`; and `oldAgentId` / `oldClaimId` / `branch` all match
-the active claim. On success, the successor claim is **sticky**: adopt
+is `human-gated`; `oldAgentId` / `oldClaimId` / `branch` all match
+the active claim; and, when an open PR already backs this claim, the
+marker's evidence has `contextScope` of `issue-plus-pr` with `linkedPr`
+naming that PR — an issue-only handoff is not enough once a PR exists.
+On success, the
+successor claim is **sticky**: adopt
 `newAgentId` / `newClaimId` **verbatim** as your own for the rest of
 the run (do not mint a fresh pair), and still post your own
 activation-nonce for `newClaimId` (see Claim verification below) — this
@@ -385,11 +404,15 @@ first, then `--fresh-claim-gate` if not `already_owned`):
 - `claimable` / `stale-reclaimable`, or `already_owned` naming a
   **different** id: the claim itself was lost. Post and verify a
   fresh/takeover claim (pre-check (c) → Claim execution → Claim
-  verification) before retrying the lock.
+  verification), then retry the lock with `--takeover` — the local
+  lock's recorded id is now stale relative to the newly verified one.
 - `already-claimed` naming a **different** id: a live competitor holds
   it — stop, the claim was lost.
 
 No release step: `git worktree remove` at F4 deletes the lock with the
 worktree.
 
-Then continue to `idd-work-lite.instructions.md`.
+Then continue to `idd-work-lite.instructions.md` — except on the
+`instructions-only` profile, where that file explicitly declines the
+profile in its own header; continue to the standard
+`idd-work.instructions.md` instead.
