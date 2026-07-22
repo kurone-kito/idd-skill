@@ -14,12 +14,10 @@ review-fix instructions instead.
   `idd-review-fix.instructions.md` instead.
 - Any mismatch between this file and the standard review-fix phase is a
   bug in this file.
-- **Named command sets** (`fix-validate` in E9, `post-fix-validate` in
-  E12) resolve from `.github/idd/config.json`'s `commands` object when
-  present, otherwise from the Project commands table in
-  `idd-overview-core.instructions.md`. Resolve the exact shell commands
-  before each step's first use — do not guess or skip validation
-  because this file does not itself carry that table.
+- **Command sets**: `fix-validate` (E9) and `post-fix-validate` (E12) are
+  read from `.github/idd/config.json`'s `commands` mapping. If that file
+  is missing or the command set cannot be read, stop and ask rather than
+  guessing a command.
 
 ## Upstream-triage boundary
 
@@ -62,6 +60,8 @@ those are E4-E8 judgment calls, excluded from every lite profile.
   stop-and-ask.
 - Advisory-wait reaches `HOLD`, `CAP_EXHAUSTED` with a `hold` route, or a
   pending-refresh-failed state.
+- The claim-lock helper reports a collision (a different claim id
+  already holds the worktree lock).
 
 ## Pre-mutation guard
 
@@ -71,7 +71,13 @@ other GitHub side effect, confirm all of the following:
 1. The active claim still uses this session's claim id.
 2. The current directory is the sibling worktree for the claimed branch.
 3. `git branch --show-current` equals the claimed branch.
-4. The worktree-local claim lock is held.
+4. Acquire the worktree-local claim lock with the profile-selected
+   `claim-lock` helper (`node scripts/claim-lock.mjs --acquire
+   --worktree <this-worktree-path> --agent-id <id> --claim-id <id>`, or
+   the package-manager-profile `idd:claim-lock` command with the same
+   arguments — resolve the exact command from
+   `docs/idd-helper-scripts.md` if unsure). A `collision` result is
+   fail-closed: stop rather than proceed.
 5. If any check fails, stop.
 
 ## E9 — Fix accepted issues
