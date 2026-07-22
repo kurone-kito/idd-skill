@@ -324,17 +324,19 @@ than the run it supersedes. Once both have completed, the later
    exists but cannot be enumerated by name): always stop per the
    condition above — this is a real gating check, never treat it like
    `no-required-checks`.
-5. **`failing`**: in the same helper's `checks[]` array, check every
-   entry where `required` is true and its `checkName` field (not
-   `name`, which this array does not have) is not
-   `idd-advisory-convergence`. If
-   **all** of those are `success`,
-   `idd-advisory-convergence` is the sole non-passing required check —
-   go to step 8's exception instead of stopping here. If **any** of
-   those is not yet `success` (whether `failing` or still
-   `pending`/`missing`/`unknown`), that does not qualify: stop per the
-   condition above rather than continuing to poll (fixing or rerunning
-   it is outside this file's mechanical scope).
+5. **`failing`**: check every `checks[]` entry where `required` is
+   true and its `checkName` is not `idd-advisory-convergence`
+   (`requiredChecks.missingNames` is always empty for this status —
+   see step 6's `missing` route for that case). If **all** are
+   `success`, `idd-advisory-convergence` is the sole non-passing
+   required check — go to step 8's exception instead of stopping
+   here. If **any** has `status: "failure"`, stop per the condition
+   above (outside this file's mechanical scope to fix or rerun).
+   Otherwise — none failed, but at least one is still
+   `pending`/`unknown` — apply step 6's timeout/on-timeout handling to
+   just those unsettled entries, never `idd-advisory-convergence`
+   itself (already completed), then re-read this step once they
+   settle.
 6. **`pending`** or **`missing`** (an expected required check has not
    posted a result yet), or any `pending`/`unknown` entry reached via
    step 3's fallback: keep polling until `success`, `failing`, or a
