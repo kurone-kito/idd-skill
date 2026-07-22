@@ -26,10 +26,11 @@ session already claimed and implemented. If the repository is
   branch, or the claimed branch is not the current branch.
 - A required helper or validation command is unavailable, invalid, or
   disagrees with live state.
-- The branch already exists on the remote (pushed before, with or
-  without a PR) and is behind `main` — this lite file only covers the
-  pre-first-push rebase; the post-publication merge-based resync is out
-  of its scope.
+- The branch already exists on the remote **and** has an open PR **and**
+  is behind `main` — this lite file only covers the pre-first-push
+  rebase; the post-publication merge-based resync is out of its scope.
+  (A pushed branch with **no** open PR yet is not this case: skip
+  straight to D3.)
 - D1's rebase hits a content conflict this session cannot resolve
   mechanically.
 - After D1, `git branch --show-current` is empty (detached HEAD) and one
@@ -40,8 +41,9 @@ session already claimed and implemented. If the repository is
   closing set after one corrective edit.
 - The required-check set for D4 cannot be determined (protection or
   ruleset reads are unreadable, or `ci-wait-state`'s
-  `requiredChecks.status` reports `no-required-checks` and that has not
-  been confirmed as expected for this repository, or `source-pinned`).
+  `requiredChecks.status` reports `source-pinned`, or reports
+  `no-required-checks` with an empty or failing `checks[]` fallback —
+  see D4 step 3).
 - Any required check other than `idd-advisory-convergence` reaches a
   failing terminal state, or `idd-advisory-convergence` is failing
   without satisfying D4 step 8's exception.
@@ -62,19 +64,22 @@ following:
 
 ## D1 — Sync main before first push
 
-This section applies **only before the branch's first push**. If the
-branch already exists on the remote, it was already published (with or
-without a PR yet) — skip this whole section, do not rebase it, and
-follow the stop-and-ask condition above instead.
+This section's rebase only applies **before the branch's first push**.
 
-1. Confirm the branch has never been pushed:
+1. Check whether the branch has been pushed:
    `git ls-remote --exit-code origin "refs/heads/{branch-name}"`
    (the `refs/heads/` prefix matters: a bare branch name also matches a
-   same-named tag). Exit 0 means the branch already exists on the
-   remote — stop per the condition above; do not continue with steps
-   2-9. Exit 2 means no matching branch; continue. Stop on any other
-   nonzero exit status. Do not substitute an open-PR check for this: a
-   branch can be pushed before its PR is created.
+   same-named tag). Exit 2 means no matching branch — continue with
+   steps 2-9 below. Exit 0 means the branch already exists on the
+   remote; stop on any other nonzero exit status. When it already
+   exists, do not rebase it — instead:
+   - Check for an open PR: `gh pr list --head {branch-name} --state
+     open`. No open PR means D2's push already happened in an earlier,
+     interrupted session — skip the rest of D1 (nothing to rebase) and
+     go straight to D3 (create the PR).
+   - An open PR already exists and this branch is behind `main`: stop
+     per the condition above — the merge-based resync is out of this
+     file's scope.
 2. Run `git fetch origin main`.
 3. If `git merge-base HEAD origin/main` equals `origin/main`, the branch
    already contains every commit on `main` — skip the rebase and go to
@@ -193,10 +198,15 @@ timeouts. Use both, not either alone.
    either helper is unavailable, fails, or disagrees with live GitHub
    state, stop and ask — do not re-derive branch-protection or ruleset
    rules by hand.
-3. **`no-required-checks`**: stop per the condition above unless this
-   has already been confirmed as expected for this repository (some
-   repositories legitimately configure none) — do not silently treat it
-   as a pass without that confirmation.
+3. **`no-required-checks`**: a repository can legitimately have no
+   _required_ checks while still running normal CI, so this is not
+   automatically a stop. Instead, fall back to the same helper's
+   `checks[]` array (every check present for this HEAD, not just
+   required ones) and its per-check `status`: every entry `success` →
+   proceed to step 7; any entry `pending` → continue at step 6
+   (poll again); any entry `failure` → stop per the condition above;
+   `checks[]` itself empty (no CI ran at all for this HEAD) → stop per
+   the condition above.
 4. **`source-pinned`** (a ruleset or integration-pinned required check
    exists but cannot be enumerated by name): always stop per the
    condition above — this is a real gating check, never treat it like
