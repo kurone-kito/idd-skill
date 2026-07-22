@@ -27,7 +27,7 @@ efforts opened alongside it:
   [#1419](https://github.com/kurone-kito/idd-skill/issues/1419)'s
   condensed execution-profile design**
   ([`docs/weak-model-lite-profile-design.md`](weak-model-lite-profile-design.md)).
-  #1419's phase-scoping table covers only the 16
+  #1419's phase-scoping table covers only the
   `.github/instructions/idd-*.instructions.md` execution-phase files; it
   never scopes or mentions `skills/issue-authoring/` at all. The
   issue-authoring skill bundle is a separate artifact with its own size,
@@ -51,10 +51,15 @@ efforts opened alongside it:
 
 Source: an independent field PoC
 (<https://gist.github.com/kurone-kito/8f45ee1ec0c07e8a7fdc8c1f04e83654>),
-quoted and paraphrased here from the issue body plus the gist itself.
-Models: qwen3.5 {0.8b, 2b, 2b-text, 4b}, ministral-3-3b, phi-4-mini
-(Foundry Local, CPU-only), with `codex exec -m gpt-5.4-mini` as a
-cross-runtime control.
+reported 2026-07-19 in
+[#1556](https://github.com/kurone-kito/idd-skill/issues/1556), quoted
+and paraphrased here from the issue body plus the gist itself. Models:
+qwen3.5 {0.8b, 2b, 2b-text, 4b}, ministral-3-3b, phi-4-mini (Foundry
+Local, CPU-only), with `codex exec -m gpt-5.4-mini` as a cross-runtime
+control. Per
+[Cite the observed incident](idd-design-rationale.md#cite-the-observed-incident),
+every failure mode named below is this one dated, issue-referenced
+incident — not three independent citations.
 
 - **Full contract (~12K tokens): 0/6 conforming drafts**, three distinct
   failure modes:
@@ -198,6 +203,31 @@ same "documented helper command over prose judgment" pattern content
 principle 4 already establishes, applied to the one place the field
 evidence shows prose alone fails outright.
 
+Two contract details the helper must get right, both already load-bearing
+in `bin/idd-audit-authored-issue.mjs`:
+
+- **`markerPrefix` resolution**: the linter's `--marker-prefix` flag and
+  `checkMarkerPrefixConsistency` both normalize and default to
+  `idd-skill`, then require every marker in the body to use the same
+  resolved prefix. The proposed helper must accept the same
+  `markerPrefix` input (defaulting identically) and apply it to every
+  marker line it emits, reusing the linter's own normalization rather
+  than a second implementation — otherwise a custom-prefix repository's
+  drafts fail the unchanged gate the helper is supposed to satisfy.
+- **Label-side output, not just body markers**: the linter's
+  `checkSuitabilityBlockedByHuman` validates `suitability: 1` against a
+  **caller-supplied labels list** (`--label`, repeatable) — it checks
+  whether the blocked-by-human label is already present, it does not
+  apply it. The proposed helper computes body-marker text only; it
+  cannot itself guarantee the cross-field invariant, because applying
+  the GitHub label is a separate mutation (`gh issue create --label` /
+  `gh issue edit --add-label`) the linter has never owned either. The
+  helper's contract should therefore explicitly flag when
+  `suitability: 1` requires that label, and the condensed profile must
+  instruct the model (or the harness applying the helper's output) to
+  add it — the same caller-owns-the-mutation split the linter itself
+  already uses, not a new responsibility this design invents.
+
 **This narrows, but does not eliminate, the harness-ownership
 question.** A model-invoked helper still depends on the model
 remembering to invoke it — a residual risk for a tier that field
@@ -223,7 +253,7 @@ all three. A condensed authoring profile should therefore cover all
 three shapes from the start rather than piloting on one — unlike the
 execution-phase decomposition in
 [#1419](https://github.com/kurone-kito/idd-skill/issues/1419) (which
-had 16 separate files to stage across multiple issues), the entire
+had many separate files to stage across multiple issues), the entire
 authoring contract is one skill bundle already, so there is no
 equivalent "narrowest pilot" slice to carve out without leaving one
 shape unable to be drafted on the lite path.
@@ -232,7 +262,7 @@ shape unable to be drafted on the lite path.
 
 `skills/issue-authoring/` already has an established two-copy drift
 control: the canonical bundle
-(`skills/issue-authoring/**/*.md`) mirrors byte-identically to
+(`skills/issue-authoring/**/*.md`) is mirrored byte-identically to
 `.claude/skills/issue-authoring/**/*.md` via the
 `claude-skills-issue-authoring-markdown-set` `fileSets` entry in
 `audit/sync-manifest.json` (`match: "basename"`, `requireSyncPairs:
@@ -244,7 +274,7 @@ file inside the same skill bundle** — for example
 new top-level delivery surface. This is a simpler shape than #1419's
 lite-instruction decomposition needed: that design had to invent a
 parallel `.github/instructions/lite/` directory and its own routing,
-because the standard profile is 16 separate always-loaded-by-table
+because the standard profile is many separate always-loaded-by-table
 files. `skills/issue-authoring/` is already one skill with a
 `references/` subdirectory pattern (`contract.md`, `draft-patterns.md`,
 `workflow-boundary.md` today); a condensed contract is one more file in
@@ -329,8 +359,10 @@ this design issue.
   `emit-marker.mjs`), computing and printing the exact
   `autopilot-suitability`/`effort`/`roadmap-id`/`blocked-by` marker
   lines (visible prose plus HTML comment) from explicit inputs,
-  enforcing the `suitability:1` ⇒ `status:blocked-by-human` cross-field
-  rule programmatically. No model-authored marker text as input.
+  reusing `bin/idd-audit-authored-issue.mjs`'s own `markerPrefix`
+  normalization, and flagging (not applying) the required
+  blocked-by-human label whenever `suitability: 1`. No model-authored
+  marker text as input.
 - **Author `skills/issue-authoring/references/contract-lite.md`** — a
   condensed authoring reference covering prose/structure guidance for
   all three issue shapes (orphan, roadmap, child), following content
