@@ -48,23 +48,24 @@ request, or other GitHub side effect, confirm all of the following:
 7. Run `git worktree list` (and `git worktree list --porcelain` when checking
    prunable entries). If a sibling worktree already exists, inspect that exact
    path with the profile-selected `claim-lock` helper before reuse or removal.
-8. Run `git branch --list {branch-name}`. If the branch exists locally, reuse it
+8. If `git worktree list --porcelain` marks the entry `prunable` and its path
+   is already absent, remove that stale entry with
+   `git worktree remove --force <path-from-list>` and continue.
+9. Run `git branch --list {branch-name}`. If the branch exists locally, reuse it
    only when it is an inheritable takeover branch; otherwise delete it with
    `git branch -d {branch-name}`.
-9. If deletion is refused, check whether a remote branch or open PR exists for
-   this branch. If so, treat it as inheritable and reuse it. If not, stop for
-   manual cleanup.
-10. If `git worktree list --porcelain` marks the entry `prunable` and its path
-    is already absent, remove that stale entry with
-    `git worktree remove --force <path-from-list>` and continue.
+10. If deletion is refused, check whether a remote branch or open PR exists for
+    this branch. If so, treat it as inheritable and reuse it. If not, stop for
+    manual cleanup.
 11. If the target path exists but is not listed in `git worktree list`, stop for
     manual cleanup.
 12. Create the sibling worktree at `../<repo-name>.<normalized-branch>`.
 13. Define `normalized-branch` as the branch name with each `/` replaced by
     `-`.
 14. Use WorkTrunk if available.
-15. In automation, use `wt switch --create -b main <branch-name> -x true`.
-16. On Windows, use `git-wt switch --create -b main <branch-name> -x true`,
+15. In automation, use `wt switch --create -b <base-branch> <branch-name> -x true`
+    (`<base-branch>` is normally `main`).
+16. On Windows, use `git-wt switch --create -b <base-branch> <branch-name> -x true`,
     or the same `wt switch` form if `git-wt` is unavailable.
 17. Do not use `wt new`.
 18. If WorkTrunk uses a pre-start install hook, its first command must acquire
