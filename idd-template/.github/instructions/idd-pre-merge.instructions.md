@@ -301,12 +301,39 @@ claim.
   is a hard merge block — route to E1/E4 (check **AW6** first when
   `sameHeadReroll.eligible`) using the `reasons`; a zero exit
   (`ready: true`) satisfies this condition.
-  Separately, require `dispositionEvidence.missingRegularComments.length
-  == 0` (ad hoc advisory-bot or reviewer comments outside a review
-  thread, which the helper above does not cover); treat absent,
-  malformed, or non-list `dispositionEvidence`/`missingRegularComments`
-  as unmet, not as vacuously satisfied. A non-empty (or unusable) result
-  routes to E1/E4 with that evidence.
+  Separately, require `dispositionEvidence.route` to be `proceed`
+  (`dispositionEvidence.blockingCount == 0` — both
+  `missingRegularComments` (any outstanding regular PR comment outside a
+  review thread, from any non-agent author including the PR author, that
+  lacks a fresh disposition marker) and `missingThreads` (any review
+  thread, resolved or unresolved, still lacking a fresh disposition
+  marker) are empty). The `advisory-convergence.mjs --assert` check
+  above only enforces the _unresolved_ Copilot-authored subset of
+  `missingThreads` (a resolved Copilot-authored thread without a fresh
+  disposition does not block there — resolution alone already satisfies
+  that check's own Clause 2); it never covers a non-Copilot-authored
+  thread or any `missingRegularComments` entry, so this check stays
+  necessary even when that one passes. Treat a missing or malformed
+  `dispositionEvidence` object, or a non-list
+  `missingRegularComments`/`missingThreads`, as unmet, not as vacuously
+  satisfied. A `route: return-to-e1` result routes to E1/E4 with that
+  evidence — except the ack-only override below.
+
+  Disposition-evidence ack-only override: when
+  `dispositionEvidence.soleCauseAckOnlyPostDisposition` is `true` — every
+  blocking item is a `missingThreads` entry whose `ackOnlyPostDisposition`
+  is `true`, and `missingRegularComments` is empty (see
+  `idd-review-triage.instructions.md`'s "Disposition-evidence parity
+  (advisory-only)" paragraph for the full condition) — autopilot may
+  deterministically override the `return-to-e1` and treat this condition
+  as satisfied, proceeding on the current HEAD SHA instead of returning
+  to E1. This is a distinct signal from the `reviewCurrency`-based
+  structural ack-only carve-out in the Review currency check above (that
+  one covers E1-snapshot staleness; this one covers disposition evidence
+  on already-resolved threads), and `pre-merge-readiness`'s own
+  `ready`/`blockers` rollup does not apply it — the agent applies it
+  here. The signal never changes `route`; any other blocking cause makes
+  it `false`, and the gate still routes to E1/E4.
   Fails closed per the shared default: if either check cannot run or its
   output is unusable, treat this condition as unmet.
 
