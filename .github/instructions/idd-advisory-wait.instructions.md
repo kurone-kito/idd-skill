@@ -364,3 +364,74 @@ The manual JSON `POST` stays the fallback. If the marker cannot be
 posted or verified, fail closed to AW4's **Recovery failed** hold
 template and stop (mirroring AW3-R's identical routing on the same
 failure).
+
+## Terminal Copilot stall-recovery contract (state, policy, markers, clock)
+
+`#1572` defines state/policy/marker/schema **contracts** for a terminal
+`COPILOT_UNAVAILABLE` signal, for the execution (`#1571`, requesting
+reviews and posting recovery markers) and routing (`#1570`, F2/F3/
+convergence/waiver integration) tracks to build against. This file does
+not itself change E14/F2/F3 routing; no caller yet acts on
+`COPILOT_UNAVAILABLE`.
+
+**Policy** (`advisory-wait-policy.mts`, resolved/read like every other
+`advisoryWait.*` knob, independent counters from `requestCap` and `#1511`'s
+`sameHeadRerollCap`): `advisoryWait.recoveryCycleCap` (integer ≥ 1,
+default **2**) bounds completed recovery cycles per PR HEAD.
+`advisoryWait.terminalWindow` (ISO 8601 duration, default **`PT12H`**) is
+the window that must elapse after cap exhaustion before the state can
+turn terminal.
+
+**Markers.** `advisory-wait-recovery:` (posted via `post-idd-marker --type
+advisory-recovery`, already used by AW3-R above) gained an _optional_
+bound form:
+`advisory-wait-recovery: {agent-id} {PR_HEAD_SHA} {ISO8601-timestamp}
+claim:{claim-id} attempt:{n}`. Omitting both `--claim-id`/`--attempt`
+renders the legacy 3-field form byte-for-byte — **AW3-R's written
+procedure above is unchanged**; passing only one of the two fails closed.
+The legacy form stays a recognized operational marker but is not usable
+recovery-cycle evidence (treated like a malformed marker: excluded from
+counting/anchoring). A new terminal marker, `copilot-unavailable:` (same
+five fields, all required, no legacy form), has no defined trigger in
+this issue — deciding when to post it is the consuming track's job. Post
+either with `post-idd-marker --type advisory-recovery [--claim-id <id>
+--attempt <n>]` / `--type copilot-unavailable --claim-id <id> --attempt
+<n>` (plus `--agent-id --head-sha --timestamp`).
+
+**Trust-filtering.** A bound marker counts as recovery-cycle evidence only
+when _all_ hold, each excluding it independently (never a whole-abort):
+author is a trusted marker actor (else untrusted); body parses as the
+bound five-field shape (else malformed/unbound); embedded agent id
+matches the active claim's (else foreign-agent); embedded claim id
+matches (else mismatched-claim); embedded HEAD SHA matches the current PR
+HEAD (else mismatched-HEAD, earlier or later); the comment's GitHub
+`created_at` validates as an ISO 8601 UTC timestamp (else
+ambiguous-created-at — excluded from both counting and anchoring, never
+counted without a valid anchor contribution).
+
+**Clock anchor** = GitHub `created_at` of the _earliest_ trusted, bound,
+current-HEAD `advisory-recovery` marker. Embedded marker timestamps are
+diagnostics only and never move it, mirroring the `review-watermark` /
+claim-heartbeat clock rule. **Completed-cycle count** = trusted bound
+marker _presence_, never the largest embedded `attempt` (diagnostic
+only). `remaining budget = max(cap - completedCycleCount, 0)`.
+
+**State.** `COPILOT_UNAVAILABLE` only when all three hold, from trusted
+evidence: cap exhausted (`completedCycleCount >= cap`); terminal window
+elapsed since the anchor; and no current-HEAD Copilot review
+(`lastCopilotCommit != PR_HEAD_SHA`). Missing/ambiguous timeline, marker,
+claim, or HEAD evidence — including the claim id/agent id simply not
+being supplied — fails closed to `NOT_TERMINAL` with a machine-readable
+reason (e.g. `active-claim-not-provided`, `no-trusted-recovery-markers`,
+`recovery-cap-not-exhausted`, `terminal-window-not-elapsed`,
+`current-head-review-exists`).
+
+**Non-bypass by construction.** `COPILOT_UNAVAILABLE` is a distinct
+terminal signal: no existing advisory-satisfied field (`outcome`,
+`f3Outcome`, any future readiness rollup) is or may be derived from it,
+and it is never derived from them — structurally independent
+computations, composed side by side. Consumers may treat it only as
+waiver _eligibility_ (a maintainer may authorize a waiver or equivalent
+human off-ramp), never as advisory satisfaction or merge readiness on its
+own; no merge or gate-satisfied report may follow from
+`COPILOT_UNAVAILABLE` alone — designing that off-ramp is `#1570`'s job.

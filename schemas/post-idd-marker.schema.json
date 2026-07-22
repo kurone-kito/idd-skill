@@ -20,7 +20,8 @@
         "baseline",
         "advisory",
         "advisory-recovery",
-        "advisory-reroll"
+        "advisory-reroll",
+        "copilot-unavailable"
       ]
     },
     "target": {

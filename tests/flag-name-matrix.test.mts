@@ -41,6 +41,7 @@ const FLAG_CONCEPTS = [
     canonical: '--claim-id',
     deprecated: '--expected-claim-id',
     helpers: [
+      'advisory-wait-state.mjs',
       'audit-pr-cleanup.mjs',
       'external-check-waiver.mjs',
       'live-status-digest.mjs',
@@ -53,6 +54,7 @@ const FLAG_CONCEPTS = [
     canonical: '--agent-id',
     deprecated: '--expected-agent-id',
     helpers: [
+      'advisory-wait-state.mjs',
       'audit-pr-cleanup.mjs',
       'live-status-digest.mjs',
       'pre-merge-readiness.mjs',

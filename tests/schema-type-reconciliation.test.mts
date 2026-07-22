@@ -286,6 +286,7 @@ export const advisoryWaitStateKeys = [
   'trustedMarkerSummary',
   'trustedMarkerActors',
   'trustedMarkerActorsSource',
+  'copilotRecovery',
 ] as const satisfies readonly (keyof AdvisoryWaitStateReport)[];
 
 export const branchConflictStateKeys = [
@@ -626,6 +627,19 @@ const advisoryWaitStateFixture = {
   },
   trustedMarkerActors: ['copilot-cli'],
   trustedMarkerActorsSource: 'config',
+  copilotRecovery: {
+    cap: 2,
+    completedCycleCount: 0,
+    remainingBudget: 2,
+    capExhausted: false,
+    terminalWindowMinutes: 720,
+    clockAnchor: '',
+    elapsedMinutes: 0,
+    windowElapsed: false,
+    activeClaimProvided: false,
+    state: 'NOT_TERMINAL',
+    reason: 'active-claim-not-provided',
+  },
 } satisfies AdvisoryWaitStateReport;
 
 const branchConflictStateFixture = {
