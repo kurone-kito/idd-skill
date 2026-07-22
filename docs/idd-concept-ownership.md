@@ -38,8 +38,8 @@ back as evidence for a gate.
 <!-- dprint-ignore-start -->
 | Concept | Creator | Mutator | Verifier |
 | --- | --- | --- | --- |
-| Issue body | Human maintainer (or the issue-authoring skill) | Human maintainer; worker session only for roadmap task-list updates (A1.5) | A0-T/A3/A3.5 readiness checks |
-| Status / blocker labels (`status:authoring`, `status:blocked-by-human`, `status:needs-decision`, `idd:ready`, `triage:{outcome}`) | Human maintainer for approval/blocker labels; worker session may apply the optional diagnostic `triage:` label (A4.5) | Human maintainer removes a blocker label once resolved | A0/A3/A3.5/A4.5 gates |
+| Issue body | Human maintainer (or the issue-authoring skill) | Human maintainer; the issue-authoring skill before an active claim or open PR exists; worker session only for roadmap task-list updates (A1.5) | A0-T/A3/A3.5 readiness checks |
+| Status / blocker labels (`status:authoring`, `status:blocked-by-human`, `status:needs-decision`, `idd:ready`, `triage:{outcome}`) | Human maintainer for the ready label; issue-authoring skill for `status:authoring`; worker session for `status:needs-decision`/`status:blocked-by-human` (A1.5 non-autonomous gap, E6 escalation) or the optional diagnostic `triage:` label (A4.5) | Whichever actor created the label; a blocker label is removed once the underlying blocker is resolved | A0/A3/A3.5/A4.5 gates |
 | Claim marker (`claimed-by`) | Worker session, A5 | Worker session (heartbeat, `unclaimed-by`) or a later worker session (stale takeover, A5/Resume-stall S5) | Claim revalidation gate before every mutation; Resume Step 1 |
 | Activation-nonce marker | Worker session, alongside every fresh claim activation (A5) | Immutable once posted; superseded implicitly by the next activation's nonce | Claim verification step 5; claim revalidation gate |
 | Heartbeat | Worker session holding the claim, re-posting `claimed-by` with the same `{claim-id}` | Worker session, every ≤ 12 h while holding | Claim-state parsing rule 3.5 (heartbeat branch invariant) |
@@ -71,13 +71,14 @@ matrix's general "who mutates" column above.
 <!-- dprint-ignore-start -->
 | Concept | Terminal state | Authorized actor / phase |
 | --- | --- | --- |
-| Issue | Closed | GitHub platform via the PR's closing keyword at F3 merge (execution-leaf issues); worker session running the A1.5 roadmap-audit claim (roadmap issues); human maintainer may also close manually |
+| Issue | Closed | GitHub platform via the PR's closing keyword at F3 merge (execution-leaf issues); worker session running the A1.5 roadmap-audit claim (roadmap issues); worker session directly at B2.0 on a verified supersession hit (acceptance criteria already met by a merged sibling PR); human maintainer may also close manually |
 | Claim | Released or superseded | Worker session (`unclaimed-by` on abort); a later worker session via stale takeover (A5, Resume-stall S5); human-gated forced handoff transfers it without a release step |
 | Roadmap task list / roadmap issue | Closed | Worker session running the A1.5 roadmap-audit claim, only once every child and descendant is closed or otherwise complete |
 | Branch and worktree | Deleted | Worker or merge-capable session, F4 — only after F3 merge succeeds |
-| Review thread | Resolved | Worker session, immediately after posting a disposition reply (E6/E13); or a human reviewer resolving their own thread |
+| Review thread | Resolved | Worker session, immediately after posting a disposition reply (E6/E13) — **except** an `**Awaiting maintainer decision**` reply, which leaves the thread unresolved until a maintainer responds (F2's unresolved-threads gate relies on this); or a human reviewer resolving their own thread |
 | PR | Merged | Merge-capable session, F3, only once the full F2/F2.5 gate checklist holds |
-| Operational marker (`review-watermark`, `review-baseline`, `advisory-wait*`, claim markers) | Superseded / minimized as `OUTDATED` | Worker session, after a newer valid marker of the same kind exists for the same claim or HEAD |
+| `review-watermark` / `review-baseline` / `advisory-wait*` markers | Superseded / minimized as `OUTDATED` | Worker session, after a newer valid marker of the same kind exists for the same claim or HEAD |
+| Claim-marker chain (`claimed-by`/`unclaimed-by`/heartbeat) | Superseded / minimized as `OUTDATED` | Worker session, but **only** the prior claim-id's chain after a verified `supersedes: <prior-id>` takeover — a same-claim heartbeat chain must never be hidden; it is the active-claim audit trail |
 | External-check waiver | Expired, or consumed | Time-based (`expiresAt`) lapse; or a worker session rerunning the waived check so it reflects the waiver |
 | Blocked-by-human / needs-decision label | Removed | Human maintainer only, after resolving the underlying blocker |
 <!-- dprint-ignore-end -->
