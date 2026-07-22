@@ -27,15 +27,25 @@ model.
 
 ## Scope
 
-- **In scope**: `.github/instructions/**/*.md` (including `lite/`),
-  `skills/issue-authoring/**/*.md`, `CLAUDE.md`, and
-  `.github/copilot-instructions.md`.
-- **Out of scope**: `.claude/**` (this skill never audits itself);
-  `docs/**` (summary docs rely on the files they cite by design, so
-  they are not audited as if they were the primary spec); and generated
-  mirrors already covered by their canonical source via an
-  `audit/sync-manifest.json` sync pair (audit the canonical source
-  instead).
+- **Audit targets** (findings may cite these): `.github/instructions/**/*.md`
+  (including `lite/`), `skills/issue-authoring/**/*.md`, `CLAUDE.md`,
+  and `.github/copilot-instructions.md`. Audit these files even though
+  `.github/instructions/**` is itself the generated `target` side of an
+  `audit/sync-manifest.json` sync pair (mirrored from `idd-template/`)
+  — this skill audits the corpus a worker session actually reads, not
+  the `idd-template/` source, so being a sync target never exempts a
+  file here.
+- **Reference-only inputs** (read for R2/R4, never a finding target):
+  `docs/idd-concept-ownership.md` (R2's closed concept-index seed) and
+  `docs/idd-autonomy-contract.md` (R4's reversible/irreversible source
+  of truth). Both are read in full every pass.
+- **Out of scope entirely** (never read, never cited): `.claude/**`
+  (this skill never audits itself) and every other file under `docs/**`
+  besides the two reference-only inputs above (summary docs rely on the
+  files they cite by design, so they are not audited as if they were
+  the primary spec; a `docs/idd-*.md` mirror's own drift is
+  `audit-docs.mjs`'s job, checked against its `idd-template/docs/`
+  source, not this skill's).
 
 ## Rule sets
 
