@@ -21,3 +21,30 @@ Language: **🇬🇧** | [🇯🇵](./CONTRIBUTING.ja.md) | [🇨🇳](./CONTRIB
    A suggested `.gitmessage` template is available at the repository root.
    See [copilot-instructions.md](./copilot-instructions.md#commit-rules)
    for examples and full details.
+
+## Local development tooling
+
+This repository uses a project-local pnpm baseline and Husky hooks so
+contributors and autopilot runs can enforce the minimum lint gate
+before commit. Template adopters do not need pnpm — use your project's
+existing tooling instead (see
+[Tooling boundary](../docs/customization.md#tooling-boundary)).
+
+Requires Node.js `^22.22.2 || >=24.2.0` (this repository's `engines`
+floor in `package.json`).
+
+```sh
+corepack enable
+pnpm install
+pnpm run lint
+pnpm run test
+```
+
+The pre-commit hook runs a fast, commit-safe subset
+(`pnpm run lint:precommit`: Biome, dprint, and markdownlint); the full
+`pnpm run lint:minimum` suite runs in CI. The commit message hook
+enforces Conventional Commits through commitlint.
+
+When you edit canonical source files in `idd-template/`, run
+`pnpm run docs:sync` to propagate the changes to all mirrored
+artifacts.
