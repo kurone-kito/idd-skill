@@ -93,10 +93,13 @@ This section's rebase only applies **before the branch's first push**.
    remote; stop on any other nonzero exit status. When it already
    exists, do not rebase it — instead check for an open PR:
    `gh pr list --head {branch-name} --state open --json number --jq
-   '.[0].number'`.
-   - No open PR: D2's push already happened in an earlier, interrupted
-     session — skip the rest of D1 (nothing to rebase) and go straight
-     to D3 (create the PR).
+   '.[0].number // empty'` (the `// empty` matters: an empty list's
+   `.[0].number` is the literal string `null`, not blank, and a
+   literal `null` can be misread as a real PR number instead of "no
+   open PR").
+   - No output (empty): D2's push already happened in an earlier,
+     interrupted session — skip the rest of D1 (nothing to rebase) and
+     go straight to D3 (create the PR).
    - An open PR exists: read its `syncRecommendation` with the
      profile-selected branch-conflict-state helper —
      `node scripts/branch-conflict-state.mjs --pr <pr-number>`, or the
