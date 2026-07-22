@@ -11,8 +11,8 @@ description: Repo-local, dogfood-only semantic audit of the IDD instruction corp
 
 **Dogfood-only.** This skill lives at
 `.claude/skills/idd-spec-audit/` in the `kurone-kito/idd-skill` source
-repository only. It has no canonical `skills/` source and is not a
-`sync-manifest.json` `syncPairs`/`fileSets` entry, unlike
+repository only. It has no canonical `skills/` source and is not an
+`audit/sync-manifest.json` `syncPairs`/`fileSets` entry, unlike
 `.claude/skills/issue-authoring/` (which mirrors `skills/issue-authoring/`)
 — there is nothing to distribute to adopter repositories yet. See
 [Promotion checkpoint](#promotion-checkpoint-final-step) below.
