@@ -62,6 +62,20 @@ GitHub side effect, confirm all of the following:
 
 ## E1 — Fetch review items into ReviewItems_snapshot
 
+### CI-completion precondition (before Step 1)
+
+Before taking the Step 1 snapshot, confirm every CI run that counts
+toward the merge gate has completed, including any opt-in or
+label-triggered job enabled at this quiescent point. If the primary
+advisory bot already reviewed an earlier head of this PR, an automatic
+same-head re-review is expected — run the advisory-wait-state helper and
+check its own `lastCopilotCommit == prHeadSha` fast-path fields (from
+`idd-advisory-wait.instructions.md`; both read fresh from that helper's
+output, independent of Step 1's `{head-SHA}` below, which is not
+captured yet at this point) and wait for that re-review to land first,
+bounded by that file's advisory-wait windows if it never does. Only
+once this precondition is satisfied, continue to Step 1.
+
 ### Step 1 — Snapshot the activity universe
 
 1. Read the current PR HEAD SHA once — `gh pr view {pr-number} --json
@@ -92,18 +106,6 @@ GitHub side effect, confirm all of the following:
    safety net for their late-arriving findings — never skip or narrow
    this fetch even when Copilot's own advisory-wait window already looks
    satisfied.
-
-### CI-completion precondition (before Step 2)
-
-Post the watermark only after every CI run that counts toward the merge
-gate has completed, including any opt-in or label-triggered job enabled
-at this quiescent point. If the primary advisory bot already reviewed an
-earlier head of this PR, an automatic same-head re-review is expected —
-check the advisory-wait-state helper's `lastCopilotCommit ==
-PR_HEAD_SHA` fast-path signal from `idd-advisory-wait.instructions.md`
-and wait for that re-review to land first, bounded by that file's
-advisory-wait windows if it never does. Take the Step 1 snapshot and
-post the watermark only after this precondition is satisfied.
 
 ### Step 2 — Record the watermark
 
