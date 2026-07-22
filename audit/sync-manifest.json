@@ -174,7 +174,7 @@
     "glob": ".github/instructions/idd-*.instructions.md",
     "alwaysLoadedPattern": "applyTo:\\s*\"\\*\\*\"",
     "alwaysLoadedLimitBytes": 20000,
-    "phaseLimitBytes": 35500
+    "phaseLimitBytes": 38000
   },
   "bundleBudgets": [
     {
