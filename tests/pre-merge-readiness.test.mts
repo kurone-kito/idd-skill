@@ -3408,6 +3408,118 @@ test('summarizeClaimValidation does not trust all authors when trusted marker se
   assert.equal(summary.reason, 'missing-active-claim');
 });
 
+// #1528: the F2/F3 merge-time write-gate's activation-nonce collision
+// check, mirroring evaluateResumeClaimRouting's own activation-nonce
+// coverage in tests/resume-claim-routing.test.mts (same shared
+// findActivationNonceWinner primitive, same #1522 marker format).
+test('summarizeClaimValidation: matching nonce keeps match (no collision)', () => {
+  const claimEvents = [
+    {
+      body: '<!-- claimed-by: copilot claim-abc supersedes: none 2026-05-12T09:00:00Z branch: issue/1-task -->',
+      createdAt: '2026-05-12T09:00:00Z',
+      author: { login: 'maintainer' },
+    },
+    {
+      body: '<!-- activation-nonce: copilot claim-abc nonce-mine 2026-05-12T09:00:05Z -->',
+      createdAt: '2026-05-12T09:00:05Z',
+      author: { login: 'maintainer' },
+    },
+  ];
+
+  const summary = summarizeClaimValidation(claimEvents, {
+    trustedMarkerLogins: ['maintainer'],
+    expectedClaimId: 'claim-abc',
+    expectedAgentId: 'copilot',
+    expectedNonce: 'nonce-mine',
+  });
+
+  assert.equal(summary.claimLost, false);
+  assert.equal(summary.reason, 'match');
+});
+
+test('summarizeClaimValidation: mismatched nonce routes to the contested/stop path', () => {
+  const claimEvents = [
+    {
+      body: '<!-- claimed-by: copilot claim-abc supersedes: none 2026-05-12T09:00:00Z branch: issue/1-task -->',
+      createdAt: '2026-05-12T09:00:00Z',
+      author: { login: 'maintainer' },
+    },
+    {
+      body: '<!-- activation-nonce: copilot claim-abc nonce-aaa 2026-05-12T09:00:05Z -->',
+      createdAt: '2026-05-12T09:00:05Z',
+      author: { login: 'maintainer' },
+    },
+    {
+      body: '<!-- activation-nonce: copilot claim-abc nonce-zzz 2026-05-12T09:00:07Z -->',
+      createdAt: '2026-05-12T09:00:07Z',
+      author: { login: 'maintainer' },
+    },
+  ];
+
+  // "nonce-aaa" sorts first ASCII and wins; the displaced session's own
+  // recorded nonce ("nonce-zzz") loses, the same second-activation
+  // collision resume-claim-routing.mts already catches at claim time.
+  const summary = summarizeClaimValidation(claimEvents, {
+    trustedMarkerLogins: ['maintainer'],
+    expectedClaimId: 'claim-abc',
+    expectedAgentId: 'copilot',
+    expectedNonce: 'nonce-zzz',
+  });
+
+  assert.equal(summary.claimLost, true);
+  assert.equal(summary.reason, 'activation-nonce-mismatch');
+  assert.equal(summary.matchesExpectedClaim, false);
+});
+
+test('summarizeClaimValidation: no activation-nonce marker skips the comparison (AC3 backward compatibility)', () => {
+  const claimEvents = [
+    {
+      body: '<!-- claimed-by: copilot claim-abc supersedes: none 2026-05-12T09:00:00Z branch: issue/1-task -->',
+      createdAt: '2026-05-12T09:00:00Z',
+      author: { login: 'maintainer' },
+    },
+  ];
+
+  const summary = summarizeClaimValidation(claimEvents, {
+    trustedMarkerLogins: ['maintainer'],
+    expectedClaimId: 'claim-abc',
+    expectedAgentId: 'copilot',
+    expectedNonce: 'nonce-mine',
+  });
+
+  assert.equal(summary.claimLost, false);
+  assert.equal(summary.reason, 'match');
+});
+
+test('summarizeClaimValidation: omitting expectedNonce opts out of the comparison entirely', () => {
+  const claimEvents = [
+    {
+      body: '<!-- claimed-by: copilot claim-abc supersedes: none 2026-05-12T09:00:00Z branch: issue/1-task -->',
+      createdAt: '2026-05-12T09:00:00Z',
+      author: { login: 'maintainer' },
+    },
+    {
+      body: '<!-- activation-nonce: copilot claim-abc nonce-aaa 2026-05-12T09:00:05Z -->',
+      createdAt: '2026-05-12T09:00:05Z',
+      author: { login: 'maintainer' },
+    },
+    {
+      body: '<!-- activation-nonce: copilot claim-abc nonce-zzz 2026-05-12T09:00:07Z -->',
+      createdAt: '2026-05-12T09:00:07Z',
+      author: { login: 'maintainer' },
+    },
+  ];
+
+  const summary = summarizeClaimValidation(claimEvents, {
+    trustedMarkerLogins: ['maintainer'],
+    expectedClaimId: 'claim-abc',
+    expectedAgentId: 'copilot',
+  });
+
+  assert.equal(summary.claimLost, false);
+  assert.equal(summary.reason, 'match');
+});
+
 test('summarizeClaimValidation requires linked-pr match for issue-plus-pr handoff', () => {
   const claimEvents = [
     {
@@ -5231,6 +5343,21 @@ test('parseArgs: valid --pr / --claim-issue parse to positive integers', () => {
   const args = parseArgs(['--pr', '1082', '--claim-issue', '1076']);
   assert.equal(args.prNumber, 1082);
   assert.equal(args.claimIssueNumber, 1076);
+});
+
+test('parseArgs: --nonce (#1528) defaults to empty and round-trips when given', () => {
+  const withoutNonce = parseArgs(['--pr', '1082', '--claim-issue', '1076']);
+  assert.equal(withoutNonce.nonce, '');
+
+  const withNonce = parseArgs([
+    '--pr',
+    '1082',
+    '--claim-issue',
+    '1076',
+    '--nonce',
+    'nonce-mine',
+  ]);
+  assert.equal(withNonce.nonce, 'nonce-mine');
 });
 
 test('parseArgs: a flag-shaped value throws instead of consuming the flag', () => {

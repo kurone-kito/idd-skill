@@ -24,6 +24,7 @@ export { DEFAULT_ADVISORY_BOT_LOGINS } from './advisory-wait-policy.mjs';
 export * from './marker-helpers.mjs';
 
 import {
+  findActivationNonceWinner,
   IDD_AGENT_DERIVED_MARKERS,
   isValidIsoTimestamp,
   operationalMarkerPrefix,
@@ -3911,6 +3912,7 @@ export function summarizeClaimValidation(claimEvents = [], options = {}) {
           },
     isStale: resolveStalePredicate(options.staleAgeMs),
   });
+  const expectedNonce = String(options.expectedNonce ?? '').trim();
   let reason = 'match';
   if (!activeClaim) {
     reason = 'missing-active-claim';
@@ -3918,6 +3920,28 @@ export function summarizeClaimValidation(claimEvents = [], options = {}) {
     reason = 'claim-id-mismatch';
   } else if (expectedAgentId && activeClaim.agentId !== expectedAgentId) {
     reason = 'agent-id-mismatch';
+  } else if (expectedClaimId && expectedNonce) {
+    // #1528: mirrors evaluateResumeClaimRouting's activation-nonce-mismatch
+    // check (resume-claim-routing.mts) -- only meaningful once claim-id and
+    // agent-id already match, since claim-id alone cannot distinguish a
+    // second, independent activation of the same id. Computed lazily, here,
+    // so every pre-#1528 caller that never passes expectedNonce (the
+    // default) pays no parsing/sorting cost for it. Trust-filter first
+    // (findActivationNonceWinner does no author checks of its own), matching
+    // how the resume-side caller pre-filters before calling the same shared
+    // primitive.
+    const activationNonceWinner = findActivationNonceWinner(
+      claimEvents.filter((event) =>
+        trustedAuthorPredicate(event.author?.login ?? event.user?.login ?? ''),
+      ),
+      activeClaim.claimId,
+    );
+    if (
+      activationNonceWinner !== null &&
+      activationNonceWinner !== expectedNonce
+    ) {
+      reason = 'activation-nonce-mismatch';
+    }
   }
   return {
     expectedClaimId,
@@ -4241,6 +4265,7 @@ export function buildPreMergeReadinessSummary(
     isForcedHandoffEnabled: options.isForcedHandoffEnabled,
     expectedClaimId: options.expectedClaimId,
     expectedAgentId: options.expectedAgentId,
+    expectedNonce: options.expectedNonce,
     staleAgeMs: options.staleAgeMs,
   });
   const waivableCheckSelectors = options.waivableCheckSelectors ?? null;

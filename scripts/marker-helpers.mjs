@@ -149,6 +149,28 @@ export function parseActivationNonceComment(body, createdAt) {
     createdAt,
   };
 }
+/**
+ * Resolve the winning activation nonce among `events` for `claimId`: the
+ * lexicographically earliest nonce (`.sort()`) among every trusted
+ * `activation-nonce` marker parsed from `events` whose `claimId` matches.
+ * This is a pure function of the observed nonce *set* (not post order or
+ * timestamp), so two sessions that both activated the same claim-id compute
+ * the identical winner once each has re-read the same trusted comment
+ * stream (#1522). `events` must already be trust-filtered by the caller --
+ * this function does no author checks of its own. Returns `null` when no
+ * matching `activation-nonce` marker exists -- callers must treat that as
+ * "no comparison possible," not a mismatch (#1522 AC3).
+ */
+export function findActivationNonceWinner(events, claimId) {
+  const nonces = events
+    .map((event) =>
+      parseActivationNonceComment(event.body ?? '', event.createdAt ?? ''),
+    )
+    .filter((marker) => Boolean(marker) && marker?.claimId === claimId)
+    .map((marker) => marker.nonce)
+    .sort();
+  return nonces.length > 0 ? nonces[0] : null;
+}
 export function parseReleaseComment(body) {
   const match = body
     .trimEnd()

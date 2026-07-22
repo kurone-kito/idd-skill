@@ -180,7 +180,7 @@ addendum resolves it.
 2. Otherwise, if the critique pass reports zero issues, check the `fix-validate`
    floor.
 3. If the floor has not passed, continue to C5 to repair validation.
-4. If the floor has passed, open and follow `idd-pr-submit.instructions.md`
+4. If the floor has passed, open and follow `idd-pr-submit-lite.instructions.md`
    now.
 
 ### C3 — Score issues
@@ -194,9 +194,9 @@ addendum resolves it.
 1. Accept high issues.
 2. If accepted issues remain and the floor has not passed, continue to C5.
 3. Otherwise, if no accepted issues remain and the floor has passed, open and
-   follow `idd-pr-submit.instructions.md` now.
+   follow `idd-pr-submit-lite.instructions.md` now.
 4. Otherwise, if only low accepted issues remain after more than 3 loops and
-   the floor has passed, open and follow `idd-pr-submit.instructions.md` now.
+   the floor has passed, open and follow `idd-pr-submit-lite.instructions.md` now.
 5. Otherwise continue to C5.
 
 ### C5 — Fix accepted issues

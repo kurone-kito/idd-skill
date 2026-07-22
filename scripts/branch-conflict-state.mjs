@@ -123,6 +123,7 @@ export async function classifyBranchConflictState(prNumber, options = {}) {
     prBaseSha,
     prHeadRef,
     prBaseRef,
+    prNumber,
     mergeable,
     mergeStateStatus,
     notes,
@@ -154,6 +155,7 @@ function deriveBranchState({
   prHeadSha,
   prBaseSha,
   prBaseRef,
+  prNumber,
   mergeable,
   mergeStateStatus,
   notes,
@@ -170,6 +172,7 @@ function deriveBranchState({
           prHeadSha,
           prBaseSha,
           prBaseRef,
+          prNumber,
           owner,
           repo,
           notes,
@@ -199,6 +202,7 @@ function deriveBranchState({
       prHeadSha,
       prBaseSha,
       prBaseRef,
+      prNumber,
       owner,
       repo,
       notes,
@@ -233,6 +237,7 @@ function deriveBranchState({
       prHeadSha,
       prBaseSha,
       prBaseRef,
+      prNumber,
       owner,
       repo,
       notes,
@@ -268,6 +273,7 @@ function deriveBranchState({
       prHeadSha,
       prBaseSha,
       prBaseRef,
+      prNumber,
       owner,
       repo,
       notes,
@@ -337,19 +343,59 @@ export function resolveMergeBaseWithRetry(
 }
 /**
  * Read-only local `git merge-base` lookup, falling back to a bounded,
- * progressively deeper fetch of the base ref when the base commit is not
- * yet present locally (e.g. a shallow CI checkout that only has the PR
- * head, or an agent worktree that has not fetched recent base history).
+ * progressively deeper fetch of the base ref **and** the PR head ref when
+ * the merge-base is not yet resolvable locally. Two genuinely different
+ * shallow-history gaps can block `git merge-base` here, and #1535 added the
+ * second one alongside #1519's original base-ref fix:
+ *
+ * - The base commit is missing (e.g. an agent worktree that has not fetched
+ *   recent base history) -- {@link tryFetchBase} handles this, unchanged
+ *   since #1519.
+ * - The PR **head**'s own ancestry is missing (e.g. a shallow CI checkout of
+ *   just the PR head, or a fork PR whose head commits were never fetched at
+ *   all) -- {@link tryFetchHead} handles this by fetching/deepening
+ *   `refs/pull/<prNumber>/head` from the same base-repository remote
+ *   {@link tryFetchBase} already targets. GitHub mirrors every PR head onto
+ *   the base repository under that ref (confirmed empirically against real
+ *   GitHub-hosted repos, including a genuine fork PR, for #1535 -- see the
+ *   PR description), so no separate fork remote URL is needed even when the
+ *   head lives in a fork: `classifyBranchConflictState`'s existing
+ *   `owner`/`repo` (the base repository) plus `prNumber` are sufficient.
+ *
+ * Each retry step attempts **both** fetches at the same escalating
+ * depth/deepen args and widens history if **either** succeeds, so a
+ * structural block on one side (e.g. a missing `prBaseRef`) does not stop
+ * the other side's retries, and the loop only gives up early when neither
+ * side can plausibly help.
+ *
  * Returns `null` when the merge-base still cannot be resolved after
  * exhausting {@link MERGE_BASE_FETCH_STEPS}; callers decide how to report
  * that indeterminate outcome, since "conflict probe" and "base-advancement"
  * callers need different diagnostics wording for the same underlying null.
  */
-function computeMergeBase(prHeadSha, prBaseSha, prBaseRef, owner, repo, notes) {
+function computeMergeBase(
+  prHeadSha,
+  prBaseSha,
+  prBaseRef,
+  prNumber,
+  owner,
+  repo,
+  notes,
+) {
   return resolveMergeBaseWithRetry(
     () => gitText(['merge-base', prHeadSha, prBaseSha]),
-    (step) =>
-      tryFetchBase(prBaseRef, owner, repo, notes, MERGE_BASE_FETCH_STEPS[step]),
+    (step) => {
+      const fetchArgs = MERGE_BASE_FETCH_STEPS[step];
+      const baseFetched = tryFetchBase(
+        prBaseRef,
+        owner,
+        repo,
+        notes,
+        fetchArgs,
+      );
+      const headFetched = tryFetchHead(prNumber, owner, repo, notes, fetchArgs);
+      return baseFetched || headFetched;
+    },
     MERGE_BASE_FETCH_STEPS.length,
   );
 }
@@ -365,6 +411,7 @@ function computeBaseAdvanced(
   prHeadSha,
   prBaseSha,
   prBaseRef,
+  prNumber,
   owner,
   repo,
   notes,
@@ -376,6 +423,7 @@ function computeBaseAdvanced(
       prHeadSha,
       prBaseSha,
       prBaseRef,
+      prNumber,
       owner,
       repo,
       notes,
@@ -398,6 +446,7 @@ function probeConflictFilesReadOnly(
   prHeadSha,
   prBaseSha,
   prBaseRef,
+  prNumber,
   owner,
   repo,
   notes,
@@ -407,6 +456,7 @@ function probeConflictFilesReadOnly(
       prHeadSha,
       prBaseSha,
       prBaseRef,
+      prNumber,
       owner,
       repo,
       notes,
@@ -599,6 +649,72 @@ function tryFetchBase(prBaseRef, owner, repo, notes, fetchArgs) {
   } catch {
     notes.push(
       `Could not fetch base ref ${prBaseRef} (git fetch ${fetchArgs.join(' ')}); merge-base probe may be incomplete.`,
+    );
+    return false;
+  }
+}
+/**
+ * Attempt one fetch of the PR **head** side at the given depth/deepen args,
+ * for {@link computeMergeBase}'s bounded retry loop (via {@link
+ * resolveMergeBaseWithRetry}) -- the #1535 sibling of {@link tryFetchBase}.
+ *
+ * Fetches `refs/pull/<prNumber>/head` from the same base-repository remote
+ * `tryFetchBase` already targets, rather than the PR's own `headRefName` or
+ * a fork's own remote URL. GitHub creates and keeps this ref updated on the
+ * **base** repository for every pull request -- including from a fork, and
+ * even when the fork remote has since been renamed, made private, or
+ * deleted -- so it is fetchable with the exact same remote URL, the exact
+ * same (anonymous, credential-helper-backed) auth, and the exact same
+ * escalating depth/deepen args as the base-ref fetch, with no separate
+ * fork-remote resolution required. Confirmed empirically for #1535 against
+ * real GitHub-hosted repos (both a same-repository PR and a genuine
+ * cross-repository/fork PR): `git ls-remote <repo> refs/pull/<n>/head`
+ * matches `gh pr view --json headRefOid` exactly, and fetching that ref
+ * (progressively deepened, mirroring {@link MERGE_BASE_FETCH_STEPS}) lets a
+ * shallow clone that never had the PR head's ancestry at all resolve
+ * `git merge-base` against it -- see the PR description for the full
+ * experiment. Because this always fetches a normally-advertised ref (never
+ * a bare, unadvertised SHA), it needs no server-side
+ * `uploadpack.allow*SHA1InWant` support either.
+ *
+ * Returns `true` when the `git fetch` call itself succeeded, so the
+ * caller's retry loop knows a deeper next step could plausibly still help;
+ * returns `false` when preconditions (`prNumber`, `owner`, `repo`) are
+ * missing or malformed, or when the fetch itself failed (network, auth,
+ * unknown ref, etc.) -- in either case a further attempt against the same
+ * unreachable/absent target would not change the outcome.
+ */
+function tryFetchHead(prNumber, owner, repo, notes, fetchArgs) {
+  // Mirrors parseArgs's own canonical-positive-integer check: a malformed or
+  // missing PR number is a structural skip, not an error -- callers that
+  // never had a resolvable PR number (e.g. this file's own hermetic tests)
+  // must not reach the real `git fetch` below.
+  const prNumberText = String(prNumber ?? '');
+  if (!/^[1-9]\d*$/.test(prNumberText)) return false;
+  if (!owner || !repo) {
+    notes.push(
+      'Skipped head-ref fetch fallback: owner/repo not provided; merge-base probe may be incomplete.',
+    );
+    return false;
+  }
+  const headRef = `refs/pull/${prNumberText}/head`;
+  try {
+    // Deliberately untested at this call site -- see tryFetchBase's own
+    // doc comment for why (this file's hermetic-test convention never lets
+    // a test reach a live network fetch); the retry-loop shape this feeds
+    // is covered directly via resolveMergeBaseWithRetry against a real
+    // local shallow-clone fixture instead (see
+    // tests/branch-conflict-state.test.mts's head-side-shallow test).
+    const { scheme, host } = resolveFetchOrigin();
+    const remote = `${scheme}://${host}/${owner}/${repo}.git`;
+    execFileSync('git', ['fetch', '--no-tags', ...fetchArgs, remote, headRef], {
+      stdio: 'ignore',
+      encoding: 'utf8',
+    });
+    return true;
+  } catch {
+    notes.push(
+      `Could not fetch head ref ${headRef} (git fetch ${fetchArgs.join(' ')}); merge-base probe may be incomplete.`,
     );
     return false;
   }

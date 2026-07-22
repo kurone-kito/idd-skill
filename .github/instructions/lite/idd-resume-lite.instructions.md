@@ -130,12 +130,13 @@ the issue branch.
 On helper-enabled profiles, run `resume-route-selection.mjs --issue <N>`
 (and stop-and-ask on failure — do not use the written table). Map `route`:
 
-| `route`                | Next phase                                       |
-| ---------------------- | ------------------------------------------------ |
-| `D1` / `D4`            | PR-submit / CI wait (`idd-pr-submit` / `idd-ci`) |
-| `E1` / `E15` / `Esync` | Review snapshot / CI wait / branch-sync          |
-| `F1` / `F2`            | Pre-merge                                        |
-| `stop`                 | STOP — report helper `reason`                    |
+| `route`                | Next phase                                                                            |
+| ---------------------- | ------------------------------------------------------------------------------------- |
+| `D1`                   | `idd-pr-submit-lite.instructions.md`, from D1 (sync/push/open PR)                     |
+| `D4`                   | `idd-pr-submit-lite.instructions.md`, D4 section only (CI wait) — do not re-run D1-D3 |
+| `E1` / `E15` / `Esync` | Review snapshot / CI wait / branch-sync                                               |
+| `F1` / `F2`            | `idd-pre-merge-lite.instructions.md`, from the top (covers both F1 and F2)            |
+| `stop`                 | STOP — report helper `reason`                                                         |
 
 Before any mutation after routing: re-validate claim ownership, PR HEAD,
 and CI live state.
