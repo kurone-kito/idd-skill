@@ -223,6 +223,52 @@ issue that passes those gates can still be under-specified if it leaves
 too much implementation shape implicit. The drafting target is therefore
 "ready and stable for a middle-tier model," not "maximally detailed."
 
+## Executability gate for code spec-units
+
+For a **code spec-unit** — a drafted unit whose acceptance criteria are
+objectively executable (a script, function, or test the drafted issue
+itself specifies) — an authoring session can validate the draft before
+publishing by building a throwaway reference implementation against its
+own stated acceptance check and accepting the draft only if that
+reference implementation passes. This reuses the downstream execution
+loop as an upstream ground-truth gate: it catches drafts whose
+acceptance criteria are internally inconsistent, non-trivially
+unsatisfiable, or otherwise not actually implementable, before a
+downstream executor ever claims the issue. The reference implementation
+is a discarded validation probe, never published — it does not cross the
+Approval boundary below; only the drafted issue itself is published,
+and building the probe does not start the IDD execution loop.
+
+This is a **recommended practice for repositories or domains where a
+drafted code spec-unit has an objectively executable acceptance
+check**, not a change to this repository's own mechanical
+`bin/idd-audit-authored-issue.mjs` checks or a new requirement on this
+repository's own issue-authoring practice — most of this repository's
+issues are multi-file engineering changes without a single executable
+acceptance check to validate against.
+
+- **Weak-model semantic self-review stays advisory.** When a weak
+  authoring model reviews its own draft for semantic quality, treat the
+  verdict as advisory only, never a hard veto on publishing — mirroring
+  the narrow-question guidance for weak-model judgment calls in
+  `docs/idd-workflow.md`'s Weak-model guardrails section.
+- **Decompose and draft want different model traits.** Decomposition
+  (judgment about scope and structure) tolerates a verbose reasoning
+  model; the structured draft step (emitting the exact spec/acceptance-
+  criteria block) is more reliable on a leaner, more literal model,
+  whose chain-of-thought does not compete with the drafted block for
+  token budget. Pick the model per sub-task, not per pipeline, when both
+  are available.
+- **Redraft and re-decomposition are limited rescue mechanisms, not
+  reliable fixes.** A bounded redraft loop tends to re-roll rather than
+  converge, because a weak author regenerates rather than incrementally
+  fixes. Re-decomposing a repeatedly-failing unit is usually low-value
+  too: most authoring failures are hard-but-atomic rather than
+  over-broad, and splitting a hard-but-atomic unit tends to produce
+  incoherent sub-units that do not recompose. Treat a code spec-unit
+  that repeatedly fails this gate as a candidate for `needs-decision` or
+  human/stronger-model authoring instead of looping indefinitely.
+
 ## Stable readiness buckets
 
 Low-confidence or low-readiness work must not be silently deleted. The
