@@ -338,6 +338,24 @@ this hold and stop:
 ## AW6 — Same-HEAD advisory reroll
 
 F2-only (`#1511`) on `sameHeadReroll.eligible`; see
-`idd-helper-scripts.md`. `requestable`: post+request
-`advisory-reroll:`, poll (not E14's loop). `inFlight`: poll only.
+`docs/idd-helper-scripts.md`. `requestable`: post the marker below **before**
+requesting the review, then poll (not E14's loop). `inFlight`: poll only.
 Else F2's route; `!inFlight`: E1.
+
+```text
+advisory-reroll: {agent-id} {PR_HEAD_SHA} {ISO8601-requested-at}
+```
+
+Plain text, no HTML comment — matching both `advisory-wait:`'s and
+`advisory-wait-recovery:`'s shape. When helper runtime is enabled, render
+and POST this marker with the profile-selected post-idd-marker command:
+
+```sh
+post-idd-marker --type advisory-reroll --target pr <pr-number> \
+  --agent-id <id> --head-sha <PR_HEAD_SHA> --timestamp <ISO8601> --apply
+```
+
+The manual JSON `POST` stays the fallback. If the marker cannot be
+posted or verified, fail closed to AW4's **Recovery failed** hold
+template and stop (mirroring AW3-R's identical routing on the same
+failure).
