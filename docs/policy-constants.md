@@ -219,6 +219,11 @@ install without a requestable-reviewer event cannot be tracked once per HEAD.
 | Advisory-convergence enforcement scope           | `all-prs` (`advisoryWait.convergenceScope`)                                                                                                                                                                                                                                                                                                                  | [Pre-merge](../.github/instructions/idd-pre-merge.instructions.md), [Helper scripts](idd-helper-scripts.md), [Customizing IDD](customization.md#policy-constants)                                                    | Keep `all-prs` for existing behavior; switch to `idd-claimed` only when the repository wants convergence to apply solely to verified IDD-owned PRs.             |
 | Advisory-convergence required-check registration | Not registered by default (hosting the `idd-advisory-convergence` workflow is itself an opt-in step — see [ONBOARDING](https://github.com/kurone-kito/idd-skill/blob/main/idd-template/ONBOARDING.md#optional--host-idd-advisory-convergence-as-a-required-check-ci-workflow); once hosted, a required-status-check Ruleset entry is a separate manual step) | [Customizing IDD](customization.md#policy-constants), [Helper scripts](idd-helper-scripts.md)                                                                                                                        | Register `idd-advisory-convergence` as a required status check to make convergence non-bypassable; this is a maintainer GitHub-settings action, not agent work. |
 
+`idd-claimed` keeps claimless/manual dependency PRs out of the gate by
+making them `not_applicable` instead of creating a waiver path. The
+maintainer waiver escape hatch still applies only to applicable,
+verified IDD-owned PRs after the deadline.
+
 ## CI Wait Defaults
 
 | Policy default                                         | Distributed value                                                                   | Owning surface                                                                                                                                                                                         | Onboarding expectation                                                                      |

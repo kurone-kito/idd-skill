@@ -882,3 +882,167 @@ test('heartbeatOverdue:false when a later trusted heartbeat repost refreshes the
   });
   assert.equal(leaf701?.claimEligible, false);
 });
+
+test('filterOrphanIssues excludes an open non-epic Depends-on reference (#1536)', async () => {
+  const issues = [
+    {
+      number: 70,
+      title: 'candidate with an open dependency',
+      state: 'OPEN',
+      labels: [],
+      body: 'Depends on #71',
+      url: 'https://example.com/70',
+    },
+  ];
+
+  const result = await filterOrphanIssues(issues, {
+    issueStateByNumber: new Map([[71, 'OPEN']]),
+    fetchIssueStateByNumber: () => 'UNRESOLVABLE',
+  });
+
+  assert.equal(result.orphans.length, 0);
+  assert.equal(result.filtered.open_dependency_reference.length, 1);
+  assert.equal(result.filtered.open_dependency_reference[0].number, 70);
+});
+
+test('filterOrphanIssues excludes an open non-epic task-list dependency reference (#1536)', async () => {
+  const issues = [
+    {
+      number: 72,
+      title: 'candidate with an open task-list dependency',
+      state: 'OPEN',
+      labels: [],
+      body: '- [ ] #73',
+      url: 'https://example.com/72',
+    },
+  ];
+
+  const result = await filterOrphanIssues(issues, {
+    issueStateByNumber: new Map([[73, 'OPEN']]),
+    fetchIssueStateByNumber: () => 'UNRESOLVABLE',
+  });
+
+  assert.equal(result.orphans.length, 0);
+  assert.equal(result.filtered.open_dependency_reference.length, 1);
+  assert.equal(result.filtered.open_dependency_reference[0].number, 72);
+});
+
+test('filterOrphanIssues exempts an open Depends-on reference to a parent epic by title (#1536)', async () => {
+  const issues = [
+    {
+      number: 80,
+      title: 'candidate depending on a roadmap',
+      state: 'OPEN',
+      labels: [],
+      body: 'Depends on #81',
+      url: 'https://example.com/80',
+    },
+    {
+      number: 81,
+      title: 'roadmap: parent',
+      state: 'OPEN',
+      labels: [],
+      body: '',
+      url: 'https://example.com/81',
+    },
+  ];
+
+  const result = await filterOrphanIssues(issues, {
+    issueStateByNumber: new Map([[81, 'OPEN']]),
+    fetchIssueStateByNumber: () => 'UNRESOLVABLE',
+  });
+
+  assert.equal(result.filtered.open_dependency_reference.length, 0);
+  assert.deepEqual(
+    result.orphans.map((o) => o.number),
+    [80, 81],
+  );
+  assert.equal(
+    result.orphans.find((o) => o.number === 80)?.reason,
+    'blocked_references_closed',
+  );
+});
+
+test('filterOrphanIssues exempts an open Depends-on reference to a configured roadmap label (#1536)', async () => {
+  const issues = [
+    {
+      number: 90,
+      title: 'candidate depending on an epic',
+      state: 'OPEN',
+      labels: [],
+      body: 'Depends on #91',
+      url: 'https://example.com/90',
+    },
+    {
+      // Title deliberately does NOT start with "roadmap" so this exercises
+      // only the configured-label path, not the independent title heuristic.
+      number: 91,
+      title: 'parent epic',
+      state: 'OPEN',
+      labels: [{ name: 'epic' }],
+      body: '',
+      url: 'https://example.com/91',
+    },
+  ];
+
+  const result = await filterOrphanIssues(issues, {
+    issueStateByNumber: new Map([[91, 'OPEN']]),
+    fetchIssueStateByNumber: () => 'UNRESOLVABLE',
+    roadmapLabelName: 'epic',
+  });
+
+  assert.equal(result.filtered.open_dependency_reference.length, 0);
+  assert.equal(
+    result.orphans.find((o) => o.number === 90)?.reason,
+    'blocked_references_closed',
+  );
+});
+
+test('filterOrphanIssues treats an unresolvable Depends-on reference as blocking (#1536)', async () => {
+  const issues = [
+    {
+      number: 92,
+      title: 'candidate with a missing dependency',
+      state: 'OPEN',
+      labels: [],
+      body: 'Depends on #999',
+      url: 'https://example.com/92',
+    },
+  ];
+
+  const result = await filterOrphanIssues(issues, {
+    issueStateByNumber: new Map(),
+    fetchIssueStateByNumber: () => 'UNRESOLVABLE',
+  });
+
+  assert.equal(result.orphans.length, 0);
+  assert.equal(result.filtered.unresolvable_reference.length, 1);
+  assert.deepEqual(result.unresolvable, [
+    {
+      issue: 92,
+      reference: 999,
+      reason: 'issue-not-found-or-inaccessible',
+    },
+  ]);
+});
+
+test('filterOrphanIssues keeps a closed Depends-on reference as an orphan candidate (#1536)', async () => {
+  const issues = [
+    {
+      number: 93,
+      title: 'candidate with a closed dependency',
+      state: 'OPEN',
+      labels: [],
+      body: 'Depends on #94',
+      url: 'https://example.com/93',
+    },
+  ];
+
+  const result = await filterOrphanIssues(issues, {
+    issueStateByNumber: new Map([[94, 'CLOSED']]),
+    fetchIssueStateByNumber: () => 'UNRESOLVABLE',
+  });
+
+  assert.equal(result.orphans.length, 1);
+  assert.equal(result.orphans[0].reason, 'blocked_references_closed');
+});

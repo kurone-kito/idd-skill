@@ -1408,6 +1408,18 @@ Interpretation rules:
 - Fail closed: if helper execution fails, output is invalid JSON, or
   required fields are missing, discard helper output and apply the
   written F2 advisory/disposition sub-gate check manually.
+- `advisoryWait.convergenceScope` controls whether advisory convergence
+  applies to every PR or only verified IDD-owned PRs. The default
+  `all-prs` keeps the helper applicable everywhere. `idd-claimed`
+  narrows it so a verified linked claim with a matching PR head branch
+  is `applicable`; a verified linked claim with a branch mismatch is
+  `not_applicable`; a verified linked claim still stays `applicable`
+  when branch data is unavailable; and PRs without a verified linked
+  claim, including manual/dependency PRs, are `not_applicable`.
+  Claimless maintainer waivers stay outside this conditional scope; the
+  normal deadline-based waiver path still applies only to applicable,
+  verified IDD-owned PRs. Invalid or unreadable config values still
+  normalize back to `all-prs` in trusted config reads.
 
 #### Bounded same-HEAD advisory reroll (AW6, #1511)
 

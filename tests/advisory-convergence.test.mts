@@ -490,6 +490,7 @@ test("#1512: this repository's own .github/idd/config.json wires the maintainer-
   // post-deadline maintainer waiver for `idd-advisory-convergence` flip
   // `ready` true. See #1512 and #1465.
   const repoPolicy = normalizePolicyConfig(loadJson('.github/idd/config.json'));
+  assert.equal(repoPolicy.advisoryWait.convergenceScope, 'idd-claimed');
   assert.equal(
     repoPolicy.ciGate.externalCheckWaivers.mode,
     'maintainer-authorized',
