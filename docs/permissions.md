@@ -522,9 +522,9 @@ precedence, so an individual session or operator can add broader `git`
 mutation commands, additional `gh api` scopes, or anything else it
 needs locally without changing the shared file. Do not widen the
 committed `.claude/settings.json` itself to cover one session's
-one-off need; add it to the personal `settings.local.json` layer
-instead, and only promote a change into the shared baseline as a
-deliberate, reviewed edit.
+one-off need; add it to the personal `.claude/settings.local.json`
+layer instead, and only promote a change into the shared baseline as
+a deliberate, reviewed edit.
 
 Permission availability is a harness convenience, never a workflow
 gate: even a fully permissive `.claude/settings.json` does not
