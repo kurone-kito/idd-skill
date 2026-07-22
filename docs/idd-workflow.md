@@ -608,6 +608,22 @@ Running this variant safely requires:
   never as something to trust or silently discard; then delegate a fresh
   subagent with a resume-specific briefing rather than resuming the dead
   worker's own context.
+- **Independently verify a worker's reported terminal outcome before
+  trusting it.** A worker's final-turn text describes what it
+  _attempted_, not proof of what actually landed on the forge. Before
+  dispatching the next worker or otherwise acting on a reported "merged"
+  outcome, confirm live GitHub state directly — for example
+  `gh pr view <n> --json state,mergedAt` and
+  `gh issue view <n> --json state,closedAt` — rather than trusting the
+  worker's own narrative.
+- **Check for dangling or broken state after an ambiguous worker
+  dispatch.** When a worker's turn ends without a clean final report
+  (stalled, killed, timed out) — especially if its last visible action
+  was a mutating step such as an F3 merge-execution command — check for
+  a PR left in a failed-merge-attempt state (e.g.
+  `gh pr view <n> --json mergeable,mergeStateStatus`) or an orphaned
+  claim before dispatching further workers, rather than assuming success
+  or failure either way.
 
 ## Live Status Digests
 
