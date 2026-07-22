@@ -51,6 +51,8 @@ session already claimed and implemented. If the repository is
   without satisfying D4 step 8's exception.
 - D2's push needs `--force-with-lease` outside the one named exception
   below.
+- D4's polling detects the PR head SHA changed mid-wait (someone else
+  pushed while this session was waiting).
 
 ## Pre-mutation guard
 
@@ -231,6 +233,13 @@ wait when it is confirmed to route completion back to this same
 session/turn; otherwise a backgrounded wait can strand the session past
 its handoff point with no one left to act on the result.
 
+**HEAD-drift detection**: on the first poll, record `ci-wait-state`'s
+`headRefOid`. On every later poll in this same wait, compare the fresh
+`headRefOid` against that recorded value. If it differs, someone pushed
+to this branch while waiting — stop per the condition above rather than
+proceeding to E1 on results for a HEAD this session never validated;
+re-enter D4 from the top to record the new HEAD and start waiting again.
+
 1. Use the profile-selected **ci-wait-policy** helper to resolve the
    running/generation timeouts and the rerun budget:
    `node scripts/ci-wait-policy.mjs`, or the package-manager-profile
@@ -261,12 +270,15 @@ its handoff point with no one left to act on the result.
    exists but cannot be enumerated by name): always stop per the
    condition above — this is a real gating check, never treat it like
    `no-required-checks`.
-5. **`failing`**: check whether `idd-advisory-convergence` is the
-   **only** failing required check. If so, go to step 8's exception
-   instead of stopping here. Otherwise (any other required check is
-   failing, with or without `idd-advisory-convergence` also failing),
-   stop per the condition above rather than continuing to poll (fixing
-   or rerunning it is outside this file's mechanical scope).
+5. **`failing`**: in the same helper's `checks[]` array, check every
+   entry where `required` is true and the name is not
+   `idd-advisory-convergence`. If **all** of those are `success`,
+   `idd-advisory-convergence` is the sole non-passing required check —
+   go to step 8's exception instead of stopping here. If **any** of
+   those is not yet `success` (whether `failing` or still
+   `pending`/`missing`/`unknown`), that does not qualify: stop per the
+   condition above rather than continuing to poll (fixing or rerunning
+   it is outside this file's mechanical scope).
 6. **`pending`** or **`missing`** (an expected required check has not
    posted a result yet): keep polling until `success`, `failing`, or the
    ci-wait-policy timeout is reached. **On timeout**: apply
@@ -282,8 +294,15 @@ its handoff point with no one left to act on the result.
    reports `pending: false` with outstanding review reasons (thread
    disposition or actionable item count on the latest review), this is
    not a CI-wait state — it turns green only after E-phase disposition,
-   downstream of D4. Absent a maintainer-posted external-check waiver
-   for this HEAD (which needs one rerun first to reflect the waiver),
-   exit CI-wait now and proceed directly to E1. This never relaxes the
-   merge gate: the check stays required, and F2 re-verifies it
-   independently before merge.
+   downstream of D4.
+   - If a maintainer has posted a valid external-check waiver for this
+     exact HEAD: rerun the `idd-advisory-convergence` check once (`gh
+     run rerun <run-id> --failed`, using the run id from `checks[]`'s
+     entry for it) so it re-evaluates and reflects the waiver, then
+     re-read `requiredChecks.status` once more. If it is now `success`,
+     go to step 7. If it is still non-passing after that one rerun,
+     stop per the condition above — do not rerun a second time.
+   - Absent a valid waiver for this HEAD: exit CI-wait now and proceed
+     directly to E1. This never relaxes the
+     merge gate: the check stays required, and F2 re-verifies it
+     independently before merge.
