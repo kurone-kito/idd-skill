@@ -279,6 +279,16 @@
         "sameHeadRerollCap": {
           "type": "integer",
           "minimum": 1
+        },
+        "recoveryCycleCap": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Bounded per-PR-HEAD Copilot stall-recovery cycle cap (#1572; default 2). A completed cycle is one trusted, claim-bound, current-HEAD-bound advisory-recovery marker. Accounted independently of requestCap and sameHeadRerollCap."
+        },
+        "terminalWindow": {
+          "type": "string",
+          "pattern": "^P(?=(?:\\d+D|T\\d+[HM]))(?=.*(?:[1-9]\\d*[DHM]))(?:\\d+D)?(?:T(?=\\d+[HM])(?:\\d+H)?(?:\\d+M)?)?$",
+          "description": "Terminal Copilot-unavailability window (#1572; default PT12H). Once the recovery-cycle cap is exhausted, this window has elapsed since the terminal clock anchor, and no current-HEAD Copilot review exists, the state contract reports COPILOT_UNAVAILABLE -- eligibility for a maintainer waiver, never advisory satisfaction on its own."
         }
       }
     },

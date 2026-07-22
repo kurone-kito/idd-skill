@@ -15,7 +15,9 @@ import {
 import {
   operationalMarkerPrefix,
   parseActivationNonceComment,
+  parseAdvisoryRecoveryComment,
   parseClaimComment,
+  parseCopilotUnavailableComment,
   parseReleaseComment,
   parseReviewWatermarkComment,
 } from '../src/scripts/protocol-helpers.mts';
@@ -236,6 +238,247 @@ test('advisory markers are recognized by operationalMarkerPrefix', () => {
   );
 });
 
+// --- #1572: extended advisory-recovery binding + new copilot-unavailable ---
+
+test('buildMarkerBody renders the legacy 3-field advisory-recovery body unchanged when claim-id/attempt are absent', () => {
+  // Regression guard: the shipped AW3-R recovery flow
+  // (idd-advisory-wait.instructions.md) posts exactly this 3-field call
+  // today with no claim-id/attempt fields. This must never change.
+  assert.equal(
+    buildMarkerBody('advisory-recovery', {
+      'agent-id': 'claude-417b737f',
+      'head-sha': SHA,
+      timestamp: TS,
+    }),
+    `advisory-wait-recovery: claude-417b737f ${SHA} ${TS}`,
+  );
+});
+
+test('buildMarkerBody renders the bound advisory-recovery body when claim-id and attempt are both present', () => {
+  const body = buildMarkerBody('advisory-recovery', {
+    'agent-id': 'claude-417b737f',
+    'head-sha': SHA,
+    timestamp: TS,
+    'claim-id': 'clm-9f6885e3',
+    attempt: '2',
+  });
+  assert.equal(
+    body,
+    `advisory-wait-recovery: claude-417b737f ${SHA} ${TS} claim:clm-9f6885e3 attempt:2`,
+  );
+  assert.doesNotMatch(body, /<!--/);
+  assert.doesNotMatch(body, /\n/);
+});
+
+test('buildMarkerBody throws on advisory-recovery with only one of claim-id/attempt (half-bound, ambiguous)', () => {
+  assert.throws(
+    () =>
+      buildMarkerBody('advisory-recovery', {
+        'agent-id': 'a',
+        'head-sha': SHA,
+        timestamp: TS,
+        'claim-id': 'clm-1',
+      }),
+    /claimId and attempt must both be provided together/,
+  );
+  assert.throws(
+    () =>
+      buildMarkerBody('advisory-recovery', {
+        'agent-id': 'a',
+        'head-sha': SHA,
+        timestamp: TS,
+        attempt: '1',
+      }),
+    /claimId and attempt must both be provided together/,
+  );
+});
+
+test('the bound advisory-recovery body round-trips through parseAdvisoryRecoveryComment', () => {
+  const body = buildMarkerBody('advisory-recovery', {
+    'agent-id': 'claude-417b737f',
+    'head-sha': SHA,
+    timestamp: TS,
+    'claim-id': 'clm-9f6885e3',
+    attempt: '2',
+  });
+  assert.deepEqual(parseAdvisoryRecoveryComment(body, CREATED_AT), {
+    agentId: 'claude-417b737f',
+    headSha: SHA,
+    timestamp: TS,
+    claimId: 'clm-9f6885e3',
+    attempt: 2,
+    createdAt: CREATED_AT,
+  });
+});
+
+test('parseAdvisoryRecoveryComment returns null for the legacy unbound 3-field form', () => {
+  // The legacy form is still a well-formed, recognized operational marker
+  // (see the round-trip test below) but is not usable recovery-cycle
+  // evidence -- excluded from counting/anchoring, not from recognition.
+  const legacyBody = buildMarkerBody('advisory-recovery', {
+    'agent-id': 'a',
+    'head-sha': SHA,
+    timestamp: TS,
+  });
+  assert.equal(parseAdvisoryRecoveryComment(legacyBody, CREATED_AT), null);
+});
+
+test('the legacy unbound advisory-recovery body is still recognized by operationalMarkerPrefix', () => {
+  const legacyBody = buildMarkerBody('advisory-recovery', {
+    'agent-id': 'a',
+    'head-sha': SHA,
+    timestamp: TS,
+  });
+  const boundBody = buildMarkerBody('advisory-recovery', {
+    'agent-id': 'a',
+    'head-sha': SHA,
+    timestamp: TS,
+    'claim-id': 'clm-1',
+    attempt: '1',
+  });
+  assert.equal(operationalMarkerPrefix(legacyBody), 'advisory-wait-recovery:');
+  assert.equal(operationalMarkerPrefix(boundBody), 'advisory-wait-recovery:');
+});
+
+test('buildMarkerBody renders the copilot-unavailable body (all fields required)', () => {
+  const body = buildMarkerBody('copilot-unavailable', {
+    'agent-id': 'claude-417b737f',
+    'claim-id': 'clm-9f6885e3',
+    'head-sha': SHA,
+    attempt: '3',
+    timestamp: TS,
+  });
+  assert.equal(
+    body,
+    `copilot-unavailable: claude-417b737f ${SHA} ${TS} claim:clm-9f6885e3 attempt:3`,
+  );
+  assert.doesNotMatch(body, /<!--/);
+  assert.doesNotMatch(body, /\n/);
+});
+
+test('buildMarkerBody throws on copilot-unavailable with any field missing', () => {
+  const fullFields = {
+    'agent-id': 'a',
+    'claim-id': 'c',
+    'head-sha': SHA,
+    attempt: '1',
+    timestamp: TS,
+  };
+  for (const omit of Object.keys(fullFields)) {
+    const fields = { ...fullFields };
+    delete (fields as Record<string, string>)[omit];
+    assert.throws(
+      () => buildMarkerBody('copilot-unavailable', fields),
+      /invalid copilot-unavailable marker payload/,
+      `omitting ${omit} should throw`,
+    );
+  }
+});
+
+test('the copilot-unavailable body round-trips through parseCopilotUnavailableComment', () => {
+  const body = buildMarkerBody('copilot-unavailable', {
+    'agent-id': 'claude-417b737f',
+    'claim-id': 'clm-9f6885e3',
+    'head-sha': SHA,
+    attempt: '3',
+    timestamp: TS,
+  });
+  assert.deepEqual(parseCopilotUnavailableComment(body, CREATED_AT), {
+    agentId: 'claude-417b737f',
+    headSha: SHA,
+    timestamp: TS,
+    claimId: 'clm-9f6885e3',
+    attempt: 3,
+    createdAt: CREATED_AT,
+  });
+  assert.equal(operationalMarkerPrefix(body), 'copilot-unavailable:');
+});
+
+test('a fractional-second embedded timestamp is recognized identically by operationalMarkerPrefix and the parse helpers', () => {
+  // OPERATIONAL_MARKERS (regex-based recognition) and
+  // parseBoundAdvisoryEvidenceMarker (structured field extraction) must
+  // agree on where the fractional-seconds group sits (before `Z`, per ISO
+  // 8601) -- otherwise a fractional embedded timestamp could be recognized
+  // as an operational marker by one path and silently rejected by the
+  // other, which would be a fail-open gap in trust-filtering (#1572).
+  const fractionalTs = '2026-07-22T14:17:41.123Z';
+  const recoveryBody = `advisory-wait-recovery: claude-417b737f ${SHA} ${fractionalTs} claim:clm-9f6885e3 attempt:2`;
+  assert.equal(
+    operationalMarkerPrefix(recoveryBody),
+    'advisory-wait-recovery:',
+  );
+  assert.deepEqual(parseAdvisoryRecoveryComment(recoveryBody, CREATED_AT), {
+    agentId: 'claude-417b737f',
+    headSha: SHA,
+    timestamp: fractionalTs,
+    claimId: 'clm-9f6885e3',
+    attempt: 2,
+    createdAt: CREATED_AT,
+  });
+
+  const unavailableBody = `copilot-unavailable: claude-417b737f ${SHA} ${fractionalTs} claim:clm-9f6885e3 attempt:3`;
+  assert.equal(
+    operationalMarkerPrefix(unavailableBody),
+    'copilot-unavailable:',
+  );
+  assert.deepEqual(
+    parseCopilotUnavailableComment(unavailableBody, CREATED_AT),
+    {
+      agentId: 'claude-417b737f',
+      headSha: SHA,
+      timestamp: fractionalTs,
+      claimId: 'clm-9f6885e3',
+      attempt: 3,
+      createdAt: CREATED_AT,
+    },
+  );
+});
+
+test('copilot-unavailable envelope validates against the post-idd-marker schema', () => {
+  const body = buildMarkerBody('copilot-unavailable', {
+    'agent-id': 'a',
+    'claim-id': 'c',
+    'head-sha': SHA,
+    attempt: '1',
+    timestamp: TS,
+  });
+  const envelope = {
+    mode: 'dry-run',
+    type: 'copilot-unavailable',
+    target: 'pr',
+    number: 1572,
+    body,
+  };
+  assert.deepEqual(validate(envelope, schema), []);
+});
+
+test('parseArgs collects --claim-id and --attempt as renderer fields for advisory-recovery', () => {
+  const args = parseArgs([
+    '--type',
+    'advisory-recovery',
+    '--target',
+    'pr',
+    '1572',
+    '--agent-id',
+    'a',
+    '--head-sha',
+    SHA,
+    '--timestamp',
+    TS,
+    '--claim-id',
+    'clm-1',
+    '--attempt',
+    '2',
+  ]);
+  assert.deepEqual(args.fields, {
+    'agent-id': 'a',
+    'head-sha': SHA,
+    timestamp: TS,
+    'claim-id': 'clm-1',
+    attempt: '2',
+  });
+});
+
 test('buildMarkerBody throws on an unknown type', () => {
   assert.throws(() => buildMarkerBody('bogus', {}), /must be one of/);
 });
@@ -278,7 +521,7 @@ test('buildMarkerBody throws on an invalid field set (renderer validation)', () 
   );
 });
 
-test('MARKER_TYPES lists exactly the eight supported types', () => {
+test('MARKER_TYPES lists exactly the nine supported types', () => {
   assert.deepEqual(
     [...MARKER_TYPES],
     [
@@ -290,6 +533,7 @@ test('MARKER_TYPES lists exactly the eight supported types', () => {
       'advisory',
       'advisory-recovery',
       'advisory-reroll',
+      'copilot-unavailable',
     ],
   );
 });

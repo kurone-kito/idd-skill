@@ -437,7 +437,7 @@ process.exit(1);
 for (const [binary, helpText] of [
   [
     'advisory-wait-state.mjs',
-    'Usage:\n  node scripts/advisory-wait-state.mjs --pr <number> [--owner <owner>] [--repo <repo>] [--trusted-marker-logins <login1,login2>] [--now <ISO8601>]\n',
+    'Usage:\n  node scripts/advisory-wait-state.mjs --pr <number> [--owner <owner>] [--repo <repo>] [--trusted-marker-logins <login1,login2>] [--claim-id <id> --agent-id <id>] [--now <ISO8601>]\n\n--claim-id / --agent-id are OPTIONAL (#1572): when both are supplied, the\ncopilotRecovery section in the output binds recovery-cycle accounting and the\nterminal clock to that active claim. When either is absent, copilotRecovery\nfails closed to NOT_TERMINAL with reason: active-claim-not-provided.\n',
   ],
   [
     'review-activity-snapshot.mjs',

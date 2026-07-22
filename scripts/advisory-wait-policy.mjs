@@ -29,6 +29,20 @@ export const DEFAULT_ADVISORY_CONVERGENCE_DEADLINE_MINUTES = 1440;
 // K=1 is sometimes insufficient, so 2 balances recovering the common case
 // against not hammering the bot when a residual is genuinely flat.
 export const DEFAULT_ADVISORY_SAME_HEAD_REROLL_CAP = 2;
+// #1572: bounded per-PR-HEAD Copilot stall-recovery cycle cap, accounted
+// independently of both DEFAULT_ADVISORY_REQUEST_CAP (ordinary re-review
+// requests) and DEFAULT_ADVISORY_SAME_HEAD_REROLL_CAP (same-HEAD reroll
+// budget, #1511). A "recovery cycle" is one trusted, claim-bound,
+// current-HEAD-bound `advisory-recovery` marker -- see
+// `buildCopilotRecoverySummary` in advisory-wait-state.mts. Small and
+// conservative like the reroll cap default, for the same reason: this is a
+// terminal-eligibility budget, not a routine retry budget.
+export const DEFAULT_ADVISORY_RECOVERY_CYCLE_CAP = 2;
+// #1572: 12h terminal unavailability window, matching the `claim-stale-age`
+// and external-check-waiver `maxValidity` distributed defaults so this gate
+// uses the same familiar timescale as other terminal/escalation windows in
+// this repository.
+export const DEFAULT_ADVISORY_TERMINAL_WINDOW_MINUTES = 720;
 export const ADVISORY_CAP_EXHAUSTED_ROUTE_DEFAULT = 'phase-specific';
 export const ADVISORY_CAP_EXHAUSTED_ROUTES = new Set([
   'phase-specific',
@@ -223,6 +237,78 @@ export function readAdvisorySameHeadRerollCap(
   } catch {
     return DEFAULT_ADVISORY_SAME_HEAD_REROLL_CAP;
   }
+}
+/**
+ * Read the configured bounded per-PR-HEAD Copilot stall-recovery cycle cap
+ * from a policy file, failing closed to the default cap when the file is
+ * missing, unreadable, or schema-invalid.
+ */
+export function readAdvisoryRecoveryCycleCap(path = '.github/idd/config.json') {
+  try {
+    const config = JSON.parse(readFileSync(path, 'utf8'));
+    // Scoped to the advisoryWait subtree (#1359); see readAdvisoryWaitPolicy.
+    if (
+      validateConfigSection(config, POLICY_SCHEMA, 'advisoryWait').length > 0
+    ) {
+      return DEFAULT_ADVISORY_RECOVERY_CYCLE_CAP;
+    }
+    return resolveAdvisoryRecoveryCycleCap(config);
+  } catch {
+    return DEFAULT_ADVISORY_RECOVERY_CYCLE_CAP;
+  }
+}
+/**
+ * Resolve the configured bounded per-PR-HEAD Copilot stall-recovery cycle cap
+ * (#1572) from a parsed policy object. Kept separate from
+ * {@link resolveAdvisoryWaitPolicy} for the same reason the deadline/reroll-cap
+ * resolvers are separate: it is not part of the five-key active-wait timing
+ * shape, and it defaults to a fixed, conservative cap when absent. Accounted
+ * independently of {@link resolveAdvisoryWaitPolicy}'s `requestCap` and
+ * {@link resolveAdvisorySameHeadRerollCap} -- a distinct counter for a
+ * distinct (terminal-eligibility) budget.
+ */
+export function resolveAdvisoryRecoveryCycleCap(config = {}) {
+  const advisoryWait = config?.advisoryWait ?? {};
+  return normalizeConfiguredPositiveInteger(
+    advisoryWait.recoveryCycleCap,
+    DEFAULT_ADVISORY_RECOVERY_CYCLE_CAP,
+  );
+}
+/**
+ * Read the configured 12h terminal-unavailability window (in minutes) from a
+ * policy file, failing closed to the default window when the file is
+ * missing, unreadable, or schema-invalid.
+ */
+export function readAdvisoryTerminalWindowMinutes(
+  path = '.github/idd/config.json',
+) {
+  try {
+    const config = JSON.parse(readFileSync(path, 'utf8'));
+    // Scoped to the advisoryWait subtree (#1359); see readAdvisoryWaitPolicy.
+    if (
+      validateConfigSection(config, POLICY_SCHEMA, 'advisoryWait').length > 0
+    ) {
+      return DEFAULT_ADVISORY_TERMINAL_WINDOW_MINUTES;
+    }
+    return resolveAdvisoryTerminalWindowMinutes(config);
+  } catch {
+    return DEFAULT_ADVISORY_TERMINAL_WINDOW_MINUTES;
+  }
+}
+/**
+ * Resolve the configured 12h terminal-unavailability window (in minutes,
+ * #1572) from a parsed policy object. Kept separate from
+ * {@link resolveAdvisoryWaitPolicy} for the same reason the pending/settled
+ * windows are not: this window gates a distinct terminal `COPILOT_UNAVAILABLE`
+ * signal (see advisory-wait-state.mts's `buildCopilotRecoverySummary`), not
+ * the active-wait poll loop.
+ */
+export function resolveAdvisoryTerminalWindowMinutes(config = {}) {
+  const advisoryWait = config?.advisoryWait ?? {};
+  return normalizeConfiguredDurationMinutes(
+    advisoryWait.terminalWindow,
+    DEFAULT_ADVISORY_TERMINAL_WINDOW_MINUTES,
+  );
 }
 export function normalizeAdvisoryWaitRuntimeOptions(options = {}) {
   const o = options ?? {};

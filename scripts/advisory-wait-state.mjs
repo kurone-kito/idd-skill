@@ -6,8 +6,12 @@
 // .mjs. See docs/typescript-sources.md.
 import { execFileSync } from 'node:child_process';
 import {
+  DEFAULT_ADVISORY_RECOVERY_CYCLE_CAP,
+  DEFAULT_ADVISORY_TERMINAL_WINDOW_MINUTES,
   readAdvisoryPrimaryBotLogin,
+  readAdvisoryRecoveryCycleCap,
   readAdvisorySecondaryBotLogin,
+  readAdvisoryTerminalWindowMinutes,
   readAdvisoryWaitPolicy,
 } from './advisory-wait-policy.mjs';
 import { parseCliArgs } from './cli-args.mjs';
@@ -15,11 +19,163 @@ import { ghText, safeGhText } from './gh-exec.mjs';
 import { loadIddConfig } from './idd-config.mjs';
 import {
   buildAdvisoryWaitSummary,
+  compareIsoTimestamps,
+  isValidIsoTimestamp,
   normalizeTrustedMarkerLogins,
+  parseAdvisoryRecoveryComment,
   parsePaginatedGhNdjson,
   resolveTrustedMarkerActors,
 } from './protocol-helpers.mjs';
 
+const COPILOT_RECOVERY_REASONS = {
+  activeClaimNotProvided: 'active-claim-not-provided',
+  noTrustedRecoveryMarkers: 'no-trusted-recovery-markers',
+  capNotExhausted: 'recovery-cap-not-exhausted',
+  windowNotElapsed: 'terminal-window-not-elapsed',
+  currentHeadReviewExists: 'current-head-review-exists',
+  copilotUnavailable:
+    'recovery-cap-exhausted-and-terminal-window-elapsed-and-no-current-head-review',
+};
+function minutesBetweenIso(start, end) {
+  const startMs = Date.parse(start);
+  const endMs = Date.parse(end);
+  if (!Number.isFinite(startMs) || !Number.isFinite(endMs) || endMs < startMs) {
+    return 0;
+  }
+  return Math.floor((endMs - startMs) / 60000);
+}
+/**
+ * Compute the `#1572` terminal Copilot stall-recovery state from
+ * already-fetched PR comments plus the already-computed
+ * `buildAdvisoryWaitSummary` evidence (`prHeadSha`, `lastCopilotCommit`).
+ * Pure and network-free -- issues no `gh` calls of its own, so calling it
+ * twice with the same input is trivially idempotent, and its output is a
+ * deterministic function of the observed marker *set* (order-independent),
+ * matching `findActivationNonceWinner`'s and `summarizeAdvisoryWaitMarkers`'s
+ * shared "re-read must reconverge" design.
+ *
+ * A candidate `advisory-wait-recovery:` comment counts as one completed
+ * recovery cycle only when ALL of the following hold -- any single failure
+ * excludes it from both `completedCycleCount` and `clockAnchor` (fail
+ * closed; never a whole-computation abort):
+ *  - the comment author is a trusted marker actor (else: untrusted);
+ *  - the body parses as the BOUND form via `parseAdvisoryRecoveryComment`
+ *    (a malformed body, or the legacy unbound 3-field form, both parse to
+ *    `null`: malformed / unbound);
+ *  - the marker's `agentId` equals the supplied `agentId` (else:
+ *    foreign-agent);
+ *  - the marker's `claimId` equals the supplied `claimId` (else:
+ *    mismatched-claim);
+ *  - the marker's `headSha` equals `prHeadSha` (else: mismatched-HEAD,
+ *    including both an earlier and a later HEAD than the current one).
+ */
+export function buildCopilotRecoverySummary(
+  { comments = [], prHeadSha, lastCopilotCommit },
+  options,
+) {
+  const now = String(options.now ?? '');
+  if (!isValidIsoTimestamp(now)) {
+    throw new Error('now must be an ISO 8601 UTC timestamp');
+  }
+  const normalizedPrHeadSha = String(prHeadSha ?? '').toLowerCase();
+  if (!/^[0-9a-f]{40}$/.test(normalizedPrHeadSha)) {
+    throw new Error('prHeadSha must be a 40-character lowercase commit SHA');
+  }
+  const cap = normalizePositiveIntegerOption(
+    options.recoveryCycleCap,
+    DEFAULT_ADVISORY_RECOVERY_CYCLE_CAP,
+  );
+  const terminalWindowMinutes = normalizePositiveNumberOption(
+    options.terminalWindowMinutes,
+    DEFAULT_ADVISORY_TERMINAL_WINDOW_MINUTES,
+  );
+  const trustedLogins = new Set(
+    normalizeTrustedMarkerLogins(options.trustedMarkerLogins ?? []),
+  );
+  const claimId = String(options.claimId ?? '').trim();
+  const agentId = String(options.agentId ?? '').trim();
+  const activeClaimProvided = claimId !== '' && agentId !== '';
+  let completedCycleCount = 0;
+  let clockAnchor = '';
+  if (activeClaimProvided) {
+    for (const comment of comments) {
+      const login = String(comment?.author?.login ?? '')
+        .trim()
+        .toLowerCase();
+      if (!trustedLogins.has(login)) {
+        continue; // untrusted
+      }
+      const marker = parseAdvisoryRecoveryComment(
+        String(comment?.body ?? ''),
+        String(comment?.createdAt ?? ''),
+      );
+      if (!marker) {
+        continue; // malformed or the legacy unbound form
+      }
+      if (marker.agentId !== agentId) {
+        continue; // foreign-agent
+      }
+      if (marker.claimId !== claimId) {
+        continue; // mismatched-claim
+      }
+      if (marker.headSha !== normalizedPrHeadSha) {
+        continue; // mismatched-HEAD (earlier or later)
+      }
+      completedCycleCount += 1;
+      if (
+        isValidIsoTimestamp(marker.createdAt) &&
+        (!clockAnchor ||
+          compareIsoTimestamps(marker.createdAt, clockAnchor) < 0)
+      ) {
+        clockAnchor = marker.createdAt;
+      }
+    }
+  }
+  const remainingBudget = Math.max(cap - completedCycleCount, 0);
+  const capExhausted = completedCycleCount >= cap;
+  const elapsedMinutes = clockAnchor ? minutesBetweenIso(clockAnchor, now) : 0;
+  const windowElapsed =
+    clockAnchor !== '' && elapsedMinutes >= terminalWindowMinutes;
+  const currentHeadReviewExists =
+    String(lastCopilotCommit ?? '').toLowerCase() === normalizedPrHeadSha;
+  let state = 'NOT_TERMINAL';
+  let reason;
+  if (!activeClaimProvided) {
+    reason = COPILOT_RECOVERY_REASONS.activeClaimNotProvided;
+  } else if (clockAnchor === '') {
+    reason = COPILOT_RECOVERY_REASONS.noTrustedRecoveryMarkers;
+  } else if (!capExhausted) {
+    reason = COPILOT_RECOVERY_REASONS.capNotExhausted;
+  } else if (!windowElapsed) {
+    reason = COPILOT_RECOVERY_REASONS.windowNotElapsed;
+  } else if (currentHeadReviewExists) {
+    reason = COPILOT_RECOVERY_REASONS.currentHeadReviewExists;
+  } else {
+    state = 'COPILOT_UNAVAILABLE';
+    reason = COPILOT_RECOVERY_REASONS.copilotUnavailable;
+  }
+  return {
+    cap,
+    completedCycleCount,
+    remainingBudget,
+    capExhausted,
+    terminalWindowMinutes,
+    clockAnchor,
+    elapsedMinutes,
+    windowElapsed,
+    activeClaimProvided,
+    state,
+    reason,
+  };
+}
+function normalizePositiveIntegerOption(value, fallback) {
+  const number = Number(value);
+  return Number.isInteger(number) && number > 0 ? number : fallback;
+}
+function normalizePositiveNumberOption(value, fallback) {
+  const number = Number(value);
+  return Number.isFinite(number) && number > 0 ? number : fallback;
+}
 // Flag-spec keys stay the dashed literal on purpose (never bare keys like
 // `pr:`): tests/flag-name-matrix.test.mts scans this file's *compiled*
 // .mjs source text for quoted flag literals such as the --pr spec key
@@ -38,6 +194,13 @@ const ADVISORY_WAIT_STATE_FLAG_SPEC = {
   '--owner': { type: 'string', default: '' },
   '--repo': { type: 'string', default: '' },
   '--trusted-marker-logins': { type: 'string', default: '' },
+  // #1572: OPTIONAL. When both --claim-id and --agent-id are supplied, the
+  // `copilotRecovery` section binds to the active claim; when either is
+  // absent, `copilotRecovery` fails closed to NOT_TERMINAL with
+  // reason: active-claim-not-provided, and every other field this CLI
+  // already prints is unaffected.
+  '--claim-id': { type: 'string', default: '' },
+  '--agent-id': { type: 'string', default: '' },
   '--now': { type: 'string', default: '' },
   '--help': { type: 'boolean', short: 'h' },
 };
@@ -138,12 +301,30 @@ function main() {
       trustedMarkerLogins,
     },
   );
+  // Reuse summary.now (not a fresh new Date() call) so both computations
+  // agree on the exact same instant.
+  const copilotRecovery = buildCopilotRecoverySummary(
+    {
+      comments: comments.map(normalizeComment),
+      prHeadSha,
+      lastCopilotCommit: summary.lastCopilotCommit,
+    },
+    {
+      now: summary.now,
+      trustedMarkerLogins,
+      claimId: args.claimId,
+      agentId: args.agentId,
+      recoveryCycleCap: readAdvisoryRecoveryCycleCap(),
+      terminalWindowMinutes: readAdvisoryTerminalWindowMinutes(),
+    },
+  );
   process.stdout.write(
     `${JSON.stringify(
       {
         ...summary,
         trustedMarkerActors: configuredTrustedActors,
         trustedMarkerActorsSource,
+        copilotRecovery,
       },
       null,
       2,
@@ -175,13 +356,20 @@ export function parseArgs(argv) {
     owner: values.owner,
     repo: values.repo,
     trustedMarkerLogins: values['trusted-marker-logins'],
+    claimId: values['claim-id'],
+    agentId: values['agent-id'],
     now: values.now,
     help,
   };
 }
 function printHelp() {
   process.stdout.write(`Usage:
-  node scripts/advisory-wait-state.mjs --pr <number> [--owner <owner>] [--repo <repo>] [--trusted-marker-logins <login1,login2>] [--now <ISO8601>]
+  node scripts/advisory-wait-state.mjs --pr <number> [--owner <owner>] [--repo <repo>] [--trusted-marker-logins <login1,login2>] [--claim-id <id> --agent-id <id>] [--now <ISO8601>]
+
+--claim-id / --agent-id are OPTIONAL (#1572): when both are supplied, the
+copilotRecovery section in the output binds recovery-cycle accounting and the
+terminal clock to that active claim. When either is absent, copilotRecovery
+fails closed to NOT_TERMINAL with reason: active-claim-not-provided.
 `);
 }
 function normalizeComment(comment) {

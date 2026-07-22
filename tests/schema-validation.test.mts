@@ -31,7 +31,12 @@ const REPO_ROOT = fileURLToPath(new URL('../', import.meta.url));
 // deliberately loose — the schema, not the type system, is under test.
 type JsonRecord = Record<string, unknown>;
 type PolicyFixture = JsonRecord & {
-  advisoryWait: { requestCap?: unknown; convergenceScope?: unknown };
+  advisoryWait: {
+    requestCap?: unknown;
+    convergenceScope?: unknown;
+    recoveryCycleCap?: unknown;
+    terminalWindow?: unknown;
+  };
 };
 
 // ---------------------------------------------------------------------------
@@ -355,6 +360,135 @@ test('policy schema accepts the mergeGate.soloCodeownerAdminFallback opt-in obje
   );
   instance.mergeGate = { soloCodeownerAdminFallback: 'hold-and-report' };
   assert.deepEqual(validate(instance, schema), []);
+});
+
+// --- #1572: advisoryWait.recoveryCycleCap / advisoryWait.terminalWindow ---
+
+test('policy schema accepts advisoryWait.recoveryCycleCap and advisoryWait.terminalWindow', () => {
+  const schema = loadJson('schemas/policy.schema.json');
+  const instance = JSON.parse(
+    JSON.stringify(loadJson('fixtures/schemas/policy.valid.json')),
+  ) as PolicyFixture;
+  instance.advisoryWait = {
+    ...instance.advisoryWait,
+    recoveryCycleCap: 3,
+    terminalWindow: 'PT8H',
+  };
+  assert.deepEqual(validate(instance, schema), []);
+});
+
+test('policy schema rejects a non-positive-integer advisoryWait.recoveryCycleCap', () => {
+  const schema = loadJson('schemas/policy.schema.json');
+  const instance = JSON.parse(
+    JSON.stringify(loadJson('fixtures/schemas/policy.valid.json')),
+  ) as PolicyFixture;
+  instance.advisoryWait = { ...instance.advisoryWait, recoveryCycleCap: 0 };
+  assert.ok(
+    validate(instance, schema).length > 0,
+    'expected a zero recoveryCycleCap to be rejected',
+  );
+});
+
+test('policy schema rejects a malformed advisoryWait.terminalWindow duration', () => {
+  const schema = loadJson('schemas/policy.schema.json');
+  const instance = JSON.parse(
+    JSON.stringify(loadJson('fixtures/schemas/policy.valid.json')),
+  ) as PolicyFixture;
+  instance.advisoryWait = {
+    ...instance.advisoryWait,
+    terminalWindow: 'not-a-duration',
+  };
+  assert.ok(
+    validate(instance, schema).length > 0,
+    'expected a malformed terminalWindow to be rejected',
+  );
+});
+
+// --- #1572: advisory-wait-state.schema.json's copilotRecovery object ------
+
+test('advisory-wait-state schema accepts a NOT_TERMINAL copilotRecovery object alongside the base fixture', () => {
+  const schema = loadJson('schemas/advisory-wait-state.schema.json');
+  const instance = JSON.parse(
+    JSON.stringify(loadJson('fixtures/schemas/advisory-wait-state.valid.json')),
+  );
+  instance.copilotRecovery = {
+    cap: 2,
+    completedCycleCount: 0,
+    remainingBudget: 2,
+    capExhausted: false,
+    terminalWindowMinutes: 720,
+    clockAnchor: '',
+    elapsedMinutes: 0,
+    windowElapsed: false,
+    activeClaimProvided: false,
+    state: 'NOT_TERMINAL',
+    reason: 'active-claim-not-provided',
+  };
+  assert.deepEqual(validate(instance, schema), []);
+});
+
+test('advisory-wait-state schema accepts a COPILOT_UNAVAILABLE copilotRecovery object', () => {
+  const schema = loadJson('schemas/advisory-wait-state.schema.json');
+  const instance = JSON.parse(
+    JSON.stringify(loadJson('fixtures/schemas/advisory-wait-state.valid.json')),
+  );
+  instance.copilotRecovery = {
+    cap: 2,
+    completedCycleCount: 2,
+    remainingBudget: 0,
+    capExhausted: true,
+    terminalWindowMinutes: 720,
+    clockAnchor: '2026-05-11T00:00:00Z',
+    elapsedMinutes: 1020,
+    windowElapsed: true,
+    activeClaimProvided: true,
+    state: 'COPILOT_UNAVAILABLE',
+    reason:
+      'recovery-cap-exhausted-and-terminal-window-elapsed-and-no-current-head-review',
+  };
+  assert.deepEqual(validate(instance, schema), []);
+});
+
+test('advisory-wait-state schema rejects an incomplete or malformed copilotRecovery object', () => {
+  const schema = loadJson('schemas/advisory-wait-state.schema.json');
+  const instance = JSON.parse(
+    JSON.stringify(loadJson('fixtures/schemas/advisory-wait-state.valid.json')),
+  );
+  instance.copilotRecovery = {
+    cap: 2,
+    completedCycleCount: 0,
+    // remainingBudget deliberately omitted -- a required nested field.
+    capExhausted: false,
+    terminalWindowMinutes: 720,
+    clockAnchor: '',
+    elapsedMinutes: 0,
+    windowElapsed: false,
+    activeClaimProvided: false,
+    state: 'NOT_TERMINAL',
+    reason: 'active-claim-not-provided',
+  };
+  assert.ok(
+    validate(instance, schema).length > 0,
+    'expected a copilotRecovery object missing remainingBudget to be rejected',
+  );
+
+  instance.copilotRecovery = {
+    cap: 2,
+    completedCycleCount: 0,
+    remainingBudget: 2,
+    capExhausted: false,
+    terminalWindowMinutes: 720,
+    clockAnchor: '',
+    elapsedMinutes: 0,
+    windowElapsed: false,
+    activeClaimProvided: false,
+    state: 'SOMEHOW_SATISFIED', // not in the enum
+    reason: 'active-claim-not-provided',
+  };
+  assert.ok(
+    validate(instance, schema).length > 0,
+    'expected an out-of-enum copilotRecovery.state to be rejected',
+  );
 });
 
 test('policy schema accepts missing mergeGate (runtime normalization supplies the default) (#1521)', () => {

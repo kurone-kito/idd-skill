@@ -27,6 +27,7 @@ import {
   renderAdvisoryWaitMarker,
   renderAdvisoryWaitRecoveryMarker,
   renderClaimedByMarker,
+  renderCopilotUnavailableMarker,
   renderReviewBaselineMarker,
   renderReviewWatermarkMarker,
   renderUnclaimedByMarker,
@@ -41,6 +42,7 @@ export const MARKER_TYPES = [
   'advisory',
   'advisory-recovery',
   'advisory-reroll',
+  'copilot-unavailable',
 ] as const;
 
 export type MarkerType = (typeof MARKER_TYPES)[number];
@@ -117,15 +119,32 @@ export function buildMarkerBody(type: string, fields: MarkerFields): string {
         timestamp: fields.timestamp,
       });
     case 'advisory-recovery':
+      // #1572: --claim-id / --attempt are OPTIONAL here so the shipped
+      // AW3-R recovery flow's existing 3-field call keeps working
+      // unchanged; passing both binds the marker for recovery-cycle
+      // accounting (see renderAdvisoryWaitRecoveryMarker's own doc comment
+      // for the fail-closed behavior on a half-bound pair).
       return renderAdvisoryWaitRecoveryMarker({
         agentId: fields['agent-id'],
         headSha: fields['head-sha'],
         timestamp: fields.timestamp,
+        ...(fields['claim-id'] !== undefined
+          ? { claimId: fields['claim-id'] }
+          : {}),
+        ...(fields.attempt !== undefined ? { attempt: fields.attempt } : {}),
       });
     case 'advisory-reroll':
       return renderAdvisoryRerollMarker({
         agentId: fields['agent-id'],
         headSha: fields['head-sha'],
+        timestamp: fields.timestamp,
+      });
+    case 'copilot-unavailable':
+      return renderCopilotUnavailableMarker({
+        agentId: fields['agent-id'],
+        claimId: fields['claim-id'],
+        headSha: fields['head-sha'],
+        attempt: fields.attempt,
         timestamp: fields.timestamp,
       });
     default:
@@ -329,8 +348,16 @@ Per-type field flags:
                      (or --agent-id --claim-id --from-pr <n> [--expected-head-sha <sha>])
   baseline           --agent-id --claim-id --sha
   advisory           --agent-id --head-sha --timestamp
-  advisory-recovery  --agent-id --head-sha --timestamp
+  advisory-recovery  --agent-id --head-sha --timestamp [--claim-id --attempt]
   advisory-reroll    --agent-id --head-sha --timestamp
+  copilot-unavailable --agent-id --claim-id --head-sha --attempt --timestamp
+
+--claim-id / --attempt on advisory-recovery are OPTIONAL (#1572): passing
+both binds the marker to the active claim and an attempt number for
+recovery-cycle accounting (advisory-wait-state.mjs); passing neither renders
+the legacy 3-field form the shipped AW3-R recovery flow already posts.
+copilot-unavailable is a brand-new terminal marker with no legacy form, so
+all five fields are required.
 
 --from-pr forwards optional --trusted-marker-logins / --advisory-bot-logins to
 the snapshot child so its counts match the manual review-activity-snapshot path.
