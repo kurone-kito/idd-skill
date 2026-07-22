@@ -540,7 +540,7 @@ failing to reach F3 for as long as `main` keeps moving (observed
 **Rule**: post the watermark as the **last** action before the F3
 `idd-merge-execute.mjs --apply` attempt, every pass. Anything after it
 (a CI rerun settling, a new disposition reply, another `main` advance)
-re-stales it and `--apply` fails closed on `review-currency`
+makes it stale again and `--apply` fails closed on `review-currency`
 regardless of CI color — re-post before retrying. Same CI-completion
 precondition as E1 Step 2 (`idd-review-snapshot.instructions.md`); it
 is just easy to satisfy once early in a multi-pass loop and assume it
