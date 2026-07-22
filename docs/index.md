@@ -61,6 +61,10 @@ also serve as the source for a future GitHub Pages site.
 - [IDD comment minimization](idd-comment-minimization.md) defines the
   live status digest helper contract and safe post-merge cleanup policy
   for stale operational markers and completed feedback.
+- [IDD concept ownership](idd-concept-ownership.md) is a
+  Creator/Mutator/Verifier matrix for loop concepts (claim markers,
+  review threads, PR body, ...), plus which actor/phase may take each
+  concept to its terminal state.
 
 ### Native Companions
 
