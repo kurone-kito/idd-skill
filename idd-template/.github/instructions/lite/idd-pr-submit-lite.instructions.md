@@ -170,7 +170,10 @@ loop instead of returning to this D1 rebase path.
    for an already-open PR; the PR must actually be created here.
 3. The PR body must include: a concise summary, a closing keyword line
    for the claimed issue, recommended follow-up issues (if any), and
-   background/rationale only when it materially affects review.
+   background/rationale only when it materially affects review. Ground
+   any background/rationale only in the issue discussion, commits,
+   diff, or explicit operator instructions — omit rather than
+   speculate.
 4. **Closing keyword**: write a plain-text line such as `Closes #N` for
    the claimed issue number, on its own line. GitHub recognizes these
    keyword forms (case-insensitive): `close`, `closes`, `closed`, `fix`,
