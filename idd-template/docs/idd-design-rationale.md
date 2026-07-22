@@ -379,8 +379,9 @@ the investigation.
 
 kurone-kito/idd-skill#1596 adopted this convention after observing that
 `mew-ton/soloscrum` cites a concrete incident for each entry in its
-anti-pattern lists (for example, "Observed 2026-05-09 on issues `#8`
-and `#9`"). A citation raises the authority of a documented prohibition for
+anti-pattern lists (for example, "Observed 2026-05-09 on issues 8 and
+9" in that project's own tracker — not this repository's). A citation
+raises the authority of a documented prohibition for
 both humans and weak models — the rule reads as field evidence, not
 authorial preference — and lets a later session check whether the
 cited incident still motivates the rule.
