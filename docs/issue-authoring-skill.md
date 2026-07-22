@@ -236,8 +236,9 @@ acceptance criteria are internally inconsistent, non-trivially
 unsatisfiable, or otherwise not actually implementable, before a
 downstream executor ever claims the issue. The reference implementation
 is a discarded validation probe, never published — it does not cross the
-Approval boundary below; only the drafted issue itself is published,
-and building the probe does not start the IDD execution loop.
+publication boundary (this file's local "Approval boundary" section
+below); only the drafted issue itself is published, and building the
+probe does not start the IDD execution loop.
 
 This is a **recommended practice for repositories or domains where a
 drafted code spec-unit has an objectively executable acceptance
