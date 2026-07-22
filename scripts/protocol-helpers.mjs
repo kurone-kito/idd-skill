@@ -3912,22 +3912,7 @@ export function summarizeClaimValidation(claimEvents = [], options = {}) {
           },
     isStale: resolveStalePredicate(options.staleAgeMs),
   });
-  // #1528: mirrors evaluateResumeClaimRouting's activation-nonce-mismatch
-  // check (resume-claim-routing.mts) -- only meaningful once claim-id and
-  // agent-id already match, since claim-id alone cannot distinguish a
-  // second, independent activation of the same id. Trust-filter first
-  // (findActivationNonceWinner does no author checks of its own), matching
-  // how the resume-side caller pre-filters before calling the same shared
-  // primitive.
   const expectedNonce = String(options.expectedNonce ?? '').trim();
-  const activationNonceWinner = activeClaim
-    ? findActivationNonceWinner(
-        claimEvents.filter((event) =>
-          trustedAuthorPredicate(event.author?.login ?? ''),
-        ),
-        activeClaim.claimId,
-      )
-    : null;
   let reason = 'match';
   if (!activeClaim) {
     reason = 'missing-active-claim';
@@ -3935,13 +3920,28 @@ export function summarizeClaimValidation(claimEvents = [], options = {}) {
     reason = 'claim-id-mismatch';
   } else if (expectedAgentId && activeClaim.agentId !== expectedAgentId) {
     reason = 'agent-id-mismatch';
-  } else if (
-    expectedClaimId &&
-    activationNonceWinner !== null &&
-    expectedNonce &&
-    activationNonceWinner !== expectedNonce
-  ) {
-    reason = 'activation-nonce-mismatch';
+  } else if (expectedClaimId && expectedNonce) {
+    // #1528: mirrors evaluateResumeClaimRouting's activation-nonce-mismatch
+    // check (resume-claim-routing.mts) -- only meaningful once claim-id and
+    // agent-id already match, since claim-id alone cannot distinguish a
+    // second, independent activation of the same id. Computed lazily, here,
+    // so every pre-#1528 caller that never passes expectedNonce (the
+    // default) pays no parsing/sorting cost for it. Trust-filter first
+    // (findActivationNonceWinner does no author checks of its own), matching
+    // how the resume-side caller pre-filters before calling the same shared
+    // primitive.
+    const activationNonceWinner = findActivationNonceWinner(
+      claimEvents.filter((event) =>
+        trustedAuthorPredicate(event.author?.login ?? ''),
+      ),
+      activeClaim.claimId,
+    );
+    if (
+      activationNonceWinner !== null &&
+      activationNonceWinner !== expectedNonce
+    ) {
+      reason = 'activation-nonce-mismatch';
+    }
   }
   return {
     expectedClaimId,
