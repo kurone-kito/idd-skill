@@ -81,8 +81,14 @@ their own targets.
   self-direction for contained, fully-specified tasks, but still show
   weak adherence to long multi-file instruction sets (the phi-4-mini
   class — roughly 128K context, tool calling supported — is the
-  reference example). Confine this tier to narrowly-scoped roles under
-  operator supervision:
+  reference example). Treat "tool calling supported" as a
+  runtime-specific claim, not a guarantee: field evidence found that a
+  local ONNX serving stack silently degraded structured tool-calls to
+  plain text with no error, so a model's stated capability listing tool
+  calling does not mean structured tool-calls are reliably available in
+  practice — see [Weak-model guardrails](#weak-model-guardrails) for
+  the harness-owned mitigation. Confine this tier to narrowly-scoped
+  roles under operator supervision:
   - executing a single, fully-specified `idd:ready` issue rather than
     Discover's open-ended candidate selection;
   - preferring a deterministic helper command (see
@@ -122,6 +128,25 @@ When a lightweight-tier model runs any part of this loop:
   profile, following the documented Markdown / `gh` / `jq` procedure
   directly is the normal, supported path for this tier too, not a stop
   condition.
+- **Weak-tier tool/retrieval contract**: have the harness — not the
+  model — own tool execution, query construction, and input-slice
+  quality (a clean, column-labeled, minimal slice rather than a raw
+  dump), and gate tool/retrieval use on a cheap uncertainty signal (for
+  example, self-consistency sampling: sample k responses, treat
+  unanimity as sufficient to skip retrieval and disagreement as the
+  trigger to search) rather than firing augmentation unconditionally.
+  Field evidence found unconditional "always augment on failure"
+  net-negative on a weak model (3/7 correct, below a 4/7
+  no-augmentation baseline) because retrieval corrupted facts the model
+  already knew, while a harness-owned self-consistency gate recovered
+  "don't retrieve what you already know" and a harness-owned web search
+  took a weak model from 1/4 to 4/4 correct on factual questions.
+- Retrieval augmentation is more reliably useful for a QA/spec step —
+  two conditions must hold: a knowledge gap exists, and the needed fact
+  is in the returned snippet — than for a mid-code-fix step, which
+  chains a third condition (the model must also transcribe the fact
+  correctly into code). It is not a substitute for fixing logic or
+  truncation failures, which retrieval cannot address.
 - Narrow the question before adding judges: when a weak model has to
   judge semantic quality, ask a narrow, falsifiable check instead of an
   open-ended review. The failure mode is correlated bias, not
@@ -150,6 +175,24 @@ When a lightweight-tier model runs any part of this loop:
   self-critique is truly independent is the kind of fragile runtime
   self-detection a weak model could get wrong, so it applies uniformly
   regardless of declared model tier.
+- **Acceptance-check rigor**: any per-unit acceptance check gating
+  weak-tier generated output should include multiple boundary cases,
+  explicit assertions, and a timeout — the timeout specifically is
+  what turns an infinite loop into a caught failure instead of a hang.
+  A narrow check (one or two cases) can let a fragile generation with a
+  real defect pass undetected.
+- **Clean-artifact generation**: a generation prompt driving weak-tier
+  output should instruct the model to produce a clean, importable
+  artifact — the target definitions and needed imports only — and
+  explicitly forbid embedding the acceptance test, assertions, prints,
+  or a self-invoking entrypoint block (Python's `__main__` guard, for
+  example), and forbid importing the artifact under construction. The
+  acceptance check itself — the literal test code, assertions, and
+  expected outputs, as distinct from the behavioral acceptance
+  criteria described in the prompt —
+  must never be shown to the generating model, since a weak model that
+  sees the test tends to reproduce it inline rather than keeping the
+  two separated.
 
 These tiers are practical operating guidance, not a new enforced
 runtime gate: `.github/instructions/idd-suitability.instructions.md`'s
