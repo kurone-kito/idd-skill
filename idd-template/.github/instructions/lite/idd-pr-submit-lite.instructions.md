@@ -60,7 +60,12 @@ following:
 2. If this session posted an activation nonce for the current claim,
    confirm it still wins (no later trusted marker for this claim id
    won the tie-break instead).
-3. The current directory is the sibling worktree for the claimed branch.
+3. The current directory is the sibling worktree for the claimed branch:
+   run `git rev-parse --show-toplevel` and compare it to
+   `../<repo-name>.<normalized-branch>` (the claimed branch with every
+   `/` replaced by `-`), resolved from the active claim's `branch:`
+   field per the B1 naming convention. A mismatch means stop; do not
+   auto-relocate.
 4. `git branch --show-current` equals the claimed branch.
 5. Acquire the worktree-local claim lock with the profile-selected
    `claim-lock` helper, passing the current agent id and claim id. A
@@ -150,26 +155,28 @@ loop instead of returning to this D1 rebase path.
 
 ## D3 — Create PR
 
-1. If `.github/pull_request_template.md` exists, shape the PR body to
+1. Actually create the PR using GH CLI (`gh pr create`) or GH MCP —
+   this step is not formatting guidance for an already-open PR.
+2. If `.github/pull_request_template.md` exists, shape the PR body to
    that template's sections from the start.
-2. The PR body must include: a concise summary, a closing keyword line
+3. The PR body must include: a concise summary, a closing keyword line
    for the claimed issue, recommended follow-up issues (if any), and
    background/rationale only when it materially affects review.
-3. **Closing keyword**: write a plain-text line such as `Closes #N` for
+4. **Closing keyword**: write a plain-text line such as `Closes #N` for
    the claimed issue number, on its own line. GitHub recognizes these
    keyword forms (case-insensitive): `close`, `closes`, `closed`, `fix`,
    `fixes`, `fixed`, `resolve`, `resolves`, `resolved`. Never wrap the
    keyword in inline code, a fenced code block, or a block-quote `>`
    prefix — GitHub does not detect the keyword in any of those forms,
    and the linked issue will not auto-close on merge.
-4. **Negation-blind detection**: GitHub matches a keyword immediately
+5. **Negation-blind detection**: GitHub matches a keyword immediately
    adjacent to a `#N` with no concept of negation. Never place a
    recognized keyword directly next to a `#N` you do not intend to
    close, even inside a sentence saying it should not close it — reorder
    the sentence so no keyword sits next to that reference.
-5. **Multiple closes**: repeat the keyword for each issue — `Closes #1,
+6. **Multiple closes**: repeat the keyword for each issue — `Closes #1,
    closes #2` closes both; `Closes #1, #2` closes only the first.
-6. If CODEOWNERS or expected reviewers are not auto-assigned, request
+7. If CODEOWNERS or expected reviewers are not auto-assigned, request
    them explicitly: `gh pr edit {pr-number} --add-reviewer
    {reviewer-login}`.
 
@@ -200,6 +207,11 @@ loop instead of returning to this D1 rebase path.
 These are two different helpers with different jobs: the policy helper
 never reads live check state, and the state helper never resolves
 timeouts. Use both, not either alone.
+
+**Waiting mode**: wait synchronously by default. Only background this
+wait when it is confirmed to route completion back to this same
+session/turn; otherwise a backgrounded wait can strand the session past
+its handoff point with no one left to act on the result.
 
 1. Use the profile-selected **ci-wait-policy** helper to resolve the
    running/generation timeouts and the rerun budget. This helper is
