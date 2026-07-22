@@ -64,8 +64,71 @@ test('suitability instructions keep issue-author approval outside A4.5 outcomes'
 
   assert.match(live, /Issue-author approval is a separate pre-claim gate\./);
   // The live target carries the sync-docs generated-from banner the template
-  // source does not; strip it before the content-mirror equality check.
-  assert.equal(template, stripGeneratedFromBanner(live));
+  // source does not; strip it before the content-mirror equality check. This
+  // pair is `concreted` mode (#1621): the manifest's PROJECT_MARKER_PREFIX
+  // substitution accounts for the rest of the divergence, mirroring
+  // sync-docs.mts / audit-docs.mts's own `applyReplacements` behavior instead
+  // of hardcoding the substituted value a second time.
+  const manifest = JSON.parse(
+    readFileSync(
+      new URL('../audit/sync-manifest.json', import.meta.url),
+      'utf8',
+    ),
+  ) as {
+    syncPairs: {
+      id: string;
+      mode?: string;
+      replacements?: { from: string; to: string }[];
+    }[];
+  };
+  const pair = manifest.syncPairs.find(
+    (candidate) => candidate.id === 'idd-suitability-instructions',
+  );
+  // Assert the pair itself, not just its replacements: falling back to `[]`
+  // for a missing/malformed pair would silently compare the raw template
+  // against the live file and could false-pass instead of catching a
+  // manifest regression that stops driving this substitution.
+  assert.ok(
+    pair,
+    'audit/sync-manifest.json is missing the idd-suitability-instructions sync pair',
+  );
+  // Pin the mode this comment describes: a switch away from `concreted`
+  // (e.g. back to `exact`, or to `structure`) could still leave the
+  // template+replacement result identical to the live file today while no
+  // longer mechanically enforcing it on the next sync-docs run.
+  assert.equal(
+    pair.mode,
+    'concreted',
+    'idd-suitability-instructions must stay in concreted mode (#1621)',
+  );
+  const expected = (pair.replacements ?? []).reduce(
+    (text, { from, to }) => text.split(from).join(to),
+    template,
+  );
+  assert.equal(expected, stripGeneratedFromBanner(live));
+
+  // Guard the substitution itself (#1621), not just manifest/live
+  // consistency: an empty or wrong `replacements` array would still pass
+  // the equality check above (both sides would drift together), silently
+  // reintroducing the unresolved placeholder. Assert the concreted output
+  // actually drops the placeholder and resolves to the repository's own
+  // configured prefix, read live rather than hardcoded a second time.
+  const config = JSON.parse(read('.github/idd/config.json')) as {
+    markerPrefix?: string;
+  };
+  assert.ok(
+    config.markerPrefix,
+    '.github/idd/config.json is missing markerPrefix',
+  );
+  assert.doesNotMatch(
+    expected,
+    /\{\{PROJECT_MARKER_PREFIX\}\}/,
+    'concreted output must not retain the unresolved PROJECT_MARKER_PREFIX placeholder',
+  );
+  assert.ok(
+    expected.includes(`${config.markerPrefix}-autopilot-suitability`),
+    `concreted output must resolve to the configured markerPrefix (${config.markerPrefix})`,
+  );
 });
 
 test('overview documents the secure default issue-author approval config behavior', () => {
