@@ -234,9 +234,14 @@ differently for step 5:
      --timestamp <ISO8601> --apply
    ```
 
-   Written fallback — POST this exact body via the GitHub JSON comment
-   API (`gh issue comment` / `gh api -f body=` silently reject
-   HTML-comment-first bodies):
+   Written fallback (`instructions-only` profile only) — `gh issue
+   comment` and `gh api -f body=` both silently reject
+   HTML-comment-first bodies, so post this exact body with a direct
+   HTTP `POST` carrying a JSON payload instead — for example
+   `gh api --method POST repos/{owner}/{repo}/issues/{N}/comments
+   --input -` fed the JSON on stdin, or `curl` with
+   `-H "Content-Type: application/json"` and
+   `-d '{"body":"<exact body below>"}'`:
 
    ```markdown
    <!-- claimed-by: {agent-id} {claim-id} supersedes: {prior-claim-id|none} {ISO8601-timestamp} branch: {branch-name} -->
