@@ -22,8 +22,8 @@ session already claimed and implemented. If the repository is
   branch, or the claimed branch is not the current branch.
 - A required helper or validation command is unavailable, invalid, or
   disagrees with live state.
-- The branch was already published (an open PR already exists for it)
-  and D1 finds it behind `main` — this lite file only covers the
+- The branch already exists on the remote (pushed before, with or
+  without a PR) and is behind `main` — this lite file only covers the
   pre-first-push rebase; the post-publication merge-based resync is out
   of its scope.
 - D1's rebase hits a content conflict this session cannot resolve
@@ -54,14 +54,17 @@ following:
 
 ## D1 — Sync main before first push
 
-This section applies **only before the branch's first push** (no open
-PR exists for it yet). If an open PR already exists for this branch,
-skip this whole section — do not rebase a published branch — and follow
-the stop-and-ask condition above instead.
+This section applies **only before the branch's first push**. If the
+branch already exists on the remote, it was already published (with or
+without a PR yet) — skip this whole section, do not rebase it, and
+follow the stop-and-ask condition above instead.
 
-1. Confirm no open PR exists yet for this branch: `gh pr list --head
-   {branch-name} --state open`. If one exists, stop per the condition
-   above; do not continue with steps 2-8.
+1. Confirm the branch has never been pushed:
+   `git ls-remote --exit-code origin {branch-name}`. A zero exit means
+   the branch already exists on the remote — stop per the condition
+   above; do not continue with steps 2-8. Do not substitute an
+   open-PR check for this: a branch can be pushed before its PR is
+   created.
 2. Run `git fetch origin main`.
 3. If `git merge-base HEAD origin/main` equals `origin/main`, the branch
    already contains every commit on `main` — skip the rebase and go to
