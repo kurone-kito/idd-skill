@@ -137,14 +137,20 @@ node scripts/resume-claim-routing.mjs --issue <N> --fresh-claim-gate
 Written fallback (`instructions-only` profile only — per the Helper
 runtime contract above, any other profile stops-and-asks on a
 missing/failing/malformed helper instead of using this fallback):
-read issue comments chronologically. Ignore untrusted marker authors.
-A `claimed-by` with a **new** `{claim-id}` becomes active only when
-there is no active claim and `supersedes: none`, or its `supersedes:`
-matches the current active claim's `{claim-id}` **and** that claim is
-already stale at the new comment's `created_at`. A `claimed-by` whose
-`{claim-id}` matches the active claim but whose `{agent-id}` differs
-(claim-id is public, not a secret) is ignored as invalid — it is
-**not** a heartbeat. An `unclaimed-by` releases only when both
+read issue comments chronologically. **Trusted marker actor** = the
+current session (after it posts and verifies its own marker), a
+configured trusted bot/App login for IDD automation, or a
+Write/Maintain/Admin collaborator only when repository policy
+explicitly allows collaborator-authored markers; ignore every other
+author for claim state. A `claimed-by` with a **new** `{claim-id}`
+becomes active only when there is no active claim and
+`supersedes: none`, or its `supersedes:` matches the current active
+claim's `{claim-id}` **and** that claim is already stale at the new
+comment's `created_at`. A `claimed-by` whose `{claim-id}` matches the
+active claim but whose `{agent-id}` **or `branch:`** differs from the
+active claim is ignored as invalid — it is **not** a heartbeat
+(heartbeat branch invariant; claim-id is public, not a secret). An
+`unclaimed-by` releases only when both
 `{agent-id}` and `{claim-id}` match the active claim. **Stale** =
 latest valid `claimed-by`'s GitHub `created_at` is
 ≥ 24 h ago (`claim-stale-age`, default `24 h`). No active claim →
@@ -345,13 +351,14 @@ effect. To move off it, either keep adopting it verbatim, or post
 `unclaimed-by` for both the sticky pair and the original displaced
 pair (exact `{agent-id}`/`{claim-id}` each), then claim fresh.
 
-Once verified, record this `{claim-id}` as your claim token for the
-rest of the run. Every later mutation (commit, push, comment, label,
-reply, resolve, reviewer request, merge) must re-verify this claim is
-still active and, inside the implementation worktree, that cwd and
-`git branch --show-current` both match the claimed branch, before
-proceeding — a mismatch means the claim was lost; stop, do not mutate
-further.
+Once verified, record this `{claim-id}` (and any posted nonce) as your
+claim token for the rest of the run. Every later mutation (commit,
+push, comment, label, reply, resolve, reviewer request, merge) must
+re-verify this claim is still active — recompute the nonce winner too
+when you posted one, and stop if it no longer matches — and, inside
+the implementation worktree, that cwd and `git branch --show-current`
+both match the claimed branch, before proceeding — a mismatch means
+the claim was lost; stop, do not mutate further.
 
 **Digest**: after verification, upsert the issue's `idd-live-status`
 digest (only when exactly one exists, or none) — `Phase: A5 claimed`,
