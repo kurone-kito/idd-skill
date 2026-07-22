@@ -14,6 +14,12 @@ review-fix instructions instead.
   `idd-review-fix.instructions.md` instead.
 - Any mismatch between this file and the standard review-fix phase is a
   bug in this file.
+- **Named command sets** (`fix-validate`, `post-fix-validate`,
+  `pre-push-validate`) resolve from `.github/idd/config.json`'s
+  `commands` object when present, otherwise from the Project commands
+  table in `idd-overview-core.instructions.md`. Resolve the exact shell
+  commands before the first use in E9 — do not guess or skip validation
+  because this file does not itself carry that table.
 
 ## Upstream-triage boundary
 
@@ -137,9 +143,12 @@ other GitHub side effect, confirm all of the following:
    triage. Fold them into this same pending push, each as its own
    atomic commit, only when every one of steps 4-7 holds.
 4. Every comment that arrived since the last push is bot-sourced:
-   authored by the primary advisory bot's login or an
-   `advisoryBotLogins` login, regardless of PATH A/B. A login also
-   configured as `secondaryBotLogin` still qualifies as bot-sourced.
+   authored by the primary advisory bot's login — for the Copilot
+   default, any login equal to `copilot` or starting with
+   `copilot-pull-request-reviewer` counts, matching
+   `isCopilotReviewerLogin` — or an `advisoryBotLogins` login,
+   regardless of PATH A/B. A login also configured as
+   `secondaryBotLogin` still qualifies as bot-sourced.
 5. Each such comment is a small, confirmable fix whose claim you
    checked against live evidence (a linter run, actual file content,
    actual runtime behavior) before folding it in. Never fold in a
@@ -156,10 +165,12 @@ other GitHub side effect, confirm all of the following:
    commit.
 9. This allowance never delays, holds, or interrupts an in-flight CI
    wait, and never changes PATH A/B routing or triage timing — only
-   push timing changes. E14 still requests a fresh primary-bot
-   re-review after every push, and each item still gets its own E13
-   disposition reply. The per-HEAD `review-watermark` still invalidates
-   on this push.
+   push timing changes. A folded-in comment does **not** get a
+   disposition reply in this round — it keeps its formal PATH
+   classification and individual E6 disposition reply for the next
+   E1/E4-E7 pass, exactly like the standard file. E14 still requests a
+   fresh primary-bot re-review after every push. The per-HEAD
+   `review-watermark` still invalidates on this push.
 10. Apply the pre-mutation guard immediately before this push.
 
 ## E13 — Reply to feedback
@@ -193,27 +204,30 @@ other GitHub side effect, confirm all of the following:
    `gh pr edit {pr-number} --add-reviewer {reviewer-login}`.
 2. Fetch the current head:
    `PR_HEAD_SHA=$(gh pr view {pr-number} --json headRefOid --jq '.headRefOid')`.
-3. Run the advisory-wait fast path
-   (`idd-advisory-wait.instructions.md`): if the primary advisory bot's
-   latest review `commit_id` already equals `PR_HEAD_SHA`, advisory-bot
-   processing is done — continue to E15.
-4. Otherwise fetch `COPILOT_PENDING` (bot in `requested_reviewers`) and
-   `EARLIEST_SAME_HEAD_AT` (oldest trusted `advisory-wait*` marker for
-   this HEAD) per `idd-advisory-wait.instructions.md` AW1-AW2, then apply
-   this decision table, top to bottom, first match wins:
-   - Bot's latest review already covers `PR_HEAD_SHA` → continue to E15.
-   - `COPILOT_PENDING` is true and no same-head marker exists, and the
-     PR timeline proves the pending request was created after the
-     current HEAD's commit event → post the recovery marker
+3. Run the profile-selected `advisory-wait-state` helper — the
+   canonical evidence collector per
+   `idd-advisory-wait.instructions.md`'s helper-first path (`node
+   scripts/advisory-wait-state.mjs --pr {pr-number}
+   --trusted-marker-logins "<trusted-login-1>,<trusted-login-2>"` in
+   the source/vendored profile; resolve the package-manager /
+   ephemeral-npx equivalent from `docs/idd-helper-scripts.md`). If it
+   fails, returns invalid JSON, or is missing required fields
+   (`outcome`, `copilotPending`, `earliestSameHeadAt`,
+   `requestMarkerCount`, `requestCap`, `capExhaustedRoute`,
+   `pendingWindowMinutes`, `settledWindowMinutes`,
+   `pollIntervalMinutes`), stop and ask — do not fall back to a manual
+   per-field fetch.
+4. Read the helper's `outcome` field and apply this decision table, top
+   to bottom, first match wins:
+   - `SATISFIED` → continue to E15.
+   - `RECOVERY_NEEDED`: post the recovery marker
      `advisory-wait-recovery: {agent-id} {PR_HEAD_SHA}
      {ISO8601-recovery-time}` as plain text. Do not request another
      review. Then go to the polling loop below.
-   - No same-head marker exists, and the per-PR request count is under
-     the configured cap (`advisoryWait.requestCap`, default 30): if
-     `COPILOT_PENDING` is true, first remove the stale pending request
-     with `gh pr edit {pr-number} --remove-reviewer
-     "@{primary-advisory-bot}"` (on a GraphQL login-resolution failure,
-     retry via `gh api
+   - `REQUEST_NEEDED`: if `copilotPending` is true, first remove the
+     stale pending request with `gh pr edit {pr-number}
+     --remove-reviewer "@{primary-advisory-bot}"` (on a GraphQL
+     login-resolution failure, retry via `gh api
      repos/{owner}/{repo}/pulls/{pr-number}/requested_reviewers -X
      DELETE -f "reviewers[]={primary-advisory-bot-rest-login}"`; if
      removal fails because the bot is no longer pending, re-run this
@@ -226,20 +240,17 @@ other GitHub side effect, confirm all of the following:
      post `advisory-wait: {agent-id} {PR_HEAD_SHA}
      {ISO8601-requested-at}` as plain text, not an HTML comment. Then go
      to the polling loop below.
-   - No same-head marker exists and the request count has reached the
-     cap: apply step 10 below (the secondary-bot check) first — it is a
-     non-gating supplement that fires on cap exhaustion independent of
-     the cap-exhausted route. Then, if the configured cap-exhausted
-     route is `hold`, post a hold comment and stop; otherwise (the
-     default) continue to E15.
-   - A same-head marker exists and `COPILOT_PENDING` is true: if
-     elapsed time since the marker is at least the configured pending
-     window, apply step 10 below (the secondary-bot check) first, then
-     continue to E15; otherwise go to the polling loop below.
-   - A same-head marker exists and `COPILOT_PENDING` is false: if
-     elapsed time is at least the configured settled window, apply
-     step 10 below (the secondary-bot check) first, then continue to
-     E15; otherwise go to the polling loop below.
+   - `CAP_EXHAUSTED`: apply step 10 below (the secondary-bot check)
+     first — it is a non-gating supplement that fires on cap exhaustion
+     independent of the cap-exhausted route. Then, if the helper's
+     `capExhaustedRoute` is `hold`, post a hold comment and stop;
+     otherwise (`phase-specific`, the default) continue to E15.
+   - `WAIT`: if `copilotPending` is true and elapsed time since
+     `earliestSameHeadAt` is at least the helper's
+     `pendingWindowMinutes`, apply step 10 below (the secondary-bot
+     check) first, then continue to E15; if `copilotPending` is false
+     and elapsed time is at least `settledWindowMinutes`, do the same;
+     otherwise go to the polling loop below.
 5. The default primary advisory bot is Copilot: use `copilot` for
    `{primary-advisory-bot}` (the add/remove-reviewer login) and
    `copilot-pull-request-reviewer[bot]` for
@@ -253,35 +264,35 @@ other GitHub side effect, confirm all of the following:
    state, that marker or comment as `Authoritative by`, and the next
    polling or maintainer action in `Next action`.
 7. **Active polling loop.** Do not post a new marker if a same-head
-   marker already exists; reuse the one with the earliest `createdAt`.
-   Take a fresh activity snapshot (same scope as E1 Step 1) and record
-   its highest `updatedAt` as a temporary polling watermark — do not
-   post it as a `review-watermark` comment. If the snapshot is empty,
-   use the `createdAt` of the latest `review-watermark` comment whose
+   marker already exists; reuse the one with the earliest `createdAt`
+   (the helper's `earliestSameHeadAt` already gives you this). Take a
+   fresh activity snapshot (same scope as E1 Step 1) and record its
+   highest `updatedAt` as a temporary polling watermark — do not post
+   it as a `review-watermark` comment. If the snapshot is empty, use
+   the `createdAt` of the latest `review-watermark` comment whose
    `{claim-id}` matches the current active claim and whose author is a
    trusted marker actor instead. If no trusted same-claim watermark
    exists, stop polling and return to E1 to create one.
-8. Poll on the configured interval. Each cycle: re-fetch the current
-   head; if it differs from `PR_HEAD_SHA`, stop polling and return to
-   `idd-review-snapshot.instructions.md` (E1). Otherwise re-read
-   threads, review bodies, and regular comments (excluding trusted
-   operational markers); if anything has `updatedAt` newer than the
-   polling watermark, stop polling and return to E1. Otherwise refresh
-   `COPILOT_PENDING`, the bot's latest review, and the same-head
-   marker's `createdAt`. If the marker is missing, post a hold comment
-   noting the advisory-wait marker for `PR_HEAD_SHA` disappeared during
-   polling and stop. If the review now covers `PR_HEAD_SHA`, exit
-   polling and continue to E15.
-9. Otherwise re-apply the elapsed-window check from step 4: if
-   `COPILOT_PENDING` is true and elapsed time since the marker is at
-   least the configured pending window, or `COPILOT_PENDING` is false
-   and elapsed time is at least the configured settled window, apply
-   step 10 below (the secondary-bot check) first, then exit polling and
-   continue to E15 — the primary bot never reviewed this HEAD, which is
-   exactly the stalled/rate-limited case step 10 exists for. Else keep
-   polling. A stalled or silent advisory bot must not cause unbounded
-   polling — this elapsed-window re-check is what times the loop out
-   even when the bot never reviews the current HEAD.
+8. Poll on the interval from the helper's `pollIntervalMinutes`. Each
+   cycle: re-fetch the current head; if it differs from `PR_HEAD_SHA`,
+   stop polling and return to `idd-review-snapshot.instructions.md`
+   (E1). Otherwise re-read threads, review bodies, and regular comments
+   (excluding trusted operational markers); if anything has `updatedAt`
+   newer than the polling watermark, stop polling and return to E1.
+   Otherwise re-run the step-3 helper. If it fails, returns invalid
+   JSON, or is missing required fields, stop and ask — do not fall back
+   to a manual per-field fetch. If `earliestSameHeadAt` is now empty,
+   post a hold comment noting the advisory-wait marker for
+   `PR_HEAD_SHA` disappeared during polling and stop. If `outcome` is
+   now `SATISFIED`, exit polling and continue to E15.
+9. Otherwise re-apply the elapsed-window check from step 4's `WAIT`
+   branch using the refreshed helper output: if the window is now
+   satisfied, apply step 10 below (the secondary-bot check) first, then
+   exit polling and continue to E15 — the primary bot never reviewed
+   this HEAD, which is exactly the stalled/rate-limited case step 10
+   exists for. Else keep polling. A stalled or silent advisory bot must
+   not cause unbounded polling — this elapsed-window re-check is what
+   times the loop out even when the bot never reviews the current HEAD.
 10. **Optional secondary advisory bot (non-gating).** When a secondary
     advisory bot is configured (`advisoryWait.secondaryBotLogin`) and
     either the request cap was reached, or a stalled/rate-limited exit
