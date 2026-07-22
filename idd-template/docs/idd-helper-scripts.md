@@ -1210,7 +1210,10 @@ Interpretation rules:
   unreplied-comment gates are unaffected
 - Readiness command: `node scripts/pre-merge-readiness.mjs`
   with `--pr <pr-number>`, `--claim-issue <issue-number>`,
-  `--claim-id <claim-id>`, and
+  `--claim-id <claim-id>`, `--nonce <token>` (this session's own
+  locally-recorded activation-nonce from claim time; #1522/#1528 — omit
+  when no nonce was recorded for the active claim, which stays backward
+  compatible), and
   `--trusted-marker-logins "<trusted-login-1>,<trusted-login-2>"`
 - Stable contract:
   [`pre-merge-readiness.schema.json`][pre-merge-readiness-schema]
