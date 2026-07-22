@@ -92,8 +92,8 @@ GitHub MCP 連携)、`jq`、`curl` などの REST クライアント、そして
 スクリプトを使う場合は Node.js が必要です(詳細は
 [Tooling boundary](docs/customization.md#tooling-boundary))。無人または
 マージ可能なエージェントへ認証情報を渡す前に
-[Permissions and threat model](docs/permissions.md) を確認し、merge
-policy を [Customizing IDD](docs/customization.md) で 1 つ選んで
+[Permissions and threat model](docs/permissions.md) を確認し、
+マージポリシーを [Customizing IDD](docs/customization.md) で 1 つ選んで
 記録してください。
 
 ### AI エージェント向け
