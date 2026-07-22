@@ -340,12 +340,11 @@ continuation.
    entirely) or a Commit-Status (`status-context`) `url` (an external
    target, not an Actions run) means there is no run `gh run rerun`
    can target — stop per the condition above and post a hold note
-   naming the check. Otherwise resolve the rerun decision from that
-   run's own history, not this wait's own memory: `gh run view
-   <run-id-from-url> --json attempt` — an `attempt` above `1` means an
-   earlier rerun already happened, so pass that count to `node
-   scripts/ci-wait-policy.mjs --rerun-count <count>` (never reset it to
-   `0` on a resumed session). If it allows
+   naming the check. Otherwise resolve the rerun decision from the
+   run's own history: `gh run view <run-id-from-url> --json attempt` —
+   GitHub's `attempt` starts at `1` for a never-rerun run, so pass
+   `attempt - 1` as `<count>` to `node scripts/ci-wait-policy.mjs
+   --rerun-count <count>`, never this wait's own memory. If it allows
    a rerun, rerun that check once as a **whole-run rerun, not
    `--failed`** (`gh run rerun <run-id-from-url>`) — a stalled check
    has no failed jobs to selectively rerun, only a run that never
