@@ -67,7 +67,9 @@ request, or other GitHub side effect, confirm all of the following:
 12. Create the sibling worktree at `../<repo-name>.<normalized-branch>`.
 13. Define `normalized-branch` as the branch name with each `/` replaced by
     `-`.
-14. Use WorkTrunk if available.
+14. Use WorkTrunk only when the `wt` command is available and its shell
+    integration is installed; otherwise use the manual `git worktree add`
+    path below.
 15. In automation, use `wt switch --create -b main <branch-name> -x true`.
 16. Do not use `wt new`.
 17. If WorkTrunk uses a pre-start install hook, its first command must acquire
@@ -103,15 +105,17 @@ request, or other GitHub side effect, confirm all of the following:
 3. If a merged PR already closed the issue, stop.
 4. If a merged PR since the claim time already touched a scoped candidate file,
    verify the acceptance criteria on current `main`.
-5. If the criteria already hold, close the issue with a comment referencing the
+5. If the criteria fully hold, close the issue with a comment referencing the
    superseding PR.
-6. Draft an issue comment plan for the exact change set.
-7. Run a critique pass on the plan.
-8. Post the refined final plan as a follow-up or update to the same issue
+6. If the criteria only partly hold, keep the issue open, record the overlap
+   in the plan, and plan only the remaining work.
+7. Draft an issue comment plan for the exact change set.
+8. Run a critique pass on the plan.
+9. Post the refined final plan as a follow-up or update to the same issue
    comment.
-9. After the final plan comment, update the live status digest to `B2 planned`,
-   `Open blockers: none` unless the plan found a blocker, `Next action: B3
-   implement`, and `Authoritative by` pointing at the claim and plan comment.
+10. After the final plan comment, update the live status digest to `B2 planned`,
+    `Open blockers: none` unless the plan found a blocker, `Next action: B3
+    implement`, and `Authoritative by` pointing at the claim and plan comment.
 
 ## B2.1 — Premise verification
 
