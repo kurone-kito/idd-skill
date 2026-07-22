@@ -213,6 +213,14 @@
       "limitBytes": 16000
     },
     {
+      "id": "bundle-claim-lite",
+      "description": "Lite claim path (weak-model condensed profile): .github/instructions/lite/idd-claim-lite.instructions.md only — self-contained; no overview/appendix.",
+      "files": [
+        ".github/instructions/lite/idd-claim-lite.instructions.md"
+      ],
+      "limitBytes": 14700
+    },
+    {
       "id": "bundle-review",
       "description": "Review path: idd-overview-core + idd-overview-appendix + idd-review-snapshot + idd-review-triage + idd-review-fix + idd-advisory-wait + idd-ci",
       "files": [
@@ -316,6 +324,12 @@
       "id": "idd-claim-instructions",
       "source": "idd-template/.github/instructions/idd-claim.instructions.md",
       "target": ".github/instructions/idd-claim.instructions.md",
+      "mode": "exact"
+    },
+    {
+      "id": "idd-claim-lite-instructions",
+      "source": "idd-template/.github/instructions/lite/idd-claim-lite.instructions.md",
+      "target": ".github/instructions/lite/idd-claim-lite.instructions.md",
       "mode": "exact"
     },
     {
