@@ -134,7 +134,7 @@ require of a human-or-model-driven session.
 | A5(c) | Fresh-claim gate | `resume-claim-routing --fresh-claim-gate` | verdict is `already-claimed` (issue held by a live competitor) |
 | A5(e) | Branch-name / collision check | `branch-name`, then the written scoped branch-pattern scan (no helper) | a matching branch is found that is **not** inheritable per the written A5(e) collision-action tree |
 | A5 | Post claim + activation nonce | `post-idd-marker --type claim`, `post-idd-marker --type activation-nonce` | claim verification (same-second tie-break, nonce winner check) fails — claim contested |
-| B1 | Worktree creation, install-deps | ordinary `git worktree add` / WorkTrunk, `verify-install-deps` — **not IDD-specific helpers** | orphaned path found, or install fails after its one retry |
+| B1 | Worktree creation, install-deps | ordinary `git worktree add` / WorkTrunk (not IDD-specific), plus `verify-install-deps` (an IDD helper, documented in `docs/idd-helper-scripts.md`, though not one of the nine the issue names) | orphaned path found, or install fails after its one retry |
 | B1 | Worktree-local lock | `claim-lock --acquire` | lock reports a collision with a different `{claim-id}` |
 | B2-B3 / C1-C6 | Plan + implement + self-review | **no deterministic helper** — the harness's one true model call per unit, scoped to atomic generation/repair only, plus deterministic **fix-validate** / **post-fix-validate** commands | acceptance check (see [Weak-model guardrails](idd-workflow.md#weak-model-guardrails)'s acceptance-check rigor bullet) fails after its bounded retry |
 | D1-D2 | Sync main, revalidate claim, lint/test, push | `fix-validate` / `pre-push-validate` (deterministic commands, not IDD-specific helpers) | validate command fails after **fix-validate** auto-fix; conflict on rebase |
@@ -199,7 +199,7 @@ model occasionally misreading a rule it could in principle re-read.
 | `branch-name` | **No** — pure/offline | own `--help` text states "Deterministic and network-free" |
 | `emit-marker` | **No** — pure/offline | "Emit-only: performs no network write"; renders body text only, does not post |
 | `ci-wait-policy` | **No** — pure/offline (policy-resolution mode) | reads only `.github/idd/config.json`; contrast with `ci-wait-state` below, which needs a live PR |
-| `post-idd-marker` (dry-run, no `--apply`) | **No** — pure/offline | prints the rendered body; identical rendering to `emit-marker` plus the JSON-POST path, gated behind `--apply` |
+| `post-idd-marker` (dry-run, no `--apply`) | **Conditional** | prints a JSON envelope whose `body` field holds the rendered marker (not the raw body text directly) — a harness must parse that field; rendering itself is pure, but `--owner` / `--repo` default to `gh repo view`, a live API call, unless both are passed explicitly — pass both for a genuinely offline dry run |
 | `post-idd-marker` (`--apply`) | **Yes** — writes | POSTs to the issue/PR comments API; requires live claim-revalidation immediately before the call |
 | `claim-approval-gate` | **Yes** | reads live issue state and timeline events |
 | `resume-claim-routing --fresh-claim-gate` | **Yes** | reads live issue comment stream |
@@ -213,18 +213,23 @@ model occasionally misreading a rule it could in principle re-read.
 <!-- dprint-ignore-end -->
 
 The implication: a harness can rehearse its own control flow, marker
-rendering, and branch-naming **fully offline** — enough to smoke-test that
+rendering, and branch-naming **fully offline** with `branch-name`,
+`emit-marker`, `ci-wait-policy`, and `post-idd-marker` dry-run **when
+`--owner`/`--repo` are passed explicitly** — enough to smoke-test that
 the runner constructs correct marker bodies and branch names before ever
 touching a credential — but there is no fully offline dry run of an actual
 single-issue pass. Every gate that decides whether to proceed (claim state,
 CI state, review state, merge readiness) requires a live, credentialed,
-network-connected loop. This matters for **when this mode can run
-unattended**: the pure subset is safe to exercise in a sandboxed or
-CI-internal smoke test with no GitHub token at all; the live subset can
-only ever run inside an already-integrated loop with real repository
-access, which is also where the weak-tier guardrail already puts the
-model-driven loop today — this mode does not relax that requirement, it
-only changes who is deciding when to call each live helper.
+network-connected loop, and even the rendering-only helpers step outside
+that offline boundary the moment repo context is left to its `gh repo
+view` default. This matters for **when this mode can run unattended**:
+the pure subset, invoked with explicit repo flags, is safe to exercise in
+a sandboxed or CI-internal smoke test with no GitHub token at all; the
+live subset can only ever run inside an already-integrated loop with real
+repository access, which is also where the weak-tier guardrail already
+puts the model-driven loop today — this mode does not relax that
+requirement, it only changes who is deciding when to call each live
+helper.
 
 ## 4. When to require this mode
 
