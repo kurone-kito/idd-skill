@@ -271,11 +271,14 @@ yet part of the published policy schema
 whose root object rejects unknown properties), and no phase file or
 the routing table in `idd-overview-core.instructions.md` reads it
 today. This subsection records the intended shape for a future issue
-to add the schema field and the routing read against; setting the
-field in `.github/idd/config.json` today has no runtime effect. Until
-that follow-up lands, point a lite-tier session at the right files
-with an explicit operator instruction, or have it open the phase
-files below manually.
+to add the schema field and the routing read against. **Do not set the
+field yet**: `.github/idd/config.json` is already validated against
+that schema (for example by `idd-doctor` and `scripts/validate-schemas.mjs`),
+and its root object's `additionalProperties: false` means adding
+`instructionProfile` today fails that validation outright — it is not
+merely inert. Until the schema follow-up lands, point a lite-tier
+session at the right files with an explicit operator instruction, or
+have it open the phase files below manually.
 
 **Phase → lite file mapping** (live as of this writing — re-check
 `.github/instructions/lite/` before trusting this table to stay
