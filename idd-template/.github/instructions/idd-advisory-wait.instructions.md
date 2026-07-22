@@ -319,10 +319,17 @@ from E1 against the new HEAD.
 4. **Verify association**: re-fetch the PR timeline and confirm the
    fresh request's `review_requested` now follows HEAD's `committed`
    event (the same proof `COPILOT_PENDING_COVERS_HEAD` uses). If not yet
-   true (timeline lag), do **not** post the marker or count a cycle;
-   retry from step 1 with fresh state — a retry that never reaches a
-   verified marker never consumes budget, so re-entry after a partial
-   failure is naturally idempotent.
+   true, this is ordinary eventual-consistency lag, not a failed
+   request — do **not** redo steps 1-3 (the request already made is
+   still valid; removing and re-requesting again only churns it).
+   Re-check this step alone after a brief pause, up to a small bounded
+   number of attempts (distributed default: 3, a few seconds apart). If
+   it still cannot be proven after that budget, do **not** post the
+   marker or count a cycle: abort the whole attempt and return to the
+   polling loop (or E1) to re-evaluate fresh at the next interval — never
+   tight-loop steps 1-4 on unresolved timeline lag. An attempt that never
+   reaches a verified marker never consumes budget either way, so
+   re-entry after a partial failure is naturally idempotent.
 5. **Post exactly one** bound marker, only once every prior step is
    verified:
 

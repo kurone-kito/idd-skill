@@ -257,7 +257,7 @@
         "reason": {
           "type": "string",
           "minLength": 1,
-          "description": "Machine-readable reason: not-pending, same-head-marker-present, proven-covers-head, recovery-cap-exhausted, or recovery-attempt-eligible."
+          "description": "Machine-readable reason: active-claim-not-provided, not-pending, same-head-marker-present, proven-covers-head, recovery-cap-exhausted, or recovery-attempt-eligible."
         }
       },
       "additionalProperties": false
