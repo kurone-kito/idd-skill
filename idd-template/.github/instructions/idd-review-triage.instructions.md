@@ -527,33 +527,16 @@ Route based on `branchState` from the helper (or `mergeable` /
 ## Merge-main livelock under fast-moving main
 
 Under heavy concurrent-session load, `main` can advance again before
-one full {sync path → E1 → F1/F2} cycle finishes, so the branch-sync
-check reports `behind-no-conflict` (up-to-date-head required) again
-on the very next pass. Naively repeating the sync path forever does
-not converge on its own — reaching F3 requires the watermark refresh
-and the up-to-date-head check to land in the same instant, not just
-eventually both be true.
+one full {sync path → E1 → F1/F2} cycle finishes, re-triggering
+`behind-no-conflict` next pass; naive repetition never reaches F3.
 
-**Rule**: treat the watermark post as the **last** action before
-attempting the merge, every single pass — not a step done once
-earlier in the cycle. If anything happens after the watermark is
-posted (a later CI run settling, a stale check-run being rerun, a new
-disposition reply, another `main` advance), the watermark is stale
-again and the merge attempt will fail closed on `review-currency`
-regardless of how green CI looks; re-post it before retrying. This is
-the same CI-completion precondition E1 Step 2 already states
-(`idd-review-snapshot.instructions.md`) — the failure mode here is
-only that it is easy to satisfy it once early in a multi-pass sync
-loop and assume it still holds by the time the merge is attempted.
-
-**Worked example**: sync path merges `main`, CI passes, the watermark
-is posted, but `main` advances again while a stale
-`idd-advisory-convergence` check-run is being rerun. The watermark's
-recorded `{latest-ci-completed-at}` no longer matches the rerun's
-completion time (`ci-pass-drift`) even though the head SHA is
-unchanged, and separately the branch is `behind-no-conflict` again.
-Both must be re-cleared — re-post the watermark after the rerun
-settles, and re-merge `main` — before the merge attempt can succeed.
+**Rule**: post the watermark as the **last** action before attempting
+the merge, every pass. Anything after it (a CI rerun settling, a new
+disposition reply, another `main` advance) re-stales it and the merge
+fails closed on `review-currency` regardless of CI color — re-post
+before retrying. Same CI-completion precondition as E1 Step 2
+(`idd-review-snapshot.instructions.md`); it is just easy to satisfy
+once early in a multi-pass loop and assume it still holds later.
 
 ## Zero-Accepted-PATH-A advisory re-review gate
 
