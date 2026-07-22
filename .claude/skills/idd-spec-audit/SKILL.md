@@ -39,13 +39,15 @@ model.
   `docs/idd-concept-ownership.md` (R2's closed concept-index seed) and
   `docs/idd-autonomy-contract.md` (R4's reversible/irreversible source
   of truth). Both are read in full every pass.
-- **Out of scope entirely** (never read, never cited): `.claude/**`
-  (this skill never audits itself) and every other file under `docs/**`
-  besides the two reference-only inputs above (summary docs rely on the
-  files they cite by design, so they are not audited as if they were
-  the primary spec; a `docs/idd-*.md` mirror's own drift is
-  `audit-docs.mjs`'s job, checked against its `idd-template/docs/`
-  source, not this skill's).
+- **Out of scope as an audit target / finding source**: `.claude/**`
+  (this skill never audits itself — no finding ever cites a file under
+  `.claude/**`, though the skill necessarily reads its own bundle, this
+  `SKILL.md` and `references/report-template.md`, to run at all) and
+  every other file under `docs/**` besides the two reference-only
+  inputs above (summary docs rely on the files they cite by design, so
+  they are not audited as if they were the primary spec; a
+  `docs/idd-*.md` mirror's own drift is `audit-docs.mjs`'s job, checked
+  against its `idd-template/docs/` source, not this skill's).
 
 ## Rule sets
 
