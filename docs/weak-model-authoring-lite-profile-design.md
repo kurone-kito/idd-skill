@@ -86,7 +86,7 @@ incident — not three independent citations.
   roadmap) while the **harness**, never the model, computed and
   injected every byte-exact marker
   (`autopilot-suitability`/`effort`/`roadmap-id`/`blocked-by`) and
-  enforced the `suitability:1` ⇒ `status:blocked-by-human` cross-field
+  enforced the `suitability: 1` ⇒ `status:blocked-by-human` cross-field
   invariant programmatically. Result: qwen3.5-2b-text (a small model)
   produced linter-passing drafts on attempt 1, across all three issue
   shapes the linter supports.
@@ -285,6 +285,15 @@ that same directory, requiring only:
   `.claude/skills/issue-authoring/references/contract-lite.md` mirror.
 - No new `fileSets` entry — the existing basename-matched set already
   covers any new file added under `skills/issue-authoring/**/*.md`.
+- One new entry in the `issue-authoring-companion-files`
+  `generatedBlocks` entry's own `paths` list — a separate mechanism
+  from `syncPairs` and `fileSets`, driving the consolidated
+  onboarding-fetch block in `idd-template/ONBOARDING.md`. Every
+  existing skill file (`SKILL.md`, `contract.md`, `draft-patterns.md`,
+  `workflow-boundary.md`, `agents/openai.yaml`) is already listed there;
+  omitting `contract-lite.md` from this list would leave it unreachable
+  by a fresh weak-model session following the generated onboarding
+  fetch loop, even after every other piece of this design lands.
 - A `bundleBudgets` entry sized independently from `contract.md`'s own
   size (read the live value with `wc -c` on the file rather than
   trusting a snapshot to stay current), following #1419's own "new,
@@ -369,8 +378,11 @@ this design issue.
   condensed authoring reference covering prose/structure guidance for
   all three issue shapes (orphan, roadmap, child), following content
   principles 1-3 and 5 above, that explicitly instructs the model to
-  call the new marker helper rather than typing markers itself. Depends
-  on the marker-helper issue above landing first.
+  call the new marker helper rather than typing markers itself; wires
+  the new `syncPairs`, `bundleBudgets`, and
+  `issue-authoring-companion-files` `paths` entries together per
+  [Sync mechanism](#sync-mechanism). Depends on the marker-helper issue
+  above landing first.
 - **Wire the authoring-lite opt-in into whatever convention #1548
   establishes** — extend or reuse the execution-phase lite-profile
   entry/opt-in mechanism for `contract-lite.md`, once
