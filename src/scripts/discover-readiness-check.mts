@@ -779,8 +779,19 @@ function normalizeLabels(labelsInput: unknown): Set<string> {
   return new Set();
 }
 
-function isParentEpicIssue(
-  issue: NormalizedIssue,
+/**
+ * Parent-epic / aggregate-issue exemption for the dependency check (#1536):
+ * an open dependency issue does not block when it is itself a roadmap/epic.
+ * Exported so `discover-orphan-filter.mts` can reuse this exact exemption for
+ * A0-O's own dependency check instead of re-implementing it (#1536). The
+ * parameter type is intentionally the minimal structural shape this function
+ * actually reads (not the full `NormalizedIssue`), so a reusing caller can
+ * pass any object with these two fields without constructing a full
+ * `NormalizedIssue` (`NormalizedIssue` itself stays structurally assignable,
+ * so this widening does not affect the call site below).
+ */
+export function isParentEpicIssue(
+  issue: { title: string; labels: Set<string> },
   roadmapLabelName: string = POLICY_DEFAULTS.labels.roadmapLabelName,
 ): boolean {
   // Title heuristic is intentionally independent of the configured roadmap
