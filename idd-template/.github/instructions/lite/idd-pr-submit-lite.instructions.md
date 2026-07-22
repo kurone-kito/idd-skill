@@ -35,9 +35,9 @@ session already claimed and implemented. If the repository is
 - `closingIssuesReferences` still does not exactly match the deliberate
   closing set after one corrective edit.
 - The required-check set for D4 cannot be determined (protection or
-  ruleset reads are unreadable, or `ci-wait-state` reports
-  `no-required-checks` and that has not been confirmed as expected for
-  this repository).
+  ruleset reads are unreadable, or `ci-wait-state`'s
+  `requiredChecks.status` reports `no-required-checks` and that has not
+  been confirmed as expected for this repository, or `source-pinned`).
 - Any required check reaches a failing terminal state.
 
 ## Pre-mutation guard
@@ -164,19 +164,22 @@ timeouts. Use both, not either alone.
    running/generation timeouts and the rerun budget. This helper is
    read-only and does not poll CI itself.
 2. Use the profile-selected **ci-wait-state** helper for the actual
-   required-check snapshot (poll it again on each wait iteration): it
-   reports a top-level `status` of `success`, `pending`, `failing`,
-   `missing`, or `no-required-checks`, plus per-check names and normalized
-   states. If either helper is unavailable, fails, or disagrees with live
-   GitHub state, stop and ask — do not re-derive branch-protection or
-   ruleset rules by hand.
-3. **`no-required-checks`**: stop per the condition above rather than
-   silently treating an empty required-check set as a pass.
+   required-check snapshot (poll it again on each wait iteration) and
+   read its `requiredChecks.status` field: `success`, `pending`,
+   `failing`, `missing`, `no-required-checks`, or `source-pinned`. If
+   either helper is unavailable, fails, or disagrees with live GitHub
+   state, stop and ask — do not re-derive branch-protection or ruleset
+   rules by hand.
+3. **`no-required-checks`** or **`source-pinned`** (a ruleset or
+   integration-pinned required check exists but cannot be enumerated by
+   name): stop per the condition above rather than silently treating
+   either as a pass.
 4. **`failing`**: a required check other than `idd-advisory-convergence`
    reached a genuine failing terminal state — stop per the condition
    above rather than continuing to poll (fixing or rerunning it is
    outside this file's mechanical scope).
-5. **`pending`**: keep polling until `success`, `failing`, or the
+5. **`pending`** or **`missing`** (an expected required check has not
+   posted a result yet): keep polling until `success`, `failing`, or the
    ci-wait-policy timeout is reached.
 6. **`success`**: proceed to `idd-review-snapshot.instructions.md` (E1).
 7. **Exception**: if `idd-advisory-convergence` is the only
