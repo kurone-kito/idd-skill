@@ -11,9 +11,10 @@ that keeps going until the issue is closed.
 
 IDD Skill gives a repository a portable Issue-Driven Development
 workflow: agents discover ready issues, claim ownership, implement in a
-branch, open a PR, handle review feedback, wait for CI, merge, and
-clean up. The whole loop ships as plain Markdown instruction files that
-live in your repository — yours to inspect, fork, and audit.
+branch, open a PR, handle review feedback, wait for CI, merge under the
+policy you select, and clean up. The whole loop ships as plain Markdown
+instruction files that live in your repository — yours to inspect,
+fork, and audit.
 
 ## Why IDD exists
 
