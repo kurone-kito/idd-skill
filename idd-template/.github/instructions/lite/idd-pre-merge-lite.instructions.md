@@ -8,7 +8,8 @@ judging live-fetched evidence directly) is out of scope for this file —
 a broken helper is a stop-and-ask condition here, never a prompt to
 reason about raw GitHub state yourself. If the repository is
 `instructions-only`, use `idd-pre-merge.instructions.md` instead; this
-lite file has no written-table fallback of its own.
+lite file depends entirely on helper runtime and has no written,
+non-helper alternative of its own for that case.
 
 ## Helper runtime contract
 
@@ -27,8 +28,11 @@ lite file has no written-table fallback of its own.
   step 1, if applicable), or is unavailable, fails, or disagrees with
   live state.
 - The pre-merge-readiness helper is missing, fails, returns invalid or
-  incomplete JSON (missing `ready`, `blockers`, or `prHeadSha`), or
-  disagrees with live GitHub state.
+  incomplete JSON (missing any of the required top-level fields listed
+  in `schemas/pre-merge-readiness.schema.json` — this file directly
+  consumes `prHeadSha`, `ready`, and `blockers`, but any other missing
+  required field equally signals a broken or contract-violating
+  report), or disagrees with live GitHub state.
 - The repository is `instructions-only`.
 
 ## F1 — Branch-state check (read-only)
@@ -64,10 +68,11 @@ This check never rebases, merges, or pushes.
    the exact command from `docs/idd-helper-scripts.md` if unsure). This
    is the same helper the standard F2 treats as the authoritative
    source for the merge decision.
-2. If the helper fails, returns invalid or incomplete JSON (missing
-   `ready`, `blockers`, or `prHeadSha`), or its evidence disagrees with
-   directly-observable live GitHub state (for example, the claim is
-   obviously lost): stop per the condition above. Do not discard the
+2. If the helper fails, returns invalid or incomplete JSON (missing any
+   of the required top-level fields listed in
+   `schemas/pre-merge-readiness.schema.json`), or its evidence disagrees
+   with directly-observable live GitHub state (for example, the claim
+   is obviously lost): stop per the condition above. Do not discard the
    helper output and fall back to live-fetch-plus-prose judgment — that
    fallback is the judgment-heavy part the standard file allows and
    this lite file deliberately excludes.
