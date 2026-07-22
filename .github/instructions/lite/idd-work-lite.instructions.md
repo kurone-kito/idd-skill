@@ -26,6 +26,8 @@ repository is `instructions-only`, use the standard work instructions instead.
 - The claimed branch is not the current branch.
 - A required helper or validation command is unavailable, invalid, or disagrees
   with live state.
+- The claim-lock helper reports a collision (a different claim id already
+  holds the worktree lock).
 - The worktree is dirty and ownership is unclear.
 - The final B2 plan comment does not exist before B3.
 - Multiple PRs match the claim branch.
