@@ -435,10 +435,15 @@ script's own path is an invariant literal prefix for the _direct_ form
 (`node scripts/idd-merge-execute.mjs …`, any flags or order), so that
 exact form is reliably blocked regardless of `--apply` or dry-run.
 But Claude Code's Bash permission match is a plain command-string
-prefix with no path normalization: `node scripts/../bin/idd-merge-execute.mjs
---apply` still matches the broad `Bash(node scripts/*)` allow above
-while matching neither literal deny, because the string does not start
-with either denied prefix. Closing every such path-alias variant would
+prefix with no path normalization:
+
+```text
+node scripts/../bin/idd-merge-execute.mjs --apply
+```
+
+still matches the broad `Bash(node scripts/*)` allow above while
+matching neither literal deny, because the string does not start with
+either denied prefix. Closing every such path-alias variant would
 mean enumerating specific safe scripts instead of allowlisting the
 whole `scripts/`/`bin/` surface — a materially bigger, more
 maintenance-heavy design this baseline does not take on. Treat this
