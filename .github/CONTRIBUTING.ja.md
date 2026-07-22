@@ -23,3 +23,30 @@ Language: [🇬🇧](./CONTRIBUTING.md) | **🇯🇵** | [🇨🇳](./CONTRIBUTI
    含めてください）。リポジトリルートに `.gitmessage` テンプレートがあります。詳細は
    [copilot-instructions.md](./copilot-instructions.md#commit-rules)
    を参照してください。
+
+## ローカル開発ツール
+
+このリポジトリには project-local の pnpm 基盤と Husky hook があり、
+コントリビューターと autopilot 実行がコミット前に最小 lint ゲートを
+強制できます。テンプレートの採用者は pnpm を必要としません —
+プロジェクト既存のツールを使ってください(詳細は
+[Tooling boundary](../docs/customization.md#tooling-boundary))。
+
+Node.js `^22.22.2 || >=24.2.0`(このリポジトリの `package.json` が
+定める `engines` の下限)が必要です。
+
+```sh
+corepack enable
+pnpm install
+pnpm run lint
+pnpm run test
+```
+
+pre-commit hook は高速・コミット安全なサブセット
+(`pnpm run lint:precommit`: Biome・dprint・markdownlint)を実行し、
+完全な `pnpm run lint:minimum` スイートは CI で実行されます。
+commit-msg hook は commitlint により Conventional Commits を検証します。
+
+`idd-template/` 配下の正規ソースファイルを編集したときは、
+`pnpm run docs:sync` を実行して、すべてのミラーアーティファクトへ
+変更を伝播してください。
