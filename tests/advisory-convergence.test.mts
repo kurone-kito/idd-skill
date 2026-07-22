@@ -1630,6 +1630,12 @@ test('late Copilot review recovery: a fresh clean review landing on HEAD clears 
 // --- collectors by design (see each file's own module-header claim); this
 // --- is a static assertion that they stay that way.
 test('#1570 AC6: touched read-only helper sources never contain a `pr merge --admin` invocation', () => {
+  // Matches the actual command shape (`merge` and `--admin` as same-line
+  // tokens), not a bare `--admin` substring -- so prose or documentation
+  // that merely mentions the flag (e.g. explaining why it must not be
+  // used) cannot false-positive this guard. Reviewed per Copilot's #1570
+  // finding (PR #1646).
+  const forbiddenInvocation = /\bmerge\b[^\n]*--admin\b/i;
   const readFile = (path: string) =>
     readFileSync(new URL(path, import.meta.url), 'utf8');
   for (const path of [
@@ -1639,7 +1645,7 @@ test('#1570 AC6: touched read-only helper sources never contain a `pr merge --ad
   ]) {
     const source = readFile(path);
     assert.ok(
-      !source.includes('--admin'),
+      !forbiddenInvocation.test(source),
       `${path} must not invoke gh pr merge --admin`,
     );
   }

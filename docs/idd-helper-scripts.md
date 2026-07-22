@@ -1292,8 +1292,10 @@ Interpretation rules:
   is unchanged by these fields; instead, `copilotUnavailable: true` with
   `copilotUnavailableWaived: false` adds a dedicated
   `copilot-terminal-unavailable` entry to `blockers[]`, additive to the
-  existing `advisory-wait` blocker. See
-  `idd-advisory-wait.instructions.md`'s Terminal routing section.
+  existing `advisory-wait` blocker. Observed incident:
+  kurone-kito/idd-skill#1562 (a Copilot review request that never proved
+  it covered current HEAD). See `idd-advisory-wait.instructions.md`'s
+  Terminal routing section.
 - `reviewCurrency.comparisonRoute` remains advisory evidence only. Agents
   must still apply written instruction checks against live GitHub state.
 - Fail closed: if helper execution fails, output is invalid JSON,
@@ -1430,9 +1432,9 @@ Interpretation rules:
   ordinary deadline has passed — but `ready` still requires a valid
   waiver in addition (`ready = converged || ((deadline.passed ||
   terminal.state == "COPILOT_UNAVAILABLE") && waived)`); the terminal
-  state alone never sets `ready: true`. See
-  `idd-advisory-wait.instructions.md`'s Terminal routing section for the
-  full hold/rerun sequence.
+  state alone never sets `ready: true`. Observed incident:
+  kurone-kito/idd-skill#1562. See `idd-advisory-wait.instructions.md`'s
+  Terminal routing section for the full hold/rerun sequence.
 - Reuses the existing evidence modules — `isCopilotReviewerLogin` /
   `readAdvisoryPrimaryBotLogin`, `resolveAdvisoryBotLogins`,
   `resolveTrustedMarkerActors`, `summarizeDispositionEvidenceForGate`,

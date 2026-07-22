@@ -375,31 +375,32 @@ export function collectPreMergeReadiness(argv) {
   // Bound to the SAME expected claim already threaded to
   // `summarizeClaimValidation` below (`--expected-claim-id`/
   // `--expected-agent-id`), matching the active claim that would have
-  // posted any `advisory-wait-recovery:` cycle markers. Fails closed to
-  // `false` (never blocks on a crash in this ancillary evidence) on any
-  // unexpected error -- a malformed `prHeadSha` here would already have
-  // failed earlier PR-fetch steps.
-  let copilotUnavailable = false;
-  try {
-    const lastCopilotCommit = findLastCopilotReviewCommit(
-      normalizedReviews,
-      primaryBotLogin,
-    );
-    const copilotRecovery = buildCopilotRecoverySummary(
-      { comments: normalizedComments, prHeadSha, lastCopilotCommit },
-      {
-        now,
-        trustedMarkerLogins,
-        claimId: args.expectedClaimId,
-        agentId: args.expectedAgentId,
-        recoveryCycleCap: readAdvisoryRecoveryCycleCap(),
-        terminalWindowMinutes: readAdvisoryTerminalWindowMinutes(),
-      },
-    );
-    copilotUnavailable = copilotRecovery.state === 'COPILOT_UNAVAILABLE';
-  } catch {
-    copilotUnavailable = false;
-  }
+  // posted any `advisory-wait-recovery:` cycle markers. Deliberately
+  // uncaught: an unexpected error here must not silently collapse to
+  // `copilotUnavailable: false` (a permissive default that could mask a
+  // real terminal-unavailable condition behind an ancillary-evidence bug
+  // -- flagged by CodeRabbit on PR #1646). Letting it throw matches this
+  // repo's documented helper-failure contract (see
+  // `idd-review-snapshot.instructions.md`'s "Helpers remain evidence
+  // collectors only"): a crash here is evidence collection failing
+  // loudly, and callers already know to fall back to the portable
+  // gh/jq/API procedure rather than trust a helper that could not run.
+  const lastCopilotCommit = findLastCopilotReviewCommit(
+    normalizedReviews,
+    primaryBotLogin,
+  );
+  const copilotRecovery = buildCopilotRecoverySummary(
+    { comments: normalizedComments, prHeadSha, lastCopilotCommit },
+    {
+      now,
+      trustedMarkerLogins,
+      claimId: args.expectedClaimId,
+      agentId: args.expectedAgentId,
+      recoveryCycleCap: readAdvisoryRecoveryCycleCap(),
+      terminalWindowMinutes: readAdvisoryTerminalWindowMinutes(),
+    },
+  );
+  const copilotUnavailable = copilotRecovery.state === 'COPILOT_UNAVAILABLE';
   const summary = buildPreMergeReadinessSummary(
     {
       prHeadSha,
