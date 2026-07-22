@@ -155,6 +155,41 @@ check as a PASS (fail-closed only for Check 3, Trust/Safety), so this
 section documents an operator-facing expectation rather than a new
 A4/A4.5 check.
 
+### Model selection and prompting for the weak tier
+
+Independent field evidence surfaced three predictable model-selection
+and prompting mistakes at the weak-local tier that the capability-tier
+classification above does not warn against on its own:
+
+- **Loop-stability-versus-single-shot mismatch**: a model's single-shot
+  coding pass rate does not predict whether it can hold a multi-turn
+  agentic loop without spiraling — the single-shot-coding knee and the
+  agentic-loop-stability knee can sit at different model sizes
+  entirely. Do not select a model for loop execution on a single-shot
+  battery alone. Use a cheap smoke test instead: can the model run N
+  turns on a simple task without spiraling? Gate model selection for
+  loop execution on that result, not the single-shot score.
+- **Reasoning-model spec-drift**: for mechanical, fully-specified,
+  single-clause steps, prefer a literal, low-reasoning model over a
+  verbose reasoning model — select for obedience, not cleverness, at
+  this tier. A reasoning model can "improve" on a literal instruction
+  instead of obeying it (for example, returning a different type than
+  specified, or renaming a referenced symbol so downstream code
+  breaks), while costing substantially more tokens and wall-time than a
+  leaner, non-reasoning model that follows the spec literally. More
+  reasoning is not automatically a safer default for this kind of step.
+- **Full-agent-wrapper degradation**: at the weak tier, prefer a
+  direct, minimal-prompt generation path — feeding only the atomic task
+  and its acceptance context — over routing the same request through a
+  full agent session with its system prompt and instruction stack. The
+  added context (system-prompt injection, a large per-turn instruction
+  stack) can push a small model past its reliable zone, so the same
+  model that succeeds on a direct minimal prompt can fail through the
+  full agent wrapper.
+
+These are adopter-facing model-selection and prompting heuristics, not
+a new requirement on this repository's own instructions or tooling.
+
 ## IDD file map
 
 | File                                                       | Role                                                                                                            |
