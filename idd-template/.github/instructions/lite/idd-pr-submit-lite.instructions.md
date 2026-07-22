@@ -31,9 +31,10 @@ session already claimed and implemented. If the repository is
   (after the `recheck` retry budget in D1 step 1, if applicable) — this
   lite file only covers the pre-first-push rebase; the post-publication
   merge-based resync (or a closer live-state read) is out of its scope.
-  (A pushed branch with **no** open PR yet is not this case: skip
-  straight to D3. An open PR with `syncRecommendation: none` is not this
-  case either: skip straight to D4.)
+  (A pushed branch with **no** open PR yet is not this case: push any
+  unpushed local commits, then skip straight to D3. An open PR with
+  `syncRecommendation: none` is not this case either: run D3.5's check,
+  then skip straight to D4.)
 - D1's rebase hits a content conflict this session cannot resolve
   mechanically.
 - After D1, `git branch --show-current` is empty (detached HEAD) and one
@@ -98,8 +99,12 @@ This section's rebase only applies **before the branch's first push**.
    literal `null` can be misread as a real PR number instead of "no
    open PR").
    - No output (empty): D2's push already happened in an earlier,
-     interrupted session — skip the rest of D1 (nothing to rebase) and
-     go straight to D3 (create the PR).
+     interrupted session. `git fetch origin {branch-name}`, then check
+     `git log --oneline origin/{branch-name}..HEAD` — if it lists any
+     commit, this or an earlier session committed more work after that
+     push without pushing it; push those commits now (a normal push,
+     not force) before continuing. Either way, skip the rest of D1
+     (nothing to rebase) and go straight to D3 (create the PR).
    - An open PR exists: read its `syncRecommendation` with the
      profile-selected branch-conflict-state helper —
      `node scripts/branch-conflict-state.mjs --pr <pr-number>`, or the
@@ -113,7 +118,11 @@ This section's rebase only applies **before the branch's first push**.
      protection requiring an up-to-date head) rather than treating every
      non-`CLEAN` state the same:
      - `syncRecommendation: "none"`: D1-D3 already happened in an
-       earlier session; skip straight to D4 (wait for CI).
+       earlier session. Run D3.5's closing-keyword check first — it is
+       idempotent even if an earlier session already verified it, and
+       a session that crashed between D3 and D3.5 would otherwise
+       never get the keyword verified — then continue to D4 (wait for
+       CI).
      - `syncRecommendation: "recheck"` (mergeability still computing):
        re-run the helper after a short wait, up to 3 attempts; only a
        result still `"recheck"` after that budget falls through to stop
