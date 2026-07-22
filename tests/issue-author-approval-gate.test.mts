@@ -64,8 +64,27 @@ test('suitability instructions keep issue-author approval outside A4.5 outcomes'
 
   assert.match(live, /Issue-author approval is a separate pre-claim gate\./);
   // The live target carries the sync-docs generated-from banner the template
-  // source does not; strip it before the content-mirror equality check.
-  assert.equal(template, stripGeneratedFromBanner(live));
+  // source does not; strip it before the content-mirror equality check. This
+  // pair is `concreted` mode (#1621): the manifest's PROJECT_MARKER_PREFIX
+  // substitution accounts for the rest of the divergence, mirroring
+  // sync-docs.mts / audit-docs.mts's own `applyReplacements` behavior instead
+  // of hardcoding the substituted value a second time.
+  const manifest = JSON.parse(
+    readFileSync(
+      new URL('../audit/sync-manifest.json', import.meta.url),
+      'utf8',
+    ),
+  ) as {
+    syncPairs: { id: string; replacements?: { from: string; to: string }[] }[];
+  };
+  const pair = manifest.syncPairs.find(
+    (candidate) => candidate.id === 'idd-suitability-instructions',
+  );
+  const expected = (pair?.replacements ?? []).reduce(
+    (text, { from, to }) => text.split(from).join(to),
+    template,
+  );
+  assert.equal(expected, stripGeneratedFromBanner(live));
 });
 
 test('overview documents the secure default issue-author approval config behavior', () => {

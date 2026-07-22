@@ -556,7 +556,13 @@
       "id": "idd-suitability-instructions",
       "source": "idd-template/.github/instructions/idd-suitability.instructions.md",
       "target": ".github/instructions/idd-suitability.instructions.md",
-      "mode": "exact"
+      "mode": "concreted",
+      "replacements": [
+        {
+          "from": "{{PROJECT_MARKER_PREFIX}}",
+          "to": "idd-skill"
+        }
+      ]
     },
     {
       "id": "idd-work-instructions",

@@ -20,7 +20,7 @@ we do this NOW?", A4.5 asks "SHOULD we do this at all?"
 
 ## Relationship to the autopilot-suitability score
 
-The numeric `<!-- {{PROJECT_MARKER_PREFIX}}-autopilot-suitability: N -->`
+The numeric `<!-- idd-skill-autopilot-suitability: N -->`
 footer is a **discovery-time** ranking/routing hint consumed in
 `idd-discover.instructions.md` (its floor is `.github/idd/config.json`
 `autopilotSuitability.floor`, default `3`; see also
