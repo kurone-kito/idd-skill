@@ -540,10 +540,9 @@ Two consumers reuse the SAME `idd-external-check-waiver:` evidence
 (selector `idd-advisory-convergence`, current HEAD, active claim) — one
 waiver satisfies either:
 
-- CI check (`advisory-convergence.mts`): `terminal` field
-  (`CopilotRecoverySummary`, separate from `deadline`); its waiver hatch
-  also opens on `COPILOT_UNAVAILABLE`, independent of `deadline.passed` —
-  `ready` still needs a valid waiver too.
+- CI check (`advisory-convergence.mts`): `terminal` field (separate from
+  `deadline`); its waiver hatch also opens on `COPILOT_UNAVAILABLE`
+  independent of `deadline.passed` — `ready` still needs a valid waiver.
 - F2/F3 (`pre-merge-readiness.mts`): `advisoryWait.copilotUnavailable` /
   `copilotUnavailableWaived`. `f3Outcome` is unchanged; unwaived instead
   adds `copilot-terminal-unavailable` to `blockers[]`, additive to
@@ -558,6 +557,5 @@ waiver satisfies either:
 > claim before this PR can proceed.
 
 **Waived**: rerun the existing `idd-advisory-convergence` run (Rerun
-mechanics below — never `workflow_dispatch`); both fields recompute fresh
-every call, so a later change or expired/invalid marker reverts
-automatically.
+mechanics below — never `workflow_dispatch`); both fields recompute every
+call, so an expired or invalid marker reverts automatically.
