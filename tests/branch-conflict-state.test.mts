@@ -112,18 +112,38 @@ let sharedUpstreamRepo: {
   dir: string;
   branch: string;
   commits: string[];
+  featureBranch: string;
+  featureCommits: string[];
 } | null = null;
 
 /**
  * Builds (once, memoized) a real "upstream" repo with several sequential
- * commits -- oldest first in the returned `commits` array. Immutable after
- * creation (nothing below ever fetches into or otherwise mutates this
- * directory), so sharing one instance across tests is safe.
+ * commits on its main line -- oldest first in the returned `commits` array
+ * -- plus a second, divergent `featureBranch` that branches off
+ * `commits[2]` and adds its own commits (`featureCommits`, oldest first).
+ * `featureBranch` models a real PR head that shares an ancestor with the
+ * base branch but has since diverged -- used by the head-side-shallow retry
+ * test below (#1535), which needs a commit reachable only through a ref
+ * *different* from whichever one was already shallow-cloned, unlike the
+ * single-branch `commits` array (which only proves that deepening the
+ * *same* already-shallow ref works, already covered by the pre-existing
+ * "deepened-success" test).
+ *
+ * HEAD is restored to `branch` (the main line) before returning:
+ * `createFreshShallowClone` below clones whatever branch is currently
+ * checked out here (no explicit `--branch`), and the pre-existing
+ * "deepened-success" test depends on that default being the main line, not
+ * `featureBranch`.
+ *
+ * Immutable after creation (nothing below ever fetches into or otherwise
+ * mutates this directory), so sharing one instance across tests is safe.
  */
 function createUpstreamRepo(): {
   dir: string;
   branch: string;
   commits: string[];
+  featureBranch: string;
+  featureCommits: string[];
 } {
   if (sharedUpstreamRepo) return sharedUpstreamRepo;
   const dir = mkdtempSync(join(tmpdir(), 'idd-branch-conflict-upstream-'));
@@ -138,7 +158,19 @@ function createUpstreamRepo(): {
     commits.push(gitNoSign(dir, ['rev-parse', 'HEAD']));
   }
   const branch = gitNoSign(dir, ['rev-parse', '--abbrev-ref', 'HEAD']);
-  sharedUpstreamRepo = { dir, branch, commits };
+
+  const featureBranch = 'feature';
+  gitNoSign(dir, ['checkout', '-q', '-b', featureBranch, commits[2]]);
+  const featureCommits: string[] = [];
+  for (let i = 0; i < 3; i += 1) {
+    writeFileSync(join(dir, `g${i}.txt`), `${i}\n`);
+    gitNoSign(dir, ['add', `g${i}.txt`]);
+    gitNoSign(dir, ['commit', '-q', '-m', `feature commit ${i}`]);
+    featureCommits.push(gitNoSign(dir, ['rev-parse', 'HEAD']));
+  }
+  gitNoSign(dir, ['checkout', '-q', branch]);
+
+  sharedUpstreamRepo = { dir, branch, commits, featureBranch, featureCommits };
   return sharedUpstreamRepo;
 }
 
@@ -501,12 +533,23 @@ test('classifyBranchConflictState: bare MERGEABLE (non-CLEAN state) also compute
 
 test('classifyBranchConflictState: CLEAN with an unresolvable merge-base reports false with an undetermined note, never a silent false-negative', async () => {
   const fixture = loadFixture('clean');
-  const result = await classifyBranchConflictState(fixture.prData.number, {
+  // The prNumber argument is deliberately `0` (not the fixture's real
+  // `101`), not just `fixture.prData.baseRefName: ''` below: since #1535,
+  // computeMergeBase also tries a head-ref fetch fallback
+  // (refs/pull/<prNumber>/head), gated on prNumber looking like a real
+  // positive-integer PR number. A real-looking prNumber here would let that
+  // new fetch attempt reach the network (test-owner/test-repo is not a real
+  // remote) even with baseRefName short-circuiting the base-ref fetch --
+  // `0` fails the same canonical-positive-integer check tryFetchHead uses,
+  // short-circuiting the head-ref fetch too, so this test stays hermetic.
+  // This test does not assert on `result.prNumber`, so the substitution is
+  // safe.
+  const result = await classifyBranchConflictState(0, {
     owner: 'test-owner',
     repo: 'test-repo',
     // Deliberately no _skipGitProbe: the fixture's placeholder SHAs are not
     // real git objects, so the initial merge-base lookup fails.
-    // baseRefName is overridden to '' so the fallback-fetch guard
+    // baseRefName is overridden to '' so the base-ref fallback-fetch guard
     // (`if (!prBaseRef) return;`) short-circuits before attempting a real
     // network fetch -- keeping this test hermetic and fast -- while still
     // exercising the "merge-base not found" path: baseAdvancedSinceMergeBase
@@ -562,6 +605,67 @@ test('resolveMergeBaseWithRetry: a genuinely shallow checkout resolves after a d
     MERGE_BASE_FETCH_STEPS.length,
   );
   assert.equal(result, baseSha);
+  assert.ok(
+    widenedSteps.length >= 1 &&
+      widenedSteps.length < MERGE_BASE_FETCH_STEPS.length,
+    `expected resolution after a deepening step and before exhausting the cap, got ${JSON.stringify(widenedSteps)}`,
+  );
+});
+
+// #1535: #1519's retry above only re-fetches the *base* ref, so it cannot
+// help when the PR **head**'s own ancestry is missing from the local
+// object store entirely (e.g. a fork PR, or a checkout that only ever
+// fetched the base branch) -- deepening the base side can never retrieve
+// commits that were never fetched from any remote in the first place.
+// tryFetchHead (production code) fetches `refs/pull/<prNumber>/head` from
+// the same base-repository remote to close this gap; the test below proves
+// the same underlying shallow-git mechanism against a *real* local fixture,
+// mirroring tryFetchHead's exact fetch shape without going through its own
+// (deliberately untested, per its doc comment) network-URL assembly.
+
+test('resolveMergeBaseWithRetry: a genuinely shallow PR head, entirely absent locally, resolves after deepening the head-side ref', () => {
+  const {
+    dir: upstreamDir,
+    commits,
+    featureBranch,
+    featureCommits,
+  } = createUpstreamRepo();
+  // A --depth=1 clone of the *base* branch only -- this checkout already
+  // has the base ref (mirroring a checkout that already benefits from
+  // #1519's base-ref retry), but has never fetched featureBranch (standing
+  // in for the PR head's own ref/remote) at all: the head commit is not
+  // merely shallow, it is completely absent from the local object
+  // database, the exact #1535 gap.
+  const shallowDir = createFreshShallowClone(upstreamDir);
+  const headSha = featureCommits[featureCommits.length - 1];
+  const baseSha = commits[commits.length - 1];
+  assert.equal(
+    mergeBaseText(shallowDir, headSha, baseSha),
+    '',
+    'fixture setup bug: the PR head commit must be entirely unresolvable before any head-side fetch',
+  );
+  const widenedSteps: number[] = [];
+  const result = resolveMergeBaseWithRetry(
+    () => mergeBaseText(shallowDir, headSha, baseSha),
+    (step) => {
+      widenedSteps.push(step);
+      // Mirrors tryFetchHead: fetch/deepen the head-side ref (here,
+      // featureBranch stands in for refs/pull/<prNumber>/head) at the same
+      // escalating depth/deepen args tryFetchBase already uses for the
+      // base side.
+      return fetchShallowFixtureStep(
+        shallowDir,
+        featureBranch,
+        MERGE_BASE_FETCH_STEPS[step],
+      );
+    },
+    MERGE_BASE_FETCH_STEPS.length,
+  );
+  // The true shared ancestor is commits[2] (where featureBranch forked from
+  // the main line) -- reachable only once the head-side ref is deepened far
+  // enough to expose it, since a first depth=1 fetch of featureBranch only
+  // brings its own tip commit with no parent history yet.
+  assert.equal(result, commits[2]);
   assert.ok(
     widenedSteps.length >= 1 &&
       widenedSteps.length < MERGE_BASE_FETCH_STEPS.length,
