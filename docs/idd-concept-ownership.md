@@ -18,13 +18,13 @@ or extends a gate defined in `.github/instructions/`.
 
 ## Actor classes
 
-| Actor class           | Meaning                                                                                                                                                                                                               |
-| --------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Worker session        | The IDD agent instance holding the active claim for an issue, executing phases A5 through F2.5, or holding the coordination-only `roadmap-audit/*` claim while running A1.5 on a roadmap issue.                       |
-| Merge-capable session | The actor authorized to execute F3. Under `fully_autonomous_merge` this is the same worker session; under `separate_merge_agent` it is a distinct designated session; under `human_merge` it is the human maintainer. |
-| Human maintainer      | A repository owner or collaborator acting outside the automated loop — approving issues, resolving holds, authorizing forced handoff or an external-check waiver, or merging manually.                                |
-| Advisory bot          | Copilot's PR review integration plus any bot configured in `advisoryBotLogins` (for example CodeRabbit or a Codex connector). Advisory only — never a merge gate on its own findings.                                 |
-| GitHub platform       | Mechanical behavior GitHub itself performs once the right input exists — closing-keyword auto-close, CI run execution, mergeability computation.                                                                      |
+| Actor class           | Meaning                                                                                                                                                                                                                                                                                             |
+| --------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Worker session        | The IDD agent instance holding the active claim for an issue, executing phases A5 through F2.5, or holding the coordination-only `roadmap-audit/*` claim while running A1.5 on a roadmap issue.                                                                                                     |
+| Merge-capable session | The actor authorized to execute F3. Under `fully_autonomous_merge` this is the same worker session; under `separate_merge_agent` it is a distinct designated session; under `human_merge` it is the human maintainer.                                                                               |
+| Human maintainer      | A repository owner or collaborator acting outside the automated loop — approving issues, resolving holds, authorizing forced handoff or an external-check waiver, or merging manually.                                                                                                              |
+| Advisory bot          | Copilot's PR review integration plus any bot configured in `advisoryBotLogins` (for example CodeRabbit or a Codex connector). Not a required-reviewer or `CHANGES_REQUESTED` gate, but its review threads still count toward F2's unresolved-threads backlog gate until dispositioned and resolved. |
+| GitHub platform       | Mechanical behavior GitHub itself performs once the right input exists — closing-keyword auto-close, CI run execution, mergeability computation.                                                                                                                                                    |
 
 ## Concept-ownership matrix
 
