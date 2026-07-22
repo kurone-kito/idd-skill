@@ -312,6 +312,50 @@ test('buildCopilotRecoverySummary excludes a malformed marker body', () => {
   assert.equal(result.clockAnchor, '');
 });
 
+test('buildCopilotRecoverySummary excludes a marker with an invalid/missing server createdAt (ambiguous clock evidence)', () => {
+  // A structurally well-formed, correctly bound marker whose GitHub
+  // `createdAt` did not validate (parseAdvisoryRecoveryComment sets this to
+  // 'none') must be excluded from BOTH cycle counting and clock anchoring --
+  // not anchoring alone. Otherwise it could still consume recovery-cycle
+  // budget (and even flip capExhausted) without ever contributing a
+  // trustworthy clock anchor, contradicting the "both counting and
+  // anchoring must be derived from trusted server-created_at evidence"
+  // fail-closed contract (#1572 AC4/AC5).
+  const result = buildCopilotRecoverySummary(
+    {
+      comments: [recoveryComment({ createdAt: 'not-a-real-timestamp' })],
+      prHeadSha: SHA,
+      lastCopilotCommit: '',
+    },
+    BASE_OPTIONS,
+  );
+  assert.equal(result.completedCycleCount, 0);
+  assert.equal(result.remainingBudget, 2);
+  assert.equal(result.capExhausted, false);
+  assert.equal(result.clockAnchor, '');
+  assert.equal(result.state, 'NOT_TERMINAL');
+  assert.equal(result.reason, 'no-trusted-recovery-markers');
+});
+
+test('buildCopilotRecoverySummary excludes a marker with an invalid createdAt even when a valid marker is also present (mixed evidence)', () => {
+  const result = buildCopilotRecoverySummary(
+    {
+      comments: [
+        recoveryComment({ createdAt: '2026-07-22T00:00:00Z', attempt: 1 }),
+        recoveryComment({ createdAt: 'not-a-real-timestamp', attempt: 2 }),
+      ],
+      prHeadSha: SHA,
+      lastCopilotCommit: '',
+    },
+    BASE_OPTIONS,
+  );
+  // Only the valid-createdAt marker counts -- the invalid one contributes
+  // to neither the count nor the anchor, even alongside good evidence.
+  assert.equal(result.completedCycleCount, 1);
+  assert.equal(result.clockAnchor, '2026-07-22T00:00:00Z');
+  assert.equal(result.capExhausted, false);
+});
+
 test('buildCopilotRecoverySummary excludes the legacy unbound 3-field advisory-recovery form', () => {
   const result = buildCopilotRecoverySummary(
     {
@@ -427,6 +471,10 @@ test('buildCopilotRecoverySummary counts a mix of one valid and several excluded
           createdAt: '2026-07-22T00:25:00Z',
           claimId: null,
           attempt: null,
+        }),
+        recoveryComment({
+          createdAt: 'not-a-real-timestamp',
+          attempt: 3,
         }),
       ],
       prHeadSha: SHA,

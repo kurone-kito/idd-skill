@@ -172,7 +172,10 @@ function minutesBetweenIso(start: string, end: string): number {
  *  - the marker's `claimId` equals the supplied `claimId` (else:
  *    mismatched-claim);
  *  - the marker's `headSha` equals `prHeadSha` (else: mismatched-HEAD,
- *    including both an earlier and a later HEAD than the current one).
+ *    including both an earlier and a later HEAD than the current one);
+ *  - the comment's GitHub `created_at` validates as an ISO 8601 UTC
+ *    timestamp (else: ambiguous-created-at -- excluded from BOTH counting
+ *    and anchoring, never counted with a missing anchor contribution).
  */
 export function buildCopilotRecoverySummary(
   {
@@ -244,11 +247,20 @@ export function buildCopilotRecoverySummary(
       if (marker.headSha !== normalizedPrHeadSha) {
         continue; // mismatched-HEAD (earlier or later)
       }
+      if (!isValidIsoTimestamp(marker.createdAt)) {
+        // Ambiguous server createdAt (parse helpers set this to 'none' when
+        // the caller-supplied timestamp did not validate): exclude from
+        // BOTH cycle counting and clock anchoring, not anchoring alone.
+        // Otherwise an evidence gap could still consume recovery-cycle
+        // budget without ever contributing a trustworthy clock anchor,
+        // contradicting the "both counting and anchoring must be derived
+        // from trusted server-created_at evidence" fail-closed contract.
+        continue;
+      }
       completedCycleCount += 1;
       if (
-        isValidIsoTimestamp(marker.createdAt) &&
-        (!clockAnchor ||
-          compareIsoTimestamps(marker.createdAt, clockAnchor) < 0)
+        !clockAnchor ||
+        compareIsoTimestamps(marker.createdAt, clockAnchor) < 0
       ) {
         clockAnchor = marker.createdAt;
       }

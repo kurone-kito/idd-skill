@@ -404,7 +404,10 @@ author is a trusted marker actor (else untrusted); body parses as the
 bound five-field shape (else malformed/unbound); embedded agent id
 matches the active claim's (else foreign-agent); embedded claim id
 matches (else mismatched-claim); embedded HEAD SHA matches the current PR
-HEAD (else mismatched-HEAD, earlier or later).
+HEAD (else mismatched-HEAD, earlier or later); the comment's GitHub
+`created_at` validates as an ISO 8601 UTC timestamp (else
+ambiguous-created-at — excluded from both counting and anchoring, never
+counted without a valid anchor contribution).
 
 **Clock anchor** = GitHub `created_at` of the _earliest_ trusted, bound,
 current-HEAD `advisory-recovery` marker. Embedded marker timestamps are
