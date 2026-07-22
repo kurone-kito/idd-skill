@@ -80,7 +80,15 @@ test('suitability instructions keep issue-author approval outside A4.5 outcomes'
   const pair = manifest.syncPairs.find(
     (candidate) => candidate.id === 'idd-suitability-instructions',
   );
-  const expected = (pair?.replacements ?? []).reduce(
+  // Assert the pair itself, not just its replacements: falling back to `[]`
+  // for a missing/malformed pair would silently compare the raw template
+  // against the live file and could false-pass instead of catching a
+  // manifest regression that stops driving this substitution.
+  assert.ok(
+    pair,
+    'audit/sync-manifest.json is missing the idd-suitability-instructions sync pair',
+  );
+  const expected = (pair.replacements ?? []).reduce(
     (text, { from, to }) => text.split(from).join(to),
     template,
   );
