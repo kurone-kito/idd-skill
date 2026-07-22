@@ -236,28 +236,105 @@ classification above does not warn against on its own:
 These are adopter-facing model-selection and prompting heuristics, not
 a new requirement on your repository's own instructions or tooling.
 
+### Lite instruction profile opt-in
+
+The guardrails above assume a session already knows to look for a
+condensed instruction bundle, when your repository ships one. This
+subsection records how a repository declares that opt-in and how a
+session resolves it, so the convention reads as part of the tier
+guidance above rather than a parallel mechanism.
+
+**Opt-in signal (recorded convention).** A repository declares its
+lite-profile choice with an `.github/idd/config.json` policy field,
+`instructionProfile`, following the same repository-local
+policy-field pattern as `mergePolicy`, `reviewPolicy`, and the other
+fields in
+[Repository-local IDD policy](customization.md#repository-local-idd-policy):
+
+- `"standard"` (default; equivalent to the field being absent) —
+  every phase uses its standard
+  `.github/instructions/idd-*.instructions.md` file, unconditionally.
+- `"lite"` — a lightweight-tier session prefers the condensed
+  `.github/instructions/lite/idd-*-lite.instructions.md` bundle for
+  any phase that has shipped one, and falls back to the standard file
+  for every phase that has not (see the mapping and fallback below).
+
+A machine-readable config field, rather than a routing note folded
+into `CLAUDE.md` / `AGENTS.md` / `GEMINI.md` prose, follows the
+upstream lite-profile design's content principle on mechanical,
+fail-closed control surfaces (see `docs/weak-model-lite-profile-design.md`
+in the source repository): mechanical, fail-closed control surfaces
+carry the safety weight for this tier, not prose judgment. A prose
+routing note is itself a cross-file reference a weak-adherence
+session could drop — exactly the failure mode the lite profile exists
+to route around.
+
+**Recorded convention, not yet wired.** `instructionProfile` is not
+yet part of the published policy schema
+(<https://kurone-kito.github.io/idd-skill/schemas/policy.schema.json>,
+whose root object rejects unknown properties), and no phase file or
+the routing table in `idd-overview-core.instructions.md` reads it
+today. This subsection records the intended shape for a future change
+to add the schema field and the routing read against; setting the
+field in `.github/idd/config.json` today has no runtime effect. Until
+that follow-up lands, point a lite-tier session at the right files
+with an explicit operator instruction, or have it open the phase
+files below manually.
+
+**Phase → lite file mapping** — only present if your repository ships
+`.github/instructions/lite/` (re-check that directory before trusting
+this table to stay current; a repository importing this template
+fresh ships none of these until it authors them):
+
+| Phase             | Standard file                      | Lite file                                    |
+| ----------------- | ---------------------------------- | -------------------------------------------- |
+| A5 Claim          | `idd-claim.instructions.md`        | `lite/idd-claim-lite.instructions.md`        |
+| B1-C6 Work        | `idd-work.instructions.md`         | `lite/idd-work-lite.instructions.md`         |
+| D1-D4 PR-submit   | `idd-pr-submit.instructions.md`    | `lite/idd-pr-submit-lite.instructions.md`    |
+| E9-E15 Review-fix | `idd-review-fix.instructions.md`   | `lite/idd-review-fix-lite.instructions.md`   |
+| Resume            | `idd-resume.instructions.md`       | `lite/idd-resume-lite.instructions.md`       |
+| Resume-stall      | `idd-resume-stall.instructions.md` | `lite/idd-resume-stall-lite.instructions.md` |
+
+`idd-ci.instructions.md` and `idd-advisory-wait.instructions.md` are
+shared helper files, not phases of their own; a lite caller is meant
+to inline the rules it needs from them instead of getting a
+standalone lite variant, so they never appear as a row here.
+
+**Explicit fallback.** Every phase without a row above falls back to
+its standard instruction file — this is the documented default, not
+an implied gap. Some phases lack a lite file because a repository's
+own lite-profile track has not shipped one yet even though it is in
+scope by design; others are permanently excluded by design — the
+open-ended selection, judgment-heavy classification, and autonomous
+merge phases (Discover, Suitability, Review-triage, and Merge) stay on
+the standard file always, regardless of how much of a repository's
+lite-profile work has landed. A lite-opted-in session encountering
+either case reads the standard file the same way a standard-tier
+session would.
+
 ## IDD file map
 
-| File                                                       | Role                                                                                                            |
-| ---------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
-| `.github/instructions/idd-overview-core.instructions.md`   | Shared definitions, command sets, routing table, critique-pass mapping                                          |
-| `.github/instructions/idd-discover.instructions.md`        | A0-T–A4.5: find a viable issue, classify roadmap vs. leaf nodes during traversal, run suitability, and hand off |
-| `.github/instructions/idd-roadmap-audit.instructions.md`   | A1.5: audit roadmap completion, including bottom-up recursive roadmap closure, before A2                        |
-| `.github/instructions/idd-claim.instructions.md`           | A5: run claim pre-checks and claim verification                                                                 |
-| `.github/instructions/idd-work.instructions.md`            | B1-B3 + C1-C6: create worktree, plan, implement, and self-review                                                |
-| `.github/instructions/idd-pr-submit.instructions.md`       | D1-D4: rebase, validate, push, open PR, and wait for CI                                                         |
-| `.github/instructions/idd-ci.instructions.md`              | D4/E15 helper: shared CI polling helper used by later phases                                                    |
-| `.github/instructions/idd-advisory-wait.instructions.md`   | AW1-AW5 helper: shared Copilot advisory-wait protocol (E14, F2, F3)                                             |
-| `.github/instructions/idd-review-snapshot.instructions.md` | E1–E3: fetch activity snapshot, run critique, check if ReviewItems_snapshot is empty                            |
-| `.github/instructions/idd-review-triage.instructions.md`   | E4–E8: classify items, score, record dispositions, and run E-phase branch-sync check before F-phase             |
-| `.github/instructions/idd-review-fix.instructions.md`      | E9-E15: fix accepted review items and push follow-up commits (merge-from-main, not rebase)                      |
-| `.github/instructions/idd-pre-merge.instructions.md`       | F1: final read-only branch-state check; F2: verify all pre-merge conditions                                     |
-| `.github/instructions/idd-merge-handoff.instructions.md`   | F2.5: resolve merge-policy handoff vs autonomous merge routing                                                  |
-| `.github/instructions/idd-merge.instructions.md`           | F3–F5: execute the merge, clean up, and loop back to discover                                                   |
-| `.github/instructions/idd-resume.instructions.md`          | Resume Step 0-3: route crash, stalled, stale-takeover, or clean continuation                                    |
-| `.github/instructions/idd-resume-stall.instructions.md`    | Resume S1-S5: handle stalled-session recovery with a dedicated safety gate                                      |
-| `docs/idd-review-policy-profiles.md`                       | PR review policy profiles and customization surfaces                                                            |
-| `docs/idd-comment-minimization.md`                         | Live status digest contract and post-merge comment minimization policy                                          |
+| File                                                       | Role                                                                                                                                                                                    |
+| ---------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `.github/instructions/idd-overview-core.instructions.md`   | Shared definitions, command sets, routing table, critique-pass mapping                                                                                                                  |
+| `.github/instructions/idd-discover.instructions.md`        | A0-T–A4.5: find a viable issue, classify roadmap vs. leaf nodes during traversal, run suitability, and hand off                                                                         |
+| `.github/instructions/idd-roadmap-audit.instructions.md`   | A1.5: audit roadmap completion, including bottom-up recursive roadmap closure, before A2                                                                                                |
+| `.github/instructions/idd-claim.instructions.md`           | A5: run claim pre-checks and claim verification                                                                                                                                         |
+| `.github/instructions/idd-work.instructions.md`            | B1-B3 + C1-C6: create worktree, plan, implement, and self-review                                                                                                                        |
+| `.github/instructions/idd-pr-submit.instructions.md`       | D1-D4: rebase, validate, push, open PR, and wait for CI                                                                                                                                 |
+| `.github/instructions/idd-ci.instructions.md`              | D4/E15 helper: shared CI polling helper used by later phases                                                                                                                            |
+| `.github/instructions/idd-advisory-wait.instructions.md`   | AW1-AW5 helper: shared Copilot advisory-wait protocol (E14, F2, F3)                                                                                                                     |
+| `.github/instructions/idd-review-snapshot.instructions.md` | E1–E3: fetch activity snapshot, run critique, check if ReviewItems_snapshot is empty                                                                                                    |
+| `.github/instructions/idd-review-triage.instructions.md`   | E4–E8: classify items, score, record dispositions, and run E-phase branch-sync check before F-phase                                                                                     |
+| `.github/instructions/idd-review-fix.instructions.md`      | E9-E15: fix accepted review items and push follow-up commits (merge-from-main, not rebase)                                                                                              |
+| `.github/instructions/idd-pre-merge.instructions.md`       | F1: final read-only branch-state check; F2: verify all pre-merge conditions                                                                                                             |
+| `.github/instructions/idd-merge-handoff.instructions.md`   | F2.5: resolve merge-policy handoff vs autonomous merge routing                                                                                                                          |
+| `.github/instructions/idd-merge.instructions.md`           | F3–F5: execute the merge, clean up, and loop back to discover                                                                                                                           |
+| `.github/instructions/idd-resume.instructions.md`          | Resume Step 0-3: route crash, stalled, stale-takeover, or clean continuation                                                                                                            |
+| `.github/instructions/idd-resume-stall.instructions.md`    | Resume S1-S5: handle stalled-session recovery with a dedicated safety gate                                                                                                              |
+| `.github/instructions/lite/idd-*-lite.instructions.md`     | Condensed weak-model-tier phase files, if your repository ships one; see [Lite instruction profile opt-in](#lite-instruction-profile-opt-in) for the mapping and standard-file fallback |
+| `docs/idd-review-policy-profiles.md`                       | PR review policy profiles and customization surfaces                                                                                                                                    |
+| `docs/idd-comment-minimization.md`                         | Live status digest contract and post-merge comment minimization policy                                                                                                                  |
 
 ## ReviewItems_snapshot lifecycle
 
