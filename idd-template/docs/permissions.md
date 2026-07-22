@@ -457,8 +457,8 @@ already inside the loop could not route around.
 ### The `gh api` DELETE-verb (and flag-position) trap
 
 Claude Code's Bash permission rules match a literal command-string
-**prefix**, optionally followed by a trailing wildcard
-(`` `Bash(git *)` ``); there is no support for matching a flag that can
+**prefix**, optionally followed by a trailing wildcard (for example
+`Bash(git *)`); there is no support for matching a flag that can
 appear at an unpredictable position in the middle of a command, or for
 distinguishing a read verb from a write verb within one command
 family. That has consequences worth knowing before you add any `gh
