@@ -281,6 +281,17 @@ not resume this wait on its own initiative: a fresh D4 entry over the
 new HEAD is a decision for whoever resolves the stop, not an automatic
 continuation.
 
+**Duplicate check instances**: the state helper's `checks[]` array can
+hold more than one entry for the same `checkName` — a rerun leaves the
+earlier instance in place alongside the fresh one, and this raw array
+is not pre-deduped for callers. Before evaluating `checks[]` below
+(steps 3, 5, and 6 all read it), first reduce it to one entry per
+`checkName`: an entry with no `completedAt` (still in flight) always
+outranks one that has completed, regardless of either entry's
+`startedAt` — a live rerun can never be older than the finished run it
+supersedes. Once both entries have completed, the one with the later
+`completedAt` wins.
+
 1. Use the profile-selected **ci-wait-policy** helper to resolve the
    running/generation timeouts and the rerun budget:
    `node scripts/ci-wait-policy.mjs`, or the package-manager-profile
@@ -301,8 +312,7 @@ continuation.
    _required_ checks while still running normal CI, so this is not
    automatically a stop. Instead, fall back to the same helper's
    `checks[]` array (every check present for this HEAD, not just
-   required ones) — dedupe by latest `checkName` instance as step 5
-   does — and its per-check `status`: every entry `success` →
+   required ones) and its per-check `status`: every entry `success` →
    proceed to step 7; any entry `pending` or `unknown` → continue at
    step 6, which applies its timeout math to every entry this route
    names, not only `required` ones (poll again — `unknown` isn't a
@@ -313,12 +323,10 @@ continuation.
    exists but cannot be enumerated by name): always stop per the
    condition above — this is a real gating check, never treat it like
    `no-required-checks`.
-5. **`failing`**: in the same helper's `checks[]` array, first keep only
-   the latest entry per `checkName` (by `completedAt`, else `startedAt`)
-   — a rerun leaves the earlier instance too; a stale `failure` must
-   not outvote a later `success`. Among those, check every entry where
-   `required` is true and its `checkName` field (not `name`, which
-   this array does not have) is not `idd-advisory-convergence`. If
+5. **`failing`**: in the same helper's `checks[]` array, check every
+   entry where `required` is true and its `checkName` field (not
+   `name`, which this array does not have) is not
+   `idd-advisory-convergence`. If
    **all** of those are `success`,
    `idd-advisory-convergence` is the sole non-passing required check —
    go to step 8's exception instead of stopping here. If **any** of
@@ -329,8 +337,7 @@ continuation.
 6. **`pending`** or **`missing`** (an expected required check has not
    posted a result yet), or any `pending`/`unknown` entry reached via
    step 3's fallback: keep polling until `success`, `failing`, or a
-   timeout. First dedupe `checks[]` by latest `checkName` instance, as
-   step 3 and step 5 do. Entries to evaluate: for this direct route,
+   timeout. Entries to evaluate: for this direct route,
    every still-non-`success` required entry, plus each name in
    `requiredChecks.missingNames` (a required check with no `checks[]`
    entry at all); for step 3's fallback, every still-non-`success`
