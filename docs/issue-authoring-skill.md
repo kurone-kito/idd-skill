@@ -178,7 +178,14 @@ first and leave large ones for a fresh session. See the
 section of the contract for the rubric, footer format, and binding
 rules.
 
-- `S` small · `M` medium · `L` large.
+- `S` small · `M` medium · `L` large — each band is now defined on two
+  axes: **scope** (how many files or subsystems the change touches) and
+  **uncertainty** (how many design decisions remain open once the plan
+  is drafted). Observed agent token usage or wall-clock duration is a
+  calibration sanity-check only, never the unit.
+- An estimate that does not fit even `L`'s scope-and-uncertainty
+  definition is a mis-scope smell: return to Decompose and Draft and
+  split at intent level instead of publishing one oversized issue.
 - The hint only reorders candidates **within** one suitability-score
   band (after the score and optional desync rules, before the
   lowest-issue-number tie-break); it never skips, gates, crosses a score

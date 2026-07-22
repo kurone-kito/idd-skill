@@ -231,6 +231,14 @@
       "limitBytes": 20000
     },
     {
+      "id": "bundle-pr-submit-lite",
+      "description": "Lite PR-submit path (weak-model condensed profile): .github/instructions/lite/idd-pr-submit-lite.instructions.md only — self-contained; no overview/appendix.",
+      "files": [
+        ".github/instructions/lite/idd-pr-submit-lite.instructions.md"
+      ],
+      "limitBytes": 22000
+    },
+    {
       "id": "bundle-review",
       "description": "Review path: idd-overview-core + idd-overview-appendix + idd-review-snapshot + idd-review-triage + idd-review-fix + idd-advisory-wait + idd-ci",
       "files": [
@@ -416,6 +424,12 @@
       "id": "idd-pr-submit-instructions",
       "source": "idd-template/.github/instructions/idd-pr-submit.instructions.md",
       "target": ".github/instructions/idd-pr-submit.instructions.md",
+      "mode": "exact"
+    },
+    {
+      "id": "idd-pr-submit-lite-instructions",
+      "source": "idd-template/.github/instructions/lite/idd-pr-submit-lite.instructions.md",
+      "target": ".github/instructions/lite/idd-pr-submit-lite.instructions.md",
       "mode": "exact"
     },
     {
