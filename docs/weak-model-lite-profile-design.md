@@ -277,7 +277,13 @@ generated pair rather than a third _kind_ of surface:
   needs — is driven by `syncPairs`. (`sync-docs.mjs` also reads
   `generatedBlocks` / `shellFileLists` for its separate
   consolidated-reference-block generation, e.g. `ONBOARDING.md`, but
-  that path is not relevant here; across every generation path,
+  that generation path is not relevant here — this is a statement
+  about `sync-docs.mjs` generation only, not about
+  `audit-docs.mjs --check`: a new lite file that matches the
+  `idd-template-core-files` block's `sourceGlobs` still needs its path
+  added to that block's `paths` list, or the audit fails (see
+  `audit/README.md`'s Intentional Exceptions section for the full
+  three-manifest-edit checklist). Across every generation path,
   `sync-docs.mjs` never reads `fileSets` at all.) So one new
   `syncPairs` entry per lite file (the same pattern the existing
   dogfood set already follows) is what actually produces each
