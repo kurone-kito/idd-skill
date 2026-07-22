@@ -163,8 +163,8 @@ This section's rebase only applies **before the branch's first push**.
    already resolved.
 7. After the **entire** rebase completes (not per-conflict, mid-rebase):
    if any file was hand-edited during conflict resolution, run
-   **fix-validate** now, against the final rebased state. Then verify
-   both:
+   **fix-validate** now, against the final rebased state, and commit
+   any resulting changes before continuing. Then verify both:
    - `git branch --show-current` is non-empty (HEAD is not detached).
    - The expected local commit appears in `git log --oneline
      origin/main..HEAD` (not local `main`, which this file never
