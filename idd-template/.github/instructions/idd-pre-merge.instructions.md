@@ -96,7 +96,8 @@ detection that `idd-claim.instructions.md`'s Claim verification step 5
 already performs at claim time (for a live session's own claim or
 adopt-verbatim) to the merge-time write-gate too — a distinct case from
 Resume-phase cold recovery, which does not yet thread `--nonce` (see
-`docs/idd-design-rationale.md`'s "Scope for #1522" note and #1529).
+`docs/idd-design-rationale.md`'s "Scope for #1522" note and
+kurone-kito/idd-skill#1529).
 Omitting `--nonce` silently skips the merge-time comparison rather than
 failing closed, so pass it whenever a nonce was recorded for the active
 claim.
