@@ -41,9 +41,14 @@ profile.
   **both** sufficient context **and** demonstrated self-direction for
   contained tasks, that still show weak adherence to long multi-file
   instruction sets (the phi-4-mini class — roughly 128K context, tool
-  calling supported — remains the reference example). The workflow
-  guide already confines this tier to narrowly-scoped roles under
-  operator supervision:
+  calling supported — remains the reference example; treat that
+  tool-calling claim as runtime-specific, not a guarantee — see
+  [Model capability expectations](idd-workflow.md#model-capability-expectations)
+  for the local/ONNX reliability caveat and
+  [Weak-model guardrails](idd-workflow.md#weak-model-guardrails) for the
+  harness-owned tool/retrieval mitigation). The workflow guide already
+  confines this tier to narrowly-scoped roles under operator
+  supervision:
   - executing a single, fully-specified `idd:ready` issue rather than
     Discover's open-ended candidate selection;
   - preferring a deterministic helper command over prose judgment
