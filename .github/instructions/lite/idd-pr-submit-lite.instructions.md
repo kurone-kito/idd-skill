@@ -32,11 +32,12 @@ session already claimed and implemented. If the repository is
 - A required helper or validation command is unavailable, invalid, or
   disagrees with live state.
 - The branch already exists on the remote **and** has an open PR **and**
-  its `mergeStateStatus` is anything other than `CLEAN` — this lite file
-  only covers the pre-first-push rebase; the post-publication
+  the branch-conflict-state helper's `syncRecommendation` is not `none`
+  (after the `recheck` retry budget in D1 step 1, if applicable) — this
+  lite file only covers the pre-first-push rebase; the post-publication
   merge-based resync (or a closer live-state read) is out of its scope.
   (A pushed branch with **no** open PR yet is not this case: skip
-  straight to D3. An open PR with `mergeStateStatus: CLEAN` is not this
+  straight to D3. An open PR with `syncRecommendation: none` is not this
   case either: skip straight to D4.)
 - D1's rebase hits a content conflict this session cannot resolve
   mechanically.
@@ -95,22 +96,32 @@ This section's rebase only applies **before the branch's first push**.
    same-named tag). Exit 2 means no matching branch — continue with
    steps 2-8 below. Exit 0 means the branch already exists on the
    remote; stop on any other nonzero exit status. When it already
-   exists, do not rebase it — instead check for an open PR
-   (`gh pr list --head {branch-name} --state open`) and, if one exists,
-   its merge state:
-   `gh pr view {branch-name} --json mergeStateStatus --jq
-   .mergeStateStatus`.
+   exists, do not rebase it — instead check for an open PR:
+   `gh pr list --head {branch-name} --state open --json number --jq
+   '.[0].number'`.
    - No open PR: D2's push already happened in an earlier, interrupted
      session — skip the rest of D1 (nothing to rebase) and go straight
      to D3 (create the PR).
-   - An open PR exists and the value is exactly `CLEAN`: nothing is
-     behind or conflicting — D1-D3 already happened in an earlier
-     session; skip straight to D4 (wait for CI).
-   - An open PR exists and the value is anything else (`BEHIND`,
-     `BLOCKED`, `DIRTY`, `UNSTABLE`, `UNKNOWN`, or any other non-`CLEAN`
-     value): stop per the condition above — this needs either the
-     merge-based resync or a live-state read this file's mechanical
-     scope does not cover.
+   - An open PR exists: read its `syncRecommendation` with the
+     profile-selected branch-conflict-state helper —
+     `node scripts/branch-conflict-state.mjs --pr <pr-number>`, or the
+     package-manager-profile `idd:branch-conflict-state` command
+     (resolve the exact command from `docs/idd-helper-scripts.md` if
+     unsure). This is the same helper the standard file's branch-sync
+     check uses, so it already accounts for whether a merely-`BEHIND`
+     head actually needs a resync (branch protection requiring an
+     up-to-date head) rather than treating every non-`CLEAN` state the
+     same:
+     - `syncRecommendation: "none"`: D1-D3 already happened in an
+       earlier session; skip straight to D4 (wait for CI).
+     - `syncRecommendation: "recheck"` (mergeability still computing):
+       re-run the helper after a short wait, up to 3 attempts; only a
+       result still `"recheck"` after that budget falls through to stop
+       per the condition above.
+     - Any other value (`"sync"`, or the helper is unavailable, fails,
+       or disagrees with live GitHub state): stop per the condition
+       above — this needs either the merge-based resync or a closer
+       live-state read this file's mechanical scope does not cover.
 2. Run `git fetch origin main`.
 3. If `git merge-base HEAD origin/main` equals `origin/main`, the branch
    already contains every commit on `main` — skip the rebase and go to
@@ -285,13 +296,21 @@ re-enter D4 from the top to record the new HEAD and start waiting again.
    condition above rather than continuing to poll (fixing or rerunning
    it is outside this file's mechanical scope).
 6. **`pending`** or **`missing`** (an expected required check has not
-   posted a result yet): keep polling until `success`, `failing`, or the
-   ci-wait-policy timeout is reached. **On timeout**: apply
-   ci-wait-policy's `rerunPolicy` (default `rerun-once`) — if this is
-   the first timeout for this wait and the policy allows a rerun,
-   rerun the stalled check once and resume polling; if the timeout
-   recurs after that rerun, or the policy is `hold`, stop per the
-   condition above and post a hold note rather than polling
+   posted a result yet): keep polling until `success`, `failing`, or a
+   timeout. **Determine timeout from server timestamps, not a client
+   clock estimate**: for each still-non-`success` required entry in
+   `checks[]`, compare its own `startedAt` (or, if absent, this wait's
+   first poll time) against the current server time; once elapsed
+   exceeds ci-wait-policy's `runningTimeout` (or `generationTimeout` if
+   the check has not appeared at all yet), that check has timed out.
+   **On timeout**: identify the stalled check from its `checks[]` entry
+   (`checkName` plus `url`, the run to rerun) and apply ci-wait-policy's
+   `rerunPolicy` (default `rerun-once`) — if this is the first timeout
+   for this wait and the policy allows a rerun, rerun that specific
+   stalled check once (`gh run rerun <run-id-from-url> --failed`) and
+   resume polling; if the timeout recurs after that rerun, or the
+   policy is `hold`, stop per the condition above and post a hold note
+   rather than polling
    indefinitely.
 7. **`success`**: proceed to `idd-review-snapshot.instructions.md` (E1).
 8. **Exception**: if `idd-advisory-convergence` is the only
