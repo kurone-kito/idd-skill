@@ -22,8 +22,11 @@ non-helper alternative of its own for that case.
   missing, fails, returns invalid or incomplete JSON, or disagrees with
   directly-observable live GitHub state, stop and ask — do not fall
   back to prose judgment or hand-derive the missing evidence yourself.
-- Any mismatch between this file and the standard Pre-Merge phase is a
-  bug in this file.
+- Any mismatch between this file and the standard Pre-Merge phase,
+  **within this file's in-scope subset** (F1's read-only check and F2's
+  helper-read verdict), is a bug in this file. The standard file's
+  prose fallback and per-blocker remediation are deliberately excluded,
+  not a mismatch to fix.
 
 ## Stop-and-ask conditions
 
@@ -38,7 +41,9 @@ non-helper alternative of its own for that case.
   consumes `prHeadSha`, `ready`, and `blockers`, but any other missing
   required field equally signals a broken or contract-violating
   report), or disagrees with live GitHub state.
-- The repository is `instructions-only`.
+- The repository is `instructions-only` — this is not a stop-and-wait
+  case: switch to `idd-pre-merge.instructions.md` instead, per the
+  introduction above.
 
 ## F1 — Branch-state check (read-only)
 
