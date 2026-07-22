@@ -27,6 +27,10 @@ session already claimed and implemented. If the repository is
   branch, or the claimed branch is not the current branch.
 - A required helper or validation command is unavailable, invalid, or
   disagrees with live state.
+- The branch was already published (an open PR already exists for it)
+  and D1 finds it behind `main` — this lite file only covers the
+  pre-first-push rebase; the post-publication merge-based resync is out
+  of its scope.
 - D1's rebase hits a content conflict this session cannot resolve
   mechanically.
 - After D1, `git branch --show-current` is empty (detached HEAD) and one
@@ -36,7 +40,10 @@ session already claimed and implemented. If the repository is
 - `closingIssuesReferences` still does not exactly match the deliberate
   closing set after one corrective edit.
 - The required-check set for D4 cannot be determined (protection or
-  ruleset reads are unreadable).
+  ruleset reads are unreadable, or `ci-wait-state` reports
+  `no-required-checks` and that has not been confirmed as expected for
+  this repository).
+- Any required check reaches a failing terminal state.
 
 ## Pre-mutation guard
 
@@ -52,15 +59,23 @@ following:
 
 ## D1 — Sync main before first push
 
-1. Run `git fetch origin main`.
-2. If this branch has never been pushed and `git merge-base HEAD
-   origin/main` equals `origin/main`, the branch already contains every
-   commit on `main` — skip the rebase and go to D2.
-3. Otherwise rebase onto it: `git rebase origin/main`.
-4. If the rebase hits a content conflict, resolve it, then run
+This section applies **only before the branch's first push** (no open
+PR exists for it yet). If an open PR already exists for this branch,
+skip this whole section — do not rebase a published branch — and follow
+the stop-and-ask condition above instead.
+
+1. Confirm no open PR exists yet for this branch: `gh pr list --head
+   {branch-name} --state open`. If one exists, stop per the condition
+   above; do not continue with steps 2-8.
+2. Run `git fetch origin main`.
+3. If `git merge-base HEAD origin/main` equals `origin/main`, the branch
+   already contains every commit on `main` — skip the rebase and go to
+   D2.
+4. Otherwise rebase onto it: `git rebase origin/main`.
+5. If the rebase hits a content conflict, resolve it, then run
    **fix-validate** before continuing if any file was hand-edited during
    resolution.
-5. **Signed-commit repos**: if primary commit signing is
+6. **Signed-commit repos**: if primary commit signing is
    non-interactive-hostile (GPG pinentry, or a hardware-touch path) but
    the repository provides a fallback wrapper for arbitrary git
    subcommands (for example `-c gpg.format=ssh -c
@@ -71,13 +86,13 @@ following:
    conflict with the **wrapper's own** `--continue` form. Plain `git
    rebase --continue` re-signs through the configured primary signing and
    stalls non-interactively right after the conflict is already resolved.
-6. After the rebase, verify both:
+7. After the rebase, verify both:
    - `git branch --show-current` is non-empty (HEAD is not detached).
    - The expected local commit appears in `git log --oneline
      main..HEAD`.
-7. If HEAD is detached, re-attach once with `git checkout {branch-name}`,
+8. If HEAD is detached, re-attach once with `git checkout {branch-name}`,
    repeat this D1 rebase (through the same signing wrapper on a
-   signed-commit repo), then re-verify both checks in step 6. If
+   signed-commit repo), then re-verify both checks in step 7. If
    recovery still fails, stop and post a hold note naming the branch
    state.
 
@@ -127,8 +142,9 @@ loop instead of returning to this D1 rebase path.
 1. Fetch the PR body: `gh pr view {pr-number} --json body --jq '.body'`.
 2. Strip fenced code blocks, inline-code spans, and block-quoted lines
    from the body.
-3. Search the remaining plain text for `\b(close[sd]?|fix(e[sd])?|
-   resolve[sd]?)\s+#<N>\b` for the claimed issue number `<N>`.
+3. Search the remaining plain text for `(?im)\b(close[sd]?|fix(e[sd])?|
+   resolve[sd]?)\s+#<N>\b` for the claimed issue number `<N>` — matching
+   case-insensitively (`Closes`, `CLOSES`, and `closes` all count).
 4. If no match: edit the PR body to add a correctly placed plain-text
    closing line, then repeat steps 1-3 once. If it still fails, stop and
    post a hold note citing the PR URL.
@@ -145,17 +161,30 @@ loop instead of returning to this D1 rebase path.
 
 ## D4 — Wait for CI
 
-1. Use the profile-selected CI-wait-policy helper as the deterministic
-   source for the required-check set and the running/generation timeouts
-   and rerun budget. If the helper is unavailable, fails, or disagrees
-   with live GitHub state, stop and ask — do not re-derive
-   branch-protection or ruleset rules by hand.
-2. Poll required checks for the current PR head SHA until every one
-   reaches a terminal state (pass or fail), respecting the helper's
-   timeout and rerun-budget policy.
-3. **On success** (every required check passes): proceed to
-   `idd-review-snapshot.instructions.md` (E1).
-4. **Exception**: if `idd-advisory-convergence` is the only
+These are two different helpers with different jobs: the policy helper
+never reads live check state, and the state helper never resolves
+timeouts. Use both, not either alone.
+
+1. Use the profile-selected **ci-wait-policy** helper to resolve the
+   running/generation timeouts and the rerun budget. This helper is
+   read-only and does not poll CI itself.
+2. Use the profile-selected **ci-wait-state** helper for the actual
+   required-check snapshot (poll it again on each wait iteration): it
+   reports a top-level `status` of `success`, `pending`, `failing`,
+   `missing`, or `no-required-checks`, plus per-check names and normalized
+   states. If either helper is unavailable, fails, or disagrees with live
+   GitHub state, stop and ask — do not re-derive branch-protection or
+   ruleset rules by hand.
+3. **`no-required-checks`**: stop per the condition above rather than
+   silently treating an empty required-check set as a pass.
+4. **`failing`**: a required check other than `idd-advisory-convergence`
+   reached a genuine failing terminal state — stop per the condition
+   above rather than continuing to poll (fixing or rerunning it is
+   outside this file's mechanical scope).
+5. **`pending`**: keep polling until `success`, `failing`, or the
+   ci-wait-policy timeout is reached.
+6. **`success`**: proceed to `idd-review-snapshot.instructions.md` (E1).
+7. **Exception**: if `idd-advisory-convergence` is the only
    non-passing required check, and that check's own run-log JSON verdict
    reports `pending: false` with outstanding review reasons (thread
    disposition or actionable item count on the latest review), this is
