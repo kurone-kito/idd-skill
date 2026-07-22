@@ -543,7 +543,7 @@ stales it, failing `--apply` closed on `review-currency` regardless
 of CI color; re-post before retrying. Same precondition as E1 Step
 2 — easy to satisfy early, forgotten by `--apply` time. A stale
 `idd-advisory-convergence` rollup: rerun via
-`rerun-advisory-convergence.mjs`
+`scripts/rerun-advisory-convergence.mjs`
 ([rerun mechanics](idd-ci.instructions.md#rerun-mechanics)).
 
 ## Zero-Accepted-PATH-A advisory re-review gate
