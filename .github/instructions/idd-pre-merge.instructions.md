@@ -308,14 +308,17 @@ claim.
   (`ready: true`) satisfies this condition.
   Separately, require `dispositionEvidence.route` to be `proceed`
   (`dispositionEvidence.blockingCount == 0` — both
-  `missingRegularComments`, ad hoc advisory-bot or reviewer comments
-  outside a review thread, and `missingThreads`, resolved or unresolved
-  threads still lacking a fresh disposition marker, are empty; neither is
-  covered by the helper above); treat absent, malformed, or non-list
-  `dispositionEvidence`/`missingRegularComments`/`missingThreads` as
-  unmet, not as vacuously satisfied. A `route: return-to-e1` result
-  routes to E1/E4 with that evidence — except the ack-only override
-  below.
+  `missingRegularComments` (ad hoc advisory-bot or reviewer comments
+  outside a review thread) and `missingThreads` (resolved or unresolved
+  threads still lacking a fresh disposition marker) are empty). The
+  `advisory-convergence.mjs --assert` check above only covers the
+  Copilot-authored subset of `missingThreads`; it never covers a
+  non-Copilot-authored thread or any `missingRegularComments` entry, so
+  this check stays necessary even when that one passes. Treat a missing
+  or malformed `dispositionEvidence` object, or a non-list
+  `missingRegularComments`/`missingThreads`, as unmet, not as vacuously
+  satisfied. A `route: return-to-e1` result routes to E1/E4 with that
+  evidence — except the ack-only override below.
 
   Disposition-evidence ack-only override: when
   `dispositionEvidence.soleCauseAckOnlyPostDisposition` is `true` — every
