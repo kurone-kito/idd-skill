@@ -75,7 +75,11 @@ test('suitability instructions keep issue-author approval outside A4.5 outcomes'
       'utf8',
     ),
   ) as {
-    syncPairs: { id: string; replacements?: { from: string; to: string }[] }[];
+    syncPairs: {
+      id: string;
+      mode?: string;
+      replacements?: { from: string; to: string }[];
+    }[];
   };
   const pair = manifest.syncPairs.find(
     (candidate) => candidate.id === 'idd-suitability-instructions',
@@ -87,6 +91,15 @@ test('suitability instructions keep issue-author approval outside A4.5 outcomes'
   assert.ok(
     pair,
     'audit/sync-manifest.json is missing the idd-suitability-instructions sync pair',
+  );
+  // Pin the mode this comment describes: a switch away from `concreted`
+  // (e.g. back to `exact`, or to `structure`) could still leave the
+  // template+replacement result identical to the live file today while no
+  // longer mechanically enforcing it on the next sync-docs run.
+  assert.equal(
+    pair.mode,
+    'concreted',
+    'idd-suitability-instructions must stay in concreted mode (#1621)',
   );
   const expected = (pair.replacements ?? []).reduce(
     (text, { from, to }) => text.split(from).join(to),
