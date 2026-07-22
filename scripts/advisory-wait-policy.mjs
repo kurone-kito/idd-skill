@@ -50,6 +50,16 @@ export const DEFAULT_ADVISORY_RECOVERY_CYCLE_CAP = 2;
 // uses the same familiar timescale as other terminal/escalation windows in
 // this repository.
 export const DEFAULT_ADVISORY_TERMINAL_WINDOW_MINUTES = 720;
+// #1570: the `idd-advisory-convergence` required-check selector name, shared
+// between advisory-convergence.mts (the CI-gate consumer, which re-exports
+// this under its own established `ADVISORY_CONVERGENCE_CHECK_SELECTOR` name
+// for backward compatibility) and protocol-helpers.mts's
+// `buildPreMergeReadinessSummary` (the F2/F3 direct-evidence consumer, which
+// filters external-check-waiver evidence by this same selector for the
+// terminal-unavailability waiver check). A single source avoids the two
+// consumers silently drifting on the registered selector string.
+export const DEFAULT_ADVISORY_CONVERGENCE_CHECK_SELECTOR =
+  'idd-advisory-convergence';
 export const ADVISORY_CAP_EXHAUSTED_ROUTE_DEFAULT = 'phase-specific';
 export const ADVISORY_CAP_EXHAUSTED_ROUTES = new Set([
   'phase-specific',

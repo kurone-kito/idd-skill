@@ -46,6 +46,19 @@
     "inFlight": false,
     "requestable": false
   },
+  "terminal": {
+    "cap": 2,
+    "completedCycleCount": 0,
+    "remainingBudget": 2,
+    "capExhausted": false,
+    "terminalWindowMinutes": 720,
+    "clockAnchor": "",
+    "elapsedMinutes": 0,
+    "windowElapsed": false,
+    "activeClaimProvided": false,
+    "state": "NOT_TERMINAL",
+    "reason": "active-claim-not-provided"
+  },
   "converged": true,
   "waived": false,
   "ready": true,

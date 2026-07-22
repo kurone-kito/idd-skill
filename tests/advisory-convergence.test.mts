@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 
 import {
@@ -12,7 +13,10 @@ import {
   runAdvisoryConvergence,
   viewerProbeGhOptions,
 } from '../src/scripts/advisory-convergence.mts';
-import { renderExternalCheckWaiverComment } from '../src/scripts/marker-helpers.mts';
+import {
+  renderAdvisoryWaitRecoveryMarker,
+  renderExternalCheckWaiverComment,
+} from '../src/scripts/marker-helpers.mts';
 import { normalizePolicyConfig } from '../src/scripts/policy-helpers.mts';
 import { loadJson, validate } from '../src/scripts/validate-schemas.mts';
 
@@ -1362,6 +1366,283 @@ test('regression: converged/waived/ready are identical with and without advisory
   assert.equal(without.pending, with_.pending);
   assert.deepEqual(without.review, with_.review);
   assert.deepEqual(without.threads, with_.threads);
+});
+
+// --- 10. terminal Copilot unavailability (#1570/#1572) ----------------------
+// --- The `#1572` terminal-recovery contract (buildCopilotRecoverySummary,
+// --- advisory-wait-state.mts) is reused here unmodified: exhausting its
+// --- bounded recovery-cycle cap (default 2) and letting its 12h terminal
+// --- window elapse proves `terminal.state === "COPILOT_UNAVAILABLE"`. This
+// --- section proves the #1570 wiring on top of it: `terminal` is reported
+// --- separately from `deadline`, `ready` never flips from
+// --- `COPILOT_UNAVAILABLE` alone, a valid maintainer waiver for the SAME
+// --- `idd-advisory-convergence` selector opens an INDEPENDENT (potentially
+// --- earlier-available) readiness path, every relevant mismatch on that
+// --- waiver still blocks, and a late Copilot review on HEAD clears the
+// --- terminal hold entirely (recomputed fresh every call, never sticky).
+
+const RECOVERY_ANCHOR_1 = '2026-07-10T00:00:00Z';
+const RECOVERY_ANCHOR_2 = '2026-07-10T01:00:00Z';
+
+function terminalRecoveryComments() {
+  return [
+    {
+      author: { login: TRUSTED },
+      body: renderAdvisoryWaitRecoveryMarker({
+        agentId: AGENT_ID,
+        headSha: HEAD,
+        timestamp: RECOVERY_ANCHOR_1,
+        claimId: CLAIM_ID,
+        attempt: 1,
+      }),
+      createdAt: RECOVERY_ANCHOR_1,
+    },
+    {
+      author: { login: TRUSTED },
+      body: renderAdvisoryWaitRecoveryMarker({
+        agentId: AGENT_ID,
+        headSha: HEAD,
+        timestamp: RECOVERY_ANCHOR_2,
+        claimId: CLAIM_ID,
+        attempt: 2,
+      }),
+      createdAt: RECOVERY_ANCHOR_2,
+    },
+  ];
+}
+
+function terminalWaiverComment(
+  overrides: {
+    headSha?: string;
+    claimId?: string;
+    actor?: string;
+    expiresAt?: string;
+  } = {},
+) {
+  const { actor = TRUSTED, ...rest } = overrides;
+  return {
+    author: { login: actor },
+    body: renderExternalCheckWaiverComment({
+      agentId: AGENT_ID,
+      claimId: CLAIM_ID,
+      headSha: HEAD,
+      checkSelector: 'idd-advisory-convergence',
+      reason:
+        'Copilot review API confirmed unavailable; recovery cycles exhausted',
+      expiresAt: '2026-07-12T00:00:00Z',
+      actor,
+      ...rest,
+    }),
+    createdAt: RECENT,
+  };
+}
+
+test('terminal-unavailable-no-waiver: COPILOT_UNAVAILABLE alone never flips ready, and a maintainer-hold reason is reported', () => {
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({
+      reviews: [], // Copilot never reviewed this HEAD
+      claimEvents: [claimComment()],
+      comments: terminalRecoveryComments(),
+    }),
+    baseOptions({
+      headCommittedAt: RECENT, // the ordinary 24h deadline has NOT passed
+      waiverMode: 'maintainer-authorized',
+      waivableSelectors: ADVISORY_CONVERGENCE_WAIVABLE,
+    }),
+  );
+  assertValidVerdict(verdict);
+  assert.equal(verdict.terminal.state, 'COPILOT_UNAVAILABLE');
+  assert.equal(verdict.terminal.capExhausted, true);
+  assert.equal(verdict.terminal.windowElapsed, true);
+  assert.equal(verdict.deadline.passed, false);
+  assert.equal(verdict.converged, false);
+  assert.equal(verdict.waived, false);
+  assert.equal(verdict.ready, false);
+  assert.ok(
+    verdict.reasons.some((reason) => reason.includes('terminally unavailable')),
+  );
+});
+
+test('terminal-unavailable-with-waiver: a valid maintainer waiver flips ready via the terminal path, independent of the ordinary 24h deadline', () => {
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({
+      reviews: [],
+      claimEvents: [claimComment()],
+      comments: [...terminalRecoveryComments(), terminalWaiverComment()],
+    }),
+    baseOptions({
+      headCommittedAt: RECENT, // still NOT past the ordinary deadline
+      waiverMode: 'maintainer-authorized',
+      waivableSelectors: ADVISORY_CONVERGENCE_WAIVABLE,
+    }),
+  );
+  assertValidVerdict(verdict);
+  assert.equal(verdict.terminal.state, 'COPILOT_UNAVAILABLE');
+  assert.equal(verdict.deadline.passed, false);
+  assert.equal(verdict.waiver.validCount, 1);
+  assert.equal(verdict.waived, true);
+  assert.equal(verdict.converged, false);
+  assert.equal(verdict.ready, true);
+});
+
+test('terminal-unavailable: a waiver bound to a different HEAD does not satisfy the terminal path', () => {
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({
+      reviews: [],
+      claimEvents: [claimComment()],
+      comments: [
+        ...terminalRecoveryComments(),
+        terminalWaiverComment({ headSha: OTHER_SHA }),
+      ],
+    }),
+    baseOptions({
+      headCommittedAt: RECENT,
+      waiverMode: 'maintainer-authorized',
+      waivableSelectors: ADVISORY_CONVERGENCE_WAIVABLE,
+    }),
+  );
+  assert.equal(verdict.terminal.state, 'COPILOT_UNAVAILABLE');
+  assert.equal(verdict.waiver.validCount, 0);
+  assert.equal(verdict.waived, false);
+  assert.equal(verdict.ready, false);
+});
+
+test('terminal-unavailable: a waiver bound to a different claim-id does not satisfy the terminal path', () => {
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({
+      reviews: [],
+      claimEvents: [claimComment()],
+      comments: [
+        ...terminalRecoveryComments(),
+        terminalWaiverComment({ claimId: 'claim-unrelated' }),
+      ],
+    }),
+    baseOptions({
+      headCommittedAt: RECENT,
+      waiverMode: 'maintainer-authorized',
+      waivableSelectors: ADVISORY_CONVERGENCE_WAIVABLE,
+    }),
+  );
+  assert.equal(verdict.terminal.state, 'COPILOT_UNAVAILABLE');
+  assert.equal(verdict.waiver.validCount, 0);
+  assert.equal(verdict.ready, false);
+});
+
+test('terminal-unavailable: a waiver posted by an untrusted actor does not satisfy the terminal path', () => {
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({
+      reviews: [],
+      claimEvents: [claimComment()],
+      comments: [
+        ...terminalRecoveryComments(),
+        terminalWaiverComment({ actor: 'random-untrusted-user' }),
+      ],
+    }),
+    baseOptions({
+      headCommittedAt: RECENT,
+      waiverMode: 'maintainer-authorized',
+      waivableSelectors: ADVISORY_CONVERGENCE_WAIVABLE,
+    }),
+  );
+  assert.equal(verdict.terminal.state, 'COPILOT_UNAVAILABLE');
+  assert.equal(verdict.waiver.validCount, 0);
+  assert.equal(verdict.ready, false);
+});
+
+test('terminal-unavailable: an expired waiver does not satisfy the terminal path', () => {
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({
+      reviews: [],
+      claimEvents: [claimComment()],
+      comments: [
+        ...terminalRecoveryComments(),
+        terminalWaiverComment({ expiresAt: '2026-07-01T00:00:00Z' }), // before NOW
+      ],
+    }),
+    baseOptions({
+      headCommittedAt: RECENT,
+      waiverMode: 'maintainer-authorized',
+      waivableSelectors: ADVISORY_CONVERGENCE_WAIVABLE,
+    }),
+  );
+  assert.equal(verdict.terminal.state, 'COPILOT_UNAVAILABLE');
+  assert.equal(verdict.waiver.validCount, 0);
+  assert.equal(verdict.ready, false);
+});
+
+test('terminal-unavailable: an otherwise-valid waiver does not satisfy the terminal path unless this selector is configured waivable', () => {
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({
+      reviews: [],
+      claimEvents: [claimComment()],
+      comments: [...terminalRecoveryComments(), terminalWaiverComment()],
+    }),
+    baseOptions({
+      headCommittedAt: RECENT,
+      waiverMode: 'maintainer-authorized',
+      waivableSelectors: [], // idd-advisory-convergence never registered
+    }),
+  );
+  assert.equal(verdict.terminal.state, 'COPILOT_UNAVAILABLE');
+  assert.equal(verdict.waiver.validCount, 0);
+  assert.equal(verdict.ready, false);
+});
+
+test('regression: terminal reports NOT_TERMINAL and never affects ready when no recovery markers exist (backward compatible)', () => {
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({
+      reviews: [copilotReview({ itemCount: 0 })],
+      claimEvents: [claimComment()],
+    }),
+    baseOptions(),
+  );
+  assertValidVerdict(verdict);
+  assert.equal(verdict.terminal.state, 'NOT_TERMINAL');
+  assert.equal(verdict.terminal.reason, 'no-trusted-recovery-markers');
+  assert.equal(verdict.converged, true);
+  assert.equal(verdict.ready, true);
+});
+
+test('late Copilot review recovery: a fresh clean review landing on HEAD clears COPILOT_UNAVAILABLE and converges normally', () => {
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({
+      reviews: [copilotReview({ itemCount: 0, commitId: HEAD })],
+      claimEvents: [claimComment()],
+      comments: terminalRecoveryComments(),
+    }),
+    baseOptions({
+      headCommittedAt: RECENT,
+      waiverMode: 'maintainer-authorized',
+      waivableSelectors: ADVISORY_CONVERGENCE_WAIVABLE,
+    }),
+  );
+  assertValidVerdict(verdict);
+  assert.equal(verdict.terminal.state, 'NOT_TERMINAL');
+  assert.equal(verdict.terminal.reason, 'current-head-review-exists');
+  assert.equal(verdict.converged, true);
+  assert.equal(verdict.waived, false); // never needed -- the ordinary path resolved it
+  assert.equal(verdict.ready, true);
+});
+
+// --- #1570 AC6: no code path this issue adds ever invokes `gh pr merge
+// --- --admin` -- advisory-convergence.mts and this touched region of
+// --- protocol-helpers.mts / pre-merge-readiness.mts are read-only evidence
+// --- collectors by design (see each file's own module-header claim); this
+// --- is a static assertion that they stay that way.
+test('#1570 AC6: touched read-only helper sources never contain a `pr merge --admin` invocation', () => {
+  const readFile = (path: string) =>
+    readFileSync(new URL(path, import.meta.url), 'utf8');
+  for (const path of [
+    '../src/scripts/advisory-convergence.mts',
+    '../src/scripts/pre-merge-readiness.mts',
+    '../src/scripts/rerun-advisory-convergence.mts',
+  ]) {
+    const source = readFile(path);
+    assert.ok(
+      !source.includes('--admin'),
+      `${path} must not invoke gh pr merge --admin`,
+    );
+  }
 });
 
 // --- pickResolvingClaimEvents (pure helper; #1347 regression) ---------------

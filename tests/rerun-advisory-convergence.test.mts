@@ -394,6 +394,35 @@ test('classifies a resolved, non-bot, terminal failure as rerun-eligible and inc
   ]);
 });
 
+// #1570: this helper classifies purely on check-run/run-instance shape
+// (conclusion, actor, event, run_attempt) -- it never inspects WHY the
+// underlying `idd-advisory-convergence` verdict was non-passing. A stale
+// instance whose non-passing conclusion traces to a terminal
+// `COPILOT_UNAVAILABLE`-without-waiver hold (advisory-convergence.mts) is
+// therefore classified and planned identically to any other non-bot,
+// terminal, resolved failure: once a maintainer posts a valid terminal
+// waiver, rerunning THIS SAME existing PR-associated run (`gh run rerun`,
+// never `workflow_dispatch`) re-evaluates the verdict fresh and observes
+// the now-`ready: true` result -- no separate rerun code path is needed.
+test('#1570: a terminal-unavailable-without-waiver failure is classified rerun-eligible the same as any other resolved non-bot failure', () => {
+  const plan = computeRerunPlan(
+    baseInput({
+      instances: [baseInstance({ conclusion: 'failure' })],
+    }),
+    baseOptions(),
+  );
+  assert.equal(plan.instances[0]?.classification, 'rerun-eligible');
+  assert.equal(plan.counts.rerunEligible, 1);
+  assert.deepEqual(plan.plan, [
+    {
+      runId: '5001',
+      command: 'gh run rerun 5001',
+      checkRunIds: ['1001'],
+      startedAt: '2026-07-16T10:00:00Z',
+    },
+  ]);
+});
+
 // Regression (#1434 review, Codex P2 + CodeRabbit Major): `gh run rerun
 // <id>` alone resolves its target repository from the caller's own
 // cwd/`GH_REPO`, not from whatever `--owner`/`--repo` this helper was

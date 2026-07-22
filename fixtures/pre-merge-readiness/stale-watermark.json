@@ -250,7 +250,9 @@
       "settledWindowMinutes": 10,
       "pollIntervalMinutes": 2,
       "capExhaustedRoute": "phase-specific",
-      "elapsedMinutes": 0
+      "elapsedMinutes": 0,
+      "copilotUnavailable": false,
+      "copilotUnavailableWaived": false
     },
     "ci": {
       "status": "success",

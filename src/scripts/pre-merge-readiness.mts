@@ -10,8 +10,11 @@ import { readFileSync } from 'node:fs';
 
 import {
   readAdvisoryPrimaryBotLogin,
+  readAdvisoryRecoveryCycleCap,
+  readAdvisoryTerminalWindowMinutes,
   readAdvisoryWaitPolicy,
 } from './advisory-wait-policy.mts';
+import { buildCopilotRecoverySummary } from './advisory-wait-state.mts';
 import { parseCliArgs } from './cli-args.mts';
 import type { CollaboratorPermissionCache } from './collaborator-permission.mts';
 import {
@@ -35,6 +38,7 @@ import {
   buildPreMergeReadinessSummary,
   DEFAULT_STALE_AGE_MS,
   deriveIddAgentLogins,
+  findLastCopilotReviewCommit,
   normalizeTrustedMarkerLogins,
   operationalMarkerPrefix,
   parsePaginatedGhNdjson,
@@ -579,12 +583,49 @@ export function collectPreMergeReadiness(
   const waivableCheckSelectors = readWaivableCheckSelectors();
   const externalCheckWaiverMaxValidity = readExternalCheckWaiverMaxValidity();
   const staleAgeMs = readClaimStaleAgeMs();
+  const now = args.now || new Date().toISOString().replace('.000Z', 'Z');
+  const normalizedComments = comments.map(normalizeComment);
+  const normalizedReviews = reviews.map(normalizeReview);
+
+  // #1570: precompute the `#1572` terminal Copilot-unavailability verdict
+  // here (the CLI/orchestration layer) rather than inside
+  // `buildPreMergeReadinessSummary` (protocol-helpers.mts), which cannot
+  // import `buildCopilotRecoverySummary` without an import cycle back
+  // through advisory-wait-state.mts (see that function's own module notes).
+  // Bound to the SAME expected claim already threaded to
+  // `summarizeClaimValidation` below (`--expected-claim-id`/
+  // `--expected-agent-id`), matching the active claim that would have
+  // posted any `advisory-wait-recovery:` cycle markers. Fails closed to
+  // `false` (never blocks on a crash in this ancillary evidence) on any
+  // unexpected error -- a malformed `prHeadSha` here would already have
+  // failed earlier PR-fetch steps.
+  let copilotUnavailable = false;
+  try {
+    const lastCopilotCommit = findLastCopilotReviewCommit(
+      normalizedReviews,
+      primaryBotLogin,
+    );
+    const copilotRecovery = buildCopilotRecoverySummary(
+      { comments: normalizedComments, prHeadSha, lastCopilotCommit },
+      {
+        now,
+        trustedMarkerLogins,
+        claimId: args.expectedClaimId,
+        agentId: args.expectedAgentId,
+        recoveryCycleCap: readAdvisoryRecoveryCycleCap(),
+        terminalWindowMinutes: readAdvisoryTerminalWindowMinutes(),
+      },
+    );
+    copilotUnavailable = copilotRecovery.state === 'COPILOT_UNAVAILABLE';
+  } catch {
+    copilotUnavailable = false;
+  }
 
   const summary = buildPreMergeReadinessSummary(
     {
       prHeadSha,
-      comments: comments.map(normalizeComment),
-      reviews: reviews.map(normalizeReview),
+      comments: normalizedComments,
+      reviews: normalizedReviews,
       threads: threads.map(normalizeThread),
       checks,
       branchRules,
@@ -604,7 +645,7 @@ export function collectPreMergeReadiness(
       mergeable,
     },
     {
-      now: args.now || new Date().toISOString().replace('.000Z', 'Z'),
+      now,
       trustedMarkerLogins,
       iddAgentLogins,
       advisoryBotLogins,
@@ -620,6 +661,7 @@ export function collectPreMergeReadiness(
       pollIntervalMinutes: advisoryWaitPolicy.pollIntervalMinutes,
       capExhaustedRoute: advisoryWaitPolicy.capExhaustedRoute,
       primaryBotLogin,
+      copilotUnavailable,
       waivableCheckSelectors,
       externalCheckWaiverMaxValidity,
       staleAgeMs,

@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
+import { renderExternalCheckWaiverComment } from '../src/scripts/marker-helpers.mts';
 import {
   fetchBranchRulesets,
   fetchGovernanceJson,
@@ -5410,6 +5411,101 @@ test('buildPreMergeReadinessSummary embeds a strict ready/blockers rollup', () =
   const readyBlockers = ready.blockers as { gate: string }[];
   assert.deepEqual(ready.blockers, computePreMergeReadinessBlockers(ready));
   assert.equal(ready.ready, readyBlockers.length === 0);
+});
+
+// #1570: a caller-supplied terminal-unavailability verdict (computed
+// upstream from buildCopilotRecoverySummary, advisory-wait-state.mts, since
+// this file cannot import it without an import cycle) must add a dedicated
+// `copilot-terminal-unavailable` blocker -- distinct from, and additive to,
+// the existing `advisory-wait` gate above -- unless a valid maintainer
+// external-check waiver for the `idd-advisory-convergence` selector exists
+// on current HEAD, bound to the expected claim.
+function advisoryWaitOf(summary: unknown): {
+  copilotUnavailable: boolean;
+  copilotUnavailableWaived: boolean;
+} {
+  return (summary as { advisoryWait: Record<string, unknown> })
+    .advisoryWait as {
+    copilotUnavailable: boolean;
+    copilotUnavailableWaived: boolean;
+  };
+}
+
+test('#1570: buildPreMergeReadinessSummary blocks on copilot-terminal-unavailable, and a valid maintainer waiver for idd-advisory-convergence clears it', () => {
+  const fixture = readJson('fixtures/pre-merge-readiness/clean.json');
+  const waivableCheckSelectors = [
+    { selector: 'idd-advisory-convergence', matchMode: 'exact' },
+  ];
+
+  const blocked = buildPreMergeReadinessSummary(fixture.input, {
+    ...fixture.options,
+    includeDispositionEvidence: true,
+    copilotUnavailable: true,
+    waivableCheckSelectors,
+    externalCheckWaiverMaxValidity: 'PT24H',
+  });
+  assert.equal(advisoryWaitOf(blocked).copilotUnavailable, true);
+  assert.equal(advisoryWaitOf(blocked).copilotUnavailableWaived, false);
+  const blockedGates = (blocked.blockers as { gate: string }[]).map(
+    (blocker) => blocker.gate,
+  );
+  assert.ok(blockedGates.includes('copilot-terminal-unavailable'));
+  assert.equal(blocked.ready, false);
+  assert.deepEqual(blocked.blockers, computePreMergeReadinessBlockers(blocked));
+
+  const waiverBody = renderExternalCheckWaiverComment({
+    agentId: fixture.options.expectedAgentId,
+    claimId: fixture.options.expectedClaimId,
+    headSha: fixture.input.prHeadSha,
+    checkSelector: 'idd-advisory-convergence',
+    reason:
+      'Copilot review API confirmed unavailable; recovery cycles exhausted',
+    expiresAt: '2026-05-13T00:00:00Z',
+    actor: 'kurone-kito',
+  });
+  const waived = buildPreMergeReadinessSummary(
+    {
+      ...fixture.input,
+      comments: [
+        ...fixture.input.comments,
+        {
+          id: 'terminal-waiver',
+          author: { login: 'kurone-kito' },
+          body: waiverBody,
+          createdAt: '2026-05-12T00:00:00Z',
+          updatedAt: '2026-05-12T00:00:00Z',
+        },
+      ],
+    },
+    {
+      ...fixture.options,
+      includeDispositionEvidence: true,
+      copilotUnavailable: true,
+      waivableCheckSelectors,
+      externalCheckWaiverMaxValidity: 'PT24H',
+    },
+  );
+  assert.equal(advisoryWaitOf(waived).copilotUnavailable, true);
+  assert.equal(advisoryWaitOf(waived).copilotUnavailableWaived, true);
+  const waivedGates = (waived.blockers as { gate: string }[]).map(
+    (blocker) => blocker.gate,
+  );
+  assert.ok(!waivedGates.includes('copilot-terminal-unavailable'));
+  assert.deepEqual(waived.blockers, computePreMergeReadinessBlockers(waived));
+
+  // Backward compatible: omitting copilotUnavailable entirely never adds
+  // the blocker (unmigrated callers see unchanged behavior).
+  const unmigrated = buildPreMergeReadinessSummary(fixture.input, {
+    ...fixture.options,
+    includeDispositionEvidence: true,
+  });
+  assert.equal(advisoryWaitOf(unmigrated).copilotUnavailable, false);
+  assert.equal(advisoryWaitOf(unmigrated).copilotUnavailableWaived, false);
+  assert.ok(
+    !(unmigrated.blockers as { gate: string }[])
+      .map((blocker) => blocker.gate)
+      .includes('copilot-terminal-unavailable'),
+  );
 });
 
 // #1377: a masked-403-as-404 on the branch-protection or ruleset reads must
