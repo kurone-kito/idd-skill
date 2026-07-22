@@ -44,7 +44,7 @@ session already claimed and implemented. If the repository is
   been confirmed as expected for this repository, or `source-pinned`).
 - Any required check other than `idd-advisory-convergence` reaches a
   failing terminal state, or `idd-advisory-convergence` is failing
-  without satisfying D4 step 7's exception.
+  without satisfying D4 step 8's exception.
 - D2's push needs `--force-with-lease` outside the one named exception
   below.
 
@@ -68,20 +68,28 @@ without a PR yet) — skip this whole section, do not rebase it, and
 follow the stop-and-ask condition above instead.
 
 1. Confirm the branch has never been pushed:
-   `git ls-remote --exit-code origin {branch-name}`. A zero exit means
-   the branch already exists on the remote — stop per the condition
-   above; do not continue with steps 2-8. Do not substitute an
-   open-PR check for this: a branch can be pushed before its PR is
-   created.
+   `git ls-remote --exit-code origin "refs/heads/{branch-name}"`
+   (the `refs/heads/` prefix matters: a bare branch name also matches a
+   same-named tag). Exit 0 means the branch already exists on the
+   remote — stop per the condition above; do not continue with steps
+   2-9. Exit 2 means no matching branch; continue. Stop on any other
+   nonzero exit status. Do not substitute an open-PR check for this: a
+   branch can be pushed before its PR is created.
 2. Run `git fetch origin main`.
 3. If `git merge-base HEAD origin/main` equals `origin/main`, the branch
    already contains every commit on `main` — skip the rebase and go to
    D2.
-4. Otherwise rebase onto it: `git rebase origin/main`.
-5. If the rebase hits a content conflict, resolve it, then run
+4. **Before rebasing**: if primary commit signing is non-interactive-
+   hostile (GPG pinentry, or a hardware-touch path) and the repository
+   provides **no** fallback wrapper for arbitrary git subcommands, stop
+   and ask before running the rebase at all — replaying even one commit
+   needs to re-sign it, and a hostile signing path with no wrapper has
+   no safe non-interactive way to do that, conflict or not.
+5. Otherwise rebase onto it: `git rebase origin/main`.
+6. If the rebase hits a content conflict, resolve it, then run
    **fix-validate** before continuing if any file was hand-edited during
    resolution.
-6. **Signed-commit repos**: if primary commit signing is
+7. **Signed-commit repos**: if primary commit signing is
    non-interactive-hostile (GPG pinentry, or a hardware-touch path) but
    the repository provides a fallback wrapper for arbitrary git
    subcommands (for example `-c gpg.format=ssh -c
@@ -92,13 +100,14 @@ follow the stop-and-ask condition above instead.
    conflict with the **wrapper's own** `--continue` form. Plain `git
    rebase --continue` re-signs through the configured primary signing and
    stalls non-interactively right after the conflict is already resolved.
-7. After the rebase, verify both:
+8. After the rebase, verify both:
    - `git branch --show-current` is non-empty (HEAD is not detached).
    - The expected local commit appears in `git log --oneline
-     main..HEAD`.
-8. If HEAD is detached, re-attach once with `git checkout {branch-name}`,
+     origin/main..HEAD` (not local `main`, which this file never
+     fast-forwards and so can be stale).
+9. If HEAD is detached, re-attach once with `git checkout {branch-name}`,
    repeat this D1 rebase (through the same signing wrapper on a
-   signed-commit repo), then re-verify both checks in step 7. If
+   signed-commit repo), then re-verify both checks in step 8. If
    recovery still fails, stop and post a hold note naming the branch
    state.
 
@@ -184,21 +193,25 @@ timeouts. Use both, not either alone.
    either helper is unavailable, fails, or disagrees with live GitHub
    state, stop and ask — do not re-derive branch-protection or ruleset
    rules by hand.
-3. **`no-required-checks`** or **`source-pinned`** (a ruleset or
-   integration-pinned required check exists but cannot be enumerated by
-   name): stop per the condition above rather than silently treating
-   either as a pass.
-4. **`failing`**: check whether `idd-advisory-convergence` is the
-   **only** failing required check. If so, go to step 7's exception
+3. **`no-required-checks`**: stop per the condition above unless this
+   has already been confirmed as expected for this repository (some
+   repositories legitimately configure none) — do not silently treat it
+   as a pass without that confirmation.
+4. **`source-pinned`** (a ruleset or integration-pinned required check
+   exists but cannot be enumerated by name): always stop per the
+   condition above — this is a real gating check, never treat it like
+   `no-required-checks`.
+5. **`failing`**: check whether `idd-advisory-convergence` is the
+   **only** failing required check. If so, go to step 8's exception
    instead of stopping here. Otherwise (any other required check is
    failing, with or without `idd-advisory-convergence` also failing),
    stop per the condition above rather than continuing to poll (fixing
    or rerunning it is outside this file's mechanical scope).
-5. **`pending`** or **`missing`** (an expected required check has not
+6. **`pending`** or **`missing`** (an expected required check has not
    posted a result yet): keep polling until `success`, `failing`, or the
    ci-wait-policy timeout is reached.
-6. **`success`**: proceed to `idd-review-snapshot.instructions.md` (E1).
-7. **Exception**: if `idd-advisory-convergence` is the only
+7. **`success`**: proceed to `idd-review-snapshot.instructions.md` (E1).
+8. **Exception**: if `idd-advisory-convergence` is the only
    non-passing required check, and that check's own run-log JSON verdict
    reports `pending: false` with outstanding review reasons (thread
    disposition or actionable item count on the latest review), this is
