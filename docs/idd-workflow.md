@@ -320,8 +320,7 @@ an implied gap. Two different reasons a phase can lack a lite file:
   listed in scope in `docs/weak-model-lite-profile-design.md`'s
   [phase scoping](weak-model-lite-profile-design.md#phase-scoping),
   but the lite-execution-profile roadmap's (#1539) decomposition list
-  has no corresponding follow-up issue for it as of this writing —
-  every other in-scope phase's track has shipped and merged.
+  has no corresponding follow-up issue for it as of this writing.
 - **Permanently excluded by design**: A0-A4 Discover, A4.5
   Suitability, E4-E8 Review-triage, and F3-F5 Merge stay on the
   standard file always — the design's
