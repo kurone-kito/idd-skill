@@ -119,10 +119,20 @@ during this investigation, not merely re-stated from the issue body:
    different body than the canonical parser was built against.
 
 These four are not stylistic nitpicks: each one is a concrete point where a
-plausible, well-intentioned reimplementation silently diverges from this
-repository's own fail-closed contract, for exactly the weak-model tier this
-mode targets — the tier this repository's own guardrails already say should
-prefer a deterministic helper over prose judgment wherever one exists (see
+plausible, well-intentioned reimplementation silently diverges from the
+canonical helpers' actual output, for exactly the weak-model tier this
+mode targets. Three of the four (timestamp precision, stop-word handling,
+marker wording) diverge in a way that **does** trip this repository's
+fail-closed rejection path directly — a thrown error or a
+`detectMalformedOperationalMarker` hit. The fourth (marker body shape,
+item 3) is narrower, per its own corrected description above: it is a
+canonical-rendering divergence the live parser tolerates, not a rejection
+case. All four still matter for the same underlying reason — a
+reimplementation has no guarantee its output matches the canonical
+helper byte-for-byte unless it calls that helper — but only the first
+three are fail-closed-rejection evidence in the strict sense. This is
+the tier this repository's own guardrails already say should prefer a
+deterministic helper over prose judgment wherever one exists (see
 [Weak-model guardrails](idd-workflow.md#weak-model-guardrails)).
 
 ## 1. The contract
@@ -156,10 +166,10 @@ require of a human-or-model-driven session.
 | D3 | Create PR | `gh pr create` (ordinary tooling) + the written closing-keyword rule | closing-keyword verification (D3.5) fails |
 | D4 | Wait for CI | `ci-wait-policy` (policy resolution), `ci-wait-state` (live snapshot) | a required check fails and the resolved policy's rerun budget is exhausted |
 | E1 | Snapshot + watermark | `review-activity-snapshot`, then `post-idd-marker --type watermark` (or the one-shot `--from-pr` path) | snapshot HEAD does not match the expected HEAD; watermark post fails |
-| E2 | Critique pass | **no deterministic helper** — an always-run, harness-scheduled model call (deterministic _that_ it runs, not deterministic _what_ it finds) | none beyond the uniform rule; a critique failure feeds E4-E8 like any other finding |
+| E2 | Critique pass | **no deterministic helper — judgment-heavy, out of scope for this mode** (see below); the harness may still schedule the single call deterministically, but must treat its findings the same as E4-E8, never act on them itself | the harness cannot triage the findings; hand off, same as E4-E8 |
 | E3 | Empty-list check | routing only, no helper | n/a — routes to merge or to E4 |
 | E4-E8 | Review triage: classify, score, Accept/Reject | **no deterministic helper — judgment-heavy, out of scope for this mode** (see Recommendation) | the harness cannot pass this gate; it must hand off |
-| E9, E13 | Fix accepted items, reply | same atomic-generation model call as B3; `post-idd-marker` for replies | same acceptance-check condition as B3 |
+| E9, E13 | Fix accepted items, reply | same atomic-generation model call as B3; `resolve-review-thread` (review-thread reply + resolve) or an ordinary PR comment (non-thread reply) — not `post-idd-marker`, which only renders operational markers | same acceptance-check condition as B3 |
 | E14 | Advisory-wait / re-review request | `advisory-wait-state`, the `idd-advisory-wait.instructions.md` decision table | advisory-wait state does not resolve within the documented decision table's terms |
 | E15 | CI re-wait | `ci-wait-policy` / `ci-wait-state` (same as D4) | same as D4 |
 | F1 | Final branch-state check | `branch-conflict-state` | branch state is `dirty`/`unknown` (hold), or still `computing` after the fixed re-poll budget |
@@ -186,6 +196,24 @@ here rather than re-derived: no mechanical, deterministic-output helper
 exists for either gate today, in either mode, and none of the drift
 evidence above changes that — reusing a canonical helper only helps for
 steps that already have one.
+
+**E2's critique pass belongs in this same judgment-heavy group, not the
+atomic-generation group** — a correction from an earlier draft of this
+table. [`docs/idd-workflow.md`](idd-workflow.md#critique-pass-invocation)
+defines a critique pass as "an independent review of a plan or diff that
+produces a list of issues with severity, correctness, and coverage
+assessment" and states plainly that a self-critique verdict is
+"**advisory only**... not sufficient by itself" — the load-bearing gate
+is the deterministic **fix-validate** command set the C-phase already
+runs, independent of critique output. Scoring severity, correctness, and
+coverage is exactly the kind of judgment call this mode's whole premise
+says the model should not make unsupervised. A harness may still
+deterministically schedule _that_ a critique call happens each cycle —
+the invocation itself is mechanical — but it must never act on _what_
+the critique finds without the same hand-off this mode already requires
+at E4-E8: the critique's findings flow into that same excluded
+triage step, not a separate, smaller judgment call the harness is
+somehow safe to resolve alone.
 
 ## 2. Reuse, not reimplementation
 
