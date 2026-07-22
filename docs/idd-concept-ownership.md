@@ -79,7 +79,7 @@ matrix's general "who mutates" column above.
 | PR | Merged | Merge-capable session, F3, only once the full F2/F2.5 gate checklist holds |
 | `review-watermark` / `review-baseline` / `advisory-wait*` markers | Superseded / minimized as `OUTDATED` | Worker session, after a newer valid marker of the same kind exists for the same claim or HEAD |
 | Claim-marker chain (`claimed-by`/`unclaimed-by`/heartbeat) | Superseded / minimized as `OUTDATED` | Worker session, but **only** the prior claim-id's chain after a verified `supersedes: <prior-id>` takeover — a same-claim heartbeat chain must never be hidden; it is the active-claim audit trail |
-| External-check waiver | Expired, or consumed | Time-based (`expiresAt`) lapse; or a worker session rerunning the waived check so it reflects the waiver |
+| External-check waiver | Expired, or consumed | Worker session, rerunning the waived check so it reflects the waiver; expiry itself is a time-driven transition (`expiresAt`) that needs no actor |
 | Blocked-by-human / needs-decision label | Removed | Human maintainer only, after resolving the underlying blocker |
 <!-- dprint-ignore-end -->
 
