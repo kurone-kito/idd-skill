@@ -298,10 +298,11 @@ continuation.
    `checks[]` array (every check present for this HEAD, not just
    required ones) and its per-check `status`: every entry `success` →
    proceed to step 7; any entry `pending` or `unknown` → continue at
-   step 6 (poll again — `unknown` isn't a settled result yet, so treat
-   it like `pending`); any entry `failure` → stop per the condition
-   above; `checks[]` itself empty (no CI ran at all for this HEAD) →
-   stop per the condition above.
+   step 6, which applies its timeout math to every entry this route
+   names, not only `required` ones (poll again — `unknown` isn't a
+   settled result yet, so treat it like `pending`); any entry `failure`
+   → stop per the condition above; `checks[]` itself empty (no CI ran
+   at all for this HEAD) → stop per the condition above.
 4. **`source-pinned`** (a ruleset or integration-pinned required check
    exists but cannot be enumerated by name): always stop per the
    condition above — this is a real gating check, never treat it like
@@ -317,24 +318,41 @@ continuation.
    condition above rather than continuing to poll (fixing or rerunning
    it is outside this file's mechanical scope).
 6. **`pending`** or **`missing`** (an expected required check has not
-   posted a result yet): keep polling until `success`, `failing`, or a
-   timeout. **Determine timeout from server timestamps, not a client
-   clock estimate**: for each still-non-`success` required entry in
-   `checks[]`, compare its own `startedAt` (or, if absent, this wait's
-   first poll time) against the current server time; once elapsed
-   exceeds ci-wait-policy's `runningTimeout` (or `generationTimeout` if
-   the check has not appeared at all yet), that check has timed out.
-   **On timeout**: identify the stalled check from its `checks[]` entry
-   (`checkName` plus `url`, the run to rerun) and apply ci-wait-policy's
-   `rerunPolicy` (default `rerun-once`) — if this is the first timeout
-   for this wait and the policy allows a rerun, rerun that specific
-   stalled check once as a **whole-run rerun, not `--failed`**
-   (`gh run rerun <run-id-from-url>`) — a stalled check has no failed
-   jobs to selectively rerun, only a run that never finished — and
-   resume polling; if the timeout recurs after that rerun, or the
-   policy is `hold`, stop per the condition above and post a hold note
-   rather than polling
-   indefinitely.
+   posted a result yet), or any `pending`/`unknown` entry reached via
+   step 3's fallback: keep polling until `success`, `failing`, or a
+   timeout. Evaluate every entry the reaching route named — required
+   entries for this route, every `checks[]` entry for step 3's (a
+   `no-required-checks` repository marks none `required`, so filtering
+   on that field there would evaluate nothing). **Determine timeout
+   from server timestamps, not a client clock estimate**: if the entry
+   has a `startedAt`, elapsed is server time minus `startedAt`, timed
+   out past ci-wait-policy's `runningTimeout`. If it has no `startedAt`
+   (queued, not yet running) or is missing from `checks[]` entirely (a
+   required check that has not posted anything at all), elapsed is
+   server time minus this wait's own first poll time, timed out past
+   `generationTimeout` instead — its running-timeout has not begun.
+   **On timeout**: identify the stalled check (`checkName` plus `url`
+   if present). A Commit-Status (`status-context`) entry's `url` points
+   at an external target, not an Actions run `gh run rerun` can act
+   on — for that kind, stop per the condition above instead of
+   attempting it. Otherwise resolve the rerun decision from that run's own
+   history, not this wait's own memory: `gh run view <run-id-from-url>
+   --json attempt` — an `attempt` above `1` means an earlier rerun
+   already happened, so pass that count to `node
+   scripts/ci-wait-policy.mjs --rerun-count <count>` (never reset it to
+   `0` on a resumed session). If it allows a rerun, rerun that check
+   once as a **whole-run rerun, not `--failed`** (`gh run rerun
+   <run-id-from-url>`) — a stalled check has no failed jobs to
+   selectively rerun, only a run that never finished — and resume
+   polling. If it is `hold`, or the timeout recurs after a rerun, stop
+   per the condition above and post a hold note.
+   **Bot-gated `action_required`**: a required check stuck there
+   because GitHub gated a bot-triggered run (for example Copilot's
+   review) pending approval is not the same kind of stalled run — a
+   rerun of the gated run itself keeps the original actor's privileges
+   and re-enters `action_required`. Instead `gh run rerun` the existing
+   **non-bot** `pull_request`-triggered run that already ran for this
+   HEAD, through the same rerun-decision resolution above.
 7. **`success`**: proceed to `idd-review-snapshot.instructions.md` (E1).
 8. **Exception**: if `idd-advisory-convergence` is the only
    non-passing required check, and that check's own run-log JSON verdict
