@@ -329,8 +329,9 @@ continuation.
 6. **`pending`** or **`missing`** (an expected required check has not
    posted a result yet), or any `pending`/`unknown` entry reached via
    step 3's fallback: keep polling until `success`, `failing`, or a
-   timeout. Entries to evaluate: for this direct route, every
-   still-non-`success` required `checks[]` entry, plus each name in
+   timeout. First dedupe `checks[]` by latest `checkName` instance, as
+   step 3 and step 5 do. Entries to evaluate: for this direct route,
+   every still-non-`success` required entry, plus each name in
    `requiredChecks.missingNames` (a required check with no `checks[]`
    entry at all); for step 3's fallback, every still-non-`success`
    entry regardless of `required` (a `no-required-checks` repository
@@ -342,11 +343,13 @@ continuation.
    server time minus this wait's own first poll time, timed out past
    `generationTimeout` instead — its running-timeout has not begun.
    **On timeout**: identify the stalled check (`checkName` plus `url`
-   if present). No `url` (a required check absent from `checks[]`
-   entirely) or a Commit-Status (`status-context`) `url` (an external
-   target, not an Actions run) means there is no run `gh run rerun`
-   can target — stop per the condition above and post a hold note
-   naming the check. Otherwise resolve the rerun decision from the
+   if present). Two cases have no run `gh run rerun` can target — stop
+   per the condition above and post a hold note naming the check for
+   either: the check has no `url` at all (a required check absent from
+   `checks[]` entirely, i.e. a `missingNames` entry), or its `url` is a
+   Commit-Status (`status-context`) entry pointing at an external
+   target rather than an Actions run. Otherwise resolve the rerun
+   decision from the
    run's own history: `gh run view <run-id-from-url> --json attempt` —
    GitHub's `attempt` starts at `1` for a never-rerun run, so pass
    `attempt - 1` as `<count>` to `node scripts/ci-wait-policy.mjs
