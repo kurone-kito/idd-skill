@@ -105,22 +105,30 @@ status must be "not started". Either condition failing → **STOP**.
 
 ### (c) Claim state
 
-**If this session already recorded a `{claim-id}` for this issue**
-(resume/heartbeat continuation), check that first — `--fresh-claim-gate`
-alone cannot tell "yours" from "a competitor's", because it deliberately
-ignores `--claim-id` for its own verdict:
+**Check first, before the fresh-claim gate** (which always ignores
+`--claim-id`, so it cannot tell "yours" from "a competitor's"), when
+either holds: this session already recorded a `{claim-id}` for this
+issue (resume/heartbeat continuation); or a trusted, live
+forced-handoff marker names this session `newAgentId` — treat its
+`newClaimId` as the `{claim-id}` to check, before Claim execution's
+forced-handoff steps:
 
 ```sh
-node scripts/resume-claim-routing.mjs --issue <N> --claim-id <your-claim-id>
+node scripts/resume-claim-routing.mjs --issue <N> --claim-id <your-or-newClaimId> [--nonce <your-recorded-nonce>]
 ```
 
-| Top-level `state` / `action` | Meaning                                                        |
-| ---------------------------- | -------------------------------------------------------------- |
-| `already_owned` / `keep`     | Your claim — skip to Claim verification (or Heartbeat)         |
-| anything else                | Not (or no longer) your claim — fall through to the gate below |
+Pass `--nonce` when this session already recorded one for that
+`{claim-id}` (true after forced-handoff step 5) so a session that lost
+the nonce tie-break cannot pass as `already_owned`; omit it otherwise.
 
-**Otherwise** (no recorded `{claim-id}` yet), run the write-gate helper
-immediately before the claim write:
+| Top-level `state` / `action` | Meaning                                                           |
+| ---------------------------- | ----------------------------------------------------------------- |
+| `already_owned` / `keep`     | Confirmed yours — skip to Claim verification (or Heartbeat)       |
+| anything else                | Not yours — forced-handoff: Stop-and-ask; else fall through below |
+
+**Otherwise** (no recorded `{claim-id}` and no matching forced-handoff
+evidence), run the write-gate helper immediately before the claim
+write:
 
 ```sh
 node scripts/resume-claim-routing.mjs --issue <N> --fresh-claim-gate
@@ -235,9 +243,11 @@ differently for step 5:
   or allowed — but this **is** a fresh activation, so still run step 5
   (activation-nonce) for it.
 
-1. **Branch name**: takeover/forced-handoff → reuse the exact
-   inherited branch verbatim, never recompute. Fresh claim → use the
-   name computed in pre-check (e).
+1. **Branch name**: takeover, forced-handoff, or a fresh claim whose
+   pre-check (e) scan matched an inheritable branch (released claim,
+   legacy migration source, or matching PR) → reuse it verbatim, never
+   recompute from the title (which may have changed since). No
+   inheritable match → use the name pre-check (e) computed.
 2. **`{claim-id}`**: generate a fresh opaque token — **except**
    forced-handoff adopt-verbatim, which reuses the marker's
    `newClaimId` instead.
@@ -295,17 +305,25 @@ differently for step 5:
 ## Heartbeat posting
 
 Only when this session already owns the active claim and is extending
-its stale clock (holding past 12 h, or a phase will exceed 12 h): copy
-the `{branch}` field **verbatim** from the original claim — never
-recompute it. `{claim-id}` and `{agent-id}` must match the original
-exactly, or the post is anomalous and does not refresh the stale
-clock.
+its stale clock (holding past 12 h, or a phase will exceed 12 h):
+repost using the **same command and body as step 4 above**, with
+`{branch}` copied **verbatim** from the original claim (never
+recompute), `{claim-id}` / `{agent-id}` matching exactly, and
+`supersedes:` unchanged — a mismatch is anomalous and does not refresh
+the stale clock. Skip step 5 (activation-nonce).
 
 ## Claim verification
 
-After posting `claimed-by` (skip if this was already-owned, no new
-post), wait the settle delay (`claim.verifySettleDelay`, default
-`PT5S`), re-read all issue comments, and check:
+**Already-owned continuation (no new post)**: pre-check (c)'s
+top-branch `already_owned` result already constitutes verification —
+skip the rest of this section (see the skip note under Claim
+execution). The steps below need a freshly posted event's timestamp to
+anchor them, so they apply only after a new `claimed-by` (fresh claim,
+takeover, or legacy migration).
+
+After posting `claimed-by`, wait the settle delay
+(`claim.verifySettleDelay`, default `PT5S`), re-read all issue
+comments, and check:
 
 1. Build the same-second contender set: every trusted `claimed-by`
    (including yours) sharing your event's `created_at` second.
@@ -354,15 +372,21 @@ node scripts/claim-lock.mjs --acquire --worktree <path> \
 ```
 
 A matching `{claim-id}` re-acquires as a read-only check. A different
-`{claim-id}` is always a collision — re-run the pre-check (c) helper.
-Retry with `--takeover` in any of these cases: the verdict is
-`claimable` or `stale-reclaimable`; or the verdict is `already-claimed`
-but its `winning_claim_id` **equals your own current `{claim-id}`**
-(you still genuinely own the GitHub claim — only the local lock file
-drifted, e.g. after a crash or worktree recreation). An `already-claimed`
-verdict naming a **different** claim-id is a real collision — stop, the
-claim was lost. No release step: `git worktree
-remove` at F4 deletes the lock with the worktree.
+`{claim-id}` is always a collision — re-run pre-check (c) (`--claim-id`
+first, then `--fresh-claim-gate` if not `already_owned`):
+
+- `already_owned` naming **your own** id: only the local lock drifted
+  (crash / worktree recreation) — you still own the GitHub claim.
+  Retry the lock with `--takeover` directly.
+- `claimable` / `stale-reclaimable`, or `already_owned` naming a
+  **different** id: the claim itself was lost. Post and verify a
+  fresh/takeover claim (pre-check (c) → Claim execution → Claim
+  verification) before retrying the lock.
+- `already-claimed` naming a **different** id: a live competitor holds
+  it — stop, the claim was lost.
+
+No release step: `git worktree remove` at F4 deletes the lock with the
+worktree.
 
 Then continue to `idd-work-lite.instructions.md` (or
 `idd-work.instructions.md` if the lite work file is not yet shipped in
