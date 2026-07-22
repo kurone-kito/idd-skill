@@ -80,7 +80,13 @@ export function buildCopilotRecoverySummary(
   if (!isValidIsoTimestamp(now)) {
     throw new Error('now must be an ISO 8601 UTC timestamp');
   }
-  const normalizedPrHeadSha = String(prHeadSha ?? '').toLowerCase();
+  // Validate the raw string WITHOUT lowercasing first, matching
+  // buildAdvisoryWaitSummary's convention (protocol-helpers.mts): callers
+  // are expected to already supply a canonical lowercase SHA (e.g. from
+  // buildAdvisoryWaitSummary's own output), and an uppercase SHA is
+  // rejected rather than silently normalized -- lowercasing before
+  // validation would accept input the error message claims is rejected.
+  const normalizedPrHeadSha = String(prHeadSha ?? '');
   if (!/^[0-9a-f]{40}$/.test(normalizedPrHeadSha)) {
     throw new Error('prHeadSha must be a 40-character lowercase commit SHA');
   }

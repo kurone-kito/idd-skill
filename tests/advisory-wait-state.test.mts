@@ -578,6 +578,22 @@ test('buildCopilotRecoverySummary throws on an invalid prHeadSha', () => {
   );
 });
 
+test("buildCopilotRecoverySummary throws on an uppercase prHeadSha (matches buildAdvisoryWaitSummary's convention: validate raw, never silently lowercase)", () => {
+  // protocol-helpers.mts's buildAdvisoryWaitSummary validates prHeadSha
+  // against /^[0-9a-f]{40}$/ WITHOUT lowercasing first, so an uppercase SHA
+  // is rejected there. buildCopilotRecoverySummary must match that
+  // convention exactly, not silently accept-and-normalize an uppercase
+  // input the shared error message claims is rejected.
+  assert.throws(
+    () =>
+      buildCopilotRecoverySummary(
+        { comments: [], prHeadSha: SHA.toUpperCase(), lastCopilotCommit: '' },
+        BASE_OPTIONS,
+      ),
+    /prHeadSha must be a 40-character lowercase commit SHA/,
+  );
+});
+
 // --- Independence from requestCap / sameHeadRerollCap ----------------------
 
 test('buildCopilotRecoverySummary cap accounting is independent of the caller passing an unrelated requestCap-shaped option', () => {
