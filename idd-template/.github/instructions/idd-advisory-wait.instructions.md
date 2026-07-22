@@ -460,12 +460,12 @@ failure).
 `COPILOT_UNAVAILABLE` signal. `#1571` (`AW3-S` above) builds the
 execution track against this contract: the bounded remove/re-request/
 verify/mark recovery cycle, and the `staleRequestRecovery` eligibility
-classification that gates it. Routing (`#1570`: wiring
-`COPILOT_UNAVAILABLE` into F2/F3/convergence/waiver decisions) remains
-unbuilt — no caller yet treats `COPILOT_UNAVAILABLE` as anything beyond
-waiver _eligibility_, and `AW3-S`'s `"cap-exhausted"` result still falls
-back to the existing `CAP_EXHAUSTED_ROUTE` handling rather than any new
-terminal routing.
+classification that gates it. `AW3-S`'s `"cap-exhausted"` result still
+falls back to the existing `CAP_EXHAUSTED_ROUTE` handling, not the
+terminal routing below (recovery-cycle exhaustion alone does not prove
+`COPILOT_UNAVAILABLE` — see **State** below). Routing it into
+F2/F3/convergence/waiver decisions:
+[Terminal routing](#terminal-routing-1570) below.
 
 **Policy** (`advisory-wait-policy.mts`, resolved/read like every other
 `advisoryWait.*` knob, independent counters from `requestCap` and `#1511`'s
@@ -527,4 +527,30 @@ computations, composed side by side. Consumers may treat it only as
 waiver _eligibility_ (a maintainer may authorize a waiver or equivalent
 human off-ramp), never as advisory satisfaction or merge readiness on its
 own; no merge or gate-satisfied report may follow from
-`COPILOT_UNAVAILABLE` alone — designing that off-ramp is `#1570`'s job.
+`COPILOT_UNAVAILABLE` alone — see the routing below.
+
+### Terminal routing (`#1570`)
+
+Two consumers reuse the SAME `idd-external-check-waiver:` evidence
+(selector `idd-advisory-convergence`, current HEAD, active claim) — one
+waiver satisfies either:
+
+- CI check (`advisory-convergence.mts`): `terminal` field (separate from
+  `deadline`); its waiver hatch also opens on `COPILOT_UNAVAILABLE`
+  independent of `deadline.passed` — `ready` still needs a valid waiver.
+- F2/F3 (`pre-merge-readiness.mts`): `advisoryWait.copilotUnavailable` /
+  `copilotUnavailableWaived`. `f3Outcome` is unchanged; unwaived instead
+  adds `copilot-terminal-unavailable` to `blockers[]`, additive to
+  `advisory-wait`. Do not merge on `f3Outcome: SATISFIED` alone here.
+
+**Unwaived**: post this hold and stop (no E14 loop, no merge bypass):
+
+> Copilot is terminally unavailable on HEAD `{PR_HEAD_SHA}`: the recovery
+> cycle is exhausted and the terminal window elapsed with no current-HEAD
+> review. A maintainer must post an `idd-external-check-waiver:` marker
+> for selector `idd-advisory-convergence`, this HEAD, and the active
+> claim before this PR can proceed.
+
+**Waived**: rerun the existing `idd-advisory-convergence` run (Rerun
+mechanics below — never `workflow_dispatch`); both fields recompute every
+call, so an expired or invalid marker reverts automatically.

@@ -5,6 +5,7 @@
 // generated .mjs. See docs/typescript-sources.md.
 import { Buffer } from 'node:buffer';
 import {
+  DEFAULT_ADVISORY_CONVERGENCE_CHECK_SELECTOR,
   DEFAULT_ADVISORY_PRIMARY_BOT_LOGIN,
   normalizeAdvisoryWaitRuntimeOptions,
 } from './advisory-wait-policy.mjs';
@@ -4038,6 +4039,30 @@ export function computePreMergeReadinessBlockers(report) {
       detail: `f3Outcome is "${f3Outcome}" (expected "SATISFIED")`,
     });
   }
+  // #1570: a settled-but-unreviewed Copilot request (`f3Outcome:
+  // "SATISFIED"` once `copilotPending` goes `false`, per
+  // `evaluateAdvisoryWaitF3Outcome`'s deliberate settled-path shortcut) must
+  // NOT merge unattended when the terminal `#1572` recovery contract has
+  // separately proven Copilot unavailable on this HEAD -- `f3Outcome` itself
+  // is intentionally left untouched (see `buildPreMergeReadinessSummary`'s
+  // module notes) so this is a DEDICATED, additive blocker rather than a
+  // change to the `advisory-wait` gate above. Only fires when the caller
+  // supplied `copilotUnavailable: true` (computed from
+  // `buildCopilotRecoverySummary`); omitted/false never fires, so a caller
+  // that has not wired this evidence sees unchanged behavior. A valid
+  // maintainer waiver for the `idd-advisory-convergence` selector (the same
+  // evidence the CI gate consumes, see advisory-convergence.mts) clears it.
+  if (
+    advisoryWait.copilotUnavailable === true &&
+    advisoryWait.copilotUnavailableWaived !== true
+  ) {
+    blockers.push({
+      gate: 'copilot-terminal-unavailable',
+      detail:
+        'Copilot is terminally unavailable on current HEAD (recovery cap exhausted and terminal window elapsed with no current-HEAD review) with no valid maintainer external-check waiver for selector ' +
+        `"${DEFAULT_ADVISORY_CONVERGENCE_CHECK_SELECTOR}"`,
+    });
+  }
   const ci = preMergeAsRecord(report.ci);
   if (!isPreMergeCiAllPassing(ci)) {
     // #1377: name the masked-403-as-404 cause explicitly when that is why the
@@ -4282,6 +4307,21 @@ export function buildPreMergeReadinessSummary(
     waivableSelectors: waivableCheckSelectors,
     protectionReadsUnreadable,
   });
+  // #1570: reuse the SAME waiver evidence above (already validated for
+  // selector/HEAD/claim/authority/expiry) to decide whether the caller-
+  // supplied terminal-unavailability verdict is also validly waived, filtered
+  // to the `idd-advisory-convergence` selector -- the identical selector
+  // advisory-convergence.mts's own terminal-waiver path consumes, so a single
+  // maintainer-posted waiver marker satisfies whichever gate (the CI
+  // required-check, or this direct F2/F3 evidence collector) is currently
+  // asking.
+  const copilotUnavailable = options.copilotUnavailable === true;
+  const copilotUnavailableWaived =
+    copilotUnavailable &&
+    waiverEvidence.valid.some(
+      (entry) =>
+        entry.checkSelector === DEFAULT_ADVISORY_CONVERGENCE_CHECK_SELECTOR,
+    );
   const dispositionEvidence = options.includeDispositionEvidence
     ? summarizeDispositionEvidenceForGate(
         { comments, threads },
@@ -4351,6 +4391,8 @@ export function buildPreMergeReadinessSummary(
       pollIntervalMinutes: advisoryWait.pollIntervalMinutes,
       capExhaustedRoute: advisoryWait.capExhaustedRoute,
       elapsedMinutes: advisoryWait.elapsedMinutes,
+      copilotUnavailable,
+      copilotUnavailableWaived,
     },
     ci,
     claim,

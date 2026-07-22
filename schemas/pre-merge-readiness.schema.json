@@ -612,7 +612,9 @@
         "settledWindowMinutes",
         "pollIntervalMinutes",
         "capExhaustedRoute",
-        "elapsedMinutes"
+        "elapsedMinutes",
+        "copilotUnavailable",
+        "copilotUnavailableWaived"
       ],
       "additionalProperties": false,
       "properties": {
@@ -687,6 +689,14 @@
         "elapsedMinutes": {
           "type": "integer",
           "minimum": 0
+        },
+        "copilotUnavailable": {
+          "type": "boolean",
+          "description": "#1570/#1572: true when buildCopilotRecoverySummary reports state === COPILOT_UNAVAILABLE for this HEAD. Computed by the caller (pre-merge-readiness.mts); false is the unmigrated default."
+        },
+        "copilotUnavailableWaived": {
+          "type": "boolean",
+          "description": "#1570: true when copilotUnavailable is true AND a valid maintainer external-check waiver exists for the idd-advisory-convergence selector on current HEAD."
         }
       }
     },

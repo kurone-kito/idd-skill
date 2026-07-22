@@ -266,6 +266,12 @@ Resolve `<profile-selected-rerun-advisory-convergence-command>` from
 `docs/idd-helper-scripts.md`; do not hardcode `node scripts/...` for
 non-vendored profiles.
 
+**Terminal-waiver recheck (`#1570`)**: once a maintainer waives a proven
+`COPILOT_UNAVAILABLE` state
+([Terminal routing](idd-advisory-wait.instructions.md#terminal-routing-1570)),
+rerun this SAME existing run via the mechanic above — never
+`workflow_dispatch`.
+
 ## Interpretation
 
 <!-- dprint-ignore-start -->

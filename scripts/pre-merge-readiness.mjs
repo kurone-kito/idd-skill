@@ -8,8 +8,11 @@ import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import {
   readAdvisoryPrimaryBotLogin,
+  readAdvisoryRecoveryCycleCap,
+  readAdvisoryTerminalWindowMinutes,
   readAdvisoryWaitPolicy,
 } from './advisory-wait-policy.mjs';
+import { buildCopilotRecoverySummary } from './advisory-wait-state.mjs';
 import { parseCliArgs } from './cli-args.mjs';
 import {
   isAuthorizedForcedHandoffActor,
@@ -28,6 +31,7 @@ import {
   buildPreMergeReadinessSummary,
   DEFAULT_STALE_AGE_MS,
   deriveIddAgentLogins,
+  findLastCopilotReviewCommit,
   normalizeTrustedMarkerLogins,
   operationalMarkerPrefix,
   parsePaginatedGhNdjson,
@@ -360,11 +364,48 @@ export function collectPreMergeReadiness(argv) {
   const waivableCheckSelectors = readWaivableCheckSelectors();
   const externalCheckWaiverMaxValidity = readExternalCheckWaiverMaxValidity();
   const staleAgeMs = readClaimStaleAgeMs();
+  const now = args.now || new Date().toISOString().replace('.000Z', 'Z');
+  const normalizedComments = comments.map(normalizeComment);
+  const normalizedReviews = reviews.map(normalizeReview);
+  // #1570: precompute the `#1572` terminal Copilot-unavailability verdict
+  // here (the CLI/orchestration layer) rather than inside
+  // `buildPreMergeReadinessSummary` (protocol-helpers.mts), which cannot
+  // import `buildCopilotRecoverySummary` without an import cycle back
+  // through advisory-wait-state.mts (see that function's own module notes).
+  // Bound to the SAME expected claim already threaded to
+  // `summarizeClaimValidation` below (`--expected-claim-id`/
+  // `--expected-agent-id`), matching the active claim that would have
+  // posted any `advisory-wait-recovery:` cycle markers. Deliberately
+  // uncaught: an unexpected error here must not silently collapse to
+  // `copilotUnavailable: false` (a permissive default that could mask a
+  // real terminal-unavailable condition behind an ancillary-evidence bug
+  // -- flagged by CodeRabbit on PR #1646). Letting it throw matches this
+  // repo's documented helper-failure contract (see
+  // `idd-review-snapshot.instructions.md`'s "Helpers remain evidence
+  // collectors only"): a crash here is evidence collection failing
+  // loudly, and callers already know to fall back to the portable
+  // gh/jq/API procedure rather than trust a helper that could not run.
+  const lastCopilotCommit = findLastCopilotReviewCommit(
+    normalizedReviews,
+    primaryBotLogin,
+  );
+  const copilotRecovery = buildCopilotRecoverySummary(
+    { comments: normalizedComments, prHeadSha, lastCopilotCommit },
+    {
+      now,
+      trustedMarkerLogins,
+      claimId: args.expectedClaimId,
+      agentId: args.expectedAgentId,
+      recoveryCycleCap: readAdvisoryRecoveryCycleCap(),
+      terminalWindowMinutes: readAdvisoryTerminalWindowMinutes(),
+    },
+  );
+  const copilotUnavailable = copilotRecovery.state === 'COPILOT_UNAVAILABLE';
   const summary = buildPreMergeReadinessSummary(
     {
       prHeadSha,
-      comments: comments.map(normalizeComment),
-      reviews: reviews.map(normalizeReview),
+      comments: normalizedComments,
+      reviews: normalizedReviews,
       threads: threads.map(normalizeThread),
       checks,
       branchRules,
@@ -384,7 +425,7 @@ export function collectPreMergeReadiness(argv) {
       mergeable,
     },
     {
-      now: args.now || new Date().toISOString().replace('.000Z', 'Z'),
+      now,
       trustedMarkerLogins,
       iddAgentLogins,
       advisoryBotLogins,
@@ -400,6 +441,7 @@ export function collectPreMergeReadiness(argv) {
       pollIntervalMinutes: advisoryWaitPolicy.pollIntervalMinutes,
       capExhaustedRoute: advisoryWaitPolicy.capExhaustedRoute,
       primaryBotLogin,
+      copilotUnavailable,
       waivableCheckSelectors,
       externalCheckWaiverMaxValidity,
       staleAgeMs,

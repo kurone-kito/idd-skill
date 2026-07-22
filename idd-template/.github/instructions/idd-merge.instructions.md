@@ -153,6 +153,10 @@ Before any mutating action in F3, apply the
    - advisory `f3Outcome` is `SATISFIED` (the authoritative advisory gate —
      do not add stricter sub-conditions; e.g. a pending-window `SATISFIED`
      can keep `copilotPending` true and `LAST_COPILOT_COMMIT` off the head);
+   - no unwaived `copilot-terminal-unavailable` in the helper's
+     `blockers[]` — separate from `f3Outcome`, not a stricter
+     sub-condition on it
+     ([Terminal routing](idd-advisory-wait.instructions.md#terminal-routing-1570));
    - all required CI checks pass for the current head;
    - claim ownership still uses your `{claim-id}`.
 

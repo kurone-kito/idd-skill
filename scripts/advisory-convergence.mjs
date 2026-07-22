@@ -55,15 +55,21 @@
 // real signal -- it only tells a caller when requesting a reroll is safe
 // and how much budget remains.
 import {
+  DEFAULT_ADVISORY_CONVERGENCE_CHECK_SELECTOR,
   DEFAULT_ADVISORY_CONVERGENCE_DEADLINE_MINUTES,
   DEFAULT_ADVISORY_PENDING_WINDOW_MINUTES,
   DEFAULT_ADVISORY_PRIMARY_BOT_LOGIN,
+  DEFAULT_ADVISORY_RECOVERY_CYCLE_CAP,
   DEFAULT_ADVISORY_SAME_HEAD_REROLL_CAP,
+  DEFAULT_ADVISORY_TERMINAL_WINDOW_MINUTES,
   readAdvisoryConvergenceDeadlineMinutes,
   readAdvisoryPrimaryBotLogin,
+  readAdvisoryRecoveryCycleCap,
   readAdvisorySameHeadRerollCap,
+  readAdvisoryTerminalWindowMinutes,
   readAdvisoryWaitPolicy,
 } from './advisory-wait-policy.mjs';
+import { buildCopilotRecoverySummary } from './advisory-wait-state.mjs';
 import { parseCanonicalIntegerOrNull, parseCliArgs } from './cli-args.mjs';
 import { isAuthorizedForcedHandoffActor } from './collaborator-permission.mjs';
 import {
@@ -93,8 +99,15 @@ import {
 } from './protocol-helpers.mjs';
 /** The external-check-waiver selector this gate recognizes (documented in
  * docs/idd-helper-scripts.md and docs/policy-constants.md; #1341's required
- * check is expected to register under the same name). */
-export const ADVISORY_CONVERGENCE_CHECK_SELECTOR = 'idd-advisory-convergence';
+ * check is expected to register under the same name). #1570: re-exported
+ * from the shared `advisory-wait-policy.mts` constant (rather than declared
+ * standalone) so `protocol-helpers.mts`'s `buildPreMergeReadinessSummary`
+ * can filter terminal-unavailability waiver evidence by the identical
+ * selector string without importing this module (which would create an
+ * import cycle back through `advisory-wait-state.mts`). The exported name
+ * and value are unchanged for existing consumers. */
+export const ADVISORY_CONVERGENCE_CHECK_SELECTOR =
+  DEFAULT_ADVISORY_CONVERGENCE_CHECK_SELECTOR;
 /**
  * Compute the deterministic advisory-convergence verdict from already-
  * fetched PR evidence. Pure (no I/O), so it is directly unit-testable with
@@ -369,13 +382,57 @@ export function computeAdvisoryConvergenceVerdict(inputs, options) {
     elapsedMinutes,
     passed: deadlinePassed,
   };
-  // --- Waiver escape hatch (only reachable once the deadline has passed) -
+  // --- Terminal Copilot-unavailability evidence (#1570/#1572) ------------
+  // Reuses `review.commitId` (Clause 1's absolute-latest Copilot review, `''`
+  // when none exists) as the `lastCopilotCommit` input -- the same fetched
+  // evidence, no separate lookup. Purely additive: computed unconditionally,
+  // reported in its own `terminal` field (never merged into `deadline`
+  // above), and -- per `buildCopilotRecoverySummary`'s own contract --
+  // `state: "COPILOT_UNAVAILABLE"` is waiver *eligibility* only. It is
+  // structurally impossible for `terminal` alone to set `converged`/`ready`:
+  // see the waiver-gate and `ready` computation below, both of which require
+  // a valid waiver in addition to `terminalUnavailable`.
+  // Note: `pre-merge-readiness.mts` resolves `lastCopilotCommit` differently
+  // (submittedAt-sorted via `findLastCopilotReviewCommit`, not fetch-order
+  // `.at(-1)`), so under a force-push/revert ordering the two gates could
+  // disagree on terminal state. Tolerable by construction: both gates must
+  // independently pass to merge, so any disagreement fails closed (the
+  // stricter side blocks; a waiver resolves it) -- never an unsafe merge.
+  const recoveryCycleCap =
+    Number.isFinite(options.recoveryCycleCap) &&
+    Number(options.recoveryCycleCap) > 0
+      ? Number(options.recoveryCycleCap)
+      : DEFAULT_ADVISORY_RECOVERY_CYCLE_CAP;
+  const terminalWindowMinutesOption =
+    Number.isFinite(options.terminalWindowMinutes) &&
+    Number(options.terminalWindowMinutes) > 0
+      ? Number(options.terminalWindowMinutes)
+      : DEFAULT_ADVISORY_TERMINAL_WINDOW_MINUTES;
+  const terminal = buildCopilotRecoverySummary(
+    { comments, prHeadSha, lastCopilotCommit: review.commitId },
+    {
+      now,
+      trustedMarkerLogins,
+      claimId: activeClaimId,
+      agentId: claim.activeClaim?.agentId ?? '',
+      recoveryCycleCap,
+      terminalWindowMinutes: terminalWindowMinutesOption,
+    },
+  );
+  const terminalUnavailable = terminal.state === 'COPILOT_UNAVAILABLE';
+  // --- Waiver escape hatch (reachable once the deadline has passed, or ---
+  // --- once terminal Copilot unavailability is proven -- either one ------
+  // --- independently opens the SAME waiver-evidence check below) ---------
   const waiverMode = String(options.waiverMode ?? 'disabled');
   const waiverCheckSelector =
     String(options.waiverCheckSelector ?? '').trim() ||
     ADVISORY_CONVERGENCE_CHECK_SELECTOR;
   let validWaiverCount = 0;
-  if (!converged && deadlinePassed && waiverMode === 'maintainer-authorized') {
+  if (
+    !converged &&
+    (deadlinePassed || terminalUnavailable) &&
+    waiverMode === 'maintainer-authorized'
+  ) {
     const waiverEvidence = summarizeExternalCheckWaivers(comments, {
       prHeadSha,
       activeClaimId,
@@ -396,6 +453,11 @@ export function computeAdvisoryConvergenceVerdict(inputs, options) {
     // Even when the configured list makes SOME check waivable, only count a
     // waiver whose own marker selector is THIS gate's selector -- a valid
     // waiver for an unrelated external check must never satisfy this one.
+    // The SAME evidence collection satisfies either precondition above: a
+    // maintainer posts one waiver marker for this selector/HEAD/claim, and
+    // whichever precondition (ordinary deadline, or terminal eligibility)
+    // is currently open consumes it -- see the `ready` computation below,
+    // which still requires the precondition it corresponds to.
     validWaiverCount = waiverEvidence.valid.filter(
       (entry) => entry.checkSelector === waiverCheckSelector,
     ).length;
@@ -407,14 +469,23 @@ export function computeAdvisoryConvergenceVerdict(inputs, options) {
     validCount: validWaiverCount,
   };
   const waived = !scopeNotApplicable && validWaiverCount > 0;
-  if (!scopeNotApplicable && !converged && deadlinePassed && !waived) {
+  if (!scopeNotApplicable && !converged && terminalUnavailable && !waived) {
+    reasons.push(
+      waiverMode === 'maintainer-authorized'
+        ? `Copilot is terminally unavailable (recovery cap exhausted and terminal window elapsed with no current-HEAD review) with no valid maintainer external-check waiver for selector "${waiverCheckSelector}" on current HEAD`
+        : `Copilot is terminally unavailable (recovery cap exhausted and terminal window elapsed with no current-HEAD review) and no waiver is available (ciGate.externalCheckWaivers.mode is "${waiverMode}", not "maintainer-authorized")`,
+    );
+  } else if (!scopeNotApplicable && !converged && deadlinePassed && !waived) {
     reasons.push(
       waiverMode === 'maintainer-authorized'
         ? `deadline (${deadlineMinutes}m) passed with no valid maintainer external-check waiver for selector "${waiverCheckSelector}" on current HEAD`
         : `deadline (${deadlineMinutes}m) passed and no waiver is available (ciGate.externalCheckWaivers.mode is "${waiverMode}", not "maintainer-authorized")`,
     );
   }
-  const ready = scopeNotApplicable || converged || (deadlinePassed && waived);
+  const ready =
+    scopeNotApplicable ||
+    converged ||
+    ((deadlinePassed || terminalUnavailable) && waived);
   return {
     protocolVersion: '1',
     decisionAuthority: 'instructions',
@@ -429,6 +500,7 @@ export function computeAdvisoryConvergenceVerdict(inputs, options) {
     deadline,
     waiver,
     sameHeadReroll,
+    terminal,
     converged,
     waived,
     ready,
@@ -813,6 +885,12 @@ function collectFromGitHub(args) {
   // stay "in flight" before a caller may safely retry.
   const sameHeadRerollCap = readAdvisorySameHeadRerollCap();
   const { pendingWindowMinutes } = readAdvisoryWaitPolicy();
+  // #1570/#1572: bounded per-PR-HEAD Copilot stall-recovery cycle cap and
+  // 12h terminal-unavailability window, read independently of the five-key
+  // `AdvisoryWaitPolicy` shape above for the same reason `sameHeadRerollCap`
+  // is (see advisory-wait-policy.mts's own doc comments on each resolver).
+  const recoveryCycleCap = readAdvisoryRecoveryCycleCap();
+  const terminalWindowMinutes = readAdvisoryTerminalWindowMinutes();
   // No manual cast: `normalizePolicyConfig`'s inferred return type already
   // carries `ciGate.externalCheckWaivers.{mode,maxValidity}` precisely (see
   // `external-check-waiver.mts`'s `NormalizedPolicy` alias for the same
@@ -881,6 +959,8 @@ function collectFromGitHub(args) {
       waivableSelectors: policy?.ciGate?.externalChecks?.waivable ?? [],
       sameHeadRerollCap,
       pendingWindowMinutes,
+      recoveryCycleCap,
+      terminalWindowMinutes,
       forcedHandoffEnabled,
       isAuthorizedForcedHandoff: (forcedBy) =>
         isAuthorizedForcedHandoffActor(
