@@ -45,8 +45,8 @@ cleanup markers — so any agent can resume any work without guessing.
   Codex CLI, OpenCode, and Antigravity CLI (formerly Gemini CLI);
   [review policy profiles](docs/idd-review-policy-profiles.md) let you
   swap the default Copilot advisory gate.
-- **No service to operate** — no server, scheduler, or SaaS account;
-  import the template files and start.
+- **No service to operate** — no server, scheduler, or additional SaaS
+  account; import the template files and start.
 
 ## Proven in production
 
