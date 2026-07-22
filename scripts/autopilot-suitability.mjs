@@ -15,6 +15,8 @@
 // advisory ranking/routing hint only — it never replaces the A4.5
 // suitability gate or the A5 claim safety checks, which still run on
 // whatever candidate is selected.
+import { stripMarkdownCodeRegions } from './markdown-code.mjs';
+
 const DEFAULT_MARKER_PREFIX = 'idd-skill';
 export const DEFAULT_AUTOPILOT_SUITABILITY_FLOOR = 3;
 /**
@@ -32,6 +34,13 @@ export const DEFAULT_AUTOPILOT_SUITABILITY_FLOOR = 3;
  * `parseAutopilotSuitability` and `idd-doctor` both parse the marker
  * through this one implementation so the regex and fail-safe rules never
  * drift between the discovery rankers and the doctor consistency check.
+ *
+ * The body is masked with {@link stripMarkdownCodeRegions} before the
+ * scan, so a marker merely *quoted* in prose (inside backticks or a
+ * fenced block — for example an issue describing this marker's own
+ * syntax) cannot be mistaken for a real one and poison an otherwise
+ * valid footer marker elsewhere in the body (#1614, mirroring #1121's
+ * identical fix for the `roadmap-id` marker).
  */
 export function parseAutopilotSuitabilityMarker(
   body,
@@ -45,10 +54,11 @@ export function parseAutopilotSuitabilityMarker(
     `<!--\\s*${escapeRegex(prefix)}-autopilot-suitability:\\s*([^\\s>]+)\\s*-->`,
     'gi',
   );
-  const text = String(body ?? '');
-  // Stream matches with regex.exec so an untrusted, marker-heavy body
-  // stays O(1) memory (no per-match arrays), and fail fast on the first
-  // invalid token or first value that conflicts with an earlier one.
+  const text = stripMarkdownCodeRegions(String(body ?? ''));
+  // Stream matches with regex.exec instead of matchAll so an untrusted,
+  // marker-heavy body avoids per-match array allocation, and fail fast
+  // on the first invalid token or first value that conflicts with an
+  // earlier one.
   let present = false;
   let value = null;
   let match = regex.exec(text);

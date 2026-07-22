@@ -123,6 +123,51 @@ test('parseAutopilotSuitabilityMarker reports present/value/malformed per case',
   );
 });
 
+test('parseAutopilotSuitabilityMarker ignores a marker quoted inside code regions (#1614)', () => {
+  // The #1614 shape (mirroring #1121's identical fix for the roadmap-id
+  // marker): an issue *about* the marker syntax that quotes an example —
+  // including an invalid one — inside code, alongside a real footer
+  // marker elsewhere in the body. The code-quoted example must not be
+  // read as a real marker and must not poison the real one to malformed.
+  const inlineQuoted = [
+    '## Background',
+    '',
+    `A drafted issue must end with a trailing \`${marker('N')}\` marker.`,
+    '',
+    marker(3),
+  ].join('\n');
+  assert.deepEqual(parseAutopilotSuitabilityMarker(inlineQuoted), {
+    present: true,
+    value: 3,
+    malformed: false,
+  });
+
+  // Same for a marker quoted inside a fenced code block.
+  const fencedQuoted = [
+    'Example marker:',
+    '',
+    '```html',
+    marker('N'),
+    '```',
+    '',
+    marker(5),
+  ].join('\n');
+  assert.deepEqual(parseAutopilotSuitabilityMarker(fencedQuoted), {
+    present: true,
+    value: 5,
+    malformed: false,
+  });
+
+  // A code-quoted marker alone (no real marker elsewhere) still reports
+  // absent, not malformed -- the quoted example is masked out entirely.
+  const onlyQuoted = `See the \`${marker('N')}\` format.`;
+  assert.deepEqual(parseAutopilotSuitabilityMarker(onlyQuoted), {
+    present: false,
+    value: null,
+    malformed: false,
+  });
+});
+
 test('parseAutopilotSuitabilityMarker is prefix-aware', () => {
   assert.deepEqual(
     parseAutopilotSuitabilityMarker(marker(4, 'my-org'), 'my-org'),
