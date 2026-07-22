@@ -32,10 +32,12 @@ session already claimed and implemented. If the repository is
 - A required helper or validation command is unavailable, invalid, or
   disagrees with live state.
 - The branch already exists on the remote **and** has an open PR **and**
-  is behind `main` — this lite file only covers the pre-first-push
-  rebase; the post-publication merge-based resync is out of its scope.
+  its `mergeStateStatus` is anything other than `CLEAN` — this lite file
+  only covers the pre-first-push rebase; the post-publication
+  merge-based resync (or a closer live-state read) is out of its scope.
   (A pushed branch with **no** open PR yet is not this case: skip
-  straight to D3.)
+  straight to D3. An open PR with `mergeStateStatus: CLEAN` is not this
+  case either: skip straight to D4.)
 - D1's rebase hits a content conflict this session cannot resolve
   mechanically.
 - After D1, `git branch --show-current` is empty (detached HEAD) and one
@@ -88,17 +90,21 @@ This section's rebase only applies **before the branch's first push**.
    steps 2-8 below. Exit 0 means the branch already exists on the
    remote; stop on any other nonzero exit status. When it already
    exists, do not rebase it — instead check for an open PR
-   (`gh pr list --head {branch-name} --state open`) and whether it is
-   behind `main` (`gh pr view {branch-name} --json mergeStateStatus`):
+   (`gh pr list --head {branch-name} --state open`) and, if one exists,
+   its merge state:
+   `gh pr view {branch-name} --json mergeStateStatus --jq
+   .mergeStateStatus`.
    - No open PR: D2's push already happened in an earlier, interrupted
      session — skip the rest of D1 (nothing to rebase) and go straight
      to D3 (create the PR).
-   - An open PR exists and this branch is behind `main`: stop per the
-     condition above — the merge-based resync is out of this file's
-     scope.
-   - An open PR exists and this branch is **not** behind `main`: D1-D3
-     already happened in an earlier session — skip straight to D4
-     (wait for CI).
+   - An open PR exists and the value is exactly `CLEAN`: nothing is
+     behind or conflicting — D1-D3 already happened in an earlier
+     session; skip straight to D4 (wait for CI).
+   - An open PR exists and the value is anything else (`BEHIND`,
+     `BLOCKED`, `DIRTY`, `UNSTABLE`, `UNKNOWN`, or any other non-`CLEAN`
+     value): stop per the condition above — this needs either the
+     merge-based resync or a live-state read this file's mechanical
+     scope does not cover.
 2. Run `git fetch origin main`.
 3. If `git merge-base HEAD origin/main` equals `origin/main`, the branch
    already contains every commit on `main` — skip the rebase and go to
@@ -148,7 +154,8 @@ loop instead of returning to this D1 rebase path.
 1. Re-read the issue. The active claim must still use this session's
    claim id. If it is missing, released, or held by a different claim id
    (even under the same agent id), the claim was lost — stop.
-2. Run **pre-push-validate**.
+2. Run **pre-push-validate**. (E2E tests are verified by CI; do not run
+   them locally.)
 3. Push the branch. Use a normal push on first publication. Use
    `--force-with-lease` only when every one of these holds: the branch
    is already published, a repository policy explicitly permits a
@@ -160,10 +167,12 @@ loop instead of returning to this D1 rebase path.
 
 ## D3 — Create PR
 
-1. Actually create the PR using GH CLI (`gh pr create`) or GH MCP —
-   this step is not formatting guidance for an already-open PR.
-2. If `.github/pull_request_template.md` exists, shape the PR body to
-   that template's sections from the start.
+1. Before drafting the body, check whether
+   `.github/pull_request_template.md` exists; if it does, shape the
+   body to that template's sections from the start.
+2. Create the PR using GH CLI (`gh pr create`) or GH MCP, with a body
+   satisfying the rules below — this step is not formatting guidance
+   for an already-open PR; the PR must actually be created here.
 3. The PR body must include: a concise summary, a closing keyword line
    for the claimed issue, recommended follow-up issues (if any), and
    background/rationale only when it materially affects review.
