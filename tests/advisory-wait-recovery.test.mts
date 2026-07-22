@@ -258,6 +258,11 @@ test('detectRecoveryHeadRace: fails closed (reports a race) when either HEAD is 
   assert.equal(detectRecoveryHeadRace(SHA, ''), true);
 });
 
+test('detectRecoveryHeadRace: fails closed even when BOTH HEADs are missing (kurone-kito/idd-skill#1645 review: a naive equality would misread this as "no race")', () => {
+  assert.equal(detectRecoveryHeadRace('', ''), true);
+  assert.equal(detectRecoveryHeadRace('   ', '   '), true);
+});
+
 // --- 4. Retry-cap exhaustion -------------------------------------------------
 
 test('evaluateStaleRequestRecoveryAction: cap-exhausted when the independent #1572 recovery-cycle budget is spent, even though the ordinary request path would still allow more attempts', () => {

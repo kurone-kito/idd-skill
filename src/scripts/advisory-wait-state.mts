@@ -414,6 +414,14 @@ export function detectRecoveryHeadRace(
   const current = String(currentHeadSha ?? '')
     .trim()
     .toLowerCase();
+  // Fail closed on missing evidence: an empty comparison side (even when
+  // BOTH sides are empty, so a naive equality would read as "unchanged")
+  // is not proof HEAD is stable -- it is proof the caller never resolved
+  // one side, and treating that as "no race" would let a recovery mutation
+  // proceed on an unknown HEAD (kurone-kito/idd-skill#1645 review).
+  if (expected === '' || current === '') {
+    return true;
+  }
   return expected !== current;
 }
 
