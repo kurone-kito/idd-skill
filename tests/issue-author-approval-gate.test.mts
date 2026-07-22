@@ -93,6 +93,29 @@ test('suitability instructions keep issue-author approval outside A4.5 outcomes'
     template,
   );
   assert.equal(expected, stripGeneratedFromBanner(live));
+
+  // Guard the substitution itself (#1621), not just manifest/live
+  // consistency: an empty or wrong `replacements` array would still pass
+  // the equality check above (both sides would drift together), silently
+  // reintroducing the unresolved placeholder. Assert the concreted output
+  // actually drops the placeholder and resolves to the repository's own
+  // configured prefix, read live rather than hardcoded a second time.
+  const config = JSON.parse(read('.github/idd/config.json')) as {
+    markerPrefix?: string;
+  };
+  assert.ok(
+    config.markerPrefix,
+    '.github/idd/config.json is missing markerPrefix',
+  );
+  assert.doesNotMatch(
+    expected,
+    /\{\{PROJECT_MARKER_PREFIX\}\}/,
+    'concreted output must not retain the unresolved PROJECT_MARKER_PREFIX placeholder',
+  );
+  assert.ok(
+    expected.includes(`${config.markerPrefix}-autopilot-suitability`),
+    `concreted output must resolve to the configured markerPrefix (${config.markerPrefix})`,
+  );
 });
 
 test('overview documents the secure default issue-author approval config behavior', () => {
