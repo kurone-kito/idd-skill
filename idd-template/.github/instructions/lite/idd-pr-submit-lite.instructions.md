@@ -323,11 +323,11 @@ continuation.
 6. **`pending`** or **`missing`** (an expected required check has not
    posted a result yet), or any `pending`/`unknown` entry reached via
    step 3's fallback: keep polling until `success`, `failing`, or a
-   timeout. Evaluate every entry the reaching route named — required
-   entries for this route, every `checks[]` entry for step 3's fallback
-   (a `no-required-checks` repository marks none `required`, so
-   filtering on that field there would evaluate nothing). **Determine
-   timeout
+   timeout. Evaluate every still-non-`success` entry the reaching route
+   named — required entries for this route, every `checks[]` entry for
+   step 3's fallback (a `no-required-checks` repository marks none
+   `required`, so filtering on that field there would evaluate
+   nothing). **Determine timeout
    from server timestamps, not a client clock estimate**: if the entry
    has a `startedAt`, elapsed is server time minus `startedAt`, timed
    out past ci-wait-policy's `runningTimeout`. If it has no `startedAt`
