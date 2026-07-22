@@ -47,7 +47,8 @@
       "Bash(gh repo delete*)",
       "Bash(gh issue delete*)",
       "Bash(gh api -X DELETE*)",
-      "Bash(gh api --method DELETE*)"
+      "Bash(gh api --method DELETE*)",
+      "Bash(gh api --method=DELETE*)"
     ]
   }
 }

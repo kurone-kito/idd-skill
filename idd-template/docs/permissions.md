@@ -433,9 +433,10 @@ allow/deny split, softened as described below.
 
 `git push --force` / `--force-with-lease` / `-f`, `git reset --hard`,
 `git clean -f`, `git branch -D`, `gh repo delete`, `gh issue delete`,
-both `gh api` DELETE-verb spellings (`-X DELETE`, `--method DELETE`,
-kept as defense in depth even though `gh api` itself is not
-allowlisted — see the trap below), and — template counterpart only —
+all three `gh api` DELETE-verb spellings (`-X DELETE`, `--method
+DELETE`, `--method=DELETE`, kept as defense in depth even though `gh
+api` itself is not allowlisted — see the trap below), and — template
+counterpart only —
 `node scripts/idd-merge-execute.mjs` / `node bin/idd-merge-execute.mjs`
 as a literal invocation.
 

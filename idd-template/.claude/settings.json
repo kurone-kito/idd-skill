@@ -47,6 +47,7 @@
       "Bash(gh issue delete*)",
       "Bash(gh api -X DELETE*)",
       "Bash(gh api --method DELETE*)",
+      "Bash(gh api --method=DELETE*)",
       "Bash(node scripts/idd-merge-execute.mjs*)",
       "Bash(node bin/idd-merge-execute.mjs*)"
     ]
