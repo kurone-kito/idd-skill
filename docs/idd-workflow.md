@@ -162,8 +162,8 @@ When a lightweight-tier model runs any part of this loop:
   literal test code, assertions, and expected outputs, as distinct
   from the behavioral acceptance criteria described in the prompt —
   must never be shown to the generating model, since a weak model that
-  sees the test tends to reproduce it inline rather than keep the two
-  separated.
+  sees the test tends to reproduce it inline rather than keeping the
+  two separated.
 
 These tiers are practical operating guidance, not a new enforced
 runtime gate: `.github/instructions/idd-suitability.instructions.md`'s
