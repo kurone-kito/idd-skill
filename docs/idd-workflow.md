@@ -298,7 +298,7 @@ appear as a row here.
 
 **Explicit fallback.** Every phase without a row above falls back to
 its standard instruction file — this is the documented default, not
-an implied gap. Two different reasons a phase can lack a lite file:
+an implied gap. Three different reasons a phase can lack a lite file:
 
 - **Tracked, not yet shipped**: the F1-F2 helper-read subset plus
   F2.5's handoff-stop outcome
