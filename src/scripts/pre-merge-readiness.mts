@@ -800,11 +800,11 @@ function printHelp(): void {
 
   --nonce <token>  this session's own recorded activation-nonce (#1522): when
                     given alongside --claim-id, the merge-time write-gate also
-                    requires it to equal the winning trusted <!-- activation-
-                    nonce: ... --> marker for that claim-id, catching a second,
-                    independent activation of the same claim-id as a collision.
-                    Omit --nonce, or leave it empty, to skip this comparison
-                    entirely (backward compatible).
+                    requires it to equal the winning trusted
+                    <!-- activation-nonce: ... --> marker for that claim-id,
+                    catching a second, independent activation of the same
+                    claim-id as a collision. Omit --nonce, or leave it empty,
+                    to skip this comparison entirely (backward compatible).
 `);
 }
 

@@ -3932,7 +3932,7 @@ export function summarizeClaimValidation(claimEvents = [], options = {}) {
     // primitive.
     const activationNonceWinner = findActivationNonceWinner(
       claimEvents.filter((event) =>
-        trustedAuthorPredicate(event.author?.login ?? ''),
+        trustedAuthorPredicate(event.author?.login ?? event.user?.login ?? ''),
       ),
       activeClaim.claimId,
     );
