@@ -72,8 +72,9 @@ through a pull request.
   normal CI and review gates. Do not rebase or force-push merely
   because the PR is `BEHIND`. This is the active branch-policy
   contract, enforced end to end by
-  `idd-review-triage.instructions.md`'s E-phase branch-sync check and
-  the `branch-conflict-state` helper.
+  `idd-review-triage.instructions.md`'s E-phase branch-sync check
+  (`Esync`), which uses the `branch-conflict-state` helper when
+  helper runtime is enabled.
 - **Force-push exceptions stay narrow** — use rebase and
   `--force-with-lease` after publication only when repository policy
   explicitly permits it and merge-based recovery cannot safely fix the

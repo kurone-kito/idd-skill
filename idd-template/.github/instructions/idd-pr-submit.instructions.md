@@ -33,9 +33,10 @@ branch so the synchronization diff is reviewable.
 
 This D-phase file records the publication boundary only: post-push
 synchronization itself runs through `idd-review-triage.instructions.md`'s
-E-phase branch-sync check (Esync), backed by the `branch-conflict-state`
-helper, and `idd-resume.instructions.md` already routes a
-content-conflicting branch there on restart.
+E-phase branch-sync check (`Esync`), which uses the
+`branch-conflict-state` helper when helper runtime is enabled (a
+`gh pr view` fallback otherwise), and `idd-resume.instructions.md`
+already routes a content-conflicting branch there on restart.
 
 If D1 itself reveals content conflicts before the first push, resolve
 them and continue the rebase. After completing the rebase, if any files
