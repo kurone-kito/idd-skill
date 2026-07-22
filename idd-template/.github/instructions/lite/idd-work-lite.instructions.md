@@ -157,6 +157,9 @@ addendum resolves it.
 2. Ask whether the implementation is correct, whether the issue's requirements
    are satisfied, whether coverage is adequate, and whether any other problems
    exist.
+3. The floor (referenced in C2, C4, and C5) is `fix-validate` passing against
+   the branch's current HEAD. Re-run it after every new commit; it does not
+   substitute for D2's `pre-push-validate` gate.
 
 ### C2 — Check for issues
 
@@ -179,8 +182,8 @@ addendum resolves it.
 2. If accepted issues remain and the floor has not passed, continue to C5.
 3. Otherwise, if no accepted issues remain and the floor has passed, open and
    follow `idd-pr-submit.instructions.md` now.
-4. Otherwise, if only low accepted issues remain after 3 loops and the floor
-   has passed, open and follow `idd-pr-submit.instructions.md` now.
+4. Otherwise, if only low accepted issues remain after more than 3 loops and
+   the floor has passed, open and follow `idd-pr-submit.instructions.md` now.
 5. Otherwise continue to C5.
 
 ### C5 — Fix accepted issues
@@ -195,5 +198,6 @@ addendum resolves it.
 ### C6 — Return to C1
 
 1. Repeat the critique loop until it is clean.
-2. Treat the low-issue three-loop exit as clean once the floor has passed.
+2. Treat the low-issue more-than-3-loop exit as clean once the floor has
+   passed.
 3. Do not widen scope into review triage or merge phases from this file.
