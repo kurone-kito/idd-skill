@@ -334,6 +334,128 @@ Keep approval labels and operational marker trust as separate controls:
   surface. Neither a ready label nor a trusted operational marker can
   substitute for the dedicated waiver contract.
 
+## Claude Code Permission Baseline
+
+This section is **Claude Code-specific**: it documents the committed
+`.claude/settings.json` allow/deny baseline and its opt-in template
+counterpart. Every other harness this workflow supports (Copilot, Codex
+CLI, OpenCode, Antigravity CLI) has no equivalent file and simply
+ignores it -- this section is purely additive for those agents, not a
+cross-agent permission contract.
+
+A fresh Claude Code session otherwise starts from an empty per-user
+`.claude/settings.local.json`, so every environment re-accumulates the
+same permission prompts from scratch and a new adopter gets no curated
+starting point at all. `mew-ton/soloscrum` ships a committed baseline
+with exactly this shape (a reversible-operations allowlist plus an
+explicit denylist for destructive ones) and documents a concrete trap
+worth repeating here: a broad `Bash(gh api*)` allow implicitly permits
+`gh api ... -X DELETE` too, unless the DELETE verb is separately
+denied. This repository's own `.claude/settings.json` and the opt-in
+`idd-template/.claude/settings.json` counterpart adopt that same
+allow/deny split, softened as described below.
+
+### What the baseline allows
+
+- **Read-only `git` queries**: `status`, `diff`, `log`, `show`,
+  `branch --list` / `--show-current` / `-a` / `-v`, `worktree list`,
+  `rev-parse`, `fetch`, `remote -v` / `remote show`, and `blame`.
+  Mutating `git` commands (`commit`, `push`, `worktree add`/`remove`,
+  branch creation) are deliberately **not** in the baseline; they stay
+  behind the normal permission prompt, or a session may layer them into
+  its own `.claude/settings.local.json`.
+- **Read-only and reversible `gh` operations**: issue/PR viewing,
+  listing, diffing, and CI-check reads; issue and PR comment/edit;
+  label changes; PR review and PR creation; `gh search`; `gh repo
+  view`; `gh auth status`; and the `gh api graphql` / `gh api user`
+  forms this workflow's instructions use for read-only queries. The
+  repository's own `.claude/settings.json` additionally scopes a
+  `Bash(gh api repos/<owner>/<repo>/*)` allow to this repository's own
+  REST namespace instead of an unscoped `Bash(gh api*)`, and includes
+  `gh pr merge` because this repository records `mergePolicy:
+  fully_autonomous_merge` (see [Merge Policy Profiles](#merge-policy-profiles)
+  above). The opt-in template counterpart under
+  `idd-template/.claude/settings.json` omits both: an imported baseline
+  must never hand a freshly onboarded, possibly `human_merge`
+  repository an unattended merge allowance, and a repository-scoped
+  `gh api` entry needs the adopter's own owner/repo filled in before it
+  is safe to add.
+- **The helper-script surfaces under `scripts/` and `bin/`**
+  (`Bash(node scripts/*)`, `Bash(node bin/*)`). These wrapper commands
+  give IDD's helper-backed evidence collectors (see
+  [IDD helper scripts](idd-helper-scripts.md)) a stable, single-entry-point
+  command string per script, which is the property that makes them a
+  good allowlist fit; ad hoc multi-step shell pipelines are not
+  allowlisted by this baseline for that reason.
+
+### What the baseline denies
+
+`git push --force` / `--force-with-lease` / `-f`, `git reset --hard`,
+`git clean -f`, `git branch -D`, `gh repo delete`, `gh issue delete`,
+and both `gh api` DELETE-verb spellings (`-X DELETE`, `--method
+DELETE`).
+
+### The `gh api` DELETE-verb (and flag-position) trap
+
+Claude Code's Bash permission rules match a literal command-string
+**prefix**, optionally followed by a trailing wildcard (`Bash(git
+*)`); there is no support for matching a flag that can appear at an
+unpredictable position in the middle of a command. That has two
+consequences worth knowing before you extend this baseline:
+
+- A deny rule for `Bash(gh api -X DELETE*)` only intercepts the
+  invocation where `-X DELETE` is the **first** argument after `gh
+  api`. `gh api <path> -X DELETE` -- method flag **after** the
+  resource path, which is at least as common in practice -- is a
+  different literal prefix and is **not** caught by that same deny
+  rule. The same positional gap applies to the `git push --force*`
+  family of deny rules against a command that places `--force` after
+  other arguments (`git push origin main --force`).
+- Because deny rules cannot close that gap by themselves, this
+  baseline avoids the underlying trap at the allow-list level instead
+  of trying to out-narrow it with more deny rules: it never ships a
+  broad, unscoped `Bash(gh api*)` allow. The repository-scoped
+  `Bash(gh api repos/<owner>/<repo>/*)` form still matches every method
+  and verb within that one repository's REST namespace -- narrowing
+  the allow to one repository is real, cross-repository defense in
+  depth, but it does **not** by itself close the flag-position gap
+  above. Treat the DELETE-verb deny entries as one layer, not a proof
+  that DELETE is unreachable; do not widen the allow list to a bare
+  `Bash(gh api*)` on the assumption that the paired deny entries make
+  it safe.
+
+### Deliberately softer than soloscrum's deny set
+
+This baseline does **not** carry a blanket `rm` / `rmdir` deny.
+Scratchpad cleanup and worktree housekeeping in this workflow
+legitimately delete files (see B1 worktree removal in
+`idd-work.instructions.md` and F4 cleanup in `idd-merge.instructions.md`);
+a blanket filesystem-delete deny would fight the workflow itself
+instead of protecting it. The denied commands above are chosen because
+they are specifically **history-rewriting or force-destructive** git/gh
+operations the normal IDD loop never needs, not because file deletion
+in general is unsafe here.
+
+### Layering personal additions
+
+The committed baseline is a shared **floor**, not a complete
+no-prompts configuration. `.claude/settings.local.json` (already
+git-ignored) layers on top of it per Claude Code's own settings
+precedence, so an individual session or operator can add broader `git`
+mutation commands, additional `gh api` scopes, or anything else it
+needs locally without changing the shared file. Do not widen the
+committed `.claude/settings.json` itself to cover one session's
+one-off need; add it to the personal `settings.local.json` layer
+instead, and only promote a change into the shared baseline as a
+deliberate, reviewed edit.
+
+Permission availability is a harness convenience, never a workflow
+gate: even a fully permissive `.claude/settings.json` does not
+substitute for the claim, review, advisory, CI, and merge gates the
+rest of this workflow enforces. A merge-capable allow entry only
+changes whether Claude Code prompts before running `gh pr merge`; it
+does not by itself satisfy F2/F3's merge gates.
+
 ## References
 
 - [GitHub REST API permissions for fine-grained personal access tokens](https://docs.github.com/en/rest/overview/permissions-required-for-fine-grained-personal-access-tokens)
