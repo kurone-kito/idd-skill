@@ -369,12 +369,16 @@ allow/deny split, softened as described below.
   deliberately **not** in the baseline; they stay behind the normal
   permission prompt, or a session may layer them into its own
   `.claude/settings.local.json`.
-- **Read-only and reversible `gh` operations**: issue/PR viewing,
-  listing, diffing, and CI-check reads; issue and PR comment/edit;
-  label changes; PR review and PR creation; `gh search`; `gh repo
-  view`; `gh auth status`; and the `gh api graphql` / `gh api user`
-  forms this workflow's instructions use for read-only queries. The
-  repository's own `.claude/settings.json` additionally scopes a
+- **Read-only `gh` queries plus reversible `gh` mutations**: issue/PR
+  viewing, listing, diffing, and CI-check reads are pure reads; issue
+  and PR comment/edit, label changes, PR review, and PR creation are
+  mutations, but reversible ones (a comment can be edited or deleted,
+  a label re-applied, a review superseded, a PR closed) that never
+  rewrite history or destroy data the way the denied operations below
+  do; `gh search`, `gh repo view`, and `gh auth status` round out the
+  read side; and the `gh api graphql` / `gh api user` forms this
+  workflow's instructions use for read-only queries. The repository's
+  own `.claude/settings.json` additionally scopes a
   `Bash(gh api repos/<owner>/<repo>/*)` allow to this repository's own
   REST namespace instead of an unscoped `Bash(gh api*)`, and includes
   `gh pr merge` because this repository records `mergePolicy:
@@ -391,14 +395,38 @@ allow/deny split, softened as described below.
   [IDD helper scripts](idd-helper-scripts.md)) a stable, single-entry-point
   command string per script, which is the property that makes them a
   good allowlist fit; ad hoc multi-step shell pipelines are not
-  allowlisted by this baseline for that reason.
+  allowlisted by this baseline for that reason. This blanket allow is
+  broad enough to reintroduce a capability the rest of the baseline
+  deliberately withholds: `scripts/idd-merge-execute.mjs` (and its
+  `bin/` counterpart) executes a real merge commit under `--apply`, so
+  without an explicit carve-out it would silently restore the same
+  unattended-merge path the `gh pr merge` omission above is trying to
+  close. The opt-in template counterpart denies both
+  `Bash(node scripts/idd-merge-execute.mjs*)` and
+  `Bash(node bin/idd-merge-execute.mjs*)` for exactly this reason — see
+  the next section for why that deny, unlike the `gh api` DELETE case,
+  is fully reliable. This repository's own dogfood
+  `.claude/settings.json` does **not** carry that deny, consistent with
+  also allowing `gh pr merge` under this repository's recorded
+  `fully_autonomous_merge` policy.
 
 ### What the baseline denies
 
 `git push --force` / `--force-with-lease` / `-f`, `git reset --hard`,
 `git clean -f`, `git branch -D`, `gh repo delete`, `gh issue delete`,
-and both `gh api` DELETE-verb spellings (`-X DELETE`, `--method
-DELETE`).
+both `gh api` DELETE-verb spellings (`-X DELETE`, `--method DELETE`),
+and — template counterpart only —
+`node scripts/idd-merge-execute.mjs` / `node bin/idd-merge-execute.mjs`
+in any invocation.
+
+That merge-executor deny is a different, more reliable shape than the
+`gh api` DELETE-verb deny below: Claude Code's Bash permission match is
+a command-string prefix, and the script's own path is always the first
+and only invariant token right after `node` — no other argument can
+come before it the way a resource path can precede `-X DELETE`. Denying
+`Bash(node scripts/idd-merge-execute.mjs*)` therefore blocks every
+invocation of that script regardless of which flags follow or what
+order they appear in, dry-run or `--apply` alike.
 
 ### The `gh api` DELETE-verb (and flag-position) trap
 

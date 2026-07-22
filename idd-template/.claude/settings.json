@@ -1,5 +1,5 @@
 {
-  "$comment": "Opt-in curated Claude Code permission baseline for repositories that import this template. See docs/permissions.md#claude-code-permission-baseline before adopting it. This baseline deliberately excludes merge-capable operations (no `gh pr merge`) so importing it never grants an unattended merge allowance by default -- add `gh pr merge` yourself only after your repository records `fully_autonomous_merge` (see docs/permissions.md#merge-policy-profiles). If your loop calls `gh api` directly against this repository's own REST endpoints, add a repository-scoped allow entry such as `Bash(gh api repos/<owner>/<repo>/*)` rather than a broad `Bash(gh api*)` allow -- see the gh-api DELETE-verb caveat in docs/permissions.md. Personal additions belong in .claude/settings.local.json, which layers on top of this file.",
+  "$comment": "Opt-in curated Claude Code permission baseline for repositories that import this template. See docs/permissions.md#claude-code-permission-baseline before adopting it. This baseline deliberately excludes merge-capable operations: no `gh pr merge` allow, and an explicit deny on `node scripts/idd-merge-execute.mjs` / `node bin/idd-merge-execute.mjs` so the broad scripts/bin helper allow below cannot silently reintroduce that same merge capability via --apply -- add `gh pr merge` and remove that deny yourself only after your repository records `fully_autonomous_merge` (see docs/permissions.md#merge-policy-profiles). If your loop calls `gh api` directly against this repository's own REST endpoints, add a repository-scoped allow entry such as `Bash(gh api repos/<owner>/<repo>/*)` rather than a broad `Bash(gh api*)` allow -- see the gh-api DELETE-verb caveat in docs/permissions.md. Personal additions belong in .claude/settings.local.json, which layers on top of this file.",
   "permissions": {
     "allow": [
       "Bash(git status*)",
@@ -47,7 +47,9 @@
       "Bash(gh repo delete*)",
       "Bash(gh issue delete*)",
       "Bash(gh api -X DELETE*)",
-      "Bash(gh api --method DELETE*)"
+      "Bash(gh api --method DELETE*)",
+      "Bash(node scripts/idd-merge-execute.mjs*)",
+      "Bash(node bin/idd-merge-execute.mjs*)"
     ]
   }
 }
