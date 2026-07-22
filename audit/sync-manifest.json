@@ -461,6 +461,12 @@
       "mode": "exact"
     },
     {
+      "id": "idd-review-fix-lite-instructions",
+      "source": "idd-template/.github/instructions/lite/idd-review-fix-lite.instructions.md",
+      "target": ".github/instructions/lite/idd-review-fix-lite.instructions.md",
+      "mode": "exact"
+    },
+    {
       "id": "idd-review-policy-profiles-doc",
       "source": "idd-template/docs/idd-review-policy-profiles.md",
       "target": "docs/idd-review-policy-profiles.md",
@@ -512,12 +518,6 @@
       "id": "idd-work-lite-instructions",
       "source": "idd-template/.github/instructions/lite/idd-work-lite.instructions.md",
       "target": ".github/instructions/lite/idd-work-lite.instructions.md",
-      "mode": "exact"
-    },
-    {
-      "id": "idd-review-fix-lite-instructions",
-      "source": "idd-template/.github/instructions/lite/idd-review-fix-lite.instructions.md",
-      "target": ".github/instructions/lite/idd-review-fix-lite.instructions.md",
       "mode": "exact"
     },
     {
