@@ -57,7 +57,7 @@ back as evidence for a gate.
 | Forced-handoff marker | Human maintainer only (`forced-handoff: human-gated`, an authorized actor) | Not mutated once posted | Successor worker session (Claim-state parsing rule 7); Resume Step 0/1 |
 | External-check waiver comment (`idd-external-check-waiver`) | Human maintainer only, under the repository's `ciGate.externalCheckWaivers` policy | Not mutated once posted; superseded by a fresh waiver | F2/F3 CI gate (`waiverEvidence` checks) |
 | Merge commit | Merge-capable session, F3 | Not mutated after creation | F2/F2.5/F3 gate checklist, immediately before merge |
-| Generated instruction-file / doc mirrors (e.g. `idd-template/` → `.github/instructions/`, `idd-template/docs/` → `docs/`) | Worker session, alongside the canonical source edit that requires it | Worker session, via the sync tooling `--apply` mode | The docs/instructions audit tooling |
+| Generated instruction-file / doc mirrors — **only in a repository that runs the sync tooling** (e.g. the idd-skill source repository's own `idd-template/` → `.github/instructions/`, `idd-template/docs/` → `docs/`; a typical adopter repository has no `idd-template/` after import, so this concept does not apply there) | Worker session, alongside the canonical source edit that requires it | Worker session, via the sync tooling `--apply` mode | The docs/instructions audit tooling |
 <!-- dprint-ignore-end -->
 
 ## Terminal-state gating
