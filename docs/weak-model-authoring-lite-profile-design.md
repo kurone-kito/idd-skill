@@ -285,8 +285,10 @@ that same directory, requiring only:
   `.claude/skills/issue-authoring/references/contract-lite.md` mirror.
 - No new `fileSets` entry — the existing basename-matched set already
   covers any new file added under `skills/issue-authoring/**/*.md`.
-- A `bundleBudgets` entry sized independently from `contract.md`'s
-  45,614-byte current size, following #1419's own "new, independently
+- A `bundleBudgets` entry sized independently from `contract.md`'s own
+  size (read the live value with `wc -c
+  skills/issue-authoring/references/contract.md` rather than trusting a
+  snapshot to stay current), following #1419's own "new, independently
   set budget" rule (a lite file's target size is a function of its own
   content principles, not a fraction of the standard file's size).
 
