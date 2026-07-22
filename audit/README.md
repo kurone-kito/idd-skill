@@ -71,10 +71,13 @@ pass:
 
 Step 3 is required for the audit check to pass — it compares `paths`
 against the files each block's `sourceGlobs` actually match, and fails
-with "manifest paths omit `<file>`" on a mismatch — even though `paths`
-plays no role in `sync-docs.mjs`'s own mirror-generation logic. Adding
-only the `syncPairs` and `bundleBudgets` entries above is not enough;
-skipping the `generatedBlocks[].paths` edit still fails the audit.
+by naming the block and the glob-matched file missing from `paths` (the
+error has the form `<block-id>: manifest paths omit <path>`, where
+`<block-id>` and `<path>` stand for the actual block id and file path)
+— even though `paths` plays no role in `sync-docs.mjs`'s own
+mirror-generation logic. Adding only the `syncPairs` and
+`bundleBudgets` entries above is not enough; skipping the
+`generatedBlocks[].paths` edit still fails the audit.
 
 ## Bundle Budgets
 
