@@ -287,7 +287,8 @@ continuation.
    condition above — this is a real gating check, never treat it like
    `no-required-checks`.
 5. **`failing`**: in the same helper's `checks[]` array, check every
-   entry where `required` is true and the name is not
+   entry where `required` is true and its `checkName` field (not
+   `name`, which this array does not have) is not
    `idd-advisory-convergence`. If **all** of those are `success`,
    `idd-advisory-convergence` is the sole non-passing required check —
    go to step 8's exception instead of stopping here. If **any** of
