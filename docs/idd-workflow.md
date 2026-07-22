@@ -157,10 +157,11 @@ When a lightweight-tier model runs any part of this loop:
   output should instruct the model to produce a clean, importable
   artifact — the target definitions and needed imports only — and
   explicitly forbid embedding the acceptance test, assertions, prints,
-  or a `__main__`/self-invoking block, and forbid importing the
-  artifact under construction. The acceptance check itself — the
-  literal test code, assertions, and expected outputs, as distinct
-  from the behavioral acceptance criteria described in the prompt —
+  or a self-invoking entrypoint block (Python's `__main__` guard, for
+  example), and forbid importing the artifact under construction. The
+  acceptance check itself — the literal test code, assertions, and
+  expected outputs, as distinct from the behavioral acceptance
+  criteria described in the prompt —
   must never be shown to the generating model, since a weak model that
   sees the test tends to reproduce it inline rather than keeping the
   two separated.
