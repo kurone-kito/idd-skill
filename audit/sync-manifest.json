@@ -248,7 +248,7 @@
       "files": [
         ".github/instructions/lite/idd-pr-submit-lite.instructions.md"
       ],
-      "limitBytes": 22000
+      "limitBytes": 23500
     },
     {
       "id": "bundle-review-fix-lite",

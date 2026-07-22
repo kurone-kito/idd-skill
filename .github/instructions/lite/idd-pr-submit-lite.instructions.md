@@ -301,7 +301,8 @@ continuation.
    _required_ checks while still running normal CI, so this is not
    automatically a stop. Instead, fall back to the same helper's
    `checks[]` array (every check present for this HEAD, not just
-   required ones) and its per-check `status`: every entry `success` →
+   required ones) — dedupe by latest `checkName` instance as step 5
+   does — and its per-check `status`: every entry `success` →
    proceed to step 7; any entry `pending` or `unknown` → continue at
    step 6, which applies its timeout math to every entry this route
    names, not only `required` ones (poll again — `unknown` isn't a
@@ -328,11 +329,12 @@ continuation.
 6. **`pending`** or **`missing`** (an expected required check has not
    posted a result yet), or any `pending`/`unknown` entry reached via
    step 3's fallback: keep polling until `success`, `failing`, or a
-   timeout. Evaluate every still-non-`success` entry the reaching route
-   named, plus each name in `requiredChecks.missingNames` (a required
-   check with no `checks[]` entry at all) — required `checks[]` entries
-   for this route, every entry for step 3's fallback (a
-   `no-required-checks` repository marks none `required`). **Determine
+   timeout. Entries to evaluate: for this direct route, every
+   still-non-`success` required `checks[]` entry, plus each name in
+   `requiredChecks.missingNames` (a required check with no `checks[]`
+   entry at all); for step 3's fallback, every still-non-`success`
+   entry regardless of `required` (a `no-required-checks` repository
+   marks none `required`). **Determine
    timeout from server timestamps, not a client clock estimate**: if
    the entry has a `startedAt`, elapsed is server time minus
    `startedAt`, timed out past ci-wait-policy's `runningTimeout`. If it
