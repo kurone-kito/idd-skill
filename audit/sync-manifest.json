@@ -101,6 +101,7 @@
         "idd-template/docs/idd-resume-detail.md",
         "idd-template/docs/idd-advisory-wait-shell-fallback.md",
         "idd-template/docs/idd-design-rationale.md",
+        "idd-template/docs/idd-concept-ownership.md",
         "idd-template/docs/permissions.md",
         "idd-template/docs/getting-started.md",
         "idd-template/docs/concepts.md",
@@ -354,6 +355,12 @@
       "id": "idd-comment-minimization-doc",
       "source": "idd-template/docs/idd-comment-minimization.md",
       "target": "docs/idd-comment-minimization.md",
+      "mode": "exact"
+    },
+    {
+      "id": "idd-concept-ownership-doc",
+      "source": "idd-template/docs/idd-concept-ownership.md",
+      "target": "docs/idd-concept-ownership.md",
       "mode": "exact"
     },
     {
