@@ -123,6 +123,45 @@ export interface ParsedReviewWatermark {
   createdAt: string;
 }
 
+/**
+ * Parsed bound `advisory-wait-recovery: ...` marker (#1572): the extended
+ * shape that additionally binds the active claim and the attempt number,
+ * distinguishing it from the plain-text
+ * `{agentId} {headSha} {timestamp}` legacy form (still valid and still
+ * matched by `OPERATIONAL_MARKERS`, but not parseable by
+ * {@link parseAdvisoryRecoveryComment}, which requires the bound suffix). The
+ * `attempt` field is a diagnostic only -- a caller counting completed
+ * recovery cycles counts trusted, claim-bound, head-bound *markers*, never
+ * trusts the largest embedded `attempt` value, mirroring how embedded
+ * timestamps never move the terminal clock (see
+ * `buildCopilotRecoverySummary` in advisory-wait-state.mts).
+ */
+export interface ParsedAdvisoryRecoveryMarker {
+  agentId: string;
+  headSha: string;
+  timestamp: string;
+  claimId: string;
+  attempt: number;
+  createdAt: string;
+}
+
+/**
+ * Parsed `copilot-unavailable: ...` terminal marker (#1572). Same bound
+ * shape as {@link ParsedAdvisoryRecoveryMarker} (agent, claim, HEAD, attempt
+ * number) -- this marker has no legacy unbound form, so every field is
+ * always required. Posting this marker is out of this issue's scope (the
+ * sibling execution/routing tracks own that); this defines the wire
+ * contract only.
+ */
+export interface ParsedCopilotUnavailableMarker {
+  agentId: string;
+  headSha: string;
+  timestamp: string;
+  claimId: string;
+  attempt: number;
+  createdAt: string;
+}
+
 const ISO8601_UTC_PATTERN = /\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z/;
 const OPTIONAL_IDD_VISIBLE_NOTE_PATTERN = String.raw`(?:\s*|\s*\n\s*_[^\n]*\bIDD\b[^\n]*_\s*)`;
 
@@ -167,9 +206,22 @@ const OPERATIONAL_MARKERS: OperationalMarker[] = [
       /^advisory-wait:\s+\S+\s+[0-9a-f]{40}\s+\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z\s*$/,
   },
   {
+    // #1572: the trailing ` claim:{claimId} attempt:{n}` suffix is OPTIONAL
+    // here on purpose. The shipped AW3-R recovery flow
+    // (idd-advisory-wait.instructions.md) already posts and consumes the
+    // legacy 3-field form via post-idd-marker's `--type advisory-recovery`
+    // and protocol-helpers.mts's `advisoryWaitMarkerMatchesHead` (which
+    // matches on a prefix, so any well-formed suffix here stays compatible
+    // with it unmodified). Making the suffix required would silently break
+    // that live flow; making it optional keeps the legacy form recognized
+    // (`operationalMarkerPrefix*`) while still letting a future bound
+    // marker match here too. Only the bound form parses via
+    // `parseAdvisoryRecoveryComment` -- the legacy form is recognized
+    // (filtered as a trusted operational comment) but is NOT usable
+    // recovery-cycle evidence (excluded from counting/anchoring).
     label: 'advisory-wait-recovery:',
     pattern:
-      /^advisory-wait-recovery:\s+\S+\s+[0-9a-f]{40}\s+\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z\s*$/,
+      /^advisory-wait-recovery:\s+\S+\s+[0-9a-f]{40}\s+\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z(?:\s+claim:\S+\s+attempt:[1-9]\d*)?\s*$/,
   },
   {
     label: '<!-- advisory-wait:',
@@ -188,6 +240,18 @@ const OPERATIONAL_MARKERS: OperationalMarker[] = [
     label: 'advisory-reroll:',
     pattern:
       /^advisory-reroll:\s+\S+\s+[0-9a-f]{40}\s+\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z\s*$/,
+  },
+  {
+    // #1572: brand-new terminal marker type, no legacy form to preserve, so
+    // the `claim:{claimId} attempt:{n}` binding suffix is unconditionally
+    // required (unlike advisory-wait-recovery: above). PLAIN-TEXT, same
+    // family shape as advisory-wait: / advisory-wait-recovery: (no visible
+    // note). This issue defines the render/parse contract only; deciding
+    // when to post it is out of scope (owned by the sibling execution/
+    // routing tracks).
+    label: 'copilot-unavailable:',
+    pattern:
+      /^copilot-unavailable:\s+\S+\s+[0-9a-f]{40}\s+\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z\s+claim:\S+\s+attempt:[1-9]\d*\s*$/,
   },
   {
     label: '<!-- forced-handoff:',
@@ -212,6 +276,7 @@ export const IDD_AGENT_DERIVED_MARKERS: ReadonlySet<string> = new Set([
   'advisory-wait-recovery:',
   '<!-- advisory-wait:',
   'advisory-reroll:',
+  'copilot-unavailable:',
 ]);
 
 const FORCED_HANDOFF_CONTEXT_SCOPES = new Set(['issue-only', 'issue-plus-pr']);
@@ -768,10 +833,40 @@ export function renderAdvisoryWaitMarker(payload: {
   return `advisory-wait: ${agentId} ${headSha} ${timestamp}`;
 }
 
+/**
+ * Normalize a claimed positive-integer token (e.g. an attempt number):
+ * accepts a JS number or a purely-numeric string, rejects anything else
+ * (fractional, negative, zero, non-numeric, or unsafe magnitude). Returns
+ * `null` on any invalid input so callers can fail closed.
+ */
+function normalizePositiveIntegerToken(value: unknown): number | null {
+  if (typeof value === 'number') {
+    return Number.isSafeInteger(value) && value >= 1 ? value : null;
+  }
+  const trimmed = String(value ?? '').trim();
+  if (!/^\d+$/.test(trimmed)) {
+    return null;
+  }
+  const parsed = Number.parseInt(trimmed, 10);
+  return Number.isSafeInteger(parsed) && parsed >= 1 ? parsed : null;
+}
+
+/**
+ * `#1572`: extended to OPTIONALLY bind the active claim and an attempt
+ * number, in addition to the original agent/HEAD/timestamp triple. Passing
+ * neither `claimId` nor `attempt` renders the exact legacy 3-field body
+ * (byte-for-byte unchanged, preserving the shipped AW3-R recovery flow that
+ * calls this renderer today without those fields). Passing both appends the
+ * bound suffix. Passing only one of the two throws -- a half-bound marker
+ * would be ambiguous evidence, so this fails closed rather than silently
+ * omitting the partial field.
+ */
 export function renderAdvisoryWaitRecoveryMarker(payload: {
   agentId?: unknown;
   headSha?: unknown;
   timestamp?: unknown;
+  claimId?: unknown;
+  attempt?: unknown;
 }): string {
   const agentId = normalizeNonWhitespaceToken(payload?.agentId);
   const headSha = normalizeNonWhitespaceToken(payload?.headSha).toLowerCase();
@@ -779,7 +874,56 @@ export function renderAdvisoryWaitRecoveryMarker(payload: {
   if (!agentId || !/^[0-9a-f]{40}$/.test(headSha) || !timestamp) {
     throw new Error('invalid advisory-wait-recovery marker payload');
   }
-  return `advisory-wait-recovery: ${agentId} ${headSha} ${timestamp}`;
+  const claimIdProvided =
+    payload?.claimId !== undefined &&
+    payload?.claimId !== null &&
+    payload?.claimId !== '';
+  const attemptProvided =
+    payload?.attempt !== undefined &&
+    payload?.attempt !== null &&
+    payload?.attempt !== '';
+  if (!claimIdProvided && !attemptProvided) {
+    return `advisory-wait-recovery: ${agentId} ${headSha} ${timestamp}`;
+  }
+  const claimId = normalizeNonWhitespaceToken(payload?.claimId);
+  const attempt = normalizePositiveIntegerToken(payload?.attempt);
+  if (!claimId || attempt === null) {
+    throw new Error(
+      'invalid advisory-wait-recovery marker payload: claimId and attempt must both be provided together',
+    );
+  }
+  return `advisory-wait-recovery: ${agentId} ${headSha} ${timestamp} claim:${claimId} attempt:${attempt}`;
+}
+
+/**
+ * `#1572`: brand-new terminal marker, no legacy unbound form -- agent,
+ * claim, HEAD, and attempt number are all unconditionally required (unlike
+ * {@link renderAdvisoryWaitRecoveryMarker}'s optional binding). Rendering
+ * this marker does not decide *when* to post it; that policy belongs to the
+ * sibling execution/routing tracks (#1571/#1570).
+ */
+export function renderCopilotUnavailableMarker(payload: {
+  agentId?: unknown;
+  claimId?: unknown;
+  headSha?: unknown;
+  attempt?: unknown;
+  timestamp?: unknown;
+}): string {
+  const agentId = normalizeNonWhitespaceToken(payload?.agentId);
+  const claimId = normalizeNonWhitespaceToken(payload?.claimId);
+  const headSha = normalizeNonWhitespaceToken(payload?.headSha).toLowerCase();
+  const attempt = normalizePositiveIntegerToken(payload?.attempt);
+  const timestamp = normalizeSecondPrecisionIsoTimestamp(payload?.timestamp);
+  if (
+    !agentId ||
+    !claimId ||
+    !/^[0-9a-f]{40}$/.test(headSha) ||
+    attempt === null ||
+    !timestamp
+  ) {
+    throw new Error('invalid copilot-unavailable marker payload');
+  }
+  return `copilot-unavailable: ${agentId} ${headSha} ${timestamp} claim:${claimId} attempt:${attempt}`;
 }
 
 // #1511: advisory-reroll is ALSO a PLAIN-TEXT marker (no visible note), same
@@ -883,6 +1027,99 @@ export function parseReviewWatermarkComment(
     maxActivityUpdatedAt,
     totalItemCount,
     latestCiCompletedAt,
+    createdAt: isValidIsoTimestamp(createdAt) ? createdAt : 'none',
+  };
+}
+
+/**
+ * Shared parser for the bound `{prefix}: {agentId} {headSha} {timestamp}
+ * claim:{claimId} attempt:{attempt}` shape used by both
+ * `advisory-wait-recovery:` (when bound) and `copilot-unavailable:` (always
+ * bound). Returns `null` on any structural mismatch, including the legacy
+ * unbound `advisory-wait-recovery:` form -- that form is still recognized as
+ * an operational marker by `OPERATIONAL_MARKERS`, but is not usable evidence
+ * for recovery-cycle counting or terminal-clock anchoring (#1572 AC3: fail
+ * closed, exclude rather than guess).
+ */
+function parseBoundAdvisoryEvidenceMarker(
+  prefix: string,
+  body: string,
+): {
+  agentId: string;
+  headSha: string;
+  timestamp: string;
+  claimId: string;
+  attempt: number;
+} | null {
+  const match = body.trimEnd().match(
+    new RegExp(
+      // Fractional seconds, when present, sit before the `Z` designator
+      // per ISO 8601 (e.g. `00:00:00.123Z`) -- this must match the
+      // OPERATIONAL_MARKERS `advisory-wait-recovery:` / `copilot-unavailable:`
+      // patterns exactly, or a fractional embedded timestamp could be
+      // recognized as an operational marker but rejected here (or vice
+      // versa). `ISO8601_UTC_PATTERN` itself has no fractional-seconds
+      // slot, so it is not reused for this group.
+      // attempt requires a positive integer ([1-9]\d*, no leading zero,
+      // no zero) -- matching OPERATIONAL_MARKERS' recognizer patterns
+      // exactly, so `attempt:0` is rejected structurally by BOTH the
+      // recognizer and the parser instead of being recognized as a
+      // well-formed marker here and then discarded post-parse.
+      `^${prefix}:\\s+(\\S+)\\s+([0-9a-f]{40})\\s+(\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?Z)\\s+claim:(\\S+)\\s+attempt:([1-9]\\d*)\\s*$`,
+    ),
+  );
+  if (!match) {
+    return null;
+  }
+  const attempt = Number.parseInt(match[5], 10);
+  if (!Number.isSafeInteger(attempt) || attempt < 1) {
+    // Unreachable given the regex above already excludes 0 and non-digits;
+    // kept as defense-in-depth against a future regex edit that widens the
+    // attempt group without updating this guard.
+    return null;
+  }
+  return {
+    agentId: match[1],
+    headSha: match[2].toLowerCase(),
+    timestamp: match[3],
+    claimId: match[4],
+    attempt,
+  };
+}
+
+/**
+ * Parse a bound `advisory-wait-recovery:` marker (#1572). Returns `null` for
+ * the legacy 3-field form (no claim/attempt binding) -- callers must treat
+ * that as unusable recovery-cycle evidence, not a parse failure to retry.
+ */
+export function parseAdvisoryRecoveryComment(
+  body: string,
+  createdAt: string,
+): ParsedAdvisoryRecoveryMarker | null {
+  const parsed = parseBoundAdvisoryEvidenceMarker(
+    'advisory-wait-recovery',
+    body,
+  );
+  if (!parsed) {
+    return null;
+  }
+  return {
+    ...parsed,
+    createdAt: isValidIsoTimestamp(createdAt) ? createdAt : 'none',
+  };
+}
+
+/** Parse a `copilot-unavailable:` terminal marker (#1572). */
+export function parseCopilotUnavailableComment(
+  body: string,
+  createdAt: string,
+): ParsedCopilotUnavailableMarker | null {
+  const parsed = parseBoundAdvisoryEvidenceMarker('copilot-unavailable', body);
+  if (!parsed) {
+    return null;
+  }
+  return {
+    ...parsed,
     createdAt: isValidIsoTimestamp(createdAt) ? createdAt : 'none',
   };
 }

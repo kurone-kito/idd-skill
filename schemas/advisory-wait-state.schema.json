@@ -171,6 +171,78 @@
     "trustedMarkerActorsSource": {
       "type": "string",
       "enum": ["flag", "env", "config", "none"]
+    },
+    "copilotRecovery": {
+      "type": "object",
+      "description": "#1572 terminal Copilot stall-recovery state. Deliberately independent of outcome/f3Outcome above: no field here is derived from them, and no field above is derived from this object. `state: \"COPILOT_UNAVAILABLE\"` is waiver *eligibility* only (see idd-advisory-wait.instructions.md) -- it must never be read as advisory satisfaction or readiness by any consumer.",
+      "required": [
+        "cap",
+        "completedCycleCount",
+        "remainingBudget",
+        "capExhausted",
+        "terminalWindowMinutes",
+        "clockAnchor",
+        "elapsedMinutes",
+        "windowElapsed",
+        "activeClaimProvided",
+        "state",
+        "reason"
+      ],
+      "properties": {
+        "cap": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Configured per-PR-HEAD recovery-cycle cap (advisoryWait.recoveryCycleCap, default 2)."
+        },
+        "completedCycleCount": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Count of trusted, active-claim-bound, current-HEAD-bound advisory-recovery markers. A completed cycle is counted by marker presence, never by the largest embedded attempt number (diagnostic only)."
+        },
+        "remainingBudget": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "max(cap - completedCycleCount, 0)."
+        },
+        "capExhausted": {
+          "type": "boolean",
+          "description": "completedCycleCount >= cap."
+        },
+        "terminalWindowMinutes": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "description": "Configured terminal-unavailability window in minutes (advisoryWait.terminalWindow, default 720 = 12h)."
+        },
+        "clockAnchor": {
+          "type": "string",
+          "pattern": "^$|^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?Z$",
+          "description": "GitHub created_at of the earliest trusted, bound, current-HEAD advisory-recovery marker; empty when none exists. Embedded marker timestamps never move this anchor -- only the GitHub-assigned comment created_at counts."
+        },
+        "elapsedMinutes": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Minutes between clockAnchor and now; 0 when there is no anchor."
+        },
+        "windowElapsed": {
+          "type": "boolean",
+          "description": "clockAnchor is non-empty AND elapsedMinutes >= terminalWindowMinutes."
+        },
+        "activeClaimProvided": {
+          "type": "boolean",
+          "description": "True only when both --claim-id and --agent-id were supplied to bind the active claim. False fails the whole object closed to NOT_TERMINAL, reason: active-claim-not-provided."
+        },
+        "state": {
+          "type": "string",
+          "enum": ["NOT_TERMINAL", "COPILOT_UNAVAILABLE"],
+          "description": "COPILOT_UNAVAILABLE only when the recovery-cycle cap is exhausted, the terminal window has elapsed since clockAnchor, and no current-HEAD Copilot review exists (lastCopilotCommit !== prHeadSha) -- all proven from trusted evidence. Any missing or ambiguous evidence fails closed to NOT_TERMINAL."
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Machine-readable reason for the current state: active-claim-not-provided, no-trusted-recovery-markers, recovery-cap-not-exhausted, terminal-window-not-elapsed, current-head-review-exists, or the COPILOT_UNAVAILABLE satisfied-all-conditions reason."
+        }
+      },
+      "additionalProperties": false
     }
   },
   "additionalProperties": false

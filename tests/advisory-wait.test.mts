@@ -6,12 +6,18 @@ import { test } from 'node:test';
 import {
   DEFAULT_ADVISORY_CONVERGENCE_DEADLINE_MINUTES,
   DEFAULT_ADVISORY_PRIMARY_BOT_LOGIN,
+  DEFAULT_ADVISORY_RECOVERY_CYCLE_CAP,
+  DEFAULT_ADVISORY_TERMINAL_WINDOW_MINUTES,
   readAdvisoryConvergenceDeadlineMinutes,
   readAdvisoryPrimaryBotLogin,
+  readAdvisoryRecoveryCycleCap,
   readAdvisorySecondaryBotLogin,
+  readAdvisoryTerminalWindowMinutes,
   readAdvisoryWaitPolicy,
   resolveAdvisoryPrimaryBotLogin,
+  resolveAdvisoryRecoveryCycleCap,
   resolveAdvisorySecondaryBotLogin,
+  resolveAdvisoryTerminalWindowMinutes,
   resolveAdvisoryWaitPolicy,
 } from '../src/scripts/advisory-wait-policy.mts';
 import {
@@ -905,6 +911,161 @@ test('readAdvisoryConvergenceDeadlineMinutes applies a schema-valid override and
     readAdvisoryConvergenceDeadlineMinutes(join(root, 'missing.json')),
     DEFAULT_ADVISORY_CONVERGENCE_DEADLINE_MINUTES,
   );
+});
+
+// #1572: recovery-cycle cap (default 2), accounted independently of
+// requestCap and sameHeadRerollCap.
+
+test('resolveAdvisoryRecoveryCycleCap defaults to 2 on absent/empty config', () => {
+  assert.equal(resolveAdvisoryRecoveryCycleCap({}), 2);
+  assert.equal(resolveAdvisoryRecoveryCycleCap(), 2);
+  assert.equal(resolveAdvisoryRecoveryCycleCap(null), 2);
+});
+
+test('resolveAdvisoryRecoveryCycleCap accepts an explicit positive integer', () => {
+  assert.equal(
+    resolveAdvisoryRecoveryCycleCap({ advisoryWait: { recoveryCycleCap: 5 } }),
+    5,
+  );
+});
+
+test('resolveAdvisoryRecoveryCycleCap falls back to the default on a non-positive-integer value', () => {
+  assert.equal(
+    resolveAdvisoryRecoveryCycleCap({ advisoryWait: { recoveryCycleCap: 0 } }),
+    2,
+  );
+  assert.equal(
+    resolveAdvisoryRecoveryCycleCap({ advisoryWait: { recoveryCycleCap: -1 } }),
+    2,
+  );
+  assert.equal(
+    resolveAdvisoryRecoveryCycleCap({
+      advisoryWait: { recoveryCycleCap: 1.5 },
+    }),
+    2,
+  );
+  assert.equal(
+    resolveAdvisoryRecoveryCycleCap({
+      advisoryWait: { recoveryCycleCap: '3' },
+    }),
+    2,
+  );
+});
+
+test('readAdvisoryRecoveryCycleCap applies a schema-valid override and is scoped to advisoryWait', () => {
+  const root = mkdtempSync(join(tmpdir(), 'idd-advisory-recovery-cap-'));
+  const validPath = join(root, 'policy.valid.json');
+  const invalidPath = join(root, 'policy.invalid.json');
+  const validConfig = JSON.parse(
+    JSON.stringify(loadJson('fixtures/schemas/policy.valid.json')),
+  );
+  validConfig.advisoryWait = { recoveryCycleCap: 4 };
+  writeFileSync(validPath, JSON.stringify(validConfig), 'utf8');
+  // A non-integer recoveryCycleCap violates the advisoryWait schema, so the
+  // reader fails closed to the default.
+  writeFileSync(
+    invalidPath,
+    JSON.stringify({ advisoryWait: { recoveryCycleCap: 'four' } }),
+    'utf8',
+  );
+
+  assert.equal(readAdvisoryRecoveryCycleCap(validPath), 4);
+  assert.equal(
+    readAdvisoryRecoveryCycleCap(invalidPath),
+    DEFAULT_ADVISORY_RECOVERY_CYCLE_CAP,
+  );
+  assert.equal(
+    readAdvisoryRecoveryCycleCap(join(root, 'missing.json')),
+    DEFAULT_ADVISORY_RECOVERY_CYCLE_CAP,
+  );
+});
+
+// #1572: 12h terminal Copilot-unavailability window.
+
+test('resolveAdvisoryTerminalWindowMinutes defaults to 720 (12h) on absent/empty config', () => {
+  assert.equal(resolveAdvisoryTerminalWindowMinutes({}), 720);
+  assert.equal(resolveAdvisoryTerminalWindowMinutes(), 720);
+  assert.equal(resolveAdvisoryTerminalWindowMinutes(null), 720);
+});
+
+test('resolveAdvisoryTerminalWindowMinutes accepts an explicit ISO8601 duration', () => {
+  assert.equal(
+    resolveAdvisoryTerminalWindowMinutes({
+      advisoryWait: { terminalWindow: 'PT6H' },
+    }),
+    6 * 60,
+  );
+  assert.equal(
+    resolveAdvisoryTerminalWindowMinutes({
+      advisoryWait: { terminalWindow: 'P1D' },
+    }),
+    24 * 60,
+  );
+});
+
+test('resolveAdvisoryTerminalWindowMinutes falls back to the default on an invalid duration', () => {
+  assert.equal(
+    resolveAdvisoryTerminalWindowMinutes({
+      advisoryWait: { terminalWindow: 'not-a-duration' },
+    }),
+    720,
+  );
+  assert.equal(
+    resolveAdvisoryTerminalWindowMinutes({
+      advisoryWait: { terminalWindow: 'PT0H' },
+    }),
+    720,
+  );
+});
+
+test('readAdvisoryTerminalWindowMinutes applies a schema-valid override and is scoped to advisoryWait', () => {
+  const root = mkdtempSync(join(tmpdir(), 'idd-advisory-terminal-window-'));
+  const validPath = join(root, 'policy.valid.json');
+  const invalidPath = join(root, 'policy.invalid.json');
+  const validConfig = JSON.parse(
+    JSON.stringify(loadJson('fixtures/schemas/policy.valid.json')),
+  );
+  validConfig.advisoryWait = { terminalWindow: 'PT8H' };
+  writeFileSync(validPath, JSON.stringify(validConfig), 'utf8');
+  // A non-string terminalWindow violates the advisoryWait schema, so the
+  // reader fails closed to the default.
+  writeFileSync(
+    invalidPath,
+    JSON.stringify({ advisoryWait: { terminalWindow: 8 } }),
+    'utf8',
+  );
+
+  assert.equal(readAdvisoryTerminalWindowMinutes(validPath), 8 * 60);
+  assert.equal(
+    readAdvisoryTerminalWindowMinutes(invalidPath),
+    DEFAULT_ADVISORY_TERMINAL_WINDOW_MINUTES,
+  );
+  assert.equal(
+    readAdvisoryTerminalWindowMinutes(join(root, 'missing.json')),
+    DEFAULT_ADVISORY_TERMINAL_WINDOW_MINUTES,
+  );
+});
+
+test('recovery-cycle cap and terminal window are independent of requestCap and sameHeadRerollCap', () => {
+  // Setting requestCap and sameHeadRerollCap must never change the
+  // recovery-cycle cap or terminal window defaults, and vice versa -- each
+  // is its own counter/knob (#1572 AC1).
+  const config = {
+    advisoryWait: {
+      requestCap: 99,
+      sameHeadRerollCap: 7,
+    },
+  };
+  assert.equal(resolveAdvisoryRecoveryCycleCap(config), 2);
+  assert.equal(resolveAdvisoryTerminalWindowMinutes(config), 720);
+  assert.equal(resolveAdvisoryWaitPolicy(config).requestCap, 99);
+
+  const recoveryConfig = {
+    advisoryWait: { recoveryCycleCap: 9, terminalWindow: 'PT1H' },
+  };
+  assert.equal(resolveAdvisoryWaitPolicy(recoveryConfig).requestCap, 30);
+  assert.equal(resolveAdvisoryRecoveryCycleCap(recoveryConfig), 9);
+  assert.equal(resolveAdvisoryTerminalWindowMinutes(recoveryConfig), 60);
 });
 
 test('computeSecondaryRequestedForHead detects a same-HEAD secondary request and resets per HEAD', () => {
