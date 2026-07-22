@@ -29,9 +29,8 @@ vendored-node** invocation form. Under `package-manager` /
 `ephemeral-npx` profiles, `scripts/` is not vendored into the repo —
 resolve each command's profile-selected equivalent from
 `docs/idd-helper-scripts.md` instead of running the vendored form
-verbatim. A helper genuinely missing on the active profile is itself a
-missing-helper case under rule 1 above (stop and ask), not a reason to
-fall through to the written tables.
+verbatim. A helper missing on the active profile is a missing-helper
+case under rule 1 (stop and ask), not a reason to fall through.
 
 ## Stop-and-ask
 
@@ -202,7 +201,8 @@ title; replace every non `a-z`/`0-9`
 character with `-`; split on `-` and drop empty tokens and the
 stop-words `a`, `an`, `the`, `and`, `or`, `in`, `for`, `to`, `with`,
 `from`; rejoin with `-`; cut to 40 chars (back off to the last `-`
-before 40 if the cut lands mid-token); strip trailing `-`; empty result
+before 40 if the cut lands mid-token **and** a `-` exists there;
+otherwise keep the hard 40-char cut); strip trailing `-`; empty result
 → `task`.
 
 Then scan for collisions:
@@ -335,8 +335,10 @@ comments, and check:
 Any failure → claim contested → **STOP**, do not proceed.
 
 **Forced-handoff adopt-verbatim** only: skip steps 1-4 (no
-`claimed-by` was posted for this path); only step 5 applies — recompute
-the nonce winner for the adopted `newClaimId` and confirm it is yours.
+`claimed-by` was posted for this path); only step 5 applies — wait the
+settle delay (`claim.verifySettleDelay`, default `PT5S`), then
+recompute the nonce winner for the adopted `newClaimId` and confirm it
+is yours.
 The successor pair is **sticky**: it re-activates on every resolution
 pass, so a later plain `claimed-by supersedes: none` will not take
 effect. To move off it, either keep adopting it verbatim, or post
@@ -383,6 +385,4 @@ first, then `--fresh-claim-gate` if not `already_owned`):
 No release step: `git worktree remove` at F4 deletes the lock with the
 worktree.
 
-Then continue to `idd-work-lite.instructions.md` (or
-`idd-work.instructions.md` if the lite work file is not yet shipped in
-this repository).
+Then continue to `idd-work-lite.instructions.md`.
