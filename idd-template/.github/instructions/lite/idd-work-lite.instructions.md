@@ -39,48 +39,56 @@ request, or other GitHub side effect, confirm all of the following:
 ## B1 — Create worktree
 
 1. On the primary worktree, run `git fetch origin main`.
-2. On the primary worktree, confirm local `main` has no unpushed commits.
-3. Fast-forward local `main` with `git merge --ff-only origin/main`.
-4. Keep the primary worktree on `main` throughout B1.
-5. Reuse the existing branch name verbatim for takeover.
-6. Run `git worktree list` (and `git worktree list --porcelain` when checking
+2. On the primary worktree, run `git log origin/main..main --oneline`.
+3. If step 2 outputs any lines, stop and report: local `main` has unpushed
+   commits. Do not force-reset `main`.
+4. Fast-forward local `main` with `git merge --ff-only origin/main`.
+5. Keep the primary worktree on `main` throughout B1.
+6. Reuse the existing branch name verbatim for takeover.
+7. Run `git worktree list` (and `git worktree list --porcelain` when checking
    prunable entries). If a sibling worktree already exists, inspect that exact
    path with the profile-selected `claim-lock` helper before reuse or removal.
-7. Run `git branch --list {branch-name}`. If the branch exists locally, reuse it
+8. Run `git branch --list {branch-name}`. If the branch exists locally, reuse it
    only when it is an inheritable takeover branch; otherwise delete it with
    `git branch -d {branch-name}`.
-8. If deletion is refused, check whether a remote branch or open PR exists for
+9. If deletion is refused, check whether a remote branch or open PR exists for
    this branch. If so, treat it as inheritable and reuse it. If not, stop for
    manual cleanup.
-9. If `git worktree list --porcelain` marks the entry `prunable` and its path
-   is already absent, remove that stale entry with `git worktree remove --force
+10. If `git worktree list --porcelain` marks the entry `prunable` and its path
+    is already absent, remove that stale entry with `git worktree remove --force
     <path-from-list>` and continue.
-10. If the target path exists but is not listed in `git worktree list`, stop for
+11. If the target path exists but is not listed in `git worktree list`, stop for
     manual cleanup.
-11. Create the sibling worktree at `../<repo-name>.<normalized-branch>`.
-12. Define `normalized-branch` as the branch name with each `/` replaced by
+12. Create the sibling worktree at `../<repo-name>.<normalized-branch>`.
+13. Define `normalized-branch` as the branch name with each `/` replaced by
     `-`.
-13. Use WorkTrunk if available.
-14. In automation, use `wt switch --create -b main <branch-name> -x true`.
-15. Do not use `wt new`.
-16. If WorkTrunk uses a pre-start install hook, its first command must acquire
+14. Use WorkTrunk if available.
+15. In automation, use `wt switch --create -b main <branch-name> -x true`.
+16. Do not use `wt new`.
+17. If WorkTrunk uses a pre-start install hook, its first command must acquire
     the worktree lock before it installs anything.
-17. If the hook cannot acquire the lock, create the worktree without the hook.
-18. If WorkTrunk is unavailable, use `git worktree add <path> -b <branch-name>
+18. If the hook cannot acquire the lock, create the worktree without the hook.
+19. If WorkTrunk is unavailable, use `git worktree add <path> -b <branch-name>
      origin/main` for a fresh claim.
-19. If WorkTrunk is unavailable and this is a takeover, use `git worktree add
+20. If WorkTrunk is unavailable and this is a takeover, use `git worktree add
      <path> <branch-name>` with the local branch.
-20. If WorkTrunk is unavailable and only the remote branch exists, run `git
+21. If WorkTrunk is unavailable and only the remote branch exists, run `git
      fetch origin <branch-name>`.
-21. If WorkTrunk is unavailable and only the remote branch exists, use `git
+22. If WorkTrunk is unavailable and only the remote branch exists, use `git
      worktree add <path> -b <branch-name> origin/<branch-name>`.
-22. For manual `git worktree add` or WorkTrunk without a hook, acquire the
+23. For manual `git worktree add` or WorkTrunk without a hook, acquire the
     worktree lock with the profile-selected `claim-lock` helper immediately
     after creation and before any install or other mutation.
-23. Run `install-deps` on the manual/no-hook path.
-24. Verify the primary worktree's HEAD is still on `main`.
-25. Verify `git worktree list` shows the new path.
-26. Verify the current directory is the new sibling worktree.
+24. Run `install-deps` on the manual/no-hook path.
+25. Verify the primary worktree's HEAD is still on `main`.
+26. Verify `git worktree list` shows the new path.
+27. Verify the current directory is the new sibling worktree.
+28. If any of steps 25-27 fails, the worktree-creation contract is violated:
+    stop, post a hold note naming the failed check, and do not continue to
+    B2 from the primary worktree.
+29. Repair a contract violation by removing the misplaced branch from the
+    primary worktree, after confirming no work is lost, then recreate the
+    sibling worktree from step 12.
 
 ## B2 — Create and refine plan
 
@@ -146,7 +154,8 @@ hold until a maintainer addendum resolves it.
 2. Otherwise, if the critique pass reports zero issues, check the `fix-validate`
    floor.
 3. If the floor has not passed, continue to C5 to repair validation.
-4. If the floor has passed, read `idd-pr-submit.instructions.md` next.
+4. If the floor has passed, open and follow `idd-pr-submit.instructions.md`
+   now.
 
 ### C3 — Score issues
 
@@ -158,10 +167,10 @@ hold until a maintainer addendum resolves it.
 
 1. Accept high issues.
 2. If accepted issues remain and the floor has not passed, continue to C5.
-3. Otherwise, if no accepted issues remain and the floor has passed, read
-   `idd-pr-submit.instructions.md` next.
+3. Otherwise, if no accepted issues remain and the floor has passed, open and
+   follow `idd-pr-submit.instructions.md` now.
 4. Otherwise, if only low accepted issues remain after 3 loops and the floor
-   has passed, read `idd-pr-submit.instructions.md` next.
+   has passed, open and follow `idd-pr-submit.instructions.md` now.
 5. Otherwise continue to C5.
 
 ### C5 — Fix accepted issues
