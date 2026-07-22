@@ -284,10 +284,14 @@ properties — it is not merely inert. Until the schema follow-up
 lands, point a lite-tier session at the right files with an explicit
 operator instruction, or have it open the phase files below manually.
 
-**Phase → lite file mapping** — only present if your repository ships
-`.github/instructions/lite/` (re-check that directory before trusting
-this table to stay current; a repository importing this template
-fresh ships none of these until it authors them):
+**Phase → lite file mapping** — the "Lite file" column names the path
+a shipped file would use, not a guarantee that your repository has
+one: check your own `.github/instructions/lite/` directory before
+trusting this table to stay current. A template import may already
+include some or all of these files (the upstream IDD repository
+dogfoods its own lite-execution-profile roadmap and this table
+mirrors its current state), or none, depending on when you imported
+and whether your repository has authored any of its own:
 
 | Phase                    | Standard file                       | Lite file                                     |
 | ------------------------ | ----------------------------------- | --------------------------------------------- |
