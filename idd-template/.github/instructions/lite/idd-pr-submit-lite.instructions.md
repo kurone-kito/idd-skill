@@ -1,0 +1,162 @@
+# IDD — PR Submit Phase (Lite) (D1-D4)
+
+Lite profile for helper-enabled weak/local models. Same semantics as
+`idd-pr-submit.instructions.md`. Use only for the single issue this
+session already claimed and implemented. If the repository is
+`instructions-only`, use the standard PR-submit instructions instead.
+
+## Helper runtime contract
+
+- Helper-enabled profiles: when a step names a helper or command set, use
+  it. If a required helper is missing, fails, or disagrees with live
+  state, stop and ask. Do not fall back silently to prose.
+- `instructions-only`: do not use this lite file; use
+  `idd-pr-submit.instructions.md` instead.
+- Any mismatch between this file and the standard PR-submit phase is a
+  bug in this file.
+
+## Stop-and-ask conditions
+
+- The active claim is ambiguous, disputed, or lost.
+- The current directory is not the sibling worktree for the claimed
+  branch, or the claimed branch is not the current branch.
+- A required helper or validation command is unavailable, invalid, or
+  disagrees with live state.
+- D1's rebase hits a content conflict this session cannot resolve
+  mechanically.
+- After D1, `git branch --show-current` is empty (detached HEAD) and one
+  re-attach-and-re-rebase attempt still fails.
+- D3.5's closing-keyword self-check still fails after one corrective
+  edit.
+- `closingIssuesReferences` still does not exactly match the deliberate
+  closing set after one corrective edit.
+- The required-check set for D4 cannot be determined (protection or
+  ruleset reads are unreadable).
+
+## Pre-mutation guard
+
+Before any commit, push, rebase, claim heartbeat, reply, resolve,
+reviewer request, or other GitHub side effect, confirm all of the
+following:
+
+1. The active claim still uses this session's claim id.
+2. The current directory is the sibling worktree for the claimed branch.
+3. `git branch --show-current` equals the claimed branch.
+4. The worktree-local claim lock is held.
+5. If any check fails, stop.
+
+## D1 — Sync main before first push
+
+1. Run `git fetch origin main`.
+2. If this branch has never been pushed and `git merge-base HEAD
+   origin/main` equals `origin/main`, the branch already contains every
+   commit on `main` — skip the rebase and go to D2.
+3. Otherwise rebase onto it: `git rebase origin/main`.
+4. If the rebase hits a content conflict, resolve it, then run
+   **fix-validate** before continuing if any file was hand-edited during
+   resolution.
+5. **Signed-commit repos**: if primary commit signing is
+   non-interactive-hostile (GPG pinentry, or a hardware-touch path) but
+   the repository provides a fallback wrapper for arbitrary git
+   subcommands (for example `-c gpg.format=ssh -c
+   user.signingkey=<abs-path> -c commit.gpgsign=true` passed to `git`
+   before the subcommand, or a repo alias that wraps any subcommand — a
+   commit-only alias will not run `rebase`), run this step's
+   `git rebase origin/main` **through that wrapper**, and continue a
+   conflict with the **wrapper's own** `--continue` form. Plain `git
+   rebase --continue` re-signs through the configured primary signing and
+   stalls non-interactively right after the conflict is already resolved.
+6. After the rebase, verify both:
+   - `git branch --show-current` is non-empty (HEAD is not detached).
+   - The expected local commit appears in `git log --oneline
+     main..HEAD`.
+7. If HEAD is detached, re-attach once with `git checkout {branch-name}`,
+   repeat this D1 rebase (through the same signing wrapper on a
+   signed-commit repo), then re-verify both checks in step 6. If
+   recovery still fails, stop and post a hold note naming the branch
+   state.
+
+Once the branch is pushed, treat it as published review history: a
+later resync merges `main` into the branch through the E-phase review
+loop instead of returning to this D1 rebase path.
+
+## D2 — Verify claim, lint, push
+
+1. Re-read the issue. The active claim must still use this session's
+   claim id. If it is missing, released, or held by a different claim id
+   (even under the same agent id), the claim was lost — stop.
+2. Run **pre-push-validate**.
+3. Push the branch. Use a normal push on first publication. Use
+   `--force-with-lease` only when recovering an already-published branch
+   under an explicit, repository-permitted force-push exception that
+   already required a rebase; otherwise use the merge-based sync path
+   instead.
+
+## D3 — Create PR
+
+1. If `.github/pull_request_template.md` exists, shape the PR body to
+   that template's sections from the start.
+2. The PR body must include: a concise summary, a closing keyword line
+   for the claimed issue, recommended follow-up issues (if any), and
+   background/rationale only when it materially affects review.
+3. **Closing keyword**: write a plain-text line such as `Closes #N` for
+   the claimed issue number, on its own line. GitHub recognizes these
+   keyword forms (case-insensitive): `close`, `closes`, `closed`, `fix`,
+   `fixes`, `fixed`, `resolve`, `resolves`, `resolved`. Never wrap the
+   keyword in inline code, a fenced code block, or a block-quote `>`
+   prefix — GitHub does not detect the keyword in any of those forms,
+   and the linked issue will not auto-close on merge.
+4. **Negation-blind detection**: GitHub matches a keyword immediately
+   adjacent to a `#N` with no concept of negation. Never place a
+   recognized keyword directly next to a `#N` you do not intend to
+   close, even inside a sentence saying it should not close it — reorder
+   the sentence so no keyword sits next to that reference.
+5. **Multiple closes**: repeat the keyword for each issue — `Closes #1,
+   closes #2` closes both; `Closes #1, #2` closes only the first.
+6. If CODEOWNERS or expected reviewers are not auto-assigned, request
+   them explicitly: `gh pr edit {pr-number} --add-reviewer
+   {reviewer-login}`.
+
+### D3.5 — Verify closing keyword detection
+
+1. Fetch the PR body: `gh pr view {pr-number} --json body --jq '.body'`.
+2. Strip fenced code blocks, inline-code spans, and block-quoted lines
+   from the body.
+3. Search the remaining plain text for `\b(close[sd]?|fix(e[sd])?|
+   resolve[sd]?)\s+#<N>\b` for the claimed issue number `<N>`.
+4. If no match: edit the PR body to add a correctly placed plain-text
+   closing line, then repeat steps 1-3 once. If it still fails, stop and
+   post a hold note citing the PR URL.
+5. Confirm the closing set matches exactly: `gh pr view {pr-number}
+   --json closingIssuesReferences --jq
+   '.closingIssuesReferences[].number'` must list precisely the
+   deliberate closing set (normally just `<N>`).
+   - An extra entry usually means an unrelated `#M` sits next to a
+     keyword elsewhere in the body — separate them.
+   - A missing entry means that issue's keyword did not register — apply
+     the same edit-and-recheck path as step 4 for that number.
+   - Repeat once after either fix. If it still fails, stop and post a
+     hold note citing the PR URL.
+
+## D4 — Wait for CI
+
+1. Use the profile-selected CI-wait-policy helper as the deterministic
+   source for the required-check set and the running/generation timeouts
+   and rerun budget. If the helper is unavailable, fails, or disagrees
+   with live GitHub state, stop and ask — do not re-derive
+   branch-protection or ruleset rules by hand.
+2. Poll required checks for the current PR head SHA until every one
+   reaches a terminal state (pass or fail), respecting the helper's
+   timeout and rerun-budget policy.
+3. **On success** (every required check passes): proceed to
+   `idd-review-snapshot.instructions.md` (E1).
+4. **Exception**: if `idd-advisory-convergence` is the only
+   non-passing required check, and that check's own run-log JSON verdict
+   reports `pending: false` with outstanding review reasons (thread
+   disposition or actionable item count on the latest review), this is
+   not a CI-wait state — it turns green only after E-phase disposition,
+   downstream of D4. Absent a maintainer-posted external-check waiver
+   for this HEAD (which needs one rerun first to reflect the waiver),
+   exit CI-wait now and proceed directly to E1. This never relaxes the
+   merge gate: the check stays required, and F2 re-verifies it
+   independently before merge.
