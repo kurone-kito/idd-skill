@@ -44,7 +44,7 @@ that runtime route is fully active everywhere.
 If D1 itself reveals content conflicts before the first push, resolve
 them and continue the rebase. After completing the rebase, if any files
 were manually edited during conflict resolution, run **fix-validate**
-before proceeding.
+and commit any resulting changes before proceeding.
 
 On a signed-commit repo whose primary signing is non-interactive-hostile
 (GPG pinentry or a hardware-touch path) but that provides a fallback
