@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
@@ -81,11 +81,11 @@ function createTwoCommitRepo(): { dir: string; older: string; newer: string } {
   git(['config', 'user.name', 'Test']);
   writeFileSync(join(dir, 'a.txt'), 'a\n');
   git(['add', 'a.txt']);
-  git(['commit', '-q', '-m', 'older']);
+  gitNoSign(dir, ['commit', '-q', '-m', 'older']);
   const older = git(['rev-parse', 'HEAD']);
   writeFileSync(join(dir, 'b.txt'), 'b\n');
   git(['add', 'b.txt']);
-  git(['commit', '-q', '-m', 'newer']);
+  gitNoSign(dir, ['commit', '-q', '-m', 'newer']);
   const newer = git(['rev-parse', 'HEAD']);
   sharedTwoCommitRepo = { dir, older, newer };
   return sharedTwoCommitRepo;
@@ -443,6 +443,42 @@ test('classifyBranchConflictState: post-push merge recommendation for BEHIND is 
   });
   assert.equal(result.syncRecommendation, 'merge-main');
   assert.equal(result.baseAdvancedSinceMergeBase, true);
+});
+
+test('createTwoCommitRepo: commits succeed even with global commit signing forced on', () => {
+  // Regression test for #1628: createTwoCommitRepo()'s two commit calls
+  // must go through gitNoSign() (or an equivalent `-c commit.gpgsign=false`)
+  // instead of the raw git() helper, so they never attempt a real GPG
+  // signature. Simulate a machine with a real, interactively-signed global
+  // GPG key by pointing GIT_CONFIG_GLOBAL at a temporary config that forces
+  // signing on and points gpg.program at a binary that always fails --
+  // the exact pattern tests/worktree-guard-hook.test.mts already uses for
+  // this same condition. Reset the memoized shared repo first so this test
+  // actually forces a rebuild under the poisoned config, rather than
+  // silently reusing an already-built repo from an earlier test and
+  // passing for the wrong reason.
+  const configDir = mkdtempSync(
+    join(tmpdir(), 'idd-branch-conflict-state-gitconfig-'),
+  );
+  const configPath = join(configDir, 'gitconfig');
+  const previousGlobal = process.env.GIT_CONFIG_GLOBAL;
+  writeFileSync(
+    configPath,
+    '[commit]\n\tgpgsign = true\n[gpg]\n\tprogram = /bin/false\n',
+  );
+  sharedTwoCommitRepo = null;
+  try {
+    process.env.GIT_CONFIG_GLOBAL = configPath;
+    // Any signing attempt would invoke /bin/false and throw, failing this.
+    assert.doesNotThrow(() => createTwoCommitRepo());
+  } finally {
+    if (previousGlobal === undefined) {
+      delete process.env.GIT_CONFIG_GLOBAL;
+    } else {
+      process.env.GIT_CONFIG_GLOBAL = previousGlobal;
+    }
+    rmSync(configDir, { recursive: true, force: true });
+  }
 });
 
 test('classifyBranchConflictState: CLEAN with base advanced past merge-base reports true with an advisory note', async () => {
