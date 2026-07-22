@@ -126,14 +126,16 @@ This section's rebase only applies **before the branch's first push**.
    `git rebase origin/main`. Otherwise (signing is not hostile, or is
    hostile with a wrapper already covering it transparently), run the
    plain `git rebase origin/main`.
-6. If the rebase hits a content conflict, resolve it, then run
-   **fix-validate** before continuing if any file was hand-edited during
-   resolution. On the signed-commit repo case in step 5, continue with
-   the **wrapper's own** `--continue` form, not plain `git rebase
+6. If the rebase hits a content conflict, resolve it and continue the
+   rebase. On the signed-commit repo case in step 5, continue with the
+   **wrapper's own** `--continue` form, not plain `git rebase
    --continue` — the plain form re-signs through the configured primary
    signing and stalls non-interactively right after the conflict is
    already resolved.
-7. After the rebase, verify both:
+7. After the **entire** rebase completes (not per-conflict, mid-rebase):
+   if any file was hand-edited during conflict resolution, run
+   **fix-validate** now, against the final rebased state. Then verify
+   both:
    - `git branch --show-current` is non-empty (HEAD is not detached).
    - The expected local commit appears in `git log --oneline
      origin/main..HEAD` (not local `main`, which this file never
@@ -267,7 +269,13 @@ its handoff point with no one left to act on the result.
    or rerunning it is outside this file's mechanical scope).
 6. **`pending`** or **`missing`** (an expected required check has not
    posted a result yet): keep polling until `success`, `failing`, or the
-   ci-wait-policy timeout is reached.
+   ci-wait-policy timeout is reached. **On timeout**: apply
+   ci-wait-policy's `rerunPolicy` (default `rerun-once`) — if this is
+   the first timeout for this wait and the policy allows a rerun,
+   rerun the stalled check once and resume polling; if the timeout
+   recurs after that rerun, or the policy is `hold`, stop per the
+   condition above and post a hold note rather than polling
+   indefinitely.
 7. **`success`**: proceed to `idd-review-snapshot.instructions.md` (E1).
 8. **Exception**: if `idd-advisory-convergence` is the only
    non-passing required check, and that check's own run-log JSON verdict
