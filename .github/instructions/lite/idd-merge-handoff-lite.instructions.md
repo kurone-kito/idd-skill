@@ -46,8 +46,11 @@ Before posting the handoff comment, confirm all of the following:
 
 1. Compose a comment containing:
    - The PR number and branch.
-   - The recorded F2 verdict: `ready` (`true`/`false`) and, if `false`,
-     every `blockers[]` entry verbatim (`gate` plus `detail`).
+   - The recorded F2 verdict: `prHeadSha` (the HEAD this verdict
+     applies to — include it regardless of `ready`, so a reader is
+     never left guessing which commit the blocker list describes),
+     `ready` (`true`/`false`), and, if `false`, every `blockers[]`
+     entry verbatim (`gate` plus `detail`).
    - The active `{claim-id}`.
    - If `ready` is `true`: the merge command candidate, for the
      operator or a stronger-tier session to review and run —
