@@ -531,20 +531,20 @@ Route based on `branchState` from the helper (or `mergeable` /
 
 ## Merge-main livelock under fast-moving `main`
 
-Under heavy concurrent-session load, `main` can advance again before
-one full {sync path → E1 → F1/F2} cycle finishes, re-triggering
-`behind-no-conflict` next pass; naive repetition can livelock,
-failing to reach F3 for as long as `main` keeps moving (observed
-2026-07-22, PR #1612).
+Under heavy concurrent-session load, `main` can advance before one
+{sync path → E1 → F1/F2} cycle finishes, re-triggering
+`behind-no-conflict`; naive repetition livelocks, never reaching F3
+while `main` keeps moving (observed 2026-07-22, PR #1612).
 
-**Rule**: post the watermark as the **last** action before the F3
-`idd-merge-execute.mjs --apply` attempt, every pass. Anything after it
-(a CI rerun settling, a new disposition reply, another `main` advance)
-makes it stale again and `--apply` fails closed on `review-currency`
-regardless of CI color — re-post before retrying. Same CI-completion
-precondition as E1 Step 2 (`idd-review-snapshot.instructions.md`); it
-is just easy to satisfy once early in a multi-pass loop and assume it
-still holds by the time `--apply` runs.
+**Rule**: post the watermark as the **last** action before F3's
+`idd-merge-execute.mjs --apply`, every pass — anything after (a CI
+rerun settling, a new disposition reply, another `main` advance)
+stales it, failing `--apply` closed on `review-currency` regardless
+of CI color; re-post before retrying. Same precondition as E1 Step
+2 — easy to satisfy early, forgotten by `--apply` time. A stale
+`idd-advisory-convergence` rollup: rerun via
+`rerun-advisory-convergence.mjs`
+([rerun mechanics](idd-ci.instructions.md#rerun-mechanics)).
 
 ## Zero-Accepted-PATH-A advisory re-review gate
 
