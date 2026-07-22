@@ -178,15 +178,19 @@ Use [ONBOARDING Step 1B policy decisions](idd-template/ONBOARDING.md#step-1b--co
 and [helper runtime selection order](docs/idd-helper-scripts.md#import-time-selection-order)
 to pick a profile deliberately.
 
-## Operational Evidence
+## Proven in production
 
-As of 2026-05-12, this repository has been dogfooding IDD through
-multi-agent, multi-session runs, including bursts of roughly x4-6
-parallel sessions. The workflow also originated in a private work
-repository and was later backported here, where it was exercised for
-about two weeks with roughly x8-10 concurrent Copilot CLI sessions.
-That is not zero-failure; it is a workflow that keeps getting tightened
-as edge cases appear.
+IDD is not a demo. It is the workflow this repository is built with:
+
+- **2,000+ issues** turned into merged pull requests across private
+  work repositories running IDD.
+- **700+ pull requests** merged in this public repository alone,
+  through multi-agent bursts of x4-6 parallel sessions (x8-10 in the
+  originating private deployment).
+- **Not zero-failure by design** — edge cases found in production
+  come back as issues, and the loop fixes itself.
+
+_As of 2026-07._
 
 ## Local pnpm tooling baseline (contributors to this repository only)
 

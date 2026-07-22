@@ -488,6 +488,21 @@ turning every adopter into a Node.js-first repository. The written
 decision tables remain the canonical protocol regardless of which helper
 profile is selected.
 
+### Practical footprint guidance
+
+Practical loop pressure depends on the helper runtime choice:
+
+- Prefer helper runtime support when you want lower day-to-day
+  context pressure in the E/F phases: helper commands collect
+  evidence, while merge and mutation decisions still follow the
+  written gates.
+- Keep `instructions-only` when your repository avoids Node.js or
+  helper tooling, or your team prefers a fully manual
+  shell/`gh`/`jq` path.
+- Expect variance either way: local policy additions, local docs, and
+  extra repository instructions can make your practical footprint
+  smaller or larger than the idd-skill source repository.
+
 ## Profile Wiring Surface
 
 Use `idd-helper-bundle-manifest` as the canonical import helper for these
