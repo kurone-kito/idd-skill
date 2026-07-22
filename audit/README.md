@@ -57,6 +57,25 @@ new allowed concrete mapping, add a `concreted` sync pair with a
 file lists, update the manifest paths or globs first, then rerun the
 audit so the marked block can be refreshed deliberately.
 
+Adding a single new file under an existing `generatedBlocks[].sourceGlobs`
+match — for example, a new lite instruction file under
+`idd-template/.github/instructions/lite/` — touches three separate
+manifest edits, not one, for `node scripts/audit-docs.mjs --check` to
+pass:
+
+1. A `syncPairs` entry (source/target and mode) so the mirrored copy is
+   generated and compared.
+2. A `bundleBudgets` entry when the file participates in a phase bundle,
+   so the phase's context ceiling covers it.
+3. The file's path added to the matching `generatedBlocks[].paths` list.
+
+Step 3 is required for the audit check to pass — it compares `paths`
+against the files each block's `sourceGlobs` actually match, and fails
+with "manifest paths omit `<file>`" on a mismatch — even though `paths`
+plays no role in `sync-docs.mjs`'s own mirror-generation logic. Adding
+only the `syncPairs` and `bundleBudgets` entries above is not enough;
+skipping the `generatedBlocks[].paths` edit still fails the audit.
+
 ## Bundle Budgets
 
 The `bundleBudgets` entries cap the combined byte size of the
