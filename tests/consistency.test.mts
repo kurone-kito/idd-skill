@@ -314,6 +314,7 @@ const DOC_BUDGET_BUNDLES = [
   { limitBytes: 45_000 },
   { limitBytes: 24_000 },
   { limitBytes: 16_000 },
+  { limitBytes: 18_500 },
 ];
 
 test('doc budget guard passes when documented values match the manifest', () => {
@@ -344,7 +345,7 @@ test('doc budget guard flags a value that drifted from every manifest budget', (
   assert.equal(result.errors.length, 1);
   assert.match(
     result.errors[0],
-    /doc-budget-drift: README\.md states 30,000 bytes, which is not a current sync-manifest budget value \(valid: 16000, 20000, 24000, 35500, 45000, 112700\)/,
+    /doc-budget-drift: README\.md states 30,000 bytes, which is not a current sync-manifest budget value \(valid: 16000, 18500, 20000, 24000, 35500, 45000, 112700\)/,
   );
 });
 

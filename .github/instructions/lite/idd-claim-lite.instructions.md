@@ -105,7 +105,22 @@ status must be "not started". Either condition failing → **STOP**.
 
 ### (c) Claim state
 
-Helper-first, immediately before the claim write:
+**If this session already recorded a `{claim-id}` for this issue**
+(resume/heartbeat continuation), check that first — `--fresh-claim-gate`
+alone cannot tell "yours" from "a competitor's", because it deliberately
+ignores `--claim-id` for its own verdict:
+
+```sh
+node scripts/resume-claim-routing.mjs --issue <N> --claim-id <your-claim-id>
+```
+
+| Top-level `state` / `action` | Meaning                                                        |
+| ---------------------------- | -------------------------------------------------------------- |
+| `already_owned` / `keep`     | Your claim — skip to Claim verification (or Heartbeat)         |
+| anything else                | Not (or no longer) your claim — fall through to the gate below |
+
+**Otherwise** (no recorded `{claim-id}` yet), run the write-gate helper
+immediately before the claim write:
 
 ```sh
 node scripts/resume-claim-routing.mjs --issue <N> --fresh-claim-gate
