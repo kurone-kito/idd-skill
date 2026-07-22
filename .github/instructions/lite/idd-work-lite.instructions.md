@@ -60,29 +60,27 @@ request, or other GitHub side effect, confirm all of the following:
    this branch. If so, treat it as inheritable and reuse it. If not, stop for
    manual cleanup.
 10. If `git worktree list --porcelain` marks the entry `prunable` and its path
-    is already absent, remove that stale entry with `git worktree remove --force
-    <path-from-list>` and continue.
+    is already absent, remove that stale entry with
+    `git worktree remove --force <path-from-list>` and continue.
 11. If the target path exists but is not listed in `git worktree list`, stop for
     manual cleanup.
 12. Create the sibling worktree at `../<repo-name>.<normalized-branch>`.
 13. Define `normalized-branch` as the branch name with each `/` replaced by
     `-`.
-14. Use WorkTrunk only when the `wt` command is available and its shell
-    integration is installed; otherwise use the manual `git worktree add`
-    path below.
+14. Use WorkTrunk if available.
 15. In automation, use `wt switch --create -b main <branch-name> -x true`.
 16. Do not use `wt new`.
 17. If WorkTrunk uses a pre-start install hook, its first command must acquire
     the worktree lock before it installs anything.
 18. If the hook cannot acquire the lock, create the worktree without the hook.
-19. If WorkTrunk is unavailable, use `git worktree add <path> -b <branch-name>
-     origin/main` for a fresh claim.
-20. If WorkTrunk is unavailable and this is a takeover, use `git worktree add
-     <path> <branch-name>` with the local branch.
-21. If WorkTrunk is unavailable and only the remote branch exists, run `git
-     fetch origin <branch-name>`.
-22. If WorkTrunk is unavailable and only the remote branch exists, use `git
-     worktree add <path> -b <branch-name> origin/<branch-name>`.
+19. If WorkTrunk is unavailable, use
+    `git worktree add <path> -b <branch-name> origin/main` for a fresh claim.
+20. If WorkTrunk is unavailable and this is a takeover, use
+    `git worktree add <path> <branch-name>` with the local branch.
+21. If WorkTrunk is unavailable and only the remote branch exists, run
+    `git fetch origin <branch-name>`.
+22. If WorkTrunk is unavailable and only the remote branch exists, use
+    `git worktree add <path> -b <branch-name> origin/<branch-name>`.
 23. For manual `git worktree add` or WorkTrunk without a hook, acquire the
     worktree lock with the profile-selected `claim-lock` helper immediately
     after creation and before any install or other mutation.
