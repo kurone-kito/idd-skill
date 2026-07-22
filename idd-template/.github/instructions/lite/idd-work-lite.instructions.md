@@ -64,29 +64,31 @@ request, or other GitHub side effect, confirm all of the following:
     `-`.
 14. Use WorkTrunk if available.
 15. In automation, use `wt switch --create -b main <branch-name> -x true`.
-16. Do not use `wt new`.
-17. If WorkTrunk uses a pre-start install hook, its first command must acquire
+16. On Windows, use `git-wt switch --create -b main <branch-name> -x true`,
+    or the same `wt switch` form if `git-wt` is unavailable.
+17. Do not use `wt new`.
+18. If WorkTrunk uses a pre-start install hook, its first command must acquire
     the worktree lock before it installs anything.
-18. If the hook cannot acquire the lock, create the worktree without the hook.
-19. If WorkTrunk is unavailable, use
+19. If the hook cannot acquire the lock, create the worktree without the hook.
+20. If WorkTrunk is unavailable, use
     `git worktree add <path> -b <branch-name> origin/main` for a fresh claim.
-20. If WorkTrunk is unavailable and this is a takeover, use
+21. If WorkTrunk is unavailable and this is a takeover, use
     `git worktree add <path> <branch-name>` with the local branch.
-21. If WorkTrunk is unavailable and only the remote branch exists, run
+22. If WorkTrunk is unavailable and only the remote branch exists, run
     `git fetch origin <branch-name>`.
-22. If WorkTrunk is unavailable and only the remote branch exists, use
+23. If WorkTrunk is unavailable and only the remote branch exists, use
     `git worktree add <path> -b <branch-name> origin/<branch-name>`.
-23. For manual `git worktree add` or WorkTrunk without a hook, acquire the
+24. For manual `git worktree add` or WorkTrunk without a hook, acquire the
     worktree lock with the profile-selected `claim-lock` helper immediately
     after creation and before any install or other mutation.
-24. Run `install-deps` on the manual/no-hook path.
-25. Verify the primary worktree's HEAD is still on `main`.
-26. Verify `git worktree list` shows the new path.
-27. Verify the current directory is the new sibling worktree.
-28. If any of steps 25-27 fails, the worktree-creation contract is violated:
+25. Run `install-deps` on the manual/no-hook path.
+26. Verify the primary worktree's HEAD is still on `main`.
+27. Verify `git worktree list` shows the new path.
+28. Verify the current directory is the new sibling worktree.
+29. If any of steps 26-28 fails, the worktree-creation contract is violated:
     stop, post a hold note naming the failed check, and do not continue to
     B2 from the primary worktree.
-29. Repair a contract violation by removing the misplaced branch from the
+30. Repair a contract violation by removing the misplaced branch from the
     primary worktree, after confirming no work is lost, then recreate the
     sibling worktree from step 12.
 
@@ -116,7 +118,9 @@ If the issue is a decision-transcription issue — it records or restates a prio
 human decision whose rationale asserts a checkable fact about shipped behavior —
 verify that fact against the prior change's actual code or docs before drafting
 the plan. If the prior change or the asserted fact cannot be verified, stop and
-hold until a maintainer addendum resolves it.
+hold with the primary-source evidence (file, line, or excerpt, or the reason
+verification was inconclusive) in the hold comment, until a maintainer
+addendum resolves it.
 
 ## B3 — Implement
 
@@ -134,7 +138,8 @@ hold until a maintainer addendum resolves it.
    drift or a stale install before blaming the change.
 10. If a test this diff did not touch fails once locally but passes in
     isolation while hosted CI is green, trust the hosted result and stop
-    chasing it as a regression.
+    chasing it as a regression. This does not waive the `fix-validate` /
+    `pre-push-validate` requirements.
 11. When consolidating a wrapper function used at multiple call sites into one
     shared function, check whether any call site's old delegate path added
     options or behavior the shared function does not replicate.
