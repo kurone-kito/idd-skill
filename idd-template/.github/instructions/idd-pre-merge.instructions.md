@@ -321,8 +321,8 @@ claim.
 
   Disposition-evidence ack-only override: when
   `dispositionEvidence.soleCauseAckOnlyPostDisposition` is `true` — every
-  blocking item is a `missingThreads` entry with `ackOnlyPostDisposition:
-  true`, and `missingRegularComments` is empty (see
+  blocking item is a `missingThreads` entry whose `ackOnlyPostDisposition`
+  is `true`, and `missingRegularComments` is empty (see
   `idd-review-triage.instructions.md`'s "Disposition-evidence parity
   (advisory-only)" paragraph for the full condition) — autopilot may
   deterministically override the `return-to-e1` and treat this condition
