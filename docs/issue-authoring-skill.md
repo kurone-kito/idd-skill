@@ -184,9 +184,8 @@ rules.
   is drafted). Observed agent token usage or wall-clock duration is a
   calibration sanity-check only, never the unit.
 - An estimate that does not fit even `L`'s scope-and-uncertainty
-  definition signals a bundled-intent draft: return to Decompose and
-  Draft and split at intent level instead of publishing one oversized
-  issue.
+  definition is a mis-scope smell: return to Decompose and Draft and
+  split at intent level instead of publishing one oversized issue.
 - The hint only reorders candidates **within** one suitability-score
   band (after the score and optional desync rules, before the
   lowest-issue-number tie-break); it never skips, gates, crosses a score

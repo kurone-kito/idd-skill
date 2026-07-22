@@ -799,9 +799,9 @@ itself: model speed shifts release to release, and concurrent agent
 runs distort wall-clock comparison. Do not anchor a hint to a specific
 token count or duration.
 
-**Scope-mismatch routing.** An estimate that does not fit even the `L`
-row's scope-and-uncertainty definition is a signal that the draft
-bundles multiple intents. Return to
+**Mis-scope routing.** An estimate that does not fit even the `L`
+row's scope-and-uncertainty definition is a mis-scope smell: the draft
+likely bundles multiple intents. Return to
 [Decompose and Draft](#2-decompose-and-draft) and split at intent level
 instead of publishing one oversized issue labeled `L`.
 
