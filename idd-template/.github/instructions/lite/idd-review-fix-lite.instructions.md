@@ -212,11 +212,15 @@ other GitHub side effect, confirm all of the following:
    the source/vendored profile; resolve the package-manager /
    ephemeral-npx equivalent from `docs/idd-helper-scripts.md`). If it
    fails, returns invalid JSON, or is missing required fields
-   (`outcome`, `copilotPending`, `earliestSameHeadAt`,
-   `requestMarkerCount`, `requestCap`, `capExhaustedRoute`,
+   (`prHeadSha`, `lastCopilotCommit`, `copilotPending`,
+   `copilotPendingCoversHead`, `outcome`, `f3Outcome`,
+   `earliestSameHeadAt`, `requestMarkerCount`, `requestCap`,
    `pendingWindowMinutes`, `settledWindowMinutes`,
-   `pollIntervalMinutes`), stop and ask — do not fall back to a manual
-   per-field fetch.
+   `pollIntervalMinutes`, `capExhaustedRoute`, `trustedMarkerSummary`
+   — the full contract in
+   `docs/idd-helper-scripts.md#stable-helper-evidence-outputs` and
+   `schemas/advisory-wait-state.schema.json`), stop and ask — do not
+   fall back to a manual per-field fetch.
 4. Read the helper's `outcome` field and apply this decision table, top
    to bottom, first match wins:
    - `SATISFIED` → continue to E15.
@@ -293,19 +297,19 @@ other GitHub side effect, confirm all of the following:
    exists for. Else keep polling. A stalled or silent advisory bot must
    not cause unbounded polling — this elapsed-window re-check is what
    times the loop out even when the bot never reviews the current HEAD.
-10. **Optional secondary advisory bot (non-gating).** When a secondary
-    advisory bot is configured (`advisoryWait.secondaryBotLogin`) and
-    either the request cap was reached, or a stalled/rate-limited exit
-    above closed while the primary never reviewed this HEAD, and the
-    secondary has not already been requested after the current HEAD's
-    commit event: request the secondary bot once for this HEAD using
-    the same gh-then-REST fallback as the primary in step 4. Post no
-    `advisory-wait:` marker for the secondary — it must never satisfy
-    the primary gate or consume the primary's request cap — and never
-    let it change the route already decided above. The secondary's
-    review is ordinary advisory input, picked up by the next E1
-    snapshot if it lands before merge. Skip this step entirely when no
-    secondary is configured.
+10. **Optional secondary advisory bot (non-gating).** Use the most
+    recent step-3/step-8 helper output's `secondaryRequestNeeded` and
+    `secondaryBotLogin` fields directly — do not re-derive the
+    request/already-requested condition manually. When
+    `secondaryRequestNeeded` is `true`, request `secondaryBotLogin`
+    once for this HEAD using the same gh-then-REST fallback as the
+    primary in step 4. Post no `advisory-wait:` marker for the
+    secondary — it must never satisfy the primary gate or consume the
+    primary's request cap — and never let it change the route already
+    decided above. The secondary's review is ordinary advisory input,
+    picked up by the next E1 snapshot if it lands before merge. Skip
+    this step entirely when `secondaryRequestNeeded` is `false` (which
+    also covers no secondary configured, per the helper contract).
 11. Advisory feedback is advisory: you are not obligated to accept
     every suggestion, but you must still wait for a review you
     explicitly requested. A human `CHANGES_REQUESTED` reviewer is not
