@@ -369,9 +369,12 @@ continuation.
      exact HEAD: rerun the `idd-advisory-convergence` check once (`gh
      run rerun --failed <run-id>`, using the run id from `checks[]`'s
      entry for it) so it re-evaluates and reflects the waiver, then
-     re-read `requiredChecks.status` once more. If it is now `success`,
-     go to step 7. If it is still non-passing after that one rerun,
-     stop per the condition above — do not rerun a second time.
+     resume step 6's normal polling for this one check instead of
+     reading `requiredChecks.status` a single time immediately — a
+     fresh rerun is asynchronous and commonly still `pending` right
+     after it starts. If it settles to `success`, go to step 7. If
+     step 6's own timeout elapses while it is still non-passing, stop
+     per the condition above — do not rerun a second time.
    - Absent a valid waiver for this HEAD: exit CI-wait now and proceed
      directly to E1. This never relaxes the
      merge gate: the check stays required, and F2 re-verifies it
