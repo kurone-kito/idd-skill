@@ -415,6 +415,7 @@ recording template you will apply in Step 3.
 docs/idd-workflow.md
 docs/idd-review-policy-profiles.md
 docs/idd-helper-scripts.md
+docs/idd-autonomy-contract.md
 docs/idd-comment-minimization.md
 docs/idd-resume-detail.md
 docs/idd-advisory-wait-shell-fallback.md
@@ -497,6 +498,7 @@ for FILE in \
   "docs/idd-workflow.md" \
   "docs/idd-review-policy-profiles.md" \
   "docs/idd-helper-scripts.md" \
+  "docs/idd-autonomy-contract.md" \
   "docs/idd-comment-minimization.md" \
   "docs/idd-resume-detail.md" \
   "docs/idd-advisory-wait-shell-fallback.md" \
@@ -587,6 +589,7 @@ for FILE in \
   "docs/idd-workflow.md" \
   "docs/idd-review-policy-profiles.md" \
   "docs/idd-helper-scripts.md" \
+  "docs/idd-autonomy-contract.md" \
   "docs/idd-comment-minimization.md" \
   "docs/idd-resume-detail.md" \
   "docs/idd-advisory-wait-shell-fallback.md" \

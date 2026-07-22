@@ -41,6 +41,7 @@ or [Core concepts](concepts.md) before using this reference.
 | Safe adopter customization surfaces    | [Customization](customization.md)                           |
 | Live digest and comment cleanup        | [IDD comment minimization](idd-comment-minimization.md)     |
 | Helper-script adoption policy          | [IDD helper script evaluation](idd-helper-scripts.md)       |
+| Reversible vs. gated mutations         | [IDD autonomy contract](idd-autonomy-contract.md)           |
 
 ## Maintainer Note
 
