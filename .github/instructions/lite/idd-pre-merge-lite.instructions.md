@@ -60,9 +60,9 @@ This check never rebases, merges, or pushes.
      re-run the helper after a short wait, up to 3 attempts; only a
      result still `"recheck"` after that budget falls through to stop
      per the condition above.
-   - Any other value (`"merge-main"`, `"policy-required-update"`,
-     `"force-push-exception"`, `"hold-unknown"`), or the helper is
-     unavailable, fails, or disagrees with live state: stop per the
+   - Any other value the helper currently reports (`"merge-main"` or
+     `"hold-unknown"`), or the helper is unavailable, fails, or
+     disagrees with live state: stop per the
      condition above — the merge-based resync and any content-conflict
      resolution are out of this lite file's scope; that path resumes
      through the E-phase branch-sync check in
