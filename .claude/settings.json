@@ -1,5 +1,5 @@
 {
-  "$comment": "Curated Claude Code permission baseline for this repository. See docs/permissions.md#claude-code-permission-baseline for the rationale, scope, and known gh-api/git-flag matching gotcha. Personal additions belong in .claude/settings.local.json, which layers on top of this file.",
+  "$comment": "Curated Claude Code permission baseline for this repository. See docs/permissions.md#claude-code-permission-baseline for the rationale, scope, and known flag/path matching gotchas. `gh api` is deliberately NOT allowlisted here (see the gh-api DELETE-verb trap in the doc); the DELETE-verb deny entries below are defense in depth if a future edit adds one back. Personal additions belong in .claude/settings.local.json, which layers on top of this file.",
   "permissions": {
     "allow": [
       "Bash(git status*)",
@@ -12,7 +12,7 @@
       "Bash(git branch -v*)",
       "Bash(git worktree list*)",
       "Bash(git rev-parse*)",
-      "Bash(git fetch*)",
+      "Bash(git fetch origin*)",
       "Bash(git remote -v)",
       "Bash(git remote show*)",
       "Bash(git blame*)",
@@ -29,13 +29,11 @@
       "Bash(gh pr edit*)",
       "Bash(gh pr review*)",
       "Bash(gh pr merge*)",
-      "Bash(gh label*)",
+      "Bash(gh label list*)",
+      "Bash(gh label create*)",
       "Bash(gh search*)",
       "Bash(gh repo view*)",
       "Bash(gh auth status)",
-      "Bash(gh api graphql*)",
-      "Bash(gh api user*)",
-      "Bash(gh api repos/kurone-kito/idd-skill/*)",
       "Bash(node scripts/*)",
       "Bash(node bin/*)"
     ],
