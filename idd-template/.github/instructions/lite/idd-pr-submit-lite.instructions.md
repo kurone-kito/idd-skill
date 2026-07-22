@@ -240,10 +240,11 @@ its handoff point with no one left to act on the result.
    automatically a stop. Instead, fall back to the same helper's
    `checks[]` array (every check present for this HEAD, not just
    required ones) and its per-check `status`: every entry `success` →
-   proceed to step 7; any entry `pending` → continue at step 6
-   (poll again); any entry `failure` → stop per the condition above;
-   `checks[]` itself empty (no CI ran at all for this HEAD) → stop per
-   the condition above.
+   proceed to step 7; any entry `pending` or `unknown` → continue at
+   step 6 (poll again — `unknown` isn't a settled result yet, so treat
+   it like `pending`); any entry `failure` → stop per the condition
+   above; `checks[]` itself empty (no CI ran at all for this HEAD) →
+   stop per the condition above.
 4. **`source-pinned`** (a ruleset or integration-pinned required check
    exists but cannot be enumerated by name): always stop per the
    condition above — this is a real gating check, never treat it like
