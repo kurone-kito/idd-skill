@@ -358,12 +358,15 @@ than the run it supersedes. Once both have completed, the later
    server time minus this wait's own first poll time, timed out past
    `generationTimeout` instead — its running-timeout has not begun.
    **On timeout**: identify the stalled check (`checkName` plus `url`
-   if present). Two cases have no run `gh run rerun` can target — stop
-   per the condition above and post a hold note naming the check for
-   either: it is a `missingNames` name with no `checks[]` entry at all
-   (so no `url` either), or its `checks[]` entry has `type:
+   if present). No case below has a run `gh run rerun` can target
+   unless the entry has both `type: "check-run"` and a non-empty
+   `url` — stop per the condition above and post a hold note naming
+   the check for any of: it is a `missingNames` name with no
+   `checks[]` entry at all (so no `url` either); its entry has `type:
    "status-context"` (a Commit-Status), whose `url` points at an
-   external target rather than an Actions run. Otherwise resolve the rerun
+   external target rather than an Actions run; or its entry has `type:
+   "check-run"` but an empty `url` (the upstream `detailsUrl` was
+   itself absent). Otherwise resolve the rerun
    decision from the
    run's own history: `gh run view <run-id-from-url> --json attempt` —
    GitHub's `attempt` starts at `1` for a never-rerun run, so pass
