@@ -36,10 +36,11 @@ synchronization path. Later branch updates should return through the
 E-phase review loop and, by default, merge `main` into the published PR
 branch so the synchronization diff is reviewable.
 
-This D-phase file records the publication boundary and target
-post-push synchronization contract. Follow-up work may still be needed
-to align later-phase conflict-handling and resume-routing helpers before
-that runtime route is fully active everywhere.
+This D-phase file records the publication boundary only: post-push
+synchronization itself runs through `idd-review-triage.instructions.md`'s
+E-phase branch-sync check (Esync), backed by the `branch-conflict-state`
+helper, and `idd-resume.instructions.md` already routes a
+content-conflicting branch there on restart.
 
 If D1 itself reveals content conflicts before the first push, resolve
 them and continue the rebase. After completing the rebase, if any files
