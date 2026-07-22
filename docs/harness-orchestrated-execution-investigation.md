@@ -149,7 +149,7 @@ require of a human-or-model-driven session.
 | E9, E13 | Fix accepted items, reply | same atomic-generation model call as B3; `post-idd-marker` for replies | same acceptance-check condition as B3 |
 | E14 | Advisory-wait / re-review request | `advisory-wait-state`, the `idd-advisory-wait.instructions.md` decision table | advisory-wait state does not resolve within the documented decision table's terms |
 | E15 | CI re-wait | `ci-wait-policy` / `ci-wait-state` (same as D4) | same as D4 |
-| F1 | Final branch-state check | live branch-state read (no dedicated helper) | branch diverged from the expected HEAD |
+| F1 | Final branch-state check | `branch-conflict-state` | branch state is `dirty`/`unknown` (hold), or still `computing` after the fixed re-poll budget |
 | F2 | Pre-merge condition check (mechanical evidence read) | `pre-merge-readiness`, `advisory-wait-state` | helper evidence is missing/invalid/disagrees with live state **and** the harness cannot itself perform the written prose fallback — see Recommendation |
 | F2 | Pre-merge condition check (prose fallback) | **no deterministic helper — judgment-heavy, out of scope for this mode** | the harness cannot pass this gate; it must hand off |
 | F2.5 | Merge-policy handoff | routing only; under `human_merge` / `separate_merge_agent`, post a handoff comment and stop | n/a — stopping cleanly **is** the in-scope outcome for this mode (see Recommendation) |
