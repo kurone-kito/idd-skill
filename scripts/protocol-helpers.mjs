@@ -24,6 +24,7 @@ export { DEFAULT_ADVISORY_BOT_LOGINS } from './advisory-wait-policy.mjs';
 export * from './marker-helpers.mjs';
 
 import {
+  findActivationNonceWinner,
   IDD_AGENT_DERIVED_MARKERS,
   isValidIsoTimestamp,
   operationalMarkerPrefix,
@@ -3911,6 +3912,22 @@ export function summarizeClaimValidation(claimEvents = [], options = {}) {
           },
     isStale: resolveStalePredicate(options.staleAgeMs),
   });
+  // #1528: mirrors evaluateResumeClaimRouting's activation-nonce-mismatch
+  // check (resume-claim-routing.mts) -- only meaningful once claim-id and
+  // agent-id already match, since claim-id alone cannot distinguish a
+  // second, independent activation of the same id. Trust-filter first
+  // (findActivationNonceWinner does no author checks of its own), matching
+  // how the resume-side caller pre-filters before calling the same shared
+  // primitive.
+  const expectedNonce = String(options.expectedNonce ?? '').trim();
+  const activationNonceWinner = activeClaim
+    ? findActivationNonceWinner(
+        claimEvents.filter((event) =>
+          trustedAuthorPredicate(event.author?.login ?? ''),
+        ),
+        activeClaim.claimId,
+      )
+    : null;
   let reason = 'match';
   if (!activeClaim) {
     reason = 'missing-active-claim';
@@ -3918,6 +3935,13 @@ export function summarizeClaimValidation(claimEvents = [], options = {}) {
     reason = 'claim-id-mismatch';
   } else if (expectedAgentId && activeClaim.agentId !== expectedAgentId) {
     reason = 'agent-id-mismatch';
+  } else if (
+    expectedClaimId &&
+    activationNonceWinner !== null &&
+    expectedNonce &&
+    activationNonceWinner !== expectedNonce
+  ) {
+    reason = 'activation-nonce-mismatch';
   }
   return {
     expectedClaimId,
@@ -4241,6 +4265,7 @@ export function buildPreMergeReadinessSummary(
     isForcedHandoffEnabled: options.isForcedHandoffEnabled,
     expectedClaimId: options.expectedClaimId,
     expectedAgentId: options.expectedAgentId,
+    expectedNonce: options.expectedNonce,
     staleAgeMs: options.staleAgeMs,
   });
   const waivableCheckSelectors = options.waivableCheckSelectors ?? null;

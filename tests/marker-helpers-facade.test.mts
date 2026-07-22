@@ -18,6 +18,7 @@ const SAMPLE_NAMES = [
   'renderUnclaimedByMarker',
   'renderActivationNonceMarker',
   'parseActivationNonceComment',
+  'findActivationNonceWinner',
   'renderReviewWatermarkMarker',
   'renderReviewBaselineMarker',
   'renderAdvisoryWaitMarker',

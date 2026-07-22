@@ -301,6 +301,11 @@ interface PreMergeReadinessArgs {
   advisoryBotLogins: string;
   expectedClaimId: string;
   expectedAgentId: string;
+  // #1528: this caller's own recorded activation-nonce (#1522), forwarded
+  // to buildPreMergeReadinessSummary's activation-nonce collision check.
+  // Empty when omitted, which skips that check entirely (backward
+  // compatible).
+  nonce: string;
   now: string;
   help: boolean;
 }
@@ -325,6 +330,7 @@ const PRE_MERGE_READINESS_FLAG_SPEC = {
   '--expected-claim-id': { type: 'string' },
   '--agent-id': { type: 'string' },
   '--expected-agent-id': { type: 'string' },
+  '--nonce': { type: 'string' },
   '--now': { type: 'string' },
   '--help': { type: 'boolean', short: 'h' },
 } as const;
@@ -606,6 +612,7 @@ export function collectPreMergeReadiness(
       prAuthorLogin,
       expectedClaimId: args.expectedClaimId,
       expectedAgentId: args.expectedAgentId,
+      expectedNonce: args.nonce,
       includeDispositionEvidence: true,
       requestCap: advisoryWaitPolicy.requestCap,
       pendingWindowMinutes: advisoryWaitPolicy.pendingWindowMinutes,
@@ -780,6 +787,7 @@ export function parseArgs(argv: string[]): PreMergeReadinessArgs {
       (values['advisory-bot-logins'] as string | undefined) ?? '',
     expectedClaimId: claimId ?? '',
     expectedAgentId: agentId ?? '',
+    nonce: (values.nonce as string | undefined) ?? '',
     now: (values.now as string | undefined) ?? '',
     help,
   };
@@ -787,8 +795,16 @@ export function parseArgs(argv: string[]): PreMergeReadinessArgs {
 
 function printHelp(): void {
   process.stdout.write(`Usage:
-  node scripts/pre-merge-readiness.mjs --pr <number> --claim-issue <number> [--owner <owner>] [--repo <repo>] [--trusted-marker-logins <login1,login2>] [--idd-agent-logins <login1,login2>] [--advisory-bot-logins <login1,login2>] [--claim-id <claim-id>] [--agent-id <agent-id>] [--now <ISO8601>]
+  node scripts/pre-merge-readiness.mjs --pr <number> --claim-issue <number> [--owner <owner>] [--repo <repo>] [--trusted-marker-logins <login1,login2>] [--idd-agent-logins <login1,login2>] [--advisory-bot-logins <login1,login2>] [--claim-id <claim-id>] [--agent-id <agent-id>] [--nonce <token>] [--now <ISO8601>]
   Deprecated aliases (one release): --expected-claim-id -> --claim-id, --expected-agent-id -> --agent-id
+
+  --nonce <token>  this session's own recorded activation-nonce (#1522): when
+                    given alongside --claim-id, the merge-time write-gate also
+                    requires it to equal the winning trusted <!-- activation-
+                    nonce: ... --> marker for that claim-id, catching a second,
+                    independent activation of the same claim-id as a collision.
+                    Omit --nonce, or leave it empty, to skip this comparison
+                    entirely (backward compatible).
 `);
 }
 
