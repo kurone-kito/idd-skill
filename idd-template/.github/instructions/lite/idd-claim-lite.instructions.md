@@ -31,10 +31,10 @@ Stop and ask the operator when:
 - an expected helper is missing, fails, or disagrees with live state;
 - pre-check (a)-(e) fails for any reason (see below) — no fallback
   candidate exists in lite scope;
-- the claim-state helper returns `disputed` / `non_inheritable`, or the
-  written claim-state rules find a live non-stale competitor;
+- the claim-state helper (`--fresh-claim-gate`) returns `already-claimed`,
+  or the written claim-state rules find a live non-stale competitor;
 - forced-handoff evidence exists but mismatches live claim/branch/PR
-  state, or `forced-handoff.mode` is not `human-gated`;
+  state, or `forcedHandoff.mode` is not `human-gated`;
 - claim verification (below) fails any race-safe check;
 - branch pre-check (e) finds an orphaned branch with no active claim.
 
@@ -48,6 +48,16 @@ are target-issue local: claims on related roadmap or child issues do
 not block this check.
 
 ### (a) Issue-author approval
+
+Helper-first:
+
+```sh
+node scripts/claim-approval-gate.mjs --issue <N>
+```
+
+Read `approved` / `reason` / `gateEnabled` / `checks` from the JSON
+output. `instructions-only` profile: use the written rules below
+directly (no helper exists for that profile).
 
 - If `.github/idd/config.json` has `skipIssueAuthorApprovalGate: true`
   → skip this check.
@@ -93,7 +103,9 @@ node scripts/resume-claim-routing.mjs --issue <N> --fresh-claim-gate
 | `stale-reclaimable`               | Proceed to Claim execution (takeover) |
 | `already-claimed`                 | **STOP** — live competitor or race    |
 
-Written fallback (`instructions-only`, or helper unavailable/malformed):
+Written fallback (`instructions-only` profile only — per the Helper
+runtime contract above, any other profile stops-and-asks on a
+missing/failing/malformed helper instead of using this fallback):
 read issue comments chronologically. Ignore untrusted marker authors.
 A `claimed-by` with a **new** `{claim-id}` becomes active only when
 there is no active claim and `supersedes: none`, or its `supersedes:`
@@ -153,7 +165,8 @@ Compute the branch name (`issue/<number>-<slug>`) with the helper:
 node scripts/branch-name.mjs --number <N> --title "<issue-title>"
 ```
 
-Written fallback: lowercase the title; replace every non `a-z`/`0-9`
+Written fallback (`instructions-only` profile only): lowercase the
+title; replace every non `a-z`/`0-9`
 character with `-`; split on `-` and drop empty tokens and the
 stop-words `a`, `an`, `the`, `and`, `or`, `in`, `for`, `to`, `with`,
 `from`; rejoin with `-`; cut to 40 chars (back off to the last `-`
