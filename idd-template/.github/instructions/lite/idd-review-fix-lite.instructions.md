@@ -14,11 +14,11 @@ review-fix instructions instead.
   `idd-review-fix.instructions.md` instead.
 - Any mismatch between this file and the standard review-fix phase is a
   bug in this file.
-- **Named command sets** (`fix-validate`, `post-fix-validate`,
-  `pre-push-validate`) resolve from `.github/idd/config.json`'s
-  `commands` object when present, otherwise from the Project commands
-  table in `idd-overview-core.instructions.md`. Resolve the exact shell
-  commands before the first use in E9 — do not guess or skip validation
+- **Named command sets** (`fix-validate` in E9, `post-fix-validate` in
+  E12) resolve from `.github/idd/config.json`'s `commands` object when
+  present, otherwise from the Project commands table in
+  `idd-overview-core.instructions.md`. Resolve the exact shell commands
+  before each step's first use — do not guess or skip validation
   because this file does not itself carry that table.
 
 ## Upstream-triage boundary
@@ -214,10 +214,10 @@ other GitHub side effect, confirm all of the following:
    fails, returns invalid JSON, or is missing required fields
    (`prHeadSha`, `lastCopilotCommit`, `copilotPending`,
    `copilotPendingCoversHead`, `outcome`, `f3Outcome`,
-   `earliestSameHeadAt`, `requestMarkerCount`, `requestCap`,
-   `pendingWindowMinutes`, `settledWindowMinutes`,
-   `pollIntervalMinutes`, `capExhaustedRoute`, `trustedMarkerSummary`
-   — the full contract in
+   `secondaryBotLogin`, `secondaryRequestNeeded`, `earliestSameHeadAt`,
+   `requestMarkerCount`, `requestCap`, `pendingWindowMinutes`,
+   `settledWindowMinutes`, `pollIntervalMinutes`, `capExhaustedRoute`,
+   `trustedMarkerSummary` — the full contract in
    `docs/idd-helper-scripts.md#stable-helper-evidence-outputs` and
    `schemas/advisory-wait-state.schema.json`), stop and ask — do not
    fall back to a manual per-field fetch.
