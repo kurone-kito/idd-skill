@@ -309,7 +309,9 @@ continuation.
    (`checkName` plus `url`, the run to rerun) and apply ci-wait-policy's
    `rerunPolicy` (default `rerun-once`) — if this is the first timeout
    for this wait and the policy allows a rerun, rerun that specific
-   stalled check once (`gh run rerun --failed <run-id-from-url>`) and
+   stalled check once as a **whole-run rerun, not `--failed`**
+   (`gh run rerun <run-id-from-url>`) — a stalled check has no failed
+   jobs to selectively rerun, only a run that never finished — and
    resume polling; if the timeout recurs after that rerun, or the
    policy is `hold`, stop per the condition above and post a hold note
    rather than polling
