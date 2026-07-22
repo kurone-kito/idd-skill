@@ -87,18 +87,31 @@ during this investigation, not merely re-stated from the issue body:
    harness-orchestrated execution mode for weak local models"` during this
    investigation reproduced the canonical slug live:
    `issue/1555-investigate-harness-orchestrated`.
-3. **Marker body shape (blank line, not a single newline).**
-   `idd-claim.instructions.md`'s "Nothing appended after the note" rule
-   requires a `claimed-by` / `unclaimed-by` body to be exactly the HTML
-   comment token, then a **blank line**, then the single italic note — no
-   more, no less. `renderClaimedByMarker`'s `.join('\n')` call joins three
-   array elements (the token, an empty string, the note), which mechanically
-   produces that blank line. A hand-rolled version using a single `\n`
-   between token and note (as the PoC reports) produces a body
-   `detectMalformedOperationalMarker` (`marker-helpers.mts`) can flag as
-   structurally malformed rather than a silently-accepted variant — the
-   claim parser's whole-body anchor does not recognize it as a live claim
-   event.
+3. **Marker body shape (byte-exact drift from the canonical rendering,
+   not a parser rejection).** `idd-claim.instructions.md`'s "Nothing
+   appended after the note" rule states the canonical body as the HTML
+   comment token, then a **blank line**, then the single italic note, and
+   `renderClaimedByMarker`'s `.join('\n')` call (joining the token, an
+   empty string, and the note) mechanically produces exactly that shape.
+   Correcting an earlier draft of this section: the live parser is more
+   forgiving than "blank line only" — `OPTIONAL_IDD_VISIBLE_NOTE_PATTERN`
+   in `src/scripts/marker-helpers.mts` (`\s*` alternated with
+   `\s*\n\s*_[^\n]*\bIDD\b[^\n]*_\s*`) matches both the canonical blank
+   line and a single `\n` between token and note, so a hand-rolled version
+   using a single newline (as the PoC reports) still parses as a
+   well-formed marker, not a `detectMalformedOperationalMarker` hit. The
+   real risk this item names is narrower than a hard rejection: a
+   reimplementation that drifts from the canonical rendering in a way
+   this pattern does _not_ tolerate — content appended after the note,
+   a note that does not satisfy the required grammar (for example,
+   missing the required `IDD` word), or more than one note — does fail
+   `detectMalformedOperationalMarker`'s stricter well-formed check. The
+   general point survives even though the specific single-newline claim
+   does not: canonical-helper output is guaranteed to land inside the
+   parser's accepted grammar; a hand-rolled rendering has to be verified
+   against that same grammar by hand, and it is easy to get partially
+   right (accepted) while still silently deviating from what the
+   canonical helper would have produced byte-for-byte.
 4. **Marker wording mismatch.** The visible note text is hardcoded exactly:
    `_{agent-id}: issue claim — IDD automation marker. Do not edit._`
    (note the em dash, `—`, not a hyphen). Any deviation — different
@@ -143,7 +156,7 @@ require of a human-or-model-driven session.
 | D3 | Create PR | `gh pr create` (ordinary tooling) + the written closing-keyword rule | closing-keyword verification (D3.5) fails |
 | D4 | Wait for CI | `ci-wait-policy` (policy resolution), `ci-wait-state` (live snapshot) | a required check fails and the resolved policy's rerun budget is exhausted |
 | E1 | Snapshot + watermark | `review-activity-snapshot`, then `post-idd-marker --type watermark` (or the one-shot `--from-pr` path) | snapshot HEAD does not match the expected HEAD; watermark post fails |
-| E2 | Critique pass | **no deterministic helper** — an always-run, harness-scheduled model call (deterministic *that* it runs, not deterministic *what* it finds) | none beyond the uniform rule; a critique failure feeds E4-E8 like any other finding |
+| E2 | Critique pass | **no deterministic helper** — an always-run, harness-scheduled model call (deterministic _that_ it runs, not deterministic _what_ it finds) | none beyond the uniform rule; a critique failure feeds E4-E8 like any other finding |
 | E3 | Empty-list check | routing only, no helper | n/a — routes to merge or to E4 |
 | E4-E8 | Review triage: classify, score, Accept/Reject | **no deterministic helper — judgment-heavy, out of scope for this mode** (see Recommendation) | the harness cannot pass this gate; it must hand off |
 | E9, E13 | Fix accepted items, reply | same atomic-generation model call as B3; `post-idd-marker` for replies | same acceptance-check condition as B3 |
