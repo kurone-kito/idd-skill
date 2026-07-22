@@ -289,14 +289,24 @@ operator instruction, or have it open the phase files below manually.
 this table to stay current; a repository importing this template
 fresh ships none of these until it authors them):
 
-| Phase             | Standard file                      | Lite file                                    |
-| ----------------- | ---------------------------------- | -------------------------------------------- |
-| A5 Claim          | `idd-claim.instructions.md`        | `lite/idd-claim-lite.instructions.md`        |
-| B1-C6 Work        | `idd-work.instructions.md`         | `lite/idd-work-lite.instructions.md`         |
-| D1-D4 PR-submit   | `idd-pr-submit.instructions.md`    | `lite/idd-pr-submit-lite.instructions.md`    |
-| E9-E15 Review-fix | `idd-review-fix.instructions.md`   | `lite/idd-review-fix-lite.instructions.md`   |
-| Resume            | `idd-resume.instructions.md`       | `lite/idd-resume-lite.instructions.md`       |
-| Resume-stall      | `idd-resume-stall.instructions.md` | `lite/idd-resume-stall-lite.instructions.md` |
+| Phase                    | Standard file                       | Lite file                                     |
+| ------------------------ | ----------------------------------- | --------------------------------------------- |
+| A5 Claim                 | `idd-claim.instructions.md`         | `lite/idd-claim-lite.instructions.md`         |
+| B1-C6 Work               | `idd-work.instructions.md`          | `lite/idd-work-lite.instructions.md`          |
+| D1-D4 PR-submit          | `idd-pr-submit.instructions.md`     | `lite/idd-pr-submit-lite.instructions.md`     |
+| E9-E15 Review-fix        | `idd-review-fix.instructions.md`    | `lite/idd-review-fix-lite.instructions.md`    |
+| F1-F2 helper-read subset | `idd-pre-merge.instructions.md`     | `lite/idd-pre-merge-lite.instructions.md`     |
+| F2.5 handoff-stop        | `idd-merge-handoff.instructions.md` | `lite/idd-merge-handoff-lite.instructions.md` |
+| Resume                   | `idd-resume.instructions.md`        | `lite/idd-resume-lite.instructions.md`        |
+| Resume-stall             | `idd-resume-stall.instructions.md`  | `lite/idd-resume-stall-lite.instructions.md`  |
+
+The F1-F2 and F2.5 rows cover a **partial** slice of their standard
+files only: the lite F1-F2 file covers just F1's read-only branch
+check and reading the `pre-merge-readiness` helper verdict, never the
+standard file's written prose fallback; the lite F2.5 file covers
+just the handoff-stop outcome, never autonomous-merge routing. Both
+still fall back to their standard file for the excluded sub-case
+within the same phase.
 
 `idd-ci.instructions.md` and `idd-advisory-wait.instructions.md` are
 shared helper files, not phases of their own; a lite caller is meant

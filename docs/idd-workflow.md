@@ -284,14 +284,25 @@ have it open the phase files below manually.
 `.github/instructions/lite/` before trusting this table to stay
 current):
 
-| Phase             | Standard file                      | Lite file                                    |
-| ----------------- | ---------------------------------- | -------------------------------------------- |
-| A5 Claim          | `idd-claim.instructions.md`        | `lite/idd-claim-lite.instructions.md`        |
-| B1-C6 Work        | `idd-work.instructions.md`         | `lite/idd-work-lite.instructions.md`         |
-| D1-D4 PR-submit   | `idd-pr-submit.instructions.md`    | `lite/idd-pr-submit-lite.instructions.md`    |
-| E9-E15 Review-fix | `idd-review-fix.instructions.md`   | `lite/idd-review-fix-lite.instructions.md`   |
-| Resume            | `idd-resume.instructions.md`       | `lite/idd-resume-lite.instructions.md`       |
-| Resume-stall      | `idd-resume-stall.instructions.md` | `lite/idd-resume-stall-lite.instructions.md` |
+| Phase                    | Standard file                       | Lite file                                     |
+| ------------------------ | ----------------------------------- | --------------------------------------------- |
+| A5 Claim                 | `idd-claim.instructions.md`         | `lite/idd-claim-lite.instructions.md`         |
+| B1-C6 Work               | `idd-work.instructions.md`          | `lite/idd-work-lite.instructions.md`          |
+| D1-D4 PR-submit          | `idd-pr-submit.instructions.md`     | `lite/idd-pr-submit-lite.instructions.md`     |
+| E9-E15 Review-fix        | `idd-review-fix.instructions.md`    | `lite/idd-review-fix-lite.instructions.md`    |
+| F1-F2 helper-read subset | `idd-pre-merge.instructions.md`     | `lite/idd-pre-merge-lite.instructions.md`     |
+| F2.5 handoff-stop        | `idd-merge-handoff.instructions.md` | `lite/idd-merge-handoff-lite.instructions.md` |
+| Resume                   | `idd-resume.instructions.md`        | `lite/idd-resume-lite.instructions.md`        |
+| Resume-stall             | `idd-resume-stall.instructions.md`  | `lite/idd-resume-stall-lite.instructions.md`  |
+
+The F1-F2 and F2.5 rows cover a **partial** slice of their standard
+files only, per the design's phase scoping: the lite F1-F2 file
+covers just F1's read-only branch check and reading the
+`pre-merge-readiness` helper verdict, never the standard file's
+written prose fallback; the lite F2.5 file covers just the
+handoff-stop outcome, never autonomous-merge routing. Both still fall
+back to their standard file for the excluded sub-case within the same
+phase — a nuance the table above cannot show by itself.
 
 `idd-ci.instructions.md` and `idd-advisory-wait.instructions.md` are
 shared helper files, not phases of their own; per the design's
@@ -301,18 +312,14 @@ appear as a row here.
 
 **Explicit fallback.** Every phase without a row above falls back to
 its standard instruction file — this is the documented default, not
-an implied gap. Three different reasons a phase can lack a lite file:
+an implied gap. Two different reasons a phase can lack a lite file:
 
-- **Tracked, not yet shipped**: the F1-F2 helper-read subset plus
-  F2.5's handoff-stop outcome
-  ([#1547](https://github.com/kurone-kito/idd-skill/issues/1547)) is
-  in scope per `docs/weak-model-lite-profile-design.md`'s
-  [phase scoping](weak-model-lite-profile-design.md#phase-scoping),
-  with an open roadmap issue but no lite file yet.
 - **In scope per design, not yet tracked**: E1-E3 review-snapshot is
-  listed in scope in that same phase-scoping table, but the roadmap's
-  (#1539) decomposition list has no corresponding follow-up issue for
-  it as of this writing.
+  listed in scope in `docs/weak-model-lite-profile-design.md`'s
+  [phase scoping](weak-model-lite-profile-design.md#phase-scoping),
+  but the lite-execution-profile roadmap's (#1539) decomposition list
+  has no corresponding follow-up issue for it as of this writing —
+  every other in-scope phase's track has shipped and merged.
 - **Permanently excluded by design**: A0-A4 Discover, A4.5
   Suitability, E4-E8 Review-triage, and F3-F5 Merge stay on the
   standard file always — the design's
