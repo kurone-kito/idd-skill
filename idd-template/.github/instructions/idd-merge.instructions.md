@@ -261,7 +261,8 @@ Before any mutating action in F3, apply the
      acknowledgement reply then resolve it directly, then **restart
      `idd-pre-merge.instructions.md` F2**; **(d)** thread with
      `**Awaiting maintainer decision**` reply → post a hold comment and
-     stop.
+     stop. Cases **(b)**-**(c)** together are the **F3 awaiting-reviewer
+     restart-F2 path** cited elsewhere in this bundle.
 
    When a merge failure routes to F1, D4, E1, or a hold, update the
    digest after recording the failure evidence. Set `Phase` to
