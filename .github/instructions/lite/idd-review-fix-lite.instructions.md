@@ -33,7 +33,7 @@ It never classifies, scores severity, or decides Accept/Reject itself —
 those are E4-E8 judgment calls, excluded from every lite profile.
 
 1. Before fixing anything, confirm every item from ReviewItems_snapshot
-   this round acts on already carries an `**Accepted**` or
+   that this round acts on already carries an `**Accepted**` or
    `**Rejected**` disposition from a prior E4-E8 pass.
 2. If a ReviewItems_snapshot item has no recorded disposition, stop and
    ask. Do not triage it yourself, and do not guess its severity.
