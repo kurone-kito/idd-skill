@@ -533,8 +533,9 @@ Route based on `branchState` from the helper (or `mergeable` /
 
 Under heavy concurrent-session load, `main` can advance again before
 one full {sync path → E1 → F1/F2} cycle finishes, re-triggering
-`behind-no-conflict` next pass; naive repetition never reaches F3
-(observed 2026-07-22, PR #1612).
+`behind-no-conflict` next pass; naive repetition can livelock,
+failing to reach F3 for as long as `main` keeps moving (observed
+2026-07-22, PR #1612).
 
 **Rule**: post the watermark as the **last** action before the F3
 `idd-merge-execute.mjs --apply` attempt, every pass. Anything after it
