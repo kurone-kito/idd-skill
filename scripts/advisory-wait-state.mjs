@@ -20,6 +20,7 @@ import { loadIddConfig } from './idd-config.mjs';
 import {
   buildAdvisoryWaitSummary,
   compareIsoTimestamps,
+  computeCopilotPendingCoversHead,
   isValidIsoTimestamp,
   normalizeTrustedMarkerLogins,
   parseAdvisoryRecoveryComment,
@@ -186,6 +187,90 @@ export function buildCopilotRecoverySummary(
     reason,
   };
 }
+const STALE_REQUEST_RECOVERY_REASONS = {
+  notPending: 'not-pending',
+  sameHeadMarkerPresent: 'same-head-marker-present',
+  provenCoversHead: 'proven-covers-head',
+  capExhausted: 'recovery-cap-exhausted',
+  attemptEligible: 'recovery-attempt-eligible',
+};
+export function evaluateStaleRequestRecoveryAction(input) {
+  if (!input.copilotPending) {
+    return {
+      action: 'not-applicable',
+      reason: STALE_REQUEST_RECOVERY_REASONS.notPending,
+    };
+  }
+  // A same-head marker (ordinary `advisory-wait:` OR a prior recovery cycle's
+  // `advisory-wait-recovery:`) already anchors this HEAD's clock -- mirrors
+  // evaluateAdvisoryWaitOutcome's own `!sameHeadMarkerPresent` gate for both
+  // its RECOVERY_NEEDED and REQUEST_NEEDED/CAP_EXHAUSTED branches, so this
+  // classifier never contradicts the shared outcome machine's routing.
+  if (input.sameHeadMarkerPresent) {
+    return {
+      action: 'not-applicable',
+      reason: STALE_REQUEST_RECOVERY_REASONS.sameHeadMarkerPresent,
+    };
+  }
+  if (input.copilotPendingCoversHead) {
+    return {
+      action: 'not-applicable',
+      reason: STALE_REQUEST_RECOVERY_REASONS.provenCoversHead,
+    };
+  }
+  if (input.remainingBudget <= 0) {
+    return {
+      action: 'cap-exhausted',
+      reason: STALE_REQUEST_RECOVERY_REASONS.capExhausted,
+    };
+  }
+  return {
+    action: 'attempt',
+    reason: STALE_REQUEST_RECOVERY_REASONS.attemptEligible,
+  };
+}
+/**
+ * `#1571` head-race guard: a pure, string-normalized comparison an E14/F2
+ * caller must re-run immediately before every mutating step of the bounded
+ * recovery cycle (removal, re-request, association verification, marker
+ * post) -- see `idd-advisory-wait.instructions.md`'s `AW3-S`. A `true` result
+ * means the branch moved between the last-known HEAD and this check: the
+ * caller must abort the current attempt without mutating or counting a
+ * cycle, and restart evaluation fresh (return to E1) against the new HEAD.
+ */
+export function detectRecoveryHeadRace(expectedHeadSha, currentHeadSha) {
+  const expected = String(expectedHeadSha ?? '')
+    .trim()
+    .toLowerCase();
+  const current = String(currentHeadSha ?? '')
+    .trim()
+    .toLowerCase();
+  return expected !== current;
+}
+/**
+ * `#1571` post-mutation association proof: after a recovery cycle's
+ * remove-then-re-request completes, re-fetch the PR timeline for the current
+ * HEAD and call this to verify the fresh request is provably associated with
+ * it (a `review_requested` event for the configured primary bot strictly
+ * after the current HEAD's `committed` event) before posting the bound
+ * `advisory-recovery` marker. Delegates to the same proof
+ * {@link evaluateStaleRequestRecoveryAction}'s caller uses to detect
+ * staleness in the first place (`computeCopilotPendingCoversHead`) -- reusing
+ * one proof for both directions keeps them from silently diverging. Returns
+ * `false` (fails closed, do not post the marker or count a cycle) on missing
+ * or ambiguous timeline evidence, exactly like the staleness check.
+ */
+export function verifyRecoveryRequestCoversHead(
+  timelineEvents,
+  prHeadSha,
+  primaryBotLogin,
+) {
+  return computeCopilotPendingCoversHead(
+    timelineEvents,
+    prHeadSha,
+    primaryBotLogin,
+  );
+}
 function normalizePositiveIntegerOption(value, fallback) {
   const number = Number(value);
   return Number.isInteger(number) && number > 0 ? number : fallback;
@@ -336,6 +421,16 @@ function main() {
       terminalWindowMinutes: readAdvisoryTerminalWindowMinutes(),
     },
   );
+  // #1571: bounded stale-request recovery eligibility, derived from the
+  // already-computed AW1-AW3 evidence (summary) plus the #1572 recovery-cycle
+  // budget (copilotRecovery). See evaluateStaleRequestRecoveryAction's own
+  // doc comment for why this is independent of RECOVERY_NEEDED/AW3-R.
+  const staleRequestRecovery = evaluateStaleRequestRecoveryAction({
+    copilotPending: summary.copilotPending,
+    copilotPendingCoversHead: summary.copilotPendingCoversHead,
+    sameHeadMarkerPresent: summary.sameHeadMarkerPresent,
+    remainingBudget: copilotRecovery.remainingBudget,
+  });
   process.stdout.write(
     `${JSON.stringify(
       {
@@ -343,6 +438,7 @@ function main() {
         trustedMarkerActors: configuredTrustedActors,
         trustedMarkerActorsSource,
         copilotRecovery,
+        staleRequestRecovery,
       },
       null,
       2,

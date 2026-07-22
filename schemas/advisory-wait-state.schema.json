@@ -243,6 +243,24 @@
         }
       },
       "additionalProperties": false
+    },
+    "staleRequestRecovery": {
+      "type": "object",
+      "description": "#1571 bounded stale-request recovery eligibility. Independent of outcome/f3Outcome and of copilotRecovery above: distinguishes the unproven-coverage (copilotPendingCoversHead=false) case PR #1562 identified from the pre-existing RECOVERY_NEEDED/AW3-R marker-anchor-only path (copilotPendingCoversHead=true). Consumed only by E14's REQUEST_NEEDED-with-pending sub-path (AW3-S) to decide whether the bounded remove/re-request/verify/mark cycle may run.",
+      "required": ["action", "reason"],
+      "properties": {
+        "action": {
+          "type": "string",
+          "enum": ["attempt", "cap-exhausted", "not-applicable"],
+          "description": "'attempt': unproven pending request, no same-head marker, recovery-cycle budget remains -- run AW3-S. 'cap-exhausted': same unproven condition, but the independent #1572 recovery-cycle cap is exhausted for this HEAD -- do not mutate; fall back to CAP_EXHAUSTED_ROUTE. 'not-applicable': no stale-request recovery decision applies."
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Machine-readable reason: not-pending, same-head-marker-present, proven-covers-head, recovery-cap-exhausted, or recovery-attempt-eligible."
+        }
+      },
+      "additionalProperties": false
     }
   },
   "additionalProperties": false

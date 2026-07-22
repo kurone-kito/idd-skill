@@ -287,6 +287,7 @@ export const advisoryWaitStateKeys = [
   'trustedMarkerActors',
   'trustedMarkerActorsSource',
   'copilotRecovery',
+  'staleRequestRecovery',
 ] as const satisfies readonly (keyof AdvisoryWaitStateReport)[];
 
 export const branchConflictStateKeys = [
@@ -639,6 +640,10 @@ const advisoryWaitStateFixture = {
     activeClaimProvided: false,
     state: 'NOT_TERMINAL',
     reason: 'active-claim-not-provided',
+  },
+  staleRequestRecovery: {
+    action: 'not-applicable',
+    reason: 'not-pending',
   },
 } satisfies AdvisoryWaitStateReport;
 

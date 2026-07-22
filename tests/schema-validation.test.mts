@@ -491,6 +491,48 @@ test('advisory-wait-state schema rejects an incomplete or malformed copilotRecov
   );
 });
 
+// --- #1571: advisory-wait-state.schema.json's staleRequestRecovery object -
+
+test('advisory-wait-state schema accepts each staleRequestRecovery.action value', () => {
+  const schema = loadJson('schemas/advisory-wait-state.schema.json');
+  for (const action of ['attempt', 'cap-exhausted', 'not-applicable']) {
+    const instance = JSON.parse(
+      JSON.stringify(
+        loadJson('fixtures/schemas/advisory-wait-state.valid.json'),
+      ),
+    );
+    instance.staleRequestRecovery = {
+      action,
+      reason: 'recovery-attempt-eligible',
+    };
+    assert.deepEqual(validate(instance, schema), []);
+  }
+});
+
+test('advisory-wait-state schema rejects an incomplete or malformed staleRequestRecovery object', () => {
+  const schema = loadJson('schemas/advisory-wait-state.schema.json');
+  const instance = JSON.parse(
+    JSON.stringify(loadJson('fixtures/schemas/advisory-wait-state.valid.json')),
+  );
+  instance.staleRequestRecovery = {
+    // action deliberately omitted -- a required nested field.
+    reason: 'not-pending',
+  };
+  assert.ok(
+    validate(instance, schema).length > 0,
+    'expected a staleRequestRecovery object missing action to be rejected',
+  );
+
+  instance.staleRequestRecovery = {
+    action: 'somehow-eligible', // not in the enum
+    reason: 'not-pending',
+  };
+  assert.ok(
+    validate(instance, schema).length > 0,
+    'expected an out-of-enum staleRequestRecovery.action to be rejected',
+  );
+});
+
 test('policy schema accepts missing mergeGate (runtime normalization supplies the default) (#1521)', () => {
   const schema = loadJson('schemas/policy.schema.json');
   const instance = JSON.parse(

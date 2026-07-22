@@ -275,6 +275,73 @@ Rules:
 - advisory clock starts from marker comment `created_at`
 - if marker cannot be posted/read, route to `AW4` recovery-failed hold
 
+### AW3-S — Bounded stale-request recovery (`#1571`)
+
+**Distinct from `AW3-R`**: `AW3-R` fires when the pending request is
+already **proven** to cover HEAD and only anchors a missing marker.
+`AW3-S` fires for the **opposite**, unproven case PR #1562 identified
+(`COPILOT_PENDING_COVERS_HEAD = false`, no same-head marker) — the
+`REQUEST_NEEDED`-with-pending sub-case (E14). It bounds the
+remove-then-re-request sequence with the independent, per-HEAD
+recovery-cycle cap from the
+[terminal contract](#terminal-copilot-stall-recovery-contract-state-policy-markers-clock)
+(default 2) instead of the far larger ordinary `REQUEST_CAP` (30).
+
+**Eligibility.** Run `advisory-wait-state` **with `--claim-id`/`--agent-id`
+set to the active claim** (omitting either makes the budget read as the
+full un-decremented cap — never trust an unbound `"attempt"` to
+authorize a mutation) and read `staleRequestRecovery`:
+
+- `"not-applicable"` → does not apply; use ordinary handling unchanged.
+- `"cap-exhausted"` → do **not** remove or re-request; handle like
+  `CAP_EXHAUSTED` (`CAP_EXHAUSTED_ROUTE`) instead of looping.
+- `"attempt"` → run the cycle below.
+
+Without helper runtime, derive the same decision from AW1-AW2 plus the
+terminal contract's `remaining budget` (`max(cap - completedCycleCount,
+0)`, trusted bound `advisory-wait-recovery:` markers only).
+
+**Bounded cycle** (only when `"attempt"`). Before each mutating step,
+re-verify the active claim
+([claim revalidation gate](idd-overview-core.instructions.md#claim-revalidation-gate))
+and that HEAD has not moved since this attempt started; either failure
+aborts without mutating or counting a cycle — discard state and restart
+from E1 against the new HEAD.
+
+1. **Remove** the stale request (E14's gh-then-REST fallback). If it
+   fails because the bot is no longer pending, re-run AW1-AW3 and
+   re-evaluate `staleRequestRecovery` fresh; any other failure posts the
+   `AW4` pending-refresh-failed hold and stops — no cycle counted.
+2. **Verify** removal and current HEAD before proceeding.
+3. **Request** Copilot again, same gh-then-REST fallback.
+4. **Verify association**: re-fetch the PR timeline and confirm the
+   fresh request's `review_requested` now follows HEAD's `committed`
+   event (the same proof `COPILOT_PENDING_COVERS_HEAD` uses). If not yet
+   true (timeline lag), do **not** post the marker or count a cycle;
+   retry from step 1 with fresh state — a retry that never reaches a
+   verified marker never consumes budget, so re-entry after a partial
+   failure is naturally idempotent.
+5. **Post exactly one** bound marker, only once every prior step is
+   verified:
+
+   ```sh
+   node scripts/post-idd-marker.mjs --type advisory-recovery --target pr <pr-number> \
+     --agent-id <id> --claim-id <id> --head-sha <PR_HEAD_SHA> \
+     --attempt <n> --timestamp <ISO8601> --apply
+   ```
+
+   `<n>` is `completedCycleCount + 1`. Posting last is what prevents
+   double-counting: `buildCopilotRecoverySummary` counts trusted marker
+   **presence**, so a retried-but-unmarked attempt never consumes budget.
+
+**Ordinary counters are untouched.** The bound marker is excluded from
+`requestMarkerCount` (only `advisory-wait:` markers count there) and from
+`#1511`'s reroll accounting. It **does** count as a same-head marker for
+the AW2 clock, which is what naturally blocks a second mutation for the
+_same_ verified HEAD within one pass (`staleRequestRecovery` reads
+`"not-applicable"` once a same-head marker exists), with no extra guard
+needed.
+
 ### AW3-H — Hide superseded advisory-wait markers
 
 After any new `advisory-wait` or `advisory-wait-recovery` marker is
@@ -363,11 +430,15 @@ failure).
 ## Terminal Copilot stall-recovery contract (state, policy, markers, clock)
 
 `#1572` defines state/policy/marker/schema **contracts** for a terminal
-`COPILOT_UNAVAILABLE` signal, for the execution (`#1571`, requesting
-reviews and posting recovery markers) and routing (`#1570`, F2/F3/
-convergence/waiver integration) tracks to build against. This file does
-not itself change E14/F2/F3 routing; no caller yet acts on
-`COPILOT_UNAVAILABLE`.
+`COPILOT_UNAVAILABLE` signal. `#1571` (`AW3-S` above) builds the
+execution track against this contract: the bounded remove/re-request/
+verify/mark recovery cycle, and the `staleRequestRecovery` eligibility
+classification that gates it. Routing (`#1570`: wiring
+`COPILOT_UNAVAILABLE` into F2/F3/convergence/waiver decisions) remains
+unbuilt — no caller yet treats `COPILOT_UNAVAILABLE` as anything beyond
+waiver _eligibility_, and `AW3-S`'s `"cap-exhausted"` result still falls
+back to the existing `CAP_EXHAUSTED_ROUTE` handling rather than any new
+terminal routing.
 
 **Policy** (`advisory-wait-policy.mts`, resolved/read like every other
 `advisoryWait.*` knob, independent counters from `requestCap` and `#1511`'s
