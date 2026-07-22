@@ -105,21 +105,25 @@ This section's rebase only applies **before the branch's first push**.
      `node scripts/branch-conflict-state.mjs --pr <pr-number>`, or the
      package-manager-profile `idd:branch-conflict-state` command
      (resolve the exact command from `docs/idd-helper-scripts.md` if
-     unsure). This is the same helper the standard file's branch-sync
-     check uses, so it already accounts for whether a merely-`BEHIND`
-     head actually needs a resync (branch protection requiring an
-     up-to-date head) rather than treating every non-`CLEAN` state the
-     same:
+     unsure). This is the same helper `idd-review-triage.instructions.md`
+     uses for its own branch-sync check (the standard `idd-pr-submit.
+     instructions.md` file does not reference it directly, since D1 there
+     only covers the pre-first-push case), so it already accounts for
+     whether a merely-`BEHIND` head actually needs a resync (branch
+     protection requiring an up-to-date head) rather than treating every
+     non-`CLEAN` state the same:
      - `syncRecommendation: "none"`: D1-D3 already happened in an
        earlier session; skip straight to D4 (wait for CI).
      - `syncRecommendation: "recheck"` (mergeability still computing):
        re-run the helper after a short wait, up to 3 attempts; only a
        result still `"recheck"` after that budget falls through to stop
        per the condition above.
-     - Any other value (`"sync"`, or the helper is unavailable, fails,
-       or disagrees with live GitHub state): stop per the condition
-       above — this needs either the merge-based resync or a closer
-       live-state read this file's mechanical scope does not cover.
+     - Any other value (`"merge-main"`, `"policy-required-update"`,
+       `"force-push-exception"`, `"hold-unknown"`, or the helper is
+       unavailable, fails, or disagrees with live GitHub state): stop
+       per the condition above — this needs either the merge-based
+       resync or a closer live-state read this file's mechanical scope
+       does not cover.
 2. Run `git fetch origin main`.
 3. If `git merge-base HEAD origin/main` equals `origin/main`, the branch
    already contains every commit on `main` — skip the rebase and go to
