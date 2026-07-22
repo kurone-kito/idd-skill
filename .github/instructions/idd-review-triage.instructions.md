@@ -626,10 +626,9 @@ override the `return-to-e1` and proceed on the current HEAD SHA (see
 non-ack blocking cause makes it `false`, so the backstop still holds for every
 other case.
 
-The narrower, informational-only `inPlaceEditOnly` /
-`soleCauseInPlaceEditOnly` sibling is documented in
-`idd-pre-merge.instructions.md` F2 (#1313) — it is not a second override
-path.
+The narrower `inPlaceEditOnly` / `soleCauseInPlaceEditOnly` sibling
+(#1313, `summarizeDispositionEvidenceForGate`) is a strict subset of
+`soleCauseAckOnlyPostDisposition`, not an override path.
 
 ## Review item classes
 
