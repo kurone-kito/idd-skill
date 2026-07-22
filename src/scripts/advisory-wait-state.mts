@@ -337,9 +337,9 @@ export interface StaleRequestRecoveryAction {
    * independent recovery-cycle cap (`#1572`) is already exhausted for this
    * HEAD: do not remove or re-request; fall back to the ordinary
    * `CAP_EXHAUSTED_ROUTE` handling instead.
-   * `'not-applicable'` -- no stale-request recovery decision applies (not
-   * pending, request is already proven to cover HEAD, or a same-head marker
-   * already anchors the clock).
+   * `'not-applicable'` -- no stale-request recovery decision applies (no
+   * claim-bound evidence, not pending, request is already proven to cover
+   * HEAD, or a same-head marker already anchors the clock).
    */
   action: 'attempt' | 'cap-exhausted' | 'not-applicable';
   /** Machine-readable reason for `action`. */
@@ -347,6 +347,7 @@ export interface StaleRequestRecoveryAction {
 }
 
 const STALE_REQUEST_RECOVERY_REASONS = {
+  activeClaimNotProvided: 'active-claim-not-provided',
   notPending: 'not-pending',
   sameHeadMarkerPresent: 'same-head-marker-present',
   provenCoversHead: 'proven-covers-head',
@@ -359,7 +360,24 @@ export function evaluateStaleRequestRecoveryAction(input: {
   copilotPendingCoversHead: boolean;
   sameHeadMarkerPresent: boolean;
   remainingBudget: number;
+  /**
+   * Mirrors {@link CopilotRecoverySummary.activeClaimProvided}: `true` only
+   * when the caller supplied both `--claim-id` and `--agent-id` so the
+   * recovery-cycle budget in `remainingBudget` is actually derived from
+   * claim-bound marker evidence, not just defaulted to the full cap. AW3-S
+   * requires claim binding to authorize a mutation (kurone-kito/idd-skill#1645
+   * review); omitting this check would let an unbound `remainingBudget`
+   * (which reads as the full cap when no evidence was ever counted) produce
+   * `"attempt"` without proof no cycle has already run.
+   */
+  activeClaimProvided: boolean;
 }): StaleRequestRecoveryAction {
+  if (!input.activeClaimProvided) {
+    return {
+      action: 'not-applicable',
+      reason: STALE_REQUEST_RECOVERY_REASONS.activeClaimNotProvided,
+    };
+  }
   if (!input.copilotPending) {
     return {
       action: 'not-applicable',
@@ -400,9 +418,12 @@ export function evaluateStaleRequestRecoveryAction(input: {
  * caller must re-run immediately before every mutating step of the bounded
  * recovery cycle (removal, re-request, association verification, marker
  * post) -- see `idd-advisory-wait.instructions.md`'s `AW3-S`. A `true` result
- * means the branch moved between the last-known HEAD and this check: the
- * caller must abort the current attempt without mutating or counting a
- * cycle, and restart evaluation fresh (return to E1) against the new HEAD.
+ * means either the branch moved between the last-known HEAD and this check,
+ * or a comparison side is missing or not a full 40-hex commit SHA (fails
+ * closed on ambiguous evidence the same way an equal-but-abbreviated or
+ * equal-but-empty pair would otherwise misread as "unchanged"): the caller
+ * must abort the current attempt without mutating or counting a cycle, and
+ * restart evaluation fresh (return to E1) against the new HEAD.
  */
 export function detectRecoveryHeadRace(
   expectedHeadSha: string,
@@ -414,12 +435,15 @@ export function detectRecoveryHeadRace(
   const current = String(currentHeadSha ?? '')
     .trim()
     .toLowerCase();
-  // Fail closed on missing evidence: an empty comparison side (even when
-  // BOTH sides are empty, so a naive equality would read as "unchanged")
-  // is not proof HEAD is stable -- it is proof the caller never resolved
-  // one side, and treating that as "no race" would let a recovery mutation
-  // proceed on an unknown HEAD (kurone-kito/idd-skill#1645 review).
-  if (expected === '' || current === '') {
+  // Fail closed on missing OR ambiguous evidence: a comparison side that is
+  // empty, or that is not a full 40-hex commit SHA (e.g. an abbreviated
+  // SHA), is not proof HEAD is stable -- even when both sides are identical
+  // non-full-SHA strings, so a naive equality would misread it as
+  // "unchanged". Treating either case as "no race" would let a recovery
+  // mutation proceed on an unresolved or ambiguous HEAD value
+  // (kurone-kito/idd-skill#1645 review).
+  const fullShaPattern = /^[0-9a-f]{40}$/;
+  if (!fullShaPattern.test(expected) || !fullShaPattern.test(current)) {
     return true;
   }
   return expected !== current;
@@ -647,6 +671,7 @@ function main(): void {
     copilotPendingCoversHead: summary.copilotPendingCoversHead,
     sameHeadMarkerPresent: summary.sameHeadMarkerPresent,
     remainingBudget: copilotRecovery.remainingBudget,
+    activeClaimProvided: copilotRecovery.activeClaimProvided,
   });
 
   process.stdout.write(

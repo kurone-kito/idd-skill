@@ -82,6 +82,51 @@ function recoveryComment(overrides: {
   };
 }
 
+// --- 0. Active-claim gating (fail closed without claim-bound evidence) -----
+
+test('evaluateStaleRequestRecoveryAction: not-applicable when no active claim was provided, even though every other condition looks attempt-eligible', () => {
+  // kurone-kito/idd-skill#1645 review: without --claim-id/--agent-id,
+  // buildCopilotRecoverySummary's remainingBudget defaults to the full cap
+  // (no marker evidence was ever counted), which must NOT be trusted as
+  // "budget available" -- the claim-not-provided signal takes precedence
+  // over every other field, including a stale-looking pending request.
+  const decision = evaluateStaleRequestRecoveryAction({
+    copilotPending: true,
+    copilotPendingCoversHead: false,
+    sameHeadMarkerPresent: false,
+    remainingBudget: 2,
+    activeClaimProvided: false,
+  });
+  assert.deepEqual(decision, {
+    action: 'not-applicable',
+    reason: 'active-claim-not-provided',
+  });
+});
+
+test('integration: an unbound advisory-wait-state invocation (no --claim-id/--agent-id) never reports "attempt"', () => {
+  const copilotRecovery = buildCopilotRecoverySummary(
+    { comments: [], prHeadSha: SHA, lastCopilotCommit: '' },
+    { ...BASE_RECOVERY_OPTIONS, claimId: '', agentId: '' },
+  );
+  // The #1572 contract already fails this closed to NOT_TERMINAL, but
+  // remainingBudget alone still reads as the full un-decremented cap --
+  // exactly the unbound-evidence trap the #1571 review caught.
+  assert.equal(copilotRecovery.activeClaimProvided, false);
+  assert.equal(copilotRecovery.remainingBudget, 2);
+
+  const decision = evaluateStaleRequestRecoveryAction({
+    copilotPending: true,
+    copilotPendingCoversHead: false,
+    sameHeadMarkerPresent: false,
+    remainingBudget: copilotRecovery.remainingBudget,
+    activeClaimProvided: copilotRecovery.activeClaimProvided,
+  });
+  assert.deepEqual(decision, {
+    action: 'not-applicable',
+    reason: 'active-claim-not-provided',
+  });
+});
+
 // --- 1. Stale (unproven) versus current-head (proven) pending requests -----
 
 test('evaluateStaleRequestRecoveryAction: attempt-eligible for an unproven pending request (PR #1562 shape)', () => {
@@ -109,6 +154,7 @@ test('evaluateStaleRequestRecoveryAction: attempt-eligible for an unproven pendi
     copilotPendingCoversHead: summary.copilotPendingCoversHead,
     sameHeadMarkerPresent: summary.sameHeadMarkerPresent,
     remainingBudget: 2,
+    activeClaimProvided: true,
   });
   assert.deepEqual(decision, {
     action: 'attempt',
@@ -139,6 +185,7 @@ test('evaluateStaleRequestRecoveryAction: not-applicable when the request is alr
     copilotPendingCoversHead: summary.copilotPendingCoversHead,
     sameHeadMarkerPresent: summary.sameHeadMarkerPresent,
     remainingBudget: 2,
+    activeClaimProvided: true,
   });
   assert.deepEqual(decision, {
     action: 'not-applicable',
@@ -152,6 +199,7 @@ test('evaluateStaleRequestRecoveryAction: not-applicable when Copilot is not pen
     copilotPendingCoversHead: false,
     sameHeadMarkerPresent: false,
     remainingBudget: 2,
+    activeClaimProvided: true,
   });
   assert.deepEqual(decision, {
     action: 'not-applicable',
@@ -165,6 +213,7 @@ test("evaluateStaleRequestRecoveryAction: not-applicable once a same-head marker
     copilotPendingCoversHead: false,
     sameHeadMarkerPresent: true,
     remainingBudget: 2,
+    activeClaimProvided: true,
   });
   assert.deepEqual(decision, {
     action: 'not-applicable',
@@ -263,6 +312,17 @@ test('detectRecoveryHeadRace: fails closed even when BOTH HEADs are missing (kur
   assert.equal(detectRecoveryHeadRace('   ', '   '), true);
 });
 
+test('detectRecoveryHeadRace: fails closed on an abbreviated (non-full-length) SHA, even when both sides match (kurone-kito/idd-skill#1645 review)', () => {
+  const abbreviated = SHA.slice(0, 7);
+  assert.equal(detectRecoveryHeadRace(abbreviated, abbreviated), true);
+  assert.equal(detectRecoveryHeadRace(abbreviated, SHA), true);
+});
+
+test('detectRecoveryHeadRace: fails closed on a non-hex or wrong-length value, even when both sides match', () => {
+  assert.equal(detectRecoveryHeadRace('not-a-sha', 'not-a-sha'), true);
+  assert.equal(detectRecoveryHeadRace(`${SHA}extra`, `${SHA}extra`), true);
+});
+
 // --- 4. Retry-cap exhaustion -------------------------------------------------
 
 test('evaluateStaleRequestRecoveryAction: cap-exhausted when the independent #1572 recovery-cycle budget is spent, even though the ordinary request path would still allow more attempts', () => {
@@ -271,6 +331,7 @@ test('evaluateStaleRequestRecoveryAction: cap-exhausted when the independent #15
     copilotPendingCoversHead: false,
     sameHeadMarkerPresent: false,
     remainingBudget: 0,
+    activeClaimProvided: true,
   });
   assert.deepEqual(decision, {
     action: 'cap-exhausted',
@@ -284,6 +345,7 @@ test('evaluateStaleRequestRecoveryAction: attempt-eligible with exactly one cycl
     copilotPendingCoversHead: false,
     sameHeadMarkerPresent: false,
     remainingBudget: 1,
+    activeClaimProvided: true,
   });
   assert.equal(decision.action, 'attempt');
 });
@@ -313,6 +375,7 @@ test('integration: a full recovery-cap exhaustion sequence via buildCopilotRecov
     copilotPendingCoversHead: false,
     sameHeadMarkerPresent: false,
     remainingBudget: copilotRecovery.remainingBudget,
+    activeClaimProvided: copilotRecovery.activeClaimProvided,
   });
   assert.deepEqual(decision, {
     action: 'cap-exhausted',
@@ -339,6 +402,7 @@ test('integration: re-entering after a partial failure (no marker posted yet) do
     copilotPendingCoversHead: false,
     sameHeadMarkerPresent: false,
     remainingBudget: copilotRecovery.remainingBudget,
+    activeClaimProvided: copilotRecovery.activeClaimProvided,
   });
   assert.equal(decision.action, 'attempt');
 });
@@ -376,6 +440,7 @@ test("integration: once one cycle's marker is verified and posted, re-evaluating
     copilotPendingCoversHead: false,
     sameHeadMarkerPresent: summary.sameHeadMarkerPresent,
     remainingBudget: copilotRecovery.remainingBudget,
+    activeClaimProvided: copilotRecovery.activeClaimProvided,
   });
   assert.deepEqual(decision, {
     action: 'not-applicable',
@@ -488,6 +553,7 @@ test('a full CLI output shape (summary + copilotRecovery + staleRequestRecovery)
     copilotPendingCoversHead: summary.copilotPendingCoversHead,
     sameHeadMarkerPresent: summary.sameHeadMarkerPresent,
     remainingBudget: copilotRecovery.remainingBudget,
+    activeClaimProvided: copilotRecovery.activeClaimProvided,
   });
 
   const fullOutput = {
@@ -507,6 +573,7 @@ test('the schema rejects a staleRequestRecovery object missing a required field 
     copilotPendingCoversHead: false,
     sameHeadMarkerPresent: false,
     remainingBudget: 2,
+    activeClaimProvided: true,
   });
 
   const { reason: _omitted, ...missingReason } = decision;

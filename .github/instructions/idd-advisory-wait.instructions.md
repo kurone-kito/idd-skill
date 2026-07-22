@@ -294,8 +294,10 @@ recovery-cycle cap from the
 
 **Eligibility.** Run `advisory-wait-state` **with `--claim-id`/`--agent-id`
 set to the active claim** (omitting either makes the budget read as the
-full un-decremented cap — never trust an unbound `"attempt"` to
-authorize a mutation) and read `staleRequestRecovery`:
+full un-decremented cap; the classifier itself fails this closed to
+`"not-applicable"` / `active-claim-not-provided` rather than relying on the
+caller to remember not to trust an unbound `"attempt"`) and read
+`staleRequestRecovery`:
 
 - `"not-applicable"` → does not apply; use ordinary handling unchanged.
 - `"cap-exhausted"` → do **not** remove or re-request; handle like
