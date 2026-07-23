@@ -2,7 +2,7 @@
 
 Lite profile for helper-enabled weak/local models. Same semantics as the
 full-size CI-polling shared helper file. Used by lite phase files that wait for
-CI after a push (today: `idd-review-fix-lite.instructions.md`'s E15
+CI after a push (e.g., `idd-review-fix-lite.instructions.md`'s E15
 step). If the repository is `instructions-only`, use the full-size
 CI-polling instructions instead of this file.
 
