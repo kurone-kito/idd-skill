@@ -252,6 +252,63 @@ Either way, preserve that branch's real history and move only the
 misplaced commit. `scripts/idd-doctor.mjs` warns on the same
 primary-worktree-HEAD symptom this gate catches at mutation time.
 
+## Work and self-review
+
+### B1 Step 3 — install-deps silent under-install detection
+
+Two independent fresh-worktree sessions observed `pnpm install
+--frozen-lockfile` report apparent success while silently leaving
+`node_modules/.bin/tsc` missing (root cause unconfirmed; suspected pnpm
+store/hardlink race). `scripts/verify-install-deps.mjs` is a thin
+generic wrapper: run the configured install command, verify a key
+binary exists, retry the install exactly once if it does not (including
+when the install command itself fails), and fail loudly with an
+actionable message if it is still missing after the retry. The existing
+install-deps idempotency contract is preserved — the wrapper never
+deletes or resets state, so reruns in fresh, reused, or recreated
+worktrees still need no manual cleanup (#1237).
+
+### B2.1 — Premise verification (decision-transcription issues)
+
+Field evidence showed a worker asked to transcribe a maintainer's
+already-recorded decision into documentation, where the decision's own
+rationale asserted a checkable fact about what a prior change shipped
+that the shipped code's own comment contradicted. The worker held,
+surfaced the primary-source evidence, and only continued after the
+maintainer corrected the record via an addendum. Nothing in the shared
+instructions prompted that judgment call, and a documentation-only PR
+has no test suite to catch a silently transcribed false premise later
+(#1390).
+
+### B3 — De-duplication refactor: check for behavior parity, not just body equivalence
+
+Closes a real regression class hit during #1208's `gh-exec.mts`
+consolidation: 10 of 22 call sites silently lost `execFileSync` stdio
+isolation / timeout options that a local `runGh` wrapper had been
+adding when the wrapper was collapsed into one shared function. It was
+caught only by an ad hoc critique pass and a reviewer comment, not by
+written implementation guidance (#1238).
+
+### B3 — Dependency drift vs. own diff: a typecheck/lint diagnostic
+
+A `typecheck`/`lint` failure in a file the current diff never touched
+can look like a bug in the diff itself, when it is really dependency
+drift or a broken `main` baseline — the #1164/#1193 incident cost real
+debugging time this way before the guidance below existed.
+
+### B3 — Local test flakiness under concurrent load: hosted CI is authoritative
+
+Field evidence from roughly eight to ten concurrent local worktree
+sessions on one machine showed delegated workers hitting local test
+timeouts on specs their diff never touched; every failure passed an
+isolated re-run and the hosted CI run (a dedicated, non-shared runner)
+stayed green each time. This was plain CPU/resource contention, but
+each occurrence cost real investigation before a worker could conclude
+"environmental, not my change" — and the pattern recurs more as
+adopters scale out concurrent sessions (#1391). Hosted CI governs when
+it disagrees with a local outcome for the same commit; that does not
+waive the fix-validate / pre-push-validate requirements themselves.
+
 ## Review triage
 
 ### Merge-main livelock under fast-moving `main`

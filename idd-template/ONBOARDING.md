@@ -421,6 +421,8 @@ recording template you will apply in Step 3.
 .github/instructions/lite/idd-review-fix-lite.instructions.md
 .github/instructions/lite/idd-resume-lite.instructions.md
 .github/instructions/lite/idd-resume-stall-lite.instructions.md
+.github/instructions/lite/idd-ci-lite.instructions.md
+.github/instructions/lite/idd-advisory-wait-lite.instructions.md
 docs/idd-workflow.md
 docs/idd-review-policy-profiles.md
 docs/idd-helper-scripts.md
@@ -513,6 +515,8 @@ for FILE in \
   ".github/instructions/lite/idd-review-fix-lite.instructions.md" \
   ".github/instructions/lite/idd-resume-lite.instructions.md" \
   ".github/instructions/lite/idd-resume-stall-lite.instructions.md" \
+  ".github/instructions/lite/idd-ci-lite.instructions.md" \
+  ".github/instructions/lite/idd-advisory-wait-lite.instructions.md" \
   "docs/idd-workflow.md" \
   "docs/idd-review-policy-profiles.md" \
   "docs/idd-helper-scripts.md" \
@@ -613,6 +617,8 @@ for FILE in \
   ".github/instructions/lite/idd-review-fix-lite.instructions.md" \
   ".github/instructions/lite/idd-resume-lite.instructions.md" \
   ".github/instructions/lite/idd-resume-stall-lite.instructions.md" \
+  ".github/instructions/lite/idd-ci-lite.instructions.md" \
+  ".github/instructions/lite/idd-advisory-wait-lite.instructions.md" \
   "docs/idd-workflow.md" \
   "docs/idd-review-policy-profiles.md" \
   "docs/idd-helper-scripts.md" \
