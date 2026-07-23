@@ -323,8 +323,9 @@ references one hop away (content principle 3), rather than inlining
 every rule from the full-size file (content principle 1). The
 advisory-wait lite sibling covers only the **E14-caller subset**: F2's
 prose fallback and F3's merge-time call site stay excluded, matching
-the design's own split-by-caller scoping for this file in
-[Phase scoping](weak-model-lite-profile-design.md#phase-scoping).
+the split-by-caller scoping for this file recorded in the upstream IDD
+repository's lite-profile roadmap/design note
+(`docs/weak-model-lite-profile-design.md`, "Phase scoping").
 
 **Explicit fallback.** Every phase without a row above falls back to
 its standard instruction file — this is the documented default, not

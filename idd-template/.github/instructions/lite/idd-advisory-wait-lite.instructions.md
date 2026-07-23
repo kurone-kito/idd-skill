@@ -125,18 +125,21 @@ Only a trusted marker actor's comment `created_at` counts for the
 clock. Never use commit author or committer timestamps as advisory
 proof.
 
-## Active polling loop
+## Polling guidance (protocol-level only)
+
+This section covers only what the AW3 protocol itself defines. Whether
+to abort this wait early on a moved HEAD or newly arrived review
+activity is the caller's own job — `idd-review-fix-lite.instructions.md`'s
+E14 already owns and fully defines that abort-and-restart logic; this
+file does not duplicate it.
 
 1. Reuse the existing same-head marker (`earliestSameHeadAt`) instead
    of posting a new one, unless none exists yet.
-2. Poll on the interval from `pollIntervalMinutes`. Each cycle:
-   re-fetch the PR HEAD; if it moved, stop polling and return to E1.
-   Re-fetch threads, review bodies, and comments; if anything is newer
-   than the last snapshot, stop polling and return to E1. Otherwise
-   re-run the Helper-first canonical path above.
+2. On each cycle, at the interval from `pollIntervalMinutes`, re-run
+   the Helper-first canonical path above for a fresh `outcome`.
 3. If `earliestSameHeadAt` is now empty, stop and ask (see
    Stop-and-ask conditions).
-4. If `outcome` is now `SATISFIED`, exit polling and continue.
+4. If `outcome` is now `SATISFIED`, exit this wait and continue.
 5. Otherwise re-apply the elapsed-window check: `copilotPending=true`
    and elapsed ≥ `pendingWindowMinutes`, or `copilotPending=false` and
    elapsed ≥ `settledWindowMinutes`, both count as satisfied — the
