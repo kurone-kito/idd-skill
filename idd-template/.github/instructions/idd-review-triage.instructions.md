@@ -108,9 +108,9 @@ current HEAD.`, then resolve the thread.
 about the runtime, CI, or an artifact. Before `Accept`ing it, verify the
 claim against the live runtime / artifact / CI run, not the comment text
 alone: confirmed → `Accept` and act; **false on the live evidence** →
-`Reject` and cite the contradicting evidence (the real run conclusion,
-file contents, or artifact) — a verified-false advisory is a reasoned
-rejection, not an action item.
+disposition it `Rejected` and cite the contradicting evidence (the real
+run conclusion, file contents, or artifact) — a verified-false advisory
+is a reasoned rejection, not an action item.
 
 **Reasoned-rejection convergence.** The iterate-to-zero loop may converge
 by reasoned rejection of peripheral or verified-false items — not every
