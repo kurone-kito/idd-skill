@@ -45,9 +45,10 @@ advisory-wait instructions directly.
 
 - A required helper field is missing, the helper exits non-zero,
   returns invalid JSON, or its evidence disagrees with live state.
-- Routing reaches the caller-derived `HOLD` state (never a
-  helper-emitted `outcome` value — see Helper-first canonical path
-  below), or `outcome` is `CAP_EXHAUSTED` with the `hold` route.
+- `outcome` is `CAP_EXHAUSTED` with the `hold` route — the only way
+  this file's routing reaches `HOLD`, which is always caller-derived,
+  never a helper-emitted `outcome` value (see Helper-first canonical
+  path below).
 - `earliestSameHeadAt` becomes empty during active polling (the marker
   disappeared).
 - A pending Copilot request cannot be refreshed, or an advisory-wait
