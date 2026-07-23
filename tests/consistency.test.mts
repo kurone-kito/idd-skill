@@ -425,6 +425,10 @@ test('live manifest instructionSizeBudgets covers both the dogfooding and idd-te
     'idd-template/.github/instructions/idd-*.instructions.md',
   ]);
   const ids = budgets.map((budget) => budget.id);
+  assert.ok(
+    ids.every((id) => typeof id === 'string' && id.trim().length > 0),
+    'each instructionSizeBudgets entry needs a non-empty id',
+  );
   assert.equal(
     new Set(ids).size,
     ids.length,

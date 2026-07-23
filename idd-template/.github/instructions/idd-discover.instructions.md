@@ -472,8 +472,9 @@ order:
   single-issue `resume-claim-routing.mjs --fresh-claim-gate` resolver
   per candidate, or apply the full parsing rules manually. A candidate
   is **ineligible** when parsing yields an active claim whose latest
-  valid `claimed-by` comment has GitHub `created_at` newer than
-  `claim-stale-age` (`docs/policy-constants.md`; distributed default:
+  valid `claimed-by` comment has GitHub `created_at` within
+  `claim-stale-age` of now (equivalently, `created_at > now -
+  claim-stale-age`; `docs/policy-constants.md`; distributed default:
   `24 h`); otherwise it **remains eligible**.
 
 After scanning the current batch:
@@ -559,8 +560,9 @@ emits this order.
 **High-contention shared-file overlap (advisory).** Concurrent
 autopilot sessions tend to edit the same F-phase bundle instruction
 files (`bundle-review` / `bundle-merge`) and `audit/sync-manifest.json`.
-As a **soft** tie-breaker after score / desync / effort / lowest-number,
-prefer a candidate whose `## Candidate files` do **not** overlap an
+As a **soft** tie-breaker evaluated after score / desync / effort but
+before the final lowest-issue-number tie-break, prefer a candidate
+whose `## Candidate files` do **not** overlap an
 actively-claimed or open-PR issue on one of those files; the optional
 `discover-shared-file-overlap` helper (see
 [IDD helper scripts](../../docs/idd-helper-scripts.md)) reports each

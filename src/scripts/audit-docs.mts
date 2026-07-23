@@ -129,7 +129,7 @@ checkShellFileLists(
 );
 checkSyncPairs(manifest.syncPairs ?? []);
 checkGeneratedFromBanners(manifest.syncPairs ?? []);
-checkInstructionSizeBudgets(manifest.instructionSizeBudgets ?? []);
+checkInstructionSizeBudgets(manifest.instructionSizeBudgets);
 checkContextCeiling(
   manifest.contextCeiling ?? null,
   checkBundleBudgets(manifest.bundleBudgets ?? []),
@@ -727,9 +727,7 @@ function docsSyncCommandByPackageManager(packageManager: unknown): string {
   }
 }
 
-function checkInstructionSizeBudgets(
-  configs: readonly InstructionSizeBudgetConfig[],
-) {
+function checkInstructionSizeBudgets(configs: unknown) {
   // One entry per audited glob: the dogfooding `.github/instructions/`
   // copy and the canonical `idd-template/.github/instructions/` source are
   // separate entries so a `structure`-mode divergence between them (prose
@@ -740,12 +738,26 @@ function checkInstructionSizeBudgets(
   // unambiguous about which copy violated its budget; see
   // `audit/README.md#instruction-size-budgets`.
   //
+  // `configs` is declared `unknown` (rather than trusting the manifest's
+  // declared type) because it comes straight from `JSON.parse`: a manifest
+  // left in the pre-#1667 single-object shape, or otherwise malformed,
+  // must fail closed with a readable audit error instead of throwing
+  // "configs is not iterable" out of the `for` loop below.
+  if (configs == null) {
+    return;
+  }
+  if (!Array.isArray(configs)) {
+    errors.push(
+      'instructionSizeBudgets: must be an array of per-glob budget entries, one per audited glob (see audit/README.md#instruction-size-budgets); got the pre-#1667 single-object shape or another non-array value',
+    );
+    return;
+  }
   // The scope/skip decision and budget evaluation for each entry live in
   // the pure helper so they can be unit-tested; the audit pipeline
   // supplies the changed file set, a glob lister, and a reader. The helper
   // reads only changed files, so unchanged instruction files are never
   // loaded from disk.
-  for (const config of configs) {
+  for (const config of configs as InstructionSizeBudgetConfig[]) {
     const result = collectInstructionSizeBudgetViolations(
       config,
       changedFiles,
