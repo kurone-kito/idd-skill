@@ -606,7 +606,18 @@ function checkInstructionSizeBudgets(configs) {
   // supplies the changed file set, a glob lister, and a reader. The helper
   // reads only changed files, so unchanged instruction files are never
   // loaded from disk.
-  for (const config of configs) {
+  for (const rawConfig of configs) {
+    // Each array entry is still unvalidated JSON: a `null` (or other
+    // non-object) entry would throw on `config.glob` below before the
+    // pure helper's own `!config` guard ever runs. Reject it here with a
+    // readable error instead of crashing the whole audit run.
+    if (rawConfig === null || typeof rawConfig !== 'object') {
+      errors.push(
+        `instructionSizeBudgets: each entry must be an object, got ${JSON.stringify(rawConfig)}`,
+      );
+      continue;
+    }
+    const config = rawConfig;
     const result = collectInstructionSizeBudgetViolations(
       config,
       changedFiles,
