@@ -15,10 +15,13 @@ use the full-size advisory-wait instructions instead of this file.
 
 ## Helper runtime contract
 
-- Helper-enabled profiles: use the named helper commands below. If a
-  required helper is missing, fails, returns invalid JSON, or disagrees
-  with live state, stop and ask — never fall back to a manual
-  per-field fetch or a hand-derived decision.
+- Helper-enabled profiles: use the named helper commands below. If the
+  advisory-wait-state evidence/decision helper is missing, fails,
+  returns invalid JSON, or disagrees with live state, stop and ask —
+  never fall back to a manual per-field fetch or a hand-derived
+  decision. This does not restrict marker _posting_: the manual JSON
+  `POST` under Markers below is the established canonical fallback for
+  that mechanical step, not a decision-making shortcut.
 - `instructions-only`: do not use this lite file.
 - Any mismatch between this file and the full-size advisory-wait
   protocol file is a bug in this file.
@@ -47,7 +50,9 @@ advisory-wait instructions directly.
 
 - A required helper field is missing, the helper exits non-zero,
   returns invalid JSON, or its evidence disagrees with live state.
-- The outcome is `HOLD`, or `CAP_EXHAUSTED` with the `hold` route.
+- Routing reaches the caller-derived `HOLD` state (never a
+  helper-emitted `outcome` value — see Helper-first canonical path
+  below), or `outcome` is `CAP_EXHAUSTED` with the `hold` route.
 - `earliestSameHeadAt` becomes empty during active polling (the marker
   disappeared).
 - A pending Copilot request cannot be refreshed, or an advisory-wait
@@ -72,12 +77,18 @@ node scripts/advisory-wait-state.mjs --pr <pr-number> \
 Resolve the package-manager / ephemeral-npx equivalent from
 `docs/idd-helper-scripts.md`.
 
-Required fields (stop and ask if any are missing): `prHeadSha`,
-`lastCopilotCommit`, `copilotPending`, `copilotPendingCoversHead`,
-`outcome`, `earliestSameHeadAt`, `requestMarkerCount`, `requestCap`,
-`pendingWindowMinutes`, `settledWindowMinutes`, `pollIntervalMinutes`,
-`capExhaustedRoute`, `trustedMarkerSummary`. Optional, non-gating:
-`secondaryBotLogin`, `secondaryRequestNeeded`.
+Required fields (stop and ask if any are missing — matching
+`idd-review-fix-lite.instructions.md`'s E14 field list exactly):
+`prHeadSha`, `lastCopilotCommit`, `copilotPending`,
+`copilotPendingCoversHead`, `outcome`, `f3Outcome`, `secondaryBotLogin`,
+`secondaryRequestNeeded`, `earliestSameHeadAt`, `requestMarkerCount`,
+`requestCap`, `pendingWindowMinutes`, `settledWindowMinutes`,
+`pollIntervalMinutes`, `capExhaustedRoute`, `trustedMarkerSummary`. The
+helper always emits every one of these (`secondaryBotLogin: ""` and
+`secondaryRequestNeeded: false` when no secondary bot is configured,
+`f3Outcome` unused by E14 but still present) — none is ever absent on a
+well-formed response, so validating all of them catches a malformed
+helper without treating any of them as truly optional.
 
 The helper computes the outcome directly from live evidence — never
 compute it by hand from raw timestamps. Allowed `outcome` values:
