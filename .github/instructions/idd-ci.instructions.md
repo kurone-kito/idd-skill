@@ -29,7 +29,7 @@ node scripts/ci-wait-policy.mjs
 Append `--rerun-count <count>` when the caller needs the deterministic
 rerun-budget decision. Resolve
 `<profile-selected-ci-wait-policy-command>` from
-`docs/idd-helper-scripts.md`; do not hardcode
+`docs/idd-helper-scripts.md`. Do not hardcode
 `node scripts/ci-wait-policy.mjs` for profiles that don't vendor
 `scripts/`.
 
