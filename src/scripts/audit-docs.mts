@@ -93,7 +93,10 @@ interface AuditManifest {
   generatedBlocks?: GeneratedBlock[];
   shellFileLists?: ShellFileList[];
   syncPairs?: SyncPair[];
-  instructionSizeBudgets?: InstructionSizeBudgetConfig | null;
+  // One entry per audited glob (dogfooding `.github/instructions/` copy,
+  // canonical `idd-template/.github/instructions/` source, …); see
+  // `checkInstructionSizeBudgets` and `audit/README.md#instruction-size-budgets`.
+  instructionSizeBudgets?: InstructionSizeBudgetConfig[] | null;
   bundleBudgets?: BundleBudget[];
   contextCeiling?: ContextCeilingConfig | null;
   docBudgetGuard?: DocBudgetGuardConfig | null;
@@ -126,7 +129,7 @@ checkShellFileLists(
 );
 checkSyncPairs(manifest.syncPairs ?? []);
 checkGeneratedFromBanners(manifest.syncPairs ?? []);
-checkInstructionSizeBudgets(manifest.instructionSizeBudgets ?? null);
+checkInstructionSizeBudgets(manifest.instructionSizeBudgets ?? []);
 checkContextCeiling(
   manifest.contextCeiling ?? null,
   checkBundleBudgets(manifest.bundleBudgets ?? []),
@@ -725,21 +728,34 @@ function docsSyncCommandByPackageManager(packageManager: unknown): string {
 }
 
 function checkInstructionSizeBudgets(
-  config: InstructionSizeBudgetConfig | null,
+  configs: readonly InstructionSizeBudgetConfig[],
 ) {
-  // The scope/skip decision and budget evaluation live in the pure helper
-  // so they can be unit-tested; the audit pipeline supplies the changed
-  // file set, a glob lister, and a reader. The helper reads only changed
-  // files, so unchanged instruction files are never loaded from disk.
-  const result = collectInstructionSizeBudgetViolations(
-    config,
-    changedFiles,
-    () =>
-      globFiles(config?.glob ?? '.github/instructions/idd-*.instructions.md'),
-    readText,
-  );
-  errors.push(...result.errors);
-  notices.push(...result.notices);
+  // One entry per audited glob: the dogfooding `.github/instructions/`
+  // copy and the canonical `idd-template/.github/instructions/` source are
+  // separate entries so a `structure`-mode divergence between them (prose
+  // free to differ, byte size free to drift) cannot silently exceed the
+  // cap on one side while only the other side is measured (#1667). Each
+  // entry's own `id` — plus the audited path's own prefix in every error
+  // message the helper emits — is the scope/label that keeps output
+  // unambiguous about which copy violated its budget; see
+  // `audit/README.md#instruction-size-budgets`.
+  //
+  // The scope/skip decision and budget evaluation for each entry live in
+  // the pure helper so they can be unit-tested; the audit pipeline
+  // supplies the changed file set, a glob lister, and a reader. The helper
+  // reads only changed files, so unchanged instruction files are never
+  // loaded from disk.
+  for (const config of configs) {
+    const result = collectInstructionSizeBudgetViolations(
+      config,
+      changedFiles,
+      () =>
+        globFiles(config.glob ?? '.github/instructions/idd-*.instructions.md'),
+      readText,
+    );
+    errors.push(...result.errors);
+    notices.push(...result.notices);
+  }
 }
 
 // Returns the measured per-bundle stats so `checkContextCeiling` can reuse

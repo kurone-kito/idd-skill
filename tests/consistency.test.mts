@@ -372,6 +372,66 @@ test('doc budget guard is a no-op without config and notices on empty budgets', 
   assert.match(noBudgets.notices[0], /skipped doc budget guard/);
 });
 
+test('doc budget guard unions size budgets across an array of per-glob entries', () => {
+  // instructionSizeBudgets in audit/sync-manifest.json is an array — one
+  // entry per audited glob (#1667) — so the drift guard must union every
+  // entry's limits into the same valid-value set instead of only reading
+  // a single object's fields.
+  const arrayBudgets = [
+    { id: 'instruction-size-budgets-dogfood', ...DOC_BUDGET_SIZE },
+    {
+      id: 'instruction-size-budgets-idd-template',
+      alwaysLoadedLimitBytes: 20_000,
+      phaseLimitBytes: 33_000,
+    },
+  ];
+  const passing = collectDocBudgetDriftViolations(
+    { id: 'doc-budget-drift', files: ['README.md'] },
+    arrayBudgets,
+    DOC_BUDGET_BUNDLES,
+    () => '| Phase instruction file | 33,000 bytes |',
+  );
+  assert.deepEqual(passing, { errors: [], notices: [] });
+
+  const drifted = collectDocBudgetDriftViolations(
+    { id: 'doc-budget-drift', files: ['README.md'] },
+    arrayBudgets,
+    DOC_BUDGET_BUNDLES,
+    () => '| Phase instruction file | 30,000 bytes |',
+  );
+  assert.equal(drifted.errors.length, 1);
+  assert.match(
+    drifted.errors[0],
+    /doc-budget-drift: README\.md states 30,000 bytes/,
+  );
+});
+
+test('live manifest instructionSizeBudgets covers both the dogfooding and idd-template instruction globs', () => {
+  // Regression guard for #1667: the manifest must keep a dedicated entry
+  // for the canonical idd-template source, not just the dogfooding copy,
+  // or a future structure-mode divergence can silently exceed the shared
+  // byte cap on the idd-template side again.
+  const manifest = readJson('audit/sync-manifest.json') as {
+    instructionSizeBudgets?: { id?: string; glob?: string }[];
+  };
+  const budgets = manifest.instructionSizeBudgets;
+  assert.ok(
+    Array.isArray(budgets),
+    'instructionSizeBudgets must be an array of per-glob budget entries',
+  );
+  const globs = budgets.map((budget) => budget.glob).sort();
+  assert.deepEqual(globs, [
+    '.github/instructions/idd-*.instructions.md',
+    'idd-template/.github/instructions/idd-*.instructions.md',
+  ]);
+  const ids = budgets.map((budget) => budget.id);
+  assert.equal(
+    new Set(ids).size,
+    ids.length,
+    'each instructionSizeBudgets entry needs a distinct id to disambiguate audit output',
+  );
+});
+
 test('config drift scenarios detect mismatches between config and overview defaults', () => {
   const overview = readText('tests/fixtures/consistency/config/overview.txt');
   const missingRowOverview = readText(

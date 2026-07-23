@@ -876,6 +876,14 @@ export interface DocBudgetGuardConfig {
  * value mislabeled with a *different* budget's number still passes — acceptable
  * for the drift this guards.
  *
+ * `sizeBudgets` accepts either a single budget object (legacy shape) or an
+ * array of them — `instructionSizeBudgets` in `audit/sync-manifest.json` is
+ * an array of one entry per audited glob (dogfooding copy, `idd-template`
+ * source, …; see `audit/README.md#instruction-size-budgets`) — and unions
+ * every entry's `alwaysLoadedLimitBytes` / `phaseLimitBytes` into the same
+ * valid-value set, so a doc may cite any configured glob's limit without
+ * drifting.
+ *
  * Matching requires a `bytes` suffix, so a doc that reads its limits live via
  * `jq` carries no hardcoded number and is never flagged. The configured
  * `files` must therefore not contain non-budget "N bytes" prose, or it would
@@ -884,6 +892,7 @@ export interface DocBudgetGuardConfig {
 export function collectDocBudgetDriftViolations(
   config: DocBudgetGuardConfig | null | undefined,
   sizeBudgets:
+    | readonly { alwaysLoadedLimitBytes?: number; phaseLimitBytes?: number }[]
     | { alwaysLoadedLimitBytes?: number; phaseLimitBytes?: number }
     | null
     | undefined,
@@ -899,11 +908,18 @@ export function collectDocBudgetDriftViolations(
   // never re-apply a default (a `?? 30000` fallback would let the set hold a
   // value the manifest no longer declares, producing a false positive).
   const validValues = new Set<number>();
-  if (typeof sizeBudgets?.alwaysLoadedLimitBytes === 'number') {
-    validValues.add(sizeBudgets.alwaysLoadedLimitBytes);
-  }
-  if (typeof sizeBudgets?.phaseLimitBytes === 'number') {
-    validValues.add(sizeBudgets.phaseLimitBytes);
+  const budgetEntries = Array.isArray(sizeBudgets)
+    ? sizeBudgets
+    : sizeBudgets
+      ? [sizeBudgets]
+      : [];
+  for (const budget of budgetEntries) {
+    if (typeof budget?.alwaysLoadedLimitBytes === 'number') {
+      validValues.add(budget.alwaysLoadedLimitBytes);
+    }
+    if (typeof budget?.phaseLimitBytes === 'number') {
+      validValues.add(budget.phaseLimitBytes);
+    }
   }
   for (const budget of bundleBudgets ?? []) {
     const limit = Number(budget.limitBytes);
