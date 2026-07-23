@@ -37,10 +37,27 @@ CI-polling instructions instead of this file.
 - A running check never reports `startedAt` and `ciWait.generationTimeout`
   elapses with still no `startedAt`.
 
+## Helper-first canonical path
+
+1. Resolve policy: `node scripts/ci-wait-policy.mjs` (append
+   `--rerun-count <count>` for the rerun-budget decision). Resolve the
+   package-manager / ephemeral-npx equivalent from
+   `docs/idd-helper-scripts.md`. This helper already resolves
+   `ciWait.*` from `.github/idd/config.json` and emits the final
+   `runningTimeout` / `generationTimeout` / `rerunPolicy` values
+   directly — never read that config file yourself.
+2. Fetch duplicate-name-safe, HEAD-pinned check state:
+   `node scripts/ci-wait-state.mjs --pr {pr-number}` (or the
+   package-manager equivalent).
+3. If either helper is unavailable, exits non-zero, or returns
+   invalid/incomplete JSON, stop and ask.
+
 ## Timing defaults
 
-Read from `.github/idd/config.json` `ciWait.*`; absent keys keep these
-distributed defaults:
+For context only — the policy helper above already resolves and
+emits these; the distributed defaults below are what it falls back to
+when the repository sets no `ciWait.*` config, not values to derive by
+hand:
 
 - `ciWait.runningTimeout`: `PT30M` — max time a running required check
   may stay running, measured from its server `startedAt`, before the
@@ -52,18 +69,6 @@ distributed defaults:
   stalled route reruns exactly once; the next recurrence stops and
   asks. `hold` never auto-reruns; it stops and asks at the first
   eligible route.
-
-## Helper-first canonical path
-
-1. Resolve policy: `node scripts/ci-wait-policy.mjs` (append
-   `--rerun-count <count>` for the rerun-budget decision). Resolve the
-   package-manager / ephemeral-npx equivalent from
-   `docs/idd-helper-scripts.md`.
-2. Fetch duplicate-name-safe, HEAD-pinned check state:
-   `node scripts/ci-wait-state.mjs --pr {pr-number}` (or the
-   package-manager equivalent).
-3. If either helper is unavailable, exits non-zero, or returns
-   invalid/incomplete JSON, stop and ask.
 
 ## Required-check discovery
 
