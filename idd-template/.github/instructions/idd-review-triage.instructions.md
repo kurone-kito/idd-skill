@@ -444,8 +444,7 @@ sync cycle finishes, livelocking naive retries before ever reaching F3
 rerun settling, a new disposition reply, another `main` advance)
 stales it, failing `--apply` closed on `review-currency` regardless
 of CI color; re-post before retrying. A stale `idd-advisory-convergence`
-rollup: rerun via `scripts/rerun-advisory-convergence.mjs`
-([rerun mechanics](idd-ci.instructions.md#rerun-mechanics)).
+rollup: see [rerun mechanics](idd-ci.instructions.md#rerun-mechanics).
 
 ## Zero-Accepted-PATH-A advisory re-review gate
 
