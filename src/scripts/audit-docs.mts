@@ -9,12 +9,15 @@ import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { join, posix } from 'node:path';
 import type {
+  ContextCeilingBundleStat,
+  ContextCeilingConfig,
   DocBudgetGuardConfig,
   InstructionSizeBudgetConfig,
   RootMarkdownAllowlistConfig,
   TypeSuppressionBudgetConfig,
 } from './consistency-helpers.mts';
 import {
+  collectContextCeilingViolations,
   collectDocBudgetDriftViolations,
   collectDuplicateSyncPairTargets,
   collectGeneratedFromBannerViolations,
@@ -92,6 +95,7 @@ interface AuditManifest {
   syncPairs?: SyncPair[];
   instructionSizeBudgets?: InstructionSizeBudgetConfig | null;
   bundleBudgets?: BundleBudget[];
+  contextCeiling?: ContextCeilingConfig | null;
   docBudgetGuard?: DocBudgetGuardConfig | null;
   forbiddenPatterns?: ForbiddenPattern[];
   rootMarkdownAllowlist?: RootMarkdownAllowlistConfig | null;
@@ -123,7 +127,10 @@ checkShellFileLists(
 checkSyncPairs(manifest.syncPairs ?? []);
 checkGeneratedFromBanners(manifest.syncPairs ?? []);
 checkInstructionSizeBudgets(manifest.instructionSizeBudgets ?? null);
-checkBundleBudgets(manifest.bundleBudgets ?? []);
+checkContextCeiling(
+  manifest.contextCeiling ?? null,
+  checkBundleBudgets(manifest.bundleBudgets ?? []),
+);
 checkDocBudgetNumbers();
 checkForbiddenPatterns(manifest.forbiddenPatterns ?? []);
 checkRootMarkdownAllowlist(manifest.rootMarkdownAllowlist ?? null);
@@ -735,7 +742,13 @@ function checkInstructionSizeBudgets(
   notices.push(...result.notices);
 }
 
-function checkBundleBudgets(budgets: BundleBudget[]) {
+// Returns the measured per-bundle stats so `checkContextCeiling` can reuse
+// this same summation instead of re-reading and re-stripping every bundle
+// file a second time.
+function checkBundleBudgets(
+  budgets: BundleBudget[],
+): ContextCeilingBundleStat[] {
+  const stats: ContextCeilingBundleStat[] = [];
   for (const budget of budgets) {
     const id = budget.id ?? 'bundle-budget';
     const files = budget.files ?? [];
@@ -757,7 +770,18 @@ function checkBundleBudgets(budgets: BundleBudget[]) {
         `${id}: bundle total is ${totalBytes} bytes (limit ${limitBytes}); files: ${files.join(', ')}`,
       );
     }
+    stats.push({ id, limitBytes, totalBytes });
   }
+  return stats;
+}
+
+function checkContextCeiling(
+  config: ContextCeilingConfig | null,
+  bundleStats: ContextCeilingBundleStat[],
+) {
+  const result = collectContextCeilingViolations(config, bundleStats);
+  errors.push(...result.errors);
+  notices.push(...result.notices);
 }
 
 function checkDocBudgetNumbers() {

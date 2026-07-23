@@ -228,6 +228,31 @@ readiness collector (kurone-kito/idd-skill#1615), so the merge-time
 write-gate's comparison is no longer a documented-but-unreachable
 no-op.
 
+### Wrong-branch commit recovery: cherry-pick, never force-push
+
+kurone-kito/idd-skill#815 named the risk directly: parallel worktrees
+let a `git switch` move a checkout out from under another run, so a
+commit lands on the wrong branch — typically the primary worktree's
+`main`, or another issue's branch. The Claim revalidation gate in
+`idd-overview-core.instructions.md` keeps the mechanical steps to a
+one-line pointer to stay inside its byte budget; this page owns the
+full procedure.
+
+Recover by **cherry-picking** the misplaced commit onto the correct
+issue branch (in its own sibling worktree), then restoring the
+contaminated branch:
+
+- **Unpushed** contaminated branch (typically the primary worktree's
+  `main`): `git reset --hard` it back to its upstream.
+- **Already pushed or shared**: do **not** `git reset --hard` then
+  force-push to erase the misplaced commit — that is the forbidden
+  force-push. Instead `git revert` the misplaced change, or let the
+  operator evacuate the branch.
+
+Either way, preserve that branch's real history and move only the
+misplaced commit. `scripts/idd-doctor.mjs` warns on the same
+primary-worktree-HEAD symptom this gate catches at mutation time.
+
 ## Advisory wait
 
 ### Non-Copilot advisory convergence is intentionally not a merge gate
