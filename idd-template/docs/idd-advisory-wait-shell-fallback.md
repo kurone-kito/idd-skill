@@ -127,9 +127,11 @@ REQUEST_MARKER_COUNT=$(
 
 ## AW3-R
 
-Post via `post-idd-marker --type advisory-recovery --target pr
-<pr-number> --agent-id <id> --head-sha <PR_HEAD_SHA> --timestamp
-<ISO8601> --apply`, or manually:
+Post via the profile-selected post-idd-marker command (source repo /
+vendored-node: `node scripts/post-idd-marker.mjs`; package-manager /
+ephemeral-npx: resolve from `docs/idd-helper-scripts.md`)
+`--type advisory-recovery --target pr <pr-number> --agent-id <id>
+--head-sha <PR_HEAD_SHA> --timestamp <ISO8601> --apply`, or manually:
 
 ```sh
 curl -X POST "https://api.github.com/repos/{owner}/{repo}/issues/{pr-number}/comments" \
