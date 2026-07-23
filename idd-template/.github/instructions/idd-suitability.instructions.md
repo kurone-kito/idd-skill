@@ -188,7 +188,7 @@ A5 is never reached for a candidate that fails any check, labeled or not.
   branches or worktrees, other operational markers (review-watermark,
   review-baseline, etc.), unilateral issue closes, roadmap
   structure/relationship edits, and any label other than the optional
-  `triage:` prefix above.
+  `triage:{outcome}` label above.
 
 ## Decision Flow
 

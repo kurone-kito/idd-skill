@@ -279,7 +279,8 @@ renders the body without posting.
 
 **Nothing appended after the note.** A `claimed-by` / `unclaimed-by`
 marker body must be exactly the HTML comment token followed by, at
-most, the single italic note shown above — never more. Any deviation
+most, the single italic note from Claim format above — never more. Any
+deviation
 — trailing content, a missing note, or a note that fails the required
 grammar — fails the parser's whole-body anchor, so the comment is not
 recognized as a live claim event. Such a deviation is still

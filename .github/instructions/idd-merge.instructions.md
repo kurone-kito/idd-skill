@@ -36,7 +36,7 @@ Before any mutating action in F3, apply the
 3. Immediately before executing the merge command, do one final live
    fetch using the **exact same activity-universe scope as E1 Step 1**
    (all review threads, review bodies, and regular PR comments,
-   excluding trusted agent operational marker comments), compared
+   excluding trusted agent operational marker comments), and compare it
    against the F2 snapshot carried forward from
    `idd-pre-merge.instructions.md`. When helper runtime is enabled,
    prefer the documented merge-gate helper reference in
@@ -47,7 +47,7 @@ Before any mutating action in F3, apply the
    missing, or live GitHub state disagrees with it, discard helper
    output and run the live fetch directly — the written gate rules
    remain canonical. Return to E1 if any of F2's Review-currency
-   return-to-E1 triggers hold, substituting the carried F2-snapshot
+   return-to-E1 triggers apply, substituting the carried F2-snapshot
    fields for F2's own stored watermark fields: `{f2-head-SHA}` for
    `{head-SHA}`, `{f2-max-activity-updatedAt}` for
    `{max-activity-updatedAt}`, `{f2-total-item-count}` for
