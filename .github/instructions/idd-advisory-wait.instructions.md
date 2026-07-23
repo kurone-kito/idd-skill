@@ -354,9 +354,9 @@ alone never proves `COPILOT_UNAVAILABLE` (see **State**).
   {PR_HEAD_SHA} {ISO8601-timestamp} claim:{claim-id} attempt:{n}`)
   counts only from a trusted actor with matching claim/HEAD; the clock
   anchors on the earliest qualifying marker; remaining budget = cap
-  minus completed-cycle count. Post with `post-idd-marker --type
-  advisory-recovery --claim-id <id> --attempt <n>` (plus `--agent-id
-  --head-sha --timestamp`).
+  minus completed-cycle count. Post with the profile-selected
+  post-idd-marker command (`--type advisory-recovery --claim-id <id>
+  --attempt <n>`, plus `--agent-id --head-sha --timestamp`).
 - **State**: `COPILOT_UNAVAILABLE` only when all three hold, from
   trusted evidence — cap exhausted (`completedCycleCount >= cap`),
   terminal window elapsed since the anchor, and no current-HEAD
