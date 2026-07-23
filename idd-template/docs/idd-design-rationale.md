@@ -228,7 +228,59 @@ readiness collector (kurone-kito/idd-skill#1615), so the merge-time
 write-gate's comparison is no longer a documented-but-unreachable
 no-op.
 
+## Review triage
+
+### Merge-main livelock under fast-moving `main`
+
+Under heavy concurrent-session load, `main` can advance before one
+{sync path → E1 → F1/F2} cycle finishes, re-triggering
+`behind-no-conflict`; naive repetition livelocks, never reaching F3
+while `main` keeps moving. The fix is procedural, not structural: post
+the `review-watermark` as the last action before F3's
+`idd-merge-execute.mjs --apply` on every pass, so anything that happens
+after — a CI rerun settling, a new disposition reply, another `main`
+advance — stales it and fails `--apply` closed on `review-currency`
+rather than merging on data the retry has since invalidated.
+
+### Zero-Accepted-PATH-A advisory re-review gate
+
+Without this gate, E8's zero-Accepted-PATH-A path would skip E14 (the
+only step that requests a fresh primary-advisory-bot review) entirely,
+so a PR whose Copilot findings were all Rejected in a given pass could
+reach F2's advisory-convergence check with the bot never having
+reviewed the resulting HEAD. The gate closes that gap by running E14's
+Primary advisory bot procedure at the now-stable HEAD whenever the last
+non-empty snapshot this episode zeroed out on a completed-review PATH B
+disposition, before proceeding to F1.
+
 ## Advisory wait
+
+### AW3-S vs AW3-R: why two recovery paths
+
+`AW3-R` fires only once the pending Copilot request is already proven
+to cover HEAD (`COPILOT_PENDING_COVERS_HEAD = true`) and just needs a
+missing marker anchored. The opposite, unproven case — a pending
+request whose association with current HEAD cannot yet be confirmed —
+cannot be resolved by `AW3-R`'s marker-only path, since there is
+nothing yet to anchor. `AW3-S` adds a bounded remove/re-request/
+verify/mark cycle for that case, deliberately capped far below the
+ordinary `REQUEST_CAP` (30) by an independent per-HEAD recovery-cycle
+budget (default 2), because each cycle mutates live reviewer state
+(remove + re-request) rather than merely posting a marker.
+
+### Terminal Copilot stall-recovery contract: why a separate signal
+
+`COPILOT_UNAVAILABLE` is a signal structurally independent from every
+existing advisory-satisfied field, rather than folded into
+`outcome`/`f3Outcome` directly. Keeping it independent means a future
+readiness rollup can consume it without risking a silent, accidental
+widening of what already counts as "advisory satisfied" — the terminal
+signal only ever unlocks a maintainer waiver path, never merge
+readiness on its own. `AW3-S`'s `"cap-exhausted"` classification
+deliberately does not by itself prove `COPILOT_UNAVAILABLE`: a HEAD can
+exhaust its recovery-cycle budget while the terminal window has not yet
+elapsed, or while a fresh same-HEAD review has since landed — either
+fact alone would make an immediate terminal declaration premature.
 
 ### Non-Copilot advisory convergence is intentionally not a merge gate
 
@@ -295,6 +347,33 @@ same as kurone-kito/idd-skill#909 originally decided to accept. A
 repository that reaches this same conclusion
 independently should record it here rather than re-litigating it on every
 structural audit.
+
+## CI
+
+### 404-vs-403 ambiguity on branch-protection/ruleset reads
+
+None of the three required-check-discovery endpoints (branch
+protection, ruleset list, ruleset detail) documents `403` as a possible
+response at all: the branch-protection reference lists only
+`200`/`404`
+(<https://docs.github.com/en/rest/branches/branch-protection#get-branch-protection>),
+and the ruleset-list/ruleset-detail references list only
+`200`/`404`/`500`
+(<https://docs.github.com/en/rest/repos/rules#get-all-repository-rulesets>,
+<https://docs.github.com/en/rest/repos/rules#get-a-repository-ruleset>).
+GitHub's own REST troubleshooting guide documents this as general API
+behavior: a `404` on a private resource substitutes for `403` to avoid
+confirming the resource's existence, and insufficient token scope is a
+listed cause of a `404` on a resource that actually exists
+(<https://docs.github.com/en/rest/using-the-rest-api/troubleshooting-the-rest-api#404-not-found-for-an-existing-resource>).
+Because these endpoints never document `403`, a `404` on any of them
+is structurally ambiguous between "genuinely nothing configured" and
+"the token cannot read this" — the response body cannot resolve that
+ambiguity, and an actor's collaborator role cannot either (role is not
+proof the caller's own token carries the scope the endpoint requires).
+This is why `idd-ci.instructions.md`'s Required-check discovery step 4
+treats every `404` on these reads exactly like a `403` unless the
+repository opts out via `ciGate.trustEmptyProtectionReads: true`.
 
 ## Pre-merge
 

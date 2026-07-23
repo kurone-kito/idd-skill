@@ -1117,6 +1117,31 @@ Interpretation rules:
   pass both when consulting `staleRequestRecovery` for a mutation
   decision (see `idd-advisory-wait.instructions.md`'s `AW3-S`).
 
+**Terminal stall-recovery marker contract** (`#1572`;
+`idd-advisory-wait.instructions.md`'s Terminal Copilot stall-recovery
+contract cites this section for the full grammar). `advisory-wait-recovery:`
+supports an _optional_ bound form —
+`advisory-wait-recovery: {agent-id} {PR_HEAD_SHA} {ISO8601-timestamp}
+claim:{claim-id} attempt:{n}` — recognized as recovery-cycle evidence
+only when every one of these holds, each excluding the marker
+independently: the comment author is a trusted marker actor; the body
+parses as the bound five-field shape; the embedded agent id and claim
+id match the active claim; the embedded HEAD SHA matches current PR
+HEAD; the comment's GitHub `created_at` is a valid ISO 8601 UTC
+timestamp. The clock anchor is the GitHub `created_at` of the
+_earliest_ qualifying marker (embedded timestamps are diagnostics
+only, mirroring the `review-watermark`/claim-heartbeat clock rule); the
+completed-cycle count is qualifying-marker _presence_, never the
+largest embedded `attempt`; `remaining budget = max(cap -
+completedCycleCount, 0)`. Omitting both `--claim-id`/`--attempt` when
+posting renders the legacy 3-field form byte-for-byte (`AW3-R`'s
+procedure is unchanged); passing only one fails closed. The legacy
+form stays a recognized marker but is not usable recovery-cycle
+evidence, excluded from counting/anchoring like a malformed marker. A
+terminal marker, `copilot-unavailable:` (same five fields, all
+required, no legacy form), has no defined trigger yet — deciding when
+to post it is the consuming track's job.
+
 ### CI wait policy resolution
 
 - Source repo / vendored-node command:
@@ -1812,6 +1837,33 @@ same as `AW4`/`AW5`.
     — decisions specific to this repository's own configuration, not a
     universal adopter policy — this sweep is a detection aid only: never
     an automatic recovery path or a retroactive merge gate.
+
+## Signed-Commit Merge Wrapper (Shared Git Procedure)
+
+`idd-review-triage.instructions.md`'s E-phase sync path and
+`idd-review-fix.instructions.md`'s E11 both merge `main` into the feature
+branch with `git fetch origin main && git merge origin/main`. On a repo
+whose primary commit signing is non-interactive-hostile (GPG pinentry /
+hardware-touch) and that configures a fallback signing wrapper for
+arbitrary git subcommands, run the **whole** operation — including a
+`--continue` after conflict resolution — through that wrapper, never the
+plain command:
+
+```sh
+git -c gpg.format=ssh -c user.signingkey=<abs-path> -c commit.gpgsign=true merge origin/main
+# resolve conflicts if any, then:
+git -c gpg.format=ssh -c user.signingkey=<abs-path> -c commit.gpgsign=true merge --continue
+```
+
+Pass the `-c` flags to `git` itself, before the subcommand (`git -c …
+merge`, not `git merge -c …`); a commit-only alias such as `git
+commit-ssh` will not run `merge`. Even a clean, conflict-free merge
+commits immediately, so the wrapper must own the operation from the
+first `merge` call, not just a later `--continue` — otherwise the merge
+commit reverts to the stalling primary signer. This is the normal-path
+complement to the recovery-path re-signing in
+`idd-pr-submit.instructions.md` (Post-rebase verification) and
+`idd-overview-core.instructions.md` (cwd-vs-claim cherry-pick recovery).
 
 ## Friction Inventory
 

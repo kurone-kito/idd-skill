@@ -1,16 +1,17 @@
-# IDD — Advisory-Wait Shell Fallback (AW1 / AW2 detail)
+# IDD — Advisory-Wait Shell Fallback (AW1 / AW2 / AW3-R / AW3-S / AW3-H detail)
 
-This document contains the verbatim `gh api` + `jq` snippets used by
-the shell fallback for [advisory-wait](../.github/instructions/idd-advisory-wait.instructions.md)
-AW1 and AW2 evidence collection.
+This document contains the verbatim `gh`/`gh api`/`jq` commands used by
+the shell fallback for [advisory-wait](../.github/instructions/idd-advisory-wait.instructions.md):
+AW1/AW2 evidence collection, and the AW3-R/AW3-S/AW3-H marker-posting
+and cleanup mutations.
 
-These snippets only apply when helper-first cannot be trusted — see
+These commands only apply when helper-first cannot be trusted — see
 the "Fail-closed fallback trigger" section in the instruction file.
 
-The instruction file owns the contract (what variables each step must
-produce and how AW3 consumes them); this document is the
-implementation reference. If the contract and these snippets diverge,
-the contract wins and these snippets must be updated.
+The instruction file owns the contract (decision rules, ordering,
+fail-closed handling, and what each step must produce); this document
+is the command reference. If the contract and these commands diverge,
+the contract wins and these commands must be updated.
 
 ## AW1
 
@@ -121,4 +122,53 @@ REQUEST_MARKER_COUNT=$(
         | length
       '
 )
+```
+
+## AW3-R
+
+Post via `post-idd-marker --type advisory-recovery --target pr
+<pr-number> --agent-id <id> --head-sha <PR_HEAD_SHA> --timestamp
+<ISO8601> --apply`, or manually:
+
+```sh
+curl -X POST "https://api.github.com/repos/{owner}/{repo}/issues/{pr-number}/comments" \
+  -H "Authorization: Bearer ${GH_TOKEN}" \
+  -H "Content-Type: application/json" \
+  -d "{\"body\":\"advisory-wait-recovery: {agent-id} {PR_HEAD_SHA} {ISO8601-recovery-time}\"}"
+```
+
+## AW3-S
+
+Only when `staleRequestRecovery` is `"attempt"` (instruction file's
+Eligibility check). Steps 2 and 4 (verify removal/HEAD; verify
+association) are read-only checks the instruction file specifies
+directly — no command block needed here.
+
+```sh
+# Step 1 — remove the stale request
+gh pr edit {pr-number} --remove-reviewer "@{primary-advisory-bot}"
+# on a GraphQL login-resolution failure:
+gh api repos/{owner}/{repo}/pulls/{pr-number}/requested_reviewers \
+  -X DELETE -f "reviewers[]={primary-advisory-bot-rest-login}"
+
+# Step 3 — request again, after step 2 verifies the removal
+gh pr edit {pr-number} --add-reviewer "@{primary-advisory-bot}"
+# on a GraphQL login-resolution failure:
+gh api repos/{owner}/{repo}/pulls/{pr-number}/requested_reviewers \
+  -X POST -f "reviewers[]={primary-advisory-bot-rest-login}"
+
+# Step 5 — post exactly one bound marker, only after step 4 verifies
+node scripts/post-idd-marker.mjs --type advisory-recovery --target pr <pr-number> \
+  --agent-id <id> --claim-id <id> --head-sha <PR_HEAD_SHA> \
+  --attempt <n> --timestamp <ISO8601> --apply
+```
+
+## AW3-H
+
+```sh
+node scripts/minimize-superseded-markers.mjs \
+  --subject-ids "<id1>,<id2>,..." \
+  --classifier OUTDATED \
+  --trusted-marker-logins "<trusted-login-1>,<trusted-login-2>" \
+  --apply
 ```
