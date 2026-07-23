@@ -203,12 +203,12 @@ Use only when AW3 outcome is `RECOVERY_NEEDED`. Post:
 advisory-wait-recovery: {agent-id} {PR_HEAD_SHA} {ISO8601-recovery-time}
 ```
 
-Helper-first via `post-idd-marker --type advisory-recovery --target pr
-<pr-number> --agent-id <id> --head-sha <PR_HEAD_SHA> --timestamp
-<ISO8601> --apply` — emits the plain-text form with no visible note so
-AW2 still matches. Manual `POST`:
-[shell fallback AW3-R](../../docs/idd-advisory-wait-shell-fallback.md#aw3-r).
-The same helper posts the `advisory-wait:` request form (E14's
+Helper-first via the profile-selected post-idd-marker command
+(`--type advisory-recovery --target pr <pr-number> --agent-id <id>
+--head-sha <PR_HEAD_SHA> --timestamp <ISO8601> --apply`) — emits the
+plain-text form with no visible note so AW2 still matches. Manual
+`POST`: [shell fallback AW3-R](../../docs/idd-advisory-wait-shell-fallback.md#aw3-r).
+The same command posts the `advisory-wait:` request form (E14's
 `REQUEST_NEEDED` marker) via `--type advisory` with the same fields.
 
 Rules:
