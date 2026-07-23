@@ -134,6 +134,7 @@ ephemeral-npx: resolve from `docs/idd-helper-scripts.md`)
 --head-sha <PR_HEAD_SHA> --timestamp <ISO8601> --apply`, or manually:
 
 ```sh
+GH_TOKEN="${GH_TOKEN:-$(gh auth token)}"
 curl -X POST "https://api.github.com/repos/{owner}/{repo}/issues/{pr-number}/comments" \
   -H "Authorization: Bearer ${GH_TOKEN}" \
   -H "Content-Type: application/json" \

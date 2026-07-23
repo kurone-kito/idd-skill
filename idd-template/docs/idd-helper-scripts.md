@@ -1135,9 +1135,10 @@ Interpretation rules:
 contract cites this section for the full grammar). `advisory-wait-recovery:`
 supports an _optional_ bound form —
 `advisory-wait-recovery: {agent-id} {PR_HEAD_SHA} {ISO8601-timestamp}
-claim:{claim-id} attempt:{n}` — recognized as recovery-cycle evidence
-only when every one of these holds, each excluding the marker
-independently: the comment author is a trusted marker actor; the body
+claim:{claim-id} attempt:{n}` (`n` a positive integer, `n >= 1`; `0` is
+invalid) — recognized as recovery-cycle evidence only when every one of
+these holds, each excluding the marker independently: the comment
+author is a trusted marker actor; the body
 parses as the bound five-field shape; the embedded agent id and claim
 id match the active claim; the embedded HEAD SHA matches current PR
 HEAD; the comment's GitHub `created_at` is a valid ISO 8601 UTC

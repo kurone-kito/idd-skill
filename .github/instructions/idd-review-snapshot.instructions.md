@@ -80,8 +80,8 @@ start of Step 1, compute `{max-activity-updatedAt}` as the highest
 the items in ReviewItems_snapshot; `none` if empty), and
 `{total-item-count}` as the snapshot's total item count (0 if empty).
 Persist all six values by posting a PR comment with this format (when
-helper runtime is enabled, prefer the **one-command** post-idd-marker
-watermark path — `--type watermark --from-pr <pr-number>
+helper runtime is enabled, prefer the **one-command** profile-selected
+post-idd-marker watermark path — `--type watermark --from-pr <pr-number>
 --expected-head-sha {head-SHA} --agent-id <id> --claim-id <id>
 --apply` — which derives the other fields from a fresh
 `review-activity-snapshot` and posts in one step; forward

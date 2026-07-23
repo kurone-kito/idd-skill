@@ -327,12 +327,12 @@ advisory-reroll: {agent-id} {PR_HEAD_SHA} {ISO8601-requested-at}
 ```
 
 Plain text, no HTML comment (matches `advisory-wait:`/
-`advisory-wait-recovery:`'s shape). Helper-first: `post-idd-marker
---type advisory-reroll --target pr <pr-number> --agent-id <id>
---head-sha <PR_HEAD_SHA> --timestamp <ISO8601> --apply`; manual JSON
-`POST` is the fallback. If it cannot be posted or verified, fail
-closed to AW4's **Recovery failed** hold (mirrors AW3-R's routing on
-the same failure).
+`advisory-wait-recovery:`'s shape). Helper-first: the profile-selected
+post-idd-marker command (`--type advisory-reroll --target pr
+<pr-number> --agent-id <id> --head-sha <PR_HEAD_SHA> --timestamp
+<ISO8601> --apply`); manual JSON `POST` is the fallback. If it cannot
+be posted or verified, fail closed to AW4's **Recovery failed** hold
+(mirrors AW3-R's routing on the same failure).
 
 ## Terminal Copilot stall-recovery contract (state, policy, markers, clock)
 
