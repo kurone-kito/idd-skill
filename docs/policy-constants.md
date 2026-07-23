@@ -350,7 +350,10 @@ measure the combined byte length of all listed files.
 128K-context-derived cap on top of the per-bundle ratchet below, so a
 future exact-fit bump errors instead of drifting past the ~10%-margin
 convention the ratchet alone allows — see the regression history under
-"Context ceiling" in `audit/README.md`.
+"Context ceiling" in
+[kurone-kito/idd-skill's own dogfooded `audit/README.md`](https://github.com/kurone-kito/idd-skill/blob/main/audit/README.md#context-ceiling)
+(the `audit/` directory is source-repo-only; it is not part of this
+copied template).
 
 - **Ceiling derivation**: no non-exempt bundle's `limitBytes` may exceed
   **120,000 bytes** (`maxBundleLimitBytes`) — a 128K-context-derived cap

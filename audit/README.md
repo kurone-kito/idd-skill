@@ -126,7 +126,10 @@ adopter-repo instructions, and working context.
 An id in `exemptBundles` that does not match any `bundleBudgets` entry
 is itself an audit error (a typo or a bundle rename left behind).
 
-As of the #1659 128K-ceiling roadmap's finalize track (#1658),
+As of the
+[#1659](https://github.com/kurone-kito/idd-skill/issues/1659) 128K-ceiling
+roadmap's finalize track
+([#1658](https://github.com/kurone-kito/idd-skill/issues/1658)),
 `exemptBundles` is empty: every bundle that entered the roadmap over
 `maxBundleLimitBytes` or above `maxUtilizationPct` cleared both checks —
 `bundle-review`, `bundle-work`, and `bundle-merge` via the sibling
