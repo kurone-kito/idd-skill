@@ -413,14 +413,13 @@ every ready candidate startable. Otherwise the gate is enabled; use
 `maintainerApprovalActorPolicy` from `.github/idd/config.json` when
 present, defaulting to `owners-and-maintainers-only`.
 
-**Maintainer approval actor**: a human repository actor allowed by
-the current `maintainerApprovalActorPolicy`. `owners-and-maintainers-only`
-(default) admits repository owners plus collaborators with Maintain
-or Admin permission; `all-write-permission-actors` adds Write
-collaborators. Do not reuse the trusted marker actor set, and do not
-count automation or the current agent unless repository policy
-explicitly grants that actor maintainer approval authority. Verify
-collaborator permission with the collaborator permission API.
+**Maintainer approval actor**: a human repository actor allowed by the
+current `maintainerApprovalActorPolicy` — `owners-and-maintainers-only`
+(default) admits owners plus Maintain/Admin collaborators;
+`all-write-permission-actors` adds Write collaborators. Never reuse the
+trusted marker actor set or count automation/the current agent unless
+policy explicitly grants that authority. Verify permission with the
+collaborator permission API.
 
 A bare organization `MEMBER` association, by itself, is not approval;
 neither is issue body text, a generated plan, nor operator attention.
@@ -430,12 +429,11 @@ neither is issue body text, a generated plan, nor operator attention.
 - the issue author is self-authorized under the current
   maintainer-approval actor policy;
 - the configured ready label from `approvalSignals.readyLabelName`
-  (default: `idd:ready`) is present when repository policy reserves
-  that label to maintainer approval actors. When
-  `approvalSignals.labelFreshnessMode` is `event-freshness`, the
-  latest matching `labeled` timeline event must be newer than the
-  latest issue title/body edit and any generated-plan update;
-  `presence-only` (default) accepts label presence alone;
+  (default: `idd:ready`), present when policy reserves it to
+  maintainer approval actors. Under `event-freshness`
+  (`approvalSignals.labelFreshnessMode`), its latest `labeled` event
+  must postdate the latest issue title/body edit and any generated-plan
+  update; `presence-only` (default) accepts label presence alone;
 - a visible approval comment from a maintainer approval actor whose
   trimmed body equals `IDD ready` or contains `IDD ready` as a
   standalone line, newer than the latest issue title/body edit and
@@ -444,17 +442,15 @@ neither is issue body text, a generated plan, nor operator attention.
 If freshness cannot be determined for a label or comment signal,
 require a fresh approval comment or a re-applied ready label.
 
-**Fail-closed**: fail closed when approval state or permission
-resolution is unavailable or ambiguous unless the repository
-explicitly opted out via `skipIssueAuthorApprovalGate`.
+**Fail-closed**: when approval state or permission resolution is
+unavailable or ambiguous, fail closed unless the repository explicitly
+opted out via `skipIssueAuthorApprovalGate`.
 
 **Candidate routing**: candidates that fail the gate are not
-ready-to-start. Keep them in an **approval-needed fallback bucket**
-ordered by ascending issue number. Continue to A4 with only the
-startable candidates. Preserve any earlier A0-O filtering from
-`orphan-first-policy`; this gate never widens previously excluded
-orphan candidates back into scope. Keep fallback issues visible; do
-not drop them.
+ready-to-start — keep them visible in an **approval-needed fallback
+bucket** ordered by ascending issue number, and continue to A4 with
+only the startable candidates. This gate never widens previously
+excluded A0-O `orphan-first-policy` candidates back into scope.
 
 If no startable candidates remain but the approval-needed fallback
 bucket is non-empty:

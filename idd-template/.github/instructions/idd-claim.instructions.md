@@ -43,9 +43,10 @@ issue itself.
 **(a) Issue-author approval gate** — Re-evaluate the repository-wide
 issue-author approval rule immediately before claim, using the same
 gate-enable, actor-policy, approval-signal, and fail-closed rules as
-**A3.5** of `idd-discover.instructions.md` (issue body text, generated
-plans, operator attention, and a bare organization `MEMBER`
-association never count as approval).
+**A3.5** of `idd-discover.instructions.md`.
+
+A bare organization `MEMBER` association never counts as approval;
+neither do issue body text, a generated plan, or operator attention.
 
 - If approval is missing for a roadmap/default discovery run, return to
   Discover using the same selection mode that produced this target so
