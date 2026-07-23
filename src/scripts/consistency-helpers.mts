@@ -384,8 +384,12 @@ export function collectContextCeilingViolations(
         );
       }
       if (overUtilization) {
+        const utilizationLabel =
+          bundle.limitBytes > 0
+            ? `${utilizationPct.toFixed(2)}%`
+            : 'unbounded (zero-byte limit)';
         errors.push(
-          `${id}: ${bundle.id} utilization ${utilizationPct.toFixed(2)}% exceeds ${maxUtilizationPct}% (${bundle.totalBytes}/${bundle.limitBytes} bytes)`,
+          `${id}: ${bundle.id} utilization ${utilizationLabel} exceeds ${maxUtilizationPct}% (${bundle.totalBytes}/${bundle.limitBytes} bytes)`,
         );
       }
     } else if (!overCeiling && !overUtilization) {

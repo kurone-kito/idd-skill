@@ -173,32 +173,40 @@ test('a bundle with a zero-byte limitBytes never gets a spurious notice', () => 
   assert.deepEqual(result.notices, []);
 });
 
-test('reflects the live day-one exemptions: exactly the four documented bundles stay green', () => {
+test('a zero-byte limitBytes with content reports the error without a misleading percentage', () => {
+  // Regression: utilizationPct is forced to 0 for display when limitBytes
+  // is 0, which previously made the error string read "utilization
+  // 0.00% exceeds 98%" even though the bundle is effectively unbounded.
+  const bundles = [{ id: 'bundle-a', limitBytes: 0, totalBytes: 1 }];
+  const result = collectContextCeilingViolations(BASE_CONFIG, bundles);
+  assert.equal(result.errors.length, 1);
+  assert.match(result.errors[0], /unbounded \(zero-byte limit\)/);
+  assert.doesNotMatch(result.errors[0], /0\.00%/);
+});
+
+test('an exemptBundles list only silences the named violators, not the rest', () => {
+  // Synthetic fixture (not live repo byte totals, which would make this
+  // test churn on unrelated content edits): every id in exemptBundles
+  // is crafted to violate one or both checks; every other id is crafted
+  // to stay well within both, mirroring the day-one exemption shape
+  // documented in audit/sync-manifest.json without depending on it.
   const config = {
     id: 'context-ceiling-128k',
     maxBundleLimitBytes: 120000,
     maxUtilizationPct: 98,
     noticeUtilizationPct: 95,
     exemptBundles: [
-      'bundle-review',
-      'bundle-work',
-      'bundle-merge',
-      'bundle-pr-submit-lite',
+      'exempt-over-ceiling',
+      'exempt-over-utilization',
+      'exempt-over-both',
     ],
   };
   const bundles = [
-    { id: 'bundle-discovery', limitBytes: 112700, totalBytes: 107228 },
-    { id: 'bundle-resume', limitBytes: 43300, totalBytes: 41109 },
-    { id: 'bundle-work', limitBytes: 45000, totalBytes: 44978 },
-    { id: 'bundle-work-lite', limitBytes: 24000, totalBytes: 10190 },
-    { id: 'bundle-resume-lite', limitBytes: 16000, totalBytes: 15523 },
-    { id: 'bundle-claim-lite', limitBytes: 21000, totalBytes: 20233 },
-    { id: 'bundle-pre-merge-lite', limitBytes: 16000, totalBytes: 8481 },
-    { id: 'bundle-pr-submit-lite', limitBytes: 23700, totalBytes: 23352 },
-    { id: 'bundle-review-fix-lite', limitBytes: 21000, totalBytes: 20117 },
-    { id: 'bundle-review-snapshot-lite', limitBytes: 13000, totalBytes: 12460 },
-    { id: 'bundle-review', limitBytes: 143000, totalBytes: 142980 },
-    { id: 'bundle-merge', limitBytes: 116100, totalBytes: 116027 },
+    { id: 'safe-a', limitBytes: 45000, totalBytes: 30000 },
+    { id: 'safe-b', limitBytes: 23700, totalBytes: 15000 },
+    { id: 'exempt-over-ceiling', limitBytes: 130000, totalBytes: 1000 },
+    { id: 'exempt-over-utilization', limitBytes: 1000, totalBytes: 999 },
+    { id: 'exempt-over-both', limitBytes: 143000, totalBytes: 142980 },
   ];
   const result = collectContextCeilingViolations(config, bundles);
   assert.deepEqual(result.errors, []);
