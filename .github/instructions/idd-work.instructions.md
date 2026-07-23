@@ -31,50 +31,40 @@ Before creating, check for local conflicts in this order:
    ```
 
    After this `main` fast-forward, do **not** change the primary
-   worktree's HEAD off `main` for any reason during B1. Commands that
-   run from the primary worktree are allowed as long as HEAD stays on
-   `main` — these include read-only inspection (`git worktree list`)
-   and the HEAD-preserving branch/worktree commands used by Steps 2-3
-   below and by Worktree creation
-   (`git branch -d <stale-branch>`, `git worktree add`,
-   `wt switch --create`).
-   What must not happen is the primary worktree's HEAD switching to
-   the issue branch. See Anti-patterns below.
+   worktree's HEAD off `main` for any reason during B1 — see
+   Anti-patterns below for the forbidden commands and the allowed
+   HEAD-preserving exceptions (read-only inspection, and the
+   HEAD-preserving branch/worktree commands used by Steps 2-3 below and
+   by Worktree creation).
 
 2. Run `git worktree list` — if a worktree for the branch already
-   exists, inspect and acquire its worktree-local claim lock before
-   reusing or removing it. Run the profile-selected claim-lock helper
-   against the exact path shown in the list with the current
-   `{agent-id}` / `{claim-id}`: `node scripts/claim-lock.mjs` in the
-   source/vendored runtime, or `idd-claim-lock` / `idd:claim-lock` in
-   imported package-manager runtimes;
-   do not run `git worktree remove` while the lock check is still a
-   collision. Resolve a collision through the Claim-state rule in
-   `idd-claim.instructions.md`, and only remove the exact path after the
-   current claim is authorized to take it over. If reusing it, keep the
-   acquired lock. If removing it, recreate the path and acquire the new
-   worktree's lock again before any install or other mutation. (Must
-   remove the worktree before deleting the branch — git prevents
-   deleting a branch checked out in a worktree.)
+   exists, inspect and acquire its
+   [worktree-local claim lock](idd-claim.instructions.md#worktree-local-lock-file-same-machine-collision)
+   before reusing or removing it (same helper commands as there); do
+   not run `git worktree remove` while the lock check is still a
+   collision — resolve it via the Claim-state rule in
+   `idd-claim.instructions.md`, and only remove the path once the
+   current claim is authorized to take it over. Reusing it keeps the
+   acquired lock; removing it means recreating the path and
+   re-acquiring the lock before any install or other mutation (removal
+   must precede branch deletion — git blocks deleting a checked-out
+   branch).
 
-   If `git worktree list --porcelain` marks the entry `prunable` and its
-   path is already absent, there is no live worktree to protect. Clean
-   that exact stale entry with `git worktree remove --force
-   <path-from-list>`, then continue; this is the only removal exception
-   before a lock check.
+   If `git worktree list --porcelain` marks the entry `prunable` with
+   its path already absent, there is no live worktree to protect —
+   clean that stale entry with `git worktree remove --force
+   <path-from-list>` and continue (the only removal exception before a
+   lock check).
 3. Run `git branch --list {branch-name}` — if the branch still exists
-   locally after step 2, check whether it is an inheritable branch
-   (claim takeover). If it is inheritable, reuse it. If it is not
-   (unexpected leftover), delete it first:
-   `git branch -d {branch-name}`. If deletion is refused (unmerged
-   commits), check whether a remote branch or open PR exists for this
-   branch — if so, treat it as inheritable and reuse it. If not, post a
-   hold comment and stop for manual cleanup; do not force-delete without
-   confirming no remote or PR claim is tied to it.
+   locally after step 2, reuse it when inheritable (claim takeover).
+   Otherwise (unexpected leftover) delete it: `git branch -d
+   {branch-name}`. If deletion is refused (unmerged commits), treat it
+   as inheritable and reuse it when a remote branch or open PR exists;
+   otherwise post a hold comment and stop for manual cleanup — do not
+   force-delete without confirming no remote or PR claim is tied to it.
 
-Then create the worktree as described below. If this is a takeover,
-reuse the exact branch name from the existing claim comment — do not
-generate a new one.
+Then create the worktree below; for a takeover, reuse the exact branch
+name from the existing claim comment instead of generating a new one.
 
 ### Anti-patterns
 
@@ -84,15 +74,13 @@ branch in the primary worktree:
 - `git switch -c <branch-name>` — switches the primary worktree to
   the issue branch and skips worktree creation entirely.
 - `git checkout -b <branch-name>` — equivalent failure mode.
-- A standalone `git branch <branch-name>` followed by in-place commits
-  in the primary worktree — defeats the sibling-worktree invariant
-  even though `git branch` alone does not move HEAD.
+- A standalone `git branch <branch-name>` then in-place commits in the
+  primary worktree — defeats the sibling-worktree invariant even though
+  `git branch` alone does not move HEAD.
 
-The primary worktree's HEAD MUST remain on `main` throughout B1. The
-implementation branch exists only inside the sibling worktree created
-by `git worktree add` (or WorkTrunk's `wt switch --create`). If the primary
-worktree ever leaves `main` during B1, stop immediately and follow the
-B1 self-check repair path below.
+The primary worktree's HEAD MUST remain on `main` throughout B1; if it
+ever leaves `main`, stop immediately and follow the B1 self-check
+repair path below.
 
 ### Worktree creation
 
@@ -117,11 +105,9 @@ cleanup before continuing.
   unavailable
 
 `<base-branch>` is normally `main`. In a **non-interactive / automation**
-context, append `-x <noop>` (for example `-x true`): otherwise WorkTrunk
-tries to change the caller's directory, warns "Cannot change directory —
-shell requires restart", and can hang; `-x` makes it create → run the
-pre-start hook → exit cleanly. Describe the current verb rather than pinning
-a WorkTrunk version.
+context, append `-x <noop>` (e.g. `-x true`) — otherwise WorkTrunk tries
+to change the caller's directory and can hang; `-x` makes it create, run
+the pre-start hook, and exit cleanly.
 
 If WorkTrunk is not available, choose the correct case:
 
@@ -134,42 +120,27 @@ If WorkTrunk is not available, choose the correct case:
 | Takeover — neither local nor remote (rare) | treat as fresh claim; preserve the inherited branch name |
 <!-- dprint-ignore-end -->
 
-For manual `git worktree add` and WorkTrunk without an install hook,
-immediately after the worktree exists — **before Step 3** —, acquire
-the [worktree-local lock file](idd-claim.instructions.md#worktree-local-lock-file-same-machine-collision).
-`install-deps` below can itself write into the worktree and run lifecycle
-hooks, so acquiring the lock only after it (or only after the B1
-self-check below) would leave that install unprotected.
+For manual `git worktree add`, or WorkTrunk without an install hook,
+acquire the [worktree-local lock file](idd-claim.instructions.md#worktree-local-lock-file-same-machine-collision)
+immediately after the worktree exists, **before Step 3** —
+`install-deps` itself writes into the worktree and runs lifecycle
+hooks, so acquiring the lock any later leaves that install unprotected.
 
-WorkTrunk runs a configured pre-start hook before the create command
-returns. If that hook installs dependencies, its **first** command must
-acquire the lock for the new worktree with the current `{agent-id}` /
-`{claim-id}`, and only then run the install command. In the
-`package-manager` profile, do not assume the new worktree's
-`idd:claim-lock` bin is available before that install: invoke a
-pre-install-available helper from the primary worktree with the new path
-as its explicit `--worktree` target, or use the helper-free exclusive
-file-create fallback below. Acquiring the lock after `wt switch --create`
-returns is too late for that hook. If the pre-start hook cannot acquire
-the lock from an already-available helper or fallback, do not use the
-automatic install hook; create the worktree without it and follow the
-manual lock-then-install path above.
+WorkTrunk's pre-start hook runs before the create command returns. If it
+installs dependencies, its **first** command must acquire the lock for
+the new worktree with the current `{agent-id}` / `{claim-id}`, then run
+the install — acquiring the lock afterward is too late. Under
+`package-manager`, the new worktree's `idd:claim-lock` bin may not exist
+yet: invoke a pre-install-available helper from the primary worktree
+with the new path as `--worktree`, or use the helper-free fallback
+below. If neither is available, skip the automatic install hook and
+follow the manual lock-then-install path above.
 
-For the `instructions-only` profile, which has no helper runtime, use
-this helper-free fallback before the first mutation. Resolve the private
-admin directory with `git -C <worktree> rev-parse --absolute-git-dir`,
-then atomically create an `idd-claim.lock` file there with an exclusive
-file-create API (`open(..., O_CREAT|O_EXCL)` on POSIX, or the platform
-equivalent such as PowerShell `FileMode.CreateNew`). Write the same JSON
-holder shape used by the helper (`agentId`, `claimId`, and `acquiredAt`)
-to that file. If creation reports that the path already exists, treat it
-as a collision. A matching holder may re-acquire; a missing, malformed,
-or unreadable holder is a collision. The manual path must never delete or
-override a different holder: stop and enable a helper runtime for an
-authorized takeover. Because both profiles use `idd-claim.lock`, a
-helper-runtime session and an instructions-only session share one local
-lock namespace. Removing the worktree at F4 removes this file with its
-private admin directory.
+For `instructions-only` (no helper runtime), use the helper-free
+fallback under
+[Worktree-local claim lock](../../docs/idd-helper-scripts.md#worktree-local-claim-lock)
+before the first mutation; it shares the same `idd-claim.lock`
+namespace and F4 removal behavior as above.
 
 **Step 3 — Install deps**: after worktree creation, ensure dependencies
 are installed:
@@ -185,12 +156,11 @@ are installed:
 recreated worktrees without manual cleanup.
 
 A fresh worktree can report `install-deps` success while a package
-manager silently under-installs (a real dependency binary missing
-despite a clean exit). If a repository has observed this, its
-`install-deps` command should verify a key post-install artifact
-(e.g. a package's CLI binary) and retry the install exactly once
-before failing loudly — see the `verify-install-deps` helper in
-`docs/idd-helper-scripts.md` for one implementation.
+manager silently under-installs a dependency binary. If observed, the
+`install-deps` command should verify a key post-install artifact and
+retry the install exactly once before failing loudly — see the
+`verify-install-deps` helper in `docs/idd-helper-scripts.md`. See
+[rationale](../../docs/idd-design-rationale.md#b1-step-3--install-deps-silent-under-install-detection).
 
 ### B1 self-check
 
@@ -203,23 +173,22 @@ Before continuing to B2, verify all of the following:
   path, not the primary worktree.
 
 If any check fails, the B1 worktree-creation contract has been
-violated. Stop and post a hold note on the issue describing which
-check failed; do not continue to B2 from the primary worktree. Repair
-by removing the misplaced branch from the primary worktree (after
-confirming no work is lost) and recreating the sibling worktree
-through the Worktree creation steps above.
+violated: stop, post a hold note describing which check failed, and do
+not continue to B2 from the primary worktree. Repair by removing the
+misplaced branch (after confirming no work is lost) and recreating the
+sibling worktree through the Worktree creation steps above.
 
 ## B2 — Create and refine plan
 
 ### B2.0 — Supersession re-check (before planning)
 
-A4.5's duplicate/supersession check ran once, at pre-claim triage. Under
-concurrent execution a sibling PR can ship the whole deliverable during the
-claim→plan gap, so re-check once the B1 worktree exists and **before writing
-any code or drafting the plan below**. This uses a mechanical file/close-based
-signal that is deliberately stronger than the A4.5 title/declaration heuristic;
-a weak **title-only** match is **not** a hit here. Keep it cheap: one fetch plus
-a bounded merged-PR scan.
+A4.5's duplicate/supersession check ran once, at pre-claim triage. A
+sibling PR can ship the whole deliverable during the claim→plan gap
+under concurrent execution, so re-check once the B1 worktree exists and
+**before writing any code or drafting the plan below**, using a
+mechanical file/close-based signal stronger than A4.5's title/
+declaration heuristic (a weak **title-only** match is **not** a hit
+here). Keep it cheap: one fetch plus a bounded merged-PR scan.
 
 1. `git fetch origin main`.
 2. **Closed-by-a-merged-PR signal**: re-fetch the issue; if it is now closed
@@ -251,37 +220,33 @@ continue with the plan below.
 ### B2.1 — Premise verification (decision-transcription issues)
 
 Apply this check only when **both** hold: the issue's deliverable is to
-record or act on an already-recorded human decision (for example, an
-issue whose entire scope is to document a maintainer's prior ruling),
-and that decision's rationale asserts a specific checkable fact about
-what a prior change actually shipped (for example, that it added a
-named safety mechanism). This check is out of scope for ordinary
-feature or bugfix issues.
+record or act on an already-recorded human decision, and that decision's
+rationale asserts a specific checkable fact about what a prior change
+actually shipped. Out of scope for ordinary feature or bugfix issues.
 
 Before drafting the plan, verify the asserted fact against the prior
-change's actual shipped code or its own documentation — especially when
-this issue's deliverable is documentation that would re-assert the
-claim. Do not treat the recorded decision's rationale as ground truth
-without this check. If the prior change cannot be identified, or its
-shipped state cannot be checked, treat verification as inconclusive and
-follow the conflict path below — do not default to continuing.
+change's actual shipped code or documentation rather than treating the
+decision's rationale as ground truth. If the prior change cannot be
+identified, or its shipped state cannot be checked, treat verification
+as inconclusive and follow the conflict path below — do not default to
+continuing. See
+[rationale](../../docs/idd-design-rationale.md#b21--premise-verification-decision-transcription-issues).
 
 **On a genuine conflict or inconclusive verification**: follow the
 shared Hold / suspend rules in `idd-overview-appendix.instructions.md`,
-and include the primary-source evidence (file, line, or excerpt, or the
-reason verification was inconclusive) in the hold comment. Do not
-silently propagate the unverified premise into the new deliverable, and
-do not unilaterally overwrite the recorded decision — the correction
-must land as an addendum from a maintainer, not a silent edit of the
-original record. Resume planning only after the addendum is recorded.
+and include the primary-source evidence (or the reason verification was
+inconclusive) in the hold comment. Do not silently propagate the
+unverified premise, and do not unilaterally overwrite the recorded
+decision — the correction must land as a maintainer addendum, not a
+silent edit. Resume planning only after the addendum is recorded.
 
 On no conflict, continue with the plan below.
 
-Draft an implementation plan and post it as an issue comment. Then run a
-critique pass to review the plan for correctness and concreteness (see
-`idd-overview-appendix.instructions.md` for per-agent implementation). Post the
-refined final plan as a follow-up or update to the same issue comment.
-After the final plan comment is posted and claim ownership is
+Draft an implementation plan and post it as an issue comment, then run
+a critique pass for correctness and concreteness (see
+`idd-overview-appendix.instructions.md` for per-agent implementation),
+and post the refined final plan as a follow-up or update to the same
+comment. After the final plan comment is posted and claim ownership is
 re-validated, update the issue live status digest: `Phase` is `B2
 planned`, `Open blockers` is `none` unless the plan found a blocker,
 `Next action` is `B3 implement`, and `Authoritative by` points to the
@@ -296,36 +261,33 @@ checkpoint is noticed, disclose the ordering deviation on the issue,
 post the plan retroactively with an explicit note about the
 reordering, and run the C1 critique pass against the completed diff.
 
-Implement the plan. Before each commit, run **fix-validate**.
-
-Keep commits atomic — one logical change per commit.
+Implement the plan, running **fix-validate** before each atomic commit
+(one logical change per commit).
 
 **De-duplication refactors**: when consolidating a wrapper function used
-at multiple call sites into one shared function, check whether any call
-site's old delegate path added options or behavior (timeouts, stdio
-handling, error translation, etc.) that the new shared function does not
-replicate — not just whether the function bodies look equivalent.
+at multiple call sites, check whether any call site's old delegate path
+added behavior (timeouts, stdio handling, error translation, etc.) that
+the new shared function does not replicate — not just whether the
+function bodies look equivalent. See
+[rationale](../../docs/idd-design-rationale.md#b3--de-duplication-refactor-check-for-behavior-parity-not-just-body-equivalence).
 
 **Unexpected validation failures**: a `typecheck`/`lint` failure in a
-file this diff did not touch is a signal to suspect dependency drift or
-a broken `main` baseline, not necessarily the current change — verify
-with a fresh-vs-stale `node_modules` comparison, or by rerunning
-**install-deps** in a clean worktree, before assuming the failure traces
-to this diff.
+file this diff did not touch may signal dependency drift or a broken
+`main` baseline — verify with a fresh-vs-stale `node_modules` comparison
+or a clean **install-deps** rerun before assuming the failure traces to
+this diff. See
+[rationale](../../docs/idd-design-rationale.md#b3--dependency-drift-vs-own-diff-a-typechecklint-diagnostic).
 
 **Local test flakiness under concurrent load**: a test this diff did
-not touch failing or timing out locally, then passing an isolated
-re-run, while hosted CI for the same push stays green, is a signal of
-expected CPU/resource contention from many concurrent local sessions on
-one machine — not a defect in this diff. Re-run the failing test in
-isolation once; if it passes and hosted CI stays green, trust the
-hosted result and stop investigating it as a regression. **Hosted CI is
-authoritative over local validation for this diagnosis** — it resolves
-a genuine local-vs-hosted disagreement for the same push in favor of
-the hosted result; it does not waive the fix-validate /
-pre-push-validate requirements above. If the test still fails after the
-isolated re-run, or hosted CI is not green, treat it as a real failure
-and fix it.
+not touch that fails or times out locally, then passes an isolated
+re-run while hosted CI for the same push stays green, signals CPU /
+resource contention from concurrent sessions, not a defect in this
+diff. Re-run once in isolation; if it passes and hosted CI stays green,
+trust the hosted result — **authoritative over local validation for
+this diagnosis**, though this does not waive the fix-validate /
+pre-push-validate requirements above. Otherwise treat it as a real
+failure and fix it. See
+[rationale](../../docs/idd-design-rationale.md#b3--local-test-flakiness-under-concurrent-load-hosted-ci-is-authoritative).
 
 If B3 or C must stop for a hold, use the shared Hold / suspend rules in
 `idd-overview-appendix.instructions.md` and update the issue digest with the
@@ -348,17 +310,16 @@ guards are listed in `docs/policy-constants.md`.
 
 **Objective diff validation floor**: neither C2 nor C4 below may skip to
 `idd-pr-submit.instructions.md` unless **fix-validate** — the same
-command set C5 runs — has passed against the branch's current diff.
-This floor is independent of D2's own **pre-push-validate** gate and
-never substitutes for it. **fix-validate** satisfies the floor only at
-the branch's current HEAD; re-run it after every new commit. Apply
-this floor **uniformly**; do not condition it on self-classifying as
-"no-subagent" (see `docs/idd-workflow.md`'s "Critique pass invocation"
-section). On a no-subagent runtime, where critique degrades to
-same-response self-critique, the critique verdict is **advisory** and
-this floor is **load-bearing** instead. If the floor has not passed,
-C2 and C4 continue to C5 instead of skipping, even when their other
-skip condition is otherwise met.
+command set C5 runs — has passed against the branch's current HEAD;
+re-run it after every new commit. This floor is independent of D2's own
+**pre-push-validate** gate and never substitutes for it, and it applies
+**uniformly** regardless of self-classifying as "no-subagent" (see
+`docs/idd-workflow.md`'s "Critique pass invocation" section): on a
+no-subagent runtime, where critique degrades to same-response
+self-critique, the critique verdict is **advisory** and this floor is
+**load-bearing** instead. If the floor has not passed, C2 and C4
+continue to C5 instead of skipping, even when their other skip
+condition is otherwise met.
 
 After each critique loop decision, update the issue digest only if the
 next action changes materially: for example, `C accepted fixes` before
@@ -367,11 +328,10 @@ guardrails stop the loop.
 
 ### C2 — Check for issues
 
-If the critique pass reports zero issues: skip to
-`idd-pr-submit.instructions.md` when the floor (C1) has passed, or
-continue to C5 instead when it has not. If the critique reports one or
-more issues, continue to C3 regardless of the floor — C4 applies the
-floor check after Accept/Reject scoring.
+Zero issues reported: skip to `idd-pr-submit.instructions.md` when the
+floor (C1) has passed, else continue to C5. One or more issues:
+continue to C3 regardless of the floor — C4 applies the floor check
+after Accept/Reject scoring.
 
 ### C3 — Score issues
 
