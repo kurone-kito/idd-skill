@@ -176,7 +176,7 @@
     "glob": ".github/instructions/idd-*.instructions.md",
     "alwaysLoadedPattern": "applyTo:\\s*\"\\*\\*\"",
     "alwaysLoadedLimitBytes": 20000,
-    "phaseLimitBytes": 38000
+    "phaseLimitBytes": 33000
   },
   "bundleBudgets": [
     {
@@ -189,7 +189,7 @@
         ".github/instructions/idd-overview-core.instructions.md",
         ".github/instructions/idd-suitability.instructions.md"
       ],
-      "limitBytes": 112700
+      "limitBytes": 104000
     },
     {
       "id": "bundle-resume",
@@ -251,7 +251,7 @@
       "files": [
         ".github/instructions/lite/idd-pr-submit-lite.instructions.md"
       ],
-      "limitBytes": 23700
+      "limitBytes": 26000
     },
     {
       "id": "bundle-review-fix-lite",
@@ -284,7 +284,7 @@
         ".github/instructions/idd-review-snapshot.instructions.md",
         ".github/instructions/idd-review-triage.instructions.md"
       ],
-      "limitBytes": 143000
+      "limitBytes": 120000
     },
     {
       "id": "bundle-merge",
@@ -298,7 +298,7 @@
         ".github/instructions/idd-overview-core.instructions.md",
         ".github/instructions/idd-pre-merge.instructions.md"
       ],
-      "limitBytes": 116100
+      "limitBytes": 108000
     }
   ],
   "contextCeiling": {
@@ -306,12 +306,7 @@
     "maxBundleLimitBytes": 120000,
     "maxUtilizationPct": 98,
     "noticeUtilizationPct": 95,
-    "exemptBundles": [
-      "bundle-review",
-      "bundle-work",
-      "bundle-merge",
-      "bundle-pr-submit-lite"
-    ]
+    "exemptBundles": []
   },
   "docBudgetGuard": {
     "id": "doc-budget-drift",

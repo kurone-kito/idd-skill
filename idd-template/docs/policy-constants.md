@@ -322,7 +322,7 @@ files, or express it without the `bytes` suffix.
 | Limit type    | Value        | Applies to                                                                 | Rationale                                                                                                                                                                                               |
 | ------------- | ------------ | -------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Always-loaded | 20,000 bytes | Files with `applyTo: "**"` in `.github/instructions/idd-*.instructions.md` | These files load on every phase regardless of which is active, so this is the strictest ceiling — it bounds the fixed floor cost every session pays before any phase-specific content is even selected. |
-| Phase         | 38,000 bytes | Other files in `.github/instructions/idd-*.instructions.md`                | Only the one file matching the active phase loads at a time, so this ceiling can run larger than the always-loaded one without raising a session's floor cost.                                          |
+| Phase         | 33,000 bytes | Other files in `.github/instructions/idd-*.instructions.md`                | Only the one file matching the active phase loads at a time, so this ceiling can run larger than the always-loaded one without raising a session's floor cost.                                          |
 
 ### Bundle limits
 
@@ -343,6 +343,39 @@ manifest. Read the live limits with
 
 Bundle checks run unconditionally (not filtered by changed files) and
 measure the combined byte length of all listed files.
+
+### Context ceiling
+
+`audit/sync-manifest.json` `contextCeiling` layers an absolute,
+128K-context-derived cap on top of the per-bundle ratchet below, so a
+future exact-fit bump errors instead of drifting past the ~10%-margin
+convention the ratchet alone allows — see the regression history under
+"Context ceiling" in `audit/README.md`.
+
+- **Ceiling derivation**: no non-exempt bundle's `limitBytes` may exceed
+  **120,000 bytes** (`maxBundleLimitBytes`) — a 128K-context-derived cap
+  of ≈ 30,000–37,000 tokens at this corpus's observed 3.25–4.0
+  bytes/token, ≤ ~29% of a 128K context window, leaving the remainder
+  for the harness system prompt, tool schemas, adopter-repo
+  instructions, and working context.
+- **`maxUtilizationPct` = 98%**: no non-exempt bundle's measured
+  (banner-stripped) byte total may exceed this percentage of its own
+  `limitBytes`. This is what stops a future exact-fit landing even for
+  a bundle that stays under `maxBundleLimitBytes`.
+- **`noticeUtilizationPct` = 95%**: any bundle (exempt or not) reaching
+  this utilization prints a CI notice, making the near-ceiling band
+  visible before a bundle tips over either error check above.
+
+**Exemption lifecycle**: `exemptBundles` temporarily excuses listed
+bundle ids from the two error checks above while a content diet is in
+flight across a sequence of sibling issues. The distributed default —
+and the state a completed diet sequence returns the list to — is an
+**empty list**: a bundle enters it only alongside the issue that
+regresses past `maxBundleLimitBytes` or `maxUtilizationPct`, and leaves
+it once the ratchet or trim resolves the violation, not by editing the
+exemption away in isolation. Keep the list empty absent an active diet;
+re-adding an entry needs the same maintainer-authorized PR-description
+callout the ratchet's own raise convention requires below.
 
 ### Bundle-budget growth
 

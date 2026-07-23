@@ -125,3 +125,12 @@ adopter-repo instructions, and working context.
 
 An id in `exemptBundles` that does not match any `bundleBudgets` entry
 is itself an audit error (a typo or a bundle rename left behind).
+
+As of the #1659 128K-ceiling roadmap's finalize track (#1658),
+`exemptBundles` is empty: every bundle that entered the roadmap over
+`maxBundleLimitBytes` or above `maxUtilizationPct` was either ratcheted
+down or dieted back under both checks. Keep the list empty going
+forward — add an entry only alongside a maintainer-authorized exception
+(the same PR-description callout the ratchet's own raise convention
+requires), and shrink it back to empty in the same PR or a tracked
+follow-up once that exception resolves.
