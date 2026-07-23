@@ -866,3 +866,25 @@ subagent-capable ones — rather than being conditioned on a runtime
 self-classifying as "no-subagent". Uniform application keeps the gate
 deterministic and avoids relying on fragile runtime self-detection that
 a weak model could get wrong.
+
+### Mutation / write-side helper lens
+
+When the diff under critique implements a helper that **mutates GitHub
+state, mutates git state, or performs a merge** (read-only helpers are
+out of scope), also apply this lens — each check below targets a gap
+class that a clean general critique repeatedly missed and that later
+review then surfaced one finding per round:
+
+- **Fail-closed inputs**: guards use strict checks (`=== true`, explicit
+  pattern/enum validation) so a non-boolean, empty, missing, or malformed
+  value blocks the mutation rather than passing it.
+- **Validate/execute scope parity**: the repo, identity, and HEAD the
+  gate validates are the same ones the mutation runs against — no split
+  between a read-side collector's scope and the executed `gh` / git
+  command; reject ambiguous partial scoping.
+- **Unsafe-output suppression**: a not-ready or invalid verdict never
+  emits a copy-pasteable command bound to an unvalidated value.
+- **Schema strictness parity**: output schemas match the values the
+  helper actually produces and mirror sibling-helper strictness (SHA
+  patterns, enums), so the published contract is no looser than the
+  runtime.
