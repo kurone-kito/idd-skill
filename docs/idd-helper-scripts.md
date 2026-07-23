@@ -957,6 +957,19 @@ Interpretation rules:
 - No explicit release verb: the lock lives inside the worktree's own
   private git-admin directory (`git rev-parse --absolute-git-dir`), so
   `git worktree remove` at F4 deletes it together with the worktree
+- **`instructions-only` helper-free fallback** (no helper runtime
+  available): resolve the private admin directory with
+  `git -C <worktree> rev-parse --absolute-git-dir`, then atomically
+  create an `idd-claim.lock` file there with an exclusive file-create
+  API (`open(..., O_CREAT|O_EXCL)` on POSIX, or the PowerShell
+  `FileMode.CreateNew` equivalent), writing the same JSON holder shape
+  (`agentId`, `claimId`, `acquiredAt`). A path that already exists is a
+  collision; a matching holder may re-acquire, and a missing,
+  malformed, or unreadable holder is also a collision. Never delete or
+  override a different holder — enable a helper runtime for an
+  authorized takeover instead. Both profiles share the `idd-claim.lock`
+  namespace, so a helper-runtime session and an instructions-only
+  session see the same lock.
 
 ### Canonical branch name
 
