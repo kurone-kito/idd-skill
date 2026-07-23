@@ -197,6 +197,114 @@ function normalizeBudgetLimit(value) {
   }
   return value;
 }
+function normalizeNonNegativeNumber(value) {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) {
+    return null;
+  }
+  return value;
+}
+/**
+ * Collect "context ceiling" violations: an absolute, 128K-context-derived
+ * cap layered on top of the per-bundle `bundleBudgets` ratchet, so a future
+ * exact-fit bump errors instead of drifting past the documented ~10%-margin
+ * convention the way `bundleBudgets` alone allowed (#1213, #1259 both
+ * regressed for lack of this backstop).
+ *
+ * Pure (no I/O) so it can be unit-tested; the audit pipeline supplies the
+ * already-measured per-bundle byte totals (`checkBundleBudgets`'s own
+ * summation, reused rather than re-read here).
+ *
+ * All threshold comparisons are cross-multiplied in byte space
+ * (`totalBytes * 100` vs. `limitBytes * pct`) rather than compared as a
+ * rounded percentage float, so a bundle sitting exactly at a configured
+ * threshold never tips over from rounding noise. `maxUtilizationPct` /
+ * `noticeUtilizationPct` use strict `>` / inclusive `>=` respectively,
+ * matching "exceeds" vs. "reaches ... or more" in the guard's own spec.
+ */
+export function collectContextCeilingViolations(config, bundles) {
+  if (!config) {
+    return { errors: [], notices: [] };
+  }
+  const id = String(config.id ?? 'context-ceiling');
+  const maxBundleLimitBytes = normalizeBudgetLimit(config.maxBundleLimitBytes);
+  if (maxBundleLimitBytes === null) {
+    return {
+      errors: [`${id}: maxBundleLimitBytes must be a non-negative integer`],
+      notices: [],
+    };
+  }
+  const maxUtilizationPct = normalizeNonNegativeNumber(
+    config.maxUtilizationPct,
+  );
+  if (maxUtilizationPct === null) {
+    return {
+      errors: [`${id}: maxUtilizationPct must be a non-negative number`],
+      notices: [],
+    };
+  }
+  const noticeUtilizationPct = normalizeNonNegativeNumber(
+    config.noticeUtilizationPct,
+  );
+  if (noticeUtilizationPct === null) {
+    return {
+      errors: [`${id}: noticeUtilizationPct must be a non-negative number`],
+      notices: [],
+    };
+  }
+  const rawExempt = Array.isArray(config.exemptBundles)
+    ? config.exemptBundles
+    : [];
+  const exemptBundles = rawExempt.filter(
+    (entry) => typeof entry === 'string' && entry.length > 0,
+  );
+  if (exemptBundles.length !== rawExempt.length) {
+    return {
+      errors: [
+        `${id}: exemptBundles must be an array of non-empty bundle id strings`,
+      ],
+      notices: [],
+    };
+  }
+  const exemptSet = new Set(exemptBundles);
+  const knownIds = new Set(bundles.map((bundle) => bundle.id));
+  const errors = [];
+  const notices = [];
+  for (const exemptId of exemptBundles) {
+    if (!knownIds.has(exemptId)) {
+      errors.push(`${id}: exemptBundles names unknown bundle id "${exemptId}"`);
+    }
+  }
+  for (const bundle of bundles) {
+    const utilizationPct =
+      bundle.limitBytes > 0 ? (bundle.totalBytes / bundle.limitBytes) * 100 : 0;
+    const overCeiling = bundle.limitBytes > maxBundleLimitBytes;
+    const overUtilization =
+      bundle.totalBytes * 100 > bundle.limitBytes * maxUtilizationPct;
+    const isExempt = exemptSet.has(bundle.id);
+    if (!isExempt) {
+      if (overCeiling) {
+        errors.push(
+          `${id}: ${bundle.id} limitBytes ${bundle.limitBytes} exceeds the ${maxBundleLimitBytes}-byte context ceiling`,
+        );
+      }
+      if (overUtilization) {
+        errors.push(
+          `${id}: ${bundle.id} utilization ${utilizationPct.toFixed(2)}% exceeds ${maxUtilizationPct}% (${bundle.totalBytes}/${bundle.limitBytes} bytes)`,
+        );
+      }
+    } else if (!overCeiling && !overUtilization) {
+      notices.push(
+        `${id}: ${bundle.id} is listed in exemptBundles but currently violates neither ceiling check; consider removing the exemption`,
+      );
+    }
+    if (bundle.totalBytes * 100 >= bundle.limitBytes * noticeUtilizationPct) {
+      notices.push(
+        `${id}: ${bundle.id} utilization is ${utilizationPct.toFixed(2)}% (>= ${noticeUtilizationPct}% notice threshold)`,
+      );
+    }
+  }
+  return { errors, notices };
+}
 // Words after which a `/` must start a regex literal, not division.
 const REGEX_PRECEDING_KEYWORDS = new Set([
   'return',

@@ -296,6 +296,18 @@
       "limitBytes": 116100
     }
   ],
+  "contextCeiling": {
+    "id": "context-ceiling-128k",
+    "maxBundleLimitBytes": 120000,
+    "maxUtilizationPct": 98,
+    "noticeUtilizationPct": 95,
+    "exemptBundles": [
+      "bundle-review",
+      "bundle-work",
+      "bundle-merge",
+      "bundle-pr-submit-lite"
+    ]
+  },
   "docBudgetGuard": {
     "id": "doc-budget-drift",
     "files": [
