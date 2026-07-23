@@ -41,7 +41,7 @@ checkShellFileLists(
 );
 checkSyncPairs(manifest.syncPairs ?? []);
 checkGeneratedFromBanners(manifest.syncPairs ?? []);
-checkInstructionSizeBudgets(manifest.instructionSizeBudgets ?? null);
+checkInstructionSizeBudgets(manifest.instructionSizeBudgets);
 checkContextCeiling(
   manifest.contextCeiling ?? null,
   checkBundleBudgets(manifest.bundleBudgets ?? []),
@@ -576,20 +576,65 @@ function docsSyncCommandByPackageManager(packageManager) {
       return '';
   }
 }
-function checkInstructionSizeBudgets(config) {
-  // The scope/skip decision and budget evaluation live in the pure helper
-  // so they can be unit-tested; the audit pipeline supplies the changed
-  // file set, a glob lister, and a reader. The helper reads only changed
-  // files, so unchanged instruction files are never loaded from disk.
-  const result = collectInstructionSizeBudgetViolations(
-    config,
-    changedFiles,
-    () =>
-      globFiles(config?.glob ?? '.github/instructions/idd-*.instructions.md'),
-    readText,
-  );
-  errors.push(...result.errors);
-  notices.push(...result.notices);
+function checkInstructionSizeBudgets(configs) {
+  // One entry per audited glob: the dogfooding `.github/instructions/`
+  // copy and the canonical `idd-template/.github/instructions/` source are
+  // separate entries so a `structure`-mode divergence between them (prose
+  // free to differ, byte size free to drift) cannot silently exceed the
+  // cap on one side while only the other side is measured (#1667). Each
+  // entry's own `id` — plus the audited path's own prefix in every error
+  // message the helper emits — is the scope/label that keeps output
+  // unambiguous about which copy violated its budget; see
+  // `audit/README.md#instruction-size-budgets`.
+  //
+  // `configs` is declared `unknown` (rather than trusting the manifest's
+  // declared type) because it comes straight from `JSON.parse`: a manifest
+  // left in the pre-#1667 single-object shape, or otherwise malformed,
+  // must fail closed with a readable audit error instead of throwing
+  // "configs is not iterable" out of the `for` loop below.
+  if (configs == null) {
+    return;
+  }
+  if (!Array.isArray(configs)) {
+    errors.push(
+      'instructionSizeBudgets: must be an array of per-glob budget entries, one per audited glob (see audit/README.md#instruction-size-budgets); got the pre-#1667 single-object shape or another non-array value',
+    );
+    return;
+  }
+  // The scope/skip decision and budget evaluation for each entry live in
+  // the pure helper so they can be unit-tested; the audit pipeline
+  // supplies the changed file set, a glob lister, and a reader. The helper
+  // reads only changed files, so unchanged instruction files are never
+  // loaded from disk.
+  for (const rawConfig of configs) {
+    // Each array entry is still unvalidated JSON: a `null` (or other
+    // non-object) entry would throw on `config.glob` below before the
+    // pure helper's own `!config` guard ever runs. Reject it here with a
+    // readable error instead of crashing the whole audit run. Arrays pass
+    // `typeof === 'object'` too, so reject them explicitly — otherwise an
+    // entry like `[[]]` would silently fall through and audit under the
+    // default glob instead of erroring.
+    if (
+      rawConfig === null ||
+      typeof rawConfig !== 'object' ||
+      Array.isArray(rawConfig)
+    ) {
+      errors.push(
+        `instructionSizeBudgets: each entry must be an object, got ${JSON.stringify(rawConfig)}`,
+      );
+      continue;
+    }
+    const config = rawConfig;
+    const result = collectInstructionSizeBudgetViolations(
+      config,
+      changedFiles,
+      () =>
+        globFiles(config.glob ?? '.github/instructions/idd-*.instructions.md'),
+      readText,
+    );
+    errors.push(...result.errors);
+    notices.push(...result.notices);
+  }
 }
 // Returns the measured per-bundle stats so `checkContextCeiling` can reuse
 // this same summation instead of re-reading and re-stripping every bundle

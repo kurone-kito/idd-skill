@@ -171,13 +171,22 @@
       "stripPrefix": "skills/issue-authoring/"
     }
   ],
-  "instructionSizeBudgets": {
-    "id": "instruction-size-budgets",
-    "glob": ".github/instructions/idd-*.instructions.md",
-    "alwaysLoadedPattern": "applyTo:\\s*\"\\*\\*\"",
-    "alwaysLoadedLimitBytes": 20000,
-    "phaseLimitBytes": 33000
-  },
+  "instructionSizeBudgets": [
+    {
+      "id": "instruction-size-budgets-dogfood",
+      "glob": ".github/instructions/idd-*.instructions.md",
+      "alwaysLoadedPattern": "applyTo:\\s*\"\\*\\*\"",
+      "alwaysLoadedLimitBytes": 20000,
+      "phaseLimitBytes": 33000
+    },
+    {
+      "id": "instruction-size-budgets-idd-template",
+      "glob": "idd-template/.github/instructions/idd-*.instructions.md",
+      "alwaysLoadedPattern": "applyTo:\\s*\"\\*\\*\"",
+      "alwaysLoadedLimitBytes": 20000,
+      "phaseLimitBytes": 33000
+    }
+  ],
   "bundleBudgets": [
     {
       "id": "bundle-discovery",

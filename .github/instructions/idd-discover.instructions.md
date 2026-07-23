@@ -557,8 +557,9 @@ emits this order.
 **High-contention shared-file overlap (advisory).** Concurrent
 autopilot sessions tend to edit the same F-phase bundle instruction
 files (`bundle-review` / `bundle-merge`) and `audit/sync-manifest.json`.
-As a **soft** tie-breaker after score / desync / effort / lowest-number,
-prefer a candidate whose `## Candidate files` do **not** overlap an
+As a **soft** tie-breaker evaluated after score / desync / effort but
+before the final lowest-issue-number tie-break, prefer a candidate
+whose `## Candidate files` do **not** overlap an
 actively-claimed or open-PR issue on one of those files; the optional
 `discover-shared-file-overlap` helper (see
 [IDD helper scripts](../../docs/idd-helper-scripts.md)) reports each

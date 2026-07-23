@@ -83,8 +83,8 @@ were not evaluated by the prior note.
 ## 1. Candidate skill-boundary mapping
 
 `idd-overview-core.instructions.md` (16,239 bytes; the one file matching
-`applyTo: "**"`, capped at 20,000 bytes by
-`instructionSizeBudgets.alwaysLoadedLimitBytes`) and
+`applyTo: "**"`, capped at 20,000 bytes by the dogfooding entry's
+`alwaysLoadedLimitBytes` in `instructionSizeBudgets`) and
 `idd-overview-appendix.instructions.md` (8,297 bytes) are loaded in
 **every** phase bundle in `audit/sync-manifest.json`'s `bundleBudgets`.
 They are categorically **not** skill candidates: something that must

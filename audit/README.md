@@ -79,6 +79,39 @@ mirror-generation logic. Adding only the `syncPairs` and
 `bundleBudgets` entries above is not enough; skipping the
 `generatedBlocks[].paths` edit still fails the audit.
 
+## Instruction Size Budgets
+
+`instructionSizeBudgets` is an array of one entry per audited glob, each
+with its own `id`, `glob`, `alwaysLoadedPattern`,
+`alwaysLoadedLimitBytes`, and `phaseLimitBytes`. Two entries currently
+run against the same caps: `instruction-size-budgets-dogfood` measures
+this repo's own generated `.github/instructions/idd-*.instructions.md`
+copies, and `instruction-size-budgets-idd-template` measures the
+canonical `idd-template/.github/instructions/idd-*.instructions.md`
+source adopters actually receive. The two copies of a `structure`-mode
+sync pair (see Sync Modes above) may carry different prose and
+therefore different byte counts, so without a dedicated entry per copy
+one side could silently exceed the shared cap while only the other side
+is ever measured (#1667).
+
+Each entry's own `id` is the scope/label that keeps a violation message
+unambiguous about which file set tripped it — the audited path's own
+`.github/instructions/` vs `idd-template/.github/instructions/` prefix
+disambiguates it a second time. Add a new entry (with its own `id`) for
+any future glob that needs the same per-file byte cap, rather than
+widening an existing entry's `glob` to cover unrelated files.
+
+Like `checkFileSets`'s changed-file scoping, each entry only measures
+files that changed against the resolved git comparison base (skipped
+with a notice, never an error, when no base resolves — for example a
+shallow clone without `origin/main`) — an unrelated PR never fails on a
+pre-existing oversized file it did not touch. Widening a glob only
+protects a copy going forward, from the next time someone actually
+edits it; it does not retroactively re-audit every unchanged file on
+every run. A one-time audit across every current file (not just changed
+ones) is still worth running by hand after adding a new entry, to catch
+any divergence that already exists.
+
 ## Bundle Budgets
 
 The `bundleBudgets` entries cap the combined byte size of the
