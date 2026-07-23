@@ -419,11 +419,19 @@ test('live manifest instructionSizeBudgets covers both the dogfooding and idd-te
     Array.isArray(budgets),
     'instructionSizeBudgets must be an array of per-glob budget entries',
   );
-  const globs = budgets.map((budget) => budget.glob).sort();
-  assert.deepEqual(globs, [
+  // Assert inclusion, not an exact-array match: audit/README.md explicitly
+  // encourages adding further per-glob entries later, and this guard must
+  // not start failing the day a third one lands.
+  const globs = budgets.map((budget) => budget.glob);
+  for (const requiredGlob of [
     '.github/instructions/idd-*.instructions.md',
     'idd-template/.github/instructions/idd-*.instructions.md',
-  ]);
+  ]) {
+    assert.ok(
+      globs.includes(requiredGlob),
+      `instructionSizeBudgets is missing an entry for ${requiredGlob}`,
+    );
+  }
   const ids = budgets.map((budget) => budget.id);
   assert.ok(
     ids.every((id) => typeof id === 'string' && id.trim().length > 0),
