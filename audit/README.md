@@ -128,9 +128,13 @@ is itself an audit error (a typo or a bundle rename left behind).
 
 As of the #1659 128K-ceiling roadmap's finalize track (#1658),
 `exemptBundles` is empty: every bundle that entered the roadmap over
-`maxBundleLimitBytes` or above `maxUtilizationPct` was either ratcheted
-down or dieted back under both checks. Keep the list empty going
-forward — add an entry only alongside a maintainer-authorized exception
-(the same PR-description callout the ratchet's own raise convention
-requires), and shrink it back to empty in the same PR or a tracked
-follow-up once that exception resolves.
+`maxBundleLimitBytes` or above `maxUtilizationPct` cleared both checks —
+`bundle-review`, `bundle-work`, and `bundle-merge` via the sibling
+content diets and this issue's limit-lowering ratchet;
+`bundle-pr-submit-lite` via a margin-restoring limit _raise_ instead,
+since it was never over the byte ceiling, only briefly above the
+utilization threshold. Keep the list empty going forward — add an entry
+only alongside a maintainer-authorized exception (the same
+PR-description callout the ratchet's own raise convention requires),
+and shrink it back to empty in the same PR or a tracked follow-up once
+that exception resolves.
