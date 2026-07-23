@@ -288,12 +288,12 @@ ack / error, as defined in E4):
   GitHub login for `{bot}` (e.g. `coderabbitai[bot]`) so the
   carry-forward rule below can attribute per-bot. A separate _completed_
   review of current HEAD, if present, is its own snapshot item —
-  `**Accept**` that one under the completed-review rules, not this
-  notice. **Re-validate first**: a completed review can race in after
-  the E1 snapshot but before this rejection posts. If it has,
-  disposition that review instead and take a fresh E1 snapshot, so the
-  rejection's later timestamp doesn't filter the completed review out
-  of the next pass.
+  disposition that one as `**Accepted**` under the completed-review
+  rules, not this notice. **Re-validate first**: a completed review can
+  race in after the E1 snapshot but before this rejection posts. If it
+  has, disposition that review instead and take a fresh E1 snapshot, so
+  the rejection's later timestamp doesn't filter the completed review
+  out of the next pass.
 - **Carry the rejection forward across pushes.** Once a notice carries a
   `**Rejected** — {bot} did not review HEAD …` reply, that disposition
   persists across later HEAD changes and pushes while the same notice

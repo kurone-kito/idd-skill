@@ -1,9 +1,10 @@
 # IDD — Advisory-Wait Shell Fallback (AW1 / AW2 / AW3-R / AW3-S / AW3-H detail)
 
-This document contains the verbatim `gh`/`gh api`/`jq` commands used by
-the shell fallback for [advisory-wait](../.github/instructions/idd-advisory-wait.instructions.md):
-AW1/AW2 evidence collection, and the AW3-R/AW3-S/AW3-H marker-posting
-and cleanup mutations.
+This document contains the verbatim commands used by the shell
+fallback for [advisory-wait](../.github/instructions/idd-advisory-wait.instructions.md):
+`gh`/`gh api`/`jq` for AW1/AW2 evidence collection, and a mix of
+`gh`/`gh api`/`curl`/`node scripts/...` for the AW3-R/AW3-S/AW3-H
+marker-posting and cleanup mutations.
 
 These commands only apply when helper-first cannot be trusted — see
 the "Fail-closed fallback trigger" section in the instruction file.
