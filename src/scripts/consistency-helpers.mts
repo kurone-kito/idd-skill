@@ -334,6 +334,15 @@ export function collectContextCeilingViolations(
     };
   }
 
+  if (
+    config.exemptBundles !== undefined &&
+    !Array.isArray(config.exemptBundles)
+  ) {
+    return {
+      errors: [`${id}: exemptBundles must be an array of bundle id strings`],
+      notices: [],
+    };
+  }
   const rawExempt = Array.isArray(config.exemptBundles)
     ? config.exemptBundles
     : [];
@@ -385,7 +394,10 @@ export function collectContextCeilingViolations(
       );
     }
 
-    if (bundle.totalBytes * 100 >= bundle.limitBytes * noticeUtilizationPct) {
+    if (
+      bundle.limitBytes > 0 &&
+      bundle.totalBytes * 100 >= bundle.limitBytes * noticeUtilizationPct
+    ) {
       notices.push(
         `${id}: ${bundle.id} utilization is ${utilizationPct.toFixed(2)}% (>= ${noticeUtilizationPct}% notice threshold)`,
       );

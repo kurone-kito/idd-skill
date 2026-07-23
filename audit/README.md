@@ -97,7 +97,12 @@ callout.
 
 The `bundleBudgets` ratchet alone has no upper bound — each `limitBytes`
 value has only ever followed content growth, and nothing mechanical
-stopped the next exact-fit bump. `contextCeiling` is an absolute,
+stopped the next exact-fit bump. Observed on
+[#1213](https://github.com/kurone-kito/idd-skill/issues/1213) (closed
+2026-07-03) and
+[#1259](https://github.com/kurone-kito/idd-skill/issues/1259) (closed
+2026-07-04, the very next day): both recovered headroom and both fully
+regressed for lack of an upper bound. `contextCeiling` is an absolute,
 128K-context-derived cap layered on top: 120,000 bytes ≈ 30,000–37,000
 tokens at this corpus's observed 3.25–4.0 bytes/token, leaving the rest
 of a 128K context window for the harness system prompt, tool schemas,

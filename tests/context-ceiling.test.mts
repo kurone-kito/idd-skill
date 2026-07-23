@@ -152,6 +152,27 @@ test('errors on a malformed exemptBundles entry', () => {
   );
 });
 
+test('errors when exemptBundles is present but not an array', () => {
+  const result = collectContextCeilingViolations(
+    { ...BASE_CONFIG, exemptBundles: 'bundle-a' },
+    [{ id: 'bundle-a', limitBytes: 1000, totalBytes: 500 }],
+  );
+  assert.equal(result.errors.length, 1);
+  assert.match(
+    result.errors[0],
+    /exemptBundles must be an array of bundle id strings/,
+  );
+});
+
+test('a bundle with a zero-byte limitBytes never gets a spurious notice', () => {
+  // Regression: the notice comparison's RHS (limitBytes * pct) is 0 when
+  // limitBytes is 0, so an unguarded ">=" would fire unconditionally,
+  // including for a bundle with zero content.
+  const bundles = [{ id: 'bundle-a', limitBytes: 0, totalBytes: 0 }];
+  const result = collectContextCeilingViolations(BASE_CONFIG, bundles);
+  assert.deepEqual(result.notices, []);
+});
+
 test('reflects the live day-one exemptions: exactly the four documented bundles stay green', () => {
   const config = {
     id: 'context-ceiling-128k',
