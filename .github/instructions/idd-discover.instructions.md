@@ -1,9 +1,9 @@
 # IDD — Discover Phase (A0-T–A4)
 
-Read this file when starting a new task. It covers finding and selecting
-the next issue to work on, including an operator-provided exact issue
-target, roadmap-audit handoff, candidate selection, and handoff to A4.5
-and claim. After selecting a viable candidate (A4), run suitability triage via
+Read this file when starting a new task: finding and selecting the next
+issue to work on, including an operator-provided exact issue target,
+roadmap-audit handoff, candidate selection, and handoff to A4.5 and
+claim. After A4 selects a viable candidate, run suitability triage via
 `idd-suitability.instructions.md` (A4.5), then proceed to
 `idd-claim.instructions.md` to claim it.
 
@@ -57,34 +57,23 @@ that issue only:
 2. If the target issue carries the configured authoring label, report
    `Issue #N is currently being authored`, run the stale-authoring
    warning check above, and stop without claiming.
-3. Apply the same readiness intent as A3 to the target:
-   - no configured blocked-by-human label from
-     `labels.blockedByHumanLabelName` (default: `status:blocked-by-human`)
-     or configured needs-decision label from
-     `labels.needsDecisionLabelName` (default: `status:needs-decision`);
-   - no open dependent issues, except parent epics or aggregate issues
-     that are acceptable under A3;
-   - visible `Blocked by #NNN` references resolve to closed or otherwise
-     completed issues, with unresolved references treated as blocked;
-   - hidden `<!-- idd-skill-blocked-by: {roadmap-id} -->` markers
-     resolve through the same scoped body-content lookup used by A3, and
-     the matching roadmap work is closed or otherwise complete;
-   - no external human coordination is required to start;
-   - no active, non-stale claim from a trusted marker actor exists on
-     the target, other than a claim this session already recorded and
-     verified (A4 Step 1.5 rules); a hit reports "already claimed",
-     same as A5.
+3. Apply A3's readiness bullets to the target — no configured
+   blocked-by-human/needs-decision label, no open blocking dependent
+   issue (visible `Blocked by #NNN` or hidden `idd-skill-blocked-by`
+   marker, both resolved the same way A3 resolves them), no external
+   human coordination required — plus one target-only check: no
+   active, non-stale claim from a trusted marker actor exists on the
+   target, other than a claim this session already recorded and
+   verified (A4 Step 1.5 rules); a hit reports "already claimed", same
+   as A5.
 4. Run the normal A4 viability gate against the target only.
 5. Apply the **A3.5** issue-author approval gate against the target.
    If A3.5 classifies it as not startable, report that the gate
-   blocked claim and stop before A5; do not fall back to another
-   issue unless the operator explicitly asks for normal discovery in
-   the same run.
+   blocked claim and stop before A5 (no fallback, per the rule above).
 
 If any targeted readiness or viability check fails, report the exact
-failed criterion and stop without claiming. Do not fall back to another
-issue unless the operator explicitly asks for normal discovery in the
-same run.
+failed criterion and stop without claiming (no fallback, per the rule
+above).
 
 If all checks pass, the target is selected. Continue to
 [`idd-suitability.instructions.md`](idd-suitability.instructions.md)
@@ -100,21 +89,16 @@ Read the **issue-scope** value from the Project commands table in
 
 - If `issue-scope` is `roadmap`: skip A0-O and proceed to A1 as normal.
 - If `issue-scope` is `roadmap-first` (the default): proceed to A1 as
-  normal. Fall back to **A0-O** before entering the A3 decision tree when
-  the roadmap path yields **no viable, startable, unclaimed candidate** —
-  via **trigger (a)** (zero candidates reach A3.5 — A2 enumerated no open
-  execution leaves, or A3 filtered them all out as blocked), **trigger
-  (b)** (candidates reach A3.5 but none is workable — A4 Step 1 viability
-  discards every A3.5-startable candidate, or A4 Step 1.5 eliminates the
-  last one), or **trigger (c)** (A1 finds no roadmap issues). Run A0-O
-  **at most once** as this fallback per Discover pass; once spent, a
-  later A4 exhaustion reports and stops per A4 Step 1 / Step 1.5 (not an
-  abort) without re-entering A0-O. This reuses A0-O **only** as a
-  `roadmap-first` fallback; the roadmap path stays primary (unlike
-  `orphan-first`). If candidates
-  reach A3.5 but it holds them all as approval-needed, do **not** fall
-  back: the approval hold governs and a non-empty approval-needed bucket
-  is not a true zero. See
+  normal, falling back to **A0-O** before the A3 decision tree when the
+  roadmap path yields **no viable, startable, unclaimed candidate** —
+  **trigger (a)** (zero candidates reach A3.5: A2 found none, or A3
+  filtered them all), **trigger (b)** (candidates reach A3.5 but A4
+  Step 1 or Step 1.5 discards every one), or **trigger (c)** (A1 finds
+  no roadmap issues). A0-O runs **at most once** per Discover pass as
+  this fallback; once spent, a later A4 exhaustion reports and stops
+  (not an abort) without re-entering A0-O. A non-empty A3.5
+  approval-needed bucket is not a true zero and never triggers this
+  fallback. See
   [A0-O fallback triggers](../../docs/idd-design-rationale.md#a0-o-roadmap-first-fallback-triggers).
 - If `issue-scope` is `orphan-first`: proceed to A0-O.
 
@@ -124,58 +108,43 @@ Read the **orphan-first-policy** value from the Project commands table
 in `idd-overview-core.instructions.md` before any repo-wide orphan issue
 search.
 
-When A0-O runs as the `roadmap-first` fallback (not the `orphan-first`
-primary path), every exit below that would re-enter **A1** or reach the
-**A3 decision tree** is redirected by the invoking trigger — trigger (a)
-or (c) to the A3 decision tree, trigger (b) (A4 exhaustion) to the A4
-**"report and stop (not an abort)"** terminal — because A1 already ran
-and must not be re-entered (no A1 ↔ A0-O or A4 ↔ A0-O loop).
+When A0-O runs as the `roadmap-first` fallback, every exit below that
+would re-enter **A1** or reach the **A3 decision tree** is redirected by
+the invoking trigger instead — (a)/(c) to the A3 decision tree, (b) (A4
+exhaustion) to the A4 **"report and stop"** terminal — since A1 already
+ran and must not be re-entered (no A1 ↔ A0-O or A4 ↔ A0-O loop).
 
-- If `orphan-first-policy` is `public-disabled`, first determine the
-  repository visibility. If the repository is public, skip A0-O without
-  searching open issues. Under the `orphan-first` primary path, proceed to
-  A1; under the `roadmap-first` fallback, triggers (a) and (c) continue to
-  the A3 decision tree and trigger (b) reports and stops instead of
-  re-entering A1. If visibility cannot be determined, treat it as public
-  and apply the same scoped routing. For private or
-  internal repositories, continue with A0-O.
+- If `orphan-first-policy` is `public-disabled`: for a public repository
+  (or when visibility cannot be determined), skip A0-O without searching
+  open issues, using the same trigger-based redirect above. For private
+  or internal repositories, continue with A0-O.
 - For `none` and `maintainer-approved`, continue with A0-O.
 
 Search all open issues in the repository. Collect every issue that
-satisfies **all** of the following:
-
-- Does NOT contain any `<!-- idd-skill-roadmap-id: … -->` marker
-  (the issue is not itself a roadmap).
-- Does NOT contain any `<!-- idd-skill-blocked-by: … -->` marker.
-- Does NOT have the configured blocked-by-human or needs-decision
-  label.
-- Does NOT have the configured authoring label.
-- Does NOT have open dependent issues, except parent epics or
-  aggregate issues that are acceptable under A3. If a dependent-issue
-  reference cannot be resolved (issue not found or inaccessible),
-  treat as blocked (fail-safe).
-- Does NOT contain visible `Blocked by #NNN` lines where the referenced
-  issue is open (apply the same fail-safe as A3: if a reference cannot
-  be resolved, treat as blocked).
+does NOT contain an `idd-skill-roadmap-id` marker (not itself a
+roadmap) or an `idd-skill-blocked-by` marker, AND otherwise passes A3's
+own readiness bullets (no configured blocked-by-human/needs-decision
+label, no configured authoring label, no open blocking dependent issue
+via either visible `Blocked by #NNN` or hidden marker form, same
+fail-safe treatment on an unresolvable reference).
 
 Apply the configured policy before passing A0-O candidates to A3.5:
 
 - `none` (the default): apply no extra orphan-first approval gate.
-- `maintainer-approved`: apply the **Approval signals** check from
-  **A3.5** (using the Maintainer approval actor definition there) to
-  each candidate, and keep only those that satisfy at least one
-  signal. The `skipIssueAuthorApprovalGate` shortcut in A3.5 does
-  **not** bypass this orphan-first filter — orphan-first
-  `maintainer-approved` is independent of the repository-wide gate
-  enable.
+- `maintainer-approved`: apply A3.5's **Approval signals** check (using
+  its Maintainer approval actor definition) to each candidate, keeping
+  only those that satisfy at least one signal. A3.5's
+  `skipIssueAuthorApprovalGate` shortcut does **not** bypass this
+  filter — orphan-first `maintainer-approved` is independent of the
+  repository-wide gate enable.
 - `public-disabled`: for private or internal repositories, behave the
   same as `none`.
 
-If at least one orphan issue remains after the configured policy is
-applied: pass the remaining set directly to **A3.5**. Skip A1–A3.
+At least one orphan issue remains after the policy is applied: pass the
+remaining set directly to **A3.5**, skipping A1–A3.
 
-If no orphan issues remain after the configured policy is applied, the
-next step depends on which path invoked A0-O:
+No orphan issues remain: the next step depends on which path invoked
+A0-O:
 
 - **`orphan-first` primary path**: fall back to the roadmap path. Proceed
   to **A1** and continue with the normal
@@ -185,11 +154,9 @@ next step depends on which path invoked A0-O:
   guard atop A0-O.
 
 The A3 decision tree (abort / ask operator in unattended mode) is
-reached when the active discovery path(s) produce zero results: for
-`orphan-first`, both the orphan path and the roadmap fallback returned
-zero; for `roadmap-first`, both the roadmap path and the orphan fallback
-returned zero; for `roadmap`, only the roadmap path runs and A3 applies
-when it returns zero.
+reached only when every active discovery path returns zero: both paths
+for `orphan-first` and `roadmap-first` (orphan + roadmap fallback,
+either order); just the roadmap path for `roadmap`.
 
 **Claim-state annotation (optional).** When helper support is enabled,
 `discover-orphan-filter` accepts an opt-in `--with-claim-state` flag
@@ -197,17 +164,16 @@ when it returns zero.
 active-claim eligibility, mirroring `discover-roadmap-graph`'s flag of
 the same name — see `docs/idd-helper-scripts.md`. This lets an A0-O
 caller fold live claim state into its output the same way the roadmap
-path already can, instead of discovering a concurrent claim only at the
-A5 pre-check.
+path already can.
 
 ## A1 — Find the roadmap
 
-Use GH CLI or GH MCP to find the roadmap among open issues. Identify it
+Use GH CLI or GH MCP to find the roadmap among open issues, identified
 by the configured roadmap label (project field) from
 `labels.roadmapLabelName` (default: `roadmap`) or by recognizing it as
-an umbrella issue. Under `roadmap` or `orphan-first` scope, if no roadmap
-issue exists, report and abort. Under `roadmap-first` scope, this is
-**trigger (c)**: fall back to **A0-O** instead of aborting.
+an umbrella issue. Under `roadmap` or `orphan-first` scope, report and
+abort if no roadmap issue exists. Under `roadmap-first` scope, this is
+**trigger (c)**: fall back to **A0-O** instead.
 
 **Autopilot cross-roadmap mode (optional, additive).** When several
 roadmaps run in parallel and the active autopilot-suitable work may live
@@ -215,12 +181,10 @@ under **sibling** epics, do not commit to a single umbrella here. Instead,
 enumerate the open execution leaves across **all** open roadmap roots and
 rank them by autopilot-suitability (see A2), then carry the top-ranked
 candidate through the normal A3/A4/A4.5/A5 gates. This is additive: the
-single-root selection above stays the default, and orphan-first filtering
-still applies only to true orphans (cross-roadmap leaves are reached via a
-parent roadmap's task list, and per A2 do **not** carry an
-`idd-skill-roadmap-id` marker themselves — that would make them roadmap
-nodes — so orphan-first, which targets issues with no roadmap linkage,
-does not exclude them).
+single-root selection above stays the default; orphan-first filtering
+still applies only to true orphans, since cross-roadmap leaves are
+reached via a parent roadmap's task list and never carry their own
+`idd-skill-roadmap-id` marker.
 
 **Legacy roots**: `--all-roadmaps` finds roots only by label or
 `idd-skill-roadmap-id` marker. Retro-label a legacy umbrella, or
@@ -229,15 +193,8 @@ label/marker roots; invalid fails safe to none). See
 `docs/idd-helper-scripts.md`.
 
 **Note**: Repo-wide or label-based issue queries are permitted only in
-**A0-T** (the scoped `idd-skill-roadmap-id` lookup needed to resolve the
-explicit target's `idd-skill-blocked-by` markers),
-**A0-O** (when `issue-scope` is `orphan-first`, or `roadmap-first` as
-the roadmap-path fallback, to find orphan issues),
-**A1** (to locate the roadmap), **A1.5** (narrow duplicate/reuse lookup
-for one specific autonomous gap), and **A3** (narrow body-content lookup
-for `idd-skill-roadmap-id` to resolve `idd-skill-blocked-by`
-dependency markers; see A2 for details). Outside these contexts,
-repo-wide and label-based queries are prohibited.
+the scoped contexts A2 enumerates below (**A0-T**, **A0-O**, **A1**,
+**A1.5**, **A3**, **A4.5**); outside those, they are prohibited.
 
 ## A1.5 — Audit completed roadmaps
 
@@ -255,28 +212,27 @@ referenced issues. Collect only **open** issues.
 
 **Allowed traversal sources** (outbound references only):
 
-- Task-list entries in the roadmap or in any recursively discovered
-  issue
-- Issue cross-references that indicate a work dependency or task
+- Task-list entries in the roadmap or any recursively discovered issue
+- Issue cross-references indicating a work dependency or task
   relationship (e.g., `Closes #NNN`, `Refs #NNN`, explicit sub-issue
-  lines in the issue body)
+  lines)
 - GitHub sub-issue relationships (parent → child)
 
 **Excluded from traversal**:
 
-- Inbound backlinks (issues that reference the roadmap but are not
+- Inbound backlinks (issues referencing the roadmap without being
   referenced by it)
-- Incidental narrative mentions (e.g., "Similar to #NNN") without an
+- Incidental narrative mentions (e.g., "Similar to #NNN") lacking an
   explicit task, sub-issue, or dependency relationship
 
-Traverse referenced issues regardless of their open/closed state.
-Issues carrying the configured roadmap label or an
+Traverse referenced issues regardless of open/closed state. Issues
+carrying the configured roadmap label or an
 `<!-- idd-skill-roadmap-id: ... -->` marker are **roadmap nodes**; any
-other issue is an **execution leaf**. Include only open execution leaf
-issues in the candidate set; do not advance roadmap nodes to
-A3/A4/A4.5/A5. Traverse closed nodes too (so descendants cannot be
-hidden). The root roadmap from A1 is the traversal start; exclude it
-from the open roadmap-node set (it is not a discovered node).
+other issue is an **execution leaf**. Include only open execution
+leaves in the candidate set; never advance roadmap nodes to
+A3/A4/A4.5/A5, but traverse closed nodes too (so descendants aren't
+hidden). The A1 root roadmap starts the traversal and is excluded from
+the open roadmap-node set.
 
 **Permitted repo-wide queries** — only the following scoped lookups may
 touch issues outside the roadmap traversal graph:
@@ -317,36 +273,33 @@ authorizes an alternate scope for the current run:
 
 **Handling unresolvable references**:
 
-- If enumeration cannot start or continue due to an infrastructure or
-  tool failure (API error, auth failure, rate limit, or the roadmap body
-  cannot be fetched): this is an **A2 enumeration failure** — abort
-  immediately and report. No fallback.
-- If a specific outbound reference cannot be resolved because the
-  referenced issue is not found or inaccessible: record the reference as
-  unresolvable with the reason, skip that branch, and continue with the
-  rest of the traversal. This is not an enumeration failure.
+- Infrastructure or tool failure (API error, auth failure, rate limit,
+  or the roadmap body cannot be fetched): **A2 enumeration failure** —
+  abort immediately and report. No fallback.
+- A specific outbound reference not found or inaccessible: record it as
+  unresolvable with the reason, skip that branch, and continue
+  traversal. Not an enumeration failure.
 
 **Helper read timing.** The `discover-roadmap-graph` helper (see
 [IDD helper script evaluation](../../docs/idd-helper-scripts.md)) is
-long-running on large graphs — it emits the whole graph in one final stdout
-write after many API calls. Redirect stdout to a file and wait for process
-exit before parsing; a zero-byte or mid-run read is **"still running," not** an
-A2 enumeration failure (only the genuine infrastructure/tool failures above
-abort).
+long-running on large graphs, emitting the whole graph in one final
+stdout write. Redirect stdout to a file and wait for process exit before
+parsing — a zero-byte or mid-run read is **"still running," not** an A2
+enumeration failure.
 
-Report every A2 execution candidate with its provenance path (e.g.,
-`#222 → #228 → #257`), open roadmap nodes encountered, and any
-unresolvable references before passing to A3.
+Report every A2 execution candidate with its provenance path (e.g.
+`#222 → #228 → #257`), any open roadmap nodes, and unresolvable
+references before passing to A3.
 
 **Autopilot cross-roadmap union (optional, additive).** When A1 elected
-the cross-roadmap mode, enumerate from **each** open roadmap root and take
-the **union** of open execution leaves. De-duplicate a leaf reached from
-several roots (record every source root as provenance; never double-count
-it). Rank the union by autopilot-suitability **descending**, tie-broken by
-issue number **ascending**; treat a missing or out-of-range score as the
-configured floor, but never rank an unscored leaf above genuinely scored
-work at the same effective value. The `discover-roadmap-graph` helper's
-`--all-roadmaps` mode produces exactly this ranked union (see
+the cross-roadmap mode, enumerate from **each** open roadmap root and
+take the **union** of open execution leaves, de-duplicating a leaf
+reached from several roots (record every source root as provenance;
+never double-count). Rank by autopilot-suitability **descending**,
+tie-broken by issue number **ascending**, using the same
+scored-vs-unscored floor tie-breaker as A4 Step 2. The
+`discover-roadmap-graph` helper's `--all-roadmaps` mode produces exactly
+this ranked union (see
 [IDD helper script evaluation](../../docs/idd-helper-scripts.md)). The
 score is an advisory ranking hint only — A3/A4/A4.5/A5 still run on the
 selected candidate.
@@ -354,10 +307,10 @@ selected candidate.
 ## A3 — Filter to ready-to-start
 
 Under concurrency, check a candidate's **active-claim eligibility** (the
-non-stale claim filter below) **first**, before investing in its viability
-or scope analysis: a parallel agent may already hold the issue, and scope
-work that displaces the claim check produces redundant PRs. The claim check
-is cheap — run it first per candidate.
+non-stale claim filter below) **first**, before investing in its
+viability or scope analysis: a parallel agent may already hold the
+issue, and scope work that displaces the claim check produces redundant
+PRs. The claim check is cheap — run it first per candidate.
 
 From A2, keep only issues that satisfy **all** of the following:
 
@@ -365,38 +318,31 @@ From A2, keep only issues that satisfy **all** of the following:
 - No configured authoring label
 - No open dependent issues (parent epics / aggregate issues that are
   still open are acceptable)
-- All dependency issues are closed or otherwise completed. Check both
-  forms of dependency: (a) visible `Blocked by #NNN` lines in the issue
-  body — if any referenced issue is open, treat as blocked; if a
-  reference cannot be resolved (issue not found or inaccessible), treat
-  as blocked (fail-safe); (b) hidden
-  `<!-- idd-skill-blocked-by: {roadmap-id} -->` markers
-  — for each `{roadmap-id}`, find the issue whose body contains
-  `<!-- idd-skill-roadmap-id: {roadmap-id} -->`. If that
-  issue is open, treat as blocked. If no issue matches the roadmap-id,
-  treat as blocked (fail-safe — an unmatched marker indicates a
-  migration integrity problem such as a typo, deleted issue, or
-  incomplete migration). If multiple issues match, treat as blocked if
-  any is open.
+- All dependency issues are closed or otherwise completed. Two forms:
+  (a) visible `Blocked by #NNN` lines — an open or unresolvable
+  reference is treated as blocked (fail-safe); (b) hidden
+  `<!-- idd-skill-blocked-by: {roadmap-id} -->` markers — find the issue
+  whose body contains a matching
+  `<!-- idd-skill-roadmap-id: {roadmap-id} -->`; treat as blocked if
+  that issue is open, if no issue matches (fail-safe — a migration
+  integrity problem such as a typo, deleted issue, or incomplete
+  migration), or if any matching issue is open.
 - No external human coordination required to start; otherwise keep
   scanning
 
-**When A2 finds zero candidates, or when zero issues survive A3
-filtering**, apply the following decision tree — do not silently expand
-scope:
+**When A2 finds zero candidates, or zero issues survive A3 filtering**,
+apply this decision tree — do not silently expand scope:
 
-1. **A2 enumeration failure** (infrastructure or tool issue — see A2 for
-   the definition): abort immediately and report. No fallback.
-   (Unresolvable individual references are already pruned in A2 and do
-   not trigger this step.)
+1. **A2 enumeration failure** (infrastructure or tool issue — see A2):
+   abort immediately and report. No fallback. (Unresolvable individual
+   references are already pruned in A2 and do not trigger this step.)
 
-2. **A2 empty — only open roadmap nodes remain**: report each open
-   roadmap node and its provenance path; A1.5 audit is needed.
-   Do not treat them as candidates.
-   Proceed to step 5.
+2. **A2 empty — only open roadmap nodes remain**: report each node and
+   its provenance path (A1.5 audit needed); do not treat them as
+   candidates. Proceed to step 5.
 
-3. **A2 empty — no candidates** (no roadmap nodes found either): report
-   zero open candidates and any skipped references. Proceed to step 5.
+3. **A2 empty — no candidates** (no roadmap nodes either): report zero
+   open candidates and any skipped references, then proceed to step 5.
 
 4. **A3 filtered to zero** (A2 found execution candidates but all were
    filtered out): report each candidate and the filter criterion it
@@ -408,13 +354,12 @@ scope:
 5. **Request explicit opt-in** — ask the operator: "No roadmap-scoped
    issues are available. Do you want to expand the search scope for this
    run? If so, specify the alternate scope." An agent is **unattended**
-   if it cannot wait for and receive a same-run operator reply. Then:
+   if it cannot wait for and receive a same-run operator reply.
 
-   - **Unattended mode**: abort and report. Do not infer opt-in from
-     prior or standing instructions.
-   - **Operator declines or does not respond**: abort and report.
+   - **Unattended mode, or the operator declines/does not respond**:
+     abort and report.
    - **Operator grants opt-in**: use the operator-specified scope for
-     this run only. Prior or standing instructions do not count as
+     this run only — prior or standing instructions never count as
      opt-in.
 
 ## A3.5 — Apply issue-author approval gate
@@ -428,14 +373,13 @@ every ready candidate startable. Otherwise the gate is enabled; use
 `maintainerApprovalActorPolicy` from `.github/idd/config.json` when
 present, defaulting to `owners-and-maintainers-only`.
 
-**Maintainer approval actor**: a human repository actor allowed by
-the current `maintainerApprovalActorPolicy`. `owners-and-maintainers-only`
-(default) admits repository owners plus collaborators with Maintain
-or Admin permission; `all-write-permission-actors` adds Write
-collaborators. Do not reuse the trusted marker actor set, and do not
-count automation or the current agent unless repository policy
-explicitly grants that actor maintainer approval authority. Verify
-collaborator permission with the collaborator permission API.
+**Maintainer approval actor**: a human repository actor allowed by the
+current `maintainerApprovalActorPolicy` — `owners-and-maintainers-only`
+(default) admits owners plus Maintain/Admin collaborators;
+`all-write-permission-actors` adds Write collaborators. Never reuse the
+trusted marker actor set or count automation/the current agent unless
+policy explicitly grants that authority. Verify permission with the
+collaborator permission API.
 
 A bare organization `MEMBER` association, by itself, is not approval;
 neither is issue body text, a generated plan, nor operator attention.
@@ -445,12 +389,11 @@ neither is issue body text, a generated plan, nor operator attention.
 - the issue author is self-authorized under the current
   maintainer-approval actor policy;
 - the configured ready label from `approvalSignals.readyLabelName`
-  (default: `idd:ready`) is present when repository policy reserves
-  that label to maintainer approval actors. When
-  `approvalSignals.labelFreshnessMode` is `event-freshness`, the
-  latest matching `labeled` timeline event must be newer than the
-  latest issue title/body edit and any generated-plan update;
-  `presence-only` (default) accepts label presence alone;
+  (default: `idd:ready`), present when policy reserves it to
+  maintainer approval actors. Under `event-freshness`
+  (`approvalSignals.labelFreshnessMode`), its latest `labeled` event
+  must postdate the latest issue title/body edit and any generated-plan
+  update; `presence-only` (default) accepts label presence alone;
 - a visible approval comment from a maintainer approval actor whose
   trimmed body equals `IDD ready` or contains `IDD ready` as a
   standalone line, newer than the latest issue title/body edit and
@@ -459,17 +402,15 @@ neither is issue body text, a generated plan, nor operator attention.
 If freshness cannot be determined for a label or comment signal,
 require a fresh approval comment or a re-applied ready label.
 
-**Fail-closed**: fail closed when approval state or permission
-resolution is unavailable or ambiguous unless the repository
-explicitly opted out via `skipIssueAuthorApprovalGate`.
+**Fail-closed**: when approval state or permission resolution is
+unavailable or ambiguous, fail closed unless the repository explicitly
+opted out via `skipIssueAuthorApprovalGate`.
 
 **Candidate routing**: candidates that fail the gate are not
-ready-to-start. Keep them in an **approval-needed fallback bucket**
-ordered by ascending issue number. Continue to A4 with only the
-startable candidates. Preserve any earlier A0-O filtering from
-`orphan-first-policy`; this gate never widens previously excluded
-orphan candidates back into scope. Keep fallback issues visible; do
-not drop them.
+ready-to-start — keep them visible in an **approval-needed fallback
+bucket** ordered by ascending issue number, and continue to A4 with
+only the startable candidates. This gate never widens previously
+excluded A0-O `orphan-first-policy` candidates back into scope.
 
 If no startable candidates remain but the approval-needed fallback
 bucket is non-empty:
@@ -501,45 +442,37 @@ criteria. Fail any one → discard the issue.
 
 If **no issue** survives the gate:
 
-- if the approval-needed fallback bucket from A3.5 is non-empty, report
-  that only approval-needed issues remain and stop without claim in
-  unattended mode. In attended mode, ask the operator whether to obtain
-  approval or opt out explicitly;
-- otherwise, under **`roadmap-first`** scope in the roadmap-traversal flow
-  (A2→A3→A4; not the A0-T gate, which stops a failed target with no
-  fallback), route to the **A0-O** roadmap-first fallback (A0 trigger (b))
-  if it has not run this pass. Once spent, or under `issue-scope: roadmap`
-  (A0-O skipped), report the discarded issues with the criterion each
-  failed, then **stop** — do not post `unclaimed-by` because no claim was
-  made. This is not an abort.
+- if the approval-needed fallback bucket from A3.5 is non-empty, apply
+  A3.5's own approval-needed routing (above) instead of falling back;
+- otherwise, apply the **exhaustion-exit routing** defined here: under
+  **`roadmap-first`** scope in the roadmap-traversal flow (A2→A3→A4; not
+  the A0-T gate, which stops a failed target with no fallback), route to
+  the **A0-O** roadmap-first fallback (A0 trigger (b)) if it has not run
+  this pass. Once spent, or under `issue-scope: roadmap` (A0-O skipped),
+  report the discarded issues with the criterion each failed, then
+  **stop** — not an abort. Do not post `unclaimed-by` because no claim
+  was made.
 
 ### Step 1.5 — Active-claim pre-scan
 
-Before selecting from the surviving viable issues, eliminate
-candidates that already carry a concurrent active non-stale claim,
-in ascending issue-number order:
+Before selecting from the surviving viable issues, eliminate candidates
+carrying a concurrent active non-stale claim, in ascending issue-number
+order:
 
 - Scan the **top N** survivors (ordered by ascending issue number),
   where `N` is `.github/idd/config.json`
   `discover.activeClaimPreScanBatchSize` (distributed default: `10`).
 - For each candidate, fetch the issue and parse comments per the
-  shared claim-state rules in `idd-claim.instructions.md` — including
+  shared claim-state rules in `idd-claim.instructions.md`, including
   forced-handoff and legacy markers, not just
-  `claimed-by`/`unclaimed-by`. No current bulk helper
-  (`discover-roadmap-graph.mjs --with-claim-state` /
-  `discover-orphan-filter.mjs --with-claim-state`) is
-  forced-handoff-aware, so a multi-candidate
-  survey here must either loop the single-issue
-  `resume-claim-routing.mjs --fresh-claim-gate` resolver per candidate
-  or apply `idd-claim.instructions.md`'s full parsing rules manually. A
-  candidate is **ineligible** when parsing yields an **active claim**
-  whose latest valid `claimed-by` comment (matching the documented
-  format, authored by a trusted marker actor) has GitHub `created_at`
-  newer than the `claim-stale-age` policy default
-  (`docs/policy-constants.md`; distributed default: `24 h`).
-  Otherwise (no active claim, the active claim is already stale, or
-  no comment satisfies the trusted-marker + format requirements) the
-  candidate **remains eligible**.
+  `claimed-by`/`unclaimed-by`. No current bulk helper's
+  `--with-claim-state` flag is forced-handoff-aware, so loop the
+  single-issue `resume-claim-routing.mjs --fresh-claim-gate` resolver
+  per candidate, or apply the full parsing rules manually. A candidate
+  is **ineligible** when parsing yields an active claim whose latest
+  valid `claimed-by` comment has GitHub `created_at` newer than
+  `claim-stale-age` (`docs/policy-constants.md`; distributed default:
+  `24 h`); otherwise it **remains eligible**.
 
 After scanning the current batch:
 
@@ -553,52 +486,45 @@ After scanning the current batch:
   below).
 
 When the entire viable candidate set is exhausted (the last bullet
-above), resolve the exit by scope: if the A3.5 approval-needed bucket is
-non-empty, report both the claimed-survivor exhaustion and the
-approval-needed hold, then stop (the approval hold takes precedence — not
-a true zero); otherwise, under `roadmap-first` scope route to the A0-O
-roadmap-first fallback (A0 trigger (b)) if it has not run this pass; under
-`issue-scope: roadmap`, or once that fallback is spent, report that all
-viable issues are currently claimed and stop (not an abort). Do not post
-`unclaimed-by` (no claim was made); retry later.
+above): if the A3.5 approval-needed bucket is non-empty, apply A3.5's
+own approval-needed routing, also reporting the claimed-survivor
+exhaustion (the approval hold takes precedence — not a true zero);
+otherwise apply Step 1's **exhaustion-exit routing** above, reporting
+that all viable issues are currently claimed in place of a discard
+criterion. Retry later.
 
 See [Discover — A4 Step 1.5 Rationale](../../docs/idd-design-rationale.md#a4-step-15--rationale-active-claim-pre-scan)
 for why this pre-scan exists.
 
 ### Step 2 — Select
 
-Among the surviving viable and unclaimed issues (after Step 1.5), pick the
-**highest authored autopilot-suitability score** (the
+Among the surviving viable and unclaimed issues (after Step 1.5), pick
+the **highest authored autopilot-suitability score** (the
 `<!-- idd-skill-autopilot-suitability: N -->` footer, or the
 `discover-roadmap-graph` node's `autopilotSuitability`), tie-broken by
 **lowest issue number**. In autopilot runs, skip scores below
-`autopilotSuitability.floor` (default `3`) as human-oriented; a missing or
-out-of-range score is treated as no score — ranked at the floor and never
-skipped, so the unscored backlog flows as before, subject to the
-scored-vs-unscored tie-breaker below when it ties against a
-genuinely-scored candidate at the same value. Advisory only: the pick
-still passes A4.5/A5 unchanged and the score never bypasses a gate. When
-`autopilotSuitability.enabled` is `false`, ignore the score entirely —
-neither skip below-floor candidates nor reorder by score — and select by
-**lowest issue number**.
+`autopilotSuitability.floor` (default `3`) as human-oriented; a missing
+or out-of-range score defaults to the floor and is never skipped
+(subject to the scored-vs-unscored tie-breaker below). Advisory only —
+the pick still passes A4.5/A5 unchanged and never bypasses a gate. When
+`autopilotSuitability.enabled` is `false`, ignore the score entirely and
+select by **lowest issue number**.
 
-**Scored-vs-unscored floor tie-breaker.** When the highest-score tie band
-pairs an unscored candidate (missing or out-of-range score, defaulted to
-the floor as defined above) against a candidate genuinely scored exactly
-at the floor value, the genuinely-scored candidate wins the tie: an explicit
-author judgment outranks a default fallback. Apply this rule first,
-before the concurrent-selection desync, effort-hint, and
-lowest-issue-number tie-breakers below, which still apply in unchanged
-relative order to any tie that remains afterward.
+**Scored-vs-unscored floor tie-breaker.** When the highest-score tie
+band pairs an unscored candidate (missing or out-of-range score,
+defaulted to the floor as defined above) against a candidate genuinely
+scored exactly at the floor value, the genuinely-scored candidate wins
+the tie: an explicit author judgment outranks a default fallback. See
+[rationale](../../docs/idd-design-rationale.md#a4--scored-vs-unscored-floor-tie-breaker-what-still-ties-afterward)
+for how the remaining tie-breakers below apply after this rule.
 
 **Concurrent-selection desync (opt-in, off by default).** When
-`.github/idd/config.json` `discover.selectionDesync` is `session-offset`
-(default `off`) and the chosen highest-score tie band has more than one
-eligible candidate, pick the band entry at index
-`selectDesyncedIndex(session-token, band-size)` instead of index 0 (a
-pure, deterministic `hash(session-token) mod band-size`, over the band
-ordered by ascending issue number, `session-token` being this session's
-`{agent-id}`). Compute it with the CLI instead of hand-tracing
+`discover.selectionDesync` is `session-offset` (default `off`) and the
+highest-score tie band has more than one eligible candidate, pick the
+band entry at index `selectDesyncedIndex(session-token, band-size)`
+instead of index 0 — a pure `hash(session-token) mod band-size` over
+the band ordered by ascending issue number, `session-token` being this
+session's `{agent-id}`. Compute it with the CLI instead of hand-tracing
 `scripts/policy-helpers.mjs`:
 
 ```sh
@@ -610,35 +536,34 @@ node scripts/select-desynced-index.mjs --token <session-token> --band-size <band
 ```
 
 Resolve `<profile-selected-select-desynced-index-command>` from
-`docs/idd-helper-scripts.md`; do not hardcode `node scripts/...` for
-non-vendored profiles. The formula above remains the canonical spec and
-fallback when the helper is unavailable. It reorders **only within** a
-single score tie band, never across score bands, and never bypasses
-A4.5/A5. With `off`, a single-entry band, or no applicable score, keep
-the deterministic **lowest issue number** pick. See
+`docs/idd-helper-scripts.md` (do not hardcode `node scripts/...` for
+non-vendored profiles); the formula above is the canonical fallback
+when the helper is unavailable. It reorders **only within** a single
+score tie band, never across bands, and never bypasses A4.5/A5. With
+`off`, a single-entry band, or no applicable score, keep the
+deterministic **lowest issue number** pick. See
 [rationale](../../docs/idd-design-rationale.md#a4-step-2--rationale-concurrent-selection-desync).
 
-**Author-recorded effort hint (soft tie-breaker).** When candidates remain
-tied after the score and optional desync rules, prefer the **lower-effort**
-candidate **before** the lowest-issue-number tie-break. Read the authored
-`<!-- idd-skill-effort: S|M|L -->` footer (or the `discover-roadmap-graph`
-node's `effort`): order `S` < `M` < `L`, and a missing or invalid hint is
-treated as the **neutral middle** (as-if `M`), so a band with no effort hints
-keeps the lowest-issue-number order exactly as before. This is a **soft**
-rule: it reorders **only within** a single score tie band, never skips,
-gates, or crosses a score band; the `discover-roadmap-graph` union already
+**Author-recorded effort hint (soft tie-breaker).** When candidates
+remain tied after the score and optional desync rules, prefer the
+**lower-effort** candidate before the lowest-issue-number tie-break.
+Read the authored `<!-- idd-skill-effort: S|M|L -->` footer (or the
+`discover-roadmap-graph` node's `effort`): `S` < `M` < `L`, with a
+missing or invalid hint as the **neutral middle** (`M`). **Soft**
+rule: reorders only within a single score tie band, never skips,
+gates, or crosses a band; the `discover-roadmap-graph` union already
 emits this order.
 
-**High-contention shared-file overlap (advisory).** Concurrent autopilot
-sessions tend to edit the same F-phase bundle instruction files
-(`bundle-review` / `bundle-merge`) and `audit/sync-manifest.json`. As a
-**soft** tie-breaker layered after the score / desync / effort /
-lowest-number rules, prefer a candidate whose `## Candidate files` do
-**not** overlap an actively-claimed or open-PR issue on one of those files;
-the optional `discover-shared-file-overlap` helper (see
-[IDD helper scripts](../../docs/idd-helper-scripts.md)) reports each candidate's
-`overlapFlag` and a `recommendedOrder`. This is **never a hard gate** —
-overlap never overrides the score or crosses a score band. See the
+**High-contention shared-file overlap (advisory).** Concurrent
+autopilot sessions tend to edit the same F-phase bundle instruction
+files (`bundle-review` / `bundle-merge`) and `audit/sync-manifest.json`.
+As a **soft** tie-breaker after score / desync / effort / lowest-number,
+prefer a candidate whose `## Candidate files` do **not** overlap an
+actively-claimed or open-PR issue on one of those files; the optional
+`discover-shared-file-overlap` helper (see
+[IDD helper scripts](../../docs/idd-helper-scripts.md)) reports each
+candidate's `overlapFlag` and `recommendedOrder`. **Never a hard gate**
+— overlap never overrides the score or crosses a band. See the
 [high-contention shared-file convention](../../docs/policy-constants.md#high-contention-shared-files).
 
 After picking, proceed to **A4.5** (`idd-suitability.instructions.md`).
@@ -655,25 +580,25 @@ Two hidden HTML comment markers are used in issue bodies to support the
 discover phase:
 
 - **Roadmap identity** (`idd-skill-roadmap-id`): placed in the roadmap
-  issue body. A3 uses this marker to resolve `blocked-by` dependency
-  lookups. A1 identifies the roadmap by its configured roadmap label
-  or umbrella structure — not by this marker.
+  issue body; A3 uses it to resolve `blocked-by` dependency lookups. A1
+  identifies the roadmap by its configured label or umbrella structure,
+  not by this marker.
 - **Sequential dependency** (`idd-skill-blocked-by`): placed in an
   issue body to express a hard dependency — this issue **cannot start
   until** the roadmap with the matching `roadmap-id` is closed.
 
 **Do not use `idd-skill-blocked-by` to group sub-tasks under an active
 roadmap.** Sub-tasks that should be worked on while the roadmap is open
-belong in the roadmap's task list as `- [ ] #NNN` entries. The
-`blocked-by` marker is reserved for issues that must wait for a
-separate, prior roadmap to close before they can start (cross-phase
-sequential dependency). Using it for grouping causes A3 to block every
-sub-task for the entire lifetime of the roadmap.
+belong in the roadmap's task list as `- [ ] #NNN` entries; `blocked-by`
+is reserved for issues that must wait for a separate, prior roadmap to
+close (cross-phase sequential dependency) — see the
+[A3 diagnostic](../../docs/idd-design-rationale.md#a3---diagnostic-all-candidates-blocked-by-an-open-roadmap)
+for the resulting deadlock pattern.
 
 ## Scope invariant (summary)
 
 Do not widen issue-selection scope beyond the roadmap traversal except
 for the explicit query allowlist already defined in A0-T, A0-O, A1,
-A1.5, A3, and A4.5, or for a same-run operator opt-in after a
-zero-result report. A single explicit target authorizes only that issue;
-prior or standing instructions do not count as opt-in.
+A1.5, A3, and A4.5, or for a same-run operator opt-in per A3 step 5
+(never inferred from prior or standing instructions). A single explicit
+target authorizes only that issue.
