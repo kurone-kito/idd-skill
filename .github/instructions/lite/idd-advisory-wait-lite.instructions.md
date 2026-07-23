@@ -96,11 +96,17 @@ compute it by hand from raw timestamps. Allowed `outcome` values:
 `WAIT`. `HOLD` is a caller-derived routing state, never an emitted
 enum value.
 
-Resolve windows from `.github/idd/config.json` `advisoryWait.*` when
-the helper output omits them; absent keys keep the distributed
-defaults: `requestCap` 30, `pendingWindowMinutes` 30,
-`settledWindowMinutes` 10, `pollIntervalMinutes` 2,
-`capExhaustedRoute` `phase-specific`.
+The helper already resolves `advisoryWait.*` from
+`.github/idd/config.json` and emits the final values directly in
+`requestCap`, `pendingWindowMinutes`, `settledWindowMinutes`,
+`pollIntervalMinutes`, and `capExhaustedRoute` — never read that config
+file yourself. A missing one of these fields is not a "config absent"
+case to resolve by hand; it is a malformed helper response (see
+Required fields above), so stop and ask instead. For context only, the
+distributed defaults the helper falls back to when the repository sets
+no `advisoryWait.*` config are: `requestCap` 30,
+`pendingWindowMinutes` 30, `settledWindowMinutes` 10,
+`pollIntervalMinutes` 2, `capExhaustedRoute` `phase-specific`.
 
 ## E14 outcome → action
 
