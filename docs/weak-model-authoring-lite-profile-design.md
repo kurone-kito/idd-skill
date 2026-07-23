@@ -140,6 +140,16 @@ design does not conflate them.
   linter-checked schema, the claim-state precondition, or the
   Publication/Approval boundary. Any disagreement between a lite
   profile and the canonical contract is a defect in the lite profile.
+- **Non-goal: operator-language translation.** A later field PoC on
+  this same tier (qwen3.5, ministral-3-3b) tested an in-loop
+  English-input/Japanese-output translation wrapper around issue
+  authoring specifically. IDD's operator-facing surfaces stay
+  English-only by design across every model tier, not just this one —
+  the gap is a project-wide scope boundary, not a weak-tier hardening
+  item this design (or #1419's) is meant to close. See
+  [#1557](https://github.com/kurone-kito/idd-skill/issues/1557) for
+  the retained field evidence; no action pending an actual
+  localization surface being proposed.
 
 ## Content principles
 
