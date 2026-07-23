@@ -112,9 +112,8 @@ no `advisoryWait.*` config are: `requestCap` 30,
 | `SATISFIED` | proceed to CI wait |
 | `REQUEST_NEEDED` | remove the stale pending request if one exists, request Copilot, post the request marker, then poll |
 | `RECOVERY_NEEDED` | post the recovery marker (do not request another review), then poll |
-| `CAP_EXHAUSTED` | `phase-specific` (default): proceed to CI wait. `hold`: stop and ask |
+| `CAP_EXHAUSTED` | `phase-specific` (default): proceed to CI wait. `hold`: stop and ask (`HOLD`'s only route; see above) |
 | `WAIT` | keep polling |
-| `HOLD` | stop and ask |
 <!-- dprint-ignore-end -->
 
 `capExhaustedRoute: phase-specific` is what lets E14 continue past
