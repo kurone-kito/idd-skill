@@ -67,48 +67,35 @@ Additionally, fetch the **current CI state** for `{head-SHA}`:
 treated-as-passed) CI run as `{latest-ci-completed-at}`, or `none` if no
 CI pass exists yet for this HEAD.
 
-**Non-Copilot advisory safety net.** The advisory-wait protocol
-(`idd-advisory-wait.instructions.md`) gives a settle/wait window to
-**Copilot only**. In a repository that configures non-Copilot
-`advisoryBotLogins` (for example CodeRabbit or a Codex connector), this
-E1 activity-universe snapshot plus the `review-watermark` delta is the
-**load-bearing safety net** for their late-arriving findings: a finding
-that lands after CI goes green is caught here and by the F2/F3 currency
-re-check, not by the Copilot advisory-wait window. This is why Step 1
-fetches the entire activity universe and Step 2 records a watermark over
-all of it.
+**Non-Copilot advisory safety net.** This E1 snapshot + the Step 2
+watermark are the load-bearing safety net for non-Copilot advisory
+bots, which get no settle/wait window from the advisory-wait protocol
+— see `idd-advisory-wait.instructions.md`'s Scope section. This is why
+Step 1 fetches the entire activity universe and Step 2 watermarks all
+of it.
 
 **Step 2 — Record the watermark.** Using the `{head-SHA}` stored at the
 start of Step 1, compute `{max-activity-updatedAt}` as the highest
 `updatedAt` server timestamp across the **entire snapshot** (not just
-the items that will appear in ReviewItems_snapshot). Write `none` if
-the snapshot is
-empty. Compute `{total-item-count}` as the total number of items in the
-snapshot (0 if empty). Persist all six values immediately by posting a
-PR comment with this format (when helper runtime is enabled, prefer the
-**one-command** profile-selected post-idd-marker watermark path —
-`--type watermark --from-pr <pr-number> --expected-head-sha {head-SHA}
---agent-id <id> --claim-id <id> --apply`
-— which derives `{max-activity-updatedAt}` / `{total-item-count}` /
-`{latest-ci-completed-at}` (and, subject to the pin below, `{head-SHA}`) from
-a fresh `review-activity-snapshot` of the PR and POSTs the marker in one
-step, so a hand-typed head SHA cannot mis-route the F2 review-currency check
-(forward `--trusted-marker-logins` here too when you pass it to the
-snapshot). **Always pass `--expected-head-sha` with the exact `{head-SHA}`
-value stored at the start of Step 1.** The helper compares it against the
-fresh snapshot's live HEAD and fails closed — posting nothing — when they
-differ, instead of silently posting a watermark keyed to a HEAD newer than
-the one Step 1 actually snapshotted; this is what keeps the one-command path
-honoring the single-stored-value invariant from Step 1 above. On that
-failure, do not retry Step 2 as-is — return to Step 1 and re-snapshot the
-moved branch. The manual six-field form — `--type watermark --target pr
-<pr-number> <watermark-fields> --apply`, passing the same six values shown
-below as `--agent-id` / `--claim-id` / `--head-sha` / `--max-activity-at` /
-`--total-item-count` / `--ci-completed-at` — stays the fallback (it already
-posts the exact Step-1 stored `{head-SHA}` value since the agent supplies it
-directly), as do `emit-marker --type review-watermark` for emit-only
-rendering and the manual HTTP `POST` below; see
-`docs/idd-helper-scripts.md`):
+the items in ReviewItems_snapshot; `none` if empty), and
+`{total-item-count}` as the snapshot's total item count (0 if empty).
+Persist all six values by posting a PR comment with this format (when
+helper runtime is enabled, prefer the **one-command** profile-selected
+post-idd-marker watermark path — `--type watermark --from-pr <pr-number>
+--expected-head-sha {head-SHA} --agent-id <id> --claim-id <id>
+--apply` — which derives the other fields from a fresh
+`review-activity-snapshot` and posts in one step; forward
+`--trusted-marker-logins` too). **Always pass `--expected-head-sha`
+with the exact `{head-SHA}` from Step 1** — the helper fails closed
+(posts nothing) if it disagrees with the fresh snapshot's live HEAD,
+rather than silently keying the watermark to a moved HEAD; on that
+failure, return to Step 1 and re-snapshot, do not retry Step 2 as-is.
+The manual six-field form (`--type watermark --target pr <pr-number>
+<watermark-fields> --apply`, same six `--agent-id`/`--claim-id`/
+`--head-sha`/`--max-activity-at`/`--total-item-count`/
+`--ci-completed-at` values) stays the fallback, as do `emit-marker
+--type review-watermark` (emit-only) and the manual HTTP `POST` below;
+see `docs/idd-helper-scripts.md`):
 
 ```markdown
 <!-- review-watermark: {agent-id} {claim-id} {head-SHA} {max-activity-updatedAt|none} {total-item-count} {latest-ci-completed-at|none} -->
@@ -122,19 +109,15 @@ write the visible note in that language (default to English if
 ambiguous). Example Japanese note:
 `_{agent-id}: レビュートリアージのスナップショット — IDD 自動化マーカー。編集しないでください。_`
 
-**Nothing appended after the note.** As with the `claimed-by` /
-`unclaimed-by` markers in `idd-claim.instructions.md`, a `review-watermark`
-(and `review-baseline`, below) comment body must be exactly the HTML
-comment token plus the single italic note, with nothing appended — any
-deviation (content appended after the note, content appended directly
-after the token with no note, a note that does not satisfy the required
-note grammar, or any other departure) fails the parser's whole-body anchor
-and the comment is not recognized as a live watermark. A body that starts
-with a structurally valid token but deviates from the exact shape in any
-of those ways is a detectable malformed marker
-(`detectMalformedOperationalMarker` in `marker-helpers.mts`); see
-`idd-claim.instructions.md` for the full rule, including the related
-disposition-marker (`**Accepted**` / `**Rejected**`) no-code-fence note.
+**Nothing appended after the note.** As with `claimed-by`/`unclaimed-by`
+in `idd-claim.instructions.md`, a `review-watermark` (and
+`review-baseline`, below) body must be exactly the HTML token plus the
+single italic note — any deviation fails the parser's whole-body anchor
+and the comment isn't recognized as a live watermark, though it is
+still detectable as a malformed marker
+(`detectMalformedOperationalMarker` in `marker-helpers.mts`). See
+`idd-claim.instructions.md` for the full rule and the related
+disposition-marker no-code-fence note.
 
 - **`{head-SHA}`**: the value read at the very start of Step 1, before
   any fetching. F2 uses this to detect pushes that occurred between E1's
@@ -149,52 +132,40 @@ disposition-marker (`**Accepted**` / `**Rejected**`) no-code-fence note.
 
 Use server-reported timestamps, not the local wall clock.
 
-**CI-completion precondition.** Post the `review-watermark` only **after**
-every CI run that will count toward the merge gate has completed — including
-any opt-in / label-triggered job enabled at the quiescent pre-merge point.
-The same precondition covers an expected advisory-bot re-review: when the
-primary advisory bot already reviewed an earlier head of this PR, an
-automatic same-head re-review is expected — check the AW1 fast-path signal in
-`idd-advisory-wait.instructions.md` (`LAST_COPILOT_COMMIT == PR_HEAD_SHA`) and
-post the watermark after that review lands, bounded by the advisory-wait
-windows when it never does. Operationally: enable the late job, await its
-completion, **then** take the Step 1 snapshot and post the watermark. A
-merge-gate-counting run completing _after_ the watermark advances HEAD's
-latest CI time and forces a wasted E1↔F2 round-trip (F2's `ci-pass-drift`
-return-to-E1) even though no new review activity occurred.
+**CI-completion precondition.** Post the `review-watermark` only
+**after** every CI run counting toward the merge gate has completed —
+including any opt-in/label-triggered job enabled at the quiescent
+pre-merge point. Same precondition for an expected advisory-bot
+re-review: when the primary bot already reviewed an earlier head,
+check the AW1 fast-path signal in `idd-advisory-wait.instructions.md`
+(`LAST_COPILOT_COMMIT == PR_HEAD_SHA`) and post after that review
+lands, bounded by the advisory-wait windows when it never does.
+Operationally: enable the late job, await completion, **then** take
+the Step 1 snapshot and post the watermark — a merge-gate run
+completing _after_ the watermark forces a wasted E1↔F2 round-trip
+(F2's `ci-pass-drift`) with no new review activity.
 
-Note: the comment body begins with an HTML comment token. Some GitHub
-client tools (e.g., `gh issue comment`, `gh api -f body=`) silently
-reject bodies that consist entirely of HTML comments; this format
-includes visible text so that is not an issue, but the HTTP `POST` path
-is still recommended for reliability (`curl` with
-`-H "Content-Type: application/json"` and
-`-d '{"body":"<!-- ... -->\n\n_note_"}'`). For `gh api` specifically
-(not `curl`), `-f` also treats a leading `@` as a literal character —
-only `-F` reads `@file` contents. The post-idd-marker helper
-referenced above performs exactly this JSON `POST` under `--apply`.
+Note: some GitHub client tools (e.g., `gh issue comment`, `gh api -f
+body=`) silently reject HTML-comment-only bodies; this format's
+visible text avoids that, but the HTTP `POST` path is still
+recommended for reliability. `gh api`'s `-f` also treats a leading `@`
+as literal — only `-F` reads `@file` contents. The post-idd-marker
+helper above performs this JSON `POST` under `--apply`.
 
-On resume or restart, read the latest
-`<!-- review-watermark: {agent-id} {claim-id} … -->` comment whose
-embedded `{claim-id}` matches the current active claim and whose GitHub
-author is a trusted marker actor to restore all six values. Ignore
-watermark comments from any other claim or from untrusted authors.
-Legacy watermarks without `{claim-id}` are not resumable across a
-restart or takeover; if no trusted same-claim watermark exists, rerun E1
-from scratch.
-After forced handoff, all prior-claim watermarks are foreign restore
-markers. Do not delete, hide, minimize, or otherwise unmark them on an
-open PR to "clear" state; ignore them and rerun E1 under the successor
-claim instead.
+On resume or restart, read the latest same-claim, trusted-author
+`<!-- review-watermark: {agent-id} {claim-id} … -->` comment to
+restore all six values; ignore watermarks from any other claim or
+untrusted author. Legacy watermarks without `{claim-id}` aren't
+resumable — rerun E1 from scratch if no trusted same-claim watermark
+exists. After forced handoff, prior-claim watermarks are foreign
+restore markers: never delete/hide/minimize them to "clear" state;
+ignore them and rerun E1 under the successor claim.
 
 **Hide superseded same-claim watermarks.** After the new watermark is
-verified to exist on GitHub, minimize every strictly older trusted
-**same-claim** `review-watermark` and `review-baseline` comment on
-this PR as `OUTDATED`. The new watermark covers their data, and
-hiding them reduces F4 backlog and review-page noise.
-
-Find candidate subject IDs (trusted same-claim watermarks older than
-the new one), then call:
+verified on GitHub, minimize every strictly older trusted **same-claim**
+`review-watermark`/`review-baseline` comment as `OUTDATED` (cuts F4
+backlog and review-page noise). Find candidate subject IDs (trusted
+same-claim watermarks older than the new one), then call:
 
 ```sh
 node scripts/minimize-superseded-markers.mjs \
@@ -204,61 +175,46 @@ node scripts/minimize-superseded-markers.mjs \
   --apply
 ```
 
-Skip this step entirely if the new watermark was not verified to
-exist on GitHub, the candidate set is empty, or the helper is
-unavailable — F4 cleanup still catches the superseded markers later.
-
-Different-claim watermarks (forced-handoff successors, takeovers)
-must not be hidden here — that is covered separately by the claim
-takeover hide path in `idd-claim.instructions.md`.
+Skip entirely if the new watermark wasn't verified, the candidate set
+is empty, or the helper is unavailable — F4 cleanup catches them later.
+Different-claim watermarks (forced-handoff successors, takeovers) must
+not be hidden here — see the claim takeover hide path in
+`idd-claim.instructions.md`.
 
 Do not create or edit the PR live status digest after posting this
-watermark unless the next route is to E1, to an F3 blocked reroute that
-leaves the F2 restart path (F1/D4), to a hold/stop, or to post-merge
-cleanup. The F3 awaiting-reviewer restart-F2 path skips digest edits so
-that F2 can restart without self-invalidating review currency. A digest
-edit after the watermark is new PR activity for review-currency purposes
-and would require a fresh E1 snapshot before F2 can pass.
+watermark unless the next route is E1, an F3 blocked reroute that
+leaves the F2 restart path (F1/D4), a hold/stop, or post-merge cleanup
+— a digest edit after the watermark counts as new review-currency
+activity and would require a fresh E1 snapshot before F2 can pass.
 
-**Step 3 — Filter into ReviewItems_snapshot.** From the snapshot, select and combine
-into **ReviewItems_snapshot**. Record the source URL for each item.
+**Step 3 — Filter into ReviewItems_snapshot.** Select and combine into
+**ReviewItems_snapshot**, recording the source URL for each item.
 
 **Review threads** (`isResolved=false`) — exclude threads where the
-latest substantive reply is from any IDD agent or the PR author, and no
-reviewer has replied since (awaiting-reviewer state). A thread is
-**not** awaiting-reviewer (and therefore remains in ReviewItems_snapshot as an active
-item) if any of the following is true:
-
-- The reviewer reopened (unresolved) the thread after the latest
-  substantive reply from any IDD agent or the PR author, even if no new
-  text was added.
-- The thread contains a reply from any IDD agent that starts with
-  `**Awaiting maintainer decision**` — these threads remain active
-  blockers regardless of whether the maintainer has responded yet.
+latest substantive reply is from any IDD agent or the PR author with no
+reviewer reply since (awaiting-reviewer state), **unless**: the
+reviewer reopened the thread after that reply (even with no new text),
+or the thread has an IDD-agent reply starting
+`**Awaiting maintainer decision**` (remains an active blocker
+regardless of maintainer response).
 
 **Review bodies** where the reviewer's latest state is
-`CHANGES_REQUESTED` — exclude reviews already replied to and re-review
-requested in a previous E13/E14 pass.
+`CHANGES_REQUESTED` — exclude reviews already replied to and
+re-review-requested in a previous E13/E14 pass.
 
-**Regular comments** where the last speaker is not any IDD agent, and no
-reply from **you** (the current agent) exists after that comment's
-timestamp — exclude periodic notification bots (Renovate, etc.). Include
-Copilot and CI advisory bot comments; they follow PATH B in E4-E7
-(advisory non-review notices — rate-limit / quota / queued / bare
-request acknowledgement / error — are dispositioned under the E6
-non-review-notice rule).
+**Regular comments** where the last speaker isn't any IDD agent and no
+reply from **you** exists after that comment's timestamp — exclude
+periodic notification bots (Renovate, etc.). Include Copilot/CI
+advisory bot comments; they follow PATH B in E4-E7 (non-review notices
+are dispositioned under the E6 rule).
 
 **Resolved-thread index (for the E5 duplicate pre-check).** Also carry
-forward, from the same Step 1 review-thread set, a light index of this
-PR's **resolved** threads (`isResolved=true`): for each, record the file
-or file area, a short summary of the substantive claim, the source URL,
-and any IDD-agent `**Accepted**` / `**Rejected**` disposition marker
-found in the thread. Do **not** add resolved threads back into
-ReviewItems_snapshot — they stay out of scoring and disposition. This
-index is a **routing hint only** for E5's resolved-thread duplicate
-pre-check (`idd-review-triage.instructions.md`): it tells triage where a
-possible prior recurrence might be, not what to conclude — confirming
-the recorded evidence still requires opening the linked thread.
+forward a light index of this PR's **resolved** threads
+(`isResolved=true`): file/area, a short claim summary, source URL, and
+any IDD-agent disposition marker found. Do **not** add resolved
+threads back into ReviewItems_snapshot. This is a **routing hint
+only** for E5's duplicate pre-check — it tells triage where a prior
+recurrence might be, not what to conclude.
 
 ## E2 — Critique pass
 
@@ -266,27 +222,21 @@ Run a critique pass on the branch's changes and add any newly found
 issues to ReviewItems_snapshot. See `idd-overview-appendix.instructions.md`
 for per-agent implementation.
 
-**Incremental review**: on the second and later passes **within the same
-claim**, scope the review to the diff since the previous E2 execution's
-head SHA (tracked via `<!-- review-baseline: … -->` PR comments — post
-a new one after each E2 run; use the latest comment with that prefix
-whose embedded `{claim-id}` matches the current active claim and whose
-GitHub author is a trusted marker actor). Reset to full-branch diff
-after a rebase, multi-fix batch, when the baseline SHA is not an
-ancestor of the current HEAD, when no trusted same-claim baseline
-exists, or whenever the active `{claim-id}` changed due to restart or
-takeover, including forced handoff. ReviewItems_snapshot is session-local; do not
-inherit a previous claim's
-critique findings unless they were persisted as reviewer-visible
-comments.
+**Incremental review**: on later passes **within the same claim**,
+scope the review to the diff since the previous E2 execution's head SHA
+(tracked via same-claim, trusted-author `<!-- review-baseline: … -->`
+comments — post a new one each run). Reset to full-branch diff after a
+rebase, a multi-fix batch, when the baseline SHA isn't an ancestor of
+current HEAD, when no trusted same-claim baseline exists, or whenever
+the active `{claim-id}` changed (restart, takeover, forced handoff).
+ReviewItems_snapshot is session-local; don't inherit a previous claim's
+critique findings unless persisted as reviewer-visible comments.
 
-After the critique pass completes, post a new `review-baseline` comment
-with the current HEAD SHA using this format (when helper runtime is
-enabled, prefer the profile-selected post-idd-marker command — `--type
-baseline --target pr <pr-number> --agent-id <id> --claim-id <id> --sha
-<head-sha> --apply` — to render and POST it in one step; `emit-marker
---type review-baseline` stays the emit-only render path; see
-`docs/idd-helper-scripts.md`):
+After the critique pass, post a new `review-baseline` comment with the
+current HEAD SHA (helper-first: profile-selected post-idd-marker
+`--type baseline --target pr <pr-number> --agent-id <id> --claim-id
+<id> --sha <head-sha> --apply`; `emit-marker --type review-baseline` is
+emit-only; see `docs/idd-helper-scripts.md`):
 
 ```markdown
 <!-- review-baseline: {agent-id} {claim-id} {SHA} -->
@@ -295,14 +245,9 @@ _{agent-id}: critique baseline — IDD automation marker. Do not edit._
 ```
 
 Use the PR body's language for the visible note (same rule as the
-watermark). Example Japanese note:
-`_{agent-id}: クリティークのベースライン — IDD 自動化マーカー。編集しないでください。_`
-
-Post using the GitHub REST API directly (the body begins with an HTML
-comment token; use the HTTP `POST` path for reliability) — or the
-post-idd-marker `--apply` helper above, which performs that JSON `POST`.
-The same "nothing appended after the note" rule stated above for
-`review-watermark` applies here too.
+watermark). Post via the GitHub REST API directly, or the
+post-idd-marker `--apply` helper above. The same "nothing appended
+after the note" rule applies here too.
 
 ## E3 — Empty list check
 
