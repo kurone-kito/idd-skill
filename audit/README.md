@@ -92,3 +92,36 @@ bundle size measured when the entry was added or last adjusted.
 callout in the pull request description explaining why the growth is
 justified; shrinking a limit after an instruction diet needs no
 callout.
+
+### Context ceiling
+
+The `bundleBudgets` ratchet alone has no upper bound — each `limitBytes`
+value has only ever followed content growth, and nothing mechanical
+stopped the next exact-fit bump. Observed on
+[#1213](https://github.com/kurone-kito/idd-skill/issues/1213) (closed
+2026-07-03) and
+[#1259](https://github.com/kurone-kito/idd-skill/issues/1259) (closed
+2026-07-04, the very next day): both recovered headroom and both fully
+regressed for lack of an upper bound. `contextCeiling` is an absolute,
+128K-context-derived cap layered on top: 120,000 bytes ≈ 30,000–37,000
+tokens at this corpus's observed 3.25–4.0 bytes/token, leaving the rest
+of a 128K context window for the harness system prompt, tool schemas,
+adopter-repo instructions, and working context.
+
+- `maxBundleLimitBytes`: no non-exempt bundle's `limitBytes` may exceed
+  this value.
+- `maxUtilizationPct`: no non-exempt bundle's measured (banner-stripped)
+  byte total may exceed this percentage of its own `limitBytes`. This is
+  what kills future exact-fit landings even for bundles that stay under
+  `maxBundleLimitBytes`.
+- `noticeUtilizationPct`: any bundle (exempt or not) reaching this
+  utilization prints a notice, making the near-ceiling band visible on
+  every CI run instead of only at the moment a bundle tips over.
+- `exemptBundles`: bundle ids temporarily excused from the two error
+  checks above. Sibling diet issues shrink this list; a listed bundle
+  that no longer violates either check gets a notice suggesting the
+  exemption be removed — exemptions are meant to shrink to empty, not
+  accumulate.
+
+An id in `exemptBundles` that does not match any `bundleBudgets` entry
+is itself an audit error (a typo or a bundle rename left behind).
