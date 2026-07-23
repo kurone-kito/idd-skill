@@ -217,7 +217,7 @@ other GitHub side effect, confirm all of the following:
    `PR_HEAD_SHA=$(gh pr view {pr-number} --json headRefOid --jq '.headRefOid')`.
 3. Run the profile-selected `advisory-wait-state` helper — the
    canonical evidence collector per
-   `idd-advisory-wait.instructions.md`'s helper-first path (`node
+   `idd-advisory-wait-lite.instructions.md`'s helper-first path (`node
    scripts/advisory-wait-state.mjs --pr {pr-number}
    --trusted-marker-logins "<trusted-login-1>,<trusted-login-2>"` in
    the source/vendored profile; resolve the package-manager /
@@ -332,9 +332,9 @@ other GitHub side effect, confirm all of the following:
 1. Schedule a wake, or background this wait only if the topology-safety
    condition is confirmed to route completion back to this turn;
    otherwise wait synchronously.
-2. Use `idd-ci.instructions.md` for the polling mechanics and timing
-   (required-check discovery, state normalization, and the shared
-   `ciWait.runningTimeout` / `ciWait.generationTimeout` /
+2. Use `idd-ci-lite.instructions.md` for the polling mechanics and
+   timing (required-check discovery, state normalization, and the
+   shared `ciWait.runningTimeout` / `ciWait.generationTimeout` /
    `ciWait.rerunPolicy` values). The outcomes below override its generic
    routing for this phase.
 3. If new review threads or comments arrive during the wait, note them

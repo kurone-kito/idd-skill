@@ -70,8 +70,8 @@ label-triggered job enabled at this quiescent point. If the primary
 advisory bot already reviewed an earlier head of this PR, an automatic
 same-head re-review is expected — run the advisory-wait-state helper and
 check its own `lastCopilotCommit == prHeadSha` fast-path fields (from
-`idd-advisory-wait.instructions.md`; both read fresh from that helper's
-output, independent of Step 1's `{head-SHA}` below, which is not
+`idd-advisory-wait-lite.instructions.md`; both read fresh from that
+helper's output, independent of Step 1's `{head-SHA}` below, which is not
 captured yet at this point) and wait for that re-review to land first,
 bounded by that file's advisory-wait windows if it never does. Only
 once this precondition is satisfied, continue to Step 1.

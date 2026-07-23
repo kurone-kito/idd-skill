@@ -315,9 +315,19 @@ stop-and-ask condition (a broken/missing helper for F1-F2; anything
 but the handoff-stop outcome for F2.5).
 
 `idd-ci.instructions.md` and `idd-advisory-wait.instructions.md` are
-shared helper files, not phases of their own; a lite caller is meant
-to inline the rules it needs from them instead of getting a
-standalone lite variant, so they never appear as a row here.
+shared helper files, not phases of their own, so they never appear as
+a row in the table above. Each now ships a standalone lite sibling
+instead — `lite/idd-ci-lite.instructions.md` and
+`lite/idd-advisory-wait-lite.instructions.md` — that a lite caller
+references one hop away (content principle 3), rather than restating
+every load-bearing rule from the full-size file inline, which is
+content principle 1's default for a lite file with no in-scope
+sibling to reference. The
+advisory-wait lite sibling covers only the **E14-caller subset**: F2's
+prose fallback and F3's merge-time call site stay excluded, matching
+the split-by-caller scoping for this file recorded in the upstream IDD
+repository's lite-profile roadmap/design note
+(`docs/weak-model-lite-profile-design.md`, "Phase scoping").
 
 **Explicit fallback.** Every phase without a row above falls back to
 its standard instruction file — this is the documented default, not

@@ -104,6 +104,8 @@
         "idd-template/.github/instructions/lite/idd-review-fix-lite.instructions.md",
         "idd-template/.github/instructions/lite/idd-resume-lite.instructions.md",
         "idd-template/.github/instructions/lite/idd-resume-stall-lite.instructions.md",
+        "idd-template/.github/instructions/lite/idd-ci-lite.instructions.md",
+        "idd-template/.github/instructions/lite/idd-advisory-wait-lite.instructions.md",
         "idd-template/docs/idd-workflow.md",
         "idd-template/docs/idd-review-policy-profiles.md",
         "idd-template/docs/idd-helper-scripts.md",
@@ -253,19 +255,22 @@
     },
     {
       "id": "bundle-review-fix-lite",
-      "description": "Lite review-fix path (weak-model condensed profile): .github/instructions/lite/idd-review-fix-lite.instructions.md only — no overview/appendix; control flow is fully inlined, with single-hop command-syntax references to idd-advisory-wait.instructions.md and idd-ci.instructions.md per content principle 3.",
+      "description": "Lite review-fix path (weak-model condensed profile): idd-review-fix-lite.instructions.md plus its two standalone lite helper siblings — idd-ci-lite.instructions.md and idd-advisory-wait-lite.instructions.md (E14-caller subset only) — no overview/appendix; control flow references those siblings one hop away per content principle 3.",
       "files": [
+        ".github/instructions/lite/idd-advisory-wait-lite.instructions.md",
+        ".github/instructions/lite/idd-ci-lite.instructions.md",
         ".github/instructions/lite/idd-review-fix-lite.instructions.md"
       ],
-      "limitBytes": 21000
+      "limitBytes": 37700
     },
     {
       "id": "bundle-review-snapshot-lite",
-      "description": "Lite review-snapshot path (weak-model condensed profile): .github/instructions/lite/idd-review-snapshot-lite.instructions.md only — no overview/appendix; control flow is fully inlined, with single-hop command-syntax references to idd-advisory-wait.instructions.md and idd-review-triage.instructions.md per content principle 3.",
+      "description": "Lite review-snapshot path (weak-model condensed profile): idd-review-snapshot-lite.instructions.md plus its standalone lite advisory-wait sibling — idd-advisory-wait-lite.instructions.md (E14-caller subset only, read here for its fast-path fields) — no overview/appendix; single-hop command-syntax reference to idd-review-triage.instructions.md remains, per content principle 3.",
       "files": [
+        ".github/instructions/lite/idd-advisory-wait-lite.instructions.md",
         ".github/instructions/lite/idd-review-snapshot-lite.instructions.md"
       ],
-      "limitBytes": 13000
+      "limitBytes": 21800
     },
     {
       "id": "bundle-review",
@@ -366,6 +371,12 @@
       "mode": "exact"
     },
     {
+      "id": "idd-advisory-wait-lite-instructions",
+      "source": "idd-template/.github/instructions/lite/idd-advisory-wait-lite.instructions.md",
+      "target": ".github/instructions/lite/idd-advisory-wait-lite.instructions.md",
+      "mode": "exact"
+    },
+    {
       "id": "idd-advisory-wait-shell-fallback-doc",
       "source": "idd-template/docs/idd-advisory-wait-shell-fallback.md",
       "target": "docs/idd-advisory-wait-shell-fallback.md",
@@ -381,6 +392,12 @@
       "id": "idd-ci-instructions",
       "source": "idd-template/.github/instructions/idd-ci.instructions.md",
       "target": ".github/instructions/idd-ci.instructions.md",
+      "mode": "exact"
+    },
+    {
+      "id": "idd-ci-lite-instructions",
+      "source": "idd-template/.github/instructions/lite/idd-ci-lite.instructions.md",
+      "target": ".github/instructions/lite/idd-ci-lite.instructions.md",
       "mode": "exact"
     },
     {
