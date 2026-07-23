@@ -57,8 +57,8 @@ advisory-wait instructions directly.
 
 ## Fast path — common case
 
-Poll `LAST_COPILOT_COMMIT` (the latest Copilot review's `commit_id`);
-once it equals `PR_HEAD_SHA`, the gate is **SATISFIED** — skip
+Run the Helper-first canonical path below. Once its `lastCopilotCommit`
+field equals its `prHeadSha` field, the gate is **SATISFIED** — skip
 everything else below and take the caller's `SATISFIED` action. Enter
 the rest of this file only when they differ.
 

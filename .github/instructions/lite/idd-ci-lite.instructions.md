@@ -25,8 +25,9 @@ CI-polling instructions instead of this file.
 
 - A required helper is missing, fails, returns invalid JSON, or
   disagrees with live state.
-- Any of the three required-check reads below is unreadable (a
-  confirmed `403`, or an untrusted `404`).
+- Any required-check discovery read below is unreadable (a confirmed
+  `403`, or an untrusted `404`) — the ruleset list, any per-ruleset
+  detail call, or the branch-protection read.
 - A non-pass check is not clearly code-caused or recognized
   infra-flaky/pre-existing, except the sole-failing
   `idd-advisory-convergence` exception the caller's own routing names.
