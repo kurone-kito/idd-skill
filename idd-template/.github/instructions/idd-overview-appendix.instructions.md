@@ -15,39 +15,29 @@ without scanning every phase file.
 ## Live status digest
 
 The optional live status digest is a human-facing issue or pull request
-comment whose first line is `<!-- idd-live-status: current -->`. It may
-summarize phase, claim, branch, last checked time, blockers, and next
-action, but it is never an authority for IDD state transitions.
-
-Agents must continue to make claim, review, advisory, CI, merge, and
-roadmap decisions from trusted operational markers and GitHub state. If
-the digest is missing or stale, repair it only after claim revalidation
-and authoritative state collection. If multiple marked digests exist,
-preserve them, report the duplicate URLs, and do not choose one as
+comment whose first line is `<!-- idd-live-status: current -->`,
+summarizing phase, claim, branch, last-checked time, blockers, and next
+action. It is never an authority for IDD state transitions — keep making
+claim, review, advisory, CI, merge, and roadmap decisions from trusted
+operational markers and GitHub state. If multiple marked digests exist,
+preserve them, report the duplicate URLs, and choose none as
 authoritative during an unattended run. See
-`docs/idd-comment-minimization.md` for the full digest contract.
-When available, the optional helper
-`node scripts/live-status-digest.mjs` may perform the same discovery,
-dry-run, duplicate refusal, and claim-checked upsert; its output remains
-convenience context, not workflow authority.
+`docs/idd-comment-minimization.md` for the full contract (marker
+uniqueness, field table, and the optional
+`node scripts/live-status-digest.mjs` helper, whose output remains
+convenience context, not workflow authority).
 
 Treat every digest create or edit as a GitHub side effect: re-validate
-the active claim first, write fields from the authoritative state just
-collected by the current phase, and set `Authoritative by` to the
-specific claim, review, CI, advisory, PR, or issue evidence used. If the
-claim was lost, do not repair or update the digest. Every digest update
-refreshes `Last checked` to the server-observed or current UTC time of
-that authoritative re-read.
+the active claim first, write fields from the state just collected by
+the current phase, and set `Authoritative by` to the specific evidence
+used. If the claim was lost, do not repair or update the digest.
 
-On pull requests, a digest edit is still PR activity unless a future
-repository helper explicitly classifies it otherwise. Therefore do not
-edit a PR digest between a valid E1 review watermark and an intended F3
-merge pass. Edit it only when the flow leaves merge intent (for example,
-returning to E1, routing from F3 to F1/D4 as blocked, or posting a
-hold/stop), or after F3 has merged. The F3 awaiting-reviewer restart-F2
-path intentionally skips digest edits so that F2 can restart without
-self-invalidating review currency. This keeps digest text from satisfying
-or perturbing review-currency, advisory, CI, or merge gates.
+On pull requests, a digest edit is still PR activity: do not edit a PR
+digest between a valid E1 review watermark and an intended F3 merge pass
+(it would perturb review-currency). Edit it only when leaving merge
+intent (returning to E1, routing F3 to F1/D4 as blocked, or a hold/stop)
+or after F3 has merged; the F3 awaiting-reviewer restart-F2 path skips
+digest edits for the same reason.
 
 ## Abort
 
@@ -135,24 +125,11 @@ Codex CLI / Antigravity CLI (formerly Gemini CLI)), see
 
 ### Mutation / write-side helper lens
 
-When the diff under critique implements a helper that **mutates GitHub
-state, mutates git state, or performs a merge** (read-only helpers are out
-of scope), also apply this lens — each check below targets a gap class that
-a clean general critique repeatedly missed and that later review then
-surfaced one finding per round:
-
-- **Fail-closed inputs**: guards use strict checks (`=== true`, explicit
-  pattern/enum validation) so a non-boolean, empty, missing, or malformed
-  value blocks the mutation rather than passing it.
-- **Validate/execute scope parity**: the repo, identity, and HEAD the gate
-  validates are the same ones the mutation runs against — no split between
-  a read-side collector's scope and the executed `gh` / git command; reject
-  ambiguous partial scoping.
-- **Unsafe-output suppression**: a not-ready or invalid verdict never emits
-  a copy-pasteable command bound to an unvalidated value.
-- **Schema strictness parity**: output schemas match the values the helper
-  actually produces and mirror sibling-helper strictness (SHA patterns,
-  enums), so the published contract is no looser than the runtime.
+When the diff under critique implements a helper that mutates GitHub or
+git state, or performs a merge, also apply the additional write-side
+checks (fail-closed inputs, validate/execute scope parity, unsafe-output
+suppression, schema strictness parity) in
+[`docs/idd-workflow.md` → Mutation / write-side helper lens](../../docs/idd-workflow.md#mutation--write-side-helper-lens).
 
 ## Template sync
 
