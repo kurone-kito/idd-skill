@@ -1,7 +1,7 @@
 # IDD — CI Polling (Lite)
 
 Lite profile for helper-enabled weak/local models. Same semantics as the
-full-size CI-polling phase file. Used by lite phase files that wait for
+full-size CI-polling shared helper file. Used by lite phase files that wait for
 CI after a push (today: `idd-review-fix-lite.instructions.md`'s E15
 step). If the repository is `instructions-only`, use the full-size
 CI-polling instructions instead of this file.
@@ -13,8 +13,8 @@ CI-polling instructions instead of this file.
   with live state, stop and ask — never fall back to a manual per-field
   fetch or prose judgment.
 - `instructions-only`: do not use this lite file.
-- Any mismatch between this file and the full-size CI-polling phase file
-  is a bug in this file.
+- Any mismatch between this file and the full-size CI-polling shared
+  helper file is a bug in this file.
 
 ## Stop-and-ask conditions
 

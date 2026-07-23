@@ -314,8 +314,10 @@ a standalone lite sibling for each instead —
 `lite/idd-ci-lite.instructions.md` and
 `lite/idd-advisory-wait-lite.instructions.md` — that a lite caller
 references one hop away (content principle 3), replacing the earlier
-plan to inline every rule from the full-size file under content
-principle 1. The advisory-wait lite sibling covers only the
+plan to restate every load-bearing rule from the full-size file
+inline, which is content principle 1's default for a lite file with
+no in-scope sibling to reference. The advisory-wait lite sibling
+covers only the
 **E14-caller subset**: F2's prose fallback and F3's merge-time call
 site stay excluded, matching the design's split-by-caller scoping for
 this file in
