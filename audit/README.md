@@ -133,7 +133,7 @@ roadmap's finalize track
 `exemptBundles` is empty: every bundle that entered the roadmap over
 `maxBundleLimitBytes` or above `maxUtilizationPct` cleared both checks —
 `bundle-review`, `bundle-work`, and `bundle-merge` via the sibling
-content diets and this issue's limit-lowering ratchet;
+content diets and #1658's own limit-lowering ratchet;
 `bundle-pr-submit-lite` via a margin-restoring limit _raise_ instead,
 since it was never over the byte ceiling, only briefly above the
 utilization threshold. Keep the list empty going forward — add an entry
