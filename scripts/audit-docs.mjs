@@ -610,8 +610,15 @@ function checkInstructionSizeBudgets(configs) {
     // Each array entry is still unvalidated JSON: a `null` (or other
     // non-object) entry would throw on `config.glob` below before the
     // pure helper's own `!config` guard ever runs. Reject it here with a
-    // readable error instead of crashing the whole audit run.
-    if (rawConfig === null || typeof rawConfig !== 'object') {
+    // readable error instead of crashing the whole audit run. Arrays pass
+    // `typeof === 'object'` too, so reject them explicitly — otherwise an
+    // entry like `[[]]` would silently fall through and audit under the
+    // default glob instead of erroring.
+    if (
+      rawConfig === null ||
+      typeof rawConfig !== 'object' ||
+      Array.isArray(rawConfig)
+    ) {
       errors.push(
         `instructionSizeBudgets: each entry must be an object, got ${JSON.stringify(rawConfig)}`,
       );
