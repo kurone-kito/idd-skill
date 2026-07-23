@@ -159,15 +159,29 @@ gh api repos/{owner}/{repo}/pulls/{pr-number}/requested_reviewers \
   -X POST -f "reviewers[]={primary-advisory-bot-rest-login}"
 
 # Step 5 — post exactly one bound marker, only after step 4 verifies
+# source repo / vendored-node profile:
 node scripts/post-idd-marker.mjs --type advisory-recovery --target pr <pr-number> \
   --agent-id <id> --claim-id <id> --head-sha <PR_HEAD_SHA> \
   --attempt <n> --timestamp <ISO8601> --apply
+# package-manager / ephemeral-npx profile, resolve the command name from
+# docs/idd-helper-scripts.md:
+<profile-selected-post-idd-marker-command> --type advisory-recovery \
+  --target pr <pr-number> --agent-id <id> --claim-id <id> \
+  --head-sha <PR_HEAD_SHA> --attempt <n> --timestamp <ISO8601> --apply
 ```
 
 ## AW3-H
 
 ```sh
+# source repo / vendored-node profile:
 node scripts/minimize-superseded-markers.mjs \
+  --subject-ids "<id1>,<id2>,..." \
+  --classifier OUTDATED \
+  --trusted-marker-logins "<trusted-login-1>,<trusted-login-2>" \
+  --apply
+# package-manager / ephemeral-npx profile, resolve the command name from
+# docs/idd-helper-scripts.md:
+<profile-selected-minimize-superseded-markers-command> \
   --subject-ids "<id1>,<id2>,..." \
   --classifier OUTDATED \
   --trusted-marker-logins "<trusted-login-1>,<trusted-login-2>" \

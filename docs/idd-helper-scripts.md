@@ -1845,9 +1845,9 @@ same as `AW4`/`AW5`.
 branch with `git fetch origin main && git merge origin/main`. On a repo
 whose primary commit signing is non-interactive-hostile (GPG pinentry /
 hardware-touch) and that configures a fallback signing wrapper for
-arbitrary git subcommands, run the **whole** operation — including a
+arbitrary git subcommands, run the **merge** step — including a
 `--continue` after conflict resolution — through that wrapper, never the
-plain command:
+plain command (`git fetch` creates no commit and needs no signing):
 
 ```sh
 git -c gpg.format=ssh -c user.signingkey=<abs-path> -c commit.gpgsign=true merge origin/main
