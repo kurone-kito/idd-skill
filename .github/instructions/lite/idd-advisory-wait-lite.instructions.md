@@ -155,12 +155,16 @@ file does not duplicate it.
    the Helper-first canonical path above for a fresh `outcome`.
 3. If `earliestSameHeadAt` is now empty, stop and ask (see
    Stop-and-ask conditions).
-4. If `outcome` is now `SATISFIED`, exit this wait and continue.
-5. Otherwise re-apply the elapsed-window check: `copilotPending=true`
-   and elapsed ≥ `pendingWindowMinutes`, or `copilotPending=false` and
-   elapsed ≥ `settledWindowMinutes`, both count as satisfied — the
-   primary bot never reviewed this HEAD, a stalled or rate-limited
-   case. Otherwise keep polling.
+4. If `outcome` is now `SATISFIED`, exit this wait and continue. The
+   helper already folds the `pendingWindowMinutes` /
+   `settledWindowMinutes` elapsed-window check into this same
+   `outcome` value on every fresh call — including the stalled or
+   rate-limited case where the primary bot never reviews this HEAD —
+   so this step alone covers that case. Never re-derive the
+   elapsed-window decision by hand from the raw window values; that
+   would risk drifting from the helper if the protocol changes it.
+5. Otherwise (`outcome` is `WAIT`, or any other non-terminal value),
+   keep polling.
 
 ## Secondary advisory bot (non-gating, optional)
 
