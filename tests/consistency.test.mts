@@ -305,23 +305,23 @@ test('instruction size budget excludes the generated-from banner from the measur
 
 const DOC_BUDGET_SIZE = {
   alwaysLoadedLimitBytes: 20_000,
-  phaseLimitBytes: 38_000,
+  phaseLimitBytes: 33_000,
 };
 // Keep representative of live audit/sync-manifest.json bundleBudgets
 // (standard + lite independent ceilings currently on main).
 const DOC_BUDGET_BUNDLES = [
-  { limitBytes: 112_700 },
+  { limitBytes: 104_000 },
   { limitBytes: 45_000 },
   { limitBytes: 24_000 },
   { limitBytes: 16_000 },
-  { limitBytes: 19_500 },
+  { limitBytes: 26_000 },
 ];
 
 test('doc budget guard passes when documented values match the manifest', () => {
   const texts: Record<string, string> = {
-    'README.md': '| Phase | 38,000 bytes |\n| Always | 20,000 bytes |',
+    'README.md': '| Phase | 33,000 bytes |\n| Always | 20,000 bytes |',
     // a hardcoded bundle value that still matches the manifest is allowed
-    'strategy.md': 'discovery bundle is 112,700 bytes',
+    'strategy.md': 'discovery bundle is 104,000 bytes',
     // a doc that reads limits live via jq carries no number → never flagged
     'jq.md':
       "read the live values with jq '.bundleBudgets' audit/sync-manifest.json",
@@ -345,7 +345,7 @@ test('doc budget guard flags a value that drifted from every manifest budget', (
   assert.equal(result.errors.length, 1);
   assert.match(
     result.errors[0],
-    /doc-budget-drift: README\.md states 30,000 bytes, which is not a current sync-manifest budget value \(valid: 16000, 19500, 20000, 24000, 38000, 45000, 112700\)/,
+    /doc-budget-drift: README\.md states 30,000 bytes, which is not a current sync-manifest budget value \(valid: 16000, 20000, 24000, 26000, 33000, 45000, 104000\)/,
   );
 });
 
