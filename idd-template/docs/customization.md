@@ -529,11 +529,15 @@ and no relevant script exists; else use `true`. For other tools, use
 
 ### Template sync mapping
 
-This repository is the canonical source of the IDD template distributed
-via `idd-template/`. When modifying any `idd-*.instructions.md` file,
-`docs/idd-workflow.md`, or `docs/customization.md`, apply the equivalent
-change to the corresponding file in `idd-template/`, replacing resolved
-project-specific values with their `{{placeholder}}` forms:
+`idd-template/` is the canonical source of the distributed IDD template
+(see [Exception: this repository is the source of a reusable IDD
+distribution](#exception-this-repository-is-the-source-of-a-reusable-idd-distribution)).
+When modifying any `idd-*.instructions.md` file, `docs/idd-workflow.md`,
+or `docs/customization.md`, edit the corresponding file in
+`idd-template/` first, using `{{placeholder}}` forms for
+project-specific values, then regenerate the live target with `node
+scripts/sync-docs.mjs --apply`, which resolves each placeholder to its
+concrete live value:
 
 | Live value (`.github/instructions/`)                                | Template form (`idd-template/`)  |
 | ------------------------------------------------------------------- | -------------------------------- |
@@ -548,8 +552,9 @@ Match by the named command row in the Project commands table, not by
 command prefix, to avoid confusing commands that share the same
 executable.
 
-Commits that modify live instruction files without updating the template
-are incomplete; include both changes in the same atomic commit.
+Commits that modify the `idd-template/` source without regenerating the
+live target are incomplete; include both changes in the same atomic
+commit.
 
 ## Tooling Boundary
 
