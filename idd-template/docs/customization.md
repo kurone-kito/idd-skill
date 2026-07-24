@@ -529,15 +529,21 @@ and no relevant script exists; else use `true`. For other tools, use
 
 ### Template sync mapping
 
-`idd-template/` is the canonical source of the distributed IDD template
-(see [Exception: this repository is the source of a reusable IDD
-distribution](#exception-this-repository-is-the-source-of-a-reusable-idd-distribution)).
-When modifying any `idd-*.instructions.md` file, `docs/idd-workflow.md`,
-or `docs/customization.md`, edit the corresponding file in
-`idd-template/` first, using `{{placeholder}}` forms for
-project-specific values, then regenerate the live target with `node
-scripts/sync-docs.mjs --apply`, which resolves each placeholder to its
-concrete live value:
+`idd-template/` is the canonical source of the distributed IDD
+template. When modifying any `idd-*.instructions.md` file,
+`docs/idd-workflow.md`, or `docs/customization.md`, edit the
+corresponding file in `idd-template/` first, using `{{placeholder}}`
+forms for project-specific values where the target pair is
+`concreted` (see the table below). Then apply the matching
+regeneration step from
+[Exception: this repository is the source of a reusable IDD
+distribution](#exception-this-repository-is-the-source-of-a-reusable-idd-distribution):
+`node scripts/sync-docs.mjs --apply` regenerates `exact`/`concreted`
+pairs (resolving `{{placeholder}}` forms for `concreted` pairs); a
+`structure`/`contains` pair such as `docs/idd-workflow.md` needs the
+equivalent change applied to the live file by hand instead, since
+`sync-docs.mjs` only checks heading/text presence for those and does
+not auto-generate their content:
 
 | Live value (`.github/instructions/`)                                | Template form (`idd-template/`)  |
 | ------------------------------------------------------------------- | -------------------------------- |
