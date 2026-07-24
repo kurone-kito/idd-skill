@@ -970,7 +970,7 @@ reusable IDD distribution.
 location:
 
 - Policy guidance → `docs/customization.md`, `docs/policy-constants.md`, etc.
-- Instruction files → `.github/instructions/idd-*.md`
+- Instruction files → `.github/instructions/idd-*.instructions.md`
 
 **When working with template imports** (external repositories importing IDD):
 
@@ -989,8 +989,9 @@ imported IDD and has no local `idd-template/` directory, where editing
 is correct.
 
 When this repository **is** the source of a reusable IDD distribution (it
-ships its own `idd-template/` copy for adopters to import), `sync-manifest.json`
-reverses the direction for every pair whose `source` sits under
+ships its own `idd-template/` copy for adopters to import),
+`audit/sync-manifest.json` reverses the direction for every pair whose
+`source` sits under
 `idd-template/`: `idd-template/` holds the canonical text, and the
 corresponding `docs/`/`.github/instructions/` file is the generated
 target — matching the `idd-generated-from` banner already present on
