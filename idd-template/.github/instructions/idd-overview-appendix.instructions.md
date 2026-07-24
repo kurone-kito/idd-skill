@@ -145,6 +145,6 @@ change applied to the live file by hand instead). For the live ↔
 template placeholder mapping and the full rationale, see
 [`docs/customization.md` → Template sync mapping](../../docs/customization.md#template-sync-mapping).
 
-Commits that modify the `idd-template/` source without regenerating the
-live target are incomplete; include both changes in the same atomic
-commit.
+Commits that modify the `idd-template/` source without syncing the
+live target (regenerating or hand-mirroring, per its mode above) are
+incomplete; include both changes in the same atomic commit.
