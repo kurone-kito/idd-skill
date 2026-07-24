@@ -999,8 +999,12 @@ target — matching the `idd-generated-from` banner already present on
 
 1. Edit the `idd-template/` copy, not the `docs/`/`.github/instructions/`
    target.
-2. Run `node scripts/sync-docs.mjs --apply` to regenerate the target from
-   the edited source.
+2. For `exact`/`concreted` `sync-manifest.json` pairs, run `node
+   scripts/sync-docs.mjs --apply` to regenerate the target from the
+   edited source. For `structure`/`contains` pairs, `sync-docs.mjs`
+   only checks headings or text presence and does not auto-generate
+   target content, so also apply the equivalent content change to the
+   target file by hand.
 3. Run `node scripts/audit-docs.mjs --check` to confirm the pair is back
    in sync.
 
