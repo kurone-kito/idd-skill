@@ -960,7 +960,7 @@ for the `idd-template/`-sourced pairs — see the exception at the end of
 
 ## Where to Edit
 
-**Always edit canonical sources** in `docs/` and `.github/instructions/`, not the
+**Edit canonical sources** in `docs/` and `.github/instructions/`, not the
 template copies. This section assumes an **adopter repository**; see the
 [exception](#exception-this-repository-is-the-source-of-a-reusable-idd-distribution)
 at the end of this section when this repository is itself the source of a
