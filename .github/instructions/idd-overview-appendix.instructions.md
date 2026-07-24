@@ -138,12 +138,18 @@ suppression, schema strictness parity) in
 
 ## Template sync
 
-This repository is the canonical source of the IDD template distributed
-via `idd-template/`. When modifying any `idd-*.instructions.md` file,
-`docs/idd-workflow.md`, or `docs/customization.md`, apply the equivalent
-change to the corresponding file in `idd-template/`. For the live ↔
-template placeholder mapping, see
+When this repository is itself the source of a reusable IDD
+distribution (it ships its own `idd-template/` copy for adopters to
+import), `idd-template/` is the canonical source, not the live copy
+below. When modifying any `idd-*.instructions.md` file,
+`docs/idd-workflow.md`, or `docs/customization.md`, edit the
+corresponding file in `idd-template/` first, then regenerate the live
+target with `node scripts/sync-docs.mjs --apply` (`structure`/
+`contains` pairs such as `docs/idd-workflow.md` need the equivalent
+change applied to the live file by hand instead). For the live ↔
+template placeholder mapping and the full rationale, see
 [`docs/customization.md` → Template sync mapping](../../docs/customization.md#template-sync-mapping).
 
-Commits that modify live instruction files without updating the template
-are incomplete; include both changes in the same atomic commit.
+Commits that modify the `idd-template/` source without syncing the
+live target (regenerating or hand-mirroring, per its mode above) are
+incomplete; include both changes in the same atomic commit.
