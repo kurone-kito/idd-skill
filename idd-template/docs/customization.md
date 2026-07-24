@@ -555,8 +555,8 @@ command prefix, to avoid confusing commands that share the same
 executable.
 
 Commits that modify the `idd-template/` source without syncing the
-live target (regenerating or hand-mirroring, per its mode above) are
-incomplete; include both changes in the same atomic commit.
+live target (regenerating or hand-mirroring, per the Exception section
+above) are incomplete; include both changes in the same atomic commit.
 
 ## Tooling Boundary
 
