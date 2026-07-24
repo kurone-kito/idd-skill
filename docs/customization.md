@@ -952,29 +952,25 @@ copies.
 - Contributor tooling should guide edits toward canonical sources instead of
   editing mirrors first.
 
+The canonical/generated roles above are described from an **adopter's**
+perspective (IDD imported, no local `idd-template/`). When this repository
+is instead the source of a reusable IDD distribution, those roles reverse
+for the `idd-template/`-sourced pairs — see the exception at the end of
+[Where to Edit](#where-to-edit) below.
+
 ## Where to Edit
 
-**Always edit canonical sources** in `docs/` and `.github/instructions/`, not the
-template copies.
+**Edit canonical sources** in `docs/` and `.github/instructions/`, not the
+template copies. This section assumes an **adopter repository**; see the
+[exception](#exception-this-repository-is-the-source-of-a-reusable-idd-distribution)
+at the end of this section when this repository is itself the source of a
+reusable IDD distribution.
 
-**When editing canonical sources**:
+**When editing canonical sources**, update the file in its canonical
+location:
 
-1. Update the file in its canonical location:
-   - Policy guidance → `docs/customization.md`, `docs/policy-constants.md`, etc.
-   - Instruction files → `.github/instructions/idd-*.md`
-
-2. If the repository distributes IDD as a template (source of a reusable IDD
-   distribution), run the documentation audit check:
-
-   ```sh
-   node scripts/audit-docs.mjs --check
-   ```
-
-   This verifies canonical/template pairs and placeholder substitutions stay
-   consistent.
-
-3. Do **not** edit files in `idd-template/` first. Update canonical sources
-   before mirroring equivalent template changes in the same commit.
+- Policy guidance → `docs/customization.md`, `docs/policy-constants.md`, etc.
+- Instruction files → `.github/instructions/idd-*.instructions.md`
 
 **When working with template imports** (external repositories importing IDD):
 
@@ -984,6 +980,33 @@ template copies.
     canonical sources only
   - Never manually edit idd-template/ files — they represent the source
     template and may be re-imported
+
+### Exception: this repository is the source of a reusable IDD distribution
+
+The guidance above assumes an **adopter repository** — one that has
+imported IDD and has no local `idd-template/` directory, where editing
+`docs/` and `.github/instructions/` directly, as this section instructs,
+is correct.
+
+When this repository **is** the source of a reusable IDD distribution (it
+ships its own `idd-template/` copy for adopters to import),
+`audit/sync-manifest.json` reverses the direction for every pair whose
+`source` sits under
+`idd-template/`: `idd-template/` holds the canonical text, and the
+corresponding `docs/`/`.github/instructions/` file is the generated
+target — matching the `idd-generated-from` banner already present on
+`.github/instructions/idd-*.instructions.md` targets. In that scenario:
+
+1. Edit the `idd-template/` copy, not the `docs/`/`.github/instructions/`
+   target.
+2. For `exact`/`concreted` `audit/sync-manifest.json` pairs, run `node
+   scripts/sync-docs.mjs --apply` to regenerate the target from the
+   edited source. For `structure`/`contains` pairs, `sync-docs.mjs`
+   only checks headings or text presence and does not auto-generate
+   target content, so also apply the equivalent content change to the
+   target file by hand.
+3. Run `node scripts/audit-docs.mjs --check` to confirm the pair is back
+   in sync.
 
 ## Repository-local IDD policy
 
