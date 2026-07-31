@@ -779,15 +779,28 @@ const LIVE_CONFIG_ERRORS_SHOWN = 10;
  * Resolve the repository's configured `helperRuntime.profile` for building
  * profile-aware remediation text (see `formatCleanupBacklogRemediation`
  * below), trying the same live-config candidates as
- * `checkHelperRuntimeConfig` in declaration order and returning the first
- * one that declares a valid profile.
+ * `checkHelperRuntimeConfig` in declaration order.
+ *
+ * The **first present candidate wins outright** -- whether it declares a
+ * valid profile, leaves `helperRuntime` absent, or is malformed -- and the
+ * search never falls through to a later (legacy) candidate once a present
+ * file has been evaluated. A present canonical `.github/idd/config.json`
+ * that omits `helperRuntime` is an intentional `instructions-only`
+ * declaration, not an invitation to consult a stale `idd-policy.json` left
+ * over from before a migration to the canonical filename -- silently
+ * picking up the legacy file's profile there would build a remediation
+ * command for a runtime the repository no longer uses (idd-skill#1718
+ * review: both Copilot and the secondary advisory bot flagged this
+ * independently). Only an *absent* (nonexistent) candidate file is
+ * skipped in favor of the next one.
  *
  * Defaults to `'instructions-only'` -- the safe, no-runnable-command
- * fallback -- when no candidate exists, none is valid JSON, or none
- * declares a valid `helperRuntime.profile`; those cases are already
- * surfaced as their own findings by `checkHelperRuntimeConfig` /
- * `checkLiveConfigSchema`; this resolver only needs a fail-closed profile
- * to build remediation text from, not a second diagnostic.
+ * fallback -- when no candidate file exists at all, the first present one
+ * is not valid JSON, or it does not declare a valid
+ * `helperRuntime.profile`; those cases are already surfaced as their own
+ * findings by `checkHelperRuntimeConfig` / `checkLiveConfigSchema`; this
+ * resolver only needs a fail-closed profile to build remediation text
+ * from, not a second diagnostic.
  */
 export function resolveConfiguredHelperRuntimeProfile(root) {
   for (const file of LIVE_CONFIG_CANDIDATE_FILES) {
@@ -799,12 +812,12 @@ export function resolveConfiguredHelperRuntimeProfile(root) {
     try {
       config = JSON.parse(readFileSync(absolutePath, 'utf8'));
     } catch {
-      continue;
+      return 'instructions-only';
     }
     const helperRuntime = inspectHelperRuntimeConfig(config);
-    if (helperRuntime.status === 'ok') {
-      return helperRuntime.profile;
-    }
+    return helperRuntime.status === 'ok'
+      ? helperRuntime.profile
+      : 'instructions-only';
   }
   return 'instructions-only';
 }

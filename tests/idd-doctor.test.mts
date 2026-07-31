@@ -1107,6 +1107,33 @@ test('resolveConfiguredHelperRuntimeProfile defaults to instructions-only when u
   }
 });
 
+test('resolveConfiguredHelperRuntimeProfile never falls through a present canonical config to a legacy one (idd-skill#1718 review)', () => {
+  // A present .github/idd/config.json that omits helperRuntime is an
+  // intentional instructions-only declaration -- it must not fall through
+  // to a stale idd-policy.json left over from before a migration to the
+  // canonical filename, even though idd-policy.json alone (with no
+  // canonical file present) is still a supported legacy path on its own
+  // (see the test above). Flagged independently by both Copilot and the
+  // secondary advisory bot on PR #1730.
+  const dir = mkdtempSync(
+    join(tmpdir(), 'idd-doctor-helper-profile-no-fallthrough-'),
+  );
+  try {
+    mkdirSync(join(dir, '.github/idd'), { recursive: true });
+    writeFileSync(join(dir, '.github/idd/config.json'), JSON.stringify({}));
+    writeFileSync(
+      join(dir, 'idd-policy.json'),
+      JSON.stringify({ helperRuntime: { profile: 'package-manager' } }),
+    );
+    assert.equal(
+      resolveConfiguredHelperRuntimeProfile(dir),
+      'instructions-only',
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('computeWindowStartIso returns null for windows that overflow Date range', () => {
   const now = Date.UTC(2026, 4, 21, 12, 0, 0);
   // ~1e9 days is well past the ±100,000,000-day toISOString limit and
