@@ -12,6 +12,12 @@
   "extends": "./tsconfig.json",
   "compilerOptions": {
     "noEmit": false,
+    // A source with a type error otherwise still emits its .mjs before tsc
+    // exits 2, letting a broken build overwrite tracked scripts/*.mjs /
+    // bin/*.mjs with un-normalized output (the Biome pass and
+    // syncGitattributes in scripts/build-ts.mjs never run after that throw).
+    // This keeps a failed build side-effect-free on the tracked tree (#1707).
+    "noEmitOnError": true,
     "rootDir": "src",
     "outDir": ".",
     "removeComments": false,

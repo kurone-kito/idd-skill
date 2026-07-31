@@ -46,11 +46,29 @@ adopter repositories that vendor the bundle.
 
 ## Build and verification
 
-| Command                | Purpose                                                                         |
-| ---------------------- | ------------------------------------------------------------------------------- |
-| `pnpm run typecheck`   | `tsc --noEmit` over `src/**/*.mts` + `tests/**/*.mts` (`strict`)                |
-| `pnpm run build`       | Emit the generated `.mjs` (tsc) and normalize them with Biome                   |
-| `pnpm run build:check` | `build` then `git diff HEAD --exit-code` — fails when the committed tree drifts |
+| Command                | Purpose                                                                                                               |
+| ---------------------- | --------------------------------------------------------------------------------------------------------------------- |
+| `pnpm run typecheck`   | `tsc --noEmit` over `src/**/*.mts` + `tests/**/*.mts` (`strict`)                                                      |
+| `pnpm run build`       | Emit the generated `.mjs` (tsc) and normalize them with Biome                                                         |
+| `pnpm run build:check` | `node scripts/build-check.mjs` — builds, then fails when the committed tree drifts or gains an untracked emitted file |
+
+`tsconfig.build.json` sets `noEmitOnError: true`, so a `.mts` source with a
+type error emits nothing at all instead of letting tsc overwrite tracked
+`scripts/*.mjs` / `bin/*.mjs` with un-normalized output before the pipeline
+dies (`pnpm run build`'s Biome pass and `.gitattributes` sync never run
+after that throw) — a failed build stays side-effect-free on the tracked
+tree (observed 2026-07-31, #1707).
+
+`build:check` runs entirely through `node:child_process` rather than a
+shell pipeline, and its untracked-artifact check uses the `git ls-files
+--others` plumbing command rather than `git status`: both choices avoid
+failure modes review found on #1707 — a shell-composed
+`test`/`$()` check is POSIX-only and breaks under npm/pnpm's default
+`cmd.exe` shell on Windows (including callers of the reusable
+pnpm-boundary workflow on a `windows-*` runner), and `git status
+--porcelain` without an explicit `--untracked-files` override silently
+respects a local or CI `status.showUntrackedFiles=no` config, which
+would let an untracked emitted artifact pass unnoticed.
 
 `pnpm run lint:minimum` runs `typecheck` and `build:check`, so a forgotten
 rebuild or a hand-edited generated file fails the installed CI lane. The
