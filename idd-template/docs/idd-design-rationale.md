@@ -134,13 +134,13 @@ agent type, with a unique session suffix only recommended, not required.
 Sessions that follow that core definition literally and omit the suffix
 all hash to the identical index and converge on the same issue — the
 same converge-and-collide shape as the 3-way race above. This specific
-bare-agent-id collapse is preventive; no observed incident yet — #1694
-identified it by inspection of the two files' definitions, not from a
-collision that already happened. `idd-discover.instructions.md` closes
-the gap by requiring the session-suffixed `{agent-id}` or, when the
-agent-id carries no unique component, a session-local fallback token
-generated
-once at Discover entry and reused for the session — with enough entropy
+bare-agent-id collapse is preventive; no observed incident yet —
+kurone-kito/idd-skill#1694 identified it by inspection of the two
+files' definitions, not from a collision that already happened.
+`idd-discover.instructions.md` closes the gap by requiring the
+session-suffixed `{agent-id}` or, when the agent-id carries no unique
+component, a session-local fallback token generated once at Discover
+entry and reused for the session — with enough entropy
 (random or UUID-derived) to stay distinct across sessions launched at
 the same moment, since a bare timestamp alone would not.
 

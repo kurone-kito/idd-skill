@@ -138,8 +138,8 @@ identified it by inspection of the two files' definitions, not from a
 collision that already happened. `idd-discover.instructions.md` closes
 the gap by requiring the session-suffixed `{agent-id}` or, when the
 agent-id carries no unique component, a session-local fallback token
-generated
-once at Discover entry and reused for the session — with enough entropy
+generated once at Discover entry and reused for the session — with
+enough entropy
 (random or UUID-derived) to stay distinct across sessions launched at
 the same moment, since a bare timestamp alone would not.
 
