@@ -154,7 +154,12 @@ nonce was recorded for the active claim.
   those replies, refresh the watermark instead.
 - **Advisory bot wait** (restart-safe enforcement): schedule a wake, or
   background only if the topology-safety condition holds (confirmed to
-  route completion back to this turn) — otherwise wait synchronously.
+  route completion back to this turn) — otherwise wait synchronously:
+  no single `gh` command blocks on Copilot review state (unlike a CI
+  run), so run the AW poll loop below as a foreground wait, never via
+  `run_in_background` absent the confirmed condition — see
+  [idd-ci.instructions.md's Wake-up
+  discipline](idd-ci.instructions.md#wake-up-discipline).
   `PR_HEAD_SHA` is already available from the review-currency check
   above. Apply the advisory-wait protocol
   (`idd-advisory-wait.instructions.md`):
