@@ -968,8 +968,13 @@ test('applyDispositionPlan: happy path posts every item and reports accurate att
       return true;
     },
     postDisposition: (body) => {
-      calls.push(`post:${body.includes('101') ? 101 : 102}`);
-      return { id: body.includes('101') ? 9101 : 9102 };
+      // Identify the item by its notice-id token (same pattern the other
+      // tests in this file use), not a bare substring match, which could
+      // otherwise misfire against another field (e.g. the head SHA) that
+      // happens to contain the same digits.
+      const noticeId = Number(/issuecomment-(\d+)/.exec(body)?.[1]);
+      calls.push(`post:${noticeId}`);
+      return { id: 9000 + noticeId };
     },
     recoverPostedDisposition: () => {
       calls.push('recover');
