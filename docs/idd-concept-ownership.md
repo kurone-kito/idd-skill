@@ -77,7 +77,7 @@ matrix's general "who mutates" column above.
 | Branch and worktree | Deleted | Worker or merge-capable session, F4 — only after F3 merge succeeds |
 | Review thread | Resolved | Worker session, immediately after posting a disposition reply (E6/E13) — **except** an `**Awaiting maintainer decision**` reply, which leaves the thread unresolved until a maintainer responds (F2's unresolved-threads gate relies on this); or a human reviewer resolving their own thread |
 | PR | Merged | Merge-capable session, F3, only once the full F2/F2.5 gate checklist holds |
-| `review-watermark` / `review-baseline` / `advisory-wait` / `advisory-wait-recovery` / `advisory-reroll` markers | Superseded / minimized as `OUTDATED` | Worker session, after a newer valid marker of the same kind exists for the same claim or HEAD |
+| `review-watermark` / `review-baseline` / `advisory-wait:` / `advisory-wait-recovery:` / `advisory-reroll:` markers | Superseded / minimized as `OUTDATED` | Worker session, after a newer valid marker of the same kind exists for the same claim or HEAD |
 | Claim-marker chain (`claimed-by`/`unclaimed-by`/heartbeat) | Superseded / minimized as `OUTDATED` | Worker session, but **only** the prior claim-id's chain after a verified `supersedes: <prior-id>` takeover — a same-claim heartbeat chain must never be hidden; it is the active-claim audit trail |
 | External-check waiver | Expired, or consumed | Worker session, rerunning the waived check so it reflects the waiver; expiry itself is a time-driven transition (`expiresAt`) that needs no actor |
 | Blocked-by-human / needs-decision label | Removed | Human maintainer only, after resolving the underlying blocker |
