@@ -104,9 +104,10 @@ F2.5 (`idd-merge-handoff.instructions.md`) resolves the recorded
 merge policy before F3 merge execution: a missing recorded policy
 resolves to `fully_autonomous_merge` (the distributed default) and
 continues; `human_merge` always stops for a human handoff;
-`separate_merge_agent` continues only when the current session is
-the designated, qualifying merge-capable actor, and otherwise stops;
-an unrecognized recorded value stops with a maintainer hold. An IDD
+`separate_merge_agent` continues only when repository documentation
+designates the current session as the merge-capable actor and its
+documented resume condition is satisfied, and otherwise stops; an
+unrecognized recorded value stops with a maintainer hold. An IDD
 session may continue through F3 merge execution only after F2.5
 clears it this way and the normal claim, freshness, CI, advisory,
 review, and unresolved-thread gates pass.
