@@ -46,9 +46,10 @@ export function normalizeWhitespace(text: string): string {
  * declaration in `source` — including side-effect `import 'x'` and
  * `export * from 'x'` / `export { a } from 'x'` re-exports — plus every
  * dynamic `import('x')` call (with or without a second import-attributes
- * argument, e.g. `import('x', { with: { type: 'json' } })`), while
- * ignoring anything that appears only inside a `//` or `/* … *\/`-style
- * comment.
+ * argument, e.g. `import('x', { with: { type: 'json' } })`, and whether the
+ * specifier is quoted or written as a no-substitution template literal,
+ * e.g. `` import(`x`) ``), while ignoring anything that appears only inside
+ * a `//` or `/* … *\/`-style comment.
  *
  * The clause between the keyword and the specifier is restricted to the
  * characters an import/export clause can actually contain (identifiers,
@@ -58,6 +59,12 @@ export function normalizeWhitespace(text: string): string {
  * quote, which this class excludes, so scanning stops there instead of
  * misreading an unrelated string literal deeper in the function body as an
  * import specifier.
+ *
+ * The dynamic-import pattern's template-literal branch excludes `$` from
+ * the backtick-delimited content, which rejects `${…}` interpolation (an
+ * expression, not a static specifier) while still matching every realistic
+ * no-substitution specifier — no valid `node:` builtin, relative path, or
+ * npm package name contains a literal `$`.
  */
 export function extractImportSpecifiers(source: string): string[] {
   const withoutComments = source
@@ -71,11 +78,15 @@ export function extractImportSpecifiers(source: string): string[] {
     ),
     // `\s*(?:,|\))` (not just `\s*\)`) so a dynamic import that passes a
     // second import-attributes argument — `import('x', {...})` — still
-    // yields its specifier instead of being silently skipped.
-    /\bimport\s*\(\s*['"]([^'"]+)['"]\s*(?:,|\))/g,
+    // yields its specifier instead of being silently skipped. The
+    // alternation's second branch accepts a no-substitution template
+    // literal (backticks, no `$`) as well as a quoted string.
+    /\bimport\s*\(\s*(?:['"]([^'"]+)['"]|`([^`$]*)`)\s*(?:,|\))/g,
   ];
   return patterns.flatMap((pattern) =>
-    [...withoutComments.matchAll(pattern)].map((match) => match[1]),
+    [...withoutComments.matchAll(pattern)]
+      .map((match) => match[1] ?? match[2])
+      .filter((specifier): specifier is string => specifier !== undefined),
   );
 }
 

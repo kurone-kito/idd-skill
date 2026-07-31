@@ -42,6 +42,8 @@ export const noSpecifierHere = 1;
 const lazy = await import('node:crypto');
 const withAttributes = await import('node:test', { with: { type: 'json' } });
 const bareWithAttributes = await import('bare-package', {});
+const templateLiteral = await import(\`node:assert\`);
+const bareTemplateLiteral = await import(\`another-bare-package\`);
 `;
   assert.deepEqual(extractImportSpecifiers(sample), [
     'node:fs',
@@ -50,7 +52,15 @@ const bareWithAttributes = await import('bare-package', {});
     'node:crypto',
     'node:test',
     'bare-package',
+    'node:assert',
+    'another-bare-package',
   ]);
+});
+
+test('extractImportSpecifiers ignores an interpolated (non-static) template-literal import', () => {
+  // biome-ignore lint/suspicious/noTemplateCurlyInString: literal ${} chars under test, not a forgotten template placeholder.
+  const sample = 'const pkg = await import(`node:${suffix}`);';
+  assert.deepEqual(extractImportSpecifiers(sample), []);
 });
 
 test('audit/sync-manifest.json has at least one exact-mode idd-template/scripts/ mirror to guard', () => {
