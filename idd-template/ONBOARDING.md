@@ -362,6 +362,12 @@ every accepted argument.
 
 You need the following core execution and profile artifact files in the
 target repository. Use whichever method applies to your situation.
+This file list is identical across every helper runtime profile; it does
+not include the `vendored-node` profile's profile-conditional helper
+script bundle (for example `scripts/minimize-superseded-markers.mjs`) —
+see
+[Profile-conditional helper files](docs/onboarding/template-distribution.md#profile-conditional-helper-files-vendored-node)
+for why that bundle is out of scope here and how to get it anyway.
 For `idd-skill` maintainers working on this generated file list and the
 remote-fetch examples, see
 [Template distribution maintainer reference](docs/onboarding/template-distribution.md).
