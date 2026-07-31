@@ -55,10 +55,10 @@ requires every adopter to receive them.
 
 `scripts/minimize-superseded-markers.mjs` (mirrored to
 `idd-template/scripts/minimize-superseded-markers.mjs` by the
-`minimize-superseded-markers-helper` syncPair) is invoked from four
-template instruction files, but it is deliberately **not** part of the
+`minimize-superseded-markers-helper` syncPair) is invoked from template
+instruction files, but it is deliberately **not** part of the
 `idd-template-core-files` block or Option A's remote-fetch loops — every
-`idd-template/**` doc and instruction file those four instruction files
+`idd-template/**` doc and instruction file those instruction files
 reference is core, but a `scripts/*.mjs` helper reference (this one
 included) is not, since every helper script is `vendored-node`
 profile-conditional. This is intentional, not an oversight:
@@ -68,29 +68,36 @@ profile-conditional. This is intentional, not an oversight:
   both the always-shipped core set and the `vendored-node`
   profile-conditional helper bundle (`collectVendoredFiles` in
   `helper-runtime-manifest.mts`, which already vendors this file for
-  that profile). The core set and the profile-conditional bundle must
-  stay disjoint by construction.
+  that profile) — observed 2026-07-31, #1698, when adding this file to
+  the core set tripped exactly that guard. The core set and the
+  profile-conditional bundle must stay disjoint by construction.
 - Putting it in the core set would also make `buildSwitchPlan` (used to
   compute add/remove diffs when an adopter switches profiles) list it
   under `removeFiles` on a `vendored-node` → non-`vendored-node` switch,
   deleting a file the adopter still needs — a real data-loss hazard, not
-  just a manifest-consistency one.
+  just a manifest-consistency one (preventive; no observed incident
+  yet).
 - Every instruction-file call site degrades gracefully ("Skip entirely
   if … the helper is unavailable"), so the practical effect of the
   exclusion is bounded capability on some install paths, not breakage.
 
-**What this means for adopters**: only this **one** helper is mirrored
-into `idd-template/` (via the `minimize-superseded-markers-helper`
-syncPair), so it is the only `vendored-node` helper a plain Option B
+**What this means for adopters**: this helper is mirrored into
+`idd-template/` (via the `minimize-superseded-markers-helper`
+syncPair), but it is the only `vendored-node` helper a plain Option B
 copy (copying the `idd-template/` tree) actually supplies — Option B
 does **not** ship the rest of the `vendored-node` bundle, since none of
 the other files `collectVendoredFiles` manages under the source
 repository's own `scripts/` have an `idd-template/` mirror. Getting the
-**complete** `vendored-node` bundle requires running `node
-scripts/idd-onboard.mjs --import --source <path-to-a-cloned-idd-skill-tree>
---target <target-repo> --profile vendored-node` from the clone (see
-[CLI-assisted onboarding](../../ONBOARDING.md#cli-assisted-onboarding)),
-which reads from the clone's repository-root `scripts/`, not
+**complete** `vendored-node` bundle requires running this from the clone
+(see
+[CLI-assisted onboarding](../../ONBOARDING.md#cli-assisted-onboarding)):
+
+```sh
+node scripts/idd-onboard.mjs --import --source <path-to-a-cloned-idd-skill-tree> \
+  --target <target-repo> --profile vendored-node
+```
+
+This reads from the clone's repository-root `scripts/`, not
 `idd-template/scripts/` — a full `idd-skill` clone, not just the
 `idd-template/` subtree. Neither path is available to a pure Option A
 remote-fetch install with no local clone. An Option A adopter who
@@ -115,11 +122,11 @@ backs) only compares this doc's generated file list against
 `audit/sync-manifest.json`; it has no awareness of the `vendored-node`
 bundle in `helper-runtime-manifest.mts`, so it will not catch the
 overlap. `resolveImportFiles`'s `manifest drift: duplicate target path`
-hard-fail does catch it, but only under `pnpm run lint`'s full test
-suite (`node --test`), which `pre-push-validate` does not run — so a
-change that only satisfies `audit-docs.mjs --check` can still break
-`idd-onboard.mjs`. This needs a maintainer decision, not a mechanical
-file-list edit.
+hard-fail does catch it (the same #1698 incident cited above), but only
+under `pnpm run lint`'s full test suite (`node --test`), which
+`pre-push-validate` does not run — so a change that only satisfies
+`audit-docs.mjs --check` can still break `idd-onboard.mjs`. This needs a
+maintainer decision, not a mechanical file-list edit.
 
 ## Remote fetch examples
 
