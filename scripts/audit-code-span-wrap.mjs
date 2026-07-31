@@ -132,8 +132,10 @@ if (import.meta.main) {
       '\nCommonMark renders the line break as a literal space, corrupting ' +
         'the token. Rewrap so the break falls at a word boundary instead, ' +
         'or move the value into a fenced code block if it is too long to ' +
-        'fit on one line. See .github/copilot-instructions.md for the ' +
-        'convention.',
+        'fit on one line. Check whether the flagged character is itself a ' +
+        'hand-added wrap artifact (not part of the real value) -- if so, ' +
+        'delete it rather than just relocating the line break. See ' +
+        '.github/copilot-instructions.md for the convention.',
     );
     process.exit(1);
   }
