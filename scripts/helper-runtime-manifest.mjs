@@ -438,6 +438,47 @@ const HELPER_COMMANDS = [
       'Evaluate A4.5 suitability checks and map deterministic outcomes.',
   },
 ];
+/**
+ * Resolve the invocation string for one helper command under one
+ * `helperRuntime.profile`, so a helper-emitted remediation hint (for
+ * example idd-doctor's post-merge-cleanup-backlog warning) never
+ * hard-codes a single profile's command form. Mirrors
+ * `buildProfileCatalog`'s per-profile command mapping for a single helper
+ * id instead of building the full multi-helper catalog, so callers that
+ * only need one command avoid the catalog's package-manager
+ * detection / vendored-file filesystem walk.
+ *
+ * Returns `null` for `instructions-only` (no runnable command exists),
+ * an unrecognized helper `id`, or an unrecognized `profile` -- callers
+ * fall back to a documentation pointer alone in all three cases.
+ */
+export function resolveHelperCommandForProfile({
+  helperId,
+  profile,
+  packageSpec = '',
+}) {
+  const command = HELPER_COMMANDS.find((entry) => entry.id === helperId);
+  if (!command) {
+    return null;
+  }
+  switch (profile) {
+    case 'vendored-node':
+      return command.vendoredCommand;
+    case 'package-manager':
+      // The bare bin name -- matches `buildProfileCatalog`'s own
+      // `package-manager` `commands` value, not a `<manager> run
+      // <scriptName>` form: argument forwarding after `run` differs
+      // across managers (npm requires a literal `--` before flags; pnpm
+      // and yarn do not), so a manager-agnostic emitted string would be
+      // wrong for at least one manager, which is worse than the bug this
+      // resolver exists to fix.
+      return command.binName;
+    case 'ephemeral-npx':
+      return `npx --yes --package ${normalizePackageSpec(packageSpec)} ${command.binName}`;
+    default:
+      return null;
+  }
+}
 // Flag-spec keys stay the dashed literal on purpose (never bare keys like
 // `profile:`): tests/flag-name-matrix.test.mts scans this file's *compiled*
 // .mjs source text for quoted flag literals such as the --profile spec key
