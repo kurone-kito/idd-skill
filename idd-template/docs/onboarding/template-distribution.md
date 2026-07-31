@@ -88,6 +88,7 @@ and wants this helper without cloning the repository can fetch the single
 file directly, the same way Option A fetches every other file:
 
 ```sh
+mkdir -p scripts
 curl -fsSL \
   "https://raw.githubusercontent.com/kurone-kito/idd-skill/main/idd-template/scripts/minimize-superseded-markers.mjs" \
   -o scripts/minimize-superseded-markers.mjs
@@ -98,8 +99,16 @@ helper) a genuine cross-profile core dependency, resolve the
 core/profile-conditional overlap in `idd-onboard.mts` and
 `helper-runtime-manifest.mts` first — do not add it to
 `idd-template-core-files` while the disjointness invariant above still
-holds; `checkGeneratedBlocks`/`resolveImportFiles` will not catch the
-resulting drift by themselves, so this needs a maintainer decision.
+holds. `node scripts/audit-docs.mjs --check` (which `checkGeneratedBlocks`
+backs) only compares this doc's generated file list against
+`audit/sync-manifest.json`; it has no awareness of the `vendored-node`
+bundle in `helper-runtime-manifest.mts`, so it will not catch the
+overlap. `resolveImportFiles`'s `manifest drift: duplicate target path`
+hard-fail does catch it, but only under `pnpm run lint`'s full test
+suite (`node --test`), which `pre-push-validate` does not run — so a
+change that only satisfies `audit-docs.mjs --check` can still break
+`idd-onboard.mjs`. This needs a maintainer decision, not a mechanical
+file-list edit.
 
 ## Remote fetch examples
 
