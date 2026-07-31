@@ -45,6 +45,13 @@ terms literally.
   hand-written helper `.mjs` path remains. `.mts` is the source of
   truth — edit the `.mts`, never the generated `.mjs`.
   See [docs/typescript-sources.md](docs/typescript-sources.md).
+- **Inline code span wrapping**: a code span may wrap at a word
+  boundary but must never wrap mid-token (right after a hyphen,
+  underscore, slash, or dot the token continues through) — CommonMark
+  renders the break as a literal space and corrupts the token. Put a
+  command too long for one line in a fenced code block instead.
+  Enforced by `node scripts/audit-code-span-wrap.mjs`
+  (repository-local; not distributed to `idd-template/`).
 
 ## Key workflow rules
 
