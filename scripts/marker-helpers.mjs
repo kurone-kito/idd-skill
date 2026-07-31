@@ -116,7 +116,8 @@ const OPERATIONAL_MARKER_ENTRIES = [
     label: 'advisory-reroll:',
     pattern:
       /^advisory-reroll:\s+\S+\s+[0-9a-f]{40}\s+\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z\s*$/,
-    // Case-sensitive on purpose (#1720), same reasoning as advisory-wait:.
+    // Case-sensitive on purpose (#1720), same reasoning as the
+    // advisory-wait: entry above.
     startPattern: /^advisory-reroll:/,
   },
   {
@@ -130,7 +131,8 @@ const OPERATIONAL_MARKER_ENTRIES = [
     label: 'copilot-unavailable:',
     pattern:
       /^copilot-unavailable:\s+\S+\s+[0-9a-f]{40}\s+\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z\s+claim:\S+\s+attempt:[1-9]\d*\s*$/,
-    // Case-sensitive on purpose (#1720), same reasoning as advisory-wait:.
+    // Case-sensitive on purpose (#1720), same reasoning as the
+    // advisory-wait: entry above.
     startPattern: /^copilot-unavailable:/,
   },
   {

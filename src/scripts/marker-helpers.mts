@@ -32,13 +32,14 @@ export interface OperationalMarker {
    * are this marker's literal label, regardless of what -- if anything --
    * follows it or how its fields are shaped. Required on every entry (#1720)
    * so `operationalMarkerPrefixByStart()` never needs a lower-fidelity
-   * case-sensitive `label.startsWith` fallback; must carry the exact same
-   * `i` flag as `pattern` -- a dedicated test asserts that parity for every
-   * `OPERATIONAL_MARKERS` entry. Deliberately **not** the same regex as
-   * `malformedPrefixPattern` below: that field validates the full field
-   * grammar, which is stricter than the token-only match this field
-   * replaces, and reusing it here would newly un-filter field-broken
-   * bodies (e.g. `<!-- claimed-by: -->`) that are filtered today.
+   * case-sensitive `normalized.startsWith(candidate.label)` fallback; must
+   * carry the exact same `i` flag as `pattern` -- a dedicated test asserts
+   * that parity for every `OPERATIONAL_MARKERS` entry. Deliberately **not**
+   * the same regex as `malformedPrefixPattern` below: that field validates
+   * the full field grammar, which is stricter than the token-only match
+   * this field replaces, and reusing it here would newly un-filter
+   * field-broken bodies (e.g. `<!-- claimed-by: -->`) that are filtered
+   * today.
    */
   startPattern: RegExp;
   /**
@@ -274,7 +275,8 @@ const OPERATIONAL_MARKER_ENTRIES: OperationalMarker[] = [
     label: 'advisory-reroll:',
     pattern:
       /^advisory-reroll:\s+\S+\s+[0-9a-f]{40}\s+\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z\s*$/,
-    // Case-sensitive on purpose (#1720), same reasoning as advisory-wait:.
+    // Case-sensitive on purpose (#1720), same reasoning as the
+    // advisory-wait: entry above.
     startPattern: /^advisory-reroll:/,
   },
   {
@@ -288,7 +290,8 @@ const OPERATIONAL_MARKER_ENTRIES: OperationalMarker[] = [
     label: 'copilot-unavailable:',
     pattern:
       /^copilot-unavailable:\s+\S+\s+[0-9a-f]{40}\s+\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z\s+claim:\S+\s+attempt:[1-9]\d*\s*$/,
-    // Case-sensitive on purpose (#1720), same reasoning as advisory-wait:.
+    // Case-sensitive on purpose (#1720), same reasoning as the
+    // advisory-wait: entry above.
     startPattern: /^copilot-unavailable:/,
   },
   {
