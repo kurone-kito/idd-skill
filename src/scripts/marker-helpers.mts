@@ -180,7 +180,7 @@ export interface ParsedCopilotUnavailableMarker {
 const ISO8601_UTC_PATTERN = /\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z/;
 const OPTIONAL_IDD_VISIBLE_NOTE_PATTERN = String.raw`(?:\s*|\s*\n\s*_[^\n]*\bIDD\b[^\n]*_\s*)`;
 
-export const OPERATIONAL_MARKERS: readonly OperationalMarker[] = [
+const OPERATIONAL_MARKER_ENTRIES: OperationalMarker[] = [
   {
     label: '<!-- claimed-by:',
     pattern:
@@ -303,6 +303,23 @@ export const OPERATIONAL_MARKERS: readonly OperationalMarker[] = [
     startPattern: /^<!--\s*idd-external-check-waiver:/i,
   },
 ];
+
+/**
+ * Frozen, exported view of {@link OPERATIONAL_MARKER_ENTRIES}. This array is
+ * exported (and re-exported transitively via `protocol-helpers.mts`'s
+ * `export * from './marker-helpers.mts'`) so tests can iterate every entry
+ * for the case-flag-parity / label-correspondence invariants (#1720). The
+ * `readonly OperationalMarker[]` type is compile-time only and does not
+ * stop a JS consumer -- or a TS call site that casts around the type --
+ * from mutating the array or an entry at runtime, which would silently
+ * change marker recognition for every `operationalMarkerPrefix*` call
+ * process-wide (this module's own three call sites included). `Object.freeze`
+ * on both the array and each entry makes that mutation a no-op (throwing in
+ * strict mode) instead of a silent, shared-state corruption.
+ */
+export const OPERATIONAL_MARKERS: readonly OperationalMarker[] = Object.freeze(
+  OPERATIONAL_MARKER_ENTRIES.map((marker) => Object.freeze(marker)),
+);
 
 export const IDD_AGENT_DERIVED_MARKERS: ReadonlySet<string> = new Set([
   '<!-- claimed-by:',

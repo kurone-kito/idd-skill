@@ -21,20 +21,28 @@ test('every OPERATIONAL_MARKERS entry carries the same /i flag on pattern and st
   }
 });
 
-test('every OPERATIONAL_MARKERS entry startPattern is ^-anchored and not global', () => {
+test('every OPERATIONAL_MARKERS entry startPattern is ^-anchored and not global or sticky', () => {
   for (const marker of OPERATIONAL_MARKERS) {
     assert.ok(
       marker.startPattern.source.startsWith('^'),
       `${marker.label}: startPattern "${marker.startPattern.source}" must anchor at ^`,
     );
-    // A `g`-flagged RegExp is `lastIndex`-stateful across repeated `.test()`
-    // calls in `OPERATIONAL_MARKERS.find(...)` -- a shared instance reused
-    // across many `operationalMarkerPrefixByStart()` calls would then give
-    // inconsistent results depending on call history.
+    // A `g`- or `y`-flagged RegExp is `lastIndex`-stateful across repeated
+    // `.test()` calls in `OPERATIONAL_MARKERS.find(...)` -- a shared
+    // instance reused across many `operationalMarkerPrefixByStart()` calls
+    // would then give inconsistent results depending on call history.
+    // Sticky (`/y`) is the same hazard as global (`/g`) here: both advance
+    // `lastIndex` on a match, they just differ in where the match is
+    // required to start.
     assert.equal(
       marker.startPattern.global,
       false,
       `${marker.label}: startPattern must not carry the /g flag`,
+    );
+    assert.equal(
+      marker.startPattern.sticky,
+      false,
+      `${marker.label}: startPattern must not carry the /y flag`,
     );
   }
 });
