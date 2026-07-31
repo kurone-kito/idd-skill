@@ -57,9 +57,11 @@ requires every adopter to receive them.
 `idd-template/scripts/minimize-superseded-markers.mjs` by the
 `minimize-superseded-markers-helper` syncPair) is invoked from four
 template instruction files, but it is deliberately **not** part of the
-`idd-template-core-files` block or Option A's remote-fetch loops, even
-though every other file those four instruction files reference is core.
-This is intentional, not an oversight:
+`idd-template-core-files` block or Option A's remote-fetch loops — every
+`idd-template/**` doc and instruction file those four instruction files
+reference is core, but a `scripts/*.mjs` helper reference (this one
+included) is not, since every helper script is `vendored-node`
+profile-conditional. This is intentional, not an oversight:
 
 - `idd-onboard.mjs`'s `resolveImportFiles` hard-fails with a "manifest
   drift: duplicate target path" error if a file's target path appears in
