@@ -77,15 +77,24 @@ This is intentional, not an oversight:
   if … the helper is unavailable"), so the practical effect of the
   exclusion is bounded capability on some install paths, not breakage.
 
-**What this means for adopters**: the `vendored-node` profile's helper
-bundle — including this file — ships only through Option B (local copy),
-or through `node scripts/idd-onboard.mjs --import --profile
-vendored-node`, which requires `--source <path-to-a-cloned-idd-skill-tree>`
-(see [CLI-assisted onboarding](../../ONBOARDING.md#cli-assisted-onboarding)).
-Neither path is available to a pure Option A remote-fetch install with no
-local clone. An Option A adopter who selected the `vendored-node` profile
-and wants this helper without cloning the repository can fetch the single
-file directly, the same way Option A fetches every other file:
+**What this means for adopters**: only this **one** helper is mirrored
+into `idd-template/` (via the `minimize-superseded-markers-helper`
+syncPair), so it is the only `vendored-node` helper a plain Option B
+copy (copying the `idd-template/` tree) actually supplies — Option B
+does **not** ship the rest of the `vendored-node` bundle, since none of
+the other files `collectVendoredFiles` manages under the source
+repository's own `scripts/` have an `idd-template/` mirror. Getting the
+**complete** `vendored-node` bundle requires `node scripts/idd-onboard.mjs
+--import --profile vendored-node --source <path-to-a-cloned-idd-skill-tree>`
+(see
+[CLI-assisted onboarding](../../ONBOARDING.md#cli-assisted-onboarding)),
+which reads from the clone's repository-root `scripts/`, not
+`idd-template/scripts/` — a full `idd-skill` clone, not just the
+`idd-template/` subtree. Neither path is available to a pure Option A
+remote-fetch install with no local clone. An Option A adopter who
+selected the `vendored-node` profile and wants this one self-contained
+helper without cloning the repository can fetch it directly, the same
+way Option A fetches every other file:
 
 ```sh
 mkdir -p scripts
