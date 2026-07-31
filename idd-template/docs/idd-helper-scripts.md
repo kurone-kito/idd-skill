@@ -1574,10 +1574,10 @@ from F2 on a non-zero `--assert` exit:
    guarantees it predates any review the bot submits in response. Doing
    it in the other order opens a race -- a bot fast enough to respond
    between the request and the marker post would submit a review whose
-   `submittedAt` is _earlier_ than `latestAt`, so `hasFreshReviewSince-
-   LastReroll` would never see it as an answer and `inFlight` would
-   stay `true` for the full pending window despite already being
-   answered (PR #1517 review). If the request itself then fails after
+   `submittedAt` is _earlier_ than `latestAt`, so
+   `hasFreshReviewSince-LastReroll` would never see it as an answer and
+   `inFlight` would stay `true` for the full pending window despite already
+   being answered (PR #1517 review). If the request itself then fails after
    the marker already posted, treat that the same as a failed request
    elsewhere in this protocol: fail closed to a hold rather than
    silently leaving a marker with no matching request behind. Then poll
