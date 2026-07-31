@@ -284,8 +284,12 @@ completion.
 
 Schedule a wake, or background this wait only if the
 topology-safety condition holds (confirmed to route completion back to
-this turn); otherwise wait synchronously. Delegate polling mechanics to
-`idd-ci.instructions.md`.
+this turn); otherwise wait synchronously (`gh run watch <run-id>
+--exit-status`, or `gh pr checks <pr-number> --watch` — see
+[idd-ci.instructions.md's Wake-up
+discipline](idd-ci.instructions.md#wake-up-discipline); do not
+`run_in_background` this wait absent the confirmed condition above).
+Delegate polling mechanics to `idd-ci.instructions.md`.
 
 - **On success** → proceed to `idd-review-snapshot.instructions.md`
 - **`idd-advisory-convergence` is the sole non-pass required check, and

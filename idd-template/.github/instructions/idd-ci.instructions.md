@@ -269,10 +269,15 @@ condition below accounts for this.
 
 - **No interim polling turns** — schedule one wake at the **expected**
   completion, or background only if the topology is confirmed to route
-  completion back to this turn; otherwise wait synchronously. Never
-  insert "is it done yet?" turns or end this turn assuming an
-  unconfirmed background/async notification resumes it — that stalls
-  silently under supervisor/worker topologies.
+  completion back to this turn; otherwise wait synchronously — block
+  with `gh run watch <run-id> --exit-status` for a single workflow run,
+  or `gh pr checks <pr-number> --watch` for a PR's overall check
+  rollup. A bare `sleep` may be sandboxed or blocked in some runtimes;
+  a `run_in_background` Bash task or any other detached/backgrounded
+  mechanism must not be used for this wait unless the topology-safety
+  condition above is confirmed. Never insert "is it done yet?" turns or
+  end this turn assuming an unconfirmed background/async notification
+  resumes it — that stalls silently under supervisor/worker topologies.
 - **Batch post-wait actions** into one turn once the wait resolves
   (disposition, replies, marker, next gate together).
 - **Scope post-fix re-validation** to the changed surface when provably

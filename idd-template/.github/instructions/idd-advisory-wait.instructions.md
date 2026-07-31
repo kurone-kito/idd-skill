@@ -35,8 +35,10 @@ one). Enter the full protocol below **only** when
 Keep the wait itself cheap per the
 [wake-up discipline](idd-ci.instructions.md#wake-up-discipline): a
 single wake at the **expected** completion, or background only if the
-topology-safety condition holds; otherwise wait synchronously. Batch
-all post-wait actions into one turn.
+topology-safety condition holds; otherwise wait synchronously (`gh pr
+checks <pr-number> --watch`; do not `run_in_background` this wait
+absent the confirmed condition). Batch all post-wait actions into one
+turn.
 
 ## 1. Canonical path (helper-first)
 

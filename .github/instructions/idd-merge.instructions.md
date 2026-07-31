@@ -87,7 +87,11 @@ Before any mutating action in F3, apply the
    is an instant state read, not itself a wait. If it escalates to a
    genuine wait, return to the F2 advisory bot wait check (backgrounds
    only if the topology-safety condition holds — confirmed to route
-   completion back to this turn — otherwise waits synchronously).
+   completion back to this turn — otherwise waits synchronously with
+   `gh pr checks <pr-number> --watch`; do not `run_in_background` this
+   wait absent the confirmed condition — see
+   [idd-ci.instructions.md's Wake-up
+   discipline](idd-ci.instructions.md#wake-up-discipline)).
    Re-fetch the HEAD SHA:
 
    ```sh
