@@ -565,13 +565,18 @@ test('required-checks rollup: a same-instant literal FAILURE vs SUCCESS tie stil
 // same instances)". Feeds identical {name, state, completedAt} check
 // instances into both classifyCiChecks (protocol-helpers.mts) and
 // buildCiWaitStateSummary (this file) and asserts both report a failing
-// outcome for every genuine failure-family conclusion. CANCELLED is fed
-// too, but asserted as the deliberate, documented exception: ci-wait-state
-// still buckets a lone CANCELLED as failing for wait-gate purposes (its
-// own local FAILURE_STATES includes it), while classifyCiChecks
-// deliberately does not (CI_FAILURE_CONCLUSION_STATES excludes it, since a
-// cancelled run reached no real verdict) -- so this pins the carve-out
-// itself as a tested contract instead of only documenting it in prose.
+// outcome for every genuine failure-family conclusion (all six
+// CI_FAILURE_CONCLUSION_STATES members: FAILURE, TIMED_OUT,
+// ACTION_REQUIRED, STARTUP_FAILURE, STALE via the shared loop below, and
+// ERROR via its own StatusContext-shaped assertion after the loop, since
+// ERROR is StatusContext-only and the loop's CheckRun fixture cannot
+// exercise it). CANCELLED is fed too, but asserted as the deliberate,
+// documented exception: ci-wait-state still buckets a lone CANCELLED as
+// failing for wait-gate purposes (its own local FAILURE_STATES includes
+// it), while classifyCiChecks deliberately does not
+// (CI_FAILURE_CONCLUSION_STATES excludes it, since a cancelled run reached
+// no real verdict) -- so this pins the carve-out itself as a tested
+// contract instead of only documenting it in prose.
 test('classifyCiChecks and ci-wait-state agree on the failure-family vocabulary (fed the same instances)', () => {
   const completedAt = '2026-07-17T16:00:06Z';
   for (const failureState of [
@@ -642,6 +647,45 @@ test('classifyCiChecks and ci-wait-state agree on the failure-family vocabulary 
     'ci-wait-state deliberately still buckets a sole CANCELLED as failing',
   );
   assert.equal(waitCancelled.requiredChecks.status, 'failing');
+
+  // ERROR: StatusContext-only (a CheckRun conclusion never reports it), so
+  // it needs its own assertion outside the loop above -- the loop's
+  // checkRun() fixture always builds a CheckRun-shaped entry (via
+  // `conclusion`), which never exercises ci-wait-state's StatusContext
+  // branch (`normalizeCheckEntry`'s `__typename === 'StatusContext'` path;
+  // see the "a same-instant StatusContext ERROR..." test above). Copilot
+  // review, PR #1735: the loop originally omitted ERROR from the
+  // cross-module agreement claim entirely.
+  const classifyError = classifyCiChecks([
+    { name: 'gated', state: 'ERROR', completedAt },
+  ]);
+  assert.equal(
+    classifyError.status,
+    'failed',
+    'expected classifyCiChecks to bucket a sole ERROR as failed',
+  );
+
+  const waitError = buildCiWaitStateSummary(
+    {
+      headRefOid: HEAD_SHA,
+      statusCheckRollup: [
+        {
+          __typename: 'StatusContext',
+          context: 'gated',
+          state: 'ERROR',
+          targetUrl: '',
+          completedAt,
+        },
+      ],
+    },
+    { requiredCheckNames: ['gated'] },
+  );
+  assert.equal(
+    waitError.requiredChecks.anyRequiredFailing,
+    true,
+    'expected ci-wait-state to bucket a sole StatusContext ERROR as failing',
+  );
+  assert.equal(waitError.requiredChecks.status, 'failing');
 });
 
 test('required-checks rollup: a not-yet-generated required check reports missing, not vacuously passing', () => {
