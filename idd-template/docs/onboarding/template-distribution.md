@@ -51,6 +51,56 @@ When adding an optional issue-authoring companion file, update the
 companion files in the core template list unless the execution loop
 requires every adopter to receive them.
 
+## Profile-conditional helper files (`vendored-node`)
+
+`scripts/minimize-superseded-markers.mjs` (mirrored to
+`idd-template/scripts/minimize-superseded-markers.mjs` by the
+`minimize-superseded-markers-helper` syncPair) is invoked from four
+template instruction files, but it is deliberately **not** part of the
+`idd-template-core-files` block or Option A's remote-fetch loops, even
+though every other file those four instruction files reference is core.
+This is intentional, not an oversight:
+
+- `idd-onboard.mjs`'s `resolveImportFiles` hard-fails with a "manifest
+  drift: duplicate target path" error if a file's target path appears in
+  both the always-shipped core set and the `vendored-node`
+  profile-conditional helper bundle (`collectVendoredFiles` in
+  `helper-runtime-manifest.mts`, which already vendors this file for
+  that profile). The core set and the profile-conditional bundle must
+  stay disjoint by construction.
+- Putting it in the core set would also make `buildSwitchPlan` (used to
+  compute add/remove diffs when an adopter switches profiles) list it
+  under `removeFiles` on a `vendored-node` → non-`vendored-node` switch,
+  deleting a file the adopter still needs — a real data-loss hazard, not
+  just a manifest-consistency one.
+- Every instruction-file call site degrades gracefully ("Skip entirely
+  if … the helper is unavailable"), so the practical effect of the
+  exclusion is bounded capability on some install paths, not breakage.
+
+**What this means for adopters**: the `vendored-node` profile's helper
+bundle — including this file — ships only through Option B (local copy),
+or through `node scripts/idd-onboard.mjs --import --profile
+vendored-node`, which requires `--source <path-to-a-cloned-idd-skill-tree>`
+(see [CLI-assisted onboarding](../../ONBOARDING.md#cli-assisted-onboarding)).
+Neither path is available to a pure Option A remote-fetch install with no
+local clone. An Option A adopter who selected the `vendored-node` profile
+and wants this helper without cloning the repository can fetch the single
+file directly, the same way Option A fetches every other file:
+
+```sh
+curl -fsSL \
+  "https://raw.githubusercontent.com/kurone-kito/idd-skill/main/idd-template/scripts/minimize-superseded-markers.mjs" \
+  -o scripts/minimize-superseded-markers.mjs
+```
+
+If a future change makes this helper (or another `vendored-node`
+helper) a genuine cross-profile core dependency, resolve the
+core/profile-conditional overlap in `idd-onboard.mts` and
+`helper-runtime-manifest.mts` first — do not add it to
+`idd-template-core-files` while the disjointness invariant above still
+holds; `checkGeneratedBlocks`/`resolveImportFiles` will not catch the
+resulting drift by themselves, so this needs a maintainer decision.
+
 ## Remote fetch examples
 
 The `gh api` and `curl` loops in `idd-template/ONBOARDING.md` intentionally

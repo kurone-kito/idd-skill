@@ -60,7 +60,6 @@
       "sourceGlobs": [
         "idd-template/.github/idd/*.json",
         "idd-template/.githooks/*",
-        "idd-template/scripts/*.mjs",
         "idd-template/.github/instructions/idd-*.instructions.md",
         "idd-template/.github/instructions/lite/idd-*.instructions.md",
         "idd-template/docs/idd-*.md",
@@ -78,7 +77,6 @@
         "idd-template/.githooks/_idd-worktree-guard.sh",
         "idd-template/.githooks/pre-commit",
         "idd-template/.githooks/pre-push",
-        "idd-template/scripts/minimize-superseded-markers.mjs",
         "idd-template/.github/instructions/idd-overview-core.instructions.md",
         "idd-template/.github/instructions/idd-overview-appendix.instructions.md",
         "idd-template/.github/instructions/idd-discover.instructions.md",
