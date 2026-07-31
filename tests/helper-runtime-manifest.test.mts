@@ -597,6 +597,16 @@ function readInstructionFiles(): { name: string; source: string }[] {
 //     idd-template's own row stays the generic `{{INSTALL_DEPS_COMMAND}}`
 //     placeholder, so an idd-template adopter never sees this concrete
 //     invocation either unless they deliberately choose to replicate it.
+//   - scripts/audit-docs.mjs: the concreted Project commands table's
+//     pre-push-validate and post-fix-validate rows invoke it directly
+//     (see .github/idd/config.json / idd-overview-core.instructions.md)
+//     to catch this repo's own mirror-copy drift against
+//     audit/sync-manifest.json. idd-template's own rows stay the generic
+//     `{{PRE_PUSH_VALIDATE_COMMANDS}}` / `{{POST_FIX_VALIDATE_COMMANDS}}`
+//     placeholders, so an idd-template adopter never sees this concrete
+//     invocation, and the check is scoped to this repo's own
+//     idd-template/ pairing, not a tool an adopter repo could run as-is
+//     (idd-skill#1726).
 // Every other dev tool (build-ts, verify-workshop-integrity, …) is excluded by
 // ABSENCE — it is never `node`-invoked in the instructions — so it is NOT added
 // here on purpose: adding it would let a future accidental `node scripts/X.mjs`
@@ -606,6 +616,7 @@ function readInstructionFiles(): { name: string; source: string }[] {
 const DOGFOOD_ONLY_CONCRETE_TOOLS = new Set([
   'scripts/sync-docs.mjs',
   'scripts/verify-install-deps.mjs',
+  'scripts/audit-docs.mjs',
 ]);
 
 // Collect every helper the instruction files tell adopters to RUN as
@@ -714,16 +725,18 @@ test('the registration guard scopes out instruction-referenced libraries and dev
   // Dev/CI tooling and the maintainer-only post-merge sweep are likewise never
   // adopter-run commands, so they stay unregistered too. build-ts /
   // verify-workshop-integrity / merged-pr-feedback-sweep are excluded by
-  // absence (never `node`-invoked in the instructions); sync-docs and
-  // verify-install-deps are `node`-invoked in the dogfood instructions
-  // (banner / concreted install-deps row, respectively) but excluded via
-  // DOGFOOD_ONLY_CONCRETE_TOOLS, so the guard still scopes both out.
+  // absence (never `node`-invoked in the instructions); sync-docs,
+  // verify-install-deps, and audit-docs are `node`-invoked in the dogfood
+  // instructions (banner / concreted install-deps row / concreted
+  // pre-push-validate+post-fix-validate rows, respectively) but excluded
+  // via DOGFOOD_ONLY_CONCRETE_TOOLS, so the guard still scopes all three out.
   for (const nonAdopterTool of [
     'scripts/build-ts.mjs',
     'scripts/sync-docs.mjs',
     'scripts/verify-workshop-integrity.mjs',
     'scripts/verify-install-deps.mjs',
     'scripts/merged-pr-feedback-sweep.mjs',
+    'scripts/audit-docs.mjs',
   ]) {
     assert.equal(
       documentedCliHelpers.has(nonAdopterTool),
