@@ -4,7 +4,8 @@
 
 # Fast, commit-safe checks only. The full suite (typecheck, tests,
 # workshop integrity) runs in CI; pre-push-validate adds docs lint,
-# cspell, mirror-drift, and build:check at push time (post-fix-validate
-# adds mirror-drift only). build:check's `git diff` deadlocked here
-# against the in-progress commit's index.lock (see #1007).
+# cspell, mirror-drift, code-span-wrap, and build:check at push time
+# (post-fix-validate adds mirror-drift and code-span-wrap only).
+# build:check's `git diff` deadlocked here against the in-progress
+# commit's index.lock (see #1007).
 pnpm run lint:precommit
