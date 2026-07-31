@@ -20,13 +20,21 @@
 // The character immediately before the break's continuation character,
 // and the character immediately after the break, must each be
 // "token-continuing": alphanumeric, OR itself one of the continuation
-// characters (`-_/.`). A single alphanumeric-only check (PR #1736
-// review, Copilot + Codex) missed real corrupting cases where the
-// neighbor is punctuation rather than a letter/digit: `./\npath`,
+// characters (`-_/.`), OR simply absent because the continuation
+// character is the very first character of the span's content (no
+// `prevPrevChar` to check at all). A single alphanumeric-only check
+// (PR #1736 review, Copilot + Codex) missed real corrupting cases where
+// the neighbor is punctuation rather than a letter/digit -- `./\npath`,
 // `../\npath` (prevPrevChar is `.`), `path/\n.gitignore` (nextChar is
-// `.`), and `--\nflag` (prevPrevChar is the other `-`). Verified this
-// broadening adds zero new false positives against every existing
-// multi-line code span already in this repository's corpus.
+// `.`), `--\nflag` (prevPrevChar is the other `-`) -- and a follow-up
+// review pass caught that a *single*-character prefix (the continuation
+// character starting the span outright, e.g. `` `/\nusr/bin` `` or
+// `` `-\nflag` ``) still fell through, since `prevPrevChar` is
+// `undefined` there rather than a real character to test. Treating
+// "no character precedes it" as passing (nothing there to disqualify
+// it) closes that gap. Verified both broadenings add zero new false
+// positives against every existing multi-line code span already in
+// this repository's corpus.
 import {
   blankFencedCodeBlocks,
   INLINE_CODE_SPAN_PATTERN,
@@ -69,8 +77,7 @@ export function findCorruptingCodeSpanWraps(text) {
       if (
         prevChar !== undefined &&
         MID_TOKEN_CONTINUATION.test(prevChar) &&
-        prevPrevChar !== undefined &&
-        TOKEN_CONTINUING.test(prevPrevChar) &&
+        (prevPrevChar === undefined || TOKEN_CONTINUING.test(prevPrevChar)) &&
         nextChar !== undefined &&
         TOKEN_CONTINUING.test(nextChar)
       ) {

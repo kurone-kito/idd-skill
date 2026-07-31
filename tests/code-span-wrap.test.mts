@@ -72,6 +72,31 @@ test('flags a doubled-flag-dash split (prevPrevChar is the other hyphen)', () =>
   assert.equal(violations.length, 1);
 });
 
+test('flags a single-character absolute-path prefix split (span starts with the break char)', () => {
+  // PR #1736 follow-up review (Codex): `/usr/bin` splitting as `/` /
+  // `usr/bin` was still missed after the two-character-prefix fix,
+  // because prevPrevChar is `undefined` when the continuation
+  // character is the very first character of the span -- there is no
+  // character before it to disqualify the match.
+  const violations = findCorruptingCodeSpanWraps('`/\nusr/bin`');
+  assert.equal(violations.length, 1);
+});
+
+test('flags a single-character flag prefix split (span starts with the break char)', () => {
+  const violations = findCorruptingCodeSpanWraps('`-\nflag`');
+  assert.equal(violations.length, 1);
+});
+
+test('flags a single-character hidden-dotfile prefix split (span starts with the break char)', () => {
+  const violations = findCorruptingCodeSpanWraps('`.\ngitignore`');
+  assert.equal(violations.length, 1);
+});
+
+test('flags a single-character underscore prefix split (span starts with the break char)', () => {
+  const violations = findCorruptingCodeSpanWraps('`_\nprivate`');
+  assert.equal(violations.length, 1);
+});
+
 test('still does not flag a slash preceded by a space after broadening the neighbor check', () => {
   // Regression guard: broadening prevPrevChar/nextChar to accept
   // continuation characters must not undo the space-boundary exclusion.
