@@ -1575,7 +1575,7 @@ from F2 on a non-zero `--assert` exit:
    it in the other order opens a race -- a bot fast enough to respond
    between the request and the marker post would submit a review whose
    `submittedAt` is _earlier_ than `latestAt`, so
-   `hasFreshReviewSince-LastReroll` would never see it as an answer and
+   `hasFreshReviewSinceLastReroll` would never see it as an answer and
    `inFlight` would stay `true` for the full pending window despite already
    being answered (PR #1517 review). If the request itself then fails after
    the marker already posted, treat that the same as a failed request
