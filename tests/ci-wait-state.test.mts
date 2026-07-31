@@ -6,6 +6,7 @@ import {
   parseArgs,
   selectLatestCheckEntry,
 } from '../src/scripts/ci-wait-state.mts';
+import { classifyCiChecks } from '../src/scripts/protocol-helpers.mts';
 
 // --- #1450: migration onto the shared cli-args.mts wrapper -----------------
 
@@ -257,16 +258,20 @@ test('required-checks rollup: the PR #1434 real-world shape (2 cancelled, 1 fail
   assert.equal(summary.requiredChecks.status, 'success');
 });
 
-// #1504: ciStateTieRank (protocol-helpers.mts) special-cases only the two
-// literal strings 'FAILURE' and 'CANCELLED'; this file's own wider
-// FAILURE_STATES vocabulary (TIMED_OUT, ACTION_REQUIRED, STARTUP_FAILURE,
-// STALE, ERROR) fell into the shared tie-break's generic rank-1 bucket, so a
-// same-instant completedAt tie against a success-family state resolved by
-// raw lexicographic comparison instead of "the failure should win". These
-// tests deliberately tie every pair at the identical completedAt to exercise
-// that same-instant fallback specifically, unlike the #1478 tests above
-// (which use strictly increasing timestamps to exercise latest-completedAt
-// selection instead).
+// #1504: at the time, ciStateTieRank (protocol-helpers.mts) special-cased
+// only the two literal strings 'FAILURE' and 'CANCELLED'; this file's own
+// wider FAILURE_STATES vocabulary (TIMED_OUT, ACTION_REQUIRED,
+// STARTUP_FAILURE, STALE, ERROR) fell into the shared tie-break's generic
+// rank-1 bucket, so a same-instant completedAt tie against a success-family
+// state resolved by raw lexicographic comparison instead of "the failure
+// should win". #1688 closed that shared corner: ciStateTieRank now ranks
+// every CI_FAILURE_CONCLUSION_STATES member (which FAILURE_STATES above is
+// derived from) at 0 directly, so these tests -- originally written to pin
+// the #1504 local-only workaround -- now exercise the shared fix instead and
+// still pass unchanged. These tests deliberately tie every pair at the
+// identical completedAt to exercise that same-instant fallback specifically,
+// unlike the #1478 tests above (which use strictly increasing timestamps to
+// exercise latest-completedAt selection instead).
 test('required-checks rollup: a same-instant TIMED_OUT vs success-family tie still reports failing', () => {
   for (const successConclusion of [
     'SUCCESS',
@@ -444,16 +449,21 @@ test('required-checks rollup: a same-instant StatusContext ERROR vs (CheckRun) s
 });
 
 test('selectLatestCheckEntry: a same-instant tie between two distinct FAILURE_STATES members resolves deterministically regardless of input order', () => {
-  // Copilot review, PR #1530: tieBreakState() normalizes every failure-
-  // bucketed entry to the same literal 'FAILURE' for tie-break purposes,
-  // so two *different* raw failure states (e.g. TIMED_OUT and
-  // STARTUP_FAILURE) now tie on both completedAt and normalized state.
-  // selectLatestCheckEntry sorts the group by the original entry.state
-  // before reducing so this still resolves to a fixed winner (the
-  // lexicographically smallest raw state, matching this tie-break's
-  // pre-#1504 argmin-by-value behavior for two non-'FAILURE' failure
-  // states) regardless of which order the two instances arrive in. The
-  // winning instance's identity is not observable through
+  // Originally added for Copilot review, PR #1530, when selectLatestCheckEntry
+  // still normalized every failure-bucketed entry to the same literal
+  // 'FAILURE' string before comparing (tieBreakState(), removed by #1688):
+  // two *different* raw failure states (e.g. TIMED_OUT and STARTUP_FAILURE)
+  // tied on both completedAt and normalized state, so an explicit pre-sort
+  // was needed to keep the winner deterministic regardless of input order.
+  // #1688 widened the shared `ciStateTieRank` itself to rank every
+  // CI_FAILURE_CONCLUSION_STATES member at 0 directly, so selectLatestCheckEntry
+  // no longer normalizes or pre-sorts at all -- it compares each entry's own
+  // real `state`. The two raw states below now tie at rank 0 without ever
+  // colliding on a shared normalized string, so the existing residual
+  // fallback (lexicographically smallest raw state wins, matching this
+  // tie-break's pre-#1504 argmin-by-value behavior) is naturally
+  // order-independent again, and this test still pins that same fixed
+  // winner. The winning instance's identity is not observable through
   // buildCiWaitStateSummary's public shape (see the note on the ERROR
   // test above), so this calls the exported reducer directly instead.
   const timedOut = {
@@ -548,6 +558,90 @@ test('required-checks rollup: a same-instant literal FAILURE vs SUCCESS tie stil
   assert.equal(summary.requiredChecks.anyRequiredFailing, true);
   assert.equal(summary.requiredChecks.allRequiredPassing, false);
   assert.equal(summary.requiredChecks.status, 'failing');
+});
+
+// #1688 acceptance criterion: "ci-wait-state and classifyCiChecks agree on
+// the failure-family vocabulary (asserted by a test that feeds both the
+// same instances)". Feeds identical {name, state, completedAt} check
+// instances into both classifyCiChecks (protocol-helpers.mts) and
+// buildCiWaitStateSummary (this file) and asserts both report a failing
+// outcome for every genuine failure-family conclusion. CANCELLED is fed
+// too, but asserted as the deliberate, documented exception: ci-wait-state
+// still buckets a lone CANCELLED as failing for wait-gate purposes (its
+// own local FAILURE_STATES includes it), while classifyCiChecks
+// deliberately does not (CI_FAILURE_CONCLUSION_STATES excludes it, since a
+// cancelled run reached no real verdict) -- so this pins the carve-out
+// itself as a tested contract instead of only documenting it in prose.
+test('classifyCiChecks and ci-wait-state agree on the failure-family vocabulary (fed the same instances)', () => {
+  const completedAt = '2026-07-17T16:00:06Z';
+  for (const failureState of [
+    'FAILURE',
+    'TIMED_OUT',
+    'ACTION_REQUIRED',
+    'STARTUP_FAILURE',
+    'STALE',
+  ]) {
+    const classifyResult = classifyCiChecks([
+      { name: 'gated', state: failureState, completedAt },
+    ]);
+    assert.equal(
+      classifyResult.status,
+      'failed',
+      `expected classifyCiChecks to bucket a sole ${failureState} as failed`,
+    );
+
+    const waitSummary = buildCiWaitStateSummary(
+      {
+        headRefOid: HEAD_SHA,
+        statusCheckRollup: [
+          checkRun({
+            name: 'gated',
+            workflowName: 'ci',
+            conclusion: failureState,
+            completedAt,
+          }),
+        ],
+      },
+      { requiredCheckNames: ['gated'] },
+    );
+    assert.equal(
+      waitSummary.requiredChecks.anyRequiredFailing,
+      true,
+      `expected ci-wait-state to bucket a sole ${failureState} as failing`,
+    );
+    assert.equal(waitSummary.requiredChecks.status, 'failing');
+  }
+
+  // CANCELLED: deliberate divergence, not agreement -- pin both sides.
+  const classifyCancelled = classifyCiChecks([
+    { name: 'gated', state: 'CANCELLED', completedAt },
+  ]);
+  assert.equal(
+    classifyCancelled.status,
+    'unknown',
+    'classifyCiChecks deliberately does not bucket a sole CANCELLED as failed',
+  );
+
+  const waitCancelled = buildCiWaitStateSummary(
+    {
+      headRefOid: HEAD_SHA,
+      statusCheckRollup: [
+        checkRun({
+          name: 'gated',
+          workflowName: 'ci',
+          conclusion: 'CANCELLED',
+          completedAt,
+        }),
+      ],
+    },
+    { requiredCheckNames: ['gated'] },
+  );
+  assert.equal(
+    waitCancelled.requiredChecks.anyRequiredFailing,
+    true,
+    'ci-wait-state deliberately still buckets a sole CANCELLED as failing',
+  );
+  assert.equal(waitCancelled.requiredChecks.status, 'failing');
 });
 
 test('required-checks rollup: a not-yet-generated required check reports missing, not vacuously passing', () => {
