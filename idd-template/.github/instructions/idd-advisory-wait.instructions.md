@@ -270,11 +270,14 @@ verified HEAD within one pass).
 ### AW3-H — Hide superseded advisory-wait markers
 
 After a new `advisory-wait`/`advisory-wait-recovery` marker is verified
-for the current `PR_HEAD_SHA`, minimize every trusted prior
-`advisory-wait*` marker whose embedded HEAD SHA does **not** match, as
-`OUTDATED` (cuts F4 backlog and review-page noise). Find candidate IDs
-(trusted `advisory-wait*` markers with a differing embedded SHA), then
-call the minimize-markers command:
+for the current `PR_HEAD_SHA`, minimize every trusted prior marker of
+the `advisory-wait:`/`advisory-wait-recovery:`/`advisory-reroll:`
+family whose embedded HEAD SHA does **not** match, as `OUTDATED` (cuts
+F4 backlog and review-page noise; the reroll prefix is included because
+it anchors the same Copilot advisory-wait clock, so a stale-HEAD reroll
+marker is exactly as much noise as a stale advisory-wait one). Find
+candidate IDs (trusted markers of that family with a differing embedded
+SHA), then call the minimize-markers command:
 [shell fallback AW3-H](../../docs/idd-advisory-wait-shell-fallback.md#aw3-h).
 
 Skip entirely if the new marker was not verified, the candidate set is

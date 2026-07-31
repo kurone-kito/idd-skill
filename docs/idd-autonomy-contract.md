@@ -117,14 +117,14 @@ claim, scoped to the roadmap issue only.
 
 ### Advisory-wait markers (AW1-AW6)
 
-| Mutation                                                      | Reversible / Irreversible | Undo path / Governing gate                                                  | Source                                                   |
-| ------------------------------------------------------------- | ------------------------- | --------------------------------------------------------------------------- | -------------------------------------------------------- |
-| Post `advisory-wait:` request marker                          | Reversible                | Superseded by the next marker for a later HEAD, or by the SATISFIED outcome | AW3 REQUEST_NEEDED (`idd-advisory-wait.instructions.md`) |
-| Post `advisory-wait-recovery:` marker                         | Reversible                | Same as above                                                               | AW3-R (`idd-advisory-wait.instructions.md`)              |
-| Post `advisory-reroll:` marker                                | Reversible                | Same as above                                                               | AW6 (`idd-advisory-wait.instructions.md`)                |
-| Request/remove primary or secondary bot reviewer              | Reversible                | `gh pr edit --remove-reviewer` / re-request                                 | E14 (`idd-review-fix.instructions.md`)                   |
-| Hide superseded `advisory-wait*` markers (`OUTDATED`)         | Irreversible              | See GitHub-minimize convention above                                        | AW3-H (`idd-advisory-wait.instructions.md`)              |
-| Approve a gated Actions run (bot-triggered `action_required`) | Reversible                | Does not destroy state; only unblocks a run                                 | `idd-ci.instructions.md` Rerun mechanics                 |
+| Mutation                                                                                        | Reversible / Irreversible | Undo path / Governing gate                                                  | Source                                                   |
+| ----------------------------------------------------------------------------------------------- | ------------------------- | --------------------------------------------------------------------------- | -------------------------------------------------------- |
+| Post `advisory-wait:` request marker                                                            | Reversible                | Superseded by the next marker for a later HEAD, or by the SATISFIED outcome | AW3 REQUEST_NEEDED (`idd-advisory-wait.instructions.md`) |
+| Post `advisory-wait-recovery:` marker                                                           | Reversible                | Same as above                                                               | AW3-R (`idd-advisory-wait.instructions.md`)              |
+| Post `advisory-reroll:` marker                                                                  | Reversible                | Same as above                                                               | AW6 (`idd-advisory-wait.instructions.md`)                |
+| Request/remove primary or secondary bot reviewer                                                | Reversible                | `gh pr edit --remove-reviewer` / re-request                                 | E14 (`idd-review-fix.instructions.md`)                   |
+| Hide superseded `advisory-wait`/`advisory-wait-recovery`/`advisory-reroll` markers (`OUTDATED`) | Irreversible              | See GitHub-minimize convention above                                        | AW3-H (`idd-advisory-wait.instructions.md`)              |
+| Approve a gated Actions run (bot-triggered `action_required`)                                   | Reversible                | Does not destroy state; only unblocks a run                                 | `idd-ci.instructions.md` Rerun mechanics                 |
 
 ### Merge execution (F2.5-F3)
 

@@ -123,9 +123,9 @@ In the idd-skill source repository, the following optional helpers were adopted:
 - `scripts/audit-pr-cleanup.mjs` for post-merge comment cleanup auditing
 - `scripts/minimize-superseded-markers.mjs` for in-flight per-marker
   `minimizeComment` of strictly superseded `review-watermark`,
-  `advisory-wait`, or `claimed-by` markers — called by E1 (Step 2),
-  advisory-wait AW3-H, and claim takeover after the replacement
-  marker is verified
+  `advisory-wait`/`advisory-reroll`, or `claimed-by` markers — called by
+  E1 (Step 2), advisory-wait AW3-H, and claim takeover after the
+  replacement marker is verified
 
   Per-helper trust model: `minimize-superseded-markers` resolves its
   trusted-author gate with the same `flag > env > config` ladder as the

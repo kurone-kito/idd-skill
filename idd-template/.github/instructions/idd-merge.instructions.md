@@ -286,7 +286,8 @@ Before any mutating action in F3, apply the
      `OUTDATED` only after merge, once the marker is no longer needed
      for resume, advisory wait, or review-currency checks. Candidate
      prefixes: `<!-- review-watermark:`, `<!-- review-baseline:`,
-     `advisory-wait:`, `advisory-wait-recovery:`, `<!-- advisory-wait:`.
+     `advisory-wait:`, `advisory-wait-recovery:`, `<!-- advisory-wait:`,
+     `advisory-reroll:`.
    - Do not minimize comments with unresolved maintainer decisions,
      active holds, failed-CI context maintainers still need,
      non-operational human discussion, or content still in active F2/F3
