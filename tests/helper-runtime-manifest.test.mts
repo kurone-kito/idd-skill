@@ -18,6 +18,7 @@ import {
   collectVendoredFiles,
   detectPackageManager,
   recommendHelperRuntimeProfile,
+  resolveHelperCommandForProfile,
   resolveSourcePackageMetadata,
 } from '../src/scripts/helper-runtime-manifest.mts';
 
@@ -735,4 +736,63 @@ test('the registration guard scopes out instruction-referenced libraries and dev
       `${nonAdopterTool} is not an adopter CLI helper and must not be registered in HELPER_COMMANDS`,
     );
   }
+});
+
+test('resolveHelperCommandForProfile resolves the audit-pr-cleanup invocation for every profile (idd-skill#1718)', () => {
+  assert.equal(
+    resolveHelperCommandForProfile({
+      helperId: 'audit-pr-cleanup',
+      profile: 'vendored-node',
+    }),
+    'node scripts/audit-pr-cleanup.mjs',
+  );
+  assert.equal(
+    resolveHelperCommandForProfile({
+      helperId: 'audit-pr-cleanup',
+      profile: 'package-manager',
+    }),
+    'idd-audit-pr-cleanup',
+  );
+  assert.equal(
+    resolveHelperCommandForProfile({
+      helperId: 'audit-pr-cleanup',
+      profile: 'ephemeral-npx',
+    }),
+    `npx --yes --package ${DEFAULT_PACKAGE_SPEC} idd-audit-pr-cleanup`,
+  );
+  assert.equal(
+    resolveHelperCommandForProfile({
+      helperId: 'audit-pr-cleanup',
+      profile: 'instructions-only',
+    }),
+    null,
+  );
+});
+
+test('resolveHelperCommandForProfile honors an explicit --package-spec pin under ephemeral-npx', () => {
+  assert.equal(
+    resolveHelperCommandForProfile({
+      helperId: 'audit-pr-cleanup',
+      profile: 'ephemeral-npx',
+      packageSpec: 'https://example.com/pinned-idd-skill.tgz',
+    }),
+    'npx --yes --package https://example.com/pinned-idd-skill.tgz idd-audit-pr-cleanup',
+  );
+});
+
+test('resolveHelperCommandForProfile returns null for an unknown helper id or profile', () => {
+  assert.equal(
+    resolveHelperCommandForProfile({
+      helperId: 'not-a-real-helper',
+      profile: 'vendored-node',
+    }),
+    null,
+  );
+  assert.equal(
+    resolveHelperCommandForProfile({
+      helperId: 'audit-pr-cleanup',
+      profile: 'not-a-real-profile',
+    }),
+    null,
+  );
 });

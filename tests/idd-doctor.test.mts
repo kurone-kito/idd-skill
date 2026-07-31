@@ -30,6 +30,7 @@ import {
   findMissingWorkshopReferences,
   findMissingWorktreeHardening,
   findPlaceholders,
+  formatCleanupBacklogRemediation,
   formatCleanupBacklogScanPreamble,
   formatCleanupBacklogScanProgress,
   hookWiresWorktreeGuard,
@@ -41,6 +42,7 @@ import {
   parseThresholdsProseHours,
   readWorktreeGuardBranchPatterns,
   readWorktreeGuardEnabled,
+  resolveConfiguredHelperRuntimeProfile,
   scanFileForPlaceholders,
   stripMarkdownNonText,
 } from '../src/scripts/idd-doctor.mts';
@@ -994,6 +996,142 @@ test('classifyBacklog coerces non-numeric / NaN / negative thresholds to 0', () 
   assert.equal(classifyBacklog([1], -5).warn, true);
   // Zero count must not warn even with a broken threshold.
   assert.equal(classifyBacklog([], NaN).warn, false);
+});
+
+test('formatCleanupBacklogRemediation resolves the audit-pr-cleanup invocation per profile (idd-skill#1718)', () => {
+  // vendored-node: unchanged from the pre-#1718 hard-coded text.
+  assert.equal(
+    formatCleanupBacklogRemediation('vendored-node'),
+    'Remediation: see docs/idd-comment-minimization.md or run `node scripts/audit-pr-cleanup.mjs --pr <N> --apply --skip-claim-check`.',
+  );
+
+  // package-manager: the bare `idd-audit-pr-cleanup` bin name -- the same
+  // form buildProfileCatalog already emits as this profile's `commands`
+  // value (docs/idd-helper-scripts.md's "profile-selected `idd:<name>`"
+  // convention), deliberately not a `<manager> run <scriptName>` form: arg
+  // forwarding after `run` differs across managers (npm needs a literal
+  // `--` before flags; pnpm/yarn don't), so a manager-agnostic emitted
+  // string would be wrong for at least one manager.
+  assert.equal(
+    formatCleanupBacklogRemediation('package-manager'),
+    'Remediation: see docs/idd-comment-minimization.md or run `idd-audit-pr-cleanup --pr <N> --apply --skip-claim-check`.',
+  );
+
+  // ephemeral-npx: names the idd-* bin via npx, no scripts/ path -- this is
+  // the exact profile the reported adopter repo was on (idd-skill#1718).
+  const ephemeralNpxText = formatCleanupBacklogRemediation('ephemeral-npx');
+  assert.match(
+    ephemeralNpxText,
+    /\bnpx --yes --package \S+ idd-audit-pr-cleanup /,
+  );
+  assert.doesNotMatch(ephemeralNpxText, /scripts\/audit-pr-cleanup\.mjs/);
+
+  // instructions-only: prescribes no command, docs pointer only.
+  assert.equal(
+    formatCleanupBacklogRemediation('instructions-only'),
+    'Remediation: see docs/idd-comment-minimization.md.',
+  );
+});
+
+test('formatCleanupBacklogRemediation falls back to the docs-only clause for an unrecognized profile', () => {
+  assert.equal(
+    formatCleanupBacklogRemediation('not-a-real-profile'),
+    'Remediation: see docs/idd-comment-minimization.md.',
+  );
+});
+
+test('resolveConfiguredHelperRuntimeProfile reads the live helperRuntime.profile', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'idd-doctor-helper-profile-'));
+  try {
+    mkdirSync(join(dir, '.github/idd'), { recursive: true });
+    writeFileSync(
+      join(dir, '.github/idd/config.json'),
+      JSON.stringify({ helperRuntime: { profile: 'ephemeral-npx' } }),
+    );
+    assert.equal(resolveConfiguredHelperRuntimeProfile(dir), 'ephemeral-npx');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('resolveConfiguredHelperRuntimeProfile also reads the legacy idd-policy.json path', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'idd-doctor-helper-profile-legacy-'));
+  try {
+    writeFileSync(
+      join(dir, 'idd-policy.json'),
+      JSON.stringify({ helperRuntime: { profile: 'package-manager' } }),
+    );
+    assert.equal(resolveConfiguredHelperRuntimeProfile(dir), 'package-manager');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('resolveConfiguredHelperRuntimeProfile defaults to instructions-only when unset, absent, or malformed', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'idd-doctor-helper-profile-absent-'));
+  try {
+    // No config file at all.
+    assert.equal(
+      resolveConfiguredHelperRuntimeProfile(dir),
+      'instructions-only',
+    );
+
+    // Config present but helperRuntime unset.
+    mkdirSync(join(dir, '.github/idd'), { recursive: true });
+    writeFileSync(join(dir, '.github/idd/config.json'), JSON.stringify({}));
+    assert.equal(
+      resolveConfiguredHelperRuntimeProfile(dir),
+      'instructions-only',
+    );
+
+    // Malformed JSON -- already reported elsewhere by
+    // checkHelperRuntimeConfig / checkLiveConfigSchema; this resolver just
+    // fails closed to the safe no-command default.
+    writeFileSync(join(dir, '.github/idd/config.json'), '{ not json');
+    assert.equal(
+      resolveConfiguredHelperRuntimeProfile(dir),
+      'instructions-only',
+    );
+
+    // Invalid profile value.
+    writeFileSync(
+      join(dir, '.github/idd/config.json'),
+      JSON.stringify({ helperRuntime: { profile: 'bun' } }),
+    );
+    assert.equal(
+      resolveConfiguredHelperRuntimeProfile(dir),
+      'instructions-only',
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('resolveConfiguredHelperRuntimeProfile never falls through a present canonical config to a legacy one (idd-skill#1718 review)', () => {
+  // A present .github/idd/config.json that omits helperRuntime is an
+  // intentional instructions-only declaration -- it must not fall through
+  // to a stale idd-policy.json left over from before a migration to the
+  // canonical filename, even though idd-policy.json alone (with no
+  // canonical file present) is still a supported legacy path on its own
+  // (see the test above). Flagged independently by both Copilot and the
+  // secondary advisory bot on PR #1730.
+  const dir = mkdtempSync(
+    join(tmpdir(), 'idd-doctor-helper-profile-no-fallthrough-'),
+  );
+  try {
+    mkdirSync(join(dir, '.github/idd'), { recursive: true });
+    writeFileSync(join(dir, '.github/idd/config.json'), JSON.stringify({}));
+    writeFileSync(
+      join(dir, 'idd-policy.json'),
+      JSON.stringify({ helperRuntime: { profile: 'package-manager' } }),
+    );
+    assert.equal(
+      resolveConfiguredHelperRuntimeProfile(dir),
+      'instructions-only',
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test('computeWindowStartIso returns null for windows that overflow Date range', () => {
