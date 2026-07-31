@@ -86,10 +86,9 @@ copy (copying the `idd-template/` tree) actually supplies — Option B
 does **not** ship the rest of the `vendored-node` bundle, since none of
 the other files `collectVendoredFiles` manages under the source
 repository's own `scripts/` have an `idd-template/` mirror. Getting the
-**complete** `vendored-node` bundle requires, run from the cloned
-`idd-skill` tree, `node scripts/idd-onboard.mjs --import --source
-<path-to-a-cloned-idd-skill-tree> --target <target-repo> --profile
-vendored-node` (see
+**complete** `vendored-node` bundle requires running `node
+scripts/idd-onboard.mjs --import --source <path-to-a-cloned-idd-skill-tree>
+--target <target-repo> --profile vendored-node` from the clone (see
 [CLI-assisted onboarding](../../ONBOARDING.md#cli-assisted-onboarding)),
 which reads from the clone's repository-root `scripts/`, not
 `idd-template/scripts/` — a full `idd-skill` clone, not just the
