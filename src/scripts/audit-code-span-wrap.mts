@@ -76,7 +76,13 @@ export function parseMarkdownlintIgnores(configText: string): string[] {
   return ignores;
 }
 
-function globToRegExp(pattern: string): RegExp {
+/**
+ * Convert a `.markdownlint-cli2.yaml`-style ignore glob (`*` within one
+ * path segment, `**` across segments) into a RegExp anchored at the start
+ * of a repo-relative path. Exported so the exclusion behavior itself --
+ * not just the ignore-list parsing -- has direct test coverage.
+ */
+export function globToRegExp(pattern: string): RegExp {
   let source = '^';
   for (let index = 0; index < pattern.length; index += 1) {
     const char = pattern[index];

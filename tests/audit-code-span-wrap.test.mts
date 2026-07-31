@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 
 import {
   auditCodeSpanWraps,
+  globToRegExp,
   parseMarkdownlintIgnores,
 } from '../src/scripts/audit-code-span-wrap.mts';
 
@@ -56,6 +57,46 @@ test("parseMarkdownlintIgnores matches this repository's actual .markdownlint-cl
   const ignores = parseMarkdownlintIgnores(config);
   assert.ok(ignores.includes('node_modules/**/*.md'));
   assert.ok(ignores.length > 0);
+});
+
+test('globToRegExp matches a node_modules/**/*.md ignore pattern across nested directories', () => {
+  const pattern = globToRegExp('node_modules/**/*.md');
+  assert.ok(pattern.test('node_modules/foo/bar.md'));
+  assert.ok(pattern.test('node_modules/foo/bar/baz.md'));
+  assert.ok(!pattern.test('src/scripts/foo.md'));
+});
+
+test('globToRegExp matches a single-segment prefix-star pattern', () => {
+  const pattern = globToRegExp('.github/CODE_OF_CONDUCT*');
+  assert.ok(pattern.test('.github/CODE_OF_CONDUCT.md'));
+  assert.ok(!pattern.test('.github/CODE_OF_CONDUCT/nested.md'));
+  assert.ok(!pattern.test('.github/OTHER.md'));
+});
+
+test('globToRegExp matches a single-segment star inside a fixed directory', () => {
+  const pattern = globToRegExp('fixtures/issue-comments/*.md');
+  assert.ok(pattern.test('fixtures/issue-comments/example.md'));
+  assert.ok(!pattern.test('fixtures/issue-comments/nested/example.md'));
+});
+
+test("this repository's ignore patterns actually exclude a matching path from the audit scope", () => {
+  // Direct regression for the exclusion behavior auditCodeSpanWraps relies
+  // on: parse the real .markdownlint-cli2.yaml ignores, then confirm a
+  // path that must be excluded (per that config) matches, and a normal
+  // in-scope Markdown path does not.
+  const config = readFileSync(
+    join(REPO_ROOT, '.markdownlint-cli2.yaml'),
+    'utf8',
+  );
+  const patterns = parseMarkdownlintIgnores(config).map(globToRegExp);
+  assert.ok(
+    patterns.some((pattern) => pattern.test('node_modules/some-pkg/README.md')),
+    'a node_modules path must be excluded by the real ignore list',
+  );
+  assert.ok(
+    !patterns.some((pattern) => pattern.test('docs/idd-workflow.md')),
+    'an ordinary tracked doc must not be excluded by the real ignore list',
+  );
 });
 
 test('auditCodeSpanWraps finds no corrupting wraps on the current repository tree', () => {
