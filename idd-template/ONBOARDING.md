@@ -394,6 +394,7 @@ recording template you will apply in Step 3.
 .githooks/_idd-worktree-guard.sh
 .githooks/pre-commit
 .githooks/pre-push
+scripts/minimize-superseded-markers.mjs
 .github/instructions/idd-overview-core.instructions.md
 .github/instructions/idd-overview-appendix.instructions.md
 .github/instructions/idd-discover.instructions.md
@@ -488,6 +489,7 @@ for FILE in \
   ".githooks/_idd-worktree-guard.sh" \
   ".githooks/pre-commit" \
   ".githooks/pre-push" \
+  "scripts/minimize-superseded-markers.mjs" \
   ".github/instructions/idd-overview-core.instructions.md" \
   ".github/instructions/idd-overview-appendix.instructions.md" \
   ".github/instructions/idd-discover.instructions.md" \
@@ -590,6 +592,7 @@ for FILE in \
   ".githooks/_idd-worktree-guard.sh" \
   ".githooks/pre-commit" \
   ".githooks/pre-push" \
+  "scripts/minimize-superseded-markers.mjs" \
   ".github/instructions/idd-overview-core.instructions.md" \
   ".github/instructions/idd-overview-appendix.instructions.md" \
   ".github/instructions/idd-discover.instructions.md" \
