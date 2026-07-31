@@ -14,9 +14,10 @@
 // DOGFOOD_ONLY_CONCRETE_TOOLS set).
 //
 // Scope matches the existing `markdownlint-cli2 "**/*.md"` command: every
-// tracked Markdown file, minus .markdownlint-cli2.yaml's own `ignores`
-// list (including idd-template/**/*.md, which is not itself excluded --
-// this check re-uses that scope, it does not add a new one).
+// tracked or untracked-but-not-ignored Markdown file (`git ls-files
+// --cached --others --exclude-standard`), minus .markdownlint-cli2.yaml's
+// own `ignores` list (including idd-template/**/*.md, which is not itself
+// excluded -- this check re-uses that scope, it does not add a new one).
 //
 // Uses only node: builtins to stay compatible with the repository's
 // bare-node boundary.
@@ -49,7 +50,10 @@ function listMarkdownFiles() {
  * this repo's config only ever uses that one simple shape (a top-level
  * `ignores:` key followed by `  - <glob>` lines), so a full YAML parser
  * would be an unused-surface dependency the bare-node boundary does not
- * need. Returns an empty array if the file or key is absent.
+ * need. Returns an empty array when the `ignores:` key itself is absent
+ * from `configText`. A missing config *file* is a separate concern the
+ * caller (`readText`) handles -- this function only ever sees text
+ * already read into memory.
  */
 export function parseMarkdownlintIgnores(configText) {
   const lines = configText.split(/\r?\n/);
@@ -107,17 +111,38 @@ export function auditCodeSpanWraps() {
     (file) => !ignorePatterns.some((pattern) => pattern.test(file)),
   );
   const results = [];
+  const unreadableFiles = [];
   for (const file of files) {
-    const violations = findCorruptingCodeSpanWraps(readText(file));
+    let text;
+    try {
+      text = readText(file);
+    } catch {
+      unreadableFiles.push(file);
+      continue;
+    }
+    const violations = findCorruptingCodeSpanWraps(text);
     if (violations.length > 0) {
       results.push({ file, violations });
     }
   }
-  return results;
+  return { results, unreadableFiles };
 }
 if (import.meta.main) {
-  const results = auditCodeSpanWraps();
+  const { results, unreadableFiles } = auditCodeSpanWraps();
+  let failed = false;
+  if (unreadableFiles.length > 0) {
+    failed = true;
+    console.error(
+      'audit-code-span-wrap: file(s) listed by git but not readable from ' +
+        'the working tree (e.g. a tracked file deleted locally without ' +
+        '`git rm`):',
+    );
+    for (const file of unreadableFiles) {
+      console.error(`- ${file}`);
+    }
+  }
   if (results.length > 0) {
+    failed = true;
     console.error(
       'audit-code-span-wrap: mid-token inline code span line break(s) found:',
     );
@@ -137,6 +162,8 @@ if (import.meta.main) {
         'delete it rather than just relocating the line break. See ' +
         '.github/copilot-instructions.md for the convention.',
     );
+  }
+  if (failed) {
     process.exit(1);
   }
   console.log('audit-code-span-wrap: no mid-token code span wraps found.');

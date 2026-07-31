@@ -99,11 +99,11 @@ test("this repository's ignore patterns actually exclude a matching path from th
   );
 });
 
-test('auditCodeSpanWraps finds no corrupting wraps on the current repository tree', () => {
+test('auditCodeSpanWraps finds no corrupting wraps or unreadable files on the current repository tree', () => {
   // End-to-end regression: this is the same scan `node
   // scripts/audit-code-span-wrap.mjs` runs as part of pre-push-validate
   // and post-fix-validate. Keeping it here means a future corrupting
   // instance fails `node --test tests/*.test.mts` too, not only the
   // separately-invoked CLI.
-  assert.deepEqual(auditCodeSpanWraps(), []);
+  assert.deepEqual(auditCodeSpanWraps(), { results: [], unreadableFiles: [] });
 });
