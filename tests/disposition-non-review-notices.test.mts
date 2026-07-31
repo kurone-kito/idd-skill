@@ -2,9 +2,12 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
 import {
+  type ApplyDispositionPlanDeps,
+  applyDispositionPlan,
   buildDispositionBody,
   buildDispositionPlan,
   buildSummaryDispositionBody,
+  type DispositionPlan,
   type NoticeComment,
   noticeReason,
   parseArgs,
@@ -930,4 +933,209 @@ test('the dry-run and apply output envelopes validate against the schema', () =>
     skipped: plan.skipped,
   };
   assert.equal(validate(apply, planSchema).length, 0, 'apply output');
+});
+
+// --- #1709: applyDispositionPlan (extracted --apply write loop) -----------
+// Mirrors resolve-review-thread.test.mts's applyResolveReviewThread suite:
+// fake in-memory deps, no network, exercising the per-post claim
+// revalidation, 2-attempt post/recover retry, and knownViewerCommentIds
+// bookkeeping in isolation.
+
+function fakePlan(plannedIds: number[]): DispositionPlan {
+  return {
+    headSha: 'abc1234',
+    planned: plannedIds.map((noticeId) => ({
+      noticeId,
+      botLogin: CODERABBIT,
+      reason: 'review limit reached / rate limited',
+      body: buildDispositionBody(
+        CODERABBIT,
+        'abc1234',
+        'review limit reached / rate limited',
+        noticeId,
+      ),
+    })),
+    skipped: [],
+  };
+}
+
+test('applyDispositionPlan: happy path posts every item and reports accurate attribution', () => {
+  const calls: string[] = [];
+  const plan = fakePlan([101, 102]);
+  const deps: ApplyDispositionPlanDeps = {
+    revalidateClaim: () => {
+      calls.push('claim');
+      return true;
+    },
+    postDisposition: (body) => {
+      calls.push(`post:${body.includes('101') ? 101 : 102}`);
+      return { id: body.includes('101') ? 9101 : 9102 };
+    },
+    recoverPostedDisposition: () => {
+      calls.push('recover');
+      return null;
+    },
+    knownViewerCommentIds: new Set([1]),
+  };
+  const result = applyDispositionPlan(plan, deps);
+  assert.equal(result.claimLost, false);
+  assert.deepEqual(result.failed, []);
+  assert.deepEqual(result.applied, [
+    { noticeId: 101, commentId: 9101 },
+    { noticeId: 102, commentId: 9102 },
+  ]);
+  // The seed id plus both newly posted ids.
+  assert.deepEqual(
+    [...result.knownViewerCommentIds].sort((a, b) => a - b),
+    [1, 9101, 9102],
+  );
+  // A claim check precedes each post; no recovery needed on the happy path.
+  assert.deepEqual(calls, ['claim', 'post:101', 'claim', 'post:102']);
+});
+
+test('applyDispositionPlan: an empty plan is a no-op that touches no dep', () => {
+  const calls: string[] = [];
+  const plan = fakePlan([]);
+  const deps: ApplyDispositionPlanDeps = {
+    revalidateClaim: () => {
+      calls.push('claim');
+      return true;
+    },
+    postDisposition: () => {
+      calls.push('post');
+      return { id: 1 };
+    },
+    recoverPostedDisposition: () => {
+      calls.push('recover');
+      return null;
+    },
+    knownViewerCommentIds: new Set([7]),
+  };
+  const result = applyDispositionPlan(plan, deps);
+  assert.deepEqual(result, {
+    applied: [],
+    failed: [],
+    claimLost: false,
+    knownViewerCommentIds: new Set([7]),
+  });
+  assert.deepEqual(calls, []);
+});
+
+test('applyDispositionPlan: claim lost mid-loop stops posting and fail-marks every remaining item', () => {
+  const postCalls: number[] = [];
+  const plan = fakePlan([201, 202, 203]);
+  let claimChecks = 0;
+  const deps: ApplyDispositionPlanDeps = {
+    revalidateClaim: () => {
+      claimChecks += 1;
+      // The first item's claim check passes; the second fails (handoff /
+      // release raced in mid-loop).
+      return claimChecks === 1;
+    },
+    postDisposition: (body) => {
+      const noticeId = /issuecomment-(\d+)/.exec(body)?.[1];
+      postCalls.push(Number(noticeId));
+      return { id: 8000 + Number(noticeId) };
+    },
+    recoverPostedDisposition: () => null,
+    knownViewerCommentIds: new Set(),
+  };
+  const result = applyDispositionPlan(plan, deps);
+  assert.equal(result.claimLost, true);
+  // Only the first item (whose claim check passed) ever reaches postDisposition.
+  assert.deepEqual(postCalls, [201]);
+  assert.deepEqual(result.applied, [{ noticeId: 201, commentId: 8201 }]);
+  assert.deepEqual(result.failed, [
+    { noticeId: 202, error: 'claim revalidation failed before post' },
+    { noticeId: 203, error: 'claim revalidation failed before post' },
+  ]);
+});
+
+test('applyDispositionPlan: a post failure recovers via a NEW comment id without a second post (no double-post)', () => {
+  const postCalls: number[] = [];
+  const plan = fakePlan([301]);
+  const deps: ApplyDispositionPlanDeps = {
+    revalidateClaim: () => true,
+    postDisposition: (body) => {
+      const noticeId = Number(/issuecomment-(\d+)/.exec(body)?.[1]);
+      postCalls.push(noticeId);
+      throw new Error(`create failed for ${noticeId}`);
+    },
+    recoverPostedDisposition: (_body, knownIds) => {
+      // Simulates finding the comment the failed create actually posted.
+      return knownIds.has(7301) ? null : { id: 7301 };
+    },
+    knownViewerCommentIds: new Set(),
+  };
+  const result = applyDispositionPlan(plan, deps);
+  assert.deepEqual(result.applied, [{ noticeId: 301, commentId: 7301 }]);
+  assert.deepEqual(result.failed, []);
+  // Recovery succeeded on the first attempt, so postDisposition is called
+  // exactly once for this item -- the second raw attempt never runs.
+  assert.deepEqual(postCalls, [301]);
+  // The recovered id lands in the returned knownViewerCommentIds.
+  assert.ok(result.knownViewerCommentIds.has(7301));
+});
+
+test('applyDispositionPlan: a recovered id cannot be double-attributed across items', () => {
+  // Two items whose creates both fail; the fake recovery would find the SAME
+  // candidate id for both, but only the first item may claim it (the id
+  // becomes "known" once attributed) -- proving no double-attribution.
+  const plan = fakePlan([401, 402]);
+  const deps: ApplyDispositionPlanDeps = {
+    revalidateClaim: () => true,
+    postDisposition: () => {
+      throw new Error('create failed');
+    },
+    recoverPostedDisposition: (_body, knownIds) =>
+      knownIds.has(9999) ? null : { id: 9999 },
+    knownViewerCommentIds: new Set(),
+  };
+  const result = applyDispositionPlan(plan, deps);
+  assert.deepEqual(result.applied, [{ noticeId: 401, commentId: 9999 }]);
+  assert.deepEqual(result.failed, [{ noticeId: 402, error: 'create failed' }]);
+  assert.ok(result.knownViewerCommentIds.has(9999));
+});
+
+test('applyDispositionPlan: retries the raw post once when recovery finds nothing, then succeeds', () => {
+  const plan = fakePlan([501]);
+  let postAttempts = 0;
+  const deps: ApplyDispositionPlanDeps = {
+    revalidateClaim: () => true,
+    postDisposition: () => {
+      postAttempts += 1;
+      if (postAttempts === 1) {
+        throw new Error('transient failure');
+      }
+      return { id: 6501 };
+    },
+    recoverPostedDisposition: () => null,
+    knownViewerCommentIds: new Set(),
+  };
+  const result = applyDispositionPlan(plan, deps);
+  assert.equal(postAttempts, 2);
+  assert.deepEqual(result.applied, [{ noticeId: 501, commentId: 6501 }]);
+  assert.deepEqual(result.failed, []);
+});
+
+test('applyDispositionPlan: reports the LAST attempt error when both attempts and recovery are exhausted', () => {
+  const plan = fakePlan([601]);
+  let postAttempts = 0;
+  const deps: ApplyDispositionPlanDeps = {
+    revalidateClaim: () => true,
+    postDisposition: () => {
+      postAttempts += 1;
+      throw new Error(`attempt ${postAttempts} failed`);
+    },
+    recoverPostedDisposition: () => null,
+    knownViewerCommentIds: new Set(),
+  };
+  const result = applyDispositionPlan(plan, deps);
+  assert.equal(postAttempts, 2);
+  assert.deepEqual(result.applied, []);
+  // lastError is reassigned on each attempt, so only attempt 2's message
+  // survives into the failure report.
+  assert.deepEqual(result.failed, [
+    { noticeId: 601, error: 'attempt 2 failed' },
+  ]);
 });
