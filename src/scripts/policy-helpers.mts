@@ -243,7 +243,12 @@ export function parseProjectCommandRows(text: string): Map<string, string> {
   return commands;
 }
 
-export function inspectHelperRuntimeConfig(config: unknown) {
+export function inspectHelperRuntimeConfig(
+  config: unknown,
+):
+  | { status: 'invalid'; reason: string }
+  | { status: 'absent' }
+  | { status: 'ok'; profile: string } {
   if (typeof config !== 'object' || config === null || Array.isArray(config)) {
     return { status: 'invalid', reason: 'config must be a non-null object' };
   }

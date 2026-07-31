@@ -12,6 +12,7 @@ import {
   parseAutopilotSuitabilityMarker,
 } from './autopilot-suitability.mjs';
 import { parseCliArgs } from './cli-args.mjs';
+import { resolveHelperCommandForProfile } from './helper-runtime-manifest.mjs';
 import {
   inspectHelperRuntimeConfig,
   POLICY_DEFAULTS,
@@ -774,6 +775,52 @@ const LIVE_CONFIG_CANDIDATE_FILES = [
   'idd-policy.json',
 ];
 const LIVE_CONFIG_ERRORS_SHOWN = 10;
+/**
+ * Resolve the repository's configured `helperRuntime.profile` for building
+ * profile-aware remediation text (see `formatCleanupBacklogRemediation`
+ * below), trying the same live-config candidates as
+ * `checkHelperRuntimeConfig` in declaration order.
+ *
+ * The **first present candidate wins outright** -- whether it declares a
+ * valid profile, leaves `helperRuntime` absent, or is malformed -- and the
+ * search never falls through to a later (legacy) candidate once a present
+ * file has been evaluated. A present canonical `.github/idd/config.json`
+ * that omits `helperRuntime` is an intentional `instructions-only`
+ * declaration, not an invitation to consult a stale `idd-policy.json` left
+ * over from before a migration to the canonical filename -- silently
+ * picking up the legacy file's profile there would build a remediation
+ * command for a runtime the repository no longer uses (idd-skill#1718
+ * review: both Copilot and the secondary advisory bot flagged this
+ * independently). Only an *absent* (nonexistent) candidate file is
+ * skipped in favor of the next one.
+ *
+ * Defaults to `'instructions-only'` -- the safe, no-runnable-command
+ * fallback -- when no candidate file exists at all, the first present one
+ * is not valid JSON, or it does not declare a valid
+ * `helperRuntime.profile`; those cases are already surfaced as their own
+ * findings by `checkHelperRuntimeConfig` / `checkLiveConfigSchema`; this
+ * resolver only needs a fail-closed profile to build remediation text
+ * from, not a second diagnostic.
+ */
+export function resolveConfiguredHelperRuntimeProfile(root) {
+  for (const file of LIVE_CONFIG_CANDIDATE_FILES) {
+    const absolutePath = join(root, file);
+    if (!exists(absolutePath)) {
+      continue;
+    }
+    let config;
+    try {
+      config = JSON.parse(readFileSync(absolutePath, 'utf8'));
+    } catch {
+      return 'instructions-only';
+    }
+    const helperRuntime = inspectHelperRuntimeConfig(config);
+    return helperRuntime.status === 'ok'
+      ? helperRuntime.profile
+      : 'instructions-only';
+  }
+  return 'instructions-only';
+}
 /**
  * Decide whether a parsed live-config document is a schema finding, given
  * the canonical policy schema and the file it was read from (for the
@@ -1539,6 +1586,36 @@ export function formatCleanupBacklogScanProgress(scanned, total, prNumber) {
 export function emitCleanupBacklogProgress(line, stream = process.stderr) {
   stream.write(`${line}\n`);
 }
+// `helper-runtime-manifest.mts`'s HELPER_COMMANDS id for `audit-pr-cleanup`
+// -- the helper the cleanup-backlog remediation hint below points at.
+const CLEANUP_BACKLOG_HELPER_ID = 'audit-pr-cleanup';
+const CLEANUP_BACKLOG_REMEDIATION_ARGS = '--pr <N> --apply --skip-claim-check';
+const CLEANUP_BACKLOG_DOCS_POINTER = 'docs/idd-comment-minimization.md';
+/**
+ * Build the post-merge-cleanup-backlog warning's remediation clause for one
+ * resolved `helperRuntime.profile`, resolving the `audit-pr-cleanup`
+ * invocation through `resolveHelperCommandForProfile` instead of
+ * hard-coding the `vendored-node` form (idd-skill#1718) -- a
+ * `vendored-node`-only command fails immediately under any other profile
+ * (for example `ephemeral-npx`, which has no `scripts/` directory to
+ * invoke). Pure (no I/O) so it can be unit-tested for every profile
+ * without mocking `gh` or the filesystem.
+ *
+ * The `docs/idd-comment-minimization.md` pointer stays in every profile,
+ * including `instructions-only`, which has no runnable command at all --
+ * the pointer alone is then the whole remediation clause.
+ */
+export function formatCleanupBacklogRemediation(profile) {
+  const docsClause = `see ${CLEANUP_BACKLOG_DOCS_POINTER}`;
+  const command = resolveHelperCommandForProfile({
+    helperId: CLEANUP_BACKLOG_HELPER_ID,
+    profile,
+  });
+  if (!command) {
+    return `Remediation: ${docsClause}.`;
+  }
+  return `Remediation: ${docsClause} or run \`${command} ${CLEANUP_BACKLOG_REMEDIATION_ARGS}\`.`;
+}
 function checkPostMergeCleanupBacklog(root, options, report) {
   const windowDays = options.windowDays;
   const warnThreshold = options.warnThreshold;
@@ -1677,8 +1754,10 @@ function checkPostMergeCleanupBacklog(root, options, report) {
     return;
   }
   const examplesText = verdict.examples.map((n) => `#${n}`).join(', ');
+  const profile = resolveConfiguredHelperRuntimeProfile(root);
+  const remediation = formatCleanupBacklogRemediation(profile);
   report.warnings.push(
-    `post-merge cleanup backlog: ${verdict.count} merged PRs in the last ${windowDays} days lack F4 cleanup evidence (warn threshold: ${warnThreshold}). Examples: ${examplesText}. Remediation: see docs/idd-comment-minimization.md or run \`node scripts/audit-pr-cleanup.mjs --pr <N> --apply --skip-claim-check\`.`,
+    `post-merge cleanup backlog: ${verdict.count} merged PRs in the last ${windowDays} days lack F4 cleanup evidence (warn threshold: ${warnThreshold}). Examples: ${examplesText}. ${remediation}`,
   );
 }
 // Default drift thresholds (idd-skill#1269): warn when the checked-out HEAD
