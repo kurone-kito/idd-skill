@@ -1139,3 +1139,25 @@ test('applyDispositionPlan: reports the LAST attempt error when both attempts an
     { noticeId: 601, error: 'attempt 2 failed' },
   ]);
 });
+
+test('applyDispositionPlan: preserves a non-Error thrown value instead of collapsing to "unknown error"', () => {
+  // A thrown string/object (not an Error instance) must still surface its
+  // own diagnostic via String() coercion, matching this repo's
+  // `error instanceof Error ? error.message : String(error)` convention
+  // elsewhere (idd-onboard.mts, discover-shared-file-overlap.mts,
+  // rerun-advisory-convergence.mts) -- not report a generic 'unknown error'.
+  const plan = fakePlan([701]);
+  const deps: ApplyDispositionPlanDeps = {
+    revalidateClaim: () => true,
+    postDisposition: () => {
+      throw 'rate limited: retry after 30s';
+    },
+    recoverPostedDisposition: () => null,
+    knownViewerCommentIds: new Set(),
+  };
+  const result = applyDispositionPlan(plan, deps);
+  assert.deepEqual(result.applied, []);
+  assert.deepEqual(result.failed, [
+    { noticeId: 701, error: 'rate limited: retry after 30s' },
+  ]);
+});

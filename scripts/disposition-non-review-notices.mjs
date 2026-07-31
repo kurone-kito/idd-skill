@@ -572,7 +572,12 @@ export function applyDispositionPlan(plan, deps) {
       try {
         posted = deps.postDisposition(item.body);
       } catch (error) {
-        lastError = error;
+        // A non-Error throw (a plain string/object, e.g. from a mocked or
+        // non-standard failure) must not collapse the diagnostic down to a
+        // generic 'unknown error' -- coerce it the same way the rest of this
+        // repo does (see idd-onboard.mts, discover-shared-file-overlap.mts,
+        // rerun-advisory-convergence.mts).
+        lastError = error instanceof Error ? error.message : String(error);
         // The create may have landed server-side despite the nonzero exit;
         // re-read (by NEW comment id) before any retry so we never
         // double-post.
@@ -588,7 +593,7 @@ export function applyDispositionPlan(plan, deps) {
     } else {
       failed.push({
         noticeId: item.noticeId,
-        error: lastError?.message ?? 'unknown error',
+        error: lastError ?? 'unknown error',
       });
     }
   }
