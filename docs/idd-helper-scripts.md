@@ -1574,14 +1574,14 @@ from F2 on a non-zero `--assert` exit:
    guarantees it predates any review the bot submits in response. Doing
    it in the other order opens a race -- a bot fast enough to respond
    between the request and the marker post would submit a review whose
-   `submittedAt` is _earlier_ than `latestAt`, so `hasFreshReviewSince-
-   LastReroll` would never see it as an answer and `inFlight` would
-   stay `true` for the full pending window despite already being
-   answered (PR #1517 review). If the request itself then fails after
-   the marker already posted, treat that the same as a failed request
-   elsewhere in this protocol: fail closed to a hold rather than
-   silently leaving a marker with no matching request behind. Then poll
-   (step 4).
+   `submittedAt` is _earlier_ than `latestAt`, so
+   `hasFreshReviewSinceLastReroll` would never see it as an answer and
+   `inFlight` would stay `true` for the full pending window despite already
+   being answered (observed 2026-07-18, #1517). If the request itself then
+   fails after the marker already posted, treat that the same as a failed
+   request elsewhere in this protocol: fail closed to a hold rather than
+   silently leaving a marker with no matching request behind. Then poll (step
+   4).
 3. If `requestable` is `false` because `inFlight` is `true`: a reroll
    is already awaiting the bot's response (including on a freshly
    resumed/restarted session). Do not post another marker; poll

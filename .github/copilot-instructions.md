@@ -286,6 +286,17 @@ feat: add auth system and refactor database layer and update docs
 - **Final newline**: always present
 - **File naming**: lowercase with hyphens (e.g., `feature-request.yml`)
   unless constrained by a platform convention (e.g., `CONTRIBUTING.md`)
+- **Inline code span wrapping**: a code span may wrap at a real word
+  boundary, but must never wrap mid-token (right after a hyphen,
+  underscore, slash, or dot that the token continues through) —
+  CommonMark renders the line break as a literal space, silently
+  corrupting the command or identifier so it can no longer be
+  copy-pasted correctly. A command or value too long to fit one line
+  belongs in a fenced code block instead of wrapping. If the character
+  at the wrap point turns out to be a hand-added artifact rather than
+  part of the real value, delete it instead of just relocating the
+  break. Enforced by `node scripts/audit-code-span-wrap.mjs`
+  (repository-local; not part of the distributed `idd-template/`).
 
 ## Guardrails
 

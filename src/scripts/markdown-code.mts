@@ -15,9 +15,14 @@
  * are themselves HTML comments. Masked regions keep their line count and
  * surrounding text so a real marker elsewhere in the body still matches.
  */
-export function stripMarkdownCodeRegions(text: string): string {
-  // Fenced blocks (``` or ~~~), tracking the fence char + length so a longer
-  // opening fence is not closed by a shorter inner fence (CommonMark §4.5).
+/**
+ * Blank fenced code block lines (``` or ~~~), tracking the fence char +
+ * length so a longer opening fence is not closed by a shorter inner fence
+ * (CommonMark §4.5). Preserves line count so line-number math on the
+ * returned text stays valid. Shared by {@link stripMarkdownCodeRegions} and
+ * the inline-code-span wrap scan in `code-span-wrap.mts`.
+ */
+export function blankFencedCodeBlocks(text: string): string {
   const lines = text.split(/\r?\n/);
   const out: string[] = [];
   let fence: { char: string; length: number } | null = null;
@@ -52,17 +57,27 @@ export function stripMarkdownCodeRegions(text: string): string {
     }
     out.push(fence === null ? line : '');
   }
-  // Inline code spans (`...`, ``...``): mask the inner content so a quoted
-  // marker no longer matches, keeping the backticks and surrounding text. The
-  // inner match allows a single newline (CommonMark renders it as a space) but
-  // stops at a blank line, which ends the paragraph: a code span cannot cross
-  // it. Allowing a blank line would let a stray unclosed backtick mask a real
-  // dependency line in a later paragraph — a fail-open miss.
-  return out
-    .join('\n')
-    .replace(
-      /(`+)((?:(?!\1)[^\r\n]|\r?\n(?![ \t]*\r?\n))+?)\1/g,
-      (_match, ticks: string, inner: string) =>
-        `${ticks}${inner.replace(/[^\r\n]/g, ' ')}${ticks}`,
-    );
+  return out.join('\n');
+}
+
+/**
+ * Inline code span pattern (`...`, ``...``): the inner match allows a
+ * single newline (CommonMark renders it as a space) but stops at a blank
+ * line, which ends the paragraph: a code span cannot cross it. Allowing a
+ * blank line would let a stray unclosed backtick mask a real dependency
+ * line in a later paragraph — a fail-open miss. Shared by
+ * {@link stripMarkdownCodeRegions} and the inline-code-span wrap scan in
+ * `code-span-wrap.mts`, so both stay in sync on what counts as a span.
+ */
+export const INLINE_CODE_SPAN_PATTERN =
+  /(`+)((?:(?!\1)[^\r\n]|\r?\n(?![ \t]*\r?\n))+?)\1/g;
+
+export function stripMarkdownCodeRegions(text: string): string {
+  // Inline code spans: mask the inner content so a quoted marker no longer
+  // matches, keeping the backticks and surrounding text.
+  return blankFencedCodeBlocks(text).replace(
+    INLINE_CODE_SPAN_PATTERN,
+    (_match, ticks: string, inner: string) =>
+      `${ticks}${inner.replace(/[^\r\n]/g, ' ')}${ticks}`,
+  );
 }
