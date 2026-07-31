@@ -1967,23 +1967,56 @@ function parseCompletedAt(value: string | null | undefined): number | null {
 }
 
 /**
+ * Failure-family *conclusion* states that must win a same-instant
+ * tie-break and classify as a genuine `classifyCiChecks` failure (#1688).
+ * Deliberately excludes `CANCELLED`: a cancelled run reached no real
+ * verdict at all (unlike these six, which are all concrete failure
+ * conclusions), so it keeps its own separate, lower tie-break rank in
+ * `ciStateTieRank` below and stays out of `classifyCiChecks`'s `failed`
+ * bucket — see that function and `ci-wait-state.mts`'s `FAILURE_STATES`
+ * (which is deliberately *derived from* this set plus `CANCELLED`, not
+ * independently maintained, so the two files cannot silently drift apart
+ * again the way #1504's local-only fix did).
+ *
+ * `ERROR` is StatusContext-only (a CheckRun conclusion never reports it);
+ * included here so a caller that feeds a raw, un-translated commit-status
+ * state directly into `classifyCiChecks` or `ciStateTieRank` still gets
+ * failure-family treatment, matching `normalizeStatusCheckRollupEntry`'s
+ * translation of StatusContext `error` to the literal `'FAILURE'` for the
+ * one call path that already normalizes it upstream.
+ */
+export const CI_FAILURE_CONCLUSION_STATES = new Set([
+  'FAILURE',
+  'TIMED_OUT',
+  'ACTION_REQUIRED',
+  'STARTUP_FAILURE',
+  'STALE',
+  'ERROR',
+]);
+
+/**
  * Tie-break precedence for two check-run instances that complete at the
- * same (or an equally unusable) instant. `FAILURE` always wins (rank 0):
- * a same-instant tie must never hide a real failure behind ordering
- * happenstance (the exact regression `classifyCiChecks`'s unconditional
- * "any FAILURE anywhere" rule existed to prevent, and not a case a rerun
- * can plausibly land in — GitHub `completedAt` has only second resolution,
- * and a rerun must trigger, queue, and execute before it can complete,
- * which practically never lands in the exact same recorded second as the
- * run it supersedes). `CANCELLED` always loses (rank 2): a cancelled run
- * reached no real verdict, so it defers to any conclusion that did.
- * Every other state — including pending states, which practically never
- * reach this tie path since they have no completed timestamp to tie on —
- * shares the middle rank (1).
+ * same (or an equally unusable) instant. Every `CI_FAILURE_CONCLUSION_STATES`
+ * member always wins (rank 0): a same-instant tie must never hide a real
+ * failure behind ordering happenstance (the exact regression
+ * `classifyCiChecks`'s unconditional "any FAILURE anywhere" rule existed
+ * to prevent, and not a case a rerun can plausibly land in — GitHub
+ * `completedAt` has only second resolution, and a rerun must trigger,
+ * queue, and execute before it can complete, which practically never
+ * lands in the exact same recorded second as the run it supersedes).
+ * Pre-#1688, only the literal `'FAILURE'` string won this way; `TIMED_OUT`,
+ * `ACTION_REQUIRED`, `STARTUP_FAILURE`, `STALE`, and `ERROR` fell into the
+ * generic rank-1 bucket below and could lose a tie to `SUCCESS` by
+ * lexicographic happenstance (#1688's reproduction: `SUCCESS` vs
+ * `TIMED_OUT`, `'SUCCESS' < 'TIMED_OUT'`). `CANCELLED` always loses (rank
+ * 2): a cancelled run reached no real verdict, so it defers to any
+ * conclusion that did. Every other state — including pending states,
+ * which practically never reach this tie path since they have no
+ * completed timestamp to tie on — shares the middle rank (1).
  */
 function ciStateTieRank(state: string): number {
-  if (state === 'FAILURE') return 0;
   if (state === 'CANCELLED') return 2;
+  if (CI_FAILURE_CONCLUSION_STATES.has(state)) return 0;
   return 1;
 }
 
@@ -2134,7 +2167,15 @@ export function classifyCiChecks(checks: CheckLike[]) {
   // outvotes the current one for the same name (see #1471).
   const deduped = selectLatestCheckPerName(normalized);
 
-  const failed = deduped.filter((check) => check.state === 'FAILURE');
+  // #1688: widened from a literal 'FAILURE' match to every
+  // CI_FAILURE_CONCLUSION_STATES member, so a TIMED_OUT/ACTION_REQUIRED/
+  // STARTUP_FAILURE/STALE/ERROR conclusion classifies as a genuine failure
+  // here too, matching ci-wait-state.mts's own bucketing for the same
+  // conclusion states instead of silently falling through to 'unknown'.
+  // CANCELLED is deliberately not included -- see CI_FAILURE_CONCLUSION_STATES.
+  const failed = deduped.filter((check) =>
+    CI_FAILURE_CONCLUSION_STATES.has(check.state),
+  );
   if (failed.length > 0) {
     return { status: 'failed', failed };
   }

@@ -26,6 +26,7 @@ import { parseCliArgs } from './cli-args.mjs';
 import { ghText } from './gh-exec.mjs';
 import { deriveGhHttpStatus } from './gh-http-status.mjs';
 import {
+  CI_FAILURE_CONCLUSION_STATES,
   parsePaginatedGhNdjson,
   selectLatestCheckInstance,
   summarizeBranchReviewRequirements,
@@ -50,18 +51,25 @@ const PENDING_STATES = new Set([
   'EXPECTED',
   'REQUESTED',
 ]);
-const FAILURE_STATES = new Set([
-  'FAILURE',
-  'CANCELLED',
-  'TIMED_OUT',
-  'ACTION_REQUIRED',
-  'STARTUP_FAILURE',
-  'STALE',
-  // Commit-status contexts (StatusContext) report `error` as a state
-  // distinct from `failure`; bucket it as failure too, or a clearly
-  // failing required check would misleadingly read as "unknown".
-  'ERROR',
-]);
+// Derived from the shared `CI_FAILURE_CONCLUSION_STATES` (protocol-helpers.mts)
+// plus `CANCELLED`, rather than an independently hand-maintained literal
+// (#1688): `CI_FAILURE_CONCLUSION_STATES` already carries `TIMED_OUT`,
+// `ACTION_REQUIRED`, `STARTUP_FAILURE`, `STALE`, and the commit-status-only
+// `ERROR` (a StatusContext `error` state distinct from `failure`; bucket it
+// as failure too, or a clearly failing required check would misleadingly
+// read as "unknown"). `CANCELLED` is added locally because this file's own
+// required-checks *bucketing* treats a cancelled run as failing for wait-gate
+// purposes, even though `ciStateTieRank`'s same-instant tie-break (in
+// `protocol-helpers.mts`) deliberately keeps `CANCELLED` at a lower rank
+// than every other member here -- a cancelled run reached no real verdict,
+// so it still loses a tie against a genuine success, but it must not be
+// treated as passing outright once it is the sole/latest instance for a
+// required check name. Deriving from the shared set (instead of maintaining
+// a second, separately-updated literal) is what keeps this file's wider
+// vocabulary from silently drifting away from `classifyCiChecks`'s again,
+// which is exactly how #1504's local-only fix diverged from the shared
+// `ciStateTieRank` in the first place.
+const FAILURE_STATES = new Set([...CI_FAILURE_CONCLUSION_STATES, 'CANCELLED']);
 // Flag-spec keys stay the dashed literal on purpose (never bare keys like
 // `pr:`): tests/flag-name-matrix.test.mts scans this file's *compiled*
 // .mjs source text for quoted flag literals such as the --pr spec key
@@ -226,24 +234,29 @@ function bucketState(state) {
  * the latest instance per name should govern pass/fail/pending (#1478).
  * Reuses the exported `selectLatestCheckInstance` for the actual
  * same-name reduction (still-incomplete wins over completed; else latest
- * `completedAt` wins; a same-instant tie prefers `FAILURE`, then
- * non-`CANCELLED`) so this file does not maintain a second,
- * independently-drifting copy of that tie-break logic. Only the
+ * `completedAt` wins; a same-instant tie prefers any
+ * `CI_FAILURE_CONCLUSION_STATES` member, then non-`CANCELLED`) so this file
+ * does not maintain a second, independently-drifting copy of that
+ * tie-break logic. Only the
  * name-keyed grouping below is local to this file, because
  * `CiWaitCheckEntry` uses `checkName` where `protocol-helpers.mts`'s
  * `CheckLike` uses `name`.
  *
- * `selectLatestCheckInstance`'s shared `ciStateTieRank` special-cases only
- * the two literal strings `'FAILURE'` and `'CANCELLED'`; every other raw
- * state -- including this file's own wider `FAILURE_STATES` additions
- * `TIMED_OUT`, `ACTION_REQUIRED`, `STARTUP_FAILURE`, `STALE`, and `ERROR`
- * -- falls into the shared tie-break's generic rank-1 bucket, where a
- * same-instant tie against a success-family state resolves by raw
+ * `selectLatestCheckInstance`'s shared `ciStateTieRank` originally
+ * special-cased only the two literal strings `'FAILURE'` and `'CANCELLED'`;
+ * every other raw state -- including this file's own wider `FAILURE_STATES`
+ * additions `TIMED_OUT`, `ACTION_REQUIRED`, `STARTUP_FAILURE`, `STALE`, and
+ * `ERROR` -- fell into the shared tie-break's generic rank-1 bucket, where a
+ * same-instant tie against a success-family state resolved by raw
  * lexicographic string comparison instead of "the failure should win"
- * (#1504). Rather than widening `ciStateTieRank` itself -- shared,
- * upstream of `classifyCiChecks`, and out of scope for this fix -- see
- * `selectLatestCheckEntry` for how each group applies a tie-break-only
- * state normalization that stays entirely local to this file.
+ * (#1504). That was fixed locally only, in this file, at the time (a
+ * tie-break-only state normalization applied by `selectLatestCheckEntry`
+ * before calling `selectLatestCheckInstance`) -- widening `ciStateTieRank`
+ * itself was left out of scope as "shared, upstream of `classifyCiChecks`".
+ * #1688 closed that shared corner: `ciStateTieRank` now ranks every
+ * `CI_FAILURE_CONCLUSION_STATES` member (which this file's `FAILURE_STATES`
+ * is derived from) at 0 directly, so `selectLatestCheckEntry` no longer
+ * needs a local normalization step at all -- see that function.
  *
  * Deliberately keyed by `checkName` alone, not the `(checkName,
  * workflowName)` pair this file otherwise disambiguates entries by (see
@@ -284,29 +297,28 @@ function selectLatestCheckEntryPerName(entries) {
 }
 /**
  * Reduce one name-keyed group to its representative instance via the
- * shared `selectLatestCheckInstance`, using a *tie-break-only* normalized
- * state (#1504) so this file's wider `FAILURE_STATES` vocabulary still
- * wins a same-instant tie against a success-family state, the same way a
- * literal `FAILURE` conclusion already does. `entry.state` itself is never
- * mutated: each group member is wrapped with `tieBreakState(entry)` for
- * selection purposes only, and the winning wrapper is unwrapped back to
- * its original `entry` before returning, so the returned `CiWaitCheckEntry`
- * always carries its real, unmodified `state`.
+ * shared `selectLatestCheckInstance`, comparing each entry's own real
+ * `state` directly -- no local tie-break-only normalization needed
+ * (#1688; pre-#1688 this wrapped every entry through a *tie-break-only*
+ * normalized state before calling `selectLatestCheckInstance`, since the
+ * shared `ciStateTieRank` only recognized the literal `'FAILURE'` string;
+ * now that `ciStateTieRank` itself ranks every `CI_FAILURE_CONCLUSION_STATES`
+ * member -- which is exactly this file's `FAILURE_STATES` minus `CANCELLED`
+ * -- at 0, this file's own wider vocabulary already wins a same-instant tie
+ * against a success-family state with no local help).
  *
- * Sorted by the original `entry.state` (ascending) before wrapping, so a
- * same-instant tie between two *distinct* raw states that both normalize
- * to the same tie-break state (e.g. `TIMED_OUT` and `STARTUP_FAILURE`,
- * both normalized to `'FAILURE'`) still resolves deterministically
- * (Copilot review, PR #1530). Without the sort, `selectLatestCheckInstance`'s
- * last-resort comparison (`candidate.state !== current.state && ...`) sees
- * two *equal* normalized states and always keeps whichever entry
- * `reduce` saw first -- an input-order artifact, not a value-based choice.
- * Pre-fix, distinct raw states made that same comparison a genuine
- * lexicographic argmin, independent of input order; sorting restores
- * exactly that: `reduce` starts from (and keeps) the lexicographically
- * smallest raw state whenever normalized states tie. This sort changes
- * nothing else -- the `completedAt`-primary and rank-primary comparisons
- * in `isNewerCheckInstance` are already order-independent.
+ * A same-instant tie between two *distinct* raw failure states (e.g.
+ * `TIMED_OUT` and `STARTUP_FAILURE`, both now rank 0) still resolves
+ * deterministically regardless of input order, because
+ * `isNewerCheckInstance`'s residual same-rank fallback
+ * (`candidate.state !== current.state && candidate.state < current.state`)
+ * is a genuine lexicographic argmin over the two *distinct* raw state
+ * strings -- symmetric and order-independent by construction, unlike the
+ * pre-#1688 wrapped comparison (which needed an explicit pre-sort, Copilot
+ * review PR #1530, because two distinct raw states could normalize to the
+ * *same* wrapped string and make the residual comparison see a false tie).
+ * With no normalization step left, that failure mode no longer exists, so
+ * the pre-sort is gone too.
  *
  * Exported (like `protocol-helpers.mts`'s own `selectLatestCheckInstance`)
  * so the determinism property above is directly unit-testable: the winning
@@ -317,36 +329,14 @@ function selectLatestCheckEntryPerName(entries) {
  * instance wins a tie.
  */
 export function selectLatestCheckEntry(group) {
-  const sorted = [...group].sort((a, b) =>
-    a.state < b.state ? -1 : a.state > b.state ? 1 : 0,
-  );
   const winner = selectLatestCheckInstance(
-    sorted.map((entry) => ({
+    group.map((entry) => ({
       entry,
-      state: tieBreakState(entry),
+      state: entry.state,
       completedAt: entry.completedAt,
     })),
   );
   return winner.entry;
-}
-/**
- * The state the shared tie-break in `selectLatestCheckInstance` should
- * compare for `entry`, which is not always `entry.state` itself (#1504).
- * `CANCELLED` is left as `CANCELLED`: a cancelled run reached no verdict,
- * so it must keep losing a same-instant tie exactly as it does today.
- * Every other entry already bucketed as `status === 'failure'` by
- * `bucketState` -- the literal `FAILURE` conclusion plus this file's wider
- * `FAILURE_STATES` additions (`TIMED_OUT`, `ACTION_REQUIRED`,
- * `STARTUP_FAILURE`, `STALE`, the StatusContext-only `ERROR`) -- normalizes
- * to the literal `'FAILURE'` so `ciStateTieRank` ranks it 0 (always wins)
- * instead of falling into its generic rank-1 bucket. Every non-failure
- * entry (success, pending, unknown) is returned unchanged: the existing
- * lexicographic fallback within that shared rank is correct as-is and out
- * of scope for this fix.
- */
-function tieBreakState(entry) {
-  if (entry.state === 'CANCELLED') return 'CANCELLED';
-  return entry.status === 'failure' ? 'FAILURE' : entry.state;
 }
 function buildRequiredChecksRollup(
   checks,
