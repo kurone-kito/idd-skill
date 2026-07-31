@@ -40,12 +40,16 @@ import 'node:process';
 export * from 'node:util';
 export const noSpecifierHere = 1;
 const lazy = await import('node:crypto');
+const withAttributes = await import('node:test', { with: { type: 'json' } });
+const bareWithAttributes = await import('bare-package', {});
 `;
   assert.deepEqual(extractImportSpecifiers(sample), [
     'node:fs',
     'node:process',
     'node:util',
     'node:crypto',
+    'node:test',
+    'bare-package',
   ]);
 });
 

@@ -45,8 +45,10 @@ export function normalizeWhitespace(text: string): string {
  * Extracts the module specifier of every static `import` / `export … from`
  * declaration in `source` — including side-effect `import 'x'` and
  * `export * from 'x'` / `export { a } from 'x'` re-exports — plus every
- * dynamic `import('x')` call, while ignoring anything that appears only
- * inside a `//` or `/* … *\/`-style comment.
+ * dynamic `import('x')` call (with or without a second import-attributes
+ * argument, e.g. `import('x', { with: { type: 'json' } })`), while
+ * ignoring anything that appears only inside a `//` or `/* … *\/`-style
+ * comment.
  *
  * The clause between the keyword and the specifier is restricted to the
  * characters an import/export clause can actually contain (identifiers,
@@ -67,7 +69,10 @@ export function extractImportSpecifiers(source: string): string[] {
       `^[ \\t]*(?:import\\b${clause}(?:\\bfrom\\s+)?|export\\b${clause}\\bfrom\\s+)['"]([^'"]+)['"]`,
       'gm',
     ),
-    /\bimport\s*\(\s*['"]([^'"]+)['"]\s*\)/g,
+    // `\s*(?:,|\))` (not just `\s*\)`) so a dynamic import that passes a
+    // second import-attributes argument — `import('x', {...})` — still
+    // yields its specifier instead of being silently skipped.
+    /\bimport\s*\(\s*['"]([^'"]+)['"]\s*(?:,|\))/g,
   ];
   return patterns.flatMap((pattern) =>
     [...withoutComments.matchAll(pattern)].map((match) => match[1]),
