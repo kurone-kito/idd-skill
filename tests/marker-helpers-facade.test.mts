@@ -38,6 +38,7 @@ const SAMPLE_NAMES = [
   'detectMalformedOperationalMarker',
   'IDD_AGENT_DERIVED_MARKERS',
   'isValidIsoTimestamp',
+  'OPERATIONAL_MARKERS',
 ] as const;
 
 test('protocol-helpers re-exports every sampled marker-helpers name by identity', () => {

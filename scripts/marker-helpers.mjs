@@ -22,11 +22,12 @@
 // single-marker parse/render primitives move in this wave.
 const ISO8601_UTC_PATTERN = /\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z/;
 const OPTIONAL_IDD_VISIBLE_NOTE_PATTERN = String.raw`(?:\s*|\s*\n\s*_[^\n]*\bIDD\b[^\n]*_\s*)`;
-const OPERATIONAL_MARKERS = [
+export const OPERATIONAL_MARKERS = [
   {
     label: '<!-- claimed-by:',
     pattern:
       /^<!--\s*claimed-by:\s+\S+\s+\S+\s+supersedes:\s+\S+\s+\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z\s+branch:\s+[^\s>]+\s*-->(?:\s*|\s*\n\s*_[^\n]*\bIDD\b[^\n]*_\s*)$/i,
+    startPattern: /^<!--\s*claimed-by:/i,
     malformedPrefixPattern:
       /^<!--\s*claimed-by:\s+\S+\s+\S+\s+supersedes:\s+\S+\s+\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z\s+branch:\s+[^\s>]+\s*-->/i,
   },
@@ -34,6 +35,7 @@ const OPERATIONAL_MARKERS = [
     label: '<!-- unclaimed-by:',
     pattern:
       /^<!--\s*unclaimed-by:\s+\S+\s+\S+\s+\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z\s*-->(?:\s*|\s*\n\s*_[^\n]*\bIDD\b[^\n]*_\s*)$/i,
+    startPattern: /^<!--\s*unclaimed-by:/i,
     malformedPrefixPattern:
       /^<!--\s*unclaimed-by:\s+\S+\s+\S+\s+\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z\s*-->/i,
   },
@@ -41,6 +43,7 @@ const OPERATIONAL_MARKERS = [
     label: '<!-- activation-nonce:',
     pattern:
       /^<!--\s*activation-nonce:\s+\S+\s+\S+\s+\S+\s+\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z\s*-->(?:\s*|\s*\n\s*_[^\n]*\bIDD\b[^\n]*_\s*)$/i,
+    startPattern: /^<!--\s*activation-nonce:/i,
     malformedPrefixPattern:
       /^<!--\s*activation-nonce:\s+\S+\s+\S+\s+\S+\s+\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z\s*-->/i,
   },
@@ -48,6 +51,7 @@ const OPERATIONAL_MARKERS = [
     label: '<!-- review-watermark:',
     pattern:
       /^<!--\s*review-watermark:\s+\S+\s+\S+\s+\S+\s+\S+\s+\d+\s+\S+\s*-->(?:\s*|\s*\n\s*_[^\n]*\bIDD\b[^\n]*_\s*)$/i,
+    startPattern: /^<!--\s*review-watermark:/i,
     malformedPrefixPattern:
       /^<!--\s*review-watermark:\s+\S+\s+\S+\s+\S+\s+\S+\s+\d+\s+\S+\s*-->/i,
   },
@@ -55,12 +59,18 @@ const OPERATIONAL_MARKERS = [
     label: '<!-- review-baseline:',
     pattern:
       /^<!--\s*review-baseline:\s+\S+\s+\S+\s+\S+\s*-->(?:\s*|\s*\n\s*_[^\n]*\bIDD\b[^\n]*_\s*)$/i,
+    startPattern: /^<!--\s*review-baseline:/i,
     malformedPrefixPattern: /^<!--\s*review-baseline:\s+\S+\s+\S+\s+\S+\s*-->/i,
   },
   {
     label: 'advisory-wait:',
     pattern:
       /^advisory-wait:\s+\S+\s+[0-9a-f]{40}\s+\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z\s*$/,
+    // Case-sensitive on purpose (#1720): `pattern` above has no `/i`, so
+    // `startPattern` must not gain one either -- widening this one would
+    // loosen a marker family the issue explicitly requires to stay
+    // case-sensitive on both paths.
+    startPattern: /^advisory-wait:/,
   },
   {
     // #1572: the trailing ` claim:{claimId} attempt:{n}` suffix is OPTIONAL
@@ -79,10 +89,19 @@ const OPERATIONAL_MARKERS = [
     label: 'advisory-wait-recovery:',
     pattern:
       /^advisory-wait-recovery:\s+\S+\s+[0-9a-f]{40}\s+\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z(?:\s+claim:\S+\s+attempt:[1-9]\d*)?\s*$/,
+    // Case-sensitive on purpose (#1720), same reasoning as advisory-wait:
+    // above; also structurally distinct from it (the literal `:` sits right
+    // after `-recovery`, so this never matches an `advisory-wait:` body).
+    startPattern: /^advisory-wait-recovery:/,
   },
   {
     label: '<!-- advisory-wait:',
     pattern: /^<!--\s*advisory-wait:\s+\S+\s+[0-9a-f]{40}\s+\S+\s*-->\s*$/,
+    // Case-sensitive on purpose (#1720): not one of the issue's four named
+    // plain-text markers, but `pattern` above has no `/i` either, so this
+    // must not gain case-insensitivity -- only the same internal-whitespace
+    // tolerance after `<!--` that `pattern` already allows.
+    startPattern: /^<!--\s*advisory-wait:/,
   },
   {
     // #1511: bounded same-HEAD advisory reroll request marker. PLAIN-TEXT,
@@ -97,6 +116,8 @@ const OPERATIONAL_MARKERS = [
     label: 'advisory-reroll:',
     pattern:
       /^advisory-reroll:\s+\S+\s+[0-9a-f]{40}\s+\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z\s*$/,
+    // Case-sensitive on purpose (#1720), same reasoning as advisory-wait:.
+    startPattern: /^advisory-reroll:/,
   },
   {
     // #1572: brand-new terminal marker type, no legacy form to preserve, so
@@ -109,6 +130,8 @@ const OPERATIONAL_MARKERS = [
     label: 'copilot-unavailable:',
     pattern:
       /^copilot-unavailable:\s+\S+\s+[0-9a-f]{40}\s+\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z\s+claim:\S+\s+attempt:[1-9]\d*\s*$/,
+    // Case-sensitive on purpose (#1720), same reasoning as advisory-wait:.
+    startPattern: /^copilot-unavailable:/,
   },
   {
     label: '<!-- forced-handoff:',
@@ -830,10 +853,8 @@ export function operationalMarkerPrefix(body) {
 }
 export function operationalMarkerPrefixByStart(body) {
   const normalized = body.trimStart();
-  const marker = OPERATIONAL_MARKERS.find(
-    (candidate) =>
-      candidate.startPattern?.test(normalized) ??
-      normalized.startsWith(candidate.label),
+  const marker = OPERATIONAL_MARKERS.find((candidate) =>
+    candidate.startPattern.test(normalized),
   );
   if (!marker) {
     return null;
