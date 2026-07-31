@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { readJson, readText } from './test-utils.mts';
+import { extractImportSpecifiers, readJson, readText } from './test-utils.mts';
 
 /** A minimal view of an `audit/sync-manifest.json` `syncPairs[]` entry. */
 interface SyncPair {
@@ -9,37 +9,6 @@ interface SyncPair {
   mode?: string;
   source?: string;
   target?: string;
-}
-
-/**
- * Extracts the module specifier of every static `import` / `export … from`
- * declaration in `source` — including side-effect `import 'x'` and
- * `export * from 'x'` / `export { a } from 'x'` re-exports — while ignoring
- * anything that appears only inside a `//` or `/* … *\/`-style comment.
- * Dynamic `import()` calls are intentionally excluded: they are runtime
- * expressions rather than static declarations, and the self-containment
- * constraint this test enforces (see `docs/idd-helper-scripts.md`) is about
- * a file's static dependency closure.
- *
- * The clause between the keyword and the specifier is restricted to the
- * characters an import/export clause can actually contain (identifiers,
- * commas, `*`, braces, whitespace). This is deliberately a *positive* class
- * rather than "anything but a quote or semicolon": a plain `export function
- * f(x) {` or `export const x = 'literal';` contains a `(` or `=` before any
- * quote, which this class excludes, so scanning stops there instead of
- * misreading an unrelated string literal deeper in the function body as an
- * import specifier.
- */
-function extractStaticImportSpecifiers(source: string): string[] {
-  const withoutComments = source
-    .replace(/\/\*[\s\S]*?\*\//g, '')
-    .replace(/(^|[^:])\/\/.*$/gm, '$1');
-  const clause = '[A-Za-z0-9_$,\\s*{}]*?';
-  const declaration = new RegExp(
-    `^[ \\t]*(?:import\\b${clause}(?:\\bfrom\\s+)?|export\\b${clause}\\bfrom\\s+)['"]([^'"]+)['"]`,
-    'gm',
-  );
-  return [...withoutComments.matchAll(declaration)].map((match) => match[1]);
 }
 
 /**
@@ -62,7 +31,7 @@ function findExactTemplateScriptMirrors(): { id: string; source: string }[] {
   );
 }
 
-test('extractStaticImportSpecifiers finds import/export-from specifiers and ignores comments', () => {
+test('extractImportSpecifiers finds import/export-from and dynamic import() specifiers, ignoring comments', () => {
   const sample = `
 // import { fake } from 'ignored-line-comment';
 /* export * from 'ignored-block-comment'; */
@@ -70,11 +39,13 @@ import { readFileSync } from 'node:fs';
 import 'node:process';
 export * from 'node:util';
 export const noSpecifierHere = 1;
+const lazy = await import('node:crypto');
 `;
-  assert.deepEqual(extractStaticImportSpecifiers(sample), [
+  assert.deepEqual(extractImportSpecifiers(sample), [
     'node:fs',
     'node:process',
     'node:util',
+    'node:crypto',
   ]);
 });
 
@@ -86,7 +57,7 @@ test('audit/sync-manifest.json has at least one exact-mode idd-template/scripts/
 
 test('exact-mode idd-template/scripts/ mirror sources import only Node built-ins', () => {
   for (const { id, source } of findExactTemplateScriptMirrors()) {
-    const specifiers = extractStaticImportSpecifiers(readText(source));
+    const specifiers = extractImportSpecifiers(readText(source));
     const nonNodeImports = specifiers.filter(
       (specifier) => !specifier.startsWith('node:'),
     );
