@@ -526,9 +526,21 @@ for how the remaining tie-breakers below apply after this rule.
 highest-score tie band has more than one eligible candidate, pick the
 band entry at index `selectDesyncedIndex(session-token, band-size)`
 instead of index 0 — a pure `hash(session-token) mod band-size` over
-the band ordered by ascending issue number, `session-token` being this
-session's `{agent-id}`. Compute it with the CLI instead of hand-tracing
-`scripts/policy-helpers.mjs`:
+the band ordered by ascending issue number.
+
+`session-token` **must be per-session-unique**: the bare, session-shared
+`{agent-id}` from `idd-overview-core.instructions.md` alone is **not** a
+compliant token. Use the session-suffixed `{agent-id}` (e.g.,
+`copilot-8122ca35`) when this session already appends one; otherwise
+generate a session-local token once at Discover entry — it must carry
+enough entropy to stay distinct across sessions launched at the same
+moment (a random or UUID-derived value; a bare timestamp alone is not
+sufficient, since same-second concurrent launches would still collide)
+— and reuse that same value for every A4 Step 2 selection this session
+makes, including re-entry after a collision. See
+[rationale](../../docs/idd-design-rationale.md#a4-step-2--rationale-concurrent-selection-desync)
+for why a bare shared token defeats this mechanism. Compute the index
+with the CLI instead of hand-tracing `scripts/policy-helpers.mjs`:
 
 ```sh
 # source repo / vendored-node
