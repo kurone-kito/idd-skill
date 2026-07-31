@@ -8,10 +8,20 @@ import {
   isStaleAt,
   isStaleByAge,
   operationalMarkerPrefix,
+  operationalMarkerPrefixByStart,
   parseActivationNonceComment,
   parseClaimComment,
   parseReleaseComment,
   parseReviewWatermarkComment,
+  renderActivationNonceMarker,
+  renderAdvisoryRerollMarker,
+  renderAdvisoryWaitMarker,
+  renderAdvisoryWaitRecoveryMarker,
+  renderClaimedByMarker,
+  renderCopilotUnavailableMarker,
+  renderReviewBaselineMarker,
+  renderReviewWatermarkMarker,
+  renderUnclaimedByMarker,
 } from '../src/scripts/protocol-helpers.mts';
 import { readText } from './test-utils.mts';
 
@@ -345,6 +355,10 @@ test('a marker quoted mid-prose is neither a live marker nor flagged malformed (
     '_copilot: issue claim — IDD automation marker. Do not edit._';
   assert.equal(parseClaimComment(body, '2026-05-23T10:00:00Z'), null);
   assert.equal(detectMalformedOperationalMarker(body), null);
+  // #1720 AC5: the token is not the literal first bytes for either prefix
+  // function -- both must keep failing closed, not just the parser above.
+  assert.equal(operationalMarkerPrefix(body), null);
+  assert.equal(operationalMarkerPrefixByStart(body), null);
 });
 
 test('a code-fenced marker is neither a live marker nor flagged malformed (anti-spoofing)', () => {
@@ -352,4 +366,135 @@ test('a code-fenced marker is neither a live marker nor flagged malformed (anti-
     '```\n<!-- claimed-by: copilot claim-A supersedes: none 2026-05-23T10:00:00Z branch: issue/100-task -->\n```';
   assert.equal(parseClaimComment(body, '2026-05-23T10:00:00Z'), null);
   assert.equal(detectMalformedOperationalMarker(body), null);
+  // #1720 AC5: same anti-spoofing floor as above, for the fenced-block case.
+  assert.equal(operationalMarkerPrefix(body), null);
+  assert.equal(operationalMarkerPrefixByStart(body), null);
+});
+
+// #1720: operationalMarkerPrefix() matches each entry's `pattern` (case-
+// insensitive for the five note-bearing markers below), while
+// operationalMarkerPrefixByStart() used to fall back to a case-SENSITIVE
+// `startsWith` check when an entry had no `startPattern` -- so a
+// correctly-shaped marker written with different casing resolved to a
+// label under one function but `null` under the other. Every entry now
+// defines a `startPattern` carrying the same case flag as `pattern`, so
+// both functions must agree. Each case below uppercases ONLY the marker
+// token (not the hex SHA / ISO timestamp fields, which stay
+// case-sensitive by their own `[0-9a-f]{40}` / literal-digit grammar) in a
+// body built from the real renderer, so the fixture is a realistic,
+// well-formed marker rather than a hand-typed approximation.
+test('a case-variant CLAIMED-BY marker resolves to the same label on both prefix functions', () => {
+  const body = renderClaimedByMarker({
+    agentId: 'copilot',
+    claimId: 'claim-A',
+    supersedes: 'none',
+    timestamp: '2026-05-23T10:00:00Z',
+    branch: 'issue/100-task',
+  }).replace('claimed-by:', 'CLAIMED-BY:');
+  assert.equal(operationalMarkerPrefix(body), '<!-- claimed-by:');
+  assert.equal(operationalMarkerPrefixByStart(body), '<!-- claimed-by:');
+});
+
+test('a case-variant UNCLAIMED-BY marker resolves to the same label on both prefix functions', () => {
+  const body = renderUnclaimedByMarker({
+    agentId: 'copilot',
+    claimId: 'claim-A',
+    timestamp: '2026-05-23T10:00:00Z',
+  }).replace('unclaimed-by:', 'UNCLAIMED-BY:');
+  assert.equal(operationalMarkerPrefix(body), '<!-- unclaimed-by:');
+  assert.equal(operationalMarkerPrefixByStart(body), '<!-- unclaimed-by:');
+});
+
+test('a case-variant ACTIVATION-NONCE marker resolves to the same label on both prefix functions', () => {
+  const body = renderActivationNonceMarker({
+    agentId: 'copilot',
+    claimId: 'claim-A',
+    nonce: 'nonce-1',
+    timestamp: '2026-05-23T10:00:00Z',
+  }).replace('activation-nonce:', 'ACTIVATION-NONCE:');
+  assert.equal(operationalMarkerPrefix(body), '<!-- activation-nonce:');
+  assert.equal(operationalMarkerPrefixByStart(body), '<!-- activation-nonce:');
+});
+
+test('a case-variant REVIEW-WATERMARK marker resolves to the same label on both prefix functions', () => {
+  const sha = 'a'.repeat(40);
+  const body = renderReviewWatermarkMarker({
+    agentId: 'copilot',
+    claimId: 'claim-A',
+    headSha: sha,
+    maxActivityAt: 'none',
+    totalItemCount: 0,
+    ciCompletedAt: 'none',
+  }).replace('review-watermark:', 'REVIEW-WATERMARK:');
+  assert.equal(operationalMarkerPrefix(body), '<!-- review-watermark:');
+  assert.equal(operationalMarkerPrefixByStart(body), '<!-- review-watermark:');
+});
+
+test('a case-variant REVIEW-BASELINE marker resolves to the same label on both prefix functions', () => {
+  const sha = 'b'.repeat(40);
+  const body = renderReviewBaselineMarker({
+    agentId: 'copilot',
+    claimId: 'claim-A',
+    sha,
+  }).replace('review-baseline:', 'REVIEW-BASELINE:');
+  assert.equal(operationalMarkerPrefix(body), '<!-- review-baseline:');
+  assert.equal(operationalMarkerPrefixByStart(body), '<!-- review-baseline:');
+});
+
+// #1720 AC: the four plain-text marker families (plus the fifth,
+// HTML-wrapped `<!-- advisory-wait:` entry, not literally named in the
+// issue body but sharing the same case-sensitive `pattern`) must NOT gain
+// case-insensitivity from this fix -- both prefix functions must keep
+// returning `null` for an uppercased token.
+test('a case-variant ADVISORY-WAIT marker is rejected by both prefix functions', () => {
+  const sha = 'c'.repeat(40);
+  const body = renderAdvisoryWaitMarker({
+    agentId: 'copilot',
+    headSha: sha,
+    timestamp: '2026-05-23T10:00:00Z',
+  }).replace('advisory-wait:', 'ADVISORY-WAIT:');
+  assert.equal(operationalMarkerPrefix(body), null);
+  assert.equal(operationalMarkerPrefixByStart(body), null);
+});
+
+test('a case-variant ADVISORY-WAIT-RECOVERY marker is rejected by both prefix functions', () => {
+  const sha = 'd'.repeat(40);
+  const body = renderAdvisoryWaitRecoveryMarker({
+    agentId: 'copilot',
+    headSha: sha,
+    timestamp: '2026-05-23T10:00:00Z',
+  }).replace('advisory-wait-recovery:', 'ADVISORY-WAIT-RECOVERY:');
+  assert.equal(operationalMarkerPrefix(body), null);
+  assert.equal(operationalMarkerPrefixByStart(body), null);
+});
+
+test('a case-variant HTML-wrapped <!-- ADVISORY-WAIT: marker is rejected by both prefix functions', () => {
+  const sha = 'e'.repeat(40);
+  const body = `<!-- ADVISORY-WAIT: copilot ${sha} 2026-05-23T10:00:00Z -->`;
+  assert.equal(operationalMarkerPrefix(body), null);
+  assert.equal(operationalMarkerPrefixByStart(body), null);
+});
+
+test('a case-variant ADVISORY-REROLL marker is rejected by both prefix functions', () => {
+  const sha = 'f'.repeat(40);
+  const body = renderAdvisoryRerollMarker({
+    agentId: 'copilot',
+    headSha: sha,
+    timestamp: '2026-05-23T10:00:00Z',
+  }).replace('advisory-reroll:', 'ADVISORY-REROLL:');
+  assert.equal(operationalMarkerPrefix(body), null);
+  assert.equal(operationalMarkerPrefixByStart(body), null);
+});
+
+test('a case-variant COPILOT-UNAVAILABLE marker is rejected by both prefix functions', () => {
+  const sha = '1234567890abcdef1234567890abcdef12345678';
+  const body = renderCopilotUnavailableMarker({
+    agentId: 'copilot',
+    claimId: 'claim-A',
+    headSha: sha,
+    attempt: 1,
+    timestamp: '2026-05-23T10:00:00Z',
+  }).replace('copilot-unavailable:', 'COPILOT-UNAVAILABLE:');
+  assert.equal(operationalMarkerPrefix(body), null);
+  assert.equal(operationalMarkerPrefixByStart(body), null);
 });
