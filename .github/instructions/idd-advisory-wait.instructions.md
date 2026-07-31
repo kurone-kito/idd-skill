@@ -40,10 +40,11 @@ one). Enter the full protocol below **only** when
 Keep the wait itself cheap per the
 [wake-up discipline](idd-ci.instructions.md#wake-up-discipline): a
 single wake at the **expected** completion, or background only if the
-topology-safety condition holds; otherwise wait synchronously (`gh pr
-checks <pr-number> --watch`; do not `run_in_background` this wait
-absent the confirmed condition). Batch all post-wait actions into one
-turn.
+topology-safety condition holds; otherwise wait synchronously — no
+single `gh` command blocks on Copilot review state, so run the AW poll
+loop below (AW1-AW5) as a foreground wait, never via
+`run_in_background` absent the confirmed condition. Batch all
+post-wait actions into one turn.
 
 ## 1. Canonical path (helper-first)
 

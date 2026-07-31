@@ -280,9 +280,10 @@ completion.
 Schedule a wake, or background this wait only if the
 topology-safety condition holds (confirmed to route completion back to
 this turn); otherwise wait synchronously (`gh run watch <run-id>
---exit-status`, or `gh pr checks <pr-number> --watch` — see
+--exit-status`, or `gh pr checks <pr-number> --watch --required` — see
 [idd-ci.instructions.md's Wake-up
-discipline](idd-ci.instructions.md#wake-up-discipline); do not
+discipline](idd-ci.instructions.md#wake-up-discipline) for the
+generation-timeout and pass/fail-decision caveats; do not
 `run_in_background` this wait absent the confirmed condition above).
 Delegate polling mechanics to `idd-ci.instructions.md`.
 

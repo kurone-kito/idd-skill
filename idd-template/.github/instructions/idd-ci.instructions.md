@@ -271,9 +271,14 @@ condition below accounts for this.
   completion, or background only if the topology is confirmed to route
   completion back to this turn; otherwise wait synchronously — block
   with `gh run watch <run-id> --exit-status` for a single workflow run,
-  or `gh pr checks <pr-number> --watch` for a PR's overall check
-  rollup. A bare `sleep` may be sandboxed or blocked in some runtimes;
-  a `run_in_background` Bash task or any other detached/backgrounded
+  or `gh pr checks <pr-number> --watch --required` for the PR's
+  required-check rollup (its exit status is only the wait signal, not
+  the gate decision — see the algorithm above; right after a push it
+  can report no checks yet, which is the generation-timeout window
+  above, not a failure). Neither command watches Copilot/advisory-bot
+  review state — see `idd-advisory-wait.instructions.md` for that poll
+  loop. A bare `sleep` may be sandboxed or blocked in some runtimes; a
+  `run_in_background` Bash task or any other detached/backgrounded
   mechanism must not be used for this wait unless the topology-safety
   condition above is confirmed. Never insert "is it done yet?" turns or
   end this turn assuming an unconfirmed background/async notification
