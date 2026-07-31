@@ -46,11 +46,18 @@ adopter repositories that vendor the bundle.
 
 ## Build and verification
 
-| Command                | Purpose                                                                         |
-| ---------------------- | ------------------------------------------------------------------------------- |
-| `pnpm run typecheck`   | `tsc --noEmit` over `src/**/*.mts` + `tests/**/*.mts` (`strict`)                |
-| `pnpm run build`       | Emit the generated `.mjs` (tsc) and normalize them with Biome                   |
-| `pnpm run build:check` | `build` then `git diff HEAD --exit-code` — fails when the committed tree drifts |
+| Command                | Purpose                                                                                                                                             |
+| ---------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `pnpm run typecheck`   | `tsc --noEmit` over `src/**/*.mts` + `tests/**/*.mts` (`strict`)                                                                                    |
+| `pnpm run build`       | Emit the generated `.mjs` (tsc) and normalize them with Biome                                                                                       |
+| `pnpm run build:check` | `build` then `git diff HEAD --exit-code`, then an untracked-artifact check — fails when the committed tree drifts or gains an unstaged emitted file |
+
+`tsconfig.build.json` sets `noEmitOnError: true`, so a `.mts` source with a
+type error emits nothing at all instead of letting tsc overwrite tracked
+`scripts/*.mjs` / `bin/*.mjs` with un-normalized output before the pipeline
+dies (`pnpm run build`'s Biome pass and `.gitattributes` sync never run
+after that throw) — a failed build stays side-effect-free on the tracked
+tree.
 
 `pnpm run lint:minimum` runs `typecheck` and `build:check`, so a forgotten
 rebuild or a hand-edited generated file fails the installed CI lane. The
