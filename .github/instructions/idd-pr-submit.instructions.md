@@ -286,7 +286,8 @@ Schedule a wake, or background this wait only if the
 topology-safety condition holds (confirmed to route completion back to
 this turn); otherwise wait synchronously — block with:
 
-- `gh run watch <run-id> --exit-status` (single workflow run)
+- `gh run watch <run-id> --exit-status` (single workflow run; not
+  usable on a fine-grained PAT)
 - `gh pr checks <pr-number> --watch --required` (PR required-check
   rollup)
 
