@@ -170,6 +170,106 @@ test('classifyCiChecks: a same-instant cancelled/success tie for one name prefer
   assert.equal(classifyCiChecks(successFirst).status, 'success');
 });
 
+// #1688: ciStateTieRank previously ranked only the literal 'FAILURE'
+// conclusion at 0; TIMED_OUT (and the other failure-family conclusions
+// below) shared the generic rank-1 bucket with SUCCESS, so a same-instant
+// tie fell back to lexicographic string comparison -- and 'SUCCESS' <
+// 'TIMED_OUT', so SUCCESS won. This is the issue's own reproduction.
+test('classifyCiChecks: #1688 repro -- a same-instant SUCCESS/TIMED_OUT tie now reports failed, not success', () => {
+  const tiedAt = '2026-07-17T16:00:06Z';
+  const timedOutFirst = [
+    { name: 'lint', state: 'TIMED_OUT', completedAt: tiedAt },
+    { name: 'lint', state: 'SUCCESS', completedAt: tiedAt },
+  ];
+  const successFirst = [
+    { name: 'lint', state: 'SUCCESS', completedAt: tiedAt },
+    { name: 'lint', state: 'TIMED_OUT', completedAt: tiedAt },
+  ];
+  assert.equal(classifyCiChecks(timedOutFirst).status, 'failed');
+  assert.equal(classifyCiChecks(successFirst).status, 'failed');
+});
+
+// Note on test teeth: TIMED_OUT is the only state in this loop where the
+// rank-0 promotion actually flips the tie's outcome pre- vs. post-#1688 --
+// ACTION_REQUIRED/ERROR/STALE/STARTUP_FAILURE already happened to win a
+// same-instant tie against every SUCCESS-family state pre-fix, purely by
+// lexicographic accident (each starts with a letter earlier than 'S'/'N').
+// This loop still asserts all five deliberately, as a regression guard
+// against a future SUCCESS-family addition ever breaking that alphabetical
+// happenstance (matching the equivalent ACTION_REQUIRED comment in
+// tests/ci-wait-state.test.mts); the "sole, non-tied" test below is what
+// actually exercises the classifyCiChecks vocabulary-widening fix for the
+// four non-TIMED_OUT states.
+test('classifyCiChecks: a same-instant tie against SUCCESS now reports failed for every newly-ranked failure-family state', () => {
+  const tiedAt = '2026-07-17T16:00:06Z';
+  for (const failureState of [
+    'TIMED_OUT',
+    'ACTION_REQUIRED',
+    'STARTUP_FAILURE',
+    'STALE',
+    'ERROR',
+  ]) {
+    const failureFirst = [
+      { name: 'gated', state: failureState, completedAt: tiedAt },
+      { name: 'gated', state: 'SUCCESS', completedAt: tiedAt },
+    ];
+    const successFirst = [
+      { name: 'gated', state: 'SUCCESS', completedAt: tiedAt },
+      { name: 'gated', state: failureState, completedAt: tiedAt },
+    ];
+    assert.equal(
+      classifyCiChecks(failureFirst).status,
+      'failed',
+      `expected a same-instant ${failureState} vs SUCCESS tie to report failed (failure-first order)`,
+    );
+    assert.equal(
+      classifyCiChecks(successFirst).status,
+      'failed',
+      `expected a same-instant ${failureState} vs SUCCESS tie to report failed (success-first order)`,
+    );
+  }
+});
+
+test('classifyCiChecks: a sole, non-tied failure-family conclusion classifies as failed, not unknown', () => {
+  // Distinct from the tie-break fix above: even with only one instance (no
+  // competing SUCCESS at all), TIMED_OUT/ACTION_REQUIRED/STARTUP_FAILURE/
+  // STALE/ERROR previously fell into 'unknown' because only the literal
+  // 'FAILURE' string matched classifyCiChecks's `failed` filter -- the
+  // "vocabulary drift" #1688 also fixes, independent of the tie-break path.
+  for (const failureState of [
+    'TIMED_OUT',
+    'ACTION_REQUIRED',
+    'STARTUP_FAILURE',
+    'STALE',
+    'ERROR',
+  ]) {
+    const checks = [
+      {
+        name: 'gated',
+        state: failureState,
+        completedAt: '2026-07-17T16:00:06Z',
+      },
+    ];
+    assert.equal(
+      classifyCiChecks(checks).status,
+      'failed',
+      `expected a sole ${failureState} conclusion to classify as failed`,
+    );
+  }
+});
+
+test('classifyCiChecks: CANCELLED alone still classifies as unknown, not failed (deliberate carve-out, unchanged)', () => {
+  // CANCELLED is deliberately excluded from CI_FAILURE_CONCLUSION_STATES: a
+  // cancelled run reached no real verdict, unlike the concrete failure
+  // conclusions above. This guards the existing `ciMixed` fixture behavior
+  // (see "classifies CI check states for advisory wait decisions" above)
+  // against a future over-broad widening.
+  const checks = [
+    { name: 'gated', state: 'CANCELLED', completedAt: '2026-07-17T16:00:06Z' },
+  ];
+  assert.equal(classifyCiChecks(checks).status, 'unknown');
+});
+
 test('classifyCiChecks: a same-instant tie between two non-failure/non-cancelled states is deterministic regardless of input order', () => {
   // PR review finding: the reducer previously kept whichever instance
   // was listed first for any tie not involving FAILURE or CANCELLED
