@@ -100,15 +100,16 @@ dogfooding policy. The setting applies only to `kurone-kito/idd-skill`
 and does not change the exported template default for adopter
 repositories.
 
-An IDD session may continue through F3 merge execution only when the
-resolved merge policy is `fully_autonomous_merge` and the normal
-claim, freshness, CI, advisory, review, and unresolved-thread gates
-pass. A missing recorded policy resolves to `fully_autonomous_merge`
-(the distributed default); a recorded `human_merge`,
-`separate_merge_agent` without a qualifying session, or an
-unrecognized value instead stops at the F3 handoff gate for a
-hand-off or hold — see `idd-merge-handoff.instructions.md` for the
-full per-policy routing.
+F2.5 (`idd-merge-handoff.instructions.md`) resolves the recorded
+merge policy before F3 merge execution: a missing recorded policy
+resolves to `fully_autonomous_merge` (the distributed default) and
+continues; `human_merge` always stops for a human handoff;
+`separate_merge_agent` continues only when the current session is
+the designated, qualifying merge-capable actor, and otherwise stops;
+an unrecognized recorded value stops with a maintainer hold. An IDD
+session may continue through F3 merge execution only after F2.5
+clears it this way and the normal claim, freshness, CI, advisory,
+review, and unresolved-thread gates pass.
 
 ## Local discover policy
 
