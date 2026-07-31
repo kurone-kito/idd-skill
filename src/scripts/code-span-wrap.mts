@@ -16,6 +16,17 @@
 // outright). Fenced code blocks are excluded first via
 // blankFencedCodeBlocks, matching the same fence semantics
 // stripMarkdownCodeRegions already uses elsewhere in this repo.
+//
+// The character immediately before the break's continuation character,
+// and the character immediately after the break, must each be
+// "token-continuing": alphanumeric, OR itself one of the continuation
+// characters (`-_/.`). A single alphanumeric-only check (PR #1736
+// review, Copilot + Codex) missed real corrupting cases where the
+// neighbor is punctuation rather than a letter/digit: `./\npath`,
+// `../\npath` (prevPrevChar is `.`), `path/\n.gitignore` (nextChar is
+// `.`), and `--\nflag` (prevPrevChar is the other `-`). Verified this
+// broadening adds zero new false positives against every existing
+// multi-line code span already in this repository's corpus.
 
 import {
   blankFencedCodeBlocks,
@@ -32,7 +43,7 @@ export interface CodeSpanWrapViolation {
 }
 
 const MID_TOKEN_CONTINUATION = /[-_/.]/;
-const ALPHANUMERIC = /[A-Za-z0-9]/;
+const TOKEN_CONTINUING = /[A-Za-z0-9\-_/.]/;
 const CONTEXT_CHARS = 20;
 
 /**
@@ -73,9 +84,9 @@ export function findCorruptingCodeSpanWraps(
         prevChar !== undefined &&
         MID_TOKEN_CONTINUATION.test(prevChar) &&
         prevPrevChar !== undefined &&
-        ALPHANUMERIC.test(prevPrevChar) &&
+        TOKEN_CONTINUING.test(prevPrevChar) &&
         nextChar !== undefined &&
-        ALPHANUMERIC.test(nextChar)
+        TOKEN_CONTINUING.test(nextChar)
       ) {
         const breakOffset = innerStart + breakIndex;
         const line = scanned.slice(0, breakOffset).split('\n').length;

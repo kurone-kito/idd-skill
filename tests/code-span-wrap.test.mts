@@ -44,6 +44,43 @@ test('does not flag when the next line starts with a non-alphanumeric character'
   assert.deepEqual(findCorruptingCodeSpanWraps('`foo-\n)bar`'), []);
 });
 
+test('flags a relative-path prefix split (./ before the break)', () => {
+  // PR #1736 review (Copilot): prevPrevChar '.' was previously rejected
+  // by a strict alphanumeric-only neighbor check, missing this real
+  // corrupting split of `./scripts/foo.mjs`.
+  const violations = findCorruptingCodeSpanWraps('`./\nscripts/foo.mjs`');
+  assert.equal(violations.length, 1);
+});
+
+test('flags a parent-relative path prefix split (../ before the break)', () => {
+  const violations = findCorruptingCodeSpanWraps('`../\nscripts/foo.mjs`');
+  assert.equal(violations.length, 1);
+});
+
+test('flags a hidden-dotfile split (nextChar is a literal dot)', () => {
+  // PR #1736 review (Copilot): nextChar '.' was previously rejected,
+  // missing `path/.gitignore` splitting as `path/` / `.gitignore`.
+  const violations = findCorruptingCodeSpanWraps('`path/\n.gitignore`');
+  assert.equal(violations.length, 1);
+});
+
+test('flags a doubled-flag-dash split (prevPrevChar is the other hyphen)', () => {
+  // PR #1736 review (Codex): `--flag` splitting as `--` / `flag` was
+  // previously missed because prevPrevChar (the first `-`) failed the
+  // old strict alphanumeric check.
+  const violations = findCorruptingCodeSpanWraps('`--\nflag`');
+  assert.equal(violations.length, 1);
+});
+
+test('still does not flag a slash preceded by a space after broadening the neighbor check', () => {
+  // Regression guard: broadening prevPrevChar/nextChar to accept
+  // continuation characters must not undo the space-boundary exclusion.
+  assert.deepEqual(
+    findCorruptingCodeSpanWraps('`prerequisite /\nmissing`'),
+    [],
+  );
+});
+
 test('skips fenced code blocks entirely', () => {
   const body = ['```', 'foo-', 'bar', '```'].join('\n');
   assert.deepEqual(findCorruptingCodeSpanWraps(body), []);
