@@ -102,8 +102,10 @@ repositories.
 
 An IDD session may continue through F3 merge execution only after the
 normal claim, freshness, CI, advisory, review, and unresolved-thread
-gates pass. Repositories without a recorded `fully_autonomous_merge`
-policy still stop at the F3 handoff gate.
+gates pass. A repository with no recorded merge policy is treated as
+`fully_autonomous_merge` (the distributed default); only an unknown
+_recorded_ policy value stops at the F3 handoff gate with a hold
+comment requesting a maintainer decision.
 
 ## Local discover policy
 
