@@ -528,6 +528,77 @@ function recoverPostedDisposition(
   }
   return null;
 }
+/**
+ * Orchestrate the `--apply` write loop with injected side effects, so the
+ * per-post claim revalidation, 2-attempt retry, and post-failure recovery
+ * are testable without the network -- mirrors `applyResolveReviewThread`'s
+ * (`resolve-review-thread.mts`) injectable-deps extraction pattern for this
+ * file's sibling write loop.
+ *
+ * Re-validates the active claim before EACH post: a claim lost mid-loop
+ * stops writing immediately and fail-marks the current item plus every
+ * remaining planned item, rather than posting under a claim no longer held.
+ * A create that throws is retried once via `recoverPostedDisposition`
+ * (never a blind second POST) before falling through to a second raw
+ * attempt, so a create that actually landed server-side despite a nonzero
+ * exit is never double-posted; a recovered id is folded into the running
+ * `knownViewerCommentIds` set immediately, so a later item in the same loop
+ * can never re-attribute it.
+ */
+export function applyDispositionPlan(plan, deps) {
+  const knownViewerCommentIds = new Set(deps.knownViewerCommentIds);
+  const applied = [];
+  const failed = [];
+  let claimLost = false;
+  for (let index = 0; index < plan.planned.length; index += 1) {
+    const item = plan.planned[index];
+    if (!deps.revalidateClaim()) {
+      // Claim lost mid-loop: stop writing and surface the current AND all
+      // remaining notices as failed rather than posting them under a claim we
+      // no longer hold, so the apply report names every notice left
+      // un-dispositioned.
+      claimLost = true;
+      for (const remaining of plan.planned.slice(index)) {
+        failed.push({
+          noticeId: remaining.noticeId,
+          error: 'claim revalidation failed before post',
+        });
+      }
+      break;
+    }
+    let posted = null;
+    let lastError = null;
+    for (let attempt = 0; attempt < 2 && !posted; attempt += 1) {
+      try {
+        posted = deps.postDisposition(item.body);
+      } catch (error) {
+        // A non-Error throw (a plain string/object, e.g. from a mocked or
+        // non-standard failure) must not collapse the diagnostic down to a
+        // generic 'unknown error' -- coerce it the same way the rest of this
+        // repo does (see idd-onboard.mts, discover-shared-file-overlap.mts,
+        // rerun-advisory-convergence.mts).
+        lastError = error instanceof Error ? error.message : String(error);
+        // The create may have landed server-side despite the nonzero exit;
+        // re-read (by NEW comment id) before any retry so we never
+        // double-post.
+        posted = deps.recoverPostedDisposition(
+          item.body,
+          knownViewerCommentIds,
+        );
+      }
+    }
+    if (posted) {
+      knownViewerCommentIds.add(posted.id);
+      applied.push({ noticeId: item.noticeId, commentId: posted.id });
+    } else {
+      failed.push({
+        noticeId: item.noticeId,
+        error: lastError ?? 'unknown error',
+      });
+    }
+  }
+  return { applied, failed, claimLost, knownViewerCommentIds };
+}
 if (import.meta.main) {
   const args = parseArgs(process.argv.slice(2));
   if (args.help || !Number.isInteger(args.pr) || (args.pr ?? 0) <= 0) {
@@ -662,58 +733,19 @@ if (import.meta.main) {
   // Re-plan from a fresh read AFTER claim revalidation, so the post loop never
   // re-posts a disposition that raced in since the dry-run.
   const plan = planNow();
-  const applied = [];
-  const failed = [];
-  // Track every viewer-authored comment id we know about (pre-existing plus the
-  // ones we post), so a post-failure recovery attributes a NEW comment to the
-  // current notice's own post instead of some other pre-existing comment that
-  // happens to carry the identical (now per-notice-unique, #1482) body text.
+  // Seed the viewer-authored comment ids known before this run (pre-existing
+  // plus, once applyDispositionPlan runs, the ones it posts), so a
+  // post-failure recovery attributes a NEW comment to the current notice's
+  // own post instead of some other pre-existing comment that happens to
+  // carry the identical (now per-notice-unique, #1482) body text.
   const knownViewerCommentIds = viewerCommentIds(owner, repo, pr, viewerLogin);
-  let claimLost = false;
-  for (let index = 0; index < plan.planned.length; index += 1) {
-    const item = plan.planned[index];
-    if (!revalidateClaim()) {
-      // Claim lost mid-loop: stop writing and surface the current AND all
-      // remaining notices as failed rather than posting them under a claim we no
-      // longer hold, so the apply report names every notice left un-dispositioned.
-      claimLost = true;
-      for (const remaining of plan.planned.slice(index)) {
-        failed.push({
-          noticeId: remaining.noticeId,
-          error: 'claim revalidation failed before post',
-        });
-      }
-      break;
-    }
-    let posted = null;
-    let lastError = null;
-    for (let attempt = 0; attempt < 2 && !posted; attempt += 1) {
-      try {
-        posted = postDisposition(owner, repo, pr, item.body);
-      } catch (error) {
-        lastError = error;
-        // The create may have landed server-side despite the nonzero exit;
-        // re-read (by NEW comment id) before any retry so we never double-post.
-        posted = recoverPostedDisposition(
-          owner,
-          repo,
-          pr,
-          item.body,
-          viewerLogin,
-          knownViewerCommentIds,
-        );
-      }
-    }
-    if (posted) {
-      knownViewerCommentIds.add(posted.id);
-      applied.push({ noticeId: item.noticeId, commentId: posted.id });
-    } else {
-      failed.push({
-        noticeId: item.noticeId,
-        error: lastError?.message ?? 'unknown error',
-      });
-    }
-  }
+  const { applied, failed, claimLost } = applyDispositionPlan(plan, {
+    revalidateClaim,
+    postDisposition: (body) => postDisposition(owner, repo, pr, body),
+    recoverPostedDisposition: (body, knownIds) =>
+      recoverPostedDisposition(owner, repo, pr, body, viewerLogin, knownIds),
+    knownViewerCommentIds,
+  });
   const status = failed.length > 0 ? 'failed' : 'applied';
   process.stdout.write(
     `${JSON.stringify({ mode: 'apply', prNumber: pr, headSha: plan.headSha, status, applied, failed, skipped: plan.skipped }, null, 2)}\n`,
