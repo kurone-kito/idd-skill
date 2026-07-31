@@ -275,17 +275,16 @@ condition below accounts for this.
 - **No interim polling turns** — schedule one wake at the **expected**
   completion, or background only if the topology is confirmed to route
   completion back to this turn; otherwise wait synchronously — block
-  with `gh run watch <run-id> --exit-status` for a single workflow run,
-  or `gh pr checks <pr-number> --watch --required` for the PR's
-  required-check rollup (use the latter on a fine-grained PAT, which
-  `gh run watch` cannot authenticate). Both only block; they do not
-  decide — required-only scoping, duplicate-name collapse, and the
-  no-required-checks route stay with the algorithm above, bounded by
-  its `ciWait.runningTimeout`/`generationTimeout`, not held open past
-  them. Neither watches Copilot review state — see
-  `idd-advisory-wait.instructions.md`'s poll loop for that. A bare
-  `sleep` may be sandboxed or blocked in some runtimes (preventive; no
-  observed incident yet); a `run_in_background` Bash task or other
+  with `gh pr checks <pr-number> --watch --required` (works on a
+  fine-grained PAT; `gh run watch <run-id> --exit-status` does not).
+  Both only block, never decide: required-only scoping, duplicate-name
+  collapse, the no-required-checks route, and the
+  `ciWait.runningTimeout`/`generationTimeout` bound all stay with the
+  algorithm above — track elapsed time and apply its rerun-or-hold
+  decision if a watch outlasts it. Neither watches Copilot review
+  state — see `idd-advisory-wait.instructions.md`. A bare `sleep` may
+  be sandboxed or blocked in some runtimes (preventive; no observed
+  incident yet); a `run_in_background` Bash task or other
   detached/backgrounded mechanism must not be used for this wait
   unless the topology-safety condition above is confirmed. Never
   insert "is it done yet?" turns or end this turn assuming an

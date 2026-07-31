@@ -292,9 +292,9 @@ this turn); otherwise wait synchronously — block with:
 
 See [idd-ci.instructions.md's Wake-up
 discipline](idd-ci.instructions.md#wake-up-discipline) for the
-generation-timeout and pass/fail-decision caveats. Do not
-`run_in_background` this wait absent the confirmed condition above.
-Delegate polling mechanics to `idd-ci.instructions.md`.
+caveats on both. Do not `run_in_background` this wait absent the
+confirmed condition above. Delegate polling mechanics to
+`idd-ci.instructions.md`.
 
 - **On success** → proceed to `idd-review-snapshot.instructions.md`
 - **`idd-advisory-convergence` is the sole non-pass required check, and
