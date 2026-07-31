@@ -1,0 +1,81 @@
+import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { test } from 'node:test';
+import { fileURLToPath } from 'node:url';
+
+import { findCorruptingCodeSpanWraps } from '../src/scripts/code-span-wrap.mts';
+
+const REPO_ROOT = fileURLToPath(new URL('..', import.meta.url));
+
+test('flags a hyphen mid-token line break inside an inline code span', () => {
+  const violations = findCorruptingCodeSpanWraps('see `foo-\nbar` here');
+  assert.equal(violations.length, 1);
+  assert.deepEqual(violations[0], { line: 1, before: 'foo-', after: 'bar' });
+});
+
+test('flags an underscore mid-token line break', () => {
+  assert.equal(findCorruptingCodeSpanWraps('see `foo_\nbar` here').length, 1);
+});
+
+test('flags a slash mid-token line break', () => {
+  assert.equal(findCorruptingCodeSpanWraps('see `foo/\nbar` here').length, 1);
+});
+
+test('flags a dot mid-token line break', () => {
+  assert.equal(findCorruptingCodeSpanWraps('see `foo.\nbar` here').length, 1);
+});
+
+test('does not flag a break at a real word boundary (space before the break)', () => {
+  assert.deepEqual(findCorruptingCodeSpanWraps('see `foo bar\nbaz` here'), []);
+});
+
+test('does not flag a slash preceded by a space (word-separator slash, not a path)', () => {
+  // "prerequisite /" then a line break: the char ending the line is '/',
+  // but the char before it is a space, not alphanumeric, so this is the
+  // "or / and"-style prose separator, not a corrupting path split.
+  assert.deepEqual(
+    findCorruptingCodeSpanWraps('`prerequisite /\nmissing`'),
+    [],
+  );
+});
+
+test('does not flag when the next line starts with a non-alphanumeric character', () => {
+  assert.deepEqual(findCorruptingCodeSpanWraps('`foo-\n)bar`'), []);
+});
+
+test('skips fenced code blocks entirely', () => {
+  const body = ['```', 'foo-', 'bar', '```'].join('\n');
+  assert.deepEqual(findCorruptingCodeSpanWraps(body), []);
+});
+
+test('reports the 1-based line number of the line ending mid-token', () => {
+  const body = ['before text', 'more `foo-', 'bar` tail'].join('\n');
+  const violations = findCorruptingCodeSpanWraps(body);
+  assert.equal(violations.length, 1);
+  assert.equal(violations[0].line, 2);
+});
+
+test('finds every corrupting break when a span crosses more than one line', () => {
+  const violations = findCorruptingCodeSpanWraps('`foo-\nbar_\nbaz`');
+  assert.equal(violations.length, 2);
+  assert.deepEqual(
+    violations.map((v) => v.line),
+    [1, 2],
+  );
+});
+
+test('real-corpus regression: a known word-boundary multi-line span is not flagged', () => {
+  // .claude/skills/issue-authoring/references/draft-patterns.md line 19-20
+  // wraps `issue-scope:\norphan-first` — the line ends with ':', a real
+  // word/punctuation boundary, not one of the corrupting continuation
+  // chars, so it must never be flagged.
+  const text = readFileSync(
+    join(
+      REPO_ROOT,
+      '.claude/skills/issue-authoring/references/draft-patterns.md',
+    ),
+    'utf8',
+  );
+  assert.deepEqual(findCorruptingCodeSpanWraps(text), []);
+});
