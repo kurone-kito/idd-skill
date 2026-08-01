@@ -73,9 +73,13 @@ export interface GhTextOptions {
    * Data written to the child's stdin (e.g. `gh api --input -` reading a
    * JSON document from stdin — the mandatory path for posting an
    * HTML-comment-first marker body, which `gh issue comment` / `gh api -f
-   * body=` silently drop). Mutually exclusive with an explicit `stdio`
-   * override in practice: `execFileSync` wires stdin itself when `input`
-   * is set, so callers needing this pass only `input`, not `stdio`.
+   * body=` silently drop). No current caller combines this with `stdio`,
+   * so in practice it is set alone — but combining them is well-defined,
+   * not undefined behavior: per Node's `child_process.execFileSync` docs,
+   * supplying `input` always overrides `stdio[0]` (stdin), regardless of
+   * what `stdio[0]` requests, so a caller that did pass both would still
+   * get its `input` written and would not need to omit `stdio` to avoid a
+   * conflict (CodeRabbit review, #1784).
    */
   input?: string;
 }
