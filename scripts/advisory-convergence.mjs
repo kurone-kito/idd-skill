@@ -108,9 +108,9 @@ import {
  * and value are unchanged for existing consumers. */
 export const ADVISORY_CONVERGENCE_CHECK_SELECTOR =
   DEFAULT_ADVISORY_CONVERGENCE_CHECK_SELECTOR;
-/** #1719: stable, machine-readable tokens for `sameHeadReroll.-
- * ineligibleReasons` -- one per boolean term of the `eligible` conjunction,
- * in the same order the conjunction is written in
+/** #1719: stable, machine-readable tokens for
+ * `sameHeadReroll.ineligibleReasons` -- one per boolean term of the
+ * `eligible` conjunction, in the same order the conjunction is written in
  * `computeAdvisoryConvergenceVerdict` below, so a report-mode caller can
  * self-diagnose a stuck AW6 reroll without re-deriving the eligibility rule
  * from `idd-advisory-wait.instructions.md` by hand. Exported (rather than
@@ -341,10 +341,11 @@ export function computeAdvisoryConvergenceVerdict(inputs, options) {
   //
   // #1719: each of the six conjuncts above is ALSO computed as its own named
   // boolean, paired with a stable token in `sameHeadRerollTerms` --
-  // `sameHeadRerollEligible` (`.every()`) and `sameHeadRerollIneligible-
-  // Reasons` (`.filter().map()`) are BOTH derived from that one array, so
-  // they cannot disagree; a term added to the conjunction without a paired
-  // token here would be a compile-time array-literal edit, not a
+  // `sameHeadRerollEligible` (`.every()`) and
+  // `sameHeadRerollIneligibleReasons` (`.filter().map()`) are BOTH derived
+  // from that one array, so they cannot disagree; a term added to the
+  // conjunction without a paired token here would be a compile-time
+  // array-literal edit, not a
   // hand-maintained parallel expression. `reviewItemCountPositiveTerm` is
   // deliberately written as "unknown counts as satisfied"
   // (`itemCount === null || itemCount > 0`), not the bare `itemCount > 0`

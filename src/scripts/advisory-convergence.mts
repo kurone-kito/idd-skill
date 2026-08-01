@@ -115,9 +115,9 @@ import {
 export const ADVISORY_CONVERGENCE_CHECK_SELECTOR =
   DEFAULT_ADVISORY_CONVERGENCE_CHECK_SELECTOR;
 
-/** #1719: stable, machine-readable tokens for `sameHeadReroll.-
- * ineligibleReasons` -- one per boolean term of the `eligible` conjunction,
- * in the same order the conjunction is written in
+/** #1719: stable, machine-readable tokens for
+ * `sameHeadReroll.ineligibleReasons` -- one per boolean term of the
+ * `eligible` conjunction, in the same order the conjunction is written in
  * `computeAdvisoryConvergenceVerdict` below, so a report-mode caller can
  * self-diagnose a stuck AW6 reroll without re-deriving the eligibility rule
  * from `idd-advisory-wait.instructions.md` by hand. Exported (rather than
@@ -252,8 +252,9 @@ export interface AdvisoryConvergenceApplicability {
  * `route` field. */
 export interface AdvisoryConvergenceDispositionEvidence {
   /** Outstanding non-thread regular PR comments (from a non-agent author)
-   * lacking a fresh disposition marker. The exact counter `sameHeadReroll.
-   * eligible`'s `missing-regular-comment-disposition` term reads. */
+   * lacking a fresh disposition marker. The exact counter
+   * `sameHeadReroll.eligible`'s `missing-regular-comment-disposition`
+   * term reads. */
   missingRegularCommentCount: number;
   /** Review threads (resolved or unresolved, any authorship) still lacking
    * a fresh disposition marker. Adjacent evidence -- not itself one of the
@@ -275,12 +276,13 @@ export interface AdvisoryConvergenceSameHeadReroll {
    * false for this HEAD, with no other triage work still outstanding. */
   eligible: boolean;
   /** #1719: one stable, machine-readable token per failing term of the
-   * six-term `eligible` conjunction above (`SAME_HEAD_REROLL_INELIGIBLE_-
-   * REASON`), in conjunction order; empty exactly when `eligible` is
-   * `true`. Computed from the SAME six terms `eligible` itself reduces
-   * from (see the computation below), so the two can never disagree --
-   * a report-mode caller no longer has to re-derive the eligibility rule
-   * by hand to self-diagnose a stuck AW6 reroll. */
+   * six-term `eligible` conjunction above
+   * (`SAME_HEAD_REROLL_INELIGIBLE_REASON`), in conjunction order; empty
+   * exactly when `eligible` is `true`. Computed from the SAME six terms
+   * `eligible` itself reduces from (see the computation below), so the
+   * two can never disagree -- a report-mode caller no longer has to
+   * re-derive the eligibility rule by hand to self-diagnose a stuck AW6
+   * reroll. */
   ineligibleReasons: string[];
   /** Trusted `advisory-reroll:` marker count whose embedded HEAD SHA
    * matches the current HEAD (resets naturally on a new push, since a new
@@ -667,10 +669,11 @@ export function computeAdvisoryConvergenceVerdict(
   //
   // #1719: each of the six conjuncts above is ALSO computed as its own named
   // boolean, paired with a stable token in `sameHeadRerollTerms` --
-  // `sameHeadRerollEligible` (`.every()`) and `sameHeadRerollIneligible-
-  // Reasons` (`.filter().map()`) are BOTH derived from that one array, so
-  // they cannot disagree; a term added to the conjunction without a paired
-  // token here would be a compile-time array-literal edit, not a
+  // `sameHeadRerollEligible` (`.every()`) and
+  // `sameHeadRerollIneligibleReasons` (`.filter().map()`) are BOTH derived
+  // from that one array, so they cannot disagree; a term added to the
+  // conjunction without a paired token here would be a compile-time
+  // array-literal edit, not a
   // hand-maintained parallel expression. `reviewItemCountPositiveTerm` is
   // deliberately written as "unknown counts as satisfied"
   // (`itemCount === null || itemCount > 0`), not the bare `itemCount > 0`

@@ -1578,7 +1578,7 @@ structurally unable to disagree.
 | `review-pending`                          | The primary bot has not yet reviewed current HEAD (`pending: true`). Always co-occurs with `review-item-count-unknown` below, since an off-HEAD review reports no usable item count. |
 | `unresolved-copilot-threads`              | `threads.satisfied` is `false` -- at least one Copilot-authored thread is neither resolved nor validly dispositioned.                                   |
 | `missing-regular-comment-disposition`     | `dispositionEvidence.missingRegularCommentCount` is non-zero -- an outstanding regular (non-thread) PR comment still lacks a fresh disposition marker.  |
-| `review-item-count-unknown`               | The latest review is on current HEAD but its comment count is unavailable (a GraphQL nullable-field edge case).                                         |
+| `review-item-count-unknown`               | The latest review's comment count is unavailable -- either the review is off-HEAD (co-firing with `review-pending` above, since `resolveLatestCopilotReviewClause` reports `itemCount: null` for any non-matching-HEAD review), or it is on current HEAD but the count itself is unavailable (a GraphQL nullable-field edge case). |
 | `review-item-count-not-positive`          | The latest review's `itemCount` is a known, non-positive value (i.e. exactly `0` -- already fully converged, nothing to reroll).                        |
 <!-- dprint-ignore-end -->
 
