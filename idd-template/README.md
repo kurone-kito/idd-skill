@@ -150,6 +150,7 @@ docs/idd-helper-scripts.md
 docs/idd-resume-detail.md
 docs/idd-review-policy-profiles.md
 docs/idd-workflow.md
+docs/index.md
 docs/onboarding/agent-entry-and-verification.md
 docs/onboarding/placeholders.md
 docs/onboarding/policy-decisions.md
