@@ -1,3 +1,10 @@
+---
+type: reference
+title: Workshop Log Format
+description: Defines the conventions workshop log segments follow so they can be assembled and reviewed without reformatting.
+tags: [workshop, log-format]
+---
+
 # Workshop Log Format
 
 Workshop logs use the conventions below so separately captured segments

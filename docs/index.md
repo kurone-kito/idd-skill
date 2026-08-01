@@ -1,3 +1,9 @@
+---
+type: index
+title: IDD Reference Manual
+description: Is the entry point and topic map for the idd-skill deeper reference manual.
+---
+
 # IDD Reference Manual
 
 <!-- cspell:words VRC VRChat -->

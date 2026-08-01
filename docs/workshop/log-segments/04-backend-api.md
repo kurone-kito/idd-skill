@@ -1,3 +1,10 @@
+---
+type: reference
+title: Backend API Log Segment
+description: Captures the timestamped backend-API log segment of the VRChat Event Calendar IDD workshop session.
+tags: [workshop, log-segment]
+---
+
 # Backend API Log Segment
 
 > **Note:** This segment is reconstructed from the preserved claim,
