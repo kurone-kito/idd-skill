@@ -235,9 +235,12 @@ gate by making them `not_applicable` instead of creating a waiver path.
 A PR that carries claim-activity evidence but whose linkage is broken or
 ambiguous (#1686) resolves `indeterminate` instead -- a hard block on
 ordinary convergence, not a bypass. The maintainer waiver escape hatch
-still applies only to applicable PRs after the deadline (and, for
-`indeterminate`, only when the case has a real `activeClaimId` to bind
-to -- see `docs/idd-helper-scripts.md`).
+requires a real, bindable `activeClaimId` after the deadline: an
+applicable PR always has one, and so does the `indeterminate`
+branch-mismatch case specifically, so it stays genuinely waivable; the
+`indeterminate` ambiguous/stale-history cases have no `activeClaimId`
+to bind to and are effectively not waivable in practice -- see
+`docs/idd-helper-scripts.md`.
 
 ## CI Wait Defaults
 
