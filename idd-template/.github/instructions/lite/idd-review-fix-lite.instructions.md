@@ -238,9 +238,10 @@ other GitHub side effect, confirm all of the following:
      `gh pr edit {pr-number} --add-reviewer "@{primary-advisory-bot}"`
      (on a GraphQL login-resolution failure, retry via `gh api
      repos/{owner}/{repo}/pulls/{pr-number}/requested_reviewers -X POST
-     -f "reviewers[]={primary-advisory-bot-rest-login}"`). Immediately
-     post `advisory-wait: {agent-id} {PR_HEAD_SHA}
-     {ISO8601-requested-at}` as plain text, not an HTML comment. Then go
+     -f "reviewers[]={primary-advisory-bot-rest-login}"`). If both
+     attempts fail, stop and ask instead of posting a marker. On
+     success, immediately post `advisory-wait: {agent-id} {PR_HEAD_SHA}
+     {ISO8601-requested-at}` as plain text, not an HTML comment, then go
      to the polling loop below.
    - `REQUEST_NEEDED`, `copilotPending` `true` (a request is already
      pending but unproven for current HEAD, no same-head marker to
