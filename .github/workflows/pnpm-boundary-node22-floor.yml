@@ -17,4 +17,4 @@ jobs:
   pnpm-boundary-node22-floor:
     uses: ./.github/workflows/pnpm-boundary.yml
     with:
-      node-version: 22.22.2
+      node-version: '22.22.2'

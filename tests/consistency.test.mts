@@ -1271,6 +1271,19 @@ test('collectEnginesRangeMirrorViolations: fails closed on an unrecognized range
   ]);
 });
 
+test('collectEnginesRangeMirrorViolations: reports an unreadable mirror file instead of throwing', () => {
+  const violations = collectEnginesRangeMirrorViolations(
+    ENGINES_NODE,
+    [{ file: 'missing.yml', mode: 'full-range' }],
+    () => {
+      throw new Error('ENOENT');
+    },
+  );
+  assert.deepEqual(violations, [
+    'engines-range-mirrors: missing.yml: could not be read',
+  ]);
+});
+
 test("audit/sync-manifest.json's guarded repo state: this repository's own engines.node mirrors are currently in sync", () => {
   const packageJson = readJson('package.json') as {
     engines?: { node?: unknown };
