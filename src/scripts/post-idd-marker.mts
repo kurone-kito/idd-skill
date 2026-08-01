@@ -20,6 +20,7 @@
 import { execFileSync } from 'node:child_process';
 import { resolve } from 'node:path';
 
+import { requireFlag } from './cli-args.mts';
 import { ghText } from './gh-exec.mts';
 import {
   renderActivationNonceMarker,
@@ -46,6 +47,44 @@ export const MARKER_TYPES = [
 ] as const;
 
 export type MarkerType = (typeof MARKER_TYPES)[number];
+
+/**
+ * The kebab-case `--flag` field names each marker `type` requires, keyed
+ * the same way {@link buildMarkerBody}'s own switch reads `fields` --
+ * consulted by the `import.meta.main` CLI entry point below to report a
+ * missing required field BY NAME (via `requireFlag`, cli-args.mts) before
+ * `buildMarkerBody` is ever called, instead of surfacing that renderer's
+ * own aggregate "invalid ... marker payload" guard with no indication of
+ * which flag was absent (#1722). `supersedes` (claim), `max-activity-at` /
+ * `ci-completed-at` (watermark) are deliberately OMITTED: the underlying
+ * renderers default an absent or empty value to the `none` sentinel, so
+ * requiring them here would reject input the renderer itself accepts.
+ * `advisory-recovery`'s optional `claim-id` / `attempt` pair is also
+ * omitted for the same reason -- passing neither renders the legacy
+ * 3-field form; the renderer's own "must both be provided together"
+ * message already names that half-bound case precisely. This CLI-layer
+ * check stays defense-in-depth-complementary to, never a replacement for,
+ * `buildMarkerBody`'s own per-type validation -- a direct caller of
+ * `buildMarkerBody` (bypassing this CLI) still gets that renderer's
+ * aggregate guard.
+ */
+const REQUIRED_FIELDS_BY_TYPE: Record<MarkerType, readonly string[]> = {
+  claim: ['agent-id', 'claim-id', 'timestamp', 'branch'],
+  unclaim: ['agent-id', 'claim-id', 'timestamp'],
+  'activation-nonce': ['agent-id', 'claim-id', 'nonce', 'timestamp'],
+  watermark: ['agent-id', 'claim-id', 'head-sha', 'total-item-count'],
+  baseline: ['agent-id', 'claim-id', 'sha'],
+  advisory: ['agent-id', 'head-sha', 'timestamp'],
+  'advisory-recovery': ['agent-id', 'head-sha', 'timestamp'],
+  'advisory-reroll': ['agent-id', 'head-sha', 'timestamp'],
+  'copilot-unavailable': [
+    'agent-id',
+    'claim-id',
+    'head-sha',
+    'attempt',
+    'timestamp',
+  ],
+};
 
 export const TARGET_KINDS = ['issue', 'pr'] as const;
 export type TargetKind = (typeof TARGET_KINDS)[number];
@@ -569,6 +608,16 @@ if (import.meta.main) {
 
   let body: string;
   try {
+    // #1722: report a missing required field BY NAME before buildMarkerBody
+    // (and the renderer it dispatches to) ever sees the payload -- runs
+    // AFTER --from-pr derivation above, so a watermark's --head-sha /
+    // --total-item-count are already populated by the time this checks
+    // them in that mode. See REQUIRED_FIELDS_BY_TYPE's own doc comment for
+    // which fields are deliberately excluded (renderer-defaulted or
+    // half-bound-optional).
+    for (const field of REQUIRED_FIELDS_BY_TYPE[args.type as MarkerType]) {
+      requireFlag(args.fields[field], `--${field}`);
+    }
     body = buildMarkerBody(args.type, args.fields);
   } catch (error) {
     process.stderr.write(`${(error as Error).message}\n`);

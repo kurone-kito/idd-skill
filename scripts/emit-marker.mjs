@@ -10,6 +10,7 @@
 // ready-to-post body string to stdout and performs NO network write; the
 // agent posts it via the documented HTTP path. The render logic lives in
 // protocol-helpers; this is the thin CLI surface.
+import { requireFlag } from './cli-args.mjs';
 import {
   renderClaimedByMarker,
   renderReviewBaselineMarker,
@@ -32,29 +33,47 @@ function runCli() {
       `--type is required and must be one of: ${MARKER_TYPES.join(', ')}`,
     );
   }
+  // #1722: validate every flag THIS marker type requires, by name, before
+  // the renderer ever sees the payload -- previously only --type was
+  // checked here, so a missing per-type flag (e.g. --timestamp for
+  // claimed-by) fell through to the renderer's own aggregate guard, which
+  // reports only an unattributed "invalid ... marker payload" with no
+  // indication of which flag was absent. requireFlag (cli-args.mts) reports
+  // the exact missing flag, matching the shape the --type check above
+  // already uses. --supersedes / --max-activity-at / --ci-completed-at are
+  // deliberately NOT required here: the renderers themselves default an
+  // absent or empty value to the `none` sentinel, so requiring them here
+  // would reject input the renderer accepts. The renderer's own aggregate
+  // guard stays in place as defense-in-depth for any other direct caller of
+  // renderClaimedByMarker / renderReviewWatermarkMarker /
+  // renderReviewBaselineMarker (e.g. protocol-helpers.mts consumers outside
+  // this CLI).
   let body;
   if (type === 'claimed-by') {
     body = renderClaimedByMarker({
-      agentId: args['agent-id'],
-      claimId: args['claim-id'],
+      agentId: requireFlag(args['agent-id'], '--agent-id'),
+      claimId: requireFlag(args['claim-id'], '--claim-id'),
       supersedes: args.supersedes,
-      timestamp: args.timestamp,
-      branch: args.branch,
+      timestamp: requireFlag(args.timestamp, '--timestamp'),
+      branch: requireFlag(args.branch, '--branch'),
     });
   } else if (type === 'review-watermark') {
     body = renderReviewWatermarkMarker({
-      agentId: args['agent-id'],
-      claimId: args['claim-id'],
-      headSha: args['head-sha'],
+      agentId: requireFlag(args['agent-id'], '--agent-id'),
+      claimId: requireFlag(args['claim-id'], '--claim-id'),
+      headSha: requireFlag(args['head-sha'], '--head-sha'),
       maxActivityAt: args['max-activity-at'],
-      totalItemCount: args['total-item-count'],
+      totalItemCount: requireFlag(
+        args['total-item-count'],
+        '--total-item-count',
+      ),
       ciCompletedAt: args['ci-completed-at'],
     });
   } else {
     body = renderReviewBaselineMarker({
-      agentId: args['agent-id'],
-      claimId: args['claim-id'],
-      sha: args.sha,
+      agentId: requireFlag(args['agent-id'], '--agent-id'),
+      claimId: requireFlag(args['claim-id'], '--claim-id'),
+      sha: requireFlag(args.sha, '--sha'),
     });
   }
   process.stdout.write(`${body}\n`);
