@@ -1081,7 +1081,15 @@ export function parseReviewWatermarkComment(
   return {
     agentId: match[1],
     claimId: match[2],
-    headSha: match[3],
+    // #1693: the `i` flag accepts an uppercase-hex SHA (the documented
+    // manual hand-composed fallback path), but downstream comparisons
+    // (diffReviewSnapshot in protocol-helpers.mts) match exactly against
+    // the always-lowercase live head SHA. Returning match[3] verbatim let a
+    // hand-composed uppercase watermark parse as valid yet never satisfy
+    // the F2 currency check, producing an unexplained head-changed
+    // repost loop. Lowercase here, matching parseExternalCheckWaiverComment's
+    // existing headSha.toLowerCase() below.
+    headSha: match[3].toLowerCase(),
     maxActivityUpdatedAt,
     totalItemCount,
     latestCiCompletedAt,
