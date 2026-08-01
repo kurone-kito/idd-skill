@@ -4,7 +4,6 @@
 // The scripts/pre-merge-readiness.mjs copy is generated from the .mts
 // source named above by `pnpm run build`. Edit the .mts source, never the
 // generated .mjs. See docs/typescript-sources.md.
-import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import {
   readAdvisoryPrimaryBotLogin,
@@ -19,7 +18,12 @@ import {
   readForcedHandoffAuthorityPolicy,
   readForcedHandoffMode,
 } from './collaborator-permission.mjs';
-import { GH_TEXT_LOOP_OPTIONS, ghText, safeGhText } from './gh-exec.mjs';
+import {
+  DEFAULT_GH_PAGINATED_TIMEOUT_MS,
+  GH_TEXT_LOOP_OPTIONS,
+  ghText,
+  safeGhText,
+} from './gh-exec.mjs';
 import { deriveGhHttpStatus } from './gh-http-status.mjs';
 import { loadIddConfig } from './idd-config.mjs';
 import {
@@ -1075,9 +1079,11 @@ export function resolveToleratedGhFailure(error, options = {}) {
 }
 function runGh(args, options = {}) {
   try {
-    return execFileSync('gh', args, {
-      encoding: 'utf8',
-      stdio: ['ignore', 'pipe', 'pipe'],
+    return ghText(args, {
+      ...GH_TEXT_LOOP_OPTIONS,
+      ...(args.includes('--paginate')
+        ? { timeout: DEFAULT_GH_PAGINATED_TIMEOUT_MS }
+        : {}),
     });
   } catch (error) {
     const tolerated = resolveToleratedGhFailure(error, options);

@@ -5,8 +5,6 @@
 // above by `pnpm run build`. Edit the .mts source, never the generated
 // .mjs. See docs/typescript-sources.md.
 
-import { execFileSync } from 'node:child_process';
-
 import {
   DEFAULT_ADVISORY_RECOVERY_CYCLE_CAP,
   DEFAULT_ADVISORY_TERMINAL_WINDOW_MINUTES,
@@ -17,7 +15,11 @@ import {
   readAdvisoryWaitPolicy,
 } from './advisory-wait-policy.mts';
 import { parseCliArgs } from './cli-args.mts';
-import { ghText, safeGhText } from './gh-exec.mts';
+import {
+  DEFAULT_GH_PAGINATED_TIMEOUT_MS,
+  ghText,
+  safeGhText,
+} from './gh-exec.mts';
 import { loadIddConfig } from './idd-config.mts';
 import type { TrustedMarkerActorResolution } from './protocol-helpers.mts';
 import {
@@ -801,8 +803,8 @@ function ghApiJson(
     // via apt, so keep the NDJSON-compatible form here.
     args.splice(1, 0, '--paginate', '--jq', '.[]');
     return parsePaginatedGhNdjson(
-      execFileSync('gh', args, { encoding: 'utf8' }),
+      ghText(args, { timeout: DEFAULT_GH_PAGINATED_TIMEOUT_MS }),
     );
   }
-  return JSON.parse(execFileSync('gh', args, { encoding: 'utf8' }));
+  return JSON.parse(ghText(args));
 }

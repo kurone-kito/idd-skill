@@ -31,7 +31,6 @@
 // It is fail-closed: only classifier-recognized notices and the exact summary
 // marker are dispositioned; real reviews and review threads are never touched.
 
-import { execFileSync } from 'node:child_process';
 import { parseCliArgs } from './cli-args.mts';
 import type { CollaboratorPermissionCache } from './collaborator-permission.mts';
 import {
@@ -39,7 +38,7 @@ import {
   readForcedHandoffAuthorityPolicy,
   readForcedHandoffMode,
 } from './collaborator-permission.mts';
-import { ghText } from './gh-exec.mts';
+import { DEFAULT_GH_PAGINATED_TIMEOUT_MS, ghText } from './gh-exec.mts';
 import { loadIddConfig } from './idd-config.mts';
 import {
   advisoryBotIdentityToken,
@@ -483,7 +482,7 @@ export function parseArgs(argv: string[]): CliArgs {
 }
 
 function ghJson(args: string[]): unknown {
-  return JSON.parse(execFileSync('gh', args, { encoding: 'utf8' }));
+  return JSON.parse(ghText(args));
 }
 
 /**
@@ -494,8 +493,8 @@ function ghJson(args: string[]): unknown {
  * 24.04 LTS ships gh 2.45.0, so the repo standardizes on `--jq '.[]'`.)
  */
 function ghJsonPaginated(args: string[]): unknown[] {
-  const out = execFileSync('gh', [...args, '--paginate', '--jq', '.[]'], {
-    encoding: 'utf8',
+  const out = ghText([...args, '--paginate', '--jq', '.[]'], {
+    timeout: DEFAULT_GH_PAGINATED_TIMEOUT_MS,
   });
   return out
     .split('\n')

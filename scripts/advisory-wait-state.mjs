@@ -4,7 +4,6 @@
 // The scripts/advisory-wait-state.mjs copy is generated from the .mts source named
 // above by `pnpm run build`. Edit the .mts source, never the generated
 // .mjs. See docs/typescript-sources.md.
-import { execFileSync } from 'node:child_process';
 import {
   DEFAULT_ADVISORY_RECOVERY_CYCLE_CAP,
   DEFAULT_ADVISORY_TERMINAL_WINDOW_MINUTES,
@@ -15,7 +14,11 @@ import {
   readAdvisoryWaitPolicy,
 } from './advisory-wait-policy.mjs';
 import { parseCliArgs } from './cli-args.mjs';
-import { ghText, safeGhText } from './gh-exec.mjs';
+import {
+  DEFAULT_GH_PAGINATED_TIMEOUT_MS,
+  ghText,
+  safeGhText,
+} from './gh-exec.mjs';
 import { loadIddConfig } from './idd-config.mjs';
 import {
   buildAdvisoryWaitSummary,
@@ -558,8 +561,8 @@ function ghApiJson(path, paginate = false, extraArgs = []) {
     // via apt, so keep the NDJSON-compatible form here.
     args.splice(1, 0, '--paginate', '--jq', '.[]');
     return parsePaginatedGhNdjson(
-      execFileSync('gh', args, { encoding: 'utf8' }),
+      ghText(args, { timeout: DEFAULT_GH_PAGINATED_TIMEOUT_MS }),
     );
   }
-  return JSON.parse(execFileSync('gh', args, { encoding: 'utf8' }));
+  return JSON.parse(ghText(args));
 }

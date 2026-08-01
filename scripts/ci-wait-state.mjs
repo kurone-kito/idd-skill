@@ -21,9 +21,8 @@
 // - HEAD drift mid-wait: this helper always reports the live `headRefOid` at
 //   read time, so a caller polling in a loop can detect the branch moving
 //   out from under an in-flight wait.
-import { execFileSync } from 'node:child_process';
 import { parseCliArgs } from './cli-args.mjs';
-import { ghText } from './gh-exec.mjs';
+import { DEFAULT_GH_PAGINATED_TIMEOUT_MS, ghText } from './gh-exec.mjs';
 import { deriveGhHttpStatus } from './gh-http-status.mjs';
 import { loadIddConfig } from './idd-config.mjs';
 import { normalizePolicyConfig } from './policy-helpers.mjs';
@@ -506,7 +505,10 @@ function ghApiJsonOr404Empty(path, paginate) {
     ? ['api', path, '--paginate', '--jq', '.[]']
     : ['api', path];
   try {
-    const raw = execFileSync('gh', args, { encoding: 'utf8' });
+    const raw = ghText(
+      args,
+      paginate ? { timeout: DEFAULT_GH_PAGINATED_TIMEOUT_MS } : {},
+    );
     if (!paginate) {
       const trimmed = raw.trim();
       return trimmed ? JSON.parse(trimmed) : {};

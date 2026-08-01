@@ -6,7 +6,11 @@
 // generated .mjs. See docs/typescript-sources.md.
 import { execFileSync } from 'node:child_process';
 import { parseCliArgs } from './cli-args.mjs';
-import { GH_TEXT_LOOP_TIMEOUT_OPTIONS, ghText } from './gh-exec.mjs';
+import {
+  DEFAULT_GH_PAGINATED_TIMEOUT_MS,
+  GH_TEXT_LOOP_TIMEOUT_OPTIONS,
+  ghText,
+} from './gh-exec.mjs';
 import { parsePaginatedGhNdjson } from './protocol-helpers.mjs';
 
 const RUNNING_STATES = new Set([
@@ -572,10 +576,11 @@ export function recoverJsonFromGhFailure(error, options = {}) {
 }
 function runGh(args) {
   try {
-    return execFileSync('gh', args, {
-      encoding: 'utf8',
-      timeout: 30_000,
-      stdio: ['ignore', 'pipe', 'pipe'],
+    return ghText(args, {
+      ...GH_TEXT_LOOP_TIMEOUT_OPTIONS,
+      ...(args.includes('--paginate')
+        ? { timeout: DEFAULT_GH_PAGINATED_TIMEOUT_MS }
+        : {}),
     });
   } catch (error) {
     const stderr = String(error?.stderr ?? '').trim();

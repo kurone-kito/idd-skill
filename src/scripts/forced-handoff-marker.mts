@@ -5,7 +5,6 @@
 // above by `pnpm run build`. Edit the .mts source, never the generated
 // .mjs. See docs/typescript-sources.md.
 
-import { execFileSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { parseCliArgs } from './cli-args.mts';
@@ -15,7 +14,11 @@ import {
   readForcedHandoffAuthorityPolicy,
   readForcedHandoffMode,
 } from './collaborator-permission.mts';
-import { ghText, safeGhText } from './gh-exec.mts';
+import {
+  DEFAULT_GH_PAGINATED_TIMEOUT_MS,
+  ghText,
+  safeGhText,
+} from './gh-exec.mts';
 import { loadIddConfig } from './idd-config.mts';
 import { resolveCollaboratorMarkerTrust } from './policy-helpers.mts';
 import type { ClaimValidationSummary } from './protocol-helpers.mts';
@@ -696,10 +699,10 @@ function ghJson(args: string[], slurp = false): unknown {
     // via apt, so keep the NDJSON-compatible form here.
     finalArgs.splice(1, 0, '--jq', '.[]');
     return parsePaginatedGhNdjson(
-      execFileSync('gh', finalArgs, { encoding: 'utf8' }),
+      ghText(finalArgs, { timeout: DEFAULT_GH_PAGINATED_TIMEOUT_MS }),
     );
   }
-  return JSON.parse(execFileSync('gh', finalArgs, { encoding: 'utf8' }));
+  return JSON.parse(ghText(finalArgs));
 }
 
 function readCollaboratorTrustEnabled(config: unknown = null): boolean {

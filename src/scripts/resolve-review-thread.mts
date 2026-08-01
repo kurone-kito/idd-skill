@@ -15,7 +15,6 @@
 // first, resolve second — a failed reply never leaves a silently-resolved
 // thread with no disposition.
 
-import { execFileSync } from 'node:child_process';
 import { parseCliArgs } from './cli-args.mts';
 import type { CollaboratorPermissionCache } from './collaborator-permission.mts';
 import {
@@ -23,7 +22,7 @@ import {
   readForcedHandoffAuthorityPolicy,
   readForcedHandoffMode,
 } from './collaborator-permission.mts';
-import { ghText } from './gh-exec.mts';
+import { DEFAULT_GH_PAGINATED_TIMEOUT_MS, ghText } from './gh-exec.mts';
 import {
   type ParsedClaimMarker,
   resolveActiveClaimForWriteGate,
@@ -234,7 +233,7 @@ thread in one invocation (E13). Dry-run by default; --apply mutates.
 `;
 
 function ghJson(args: string[]): unknown {
-  return JSON.parse(execFileSync('gh', args, { encoding: 'utf8' }));
+  return JSON.parse(ghText(args));
 }
 
 /**
@@ -243,8 +242,8 @@ function ghJson(args: string[]): unknown {
  * line (NDJSON), which we parse line-by-line (mirrors the sibling helpers).
  */
 function ghJsonPaginated(args: string[]): unknown[] {
-  const out = execFileSync('gh', [...args, '--paginate', '--jq', '.[]'], {
-    encoding: 'utf8',
+  const out = ghText([...args, '--paginate', '--jq', '.[]'], {
+    timeout: DEFAULT_GH_PAGINATED_TIMEOUT_MS,
   });
   return out
     .split('\n')
@@ -268,9 +267,7 @@ function ghGraphql(
     }
     args.push('-f', `${key}=${value}`);
   }
-  return JSON.parse(
-    execFileSync('gh', args, { encoding: 'utf8' }).trim() || '{}',
-  );
+  return JSON.parse(ghText(args) || '{}');
 }
 
 interface ReviewThreadsConnectionPayload {

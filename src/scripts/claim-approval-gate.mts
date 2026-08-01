@@ -5,10 +5,12 @@
 // source named above by `pnpm run build`. Edit the .mts source, never the
 // generated .mjs. See docs/typescript-sources.md.
 
-import { execFileSync } from 'node:child_process';
-
 import { parseCliArgs } from './cli-args.mts';
-import { GH_TEXT_LOOP_TIMEOUT_OPTIONS, ghText } from './gh-exec.mts';
+import {
+  DEFAULT_GH_PAGINATED_TIMEOUT_MS,
+  GH_TEXT_LOOP_TIMEOUT_OPTIONS,
+  ghText,
+} from './gh-exec.mts';
 import { deriveGhHttpStatus } from './gh-http-status.mts';
 import { loadPolicyConfig } from './idd-config.mts';
 import { normalizePolicyConfig } from './policy-helpers.mts';
@@ -947,7 +949,7 @@ function ghApiJson(
   if (paginate) {
     args.push('--paginate', '--jq', '.[]');
   }
-  const raw = runGh(args).trim();
+  const raw = runGh(args, paginate).trim();
   if (paginate) {
     return parsePaginatedGhNdjson(raw);
   }
@@ -1010,12 +1012,11 @@ export function wrapGhError(error: unknown): unknown {
   return wrapped;
 }
 
-function runGh(args: string[]): string {
+function runGh(args: string[], paginate = false): string {
   try {
-    return execFileSync('gh', args, {
-      encoding: 'utf8',
-      timeout: 30_000,
-      stdio: ['ignore', 'pipe', 'pipe'],
+    return ghText(args, {
+      ...GH_TEXT_LOOP_TIMEOUT_OPTIONS,
+      ...(paginate ? { timeout: DEFAULT_GH_PAGINATED_TIMEOUT_MS } : {}),
     });
   } catch (error) {
     throw wrapGhError(error);

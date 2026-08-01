@@ -14,9 +14,37 @@
 //
 // Consumed by the `src/scripts/*.mts` helpers that shell out to `gh` or
 // need the CLI-entry-point guard.
-import { execFileSync } from 'node:child_process';
+import { execFile, execFileSync } from 'node:child_process';
 import { setTimeout as sleep } from 'node:timers/promises';
+import { promisify } from 'node:util';
 import { parsePaginatedGhNdjson } from './protocol-helpers.mjs';
+/**
+ * Default `execFileSync`/`execFile` timeout (ms) applied when a caller
+ * supplies none — the existing 30s convention already used at 54+
+ * `GH_TEXT_LOOP_TIMEOUT_OPTIONS` call sites (#1675). Without this, a
+ * stalled or credential-prompting `gh` invocation (rate limiting, network
+ * stall, an unexpected interactive re-auth prompt) hangs the calling
+ * helper indefinitely instead of failing closed into IDD's recovery
+ * routing. An explicit caller-supplied `timeout` (including `0`, which
+ * Node treats as "no timeout") always wins over this default.
+ */
+export const DEFAULT_GH_TIMEOUT_MS = 30_000;
+/**
+ * Default timeout (ms) for a **paginated** `gh api --paginate` call
+ * (`{@link ghApiJson}` with `paginate: true`) when the caller supplies
+ * none. `--paginate` makes `gh` walk every page of a list endpoint as
+ * sequential HTTP round-trips inside one subprocess invocation, so the
+ * single-request {@link DEFAULT_GH_TIMEOUT_MS} bound is too tight by
+ * default for a response spanning more than a couple of pages. This
+ * repo's paginated callers are PR/issue-scoped (review threads, comments,
+ * timeline events — bounded in practice to a few pages), so a flat 4x
+ * multiplier is a deliberately generous but still-bounded default rather
+ * than an unbounded pass-through; callers with a legitimately different
+ * bound (e.g. a large graph traversal) pass an explicit `timeout` to
+ * override it. Recorded here so this default isn't re-litigated later.
+ */
+export const DEFAULT_GH_PAGINATED_TIMEOUT_MS = 120_000;
+const execFileAsync = promisify(execFile);
 /**
  * Shared `{ stdio }` override for callers that invoke `gh` in a tight or
  * high-volume loop and want to avoid an open-but-unwritten stdin pipe, but
@@ -37,6 +65,10 @@ export const GH_TEXT_LOOP_TIMEOUT_OPTIONS = {
 /**
  * Run `gh` synchronously and return its trimmed stdout.
  *
+ * Applies {@link DEFAULT_GH_TIMEOUT_MS} when the caller supplies no
+ * `timeout` (#1675) — a caller-supplied value, including `0`, always
+ * wins.
+ *
  * Throws (propagating the child-process error) on any non-zero exit —
  * callers that need to tolerate specific failures use {@link safeGhText}
  * or {@link ghApiJson}'s `allowStatuses` option instead.
@@ -44,8 +76,9 @@ export const GH_TEXT_LOOP_TIMEOUT_OPTIONS = {
 export function ghText(args, options = {}) {
   return execFileSync('gh', args, {
     encoding: 'utf8',
+    timeout: options.timeout ?? DEFAULT_GH_TIMEOUT_MS,
     ...(options.stdio ? { stdio: options.stdio } : {}),
-    ...(options.timeout ? { timeout: options.timeout } : {}),
+    ...(options.input !== undefined ? { input: options.input } : {}),
   }).trim();
 }
 /** {@link ghText}, swallowing any failure and returning `''` instead. */
@@ -55,6 +88,35 @@ export function safeGhText(args, options = {}) {
   } catch {
     return '';
   }
+}
+/**
+ * Async sibling of {@link ghText}, for callers that need several `gh`
+ * subprocesses running concurrently (`execFileSync` serializes even
+ * concurrent `await`s because it holds the event loop). Extracted from
+ * `discover-roadmap-graph.mts`'s traversal hot-path loader (#1675) so
+ * that file no longer needs its own direct `execFile('gh', ...)` call.
+ *
+ * `execFile` has no `stdio` option, so its default stdio does not ignore
+ * stdin the way {@link GH_TEXT_LOOP_OPTIONS} does for the sync API. None
+ * of this module's own callers pass `--input` or an `@-` field value (the
+ * only ways `gh api` reads stdin), so `gh` itself never blocks on stdin
+ * here — this still closes the child's stdin defensively so a future
+ * caller can't silently reintroduce a stdin hang (mirrors the pattern
+ * `discover-roadmap-graph.mts` used before this extraction).
+ *
+ * Trims stdout, matching {@link ghText}'s convention.
+ */
+export async function ghTextAsync(args, options = {}) {
+  const run = execFileAsync('gh', args, {
+    encoding: 'utf8',
+    timeout: options.timeout ?? DEFAULT_GH_TIMEOUT_MS,
+    ...(options.maxBuffer !== undefined
+      ? { maxBuffer: options.maxBuffer }
+      : {}),
+  });
+  run.child.stdin?.end();
+  const { stdout } = await run;
+  return stdout.trim();
 }
 /**
  * Run `gh api <path>` and parse its output as JSON, optionally paginating
@@ -71,9 +133,12 @@ export function ghApiJson(path, options = {}) {
   if (paginate) {
     args.push('--paginate', '--jq', '.[]');
   }
+  const timeout =
+    options.timeout ??
+    (paginate ? DEFAULT_GH_PAGINATED_TIMEOUT_MS : DEFAULT_GH_TIMEOUT_MS);
   let raw;
   try {
-    raw = execFileSync('gh', args, { encoding: 'utf8' });
+    raw = execFileSync('gh', args, { encoding: 'utf8', timeout });
   } catch (error) {
     const failure = error;
     const status = Number(failure?.status ?? -1);

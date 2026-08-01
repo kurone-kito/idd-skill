@@ -5,7 +5,6 @@
 // source named above by `pnpm run build`. Edit the .mts source, never the
 // generated .mjs. See docs/typescript-sources.md.
 
-import { execFileSync } from 'node:child_process';
 import type { LabelEvent } from './authoring-label-guard.mts';
 import {
   buildAuthoringLabelWarning,
@@ -16,7 +15,11 @@ import {
   parseAutopilotSuitability,
 } from './autopilot-suitability.mts';
 import { parseCliArgs } from './cli-args.mts';
-import { GH_TEXT_LOOP_OPTIONS, ghText } from './gh-exec.mts';
+import {
+  DEFAULT_GH_PAGINATED_TIMEOUT_MS,
+  GH_TEXT_LOOP_OPTIONS,
+  ghText,
+} from './gh-exec.mts';
 import { deriveGhHttpStatus } from './gh-http-status.mts';
 import { loadPolicyConfig } from './idd-config.mts';
 import { stripMarkdownCodeRegions } from './markdown-code.mts';
@@ -1005,7 +1008,7 @@ function listOpenIssueNumbers(owner: string, repo: string): number[] {
         '--jq',
         '.[] | select(.pull_request == null) | .number',
       ],
-      GH_TEXT_LOOP_OPTIONS,
+      { ...GH_TEXT_LOOP_OPTIONS, timeout: DEFAULT_GH_PAGINATED_TIMEOUT_MS },
     ),
   );
 }
@@ -1064,10 +1067,7 @@ function resolveSuitabilityEnabled(config: unknown): boolean {
 
 function runGh(args: string[]): string {
   try {
-    return execFileSync('gh', args, {
-      encoding: 'utf8',
-      stdio: ['ignore', 'pipe', 'pipe'],
-    });
+    return ghText(args, GH_TEXT_LOOP_OPTIONS);
   } catch (error) {
     const rawStatus = (error as { status?: unknown } | null)?.status;
     const status = typeof rawStatus === 'number' ? rawStatus : null;

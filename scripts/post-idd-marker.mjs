@@ -357,8 +357,7 @@ the snapshot child so its counts match the manual review-activity-snapshot path.
  * for the comments API); `target` is descriptive-only and never changes routing.
  */
 function postMarker(owner, repo, number, body) {
-  const out = execFileSync(
-    'gh',
+  const out = ghText(
     [
       'api',
       '--method',
@@ -367,7 +366,7 @@ function postMarker(owner, repo, number, body) {
       '--input',
       '-',
     ],
-    { input: JSON.stringify({ body }), encoding: 'utf8' },
+    { input: JSON.stringify({ body }) },
   );
   return JSON.parse(out);
 }

@@ -12,12 +12,15 @@
 // emits a soft de-prioritization order for A4 Step 2. It is the
 // file-contention companion to the #1008 `--with-claim-state` claim-eligibility
 // annotation. Evidence-only: it claims nothing and mutates no state.
-import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { parseAutopilotSuitability } from './autopilot-suitability.mjs';
 import { parseCliArgs } from './cli-args.mjs';
-import { GH_TEXT_LOOP_TIMEOUT_OPTIONS, ghText } from './gh-exec.mjs';
+import {
+  DEFAULT_GH_PAGINATED_TIMEOUT_MS,
+  GH_TEXT_LOOP_TIMEOUT_OPTIONS,
+  ghText,
+} from './gh-exec.mjs';
 import { loadPolicyConfig } from './idd-config.mjs';
 import { parseIsoDurationToMs } from './policy-helpers.mjs';
 import {
@@ -448,7 +451,10 @@ function fetchActiveClaimBranchNumbers(repoRef) {
       '--jq',
       '.[].ref',
     ],
-    GH_TEXT_LOOP_TIMEOUT_OPTIONS,
+    {
+      ...GH_TEXT_LOOP_TIMEOUT_OPTIONS,
+      timeout: DEFAULT_GH_PAGINATED_TIMEOUT_MS,
+    },
   );
   for (const line of output.split('\n')) {
     const match = line.match(/^refs\/heads\/issue\/(\d+)-/);
@@ -698,11 +704,7 @@ export function ghJson(args) {
 }
 function runGh(args) {
   try {
-    return execFileSync('gh', args, {
-      encoding: 'utf8',
-      timeout: 30_000,
-      stdio: ['ignore', 'pipe', 'pipe'],
-    });
+    return ghText(args, GH_TEXT_LOOP_TIMEOUT_OPTIONS);
   } catch (error) {
     const stderr = String(error?.stderr ?? '').trim();
     if (stderr) {

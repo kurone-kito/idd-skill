@@ -17,7 +17,6 @@
 // closed child with an open linked PR, a traversal cycle, or no explicit child
 // work is NEVER closed.
 
-import { execFileSync } from 'node:child_process';
 import { parseCliArgs } from './cli-args.mts';
 import {
   buildIssueLoader,
@@ -1457,8 +1456,7 @@ function postIssueComment(
   issueNumber: number,
   body: string,
 ): void {
-  execFileSync(
-    'gh',
+  ghText(
     [
       'api',
       '--method',
@@ -1467,7 +1465,7 @@ function postIssueComment(
       '--input',
       '-',
     ],
-    { input: JSON.stringify({ body }), encoding: 'utf8' },
+    { input: JSON.stringify({ body }) },
   );
 }
 

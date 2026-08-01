@@ -5,7 +5,6 @@
 // above by `pnpm run build`. Edit the .mts source, never the generated
 // .mjs. See docs/typescript-sources.md.
 
-import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import type { CollaboratorPermissionCache } from './collaborator-permission.mts';
 import {
@@ -15,7 +14,11 @@ import {
   resolveTrustedCollaboratorMarkerLogins,
 } from './collaborator-permission.mts';
 import { planHandoff } from './forced-handoff-marker.mts';
-import { ghText, safeGhText } from './gh-exec.mts';
+import {
+  DEFAULT_GH_PAGINATED_TIMEOUT_MS,
+  ghText,
+  safeGhText,
+} from './gh-exec.mts';
 import { parsePaginatedGhNdjson } from './protocol-helpers.mts';
 import type { PromptFn } from './readline-prompt.mts';
 import { makeReadlinePrompt } from './readline-prompt.mts';
@@ -285,10 +288,10 @@ function ghJson(args: string[], slurp = false): unknown {
     // via apt, so keep the NDJSON-compatible form here.
     finalArgs.splice(1, 0, '--jq', '.[]');
     return parsePaginatedGhNdjson(
-      execFileSync('gh', finalArgs, { encoding: 'utf8' }),
+      ghText(finalArgs, { timeout: DEFAULT_GH_PAGINATED_TIMEOUT_MS }),
     );
   }
-  return JSON.parse(execFileSync('gh', finalArgs, { encoding: 'utf8' }));
+  return JSON.parse(ghText(finalArgs));
 }
 
 export function buildTrustedMarkerLogins(

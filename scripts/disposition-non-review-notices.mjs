@@ -30,14 +30,13 @@
 //
 // It is fail-closed: only classifier-recognized notices and the exact summary
 // marker are dispositioned; real reviews and review threads are never touched.
-import { execFileSync } from 'node:child_process';
 import { parseCliArgs } from './cli-args.mjs';
 import {
   isAuthorizedForcedHandoffActor,
   readForcedHandoffAuthorityPolicy,
   readForcedHandoffMode,
 } from './collaborator-permission.mjs';
-import { ghText } from './gh-exec.mjs';
+import { DEFAULT_GH_PAGINATED_TIMEOUT_MS, ghText } from './gh-exec.mjs';
 import { loadIddConfig } from './idd-config.mjs';
 import {
   advisoryBotIdentityToken,
@@ -382,7 +381,7 @@ export function parseArgs(argv) {
   };
 }
 function ghJson(args) {
-  return JSON.parse(execFileSync('gh', args, { encoding: 'utf8' }));
+  return JSON.parse(ghText(args));
 }
 /**
  * Fetch a paginated list endpoint as an array. `gh api --paginate` concatenates
@@ -392,8 +391,8 @@ function ghJson(args) {
  * 24.04 LTS ships gh 2.45.0, so the repo standardizes on `--jq '.[]'`.)
  */
 function ghJsonPaginated(args) {
-  const out = execFileSync('gh', [...args, '--paginate', '--jq', '.[]'], {
-    encoding: 'utf8',
+  const out = ghText([...args, '--paginate', '--jq', '.[]'], {
+    timeout: DEFAULT_GH_PAGINATED_TIMEOUT_MS,
   });
   return out
     .split('\n')

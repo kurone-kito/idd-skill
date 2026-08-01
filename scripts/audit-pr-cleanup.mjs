@@ -4,7 +4,6 @@
 // The scripts/audit-pr-cleanup.mjs copy is generated from the .mts source named
 // above by `pnpm run build`. Edit the .mts source, never the generated
 // .mjs. See docs/typescript-sources.md.
-import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { computeReportSummary } from './audit-pr-cleanup-summary.mjs';
 import { parseCliArgs } from './cli-args.mjs';
@@ -13,6 +12,7 @@ import {
   readForcedHandoffAuthorityPolicy,
   readForcedHandoffMode,
 } from './collaborator-permission.mjs';
+import { ghText } from './gh-exec.mjs';
 import { resolveCollaboratorMarkerTrust } from './policy-helpers.mjs';
 import {
   classifyRegularBotComment,
@@ -846,19 +846,15 @@ function assertActiveClaim(
 }
 function readActiveClaim(owner, repo, issueNumber, options = {}) {
   const result = JSON.parse(
-    execFileSync(
-      'gh',
-      [
-        'issue',
-        'view',
-        String(issueNumber),
-        '--repo',
-        `${owner}/${repo}`,
-        '--json',
-        'comments',
-      ],
-      { encoding: 'utf8' },
-    ),
+    ghText([
+      'issue',
+      'view',
+      String(issueNumber),
+      '--repo',
+      `${owner}/${repo}`,
+      '--json',
+      'comments',
+    ]),
   );
   const comments = (result.comments ?? []).map((comment) => ({
     body: comment.body ?? '',
@@ -925,18 +921,15 @@ function isTrustedMarkerAuthor(owner, repo, login) {
   }
   let trusted = false;
   try {
-    const permission = execFileSync(
-      'gh',
+    const permission = ghText(
       [
         'api',
         `repos/${owner}/${repo}/collaborators/${encodeURIComponent(login)}/permission`,
         '--jq',
         '.permission',
       ],
-      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] },
-    )
-      .trim()
-      .toLowerCase();
+      { stdio: ['ignore', 'pipe', 'ignore'] },
+    ).toLowerCase();
     trusted = TRUSTED_MARKER_PERMISSIONS.has(permission);
   } catch {
     trusted = false;
@@ -949,13 +942,9 @@ function currentViewerLogin() {
     return cachedCurrentViewerLogin;
   }
   try {
-    cachedCurrentViewerLogin = execFileSync(
-      'gh',
-      ['api', 'user', '--jq', '.login'],
-      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] },
-    )
-      .trim()
-      .toLowerCase();
+    cachedCurrentViewerLogin = ghText(['api', 'user', '--jq', '.login'], {
+      stdio: ['ignore', 'pipe', 'ignore'],
+    }).toLowerCase();
   } catch {
     cachedCurrentViewerLogin = '';
   }
@@ -1010,7 +999,7 @@ function ghGraphql(query, variables, options = {}) {
     }
   }
   try {
-    return JSON.parse(execFileSync('gh', commandArgs, { encoding: 'utf8' }));
+    return JSON.parse(ghText(commandArgs));
   } catch (error) {
     const e = error;
     const stdout = String(e.stdout ?? '').trim();
@@ -1045,13 +1034,14 @@ function detectRepository() {
   if (process.env.GITHUB_REPOSITORY) {
     return process.env.GITHUB_REPOSITORY;
   }
-  return execFileSync(
-    'gh',
-    ['repo', 'view', '--json', 'nameWithOwner', '--jq', '.nameWithOwner'],
-    {
-      encoding: 'utf8',
-    },
-  ).trim();
+  return ghText([
+    'repo',
+    'view',
+    '--json',
+    'nameWithOwner',
+    '--jq',
+    '.nameWithOwner',
+  ]);
 }
 function parseRepository(value) {
   const parts = value.split('/');

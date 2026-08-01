@@ -4,9 +4,8 @@
 // The scripts/review-activity-snapshot.mjs copy is generated from the .mts
 // source named above by `pnpm run build`. Edit the .mts source, never the
 // generated .mjs. See docs/typescript-sources.md.
-import { execFileSync } from 'node:child_process';
 import { parseCliArgs } from './cli-args.mjs';
-import { ghText } from './gh-exec.mjs';
+import { DEFAULT_GH_PAGINATED_TIMEOUT_MS, ghText } from './gh-exec.mjs';
 import { loadIddConfig } from './idd-config.mjs';
 import {
   buildActivitySnapshotSummary,
@@ -364,7 +363,12 @@ function ghApiJson(path, paginate = false, fields = null) {
 }
 function runGh(args, options = {}) {
   try {
-    return execFileSync('gh', args, { encoding: 'utf8' });
+    return ghText(
+      args,
+      args.includes('--paginate')
+        ? { timeout: DEFAULT_GH_PAGINATED_TIMEOUT_MS }
+        : {},
+    );
   } catch (error) {
     const status = Number(error?.status ?? -1);
     if ((options.allowStatuses ?? []).includes(status)) {

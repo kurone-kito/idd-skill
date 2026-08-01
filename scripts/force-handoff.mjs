@@ -4,7 +4,6 @@
 // The scripts/force-handoff.mjs copy is generated from the .mts source named
 // above by `pnpm run build`. Edit the .mts source, never the generated
 // .mjs. See docs/typescript-sources.md.
-import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import {
   isAuthorizedForcedHandoffActor,
@@ -13,7 +12,11 @@ import {
   resolveTrustedCollaboratorMarkerLogins,
 } from './collaborator-permission.mjs';
 import { planHandoff } from './forced-handoff-marker.mjs';
-import { ghText, safeGhText } from './gh-exec.mjs';
+import {
+  DEFAULT_GH_PAGINATED_TIMEOUT_MS,
+  ghText,
+  safeGhText,
+} from './gh-exec.mjs';
 import { parsePaginatedGhNdjson } from './protocol-helpers.mjs';
 import { makeReadlinePrompt } from './readline-prompt.mjs';
 export const NON_TTY_ERROR =
@@ -199,10 +202,10 @@ function ghJson(args, slurp = false) {
     // via apt, so keep the NDJSON-compatible form here.
     finalArgs.splice(1, 0, '--jq', '.[]');
     return parsePaginatedGhNdjson(
-      execFileSync('gh', finalArgs, { encoding: 'utf8' }),
+      ghText(finalArgs, { timeout: DEFAULT_GH_PAGINATED_TIMEOUT_MS }),
     );
   }
-  return JSON.parse(execFileSync('gh', finalArgs, { encoding: 'utf8' }));
+  return JSON.parse(ghText(finalArgs));
 }
 export function buildTrustedMarkerLogins(
   owner,

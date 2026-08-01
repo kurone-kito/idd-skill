@@ -5,10 +5,13 @@ import { join } from 'node:path';
 import { test } from 'node:test';
 
 import {
+  DEFAULT_GH_PAGINATED_TIMEOUT_MS,
+  DEFAULT_GH_TIMEOUT_MS,
   GH_TEXT_LOOP_OPTIONS,
   GH_TEXT_LOOP_TIMEOUT_OPTIONS,
   ghApiJson,
   ghText,
+  ghTextAsync,
   safeGhText,
   withBoundedRetry,
 } from '../src/scripts/gh-exec.mts';
@@ -96,6 +99,38 @@ process.stdout.write('too slow');
 `);
   try {
     assert.throws(() => ghText(['repo', 'view'], { timeout: 50 }));
+  } finally {
+    restore();
+  }
+});
+
+test('DEFAULT_GH_TIMEOUT_MS and DEFAULT_GH_PAGINATED_TIMEOUT_MS match the documented 30s/120s convention', () => {
+  assert.equal(DEFAULT_GH_TIMEOUT_MS, 30_000);
+  assert.equal(DEFAULT_GH_PAGINATED_TIMEOUT_MS, 120_000);
+});
+
+test('ghText succeeds under the default timeout when the caller supplies none (#1675)', () => {
+  const restore = stubGh(`process.stdout.write('  under-default  \\n');`);
+  try {
+    assert.equal(ghText(['repo', 'view']), 'under-default');
+  } finally {
+    restore();
+  }
+});
+
+test('ghText forwards an input option to the child process stdin (#1675)', () => {
+  const restore = stubGh(`
+const chunks = [];
+process.stdin.on('data', (chunk) => chunks.push(chunk));
+process.stdin.on('end', () => {
+  process.stdout.write(Buffer.concat(chunks).toString('utf8'));
+});
+`);
+  try {
+    const result = ghText(['api', '--input', '-'], {
+      input: JSON.stringify({ body: 'hello' }),
+    });
+    assert.deepEqual(JSON.parse(result), { body: 'hello' });
   } finally {
     restore();
   }
@@ -259,6 +294,151 @@ process.exit(1);
     assert.throws(() =>
       ghApiJson('repos/o/r/issues/1', { allowStatuses: [1] }),
     );
+  } finally {
+    restore();
+  }
+});
+
+test('ghApiJson (non-paginated) forwards an explicit timeout override and throws when gh exceeds it (#1675)', () => {
+  const restore = stubGh(`
+const start = Date.now();
+while (Date.now() - start < 2000) {
+  // busy-wait
+}
+process.stdout.write('{}');
+`);
+  try {
+    assert.throws(() => ghApiJson('repos/o/r/issues/1', { timeout: 50 }));
+  } finally {
+    restore();
+  }
+});
+
+test('ghApiJson (paginated) forwards an explicit timeout override and throws when gh exceeds it (#1675)', () => {
+  const restore = stubGh(`
+const start = Date.now();
+while (Date.now() - start < 2000) {
+  // busy-wait
+}
+process.stdout.write('[]');
+`);
+  try {
+    assert.throws(() =>
+      ghApiJson('repos/o/r/issues', { paginate: true, timeout: 50 }),
+    );
+  } finally {
+    restore();
+  }
+});
+
+test('ghApiJson (non-paginated) succeeds under the default timeout when the caller supplies none (#1675)', () => {
+  const restore = stubGh(`process.stdout.write(JSON.stringify({ ok: true }));`);
+  try {
+    assert.deepEqual(ghApiJson('repos/o/r/issues/1'), { ok: true });
+  } finally {
+    restore();
+  }
+});
+
+test('ghApiJson (paginated) succeeds under the default paginated timeout when the caller supplies none (#1675)', () => {
+  const restore = stubGh(`process.stdout.write(JSON.stringify({ id: 1 }));`);
+  try {
+    assert.deepEqual(ghApiJson('repos/o/r/issues', { paginate: true }), [
+      { id: 1 },
+    ]);
+  } finally {
+    restore();
+  }
+});
+
+test('ghTextAsync trims stdout and forwards argv to gh', async () => {
+  const tempRoot = mkdtempSync(join(tmpdir(), 'idd-gh-exec-test-'));
+  const argsFile = join(tempRoot, 'args.json');
+  const restore = stubGh(`
+const fs = require('node:fs');
+fs.writeFileSync(${JSON.stringify(argsFile)}, JSON.stringify(process.argv.slice(2)));
+process.stdout.write('  hello async  \\n');
+`);
+  try {
+    const result = await ghTextAsync(['repo', 'view', '--json', 'name']);
+    assert.equal(result, 'hello async');
+    assert.deepEqual(JSON.parse(readFileSync(argsFile, 'utf8')), [
+      'repo',
+      'view',
+      '--json',
+      'name',
+    ]);
+  } finally {
+    restore();
+  }
+});
+
+test('ghTextAsync throws on a non-zero gh exit', async () => {
+  const restore = stubGh(`
+process.stderr.write('boom');
+process.exit(1);
+`);
+  try {
+    await assert.rejects(() => ghTextAsync(['repo', 'view']));
+  } finally {
+    restore();
+  }
+});
+
+test('ghTextAsync succeeds under the default timeout when the caller supplies none (#1675)', async () => {
+  const restore = stubGh(`process.stdout.write('  fast-async  \\n');`);
+  try {
+    assert.equal(await ghTextAsync(['repo', 'view']), 'fast-async');
+  } finally {
+    restore();
+  }
+});
+
+test('ghTextAsync forwards a timeout override and rejects when gh exceeds it', async () => {
+  const restore = stubGh(`
+const start = Date.now();
+while (Date.now() - start < 2000) {
+  // busy-wait
+}
+process.stdout.write('too slow');
+`);
+  try {
+    await assert.rejects(() => ghTextAsync(['repo', 'view'], { timeout: 50 }));
+  } finally {
+    restore();
+  }
+});
+
+test('ghTextAsync throws when stdout exceeds the default maxBuffer', async () => {
+  const restore = stubGh(`process.stdout.write('x'.repeat(2 * 1024 * 1024));`);
+  try {
+    await assert.rejects(() => ghTextAsync(['repo', 'view']));
+  } finally {
+    restore();
+  }
+});
+
+test('ghTextAsync forwards a maxBuffer override to tolerate larger output', async () => {
+  const restore = stubGh(`process.stdout.write('x'.repeat(2 * 1024 * 1024));`);
+  try {
+    const result = await ghTextAsync(['repo', 'view'], {
+      maxBuffer: 4 * 1024 * 1024,
+    });
+    assert.equal(result.length, 2 * 1024 * 1024);
+  } finally {
+    restore();
+  }
+});
+
+test('ghTextAsync preserves an explicit maxBuffer: 0 instead of silently falling back to execFile default (#1784 CodeRabbit review)', async () => {
+  const restore = stubGh(`process.stdout.write('a');`);
+  try {
+    // A single byte of stdout already exceeds maxBuffer: 0. If the option
+    // construction used a truthy check (`options.maxBuffer ? … : {}`) rather
+    // than `!== undefined`, an explicit 0 would be dropped and execFile's own
+    // 1 MiB default would silently apply instead, making this resolve
+    // instead of reject.
+    await assert.rejects(() => ghTextAsync(['repo', 'view'], { maxBuffer: 0 }));
   } finally {
     restore();
   }

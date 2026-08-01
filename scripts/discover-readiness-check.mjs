@@ -4,7 +4,6 @@
 // The scripts/discover-readiness-check.mjs copy is generated from the .mts
 // source named above by `pnpm run build`. Edit the .mts source, never the
 // generated .mjs. See docs/typescript-sources.md.
-import { execFileSync } from 'node:child_process';
 import {
   buildAuthoringLabelWarning,
   resolveAuthoringGuardPolicy,
@@ -14,7 +13,11 @@ import {
   parseAutopilotSuitability,
 } from './autopilot-suitability.mjs';
 import { parseCliArgs } from './cli-args.mjs';
-import { GH_TEXT_LOOP_OPTIONS, ghText } from './gh-exec.mjs';
+import {
+  DEFAULT_GH_PAGINATED_TIMEOUT_MS,
+  GH_TEXT_LOOP_OPTIONS,
+  ghText,
+} from './gh-exec.mjs';
 import { deriveGhHttpStatus } from './gh-http-status.mjs';
 import { loadPolicyConfig } from './idd-config.mjs';
 import { stripMarkdownCodeRegions } from './markdown-code.mjs';
@@ -809,7 +812,7 @@ function listOpenIssueNumbers(owner, repo) {
         '--jq',
         '.[] | select(.pull_request == null) | .number',
       ],
-      GH_TEXT_LOOP_OPTIONS,
+      { ...GH_TEXT_LOOP_OPTIONS, timeout: DEFAULT_GH_PAGINATED_TIMEOUT_MS },
     ),
   );
 }
@@ -858,10 +861,7 @@ function resolveSuitabilityEnabled(config) {
 }
 function runGh(args) {
   try {
-    return execFileSync('gh', args, {
-      encoding: 'utf8',
-      stdio: ['ignore', 'pipe', 'pipe'],
-    });
+    return ghText(args, GH_TEXT_LOOP_OPTIONS);
   } catch (error) {
     const rawStatus = error?.status;
     const status = typeof rawStatus === 'number' ? rawStatus : null;
