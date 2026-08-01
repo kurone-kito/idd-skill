@@ -29,8 +29,8 @@ For each item in ReviewItems_snapshot, first classify it:
   included by E1 for traceability, even when they do not require a code
   change.
 - If classification is ambiguous, default to PATH A.
-- Record each PATH A actor's permission standing (CODEOWNER / required
-  reviewer / Write-Maintain-Admin, or none) — E5's cap reads it.
+- Record each PATH A actor's permission standing (CODEOWNER, required
+  reviewer, sufficient collaborator access, or none) — E5's cap reads it.
 
 **Advisory non-review notice.** Before scoring a PATH B item, decide
 whether it is a _completed_ advisory review of the current HEAD or an
@@ -57,9 +57,10 @@ Then apply path-specific scoring:
 
 Record a path-specific disposition for every item:
 
-- **PATH A**: High-severity items reach Accepted only once "Verify
-  before accept" below confirms the claim against live evidence;
-  Medium/Low require an explicit Accept or Reject decision.
+- **PATH A**: High-severity items reach Accepted only via "Verify
+  before accept" below, or — when the actor-permission cap applies —
+  an explicit maintainer confirmation reply; Medium/Low require an
+  explicit Accept or Reject decision.
 - **PATH B** (a _completed_ review of the current HEAD): `Accepted`
   means the advisory confirms the implementation or captures useful
   context; `Rejected` means noted, no action required. An advisory
@@ -67,13 +68,14 @@ Record a path-specific disposition for every item:
   as `Rejected` per the E6 non-review-notice rule.
 
 **Actor-permission cap (PATH A).** Before an Accept, check whether the
-actor is a CODEOWNER, required reviewer, or holds Write/Maintain/Admin
-access (`GET /repos/{owner}/{repo}/collaborators/{username}/permission`).
-Absent all three, assertion alone never reaches Accept forced — only
-"Verify before accept" confirming the claim, or an explicit maintainer
-confirmation reply, gets it there. Otherwise cap it at Rejected with the
-reasoned reply E6 already requires. CODEOWNER/required-reviewer AMD
-handling is unchanged.
+actor is a CODEOWNER, required reviewer, or holds Triage/Write/Maintain/
+Admin access (`GET
+/repos/{owner}/{repo}/collaborators/{username}/permission`). Absent all
+three, assertion alone never reaches Accept forced — only "Verify before
+accept" confirming the claim, or an explicit maintainer confirmation
+reply, gets it there. Otherwise cap it at Rejected with the reasoned
+reply E6 already requires. CODEOWNER/required-reviewer AMD handling is
+unchanged.
 
 Accepted PATH B items do **not** enter review-fix. They are fully
 handled in E6-E7.
@@ -82,10 +84,12 @@ handled in E6-E7.
 often asserts a fact — about safety, correctness, the runtime, CI, or an
 artifact. Before `Accept`ing it, confirm the claim against live evidence
 (a code read, reproduction, or an equivalent check), not the comment
-text alone: confirmed → `Accept` and act; **false on the live evidence**
-→ disposition it `Rejected` and cite the contradicting evidence (the
-code as read, the real run conclusion, file contents, or artifact) — a
-verified-false claim is a reasoned rejection, not an action item.
+text alone — the actor-permission cap above is the only exception, via
+maintainer confirmation for an unprivileged PATH A actor: confirmed →
+`Accept` and act; **false on the live evidence** → disposition it
+`Rejected` and cite the contradicting evidence (the code as read, the
+real run conclusion, file contents, or artifact) — a verified-false
+claim is a reasoned rejection, not an action item.
 
 **Resolved-thread duplicate pre-check (PATH B, before verification).**
 Before verification above, check whether a new PATH B item — a review
