@@ -1,3 +1,10 @@
+---
+type: tutorial
+title: Build a VRChat Event Calendar with IDD
+description: Walks through an end-to-end IDD workshop session that builds a VRChat event calendar example from an empty repository.
+tags: [workshop, tutorial]
+---
+
 # Build a VRChat Event Calendar with IDD
 
 <!-- cspell:words Defang VRChat -->

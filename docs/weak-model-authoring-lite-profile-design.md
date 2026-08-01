@@ -1,3 +1,10 @@
+---
+type: design
+title: Weak-Model Authoring Lite Profile — Design
+description: Records the design for a lite authoring profile that improves weak local model conformance with the issue-authoring skill.
+tags: [weak-model, issue-authoring]
+---
+
 # Weak-Model Authoring Lite Profile — Design
 
 This page records the design for

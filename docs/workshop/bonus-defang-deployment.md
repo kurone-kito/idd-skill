@@ -1,3 +1,10 @@
+---
+type: tutorial
+title: "Bonus: Deploy with Defang"
+description: Walks through the optional bonus path of deploying the workshop app from local Docker Compose to a Defang deployment.
+tags: [workshop, defang]
+---
+
 <!-- cspell:words BYOC Defang DigitalOcean dotenv Postgres PostgreSQL -->
 <!-- cspell:words Pulumi Redis whoami -->
 

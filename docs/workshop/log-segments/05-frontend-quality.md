@@ -1,3 +1,10 @@
+---
+type: reference
+title: Frontend and Quality Hardening Log Segment
+description: Captures the timestamped frontend-and-quality-hardening log segment of the VRChat Event Calendar IDD workshop session.
+tags: [workshop, log-segment]
+---
+
 # Frontend and Quality Hardening Log Segment
 
 > **Note:** This segment is reconstructed from the preserved claim,
