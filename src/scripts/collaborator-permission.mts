@@ -20,6 +20,7 @@
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 
+import { operationalMarkerPrefix } from './marker-helpers.mts';
 import { normalizePolicyConfig } from './policy-helpers.mts';
 
 const DEFAULT_POLICY_PATH = '.github/idd/config.json';
@@ -188,4 +189,82 @@ export function readForcedHandoffAuthorityPolicy(
   configPath: string = DEFAULT_POLICY_PATH,
 ): string {
   return readForcedHandoffPolicy(configPath).authorityPolicy;
+}
+
+/** Minimal comment shape the marker-authors-first filter needs. */
+export interface MarkerTrustCommentLike {
+  body?: string | null;
+  user?: { login?: string | null } | null;
+  author?: { login?: string | null } | null;
+}
+
+/**
+ * Resolve collaborator-marker-trust logins from a comment stream:
+ * marker-authors-first (#1693). Only comment authors whose comment body is
+ * itself marker-shaped per `isMarkerShaped` (default: any recognized
+ * operational-marker prefix via `operationalMarkerPrefix`) are even
+ * candidates; only those candidates get a collaborator-permission lookup,
+ * and only Write/Maintain/Admin permission earns trust.
+ *
+ * Checking every unique comment author regardless of whether they ever
+ * posted anything marker-shaped over-trusts ordinary commenters (anyone
+ * with write+ access who merely left an unrelated comment would be treated
+ * as a trusted marker actor) and wastes a permission lookup per unique
+ * commenter. This mirrors `pre-merge-readiness.mts` /
+ * `advisory-convergence.mts`'s identically-named local function (kept
+ * local there rather than migrated here: both call `safeGhText` with
+ * `GH_TEXT_LOOP_OPTIONS` loop-safety timeouts that this shared
+ * `collaboratorPermission`-based implementation does not apply, and
+ * `advisory-wait-state.mts`'s local variant intentionally narrows the
+ * marker-shape predicate to advisory-wait markers only). New consumers
+ * (`force-handoff.mts`, `external-check-waiver.mts`) call this instead of
+ * hand-rolling a fourth/fifth "check every comment author" copy.
+ *
+ * Deliberately checks only the legacy `permission` field (admin/maintain/
+ * write), matching the sibling implementations' `--jq '.permission'`
+ * shape exactly rather than also checking `role_name` -- parity with the
+ * sibling filter is an explicit acceptance criterion, and GitHub's legacy
+ * `permission` field already collapses a `maintain` role to `write` (see
+ * `collaboratorPermission`'s doc comment above), so a `role_name` check
+ * would only widen trust, never narrow it, and would make "parity"
+ * untestable against a real HTTP response shape.
+ */
+export function resolveTrustedCollaboratorMarkerLogins(
+  owner: string,
+  repo: string,
+  comments: MarkerTrustCommentLike[],
+  options: {
+    cache?: CollaboratorPermissionCache;
+    isMarkerShaped?: (body: string) => boolean;
+  } = {},
+): string[] {
+  const isMarkerShaped =
+    options.isMarkerShaped ??
+    ((body: string) => operationalMarkerPrefix(body) !== null);
+  const markerAuthors = [
+    ...new Set(
+      comments
+        .filter((comment) => isMarkerShaped(String(comment.body ?? '')))
+        .map((comment) =>
+          String(comment.author?.login ?? comment.user?.login ?? '')
+            .trim()
+            .toLowerCase(),
+        )
+        .filter(Boolean),
+    ),
+  ];
+
+  return markerAuthors.filter((login) => {
+    const { permission } = collaboratorPermission(
+      owner,
+      repo,
+      login,
+      options.cache,
+    );
+    return (
+      permission === 'admin' ||
+      permission === 'maintain' ||
+      permission === 'write'
+    );
+  });
 }

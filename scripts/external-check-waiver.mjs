@@ -7,6 +7,7 @@
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { parseCliArgs } from './cli-args.mjs';
+import { resolveTrustedCollaboratorMarkerLogins } from './collaborator-permission.mjs';
 import { resolveHelperActiveClaim } from './forced-handoff-marker.mjs';
 import { ghText, safeGhText } from './gh-exec.mjs';
 import { deriveGhHttpStatus } from './gh-http-status.mjs';
@@ -693,33 +694,18 @@ export function buildTrustedMarkerLogins({
   ) {
     return trusted;
   }
-  const uniqueLogins = new Set(
-    (issueComments ?? [])
-      .map((comment) =>
-        String(comment.user?.login ?? comment.author?.login ?? '')
-          .trim()
-          .toLowerCase(),
-      )
-      .filter(Boolean),
-  );
-  for (const login of uniqueLogins) {
-    if (trusted.has(login)) {
-      continue;
-    }
-    const authority = resolveCollaboratorAuthority({
-      owner,
-      repo,
-      actor: login,
-    });
-    if (
-      authority.roleName === 'admin' ||
-      authority.roleName === 'maintain' ||
-      authority.permission === 'admin' ||
-      authority.permission === 'maintain' ||
-      authority.permission === 'write'
-    ) {
-      trusted.add(login);
-    }
+  // #1693: marker-authors-first -- only comment authors whose comment is
+  // itself operational-marker-shaped are permission-checked, matching
+  // pre-merge-readiness.mts / advisory-convergence.mts /
+  // advisory-wait-state.mts (and force-handoff.mts as of this change).
+  // Checking every unique comment author (the prior local loop here)
+  // over-trusted ordinary commenters.
+  for (const login of resolveTrustedCollaboratorMarkerLogins(
+    owner,
+    repo,
+    issueComments ?? [],
+  )) {
+    trusted.add(login);
   }
   return trusted;
 }

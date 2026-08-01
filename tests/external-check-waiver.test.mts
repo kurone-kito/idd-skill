@@ -298,6 +298,37 @@ test('buildTrustedMarkerLogins always trusts the repository owner', () => {
   assert.ok(trusted.has('maintainer-user'));
 });
 
+// #1693: buildTrustedMarkerLogins previously permission-checked every
+// unique comment author (not just marker-shaped ones) whenever collaborator
+// marker trust is enabled, over-trusting an ordinary write+ commenter who
+// never posted an operational marker. Collaborator-marker-trust widening
+// requires a live gh collaborator-permission lookup with no injection seam
+// here, and #1212 forbids mocking the `gh` subprocess -- so this regresses
+// against the disabled-widening path instead: with collaborator marker
+// trust left at its default (disabled), no comment author is ever
+// permission-checked regardless of shape, proving the widening loop no
+// longer runs unconditionally over every comment author the way the prior
+// implementation did (the buildTrustedMarkerLogins/resolveTrustedCollaboratorMarkerLogins
+// unit coverage in tests/force-handoff.test.mts and
+// tests/collaborator-permission.test.mts exercises the enabled marker-shape
+// filter itself via cache-seeding).
+test('buildTrustedMarkerLogins does not trust a non-marker-shaped comment author (collaborator trust disabled by default)', () => {
+  const trusted = buildTrustedMarkerLogins({
+    owner: 'repo-owner',
+    repo: 'example',
+    rawConfig: normalizePolicyConfig({}),
+    viewerLogin: 'maintainer-user',
+    issueComments: [
+      {
+        body: 'just an ordinary comment',
+        user: { login: 'random-write-actor' },
+      },
+    ],
+  });
+
+  assert.ok(!trusted.has('random-write-actor'));
+});
+
 // #1693: exit-code-never-surfaces-as-HTTP-status + JSON-body status
 // recovery, proven against the actual wired catch-branch function (not
 // just the underlying gh-http-status.mts helper it delegates to -- see
