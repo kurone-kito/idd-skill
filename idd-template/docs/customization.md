@@ -250,11 +250,20 @@ durations only; zero-length values and second-based values are invalid.
 Repositories may also customize `advisoryWait.convergenceScope` in
 `.github/idd/config.json`. The default `all-prs` keeps convergence on
 every PR. `idd-claimed` is opt-in and limits convergence to verified
-IDD-owned PRs. Under `idd-claimed`, PRs without a verified linked claim
-resolve to `not_applicable` instead of opening a new waiver path, so
-claimless/manual dependency PRs stay outside the gate. Invalid values
-are rejected by schema, and runtime normalization falls back to
-`all-prs` for untrusted config reads.
+IDD-owned PRs. Under `idd-claimed`, a PR with no verified linked claim
+AND no claim-marker history at all resolves to `not_applicable` instead
+of opening a new waiver path, so genuinely claimless/manual dependency
+PRs stay outside the gate. A PR that DOES carry evidence of IDD claim
+activity but whose claim linkage is currently broken or ambiguous
+(#1686 -- a branch mismatch against an active claim, two or more
+actively-claimed closing references, or a stale/released claim)
+resolves to `indeterminate` instead: this hard-blocks readiness through
+the ordinary convergence path, leaving only the existing
+deadline/terminal-plus-maintainer-waiver escape hatch (see
+`docs/idd-helper-scripts.md`'s `advisoryWait.convergenceScope` entry
+for the exact per-case waiver availability). Invalid values are
+rejected by schema, and runtime normalization falls back to `all-prs`
+for untrusted config reads.
 
 `advisoryWait.primaryBotLogin` selects the advisory bot whose review the
 advisory-wait gate tracks (default Copilot), and

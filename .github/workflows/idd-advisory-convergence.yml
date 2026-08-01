@@ -165,6 +165,47 @@ name: IDD advisory-convergence gate
 # resulting stale display without a config change, so this workflow
 # keeps its current concurrency configuration rather than trading it for
 # an equally-racy alternative.
+#
+# Fail-closed on broken claim linkage under `idd-claimed` scope (#1686):
+# the readiness formula this check enforces
+# (`ready = scopeNotApplicable || converged || (deadline/terminal-passed
+# && waived)`) previously reached `scopeNotApplicable: true` (hence
+# `ready: true` with zero Copilot involvement) via THREE data-level
+# paths the executing session itself controls: (2) a PR closing two
+# actively-claimed issues, where disambiguation fails closed to no
+# resolved claim; (3) a PR head branch that no longer matches the
+# branch recorded on an active trusted claim; and (4) a claim whose
+# marker history is real but no longer resolves active (a stale or
+# released claim). `advisory-convergence.mts`'s `computeAdvisoryConvergenceVerdict`
+# now classifies each of these as `applicability.status: "indeterminate"`
+# instead of `"not_applicable"` -- a third outcome that, unlike
+# `not_applicable`, NEVER satisfies `ready` through the ordinary
+# convergence path; only the pre-existing deadline/terminal-plus-
+# maintainer-waiver escape hatch can still clear it, and for paths 2
+# and 4 no `activeClaimId` exists to bind a waiver to at all (see
+# `summarizeExternalCheckWaivers`'s fail-closed-on-empty-claim-id rule,
+# protocol-helpers.mts), so those two are effectively not waivable in
+# practice -- only path 3 (a real, resolvable active claim) stays
+# genuinely waivable.
+#
+# Known residual, deliberately NOT closed by #1686 (path 1): a PR body
+# that omits or mangles its `Closes #N` reference yields ZERO claim
+# candidates and ZERO claim-marker history for this PR -- indistinguishable,
+# from this check's own evidence, from a genuine external contribution
+# with no linked issue at all. Two candidate signals to force
+# applicability here were considered and rejected: (a) PR-author
+# membership in `trustedMarkerActors` would block a legitimate trusted
+# maintainer's own manual/non-IDD PR, which this scope must not touch;
+# (b) inferring a linked issue from the PR's branch name (e.g.
+# `issue/1234-*`) is itself a signal the executing session fully
+# controls -- it could name the branch anything, so it closes nothing a
+# careless/adversarial session could not simply avoid. No signal outside
+# the session's own control was found for path 1 within this issue's
+# scope; it remains the honor-system layer #1341 already names as
+# insufficient on its own, mitigated only by D3.5's closing-keyword
+# verification (`idd-pr-submit.instructions.md`) catching a missing
+# reference before merge in the ordinary IDD flow, and by CODEOWNERS
+# review as the general backstop for any PR that evades it.
 on:
   pull_request:
     types:
