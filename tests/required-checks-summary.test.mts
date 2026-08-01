@@ -147,8 +147,11 @@ test('surfaces a discarded CANCELLED sibling for a required check via discardedN
 // classifyCiChecks runs -- so a waived CANCELLED sibling silently dropped
 // out of this evidence field the moment a maintainer authorized a waiver
 // for it. That is exactly the divergence-masking scenario #1745 exists to
-// surface, and exactly the check (`idd-advisory-convergence`) this repo's
-// own `.github/idd/config.json` marks waivable.
+// surface. This is a generic waiver + discarded-sibling test using the
+// same 'lint' stand-in check name as its neighbors above; the real-world
+// motivating check is `idd-advisory-convergence`, which this repo's own
+// `.github/idd/config.json` marks waivable, but this fixture does not
+// exercise that specific check name/config.
 test('discardedNonPassingRequiredChecks still surfaces a waived CANCELLED sibling even though the waiver rewrites it to SKIPPED for status purposes', () => {
   const waivers = {
     valid: [
