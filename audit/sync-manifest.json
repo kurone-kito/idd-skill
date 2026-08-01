@@ -670,39 +670,39 @@
     },
     {
       "id": "minimal-run-activation-nonce-marker",
-      "reference": ".github/instructions/idd-claim.instructions.md",
+      "reference": "src/scripts/marker-helpers.mts",
       "target": "examples/minimal-run/activation-nonce.md",
       "mode": "contains",
       "requiredPatterns": [
-        "<!-- activation-nonce: \\S+ \\S+ \\S+ \\S+ -->"
+        "<!-- activation-nonce: \\S+ \\S+ \\S+ \\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}Z -->"
       ]
     },
     {
       "id": "minimal-run-claim-marker",
-      "reference": ".github/instructions/idd-overview-core.instructions.md",
+      "reference": "src/scripts/marker-helpers.mts",
       "target": "examples/minimal-run/claim-comment.md",
       "mode": "contains",
       "requiredPatterns": [
-        "<!-- claimed-by: \\S+ \\S+ supersedes: \\S+ \\S+ branch: \\S+ -->"
+        "<!-- claimed-by: \\S+ \\S+ supersedes: \\S+ \\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}Z branch: \\S+ -->"
       ]
     },
     {
       "id": "minimal-run-heartbeat-marker",
-      "reference": ".github/instructions/idd-overview-core.instructions.md",
+      "reference": "src/scripts/marker-helpers.mts",
       "target": "examples/minimal-run/heartbeat.md",
       "mode": "contains",
       "requiredPatterns": [
-        "<!-- claimed-by: \\S+ \\S+ supersedes: \\S+ \\S+ branch: \\S+ -->"
+        "<!-- claimed-by: \\S+ \\S+ supersedes: \\S+ \\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}Z branch: \\S+ -->"
       ]
     },
     {
       "id": "minimal-run-review-snapshot-markers",
-      "reference": ".github/instructions/idd-review-snapshot.instructions.md",
+      "reference": "src/scripts/marker-helpers.mts",
       "target": "examples/minimal-run/review-snapshot.md",
       "mode": "contains",
       "requiredPatterns": [
-        "<!-- review-watermark: \\S+ \\S+ \\S+ \\S+ \\S+ \\S+ -->",
-        "<!-- review-baseline: \\S+ \\S+ \\S+ -->"
+        "<!-- review-watermark: \\S+ \\S+ [0-9a-f]{40} \\S+ \\d+ \\S+ -->",
+        "<!-- review-baseline: \\S+ \\S+ [0-9a-f]{40} -->"
       ]
     },
     {
