@@ -124,25 +124,31 @@ In the idd-skill source repository, the following optional helpers were adopted:
   diagnosis of stuck `idd-advisory-convergence` check-run rollups,
   read-only by default: fetches every check-run instance for a PR's
   current HEAD SHA (paged commit check-runs API), classifies each as
-  `pass` / `pending` / `bot-gated-skip` / `unresolved` / `rerun-eligible`,
-  and prints the ordered, deduplicated `gh run rerun <id>` recovery plan
-  for the rerun-eligible instances (each command includes `-R owner/repo`
-  when the repository is known) — referenced from
-  `idd-ci.instructions.md` §Rerun mechanics as the preferred way to
-  produce that plan. When the rollup is stuck on a bot-gated instance
-  alongside an already-passing non-bot pull_request-family instance, it
-  additionally offers a `recoveryRefreshPlan` — populated even alongside
-  a non-empty rerun plan when every rerun-eligible instance there is
-  itself bot-triggered (#1745; rerunning a bot-triggered instance does
-  not supply the non-bot trigger the recovery-refresh option exists to
-  provide): rerunning the already-passing instance is the documented way
-  to force a fresh non-bot evaluation and clear the stale rollup. Pass
-  `--apply` (#1766) to execute that same plan instead of only diagnosing
-  it: reruns each rerun-eligible instance in order (recovery-refresh
-  first when one applies), waits for each to reach a genuinely new
-  completed attempt before starting the next, and stops early once the
-  recomputed plan is fully resolved — never a `bot-gated-skip` or
-  rerun-budget-held instance.
+  `pass` / `pending` / `bot-gated-skip` / `unresolved` /
+  `awaiting-fresh-review` / `rerun-eligible`, and prints the ordered,
+  deduplicated `gh run rerun <id>` recovery plan for the rerun-eligible
+  instances (each command includes `-R owner/repo` when the repository
+  is known) — referenced from `idd-ci.instructions.md` §Rerun mechanics
+  as the preferred way to produce that plan. An instance whose own
+  advisory-convergence job-log verdict reports that the latest Copilot
+  review does not cover the current HEAD is classified
+  `awaiting-fresh-review` rather than `rerun-eligible` (#1775), so the
+  diagnosis (and `--apply`) never burn the rerun-once budget on a
+  failure only a fresh review can clear. When the rollup is stuck on a
+  bot-gated instance alongside an already-passing non-bot
+  pull_request-family instance, it additionally offers a
+  `recoveryRefreshPlan` — populated even alongside a non-empty rerun
+  plan when every rerun-eligible instance there is itself bot-triggered
+  (#1745; rerunning a bot-triggered instance does not supply the
+  non-bot trigger the recovery-refresh option exists to provide):
+  rerunning the already-passing instance is the documented way to force
+  a fresh non-bot evaluation and clear the stale rollup. Pass `--apply`
+  (#1766) to execute that same plan instead of only diagnosing it:
+  reruns each rerun-eligible instance in order (recovery-refresh first
+  when one applies), waits for each to reach a genuinely new completed
+  attempt before starting the next, and stops early once the recomputed
+  plan is fully resolved — never a `bot-gated-skip`,
+  `awaiting-fresh-review`, or rerun-budget-held instance.
 - `scripts/live-status-digest.mjs` for issue or PR live status digest
   discovery, rendering, dry-run, and claim-checked upsert
 - `scripts/audit-pr-cleanup.mjs` for post-merge comment cleanup auditing
@@ -1275,10 +1281,15 @@ to post it is the consuming track's job.
   required-check rollup, read-only by default: fetches every check-run
   instance for the PR's current HEAD SHA (paged commit check-runs API,
   `filter=all`), classifies each as `pass` / `pending` / `bot-gated-skip` /
-  `unresolved` / `rerun-eligible`, and prints the ordered, deduplicated
-  `gh run rerun <id>` recovery plan for the rerun-eligible instances --
-  referenced from `idd-ci.instructions.md` §Rerun mechanics as the
-  preferred way to produce that plan
+  `unresolved` / `awaiting-fresh-review` / `rerun-eligible`, and prints
+  the ordered, deduplicated `gh run rerun <id>` recovery plan for the
+  rerun-eligible instances -- referenced from `idd-ci.instructions.md`
+  §Rerun mechanics as the preferred way to produce that plan. An
+  instance whose own advisory-convergence job-log verdict reports that
+  the latest Copilot review does not cover the current HEAD is
+  classified `awaiting-fresh-review` rather than `rerun-eligible`
+  (#1775), so neither the diagnosis nor `--apply` burns the rerun-once
+  budget on a failure only a fresh review can clear
 - Also reports a `recoveryRefreshPlan` when the rollup is stuck on a
   bot-gated instance alongside an already-passing non-bot
   pull_request-family instance — populated even alongside a non-empty
@@ -1297,7 +1308,8 @@ to post it is the consuming track's job.
   attempt (polled via the actions/runs API, not `gh run watch`, to avoid
   racing a just-issued rerun's stale pre-rerun status) before starting
   the next, and stops early once the recomputed plan is fully resolved --
-  a `bot-gated-skip` or rerun-budget-held instance is never rerun
+  a `bot-gated-skip`, `awaiting-fresh-review`, or rerun-budget-held
+  instance is never rerun
 
 ### Merge-gate evidence
 
