@@ -647,6 +647,91 @@ test('does not offer a recovery-refresh plan when a genuine rerun-eligible insta
   assert.equal(plan.recoveryRefreshCaveat, '');
 });
 
+// Regression (#1745 Codex review on this same PR, P2): a bot-triggered
+// rerun-eligible instance (e.g. a CANCELLED sibling, narrowed out of
+// bot-gated-skip by this same PR) does NOT itself supply the "fresh
+// non-bot-triggered evaluation" the recovery-refresh mechanism exists to
+// force -- its rerun preserves the original triggering actor. When a
+// still-genuinely-gated action_required instance ALSO exists in the same
+// batch, both plan (rerun the bot-triggered CANCELLED instance) and
+// recoveryRefreshPlan (rerun the already-passing non-bot instance) must be
+// offered together; suppressing recoveryRefreshPlan just because *some*
+// instance is rerun-eligible would silently omit the documented first
+// recovery step when GitHub's rollup happens to still be pinned to the
+// action_required entry.
+test('offers both plan and recoveryRefreshPlan when a bot-triggered rerun-eligible instance coexists with a genuinely gated action_required instance', () => {
+  const plan = computeRerunPlan(
+    baseInput({
+      instances: [
+        baseInstance({
+          checkRunId: 'gated',
+          runId: '7001',
+          conclusion: 'action_required',
+        }),
+        baseInstance({
+          checkRunId: 'cancelled-bot',
+          runId: '7004',
+          conclusion: 'cancelled',
+          actorLogin: 'copilot-pull-request-reviewer[bot]',
+          actorType: 'Bot',
+          triggeringActorLogin: 'copilot-pull-request-reviewer[bot]',
+          triggeringActorType: 'Bot',
+        }),
+        baseInstance({
+          checkRunId: 'passing',
+          runId: '7002',
+          conclusion: 'success',
+        }),
+      ],
+    }),
+    baseOptions(),
+  );
+  assert.deepEqual(
+    plan.plan.map((entry) => entry.runId),
+    ['7004'],
+  );
+  assert.deepEqual(
+    plan.recoveryRefreshPlan.map((entry) => entry.runId),
+    ['7002'],
+  );
+  assert.notEqual(plan.recoveryRefreshCaveat, '');
+});
+
+// A genuinely NON-bot rerun-eligible instance is the mirror-opposite case:
+// its own rerun already forces the same "fresh non-bot evaluation" the
+// refresh mechanism exists to provide, so recoveryRefreshPlan stays
+// suppressed even though a bot-gated action_required instance also exists
+// -- unchanged from the pre-#1745 behavior (the prior test above).
+test('still suppresses recoveryRefreshPlan when the coexisting rerun-eligible instance is non-bot', () => {
+  const plan = computeRerunPlan(
+    baseInput({
+      instances: [
+        baseInstance({
+          checkRunId: 'gated',
+          runId: '7001',
+          conclusion: 'action_required',
+        }),
+        baseInstance({
+          checkRunId: 'failed-non-bot',
+          runId: '7005',
+          conclusion: 'failure',
+        }),
+        baseInstance({
+          checkRunId: 'passing',
+          runId: '7002',
+          conclusion: 'success',
+        }),
+      ],
+    }),
+    baseOptions(),
+  );
+  assert.deepEqual(
+    plan.plan.map((entry) => entry.runId),
+    ['7005'],
+  );
+  assert.deepEqual(plan.recoveryRefreshPlan, []);
+});
+
 test('does not offer a recovery-refresh plan without a bot-gated-skip instance present', () => {
   const plan = computeRerunPlan(
     baseInput({

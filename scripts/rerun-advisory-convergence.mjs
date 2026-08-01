@@ -207,51 +207,69 @@ export function computeRerunPlan(input, options) {
       resolveInstanceRerunDecision(instance, rerunPolicy),
     ]),
   );
-  const plan = buildOrderedPlan(
-    eligibleInstances.filter(
-      (instance) =>
-        eligibleDecisions.get(instance.checkRunId)?.action === 'rerun',
-    ),
-    owner,
-    repo,
+  const reRunningEligibleInstances = eligibleInstances.filter(
+    (instance) =>
+      eligibleDecisions.get(instance.checkRunId)?.action === 'rerun',
   );
+  const plan = buildOrderedPlan(reRunningEligibleInstances, owner, repo);
   const recoveryRefreshCandidates = selectRecoveryRefreshCandidates(
     instances,
     classifyOptions,
   );
-  // Gated on `eligibleInstances.length === 0` -- NOT `plan.length === 0`
-  // (this file's own prior bug, CodeRabbit review, #1434): those two are
-  // NOT equivalent. `plan` can be empty either because no instance was
-  // ever rerun-eligible, OR because a genuine rerun-eligible instance
-  // existed but its budget was exhausted/unconfirmed. Gating on
-  // `plan.length === 0` alone let a budget-held instance silently fall
-  // through to recovery-refresh, which would then recommend rerunning a
-  // DIFFERENT, already-passing instance instead -- circumventing the
-  // "one rerun, then a human reviews it" boundary the budget hold exists
-  // to enforce. `eligibleInstances.length === 0` only takes this path
-  // when there was never a real rerun-eligible instance to begin with
-  // (the scenario recoveryRefreshPlan's own doc comment describes:
-  // bot-gated-only, nothing else to trigger a fresh evaluation).
-  const refreshDecisions =
-    eligibleInstances.length === 0
-      ? new Map(
-          recoveryRefreshCandidates.map((instance) => [
-            instance.checkRunId,
-            resolveInstanceRerunDecision(instance, rerunPolicy),
-          ]),
-        )
-      : new Map();
-  const recoveryRefreshPlan =
-    eligibleInstances.length === 0
-      ? buildOrderedPlan(
-          recoveryRefreshCandidates.filter(
-            (instance) =>
-              refreshDecisions.get(instance.checkRunId)?.action === 'rerun',
-          ),
-          owner,
-          repo,
-        )
-      : [];
+  // Two independent conditions gate recoveryRefreshPlan, both preserved
+  // from the reasoning that produced them:
+  //
+  // 1. `!anyEligibleHeld` (CodeRabbit review, #1434): a genuine
+  //    rerun-eligible instance whose OWN budget is exhausted/unconfirmed
+  //    must never silently fall through to recovery-refresh, which would
+  //    recommend rerunning a DIFFERENT, already-passing instance instead --
+  //    circumventing the "one rerun, then a human reviews it" boundary the
+  //    budget hold exists to enforce.
+  // 2. `everyReRunningEligibleIsBotTriggered` (#1745 Codex review, this
+  //    PR): pre-#1745, EVERY bot-triggered non-pass instance was
+  //    `bot-gated-skip`, so `eligibleInstances.length === 0` alone
+  //    correctly meant "bot-gated-only, nothing else to trigger a fresh
+  //    evaluation" -- the scenario recoveryRefreshPlan's own doc comment
+  //    describes. #1745 narrowed `bot-gated-skip` to a genuine
+  //    `action_required` conclusion only, so a bot-triggered `CANCELLED`
+  //    sibling can now be BOTH independently `rerun-eligible` (goes into
+  //    `plan`) AND coexist with a still-genuinely-gated `action_required`
+  //    instance that ALSO needs the passing-instance refresh -- rerunning
+  //    the bot-triggered eligible instance does not itself supply the
+  //    "fresh NON-BOT-triggered evaluation" the refresh mechanism exists
+  //    to force (a rerun preserves its original run's triggering actor),
+  //    so it must not suppress recoveryRefreshPlan the way a genuinely
+  //    NON-bot rerun-eligible instance legitimately does (that instance's
+  //    own rerun already IS the needed non-bot trigger). Vacuously `true`
+  //    when there is nothing in `plan` to begin with, preserving the
+  //    original bot-gated-only case unchanged.
+  const anyEligibleHeld = eligibleInstances.some(
+    (instance) =>
+      eligibleDecisions.get(instance.checkRunId)?.action !== 'rerun',
+  );
+  const everyReRunningEligibleIsBotTriggered = reRunningEligibleInstances.every(
+    (instance) => isBotTriggered(instance, classifyOptions),
+  );
+  const allowRecoveryRefresh =
+    !anyEligibleHeld && everyReRunningEligibleIsBotTriggered;
+  const refreshDecisions = allowRecoveryRefresh
+    ? new Map(
+        recoveryRefreshCandidates.map((instance) => [
+          instance.checkRunId,
+          resolveInstanceRerunDecision(instance, rerunPolicy),
+        ]),
+      )
+    : new Map();
+  const recoveryRefreshPlan = allowRecoveryRefresh
+    ? buildOrderedPlan(
+        recoveryRefreshCandidates.filter(
+          (instance) =>
+            refreshDecisions.get(instance.checkRunId)?.action === 'rerun',
+        ),
+        owner,
+        repo,
+      )
+    : [];
   const heldEligibleCount = [...eligibleDecisions.values()].filter(
     (decision) => decision.action === 'hold',
   ).length;
