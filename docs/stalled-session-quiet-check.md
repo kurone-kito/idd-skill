@@ -1,3 +1,10 @@
+---
+type: reference
+title: Stalled Session Quiet-Check Helper
+description: Documents the CLI usage, output schema, and required live rechecks for the Resume/S2 stalled-session quiet-check helper.
+tags: [helper-scripts, resume]
+---
+
 # Stalled Session Quiet-Check Helper
 
 Detects quiet windows for the Resume/S2 stalled-session recovery path.

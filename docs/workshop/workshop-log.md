@@ -1,3 +1,10 @@
+---
+type: reference
+title: VRChat Event Calendar IDD Workshop Log
+description: Is the complete timestamped record of the IDD session that built the VRChat Event Calendar from an empty repository to a working MVP.
+tags: [workshop, session-log]
+---
+
 <!-- cspell:words Defang defang VRChat -->
 
 # VRChat Event Calendar IDD Workshop Log

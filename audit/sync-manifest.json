@@ -828,30 +828,7 @@
         "investigation",
         "tutorial"
       ],
-      "exemptPaths": [
-        "docs/ai-strategy.md",
-        "docs/claude-skill-strategy.md",
-        "docs/harness-orchestrated-execution-investigation.md",
-        "docs/issue-authoring-skill.md",
-        "docs/pages-strategy.md",
-        "docs/positioning.md",
-        "docs/pr-cleanup-backlog-batch-001.md",
-        "docs/skills-delivery-investigation.md",
-        "docs/stalled-session-quiet-check.md",
-        "docs/typescript-sources.md",
-        "docs/weak-model-authoring-lite-profile-design.md",
-        "docs/weak-model-lite-profile-design.md",
-        "docs/workshop/assets/recordings/README.md",
-        "docs/workshop/bonus-defang-deployment.md",
-        "docs/workshop/LOG-FORMAT.md",
-        "docs/workshop/log-segments/01-bootstrap.md",
-        "docs/workshop/log-segments/02-infrastructure.md",
-        "docs/workshop/log-segments/03-data-layer.md",
-        "docs/workshop/log-segments/04-backend-api.md",
-        "docs/workshop/log-segments/05-frontend-quality.md",
-        "docs/workshop/README.md",
-        "docs/workshop/workshop-log.md"
-      ]
+      "exemptPaths": []
     }
   ],
   "markdownLinkAudit": {
