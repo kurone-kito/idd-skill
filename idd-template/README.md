@@ -90,12 +90,15 @@ strings). This JSON is optional and does not replace
 
 ## Files
 
-The complete `idd-template/` file inventory below is generated from
-`audit/sync-manifest.json` (`node scripts/sync-docs.mjs --apply`); see
-`docs/idd-workflow.md`'s file map and `docs/reference.md` for what each
-instruction and docs page does. This is the full shipped inventory, not
-the adopter import list — the narrower set an agent actually fetches
-during onboarding is generated separately in `ONBOARDING.md`.
+The complete `idd-template/` file inventory below is mechanically kept
+in sync by the upstream `idd-skill` source repository's own tooling
+(`audit/sync-manifest.json` plus `node scripts/sync-docs.mjs --apply`)
+— those two paths are source-repo maintenance tooling, not files this
+template ships into an adopter repository. See `docs/idd-workflow.md`'s
+file map and `docs/reference.md` for what each instruction and docs
+page does. This is the full shipped inventory, not the adopter import
+list — the narrower set an agent actually fetches during onboarding is
+generated separately in `ONBOARDING.md`.
 
 <!-- audit:generated id=idd-template-readme-core-files -->
 
