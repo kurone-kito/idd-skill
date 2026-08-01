@@ -328,6 +328,10 @@ test('template context: a directory link walking all the way out to the true rep
   });
   assert.equal(violations.length, 1);
   assert.match(violations[0], /outside idd-template\/ in template context/);
+  // A Copilot review finding on this PR: the raw empty-string path rendered
+  // as "resolves to , outside ..." -- confusing when diagnosing a failure.
+  // Render a readable stand-in instead.
+  assert.match(violations[0], /resolves to <repo root>, outside/);
 });
 
 test('an intentional exception suppressed with the ignore marker does not fail', () => {

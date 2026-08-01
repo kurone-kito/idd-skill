@@ -197,6 +197,13 @@ export function resolveLinkTarget(sourceFile, target) {
     : resolved;
   return { path, fragment, isDirectory };
 }
+// A resolved path of `''` is the repo-root sentinel (see resolveLinkTarget);
+// rendered literally in a violation message it reads as "resolves to ,
+// outside ..." -- confusing when diagnosing a failure. Render a readable
+// stand-in instead. Every other resolved path is rendered as-is.
+function displayPath(path) {
+  return path === '' ? '<repo root>' : path;
+}
 /**
  * Collect intra-repo markdown link/anchor violations across every file
  * `listFiles`'s configured globs match. Pure (no direct I/O); the audit
@@ -267,7 +274,7 @@ export function collectMarkdownLinkAuditViolations(
         !resolved.path.startsWith(templateRoot)
       ) {
         violations.push(
-          `${id}: ${file}:${occurrence.line}: link "${occurrence.target}" resolves to ${resolved.path}, outside ${templateRoot} in template context -- adopters who copy ${templateRoot} will not have this file`,
+          `${id}: ${file}:${occurrence.line}: link "${occurrence.target}" resolves to ${displayPath(resolved.path)}, outside ${templateRoot} in template context -- adopters who copy ${templateRoot} will not have this file`,
         );
         continue;
       }
