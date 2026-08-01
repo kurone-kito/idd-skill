@@ -1537,8 +1537,7 @@ function waitForNewAttempt(owner, repo, runId, priorAttempt) {
     );
     const attempt =
       typeof payload.run_attempt === 'number' ? payload.run_attempt : null;
-    const isNewAttempt =
-      priorAttempt === null || (attempt !== null && attempt > priorAttempt);
+    const isNewAttempt = attempt !== null && attempt > priorAttempt;
     if (isNewAttempt && payload.status === 'completed') {
       return;
     }
@@ -1594,10 +1593,19 @@ function buildProductionApplyDeps(args) {
           GH_TEXT_LOOP_TIMEOUT_OPTIONS,
         ),
       );
-      const priorAttempt =
-        typeof priorPayload.run_attempt === 'number'
-          ? priorPayload.run_attempt
-          : null;
+      // Fail closed BEFORE issuing the rerun (Copilot review, #1772):
+      // waitForNewAttempt's whole race-avoidance guarantee rests on
+      // comparing this pre-rerun run_attempt against the post-rerun
+      // value, so a missing/non-numeric run_attempt here means that
+      // guarantee cannot be verified at all -- proceeding anyway (e.g.
+      // treating "unknown" as automatically "new") would silently
+      // reopen the exact stale-read race this function exists to close.
+      if (typeof priorPayload.run_attempt !== 'number') {
+        throw new Error(
+          `cannot verify a new rerun attempt for run ${command.runId} (${owner}/${repo}): the current run_attempt is missing or non-numeric`,
+        );
+      }
+      const priorAttempt = priorPayload.run_attempt;
       ghText(
         ['run', 'rerun', command.runId, '-R', `${owner}/${repo}`],
         GH_TEXT_LOOP_TIMEOUT_OPTIONS,
