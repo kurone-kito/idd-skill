@@ -17,6 +17,7 @@
     "pending",
     "deadline",
     "waiver",
+    "dispositionEvidence",
     "sameHeadReroll",
     "terminal",
     "converged",
@@ -127,10 +128,21 @@
         "validCount": { "type": "integer", "minimum": 0 }
       }
     },
+    "dispositionEvidence": {
+      "type": "object",
+      "description": "#1719: eligibility-relevant disposition-evidence counters feeding sameHeadReroll.eligible's missing-regular-comment-disposition term, exposed so the numeric input is visible and not only its pass/fail verdict. A narrow, counters-only view for THIS gate -- not the same shape as pre-merge-readiness's own dispositionEvidence object (which additionally carries route/blockingCount/full missing-item lists for the F2 merge gate).",
+      "required": ["missingRegularCommentCount", "missingThreadCount"],
+      "additionalProperties": false,
+      "properties": {
+        "missingRegularCommentCount": { "type": "integer", "minimum": 0 },
+        "missingThreadCount": { "type": "integer", "minimum": 0 }
+      }
+    },
     "sameHeadReroll": {
       "type": "object",
       "required": [
         "eligible",
+        "ineligibleReasons",
         "count",
         "cap",
         "exhausted",
@@ -141,6 +153,11 @@
       "additionalProperties": false,
       "properties": {
         "eligible": { "type": "boolean" },
+        "ineligibleReasons": {
+          "type": "array",
+          "description": "#1719: one stable, machine-readable token per failing term of the eligible conjunction (in conjunction order); empty exactly when eligible is true.",
+          "items": { "type": "string" }
+        },
         "count": { "type": "integer", "minimum": 0 },
         "cap": { "type": "integer", "minimum": 1 },
         "exhausted": { "type": "boolean" },

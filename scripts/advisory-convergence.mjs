@@ -108,6 +108,22 @@ import {
  * and value are unchanged for existing consumers. */
 export const ADVISORY_CONVERGENCE_CHECK_SELECTOR =
   DEFAULT_ADVISORY_CONVERGENCE_CHECK_SELECTOR;
+/** #1719: stable, machine-readable tokens for `sameHeadReroll.-
+ * ineligibleReasons` -- one per boolean term of the `eligible` conjunction,
+ * in the same order the conjunction is written in
+ * `computeAdvisoryConvergenceVerdict` below, so a report-mode caller can
+ * self-diagnose a stuck AW6 reroll without re-deriving the eligibility rule
+ * from `idd-advisory-wait.instructions.md` by hand. Exported (rather than
+ * inlined as string literals at each call site) so tests reference the same
+ * single source of truth the implementation does. */
+export const SAME_HEAD_REROLL_INELIGIBLE_REASON = {
+  SCOPE_NOT_APPLICABLE: 'scope-not-applicable',
+  REVIEW_PENDING: 'review-pending',
+  UNRESOLVED_COPILOT_THREADS: 'unresolved-copilot-threads',
+  MISSING_REGULAR_COMMENT_DISPOSITION: 'missing-regular-comment-disposition',
+  REVIEW_ITEM_COUNT_UNKNOWN: 'review-item-count-unknown',
+  REVIEW_ITEM_COUNT_NOT_POSITIVE: 'review-item-count-not-positive',
+};
 /**
  * Compute the deterministic advisory-convergence verdict from already-
  * fetched PR evidence. Pure (no I/O), so it is directly unit-testable with
@@ -207,12 +223,6 @@ export function computeAdvisoryConvergenceVerdict(inputs, options) {
         ? `latest ${primaryBotLogin} review (commit ${review.commitId || '<unknown>'}) does not cover current HEAD ${prHeadSha}`
         : `${primaryBotLogin} has not reviewed this pull request yet`,
     );
-  } else if (!scopeNotApplicable && !review.satisfied) {
-    reasons.push(
-      review.itemCount === null
-        ? `latest ${primaryBotLogin} review on current HEAD carries an unknown number of actionable items (comment count unavailable)`
-        : `latest ${primaryBotLogin} review on current HEAD carries ${review.itemCount} actionable item(s)`,
-    );
   }
   // --- Clause 2: every current Copilot-authored thread is resolved or ---
   // --- validly dispositioned (reusing summarizeDispositionEvidenceForGate)
@@ -266,11 +276,49 @@ export function computeAdvisoryConvergenceVerdict(inputs, options) {
     blockingCount: copilotBlocking.length,
     satisfied: copilotBlocking.length === 0,
   };
+  // Clause 1's "review is not clean" reason is pushed here, after Clause 2's
+  // `threadClause` is available -- deliberately deferred from the `pending`
+  // check above (which already returned via that `if`, so `reasons` order is
+  // unaffected: pending and not-satisfied are mutually exclusive, and this
+  // still precedes Clause 2's own thread-blocking reason below).
+  //
+  // #1719: reported adopter incident -- the primary bot's review on current
+  // HEAD carried `itemCount: 1` while every visible GraphQL review thread
+  // was already `isResolved: true`; the actual cause was a "Comments
+  // suppressed due to low confidence" item embedded in the review's
+  // top-level BODY TEXT rather than posted as a review thread -- it
+  // contributes to `itemCount` but is invisible to any `reviewThreads`
+  // query, so it can never be resolved the normal way, and nothing in this
+  // gate's output pointed there. When every visible Copilot-authored thread
+  // is already resolved and `itemCount` is still positive, no thread query
+  // can explain it -- point directly at the review body instead of leaving
+  // an agent to re-derive this by hand a second time.
+  if (!scopeNotApplicable && !pending && !review.satisfied) {
+    const itemCountReason =
+      review.itemCount === null
+        ? `latest ${primaryBotLogin} review on current HEAD carries an unknown number of actionable items (comment count unavailable)`
+        : `latest ${primaryBotLogin} review on current HEAD carries ${review.itemCount} actionable item(s)`;
+    reasons.push(
+      threadClause.satisfied &&
+        review.itemCount !== null &&
+        review.itemCount > 0
+        ? `${itemCountReason} -- no unresolved ${primaryBotLogin}-authored thread accounts for them; check the review body directly for an item suppressed due to low confidence, which counts toward itemCount but never appears in reviewThreads`
+        : itemCountReason,
+    );
+  }
   if (!scopeNotApplicable && !threadClause.satisfied) {
     reasons.push(
       `${threadClause.blockingCount} ${primaryBotLogin}-authored review thread(s) are neither resolved nor validly dispositioned: ${threadClause.blockingIds.join(', ')}`,
     );
   }
+  // #1719: eligibility-relevant `dispositionEvidence` counters, exposed on
+  // the report object -- see `AdvisoryConvergenceDispositionEvidence`'s doc
+  // comment for why this is a narrow counters-only projection, not the same
+  // shape as `pre-merge-readiness.mjs`'s own `dispositionEvidence` field.
+  const dispositionEvidenceReport = {
+    missingRegularCommentCount: dispositionEvidence.missingRegularCommentCount,
+    missingThreadCount: dispositionEvidence.missingThreadCount,
+  };
   const converged =
     !scopeNotApplicable &&
     !pending &&
@@ -290,21 +338,63 @@ export function computeAdvisoryConvergenceVerdict(inputs, options) {
   // was not actually done yet -- and if the bot does not answer quickly,
   // that attempt is permanently consumed before the real blocker is even
   // cleared (PR #1517 review).
-  const sameHeadRerollEligible =
-    !scopeNotApplicable &&
-    !pending &&
-    threadClause.satisfied &&
-    dispositionEvidence.missingRegularCommentCount === 0 &&
-    review.itemCount !== null &&
-    review.itemCount > 0;
-  // Both guards require `> 0` (not merely `Number.isFinite`/`Number.is-
-  // Integer`), matching `normalizePositiveInteger` / `normalizePositiveNumber`
-  // (advisory-wait-policy.mts) exactly: this function is exported and pure,
-  // so a direct caller (a test, or future code bypassing the CLI's own
-  // schema-validated config read) could otherwise pass `0` or a negative
-  // value and silently corrupt behavior -- `cap: 0` makes `exhausted`
-  // trivially true (`count >= 0`), and `pendingWindowMinutes <= 0` breaks
-  // the `inFlight` elapsed-time comparison (PR #1517 review).
+  //
+  // #1719: each of the six conjuncts above is ALSO computed as its own named
+  // boolean, paired with a stable token in `sameHeadRerollTerms` --
+  // `sameHeadRerollEligible` (`.every()`) and `sameHeadRerollIneligible-
+  // Reasons` (`.filter().map()`) are BOTH derived from that one array, so
+  // they cannot disagree; a term added to the conjunction without a paired
+  // token here would be a compile-time array-literal edit, not a
+  // hand-maintained parallel expression. `reviewItemCountPositiveTerm` is
+  // deliberately written as "unknown counts as satisfied"
+  // (`itemCount === null || itemCount > 0`), not the bare `itemCount > 0`
+  // the original two-line conjunct implied standalone: this keeps the two
+  // item-count terms mutually exclusive in `ineligibleReasons` (an unknown
+  // count reports ONLY `review-item-count-unknown`, never also
+  // `review-item-count-not-positive`), while `reviewItemCountKnownTerm &&
+  // reviewItemCountPositiveTerm` together still reduce to exactly the
+  // original `itemCount !== null && itemCount > 0` conjunct.
+  const scopeApplicableTerm = !scopeNotApplicable;
+  const reviewNotPendingTerm = !pending;
+  const threadsSatisfiedTerm = threadClause.satisfied;
+  const noMissingRegularCommentsTerm =
+    dispositionEvidence.missingRegularCommentCount === 0;
+  const reviewItemCountKnownTerm = review.itemCount !== null;
+  const reviewItemCountPositiveTerm =
+    review.itemCount === null || review.itemCount > 0;
+  const sameHeadRerollTerms = [
+    {
+      token: SAME_HEAD_REROLL_INELIGIBLE_REASON.SCOPE_NOT_APPLICABLE,
+      satisfied: scopeApplicableTerm,
+    },
+    {
+      token: SAME_HEAD_REROLL_INELIGIBLE_REASON.REVIEW_PENDING,
+      satisfied: reviewNotPendingTerm,
+    },
+    {
+      token: SAME_HEAD_REROLL_INELIGIBLE_REASON.UNRESOLVED_COPILOT_THREADS,
+      satisfied: threadsSatisfiedTerm,
+    },
+    {
+      token:
+        SAME_HEAD_REROLL_INELIGIBLE_REASON.MISSING_REGULAR_COMMENT_DISPOSITION,
+      satisfied: noMissingRegularCommentsTerm,
+    },
+    {
+      token: SAME_HEAD_REROLL_INELIGIBLE_REASON.REVIEW_ITEM_COUNT_UNKNOWN,
+      satisfied: reviewItemCountKnownTerm,
+    },
+    {
+      token: SAME_HEAD_REROLL_INELIGIBLE_REASON.REVIEW_ITEM_COUNT_NOT_POSITIVE,
+      satisfied: reviewItemCountPositiveTerm,
+    },
+  ];
+  const sameHeadRerollEligible = sameHeadRerollTerms.every(
+    (term) => term.satisfied,
+  );
+  const sameHeadRerollIneligibleReasons = sameHeadRerollTerms
+    .filter((term) => !term.satisfied)
+    .map((term) => term.token);
   const sameHeadRerollCap =
     Number.isInteger(options.sameHeadRerollCap) &&
     Number(options.sameHeadRerollCap) > 0
@@ -355,6 +445,7 @@ export function computeAdvisoryConvergenceVerdict(inputs, options) {
   const sameHeadRerollExhausted = rerollMarkers.count >= sameHeadRerollCap;
   const sameHeadReroll = {
     eligible: sameHeadRerollEligible,
+    ineligibleReasons: sameHeadRerollIneligibleReasons,
     count: rerollMarkers.count,
     cap: sameHeadRerollCap,
     exhausted: sameHeadRerollExhausted,
@@ -499,6 +590,7 @@ export function computeAdvisoryConvergenceVerdict(inputs, options) {
     pending,
     deadline,
     waiver,
+    dispositionEvidence: dispositionEvidenceReport,
     sameHeadReroll,
     terminal,
     converged,
