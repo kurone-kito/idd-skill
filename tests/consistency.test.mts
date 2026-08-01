@@ -671,6 +671,7 @@ test('policy normalization provides default-safe values and supports aliases', (
         maxValidity: 'PT24H',
       },
       trustEmptyProtectionReads: false,
+      trustSourcePinnedRequiredChecks: false,
     },
     discover: {
       activeClaimPreScanBatchSize: 10,
@@ -760,6 +761,7 @@ test('policy normalization provides default-safe values and supports aliases', (
           maxValidity: 'PT12H',
         },
         trustEmptyProtectionReads: true,
+        trustSourcePinnedRequiredChecks: true,
       },
       discover: {
         activeClaimPreScanBatchSize: 11,
@@ -837,6 +839,7 @@ test('policy normalization provides default-safe values and supports aliases', (
           maxValidity: 'PT12H',
         },
         trustEmptyProtectionReads: true,
+        trustSourcePinnedRequiredChecks: true,
       },
       discover: {
         activeClaimPreScanBatchSize: 11,
@@ -955,6 +958,7 @@ test('policy normalization provides default-safe values and supports aliases', (
         maxValidity: 'PT24H',
       },
       trustEmptyProtectionReads: false,
+      trustSourcePinnedRequiredChecks: false,
     },
   );
 
@@ -986,6 +990,21 @@ test('policy normalization provides default-safe values and supports aliases', (
     normalizePolicyConfig({
       ciGate: { trustEmptyProtectionReads: true },
     }).ciGate.trustEmptyProtectionReads,
+    true,
+  );
+
+  // #1689: same fail-closed coercion contract as trustEmptyProtectionReads
+  // above, for the sibling ciGate.trustSourcePinnedRequiredChecks opt-in.
+  assert.equal(
+    normalizePolicyConfig({
+      ciGate: { trustSourcePinnedRequiredChecks: 'true' },
+    }).ciGate.trustSourcePinnedRequiredChecks,
+    false,
+  );
+  assert.equal(
+    normalizePolicyConfig({
+      ciGate: { trustSourcePinnedRequiredChecks: true },
+    }).ciGate.trustSourcePinnedRequiredChecks,
     true,
   );
 });

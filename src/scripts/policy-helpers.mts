@@ -56,6 +56,7 @@ interface RawConfig {
       maxValidity?: unknown;
     };
     trustEmptyProtectionReads?: unknown;
+    trustSourcePinnedRequiredChecks?: unknown;
   };
   discover?: {
     activeClaimPreScanBatchSize?: unknown;
@@ -190,6 +191,14 @@ export const POLICY_DEFAULTS = Object.freeze({
     // #1377: default false fails closed on a masked-403-as-404 branch-
     // protection/ruleset read instead of trusting it as genuinely empty.
     trustEmptyProtectionReads: false,
+    // #1689: default false fails closed on a required check whose ruleset
+    // entry carries an `app_id`/`integration_id` (source-pinned) -- this
+    // repository has no way to verify the live check-run instance actually
+    // came from that pinned integration (see the option's own doc comment
+    // on `summarizeRequiredChecks` in protocol-helpers.mts), so a pinned
+    // check's green state stays untrusted by default rather than silently
+    // treated as passing.
+    trustSourcePinnedRequiredChecks: false,
   }),
   discover: Object.freeze({
     activeClaimPreScanBatchSize: 10,
@@ -440,6 +449,8 @@ export function normalizePolicyConfig(config: unknown) {
         ),
       },
       trustEmptyProtectionReads: c?.ciGate?.trustEmptyProtectionReads === true,
+      trustSourcePinnedRequiredChecks:
+        c?.ciGate?.trustSourcePinnedRequiredChecks === true,
     },
     discover: {
       activeClaimPreScanBatchSize: parsePositiveInteger(
