@@ -1,3 +1,10 @@
+---
+type: reference
+title: IDD — Concept Ownership Matrix
+description: Answers which actor may touch a given IDD concept at a given phase without re-reading every instruction file.
+tags: [concept-ownership, matrix]
+---
+
 # IDD — Concept Ownership Matrix
 
 Use this page to answer "may this actor touch this concept, right now?"

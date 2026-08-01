@@ -1,3 +1,10 @@
+---
+type: guide
+title: Customizing IDD
+description: Lists which IDD surfaces adopters can safely customize and points to the authoritative file for each policy.
+tags: [customization, configuration]
+---
+
 # Customizing IDD
 
 Use this guide after the first template import and before running IDD in
