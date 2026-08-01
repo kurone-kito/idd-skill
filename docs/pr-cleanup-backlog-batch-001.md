@@ -1,3 +1,10 @@
+---
+type: reference
+title: PR Cleanup Backlog — Batch Run 001
+description: Records the first batch execution of the historical merged-PR cleanup backlog campaign and how to continue subsequent batches.
+tags: [pr-cleanup, backlog]
+---
+
 # PR Cleanup Backlog — Batch Run 001
 
 This document records the first batch execution of the historical

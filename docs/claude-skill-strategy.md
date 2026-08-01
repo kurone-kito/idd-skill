@@ -1,3 +1,10 @@
+---
+type: design
+title: Claude Code Skill Strategy for the IDD Execution Loop
+description: Records the design evaluation and no-go decision for packaging the IDD execution loop as a Claude Code skill.
+tags: [claude-code, skill-strategy]
+---
+
 # Claude Code Skill Strategy for the IDD Execution Loop
 
 This page records the design evaluation for packaging the IDD execution

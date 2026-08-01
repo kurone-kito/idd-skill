@@ -5,11 +5,10 @@
 // source named above by `pnpm run build`. Edit the .mts source, never the
 // generated .mjs. See docs/typescript-sources.md.
 import { execFileSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
 import { parseCliArgs } from './cli-args.mjs';
 import { isAuthorizedForcedHandoffActor } from './collaborator-permission.mjs';
 import { GH_TEXT_LOOP_TIMEOUT_OPTIONS, ghText } from './gh-exec.mjs';
+import { loadPolicyConfig } from './idd-config.mjs';
 import { normalizePolicyConfig } from './policy-helpers.mjs';
 import {
   buildForcedHandoffEnableGate,
@@ -303,7 +302,7 @@ function runCli() {
       GH_TEXT_LOOP_TIMEOUT_OPTIONS,
     );
   const repository = `${owner}/${repo}`;
-  const policy = loadPolicy(args.policy, { strict: Boolean(args.policy) });
+  const policy = loadPolicy(args.policy);
   const staleAgeMs = args.staleAgeMs > 0 ? args.staleAgeMs : policy.staleAgeMs;
   const trustedLogins = resolveTrustedLogins({
     fromArgs: args.trustedMarkerLogins,
@@ -741,45 +740,33 @@ function fetchIssueComments(repository, issueNumber) {
   }
   return comments;
 }
-function loadPolicy(policyPath, { strict = false } = {}) {
-  const source = policyPath
-    ? resolve(process.cwd(), policyPath)
-    : resolve(process.cwd(), '.github/idd/config.json');
-  try {
-    const config = JSON.parse(readFileSync(source, 'utf8'));
-    const normalized = normalizePolicyConfig(config);
-    return {
-      source,
-      staleAgeMs:
-        parseDurationToMs(config?.claimTiming?.staleAge) ??
-        DEFAULT_STALE_AGE_MS,
-      trustedMarkerActors: Array.isArray(config?.trustedMarkerActors)
-        ? config.trustedMarkerActors
-            .map((value) => String(value ?? '').trim())
-            .filter(Boolean)
-        : [],
-      forcedHandoff: {
-        mode: normalized.forcedHandoff.mode,
-        authorityPolicy: normalized.forcedHandoff.authorityPolicy,
-      },
-    };
-  } catch (error) {
-    if (strict) {
-      throw new Error(
-        `failed to load policy from ${source}: ${String(error?.message ?? error)}`,
-      );
-    }
-    const normalized = normalizePolicyConfig({});
-    return {
-      source,
-      staleAgeMs: DEFAULT_STALE_AGE_MS,
-      trustedMarkerActors: [],
-      forcedHandoff: {
-        mode: normalized.forcedHandoff.mode,
-        authorityPolicy: normalized.forcedHandoff.authorityPolicy,
-      },
-    };
-  }
+// Read-and-parse failure semantics (explicit path throws; default path
+// silently falls back only on ENOENT) are converged in idd-config.mts's
+// loadPolicyConfig (#1721). It already implements exactly what this
+// function's former `strict` option hand-rolled -- the caller always passed
+// `strict: Boolean(args.policy)`, the same "was an explicit path given" test
+// loadPolicyConfig makes internally -- so the option (and this function's
+// own try/catch around the read) is no longer needed; a load failure now
+// propagates the shared reader's own error.
+function loadPolicy(policyPath) {
+  const { path: source, config } = loadPolicyConfig(policyPath);
+  const typedConfig = config;
+  const normalized = normalizePolicyConfig(typedConfig);
+  return {
+    source,
+    staleAgeMs:
+      parseDurationToMs(typedConfig?.claimTiming?.staleAge) ??
+      DEFAULT_STALE_AGE_MS,
+    trustedMarkerActors: Array.isArray(typedConfig?.trustedMarkerActors)
+      ? typedConfig.trustedMarkerActors
+          .map((value) => String(value ?? '').trim())
+          .filter(Boolean)
+      : [],
+    forcedHandoff: {
+      mode: normalized.forcedHandoff.mode,
+      authorityPolicy: normalized.forcedHandoff.authorityPolicy,
+    },
+  };
 }
 function parseDurationToMs(value) {
   const text = String(value ?? '').trim();

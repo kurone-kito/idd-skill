@@ -1,3 +1,10 @@
+---
+type: investigation
+title: IDD Skill — Competitive Landscape and Positioning
+description: Analyzes the competitive landscape for idd-skill and summarizes its strategic position relative to adjacent tools.
+tags: [positioning, competitive-analysis]
+---
+
 # IDD Skill — Competitive Landscape and Positioning
 
 Analysis date: 2026-05-07

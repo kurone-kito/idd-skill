@@ -1,3 +1,10 @@
+---
+type: reference
+title: Data Layer Log Segment
+description: Captures the timestamped data-layer log segment of the VRChat Event Calendar IDD workshop session.
+tags: [workshop, log-segment]
+---
+
 # Data Layer Log Segment
 
 > **Note:** This segment is reconstructed from the preserved claim,

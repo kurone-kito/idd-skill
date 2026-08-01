@@ -1,11 +1,18 @@
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
+import { chmodSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { test } from 'node:test';
+import { fileURLToPath } from 'node:url';
 
 import {
   evaluateClaimApprovalGate,
   wrapGhError,
 } from '../src/scripts/claim-approval-gate.mts';
 import { deriveGhHttpStatus } from '../src/scripts/gh-http-status.mts';
+
+const REPO_ROOT = fileURLToPath(new URL('..', import.meta.url));
 
 const BASE_ISSUE = {
   number: 393,
@@ -531,4 +538,75 @@ test('wrapGhError + deriveGhHttpStatus recovers a status from a JSON error body 
     stdout: '{"message":"Not Found","status":"404"}',
   });
   assert.equal(deriveGhHttpStatus(wrapped), 404);
+});
+
+// #1721: claim-approval-gate was one of three helpers that silently
+// swallowed every --policy load failure (including an explicitly-supplied
+// path) into fallback defaults (fail-open). It now routes through
+// idd-config.mts's loadPolicyConfig, which fails closed for an
+// unreadable/malformed explicit path.
+
+test('CLI path fails when an explicit --policy file is invalid', () => {
+  const tempRoot = mkdtempSync(
+    join(tmpdir(), 'idd-claim-approval-gate-policy-'),
+  );
+  const ghPath = join(tempRoot, 'gh');
+  const policyPath = join(tempRoot, 'bad-policy.json');
+
+  writeFileSync(
+    ghPath,
+    `#!/usr/bin/env node
+const args = process.argv.slice(2);
+if (args[0] === "repo" && args[1] === "view") {
+  const jq = args[args.indexOf("--jq") + 1];
+  process.stdout.write(jq === ".owner.login" ? "kurone-kito\\n" : "idd-skill\\n");
+  process.exit(0);
+}
+if (args[0] === "api" && args[1] && args[1].endsWith("/issues/1")) {
+  process.stdout.write(JSON.stringify({
+    number: 1,
+    title: "t",
+    state: "OPEN",
+    html_url: "https://example.com/issues/1",
+    user: { login: "author" },
+  }) + "\\n");
+  process.exit(0);
+}
+if (args[0] === "api" && args[1] && args[1].endsWith("/comments")) {
+  process.stdout.write("[]\\n");
+  process.exit(0);
+}
+if (args[0] === "api" && args[1] && args[1].endsWith("/timeline")) {
+  process.stdout.write("[]\\n");
+  process.exit(0);
+}
+process.stderr.write("unexpected gh invocation: " + args.join(" ") + "\\n");
+process.exit(1);
+`,
+  );
+  writeFileSync(policyPath, '{not-json');
+  chmodSync(ghPath, 0o755);
+
+  assert.throws(
+    () =>
+      execFileSync(
+        process.execPath,
+        [
+          join(REPO_ROOT, 'scripts/claim-approval-gate.mjs'),
+          '--issue',
+          '1',
+          '--policy',
+          policyPath,
+        ],
+        {
+          cwd: REPO_ROOT,
+          encoding: 'utf8',
+          env: {
+            ...process.env,
+            PATH: `${tempRoot}:${process.env.PATH ?? ''}`,
+          },
+        },
+      ),
+    /failed to load policy from .*bad-policy\.json/,
+  );
 });

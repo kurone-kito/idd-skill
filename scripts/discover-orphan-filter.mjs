@@ -5,8 +5,6 @@
 // source named above by `pnpm run build`. Edit the .mts source, never the
 // generated .mjs. See docs/typescript-sources.md.
 import { execFileSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
 import {
   buildAuthoringLabelWarning,
   resolveAuthoringGuardPolicy,
@@ -28,6 +26,7 @@ import {
 } from './discover-roadmap-graph.mjs';
 import { effortOrdinal, parseEffort } from './effort.mjs';
 import { GH_TEXT_LOOP_TIMEOUT_OPTIONS, ghText } from './gh-exec.mjs';
+import { loadPolicyConfig } from './idd-config.mjs';
 import { createMarkerRegex } from './marker-regex.mjs';
 import { normalizePolicyConfig, POLICY_DEFAULTS } from './policy-helpers.mjs';
 
@@ -575,54 +574,36 @@ claim gate (idd-claim.instructions.md) remains the real protection.
 `);
 }
 function loadPolicy(policyPath) {
-  const defaultPath = resolve(process.cwd(), '.github/idd/config.json');
-  const targetPath = policyPath
-    ? resolve(process.cwd(), policyPath)
-    : defaultPath;
-  try {
-    const config = JSON.parse(readFileSync(targetPath, 'utf8'));
-    const authoringPolicy = resolveAuthoringGuardPolicy(config);
-    const labelsPolicy = normalizePolicyConfig(config).labels;
-    return {
-      source: targetPath,
-      orphanFirstPolicy: getOrphanFirstPolicy(config),
-      markerPrefix: normalizeMarkerPrefix(config.markerPrefix),
-      authoringLabelName: authoringPolicy.labelName,
-      authoringStaleAge: authoringPolicy.staleAge,
-      authoringStaleAgeMs: authoringPolicy.staleAgeMs,
-      blockedByHumanLabelName: labelsPolicy.blockedByHumanLabelName,
-      needsDecisionLabelName: labelsPolicy.needsDecisionLabelName,
-      roadmapLabelName: labelsPolicy.roadmapLabelName,
-      autopilotSuitabilityFloor: resolveAutopilotSuitabilityFloor(config),
-      autopilotSuitabilityEnabled: resolveAutopilotSuitabilityEnabled(config),
-      // Passed through verbatim (raw, un-normalized) for
-      // buildClaimStateResolution (#1395), which expects this same shape —
-      // it is only consumed when --with-claim-state is passed.
-      claimTiming: config.claimTiming,
-      trustedMarkerActors: config.trustedMarkerActors,
-    };
-  } catch {
-    const authoringPolicy = resolveAuthoringGuardPolicy({});
-    const labelsPolicy = normalizePolicyConfig({}).labels;
-    return {
-      source: targetPath,
-      orphanFirstPolicy: 'none',
-      markerPrefix: DEFAULT_MARKER_PREFIX,
-      authoringLabelName: authoringPolicy.labelName,
-      authoringStaleAge: authoringPolicy.staleAge,
-      authoringStaleAgeMs: authoringPolicy.staleAgeMs,
-      blockedByHumanLabelName: labelsPolicy.blockedByHumanLabelName,
-      needsDecisionLabelName: labelsPolicy.needsDecisionLabelName,
-      roadmapLabelName: labelsPolicy.roadmapLabelName,
-      autopilotSuitabilityFloor: DEFAULT_AUTOPILOT_SUITABILITY_FLOOR,
-      autopilotSuitabilityEnabled: true,
-      // No config was readable, so buildClaimStateResolution falls back to
-      // its own defaults (24h stale age, env-only trusted actors) — the
-      // same soft-default philosophy the graph helper already relies on.
-      claimTiming: undefined,
-      trustedMarkerActors: undefined,
-    };
-  }
+  // Read-and-parse failure semantics (explicit path throws; default path
+  // silently falls back only on ENOENT) are converged in idd-config.mts's
+  // loadPolicyConfig (#1721) — this function keeps only its own shape
+  // normalization on top of that raw config.
+  const { path: source, config: rawConfig } = loadPolicyConfig(policyPath);
+  const config = rawConfig ?? {};
+  const authoringPolicy = resolveAuthoringGuardPolicy(config);
+  const labelsPolicy = normalizePolicyConfig(config).labels;
+  return {
+    source,
+    orphanFirstPolicy: getOrphanFirstPolicy(config),
+    markerPrefix: normalizeMarkerPrefix(config.markerPrefix),
+    authoringLabelName: authoringPolicy.labelName,
+    authoringStaleAge: authoringPolicy.staleAge,
+    authoringStaleAgeMs: authoringPolicy.staleAgeMs,
+    blockedByHumanLabelName: labelsPolicy.blockedByHumanLabelName,
+    needsDecisionLabelName: labelsPolicy.needsDecisionLabelName,
+    roadmapLabelName: labelsPolicy.roadmapLabelName,
+    autopilotSuitabilityFloor: resolveAutopilotSuitabilityFloor(config),
+    autopilotSuitabilityEnabled: resolveAutopilotSuitabilityEnabled(config),
+    // Passed through verbatim (raw, un-normalized) for
+    // buildClaimStateResolution (#1395), which expects this same shape —
+    // it is only consumed when --with-claim-state is passed. Undefined
+    // when no config was found (default path, ENOENT), matching
+    // buildClaimStateResolution's own defaults (24h stale age, env-only
+    // trusted actors) — the same soft-default philosophy the graph helper
+    // already relies on.
+    claimTiming: config.claimTiming,
+    trustedMarkerActors: config.trustedMarkerActors,
+  };
 }
 function resolveAutopilotSuitabilityFloor(config) {
   // Delegate range/default validation to the shared normalizer so the

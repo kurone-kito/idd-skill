@@ -1,3 +1,10 @@
+---
+type: reference
+title: TypeScript helper sources
+description: Explains the generated .mjs-from-.mts helper source layout, build commands, and drift guards this repository enforces.
+tags: [typescript, build-tooling]
+---
+
 # TypeScript helper sources
 
 The IDD helper migration to TypeScript is **complete**: every
