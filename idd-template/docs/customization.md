@@ -1086,10 +1086,11 @@ consistency.
 
 **Field profile** (four fields): `type` (required, one value from the
 closed vocabulary below), `title` (required, matches the page's `# H1`
-heading exactly), `description` (required, one sentence ending in a
-period), and `tags` (optional, a YAML list of non-empty strings;
-lowercase-hyphen is the authoring convention, though only
-non-emptiness is mechanically enforced).
+heading exactly), `description` (required, a non-empty string; one
+sentence ending in a period is the authoring convention, though only
+non-emptiness is mechanically enforced), and `tags` (optional, a YAML
+list of non-empty strings; lowercase-hyphen is the authoring
+convention, though only non-emptiness is mechanically enforced).
 
 **Closed `type` vocabulary**: `index`, `guide`, `concept`, `reference`,
 `workflow`, `design`, `investigation`, `tutorial`.
