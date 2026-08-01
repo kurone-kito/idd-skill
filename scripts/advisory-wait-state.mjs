@@ -538,11 +538,12 @@ function resolveTrustedCollaboratorMarkerLogins(owner, repo, comments) {
     );
   });
 }
-function advisoryMarkerComment(body) {
+export function advisoryMarkerComment(body) {
   const normalized = String(body ?? '');
   return (
     normalized.startsWith('advisory-wait:') ||
     normalized.startsWith('advisory-wait-recovery:') ||
+    normalized.startsWith('advisory-reroll:') ||
     normalized.startsWith('<!-- advisory-wait:')
   );
 }

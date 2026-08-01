@@ -775,11 +775,12 @@ function resolveTrustedCollaboratorMarkerLogins(
   });
 }
 
-function advisoryMarkerComment(body: string): boolean {
+export function advisoryMarkerComment(body: string): boolean {
   const normalized = String(body ?? '');
   return (
     normalized.startsWith('advisory-wait:') ||
     normalized.startsWith('advisory-wait-recovery:') ||
+    normalized.startsWith('advisory-reroll:') ||
     normalized.startsWith('<!-- advisory-wait:')
   );
 }
