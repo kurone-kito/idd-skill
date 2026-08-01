@@ -123,9 +123,10 @@ APM's `bin/` support does and does not cover. Per
 [Repo shapes — Shipping `bin/` executables](https://microsoft.github.io/apm/producer/repo-shapes/#shipping-bin-executables-claude-code-only):
 a package may ship a top-level `bin/` directory of executables, but
 this is explicitly **"a Claude-Code-specific contract — no other
-harness has an equivalent"**, deploy is **"user-scope only"** (`apm
-install -g`; a project-scope install "skips `bin/` and prints a hint to
-re-run with `-g`"), and the deployed scripts land on Claude Code's Bash
+harness has an equivalent"**, deploy is **"user-scope only"**
+(a global `apm install -g`; a project-scope install "skips `bin/` and
+prints a hint to re-run with `-g`"), and the deployed scripts land on
+Claude Code's Bash
 `PATH` and are **"invoked without per-call confirmation"** (treated as
 trusted code). This does not cover IDD's helper bundle
 (`scripts/*.mjs`, per `docs/idd-helper-scripts.md`): the helper bundle
@@ -205,10 +206,15 @@ missing integrations, orphaned files vs the lockfile)"**
 
 The template ships 26 `{{...}}` placeholder occurrences across five
 instruction files (`idd-discover`, `idd-overview-core`,
-`idd-roadmap-audit`, `idd-suitability`, `idd-work` — reconfirmed by
-`grep -o '{{[A-Z_]*}}' idd-template/.github/instructions/*.instructions.md
-| wc -l` against this repository today) that onboarding substitutes in
-place with each adopter's own values. That substitution is, by
+`idd-roadmap-audit`, `idd-suitability`, `idd-work`) that onboarding
+substitutes in place with each adopter's own values — reconfirmed
+against this repository today by:
+
+```sh
+grep -o '{{[A-Z_]*}}' idd-template/.github/instructions/*.instructions.md | wc -l
+```
+
+That substitution is, by
 definition, exactly the class of post-install hand-edit `apm audit`
 flags as drift, and every one of those five files would carry
 permanent, unresolvable drift the moment onboarding finished — not a
@@ -358,8 +364,8 @@ existing zero-new-dependency raw-URL/`idd-onboard.mjs` path remains the
 default for the core template regardless of whether the optional
 companion also ships an APM manifest.
 
-**Release-cadence risk.** APM's own release history (`gh api
-repos/microsoft/apm/releases`, checked 2026-08) shows `v0.17.0`
+**Release-cadence risk.** APM's own release history (the GitHub
+Releases API for `microsoft/apm`, checked 2026-08) shows `v0.17.0`
 (2026-06-04) through `v0.26.0` (2026-07-18) — 10 tagged releases in
 about 6.5 weeks, roughly one every 4–5 days, with `v0.27.0` already
 recorded in `CHANGELOG.md` days later. The `[Unreleased]`/`[0.27.0]`
