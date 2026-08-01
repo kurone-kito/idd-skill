@@ -20,8 +20,10 @@ CI-polling instructions instead of this file.
 
 - A required helper is missing, fails, returns invalid JSON, or
   disagrees with live state.
-- `requiredChecks.status` is `source-pinned` (a real gating check exists
-  but cannot be enumerated by name).
+- `requiredChecks.status` is `source-pinned` (a real, pinned gating
+  check whose provenance the helper cannot verify — its name may be
+  unresolvable, or resolvable-and-passing but not confirmably from the
+  pinned source).
 - A non-pass check is not clearly code-caused or recognized
   infra-flaky/pre-existing, except the sole-failing
   `idd-advisory-convergence` exception the caller's own routing names.
