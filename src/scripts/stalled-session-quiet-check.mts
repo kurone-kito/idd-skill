@@ -11,6 +11,7 @@ import { resolve } from 'node:path';
 
 import { parseCliArgs } from './cli-args.mts';
 import { GH_TEXT_LOOP_TIMEOUT_OPTIONS, ghText } from './gh-exec.mts';
+import { parsePaginatedGhNdjson } from './protocol-helpers.mts';
 
 const DEFAULT_QUIET_WINDOW_MS = 30 * 60 * 1000;
 
@@ -316,36 +317,36 @@ function collectActivities({
   }
 
   // Paginate issue comments (includes PR comments)
-  const prComments = ghJson([
+  const prComments = ghPaginatedJson([
     'api',
     `repos/${repository}/issues/${pr}/comments`,
     '--paginate',
     '--jq',
-    '[.[] | {timestamp: .created_at}]',
+    '.[] | {timestamp: .created_at}',
   ]) as { timestamp?: unknown }[];
   for (const c of prComments) {
     activities.push({ type: 'comment', timestamp: c.timestamp });
   }
 
   // Paginate PR reviews
-  const reviews = ghJson([
+  const reviews = ghPaginatedJson([
     'api',
     `repos/${repository}/pulls/${pr}/reviews`,
     '--paginate',
     '--jq',
-    '[.[] | {timestamp: .submitted_at}]',
+    '.[] | {timestamp: .submitted_at}',
   ]) as { timestamp?: unknown }[];
   for (const r of reviews) {
     activities.push({ type: 'review', timestamp: r.timestamp });
   }
 
   // Paginate PR review comments
-  const reviewComments = ghJson([
+  const reviewComments = ghPaginatedJson([
     'api',
     `repos/${repository}/pulls/${pr}/comments`,
     '--paginate',
     '--jq',
-    '[.[] | {timestamp: .created_at}]',
+    '.[] | {timestamp: .created_at}',
   ]) as { timestamp?: unknown }[];
   for (const rc of reviewComments) {
     activities.push({ type: 'comment', timestamp: rc.timestamp });
@@ -353,12 +354,12 @@ function collectActivities({
 
   if (headSha) {
     // Paginate check-runs for CI activity
-    const checkRuns = ghJson([
+    const checkRuns = ghPaginatedJson([
       'api',
       `repos/${repository}/commits/${headSha}/check-runs`,
       '--paginate',
       '--jq',
-      '[.check_runs[] | {status: .status, started_at: .started_at, completed_at: .completed_at}]',
+      '.check_runs[] | {status: .status, started_at: .started_at, completed_at: .completed_at}',
     ]) as { status?: unknown; completed_at?: unknown }[];
     for (const run of checkRuns) {
       if (run.status === 'queued' || run.status === 'in_progress') {
@@ -466,6 +467,33 @@ function compareIso(left: unknown, right: unknown): number {
 
 function ghJson(args: string[]): unknown {
   return JSON.parse(runGh(args).trim() || 'null') ?? [];
+}
+
+/**
+ * Run a `gh api ... --paginate --jq <program>` call and parse its output as
+ * NDJSON (#1692). `<program>` must stream individual values per page (e.g.
+ * `.[] | {...}` or `.check_runs[] | {...}`), not wrap them back into a
+ * per-page array (`[.[] | {...}]`) -- the latter made `gh --paginate` emit
+ * one JSON array per page, which this file's prior single whole-stdout
+ * `JSON.parse` (via `ghJson`) could not parse once there was more than one
+ * page. Matches the shared NDJSON convention `gh-exec.mts`'s `ghApiJson`
+ * already uses.
+ *
+ * Requires `args` to already include `--paginate` and `--jq` (Copilot
+ * review on PR #1763): a call site missing either flag would still parse
+ * without error -- `--jq`-less output as a single JSON.parse of one big
+ * value, or non-paginated output as a trivially "one item" NDJSON stream --
+ * silently returning only a first page or a wrong shape instead of failing
+ * loudly. Every current call site already passes both; this only guards
+ * against a future call site accidentally dropping one.
+ */
+function ghPaginatedJson(args: string[]): unknown[] {
+  if (!args.includes('--paginate') || !args.includes('--jq')) {
+    throw new Error(
+      `ghPaginatedJson requires both --paginate and --jq in args, got: ${args.join(' ')}`,
+    );
+  }
+  return parsePaginatedGhNdjson(runGh(args));
 }
 
 function runGh(args: string[]): string {
