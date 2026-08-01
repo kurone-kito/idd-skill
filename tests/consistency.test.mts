@@ -1526,6 +1526,116 @@ test('collectOkfFrontmatterViolations: an exemptPaths entry naming a now-conform
   );
 });
 
+test('collectOkfFrontmatterViolations: an H1 legitimately ending in "#" is not stripped', () => {
+  // CommonMark's ATX closing sequence requires a preceding space; a title
+  // like "Guide to C#" must keep its trailing "#" rather than have it
+  // misread as a closing sequence and stripped down to "Guide to C".
+  const { listFiles, readFile } = okfFixture({
+    'docs/foo.md':
+      '---\ntype: guide\ntitle: Guide to C#\ndescription: A short sentence.\n---\n\n# Guide to C#\n\nBody.\n',
+  });
+  const errors = collectOkfFrontmatterViolations(
+    [
+      {
+        id: 'docs-okf',
+        roots: ['docs'],
+        types: OKF_TEST_TYPES,
+        exemptPaths: [],
+      },
+    ],
+    listFiles,
+    readFile,
+  );
+  assert.deepEqual(errors, []);
+});
+
+test('collectOkfFrontmatterViolations: a legitimate closing sequence is still stripped', () => {
+  const { listFiles, readFile } = okfFixture({
+    'docs/foo.md':
+      '---\ntype: guide\ntitle: Foo\ndescription: A short sentence.\n---\n\n# Foo #\n\nBody.\n',
+  });
+  const errors = collectOkfFrontmatterViolations(
+    [
+      {
+        id: 'docs-okf',
+        roots: ['docs'],
+        types: OKF_TEST_TYPES,
+        exemptPaths: [],
+      },
+    ],
+    listFiles,
+    readFile,
+  );
+  assert.deepEqual(errors, []);
+});
+
+test('collectOkfFrontmatterViolations: a zero-indent YAML block sequence for tags parses correctly', () => {
+  // YAML permits a block sequence at the same indentation as its mapping
+  // key; the parser must not silently drop these items into an empty
+  // scalar and then fail the "tags must be a list" check on valid YAML.
+  const { listFiles, readFile } = okfFixture({
+    'docs/foo.md':
+      '---\ntype: guide\ntitle: Foo\ndescription: A short sentence.\ntags:\n- okf\n- frontmatter\n---\n\n# Foo\n\nBody.\n',
+  });
+  const errors = collectOkfFrontmatterViolations(
+    [
+      {
+        id: 'docs-okf',
+        roots: ['docs'],
+        types: OKF_TEST_TYPES,
+        exemptPaths: [],
+      },
+    ],
+    listFiles,
+    readFile,
+  );
+  assert.deepEqual(errors, []);
+});
+
+test('collectOkfFrontmatterViolations: an indented block sequence for tags still parses correctly', () => {
+  const { listFiles, readFile } = okfFixture({
+    'docs/foo.md':
+      '---\ntype: guide\ntitle: Foo\ndescription: A short sentence.\ntags:\n  - okf\n  - frontmatter\n---\n\n# Foo\n\nBody.\n',
+  });
+  const errors = collectOkfFrontmatterViolations(
+    [
+      {
+        id: 'docs-okf',
+        roots: ['docs'],
+        types: OKF_TEST_TYPES,
+        exemptPaths: [],
+      },
+    ],
+    listFiles,
+    readFile,
+  );
+  assert.deepEqual(errors, []);
+});
+
+test('collectOkfFrontmatterViolations: an exemptPaths entry naming a reserved filename fails', () => {
+  const { listFiles, readFile } = okfFixture({
+    'docs/index.md': '# Index\n\nNo frontmatter here, and that is fine.\n',
+  });
+  const errors = collectOkfFrontmatterViolations(
+    [
+      {
+        id: 'docs-okf',
+        roots: ['docs'],
+        reservedFilenames: ['index.md', 'log.md'],
+        types: OKF_TEST_TYPES,
+        exemptPaths: ['docs/index.md'],
+      },
+    ],
+    listFiles,
+    readFile,
+  );
+  assert.equal(errors.length, 1);
+  assert.match(
+    errors[0],
+    /exemptPaths names docs\/index\.md, which is a reserved filename and is never checked/,
+  );
+});
+
 test('collectOkfFrontmatterViolations: misconfigured roots/types fail closed, non-array bundles are a no-op', () => {
   assert.deepEqual(
     collectOkfFrontmatterViolations(

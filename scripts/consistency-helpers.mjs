@@ -884,8 +884,12 @@ export function resolveGeneratedBlockFiles(block, globFilesFn) {
 // does not count -- OKF/YAML frontmatter must open the document.
 const OKF_FRONTMATTER_PATTERN = /^---\r?\n([\s\S]*?)\r?\n---\r?\n/;
 // A single `#` immediately followed by whitespace is level 1; `##` and
-// deeper never match because the second `#` is not whitespace.
-const OKF_H1_PATTERN = /^#\s+(.+?)\s*#*\s*$/;
+// deeper never match because the second `#` is not whitespace. The
+// optional closing sequence requires at least one preceding whitespace
+// character (CommonMark's own ATX closing-sequence rule), so a title that
+// legitimately ends in `#` (e.g. "Guide to C#") keeps that character
+// instead of having it stripped as a false closing sequence.
+const OKF_H1_PATTERN = /^#\s+(.+?)(?:\s+#+)?\s*$/;
 /**
  * Minimal frontmatter-field parser for the OKF conformance checker. Only
  * supports the shapes the field profile actually uses: a flat `key: value`
@@ -912,7 +916,13 @@ function parseOkfFrontmatterFields(inner) {
       const items = [];
       let cursor = index + 1;
       while (cursor < lines.length) {
-        const itemMatch = /^\s+-\s*(.*)$/.exec(lines[cursor]);
+        // YAML permits a block sequence at the same indentation as its
+        // mapping key (zero-indent), so the leading whitespace before `-`
+        // is optional here -- only requiring `\s+` would silently miss
+        // that valid form and leave `items` empty. The trailing `\s+`
+        // (not `\s*`) keeps a scalar like `-foo` from being misread as a
+        // list item.
+        const itemMatch = /^\s*-\s+(.*)$/.exec(lines[cursor]);
         if (!itemMatch) {
           break;
         }
@@ -1095,6 +1105,17 @@ export function collectOkfFrontmatterViolations(bundles, listFiles, readFile) {
     for (const file of files) {
       const basename = file.slice(file.lastIndexOf('/') + 1);
       if (reservedFilenames.has(basename)) {
+        // A reserved filename is never checked for conformance, so an
+        // exemptPaths entry naming one is dead configuration -- neither
+        // the "now conforms" branch below nor the exemptPaths-existence
+        // loop after this one would ever catch it, since the latter only
+        // checks scope membership, not reserved-ness. Report it here,
+        // the only place that still has both facts in hand.
+        if (exemptSet.has(file)) {
+          errors.push(
+            `${id}: exemptPaths names ${file}, which is a reserved filename and is never checked; remove the redundant exemption`,
+          );
+        }
         continue;
       }
       const reason = checkOkfPageConformance(readFile(file), typeSet);
