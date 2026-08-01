@@ -30,7 +30,7 @@ For each item in ReviewItems_snapshot, first classify it:
   change.
 - If classification is ambiguous, default to PATH A.
 - Record each PATH A actor's permission standing (CODEOWNER, required
-  reviewer, sufficient collaborator access, or none) — E5's cap reads it.
+  reviewer, Triage/Write/Maintain/Admin, or none) — E5's cap reads it.
 
 **Advisory non-review notice.** Before scoring a PATH B item, decide
 whether it is a _completed_ advisory review of the current HEAD or an
