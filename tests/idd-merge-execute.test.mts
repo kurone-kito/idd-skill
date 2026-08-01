@@ -1095,17 +1095,21 @@ function httpError(status: number): Error {
   return new Error(`gh: Not Found (HTTP ${status})`);
 }
 
-test('resolveRemoteSoloCodeownerAdminFallbackMode decodes a valid remote config', () => {
+test('resolveRemoteSoloCodeownerAdminFallbackMode decodes a valid remote config, threading repoRef/headSha to the fetch', () => {
+  const calls: [string, string][] = [];
   const mode = resolveRemoteSoloCodeownerAdminFallbackMode(
     42,
     'o/r',
     'deadbeef',
-    () =>
-      base64Config({
+    (repoRef, headSha) => {
+      calls.push([repoRef, headSha]);
+      return base64Config({
         mergeGate: { soloCodeownerAdminFallback: 'hold-and-report' },
-      }),
+      });
+    },
   );
   assert.equal(mode, 'hold-and-report');
+  assert.deepEqual(calls, [['o/r', 'deadbeef']]);
 });
 
 test('resolveRemoteSoloCodeownerAdminFallbackMode falls back to the distributed default on a confirmed 404', () => {

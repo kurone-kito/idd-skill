@@ -249,7 +249,12 @@ function buildStubGhScript(threadResolved: boolean): string {
 
   // Each branch below matches one distinct call `collectPreMergeReadiness`
   // makes. An unmatched call falls through to the final handler, which
-  // fails loudly instead of hanging (mirrors cli-entry-smoke.test.mts).
+  // fails loudly instead of hanging (mirrors cli-entry-smoke.test.mts) --
+  // except the `api user`/`api app` reads, which go through `safeGhText`
+  // (gh-exec.mts) and so degrade silently to `''` on any failure, including
+  // this stub's own "unexpected invocation" exit; harmless here since none
+  // of this suite's assertions depend on viewerLogin/viewerAppSlug, but an
+  // arg-shape drift on those two specific calls alone would not turn red.
   return `#!/usr/bin/env node
 const args = process.argv.slice(2);
 const a = (i) => args[i];
@@ -381,9 +386,15 @@ test('pre-merge-readiness.mjs CLI: blocked scenario (one unresolved review threa
     missingThreads: { id: string; isResolved: boolean }[];
   };
   assert.equal(dispositionEvidence.missingThreads[0]?.isResolved, false);
-  assert.equal(report.ready, false);
+
+  // The clean scenario is *also* `ready: false` here (replicating the
+  // review-watermark/claim-marker grammar needed for a full ready:true is
+  // out of scope, see the block comment above), so asserting `ready` alone
+  // would not discriminate between the two scenarios. Assert the ONE gate
+  // this scenario's flipped field should add instead.
+  const blockers = report.blockers as { gate: string }[];
   assert.ok(
-    (report.blockers as unknown[]).length > 0,
-    'blocked scenario must report at least one blocker',
+    blockers.some((blocker) => blocker.gate === 'unresolved-threads'),
+    `expected an "unresolved-threads" blocker, got: ${JSON.stringify(blockers)}`,
   );
 });
