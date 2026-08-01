@@ -2315,14 +2315,34 @@ export function classifyCiChecks(checks: CheckLike[]) {
 }
 
 /**
+ * #1686: the exact, closed set of logins recognized for the *default*
+ * Copilot primary advisory bot -- the human-facing `copilot` slash-command
+ * actor plus the two known GitHub-App review-bot login forms. Previously
+ * matched via `normalized.startsWith('copilot-pull-request-reviewer')`,
+ * which a *registrable* GitHub username lookalike (for example
+ * `copilot-pull-request-reviewer1`) could also satisfy on a public
+ * repository: any account can submit a PR review, so a lookalike login
+ * could post an empty review of the current HEAD and masquerade as the
+ * real bot's convergence signal (Clause 1 of `advisory-convergence.mts`'s
+ * verdict: `matchesHead: true, itemCount: 0`). An exact set closes that
+ * gap without narrowing the two genuine login forms GitHub actually uses.
+ */
+const EXACT_COPILOT_REVIEWER_LOGINS: ReadonlySet<string> = new Set([
+  'copilot',
+  'copilot-pull-request-reviewer',
+  'copilot-pull-request-reviewer[bot]',
+]);
+
+/**
  * Match a review/reviewer login against the configured primary advisory bot.
  *
  * `primaryBotLogin` defaults to Copilot so existing callers stay behavior-
- * preserving. For the Copilot default the historical dual match is kept
- * (the exact `copilot` actor plus the `copilot-pull-request-reviewer*` GitHub
- * App login family). A non-Copilot configured login is matched by exact
- * normalized (trimmed, lower-cased) equality, since an arbitrary bot login has
- * no analogous prefix family.
+ * preserving. For the Copilot default, the login must be an exact member of
+ * {@link EXACT_COPILOT_REVIEWER_LOGINS} (#1686 -- previously a broader
+ * `copilot-pull-request-reviewer*` prefix match; see that constant's doc
+ * comment for why it was narrowed). A non-Copilot configured login is
+ * matched by exact normalized (trimmed, lower-cased) equality, since an
+ * arbitrary bot login has no analogous prefix family.
  */
 export function isCopilotReviewerLogin(
   login: unknown,
@@ -2336,10 +2356,7 @@ export function isCopilotReviewerLogin(
       .trim()
       .toLowerCase() || DEFAULT_ADVISORY_PRIMARY_BOT_LOGIN;
   if (configured === DEFAULT_ADVISORY_PRIMARY_BOT_LOGIN) {
-    return (
-      normalized === 'copilot' ||
-      normalized.startsWith('copilot-pull-request-reviewer')
-    );
+    return EXACT_COPILOT_REVIEWER_LOGINS.has(normalized);
   }
   return normalized === configured;
 }

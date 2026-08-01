@@ -63,7 +63,7 @@
         },
         "status": {
           "type": "string",
-          "enum": ["applicable", "not_applicable"]
+          "enum": ["applicable", "not_applicable", "indeterminate"]
         },
         "reason": {
           "type": "string",
