@@ -1,10 +1,12 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
-import { devNull, tmpdir } from 'node:os';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
+
+import { fixtureEnv } from './test-utils.mts';
 
 // checkFileSets in src/scripts/audit-docs.mts is not exported (the module
 // runs as a top-level side-effecting CLI script, including a `process.exit`
@@ -23,51 +25,12 @@ import { fileURLToPath } from 'node:url';
 // file's target and syncPairs entry. checkFileSets now fails closed on any
 // such collision instead of guessing which path a basename "really" refers
 // to.
+//
+// `fixtureEnv()` (sanitized git env so this subprocess never touches the
+// host repo's GIT_DIR / ignore config) lives in `./test-utils.mts`, shared
+// with `tests/sync-docs.test.mts`'s own git-backed fixture (#1703).
 
 const REPO_ROOT = fileURLToPath(new URL('../', import.meta.url));
-
-// Fixture invariant: fixture git processes (and the audit-docs.mjs
-// subprocess, which itself shells out to `git ls-files`) must never read
-// the ambient GIT_DIR / GIT_INDEX_FILE / GIT_WORK_TREE state. A caller that
-// runs this suite from inside a git hook exports those variables, and an
-// unsanitized fixture would then operate on (and could mutate) the host
-// repository instead of the temp fixture, despite `cwd` pointing at the
-// fixture. Same pattern as tests/worktree-guard-hook.test.mts.
-//
-// `git ls-files --exclude-standard` also honors `core.excludesFile`, which
-// git resolves from the global/system config file *or*, when that key is
-// entirely unset (as it is once GIT_CONFIG_GLOBAL/SYSTEM point at
-// /dev/null below), falls back to git's own hardcoded default
-// `$XDG_CONFIG_HOME/git/ignore`. An operator's real personal ignore file
-// there can exclude fixture paths for reasons that have nothing to do with
-// this suite (for example a `.claude/*` entry with a narrower allowlist
-// than this fixture's directory names need), silently dropping fixture
-// files from `git ls-files` and making the suite flaky depending on who
-// runs it. Force `core.excludesFile` itself to `/dev/null` via the
-// `GIT_CONFIG_COUNT`/`GIT_CONFIG_KEY_n`/`GIT_CONFIG_VALUE_n` env
-// injection (which git honors regardless of file-based config, and unlike
-// leaving the key unset, does not trigger the XDG-default fallback) so
-// fixture file discovery can never be influenced by the host's ignore
-// patterns.
-function fixtureEnv(): NodeJS.ProcessEnv {
-  const env = { ...process.env };
-  for (const key of Object.keys(env)) {
-    if (key.startsWith('GIT_CONFIG')) {
-      delete env[key];
-    }
-  }
-  delete env.GIT_DIR;
-  delete env.GIT_INDEX_FILE;
-  delete env.GIT_WORK_TREE;
-  delete env.GIT_COMMON_DIR;
-  delete env.GIT_OBJECT_DIRECTORY;
-  env.GIT_CONFIG_GLOBAL = devNull;
-  env.GIT_CONFIG_SYSTEM = devNull;
-  env.GIT_CONFIG_COUNT = '1';
-  env.GIT_CONFIG_KEY_0 = 'core.excludesFile';
-  env.GIT_CONFIG_VALUE_0 = devNull;
-  return env;
-}
 
 interface RunResult {
   status: number;
