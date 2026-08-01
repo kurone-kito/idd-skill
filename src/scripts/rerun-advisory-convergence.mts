@@ -982,6 +982,10 @@ interface RerunPlanArgs {
   repo: string;
   now: string;
   help: boolean;
+  /** When `true`, execute the computed plan's rerun-eligible instances
+   * via `gh run rerun` instead of only diagnosing them. See
+   * {@link applyRerunPlan}. */
+  apply: boolean;
 }
 
 /** A conservative GitHub owner/repo identifier character class --
@@ -1062,13 +1066,21 @@ export function parseArgs(argv: string[]): RerunPlanArgs {
       repo: { type: 'string' },
       now: { type: 'string' },
       help: { type: 'boolean', short: 'h' },
+      apply: { type: 'boolean' },
     },
     strict: true,
     allowPositionals: false,
   });
 
   if (values.help) {
-    return { prNumber: null, owner: '', repo: '', now: '', help: true };
+    return {
+      prNumber: null,
+      owner: '',
+      repo: '',
+      now: '',
+      help: true,
+      apply: false,
+    };
   }
 
   const owner = String(values.owner ?? '').trim();
@@ -1114,6 +1126,7 @@ export function parseArgs(argv: string[]): RerunPlanArgs {
     repo,
     now: String(values.now ?? '').trim(),
     help: false,
+    apply: Boolean(values.apply),
   };
 }
 
@@ -1255,17 +1268,28 @@ export function buildRerunPlanTextSections(
 
 function printHelp(): void {
   process.stdout.write(`Usage:
-  node scripts/rerun-advisory-convergence.mjs --pr <number> [--owner <owner> --repo <repo>] [--now <ISO8601>] [--help]
+  node scripts/rerun-advisory-convergence.mjs --pr <number> [--owner <owner> --repo <repo>] [--now <ISO8601>] [--apply] [--help]
 
-Read-only: fetches every "${RERUN_PLAN_CHECK_NAME}" check-run instance for
-the PR's current HEAD SHA (commit check-runs API, paged -- not the
-recent-runs list, which can page the target run out of view), classifies
-each as pass / pending / bot-gated-skip / unresolved / rerun-eligible, and
-prints the ordered sequential "gh run rerun <id>" recovery plan for the
-rerun-eligible instances (each command includes "-R <owner>/<repo>" when
-the repository is known, so the plan is safe to run outside this
-checkout). Never calls "gh run rerun" (or any other mutating command)
-itself.
+By default (without --apply): read-only. Fetches every
+"${RERUN_PLAN_CHECK_NAME}" check-run instance for the PR's current HEAD SHA
+(commit check-runs API, paged -- not the recent-runs list, which can page
+the target run out of view), classifies each as pass / pending /
+bot-gated-skip / unresolved / rerun-eligible, and prints the ordered
+sequential "gh run rerun <id>" recovery plan for the rerun-eligible
+instances (each command includes "-R <owner>/<repo>" when the repository
+is known, so the plan is safe to run outside this checkout). Never calls
+"gh run rerun" (or any other mutating command) itself.
+
+With --apply: after printing the same diagnostic plan as above, executes
+it -- "gh run rerun"-ing each rerun-eligible (never bot-gated-skip or
+rerun-budget-held) instance one at a time, waiting for each to reach a
+terminal state before starting the next, exactly as "planCaveat" already
+documents. Prefers the recovery-refresh plan first when one exists,
+matching idd-ci.instructions.md's documented recovery order. After each
+rerun, the plan is recomputed from fresh evidence and the loop stops early
+as soon as it resolves (no rerun-eligible or recovery-refresh instance
+remains) instead of running the rest of the original plan. A final summary
+of what ran and whether the target state resolved is printed to stderr.
 
 --owner and --repo must be given together (to inspect a PR outside the
 current checkout) or omitted together (to auto-detect the current
@@ -1274,12 +1298,14 @@ checkout's own repository) -- providing only one is rejected.
 Honors the inspected repository's configured ciWait.rerunPolicy: when
 it is "hold", both the rerun plan and the recovery-refresh plan stay
 empty (with a notice explaining why) instead of recommending reruns a
-repository has deliberately opted out of.
+repository has deliberately opted out of -- --apply then has nothing
+eligible to execute either.
 
 On a normal (non-help) run, stdout carries ONLY the JSON plan document
 (safe to pipe into "jq" or similar); the human-readable recovery-plan
-summary is printed to stderr. (This --help text itself is the one
-exception: it is plain usage text on stdout, not JSON.)
+summary (and, under --apply, the final apply summary) is printed to
+stderr. (This --help text itself is the one exception: it is plain usage
+text on stdout, not JSON.)
 `);
 }
 
@@ -1302,10 +1328,14 @@ const defaultDeps: RerunPlanDeps = { collect: collectFromGitHub };
 export function runRerunAdvisoryConvergence(
   argv: string[],
   deps: RerunPlanDeps = defaultDeps,
-): { plan: RerunAdvisoryConvergencePlan | null; help: boolean } {
+): {
+  plan: RerunAdvisoryConvergencePlan | null;
+  help: boolean;
+  args: RerunPlanArgs;
+} {
   const args = parseArgs(argv);
   if (args.help) {
-    return { plan: null, help: true };
+    return { plan: null, help: true, args };
   }
   if (!args.prNumber) {
     throw new Error('missing required --pr <number> argument');
@@ -1313,7 +1343,120 @@ export function runRerunAdvisoryConvergence(
 
   const { input, options } = deps.collect(args);
   const plan = computeRerunPlan(input, options);
-  return { plan, help: false };
+  return { plan, help: false, args };
+}
+
+// --- --apply: execute the plan's rerun-eligible instances ---------------
+
+/** Safety bound on how many `gh run rerun` invocations {@link
+ * applyRerunPlan} will execute in a single call, guarding against an
+ * unexpected oscillating state (a fresh rerun-eligible instance appearing
+ * after every rerun) turning into an unbounded loop. Comfortably above
+ * any real plan observed in dogfooding (5 stale instances was the largest
+ * single-PR case motivating #1766). */
+const MAX_APPLY_RERUNS = 20;
+
+/** One `gh run rerun` invocation `applyRerunPlan` actually executed. */
+export interface RerunApplyExecutedEntry {
+  runId: string;
+  command: string;
+  /** Which plan section this entry came from -- `recoveryRefreshPlan` is
+   * preferred first when both are non-empty, matching {@link
+   * describeRecoveryRefreshHeader}'s documented recovery order. */
+  section: 'plan' | 'recoveryRefreshPlan';
+}
+
+/** Result of {@link applyRerunPlan}. */
+export interface RerunApplyResult {
+  executed: RerunApplyExecutedEntry[];
+  /** The plan as last recomputed (or the initial plan, unchanged, if
+   * nothing was ever executed). */
+  finalPlan: RerunAdvisoryConvergencePlan;
+  /** `true` when the loop stopped because recomputing found nothing left
+   * to rerun (both `plan` and `recoveryRefreshPlan` empty) -- the "target
+   * state resolved" signal from #1766's acceptance criteria, expressed as
+   * this helper's own check-name rollup state (an alternative the issue
+   * explicitly allows in place of a separate `mergeStateStatus` fetch,
+   * and one this helper already has every input to compute without a new
+   * dependency). `false` when {@link MAX_APPLY_RERUNS} was reached with
+   * instances still outstanding. */
+  resolved: boolean;
+}
+
+/** Dependencies injected by tests; production defaults perform real I/O
+ * (see {@link buildProductionApplyDeps}). Mirrors {@link RerunPlanDeps}'s
+ * DI pattern. */
+export interface RerunApplyDeps {
+  /** Executes one plan command (`gh run rerun <id> [-R owner/repo]`) and
+   * blocks until that run reaches a terminal state, regardless of its own
+   * conclusion -- {@link recomputePlan} is the authoritative signal for
+   * whether the rerun actually helped, not this call's own outcome. */
+  rerunAndWait: (command: RerunPlanCommand) => void;
+  /** Re-fetches evidence and recomputes the plan from scratch, so each
+   * loop iteration's decision reflects live state instead of the
+   * snapshot the loop started with. */
+  recomputePlan: () => RerunAdvisoryConvergencePlan;
+}
+
+/**
+ * Execute `initialPlan`'s rerun-eligible instances one at a time, waiting
+ * for each to complete and recomputing the plan before deciding whether
+ * to continue. Pure aside from the injected `deps` (no direct I/O of its
+ * own), mirroring {@link computeRerunPlan}'s own separation of policy
+ * from I/O -- directly unit-testable with a fake `deps`, no network
+ * dependency (#1766 acceptance criteria).
+ *
+ * Prefers `recoveryRefreshPlan`'s next entry over `plan`'s whenever both
+ * are non-empty, matching {@link describeRecoveryRefreshHeader}'s
+ * documented recovery order (try the recovery-refresh rerun first; only
+ * fall back to the sequential plan if it does not clear the rollup).
+ * `bot-gated-skip` and rerun-budget-held instances are never candidates
+ * here: neither `plan` nor `recoveryRefreshPlan` ever contains them (see
+ * {@link computeRerunPlan}), so this loop cannot reach them regardless of
+ * `deps.recomputePlan`'s output.
+ */
+export function applyRerunPlan(
+  initialPlan: RerunAdvisoryConvergencePlan,
+  deps: RerunApplyDeps,
+): RerunApplyResult {
+  const executed: RerunApplyExecutedEntry[] = [];
+  let plan = initialPlan;
+
+  for (let attempt = 0; attempt < MAX_APPLY_RERUNS; attempt += 1) {
+    const fromRefresh = plan.recoveryRefreshPlan[0];
+    const next = fromRefresh ?? plan.plan[0];
+    if (!next) {
+      return { executed, finalPlan: plan, resolved: true };
+    }
+    const section: RerunApplyExecutedEntry['section'] = fromRefresh
+      ? 'recoveryRefreshPlan'
+      : 'plan';
+    deps.rerunAndWait(next);
+    executed.push({ runId: next.runId, command: next.command, section });
+    plan = deps.recomputePlan();
+  }
+
+  return { executed, finalPlan: plan, resolved: false };
+}
+
+/**
+ * Human-readable final summary for `--apply`, printed to stderr after
+ * {@link applyRerunPlan} finishes. Pure and directly unit-testable,
+ * mirroring {@link buildRerunPlanTextSections} / {@link
+ * describeOutstandingStates} rather than being reachable only through the
+ * CLI entry point.
+ */
+export function formatApplySummary(result: RerunApplyResult): string {
+  const lines = [`--apply: executed ${result.executed.length} rerun(s).`];
+  for (const [index, entry] of result.executed.entries()) {
+    lines.push(`  ${index + 1}. [${entry.section}] ${entry.command}`);
+  }
+  lines.push(
+    result.resolved
+      ? 'Target state resolved: no rerun-eligible or recovery-refresh instance remains.'
+      : `Target state NOT resolved after ${MAX_APPLY_RERUNS} rerun(s) -- instances still remain. Re-run this helper to continue, or investigate manually.`,
+  );
+  return lines.join('\n');
 }
 
 // --- Production I/O: fetch check-run/run evidence via `gh` --------------
@@ -1346,6 +1489,9 @@ interface RawWorkflowRunPayload {
   /** 1 for the original run; increments on the SAME run id after `gh run
    * rerun` -- see {@link RerunPlanRawInstance.runAttempt}. */
   run_attempt?: number | null;
+  /** Consulted only by {@link waitForNewAttempt} (the `--apply` polling
+   * loop); every other reader of this payload shape ignores it. */
+  status?: string | null;
 }
 
 /**
@@ -1801,13 +1947,149 @@ function collectFromGitHub(args: RerunPlanArgs): {
   };
 }
 
+/** Polling interval for {@link waitForNewAttempt}. A synchronous sleep
+ * (`Atomics.wait` on a throwaway `SharedArrayBuffer`, not a subprocess),
+ * so this file can stay fully synchronous like every other helper here. */
+const APPLY_POLL_INTERVAL_MS = 5_000;
+
+/** Safety bound: {@link waitForNewAttempt} fails closed (throws) instead
+ * of polling forever when a rerun never reaches a new completed attempt
+ * within this window. A workflow run can legitimately take several
+ * minutes, unlike this file's other quick read-only `gh` calls (all
+ * bounded by {@link GH_TEXT_LOOP_TIMEOUT_OPTIONS}'s 30s). */
+const APPLY_POLL_TIMEOUT_MS = 15 * 60_000;
+
+function sleepSync(ms: number): void {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+/**
+ * Blocks until `runId` (within `owner`/`repo`) reports BOTH a
+ * `run_attempt` strictly greater than `priorAttempt` AND
+ * `status === 'completed'` -- i.e. the NEW attempt `gh run rerun` just
+ * requested has actually finished, never a stale read of the attempt
+ * that existed before the rerun.
+ *
+ * Deliberately does not shell out to `gh run watch`: that command's very
+ * first status read can race a just-issued `gh run rerun` -- GitHub's
+ * backend has not necessarily flipped the run's `status` off its
+ * PRE-rerun `completed` value by the time `gh run watch` takes its first
+ * look, which would make the caller's wait return instantly against the
+ * OLD attempt instead of the new one, silently defeating the
+ * one-at-a-time, wait-for-completion guarantee `--apply` exists to
+ * provide (the exact failure mode `planCaveat`'s ordering rule protects
+ * against). Comparing `run_attempt` against the value captured
+ * immediately BEFORE `gh run rerun` closes that race by construction: a
+ * stale `completed` read is correctly recognized as still describing the
+ * OLD attempt, and polling continues. Reuses the same `gh api
+ * repos/{owner}/{repo}/actions/runs/{run_id}` shape
+ * (`RawWorkflowRunPayload`) `collectFromGitHub`'s own per-run lookup loop
+ * already parses.
+ */
+function waitForNewAttempt(
+  owner: string,
+  repo: string,
+  runId: string,
+  priorAttempt: number | null,
+): void {
+  const deadline = Date.now() + APPLY_POLL_TIMEOUT_MS;
+  for (;;) {
+    const payload = JSON.parse(
+      ghText(
+        ['api', `repos/${owner}/${repo}/actions/runs/${runId}`],
+        GH_TEXT_LOOP_TIMEOUT_OPTIONS,
+      ),
+    ) as RawWorkflowRunPayload;
+    const attempt =
+      typeof payload.run_attempt === 'number' ? payload.run_attempt : null;
+    const isNewAttempt =
+      priorAttempt === null || (attempt !== null && attempt > priorAttempt);
+    if (isNewAttempt && payload.status === 'completed') {
+      return;
+    }
+    if (Date.now() >= deadline) {
+      throw new Error(
+        `timed out waiting for run ${runId} (${owner}/${repo}) to complete a new attempt after rerun`,
+      );
+    }
+    sleepSync(APPLY_POLL_INTERVAL_MS);
+  }
+}
+
+/** Resolves `{owner, repo}` the same way {@link collectFromGitHub} does
+ * (explicit `--owner`/`--repo` first, else `gh repo view` auto-detection)
+ * -- duplicated as these two lines rather than extracted into a shared
+ * helper `collectFromGitHub` also calls, since that function's own
+ * structure has already been shaped by several rounds of review (#1434)
+ * and splitting it now for this narrow reuse is not worth the regression
+ * risk. */
+function resolveOwnerRepo(args: RerunPlanArgs): {
+  owner: string;
+  repo: string;
+} {
+  const owner =
+    args.owner ||
+    ghText(
+      ['repo', 'view', '--json', 'owner', '--jq', '.owner.login'],
+      GH_TEXT_LOOP_TIMEOUT_OPTIONS,
+    );
+  const repo =
+    args.repo ||
+    ghText(
+      ['repo', 'view', '--json', 'name', '--jq', '.name'],
+      GH_TEXT_LOOP_TIMEOUT_OPTIONS,
+    );
+  return { owner, repo };
+}
+
+/** Production {@link RerunApplyDeps}: a real `gh run rerun` plus {@link
+ * waitForNewAttempt} polling, and a fresh {@link collectFromGitHub} +
+ * {@link computeRerunPlan} for `recomputePlan`. `rerunAndWait` never
+ * swallows a failure -- unlike this file's many read-only lookups, a
+ * mutating `gh run rerun` (or a poll that never observes a new completed
+ * attempt) genuinely failing is worth surfacing to the operator, not
+ * silently treating as "no change" (matching `ghText`'s own
+ * throw-by-default contract). `owner`/`repo` are resolved once, up
+ * front, and reused for every rerun in the loop -- `recomputePlan` still
+ * re-resolves them itself on each call (via its own fresh
+ * `collectFromGitHub`), which is redundant but harmless (two cheap `gh
+ * repo view` calls) and keeps `recomputePlan` a self-contained unit. */
+function buildProductionApplyDeps(args: RerunPlanArgs): RerunApplyDeps {
+  const { owner, repo } = resolveOwnerRepo(args);
+  return {
+    rerunAndWait: (command) => {
+      const priorPayload = JSON.parse(
+        ghText(
+          ['api', `repos/${owner}/${repo}/actions/runs/${command.runId}`],
+          GH_TEXT_LOOP_TIMEOUT_OPTIONS,
+        ),
+      ) as RawWorkflowRunPayload;
+      const priorAttempt =
+        typeof priorPayload.run_attempt === 'number'
+          ? priorPayload.run_attempt
+          : null;
+      ghText(
+        ['run', 'rerun', command.runId, '-R', `${owner}/${repo}`],
+        GH_TEXT_LOOP_TIMEOUT_OPTIONS,
+      );
+      waitForNewAttempt(owner, repo, command.runId, priorAttempt);
+    },
+    recomputePlan: () => {
+      const { input, options } = collectFromGitHub(args);
+      return computeRerunPlan(input, options);
+    },
+  };
+}
+
 // CLI: emit the plan as JSON plus a human-readable ordered command list.
 // Guarded behind `import.meta.main` (Node's own native CLI-entry-point
 // detection, matching every other already-migrated helper in this repo)
 // so importing this module (for unit tests) never parses process.argv,
 // prints usage, or makes a `gh` call.
 if (import.meta.main) {
-  const { plan, help } = runRerunAdvisoryConvergence(process.argv.slice(2));
+  const { plan, help, args } = runRerunAdvisoryConvergence(
+    process.argv.slice(2),
+  );
   if (help) {
     printHelp();
   } else if (plan) {
@@ -1865,6 +2147,14 @@ if (import.meta.main) {
     ) {
       // Genuinely nothing to report at all.
       process.stderr.write(`\n${describeNoActionState(plan)}\n`);
+    }
+    // --apply executes AFTER the full read-only diagnosis above has
+    // already printed -- an operator (or a log) always sees the same
+    // diagnostic output whether or not --apply was passed, with the
+    // execution summary appended, never substituted in its place.
+    if (args.apply) {
+      const applyResult = applyRerunPlan(plan, buildProductionApplyDeps(args));
+      process.stderr.write(`\n${formatApplySummary(applyResult)}\n`);
     }
   }
   // Set exitCode and let the process end naturally instead of calling
