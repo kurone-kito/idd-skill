@@ -250,4 +250,10 @@ jobs:
       - name: Run advisory-convergence verdict (--assert)
         env:
           GH_TOKEN: ${{ github.token }}
-        run: node scripts/advisory-convergence.mjs --pr ${{ github.event.pull_request.number || inputs.pr_number }} --assert
+          # workflow_dispatch's `pr_number` input is `type: number` in the
+          # UI, but that constraint is not strictly enforced for direct API
+          # dispatches, so route it through env: and reference it as a
+          # quoted shell variable rather than interpolating the `${{ }}`
+          # expression directly into the run: script.
+          PR_NUMBER: ${{ github.event.pull_request.number || inputs.pr_number }}
+        run: node scripts/advisory-convergence.mjs --pr "$PR_NUMBER" --assert
