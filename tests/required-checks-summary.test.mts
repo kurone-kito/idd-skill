@@ -76,6 +76,104 @@ test('an app-pinned classic required check with no context is not no-required-ch
   assert.equal(r.noRequiredChecksConfigured, false);
 });
 
+// #1689: a named, present, and pass-equivalent required check whose
+// ruleset entry carries an `app_id`/`integration_id` (source-pinned)
+// downgrades to `unknown` by default -- this codebase fetches no
+// producer-identity data for a live check-run, so it cannot verify the
+// pinning -- but the `ciGate.trustSourcePinnedRequiredChecks` opt-in lets
+// a repository operator who has verified the pinning out-of-band treat it
+// as trusted. Without the opt-in, `isPreMergeCiAllPassing` (protocol-
+// helpers.mts) has no passing path at all for this shape; see the
+// `sourcePinnedRequiredCheckNames` field this test also locks.
+test('a source-pinned but present-and-passing required check downgrades to unknown by default, and the trust opt-in restores success', () => {
+  const rules = [
+    {
+      type: 'required_status_checks',
+      parameters: {
+        required_status_checks: [{ context: 'lint', app_id: 1 }],
+      },
+    },
+  ];
+  const untrusted = summarizeRequiredChecks(
+    [{ name: 'lint', state: 'SUCCESS' }],
+    rules,
+  );
+  assert.equal(untrusted.status, 'unknown');
+  assert.equal(untrusted.requiredChecksPassing, false);
+  assert.deepEqual(untrusted.sourcePinnedRequiredCheckNames, ['lint']);
+  assert.equal(untrusted.sourcePinnedUnresolved, false);
+
+  const trusted = summarizeRequiredChecks(
+    [{ name: 'lint', state: 'SUCCESS' }],
+    rules,
+    {},
+    { trustSourcePinnedRequiredChecks: true },
+  );
+  assert.equal(trusted.status, 'success');
+  assert.equal(trusted.requiredChecksPassing, true);
+  assert.deepEqual(trusted.sourcePinnedRequiredCheckNames, []);
+  assert.equal(trusted.sourcePinnedUnresolved, false);
+});
+
+// #1689: a `workflows` rule (no enumerable check name) coexisting with a
+// separate, named-and-unpinned required check must still surface
+// sourcePinnedUnresolved: true even though sourcePinnedRequiredCheckNames
+// is empty -- the two fields are independently meaningful, and a caller
+// that only checks the names array would wrongly fall back to a generic
+// detail for this shape. The opt-in must not clear it either: there is no
+// check name to correlate the workflows-rule pinning with a live run.
+test('an unnamed workflows-rule pin coexisting with a named-and-unpinned check reports sourcePinnedUnresolved, and the opt-in does not clear it', () => {
+  const rules = [
+    {
+      type: 'required_status_checks',
+      parameters: { required_status_checks: [{ context: 'lint' }] },
+    },
+    { type: 'workflows', parameters: {} },
+  ];
+  const untrusted = summarizeRequiredChecks(
+    [{ name: 'lint', state: 'SUCCESS' }],
+    rules,
+  );
+  assert.equal(untrusted.status, 'unknown');
+  assert.equal(untrusted.requiredChecksPassing, false);
+  assert.deepEqual(untrusted.sourcePinnedRequiredCheckNames, []);
+  assert.equal(untrusted.sourcePinnedUnresolved, true);
+
+  const trusted = summarizeRequiredChecks(
+    [{ name: 'lint', state: 'SUCCESS' }],
+    rules,
+    {},
+    { trustSourcePinnedRequiredChecks: true },
+  );
+  assert.equal(trusted.status, 'unknown');
+  assert.equal(trusted.requiredChecksPassing, false);
+  assert.equal(trusted.sourcePinnedUnresolved, true);
+});
+
+// The opt-in must not flip a genuinely failing source-pinned required
+// check to passing -- it only removes the unconditional downgrade of an
+// otherwise-`success` classification, never overrides a real failure.
+test('the trust opt-in does not mask a genuinely failing source-pinned required check', () => {
+  const rules = [
+    {
+      type: 'required_status_checks',
+      parameters: {
+        required_status_checks: [{ context: 'lint', app_id: 1 }],
+      },
+    },
+  ];
+  const r = summarizeRequiredChecks(
+    [{ name: 'lint', state: 'FAILURE' }],
+    rules,
+    {},
+    { trustSourcePinnedRequiredChecks: true },
+  );
+  assert.equal(r.status, 'failed');
+  assert.equal(r.requiredChecksPassing, false);
+  assert.deepEqual(r.sourcePinnedRequiredCheckNames, []);
+  assert.equal(r.sourcePinnedUnresolved, false);
+});
+
 // #1377: a masked-403-as-404 on the branch-protection or ruleset reads must
 // not fall through to "no required checks configured" just because the
 // (fallback-empty) reads found nothing — that is indistinguishable from a

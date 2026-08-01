@@ -306,6 +306,8 @@
       ],
       "missingRequiredCheckNames": [],
       "discardedNonPassingRequiredChecks": [],
+      "sourcePinnedRequiredCheckNames": [],
+      "sourcePinnedUnresolved": false,
       "checks": [
         {
           "name": "lint",

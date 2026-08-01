@@ -244,6 +244,8 @@
         "test"
       ],
       "discardedNonPassingRequiredChecks": [],
+      "sourcePinnedRequiredCheckNames": [],
+      "sourcePinnedUnresolved": false,
       "checks": [
         {
           "name": "lint",
