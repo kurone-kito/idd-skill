@@ -1,5 +1,5 @@
 {
-  "_comment": "Documentation audit contract. Use exact for mirrored files, concreted when the source becomes the target after listed replacements, and structure when the files intentionally differ but must keep the same heading map.",
+  "_comment": "Documentation audit contract. Use exact for mirrored files, concreted when the source becomes the target after listed replacements, and structure when the files intentionally differ but must keep the same heading map. Always edit the source side of an exact/concreted pair -- sync-docs.mjs regenerates target from source and, since #1765, refuses to overwrite a target carrying an uncommitted local edit without --force.",
   "readmePairs": [
     {
       "id": "root-readme",
