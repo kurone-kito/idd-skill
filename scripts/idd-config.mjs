@@ -64,6 +64,13 @@ export const DEFAULT_POLICY_CONFIG_PATH = '.github/idd/config.json';
  *   "repository has no IDD config" case. A syntax error, permission error,
  *   or any other read failure on the default path still throws: an
  *   existing-but-broken config is never silently equivalent to "absent".
+ * - A file that parses as valid JSON but whose top-level value is not a
+ *   plain object (`null`, an array, a string, a number, a boolean) is
+ *   rejected the same way as a syntax error, for both the explicit and
+ *   default path. `JSON.parse('null')` succeeds and returns `null`, which
+ *   — left unchecked — would be indistinguishable from this function's own
+ *   "absent" sentinel and silently re-open exactly the fail-open gap this
+ *   function exists to close.
  *
  * Callers keep their own shape normalization (field extraction, defaults
  * for individual fields, etc.) on top of the raw `config` this returns —
@@ -80,7 +87,17 @@ export function loadPolicyConfig(policyPath) {
     explicit ? policyPath : DEFAULT_POLICY_CONFIG_PATH,
   );
   try {
-    return { path, config: JSON.parse(readFileSync(path, 'utf8')) };
+    const parsed = JSON.parse(readFileSync(path, 'utf8'));
+    if (!isPlainObject(parsed)) {
+      // A syntactically-valid top-level scalar/array/`null` is still a
+      // malformed *policy config* -- reject it the same way a syntax error
+      // is rejected below, rather than letting `JSON.parse('null')` in
+      // particular masquerade as this function's own "absent" sentinel.
+      throw new Error(
+        `expected a JSON object at the top level, got ${describeJsonValueKind(parsed)}`,
+      );
+    }
+    return { path, config: parsed };
   } catch (error) {
     if (!explicit && isEnoentError(error)) {
       return { path, config: null };
@@ -88,6 +105,20 @@ export function loadPolicyConfig(policyPath) {
     const message = error instanceof Error ? error.message : String(error);
     throw new Error(`failed to load policy from ${path}: ${message}`);
   }
+}
+/** True when `value` is a non-null, non-array JSON object. */
+function isPlainObject(value) {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+/** Short human-readable description of a non-object parsed JSON value. */
+function describeJsonValueKind(value) {
+  if (value === null) {
+    return 'null';
+  }
+  if (Array.isArray(value)) {
+    return 'an array';
+  }
+  return `a ${typeof value}`;
 }
 /** True when `error` is a Node.js filesystem error with `code: 'ENOENT'`. */
 function isEnoentError(error) {

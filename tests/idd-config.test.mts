@@ -144,6 +144,56 @@ test('loadPolicyConfig explicit path: an empty string is treated as "no explicit
   });
 });
 
+// Regression coverage for a Copilot review finding on PR #1776:
+// `JSON.parse('null')` succeeds (it does not throw), so an existing config
+// file whose top-level JSON value is `null` (or any other non-object, e.g.
+// an array) previously flowed through the success path unchecked and
+// returned `{ config: null }` -- indistinguishable from this function's own
+// "absent" sentinel, silently reopening the fail-open gap this function
+// exists to close.
+
+test('loadPolicyConfig default path: throws on a top-level JSON null (existing file, not ENOENT)', () => {
+  withSandboxCwd((sandbox) => {
+    writeConfig(sandbox, 'null');
+    assert.throws(
+      () => loadPolicyConfig(),
+      /failed to load policy from .*config\.json: expected a JSON object at the top level, got null/,
+    );
+  });
+});
+
+test('loadPolicyConfig default path: throws on a top-level JSON array', () => {
+  withSandboxCwd((sandbox) => {
+    writeConfig(sandbox, '[]');
+    assert.throws(
+      () => loadPolicyConfig(),
+      /expected a JSON object at the top level, got an array/,
+    );
+  });
+});
+
+test('loadPolicyConfig explicit path: throws on a top-level JSON null, naming the path', () => {
+  withSandboxCwd((sandbox) => {
+    const nullPath = join(sandbox, 'null-policy.json');
+    writeFileSync(nullPath, 'null');
+    assert.throws(
+      () => loadPolicyConfig('null-policy.json'),
+      /failed to load policy from .*null-policy\.json: expected a JSON object at the top level, got null/,
+    );
+  });
+});
+
+test('loadPolicyConfig explicit path: throws on a top-level JSON number', () => {
+  withSandboxCwd((sandbox) => {
+    const numberPath = join(sandbox, 'number-policy.json');
+    writeFileSync(numberPath, '42');
+    assert.throws(
+      () => loadPolicyConfig('number-policy.json'),
+      /expected a JSON object at the top level, got a number/,
+    );
+  });
+});
+
 // Permission-denied is a distinct failure from ENOENT and must throw on the
 // default path too (never silently treated as "absent"). Skipped when
 // running as root or on a platform where chmod does not restrict the
