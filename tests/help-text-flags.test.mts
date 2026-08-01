@@ -80,11 +80,13 @@ function extractFlagSpecBlock(src: string, helper: string): string {
  * deliberately requires the quote+colon shape (not a bare substring scan
  * like flag-name-matrix.test.mts's `includesQuotedFlag`) so a flag name
  * that happens to appear inside a `default:` value string is never
- * mistaken for a declared key.
+ * mistaken for a declared key. Not anchored to line start, so two keys
+ * sharing one line (unlikely with this repo's formatter, but not
+ * statically guaranteed) are both still collected.
  */
 function extractDeclaredFlags(specBlock: string): Set<string> {
   const flags = new Set<string>();
-  const flagKeyPattern = /^\s*['"](--[a-z0-9][a-z0-9-]*)['"]\s*:/gm;
+  const flagKeyPattern = /['"](--[a-z0-9][a-z0-9-]*)['"]\s*:/g;
   let match: RegExpExecArray | null = flagKeyPattern.exec(specBlock);
   while (match !== null) {
     flags.add(match[1]);
@@ -101,7 +103,10 @@ function extractDeclaredFlags(specBlock: string): Set<string> {
  */
 function extractDocumentedFlags(helpText: string): Set<string> {
   const flags = new Set<string>();
-  const flagTokenPattern = /--[a-z][a-z0-9]*(?:-[a-z0-9]+)*/g;
+  // Negative lookbehind excludes a hyphen or word character immediately
+  // before the `--`, so a prose token like `foo--bar` can't be mistaken for
+  // a documented `--bar` flag.
+  const flagTokenPattern = /(?<![\w-])--[a-z][a-z0-9]*(?:-[a-z0-9]+)*/g;
   let match: RegExpExecArray | null = flagTokenPattern.exec(helpText);
   while (match !== null) {
     flags.add(match[0]);
@@ -246,6 +251,14 @@ test('extractDeclaredFlags reads quoted dashed keys, ignoring a same-named defau
   );
 });
 
+test('extractDeclaredFlags collects two keys sharing one line', () => {
+  const specBlock = `'--pr': { type: 'string' }, '--repo': { type: 'string' },`;
+  assert.deepEqual(
+    [...extractDeclaredFlags(specBlock)].sort(),
+    ['--pr', '--repo'].sort(),
+  );
+});
+
 test('extractDocumentedFlags reads every --dashed token in prose, not only the Usage line', () => {
   const helpText = [
     'Usage:',
@@ -258,6 +271,11 @@ test('extractDocumentedFlags reads every --dashed token in prose, not only the U
     [...extractDocumentedFlags(helpText)].sort(),
     ['--old-name', '--pr'].sort(),
   );
+});
+
+test('extractDocumentedFlags ignores a --dashed token immediately preceded by a hyphen or word character', () => {
+  const helpText = 'see foo--bar for context; the real flag is --pr\n';
+  assert.deepEqual([...extractDocumentedFlags(helpText)], ['--pr']);
 });
 
 test('a flag declared but not documented is detected as drift', () => {
