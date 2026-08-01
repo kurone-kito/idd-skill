@@ -24,6 +24,7 @@ import {
   isStaleByAge,
   normalizeLinkedPrReference,
   parseClaimComment,
+  parseReleaseComment,
   resolveActiveClaim,
 } from './protocol-helpers.mts';
 
@@ -244,11 +245,13 @@ export function evaluateResumeClaimRouting(
     routeState = 'unclaimed';
     action = 're_claim';
     reason = 'no-active-claim';
-  } else if (laterCompetingClaim) {
-    routeState = 'disputed';
-    action = 'stop';
-    reason = 'later-competing-claim';
   } else if (claimIdChecked && claimIdChecked === state.activeClaim.claimId) {
+    // Owner-resume path: the checking session already proved ownership of
+    // the active claim-id. A later competing claim disputes an owner
+    // unconditionally here, regardless of the active claim's own staleness
+    // (#1687 keeps this test-locked semantic byte-identical -- only the
+    // non-owner / fresh-claim-gate path below gains a staleness escape).
+    //
     // The claim-id matches, but claim-id alone cannot distinguish a second,
     // independent activation of the same id (the sticky forced-handoff
     // adopt-verbatim collision #1522 exists to catch) -- so when both a
@@ -256,11 +259,27 @@ export function evaluateResumeClaimRouting(
     // require them to agree too. Either side being absent (no nonce posted
     // yet, or this caller never opted in) skips the comparison and keeps
     // the claim-id-only outcome, matching pre-#1522 behavior exactly.
-    if (
+    //
+    // Computed unconditionally (not only when laterCompetingClaim is falsy)
+    // so a later-competing-claim dispute can still surface a concurrent
+    // nonce mismatch in `reason` (CodeRabbit, PR #1770) -- a caller that
+    // mechanically releases on "step 4 is the sole failing check" must be
+    // able to tell a step-4-only dispute apart from a dispute where step 5
+    // also fails, since releasing a claim-id/agent-id pair that a second,
+    // legitimate activation shares would evict that other session.
+    const nonceMismatch =
       activationNonceWinner !== null &&
       nonceChecked &&
-      activationNonceWinner !== nonceChecked
-    ) {
+      activationNonceWinner !== nonceChecked;
+    if (laterCompetingClaim && nonceMismatch) {
+      routeState = 'disputed';
+      action = 'stop';
+      reason = 'later-competing-claim-and-activation-nonce-mismatch';
+    } else if (laterCompetingClaim) {
+      routeState = 'disputed';
+      action = 'stop';
+      reason = 'later-competing-claim';
+    } else if (nonceMismatch) {
       routeState = 'disputed';
       action = 'stop';
       reason = 'activation-nonce-mismatch';
@@ -274,9 +293,19 @@ export function evaluateResumeClaimRouting(
     action = 'stop';
     reason = 'same-second-claim-tie-break-loss';
   } else if (isStaleByAge(state.activeClaim.createdAt, nowIso, staleAgeMs)) {
+    // Non-owner path (a fresh session, or --fresh-claim-gate, which always
+    // ignores claim-id): staleness of the active claim is now evaluated
+    // BEFORE laterCompetingClaim, so a stale disputed claim still escapes to
+    // a takeover-eligible route once claim-stale-age elapses (#1687) --
+    // closing the livelock where a lost different-second claim race left the
+    // issue permanently disputed even past the 24h stale-takeover backstop.
     routeState = 'stale';
     action = 'takeover';
     reason = 'active-claim-stale';
+  } else if (laterCompetingClaim) {
+    routeState = 'disputed';
+    action = 'stop';
+    reason = 'later-competing-claim';
   } else {
     routeState = 'non_inheritable';
     action = 'stop';
@@ -709,6 +738,13 @@ function findLaterCompetingClaim(
       const claimSecond = toSecond(claim.createdAt);
       return claimSecond !== null && claimSecond > activeSecond;
     })
+    // Reconcile competitor releases (#1687): a competing claimed-by whose
+    // {agent-id}/{claim-id} pair has a later matching trusted unclaimed-by
+    // no longer counts as a live competitor -- a courteous loser that
+    // releases its raced claim must clear the dispute it created, instead
+    // of leaving the issue permanently disputed against a claim nobody
+    // holds anymore.
+    .filter((claim) => !isClaimReleased(events, claim))
     .sort((left, right) => compareIso(left.createdAt, right.createdAt));
   if (contenders.length === 0) {
     return null;
@@ -717,6 +753,46 @@ function findLaterCompetingClaim(
     claim_id: contenders[0].claimId,
     created_at: contenders[0].createdAt,
   };
+}
+
+/**
+ * True when a trusted `unclaimed-by` event releases `claim` -- its parsed
+ * `{agentId, claimId}` (via `parseReleaseComment`, which carries no
+ * timestamp of its own) matches `claim`'s, and the release event's own
+ * GitHub `created_at` (`event.createdAt`, the raw comment metadata) is
+ * strictly later than `claim.createdAt`. Uses the same `{agentId, claimId}`
+ * match as `applyClaimEvent`'s release check, but is evaluated
+ * independently here: `findLaterCompetingClaim`'s candidate
+ * never became the active claim (rule 4 of Claim-state parsing rejects a
+ * `supersedes: none` competitor while a claim already exists), so its own
+ * release never flows through `resolveActiveClaim`'s state machine and must
+ * be checked directly against the raw trusted event stream instead.
+ *
+ * Deliberately fail-closed, not a byte-identical mirror of
+ * `resolveActiveClaim`'s ordering: GitHub `created_at` is second-precision,
+ * so a claim and its release can share an identical timestamp string.
+ * `resolveActiveClaim`'s own sort breaks that tie by array/index order
+ * (effectively trusting fetch order) when resolving the *active* claim;
+ * this check requires a strictly later second instead, so an
+ * indistinguishable same-second ordering is never treated as proof of
+ * release -- the competing claim stays counted as live (the safer default)
+ * until a later, unambiguous release lands.
+ */
+function isClaimReleased(
+  events: NormalizedClaimEvent[],
+  claim: ParsedClaimMarker,
+): boolean {
+  return events.some((event) => {
+    const release = parseReleaseComment(event.body);
+    if (
+      !release ||
+      release.agentId !== claim.agentId ||
+      release.claimId !== claim.claimId
+    ) {
+      return false;
+    }
+    return compareIso(event.createdAt, claim.createdAt) > 0;
+  });
 }
 
 // `findActivationNonceWinner` moved to marker-helpers.mts (#1528) so the
