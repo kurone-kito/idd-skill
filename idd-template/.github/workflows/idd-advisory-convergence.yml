@@ -15,6 +15,14 @@ name: IDD advisory-convergence gate
 # `ubuntu-latest` + `@v4` forms rather than a repository-specific
 # pinned SHA or custom runner label, unlike this source repository's
 # own dogfooded copy at .github/workflows/idd-advisory-convergence.yml.
+concurrency:
+  cancel-in-progress: true
+  # Grouped by PR number, not github.ref: pull_request_review and
+  # pull_request_review_comment are not pull_request-family events, so
+  # github.ref does not resolve the same way for them as it does for a
+  # pull_request-only workflow. workflow_dispatch has no pull_request
+  # context either, so it falls back to its own input.
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || inputs.pr_number }}
 on:
   pull_request:
     types: [opened, reopened, synchronize]
@@ -35,6 +43,10 @@ permissions:
 jobs:
   idd-advisory-convergence:
     runs-on: ubuntu-latest
+    # Bounds pathological hangs; adjust to your own observed run duration
+    # once you have history (see idd-doctor.yml/lint.yml in the source
+    # repository for the pattern of sizing this from real run durations).
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
         with:
@@ -61,4 +73,10 @@ jobs:
           node-version: 24.x
       - env:
           GH_TOKEN: ${{ github.token }}
-        run: node scripts/advisory-convergence.mjs --pr ${{ github.event.pull_request.number || inputs.pr_number }} --assert
+          # workflow_dispatch's `pr_number` input is `type: number` in the
+          # UI, but that constraint is not strictly enforced for direct API
+          # dispatches, so route it through env: and reference it as a
+          # quoted shell variable rather than interpolating the `${{ }}`
+          # expression directly into the run: script.
+          PR_NUMBER: ${{ github.event.pull_request.number || inputs.pr_number }}
+        run: node scripts/advisory-convergence.mjs --pr "$PR_NUMBER" --assert

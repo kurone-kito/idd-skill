@@ -18,6 +18,7 @@ import {
   POLICY_DEFAULTS,
   parseProjectCommandRows,
 } from './policy-helpers.mjs';
+import { resolveTrustedMarkerActors } from './protocol-helpers.mjs';
 import { loadJson, validate } from './validate-schemas.mjs';
 
 const WORKSHOP_ENTRY_POINTS = ['README.md', 'README.ja.md', 'docs/index.md'];
@@ -1616,6 +1617,32 @@ export function formatCleanupBacklogRemediation(profile) {
   }
   return `Remediation: ${docsClause} or run \`${command} ${CLEANUP_BACKLOG_REMEDIATION_ARGS}\`.`;
 }
+/**
+ * Trusted authors for `<!-- idd-cleanup-evidence: ... -->` comments: the
+ * repository's configured `trustedMarkerActors` (`.github/idd/config.json`)
+ * plus `github-actions[bot]`, the identity `post-merge-cleanup.yml` posts
+ * under via `GITHUB_TOKEN`. Any commenter outside this set can pre-post the
+ * marker prefix on a public repo, so an untrusted-author match must never
+ * count as genuine cleanup evidence -- the same trust-scoping every other
+ * IDD operational marker already applies. Fails closed to
+ * `github-actions[bot]` alone (config unreadable/malformed never widens
+ * trust).
+ */
+function readCleanupEvidenceTrustedLogins(root) {
+  let trustedMarkerActors;
+  try {
+    const config = JSON.parse(
+      readFileSync(join(root, '.github/idd/config.json'), 'utf8'),
+    );
+    trustedMarkerActors = config?.trustedMarkerActors;
+  } catch {
+    trustedMarkerActors = undefined;
+  }
+  const { actors } = resolveTrustedMarkerActors({
+    config: { trustedMarkerActors },
+  });
+  return new Set([...actors, 'github-actions[bot]']);
+}
 function checkPostMergeCleanupBacklog(root, options, report) {
   const windowDays = options.windowDays;
   const warnThreshold = options.warnThreshold;
@@ -1700,6 +1727,7 @@ function checkPostMergeCleanupBacklog(root, options, report) {
   emitCleanupBacklogProgress(
     formatCleanupBacklogScanPreamble(mergedPrs.length),
   );
+  const trustedLogins = readCleanupEvidenceTrustedLogins(root);
   const missing = [];
   const evidenceFailures = [];
   let scanned = 0;
@@ -1719,7 +1747,7 @@ function checkPostMergeCleanupBacklog(root, options, report) {
         '--paginate',
         `repos/${owner}/${repo}/issues/${number}/comments`,
         '--jq',
-        '.[] | select(.body | startswith("<!-- idd-cleanup-evidence:")) | .id',
+        '.[] | select(.body | startswith("<!-- idd-cleanup-evidence:")) | [.id, .user.login] | @tsv',
       ],
       root,
     );
@@ -1727,11 +1755,26 @@ function checkPostMergeCleanupBacklog(root, options, report) {
       evidenceFailures.push(number);
       continue;
     }
-    const matchLines = String(evidence.stdout)
+    // Only a trusted-author match counts as genuine cleanup evidence (see
+    // readCleanupEvidenceTrustedLogins) -- an untrusted commenter's
+    // pre-posted marker-prefixed comment must not suppress this backlog
+    // warning.
+    const hasTrustedEvidence = String(evidence.stdout)
       .split(/\r?\n/)
       .map((line) => line.trim())
-      .filter((line) => line.length > 0);
-    if (matchLines.length === 0) {
+      .filter((line) => line.length > 0)
+      .some((line) => {
+        const tabIndex = line.indexOf('\t');
+        if (tabIndex === -1) {
+          return false;
+        }
+        const login = line
+          .slice(tabIndex + 1)
+          .trim()
+          .toLowerCase();
+        return trustedLogins.has(login);
+      });
+    if (!hasTrustedEvidence) {
       missing.push(number);
     }
   }

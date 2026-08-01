@@ -109,6 +109,6 @@ generated copy: `node scripts/sync-docs.mjs --apply` regenerates
 derived copies and `node scripts/audit-docs.mjs --check` fails on
 drift.
 
-`.claude/skills/issue-authoring/` is a generated, byte-identical copy
-of the canonical bundle, so Claude Code auto-discovers the skill in
-this repository.
+`.claude/skills/issue-authoring/` is a generated mirror of the
+canonical bundle's Markdown files (byte-identical per file), so Claude
+Code auto-discovers the skill in this repository.
