@@ -981,7 +981,10 @@ OpenCode.
 
 - If the file already exists, append or adapt an IDD section without
   replacing unrelated repository guidance.
-- If the file is missing, create a minimal stub.
+- If the file is missing, create a minimal stub — and when a sibling
+  entry file already carries repository-specific guidance, point the
+  new file at the sibling that owns it instead of copying that
+  guidance in.
 - Only skip creating a missing root agent entry file when the operator
   explicitly opts out of adding new files.
 
