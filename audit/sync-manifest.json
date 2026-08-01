@@ -669,6 +669,43 @@
       ]
     },
     {
+      "id": "minimal-run-activation-nonce-marker",
+      "reference": ".github/instructions/idd-claim.instructions.md",
+      "target": "examples/minimal-run/activation-nonce.md",
+      "mode": "contains",
+      "requiredPatterns": [
+        "<!-- activation-nonce: \\S+ \\S+ \\S+ \\S+ -->"
+      ]
+    },
+    {
+      "id": "minimal-run-claim-marker",
+      "reference": ".github/instructions/idd-overview-core.instructions.md",
+      "target": "examples/minimal-run/claim-comment.md",
+      "mode": "contains",
+      "requiredPatterns": [
+        "<!-- claimed-by: \\S+ \\S+ supersedes: \\S+ \\S+ branch: \\S+ -->"
+      ]
+    },
+    {
+      "id": "minimal-run-heartbeat-marker",
+      "reference": ".github/instructions/idd-overview-core.instructions.md",
+      "target": "examples/minimal-run/heartbeat.md",
+      "mode": "contains",
+      "requiredPatterns": [
+        "<!-- claimed-by: \\S+ \\S+ supersedes: \\S+ \\S+ branch: \\S+ -->"
+      ]
+    },
+    {
+      "id": "minimal-run-review-snapshot-markers",
+      "reference": ".github/instructions/idd-review-snapshot.instructions.md",
+      "target": "examples/minimal-run/review-snapshot.md",
+      "mode": "contains",
+      "requiredPatterns": [
+        "<!-- review-watermark: \\S+ \\S+ \\S+ \\S+ \\S+ \\S+ -->",
+        "<!-- review-baseline: \\S+ \\S+ \\S+ -->"
+      ]
+    },
+    {
       "id": "minimize-superseded-markers-helper",
       "source": "scripts/minimize-superseded-markers.mjs",
       "target": "idd-template/scripts/minimize-superseded-markers.mjs",
