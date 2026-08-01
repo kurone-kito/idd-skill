@@ -1073,18 +1073,21 @@ when the repository is the source of a reusable IDD distribution.
 
 ## Docs Bundle Frontmatter Convention (OKF)
 
-Every page under this repository's `docs/` bundle (imported from
-`idd-template/docs/**`) carries [OKF](https://okf.md/) (Open Knowledge
-Format v0.1) frontmatter: a small `type`/`title`/`description`/`tags`
-block that a generated index table (`docs/index.md`) turns into a
-drift-guarded topic map, so an agent with no prior familiarity with the
-bundle has an entry point to read instead of listing the directory.
+Every non-reserved page under this repository's `docs/` bundle
+(imported from `idd-template/docs/**`) carries [OKF](https://okf.md/)
+(Open Knowledge Format v0.1) frontmatter — `index.md` and `log.md` are
+the reserved exceptions, see below: a small
+`type`/`title`/`description`/`tags` block that a generated index table
+(`docs/index.md`) turns into a drift-guarded topic map, so an agent
+with no prior familiarity with the bundle has an entry point to read
+instead of listing the directory.
 
 **Field profile** (four fields): `type` (required, one value from the
 closed vocabulary below), `title` (required, matches the page's `# H1`
 heading exactly), `description` (required, one sentence ending in a
-period), and `tags` (optional, a YAML list of lowercase-hyphen
-strings).
+period), and `tags` (optional, a YAML list of non-empty strings;
+lowercase-hyphen is the authoring convention, though only
+non-emptiness is mechanically enforced).
 
 **Closed `type` vocabulary**: `index`, `guide`, `concept`, `reference`,
 `workflow`, `design`, `investigation`, `tutorial`.
@@ -1102,14 +1105,15 @@ frontmatter-bearing page.
 **Deliberately not extended to `.github/instructions/**`**: instruction
 files already carry a different, consumer-specific frontmatter contract
 (`applyTo:`, `excludeAgent:`) that GitHub Copilot's custom instructions
-loader parses, so mixing in OKF keys would collide with it. Instruction
-files are also this repository's tightest byte-budget surface — every
-byte loads verbatim into an agent's context on every session (see
+loader parses, so mixing in OKF keys would collide with it (preventive;
+no observed incident yet). Instruction files are also this repository's
+tightest byte-budget surface — every byte loads verbatim into an
+agent's context on every session (see
 [Policy constants](policy-constants.md)) — so frontmatter metadata with
 no runtime value is not worth spending that budget on. Do not replicate
 this convention under your own `.github/instructions/**`; doing so
 risks breaching your own instruction bundle's byte budget for no
-retrieval benefit.
+retrieval benefit (preventive; no observed incident yet).
 
 ## Canonical Asset Map
 
