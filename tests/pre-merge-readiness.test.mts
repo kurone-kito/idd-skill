@@ -182,6 +182,8 @@ test('required check summaries block when no merge-gate policy evidence exists',
     requiredCheckNames: [],
     missingRequiredCheckNames: [],
     discardedNonPassingRequiredChecks: [],
+    sourcePinnedRequiredCheckNames: [],
+    sourcePinnedUnresolved: false,
     checks: [],
   });
 });
@@ -195,6 +197,9 @@ test('classic branch protection check metadata keeps source-pinned checks conser
 
   assert.equal(summary.status, 'unknown');
   assert.deepEqual(summary.requiredCheckNames, ['lint']);
+  // #1689: names the specific source-pinned check(s) so a blocker detail can
+  // cite the real cause instead of a generic CI message.
+  assert.deepEqual(summary.sourcePinnedRequiredCheckNames, ['lint']);
 });
 
 test('classic branch protection app_id -1 does not force source-pinned status', () => {
@@ -206,6 +211,40 @@ test('classic branch protection app_id -1 does not force source-pinned status', 
 
   assert.equal(summary.status, 'success');
   assert.deepEqual(summary.requiredCheckNames, ['lint']);
+  assert.deepEqual(summary.sourcePinnedRequiredCheckNames, []);
+});
+
+// #1689: the `ciGate.trustSourcePinnedRequiredChecks` opt-in lets a
+// repository operator who has verified out-of-band that the pinned
+// integration is the sole producer of a named required check treat its
+// green state as trusted, instead of being permanently stuck at `unknown`
+// with no passing path at all (the bug this option fixes).
+test('trustSourcePinnedRequiredChecks opts a source-pinned but present-and-passing required check into success', () => {
+  const summary = summarizeRequiredChecks(
+    [{ name: 'lint', state: 'SUCCESS', completedAt: '2026-05-12T00:32:10Z' }],
+    [],
+    { required_status_checks: { checks: [{ context: 'lint', app_id: 1 }] } },
+    { trustSourcePinnedRequiredChecks: true },
+  );
+
+  assert.equal(summary.status, 'success');
+  assert.equal(summary.requiredChecksPassing, true);
+  assert.deepEqual(summary.sourcePinnedRequiredCheckNames, []);
+});
+
+// The knob must not relax the fully-unnamed pinned case (a ruleset
+// `workflows` rule with no enumerable check name): there is no check name
+// to correlate with a live run at all, so `noRequiredChecksConfigured`
+// stays false regardless of the opt-in.
+test('trustSourcePinnedRequiredChecks does not relax an unnamed workflows-rule pin', () => {
+  const summary = summarizeRequiredChecks(
+    [],
+    [{ type: 'workflows', parameters: {} }],
+    {},
+    { trustSourcePinnedRequiredChecks: true },
+  );
+
+  assert.equal(summary.noRequiredChecksConfigured, false);
 });
 
 test('required workflow rules keep CI conservative even when named checks pass', () => {
@@ -224,6 +263,37 @@ test('required workflow rules keep CI conservative even when named checks pass',
 
   assert.equal(summary.status, 'unknown');
   assert.equal(summary.requiredChecksPassing, false);
+  // #1689: the `lint` context itself is not individually pinned (only the
+  // sibling `workflows` rule is), so it never lands in
+  // sourcePinnedRequiredCheckNames -- but the downgrade must still be
+  // attributable via sourcePinnedUnresolved, so a blocker detail can name
+  // the cause instead of falling through to the generic CI message.
+  assert.deepEqual(summary.sourcePinnedRequiredCheckNames, []);
+  assert.equal(summary.sourcePinnedUnresolved, true);
+});
+
+// #1689: the opt-in must not relax this mixed case even though the named
+// `lint` check would itself qualify -- the sibling `workflows` rule has no
+// check name to correlate with a live run at all, so it stays fail-closed
+// regardless of trustSourcePinnedRequiredChecks.
+test('trustSourcePinnedRequiredChecks does not relax a mixed named-check-plus-workflows-rule pin', () => {
+  const summary = summarizeRequiredChecks(
+    [{ name: 'lint', state: 'SUCCESS', completedAt: '2026-05-12T00:32:10Z' }],
+    [
+      {
+        type: 'workflows',
+        parameters: {
+          workflows: [{ repository_id: 1, path: '.github/workflows/ci.yml' }],
+        },
+      },
+    ],
+    { required_status_checks: { contexts: ['lint'] } },
+    { trustSourcePinnedRequiredChecks: true },
+  );
+
+  assert.equal(summary.status, 'unknown');
+  assert.equal(summary.requiredChecksPassing, false);
+  assert.equal(summary.sourcePinnedUnresolved, true);
 });
 
 test('CODEOWNERS patterns with slashes stay root anchored', () => {
@@ -5561,6 +5631,120 @@ test('buildPreMergeReadinessSummary blocks on the ci gate with a specific detail
     'cannot determine required checks: protection/ruleset unreadable',
   );
   assert.equal(unreadable.ready, false);
+});
+
+// #1689: a required check whose ruleset entry carries an `app_id` (source-
+// pinned) must block the ci gate with a detail naming that specific cause
+// -- not the generic "CI is not all-passing" message -- and the
+// `ciGate.trustSourcePinnedRequiredChecks` opt-in must clear it once the
+// operator has verified the pinned integration out-of-band.
+test('buildPreMergeReadinessSummary blocks on the ci gate with a specific detail when a required check is source-pinned, and the opt-in clears it', () => {
+  const fixture = readJson('fixtures/pre-merge-readiness/clean.json');
+  const branchRules = (
+    fixture.input.branchRules as Record<string, unknown>[]
+  ).map((rule) =>
+    rule.type === 'required_status_checks'
+      ? {
+          type: 'required_status_checks',
+          parameters: {
+            required_status_checks: [{ context: 'lint', app_id: 1 }],
+          },
+        }
+      : rule,
+  );
+
+  const pinned = buildPreMergeReadinessSummary(
+    { ...fixture.input, branchRules },
+    { ...fixture.options, includeDispositionEvidence: true },
+  );
+  assert.equal((pinned.ci as Record<string, unknown>).status, 'unknown');
+  assert.deepEqual(
+    (pinned.ci as Record<string, unknown>).sourcePinnedRequiredCheckNames,
+    ['lint'],
+  );
+  assert.deepEqual(pinned.blockers, computePreMergeReadinessBlockers(pinned));
+  const ciBlocker = (
+    pinned.blockers as { gate: string; detail: string }[]
+  ).find((blocker) => blocker.gate === 'ci');
+  assert.equal(
+    ciBlocker?.detail,
+    'required check lint is source-pinned; producer verification unavailable (set ciGate.trustSourcePinnedRequiredChecks to opt in once the pinned integration is verified)',
+  );
+  assert.equal(pinned.ready, false);
+
+  const trusted = buildPreMergeReadinessSummary(
+    { ...fixture.input, branchRules },
+    {
+      ...fixture.options,
+      includeDispositionEvidence: true,
+      trustSourcePinnedRequiredChecks: true,
+    },
+  );
+  assert.equal((trusted.ci as Record<string, unknown>).status, 'success');
+  assert.deepEqual(
+    (trusted.ci as Record<string, unknown>).sourcePinnedRequiredCheckNames,
+    [],
+  );
+  assert.deepEqual(trusted.blockers, computePreMergeReadinessBlockers(trusted));
+  assert.equal(trusted.ready, true);
+});
+
+// #1689: an unresolvable pinned source (a ruleset `workflows` rule with no
+// enumerable check name) coexisting with a separate, named-and-unpinned
+// required check must still name the source-pinned cause in the ci blocker
+// detail -- not fall through to the generic "CI is not all-passing"
+// message -- and the opt-in must not clear it (there is no check name to
+// correlate the pinning with a live run).
+test('buildPreMergeReadinessSummary blocks on the ci gate with a specific detail for an unresolvable mixed source-pinned requirement, and the opt-in does not clear it', () => {
+  const fixture = readJson('fixtures/pre-merge-readiness/clean.json');
+  const branchRules = [
+    ...(fixture.input.branchRules as Record<string, unknown>[]),
+    {
+      type: 'workflows',
+      parameters: {
+        workflows: [{ repository_id: 1, path: '.github/workflows/ci.yml' }],
+      },
+    },
+  ];
+
+  const pinned = buildPreMergeReadinessSummary(
+    { ...fixture.input, branchRules },
+    { ...fixture.options, includeDispositionEvidence: true },
+  );
+  assert.equal((pinned.ci as Record<string, unknown>).status, 'unknown');
+  assert.deepEqual(
+    (pinned.ci as Record<string, unknown>).sourcePinnedRequiredCheckNames,
+    [],
+  );
+  assert.equal(
+    (pinned.ci as Record<string, unknown>).sourcePinnedUnresolved,
+    true,
+  );
+  assert.deepEqual(pinned.blockers, computePreMergeReadinessBlockers(pinned));
+  const ciBlocker = (
+    pinned.blockers as { gate: string; detail: string }[]
+  ).find((blocker) => blocker.gate === 'ci');
+  assert.equal(
+    ciBlocker?.detail,
+    'an unresolvable source-pinned required-check requirement is in force (e.g. a ruleset `workflows` rule); producer verification unavailable, and this cause is never covered by the ciGate.trustSourcePinnedRequiredChecks opt-in',
+  );
+  assert.equal(pinned.ready, false);
+
+  const trusted = buildPreMergeReadinessSummary(
+    { ...fixture.input, branchRules },
+    {
+      ...fixture.options,
+      includeDispositionEvidence: true,
+      trustSourcePinnedRequiredChecks: true,
+    },
+  );
+  assert.equal((trusted.ci as Record<string, unknown>).status, 'unknown');
+  assert.equal(
+    (trusted.ci as Record<string, unknown>).sourcePinnedUnresolved,
+    true,
+  );
+  assert.deepEqual(trusted.blockers, computePreMergeReadinessBlockers(trusted));
+  assert.equal(trusted.ready, false);
 });
 
 // #1380: a masked-403-as-404 on a codeowner-requiring ruleset's *detail*

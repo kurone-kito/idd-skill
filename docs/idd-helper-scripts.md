@@ -1209,14 +1209,28 @@ to post it is the consuming track's job.
   buckets as `failure`, same as `failure`) and `required` flag; and
   `requiredChecks` (`names`, `missingNames`, `allRequiredPresent`,
   `allRequiredPassing`, `anyRequiredPending`, `anyRequiredFailing`,
-  `anyRequiredUnknown`, `requiredCheckSourcePinned`, and a top-level
-  `status` of
+  `anyRequiredUnknown`, `requiredCheckSourcePinned`,
+  `requiredCheckSourcePinnedUnresolved`, and a top-level `status` of
   `success|pending|failing|missing|no-required-checks|source-pinned`)
 - **Source-pinned required checks**: when a ruleset `workflows` rule or an
   app/integration-pinned classic required check is in force but cannot be
   enumerated by name, `requiredCheckSourcePinned` is `true` and `status` is
   `source-pinned` — never `no-required-checks` — so a caller cannot
-  mistake an unresolvable required-check source for a vacuous pass.
+  mistake an unresolvable required-check source for a vacuous pass. When
+  every named required check is instead present and pass-equivalent but a
+  pinned rule entry also names one of them, `status` is still
+  `source-pinned` (not `success`) by default, because no producer-identity
+  data is fetched anywhere in this codebase's check-run reads to verify the
+  pinning (#1689) — set `ciGate.trustSourcePinnedRequiredChecks: true` in
+  `.github/idd/config.json` to opt in once the repository operator has
+  verified the pinned integration out-of-band; see the "Source-pinned
+  required-check trust" row in [Customizing IDD](customization.md).
+  `requiredCheckSourcePinnedUnresolved` is `true` when at least one pinned
+  source has no resolved check name at all (a `workflows` rule, or a
+  pinned classic entry with no `context`/`name`/`check`); the opt-in never
+  clears `status` back to `success` while this is `true`, even when a
+  separate, named-and-pinned check on the same required-check set would
+  itself qualify.
 - it remains read-only; the command performs no reruns and posts no
   GitHub comment
 
@@ -1311,6 +1325,25 @@ to post it is the consuming track's job.
   (empty array, never omitted, when nothing was discarded) -- it does not
   itself gate F2/F3; a non-empty list is a prompt to double-check the live
   GitHub rollup directly rather than trusting a bare `ci.status: "success"`.
+- `ci.sourcePinnedRequiredCheckNames` (#1689) lists the required check
+  names whose green state was downgraded to `ci.status: "unknown"` because
+  their ruleset/classic-protection entry is source-pinned
+  (`app_id`/`integration_id`) and neither a verified producer match nor
+  the `ciGate.trustSourcePinnedRequiredChecks` opt-in applies. Evidence
+  only (empty array, never omitted, when no such downgrade occurred) --
+  `computePreMergeReadinessBlockers` uses it to name the source-pinned
+  cause in the `ci` blocker detail instead of a generic "CI is not
+  all-passing" message; see [Customizing IDD](customization.md)'s
+  "Source-pinned required-check trust" row for the opt-in.
+  `ci.sourcePinnedUnresolved` is a sibling boolean, `true` when the
+  downgrade fired at least partly because of a pinned source with no
+  resolved check name (a ruleset `workflows` rule, or a pinned entry with
+  no `context`/`name`/`check`) -- distinct from
+  `sourcePinnedRequiredCheckNames` being empty, which alone is ambiguous
+  between "no pinning" and "pinning exists but is unnamed." The
+  `trustSourcePinnedRequiredChecks` opt-in never clears this cause, even
+  when a separate, named-and-pinned check on the same required-check set
+  would itself qualify.
 - Authoritative phase role: the live `pre-merge-readiness` run on the
   current HEAD is the **authoritative source for the final-merge CI and
   activity fields** at F2/F3. The `review-activity-snapshot` helper builds

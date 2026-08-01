@@ -3884,6 +3884,11 @@ export function summarizeBranchReviewRequirements(
   branchProtection: BranchProtectionLike = {},
 ) {
   const requiredCheckNames = new Set<string>();
+  // #1689: the subset of requiredCheckNames whose ruleset/classic-protection
+  // entry is source-pinned (see `summarizeRequiredCheckMetadata`'s
+  // `pinnedNames`) -- lets `summarizeRequiredChecks` name the specific
+  // pinned check(s) in a blocker detail instead of a generic message.
+  const requiredCheckSourcePinnedNames = new Set<string>();
   const requiredReviewerLogins = new Set<string>();
   const requiredReviewerTeams = new Set<string>();
   const requiredReviewerRequirements: ReviewerRequirement[] = [];
@@ -3896,6 +3901,13 @@ export function summarizeBranchReviewRequirements(
   let classicRequireCodeOwnerReview = false;
   let requiresConversationResolution = false;
   let requiredCheckSourcePinned = false;
+  // #1689: true when at least one pinned source cannot be attributed to a
+  // resolved check name (a `workflows` rule, or a pinned entry with no
+  // `context`/`name`/`check`) -- independent of whether OTHER, named-and-
+  // pinned entries also exist. `trustSourcePinnedRequiredChecks` must never
+  // bypass the downgrade while this is true, even when
+  // `requiredCheckSourcePinnedNames` is non-empty from a separate entry.
+  let requiredCheckSourcePinnedUnresolved = false;
 
   for (const rule of branchRules) {
     if (rule?.type === 'pull_request') {
@@ -3931,14 +3943,20 @@ export function summarizeBranchReviewRequirements(
       );
       requiredCheckSourcePinned =
         requiredCheckSourcePinned || checkMetadata.sourcePinned;
+      requiredCheckSourcePinnedUnresolved =
+        requiredCheckSourcePinnedUnresolved || checkMetadata.unresolvedPinned;
       for (const name of checkMetadata.names) {
         requiredCheckNames.add(name);
+      }
+      for (const name of checkMetadata.pinnedNames) {
+        requiredCheckSourcePinnedNames.add(name);
       }
       continue;
     }
 
     if (rule?.type === 'workflows') {
       requiredCheckSourcePinned = true;
+      requiredCheckSourcePinnedUnresolved = true;
     }
   }
 
@@ -3983,8 +4001,14 @@ export function summarizeBranchReviewRequirements(
   );
   requiredCheckSourcePinned =
     requiredCheckSourcePinned || protectionCheckMetadata.sourcePinned;
+  requiredCheckSourcePinnedUnresolved =
+    requiredCheckSourcePinnedUnresolved ||
+    protectionCheckMetadata.unresolvedPinned;
   for (const name of protectionCheckMetadata.names) {
     requiredCheckNames.add(name);
+  }
+  for (const name of protectionCheckMetadata.pinnedNames) {
+    requiredCheckSourcePinnedNames.add(name);
   }
 
   return {
@@ -4002,6 +4026,8 @@ export function summarizeBranchReviewRequirements(
     ].sort(),
     requiresConversationResolution,
     requiredCheckSourcePinned,
+    requiredCheckSourcePinnedNames: [...requiredCheckSourcePinnedNames].sort(),
+    requiredCheckSourcePinnedUnresolved,
     requiredReviewerLogins: [...requiredReviewerLogins].sort(),
     requiredReviewerTeams: [...requiredReviewerTeams].sort(),
     requiredReviewerRequirements,
@@ -4111,11 +4137,32 @@ export function summarizeRequiredChecks(
     waivers = null,
     waivableSelectors = null,
     protectionReadsUnreadable = false,
+    trustSourcePinnedRequiredChecks = false,
   }: {
     waivers?: { valid?: { checkSelector?: unknown }[] | null } | null;
     waivableSelectors?: { selector?: unknown; matchMode?: unknown }[] | null;
     // #1377: see `buildPreMergeReadinessSummary`'s option of the same name.
     protectionReadsUnreadable?: boolean;
+    // #1689: `ciGate.trustSourcePinnedRequiredChecks` opt-in (mirrors
+    // `ciGate.trustEmptyProtectionReads`'s shape). Default `false` keeps the
+    // pre-#1689 conservative behavior: a required check whose ruleset entry
+    // carries an `app_id`/`integration_id` (source-pinned) downgrades an
+    // otherwise-`success` classification to `unknown` unconditionally,
+    // because this helper has no way to verify the live check-run instance
+    // actually came from the pinned integration (no producer app identity is
+    // fetched anywhere in this codebase's `statusCheckRollup` reads -- see
+    // `CheckLike`'s doc comment). Setting this `true` is a git-committed,
+    // human-authorized decision that the repository operator has verified
+    // out-of-band that the pinned integration is the sole producer of the
+    // named required check(s), not a runtime check of actual producer
+    // identity -- the same trust model `trustEmptyProtectionReads` already
+    // uses for a different unverifiable read. It only widens the NAMED,
+    // present-and-matched case handled below; a fully unnamed pinned
+    // requirement (e.g. a ruleset `workflows` rule with no enumerable
+    // context) stays unconditionally conservative via
+    // `noRequiredChecksConfigured`'s own `!sourcePinned` guard, since there
+    // is no check name to correlate with a live run at all in that case.
+    trustSourcePinnedRequiredChecks?: boolean;
   } = {},
 ) {
   const branchReviewRequirements = summarizeBranchReviewRequirements(
@@ -4180,6 +4227,19 @@ export function summarizeRequiredChecks(
   // doc comment for the full rationale). Empty (never omitted) when no
   // required checks are configured.
   let discardedNonPassingRequiredChecks: CiCheckDiscardedSibling[] = [];
+  // #1689: the pinned required-check names that caused the downgrade below
+  // (empty unless that downgrade actually fired). Lets a caller's blocker
+  // detail name the source-pinned cause explicitly instead of a generic
+  // "CI is not all-passing" message -- see `computePreMergeReadinessBlockers`.
+  let sourcePinnedRequiredCheckNames: string[] = [];
+  // #1689: true when the downgrade below fired at least partly because of a
+  // pinned source that could not be attributed to any check name (a
+  // ruleset `workflows` rule, or a pinned entry with no `context`/`name`/
+  // `check`) -- distinct from `sourcePinnedRequiredCheckNames` being empty,
+  // which alone would be ambiguous between "no pinning" and "pinning
+  // exists but is unnamed." Lets a blocker detail name the cause even when
+  // no specific check name can be cited.
+  let sourcePinnedUnresolved = false;
   if (requiredCheckNames.length > 0) {
     const effectiveChecks = matchedRequiredChecks.map((c) =>
       c.coveredByWaiver ? { ...c, state: 'SKIPPED' } : c,
@@ -4189,11 +4249,23 @@ export function summarizeRequiredChecks(
       missingRequiredCheckNames.length > 0
         ? 'missing'
         : ciClassification.status;
+    // #1689: the `trustSourcePinnedRequiredChecks` opt-in only widens the
+    // named/resolved case -- an unresolved pinned source (no check name to
+    // correlate with a live run at all) always still forces the downgrade,
+    // even when a SEPARATE, named-and-pinned entry also exists and the
+    // operator has opted in for that one.
     if (
       status === 'success' &&
-      branchReviewRequirements.requiredCheckSourcePinned
+      branchReviewRequirements.requiredCheckSourcePinned &&
+      (!trustSourcePinnedRequiredChecks ||
+        branchReviewRequirements.requiredCheckSourcePinnedUnresolved)
     ) {
       status = 'unknown';
+      sourcePinnedRequiredCheckNames = [
+        ...branchReviewRequirements.requiredCheckSourcePinnedNames,
+      ];
+      sourcePinnedUnresolved =
+        branchReviewRequirements.requiredCheckSourcePinnedUnresolved;
     }
     // #1753: computed from the RAW matchedRequiredChecks -- deliberately
     // NOT ciClassification.discardedNonPassingInstances above, which is
@@ -4236,6 +4308,13 @@ export function summarizeRequiredChecks(
     // unconditionally (empty array, never omitted) so a consumer never has
     // to special-case "field absent" vs. "field empty".
     discardedNonPassingRequiredChecks,
+    // #1689: see the field's own inline comment above -- reported
+    // unconditionally (empty array, never omitted), populated only when the
+    // source-pinned downgrade actually fired for this call.
+    sourcePinnedRequiredCheckNames,
+    // #1689: see the field's own inline comment above -- `false` unless the
+    // downgrade fired AND at least one pinned source was unnamed.
+    sourcePinnedUnresolved,
     checks: normalizedChecks.map((check) => ({
       name: check.name,
       state: check.state,
@@ -5346,13 +5425,50 @@ export function computePreMergeReadinessBlockers(
 
   const ci = preMergeAsRecord(report.ci);
   if (!isPreMergeCiAllPassing(ci)) {
+    // #1689: name the source-pinned cause explicitly when a required check
+    // is otherwise green but its ruleset entry carries an
+    // `app_id`/`integration_id` this helper cannot verify -- see
+    // `summarizeRequiredChecks`'s `sourcePinnedRequiredCheckNames` doc
+    // comment. Checked before the masked-403-as-404 detail below since the
+    // two causes are mutually exclusive (the source-pinned downgrade only
+    // fires on a genuinely readable required-check set).
+    const sourcePinnedNames = Array.isArray(ci.sourcePinnedRequiredCheckNames)
+      ? (ci.sourcePinnedRequiredCheckNames as unknown[]).map((name) =>
+          String(name ?? ''),
+        )
+      : [];
+    // #1689: a pinned source that could not be attributed to any check name
+    // (a ruleset `workflows` rule, or a pinned entry with no `context`/
+    // `name`/`check`) -- see `sourcePinnedRequiredCheckNames`'s doc comment.
+    // Checked so the detail still names the source-pinned cause even when
+    // `sourcePinnedNames` above is empty (or only partially covers the
+    // pinning, in the mixed case), and so the opt-in caveat only appears
+    // when it is actually relevant (an unresolvable source is never
+    // covered by `trustSourcePinnedRequiredChecks`).
+    const sourcePinnedUnresolved = ci.sourcePinnedUnresolved === true;
+    let sourcePinnedDetail = '';
+    if (sourcePinnedNames.length > 0 && sourcePinnedUnresolved) {
+      sourcePinnedDetail = `required ${sourcePinnedNames.length > 1 ? 'checks' : 'check'} ${sourcePinnedNames.join(
+        ', ',
+      )}, plus an unresolvable source-pinned required-check requirement (e.g. a ruleset \`workflows\` rule), are source-pinned; producer verification unavailable (set ciGate.trustSourcePinnedRequiredChecks to opt in for the named check(s); the unresolvable source is never covered by this opt-in)`;
+    } else if (sourcePinnedNames.length > 0) {
+      sourcePinnedDetail = `required ${sourcePinnedNames.length > 1 ? 'checks' : 'check'} ${sourcePinnedNames.join(
+        ', ',
+      )} ${
+        sourcePinnedNames.length > 1 ? 'are' : 'is'
+      } source-pinned; producer verification unavailable (set ciGate.trustSourcePinnedRequiredChecks to opt in once the pinned integration is verified)`;
+    } else if (sourcePinnedUnresolved) {
+      sourcePinnedDetail =
+        'an unresolvable source-pinned required-check requirement is in force (e.g. a ruleset `workflows` rule); producer verification unavailable, and this cause is never covered by the ciGate.trustSourcePinnedRequiredChecks opt-in';
+    }
     // #1377: name the masked-403-as-404 cause explicitly when that is why the
     // gate is not all-passing, matching idd-ci.instructions.md's wording,
     // instead of the generic status/noRequiredChecksConfigured detail below.
     const detail =
       ci.protectionReadsUnreadable === true
         ? 'cannot determine required checks: protection/ruleset unreadable'
-        : `CI is not all-passing (status="${String(
+        : sourcePinnedDetail ||
+          `CI is not all-passing (status="${String(
             ci.status ?? '',
           )}", noRequiredChecksConfigured=${Boolean(
             ci.noRequiredChecksConfigured,
@@ -5553,6 +5669,10 @@ export function buildPreMergeReadinessSummary(
     waivableCheckSelectors?:
       | { selector?: unknown; matchMode?: unknown }[]
       | null;
+    // #1689: configured `ciGate.trustSourcePinnedRequiredChecks`, forwarded
+    // to `summarizeRequiredChecks` unchanged. Omitted by unit callers
+    // (default `false`, unchanged pre-#1689 conservative behavior).
+    trustSourcePinnedRequiredChecks?: boolean;
     // #1570: the caller-precomputed `#1572` terminal Copilot-unavailability
     // verdict (`buildCopilotRecoverySummary(...).state === 'COPILOT_UNAVAILABLE'`
     // in advisory-wait-state.mts). Computed by the CALLER, not here: this
@@ -5718,6 +5838,8 @@ export function buildPreMergeReadinessSummary(
     waivers: waiverEvidence,
     waivableSelectors: waivableCheckSelectors,
     protectionReadsUnreadable,
+    trustSourcePinnedRequiredChecks:
+      options.trustSourcePinnedRequiredChecks === true,
   });
 
   // #1570: reuse the SAME waiver evidence above (already validated for
@@ -6462,7 +6584,21 @@ function summarizeRequiredCheckMetadata(
   parameters: RequiredCheckParametersLike,
 ) {
   const names = new Set<string>();
+  // #1689: the SPECIFIC subset of `names` whose rule entry is itself
+  // source-pinned -- distinct from the aggregate `sourcePinned` flag below,
+  // which only says "at least one pinned entry exists somewhere in this
+  // parameters object." `summarizeRequiredChecks` needs the actual pinned
+  // names to name the source-pinned cause in a blocker detail instead of a
+  // generic "CI is not all-passing" message.
+  const pinnedNames = new Set<string>();
   let sourcePinned = false;
+  // #1689: true when at least one pinned entry could NOT be attributed to a
+  // resolved name (no `context`/`name`/`check` at all) -- distinct from
+  // `pinnedNames` being merely empty, which could also mean "no pinned
+  // entry exists." A caller must fail closed on this regardless of the
+  // `trustSourcePinnedRequiredChecks` opt-in: there is nothing to verify or
+  // trust when there is no check name to correlate with a live run.
+  let unresolvedPinned = false;
   const rawChecks = [
     ...(parameters.required_status_checks ?? []),
     ...(parameters.required_checks ?? []),
@@ -6478,14 +6614,15 @@ function summarizeRequiredCheckMetadata(
       continue;
     }
 
-    if (
+    const isPinned =
       isSourcePinnedRequirementId(rawCheck?.app_id) ||
       isSourcePinnedRequirementId(rawCheck?.integration_id) ||
-      rawCheck?.source
-    ) {
+      Boolean(rawCheck?.source);
+    if (isPinned) {
       sourcePinned = true;
     }
 
+    let resolvedName = '';
     for (const candidate of [
       rawCheck?.context,
       rawCheck?.name,
@@ -6494,15 +6631,25 @@ function summarizeRequiredCheckMetadata(
     ]) {
       const normalized = String(candidate ?? '').trim();
       if (normalized) {
-        names.add(normalized);
+        resolvedName = normalized;
         break;
       }
+    }
+    if (resolvedName) {
+      names.add(resolvedName);
+      if (isPinned) {
+        pinnedNames.add(resolvedName);
+      }
+    } else if (isPinned) {
+      unresolvedPinned = true;
     }
   }
 
   return {
     names: [...names].sort(),
     sourcePinned,
+    pinnedNames: [...pinnedNames].sort(),
+    unresolvedPinned,
   };
 }
 

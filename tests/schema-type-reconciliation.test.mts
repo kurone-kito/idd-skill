@@ -202,6 +202,7 @@ interface PolicyConfigFile {
       maxValidity?: string;
     };
     trustEmptyProtectionReads?: boolean;
+    trustSourcePinnedRequiredChecks?: boolean;
   };
   discover?: {
     activeClaimPreScanBatchSize?: number;
@@ -869,6 +870,7 @@ const policyConfigFixture = {
       maxValidity: 'PT24H',
     },
     trustEmptyProtectionReads: true,
+    trustSourcePinnedRequiredChecks: true,
   },
   discover: {
     activeClaimPreScanBatchSize: 10,
@@ -1034,6 +1036,8 @@ const preMergeReadinessFixture = {
     requiredCheckNames: ['lint'],
     missingRequiredCheckNames: [],
     discardedNonPassingRequiredChecks: [],
+    sourcePinnedRequiredCheckNames: [],
+    sourcePinnedUnresolved: false,
     checks: [
       {
         name: 'lint',
