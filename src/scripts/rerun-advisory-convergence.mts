@@ -1709,7 +1709,7 @@ interface RawWorkflowRunPayload {
  * `idd-advisory-convergence` job whose log carries the JSON verdict
  * {@link extractAdvisoryVerdictReasonsFromLog} parses (#1775).
  * `--paginate` is required: the Actions "list jobs for a workflow run"
- * endpoint pages at 30 jobs, and a busy matrixed run can place the
+ * endpoint pages at 30 jobs, and a busy multi-job run can place the
  * advisory-convergence job beyond the first page -- missing it would
  * leave `verdictReasons` null and misclassify an uncovered-HEAD failure
  * as `rerun-eligible` (Copilot review on #1790).
