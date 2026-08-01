@@ -92,12 +92,16 @@ Any failure → STOP and restart. Do not post takeover on stale evidence.
 
 ## S5 — Takeover
 
-1. Post claim with fresh `{claim-id}` and `supersedes: <prior-claim-id>`
-   via `post-idd-marker --type claim ... --apply` (or equivalent).
-2. Wait settle delay; re-parse; confirm active claim is yours.
-3. If lost: STOP.
-4. If verified: return to `idd-resume-lite.instructions.md` Step 1, then
-   Step 2/3.
+1. Run `idd-claim-lite.instructions.md` pre-checks (d)/(e); either
+   failing → STOP.
+2. Post claim (fresh `{claim-id}`, `supersedes: <prior-claim-id>`) via
+   `post-idd-marker --type claim ... --apply`, then an
+   activation-nonce for the same `{claim-id}` (same file's step 5).
+3. Wait settle delay; re-parse; confirm claim and nonce winner are
+   yours.
+4. If lost: STOP.
+5. If verified: return to `idd-resume-lite.instructions.md` Step 1,
+   then Step 2/3.
 
 ## Hold behavior
 
