@@ -16,10 +16,41 @@
 // need the CLI-entry-point guard.
 
 import type { StdioOptions } from 'node:child_process';
-import { execFileSync } from 'node:child_process';
+import { execFile, execFileSync } from 'node:child_process';
 import { setTimeout as sleep } from 'node:timers/promises';
+import { promisify } from 'node:util';
 
 import { parsePaginatedGhNdjson } from './protocol-helpers.mts';
+
+/**
+ * Default `execFileSync`/`execFile` timeout (ms) applied when a caller
+ * supplies none — the existing 30s convention already used at 54+
+ * `GH_TEXT_LOOP_TIMEOUT_OPTIONS` call sites (#1675). Without this, a
+ * stalled or credential-prompting `gh` invocation (rate limiting, network
+ * stall, an unexpected interactive re-auth prompt) hangs the calling
+ * helper indefinitely instead of failing closed into IDD's recovery
+ * routing. An explicit caller-supplied `timeout` (including `0`, which
+ * Node treats as "no timeout") always wins over this default.
+ */
+export const DEFAULT_GH_TIMEOUT_MS = 30_000;
+
+/**
+ * Default timeout (ms) for a **paginated** `gh api --paginate` call
+ * (`{@link ghApiJson}` with `paginate: true`) when the caller supplies
+ * none. `--paginate` makes `gh` walk every page of a list endpoint as
+ * sequential HTTP round-trips inside one subprocess invocation, so the
+ * single-request {@link DEFAULT_GH_TIMEOUT_MS} bound is too tight by
+ * default for a response spanning more than a couple of pages. This
+ * repo's paginated callers are PR/issue-scoped (review threads, comments,
+ * timeline events — bounded in practice to a few pages), so a flat 4x
+ * multiplier is a deliberately generous but still-bounded default rather
+ * than an unbounded pass-through; callers with a legitimately different
+ * bound (e.g. a large graph traversal) pass an explicit `timeout` to
+ * override it. Recorded here so this default isn't re-litigated later.
+ */
+export const DEFAULT_GH_PAGINATED_TIMEOUT_MS = 120_000;
+
+const execFileAsync = promisify(execFile);
 
 /** Optional `execFileSync` overrides accepted by {@link ghText}. */
 export interface GhTextOptions {
@@ -31,13 +62,22 @@ export interface GhTextOptions {
    */
   stdio?: StdioOptions;
   /**
-   * Override the `execFileSync` timeout (milliseconds). Several callers
-   * pair this with the `stdio` override above so a stalled `gh` (rate
-   * limiting, network stall, an unexpected interactive re-auth prompt)
-   * fails closed instead of hanging indefinitely. See
-   * {@link GH_TEXT_LOOP_TIMEOUT_OPTIONS}.
+   * Override the `execFileSync` timeout (milliseconds). Defaults to
+   * {@link DEFAULT_GH_TIMEOUT_MS} when omitted; pass `0` for no timeout.
+   * Several callers pair an explicit override with the `stdio` override
+   * above so a stalled `gh` fails closed with the same stdin-ignoring
+   * shape. See {@link GH_TEXT_LOOP_TIMEOUT_OPTIONS}.
    */
   timeout?: number;
+  /**
+   * Data written to the child's stdin (e.g. `gh api --input -` reading a
+   * JSON document from stdin — the mandatory path for posting an
+   * HTML-comment-first marker body, which `gh issue comment` / `gh api -f
+   * body=` silently drop). Mutually exclusive with an explicit `stdio`
+   * override in practice: `execFileSync` wires stdin itself when `input`
+   * is set, so callers needing this pass only `input`, not `stdio`.
+   */
+  input?: string;
 }
 
 /**
@@ -62,6 +102,10 @@ export const GH_TEXT_LOOP_TIMEOUT_OPTIONS: GhTextOptions = {
 /**
  * Run `gh` synchronously and return its trimmed stdout.
  *
+ * Applies {@link DEFAULT_GH_TIMEOUT_MS} when the caller supplies no
+ * `timeout` (#1675) — a caller-supplied value, including `0`, always
+ * wins.
+ *
  * Throws (propagating the child-process error) on any non-zero exit —
  * callers that need to tolerate specific failures use {@link safeGhText}
  * or {@link ghApiJson}'s `allowStatuses` option instead.
@@ -69,8 +113,9 @@ export const GH_TEXT_LOOP_TIMEOUT_OPTIONS: GhTextOptions = {
 export function ghText(args: string[], options: GhTextOptions = {}): string {
   return execFileSync('gh', args, {
     encoding: 'utf8',
+    timeout: options.timeout ?? DEFAULT_GH_TIMEOUT_MS,
     ...(options.stdio ? { stdio: options.stdio } : {}),
-    ...(options.timeout ? { timeout: options.timeout } : {}),
+    ...(options.input !== undefined ? { input: options.input } : {}),
   }).trim();
 }
 
@@ -84,6 +129,54 @@ export function safeGhText(
   } catch {
     return '';
   }
+}
+
+/** Optional overrides accepted by {@link ghTextAsync}. */
+export interface GhTextAsyncOptions {
+  /**
+   * Override the `execFile` timeout (milliseconds). Defaults to
+   * {@link DEFAULT_GH_TIMEOUT_MS} when omitted; a caller-supplied value,
+   * including `0`, always wins.
+   */
+  timeout?: number;
+  /**
+   * Override the per-stream buffer cap (bytes). `execFile`'s own default
+   * is 1 MiB; a caller expecting a larger response (e.g. a paginated
+   * GraphQL page) raises this explicitly rather than risking a silent
+   * truncation.
+   */
+  maxBuffer?: number;
+}
+
+/**
+ * Async sibling of {@link ghText}, for callers that need several `gh`
+ * subprocesses running concurrently (`execFileSync` serializes even
+ * concurrent `await`s because it holds the event loop). Extracted from
+ * `discover-roadmap-graph.mts`'s traversal hot-path loader (#1675) so
+ * that file no longer needs its own direct `execFile('gh', ...)` call.
+ *
+ * `execFile` has no `stdio` option, so its default stdio does not ignore
+ * stdin the way {@link GH_TEXT_LOOP_OPTIONS} does for the sync API. None
+ * of this module's own callers pass `--input` or an `@-` field value (the
+ * only ways `gh api` reads stdin), so `gh` itself never blocks on stdin
+ * here — this still closes the child's stdin defensively so a future
+ * caller can't silently reintroduce a stdin hang (mirrors the pattern
+ * `discover-roadmap-graph.mts` used before this extraction).
+ *
+ * Trims stdout, matching {@link ghText}'s convention.
+ */
+export async function ghTextAsync(
+  args: string[],
+  options: GhTextAsyncOptions = {},
+): Promise<string> {
+  const run = execFileAsync('gh', args, {
+    encoding: 'utf8',
+    timeout: options.timeout ?? DEFAULT_GH_TIMEOUT_MS,
+    ...(options.maxBuffer ? { maxBuffer: options.maxBuffer } : {}),
+  });
+  run.child.stdin?.end();
+  const { stdout } = await run;
+  return stdout.trim();
 }
 
 /** Options accepted by {@link ghApiJson}. */
@@ -104,6 +197,14 @@ export interface GhApiJsonOptions {
    * throwing.
    */
   allowStatuses?: number[];
+  /**
+   * Override the `execFileSync` timeout (milliseconds). Defaults to
+   * {@link DEFAULT_GH_TIMEOUT_MS} for a non-paginated call, or
+   * {@link DEFAULT_GH_PAGINATED_TIMEOUT_MS} when `paginate` is `true`
+   * (#1675) — a caller-supplied value, including `0`, always wins over
+   * either default.
+   */
+  timeout?: number;
 }
 
 /**
@@ -124,9 +225,12 @@ export function ghApiJson(
   if (paginate) {
     args.push('--paginate', '--jq', '.[]');
   }
+  const timeout =
+    options.timeout ??
+    (paginate ? DEFAULT_GH_PAGINATED_TIMEOUT_MS : DEFAULT_GH_TIMEOUT_MS);
   let raw: string;
   try {
-    raw = execFileSync('gh', args, { encoding: 'utf8' });
+    raw = execFileSync('gh', args, { encoding: 'utf8', timeout });
   } catch (error) {
     const failure = error as { status?: unknown; stdout?: unknown } | null;
     const status = Number(failure?.status ?? -1);
