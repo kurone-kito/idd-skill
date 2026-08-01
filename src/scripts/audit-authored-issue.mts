@@ -37,8 +37,7 @@ import {
 import { extractRoadmapMarkerId } from './discover-roadmap-graph.mts';
 import type { EffortMarkerDetection } from './effort.mts';
 import { parseEffortMarker } from './effort.mts';
-import type { IddConfig } from './idd-config.mts';
-import { loadIddConfig } from './idd-config.mts';
+import { loadIddConfig, loadPolicyConfig } from './idd-config.mts';
 import { stripMarkdownCodeRegions } from './markdown-code.mts';
 import { createMarkerRegex, escapeRegex } from './marker-regex.mts';
 import { normalizePolicyConfig, POLICY_DEFAULTS } from './policy-helpers.mts';
@@ -1334,6 +1333,18 @@ function isIssueShape(value: string): value is IssueShape {
   return value === 'orphan' || value === 'roadmap' || value === 'child';
 }
 
+/**
+ * Deliberate exception (#1721): every sibling `*.mts` `loadPolicy()` throws
+ * on an explicit path that cannot be read or parsed (converged through
+ * idd-config.mts's `loadPolicyConfig`). This one does not: `main()` may
+ * still apply `--marker-prefix` on top of the value this returns, so an
+ * unreadable `--config` here does not necessarily mean the invocation is
+ * under-specified — hard-failing would reject an invocation that is
+ * actually fully specified. This function still calls the same shared
+ * `loadPolicyConfig()` reader every sibling routes through for the
+ * read-and-parse step, and catches its throw itself right here to keep
+ * this warn-and-continue contract instead of propagating it.
+ */
 function loadPolicy(configPath?: string): {
   markerPrefix: string;
   blockedByHumanLabelName: string;
@@ -1342,27 +1353,35 @@ function loadPolicy(configPath?: string): {
   // than a second "readFileSync + JSON.parse, null on error" copy of the
   // exact pattern it was extracted from (see that module's header, #1208).
   // loadIddConfig() always reads '.github/idd/config.json' relative to cwd
-  // and has no path parameter, so an explicit --config override still
-  // falls back to its own JSON.parse branch.
-  const config = configPath
-    ? loadConfigFromPath(resolve(process.cwd(), configPath))
-    : loadIddConfig();
-  if (!config) {
-    // Stay fail-safe (never hard-crash on a bad config, matching every
-    // sibling *.mts loadPolicy()), but surface an explicit --config that
-    // could not be read/parsed: silently validating against the wrong
-    // policy would be a confusing, hard-to-notice false pass/fail.
-    if (configPath) {
+  // and has no path parameter, so an explicit --config override instead
+  // goes through loadPolicyConfig() below (caught locally, see doc comment
+  // above).
+  let config: unknown;
+  if (configPath) {
+    try {
+      config = loadPolicyConfig(configPath).config;
+    } catch (error) {
+      // Stay fail-safe (never hard-crash on a bad config, unlike every
+      // sibling *.mts loadPolicy()), but surface an explicit --config that
+      // could not be read/parsed: silently validating against the wrong
+      // policy would be a confusing, hard-to-notice false pass/fail.
+      //
       // Describe this as loadPolicy's own fallback, not the audit's final
       // effective markerPrefix: main() still applies --marker-prefix on
       // top of this return value when the operator passed it, so naming a
       // specific value here (e.g. DEFAULT_MARKER_PREFIX) could mislead
       // when that flag is also present. The report's own markerPrefix
       // field is the authoritative source for the value actually used.
+      const message = error instanceof Error ? error.message : String(error);
       console.error(
-        `warning: could not read or parse --config ${configPath}; falling back to default policy unless overridden by --marker-prefix (see the report's markerPrefix field for the effective value)`,
+        `warning: could not read or parse --config ${configPath}; falling back to default policy unless overridden by --marker-prefix (see the report's markerPrefix field for the effective value): ${message}`,
       );
+      config = null;
     }
+  } else {
+    config = loadIddConfig();
+  }
+  if (!config) {
     return {
       markerPrefix: DEFAULT_MARKER_PREFIX,
       blockedByHumanLabelName: POLICY_DEFAULTS.labels.blockedByHumanLabelName,
@@ -1375,14 +1394,6 @@ function loadPolicy(configPath?: string): {
     blockedByHumanLabelName:
       normalizePolicyConfig(config).labels.blockedByHumanLabelName,
   };
-}
-
-function loadConfigFromPath(targetPath: string): IddConfig | null {
-  try {
-    return JSON.parse(readFileSync(targetPath, 'utf8')) as IddConfig;
-  } catch {
-    return null;
-  }
 }
 
 function writeReport(report: AuditReport, format: string): void {
