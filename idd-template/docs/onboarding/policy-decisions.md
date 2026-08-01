@@ -203,6 +203,52 @@ emit a reviewed tag, commit, tarball, or internal mirror URL. Treat
 `refs/heads/main` as a manual opt-in when the repository explicitly
 wants a mutable helper source instead of a reviewed pinned spec.
 
+### IDD label names
+
+Confirm whether the repository keeps the three distributed IDD label
+names or maps them onto an existing local label taxonomy:
+
+- `labels.roadmapLabelName` (distributed default `roadmap`)
+- `labels.blockedByHumanLabelName` (distributed default
+  `status:blocked-by-human`)
+- `labels.needsDecisionLabelName` (distributed default
+  `status:needs-decision`)
+
+**Auto-labeler risk.** If the repository runs a semantic issue
+auto-labeler — a bot such as CodeRabbit's issue enrichment that infers
+labels from issue content instead of applying only labels a human or
+workflow explicitly requests — that labeler can apply any of these
+three configured label names to an ordinary issue on its own judgment,
+regardless of which label names the repository chose. The failure is
+silent: nothing errors, and the issue simply stops being an execution
+candidate (a spurious `labels.roadmapLabelName` match) or gets parked
+behind a hold (a spurious `labels.blockedByHumanLabelName` or
+`labels.needsDecisionLabelName` match — both are Discover's
+roadmap-level blocker gates) with no visible cause. This has been
+observed in the field: in one fresh template import, `coderabbitai[bot]`
+applied the roadmap label to all eight children of one authored roadmap
+batch — an 8/8 hit rate, not an occasional misfire — and separately
+applied the blocked-by-human label to an issue that had been authored
+with the needs-decision label, so the risk is not limited to one label
+name.
+
+**Omitting a label from the labeler's instructions is not a
+restriction.** A semantic labeler's own configuration (for example, a
+`labeling_instructions` list scoped to content labels) supplies
+per-label guidance for the labels the product is told about — it does
+not narrow which labels the product's own auto-labeling heuristic may
+apply on its own. Leaving the three IDD label names out of that
+configuration does not stop the labeler from applying them; do not
+recommend or rely on that omission as a mitigation.
+
+**Ask this question during onboarding**: does anything in this
+repository, or an installed GitHub App, auto-apply labels to issues
+based on content? If yes, and the repository keeps the distributed IDD
+label names (or any other label such an auto-labeler could plausibly
+infer), adopt the guard recipe in
+[Customizing IDD — Reserved-label guard recipe](../customization.md#reserved-label-guard-recipe)
+before relying on unattended discovery or hold semantics.
+
 ## Related default policies to confirm
 
 The onboarding entry point should also confirm whether the repository
