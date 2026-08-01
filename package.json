@@ -64,15 +64,15 @@
     "docs:sync:check": "node scripts/sync-docs.mjs --check"
   },
   "devDependencies": {
-    "@biomejs/biome": "2.5.2",
-    "@commitlint/cli": "^21.0.2",
+    "@biomejs/biome": "2.5.6",
+    "@commitlint/cli": "^21.2.1",
     "@commitlint/config-conventional": "^21.0.0",
     "@kurone-kito/biome-config": "0.22.0",
-    "@types/node": "26.1.0",
+    "@types/node": "26.1.2",
     "cspell": "^10.0.0",
-    "dprint": "0.55.1",
+    "dprint": "0.55.2",
     "husky": "^9.1.7",
-    "markdownlint-cli2": "^0.23.0",
+    "markdownlint-cli2": "^0.23.2",
     "typescript": "7.0.2"
   },
   "packageManager": "pnpm@11.15.0+sha512.266f8957a30d2be6e9468e5e66bcdedd35a794175f71b067ba8504d686cce1d0c0f429b33c323c3c569ad4891e667574a49ff71d1b89a22cc66f13c65818c578",
