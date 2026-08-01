@@ -1450,7 +1450,7 @@ test('extractOkfIndexFields reads type/title/description from OKF frontmatter', 
 });
 
 test('buildOkfIndexRows groups by typeOrder then path and excludes reserved paths', () => {
-  const files = {
+  const files: Record<string, string> = {
     'docs/b.md':
       '---\ntype: guide\ntitle: B\ndescription: B page.\n---\n\n# B\n',
     'docs/a.md':
