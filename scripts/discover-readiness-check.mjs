@@ -5,8 +5,6 @@
 // source named above by `pnpm run build`. Edit the .mts source, never the
 // generated .mjs. See docs/typescript-sources.md.
 import { execFileSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
 import {
   buildAuthoringLabelWarning,
   resolveAuthoringGuardPolicy,
@@ -18,6 +16,7 @@ import {
 import { parseCliArgs } from './cli-args.mjs';
 import { GH_TEXT_LOOP_OPTIONS, ghText } from './gh-exec.mjs';
 import { deriveGhHttpStatus } from './gh-http-status.mjs';
+import { loadPolicyConfig } from './idd-config.mjs';
 import { stripMarkdownCodeRegions } from './markdown-code.mjs';
 import { escapeRegex } from './marker-regex.mjs';
 import { normalizePolicyConfig, POLICY_DEFAULTS } from './policy-helpers.mjs';
@@ -832,15 +831,12 @@ export function parseIssueNumberLines(raw) {
       .map((line) => Number.parseInt(line, 10)),
   );
 }
+// Read-and-parse failure semantics (explicit path throws; default path
+// silently falls back only on ENOENT) are converged in idd-config.mts's
+// loadPolicyConfig (#1721); this helper has no shape normalization of its
+// own beyond returning the raw config.
 function loadPolicy(policyPath) {
-  const targetPath = policyPath
-    ? resolve(process.cwd(), policyPath)
-    : resolve(process.cwd(), '.github/idd/config.json');
-  try {
-    return JSON.parse(readFileSync(targetPath, 'utf8'));
-  } catch {
-    return {};
-  }
+  return loadPolicyConfig(policyPath).config;
 }
 function resolveMarkerPrefix(config) {
   const prefix = config?.markerPrefix;
