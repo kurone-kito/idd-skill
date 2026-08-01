@@ -128,6 +128,57 @@ test('policy schema declares ciGate only once at the top level', () => {
   assert.equal(ciGateMatches.length, 1);
 });
 
+test('every reachable property in the policy schema has a description', () => {
+  // Recursively walks only the schema's own `properties` keyword nesting
+  // (never `items`, `patternProperties`, or `additionalProperties`), so an
+  // array's element schema (e.g. `ciGate.externalChecks.advisory.items`)
+  // is not counted as a separate reachable property here — matching how
+  // #1793 counted "87 of 102 properties" for this schema.
+  interface SchemaPropertyNode {
+    description?: unknown;
+    properties?: Record<string, SchemaPropertyNode>;
+  }
+  function collectMissingDescriptions(
+    node: SchemaPropertyNode | undefined,
+    path: string,
+    missing: string[],
+    visited: { count: number },
+  ): void {
+    if (typeof node !== 'object' || node === null) return;
+    visited.count += 1;
+    if (
+      typeof node.description !== 'string' ||
+      node.description.trim() === ''
+    ) {
+      missing.push(path);
+    }
+    for (const [key, child] of Object.entries(node.properties ?? {})) {
+      collectMissingDescriptions(child, `${path}.${key}`, missing, visited);
+    }
+  }
+
+  const schema = loadJson('schemas/policy.schema.json') as {
+    properties: Record<string, SchemaPropertyNode>;
+  };
+  const missing: string[] = [];
+  const visited = { count: 0 };
+  for (const [key, child] of Object.entries(schema.properties)) {
+    collectMissingDescriptions(child, key, missing, visited);
+  }
+
+  assert.deepEqual(
+    missing,
+    [],
+    `Missing "description" on: ${missing.join(', ')}`,
+  );
+  // A walker with a typo'd root key or an empty properties tree would
+  // otherwise pass vacuously; guard against that too.
+  assert.ok(
+    visited.count > 90,
+    `expected a substantial reachable properties tree, saw ${visited.count}`,
+  );
+});
+
 test('phase-graph schema uses only allowed keywords', () => {
   const schema = loadJson('schemas/phase-graph.schema.json');
   assert.deepEqual(checkSchemaKeywords(schema), []);

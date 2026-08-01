@@ -17,19 +17,23 @@
   "properties": {
     "$schema": {
       "type": "string",
-      "minLength": 1
+      "minLength": 1,
+      "description": "The published policy schema `$id` URL this config file validates against, enabling editor hover text and autocomplete. Required when `config.json` exists; no runtime default."
     },
     "iddVersion": {
       "type": "string",
-      "pattern": "^\\d+\\.\\d+\\.\\d+$"
+      "pattern": "^\\d+\\.\\d+\\.\\d+$",
+      "description": "Records which distributed IDD release this repository imported, following semantic-versioning intent for template re-sync decisions. Required; no default. `idd-doctor` also runs a content-based staleness check as a backstop."
     },
     "markerPrefix": {
       "type": "string",
-      "pattern": "^[a-z][a-z0-9-]{1,31}$"
+      "pattern": "^[a-z][a-z0-9-]{1,31}$",
+      "description": "Prefix embedded in every marker token and generated label name (for example `idd-skill-roadmap-id`). Required when `config.json` exists; no schema default, though helper code falls back to `idd-skill` when the file itself is absent."
     },
     "mergePolicy": {
       "type": "string",
-      "enum": ["fully_autonomous_merge", "human_merge", "separate_merge_agent"]
+      "enum": ["fully_autonomous_merge", "human_merge", "separate_merge_agent"],
+      "description": "Selects which session is authorized to execute the F3 merge. Required; changing it is a workflow behavior change needing matching phase-file updates. An absent `config.json` is treated as the fully-autonomous profile."
     },
     "reviewPolicy": {
       "type": "string",
@@ -38,7 +42,8 @@
         "human-required",
         "no-advisory",
         "external-bot"
-      ]
+      ],
+      "description": "Selects the PR review-authority profile enforced by the E/F-phase instructions. Required; the distributed default is the Copilot-advisory profile, where CI, branch protection, and claim checks still gate the merge."
     },
     "threadResolutionPolicy": {
       "type": "string",
@@ -46,7 +51,8 @@
         "fast-agent-resolve",
         "hybrid-reviewer-ack",
         "strict-reviewer-resolve"
-      ]
+      ],
+      "description": "Selects which review threads an agent may resolve on its own initiative. Required; the distributed default lets agents resolve after acting on feedback. Branch-protection conversation-resolution rules always override this policy."
     },
     "claimTiming": {
       "type": "object",
@@ -55,13 +61,16 @@
       "properties": {
         "staleAge": {
           "type": "string",
-          "pattern": "^P(?=\\d|T\\d)(?:\\d+D)?(?:T(?=\\d)(?:\\d+H)?(?:\\d+M)?(?:\\d+S)?)?$"
+          "pattern": "^P(?=\\d|T\\d)(?:\\d+D)?(?:T(?=\\d)(?:\\d+H)?(?:\\d+M)?(?:\\d+S)?)?$",
+          "description": "ISO 8601 duration after which an active claim's latest valid `claimed-by` comment is considered stale and eligible for takeover. Required; the distributed convention is `PT24H`."
         },
         "heartbeatInterval": {
           "type": "string",
-          "pattern": "^P(?=\\d|T\\d)(?:\\d+D)?(?:T(?=\\d)(?:\\d+H)?(?:\\d+M)?(?:\\d+S)?)?$"
+          "pattern": "^P(?=\\d|T\\d)(?:\\d+D)?(?:T(?=\\d)(?:\\d+H)?(?:\\d+M)?(?:\\d+S)?)?$",
+          "description": "ISO 8601 duration cadence at which an owning session re-posts its claim comment to reset the stale clock. Required; the distributed convention is `PT12H`."
         }
-      }
+      },
+      "description": "Container for the claim ownership timing pair (`staleAge`, `heartbeatInterval`) read by discover, claim, resume, and resume-stall instruction files. Required object; both nested fields are themselves required."
     },
     "trustedMarkerActors": {
       "type": "array",
@@ -69,7 +78,8 @@
       "items": {
         "type": "string",
         "minLength": 1
-      }
+      },
+      "description": "GitHub logins (or bot/App identities) whose `claimed-by`, `unclaimed-by`, review-watermark, and other operational marker comments are trusted for state transitions. Required; at least one entry."
     },
     "advisoryBotLogins": {
       "type": "array",
@@ -89,7 +99,8 @@
           "description": "GitHub <owner>/<repo> slug for the example repository whose README is expected to back-link to docs/workshop/. Empty string disables the doctor cross-check.",
           "pattern": "^(?:|[^/\\s]+/[^/\\s]+)$"
         }
-      }
+      },
+      "description": "Optional metadata block naming an example repository used by the onboarding workshop's cross-check. Absent by default; omitting it disables the `idd-doctor` cross-check."
     },
     "commands": {
       "type": "object",
@@ -98,21 +109,26 @@
       "properties": {
         "install-deps": {
           "type": "string",
-          "minLength": 1
+          "minLength": 1,
+          "description": "Shell command that installs project dependencies before implementation work begins. Required; must stay idempotent so reruns in fresh, reused, or recreated worktrees need no manual cleanup."
         },
         "fix-validate": {
           "type": "string",
-          "minLength": 1
+          "minLength": 1,
+          "description": "Shell command that auto-fixes and validates the working tree before each atomic commit. Required; run before committing, then again if `pre-push-validate` reports a fixable failure."
         },
         "pre-push-validate": {
           "type": "string",
-          "minLength": 1
+          "minLength": 1,
+          "description": "Shell command that validates the branch before pushing, without auto-fixing. Required; on failure, run `fix-validate`, commit, then re-run this command."
         },
         "post-fix-validate": {
           "type": "string",
-          "minLength": 1
+          "minLength": 1,
+          "description": "Shell command that re-validates after a review-fix or triage edit, mirroring `fix-validate` without redundant re-fixing already covered elsewhere. Required."
         }
-      }
+      },
+      "description": "Shell command overrides for the four validation lifecycle steps. Required object; when present and valid, these strings override the matching rows in the Project commands table."
     },
     "helperRuntime": {
       "type": "object",
@@ -127,36 +143,44 @@
             "vendored-node",
             "ephemeral-npx",
             "instructions-only"
-          ]
+          ],
+          "description": "Selects which helper-runtime import surface this repository uses. Required within this object; the whole `helperRuntime` key defaults to the instructions-only fallback when absent."
         }
       }
     },
     "issueScope": {
       "type": "string",
-      "enum": ["roadmap", "roadmap-first", "orphan-first"]
+      "enum": ["roadmap", "roadmap-first", "orphan-first"],
+      "description": "Selects Discover's candidate scope (roadmap traversal, orphan issues, or both). Optional; defaults to the roadmap-first path with an orphan fallback. Must stay synchronized with the Project commands table's matching row."
     },
     "orphanFirstPolicy": {
       "type": "string",
-      "enum": ["none", "maintainer-approved", "public-disabled"]
+      "enum": ["none", "maintainer-approved", "public-disabled"],
+      "description": "Approval gate applied to orphan-issue candidates once Discover's orphan path runs. Optional; defaults to no extra gate beyond the standard A3 readiness checks."
     },
     "skipIssueAuthorApprovalGate": {
-      "type": "boolean"
+      "type": "boolean",
+      "description": "Opt-out for the repository-wide issue-author approval gate. Optional; omitted or `false` (default) keeps the gate enabled, requiring a self-authorizing author or an explicit approval signal."
     },
     "critiqueLoopProfile": {
       "type": "string",
-      "minLength": 1
+      "minLength": 1,
+      "description": "Free-text record of which critique-loop profile this repository has selected, for onboarding notes and human readers. Optional; not currently read by any discover, claim, or review runtime consumer."
     },
     "mergeHandoffActor": {
       "type": "string",
-      "minLength": 1
+      "minLength": 1,
+      "description": "Free-text record of the designated merge-capable actor for the separate-merge-agent policy, alongside the documented resume condition. Optional; not currently read by any runtime consumer — informational only."
     },
     "externalAdvisoryBot": {
       "type": "string",
-      "minLength": 1
+      "minLength": 1,
+      "description": "Free-text record naming an external advisory bot for a non-default review policy, kept for onboarding and documentation. Optional; `advisoryWait.primaryBotLogin` is the field the advisory-wait runtime actually reads."
     },
     "maintainerApprovalActorPolicy": {
       "type": "string",
-      "enum": ["owners-and-maintainers-only", "all-write-permission-actors"]
+      "enum": ["owners-and-maintainers-only", "all-write-permission-actors"],
+      "description": "Selects who counts as a maintainer approval actor for the issue-author approval gate. Optional; defaults to owners plus Maintain/Admin collaborators only, excluding plain Write permission."
     },
     "maintainerApprovalActors": {
       "type": "array",
@@ -164,7 +188,8 @@
       "items": {
         "type": "string",
         "minLength": 1
-      }
+      },
+      "description": "Optional explicit allowlist of GitHub logins granted maintainer approval authority. Schema-supported metadata; the distributed discover/claim runtime does not yet enforce this list."
     },
     "stallRecovery": {
       "type": "object",
@@ -172,9 +197,11 @@
       "properties": {
         "quietWindow": {
           "type": "string",
-          "pattern": "^P(?=\\d|T\\d)(?:\\d+D)?(?:T(?=\\d)(?:\\d+H)?(?:\\d+M)?(?:\\d+S)?)?$"
+          "pattern": "^P(?=\\d|T\\d)(?:\\d+D)?(?:T(?=\\d)(?:\\d+H)?(?:\\d+M)?(?:\\d+S)?)?$",
+          "description": "ISO 8601 duration of no session activity that counts as evidence a claimed issue's session may be stalled, used by the S2/S4 resume-stall checks. Optional; defaults to `PT30M`."
         }
-      }
+      },
+      "description": "Container for stalled-session recovery timing (`quietWindow`). Optional; omitting it keeps the distributed quiet-window default."
     },
     "forcedHandoff": {
       "type": "object",
@@ -182,13 +209,16 @@
       "properties": {
         "mode": {
           "type": "string",
-          "enum": ["disabled", "human-gated"]
+          "enum": ["disabled", "human-gated"],
+          "description": "Enables a human-verified exception letting a maintainer transfer a stuck, non-stale claim before the 24-hour stale takeover applies. Legacy alias cluster: this canonical nested-camelCase key wins over `forced-handoff.mode`, `forcedHandoffMode`, then `forced-handoff-mode`, in that order. Optional; the safer state applies by default."
         },
         "authorityPolicy": {
           "type": "string",
-          "enum": ["owners-and-maintainers-only", "all-write-permission-actors"]
+          "enum": ["owners-and-maintainers-only", "all-write-permission-actors"],
+          "description": "Human approval authority required to authorize a forced handoff. Legacy alias cluster: this canonical nested-camelCase key wins over `forced-handoff.authorityPolicy`, `forcedHandoffAuthority`, then `forced-handoff-authority`, in that order. Optional; defaults to owners and Maintain/Admin collaborators only."
         }
-      }
+      },
+      "description": "Canonical nested-camelCase container for the forced-handoff settings (`mode`, `authorityPolicy`). Optional; wins over the `forced-handoff` nested and flat alias forms whenever a nested value is present and valid."
     },
     "forced-handoff": {
       "type": "object",
@@ -196,44 +226,55 @@
       "properties": {
         "mode": {
           "type": "string",
-          "enum": ["disabled", "human-gated"]
+          "enum": ["disabled", "human-gated"],
+          "description": "Legacy nested-kebab-case alias for `forcedHandoff.mode`. Optional; wins only when the canonical `forcedHandoff.mode` is absent or invalid; `forcedHandoffMode` and `forced-handoff-mode` are tried after this, in that order."
         },
         "authorityPolicy": {
           "type": "string",
-          "enum": ["owners-and-maintainers-only", "all-write-permission-actors"]
+          "enum": ["owners-and-maintainers-only", "all-write-permission-actors"],
+          "description": "Legacy nested-kebab-case alias for `forcedHandoff.authorityPolicy`. Optional; wins only when the canonical `forcedHandoff.authorityPolicy` is absent or invalid; `forcedHandoffAuthority` and `forced-handoff-authority` are tried after this, in that order."
         }
-      }
+      },
+      "description": "Legacy nested-kebab-case alias for `forcedHandoff` (`mode`, `authorityPolicy`). Optional; the canonical `forcedHandoff` nested-camelCase form wins whenever it carries a valid value instead."
     },
     "forcedHandoffMode": {
       "type": "string",
-      "enum": ["disabled", "human-gated"]
+      "enum": ["disabled", "human-gated"],
+      "description": "Legacy flat-camelCase alias for `forcedHandoff.mode`. Optional; wins only when neither nested form (`forcedHandoff.mode`, `forced-handoff.mode`) carries a valid value; `forced-handoff-mode` is the final fallback after this."
     },
     "forced-handoff-mode": {
       "type": "string",
-      "enum": ["disabled", "human-gated"]
+      "enum": ["disabled", "human-gated"],
+      "description": "Legacy flat-kebab-case alias for `forcedHandoff.mode`, and the last-resort form in the four-way precedence order (nested-camelCase, nested-kebab-case, flat-camelCase, then this). Optional."
     },
     "forcedHandoffAuthority": {
       "type": "string",
-      "enum": ["owners-and-maintainers-only", "all-write-permission-actors"]
+      "enum": ["owners-and-maintainers-only", "all-write-permission-actors"],
+      "description": "Legacy flat-camelCase alias for `forcedHandoff.authorityPolicy`. Optional; wins only when neither nested form carries a valid value; `forced-handoff-authority` is the final fallback after this."
     },
     "forced-handoff-authority": {
       "type": "string",
-      "enum": ["owners-and-maintainers-only", "all-write-permission-actors"]
+      "enum": ["owners-and-maintainers-only", "all-write-permission-actors"],
+      "description": "Legacy flat-kebab-case alias for `forcedHandoff.authorityPolicy`, and the last-resort form in the four-way precedence order (nested-camelCase, nested-kebab-case, flat-camelCase, then this). Optional."
     },
     "markerTrust": {
       "type": "object",
       "additionalProperties": false,
       "properties": {
         "allowCollaboratorMarkers": {
-          "type": "boolean"
+          "type": "boolean",
+          "description": "Whether operational markers authored by Write/Maintain/Admin collaborators, not only the configured trusted actors, are trusted for claim and review state transitions. Legacy alias cluster: this canonical nested key wins over `markerTrustAllowCollaboratorMarkers`, then `allowCollaboratorMarkers`. Optional; defaults to the more conservative state."
         }
-      }
+      },
+      "description": "Canonical nested-camelCase container for marker-trust settings (`allowCollaboratorMarkers`). Optional; wins over the flat alias forms whenever it carries a valid value."
     },
     "markerTrustAllowCollaboratorMarkers": {
-      "type": "boolean"
+      "type": "boolean",
+      "description": "Legacy flat-camelCase alias for `markerTrust.allowCollaboratorMarkers`. Optional; wins only when the canonical nested key is absent or invalid; `allowCollaboratorMarkers` is tried after this."
     },
     "allowCollaboratorMarkers": {
-      "type": "boolean"
+      "type": "boolean",
+      "description": "Legacy flat alias for `markerTrust.allowCollaboratorMarkers`, and the last-resort form in the three-way precedence order (nested-camelCase, flat-camelCase, then this). Optional."
     },
     "advisoryWait": {
       "type": "object",
@@ -246,39 +287,48 @@
         },
         "requestCap": {
           "type": "integer",
-          "minimum": 1
+          "minimum": 1,
+          "description": "Maximum number of re-review requests the advisory-wait loop may post to the primary bot per PR — a process-level cap, not GitHub-enforced. Optional; defaults to `30`."
         },
         "pendingWindow": {
           "type": "string",
-          "pattern": "^P(?=(?:\\d+D|T\\d+[HM]))(?=.*(?:[1-9]\\d*[DHM]))(?:\\d+D)?(?:T(?=\\d+[HM])(?:\\d+H)?(?:\\d+M)?)?$"
+          "pattern": "^P(?=(?:\\d+D|T\\d+[HM]))(?=.*(?:[1-9]\\d*[DHM]))(?:\\d+D)?(?:T(?=\\d+[HM])(?:\\d+H)?(?:\\d+M)?)?$",
+          "description": "Whole-minute ISO 8601 duration to wait once the primary bot review is pending before treating the advisory gate as satisfied. Optional; defaults to `PT30M`."
         },
         "settledWindow": {
           "type": "string",
-          "pattern": "^P(?=(?:\\d+D|T\\d+[HM]))(?=.*(?:[1-9]\\d*[DHM]))(?:\\d+D)?(?:T(?=\\d+[HM])(?:\\d+H)?(?:\\d+M)?)?$"
+          "pattern": "^P(?=(?:\\d+D|T\\d+[HM]))(?=.*(?:[1-9]\\d*[DHM]))(?:\\d+D)?(?:T(?=\\d+[HM])(?:\\d+H)?(?:\\d+M)?)?$",
+          "description": "Whole-minute ISO 8601 duration to wait once the primary bot review is submitted or cancelled before treating the advisory gate as satisfied. Optional; defaults to `PT10M`."
         },
         "pollInterval": {
           "type": "string",
-          "pattern": "^P(?=(?:\\d+D|T\\d+[HM]))(?=.*(?:[1-9]\\d*[DHM]))(?:\\d+D)?(?:T(?=\\d+[HM])(?:\\d+H)?(?:\\d+M)?)?$"
+          "pattern": "^P(?=(?:\\d+D|T\\d+[HM]))(?=.*(?:[1-9]\\d*[DHM]))(?:\\d+D)?(?:T(?=\\d+[HM])(?:\\d+H)?(?:\\d+M)?)?$",
+          "description": "Whole-minute ISO 8601 duration between polls while actively waiting on primary-bot review state. Optional; defaults to `PT2M`."
         },
         "capExhaustedRoute": {
           "type": "string",
-          "enum": ["phase-specific", "hold"]
+          "enum": ["phase-specific", "hold"],
+          "description": "Routing once the re-review request cap is exhausted. Optional; defaults to a phase-specific split, where E14 skips the wait while F2/F3 still hold for a maintainer."
         },
         "primaryBotLogin": {
           "type": "string",
-          "minLength": 1
+          "minLength": 1,
+          "description": "GitHub login of the advisory bot whose review the advisory-wait gate tracks as the primary signal. Optional; defaults to Copilot, preserving the Copilot-advisory behavior."
         },
         "secondaryBotLogin": {
           "type": "string",
-          "minLength": 1
+          "minLength": 1,
+          "description": "GitHub login of an optional, non-gating secondary advisory bot, requested once per HEAD only while the primary bot is cap-exhausted or stalled. Optional; no default — omitted or equal to the primary disables it."
         },
         "convergenceDeadline": {
           "type": "string",
-          "pattern": "^P(?=(?:\\d+D|T\\d+[HM]))(?=.*(?:[1-9]\\d*[DHM]))(?:\\d+D)?(?:T(?=\\d+[HM])(?:\\d+H)?(?:\\d+M)?)?$"
+          "pattern": "^P(?=(?:\\d+D|T\\d+[HM]))(?=.*(?:[1-9]\\d*[DHM]))(?:\\d+D)?(?:T(?=\\d+[HM])(?:\\d+H)?(?:\\d+M)?)?$",
+          "description": "Whole-minute ISO 8601 duration from the HEAD commit's own timestamp after which the advisory-convergence check can only turn green via a maintainer waiver, not a fresh review. Optional; defaults to `PT24H`."
         },
         "sameHeadRerollCap": {
           "type": "integer",
-          "minimum": 1
+          "minimum": 1,
+          "description": "Bounded budget for same-HEAD advisory rerolls once the primary bot's review already covers current HEAD but every remaining item is already dispositioned. Scoped per HEAD; kept separate from `requestCap`. Optional; defaults to `2`."
         },
         "recoveryCycleCap": {
           "type": "integer",
@@ -290,7 +340,8 @@
           "pattern": "^P(?=(?:\\d+D|T\\d+[HM]))(?=.*(?:[1-9]\\d*[DHM]))(?:\\d+D)?(?:T(?=\\d+[HM])(?:\\d+H)?(?:\\d+M)?)?$",
           "description": "Terminal Copilot-unavailability window (#1572; default PT12H). Once the recovery-cycle cap is exhausted, this window has elapsed since the terminal clock anchor, and no current-HEAD Copilot review exists, the state contract reports COPILOT_UNAVAILABLE -- eligibility for a maintainer waiver, never advisory satisfaction on its own."
         }
-      }
+      },
+      "description": "Container for Copilot/primary-bot advisory review timing, caps, and bot identity. Optional; omitting any nested key keeps that key's own distributed default."
     },
     "ciWait": {
       "type": "object",
@@ -298,17 +349,21 @@
       "properties": {
         "runningTimeout": {
           "type": "string",
-          "pattern": "^P(?=\\d|T\\d)(?:\\d+D)?(?:T(?=\\d)(?:\\d+H)?(?:\\d+M)?(?:\\d+S)?)?$"
+          "pattern": "^P(?=\\d|T\\d)(?:\\d+D)?(?:T(?=\\d)(?:\\d+H)?(?:\\d+M)?(?:\\d+S)?)?$",
+          "description": "Maximum time to poll a running required CI check, measured from its server-reported start time, before stalled-run recovery begins. Optional; defaults to `PT30M`."
         },
         "generationTimeout": {
           "type": "string",
-          "pattern": "^P(?=\\d|T\\d)(?:\\d+D)?(?:T(?=\\d)(?:\\d+H)?(?:\\d+M)?(?:\\d+S)?)?$"
+          "pattern": "^P(?=\\d|T\\d)(?:\\d+D)?(?:T(?=\\d)(?:\\d+H)?(?:\\d+M)?(?:\\d+S)?)?$",
+          "description": "Maximum time to wait for required CI checks to appear at all before treating the wait as stalled. Optional; defaults to `PT10M`."
         },
         "rerunPolicy": {
           "type": "string",
-          "enum": ["rerun-once", "hold"]
+          "enum": ["rerun-once", "hold"],
+          "description": "Rerun budget for infra or stalled CI recovery. Optional; defaults to rerunning the first eligible failure once, then holding if the same route recurs."
         }
-      }
+      },
+      "description": "Container for CI-check polling timing and rerun policy shared by the D, E, and F phases. Optional; omitting any nested key keeps that key's own distributed default."
     },
     "ciGate": {
       "type": "object",
@@ -335,7 +390,8 @@
                     "enum": ["exact", "glob"]
                   }
                 }
-              }
+              },
+              "description": "Selectors matching repo-external checks whose non-pass state is tolerated by the local CI gate, informational rather than merge-blocking on its own. Optional; empty by default (no advisory overrides)."
             },
             "waivable": {
               "type": "array",
@@ -354,9 +410,11 @@
                     "enum": ["exact", "glob"]
                   }
                 }
-              }
+              },
+              "description": "Selectors matching repo-external checks eligible for a maintainer-authorized external-check waiver via `externalCheckWaivers`. Optional; empty by default (nothing is waivable)."
             }
-          }
+          },
+          "description": "Container for the `advisory` and `waivable` repo-external check-selector lists that this repository's local CI gate classifies. Optional; omitting it applies no external-check overrides."
         },
         "externalCheckWaivers": {
           "type": "object",
@@ -364,17 +422,21 @@
           "properties": {
             "mode": {
               "type": "string",
-              "enum": ["disabled", "maintainer-authorized"]
+              "enum": ["disabled", "maintainer-authorized"],
+              "description": "Enables the maintainer-authorized external-check waiver escape hatch for repo-external checks. Optional; defaults to the disabled state, so no check is waivable regardless of the `waivable` selector list."
             },
             "authorityPolicy": {
               "type": "string",
-              "enum": ["owners-and-maintainers-only", "all-write-permission-actors"]
+              "enum": ["owners-and-maintainers-only", "all-write-permission-actors"],
+              "description": "Who may author a valid external-check waiver. Optional; defaults to owners and Maintain/Admin collaborators only, excluding plain Write permission."
             },
             "maxValidity": {
               "type": "string",
-              "pattern": "^(?=.*[1-9])P(?=\\d|T\\d)(?:\\d+D)?(?:T(?=\\d)(?:\\d+H)?(?:\\d+M)?(?:\\d+S)?)?$"
+              "pattern": "^(?=.*[1-9])P(?=\\d|T\\d)(?:\\d+D)?(?:T(?=\\d)(?:\\d+H)?(?:\\d+M)?(?:\\d+S)?)?$",
+              "description": "Maximum ISO 8601 duration a single external-check waiver stays valid before it must be renewed. Optional; defaults to `PT24H` — keep waivers short-lived and finite."
             }
-          }
+          },
+          "description": "Container for the maintainer-authorized external-check waiver policy (`mode`, `authorityPolicy`, `maxValidity`). Optional; omitting it keeps waivers unavailable."
         },
         "trustEmptyProtectionReads": {
           "type": "boolean",
@@ -384,7 +446,8 @@
           "type": "boolean",
           "description": "Opt-in toggle for trusting a source-pinned required check (a ruleset or classic branch-protection entry whose `app_id`/`integration_id` names a specific GitHub App/integration as the expected producer) once it is present, matched by name, and pass-equivalent (default false; absent means false). Default `false` fails closed: the CI gate downgrades an otherwise-passing named check to unresolved (`unknown` in `pre-merge-readiness`, `source-pinned` in the ci-wait-state helper) whenever any required-check rule entry is source-pinned, because no producer-identity data (the actual GitHub App that created the check) is fetched anywhere in this codebase's check-run reads, so the pinning cannot be verified at runtime. Set `true` only when the repository operator has verified out-of-band that the pinned integration is the sole producer of the named required check(s); this is a git-committed, human-authorized decision, not a runtime check of actual producer identity. It never relaxes a fully unnamed pinned requirement (e.g. a ruleset `workflows` rule with no enumerable check name), which stays unconditionally conservative."
         }
-      }
+      },
+      "description": "Container for repo-external CI-check classification and the maintainer-authorized external-check waiver policy. Optional; omitting it keeps no external overrides and disabled waivers."
     },
     "discover": {
       "type": "object",
@@ -392,7 +455,8 @@
       "properties": {
         "activeClaimPreScanBatchSize": {
           "type": "integer",
-          "minimum": 1
+          "minimum": 1,
+          "description": "Number of viable candidates the A4 Step 1.5 active-claim pre-scan checks per batch before moving to the next range. Optional; defaults to `10`."
         },
         "selectionDesync": {
           "type": "string",
@@ -408,7 +472,8 @@
           },
           "description": "Issue numbers of legacy roadmap roots that predate the `roadmap` label and `<prefix>-roadmap-id` marker (e.g. an ad-hoc umbrella convention adopted before IDD). Unioned into `--all-roadmaps` root discovery and deduped against label/marker roots; a missing or invalid value fails safe to no extra roots."
         }
-      }
+      },
+      "description": "Container for Discover-phase concurrency tuning: active-claim pre-scan batch size, selection desync, and legacy roadmap roots. Optional; omitting any nested key keeps that key's own distributed default."
     },
     "claim": {
       "type": "object",
@@ -416,9 +481,11 @@
       "properties": {
         "verifySettleDelay": {
           "type": "string",
-          "pattern": "^(?=.*[1-9])P(?=\\d|T\\d)(?:\\d+D)?(?:T(?=\\d)(?:\\d+H)?(?:\\d+M)?(?:\\d+S)?)?$"
+          "pattern": "^(?=.*[1-9])P(?=\\d|T\\d)(?:\\d+D)?(?:T(?=\\d)(?:\\d+H)?(?:\\d+M)?(?:\\d+S)?)?$",
+          "description": "ISO 8601 duration to wait after posting a `claimed-by` comment, letting GitHub eventual consistency settle before re-reading and verifying the claim. Optional; defaults to `PT5S`."
         }
-      }
+      },
+      "description": "Container for claim-verification timing (`verifySettleDelay`). Optional; omitting it keeps the distributed default."
     },
     "critiqueLoop": {
       "type": "object",
@@ -426,13 +493,16 @@
       "properties": {
         "cPhaseLowSeveritySkipAfter": {
           "type": "integer",
-          "minimum": 1
+          "minimum": 1,
+          "description": "Loop-count threshold after which C4 may skip remaining Low-severity Accepted findings, once the objective diff validation floor has also passed. Optional; defaults to `3`."
         },
         "e10NoProgressHoldAfter": {
           "type": "integer",
-          "minimum": 1
+          "minimum": 1,
+          "description": "Number of consecutive E10 review-fix critique passes without meaningful progress before the auto-loop stops and posts a hold for a maintainer decision. Optional; defaults to `3`."
         }
-      }
+      },
+      "description": "Container for the C-phase and E10 critique-loop convergence guardrails. Optional; omitting any nested key keeps that key's own distributed default."
     },
     "reviewEscalation": {
       "type": "object",
@@ -440,13 +510,16 @@
       "properties": {
         "changesRequestedFirstEscalation": {
           "type": "string",
-          "pattern": "^(?=.*[1-9])P(?=\\d|T\\d)(?:\\d+D)?(?:T(?=\\d)(?:\\d+H)?(?:\\d+M)?(?:\\d+S)?)?$"
+          "pattern": "^(?=.*[1-9])P(?=\\d|T\\d)(?:\\d+D)?(?:T(?=\\d)(?:\\d+H)?(?:\\d+M)?(?:\\d+S)?)?$",
+          "description": "ISO 8601 duration of reviewer silence, after posting a rejection reply, before escalating to a maintainer. Optional; defaults to `PT24H`."
         },
         "changesRequestedSecondEscalation": {
           "type": "string",
-          "pattern": "^(?=.*[1-9])P(?=\\d|T\\d)(?:\\d+D)?(?:T(?=\\d)(?:\\d+H)?(?:\\d+M)?(?:\\d+S)?)?$"
+          "pattern": "^(?=.*[1-9])P(?=\\d|T\\d)(?:\\d+D)?(?:T(?=\\d)(?:\\d+H)?(?:\\d+M)?(?:\\d+S)?)?$",
+          "description": "ISO 8601 duration of continued silence after the first escalation before applying the needs-decision label and releasing the claim. Optional; defaults to `PT48H`."
         }
-      }
+      },
+      "description": "Container for the rejected-`CHANGES_REQUESTED` reviewer escalation timers. Optional; omitting any nested key keeps that key's own distributed default."
     },
     "approvalSignals": {
       "type": "object",
@@ -454,13 +527,16 @@
       "properties": {
         "readyLabelName": {
           "type": "string",
-          "minLength": 1
+          "minLength": 1,
+          "description": "GitHub label name that satisfies the issue-author approval gate when applied by a maintainer approval actor. Optional; defaults to `idd:ready`."
         },
         "labelFreshnessMode": {
           "type": "string",
-          "enum": ["presence-only", "event-freshness"]
+          "enum": ["presence-only", "event-freshness"],
+          "description": "Freshness rule applied to the configured ready label. Optional; defaults to accepting label presence alone, without checking the labeling event against later issue or plan edits."
         }
-      }
+      },
+      "description": "Container for the issue-author approval gate's ready-label name and freshness rule. Optional; omitting any nested key keeps that key's own distributed default."
     },
     "issueAuthoring": {
       "type": "object",
@@ -468,17 +544,21 @@
       "properties": {
         "maxClarificationRounds": {
           "type": "integer",
-          "minimum": 1
+          "minimum": 1,
+          "description": "Maximum number of clarification rounds the issue-authoring skill runs before drafting must converge. Optional; defaults to `3`; keep any increase finite so drafting still converges."
         },
         "authoringLabelName": {
           "type": "string",
-          "minLength": 1
+          "minLength": 1,
+          "description": "GitHub label name marking an issue as currently being authored, excluding it from Discover's candidate selection. Optional; defaults to `status:authoring`."
         },
         "authoringStaleAge": {
           "type": "string",
-          "pattern": "^P(?=\\d|T\\d)(?:\\d+D)?(?:T(?=\\d)(?:\\d+H)?(?:\\d+M)?(?:\\d+S)?)?$"
+          "pattern": "^P(?=\\d|T\\d)(?:\\d+D)?(?:T(?=\\d)(?:\\d+H)?(?:\\d+M)?(?:\\d+S)?)?$",
+          "description": "ISO 8601 duration after which a lingering authoring label triggers a stalled-authoring warning. Optional; defaults to `PT4H`; keep it below `claimTiming.staleAge`."
         }
-      }
+      },
+      "description": "Container for issue-authoring guard settings: authoring label, staleness window, and clarification-round bound. Optional; omitting any nested key keeps that key's own distributed default."
     },
     "autopilotSuitability": {
       "type": "object",
@@ -493,7 +573,8 @@
           "type": "boolean",
           "description": "When false, discovery ignores the score entirely and evaluates every candidate the legacy way (default true)."
         }
-      }
+      },
+      "description": "Container for the discovery autopilot-suitability score floor and its enable switch. Optional; omitting it keeps the distributed defaults for both nested keys."
     },
     "worktreeGuard": {
       "type": "object",
@@ -514,7 +595,8 @@
           },
           "description": "Branch globs the guard treats as implementation branches that must not live in the primary worktree (default [\"issue/*\", \"roadmap-audit/*\"] when absent)."
         }
-      }
+      },
+      "description": "Container for the disposable-worktree guard's enablement and protected branch-name patterns. Optional; omitting it keeps the guard's historical advisory-only behavior."
     },
     "labels": {
       "type": "object",
@@ -522,17 +604,21 @@
       "properties": {
         "roadmapLabelName": {
           "type": "string",
-          "minLength": 1
+          "minLength": 1,
+          "description": "GitHub label name (or umbrella marker) that identifies a roadmap issue. Optional; defaults to `roadmap`."
         },
         "blockedByHumanLabelName": {
           "type": "string",
-          "minLength": 1
+          "minLength": 1,
+          "description": "GitHub label name marking an issue as blocked on human coordination, excluding it from Discover's ready-to-start set. Optional; defaults to `status:blocked-by-human`."
         },
         "needsDecisionLabelName": {
           "type": "string",
-          "minLength": 1
+          "minLength": 1,
+          "description": "GitHub label name marking an issue as needing a maintainer decision, excluding it from Discover's ready-to-start set. Optional; defaults to `status:needs-decision`."
         }
-      }
+      },
+      "description": "Container for the three IDD-role label names: roadmap, blocked-by-human, and needs-decision. Optional; omitting any nested key keeps that key's own distributed default."
     },
     "mergeGate": {
       "type": "object",
@@ -543,7 +629,8 @@
           "enum": ["auto-admin-retry", "hold-and-report"],
           "description": "Distributed default `auto-admin-retry`: F3 retries once with `gh pr merge --admin` when the Gate checklist is fully green, the only merge-command failure is the self-CODEOWNER \"base branch policy prohibits the merge\" error, and the PR author is proven to be the sole eligible codeowner. `hold-and-report` opts into the pre-#1521 behavior: F3 always stops and posts a hold comment on this error instead of retrying."
         }
-      }
+      },
+      "description": "Container for the F3 solo-CODEOWNER admin-fallback policy (`soloCodeownerAdminFallback`). Optional; omitting it keeps the distributed default."
     }
   },
   "patternProperties": {
