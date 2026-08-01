@@ -581,16 +581,18 @@ section for the adopter-facing version of this rubric.
 
 ## Authoring label lifecycle
 
-The issue authoring skill must use the configured authoring label as a
-publication guard while it creates or updates issues. The label name
-comes from `issueAuthoring.authoringLabelName`, with `status:authoring`
-as the distributed default.
+The issue authoring skill must use the configured authoring label as
+both the **draft marker** for held issues and the **claim-suppression
+lock** that keeps Discover from selecting them, while it creates or
+updates issues. The label name comes from
+`issueAuthoring.authoringLabelName`, with `status:authoring` as the
+distributed default.
 
-During Phase 2 publishing, the skill must ensure the label exists in
-the target repository before first use. For the bundled GitHub CLI
-publication flow, create a missing label with `gh label create` before
-applying it. Failure to create or apply the label is a publishing
-blocker, not a warning.
+During Stage 1 (author-and-publish), the skill must ensure the label
+exists in the target repository before first use. For the bundled
+GitHub CLI publication flow, create a missing label with
+`gh label create` before applying it. Failure to create or apply the
+label is a publishing blocker, not a warning.
 
 For existing issues, apply the authoring label before updating issue
 content. For new issues, prefer creating the issue with the authoring
@@ -602,18 +604,36 @@ stopping. Deletion needs admin permission the authoring agent typically
 lacks (and `docs/permissions.md` forbids for normal IDD), so it is not the
 default path.
 
-These guards keep partially published issue sets visible to the IDD
-discover guard while the full set is still being authored. Remove the
-label from all published issues only after the complete issue set is
-published, the user confirms the published result, and the user
-explicitly requests release from the authoring hold for IDD execution.
-If publishing is interrupted before that release, leave the label in
-place so later discover passes route the issue through authoring-label
-handling instead of normal ready-work discovery.
+Publishing under this label needs no separate user approval: once a
+drafted `ready` body passes the mechanical `audit-authored-issue` gate
+and the critique pass, the skill publishes it directly (see
+[Approval boundary](#approval-boundary) below for the one exception).
+The held issue **is** the draft — in-place body edits, roadmap
+relationship wiring (children first, then roadmaps once the real issue
+numbers exist), and re-lint of already-published bodies all happen on
+the published issue itself, under the same label, rather than in a
+session-local buffer a later session cannot see.
 
-Removing the authoring label releases the Discover guard. Do it only as
-part of the explicit execution handoff; publication confirmation alone
-does not start Discover, Claim, and Work.
+These guards keep partially published issue sets visible to the IDD
+discover guard while the full set is still being wired. If a session
+is interrupted before the set is stable, leave the label in place —
+the label alone is what keeps Discover from selecting the unfinished
+set; no other bookkeeping is required for a later session to find and
+finish the work.
+
+Remove the label from all published issues only after: the release
+checklist passes — every child issue is referenced from its parent
+roadmap's `## Tracks` list, no unsubstituted placeholder remains in
+any published body, and the `audit-authored-issue` linter (or its
+manual fallback) is green on every published body in the set — and the
+user explicitly requests release from the authoring hold. This release
+checklist plus the user's explicit request together form the single
+approval boundary in this contract.
+
+Removing the authoring label releases the Discover guard and
+authorizes IDD execution for the released issues. Do it only as part
+of that explicit release request; nothing in this contract removes the
+label or starts Discover, Claim, and Work on its own.
 
 ## Reuse-first issue policy
 
@@ -1051,20 +1071,28 @@ instruction files execute them.
 
 ## Approval boundary
 
-Issue authoring and IDD execution are separate decisions.
+Issue authoring under the hold and IDD execution are separate
+decisions, but drafting and publishing are not: by default, the skill
+authors and publishes a `ready` issue set directly under the
+configured authoring label (`issueAuthoring.authoringLabelName`,
+default `status:authoring`), gated only by the mechanical
+`audit-authored-issue` check and the critique pass — no prior user
+approval of the drafted body is required.
 
-By default, the skill should end by reporting:
+The one exception: if the current request asks only for a preview
+(drafts to review before anything is created), the skill should honor
+that and stop after reporting, without publishing:
 
 - the proposed issue set
 - the rationale for the decomposition
 - any assumptions, open questions, or deferred decisions
 
-Creating or editing GitHub issues requires explicit user approval unless
-the current request already asks the agent to publish the issues.
-
-Starting the IDD execution loop requires a separate explicit approval.
-Drafting issues does not by itself authorize the agent to move into
-Discover or Claim.
+Starting the IDD execution loop requires the user's explicit
+hold-release request — the single approval boundary in this contract.
+That same request also authorizes removing the authoring label (see
+[Authoring label lifecycle](#authoring-label-lifecycle)). Publishing a
+ready issue set under the hold does not by itself authorize the agent
+to move into Discover or Claim.
 
 ## Non-goals
 
