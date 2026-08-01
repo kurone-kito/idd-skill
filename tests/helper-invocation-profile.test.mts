@@ -98,6 +98,13 @@ const SOURCE_REPO_INTERNAL_ENTRY_PATHS = new Set([
 // above -- this is a hypothetical name, not a real unregistered helper.
 const NON_ADOPTER_BIN_NAMES = new Set(['idd-emit-authoring-marker']);
 
+// Same shape as NON_ADOPTER_BIN_NAMES, for the `idd:<name>` package-script
+// form. Empty today (no `npm run|pnpm|yarn idd:<name>` invocation on the
+// current corpus names an unregistered scriptName), kept as a real,
+// consulted Set rather than omitted so a future non-adopter scriptName
+// has a home and the violation message below stays accurate.
+const NON_ADOPTER_SCRIPT_NAMES = new Set<string>();
+
 // Both copies discuss `bin/idd-merge-execute.mjs` as a Bash-permission
 // deny-pattern string (see docs/permissions.md around line 447), not as
 // a prescribed invocation for a reader to run -- the opposite of what
@@ -242,7 +249,10 @@ function collectHelperInvocationViolations(
     }
 
     for (const scriptName of packageScripts) {
-      if (!scriptNames.has(scriptName)) {
+      if (
+        !scriptNames.has(scriptName) &&
+        !NON_ADOPTER_SCRIPT_NAMES.has(scriptName)
+      ) {
         violations.push({
           file: file.path,
           rule: 'unbacked-helper',
