@@ -784,7 +784,7 @@ The adopted helper boundaries are intentionally narrow:
 - Command: `node scripts/forced-handoff-marker.mjs --issue <number> --plan ...`
 - Published bin: `idd-forced-handoff-marker`
 - Stable contract:
-  [`schemas/forced-handoff-marker.schema.json`](../schemas/forced-handoff-marker.schema.json)
+  [`forced-handoff-marker.schema.json`][forced-handoff-marker-schema]
 - Intended use:
   - render or inspect canonical forced-handoff marker payloads
   - support audited debugging or manual review of the exact body
@@ -2059,6 +2059,7 @@ replace the written decision tables.
 [advisory-convergence-schema]: https://kurone-kito.github.io/idd-skill/schemas/advisory-convergence.schema.json
 [advisory-wait-state-schema]: https://kurone-kito.github.io/idd-skill/schemas/advisory-wait-state.schema.json
 [disposition-non-review-notices-schema]: https://kurone-kito.github.io/idd-skill/schemas/disposition-non-review-notices.schema.json
+[forced-handoff-marker-schema]: https://kurone-kito.github.io/idd-skill/schemas/forced-handoff-marker.schema.json
 [idd-merge-execute-schema]: https://kurone-kito.github.io/idd-skill/schemas/idd-merge-execute.schema.json
 [post-idd-marker-schema]: https://kurone-kito.github.io/idd-skill/schemas/post-idd-marker.schema.json
 [pre-merge-readiness-schema]: https://kurone-kito.github.io/idd-skill/schemas/pre-merge-readiness.schema.json
