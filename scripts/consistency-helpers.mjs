@@ -1046,10 +1046,11 @@ export function extractOkfIndexFields(text) {
 }
 /**
  * Build deterministic OKF index rows from repo-relative paths.
- * Skips `excludePaths`, reserved basenames when listed there, and pages
- * whose frontmatter cannot supply type/title/description. Groups by
- * `typeOrder` (unknown types sort after known ones, alphabetically),
- * then by path within a group.
+ * Skips exact paths listed in `excludePaths` and pages whose frontmatter
+ * cannot supply type/title/description. Callers that want reserved
+ * basenames (e.g. `index.md`) omitted must put those paths in
+ * `excludePaths` explicitly. Groups by `typeOrder` (unknown types sort
+ * after known ones, alphabetically), then by path within a group.
  */
 export function buildOkfIndexRows(files, readFile, options = {}) {
   const exclude = new Set(
@@ -1104,15 +1105,22 @@ export function renderOkfIndexMarkdownTable(rows, linkBase = 'docs') {
       const href = row.path.startsWith(prefix)
         ? row.path.slice(prefix.length)
         : row.path;
-      // Escape pipe characters in cell text so a description containing
-      // `|` cannot break the table.
-      const type = row.type.replace(/\|/g, '\\|');
-      const title = row.title.replace(/\|/g, '\\|');
-      const description = row.description.replace(/\|/g, '\\|');
+      // Escape backslashes first, then pipes, so a cell value containing
+      // `\` cannot leave an incomplete escape sequence before `|`
+      // (CodeQL js/incomplete-sanitization on PR #1791).
+      const type = escapeMarkdownTableCell(row.type);
+      const title = escapeMarkdownTableCell(row.title);
+      const description = escapeMarkdownTableCell(row.description);
       return `| ${type} | [${title}](${href}) | ${description} |`;
     })
     .join('\n');
   return `\n\n${openIgnore}\n${header}\n${body}\n${closeIgnore}\n\n`;
+}
+/** Escape a Markdown table cell so `|` and `\` cannot break the row. */
+export function escapeMarkdownTableCell(value) {
+  return String(value ?? '')
+    .replace(/\\/g, '\\\\')
+    .replace(/\|/g, '\\|');
 }
 // Anchored at the very start of the file; a frontmatter block anywhere else
 // does not count -- OKF/YAML frontmatter must open the document.

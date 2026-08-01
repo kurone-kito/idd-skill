@@ -14,6 +14,7 @@ import {
   collectInstructionSizeBudgetViolations,
   collectOkfFrontmatterViolations,
   collectPolicyConfigDrift,
+  escapeMarkdownTableCell,
   extractOkfIndexFields,
   generatedFromBanner,
   injectGeneratedFromBanner,
@@ -1488,6 +1489,12 @@ test('renderOkfIndexMarkdownTable links relative to linkBase', () => {
   assert.match(table, /\| Type \| Page \| Description \|/);
   assert.match(table, /\| guide \| \[Foo\]\(foo\.md\) \| Foo page\. \|/);
   assert.match(table, /dprint-ignore-end/);
+});
+
+test('escapeMarkdownTableCell escapes backslashes before pipes', () => {
+  assert.equal(escapeMarkdownTableCell('a|b'), 'a\\|b');
+  assert.equal(escapeMarkdownTableCell('a\\b'), 'a\\\\b');
+  assert.equal(escapeMarkdownTableCell('a\\|b'), 'a\\\\\\|b');
 });
 
 test('resolveGeneratedBlockFiles: paths present takes precedence, globFilesFn is never called', () => {

@@ -12,7 +12,7 @@
       "languageLinks": [
         {
           "file": "README.md",
-          "text": "[\u65e5\u672c\u8a9e](./README.ja.md)"
+          "text": "[日本語](./README.ja.md)"
         },
         {
           "file": "README.ja.md",
@@ -269,7 +269,7 @@
     },
     {
       "id": "bundle-work-lite",
-      "description": "Lite work path (weak-model condensed profile): .github/instructions/lite/idd-work-lite.instructions.md only \u2014 self-contained; no overview/appendix.",
+      "description": "Lite work path (weak-model condensed profile): .github/instructions/lite/idd-work-lite.instructions.md only — self-contained; no overview/appendix.",
       "files": [
         ".github/instructions/lite/idd-work-lite.instructions.md"
       ],
@@ -286,7 +286,7 @@
     },
     {
       "id": "bundle-claim-lite",
-      "description": "Lite claim path (weak-model condensed profile): .github/instructions/lite/idd-claim-lite.instructions.md only \u2014 self-contained; no overview/appendix.",
+      "description": "Lite claim path (weak-model condensed profile): .github/instructions/lite/idd-claim-lite.instructions.md only — self-contained; no overview/appendix.",
       "files": [
         ".github/instructions/lite/idd-claim-lite.instructions.md"
       ],
@@ -303,7 +303,7 @@
     },
     {
       "id": "bundle-pr-submit-lite",
-      "description": "Lite PR-submit path (weak-model condensed profile): .github/instructions/lite/idd-pr-submit-lite.instructions.md only \u2014 self-contained; no overview/appendix.",
+      "description": "Lite PR-submit path (weak-model condensed profile): .github/instructions/lite/idd-pr-submit-lite.instructions.md only — self-contained; no overview/appendix.",
       "files": [
         ".github/instructions/lite/idd-pr-submit-lite.instructions.md"
       ],
@@ -311,7 +311,7 @@
     },
     {
       "id": "bundle-review-fix-lite",
-      "description": "Lite review-fix path (weak-model condensed profile): idd-review-fix-lite.instructions.md plus its two standalone lite helper siblings \u2014 idd-ci-lite.instructions.md and idd-advisory-wait-lite.instructions.md (E14-caller subset only) \u2014 no overview/appendix; control flow references those siblings one hop away per content principle 3.",
+      "description": "Lite review-fix path (weak-model condensed profile): idd-review-fix-lite.instructions.md plus its two standalone lite helper siblings — idd-ci-lite.instructions.md and idd-advisory-wait-lite.instructions.md (E14-caller subset only) — no overview/appendix; control flow references those siblings one hop away per content principle 3.",
       "files": [
         ".github/instructions/lite/idd-advisory-wait-lite.instructions.md",
         ".github/instructions/lite/idd-ci-lite.instructions.md",
@@ -321,7 +321,7 @@
     },
     {
       "id": "bundle-review-snapshot-lite",
-      "description": "Lite review-snapshot path (weak-model condensed profile): idd-review-snapshot-lite.instructions.md plus its standalone lite advisory-wait sibling \u2014 idd-advisory-wait-lite.instructions.md (E14-caller subset only, read here for its fast-path fields) \u2014 no overview/appendix; single-hop command-syntax reference to idd-review-triage.instructions.md remains, per content principle 3.",
+      "description": "Lite review-snapshot path (weak-model condensed profile): idd-review-snapshot-lite.instructions.md plus its standalone lite advisory-wait sibling — idd-advisory-wait-lite.instructions.md (E14-caller subset only, read here for its fast-path fields) — no overview/appendix; single-hop command-syntax reference to idd-review-triage.instructions.md remains, per content principle 3.",
       "files": [
         ".github/instructions/lite/idd-advisory-wait-lite.instructions.md",
         ".github/instructions/lite/idd-review-snapshot-lite.instructions.md"
