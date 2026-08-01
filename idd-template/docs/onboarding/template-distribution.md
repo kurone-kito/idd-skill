@@ -1,3 +1,10 @@
+---
+type: reference
+title: Template Distribution Maintainer Reference
+description: Explains how the template's generated file-distribution lists in ONBOARDING.md stay correct as files are added, removed, or moved.
+tags: [onboarding, template-distribution]
+---
+
 # Template Distribution Maintainer Reference
 
 Use this page when maintaining the file distribution surface for

@@ -1,3 +1,10 @@
+---
+type: reference
+title: IDD Policy Constants
+description: Inventories the distributed IDD policy defaults and names which configuration surface owns each one.
+tags: [policy-constants, defaults]
+---
+
 # IDD Policy Constants
 
 This page inventories the distributed IDD policy defaults that currently

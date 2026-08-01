@@ -1,3 +1,10 @@
+---
+type: guide
+title: Getting Started with IDD
+description: Walks a new adopter through the shortest safe path from deciding to adopt IDD to running the first Issue-Driven Development loop.
+tags: [getting-started, onboarding]
+---
+
 # Getting Started with IDD
 
 Use this guide when you want the shortest safe path from deciding a
