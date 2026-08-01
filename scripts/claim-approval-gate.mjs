@@ -5,10 +5,10 @@
 // source named above by `pnpm run build`. Edit the .mts source, never the
 // generated .mjs. See docs/typescript-sources.md.
 import { execFileSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
 import { parseCliArgs } from './cli-args.mjs';
 import { GH_TEXT_LOOP_TIMEOUT_OPTIONS, ghText } from './gh-exec.mjs';
 import { deriveGhHttpStatus } from './gh-http-status.mjs';
+import { loadPolicyConfig } from './idd-config.mjs';
 import { normalizePolicyConfig } from './policy-helpers.mjs';
 import { parsePaginatedGhNdjson } from './protocol-helpers.mjs';
 
@@ -697,28 +697,22 @@ function resolveCollaboratorPermission({ owner, repo, login, cache }) {
   cache.set(normalized, resolved);
   return resolved;
 }
+// Read-and-parse failure semantics (explicit path throws; default path
+// silently falls back only on ENOENT) are converged in idd-config.mts's
+// loadPolicyConfig (#1721); this helper keeps its own shape normalization —
+// normalizePolicyConfig's full defaults on a missing/absent config, and the
+// `source` field embedded in `config` so normalizePolicy() (below) can read
+// it back out of the value evaluateClaimApprovalGate receives.
 function loadPolicy(policyPath) {
-  const source = policyPath || '.github/idd/config.json';
-  try {
-    const raw = JSON.parse(readFileSync(source, 'utf8'));
-    const normalized = normalizePolicyConfig(raw);
-    return {
+  const { path: source, config: rawConfig } = loadPolicyConfig(policyPath);
+  const normalized = normalizePolicyConfig(rawConfig);
+  return {
+    source,
+    config: {
+      ...normalized,
       source,
-      config: {
-        ...normalized,
-        source,
-      },
-    };
-  } catch {
-    return {
-      source,
-      config: {
-        skipIssueAuthorApprovalGate: false,
-        maintainerApprovalActorPolicy: APPROVAL_POLICY_DEFAULT,
-        source,
-      },
-    };
-  }
+    },
+  };
 }
 function ghApiJson(path, paginate = false, extraArgs = []) {
   const args = ['api', path, ...extraArgs];

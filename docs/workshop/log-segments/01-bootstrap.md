@@ -1,3 +1,10 @@
+---
+type: reference
+title: Bootstrap Log Segment
+description: Captures the timestamped bootstrap log segment of the VRChat Event Calendar IDD workshop session.
+tags: [workshop, log-segment]
+---
+
 # Bootstrap Log Segment
 
 > **Note:** This segment combines verbatim shell capture from the

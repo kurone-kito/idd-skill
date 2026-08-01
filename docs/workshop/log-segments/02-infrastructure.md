@@ -1,3 +1,10 @@
+---
+type: reference
+title: Infrastructure Setup Log Segment
+description: Captures the timestamped infrastructure-setup log segment of the VRChat Event Calendar IDD workshop session.
+tags: [workshop, log-segment]
+---
+
 # Infrastructure Setup Log Segment
 
 > **Note:** This segment is reconstructed from the preserved claim,

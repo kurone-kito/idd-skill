@@ -582,6 +582,7 @@ export function collectPreMergeReadiness(
   const forcedHandoffPermissionCache: CollaboratorPermissionCache = new Map();
   const waivableCheckSelectors = readWaivableCheckSelectors();
   const externalCheckWaiverMaxValidity = readExternalCheckWaiverMaxValidity();
+  const trustSourcePinnedRequiredChecks = readTrustSourcePinnedRequiredChecks();
   const staleAgeMs = readClaimStaleAgeMs();
   const now = args.now || new Date().toISOString().replace('.000Z', 'Z');
   const normalizedComments = comments.map(normalizeComment);
@@ -665,6 +666,7 @@ export function collectPreMergeReadiness(
       copilotUnavailable,
       waivableCheckSelectors,
       externalCheckWaiverMaxValidity,
+      trustSourcePinnedRequiredChecks,
       staleAgeMs,
       forcedHandoffEnabled,
       expectedLinkedPrs: [String(args.prNumber), prUrl].filter(Boolean),
@@ -1478,6 +1480,18 @@ function readTrustEmptyProtectionReads(): boolean {
   return (
     normalizePolicyConfig(loadIddConfig()).ciGate.trustEmptyProtectionReads ===
     true
+  );
+}
+
+// Configured source-pinned required-check trust opt-in
+// (`ciGate.trustSourcePinnedRequiredChecks`, #1689). Same pattern as
+// `readTrustEmptyProtectionReads` above; see `summarizeRequiredChecks`'s
+// (protocol-helpers.mts) doc comment on the option of the same name for the
+// full rationale.
+function readTrustSourcePinnedRequiredChecks(): boolean {
+  return (
+    normalizePolicyConfig(loadIddConfig()).ciGate
+      .trustSourcePinnedRequiredChecks === true
   );
 }
 

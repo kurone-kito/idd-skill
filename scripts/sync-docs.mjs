@@ -14,16 +14,33 @@
  *   node scripts/sync-docs.mjs          # dry-run: report what is out of sync
  *   node scripts/sync-docs.mjs --check  # same as default (explicit dry-run)
  *   node scripts/sync-docs.mjs --apply  # write updated files to disk
+ *   node scripts/sync-docs.mjs --apply --force
+ *     # also overwrite a target that has uncommitted local edits (see below)
  *
  * Skipped pair modes (cannot auto-generate):
  *   structure  — only heading structure is checked; no source to copy
  *   contains   — only text-presence is checked; no source to copy
+ *
+ * Uncommitted-target-edit guard (#1765): an `exact`/`concreted` pair's
+ * `target` is always regenerated from its `source` — editing `target`
+ * directly is a mistake the sync would otherwise discard silently. Before
+ * queuing such a target's diff, this compares the target's on-disk content
+ * against its last commit (`git show HEAD:<target>`). If they differ, and
+ * that on-disk content is not what regeneration would already produce
+ * either, the target carries a genuine uncommitted local edit that would be
+ * lost — this is reported as an error and the target is left untouched
+ * unless `--force` is passed. A target with no uncommitted state (on-disk
+ * matches its last commit, just stale relative to `source`) is unaffected
+ * and still syncs silently, as before.
  */
+import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import {
+  globFiles,
   injectGeneratedFromBanner,
   isBannerScopedInstructionTarget,
+  resolveGeneratedBlockFiles,
 } from './consistency-helpers.mjs';
 
 // Resolve the repository root by walking up to the nearest package.json,
@@ -47,8 +64,33 @@ function resolveRepoRoot(fromDir) {
 }
 const root = resolveRepoRoot(import.meta.dirname);
 const manifestPath = 'audit/sync-manifest.json';
+let repoFilesCache = null;
+// Lazy: only shelled out to when a block actually falls back to
+// sourceGlobs (today's manifest sets `paths` on every entry), so a normal
+// run with no sourceGlobs-only blocks never pays for this git call.
+//
+// Deliberately omits `--full-name`: `sourceGlobs` patterns are written
+// relative to `root` (the nearest `package.json`, not necessarily the
+// git worktree's top level -- e.g. an adopter monorepo with a nested
+// `package.json`), and `git ls-files` without `--full-name` already
+// prints paths relative to its own `cwd`, which is `root` below. Adding
+// `--full-name` would instead force paths relative to the git project
+// top, silently mismatching every `sourceGlobs` pattern whenever `root`
+// differs from that top level (#1748 review).
+function getRepoFiles() {
+  if (!repoFilesCache) {
+    const output = execFileSync(
+      'git',
+      ['ls-files', '--cached', '--others', '--exclude-standard'],
+      { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] },
+    );
+    repoFilesCache = output.split(/\r?\n/).filter(Boolean).sort();
+  }
+  return repoFilesCache;
+}
 const args = process.argv.slice(2);
 const apply = args.includes('--apply');
+const force = args.includes('--force');
 const manifest = JSON.parse(readText(manifestPath));
 const generatedBlocks = manifest.generatedBlocks ?? [];
 const shellFileLists = manifest.shellFileLists ?? [];
@@ -130,6 +172,24 @@ function processSyncPairs(pairs) {
       }
       const current = tryReadText(target);
       if (current === null || normalizeText(current) !== generated) {
+        if (
+          current !== null &&
+          !force &&
+          hasUncommittedTargetEdit(target, current)
+        ) {
+          console.error(
+            `sync-docs: ${target} has uncommitted local changes that differ ` +
+              `from both its last commit and the content generated from ` +
+              `${source}. Regenerating would discard them.\n` +
+              `  This is an ${mode}-mode pair: ${target} is always ` +
+              `regenerated from ${source} -- edit ${source} instead.\n` +
+              `  If this edit landed on the wrong side by mistake, move it ` +
+              `to ${source} and re-run.\n` +
+              `  Pass --force to overwrite ${target} anyway.`,
+          );
+          nonZeroExit = true;
+          continue;
+        }
         diffs.push({ target, content: generated });
       }
     } else if (mode === 'structure' || mode === 'contains') {
@@ -342,8 +402,21 @@ function renderGeneratedBlock(block) {
   return `\n\n\`\`\`${block.language ?? 'text'}\n${renderedFiles.join('\n')}\n\`\`\`\n\n`;
 }
 function resolveBlockFiles(block) {
-  // Use the static paths list when present; this matches audit-docs.mjs behaviour.
-  return block.paths ? [...block.paths] : [];
+  // paths-first, sourceGlobs-fallback -- shared with audit-docs.mjs via
+  // consistency-helpers.mts's resolveGeneratedBlockFiles (#1703) so the two
+  // tools cannot drift on this resolution rule again.
+  //
+  // Known limitation (#1748 review): getRepoFiles() caches a single
+  // git-ls-files snapshot taken before this run's writes are applied
+  // (this script queues every diff, then writes them all at the end). A
+  // sourceGlobs-only block whose pattern would match a file a syncPairs
+  // entry creates in this SAME --apply run won't see that not-yet-written
+  // file until a second --apply pass. No current manifest entry combines
+  // sourceGlobs-only resolution with a same-run syncPairs target this
+  // way; re-running --apply converges if one ever does.
+  return resolveGeneratedBlockFiles(block, (pattern) =>
+    globFiles(pattern, getRepoFiles()),
+  );
 }
 function applyReplacements(text, replacements) {
   let result = text;
@@ -363,6 +436,31 @@ function doStripPrefix(file, prefix) {
   );
   nonZeroExit = true;
   return file;
+}
+/**
+ * True when `current` (the target's on-disk content, already known to
+ * differ from the freshly generated content) also differs from the
+ * target's last-committed content -- i.e. an uncommitted, at-risk local
+ * edit exists, not just a target that is legitimately stale relative to
+ * its source. Any failure reading git state (untracked file, no HEAD, git
+ * unavailable) falls back to the pre-#1765 behavior: untracked/unreadable
+ * git state proceeds like there is nothing to protect, since a missing
+ * git baseline can never distinguish "stale" from "locally edited" and
+ * this guard must not block a repository or profile that never had this
+ * protection in the first place.
+ */
+function hasUncommittedTargetEdit(target, current) {
+  let committed;
+  try {
+    committed = execFileSync('git', ['show', `HEAD:${target}`], {
+      cwd: root,
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+    });
+  } catch {
+    return false;
+  }
+  return normalizeText(current) !== normalizeText(committed);
 }
 function readText(relPath) {
   try {

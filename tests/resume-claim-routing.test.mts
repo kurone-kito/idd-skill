@@ -835,3 +835,227 @@ test('gate never honors a forced handoff when forced-handoff mode is disabled', 
   );
   assert.equal(result.active_claim?.claim_id, 'claim-old');
 });
+
+// #1687: a lost different-second claim race must not livelock the issue
+// against mechanical reclaim once the active claim clears claim-stale-age --
+// even though a later competing claim marker is still present from the
+// losing side of the race.
+test('stale active claim with a later competing claim still routes to takeover for a fresh session', () => {
+  const events = [
+    {
+      createdAt: '2026-05-12T09:00:00Z',
+      author: { login: 'maintainer' },
+      body: '<!-- claimed-by: copilot claim-a supersedes: none 2026-05-12T09:00:00Z branch: issue/20-task -->',
+    },
+    {
+      createdAt: '2026-05-12T09:00:03Z',
+      author: { login: 'maintainer' },
+      body: '<!-- claimed-by: other claim-b supersedes: none 2026-05-12T09:00:03Z branch: issue/20-task -->',
+    },
+  ];
+
+  // A fresh session (no --claim-id) checking well past the 24h stale-age
+  // boundary must still see a takeover-eligible route -- this is the
+  // documented Discover Step 1.5 mechanical path.
+  const result = evaluateResumeClaimRouting(
+    { now: '2026-05-13T09:00:04Z', events },
+    { isTrustedAuthor: trusted(['maintainer']) },
+  );
+  assert.equal(result.state, 'stale');
+  assert.equal(result.action, 'takeover');
+  assert.equal(result.reason, 'active-claim-stale');
+  assert.equal(result.active_claim?.claim_id, 'claim-a');
+
+  // The A5(c) fresh-claim gate (which always ignores --claim-id) must reach
+  // the same conclusion: `stale-reclaimable`, never a permanent
+  // `already-claimed`/disputed verdict.
+  const gate = evaluateFreshClaimGate(
+    { now: '2026-05-13T09:00:04Z', events },
+    { isTrustedAuthor: trusted(['maintainer']) },
+  );
+  assert.equal(gate.verdict, 'stale-reclaimable');
+  assert.equal(gate.winningClaimId, 'claim-a');
+});
+
+// #1687: the owner-resume disputed/stop semantics are test-locked and must
+// stay unchanged by the staleness reordering above -- a session that
+// verified it owns the active claim (matching --claim-id) still sees
+// `disputed` against a later competing claim, even once its own claim has
+// crossed the 24h stale-age boundary. Only a *fresh* (non-owner) session
+// gets the new staleness escape.
+test('owner-resume dispute against a later competing claim is unaffected by the active claim going stale', () => {
+  const result = evaluateResumeClaimRouting(
+    {
+      claimId: 'claim-owned',
+      now: '2026-05-13T10:30:00Z',
+      events: [
+        {
+          createdAt: '2026-05-12T10:00:00Z',
+          author: { login: 'maintainer' },
+          body: '<!-- claimed-by: copilot claim-owned supersedes: none 2026-05-12T10:00:00Z branch: issue/21-task -->',
+        },
+        {
+          createdAt: '2026-05-12T10:05:00Z',
+          author: { login: 'maintainer' },
+          body: '<!-- claimed-by: other claim-race supersedes: none 2026-05-12T10:05:00Z branch: issue/21-task -->',
+        },
+      ],
+    },
+    { isTrustedAuthor: trusted(['maintainer']) },
+  );
+
+  assert.equal(result.state, 'disputed');
+  assert.equal(result.action, 'stop');
+  assert.equal(result.reason, 'later-competing-claim');
+  assert.equal(result.evidence.later_competing_claim?.claim_id, 'claim-race');
+});
+
+// PR #1770 (CodeRabbit): when a later competing claim (step 4) and an
+// activation-nonce mismatch (step 5) both fail for the same owner-resume
+// check, `reason` must say so distinctly -- a caller deciding whether "step
+// 4 is the sole failing check" (the safe-to-release precondition in
+// idd-claim.instructions.md's Claim verification) cannot tell a step-4-only
+// dispute apart from a dual failure if both collapse onto the same
+// `later-competing-claim` reason. Releasing on a dual failure would evict
+// the second, legitimate activation that shares this exact
+// `{agent-id}`/`{claim-id}` pair.
+test('reports a distinct reason when a later competing claim and a nonce mismatch both fail', () => {
+  const events = [
+    {
+      createdAt: '2026-05-12T09:00:00Z',
+      author: { login: 'maintainer' },
+      body: '<!-- claimed-by: copilot claim-abc supersedes: none 2026-05-12T09:00:00Z branch: issue/24-task -->',
+    },
+    {
+      createdAt: '2026-05-12T09:00:05Z',
+      author: { login: 'maintainer' },
+      body: '<!-- activation-nonce: copilot claim-abc nonce-aaa 2026-05-12T09:00:05Z -->',
+    },
+    {
+      createdAt: '2026-05-12T09:00:07Z',
+      author: { login: 'maintainer' },
+      body: '<!-- activation-nonce: copilot claim-abc nonce-zzz 2026-05-12T09:00:07Z -->',
+    },
+    {
+      createdAt: '2026-05-12T09:05:00Z',
+      author: { login: 'maintainer' },
+      body: '<!-- claimed-by: other claim-race supersedes: none 2026-05-12T09:05:00Z branch: issue/24-task -->',
+    },
+  ];
+
+  const loserPerspective = evaluateResumeClaimRouting(
+    {
+      claimId: 'claim-abc',
+      nonce: 'nonce-zzz',
+      now: '2026-05-12T10:00:00Z',
+      events,
+    },
+    { isTrustedAuthor: trusted(['maintainer']) },
+  );
+
+  assert.equal(loserPerspective.state, 'disputed');
+  assert.equal(loserPerspective.action, 'stop');
+  assert.equal(
+    loserPerspective.reason,
+    'later-competing-claim-and-activation-nonce-mismatch',
+  );
+  assert.equal(
+    loserPerspective.evidence.later_competing_claim?.claim_id,
+    'claim-race',
+  );
+  assert.equal(loserPerspective.evidence.activation_nonce_winner, 'nonce-aaa');
+
+  // The nonce winner's own perspective is unaffected: it still fails step 4
+  // (the same later competing claim) with the plain reason, since its own
+  // nonce comparison passes.
+  const winnerPerspective = evaluateResumeClaimRouting(
+    {
+      claimId: 'claim-abc',
+      nonce: 'nonce-aaa',
+      now: '2026-05-12T10:00:00Z',
+      events,
+    },
+    { isTrustedAuthor: trusted(['maintainer']) },
+  );
+  assert.equal(winnerPerspective.state, 'disputed');
+  assert.equal(winnerPerspective.reason, 'later-competing-claim');
+});
+
+// #1687: a competitor that loses the race and courteously releases its own
+// raced claim (its own {agent-id}/{claim-id} unclaimed-by, posted after its
+// claimed-by) must no longer count as a live competitor -- clearing the
+// dispute it created instead of leaving it stuck forever.
+test('a released competing claim no longer produces disputed', () => {
+  const result = evaluateResumeClaimRouting(
+    {
+      claimId: 'claim-owned',
+      now: '2026-05-12T11:00:00Z',
+      events: [
+        {
+          createdAt: '2026-05-12T10:00:00Z',
+          author: { login: 'maintainer' },
+          body: '<!-- claimed-by: copilot claim-owned supersedes: none 2026-05-12T10:00:00Z branch: issue/22-task -->',
+        },
+        {
+          createdAt: '2026-05-12T10:05:00Z',
+          author: { login: 'maintainer' },
+          body: '<!-- claimed-by: other claim-race supersedes: none 2026-05-12T10:05:00Z branch: issue/22-task -->',
+        },
+        {
+          createdAt: '2026-05-12T10:06:00Z',
+          author: { login: 'maintainer' },
+          body: '<!-- unclaimed-by: other claim-race 2026-05-12T10:06:00Z -->',
+        },
+      ],
+    },
+    { isTrustedAuthor: trusted(['maintainer']) },
+  );
+
+  assert.equal(result.state, 'already_owned');
+  assert.equal(result.action, 'keep');
+  assert.equal(result.reason, 'claim-id-match');
+  assert.equal(result.evidence.later_competing_claim, null);
+});
+
+test('evaluateFreshClaimGate: released competing claim is claimable, not already-claimed', () => {
+  // Mirrors the fresh-claim-gate scenario from the livelock report: the
+  // active claim itself has also been released (the owner's own courteous
+  // walk-away, matching the new step-4-only release instruction), so the
+  // issue should read as plainly unclaimed once the raced competitor's
+  // release is reconciled too -- proving `findLaterCompetingClaim`'s
+  // reconciliation never masks the ordinary release path (once
+  // `state.activeClaim` clears, the competing-claim scan is never even
+  // invoked; see `!state.activeClaim` in `evaluateResumeClaimRouting`).
+  const gate = evaluateFreshClaimGate(
+    {
+      now: '2026-05-12T11:00:00Z',
+      events: [
+        {
+          createdAt: '2026-05-12T10:00:00Z',
+          author: { login: 'maintainer' },
+          body: '<!-- claimed-by: copilot claim-owned supersedes: none 2026-05-12T10:00:00Z branch: issue/23-task -->',
+        },
+        {
+          createdAt: '2026-05-12T10:05:00Z',
+          author: { login: 'maintainer' },
+          body: '<!-- claimed-by: other claim-race supersedes: none 2026-05-12T10:05:00Z branch: issue/23-task -->',
+        },
+        {
+          createdAt: '2026-05-12T10:06:00Z',
+          author: { login: 'maintainer' },
+          body: '<!-- unclaimed-by: other claim-race 2026-05-12T10:06:00Z -->',
+        },
+        {
+          createdAt: '2026-05-12T10:07:00Z',
+          author: { login: 'maintainer' },
+          body: '<!-- unclaimed-by: copilot claim-owned 2026-05-12T10:07:00Z -->',
+        },
+      ],
+    },
+    { isTrustedAuthor: trusted(['maintainer']) },
+  );
+
+  assert.equal(gate.verdict, 'claimable');
+  assert.equal(gate.reason, 'no-active-claim');
+  assert.equal(gate.winningClaimId, null);
+});
