@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
 import {
   cpSync,
   mkdirSync,
@@ -7,7 +8,7 @@ import {
   rmSync,
   writeFileSync,
 } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { devNull, tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -156,11 +157,51 @@ function writeScaffoldedFile(dir: string, rel: string, content: string): void {
 }
 
 /**
+ * A sanitized environment for spawning `git` (or a script that itself
+ * shells out to `git ls-files`) against a temp fixture repo. Deletes the
+ * repo-location override variables (`GIT_DIR`, `GIT_INDEX_FILE`,
+ * `GIT_WORK_TREE`, `GIT_COMMON_DIR`, `GIT_OBJECT_DIRECTORY`) a caller
+ * running inside a git hook may have exported -- which would otherwise
+ * point the fixture's `git` invocations at the *host* repository instead
+ * of the temp fixture despite `cwd` being set correctly -- and every
+ * ambient `GIT_CONFIG*` variable, replacing them with a fixed
+ * `GIT_CONFIG_COUNT`/`KEY`/`VALUE` triple that pins `core.excludesFile`
+ * to `os.devNull` (the platform null device, not necessarily the literal
+ * path `/dev/null`) so an operator's personal global ignore file can
+ * never drop fixture paths from `git ls-files --exclude-standard`. Other
+ * `GIT_*` variables outside these two groups are left untouched. Shared
+ * by every suite that scaffolds a git-backed fixture (originally local
+ * to `audit-docs-file-sets.test.mts`; lifted out for `sync-docs.test.mts`
+ * too per #1703, so the sanitization logic itself has one copy).
+ */
+export function fixtureEnv(): NodeJS.ProcessEnv {
+  const env = { ...process.env };
+  for (const key of Object.keys(env)) {
+    if (key.startsWith('GIT_CONFIG')) {
+      delete env[key];
+    }
+  }
+  delete env.GIT_DIR;
+  delete env.GIT_INDEX_FILE;
+  delete env.GIT_WORK_TREE;
+  delete env.GIT_COMMON_DIR;
+  delete env.GIT_OBJECT_DIRECTORY;
+  env.GIT_CONFIG_GLOBAL = devNull;
+  env.GIT_CONFIG_SYSTEM = devNull;
+  env.GIT_CONFIG_COUNT = '1';
+  env.GIT_CONFIG_KEY_0 = 'core.excludesFile';
+  env.GIT_CONFIG_VALUE_0 = devNull;
+  return env;
+}
+
+/**
  * Builds a self-contained sync-docs fixture repo: `package.json` (so
  * `resolveRepoRoot` stops here), a copy of the real `sync-docs.mjs` under
  * `scripts/` plus its import closure, the fixture manifest, and any
  * referenced source/target files. `register` is called with a cleanup
- * callback (e.g. `(cleanup) => t.after(cleanup)`).
+ * callback (e.g. `(cleanup) => t.after(cleanup)`). Git-initializes the
+ * fixture (sanitized via `fixtureEnv()`) so a `sourceGlobs` block can
+ * resolve through `sync-docs.mjs`'s own `git ls-files` call (#1703).
  */
 export function makeScaffoldedSyncRepo(
   register: (cleanup: () => void) => void,
@@ -170,6 +211,7 @@ export function makeScaffoldedSyncRepo(
   const dir = mkdtempSync(join(tmpdir(), 'sync-docs-'));
   register(() => rmSync(dir, { recursive: true, force: true }));
 
+  execFileSync('git', ['init', '--quiet'], { cwd: dir, env: fixtureEnv() });
   writeScaffoldedFile(dir, 'package.json', '{}\n');
   mkdirSync(join(dir, 'scripts'), { recursive: true });
   cpSync(SYNC_DOCS_SCRIPT, join(dir, 'scripts', 'sync-docs.mjs'));
