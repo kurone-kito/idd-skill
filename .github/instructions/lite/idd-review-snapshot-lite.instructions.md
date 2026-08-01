@@ -246,8 +246,8 @@ watermark. The same "nothing after the note" rule applies here too.
 
 - **ReviewItems_snapshot is empty** → proceed to
   `idd-pre-merge-lite.instructions.md` (F1), which covers the
-  branch-sync decision. Never route this case to the excluded
-  `idd-review-triage.instructions.md`.
+  branch-sync decision. Do not route this case directly to the
+  excluded `idd-review-triage.instructions.md`.
 - **ReviewItems_snapshot is non-empty** → this lite session's job ends
   here (see Triage hand-off boundary above); hand off to
   `idd-review-triage.instructions.md` (E4) for a stronger session or a

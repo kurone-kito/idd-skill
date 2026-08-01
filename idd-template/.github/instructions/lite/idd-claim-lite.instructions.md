@@ -187,7 +187,8 @@ takeover, migrate with a fresh `{claim-id}` and `supersedes: none`.
 active claim to `newAgentId` / `newClaimId` only when **all** hold: the
 comment author is a trusted marker actor; the author (case-insensitive)
 equals the marker's `forcedBy` field — unconditionally, a
-deliberately stricter bind than the full spec's opt-in — this blocks a
+deliberately stricter bind than the full spec's opt-in
+(`requireAuthorMatchesForcedBy`) — this blocks a
 same-identity self-signed hijack where a displaced session spoofs a
 different `forcedBy` name while posting the marker itself; that author
 is authorized under `forcedHandoff.authorityPolicy`;
