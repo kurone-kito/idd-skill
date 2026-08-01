@@ -1061,8 +1061,9 @@ After completing the steps above, confirm each item:
 - [ ] Among the entry files the operator did not opt out of creating,
       they agree on repository-specific engineering guidance — each
       carries it directly or points to the file(s) that own it; no
-      newly created file silently drops it. Manual check: `--verify`
-      below does not cover this item.
+      newly created file silently drops it (observed 2026-07-27,
+      kurone-kito/idd-skill#1717). Manual check: `--verify` below does
+      not cover this item.
 - [ ] If `.github/copilot-instructions.md` existed before onboarding,
       it now includes the IDD workflow reference as well.
 - [ ] The `{{PROJECT_MARKER_PREFIX}}-roadmap-id` and
