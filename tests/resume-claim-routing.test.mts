@@ -949,8 +949,12 @@ test('a released competing claim no longer produces disputed', () => {
 test('evaluateFreshClaimGate: released competing claim is claimable, not already-claimed', () => {
   // Mirrors the fresh-claim-gate scenario from the livelock report: the
   // active claim itself has also been released (the owner's own courteous
-  // walk-away), so the issue should read as plainly unclaimed once the
-  // raced competitor's release is reconciled too.
+  // walk-away, matching the new step-4-only release instruction), so the
+  // issue should read as plainly unclaimed once the raced competitor's
+  // release is reconciled too -- proving `findLaterCompetingClaim`'s
+  // reconciliation never masks the ordinary release path (once
+  // `state.activeClaim` clears, the competing-claim scan is never even
+  // invoked; see `!state.activeClaim` in `evaluateResumeClaimRouting`).
   const gate = evaluateFreshClaimGate(
     {
       now: '2026-05-12T11:00:00Z',
@@ -970,12 +974,17 @@ test('evaluateFreshClaimGate: released competing claim is claimable, not already
           author: { login: 'maintainer' },
           body: '<!-- unclaimed-by: other claim-race 2026-05-12T10:06:00Z -->',
         },
+        {
+          createdAt: '2026-05-12T10:07:00Z',
+          author: { login: 'maintainer' },
+          body: '<!-- unclaimed-by: copilot claim-owned 2026-05-12T10:07:00Z -->',
+        },
       ],
     },
     { isTrustedAuthor: trusted(['maintainer']) },
   );
 
-  assert.equal(gate.verdict, 'already-claimed');
-  assert.equal(gate.reason, 'active-claim-non-stale');
-  assert.equal(gate.winningClaimId, 'claim-owned');
+  assert.equal(gate.verdict, 'claimable');
+  assert.equal(gate.reason, 'no-active-claim');
+  assert.equal(gate.winningClaimId, null);
 });
