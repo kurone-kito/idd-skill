@@ -221,9 +221,10 @@ workflow explicitly requests — that labeler can apply any of these
 three configured label names to an ordinary issue on its own judgment,
 regardless of which label names the repository chose. The failure is
 silent: nothing errors, and the issue simply stops being an execution
-candidate (a spurious `roadmapLabelName` or `needsDecisionLabelName`
-match) or gets parked behind a hold (a spurious
-`blockedByHumanLabelName` match) with no visible cause. This has been
+candidate (a spurious `labels.roadmapLabelName` or
+`labels.needsDecisionLabelName` match) or gets parked behind a hold (a
+spurious `labels.blockedByHumanLabelName` match) with no visible
+cause. This has been
 observed in the field: in one fresh template import, `coderabbitai[bot]`
 applied the roadmap label to all eight children of one authored roadmap
 batch — an 8/8 hit rate, not an occasional misfire — and separately

@@ -654,7 +654,8 @@ for the field evidence behind this risk. Omitting a label from the
 labeler's own instruction list does **not** restrict which labels it
 may apply — do not rely on that as a mitigation.
 
-This repository (`kurone-kito/idd-skill`) guards against this with
+The idd-skill source repository (`kurone-kito/idd-skill`, distinct from
+your own repository below) guards against this with
 `.github/workflows/strip-untrusted-labels.yml`: a same-event
 `issues: labeled` / `pull_request_target: labeled` handler that removes
 a reserved label the instant a configured untrusted actor applies it.
