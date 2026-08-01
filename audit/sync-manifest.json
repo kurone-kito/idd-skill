@@ -853,5 +853,17 @@
         "docs/workshop/workshop-log.md"
       ]
     }
-  ]
+  ],
+  "markdownLinkAudit": {
+    "id": "markdown-link-audit",
+    "_comment": "Intra-repo markdown link/anchor audit (#1697): resolves every relative markdown link's target file and #fragment against the target's actual GitHub-slugged headings, preventing the dead-anchor drift class #1696 fixed by hand. Runs unconditionally (not changed-file-scoped), since a heading rename in one file orphans inbound anchors in files a PR never touches. Links from idd-template/** are resolved in template context: a relative link that escapes templateRoot is flagged even when the target happens to exist in the source repo tree, since adopters only receive the idd-template/ subtree. External http(s)/mailto/tel links are out of scope (no network I/O). See audit/README.md for the suppression-comment escape hatch.",
+    "globs": [
+      "docs/**/*.md",
+      "idd-template/**/*.md",
+      ".github/instructions/**/*.md",
+      "skills/**/*.md",
+      "*.md"
+    ],
+    "templateRoot": "idd-template/"
+  }
 }

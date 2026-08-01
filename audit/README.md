@@ -178,3 +178,47 @@ only alongside a maintainer-authorized exception (the same
 PR-description callout the ratchet's own raise convention requires),
 and shrink it back to empty in the same PR or a tracked follow-up once
 that exception resolves.
+
+## Markdown Link/Anchor Audit
+
+`markdownLinkAudit` resolves every relative Markdown link found under
+its configured `globs`, and any `#fragment` on that link, against the
+target file's actual content: the file must exist, and a `#fragment`
+must match one of the target's headings after applying GitHub's own
+slugging rules — lowercase, delete punctuation outright (never
+replace it with a hyphen or space), convert each space to a hyphen
+without collapsing runs, and append `-1`, `-2`, ... to a heading slug
+repeated later in the same document. A link to a directory (a target
+ending in `/`) is checked for the directory's existence only, never
+an anchor. Runs unconditionally over every matched file, not scoped
+to changed files: a heading rename in one file orphans inbound
+anchors in files a given pull request never touches, so a
+changed-file scope would miss exactly the drift class this check
+exists to catch. External `http(s)`, `mailto:`, and `tel:` links are
+out of scope — no network I/O.
+
+### Template context
+
+A link from an `idd-template/**` file is resolved against the shipped
+template tree, not the source repository tree: `templateRoot`
+(default `idd-template/`) is the boundary adopters actually receive
+when they copy that directory into their own repository. A relative
+link whose resolved path falls outside `templateRoot` fails the audit
+even when that exact path happens to exist in the source repository —
+adopters never get the sibling files the source repository ships
+outside `idd-template/`. This is the mechanism that let a template
+instruction file's relative link to the source repository's own
+`copilot-instructions.md` and to a source-repo-only `schemas/`
+directory both rot silently before this checker existed; retargeting
+such a link to a hosted URL, or to a file that genuinely ships inside
+`idd-template/`, is the fix — not a suppression.
+
+### Suppressing an intentional exception
+
+Add an `<!-- audit:ignore-link -->` HTML comment on the same source
+line as the link to suppress every link on that line (matched after
+inline code spans are stripped, so documenting the marker itself in
+backtick-wrapped example text never suppresses a real link on that
+same line). Keep this narrowly used: prefer fixing the link or the
+heading first, and reserve the marker for a link this checker cannot
+correctly evaluate.
