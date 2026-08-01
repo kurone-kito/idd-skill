@@ -121,10 +121,10 @@ const NODE_SCRIPTS_RE = /\bnode\s+(scripts\/[a-z0-9-]+\.mjs)\b/g;
 const BIN_MJS_RE = /(?:\.\/)?\bbin\/(idd-[a-zA-Z0-9-]+)\.mjs\b/g;
 const PACKAGE_SCRIPT_RE =
   /(?:npm run|pnpm(?: run)?|yarn(?: run)?)\s+(idd:[a-zA-Z0-9-]+)/g;
-// Leading whitespace is required, not optional: a fenced block nested
-// inside a list item (a common pattern in these docs) is itself
-// indented, so anchoring at column 0 misses it entirely (idd-skill#1674
-// review).
+// Leading whitespace before the fence marker is allowed (`^\s*`), not
+// anchored to column 0: a fenced block nested inside a list item (a
+// common pattern in these docs) is itself indented, so a column-0
+// anchor missed it entirely (idd-skill#1674 review).
 const FENCE_RE = /^\s*```(\S*)/;
 // First token on a line inside a fenced sh/bash/shell/console block,
 // optionally after a `$ ` shell-prompt marker. Deliberately narrow: a
