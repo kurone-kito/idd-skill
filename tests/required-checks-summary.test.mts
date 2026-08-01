@@ -100,6 +100,75 @@ test('a genuinely protected branch reports protectionReadsUnreadable: false even
   assert.equal(r.protectionReadsUnreadable, false);
 });
 
+// Regression (#1745): live on PR #1741, the F2/F3 authoritative CI read
+// reported ci.status: "success" for a HEAD GitHub itself blocked on --
+// summarizeRequiredChecks must forward classifyCiChecks's
+// discardedNonPassingInstances onto its own discardedNonPassingRequiredChecks
+// field (scoped to required checks only) so a 'success' verdict is never
+// silently opaque about a discarded non-passing same-name sibling.
+test('surfaces a discarded CANCELLED sibling for a required check via discardedNonPassingRequiredChecks', () => {
+  const r = summarize(
+    [
+      {
+        name: 'lint',
+        state: 'CANCELLED',
+        completedAt: '2026-07-18T03:45:56Z',
+        type: 'check-run',
+        workflowName: 'Lint gate',
+      },
+      {
+        name: 'lint',
+        state: 'SUCCESS',
+        completedAt: '2026-07-18T03:47:01Z',
+        type: 'check-run',
+        workflowName: 'Lint gate',
+      },
+    ],
+    protectedRules,
+  );
+  assert.equal(r.status, 'success');
+  assert.equal(r.requiredChecksPassing, true);
+  assert.equal(r.discardedNonPassingRequiredChecks.length, 1);
+  assert.equal(
+    r.discardedNonPassingRequiredChecks[0]?.discardedState,
+    'CANCELLED',
+  );
+  assert.equal(
+    r.discardedNonPassingRequiredChecks[0]?.selectedState,
+    'SUCCESS',
+  );
+  assert.equal(r.discardedNonPassingRequiredChecks[0]?.name, 'lint');
+});
+
+test('discardedNonPassingRequiredChecks is empty when nothing was discarded', () => {
+  const r = summarize([{ name: 'lint', state: 'SUCCESS' }], protectedRules);
+  assert.deepEqual(r.discardedNonPassingRequiredChecks, []);
+});
+
+test('discardedNonPassingRequiredChecks is empty when no required checks are configured', () => {
+  const r = summarize(
+    [
+      {
+        name: 'build',
+        state: 'CANCELLED',
+        completedAt: '2026-07-18T03:45:56Z',
+        type: 'check-run',
+        workflowName: 'Build gate',
+      },
+      {
+        name: 'build',
+        state: 'SUCCESS',
+        completedAt: '2026-07-18T03:47:01Z',
+        type: 'check-run',
+        workflowName: 'Build gate',
+      },
+    ],
+    [],
+  );
+  assert.equal(r.noRequiredChecksConfigured, true);
+  assert.deepEqual(r.discardedNonPassingRequiredChecks, []);
+});
+
 // #1471: a stale check-run instance for a name must not falsely block
 // pre-merge readiness once a later instance for that same name converged.
 test('unprotected: presentRunConclusion reflects the latest instance, not a stale instance sharing its name', () => {

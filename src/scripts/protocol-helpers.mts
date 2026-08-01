@@ -2118,15 +2118,21 @@ export function selectLatestCheckInstance<
  * `gh`/GraphQL's `statusCheckRollup` exposes today; `ci-wait-state.mts`'s
  * own `(checkName, workflowName)` key has the identical accepted gap.
  */
-function selectLatestCheckPerName<
+/**
+ * Group check-run instances by the same `(name, type, workflowName)`
+ * producer-identity key `selectLatestCheckPerName` reduces to one
+ * representative -- shared here so a caller that needs to inspect the
+ * DISCARDED siblings, not just the survivor (see
+ * {@link findDiscardedNonPassingSiblings}), can never drift out of sync
+ * with that grouping.
+ */
+function groupChecksByProducer<
   T extends {
     name?: string | null;
-    state: string;
-    completedAt?: string | null;
     type?: string | null;
     workflowName?: string | null;
   },
->(checks: T[]): T[] {
+>(checks: T[]): Map<string, T[]> {
   // A Map already iterates in first-insertion order, so grouping into one
   // is enough to preserve stable output order with no separate order array
   // (see the same pattern in `findDuplicateBasenames` in audit-docs.mts).
@@ -2149,7 +2155,103 @@ function selectLatestCheckPerName<
       groups.set(key, [check]);
     }
   }
-  return [...groups.values()].map((group) => selectLatestCheckInstance(group));
+  return groups;
+}
+
+function selectLatestCheckPerName<
+  T extends {
+    name?: string | null;
+    state: string;
+    completedAt?: string | null;
+    type?: string | null;
+    workflowName?: string | null;
+  },
+>(checks: T[]): T[] {
+  return [...groupChecksByProducer(checks).values()].map((group) =>
+    selectLatestCheckInstance(group),
+  );
+}
+
+/** Check-run states {@link findDiscardedNonPassingSiblings} treats as
+ * "genuinely non-passing": every `CI_FAILURE_CONCLUSION_STATES` member plus
+ * `CANCELLED` (deliberately excluded from that set itself -- see its own
+ * doc comment -- but still evidence-worthy here: a discarded `CANCELLED`
+ * sibling is exactly the #1745 finding, a stale/gated instance masked by a
+ * same-name `SUCCESS`). Pending states are excluded on purpose: a discarded
+ * still-running sibling in favor of an already-completed one is ordinary,
+ * expected dedup behavior, not a discrepancy worth flagging. */
+const GENUINELY_NON_PASSING_STATES = new Set([
+  ...CI_FAILURE_CONCLUSION_STATES,
+  'CANCELLED',
+]);
+
+/** One divergence {@link classifyCiChecks} reports on its
+ * `discardedNonPassingInstances` field. */
+export interface CiCheckDiscardedSibling {
+  name: string;
+  type: string;
+  workflowName: string;
+  selectedState: string;
+  selectedCompletedAt: string | null;
+  discardedState: string;
+  discardedCompletedAt: string | null;
+}
+
+/**
+ * Detect same-producer `(name, type, workflowName)` groups whose
+ * dedup-selected "latest" instance (`selectLatestCheckInstance`) is
+ * pass-equivalent (SUCCESS/SKIPPED/NEUTRAL/NOT_APPLICABLE) while a
+ * DISCARDED sibling in that same group is genuinely non-passing (see
+ * {@link GENUINELY_NON_PASSING_STATES}) -- the live discrepancy PR #1741
+ * exhibited (#1745): `classifyCiChecks` reported `success` for a commit
+ * whose GitHub `statusCheckRollup.state` was `FAILURE`, because a
+ * `CANCELLED` bot-triggered `idd-advisory-convergence` instance existed
+ * alongside the `SUCCESS` instance this dedup selected as "latest".
+ * Confirming the exact internal GitHub selection is not possible after the
+ * fact (see #1745's evidence-durability note), so this reports the
+ * discarded-sibling FACT itself -- a same-name non-passing instance existed
+ * and was NOT counted -- rather than asserting why GitHub's own rollup
+ * disagreed. Pure and read-only: never changes which instance
+ * `selectLatestCheckPerName` selects, only reports when a discarded sibling
+ * makes that selection's "success" verdict less certain than it looks.
+ */
+function findDiscardedNonPassingSiblings<
+  T extends {
+    name?: string | null;
+    state: string;
+    completedAt?: string | null;
+    type?: string | null;
+    workflowName?: string | null;
+  },
+>(checks: T[]): CiCheckDiscardedSibling[] {
+  const divergences: CiCheckDiscardedSibling[] = [];
+  for (const group of groupChecksByProducer(checks).values()) {
+    if (group.length < 2) continue;
+    const selected = selectLatestCheckInstance(group);
+    if (
+      !['SUCCESS', 'SKIPPED', 'NEUTRAL', 'NOT_APPLICABLE'].includes(
+        selected.state,
+      )
+    ) {
+      continue;
+    }
+    for (const sibling of group) {
+      if (sibling === selected) continue;
+      if (!GENUINELY_NON_PASSING_STATES.has(sibling.state)) continue;
+      divergences.push({
+        name: String(selected.name ?? ''),
+        type: selected.type ? String(selected.type) : '',
+        workflowName: selected.workflowName
+          ? String(selected.workflowName)
+          : '',
+        selectedState: selected.state,
+        selectedCompletedAt: selected.completedAt ?? null,
+        discardedState: sibling.state,
+        discardedCompletedAt: sibling.completedAt ?? null,
+      });
+    }
+  }
+  return divergences;
 }
 
 export function classifyCiChecks(checks: CheckLike[]) {
@@ -2167,6 +2269,13 @@ export function classifyCiChecks(checks: CheckLike[]) {
   // outvotes the current one for the same name (see #1471).
   const deduped = selectLatestCheckPerName(normalized);
 
+  // #1745: computed unconditionally (not just for the 'success' path) so
+  // every returned shape below carries the same field -- a discarded
+  // non-passing sibling is evidence worth surfacing even when the overall
+  // status already reads 'failed'/'pending' for an unrelated check name.
+  const discardedNonPassingInstances =
+    findDiscardedNonPassingSiblings(normalized);
+
   // #1688: widened from a literal 'FAILURE' match to every
   // CI_FAILURE_CONCLUSION_STATES member, so a TIMED_OUT/ACTION_REQUIRED/
   // STARTUP_FAILURE/STALE/ERROR conclusion classifies as a genuine failure
@@ -2177,7 +2286,7 @@ export function classifyCiChecks(checks: CheckLike[]) {
     CI_FAILURE_CONCLUSION_STATES.has(check.state),
   );
   if (failed.length > 0) {
-    return { status: 'failed', failed };
+    return { status: 'failed', failed, discardedNonPassingInstances };
   }
 
   const pending = deduped.filter((check) => {
@@ -2188,7 +2297,7 @@ export function classifyCiChecks(checks: CheckLike[]) {
     );
   });
   if (pending.length > 0) {
-    return { status: 'pending', pending };
+    return { status: 'pending', pending, discardedNonPassingInstances };
   }
 
   const passing = deduped.filter((check) => {
@@ -2201,6 +2310,7 @@ export function classifyCiChecks(checks: CheckLike[]) {
     status: passing.length === deduped.length ? 'success' : 'unknown',
     passing,
     unknown: deduped.filter((check) => !passing.includes(check)),
+    discardedNonPassingInstances,
   };
 }
 
@@ -4042,6 +4152,17 @@ export function summarizeRequiredChecks(
   );
 
   let status = 'unknown';
+  // #1745: discarded non-passing same-name siblings among the REQUIRED
+  // checks, e.g. a CANCELLED idd-advisory-convergence instance sitting
+  // alongside the SUCCESS instance selectLatestCheckPerName picked as
+  // "latest" -- surfaced regardless of the final `status` below so a
+  // 'success' verdict here is never silently opaque about a discarded
+  // non-passing sibling GitHub's own statusCheckRollup may have weighed
+  // differently (the live PR #1741 divergence this field exists to make
+  // visible; see classifyCiChecks's own findDiscardedNonPassingSiblings
+  // doc comment for the full rationale). Empty (never omitted) when no
+  // required checks are configured.
+  let discardedNonPassingRequiredChecks: CiCheckDiscardedSibling[] = [];
   if (requiredCheckNames.length > 0) {
     const effectiveChecks = matchedRequiredChecks.map((c) =>
       c.coveredByWaiver ? { ...c, state: 'SKIPPED' } : c,
@@ -4057,6 +4178,8 @@ export function summarizeRequiredChecks(
     ) {
       status = 'unknown';
     }
+    discardedNonPassingRequiredChecks =
+      ciClassification.discardedNonPassingInstances;
   }
 
   return {
@@ -4078,6 +4201,10 @@ export function summarizeRequiredChecks(
       requiredCheckNames.length > 0 && status === 'success',
     requiredCheckNames,
     missingRequiredCheckNames,
+    // #1745: see the field's own inline comment above -- reported
+    // unconditionally (empty array, never omitted) so a consumer never has
+    // to special-case "field absent" vs. "field empty".
+    discardedNonPassingRequiredChecks,
     checks: normalizedChecks.map((check) => ({
       name: check.name,
       state: check.state,
