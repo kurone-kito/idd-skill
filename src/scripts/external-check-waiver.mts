@@ -5,7 +5,6 @@
 // above by `pnpm run build`. Edit the .mts source, never the generated
 // .mjs. See docs/typescript-sources.md.
 
-import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 
 import { parseCliArgs } from './cli-args.mts';
@@ -1068,11 +1067,9 @@ function ghJson(args: string[], slurp = false): unknown {
   const finalArgs = [...args];
   if (slurp) {
     finalArgs.splice(1, 0, '--jq', '.[]');
-    return parsePaginatedGhNdjson(
-      execFileSync('gh', finalArgs, { encoding: 'utf8' }),
-    );
+    return parsePaginatedGhNdjson(ghText(finalArgs));
   }
-  return JSON.parse(execFileSync('gh', finalArgs, { encoding: 'utf8' }));
+  return JSON.parse(ghText(finalArgs));
 }
 
 /**
@@ -1103,9 +1100,7 @@ function ghApiJsonWithStatus(path: string): GhApiStatusResult {
   try {
     return {
       status: 200,
-      body: JSON.parse(
-        execFileSync('gh', ['api', path], { encoding: 'utf8' }),
-      ) as GhApiStatusResult['body'],
+      body: JSON.parse(ghText(['api', path])) as GhApiStatusResult['body'],
     };
   } catch (error) {
     return deriveGhApiStatusFromError(error);

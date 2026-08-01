@@ -4,7 +4,6 @@
 // The scripts/live-status-digest.mjs copy is generated from the .mts
 // source named above by `pnpm run build`. Edit the .mts source, never the
 // generated .mjs. See docs/typescript-sources.md.
-import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { parseCliArgs } from './cli-args.mjs';
 import {
@@ -13,7 +12,7 @@ import {
   readForcedHandoffAuthorityPolicy,
   readForcedHandoffMode,
 } from './collaborator-permission.mjs';
-import { ghApiJson } from './gh-exec.mjs';
+import { ghApiJson, ghText } from './gh-exec.mjs';
 import { resolveCollaboratorMarkerTrust } from './policy-helpers.mjs';
 import {
   applyDigestUpsert,
@@ -227,17 +226,13 @@ function fetchIssueComments(owner, repo, number) {
   // --slurp landed in gh v2.48.0, but Ubuntu 24.04 LTS ships gh v2.45.0
   // via apt, so keep the NDJSON-compatible form here.
   const result = parsePaginatedGhNdjson(
-    execFileSync(
-      'gh',
-      [
-        'api',
-        '--paginate',
-        '--jq',
-        '.[]',
-        `repos/${owner}/${repo}/issues/${number}/comments`,
-      ],
-      { encoding: 'utf8' },
-    ),
+    ghText([
+      'api',
+      '--paginate',
+      '--jq',
+      '.[]',
+      `repos/${owner}/${repo}/issues/${number}/comments`,
+    ]),
   );
   return result.map((comment) => ({
     id: comment.id,
@@ -393,13 +388,9 @@ function currentViewerLogin() {
     return cachedCurrentViewerLogin;
   }
   try {
-    cachedCurrentViewerLogin = execFileSync(
-      'gh',
-      ['api', 'user', '--jq', '.login'],
-      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] },
-    )
-      .trim()
-      .toLowerCase();
+    cachedCurrentViewerLogin = ghText(['api', 'user', '--jq', '.login'], {
+      stdio: ['ignore', 'pipe', 'ignore'],
+    }).toLowerCase();
   } catch {
     cachedCurrentViewerLogin = '';
   }
@@ -454,13 +445,14 @@ function detectRepository() {
   if (process.env.GITHUB_REPOSITORY) {
     return process.env.GITHUB_REPOSITORY;
   }
-  return execFileSync(
-    'gh',
-    ['repo', 'view', '--json', 'nameWithOwner', '--jq', '.nameWithOwner'],
-    {
-      encoding: 'utf8',
-    },
-  ).trim();
+  return ghText([
+    'repo',
+    'view',
+    '--json',
+    'nameWithOwner',
+    '--jq',
+    '.nameWithOwner',
+  ]);
 }
 function parseRepository(value) {
   const parts = value.split('/');
@@ -474,7 +466,7 @@ function parseRepository(value) {
 }
 function ghJson(commandArgs) {
   try {
-    return JSON.parse(execFileSync('gh', commandArgs, { encoding: 'utf8' }));
+    return JSON.parse(ghText(commandArgs));
   } catch (error) {
     const stdout = String(error.stdout ?? '').trim();
     const stderr = String(error.stderr ?? '').trim();

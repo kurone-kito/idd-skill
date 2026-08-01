@@ -5,8 +5,6 @@
 // above by `pnpm run build`. Edit the .mts source, never the generated
 // .mjs. See docs/typescript-sources.md.
 
-import { execFileSync } from 'node:child_process';
-
 import {
   DEFAULT_ADVISORY_RECOVERY_CYCLE_CAP,
   DEFAULT_ADVISORY_TERMINAL_WINDOW_MINUTES,
@@ -800,9 +798,7 @@ function ghApiJson(
     // --slurp landed in gh v2.48.0, but Ubuntu 24.04 LTS ships gh v2.45.0
     // via apt, so keep the NDJSON-compatible form here.
     args.splice(1, 0, '--paginate', '--jq', '.[]');
-    return parsePaginatedGhNdjson(
-      execFileSync('gh', args, { encoding: 'utf8' }),
-    );
+    return parsePaginatedGhNdjson(ghText(args));
   }
-  return JSON.parse(execFileSync('gh', args, { encoding: 'utf8' }));
+  return JSON.parse(ghText(args));
 }

@@ -14,7 +14,6 @@
 // revalidated immediately before the reply is posted (fail-closed). Reply
 // first, resolve second — a failed reply never leaves a silently-resolved
 // thread with no disposition.
-import { execFileSync } from 'node:child_process';
 import { parseCliArgs } from './cli-args.mjs';
 import {
   isAuthorizedForcedHandoffActor,
@@ -154,7 +153,7 @@ thread in one invocation (E13). Dry-run by default; --apply mutates.
   -h, --help                     show this help
 `;
 function ghJson(args) {
-  return JSON.parse(execFileSync('gh', args, { encoding: 'utf8' }));
+  return JSON.parse(ghText(args));
 }
 /**
  * Fetch a paginated list endpoint as an array. `gh api --paginate` concatenates
@@ -162,9 +161,7 @@ function ghJson(args) {
  * line (NDJSON), which we parse line-by-line (mirrors the sibling helpers).
  */
 function ghJsonPaginated(args) {
-  const out = execFileSync('gh', [...args, '--paginate', '--jq', '.[]'], {
-    encoding: 'utf8',
-  });
+  const out = ghText([...args, '--paginate', '--jq', '.[]']);
   return out
     .split('\n')
     .map((line) => line.trim())
@@ -183,9 +180,7 @@ function ghGraphql(query, variables) {
     }
     args.push('-f', `${key}=${value}`);
   }
-  return JSON.parse(
-    execFileSync('gh', args, { encoding: 'utf8' }).trim() || '{}',
-  );
+  return JSON.parse(ghText(args) || '{}');
 }
 /**
  * Throw when a GraphQL response carries top-level `errors`, so a bad
