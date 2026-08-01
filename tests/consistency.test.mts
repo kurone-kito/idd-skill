@@ -633,6 +633,75 @@ test('helper runtime inspection accepts absent and supported profiles, rejects u
   );
 });
 
+test('helper runtime inspection accepts an optional pinned packageSpec and rejects a malformed one (idd-skill#1731)', () => {
+  assert.deepEqual(
+    inspectHelperRuntimeConfig({
+      helperRuntime: {
+        profile: 'ephemeral-npx',
+        packageSpec: 'https://example.com/pinned-idd-skill.tgz',
+      },
+    }),
+    {
+      status: 'ok',
+      profile: 'ephemeral-npx',
+      packageSpec: 'https://example.com/pinned-idd-skill.tgz',
+    },
+  );
+  // Absent packageSpec keeps the exact pre-#1731 result shape -- no
+  // packageSpec key at all, not an empty string -- so every existing
+  // profile-only assert.deepEqual case above is unaffected.
+  assert.deepEqual(
+    inspectHelperRuntimeConfig({
+      helperRuntime: {
+        profile: 'instructions-only',
+      },
+    }),
+    {
+      status: 'ok',
+      profile: 'instructions-only',
+    },
+  );
+  assert.deepEqual(
+    inspectHelperRuntimeConfig({
+      helperRuntime: {
+        profile: 'ephemeral-npx',
+        packageSpec: '',
+      },
+    }),
+    {
+      status: 'invalid',
+      reason:
+        'helperRuntime.packageSpec must be a non-empty string with no whitespace',
+    },
+  );
+  assert.deepEqual(
+    inspectHelperRuntimeConfig({
+      helperRuntime: {
+        profile: 'ephemeral-npx',
+        packageSpec: 'has a space',
+      },
+    }),
+    {
+      status: 'invalid',
+      reason:
+        'helperRuntime.packageSpec must be a non-empty string with no whitespace',
+    },
+  );
+  assert.deepEqual(
+    inspectHelperRuntimeConfig({
+      helperRuntime: {
+        profile: 'ephemeral-npx',
+        packageSpec: 42,
+      },
+    }),
+    {
+      status: 'invalid',
+      reason:
+        'helperRuntime.packageSpec must be a non-empty string with no whitespace',
+    },
+  );
+});
+
 test('policy normalization provides default-safe values and supports aliases', () => {
   assert.deepEqual(normalizePolicyConfig(null), {
     issueScope: 'roadmap-first',

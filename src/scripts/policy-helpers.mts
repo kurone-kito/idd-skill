@@ -92,7 +92,7 @@ const HELPER_RUNTIME_PROFILES = new Set([
   'ephemeral-npx',
   'instructions-only',
 ]);
-const HELPER_RUNTIME_KEYS = new Set(['profile']);
+const HELPER_RUNTIME_KEYS = new Set(['profile', 'packageSpec']);
 const ISSUE_SCOPES = new Set(['roadmap', 'roadmap-first', 'orphan-first']);
 const ORPHAN_FIRST_POLICIES = new Set([
   'none',
@@ -138,6 +138,11 @@ const ADVISORY_WHOLE_MINUTE_DURATION_RE =
   /^P(?=(?:\d+D|T\d+[HM]))(?=.*(?:[1-9]\d*[DHM]))(?:\d+D)?(?:T(?=\d+[HM])(?:\d+H)?(?:\d+M)?)?$/;
 const DURATION_RE =
   /^P(?:(?<days>\d+)D)?(?:T(?:(?<hours>\d+)H)?(?:(?<minutes>\d+)M)?(?:(?<seconds>\d+)S)?)?$/;
+// Mirrors schemas/policy.schema.json's helperRuntime.packageSpec pattern: a
+// non-empty, whitespace-free string. The value is embedded raw into
+// copy-pasteable shell command text (`npx --package <spec> ...`, `<manager>
+// add <spec>`), so embedded whitespace would corrupt that command.
+const PACKAGE_SPEC_RE = /^\S+$/;
 const SECOND_MS = 1000;
 const MINUTE_MS = 60 * SECOND_MS;
 const HOUR_MS = 60 * MINUTE_MS;
@@ -257,7 +262,7 @@ export function inspectHelperRuntimeConfig(
 ):
   | { status: 'invalid'; reason: string }
   | { status: 'absent' }
-  | { status: 'ok'; profile: string } {
+  | { status: 'ok'; profile: string; packageSpec?: string } {
   if (typeof config !== 'object' || config === null || Array.isArray(config)) {
     return { status: 'invalid', reason: 'config must be a non-null object' };
   }
@@ -301,6 +306,23 @@ export function inspectHelperRuntimeConfig(
       status: 'invalid',
       reason: `unsupported helperRuntime.profile "${profile}"`,
     };
+  }
+
+  // Optional: absent by default (existing behavior, existing profile-only
+  // callers/tests are unaffected). When present, it must be a non-empty,
+  // whitespace-free string -- mirrors schemas/policy.schema.json's pattern
+  // so the JSON Schema validator and this runtime guard never disagree.
+  if (hasOwn(helperRuntime, 'packageSpec')) {
+    const packageSpec = (helperRuntime as { packageSpec?: unknown })
+      .packageSpec;
+    if (typeof packageSpec !== 'string' || !PACKAGE_SPEC_RE.test(packageSpec)) {
+      return {
+        status: 'invalid',
+        reason:
+          'helperRuntime.packageSpec must be a non-empty string with no whitespace',
+      };
+    }
+    return { status: 'ok', profile, packageSpec };
   }
 
   return { status: 'ok', profile };

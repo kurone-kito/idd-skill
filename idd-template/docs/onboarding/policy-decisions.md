@@ -385,6 +385,9 @@ Keep these rules in mind:
 - keep command strings JSON-escaped instead of pasting fragile raw shell
 - keep `helperRuntime.profile` aligned with the human-readable helper
   runtime section when helper support is enabled
+- set `helperRuntime.packageSpec` only when the repository has pinned a
+  reviewed tarball, mirror URL, or commit archive for its `ephemeral-npx`
+  helper install; omit it to keep the mutable default archive URL
 
 The file validates against the canonical schema at:
 

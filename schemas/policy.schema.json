@@ -128,6 +128,11 @@
             "ephemeral-npx",
             "instructions-only"
           ]
+        },
+        "packageSpec": {
+          "type": "string",
+          "description": "Optional pinned npm spec, tarball URL, or reviewed commit archive for ephemeral-npx and package-manager helper invocations. Absent falls back to the mutable main archive URL.",
+          "pattern": "^\\S+$"
         }
       }
     },

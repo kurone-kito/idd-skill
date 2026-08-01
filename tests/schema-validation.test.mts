@@ -1155,6 +1155,48 @@ test('policy schema rejects unsupported helperRuntime profiles', () => {
   assert.ok(errors.some((error) => error.includes('$.helperRuntime.profile')));
 });
 
+test('policy schema accepts a pinned helperRuntime.packageSpec (idd-skill#1731)', () => {
+  const schema = loadJson('schemas/policy.schema.json');
+  const instance = loadJson(
+    'fixtures/schemas/policy.valid.json',
+  ) as PolicyFixture;
+  instance.helperRuntime = {
+    profile: 'ephemeral-npx',
+    packageSpec: 'https://example.com/pinned-idd-skill.tgz',
+  };
+  const errors = validate(instance, schema);
+  assert.deepEqual(errors, []);
+});
+
+test('policy schema rejects an empty helperRuntime.packageSpec', () => {
+  const schema = loadJson('schemas/policy.schema.json');
+  const instance = loadJson(
+    'fixtures/schemas/policy.valid.json',
+  ) as PolicyFixture;
+  instance.helperRuntime = { profile: 'ephemeral-npx', packageSpec: '' };
+  const errors = validate(instance, schema);
+  assert.ok(
+    errors.some((error) => error.includes('$.helperRuntime.packageSpec')),
+    errors.join('\n'),
+  );
+});
+
+test('policy schema rejects a whitespace-containing helperRuntime.packageSpec', () => {
+  const schema = loadJson('schemas/policy.schema.json');
+  const instance = loadJson(
+    'fixtures/schemas/policy.valid.json',
+  ) as PolicyFixture;
+  instance.helperRuntime = {
+    profile: 'ephemeral-npx',
+    packageSpec: 'has a space',
+  };
+  const errors = validate(instance, schema);
+  assert.ok(
+    errors.some((error) => error.includes('$.helperRuntime.packageSpec')),
+    errors.join('\n'),
+  );
+});
+
 // ---------------------------------------------------------------------------
 // Unsupported format values
 // ---------------------------------------------------------------------------
