@@ -41,8 +41,9 @@ Keep these rules explicit:
 there — it keeps the review agent out of the IDD _execution_ protocol
 files that only an implementing agent needs. If the target
 repository's repository-specific engineering guidance instead lives in
-its own `.github/instructions/*.md` constraint file, do not cargo-cult that
-frontmatter onto it. `excludeAgent` belongs on IDD protocol files, not
+its own `.github/instructions/*.instructions.md` constraint file, do
+not cargo-cult that frontmatter onto it. `excludeAgent` belongs on IDD
+protocol files, not
 on constraint files — copying it onto a constraint file hides those
 rules from precisely the reviewer that most needs to see them.
 
