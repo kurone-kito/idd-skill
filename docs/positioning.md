@@ -49,6 +49,19 @@ powerful but heavyweight; they require infrastructure, are
 single-agent by design, and do not address parallel multi-agent
 coordination at the issue-tracking level.
 
+**Distribution / package management** — Tools such as
+[Microsoft APM](https://github.com/microsoft/apm) (Agent Package
+Manager, pre-1.0 as of this writing) install, version, and audit agent
+context files (instructions, skills, prompts, agents, hooks, MCP
+server declarations) across multiple harnesses, with a lockfile that
+pins resolved commits and per-file content hashes. This category
+solves a different problem than the other three: it governs how agent
+context artifacts reach a repository and stay current, not what an
+agent does once those artifacts are in place. See
+[Investigation: Microsoft APM as an Additional IDD Distribution
+Channel](apm-distribution-strategy.md) for the detailed evaluation and
+current no-go recommendation.
+
 ## Comparison matrix
 
 | Criterion                         | idd-skill                                                         | GitHub Agentic Workflows        | Awesome-Copilot skills | Kiro / Factory.ai | OpenHands            |
@@ -101,6 +114,22 @@ proceed.
 idd-skill alongside existing Copilot skill collections; the instruction
 files occupy a different namespace and are concerned with workflow
 orchestration rather than task-specific capabilities.
+
+**idd-skill and agent package managers are complementary, not
+competing, but not yet integrated.** A package manager such as
+Microsoft APM governs how agent context artifacts are installed,
+versioned, and audited for drift; idd-skill governs the coordination
+rules, phase routing, review triage, and merge conditions those
+artifacts encode once an agent is running. In principle the two could
+compose the same way idd-skill composes with GitHub Agentic Workflows
+above. In practice, as of this analysis, idd-skill does not distribute
+through APM or any other agent package manager — the current channel is
+the `idd-template/ONBOARDING.md` raw-fetch-and-copy flow — because the
+IDD phase-instruction corpus's workflow-step-scoped activation model
+does not map cleanly onto APM's file-glob-scoped `instructions`
+primitive today. See
+[Investigation: Microsoft APM as an Additional IDD Distribution
+Channel](apm-distribution-strategy.md) for the full evaluation.
 
 ## Known gaps
 
