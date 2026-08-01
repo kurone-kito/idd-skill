@@ -43,7 +43,9 @@ The authoritative generated lists are configured in
 - `generatedBlocks[].id == "idd-template-readme-core-files"` and
   `"idd-template-readme-issue-authoring-files"` own the descriptive
   file inventory in `idd-template/README.md`'s "Files" section. This is
-  a **fourth, broader** distribution surface: a `sourceGlobs`-only
+  a **fourth, broader inventory surface** — not one of the three
+  distribution surfaces above, since it documents the shipped file set
+  rather than copying it into an adopter repository: a `sourceGlobs`-only
   match against every file under `idd-template/` (`idd-template/**/*`),
   deliberately including files the core import list excludes by design
   — `scripts/minimize-superseded-markers.mjs` (see the
