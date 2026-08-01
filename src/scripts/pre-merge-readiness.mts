@@ -851,7 +851,15 @@ function printHelp(): void {
 `);
 }
 
-function normalizeComment(comment: IssueCommentPayload) {
+/**
+ * Normalize a raw `gh api .../issues/{n}/comments` entry into the
+ * summarizer-shape `CommentLike` `buildPreMergeReadinessSummary`
+ * (protocol-helpers.mts) expects. Exported for direct unit testing (#1708):
+ * previously local-only and unreferenced by any test, so a REST
+ * field-mapping drift (e.g. `user.login` -> `author.login`) would surface
+ * only in production.
+ */
+export function normalizeComment(comment: IssueCommentPayload) {
   return {
     id: String(comment.id ?? ''),
     author: { login: comment.user?.login ?? '' },
@@ -861,7 +869,14 @@ function normalizeComment(comment: IssueCommentPayload) {
   };
 }
 
-function normalizeClaimComment(comment: IssueCommentPayload) {
+/**
+ * Normalize a raw claim-issue comment entry into the `CommentLike` shape
+ * the claim-validation gate expects. Deliberately narrower than
+ * {@link normalizeComment} (no `id`/`updatedAt`): the claim gate only ever
+ * reads `body`/`createdAt`/`author.login`. Exported for direct unit
+ * testing (#1708), see {@link normalizeComment}'s doc comment.
+ */
+export function normalizeClaimComment(comment: IssueCommentPayload) {
   return {
     body: comment.body ?? '',
     createdAt: comment.created_at ?? '',
@@ -869,7 +884,12 @@ function normalizeClaimComment(comment: IssueCommentPayload) {
   };
 }
 
-function normalizeReview(review: ReviewPayload) {
+/**
+ * Normalize a raw `gh api .../pulls/{n}/reviews` entry into the
+ * summarizer-shape `ReviewLike`. Exported for direct unit testing (#1708),
+ * see {@link normalizeComment}'s doc comment.
+ */
+export function normalizeReview(review: ReviewPayload) {
   return {
     author: { login: review.user?.login ?? '' },
     state: review.state ?? '',
@@ -880,7 +900,12 @@ function normalizeReview(review: ReviewPayload) {
   };
 }
 
-function normalizeThread(thread: ReviewThreadPayload) {
+/**
+ * Normalize a raw GraphQL `reviewThreads` node into the summarizer-shape
+ * `ThreadLike`. Exported for direct unit testing (#1708), see
+ * {@link normalizeComment}'s doc comment.
+ */
+export function normalizeThread(thread: ReviewThreadPayload) {
   return {
     id: thread.id,
     isResolved: Boolean(thread.isResolved),
