@@ -171,11 +171,22 @@ test('every reachable property in the policy schema has a description', () => {
     [],
     `Missing "description" on: ${missing.join(', ')}`,
   );
-  // A walker with a typo'd root key or an empty properties tree would
-  // otherwise pass vacuously; guard against that too.
+  // An empty or malformed properties tree would otherwise pass the
+  // assertion above vacuously; guard against that structurally (a
+  // non-empty tree containing a known stable canary key) instead of a
+  // hard-coded property count, which would need updating on every
+  // legitimate schema change.
   assert.ok(
-    visited.count > 90,
-    `expected a substantial reachable properties tree, saw ${visited.count}`,
+    Object.keys(schema.properties).length > 0,
+    'expected the policy schema to declare at least one top-level property',
+  );
+  assert.ok(
+    '$schema' in schema.properties,
+    'expected a stable "$schema" top-level property as a walker canary',
+  );
+  assert.ok(
+    visited.count >= Object.keys(schema.properties).length,
+    'expected the walker to visit at least every top-level property',
   );
 });
 

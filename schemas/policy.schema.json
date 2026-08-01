@@ -18,7 +18,7 @@
     "$schema": {
       "type": "string",
       "minLength": 1,
-      "description": "The published policy schema `$id` URL this config file validates against, enabling editor hover text and autocomplete. Required when `config.json` exists; no runtime default."
+      "description": "The published policy schema `$id` URL this config file validates against, enabling editor hover text and autocomplete. Not in the schema's own `required` list; conventionally present, but no runtime default."
     },
     "iddVersion": {
       "type": "string",
