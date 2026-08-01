@@ -86,9 +86,9 @@ dependencies on a separate roadmap.
 When a project has genuine parallel tracks or multi-session coordination
 boundaries, nested roadmap hierarchies let each track close
 independently before the parent roadmap closes. See
-[Recursive Roadmap Hierarchies](idd-workflow.md#recursive-roadmap-hierarchies)
-in the workflow guide for structure examples, the grouping-versus-dependency
-distinction, and how discovery and bottom-up audit behave across levels.
+[Roadmap Claim Guardrails](idd-workflow.md#roadmap-claim-guardrails)
+in the workflow guide for how nested roadmap claims stay
+coordination-only and how bottom-up audit closes each level.
 
 ## 4. Start the Loop
 
