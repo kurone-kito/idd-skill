@@ -591,6 +591,20 @@ reads as a deliberate statement rather than an omission.
 The convention applies **forward**, to new or edited passages only.
 Retrofitting an existing passage with a citation is in scope on
 budget-exempt `docs/` surfaces, but out of scope for
-`.github/instructions/` files — do not edit an instruction file
-solely to add a citation; those bundle budgets already sit near their
-ceiling (see the headroom review in kurone-kito/idd-skill#1525).
+`.github/instructions/` files: do not edit an instruction file solely
+to add a citation. That exemption is not retrofit-only — a brand-new
+`.github/instructions/` passage that names an anti-pattern or failure
+mode is exempt from the citation requirement too, for the same
+reason: those bundle budgets already sit near their ceiling (see the
+headroom review in kurone-kito/idd-skill#1525; scope clarified by
+kurone-kito/idd-skill#1647 after CodeRabbit read the original wording
+as covering only retrofits).
+
+When an instruction passage's motivating incident is worth recording
+in full, put the date-plus-reference in a paired
+`docs/idd-design-rationale.md` entry and link to it by section anchor,
+as most cited passages already do. A bare issue-number aside directly
+in the instruction text remains acceptable in place of that link when
+no paired entry exists — both forms fit inside the tight
+instruction-bundle budget that motivates the exemption; neither is
+required.
