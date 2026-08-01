@@ -13,6 +13,7 @@ import type {
   ContextCeilingConfig,
   DocBudgetGuardConfig,
   InstructionSizeBudgetConfig,
+  OkfBundleConfig,
   RootMarkdownAllowlistConfig,
   TypeSuppressionBudgetConfig,
 } from './consistency-helpers.mts';
@@ -22,6 +23,7 @@ import {
   collectDuplicateSyncPairTargets,
   collectGeneratedFromBannerViolations,
   collectInstructionSizeBudgetViolations,
+  collectOkfFrontmatterViolations,
   collectPolicyConfigDrift,
   collectRootMarkdownAllowlistViolations,
   collectTypeSuppressionViolations,
@@ -106,6 +108,7 @@ interface AuditManifest {
   forbiddenPatterns?: ForbiddenPattern[];
   rootMarkdownAllowlist?: RootMarkdownAllowlistConfig | null;
   typeSuppressionBudgets?: TypeSuppressionBudgetConfig | null;
+  okfBundles?: OkfBundleConfig[] | null;
 }
 
 const root = process.cwd();
@@ -141,6 +144,7 @@ checkDocBudgetNumbers();
 checkForbiddenPatterns(manifest.forbiddenPatterns ?? []);
 checkRootMarkdownAllowlist(manifest.rootMarkdownAllowlist ?? null);
 checkTypeSuppressionBudgets(manifest.typeSuppressionBudgets ?? null);
+checkOkfBundles(manifest.okfBundles ?? null);
 checkConfigInstructionDrift();
 checkGeneratedSourcePairs();
 
@@ -565,6 +569,19 @@ function checkRootMarkdownAllowlist(
   config: RootMarkdownAllowlistConfig | null,
 ) {
   errors.push(...collectRootMarkdownAllowlistViolations(repoFiles, config));
+}
+
+// OKF frontmatter conformance audit (#1680): the collector lives in
+// consistency-helpers so it can be unit-tested with synthetic fixtures. The
+// audit pipeline supplies the live glob (bound to `repoFiles`) and reader.
+function checkOkfBundles(bundles: OkfBundleConfig[] | null) {
+  errors.push(
+    ...collectOkfFrontmatterViolations(
+      bundles,
+      (pattern) => globFiles(pattern, repoFiles),
+      readText,
+    ),
+  );
 }
 
 // Type-suppression budget guard (ratchet, mirroring bundleBudgets): a
