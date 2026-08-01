@@ -110,6 +110,65 @@ export function isSafeSoloCodeownerAdminMergeState(
 function scopedGhArgs(repoRef, args) {
   return repoRef ? ['-R', repoRef, ...args] : args;
 }
+/**
+ * Decode and classify a remote `.github/idd/config.json` read into the
+ * `mergeGate.soloCodeownerAdminFallback` policy value. Pure aside from the
+ * injected `fetchEncodedConfig` (mirrors this repo's established
+ * injectable-fetch pattern, e.g. `resolveEligibleCodeownerUserLogins` in
+ * `pre-merge-readiness.mts`) -- default resolves the real base64 `.content`
+ * field via `gh api .../contents/.github/idd/config.json`.
+ *
+ * A confirmed `404` means the target ref has no policy file: falls back to
+ * the same distributed defaults `loadIddConfig()` uses for the local-repo
+ * path. Any other fetch failure is ambiguous or malformed and rethrows
+ * (fail-closed) rather than silently mapping onto the permissive
+ * `auto-admin-retry` default -- the #1521-adjacent fail-open corner #1708
+ * pins with direct tests (previously exercised only via a full
+ * `MergeExecuteDeps` stub, never this decode-and-classify logic itself).
+ * An empty (but successfully fetched) `.content` also throws instead of
+ * being caught as "no policy file": a policy file that exists but decodes
+ * to nothing is a malformed read, not an absent one, so it must stay
+ * fail-closed too -- `deriveGhHttpStatus` on that synthetic error returns
+ * `null` (no HTTP status text to parse), which is `!== 404`, so it rethrows
+ * exactly like any other non-404 failure.
+ */
+export function resolveRemoteSoloCodeownerAdminFallbackMode(
+  prNumber,
+  repoRef,
+  headSha,
+  fetchEncodedConfig = (scopedRepoRef, ref) =>
+    ghText(
+      scopedGhArgs(scopedRepoRef, [
+        'api',
+        `repos/${scopedRepoRef}/contents/.github/idd/config.json`,
+        '--method',
+        'GET',
+        '--field',
+        `ref=${ref}`,
+        '--jq',
+        '.content',
+      ]),
+    ),
+) {
+  let config;
+  try {
+    const encodedConfig = fetchEncodedConfig(repoRef, headSha);
+    if (!encodedConfig) {
+      throw new Error(
+        `target repository policy is empty for PR #${prNumber} at ${headSha}`,
+      );
+    }
+    config = JSON.parse(
+      Buffer.from(encodedConfig.replace(/\n/g, ''), 'base64').toString('utf8'),
+    );
+  } catch (error) {
+    if (deriveGhHttpStatus(error) !== 404) {
+      throw error;
+    }
+    config = null;
+  }
+  return normalizePolicyConfig(config).mergeGate.soloCodeownerAdminFallback;
+}
 const defaultDeps = {
   collect: (passthrough) => collectPreMergeReadiness(passthrough),
   fetchHeadSha: (prNumber, repoRef) =>
@@ -162,47 +221,11 @@ const defaultDeps = {
         '--admin',
       ]),
     ),
-  resolveSoloCodeownerAdminFallbackMode: (prNumber, repoRef, headSha) => {
-    let config;
-    if (!repoRef) {
-      config = loadIddConfig();
-    } else {
-      try {
-        const encodedConfig = ghText(
-          scopedGhArgs(repoRef, [
-            'api',
-            `repos/${repoRef}/contents/.github/idd/config.json`,
-            '--method',
-            'GET',
-            '--field',
-            `ref=${headSha}`,
-            '--jq',
-            '.content',
-          ]),
-        );
-        if (!encodedConfig) {
-          throw new Error(
-            `target repository policy is empty for PR #${prNumber} at ${headSha}`,
-          );
-        }
-        config = JSON.parse(
-          Buffer.from(encodedConfig.replace(/\n/g, ''), 'base64').toString(
-            'utf8',
-          ),
-        );
-      } catch (error) {
-        // The config file is optional. A confirmed Contents-API 404 means
-        // this target ref has no policy file, so use the distributed
-        // defaults just as local loadIddConfig() does. Any other failure is
-        // ambiguous or malformed and must remain fail-closed.
-        if (deriveGhHttpStatus(error) !== 404) {
-          throw error;
-        }
-        config = null;
-      }
-    }
-    return normalizePolicyConfig(config).mergeGate.soloCodeownerAdminFallback;
-  },
+  resolveSoloCodeownerAdminFallbackMode: (prNumber, repoRef, headSha) =>
+    repoRef
+      ? resolveRemoteSoloCodeownerAdminFallbackMode(prNumber, repoRef, headSha)
+      : normalizePolicyConfig(loadIddConfig()).mergeGate
+          .soloCodeownerAdminFallback,
 };
 /**
  * Build the F3 verdict and, under `--apply`, execute the merge. The

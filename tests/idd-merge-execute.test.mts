@@ -6,6 +6,7 @@ import {
   isEligibleForSoloCodeownerAdminFallback,
   isSafeSoloCodeownerAdminMergeState,
   type MergeExecuteDeps,
+  resolveRemoteSoloCodeownerAdminFallbackMode,
   runMergeExecute,
 } from '../src/scripts/idd-merge-execute.mts';
 import { computePreMergeReadinessBlockers } from '../src/scripts/protocol-helpers.mts';
@@ -1077,4 +1078,67 @@ test('--apply aborts a BEHIND admin fallback when an up-to-date head is required
   assert.deepEqual(calls.adminMerged, []);
   assert.match(verdict.mergeResult, /admin-fallback aborted/);
   assert.equal(exitCode, 1);
+});
+
+// ---------------------------------------------------------------------------
+// resolveRemoteSoloCodeownerAdminFallbackMode -- #1708: pin the
+// 404-vs-non-404 and empty-content branches directly (no MergeExecuteDeps
+// injection), via the same injectable-fetch pattern this file's other pure
+// helpers already use.
+// ---------------------------------------------------------------------------
+
+function base64Config(config: unknown): string {
+  return Buffer.from(JSON.stringify(config), 'utf8').toString('base64');
+}
+
+function httpError(status: number): Error {
+  return new Error(`gh: Not Found (HTTP ${status})`);
+}
+
+test('resolveRemoteSoloCodeownerAdminFallbackMode decodes a valid remote config', () => {
+  const mode = resolveRemoteSoloCodeownerAdminFallbackMode(
+    42,
+    'o/r',
+    'deadbeef',
+    () =>
+      base64Config({
+        mergeGate: { soloCodeownerAdminFallback: 'hold-and-report' },
+      }),
+  );
+  assert.equal(mode, 'hold-and-report');
+});
+
+test('resolveRemoteSoloCodeownerAdminFallbackMode falls back to the distributed default on a confirmed 404', () => {
+  const mode = resolveRemoteSoloCodeownerAdminFallbackMode(
+    42,
+    'o/r',
+    'deadbeef',
+    () => {
+      throw httpError(404);
+    },
+  );
+  assert.equal(mode, 'auto-admin-retry');
+});
+
+test('resolveRemoteSoloCodeownerAdminFallbackMode rethrows a non-404 fetch failure', () => {
+  assert.throws(
+    () =>
+      resolveRemoteSoloCodeownerAdminFallbackMode(42, 'o/r', 'deadbeef', () => {
+        throw httpError(403);
+      }),
+    /HTTP 403/,
+  );
+});
+
+test('resolveRemoteSoloCodeownerAdminFallbackMode rejects an empty (but successfully fetched) content field instead of treating it as "no policy file"', () => {
+  assert.throws(
+    () =>
+      resolveRemoteSoloCodeownerAdminFallbackMode(
+        42,
+        'o/r',
+        'deadbeef',
+        () => '',
+      ),
+    /policy is empty for PR #42 at deadbeef/,
+  );
 });
