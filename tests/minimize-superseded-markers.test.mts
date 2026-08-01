@@ -184,6 +184,33 @@ test('an explicit empty --subject-ids value is rejected at parse time', () => {
   assert.equal(result.stderr.trim(), 'error: --subject-ids requires a value');
 });
 
+// #1722: an omitted --subject-ids is a DIFFERENT code path than the empty
+// value case above (values['subject-ids'] defaults to '' via parseArgs'
+// own declared default, then splits/filters to an empty array, then hits
+// the post-parse length check below -- not the requires-a-value branch),
+// and produces a different, still flag-named message. This is the
+// write-path helper's own required-flag case named in #1722's acceptance
+// criteria (one missing-required-flag case per covered helper, asserted on
+// the flag name).
+test('an omitted --subject-ids is rejected by name, distinctly from the empty-value case', () => {
+  const script = join(
+    dirname(fileURLToPath(import.meta.url)),
+    '..',
+    'scripts',
+    'minimize-superseded-markers.mjs',
+  );
+  const result = spawnSync(process.execPath, [script, '--allow-untrusted'], {
+    encoding: 'utf8',
+  });
+
+  assert.equal(result.status, 2);
+  assert.equal(result.stdout, '');
+  assert.equal(
+    result.stderr.trim(),
+    'error: --subject-ids must contain at least one ID',
+  );
+});
+
 test('an explicit empty --trusted-marker-logins value is accepted, unlike --subject-ids', () => {
   const sandbox = mkdtempSync(join(tmpdir(), 'idd-minimize-'));
   try {

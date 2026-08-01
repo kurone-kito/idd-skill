@@ -1150,6 +1150,117 @@ test('--from-pr fails closed on an explicit non-pr --target', () => {
   assert.match(stderr, /--from-pr always targets the PR/);
 });
 
+// --- CLI-layer required-flag validation (#1722) -----------------------------
+//
+// Before #1722, only --type/--target/the positional number were validated by
+// name; a missing per-type renderer field (e.g. --timestamp for --type
+// claim) fell through to buildMarkerBody's aggregate guard, surfacing only
+// an unattributed "invalid ... marker payload" with no indication of which
+// flag was absent. These tests spawn the compiled CLI (reusing
+// runCliExpectingFailure above, which also proves the rejection happens
+// before any `gh` call by removing `gh` from PATH) and assert the exit code
+// and error text name the specific missing flag, for every required flag of
+// every marker type the CLI supports.
+
+/** A complete, valid renderer-field set per marker type (excluding the
+ * structural --type / --target / positional-number flags), matching
+ * REQUIRED_FIELDS_BY_TYPE in post-idd-marker.mts. */
+const FULL_FIELDS_BY_TYPE: Record<string, Record<string, string>> = {
+  claim: {
+    'agent-id': 'a',
+    'claim-id': 'c',
+    timestamp: TS,
+    branch: 'issue/1722-fix',
+  },
+  unclaim: { 'agent-id': 'a', 'claim-id': 'c', timestamp: TS },
+  'activation-nonce': {
+    'agent-id': 'a',
+    'claim-id': 'c',
+    nonce: 'n-1',
+    timestamp: TS,
+  },
+  watermark: {
+    'agent-id': 'a',
+    'claim-id': 'c',
+    'head-sha': SHA,
+    'total-item-count': '0',
+  },
+  baseline: { 'agent-id': 'a', 'claim-id': 'c', sha: SHA },
+  advisory: { 'agent-id': 'a', 'head-sha': SHA, timestamp: TS },
+  'advisory-recovery': { 'agent-id': 'a', 'head-sha': SHA, timestamp: TS },
+  'advisory-reroll': { 'agent-id': 'a', 'head-sha': SHA, timestamp: TS },
+  'copilot-unavailable': {
+    'agent-id': 'a',
+    'claim-id': 'c',
+    'head-sha': SHA,
+    attempt: '1',
+    timestamp: TS,
+  },
+};
+
+function postIddMarkerArgv(
+  type: string,
+  fields: Record<string, string>,
+): string[] {
+  const argv = [
+    join(REPO_ROOT, 'scripts/post-idd-marker.mjs'),
+    '--type',
+    type,
+    '--target',
+    'pr',
+    '1722',
+  ];
+  for (const [flag, value] of Object.entries(fields)) {
+    argv.push(`--${flag}`, value);
+  }
+  return argv;
+}
+
+test('post-idd-marker CLI: the full flag set for every marker type succeeds (dry-run)', () => {
+  for (const [type, fields] of Object.entries(FULL_FIELDS_BY_TYPE)) {
+    const output = execFileSync(
+      process.execPath,
+      postIddMarkerArgv(type, fields),
+      { cwd: REPO_ROOT, encoding: 'utf8' },
+    );
+    const parsed = JSON.parse(output);
+    assert.equal(parsed.mode, 'dry-run', `${type} should dry-run cleanly`);
+    assert.equal(parsed.type, type);
+  }
+});
+
+test('post-idd-marker CLI: claim without --timestamp names --timestamp (issue example)', () => {
+  const { timestamp: _omit, ...rest } = FULL_FIELDS_BY_TYPE.claim;
+  const stderr = runCliExpectingFailure(postIddMarkerArgv('claim', rest));
+  assert.match(stderr, /--timestamp is required/);
+});
+
+test('post-idd-marker CLI: every required flag of every marker type is rejected by name when omitted', () => {
+  for (const [type, fields] of Object.entries(FULL_FIELDS_BY_TYPE)) {
+    for (const omittedFlag of Object.keys(fields)) {
+      const partial = Object.fromEntries(
+        Object.entries(fields).filter(([flag]) => flag !== omittedFlag),
+      );
+      const stderr = runCliExpectingFailure(postIddMarkerArgv(type, partial));
+      assert.match(
+        stderr,
+        new RegExp(`--${omittedFlag} is required`),
+        `${type} without --${omittedFlag} should name --${omittedFlag}`,
+      );
+    }
+  }
+});
+
+test('post-idd-marker CLI: --supersedes stays optional (renderer-defaulted, not CLI-required)', () => {
+  const output = execFileSync(
+    process.execPath,
+    postIddMarkerArgv('claim', FULL_FIELDS_BY_TYPE.claim),
+    { cwd: REPO_ROOT, encoding: 'utf8' },
+  );
+  const parsed = JSON.parse(output);
+  assert.match(parsed.body, /supersedes: none /);
+});
+
 test('--expected-head-sha is rejected without --from-pr (before any gh call)', () => {
   // In manual mode the caller already supplies --head-sha directly; there is
   // nothing for --expected-head-sha to compare it against.
