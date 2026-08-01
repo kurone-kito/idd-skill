@@ -1075,12 +1075,14 @@ when the repository is the source of a reusable IDD distribution.
 
 Every non-reserved page under this repository's `docs/` bundle
 (imported from `idd-template/docs/**`) carries [OKF](https://okf.md/)
-(Open Knowledge Format v0.1) frontmatter — `index.md` and `log.md` are
-the reserved exceptions, see below: a small
+(Open Knowledge Format v0.1) frontmatter: a small
 `type`/`title`/`description`/`tags` block that a generated index table
 (`docs/index.md`) turns into a drift-guarded topic map, so an agent
 with no prior familiarity with the bundle has an entry point to read
-instead of listing the directory.
+instead of listing the directory. `index.md` and `log.md` are exempt
+from this checker's enforcement (see Reserved filenames below) — this
+bundle's own index page carries conforming frontmatter anyway, for
+consistency.
 
 **Field profile** (four fields): `type` (required, one value from the
 closed vocabulary below), `title` (required, matches the page's `# H1`
