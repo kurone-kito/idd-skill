@@ -146,6 +146,15 @@ jobs:
               echo 'github-actions[bot]'
             } | tr '[:upper:]' '[:lower:]'
           )
+          # Capture into a variable (not process substitution): a failure
+          # inside `< <(gh api ...)` does not reliably propagate to this
+          # shell's default `-e`/`pipefail`, which could leave EXISTING
+          # empty and post a duplicate evidence comment on a transient
+          # `gh api` failure (rate limit/network). A plain command
+          # substitution assignment does trip `-e` on failure.
+          COMMENTS_TSV=$(gh api --paginate \
+            "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments" \
+            --jq '.[] | select(.body | startswith("<!-- idd-cleanup-evidence:")) | [.id, .user.login] | @tsv')
           EXISTING=""
           while IFS=$'\t' read -r candidate_id candidate_login; do
             [ -z "$candidate_id" ] && continue
@@ -154,9 +163,7 @@ jobs:
               EXISTING="$candidate_id"
               break
             fi
-          done < <(gh api --paginate \
-            "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments" \
-            --jq '.[] | select(.body | startswith("<!-- idd-cleanup-evidence:")) | [.id, .user.login] | @tsv')
+          done <<< "$COMMENTS_TSV"
           if [ -n "$EXISTING" ]; then
             echo "::notice::PR #${PR_NUMBER} already has a trusted-author idd-cleanup-evidence comment (id: ${EXISTING}); skipping workflow post."
             exit 0
