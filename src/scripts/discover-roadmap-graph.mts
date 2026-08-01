@@ -5,9 +5,6 @@
 // source named above by `pnpm run build`. Edit the .mts source, never the
 // generated .mjs. See docs/typescript-sources.md.
 
-import { execFile, execFileSync } from 'node:child_process';
-import { promisify } from 'node:util';
-
 import { resolveAuthoringGuardPolicy } from './authoring-label-guard.mts';
 import {
   isAutopilotSuitabilityScore,
@@ -19,7 +16,12 @@ import {
   evaluateDiscoverReadiness,
 } from './discover-readiness-check.mts';
 import { type EffortHint, effortOrdinal, parseEffort } from './effort.mts';
-import { GH_TEXT_LOOP_OPTIONS, ghText, withBoundedRetry } from './gh-exec.mts';
+import {
+  GH_TEXT_LOOP_OPTIONS,
+  ghText,
+  ghTextAsync,
+  withBoundedRetry,
+} from './gh-exec.mts';
 import { loadPolicyConfig } from './idd-config.mts';
 import { stripMarkdownCodeRegions } from './markdown-code.mts';
 import {
@@ -56,45 +58,26 @@ const DEFAULT_TRAVERSAL_CONCURRENCY = 8;
 // still bounds worst-case memory instead of accepting the old
 // accumulation's unbounded growth (Copilot review, #1463).
 const GH_ASYNC_MAX_BUFFER = 10 * 1024 * 1024;
-const execFileAsync = promisify(execFile);
 /**
  * Async `gh` invocation used ONLY by the traversal hot-path loaders
- * (`buildIssueLoader` / `buildSubIssueLoader`). Unlike the blocking
- * `execFileSync` runner — which serializes even concurrent `await`s because it
- * holds the event loop — this `execFile`-based runner lets multiple `gh`
- * subprocesses run in parallel; the actual in-flight bound is enforced by the
- * prefetch crawl's `mapPool` using the resolved `concurrency` (default
+ * (`buildIssueLoader` / `buildSubIssueLoader`). Unlike the blocking sync
+ * runner — which serializes even concurrent `await`s because it holds the
+ * event loop — {@link ghTextAsync} lets multiple `gh` subprocesses run in
+ * parallel; the actual in-flight bound is enforced by the prefetch crawl's
+ * `mapPool` using the resolved `concurrency` (default
  * {@link DEFAULT_TRAVERSAL_CONCURRENCY}). The non-hot-path callers (owner/repo
  * resolution, claim-state comments, `--all-roadmaps` search) keep the sync
  * runner, so their behavior is byte-unchanged.
  *
- * #1449: replaces a hand-rolled `spawn` + manual stdout/stderr accumulation
- * (~28 lines). `promisify(execFile)`'s rejection already carries `.code`
- * (exit status, or the string spawn-error code such as `'ENOENT'`),
- * `.stderr`, and `.stdout` as own properties — empirically confirmed
- * byte-identical to the shape the old hand-rolled rejection built, and
- * exactly what {@link resolveGhExitStatus} / {@link wrapGhFailure} already
- * read — so no error-shape adapter code is needed.
- *
- * `execFile` has no `stdio` option, so its default stdio does not
- * reproduce the previous `spawn(..., { stdio: ['ignore', 'pipe', 'pipe'] })`
- * stdin-ignore behavior (confirmed empirically: a stdin-reading child hangs
- * under plain `execFile` where it exited immediately under the old
- * `spawn` runner). None of this file's `gh` invocations pass `--input` or
- * an `@-` field value (the only ways `gh api` reads stdin — see
- * `gh api --help`), so `gh` itself never blocks here today. Still,
- * `run.child.stdin?.end()` below closes the child's stdin immediately
- * (mirroring `stdio: ['ignore', ...]`) so a future caller can't silently
- * reintroduce a stdin hang — this repo hardened a sibling stdin-hang bug
- * in #1444.
+ * #1675: delegates to gh-exec.mts's shared `ghTextAsync` (extracted from
+ * this function's own #1449 `promisify(execFile)` implementation) instead
+ * of spawning `gh` directly, so this hot path also gets the shared default
+ * timeout. `.trim()`ed stdout is a behavior-preserving change here: every
+ * caller of `runGhCapture` already trims (or `JSON.parse`s, which ignores
+ * surrounding whitespace) its result.
  */
 function runGhCapture(args: string[]): Promise<string> {
-  const run = execFileAsync('gh', args, {
-    encoding: 'utf8',
-    maxBuffer: GH_ASYNC_MAX_BUFFER,
-  });
-  run.child.stdin?.end();
-  return run.then(({ stdout }) => stdout);
+  return ghTextAsync(args, { maxBuffer: GH_ASYNC_MAX_BUFFER });
 }
 // Policy default claim stale age (`claimTiming.staleAge`, `PT24H`). Mirrors
 // the default baked into protocol-helpers' `isStaleAt`, so when the configured
@@ -2828,10 +2811,7 @@ function runGh(
   const { allowStatuses = [] } = options;
 
   try {
-    return execFileSync('gh', args, {
-      encoding: 'utf8',
-      stdio: ['ignore', 'pipe', 'pipe'],
-    });
+    return ghText(args, GH_TEXT_LOOP_OPTIONS);
   } catch (error) {
     return wrapGhFailure(error, args, allowStatuses);
   }
