@@ -206,8 +206,10 @@ when they copy that directory into their own repository. A relative
 link whose resolved path falls outside `templateRoot` fails the audit
 even when that exact path happens to exist in the source repository —
 adopters never get the sibling files the source repository ships
-outside `idd-template/`. This is the mechanism that let a template
-instruction file's relative link to the source repository's own
+outside `idd-template/`. Observed on
+[#1696](https://github.com/kurone-kito/idd-skill/issues/1696) (the
+2026-07-28 audit, closed 2026-08-01): a template instruction file's
+relative link to the source repository's own
 `copilot-instructions.md` and to a source-repo-only `schemas/`
 directory both rot silently before this checker existed; retargeting
 such a link to a hosted URL, or to a file that genuinely ships inside

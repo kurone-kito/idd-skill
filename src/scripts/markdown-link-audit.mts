@@ -172,6 +172,18 @@ export function extractLinkOccurrences(text: string): LinkOccurrence[] {
 // and mailto:/tel: are never file paths.
 const EXTERNAL_SCHEME_PATTERN = /^(?:https?|mailto|tel):/i;
 
+// A target beginning with `/` is never a path relative to the linking
+// file's own directory: a single leading slash renders on GitHub's blob
+// viewer as domain-absolute (relative to github.com, not the repo root),
+// and a double leading slash (`//host/path`) is a protocol-relative URL to
+// a possibly different host. Neither is a `posix.join`-safe repo-relative
+// path -- joining it against the source file's directory silently produces
+// an unrelated path (`/docs/y.md` from `docs/x.md` becomes
+// `docs/docs/y.md`; `//example.com/page` becomes `example.com/page`),
+// which the collector would then report as a spurious missing file. Treat
+// both forms as out of scope, the same as an external http(s) URL.
+const ROOT_OR_PROTOCOL_RELATIVE_PATTERN = /^\//;
+
 function decodePathPart(pathPart: string): string {
   try {
     return decodeURIComponent(pathPart);
@@ -186,14 +198,18 @@ function decodePathPart(pathPart: string): string {
 /**
  * Resolve one link occurrence's target to a repo-relative path plus an
  * optional fragment, or `null` when the target is out of scope (external
- * URL, mailto:, tel:) and therefore not checked. `sourceFile` must be the
+ * URL, mailto:, tel:, a root-absolute `/path`, or a protocol-relative
+ * `//host/path`) and therefore not checked. `sourceFile` must be the
  * repo-relative path of the file the link appears in.
  */
 export function resolveLinkTarget(
   sourceFile: string,
   target: string,
 ): { path: string; fragment: string | null; isDirectory: boolean } | null {
-  if (EXTERNAL_SCHEME_PATTERN.test(target)) {
+  if (
+    EXTERNAL_SCHEME_PATTERN.test(target) ||
+    ROOT_OR_PROTOCOL_RELATIVE_PATTERN.test(target)
+  ) {
     return null;
   }
   const hashIndex = target.indexOf('#');

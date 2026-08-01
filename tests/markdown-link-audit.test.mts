@@ -154,6 +154,18 @@ test('resolveLinkTarget returns null for out-of-scope external schemes', () => {
   assert.equal(resolveLinkTarget('docs/x.md', 'mailto:a@example.com'), null);
 });
 
+test('resolveLinkTarget returns null for a root-absolute or protocol-relative target', () => {
+  // A CodeRabbit finding on this PR: a naive posix.join silently produces
+  // an unrelated path for either form (`/docs/y.md` from `docs/x.md`
+  // becomes `docs/docs/y.md`; `//example.com/page` becomes
+  // `example.com/page`), which would then be reported as a spurious
+  // missing file. GitHub's blob viewer also renders a single leading
+  // slash as domain-absolute, not repo-root-relative, so out of scope is
+  // the correct reading either way.
+  assert.equal(resolveLinkTarget('docs/x.md', '/docs/y.md'), null);
+  assert.equal(resolveLinkTarget('README.md', '//example.com/page'), null);
+});
+
 test('resolveLinkTarget resolves a same-file fragment-only link', () => {
   assert.deepEqual(resolveLinkTarget('docs/x.md', '#frag'), {
     path: 'docs/x.md',
@@ -328,6 +340,14 @@ test('an intentional exception suppressed with the ignore marker does not fail',
 test('an external http(s) link is out of scope and never fails', () => {
   const violations = collect({
     'docs/a.md': '[external](https://example.com/does-not-exist.md#nope)\n',
+  });
+  assert.deepEqual(violations, []);
+});
+
+test('a root-absolute or protocol-relative link is out of scope and never fails', () => {
+  const violations = collect({
+    'docs/a.md':
+      '[root](/does-not-exist.md)\n\n[protocol-relative](//example.com/does-not-exist.md)\n',
   });
   assert.deepEqual(violations, []);
 });
