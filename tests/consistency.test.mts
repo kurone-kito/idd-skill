@@ -6,18 +6,23 @@ import { fileURLToPath } from 'node:url';
 
 import { ADVISORY_CONVERGENCE_CHECK_SELECTOR } from '../src/scripts/advisory-convergence.mts';
 import {
+  buildOkfIndexRows,
   collectDocBudgetDriftViolations,
   collectDuplicateSyncPairTargets,
+  collectEnginesRangeMirrorViolations,
   collectGeneratedFromBannerViolations,
   collectInstructionSizeBudgetViolations,
   collectOkfFrontmatterViolations,
   collectPolicyConfigDrift,
+  escapeMarkdownTableCell,
+  extractOkfIndexFields,
   generatedFromBanner,
   injectGeneratedFromBanner,
   inspectHelperRuntimeConfig,
   isBannerScopedInstructionTarget,
   normalizePolicyConfig,
   parseGeneratedFromBannerSource,
+  renderOkfIndexMarkdownTable,
   resolveCollaboratorMarkerTrust,
   resolveGeneratedBlockFiles,
   stripGeneratedFromBanner,
@@ -1296,11 +1301,201 @@ test('audit/sync-manifest.json guards the .claude issue-authoring markdown mirro
 });
 
 // =============================================================================
+// collectEnginesRangeMirrorViolations (#1706) -- the engines.node range
+// mirror guard shared by audit-docs.mts's checkEnginesRangeMirrors.
+// =============================================================================
+
+const ENGINES_NODE = '^22.22.2 || >=24.2.0';
+
+test('collectEnginesRangeMirrorViolations: passes when every mirror matches', () => {
+  const files: Record<string, string> = {
+    '.nvmrc': '22.22.2\n',
+    'workflow.yml': `some yaml\n${ENGINES_NODE}\nmore yaml`,
+    'prose.md':
+      'Requires 22.22.2 or newer on the 22.x line, or 24.2.0 or newer',
+  };
+  const violations = collectEnginesRangeMirrorViolations(
+    ENGINES_NODE,
+    [
+      { file: '.nvmrc', mode: 'low-bound-line' },
+      { file: 'workflow.yml', mode: 'full-range' },
+      { file: 'prose.md', mode: 'components' },
+    ],
+    (file) => files[file],
+  );
+  assert.deepEqual(violations, []);
+});
+
+test('collectEnginesRangeMirrorViolations: catches a stale low-bound pin', () => {
+  const violations = collectEnginesRangeMirrorViolations(
+    ENGINES_NODE,
+    [{ file: '.nvmrc', mode: 'low-bound-line' }],
+    () => '22.20.0\n',
+  );
+  assert.deepEqual(violations, [
+    'engines-range-mirrors: .nvmrc pins "22.20.0", expected the engines.node low bound "22.22.2"',
+  ]);
+});
+
+test('collectEnginesRangeMirrorViolations: catches a stale full-range mention', () => {
+  const violations = collectEnginesRangeMirrorViolations(
+    ENGINES_NODE,
+    [{ file: 'workflow.yml', mode: 'full-range' }],
+    () => 'const ok = ... ^22.22.1 || >=24.2.0 ...',
+  );
+  assert.deepEqual(violations, [
+    `engines-range-mirrors: workflow.yml does not contain the current engines.node range "${ENGINES_NODE}"`,
+  ]);
+});
+
+test('collectEnginesRangeMirrorViolations: components mode requires both bounds', () => {
+  const violations = collectEnginesRangeMirrorViolations(
+    ENGINES_NODE,
+    [{ file: 'prose.md', mode: 'components' }],
+    // Only mentions the low bound, not the high one.
+    () => 'Node.js 22.22.2 or newer',
+  );
+  assert.deepEqual(violations, [
+    `engines-range-mirrors: prose.md does not mention both engines.node bounds "22.22.2" and "24.2.0"`,
+  ]);
+});
+
+test('collectEnginesRangeMirrorViolations: fails closed on a missing or non-string engines.node', () => {
+  assert.deepEqual(
+    collectEnginesRangeMirrorViolations(undefined, [], () => ''),
+    [
+      'engines-range-mirrors: package.json engines.node is missing or not a string',
+    ],
+  );
+  assert.deepEqual(
+    collectEnginesRangeMirrorViolations(42, [], () => ''),
+    [
+      'engines-range-mirrors: package.json engines.node is missing or not a string',
+    ],
+  );
+});
+
+test('collectEnginesRangeMirrorViolations: fails closed on an unrecognized range shape', () => {
+  const violations = collectEnginesRangeMirrorViolations('>=18', [], () => '');
+  assert.deepEqual(violations, [
+    'engines-range-mirrors: engines.node ">=18" does not match the expected "^<low> || >=<high>" shape; cannot verify mirrors',
+  ]);
+});
+
+test('collectEnginesRangeMirrorViolations: reports an unreadable mirror file instead of throwing', () => {
+  const violations = collectEnginesRangeMirrorViolations(
+    ENGINES_NODE,
+    [{ file: 'missing.yml', mode: 'full-range' }],
+    () => {
+      throw new Error('ENOENT');
+    },
+  );
+  assert.deepEqual(violations, [
+    'engines-range-mirrors: missing.yml: could not be read',
+  ]);
+});
+
+test("audit/sync-manifest.json's guarded repo state: this repository's own engines.node mirrors are currently in sync", () => {
+  const packageJson = readJson('package.json') as {
+    engines?: { node?: unknown };
+  };
+  const violations = collectEnginesRangeMirrorViolations(
+    packageJson.engines?.node,
+    [
+      { file: '.nvmrc', mode: 'low-bound-line' },
+      { file: '.node-version', mode: 'low-bound-line' },
+      { file: '.tool-versions', mode: 'low-bound-contains' },
+      { file: '.github/workflows/lint.yml', mode: 'full-range' },
+      {
+        file: '.github/workflows/idd-advisory-convergence.yml',
+        mode: 'full-range',
+      },
+      {
+        file: '.github/workflows/pnpm-boundary-node22-floor.yml',
+        mode: 'low-bound-contains',
+      },
+      { file: '.github/CONTRIBUTING.md', mode: 'full-range' },
+      { file: '.github/CONTRIBUTING.ja.md', mode: 'full-range' },
+      { file: '.github/CONTRIBUTING.zh.md', mode: 'full-range' },
+      { file: 'docs/typescript-sources.md', mode: 'full-range' },
+      { file: 'docs/workshop/README.md', mode: 'components' },
+      { file: 'docs/stalled-session-quiet-check.md', mode: 'components' },
+      { file: 'src/scripts/helper-runtime-manifest.mts', mode: 'full-range' },
+    ],
+    readText,
+  );
+  assert.deepEqual(violations, []);
+});
+
+// =============================================================================
 // resolveGeneratedBlockFiles (#1703) -- the shared paths-first,
 // sourceGlobs-fallback resolution rule for a generatedBlocks manifest
 // entry, previously duplicated (and drifted) between sync-docs.mts and
 // audit-docs.mts.
 // =============================================================================
+
+// =============================================================================
+// OKF index table renderer (#1683)
+// =============================================================================
+
+test('extractOkfIndexFields reads type/title/description from OKF frontmatter', () => {
+  const fields = extractOkfIndexFields(
+    '---\ntype: guide\ntitle: Hello\ndescription: One sentence.\n---\n\n# Hello\n',
+  );
+  assert.deepEqual(fields, {
+    type: 'guide',
+    title: 'Hello',
+    description: 'One sentence.',
+  });
+  assert.equal(extractOkfIndexFields('# no frontmatter\n'), null);
+});
+
+test('buildOkfIndexRows groups by typeOrder then path and excludes reserved paths', () => {
+  const files: Record<string, string> = {
+    'docs/b.md':
+      '---\ntype: guide\ntitle: B\ndescription: B page.\n---\n\n# B\n',
+    'docs/a.md':
+      '---\ntype: guide\ntitle: A\ndescription: A page.\n---\n\n# A\n',
+    'docs/z.md':
+      '---\ntype: concept\ntitle: Z\ndescription: Z page.\n---\n\n# Z\n',
+    'docs/index.md':
+      '---\ntype: index\ntitle: Index\ndescription: Index page.\n---\n\n# Index\n',
+  };
+  const rows = buildOkfIndexRows(Object.keys(files), (p) => files[p] ?? '', {
+    typeOrder: ['guide', 'concept'],
+    excludePaths: ['docs/index.md'],
+  });
+  assert.deepEqual(
+    rows.map((r) => r.path),
+    ['docs/a.md', 'docs/b.md', 'docs/z.md'],
+  );
+  assert.equal(rows[0]?.type, 'guide');
+  assert.equal(rows[2]?.type, 'concept');
+});
+
+test('renderOkfIndexMarkdownTable links relative to linkBase', () => {
+  const table = renderOkfIndexMarkdownTable(
+    [
+      {
+        path: 'docs/foo.md',
+        type: 'guide',
+        title: 'Foo',
+        description: 'Foo page.',
+      },
+    ],
+    'docs',
+  );
+  assert.match(table, /dprint-ignore-start/);
+  assert.match(table, /\| Type \| Page \| Description \|/);
+  assert.match(table, /\| guide \| \[Foo\]\(foo\.md\) \| Foo page\. \|/);
+  assert.match(table, /dprint-ignore-end/);
+});
+
+test('escapeMarkdownTableCell escapes backslashes before pipes', () => {
+  assert.equal(escapeMarkdownTableCell('a|b'), 'a\\|b');
+  assert.equal(escapeMarkdownTableCell('a\\b'), 'a\\\\b');
+  assert.equal(escapeMarkdownTableCell('a\\|b'), 'a\\\\\\|b');
+});
 
 test('resolveGeneratedBlockFiles: paths present takes precedence, globFilesFn is never called', () => {
   const files = resolveGeneratedBlockFiles(

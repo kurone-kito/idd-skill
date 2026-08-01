@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
 import { test } from 'node:test';
+import { fileURLToPath } from 'node:url';
 
 import {
   parseClaimComment,
@@ -12,6 +14,11 @@ import {
 // A real 40-hex commit SHA — the watermark/claim parsers and the published
 // schemas require this exact shape, so the tests must use one.
 const SHA = '0123456789abcdef0123456789abcdef01234567';
+const TS = '2026-06-17T09:47:08Z';
+const REPO_ROOT = fileURLToPath(new URL('..', import.meta.url));
+const EMIT_MARKER_CLI = fileURLToPath(
+  new URL('../scripts/emit-marker.mjs', import.meta.url),
+);
 
 test('renderClaimedByMarker emits the exact claimed-by body', () => {
   assert.equal(
@@ -238,4 +245,122 @@ test('renderers reject payloads that would not round-trip', () => {
   assert.throws(() =>
     renderReviewBaselineMarker({ agentId: 'a', claimId: 'c', sha: 'deadbeef' }),
   );
+});
+
+// --- CLI-layer required-flag validation (#1722) -----------------------------
+//
+// Before #1722, `idd-emit-marker` validated only --type by name; every other
+// missing flag fell through to the renderer's aggregate guard, surfacing
+// only an unattributed "invalid ... marker payload" with no indication of
+// which flag was absent. These tests spawn the compiled CLI directly (the
+// same pattern tests/post-idd-marker.test.mts already uses) and assert the
+// exit code and error text name the specific missing flag, for every
+// required flag of every marker type the CLI supports.
+
+/** Run the compiled emit-marker CLI, returning its combined error text
+ * (Node writes an uncaught Error's stack -- including its `Error: <message>`
+ * line -- to stderr; this helper does not care which stream carries it, only
+ * that the flag name appears somewhere in the failure output). Asserts the
+ * process exited non-zero. */
+function runEmitMarkerExpectingFailure(argv: string[]): string {
+  try {
+    execFileSync(process.execPath, [EMIT_MARKER_CLI, ...argv], {
+      cwd: REPO_ROOT,
+      encoding: 'utf8',
+    });
+  } catch (error) {
+    const failure = error as { status?: number; stderr?: string };
+    assert.notEqual(failure.status, 0);
+    return failure.stderr ?? '';
+  }
+  throw new Error('expected the CLI to exit non-zero');
+}
+
+/** A complete, valid flag set per marker type, keyed by the flag names the
+ * CLI's own required-field validation should demand for that type. */
+const FULL_FLAGS_BY_TYPE: Record<string, Record<string, string>> = {
+  'claimed-by': {
+    'agent-id': 'a',
+    'claim-id': 'c',
+    timestamp: TS,
+    branch: 'issue/1722-fix',
+  },
+  'review-watermark': {
+    'agent-id': 'a',
+    'claim-id': 'c',
+    'head-sha': SHA,
+    'total-item-count': '0',
+  },
+  'review-baseline': {
+    'agent-id': 'a',
+    'claim-id': 'c',
+    sha: SHA,
+  },
+};
+
+function toArgv(type: string, fields: Record<string, string>): string[] {
+  const argv = ['--type', type];
+  for (const [flag, value] of Object.entries(fields)) {
+    argv.push(`--${flag}`, value);
+  }
+  return argv;
+}
+
+test('emit-marker CLI: the full flag set for every marker type succeeds', () => {
+  for (const [type, fields] of Object.entries(FULL_FLAGS_BY_TYPE)) {
+    const output = execFileSync(
+      process.execPath,
+      [EMIT_MARKER_CLI, ...toArgv(type, fields)],
+      { cwd: REPO_ROOT, encoding: 'utf8' },
+    );
+    assert.match(output, /^<!--/, `${type} should print a marker body`);
+  }
+});
+
+test('emit-marker CLI: claimed-by without --timestamp names --timestamp (issue example)', () => {
+  const { timestamp: _omit, ...rest } = FULL_FLAGS_BY_TYPE['claimed-by'];
+  const stderr = runEmitMarkerExpectingFailure(toArgv('claimed-by', rest));
+  assert.match(stderr, /--timestamp is required/);
+});
+
+test('emit-marker CLI: every required flag of every marker type is rejected by name when omitted', () => {
+  for (const [type, fields] of Object.entries(FULL_FLAGS_BY_TYPE)) {
+    for (const omittedFlag of Object.keys(fields)) {
+      const partial = Object.fromEntries(
+        Object.entries(fields).filter(([flag]) => flag !== omittedFlag),
+      );
+      const stderr = runEmitMarkerExpectingFailure(toArgv(type, partial));
+      assert.match(
+        stderr,
+        new RegExp(`--${omittedFlag} is required`),
+        `${type} without --${omittedFlag} should name --${omittedFlag}`,
+      );
+    }
+  }
+});
+
+test('emit-marker CLI: --supersedes / --max-activity-at / --ci-completed-at stay optional (renderer-defaulted, not CLI-required)', () => {
+  // These three are deliberately excluded from CLI-layer requireFlag
+  // validation: the renderers default an absent/empty value to the `none`
+  // sentinel, so requiring them here would reject input the renderer itself
+  // accepts (see emit-marker.mts's own comment above the requireFlag calls).
+  const claimedByOutput = execFileSync(
+    process.execPath,
+    [
+      EMIT_MARKER_CLI,
+      ...toArgv('claimed-by', FULL_FLAGS_BY_TYPE['claimed-by']),
+    ],
+    { cwd: REPO_ROOT, encoding: 'utf8' },
+  );
+  assert.match(claimedByOutput, /supersedes: none /);
+
+  const watermarkOutput = execFileSync(
+    process.execPath,
+    [
+      EMIT_MARKER_CLI,
+      ...toArgv('review-watermark', FULL_FLAGS_BY_TYPE['review-watermark']),
+    ],
+    { cwd: REPO_ROOT, encoding: 'utf8' },
+  );
+  assert.match(watermarkOutput, new RegExp(`${SHA} none 0 none `));
 });

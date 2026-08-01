@@ -6,11 +6,15 @@ import {
   buildCheckRunsForRefArgs,
   buildIddConfigContentsArgs,
   buildRerunPlanTextSections,
+  buildRunViewLogArgs,
   computeRerunPlan,
   describeNoActionState,
   describeOutstandingStates,
   describeRecoveryRefreshHeader,
+  extractAdvisoryVerdictReasonsFromLog,
   formatApplySummary,
+  hasUncoveredHeadVerdictReason,
+  isUncoveredHeadVerdictReason,
   parseArgs,
   parseRunIdFromUrl,
   RERUN_PLAN_CHECK_NAME,
@@ -20,6 +24,7 @@ import {
   resolveCheckRunUrl,
   runRerunAdvisoryConvergence,
   sanitizeRemoteConfig,
+  UNCOVERED_HEAD_REASON_MARKER,
 } from '../src/scripts/rerun-advisory-convergence.mts';
 
 const HEAD = '1111111111111111111111111111111111111111';
@@ -433,6 +438,147 @@ for (const event of [
   });
 }
 
+// --- Classification: awaiting-fresh-review (#1775) -----------------------
+
+test('#1775: classifies an uncovered-HEAD verdict reason as awaiting-fresh-review, not rerun-eligible', () => {
+  const uncovered =
+    'latest copilot review (commit dd0360511785c070a41da94f51de14aa2f2951f8) does not cover current HEAD a479827a75a92962222ce702a3467d1725135c1e';
+  const plan = computeRerunPlan(
+    baseInput({
+      instances: [
+        baseInstance({
+          conclusion: 'failure',
+          verdictReasons: [uncovered],
+        }),
+      ],
+    }),
+    baseOptions(),
+  );
+  assert.equal(plan.instances[0]?.classification, 'awaiting-fresh-review');
+  assert.equal(plan.counts.awaitingFreshReview, 1);
+  assert.equal(plan.counts.rerunEligible, 0);
+  assert.equal(plan.plan.length, 0);
+  assert.match(plan.instances[0]?.reason ?? '', /wait for a fresh review/);
+  assert.match(
+    describeOutstandingStates(plan),
+    /awaiting a fresh review covering the current HEAD/,
+  );
+});
+
+test('#1775: a missing verdictReasons leaves a terminal failure rerun-eligible (no invented hold)', () => {
+  const plan = computeRerunPlan(
+    baseInput({
+      instances: [
+        baseInstance({
+          conclusion: 'failure',
+          verdictReasons: null,
+        }),
+      ],
+    }),
+    baseOptions(),
+  );
+  assert.equal(plan.instances[0]?.classification, 'rerun-eligible');
+  assert.equal(plan.counts.rerunEligible, 1);
+  assert.equal(plan.plan.length, 1);
+});
+
+test('#1775: non-coverage reasons (e.g. unresolved threads) stay rerun-eligible', () => {
+  const plan = computeRerunPlan(
+    baseInput({
+      instances: [
+        baseInstance({
+          conclusion: 'failure',
+          verdictReasons: [
+            '1 copilot-authored review thread(s) are neither resolved nor validly dispositioned',
+          ],
+        }),
+      ],
+    }),
+    baseOptions(),
+  );
+  assert.equal(plan.instances[0]?.classification, 'rerun-eligible');
+  assert.equal(plan.plan.length, 1);
+});
+
+test('#1775: applyRerunPlan never spends budget on an awaiting-fresh-review instance', () => {
+  const initialPlan = computeRerunPlan(
+    baseInput({
+      instances: [
+        baseInstance({
+          conclusion: 'failure',
+          verdictReasons: [
+            `latest copilot review (commit ${HEAD}) does not cover current HEAD ${HEAD}`,
+          ],
+        }),
+      ],
+    }),
+    baseOptions(),
+  );
+  assert.equal(initialPlan.plan.length, 0);
+
+  let rerunCalled = false;
+  const result = applyRerunPlan(initialPlan, {
+    rerunAndWait: () => {
+      rerunCalled = true;
+    },
+    recomputePlan: () => {
+      throw new Error('recomputePlan should not be called');
+    },
+  });
+
+  assert.equal(rerunCalled, false);
+  assert.equal(result.executed.length, 0);
+  assert.equal(result.resolved, true);
+});
+
+// --- extractAdvisoryVerdictReasonsFromLog / uncovered-HEAD helpers ------
+
+test('#1775: extractAdvisoryVerdictReasonsFromLog parses gh-run-view-shaped logs', () => {
+  const log = [
+    'idd-advisory-convergence\tRun advisory-convergence verdict (--assert)\t2026-08-01T11:13:10.0000000Z {',
+    'idd-advisory-convergence\tRun advisory-convergence verdict (--assert)\t2026-08-01T11:13:10.0000001Z   "protocolVersion": "1",',
+    'idd-advisory-convergence\tRun advisory-convergence verdict (--assert)\t2026-08-01T11:13:10.0000002Z   "ready": false,',
+    'idd-advisory-convergence\tRun advisory-convergence verdict (--assert)\t2026-08-01T11:13:10.0000003Z   "reasons": [',
+    'idd-advisory-convergence\tRun advisory-convergence verdict (--assert)\t2026-08-01T11:13:10.0000004Z     "latest copilot review (commit abc) does not cover current HEAD def"',
+    'idd-advisory-convergence\tRun advisory-convergence verdict (--assert)\t2026-08-01T11:13:10.0000005Z   ]',
+    'idd-advisory-convergence\tRun advisory-convergence verdict (--assert)\t2026-08-01T11:13:10.0000006Z }',
+  ].join('\n');
+  const reasons = extractAdvisoryVerdictReasonsFromLog(log);
+  assert.deepEqual(reasons, [
+    'latest copilot review (commit abc) does not cover current HEAD def',
+  ]);
+  assert.equal(hasUncoveredHeadVerdictReason(reasons), true);
+  const firstReason = reasons?.[0] ?? '';
+  assert.equal(isUncoveredHeadVerdictReason(firstReason), true);
+  assert.equal(
+    isUncoveredHeadVerdictReason(
+      'copilot has not reviewed this pull request yet',
+    ),
+    false,
+  );
+  assert.equal(hasUncoveredHeadVerdictReason(null), false);
+  assert.match(UNCOVERED_HEAD_REASON_MARKER, /does not cover current HEAD/);
+});
+
+test('#1775: extractAdvisoryVerdictReasonsFromLog returns null when no verdict JSON is present', () => {
+  assert.equal(extractAdvisoryVerdictReasonsFromLog(''), null);
+  assert.equal(
+    extractAdvisoryVerdictReasonsFromLog('Process completed with exit code 1.'),
+    null,
+  );
+});
+
+test('#1775: buildRunViewLogArgs pins the plain-text run-log command', () => {
+  assert.deepEqual(buildRunViewLogArgs('o', 'r', '99'), [
+    'run',
+    'view',
+    '99',
+    '-R',
+    'o/r',
+    '--log',
+  ]);
+});
+
 // --- Classification: rerun-eligible + ordered plan -----------------------
 
 test('classifies a resolved, non-bot, terminal failure as rerun-eligible and includes it in the plan', () => {
@@ -454,16 +600,17 @@ test('classifies a resolved, non-bot, terminal failure as rerun-eligible and inc
   ]);
 });
 
-// #1570: this helper classifies purely on check-run/run-instance shape
-// (conclusion, actor, event, run_attempt) -- it never inspects WHY the
-// underlying `idd-advisory-convergence` verdict was non-passing. A stale
-// instance whose non-passing conclusion traces to a terminal
-// `COPILOT_UNAVAILABLE`-without-waiver hold (advisory-convergence.mts) is
-// therefore classified and planned identically to any other non-bot,
-// terminal, resolved failure: once a maintainer posts a valid terminal
-// waiver, rerunning THIS SAME existing PR-associated run (`gh run rerun`,
-// never `workflow_dispatch`) re-evaluates the verdict fresh and observes
-// the now-`ready: true` result -- no separate rerun code path is needed.
+// #1570: absent an explicit uncovered-HEAD verdict reason (#1775), this
+// helper classifies on check-run/run-instance shape (conclusion, actor,
+// event, run_attempt) and does not re-derive the underlying
+// `idd-advisory-convergence` verdict. A stale instance whose non-passing
+// conclusion traces to a terminal `COPILOT_UNAVAILABLE`-without-waiver
+// hold (advisory-convergence.mts) is therefore classified and planned
+// identically to any other non-bot, terminal, resolved failure: once a
+// maintainer posts a valid terminal waiver, rerunning THIS SAME existing
+// PR-associated run (`gh run rerun`, never `workflow_dispatch`)
+// re-evaluates the verdict fresh and observes the now-`ready: true`
+// result -- no separate rerun code path is needed.
 test('#1570: a terminal-unavailable-without-waiver failure is classified rerun-eligible the same as any other resolved non-bot failure', () => {
   const plan = computeRerunPlan(
     baseInput({

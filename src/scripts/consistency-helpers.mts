@@ -1082,6 +1082,108 @@ export function collectDuplicateSyncPairTargets(
   return violations;
 }
 
+// --- engines.node range mirror guard (#1706) --------------------------------
+//
+// `package.json`'s `engines.node` range is hand-mirrored across ~12 files
+// (two inline CI floor-assert scripts, a source-code default, prose in
+// three CONTRIBUTING translations and three docs pages, plus the plain
+// low-bound version pinned in .nvmrc/.node-version/.tool-versions) with no
+// guard. Sharing one drift check here means the next engines bump that
+// misses one mirror fails the audit instead of silently drifting.
+
+export type EnginesRangeMirrorMode =
+  | 'full-range'
+  | 'components'
+  | 'low-bound-line'
+  | 'low-bound-contains';
+
+export interface EnginesRangeMirrorSpec {
+  file: string;
+  mode: EnginesRangeMirrorMode;
+}
+
+/**
+ * Parses `^<low>.<x>.<y> || >=<high>.<x>.<y>` -- the only shape this
+ * repository's `engines.node` has ever used -- into its two version
+ * bounds. Returns null when the range doesn't match that exact shape
+ * (fail closed rather than guess at a different range grammar).
+ */
+function parseTwoClauseEnginesRange(
+  engines: string,
+): { low: string; high: string } | null {
+  const match = /^\^(\d+\.\d+\.\d+)\s*\|\|\s*>=(\d+\.\d+\.\d+)$/.exec(
+    engines.trim(),
+  );
+  return match ? { low: match[1], high: match[2] } : null;
+}
+
+export function collectEnginesRangeMirrorViolations(
+  enginesNode: unknown,
+  mirrors: readonly EnginesRangeMirrorSpec[],
+  readText: (file: string) => string,
+): string[] {
+  const engines = typeof enginesNode === 'string' ? enginesNode.trim() : '';
+  if (!engines) {
+    return [
+      'engines-range-mirrors: package.json engines.node is missing or not a string',
+    ];
+  }
+  const bounds = parseTwoClauseEnginesRange(engines);
+  const violations: string[] = [];
+  if (!bounds) {
+    violations.push(
+      `engines-range-mirrors: engines.node "${engines}" does not match the expected "^<low> || >=<high>" shape; cannot verify mirrors`,
+    );
+  }
+
+  for (const mirror of mirrors) {
+    let text: string;
+    try {
+      text = readText(mirror.file);
+    } catch {
+      violations.push(
+        `engines-range-mirrors: ${mirror.file}: could not be read`,
+      );
+      continue;
+    }
+    switch (mirror.mode) {
+      case 'full-range':
+        if (!text.includes(engines)) {
+          violations.push(
+            `engines-range-mirrors: ${mirror.file} does not contain the current engines.node range "${engines}"`,
+          );
+        }
+        break;
+      case 'components':
+        if (
+          bounds &&
+          (!text.includes(bounds.low) || !text.includes(bounds.high))
+        ) {
+          violations.push(
+            `engines-range-mirrors: ${mirror.file} does not mention both engines.node bounds "${bounds.low}" and "${bounds.high}"`,
+          );
+        }
+        break;
+      case 'low-bound-line':
+        if (bounds && text.trim() !== bounds.low) {
+          violations.push(
+            `engines-range-mirrors: ${mirror.file} pins "${text.trim()}", expected the engines.node low bound "${bounds.low}"`,
+          );
+        }
+        break;
+      case 'low-bound-contains':
+        if (bounds && !text.includes(bounds.low)) {
+          violations.push(
+            `engines-range-mirrors: ${mirror.file} does not mention the engines.node low bound "${bounds.low}"`,
+          );
+        }
+        break;
+    }
+  }
+
+  return violations;
+}
+
 // --- generatedBlocks file resolution (#1703) --------------------------------
 //
 // sync-docs.mts and audit-docs.mts each independently decided how a
@@ -1147,6 +1249,148 @@ export function resolveGeneratedBlockFiles(
     return [...block.paths];
   }
   return uniqueSorted((block.sourceGlobs ?? []).flatMap(globFilesFn));
+}
+
+// --- OKF index table generated blocks (#1683) ------------------------------
+//
+// `generatedBlocks[]` entries with `kind: "okf-table"` render a Markdown
+// table of OKF frontmatter (`title` / `type` / `description`) instead of
+// the default fenced path list. Shared by sync-docs and audit-docs so the
+// rendered table cannot drift between apply and check.
+
+/** Optional fields a `generatedBlocks[]` entry may carry for okf-table. */
+export interface OkfTableBlockSource extends GeneratedBlockFileSource {
+  /** `"path-list"` (default) or `"okf-table"`. */
+  kind?: string | null;
+  /** Closed type vocabulary order; rows are grouped in this order. */
+  typeOrder?: string[] | null;
+  /** Repo-relative paths to omit from the table (e.g. `docs/index.md`). */
+  excludePaths?: string[] | null;
+  /**
+   * Directory the generated table lives in (e.g. `docs`). Row links are
+   * relative to this directory, so `docs/foo.md` becomes `foo.md`.
+   */
+  linkBase?: string | null;
+}
+
+/** One rendered row of an OKF index table. */
+export interface OkfIndexRow {
+  path: string;
+  type: string;
+  title: string;
+  description: string;
+}
+
+/**
+ * Extract `type` / `title` / `description` from a page's OKF frontmatter,
+ * or `null` when the opening frontmatter block is missing or any of the
+ * three fields is empty/non-scalar. Pure and unit-testable.
+ */
+export function extractOkfIndexFields(
+  text: string,
+): { type: string; title: string; description: string } | null {
+  const match = OKF_FRONTMATTER_PATTERN.exec(String(text ?? ''));
+  if (!match) return null;
+  const fields = parseOkfFrontmatterFields(match[1] ?? '');
+  const type = typeof fields.type === 'string' ? fields.type.trim() : '';
+  const title = typeof fields.title === 'string' ? fields.title.trim() : '';
+  const description =
+    typeof fields.description === 'string' ? fields.description.trim() : '';
+  if (!type || !title || !description) return null;
+  return { type, title, description };
+}
+
+/**
+ * Build deterministic OKF index rows from repo-relative paths.
+ * Skips exact paths listed in `excludePaths` and pages whose frontmatter
+ * cannot supply type/title/description. Callers that want reserved
+ * basenames (e.g. `index.md`) omitted must put those paths in
+ * `excludePaths` explicitly. Groups by `typeOrder` (unknown types sort
+ * after known ones, alphabetically), then by path within a group.
+ */
+export function buildOkfIndexRows(
+  files: readonly string[],
+  readFile: (path: string) => string,
+  options: {
+    typeOrder?: readonly string[] | null;
+    excludePaths?: readonly string[] | null;
+  } = {},
+): OkfIndexRow[] {
+  const exclude = new Set(
+    (options.excludePaths ?? []).map((p) => String(p).replace(/\\/g, '/')),
+  );
+  const typeOrder = (options.typeOrder ?? []).map(String);
+  const typeRank = new Map(typeOrder.map((t, i) => [t, i]));
+
+  const rows: OkfIndexRow[] = [];
+  for (const rawPath of files) {
+    const path = String(rawPath).replace(/\\/g, '/');
+    if (exclude.has(path)) continue;
+    let text: string;
+    try {
+      text = readFile(path);
+    } catch {
+      continue;
+    }
+    const fields = extractOkfIndexFields(text);
+    if (!fields) continue;
+    rows.push({ path, ...fields });
+  }
+
+  rows.sort((a, b) => {
+    const ra = typeRank.get(a.type);
+    const rb = typeRank.get(b.type);
+    const rankA = ra === undefined ? typeOrder.length : ra;
+    const rankB = rb === undefined ? typeOrder.length : rb;
+    if (rankA !== rankB) return rankA - rankB;
+    if (a.type !== b.type) return a.type.localeCompare(b.type);
+    return a.path.localeCompare(b.path);
+  });
+  return rows;
+}
+
+/**
+ * Render an OKF index as a Markdown table. Links are relative to
+ * `linkBase` (e.g. `docs` → `docs/foo.md` becomes `foo.md`). Pure.
+ */
+export function renderOkfIndexMarkdownTable(
+  rows: readonly OkfIndexRow[],
+  linkBase = 'docs',
+): string {
+  const base = String(linkBase ?? 'docs')
+    .replace(/\\/g, '/')
+    .replace(/\/+$/, '');
+  const prefix = `${base}/`;
+  const header = '| Type | Page | Description |\n| ---- | ---- | ----------- |';
+  // Wrap in dprint-ignore so the formatter cannot re-pad table cells and
+  // make the audit-docs exact-string check fail on every apply (#1683).
+  const openIgnore = '<!-- dprint-ignore-start -->';
+  const closeIgnore = '<!-- dprint-ignore-end -->';
+  if (rows.length === 0) {
+    return `\n\n${openIgnore}\n${header}\n${closeIgnore}\n\n`;
+  }
+  const body = rows
+    .map((row) => {
+      const href = row.path.startsWith(prefix)
+        ? row.path.slice(prefix.length)
+        : row.path;
+      // Escape backslashes first, then pipes, so a cell value containing
+      // `\` cannot leave an incomplete escape sequence before `|`
+      // (CodeQL js/incomplete-sanitization on PR #1791).
+      const type = escapeMarkdownTableCell(row.type);
+      const title = escapeMarkdownTableCell(row.title);
+      const description = escapeMarkdownTableCell(row.description);
+      return `| ${type} | [${title}](${href}) | ${description} |`;
+    })
+    .join('\n');
+  return `\n\n${openIgnore}\n${header}\n${body}\n${closeIgnore}\n\n`;
+}
+
+/** Escape a Markdown table cell so `|` and `\` cannot break the row. */
+export function escapeMarkdownTableCell(value: string): string {
+  return String(value ?? '')
+    .replace(/\\/g, '\\\\')
+    .replace(/\|/g, '\\|');
 }
 
 // --- OKF frontmatter conformance audit (#1680) ------------------------------

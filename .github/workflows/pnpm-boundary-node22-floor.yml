@@ -1,0 +1,20 @@
+name: Pnpm boundary guard (Node 22 floor)
+# #1706: this repository's own pull_request lane for pnpm-boundary.yml
+# (and every other Node-pinning workflow) runs on Node 24.x, so the
+# `^22.22.2` half of this repository's `engines.node` range was never
+# actually exercised in CI -- .nvmrc/.node-version/.tool-versions all
+# recommend 22.22.2, but nothing ran the test suite there. This workflow
+# invokes pnpm-boundary.yml's existing reusable `node-version` input (a
+# second invocation, per the issue's own suggestion) pinned to the low
+# end of the range, so a helper that only works on 24.x-and-newer APIs
+# fails here instead of shipping silently broken for every 22.x
+# developer/adopter (the #1447 failure class this guards against).
+on:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  pnpm-boundary-node22-floor:
+    uses: ./.github/workflows/pnpm-boundary.yml
+    with:
+      node-version: '22.22.2'

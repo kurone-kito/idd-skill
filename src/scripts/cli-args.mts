@@ -383,3 +383,38 @@ export function parseCanonicalIntegerOrNull(
 ): number | null {
   return parseCanonicalIntegerToken(token, min);
 }
+
+/**
+ * Validate that a required CLI flag's value is present and non-empty,
+ * returning it narrowed to `string`. Throws this repository's established
+ * `--flag is required` shape -- the same wording `branch-name.mts`'s
+ * `--number`/`--title` checks, `claim-lock.mts`'s `--worktree` check,
+ * `verify-install-deps.mts`'s `--key-binary`/`--install-command` checks, and
+ * many other hand-rolled parsers across `src/scripts/` already use verbatim
+ * -- when `value` is `undefined`, an empty string, or any non-string (e.g. a
+ * boolean flag's value passed where a value-flag was expected).
+ *
+ * Deliberately separate from {@link parseCliArgs}: several write-path
+ * helpers (`emit-marker.mts`, `post-idd-marker.mts`) collect a
+ * marker-type-dependent, dynamically-keyed field set that `parseCliArgs`'s
+ * static, declared spec cannot express -- see each of those files' own
+ * `parseArgs` doc comment for the full reasoning behind that exclusion. This
+ * function is the narrow, spec-free primitive those hand-rolled parsers can
+ * still reuse to report a missing required field BY NAME, instead of
+ * deferring to an aggregate downstream guard (a renderer's own payload
+ * validation) that only ever reports an unattributed "invalid ... payload"
+ * error with no indication of which flag was missing (#1722).
+ *
+ * Checks `value === ''` explicitly rather than `!value`: several required
+ * fields this function guards are numeric-looking strings that are falsy as
+ * a *number* but a perfectly valid, present string value -- e.g.
+ * `--total-item-count '0'` (emit-marker.mts / post-idd-marker.mts's
+ * watermark type). A bare `!value` truthiness check would reject that `'0'`
+ * as if the flag were missing.
+ */
+export function requireFlag(value: unknown, flagName: string): string {
+  if (typeof value !== 'string' || value === '') {
+    throw new Error(`${flagName} is required`);
+  }
+  return value;
+}

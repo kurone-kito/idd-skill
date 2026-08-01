@@ -5,6 +5,7 @@ import {
   parseCanonicalIntegerOrNull,
   parseCanonicalIntegerOrThrow,
   parseCliArgs,
+  requireFlag,
 } from '../src/scripts/cli-args.mts';
 
 const SAMPLE_SPEC = {
@@ -195,4 +196,38 @@ test('parseCanonicalIntegerOrNull: resolves a canonical positive integer token',
 
 test('parseCanonicalIntegerOrNull: honors an explicit min of 0', () => {
   assert.equal(parseCanonicalIntegerOrNull('0', 0), 0);
+});
+
+// --- requireFlag (#1722) -----------------------------------------------------
+
+test('requireFlag: returns a present, non-empty string value unchanged', () => {
+  assert.equal(requireFlag('claude-417b737f', '--agent-id'), 'claude-417b737f');
+});
+
+test('requireFlag: throws "--flag is required" on undefined', () => {
+  assert.throws(() => requireFlag(undefined, '--timestamp'), {
+    message: '--timestamp is required',
+  });
+});
+
+test('requireFlag: throws "--flag is required" on an empty string', () => {
+  assert.throws(() => requireFlag('', '--branch'), {
+    message: '--branch is required',
+  });
+});
+
+test('requireFlag: accepts the numeric-string "0" (checks === \'\', not truthiness)', () => {
+  // A bare `!value` truthiness check would reject '0' as if the flag were
+  // missing -- e.g. --total-item-count '0' (emit-marker.mts /
+  // post-idd-marker.mts's watermark type is a legitimate, present value.
+  assert.equal(requireFlag('0', '--total-item-count'), '0');
+});
+
+test('requireFlag: throws "--flag is required" on a non-string value (e.g. a boolean)', () => {
+  assert.throws(() => requireFlag(true, '--head-sha'), {
+    message: '--head-sha is required',
+  });
+  assert.throws(() => requireFlag(null, '--head-sha'), {
+    message: '--head-sha is required',
+  });
 });

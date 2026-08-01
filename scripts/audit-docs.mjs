@@ -8,9 +8,11 @@ import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { join, posix } from 'node:path';
 import {
+  buildOkfIndexRows,
   collectContextCeilingViolations,
   collectDocBudgetDriftViolations,
   collectDuplicateSyncPairTargets,
+  collectEnginesRangeMirrorViolations,
   collectGeneratedFromBannerViolations,
   collectInstructionSizeBudgetViolations,
   collectOkfFrontmatterViolations,
@@ -19,6 +21,7 @@ import {
   collectTypeSuppressionViolations,
   globFiles,
   isBannerScopedInstructionTarget,
+  renderOkfIndexMarkdownTable,
   resolveGeneratedBlockFiles,
   stripGeneratedFromBanner,
   uniqueSorted,
@@ -37,6 +40,30 @@ const notices = [];
 const manifest = JSON.parse(readText(manifestPath));
 const repoFiles = listRepoFiles();
 const changedFiles = listChangedFiles();
+// The fixed, known mirror set for this repository's engines.node range
+// (#1706) -- not manifest-configurable, since these are this repository's
+// own specific files, not an adopter-extensible convention.
+const ENGINES_RANGE_MIRRORS = [
+  { file: '.nvmrc', mode: 'low-bound-line' },
+  { file: '.node-version', mode: 'low-bound-line' },
+  { file: '.tool-versions', mode: 'low-bound-contains' },
+  { file: '.github/workflows/lint.yml', mode: 'full-range' },
+  {
+    file: '.github/workflows/idd-advisory-convergence.yml',
+    mode: 'full-range',
+  },
+  {
+    file: '.github/workflows/pnpm-boundary-node22-floor.yml',
+    mode: 'low-bound-contains',
+  },
+  { file: '.github/CONTRIBUTING.md', mode: 'full-range' },
+  { file: '.github/CONTRIBUTING.ja.md', mode: 'full-range' },
+  { file: '.github/CONTRIBUTING.zh.md', mode: 'full-range' },
+  { file: 'docs/typescript-sources.md', mode: 'full-range' },
+  { file: 'docs/workshop/README.md', mode: 'components' },
+  { file: 'docs/stalled-session-quiet-check.md', mode: 'components' },
+  { file: 'src/scripts/helper-runtime-manifest.mts', mode: 'full-range' },
+];
 checkReadmePairs(manifest.readmePairs ?? []);
 checkFileSets(manifest.fileSets ?? [], manifest.syncPairs ?? []);
 checkGeneratedBlocks(manifest.generatedBlocks ?? []);
@@ -59,6 +86,7 @@ checkOkfBundles(manifest.okfBundles ?? null);
 checkMarkdownLinkAudit(manifest.markdownLinkAudit ?? null);
 checkConfigInstructionDrift();
 checkGeneratedSourcePairs();
+checkEnginesRangeMirrors();
 if (errors.length > 0) {
   console.error('documentation audit failed:');
   for (const error of errors) {
@@ -321,6 +349,13 @@ function checkShellFileLists(lists, generatedBlocks) {
 }
 function renderGeneratedBlock(block) {
   const files = resolveBlockFiles(block);
+  if (String(block.kind ?? '').trim() === 'okf-table') {
+    const rows = buildOkfIndexRows(files, (path) => readText(path), {
+      typeOrder: block.typeOrder ?? [],
+      excludePaths: block.excludePaths ?? [],
+    });
+    return renderOkfIndexMarkdownTable(rows, block.linkBase ?? 'docs');
+  }
   const renderedFiles = files.map((file) =>
     stripPrefix(file, block.stripPrefix),
   );
@@ -550,6 +585,36 @@ function checkConfigInstructionDrift() {
       `${pair.configPath} matches ${pair.overviewPath} command and scope defaults`,
     );
   }
+}
+function checkEnginesRangeMirrors() {
+  // Only applies when this repository's own known mirror set is actually
+  // present -- a fixture repo unrelated to this guard (or a future repo
+  // state without these specific files) is not a violation, matching
+  // detectSyncCommand's own repoFiles.includes('package.json') gate.
+  if (!repoFiles.includes('package.json')) {
+    return;
+  }
+  let packageJson;
+  try {
+    packageJson = JSON.parse(readText('package.json'));
+  } catch {
+    errors.push('engines-range-mirrors: package.json could not be parsed');
+    return;
+  }
+  if (packageJson.engines?.node === undefined) {
+    // No engines.node declared at all -- nothing for this repo to mirror.
+    return;
+  }
+  const presentMirrors = ENGINES_RANGE_MIRRORS.filter((mirror) =>
+    repoFiles.includes(mirror.file),
+  );
+  errors.push(
+    ...collectEnginesRangeMirrorViolations(
+      packageJson.engines.node,
+      presentMirrors,
+      readText,
+    ),
+  );
 }
 function buildRemediation(currentErrors) {
   const hasMirrorDrift = containsMirrorDrift(currentErrors);
