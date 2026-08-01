@@ -141,7 +141,15 @@ test('classifies an action_required conclusion as bot-gated-skip', () => {
   assert.equal(plan.plan.length, 0);
 });
 
-test('classifies a bot-triggered failure (actor.type === Bot) as bot-gated-skip even without action_required', () => {
+// Regression (#1745): a CANCELLED-conclusion bot-triggered instance is no
+// longer classified bot-gated-skip. #1424 only established that an
+// action_required-conclusion Copilot-triggered run is gated by GitHub; a
+// direct experiment on PR #1741 confirmed a CANCELLED-conclusion
+// bot-triggered instance reran and completed normally, never re-entering
+// action_required. The prior, over-broad "action_required OR botTriggered"
+// rule withheld exactly this working recovery action from the plan and
+// contributed to a false CODEOWNER-deadlock misdiagnosis (issue #1745).
+test('classifies a CANCELLED, bot-triggered instance as rerun-eligible, not bot-gated-skip', () => {
   const plan = computeRerunPlan(
     baseInput({
       instances: [
@@ -156,16 +164,35 @@ test('classifies a bot-triggered failure (actor.type === Bot) as bot-gated-skip 
     }),
     baseOptions(),
   );
-  assert.equal(plan.instances[0]?.classification, 'bot-gated-skip');
-  assert.match(plan.instances[0]?.reason ?? '', /bot/);
+  assert.equal(plan.instances[0]?.classification, 'rerun-eligible');
+  assert.equal(plan.counts.rerunEligible, 1);
+  assert.equal(plan.counts.botGatedSkip, 0);
+  assert.equal(plan.plan.length, 1);
+  assert.match(plan.instances[0]?.reason ?? '', /is a bot/);
 });
 
-test('classifies a bot-triggered run via configured advisoryBotLogins fallback (type missing)', () => {
+// The isBotTriggered login-normalization fallbacks below (#1434 review,
+// Codex P2) no longer affect classifyInstance's own bot-gated-skip
+// decision post-#1745 (only an action_required conclusion gates now), but
+// they still matter for selectRecoveryRefreshCandidates: an already-PASSING
+// instance must still be excluded from the recovery-refresh plan when it is
+// itself bot-triggered (rerunning it would not force a genuinely fresh
+// non-bot evaluation). These tests retarget the same fixtures to that
+// surviving usage site instead of losing the regression coverage.
+
+test('excludes a bot-triggered passing instance from the recovery-refresh plan via configured advisoryBotLogins fallback (type missing)', () => {
   const plan = computeRerunPlan(
     baseInput({
       instances: [
         baseInstance({
-          conclusion: 'failure',
+          checkRunId: 'gated',
+          runId: '7001',
+          conclusion: 'action_required',
+        }),
+        baseInstance({
+          checkRunId: 'bot-passing',
+          runId: '7002',
+          conclusion: 'success',
           actorLogin: 'coderabbitai[bot]',
           actorType: null,
           triggeringActorLogin: 'coderabbitai[bot]',
@@ -175,20 +202,27 @@ test('classifies a bot-triggered run via configured advisoryBotLogins fallback (
     }),
     baseOptions(),
   );
-  assert.equal(plan.instances[0]?.classification, 'bot-gated-skip');
+  assert.deepEqual(plan.recoveryRefreshPlan, []);
 });
 
 // Regression (#1434 review, Codex P2): a repository can configure a bare
 // login (`my-bot`) while the Actions payload reports the GitHub-appended
 // `[bot]`-suffixed form (`my-bot[bot]`), or vice versa. An un-normalized
-// set lookup would miss that match and let a bot-triggered run fall
-// through as rerun-eligible.
-test('classifies a bot-triggered run when the configured login is bare but the actual actor login is [bot]-suffixed', () => {
+// set lookup would miss that match and let a bot-triggered passing instance
+// fall through as a recovery-refresh candidate.
+test('excludes a bot-triggered passing instance from the recovery-refresh plan when the configured login is bare but the actual actor login is [bot]-suffixed', () => {
   const plan = computeRerunPlan(
     baseInput({
       instances: [
         baseInstance({
-          conclusion: 'failure',
+          checkRunId: 'gated',
+          runId: '7001',
+          conclusion: 'action_required',
+        }),
+        baseInstance({
+          checkRunId: 'bot-passing',
+          runId: '7002',
+          conclusion: 'success',
           actorLogin: 'coderabbitai[bot]',
           actorType: null,
           triggeringActorLogin: 'coderabbitai[bot]',
@@ -198,15 +232,22 @@ test('classifies a bot-triggered run when the configured login is bare but the a
     }),
     baseOptions({ advisoryBotLogins: ['coderabbitai'] }),
   );
-  assert.equal(plan.instances[0]?.classification, 'bot-gated-skip');
+  assert.deepEqual(plan.recoveryRefreshPlan, []);
 });
 
-test('classifies a bot-triggered run when the configured login is [bot]-suffixed but the actual actor login is bare', () => {
+test('excludes a bot-triggered passing instance from the recovery-refresh plan when the configured login is [bot]-suffixed but the actual actor login is bare', () => {
   const plan = computeRerunPlan(
     baseInput({
       instances: [
         baseInstance({
-          conclusion: 'failure',
+          checkRunId: 'gated',
+          runId: '7001',
+          conclusion: 'action_required',
+        }),
+        baseInstance({
+          checkRunId: 'bot-passing',
+          runId: '7002',
+          conclusion: 'success',
           actorLogin: 'coderabbitai',
           actorType: null,
           triggeringActorLogin: 'coderabbitai',
@@ -216,7 +257,7 @@ test('classifies a bot-triggered run when the configured login is [bot]-suffixed
     }),
     baseOptions({ advisoryBotLogins: ['coderabbitai[bot]'] }),
   );
-  assert.equal(plan.instances[0]?.classification, 'bot-gated-skip');
+  assert.deepEqual(plan.recoveryRefreshPlan, []);
 });
 
 // Regression (#1434 review, Codex P2, second occurrence): the sibling gap
@@ -224,13 +265,21 @@ test('classifies a bot-triggered run when the configured login is [bot]-suffixed
 // primaryBotLogin path -- isCopilotReviewerLogin's non-default branch does
 // an exact, un-normalized comparison, so a configured custom primary bot
 // login whose [bot]-suffix form doesn't match the actual actor login
-// (or vice versa) would otherwise fall through as rerun-eligible.
-test('classifies a bot-triggered run when a custom primaryBotLogin is bare but the actual actor login is [bot]-suffixed', () => {
+// (or vice versa) would otherwise fall through as a recovery-refresh
+// candidate.
+test('excludes a bot-triggered passing instance from the recovery-refresh plan when a custom primaryBotLogin is bare but the actual actor login is [bot]-suffixed', () => {
   const plan = computeRerunPlan(
     baseInput({
       instances: [
         baseInstance({
-          conclusion: 'failure',
+          checkRunId: 'gated',
+          runId: '7001',
+          conclusion: 'action_required',
+        }),
+        baseInstance({
+          checkRunId: 'bot-passing',
+          runId: '7002',
+          conclusion: 'success',
           actorLogin: 'my-bot[bot]',
           actorType: null,
           triggeringActorLogin: 'my-bot[bot]',
@@ -240,15 +289,22 @@ test('classifies a bot-triggered run when a custom primaryBotLogin is bare but t
     }),
     baseOptions({ primaryBotLogin: 'my-bot', advisoryBotLogins: [] }),
   );
-  assert.equal(plan.instances[0]?.classification, 'bot-gated-skip');
+  assert.deepEqual(plan.recoveryRefreshPlan, []);
 });
 
-test('classifies a bot-triggered run when a custom primaryBotLogin is [bot]-suffixed but the actual actor login is bare', () => {
+test('excludes a bot-triggered passing instance from the recovery-refresh plan when a custom primaryBotLogin is [bot]-suffixed but the actual actor login is bare', () => {
   const plan = computeRerunPlan(
     baseInput({
       instances: [
         baseInstance({
-          conclusion: 'failure',
+          checkRunId: 'gated',
+          runId: '7001',
+          conclusion: 'action_required',
+        }),
+        baseInstance({
+          checkRunId: 'bot-passing',
+          runId: '7002',
+          conclusion: 'success',
           actorLogin: 'my-bot',
           actorType: null,
           triggeringActorLogin: 'my-bot',
@@ -258,7 +314,7 @@ test('classifies a bot-triggered run when a custom primaryBotLogin is [bot]-suff
     }),
     baseOptions({ primaryBotLogin: 'my-bot[bot]', advisoryBotLogins: [] }),
   );
-  assert.equal(plan.instances[0]?.classification, 'bot-gated-skip');
+  assert.deepEqual(plan.recoveryRefreshPlan, []);
 });
 
 test('does not classify a plain human failure as bot-gated-skip', () => {

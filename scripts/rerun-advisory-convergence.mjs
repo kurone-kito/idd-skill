@@ -30,18 +30,28 @@
 //   - `pass`: conclusion is success/neutral/skipped -- no action needed.
 //   - `pending`: still queued/in_progress (no conclusion yet) -- reported,
 //     excluded from the plan (rerunning a live run cancels it, not helps).
-//   - `bot-gated-skip`: conclusion is `action_required`, OR the underlying
-//     workflow run's actor/triggering_actor is a bot (`type === "Bot"` is
-//     the primary signal; a configured advisory-bot login is a defensive
-//     fallback) -- rerunning re-enters `action_required` per #1424, so this
-//     needs a non-bot trigger or maintainer approval, never a rerun.
+//   - `bot-gated-skip`: conclusion is `action_required` -- rerunning
+//     without a non-bot trigger or maintainer approval re-enters
+//     `action_required` per #1424, so this needs a non-bot trigger or
+//     maintainer approval, never a rerun. Whether the underlying workflow
+//     run's actor/triggering_actor is a bot (`type === "Bot"` is the
+//     primary signal; a configured advisory-bot login is a defensive
+//     fallback) is reported in the reason text when it applies, but no
+//     longer gates BY ITSELF (narrowed by #1745): #1424 only established
+//     that an `action_required`-conclusion Copilot-triggered run is gated
+//     by GitHub, never that every bot-triggered instance regardless of its
+//     own conclusion is unsafe to rerun. A direct experiment on PR #1741
+//     confirmed a `CANCELLED`-conclusion bot-triggered instance reran and
+//     completed normally, never re-entering `action_required` -- the prior,
+//     over-broad `|| botTriggered` condition withheld exactly that working
+//     recovery action from the plan.
 //   - `unresolved`: the run id could not be parsed from the check-run's
 //     URL, or the per-run lookup itself failed -- reported for manual
 //     inspection, never silently dropped and never placed in the plan
 //     (fail-closed: an instance this helper cannot positively verify as
 //     safe is never recommended for rerun).
-//   - `rerun-eligible`: non-pass, terminal, non-bot, resolved -- goes into
-//     the ordered rerun plan.
+//   - `rerun-eligible`: non-pass, terminal, resolved -- goes into the
+//     ordered rerun plan (bot-triggered or not, unless gated per above).
 //
 // Reuse map (no duplicated identity/config logic):
 //   - `resolveAdvisoryPrimaryBotLogin`, `isCopilotReviewerLogin`,
@@ -448,19 +458,23 @@ function classifyInstance(instance, options) {
       reason: `status "${status}" has not concluded yet; rerunning a live run would cancel it instead of recovering it`,
     };
   }
-  // 3. Bot-gated: action_required conclusion, or a bot-triggered actor.
-  // Either signal alone is sufficient (matches the issue's literal
-  // "bot-triggered / action_required" acceptance wording).
+  // 3. Bot-gated: `action_required` conclusion ONLY (#1745 narrowed this
+  // from the prior "action_required OR bot-triggered actor" rule -- #1424
+  // established just the action_required case; a bot-triggered instance
+  // with any other conclusion, e.g. CANCELLED, reruns and completes
+  // normally, per #1745's direct experiment on PR #1741). `botTriggered` is
+  // still computed here (and reused at step 7 below) purely to annotate the
+  // reason text and to feed `selectRecoveryRefreshCandidates`, which still
+  // must exclude a bot-triggered PASS instance from the refresh
+  // suggestion -- it no longer decides this instance's classification by
+  // itself.
   const botTriggered = isBotTriggered(instance, options);
-  if (conclusion === 'action_required' || botTriggered) {
-    const actorDescription =
-      instance.triggeringActorLogin ?? instance.actorLogin ?? 'unknown actor';
-    const reason =
-      conclusion === 'action_required' && botTriggered
-        ? `conclusion is "action_required" and the triggering actor (${actorDescription}) is a bot; rerunning re-enters action_required (#1424) -- needs a non-bot trigger or maintainer approval`
-        : conclusion === 'action_required'
-          ? 'conclusion is "action_required"; rerunning without a non-bot trigger or maintainer approval re-enters action_required (#1424)'
-          : `triggering actor (${actorDescription}) is a bot; rerunning re-enters action_required (#1424) -- needs a non-bot trigger or maintainer approval`;
+  const actorDescription =
+    instance.triggeringActorLogin ?? instance.actorLogin ?? 'unknown actor';
+  if (conclusion === 'action_required') {
+    const reason = botTriggered
+      ? `conclusion is "action_required" and the triggering actor (${actorDescription}) is a bot; rerunning re-enters action_required (#1424) -- needs a non-bot trigger or maintainer approval`
+      : 'conclusion is "action_required"; rerunning without a non-bot trigger or maintainer approval re-enters action_required (#1424)';
     return { ...instance, classification: 'bot-gated-skip', reason };
   }
   // 4. Fail closed on an unresolvable run identity -- never guess.
@@ -505,12 +519,18 @@ function classifyInstance(instance, options) {
         : 'triggering event is unknown; inspect manually rather than assuming it is safe to rerun',
     };
   }
-  // 7. Non-pass, terminal, non-bot, resolved, pull_request-family --
-  // safe to rerun.
+  // 7. Non-pass, terminal, resolved, pull_request-family -- safe to rerun.
+  // A bot-triggered actor does not withhold this instance by itself
+  // (#1745) -- only a genuinely `action_required` conclusion does, handled
+  // in step 3 above -- so the reason notes bot-triggering when present
+  // instead of asserting "non-bot" for an instance that may well be one.
+  const botNote = botTriggered
+    ? ` (triggering actor ${actorDescription} is a bot, but conclusion "${conclusion}" is not action_required-gated)`
+    : '';
   return {
     ...instance,
     classification: 'rerun-eligible',
-    reason: `conclusion "${conclusion}" is non-passing, non-bot, and resolved (event "${runEvent}"); safe to rerun`,
+    reason: `conclusion "${conclusion}" is non-passing and resolved (event "${runEvent}")${botNote}; safe to rerun`,
   };
 }
 /**

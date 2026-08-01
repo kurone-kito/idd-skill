@@ -217,6 +217,22 @@ The check also self-heals on the next non-bot trigger — a push or a
 **review-thread** reply, not a regular PR comment (no `issue_comment`
 subscription).
 
+**If rerunning the passing non-bot instance alone does not clear the
+rollup (`#1745`)**: a HEAD can carry several `idd-advisory-convergence`
+check-run instances at once (the check fires on `pull_request` plus
+`pull_request_review`/`pull_request_review_comment`, and
+`cancel-in-progress` cancels most of them), and GitHub's own required-check
+rollup can stay pinned to a bot-triggered instance whose **conclusion** is
+`CANCELLED` — distinct from the `action_required` case above. Unlike
+`action_required`, a `CANCELLED`-conclusion bot-triggered instance is
+**not** gated: rerunning it completes normally and does not re-enter
+`action_required` (confirmed by direct experiment, `#1745`). If the
+non-bot rerun above does not clear the block, rerun every
+`CANCELLED`-conclusion bot-triggered sibling instance for the same HEAD
+next (`gh run rerun <run-id>` on each, one at a time, per the sequential
+rule in the helper-first plan below) — only an `action_required`-conclusion
+instance stays withheld from rerun.
+
 **Helper-first**: prints this diagnosis and ordered rerun plan, read-only.
 
 ```sh
