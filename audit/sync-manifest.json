@@ -689,7 +689,7 @@
       "target": "skills/issue-authoring/references/workflow-boundary.md",
       "mode": "contains",
       "requiredText": [
-        "This bundle handles pre-approval issue drafting only.",
+        "Stage 2: Release (the single approval boundary)",
         "start the Discover -> Claim -> Work loop implicitly"
       ]
     },
