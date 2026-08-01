@@ -16,10 +16,12 @@ chooser for output shapes.
 ## Output chooser
 
 Draft an orphan issue only when one autonomous task can finish the work
-and the target repository is discoverable through `issue-scope:
-orphan-first`. If the repository uses `orphan-first-policy:
+and the target repository discovers orphans (`issue-scope:
+roadmap-first`, the default, via the orphan fallback, or
+`orphan-first`). If the repository uses `orphan-first-policy:
 maintainer-approved`, include a post-publication approval step after the
-final issue content is stable. If a public repository uses
+final issue content is stable. If the repository sets `issue-scope:
+roadmap` (roadmap-only) or a public repository uses
 `orphan-first-policy: public-disabled`, draft a roadmap package instead.
 
 If the repository keeps the broader secure-by-default issue-author
