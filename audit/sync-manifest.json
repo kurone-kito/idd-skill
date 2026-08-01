@@ -658,6 +658,17 @@
       ]
     },
     {
+      "id": "issue-authoring-draft-patterns-reference",
+      "reference": "docs/issue-authoring-skill.md",
+      "target": "skills/issue-authoring/references/draft-patterns.md",
+      "mode": "contains",
+      "requiredText": [
+        "the target repository discovers orphans (`issue-scope:",
+        "via the orphan fallback",
+        "can actually discover orphan"
+      ]
+    },
+    {
       "id": "minimize-superseded-markers-helper",
       "source": "scripts/minimize-superseded-markers.mjs",
       "target": "idd-template/scripts/minimize-superseded-markers.mjs",
