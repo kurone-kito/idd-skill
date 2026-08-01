@@ -90,53 +90,94 @@ strings). This JSON is optional and does not replace
 
 ## Files
 
+The complete `idd-template/` file inventory below is generated from
+`audit/sync-manifest.json` (`node scripts/sync-docs.mjs --apply`); see
+`docs/idd-workflow.md`'s file map and `docs/reference.md` for what each
+instruction and docs page does. This is the full shipped inventory, not
+the adopter import list — the narrower set an agent actually fetches
+during onboarding is generated separately in `ONBOARDING.md`.
+
+<!-- audit:generated id=idd-template-readme-core-files -->
+
 ```text
-.github/instructions/
-  idd-overview-core.instructions.md       ← shared definitions; auto-loaded by Copilot execution surfaces (applyTo: "**", excludeAgent: "code-review"); see docs/idd-workflow.md for per-agent loading
-  idd-discover.instructions.md       ← A0–A4: find and select next issue
-  idd-roadmap-audit.instructions.md  ← A1.5: roadmap completion audit and roadmap-side coordination
-  idd-suitability.instructions.md    ← A4.5: pre-claim suitability triage
-  idd-claim.instructions.md          ← A5: claim pre-checks and execution
-  idd-work.instructions.md           ← B+C: branch, plan, implement, self-review
-  idd-pr-submit.instructions.md      ← D: rebase, validate, push, open PR, CI wait
-  idd-ci.instructions.md              ← shared CI polling helper
-  idd-advisory-wait.instructions.md  ← shared Copilot advisory-wait protocol
-  idd-review-snapshot.instructions.md ← E1–E3: fetch activity, critique, empty check
-  idd-review-triage.instructions.md  ← E4–E8: classify, score, and record dispositions
-  idd-review-fix.instructions.md     ← E9–E15: fix, push, reply, CI wait
-  idd-pre-merge.instructions.md      ← F1–F2: conflict resolution and pre-merge conditions
-  idd-merge-handoff.instructions.md  ← F2.5: merge-policy handoff routing
-  idd-merge.instructions.md          ← F3–F5: merge execution, cleanup, and loop
-  idd-resume.instructions.md         ← resume after crash / handoff
-  idd-resume-stall.instructions.md   ← stalled-session recovery gate
-docs/
-  getting-started.md                  ← concise import-to-first-loop guide
-  customization.md                    ← adopter policy customization guide
-  policy-constants.md                 ← distributed timing, wait, and loop defaults
-  reference.md                        ← detailed phase and policy navigation
-  idd-workflow.md                    ← cross-agent entry point and file map
-  idd-review-policy-profiles.md      ← default and alternative PR review policies
-  idd-helper-scripts.md              ← optional helper-script evaluation and policy
-  idd-comment-minimization.md        ← post-merge comment cleanup policy and experiment
-  permissions.md                     ← permission profiles and threat model
-  onboarding/
-    template-distribution.md         ← generated file-list and fetch-surface maintenance
-profiles/
-  README.md                          ← profile artifact index
-  human-required/README.md           ← required human review artifact
-  no-advisory/README.md              ← no advisory reviewer artifact
-  external-bot/README.md             ← external advisory bot artifact
-ONBOARDING.md                        ← AI agent import guide (start here)
-README.md                            ← this file
+.claude/settings.json
+.githooks/_idd-worktree-guard.sh
+.githooks/pre-commit
+.githooks/pre-push
+.github/idd/config.json
+.github/instructions/idd-advisory-wait.instructions.md
+.github/instructions/idd-ci.instructions.md
+.github/instructions/idd-claim.instructions.md
+.github/instructions/idd-discover.instructions.md
+.github/instructions/idd-merge-handoff.instructions.md
+.github/instructions/idd-merge.instructions.md
+.github/instructions/idd-overview-appendix.instructions.md
+.github/instructions/idd-overview-core.instructions.md
+.github/instructions/idd-pr-submit.instructions.md
+.github/instructions/idd-pre-merge.instructions.md
+.github/instructions/idd-resume-stall.instructions.md
+.github/instructions/idd-resume.instructions.md
+.github/instructions/idd-review-fix.instructions.md
+.github/instructions/idd-review-snapshot.instructions.md
+.github/instructions/idd-review-triage.instructions.md
+.github/instructions/idd-roadmap-audit.instructions.md
+.github/instructions/idd-suitability.instructions.md
+.github/instructions/idd-work.instructions.md
+.github/instructions/lite/idd-advisory-wait-lite.instructions.md
+.github/instructions/lite/idd-ci-lite.instructions.md
+.github/instructions/lite/idd-claim-lite.instructions.md
+.github/instructions/lite/idd-merge-handoff-lite.instructions.md
+.github/instructions/lite/idd-pr-submit-lite.instructions.md
+.github/instructions/lite/idd-pre-merge-lite.instructions.md
+.github/instructions/lite/idd-resume-lite.instructions.md
+.github/instructions/lite/idd-resume-stall-lite.instructions.md
+.github/instructions/lite/idd-review-fix-lite.instructions.md
+.github/instructions/lite/idd-review-snapshot-lite.instructions.md
+.github/instructions/lite/idd-work-lite.instructions.md
+.github/workflows/idd-advisory-convergence.yml
+docs/concepts.md
+docs/customization.md
+docs/getting-started.md
+docs/idd-advisory-wait-shell-fallback.md
+docs/idd-autonomy-contract.md
+docs/idd-comment-minimization.md
+docs/idd-concept-ownership.md
+docs/idd-design-rationale.md
+docs/idd-helper-scripts.md
+docs/idd-resume-detail.md
+docs/idd-review-policy-profiles.md
+docs/idd-workflow.md
+docs/onboarding/agent-entry-and-verification.md
+docs/onboarding/placeholders.md
+docs/onboarding/policy-decisions.md
+docs/onboarding/template-distribution.md
+docs/permissions.md
+docs/policy-constants.md
+docs/reference.md
+ONBOARDING.md
+profiles/external-bot/README.md
+profiles/human-required/README.md
+profiles/no-advisory/README.md
+profiles/README.md
+README.md
+scripts/minimize-superseded-markers.mjs
+```
+
+<!-- /audit:generated -->
 
 Optional companion artifact:
-skills/issue-authoring/
-  SKILL.md                           ← pre-execution issue drafting skill
-  agents/openai.yaml                 ← optional OpenAI agent metadata
-  references/contract.md             ← bundled issue authoring contract
-  references/draft-patterns.md       ← drafting examples and output chooser
-  references/workflow-boundary.md    ← publication/execution boundary
+
+<!-- audit:generated id=idd-template-readme-issue-authoring-files -->
+
+```text
+skills/issue-authoring/SKILL.md
+skills/issue-authoring/agents/openai.yaml
+skills/issue-authoring/references/contract.md
+skills/issue-authoring/references/draft-patterns.md
+skills/issue-authoring/references/workflow-boundary.md
 ```
+
+<!-- /audit:generated -->
 
 See `docs/idd-workflow.md` for the distinction between cross-agent
 execution and PR review policy, and
