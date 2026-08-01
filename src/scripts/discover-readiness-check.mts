@@ -6,8 +6,6 @@
 // generated .mjs. See docs/typescript-sources.md.
 
 import { execFileSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
 import type { LabelEvent } from './authoring-label-guard.mts';
 import {
   buildAuthoringLabelWarning,
@@ -20,6 +18,7 @@ import {
 import { parseCliArgs } from './cli-args.mts';
 import { GH_TEXT_LOOP_OPTIONS, ghText } from './gh-exec.mts';
 import { deriveGhHttpStatus } from './gh-http-status.mts';
+import { loadPolicyConfig } from './idd-config.mts';
 import { stripMarkdownCodeRegions } from './markdown-code.mts';
 import { escapeRegex } from './marker-regex.mts';
 import { normalizePolicyConfig, POLICY_DEFAULTS } from './policy-helpers.mts';
@@ -1030,15 +1029,12 @@ export function parseIssueNumberLines(raw: string): number[] {
   );
 }
 
+// Read-and-parse failure semantics (explicit path throws; default path
+// silently falls back only on ENOENT) are converged in idd-config.mts's
+// loadPolicyConfig (#1721); this helper has no shape normalization of its
+// own beyond returning the raw config.
 function loadPolicy(policyPath: string): unknown {
-  const targetPath = policyPath
-    ? resolve(process.cwd(), policyPath)
-    : resolve(process.cwd(), '.github/idd/config.json');
-  try {
-    return JSON.parse(readFileSync(targetPath, 'utf8'));
-  } catch {
-    return {};
-  }
+  return loadPolicyConfig(policyPath).config;
 }
 
 function resolveMarkerPrefix(config: unknown): string {
