@@ -278,9 +278,10 @@ export function computeAdvisoryConvergenceVerdict(inputs, options) {
   };
   // Clause 1's "review is not clean" reason is pushed here, after Clause 2's
   // `threadClause` is available -- deliberately deferred from the `pending`
-  // check above (which already returned via that `if`, so `reasons` order is
-  // unaffected: pending and not-satisfied are mutually exclusive, and this
-  // still precedes Clause 2's own thread-blocking reason below).
+  // check above (whose own `if` already exhausts the pending case, so
+  // `reasons` order is unaffected: pending and not-satisfied are mutually
+  // exclusive, and this still precedes Clause 2's own thread-blocking
+  // reason below).
   //
   // #1719: reported adopter incident -- the primary bot's review on current
   // HEAD carried `itemCount: 1` while every visible GraphQL review thread
@@ -339,8 +340,8 @@ export function computeAdvisoryConvergenceVerdict(inputs, options) {
   // that attempt is permanently consumed before the real blocker is even
   // cleared (PR #1517 review).
   //
-  // #1719: each of the six conjuncts above is ALSO computed as its own named
-  // boolean, paired with a stable token in `sameHeadRerollTerms` --
+  // #1719: each of the six eligibility terms above is ALSO computed as its
+  // own named boolean, paired with a stable token in `sameHeadRerollTerms` --
   // `sameHeadRerollEligible` (`.every()`) and
   // `sameHeadRerollIneligibleReasons` (`.filter().map()`) are BOTH derived
   // from that one array, so they cannot disagree; a term added to the

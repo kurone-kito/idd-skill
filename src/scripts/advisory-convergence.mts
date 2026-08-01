@@ -132,6 +132,16 @@ export const SAME_HEAD_REROLL_INELIGIBLE_REASON = {
   REVIEW_ITEM_COUNT_NOT_POSITIVE: 'review-item-count-not-positive',
 } as const;
 
+/** The exact token union `sameHeadReroll.ineligibleReasons` may contain
+ * (#1719 PR review). Narrowing the field from a bare `string[]` to this
+ * union at the type level, and the schema's `items` to the matching
+ * `enum`, makes the "stable, machine-readable token" contract
+ * self-documenting and catches an accidental new/typo'd token at compile
+ * time or schema-validation time instead of silently widening the
+ * contract. */
+export type SameHeadRerollIneligibleReasonToken =
+  (typeof SAME_HEAD_REROLL_INELIGIBLE_REASON)[keyof typeof SAME_HEAD_REROLL_INELIGIBLE_REASON];
+
 /** Author reference embedded in GitHub REST/GraphQL payloads. */
 interface GhAuthorPayload {
   login?: string | null;
@@ -283,7 +293,7 @@ export interface AdvisoryConvergenceSameHeadReroll {
    * two can never disagree -- a report-mode caller no longer has to
    * re-derive the eligibility rule by hand to self-diagnose a stuck AW6
    * reroll. */
-  ineligibleReasons: string[];
+  ineligibleReasons: SameHeadRerollIneligibleReasonToken[];
   /** Trusted `advisory-reroll:` marker count whose embedded HEAD SHA
    * matches the current HEAD (resets naturally on a new push, since a new
    * HEAD's markers start over). */
@@ -603,9 +613,10 @@ export function computeAdvisoryConvergenceVerdict(
 
   // Clause 1's "review is not clean" reason is pushed here, after Clause 2's
   // `threadClause` is available -- deliberately deferred from the `pending`
-  // check above (which already returned via that `if`, so `reasons` order is
-  // unaffected: pending and not-satisfied are mutually exclusive, and this
-  // still precedes Clause 2's own thread-blocking reason below).
+  // check above (whose own `if` already exhausts the pending case, so
+  // `reasons` order is unaffected: pending and not-satisfied are mutually
+  // exclusive, and this still precedes Clause 2's own thread-blocking
+  // reason below).
   //
   // #1719: reported adopter incident -- the primary bot's review on current
   // HEAD carried `itemCount: 1` while every visible GraphQL review thread
@@ -667,8 +678,8 @@ export function computeAdvisoryConvergenceVerdict(
   // that attempt is permanently consumed before the real blocker is even
   // cleared (PR #1517 review).
   //
-  // #1719: each of the six conjuncts above is ALSO computed as its own named
-  // boolean, paired with a stable token in `sameHeadRerollTerms` --
+  // #1719: each of the six eligibility terms above is ALSO computed as its
+  // own named boolean, paired with a stable token in `sameHeadRerollTerms` --
   // `sameHeadRerollEligible` (`.every()`) and
   // `sameHeadRerollIneligibleReasons` (`.filter().map()`) are BOTH derived
   // from that one array, so they cannot disagree; a term added to the
@@ -691,7 +702,10 @@ export function computeAdvisoryConvergenceVerdict(
   const reviewItemCountKnownTerm = review.itemCount !== null;
   const reviewItemCountPositiveTerm =
     review.itemCount === null || review.itemCount > 0;
-  const sameHeadRerollTerms: { token: string; satisfied: boolean }[] = [
+  const sameHeadRerollTerms: {
+    token: SameHeadRerollIneligibleReasonToken;
+    satisfied: boolean;
+  }[] = [
     {
       token: SAME_HEAD_REROLL_INELIGIBLE_REASON.SCOPE_NOT_APPLICABLE,
       satisfied: scopeApplicableTerm,

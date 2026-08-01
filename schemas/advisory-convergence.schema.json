@@ -156,7 +156,17 @@
         "ineligibleReasons": {
           "type": "array",
           "description": "#1719: one stable, machine-readable token per failing term of the eligible conjunction (in conjunction order); empty exactly when eligible is true.",
-          "items": { "type": "string" }
+          "items": {
+            "type": "string",
+            "enum": [
+              "scope-not-applicable",
+              "review-pending",
+              "unresolved-copilot-threads",
+              "missing-regular-comment-disposition",
+              "review-item-count-unknown",
+              "review-item-count-not-positive"
+            ]
+          }
         },
         "count": { "type": "integer", "minimum": 0 },
         "cap": { "type": "integer", "minimum": 1 },
