@@ -27,7 +27,7 @@ jobs:
       # local-only primary-worktree-HEAD check never false-positives.
       # pull_request checkouts are already detached merge commits;
       # pinning the ref keeps that guaranteed even if triggers change.
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.sha }}
           # Fetch full history and tags: the default fetch-depth: 1
