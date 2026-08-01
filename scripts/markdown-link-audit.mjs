@@ -7,11 +7,14 @@ import { posix } from 'node:path';
 
 const DEFAULT_TEMPLATE_ROOT = 'idd-template/';
 // The suppression marker for a narrowly-used, intentional exception (see
-// audit/README.md). Matched as a literal substring on the same source line
-// as the link -- after inline-code-span stripping, so an HTML-comment
+// audit/README.md): `<!-- audit:ignore-link -->`, or the same token with an
+// optional `: reason` before the closing `-->`. Matched as a well-formed
+// HTML comment (not a bare prefix -- a longer, unrelated comment that
+// merely starts with this text must never suppress a real link) on the
+// same source line as the link, after inline-code-span stripping, so an
 // example wrapped in backticks in documentation prose never suppresses a
 // real link on that same line.
-const IGNORE_MARKER = '<!-- audit:ignore-link';
+const IGNORE_MARKER_PATTERN = /<!--\s*audit:ignore-link(?::[^>]*)?\s*-->/;
 /**
  * GitHub's heading-id ("slug") algorithm: lowercase, delete every character
  * that is not a Unicode letter, number, hyphen, or space (punctuation is
@@ -87,10 +90,11 @@ const REFERENCE_DEFINITION_PATTERN = /^ {0,3}\[[^\]]+\]:\s*(\S+)/;
  * Extract every inline (`[text](target)`) and reference-style
  * (`[label]: target`) link occurrence from `text`, fence-aware and with
  * inline code spans stripped first so example link syntax shown as code is
- * never mistaken for a real link. A line carrying the `IGNORE_MARKER`
- * (after code-span stripping, so a documentation example of the marker
- * wrapped in backticks never suppresses a real link on that line) marks
- * every link occurrence on that line as suppressed.
+ * never mistaken for a real link. A line carrying a well-formed
+ * `IGNORE_MARKER_PATTERN` comment (after code-span stripping, so a
+ * documentation example of the marker wrapped in backticks never
+ * suppresses a real link on that line) marks every link occurrence on
+ * that line as suppressed.
  */
 export function extractLinkOccurrences(text) {
   const occurrences = [];
@@ -106,7 +110,7 @@ export function extractLinkOccurrences(text) {
       continue;
     }
     const line = stripInlineCodeSpans(rawLine);
-    const suppressed = line.includes(IGNORE_MARKER);
+    const suppressed = IGNORE_MARKER_PATTERN.test(line);
     const lineNumber = index + 1;
     for (const match of line.matchAll(INLINE_LINK_PATTERN)) {
       occurrences.push({ line: lineNumber, target: match[1], suppressed });
@@ -155,8 +159,27 @@ export function resolveLinkTarget(sourceFile, target) {
   const resolved = posix.normalize(
     posix.join(posix.dirname(sourceFile), decoded),
   );
-  const path =
-    isDirectory && !resolved.endsWith('/') ? `${resolved}/` : resolved;
+  // `posix.normalize` collapses a directory link that lands exactly on the
+  // repo root (`.`/`..` from a root file, or enough `../` segments to walk
+  // back up to it) to `.` -- or, when the decoded target itself ended in a
+  // trailing slash (e.g. `../`), to `./` (normalize preserves an input
+  // trailing separator). `git ls-files` output never starts with `./`, so
+  // appending a trailing slash to `.` the way every other directory target
+  // gets one would make the repoFiles-prefix existence check below always
+  // fail -- reporting the repo root itself as a missing directory.
+  // Represent the repo root as `''` instead: every repoFiles entry
+  // trivially starts with `''`, so the existence check (and the
+  // template-context prefix check, which correctly still flags a template
+  // file walking out to the true repo root) both stay correct without a
+  // special case at either call site.
+  const isRepoRoot = resolved === '.' || resolved === './';
+  const path = isDirectory
+    ? isRepoRoot
+      ? ''
+      : resolved.endsWith('/')
+        ? resolved
+        : `${resolved}/`
+    : resolved;
   return { path, fragment, isDirectory };
 }
 /**

@@ -219,6 +219,9 @@ Add an `<!-- audit:ignore-link -->` HTML comment on the same source
 line as the link to suppress every link on that line (matched after
 inline code spans are stripped, so documenting the marker itself in
 backtick-wrapped example text never suppresses a real link on that
-same line). Keep this narrowly used: prefer fixing the link or the
-heading first, and reserve the marker for a link this checker cannot
-correctly evaluate.
+same line). The marker must be a well-formed comment — a longer,
+unrelated comment that merely starts with the same text is never
+matched. Optionally carry a reason before the closing `-->`, for
+example `<!-- audit:ignore-link: known false positive -->`. Keep this
+narrowly used: prefer fixing the link or the heading first, and
+reserve the marker for a link this checker cannot correctly evaluate.

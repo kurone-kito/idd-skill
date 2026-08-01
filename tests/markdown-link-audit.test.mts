@@ -110,6 +110,25 @@ test('extractLinkOccurrences does not suppress a link when the marker only appea
   assert.equal(occurrences[0].suppressed, false);
 });
 
+test('extractLinkOccurrences suppresses when the marker carries an optional reason', () => {
+  const text =
+    '[a](missing.md) <!-- audit:ignore-link: known false positive -->\n';
+  const occurrences = extractLinkOccurrences(text);
+  assert.equal(occurrences.length, 1);
+  assert.equal(occurrences[0].suppressed, true);
+});
+
+test('extractLinkOccurrences does not suppress on a longer, unrelated comment sharing the marker prefix', () => {
+  // Regression: matching a bare substring instead of the well-formed
+  // comment would let any longer comment that happens to start with the
+  // same text silently widen the suppression scope.
+  const text =
+    '[a](missing.md) <!-- audit:ignore-linked-to-something-else -->\n';
+  const occurrences = extractLinkOccurrences(text);
+  assert.equal(occurrences.length, 1);
+  assert.equal(occurrences[0].suppressed, false);
+});
+
 test('extractLinkOccurrences ignores links inside a fenced code block', () => {
   const text = '```\n[a](missing.md)\n```\n';
   assert.deepEqual(extractLinkOccurrences(text), []);
@@ -150,6 +169,24 @@ test('resolveLinkTarget resolves a relative path with a fragment', () => {
 test('resolveLinkTarget flags a trailing-slash target as a directory link', () => {
   assert.deepEqual(resolveLinkTarget('README.md', 'idd-template/'), {
     path: 'idd-template/',
+    fragment: null,
+    isDirectory: true,
+  });
+});
+
+test('resolveLinkTarget represents a directory link that collapses to the repo root as the empty path', () => {
+  // Regression: posix.normalize collapses enough "../" segments (or a bare
+  // "."/"..") back to the bare string ".", which git ls-files output never
+  // starts with -- appending a trailing slash the way every other
+  // directory target gets one would make the repo root's own existence
+  // check always fail.
+  assert.deepEqual(resolveLinkTarget('docs/x.md', '../'), {
+    path: '',
+    fragment: null,
+    isDirectory: true,
+  });
+  assert.deepEqual(resolveLinkTarget('README.md', '.'), {
+    path: '',
     fragment: null,
     isDirectory: true,
   });
@@ -201,6 +238,16 @@ test('passes on an existing target directory link', () => {
   assert.deepEqual(violations, []);
 });
 
+test('passes on a directory link that resolves to the repo root', () => {
+  // Regression: the repo root has no `git ls-files` entry of its own, so a
+  // naive prefix check against a `./`-prefixed path would always miss.
+  const violations = collect({
+    'docs/x.md': '[root](../)\n',
+    'README.md': '# Root\n',
+  });
+  assert.deepEqual(violations, []);
+});
+
 test('em-dash heading: the correct double-hyphen anchor passes and the hand-written triple-hyphen form fails', () => {
   const files = {
     'docs/a.md': '# A3 — Diagnostic: all candidates blocked\n',
@@ -247,6 +294,18 @@ test('template context: a link staying inside idd-template/** is checked against
     'docs/y.md': '# Different Heading\n',
   });
   assert.deepEqual(violations, []);
+});
+
+test('template context: a directory link walking all the way out to the true repo root still fails', () => {
+  // The repo-root directory fix (empty-string path) must not accidentally
+  // widen the template-context escape check: "" never starts with
+  // templateRoot either.
+  const violations = collect({
+    'idd-template/x.md': '[escapes](../)\n',
+    'README.md': '# Root\n',
+  });
+  assert.equal(violations.length, 1);
+  assert.match(violations[0], /outside idd-template\/ in template context/);
 });
 
 test('an intentional exception suppressed with the ignore marker does not fail', () => {
