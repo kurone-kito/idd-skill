@@ -579,17 +579,23 @@ retained. `instructions-only` uses neither. When an instruction shows a
 `node scripts/...` command, resolve it to your profile's authoritative surface
 rather than maintaining both.
 
-**Authoring rule for distributed instructions/docs.** A mandatory helper
-step (one with no skip/fallback wording) must always name an
-`instructions-only` fallback, since that profile has no helper runtime at
-all. Every invocation written into a distributed file (`.github/instructions/**`,
-`docs/**`, and their `idd-template/` sources) must use a form the
-`helper-runtime-manifest` command table actually produces for some
-profile — `node scripts/<name>.mjs`, a `package.json` `idd:<name>` script,
-or the `idd-<name>` bin command — never the source repository's own
-`bin/<name>.mjs` build artifact path, which no adopter profile vends (see
-`tests/helper-invocation-profile.test.mts`, which enforces both rules
-mechanically).
+**Authoring rule for instructions/docs.** A mandatory helper step (one
+with no skip/fallback wording) must always name an `instructions-only`
+fallback, since that profile has no helper runtime at all. Every helper
+invocation written into `.github/instructions/**`, `docs/**`, or their
+`idd-template/` sources must use a form the `helper-runtime-manifest`
+command table actually produces for some profile — `node
+scripts/<name>.mjs`, a `package.json` `idd:<name>` script, or the
+`idd-<name>` bin command. Separately, a file that is itself part of the
+distributed template (anything under `idd-template/`, or a generated
+copy of it — see `resolveDistributedFiles()` in
+`tests/helper-invocation-profile.test.mts`) must never prescribe the
+source repository's own `bin/<name>.mjs` build-artifact path, which no
+adopter profile vends; a source-repo-only page (no `idd-template/`
+counterpart) may still discuss that path when its subject genuinely is
+this repository's own tooling.
+`tests/helper-invocation-profile.test.mts` enforces both rules
+mechanically.
 
 To switch profiles later, rerun the manifest with both
 `--profile <target-profile>` and `--from-profile <current-profile>`. The

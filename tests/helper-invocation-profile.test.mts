@@ -114,16 +114,21 @@ const NODE_SCRIPTS_RE = /\bnode\s+(scripts\/[a-z0-9-]+\.mjs)\b/g;
 const BIN_MJS_RE = /(?:\.\/)?\bbin\/(idd-[a-zA-Z0-9-]+)\.mjs\b/g;
 const PACKAGE_SCRIPT_RE =
   /(?:npm run|pnpm(?: run)?|yarn(?: run)?)\s+(idd:[a-zA-Z0-9-]+)/g;
-const FENCE_RE = /^```(\S*)/;
+// Leading whitespace is required, not optional: a fenced block nested
+// inside a list item (a common pattern in these docs) is itself
+// indented, so anchoring at column 0 misses it entirely (idd-skill#1674
+// review).
+const FENCE_RE = /^\s*```(\S*)/;
 // First token on a line inside a fenced sh/bash/shell/console block,
 // optionally after a `$ ` shell-prompt marker. Deliberately narrow: a
 // naive `idd-[a-z0-9-]+` scan matches 30+ unrelated tokens on this
 // corpus (marker names, doc slugs, `idd-skill-*` prefixes, ...), almost
 // none of which are command invocations (see the reconnaissance comment
-// on issue #1674). This constrained form intentionally finds ~0
-// violations on the current corpus -- a legitimate result, not a sign
-// the form needs loosening; a deliberately introduced violation still
-// trips it (see the synthetic test below).
+// on issue #1674). This constrained form intentionally finds only a
+// handful of hits on the current corpus, all already correctly backed
+// -- a legitimate result, not a sign the form needs loosening; a
+// deliberately introduced violation still trips it (see the synthetic
+// test below).
 const BARE_BIN_COMMAND_RE = /^\s*\$?\s*(idd-[a-zA-Z0-9-]+)\b/;
 const FENCED_LANGS = new Set(['', 'sh', 'bash', 'shell', 'console']);
 
