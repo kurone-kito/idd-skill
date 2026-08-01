@@ -1581,8 +1581,8 @@ function parsePositiveIntegerOrNull(
 
 function printHelp(): void {
   process.stdout.write(`Usage:
-  node scripts/idd-roadmap-audit-execute.mjs --roadmap <number> [--owner <owner>] [--repo <repo>] [--policy <path>]
-  node scripts/idd-roadmap-audit-execute.mjs --roadmap <number> --claim-id <claim-id> [--claim-issue <number>] [--agent-id <agent-id>] [--owner <owner>] [--repo <repo>] [--policy <path>] [--apply]
+  node scripts/idd-roadmap-audit-execute.mjs --roadmap <number> [--owner <owner>] [--repo <repo>] [--policy <path>] [--now <ISO8601>]
+  node scripts/idd-roadmap-audit-execute.mjs --roadmap <number> --claim-id <claim-id> [--claim-issue <number>] [--agent-id <agent-id>] [--owner <owner>] [--repo <repo>] [--policy <path>] [--now <ISO8601>] [--apply]
 
   Default (no --apply): dry-run. Evaluates A1.5 roadmap completion via the
   read-only discover-roadmap-graph traversal and prints { ready, blockers,
