@@ -259,7 +259,14 @@ require explicit operator confirmation:
     `labels.blockedByHumanLabelName`, and
     `labels.needsDecisionLabelName` — distributed defaults `roadmap`,
     `status:blocked-by-human`, and `status:needs-decision`, or an
-    existing local label taxonomy)
+    existing local label taxonomy). A semantic issue auto-labeler (for
+    example, CodeRabbit's issue enrichment) can auto-apply any of these
+    three configured label names to an ordinary issue with no error,
+    dropping it from execution candidates or parking it behind a hold;
+    omitting a label from the labeler's own instruction list does not
+    restrict which labels it may apply. See
+    [IDD label names](docs/onboarding/policy-decisions.md#idd-label-names)
+    for the field evidence and the guard recipe.
 
 Use
 [Onboarding Reference — Policy Decisions](docs/onboarding/policy-decisions.md)
