@@ -132,6 +132,8 @@ pnpm-lock.yaml.*
 # the tracked curated permission allow/deny baseline (see issue #1595).
 .claude/*
 !.claude/skills/
+!.claude/agents/
+!.claude/commands/
 !.claude/settings.json
 
 # OpenAI Codex sandbox
