@@ -781,5 +781,87 @@
     ],
     "tsExpectErrorLimit": 0,
     "explicitAnyLimit": 0
-  }
+  },
+  "okfBundles": [
+    {
+      "id": "docs-okf",
+      "_comment": "OKF (Open Knowledge Format v0.1) frontmatter conformance bundle (#1680). Fail-closed: every .md file under roots/**/*.md is checked unless its basename is in reservedFilenames or its path is in exemptPaths. No page is backfilled by this track -- exemptPaths lists every page that predates the profile; a later backfill track removes entries as it converts each page, and a stale (now-conforming) entry is itself a checker failure. See docs/okf-frontmatter.md for the field profile.",
+      "roots": [
+        "docs",
+        "idd-template/docs"
+      ],
+      "reservedFilenames": [
+        "index.md",
+        "log.md"
+      ],
+      "types": [
+        "index",
+        "guide",
+        "concept",
+        "reference",
+        "workflow",
+        "design",
+        "investigation",
+        "tutorial"
+      ],
+      "exemptPaths": [
+        "docs/ai-strategy.md",
+        "docs/claude-skill-strategy.md",
+        "docs/concepts.md",
+        "docs/customization.md",
+        "docs/getting-started.md",
+        "docs/harness-orchestrated-execution-investigation.md",
+        "docs/idd-advisory-wait-shell-fallback.md",
+        "docs/idd-autonomy-contract.md",
+        "docs/idd-comment-minimization.md",
+        "docs/idd-concept-ownership.md",
+        "docs/idd-design-rationale.md",
+        "docs/idd-helper-scripts.md",
+        "docs/idd-resume-detail.md",
+        "docs/idd-review-policy-profiles.md",
+        "docs/idd-workflow.md",
+        "docs/issue-authoring-skill.md",
+        "docs/pages-strategy.md",
+        "docs/permissions.md",
+        "docs/policy-constants.md",
+        "docs/positioning.md",
+        "docs/pr-cleanup-backlog-batch-001.md",
+        "docs/reference.md",
+        "docs/skills-delivery-investigation.md",
+        "docs/stalled-session-quiet-check.md",
+        "docs/typescript-sources.md",
+        "docs/weak-model-authoring-lite-profile-design.md",
+        "docs/weak-model-lite-profile-design.md",
+        "docs/workshop/assets/recordings/README.md",
+        "docs/workshop/bonus-defang-deployment.md",
+        "docs/workshop/LOG-FORMAT.md",
+        "docs/workshop/log-segments/01-bootstrap.md",
+        "docs/workshop/log-segments/02-infrastructure.md",
+        "docs/workshop/log-segments/03-data-layer.md",
+        "docs/workshop/log-segments/04-backend-api.md",
+        "docs/workshop/log-segments/05-frontend-quality.md",
+        "docs/workshop/README.md",
+        "docs/workshop/workshop-log.md",
+        "idd-template/docs/concepts.md",
+        "idd-template/docs/customization.md",
+        "idd-template/docs/getting-started.md",
+        "idd-template/docs/idd-advisory-wait-shell-fallback.md",
+        "idd-template/docs/idd-autonomy-contract.md",
+        "idd-template/docs/idd-comment-minimization.md",
+        "idd-template/docs/idd-concept-ownership.md",
+        "idd-template/docs/idd-design-rationale.md",
+        "idd-template/docs/idd-helper-scripts.md",
+        "idd-template/docs/idd-resume-detail.md",
+        "idd-template/docs/idd-review-policy-profiles.md",
+        "idd-template/docs/idd-workflow.md",
+        "idd-template/docs/onboarding/agent-entry-and-verification.md",
+        "idd-template/docs/onboarding/placeholders.md",
+        "idd-template/docs/onboarding/policy-decisions.md",
+        "idd-template/docs/onboarding/template-distribution.md",
+        "idd-template/docs/permissions.md",
+        "idd-template/docs/policy-constants.md",
+        "idd-template/docs/reference.md"
+      ]
+    }
+  ]
 }

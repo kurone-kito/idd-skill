@@ -880,3 +880,238 @@ export function resolveGeneratedBlockFiles(block, globFilesFn) {
   }
   return uniqueSorted((block.sourceGlobs ?? []).flatMap(globFilesFn));
 }
+// Anchored at the very start of the file; a frontmatter block anywhere else
+// does not count -- OKF/YAML frontmatter must open the document.
+const OKF_FRONTMATTER_PATTERN = /^---\r?\n([\s\S]*?)\r?\n---\r?\n/;
+// A single `#` immediately followed by whitespace is level 1; `##` and
+// deeper never match because the second `#` is not whitespace.
+const OKF_H1_PATTERN = /^#\s+(.+?)\s*#*\s*$/;
+/**
+ * Minimal frontmatter-field parser for the OKF conformance checker. Only
+ * supports the shapes the field profile actually uses: a flat `key: value`
+ * scalar (optionally single/double-quoted), an inline list (`key: [a, b]`),
+ * and a block list (`key:` followed by indented `- item` lines). This
+ * repo's OKF frontmatter never needs more than that, so pulling in a full
+ * YAML parser would be unused surface the bare-node boundary does not need
+ * -- mirrors `parseMarkdownlintIgnores`'s reasoning in
+ * audit-code-span-wrap.mts.
+ */
+function parseOkfFrontmatterFields(inner) {
+  const lines = inner.split('\n');
+  const fields = {};
+  let index = 0;
+  while (index < lines.length) {
+    const keyMatch = /^([A-Za-z_][\w-]*):\s*(.*)$/.exec(lines[index]);
+    if (!keyMatch) {
+      index += 1;
+      continue;
+    }
+    const [, key, rawRest] = keyMatch;
+    const rest = rawRest.trim();
+    if (rest === '') {
+      const items = [];
+      let cursor = index + 1;
+      while (cursor < lines.length) {
+        const itemMatch = /^\s+-\s*(.*)$/.exec(lines[cursor]);
+        if (!itemMatch) {
+          break;
+        }
+        items.push(unquoteOkfScalar(itemMatch[1].trim()));
+        cursor += 1;
+      }
+      fields[key] = items.length > 0 ? items : '';
+      index = cursor > index + 1 ? cursor : index + 1;
+      continue;
+    }
+    if (rest.startsWith('[') && rest.endsWith(']')) {
+      const listInner = rest.slice(1, -1).trim();
+      fields[key] =
+        listInner.length === 0
+          ? []
+          : listInner.split(',').map((item) => unquoteOkfScalar(item.trim()));
+      index += 1;
+      continue;
+    }
+    fields[key] = unquoteOkfScalar(rest);
+    index += 1;
+  }
+  return fields;
+}
+function unquoteOkfScalar(value) {
+  if (value.length >= 2) {
+    const first = value[0];
+    const last = value[value.length - 1];
+    if ((first === '"' && last === '"') || (first === "'" && last === "'")) {
+      return value.slice(1, -1);
+    }
+  }
+  return value;
+}
+/**
+ * Extract the page's first top-level (`# `) heading text, skipping fenced
+ * code blocks, or `null` when none is present. Mirrors the fence-aware scan
+ * `headingSignature` in audit-docs.mts uses, scoped to the first H1 only --
+ * the OKF `title` field must match exactly this heading.
+ */
+function extractOkfFirstH1(text) {
+  let inFence = false;
+  for (const line of text.split('\n')) {
+    if (/^\s*```/.test(line)) {
+      inFence = !inFence;
+      continue;
+    }
+    if (inFence) {
+      continue;
+    }
+    const match = OKF_H1_PATTERN.exec(line);
+    if (match) {
+      return match[1].trim();
+    }
+  }
+  return null;
+}
+/**
+ * Check one in-scope page's full text against the OKF field profile.
+ * Returns `null` when it conforms, or a human-readable reason when it does
+ * not -- callers append this to a `${bundleId}: ${file} ${reason}` message.
+ */
+function checkOkfPageConformance(text, typeSet) {
+  const match = OKF_FRONTMATTER_PATTERN.exec(text);
+  if (!match) {
+    return 'has no parseable YAML frontmatter block';
+  }
+  const fields = parseOkfFrontmatterFields(match[1]);
+  const type = typeof fields.type === 'string' ? fields.type.trim() : '';
+  const title = typeof fields.title === 'string' ? fields.title.trim() : '';
+  const description =
+    typeof fields.description === 'string' ? fields.description.trim() : '';
+  if (!type) {
+    return 'frontmatter is missing a non-empty "type" field';
+  }
+  if (!title) {
+    return 'frontmatter is missing a non-empty "title" field';
+  }
+  if (!description) {
+    return 'frontmatter is missing a non-empty "description" field';
+  }
+  if (!typeSet.has(type)) {
+    return `frontmatter "type: ${type}" is not in the configured types list`;
+  }
+  const h1 = extractOkfFirstH1(text);
+  if (h1 === null) {
+    return 'has no top-level "# " heading to compare against frontmatter "title"';
+  }
+  if (title !== h1) {
+    return `frontmatter "title: ${title}" does not match the page's "# ${h1}" heading`;
+  }
+  if (Object.hasOwn(fields, 'tags')) {
+    const tags = fields.tags;
+    const isValidTagList =
+      Array.isArray(tags) &&
+      tags.every((tag) => typeof tag === 'string' && tag.trim().length > 0);
+    if (!isValidTagList) {
+      return 'frontmatter "tags" must be a YAML list of non-empty strings';
+    }
+  }
+  return null;
+}
+/**
+ * Collect OKF frontmatter conformance violations for every `okfBundles[]`
+ * manifest entry (#1680). Pure (no direct I/O) so it can be unit-tested
+ * with synthetic fixtures; the audit pipeline supplies `repoFiles`,
+ * `listFiles` (bound to the live glob against `repoFiles`), and `readFile`.
+ *
+ * Fail-closed by construction: a file under a configured root is checked
+ * unless it is a reserved filename or already listed in `exemptPaths`, so a
+ * newly added page is enforced by default. `exemptPaths` entries are
+ * themselves validated: an entry naming a file outside every configured
+ * root (missing, mistyped, or never in scope) or a file that now conforms
+ * (a stale exemption a later backfill track forgot to remove) is reported.
+ */
+export function collectOkfFrontmatterViolations(bundles, listFiles, readFile) {
+  if (!Array.isArray(bundles)) {
+    return [];
+  }
+  const errors = [];
+  for (const bundle of bundles) {
+    const bundleId = bundle.id;
+    const id =
+      typeof bundleId === 'string' && bundleId.length > 0
+        ? bundleId
+        : 'okf-bundle';
+    const bundleRoots = bundle.roots;
+    const roots = Array.isArray(bundleRoots)
+      ? bundleRoots.filter(
+          (root) => typeof root === 'string' && root.length > 0,
+        )
+      : [];
+    if (roots.length === 0) {
+      errors.push(
+        `${id}: roots must be a non-empty array of directory strings`,
+      );
+      continue;
+    }
+    const bundleTypes = bundle.types;
+    const types = Array.isArray(bundleTypes)
+      ? bundleTypes.filter(
+          (type) => typeof type === 'string' && type.length > 0,
+        )
+      : [];
+    if (types.length === 0) {
+      errors.push(`${id}: types must be a non-empty array of type strings`);
+      continue;
+    }
+    const typeSet = new Set(types);
+    const bundleReservedFilenames = bundle.reservedFilenames;
+    const reservedFilenames = new Set(
+      Array.isArray(bundleReservedFilenames)
+        ? bundleReservedFilenames.filter(
+            (name) => typeof name === 'string' && name.length > 0,
+          )
+        : [],
+    );
+    const bundleExemptPaths = bundle.exemptPaths;
+    const rawExemptPaths = Array.isArray(bundleExemptPaths)
+      ? bundleExemptPaths
+      : [];
+    const exemptPaths = rawExemptPaths.filter(
+      (path) => typeof path === 'string' && path.length > 0,
+    );
+    if (exemptPaths.length !== rawExemptPaths.length) {
+      errors.push(
+        `${id}: exemptPaths must be an array of non-empty path strings`,
+      );
+    }
+    const exemptSet = new Set(exemptPaths);
+    const files = uniqueSorted(
+      roots.flatMap((root) => listFiles(`${root}/**/*.md`)),
+    );
+    const inScopeFileSet = new Set(files);
+    for (const file of files) {
+      const basename = file.slice(file.lastIndexOf('/') + 1);
+      if (reservedFilenames.has(basename)) {
+        continue;
+      }
+      const reason = checkOkfPageConformance(readFile(file), typeSet);
+      if (exemptSet.has(file)) {
+        if (reason === null) {
+          errors.push(
+            `${id}: exemptPaths names ${file}, which now conforms to the OKF profile; remove the stale exemption`,
+          );
+        }
+        continue;
+      }
+      if (reason !== null) {
+        errors.push(`${id}: ${file} ${reason}`);
+      }
+    }
+    for (const exempt of exemptPaths) {
+      if (!inScopeFileSet.has(exempt)) {
+        errors.push(
+          `${id}: exemptPaths names ${exempt}, which does not exist under a configured root`,
+        );
+      }
+    }
+  }
+  return errors;
+}

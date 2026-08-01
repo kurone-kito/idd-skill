@@ -10,6 +10,7 @@ import {
   collectDuplicateSyncPairTargets,
   collectGeneratedFromBannerViolations,
   collectInstructionSizeBudgetViolations,
+  collectOkfFrontmatterViolations,
   collectPolicyConfigDrift,
   generatedFromBanner,
   injectGeneratedFromBanner,
@@ -1229,4 +1230,313 @@ test('resolveGeneratedBlockFiles: neither paths nor sourceGlobs resolves to an e
     resolveGeneratedBlockFiles({}, () => []),
     [],
   );
+});
+
+// =============================================================================
+// collectOkfFrontmatterViolations (#1680) -- fail-closed OKF v0.1 frontmatter
+// conformance checker for `okfBundles[]` manifest entries. Every case here
+// uses synthetic in-memory fixtures, never the live docs/** corpus: this
+// track intentionally backfills no page (see docs/okf-frontmatter.md).
+// =============================================================================
+
+const OKF_TEST_TYPES = ['guide', 'reference', 'concept'];
+
+/**
+ * Builds `listFiles`/`readFile` callbacks over an in-memory
+ * `{ path: content }` map, mirroring how the audit pipeline binds
+ * `globFiles`/`readText` to `repoFiles` -- without touching the real
+ * filesystem or the live docs corpus.
+ */
+function okfFixture(files: Record<string, string>) {
+  const listFiles = (pattern: string) => {
+    const prefix = pattern.replace(/\/\*\*\/\*\.md$/, '/');
+    return Object.keys(files)
+      .filter((path) => path.startsWith(prefix))
+      .sort();
+  };
+  const readFile = (path: string) => {
+    if (!Object.hasOwn(files, path)) {
+      throw new Error(`unexpected read in OKF fixture: ${path}`);
+    }
+    return files[path];
+  };
+  return { listFiles, readFile };
+}
+
+test('collectOkfFrontmatterViolations: a conforming page passes', () => {
+  const { listFiles, readFile } = okfFixture({
+    'docs/foo.md':
+      '---\ntype: guide\ntitle: Foo\ndescription: A short sentence.\ntags: [a, b]\n---\n\n# Foo\n\nBody.\n',
+  });
+  const errors = collectOkfFrontmatterViolations(
+    [
+      {
+        id: 'docs-okf',
+        roots: ['docs'],
+        reservedFilenames: ['index.md'],
+        types: OKF_TEST_TYPES,
+        exemptPaths: [],
+      },
+    ],
+    listFiles,
+    readFile,
+  );
+  assert.deepEqual(errors, []);
+});
+
+test('collectOkfFrontmatterViolations: a reserved filename is skipped entirely', () => {
+  const { listFiles, readFile } = okfFixture({
+    'docs/index.md': '# Index\n\nNo frontmatter here, and that is fine.\n',
+  });
+  const errors = collectOkfFrontmatterViolations(
+    [
+      {
+        id: 'docs-okf',
+        roots: ['docs'],
+        reservedFilenames: ['index.md', 'log.md'],
+        types: OKF_TEST_TYPES,
+        exemptPaths: [],
+      },
+    ],
+    listFiles,
+    readFile,
+  );
+  assert.deepEqual(errors, []);
+});
+
+test('collectOkfFrontmatterViolations: a file with no frontmatter block fails', () => {
+  const { listFiles, readFile } = okfFixture({
+    'docs/foo.md': '# Foo\n\nBody with no leading frontmatter at all.\n',
+  });
+  const errors = collectOkfFrontmatterViolations(
+    [
+      {
+        id: 'docs-okf',
+        roots: ['docs'],
+        types: OKF_TEST_TYPES,
+        exemptPaths: [],
+      },
+    ],
+    listFiles,
+    readFile,
+  );
+  assert.equal(errors.length, 1);
+  assert.match(
+    errors[0],
+    /docs\/foo\.md has no parseable YAML frontmatter block/,
+  );
+});
+
+test('collectOkfFrontmatterViolations: an empty type fails', () => {
+  const { listFiles, readFile } = okfFixture({
+    'docs/foo.md':
+      '---\ntype: ""\ntitle: Foo\ndescription: A short sentence.\n---\n\n# Foo\n',
+  });
+  const errors = collectOkfFrontmatterViolations(
+    [
+      {
+        id: 'docs-okf',
+        roots: ['docs'],
+        types: OKF_TEST_TYPES,
+        exemptPaths: [],
+      },
+    ],
+    listFiles,
+    readFile,
+  );
+  assert.equal(errors.length, 1);
+  assert.match(errors[0], /missing a non-empty "type" field/);
+});
+
+test('collectOkfFrontmatterViolations: a missing description fails', () => {
+  const { listFiles, readFile } = okfFixture({
+    'docs/foo.md': '---\ntype: guide\ntitle: Foo\n---\n\n# Foo\n',
+  });
+  const errors = collectOkfFrontmatterViolations(
+    [
+      {
+        id: 'docs-okf',
+        roots: ['docs'],
+        types: OKF_TEST_TYPES,
+        exemptPaths: [],
+      },
+    ],
+    listFiles,
+    readFile,
+  );
+  assert.equal(errors.length, 1);
+  assert.match(errors[0], /missing a non-empty "description" field/);
+});
+
+test('collectOkfFrontmatterViolations: a type outside the closed set fails', () => {
+  const { listFiles, readFile } = okfFixture({
+    'docs/foo.md':
+      '---\ntype: essay\ntitle: Foo\ndescription: A short sentence.\n---\n\n# Foo\n',
+  });
+  const errors = collectOkfFrontmatterViolations(
+    [
+      {
+        id: 'docs-okf',
+        roots: ['docs'],
+        types: OKF_TEST_TYPES,
+        exemptPaths: [],
+      },
+    ],
+    listFiles,
+    readFile,
+  );
+  assert.equal(errors.length, 1);
+  assert.match(errors[0], /"type: essay" is not in the configured types list/);
+});
+
+test('collectOkfFrontmatterViolations: a title disagreeing with the H1 fails', () => {
+  const { listFiles, readFile } = okfFixture({
+    'docs/foo.md':
+      '---\ntype: guide\ntitle: Wrong Title\ndescription: A short sentence.\n---\n\n# Foo\n',
+  });
+  const errors = collectOkfFrontmatterViolations(
+    [
+      {
+        id: 'docs-okf',
+        roots: ['docs'],
+        types: OKF_TEST_TYPES,
+        exemptPaths: [],
+      },
+    ],
+    listFiles,
+    readFile,
+  );
+  assert.equal(errors.length, 1);
+  assert.match(
+    errors[0],
+    /"title: Wrong Title" does not match the page's "# Foo" heading/,
+  );
+});
+
+test('collectOkfFrontmatterViolations: a non-list tags fails', () => {
+  const { listFiles, readFile } = okfFixture({
+    'docs/foo.md':
+      '---\ntype: guide\ntitle: Foo\ndescription: A short sentence.\ntags: not-a-list\n---\n\n# Foo\n',
+  });
+  const errors = collectOkfFrontmatterViolations(
+    [
+      {
+        id: 'docs-okf',
+        roots: ['docs'],
+        types: OKF_TEST_TYPES,
+        exemptPaths: [],
+      },
+    ],
+    listFiles,
+    readFile,
+  );
+  assert.equal(errors.length, 1);
+  assert.match(errors[0], /"tags" must be a YAML list of non-empty strings/);
+});
+
+test('collectOkfFrontmatterViolations: a non-conforming page listed in exemptPaths is silently skipped', () => {
+  const { listFiles, readFile } = okfFixture({
+    'docs/foo.md': '# Foo\n\nNo frontmatter, but grandfathered in.\n',
+  });
+  const errors = collectOkfFrontmatterViolations(
+    [
+      {
+        id: 'docs-okf',
+        roots: ['docs'],
+        types: OKF_TEST_TYPES,
+        exemptPaths: ['docs/foo.md'],
+      },
+    ],
+    listFiles,
+    readFile,
+  );
+  assert.deepEqual(errors, []);
+});
+
+test('collectOkfFrontmatterViolations: an exemptPaths entry naming a nonexistent file fails', () => {
+  const { listFiles, readFile } = okfFixture({
+    'docs/foo.md':
+      '---\ntype: guide\ntitle: Foo\ndescription: A short sentence.\n---\n\n# Foo\n',
+  });
+  const errors = collectOkfFrontmatterViolations(
+    [
+      {
+        id: 'docs-okf',
+        roots: ['docs'],
+        types: OKF_TEST_TYPES,
+        exemptPaths: ['docs/missing.md'],
+      },
+    ],
+    listFiles,
+    readFile,
+  );
+  assert.equal(errors.length, 1);
+  assert.match(
+    errors[0],
+    /exemptPaths names docs\/missing\.md, which does not exist under a configured root/,
+  );
+});
+
+test('collectOkfFrontmatterViolations: an exemptPaths entry naming a now-conforming file fails', () => {
+  const { listFiles, readFile } = okfFixture({
+    'docs/foo.md':
+      '---\ntype: guide\ntitle: Foo\ndescription: A short sentence.\n---\n\n# Foo\n',
+  });
+  const errors = collectOkfFrontmatterViolations(
+    [
+      {
+        id: 'docs-okf',
+        roots: ['docs'],
+        types: OKF_TEST_TYPES,
+        exemptPaths: ['docs/foo.md'],
+      },
+    ],
+    listFiles,
+    readFile,
+  );
+  assert.equal(errors.length, 1);
+  assert.match(
+    errors[0],
+    /exemptPaths names docs\/foo\.md, which now conforms to the OKF profile/,
+  );
+});
+
+test('collectOkfFrontmatterViolations: misconfigured roots/types fail closed, non-array bundles are a no-op', () => {
+  assert.deepEqual(
+    collectOkfFrontmatterViolations(
+      null,
+      () => [],
+      () => '',
+    ),
+    [],
+  );
+  assert.deepEqual(
+    collectOkfFrontmatterViolations(
+      undefined,
+      () => [],
+      () => '',
+    ),
+    [],
+  );
+
+  const noRoots = collectOkfFrontmatterViolations(
+    [{ id: 'x', roots: [], types: OKF_TEST_TYPES }],
+    () => {
+      throw new Error('listFiles must not be called without roots');
+    },
+    () => '',
+  );
+  assert.equal(noRoots.length, 1);
+  assert.match(
+    noRoots[0],
+    /roots must be a non-empty array of directory strings/,
+  );
+
+  const noTypes = collectOkfFrontmatterViolations(
+    [{ id: 'x', roots: ['docs'], types: [] }],
+    () => [],
+    () => '',
+  );
+  assert.equal(noTypes.length, 1);
+  assert.match(noTypes[0], /types must be a non-empty array of type strings/);
 });
