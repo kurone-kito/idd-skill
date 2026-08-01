@@ -110,11 +110,14 @@ In the idd-skill source repository, the following optional helpers were adopted:
   ordered, deduplicated `gh run rerun <id>` recovery plan for the
   rerun-eligible instances (each command includes `-R owner/repo` when
   the repository is known) — referenced from `idd-ci.instructions.md`
-  §Rerun mechanics as the preferred way to produce that plan. When no
-  instance is rerun-eligible but the rollup is stuck on a bot-gated
-  instance alongside an already-passing non-bot pull_request-family
-  instance, it additionally offers a `recoveryRefreshPlan`: rerunning
-  that already-passing instance is the documented way to force a fresh
+  §Rerun mechanics as the preferred way to produce that plan. When the
+  rollup is stuck on a bot-gated instance alongside an already-passing
+  non-bot pull_request-family instance, it additionally offers a
+  `recoveryRefreshPlan` — populated even alongside a non-empty rerun plan
+  when every rerun-eligible instance there is itself bot-triggered (#1745;
+  rerunning a bot-triggered instance does not supply the non-bot trigger
+  the recovery-refresh option exists to provide): rerunning the
+  already-passing instance is the documented way to force a fresh
   non-bot evaluation and clear the stale rollup. Never calls
   `gh run rerun` itself; a mutating `--apply` mode is a deliberate
   follow-up.
@@ -1221,10 +1224,14 @@ to post it is the consuming track's job.
   recovery plan for the rerun-eligible instances -- referenced from
   `idd-ci.instructions.md` §Rerun mechanics as the preferred way to produce
   that plan
-- Also reports a `recoveryRefreshPlan` when no instance is rerun-eligible but
-  the rollup is stuck on a bot-gated instance alongside an already-passing
-  non-bot pull_request-family instance, and honors the resolved
-  `ciWait.rerunPolicy`: a `"hold"` policy, or an instance whose own
+- Also reports a `recoveryRefreshPlan` when the rollup is stuck on a
+  bot-gated instance alongside an already-passing non-bot
+  pull_request-family instance — populated even alongside a non-empty
+  sequential rerun plan when every rerun-eligible instance there is itself
+  bot-triggered (#1745; rerunning a bot-triggered instance does not supply
+  the non-bot trigger the recovery-refresh option exists to provide) — and
+  honors the resolved `ciWait.rerunPolicy`: a `"hold"` policy, or an
+  instance whose own
   `runAttempt` already exhausted the `"rerun-once"` budget, withholds the
   corresponding plan entries with an explanatory `rerunPolicyHoldNotice`
   instead of silently omitting them

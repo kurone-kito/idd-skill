@@ -327,8 +327,15 @@ export interface RerunAdvisoryConvergencePlan {
 const PLAN_CAVEAT =
   'Rerun the rerun-eligible instances ONE AT A TIME, in the order listed below, waiting for each `gh run rerun` to finish before starting the next -- rerunning several concurrently makes them cancel each other via the shared concurrency group.';
 
+// Deliberately does NOT open with "No rerun-eligible instance exists": since
+// #1745, recoveryRefreshPlan can be populated alongside a non-empty `plan`
+// (a bot-triggered rerun-eligible instance, e.g. a CANCELLED sibling, does
+// not itself supply the non-bot trigger a separately bot-gated instance
+// still needs), so that claim is not always true. `plan`'s own emptiness or
+// non-emptiness is already visible in the JSON document; this text sticks to
+// the technical gating condition, which holds regardless (#1752).
 const RECOVERY_REFRESH_CAVEAT =
-  'No rerun-eligible instance exists, but at least one check-run is bot-gated-skip and at least one already-PASSING non-bot pull_request-family instance exists for this SHA. Per idd-ci.instructions.md Rerun mechanics, rerunning that already-passing instance (not the bot-gated one) is the documented way to force a fresh non-bot-triggered evaluation and clear a required-check rollup pinned to the stale bot-gated state -- the instance itself does not need to change its outcome.';
+  'At least one check-run is bot-gated-skip and at least one already-PASSING non-bot pull_request-family instance exists for this SHA. Per idd-ci.instructions.md Rerun mechanics, rerunning that already-passing instance (not the bot-gated one) is the documented way to force a fresh non-bot-triggered evaluation and clear a required-check rollup pinned to the stale bot-gated state -- the instance itself does not need to change its outcome.';
 
 /** Pure inputs to {@link computeRerunPlan} (already fetched; this function
  * performs no I/O). */
@@ -1167,6 +1174,83 @@ export function describeNoActionState(
   return `No rerun-eligible instance and no recovery-refresh option, but this is not a clean "nothing to do": ${notes}.`;
 }
 
+/**
+ * Header line introducing the recovery-refresh section of the CLI's stderr
+ * summary. Two independent conditions ({@link
+ * RerunAdvisoryConvergencePlan.plan} and {@link
+ * RerunAdvisoryConvergencePlan.recoveryRefreshPlan}) can both be non-empty
+ * at once since #1745 (a bot-triggered rerun-eligible instance in `plan`,
+ * e.g. a CANCELLED sibling, does not itself supply the non-bot trigger a
+ * separately bot-gated instance still needs from `recoveryRefreshPlan`) --
+ * a hardcoded "No rerun-eligible instances" header became false in that
+ * combined case (#1752, post-merge Codex review on #1749/#1745).
+ * `idd-ci.instructions.md` §Rerun mechanics documents the recovery-refresh
+ * rerun as the recommended FIRST step in that combined scenario (rerun the
+ * already-passing non-bot instance; only rerun the CANCELLED-conclusion
+ * bot-triggered sibling(s) next if that alone does not clear the rollup),
+ * so the combined-case wording says so explicitly rather than relying on
+ * {@link buildRerunPlanTextSections}'s print order alone.
+ */
+export function describeRecoveryRefreshHeader(
+  plan: RerunAdvisoryConvergencePlan,
+): string {
+  return plan.plan.length > 0
+    ? 'A recovery-refresh option is also available -- try this FIRST, per idd-ci.instructions.md §Rerun mechanics; only fall back to the sequential recovery plan below if it does not clear the rollup:'
+    : 'No rerun-eligible instances, but a recovery-refresh option is available:';
+}
+
+/**
+ * Ordered, fully-rendered stderr sections for the recovery-refresh option
+ * and the sequential rerun-eligible plan, selected and formatted
+ * independently of each other -- the CLI entry point below previously
+ * treated these as mutually exclusive (`if`/`else if`), so whenever both
+ * `plan.recoveryRefreshPlan` and `plan.plan` were non-empty at once (#1745
+ * made that possible), only the first-checked one ever printed, silently
+ * dropping the other's recovery command from the human-readable summary an
+ * operator actually follows even though the JSON document above already
+ * carried both correctly (#1752). Extracted as its own pure, directly
+ * unit-testable function -- mirroring {@link describeOutstandingStates} /
+ * {@link describeNoActionState} -- so SECTION SELECTION (which sections
+ * appear, and in what order), not just wording, has direct test coverage
+ * instead of being reachable only through the `import.meta.main` CLI entry
+ * point.
+ *
+ * Order: the recoveryRefreshPlan section prints first when both are
+ * present, matching `idd-ci.instructions.md` §Rerun mechanics' documented
+ * recovery order for this exact combined scenario (see {@link
+ * describeRecoveryRefreshHeader}). Each returned entry is pre-joined with
+ * internal newlines; the caller wraps each in the same single leading and
+ * trailing blank line every other CLI-summary section already uses.
+ */
+export function buildRerunPlanTextSections(
+  plan: RerunAdvisoryConvergencePlan,
+): string[] {
+  const sections: string[] = [];
+  if (plan.recoveryRefreshPlan.length > 0) {
+    sections.push(
+      [
+        describeRecoveryRefreshHeader(plan),
+        ...plan.recoveryRefreshPlan.map(
+          (entry, index) => `  ${index + 1}. ${entry.command}`,
+        ),
+        '',
+        plan.recoveryRefreshCaveat,
+      ].join('\n'),
+    );
+  }
+  if (plan.plan.length > 0) {
+    sections.push(
+      [
+        'Sequential recovery plan (run one at a time; wait for each to finish before the next):',
+        ...plan.plan.map((entry, index) => `  ${index + 1}. ${entry.command}`),
+        '',
+        plan.planCaveat,
+      ].join('\n'),
+    );
+  }
+  return sections;
+}
+
 function printHelp(): void {
   process.stdout.write(`Usage:
   node scripts/rerun-advisory-convergence.mjs --pr <number> [--owner <owner> --repo <repo>] [--now <ISO8601>] [--help]
@@ -1733,24 +1817,23 @@ if (import.meta.main) {
     // despite the stream *starting* with a well-formed document
     // (#1434 review, Copilot).
     process.stdout.write(`${JSON.stringify(plan, null, 2)}\n`);
-    if (plan.plan.length > 0) {
-      process.stderr.write(
-        '\nSequential recovery plan (run one at a time; wait for each to finish before the next):\n',
-      );
-      plan.plan.forEach((entry, index) => {
-        process.stderr.write(`  ${index + 1}. ${entry.command}\n`);
-      });
-      process.stderr.write(`\n${plan.planCaveat}\n`);
-    } else if (plan.recoveryRefreshPlan.length > 0) {
-      process.stderr.write(
-        '\nNo rerun-eligible instances, but a recovery-refresh option is available:\n',
-      );
-      plan.recoveryRefreshPlan.forEach((entry, index) => {
-        process.stderr.write(`  ${index + 1}. ${entry.command}\n`);
-      });
-      process.stderr.write(`\n${plan.recoveryRefreshCaveat}\n`);
+    // plan.recoveryRefreshPlan and plan.plan are printed as two
+    // INDEPENDENT sections (never else-if): #1745 made it possible for
+    // both to be non-empty at once (a bot-triggered rerun-eligible
+    // instance in `plan` does not itself supply the non-bot trigger a
+    // separately bot-gated instance still needs from
+    // `recoveryRefreshPlan`), and an `else if` here previously printed
+    // only whichever section was checked first, silently dropping the
+    // other's recovery command from this human-readable summary even
+    // though the JSON document above already carried both correctly
+    // (#1752, post-merge Codex review on #1749/#1745). Section selection
+    // and order are delegated to buildRerunPlanTextSections so the
+    // combined case has direct unit-test coverage instead of being
+    // reachable only through this CLI entry point.
+    for (const section of buildRerunPlanTextSections(plan)) {
+      process.stderr.write(`\n${section}\n`);
     }
-    // Independent of whichever branch above fired: rerunPolicyHoldNotice
+    // Independent of whichever section(s) above fired: rerunPolicyHoldNotice
     // describes a policy-held or budget-held instance, which is a
     // DIFFERENT instance than whichever one just populated `plan` or
     // `recoveryRefreshPlan` above -- printing it only in an `else if`
