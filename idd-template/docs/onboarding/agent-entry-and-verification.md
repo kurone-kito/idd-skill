@@ -326,7 +326,8 @@ checks, confirm the detailed items below.
       own it (a sibling entry file, an existing
       `.github/copilot-instructions.md`, or more than one when
       guidance is split) — no entry file silently drops guidance
-      another existing file already carries.
+      another existing file already carries (observed 2026-07-27,
+      kurone-kito/idd-skill#1717).
 - [ ] If `.github/copilot-instructions.md` existed before onboarding,
       it now includes the IDD workflow reference as well.
 - [ ] If the operator opted into the optional `opencode.json`
