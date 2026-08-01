@@ -617,8 +617,8 @@ session-local buffer a later session cannot see.
 These guards keep partially published issue sets visible to the IDD
 discover guard while the full set is still being wired. If a session
 is interrupted before the set is stable, leave the label in place —
-the label alone is what keeps the unfinished set invisible to Discover;
-no other bookkeeping is required for a later session to find and
+the label alone is what keeps Discover from selecting the unfinished
+set; no other bookkeeping is required for a later session to find and
 finish the work.
 
 Remove the label from all published issues only after: the release

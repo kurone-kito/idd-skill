@@ -98,8 +98,8 @@ needs-decision, blocked-by-human, and out-of-scope.
      edits, roadmap relationship wiring, and re-lint of already-published
      bodies on the published issue itself, under the same label
    - if a session is interrupted before the set is fully wired, leave
-     the label in place — it alone keeps the unfinished set invisible
-     to Discover until a later session finishes the work
+     the label in place — it alone keeps Discover from selecting the
+     unfinished set until a later session finishes the work
    - remove the label from all published issues only after the release
      checklist passes (every child referenced from its roadmap's
      `## Tracks` list, no unsubstituted placeholders, linter green on

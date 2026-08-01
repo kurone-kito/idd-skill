@@ -858,9 +858,9 @@ only approval boundary.
   selecting it: held issues ARE the drafts, so in-place edits, roadmap
   relationship wiring, and re-lint of already-published bodies all
   happen under that same lock. If a session is interrupted before the
-  set is fully wired, leave the label in place — that alone keeps the
-  unfinished set invisible to Discover until a later session finishes
-  the work.
+  set is fully wired, leave the label in place — that alone keeps
+  Discover from selecting the unfinished set until a later session
+  finishes the work.
 - **Stage 2 — release.** Before removing the authoring label, run a
   release checklist: every child issue is referenced from its parent
   roadmap's `## Tracks` list; no unsubstituted placeholder remains in
