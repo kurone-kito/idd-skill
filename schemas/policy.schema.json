@@ -379,6 +379,10 @@
         "trustEmptyProtectionReads": {
           "type": "boolean",
           "description": "Opt-in toggle for trusting a `404` on the branch-protection or ruleset reads as a genuinely empty result (default false; absent means false). GitHub's documented status-code contracts for these reads never include `403`, so a `404` can also mean the token lacks permission to read a real configuration and GitHub is masking that as `404` to avoid confirming the resource's existence. Default `false` fails closed: an unreadable `404` on these reads is treated the same as an explicit `403` (hold) rather than as `noRequiredChecksConfigured`. Set `true` only when the repository operator has verified the automation token is known to carry full read access to these specific endpoints; this is a git-committed, human-authorized decision, not a runtime check of the caller's role or token scope."
+        },
+        "trustSourcePinnedRequiredChecks": {
+          "type": "boolean",
+          "description": "Opt-in toggle for trusting a source-pinned required check (a ruleset or classic branch-protection entry whose `app_id`/`integration_id` names a specific GitHub App/integration as the expected producer) once it is present, matched by name, and pass-equivalent (default false; absent means false). Default `false` fails closed: the CI gate downgrades an otherwise-passing named check to unresolved (`unknown` in `pre-merge-readiness`, `source-pinned` in the ci-wait-state helper) whenever any required-check rule entry is source-pinned, because no producer-identity data (the actual GitHub App that created the check) is fetched anywhere in this codebase's check-run reads, so the pinning cannot be verified at runtime. Set `true` only when the repository operator has verified out-of-band that the pinned integration is the sole producer of the named required check(s); this is a git-committed, human-authorized decision, not a runtime check of actual producer identity. It never relaxes a fully unnamed pinned requirement (e.g. a ruleset `workflows` rule with no enumerable check name), which stays unconditionally conservative."
         }
       }
     },
