@@ -1,7 +1,12 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { runHandoff } from '../src/scripts/force-handoff.mts';
+import type { CollaboratorPermissionCache } from '../src/scripts/collaborator-permission.mts';
+import { resolveTrustedCollaboratorMarkerLogins } from '../src/scripts/collaborator-permission.mts';
+import {
+  buildTrustedMarkerLogins,
+  runHandoff,
+} from '../src/scripts/force-handoff.mts';
 
 type RunHandoffOptions = NonNullable<Parameters<typeof runHandoff>[0]>;
 
@@ -185,4 +190,95 @@ test('runHandoff reports posted: true and returns successorIds and commentUrl', 
     /^claim-[0-9a-f]{16}$/,
     'claim ID should match expected format',
   );
+});
+
+// --- #1693: buildTrustedMarkerLogins trusts only operational-marker -------
+// authors, matching the sibling filter ------------------------------------
+//
+// Previously buildTrustedMarkerLogins permission-checked every unique
+// issue-comment author (once collaborator marker trust is enabled),
+// over-trusting an ordinary write+ commenter who never posted an
+// operational marker. It now delegates that widening step to
+// resolveTrustedCollaboratorMarkerLogins (collaborator-permission.mts) --
+// the same marker-authors-first filter pre-merge-readiness.mts and
+// advisory-convergence.mts already use. This test proves parity by calling
+// both with the identical comment/permission inputs and asserting matching
+// membership, rather than trusting that "delegates to" claim by
+// inspection alone.
+
+const MARKER_AUTHORS_FIRST_BODY = [
+  '<!-- claimed-by: some-agent claim-marker-parity supersedes: none 2026-05-13T10:00:00Z branch: issue/9001-parity -->',
+  '',
+  '_some-agent: issue claim — IDD automation marker. Do not edit._',
+].join('\n');
+
+test('buildTrustedMarkerLogins trusts only operational-marker-shaped comment authors when collaborator marker trust is enabled', () => {
+  const previousEnv = process.env.IDD_TRUST_COLLABORATOR_MARKERS;
+  process.env.IDD_TRUST_COLLABORATOR_MARKERS = 'true';
+  try {
+    const comments = [
+      { body: MARKER_AUTHORS_FIRST_BODY, user: { login: 'marker-author' } },
+      {
+        body: 'just an ordinary comment',
+        user: { login: 'ordinary-commenter' },
+      },
+    ];
+    const seed: CollaboratorPermissionCache = new Map([
+      ['o/r:marker-author', { permission: 'write', roleName: 'write' }],
+      ['o/r:ordinary-commenter', { permission: 'write', roleName: 'write' }],
+    ]);
+
+    const trusted = buildTrustedMarkerLogins(
+      'o',
+      'r',
+      'viewer',
+      comments,
+      new Map(seed),
+    );
+    const siblingFilterResult = resolveTrustedCollaboratorMarkerLogins(
+      'o',
+      'r',
+      comments,
+      { cache: new Map(seed) },
+    );
+
+    // Parity, per-login: force-handoff's decision for each comment author
+    // exactly matches the sibling filter's own decision for that same
+    // author (comparing whole sets directly would also pick up
+    // config-sourced base actors this repo's own .github/idd/config.json
+    // declares, which are unrelated to the marker-shape filter under
+    // test).
+    for (const login of ['marker-author', 'ordinary-commenter']) {
+      assert.equal(
+        trusted.has(login),
+        siblingFilterResult.includes(login),
+        `parity mismatch for ${login}`,
+      );
+    }
+    assert.ok(trusted.has('marker-author'));
+    assert.ok(!trusted.has('ordinary-commenter'));
+  } finally {
+    if (previousEnv === undefined) {
+      delete process.env.IDD_TRUST_COLLABORATOR_MARKERS;
+    } else {
+      process.env.IDD_TRUST_COLLABORATOR_MARKERS = previousEnv;
+    }
+  }
+});
+
+test('buildTrustedMarkerLogins leaves comment authors untouched when collaborator marker trust is disabled', () => {
+  const previousEnv = process.env.IDD_TRUST_COLLABORATOR_MARKERS;
+  delete process.env.IDD_TRUST_COLLABORATOR_MARKERS;
+  try {
+    const trusted = buildTrustedMarkerLogins('o', 'r', 'viewer', [
+      { body: MARKER_AUTHORS_FIRST_BODY, user: { login: 'marker-author' } },
+    ]);
+    assert.ok(!trusted.has('marker-author'));
+  } finally {
+    if (previousEnv === undefined) {
+      delete process.env.IDD_TRUST_COLLABORATOR_MARKERS;
+    } else {
+      process.env.IDD_TRUST_COLLABORATOR_MARKERS = previousEnv;
+    }
+  }
 });

@@ -11,6 +11,7 @@ import {
   parseArgs,
   pickResolvingClaimEvents,
   runAdvisoryConvergence,
+  SAME_HEAD_REROLL_INELIGIBLE_REASON,
   viewerProbeGhOptions,
 } from '../src/scripts/advisory-convergence.mts';
 import {
@@ -1366,6 +1367,247 @@ test('regression: converged/waived/ready are identical with and without advisory
   assert.equal(without.pending, with_.pending);
   assert.deepEqual(without.review, with_.review);
   assert.deepEqual(without.threads, with_.threads);
+});
+
+// --- 9b. sameHeadReroll.ineligibleReasons / dispositionEvidence (#1719) -----
+// --- `eligible` is a conjunction of six boolean terms (see the computation
+// --- in advisory-convergence.mts); `ineligibleReasons` is derived from the
+// --- SAME six terms (`.every()` / `.filter().map()` over one shared array),
+// --- so the two can never disagree. This section proves: the known-token
+// --- set stays pinned to exactly six (so a term added to the conjunction
+// --- without a paired token trips a test), the array is empty exactly when
+// --- eligible is true, each term produces its own token when it is the
+// --- (sole, where isolable) failing one, and the `dispositionEvidence`
+// --- counters that feed one of those terms are exposed on the report.
+
+test('ineligibleReasons: the known-token set is pinned to exactly the six eligibility terms', () => {
+  // A 7th conjunct added to `sameHeadRerollEligible` without a paired token
+  // in `SAME_HEAD_REROLL_INELIGIBLE_REASON` would leave this set at 6,
+  // failing this pin -- the reviewer must touch this test to add one.
+  assert.deepEqual(
+    Object.values(SAME_HEAD_REROLL_INELIGIBLE_REASON).sort(),
+    [
+      'missing-regular-comment-disposition',
+      'review-item-count-not-positive',
+      'review-item-count-unknown',
+      'review-pending',
+      'scope-not-applicable',
+      'unresolved-copilot-threads',
+    ].sort(),
+  );
+});
+
+test('ineligibleReasons: empty exactly when eligible is true', () => {
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({ reviews: [copilotReview({ itemCount: 2 })] }),
+    baseOptions(),
+  );
+  assertValidVerdict(verdict);
+  assert.equal(verdict.sameHeadReroll.eligible, true);
+  assert.deepEqual(verdict.sameHeadReroll.ineligibleReasons, []);
+});
+
+test('ineligibleReasons: scope-not-applicable fires alone when only the applicability term fails', () => {
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({
+      reviews: [copilotReview({ itemCount: 2 })],
+      claimEvents: [claimComment()],
+    }),
+    baseOptions({
+      convergenceScope: 'idd-claimed',
+      prHeadRefName: 'issue/1234-different',
+    }),
+  );
+  assertValidVerdict(verdict);
+  assert.equal(verdict.applicability.status, 'not_applicable');
+  assert.deepEqual(verdict.sameHeadReroll.ineligibleReasons, [
+    SAME_HEAD_REROLL_INELIGIBLE_REASON.SCOPE_NOT_APPLICABLE,
+  ]);
+});
+
+test('ineligibleReasons: review-pending co-fires with review-item-count-unknown (matchesHead false forces itemCount null)', () => {
+  // Not isolable to a single token: `resolveLatestCopilotReviewClause`
+  // always reports `itemCount: null` off-HEAD, so these two terms always
+  // fail together -- this test documents that coupling rather than
+  // asserting an unreachable single-token result.
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({
+      reviews: [copilotReview({ commitId: OTHER_SHA, itemCount: 2 })],
+    }),
+    baseOptions(),
+  );
+  assertValidVerdict(verdict);
+  assert.equal(verdict.pending, true);
+  assert.deepEqual(verdict.sameHeadReroll.ineligibleReasons, [
+    SAME_HEAD_REROLL_INELIGIBLE_REASON.REVIEW_PENDING,
+    SAME_HEAD_REROLL_INELIGIBLE_REASON.REVIEW_ITEM_COUNT_UNKNOWN,
+  ]);
+});
+
+test('ineligibleReasons: unresolved-copilot-threads fires alone when only the thread term fails', () => {
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({
+      reviews: [copilotReview({ itemCount: 2 })],
+      threads: [
+        {
+          id: 'PRT_ISOLATE_THREAD',
+          isResolved: false,
+          comments: {
+            nodes: [
+              {
+                author: { login: COPILOT_LOGIN },
+                body: 'nit: consider extracting this into a helper',
+                createdAt: OLD,
+                updatedAt: OLD,
+              },
+            ],
+          },
+        },
+      ],
+    }),
+    baseOptions(),
+  );
+  assertValidVerdict(verdict);
+  assert.equal(verdict.threads.satisfied, false);
+  assert.deepEqual(verdict.sameHeadReroll.ineligibleReasons, [
+    SAME_HEAD_REROLL_INELIGIBLE_REASON.UNRESOLVED_COPILOT_THREADS,
+  ]);
+});
+
+test('ineligibleReasons: missing-regular-comment-disposition fires alone when only the disposition term fails', () => {
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({
+      reviews: [copilotReview({ itemCount: 2 })],
+      comments: [
+        {
+          id: 1,
+          createdAt: OLD,
+          body: 'please double check this edge case',
+          author: { login: 'some-reviewer' },
+        },
+      ],
+    }),
+    baseOptions(),
+  );
+  assertValidVerdict(verdict);
+  assert.equal(verdict.dispositionEvidence.missingRegularCommentCount, 1);
+  assert.deepEqual(verdict.sameHeadReroll.ineligibleReasons, [
+    SAME_HEAD_REROLL_INELIGIBLE_REASON.MISSING_REGULAR_COMMENT_DISPOSITION,
+  ]);
+});
+
+test('ineligibleReasons: review-item-count-unknown fires alone when itemCount is unavailable on a matching-HEAD review', () => {
+  // No `itemCount` key at all (rather than an explicit `undefined`
+  // override): `Number.isFinite(undefined)` is false, so
+  // `resolveLatestCopilotReviewClause` reports `itemCount: null` even
+  // though `matchesHead` is true -- unlike the review-pending case above,
+  // `review-item-count-not-positive` is deliberately designed NOT to
+  // co-fire here (see its "unknown counts as satisfied" doc comment).
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({
+      reviews: [
+        {
+          author: { login: COPILOT_LOGIN },
+          submittedAt: RECENT,
+          commitId: HEAD,
+        },
+      ],
+    }),
+    baseOptions(),
+  );
+  assertValidVerdict(verdict);
+  assert.equal(verdict.pending, false);
+  assert.equal(verdict.review.itemCount, null);
+  assert.deepEqual(verdict.sameHeadReroll.ineligibleReasons, [
+    SAME_HEAD_REROLL_INELIGIBLE_REASON.REVIEW_ITEM_COUNT_UNKNOWN,
+  ]);
+});
+
+test('ineligibleReasons: review-item-count-not-positive fires alone when itemCount is exactly zero', () => {
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({ reviews: [copilotReview()] }), // itemCount: 0 default
+    baseOptions(),
+  );
+  assertValidVerdict(verdict);
+  assert.equal(verdict.converged, true); // already fully converged
+  assert.deepEqual(verdict.sameHeadReroll.ineligibleReasons, [
+    SAME_HEAD_REROLL_INELIGIBLE_REASON.REVIEW_ITEM_COUNT_NOT_POSITIVE,
+  ]);
+});
+
+test('reasons: itemCount > 0 with every visible Copilot thread resolved points at the review body (#1719 incident shape)', () => {
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({ reviews: [copilotReview({ itemCount: 1 })] }),
+    baseOptions(),
+  );
+  assertValidVerdict(verdict);
+  assert.equal(verdict.threads.satisfied, true);
+  assert.equal(verdict.review.itemCount, 1);
+  assert.match(
+    verdict.reasons.join('\n'),
+    /check the review body directly for an item suppressed due to low confidence/,
+  );
+});
+
+test('reasons: itemCount > 0 with an unresolved blocking thread does NOT add the review-body pointer (a real thread already explains it)', () => {
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({
+      reviews: [copilotReview({ itemCount: 2 })],
+      threads: [
+        {
+          id: 'PRT_REAL_BLOCK',
+          isResolved: false,
+          comments: {
+            nodes: [
+              {
+                author: { login: COPILOT_LOGIN },
+                body: 'nit: consider extracting this into a helper',
+                createdAt: OLD,
+                updatedAt: OLD,
+              },
+            ],
+          },
+        },
+      ],
+    }),
+    baseOptions(),
+  );
+  assertValidVerdict(verdict);
+  assert.equal(verdict.threads.satisfied, false);
+  assert.doesNotMatch(
+    verdict.reasons.join('\n'),
+    /check the review body directly/,
+  );
+  assert.match(verdict.reasons.join('\n'), /2 actionable item/);
+});
+
+test('dispositionEvidence: exposes missingRegularCommentCount feeding sameHeadReroll.eligible, plus its missingThreadCount sibling', () => {
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({
+      reviews: [copilotReview({ itemCount: 2 })],
+      comments: [
+        {
+          id: 1,
+          createdAt: OLD,
+          body: 'please double check this edge case',
+          author: { login: 'some-reviewer' },
+        },
+      ],
+    }),
+    baseOptions(),
+  );
+  assertValidVerdict(verdict);
+  assert.equal(verdict.dispositionEvidence.missingRegularCommentCount, 1);
+  assert.equal(typeof verdict.dispositionEvidence.missingThreadCount, 'number');
+});
+
+test('dispositionEvidence: missingRegularCommentCount is zero when nothing is outstanding', () => {
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({ reviews: [copilotReview({ itemCount: 2 })] }),
+    baseOptions(),
+  );
+  assertValidVerdict(verdict);
+  assert.equal(verdict.dispositionEvidence.missingRegularCommentCount, 0);
 });
 
 // --- 10. terminal Copilot unavailability (#1570/#1572) ----------------------

@@ -7,8 +7,10 @@
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { parseCliArgs } from './cli-args.mjs';
+import { resolveTrustedCollaboratorMarkerLogins } from './collaborator-permission.mjs';
 import { resolveHelperActiveClaim } from './forced-handoff-marker.mjs';
 import { ghText, safeGhText } from './gh-exec.mjs';
+import { deriveGhHttpStatus } from './gh-http-status.mjs';
 import {
   normalizePolicyConfig,
   parseIsoDurationToMs,
@@ -692,33 +694,18 @@ export function buildTrustedMarkerLogins({
   ) {
     return trusted;
   }
-  const uniqueLogins = new Set(
-    (issueComments ?? [])
-      .map((comment) =>
-        String(comment.user?.login ?? comment.author?.login ?? '')
-          .trim()
-          .toLowerCase(),
-      )
-      .filter(Boolean),
-  );
-  for (const login of uniqueLogins) {
-    if (trusted.has(login)) {
-      continue;
-    }
-    const authority = resolveCollaboratorAuthority({
-      owner,
-      repo,
-      actor: login,
-    });
-    if (
-      authority.roleName === 'admin' ||
-      authority.roleName === 'maintain' ||
-      authority.permission === 'admin' ||
-      authority.permission === 'maintain' ||
-      authority.permission === 'write'
-    ) {
-      trusted.add(login);
-    }
+  // #1693: marker-authors-first -- only comment authors whose comment is
+  // itself operational-marker-shaped are permission-checked, matching
+  // pre-merge-readiness.mts / advisory-convergence.mts /
+  // advisory-wait-state.mts (and force-handoff.mts as of this change).
+  // Checking every unique comment author (the prior local loop here)
+  // over-trusted ordinary commenters.
+  for (const login of resolveTrustedCollaboratorMarkerLogins(
+    owner,
+    repo,
+    issueComments ?? [],
+  )) {
+    trusted.add(login);
   }
   return trusted;
 }
@@ -749,6 +736,29 @@ function ghJson(args, slurp = false) {
   }
   return JSON.parse(execFileSync('gh', finalArgs, { encoding: 'utf8' }));
 }
+/**
+ * Pure derivation step for {@link ghApiJsonWithStatus}'s catch branch,
+ * exported so tests can inject an error shape directly instead of shelling
+ * out to a real `gh` invocation (matching the mock-free-subprocess
+ * convention documented in `tests/collaborator-permission.test.mts`).
+ *
+ * #1693: derives the real HTTP status via the shared gh-http-status.mts
+ * helpers (stderr `(HTTP NNN)` pattern, then a JSON-body `"status"` field
+ * fallback across stderr/stdout/message) instead of the prior local
+ * `extractGhHttpStatus`, which fell back to the child-process exit code
+ * when no HTTP-status text was found -- `gh` exits 1 for 401/403/404
+ * alike, so that fallback could misreport a 404 or an auth failure as
+ * "status 1". `deriveGhHttpStatus` returns null (not 0) when no status can
+ * be determined at all; 500 preserves this function's existing
+ * "definitely not 200, not 404" fail-closed fallback for that case.
+ */
+export function deriveGhApiStatusFromError(error) {
+  const status = deriveGhHttpStatus(error);
+  return {
+    status: status ?? 500,
+    body: {},
+  };
+}
 function ghApiJsonWithStatus(path) {
   try {
     return {
@@ -756,22 +766,8 @@ function ghApiJsonWithStatus(path) {
       body: JSON.parse(execFileSync('gh', ['api', path], { encoding: 'utf8' })),
     };
   } catch (error) {
-    const status = extractGhHttpStatus(error);
-    return {
-      status: status || 500,
-      body: {},
-    };
+    return deriveGhApiStatusFromError(error);
   }
-}
-export function extractGhHttpStatus(error) {
-  const e = error;
-  const stderr = String(e?.stderr ?? '');
-  const httpStatusMatch = stderr.match(/\(HTTP\s+(\d{3})\)/i);
-  if (httpStatusMatch) {
-    return Number(httpStatusMatch[1]);
-  }
-  const exitStatus = Number(e?.status ?? e?.exitCode ?? 0);
-  return Number.isInteger(exitStatus) && exitStatus > 0 ? exitStatus : 0;
 }
 function renderReport(report, format) {
   if (format === 'text') {

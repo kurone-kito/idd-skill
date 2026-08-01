@@ -1,7 +1,11 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { evaluateClaimApprovalGate } from '../src/scripts/claim-approval-gate.mts';
+import {
+  evaluateClaimApprovalGate,
+  wrapGhError,
+} from '../src/scripts/claim-approval-gate.mts';
+import { deriveGhHttpStatus } from '../src/scripts/gh-http-status.mts';
 
 const BASE_ISSUE = {
   number: 393,
@@ -478,4 +482,53 @@ test('check ids stay deterministic and ordered', () => {
       'ambiguity_guard',
     ],
   );
+});
+
+// --- #1693: shared gh-http-status.mts wiring --------------------------
+
+// wrapGhError is runGh's catch-branch pure step, exported so these tests
+// can inject a raw execFileSync-shaped error directly instead of shelling
+// out to a real `gh` invocation (#1212's mock-free-subprocess convention).
+// Composing it with deriveGhHttpStatus (the same composition
+// ghApiJsonWithStatus's catch branch performs internally) proves the full
+// wiring, not just the underlying shared helper in isolation.
+
+test('wrapGhError preserves stdout on the wrapped error (previously dropped)', () => {
+  const wrapped = wrapGhError({
+    status: 1,
+    stderr: 'gh: Not Found (HTTP 404)',
+    stdout: '{"message":"Not Found","status":"404"}',
+  }) as { stderr?: string; stdout?: string };
+  assert.equal(wrapped.stderr, 'gh: Not Found (HTTP 404)');
+  assert.equal(wrapped.stdout, '{"message":"Not Found","status":"404"}');
+});
+
+test('wrapGhError returns the original error unchanged when stderr is empty', () => {
+  const original = { status: 1, stderr: '', stdout: 'irrelevant' };
+  assert.equal(wrapGhError(original), original);
+});
+
+test('wrapGhError + deriveGhHttpStatus never surfaces a bare exit code as the HTTP status', () => {
+  // gh exits 1 for 401/403/404 alike; the removed status-derivation logic
+  // in ghApiJsonWithStatus greped stderr only for /HTTP\s+(\d+)/ and fell
+  // through to a "status could not be determined" 0 when absent -- so an
+  // exit code never leaked through this specific path even before the
+  // fix. This test locks in that invariant against the new composition.
+  const wrapped = wrapGhError({ status: 1, stderr: 'connect ETIMEDOUT' });
+  assert.equal(deriveGhHttpStatus(wrapped), null);
+});
+
+test('wrapGhError + deriveGhHttpStatus recovers a status from a JSON error body on stdout', () => {
+  // #1693: the prior local ghApiJsonWithStatus implementation greped
+  // stderr only, and even wrapGhError's predecessor dropped .stdout on the
+  // wrapped error -- so a JSON error body written to stdout (with no
+  // "(HTTP NNN)" text in stderr) was invisible end to end. Both defects
+  // are fixed together: wrapGhError now preserves .stdout, and
+  // deriveGhHttpStatus already knows how to fall back to it.
+  const wrapped = wrapGhError({
+    status: 1,
+    stderr: 'gh: Not Found',
+    stdout: '{"message":"Not Found","status":"404"}',
+  });
+  assert.equal(deriveGhHttpStatus(wrapped), 404);
 });
