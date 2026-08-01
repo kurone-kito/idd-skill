@@ -10,6 +10,7 @@ import { ghText } from './gh-exec.mjs';
 import { loadIddConfig } from './idd-config.mjs';
 import {
   buildActivitySnapshotSummary,
+  parsePaginatedGhNdjson,
   resolveAdvisoryBotLogins,
   resolveTrustedMarkerActors,
 } from './protocol-helpers.mjs';
@@ -334,9 +335,6 @@ function ghJson(args, options = {}) {
 }
 function ghApiJson(path, paginate = false, fields = null) {
   const args = ['api', path];
-  if (paginate) {
-    args.push('--paginate');
-  }
   if (fields) {
     for (const [key, value] of Object.entries(fields)) {
       args.push(
@@ -345,17 +343,22 @@ function ghApiJson(path, paginate = false, fields = null) {
       );
     }
   }
+  // #1692: `--jq '.[]'` (not a bare `--paginate`) makes gh emit one JSON
+  // value per line, guaranteed newline-separated, for every element across
+  // every page -- without it, `--paginate` alone concatenates each page's
+  // whole-array response with no separator on gh 2.45.0 (this repo's
+  // documented compatibility floor), which broke a naive split('\n') on
+  // multi-page output. Matches the NDJSON convention `gh-exec.mts`'s
+  // shared `ghApiJson` already uses.
+  if (paginate) {
+    args.push('--paginate', '--jq', '.[]');
+  }
   const raw = runGh(args).trim();
   if (!raw) {
     return [];
   }
   if (paginate) {
-    const chunks = raw
-      .split('\n')
-      .map((line) => line.trim())
-      .filter(Boolean)
-      .map((line) => JSON.parse(line));
-    return chunks.flatMap((chunk) => (Array.isArray(chunk) ? chunk : [chunk]));
+    return parsePaginatedGhNdjson(raw);
   }
   return JSON.parse(raw);
 }

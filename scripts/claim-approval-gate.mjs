@@ -10,6 +10,7 @@ import { parseCliArgs } from './cli-args.mjs';
 import { GH_TEXT_LOOP_TIMEOUT_OPTIONS, ghText } from './gh-exec.mjs';
 import { deriveGhHttpStatus } from './gh-http-status.mjs';
 import { normalizePolicyConfig } from './policy-helpers.mjs';
+import { parsePaginatedGhNdjson } from './protocol-helpers.mjs';
 
 const APPROVAL_POLICIES = new Set([
   'owners-and-maintainers-only',
@@ -278,6 +279,7 @@ function runCli() {
           result: check.result,
         })),
     timelineAvailable: timelineState.known,
+    timelineParseError: timelineState.parseError,
   };
   process.stdout.write(`${JSON.stringify(output, null, 2)}\n`);
 }
@@ -637,9 +639,18 @@ function fetchIssueTimeline(repoRef, issueNumber) {
       true,
       ['-H', 'Accept: application/vnd.github+json'],
     );
-    return { known: true, events };
-  } catch {
-    return { known: false, events: [] };
+    return { known: true, events, parseError: '' };
+  } catch (error) {
+    // #1692: a `SyntaxError` means the gh call itself succeeded but its
+    // output could not be parsed -- a bug, not a legitimate "timeline
+    // unavailable" case (missing issue, permission denial, network
+    // failure, all of which throw from `runGh` before parsing is ever
+    // reached). Surface it via `parseError` instead of silently
+    // collapsing into the same `known: false` shape a genuine absence
+    // produces, so it stays visible in the CLI's JSON output rather than
+    // being indistinguishable from "no timeline data".
+    const parseError = error instanceof SyntaxError ? error.message : '';
+    return { known: false, events: [], parseError };
   }
 }
 function resolveCollaboratorPermission({ owner, repo, login, cache }) {
@@ -711,10 +722,21 @@ function loadPolicy(policyPath) {
 }
 function ghApiJson(path, paginate = false, extraArgs = []) {
   const args = ['api', path, ...extraArgs];
+  // #1692: `--jq '.[]'` (not a bare `--paginate`) makes gh emit one JSON
+  // value per line, guaranteed newline-separated, for every element across
+  // every page. Without it, a whole-stdout `JSON.parse` (the prior
+  // behavior here) broke on any multi-page response -- `--paginate` alone
+  // concatenates each page's whole-array response, with no separator
+  // guaranteed on gh 2.45.0 (this repo's documented compatibility floor).
+  // Matches the NDJSON convention `gh-exec.mts`'s shared `ghApiJson` uses.
   if (paginate) {
-    args.push('--paginate');
+    args.push('--paginate', '--jq', '.[]');
   }
-  return JSON.parse(runGh(args).trim() || '[]');
+  const raw = runGh(args).trim();
+  if (paginate) {
+    return parsePaginatedGhNdjson(raw);
+  }
+  return JSON.parse(raw || '[]');
 }
 function ghApiJsonWithStatus(path) {
   try {
