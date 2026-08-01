@@ -777,10 +777,11 @@ const LIVE_CONFIG_CANDIDATE_FILES = [
 ];
 const LIVE_CONFIG_ERRORS_SHOWN = 10;
 /**
- * Resolve the repository's configured `helperRuntime.profile` for building
- * profile-aware remediation text (see `formatCleanupBacklogRemediation`
- * below), trying the same live-config candidates as
- * `checkHelperRuntimeConfig` in declaration order.
+ * Resolve the repository's configured `helperRuntime` (`profile` plus the
+ * optional pinned `packageSpec`, idd-skill#1731) for building profile-aware
+ * remediation text (see `formatCleanupBacklogRemediation` below), trying
+ * the same live-config candidates as `checkHelperRuntimeConfig` in
+ * declaration order.
  *
  * The **first present candidate wins outright** -- whether it declares a
  * valid profile, leaves `helperRuntime` absent, or is malformed -- and the
@@ -795,15 +796,22 @@ const LIVE_CONFIG_ERRORS_SHOWN = 10;
  * independently). Only an *absent* (nonexistent) candidate file is
  * skipped in favor of the next one.
  *
- * Defaults to `'instructions-only'` -- the safe, no-runnable-command
- * fallback -- when no candidate file exists at all, the first present one
- * is not valid JSON, or it does not declare a valid
- * `helperRuntime.profile`; those cases are already surfaced as their own
- * findings by `checkHelperRuntimeConfig` / `checkLiveConfigSchema`; this
- * resolver only needs a fail-closed profile to build remediation text
- * from, not a second diagnostic.
+ * Defaults to `{ profile: 'instructions-only', packageSpec: '' }` -- the
+ * safe, no-runnable-command fallback -- when no candidate file exists at
+ * all, the first present one is not valid JSON, or it does not declare a
+ * valid `helperRuntime.profile`; those cases are already surfaced as their
+ * own findings by `checkHelperRuntimeConfig` / `checkLiveConfigSchema`;
+ * this resolver only needs a fail-closed profile to build remediation text
+ * from, not a second diagnostic. `packageSpec` is `''` (meaning: fall back
+ * to the default package spec) whenever it isn't configured, even when
+ * `profile` itself resolved successfully.
+ *
+ * Both `resolveConfiguredHelperRuntimeProfile` and
+ * `resolveConfiguredHelperRuntimePackageSpec` below delegate to this single
+ * internal walk so the file-candidate-resolution invariant above lives in
+ * exactly one place.
  */
-export function resolveConfiguredHelperRuntimeProfile(root) {
+function resolveConfiguredHelperRuntime(root) {
   for (const file of LIVE_CONFIG_CANDIDATE_FILES) {
     const absolutePath = join(root, file);
     if (!exists(absolutePath)) {
@@ -813,14 +821,32 @@ export function resolveConfiguredHelperRuntimeProfile(root) {
     try {
       config = JSON.parse(readFileSync(absolutePath, 'utf8'));
     } catch {
-      return 'instructions-only';
+      return { profile: 'instructions-only', packageSpec: '' };
     }
     const helperRuntime = inspectHelperRuntimeConfig(config);
     return helperRuntime.status === 'ok'
-      ? helperRuntime.profile
-      : 'instructions-only';
+      ? {
+          profile: helperRuntime.profile,
+          packageSpec: helperRuntime.packageSpec ?? '',
+        }
+      : { profile: 'instructions-only', packageSpec: '' };
   }
-  return 'instructions-only';
+  return { profile: 'instructions-only', packageSpec: '' };
+}
+export function resolveConfiguredHelperRuntimeProfile(root) {
+  return resolveConfiguredHelperRuntime(root).profile;
+}
+/**
+ * Resolve the repository's configured `helperRuntime.packageSpec`
+ * (idd-skill#1731), for threading a pinned ephemeral-npx/package-manager
+ * spec into remediation text instead of always falling back to the
+ * mutable default archive URL. Returns `''` (use the default) under the
+ * same fail-closed conditions as `resolveConfiguredHelperRuntimeProfile`:
+ * no candidate file, invalid JSON, an invalid `helperRuntime`, or simply no
+ * `packageSpec` configured.
+ */
+export function resolveConfiguredHelperRuntimePackageSpec(root) {
+  return resolveConfiguredHelperRuntime(root).packageSpec;
 }
 /**
  * Decide whether a parsed live-config document is a schema finding, given
@@ -1602,15 +1628,22 @@ const CLEANUP_BACKLOG_DOCS_POINTER = 'docs/idd-comment-minimization.md';
  * invoke). Pure (no I/O) so it can be unit-tested for every profile
  * without mocking `gh` or the filesystem.
  *
+ * The optional `packageSpec` (idd-skill#1731) is the resolved
+ * `helperRuntime.packageSpec`; an empty string (the default when unset)
+ * lets `resolveHelperCommandForProfile` fall back to the mutable default
+ * archive URL under `ephemeral-npx`, unchanged from before this pin
+ * existed.
+ *
  * The `docs/idd-comment-minimization.md` pointer stays in every profile,
  * including `instructions-only`, which has no runnable command at all --
  * the pointer alone is then the whole remediation clause.
  */
-export function formatCleanupBacklogRemediation(profile) {
+export function formatCleanupBacklogRemediation(profile, packageSpec = '') {
   const docsClause = `see ${CLEANUP_BACKLOG_DOCS_POINTER}`;
   const command = resolveHelperCommandForProfile({
     helperId: CLEANUP_BACKLOG_HELPER_ID,
     profile,
+    packageSpec,
   });
   if (!command) {
     return `Remediation: ${docsClause}.`;
@@ -1797,8 +1830,8 @@ function checkPostMergeCleanupBacklog(root, options, report) {
     return;
   }
   const examplesText = verdict.examples.map((n) => `#${n}`).join(', ');
-  const profile = resolveConfiguredHelperRuntimeProfile(root);
-  const remediation = formatCleanupBacklogRemediation(profile);
+  const { profile, packageSpec } = resolveConfiguredHelperRuntime(root);
+  const remediation = formatCleanupBacklogRemediation(profile, packageSpec);
   report.warnings.push(
     `post-merge cleanup backlog: ${verdict.count} merged PRs in the last ${windowDays} days lack F4 cleanup evidence (warn threshold: ${warnThreshold}). Examples: ${examplesText}. ${remediation}`,
   );

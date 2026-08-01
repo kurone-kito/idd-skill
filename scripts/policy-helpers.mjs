@@ -9,7 +9,7 @@ const HELPER_RUNTIME_PROFILES = new Set([
   'ephemeral-npx',
   'instructions-only',
 ]);
-const HELPER_RUNTIME_KEYS = new Set(['profile']);
+const HELPER_RUNTIME_KEYS = new Set(['profile', 'packageSpec']);
 const ISSUE_SCOPES = new Set(['roadmap', 'roadmap-first', 'orphan-first']);
 const ORPHAN_FIRST_POLICIES = new Set([
   'none',
@@ -55,6 +55,18 @@ const ADVISORY_WHOLE_MINUTE_DURATION_RE =
   /^P(?=(?:\d+D|T\d+[HM]))(?=.*(?:[1-9]\d*[DHM]))(?:\d+D)?(?:T(?=\d+[HM])(?:\d+H)?(?:\d+M)?)?$/;
 const DURATION_RE =
   /^P(?:(?<days>\d+)D)?(?:T(?:(?<hours>\d+)H)?(?:(?<minutes>\d+)M)?(?:(?<seconds>\d+)S)?)?$/;
+// Mirrors schemas/policy.schema.json's helperRuntime.packageSpec pattern: a
+// non-empty, shell-safe character allowlist (letters, digits, and
+// `@:/_.+^#%-`), not merely "no whitespace" (idd-skill#1803 review). The
+// value is embedded raw and unquoted into copy-pasteable shell command
+// text (`npx --package <spec> ...`, `<manager> add <spec>`) -- a bare
+// whitespace check still lets shell metacharacters (`;`, `&`, `|`, `$`,
+// backticks, quotes, parens) through, which can corrupt or inject into
+// that command when an operator copies it. The allowlist covers realistic
+// npm specs (`@scope/name@version`, `github:owner/repo#ref`), HTTPS/git+
+// URLs, and tarball paths while excluding every shell metacharacter in
+// that list.
+const PACKAGE_SPEC_RE = /^[A-Za-z0-9@:/_.+^#%-]+$/;
 const SECOND_MS = 1000;
 const MINUTE_MS = 60 * SECOND_MS;
 const HOUR_MS = 60 * MINUTE_MS;
@@ -205,6 +217,22 @@ export function inspectHelperRuntimeConfig(config) {
       status: 'invalid',
       reason: `unsupported helperRuntime.profile "${profile}"`,
     };
+  }
+  // Optional: absent by default (existing behavior, existing profile-only
+  // callers/tests are unaffected). When present, it must be a non-empty
+  // string in the shell-safe character allowlist -- mirrors
+  // schemas/policy.schema.json's pattern so the JSON Schema validator and
+  // this runtime guard never disagree.
+  if (hasOwn(helperRuntime, 'packageSpec')) {
+    const packageSpec = helperRuntime.packageSpec;
+    if (typeof packageSpec !== 'string' || !PACKAGE_SPEC_RE.test(packageSpec)) {
+      return {
+        status: 'invalid',
+        reason:
+          'helperRuntime.packageSpec must be a non-empty string using only shell-safe characters (letters, digits, and @:/_.+^#%-)',
+      };
+    }
+    return { status: 'ok', profile, packageSpec };
   }
   return { status: 'ok', profile };
 }

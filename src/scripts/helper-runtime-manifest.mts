@@ -8,6 +8,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { dirname, relative, resolve } from 'node:path';
 import { parseCliArgs } from './cli-args.mts';
+import { inspectHelperRuntimeConfig } from './policy-helpers.mts';
 
 // Resolve the package root by walking up to the nearest package.json.
 // This is location-independent, so it returns the same root whether this
@@ -117,6 +118,18 @@ const DEFAULT_PACKAGE_SPEC =
 const SOURCE_REPOSITORY = 'github:kurone-kito/idd-skill';
 const PACKAGE_SPEC_PIN_HINT =
   'Pass --package-spec with a pinned tarball URL or reviewed commit archive when you need reproducible helper imports.';
+// Same two candidate filenames and first-present-wins precedence as
+// idd-doctor.mts's LIVE_CONFIG_CANDIDATE_FILES / resolveConfiguredHelperRuntime
+// (idd-skill#1731): `.github/idd/config.json` is canonical, `idd-policy.json`
+// is the legacy top-level name a repository may still use. Kept as a small,
+// self-contained local read here rather than importing idd-doctor.mts, which
+// would pull the whole doctor tool into this file's own vendored-node
+// managedFiles import-graph walk (collectVendoredFiles below) for every
+// profile that resolves this command's entry path.
+const LIVE_CONFIG_CANDIDATE_FILES = [
+  '.github/idd/config.json',
+  'idd-policy.json',
+];
 const NODE_ENGINES = '^22.22.2 || >=24.2.0';
 const SCRIPT_FILE_EXTENSIONS = ['.mjs', '.js', '.json'];
 // Runtime data files a helper reads at execution time (not via `import`),
@@ -594,6 +607,37 @@ if (import.meta.main) {
   process.stdout.write(`${JSON.stringify(manifest, null, 2)}\n`);
 }
 
+/**
+ * Resolve `targetRoot`'s configured `helperRuntime.packageSpec`
+ * (idd-skill#1731), so `buildHelperRuntimeManifest` can reflect a
+ * repository-pinned tarball/mirror in its `ephemeral-npx` (and
+ * `package-manager`) command catalog even when the caller passes no
+ * explicit `--package-spec`. Returns `''` (meaning: fall back to
+ * `DEFAULT_PACKAGE_SPEC`) when no candidate config file exists, the first
+ * present one is not valid JSON, `helperRuntime` is absent/invalid, or no
+ * `packageSpec` is configured -- the same fail-closed default as an
+ * unrecognized `helperRuntime.profile`.
+ */
+function resolveConfiguredPackageSpec(targetRoot: string): string {
+  for (const file of LIVE_CONFIG_CANDIDATE_FILES) {
+    const absolutePath = resolve(targetRoot, file);
+    if (!existsSync(absolutePath)) {
+      continue;
+    }
+    let config: unknown;
+    try {
+      config = JSON.parse(readFileSync(absolutePath, 'utf8'));
+    } catch {
+      return '';
+    }
+    const helperRuntime = inspectHelperRuntimeConfig(config);
+    return helperRuntime.status === 'ok'
+      ? (helperRuntime.packageSpec ?? '')
+      : '';
+  }
+  return '';
+}
+
 export function buildHelperRuntimeManifest({
   profile = '',
   fromProfile = '',
@@ -612,7 +656,13 @@ export function buildHelperRuntimeManifest({
   const normalizedProfile = normalizeProfile(profile);
   const normalizedFromProfile = normalizeOptionalProfile(fromProfile);
   const normalizedTargetRoot = targetRoot || process.cwd();
-  const normalizedPackageSpec = normalizePackageSpec(packageSpec);
+  // Precedence: explicit --package-spec > configured helperRuntime.packageSpec
+  // > DEFAULT_PACKAGE_SPEC (idd-skill#1731). normalizePackageSpec's own `||
+  // DEFAULT_PACKAGE_SPEC` fallback is unchanged; this only widens what feeds
+  // its left-hand side before that fallback applies.
+  const normalizedPackageSpec = normalizePackageSpec(
+    packageSpec || resolveConfiguredPackageSpec(normalizedTargetRoot),
+  );
   const recommendation = recommendHelperRuntimeProfile(normalizedTargetRoot);
   const normalizedPackageManager = normalizePackageManager(
     packageManager || detectPackageManager(normalizedTargetRoot),

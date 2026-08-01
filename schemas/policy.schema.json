@@ -145,6 +145,11 @@
             "instructions-only"
           ],
           "description": "Selects which helper-runtime import surface this repository uses. Required within this object; the whole `helperRuntime` key defaults to the instructions-only fallback when absent."
+        },
+        "packageSpec": {
+          "type": "string",
+          "description": "Optional pinned npm spec, tarball URL, or reviewed commit archive for ephemeral-npx and package-manager helper invocations. Absent falls back to the mutable main archive URL. Restricted to a shell-safe character set (letters, digits, and @:/_.+^#%-) because the value is embedded unquoted into copy-pasteable shell command text; shell metacharacters such as ; & | $ backticks quotes and spaces are rejected to prevent corrupting or injecting into that command.",
+          "pattern": "^[A-Za-z0-9@:/_.+^#%-]+$"
         }
       }
     },

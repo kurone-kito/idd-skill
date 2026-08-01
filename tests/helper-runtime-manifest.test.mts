@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import {
   existsSync,
+  mkdirSync,
   mkdtempSync,
   readdirSync,
   readFileSync,
@@ -821,4 +822,77 @@ test('resolveHelperCommandForProfile returns null for an unknown helper id or pr
     }),
     null,
   );
+});
+
+test('buildHelperRuntimeManifest falls back to a configured helperRuntime.packageSpec when no --package-spec is passed (idd-skill#1731)', () => {
+  const dir = mkdtempSync(
+    join(tmpdir(), 'idd-helper-runtime-manifest-configured-spec-'),
+  );
+  mkdirSync(join(dir, '.github/idd'), { recursive: true });
+  writeFileSync(
+    join(dir, '.github/idd/config.json'),
+    JSON.stringify({
+      helperRuntime: {
+        profile: 'ephemeral-npx',
+        packageSpec: 'https://example.com/pinned-idd-skill.tgz',
+      },
+    }),
+  );
+
+  const manifest = buildHelperRuntimeManifest({ targetRoot: dir });
+  assert.equal(
+    manifest.packageSpec,
+    'https://example.com/pinned-idd-skill.tgz',
+  );
+  assert.equal(
+    manifest.profiles['ephemeral-npx'].commands['idd:audit-pr-cleanup'],
+    'npx --yes --package https://example.com/pinned-idd-skill.tgz idd-audit-pr-cleanup',
+  );
+});
+
+test('buildHelperRuntimeManifest lets an explicit --package-spec win over a configured one', () => {
+  const dir = mkdtempSync(
+    join(tmpdir(), 'idd-helper-runtime-manifest-explicit-wins-'),
+  );
+  mkdirSync(join(dir, '.github/idd'), { recursive: true });
+  writeFileSync(
+    join(dir, '.github/idd/config.json'),
+    JSON.stringify({
+      helperRuntime: {
+        profile: 'ephemeral-npx',
+        packageSpec: 'https://example.com/pinned-idd-skill.tgz',
+      },
+    }),
+  );
+
+  const manifest = buildHelperRuntimeManifest({
+    targetRoot: dir,
+    packageSpec: 'https://example.com/cli-flag-wins.tgz',
+  });
+  assert.equal(manifest.packageSpec, 'https://example.com/cli-flag-wins.tgz');
+});
+
+test('buildHelperRuntimeManifest falls back to the default package spec when no config or flag pins one', () => {
+  const dir = mkdtempSync(
+    join(tmpdir(), 'idd-helper-runtime-manifest-no-pin-'),
+  );
+  const manifest = buildHelperRuntimeManifest({ targetRoot: dir });
+  assert.equal(manifest.packageSpec, DEFAULT_PACKAGE_SPEC);
+});
+
+test('buildHelperRuntimeManifest also reads a configured packageSpec from the legacy idd-policy.json path', () => {
+  const dir = mkdtempSync(
+    join(tmpdir(), 'idd-helper-runtime-manifest-legacy-spec-'),
+  );
+  writeFileSync(
+    join(dir, 'idd-policy.json'),
+    JSON.stringify({
+      helperRuntime: {
+        profile: 'ephemeral-npx',
+        packageSpec: 'https://mirror.example/idd-skill.tgz',
+      },
+    }),
+  );
+  const manifest = buildHelperRuntimeManifest({ targetRoot: dir });
+  assert.equal(manifest.packageSpec, 'https://mirror.example/idd-skill.tgz');
 });

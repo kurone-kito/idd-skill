@@ -42,6 +42,7 @@ import {
   parseThresholdsProseHours,
   readWorktreeGuardBranchPatterns,
   readWorktreeGuardEnabled,
+  resolveConfiguredHelperRuntimePackageSpec,
   resolveConfiguredHelperRuntimeProfile,
   scanFileForPlaceholders,
   stripMarkdownNonText,
@@ -1132,6 +1133,96 @@ test('resolveConfiguredHelperRuntimeProfile never falls through a present canoni
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test('resolveConfiguredHelperRuntimePackageSpec reads a configured pin, defaults to empty otherwise (idd-skill#1731)', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'idd-doctor-helper-package-spec-'));
+  try {
+    // No config file at all.
+    assert.equal(resolveConfiguredHelperRuntimePackageSpec(dir), '');
+
+    // profile configured, no packageSpec -- still empty (fall back to
+    // the default archive URL), not an error.
+    mkdirSync(join(dir, '.github/idd'), { recursive: true });
+    writeFileSync(
+      join(dir, '.github/idd/config.json'),
+      JSON.stringify({ helperRuntime: { profile: 'ephemeral-npx' } }),
+    );
+    assert.equal(resolveConfiguredHelperRuntimePackageSpec(dir), '');
+
+    // Configured pin is read back verbatim.
+    writeFileSync(
+      join(dir, '.github/idd/config.json'),
+      JSON.stringify({
+        helperRuntime: {
+          profile: 'ephemeral-npx',
+          packageSpec: 'https://example.com/pinned-idd-skill.tgz',
+        },
+      }),
+    );
+    assert.equal(
+      resolveConfiguredHelperRuntimePackageSpec(dir),
+      'https://example.com/pinned-idd-skill.tgz',
+    );
+
+    // Malformed JSON fails closed to empty, same as the profile resolver.
+    writeFileSync(join(dir, '.github/idd/config.json'), '{ not json');
+    assert.equal(resolveConfiguredHelperRuntimePackageSpec(dir), '');
+
+    // An invalid packageSpec (whitespace) fails the whole helperRuntime
+    // block closed to empty, mirroring an invalid profile.
+    writeFileSync(
+      join(dir, '.github/idd/config.json'),
+      JSON.stringify({
+        helperRuntime: { profile: 'ephemeral-npx', packageSpec: 'has space' },
+      }),
+    );
+    assert.equal(resolveConfiguredHelperRuntimePackageSpec(dir), '');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('resolveConfiguredHelperRuntimePackageSpec also reads the legacy idd-policy.json path', () => {
+  const dir = mkdtempSync(
+    join(tmpdir(), 'idd-doctor-helper-package-spec-legacy-'),
+  );
+  try {
+    writeFileSync(
+      join(dir, 'idd-policy.json'),
+      JSON.stringify({
+        helperRuntime: {
+          profile: 'package-manager',
+          packageSpec: 'https://mirror.example/idd-skill.tgz',
+        },
+      }),
+    );
+    assert.equal(
+      resolveConfiguredHelperRuntimePackageSpec(dir),
+      'https://mirror.example/idd-skill.tgz',
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('formatCleanupBacklogRemediation uses a configured packageSpec under ephemeral-npx (idd-skill#1731)', () => {
+  assert.equal(
+    formatCleanupBacklogRemediation(
+      'ephemeral-npx',
+      'https://example.com/pinned-idd-skill.tgz',
+    ),
+    'Remediation: see docs/idd-comment-minimization.md or run `npx --yes --package https://example.com/pinned-idd-skill.tgz idd-audit-pr-cleanup --pr <N> --apply --skip-claim-check`.',
+  );
+
+  // Absent packageSpec keeps the pre-#1731 default-archive-URL behavior.
+  const defaultText = formatCleanupBacklogRemediation('ephemeral-npx');
+  assert.match(defaultText, /\bnpx --yes --package \S+ idd-audit-pr-cleanup /);
+  assert.doesNotMatch(
+    defaultText,
+    /pinned-idd-skill\.tgz/,
+    'no configured pin should fall back to the default archive URL',
+  );
 });
 
 test('computeWindowStartIso returns null for windows that overflow Date range', () => {

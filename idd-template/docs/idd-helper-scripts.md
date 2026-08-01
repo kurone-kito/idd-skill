@@ -570,7 +570,14 @@ Node.js helper path.
   <helper-package-spec> idd-*` commands without copying helper files
   into the repository. The default helper package spec is an HTTPS
   archive URL, and `--package-spec` lets adopters pin a reviewed tarball
-  or mirror URL explicitly.
+  or mirror URL explicitly. Persist that same pin in
+  `.github/idd/config.json` as the optional `helperRuntime.packageSpec`
+  field so it is reflected consistently in every helper-emitted
+  `ephemeral-npx` invocation string (including the manifest CLI's own
+  default and idd-doctor's remediation hints), not only a one-shot
+  `--package-spec` flag on a single invocation. An explicit
+  `--package-spec` flag still wins over the configured value when both
+  are present.
 - `instructions-only`: keep helper dependencies, helper files, and helper
   wrapper scripts out of the target repository entirely.
 

@@ -633,6 +633,121 @@ test('helper runtime inspection accepts absent and supported profiles, rejects u
   );
 });
 
+test('helper runtime inspection accepts an optional pinned packageSpec and rejects a malformed one (idd-skill#1731)', () => {
+  assert.deepEqual(
+    inspectHelperRuntimeConfig({
+      helperRuntime: {
+        profile: 'ephemeral-npx',
+        packageSpec: 'https://example.com/pinned-idd-skill.tgz',
+      },
+    }),
+    {
+      status: 'ok',
+      profile: 'ephemeral-npx',
+      packageSpec: 'https://example.com/pinned-idd-skill.tgz',
+    },
+  );
+  // Absent packageSpec keeps the exact pre-#1731 result shape -- no
+  // packageSpec key at all, not an empty string -- so every existing
+  // profile-only assert.deepEqual case above is unaffected.
+  assert.deepEqual(
+    inspectHelperRuntimeConfig({
+      helperRuntime: {
+        profile: 'instructions-only',
+      },
+    }),
+    {
+      status: 'ok',
+      profile: 'instructions-only',
+    },
+  );
+  assert.deepEqual(
+    inspectHelperRuntimeConfig({
+      helperRuntime: {
+        profile: 'ephemeral-npx',
+        packageSpec: '',
+      },
+    }),
+    {
+      status: 'invalid',
+      reason:
+        'helperRuntime.packageSpec must be a non-empty string using only shell-safe characters (letters, digits, and @:/_.+^#%-)',
+    },
+  );
+  assert.deepEqual(
+    inspectHelperRuntimeConfig({
+      helperRuntime: {
+        profile: 'ephemeral-npx',
+        packageSpec: 'has a space',
+      },
+    }),
+    {
+      status: 'invalid',
+      reason:
+        'helperRuntime.packageSpec must be a non-empty string using only shell-safe characters (letters, digits, and @:/_.+^#%-)',
+    },
+  );
+  assert.deepEqual(
+    inspectHelperRuntimeConfig({
+      helperRuntime: {
+        profile: 'ephemeral-npx',
+        packageSpec: 42,
+      },
+    }),
+    {
+      status: 'invalid',
+      reason:
+        'helperRuntime.packageSpec must be a non-empty string using only shell-safe characters (letters, digits, and @:/_.+^#%-)',
+    },
+  );
+});
+
+test('helper runtime inspection rejects a shell-metacharacter packageSpec and accepts realistic npm/github/URL specs (idd-skill#1803)', () => {
+  // A whitespace-free but shell-unsafe spec must still be rejected -- a
+  // bare "no whitespace" check would have let this through, but the value
+  // is embedded raw/unquoted into copy-pasteable shell command text
+  // (`npx --package <spec> ...`), so `;`, `&`, `|`, `$`, backticks,
+  // quotes, and parens must all be rejected too.
+  for (const maliciousSpec of [
+    'pkg;touch /tmp/pwned',
+    'pkg&&touch',
+    'pkg|touch',
+    'pkg`touch`',
+    'pkg$(touch)',
+    "pkg'touch'",
+    'pkg"touch"',
+    'pkg(touch)',
+  ]) {
+    assert.deepEqual(
+      inspectHelperRuntimeConfig({
+        helperRuntime: { profile: 'ephemeral-npx', packageSpec: maliciousSpec },
+      }),
+      {
+        status: 'invalid',
+        reason:
+          'helperRuntime.packageSpec must be a non-empty string using only shell-safe characters (letters, digits, and @:/_.+^#%-)',
+      },
+      `expected ${JSON.stringify(maliciousSpec)} to be rejected`,
+    );
+  }
+
+  // Realistic specs stay accepted: npm scoped package + version, npm
+  // github-shorthand with a tag/ref, and an HTTPS tarball URL.
+  for (const realisticSpec of [
+    '@kurone-kito/idd-skill@1.2.3',
+    'github:kurone-kito/idd-skill#v1.0.0',
+    'https://codeload.github.com/kurone-kito/idd-skill/tar.gz/refs/heads/main',
+  ]) {
+    assert.deepEqual(
+      inspectHelperRuntimeConfig({
+        helperRuntime: { profile: 'ephemeral-npx', packageSpec: realisticSpec },
+      }),
+      { status: 'ok', profile: 'ephemeral-npx', packageSpec: realisticSpec },
+      `expected ${JSON.stringify(realisticSpec)} to be accepted`,
+    );
+  }
+});
+
 test('policy normalization provides default-safe values and supports aliases', () => {
   assert.deepEqual(normalizePolicyConfig(null), {
     issueScope: 'roadmap-first',
