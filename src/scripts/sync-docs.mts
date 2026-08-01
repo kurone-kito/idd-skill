@@ -98,11 +98,20 @@ let repoFilesCache: string[] | null = null;
 // Lazy: only shelled out to when a block actually falls back to
 // sourceGlobs (today's manifest sets `paths` on every entry), so a normal
 // run with no sourceGlobs-only blocks never pays for this git call.
+//
+// Deliberately omits `--full-name`: `sourceGlobs` patterns are written
+// relative to `root` (the nearest `package.json`, not necessarily the
+// git worktree's top level -- e.g. an adopter monorepo with a nested
+// `package.json`), and `git ls-files` without `--full-name` already
+// prints paths relative to its own `cwd`, which is `root` below. Adding
+// `--full-name` would instead force paths relative to the git project
+// top, silently mismatching every `sourceGlobs` pattern whenever `root`
+// differs from that top level (#1748 review).
 function getRepoFiles(): string[] {
   if (!repoFilesCache) {
     const output = execFileSync(
       'git',
-      ['ls-files', '--cached', '--others', '--exclude-standard', '--full-name'],
+      ['ls-files', '--cached', '--others', '--exclude-standard'],
       { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] },
     );
     repoFilesCache = output.split(/\r?\n/).filter(Boolean).sort();
@@ -455,6 +464,15 @@ function resolveBlockFiles(block: GeneratedBlock): string[] {
   // paths-first, sourceGlobs-fallback -- shared with audit-docs.mjs via
   // consistency-helpers.mts's resolveGeneratedBlockFiles (#1703) so the two
   // tools cannot drift on this resolution rule again.
+  //
+  // Known limitation (#1748 review): getRepoFiles() caches a single
+  // git-ls-files snapshot taken before this run's writes are applied
+  // (this script queues every diff, then writes them all at the end). A
+  // sourceGlobs-only block whose pattern would match a file a syncPairs
+  // entry creates in this SAME --apply run won't see that not-yet-written
+  // file until a second --apply pass. No current manifest entry combines
+  // sourceGlobs-only resolution with a same-run syncPairs target this
+  // way; re-running --apply converges if one ever does.
   return resolveGeneratedBlockFiles(block, (pattern) =>
     globFiles(pattern, getRepoFiles()),
   );

@@ -1,6 +1,14 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { readFileSync, rmSync } from 'node:fs';
+import {
+  cpSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
@@ -8,6 +16,8 @@ import { fileURLToPath } from 'node:url';
 import { fixtureEnv, makeScaffoldedSyncRepo } from './test-utils.mts';
 
 const REPO_ROOT = fileURLToPath(new URL('../', import.meta.url));
+const SYNC_DOCS_SCRIPT = join(REPO_ROOT, 'scripts/sync-docs.mjs');
+const SYNC_DOCS_DEPS = ['consistency-helpers.mjs', 'policy-helpers.mjs'];
 
 interface RunResult {
   status: number;
@@ -209,6 +219,62 @@ test('generatedBlock falls back to sourceGlobs when paths is absent, agreeing wi
   rmSync(join(dir, 'scripts'), { recursive: true, force: true });
   const audited = runAuditDocs(dir);
   assert.equal(audited.status, 0, audited.stderr || audited.stdout);
+});
+
+test('sourceGlobs fallback resolves relative to package.json root, not the git worktree top (#1748 review)', (t) => {
+  // Reproduces the adopter-monorepo shape a review comment on #1748
+  // flagged: the git top-level and resolveRepoRoot's nearest-package.json
+  // root are different directories. `git ls-files` must be read relative
+  // to `root` (the package dir), not the git project top, or a
+  // sourceGlobs-only block silently resolves to an empty list here.
+  const gitRoot = mkdtempSync(join(tmpdir(), 'sync-docs-monorepo-'));
+  t.after(() => rmSync(gitRoot, { recursive: true, force: true }));
+  execFileSync('git', ['init', '--quiet'], { cwd: gitRoot, env: fixtureEnv() });
+
+  const pkgDir = join(gitRoot, 'pkg');
+  mkdirSync(join(pkgDir, 'scripts'), { recursive: true });
+  mkdirSync(join(pkgDir, 'content'), { recursive: true });
+  cpSync(SYNC_DOCS_SCRIPT, join(pkgDir, 'scripts', 'sync-docs.mjs'));
+  for (const dep of SYNC_DOCS_DEPS) {
+    cpSync(join(REPO_ROOT, 'scripts', dep), join(pkgDir, 'scripts', dep));
+  }
+  writeFileSync(join(pkgDir, 'package.json'), '{}\n', 'utf8');
+  mkdirSync(join(pkgDir, 'audit'), { recursive: true });
+  writeFileSync(
+    join(pkgDir, 'audit', 'sync-manifest.json'),
+    JSON.stringify({
+      generatedBlocks: [
+        {
+          id: 'blk',
+          file: 'doc.md',
+          language: 'text',
+          sourceGlobs: ['content/*.md'],
+        },
+      ],
+    }),
+    'utf8',
+  );
+  writeFileSync(join(pkgDir, 'doc.md'), blockFixture('blk'), 'utf8');
+  writeFileSync(join(pkgDir, 'content', 'a.md'), '# a\n', 'utf8');
+
+  const applied = execFileSync(
+    process.execPath,
+    [join(pkgDir, 'scripts', 'sync-docs.mjs'), '--apply'],
+    {
+      cwd: pkgDir,
+      env: fixtureEnv(),
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+    },
+  );
+  assert.match(applied, /Synced 1 file\(s\)\./);
+
+  const doc = readFileSync(join(pkgDir, 'doc.md'), 'utf8');
+  // Before the #1748 review fix, `--full-name` made this resolve to the
+  // empty list (the glob-matched file's git-top-relative path,
+  // "pkg/content/a.md", never matched the root-relative "content/*.md"
+  // pattern).
+  assert.match(doc, /```text\ncontent\/a\.md\n```/);
 });
 
 test('shell-file-list rewrites the "for FILE in" block from its source generatedBlock', (t) => {

@@ -158,16 +158,21 @@ function writeScaffoldedFile(dir: string, rel: string, content: string): void {
 
 /**
  * A sanitized environment for spawning `git` (or a script that itself
- * shells out to `git ls-files`) against a temp fixture repo. Strips every
- * ambient `GIT_*` variable a caller running inside a git hook may have
- * exported (which would otherwise point the fixture's `git` invocations at
- * the *host* repository instead of the temp fixture despite `cwd` being
- * set correctly) and pins `core.excludesFile` to `/dev/null` so an
- * operator's personal global ignore file can never drop fixture paths
- * from `git ls-files --exclude-standard`. Shared by every suite that
- * scaffolds a git-backed fixture (originally local to
- * `audit-docs-file-sets.test.mts`; lifted out for `sync-docs.test.mts` too
- * per #1703, so the sanitization logic itself has one copy).
+ * shells out to `git ls-files`) against a temp fixture repo. Deletes the
+ * repo-location override variables (`GIT_DIR`, `GIT_INDEX_FILE`,
+ * `GIT_WORK_TREE`, `GIT_COMMON_DIR`, `GIT_OBJECT_DIRECTORY`) a caller
+ * running inside a git hook may have exported -- which would otherwise
+ * point the fixture's `git` invocations at the *host* repository instead
+ * of the temp fixture despite `cwd` being set correctly -- and every
+ * ambient `GIT_CONFIG*` variable, replacing them with a fixed
+ * `GIT_CONFIG_COUNT`/`KEY`/`VALUE` triple that pins `core.excludesFile`
+ * to `os.devNull` (the platform null device, not necessarily the literal
+ * path `/dev/null`) so an operator's personal global ignore file can
+ * never drop fixture paths from `git ls-files --exclude-standard`. Other
+ * `GIT_*` variables outside these two groups are left untouched. Shared
+ * by every suite that scaffolds a git-backed fixture (originally local
+ * to `audit-docs-file-sets.test.mts`; lifted out for `sync-docs.test.mts`
+ * too per #1703, so the sanitization logic itself has one copy).
  */
 export function fixtureEnv(): NodeJS.ProcessEnv {
   const env = { ...process.env };
