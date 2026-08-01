@@ -1,3 +1,10 @@
+---
+type: investigation
+title: "Investigation: Skills-Based On-Demand Delivery of IDD Phase Instructions"
+description: Records the findings and recommendation on whether to deliver IDD phase instructions as on-demand skill bundles.
+tags: [investigation, skills-delivery]
+---
+
 # Investigation: Skills-Based On-Demand Delivery of IDD Phase Instructions
 
 This document records the findings and recommendation for

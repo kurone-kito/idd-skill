@@ -1,3 +1,10 @@
+---
+type: design
+title: GitHub Pages Readiness Strategy
+description: Records the low-cost path and deferred decisions for turning the docs reference manual into a public GitHub Pages site.
+tags: [github-pages, docs-strategy]
+---
+
 # GitHub Pages Readiness Strategy
 
 This page records the low-cost path for turning the `docs/` reference

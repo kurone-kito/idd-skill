@@ -1,3 +1,10 @@
+---
+type: design
+title: AI tooling strategy
+description: Explains why this repository prioritizes GitHub Copilot and how the other agent compatibility entry files should stay in sync with it.
+tags: [ai-strategy, copilot]
+---
+
 # AI tooling strategy
 
 This repository currently prioritizes GitHub Copilot because it

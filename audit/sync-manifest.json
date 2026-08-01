@@ -828,30 +828,19 @@
         "investigation",
         "tutorial"
       ],
-      "exemptPaths": [
-        "docs/ai-strategy.md",
-        "docs/claude-skill-strategy.md",
-        "docs/harness-orchestrated-execution-investigation.md",
-        "docs/issue-authoring-skill.md",
-        "docs/pages-strategy.md",
-        "docs/positioning.md",
-        "docs/pr-cleanup-backlog-batch-001.md",
-        "docs/skills-delivery-investigation.md",
-        "docs/stalled-session-quiet-check.md",
-        "docs/typescript-sources.md",
-        "docs/weak-model-authoring-lite-profile-design.md",
-        "docs/weak-model-lite-profile-design.md",
-        "docs/workshop/assets/recordings/README.md",
-        "docs/workshop/bonus-defang-deployment.md",
-        "docs/workshop/LOG-FORMAT.md",
-        "docs/workshop/log-segments/01-bootstrap.md",
-        "docs/workshop/log-segments/02-infrastructure.md",
-        "docs/workshop/log-segments/03-data-layer.md",
-        "docs/workshop/log-segments/04-backend-api.md",
-        "docs/workshop/log-segments/05-frontend-quality.md",
-        "docs/workshop/README.md",
-        "docs/workshop/workshop-log.md"
-      ]
+      "exemptPaths": []
     }
-  ]
+  ],
+  "markdownLinkAudit": {
+    "id": "markdown-link-audit",
+    "_comment": "Intra-repo markdown link/anchor audit (#1697): resolves every relative markdown link's target file and #fragment against the target's actual GitHub-slugged headings, preventing the dead-anchor drift class #1696 fixed by hand. Runs unconditionally (not changed-file-scoped), since a heading rename in one file orphans inbound anchors in files a PR never touches. Links from idd-template/** are resolved in template context: a relative link that escapes templateRoot is flagged even when the target happens to exist in the source repo tree, since adopters only receive the idd-template/ subtree. External http(s)/mailto/tel links are out of scope (no network I/O). See audit/README.md for the suppression-comment escape hatch.",
+    "globs": [
+      "docs/**/*.md",
+      "idd-template/**/*.md",
+      ".github/instructions/**/*.md",
+      "skills/**/*.md",
+      "*.md"
+    ],
+    "templateRoot": "idd-template/"
+  }
 }

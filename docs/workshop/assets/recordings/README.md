@@ -1,3 +1,10 @@
+---
+type: reference
+title: Workshop Recording Toolchain
+description: Explains how to store and reproduce source tapes for workshop terminal recordings.
+tags: [workshop, recordings]
+---
+
 # Workshop Recording Toolchain
 
 This directory stores source tapes for workshop terminal recordings.
