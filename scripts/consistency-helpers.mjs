@@ -907,6 +907,82 @@ export function collectDuplicateSyncPairTargets(syncPairs) {
   }
   return violations;
 }
+/**
+ * Parses `^<low>.<x>.<y> || >=<high>.<x>.<y>` -- the only shape this
+ * repository's `engines.node` has ever used -- into its two version
+ * bounds. Returns null when the range doesn't match that exact shape
+ * (fail closed rather than guess at a different range grammar).
+ */
+function parseTwoClauseEnginesRange(engines) {
+  const match = /^\^(\d+\.\d+\.\d+)\s*\|\|\s*>=(\d+\.\d+\.\d+)$/.exec(
+    engines.trim(),
+  );
+  return match ? { low: match[1], high: match[2] } : null;
+}
+export function collectEnginesRangeMirrorViolations(
+  enginesNode,
+  mirrors,
+  readText,
+) {
+  const engines = typeof enginesNode === 'string' ? enginesNode.trim() : '';
+  if (!engines) {
+    return [
+      'engines-range-mirrors: package.json engines.node is missing or not a string',
+    ];
+  }
+  const bounds = parseTwoClauseEnginesRange(engines);
+  const violations = [];
+  if (!bounds) {
+    violations.push(
+      `engines-range-mirrors: engines.node "${engines}" does not match the expected "^<low> || >=<high>" shape; cannot verify mirrors`,
+    );
+  }
+  for (const mirror of mirrors) {
+    let text;
+    try {
+      text = readText(mirror.file);
+    } catch {
+      violations.push(
+        `engines-range-mirrors: ${mirror.file}: could not be read`,
+      );
+      continue;
+    }
+    switch (mirror.mode) {
+      case 'full-range':
+        if (!text.includes(engines)) {
+          violations.push(
+            `engines-range-mirrors: ${mirror.file} does not contain the current engines.node range "${engines}"`,
+          );
+        }
+        break;
+      case 'components':
+        if (
+          bounds &&
+          (!text.includes(bounds.low) || !text.includes(bounds.high))
+        ) {
+          violations.push(
+            `engines-range-mirrors: ${mirror.file} does not mention both engines.node bounds "${bounds.low}" and "${bounds.high}"`,
+          );
+        }
+        break;
+      case 'low-bound-line':
+        if (bounds && text.trim() !== bounds.low) {
+          violations.push(
+            `engines-range-mirrors: ${mirror.file} pins "${text.trim()}", expected the engines.node low bound "${bounds.low}"`,
+          );
+        }
+        break;
+      case 'low-bound-contains':
+        if (bounds && !text.includes(bounds.low)) {
+          violations.push(
+            `engines-range-mirrors: ${mirror.file} does not mention the engines.node low bound "${bounds.low}"`,
+          );
+        }
+        break;
+    }
+  }
+  return violations;
+}
 export function uniqueSorted(values) {
   return [...new Set(values)].sort((left, right) => left.localeCompare(right));
 }
