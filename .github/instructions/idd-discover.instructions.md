@@ -348,7 +348,7 @@ apply this decision tree — do not silently expand scope:
    filtered out): report each candidate and the filter criterion it
    failed, then proceed to step 5.
 
-   See [Discover — A3 Diagnostic](../../docs/idd-design-rationale.md#a3---diagnostic-all-candidates-blocked-by-an-open-roadmap)
+   See [Discover — A3 Diagnostic](../../docs/idd-design-rationale.md#a3--diagnostic-all-candidates-blocked-by-an-open-roadmap)
    for the marker-misuse pattern this case typically indicates.
 
 5. **Request explicit opt-in** — ask the operator: "No roadmap-scoped
@@ -605,7 +605,7 @@ roadmap.** Sub-tasks that should be worked on while the roadmap is open
 belong in the roadmap's task list as `- [ ] #NNN` entries; `blocked-by`
 is reserved for issues that must wait for a separate, prior roadmap to
 close (cross-phase sequential dependency) — see the
-[A3 diagnostic](../../docs/idd-design-rationale.md#a3---diagnostic-all-candidates-blocked-by-an-open-roadmap)
+[A3 diagnostic](../../docs/idd-design-rationale.md#a3--diagnostic-all-candidates-blocked-by-an-open-roadmap)
 for the resulting deadlock pattern.
 
 ## Scope invariant (summary)

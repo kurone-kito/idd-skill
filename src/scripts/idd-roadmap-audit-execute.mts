@@ -18,8 +18,6 @@
 // work is NEVER closed.
 
 import { execFileSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
 import { parseCliArgs } from './cli-args.mts';
 import {
   buildIssueLoader,
@@ -30,6 +28,7 @@ import {
   type RoadmapGraphReport,
 } from './discover-roadmap-graph.mts';
 import { GH_TEXT_LOOP_OPTIONS, ghText } from './gh-exec.mts';
+import { loadPolicyConfig } from './idd-config.mts';
 import { normalizePolicyConfig, POLICY_DEFAULTS } from './policy-helpers.mts';
 import type { ClaimValidationSummary } from './protocol-helpers.mts';
 import {
@@ -1472,19 +1471,15 @@ function postIssueComment(
   );
 }
 
+// Read-and-parse failure semantics (explicit path throws; default path
+// silently falls back only on ENOENT) are converged in idd-config.mts's
+// loadPolicyConfig (#1721). The `?? {}` preserves this helper's existing
+// contract of always returning a plain object: callers below dereference
+// fields off the returned value via a non-optional-chained `rawConfig as
+// {...}` cast, so a bare `null` on the "no config" default-path case would
+// throw downstream.
 function loadPolicy(policyPath: string): unknown {
-  const targetPath = policyPath
-    ? resolve(process.cwd(), policyPath)
-    : resolve(process.cwd(), '.github/idd/config.json');
-  try {
-    return JSON.parse(readFileSync(targetPath, 'utf8'));
-  } catch (error) {
-    if (!policyPath) {
-      return {};
-    }
-    const detail = error instanceof Error ? error.message : String(error);
-    throw new Error(`failed to load policy from ${targetPath}: ${detail}`);
-  }
+  return loadPolicyConfig(policyPath).config ?? {};
 }
 
 function normalizeMarkerPrefix(markerPrefix: unknown): string {
@@ -1581,8 +1576,8 @@ function parsePositiveIntegerOrNull(
 
 function printHelp(): void {
   process.stdout.write(`Usage:
-  node scripts/idd-roadmap-audit-execute.mjs --roadmap <number> [--owner <owner>] [--repo <repo>] [--policy <path>]
-  node scripts/idd-roadmap-audit-execute.mjs --roadmap <number> --claim-id <claim-id> [--claim-issue <number>] [--agent-id <agent-id>] [--owner <owner>] [--repo <repo>] [--policy <path>] [--apply]
+  node scripts/idd-roadmap-audit-execute.mjs --roadmap <number> [--owner <owner>] [--repo <repo>] [--policy <path>] [--now <ISO8601>]
+  node scripts/idd-roadmap-audit-execute.mjs --roadmap <number> --claim-id <claim-id> [--claim-issue <number>] [--agent-id <agent-id>] [--owner <owner>] [--repo <repo>] [--policy <path>] [--now <ISO8601>] [--apply]
 
   Default (no --apply): dry-run. Evaluates A1.5 roadmap completion via the
   read-only discover-roadmap-graph traversal and prints { ready, blockers,

@@ -1,10 +1,23 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
+import {
+  cpSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
+import { fileURLToPath } from 'node:url';
 
-import { makeScaffoldedSyncRepo } from './test-utils.mts';
+import { fixtureEnv, makeScaffoldedSyncRepo } from './test-utils.mts';
+
+const REPO_ROOT = fileURLToPath(new URL('../', import.meta.url));
+const SYNC_DOCS_SCRIPT = join(REPO_ROOT, 'scripts/sync-docs.mjs');
+const SYNC_DOCS_DEPS = ['consistency-helpers.mjs', 'policy-helpers.mjs'];
 
 interface RunResult {
   status: number;
@@ -21,7 +34,39 @@ function run(dir: string, ...args: string[]): RunResult {
     const stdout = execFileSync(
       process.execPath,
       [join(dir, 'scripts', 'sync-docs.mjs'), ...args],
-      { cwd: dir, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] },
+      {
+        cwd: dir,
+        env: fixtureEnv(),
+        encoding: 'utf8',
+        stdio: ['ignore', 'pipe', 'pipe'],
+      },
+    );
+    return { status: 0, stdout, stderr: '' };
+  } catch (error) {
+    const e = error as { status?: unknown; stdout?: unknown; stderr?: unknown };
+    return {
+      status: typeof e.status === 'number' ? e.status : 1,
+      stdout: typeof e.stdout === 'string' ? e.stdout : '',
+      stderr: typeof e.stderr === 'string' ? e.stderr : '',
+    };
+  }
+}
+
+// Runs the REAL repo's built audit-docs.mjs (not copied into the fixture,
+// following audit-docs-file-sets.test.mts's pattern) against the fixture
+// dir as its cwd -- used to prove sync-docs and audit-docs agree on a
+// sourceGlobs-only block's resolved content (#1703 acceptance criterion 1).
+function runAuditDocs(dir: string): RunResult {
+  try {
+    const stdout = execFileSync(
+      process.execPath,
+      [join(REPO_ROOT, 'scripts', 'audit-docs.mjs'), '--check'],
+      {
+        cwd: dir,
+        env: fixtureEnv(),
+        encoding: 'utf8',
+        stdio: ['ignore', 'pipe', 'pipe'],
+      },
     );
     return { status: 0, stdout, stderr: '' };
   } catch (error) {
@@ -72,6 +117,113 @@ test('exact syncPair: --check reports drift without writing, --apply writes and 
   const reChecked = run(dir, '--check');
   assert.equal(reChecked.status, 0);
   assert.match(reChecked.stdout, /All mirrored artifacts are up to date\./);
+});
+
+// Commits every currently-written file in `dir` as the repo's initial
+// commit, so a subsequent on-disk edit becomes a genuine *uncommitted*
+// change relative to `git show HEAD:<path>` -- required for #1765's
+// uncommitted-target-edit guard tests, since makeScaffoldedSyncRepo itself
+// only `git init`s the fixture and never commits.
+function commitAll(dir: string): void {
+  const env = {
+    ...fixtureEnv(),
+    GIT_AUTHOR_NAME: 'test',
+    GIT_AUTHOR_EMAIL: 'test@example.com',
+    GIT_COMMITTER_NAME: 'test',
+    GIT_COMMITTER_EMAIL: 'test@example.com',
+  };
+  execFileSync('git', ['add', '-A'], { cwd: dir, env });
+  execFileSync('git', ['commit', '--quiet', '-m', 'init'], { cwd: dir, env });
+}
+
+test('exact syncPair: an uncommitted target edit is protected without --force', (t) => {
+  const dir = makeScaffoldedSyncRepo(
+    (cleanup) => t.after(cleanup),
+    {
+      syncPairs: [
+        {
+          id: 'pair-exact',
+          source: 'src/a.md',
+          target: 'out/a.md',
+          mode: 'exact',
+        },
+      ],
+    },
+    {
+      'src/a.md': 'generated content\n',
+      'out/a.md': 'generated content\n',
+    },
+  );
+  commitAll(dir);
+  // Simulate a mistaken direct edit to the target after the initial commit.
+  writeFileSync(join(dir, 'out/a.md'), 'a local edit worth keeping\n', 'utf8');
+
+  const checked = run(dir, '--check');
+  assert.equal(checked.status, 1);
+  assert.match(checked.stderr, /uncommitted local changes/);
+  assert.match(checked.stderr, /out\/a\.md/);
+  assert.match(checked.stderr, /Pass --force/);
+  // The edit must survive untouched.
+  assert.equal(read(dir, 'out/a.md'), 'a local edit worth keeping\n');
+
+  const applied = run(dir, '--apply');
+  assert.equal(applied.status, 1);
+  assert.equal(read(dir, 'out/a.md'), 'a local edit worth keeping\n');
+});
+
+test('exact syncPair: --force overwrites a protected uncommitted target edit', (t) => {
+  const dir = makeScaffoldedSyncRepo(
+    (cleanup) => t.after(cleanup),
+    {
+      syncPairs: [
+        {
+          id: 'pair-exact',
+          source: 'src/a.md',
+          target: 'out/a.md',
+          mode: 'exact',
+        },
+      ],
+    },
+    {
+      'src/a.md': 'generated content\n',
+      'out/a.md': 'generated content\n',
+    },
+  );
+  commitAll(dir);
+  writeFileSync(join(dir, 'out/a.md'), 'a local edit worth keeping\n', 'utf8');
+
+  const applied = run(dir, '--apply', '--force');
+  assert.equal(applied.status, 0);
+  assert.equal(read(dir, 'out/a.md'), 'generated content\n');
+});
+
+test('exact syncPair: a target that is merely stale (matches its last commit) still syncs silently, no --force needed', (t) => {
+  const dir = makeScaffoldedSyncRepo(
+    (cleanup) => t.after(cleanup),
+    {
+      syncPairs: [
+        {
+          id: 'pair-exact',
+          source: 'src/a.md',
+          target: 'out/a.md',
+          mode: 'exact',
+        },
+      ],
+    },
+    {
+      'src/a.md': 'old generated content\n',
+      'out/a.md': 'old generated content\n',
+    },
+  );
+  commitAll(dir);
+  // The source changes; the target is untouched on disk, so it exactly
+  // matches its last commit -- no uncommitted target edit exists.
+  writeFileSync(join(dir, 'src/a.md'), 'new generated content\n', 'utf8');
+
+  const applied = run(dir, '--apply');
+  assert.equal(applied.status, 0);
+  assert.equal(applied.stderr, '');
+  assert.equal(read(dir, 'out/a.md'), 'new generated content\n');
 });
 
 test('contains and structure syncPair modes are skipped, not generated', (t) => {
@@ -130,9 +282,106 @@ test('generatedBlock resolves explicit paths (prefix-stripped); absent paths ren
   // stripPrefix removed the leading "src/".
   assert.ok(!doc.includes('src/one.mts'), 'prefix should be stripped');
 
-  // resolveBlockFiles uses block.paths only; with no paths the list is empty.
+  // Neither paths nor sourceGlobs is set, so there's nothing to resolve.
   const doc2 = read(dir, 'doc2.md');
   assert.match(doc2, /```text\n\n```/);
+});
+
+test('generatedBlock falls back to sourceGlobs when paths is absent, agreeing with audit-docs.mjs (#1703)', (t) => {
+  const dir = makeScaffoldedSyncRepo(
+    (cleanup) => t.after(cleanup),
+    {
+      generatedBlocks: [
+        {
+          id: 'blk',
+          file: 'doc.md',
+          language: 'text',
+          sourceGlobs: ['content/*.md'],
+        },
+      ],
+    },
+    {
+      'doc.md': blockFixture('blk'),
+      'content/b.md': '# b\n',
+      'content/a.md': '# a\n',
+    },
+  );
+
+  const applied = run(dir, '--apply');
+  assert.equal(applied.status, 0, applied.stderr);
+
+  // Before #1703 this rendered an empty block; the sourceGlobs fallback
+  // now matches both untracked-but-not-ignored files, deduped and sorted.
+  const doc = read(dir, 'doc.md');
+  assert.match(doc, /```text\ncontent\/a\.md\ncontent\/b\.md\n```/);
+
+  // Direct cross-tool parity check: audit-docs.mjs independently resolves
+  // the same sourceGlobs-only block and must see the content sync-docs.mjs
+  // just wrote as already up to date, not stale. Drop the copied
+  // sync-docs.mjs dependency closure first -- those real, banner-carrying
+  // .mjs files trip audit-docs.mjs's unrelated generated-source-pairing
+  // check (their paired .mts sources don't exist in this minimal fixture),
+  // which has nothing to do with the generatedBlocks resolution this test
+  // is about.
+  rmSync(join(dir, 'scripts'), { recursive: true, force: true });
+  const audited = runAuditDocs(dir);
+  assert.equal(audited.status, 0, audited.stderr || audited.stdout);
+});
+
+test('sourceGlobs fallback resolves relative to package.json root, not the git worktree top (#1748 review)', (t) => {
+  // Reproduces the adopter-monorepo shape a review comment on #1748
+  // flagged: the git top-level and resolveRepoRoot's nearest-package.json
+  // root are different directories. `git ls-files` must be read relative
+  // to `root` (the package dir), not the git project top, or a
+  // sourceGlobs-only block silently resolves to an empty list here.
+  const gitRoot = mkdtempSync(join(tmpdir(), 'sync-docs-monorepo-'));
+  t.after(() => rmSync(gitRoot, { recursive: true, force: true }));
+  execFileSync('git', ['init', '--quiet'], { cwd: gitRoot, env: fixtureEnv() });
+
+  const pkgDir = join(gitRoot, 'pkg');
+  mkdirSync(join(pkgDir, 'scripts'), { recursive: true });
+  mkdirSync(join(pkgDir, 'content'), { recursive: true });
+  cpSync(SYNC_DOCS_SCRIPT, join(pkgDir, 'scripts', 'sync-docs.mjs'));
+  for (const dep of SYNC_DOCS_DEPS) {
+    cpSync(join(REPO_ROOT, 'scripts', dep), join(pkgDir, 'scripts', dep));
+  }
+  writeFileSync(join(pkgDir, 'package.json'), '{}\n', 'utf8');
+  mkdirSync(join(pkgDir, 'audit'), { recursive: true });
+  writeFileSync(
+    join(pkgDir, 'audit', 'sync-manifest.json'),
+    JSON.stringify({
+      generatedBlocks: [
+        {
+          id: 'blk',
+          file: 'doc.md',
+          language: 'text',
+          sourceGlobs: ['content/*.md'],
+        },
+      ],
+    }),
+    'utf8',
+  );
+  writeFileSync(join(pkgDir, 'doc.md'), blockFixture('blk'), 'utf8');
+  writeFileSync(join(pkgDir, 'content', 'a.md'), '# a\n', 'utf8');
+
+  const applied = execFileSync(
+    process.execPath,
+    [join(pkgDir, 'scripts', 'sync-docs.mjs'), '--apply'],
+    {
+      cwd: pkgDir,
+      env: fixtureEnv(),
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+    },
+  );
+  assert.match(applied, /Synced 1 file\(s\)\./);
+
+  const doc = readFileSync(join(pkgDir, 'doc.md'), 'utf8');
+  // Before the #1748 review fix, `--full-name` made this resolve to the
+  // empty list (the glob-matched file's git-top-relative path,
+  // "pkg/content/a.md", never matched the root-relative "content/*.md"
+  // pattern).
+  assert.match(doc, /```text\ncontent\/a\.md\n```/);
 });
 
 test('shell-file-list rewrites the "for FILE in" block from its source generatedBlock', (t) => {

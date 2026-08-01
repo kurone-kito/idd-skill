@@ -258,6 +258,27 @@ function normalizeBudgetLimit(value: unknown): number | null {
   return value;
 }
 
+/**
+ * Like {@link normalizeBudgetLimit}, but for a budget field that must be
+ * strictly positive (zero is not a usable instruction-file byte limit) and
+ * that falls back to `defaultValue` only when genuinely absent
+ * (`undefined`) rather than on every falsy/invalid value — a present but
+ * invalid value (a string, `0`, a negative number, a non-integer) is a
+ * manifest authoring error to reject, not silently coerce to the default.
+ */
+function normalizePositiveIntegerBudget(
+  value: unknown,
+  defaultValue: number,
+): number | null {
+  if (value === undefined) {
+    return defaultValue;
+  }
+  if (typeof value !== 'number' || !Number.isInteger(value) || value <= 0) {
+    return null;
+  }
+  return value;
+}
+
 /** Declarative config for the absolute 128K context-ceiling guard. */
 export interface ContextCeilingConfig {
   id?: unknown;
@@ -590,13 +611,22 @@ function regexCanStartAfter(lastCodeChar: string, lastWord: string): boolean {
   return !/[\w$)\]'"`/]/.test(lastCodeChar);
 }
 
-/** Manifest config for the instruction size-budget audit. */
+/**
+ * Manifest config for the instruction size-budget audit. `id`/`glob` come
+ * from a trusted, mechanically-generated section of the manifest, but
+ * `alwaysLoadedPattern`/`alwaysLoadedLimitBytes`/`phaseLimitBytes` are
+ * hand-authored and validated at read time by
+ * `collectInstructionSizeBudgetViolations` below (#1721) — declared
+ * `unknown` here, matching the sibling budget-guard configs in this file
+ * (e.g. `TypeSuppressionBudgetConfig`), so the type system does not imply a
+ * correctness guarantee the JSON source cannot actually make.
+ */
 export interface InstructionSizeBudgetConfig {
   id?: string;
   glob?: string;
-  alwaysLoadedPattern?: string;
-  alwaysLoadedLimitBytes?: number;
-  phaseLimitBytes?: number;
+  alwaysLoadedPattern?: unknown;
+  alwaysLoadedLimitBytes?: unknown;
+  phaseLimitBytes?: unknown;
 }
 
 // ---------------------------------------------------------------------------
@@ -822,11 +852,66 @@ export function collectInstructionSizeBudgetViolations(
     };
   }
 
-  const alwaysLoadedPattern =
-    config.alwaysLoadedPattern ?? 'applyTo:\\s*"\\*\\*"';
-  const alwaysLoadedRegex = new RegExp(alwaysLoadedPattern, 'm');
-  const alwaysLoadedLimitBytes = config.alwaysLoadedLimitBytes ?? 20_000;
-  const phaseLimitBytes = config.phaseLimitBytes ?? 30_000;
+  // `??` only substitutes on null/undefined, so a manifest typo (a string
+  // where a number belongs, a non-positive limit, an unclosed regex group)
+  // used to flow straight through: a non-numeric limit coerced every size
+  // comparison to `NaN`, which is always false, silently passing the guard
+  // it exists to enforce (fail-open); a malformed pattern threw an unhandled
+  // `SyntaxError` from `new RegExp` instead of naming the bad field. Reject
+  // both explicitly, naming the offending field and value (#1721).
+  // `=== undefined` (not `??`) so an explicit `null` in the manifest is
+  // validated and rejected below rather than silently treated the same as
+  // "field not provided" and defaulted -- the same undefined-only-default
+  // distinction normalizePositiveIntegerBudget already makes for the two
+  // limit fields.
+  const alwaysLoadedPatternValue =
+    config.alwaysLoadedPattern === undefined
+      ? 'applyTo:\\s*"\\*\\*"'
+      : config.alwaysLoadedPattern;
+  if (typeof alwaysLoadedPatternValue !== 'string') {
+    return {
+      errors: [
+        `${id}: alwaysLoadedPattern must be a string (got ${JSON.stringify(alwaysLoadedPatternValue)})`,
+      ],
+      notices: [],
+    };
+  }
+  let alwaysLoadedRegex: RegExp;
+  try {
+    alwaysLoadedRegex = new RegExp(alwaysLoadedPatternValue, 'm');
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return {
+      errors: [
+        `${id}: alwaysLoadedPattern ${JSON.stringify(alwaysLoadedPatternValue)} does not compile as a regular expression: ${message}`,
+      ],
+      notices: [],
+    };
+  }
+  const alwaysLoadedLimitBytes = normalizePositiveIntegerBudget(
+    config.alwaysLoadedLimitBytes,
+    20_000,
+  );
+  if (alwaysLoadedLimitBytes === null) {
+    return {
+      errors: [
+        `${id}: alwaysLoadedLimitBytes must be a positive integer (got ${JSON.stringify(config.alwaysLoadedLimitBytes)})`,
+      ],
+      notices: [],
+    };
+  }
+  const phaseLimitBytes = normalizePositiveIntegerBudget(
+    config.phaseLimitBytes,
+    30_000,
+  );
+  if (phaseLimitBytes === null) {
+    return {
+      errors: [
+        `${id}: phaseLimitBytes must be a positive integer (got ${JSON.stringify(config.phaseLimitBytes)})`,
+      ],
+      notices: [],
+    };
+  }
 
   const errors: string[] = [];
   for (const path of listFiles()) {
@@ -892,8 +977,11 @@ export interface DocBudgetGuardConfig {
 export function collectDocBudgetDriftViolations(
   config: DocBudgetGuardConfig | null | undefined,
   sizeBudgets:
-    | readonly { alwaysLoadedLimitBytes?: number; phaseLimitBytes?: number }[]
-    | { alwaysLoadedLimitBytes?: number; phaseLimitBytes?: number }
+    | readonly {
+        alwaysLoadedLimitBytes?: unknown;
+        phaseLimitBytes?: unknown;
+      }[]
+    | { alwaysLoadedLimitBytes?: unknown; phaseLimitBytes?: unknown }
     | null
     | undefined,
   bundleBudgets: readonly { limitBytes?: number | string }[] | undefined,
@@ -992,4 +1080,370 @@ export function collectDuplicateSyncPairTargets(
     seen.add(target);
   }
   return violations;
+}
+
+// --- generatedBlocks file resolution (#1703) --------------------------------
+//
+// sync-docs.mts and audit-docs.mts each independently decided how a
+// `generatedBlocks[]` manifest entry resolves to a file list, and drifted:
+// audit-docs.mts fell back to globbing `sourceGlobs` when `paths` was
+// absent, sync-docs.mts silently returned an empty list. Sharing this one
+// function pins the resolution rule in a single place so the two tools
+// cannot diverge on it again.
+
+export interface GeneratedBlockFileSource {
+  paths?: string[];
+  sourceGlobs?: string[];
+}
+
+export function uniqueSorted(values: string[]): string[] {
+  return [...new Set(values)].sort((left, right) => left.localeCompare(right));
+}
+
+export function globToRegExp(pattern: string): RegExp {
+  let source = '^';
+  for (let index = 0; index < pattern.length; index += 1) {
+    const char = pattern[index];
+    if (char === '*') {
+      if (pattern[index + 1] === '*') {
+        if (pattern[index + 2] === '/') {
+          source += '(?:.*/)?';
+          index += 2;
+        } else {
+          source += '.*';
+          index += 1;
+        }
+      } else {
+        source += '[^/]*';
+      }
+      continue;
+    }
+    source += escapeRegExpChar(char);
+  }
+  return new RegExp(`${source}$`);
+}
+
+function escapeRegExpChar(value: string): string {
+  return value.replace(/[\\^$+?.()|[\]{}]/g, '\\$&');
+}
+
+/** Matches `pattern` against a caller-supplied repo file list. */
+export function globFiles(pattern: string, repoFiles: string[]): string[] {
+  const regex = globToRegExp(pattern);
+  return repoFiles.filter((file) => regex.test(file)).sort();
+}
+
+/**
+ * Resolves a `generatedBlocks[]` entry's file list: the static `paths`
+ * list when present, otherwise every repo file matching `sourceGlobs`
+ * (deduped and sorted). `globFilesFn` is injected so each caller supplies
+ * its own file listing instead of re-implementing the glob walk.
+ */
+export function resolveGeneratedBlockFiles(
+  block: GeneratedBlockFileSource,
+  globFilesFn: (pattern: string) => string[],
+): string[] {
+  if (block.paths) {
+    return [...block.paths];
+  }
+  return uniqueSorted((block.sourceGlobs ?? []).flatMap(globFilesFn));
+}
+
+// --- OKF frontmatter conformance audit (#1680) ------------------------------
+//
+// The parent roadmap (#1685) adopts OKF (Open Knowledge Format v0.1)
+// frontmatter across docs/** and idd-template/docs/**. This track lands the
+// field profile (docs/okf-frontmatter.md) and this fail-closed checker: every
+// `.md` file under a configured `okfBundles[]` root is enforced unless it is
+// a reserved filename (index.md, log.md by default) or listed in that
+// entry's `exemptPaths` -- so a newly added page is covered by default
+// instead of silently skipped.
+
+/** One `okfBundles[]` manifest entry (see audit/sync-manifest.json). */
+export interface OkfBundleConfig {
+  id?: unknown;
+  roots?: unknown;
+  reservedFilenames?: unknown;
+  types?: unknown;
+  exemptPaths?: unknown;
+}
+
+// Anchored at the very start of the file; a frontmatter block anywhere else
+// does not count -- OKF/YAML frontmatter must open the document.
+const OKF_FRONTMATTER_PATTERN = /^---\r?\n([\s\S]*?)\r?\n---\r?\n/;
+// A single `#` immediately followed by whitespace is level 1; `##` and
+// deeper never match because the second `#` is not whitespace. The
+// optional closing sequence requires at least one preceding whitespace
+// character (CommonMark's own ATX closing-sequence rule), so a title that
+// legitimately ends in `#` (e.g. "Guide to C#") keeps that character
+// instead of having it stripped as a false closing sequence.
+const OKF_H1_PATTERN = /^#\s+(.+?)(?:\s+#+)?\s*$/;
+
+/**
+ * Minimal frontmatter-field parser for the OKF conformance checker. Only
+ * supports the shapes the field profile actually uses: a flat `key: value`
+ * scalar (optionally single/double-quoted), an inline list (`key: [a, b]`),
+ * and a block list (`key:` followed by indented `- item` lines). This
+ * repo's OKF frontmatter never needs more than that, so pulling in a full
+ * YAML parser would be unused surface the bare-node boundary does not need
+ * -- mirrors `parseMarkdownlintIgnores`'s reasoning in
+ * audit-code-span-wrap.mts.
+ */
+function parseOkfFrontmatterFields(
+  inner: string,
+): Record<string, string | string[]> {
+  const lines = inner.split('\n');
+  const fields: Record<string, string | string[]> = {};
+  let index = 0;
+  while (index < lines.length) {
+    const keyMatch = /^([A-Za-z_][\w-]*):\s*(.*)$/.exec(lines[index]);
+    if (!keyMatch) {
+      index += 1;
+      continue;
+    }
+    const [, key, rawRest] = keyMatch;
+    const rest = rawRest.trim();
+    if (rest === '') {
+      const items: string[] = [];
+      let cursor = index + 1;
+      while (cursor < lines.length) {
+        // YAML permits a block sequence at the same indentation as its
+        // mapping key (zero-indent), so the leading whitespace before `-`
+        // is optional here -- only requiring `\s+` would silently miss
+        // that valid form and leave `items` empty. The trailing `\s+`
+        // (not `\s*`) keeps a scalar like `-foo` from being misread as a
+        // list item.
+        const itemMatch = /^\s*-\s+(.*)$/.exec(lines[cursor]);
+        if (!itemMatch) {
+          break;
+        }
+        items.push(unquoteOkfScalar(itemMatch[1].trim()));
+        cursor += 1;
+      }
+      fields[key] = items.length > 0 ? items : '';
+      index = cursor > index + 1 ? cursor : index + 1;
+      continue;
+    }
+    if (rest.startsWith('[') && rest.endsWith(']')) {
+      const listInner = rest.slice(1, -1).trim();
+      fields[key] =
+        listInner.length === 0
+          ? []
+          : listInner.split(',').map((item) => unquoteOkfScalar(item.trim()));
+      index += 1;
+      continue;
+    }
+    fields[key] = unquoteOkfScalar(rest);
+    index += 1;
+  }
+  return fields;
+}
+
+function unquoteOkfScalar(value: string): string {
+  if (value.length >= 2) {
+    const first = value[0];
+    const last = value[value.length - 1];
+    if ((first === '"' && last === '"') || (first === "'" && last === "'")) {
+      return value.slice(1, -1);
+    }
+  }
+  return value;
+}
+
+/**
+ * Extract the page's first top-level (`# `) heading text, skipping fenced
+ * code blocks, or `null` when none is present. Mirrors the fence-aware scan
+ * `headingSignature` in audit-docs.mts uses, scoped to the first H1 only --
+ * the OKF `title` field must match exactly this heading.
+ */
+function extractOkfFirstH1(text: string): string | null {
+  let inFence = false;
+  for (const line of text.split('\n')) {
+    if (/^\s*```/.test(line)) {
+      inFence = !inFence;
+      continue;
+    }
+    if (inFence) {
+      continue;
+    }
+    const match = OKF_H1_PATTERN.exec(line);
+    if (match) {
+      return match[1].trim();
+    }
+  }
+  return null;
+}
+
+/**
+ * Check one in-scope page's full text against the OKF field profile.
+ * Returns `null` when it conforms, or a human-readable reason when it does
+ * not -- callers append this to a `${bundleId}: ${file} ${reason}` message.
+ */
+function checkOkfPageConformance(
+  text: string,
+  typeSet: ReadonlySet<string>,
+): string | null {
+  const match = OKF_FRONTMATTER_PATTERN.exec(text);
+  if (!match) {
+    return 'has no parseable YAML frontmatter block';
+  }
+  const fields = parseOkfFrontmatterFields(match[1]);
+  const type = typeof fields.type === 'string' ? fields.type.trim() : '';
+  const title = typeof fields.title === 'string' ? fields.title.trim() : '';
+  const description =
+    typeof fields.description === 'string' ? fields.description.trim() : '';
+  if (!type) {
+    return 'frontmatter is missing a non-empty "type" field';
+  }
+  if (!title) {
+    return 'frontmatter is missing a non-empty "title" field';
+  }
+  if (!description) {
+    return 'frontmatter is missing a non-empty "description" field';
+  }
+  if (!typeSet.has(type)) {
+    return `frontmatter "type: ${type}" is not in the configured types list`;
+  }
+  // Scan only the post-frontmatter body for the H1: a plain (unindented)
+  // YAML comment line inside the frontmatter block, e.g. `# a note`, would
+  // otherwise match the same `# ` heading pattern and be misread as the
+  // page's H1, producing a false "title does not match" failure even when
+  // the real body heading agrees with `title`.
+  const h1 = extractOkfFirstH1(text.slice(match[0].length));
+  if (h1 === null) {
+    return 'has no top-level "# " heading to compare against frontmatter "title"';
+  }
+  if (title !== h1) {
+    return `frontmatter "title: ${title}" does not match the page's "# ${h1}" heading`;
+  }
+  if (Object.hasOwn(fields, 'tags')) {
+    const tags = fields.tags;
+    const isValidTagList =
+      Array.isArray(tags) &&
+      tags.every((tag) => typeof tag === 'string' && tag.trim().length > 0);
+    if (!isValidTagList) {
+      return 'frontmatter "tags" must be a YAML list of non-empty strings';
+    }
+  }
+  return null;
+}
+
+/**
+ * Collect OKF frontmatter conformance violations for every `okfBundles[]`
+ * manifest entry (#1680). Pure (no direct I/O) so it can be unit-tested
+ * with synthetic fixtures; the audit pipeline supplies `repoFiles`,
+ * `listFiles` (bound to the live glob against `repoFiles`), and `readFile`.
+ *
+ * Fail-closed by construction: a file under a configured root is checked
+ * unless it is a reserved filename or already listed in `exemptPaths`, so a
+ * newly added page is enforced by default. `exemptPaths` entries are
+ * themselves validated: an entry naming a file outside every configured
+ * root (missing, mistyped, or never in scope) or a file that now conforms
+ * (a stale exemption a later backfill track forgot to remove) is reported.
+ */
+export function collectOkfFrontmatterViolations(
+  bundles: readonly OkfBundleConfig[] | null | undefined,
+  listFiles: (pattern: string) => string[],
+  readFile: (path: string) => string,
+): string[] {
+  if (!Array.isArray(bundles)) {
+    return [];
+  }
+  const errors: string[] = [];
+  for (const bundle of bundles) {
+    const bundleId = bundle.id;
+    const id =
+      typeof bundleId === 'string' && bundleId.length > 0
+        ? bundleId
+        : 'okf-bundle';
+    const bundleRoots = bundle.roots;
+    const roots = Array.isArray(bundleRoots)
+      ? bundleRoots.filter(
+          (root): root is string => typeof root === 'string' && root.length > 0,
+        )
+      : [];
+    if (roots.length === 0) {
+      errors.push(
+        `${id}: roots must be a non-empty array of directory strings`,
+      );
+      continue;
+    }
+    const bundleTypes = bundle.types;
+    const types = Array.isArray(bundleTypes)
+      ? bundleTypes.filter(
+          (type): type is string => typeof type === 'string' && type.length > 0,
+        )
+      : [];
+    if (types.length === 0) {
+      errors.push(`${id}: types must be a non-empty array of type strings`);
+      continue;
+    }
+    const typeSet = new Set(types);
+    const bundleReservedFilenames = bundle.reservedFilenames;
+    const reservedFilenames = new Set(
+      Array.isArray(bundleReservedFilenames)
+        ? bundleReservedFilenames.filter(
+            (name): name is string =>
+              typeof name === 'string' && name.length > 0,
+          )
+        : [],
+    );
+    const bundleExemptPaths = bundle.exemptPaths;
+    const rawExemptPaths = Array.isArray(bundleExemptPaths)
+      ? bundleExemptPaths
+      : [];
+    const exemptPaths = rawExemptPaths.filter(
+      (path): path is string => typeof path === 'string' && path.length > 0,
+    );
+    if (exemptPaths.length !== rawExemptPaths.length) {
+      errors.push(
+        `${id}: exemptPaths must be an array of non-empty path strings`,
+      );
+    }
+    const exemptSet = new Set(exemptPaths);
+
+    const files = uniqueSorted(
+      roots.flatMap((root) => listFiles(`${root}/**/*.md`)),
+    );
+    const inScopeFileSet = new Set(files);
+
+    for (const file of files) {
+      const basename = file.slice(file.lastIndexOf('/') + 1);
+      if (reservedFilenames.has(basename)) {
+        // A reserved filename is never checked for conformance, so an
+        // exemptPaths entry naming one is dead configuration -- neither
+        // the "now conforms" branch below nor the exemptPaths-existence
+        // loop after this one would ever catch it, since the latter only
+        // checks scope membership, not reserved-ness. Report it here,
+        // the only place that still has both facts in hand.
+        if (exemptSet.has(file)) {
+          errors.push(
+            `${id}: exemptPaths names ${file}, which is a reserved filename and is never checked; remove the redundant exemption`,
+          );
+        }
+        continue;
+      }
+      const reason = checkOkfPageConformance(readFile(file), typeSet);
+      if (exemptSet.has(file)) {
+        if (reason === null) {
+          errors.push(
+            `${id}: exemptPaths names ${file}, which now conforms to the OKF profile; remove the stale exemption`,
+          );
+        }
+        continue;
+      }
+      if (reason !== null) {
+        errors.push(`${id}: ${file} ${reason}`);
+      }
+    }
+
+    for (const exempt of exemptPaths) {
+      if (!inScopeFileSet.has(exempt)) {
+        errors.push(
+          `${id}: exemptPaths names ${exempt}, which does not exist under a configured root`,
+        );
+      }
+    }
+  }
+  return errors;
 }

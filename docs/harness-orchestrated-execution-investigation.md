@@ -1,3 +1,10 @@
+---
+type: investigation
+title: "Investigation: Harness-Orchestrated Execution Mode for Weak Local Models"
+description: Records the findings and recommendation on whether to define a harness-orchestrated execution mode for weak local models.
+tags: [investigation, weak-model]
+---
+
 # Investigation: Harness-Orchestrated Execution Mode for Weak Local Models
 
 This document records the findings and recommendation for

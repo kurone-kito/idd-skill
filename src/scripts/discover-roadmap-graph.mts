@@ -6,8 +6,6 @@
 // generated .mjs. See docs/typescript-sources.md.
 
 import { execFile, execFileSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
 import { promisify } from 'node:util';
 
 import { resolveAuthoringGuardPolicy } from './authoring-label-guard.mts';
@@ -22,6 +20,7 @@ import {
 } from './discover-readiness-check.mts';
 import { type EffortHint, effortOrdinal, parseEffort } from './effort.mts';
 import { GH_TEXT_LOOP_OPTIONS, ghText, withBoundedRetry } from './gh-exec.mts';
+import { loadPolicyConfig } from './idd-config.mts';
 import { stripMarkdownCodeRegions } from './markdown-code.mts';
 import {
   normalizePolicyConfig,
@@ -2768,19 +2767,15 @@ async function runGraphqlQuery(
   }
 }
 
+// Read-and-parse failure semantics (explicit path throws; default path
+// silently falls back only on ENOENT) are converged in idd-config.mts's
+// loadPolicyConfig (#1721). The `?? {}` preserves this helper's existing
+// contract of always returning a plain object: several callers below (e.g.
+// buildClaimStateResolution, buildReadinessResolution) dereference fields
+// off the returned value without an optional-chained `policy?.`, so a bare
+// `null` on the "no config" default-path case would throw downstream.
 function loadPolicy(policyPath: string): unknown {
-  const targetPath = policyPath
-    ? resolve(process.cwd(), policyPath)
-    : resolve(process.cwd(), '.github/idd/config.json');
-  try {
-    return JSON.parse(readFileSync(targetPath, 'utf8'));
-  } catch (error) {
-    if (!policyPath) {
-      return {};
-    }
-    const detail = error instanceof Error ? error.message : String(error);
-    throw new Error(`failed to load policy from ${targetPath}: ${detail}`);
-  }
+  return loadPolicyConfig(policyPath).config ?? {};
 }
 
 /**

@@ -1,3 +1,10 @@
+---
+type: reference
+title: Onboarding Reference — Policy Decisions
+description: Provides the detailed policy-decision guidance behind ONBOARDING.md's operator-confirmation steps.
+tags: [onboarding, policy-decisions]
+---
+
 # Onboarding Reference — Policy Decisions
 
 Use this reference alongside `idd-template/ONBOARDING.md` when you need

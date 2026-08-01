@@ -755,6 +755,79 @@ test('mixed source-pinned case: named required checks all pass, but never report
   assert.equal(summary.requiredChecks.allRequiredPassing, false);
 });
 
+// #1689: without this knob, a D-phase CI-wait caller polling `ci-wait-state`
+// after F2/F3 already opted in via `ciGate.trustSourcePinnedRequiredChecks`
+// would still see `status: 'source-pinned'` forever and never reach
+// idd-ci.instructions.md's on-success route -- moving the same livelock
+// #1689 fixes in pre-merge-readiness.mts one phase earlier instead of
+// removing it. `trustSourcePinnedRequiredChecks: true` must let the named,
+// present, and passing case report `success`.
+test('trustSourcePinnedRequiredChecks opts the named/present/passing mixed case into success', () => {
+  const summary = buildCiWaitStateSummary(
+    {
+      headRefOid: HEAD_SHA,
+      statusCheckRollup: [
+        checkRun({ name: 'lint', workflowName: 'ci', conclusion: 'SUCCESS' }),
+      ],
+    },
+    {
+      requiredCheckNames: ['lint'],
+      requiredCheckSourcePinned: true,
+      trustSourcePinnedRequiredChecks: true,
+    },
+  );
+
+  assert.equal(summary.requiredChecks.status, 'success');
+  assert.equal(summary.requiredChecks.allRequiredPassing, true);
+});
+
+// The knob must not relax the fully-unnamed pinned case: there is no check
+// name to correlate with a live run at all, so it stays unconditionally
+// conservative regardless of the opt-in.
+test('trustSourcePinnedRequiredChecks does not relax the unnamed (empty names) source-pinned case', () => {
+  const summary = buildCiWaitStateSummary(
+    {
+      headRefOid: HEAD_SHA,
+      statusCheckRollup: [checkRun({ name: 'build', conclusion: 'SUCCESS' })],
+    },
+    {
+      requiredCheckNames: [],
+      requiredCheckSourcePinned: true,
+      trustSourcePinnedRequiredChecks: true,
+    },
+  );
+
+  assert.equal(summary.requiredChecks.status, 'source-pinned');
+  assert.equal(summary.requiredChecks.allRequiredPresent, false);
+  assert.equal(summary.requiredChecks.allRequiredPassing, false);
+});
+
+// #1689: a mixed shape -- a named-and-present-and-passing required check
+// alongside a SEPARATE unresolved pinned source (e.g. a ruleset
+// `workflows` rule with no enumerable check name). The opt-in must not
+// bypass the downgrade here even though the named check alone would
+// qualify: `requiredCheckSourcePinnedUnresolved: true` means there is no
+// check name to correlate the unresolved pinning with a live run at all.
+test('trustSourcePinnedRequiredChecks does not relax a mixed named-check-plus-unresolved-pin case', () => {
+  const summary = buildCiWaitStateSummary(
+    {
+      headRefOid: HEAD_SHA,
+      statusCheckRollup: [
+        checkRun({ name: 'lint', workflowName: 'ci', conclusion: 'SUCCESS' }),
+      ],
+    },
+    {
+      requiredCheckNames: ['lint'],
+      requiredCheckSourcePinned: true,
+      requiredCheckSourcePinnedUnresolved: true,
+      trustSourcePinnedRequiredChecks: true,
+    },
+  );
+
+  assert.equal(summary.requiredChecks.status, 'source-pinned');
+  assert.equal(summary.requiredChecks.allRequiredPassing, false);
+});
+
 test('all required checks passing reports allRequiredPassing and status success', () => {
   const summary = buildCiWaitStateSummary(
     {

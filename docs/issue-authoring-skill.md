@@ -1,3 +1,10 @@
+---
+type: reference
+title: Issue Authoring Skill Contract and Schema
+description: Defines the stable contract and output schema for the agent-facing issue authoring skill that prepares IDD-ready issues.
+tags: [issue-authoring, skill-contract]
+---
+
 # Issue Authoring Skill Contract and Schema
 
 This document defines the stable contract and output schema for an

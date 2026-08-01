@@ -18,6 +18,7 @@ import {
   resolveHighContentionFiles,
 } from './discover-shared-file-overlap.mjs';
 import { GH_TEXT_LOOP_TIMEOUT_OPTIONS, ghText } from './gh-exec.mjs';
+import { loadPolicyConfig } from './idd-config.mjs';
 import { normalizePolicyConfig, POLICY_DEFAULTS } from './policy-helpers.mjs';
 
 /** Upper bound on the #1484 bounded merged-PR scan (mirrors B2.0's own
@@ -927,26 +928,15 @@ export function parseArgs(argv) {
   };
 }
 /**
- * Load and parse `.github/idd/config.json` (or `--policy <path>` when given),
- * falling back to `{}` on a missing/invalid default path so the CLI stays
- * usable without any policy file (#1273; mirrors the sibling helpers'
- * `loadPolicy` pattern, e.g. `discover-orphan-filter.mts`). An explicit
- * `--policy <path>` that fails to read/parse throws, matching the sibling
- * helpers' fail-loud behavior for an operator-specified path.
+ * Load and parse `.github/idd/config.json` (or `--policy <path>` when
+ * given). Read-and-parse failure semantics (explicit path throws; default
+ * path silently falls back only on ENOENT, matching an absent default
+ * policy file so the CLI stays usable without one, #1273) are converged in
+ * idd-config.mts's `loadPolicyConfig` (#1721) — this function has no shape
+ * normalization of its own beyond returning the raw config.
  */
 function loadPolicy(policyPath) {
-  const targetPath = policyPath
-    ? resolve(process.cwd(), policyPath)
-    : resolve(process.cwd(), '.github/idd/config.json');
-  try {
-    return JSON.parse(readFileSync(targetPath, 'utf8'));
-  } catch (error) {
-    if (!policyPath) {
-      return {};
-    }
-    const detail = error instanceof Error ? error.message : String(error);
-    throw new Error(`failed to load policy from ${targetPath}: ${detail}`);
-  }
+  return loadPolicyConfig(policyPath).config;
 }
 function printHelp() {
   process.stdout.write(`Usage:

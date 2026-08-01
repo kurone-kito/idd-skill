@@ -1,3 +1,10 @@
+---
+type: reference
+title: IDD Autonomy Contract
+description: Classifies every externally visible IDD mutation as reversible or irreversible and names the gate or undo path for each.
+tags: [autonomy, mutations]
+---
+
 # IDD Autonomy Contract
 
 <!-- cspell:words unminimize -->
@@ -172,6 +179,6 @@ autopilot never performs them — only a human maintainer does:
 ## Coverage
 
 This page was derived from a full sweep of every
-`.github/instructions/*.instructions.md` file (18 files) and every
-`.github/instructions/lite/*.instructions.md` file (4 files) in this
-repository at authoring time.
+`.github/instructions/*.instructions.md` file and every
+`.github/instructions/lite/*.instructions.md` file in this repository at
+authoring time.

@@ -1,3 +1,9 @@
+---
+type: index
+title: IDD Reference Manual
+description: Is the entry point and topic map for the idd-skill deeper reference manual.
+---
+
 # IDD Reference Manual
 
 <!-- cspell:words VRC VRChat -->
@@ -72,6 +78,9 @@ also serve as the source for a future GitHub Pages site.
 - [Minimal IDD run sample](https://github.com/kurone-kito/idd-skill/blob/main/examples/minimal-run/README.md)
   is a compact set of realistic marker-comment bodies (claim, activation
   nonce, heartbeat, review snapshot, ...) for one end-to-end run.
+- [OKF frontmatter profile](okf-frontmatter.md) defines the OKF v0.1
+  frontmatter field profile, bundle scope, and conformance rules the
+  docs corpus adopts, plus the audit that enforces it.
 
 ### Native Companions
 

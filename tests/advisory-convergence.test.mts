@@ -6,8 +6,10 @@ import {
   type AdvisoryConvergenceDeps,
   type AdvisoryConvergenceInputs,
   type AdvisoryConvergenceOptions,
+  classifyClaimCandidateAmbiguity,
   classifyCopilotAuthoredThreadIds,
   computeAdvisoryConvergenceVerdict,
+  hasTrustedClaimMarkerHistory,
   parseArgs,
   pickResolvingClaimEvents,
   runAdvisoryConvergence,
@@ -19,6 +21,7 @@ import {
   renderExternalCheckWaiverComment,
 } from '../src/scripts/marker-helpers.mts';
 import { normalizePolicyConfig } from '../src/scripts/policy-helpers.mts';
+import { summarizeClaimValidation } from '../src/scripts/protocol-helpers.mts';
 import { loadJson, validate } from '../src/scripts/validate-schemas.mts';
 
 const SCHEMA = loadJson('schemas/advisory-convergence.schema.json');
@@ -216,7 +219,7 @@ test('idd-claimed scope: matching linked-claim branch keeps the gate applicable'
   assert.equal(verdict.ready, true);
 });
 
-test('idd-claimed scope: a branch mismatch short-circuits the gate as not applicable', () => {
+test('idd-claimed scope: a branch mismatch against an active trusted claim makes the gate indeterminate, not not_applicable (#1686 path 3)', () => {
   const verdict = computeAdvisoryConvergenceVerdict(
     baseInputs({
       reviews: [copilotReview()],
@@ -230,12 +233,117 @@ test('idd-claimed scope: a branch mismatch short-circuits the gate as not applic
   assertValidVerdict(verdict);
   assert.deepEqual(verdict.applicability, {
     scope: 'idd-claimed',
-    status: 'not_applicable',
+    status: 'indeterminate',
     reason: 'idd-claimed-branch-mismatch',
   });
+  assert.equal(verdict.pending, false);
   assert.equal(verdict.converged, false);
+  // Indeterminate must never let `ready` become true through the ordinary
+  // convergence path -- only a maintainer waiver (tested separately below)
+  // can clear it, unlike the pre-#1686 not_applicable behavior this test
+  // used to assert (`ready: true` unconditionally).
+  assert.equal(verdict.ready, false);
+  assert.match(
+    verdict.reasons.join('\n'),
+    /applicability is indeterminate \(idd-claimed-branch-mismatch\)/,
+  );
+});
+
+test('idd-claimed scope: an indeterminate branch mismatch still falls through the existing maintainer-waiver escape hatch (#1686)', () => {
+  // The active claim here has a real, non-empty claimId, so a waiver CAN
+  // bind to it -- unlike paths 2/4 below, where `activeClaimId` stays ''
+  // and `summarizeExternalCheckWaivers` fails closed on an unbound waiver.
+  const waiverBody = renderExternalCheckWaiverComment({
+    agentId: AGENT_ID,
+    claimId: CLAIM_ID,
+    headSha: HEAD,
+    checkSelector: 'idd-advisory-convergence',
+    reason: 'confirmed benign branch-name mismatch (#1686)',
+    expiresAt: '2026-07-12T00:00:00Z',
+    actor: TRUSTED,
+  });
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({
+      reviews: [copilotReview()],
+      claimEvents: [claimComment()],
+      comments: [
+        { author: { login: TRUSTED }, body: waiverBody, createdAt: RECENT },
+      ],
+    }),
+    baseOptions({
+      convergenceScope: 'idd-claimed',
+      prHeadRefName: 'issue/1234-different',
+      headCommittedAt: OLD,
+      waiverMode: 'maintainer-authorized',
+      waivableSelectors: ADVISORY_CONVERGENCE_WAIVABLE,
+    }),
+  );
+  assertValidVerdict(verdict);
+  assert.equal(verdict.applicability.status, 'indeterminate');
+  assert.equal(verdict.deadline.passed, true);
+  assert.equal(verdict.waived, true);
   assert.equal(verdict.ready, true);
-  assert.deepEqual(verdict.reasons, []);
+});
+
+test('idd-claimed scope: multiple resolving claim candidates make the gate indeterminate, not not_applicable (#1686 path 2)', () => {
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({
+      reviews: [copilotReview()],
+      // Disambiguation already failed closed to [] upstream (mirrors
+      // `pickResolvingClaimEvents`'s own contract) -- `claimCandidateAmbiguous`
+      // is the separate signal that tells this apart from "no claim at all".
+      claimEvents: [],
+      claimCandidateAmbiguous: true,
+    }),
+    baseOptions({
+      convergenceScope: 'idd-claimed',
+      prHeadRefName: 'issue/1234-test',
+    }),
+  );
+  assertValidVerdict(verdict);
+  assert.deepEqual(verdict.applicability, {
+    scope: 'idd-claimed',
+    status: 'indeterminate',
+    reason: 'idd-claimed-multiple-resolving-claim-candidates',
+  });
+  assert.equal(verdict.pending, false);
+  assert.equal(verdict.converged, false);
+  assert.equal(verdict.ready, false);
+  // No activeClaimId exists to bind a waiver to -- summarizeExternalCheckWaivers
+  // fails closed on an unbound waiver, so this path is not waivable in practice
+  // even with waiverMode: 'maintainer-authorized' (unlike the branch-mismatch
+  // path above, which has a real activeClaimId).
+});
+
+test('idd-claimed scope: a stale trusted claim (claim-marker history present, no currently active claim) yields a failing outcome, not not_applicable (#1686 path 4)', () => {
+  // `resolveActiveClaim` (protocol-helpers.mts) has no `now` and never
+  // expires a claim by elapsed time alone; staleness there only matters when
+  // a LATER event attempts to supersede the active claim. So the concrete
+  // way `activeClaimPresent` becomes false while claim history genuinely
+  // exists is an explicit release, not a bare age check -- this fixture
+  // demonstrates that shape (a stale, well-past-staleAge claimed-by marker,
+  // explicitly released) rather than asserting on elapsed time. See
+  // `hasTrustedClaimMarkerHistory`'s doc comment for the full finding.
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({
+      reviews: [copilotReview()],
+      claimEvents: [],
+      claimMarkerHistoryPresent: true,
+    }),
+    baseOptions({
+      convergenceScope: 'idd-claimed',
+      prHeadRefName: 'issue/1234-test',
+    }),
+  );
+  assertValidVerdict(verdict);
+  assert.deepEqual(verdict.applicability, {
+    scope: 'idd-claimed',
+    status: 'indeterminate',
+    reason: 'idd-claimed-claim-history-without-active-claim',
+  });
+  assert.equal(verdict.pending, false);
+  assert.equal(verdict.converged, false);
+  assert.equal(verdict.ready, false);
 });
 
 test('idd-claimed scope: a PR without a verified linked claim is not applicable', () => {
@@ -1407,7 +1515,22 @@ test('ineligibleReasons: empty exactly when eligible is true', () => {
   assert.deepEqual(verdict.sameHeadReroll.ineligibleReasons, []);
 });
 
-test('ineligibleReasons: scope-not-applicable fires alone when only the applicability term fails', () => {
+test('ineligibleReasons: scope-not-applicable fires alone when applicability is not_applicable', () => {
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({ reviews: [copilotReview({ itemCount: 2 })], claimEvents: [] }),
+    baseOptions({
+      convergenceScope: 'idd-claimed',
+      prHeadRefName: 'feature/no-claim',
+    }),
+  );
+  assertValidVerdict(verdict);
+  assert.equal(verdict.applicability.status, 'not_applicable');
+  assert.deepEqual(verdict.sameHeadReroll.ineligibleReasons, [
+    SAME_HEAD_REROLL_INELIGIBLE_REASON.SCOPE_NOT_APPLICABLE,
+  ]);
+});
+
+test('ineligibleReasons: scope-not-applicable also fires alone when applicability is indeterminate (#1686)', () => {
   const verdict = computeAdvisoryConvergenceVerdict(
     baseInputs({
       reviews: [copilotReview({ itemCount: 2 })],
@@ -1419,7 +1542,7 @@ test('ineligibleReasons: scope-not-applicable fires alone when only the applicab
     }),
   );
   assertValidVerdict(verdict);
-  assert.equal(verdict.applicability.status, 'not_applicable');
+  assert.equal(verdict.applicability.status, 'indeterminate');
   assert.deepEqual(verdict.sameHeadReroll.ineligibleReasons, [
     SAME_HEAD_REROLL_INELIGIBLE_REASON.SCOPE_NOT_APPLICABLE,
   ]);
@@ -2005,6 +2128,183 @@ test('classifyCopilotAuthoredThreadIds: a thread counts only when its ORIGINATIN
     'copilot',
   );
   assert.deepEqual([...ids].sort(), ['A']);
+});
+
+test('classifyCopilotAuthoredThreadIds: #1686 -- a login-matching author is excluded when __typename proves it is not a Bot', () => {
+  const ids = classifyCopilotAuthoredThreadIds(
+    [
+      {
+        id: 'A',
+        comments: {
+          nodes: [
+            {
+              author: { login: COPILOT_LOGIN, __typename: 'User' },
+              createdAt: OLD,
+            },
+          ],
+        },
+      },
+      {
+        id: 'B',
+        comments: {
+          nodes: [
+            {
+              author: { login: COPILOT_LOGIN, __typename: 'Bot' },
+              createdAt: OLD,
+            },
+          ],
+        },
+      },
+      {
+        id: 'C',
+        comments: {
+          // No __typename on the payload at all: treated as unknown, not a
+          // rejection -- preserves every pre-#1686 fixture/caller.
+          nodes: [{ author: { login: COPILOT_LOGIN }, createdAt: OLD }],
+        },
+      },
+    ],
+    'copilot',
+  );
+  assert.deepEqual([...ids].sort(), ['B', 'C']);
+});
+
+test('#1686: Clause 1 rejects a login-matching review whose __typename proves it is not a Bot', () => {
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({
+      reviews: [
+        copilotReview({ author: { login: COPILOT_LOGIN, __typename: 'User' } }),
+      ],
+    }),
+    baseOptions(),
+  );
+  assertValidVerdict(verdict);
+  assert.equal(verdict.review.found, false);
+  assert.equal(verdict.pending, true);
+});
+
+test('#1686: Clause 1 still accepts a login-matching review whose __typename is Bot or absent', () => {
+  const withBotTypename = computeAdvisoryConvergenceVerdict(
+    baseInputs({
+      reviews: [
+        copilotReview({ author: { login: COPILOT_LOGIN, __typename: 'Bot' } }),
+      ],
+    }),
+    baseOptions(),
+  );
+  assertValidVerdict(withBotTypename);
+  assert.equal(withBotTypename.converged, true);
+
+  const withoutTypename = computeAdvisoryConvergenceVerdict(
+    baseInputs({ reviews: [copilotReview()] }),
+    baseOptions(),
+  );
+  assertValidVerdict(withoutTypename);
+  assert.equal(withoutTypename.converged, true);
+});
+
+// --- classifyClaimCandidateAmbiguity (#1686 path 2) -------------------------
+
+test('classifyClaimCandidateAmbiguity: false when zero or exactly one candidate resolves', () => {
+  const noClaim = [
+    { author: { login: TRUSTED }, body: 'not a claim', createdAt: OLD },
+  ];
+  const claimA = [claimComment('claim-a')];
+  assert.equal(
+    classifyClaimCandidateAmbiguity([noClaim], [TRUSTED], false),
+    false,
+  );
+  assert.equal(
+    classifyClaimCandidateAmbiguity([claimA], [TRUSTED], false),
+    false,
+  );
+  assert.equal(
+    classifyClaimCandidateAmbiguity([noClaim, claimA], [TRUSTED], false),
+    false,
+  );
+});
+
+test('classifyClaimCandidateAmbiguity: true when two or more candidates each resolve an active claim', () => {
+  const claimA = [claimComment('claim-a')];
+  const claimB = [claimComment('claim-b')];
+  assert.equal(
+    classifyClaimCandidateAmbiguity([claimA, claimB], [TRUSTED], false),
+    true,
+  );
+});
+
+test('classifyClaimCandidateAmbiguity: an explicit candidate (--claim-issue) is never ambiguous', () => {
+  const claimA = [claimComment('claim-a')];
+  const claimB = [claimComment('claim-b')];
+  assert.equal(
+    classifyClaimCandidateAmbiguity([claimA, claimB], [TRUSTED], true),
+    false,
+  );
+});
+
+// --- hasTrustedClaimMarkerHistory (#1686 path 4) ----------------------------
+
+test('hasTrustedClaimMarkerHistory: false when no candidate ever carried a trusted claim marker', () => {
+  assert.equal(hasTrustedClaimMarkerHistory([], [TRUSTED]), false);
+  assert.equal(
+    hasTrustedClaimMarkerHistory(
+      [
+        [
+          {
+            author: { login: TRUSTED },
+            body: 'just a comment',
+            createdAt: OLD,
+          },
+        ],
+      ],
+      [TRUSTED],
+    ),
+    false,
+  );
+});
+
+test('hasTrustedClaimMarkerHistory: false when the only claim marker is from an untrusted author', () => {
+  assert.equal(
+    hasTrustedClaimMarkerHistory(
+      [[{ ...claimComment(), author: { login: 'random-account' } }]],
+      [TRUSTED],
+    ),
+    false,
+  );
+});
+
+test('hasTrustedClaimMarkerHistory: true for a still-active trusted claim (the ordinary case)', () => {
+  assert.equal(
+    hasTrustedClaimMarkerHistory([[claimComment()]], [TRUSTED]),
+    true,
+  );
+});
+
+test('hasTrustedClaimMarkerHistory: true for a STALE trusted claim -- a claimed-by marker well past staleAge with no active claim resolving', () => {
+  // Ground truth for path 4: `resolveActiveClaim` never expires a claim by
+  // elapsed time alone (see this function's own doc comment) -- the
+  // concrete way `activeClaimPresent` becomes false while history exists is
+  // an explicit release. This fixture is exactly that shape: an old
+  // `claimed-by` (`OLD`, well past the 24h staleAge default relative to
+  // `NOW`) followed by a trusted `unclaimed-by` release for the SAME
+  // agent/claim -- `summarizeClaimValidation` resolves no active claim, but
+  // the claim marker history is unambiguously real.
+  const claimId = 'stale-claim-1';
+  const agentId = 'claude-test';
+  const released = [
+    claimComment(claimId),
+    {
+      author: { login: TRUSTED },
+      body: `<!-- unclaimed-by: ${agentId} ${claimId} ${RECENT} -->\n\n_${agentId}: issue claim released — IDD automation marker. Do not edit._`,
+      createdAt: RECENT,
+    },
+  ];
+  assert.equal(
+    summarizeClaimValidation(released, { trustedMarkerLogins: [TRUSTED] })
+      .activeClaimPresent,
+    false,
+  );
+  assert.equal(hasTrustedClaimMarkerHistory([released], [TRUSTED]), true);
 });
 
 // --- parseArgs ---------------------------------------------------------------
