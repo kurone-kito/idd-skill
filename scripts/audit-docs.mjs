@@ -13,6 +13,7 @@ import {
   collectDuplicateSyncPairTargets,
   collectGeneratedFromBannerViolations,
   collectInstructionSizeBudgetViolations,
+  collectOkfFrontmatterViolations,
   collectPolicyConfigDrift,
   collectRootMarkdownAllowlistViolations,
   collectTypeSuppressionViolations,
@@ -53,6 +54,7 @@ checkDocBudgetNumbers();
 checkForbiddenPatterns(manifest.forbiddenPatterns ?? []);
 checkRootMarkdownAllowlist(manifest.rootMarkdownAllowlist ?? null);
 checkTypeSuppressionBudgets(manifest.typeSuppressionBudgets ?? null);
+checkOkfBundles(manifest.okfBundles ?? null);
 checkConfigInstructionDrift();
 checkGeneratedSourcePairs();
 if (errors.length > 0) {
@@ -431,6 +433,18 @@ function checkForbiddenPatterns(patterns) {
 }
 function checkRootMarkdownAllowlist(config) {
   errors.push(...collectRootMarkdownAllowlistViolations(repoFiles, config));
+}
+// OKF frontmatter conformance audit (#1680): the collector lives in
+// consistency-helpers so it can be unit-tested with synthetic fixtures. The
+// audit pipeline supplies the live glob (bound to `repoFiles`) and reader.
+function checkOkfBundles(bundles) {
+  errors.push(
+    ...collectOkfFrontmatterViolations(
+      bundles,
+      (pattern) => globFiles(pattern, repoFiles),
+      readText,
+    ),
+  );
 }
 // Type-suppression budget guard (ratchet, mirroring bundleBudgets): a
 // pure `node:` text scan so the bare-node lane enforces the budgets with

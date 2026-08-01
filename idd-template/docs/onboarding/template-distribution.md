@@ -40,14 +40,33 @@ The authoritative generated lists are configured in
   optional issue-authoring companion list.
 - `shellFileLists` ties each generated list to the `gh api` and `curl`
   loops in `idd-template/ONBOARDING.md`.
+- `generatedBlocks[].id == "idd-template-readme-core-files"` and
+  `"idd-template-readme-issue-authoring-files"` own the descriptive
+  file inventory in `idd-template/README.md`'s "Files" section. This is
+  a **fourth, broader inventory surface** — not one of the three
+  distribution surfaces above, since it documents the shipped file set
+  rather than copying it into an adopter repository: a `sourceGlobs`-only
+  match against every file under `idd-template/` (`idd-template/**/*`),
+  deliberately including files the core import list excludes by design
+  — `scripts/minimize-superseded-markers.mjs` (see the
+  profile-conditional section below), `.github/workflows/*.yml`, and
+  `.claude/settings.json`. Because it has no `paths` list, adding a new
+  `idd-template/` file never requires a manual edit here — running
+  `node scripts/sync-docs.mjs --apply` picks it up automatically. Keep
+  the issue-authoring companion
+  half's `paths` in sync with `issue-authoring-companion-files`'s own
+  list by hand (both are short, curated, and rarely change) — the
+  audit's `paths`/`sourceGlobs` cross-check still catches drift on that
+  one.
 
 When adding a core template file, update both `sourceGlobs` and `paths`
 for `idd-template-core-files` when the new path is not already covered.
 The docs audit compares those entries with the repository files and
 fails if the generated block or shell loops are stale.
 
-When adding an optional issue-authoring companion file, update the
-`issue-authoring-companion-files` block instead. Do not put optional
+When adding an optional issue-authoring companion file, update both the
+`issue-authoring-companion-files` block and the
+`idd-template-readme-issue-authoring-files` block above. Do not put optional
 companion files in the core template list unless the execution loop
 requires every adopter to receive them.
 
@@ -165,6 +184,13 @@ Before merging a distribution-surface change, verify:
 - the `gh api` and `curl` loops in `idd-template/ONBOARDING.md` include
   the same path.
 - optional issue-authoring files remain in the optional companion list.
-- `idd-template/README.md` mentions the new reference page when it is
-  part of the exported template documentation set.
+- a new issue-authoring companion file is also added to the
+  `idd-template-readme-issue-authoring-files` `paths` list (its
+  `sourceGlobs` cross-check catches an omission, but only after running
+  `node scripts/sync-docs.mjs --apply` to regenerate
+  `idd-template/README.md`).
+- `node scripts/sync-docs.mjs --apply` has run so `idd-template/README.md`'s
+  generated file inventory reflects any new/removed/moved
+  `idd-template/` path (its core half needs no manifest edit — a new
+  `idd-template/**/*` path is picked up automatically).
 - `node scripts/audit-docs.mjs --check` passes.
