@@ -1,3 +1,10 @@
+---
+type: reference
+title: Onboarding Reference — Agent Entry and Verification
+description: Provides the detailed agent-entry examples and verification checklist referenced by ONBOARDING.md steps 5 and 6.
+tags: [onboarding, agent-entry]
+---
+
 # Onboarding Reference — Agent Entry and Verification
 
 Use this reference alongside `idd-template/ONBOARDING.md` when you need
