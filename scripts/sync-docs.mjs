@@ -14,10 +14,24 @@
  *   node scripts/sync-docs.mjs          # dry-run: report what is out of sync
  *   node scripts/sync-docs.mjs --check  # same as default (explicit dry-run)
  *   node scripts/sync-docs.mjs --apply  # write updated files to disk
+ *   node scripts/sync-docs.mjs --apply --force
+ *     # also overwrite a target that has uncommitted local edits (see below)
  *
  * Skipped pair modes (cannot auto-generate):
  *   structure  — only heading structure is checked; no source to copy
  *   contains   — only text-presence is checked; no source to copy
+ *
+ * Uncommitted-target-edit guard (#1765): an `exact`/`concreted` pair's
+ * `target` is always regenerated from its `source` — editing `target`
+ * directly is a mistake the sync would otherwise discard silently. Before
+ * queuing such a target's diff, this compares the target's on-disk content
+ * against its last commit (`git show HEAD:<target>`). If they differ, and
+ * that on-disk content is not what regeneration would already produce
+ * either, the target carries a genuine uncommitted local edit that would be
+ * lost — this is reported as an error and the target is left untouched
+ * unless `--force` is passed. A target with no uncommitted state (on-disk
+ * matches its last commit, just stale relative to `source`) is unaffected
+ * and still syncs silently, as before.
  */
 import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
@@ -76,6 +90,7 @@ function getRepoFiles() {
 }
 const args = process.argv.slice(2);
 const apply = args.includes('--apply');
+const force = args.includes('--force');
 const manifest = JSON.parse(readText(manifestPath));
 const generatedBlocks = manifest.generatedBlocks ?? [];
 const shellFileLists = manifest.shellFileLists ?? [];
@@ -157,6 +172,24 @@ function processSyncPairs(pairs) {
       }
       const current = tryReadText(target);
       if (current === null || normalizeText(current) !== generated) {
+        if (
+          current !== null &&
+          !force &&
+          hasUncommittedTargetEdit(target, current)
+        ) {
+          console.error(
+            `sync-docs: ${target} has uncommitted local changes that differ ` +
+              `from both its last commit and the content generated from ` +
+              `${source}. Regenerating would discard them.\n` +
+              `  This is an ${mode}-mode pair: ${target} is always ` +
+              `regenerated from ${source} -- edit ${source} instead.\n` +
+              `  If this edit landed on the wrong side by mistake, move it ` +
+              `to ${source} and re-run.\n` +
+              `  Pass --force to overwrite ${target} anyway.`,
+          );
+          nonZeroExit = true;
+          continue;
+        }
         diffs.push({ target, content: generated });
       }
     } else if (mode === 'structure' || mode === 'contains') {
@@ -403,6 +436,31 @@ function doStripPrefix(file, prefix) {
   );
   nonZeroExit = true;
   return file;
+}
+/**
+ * True when `current` (the target's on-disk content, already known to
+ * differ from the freshly generated content) also differs from the
+ * target's last-committed content -- i.e. an uncommitted, at-risk local
+ * edit exists, not just a target that is legitimately stale relative to
+ * its source. Any failure reading git state (untracked file, no HEAD, git
+ * unavailable) falls back to the pre-#1765 behavior: untracked/unreadable
+ * git state proceeds like there is nothing to protect, since a missing
+ * git baseline can never distinguish "stale" from "locally edited" and
+ * this guard must not block a repository or profile that never had this
+ * protection in the first place.
+ */
+function hasUncommittedTargetEdit(target, current) {
+  let committed;
+  try {
+    committed = execFileSync('git', ['show', `HEAD:${target}`], {
+      cwd: root,
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+    });
+  } catch {
+    return false;
+  }
+  return normalizeText(current) !== normalizeText(committed);
 }
 function readText(relPath) {
   try {
