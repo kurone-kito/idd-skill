@@ -20,15 +20,19 @@ Keep these rules explicit:
 - If the file already exists, append or adapt an IDD workflow section
   without replacing unrelated repository guidance.
 - If the file is missing, create a minimal stub. When at least one
-  sibling entry file (`CLAUDE.md`, `AGENTS.md`, or `GEMINI.md`) already
-  carries repository-specific guidance beyond the shared IDD workflow
-  section, do not let the new stub drop it: add a short pointer in the
-  new file to the single sibling that owns that guidance, instead of
-  copying the prose into every stub — three copies trade the asymmetry
-  problem for a divergence problem the next edit will miss. Apply this
-  the same way for `CLAUDE.md`, `AGENTS.md`, and `GEMINI.md`; no
-  runtime is a special case. Where no sibling carries
-  repository-specific guidance, the plain stub below remains correct.
+  existing file among `CLAUDE.md`, `AGENTS.md`, `GEMINI.md`, or an
+  already-present `.github/copilot-instructions.md` already carries
+  repository-specific guidance beyond the shared IDD workflow section,
+  do not let the new stub drop it: add a short pointer in the new file
+  to the single existing file that owns that guidance, instead of
+  copying the prose into every stub — several copies trade the
+  asymmetry problem for a divergence problem the next edit will miss.
+  Apply this the same way for `CLAUDE.md`, `AGENTS.md`, and
+  `GEMINI.md`; no runtime is a special case, and
+  `.github/copilot-instructions.md` counts as a guidance source even
+  though it isn't itself one of the three stubbed files. Where no
+  existing file carries repository-specific guidance, the plain stub
+  below remains correct.
 - Only skip creating a missing root agent entry file when the operator
   explicitly opts out of adding new files.
 
@@ -65,9 +69,10 @@ If `CLAUDE.md` already exists, add the shared IDD workflow section
 above and adapt the surrounding wording to the existing document style.
 
 If `CLAUDE.md` does not exist, create a minimal file such as below.
-When `AGENTS.md` or `GEMINI.md` already carries repository-specific
-guidance, add one line near the top pointing to whichever sibling owns
-it — for example, `See AGENTS.md for repository-specific rules.` —
+When `AGENTS.md`, `GEMINI.md`, or an existing
+`.github/copilot-instructions.md` already carries repository-specific
+guidance, add one line near the top pointing to whichever file owns it
+— for example, `See AGENTS.md for repository-specific rules.` —
 instead of copying that guidance here:
 
 ```markdown
@@ -105,9 +110,10 @@ manually open `.github/instructions/idd-overview-core.instructions.md`
 and the routed phase file before starting IDD work.
 
 If `AGENTS.md` does not exist, create a minimal file such as below.
-When `CLAUDE.md` or `GEMINI.md` already carries repository-specific
-guidance, add one line near the top pointing to whichever sibling owns
-it — for example, `See CLAUDE.md for repository-specific rules.` —
+When `CLAUDE.md`, `GEMINI.md`, or an existing
+`.github/copilot-instructions.md` already carries repository-specific
+guidance, add one line near the top pointing to whichever file owns it
+— for example, `See CLAUDE.md for repository-specific rules.` —
 instead of copying that guidance here:
 
 ```markdown
@@ -179,9 +185,10 @@ If `GEMINI.md` already exists, apply the same IDD workflow section as
 wording and still pointing to `docs/idd-workflow.md`.
 
 If `GEMINI.md` does not exist, create a minimal file such as below.
-When `CLAUDE.md` or `AGENTS.md` already carries repository-specific
-guidance, add one line near the top pointing to whichever sibling owns
-it — for example, `See AGENTS.md for repository-specific rules.` —
+When `CLAUDE.md`, `AGENTS.md`, or an existing
+`.github/copilot-instructions.md` already carries repository-specific
+guidance, add one line near the top pointing to whichever file owns it
+— for example, `See AGENTS.md for repository-specific rules.` —
 instead of copying that guidance here:
 
 ```markdown
@@ -214,6 +221,12 @@ receive the same entry path. Keep the
 `excludeAgent: "code-review"` behavior in
 `.github/instructions/idd-overview-core.instructions.md`; repository-wide
 Copilot guidance may still apply during review.
+
+If `.github/copilot-instructions.md` carries repository-specific
+guidance that none of `CLAUDE.md`, `AGENTS.md`, or `GEMINI.md` already
+has, it is a guidance source for the carry-over rule above too: point
+each newly created stub at it the same way a stub would point at a
+sibling entry file.
 
 ## Verification details
 
@@ -304,9 +317,10 @@ checks, confirm the detailed items below.
 - [ ] Among the entry files the operator did not opt out of creating,
       `CLAUDE.md`, `AGENTS.md`, and `GEMINI.md` agree on
       repository-specific engineering guidance: each file either
-      carries that guidance directly, or points to the single sibling
-      file that owns it — no entry file silently drops guidance
-      another sibling already carries.
+      carries that guidance directly, or points to the single file
+      that owns it (a sibling entry file, or an existing
+      `.github/copilot-instructions.md`) — no entry file silently
+      drops guidance another existing file already carries.
 - [ ] If `.github/copilot-instructions.md` existed before onboarding,
       it now includes the IDD workflow reference as well.
 - [ ] If the operator opted into the optional `opencode.json`
