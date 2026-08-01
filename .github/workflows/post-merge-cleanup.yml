@@ -14,8 +14,10 @@
 #   - No PR-head code, workflow, or action is ever executed: the only
 #     script that runs is this repository's own tracked
 #     `scripts/audit-pr-cleanup.mjs`, invoked with the PR number as inert
-#     numeric data (interpolated into a single-quoted shell variable, not
-#     evaluated).
+#     numeric data. The `pr_number` value (a `workflow_dispatch` number
+#     input, not strictly enforced as numeric for direct API dispatches)
+#     is passed through `env:` and referenced as a quoted shell variable,
+#     never interpolated directly into a `run:` script.
 #   - The `cleanup` job only runs when
 #     `github.event.pull_request.merged == true`, or via an explicit,
 #     human-triggered `workflow_dispatch` -- never against an open or
@@ -63,9 +65,14 @@ jobs:
         id: cleanup
         env:
           GH_TOKEN: ${{ github.token }}
+          # workflow_dispatch's `pr_number` input is `type: number` in the
+          # UI, but that constraint is not strictly enforced for direct API
+          # dispatches, so route it through env: and reference it as a
+          # quoted shell variable rather than interpolating the `${{ }}`
+          # expression directly into the run: script.
+          PR_NUMBER: ${{ github.event.pull_request.number || github.event.inputs.pr_number }}
         run: |
           set +e
-          PR_NUMBER='${{ github.event.pull_request.number || github.event.inputs.pr_number }}'
           if [ -z "$PR_NUMBER" ]; then
             echo "::error::PR_NUMBER is empty"
             exit 1
@@ -124,14 +131,41 @@ jobs:
           # only serialises this workflow's own runs; an agent F4 (or a
           # maintainer rerunning workflow_dispatch on the same PR) can
           # still have posted an evidence comment outside this run. Skip
-          # if any <!-- idd-cleanup-evidence: ... --> comment is already
-          # on the PR.
-          EXISTING=$(gh api --paginate \
+          # if a <!-- idd-cleanup-evidence: ... --> comment already on the
+          # PR was posted by a trusted author -- this workflow's own posts
+          # are authored by `github-actions[bot]` (the GITHUB_TOKEN actor),
+          # and an agent's local F4 post is authored by a configured
+          # `trustedMarkerActors` login. An untrusted commenter pre-posting
+          # this marker prefix must never suppress the genuine evidence
+          # post or be treated as a completed cleanup record (this is the
+          # same trust-scoping every other IDD operational marker already
+          # applies).
+          TRUSTED_LOGINS=$(
+            {
+              jq -r '(.trustedMarkerActors // [])[]' .github/idd/config.json 2>/dev/null
+              echo 'github-actions[bot]'
+            } | tr '[:upper:]' '[:lower:]'
+          )
+          # Capture into a variable (not process substitution): a failure
+          # inside `< <(gh api ...)` does not reliably propagate to this
+          # shell's default `-e`/`pipefail`, which could leave EXISTING
+          # empty and post a duplicate evidence comment on a transient
+          # `gh api` failure (rate limit/network). A plain command
+          # substitution assignment does trip `-e` on failure.
+          COMMENTS_TSV=$(gh api --paginate \
             "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments" \
-            --jq '.[] | select(.body | startswith("<!-- idd-cleanup-evidence:")) | .id' \
-            | head -n1)
+            --jq '.[] | select(.body | startswith("<!-- idd-cleanup-evidence:")) | [.id, .user.login] | @tsv')
+          EXISTING=""
+          while IFS=$'\t' read -r candidate_id candidate_login; do
+            [ -z "$candidate_id" ] && continue
+            lower_login=$(printf '%s' "$candidate_login" | tr '[:upper:]' '[:lower:]')
+            if printf '%s\n' "$TRUSTED_LOGINS" | grep -Fxq "$lower_login"; then
+              EXISTING="$candidate_id"
+              break
+            fi
+          done <<< "$COMMENTS_TSV"
           if [ -n "$EXISTING" ]; then
-            echo "::notice::PR #${PR_NUMBER} already has an idd-cleanup-evidence comment (id: ${EXISTING}); skipping workflow post."
+            echo "::notice::PR #${PR_NUMBER} already has a trusted-author idd-cleanup-evidence comment (id: ${EXISTING}); skipping workflow post."
             exit 0
           fi
           BODY=$(printf '%s\n\n%s\n\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n' \

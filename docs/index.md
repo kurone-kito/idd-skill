@@ -55,9 +55,9 @@ also serve as the source for a future GitHub Pages site.
   for maintainers and agents who need an authoritative source link.
 - [IDD workflow guide](idd-workflow.md) explains where each supported
   agent starts and which phase file to read next.
-- [IDD helper script evaluation](idd-helper-scripts.md) records why the
-  current workflow stays portable shell / `gh` / `jq` instructions
-  instead of requiring helper scripts.
+- [IDD helper script evaluation](idd-helper-scripts.md) records the
+  decision to adopt optional helper scripts and inventories the ones
+  shipped in the source repository, phase by phase.
 - [IDD comment minimization](idd-comment-minimization.md) defines the
   live status digest helper contract and safe post-merge cleanup policy
   for stale operational markers and completed feedback.
@@ -69,6 +69,9 @@ also serve as the source for a future GitHub Pages site.
   Creator/Mutator/Verifier matrix for loop concepts (claim markers,
   review threads, PR body, ...), plus which actor/phase may take each
   concept to its terminal state.
+- [Minimal IDD run sample](https://github.com/kurone-kito/idd-skill/blob/main/examples/minimal-run/README.md)
+  is a compact set of realistic marker-comment bodies (claim, activation
+  nonce, heartbeat, review snapshot, ...) for one end-to-end run.
 
 ### Native Companions
 
