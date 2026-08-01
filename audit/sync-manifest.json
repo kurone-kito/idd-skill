@@ -145,6 +145,30 @@
         "skills/issue-authoring/references/draft-patterns.md",
         "skills/issue-authoring/references/workflow-boundary.md"
       ]
+    },
+    {
+      "id": "idd-template-readme-core-files",
+      "file": "idd-template/README.md",
+      "language": "text",
+      "stripPrefix": "idd-template/",
+      "sourceGlobs": [
+        "idd-template/**/*"
+      ]
+    },
+    {
+      "id": "idd-template-readme-issue-authoring-files",
+      "file": "idd-template/README.md",
+      "language": "text",
+      "sourceGlobs": [
+        "skills/issue-authoring/**"
+      ],
+      "paths": [
+        "skills/issue-authoring/SKILL.md",
+        "skills/issue-authoring/agents/openai.yaml",
+        "skills/issue-authoring/references/contract.md",
+        "skills/issue-authoring/references/draft-patterns.md",
+        "skills/issue-authoring/references/workflow-boundary.md"
+      ]
     }
   ],
   "shellFileLists": [
