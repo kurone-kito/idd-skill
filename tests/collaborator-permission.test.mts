@@ -11,6 +11,7 @@ import {
   readForcedHandoffAuthorityPolicy,
   readForcedHandoffMode,
   readForcedHandoffPolicy,
+  resolveTrustedCollaboratorMarkerLogins,
 } from '../src/scripts/collaborator-permission.mts';
 
 // collaboratorPermission and isAuthorizedForcedHandoffActor's UNCACHED path
@@ -222,3 +223,93 @@ for (const [permission, roleName, expected] of LOOSE_POLICY_CASES) {
     );
   });
 }
+
+// --- resolveTrustedCollaboratorMarkerLogins (#1693) ---------------------
+//
+// #1693: this is the single canonical "marker-authors-first" filter
+// force-handoff.mts and external-check-waiver.mts now call instead of
+// each hand-rolling a copy that permission-checked every unique comment
+// author regardless of whether they ever posted anything marker-shaped.
+// Coverage stays on the cache-seeding seam (#1212: no `gh` subprocess
+// mocking), which also proves a non-marker-shaped author's comment never
+// even reaches a permission lookup: seeding the cache for a login that is
+// never queried would go unnoticed, but seeding it and asserting the
+// login is still excluded (cases below) proves the filter, not the cache.
+
+const ADVISORY_WAIT_SHA = 'a'.repeat(40);
+const MARKER_BODY = `advisory-wait: some-agent ${ADVISORY_WAIT_SHA} 2026-05-10T00:00:00Z`;
+
+test('resolveTrustedCollaboratorMarkerLogins excludes a write+ author whose comment is not marker-shaped', () => {
+  const cache = seededCache('o', 'r', 'random-write-actor', 'write', 'write');
+  const trusted = resolveTrustedCollaboratorMarkerLogins(
+    'o',
+    'r',
+    [
+      {
+        body: 'just an ordinary comment',
+        user: { login: 'random-write-actor' },
+      },
+    ],
+    { cache },
+  );
+  assert.deepEqual(trusted, []);
+});
+
+test('resolveTrustedCollaboratorMarkerLogins includes a write+ author whose comment is marker-shaped', () => {
+  const cache = seededCache('o', 'r', 'marker-author', 'write', 'write');
+  const trusted = resolveTrustedCollaboratorMarkerLogins(
+    'o',
+    'r',
+    [{ body: MARKER_BODY, author: { login: 'marker-author' } }],
+    { cache },
+  );
+  assert.deepEqual(trusted, ['marker-author']);
+});
+
+test('resolveTrustedCollaboratorMarkerLogins still excludes a marker-shaped author without write+ permission', () => {
+  const cache = seededCache('o', 'r', 'read-only-actor', 'read', 'read');
+  const trusted = resolveTrustedCollaboratorMarkerLogins(
+    'o',
+    'r',
+    [{ body: MARKER_BODY, user: { login: 'read-only-actor' } }],
+    { cache },
+  );
+  assert.deepEqual(trusted, []);
+});
+
+test('resolveTrustedCollaboratorMarkerLogins dedupes repeated marker-shaped authors to one permission lookup', () => {
+  const cache = seededCache('o', 'r', 'repeat-author', 'admin', 'admin');
+  const trusted = resolveTrustedCollaboratorMarkerLogins(
+    'o',
+    'r',
+    [
+      { body: MARKER_BODY, user: { login: 'repeat-author' } },
+      { body: MARKER_BODY, user: { login: 'Repeat-Author' } },
+    ],
+    { cache },
+  );
+  assert.deepEqual(trusted, ['repeat-author']);
+});
+
+test('resolveTrustedCollaboratorMarkerLogins accepts a custom isMarkerShaped predicate', () => {
+  const cache = seededCache('o', 'r', 'advisory-actor', 'write', 'write');
+  const trusted = resolveTrustedCollaboratorMarkerLogins(
+    'o',
+    'r',
+    [
+      { body: MARKER_BODY, user: { login: 'advisory-actor' } },
+      // A different recognized operational marker (claimed-by-shaped) that
+      // the narrower custom predicate below must reject even though the
+      // default operationalMarkerPrefix predicate would accept it.
+      {
+        body: '<!-- claimed-by: agent claim-1 supersedes: none 2026-05-10T00:00:00Z branch: issue/1 -->',
+        user: { login: 'claim-actor' },
+      },
+    ],
+    {
+      cache,
+      isMarkerShaped: (body) => body.startsWith('advisory-wait:'),
+    },
+  );
+  assert.deepEqual(trusted, ['advisory-actor']);
+});

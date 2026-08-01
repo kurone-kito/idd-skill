@@ -100,6 +100,147 @@ test('a genuinely protected branch reports protectionReadsUnreadable: false even
   assert.equal(r.protectionReadsUnreadable, false);
 });
 
+// Regression (#1745): live on PR #1741, the F2/F3 authoritative CI read
+// reported ci.status: "success" for a HEAD GitHub itself blocked on --
+// summarizeRequiredChecks must forward classifyCiChecks's
+// discardedNonPassingInstances onto its own discardedNonPassingRequiredChecks
+// field (scoped to required checks only) so a 'success' verdict is never
+// silently opaque about a discarded non-passing same-name sibling.
+test('surfaces a discarded CANCELLED sibling for a required check via discardedNonPassingRequiredChecks', () => {
+  const r = summarize(
+    [
+      {
+        name: 'lint',
+        state: 'CANCELLED',
+        completedAt: '2026-07-18T03:45:56Z',
+        type: 'check-run',
+        workflowName: 'Lint gate',
+      },
+      {
+        name: 'lint',
+        state: 'SUCCESS',
+        completedAt: '2026-07-18T03:47:01Z',
+        type: 'check-run',
+        workflowName: 'Lint gate',
+      },
+    ],
+    protectedRules,
+  );
+  assert.equal(r.status, 'success');
+  assert.equal(r.requiredChecksPassing, true);
+  assert.equal(r.discardedNonPassingRequiredChecks.length, 1);
+  assert.equal(
+    r.discardedNonPassingRequiredChecks[0]?.discardedState,
+    'CANCELLED',
+  );
+  assert.equal(
+    r.discardedNonPassingRequiredChecks[0]?.selectedState,
+    'SUCCESS',
+  );
+  assert.equal(r.discardedNonPassingRequiredChecks[0]?.name, 'lint');
+});
+
+// Regression (#1753): a Codex review on PR #1749 (#1745's own PR) found
+// that summarizeRequiredChecks computed discardedNonPassingRequiredChecks
+// from the waiver-adjusted effectiveChecks -- where a waived non-passing
+// instance's `state` is rewritten to 'SKIPPED' (pass-equivalent) before
+// classifyCiChecks runs -- so a waived CANCELLED sibling silently dropped
+// out of this evidence field the moment a maintainer authorized a waiver
+// for it. That is exactly the divergence-masking scenario #1745 exists to
+// surface. This is a generic waiver + discarded-sibling test using the
+// same 'lint' stand-in check name as its neighbors above; the real-world
+// motivating check is `idd-advisory-convergence`, which this repo's own
+// `.github/idd/config.json` marks waivable, but this fixture does not
+// exercise that specific check name/config.
+test('discardedNonPassingRequiredChecks still surfaces a waived CANCELLED sibling even though the waiver rewrites it to SKIPPED for status purposes', () => {
+  const waivers = {
+    valid: [
+      {
+        authorLogin: 'kurone-kito',
+        checkSelector: 'lint',
+        reason: 'known-flaky-cancel',
+        expiresAt: '2099-01-01T00:00:00Z',
+      },
+    ],
+    expired: [],
+    wrongHead: [],
+    wrongClaim: [],
+    unauthorized: [],
+    malformed: [],
+  };
+  const r = summarizeRequiredChecks(
+    [
+      {
+        name: 'lint',
+        state: 'CANCELLED',
+        completedAt: '2026-07-18T03:45:56Z',
+        type: 'check-run',
+        workflowName: 'Lint gate',
+      },
+      {
+        name: 'lint',
+        state: 'SUCCESS',
+        completedAt: '2026-07-18T03:47:01Z',
+        type: 'check-run',
+        workflowName: 'Lint gate',
+      },
+    ],
+    protectedRules,
+    {},
+    { waivers },
+  );
+  // status/requiredChecksPassing must keep honoring the waiver exactly as
+  // before this fix -- no regression to existing waiver behavior.
+  assert.equal(r.status, 'success');
+  assert.equal(r.requiredChecksPassing, true);
+  assert.equal(
+    r.checks.find((c) => c.state === 'CANCELLED')?.coveredByWaiver,
+    true,
+  );
+  // The discarded CANCELLED sibling must still be visible even though the
+  // waiver rewrote its `state` to 'SKIPPED' in the effectiveChecks used by
+  // `status` above.
+  assert.equal(r.discardedNonPassingRequiredChecks.length, 1);
+  assert.equal(
+    r.discardedNonPassingRequiredChecks[0]?.discardedState,
+    'CANCELLED',
+  );
+  assert.equal(
+    r.discardedNonPassingRequiredChecks[0]?.selectedState,
+    'SUCCESS',
+  );
+  assert.equal(r.discardedNonPassingRequiredChecks[0]?.name, 'lint');
+});
+
+test('discardedNonPassingRequiredChecks is empty when nothing was discarded', () => {
+  const r = summarize([{ name: 'lint', state: 'SUCCESS' }], protectedRules);
+  assert.deepEqual(r.discardedNonPassingRequiredChecks, []);
+});
+
+test('discardedNonPassingRequiredChecks is empty when no required checks are configured', () => {
+  const r = summarize(
+    [
+      {
+        name: 'build',
+        state: 'CANCELLED',
+        completedAt: '2026-07-18T03:45:56Z',
+        type: 'check-run',
+        workflowName: 'Build gate',
+      },
+      {
+        name: 'build',
+        state: 'SUCCESS',
+        completedAt: '2026-07-18T03:47:01Z',
+        type: 'check-run',
+        workflowName: 'Build gate',
+      },
+    ],
+    [],
+  );
+  assert.equal(r.noRequiredChecksConfigured, true);
+  assert.deepEqual(r.discardedNonPassingRequiredChecks, []);
+});
+
 // #1471: a stale check-run instance for a name must not falsely block
 // pre-merge readiness once a later instance for that same name converged.
 test('unprotected: presentRunConclusion reflects the latest instance, not a stale instance sharing its name', () => {

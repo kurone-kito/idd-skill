@@ -10,6 +10,7 @@ import { readFileSync } from 'node:fs';
 
 import { parseCliArgs } from './cli-args.mts';
 import { GH_TEXT_LOOP_TIMEOUT_OPTIONS, ghText } from './gh-exec.mts';
+import { deriveGhHttpStatus } from './gh-http-status.mts';
 import { normalizePolicyConfig } from './policy-helpers.mts';
 
 const APPROVAL_POLICIES = new Set([
@@ -945,20 +946,52 @@ function ghApiJsonWithStatus(path: string): {
     const body = JSON.parse(runGh(['api', path]).trim() || '{}');
     return { status: 200, body };
   } catch (error) {
-    const stderr = String((error as { stderr?: unknown })?.stderr ?? '');
-    const httpStatus = Number.parseInt(
-      /HTTP\s+(\d+)/.exec(stderr)?.[1] ?? '0',
-      10,
-    );
-    if (httpStatus > 0) {
-      return { status: httpStatus, body: null };
-    }
-    return { status: 0, body: null };
+    // #1693: derive the real HTTP status via the shared gh-http-status.mts
+    // helper instead of grepping stderr only with a bespoke `/HTTP\s+(\d+)/`
+    // pattern -- that missed the JSON-error-body-in-stdout fallback
+    // deriveGhHttpStatus already applies (stdout now survives runGh's error
+    // wrapping too; see wrapGhError below). `0` preserves this function's
+    // existing "status could not be determined" sentinel (unchanged
+    // downstream contract: callers already treat any non-200/404 status,
+    // including 0, as "permission lookup failed").
+    const status = deriveGhHttpStatus(error);
+    return { status: status ?? 0, body: null };
   }
 }
 
 function ghJson(args: string[]): unknown {
   return JSON.parse(runGh(args).trim() || '{}');
+}
+
+/**
+ * Pure wrap step for {@link runGh}'s catch branch, exported so tests can
+ * inject a raw execFileSync-shaped error directly instead of shelling out
+ * to a real `gh` invocation (matching the mock-free-subprocess convention
+ * documented in `tests/collaborator-permission.test.mts`).
+ *
+ * When stderr is present, wraps it into a fresh Error carrying both
+ * `.stderr` and `.stdout`. #1693: the previous wrap carried `.stderr` only,
+ * which silently dropped `.stdout` and defeated `deriveGhHttpStatus`'s
+ * JSON-error-body-in-stdout fallback for every caller downstream of
+ * `runGh` (this file's `ghApiJsonWithStatus`) -- `gh api` can print a JSON
+ * error body to stdout even as it writes its human-readable diagnostic to
+ * stderr. When stderr is empty, returns the original error unchanged: the
+ * raw execFileSync error already carries `.stdout`/`.stderr`/`.status`
+ * natively, so wrapping would only lose information.
+ */
+export function wrapGhError(error: unknown): unknown {
+  const stderr = String((error as { stderr?: unknown })?.stderr ?? '').trim();
+  if (!stderr) {
+    return error;
+  }
+  const stdout = String((error as { stdout?: unknown })?.stdout ?? '').trim();
+  const wrapped = new Error(`gh command failed: ${stderr}`) as Error & {
+    stderr?: string;
+    stdout?: string;
+  };
+  wrapped.stderr = stderr;
+  wrapped.stdout = stdout;
+  return wrapped;
 }
 
 function runGh(args: string[]): string {
@@ -969,14 +1002,6 @@ function runGh(args: string[]): string {
       stdio: ['ignore', 'pipe', 'pipe'],
     });
   } catch (error) {
-    const stderr = String((error as { stderr?: unknown })?.stderr ?? '').trim();
-    if (stderr) {
-      const wrapped = new Error(`gh command failed: ${stderr}`) as Error & {
-        stderr?: string;
-      };
-      wrapped.stderr = stderr;
-      throw wrapped;
-    }
-    throw error;
+    throw wrapGhError(error);
   }
 }

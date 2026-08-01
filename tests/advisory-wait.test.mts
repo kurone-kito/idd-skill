@@ -492,6 +492,71 @@ test('classifyCiChecks: the (name, type, workflowName) dedup key is deterministi
   }
 });
 
+// Regression (#1745): live on PR #1741, classifyCiChecks reported
+// ci.status: "success" for a HEAD whose GitHub statusCheckRollup.state was
+// "FAILURE" -- the dedup path resolved an idd-advisory-convergence
+// check-run group to a SUCCESS "latest" instance while a CANCELLED
+// bot-triggered sibling for the same (name, type, workflowName) also
+// existed in the same group, and nothing in classifyCiChecks's own output
+// surfaced that a non-passing instance had been discarded. This asserts the
+// discrepancy is now visible in the output itself, not just the final
+// 'success' status.
+test('classifyCiChecks: surfaces a discarded CANCELLED sibling when the dedup-selected latest instance is SUCCESS', () => {
+  const cancelled = {
+    name: 'idd-advisory-convergence',
+    state: 'CANCELLED',
+    completedAt: '2026-07-18T03:45:56Z',
+    type: 'check-run',
+    workflowName: 'IDD advisory-convergence gate',
+  };
+  const success = {
+    ...cancelled,
+    state: 'SUCCESS',
+    completedAt: '2026-07-18T03:47:01Z',
+  };
+  const result = classifyCiChecks([cancelled, success]);
+  assert.equal(result.status, 'success');
+  assert.equal(result.discardedNonPassingInstances?.length, 1);
+  assert.deepEqual(result.discardedNonPassingInstances?.[0], {
+    name: 'idd-advisory-convergence',
+    type: 'check-run',
+    workflowName: 'IDD advisory-convergence gate',
+    selectedState: 'SUCCESS',
+    selectedCompletedAt: '2026-07-18T03:47:01Z',
+    discardedState: 'CANCELLED',
+    discardedCompletedAt: '2026-07-18T03:45:56Z',
+  });
+});
+
+test('classifyCiChecks: reports an empty discardedNonPassingInstances list when nothing was discarded', () => {
+  const result = classifyCiChecks([
+    { name: 'lint', state: 'SUCCESS', completedAt: '2026-07-18T03:45:56Z' },
+  ]);
+  assert.deepEqual(result.discardedNonPassingInstances, []);
+});
+
+test('classifyCiChecks: does not flag a discarded pass-equivalent sibling as a discrepancy', () => {
+  // A discarded NEUTRAL sibling in favor of a later SUCCESS is two
+  // pass-equivalent instances, not a masked failure -- only a genuinely
+  // non-passing discarded sibling (CI_FAILURE_CONCLUSION_STATES or
+  // CANCELLED) is worth flagging.
+  const older = {
+    name: 'idd-advisory-convergence',
+    state: 'NEUTRAL',
+    completedAt: '2026-07-18T03:45:56Z',
+    type: 'check-run',
+    workflowName: 'IDD advisory-convergence gate',
+  };
+  const newer = {
+    ...older,
+    state: 'SUCCESS',
+    completedAt: '2026-07-18T03:47:01Z',
+  };
+  const result = classifyCiChecks([older, newer]);
+  assert.equal(result.status, 'success');
+  assert.deepEqual(result.discardedNonPassingInstances, []);
+});
+
 test('classifyCiChecks: characterization -- two same-name, same-type entries that both lack a workflowName still dedupe (accepted residual limitation)', () => {
   // Documents the deliberately-accepted residual gap: without a real
   // producer identity (e.g. the owning GitHub App) for two check-runs

@@ -10,6 +10,7 @@ import {
   isAuthorizedForcedHandoffActor,
   readForcedHandoffAuthorityPolicy,
   readForcedHandoffMode,
+  resolveTrustedCollaboratorMarkerLogins,
 } from './collaborator-permission.mjs';
 import { planHandoff } from './forced-handoff-marker.mjs';
 import { ghText, safeGhText } from './gh-exec.mjs';
@@ -203,7 +204,13 @@ function ghJson(args, slurp = false) {
   }
   return JSON.parse(execFileSync('gh', finalArgs, { encoding: 'utf8' }));
 }
-function buildTrustedMarkerLogins(owner, repo, viewerLogin, issueComments) {
+export function buildTrustedMarkerLogins(
+  owner,
+  repo,
+  viewerLogin,
+  issueComments,
+  cache,
+) {
   const configuredActors = readTrustedMarkerActorsFromConfig();
   const configured = [
     viewerLogin,
@@ -216,36 +223,18 @@ function buildTrustedMarkerLogins(owner, repo, viewerLogin, issueComments) {
   if (!readCollaboratorTrustEnabled()) {
     return trusted;
   }
-  const permissionCache = new Map();
-  const uniqueLogins = new Set(
-    issueComments
-      .map((comment) =>
-        String(
-          comment.user?.login ?? comment.author?.login ?? '',
-        ).toLowerCase(),
-      )
-      .filter(Boolean),
-  );
-  for (const login of uniqueLogins) {
-    if (trusted.has(login)) {
-      continue;
-    }
-    const permission =
-      permissionCache.get(login) ??
-      safeGhText([
-        'api',
-        `repos/${owner}/${repo}/collaborators/${encodeURIComponent(login)}/permission`,
-        '--jq',
-        '.permission',
-      ]).toLowerCase();
-    permissionCache.set(login, permission);
-    if (
-      permission === 'admin' ||
-      permission === 'maintain' ||
-      permission === 'write'
-    ) {
-      trusted.add(login);
-    }
+  // #1693: marker-authors-first -- only comment authors whose comment is
+  // itself operational-marker-shaped are permission-checked, matching
+  // pre-merge-readiness.mts / advisory-convergence.mts /
+  // advisory-wait-state.mts. Checking every unique comment author (the
+  // prior local loop here) over-trusted ordinary commenters.
+  for (const login of resolveTrustedCollaboratorMarkerLogins(
+    owner,
+    repo,
+    issueComments,
+    { cache },
+  )) {
+    trusted.add(login);
   }
   return trusted;
 }

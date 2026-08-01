@@ -239,22 +239,21 @@ other GitHub side effect, confirm all of the following:
      `advisory-wait-recovery: {agent-id} {PR_HEAD_SHA}
      {ISO8601-recovery-time}` as plain text. Do not request another
      review. Then go to the polling loop below.
-   - `REQUEST_NEEDED`: if `copilotPending` is true, first remove the
-     stale pending request with `gh pr edit {pr-number}
-     --remove-reviewer "@{primary-advisory-bot}"` (on a GraphQL
-     login-resolution failure, retry via `gh api
-     repos/{owner}/{repo}/pulls/{pr-number}/requested_reviewers -X
-     DELETE -f "reviewers[]={primary-advisory-bot-rest-login}"`; if
-     removal fails because the bot is no longer pending, re-run this
-     step from the top; if it fails for any other reason, post a hold
-     comment and stop). Then request the review with `gh pr edit
-     {pr-number} --add-reviewer "@{primary-advisory-bot}"` (on the same
-     GraphQL failure, retry via `gh api
+   - `REQUEST_NEEDED`, `copilotPending` `false`: request the review with
+     `gh pr edit {pr-number} --add-reviewer "@{primary-advisory-bot}"`
+     (on a GraphQL login-resolution failure, retry via `gh api
      repos/{owner}/{repo}/pulls/{pr-number}/requested_reviewers -X POST
-     -f "reviewers[]={primary-advisory-bot-rest-login}"`). Immediately
-     post `advisory-wait: {agent-id} {PR_HEAD_SHA}
-     {ISO8601-requested-at}` as plain text, not an HTML comment. Then go
+     -f "reviewers[]={primary-advisory-bot-rest-login}"`). If both
+     attempts fail, stop and ask instead of posting a marker. On
+     success, immediately post `advisory-wait: {agent-id} {PR_HEAD_SHA}
+     {ISO8601-requested-at}` as plain text, not an HTML comment, then go
      to the polling loop below.
+   - `REQUEST_NEEDED`, `copilotPending` `true` (a request is already
+     pending but unproven for current HEAD, no same-head marker to
+     anchor polling): lite does not track the claim-id/agent-id the
+     full protocol's bounded `AW3-S` remove/re-request cycle requires —
+     stop and ask rather than remove, re-request, or enter the
+     marker-based polling loop below with no marker.
    - `CAP_EXHAUSTED`: apply step 10 below (the secondary-bot check)
      first — it is a non-gating supplement that fires on cap exhaustion
      independent of the cap-exhausted route. Then, if the helper's

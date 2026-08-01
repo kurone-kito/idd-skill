@@ -19,6 +19,17 @@ In the idd-skill source repository, the following optional helpers were adopted:
   [kurone-kito/idd-skill#1395](https://github.com/kurone-kito/idd-skill/issues/1395))
 - `scripts/discover-roadmap-graph.mjs` for A1.5/A2 recursive roadmap graph
   enumeration and classification
+- `scripts/idd-roadmap-audit-execute.mjs` for the A1.5 roadmap-completion
+  mutation: dry-run gates only the mechanical completion preconditions
+  (all descendants closed/complete, no open/unresolved/nested-roadmap
+  blocker) via the roadmap-graph traversal and emits `{ready, blockers,
+  evidenceBody}` — it does **not** verify the roadmap's free-form success
+  criteria or autonomy-gap items, which the caller must confirm
+  separately before `--apply`; `--apply` re-validates the roadmap-audit
+  claim and the graph immediately before mutating, then posts the
+  evidence comment, closes the completed roadmap, and releases the claim
+  (referenced in
+  [kurone-kito/idd-skill#1071](https://github.com/kurone-kito/idd-skill/issues/1071))
 - `scripts/discover-readiness-check.mjs` for A3 readiness criterion
   evaluation (referenced in
   [kurone-kito/idd-skill#391](https://github.com/kurone-kito/idd-skill/issues/391))
@@ -110,11 +121,14 @@ In the idd-skill source repository, the following optional helpers were adopted:
   ordered, deduplicated `gh run rerun <id>` recovery plan for the
   rerun-eligible instances (each command includes `-R owner/repo` when
   the repository is known) — referenced from `idd-ci.instructions.md`
-  §Rerun mechanics as the preferred way to produce that plan. When no
-  instance is rerun-eligible but the rollup is stuck on a bot-gated
-  instance alongside an already-passing non-bot pull_request-family
-  instance, it additionally offers a `recoveryRefreshPlan`: rerunning
-  that already-passing instance is the documented way to force a fresh
+  §Rerun mechanics as the preferred way to produce that plan. When the
+  rollup is stuck on a bot-gated instance alongside an already-passing
+  non-bot pull_request-family instance, it additionally offers a
+  `recoveryRefreshPlan` — populated even alongside a non-empty rerun plan
+  when every rerun-eligible instance there is itself bot-triggered (#1745;
+  rerunning a bot-triggered instance does not supply the non-bot trigger
+  the recovery-refresh option exists to provide): rerunning the
+  already-passing instance is the documented way to force a fresh
   non-bot evaluation and clear the stale rollup. Never calls
   `gh run rerun` itself; a mutating `--apply` mode is a deliberate
   follow-up.
@@ -1221,10 +1235,14 @@ to post it is the consuming track's job.
   recovery plan for the rerun-eligible instances -- referenced from
   `idd-ci.instructions.md` §Rerun mechanics as the preferred way to produce
   that plan
-- Also reports a `recoveryRefreshPlan` when no instance is rerun-eligible but
-  the rollup is stuck on a bot-gated instance alongside an already-passing
-  non-bot pull_request-family instance, and honors the resolved
-  `ciWait.rerunPolicy`: a `"hold"` policy, or an instance whose own
+- Also reports a `recoveryRefreshPlan` when the rollup is stuck on a
+  bot-gated instance alongside an already-passing non-bot
+  pull_request-family instance — populated even alongside a non-empty
+  sequential rerun plan when every rerun-eligible instance there is itself
+  bot-triggered (#1745; rerunning a bot-triggered instance does not supply
+  the non-bot trigger the recovery-refresh option exists to provide) — and
+  honors the resolved `ciWait.rerunPolicy`: a `"hold"` policy, or an
+  instance whose own
   `runAttempt` already exhausted the `"rerun-once"` budget, withholds the
   corresponding plan entries with an explanatory `rerunPolicyHoldNotice`
   instead of silently omitting them
@@ -1283,6 +1301,16 @@ to post it is the consuming track's job.
   is a `branch-currency` merge-gate blocker (see below); `UNKNOWN` is the
   async-still-computing state F1 and the E-phase branch-sync check
   already re-poll, not a blocker here.
+- `ci.discardedNonPassingRequiredChecks` (#1745) surfaces a same-name/type/
+  workflowName required-check instance discarded by the latest-per-producer
+  dedup while the surviving representative is pass-equivalent -- e.g. a
+  `CANCELLED` bot-triggered instance sitting alongside the `SUCCESS`
+  instance the dedup selected as "latest", the live PR #1741 divergence
+  where `ci.status: "success"` disagreed with GitHub's own
+  `statusCheckRollup.state: "FAILURE"` for the same commit. Evidence only
+  (empty array, never omitted, when nothing was discarded) -- it does not
+  itself gate F2/F3; a non-empty list is a prompt to double-check the live
+  GitHub rollup directly rather than trusting a bare `ci.status: "success"`.
 - Authoritative phase role: the live `pre-merge-readiness` run on the
   current HEAD is the **authoritative source for the final-merge CI and
   activity fields** at F2/F3. The `review-activity-snapshot` helper builds
@@ -1474,6 +1502,18 @@ to post it is the consuming track's job.
   state alone never sets `ready: true`. Observed incident:
   kurone-kito/idd-skill#1562. See `idd-advisory-wait.instructions.md`'s
   Terminal routing section for the full hold/rerun sequence.
+- **Eligibility-relevant disposition-evidence counters (`#1719`)**: the
+  verdict also reports a `dispositionEvidence` field —
+  `{ missingRegularCommentCount, missingThreadCount }` — a narrow,
+  counters-only projection of the same evidence
+  `summarizeDispositionEvidenceForGate` already computes for this gate. It
+  exposes the numeric input behind `sameHeadReroll.eligible`'s
+  `missing-regular-comment-disposition` term (see below) directly on the
+  report, instead of only its pass/fail verdict. Not the same shape as
+  `pre-merge-readiness.mjs`'s own `dispositionEvidence` field (which
+  additionally carries `route` / `blockingCount` / full missing-item lists
+  for the F2 merge gate) — this gate's `dispositionEvidence` never gates
+  anything by itself.
 - Reuses the existing evidence modules — `isCopilotReviewerLogin` /
   `readAdvisoryPrimaryBotLogin`, `resolveAdvisoryBotLogins`,
   `resolveTrustedMarkerActors`, `summarizeDispositionEvidenceForGate`,
@@ -1532,21 +1572,50 @@ evidence, purely additively: `converged` / `waived` / `ready` are
 computed with **no reference to it at all**, so it can never let the
 gate pass on anything but the primary bot's own real signal.
 
-| Field         | Meaning                                                                                                                                                                                                                                                                                                                               |
-| ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `eligible`    | `matchesHead: true`, `itemCount > 0`, every Copilot-authored thread resolved or validly dispositioned, AND no outstanding regular-comment disposition evidence (`dispositionEvidence.missingRegularCommentCount === 0`) -- the static count is the ONLY thing keeping `converged` false, with no other triage work still outstanding. |
-| `count`       | Trusted `advisory-reroll:` marker count matching the current HEAD (resets on a new push, since a new HEAD's markers start over).                                                                                                                                                                                                      |
-| `cap`         | Configured bounded budget, `advisoryWait.sameHeadRerollCap` (default 2, deliberately conservative but > 1: same-SHA re-review is not a guaranteed one-shot off-ramp).                                                                                                                                                                 |
-| `exhausted`   | `count >= cap`: stop rerolling, fall through to the existing deadline-plus-maintainer-waiver backstop (#1512) or hold.                                                                                                                                                                                                                |
-| `latestAt`    | GitHub `created_at` of the latest trusted same-HEAD reroll marker, or `''` -- **never** the marker's embedded, agent-supplied timestamp (same anchor rule AW2 already states for `advisory-wait:`).                                                                                                                                   |
-| `inFlight`    | `true` while a reroll marker exists, no primary-bot review has been submitted after it yet, **and** the configured `advisoryWait.pendingWindow` has not yet elapsed since it was posted. Recomputed fresh from GitHub state on every call (never in-session memory), so a crash mid-poll can never cause a duplicate reroll request.  |
-| `requestable` | `eligible && !exhausted && !inFlight` -- the exact instant it is safe to request a fresh same-HEAD reroll.                                                                                                                                                                                                                            |
+| Field               | Meaning                                                                                                                                                                                                                                                                                                                               |
+| ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `eligible`          | `matchesHead: true`, `itemCount > 0`, every Copilot-authored thread resolved or validly dispositioned, AND no outstanding regular-comment disposition evidence (`dispositionEvidence.missingRegularCommentCount === 0`) -- the static count is the ONLY thing keeping `converged` false, with no other triage work still outstanding. |
+| `ineligibleReasons` | `#1719`: one stable, machine-readable token per failing term of the `eligible` conjunction above (empty exactly when `eligible` is `true`), so a caller can self-diagnose a stuck reroll without re-deriving the rule by hand. See below for the token list and the report-mode example.                                              |
+| `count`             | Trusted `advisory-reroll:` marker count matching the current HEAD (resets on a new push, since a new HEAD's markers start over).                                                                                                                                                                                                      |
+| `cap`               | Configured bounded budget, `advisoryWait.sameHeadRerollCap` (default 2, deliberately conservative but > 1: same-SHA re-review is not a guaranteed one-shot off-ramp).                                                                                                                                                                 |
+| `exhausted`         | `count >= cap`: stop rerolling, fall through to the existing deadline-plus-maintainer-waiver backstop (#1512) or hold.                                                                                                                                                                                                                |
+| `latestAt`          | GitHub `created_at` of the latest trusted same-HEAD reroll marker, or `''` -- **never** the marker's embedded, agent-supplied timestamp (same anchor rule AW2 already states for `advisory-wait:`).                                                                                                                                   |
+| `inFlight`          | `true` while a reroll marker exists, no primary-bot review has been submitted after it yet, **and** the configured `advisoryWait.pendingWindow` has not yet elapsed since it was posted. Recomputed fresh from GitHub state on every call (never in-session memory), so a crash mid-poll can never cause a duplicate reroll request.  |
+| `requestable`       | `eligible && !exhausted && !inFlight` -- the exact instant it is safe to request a fresh same-HEAD reroll.                                                                                                                                                                                                                            |
+
+**`ineligibleReasons` tokens (`#1719`)**: one entry per failing term, in
+the same order the `eligible` conjunction is written in
+`advisory-convergence.mts`. Computed from the exact same six terms
+`eligible` itself reduces from -- the array and the boolean are
+structurally unable to disagree.
+
+<!-- dprint-ignore-start -->
+| Token                                    | Fires when...                                                                                                                                          |
+| ----------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `scope-not-applicable`                    | `applicability.status` is `not_applicable` (`advisoryWait.convergenceScope: "idd-claimed"` and this PR has no matching verified linked claim/branch).   |
+| `review-pending`                          | The primary bot has not yet reviewed current HEAD (`pending: true`). Always co-occurs with `review-item-count-unknown` below, since an off-HEAD review reports no usable item count. |
+| `unresolved-copilot-threads`              | `threads.satisfied` is `false` -- at least one Copilot-authored thread is neither resolved nor validly dispositioned.                                   |
+| `missing-regular-comment-disposition`     | `dispositionEvidence.missingRegularCommentCount` is non-zero -- an outstanding regular (non-thread) PR comment still lacks a fresh disposition marker.  |
+| `review-item-count-unknown`               | The latest review's comment count is unavailable -- either the review is off-HEAD (co-firing with `review-pending` above, since `resolveLatestCopilotReviewClause` reports `itemCount: null` for any non-matching-HEAD review), or it is on current HEAD but the count itself is unavailable (a GraphQL nullable-field edge case). |
+| `review-item-count-not-positive`          | The latest review's `itemCount` is a known, non-positive value (i.e. exactly `0` -- already fully converged, nothing to reroll).                        |
+<!-- dprint-ignore-end -->
+
+When `review-item-count-not-positive` is absent but `converged` is still
+`false` with `threads.satisfied: true` (every visible Copilot-authored
+thread already resolved) and `review.itemCount > 0`, the top-level
+`reasons` array's item-count entry is itself extended with a pointer to
+check the review body directly -- the shape of the reported adopter
+incident: a "Comments suppressed due to low confidence" item embedded in
+the review's own body text counts toward `itemCount` but never surfaces
+as a review thread, so no thread query can ever explain it.
 
 **AW6 procedure** (`idd-advisory-wait.instructions.md`), invoked only
 from F2 on a non-zero `--assert` exit:
 
 1. If `sameHeadReroll.eligible` is `false`, the carve-out does not
-   apply; fall through to F2's normal route-to-E1/E4.
+   apply; fall through to F2's normal route-to-E1/E4. `ineligibleReasons`
+   names the failing term(s) directly, without re-deriving the rule by
+   hand.
 2. If `requestable` is `true`: **post the marker before requesting the
    review**, as plain text (no HTML comment, matching `advisory-wait:`'s
    shape):
