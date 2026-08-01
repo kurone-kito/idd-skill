@@ -23,6 +23,17 @@ function loadIddConfig() {
     return null;
   }
 }
+// #1675: this file is deliberately self-contained (see the "Deliberately
+// NOT importing the shared config-loader module" comment above) and so
+// cannot import gh-exec.mts's shared DEFAULT_GH_TIMEOUT_MS -- duplicating
+// the same 30s value locally is the narrow, documented exception to
+// routing every gh call through gh-exec.mts. Declared here, above the
+// import.meta.main trigger below, rather than alongside runGh further
+// down: the trigger block calls runGh() synchronously at
+// module-evaluation time, and a const declared after that point is still
+// in the temporal dead zone when the trigger fires (see
+// discover-readiness-check.mts's / ci-wait-policy.mts's identical note).
+const GH_TIMEOUT_MS = 30_000;
 const ALLOWED_CLASSIFIERS = new Set(['OUTDATED', 'RESOLVED']);
 const ALLOWED_FORMATS = new Set(['json', 'table']);
 const MINIMIZABLE_TYPENAMES = new Set([
@@ -433,6 +444,7 @@ function runGh(argv) {
   try {
     const stdout = execFileSync('gh', argv, {
       encoding: 'utf8',
+      timeout: GH_TIMEOUT_MS,
       stdio: ['ignore', 'pipe', 'pipe'],
     });
     return { ok: true, stdout };
