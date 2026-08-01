@@ -1,3 +1,10 @@
+---
+type: design
+title: Weak-Model Lite Instruction Profile — Design
+description: Records the design for a condensed IDD instruction profile targeting weak local models with ample context but low adherence.
+tags: [weak-model, lite-profile]
+---
+
 # Weak-Model Lite Instruction Profile — Design
 
 This page records the design for

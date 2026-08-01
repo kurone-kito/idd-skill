@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
 import {
+  applyRerunPlan,
   buildCheckRunsForRefArgs,
   buildIddConfigContentsArgs,
   buildRerunPlanTextSections,
@@ -9,6 +10,7 @@ import {
   describeNoActionState,
   describeOutstandingStates,
   describeRecoveryRefreshHeader,
+  formatApplySummary,
   parseArgs,
   parseRunIdFromUrl,
   RERUN_PLAN_CHECK_NAME,
@@ -1631,6 +1633,7 @@ test('parseArgs parses --pr, --owner, --repo, --now', () => {
     repo: 'idd-skill',
     now: NOW,
     help: false,
+    apply: false,
   });
 });
 
@@ -1695,6 +1698,11 @@ test('parseArgs leaves an ordinary --pr value taking a following flag untouched'
 test('parseArgs recognizes --help', () => {
   assert.equal(parseArgs(['--help']).help, true);
   assert.equal(parseArgs(['-h']).help, true);
+});
+
+test('parseArgs recognizes --apply, defaulting to false when omitted', () => {
+  assert.equal(parseArgs(['--pr', '1431']).apply, false);
+  assert.equal(parseArgs(['--pr', '1431', '--apply']).apply, true);
 });
 
 // parseArgs delegates mechanical parsing to node:util's own stable
@@ -1881,4 +1889,229 @@ test('runRerunAdvisoryConvergence computes a plan from injected collect output (
   assert.equal(result.help, false);
   assert.equal(result.plan?.counts.rerunEligible, 1);
   assert.equal(result.plan?.plan.length, 1);
+});
+
+test('runRerunAdvisoryConvergence returns the parsed args alongside the plan', () => {
+  const result = runRerunAdvisoryConvergence(['--pr', '1431', '--apply'], {
+    collect: () => ({ input: baseInput(), options: baseOptions() }),
+  });
+  assert.equal(result.args.prNumber, 1431);
+  assert.equal(result.args.apply, true);
+});
+
+// --- applyRerunPlan -------------------------------------------------------
+
+test('applyRerunPlan reruns each plan entry in order, waiting for each before recomputing', () => {
+  const instanceA = baseInstance({
+    checkRunId: '1001',
+    runId: '5001',
+    htmlUrl:
+      'https://github.com/kurone-kito/idd-skill/actions/runs/5001/job/9001',
+    startedAt: '2026-07-16T10:00:00Z',
+    conclusion: 'cancelled',
+  });
+  const instanceB = baseInstance({
+    checkRunId: '1002',
+    runId: '5002',
+    htmlUrl:
+      'https://github.com/kurone-kito/idd-skill/actions/runs/5002/job/9002',
+    startedAt: '2026-07-16T10:05:00Z',
+    conclusion: 'cancelled',
+  });
+  const initialPlan = computeRerunPlan(
+    baseInput({ instances: [instanceA, instanceB] }),
+    baseOptions(),
+  );
+  assert.deepEqual(
+    initialPlan.plan.map((entry) => entry.runId),
+    ['5001', '5002'],
+  );
+
+  const afterFirst = computeRerunPlan(
+    baseInput({ instances: [instanceB] }),
+    baseOptions(),
+  );
+  const afterSecond = computeRerunPlan(
+    baseInput({ instances: [] }),
+    baseOptions(),
+  );
+
+  const rerunCalls: string[] = [];
+  let recomputeCallCount = 0;
+  const result = applyRerunPlan(initialPlan, {
+    rerunAndWait: (command) => {
+      rerunCalls.push(command.runId);
+    },
+    recomputePlan: () => {
+      recomputeCallCount += 1;
+      return recomputeCallCount === 1 ? afterFirst : afterSecond;
+    },
+  });
+
+  assert.deepEqual(rerunCalls, ['5001', '5002']);
+  assert.equal(result.executed.length, 2);
+  assert.equal(result.executed[0]?.section, 'plan');
+  assert.equal(result.resolved, true);
+  assert.equal(result.finalPlan, afterSecond);
+});
+
+test('applyRerunPlan stops early once the recomputed plan resolves, skipping the rest of the original plan', () => {
+  const instanceA = baseInstance({
+    checkRunId: '1001',
+    conclusion: 'cancelled',
+  });
+  const instanceB = baseInstance({
+    checkRunId: '1002',
+    runId: '5002',
+    htmlUrl:
+      'https://github.com/kurone-kito/idd-skill/actions/runs/5002/job/9002',
+    conclusion: 'cancelled',
+  });
+  const initialPlan = computeRerunPlan(
+    baseInput({ instances: [instanceA, instanceB] }),
+    baseOptions(),
+  );
+  assert.equal(initialPlan.plan.length, 2);
+
+  const resolvedPlan = computeRerunPlan(
+    baseInput({ instances: [] }),
+    baseOptions(),
+  );
+  const rerunCalls: string[] = [];
+  const result = applyRerunPlan(initialPlan, {
+    rerunAndWait: (command) => {
+      rerunCalls.push(command.runId);
+    },
+    recomputePlan: () => resolvedPlan,
+  });
+
+  assert.equal(rerunCalls.length, 1);
+  assert.equal(result.executed.length, 1);
+  assert.equal(result.resolved, true);
+});
+
+test('applyRerunPlan never reruns a bot-gated-skip instance, and resolves immediately when nothing is eligible', () => {
+  const gated = baseInstance({ conclusion: 'action_required' });
+  const initialPlan = computeRerunPlan(
+    baseInput({ instances: [gated] }),
+    baseOptions(),
+  );
+  assert.equal(initialPlan.plan.length, 0);
+  assert.equal(initialPlan.recoveryRefreshPlan.length, 0);
+
+  let rerunCalled = false;
+  const result = applyRerunPlan(initialPlan, {
+    rerunAndWait: () => {
+      rerunCalled = true;
+    },
+    recomputePlan: () => {
+      throw new Error('recomputePlan should not be called');
+    },
+  });
+
+  assert.equal(rerunCalled, false);
+  assert.equal(result.executed.length, 0);
+  assert.equal(result.resolved, true);
+});
+
+test('applyRerunPlan prefers the recovery-refresh entry over the sequential plan when both are non-empty', () => {
+  const initialPlan = computeRerunPlan(
+    baseInput({
+      instances: [
+        baseInstance({
+          checkRunId: 'gated',
+          runId: '7001',
+          conclusion: 'action_required',
+        }),
+        baseInstance({
+          checkRunId: 'cancelled-bot',
+          runId: '7004',
+          conclusion: 'cancelled',
+          actorLogin: 'copilot-pull-request-reviewer[bot]',
+          actorType: 'Bot',
+          triggeringActorLogin: 'copilot-pull-request-reviewer[bot]',
+          triggeringActorType: 'Bot',
+        }),
+        baseInstance({
+          checkRunId: 'passing',
+          runId: '7002',
+          conclusion: 'success',
+        }),
+      ],
+    }),
+    baseOptions(),
+  );
+  assert.deepEqual(
+    initialPlan.plan.map((entry) => entry.runId),
+    ['7004'],
+  );
+  assert.deepEqual(
+    initialPlan.recoveryRefreshPlan.map((entry) => entry.runId),
+    ['7002'],
+  );
+
+  const resolvedPlan = computeRerunPlan(
+    baseInput({ instances: [] }),
+    baseOptions(),
+  );
+  const order: string[] = [];
+  const result = applyRerunPlan(initialPlan, {
+    rerunAndWait: (command) => {
+      order.push(command.runId);
+    },
+    recomputePlan: () => resolvedPlan,
+  });
+
+  assert.deepEqual(order, ['7002']);
+  assert.equal(result.executed[0]?.section, 'recoveryRefreshPlan');
+});
+
+test('applyRerunPlan stops after its safety bound instead of looping forever when the plan never resolves', () => {
+  const instanceA = baseInstance({
+    checkRunId: '1001',
+    conclusion: 'cancelled',
+  });
+  const initialPlan = computeRerunPlan(
+    baseInput({ instances: [instanceA] }),
+    baseOptions(),
+  );
+  assert.equal(initialPlan.plan.length, 1);
+
+  let calls = 0;
+  const result = applyRerunPlan(initialPlan, {
+    rerunAndWait: () => {
+      calls += 1;
+    },
+    recomputePlan: () => initialPlan,
+  });
+
+  assert.equal(result.resolved, false);
+  assert.ok(calls >= 1);
+  assert.equal(result.executed.length, calls);
+});
+
+// --- formatApplySummary ----------------------------------------------------
+
+test('formatApplySummary reports each executed command and a resolved verdict', () => {
+  const text = formatApplySummary({
+    executed: [
+      { runId: '5001', command: 'gh run rerun 5001', section: 'plan' },
+    ],
+    finalPlan: computeRerunPlan(baseInput({ instances: [] }), baseOptions()),
+    resolved: true,
+  });
+  assert.match(text, /executed 1 rerun/);
+  assert.match(text, /gh run rerun 5001/);
+  assert.match(text, /resolved/);
+  assert.doesNotMatch(text, /NOT resolved/);
+});
+
+test('formatApplySummary reports an unresolved verdict when nothing cleared the rollup', () => {
+  const text = formatApplySummary({
+    executed: [],
+    finalPlan: computeRerunPlan(baseInput({ instances: [] }), baseOptions()),
+    resolved: false,
+  });
+  assert.match(text, /executed 0 rerun/);
+  assert.match(text, /NOT resolved/);
 });

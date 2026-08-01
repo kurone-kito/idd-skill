@@ -916,6 +916,34 @@ test('isCopilotReviewerLogin keeps the dual Copilot match by default and matches
   assert.equal(isCopilotReviewerLogin('copilot', '   '), true);
 });
 
+test('#1686: isCopilotReviewerLogin matches only the exact Copilot login set and rejects a registrable lookalike', () => {
+  // The three exact logins the default Copilot match now recognizes.
+  assert.equal(isCopilotReviewerLogin('copilot'), true);
+  assert.equal(isCopilotReviewerLogin('Copilot'), true);
+  assert.equal(isCopilotReviewerLogin('copilot-pull-request-reviewer'), true);
+  assert.equal(
+    isCopilotReviewerLogin('copilot-pull-request-reviewer[bot]'),
+    true,
+  );
+  assert.equal(
+    isCopilotReviewerLogin('Copilot-Pull-Request-Reviewer[Bot]'),
+    true,
+  );
+  // The acceptance-criterion regression: a GitHub username is alphanumeric-
+  // plus-hyphen, so `copilot-pull-request-reviewer1` is a REGISTRABLE login
+  // distinct from the real bot's own two forms above. The pre-#1686 prefix
+  // match (`startsWith('copilot-pull-request-reviewer')`) accepted it; the
+  // exact-set match must not.
+  assert.equal(isCopilotReviewerLogin('copilot-pull-request-reviewer1'), false);
+  // A handful of other lookalike shapes a prefix match would also have let
+  // through.
+  assert.equal(
+    isCopilotReviewerLogin('copilot-pull-request-reviewer-fake'),
+    false,
+  );
+  assert.equal(isCopilotReviewerLogin('copilot-impersonator'), false);
+});
+
 test('advisory wait summary resolves coverage against a configured primary bot', () => {
   const headSha = 'b'.repeat(40);
   const input = {

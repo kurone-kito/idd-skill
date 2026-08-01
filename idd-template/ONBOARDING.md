@@ -981,7 +981,10 @@ OpenCode.
 
 - If the file already exists, append or adapt an IDD section without
   replacing unrelated repository guidance.
-- If the file is missing, create a minimal stub.
+- If the file is missing, create a minimal stub — and when a sibling
+  entry file or an existing `.github/copilot-instructions.md` already
+  carries repository-specific guidance, point the new file at the
+  file(s) that own it instead of copying that guidance in.
 - Only skip creating a missing root agent entry file when the operator
   explicitly opts out of adding new files.
 
@@ -1055,6 +1058,12 @@ After completing the steps above, confirm each item:
 - [ ] `CLAUDE.md`, `AGENTS.md`, and `GEMINI.md` exist and reference
       `docs/idd-workflow.md`, unless the operator explicitly opted out
       of creating them.
+- [ ] Among the entry files the operator did not opt out of creating,
+      they agree on repository-specific engineering guidance — each
+      carries it directly or points to the file(s) that own it; no
+      newly created file silently drops it (observed 2026-07-27,
+      kurone-kito/idd-skill#1717). Manual check: `--verify` below does
+      not cover this item.
 - [ ] If `.github/copilot-instructions.md` existed before onboarding,
       it now includes the IDD workflow reference as well.
 - [ ] The `{{PROJECT_MARKER_PREFIX}}-roadmap-id` and

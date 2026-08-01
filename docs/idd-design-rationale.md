@@ -1,3 +1,10 @@
+---
+type: design
+title: IDD — Design Rationale and Maintainer Notes
+description: Collects maintainer-facing rationale for why IDD phase rules exist as they do, organized by phase file.
+tags: [design-rationale, maintainer-notes]
+---
+
 # IDD — Design Rationale and Maintainer Notes
 
 This document collects maintainer-facing rationale, diagnostics, and

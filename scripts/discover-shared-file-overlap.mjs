@@ -18,6 +18,7 @@ import { resolve } from 'node:path';
 import { parseAutopilotSuitability } from './autopilot-suitability.mjs';
 import { parseCliArgs } from './cli-args.mjs';
 import { GH_TEXT_LOOP_TIMEOUT_OPTIONS, ghText } from './gh-exec.mjs';
+import { loadPolicyConfig } from './idd-config.mjs';
 import { parseIsoDurationToMs } from './policy-helpers.mjs';
 import {
   resolveActiveClaim,
@@ -556,23 +557,12 @@ function loadManifest(manifestPath) {
   }
 }
 function loadPolicy(policyPath) {
-  const explicit = policyPath.length > 0;
-  const targetPath = explicit
-    ? resolve(process.cwd(), policyPath)
-    : resolve(process.cwd(), '.github/idd/config.json');
-  let config = null;
-  try {
-    config = JSON.parse(readFileSync(targetPath, 'utf8'));
-  } catch (error) {
-    // Fail closed on an explicit --policy that cannot be loaded: silently
-    // using defaults would drop custom trusted actors / claim timing and let
-    // active claims disappear. An absent default config still falls back.
-    if (explicit) {
-      const message = error instanceof Error ? error.message : String(error);
-      throw new Error(`failed to load policy at ${targetPath}: ${message}`);
-    }
-    config = null;
-  }
+  // Fail closed on an explicit --policy that cannot be loaded: silently
+  // using defaults would drop custom trusted actors / claim timing and let
+  // active claims disappear. An absent default config still falls back
+  // (idd-config.mts's loadPolicyConfig, #1721, converges this read-and-parse
+  // semantics for all nine --policy/--config-aware helpers).
+  const config = loadPolicyConfig(policyPath).config;
   const markerPrefix =
     typeof config?.markerPrefix === 'string' && config.markerPrefix.length > 0
       ? config.markerPrefix

@@ -27,6 +27,8 @@ import { execFileSync } from 'node:child_process';
 import { parseCliArgs } from './cli-args.mts';
 import { ghText } from './gh-exec.mts';
 import { deriveGhHttpStatus } from './gh-http-status.mts';
+import { loadIddConfig } from './idd-config.mts';
+import { normalizePolicyConfig } from './policy-helpers.mts';
 import {
   CI_FAILURE_CONCLUSION_STATES,
   parsePaginatedGhNdjson,
@@ -126,14 +128,31 @@ export interface CiWaitRequiredChecksRollup {
   anyRequiredUnknown: boolean;
   /**
    * True when a ruleset `workflows` rule or an app/integration-pinned
-   * classic required check is in force but cannot be enumerated by name
-   * (mirrors `summarizeBranchReviewRequirements`'s
-   * `requiredCheckSourcePinned`). When this is true and `names` is empty,
-   * `status` is `source-pinned`, not `no-required-checks` — required
-   * checks are still gating the branch; this helper just cannot resolve
-   * them by name, so callers must not treat it as a vacuous pass.
+   * classic required check is in force (mirrors
+   * `summarizeBranchReviewRequirements`'s `requiredCheckSourcePinned`).
+   * When this is true and `names` is empty, `status` is `source-pinned`,
+   * not `no-required-checks` — required checks are still gating the
+   * branch; this helper just cannot resolve them by name, so callers must
+   * not treat it as a vacuous pass. When `names` is non-empty and every
+   * named check passes, `status` is also `source-pinned` (not `success`)
+   * unless the caller opts in via `ciGate.trustSourcePinnedRequiredChecks`
+   * (#1689; see `buildRequiredChecksRollup`'s doc comment) — this helper
+   * has no way to verify a green named check actually came from the
+   * pinned integration.
    */
   requiredCheckSourcePinned: boolean;
+  /**
+   * True when at least one pinned source could not be attributed to a
+   * resolved check name (a `workflows` rule, or a pinned classic entry with
+   * no `context`/`name`/`check`) -- mirrors
+   * `summarizeBranchReviewRequirements`'s `requiredCheckSourcePinnedUnresolved`
+   * (#1689). The `ciGate.trustSourcePinnedRequiredChecks` opt-in must never
+   * bypass the `source-pinned` status while this is true, even when a
+   * SEPARATE, named-and-pinned check on the same required-check set would
+   * itself qualify for the opt-in -- there is no check name to correlate
+   * the unresolved pinning with a live run at all.
+   */
+  requiredCheckSourcePinnedUnresolved: boolean;
   status:
     | 'success'
     | 'pending'
@@ -271,6 +290,12 @@ function main(): void {
     branchProtection,
   );
 
+  // #1689: `ciGate.trustSourcePinnedRequiredChecks` -- see
+  // `buildRequiredChecksRollup`'s doc comment for the full rationale.
+  const trustSourcePinnedRequiredChecks =
+    normalizePolicyConfig(loadIddConfig()).ciGate
+      .trustSourcePinnedRequiredChecks === true;
+
   const summary = buildCiWaitStateSummary(
     {
       headRefOid: pr.headRefOid ?? '',
@@ -280,6 +305,9 @@ function main(): void {
       requiredCheckNames: branchReviewRequirements.requiredCheckNames,
       requiredCheckSourcePinned:
         branchReviewRequirements.requiredCheckSourcePinned,
+      requiredCheckSourcePinnedUnresolved:
+        branchReviewRequirements.requiredCheckSourcePinnedUnresolved,
+      trustSourcePinnedRequiredChecks,
     },
   );
 
@@ -300,6 +328,14 @@ export function buildCiWaitStateSummary(
   options: {
     requiredCheckNames?: string[] | null;
     requiredCheckSourcePinned?: boolean;
+    // #1689: mirrors `summarizeBranchReviewRequirements`'s field of the same
+    // name -- see `CiWaitRequiredChecksRollup`'s doc comment. Omitted by
+    // unit callers (default `false`).
+    requiredCheckSourcePinnedUnresolved?: boolean;
+    // #1689: `ciGate.trustSourcePinnedRequiredChecks` opt-in, forwarded to
+    // `buildRequiredChecksRollup`. Omitted by unit callers (default
+    // `false`, unchanged pre-#1689 conservative behavior).
+    trustSourcePinnedRequiredChecks?: boolean;
   } = {},
 ): CiWaitStateSummary {
   const requiredCheckNameSet = new Set(
@@ -316,6 +352,8 @@ export function buildCiWaitStateSummary(
     checks,
     requiredCheckNameSet,
     options.requiredCheckSourcePinned === true,
+    options.requiredCheckSourcePinnedUnresolved === true,
+    options.trustSourcePinnedRequiredChecks === true,
   );
 
   return {
@@ -503,6 +541,21 @@ function buildRequiredChecksRollup(
   checks: CiWaitCheckEntry[],
   requiredCheckNameSet: Set<string>,
   requiredCheckSourcePinned: boolean,
+  // #1689: true when at least one pinned source has no resolved check name
+  // (a `workflows` rule, or a pinned classic entry with no `context`/
+  // `name`/`check`) -- see `CiWaitRequiredChecksRollup`'s doc comment. The
+  // opt-in below must never bypass the downgrade while this is true, even
+  // when a separate, named-and-pinned check on the same required-check set
+  // would itself qualify.
+  requiredCheckSourcePinnedUnresolved: boolean,
+  // #1689: `ciGate.trustSourcePinnedRequiredChecks` opt-in, mirroring
+  // `summarizeRequiredChecks`'s option of the same name in
+  // protocol-helpers.mts -- see that function's doc comment for the full
+  // rationale. Only widens the named/present/passing mixed case below;
+  // the fully-unnamed case above (`names.length === 0`) stays
+  // unconditionally conservative regardless of this flag, since there is
+  // no check name to correlate with a live run at all in that case.
+  trustSourcePinnedRequiredChecks: boolean,
 ): CiWaitRequiredChecksRollup {
   const names = [...requiredCheckNameSet].sort();
   if (names.length === 0) {
@@ -520,6 +573,7 @@ function buildRequiredChecksRollup(
       anyRequiredFailing: false,
       anyRequiredUnknown: false,
       requiredCheckSourcePinned,
+      requiredCheckSourcePinnedUnresolved,
       status: requiredCheckSourcePinned
         ? 'source-pinned'
         : 'no-required-checks',
@@ -560,14 +614,22 @@ function buildRequiredChecksRollup(
     status = 'failing';
   } else if (anyRequiredPending || anyRequiredUnknown) {
     status = 'pending';
-  } else if (requiredCheckSourcePinned) {
+  } else if (
+    requiredCheckSourcePinned &&
+    (!trustSourcePinnedRequiredChecks || requiredCheckSourcePinnedUnresolved)
+  ) {
     // Mixed case: enumerable required checks all pass, but a ruleset
     // `workflows` rule or an app-pinned classic check is ALSO in force and
     // not name-enumerable, so it is not covered by requiredEntries at all.
     // Mirrors summarizeRequiredChecks in protocol-helpers.mts, which
-    // downgrades an otherwise-"success" classification to unresolved under
-    // the same condition — never report a vacuous success while an
-    // unverified source-pinned requirement could still be gating the branch.
+    // downgrades an otherwise-"success" classification (absent the #1689
+    // `trustSourcePinnedRequiredChecks` opt-in checked above) under the
+    // same condition — never report a vacuous success while an unverified
+    // source-pinned requirement could still be gating the branch. The
+    // opt-in itself never overrides an unresolved pinned source (no check
+    // name to correlate with a live run at all), even when a separate,
+    // named-and-pinned check on the same required-check set would itself
+    // qualify.
     status = 'source-pinned';
   } else {
     status = 'success';
@@ -583,6 +645,7 @@ function buildRequiredChecksRollup(
     anyRequiredFailing,
     anyRequiredUnknown,
     requiredCheckSourcePinned,
+    requiredCheckSourcePinnedUnresolved,
     status,
   };
 }

@@ -11,6 +11,7 @@ import {
   collectEnginesRangeMirrorViolations,
   collectGeneratedFromBannerViolations,
   collectInstructionSizeBudgetViolations,
+  collectOkfFrontmatterViolations,
   collectPolicyConfigDrift,
   generatedFromBanner,
   injectGeneratedFromBanner,
@@ -122,6 +123,92 @@ test('instruction size budget returns nothing for absent config', () => {
     },
   );
   assert.deepEqual(result, { errors: [], notices: [] });
+});
+
+// #1721: `??` only substitutes on null/undefined, so a non-numeric budget
+// limit used to coerce every size comparison to NaN (always false),
+// silently passing the guard (fail-open) instead of being rejected.
+test('instruction size budget rejects a non-numeric alwaysLoadedLimitBytes instead of silently passing (fail-open regression)', () => {
+  const result = collectInstructionSizeBudgetViolations(
+    {
+      id: 'instruction-size-budgets',
+      alwaysLoadedLimitBytes: 'not-a-number',
+    },
+    new Set(['idd-core.instructions.md']),
+    () => {
+      throw new Error('must not list files once validation rejects config');
+    },
+    () => {
+      throw new Error('must not read files once validation rejects config');
+    },
+  );
+  assert.deepEqual(result.notices, []);
+  assert.equal(result.errors.length, 1);
+  assert.match(
+    result.errors[0],
+    /alwaysLoadedLimitBytes must be a positive integer \(got "not-a-number"\)/,
+  );
+});
+
+test('instruction size budget rejects a non-positive phaseLimitBytes', () => {
+  const result = collectInstructionSizeBudgetViolations(
+    { id: 'instruction-size-budgets', phaseLimitBytes: 0 },
+    new Set(),
+    () => [],
+    () => '',
+  );
+  assert.equal(result.errors.length, 1);
+  assert.match(
+    result.errors[0],
+    /phaseLimitBytes must be a positive integer \(got 0\)/,
+  );
+});
+
+test('instruction size budget rejects a non-string alwaysLoadedPattern', () => {
+  const result = collectInstructionSizeBudgetViolations(
+    { id: 'instruction-size-budgets', alwaysLoadedPattern: 42 },
+    new Set(),
+    () => [],
+    () => '',
+  );
+  assert.equal(result.errors.length, 1);
+  assert.match(
+    result.errors[0],
+    /alwaysLoadedPattern must be a string \(got 42\)/,
+  );
+});
+
+// Regression coverage for a Copilot review finding on PR #1776: `??` only
+// substitutes on `undefined`, not `null`, but the two are not the same
+// authoring intent -- an explicit `null` in the manifest is a malformed
+// value that must be rejected, not silently treated the same as "field
+// omitted" and defaulted.
+test('instruction size budget rejects an explicit null alwaysLoadedPattern instead of silently defaulting it', () => {
+  const result = collectInstructionSizeBudgetViolations(
+    { id: 'instruction-size-budgets', alwaysLoadedPattern: null },
+    new Set(),
+    () => [],
+    () => '',
+  );
+  assert.equal(result.errors.length, 1);
+  assert.match(
+    result.errors[0],
+    /alwaysLoadedPattern must be a string \(got null\)/,
+  );
+});
+
+test('instruction size budget rejects an alwaysLoadedPattern that does not compile as a regular expression', () => {
+  const result = collectInstructionSizeBudgetViolations(
+    { id: 'instruction-size-budgets', alwaysLoadedPattern: '(' },
+    new Set(),
+    () => [],
+    () => '',
+  );
+  assert.equal(result.errors.length, 1);
+  assert.match(
+    result.errors[0],
+    /alwaysLoadedPattern "\(" does not compile as a regular expression/,
+  );
 });
 
 const BANNER_SOURCE =
@@ -585,6 +672,7 @@ test('policy normalization provides default-safe values and supports aliases', (
         maxValidity: 'PT24H',
       },
       trustEmptyProtectionReads: false,
+      trustSourcePinnedRequiredChecks: false,
     },
     discover: {
       activeClaimPreScanBatchSize: 10,
@@ -674,6 +762,7 @@ test('policy normalization provides default-safe values and supports aliases', (
           maxValidity: 'PT12H',
         },
         trustEmptyProtectionReads: true,
+        trustSourcePinnedRequiredChecks: true,
       },
       discover: {
         activeClaimPreScanBatchSize: 11,
@@ -751,6 +840,7 @@ test('policy normalization provides default-safe values and supports aliases', (
           maxValidity: 'PT12H',
         },
         trustEmptyProtectionReads: true,
+        trustSourcePinnedRequiredChecks: true,
       },
       discover: {
         activeClaimPreScanBatchSize: 11,
@@ -869,6 +959,7 @@ test('policy normalization provides default-safe values and supports aliases', (
         maxValidity: 'PT24H',
       },
       trustEmptyProtectionReads: false,
+      trustSourcePinnedRequiredChecks: false,
     },
   );
 
@@ -900,6 +991,21 @@ test('policy normalization provides default-safe values and supports aliases', (
     normalizePolicyConfig({
       ciGate: { trustEmptyProtectionReads: true },
     }).ciGate.trustEmptyProtectionReads,
+    true,
+  );
+
+  // #1689: same fail-closed coercion contract as trustEmptyProtectionReads
+  // above, for the sibling ciGate.trustSourcePinnedRequiredChecks opt-in.
+  assert.equal(
+    normalizePolicyConfig({
+      ciGate: { trustSourcePinnedRequiredChecks: 'true' },
+    }).ciGate.trustSourcePinnedRequiredChecks,
+    false,
+  );
+  assert.equal(
+    normalizePolicyConfig({
+      ciGate: { trustSourcePinnedRequiredChecks: true },
+    }).ciGate.trustSourcePinnedRequiredChecks,
     true,
   );
 });
@@ -1357,4 +1463,448 @@ test('resolveGeneratedBlockFiles: neither paths nor sourceGlobs resolves to an e
     resolveGeneratedBlockFiles({}, () => []),
     [],
   );
+});
+
+// =============================================================================
+// collectOkfFrontmatterViolations (#1680) -- fail-closed OKF v0.1 frontmatter
+// conformance checker for `okfBundles[]` manifest entries. Every case here
+// uses synthetic in-memory fixtures, never the live docs/** corpus: this
+// track intentionally backfills no page (see docs/okf-frontmatter.md).
+// =============================================================================
+
+const OKF_TEST_TYPES = ['guide', 'reference', 'concept'];
+
+/**
+ * Builds `listFiles`/`readFile` callbacks over an in-memory
+ * `{ path: content }` map, mirroring how the audit pipeline binds
+ * `globFiles`/`readText` to `repoFiles` -- without touching the real
+ * filesystem or the live docs corpus.
+ */
+function okfFixture(files: Record<string, string>) {
+  const listFiles = (pattern: string) => {
+    const prefix = pattern.replace(/\/\*\*\/\*\.md$/, '/');
+    return Object.keys(files)
+      .filter((path) => path.startsWith(prefix))
+      .sort();
+  };
+  const readFile = (path: string) => {
+    if (!Object.hasOwn(files, path)) {
+      throw new Error(`unexpected read in OKF fixture: ${path}`);
+    }
+    return files[path];
+  };
+  return { listFiles, readFile };
+}
+
+test('collectOkfFrontmatterViolations: a conforming page passes', () => {
+  const { listFiles, readFile } = okfFixture({
+    'docs/foo.md':
+      '---\ntype: guide\ntitle: Foo\ndescription: A short sentence.\ntags: [a, b]\n---\n\n# Foo\n\nBody.\n',
+  });
+  const errors = collectOkfFrontmatterViolations(
+    [
+      {
+        id: 'docs-okf',
+        roots: ['docs'],
+        reservedFilenames: ['index.md'],
+        types: OKF_TEST_TYPES,
+        exemptPaths: [],
+      },
+    ],
+    listFiles,
+    readFile,
+  );
+  assert.deepEqual(errors, []);
+});
+
+test('collectOkfFrontmatterViolations: a plain YAML comment inside frontmatter is not misread as the H1', () => {
+  // A `# `-prefixed line inside the frontmatter block is a YAML comment,
+  // not a Markdown heading -- the H1 scan must only run on the
+  // post-frontmatter body, or this would produce a false "title does not
+  // match" failure even though the body's own `# Foo` heading agrees with
+  // `title`.
+  const { listFiles, readFile } = okfFixture({
+    'docs/foo.md':
+      '---\ntype: guide\n# a plain YAML comment, not a heading\ntitle: Foo\ndescription: A short sentence.\n---\n\n# Foo\n\nBody.\n',
+  });
+  const errors = collectOkfFrontmatterViolations(
+    [
+      {
+        id: 'docs-okf',
+        roots: ['docs'],
+        types: OKF_TEST_TYPES,
+        exemptPaths: [],
+      },
+    ],
+    listFiles,
+    readFile,
+  );
+  assert.deepEqual(errors, []);
+});
+
+test('collectOkfFrontmatterViolations: a reserved filename is skipped entirely', () => {
+  const { listFiles, readFile } = okfFixture({
+    'docs/index.md': '# Index\n\nNo frontmatter here, and that is fine.\n',
+  });
+  const errors = collectOkfFrontmatterViolations(
+    [
+      {
+        id: 'docs-okf',
+        roots: ['docs'],
+        reservedFilenames: ['index.md', 'log.md'],
+        types: OKF_TEST_TYPES,
+        exemptPaths: [],
+      },
+    ],
+    listFiles,
+    readFile,
+  );
+  assert.deepEqual(errors, []);
+});
+
+test('collectOkfFrontmatterViolations: a file with no frontmatter block fails', () => {
+  const { listFiles, readFile } = okfFixture({
+    'docs/foo.md': '# Foo\n\nBody with no leading frontmatter at all.\n',
+  });
+  const errors = collectOkfFrontmatterViolations(
+    [
+      {
+        id: 'docs-okf',
+        roots: ['docs'],
+        types: OKF_TEST_TYPES,
+        exemptPaths: [],
+      },
+    ],
+    listFiles,
+    readFile,
+  );
+  assert.equal(errors.length, 1);
+  assert.match(
+    errors[0],
+    /docs\/foo\.md has no parseable YAML frontmatter block/,
+  );
+});
+
+test('collectOkfFrontmatterViolations: an empty type fails', () => {
+  const { listFiles, readFile } = okfFixture({
+    'docs/foo.md':
+      '---\ntype: ""\ntitle: Foo\ndescription: A short sentence.\n---\n\n# Foo\n',
+  });
+  const errors = collectOkfFrontmatterViolations(
+    [
+      {
+        id: 'docs-okf',
+        roots: ['docs'],
+        types: OKF_TEST_TYPES,
+        exemptPaths: [],
+      },
+    ],
+    listFiles,
+    readFile,
+  );
+  assert.equal(errors.length, 1);
+  assert.match(errors[0], /missing a non-empty "type" field/);
+});
+
+test('collectOkfFrontmatterViolations: a missing description fails', () => {
+  const { listFiles, readFile } = okfFixture({
+    'docs/foo.md': '---\ntype: guide\ntitle: Foo\n---\n\n# Foo\n',
+  });
+  const errors = collectOkfFrontmatterViolations(
+    [
+      {
+        id: 'docs-okf',
+        roots: ['docs'],
+        types: OKF_TEST_TYPES,
+        exemptPaths: [],
+      },
+    ],
+    listFiles,
+    readFile,
+  );
+  assert.equal(errors.length, 1);
+  assert.match(errors[0], /missing a non-empty "description" field/);
+});
+
+test('collectOkfFrontmatterViolations: a type outside the closed set fails', () => {
+  const { listFiles, readFile } = okfFixture({
+    'docs/foo.md':
+      '---\ntype: essay\ntitle: Foo\ndescription: A short sentence.\n---\n\n# Foo\n',
+  });
+  const errors = collectOkfFrontmatterViolations(
+    [
+      {
+        id: 'docs-okf',
+        roots: ['docs'],
+        types: OKF_TEST_TYPES,
+        exemptPaths: [],
+      },
+    ],
+    listFiles,
+    readFile,
+  );
+  assert.equal(errors.length, 1);
+  assert.match(errors[0], /"type: essay" is not in the configured types list/);
+});
+
+test('collectOkfFrontmatterViolations: a title disagreeing with the H1 fails', () => {
+  const { listFiles, readFile } = okfFixture({
+    'docs/foo.md':
+      '---\ntype: guide\ntitle: Wrong Title\ndescription: A short sentence.\n---\n\n# Foo\n',
+  });
+  const errors = collectOkfFrontmatterViolations(
+    [
+      {
+        id: 'docs-okf',
+        roots: ['docs'],
+        types: OKF_TEST_TYPES,
+        exemptPaths: [],
+      },
+    ],
+    listFiles,
+    readFile,
+  );
+  assert.equal(errors.length, 1);
+  assert.match(
+    errors[0],
+    /"title: Wrong Title" does not match the page's "# Foo" heading/,
+  );
+});
+
+test('collectOkfFrontmatterViolations: a non-list tags fails', () => {
+  const { listFiles, readFile } = okfFixture({
+    'docs/foo.md':
+      '---\ntype: guide\ntitle: Foo\ndescription: A short sentence.\ntags: not-a-list\n---\n\n# Foo\n',
+  });
+  const errors = collectOkfFrontmatterViolations(
+    [
+      {
+        id: 'docs-okf',
+        roots: ['docs'],
+        types: OKF_TEST_TYPES,
+        exemptPaths: [],
+      },
+    ],
+    listFiles,
+    readFile,
+  );
+  assert.equal(errors.length, 1);
+  assert.match(errors[0], /"tags" must be a YAML list of non-empty strings/);
+});
+
+test('collectOkfFrontmatterViolations: a non-conforming page listed in exemptPaths is silently skipped', () => {
+  const { listFiles, readFile } = okfFixture({
+    'docs/foo.md': '# Foo\n\nNo frontmatter, but grandfathered in.\n',
+  });
+  const errors = collectOkfFrontmatterViolations(
+    [
+      {
+        id: 'docs-okf',
+        roots: ['docs'],
+        types: OKF_TEST_TYPES,
+        exemptPaths: ['docs/foo.md'],
+      },
+    ],
+    listFiles,
+    readFile,
+  );
+  assert.deepEqual(errors, []);
+});
+
+test('collectOkfFrontmatterViolations: an exemptPaths entry naming a nonexistent file fails', () => {
+  const { listFiles, readFile } = okfFixture({
+    'docs/foo.md':
+      '---\ntype: guide\ntitle: Foo\ndescription: A short sentence.\n---\n\n# Foo\n',
+  });
+  const errors = collectOkfFrontmatterViolations(
+    [
+      {
+        id: 'docs-okf',
+        roots: ['docs'],
+        types: OKF_TEST_TYPES,
+        exemptPaths: ['docs/missing.md'],
+      },
+    ],
+    listFiles,
+    readFile,
+  );
+  assert.equal(errors.length, 1);
+  assert.match(
+    errors[0],
+    /exemptPaths names docs\/missing\.md, which does not exist under a configured root/,
+  );
+});
+
+test('collectOkfFrontmatterViolations: an exemptPaths entry naming a now-conforming file fails', () => {
+  const { listFiles, readFile } = okfFixture({
+    'docs/foo.md':
+      '---\ntype: guide\ntitle: Foo\ndescription: A short sentence.\n---\n\n# Foo\n',
+  });
+  const errors = collectOkfFrontmatterViolations(
+    [
+      {
+        id: 'docs-okf',
+        roots: ['docs'],
+        types: OKF_TEST_TYPES,
+        exemptPaths: ['docs/foo.md'],
+      },
+    ],
+    listFiles,
+    readFile,
+  );
+  assert.equal(errors.length, 1);
+  assert.match(
+    errors[0],
+    /exemptPaths names docs\/foo\.md, which now conforms to the OKF profile/,
+  );
+});
+
+test('collectOkfFrontmatterViolations: an H1 legitimately ending in "#" is not stripped', () => {
+  // CommonMark's ATX closing sequence requires a preceding space; a title
+  // like "Guide to C#" must keep its trailing "#" rather than have it
+  // misread as a closing sequence and stripped down to "Guide to C".
+  const { listFiles, readFile } = okfFixture({
+    'docs/foo.md':
+      '---\ntype: guide\ntitle: Guide to C#\ndescription: A short sentence.\n---\n\n# Guide to C#\n\nBody.\n',
+  });
+  const errors = collectOkfFrontmatterViolations(
+    [
+      {
+        id: 'docs-okf',
+        roots: ['docs'],
+        types: OKF_TEST_TYPES,
+        exemptPaths: [],
+      },
+    ],
+    listFiles,
+    readFile,
+  );
+  assert.deepEqual(errors, []);
+});
+
+test('collectOkfFrontmatterViolations: a legitimate closing sequence is still stripped', () => {
+  const { listFiles, readFile } = okfFixture({
+    'docs/foo.md':
+      '---\ntype: guide\ntitle: Foo\ndescription: A short sentence.\n---\n\n# Foo #\n\nBody.\n',
+  });
+  const errors = collectOkfFrontmatterViolations(
+    [
+      {
+        id: 'docs-okf',
+        roots: ['docs'],
+        types: OKF_TEST_TYPES,
+        exemptPaths: [],
+      },
+    ],
+    listFiles,
+    readFile,
+  );
+  assert.deepEqual(errors, []);
+});
+
+test('collectOkfFrontmatterViolations: a zero-indent YAML block sequence for tags parses correctly', () => {
+  // YAML permits a block sequence at the same indentation as its mapping
+  // key; the parser must not silently drop these items into an empty
+  // scalar and then fail the "tags must be a list" check on valid YAML.
+  const { listFiles, readFile } = okfFixture({
+    'docs/foo.md':
+      '---\ntype: guide\ntitle: Foo\ndescription: A short sentence.\ntags:\n- okf\n- frontmatter\n---\n\n# Foo\n\nBody.\n',
+  });
+  const errors = collectOkfFrontmatterViolations(
+    [
+      {
+        id: 'docs-okf',
+        roots: ['docs'],
+        types: OKF_TEST_TYPES,
+        exemptPaths: [],
+      },
+    ],
+    listFiles,
+    readFile,
+  );
+  assert.deepEqual(errors, []);
+});
+
+test('collectOkfFrontmatterViolations: an indented block sequence for tags still parses correctly', () => {
+  const { listFiles, readFile } = okfFixture({
+    'docs/foo.md':
+      '---\ntype: guide\ntitle: Foo\ndescription: A short sentence.\ntags:\n  - okf\n  - frontmatter\n---\n\n# Foo\n\nBody.\n',
+  });
+  const errors = collectOkfFrontmatterViolations(
+    [
+      {
+        id: 'docs-okf',
+        roots: ['docs'],
+        types: OKF_TEST_TYPES,
+        exemptPaths: [],
+      },
+    ],
+    listFiles,
+    readFile,
+  );
+  assert.deepEqual(errors, []);
+});
+
+test('collectOkfFrontmatterViolations: an exemptPaths entry naming a reserved filename fails', () => {
+  const { listFiles, readFile } = okfFixture({
+    'docs/index.md': '# Index\n\nNo frontmatter here, and that is fine.\n',
+  });
+  const errors = collectOkfFrontmatterViolations(
+    [
+      {
+        id: 'docs-okf',
+        roots: ['docs'],
+        reservedFilenames: ['index.md', 'log.md'],
+        types: OKF_TEST_TYPES,
+        exemptPaths: ['docs/index.md'],
+      },
+    ],
+    listFiles,
+    readFile,
+  );
+  assert.equal(errors.length, 1);
+  assert.match(
+    errors[0],
+    /exemptPaths names docs\/index\.md, which is a reserved filename and is never checked/,
+  );
+});
+
+test('collectOkfFrontmatterViolations: misconfigured roots/types fail closed, non-array bundles are a no-op', () => {
+  assert.deepEqual(
+    collectOkfFrontmatterViolations(
+      null,
+      () => [],
+      () => '',
+    ),
+    [],
+  );
+  assert.deepEqual(
+    collectOkfFrontmatterViolations(
+      undefined,
+      () => [],
+      () => '',
+    ),
+    [],
+  );
+
+  const noRoots = collectOkfFrontmatterViolations(
+    [{ id: 'x', roots: [], types: OKF_TEST_TYPES }],
+    () => {
+      throw new Error('listFiles must not be called without roots');
+    },
+    () => '',
+  );
+  assert.equal(noRoots.length, 1);
+  assert.match(
+    noRoots[0],
+    /roots must be a non-empty array of directory strings/,
+  );
+
+  const noTypes = collectOkfFrontmatterViolations(
+    [{ id: 'x', roots: ['docs'], types: [] }],
+    () => [],
+    () => '',
+  );
+  assert.equal(noTypes.length, 1);
+  assert.match(noTypes[0], /types must be a non-empty array of type strings/);
 });

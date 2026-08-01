@@ -228,19 +228,28 @@ next (`gh run rerun <run-id>` on each, one at a time, per the sequential
 rule in the helper-first plan below) — only an `action_required`-conclusion
 instance stays withheld from rerun.
 
-**Helper-first**: prints this diagnosis and ordered rerun plan, read-only.
+**Helper-first**: prints this diagnosis and ordered rerun plan, read-only
+by default; pass `--apply` to also execute it — the preferred one-shot
+recovery path when a helper runtime is available. `--apply` reruns each
+rerun-eligible instance in order (recovery-refresh first when one
+applies), waits for each to reach a terminal state before starting the
+next, and stops early as soon as the rollup resolves — never a
+`bot-gated-skip` or rerun-budget-held instance.
 
 ```sh
 # source repo / vendored-node profile
-node scripts/rerun-advisory-convergence.mjs --pr <n>
+node scripts/rerun-advisory-convergence.mjs --pr <n> [--apply]
 
 # package-manager / ephemeral-npx profile
-<profile-selected-rerun-advisory-convergence-command> --pr <n>
+<profile-selected-rerun-advisory-convergence-command> --pr <n> [--apply]
 ```
 
 Resolve `<profile-selected-rerun-advisory-convergence-command>` from
 `docs/idd-helper-scripts.md`; do not hardcode `node scripts/...` for
-non-vendored profiles.
+non-vendored profiles. On `instructions-only` (no helper runtime), fall
+back to the manual sequence: run the diagnostic, then `gh run rerun
+<run-id>` on each plan entry one at a time, waiting for each to finish
+before the next.
 
 **Terminal-waiver recheck (`#1570`)**: once a maintainer waives a proven
 `COPILOT_UNAVAILABLE` state

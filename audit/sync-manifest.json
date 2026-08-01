@@ -1,5 +1,5 @@
 {
-  "_comment": "Documentation audit contract. Use exact for mirrored files, concreted when the source becomes the target after listed replacements, and structure when the files intentionally differ but must keep the same heading map.",
+  "_comment": "Documentation audit contract. Use exact for mirrored files, concreted when the source becomes the target after listed replacements, and structure when the files intentionally differ but must keep the same heading map. Always edit the source side of an exact/concreted pair -- sync-docs.mjs regenerates target from source and, since #1765, refuses to overwrite a target carrying an uncommitted local edit without --force.",
   "readmePairs": [
     {
       "id": "root-readme",
@@ -134,6 +134,30 @@
     {
       "id": "issue-authoring-companion-files",
       "file": "idd-template/ONBOARDING.md",
+      "language": "text",
+      "sourceGlobs": [
+        "skills/issue-authoring/**"
+      ],
+      "paths": [
+        "skills/issue-authoring/SKILL.md",
+        "skills/issue-authoring/agents/openai.yaml",
+        "skills/issue-authoring/references/contract.md",
+        "skills/issue-authoring/references/draft-patterns.md",
+        "skills/issue-authoring/references/workflow-boundary.md"
+      ]
+    },
+    {
+      "id": "idd-template-readme-core-files",
+      "file": "idd-template/README.md",
+      "language": "text",
+      "stripPrefix": "idd-template/",
+      "sourceGlobs": [
+        "idd-template/**/*"
+      ]
+    },
+    {
+      "id": "idd-template-readme-issue-authoring-files",
+      "file": "idd-template/README.md",
       "language": "text",
       "sourceGlobs": [
         "skills/issue-authoring/**"
@@ -781,5 +805,42 @@
     ],
     "tsExpectErrorLimit": 0,
     "explicitAnyLimit": 0
+  },
+  "okfBundles": [
+    {
+      "id": "docs-okf",
+      "_comment": "OKF (Open Knowledge Format v0.1) frontmatter conformance bundle (#1680). Fail-closed: every .md file under roots/**/*.md is checked unless its basename is in reservedFilenames or its path is in exemptPaths. No page is backfilled by this track -- exemptPaths lists every page that predates the profile; a later backfill track removes entries as it converts each page, and a stale (now-conforming) entry is itself a checker failure. See docs/okf-frontmatter.md for the field profile.",
+      "roots": [
+        "docs",
+        "idd-template/docs"
+      ],
+      "reservedFilenames": [
+        "index.md",
+        "log.md"
+      ],
+      "types": [
+        "index",
+        "guide",
+        "concept",
+        "reference",
+        "workflow",
+        "design",
+        "investigation",
+        "tutorial"
+      ],
+      "exemptPaths": []
+    }
+  ],
+  "markdownLinkAudit": {
+    "id": "markdown-link-audit",
+    "_comment": "Intra-repo markdown link/anchor audit (#1697): resolves every relative markdown link's target file and #fragment against the target's actual GitHub-slugged headings, preventing the dead-anchor drift class #1696 fixed by hand. Runs unconditionally (not changed-file-scoped), since a heading rename in one file orphans inbound anchors in files a PR never touches. Links from idd-template/** are resolved in template context: a relative link that escapes templateRoot is flagged even when the target happens to exist in the source repo tree, since adopters only receive the idd-template/ subtree. External http(s)/mailto/tel links are out of scope (no network I/O). See audit/README.md for the suppression-comment escape hatch.",
+    "globs": [
+      "docs/**/*.md",
+      "idd-template/**/*.md",
+      ".github/instructions/**/*.md",
+      "skills/**/*.md",
+      "*.md"
+    ],
+    "templateRoot": "idd-template/"
   }
 }
