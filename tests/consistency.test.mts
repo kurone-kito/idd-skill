@@ -1284,6 +1284,31 @@ test('collectOkfFrontmatterViolations: a conforming page passes', () => {
   assert.deepEqual(errors, []);
 });
 
+test('collectOkfFrontmatterViolations: a plain YAML comment inside frontmatter is not misread as the H1', () => {
+  // A `# `-prefixed line inside the frontmatter block is a YAML comment,
+  // not a Markdown heading -- the H1 scan must only run on the
+  // post-frontmatter body, or this would produce a false "title does not
+  // match" failure even though the body's own `# Foo` heading agrees with
+  // `title`.
+  const { listFiles, readFile } = okfFixture({
+    'docs/foo.md':
+      '---\ntype: guide\n# a plain YAML comment, not a heading\ntitle: Foo\ndescription: A short sentence.\n---\n\n# Foo\n\nBody.\n',
+  });
+  const errors = collectOkfFrontmatterViolations(
+    [
+      {
+        id: 'docs-okf',
+        roots: ['docs'],
+        types: OKF_TEST_TYPES,
+        exemptPaths: [],
+      },
+    ],
+    listFiles,
+    readFile,
+  );
+  assert.deepEqual(errors, []);
+});
+
 test('collectOkfFrontmatterViolations: a reserved filename is skipped entirely', () => {
   const { listFiles, readFile } = okfFixture({
     'docs/index.md': '# Index\n\nNo frontmatter here, and that is fine.\n',

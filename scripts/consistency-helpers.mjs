@@ -997,7 +997,12 @@ function checkOkfPageConformance(text, typeSet) {
   if (!typeSet.has(type)) {
     return `frontmatter "type: ${type}" is not in the configured types list`;
   }
-  const h1 = extractOkfFirstH1(text);
+  // Scan only the post-frontmatter body for the H1: a plain (unindented)
+  // YAML comment line inside the frontmatter block, e.g. `# a note`, would
+  // otherwise match the same `# ` heading pattern and be misread as the
+  // page's H1, producing a false "title does not match" failure even when
+  // the real body heading agrees with `title`.
+  const h1 = extractOkfFirstH1(text.slice(match[0].length));
   if (h1 === null) {
     return 'has no top-level "# " heading to compare against frontmatter "title"';
   }
