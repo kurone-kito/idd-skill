@@ -1197,6 +1197,42 @@ test('policy schema rejects a whitespace-containing helperRuntime.packageSpec', 
   );
 });
 
+test('policy schema rejects a shell-metacharacter helperRuntime.packageSpec (idd-skill#1803)', () => {
+  const schema = loadJson('schemas/policy.schema.json');
+  for (const maliciousSpec of [
+    'pkg;touch /tmp/pwned',
+    'pkg|touch',
+    'pkg`touch`',
+    'pkg$(touch)',
+  ]) {
+    const instance = loadJson(
+      'fixtures/schemas/policy.valid.json',
+    ) as PolicyFixture;
+    instance.helperRuntime = {
+      profile: 'ephemeral-npx',
+      packageSpec: maliciousSpec,
+    };
+    const errors = validate(instance, schema);
+    assert.ok(
+      errors.some((error) => error.includes('$.helperRuntime.packageSpec')),
+      `expected ${JSON.stringify(maliciousSpec)} to be rejected: ${errors.join('\n')}`,
+    );
+  }
+});
+
+test('policy schema accepts an npm github-shorthand helperRuntime.packageSpec with a ref', () => {
+  const schema = loadJson('schemas/policy.schema.json');
+  const instance = loadJson(
+    'fixtures/schemas/policy.valid.json',
+  ) as PolicyFixture;
+  instance.helperRuntime = {
+    profile: 'ephemeral-npx',
+    packageSpec: 'github:kurone-kito/idd-skill#v1.0.0',
+  };
+  const errors = validate(instance, schema);
+  assert.deepEqual(errors, []);
+});
+
 // ---------------------------------------------------------------------------
 // Unsupported format values
 // ---------------------------------------------------------------------------
