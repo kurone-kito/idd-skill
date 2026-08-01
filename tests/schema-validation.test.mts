@@ -128,6 +128,68 @@ test('policy schema declares ciGate only once at the top level', () => {
   assert.equal(ciGateMatches.length, 1);
 });
 
+test('every reachable property in the policy schema has a description', () => {
+  // Recursively walks only the schema's own `properties` keyword nesting
+  // (never `items`, `patternProperties`, or `additionalProperties`), so an
+  // array's element schema (e.g. `ciGate.externalChecks.advisory.items`)
+  // is not counted as a separate reachable property here — matching how
+  // #1793 counted "87 of 102 properties" for this schema.
+  interface SchemaPropertyNode {
+    description?: unknown;
+    properties?: Record<string, SchemaPropertyNode>;
+  }
+  function collectMissingDescriptions(
+    node: SchemaPropertyNode | undefined,
+    path: string,
+    missing: string[],
+    visited: { count: number },
+  ): void {
+    if (typeof node !== 'object' || node === null) return;
+    visited.count += 1;
+    if (
+      typeof node.description !== 'string' ||
+      node.description.trim() === ''
+    ) {
+      missing.push(path);
+    }
+    for (const [key, child] of Object.entries(node.properties ?? {})) {
+      collectMissingDescriptions(child, `${path}.${key}`, missing, visited);
+    }
+  }
+
+  const schema = loadJson('schemas/policy.schema.json') as {
+    properties: Record<string, SchemaPropertyNode>;
+  };
+  const missing: string[] = [];
+  const visited = { count: 0 };
+  for (const [key, child] of Object.entries(schema.properties)) {
+    collectMissingDescriptions(child, key, missing, visited);
+  }
+
+  assert.deepEqual(
+    missing,
+    [],
+    `Missing "description" on: ${missing.join(', ')}`,
+  );
+  // An empty or malformed properties tree would otherwise pass the
+  // assertion above vacuously; guard against that structurally (a
+  // non-empty tree containing a known stable canary key) instead of a
+  // hard-coded property count, which would need updating on every
+  // legitimate schema change.
+  assert.ok(
+    Object.keys(schema.properties).length > 0,
+    'expected the policy schema to declare at least one top-level property',
+  );
+  assert.ok(
+    '$schema' in schema.properties,
+    'expected a stable "$schema" top-level property as a walker canary',
+  );
+  assert.ok(
+    visited.count >= Object.keys(schema.properties).length,
+    'expected the walker to visit at least every top-level property',
+  );
+});
+
 test('phase-graph schema uses only allowed keywords', () => {
   const schema = loadJson('schemas/phase-graph.schema.json');
   assert.deepEqual(checkSchemaKeywords(schema), []);

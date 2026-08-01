@@ -400,6 +400,11 @@ recording template you will apply in Step 3.
 
 ### File list
 
+This list includes `docs/index.md`, the entry point and topic map for
+the imported `docs/` bundle — see
+[Customizing IDD § Docs Bundle Frontmatter Convention (OKF)](docs/customization.md#docs-bundle-frontmatter-convention-okf)
+for the frontmatter convention its generated table follows.
+
 <!-- audit:generated id=idd-template-core-files -->
 
 ```text
@@ -436,6 +441,7 @@ recording template you will apply in Step 3.
 .github/instructions/lite/idd-resume-stall-lite.instructions.md
 .github/instructions/lite/idd-ci-lite.instructions.md
 .github/instructions/lite/idd-advisory-wait-lite.instructions.md
+docs/index.md
 docs/idd-workflow.md
 docs/idd-review-policy-profiles.md
 docs/idd-helper-scripts.md
@@ -530,6 +536,7 @@ for FILE in \
   ".github/instructions/lite/idd-resume-stall-lite.instructions.md" \
   ".github/instructions/lite/idd-ci-lite.instructions.md" \
   ".github/instructions/lite/idd-advisory-wait-lite.instructions.md" \
+  "docs/index.md" \
   "docs/idd-workflow.md" \
   "docs/idd-review-policy-profiles.md" \
   "docs/idd-helper-scripts.md" \
@@ -632,6 +639,7 @@ for FILE in \
   ".github/instructions/lite/idd-resume-stall-lite.instructions.md" \
   ".github/instructions/lite/idd-ci-lite.instructions.md" \
   ".github/instructions/lite/idd-advisory-wait-lite.instructions.md" \
+  "docs/index.md" \
   "docs/idd-workflow.md" \
   "docs/idd-review-policy-profiles.md" \
   "docs/idd-helper-scripts.md" \

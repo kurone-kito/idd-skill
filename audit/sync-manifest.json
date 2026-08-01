@@ -62,6 +62,7 @@
         "idd-template/.githooks/*",
         "idd-template/.github/instructions/idd-*.instructions.md",
         "idd-template/.github/instructions/lite/idd-*.instructions.md",
+        "idd-template/docs/index.md",
         "idd-template/docs/idd-*.md",
         "idd-template/docs/permissions.md",
         "idd-template/docs/getting-started.md",
@@ -106,6 +107,7 @@
         "idd-template/.github/instructions/lite/idd-resume-stall-lite.instructions.md",
         "idd-template/.github/instructions/lite/idd-ci-lite.instructions.md",
         "idd-template/.github/instructions/lite/idd-advisory-wait-lite.instructions.md",
+        "idd-template/docs/index.md",
         "idd-template/docs/idd-workflow.md",
         "idd-template/docs/idd-review-policy-profiles.md",
         "idd-template/docs/idd-helper-scripts.md",
@@ -191,6 +193,29 @@
       ],
       "sourceGlobs": [
         "docs/**/*.md"
+      ]
+    },
+    {
+      "id": "idd-template-docs-index-okf-table",
+      "_comment": "OKF frontmatter index table for idd-template/docs/index.md (#1684). Same generator as docs-index-okf-table (#1683), reused unmodified and scoped to the exported template bundle at idd-template/docs/** so an adopter's agent has an entry point into the imported docs/ bundle.",
+      "file": "idd-template/docs/index.md",
+      "kind": "okf-table",
+      "linkBase": "idd-template/docs",
+      "typeOrder": [
+        "index",
+        "guide",
+        "concept",
+        "reference",
+        "workflow",
+        "design",
+        "investigation",
+        "tutorial"
+      ],
+      "excludePaths": [
+        "idd-template/docs/index.md"
+      ],
+      "sourceGlobs": [
+        "idd-template/docs/**/*.md"
       ]
     }
   ],
