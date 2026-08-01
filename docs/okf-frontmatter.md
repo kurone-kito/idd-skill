@@ -116,6 +116,15 @@ future shape would be premature. Widening enforcement to a future OKF
 tooling dependency, or to additional OKF-recommended fields, is a
 deliberate follow-up decision, not an implicit consequence of this page.
 
+Two rows in the field profile table above name a shape the checker does
+not verify: `description`'s "ending in a period" and `tags`'
+"lowercase-hyphen strings" are authoring conventions for a reviewer to
+apply, not mechanical checks — the checker enforces only that both
+fields are non-empty (`description`) or a list of non-empty strings
+(`tags`). Tightening either into a mechanical rule is the same kind of
+deliberate follow-up as the paragraph above, not an oversight in this
+track.
+
 ## Related pages
 
 - [IDD workflow guide](idd-workflow.md) — phase routing this profile
