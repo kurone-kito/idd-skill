@@ -172,7 +172,9 @@ export async function ghTextAsync(
   const run = execFileAsync('gh', args, {
     encoding: 'utf8',
     timeout: options.timeout ?? DEFAULT_GH_TIMEOUT_MS,
-    ...(options.maxBuffer ? { maxBuffer: options.maxBuffer } : {}),
+    ...(options.maxBuffer !== undefined
+      ? { maxBuffer: options.maxBuffer }
+      : {}),
   });
   run.child.stdin?.end();
   const { stdout } = await run;

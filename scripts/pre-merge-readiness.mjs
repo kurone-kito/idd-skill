@@ -18,7 +18,12 @@ import {
   readForcedHandoffAuthorityPolicy,
   readForcedHandoffMode,
 } from './collaborator-permission.mjs';
-import { GH_TEXT_LOOP_OPTIONS, ghText, safeGhText } from './gh-exec.mjs';
+import {
+  DEFAULT_GH_PAGINATED_TIMEOUT_MS,
+  GH_TEXT_LOOP_OPTIONS,
+  ghText,
+  safeGhText,
+} from './gh-exec.mjs';
 import { deriveGhHttpStatus } from './gh-http-status.mjs';
 import { loadIddConfig } from './idd-config.mjs';
 import {
@@ -1049,7 +1054,12 @@ export function resolveToleratedGhFailure(error, options = {}) {
 }
 function runGh(args, options = {}) {
   try {
-    return ghText(args, GH_TEXT_LOOP_OPTIONS);
+    return ghText(args, {
+      ...GH_TEXT_LOOP_OPTIONS,
+      ...(args.includes('--paginate')
+        ? { timeout: DEFAULT_GH_PAGINATED_TIMEOUT_MS }
+        : {}),
+    });
   } catch (error) {
     const tolerated = resolveToleratedGhFailure(error, options);
     if (tolerated !== undefined) {

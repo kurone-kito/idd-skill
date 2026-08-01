@@ -22,7 +22,7 @@ import {
   readForcedHandoffAuthorityPolicy,
   readForcedHandoffMode,
 } from './collaborator-permission.mts';
-import { ghText } from './gh-exec.mts';
+import { DEFAULT_GH_PAGINATED_TIMEOUT_MS, ghText } from './gh-exec.mts';
 import {
   type ParsedClaimMarker,
   resolveActiveClaimForWriteGate,
@@ -242,7 +242,9 @@ function ghJson(args: string[]): unknown {
  * line (NDJSON), which we parse line-by-line (mirrors the sibling helpers).
  */
 function ghJsonPaginated(args: string[]): unknown[] {
-  const out = ghText([...args, '--paginate', '--jq', '.[]']);
+  const out = ghText([...args, '--paginate', '--jq', '.[]'], {
+    timeout: DEFAULT_GH_PAGINATED_TIMEOUT_MS,
+  });
   return out
     .split('\n')
     .map((line) => line.trim())

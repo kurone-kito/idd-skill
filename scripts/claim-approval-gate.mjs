@@ -5,7 +5,11 @@
 // source named above by `pnpm run build`. Edit the .mts source, never the
 // generated .mjs. See docs/typescript-sources.md.
 import { parseCliArgs } from './cli-args.mjs';
-import { GH_TEXT_LOOP_TIMEOUT_OPTIONS, ghText } from './gh-exec.mjs';
+import {
+  DEFAULT_GH_PAGINATED_TIMEOUT_MS,
+  GH_TEXT_LOOP_TIMEOUT_OPTIONS,
+  ghText,
+} from './gh-exec.mjs';
 import { deriveGhHttpStatus } from './gh-http-status.mjs';
 import { loadPolicyConfig } from './idd-config.mjs';
 import { normalizePolicyConfig } from './policy-helpers.mjs';
@@ -707,7 +711,7 @@ function ghApiJson(path, paginate = false, extraArgs = []) {
   if (paginate) {
     args.push('--paginate');
   }
-  return JSON.parse(runGh(args).trim() || '[]');
+  return JSON.parse(runGh(args, paginate).trim() || '[]');
 }
 function ghApiJsonWithStatus(path) {
   try {
@@ -756,9 +760,12 @@ export function wrapGhError(error) {
   wrapped.stdout = stdout;
   return wrapped;
 }
-function runGh(args) {
+function runGh(args, paginate = false) {
   try {
-    return ghText(args, GH_TEXT_LOOP_TIMEOUT_OPTIONS);
+    return ghText(args, {
+      ...GH_TEXT_LOOP_TIMEOUT_OPTIONS,
+      ...(paginate ? { timeout: DEFAULT_GH_PAGINATED_TIMEOUT_MS } : {}),
+    });
   } catch (error) {
     throw wrapGhError(error);
   }

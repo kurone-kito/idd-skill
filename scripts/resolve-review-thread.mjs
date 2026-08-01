@@ -20,7 +20,7 @@ import {
   readForcedHandoffAuthorityPolicy,
   readForcedHandoffMode,
 } from './collaborator-permission.mjs';
-import { ghText } from './gh-exec.mjs';
+import { DEFAULT_GH_PAGINATED_TIMEOUT_MS, ghText } from './gh-exec.mjs';
 import { resolveActiveClaimForWriteGate } from './protocol-helpers.mjs';
 /**
  * Find the review thread that owns the review comment whose REST database id is
@@ -161,7 +161,9 @@ function ghJson(args) {
  * line (NDJSON), which we parse line-by-line (mirrors the sibling helpers).
  */
 function ghJsonPaginated(args) {
-  const out = ghText([...args, '--paginate', '--jq', '.[]']);
+  const out = ghText([...args, '--paginate', '--jq', '.[]'], {
+    timeout: DEFAULT_GH_PAGINATED_TIMEOUT_MS,
+  });
   return out
     .split('\n')
     .map((line) => line.trim())

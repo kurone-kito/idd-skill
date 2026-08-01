@@ -8,7 +8,11 @@ import { readFileSync } from 'node:fs';
 import { parseCliArgs } from './cli-args.mjs';
 import { resolveTrustedCollaboratorMarkerLogins } from './collaborator-permission.mjs';
 import { resolveHelperActiveClaim } from './forced-handoff-marker.mjs';
-import { ghText, safeGhText } from './gh-exec.mjs';
+import {
+  DEFAULT_GH_PAGINATED_TIMEOUT_MS,
+  ghText,
+  safeGhText,
+} from './gh-exec.mjs';
 import { deriveGhHttpStatus } from './gh-http-status.mjs';
 import {
   normalizePolicyConfig,
@@ -729,7 +733,9 @@ function ghJson(args, slurp = false) {
   const finalArgs = [...args];
   if (slurp) {
     finalArgs.splice(1, 0, '--jq', '.[]');
-    return parsePaginatedGhNdjson(ghText(finalArgs));
+    return parsePaginatedGhNdjson(
+      ghText(finalArgs, { timeout: DEFAULT_GH_PAGINATED_TIMEOUT_MS }),
+    );
   }
   return JSON.parse(ghText(finalArgs));
 }

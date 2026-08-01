@@ -14,7 +14,11 @@ import {
   readForcedHandoffAuthorityPolicy,
   readForcedHandoffMode,
 } from './collaborator-permission.mts';
-import { ghText, safeGhText } from './gh-exec.mts';
+import {
+  DEFAULT_GH_PAGINATED_TIMEOUT_MS,
+  ghText,
+  safeGhText,
+} from './gh-exec.mts';
 import { loadIddConfig } from './idd-config.mts';
 import { resolveCollaboratorMarkerTrust } from './policy-helpers.mts';
 import type { ClaimValidationSummary } from './protocol-helpers.mts';
@@ -694,7 +698,9 @@ function ghJson(args: string[], slurp = false): unknown {
     // --slurp landed in gh v2.48.0, but Ubuntu 24.04 LTS ships gh v2.45.0
     // via apt, so keep the NDJSON-compatible form here.
     finalArgs.splice(1, 0, '--jq', '.[]');
-    return parsePaginatedGhNdjson(ghText(finalArgs));
+    return parsePaginatedGhNdjson(
+      ghText(finalArgs, { timeout: DEFAULT_GH_PAGINATED_TIMEOUT_MS }),
+    );
   }
   return JSON.parse(ghText(finalArgs));
 }

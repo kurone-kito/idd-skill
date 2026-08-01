@@ -6,7 +6,11 @@
 // generated .mjs. See docs/typescript-sources.md.
 
 import { parseCliArgs } from './cli-args.mts';
-import { GH_TEXT_LOOP_TIMEOUT_OPTIONS, ghText } from './gh-exec.mts';
+import {
+  DEFAULT_GH_PAGINATED_TIMEOUT_MS,
+  GH_TEXT_LOOP_TIMEOUT_OPTIONS,
+  ghText,
+} from './gh-exec.mts';
 import { deriveGhHttpStatus } from './gh-http-status.mts';
 import { loadPolicyConfig } from './idd-config.mts';
 import { normalizePolicyConfig } from './policy-helpers.mts';
@@ -927,7 +931,7 @@ function ghApiJson(
   if (paginate) {
     args.push('--paginate');
   }
-  return JSON.parse(runGh(args).trim() || '[]');
+  return JSON.parse(runGh(args, paginate).trim() || '[]');
 }
 
 function ghApiJsonWithStatus(path: string): {
@@ -986,9 +990,12 @@ export function wrapGhError(error: unknown): unknown {
   return wrapped;
 }
 
-function runGh(args: string[]): string {
+function runGh(args: string[], paginate = false): string {
   try {
-    return ghText(args, GH_TEXT_LOOP_TIMEOUT_OPTIONS);
+    return ghText(args, {
+      ...GH_TEXT_LOOP_TIMEOUT_OPTIONS,
+      ...(paginate ? { timeout: DEFAULT_GH_PAGINATED_TIMEOUT_MS } : {}),
+    });
   } catch (error) {
     throw wrapGhError(error);
   }

@@ -13,7 +13,11 @@ import {
   parseAutopilotSuitability,
 } from './autopilot-suitability.mjs';
 import { parseCliArgs } from './cli-args.mjs';
-import { GH_TEXT_LOOP_OPTIONS, ghText } from './gh-exec.mjs';
+import {
+  DEFAULT_GH_PAGINATED_TIMEOUT_MS,
+  GH_TEXT_LOOP_OPTIONS,
+  ghText,
+} from './gh-exec.mjs';
 import { deriveGhHttpStatus } from './gh-http-status.mjs';
 import { loadPolicyConfig } from './idd-config.mjs';
 import { stripMarkdownCodeRegions } from './markdown-code.mjs';
@@ -808,7 +812,7 @@ function listOpenIssueNumbers(owner, repo) {
         '--jq',
         '.[] | select(.pull_request == null) | .number',
       ],
-      GH_TEXT_LOOP_OPTIONS,
+      { ...GH_TEXT_LOOP_OPTIONS, timeout: DEFAULT_GH_PAGINATED_TIMEOUT_MS },
     ),
   );
 }

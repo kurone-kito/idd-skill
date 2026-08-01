@@ -33,12 +33,16 @@ const EXEMPT_FILES = new Set([
  * Matches a direct `execFileSync('gh', …)`, `execFile('gh', …)`, or
  * `spawnSync('gh', …)` call — the exact three forms named in #1675's
  * acceptance criteria — with `'gh'`/`"gh"` as the literal first argument.
- * Does not catch an indirect alias (e.g. `const run = promisify(execFile);
- * run('gh', …)`); the migration this guards eliminated every such alias, so
- * catching that indirection is out of scope for this literal-call check.
+ * Also matches a namespace-qualified call (e.g. `childProcess.execFileSync(
+ * 'gh', …)` from `import * as childProcess from 'node:child_process'`),
+ * since that form spawns `gh` exactly the same way but wouldn't match a
+ * bare-identifier-only pattern (CodeRabbit review, #1784). Does not catch
+ * an indirect alias (e.g. `const run = promisify(execFile); run('gh', …)`);
+ * the migration this guards eliminated every such alias, so catching that
+ * indirection is out of scope for this literal-call check.
  */
 const DIRECT_GH_SPAWN_PATTERN =
-  /\b(?:execFileSync|execFile|spawnSync)\s*\(\s*(['"])gh\1/;
+  /\b(?:[A-Za-z_$][\w$]*\.)?(?:execFileSync|execFile|spawnSync)\s*\(\s*(['"])gh\1/;
 
 /** Every `.mts` file name (not path) directly under `src/scripts/`. */
 function findScriptFiles(): string[] {
@@ -59,7 +63,14 @@ test('DIRECT_GH_SPAWN_PATTERN matches every documented direct-spawn shape', () =
   assert.ok(DIRECT_GH_SPAWN_PATTERN.test(`execFile('gh', args, cb)`));
   assert.ok(DIRECT_GH_SPAWN_PATTERN.test(`spawnSync('gh', args)`));
   assert.ok(DIRECT_GH_SPAWN_PATTERN.test(`  execFileSync(  'gh' , args)`));
+  assert.ok(
+    DIRECT_GH_SPAWN_PATTERN.test(`childProcess.execFileSync('gh', args)`),
+  );
+  assert.ok(DIRECT_GH_SPAWN_PATTERN.test(`cp.spawnSync('gh', args)`));
   assert.ok(!DIRECT_GH_SPAWN_PATTERN.test(`execFileSync('git', args, {})`));
+  assert.ok(
+    !DIRECT_GH_SPAWN_PATTERN.test(`childProcess.execFileSync('git', args)`),
+  );
   assert.ok(!DIRECT_GH_SPAWN_PATTERN.test(`ghText(args)`));
 });
 

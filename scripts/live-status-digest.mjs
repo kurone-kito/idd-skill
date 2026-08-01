@@ -12,7 +12,11 @@ import {
   readForcedHandoffAuthorityPolicy,
   readForcedHandoffMode,
 } from './collaborator-permission.mjs';
-import { ghApiJson, ghText } from './gh-exec.mjs';
+import {
+  DEFAULT_GH_PAGINATED_TIMEOUT_MS,
+  ghApiJson,
+  ghText,
+} from './gh-exec.mjs';
 import { resolveCollaboratorMarkerTrust } from './policy-helpers.mjs';
 import {
   applyDigestUpsert,
@@ -226,13 +230,16 @@ function fetchIssueComments(owner, repo, number) {
   // --slurp landed in gh v2.48.0, but Ubuntu 24.04 LTS ships gh v2.45.0
   // via apt, so keep the NDJSON-compatible form here.
   const result = parsePaginatedGhNdjson(
-    ghText([
-      'api',
-      '--paginate',
-      '--jq',
-      '.[]',
-      `repos/${owner}/${repo}/issues/${number}/comments`,
-    ]),
+    ghText(
+      [
+        'api',
+        '--paginate',
+        '--jq',
+        '.[]',
+        `repos/${owner}/${repo}/issues/${number}/comments`,
+      ],
+      { timeout: DEFAULT_GH_PAGINATED_TIMEOUT_MS },
+    ),
   );
   return result.map((comment) => ({
     id: comment.id,

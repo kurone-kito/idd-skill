@@ -36,7 +36,7 @@ import {
   readForcedHandoffAuthorityPolicy,
   readForcedHandoffMode,
 } from './collaborator-permission.mjs';
-import { ghText } from './gh-exec.mjs';
+import { DEFAULT_GH_PAGINATED_TIMEOUT_MS, ghText } from './gh-exec.mjs';
 import { loadIddConfig } from './idd-config.mjs';
 import {
   advisoryBotIdentityToken,
@@ -391,7 +391,9 @@ function ghJson(args) {
  * 24.04 LTS ships gh 2.45.0, so the repo standardizes on `--jq '.[]'`.)
  */
 function ghJsonPaginated(args) {
-  const out = ghText([...args, '--paginate', '--jq', '.[]']);
+  const out = ghText([...args, '--paginate', '--jq', '.[]'], {
+    timeout: DEFAULT_GH_PAGINATED_TIMEOUT_MS,
+  });
   return out
     .split('\n')
     .map((line) => line.trim())

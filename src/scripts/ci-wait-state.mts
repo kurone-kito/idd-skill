@@ -23,7 +23,7 @@
 //   out from under an in-flight wait.
 
 import { parseCliArgs } from './cli-args.mts';
-import { ghText } from './gh-exec.mts';
+import { DEFAULT_GH_PAGINATED_TIMEOUT_MS, ghText } from './gh-exec.mts';
 import { deriveGhHttpStatus } from './gh-http-status.mts';
 import { loadIddConfig } from './idd-config.mts';
 import { normalizePolicyConfig } from './policy-helpers.mts';
@@ -703,7 +703,10 @@ function ghApiJsonOr404Empty(path: string, paginate: boolean): unknown {
     ? ['api', path, '--paginate', '--jq', '.[]']
     : ['api', path];
   try {
-    const raw = ghText(args);
+    const raw = ghText(
+      args,
+      paginate ? { timeout: DEFAULT_GH_PAGINATED_TIMEOUT_MS } : {},
+    );
     if (!paginate) {
       const trimmed = raw.trim();
       return trimmed ? JSON.parse(trimmed) : {};

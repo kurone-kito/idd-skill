@@ -7,7 +7,11 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { parseCliArgs } from './cli-args.mjs';
-import { GH_TEXT_LOOP_TIMEOUT_OPTIONS, ghText } from './gh-exec.mjs';
+import {
+  DEFAULT_GH_PAGINATED_TIMEOUT_MS,
+  GH_TEXT_LOOP_TIMEOUT_OPTIONS,
+  ghText,
+} from './gh-exec.mjs';
 
 const DEFAULT_QUIET_WINDOW_MS = 30 * 60 * 1000;
 // Flag-spec keys stay the dashed literal on purpose (never bare keys like
@@ -362,7 +366,12 @@ function ghJson(args) {
 }
 function runGh(args) {
   try {
-    return ghText(args, GH_TEXT_LOOP_TIMEOUT_OPTIONS);
+    return ghText(args, {
+      ...GH_TEXT_LOOP_TIMEOUT_OPTIONS,
+      ...(args.includes('--paginate')
+        ? { timeout: DEFAULT_GH_PAGINATED_TIMEOUT_MS }
+        : {}),
+    });
   } catch (error) {
     const stderr = String(error?.stderr ?? '').trim();
     if (stderr) throw new Error(`gh command failed: ${stderr}`);

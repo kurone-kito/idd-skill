@@ -15,7 +15,11 @@ import {
   readAdvisoryWaitPolicy,
 } from './advisory-wait-policy.mts';
 import { parseCliArgs } from './cli-args.mts';
-import { ghText, safeGhText } from './gh-exec.mts';
+import {
+  DEFAULT_GH_PAGINATED_TIMEOUT_MS,
+  ghText,
+  safeGhText,
+} from './gh-exec.mts';
 import { loadIddConfig } from './idd-config.mts';
 import type { TrustedMarkerActorResolution } from './protocol-helpers.mts';
 import {
@@ -798,7 +802,9 @@ function ghApiJson(
     // --slurp landed in gh v2.48.0, but Ubuntu 24.04 LTS ships gh v2.45.0
     // via apt, so keep the NDJSON-compatible form here.
     args.splice(1, 0, '--paginate', '--jq', '.[]');
-    return parsePaginatedGhNdjson(ghText(args));
+    return parsePaginatedGhNdjson(
+      ghText(args, { timeout: DEFAULT_GH_PAGINATED_TIMEOUT_MS }),
+    );
   }
   return JSON.parse(ghText(args));
 }

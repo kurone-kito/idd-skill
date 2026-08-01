@@ -299,7 +299,7 @@ process.exit(1);
   }
 });
 
-test('ghApiJson (non-paginated) applies the default timeout and throws when gh exceeds it (#1675)', () => {
+test('ghApiJson (non-paginated) forwards an explicit timeout override and throws when gh exceeds it (#1675)', () => {
   const restore = stubGh(`
 const start = Date.now();
 while (Date.now() - start < 2000) {
@@ -314,7 +314,7 @@ process.stdout.write('{}');
   }
 });
 
-test('ghApiJson (paginated) applies the paginated default timeout and throws when gh exceeds it (#1675)', () => {
+test('ghApiJson (paginated) forwards an explicit timeout override and throws when gh exceeds it (#1675)', () => {
   const restore = stubGh(`
 const start = Date.now();
 while (Date.now() - start < 2000) {
@@ -326,6 +326,26 @@ process.stdout.write('[]');
     assert.throws(() =>
       ghApiJson('repos/o/r/issues', { paginate: true, timeout: 50 }),
     );
+  } finally {
+    restore();
+  }
+});
+
+test('ghApiJson (non-paginated) succeeds under the default timeout when the caller supplies none (#1675)', () => {
+  const restore = stubGh(`process.stdout.write(JSON.stringify({ ok: true }));`);
+  try {
+    assert.deepEqual(ghApiJson('repos/o/r/issues/1'), { ok: true });
+  } finally {
+    restore();
+  }
+});
+
+test('ghApiJson (paginated) succeeds under the default paginated timeout when the caller supplies none (#1675)', () => {
+  const restore = stubGh(`process.stdout.write(JSON.stringify({ id: 1 }));`);
+  try {
+    assert.deepEqual(ghApiJson('repos/o/r/issues', { paginate: true }), [
+      { id: 1 },
+    ]);
   } finally {
     restore();
   }
@@ -405,6 +425,20 @@ test('ghTextAsync forwards a maxBuffer override to tolerate larger output', asyn
       maxBuffer: 4 * 1024 * 1024,
     });
     assert.equal(result.length, 2 * 1024 * 1024);
+  } finally {
+    restore();
+  }
+});
+
+test('ghTextAsync preserves an explicit maxBuffer: 0 instead of silently falling back to execFile default (#1784 CodeRabbit review)', async () => {
+  const restore = stubGh(`process.stdout.write('a');`);
+  try {
+    // A single byte of stdout already exceeds maxBuffer: 0. If the option
+    // construction used a truthy check (`options.maxBuffer ? … : {}`) rather
+    // than `!== undefined`, an explicit 0 would be dropped and execFile's own
+    // 1 MiB default would silently apply instead, making this resolve
+    // instead of reject.
+    await assert.rejects(() => ghTextAsync(['repo', 'view'], { maxBuffer: 0 }));
   } finally {
     restore();
   }

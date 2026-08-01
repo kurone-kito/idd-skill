@@ -15,7 +15,11 @@ import {
   parseAutopilotSuitability,
 } from './autopilot-suitability.mts';
 import { parseCliArgs } from './cli-args.mts';
-import { GH_TEXT_LOOP_OPTIONS, ghText } from './gh-exec.mts';
+import {
+  DEFAULT_GH_PAGINATED_TIMEOUT_MS,
+  GH_TEXT_LOOP_OPTIONS,
+  ghText,
+} from './gh-exec.mts';
 import { deriveGhHttpStatus } from './gh-http-status.mts';
 import { loadPolicyConfig } from './idd-config.mts';
 import { stripMarkdownCodeRegions } from './markdown-code.mts';
@@ -1004,7 +1008,7 @@ function listOpenIssueNumbers(owner: string, repo: string): number[] {
         '--jq',
         '.[] | select(.pull_request == null) | .number',
       ],
-      GH_TEXT_LOOP_OPTIONS,
+      { ...GH_TEXT_LOOP_OPTIONS, timeout: DEFAULT_GH_PAGINATED_TIMEOUT_MS },
     ),
   );
 }

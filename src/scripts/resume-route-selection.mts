@@ -8,7 +8,11 @@
 import { execFileSync } from 'node:child_process';
 
 import { parseCliArgs } from './cli-args.mts';
-import { GH_TEXT_LOOP_TIMEOUT_OPTIONS, ghText } from './gh-exec.mts';
+import {
+  DEFAULT_GH_PAGINATED_TIMEOUT_MS,
+  GH_TEXT_LOOP_TIMEOUT_OPTIONS,
+  ghText,
+} from './gh-exec.mts';
 import { parsePaginatedGhNdjson } from './protocol-helpers.mts';
 
 /** Author reference embedded in GitHub REST payloads. */
@@ -775,7 +779,12 @@ export function recoverJsonFromGhFailure(
 
 function runGh(args: string[]): string {
   try {
-    return ghText(args, GH_TEXT_LOOP_TIMEOUT_OPTIONS);
+    return ghText(args, {
+      ...GH_TEXT_LOOP_TIMEOUT_OPTIONS,
+      ...(args.includes('--paginate')
+        ? { timeout: DEFAULT_GH_PAGINATED_TIMEOUT_MS }
+        : {}),
+    });
   } catch (error) {
     const stderr = String(
       (error as { stderr?: unknown } | null)?.stderr ?? '',

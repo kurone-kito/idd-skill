@@ -18,7 +18,11 @@ import { resolve } from 'node:path';
 
 import { parseAutopilotSuitability } from './autopilot-suitability.mts';
 import { parseCliArgs } from './cli-args.mts';
-import { GH_TEXT_LOOP_TIMEOUT_OPTIONS, ghText } from './gh-exec.mts';
+import {
+  DEFAULT_GH_PAGINATED_TIMEOUT_MS,
+  GH_TEXT_LOOP_TIMEOUT_OPTIONS,
+  ghText,
+} from './gh-exec.mts';
 import { loadPolicyConfig } from './idd-config.mts';
 import { parseIsoDurationToMs } from './policy-helpers.mts';
 import {
@@ -568,7 +572,10 @@ function fetchActiveClaimBranchNumbers(repoRef: string): number[] {
       '--jq',
       '.[].ref',
     ],
-    GH_TEXT_LOOP_TIMEOUT_OPTIONS,
+    {
+      ...GH_TEXT_LOOP_TIMEOUT_OPTIONS,
+      timeout: DEFAULT_GH_PAGINATED_TIMEOUT_MS,
+    },
   );
   for (const line of output.split('\n')) {
     const match = line.match(/^refs\/heads\/issue\/(\d+)-/);
