@@ -17,22 +17,24 @@ import { fileURLToPath } from 'node:url';
 // agrees with that same helper's own declared flag spec.
 //
 // Coverage: every src/scripts/*.mts helper that declares a FLAG_SPEC-style
-// object (33 currently). Earlier drafts of this test scoped coverage to
-// helpers with a function literally named printHelp() (23), but that ties
-// participation to a naming convention rather than to whether --help is
-// actually renderable -- and the real sweep below spawns the compiled
-// scripts/<name>.mjs with --help regardless of which internal mechanism
-// (printHelp(), printUsage(), a module-level USAGE constant, or an inline
-// console.log/process.stdout.write) produces that output. Each of the 10
-// non-printHelp() helpers was individually confirmed before being added
-// here: --help exits 0 in well under a second with no gh/network I/O, and
-// its FLAG_SPEC block parses cleanly. A helper is excluded only when it has
-// no FLAG_SPEC at all -- nothing declarative to compare against (9 helpers
-// currently: 6 with a hand-rolled parseArgs() loop, one that calls
-// node:util's parseArgs() directly with bare option keys, and one with an
-// ad-hoc argv.includes('--help') check -- each with a one-line reason
-// below, mirroring tests/flag-name-matrix.test.mts's explicit `helpers`
-// style rather than silent discovery).
+// object (see COVERED_HELPERS below; its exact count isn't restated here so
+// this comment can't drift from the list -- the meta-consistency test keeps
+// the list itself honest against the live source tree). Earlier drafts of
+// this test scoped coverage to helpers with a function literally named
+// printHelp(), but that ties participation to a naming convention rather
+// than to whether --help is actually renderable -- and the real sweep below
+// spawns the compiled scripts/<name>.mjs with --help regardless of which
+// internal mechanism (printHelp(), printUsage(), a module-level USAGE
+// constant, or an inline console.log/process.stdout.write) produces that
+// output. Every non-printHelp() helper was individually confirmed before
+// being added to COVERED_HELPERS: --help exits 0 in well under a second
+// with no gh/network I/O, and its FLAG_SPEC block parses cleanly. A helper
+// is excluded only when it has no FLAG_SPEC at all -- nothing declarative
+// to compare against (see EXCLUDED_HELPERS below: most via a hand-rolled
+// parseArgs() loop, one via node:util's parseArgs() directly with bare
+// option keys, one via an ad-hoc argv.includes('--help') check -- each with
+// a one-line reason there, mirroring tests/flag-name-matrix.test.mts's
+// explicit `helpers` style rather than silent discovery).
 //
 // Rendering choice: this test spawns each covered helper's *compiled*
 // scripts/<name>.mjs with --help and captures real stdout, rather than
@@ -66,9 +68,10 @@ function hasFlagSpec(src: string): boolean {
 /**
  * Extracts the body of the first `const <NAME>_FLAG_SPEC = { ... } as
  * const;` declaration in `src`. Every covered helper's spec closes with the
- * literal `} as const;` on its own line -- verified across all 33 helpers
- * below, and enforced structurally by TypeScript (the `as const` assertion
- * is what makes `parseCliArgs`'s generic flag-name inference work).
+ * literal `} as const;` on its own line -- verified across every helper in
+ * COVERED_HELPERS below, and enforced structurally by TypeScript (the
+ * `as const` assertion is what makes `parseCliArgs`'s generic flag-name
+ * inference work).
  */
 function extractFlagSpecBlock(src: string, helper: string): string {
   const match = src.match(/_FLAG_SPEC\s*=\s*\{([\s\S]*?)\n\} as const;/);
@@ -156,10 +159,9 @@ const CROSS_REFERENCE_FLAGS: Readonly<Record<string, readonly string[]>> = {
 
 // Explicit covered-helper list (mirrors tests/flag-name-matrix.test.mts's
 // `helpers` style): every src/scripts/*.mts helper that declares a
-// FLAG_SPEC-style object, built by hand rather than by silent discovery.
-// 33 helpers currently qualify -- see the header comment above for why this
-// isn't narrowed to only helpers with a function literally named
-// printHelp().
+// FLAG_SPEC-style object, built by hand rather than by silent discovery --
+// see the header comment above for why this isn't narrowed to only helpers
+// with a function literally named printHelp().
 const COVERED_HELPERS = [
   'advisory-convergence',
   'advisory-wait-state',
@@ -261,7 +263,7 @@ const EXCLUDED_HELPERS: readonly { helper: string; reason: string }[] = [
 // ---------------------------------------------------------------------------
 // Unit tests for the two pure extractors, over synthetic fixtures -- proves
 // each direction of drift is actually detected (not just that the real
-// 33-helper sweep below happens to pass today). Mirrors
+// per-helper sweep below happens to pass today). Mirrors
 // tests/cli-entry-smoke.test.mts's synthetic-fixture-before-real-corpus
 // shape.
 // ---------------------------------------------------------------------------
