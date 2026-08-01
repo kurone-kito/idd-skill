@@ -256,7 +256,7 @@ const a = (i) => args[i];
 function out(text) { process.stdout.write(text); process.exit(0); }
 function notFound() { process.stderr.write('gh: Not Found (HTTP 404)\\n'); process.exit(1); }
 
-if (a(0) === 'api' && a(1) === 'user') out(${JSON.stringify('octocat')});
+if (a(0) === 'api' && a(1) === 'user') out(${JSON.stringify('viewer-user')});
 if (a(0) === 'api' && a(1) === 'app') out('');
 if (a(0) === 'pr' && a(1) === 'view' && a(2) === '${String(PR_NUMBER)}') out(${JSON.stringify(JSON.stringify(prView))});
 if (a(0) === 'api' && a(1) === '${`repos/${REPO_REF}/rules/branches/${BASE_REF}`}') out('');
