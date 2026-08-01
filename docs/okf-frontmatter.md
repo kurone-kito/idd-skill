@@ -56,7 +56,7 @@ and the checker never widens into them:
 | --- | --- | --- |
 | `type` | yes | One value from the closed set below |
 | `title` | yes | Matches the page's `# H1` text exactly |
-| `description` | yes | One sentence, ending in a period |
+| `description` | yes | One sentence, ending in a period. Consumed by the generated docs index table in `docs/index.md` (`docs-index-okf-table` generated block, #1683) — not decorative. |
 | `tags` | no | YAML list of lowercase-hyphen strings |
 <!-- dprint-ignore-end -->
 

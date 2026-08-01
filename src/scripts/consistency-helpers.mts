@@ -1251,6 +1251,135 @@ export function resolveGeneratedBlockFiles(
   return uniqueSorted((block.sourceGlobs ?? []).flatMap(globFilesFn));
 }
 
+// --- OKF index table generated blocks (#1683) ------------------------------
+//
+// `generatedBlocks[]` entries with `kind: "okf-table"` render a Markdown
+// table of OKF frontmatter (`title` / `type` / `description`) instead of
+// the default fenced path list. Shared by sync-docs and audit-docs so the
+// rendered table cannot drift between apply and check.
+
+/** Optional fields a `generatedBlocks[]` entry may carry for okf-table. */
+export interface OkfTableBlockSource extends GeneratedBlockFileSource {
+  /** `"path-list"` (default) or `"okf-table"`. */
+  kind?: string | null;
+  /** Closed type vocabulary order; rows are grouped in this order. */
+  typeOrder?: string[] | null;
+  /** Repo-relative paths to omit from the table (e.g. `docs/index.md`). */
+  excludePaths?: string[] | null;
+  /**
+   * Directory the generated table lives in (e.g. `docs`). Row links are
+   * relative to this directory, so `docs/foo.md` becomes `foo.md`.
+   */
+  linkBase?: string | null;
+}
+
+/** One rendered row of an OKF index table. */
+export interface OkfIndexRow {
+  path: string;
+  type: string;
+  title: string;
+  description: string;
+}
+
+/**
+ * Extract `type` / `title` / `description` from a page's OKF frontmatter,
+ * or `null` when the opening frontmatter block is missing or any of the
+ * three fields is empty/non-scalar. Pure and unit-testable.
+ */
+export function extractOkfIndexFields(
+  text: string,
+): { type: string; title: string; description: string } | null {
+  const match = OKF_FRONTMATTER_PATTERN.exec(String(text ?? ''));
+  if (!match) return null;
+  const fields = parseOkfFrontmatterFields(match[1] ?? '');
+  const type = typeof fields.type === 'string' ? fields.type.trim() : '';
+  const title = typeof fields.title === 'string' ? fields.title.trim() : '';
+  const description =
+    typeof fields.description === 'string' ? fields.description.trim() : '';
+  if (!type || !title || !description) return null;
+  return { type, title, description };
+}
+
+/**
+ * Build deterministic OKF index rows from repo-relative paths.
+ * Skips `excludePaths`, reserved basenames when listed there, and pages
+ * whose frontmatter cannot supply type/title/description. Groups by
+ * `typeOrder` (unknown types sort after known ones, alphabetically),
+ * then by path within a group.
+ */
+export function buildOkfIndexRows(
+  files: readonly string[],
+  readFile: (path: string) => string,
+  options: {
+    typeOrder?: readonly string[] | null;
+    excludePaths?: readonly string[] | null;
+  } = {},
+): OkfIndexRow[] {
+  const exclude = new Set(
+    (options.excludePaths ?? []).map((p) => String(p).replace(/\\/g, '/')),
+  );
+  const typeOrder = (options.typeOrder ?? []).map(String);
+  const typeRank = new Map(typeOrder.map((t, i) => [t, i]));
+
+  const rows: OkfIndexRow[] = [];
+  for (const rawPath of files) {
+    const path = String(rawPath).replace(/\\/g, '/');
+    if (exclude.has(path)) continue;
+    let text: string;
+    try {
+      text = readFile(path);
+    } catch {
+      continue;
+    }
+    const fields = extractOkfIndexFields(text);
+    if (!fields) continue;
+    rows.push({ path, ...fields });
+  }
+
+  rows.sort((a, b) => {
+    const ra = typeRank.get(a.type);
+    const rb = typeRank.get(b.type);
+    const rankA = ra === undefined ? typeOrder.length : ra;
+    const rankB = rb === undefined ? typeOrder.length : rb;
+    if (rankA !== rankB) return rankA - rankB;
+    if (a.type !== b.type) return a.type.localeCompare(b.type);
+    return a.path.localeCompare(b.path);
+  });
+  return rows;
+}
+
+/**
+ * Render an OKF index as a Markdown table. Links are relative to
+ * `linkBase` (e.g. `docs` → `docs/foo.md` becomes `foo.md`). Pure.
+ */
+export function renderOkfIndexMarkdownTable(
+  rows: readonly OkfIndexRow[],
+  linkBase = 'docs',
+): string {
+  const base = String(linkBase ?? 'docs')
+    .replace(/\\/g, '/')
+    .replace(/\/+$/, '');
+  const prefix = `${base}/`;
+  const header = '| Type | Page | Description |\n| ---- | ---- | ----------- |';
+  if (rows.length === 0) {
+    return `\n\n${header}\n\n`;
+  }
+  const body = rows
+    .map((row) => {
+      const href = row.path.startsWith(prefix)
+        ? row.path.slice(prefix.length)
+        : row.path;
+      // Escape pipe characters in cell text so a description containing
+      // `|` cannot break the table.
+      const type = row.type.replace(/\|/g, '\\|');
+      const title = row.title.replace(/\|/g, '\\|');
+      const description = row.description.replace(/\|/g, '\\|');
+      return `| ${type} | [${title}](${href}) | ${description} |`;
+    })
+    .join('\n');
+  return `\n\n${header}\n${body}\n\n`;
+}
+
 // --- OKF frontmatter conformance audit (#1680) ------------------------------
 //
 // The parent roadmap (#1685) adopts OKF (Open Knowledge Format v0.1)

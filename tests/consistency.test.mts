@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 
 import { ADVISORY_CONVERGENCE_CHECK_SELECTOR } from '../src/scripts/advisory-convergence.mts';
 import {
+  buildOkfIndexRows,
   collectDocBudgetDriftViolations,
   collectDuplicateSyncPairTargets,
   collectEnginesRangeMirrorViolations,
@@ -13,12 +14,14 @@ import {
   collectInstructionSizeBudgetViolations,
   collectOkfFrontmatterViolations,
   collectPolicyConfigDrift,
+  extractOkfIndexFields,
   generatedFromBanner,
   injectGeneratedFromBanner,
   inspectHelperRuntimeConfig,
   isBannerScopedInstructionTarget,
   normalizePolicyConfig,
   parseGeneratedFromBannerSource,
+  renderOkfIndexMarkdownTable,
   resolveCollaboratorMarkerTrust,
   resolveGeneratedBlockFiles,
   stripGeneratedFromBanner,
@@ -1429,6 +1432,61 @@ test("audit/sync-manifest.json's guarded repo state: this repository's own engin
 // entry, previously duplicated (and drifted) between sync-docs.mts and
 // audit-docs.mts.
 // =============================================================================
+
+// =============================================================================
+// OKF index table renderer (#1683)
+// =============================================================================
+
+test('extractOkfIndexFields reads type/title/description from OKF frontmatter', () => {
+  const fields = extractOkfIndexFields(
+    '---\ntype: guide\ntitle: Hello\ndescription: One sentence.\n---\n\n# Hello\n',
+  );
+  assert.deepEqual(fields, {
+    type: 'guide',
+    title: 'Hello',
+    description: 'One sentence.',
+  });
+  assert.equal(extractOkfIndexFields('# no frontmatter\n'), null);
+});
+
+test('buildOkfIndexRows groups by typeOrder then path and excludes reserved paths', () => {
+  const files = {
+    'docs/b.md':
+      '---\ntype: guide\ntitle: B\ndescription: B page.\n---\n\n# B\n',
+    'docs/a.md':
+      '---\ntype: guide\ntitle: A\ndescription: A page.\n---\n\n# A\n',
+    'docs/z.md':
+      '---\ntype: concept\ntitle: Z\ndescription: Z page.\n---\n\n# Z\n',
+    'docs/index.md':
+      '---\ntype: index\ntitle: Index\ndescription: Index page.\n---\n\n# Index\n',
+  };
+  const rows = buildOkfIndexRows(Object.keys(files), (p) => files[p] ?? '', {
+    typeOrder: ['guide', 'concept'],
+    excludePaths: ['docs/index.md'],
+  });
+  assert.deepEqual(
+    rows.map((r) => r.path),
+    ['docs/a.md', 'docs/b.md', 'docs/z.md'],
+  );
+  assert.equal(rows[0]?.type, 'guide');
+  assert.equal(rows[2]?.type, 'concept');
+});
+
+test('renderOkfIndexMarkdownTable links relative to linkBase', () => {
+  const table = renderOkfIndexMarkdownTable(
+    [
+      {
+        path: 'docs/foo.md',
+        type: 'guide',
+        title: 'Foo',
+        description: 'Foo page.',
+      },
+    ],
+    'docs',
+  );
+  assert.match(table, /\| Type \| Page \| Description \|/);
+  assert.match(table, /\| guide \| \[Foo\]\(foo\.md\) \| Foo page\. \|/);
+});
 
 test('resolveGeneratedBlockFiles: paths present takes precedence, globFilesFn is never called', () => {
   const files = resolveGeneratedBlockFiles(
