@@ -1,9 +1,10 @@
 # A5 — Activation-nonce comment
 
-Posted alongside every fresh claim activation (fresh claim, takeover, or
-legacy migration), immediately after the `claimed-by` comment in
-`claim-comment.md`. Never posted for a plain heartbeat, which reuses the
-existing `{claim-id}`.
+Posted for every fresh claim activation: fresh claim, takeover, or
+legacy migration (immediately after the `claimed-by` comment in
+`claim-comment.md`), and also forced-handoff adopt-verbatim, which
+posts no separate `claimed-by` of its own. Never posted for a plain
+heartbeat, which reuses the existing `{claim-id}`.
 
 ---
 

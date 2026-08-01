@@ -69,8 +69,8 @@ also serve as the source for a future GitHub Pages site.
   Creator/Mutator/Verifier matrix for loop concepts (claim markers,
   review threads, PR body, ...), plus which actor/phase may take each
   concept to its terminal state.
-- [Minimal IDD run sample](../examples/minimal-run/README.md) is a
-  compact set of realistic marker-comment bodies (claim, activation
+- [Minimal IDD run sample](https://github.com/kurone-kito/idd-skill/blob/main/examples/minimal-run/README.md)
+  is a compact set of realistic marker-comment bodies (claim, activation
   nonce, heartbeat, review snapshot, ...) for one end-to-end run.
 
 ### Native Companions
