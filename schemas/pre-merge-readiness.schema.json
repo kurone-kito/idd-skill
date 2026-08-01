@@ -818,7 +818,7 @@
         },
         "sourcePinnedRequiredCheckNames": {
           "type": "array",
-          "description": "#1689: required check names whose green state was downgraded to `unknown` (via `status` above) because their ruleset/classic-protection entry carries an `app_id`/`integration_id` (source-pinned) and neither a verified producer match nor the `ciGate.trustSourcePinnedRequiredChecks` opt-in applies. Lets a caller's blocker detail name the source-pinned cause explicitly instead of a generic \"CI is not all-passing\" message. Empty (never omitted) when no such downgrade occurred.",
+          "description": "#1689: required check names whose green state was downgraded to `unknown` (via `status` above) because their ruleset/classic-protection entry carries an `app_id`/`integration_id` (source-pinned) and the `ciGate.trustSourcePinnedRequiredChecks` opt-in was not set. Producer verification itself is not implemented (no GitHub App identity is fetched for a live check-run anywhere in this codebase); the opt-in is a human-authorized trust decision, not a runtime check. Lets a caller's blocker detail name the source-pinned cause explicitly instead of a generic \"CI is not all-passing\" message. Empty (never omitted) when no such downgrade occurred.",
           "items": {
             "type": "string",
             "minLength": 1

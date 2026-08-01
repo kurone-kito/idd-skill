@@ -1328,9 +1328,12 @@ to post it is the consuming track's job.
 - `ci.sourcePinnedRequiredCheckNames` (#1689) lists the required check
   names whose green state was downgraded to `ci.status: "unknown"` because
   their ruleset/classic-protection entry is source-pinned
-  (`app_id`/`integration_id`) and neither a verified producer match nor
-  the `ciGate.trustSourcePinnedRequiredChecks` opt-in applies. Evidence
-  only (empty array, never omitted, when no such downgrade occurred) --
+  (`app_id`/`integration_id`) and the `ciGate.trustSourcePinnedRequiredChecks`
+  opt-in was not set. Producer verification itself is not implemented (no
+  GitHub App identity is fetched for a live check-run anywhere in this
+  codebase); the opt-in is a human-authorized trust decision, not a
+  runtime check. Evidence only (empty array, never omitted, when no such
+  downgrade occurred) --
   `computePreMergeReadinessBlockers` uses it to name the source-pinned
   cause in the `ci` blocker detail instead of a generic "CI is not
   all-passing" message; see [Customizing IDD](customization.md)'s
