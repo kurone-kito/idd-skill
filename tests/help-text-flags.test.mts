@@ -27,8 +27,10 @@ import { fileURLToPath } from 'node:url';
 // non-printHelp() helpers was individually confirmed before being added
 // here: --help exits 0 in well under a second with no gh/network I/O, and
 // its FLAG_SPEC block parses cleanly. A helper is excluded only when it has
-// no FLAG_SPEC at all -- nothing declarative to compare against (6
-// hand-rolled parseArgs() helpers currently, each with a one-line reason
+// no FLAG_SPEC at all -- nothing declarative to compare against (9 helpers
+// currently: 6 with a hand-rolled parseArgs() loop, one that calls
+// node:util's parseArgs() directly with bare option keys, and one with an
+// ad-hoc argv.includes('--help') check -- each with a one-line reason
 // below, mirroring tests/flag-name-matrix.test.mts's explicit `helpers`
 // style rather than silent discovery).
 //
@@ -197,7 +199,17 @@ const COVERED_HELPERS = [
 // Every other src/scripts/*.mts helper that has some CLI --help surface but
 // no FLAG_SPEC object to compare it against, with a one-line reason it
 // cannot participate in this check (issue #1676's acceptance criteria
-// requires this be visible rather than invisible).
+// requires this be visible rather than invisible). Verified against the
+// complete non-FLAG_SPEC universe under src/scripts/ (every file without a
+// FLAG_SPEC declaration, not just files matching one specific pattern): for
+// each, `--help` was compared against an unrecognized-flag invocation to
+// tell a genuine --help path from a helper that just silently ignores
+// unknown flags and runs its normal behavior regardless (e.g.
+// audit-code-span-wrap, check-pnpm-boundary, sync-docs, validate-schemas
+// all do the latter and are correctly absent from this list; audit-docs and
+// build-ts print a generic invalid-usage/crash message for *any*
+// unrecognized flag, not --help specifically, and are absent for the same
+// reason).
 const EXCLUDED_HELPERS: readonly { helper: string; reason: string }[] = [
   {
     helper: 'discover-orphan-filter',
@@ -228,6 +240,21 @@ const EXCLUDED_HELPERS: readonly { helper: string; reason: string }[] = [
     helper: 'rerun-advisory-convergence',
     reason:
       'hand-rolled parseArgs() loop, no declarative FLAG_SPEC object to compare',
+  },
+  {
+    helper: 'post-idd-marker',
+    reason:
+      'hand-rolled parseArgs() loop (own local function) with a USAGE constant, no declarative FLAG_SPEC object to compare',
+  },
+  {
+    helper: 'minimize-superseded-markers',
+    reason:
+      "calls node:util's parseArgs() directly with bare (non-dashed) option keys, not the shared cli-args.mts FLAG_SPEC convention -- no declarative --dashed spec to compare",
+  },
+  {
+    helper: 'update-fixtures',
+    reason:
+      "ad-hoc argv.includes('--help') check against a HELP constant, no declarative FLAG_SPEC object to compare",
   },
 ];
 
