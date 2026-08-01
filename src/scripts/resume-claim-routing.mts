@@ -251,23 +251,35 @@ export function evaluateResumeClaimRouting(
     // unconditionally here, regardless of the active claim's own staleness
     // (#1687 keeps this test-locked semantic byte-identical -- only the
     // non-owner / fresh-claim-gate path below gains a staleness escape).
-    if (laterCompetingClaim) {
+    //
+    // The claim-id matches, but claim-id alone cannot distinguish a second,
+    // independent activation of the same id (the sticky forced-handoff
+    // adopt-verbatim collision #1522 exists to catch) -- so when both a
+    // local nonce and a trusted activation-nonce winner are available,
+    // require them to agree too. Either side being absent (no nonce posted
+    // yet, or this caller never opted in) skips the comparison and keeps
+    // the claim-id-only outcome, matching pre-#1522 behavior exactly.
+    //
+    // Computed unconditionally (not only when laterCompetingClaim is falsy)
+    // so a later-competing-claim dispute can still surface a concurrent
+    // nonce mismatch in `reason` (CodeRabbit, PR #1770) -- a caller that
+    // mechanically releases on "step 4 is the sole failing check" must be
+    // able to tell a step-4-only dispute apart from a dispute where step 5
+    // also fails, since releasing a claim-id/agent-id pair that a second,
+    // legitimate activation shares would evict that other session.
+    const nonceMismatch =
+      activationNonceWinner !== null &&
+      nonceChecked &&
+      activationNonceWinner !== nonceChecked;
+    if (laterCompetingClaim && nonceMismatch) {
+      routeState = 'disputed';
+      action = 'stop';
+      reason = 'later-competing-claim-and-activation-nonce-mismatch';
+    } else if (laterCompetingClaim) {
       routeState = 'disputed';
       action = 'stop';
       reason = 'later-competing-claim';
-    } else if (
-      // The claim-id matches, but claim-id alone cannot distinguish a
-      // second, independent activation of the same id (the sticky
-      // forced-handoff adopt-verbatim collision #1522 exists to catch) --
-      // so when both a local nonce and a trusted activation-nonce winner
-      // are available, require them to agree too. Either side being
-      // absent (no nonce posted yet, or this caller never opted in) skips
-      // the comparison and keeps the claim-id-only outcome, matching
-      // pre-#1522 behavior exactly.
-      activationNonceWinner !== null &&
-      nonceChecked &&
-      activationNonceWinner !== nonceChecked
-    ) {
+    } else if (nonceMismatch) {
       routeState = 'disputed';
       action = 'stop';
       reason = 'activation-nonce-mismatch';

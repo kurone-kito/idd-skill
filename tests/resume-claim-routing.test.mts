@@ -910,6 +910,77 @@ test('owner-resume dispute against a later competing claim is unaffected by the 
   assert.equal(result.evidence.later_competing_claim?.claim_id, 'claim-race');
 });
 
+// PR #1770 (CodeRabbit): when a later competing claim (step 4) and an
+// activation-nonce mismatch (step 5) both fail for the same owner-resume
+// check, `reason` must say so distinctly -- a caller deciding whether "step
+// 4 is the sole failing check" (the safe-to-release precondition in
+// idd-claim.instructions.md's Claim verification) cannot tell a step-4-only
+// dispute apart from a dual failure if both collapse onto the same
+// `later-competing-claim` reason. Releasing on a dual failure would evict
+// the second, legitimate activation that shares this exact
+// `{agent-id}`/`{claim-id}` pair.
+test('reports a distinct reason when a later competing claim and a nonce mismatch both fail', () => {
+  const events = [
+    {
+      createdAt: '2026-05-12T09:00:00Z',
+      author: { login: 'maintainer' },
+      body: '<!-- claimed-by: copilot claim-abc supersedes: none 2026-05-12T09:00:00Z branch: issue/24-task -->',
+    },
+    {
+      createdAt: '2026-05-12T09:00:05Z',
+      author: { login: 'maintainer' },
+      body: '<!-- activation-nonce: copilot claim-abc nonce-aaa 2026-05-12T09:00:05Z -->',
+    },
+    {
+      createdAt: '2026-05-12T09:00:07Z',
+      author: { login: 'maintainer' },
+      body: '<!-- activation-nonce: copilot claim-abc nonce-zzz 2026-05-12T09:00:07Z -->',
+    },
+    {
+      createdAt: '2026-05-12T09:05:00Z',
+      author: { login: 'maintainer' },
+      body: '<!-- claimed-by: other claim-race supersedes: none 2026-05-12T09:05:00Z branch: issue/24-task -->',
+    },
+  ];
+
+  const loserPerspective = evaluateResumeClaimRouting(
+    {
+      claimId: 'claim-abc',
+      nonce: 'nonce-zzz',
+      now: '2026-05-12T10:00:00Z',
+      events,
+    },
+    { isTrustedAuthor: trusted(['maintainer']) },
+  );
+
+  assert.equal(loserPerspective.state, 'disputed');
+  assert.equal(loserPerspective.action, 'stop');
+  assert.equal(
+    loserPerspective.reason,
+    'later-competing-claim-and-activation-nonce-mismatch',
+  );
+  assert.equal(
+    loserPerspective.evidence.later_competing_claim?.claim_id,
+    'claim-race',
+  );
+  assert.equal(loserPerspective.evidence.activation_nonce_winner, 'nonce-aaa');
+
+  // The nonce winner's own perspective is unaffected: it still fails step 4
+  // (the same later competing claim) with the plain reason, since its own
+  // nonce comparison passes.
+  const winnerPerspective = evaluateResumeClaimRouting(
+    {
+      claimId: 'claim-abc',
+      nonce: 'nonce-aaa',
+      now: '2026-05-12T10:00:00Z',
+      events,
+    },
+    { isTrustedAuthor: trusted(['maintainer']) },
+  );
+  assert.equal(winnerPerspective.state, 'disputed');
+  assert.equal(winnerPerspective.reason, 'later-competing-claim');
+});
+
 // #1687: a competitor that loses the race and courteously releases its own
 // raced claim (its own {agent-id}/{claim-id} unclaimed-by, posted after its
 // claimed-by) must no longer count as a live competitor -- clearing the
