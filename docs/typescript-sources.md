@@ -46,11 +46,11 @@ adopter repositories that vendor the bundle.
 
 ## Build and verification
 
-| Command                | Purpose                                                                                                               |
-| ---------------------- | --------------------------------------------------------------------------------------------------------------------- |
-| `pnpm run typecheck`   | `tsc --noEmit` over `src/**/*.mts` + `tests/**/*.mts` (`strict`)                                                      |
-| `pnpm run build`       | Emit the generated `.mjs` (tsc) and normalize them with Biome                                                         |
-| `pnpm run build:check` | `node scripts/build-check.mjs` — builds, then fails when the committed tree drifts or gains an untracked emitted file |
+| Command                | Purpose                                                                                                                                                                                                          |
+| ---------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `pnpm run typecheck`   | `tsc --noEmit` over `src/**/*.mts` + `tests/**/*.mts` (`strict`)                                                                                                                                                 |
+| `pnpm run build`       | Emit the generated `.mjs` (tsc) and normalize them with Biome                                                                                                                                                    |
+| `pnpm run build:check` | `pnpm run build && git diff HEAD --exit-code -- scripts bin .gitattributes && node scripts/check-untracked-artifacts.mjs` — builds, then fails when the committed tree drifts or gains an untracked emitted file |
 
 `tsconfig.build.json` sets `noEmitOnError: true`, so a `.mts` source with a
 type error emits nothing at all instead of letting tsc overwrite tracked

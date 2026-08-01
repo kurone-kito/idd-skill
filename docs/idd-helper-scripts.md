@@ -579,6 +579,18 @@ retained. `instructions-only` uses neither. When an instruction shows a
 `node scripts/...` command, resolve it to your profile's authoritative surface
 rather than maintaining both.
 
+**Authoring rule for distributed instructions/docs.** A mandatory helper
+step (one with no skip/fallback wording) must always name an
+`instructions-only` fallback, since that profile has no helper runtime at
+all. Every invocation written into a distributed file (`.github/instructions/**`,
+`docs/**`, and their `idd-template/` sources) must use a form the
+`helper-runtime-manifest` command table actually produces for some
+profile — `node scripts/<name>.mjs`, a `package.json` `idd:<name>` script,
+or the `idd-<name>` bin command — never the source repository's own
+`bin/<name>.mjs` build artifact path, which no adopter profile vends (see
+`tests/helper-invocation-profile.test.mts`, which enforces both rules
+mechanically).
+
 To switch profiles later, rerun the manifest with both
 `--profile <target-profile>` and `--from-profile <current-profile>`. The
 switch section reports the files, dependency entries, and `package.json`
@@ -1891,9 +1903,10 @@ same as `AW4`/`AW5`.
 ### Merged-PR feedback sweep
 
 - Source repo / vendored-node command:
-  `node scripts/merged-pr-feedback-sweep.mjs`
-- Package-manager / ephemeral-npx command: use the profile-selected
-  `idd-merged-pr-feedback-sweep` command
+  `node scripts/merged-pr-feedback-sweep.mjs`. Source-repo internal
+  helper; not distributed via the package-manager / ephemeral-npx
+  profiles (it is a maintainer-run sweep, never an adopter-facing
+  step in the phase instructions).
 - A **manually-invoked**, read-only detector (no schedule, no mutation). It
   scans MERGED PRs and surfaces feedback that was left unattended at merge:
   - **Window selector**: `--since <ISO8601>` and/or `--days <N>`, or
