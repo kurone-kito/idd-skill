@@ -4,9 +4,11 @@ import { test } from 'node:test';
 import {
   buildCheckRunsForRefArgs,
   buildIddConfigContentsArgs,
+  buildRerunPlanTextSections,
   computeRerunPlan,
   describeNoActionState,
   describeOutstandingStates,
+  describeRecoveryRefreshHeader,
   parseArgs,
   parseRunIdFromUrl,
   RERUN_PLAN_CHECK_NAME,
@@ -1182,6 +1184,147 @@ test('describeOutstandingStates reports a pending instance even when a genuine r
     describeOutstandingStates(plan),
     /1 instance\(s\) are still running/,
   );
+});
+
+// --- describeRecoveryRefreshHeader / buildRerunPlanTextSections
+// (regression: #1752, post-merge Codex review on PR #1749/#1745) ---------
+//
+// The CLI's stderr renderer previously treated plan.plan and
+// plan.recoveryRefreshPlan as mutually exclusive (`if`/`else if`), so
+// whenever #1745 made both non-empty at once (a bot-triggered
+// rerun-eligible instance in `plan` does not itself supply the non-bot
+// trigger a separately bot-gated instance still needs from
+// `recoveryRefreshPlan`), only the first-checked section ever printed,
+// silently dropping the other's recovery command. These tests cover
+// SECTION SELECTION directly (not just wording), matching the same
+// combined-instance fixture as the existing computeRerunPlan-level
+// regression test above ("offers both plan and recoveryRefreshPlan ...").
+
+function combinedCasePlan() {
+  return computeRerunPlan(
+    baseInput({
+      instances: [
+        baseInstance({
+          checkRunId: 'gated',
+          runId: '7001',
+          conclusion: 'action_required',
+        }),
+        baseInstance({
+          checkRunId: 'cancelled-bot',
+          runId: '7004',
+          conclusion: 'cancelled',
+          actorLogin: 'copilot-pull-request-reviewer[bot]',
+          actorType: 'Bot',
+          triggeringActorLogin: 'copilot-pull-request-reviewer[bot]',
+          triggeringActorType: 'Bot',
+        }),
+        baseInstance({
+          checkRunId: 'passing',
+          runId: '7002',
+          conclusion: 'success',
+        }),
+      ],
+    }),
+    baseOptions(),
+  );
+}
+
+test('describeRecoveryRefreshHeader: sole case still says no rerun-eligible instances exist', () => {
+  const plan = computeRerunPlan(
+    baseInput({
+      instances: [
+        baseInstance({
+          checkRunId: 'gated',
+          runId: '7001',
+          conclusion: 'action_required',
+        }),
+        baseInstance({
+          checkRunId: 'passing',
+          runId: '7002',
+          conclusion: 'success',
+        }),
+      ],
+    }),
+    baseOptions(),
+  );
+  assert.equal(plan.plan.length, 0);
+  assert.equal(plan.recoveryRefreshPlan.length, 1);
+  assert.match(
+    describeRecoveryRefreshHeader(plan),
+    /No rerun-eligible instances/,
+  );
+});
+
+test('describeRecoveryRefreshHeader: combined case no longer claims no rerun-eligible instances exist', () => {
+  const plan = combinedCasePlan();
+  assert.equal(plan.plan.length, 1);
+  assert.equal(plan.recoveryRefreshPlan.length, 1);
+  const header = describeRecoveryRefreshHeader(plan);
+  assert.doesNotMatch(header, /No rerun-eligible instances/);
+  // Per idd-ci.instructions.md §Rerun mechanics, the recovery-refresh
+  // rerun is the documented FIRST step in this exact combined scenario.
+  assert.match(header, /try this FIRST/);
+});
+
+test('buildRerunPlanTextSections: sole sequential-plan case prints only that section', () => {
+  const plan = computeRerunPlan(
+    baseInput({ instances: [baseInstance({ conclusion: 'failure' })] }),
+    baseOptions(),
+  );
+  assert.equal(plan.plan.length, 1);
+  assert.equal(plan.recoveryRefreshPlan.length, 0);
+  const sections = buildRerunPlanTextSections(plan);
+  assert.equal(sections.length, 1);
+  assert.match(sections[0] ?? '', /^Sequential recovery plan/);
+});
+
+test('buildRerunPlanTextSections: sole recovery-refresh case prints only that section', () => {
+  const plan = computeRerunPlan(
+    baseInput({
+      instances: [
+        baseInstance({
+          checkRunId: 'gated',
+          runId: '7001',
+          conclusion: 'action_required',
+        }),
+        baseInstance({
+          checkRunId: 'passing',
+          runId: '7002',
+          conclusion: 'success',
+        }),
+      ],
+    }),
+    baseOptions(),
+  );
+  assert.equal(plan.plan.length, 0);
+  assert.equal(plan.recoveryRefreshPlan.length, 1);
+  const sections = buildRerunPlanTextSections(plan);
+  assert.equal(sections.length, 1);
+  assert.match(sections[0] ?? '', /No rerun-eligible instances/);
+});
+
+test('buildRerunPlanTextSections: combined case prints BOTH sections, recovery-refresh first', () => {
+  const plan = combinedCasePlan();
+  const sections = buildRerunPlanTextSections(plan);
+  assert.equal(sections.length, 2);
+  // Recovery-refresh section prints first (matches idd-ci.instructions.md
+  // §Rerun mechanics' documented recovery order for this scenario: rerun
+  // the already-passing non-bot instance first, and only fall back to the
+  // bot-triggered sequential reruns if that alone doesn't clear the
+  // rollup).
+  assert.match(sections[0] ?? '', /recovery-refresh option/);
+  assert.doesNotMatch(sections[0] ?? '', /No rerun-eligible instances/);
+  assert.match(sections[0] ?? '', /gh run rerun 7002/);
+  assert.match(sections[1] ?? '', /^Sequential recovery plan/);
+  assert.match(sections[1] ?? '', /gh run rerun 7004/);
+});
+
+test('buildRerunPlanTextSections: returns no sections when both plan and recoveryRefreshPlan are empty', () => {
+  const plan = computeRerunPlan(
+    baseInput({ instances: [baseInstance({ conclusion: 'success' })] }),
+    baseOptions(),
+  );
+  assert.deepEqual(buildRerunPlanTextSections(plan), []);
 });
 
 // --- Empty case -----------------------------------------------------------
