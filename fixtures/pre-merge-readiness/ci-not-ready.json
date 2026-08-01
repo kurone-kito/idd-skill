@@ -243,6 +243,7 @@
       "missingRequiredCheckNames": [
         "test"
       ],
+      "discardedNonPassingRequiredChecks": [],
       "checks": [
         {
           "name": "lint",

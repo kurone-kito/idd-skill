@@ -305,6 +305,7 @@
         "lint"
       ],
       "missingRequiredCheckNames": [],
+      "discardedNonPassingRequiredChecks": [],
       "checks": [
         {
           "name": "lint",
