@@ -1283,6 +1283,16 @@ to post it is the consuming track's job.
   is a `branch-currency` merge-gate blocker (see below); `UNKNOWN` is the
   async-still-computing state F1 and the E-phase branch-sync check
   already re-poll, not a blocker here.
+- `ci.discardedNonPassingRequiredChecks` (#1745) surfaces a same-name/type/
+  workflowName required-check instance discarded by the latest-per-producer
+  dedup while the surviving representative is pass-equivalent -- e.g. a
+  `CANCELLED` bot-triggered instance sitting alongside the `SUCCESS`
+  instance the dedup selected as "latest", the live PR #1741 divergence
+  where `ci.status: "success"` disagreed with GitHub's own
+  `statusCheckRollup.state: "FAILURE"` for the same commit. Evidence only
+  (empty array, never omitted, when nothing was discarded) -- it does not
+  itself gate F2/F3; a non-empty list is a prompt to double-check the live
+  GitHub rollup directly rather than trusting a bare `ci.status: "success"`.
 - Authoritative phase role: the live `pre-merge-readiness` run on the
   current HEAD is the **authoritative source for the final-merge CI and
   activity fields** at F2/F3. The `review-activity-snapshot` helper builds
