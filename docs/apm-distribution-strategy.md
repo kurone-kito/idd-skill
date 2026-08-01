@@ -129,8 +129,9 @@ re-run with `-g`"), and the deployed scripts land on Claude Code's Bash
 `PATH` and are **"invoked without per-call confirmation"** (treated as
 trusted code). This does not cover IDD's helper bundle
 (`scripts/*.mjs`, per `docs/idd-helper-scripts.md`): the helper bundle
-is invoked identically by every supported agent's own shell tool
-(`node scripts/x.mjs …`), is normally project-scoped (the
+is invoked identically by every supported agent's own shell tool (for
+example `node scripts/audit-docs.mjs --check`), is normally
+project-scoped (the
 `vendored-node` profile copies files into the adopter repo, not a
 global directory), and is read as an explicit command named in the
 instruction text rather than a bare command silently available on
