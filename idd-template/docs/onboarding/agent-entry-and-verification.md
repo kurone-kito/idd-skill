@@ -24,8 +24,8 @@ Keep these rules explicit:
   already-present `.github/copilot-instructions.md` already carries
   repository-specific guidance beyond the shared IDD workflow section,
   do not let the new stub drop it: add a short pointer in the new file
-  to the single existing file that owns that guidance, instead of
-  copying the prose into every stub — several copies trade the
+  to the existing file that owns that guidance, instead of copying the
+  prose into every stub — several copies trade the
   asymmetry problem for a divergence problem the next edit will miss
   (observed 2026-07-27, kurone-kito/idd-skill#1717). Apply this the
   same way for `CLAUDE.md`, `AGENTS.md`, and `GEMINI.md`; no runtime is
