@@ -177,6 +177,25 @@ test('instruction size budget rejects a non-string alwaysLoadedPattern', () => {
   );
 });
 
+// Regression coverage for a Copilot review finding on PR #1776: `??` only
+// substitutes on `undefined`, not `null`, but the two are not the same
+// authoring intent -- an explicit `null` in the manifest is a malformed
+// value that must be rejected, not silently treated the same as "field
+// omitted" and defaulted.
+test('instruction size budget rejects an explicit null alwaysLoadedPattern instead of silently defaulting it', () => {
+  const result = collectInstructionSizeBudgetViolations(
+    { id: 'instruction-size-budgets', alwaysLoadedPattern: null },
+    new Set(),
+    () => [],
+    () => '',
+  );
+  assert.equal(result.errors.length, 1);
+  assert.match(
+    result.errors[0],
+    /alwaysLoadedPattern must be a string \(got null\)/,
+  );
+});
+
 test('instruction size budget rejects an alwaysLoadedPattern that does not compile as a regular expression', () => {
   const result = collectInstructionSizeBudgetViolations(
     { id: 'instruction-size-budgets', alwaysLoadedPattern: '(' },

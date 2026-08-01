@@ -706,8 +706,15 @@ export function collectInstructionSizeBudgetViolations(
   // it exists to enforce (fail-open); a malformed pattern threw an unhandled
   // `SyntaxError` from `new RegExp` instead of naming the bad field. Reject
   // both explicitly, naming the offending field and value (#1721).
+  // `=== undefined` (not `??`) so an explicit `null` in the manifest is
+  // validated and rejected below rather than silently treated the same as
+  // "field not provided" and defaulted -- the same undefined-only-default
+  // distinction normalizePositiveIntegerBudget already makes for the two
+  // limit fields.
   const alwaysLoadedPatternValue =
-    config.alwaysLoadedPattern ?? 'applyTo:\\s*"\\*\\*"';
+    config.alwaysLoadedPattern === undefined
+      ? 'applyTo:\\s*"\\*\\*"'
+      : config.alwaysLoadedPattern;
   if (typeof alwaysLoadedPatternValue !== 'string') {
     return {
       errors: [
