@@ -713,6 +713,7 @@
         "requiredChecksPassing",
         "requiredCheckNames",
         "missingRequiredCheckNames",
+        "discardedNonPassingRequiredChecks",
         "checks"
       ],
       "additionalProperties": false,
@@ -769,6 +770,48 @@
           "items": {
             "type": "string",
             "minLength": 1
+          }
+        },
+        "discardedNonPassingRequiredChecks": {
+          "type": "array",
+          "description": "#1745: same-name/type/workflowName required-check instances discarded by the latest-per-producer dedup while the dedup-selected representative for that group is pass-equivalent -- surfaces the exact PR #1741 divergence, where a CANCELLED idd-advisory-convergence instance was masked by a same-name SUCCESS instance even though GitHub's own statusCheckRollup.state disagreed. Empty (never omitted) when no such discarded sibling exists.",
+          "items": {
+            "type": "object",
+            "required": [
+              "name",
+              "type",
+              "workflowName",
+              "selectedState",
+              "selectedCompletedAt",
+              "discardedState",
+              "discardedCompletedAt"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "type": {
+                "type": "string"
+              },
+              "workflowName": {
+                "type": "string"
+              },
+              "selectedState": {
+                "type": "string",
+                "minLength": 1
+              },
+              "selectedCompletedAt": {
+                "type": ["string", "null"]
+              },
+              "discardedState": {
+                "type": "string",
+                "minLength": 1
+              },
+              "discardedCompletedAt": {
+                "type": ["string", "null"]
+              }
+            }
           }
         },
         "checks": {

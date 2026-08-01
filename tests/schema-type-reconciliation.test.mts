@@ -1027,6 +1027,7 @@ const preMergeReadinessFixture = {
     requiredChecksPassing: true,
     requiredCheckNames: ['lint'],
     missingRequiredCheckNames: [],
+    discardedNonPassingRequiredChecks: [],
     checks: [
       {
         name: 'lint',
