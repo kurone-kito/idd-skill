@@ -478,8 +478,21 @@ function ghJson(args: string[]): unknown {
  * `JSON.parse` (via `ghJson`) could not parse once there was more than one
  * page. Matches the shared NDJSON convention `gh-exec.mts`'s `ghApiJson`
  * already uses.
+ *
+ * Requires `args` to already include `--paginate` and `--jq` (Copilot
+ * review on PR #1763): a call site missing either flag would still parse
+ * without error -- `--jq`-less output as a single JSON.parse of one big
+ * value, or non-paginated output as a trivially "one item" NDJSON stream --
+ * silently returning only a first page or a wrong shape instead of failing
+ * loudly. Every current call site already passes both; this only guards
+ * against a future call site accidentally dropping one.
  */
 function ghPaginatedJson(args: string[]): unknown[] {
+  if (!args.includes('--paginate') || !args.includes('--jq')) {
+    throw new Error(
+      `ghPaginatedJson requires both --paginate and --jq in args, got: ${args.join(' ')}`,
+    );
+  }
   return parsePaginatedGhNdjson(runGh(args));
 }
 

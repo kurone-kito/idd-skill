@@ -33,7 +33,12 @@ function ndjson(items: unknown[]): string {
 
 /**
  * Build a stub `gh` Node script matching each call in `responses` (keyed by
- * `JSON.stringify(argv)`) exactly. An unmatched call fails loudly.
+ * `JSON.stringify(argv)`) exactly. An unmatched call fails loudly. The one
+ * exception: when `graphqlResponse` is given, `api graphql` calls match on
+ * `args[0]`/`args[1]` alone (checked before the exact-argv table), returning
+ * the same canned response regardless of the GraphQL query/variables --
+ * `fetchReviewThreads`'s query text is unrelated to this file's pagination
+ * fix and reproducing it byte-for-byte here would be needlessly brittle.
  */
 function buildStubGh(
   responses: Map<string, string>,
