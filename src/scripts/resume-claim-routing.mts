@@ -757,14 +757,24 @@ function findLaterCompetingClaim(
 
 /**
  * True when a trusted `unclaimed-by` event releases `claim` -- an
- * `{agentId, claimId}` match at a GitHub `created_at` strictly later than
- * `claim.createdAt`. Mirrors the release-matching rule in
- * `applyClaimEvent`/`parseReleaseComment`, but is evaluated independently
- * here: `findLaterCompetingClaim`'s candidate never became the active claim
- * (rule 4 of Claim-state parsing rejects a `supersedes: none` competitor
- * while a claim already exists), so its own release never flows through
- * `resolveActiveClaim`'s state machine and must be checked directly against
- * the raw trusted event stream instead.
+ * `{agentId, claimId}` match whose GitHub `created_at` (via
+ * `parseReleaseComment`) is strictly later than `claim.createdAt`. Uses the
+ * same `{agentId, claimId}` match as `applyClaimEvent`'s release check, but
+ * is evaluated independently here: `findLaterCompetingClaim`'s candidate
+ * never became the active claim (rule 4 of Claim-state parsing rejects a
+ * `supersedes: none` competitor while a claim already exists), so its own
+ * release never flows through `resolveActiveClaim`'s state machine and must
+ * be checked directly against the raw trusted event stream instead.
+ *
+ * Deliberately fail-closed, not a byte-identical mirror of
+ * `resolveActiveClaim`'s ordering: GitHub `created_at` is second-precision,
+ * so a claim and its release can share an identical timestamp string.
+ * `resolveActiveClaim`'s own sort breaks that tie by array/index order
+ * (effectively trusting fetch order) when resolving the *active* claim;
+ * this check requires a strictly later second instead, so an
+ * indistinguishable same-second ordering is never treated as proof of
+ * release -- the competing claim stays counted as live (the safer default)
+ * until a later, unambiguous release lands.
  */
 function isClaimReleased(
   events: NormalizedClaimEvent[],
