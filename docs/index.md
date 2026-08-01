@@ -33,6 +33,19 @@ also serve as the source for a future GitHub Pages site.
 | Understand the value prop | [Positioning](positioning.md)                                        | Summarizes where idd-skill fits among adjacent tools.                       |
 | Plan future publication   | [Pages strategy](pages-strategy.md)                                  | Records the low-cost path toward GitHub Pages.                              |
 
+### Project Strategy
+
+Maintainer-facing investigation and design notes that record
+distribution and positioning decisions for the project itself, as
+distinct from the phase rules in `.github/instructions/`:
+
+- [IDD Skill — Competitive Landscape and Positioning](positioning.md)
+- [Claude Code Skill Strategy for the IDD Execution Loop](claude-skill-strategy.md)
+- [Investigation: Skills-Based On-Demand Delivery of IDD Phase
+  Instructions](skills-delivery-investigation.md)
+- [Investigation: Microsoft APM as an Additional IDD Distribution
+  Channel](apm-distribution-strategy.md)
+
 ## Reference Map
 
 <!-- audit:generated id=docs-index-okf-table -->
@@ -73,6 +86,7 @@ also serve as the source for a future GitHub Pages site.
 | design | [GitHub Pages Readiness Strategy](pages-strategy.md) | Records the low-cost path and deferred decisions for turning the docs reference manual into a public GitHub Pages site. |
 | design | [Weak-Model Authoring Lite Profile — Design](weak-model-authoring-lite-profile-design.md) | Records the design for a lite authoring profile that improves weak local model conformance with the issue-authoring skill. |
 | design | [Weak-Model Lite Instruction Profile — Design](weak-model-lite-profile-design.md) | Records the design for a condensed IDD instruction profile targeting weak local models with ample context but low adherence. |
+| investigation | [Investigation: Microsoft APM as an Additional IDD Distribution Channel](apm-distribution-strategy.md) | Records the findings and Go/No-Go recommendation on whether IDD should adopt Microsoft APM (Agent Package Manager) as an additional distribution channel for the template. |
 | investigation | [Investigation: Harness-Orchestrated Execution Mode for Weak Local Models](harness-orchestrated-execution-investigation.md) | Records the findings and recommendation on whether to define a harness-orchestrated execution mode for weak local models. |
 | investigation | [IDD Skill — Competitive Landscape and Positioning](positioning.md) | Analyzes the competitive landscape for idd-skill and summarizes its strategic position relative to adjacent tools. |
 | investigation | [Investigation: Skills-Based On-Demand Delivery of IDD Phase Instructions](skills-delivery-investigation.md) | Records the findings and recommendation on whether to deliver IDD phase instructions as on-demand skill bundles. |

@@ -585,6 +585,58 @@ routing table does not already serve. A future audit that re-discovers
 this question (see issues #1413, #1414, and #1416) should treat it as a
 decided trade-off rather than re-running the investigation.
 
+### Microsoft APM as an additional distribution channel: no-go (2026-08-02)
+
+Issue #1727 investigated whether this repository should distribute the
+IDD template through [Microsoft APM](https://github.com/microsoft/apm)
+(Agent Package Manager), a pre-1.0 MIT-licensed package manager for
+agent context, beside the existing `idd-template/ONBOARDING.md`
+raw-fetch-and-copy flow. The full findings live in
+`docs/apm-distribution-strategy.md`.
+
+The decision: **no-go** for the core template. Five payload classes
+(`.github/workflows/idd-advisory-convergence.yml`, `.githooks/`,
+`.github/idd/config.json`, `profiles/`, `idd-template/docs/**`) have no
+APM primitive at all — APM's `hooks` primitive is a false-friend name
+collision with `.githooks/`, since it covers harness-runtime
+lifecycle callbacks, not git hooks. The phase-instruction corpus's real
+activation key is workflow-step position, which does not map onto
+APM's file-glob-scoped `applyTo` frontmatter; encoding it either way
+degrades current behavior (a meaningless glob, or folding every phase
+file into the always-loaded compiled context and blowing the
+`instructionSizeBudgets`/`bundleBudgets` caps). APM's `apm.lock.yaml`
+pins per-file content hashes, which is structurally incompatible with
+the template's 26 `{{...}}` placeholder occurrences that onboarding
+substitutes in place — every onboarded repository would carry
+permanent, unresolvable drift from completion onward. Multi-target
+compilation also breaks the corpus's own cross-references (bare-prose
+mentions of `<name>.instructions.md`, the large majority of the
+corpus's ~200 such references) on every non-Copilot target, since each
+target compiles instructions to a different directory and, for several
+targets, a different file extension. Net, adopting APM for the phase
+corpus reproduces the "third synchronized surface" objection that
+already decided the skill-delivery no-go above, now as a new external
+CLI dependency rather than a same-repo generated file tree.
+
+The one favorable exception: `skills/issue-authoring/` already
+conforms to APM's skill-frontmatter contract, already uses the
+`references/` convention, carries no placeholders, and its drift
+arithmetic is net-neutral — APM's skill-bundle deployment would
+plausibly **replace**, not add to, the existing
+`skills/issue-authoring` → `.claude/skills/issue-authoring`
+`mode: "exact"` sync pair. That exception is recorded as a named
+revisit condition, not an adoption; APM's pre-1.0 release cadence (10
+tagged releases in roughly 6.5 weeks as of this analysis) is an
+independent, ongoing maintenance-risk factor even for that narrow case.
+
+Conditions that would revisit this: APM reaching a stable schema; APM's
+`instructions` primitive gaining a workflow-step-scoped activation mode;
+explicit adopter demand with a concrete use case the raw-URL path does
+not already serve; or a bounded pilot of `skills/issue-authoring/`
+alone. A future audit that re-discovers this question (see #1727)
+should treat it as a decided trade-off rather than re-running the
+investigation.
+
 ## Documentation conventions
 
 ### Cite the observed incident
