@@ -39,9 +39,11 @@ import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import {
+  buildOkfIndexRows,
   globFiles,
   injectGeneratedFromBanner,
   isBannerScopedInstructionTarget,
+  renderOkfIndexMarkdownTable,
   resolveGeneratedBlockFiles,
 } from './consistency-helpers.mts';
 
@@ -60,6 +62,11 @@ interface GeneratedBlock {
   stripPrefix?: string;
   paths?: string[];
   sourceGlobs?: string[];
+  /** `"path-list"` (default) or `"okf-table"` (#1683). */
+  kind?: string;
+  typeOrder?: string[];
+  excludePaths?: string[];
+  linkBase?: string;
 }
 
 interface ShellFileList {
@@ -489,6 +496,13 @@ function applyShellFileList(
 
 function renderGeneratedBlock(block: GeneratedBlock): string {
   const files = resolveBlockFiles(block);
+  if (String(block.kind ?? '').trim() === 'okf-table') {
+    const rows = buildOkfIndexRows(files, (path) => readText(path), {
+      typeOrder: block.typeOrder ?? [],
+      excludePaths: block.excludePaths ?? [],
+    });
+    return renderOkfIndexMarkdownTable(rows, block.linkBase ?? 'docs');
+  }
   const renderedFiles = files.map((f) => doStripPrefix(f, block.stripPrefix));
   return `\n\n\`\`\`${block.language ?? 'text'}\n${renderedFiles.join('\n')}\n\`\`\`\n\n`;
 }

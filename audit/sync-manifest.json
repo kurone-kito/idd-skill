@@ -169,6 +169,29 @@
         "skills/issue-authoring/references/draft-patterns.md",
         "skills/issue-authoring/references/workflow-boundary.md"
       ]
+    },
+    {
+      "id": "docs-index-okf-table",
+      "_comment": "OKF frontmatter index table for docs/index.md (#1683). kind okf-table renders title/type/description rows from docs-okf pages under docs/**, excluding docs/index.md itself.",
+      "file": "docs/index.md",
+      "kind": "okf-table",
+      "linkBase": "docs",
+      "typeOrder": [
+        "index",
+        "guide",
+        "concept",
+        "reference",
+        "workflow",
+        "design",
+        "investigation",
+        "tutorial"
+      ],
+      "excludePaths": [
+        "docs/index.md"
+      ],
+      "sourceGlobs": [
+        "docs/**/*.md"
+      ]
     }
   ],
   "shellFileLists": [

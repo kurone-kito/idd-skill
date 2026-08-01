@@ -19,6 +19,7 @@ import type {
   TypeSuppressionBudgetConfig,
 } from './consistency-helpers.mts';
 import {
+  buildOkfIndexRows,
   collectContextCeilingViolations,
   collectDocBudgetDriftViolations,
   collectDuplicateSyncPairTargets,
@@ -31,6 +32,7 @@ import {
   collectTypeSuppressionViolations,
   globFiles,
   isBannerScopedInstructionTarget,
+  renderOkfIndexMarkdownTable,
   resolveGeneratedBlockFiles,
   stripGeneratedFromBanner,
   uniqueSorted,
@@ -63,6 +65,11 @@ interface GeneratedBlock {
   paths?: string[];
   sourceGlobs?: string[];
   stripPrefix?: string;
+  /** `"path-list"` (default) or `"okf-table"` (#1683). */
+  kind?: string;
+  typeOrder?: string[];
+  excludePaths?: string[];
+  linkBase?: string;
 }
 
 interface ShellFileList {
@@ -472,6 +479,13 @@ function checkShellFileLists(
 
 function renderGeneratedBlock(block: GeneratedBlock): string {
   const files = resolveBlockFiles(block);
+  if (String(block.kind ?? '').trim() === 'okf-table') {
+    const rows = buildOkfIndexRows(files, (path) => readText(path), {
+      typeOrder: block.typeOrder ?? [],
+      excludePaths: block.excludePaths ?? [],
+    });
+    return renderOkfIndexMarkdownTable(rows, block.linkBase ?? 'docs');
+  }
   const renderedFiles = files.map((file) =>
     stripPrefix(file, block.stripPrefix),
   );

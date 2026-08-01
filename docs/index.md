@@ -35,74 +35,52 @@ also serve as the source for a future GitHub Pages site.
 
 ## Reference Map
 
-### Adoption and Onboarding
+<!-- audit:generated id=docs-index-okf-table -->
 
-- [Getting started](getting-started.md) is the concise first-run path
-  from template import to the first IDD execution loop.
-- [Core IDD concepts](concepts.md) explains the key terms new adopters
-  should know before reading strict phase rules.
-- [Customizing IDD](customization.md) names the safe adopter policy
-  surfaces for review, advisory, merge, CI, and discovery behavior.
-- [Policy constants](policy-constants.md) inventories the distributed
-  timing, wait, and loop defaults without changing workflow behavior.
-- [Template onboarding][template-onboarding] is the canonical
-  guide for importing the portable IDD template into another
-  repository.
-- [Permissions and threat model](permissions.md) describes the minimum
-  GitHub access profiles, forbidden credentials, and operating controls
-  for unattended or merge-capable agents.
-- [IDD review policy profiles](idd-review-policy-profiles.md) explains
-  the default Copilot advisory PR policy and non-default customization
-  surfaces.
+<!-- dprint-ignore-start -->
+| Type | Page | Description |
+| ---- | ---- | ----------- |
+| guide | [Customizing IDD](customization.md) | Lists which IDD surfaces adopters can safely customize and points to the authoritative file for each policy. |
+| guide | [Getting Started with IDD](getting-started.md) | Walks a new adopter through the shortest safe path from deciding to adopt IDD to running the first Issue-Driven Development loop. |
+| guide | [IDD Review Policy Profiles](idd-review-policy-profiles.md) | Names the supported PR review policy profiles and the instruction files an adopter must edit to select one other than the Copilot-advisory default. |
+| guide | [Permissions and Threat Model](permissions.md) | Defines the credential profiles, merge-policy boundaries, and threat model an operator must choose before granting IDD agents GitHub access. |
+| concept | [Core IDD Concepts](concepts.md) | Introduces the loop-engineering vocabulary and mental model behind the IDD phase instructions before diving into phase-by-phase rules. |
+| reference | [IDD — Advisory-Wait Shell Fallback (AW1 / AW2 / AW3-R / AW3-S / AW3-H detail)](idd-advisory-wait-shell-fallback.md) | Provides the verbatim gh, gh api, jq, and curl commands the advisory-wait shell fallback uses when helper support cannot be trusted. |
+| reference | [IDD Autonomy Contract](idd-autonomy-contract.md) | Classifies every externally visible IDD mutation as reversible or irreversible and names the gate or undo path for each. |
+| reference | [IDD Comment Minimization](idd-comment-minimization.md) | Defines the live status digest contract and the safe procedure for minimizing completed review feedback and stale operational markers after merge. |
+| reference | [IDD — Concept Ownership Matrix](idd-concept-ownership.md) | Answers which actor may touch a given IDD concept at a given phase without re-reading every instruction file. |
+| reference | [IDD Resume — Detail Reference](idd-resume-detail.md) | Provides the full narrative detail behind idd-resume.instructions.md's compact routing tables for branches that need careful judgment. |
+| reference | [Issue Authoring Skill Contract and Schema](issue-authoring-skill.md) | Defines the stable contract and output schema for the agent-facing issue authoring skill that prepares IDD-ready issues. |
+| reference | [OKF Frontmatter Profile](okf-frontmatter.md) | Defines the OKF v0.1 frontmatter field profile, bundle scope, and conformance rules this repository's docs corpus adopts. |
+| reference | [IDD Policy Constants](policy-constants.md) | Inventories the distributed IDD policy defaults and names which configuration surface owns each one. |
+| reference | [PR Cleanup Backlog — Batch Run 001](pr-cleanup-backlog-batch-001.md) | Records the first batch execution of the historical merged-PR cleanup backlog campaign and how to continue subsequent batches. |
+| reference | [IDD Detailed Reference](reference.md) | Maps each operational question to the authoritative phase file or policy page that answers it. |
+| reference | [Stalled Session Quiet-Check Helper](stalled-session-quiet-check.md) | Documents the CLI usage, output schema, and required live rechecks for the Resume/S2 stalled-session quiet-check helper. |
+| reference | [TypeScript helper sources](typescript-sources.md) | Explains the generated .mjs-from-.mts helper source layout, build commands, and drift guards this repository enforces. |
+| reference | [Workshop Recording Toolchain](workshop/assets/recordings/README.md) | Explains how to store and reproduce source tapes for workshop terminal recordings. |
+| reference | [Workshop Log Format](workshop/LOG-FORMAT.md) | Defines the conventions workshop log segments follow so they can be assembled and reviewed without reformatting. |
+| reference | [Bootstrap Log Segment](workshop/log-segments/01-bootstrap.md) | Captures the timestamped bootstrap log segment of the VRChat Event Calendar IDD workshop session. |
+| reference | [Infrastructure Setup Log Segment](workshop/log-segments/02-infrastructure.md) | Captures the timestamped infrastructure-setup log segment of the VRChat Event Calendar IDD workshop session. |
+| reference | [Data Layer Log Segment](workshop/log-segments/03-data-layer.md) | Captures the timestamped data-layer log segment of the VRChat Event Calendar IDD workshop session. |
+| reference | [Backend API Log Segment](workshop/log-segments/04-backend-api.md) | Captures the timestamped backend-API log segment of the VRChat Event Calendar IDD workshop session. |
+| reference | [Frontend and Quality Hardening Log Segment](workshop/log-segments/05-frontend-quality.md) | Captures the timestamped frontend-and-quality-hardening log segment of the VRChat Event Calendar IDD workshop session. |
+| reference | [VRChat Event Calendar IDD Workshop Log](workshop/workshop-log.md) | Is the complete timestamped record of the IDD session that built the VRChat Event Calendar from an empty repository to a working MVP. |
+| workflow | [IDD workflow guide](idd-workflow.md) | Routes each agent to its entry file and the phase file matching its current state. |
+| design | [AI tooling strategy](ai-strategy.md) | Explains why this repository prioritizes GitHub Copilot and how the other agent compatibility entry files should stay in sync with it. |
+| design | [Claude Code Skill Strategy for the IDD Execution Loop](claude-skill-strategy.md) | Records the design evaluation and no-go decision for packaging the IDD execution loop as a Claude Code skill. |
+| design | [IDD — Design Rationale and Maintainer Notes](idd-design-rationale.md) | Collects maintainer-facing rationale for why IDD phase rules exist as they do, organized by phase file. |
+| design | [IDD Helper Script Evaluation](idd-helper-scripts.md) | Records the current adoption decision and trade-offs for IDD's optional helper scripts so future reviews do not re-evaluate them from scratch. |
+| design | [GitHub Pages Readiness Strategy](pages-strategy.md) | Records the low-cost path and deferred decisions for turning the docs reference manual into a public GitHub Pages site. |
+| design | [Weak-Model Authoring Lite Profile — Design](weak-model-authoring-lite-profile-design.md) | Records the design for a lite authoring profile that improves weak local model conformance with the issue-authoring skill. |
+| design | [Weak-Model Lite Instruction Profile — Design](weak-model-lite-profile-design.md) | Records the design for a condensed IDD instruction profile targeting weak local models with ample context but low adherence. |
+| investigation | [Investigation: Harness-Orchestrated Execution Mode for Weak Local Models](harness-orchestrated-execution-investigation.md) | Records the findings and recommendation on whether to define a harness-orchestrated execution mode for weak local models. |
+| investigation | [IDD Skill — Competitive Landscape and Positioning](positioning.md) | Analyzes the competitive landscape for idd-skill and summarizes its strategic position relative to adjacent tools. |
+| investigation | [Investigation: Skills-Based On-Demand Delivery of IDD Phase Instructions](skills-delivery-investigation.md) | Records the findings and recommendation on whether to deliver IDD phase instructions as on-demand skill bundles. |
+| tutorial | [Bonus: Deploy with Defang](workshop/bonus-defang-deployment.md) | Walks through the optional bonus path of deploying the workshop app from local Docker Compose to a Defang deployment. |
+| tutorial | [Build a VRChat Event Calendar with IDD](workshop/README.md) | Walks through an end-to-end IDD workshop session that builds a VRChat event calendar example from an empty repository. |
+<!-- dprint-ignore-end -->
 
-### Detailed Reference
-
-- [Detailed reference](reference.md) is the compact phase and policy map
-  for maintainers and agents who need an authoritative source link.
-- [IDD workflow guide](idd-workflow.md) explains where each supported
-  agent starts and which phase file to read next.
-- [IDD helper script evaluation](idd-helper-scripts.md) records the
-  decision to adopt optional helper scripts and inventories the ones
-  shipped in the source repository, phase by phase.
-- [IDD comment minimization](idd-comment-minimization.md) defines the
-  live status digest helper contract and safe post-merge cleanup policy
-  for stale operational markers and completed feedback.
-- [IDD autonomy contract](idd-autonomy-contract.md) classifies every
-  externally visible mutation the loop performs as reversible or
-  gated/irreversible, with the undo path or governing gate named for
-  each.
-- [IDD concept ownership](idd-concept-ownership.md) is a
-  Creator/Mutator/Verifier matrix for loop concepts (claim markers,
-  review threads, PR body, ...), plus which actor/phase may take each
-  concept to its terminal state.
-- [Minimal IDD run sample](https://github.com/kurone-kito/idd-skill/blob/main/examples/minimal-run/README.md)
-  is a compact set of realistic marker-comment bodies (claim, activation
-  nonce, heartbeat, review snapshot, ...) for one end-to-end run.
-- [OKF frontmatter profile](okf-frontmatter.md) defines the OKF v0.1
-  frontmatter field profile, bundle scope, and conformance rules the
-  docs corpus adopts, plus the audit that enforces it.
-
-### Native Companions
-
-- [Issue authoring skill contract](issue-authoring-skill.md) describes
-  the optional pre-execution helper for drafting IDD-ready roadmap and
-  sub-issues before the Discover -> Claim -> Work loop begins, including
-  where the source bundle lives and how to install it for each agent
-  runtime.
-
-### Project Strategy
-
-- [Positioning](positioning.md) covers the competitive landscape,
-  differentiators, and known gaps.
-- [AI tooling strategy](ai-strategy.md) records the repository's
-  Copilot-first guidance policy and how compatibility entry files are
-  maintained for other agents.
-- [GitHub Pages readiness strategy](pages-strategy.md) records the
-  low-cost publication path and the reasons Pages is preferred over Wiki
-  for the primary public reference.
-- [Claude Code skill strategy](claude-skill-strategy.md) records the
-  design evaluation and go/no-go criteria for packaging the IDD
-  execution loop as a Claude Code skill.
+<!-- /audit:generated -->
 
 ## Language Policy
 

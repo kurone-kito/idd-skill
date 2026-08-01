@@ -1028,6 +1028,100 @@ export function resolveGeneratedBlockFiles(block, globFilesFn) {
   }
   return uniqueSorted((block.sourceGlobs ?? []).flatMap(globFilesFn));
 }
+/**
+ * Extract `type` / `title` / `description` from a page's OKF frontmatter,
+ * or `null` when the opening frontmatter block is missing or any of the
+ * three fields is empty/non-scalar. Pure and unit-testable.
+ */
+export function extractOkfIndexFields(text) {
+  const match = OKF_FRONTMATTER_PATTERN.exec(String(text ?? ''));
+  if (!match) return null;
+  const fields = parseOkfFrontmatterFields(match[1] ?? '');
+  const type = typeof fields.type === 'string' ? fields.type.trim() : '';
+  const title = typeof fields.title === 'string' ? fields.title.trim() : '';
+  const description =
+    typeof fields.description === 'string' ? fields.description.trim() : '';
+  if (!type || !title || !description) return null;
+  return { type, title, description };
+}
+/**
+ * Build deterministic OKF index rows from repo-relative paths.
+ * Skips exact paths listed in `excludePaths` and pages whose frontmatter
+ * cannot supply type/title/description. Callers that want reserved
+ * basenames (e.g. `index.md`) omitted must put those paths in
+ * `excludePaths` explicitly. Groups by `typeOrder` (unknown types sort
+ * after known ones, alphabetically), then by path within a group.
+ */
+export function buildOkfIndexRows(files, readFile, options = {}) {
+  const exclude = new Set(
+    (options.excludePaths ?? []).map((p) => String(p).replace(/\\/g, '/')),
+  );
+  const typeOrder = (options.typeOrder ?? []).map(String);
+  const typeRank = new Map(typeOrder.map((t, i) => [t, i]));
+  const rows = [];
+  for (const rawPath of files) {
+    const path = String(rawPath).replace(/\\/g, '/');
+    if (exclude.has(path)) continue;
+    let text;
+    try {
+      text = readFile(path);
+    } catch {
+      continue;
+    }
+    const fields = extractOkfIndexFields(text);
+    if (!fields) continue;
+    rows.push({ path, ...fields });
+  }
+  rows.sort((a, b) => {
+    const ra = typeRank.get(a.type);
+    const rb = typeRank.get(b.type);
+    const rankA = ra === undefined ? typeOrder.length : ra;
+    const rankB = rb === undefined ? typeOrder.length : rb;
+    if (rankA !== rankB) return rankA - rankB;
+    if (a.type !== b.type) return a.type.localeCompare(b.type);
+    return a.path.localeCompare(b.path);
+  });
+  return rows;
+}
+/**
+ * Render an OKF index as a Markdown table. Links are relative to
+ * `linkBase` (e.g. `docs` → `docs/foo.md` becomes `foo.md`). Pure.
+ */
+export function renderOkfIndexMarkdownTable(rows, linkBase = 'docs') {
+  const base = String(linkBase ?? 'docs')
+    .replace(/\\/g, '/')
+    .replace(/\/+$/, '');
+  const prefix = `${base}/`;
+  const header = '| Type | Page | Description |\n| ---- | ---- | ----------- |';
+  // Wrap in dprint-ignore so the formatter cannot re-pad table cells and
+  // make the audit-docs exact-string check fail on every apply (#1683).
+  const openIgnore = '<!-- dprint-ignore-start -->';
+  const closeIgnore = '<!-- dprint-ignore-end -->';
+  if (rows.length === 0) {
+    return `\n\n${openIgnore}\n${header}\n${closeIgnore}\n\n`;
+  }
+  const body = rows
+    .map((row) => {
+      const href = row.path.startsWith(prefix)
+        ? row.path.slice(prefix.length)
+        : row.path;
+      // Escape backslashes first, then pipes, so a cell value containing
+      // `\` cannot leave an incomplete escape sequence before `|`
+      // (CodeQL js/incomplete-sanitization on PR #1791).
+      const type = escapeMarkdownTableCell(row.type);
+      const title = escapeMarkdownTableCell(row.title);
+      const description = escapeMarkdownTableCell(row.description);
+      return `| ${type} | [${title}](${href}) | ${description} |`;
+    })
+    .join('\n');
+  return `\n\n${openIgnore}\n${header}\n${body}\n${closeIgnore}\n\n`;
+}
+/** Escape a Markdown table cell so `|` and `\` cannot break the row. */
+export function escapeMarkdownTableCell(value) {
+  return String(value ?? '')
+    .replace(/\\/g, '\\\\')
+    .replace(/\|/g, '\\|');
+}
 // Anchored at the very start of the file; a frontmatter block anywhere else
 // does not count -- OKF/YAML frontmatter must open the document.
 const OKF_FRONTMATTER_PATTERN = /^---\r?\n([\s\S]*?)\r?\n---\r?\n/;

@@ -8,6 +8,7 @@ import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { join, posix } from 'node:path';
 import {
+  buildOkfIndexRows,
   collectContextCeilingViolations,
   collectDocBudgetDriftViolations,
   collectDuplicateSyncPairTargets,
@@ -20,6 +21,7 @@ import {
   collectTypeSuppressionViolations,
   globFiles,
   isBannerScopedInstructionTarget,
+  renderOkfIndexMarkdownTable,
   resolveGeneratedBlockFiles,
   stripGeneratedFromBanner,
   uniqueSorted,
@@ -347,6 +349,13 @@ function checkShellFileLists(lists, generatedBlocks) {
 }
 function renderGeneratedBlock(block) {
   const files = resolveBlockFiles(block);
+  if (String(block.kind ?? '').trim() === 'okf-table') {
+    const rows = buildOkfIndexRows(files, (path) => readText(path), {
+      typeOrder: block.typeOrder ?? [],
+      excludePaths: block.excludePaths ?? [],
+    });
+    return renderOkfIndexMarkdownTable(rows, block.linkBase ?? 'docs');
+  }
   const renderedFiles = files.map((file) =>
     stripPrefix(file, block.stripPrefix),
   );
