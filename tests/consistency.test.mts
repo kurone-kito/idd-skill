@@ -124,6 +124,73 @@ test('instruction size budget returns nothing for absent config', () => {
   assert.deepEqual(result, { errors: [], notices: [] });
 });
 
+// #1721: `??` only substitutes on null/undefined, so a non-numeric budget
+// limit used to coerce every size comparison to NaN (always false),
+// silently passing the guard (fail-open) instead of being rejected.
+test('instruction size budget rejects a non-numeric alwaysLoadedLimitBytes instead of silently passing (fail-open regression)', () => {
+  const result = collectInstructionSizeBudgetViolations(
+    {
+      id: 'instruction-size-budgets',
+      alwaysLoadedLimitBytes: 'not-a-number',
+    },
+    new Set(['idd-core.instructions.md']),
+    () => {
+      throw new Error('must not list files once validation rejects config');
+    },
+    () => {
+      throw new Error('must not read files once validation rejects config');
+    },
+  );
+  assert.deepEqual(result.notices, []);
+  assert.equal(result.errors.length, 1);
+  assert.match(
+    result.errors[0],
+    /alwaysLoadedLimitBytes must be a positive integer \(got "not-a-number"\)/,
+  );
+});
+
+test('instruction size budget rejects a non-positive phaseLimitBytes', () => {
+  const result = collectInstructionSizeBudgetViolations(
+    { id: 'instruction-size-budgets', phaseLimitBytes: 0 },
+    new Set(),
+    () => [],
+    () => '',
+  );
+  assert.equal(result.errors.length, 1);
+  assert.match(
+    result.errors[0],
+    /phaseLimitBytes must be a positive integer \(got 0\)/,
+  );
+});
+
+test('instruction size budget rejects a non-string alwaysLoadedPattern', () => {
+  const result = collectInstructionSizeBudgetViolations(
+    { id: 'instruction-size-budgets', alwaysLoadedPattern: 42 },
+    new Set(),
+    () => [],
+    () => '',
+  );
+  assert.equal(result.errors.length, 1);
+  assert.match(
+    result.errors[0],
+    /alwaysLoadedPattern must be a string \(got 42\)/,
+  );
+});
+
+test('instruction size budget rejects an alwaysLoadedPattern that does not compile as a regular expression', () => {
+  const result = collectInstructionSizeBudgetViolations(
+    { id: 'instruction-size-budgets', alwaysLoadedPattern: '(' },
+    new Set(),
+    () => [],
+    () => '',
+  );
+  assert.equal(result.errors.length, 1);
+  assert.match(
+    result.errors[0],
+    /alwaysLoadedPattern "\(" does not compile as a regular expression/,
+  );
+});
+
 const BANNER_SOURCE =
   'idd-template/.github/instructions/idd-claim.instructions.md';
 

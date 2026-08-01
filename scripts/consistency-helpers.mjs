@@ -197,6 +197,23 @@ function normalizeBudgetLimit(value) {
   }
   return value;
 }
+/**
+ * Like {@link normalizeBudgetLimit}, but for a budget field that must be
+ * strictly positive (zero is not a usable instruction-file byte limit) and
+ * that falls back to `defaultValue` only when genuinely absent
+ * (`undefined`) rather than on every falsy/invalid value — a present but
+ * invalid value (a string, `0`, a negative number, a non-integer) is a
+ * manifest authoring error to reject, not silently coerce to the default.
+ */
+function normalizePositiveIntegerBudget(value, defaultValue) {
+  if (value === undefined) {
+    return defaultValue;
+  }
+  if (typeof value !== 'number' || !Number.isInteger(value) || value <= 0) {
+    return null;
+  }
+  return value;
+}
 function normalizeNonNegativeNumber(value) {
   if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) {
     return null;
@@ -682,11 +699,59 @@ export function collectInstructionSizeBudgetViolations(
       ],
     };
   }
-  const alwaysLoadedPattern =
+  // `??` only substitutes on null/undefined, so a manifest typo (a string
+  // where a number belongs, a non-positive limit, an unclosed regex group)
+  // used to flow straight through: a non-numeric limit coerced every size
+  // comparison to `NaN`, which is always false, silently passing the guard
+  // it exists to enforce (fail-open); a malformed pattern threw an unhandled
+  // `SyntaxError` from `new RegExp` instead of naming the bad field. Reject
+  // both explicitly, naming the offending field and value (#1721).
+  const alwaysLoadedPatternValue =
     config.alwaysLoadedPattern ?? 'applyTo:\\s*"\\*\\*"';
-  const alwaysLoadedRegex = new RegExp(alwaysLoadedPattern, 'm');
-  const alwaysLoadedLimitBytes = config.alwaysLoadedLimitBytes ?? 20_000;
-  const phaseLimitBytes = config.phaseLimitBytes ?? 30_000;
+  if (typeof alwaysLoadedPatternValue !== 'string') {
+    return {
+      errors: [
+        `${id}: alwaysLoadedPattern must be a string (got ${JSON.stringify(alwaysLoadedPatternValue)})`,
+      ],
+      notices: [],
+    };
+  }
+  let alwaysLoadedRegex;
+  try {
+    alwaysLoadedRegex = new RegExp(alwaysLoadedPatternValue, 'm');
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return {
+      errors: [
+        `${id}: alwaysLoadedPattern ${JSON.stringify(alwaysLoadedPatternValue)} does not compile as a regular expression: ${message}`,
+      ],
+      notices: [],
+    };
+  }
+  const alwaysLoadedLimitBytes = normalizePositiveIntegerBudget(
+    config.alwaysLoadedLimitBytes,
+    20_000,
+  );
+  if (alwaysLoadedLimitBytes === null) {
+    return {
+      errors: [
+        `${id}: alwaysLoadedLimitBytes must be a positive integer (got ${JSON.stringify(config.alwaysLoadedLimitBytes)})`,
+      ],
+      notices: [],
+    };
+  }
+  const phaseLimitBytes = normalizePositiveIntegerBudget(
+    config.phaseLimitBytes,
+    30_000,
+  );
+  if (phaseLimitBytes === null) {
+    return {
+      errors: [
+        `${id}: phaseLimitBytes must be a positive integer (got ${JSON.stringify(config.phaseLimitBytes)})`,
+      ],
+      notices: [],
+    };
+  }
   const errors = [];
   for (const path of listFiles()) {
     if (!changedFiles.has(path)) {
