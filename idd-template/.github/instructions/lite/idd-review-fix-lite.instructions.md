@@ -243,11 +243,11 @@ other GitHub side effect, confirm all of the following:
      {ISO8601-requested-at}` as plain text, not an HTML comment. Then go
      to the polling loop below.
    - `REQUEST_NEEDED`, `copilotPending` `true` (a request is already
-     pending but unproven for current HEAD): lite does not track the
-     claim-id/agent-id the full protocol's bounded `AW3-S`
-     remove/re-request cycle requires — mirror its fail-closed
-     `not-applicable` default: do not remove or re-request; go straight
-     to the polling loop below.
+     pending but unproven for current HEAD, no same-head marker to
+     anchor polling): lite does not track the claim-id/agent-id the
+     full protocol's bounded `AW3-S` remove/re-request cycle requires —
+     stop and ask rather than remove, re-request, or enter the
+     marker-based polling loop below with no marker.
    - `CAP_EXHAUSTED`: apply step 10 below (the secondary-bot check)
      first — it is a non-gating supplement that fires on cap exhaustion
      independent of the cap-exhausted route. Then, if the helper's
