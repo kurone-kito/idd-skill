@@ -119,6 +119,113 @@ test('exact syncPair: --check reports drift without writing, --apply writes and 
   assert.match(reChecked.stdout, /All mirrored artifacts are up to date\./);
 });
 
+// Commits every currently-written file in `dir` as the repo's initial
+// commit, so a subsequent on-disk edit becomes a genuine *uncommitted*
+// change relative to `git show HEAD:<path>` -- required for #1765's
+// uncommitted-target-edit guard tests, since makeScaffoldedSyncRepo itself
+// only `git init`s the fixture and never commits.
+function commitAll(dir: string): void {
+  const env = {
+    ...fixtureEnv(),
+    GIT_AUTHOR_NAME: 'test',
+    GIT_AUTHOR_EMAIL: 'test@example.com',
+    GIT_COMMITTER_NAME: 'test',
+    GIT_COMMITTER_EMAIL: 'test@example.com',
+  };
+  execFileSync('git', ['add', '-A'], { cwd: dir, env });
+  execFileSync('git', ['commit', '--quiet', '-m', 'init'], { cwd: dir, env });
+}
+
+test('exact syncPair: an uncommitted target edit is protected without --force', (t) => {
+  const dir = makeScaffoldedSyncRepo(
+    (cleanup) => t.after(cleanup),
+    {
+      syncPairs: [
+        {
+          id: 'pair-exact',
+          source: 'src/a.md',
+          target: 'out/a.md',
+          mode: 'exact',
+        },
+      ],
+    },
+    {
+      'src/a.md': 'generated content\n',
+      'out/a.md': 'generated content\n',
+    },
+  );
+  commitAll(dir);
+  // Simulate a mistaken direct edit to the target after the initial commit.
+  writeFileSync(join(dir, 'out/a.md'), 'a local edit worth keeping\n', 'utf8');
+
+  const checked = run(dir, '--check');
+  assert.equal(checked.status, 1);
+  assert.match(checked.stderr, /uncommitted local changes/);
+  assert.match(checked.stderr, /out\/a\.md/);
+  assert.match(checked.stderr, /Pass --force/);
+  // The edit must survive untouched.
+  assert.equal(read(dir, 'out/a.md'), 'a local edit worth keeping\n');
+
+  const applied = run(dir, '--apply');
+  assert.equal(applied.status, 1);
+  assert.equal(read(dir, 'out/a.md'), 'a local edit worth keeping\n');
+});
+
+test('exact syncPair: --force overwrites a protected uncommitted target edit', (t) => {
+  const dir = makeScaffoldedSyncRepo(
+    (cleanup) => t.after(cleanup),
+    {
+      syncPairs: [
+        {
+          id: 'pair-exact',
+          source: 'src/a.md',
+          target: 'out/a.md',
+          mode: 'exact',
+        },
+      ],
+    },
+    {
+      'src/a.md': 'generated content\n',
+      'out/a.md': 'generated content\n',
+    },
+  );
+  commitAll(dir);
+  writeFileSync(join(dir, 'out/a.md'), 'a local edit worth keeping\n', 'utf8');
+
+  const applied = run(dir, '--apply', '--force');
+  assert.equal(applied.status, 0);
+  assert.equal(read(dir, 'out/a.md'), 'generated content\n');
+});
+
+test('exact syncPair: a target that is merely stale (matches its last commit) still syncs silently, no --force needed', (t) => {
+  const dir = makeScaffoldedSyncRepo(
+    (cleanup) => t.after(cleanup),
+    {
+      syncPairs: [
+        {
+          id: 'pair-exact',
+          source: 'src/a.md',
+          target: 'out/a.md',
+          mode: 'exact',
+        },
+      ],
+    },
+    {
+      'src/a.md': 'old generated content\n',
+      'out/a.md': 'old generated content\n',
+    },
+  );
+  commitAll(dir);
+  // The source changes; the target is untouched on disk, so it exactly
+  // matches its last commit -- no uncommitted target edit exists.
+  writeFileSync(join(dir, 'src/a.md'), 'new generated content\n', 'utf8');
+
+  const applied = run(dir, '--apply');
+  assert.equal(applied.status, 0);
+  assert.equal(applied.stderr, '');
+  assert.equal(read(dir, 'out/a.md'), 'new generated content\n');
+});
+
 test('contains and structure syncPair modes are skipped, not generated', (t) => {
   const dir = makeScaffoldedSyncRepo((cleanup) => t.after(cleanup), {
     syncPairs: [
