@@ -577,8 +577,10 @@ function classifyInstance(instance, options) {
  * through as rerun-eligible (#1434 review, Codex P2).
  *
  * `isCopilotReviewerLogin` itself only normalizes this way for the
- * *default* Copilot login (a `copilot`/`copilot-pull-request-reviewer*`
- * prefix match); once a repository configures a non-default
+ * *default* Copilot login (an exact-set match against `copilot`/
+ * `copilot-pull-request-reviewer`/`copilot-pull-request-reviewer[bot]` --
+ * #1686 narrowed this from a `copilot-pull-request-reviewer*` prefix
+ * match); once a repository configures a non-default
  * `primaryBotLogin`, it falls back to an exact `normalized === configured`
  * comparison with no `[bot]`-suffix handling -- the same gap the
  * `advisoryBotLogins` fallback already closed for its own set, just on

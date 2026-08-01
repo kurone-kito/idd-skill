@@ -23,13 +23,13 @@ REPO=$(gh repo view --json name --jq '.name')
 LAST_COPILOT_COMMIT=$(
   gh api "repos/${OWNER}/${REPO}/pulls/{pr-number}/reviews" \
     --paginate \
-    --jq '.[] | select(.user.login | startswith("copilot-pull-request-reviewer")) |
+    --jq '.[] | select(.user.login == "copilot-pull-request-reviewer" or .user.login == "copilot-pull-request-reviewer[bot]") |
                {sa: .submitted_at, cid: .commit_id}' \
   | jq -rs 'sort_by(.sa) | last | .cid // ""'
 )
 
 COPILOT_PENDING=$(gh api "repos/${OWNER}/${REPO}/pulls/{pr-number}/requested_reviewers" \
-  --jq '.users | any(.login == "Copilot" or (.login | startswith("copilot-pull-request-reviewer")))')
+  --jq '.users | any(.login == "Copilot" or .login == "copilot-pull-request-reviewer" or .login == "copilot-pull-request-reviewer[bot]")')
 
 COPILOT_PENDING_COVERS_HEAD=$(
   gh api "repos/${OWNER}/${REPO}/issues/{pr-number}/timeline" \
@@ -44,7 +44,9 @@ COPILOT_PENDING_COVERS_HEAD=$(
         | (map(select(.value.event == "review_requested"
              and (((.value.requested_reviewer.login // "") == "Copilot")
                   or ((.value.requested_reviewer.login // "")
-                      | startswith("copilot-pull-request-reviewer")))))
+                      == "copilot-pull-request-reviewer")
+                  or ((.value.requested_reviewer.login // "")
+                      == "copilot-pull-request-reviewer[bot]"))))
            | last | .key // null) as $request_index
         | ($head_index != null and $request_index != null and
            $request_index > $head_index)

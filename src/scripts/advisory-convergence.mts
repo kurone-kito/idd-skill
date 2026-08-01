@@ -83,7 +83,7 @@ import {
   safeGhText,
 } from './gh-exec.mts';
 import { loadIddConfig } from './idd-config.mts';
-import { isValidIsoTimestamp } from './marker-helpers.mts';
+import { isValidIsoTimestamp, parseClaimComment } from './marker-helpers.mts';
 import {
   normalizePolicyConfig,
   parseIsoDurationToMs,
@@ -142,9 +142,16 @@ export const SAME_HEAD_REROLL_INELIGIBLE_REASON = {
 export type SameHeadRerollIneligibleReasonToken =
   (typeof SAME_HEAD_REROLL_INELIGIBLE_REASON)[keyof typeof SAME_HEAD_REROLL_INELIGIBLE_REASON];
 
-/** Author reference embedded in GitHub REST/GraphQL payloads. */
+/** Author reference embedded in GitHub REST/GraphQL payloads.
+ * `__typename` (#1686) is GraphQL-only -- this file's own `reviews` /
+ * `reviewThreads` / thread-comment-page queries request it explicitly (see
+ * `fetchReviewsAndHeadCommit` / `fetchReviewThreads` /
+ * `fetchThreadCommentPages`), so every LIVE payload this gate evaluates
+ * carries it; a fixture/test payload that omits it is treated as
+ * "unknown", never as a rejection -- see {@link isVerifiedCopilotAuthor}. */
 interface GhAuthorPayload {
   login?: string | null;
+  __typename?: string | null;
 }
 
 /** Issue/PR comment payload fields consumed by this helper. */
@@ -243,10 +250,27 @@ export interface AdvisoryConvergenceWaiver {
   validCount: number;
 }
 
-/** Scope gate evidence for the advisory-convergence verdict. */
+/** Scope gate evidence for the advisory-convergence verdict.
+ *
+ * `status: 'indeterminate'` (#1686) is a third, deliberately distinct
+ * outcome from `not_applicable`: it means this PR carries real evidence of
+ * IDD claim activity (a trusted `claimed-by` marker exists somewhere in its
+ * candidate claim-issue history, or its closing references are ambiguous
+ * between two or more actively-claimed issues, or its linked issue has an
+ * active claim whose recorded branch does not match the PR's own head
+ * branch) but the claim linkage the `idd-claimed` scope needs cannot be
+ * resolved cleanly right now. Unlike `not_applicable`, `indeterminate`
+ * NEVER makes the verdict `ready` on its own (see `converged`/`ready`
+ * below) -- it still falls through the existing deadline+maintainer-waiver
+ * escape hatch like any other non-converged verdict, so a human can either
+ * repair the claim linkage or explicitly waive this check, but the
+ * executing session cannot manufacture readiness by omitting, duplicating,
+ * or letting its own claim linkage go missing. `not_applicable` stays
+ * reserved for a PR with NO such evidence at all -- a genuine non-IDD
+ * contribution this scope must not block. */
 export interface AdvisoryConvergenceApplicability {
   scope: 'all-prs' | 'idd-claimed';
-  status: 'applicable' | 'not_applicable';
+  status: 'applicable' | 'not_applicable' | 'indeterminate';
   reason: string;
 }
 
@@ -367,6 +391,35 @@ export interface AdvisoryConvergenceInputs {
    * active claim for waiver validation; the `converged` computation itself
    * never depends on a claim. */
   claimEvents?: IssueCommentPayload[];
+  /** #1686: true when at least one trusted, syntactically valid
+   * `claimed-by` marker was ever posted on ANY of the PR's candidate claim
+   * issues -- computed by the CLI-collection layer over the union of every
+   * candidate's raw comment stream, independent of whether that history
+   * currently resolves to an ACTIVE claim. `claimEvents` above can be `[]`
+   * even when this is `true`: `pickResolvingClaimEvents` fails closed to
+   * `[]` both when zero candidates resolve and when the linkage is
+   * ambiguous, collapsing exactly the distinction this field restores (see
+   * the module header's path 2 and path 4). Distinguishes a genuinely
+   * non-IDD PR (no linked issue, no claim history ever -- `false`, stays
+   * `not_applicable`) from an IDD-shaped PR whose claim linkage is
+   * currently broken (a stale or released claim -- `true`, becomes
+   * `indeterminate`). Defaults to `false` when omitted, preserving prior
+   * `not_applicable` behavior for every fixture/caller that predates this
+   * field. */
+  claimMarkerHistoryPresent?: boolean;
+  /** #1686: true when two or more of the PR's candidate claim issues each
+   * independently resolve an ACTIVE trusted claim -- the disambiguation
+   * failure `pickResolvingClaimEvents` already fails closed to `[]` for
+   * (module header path 2). An explicit `--claim-issue` target has no
+   * ambiguity to resolve, so the CLI-collection layer always reports
+   * `false` for it (see `classifyClaimCandidateAmbiguity`). Defaults to
+   * `false` when omitted. Checked BEFORE `claimMarkerHistoryPresent` in the
+   * applicability computation so the more specific "which failure mode"
+   * reason wins -- an ambiguous set of candidates trivially also has claim
+   * history (an active claim cannot exist without a valid marker), so the
+   * two fields are not mutually exclusive; the check order is what makes
+   * the reported `reason` precise. */
+  claimCandidateAmbiguous?: boolean;
 }
 
 /** Pure options accepted by {@link computeAdvisoryConvergenceVerdict}. */
@@ -505,14 +558,33 @@ export function computeAdvisoryConvergenceVerdict(
     options.convergenceScope === 'idd-claimed' ? 'idd-claimed' : 'all-prs';
   const prHeadRefName = String(options.prHeadRefName ?? '').trim();
   const activeClaimBranch = String(claim.activeClaim?.branch ?? '').trim();
+  // #1686: evidence the CLI-collection layer computes over EVERY candidate
+  // claim issue (not just whichever one -- if any -- ended up "active"), so
+  // the applicability gate can tell a genuinely non-IDD PR apart from an
+  // IDD-shaped PR whose claim linkage is currently broken. See each field's
+  // own doc comment on `AdvisoryConvergenceInputs` for the full rationale.
+  const claimMarkerHistoryPresent = inputs.claimMarkerHistoryPresent === true;
+  const claimCandidateAmbiguous = inputs.claimCandidateAmbiguous === true;
   const applicability: AdvisoryConvergenceApplicability =
     convergenceScope === 'idd-claimed'
       ? !claim.activeClaimPresent
-        ? {
-            scope: convergenceScope,
-            status: 'not_applicable',
-            reason: 'idd-claimed-no-verified-linked-issue-claim',
-          }
+        ? claimCandidateAmbiguous
+          ? {
+              scope: convergenceScope,
+              status: 'indeterminate',
+              reason: 'idd-claimed-multiple-resolving-claim-candidates',
+            }
+          : claimMarkerHistoryPresent
+            ? {
+                scope: convergenceScope,
+                status: 'indeterminate',
+                reason: 'idd-claimed-claim-history-without-active-claim',
+              }
+            : {
+                scope: convergenceScope,
+                status: 'not_applicable',
+                reason: 'idd-claimed-no-verified-linked-issue-claim',
+              }
         : !prHeadRefName
           ? {
               scope: convergenceScope,
@@ -528,7 +600,7 @@ export function computeAdvisoryConvergenceVerdict(
             : activeClaimBranch !== prHeadRefName
               ? {
                   scope: convergenceScope,
-                  status: 'not_applicable',
+                  status: 'indeterminate',
                   reason: 'idd-claimed-branch-mismatch',
                 }
               : {
@@ -541,7 +613,29 @@ export function computeAdvisoryConvergenceVerdict(
           status: 'applicable',
           reason: 'all-prs',
         };
+  // `scopeNotApplicable` keeps its pre-#1686 meaning EXACTLY -- `status ===
+  // 'not_applicable'` only -- since it still gates the waiver-evidence
+  // bookkeeping (`waived` below) and the unconditional `ready` pass for a
+  // genuinely non-IDD PR. `scopeIndeterminate` is the new third state:
+  // unlike `not_applicable`, it must NEVER let `ready` become true through
+  // the ordinary convergence path (`converged` below is forced `false` for
+  // it, same as `not_applicable` blocks evaluating convergence at all) --
+  // only the existing deadline/terminal-plus-maintainer-waiver escape hatch
+  // can still clear it (`waived` stays gated by `scopeNotApplicable` alone,
+  // deliberately NOT `scopeBlocksConvergenceEval`, so a trusted maintainer
+  // marker can still resolve an indeterminate verdict same as any other
+  // non-converged one -- see the module header and PR discussion for why
+  // hard-blocking indeterminate with no waiver escape at all would leave a
+  // required check with no recovery path for a repository under
+  // `required_approving_review_count: 0`).
   const scopeNotApplicable = applicability.status === 'not_applicable';
+  const scopeIndeterminate = applicability.status === 'indeterminate';
+  const scopeBlocksConvergenceEval = scopeNotApplicable || scopeIndeterminate;
+  if (scopeIndeterminate) {
+    reasons.push(
+      `applicability is indeterminate (${applicability.reason}): this PR carries evidence of IDD claim activity but its claim linkage cannot be resolved cleanly -- repair the claim/PR-body linkage (or, for a confirmed benign case, have a trusted maintainer post an idd-external-check-waiver marker) before this check can converge`,
+    );
+  }
 
   // --- Clause 1: latest Copilot review is clean on the current HEAD -----
   const review = resolveLatestCopilotReviewClause(
@@ -549,8 +643,8 @@ export function computeAdvisoryConvergenceVerdict(
     prHeadSha,
     primaryBotLogin,
   );
-  const pending = scopeNotApplicable ? false : !review.matchesHead;
-  if (!scopeNotApplicable && pending) {
+  const pending = scopeBlocksConvergenceEval ? false : !review.matchesHead;
+  if (!scopeBlocksConvergenceEval && pending) {
     reasons.push(
       review.found
         ? `latest ${primaryBotLogin} review (commit ${review.commitId || '<unknown>'}) does not cover current HEAD ${prHeadSha}`
@@ -629,7 +723,7 @@ export function computeAdvisoryConvergenceVerdict(
   // is already resolved and `itemCount` is still positive, no thread query
   // can explain it -- point directly at the review body instead of leaving
   // an agent to re-derive this by hand a second time.
-  if (!scopeNotApplicable && !pending && !review.satisfied) {
+  if (!scopeBlocksConvergenceEval && !pending && !review.satisfied) {
     const itemCountReason =
       review.itemCount === null
         ? `latest ${primaryBotLogin} review on current HEAD carries an unknown number of actionable items (comment count unavailable)`
@@ -642,7 +736,7 @@ export function computeAdvisoryConvergenceVerdict(
         : itemCountReason,
     );
   }
-  if (!scopeNotApplicable && !threadClause.satisfied) {
+  if (!scopeBlocksConvergenceEval && !threadClause.satisfied) {
     reasons.push(
       `${threadClause.blockingCount} ${primaryBotLogin}-authored review thread(s) are neither resolved nor validly dispositioned: ${threadClause.blockingIds.join(', ')}`,
     );
@@ -658,7 +752,7 @@ export function computeAdvisoryConvergenceVerdict(
   };
 
   const converged =
-    !scopeNotApplicable &&
+    !scopeBlocksConvergenceEval &&
     !pending &&
     review.satisfied &&
     threadClause.satisfied;
@@ -694,7 +788,12 @@ export function computeAdvisoryConvergenceVerdict(
   // `review-item-count-not-positive`), while `reviewItemCountKnownTerm &&
   // reviewItemCountPositiveTerm` together still reduce to exactly the
   // original `itemCount !== null && itemCount > 0` conjunct.
-  const scopeApplicableTerm = !scopeNotApplicable;
+  // #1686: `indeterminate` now also disqualifies a same-HEAD reroll --
+  // offering to reroll Copilot is pointless while the underlying claim
+  // linkage itself is broken/ambiguous, so this term (and its
+  // `SCOPE_NOT_APPLICABLE` token; see that token's doc row in
+  // docs/idd-helper-scripts.md) fires for either non-`applicable` status.
+  const scopeApplicableTerm = !scopeBlocksConvergenceEval;
   const reviewNotPendingTerm = !pending;
   const threadsSatisfiedTerm = threadClause.satisfied;
   const noMissingRegularCommentsTerm =
@@ -781,7 +880,7 @@ export function computeAdvisoryConvergenceVerdict(
   // answered reroll self-describes as no-longer-in-flight once the window
   // elapses, instead of blocking a retry forever if the bot goes silent.
   const sameHeadRerollInFlight =
-    !scopeNotApplicable &&
+    !scopeBlocksConvergenceEval &&
     rerollMarkers.latestAt !== '' &&
     !hasFreshReviewSinceLastReroll &&
     rerollElapsedMinutes < pendingWindowMinutesForReroll;
@@ -948,6 +1047,38 @@ export function computeAdvisoryConvergenceVerdict(
   };
 }
 
+/**
+ * #1686: defense-in-depth on top of `isCopilotReviewerLogin`'s login-string
+ * check. GitHub's GraphQL API reports `__typename: "Bot"` consistently for
+ * every App/bot account regardless of login spelling, and a real human
+ * account can never report it -- so a *registrable* login lookalike (e.g. a
+ * human account named `copilot-pull-request-reviewer`, distinct from the
+ * real bot's own `[bot]`-suffixed login) still fails this check even though
+ * it passes the login-string comparison. This file's own GraphQL queries
+ * (`fetchReviewsAndHeadCommit` / `fetchReviewThreads` /
+ * `fetchThreadCommentPages`) request `__typename` on every `author` field,
+ * so every LIVE payload this gate evaluates carries it; a payload that
+ * omits it (an older fixture, or a future caller not routed through this
+ * file's own queries) is treated as "unknown" and does NOT fail the check
+ * -- this stays a narrowing on top of the login match, never a new
+ * blocking requirement for a caller this field predates. Deliberately kept
+ * local to this file (mirroring `rerun-advisory-convergence.mts`'s own
+ * "closes it locally without widening that shared function's behavior"
+ * precedent) rather than folded into `isCopilotReviewerLogin` itself, which
+ * many REST-payload callers across the codebase rely on and which has no
+ * `__typename` to check.
+ */
+function isVerifiedCopilotAuthor(
+  author: GhAuthorPayload | null | undefined,
+  primaryBotLogin: string,
+): boolean {
+  if (!isCopilotReviewerLogin(author?.login ?? '', primaryBotLogin)) {
+    return false;
+  }
+  const typename = author?.__typename;
+  return typename === undefined || typename === null || typename === 'Bot';
+}
+
 /** Evaluate Clause 1 against the single, absolute-latest Copilot review --
  * per the issue's literal wording ("the latest Copilot review's commit_id
  * equals current HEAD"), not "the latest review among those that happen to
@@ -976,9 +1107,7 @@ function resolveLatestCopilotReviewClause(
   primaryBotLogin: string,
 ): AdvisoryConvergenceReviewClause {
   const latest = reviews
-    .filter((review) =>
-      isCopilotReviewerLogin(review.author?.login ?? '', primaryBotLogin),
-    )
+    .filter((review) => isVerifiedCopilotAuthor(review.author, primaryBotLogin))
     .at(-1);
   if (!latest) {
     return {
@@ -1032,7 +1161,7 @@ export function classifyCopilotAuthoredThreadIds(
     const originating = (thread.comments?.nodes ?? [])[0];
     if (
       originating &&
-      isCopilotReviewerLogin(originating.author?.login ?? '', primaryBotLogin)
+      isVerifiedCopilotAuthor(originating.author, primaryBotLogin)
     ) {
       // Match `summarizeDispositionEvidenceForGate`'s own
       // `missingThreads[].id` fallback exactly (protocol-helpers.mts) so a
@@ -1385,6 +1514,28 @@ function collectFromGitHub(args: AdvisoryConvergenceArgs): {
     trustedMarkerLogins,
     Boolean(args.claimIssueNumber),
   );
+  // #1686: ambiguity is a distinct signal from `claimEvents` above --
+  // `pickResolvingClaimEvents` deliberately collapses BOTH "zero candidates
+  // resolve" and "two or more candidates resolve" to `[]` (see its own doc
+  // comment), so this must be computed separately over the same
+  // `claimCandidates`/`trustedMarkerLogins` inputs rather than re-derived
+  // from the already-collapsed `claimEvents`.
+  const claimCandidateAmbiguous = classifyClaimCandidateAmbiguity(
+    claimCandidates,
+    trustedMarkerLogins,
+    Boolean(args.claimIssueNumber),
+  );
+  // #1686: true when ANY candidate claim issue ever carried a trusted,
+  // syntactically valid `claimed-by` marker -- computed over the union of
+  // every candidate's RAW comment stream (`claimCandidates`, not the
+  // resolved-and-possibly-emptied `claimEvents`), so a stale, released, or
+  // otherwise no-longer-active claim still counts as genuine IDD claim
+  // history. See `hasTrustedClaimMarkerHistory`'s doc comment for the full
+  // rationale and the module header's path 4.
+  const claimMarkerHistoryPresent = hasTrustedClaimMarkerHistory(
+    claimCandidates,
+    trustedMarkerLogins,
+  );
 
   const primaryBotLogin = readAdvisoryPrimaryBotLogin();
   const deadlineMinutes = readAdvisoryConvergenceDeadlineMinutes();
@@ -1445,6 +1596,8 @@ function collectFromGitHub(args: AdvisoryConvergenceArgs): {
       threads,
       comments,
       claimEvents,
+      claimMarkerHistoryPresent,
+      claimCandidateAmbiguous,
     },
     options: {
       now: args.now || new Date().toISOString().replace('.000Z', 'Z'),
@@ -1556,6 +1709,23 @@ function fetchClaimEventCandidates(
   );
 }
 
+/** Candidate claim-issue comment streams whose *active claim* actually
+ * resolves (`summarizeClaimValidation`). Shared by
+ * {@link pickResolvingClaimEvents} and {@link classifyClaimCandidateAmbiguity}
+ * (#1686) so both read the identical disambiguation result instead of two
+ * independently-maintained filters that could drift. */
+function filterResolvingClaimCandidates(
+  candidates: IssueCommentPayload[][],
+  trustedMarkerLogins: string[],
+): IssueCommentPayload[][] {
+  return candidates.filter((comments) =>
+    Boolean(
+      summarizeClaimValidation(comments, { trustedMarkerLogins })
+        .activeClaimPresent,
+    ),
+  );
+}
+
 /**
  * Resolve the linked (claim) issue's comment stream for waiver-claim
  * binding, given already-fetched candidate comment streams
@@ -1571,7 +1741,14 @@ function fetchClaimEventCandidates(
  * own `selectLinkedIssueCandidate` disambiguates multiple linked issues by
  * active-claim presence rather than requiring a single closing reference.
  * Zero or multiple resolving candidates fail closed to `[]` (no waiver
- * claim can bind unambiguously), same as before #1344/#1347.
+ * claim can bind unambiguously), same as before #1344/#1347 -- and
+ * unchanged by #1686: {@link classifyClaimCandidateAmbiguity} below is the
+ * new, separate signal that lets a caller tell the "zero resolving" and
+ * "multiple resolving" cases apart without touching this function's own
+ * fail-closed-to-`[]` contract (pinned by
+ * "pickResolvingClaimEvents: zero or multiple resolving candidates still
+ * fail closed to [] (unchanged from pre-#1344/#1347 behavior)" in
+ * tests/advisory-convergence.test.mts).
  */
 export function pickResolvingClaimEvents(
   candidates: IssueCommentPayload[][],
@@ -1581,13 +1758,86 @@ export function pickResolvingClaimEvents(
   if (isExplicit) {
     return candidates[0] ?? [];
   }
-  const resolving = candidates.filter((comments) =>
-    Boolean(
-      summarizeClaimValidation(comments, { trustedMarkerLogins })
-        .activeClaimPresent,
-    ),
+  const resolving = filterResolvingClaimCandidates(
+    candidates,
+    trustedMarkerLogins,
   );
   return resolving.length === 1 ? resolving[0] : [];
+}
+
+/**
+ * #1686: true when two or more claim-issue candidates each independently
+ * resolve an active trusted claim -- the specific disambiguation-failure
+ * case {@link pickResolvingClaimEvents} already fails closed to `[]` for
+ * (see its own doc comment above and the module header's path 2). Surfaced
+ * as an explicit signal so the `idd-claimed` applicability gate
+ * (`computeAdvisoryConvergenceVerdict`) can distinguish "this PR's closing
+ * references are ambiguous between two actively-claimed issues" from the
+ * ordinary "no candidate resolves at all" case, which
+ * `pickResolvingClaimEvents`'s own collapsed `[]` output cannot
+ * distinguish by itself. An explicit `--claim-issue` target has no
+ * ambiguity to resolve -- always `false`, mirroring
+ * `pickResolvingClaimEvents`'s own `isExplicit` short-circuit.
+ */
+export function classifyClaimCandidateAmbiguity(
+  candidates: IssueCommentPayload[][],
+  trustedMarkerLogins: string[],
+  isExplicit: boolean,
+): boolean {
+  if (isExplicit) {
+    return false;
+  }
+  return (
+    filterResolvingClaimCandidates(candidates, trustedMarkerLogins).length > 1
+  );
+}
+
+/**
+ * #1686: true when at least one TRUSTED, syntactically valid `claimed-by`
+ * marker exists anywhere in `candidates`' raw comment streams -- regardless
+ * of whether it currently resolves to an ACTIVE claim. A released
+ * (`unclaimed-by`), superseded-without-a-qualifying-takeover, or otherwise
+ * no-longer-current claim still counts: this function answers "did real IDD
+ * claim activity ever happen here", not "is a claim active right now" (that
+ * question is `summarizeClaimValidation(...).activeClaimPresent`, already
+ * computed elsewhere).
+ *
+ * Note on *why* this function is needed rather than an age comparison:
+ * `resolveActiveClaim` (protocol-helpers.mts) has no `now` parameter and
+ * never expires a claim by elapsed time alone -- staleness there only
+ * matters when a LATER claim event attempts to supersede the active one
+ * (`claim.supersedes === activeClaim.claimId && isStale(...)`). A claim
+ * that goes stale on a long-open PR with no subsequent takeover event stays
+ * `activeClaimPresent: true` forever in this codebase; time by itself never
+ * clears it. So the concrete way `activeClaimPresent` becomes `false` while
+ * genuine claim history exists is an explicit release/handoff event (or a
+ * disambiguation failure -- see {@link classifyClaimCandidateAmbiguity}
+ * instead), not a bare age computation -- this function's own test fixtures
+ * demonstrate that shape rather than asserting on elapsed time. See the
+ * module header's path 4 and `AdvisoryConvergenceInputs.claimMarkerHistoryPresent`'s
+ * doc comment.
+ */
+export function hasTrustedClaimMarkerHistory(
+  candidates: IssueCommentPayload[][],
+  trustedMarkerLogins: string[],
+): boolean {
+  const trusted = new Set(trustedMarkerLogins);
+  return candidates.some((candidateComments) =>
+    candidateComments.some((event) => {
+      const login = String(event.author?.login ?? event.user?.login ?? '')
+        .trim()
+        .toLowerCase();
+      if (!trusted.has(login)) {
+        return false;
+      }
+      return (
+        parseClaimComment(
+          event.body ?? '',
+          event.createdAt ?? event.created_at ?? '',
+        ) !== null
+      );
+    }),
+  );
 }
 
 /**
@@ -1688,7 +1938,7 @@ function fetchReviewsAndHeadCommit(
                 nodes {
                   commit { oid }
                   submittedAt
-                  author { login }
+                  author { login __typename }
                   comments { totalCount }
                 }
               }
@@ -1764,7 +2014,7 @@ function fetchReviewThreads(
                       body
                       createdAt
                       updatedAt
-                      author { login }
+                      author { login __typename }
                       pullRequestReview { id }
                     }
                   }
@@ -1832,7 +2082,7 @@ function fetchThreadCommentPages(
                   body
                   createdAt
                   updatedAt
-                  author { login }
+                  author { login __typename }
                   pullRequestReview { id }
                 }
               }

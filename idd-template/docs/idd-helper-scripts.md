@@ -1544,14 +1544,31 @@ to post it is the consuming track's job.
   applies to every PR or only verified IDD-owned PRs. The default
   `all-prs` keeps the helper applicable everywhere. `idd-claimed`
   narrows it so a verified linked claim with a matching PR head branch
-  is `applicable`; a verified linked claim with a branch mismatch is
-  `not_applicable`; a verified linked claim still stays `applicable`
-  when branch data is unavailable; and PRs without a verified linked
-  claim, including manual/dependency PRs, are `not_applicable`.
+  is `applicable`; a verified linked claim still stays `applicable`
+  when branch data is unavailable; and a PR with no verified linked
+  claim AND no claim-marker history at all (a genuine non-IDD
+  contribution, including manual/dependency PRs) is `not_applicable`.
   Claimless maintainer waivers stay outside this conditional scope; the
   normal deadline-based waiver path still applies only to applicable,
   verified IDD-owned PRs. Invalid or unreadable config values still
   normalize back to `all-prs` in trusted config reads.
+  - `status: "indeterminate"` (#1686): a third outcome, distinct from
+    both `applicable` and `not_applicable`, for a PR that carries real
+    evidence of IDD claim activity but whose claim linkage cannot be
+    resolved cleanly right now -- a claim-branch mismatch against an
+    active trusted claim, closing references ambiguous between two or
+    more actively-claimed issues, or a stale/released claim (claim
+    marker history exists, but no claim currently resolves active).
+    Unlike `not_applicable`, `indeterminate` never lets `ready` become
+    `true` through ordinary convergence -- only the existing
+    deadline/terminal-plus-maintainer-waiver escape hatch can still
+    clear it (and, for the ambiguous/stale-history cases, no
+    `activeClaimId` exists to bind a waiver to in the first place, so
+    those two are effectively not waivable in practice; the
+    branch-mismatch case does have a real `activeClaimId` and stays
+    genuinely waivable). See
+    `computeAdvisoryConvergenceVerdict`'s `AdvisoryConvergenceApplicability`
+    doc comment (advisory-convergence.mts) for the full contract.
 
 #### Bounded same-HEAD advisory reroll (AW6, #1511)
 
@@ -1592,7 +1609,7 @@ structurally unable to disagree.
 <!-- dprint-ignore-start -->
 | Token                                    | Fires when...                                                                                                                                          |
 | ----------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `scope-not-applicable`                    | `applicability.status` is `not_applicable` (`advisoryWait.convergenceScope: "idd-claimed"` and this PR has no matching verified linked claim/branch).   |
+| `scope-not-applicable`                    | `applicability.status` is `not_applicable` OR `indeterminate` (#1686) -- `advisoryWait.convergenceScope: "idd-claimed"` and this PR either has no verified linked claim/branch, or has a broken/ambiguous claim linkage. Offering a same-HEAD reroll is pointless in either case. |
 | `review-pending`                          | The primary bot has not yet reviewed current HEAD (`pending: true`). Always co-occurs with `review-item-count-unknown` below, since an off-HEAD review reports no usable item count. |
 | `unresolved-copilot-threads`              | `threads.satisfied` is `false` -- at least one Copilot-authored thread is neither resolved nor validly dispositioned.                                   |
 | `missing-regular-comment-disposition`     | `dispositionEvidence.missingRegularCommentCount` is non-zero -- an outstanding regular (non-thread) PR comment still lacks a fresh disposition marker.  |
