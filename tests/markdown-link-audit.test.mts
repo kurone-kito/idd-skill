@@ -57,6 +57,16 @@ test('githubHeadingSlug matches the corpus-validated parenthetical-list case', (
   );
 });
 
+test('githubHeadingSlug preserves underscores', () => {
+  // A Copilot review of this PR flagged the docstring for omitting that the
+  // implementation also keeps underscores (a "word" character, matching
+  // GitHub's own algorithm) -- lock the contract in with a direct test.
+  assert.equal(
+    githubHeadingSlug('ReviewItems_snapshot lifecycle'),
+    'reviewitems_snapshot-lifecycle',
+  );
+});
+
 // --- extractHeadingSlugs -------------------------------------------------
 
 test('extractHeadingSlugs applies GitHub duplicate-suffixing to a repeated heading', () => {

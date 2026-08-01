@@ -51,12 +51,12 @@ interface LinkOccurrence {
 
 /**
  * GitHub's heading-id ("slug") algorithm: lowercase, delete every character
- * that is not a Unicode letter, number, hyphen, or space (punctuation is
- * deleted outright, never replaced with a hyphen or space), then convert
- * each remaining space to a hyphen without collapsing runs -- two adjacent
- * spaces (for example around a deleted em-dash) become two adjacent hyphens.
- * Validated against three live corpus anchors during implementation:
- * `#terminal-copilot-stall-recovery-contract-state-policy-markers-clock`,
+ * that is not a Unicode letter, number, hyphen, underscore, or space
+ * (punctuation is deleted outright, never replaced with a hyphen or space),
+ * then convert each remaining space to a hyphen without collapsing runs --
+ * two adjacent spaces (for example around a deleted em-dash) become two
+ * adjacent hyphens. Validated against three live corpus anchors during
+ * implementation: `#terminal-copilot-stall-recovery-contract-state-policy-markers-clock`,
  * `#a3--diagnostic-…` (the double-hyphen em-dash case), and
  * `#worktree-creation`.
  */
