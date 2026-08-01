@@ -21,12 +21,14 @@
 // command) itself; a mutating `--apply` mode is a deliberate follow-up
 // (out of scope here).
 //
-// Classification (five states -- the issue's three named buckets, `pass` /
-// `rerun-eligible` / `bot-gated-skip`, are a subset here; `pending` and
-// `unresolved` are additional fail-safe states so a live run is never
-// force-classified into either "skip forever" or "safe to rerun", and an
-// unresolvable run identity is reported instead of silently guessed or
-// silently dropped):
+// Classification (six states -- the issue's three named buckets, `pass` /
+// `rerun-eligible` / `bot-gated-skip`, are a subset here; `pending`,
+// `unresolved`, and `awaiting-fresh-review` are additional fail-safe
+// states so a live run is never force-classified into either "skip
+// forever" or "safe to rerun", an unresolvable run identity is reported
+// instead of silently guessed or dropped, and a failure whose own
+// advisory-convergence verdict is "review does not cover HEAD" is never
+// recommended for a rerun that cannot change that outcome -- #1775):
 //   - `pass`: conclusion is success/neutral/skipped -- no action needed.
 //   - `pending`: still queued/in_progress (no conclusion yet) -- reported,
 //     excluded from the plan (rerunning a live run cancels it, not helps).
@@ -50,6 +52,12 @@
 //     inspection, never silently dropped and never placed in the plan
 //     (fail-closed: an instance this helper cannot positively verify as
 //     safe is never recommended for rerun).
+//   - `awaiting-fresh-review`: the instance's own advisory-convergence
+//     JSON verdict (from the workflow job log) reports that the latest
+//     Copilot review does not cover the current HEAD. No number of
+//     `gh run rerun` invocations changes that outcome -- only a fresh
+//     review does -- so this is never placed in the plan and never
+//     spends the rerun-once budget (#1775, observed on PR #1772).
 //   - `rerun-eligible`: non-pass, terminal, resolved -- goes into the
 //     ordered rerun plan (bot-triggered or not, unless gated per above).
 //
@@ -161,7 +169,18 @@ export type RerunPlanClassification =
   | 'pending'
   | 'bot-gated-skip'
   | 'unresolved'
+  | 'awaiting-fresh-review'
   | 'rerun-eligible';
+
+/**
+ * Stable phrase shared with `advisory-convergence.mts` Clause 1's reason
+ * text (`latest <bot> review (commit <sha>) does not cover current HEAD
+ * <head>`). Matching on this substring (not the whole templated string)
+ * keeps the classifier independent of the configured primary bot login
+ * and of either SHA, while still sourcing the decision from the
+ * workflow's own verdict rather than re-deriving coverage (#1775).
+ */
+export const UNCOVERED_HEAD_REASON_MARKER = 'does not cover current HEAD';
 
 /**
  * One check-run instance, already normalized and (when resolvable) already
@@ -200,6 +219,17 @@ export interface RerunPlanRawInstance {
    * rerun-once budget (not just its policy string) can be honored per
    * instance. */
   runAttempt: number | null;
+  /**
+   * `reasons` array from this instance's own advisory-convergence JSON
+   * verdict (parsed out of the workflow job log), or `null` when the log
+   * was not consulted or could not be parsed. A `null` leaves
+   * classification unchanged (no invented hold); a non-null list that
+   * contains an {@link UNCOVERED_HEAD_REASON_MARKER} reason classifies
+   * the instance as `awaiting-fresh-review` instead of `rerun-eligible`
+   * (#1775). Tests inject this directly; production
+   * {@link collectFromGitHub} fills it for non-pass terminal instances.
+   */
+  verdictReasons?: string[] | null;
 }
 
 /** {@link RerunPlanRawInstance} plus the assigned classification and a
@@ -259,6 +289,10 @@ export interface RerunAdvisoryConvergencePlan {
     pending: number;
     botGatedSkip: number;
     unresolved: number;
+    /** Instances whose own advisory-convergence verdict reported that
+     * the latest Copilot review does not cover the current HEAD -- not
+     * rerun-eligible; wait for a fresh review (#1775). */
+    awaitingFreshReview: number;
     rerunEligible: number;
     /** How many instances (across `rerun-eligible` classifications and
      * recovery-refresh candidates alike) were excluded from their
@@ -544,6 +578,7 @@ export function computeRerunPlan(
     pending: 0,
     botGatedSkip: 0,
     unresolved: 0,
+    awaitingFreshReview: 0,
     rerunEligible: 0,
     rerunBudgetHeld: budgetHeldCheckRunIds.size,
     total: instances.length,
@@ -554,6 +589,8 @@ export function computeRerunPlan(
     else if (instance.classification === 'bot-gated-skip')
       counts.botGatedSkip += 1;
     else if (instance.classification === 'unresolved') counts.unresolved += 1;
+    else if (instance.classification === 'awaiting-fresh-review')
+      counts.awaitingFreshReview += 1;
     else counts.rerunEligible += 1;
   }
 
@@ -796,7 +833,25 @@ function classifyInstance(
     };
   }
 
-  // 7. Non-pass, terminal, resolved, pull_request-family -- safe to rerun.
+  // 7. Uncovered-HEAD hold (#1775): the instance's own
+  // advisory-convergence JSON verdict (from the workflow job log) says
+  // the latest Copilot review does not cover the current HEAD. Rerunning
+  // cannot change that -- only a fresh review can -- so never place this
+  // in the plan and never spend the rerun-once budget on it. Only fires
+  // when `verdictReasons` was actually consulted and matched; a missing
+  // / unparsed log leaves classification unchanged (no invented hold).
+  if (hasUncoveredHeadVerdictReason(instance.verdictReasons)) {
+    const matched =
+      instance.verdictReasons?.find(isUncoveredHeadVerdictReason) ??
+      UNCOVERED_HEAD_REASON_MARKER;
+    return {
+      ...instance,
+      classification: 'awaiting-fresh-review',
+      reason: `advisory-convergence verdict reports "${matched}"; rerunning cannot clear this -- wait for a fresh review covering the current HEAD rather than spending the rerun-once budget (#1775)`,
+    };
+  }
+
+  // 8. Non-pass, terminal, resolved, pull_request-family -- safe to rerun.
   // A bot-triggered actor does not withhold this instance by itself
   // (#1745) -- only a genuinely `action_required` conclusion does, handled
   // in step 3 above -- so the reason notes bot-triggering when present
@@ -809,6 +864,113 @@ function classifyInstance(
     classification: 'rerun-eligible',
     reason: `conclusion "${conclusion}" is non-passing and resolved (event "${runEvent}")${botNote}; safe to rerun`,
   };
+}
+
+/**
+ * `true` when `reason` is an advisory-convergence Clause 1
+ * uncovered-HEAD reason (see {@link UNCOVERED_HEAD_REASON_MARKER}).
+ */
+export function isUncoveredHeadVerdictReason(reason: string): boolean {
+  return String(reason ?? '')
+    .toLowerCase()
+    .includes(UNCOVERED_HEAD_REASON_MARKER.toLowerCase());
+}
+
+/**
+ * `true` when a consulted `reasons` list contains an uncovered-HEAD
+ * reason. A `null` / `undefined` list means "not consulted" and never
+ * matches -- so a missing log cannot invent an `awaiting-fresh-review`
+ * hold (#1775).
+ */
+export function hasUncoveredHeadVerdictReason(
+  reasons: readonly string[] | null | undefined,
+): boolean {
+  if (!reasons) return false;
+  return reasons.some((reason) => isUncoveredHeadVerdictReason(reason));
+}
+
+/**
+ * Extract the advisory-convergence JSON verdict's `reasons` array from a
+ * workflow job log (`gh run view --log` / Actions job-logs API output).
+ * Returns `null` when no well-formed verdict JSON is found, so callers
+ * can leave `verdictReasons` unset rather than inventing an empty list
+ * that would look like "fetched, no reasons". Pure and unit-testable;
+ * production collection feeds it the log text for each non-pass run.
+ *
+ * The log lines are typically prefixed with a job/step/timestamp column
+ * (and may carry ANSI color codes); both are stripped before brace-
+ * matching so the same parser works on raw job logs and on
+ * `gh run view --log` output.
+ */
+export function extractAdvisoryVerdictReasonsFromLog(
+  logText: string,
+): string[] | null {
+  // Strip ANSI CSI color sequences without a control-character regex
+  // (Biome disallows `\u001b` in regex literals). ESC is code 27.
+  const esc = String.fromCharCode(27);
+  const text = String(logText ?? '')
+    .split(esc)
+    .map((chunk, index) =>
+      index === 0 ? chunk : chunk.replace(/^\[[0-9;]*m/, ''),
+    )
+    .join('');
+  if (!text) return null;
+
+  // Rebuild candidate JSON payloads by walking braces across lines after
+  // stripping the `gh run view --log` prefix (everything through the
+  // first `Z ` timestamp marker on each line, when present). Prefer the
+  // LAST well-formed advisory-convergence verdict in the log -- a single
+  // job can echo intermediate output, and the final `--assert` document
+  // is what actually determined the check-run conclusion.
+  const payloadChunks: string[] = [];
+  let depth = 0;
+  let buf: string[] = [];
+  for (const rawLine of text.split(/\r?\n/)) {
+    const timestampMatch = rawLine.match(/Z (.*)$/);
+    const line =
+      timestampMatch && timestampMatch[1] !== undefined
+        ? timestampMatch[1]
+        : rawLine;
+    for (const ch of line) {
+      if (ch === '{') {
+        if (depth === 0) buf = ['{'];
+        else buf.push(ch);
+        depth += 1;
+      } else if (ch === '}') {
+        if (depth === 0) continue;
+        buf.push(ch);
+        depth -= 1;
+        if (depth === 0) {
+          payloadChunks.push(buf.join(''));
+          buf = [];
+        }
+      } else if (depth > 0) {
+        buf.push(ch);
+      }
+    }
+  }
+
+  let lastReasons: string[] | null = null;
+  for (const chunk of payloadChunks) {
+    if (!chunk.includes('"reasons"') || !chunk.includes('"ready"')) continue;
+    try {
+      const parsed = JSON.parse(chunk) as {
+        reasons?: unknown;
+        ready?: unknown;
+      };
+      if (!Array.isArray(parsed.reasons) || typeof parsed.ready !== 'boolean') {
+        continue;
+      }
+      const reasons = parsed.reasons
+        .filter((entry): entry is string => typeof entry === 'string')
+        .map((entry) => entry.trim())
+        .filter((entry) => entry.length > 0);
+      lastReasons = reasons;
+    } catch {
+      // not valid JSON -- skip
+    }
+  }
+  return lastReasons;
 }
 
 /**
@@ -1131,12 +1293,12 @@ export function parseArgs(argv: string[]): RerunPlanArgs {
 }
 
 /**
- * Describe outstanding `pending` / `bot-gated-skip` / `unresolved`
- * instance counts, or `''` when none exist. Extracted from
- * {@link describeNoActionState} so the CLI can surface these states
- * independently of whether a rerun plan, recovery-refresh plan, or hold
- * notice ALSO exists for a different instance in the same run --
- * previously these were only ever shown when NONE of those three
+ * Describe outstanding `pending` / `bot-gated-skip` / `unresolved` /
+ * `awaiting-fresh-review` instance counts, or `''` when none exist.
+ * Extracted from {@link describeNoActionState} so the CLI can surface
+ * these states independently of whether a rerun plan, recovery-refresh
+ * plan, or hold notice ALSO exists for a different instance in the same
+ * run -- previously these were only ever shown when NONE of those three
  * existed, silently hiding e.g. 2 still-pending instances whenever the
  * output happened to also have a rerun plan for a different instance
  * (CodeRabbit review, #1434).
@@ -1160,21 +1322,27 @@ export function describeOutstandingStates(
       `${plan.counts.unresolved} instance(s) could not be resolved -- inspect each instance's "reason" above manually`,
     );
   }
+  if (plan.counts.awaitingFreshReview > 0) {
+    notes.push(
+      `${plan.counts.awaitingFreshReview} instance(s) are awaiting a fresh review covering the current HEAD -- wait for Copilot (or the configured primary bot) to re-review rather than rerunning (#1775)`,
+    );
+  }
   return notes.join('; ');
 }
 
 /**
  * Describe the terminal state when there is truly nothing to report:
  * no rerun plan, no recovery-refresh plan, no hold notice, AND no
- * outstanding `pending` / `unresolved` / `bot-gated-skip` instance (see
- * {@link describeOutstandingStates}, which the CLI now also consults
- * independently of this function). "Nothing to do" would be accurate
- * only when every instance is `pass` (or there are no instances at all)
- * -- `pending`, `unresolved`, and `bot-gated-skip` all still require an
- * operator action (waiting, manual inspection, approval, or a non-bot
- * trigger, per each instance's own `reason`), so presenting them as
- * no-action risked leaving a genuinely stuck required check unresolved
- * (#1434 review, Codex P2).
+ * outstanding `pending` / `unresolved` / `bot-gated-skip` /
+ * `awaiting-fresh-review` instance (see {@link describeOutstandingStates},
+ * which the CLI now also consults independently of this function).
+ * "Nothing to do" would be accurate only when every instance is `pass`
+ * (or there are no instances at all) -- `pending`, `unresolved`,
+ * `bot-gated-skip`, and `awaiting-fresh-review` all still require an
+ * operator action (waiting, manual inspection, approval, a non-bot
+ * trigger, or a fresh review, per each instance's own `reason`), so
+ * presenting them as no-action risked leaving a genuinely stuck required
+ * check unresolved (#1434 review, Codex P2; #1775).
  */
 export function describeNoActionState(
   plan: RerunAdvisoryConvergencePlan,
@@ -1274,22 +1442,28 @@ By default (without --apply): read-only. Fetches every
 "${RERUN_PLAN_CHECK_NAME}" check-run instance for the PR's current HEAD SHA
 (commit check-runs API, paged -- not the recent-runs list, which can page
 the target run out of view), classifies each as pass / pending /
-bot-gated-skip / unresolved / rerun-eligible, and prints the ordered
-sequential "gh run rerun <id>" recovery plan for the rerun-eligible
-instances (each command includes "-R <owner>/<repo>" when the repository
-is known, so the plan is safe to run outside this checkout). Never calls
-"gh run rerun" (or any other mutating command) itself.
+bot-gated-skip / unresolved / awaiting-fresh-review / rerun-eligible, and
+prints the ordered sequential "gh run rerun <id>" recovery plan for the
+rerun-eligible instances (each command includes "-R <owner>/<repo>" when
+the repository is known, so the plan is safe to run outside this
+checkout). An instance whose own advisory-convergence verdict reports
+that the latest review does not cover the current HEAD is classified
+awaiting-fresh-review (not rerun-eligible) so the diagnosis tells the
+operator to wait for a fresh review rather than burning the rerun-once
+budget (#1775). Never calls "gh run rerun" (or any other mutating
+command) itself.
 
 With --apply: after printing the same diagnostic plan as above, executes
-it -- "gh run rerun"-ing each rerun-eligible (never bot-gated-skip or
-rerun-budget-held) instance one at a time, waiting for each to reach a
-terminal state before starting the next, exactly as "planCaveat" already
-documents. Prefers the recovery-refresh plan first when one exists,
-matching idd-ci.instructions.md's documented recovery order. After each
-rerun, the plan is recomputed from fresh evidence and the loop stops early
-as soon as it resolves (no rerun-eligible or recovery-refresh instance
-remains) instead of running the rest of the original plan. A final summary
-of what ran and whether the target state resolved is printed to stderr.
+it -- "gh run rerun"-ing each rerun-eligible (never bot-gated-skip,
+awaiting-fresh-review, or rerun-budget-held) instance one at a time,
+waiting for each to reach a terminal state before starting the next,
+exactly as "planCaveat" already documents. Prefers the recovery-refresh
+plan first when one exists, matching idd-ci.instructions.md's documented
+recovery order. After each rerun, the plan is recomputed from fresh
+evidence and the loop stops early as soon as it resolves (no
+rerun-eligible or recovery-refresh instance remains) instead of running
+the rest of the original plan. A final summary of what ran and whether
+the target state resolved is printed to stderr.
 
 --owner and --repo must be given together (to inspect a PR outside the
 current checkout) or omitted together (to auto-detect the current
@@ -1410,10 +1584,11 @@ export interface RerunApplyDeps {
  * are non-empty, matching {@link describeRecoveryRefreshHeader}'s
  * documented recovery order (try the recovery-refresh rerun first; only
  * fall back to the sequential plan if it does not clear the rollup).
- * `bot-gated-skip` and rerun-budget-held instances are never candidates
- * here: neither `plan` nor `recoveryRefreshPlan` ever contains them (see
- * {@link computeRerunPlan}), so this loop cannot reach them regardless of
- * `deps.recomputePlan`'s output.
+ * `bot-gated-skip`, `awaiting-fresh-review`, and rerun-budget-held
+ * instances are never candidates here: neither `plan` nor
+ * `recoveryRefreshPlan` ever contains them (see {@link computeRerunPlan}),
+ * so this loop cannot reach them regardless of `deps.recomputePlan`'s
+ * output (#1775 keeps uncovered-HEAD failures out of both plans).
  */
 export function applyRerunPlan(
   initialPlan: RerunAdvisoryConvergencePlan,
@@ -1529,6 +1704,47 @@ interface RawWorkflowRunPayload {
  * function passes `--jq '.check_runs[]'` directly and reuses the same
  * {@link parsePaginatedGhNdjson} parser `ghApiJson` uses internally.
  */
+/**
+ * Args for downloading one workflow run's combined job logs as plain
+ * text via `gh run view --log`. Prefer this over
+ * `GET /repos/.../actions/jobs/{id}/logs`, which redirects to a ZIP
+ * archive that `ghText` would decode as garbage UTF-8 and leave
+ * `verdictReasons` null (Copilot review on #1790). Scoped with `-R
+ * owner/repo` so a cross-repository diagnosis still hits the right
+ * run.
+ */
+export function buildRunViewLogArgs(
+  owner: string,
+  repo: string,
+  runId: string,
+): string[] {
+  return ['run', 'view', runId, '-R', `${owner}/${repo}`, '--log'];
+}
+
+/**
+ * Fetch and parse the advisory-convergence `reasons` array for one
+ * workflow run, or `null` when the log cannot be read / parsed. Uses
+ * {@link buildRunViewLogArgs} (`gh run view --log`) for plain-text logs
+ * and feeds them to {@link extractAdvisoryVerdictReasonsFromLog}.
+ * Failures are swallowed into `null` so a flaky log download cannot
+ * invent an uncovered-HEAD hold or abort the whole diagnosis (#1775).
+ */
+function fetchAdvisoryVerdictReasonsForRun(
+  owner: string,
+  repo: string,
+  runId: string,
+): string[] | null {
+  try {
+    const logText = ghText(
+      buildRunViewLogArgs(owner, repo, runId),
+      GH_TEXT_LOOP_TIMEOUT_OPTIONS,
+    );
+    return extractAdvisoryVerdictReasonsFromLog(logText);
+  } catch {
+    return null;
+  }
+}
+
 export function buildCheckRunsForRefArgs(
   owner: string,
   repo: string,
@@ -1860,6 +2076,31 @@ function collectFromGitHub(args: RerunPlanArgs): {
     }
   }
 
+  // Per-run advisory-convergence verdict reasons (#1775). Only non-pass
+  // terminal check-runs need them -- pass / pending never reach the
+  // uncovered-HEAD classifier, so skipping those saves a log download
+  // per green instance. Failures to fetch or parse leave the map entry
+  // absent (`null` on the instance) rather than inventing an empty list,
+  // so a flaky log API cannot invent an awaiting-fresh-review hold.
+  const runIdsNeedingVerdict = new Set(
+    rawCheckRuns
+      .map((run) => {
+        const conclusion = run.conclusion
+          ? String(run.conclusion).trim().toLowerCase()
+          : '';
+        if (!conclusion || PASS_CONCLUSIONS.has(conclusion)) return null;
+        return parseRunIdFromUrl(resolveCheckRunUrl(run));
+      })
+      .filter((id): id is string => id !== null),
+  );
+  const verdictReasonsByRunId = new Map<string, string[] | null>();
+  for (const runId of runIdsNeedingVerdict) {
+    verdictReasonsByRunId.set(
+      runId,
+      fetchAdvisoryVerdictReasonsForRun(owner, repo, runId),
+    );
+  }
+
   const instances: RerunPlanRawInstance[] = rawCheckRuns.map((run) => {
     const url = resolveCheckRunUrl(run);
     const runId = parseRunIdFromUrl(url);
@@ -1879,6 +2120,8 @@ function collectFromGitHub(args: RerunPlanArgs): {
       triggeringActorLogin: meta?.triggeringActorLogin ?? null,
       triggeringActorType: meta?.triggeringActorType ?? null,
       runAttempt: meta?.runAttempt ?? null,
+      verdictReasons:
+        runId !== null ? (verdictReasonsByRunId.get(runId) ?? null) : null,
     };
   });
 
