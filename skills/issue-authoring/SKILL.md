@@ -108,9 +108,10 @@ needs-decision, blocked-by-human, and out-of-scope.
 - For concrete drafting patterns and example prompts: read
   [references/draft-patterns.md](references/draft-patterns.md).
 - When editing this bundle inside the source repository, keep the
-  bundled references synchronized with the canonical maintenance docs in
-  [../../docs/issue-authoring-skill.md](../../docs/issue-authoring-skill.md)
-  and [../../docs/idd-workflow.md](../../docs/idd-workflow.md).
+  bundled references synchronized with the canonical maintenance docs at
+  repo-root `docs/issue-authoring-skill.md` and `docs/idd-workflow.md`
+  (relative links are avoided here since this file is mirrored at a
+  different path depth in `.claude/skills/issue-authoring/`).
 
 ## Output Checklist
 

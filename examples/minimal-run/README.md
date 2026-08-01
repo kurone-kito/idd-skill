@@ -7,6 +7,7 @@ artifacts. Each file is a realistic example, not a strict schema.
 | ----------------------- | ----------------------------------------------- |
 | `issue.md`              | Initial issue statement and acceptance criteria |
 | `claim-comment.md`      | `claimed-by` marker comment body                |
+| `activation-nonce.md`   | `activation-nonce` marker comment body          |
 | `heartbeat.md`          | Claim heartbeat refresh comment body            |
 | `pr-body.md`            | Pull request body used in D3                    |
 | `review-snapshot.md`    | E1 snapshot summary and watermark marker        |

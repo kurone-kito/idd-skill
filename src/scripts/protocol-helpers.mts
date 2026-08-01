@@ -4178,8 +4178,22 @@ export function summarizeRequiredChecks(
     ) {
       status = 'unknown';
     }
-    discardedNonPassingRequiredChecks =
-      ciClassification.discardedNonPassingInstances;
+    // #1753: computed from the RAW matchedRequiredChecks -- deliberately
+    // NOT ciClassification.discardedNonPassingInstances above, which is
+    // derived from the waiver-adjusted effectiveChecks. A valid waiver
+    // rewrites a waived non-passing instance's `state` to 'SKIPPED' (pass-
+    // equivalent, outside GENUINELY_NON_PASSING_STATES), so computing this
+    // evidence field from effectiveChecks would let a waived CANCELLED
+    // sibling silently drop out of this field the moment it is waived --
+    // exactly the divergence-masking scenario #1745 exists to surface, and
+    // exactly the check this repo's own `idd-advisory-convergence` waivable
+    // policy can trigger. `status` above intentionally keeps using the
+    // waiver-adjusted effectiveChecks -- a valid waiver legitimately makes
+    // a check pass for merge-gate purposes; only this evidence-only
+    // computation needs the pre-waiver truth.
+    discardedNonPassingRequiredChecks = findDiscardedNonPassingSiblings(
+      matchedRequiredChecks,
+    );
   }
 
   return {
