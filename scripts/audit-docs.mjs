@@ -23,6 +23,7 @@ import {
   stripGeneratedFromBanner,
   uniqueSorted,
 } from './consistency-helpers.mjs';
+import { collectMarkdownLinkAuditViolations } from './markdown-link-audit.mjs';
 
 const root = process.cwd();
 const manifestPath = 'audit/sync-manifest.json';
@@ -55,6 +56,7 @@ checkForbiddenPatterns(manifest.forbiddenPatterns ?? []);
 checkRootMarkdownAllowlist(manifest.rootMarkdownAllowlist ?? null);
 checkTypeSuppressionBudgets(manifest.typeSuppressionBudgets ?? null);
 checkOkfBundles(manifest.okfBundles ?? null);
+checkMarkdownLinkAudit(manifest.markdownLinkAudit ?? null);
 checkConfigInstructionDrift();
 checkGeneratedSourcePairs();
 if (errors.length > 0) {
@@ -446,6 +448,23 @@ function checkOkfBundles(bundles) {
     ),
   );
 }
+// Intra-repo markdown link/anchor audit (#1697): resolves every relative
+// markdown link's target file and `#fragment` against the target's actual
+// GitHub-slugged headings. The collector lives in markdown-link-audit.mts
+// (a new sibling module, not consistency-helpers.mts, to keep this change
+// isolated from that file's other concurrent edits) so it can be
+// unit-tested without I/O; the audit pipeline supplies the live glob and
+// reader.
+function checkMarkdownLinkAudit(config) {
+  errors.push(
+    ...collectMarkdownLinkAuditViolations(
+      config,
+      repoFiles,
+      (pattern) => globFiles(pattern, repoFiles),
+      readText,
+    ),
+  );
+}
 // Type-suppression budget guard (ratchet, mirroring bundleBudgets): a
 // pure `node:` text scan so the bare-node lane enforces the budgets with
 // no typescript dependency. The collector lives in consistency-helpers so
@@ -535,10 +554,16 @@ function checkConfigInstructionDrift() {
 function buildRemediation(currentErrors) {
   const hasMirrorDrift = containsMirrorDrift(currentErrors);
   const hasManifestListMismatch = containsManifestListMismatch(currentErrors);
-  if (!hasMirrorDrift && !hasManifestListMismatch) {
+  const hasLinkAuditFailure = containsLinkAuditFailure(currentErrors);
+  if (!hasMirrorDrift && !hasManifestListMismatch && !hasLinkAuditFailure) {
     return [];
   }
   const lines = [];
+  if (hasLinkAuditFailure) {
+    lines.push(
+      'retarget the broken link to an existing file/anchor, rename the heading back, or add `<!-- audit:ignore-link -->` on the link line for a narrow, intentional exception (see audit/README.md)',
+    );
+  }
   if (hasMirrorDrift) {
     const syncCommand = detectSyncCommand();
     if (syncCommand) {
@@ -572,6 +597,13 @@ function containsMirrorDrift(currentErrors) {
 function containsManifestListMismatch(currentErrors) {
   return currentErrors.some((error) =>
     /manifest paths omit|manifest path does not exist or match globs/.test(
+      error,
+    ),
+  );
+}
+function containsLinkAuditFailure(currentErrors) {
+  return currentErrors.some((error) =>
+    /-> missing file |-> missing directory |-> heading anchor #.* not found in |outside .* in template context/.test(
       error,
     ),
   );
