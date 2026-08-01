@@ -1,3 +1,10 @@
+---
+type: design
+title: IDD Helper Script Evaluation
+description: Records the current adoption decision and trade-offs for IDD's optional helper scripts so future reviews do not re-evaluate them from scratch.
+tags: [helper-scripts, tooling]
+---
+
 # IDD Helper Script Evaluation
 
 This document records the current decision on optional helper scripts for

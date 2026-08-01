@@ -1,3 +1,10 @@
+---
+type: reference
+title: IDD — Advisory-Wait Shell Fallback (AW1 / AW2 / AW3-R / AW3-S / AW3-H detail)
+description: Provides the verbatim gh, gh api, jq, and curl commands the advisory-wait shell fallback uses when helper support cannot be trusted.
+tags: [advisory-wait, shell-fallback]
+---
+
 # IDD — Advisory-Wait Shell Fallback (AW1 / AW2 / AW3-R / AW3-S / AW3-H detail)
 
 This document contains the verbatim commands used by the shell

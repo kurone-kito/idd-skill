@@ -1,3 +1,10 @@
+---
+type: workflow
+title: IDD workflow guide
+description: Routes each agent to its entry file and the phase file matching its current state.
+tags: [workflow, phase-routing]
+---
+
 # IDD workflow guide
 
 This document is the neutral entry point for the repository's

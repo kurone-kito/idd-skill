@@ -1,3 +1,10 @@
+---
+type: reference
+title: IDD Autonomy Contract
+description: Classifies every externally visible IDD mutation as reversible or irreversible and names the gate or undo path for each.
+tags: [autonomy, mutations]
+---
+
 # IDD Autonomy Contract
 
 <!-- cspell:words unminimize -->

@@ -1,3 +1,10 @@
+---
+type: reference
+title: IDD Comment Minimization
+description: Defines the live status digest contract and the safe procedure for minimizing completed review feedback and stale operational markers after merge.
+tags: [comment-minimization, cleanup]
+---
+
 # IDD Comment Minimization
 
 <!-- cspell:words AAAAB Unminimize Wpaqs unminimized -->
