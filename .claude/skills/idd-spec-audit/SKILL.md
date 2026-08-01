@@ -1,6 +1,6 @@
 ---
 name: idd-spec-audit
-description: Repo-local, dogfood-only semantic audit of the IDD instruction corpus for leaked session context, cross-file contradictions, fresh-memory completability gaps, and automation blockers. Use only in the kurone-kito/idd-skill source repository, on request, to audit .github/instructions, skills/issue-authoring, CLAUDE.md, or .github/copilot-instructions.md. Read-only — never edits files or mutates issues.
+description: Repo-local, dogfood-only semantic audit of the IDD instruction corpus for leaked session context, cross-file contradictions, fresh-memory completability gaps, automation blockers, and restatement-discipline drift. Use only in the kurone-kito/idd-skill source repository, on request, to audit .github/instructions, skills/issue-authoring, CLAUDE.md, or .github/copilot-instructions.md. Read-only — never edits files or mutates issues.
 ---
 
 # IDD Spec Audit
@@ -51,7 +51,7 @@ model.
 
 ## Rule sets
 
-Run all four rule sets on every pass; do not skip one to save time. A
+Run all five rule sets on every pass; do not skip one to save time. A
 finding names the rule set, the file, the line or section, and a short
 quote of the offending text.
 
@@ -110,6 +110,34 @@ A mutation with no row in the contract falls back to the contract's own
 default (irreversible); that default governs the contract itself; do
 not extend R4 to independently police no-row mutations beyond the two
 cases above.
+
+### R5 — restatement discipline (closed v1 concept index)
+
+Flag a passage that restates a rule defined canonically elsewhere in
+the corpus when the restatement's scope does not match the canonical
+rule's scope: broader than the canonical rule, narrower than it, or
+phrased as unconditional where the canonical rule is conditional (has
+stated exceptions, applies only under a named runtime profile, or only
+within a bounded phase range).
+
+**Scope is the same closed v1 concept index R2 uses** — reuse the
+exact list in [R2](#r2--cross-file-contradictions-closed-v1-concept-index)
+above rather than introduce a second, open-ended index. A restatement
+of a concept outside that index is out of R5's scope; do not flag it,
+no matter how sloppily it is worded. This keeps R5 from treating every
+emphatic sentence in the corpus as a finding — the rule exists to
+catch a scope drift on the seven concepts already load-bearing enough
+to have a closed index, not to police prose style generally.
+
+**Preferred remedy**: cite the canonical section instead of restating
+it inline. Prefer `See [<section>](<path>#<anchor>)` (or an equivalent
+plain-text pointer to the file/section) over reproducing a
+multi-clause rule's conditions in a second location — inline
+restatement of a multi-clause rule is the exact failure mode this rule
+set exists to catch, and the instruction bundles are already close to
+their byte budgets, so citing is also the cheaper fix. Note the
+preferred remedy in the finding so the reader does not have to
+re-derive it.
 
 ## Execution model
 

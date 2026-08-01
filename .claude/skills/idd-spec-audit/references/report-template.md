@@ -58,9 +58,25 @@ was skipped.
   to an unneeded confirmation gate qualify]`
 - **Appeared in**: `[K]/[N]`
 
+## R5 — Restatement discipline (closed v1 concept index)
+
+`[repeat per finding; write "No findings." if empty]`
+
+- **File**: `[path]`
+- **Location**: `[line number or section heading of the restatement]`
+- **Restatement quote**: `[short quote of the restating text]`
+- **Canonical rule**: `[path#section or line the restatement diverges
+  from]`
+- **Canonical quote**: `[short quote of the canonical rule]`
+- **Scope divergence**: `[broader / narrower / unconditional-vs-conditional
+  — one line]`
+- **Recommended remedy**: `[cite the canonical section instead of
+  restating it inline]`
+- **Appeared in**: `[K]/[N]`
+
 ## Summary
 
-- **Total findings**: `[count across all four rule sets]`
+- **Total findings**: `[count across all five rule sets]`
 - **Files touched by at least one finding**: `[count]`
 - **Notable patterns across passes**: `[one or two lines, or "None."]`
 
