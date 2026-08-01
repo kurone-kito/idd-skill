@@ -70,7 +70,7 @@ TRUSTED_MARKER_LOGIN_JSON=$(
     printf '%s\n' "$TRUSTED_MARKER_ACTORS" | tr ',' '\n'
     if printf '%s\n' "$TRUST_COLLABORATOR_MARKERS" | grep -Eiq '^(1|true|yes)$'; then
       printf '%s\n' "$ADVISORY_COMMENTS_JSON" \
-        | jq -r '.[] | select((.body // "") | test("^advisory-wait:|^advisory-wait-recovery:|^<!-- advisory-wait:")) | .user.login // empty' \
+        | jq -r '.[] | select((.body // "") | test("^advisory-wait:|^advisory-wait-recovery:|^<!-- advisory-wait:|^advisory-reroll:")) | .user.login // empty' \
         | sort -fu \
         | while IFS= read -r login; do
           permission=$(
