@@ -97,17 +97,21 @@ function extractDocumentedFlags(helpText: string): Set<string> {
   return flags;
 }
 
-// `--help`/`-h` is supplied identically by every parseCliArgs() helper via
-// the shared cli-args.mts contract (`{ type: 'boolean', short: 'h' }`), not
-// declared per-helper. It is also not a member of the drift class this test
-// targets: the 12 findings the issue cites were flags that misled a caller
+// `--help`/`-h` is declared identically (`{ type: 'boolean', short: 'h' }`)
+// in every covered helper's own FLAG_SPEC -- cli-args.mts's `parseCliArgs`
+// only exposes `values.help` when the caller's own spec includes a --help
+// entry (see its CliParseResult doc comment), so this is boilerplate
+// repeated per-helper, not something the wrapper silently injects. It is
+// still excluded here: it is not a member of the drift class this test
+// targets (the 12 findings the issue cites were flags that misled a caller
 // mid-use; nobody is misled about --help working, since invoking it is how
-// they read the text in the first place. 9 of the 23 covered helpers already
-// mention `[--help]` in their Usage line and 14 don't -- comparing this
-// wrapper-supplied constant against per-helper prose would test the shared
-// wrapper, not the helper, so it is excluded here rather than patched into
-// 14 files. (Standardizing that documentation style is a legitimate,
-// separate follow-up -- not this test's concern.)
+// they read the text in the first place), and because it is the same
+// boilerplate literal in all 23 specs, comparing it against per-helper prose
+// would mostly test whether that shared boilerplate line happens to also be
+// echoed in the Usage line, not real per-helper drift. 9 of the 23 covered
+// helpers already mention `[--help]` in their Usage line and 14 don't;
+// standardizing that is a legitimate, separate follow-up, not this test's
+// concern.
 const UNIVERSAL_FLAGS = new Set(['--help']);
 
 // Per-helper allowlist for a flag literal that appears in --help prose but
@@ -358,10 +362,17 @@ test('COVERED_HELPERS and EXCLUDED_HELPERS exactly account for every FLAG_SPEC/p
 
   for (const { helper } of EXCLUDED_HELPERS) {
     const src = readSource(helper);
-    const stillOnlyOne = !(hasFlagSpec(src) && hasPrintHelp(src));
+    const specPresent = hasFlagSpec(src);
+    const helpPresent = hasPrintHelp(src);
+    // Require exactly one signal (XOR), not merely "not both": a helper that
+    // has lost BOTH FLAG_SPEC and printHelp() no longer matches the reason
+    // recorded for it above (each reason names which one it still has) and
+    // its entry has gone stale, same as gaining both would be.
     assert.ok(
-      stillOnlyOne,
-      `${helper} is listed as excluded but now declares both FLAG_SPEC and printHelp() -- move it to COVERED_HELPERS`,
+      specPresent !== helpPresent,
+      specPresent && helpPresent
+        ? `${helper} is listed as excluded but now declares both FLAG_SPEC and printHelp() -- move it to COVERED_HELPERS`
+        : `${helper} is listed as excluded but now declares NEITHER FLAG_SPEC nor printHelp() -- its recorded reason no longer applies; remove or update this entry`,
     );
   }
 });
