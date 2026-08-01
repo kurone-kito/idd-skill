@@ -24,8 +24,8 @@ Keep these rules explicit:
   already-present `.github/copilot-instructions.md` already carries
   repository-specific guidance beyond the shared IDD workflow section,
   do not let the new stub drop it: add a short pointer in the new file
-  to the existing file that owns that guidance, instead of copying the
-  prose into every stub — several copies trade the
+  to the existing file(s) that own that guidance, instead of copying
+  the prose into every stub — several copies trade the
   asymmetry problem for a divergence problem the next edit will miss
   (observed 2026-07-27, kurone-kito/idd-skill#1717). Apply this the
   same way for `CLAUDE.md`, `AGENTS.md`, and `GEMINI.md`; no runtime is
@@ -76,7 +76,7 @@ above and adapt the surrounding wording to the existing document style.
 If `CLAUDE.md` does not exist, create a minimal file such as below.
 When `AGENTS.md`, `GEMINI.md`, or an existing
 `.github/copilot-instructions.md` already carries repository-specific
-guidance, add one line near the top pointing to whichever file owns it
+guidance, add one line near the top per owning file, pointing to it
 — for example, `See AGENTS.md for repository-specific rules.` —
 instead of copying that guidance here:
 
@@ -117,7 +117,7 @@ and the routed phase file before starting IDD work.
 If `AGENTS.md` does not exist, create a minimal file such as below.
 When `CLAUDE.md`, `GEMINI.md`, or an existing
 `.github/copilot-instructions.md` already carries repository-specific
-guidance, add one line near the top pointing to whichever file owns it
+guidance, add one line near the top per owning file, pointing to it
 — for example, `See CLAUDE.md for repository-specific rules.` —
 instead of copying that guidance here:
 
@@ -192,7 +192,7 @@ wording and still pointing to `docs/idd-workflow.md`.
 If `GEMINI.md` does not exist, create a minimal file such as below.
 When `CLAUDE.md`, `AGENTS.md`, or an existing
 `.github/copilot-instructions.md` already carries repository-specific
-guidance, add one line near the top pointing to whichever file owns it
+guidance, add one line near the top per owning file, pointing to it
 — for example, `See AGENTS.md for repository-specific rules.` —
 instead of copying that guidance here:
 
@@ -322,10 +322,11 @@ checks, confirm the detailed items below.
 - [ ] Among the entry files the operator did not opt out of creating,
       `CLAUDE.md`, `AGENTS.md`, and `GEMINI.md` agree on
       repository-specific engineering guidance: each file either
-      carries that guidance directly, or points to the single file
-      that owns it (a sibling entry file, or an existing
-      `.github/copilot-instructions.md`) — no entry file silently
-      drops guidance another existing file already carries.
+      carries that guidance directly, or points to the file(s) that
+      own it (a sibling entry file, an existing
+      `.github/copilot-instructions.md`, or more than one when
+      guidance is split) — no entry file silently drops guidance
+      another existing file already carries.
 - [ ] If `.github/copilot-instructions.md` existed before onboarding,
       it now includes the IDD workflow reference as well.
 - [ ] If the operator opted into the optional `opencode.json`
