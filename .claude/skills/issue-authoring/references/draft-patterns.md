@@ -594,8 +594,10 @@ Publish each `ready` body directly under the authoring hold once it
 passes the mechanical gate and the critique pass — this is the default
 outcome of drafting, and it needs no separate publish approval. Stop
 after publishing (and applying/creating the authoring label) unless
-the user also separately requested release from the authoring hold or
-asked to start the IDD execution loop.
+the user also separately requests release from the authoring hold —
+release is what authorizes starting the IDD execution loop, so a
+request phrased as "start the IDD execution loop" counts as that same
+release request, not a separate path around it.
 
 If the user asked for drafts only (a preview before anything is
 created), honor that instead: stop after reporting the issue set,
