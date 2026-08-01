@@ -573,6 +573,7 @@ test('#1775: buildRunJobsArgs / buildJobLogsArgs pin the Actions endpoints', () 
   assert.deepEqual(buildRunJobsArgs('o', 'r', '99'), [
     'api',
     'repos/o/r/actions/runs/99/jobs',
+    '--paginate',
     '--jq',
     '.jobs[]',
   ]);

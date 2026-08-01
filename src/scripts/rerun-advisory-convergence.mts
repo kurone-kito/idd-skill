@@ -1708,6 +1708,11 @@ interface RawWorkflowRunPayload {
  * Args for listing jobs of one workflow run -- used to locate the
  * `idd-advisory-convergence` job whose log carries the JSON verdict
  * {@link extractAdvisoryVerdictReasonsFromLog} parses (#1775).
+ * `--paginate` is required: the Actions "list jobs for a workflow run"
+ * endpoint pages at 30 jobs, and a busy matrixed run can place the
+ * advisory-convergence job beyond the first page -- missing it would
+ * leave `verdictReasons` null and misclassify an uncovered-HEAD failure
+ * as `rerun-eligible` (Copilot review on #1790).
  */
 export function buildRunJobsArgs(
   owner: string,
@@ -1717,6 +1722,7 @@ export function buildRunJobsArgs(
   return [
     'api',
     `repos/${owner}/${repo}/actions/runs/${runId}/jobs`,
+    '--paginate',
     '--jq',
     '.jobs[]',
   ];
@@ -1743,11 +1749,15 @@ export function buildJobLogsArgs(
 /**
  * Fetch and parse the advisory-convergence `reasons` array for one
  * workflow run, or `null` when the log cannot be read / parsed. Looks up
- * the job whose name matches {@link RERUN_PLAN_CHECK_NAME} (falling back
- * to the first job when names are unavailable) and feeds its log to
- * {@link extractAdvisoryVerdictReasonsFromLog}. Failures are swallowed
- * into `null` so a flaky log API cannot invent an uncovered-HEAD hold
- * or abort the whole diagnosis (#1775).
+ * the job whose name matches {@link RERUN_PLAN_CHECK_NAME}. When every
+ * job in the payload is missing a name (or names are blank), falls back
+ * to the first job with an id -- the Actions jobs API normally always
+ * returns `name`, so this fallback is only for a truncated/malformed
+ * payload, never for "name present but did not match" (that would read
+ * an unrelated job's log and could invent an `awaiting-fresh-review`
+ * hold; CodeRabbit review on #1790). Failures are swallowed into `null`
+ * so a flaky log API cannot invent an uncovered-HEAD hold or abort the
+ * whole diagnosis (#1775).
  */
 function fetchAdvisoryVerdictReasonsForRun(
   owner: string,
@@ -1764,15 +1774,19 @@ function fetchAdvisoryVerdictReasonsForRun(
       name?: string | null;
     }>;
     if (jobs.length === 0) return null;
-    const named =
-      jobs.find(
-        (job) =>
-          String(job.name ?? '').trim() === RERUN_PLAN_CHECK_NAME &&
-          job.id != null,
-      ) ?? jobs.find((job) => job.id != null);
-    if (!named || named.id == null) return null;
+    const named = jobs.find(
+      (job) =>
+        String(job.name ?? '').trim() === RERUN_PLAN_CHECK_NAME &&
+        job.id != null,
+    );
+    const namesAllBlank = jobs.every(
+      (job) => String(job.name ?? '').trim() === '',
+    );
+    const selected =
+      named ?? (namesAllBlank ? jobs.find((job) => job.id != null) : undefined);
+    if (!selected || selected.id == null) return null;
     const logText = ghText(
-      buildJobLogsArgs(owner, repo, String(named.id)),
+      buildJobLogsArgs(owner, repo, String(selected.id)),
       GH_TEXT_LOOP_TIMEOUT_OPTIONS,
     );
     return extractAdvisoryVerdictReasonsFromLog(logText);
