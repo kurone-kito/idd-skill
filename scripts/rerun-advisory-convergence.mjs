@@ -1268,71 +1268,29 @@ export function formatApplySummary(result) {
  * {@link parsePaginatedGhNdjson} parser `ghApiJson` uses internally.
  */
 /**
- * Args for listing jobs of one workflow run -- used to locate the
- * `idd-advisory-convergence` job whose log carries the JSON verdict
- * {@link extractAdvisoryVerdictReasonsFromLog} parses (#1775).
- * `--paginate` is required: the Actions "list jobs for a workflow run"
- * endpoint pages at 30 jobs, and a busy multi-job run can place the
- * advisory-convergence job beyond the first page -- missing it would
- * leave `verdictReasons` null and misclassify an uncovered-HEAD failure
- * as `rerun-eligible` (Copilot review on #1790).
+ * Args for downloading one workflow run's combined job logs as plain
+ * text via `gh run view --log`. Prefer this over
+ * `GET /repos/.../actions/jobs/{id}/logs`, which redirects to a ZIP
+ * archive that `ghText` would decode as garbage UTF-8 and leave
+ * `verdictReasons` null (Copilot review on #1790). Scoped with `-R
+ * owner/repo` so a cross-repository diagnosis still hits the right
+ * run.
  */
-export function buildRunJobsArgs(owner, repo, runId) {
-  return [
-    'api',
-    `repos/${owner}/${repo}/actions/runs/${runId}/jobs`,
-    '--paginate',
-    '--jq',
-    '.jobs[]',
-  ];
-}
-/**
- * Args for downloading one job's logs. `--allow-escape-sequences` is
- * required: Actions job logs routinely embed ANSI color codes, and `gh
- * api` refuses to print them to a non-TTY without this flag (confirmed
- * empirically while implementing #1775).
- */
-export function buildJobLogsArgs(owner, repo, jobId) {
-  return [
-    'api',
-    `repos/${owner}/${repo}/actions/jobs/${jobId}/logs`,
-    '--allow-escape-sequences',
-  ];
+export function buildRunViewLogArgs(owner, repo, runId) {
+  return ['run', 'view', runId, '-R', `${owner}/${repo}`, '--log'];
 }
 /**
  * Fetch and parse the advisory-convergence `reasons` array for one
- * workflow run, or `null` when the log cannot be read / parsed. Looks up
- * the job whose name matches {@link RERUN_PLAN_CHECK_NAME}. When every
- * job in the payload is missing a name (or names are blank), falls back
- * to the first job with an id -- the Actions jobs API normally always
- * returns `name`, so this fallback is only for a truncated/malformed
- * payload, never for "name present but did not match" (that would read
- * an unrelated job's log and could invent an `awaiting-fresh-review`
- * hold; CodeRabbit review on #1790). Failures are swallowed into `null`
- * so a flaky log API cannot invent an uncovered-HEAD hold or abort the
- * whole diagnosis (#1775).
+ * workflow run, or `null` when the log cannot be read / parsed. Uses
+ * {@link buildRunViewLogArgs} (`gh run view --log`) for plain-text logs
+ * and feeds them to {@link extractAdvisoryVerdictReasonsFromLog}.
+ * Failures are swallowed into `null` so a flaky log download cannot
+ * invent an uncovered-HEAD hold or abort the whole diagnosis (#1775).
  */
 function fetchAdvisoryVerdictReasonsForRun(owner, repo, runId) {
   try {
-    const jobsRaw = ghText(
-      buildRunJobsArgs(owner, repo, runId),
-      GH_TEXT_LOOP_TIMEOUT_OPTIONS,
-    );
-    const jobs = parsePaginatedGhNdjson(jobsRaw);
-    if (jobs.length === 0) return null;
-    const named = jobs.find(
-      (job) =>
-        String(job.name ?? '').trim() === RERUN_PLAN_CHECK_NAME &&
-        job.id != null,
-    );
-    const namesAllBlank = jobs.every(
-      (job) => String(job.name ?? '').trim() === '',
-    );
-    const selected =
-      named ?? (namesAllBlank ? jobs.find((job) => job.id != null) : undefined);
-    if (!selected || selected.id == null) return null;
     const logText = ghText(
-      buildJobLogsArgs(owner, repo, String(selected.id)),
+      buildRunViewLogArgs(owner, repo, runId),
       GH_TEXT_LOOP_TIMEOUT_OPTIONS,
     );
     return extractAdvisoryVerdictReasonsFromLog(logText);

@@ -5,9 +5,8 @@ import {
   applyRerunPlan,
   buildCheckRunsForRefArgs,
   buildIddConfigContentsArgs,
-  buildJobLogsArgs,
   buildRerunPlanTextSections,
-  buildRunJobsArgs,
+  buildRunViewLogArgs,
   computeRerunPlan,
   describeNoActionState,
   describeOutstandingStates,
@@ -569,18 +568,14 @@ test('#1775: extractAdvisoryVerdictReasonsFromLog returns null when no verdict J
   );
 });
 
-test('#1775: buildRunJobsArgs / buildJobLogsArgs pin the Actions endpoints', () => {
-  assert.deepEqual(buildRunJobsArgs('o', 'r', '99'), [
-    'api',
-    'repos/o/r/actions/runs/99/jobs',
-    '--paginate',
-    '--jq',
-    '.jobs[]',
-  ]);
-  assert.deepEqual(buildJobLogsArgs('o', 'r', '42'), [
-    'api',
-    'repos/o/r/actions/jobs/42/logs',
-    '--allow-escape-sequences',
+test('#1775: buildRunViewLogArgs pins the plain-text run-log command', () => {
+  assert.deepEqual(buildRunViewLogArgs('o', 'r', '99'), [
+    'run',
+    'view',
+    '99',
+    '-R',
+    'o/r',
+    '--log',
   ]);
 });
 
