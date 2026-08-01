@@ -11,6 +11,7 @@ import { readFileSync } from 'node:fs';
 import { parseCliArgs } from './cli-args.mts';
 import { resolveHelperActiveClaim } from './forced-handoff-marker.mts';
 import { ghText, safeGhText } from './gh-exec.mts';
+import { deriveGhHttpStatus } from './gh-http-status.mts';
 import {
   normalizePolicyConfig,
   parseIsoDurationToMs,
@@ -1088,6 +1089,30 @@ function ghJson(args: string[], slurp = false): unknown {
   return JSON.parse(execFileSync('gh', finalArgs, { encoding: 'utf8' }));
 }
 
+/**
+ * Pure derivation step for {@link ghApiJsonWithStatus}'s catch branch,
+ * exported so tests can inject an error shape directly instead of shelling
+ * out to a real `gh` invocation (matching the mock-free-subprocess
+ * convention documented in `tests/collaborator-permission.test.mts`).
+ *
+ * #1693: derives the real HTTP status via the shared gh-http-status.mts
+ * helpers (stderr `(HTTP NNN)` pattern, then a JSON-body `"status"` field
+ * fallback across stderr/stdout/message) instead of the prior local
+ * `extractGhHttpStatus`, which fell back to the child-process exit code
+ * when no HTTP-status text was found -- `gh` exits 1 for 401/403/404
+ * alike, so that fallback could misreport a 404 or an auth failure as
+ * "status 1". `deriveGhHttpStatus` returns null (not 0) when no status can
+ * be determined at all; 500 preserves this function's existing
+ * "definitely not 200, not 404" fail-closed fallback for that case.
+ */
+export function deriveGhApiStatusFromError(error: unknown): GhApiStatusResult {
+  const status = deriveGhHttpStatus(error);
+  return {
+    status: status ?? 500,
+    body: {},
+  };
+}
+
 function ghApiJsonWithStatus(path: string): GhApiStatusResult {
   try {
     return {
@@ -1097,28 +1122,8 @@ function ghApiJsonWithStatus(path: string): GhApiStatusResult {
       ) as GhApiStatusResult['body'],
     };
   } catch (error) {
-    const status = extractGhHttpStatus(error);
-    return {
-      status: status || 500,
-      body: {},
-    };
+    return deriveGhApiStatusFromError(error);
   }
-}
-
-export function extractGhHttpStatus(error: unknown): number {
-  const e = error as {
-    stderr?: unknown;
-    status?: unknown;
-    exitCode?: unknown;
-  } | null;
-  const stderr = String(e?.stderr ?? '');
-  const httpStatusMatch = stderr.match(/\(HTTP\s+(\d{3})\)/i);
-  if (httpStatusMatch) {
-    return Number(httpStatusMatch[1]);
-  }
-
-  const exitStatus = Number(e?.status ?? e?.exitCode ?? 0);
-  return Number.isInteger(exitStatus) && exitStatus > 0 ? exitStatus : 0;
 }
 
 function renderReport(report: ExternalCheckWaiverReport, format: string): void {

@@ -3,7 +3,7 @@ import { test } from 'node:test';
 
 import {
   buildTrustedMarkerLogins,
-  extractGhHttpStatus,
+  deriveGhApiStatusFromError,
   parseArgs,
   planExternalCheckWaiver,
 } from '../src/scripts/external-check-waiver.mts';
@@ -298,16 +298,41 @@ test('buildTrustedMarkerLogins always trusts the repository owner', () => {
   assert.ok(trusted.has('maintainer-user'));
 });
 
-test('extractGhHttpStatus prefers HTTP status codes from gh stderr', () => {
+// #1693: exit-code-never-surfaces-as-HTTP-status + JSON-body status
+// recovery, proven against the actual wired catch-branch function (not
+// just the underlying gh-http-status.mts helper it delegates to -- see
+// tests/gh-http-status.test.mts for that direct coverage).
+test('deriveGhApiStatusFromError never surfaces a bare process exit code as the HTTP status', () => {
+  // gh exits 1 for 401/403/404 alike; the removed extractGhHttpStatus used
+  // to fall back to this exit code when no `(HTTP NNN)` text was present,
+  // silently reporting e.g. a 404 as "status 1". The fixed function must
+  // fail closed to 500 instead.
   assert.equal(
-    extractGhHttpStatus({
+    deriveGhApiStatusFromError({ status: 1, stderr: '', stdout: '' }).status,
+    500,
+  );
+});
+
+test('deriveGhApiStatusFromError recovers a status from a JSON error body on stdout', () => {
+  assert.equal(
+    deriveGhApiStatusFromError({
       status: 1,
-      stderr: 'gh: definitely-not-a-user is not a user (HTTP 404)\n',
-    }),
+      stderr: '',
+      stdout: '{"message":"Not Found","status":"404"}',
+    }).status,
     404,
   );
-  assert.equal(extractGhHttpStatus({ status: 1, stderr: '' }), 1);
-  assert.equal(extractGhHttpStatus({ status: 0, stderr: '' }), 0);
+});
+
+test('deriveGhApiStatusFromError still prefers the (HTTP NNN) stderr signal', () => {
+  assert.equal(
+    deriveGhApiStatusFromError({
+      status: 1,
+      stderr: 'gh: definitely-not-a-user is not a user (HTTP 404)\n',
+      stdout: '',
+    }).status,
+    404,
+  );
 });
 
 test('parseExternalCheckWaiverComment returns null for empty or non-marker bodies', () => {
