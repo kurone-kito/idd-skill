@@ -1092,8 +1092,12 @@ export function renderOkfIndexMarkdownTable(rows, linkBase = 'docs') {
     .replace(/\/+$/, '');
   const prefix = `${base}/`;
   const header = '| Type | Page | Description |\n| ---- | ---- | ----------- |';
+  // Wrap in dprint-ignore so the formatter cannot re-pad table cells and
+  // make the audit-docs exact-string check fail on every apply (#1683).
+  const openIgnore = '<!-- dprint-ignore-start -->';
+  const closeIgnore = '<!-- dprint-ignore-end -->';
   if (rows.length === 0) {
-    return `\n\n${header}\n\n`;
+    return `\n\n${openIgnore}\n${header}\n${closeIgnore}\n\n`;
   }
   const body = rows
     .map((row) => {
@@ -1108,7 +1112,7 @@ export function renderOkfIndexMarkdownTable(rows, linkBase = 'docs') {
       return `| ${type} | [${title}](${href}) | ${description} |`;
     })
     .join('\n');
-  return `\n\n${header}\n${body}\n\n`;
+  return `\n\n${openIgnore}\n${header}\n${body}\n${closeIgnore}\n\n`;
 }
 // Anchored at the very start of the file; a frontmatter block anywhere else
 // does not count -- OKF/YAML frontmatter must open the document.
