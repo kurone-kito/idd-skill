@@ -24,6 +24,29 @@ those profiles. Committing the generated `.mjs` keeps every helper
 profile, the documented `node scripts/<name>.mjs` invocations, and the
 install-free bare-node CI lane working unchanged.
 
+## `@types/node` vs. the engines floor
+
+`@types/node` is pinned to `26.1.0` — newer than either half of the
+`^22.22.2 || >=24.2.0` engines range — so `pnpm run typecheck` validates
+against the Node 26 API surface, not the lowest version this repository
+actually ships on. This is a deliberate trade-off, not an oversight
+(#1706): downgrading `@types/node` to match the 22.x floor would lose
+type coverage for code paths that intentionally target the newer
+24.2.0+ half of the range, and TypeScript's structural typing means a
+too-new API passing typecheck doesn't reliably fail loudly at that
+type-only layer.
+
+The actual backstop is runtime, not type-level: the Node 22 CI lane
+(`pnpm-boundary-node22-floor.yml`) runs the full `pnpm run lint:minimum`
+suite — including the whole test suite and
+`verify-workshop-integrity.mts` — directly on Node 22.22.2. A helper
+that calls an API present in the types-26 surface but missing or
+broken on the true floor version (the #1447 failure class) crashes
+there even though it typechecks cleanly, closing the gap that pinning
+`@types/node` down would only partially cover anyway (types don't
+model version-specific runtime bugs like #1447's `import.meta.main`
+silently-falsy case).
+
 ## Layout
 
 ```text
