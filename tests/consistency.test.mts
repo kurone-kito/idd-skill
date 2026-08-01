@@ -19,6 +19,7 @@ import {
   normalizePolicyConfig,
   parseGeneratedFromBannerSource,
   resolveCollaboratorMarkerTrust,
+  resolveGeneratedBlockFiles,
   stripGeneratedFromBanner,
 } from '../src/scripts/consistency-helpers.mts';
 import { findPlaceholders } from '../src/scripts/idd-doctor.mts';
@@ -1314,4 +1315,46 @@ test("audit/sync-manifest.json's guarded repo state: this repository's own engin
     readText,
   );
   assert.deepEqual(violations, []);
+});
+
+// =============================================================================
+// resolveGeneratedBlockFiles (#1703) -- the shared paths-first,
+// sourceGlobs-fallback resolution rule for a generatedBlocks manifest
+// entry, previously duplicated (and drifted) between sync-docs.mts and
+// audit-docs.mts.
+// =============================================================================
+
+test('resolveGeneratedBlockFiles: paths present takes precedence, globFilesFn is never called', () => {
+  const files = resolveGeneratedBlockFiles(
+    { paths: ['b.md', 'a.md'], sourceGlobs: ['ignored/**'] },
+    () => {
+      throw new Error('globFilesFn must not be invoked when paths is set');
+    },
+  );
+  // paths is returned verbatim (not sorted) -- only the sourceGlobs
+  // fallback dedupes/sorts.
+  assert.deepEqual(files, ['b.md', 'a.md']);
+});
+
+test('resolveGeneratedBlockFiles: falls back to sourceGlobs when paths is absent, deduped and sorted', () => {
+  const seenPatterns: string[] = [];
+  const files = resolveGeneratedBlockFiles(
+    { sourceGlobs: ['src/*.mts', 'lib/*.mts'] },
+    (pattern) => {
+      seenPatterns.push(pattern);
+      if (pattern === 'src/*.mts') {
+        return ['src/b.mts', 'src/a.mts', 'src/a.mts'];
+      }
+      return ['lib/z.mts'];
+    },
+  );
+  assert.deepEqual(seenPatterns, ['src/*.mts', 'lib/*.mts']);
+  assert.deepEqual(files, ['lib/z.mts', 'src/a.mts', 'src/b.mts']);
+});
+
+test('resolveGeneratedBlockFiles: neither paths nor sourceGlobs resolves to an empty list', () => {
+  assert.deepEqual(
+    resolveGeneratedBlockFiles({}, () => []),
+    [],
+  );
 });

@@ -911,3 +911,48 @@ export function collectEnginesRangeMirrorViolations(
   }
   return violations;
 }
+export function uniqueSorted(values) {
+  return [...new Set(values)].sort((left, right) => left.localeCompare(right));
+}
+export function globToRegExp(pattern) {
+  let source = '^';
+  for (let index = 0; index < pattern.length; index += 1) {
+    const char = pattern[index];
+    if (char === '*') {
+      if (pattern[index + 1] === '*') {
+        if (pattern[index + 2] === '/') {
+          source += '(?:.*/)?';
+          index += 2;
+        } else {
+          source += '.*';
+          index += 1;
+        }
+      } else {
+        source += '[^/]*';
+      }
+      continue;
+    }
+    source += escapeRegExpChar(char);
+  }
+  return new RegExp(`${source}$`);
+}
+function escapeRegExpChar(value) {
+  return value.replace(/[\\^$+?.()|[\]{}]/g, '\\$&');
+}
+/** Matches `pattern` against a caller-supplied repo file list. */
+export function globFiles(pattern, repoFiles) {
+  const regex = globToRegExp(pattern);
+  return repoFiles.filter((file) => regex.test(file)).sort();
+}
+/**
+ * Resolves a `generatedBlocks[]` entry's file list: the static `paths`
+ * list when present, otherwise every repo file matching `sourceGlobs`
+ * (deduped and sorted). `globFilesFn` is injected so each caller supplies
+ * its own file listing instead of re-implementing the glob walk.
+ */
+export function resolveGeneratedBlockFiles(block, globFilesFn) {
+  if (block.paths) {
+    return [...block.paths];
+  }
+  return uniqueSorted((block.sourceGlobs ?? []).flatMap(globFilesFn));
+}

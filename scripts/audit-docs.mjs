@@ -17,8 +17,11 @@ import {
   collectPolicyConfigDrift,
   collectRootMarkdownAllowlistViolations,
   collectTypeSuppressionViolations,
+  globFiles,
   isBannerScopedInstructionTarget,
+  resolveGeneratedBlockFiles,
   stripGeneratedFromBanner,
+  uniqueSorted,
 } from './consistency-helpers.mjs';
 
 const root = process.cwd();
@@ -106,7 +109,7 @@ function checkGeneratedSourcePairs() {
   const bannerPattern = /^\/\/ idd-generated-from:\s*(\S+)/m;
   const repoFileSet = new Set(repoFiles);
   // Forward direction: each source has its generated counterpart.
-  for (const source of globFiles('src/**/*.mts')) {
+  for (const source of globFiles('src/**/*.mts', repoFiles)) {
     const emitted = emittedPathForSource(source);
     if (!emitted) {
       errors.push(
@@ -123,8 +126,8 @@ function checkGeneratedSourcePairs() {
   // Reverse direction: each banner-marked artifact has its source, and the
   // banner resolves back to this exact file.
   for (const emitted of [
-    ...globFiles('scripts/**/*.mjs'),
-    ...globFiles('bin/**/*.mjs'),
+    ...globFiles('scripts/**/*.mjs', repoFiles),
+    ...globFiles('bin/**/*.mjs', repoFiles),
   ]) {
     const match = bannerPattern.exec(readText(emitted));
     if (!match) {
@@ -205,8 +208,8 @@ function checkFileSets(fileSets, syncPairs) {
     syncPairs.map((pair) => `${pair.source}\0${pair.target}`),
   );
   for (const fileSet of fileSets) {
-    const sourceFiles = globFiles(fileSet.sourceGlob);
-    const targetFiles = globFiles(fileSet.targetGlob);
+    const sourceFiles = globFiles(fileSet.sourceGlob, repoFiles);
+    const targetFiles = globFiles(fileSet.targetGlob, repoFiles);
     if (fileSet.match !== 'basename') {
       errors.push(
         `${fileSet.id}: unsupported file set match mode ${fileSet.match}`,
@@ -346,11 +349,10 @@ function renderGeneratedBlock(block) {
   return `\n\n\`\`\`${block.language ?? 'text'}\n${renderedFiles.join('\n')}\n\`\`\`\n\n`;
 }
 function resolveBlockFiles(block) {
-  const files = block.paths
-    ? [...block.paths]
-    : uniqueSorted((block.sourceGlobs ?? []).flatMap(globFiles));
+  const blockGlobFiles = (pattern) => globFiles(pattern, repoFiles);
+  const files = resolveGeneratedBlockFiles(block, blockGlobFiles);
   const actualFiles = uniqueSorted(
-    (block.sourceGlobs ?? []).flatMap(globFiles),
+    (block.sourceGlobs ?? []).flatMap(blockGlobFiles),
   );
   if (block.paths && block.sourceGlobs) {
     const expectedSet = new Set(block.paths);
@@ -444,7 +446,7 @@ function checkContainsPair(pair) {
 function checkForbiddenPatterns(patterns) {
   for (const pattern of patterns) {
     const regex = new RegExp(pattern.pattern, 'i');
-    const files = globFiles(pattern.glob);
+    const files = globFiles(pattern.glob, repoFiles);
     for (const file of files) {
       const text = readText(file);
       if (regex.test(stripGeneratedBlocks(text))) {
@@ -480,7 +482,9 @@ function checkTypeSuppressionBudgets(config) {
     );
     return;
   }
-  const files = uniqueSorted(globs.flatMap(globFiles)).map((path) => ({
+  const files = uniqueSorted(
+    globs.flatMap((glob) => globFiles(glob, repoFiles)),
+  ).map((path) => ({
     path,
     text: readText(path),
   }));
@@ -571,18 +575,30 @@ function checkEnginesRangeMirrors() {
   );
 }
 function buildRemediation(currentErrors) {
-  if (!containsMirrorDrift(currentErrors)) {
+  const hasMirrorDrift = containsMirrorDrift(currentErrors);
+  const hasManifestListMismatch = containsManifestListMismatch(currentErrors);
+  if (!hasMirrorDrift && !hasManifestListMismatch) {
     return [];
   }
-  const syncCommand = detectSyncCommand();
   const lines = [];
-  if (syncCommand) {
+  if (hasMirrorDrift) {
+    const syncCommand = detectSyncCommand();
+    if (syncCommand) {
+      lines.push(
+        `run \`${syncCommand}\` to refresh mirrored files from canonical sources`,
+      );
+    } else {
+      lines.push(
+        'align canonical files and their mirrored counterparts for the reported drift paths',
+      );
+    }
+  }
+  if (hasManifestListMismatch) {
+    // A manifest-list mismatch is not mirror drift: `docs:sync` reads
+    // `generatedBlocks[].paths` as-is, so it cannot resolve a disagreement
+    // between `paths` and what `sourceGlobs` actually matches (#1703).
     lines.push(
-      `run \`${syncCommand}\` to refresh mirrored files from canonical sources`,
-    );
-  } else {
-    lines.push(
-      'align canonical files and their mirrored counterparts for the reported drift paths',
+      "edit `audit/sync-manifest.json`'s `generatedBlocks[].paths` to match the reported `sourceGlobs` result -- `docs:sync` cannot fix a manifest-list mismatch",
     );
   }
   lines.push('re-run `node scripts/audit-docs.mjs --check`');
@@ -590,7 +606,14 @@ function buildRemediation(currentErrors) {
 }
 function containsMirrorDrift(currentErrors) {
   return currentErrors.some((error) =>
-    /generated block .* is stale|shell file list .* is stale| and .* differ in (exact|concreted) mode|heading structure differs between|target is missing|target has unexpected|is missing a syncPairs entry|manifest paths omit|manifest path does not exist or match globs/.test(
+    /generated block .* is stale|shell file list .* is stale| and .* differ in (exact|concreted) mode|heading structure differs between|target is missing|target has unexpected|is missing a syncPairs entry/.test(
+      error,
+    ),
+  );
+}
+function containsManifestListMismatch(currentErrors) {
+  return currentErrors.some((error) =>
+    /manifest paths omit|manifest path does not exist or match globs/.test(
       error,
     ),
   );
@@ -685,7 +708,10 @@ function checkInstructionSizeBudgets(configs) {
       config,
       changedFiles,
       () =>
-        globFiles(config.glob ?? '.github/instructions/idd-*.instructions.md'),
+        globFiles(
+          config.glob ?? '.github/instructions/idd-*.instructions.md',
+          repoFiles,
+        ),
       readText,
     );
     errors.push(...result.errors);
@@ -807,39 +833,10 @@ function listRepoFiles() {
   ]);
   return output.split(/\r?\n/).filter(Boolean).sort();
 }
-// Excluded from the node-core-builtins roadmap's (#1445) built-in swaps:
-// this matches `pattern` against `repoFiles`, an in-memory list already
-// fetched from `git ls-files --cached --others --exclude-standard` (see
-// `listRepoFiles`), which correctly excludes gitignored and untracked
-// files. Swapping this for `fs.globSync` would instead search the real
-// filesystem and widen the matched set to files `git ls-files` deliberately
-// omits.
-function globFiles(pattern) {
-  const regex = globToRegExp(pattern);
-  return repoFiles.filter((file) => regex.test(file)).sort();
-}
-function globToRegExp(pattern) {
-  let source = '^';
-  for (let index = 0; index < pattern.length; index += 1) {
-    const char = pattern[index];
-    if (char === '*') {
-      if (pattern[index + 1] === '*') {
-        if (pattern[index + 2] === '/') {
-          source += '(?:.*/)?';
-          index += 2;
-        } else {
-          source += '.*';
-          index += 1;
-        }
-      } else {
-        source += '[^/]*';
-      }
-      continue;
-    }
-    source += escapeRegExp(char);
-  }
-  return new RegExp(`${source}$`);
-}
+// glob matching against `repoFiles` (an in-memory list already fetched
+// from `git ls-files --cached --others --exclude-standard`, see
+// `listRepoFiles`) is shared with sync-docs.mts via consistency-helpers.mts
+// (#1703) as `globFiles`/`globToRegExp`, imported above.
 function headingSignature(text, { levelsOnly }) {
   const headings = [];
   let inFence = false;
@@ -981,10 +978,4 @@ function findDuplicateBasenames(files) {
     }
   }
   return duplicates;
-}
-function uniqueSorted(values) {
-  return [...new Set(values)].sort((left, right) => left.localeCompare(right));
-}
-function escapeRegExp(value) {
-  return value.replace(/[\\^$+?.()|[\]{}]/g, '\\$&');
 }

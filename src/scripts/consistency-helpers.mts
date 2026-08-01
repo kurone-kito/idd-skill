@@ -1095,3 +1095,70 @@ export function collectEnginesRangeMirrorViolations(
 
   return violations;
 }
+
+// --- generatedBlocks file resolution (#1703) --------------------------------
+//
+// sync-docs.mts and audit-docs.mts each independently decided how a
+// `generatedBlocks[]` manifest entry resolves to a file list, and drifted:
+// audit-docs.mts fell back to globbing `sourceGlobs` when `paths` was
+// absent, sync-docs.mts silently returned an empty list. Sharing this one
+// function pins the resolution rule in a single place so the two tools
+// cannot diverge on it again.
+
+export interface GeneratedBlockFileSource {
+  paths?: string[];
+  sourceGlobs?: string[];
+}
+
+export function uniqueSorted(values: string[]): string[] {
+  return [...new Set(values)].sort((left, right) => left.localeCompare(right));
+}
+
+export function globToRegExp(pattern: string): RegExp {
+  let source = '^';
+  for (let index = 0; index < pattern.length; index += 1) {
+    const char = pattern[index];
+    if (char === '*') {
+      if (pattern[index + 1] === '*') {
+        if (pattern[index + 2] === '/') {
+          source += '(?:.*/)?';
+          index += 2;
+        } else {
+          source += '.*';
+          index += 1;
+        }
+      } else {
+        source += '[^/]*';
+      }
+      continue;
+    }
+    source += escapeRegExpChar(char);
+  }
+  return new RegExp(`${source}$`);
+}
+
+function escapeRegExpChar(value: string): string {
+  return value.replace(/[\\^$+?.()|[\]{}]/g, '\\$&');
+}
+
+/** Matches `pattern` against a caller-supplied repo file list. */
+export function globFiles(pattern: string, repoFiles: string[]): string[] {
+  const regex = globToRegExp(pattern);
+  return repoFiles.filter((file) => regex.test(file)).sort();
+}
+
+/**
+ * Resolves a `generatedBlocks[]` entry's file list: the static `paths`
+ * list when present, otherwise every repo file matching `sourceGlobs`
+ * (deduped and sorted). `globFilesFn` is injected so each caller supplies
+ * its own file listing instead of re-implementing the glob walk.
+ */
+export function resolveGeneratedBlockFiles(
+  block: GeneratedBlockFileSource,
+  globFilesFn: (pattern: string) => string[],
+): string[] {
+  if (block.paths) {
+    return [...block.paths];
+  }
+  return uniqueSorted((block.sourceGlobs ?? []).flatMap(globFilesFn));
+}
