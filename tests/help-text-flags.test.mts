@@ -16,15 +16,28 @@ import { fileURLToPath } from 'node:url';
 // spelling ACROSS helpers, never that a single helper's own --help output
 // agrees with that same helper's own declared flag spec.
 //
+// Coverage: every src/scripts/*.mts helper that declares a FLAG_SPEC-style
+// object (33 currently). Earlier drafts of this test scoped coverage to
+// helpers with a function literally named printHelp() (23), but that ties
+// participation to a naming convention rather than to whether --help is
+// actually renderable -- and the real sweep below spawns the compiled
+// scripts/<name>.mjs with --help regardless of which internal mechanism
+// (printHelp(), printUsage(), a module-level USAGE constant, or an inline
+// console.log/process.stdout.write) produces that output. Each of the 10
+// non-printHelp() helpers was individually confirmed before being added
+// here: --help exits 0 in well under a second with no gh/network I/O, and
+// its FLAG_SPEC block parses cleanly. A helper is excluded only when it has
+// no FLAG_SPEC at all -- nothing declarative to compare against (6
+// hand-rolled parseArgs() helpers currently, each with a one-line reason
+// below, mirroring tests/flag-name-matrix.test.mts's explicit `helpers`
+// style rather than silent discovery).
+//
 // Rendering choice: this test spawns each covered helper's *compiled*
 // scripts/<name>.mjs with --help and captures real stdout, rather than
-// statically parsing the printHelp() template literal. Every covered
-// helper's --help path returns before any gh/network I/O (the shared
-// cli-args.mts contract checks `args.help` first; two of these helpers'
-// exact --help bytes are already pinned in tests/cli-entry-smoke.test.mts),
-// so spawning is a fast, dependency-free subprocess call that also exercises
-// the real compiled artifact, matching that same file's shelling-out
-// convention for --help output.
+// statically parsing its help-text source. This is a fast, dependency-free
+// subprocess call that also exercises the real compiled artifact, matching
+// tests/cli-entry-smoke.test.mts's shelling-out convention for --help
+// output (which already pins two of these helpers' exact --help bytes).
 //
 // Declared-flag extraction reads the *source* src/scripts/<name>.mts (not
 // the compiled .mjs -- flag-name-matrix.test.mts already covers the .mjs
@@ -40,18 +53,18 @@ function readSource(helper: string): string {
   return readFileSync(join(srcScriptsDir, `${helper}.mts`), 'utf8');
 }
 
+/** True when `src` declares a `<NAME>_FLAG_SPEC = { ... }` object -- the
+ * declarative flag spec consumed by `parseCliArgs()` (see cli-args.mts).
+ * This is the sole participation gate for this test: see the header comment
+ * above for why a help-*printer* naming convention is not used instead. */
 function hasFlagSpec(src: string): boolean {
   return /_FLAG_SPEC\s*=\s*\{/.test(src);
-}
-
-function hasPrintHelp(src: string): boolean {
-  return /^function printHelp\(/m.test(src);
 }
 
 /**
  * Extracts the body of the first `const <NAME>_FLAG_SPEC = { ... } as
  * const;` declaration in `src`. Every covered helper's spec closes with the
- * literal `} as const;` on its own line -- verified across all 23 helpers
+ * literal `} as const;` on its own line -- verified across all 33 helpers
  * below, and enforced structurally by TypeScript (the `as const` assertion
  * is what makes `parseCliArgs`'s generic flag-name inference work).
  */
@@ -106,10 +119,10 @@ function extractDocumentedFlags(helpText: string): Set<string> {
 // targets (the 12 findings the issue cites were flags that misled a caller
 // mid-use; nobody is misled about --help working, since invoking it is how
 // they read the text in the first place), and because it is the same
-// boilerplate literal in all 23 specs, comparing it against per-helper prose
+// boilerplate literal in every spec, comparing it against per-helper prose
 // would mostly test whether that shared boilerplate line happens to also be
-// echoed in the Usage line, not real per-helper drift. 9 of the 23 covered
-// helpers already mention `[--help]` in their Usage line and 14 don't;
+// echoed in the Usage line, not real per-helper drift. Many covered helpers
+// already mention `[--help]` in their Usage line and many don't;
 // standardizing that is a legitimate, separate follow-up, not this test's
 // concern.
 const UNIVERSAL_FLAGS = new Set(['--help']);
@@ -135,12 +148,17 @@ const CROSS_REFERENCE_FLAGS: Readonly<Record<string, readonly string[]>> = {
 };
 
 // Explicit covered-helper list (mirrors tests/flag-name-matrix.test.mts's
-// `helpers` style): every src/scripts/*.mts helper that declares BOTH a
-// FLAG_SPEC-style object and a printHelp() function, built by hand rather
-// than by silent discovery. 23 helpers currently qualify.
+// `helpers` style): every src/scripts/*.mts helper that declares a
+// FLAG_SPEC-style object, built by hand rather than by silent discovery.
+// 33 helpers currently qualify -- see the header comment above for why this
+// isn't narrowed to only helpers with a function literally named
+// printHelp().
 const COVERED_HELPERS = [
   'advisory-convergence',
   'advisory-wait-state',
+  'audit-authored-issue',
+  'audit-pr-cleanup',
+  'branch-conflict-state',
   'branch-name',
   'ci-wait-policy',
   'ci-wait-state',
@@ -149,11 +167,17 @@ const COVERED_HELPERS = [
   'discover-readiness-check',
   'discover-shared-file-overlap',
   'discover-viability-gate',
+  'disposition-non-review-notices',
+  'external-check-waiver',
+  'forced-handoff-marker',
   'helper-runtime-manifest',
+  'idd-doctor',
   'idd-roadmap-audit-execute',
+  'live-status-digest',
   'merged-pr-feedback-sweep',
   'phase-id-resolver',
   'pre-merge-readiness',
+  'resolve-review-thread',
   'resume-claim-routing',
   'resume-route-selection',
   'review-activity-snapshot',
@@ -162,64 +186,14 @@ const COVERED_HELPERS = [
   'stalled-session-quiet-check',
   'suitability-triage',
   'verify-install-deps',
+  'verify-workshop-integrity',
 ] as const;
 
-// Every other src/scripts/*.mts helper that declares a FLAG_SPEC object or a
-// printHelp() function, but not both, with a one-line reason it cannot
-// participate in this check (issue #1676's acceptance criteria requires
-// this be visible rather than invisible).
+// Every other src/scripts/*.mts helper that has some CLI --help surface but
+// no FLAG_SPEC object to compare it against, with a one-line reason it
+// cannot participate in this check (issue #1676's acceptance criteria
+// requires this be visible rather than invisible).
 const EXCLUDED_HELPERS: readonly { helper: string; reason: string }[] = [
-  // --- FLAG_SPEC present, no printHelp() (10) ---------------------------
-  {
-    helper: 'audit-authored-issue',
-    reason:
-      'help text is an inline console.log(`usage: ...`), not a printHelp() function',
-  },
-  {
-    helper: 'audit-pr-cleanup',
-    reason:
-      'help text is an inline console.log(`usage: ...`), not a printHelp() function',
-  },
-  {
-    helper: 'branch-conflict-state',
-    reason: 'help printer is named printUsage(), not printHelp()',
-  },
-  {
-    helper: 'disposition-non-review-notices',
-    reason:
-      'help text is a module-level USAGE constant, not a printHelp() function',
-  },
-  {
-    helper: 'external-check-waiver',
-    reason:
-      'help text is an inline process.stdout.write(`usage: ...`), not a printHelp() function',
-  },
-  {
-    helper: 'forced-handoff-marker',
-    reason:
-      'help text is an inline console.log(`usage: ...`), not a printHelp() function',
-  },
-  {
-    helper: 'idd-doctor',
-    reason:
-      'help text is an inline console.log(`usage: ...`), not a printHelp() function',
-  },
-  {
-    helper: 'live-status-digest',
-    reason:
-      'help text is an inline console.log(`usage: ...`), not a printHelp() function',
-  },
-  {
-    helper: 'resolve-review-thread',
-    reason:
-      'help text is a module-level USAGE constant, not a printHelp() function',
-  },
-  {
-    helper: 'verify-workshop-integrity',
-    reason:
-      'help text is an inline console.log(`usage: ...`), not a printHelp() function',
-  },
-  // --- printHelp() present, no FLAG_SPEC (6) ------------------------------
   {
     helper: 'discover-orphan-filter',
     reason:
@@ -255,7 +229,7 @@ const EXCLUDED_HELPERS: readonly { helper: string; reason: string }[] = [
 // ---------------------------------------------------------------------------
 // Unit tests for the two pure extractors, over synthetic fixtures -- proves
 // each direction of drift is actually detected (not just that the real
-// 23-helper sweep below happens to pass today). Mirrors
+// 33-helper sweep below happens to pass today). Mirrors
 // tests/cli-entry-smoke.test.mts's synthetic-fixture-before-real-corpus
 // shape.
 // ---------------------------------------------------------------------------
@@ -306,11 +280,11 @@ test('a flag documented but not declared is detected as drift', () => {
 
 // ---------------------------------------------------------------------------
 // Meta-consistency guard: catches a covered/excluded list going stale (a
-// helper gaining or losing FLAG_SPEC/printHelp without this file being
-// updated), independent of the real per-helper sweep below.
+// helper gaining or losing FLAG_SPEC without this file being updated),
+// independent of the real per-helper sweep below.
 // ---------------------------------------------------------------------------
 
-test('COVERED_HELPERS and EXCLUDED_HELPERS exactly account for every FLAG_SPEC/printHelp-bearing helper', () => {
+test('COVERED_HELPERS and EXCLUDED_HELPERS stay consistent with live FLAG_SPEC presence', () => {
   const coveredSet = new Set<string>(COVERED_HELPERS);
   const excludedSet = new Set(EXCLUDED_HELPERS.map((entry) => entry.helper));
 
@@ -331,48 +305,37 @@ test('COVERED_HELPERS and EXCLUDED_HELPERS exactly account for every FLAG_SPEC/p
     );
   }
 
+  // Every FLAG_SPEC-bearing helper under src/scripts/ must be explicitly
+  // covered -- a new one appearing here without being added to
+  // COVERED_HELPERS (after being individually vetted per the header
+  // comment) would otherwise run with zero drift coverage, silently.
   const allHelperNames = readdirSync(srcScriptsDir)
     .filter((name) => name.endsWith('.mts'))
     .map((name) => name.slice(0, -'.mts'.length));
 
   for (const name of allHelperNames) {
-    const src = readSource(name);
-    const specPresent = hasFlagSpec(src);
-    const helpPresent = hasPrintHelp(src);
-    if (specPresent && helpPresent) {
+    if (hasFlagSpec(readSource(name))) {
       assert.ok(
         coveredSet.has(name),
-        `${name} declares both FLAG_SPEC and printHelp() but is missing from COVERED_HELPERS`,
-      );
-    } else if (specPresent || helpPresent) {
-      assert.ok(
-        excludedSet.has(name),
-        `${name} declares FLAG_SPEC or printHelp() (not both) but is missing from EXCLUDED_HELPERS`,
+        `${name} declares a FLAG_SPEC object but is missing from COVERED_HELPERS`,
       );
     }
   }
 
   for (const helper of COVERED_HELPERS) {
-    const src = readSource(helper);
     assert.ok(
-      hasFlagSpec(src) && hasPrintHelp(src),
-      `${helper} is listed as covered but no longer declares both FLAG_SPEC and printHelp()`,
+      hasFlagSpec(readSource(helper)),
+      `${helper} is listed as covered but no longer declares a FLAG_SPEC object`,
     );
   }
 
+  // An excluded entry's reason is "no FLAG_SPEC to compare" -- if the helper
+  // gained one, the reason no longer holds and it belongs in
+  // COVERED_HELPERS instead (after the same per-helper vetting).
   for (const { helper } of EXCLUDED_HELPERS) {
-    const src = readSource(helper);
-    const specPresent = hasFlagSpec(src);
-    const helpPresent = hasPrintHelp(src);
-    // Require exactly one signal (XOR), not merely "not both": a helper that
-    // has lost BOTH FLAG_SPEC and printHelp() no longer matches the reason
-    // recorded for it above (each reason names which one it still has) and
-    // its entry has gone stale, same as gaining both would be.
     assert.ok(
-      specPresent !== helpPresent,
-      specPresent && helpPresent
-        ? `${helper} is listed as excluded but now declares both FLAG_SPEC and printHelp() -- move it to COVERED_HELPERS`
-        : `${helper} is listed as excluded but now declares NEITHER FLAG_SPEC nor printHelp() -- its recorded reason no longer applies; remove or update this entry`,
+      !hasFlagSpec(readSource(helper)),
+      `${helper} is listed as excluded (no FLAG_SPEC) but now declares one -- move it to COVERED_HELPERS`,
     );
   }
 });
