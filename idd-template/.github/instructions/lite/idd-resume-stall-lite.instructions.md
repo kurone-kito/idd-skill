@@ -99,9 +99,8 @@ Any failure → STOP and restart. Do not post takeover on stale evidence.
    activation-nonce (`idd-claim-lite.instructions.md` step 5).
 2. Wait settle delay; re-parse; confirm claim and nonce winner are
    yours.
-3. If lost: STOP.
-4. If verified: return to `idd-resume-lite.instructions.md` Step 1,
-   then Step 2/3.
+3. Lost → STOP. Verified → record nonce; return to
+   `idd-resume-lite.instructions.md` Step 1, Step 2/3.
 
 ## Hold behavior
 
