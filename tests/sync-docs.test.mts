@@ -1,10 +1,13 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
+import { readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { test } from 'node:test';
+import { fileURLToPath } from 'node:url';
 
-import { makeScaffoldedSyncRepo } from './test-utils.mts';
+import { fixtureEnv, makeScaffoldedSyncRepo } from './test-utils.mts';
+
+const REPO_ROOT = fileURLToPath(new URL('../', import.meta.url));
 
 interface RunResult {
   status: number;
@@ -21,7 +24,39 @@ function run(dir: string, ...args: string[]): RunResult {
     const stdout = execFileSync(
       process.execPath,
       [join(dir, 'scripts', 'sync-docs.mjs'), ...args],
-      { cwd: dir, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] },
+      {
+        cwd: dir,
+        env: fixtureEnv(),
+        encoding: 'utf8',
+        stdio: ['ignore', 'pipe', 'pipe'],
+      },
+    );
+    return { status: 0, stdout, stderr: '' };
+  } catch (error) {
+    const e = error as { status?: unknown; stdout?: unknown; stderr?: unknown };
+    return {
+      status: typeof e.status === 'number' ? e.status : 1,
+      stdout: typeof e.stdout === 'string' ? e.stdout : '',
+      stderr: typeof e.stderr === 'string' ? e.stderr : '',
+    };
+  }
+}
+
+// Runs the REAL repo's built audit-docs.mjs (not copied into the fixture,
+// following audit-docs-file-sets.test.mts's pattern) against the fixture
+// dir as its cwd -- used to prove sync-docs and audit-docs agree on a
+// sourceGlobs-only block's resolved content (#1703 acceptance criterion 1).
+function runAuditDocs(dir: string): RunResult {
+  try {
+    const stdout = execFileSync(
+      process.execPath,
+      [join(REPO_ROOT, 'scripts', 'audit-docs.mjs'), '--check'],
+      {
+        cwd: dir,
+        env: fixtureEnv(),
+        encoding: 'utf8',
+        stdio: ['ignore', 'pipe', 'pipe'],
+      },
     );
     return { status: 0, stdout, stderr: '' };
   } catch (error) {
@@ -130,9 +165,50 @@ test('generatedBlock resolves explicit paths (prefix-stripped); absent paths ren
   // stripPrefix removed the leading "src/".
   assert.ok(!doc.includes('src/one.mts'), 'prefix should be stripped');
 
-  // resolveBlockFiles uses block.paths only; with no paths the list is empty.
+  // Neither paths nor sourceGlobs is set, so there's nothing to resolve.
   const doc2 = read(dir, 'doc2.md');
   assert.match(doc2, /```text\n\n```/);
+});
+
+test('generatedBlock falls back to sourceGlobs when paths is absent, agreeing with audit-docs.mjs (#1703)', (t) => {
+  const dir = makeScaffoldedSyncRepo(
+    (cleanup) => t.after(cleanup),
+    {
+      generatedBlocks: [
+        {
+          id: 'blk',
+          file: 'doc.md',
+          language: 'text',
+          sourceGlobs: ['content/*.md'],
+        },
+      ],
+    },
+    {
+      'doc.md': blockFixture('blk'),
+      'content/b.md': '# b\n',
+      'content/a.md': '# a\n',
+    },
+  );
+
+  const applied = run(dir, '--apply');
+  assert.equal(applied.status, 0, applied.stderr);
+
+  // Before #1703 this rendered an empty block; the sourceGlobs fallback
+  // now matches both untracked-but-not-ignored files, deduped and sorted.
+  const doc = read(dir, 'doc.md');
+  assert.match(doc, /```text\ncontent\/a\.md\ncontent\/b\.md\n```/);
+
+  // Direct cross-tool parity check: audit-docs.mjs independently resolves
+  // the same sourceGlobs-only block and must see the content sync-docs.mjs
+  // just wrote as already up to date, not stale. Drop the copied
+  // sync-docs.mjs dependency closure first -- those real, banner-carrying
+  // .mjs files trip audit-docs.mjs's unrelated generated-source-pairing
+  // check (their paired .mts sources don't exist in this minimal fixture),
+  // which has nothing to do with the generatedBlocks resolution this test
+  // is about.
+  rmSync(join(dir, 'scripts'), { recursive: true, force: true });
+  const audited = runAuditDocs(dir);
+  assert.equal(audited.status, 0, audited.stderr || audited.stdout);
 });
 
 test('shell-file-list rewrites the "for FILE in" block from its source generatedBlock', (t) => {

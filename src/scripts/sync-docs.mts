@@ -21,11 +21,14 @@
  *   contains   — only text-presence is checked; no source to copy
  */
 
+import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import {
+  globFiles,
   injectGeneratedFromBanner,
   isBannerScopedInstructionTarget,
+  resolveGeneratedBlockFiles,
 } from './consistency-helpers.mts';
 
 interface SyncPair {
@@ -42,6 +45,7 @@ interface GeneratedBlock {
   language?: string;
   stripPrefix?: string;
   paths?: string[];
+  sourceGlobs?: string[];
 }
 
 interface ShellFileList {
@@ -88,6 +92,23 @@ function resolveRepoRoot(fromDir: string): string {
 
 const root = resolveRepoRoot(import.meta.dirname);
 const manifestPath = 'audit/sync-manifest.json';
+
+let repoFilesCache: string[] | null = null;
+
+// Lazy: only shelled out to when a block actually falls back to
+// sourceGlobs (today's manifest sets `paths` on every entry), so a normal
+// run with no sourceGlobs-only blocks never pays for this git call.
+function getRepoFiles(): string[] {
+  if (!repoFilesCache) {
+    const output = execFileSync(
+      'git',
+      ['ls-files', '--cached', '--others', '--exclude-standard', '--full-name'],
+      { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] },
+    );
+    repoFilesCache = output.split(/\r?\n/).filter(Boolean).sort();
+  }
+  return repoFilesCache;
+}
 
 const args = process.argv.slice(2);
 const apply = args.includes('--apply');
@@ -431,8 +452,12 @@ function renderGeneratedBlock(block: GeneratedBlock): string {
 }
 
 function resolveBlockFiles(block: GeneratedBlock): string[] {
-  // Use the static paths list when present; this matches audit-docs.mjs behaviour.
-  return block.paths ? [...block.paths] : [];
+  // paths-first, sourceGlobs-fallback -- shared with audit-docs.mjs via
+  // consistency-helpers.mts's resolveGeneratedBlockFiles (#1703) so the two
+  // tools cannot drift on this resolution rule again.
+  return resolveGeneratedBlockFiles(block, (pattern) =>
+    globFiles(pattern, getRepoFiles()),
+  );
 }
 
 function applyReplacements(

@@ -19,11 +19,14 @@
  *   structure  — only heading structure is checked; no source to copy
  *   contains   — only text-presence is checked; no source to copy
  */
+import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import {
+  globFiles,
   injectGeneratedFromBanner,
   isBannerScopedInstructionTarget,
+  resolveGeneratedBlockFiles,
 } from './consistency-helpers.mjs';
 
 // Resolve the repository root by walking up to the nearest package.json,
@@ -47,6 +50,21 @@ function resolveRepoRoot(fromDir) {
 }
 const root = resolveRepoRoot(import.meta.dirname);
 const manifestPath = 'audit/sync-manifest.json';
+let repoFilesCache = null;
+// Lazy: only shelled out to when a block actually falls back to
+// sourceGlobs (today's manifest sets `paths` on every entry), so a normal
+// run with no sourceGlobs-only blocks never pays for this git call.
+function getRepoFiles() {
+  if (!repoFilesCache) {
+    const output = execFileSync(
+      'git',
+      ['ls-files', '--cached', '--others', '--exclude-standard', '--full-name'],
+      { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] },
+    );
+    repoFilesCache = output.split(/\r?\n/).filter(Boolean).sort();
+  }
+  return repoFilesCache;
+}
 const args = process.argv.slice(2);
 const apply = args.includes('--apply');
 const manifest = JSON.parse(readText(manifestPath));
@@ -342,8 +360,12 @@ function renderGeneratedBlock(block) {
   return `\n\n\`\`\`${block.language ?? 'text'}\n${renderedFiles.join('\n')}\n\`\`\`\n\n`;
 }
 function resolveBlockFiles(block) {
-  // Use the static paths list when present; this matches audit-docs.mjs behaviour.
-  return block.paths ? [...block.paths] : [];
+  // paths-first, sourceGlobs-fallback -- shared with audit-docs.mjs via
+  // consistency-helpers.mts's resolveGeneratedBlockFiles (#1703) so the two
+  // tools cannot drift on this resolution rule again.
+  return resolveGeneratedBlockFiles(block, (pattern) =>
+    globFiles(pattern, getRepoFiles()),
+  );
 }
 function applyReplacements(text, replacements) {
   let result = text;
