@@ -83,11 +83,13 @@ CI-polling shared helper file), never this one. Read
 - `failing`: at least one required check is non-passing — apply
   Interpretation below to it.
 - `no-required-checks`: a repository can legitimately have none while
-  still running normal CI — fall back to `checks[]` (every check
-  present, not just required ones): all `success` → proceed; any
-  `pending`/`unknown` → keep polling; any `failure`, or `checks[]`
-  itself empty → stop and ask. Never treat an empty required-check set
-  as a vacuous pass.
+  still running normal CI — fall back to `checks[]`'s own per-check
+  `status` (already bucketed by the helper as `success` / `pending` /
+  `failure` / `unknown`, distinct from step 2's raw-state normalization
+  below): every entry `success` → proceed; any `pending`/`unknown` →
+  keep polling (`unknown` isn't settled yet, so treat it like
+  `pending`); any `failure`, or `checks[]` itself empty → stop and ask.
+  Never treat an empty required-check set as a vacuous pass.
 - `source-pinned`: stop and ask (see Stop-and-ask conditions above).
 
 ## Polling algorithm
