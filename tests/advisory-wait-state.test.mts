@@ -2,6 +2,7 @@ import { strict as assert } from 'node:assert';
 import { test } from 'node:test';
 
 import {
+  advisoryMarkerComment,
   buildCopilotRecoverySummary,
   parseArgs,
 } from '../src/scripts/advisory-wait-state.mts';
@@ -753,4 +754,34 @@ test('a full CLI output shape (summary fields + copilotRecovery) validates clean
     copilotRecovery,
   };
   assert.deepEqual(validate(fullOutput, advisoryWaitStateSchema), []);
+});
+
+// --- #1742: collaborator-trust discovery must recognize advisory-reroll: ---
+//
+// resolveTrustedCollaboratorMarkerLogins() (not exported: it shells out to
+// `gh api .../collaborators/.../permission`, which none of this file's other
+// gh-backed helpers unit-test either) pre-filters candidate comments through
+// this exported predicate before checking collaborator permission. A
+// reroll-only-authored comment must pass the pre-filter -- otherwise its
+// author is never even considered as a collaborator-trust candidate,
+// regardless of their actual repository permission.
+
+test('advisoryMarkerComment: recognizes an advisory-reroll: marker as a candidate', () => {
+  assert.equal(
+    advisoryMarkerComment(
+      'advisory-reroll: agent-id abc123 2026-07-30T00:00:00Z',
+    ),
+    true,
+  );
+});
+
+test('advisoryMarkerComment: still recognizes advisory-wait: and advisory-wait-recovery:', () => {
+  assert.equal(advisoryMarkerComment('advisory-wait: agent-id'), true);
+  assert.equal(advisoryMarkerComment('advisory-wait-recovery: agent-id'), true);
+  assert.equal(advisoryMarkerComment('<!-- advisory-wait: agent-id -->'), true);
+});
+
+test('advisoryMarkerComment: rejects unrelated comment bodies', () => {
+  assert.equal(advisoryMarkerComment('just a regular comment'), false);
+  assert.equal(advisoryMarkerComment(''), false);
 });
