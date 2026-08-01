@@ -1074,9 +1074,10 @@ instruction files execute them.
 Issue authoring under the hold and IDD execution are separate
 decisions, but drafting and publishing are not: by default, the skill
 authors and publishes a `ready` issue set directly under the
-configured authoring label (`status:authoring`), gated only by the
-mechanical `audit-authored-issue` check and the critique pass — no
-prior user approval of the drafted body is required.
+configured authoring label (`issueAuthoring.authoringLabelName`,
+default `status:authoring`), gated only by the mechanical
+`audit-authored-issue` check and the critique pass — no prior user
+approval of the drafted body is required.
 
 The one exception: if the current request asks only for a preview
 (drafts to review before anything is created), the skill should honor
