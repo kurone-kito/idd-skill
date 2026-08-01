@@ -365,8 +365,8 @@ comments, and check:
 Any failure → claim contested → **STOP**, do not proceed. **Exception:
 only step 4 fails** (1-3 passed — the claim is genuinely yours) → post
 `unclaimed-by` for your own `{agent-id}`/`{claim-id}` first (safe: you
-provably hold it), **then STOP**. Step 5 failing instead → never
-release (a different session shares that exact pair) — STOP as usual.
+provably hold it), **then STOP**. Step 5 also failing (alone or with
+step 4) → never release (shares that exact pair) — STOP as usual.
 
 **Forced-handoff adopt-verbatim** only: skip steps 1-4 (no
 `claimed-by` was posted for this path); only step 5 applies — wait the

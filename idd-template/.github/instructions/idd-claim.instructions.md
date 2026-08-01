@@ -366,11 +366,15 @@ before returning to Discover. You provably hold the active claim, so
 releasing it is safe and restores the issue to unclaimed — without this
 release, the issue would stay locked against mechanical reclaim
 (including the 24 h stale-takeover) with no live owner, since the
-losing side of a different-second claim race never activates. Do
-**not** release when step 5 (activation-nonce) is the failing check
-instead: a nonce mismatch means a second, independent activation shares
-your exact `{agent-id}` / `{claim-id}` pair, and releasing it would
-also evict that other session's legitimate claim.
+losing side of a different-second claim race never activates. Verify
+step 5 independently before releasing — do not infer "step 4 only"
+merely from a helper's single `reason` field, since a combined
+`later-competing-claim-and-activation-nonce-mismatch` verdict means
+step 5 also failed. Do **not** release whenever step 5
+(activation-nonce) fails, alone or together with step 4: a nonce
+mismatch means a second, independent activation shares your exact
+`{agent-id}` / `{claim-id}` pair, and releasing it would also evict
+that other session's legitimate claim.
 
 Return to Discover using the same selection mode that produced this
 target and pick the next eligible issue (orphan-first: continue the
