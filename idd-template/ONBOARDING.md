@@ -1061,7 +1061,8 @@ After completing the steps above, confirm each item:
 - [ ] Among those entry files, the ones not opted out of agree on
       repository-specific engineering guidance — each carries it
       directly or points to the file that owns it; no newly created
-      file silently drops it.
+      file silently drops it. Manual check: `--verify` below does not
+      cover this item.
 - [ ] If `.github/copilot-instructions.md` existed before onboarding,
       it now includes the IDD workflow reference as well.
 - [ ] The `{{PROJECT_MARKER_PREFIX}}-roadmap-id` and

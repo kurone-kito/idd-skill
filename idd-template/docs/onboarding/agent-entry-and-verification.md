@@ -26,11 +26,15 @@ Keep these rules explicit:
   do not let the new stub drop it: add a short pointer in the new file
   to the single existing file that owns that guidance, instead of
   copying the prose into every stub — several copies trade the
-  asymmetry problem for a divergence problem the next edit will miss.
-  Apply this the same way for `CLAUDE.md`, `AGENTS.md`, and
-  `GEMINI.md`; no runtime is a special case, and
-  `.github/copilot-instructions.md` counts as a guidance source even
-  though it isn't itself one of the three stubbed files. Where no
+  asymmetry problem for a divergence problem the next edit will miss
+  (observed 2026-07-27, kurone-kito/idd-skill#1717). Apply this the
+  same way for `CLAUDE.md`, `AGENTS.md`, and `GEMINI.md`; no runtime is
+  a special case, and `.github/copilot-instructions.md` counts as a
+  guidance source even though it isn't itself one of the three stubbed
+  files. If guidance is already split across more than one existing
+  file with different content, point the new stub at every file that
+  owns part of it (or consolidate first) — a pointer to only one owner
+  would repeat the same drop this rule exists to prevent. Where no
   existing file carries repository-specific guidance, the plain stub
   below remains correct.
 - Only skip creating a missing root agent entry file when the operator
@@ -43,9 +47,9 @@ files that only an implementing agent needs. If the target
 repository's repository-specific engineering guidance instead lives in
 its own `.github/instructions/*.instructions.md` constraint file, do
 not cargo-cult that frontmatter onto it. `excludeAgent` belongs on IDD
-protocol files, not
-on constraint files — copying it onto a constraint file hides those
-rules from precisely the reviewer that most needs to see them.
+protocol files, not on constraint files — copying it onto a constraint
+file hides those rules from precisely the reviewer that most needs to
+see them (preventive; no observed incident yet).
 
 ### Shared IDD workflow stub
 
