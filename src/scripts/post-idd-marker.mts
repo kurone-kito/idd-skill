@@ -382,8 +382,7 @@ function postMarker(
   number: number,
   body: string,
 ): { id: number; html_url: string } {
-  const out = execFileSync(
-    'gh',
+  const out = ghText(
     [
       'api',
       '--method',
@@ -392,7 +391,7 @@ function postMarker(
       '--input',
       '-',
     ],
-    { input: JSON.stringify({ body }), encoding: 'utf8' },
+    { input: JSON.stringify({ body }) },
   );
   return JSON.parse(out) as { id: number; html_url: string };
 }

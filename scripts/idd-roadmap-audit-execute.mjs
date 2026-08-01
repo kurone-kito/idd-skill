@@ -16,7 +16,6 @@
 // with an open / unresolved / inaccessible / nested-roadmap descendant, a
 // closed child with an open linked PR, a traversal cycle, or no explicit child
 // work is NEVER closed.
-import { execFileSync } from 'node:child_process';
 import { parseCliArgs } from './cli-args.mjs';
 import {
   buildIssueLoader,
@@ -1131,8 +1130,7 @@ function parseConnectedPrEvents(nodes) {
  * body=`; the same path is reused for the evidence comment for consistency.
  */
 function postIssueComment(owner, repo, issueNumber, body) {
-  execFileSync(
-    'gh',
+  ghText(
     [
       'api',
       '--method',
@@ -1141,7 +1139,7 @@ function postIssueComment(owner, repo, issueNumber, body) {
       '--input',
       '-',
     ],
-    { input: JSON.stringify({ body }), encoding: 'utf8' },
+    { input: JSON.stringify({ body }) },
   );
 }
 // Read-and-parse failure semantics (explicit path throws; default path

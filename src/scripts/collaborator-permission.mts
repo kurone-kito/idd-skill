@@ -17,9 +17,9 @@
 // roadmap #745 / #748 / #754. Single source of truth so the next
 // behavioural change lands in one place rather than five.
 
-import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 
+import { ghText } from './gh-exec.mts';
 import { operationalMarkerPrefix } from './marker-helpers.mts';
 import { normalizePolicyConfig } from './policy-helpers.mts';
 
@@ -72,13 +72,12 @@ export function collaboratorPermission(
   let permission = '';
   let roleName = '';
   try {
-    const raw = execFileSync(
-      'gh',
+    const raw = ghText(
       [
         'api',
         `repos/${owner}/${repo}/collaborators/${encodeURIComponent(normalizedLogin)}/permission`,
       ],
-      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] },
+      { stdio: ['ignore', 'pipe', 'ignore'] },
     );
     const parsed = JSON.parse(raw) as {
       permission?: unknown;
