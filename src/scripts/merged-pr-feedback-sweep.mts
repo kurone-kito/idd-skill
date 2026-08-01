@@ -14,9 +14,8 @@
 //
 // This is the recurring counterpart of the one-time audit in #910 and the
 // chosen recovery path from #909 (advisory-wait stays Copilot-only).
-import { execFileSync } from 'node:child_process';
-
 import { parseCliArgs } from './cli-args.mts';
+import { ghText } from './gh-exec.mts';
 import { loadIddConfig } from './idd-config.mts';
 import {
   advisoryBotIdentityToken,
@@ -642,7 +641,7 @@ function resolveSinceDate(args: SweepArgs): string | null {
 }
 
 function runGh(args: string[]): string {
-  return execFileSync('gh', args, { encoding: 'utf8' });
+  return ghText(args);
 }
 
 function ghGraphql(

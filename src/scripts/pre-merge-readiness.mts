@@ -5,7 +5,6 @@
 // source named above by `pnpm run build`. Edit the .mts source, never the
 // generated .mjs. See docs/typescript-sources.md.
 
-import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 
 import {
@@ -1385,10 +1384,7 @@ export function resolveToleratedGhFailure(
 
 function runGh(args: string[], options: RunGhOptions = {}): string {
   try {
-    return execFileSync('gh', args, {
-      encoding: 'utf8',
-      stdio: ['ignore', 'pipe', 'pipe'],
-    });
+    return ghText(args, GH_TEXT_LOOP_OPTIONS);
   } catch (error) {
     const tolerated = resolveToleratedGhFailure(error, options);
     if (tolerated !== undefined) {

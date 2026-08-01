@@ -775,11 +775,7 @@ export function recoverJsonFromGhFailure(
 
 function runGh(args: string[]): string {
   try {
-    return execFileSync('gh', args, {
-      encoding: 'utf8',
-      timeout: 30_000,
-      stdio: ['ignore', 'pipe', 'pipe'],
-    });
+    return ghText(args, GH_TEXT_LOOP_TIMEOUT_OPTIONS);
   } catch (error) {
     const stderr = String(
       (error as { stderr?: unknown } | null)?.stderr ?? '',

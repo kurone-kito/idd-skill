@@ -13,7 +13,6 @@
 // file-contention companion to the #1008 `--with-claim-state` claim-eligibility
 // annotation. Evidence-only: it claims nothing and mutates no state.
 
-import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
@@ -864,11 +863,7 @@ export function ghJson(args: string[]): unknown[] {
 
 function runGh(args: string[]): string {
   try {
-    return execFileSync('gh', args, {
-      encoding: 'utf8',
-      timeout: 30_000,
-      stdio: ['ignore', 'pipe', 'pipe'],
-    });
+    return ghText(args, GH_TEXT_LOOP_TIMEOUT_OPTIONS);
   } catch (error) {
     const stderr = String(
       (error as { stderr?: unknown } | null)?.stderr ?? '',

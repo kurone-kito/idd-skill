@@ -5,7 +5,6 @@
 // source named above by `pnpm run build`. Edit the .mts source, never the
 // generated .mjs. See docs/typescript-sources.md.
 
-import { execFileSync } from 'node:child_process';
 import type { LabelEvent } from './authoring-label-guard.mts';
 import {
   buildAuthoringLabelWarning,
@@ -1064,10 +1063,7 @@ function resolveSuitabilityEnabled(config: unknown): boolean {
 
 function runGh(args: string[]): string {
   try {
-    return execFileSync('gh', args, {
-      encoding: 'utf8',
-      stdio: ['ignore', 'pipe', 'pipe'],
-    });
+    return ghText(args, GH_TEXT_LOOP_OPTIONS);
   } catch (error) {
     const rawStatus = (error as { status?: unknown } | null)?.status;
     const status = typeof rawStatus === 'number' ? rawStatus : null;

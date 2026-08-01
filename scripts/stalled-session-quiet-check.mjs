@@ -4,7 +4,6 @@
 // The scripts/stalled-session-quiet-check.mjs copy is generated from the
 // .mts source named above by `pnpm run build`. Edit the .mts source,
 // never the generated .mjs. See docs/typescript-sources.md.
-import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { parseCliArgs } from './cli-args.mjs';
@@ -363,11 +362,7 @@ function ghJson(args) {
 }
 function runGh(args) {
   try {
-    return execFileSync('gh', args, {
-      encoding: 'utf8',
-      timeout: 30_000,
-      stdio: ['ignore', 'pipe', 'pipe'],
-    });
+    return ghText(args, GH_TEXT_LOOP_TIMEOUT_OPTIONS);
   } catch (error) {
     const stderr = String(error?.stderr ?? '').trim();
     if (stderr) throw new Error(`gh command failed: ${stderr}`);

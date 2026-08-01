@@ -5,7 +5,6 @@
 // source named above by `pnpm run build`. Edit the .mts source, never
 // the generated .mjs. See docs/typescript-sources.md.
 
-import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
@@ -1634,11 +1633,7 @@ function ghJson(args: string[]): unknown {
 
 function runGh(args: string[]): string {
   try {
-    return execFileSync('gh', args, {
-      encoding: 'utf8',
-      timeout: 30_000,
-      stdio: ['ignore', 'pipe', 'pipe'],
-    });
+    return ghText(args, GH_TEXT_LOOP_TIMEOUT_OPTIONS);
   } catch (error) {
     const stderr = String((error as { stderr?: unknown })?.stderr ?? '').trim();
     if (stderr) {

@@ -22,8 +22,6 @@
 //   read time, so a caller polling in a loop can detect the branch moving
 //   out from under an in-flight wait.
 
-import { execFileSync } from 'node:child_process';
-
 import { parseCliArgs } from './cli-args.mts';
 import { ghText } from './gh-exec.mts';
 import { deriveGhHttpStatus } from './gh-http-status.mts';
@@ -705,7 +703,7 @@ function ghApiJsonOr404Empty(path: string, paginate: boolean): unknown {
     ? ['api', path, '--paginate', '--jq', '.[]']
     : ['api', path];
   try {
-    const raw = execFileSync('gh', args, { encoding: 'utf8' });
+    const raw = ghText(args);
     if (!paginate) {
       const trimmed = raw.trim();
       return trimmed ? JSON.parse(trimmed) : {};

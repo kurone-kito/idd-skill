@@ -4,7 +4,6 @@
 // The scripts/discover-readiness-check.mjs copy is generated from the .mts
 // source named above by `pnpm run build`. Edit the .mts source, never the
 // generated .mjs. See docs/typescript-sources.md.
-import { execFileSync } from 'node:child_process';
 import {
   buildAuthoringLabelWarning,
   resolveAuthoringGuardPolicy,
@@ -858,10 +857,7 @@ function resolveSuitabilityEnabled(config) {
 }
 function runGh(args) {
   try {
-    return execFileSync('gh', args, {
-      encoding: 'utf8',
-      stdio: ['ignore', 'pipe', 'pipe'],
-    });
+    return ghText(args, GH_TEXT_LOOP_OPTIONS);
   } catch (error) {
     const rawStatus = error?.status;
     const status = typeof rawStatus === 'number' ? rawStatus : null;
