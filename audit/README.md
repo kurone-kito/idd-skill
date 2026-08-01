@@ -73,11 +73,15 @@ Step 3 is required for the audit check to pass — it compares `paths`
 against the files each block's `sourceGlobs` actually match, and fails
 by naming the block and the glob-matched file missing from `paths` (the
 error has the form `<block-id>: manifest paths omit <path>`, where
-`<block-id>` and `<path>` stand for the actual block id and file path)
-— even though `paths` plays no role in `sync-docs.mjs`'s own
-mirror-generation logic. Adding only the `syncPairs` and
-`bundleBudgets` entries above is not enough; skipping the
-`generatedBlocks[].paths` edit still fails the audit.
+`<block-id>` and `<path>` stand for the actual block id and file path).
+`sync-docs.mjs` shares this exact `paths`-first, `sourceGlobs`-fallback
+resolution rule with `audit-docs.mjs` (one function, imported by both):
+`paths` is the only input it consults when present, and `sourceGlobs` is
+used only as a fallback when `paths` is absent — so skipping the
+`generatedBlocks[].paths` edit does not regenerate an empty block, but
+it still fails this `paths`/`sourceGlobs` consistency check. Adding only
+the `syncPairs` and `bundleBudgets` entries above is not enough;
+skipping the `generatedBlocks[].paths` edit still fails the audit.
 
 ## Instruction Size Budgets
 
