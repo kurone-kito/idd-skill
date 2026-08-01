@@ -49,8 +49,9 @@ The authoritative generated lists are configured in
   — `scripts/minimize-superseded-markers.mjs` (see the
   profile-conditional section below), `.github/workflows/*.yml`, and
   `.claude/settings.json`. Because it has no `paths` list, adding a new
-  `idd-template/` file never requires a manual edit here; `sync-docs.mjs
-  --apply` picks it up automatically. Keep the issue-authoring companion
+  `idd-template/` file never requires a manual edit here — running
+  `node scripts/sync-docs.mjs --apply` picks it up automatically. Keep
+  the issue-authoring companion
   half's `paths` in sync with `issue-authoring-companion-files`'s own
   list by hand (both are short, curated, and rarely change) — the
   audit's `paths`/`sourceGlobs` cross-check still catches drift on that
@@ -183,8 +184,9 @@ Before merging a distribution-surface change, verify:
 - optional issue-authoring files remain in the optional companion list.
 - a new issue-authoring companion file is also added to the
   `idd-template-readme-issue-authoring-files` `paths` list (its
-  `sourceGlobs` cross-check catches an omission, but only after
-  `sync-docs.mjs --apply` regenerates `idd-template/README.md`).
+  `sourceGlobs` cross-check catches an omission, but only after running
+  `node scripts/sync-docs.mjs --apply` to regenerate
+  `idd-template/README.md`).
 - `node scripts/sync-docs.mjs --apply` has run so `idd-template/README.md`'s
   generated file inventory reflects any new/removed/moved
   `idd-template/` path (its core half needs no manifest edit — a new
