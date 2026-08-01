@@ -28,7 +28,8 @@ test('IDD file map keeps canonical phase-ID anchors', () => {
       '## IDD file map',
     );
     for (const anchor of [
-      'A0-T–A4.5',
+      'A0-T–A4',
+      'A4.5',
       'B1-B3 + C1-C6',
       'F2.5',
       'Resume Step 0-3',
