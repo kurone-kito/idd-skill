@@ -255,6 +255,7 @@ export const advisoryConvergenceKeys = [
   'pending',
   'deadline',
   'waiver',
+  'dispositionEvidence',
   'sameHeadReroll',
   'terminal',
   'converged',
@@ -581,8 +582,13 @@ const advisoryConvergenceFixture = {
     activeClaimId: '',
     validCount: 0,
   },
+  dispositionEvidence: {
+    missingRegularCommentCount: 0,
+    missingThreadCount: 0,
+  },
   sameHeadReroll: {
     eligible: false,
+    ineligibleReasons: ['review-item-count-not-positive'],
     count: 0,
     cap: 2,
     exhausted: false,
