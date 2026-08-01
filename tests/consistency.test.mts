@@ -1484,8 +1484,10 @@ test('renderOkfIndexMarkdownTable links relative to linkBase', () => {
     ],
     'docs',
   );
+  assert.match(table, /dprint-ignore-start/);
   assert.match(table, /\| Type \| Page \| Description \|/);
   assert.match(table, /\| guide \| \[Foo\]\(foo\.md\) \| Foo page\. \|/);
+  assert.match(table, /dprint-ignore-end/);
 });
 
 test('resolveGeneratedBlockFiles: paths present takes precedence, globFilesFn is never called', () => {
