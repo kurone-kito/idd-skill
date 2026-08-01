@@ -77,10 +77,11 @@ needs-decision, blocked-by-human, and out-of-scope.
    `instructions-only` installs with no helper runtime. Resolve every
    reported failure before treating the issue as ready.
 7. Publish each `ready` drafted body directly under the authoring hold
-   once it passes the mechanical gate (step 6) and the critique pass —
-   no separate publish approval is needed. Only skip publishing when
-   the current request explicitly asked for a preview instead. Manage
-   the authoring label for each created or updated issue:
+   once it passes the mechanical gate (step 6) and the critique pass
+   (the Intake and Clarification phase above) — no separate publish
+   approval is needed. Only skip publishing when the current request
+   explicitly asked for a preview instead. Manage the authoring label
+   for each created or updated issue:
    - resolve `issueAuthoring.authoringLabelName`, defaulting to
      `status:authoring`
    - create the label with `gh label create` before first use when the

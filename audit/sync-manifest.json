@@ -689,6 +689,7 @@
       "target": "skills/issue-authoring/references/workflow-boundary.md",
       "mode": "contains",
       "requiredText": [
+        "Stage 1: Author-and-publish (under the hold)",
         "Stage 2: Release (the single approval boundary)",
         "start the Discover -> Claim -> Work loop implicitly"
       ]
