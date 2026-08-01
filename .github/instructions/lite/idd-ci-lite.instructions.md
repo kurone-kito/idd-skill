@@ -75,8 +75,9 @@ hand:
 Never derive this by hand — the Helper-first canonical path's
 `ci-wait-state` call already resolves the required-check set as
 `requiredChecks`; manual `gh api .../rulesets` / `.../protection`
-derivation belongs only to the full-size CI-polling shared helper file,
-never this one. Read `requiredChecks.status`:
+derivation belongs only to `idd-ci.instructions.md` (the full-size
+CI-polling shared helper file), never this one. Read
+`requiredChecks.status`:
 
 - `success`: every required check passed — proceed per Interpretation
   below.
@@ -102,7 +103,9 @@ never this one. Read `requiredChecks.status`:
    Commit-Status `expected` → running; `failure` / `cancelled` /
    `timed_out` / `action_required` / `startup_failure` / `stale` →
    non-pass.
-3. Evaluate only checks in the required-check set.
+3. Evaluate only checks in the required-check set — except the
+   `no-required-checks` fallback above, which evaluates every present
+   check instead.
 4. Repeat at a reasonable interval until a terminal outcome below is
    reached. Anchor every timeout to the check's own server `startedAt`,
    never a client clock.
