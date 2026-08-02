@@ -693,7 +693,7 @@ function findToolchainResidueToken(value) {
 function escapeRegex(value) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
-function checkPolicySignals(root, report) {
+export function checkPolicySignals(root, report) {
   const files = [
     'README.md',
     'README.ja.md',
@@ -720,6 +720,7 @@ function checkPolicySignals(root, report) {
     report.passes.push('merge policy signal found');
   }
   const reviewPolicySignals = [
+    'copilot-advisory',
     'copilot advisory',
     'no-advisory',
     'human-required',

@@ -837,7 +837,7 @@ function escapeRegex(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
-function checkPolicySignals(root: string, report: DoctorReport) {
+export function checkPolicySignals(root: string, report: DoctorReport) {
   const files = [
     'README.md',
     'README.ja.md',
@@ -866,6 +866,7 @@ function checkPolicySignals(root: string, report: DoctorReport) {
   }
 
   const reviewPolicySignals = [
+    'copilot-advisory',
     'copilot advisory',
     'no-advisory',
     'human-required',
