@@ -56,8 +56,9 @@ advisory-convergence hardening release.
 - An OKF (Open Knowledge Format) frontmatter profile for docs pages
   with an audit guard, plus a generated docs-index table built from
   that frontmatter.
-- Onboarding wave 2: manifest-driven fetch/copy of distributed files
-  and a `--verify` post-import check mode for the `idd-onboard` CLI.
+- Onboarding automation waves 2-3: manifest-driven fetch/copy of
+  distributed files, and a `--verify` post-import check mode for the
+  `idd-onboard` CLI.
 - `labels.*` adopter configurability completed with a migration
   guide.
 - opencode and Antigravity CLI recognized as shared `agents.md`
@@ -65,6 +66,13 @@ advisory-convergence hardening release.
 - A shared `node:util` `parseArgs` wrapper adopted across the helper
   CLI bundle, and a curated Claude Code permission allow/deny
   baseline shipped for adopters.
+- New repository guards: an `audit-docs` check that resolves every
+  relative markdown link (and `#fragment`, against GitHub's own
+  heading-slug algorithm) under the docs and instruction corpus, and
+  a workflow-hardening pass across `.github/workflows/` (Node-floor
+  guard parity, a forkable-PR label-strip trigger fix, and quoted
+  `env:` routing for numeric `workflow_dispatch` inputs) with its
+  `idd-template/` mirrors kept in sync.
 
 ### Changed
 
@@ -115,8 +123,14 @@ advisory-convergence hardening release.
   in three helpers, and applies a shared subprocess timeout to every
   `gh` call.
 - Review-triage fixes: loosened and shape-gated the Codex
-  usage-limit/notice detector, and added a resolved-thread duplicate
-  pre-check.
+  usage-limit/notice detector, added a resolved-thread duplicate
+  pre-check, and gated PATH A bot-finding acceptance on evidence and
+  commenter permission.
+- The F4 cleanup-evidence marker was forgeable (any commenter could
+  pre-post one to suppress the genuine evidence and plant forged
+  counts); `idd-doctor` and `idd-merge.instructions.md` now scope
+  marker consumption to trusted authors, matching every other IDD
+  operational marker.
 - Lite-profile fixes from post-merge review triage: activation-nonce
   recheck restored in work/review-fix lite files, E3-empty routing
   corrected, and fail-closed recovery bounds and A5 pre-checks
