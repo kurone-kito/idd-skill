@@ -406,7 +406,7 @@ export interface AdvisoryConvergenceInputs {
    * `indeterminate`). Defaults to `false` when omitted, preserving prior
    * `not_applicable` behavior for every fixture/caller that predates this
    * field. */
-  claimMarkerHistoryPresent?: boolean;
+  claimMarkerHistoryPresent: boolean;
   /** #1686: true when two or more of the PR's candidate claim issues each
    * independently resolve an ACTIVE trusted claim -- the disambiguation
    * failure `pickResolvingClaimEvents` already fails closed to `[]` for
@@ -419,7 +419,7 @@ export interface AdvisoryConvergenceInputs {
    * history (an active claim cannot exist without a valid marker), so the
    * two fields are not mutually exclusive; the check order is what makes
    * the reported `reason` precise. */
-  claimCandidateAmbiguous?: boolean;
+  claimCandidateAmbiguous: boolean;
 }
 
 /** Pure options accepted by {@link computeAdvisoryConvergenceVerdict}. */

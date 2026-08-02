@@ -55,6 +55,8 @@ function baseInputs(
     threads: [],
     comments: [],
     claimEvents: [],
+    claimMarkerHistoryPresent: false,
+    claimCandidateAmbiguous: false,
     ...overrides,
   };
 }
