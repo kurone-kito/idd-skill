@@ -702,6 +702,53 @@ test('buildPreMergeReadinessSummary: the bare "copilot" default identity is excl
   assert.equal(reviewerStates.codeownerApprovalSatisfied, false);
 });
 
+// #1818 (Copilot review follow-up, PR #1826): unlike `buildAdvisoryWaitSummary`
+// a few lines below in the same function (which normalizes and defaults
+// `primaryBotLogin` to `DEFAULT_ADVISORY_PRIMARY_BOT_LOGIN` when the option is
+// omitted/blank), the initial `reviewerStateAdvisoryBotLogins` fix unioned
+// `options.primaryBotLogin` directly -- an omitted option dropped out of the
+// union entirely (`normalizeTrustedMarkerLogins` filters empty strings), so a
+// caller that OMITS `primaryBotLogin` (relying on defaulting, unlike this
+// file's own `collectPreMergeReadiness`, which always resolves a non-empty
+// value) still would not classify a bare `'copilot'` review as advisory here.
+// This test omits `primaryBotLogin` entirely (the previous test above passes
+// it explicitly), proving the default-resolution path itself, not just the
+// explicit-value path.
+test('buildPreMergeReadinessSummary: bare "copilot" is excluded even when primaryBotLogin is omitted entirely (relies on default resolution)', () => {
+  const prHeadSha = '8888888888888888888888888888888888888888';
+  const summary = buildPreMergeReadinessSummary(
+    {
+      prHeadSha,
+      reviews: [
+        {
+          author: { login: 'copilot' },
+          state: 'APPROVED',
+          commitId: prHeadSha,
+          submittedAt: '2026-08-02T00:00:00Z',
+        },
+      ],
+      changedFiles: ['README.md'],
+      codeownersText: '* @copilot\n',
+      branchRules: [
+        {
+          type: 'pull_request',
+          parameters: { require_code_owner_review: true },
+        },
+      ],
+      reviewDecision: 'REVIEW_REQUIRED',
+    },
+    {
+      now: '2026-08-02T00:05:00Z',
+      advisoryBotLogins: [],
+      // primaryBotLogin intentionally omitted -- must still default.
+    },
+  );
+
+  const reviewerStates = summary.reviewerStates as Record<string, unknown>;
+  assert.equal(reviewerStates.humanApprovedCount, 0);
+  assert.equal(reviewerStates.codeownerApprovalSatisfied, false);
+});
+
 // #1818 (C1 critique round 2 follow-up): the `codeownerApproved` narrowing
 // (adding `review.isHuman` to its filter, see the change above) is a
 // behavior change for EVERY advisory bot recognized as an "advisory bot"

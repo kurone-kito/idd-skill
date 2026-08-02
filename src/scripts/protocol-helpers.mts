@@ -5796,9 +5796,23 @@ export function buildPreMergeReadinessSummary(
   // widening the shared `advisoryBotLogins` above, which also feeds
   // `buildActivitySnapshotSummary` and `summarizeRegularCommentsForGate`
   // (unrelated classification needs that must not change as a side effect).
+  //
+  // Normalize + default `options.primaryBotLogin` the same way
+  // `buildAdvisoryWaitSummary` does a few lines below (`primaryBotLogin`
+  // local const there) -- an omitted/blank option must still resolve to the
+  // Copilot default, not silently drop out of the union. Without this, a
+  // caller that relies on defaulting (any caller other than this file's own
+  // `collectPreMergeReadiness`, which always resolves a non-empty value)
+  // would leave the bare `copilot` login unclassified here even though
+  // `isCopilotReviewerLogin` elsewhere already treats it as a genuine
+  // Copilot form (Copilot review, PR #1826).
+  const resolvedPrimaryBotLogin =
+    String(options.primaryBotLogin ?? '')
+      .trim()
+      .toLowerCase() || DEFAULT_ADVISORY_PRIMARY_BOT_LOGIN;
   const reviewerStateAdvisoryBotLogins = normalizeTrustedMarkerLogins([
     ...advisoryBotLogins,
-    options.primaryBotLogin ?? '',
+    resolvedPrimaryBotLogin,
   ]);
   const reviewerStates = summarizeReviewerStates(reviews, {
     reviewDecision,
