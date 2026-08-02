@@ -3458,6 +3458,7 @@ export function summarizeReviewerStates(
     changedFiles = [],
     eligibleCodeownerUserLogins = null,
     eligibleCodeownerUserLoginsUnreadable = false,
+    reviewsUnreadable = false,
     advisoryBotLogins = [],
     prAuthorLogin = '',
     viewerLogin = '',
@@ -3552,6 +3553,16 @@ export function summarizeReviewerStates(
         if ((requirement.minimumApprovals ?? 0) <= 0) {
           return true;
         }
+        // #1837: deliberately NOT gated by `reviewsUnreadable` (unlike the
+        // `codeownerApprovalSatisfied`/`requiredApprovalsSatisfied` bypasses
+        // fixed below). A team-identity requirement (`requirement.identity`
+        // contains `/`, checked immediately below) can never be resolved to
+        // a reviewing login from `reviews` data -- this code has no team
+        // membership lookup at all -- so GitHub's own aggregate decision is
+        // the only signal available for it regardless of whether the caller
+        // fetched full review data. See "required reviewer rule objects
+        // stay blocking until GitHub marks approval satisfied" in
+        // tests/pre-merge-readiness.test.mts, which locks this in.
         if (normalizedReviewDecision === 'APPROVED') {
           return true;
         }
@@ -3561,13 +3572,26 @@ export function summarizeReviewerStates(
         return latestByLogin.get(requirement.identity)?.state === 'APPROVED';
       },
     );
+  // #1837: `normalizedReviewDecision === 'APPROVED'` alone used to be an
+  // unconditional bypass here, letting GitHub's own aggregate `reviewDecision`
+  // (which can resolve APPROVED from a bot-only review -- GitHub shipped
+  // bot-review-state support 2026-08-01, see #1818's background) satisfy this
+  // gate even when the classified data this function already computed
+  // (`codeownerApproved`) shows the approval came only from a bot. When the
+  // caller genuinely could not fetch/classify individual reviews
+  // (`reviewsUnreadable`), GitHub's aggregate is still the only available
+  // signal and stays a bypass. When review data IS available (the normal
+  // `collectPreMergeReadiness` path, which fails closed by throwing rather
+  // than ever reaching this function with partial data), the classified
+  // `codeownerApproved` check must also agree -- GitHub's `APPROVED` decision
+  // no longer overrides it on its own.
   const codeownerSelfApproval = summarizeCodeownerSelfApproval({
     requireCodeOwnerReview: branchReviewRequirements.requireCodeOwnerReview,
     codeownerApprovalSatisfied:
       !branchReviewRequirements.requireCodeOwnerReview ||
       !hasExplicitCodeownerMatches ||
       codeownerApproved ||
-      normalizedReviewDecision === 'APPROVED',
+      (reviewsUnreadable && normalizedReviewDecision === 'APPROVED'),
     hasExplicitCodeownerMatches,
     codeownerUserLogins: codeowners.codeownerUserLogins,
     eligibleCodeownerUserLogins:
@@ -3607,10 +3631,21 @@ export function summarizeReviewerStates(
     unmatchedCodeownerFiles: codeowners.unmatchedFiles,
     latestByAuthor,
     humanApprovedCount,
+    // #1837: see the comment above `codeownerSelfApproval` for the shared
+    // rationale. `reviewsUnreadable` keeps the pre-fix blanket-trust bypass
+    // (first disjunct) only when review data genuinely could not be
+    // classified. Otherwise (the normal, classifiable path -- the second
+    // disjunct), an `APPROVED` aggregate is treated the same as an empty
+    // one: it still must be corroborated by the classified
+    // `humanApprovedCount` reaching the required threshold (or the
+    // threshold being `0`, i.e. no approvals required at all -- nothing is
+    // missing, so this stays a pass by design, not a gap).
     requiredApprovalsSatisfied:
       requiredReviewerApprovalsSatisfied &&
-      (normalizedReviewDecision === 'APPROVED' ||
-        (!normalizedReviewDecision &&
+      ((reviewsUnreadable && normalizedReviewDecision === 'APPROVED') ||
+        (!reviewsUnreadable &&
+          (normalizedReviewDecision === 'APPROVED' ||
+            !normalizedReviewDecision) &&
           (branchReviewRequirements.requiredApprovingReviewCount === 0 ||
             humanApprovedCount >=
               branchReviewRequirements.requiredApprovingReviewCount))),
@@ -3618,7 +3653,7 @@ export function summarizeReviewerStates(
       !branchReviewRequirements.requireCodeOwnerReview ||
       !hasExplicitCodeownerMatches ||
       codeownerApproved ||
-      normalizedReviewDecision === 'APPROVED',
+      (reviewsUnreadable && normalizedReviewDecision === 'APPROVED'),
     codeownerSelfApproval,
     humanChangesRequestedCount: blockingChangesRequestedLogins.length,
     blockingChangesRequestedLogins,
@@ -4421,6 +4456,7 @@ export function buildPreMergeReadinessSummary(
     codeownersText = '',
     eligibleCodeownerUserLogins = null,
     eligibleCodeownerUserLoginsUnreadable = false,
+    reviewsUnreadable = false,
     reviewDecision = '',
     mergeStateStatus = '',
     mergeable = '',
@@ -4547,6 +4583,7 @@ export function buildPreMergeReadinessSummary(
     changedFiles,
     eligibleCodeownerUserLogins,
     eligibleCodeownerUserLoginsUnreadable,
+    reviewsUnreadable,
     advisoryBotLogins: reviewerStateAdvisoryBotLogins,
     prAuthorLogin,
     viewerLogin: options.viewerLogin,

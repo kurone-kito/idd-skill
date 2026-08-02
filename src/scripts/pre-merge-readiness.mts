@@ -646,6 +646,15 @@ export function collectPreMergeReadiness(
       codeownersText,
       eligibleCodeownerUserLogins,
       eligibleCodeownerUserLoginsUnreadable,
+      // #1837: `reviews` above is fetched by the uncaught `ghApiJson` call
+      // a few lines up (no `fetchGovernanceJson`-style tolerance) -- a
+      // fetch failure throws and crashes this whole CLI invocation rather
+      // than reaching `buildPreMergeReadinessSummary` with partial data.
+      // This caller therefore never has genuinely-unclassifiable review
+      // data; pass `false` explicitly (rather than relying on the default)
+      // so the reason is documented at the one real call site instead of
+      // only in protocol-helpers.mts's option comment.
+      reviewsUnreadable: false,
       reviewDecision,
       mergeStateStatus,
       mergeable,
