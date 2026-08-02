@@ -50,11 +50,20 @@ function buildCleanupBacklogStubGh(config: {
   mergedPrNumbers: number[];
   evidenceByPr: Map<number, string>;
   failEvidenceFor?: Set<number>;
+  // idd-skill#1829: per-PR head ref, defaulting to an `issue/*`-shaped
+  // branch so the pre-existing tests below (authored before the
+  // `headRefName` scoping fix) keep exercising an IDD-branch PR without
+  // being rewritten.
+  headRefNameByPr?: Map<number, string>;
 }): string {
   const owner = JSON.stringify(config.owner);
   const repo = JSON.stringify(config.repo);
+  const headRefNameByPr = config.headRefNameByPr ?? new Map();
   const prListJson = JSON.stringify(
-    config.mergedPrNumbers.map((number) => ({ number })),
+    config.mergedPrNumbers.map((number) => ({
+      number,
+      headRefName: headRefNameByPr.get(number) ?? `issue/${number}-fixture`,
+    })),
   );
   const evidenceTable = JSON.stringify([...config.evidenceByPr.entries()]);
   const failingNumbers = JSON.stringify([...(config.failEvidenceFor ?? [])]);
@@ -219,5 +228,42 @@ test('checkPostMergeCleanupBacklog CLI: a per-PR evidence-fetch failure is repor
       !report.warnings.some((w) => w.includes(BACKLOG_WARNING_SUBSTRING)),
       `evidence-fetch failures must not be folded into the missing-evidence backlog warning, got: ${JSON.stringify(report.warnings)}`,
     );
+  });
+});
+
+// idd-skill#1829: a Dependabot-style (or any other non-IDD) branch must
+// never count toward the backlog total or the `Examples: ...` list -- only
+// `checkPostMergeCleanupBacklog`'s IDD-branch-naming scoping fix
+// distinguishes the two; the pre-fix code counted both merged PRs
+// regardless of head ref, which this test would fail against (count 2,
+// #802 present).
+test('checkPostMergeCleanupBacklog CLI: excludes a merged PR whose head ref is not an IDD branch (idd-skill#1829)', () => {
+  withTempCwd((cwd) => {
+    const report = runIddDoctorReport(
+      cwd,
+      buildCleanupBacklogStubGh({
+        owner: 'o',
+        repo: 'r',
+        mergedPrNumbers: [801, 802],
+        evidenceByPr: new Map(),
+        headRefNameByPr: new Map([
+          [801, 'issue/801-fix-foo'],
+          [802, 'dependabot/npm_and_yarn/lodash-4.17.21'],
+        ]),
+      }),
+    );
+    const backlogWarning = report.warnings.find((w) =>
+      w.includes(BACKLOG_WARNING_SUBSTRING),
+    );
+    assert.ok(
+      backlogWarning,
+      `expected a cleanup-backlog warning, got: ${JSON.stringify(report.warnings)}`,
+    );
+    assert.match(
+      backlogWarning ?? '',
+      /^post-merge cleanup backlog: 1 merged PRs/,
+    );
+    assert.match(backlogWarning ?? '', /#801/);
+    assert.doesNotMatch(backlogWarning ?? '', /#802/);
   });
 });
