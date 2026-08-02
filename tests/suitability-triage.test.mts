@@ -1,10 +1,12 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 
 import {
-  buildClosedByMergedPrArgs,
-  buildMergedPrListArgs,
-  buildPrFilesArgs,
+  DEFAULT_BUNDLE_IDS,
+  DEFAULT_MANIFEST_PATH,
+} from '../src/scripts/discover-shared-file-overlap.mts';
+import {
   checkActionability,
   checkAutonomy,
   checkCoherence,
@@ -12,8 +14,8 @@ import {
   checkRepositoryFit,
   checkTrustSafety,
   checkVerifiability,
-  evaluateHighConfidenceDuplicate,
   evaluateSuitability,
+  loadHighContentionFiles,
   parseArgs,
 } from '../src/scripts/suitability-triage.mts';
 
@@ -71,6 +73,28 @@ test('parseArgs: rejects an unknown flag', () => {
 test('parseArgs: --help is recognized without requiring --issue', () => {
   const args = parseArgs(['--help']);
   assert.equal(args.help, true);
+});
+
+// --- #1499: --manifest / --bundles override surface -------------------------
+
+test('parseArgs: --manifest defaults to the shared DEFAULT_MANIFEST_PATH', () => {
+  const args = parseArgs([]);
+  assert.equal(args.manifest, DEFAULT_MANIFEST_PATH);
+});
+
+test('parseArgs: --manifest accepts an explicit override', () => {
+  const args = parseArgs(['--manifest', 'custom/manifest.json']);
+  assert.equal(args.manifest, 'custom/manifest.json');
+});
+
+test('parseArgs: --bundles is absent by default (null, not DEFAULT_BUNDLE_IDS)', () => {
+  const args = parseArgs([]);
+  assert.equal(args.bundles, null);
+});
+
+test('parseArgs: --bundles is comma-split and trimmed, mirroring discover-shared-file-overlap.mjs', () => {
+  const args = parseArgs(['--bundles', ' bundle-a, bundle-b ,,bundle-c']);
+  assert.deepEqual(args.bundles, ['bundle-a', 'bundle-b', 'bundle-c']);
 });
 
 // The check helpers only read the context fields each test supplies, so
@@ -622,138 +646,6 @@ test('duplicate check detects a URL-form duplicate declaration', () => {
   assert.equal(result.pass, false);
 });
 
-// --- #1484: high-confidence Check 4 tier ------------------------------------
-
-test('evaluateHighConfidenceDuplicate: undefined input is absent, not a hit', () => {
-  assert.equal(evaluateHighConfidenceDuplicate(undefined), null);
-});
-
-test('evaluateHighConfidenceDuplicate: empty arrays fall through (fail-safe)', () => {
-  const result = evaluateHighConfidenceDuplicate({
-    closedByMergedPrNumbers: [],
-    candidateFiles: [],
-    highContentionFiles: [],
-    mergedPrs: [],
-  });
-  assert.equal(result, null);
-});
-
-test('evaluateHighConfidenceDuplicate: malformed (non-array) fields never crash and never hit', () => {
-  const result = evaluateHighConfidenceDuplicate({
-    closedByMergedPrNumbers: 'not-an-array',
-    candidateFiles: null,
-    highContentionFiles: undefined,
-    mergedPrs: 42,
-  } as unknown as Context['highConfidenceDuplicate']);
-  assert.equal(result, null);
-});
-
-test('evaluateHighConfidenceDuplicate: closing-PR-reference hit cites the PR number', () => {
-  const result = evaluateHighConfidenceDuplicate({
-    closedByMergedPrNumbers: [123],
-    candidateFiles: [],
-    highContentionFiles: [],
-    mergedPrs: [],
-  });
-  assert.equal(result?.pass, false);
-  assert.match(result?.evidence ?? '', /#123/);
-  assert.match(result?.evidence ?? '', /closedByPullRequestsReferences/);
-});
-
-test('evaluateHighConfidenceDuplicate: same-candidate-files hit cites the PR number and file', () => {
-  const result = evaluateHighConfidenceDuplicate({
-    closedByMergedPrNumbers: [],
-    candidateFiles: ['scripts/foo.mjs'],
-    highContentionFiles: [],
-    mergedPrs: [
-      {
-        number: 456,
-        mergedAt: '2026-07-10T00:00:00Z',
-        files: ['scripts/foo.mjs', 'docs/unrelated.md'],
-      },
-    ],
-  });
-  assert.equal(result?.pass, false);
-  assert.match(result?.evidence ?? '', /#456/);
-  assert.match(result?.evidence ?? '', /scripts\/foo\.mjs/);
-  assert.doesNotMatch(result?.evidence ?? '', /unrelated\.md/);
-});
-
-test('evaluateHighConfidenceDuplicate: reuses normalizeContentionPath so mirrored instruction paths still match', () => {
-  // Same basename cited two different ways: the issue's own '## Candidate
-  // files' style (idd-template source path) vs. the merged PR's actual
-  // changed-file path (generated mirror). Proves real reuse of
-  // discover-shared-file-overlap's normalization, not a re-implementation
-  // that only matches identical strings.
-  const result = evaluateHighConfidenceDuplicate({
-    closedByMergedPrNumbers: [],
-    candidateFiles: [
-      'idd-template/.github/instructions/idd-work.instructions.md',
-    ],
-    highContentionFiles: [],
-    mergedPrs: [
-      {
-        number: 789,
-        mergedAt: '2026-07-11T00:00:00Z',
-        files: ['.github/instructions/idd-work.instructions.md'],
-      },
-    ],
-  });
-  assert.equal(result?.pass, false);
-  assert.match(result?.evidence ?? '', /#789/);
-});
-
-test('evaluateHighConfidenceDuplicate: a high-contention-only overlap is not high-confidence evidence', () => {
-  // The only shared file is in the high-contention exclusion set, so this
-  // must fall through (null), not fire -- a coincidental hit on a
-  // broadly-shared file is not evidence THIS issue was superseded.
-  const result = evaluateHighConfidenceDuplicate({
-    closedByMergedPrNumbers: [],
-    candidateFiles: ['audit/sync-manifest.json'],
-    highContentionFiles: ['audit/sync-manifest.json'],
-    mergedPrs: [
-      {
-        number: 999,
-        mergedAt: '2026-07-12T00:00:00Z',
-        files: ['audit/sync-manifest.json'],
-      },
-    ],
-  });
-  assert.equal(result, null);
-});
-
-test('evaluateHighConfidenceDuplicate: a genuine file still hits when a co-listed file is high-contention', () => {
-  // Regression guard for the exclusion filter being too aggressive: a
-  // candidate list with one high-contention file and one genuine file must
-  // still fire on the genuine file's overlap.
-  const result = evaluateHighConfidenceDuplicate({
-    closedByMergedPrNumbers: [],
-    candidateFiles: ['audit/sync-manifest.json', 'scripts/genuine.mjs'],
-    highContentionFiles: ['audit/sync-manifest.json'],
-    mergedPrs: [
-      {
-        number: 1000,
-        mergedAt: '2026-07-13T00:00:00Z',
-        files: ['audit/sync-manifest.json', 'scripts/genuine.mjs'],
-      },
-    ],
-  });
-  assert.equal(result?.pass, false);
-  assert.match(result?.evidence ?? '', /scripts\/genuine\.mjs/);
-  assert.doesNotMatch(result?.evidence ?? '', /sync-manifest\.json/);
-});
-
-test('evaluateHighConfidenceDuplicate: closing-PR-reference is checked before the file-overlap scan', () => {
-  const result = evaluateHighConfidenceDuplicate({
-    closedByMergedPrNumbers: [111],
-    candidateFiles: ['scripts/foo.mjs'],
-    highContentionFiles: [],
-    mergedPrs: [{ number: 222, mergedAt: '', files: ['unrelated.mjs'] }],
-  });
-  assert.match(result?.evidence ?? '', /#111/);
-  assert.doesNotMatch(result?.evidence ?? '', /#222/);
-});
-
 test('checkDuplicateOrSuperseded: high-confidence tier takes priority over the weak heuristic', () => {
   // Three supplied Context fields (vs. this file's usual one or two) makes
   // TypeScript's structural-cast "sufficient overlap" check reject a direct
@@ -891,73 +783,192 @@ test('evaluateSuitability: a malformed highConfidenceDuplicate option is neutral
   });
 });
 
-// --- #1484: detect-only boundary (argv-builder read-verb assertions) -------
-// A compiled-text grep for mutating verb literals would miss a
-// `gh api ... -X POST`-shaped mutation, since none of this file's own calls
-// use one. Instead, assert directly on the argv each builder produces: the
-// gh subcommand-verb position (index 1) must be an allow-listed read verb,
-// and no mutating flag/verb literal appears anywhere in the argv.
-const READ_VERBS = new Set(['view', 'list']);
-const FORBIDDEN_TOKENS = new Set([
-  'close',
-  'comment',
-  'edit',
-  'merge',
-  'reopen',
-  'delete',
-  '-X',
-  '--method',
-]);
+// --- #1499: typed tier field on the weak-heuristic fail paths --------------
+// evaluateHighConfidenceDuplicate's own tier: 'high-confidence' output is
+// covered directly in tests/supersession-detection.test.mts; these cover
+// the tier: 'weak' branches that stay local to checkDuplicateOrSuperseded
+// (declaration scan, exact-title, near-duplicate, degraded exact-title).
 
-function assertReadOnlyArgv(args: string[]): void {
-  if (args[0] === 'api') {
-    // gh api graphql: the payload must be a `query` operation, never a
-    // `mutation`, so check the actual `-f query=...` value rather than an
-    // allow-listed subcommand-verb position.
-    assert.equal(args[1], 'graphql');
-    const queryArg = args.find((arg) => arg.startsWith('query='));
-    assert.equal(typeof queryArg, 'string');
-    assert.match(queryArg ?? '', /^query=\s*query[\s(]/);
-    assert.doesNotMatch(queryArg ?? '', /\bmutation\b/);
-  } else {
-    assert.equal(args[0] === 'issue' || args[0] === 'pr', true);
-    assert.equal(READ_VERBS.has(args[1]), true);
-  }
-  for (const token of args) {
-    assert.equal(
-      FORBIDDEN_TOKENS.has(token),
-      false,
-      `unexpected mutating token "${token}" in argv: ${JSON.stringify(args)}`,
-    );
-  }
-}
+test('checkDuplicateOrSuperseded: an exact-title duplicate fail carries tier "weak"', () => {
+  const result = checkDuplicateOrSuperseded({
+    issue: BASE_ISSUE,
+    duplicateCandidates: [
+      { number: 9, title: BASE_ISSUE.title, state: 'OPEN' },
+    ] as Context['duplicateCandidates'],
+  } as Context);
+  assert.equal(result.pass, false);
+  assert.equal(result.tier, 'weak');
+});
 
-test('buildClosedByMergedPrArgs is read-only', () => {
-  assertReadOnlyArgv(
-    buildClosedByMergedPrArgs('kurone-kito', 'idd-skill', 1484),
+test('checkDuplicateOrSuperseded: a near-duplicate fail carries tier "weak"', () => {
+  const nearDuplicateTitle = `${BASE_ISSUE.title} extra`;
+  const result = checkDuplicateOrSuperseded({
+    issue: BASE_ISSUE,
+    duplicateCandidates: [
+      { number: 10, title: nearDuplicateTitle, state: 'OPEN' },
+    ] as Context['duplicateCandidates'],
+  } as Context);
+  assert.equal(result.pass, false);
+  assert.equal(result.tier, 'weak');
+});
+
+test('checkDuplicateOrSuperseded: a free-text declaration fail carries tier "weak"', () => {
+  const result = checkDuplicateOrSuperseded({
+    issue: {
+      ...BASE_ISSUE,
+      body: `${BASE_ISSUE.body}\nThis is a duplicate of #321.`,
+    },
+    duplicateCandidates: [] as Context['duplicateCandidates'],
+  } as Context);
+  assert.equal(result.pass, false);
+  assert.equal(result.tier, 'weak');
+});
+
+test('checkDuplicateOrSuperseded: a degraded exact-title fail carries tier "weak"', () => {
+  const result = checkDuplicateOrSuperseded({
+    issue: BASE_ISSUE,
+    duplicateCandidates: [
+      { number: 11, title: BASE_ISSUE.title, state: 'OPEN' },
+    ] as Context['duplicateCandidates'],
+    highConfidenceCollectionDegraded: true,
+  } as Context);
+  assert.equal(result.pass, false);
+  assert.equal(result.tier, 'weak');
+});
+
+test('checkDuplicateOrSuperseded: a pass carries no tier at all', () => {
+  const result = checkDuplicateOrSuperseded({
+    issue: BASE_ISSUE,
+    duplicateCandidates: [] as Context['duplicateCandidates'],
+  } as Context);
+  assert.equal(result.pass, true);
+  assert.equal(result.tier, undefined);
+});
+
+test('evaluateSuitability: checks[] threads tier through from the failing check', () => {
+  // Note: evaluateSuitability's own return shape (SuitabilityResult.checks)
+  // is what this asserts -- not runCli's separate verbose/non-verbose JSON
+  // output mapping, which is covered by the two tests below instead (E2
+  // self-review finding: an earlier version of this test's name implied it
+  // covered the non-verbose mapping, but it only exercised the pre-mapping
+  // checks[] array).
+  const result = evaluateSuitability(BASE_ISSUE, {
+    duplicateCandidates: [{ number: 12, title: BASE_ISSUE.title }],
+  });
+  const duplicateCheck = result.checks.find(
+    (check) => check.id === 'duplicate_or_superseded',
+  );
+  assert.equal(duplicateCheck?.tier, 'weak');
+});
+
+// --- #1499: runCli's verbose/non-verbose JSON mapping (wiring check) -------
+// runCli itself isn't unit-tested (real gh I/O), so -- mirroring the
+// loadHighContentionFiles wiring pin above -- these are structural pins on
+// the source text proving both mapping branches actually carry `tier`
+// through, rather than only the pre-mapping evaluateSuitability output
+// tested above.
+
+test('runCli: verbose output passes result.checks through unchanged (tier included)', () => {
+  const source = readFileSync(
+    new URL('../src/scripts/suitability-triage.mts', import.meta.url),
+    'utf8',
+  );
+  assert.match(source, /checks: args\.verbose\s*\n\s*\? result\.checks/);
+});
+
+test('runCli: non-verbose output mapping still spreads tier when present', () => {
+  const source = readFileSync(
+    new URL('../src/scripts/suitability-triage.mts', import.meta.url),
+    'utf8',
+  );
+  assert.match(
+    source,
+    /result: check\.result,[\s\S]{0,400}\.\.\.\(check\.tier \? \{ tier: check\.tier \} : \{\}\)/,
   );
 });
 
-test('buildClosedByMergedPrArgs requests state so callers can filter to MERGED', () => {
-  // Regression guard for a real bug caught by review: the REST-shimmed `gh
-  // issue view --json closedByPullRequestsReferences` carries no per-PR
-  // `state` and includes OPEN (not yet merged) PRs, not only merged ones.
-  // The GraphQL query built here must request `state` explicitly so
-  // fetchClosedByMergedPrNumbers can filter to MERGED before treating a hit
-  // as high-confidence evidence.
-  const args = buildClosedByMergedPrArgs('kurone-kito', 'idd-skill', 1484);
-  const queryArg = args.find((arg) => arg.startsWith('query=')) ?? '';
-  assert.match(queryArg, /closedByPullRequestsReferences/);
-  assert.match(queryArg, /\bstate\b/);
-  assert.match(queryArg, /\bnumber\b/);
-});
+// --- #1499: --manifest / --bundles override surface (loadHighContentionFiles) ----
+// loadHighContentionFiles reads a real file (readFileSync), so these exercise
+// it against this repository's own real audit/sync-manifest.json rather than
+// an in-memory fixture -- `bundle-discovery` is a real, non-default bundle
+// whose file set is disjoint enough from DEFAULT_BUNDLE_IDS
+// (bundle-review/bundle-merge) to prove the override genuinely changes the
+// resolved exclusion set, not just accepts the flag syntactically.
 
-test('buildMergedPrListArgs is read-only', () => {
-  assertReadOnlyArgv(
-    buildMergedPrListArgs('kurone-kito/idd-skill', '2026-07-01T00:00:00Z'),
+test('loadHighContentionFiles: default bundle IDs resolve merge-bundle files, not discovery-bundle files', () => {
+  const resolved = loadHighContentionFiles(
+    DEFAULT_MANIFEST_PATH,
+    DEFAULT_BUNDLE_IDS,
   );
+  assert.notEqual(resolved, null);
+  assert.equal(resolved?.includes('idd-merge.instructions.md'), true);
+  assert.equal(resolved?.includes('idd-discover.instructions.md'), false);
 });
 
-test('buildPrFilesArgs is read-only', () => {
-  assertReadOnlyArgv(buildPrFilesArgs('kurone-kito/idd-skill', 1492));
+test('loadHighContentionFiles: a --bundles override resolves that bundle instead of the default', () => {
+  // Regression guard for the #1499 bug: this must validate against the
+  // REQUESTED bundle ID (bundle-discovery), not the hardcoded
+  // DEFAULT_BUNDLE_IDS -- with the pre-#1499 hardcoded validation this would
+  // incorrectly return null (bundle-discovery is absent from
+  // DEFAULT_BUNDLE_IDS's completeness check).
+  const resolved = loadHighContentionFiles(DEFAULT_MANIFEST_PATH, [
+    'bundle-discovery',
+  ]);
+  assert.notEqual(resolved, null);
+  assert.equal(resolved?.includes('idd-discover.instructions.md'), true);
+  assert.equal(resolved?.includes('idd-merge.instructions.md'), false);
+});
+
+test('loadHighContentionFiles: the manifest path itself is treated as high-contention (extraFiles: [manifestPath])', () => {
+  const resolved = loadHighContentionFiles(
+    DEFAULT_MANIFEST_PATH,
+    DEFAULT_BUNDLE_IDS,
+  );
+  assert.equal(resolved?.includes(DEFAULT_MANIFEST_PATH), true);
+});
+
+test('loadHighContentionFiles: a bundle ID absent from the manifest returns null (fail-safe, not an empty set)', () => {
+  const resolved = loadHighContentionFiles(DEFAULT_MANIFEST_PATH, [
+    'bundle-does-not-exist',
+  ]);
+  assert.equal(resolved, null);
+});
+
+test('loadHighContentionFiles: an empty bundleIds list returns null, not a vacuously-"complete" empty set', () => {
+  // Regression guard for a Copilot review finding on this PR: `[].every(...)`
+  // is vacuously true, so an empty list must not sail through the
+  // completeness check below and resolve to a set containing only
+  // extraFiles (the manifest path itself) -- that would make the
+  // high-confidence overlap scan MORE permissive, the opposite of this
+  // tier's fail-safe contract.
+  const resolved = loadHighContentionFiles(DEFAULT_MANIFEST_PATH, []);
+  assert.equal(resolved, null);
+});
+
+test('loadHighContentionFiles: an unreadable manifest path returns null', () => {
+  const resolved = loadHighContentionFiles(
+    'no/such/manifest.json',
+    DEFAULT_BUNDLE_IDS,
+  );
+  assert.equal(resolved, null);
+});
+
+// --- #1499: wiring call-site pin --------------------------------------------
+// loadHighContentionFiles is proven correct in isolation above; the one
+// remaining risk is the real runCli call site silently reverting to the
+// hardcoded defaults instead of forwarding args.manifest / args.bundles --
+// a regression with no other test coverage. Mirrors this repo's own
+// established "cover the call site, not just the extracted helper" pattern
+// (see idd-skill#1810's resolveClaimEvidence structural pin in
+// tests/advisory-convergence.test.mts).
+
+test('runCli forwards args.manifest / args.bundles into loadHighContentionFiles (wiring check)', () => {
+  const source = readFileSync(
+    new URL('../src/scripts/suitability-triage.mts', import.meta.url),
+    'utf8',
+  );
+  assert.match(
+    source,
+    /loadHighContentionFiles\(\s*args\.manifest,\s*args\.bundles\s*\?\?\s*DEFAULT_BUNDLE_IDS,?\s*\)/,
+  );
 });

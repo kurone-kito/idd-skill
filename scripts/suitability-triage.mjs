@@ -9,57 +9,35 @@ import { resolve } from 'node:path';
 import { parseCliArgs } from './cli-args.mjs';
 import {
   DEFAULT_BUNDLE_IDS,
-  DEFAULT_EXTRA_FILES,
   DEFAULT_MANIFEST_PATH,
   ghJson as ghJsonArray,
-  normalizeContentionPath,
   parseCandidateFiles,
   resolveHighContentionFiles,
 } from './discover-shared-file-overlap.mjs';
 import { GH_TEXT_LOOP_TIMEOUT_OPTIONS, ghText } from './gh-exec.mjs';
 import { loadPolicyConfig } from './idd-config.mjs';
 import { normalizePolicyConfig, POLICY_DEFAULTS } from './policy-helpers.mjs';
+import {
+  buildClosedByMergedPrArgs,
+  buildMergedPrListArgs,
+  buildPrFilesArgs,
+  evaluateHighConfidenceDuplicate,
+} from './supersession-detection.mjs';
 
-/** Upper bound on the #1484 bounded merged-PR scan (mirrors B2.0's own
- * documented `gh pr list --limit 50`). */
-const MERGED_PR_SCAN_LIMIT = 50;
 /**
  * Wall-clock budget for the #1484 merged-PR file-overlap scan (CodeRabbit
- * review finding on this PR): up to MERGED_PR_SCAN_LIMIT sequential
- * `gh pr view` calls at 30s each could otherwise take ~25 minutes in the
- * worst case (a degraded/rate-limited GitHub API). Stop early and return
- * whatever has been collected once this budget elapses, rather than
- * blocking the whole A4.5 evaluation on a slow scan. Referenced from inside
- * `fetchMergedPrFileOverlapEvidence`, which the `import.meta.main` trigger
- * below can reach synchronously, so this must stay declared above that
- * trigger for the same temporal-dead-zone reason as `CLOSED_BY_MERGED_PR_QUERY`.
+ * review finding on this PR): up to `supersession-detection.mts`'s own
+ * merged-PR-scan limit (50, mirroring B2.0's own documented `gh pr list
+ * --limit 50`) sequential `gh pr view` calls at 30s each could otherwise
+ * take ~25 minutes in the worst case (a degraded/rate-limited GitHub API).
+ * Stop early and return whatever has been collected once this budget
+ * elapses, rather than blocking the whole A4.5 evaluation on a slow scan.
+ * (#1499: that limit is baked into `buildMergedPrListArgs`'s own argv,
+ * which this file now only calls rather than builds -- this comment stays
+ * prose-only rather than importing the value, since nothing here needs it
+ * as a live binding.)
  */
 const MERGED_PR_SCAN_DEADLINE_MS = 2 * 60 * 1000;
-/**
- * GraphQL query for the closed-by-merged-PR read (#1484), bounded to the
- * first 50 closing-PR references. A later page could theoretically hold an
- * additional MERGED reference this misses, but that only makes the tier
- * under-detect (fall back to the weak heuristic) rather than over-detect --
- * the safe fail direction for a check that must never fail TOWARD a false
- * positive, so a full pagination loop (as `idd-roadmap-audit-execute.mts`'s
- * `hasOpenClosingPr` implements for its own different, block-a-close use
- * case) is not required here. Declared here, above the `import.meta.main`
- * trigger below, rather than alongside the other #1484 CLI glue further
- * down: the trigger calls `runCli()` synchronously at module-evaluation
- * time, and a `const` declared after that point is still in the temporal
- * dead zone when the trigger fires (see `discover-shared-file-overlap.mts`'s
- * identical note on its own flag-spec constant).
- */
-const CLOSED_BY_MERGED_PR_QUERY = `query($owner:String!,$repo:String!,$number:Int!){
-  repository(owner:$owner,name:$repo){
-    issue(number:$number){
-      state
-      closedByPullRequestsReferences(first:50){
-        nodes { number state }
-      }
-    }
-  }
-}`;
 // Flag-spec keys stay the dashed literal on purpose (never bare keys like
 // `issue:`): tests/flag-name-matrix.test.mts scans this file's *compiled*
 // .mjs source text for quoted flag literals such as the --issue spec key
@@ -79,6 +57,8 @@ const SUITABILITY_TRIAGE_FLAG_SPEC = {
   '--owner': { type: 'string', default: '' },
   '--repo': { type: 'string', default: '' },
   '--policy': { type: 'string', default: '' },
+  '--manifest': { type: 'string', default: DEFAULT_MANIFEST_PATH },
+  '--bundles': { type: 'string' },
   '--verbose': { type: 'boolean', default: false },
   '--help': { type: 'boolean', short: 'h' },
 };
@@ -225,6 +205,7 @@ export function evaluateSuitability(issue, options = {}) {
       name: check.name,
       result: result.pass ? 'pass' : 'fail',
       evidence: result.evidence,
+      ...(result.tier ? { tier: result.tier } : {}),
     });
     if (!result.pass) {
       return {
@@ -405,73 +386,6 @@ export function checkTrustSafety(context) {
     evidence: 'No trust/safety blockers detected.',
   };
 }
-/**
- * High-confidence Check 4 tier (#1484): evaluate the mechanical B2.0-style
- * signals -- a merged closing-PR reference on the candidate issue itself, or
- * a merged PR that already changed one of the issue's own declared
- * `## Candidate files` (excluding high-contention/shared files, which many
- * unrelated issues touch and so are not on their own high-confidence
- * evidence that THIS issue was superseded). Returns `null` -- never a
- * synthesized verdict of its own -- whenever no strong signal fires, so the
- * caller falls through to the existing weak title/declaration heuristic
- * unchanged. This is the fail-safe contract the issue requires: never fail
- * TOWARD a false high-confidence flag. `input` may be `undefined` (evidence
- * not collected by the caller) or a partially malformed shape; both degrade
- * to "no verdict" rather than a crash or a false hit.
- */
-export function evaluateHighConfidenceDuplicate(input) {
-  if (!input) {
-    return null;
-  }
-  const closedByMergedPrNumbers = (
-    Array.isArray(input.closedByMergedPrNumbers)
-      ? input.closedByMergedPrNumbers
-      : []
-  ).filter((n) => Number.isInteger(n) && n > 0);
-  if (closedByMergedPrNumbers.length > 0) {
-    return {
-      pass: false,
-      evidence: `High-confidence duplicate: issue is already referenced by merged closing PR(s) #${closedByMergedPrNumbers.join(', #')} (closedByPullRequestsReferences).`,
-    };
-  }
-  const highContention = new Set(
-    (Array.isArray(input.highContentionFiles)
-      ? input.highContentionFiles
-      : []
-    ).map((file) => normalizeContentionPath(file)),
-  );
-  const candidateFiles = [
-    ...new Set(
-      (Array.isArray(input.candidateFiles) ? input.candidateFiles : [])
-        .map((file) => normalizeContentionPath(file))
-        .filter((file) => file.length > 0 && !highContention.has(file)),
-    ),
-  ];
-  if (candidateFiles.length === 0) {
-    return null;
-  }
-  const candidateSet = new Set(candidateFiles);
-  const mergedPrs = Array.isArray(input.mergedPrs) ? input.mergedPrs : [];
-  for (const raw of mergedPrs) {
-    const pr = raw ?? {};
-    const number = Number(pr.number);
-    if (!Number.isInteger(number) || number <= 0) {
-      continue;
-    }
-    const files = Array.isArray(pr.files) ? pr.files : [];
-    const overlap = [
-      ...new Set(files.map((file) => normalizeContentionPath(file))),
-    ].filter((file) => candidateSet.has(file));
-    if (overlap.length > 0) {
-      const mergedAt = String(pr.mergedAt ?? '');
-      return {
-        pass: false,
-        evidence: `High-confidence duplicate: merged PR #${number}${mergedAt ? ` (merged ${mergedAt})` : ''} already changed candidate file(s): ${overlap.sort().join(', ')}.`,
-      };
-    }
-  }
-  return null;
-}
 export function checkDuplicateOrSuperseded(context) {
   const highConfidence = evaluateHighConfidenceDuplicate(
     context.highConfidenceDuplicate,
@@ -499,6 +413,7 @@ export function checkDuplicateOrSuperseded(context) {
       return {
         pass: false,
         evidence: `Exact-title duplicate found: #${degradedExactMatch.number}`,
+        tier: 'weak',
       };
     }
     return {
@@ -519,6 +434,7 @@ export function checkDuplicateOrSuperseded(context) {
     return {
       pass: false,
       evidence: `Issue body declares duplicate/superseded status: ${matched}`,
+      tier: 'weak',
     };
   }
   const exactTitle = normalizeText(issue.title);
@@ -532,6 +448,7 @@ export function checkDuplicateOrSuperseded(context) {
     return {
       pass: false,
       evidence: `Exact-title duplicate found: #${duplicate.number}`,
+      tier: 'weak',
     };
   }
   // Near-duplicate detection: check for high similarity (>80% Levenshtein match)
@@ -549,6 +466,7 @@ export function checkDuplicateOrSuperseded(context) {
     return {
       pass: false,
       evidence: `Near-duplicate found: #${nearDuplicate.number} ("${nearDuplicate.title}"). Title similarity >80%.`,
+      tier: 'weak',
     };
   }
   return {
@@ -813,7 +731,12 @@ function runCli() {
     // against -- most issues have none, and the result would otherwise be
     // discarded.
     const resolvedHighContentionFiles =
-      candidateFiles.length > 0 ? loadHighContentionFiles() : null;
+      candidateFiles.length > 0
+        ? loadHighContentionFiles(
+            args.manifest,
+            args.bundles ?? DEFAULT_BUNDLE_IDS,
+          )
+        : null;
     const shouldScanMergedPrs =
       candidateFiles.length > 0 &&
       resolvedHighContentionFiles !== null &&
@@ -889,6 +812,10 @@ function runCli() {
           id: check.id,
           name: check.name,
           result: check.result,
+          // #1499: carried through even in non-verbose mode -- the typed
+          // tier signal exists precisely so a consumer can branch on it
+          // without asking for full evidence prose.
+          ...(check.tier ? { tier: check.tier } : {}),
         })),
   };
   process.stdout.write(`${JSON.stringify(output, null, 2)}\n`);
@@ -922,6 +849,17 @@ export function parseArgs(argv) {
     owner: values.owner,
     repo: values.repo,
     policy: values.policy,
+    manifest: values.manifest,
+    // #1499: mirrors `discover-shared-file-overlap.mts`'s own `--bundles`
+    // parsing exactly -- absent means "not passed" (`null`), present is a
+    // comma-split, trimmed, empty-token-filtered list.
+    bundles:
+      values.bundles === undefined
+        ? null
+        : String(values.bundles)
+            .split(',')
+            .map((part) => part.trim())
+            .filter(Boolean),
     verbose: values.verbose,
     help,
   };
@@ -939,7 +877,13 @@ function loadPolicy(policyPath) {
 }
 function printHelp() {
   process.stdout.write(`Usage:
-  node scripts/suitability-triage.mjs --issue <number> [--token <token>] [--owner <owner>] [--repo <repo>] [--policy <path>] [--verbose] [--help]
+  node scripts/suitability-triage.mjs --issue <number> [--token <token>] [--owner <owner>] [--repo <repo>] [--policy <path>] [--manifest <path>] [--bundles <id1,id2>] [--verbose] [--help]
+
+--manifest / --bundles override the Check 4 high-confidence tier's
+high-contention exclusion set (default: the same manifest path and bundle
+IDs as discover-shared-file-overlap.mjs's own --manifest/--bundles), so a
+repository that customizes its A4 Step 2 contention bundles gets a matching
+Check-4 exclusion set instead of a stale hardcoded default.
 
 Output schema:
 {
@@ -950,6 +894,11 @@ Output schema:
   "failedCheck": "repository_fit|...|null",
   "checks": [{"id":"repository_fit","name":"Repository Fit","result":"pass|fail","evidence":"..."}]
 }
+
+Each checks[] entry may also carry "tier":"high-confidence|weak" -- present
+only on a duplicate_or_superseded fail (absent on every pass and on every
+other check), distinguishing a high-confidence mechanical hit from the weak
+title/declaration heuristic.
 `);
 }
 function normalizeIssue(issue) {
@@ -1089,74 +1038,12 @@ function fetchDuplicateCandidates(repoRef, issue) {
   return normalizeDuplicateCandidates(payload.items ?? []);
 }
 // --- #1484: high-confidence Check 4 tier CLI glue ---------------------------
-// Read-only: every function below only ever calls `gh api graphql` (with a
-// `query` operation, never `mutation`), `gh pr list`, or `gh pr view` (no
-// -X/--method, no issue/PR mutation subcommand).
-// #1484 is detect-only by design; do not add a mutating gh call here -- a
-// later gated-close follow-up (#1485) is a separate, human-gated change.
-// The argv-builders are exported so tests can assert the exact read-only
-// verb without shelling out (a compiled-text grep for mutating verb
-// literals would miss a `gh api ... -X POST`-shaped mutation, since none of
-// this file's own calls use one).
-/**
- * Argv for the closed-by-merged-PR read. Uses `gh api graphql` rather than
- * `gh issue view --json closedByPullRequestsReferences`: the latter's
- * REST-shimmed shape carries no per-PR `state`, and the connection includes
- * OPEN (not yet merged) PRs, not only merged ones -- confirmed empirically
- * against this repo's own issue #1489 (OPEN) / PR #1497 (OPEN), and matches
- * `idd-roadmap-audit-execute.mts`'s documented note that the field "returns
- * merged PRs even with `includeClosedPrs:false`" (i.e. state alone
- * determines relevance, not that flag). Filtering to `state === 'MERGED'`
- * happens in `fetchClosedByMergedPrNumbers` below, after this fetch --
- * without it, an issue with only an in-progress unmerged closing PR would
- * wrongly read as "already referenced by a merged closing PR".
- */
-export function buildClosedByMergedPrArgs(owner, repo, issueNumber) {
-  return [
-    'api',
-    'graphql',
-    '-f',
-    `query=${CLOSED_BY_MERGED_PR_QUERY}`,
-    '-f',
-    `owner=${owner}`,
-    '-f',
-    `repo=${repo}`,
-    '-F',
-    `number=${issueNumber}`,
-  ];
-}
-/** Argv for the bounded merged-PR list scan (mirrors B2.0's own documented
- * `gh pr list --search "merged:>=<since>"` shape). */
-export function buildMergedPrListArgs(repoRef, sinceIso) {
-  return [
-    'pr',
-    'list',
-    '--repo',
-    repoRef,
-    '--state',
-    'merged',
-    '--search',
-    `merged:>=${sinceIso}`,
-    '--json',
-    'number,mergedAt',
-    '--limit',
-    String(MERGED_PR_SCAN_LIMIT),
-  ];
-}
-/** Argv for one merged PR's changed-file list. */
-export function buildPrFilesArgs(repoRef, prNumber) {
-  return [
-    'pr',
-    'view',
-    String(prNumber),
-    '--repo',
-    repoRef,
-    '--json',
-    'files',
-    '--jq',
-    '.files[].path',
-  ];
-}
+// The pure argv-builders (`buildClosedByMergedPrArgs`, `buildMergedPrListArgs`,
+// `buildPrFilesArgs`) and the evaluation kernel (`evaluateHighConfidenceDuplicate`)
+// moved to `supersession-detection.mts` (#1499); this file keeps only the
+// `gh`-executing orchestration below (fetch, try/catch, deadline budget,
+// `collectionWarnings`), which the issue does not name as part of the
+// extraction.
 /**
  * Fetch the candidate issue's own merged closing-PR references. Throws (via
  * `runGh`, no try/catch here) on a `gh` error rather than silently reading a
@@ -1269,20 +1156,35 @@ function fetchMergedPrFileOverlapEvidence(repoRef, sinceIso) {
  * same way. `closedByPullRequestsReferences` is a separate, independent
  * signal and is unaffected by either fallback.
  */
-function loadHighContentionFiles() {
+export function loadHighContentionFiles(manifestPath, bundleIds) {
+  // Copilot review finding on this PR: `[].every(...)` is vacuously `true`,
+  // so an explicitly-empty (or whitespace-only, after --bundles parsing)
+  // override would otherwise sail through the completeness check below and
+  // resolve to a high-contention set containing only `extraFiles` (just the
+  // manifest path) -- the opposite of this tier's fail-safe contract, since
+  // a smaller exclusion set makes the overlap scan MORE permissive, not
+  // less. Treat an empty list the same as any other invalid/incomplete
+  // request: degrade to null (collection warning, exact-title-only) rather
+  // than silently accepting zero bundles as "all resolved".
+  if (bundleIds.length === 0) {
+    return null;
+  }
   try {
     const manifest = JSON.parse(
-      readFileSync(resolve(process.cwd(), DEFAULT_MANIFEST_PATH), 'utf8'),
+      readFileSync(resolve(process.cwd(), manifestPath), 'utf8'),
     );
     // Codex P2 review finding: a manifest that parses but lacks usable
     // `bundleBudgets` entries for one or both target bundle IDs (an empty
     // object, or an older schema) doesn't throw here -- `resolveHighContentionFiles`
-    // degrades gracefully to just `DEFAULT_EXTRA_FILES` for A4 Step 2's own,
-    // lower-stakes de-prioritization use. But for this tier, an incomplete
-    // exclusion set can miss a genuinely high-contention file, so a shared
-    // bundle/instruction file could be misread as specific overlap evidence
-    // -- exactly the false high-confidence flag Check 4 must never produce.
-    // Require both configured bundle IDs to actually resolve before
+    // degrades gracefully to just the manifest path itself for A4 Step 2's
+    // own, lower-stakes de-prioritization use. But for this tier, an
+    // incomplete exclusion set can miss a genuinely high-contention file, so
+    // a shared bundle/instruction file could be misread as specific overlap
+    // evidence -- exactly the false high-confidence flag Check 4 must never
+    // produce. Require every requested bundle ID (#1499: the caller's own
+    // `--bundles` override when given, not the hardcoded default -- a
+    // repository that customizes its bundle set must have THOSE bundles
+    // validated, not `DEFAULT_BUNDLE_IDS`) to actually resolve before
     // accepting the set; otherwise treat it the same as an unreadable
     // manifest (return null, which the caller already records as a
     // collection warning and degrades to exact-title-only).
@@ -1303,7 +1205,7 @@ function loadHighContentionFiles() {
     // above yet still let `resolveHighContentionFiles` silently omit that
     // bundle's real shared files -- the same false-flag risk as a missing
     // bundle id entirely, so it must degrade the same way.
-    const allBundleIdsResolved = DEFAULT_BUNDLE_IDS.every((id) =>
+    const allBundleIdsResolved = bundleIds.every((id) =>
       nonEmptyFilesBundleIds.has(id),
     );
     if (!allBundleIdsResolved) {
@@ -1312,8 +1214,12 @@ function loadHighContentionFiles() {
     return [
       ...resolveHighContentionFiles({
         manifest,
-        bundleIds: DEFAULT_BUNDLE_IDS,
-        extraFiles: DEFAULT_EXTRA_FILES,
+        bundleIds,
+        // #1499: mirrors `discover-shared-file-overlap.mts`'s own `runCli`
+        // pattern -- the manifest path actually in use is the file reported
+        // (and matched) as high-contention, not a hardcoded default that
+        // silently stops tracking a customized manifest.
+        extraFiles: [manifestPath],
       }),
     ];
   } catch {
