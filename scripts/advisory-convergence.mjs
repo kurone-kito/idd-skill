@@ -178,8 +178,22 @@ export function computeAdvisoryConvergenceVerdict(inputs, options) {
   // the applicability gate can tell a genuinely non-IDD PR apart from an
   // IDD-shaped PR whose claim linkage is currently broken. See each field's
   // own doc comment on `AdvisoryConvergenceInputs` for the full rationale.
-  const claimMarkerHistoryPresent = inputs.claimMarkerHistoryPresent === true;
-  const claimCandidateAmbiguous = inputs.claimCandidateAmbiguous === true;
+  //
+  // #1821: the TS type already requires both fields at compile time, but
+  // that guard is erased at emit -- an untyped caller of the exported
+  // `.mjs` (or a hand-written JS caller) can still pass `undefined` or a
+  // non-boolean value through. Reject that here instead of silently
+  // coercing it to `false`, matching this function's existing
+  // error-handling convention for invalid inputs (see the `now` /
+  // `prHeadSha` validation above).
+  if (typeof inputs.claimMarkerHistoryPresent !== 'boolean') {
+    throw new Error('claimMarkerHistoryPresent must be a boolean');
+  }
+  if (typeof inputs.claimCandidateAmbiguous !== 'boolean') {
+    throw new Error('claimCandidateAmbiguous must be a boolean');
+  }
+  const claimMarkerHistoryPresent = inputs.claimMarkerHistoryPresent;
+  const claimCandidateAmbiguous = inputs.claimCandidateAmbiguous;
   const applicability =
     convergenceScope === 'idd-claimed'
       ? !claim.activeClaimPresent
