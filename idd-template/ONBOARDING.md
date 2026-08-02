@@ -475,7 +475,6 @@ Optional companion files:
 
 ```text
 skills/issue-authoring/SKILL.md
-skills/issue-authoring/agents/openai.yaml
 skills/issue-authoring/references/contract.md
 skills/issue-authoring/references/draft-patterns.md
 skills/issue-authoring/references/workflow-boundary.md
@@ -577,12 +576,10 @@ directory the target agent expects:
 ```sh
 DEST="."  # root of the target repository
 
-mkdir -p "${DEST}/skills/issue-authoring/agents" \
-  "${DEST}/skills/issue-authoring/references"
+mkdir -p "${DEST}/skills/issue-authoring/references"
 
 for FILE in \
   "SKILL.md" \
-  "agents/openai.yaml" \
   "references/contract.md" \
   "references/draft-patterns.md" \
   "references/workflow-boundary.md"
@@ -678,12 +675,10 @@ fetch it separately:
 BASE="https://raw.githubusercontent.com/kurone-kito/idd-skill/main/skills/issue-authoring"
 DEST="."  # root of the target repository
 
-mkdir -p "${DEST}/skills/issue-authoring/agents" \
-  "${DEST}/skills/issue-authoring/references"
+mkdir -p "${DEST}/skills/issue-authoring/references"
 
 for FILE in \
   "SKILL.md" \
-  "agents/openai.yaml" \
   "references/contract.md" \
   "references/draft-patterns.md" \
   "references/workflow-boundary.md"

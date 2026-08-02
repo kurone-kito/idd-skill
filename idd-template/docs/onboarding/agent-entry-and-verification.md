@@ -290,8 +290,7 @@ checks, confirm the detailed items below.
       the repository stays on `instructions-only` or opted into
       `package-manager`, `vendored-node`, or `ephemeral-npx`.
 - [ ] If the operator opted into issue authoring,
-      `skills/issue-authoring/SKILL.md`,
-      `skills/issue-authoring/agents/openai.yaml`, and the
+      `skills/issue-authoring/SKILL.md` and the
       `skills/issue-authoring/references/` files are present.
 
 ### Placeholder, marker, and config alignment
