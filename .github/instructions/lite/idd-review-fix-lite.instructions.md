@@ -292,7 +292,7 @@ other GitHub side effect, confirm all of the following:
    exists, stop polling and return to E1 to create one.
 8. Poll on the interval from the helper's `pollIntervalMinutes`. Each
    cycle: re-fetch the current head; if it differs from `PR_HEAD_SHA`,
-   stop polling and return to `idd-review-snapshot.instructions.md`
+   stop polling and return to `idd-review-snapshot-lite.instructions.md`
    (E1). Otherwise re-read threads, review bodies, and regular comments
    (excluding trusted operational markers); if anything has `updatedAt`
    newer than the polling watermark, stop polling and return to E1.
@@ -341,8 +341,8 @@ other GitHub side effect, confirm all of the following:
    routing for this phase.
 3. If new review threads or comments arrive during the wait, note them
    but keep waiting for CI.
-4. On success: return to `idd-review-snapshot.instructions.md` (E1) —
-   do not skip triage.
+4. On success: return to `idd-review-snapshot-lite.instructions.md`
+   (E1) — do not skip triage.
 5. On failure that is code-caused: fix it, run `fix-validate`, commit
    atomically, then return to E11.
 6. On failure that is infra-flaky or pre-existing (also failing on
