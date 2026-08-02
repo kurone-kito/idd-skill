@@ -14,6 +14,90 @@ discipline and has no tag.
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-08-02
+
+Weak-model "lite" profile, 128k context-budget ceiling, and
+advisory-convergence hardening release.
+
+### Added
+
+- Weak-model "lite" instruction profile: a condensed, opt-in
+  instruction set spanning claim, work, PR-submit, review-snapshot,
+  review-fix, pre-merge, and merge-handoff, with helper-first
+  resume/stall guidance and documented model-capability tiers guiding
+  when to opt in.
+- A 128k-context-derived absolute ceiling on instruction-bundle
+  budgets, with a repository-wide diet pass across the overview,
+  discover/claim/work/merge, and review-path bundles (`idd-template`
+  copies included) to fit under it.
+- Advisory-convergence hardening: promoted to a required-check CI
+  workflow backed by a policy-engine helper, a bounded same-HEAD
+  reroll to converge all-rejected reviews, a Copilot stall-recovery
+  state contract with bounded stale-request recovery, terminal
+  Copilot-unavailability routed into the merge gate, and a
+  maintainer-waiver backstop policy field.
+- New evidence/recovery helpers: `ci-wait-state` (a D-phase CI-poll
+  snapshot), `rerun-advisory-convergence` (a read-only rerun plan
+  plus an `--apply` sequential mode), and `audit-authored-issue` (a
+  drafted-issue-body linter wired into the issue-authoring skill).
+- Claim-protocol hardening: activation-nonce collision detection at
+  claim and merge gates, a worktree-local lock file guarding
+  same-machine collisions, and orchestrator delegation as a third
+  activation path.
+- Discovery upgrades: `--with-claim-state` and desync-band CLI
+  options for the orphan filter, a heartbeat-overdue diagnostic, a
+  high-confidence duplicate tier in A4.5, `discover.legacyRoots` for
+  retro-labeled A1 roots, and an A0-O trigger for the zero-roadmap
+  case.
+- Issue-authoring skill hardening: broadened prose-only dependency
+  detection across more reference shapes, a just-discovered-duplicate
+  pre-publish scan, an executability-gate recommendation for code
+  spec-units, and collapse of the release step to a single approval.
+- An OKF (Open Knowledge Format) frontmatter profile for docs pages
+  with an audit guard, plus a generated docs-index table built from
+  that frontmatter.
+- Onboarding automation waves 2-3: manifest-driven fetch/copy of
+  distributed files, and a `--verify` post-import check mode for the
+  `idd-onboard` CLI.
+- `labels.*` adopter configurability completed with a migration
+  guide.
+- OpenCode and Antigravity CLI recognized as shared `agents.md`
+  runtimes alongside the existing agent integrations.
+- A shared `node:util` `parseArgs` wrapper adopted across the helper
+  CLI bundle, and a curated Claude Code permission allow/deny
+  baseline shipped for adopters.
+- New repository guards: an `audit-docs` check that resolves every
+  relative markdown link (and `#fragment`, against GitHub's own
+  heading-slug algorithm) under the docs and instruction corpus, and
+  a workflow-hardening pass across `.github/workflows/` (Node-floor
+  guard parity, a forkable-PR label-strip trigger fix, and quoted
+  `env:` routing for numeric `workflow_dispatch` inputs) with its
+  `idd-template/` mirrors kept in sync.
+
+### Changed
+
+- `README.md` / `README.ja.md` restructured as a benefit-led landing
+  page, with a refreshed production-evidence section.
+- CI check-run classification hardened: same-name instances are
+  deduplicated, same-name checks from different producers are no
+  longer conflated, and failure-family states are ranked above a
+  stale `SUCCESS` in tie-breaks.
+- Pre-merge/merge gate refinements: a branch-currency
+  (up-to-date-head) gate, a broadened F2 own-agent-comment carve-out,
+  and a retry path for solo-CODEOWNER merge deadlocks.
+- Helper internals consolidated onto `node:` builtins
+  (`import.meta.main` / `dirname` / `filename` and friends), a
+  default `gh` subprocess timeout routed through the shared
+  `gh-exec` module, and a fix for a template marker-prefix leak into
+  helper output.
+- `engines.node`'s `>=24` branch narrowed to `>=24.2.0` (Node 24.0.0
+  and 24.1.0 lacked `import.meta.main`, which several helpers now
+  rely on); the `^22.22.2` floor is unchanged.
+- An auto-labeler guard recipe documented for adopters, and pinned
+  `packageSpec` support added for npx-based helper invocation text.
+- Dependency bumps: TypeScript 7.0.2, pnpm v11, `actions/setup-node`,
+  `actions/stale`.
+
 ### Removed
 
 - `skills/issue-authoring/agents/openai.yaml` is no longer part of the
@@ -24,6 +108,48 @@ discipline and has no tag.
   `$issue-authoring` macro syntax, and it had gone untouched since the
   skill's scaffold commit. Adopters who already installed a copy of this
   file may remove it manually; it is safe to delete.
+
+### Fixed
+
+- Claim/discovery race fixes: A0-T fast-fails on an already-claimed
+  target instead of falling back to Discover, code-quoted
+  autopilot-suitability markers are masked from detection, and
+  concurrent-selection desync tokens are now per-session-unique. A
+  same-second claim race could livelock an issue forever (the losing
+  session never released, and resume-routing checked the competing
+  claim before staleness); staleness is now evaluated first, so the
+  24h stale-takeover path clears the dispute.
+- Merge-gate correctness: a required check backed by a source-pinned
+  (`app_id`/`integration_id`) ruleset entry — reachable through
+  GitHub's own suggested-check picker — was unconditionally
+  downgraded to `unknown`, permanently livelocking merge even with CI
+  green; a new opt-in `ciGate.trustSourcePinnedRequiredChecks` policy
+  knob lets an operator who has verified the producer trust it. A
+  configured `advisoryWait.primaryBotLogin` could be silently counted
+  as a human/CODEOWNER approval in the reviewer-approval gate — a
+  fail-open on a check meant to require a human — because only
+  `advisoryBotLogins` was excluded, not the primary bot too.
+- Advisory-convergence correctness: fails closed on IDD-shaped PRs
+  with broken claim linkage and tightened reviewer identity, and
+  requires claim-evidence input fields before proceeding.
+- gh-API robustness: fails closed on a masked 404 from
+  protection/ruleset reads, repairs multi-page `gh` output parsing
+  in three helpers, and applies a shared subprocess timeout to every
+  `gh` call.
+- Review-triage fixes: loosened and shape-gated the Codex
+  usage-limit/notice detector, added a resolved-thread duplicate
+  pre-check, and gated PATH A bot-finding acceptance on evidence and
+  commenter permission.
+- The F4 cleanup-evidence marker was forgeable (any commenter could
+  pre-post one to suppress the genuine evidence and plant forged
+  counts); `idd-doctor` and `idd-merge.instructions.md` now scope
+  marker consumption to trusted authors, matching every other IDD
+  operational marker.
+- Lite-profile fixes from post-merge review triage: activation-nonce
+  recheck restored in work/review-fix lite files, E3-empty routing
+  corrected, and fail-closed recovery bounds and A5 pre-checks
+  restored.
+- `.gitignore` re-includes `.claude/agents/` and `.claude/commands/`.
 
 ## [0.4.0] - 2026-07-04
 
