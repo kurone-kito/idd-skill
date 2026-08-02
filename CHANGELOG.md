@@ -61,7 +61,7 @@ advisory-convergence hardening release.
   `idd-onboard` CLI.
 - `labels.*` adopter configurability completed with a migration
   guide.
-- opencode and Antigravity CLI recognized as shared `agents.md`
+- OpenCode and Antigravity CLI recognized as shared `agents.md`
   runtimes alongside the existing agent integrations.
 - A shared `node:util` `parseArgs` wrapper adopted across the helper
   CLI bundle, and a curated Claude Code permission allow/deny
