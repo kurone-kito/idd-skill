@@ -56,8 +56,15 @@ The authoritative generated lists are configured in
   match against every file under `idd-template/` (`idd-template/**/*`),
   deliberately including files the core import list excludes by design
   — `scripts/minimize-superseded-markers.mjs` (see the
-  profile-conditional section below), `.github/workflows/*.yml`, and
-  `.claude/settings.json`. Because it has no `paths` list, adding a new
+  profile-conditional section below), `.github/workflows/idd-advisory-convergence.yml`,
+  and `.claude/settings.json`. `post-merge-cleanup.yml` is **not** in
+  this exclusion list — it moved into the core `idd-template-core-files`
+  set once its cleanup-audit invocation became profile-portable (no
+  longer `vendored-node`-only), unlike `idd-advisory-convergence.yml`,
+  which stays opt-in-only for an unrelated reason: hosting it as a
+  required-status-check is a deliberate adopter decision with its own
+  ruleset-registration step, not a helper-portability question. Because
+  the readme inventory block has no `paths` list, adding a new
   `idd-template/` file never requires a manual edit here — running
   `node scripts/sync-docs.mjs --apply` picks it up automatically. Keep
   the issue-authoring companion

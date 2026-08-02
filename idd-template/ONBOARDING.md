@@ -409,6 +409,7 @@ for the frontmatter convention its generated table follows.
 
 ```text
 .github/idd/config.json
+.github/workflows/post-merge-cleanup.yml
 .githooks/_idd-worktree-guard.sh
 .githooks/pre-commit
 .githooks/pre-push
@@ -498,11 +499,12 @@ Fetch all files with `gh api` (recommended — handles auth automatically):
 ```sh
 DEST="."  # root of the target repository
 
-mkdir -p "${DEST}/.github/idd" "${DEST}/.github/instructions" "${DEST}/docs" \
-  "${DEST}/docs/onboarding"
+mkdir -p "${DEST}/.github/idd" "${DEST}/.github/workflows" \
+  "${DEST}/.github/instructions" "${DEST}/docs" "${DEST}/docs/onboarding"
 
 for FILE in \
   ".github/idd/config.json" \
+  ".github/workflows/post-merge-cleanup.yml" \
   ".githooks/_idd-worktree-guard.sh" \
   ".githooks/pre-commit" \
   ".githooks/pre-push" \
@@ -599,11 +601,12 @@ repository):
 BASE="https://raw.githubusercontent.com/kurone-kito/idd-skill/main/idd-template"
 DEST="."  # root of the target repository
 
-mkdir -p "${DEST}/.github/idd" "${DEST}/.github/instructions" "${DEST}/docs" \
-  "${DEST}/docs/onboarding"
+mkdir -p "${DEST}/.github/idd" "${DEST}/.github/workflows" \
+  "${DEST}/.github/instructions" "${DEST}/docs" "${DEST}/docs/onboarding"
 
 for FILE in \
   ".github/idd/config.json" \
+  ".github/workflows/post-merge-cleanup.yml" \
   ".githooks/_idd-worktree-guard.sh" \
   ".githooks/pre-commit" \
   ".githooks/pre-push" \
