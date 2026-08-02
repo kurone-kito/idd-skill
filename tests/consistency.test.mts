@@ -1309,6 +1309,12 @@ test('pre-merge F2 own-agent-comment carve-out covers procedural/status comments
       /own-agent-authored\s+procedural\s+or\s+status\s+comment/,
     );
     assert.match(text, /hold\s+comment\s+explaining\s+a\s+blocker/);
+    // Guards the carve-out's no-finding condition: it only covers a
+    // comment that introduces no reviewer or bot finding of its own.
+    assert.match(
+      text,
+      /introduces\s+no\s+reviewer\s+or\s+bot\s+finding\s+of\s+its\s+own/,
+    );
     // Guards against silently swallowing a mixed-cause trigger: the
     // refresh-instead sentence must still be gated on "solely".
     assert.match(text, /triggered\s+solely\s+by\s+disposition\s+replies/);

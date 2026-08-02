@@ -162,8 +162,9 @@ nonce was recorded for the active claim.
   convergence activity too, though the branch-sync route's own
   refresh does not independently re-cover it. If a return-to-E1 is
   triggered solely by disposition replies, other own-agent
-  procedural comments of that kind, or both, refresh the watermark
-  directly instead; every other F2 trigger and gate is unaffected.
+  procedural or status comments of that kind, or both, refresh the
+  watermark directly instead; every other F2 trigger and gate is
+  unaffected.
 - **Advisory bot wait** (restart-safe enforcement): schedule a wake, or
   background only if the topology-safety condition holds (confirmed to
   route completion back to this turn) — otherwise wait synchronously:
