@@ -794,6 +794,97 @@ test('buildPreMergeReadinessSummary: a default-recognized advisory bot (CodeRabb
   assert.equal(reviewerStates.codeownerApprovalSatisfied, false);
 });
 
+// #1837: unlike the tests above (which all deliberately use
+// `reviewDecision: 'REVIEW_REQUIRED'` so `codeownerApprovalSatisfied` cannot
+// be trivially satisfied by the aggregate alone), this test uses the exact
+// scenario the issue describes: GitHub's own `reviewDecision` resolves
+// `APPROVED` purely because a bot's review carries `state: 'APPROVED'` (the
+// 2026-08-01 GitHub rollout described in #1818's background), with a
+// `required_approving_review_count: 1` repo config -- the scenario the issue
+// itself names as the one that actually needs this fix. Full review data is
+// available to the caller (the normal `collectPreMergeReadiness` path,
+// `reviewsUnreadable` omitted/defaulted false), so the classified data
+// (`humanApprovedCount: 0`) must still block both gates despite the
+// `APPROVED` aggregate.
+test('buildPreMergeReadinessSummary: a bot-only APPROVED review does not satisfy codeowner/required-approval gates via the reviewDecision aggregate bypass when review data is classifiable', () => {
+  const prHeadSha = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+  const botLogin = 'coderabbitai[bot]';
+  const summary = buildPreMergeReadinessSummary(
+    {
+      prHeadSha,
+      reviews: [
+        {
+          author: { login: botLogin },
+          state: 'APPROVED',
+          commitId: prHeadSha,
+          submittedAt: '2026-08-02T00:00:00Z',
+        },
+      ],
+      changedFiles: ['README.md'],
+      codeownersText: `* @${botLogin}\n`,
+      branchRules: [
+        {
+          type: 'pull_request',
+          parameters: {
+            required_approving_review_count: 1,
+            require_code_owner_review: true,
+          },
+        },
+      ],
+      // GitHub's own aggregate says APPROVED, but the only review backing
+      // it is the bot's -- this is the bug scenario, not a legitimate pass.
+      reviewDecision: 'APPROVED',
+    },
+    {
+      now: '2026-08-02T00:05:00Z',
+      advisoryBotLogins: [],
+    },
+  );
+
+  const reviewerStates = summary.reviewerStates as Record<string, unknown>;
+  assert.equal(reviewerStates.humanApprovedCount, 0);
+  assert.equal(reviewerStates.codeownerApprovalSatisfied, false);
+  assert.equal(reviewerStates.requiredApprovalsSatisfied, false);
+});
+
+// #1837: the mirror case -- when the caller genuinely could not
+// fetch/classify individual reviews (`reviewsUnreadable: true`, `reviews`
+// empty even though a bot approval exists server-side), GitHub's own
+// aggregate `reviewDecision` remains the only available signal and must
+// still satisfy both gates, exactly as it did before this fix. This proves
+// the new signal is a real fallback, not a blanket removal of the bypass.
+test('buildPreMergeReadinessSummary: reviewsUnreadable lets the reviewDecision aggregate satisfy codeowner/required-approval gates when the caller could not classify reviews', () => {
+  const prHeadSha = 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
+  const botLogin = 'coderabbitai[bot]';
+  const summary = buildPreMergeReadinessSummary(
+    {
+      prHeadSha,
+      reviews: [],
+      changedFiles: ['README.md'],
+      codeownersText: `* @${botLogin}\n`,
+      branchRules: [
+        {
+          type: 'pull_request',
+          parameters: {
+            required_approving_review_count: 1,
+            require_code_owner_review: true,
+          },
+        },
+      ],
+      reviewDecision: 'APPROVED',
+      reviewsUnreadable: true,
+    },
+    {
+      now: '2026-08-02T00:05:00Z',
+      advisoryBotLogins: [],
+    },
+  );
+
+  const reviewerStates = summary.reviewerStates as Record<string, unknown>;
+  assert.equal(reviewerStates.codeownerApprovalSatisfied, true);
+  assert.equal(reviewerStates.requiredApprovalsSatisfied, true);
+});
+
 test('email-only CODEOWNERS rules still block codeowner approval', () => {
   const summary = summarizeReviewerStates([], {
     branchRules: [
