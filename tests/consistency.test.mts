@@ -1285,6 +1285,36 @@ test('merge Duplicate-success-record skip rule still requires a trusted marker a
   }
 });
 
+test('pre-merge F2 own-agent-comment carve-out covers procedural/status comments beyond disposition replies (idd-skill#1811)', () => {
+  const preMerge = readFileSync(
+    new URL(
+      '../.github/instructions/idd-pre-merge.instructions.md',
+      import.meta.url,
+    ),
+    'utf8',
+  );
+  const templatePreMerge = readFileSync(
+    new URL(
+      '../idd-template/.github/instructions/idd-pre-merge.instructions.md',
+      import.meta.url,
+    ),
+    'utf8',
+  );
+
+  for (const text of [preMerge, templatePreMerge]) {
+    // \s+ between words tolerates a Markdown reflow (dprint) that moves a
+    // wrap point mid-phrase without changing the semantic content.
+    assert.match(
+      text,
+      /own-agent-authored\s+procedural\s+or\s+status\s+comment/,
+    );
+    assert.match(text, /hold\s+comment\s+explaining\s+a\s+blocker/);
+    // Guards against silently swallowing a mixed-cause trigger: the
+    // refresh-instead sentence must still be gated on "solely".
+    assert.match(text, /triggered\s+solely\s+by\s+disposition\s+replies/);
+  }
+});
+
 test('recursive roadmap audit guidance stays aligned across instruction and docs surfaces', () => {
   const audit = readFileSync(ROADMAP_AUDIT_PATH, 'utf8');
   const workflow = readFileSync(WORKFLOW_PATH, 'utf8');
