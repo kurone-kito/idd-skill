@@ -114,7 +114,17 @@ advisory-convergence hardening release.
 - Claim/discovery race fixes: A0-T fast-fails on an already-claimed
   target instead of falling back to Discover, code-quoted
   autopilot-suitability markers are masked from detection, and
-  concurrent-selection desync tokens are now per-session-unique.
+  concurrent-selection desync tokens are now per-session-unique. A
+  same-second claim race could livelock an issue forever (the losing
+  session never released, and resume-routing checked the competing
+  claim before staleness); staleness is now evaluated first, so the
+  24h stale-takeover path clears the dispute.
+- Merge-gate correctness: a required check backed by a source-pinned
+  (`app_id`/`integration_id`) ruleset entry — reachable through
+  GitHub's own suggested-check picker — was unconditionally
+  downgraded to `unknown`, permanently livelocking merge even with CI
+  green; a new opt-in `ciGate.trustSourcePinnedRequiredChecks` policy
+  knob lets an operator who has verified the producer trust it.
 - Advisory-convergence correctness: fails closed on IDD-shaped PRs
   with broken claim linkage and tightened reviewer identity, and
   requires claim-evidence input fields before proceeding.
