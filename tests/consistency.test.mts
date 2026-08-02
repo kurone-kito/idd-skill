@@ -1229,6 +1229,62 @@ test('discover A2 roadmap node classification guidance is present in instruction
   assert.match(templateWorkflow, /classify roadmap/i);
 });
 
+test('review-triage PATH A verify-before-accept and actor-permission-cap guidance is present in instruction and template surfaces (idd-skill#1690, PR#1796)', () => {
+  const reviewTriage = readFileSync(
+    new URL(
+      '../.github/instructions/idd-review-triage.instructions.md',
+      import.meta.url,
+    ),
+    'utf8',
+  );
+  const templateReviewTriage = readFileSync(
+    new URL(
+      '../idd-template/.github/instructions/idd-review-triage.instructions.md',
+      import.meta.url,
+    ),
+    'utf8',
+  );
+
+  for (const text of [reviewTriage, templateReviewTriage]) {
+    // \s+ between words tolerates a Markdown reflow (dprint) that moves a
+    // wrap point mid-phrase without changing the semantic content.
+    assert.match(text, /Verify\s+before\s+accept/);
+    assert.match(text, /actor-permission\s+cap/i);
+    // Guards against reverting the PR#1796 hardening: an unprivileged
+    // commenter's assertion alone must never force an Accept.
+    assert.match(text, /collaborators\/\{username\}\/permission/);
+    assert.match(text, /assertion\s+alone\s+never\s+reaches\s+Accept\s+forced/);
+  }
+});
+
+test('merge Duplicate-success-record skip rule still requires a trusted marker actor is present in instruction and template surfaces (idd-skill#1691, PR#1759)', () => {
+  const merge = readFileSync(
+    new URL(
+      '../.github/instructions/idd-merge.instructions.md',
+      import.meta.url,
+    ),
+    'utf8',
+  );
+  const templateMerge = readFileSync(
+    new URL(
+      '../idd-template/.github/instructions/idd-merge.instructions.md',
+      import.meta.url,
+    ),
+    'utf8',
+  );
+
+  for (const text of [merge, templateMerge]) {
+    // \s+ between words tolerates a Markdown reflow (dprint) that moves a
+    // wrap point mid-phrase without changing the semantic content.
+    assert.match(text, /Duplicate-success-record\s+skip\s+rule/);
+    assert.match(text, /whose\s+author\s+is\s+a\s+trusted\s+marker\s+actor/);
+    assert.match(
+      text,
+      /An\s+untrusted\s+commenter's\s+marker-prefixed\s+comment\s+never\s+counts\s+as\s+evidence/,
+    );
+  }
+});
+
 test('recursive roadmap audit guidance stays aligned across instruction and docs surfaces', () => {
   const audit = readFileSync(ROADMAP_AUDIT_PATH, 'utf8');
   const workflow = readFileSync(WORKFLOW_PATH, 'utf8');

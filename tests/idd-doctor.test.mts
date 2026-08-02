@@ -40,6 +40,7 @@ import {
   parsePrimaryWorktreePath,
   parseProjectCommandRows,
   parseThresholdsProseHours,
+  readCleanupEvidenceTrustedLogins,
   readWorktreeGuardBranchPatterns,
   readWorktreeGuardEnabled,
   resolveConfiguredHelperRuntimePackageSpec,
@@ -1223,6 +1224,72 @@ test('formatCleanupBacklogRemediation uses a configured packageSpec under epheme
     /pinned-idd-skill\.tgz/,
     'no configured pin should fall back to the default archive URL',
   );
+});
+
+test('readCleanupEvidenceTrustedLogins includes configured trustedMarkerActors plus github-actions[bot], excludes untrusted logins (idd-skill#1691, PR#1759)', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'idd-doctor-cleanup-evidence-trust-'));
+  try {
+    mkdirSync(join(dir, '.github/idd'), { recursive: true });
+    writeFileSync(
+      join(dir, '.github/idd/config.json'),
+      JSON.stringify({ trustedMarkerActors: ['kurone-kito'] }),
+    );
+    const logins = readCleanupEvidenceTrustedLogins(dir);
+    // Exact-set assertion (not just membership): a regression that
+    // accidentally widens the trusted set with an extra login must fail
+    // this test even though it would still contain 'kurone-kito' and
+    // 'github-actions[bot]' (Copilot review, PR#1809).
+    assert.deepEqual(logins, new Set(['kurone-kito', 'github-actions[bot]']));
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('readCleanupEvidenceTrustedLogins fails closed to github-actions[bot] alone when config is missing, empty, or malformed (idd-skill#1691, PR#1759)', () => {
+  const dir = mkdtempSync(
+    join(tmpdir(), 'idd-doctor-cleanup-evidence-trust-fail-closed-'),
+  );
+  try {
+    // No config file at all.
+    assert.deepEqual(
+      readCleanupEvidenceTrustedLogins(dir),
+      new Set(['github-actions[bot]']),
+    );
+
+    // Config present, valid JSON, but the trustedMarkerActors key is
+    // entirely absent -- a distinct code path (config?.trustedMarkerActors
+    // resolves via optional chaining to undefined, no throw at all) from
+    // both the missing-file case above and the malformed-JSON case below
+    // (Copilot review, PR#1809).
+    mkdirSync(join(dir, '.github/idd'), { recursive: true });
+    writeFileSync(join(dir, '.github/idd/config.json'), JSON.stringify({}));
+    assert.deepEqual(
+      readCleanupEvidenceTrustedLogins(dir),
+      new Set(['github-actions[bot]']),
+    );
+
+    // Present but empty trustedMarkerActors array -- a further distinct
+    // code branch (Array.isArray true, then empty) from the case above
+    // (Array.isArray false on undefined), even though the observable
+    // result is the same fail-closed set.
+    writeFileSync(
+      join(dir, '.github/idd/config.json'),
+      JSON.stringify({ trustedMarkerActors: [] }),
+    );
+    assert.deepEqual(
+      readCleanupEvidenceTrustedLogins(dir),
+      new Set(['github-actions[bot]']),
+    );
+
+    // Malformed JSON must never widen trust beyond the safe default.
+    writeFileSync(join(dir, '.github/idd/config.json'), '{ not json');
+    assert.deepEqual(
+      readCleanupEvidenceTrustedLogins(dir),
+      new Set(['github-actions[bot]']),
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test('computeWindowStartIso returns null for windows that overflow Date range', () => {

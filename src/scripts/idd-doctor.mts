@@ -1957,7 +1957,7 @@ export function formatCleanupBacklogRemediation(
  * `github-actions[bot]` alone (config unreadable/malformed never widens
  * trust).
  */
-function readCleanupEvidenceTrustedLogins(root: string): Set<string> {
+export function readCleanupEvidenceTrustedLogins(root: string): Set<string> {
   let trustedMarkerActors: unknown;
   try {
     const config = JSON.parse(
