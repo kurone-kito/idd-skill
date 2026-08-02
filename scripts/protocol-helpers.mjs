@@ -3514,8 +3514,16 @@ export function summarizeReviewerStates(
   const humanApprovedCount = latestByAuthor.filter((review) => {
     return review.isHuman && review.state === 'APPROVED';
   }).length;
+  // #1818: also require `isHuman` here, mirroring `humanApprovedCount` above.
+  // Without it, any advisory bot (default-recognized or configured) that is
+  // also listed as a CODEOWNER for the changed files would satisfy the
+  // codeowner-approval gate on its own review -- the same fail-open shape
+  // `humanApprovedCount` already guarded against. This intentionally
+  // diverges from GitHub's own CODEOWNERS gate (which would count a bot
+  // codeowner's approval); the stricter, fail-closed reading is deliberate,
+  // not a gap to "fix" back.
   const codeownerApproved = latestByAuthor.some((review) => {
-    return review.isCodeowner && review.state === 'APPROVED';
+    return review.isCodeowner && review.isHuman && review.state === 'APPROVED';
   });
   const hasExplicitCodeownerMatches = changedFiles.some((filePath) => {
     const normalizedPath = String(filePath ?? '').replace(/^\/+/, '');
@@ -4500,6 +4508,21 @@ export function buildPreMergeReadinessSummary(
     trustedMarkerLogins,
     threads,
   });
+  // #1818: `options.primaryBotLogin` (the configured advisory-wait primary
+  // bot, e.g. a non-default Copilot form or a wholly different bot) must be
+  // treated as an advisory bot by `summarizeReviewerStates`'s review-approval
+  // counting specifically -- `isKnownReviewBot` only recognizes the literal
+  // default bot identities, and a repo that configures a custom
+  // `primaryBotLogin` without separately adding it to `advisoryBotLogins`
+  // would otherwise have that bot's `APPROVED`/`CHANGES_REQUESTED` review
+  // counted as a human's. Union it into a call-site-local set instead of
+  // widening the shared `advisoryBotLogins` above, which also feeds
+  // `buildActivitySnapshotSummary` and `summarizeRegularCommentsForGate`
+  // (unrelated classification needs that must not change as a side effect).
+  const reviewerStateAdvisoryBotLogins = normalizeTrustedMarkerLogins([
+    ...advisoryBotLogins,
+    options.primaryBotLogin ?? '',
+  ]);
   const reviewerStates = summarizeReviewerStates(reviews, {
     reviewDecision,
     branchRules,
@@ -4510,7 +4533,7 @@ export function buildPreMergeReadinessSummary(
     changedFiles,
     eligibleCodeownerUserLogins,
     eligibleCodeownerUserLoginsUnreadable,
-    advisoryBotLogins,
+    advisoryBotLogins: reviewerStateAdvisoryBotLogins,
     prAuthorLogin,
     viewerLogin: options.viewerLogin,
     viewerTeamSlugs: options.viewerTeamSlugs,
