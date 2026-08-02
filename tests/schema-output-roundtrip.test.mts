@@ -345,6 +345,8 @@ test('advisory-convergence: computeAdvisoryConvergenceVerdict output validates a
     threads: [],
     comments: [],
     claimEvents: [],
+    claimMarkerHistoryPresent: false,
+    claimCandidateAmbiguous: false,
   };
   const options: AdvisoryConvergenceOptions = {
     now: NOW,
