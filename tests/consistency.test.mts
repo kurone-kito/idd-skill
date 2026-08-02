@@ -1229,6 +1229,58 @@ test('discover A2 roadmap node classification guidance is present in instruction
   assert.match(templateWorkflow, /classify roadmap/i);
 });
 
+test('review-triage PATH A verify-before-accept and actor-permission-cap guidance is present in instruction and template surfaces (idd-skill#1690, PR#1796)', () => {
+  const reviewTriage = readFileSync(
+    new URL(
+      '../.github/instructions/idd-review-triage.instructions.md',
+      import.meta.url,
+    ),
+    'utf8',
+  );
+  const templateReviewTriage = readFileSync(
+    new URL(
+      '../idd-template/.github/instructions/idd-review-triage.instructions.md',
+      import.meta.url,
+    ),
+    'utf8',
+  );
+
+  for (const text of [reviewTriage, templateReviewTriage]) {
+    assert.match(text, /Verify before accept/);
+    assert.match(text, /actor-permission cap/i);
+    // Guards against reverting the PR#1796 hardening: an unprivileged
+    // commenter's assertion alone must never force an Accept.
+    assert.match(text, /collaborators\/\{username\}\/permission/);
+    assert.match(text, /assertion alone never reaches Accept forced/);
+  }
+});
+
+test('merge Duplicate-success-record skip rule still requires a trusted marker actor is present in instruction and template surfaces (idd-skill#1691, PR#1759)', () => {
+  const merge = readFileSync(
+    new URL(
+      '../.github/instructions/idd-merge.instructions.md',
+      import.meta.url,
+    ),
+    'utf8',
+  );
+  const templateMerge = readFileSync(
+    new URL(
+      '../idd-template/.github/instructions/idd-merge.instructions.md',
+      import.meta.url,
+    ),
+    'utf8',
+  );
+
+  for (const text of [merge, templateMerge]) {
+    assert.match(text, /Duplicate-success-record skip rule/);
+    assert.match(text, /whose author is a trusted marker actor/);
+    assert.match(
+      text,
+      /An untrusted commenter's\s+marker-prefixed comment never counts as evidence/,
+    );
+  }
+});
+
 test('recursive roadmap audit guidance stays aligned across instruction and docs surfaces', () => {
   const audit = readFileSync(ROADMAP_AUDIT_PATH, 'utf8');
   const workflow = readFileSync(WORKFLOW_PATH, 'utf8');

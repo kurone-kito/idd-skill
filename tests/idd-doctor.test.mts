@@ -40,6 +40,7 @@ import {
   parsePrimaryWorktreePath,
   parseProjectCommandRows,
   parseThresholdsProseHours,
+  readCleanupEvidenceTrustedLogins,
   readWorktreeGuardBranchPatterns,
   readWorktreeGuardEnabled,
   resolveConfiguredHelperRuntimePackageSpec,
@@ -1223,6 +1224,62 @@ test('formatCleanupBacklogRemediation uses a configured packageSpec under epheme
     /pinned-idd-skill\.tgz/,
     'no configured pin should fall back to the default archive URL',
   );
+});
+
+test('readCleanupEvidenceTrustedLogins includes configured trustedMarkerActors plus github-actions[bot], excludes untrusted logins (idd-skill#1691, PR#1759)', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'idd-doctor-cleanup-evidence-trust-'));
+  try {
+    mkdirSync(join(dir, '.github/idd'), { recursive: true });
+    writeFileSync(
+      join(dir, '.github/idd/config.json'),
+      JSON.stringify({ trustedMarkerActors: ['kurone-kito'] }),
+    );
+    const logins = readCleanupEvidenceTrustedLogins(dir);
+    assert.ok(logins.has('kurone-kito'));
+    assert.ok(logins.has('github-actions[bot]'));
+    assert.ok(
+      !logins.has('some-untrusted-commenter'),
+      'an untrusted login must not be present in the trusted set',
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('readCleanupEvidenceTrustedLogins fails closed to github-actions[bot] alone when config is missing, empty, or malformed (idd-skill#1691, PR#1759)', () => {
+  const dir = mkdtempSync(
+    join(tmpdir(), 'idd-doctor-cleanup-evidence-trust-fail-closed-'),
+  );
+  try {
+    // No config file at all.
+    assert.deepEqual(
+      readCleanupEvidenceTrustedLogins(dir),
+      new Set(['github-actions[bot]']),
+    );
+
+    // Present but empty trustedMarkerActors array -- a distinct code
+    // branch (Array.isArray true, then empty) from the try/catch
+    // failure cases below, even though the observable result is the
+    // same fail-closed set.
+    mkdirSync(join(dir, '.github/idd'), { recursive: true });
+    writeFileSync(
+      join(dir, '.github/idd/config.json'),
+      JSON.stringify({ trustedMarkerActors: [] }),
+    );
+    assert.deepEqual(
+      readCleanupEvidenceTrustedLogins(dir),
+      new Set(['github-actions[bot]']),
+    );
+
+    // Malformed JSON must never widen trust beyond the safe default.
+    writeFileSync(join(dir, '.github/idd/config.json'), '{ not json');
+    assert.deepEqual(
+      readCleanupEvidenceTrustedLogins(dir),
+      new Set(['github-actions[bot]']),
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test('computeWindowStartIso returns null for windows that overflow Date range', () => {
