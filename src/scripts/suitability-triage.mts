@@ -25,8 +25,10 @@ import {
   buildPrFilesArgs,
   type CheckOutcome,
   evaluateHighConfidenceDuplicate,
+  findCandidateFileOverlap,
   type HighConfidenceDuplicateInput,
   type HighConfidenceMergedPr,
+  resolveCandidateFileSet,
 } from './supersession-detection.mts';
 
 /**
@@ -854,6 +856,31 @@ function runCli(): void {
   const duplicateCandidates = fetchDuplicateCandidates(repoRef, issue);
   const labelsPolicy = normalizePolicyConfig(loadPolicy(args.policy)).labels;
 
+  // #1815: repository_fit, coherence, and trust_safety are cheap, local,
+  // no-I/O checks that run before duplicate_or_superseded (Check 4) in
+  // evaluateSuitability's own CHECKS order, which short-circuits the whole
+  // 7-check loop on the first failure -- so collecting Check 4's
+  // network-heavy evidence below (closedByPullRequestsReferences, plus the
+  // up-to-50-sequential merged-PR file-overlap scan) is wasted work
+  // whenever one of the three already fails. Evaluate them here, against
+  // the same Context shape evaluateSuitability builds internally, purely to
+  // decide whether to collect that evidence at all -- evaluateSuitability
+  // below still re-runs all three (cheap, no I/O) as part of its own normal
+  // 7-check loop, so this changes only which network calls happen, never a
+  // check's pass/fail outcome (fetchDuplicateCandidates above stays eager:
+  // a single `gh api search/issues` call, not the network cost this issue
+  // targets).
+  const preEvidenceContext: Context = {
+    issue,
+    repository: normalizeRepository({ owner, repo }),
+    duplicateCandidates: [],
+    trustSafetyAmbiguous: false,
+  };
+  const shouldCollectEvidence =
+    checkRepositoryFit(preEvidenceContext).pass &&
+    checkCoherence(preEvidenceContext).pass &&
+    checkTrustSafety(preEvidenceContext).pass;
+
   // #1484: high-confidence Check 4 tier evidence. The two mechanical signals
   // (closedByPullRequestsReferences, and the same-candidate-files merged-PR
   // scan) are collected in two SEPARATE try/catch blocks (CodeRabbit review
@@ -873,77 +900,86 @@ function runCli(): void {
   // 7-check evaluation (Codex review finding on this PR) -- this tier is an
   // optional enhancement layered onto Check 4, and Check 4's own documented
   // Edge Case ("Timeout on duplicate detection... fall back to exact title
-  // match only") already anticipates exactly this degradation.
+  // match only") already anticipates exactly this degradation. Both blocks
+  // below run only when `shouldCollectEvidence` is true (#1815) -- when it
+  // is false, Check 4 is never reached anyway, so `collectionWarnings`
+  // correctly stays empty (this is a deliberate skip, not a collection
+  // failure).
   const collectionWarnings: string[] = [];
   let closedByMergedPrNumbers: number[] = [];
-  try {
-    closedByMergedPrNumbers = fetchClosedByMergedPrNumbers(
-      owner,
-      repo,
-      args.issue,
-    );
-  } catch (error) {
-    collectionWarnings.push(
-      `closedByPullRequestsReferences: ${error instanceof Error ? error.message : String(error)}`,
-    );
-  }
-
   let candidateFiles: string[] = [];
   let highContentionFiles: string[] = [];
   let mergedPrs: HighConfidenceMergedPr[] = [];
-  try {
-    candidateFiles = parseCandidateFiles(issue.body);
-    // Only resolve the high-contention exclusion set (a file read + JSON
-    // parse) when there is a '## Candidate files' section to check it
-    // against -- most issues have none, and the result would otherwise be
-    // discarded.
-    const resolvedHighContentionFiles =
-      candidateFiles.length > 0
-        ? loadHighContentionFiles(
-            args.manifest,
-            args.bundles ?? DEFAULT_BUNDLE_IDS,
-          )
-        : null;
-    const shouldScanMergedPrs =
-      candidateFiles.length > 0 &&
-      resolvedHighContentionFiles !== null &&
-      issue.createdAt.length > 0;
-    highContentionFiles = resolvedHighContentionFiles ?? [];
-    if (candidateFiles.length > 0 && resolvedHighContentionFiles === null) {
-      // Codex P2 review finding: an unreadable/missing high-contention
-      // manifest silently skipped the same-candidate-files scan without
-      // recording a warning -- but from Check 4's perspective this is the
-      // same class of "high-confidence evidence could not be collected" as
-      // a genuine gh/API failure, and must degrade the same way (exact
-      // title match only), not let the full weak heuristic run.
+
+  if (shouldCollectEvidence) {
+    try {
+      closedByMergedPrNumbers = fetchClosedByMergedPrNumbers(
+        owner,
+        repo,
+        args.issue,
+      );
+    } catch (error) {
       collectionWarnings.push(
-        'same-candidate-files scan: high-contention manifest unavailable, skipping the scan',
+        `closedByPullRequestsReferences: ${error instanceof Error ? error.message : String(error)}`,
       );
     }
-    if (shouldScanMergedPrs) {
-      const scanResult = fetchMergedPrFileOverlapEvidence(
-        repoRef,
-        issue.createdAt,
-      );
-      mergedPrs = scanResult.mergedPrs;
-      if (scanResult.truncatedByDeadline) {
-        // Codex P2 review finding: a deadline-truncated scan returns
-        // normally (not a throw), so it must record its own warning here --
-        // otherwise Check 4 would run the full weak heuristic on
-        // incomplete evidence instead of degrading to exact-title-only.
+
+    try {
+      candidateFiles = parseCandidateFiles(issue.body);
+      // Only resolve the high-contention exclusion set (a file read + JSON
+      // parse) when there is a '## Candidate files' section to check it
+      // against -- most issues have none, and the result would otherwise be
+      // discarded.
+      const resolvedHighContentionFiles =
+        candidateFiles.length > 0
+          ? loadHighContentionFiles(
+              args.manifest,
+              args.bundles ?? DEFAULT_BUNDLE_IDS,
+            )
+          : null;
+      const shouldScanMergedPrs =
+        candidateFiles.length > 0 &&
+        resolvedHighContentionFiles !== null &&
+        issue.createdAt.length > 0;
+      highContentionFiles = resolvedHighContentionFiles ?? [];
+      if (candidateFiles.length > 0 && resolvedHighContentionFiles === null) {
+        // Codex P2 review finding: an unreadable/missing high-contention
+        // manifest silently skipped the same-candidate-files scan without
+        // recording a warning -- but from Check 4's perspective this is the
+        // same class of "high-confidence evidence could not be collected" as
+        // a genuine gh/API failure, and must degrade the same way (exact
+        // title match only), not let the full weak heuristic run.
         collectionWarnings.push(
-          'same-candidate-files scan: truncated by MERGED_PR_SCAN_DEADLINE_MS before scanning every merged PR in the window',
+          'same-candidate-files scan: high-contention manifest unavailable, skipping the scan',
         );
       }
-    } else {
+      if (shouldScanMergedPrs) {
+        const scanResult = fetchMergedPrFileOverlapEvidence(
+          repoRef,
+          issue.createdAt,
+          candidateFiles,
+          highContentionFiles,
+        );
+        mergedPrs = scanResult.mergedPrs;
+        if (scanResult.truncatedByDeadline) {
+          // Codex P2 review finding: a deadline-truncated scan returns
+          // normally (not a throw), so it must record its own warning here --
+          // otherwise Check 4 would run the full weak heuristic on
+          // incomplete evidence instead of degrading to exact-title-only.
+          collectionWarnings.push(
+            'same-candidate-files scan: truncated by MERGED_PR_SCAN_DEADLINE_MS before scanning every merged PR in the window',
+          );
+        }
+      } else {
+        mergedPrs = [];
+      }
+    } catch (error) {
+      collectionWarnings.push(
+        `same-candidate-files scan: ${error instanceof Error ? error.message : String(error)}`,
+      );
+      candidateFiles = [];
       mergedPrs = [];
     }
-  } catch (error) {
-    collectionWarnings.push(
-      `same-candidate-files scan: ${error instanceof Error ? error.message : String(error)}`,
-    );
-    candidateFiles = [];
-    mergedPrs = [];
   }
 
   const highConfidenceDuplicate: SuitabilityOptions['highConfidenceDuplicate'] =
@@ -1373,15 +1409,35 @@ interface MergedPrFileOverlapScanResult {
  * still throws -- the caller (`runCli`) wraps this and its sibling fetch in
  * a separate try/catch so that surfaces as the same documented Check 4 Edge
  * Case fallback for just this signal, without discarding the other.
+ *
+ * `candidateFiles` / `highContentionFiles` (#1815) let the scan stop early:
+ * `evaluateHighConfidenceDuplicate` only needs the FIRST merged PR (in scan
+ * order) whose changed files overlap the exclusion-adjusted candidate set
+ * to return a high-confidence fail -- every PR after it would otherwise be
+ * fetched and then ignored. `resolveCandidateFileSet` /
+ * `findCandidateFileOverlap` (`supersession-detection.mts`) are the exact
+ * same helpers `evaluateHighConfidenceDuplicate` itself now uses, so the
+ * PR this loop stops on is provably the same PR the downstream evaluation
+ * would stop on -- no evidence-content change, only fewer PRs fetched.
+ * Exported (not just called) so `fetchMergedPrFileOverlapEvidence` can be
+ * unit-tested directly against a stubbed `gh` on `PATH`, the way this
+ * repo's other `gh`-calling functions are exercised (see
+ * `tests/gh-exec.test.mts` / `tests/discover-roadmap-graph.test.mts`).
  */
-function fetchMergedPrFileOverlapEvidence(
+export function fetchMergedPrFileOverlapEvidence(
   repoRef: string,
   sinceIso: string,
+  candidateFiles: string[],
+  highContentionFiles: string[],
 ): MergedPrFileOverlapScanResult {
   const list = ghJsonArray(buildMergedPrListArgs(repoRef, sinceIso));
   const mergedPrs: HighConfidenceMergedPr[] = [];
   const deadline = Date.now() + MERGED_PR_SCAN_DEADLINE_MS;
   let truncatedByDeadline = false;
+  const candidateSet = resolveCandidateFileSet(
+    candidateFiles,
+    highContentionFiles,
+  );
   for (const entry of list) {
     if (Date.now() >= deadline) {
       truncatedByDeadline = true;
@@ -1397,6 +1453,16 @@ function fetchMergedPrFileOverlapEvidence(
       .map((line) => line.trim())
       .filter(Boolean);
     mergedPrs.push({ number, mergedAt: String(pr.mergedAt ?? ''), files });
+    if (findCandidateFileOverlap(files, candidateSet).length > 0) {
+      // Qualifying overlap found (#1815): stop -- see the doc comment
+      // above. Deliberately a plain `break`, NOT `truncatedByDeadline =
+      // true`: this is a complete, successful scan that found its answer
+      // early, not a scan cut short before finishing. Setting the flag
+      // here would wrongly push a `collectionWarnings` entry in `runCli`,
+      // which degrades Check 4 to exact-title-only -- silently turning a
+      // genuine high-confidence hit into a false pass.
+      break;
+    }
   }
   return { mergedPrs, truncatedByDeadline };
 }

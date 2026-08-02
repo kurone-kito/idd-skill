@@ -6,6 +6,8 @@ import {
   buildMergedPrListArgs,
   buildPrFilesArgs,
   evaluateHighConfidenceDuplicate,
+  findCandidateFileOverlap,
+  resolveCandidateFileSet,
 } from '../src/scripts/supersession-detection.mts';
 
 // --- #1499: relocated from tests/suitability-triage.test.mts ---------------
@@ -175,6 +177,65 @@ test('evaluateHighConfidenceDuplicate: a same-candidate-files hit carries tier "
     ],
   });
   assert.equal(result?.tier, 'high-confidence');
+});
+
+// --- #1815: extracted resolveCandidateFileSet / findCandidateFileOverlap ---
+// evaluateHighConfidenceDuplicate now calls these instead of inlining the
+// same logic; the tests above already prove the refactor is
+// behavior-preserving end-to-end. These cover the extracted helpers
+// directly, since suitability-triage.mts's `fetchMergedPrFileOverlapEvidence`
+// early exit (#1815) now reuses them independently of
+// evaluateHighConfidenceDuplicate.
+
+test('resolveCandidateFileSet: normalizes and excludes high-contention files', () => {
+  const set = resolveCandidateFileSet(
+    ['scripts/genuine.mjs', 'audit/sync-manifest.json'],
+    ['audit/sync-manifest.json'],
+  );
+  assert.equal(set.has('scripts/genuine.mjs'), true);
+  assert.equal(set.has('audit/sync-manifest.json'), false);
+  assert.equal(set.size, 1);
+});
+
+test('resolveCandidateFileSet: an empty candidateFiles list resolves to an empty set', () => {
+  const set = resolveCandidateFileSet([], []);
+  assert.equal(set.size, 0);
+});
+
+test('resolveCandidateFileSet: reuses normalizeContentionPath so mirrored instruction paths still match', () => {
+  // normalizeContentionPath reduces any `*.instructions.md` path to its
+  // basename (idd-template source vs. generated .github/instructions/
+  // mirror share one normalized key) -- same fixture shape as the
+  // evaluateHighConfidenceDuplicate test above, exercised directly against
+  // the extracted helper.
+  const set = resolveCandidateFileSet(
+    ['idd-template/.github/instructions/idd-work.instructions.md'],
+    [],
+  );
+  assert.equal(set.has('idd-work.instructions.md'), true);
+});
+
+test('findCandidateFileOverlap: returns overlapping normalized files only', () => {
+  const set = resolveCandidateFileSet(['scripts/genuine.mjs'], []);
+  const overlap = findCandidateFileOverlap(
+    ['scripts/genuine.mjs', 'docs/unrelated.md'],
+    set,
+  );
+  assert.deepEqual(overlap, ['scripts/genuine.mjs']);
+});
+
+test('findCandidateFileOverlap: an empty candidateSet always returns no overlap', () => {
+  const overlap = findCandidateFileOverlap(
+    ['scripts/genuine.mjs'],
+    new Set<string>(),
+  );
+  assert.deepEqual(overlap, []);
+});
+
+test('findCandidateFileOverlap: no overlap when files are disjoint from the set', () => {
+  const set = resolveCandidateFileSet(['scripts/genuine.mjs'], []);
+  const overlap = findCandidateFileOverlap(['docs/unrelated.md'], set);
+  assert.deepEqual(overlap, []);
 });
 
 // --- #1484: detect-only boundary (argv-builder read-verb assertions) -------
