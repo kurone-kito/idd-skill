@@ -403,17 +403,23 @@ export interface AdvisoryConvergenceInputs {
    * non-IDD PR (no linked issue, no claim history ever -- `false`, stays
    * `not_applicable`) from an IDD-shaped PR whose claim linkage is
    * currently broken (a stale or released claim -- `true`, becomes
-   * `indeterminate`). Defaults to `false` when omitted, preserving prior
-   * `not_applicable` behavior for every fixture/caller that predates this
-   * field. */
+   * `indeterminate`). Required: every construction site must state the
+   * value explicitly (`false` for a PR with no claim history to report) --
+   * `collectFromGitHub` always computes and forwards it via
+   * `resolveClaimEvidence`, so an omitted field on this typed interface
+   * would signal a broken forwarding path, not a legitimate "no history"
+   * case (kurone-kito/idd-skill#1814). An untyped JS caller of the emitted
+   * `.mjs` that still omits it gets the same effective `false` at runtime,
+   * since it is read below as `inputs.claimMarkerHistoryPresent === true`. */
   claimMarkerHistoryPresent: boolean;
   /** #1686: true when two or more of the PR's candidate claim issues each
    * independently resolve an ACTIVE trusted claim -- the disambiguation
    * failure `pickResolvingClaimEvents` already fails closed to `[]` for
    * (module header path 2). An explicit `--claim-issue` target has no
    * ambiguity to resolve, so the CLI-collection layer always reports
-   * `false` for it (see `classifyClaimCandidateAmbiguity`). Defaults to
-   * `false` when omitted. Checked BEFORE `claimMarkerHistoryPresent` in the
+   * `false` for it (see `classifyClaimCandidateAmbiguity`). Required for the
+   * same reason as `claimMarkerHistoryPresent` above (kurone-kito/idd-skill#1814).
+   * Checked BEFORE `claimMarkerHistoryPresent` in the
    * applicability computation so the more specific "which failure mode"
    * reason wins -- an ambiguous set of candidates trivially also has claim
    * history (an active claim cannot exist without a valid marker), so the
