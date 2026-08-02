@@ -425,7 +425,11 @@ export interface AdvisoryConvergenceInputs {
    * reason wins -- an ambiguous set of candidates trivially also has claim
    * history (an active claim cannot exist without a valid marker), so the
    * two fields are not mutually exclusive; the check order is what makes
-   * the reported `reason` precise. */
+   * the reported `reason` precise. Validated the same way
+   * `claimMarkerHistoryPresent` is -- an untyped `.mjs` caller that omits
+   * it (or passes a non-boolean) is rejected at runtime with a thrown
+   * `Error` instead of silently coercing to `false`
+   * (kurone-kito/idd-skill#1821). */
   claimCandidateAmbiguous: boolean;
 }
 
