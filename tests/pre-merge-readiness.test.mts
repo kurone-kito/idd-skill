@@ -3352,6 +3352,54 @@ test('disposition evidence does not hint from a wrong-phrase reply that predates
   assert.equal(summary.missingRegularComments[0].hint, undefined);
 });
 
+// #1833: `missingRegularComments[].hint` must validate against
+// `schemas/pre-merge-readiness.schema.json` -- that schema's
+// `dispositionEvidence.missingRegularComments[]` item shape is
+// `additionalProperties: false`, so an unaccounted-for new field on the
+// TypeScript side would be silently rejected by any schema-validating
+// consumer even though `summarizeDispositionEvidenceForGate` itself is happy
+// to emit it (caught by Copilot review on PR #1848 -- the schema was missed
+// in the original change).
+test('a hinted missingRegularComments entry validates against pre-merge-readiness.schema.json', () => {
+  const summary = summarizeDispositionEvidenceForGate(
+    {
+      comments: [
+        {
+          id: 1,
+          createdAt: '2026-05-12T00:00:00Z',
+          updatedAt: '2026-05-12T03:00:00Z',
+          body: 'You have reached your Codex usage limits for code reviews.',
+          author: { login: 'chatgpt-codex-connector[bot]' },
+        },
+        {
+          id: 2,
+          createdAt: '2026-05-12T00:00:30Z',
+          body: '**Rejected** — CodeRabbit rate-limited, no findings to triage.',
+          author: { login: 'idd-bot' },
+        },
+      ],
+      threads: [],
+    },
+    {
+      iddAgentLogins: ['idd-bot'],
+      advisoryBotLogins: ['chatgpt-codex-connector[bot]'],
+    },
+  );
+  assert.ok(summary.missingRegularComments[0].hint);
+
+  const schema = loadJson('schemas/pre-merge-readiness.schema.json') as {
+    properties: {
+      dispositionEvidence: {
+        properties: { missingRegularComments: { items: unknown } };
+      };
+    };
+  };
+  const itemSchema =
+    schema.properties.dispositionEvidence.properties.missingRegularComments
+      .items;
+  assert.deepEqual(validate(summary.missingRegularComments[0], itemSchema), []);
+});
+
 // No regression (multi-bot): a disposition naming one advisory bot must NOT
 // carry forward another bot's still-undispositioned notice. The repo can
 // configure several advisory bots at once, so an order/count-only pairing would

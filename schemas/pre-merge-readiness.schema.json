@@ -1005,6 +1005,9 @@
               },
               "bodyPreview": {
                 "type": "string"
+              },
+              "hint": {
+                "type": "string"
               }
             }
           }
