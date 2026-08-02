@@ -349,6 +349,53 @@ test('idd-claimed scope: a stale trusted claim (claim-marker history present, no
   assert.equal(verdict.ready, false);
 });
 
+// --- claim-evidence runtime validation (#1821) ------------------------------
+// `claimMarkerHistoryPresent` / `claimCandidateAmbiguous` are required
+// `boolean` fields at the TS level (#1814), but that guard is erased at
+// emit -- an untyped caller of the exported `.mjs` can still pass
+// `undefined` or a non-boolean value through. These cases pin the runtime
+// rejection this issue adds, so it cannot silently regress back to the old
+// `=== true` coercion. `as never` bypasses the TS type that already
+// forbids constructing these bad inputs directly.
+
+test('computeAdvisoryConvergenceVerdict: rejects a non-boolean claimMarkerHistoryPresent instead of coercing it to false', () => {
+  assert.throws(
+    () =>
+      computeAdvisoryConvergenceVerdict(
+        baseInputs({ claimMarkerHistoryPresent: undefined as never }),
+        baseOptions(),
+      ),
+    { message: 'claimMarkerHistoryPresent must be a boolean' },
+  );
+  assert.throws(
+    () =>
+      computeAdvisoryConvergenceVerdict(
+        baseInputs({ claimMarkerHistoryPresent: 'true' as never }),
+        baseOptions(),
+      ),
+    { message: 'claimMarkerHistoryPresent must be a boolean' },
+  );
+});
+
+test('computeAdvisoryConvergenceVerdict: rejects a non-boolean claimCandidateAmbiguous instead of coercing it to false', () => {
+  assert.throws(
+    () =>
+      computeAdvisoryConvergenceVerdict(
+        baseInputs({ claimCandidateAmbiguous: undefined as never }),
+        baseOptions(),
+      ),
+    { message: 'claimCandidateAmbiguous must be a boolean' },
+  );
+  assert.throws(
+    () =>
+      computeAdvisoryConvergenceVerdict(
+        baseInputs({ claimCandidateAmbiguous: 1 as never }),
+        baseOptions(),
+      ),
+    { message: 'claimCandidateAmbiguous must be a boolean' },
+  );
+});
+
 test('idd-claimed scope: a PR without a verified linked claim is not applicable', () => {
   const verdict = computeAdvisoryConvergenceVerdict(
     baseInputs({ reviews: [], claimEvents: [] }),
