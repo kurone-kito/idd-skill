@@ -892,8 +892,13 @@ Output schema:
   "passed": true,
   "outcome": "ready|unclear|needs-decision|blocked-by-human|duplicate|out-of-scope|invalid",
   "failedCheck": "repository_fit|...|null",
-  "checks": [{"id":"repository_fit","name":"Repository Fit","result":"pass|fail","evidence":"...","tier":"high-confidence|weak"}]
+  "checks": [{"id":"repository_fit","name":"Repository Fit","result":"pass|fail","evidence":"..."}]
 }
+
+Each checks[] entry may also carry "tier":"high-confidence|weak" -- present
+only on a duplicate_or_superseded fail (absent on every pass and on every
+other check), distinguishing a high-confidence mechanical hit from the weak
+title/declaration heuristic.
 `);
 }
 function normalizeIssue(issue) {

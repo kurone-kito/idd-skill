@@ -845,7 +845,13 @@ test('checkDuplicateOrSuperseded: a pass carries no tier at all', () => {
   assert.equal(result.tier, undefined);
 });
 
-test('evaluateSuitability: non-verbose checks[] output still carries tier through', () => {
+test('evaluateSuitability: checks[] threads tier through from the failing check', () => {
+  // Note: evaluateSuitability's own return shape (SuitabilityResult.checks)
+  // is what this asserts -- not runCli's separate verbose/non-verbose JSON
+  // output mapping, which is covered by the two tests below instead (E2
+  // self-review finding: an earlier version of this test's name implied it
+  // covered the non-verbose mapping, but it only exercised the pre-mapping
+  // checks[] array).
   const result = evaluateSuitability(BASE_ISSUE, {
     duplicateCandidates: [{ number: 12, title: BASE_ISSUE.title }],
   });
@@ -853,6 +859,32 @@ test('evaluateSuitability: non-verbose checks[] output still carries tier throug
     (check) => check.id === 'duplicate_or_superseded',
   );
   assert.equal(duplicateCheck?.tier, 'weak');
+});
+
+// --- #1499: runCli's verbose/non-verbose JSON mapping (wiring check) -------
+// runCli itself isn't unit-tested (real gh I/O), so -- mirroring the
+// loadHighContentionFiles wiring pin above -- these are structural pins on
+// the source text proving both mapping branches actually carry `tier`
+// through, rather than only the pre-mapping evaluateSuitability output
+// tested above.
+
+test('runCli: verbose output passes result.checks through unchanged (tier included)', () => {
+  const source = readFileSync(
+    new URL('../src/scripts/suitability-triage.mts', import.meta.url),
+    'utf8',
+  );
+  assert.match(source, /checks: args\.verbose\s*\n\s*\? result\.checks/);
+});
+
+test('runCli: non-verbose output mapping still spreads tier when present', () => {
+  const source = readFileSync(
+    new URL('../src/scripts/suitability-triage.mts', import.meta.url),
+    'utf8',
+  );
+  assert.match(
+    source,
+    /result: check\.result,[\s\S]{0,400}\.\.\.\(check\.tier \? \{ tier: check\.tier \} : \{\}\)/,
+  );
 });
 
 // --- #1499: --manifest / --bundles override surface (loadHighContentionFiles) ----
