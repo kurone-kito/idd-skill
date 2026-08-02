@@ -11,20 +11,28 @@
 #     merge commit itself) -- it is never the PR's own head SHA, and
 #     never content that has not already passed through the merge
 #     decision.
-#   - No PR-head code, workflow, or action is ever executed. Only this
-#     repository's own base-branch-tracked content runs: the
-#     cleanup-audit invocation resolved below always names a script or
-#     package this base branch already tracks or has already declared as
-#     a dependency, never anything from the PR diff. Under the
-#     `package-manager` profile specifically, that base-branch content
-#     includes the repository's own declared install lifecycle (its
-#     lockfile-driven `npm ci` / `pnpm install --frozen-lockfile` /
+#   - No PR-head code, workflow, or action is ever executed; nothing from
+#     the PR diff ever runs. Under `vendored-node` and `package-manager`,
+#     the cleanup-audit invocation names only a script or package this
+#     base branch already tracks or has already declared as a
+#     dependency. Under `package-manager` specifically, that base-branch
+#     content includes the repository's own declared install lifecycle
+#     (its lockfile-driven `npm ci` / `pnpm install --frozen-lockfile` /
 #     `yarn install --frozen-lockfile`) -- that is the adopter's own
 #     already-reviewed, already-merged dependency tree, not PR-head
 #     content, but it is a wider execution surface than this source
 #     repository's own dogfooded copy (which only ever runs its single
 #     tracked `scripts/audit-pr-cleanup.mjs`), so it is called out here
-#     explicitly.
+#     explicitly. Under `ephemeral-npx` specifically, when the repository
+#     has not configured `helperRuntime.packageSpec`, the invocation
+#     falls back to fetching a **mutable** default archive URL
+#     (`https://codeload.github.com/kurone-kito/idd-skill/tar.gz/refs/heads/main`)
+#     over the network at run time -- not base-branch-tracked content and
+#     not a declared dependency either. This is a real, wider execution
+#     surface than the other profiles; adopters on `ephemeral-npx` should
+#     pin `helperRuntime.packageSpec` to a reviewed tarball or mirror URL
+#     (see docs/idd-helper-scripts.md's "Profile Wiring Surface" section)
+#     to close this gap.
 #   - The `pr_number` value (a `workflow_dispatch` number input, not
 #     strictly enforced as numeric for direct API dispatches) is passed
 #     through `env:` and referenced as a quoted shell variable, never
@@ -184,34 +192,41 @@ jobs:
             echo "::error::PR_NUMBER is empty"
             exit 1
           fi
-          ARGS="--pr $PR_NUMBER --apply --skip-claim-check --format json"
+          # FLAGS holds only fixed, non-attacker-controlled literal
+          # tokens -- unquoted word-splitting below is safe for it.
+          # PR_NUMBER is untrusted (a workflow_dispatch number input is
+          # not strictly enforced as numeric for direct API dispatches)
+          # and is always passed as its own separately quoted argument,
+          # never folded into a word-split string, so a crafted value
+          # cannot inject extra flags/args into the helper invocation.
+          FLAGS="--apply --skip-claim-check --format json"
           case "$PROFILE" in
             vendored-node)
               # shellcheck disable=SC2086
-              JSON=$(node scripts/audit-pr-cleanup.mjs $ARGS 2>cleanup-stderr.log)
+              JSON=$(node scripts/audit-pr-cleanup.mjs --pr "$PR_NUMBER" $FLAGS 2>cleanup-stderr.log)
               ;;
             package-manager)
               case "$MANAGER" in
                 pnpm)
                   # shellcheck disable=SC2086
-                  JSON=$(pnpm exec idd-audit-pr-cleanup $ARGS 2>cleanup-stderr.log)
+                  JSON=$(pnpm exec idd-audit-pr-cleanup --pr "$PR_NUMBER" $FLAGS 2>cleanup-stderr.log)
                   ;;
                 yarn)
                   # shellcheck disable=SC2086
-                  JSON=$(yarn idd-audit-pr-cleanup $ARGS 2>cleanup-stderr.log)
+                  JSON=$(yarn idd-audit-pr-cleanup --pr "$PR_NUMBER" $FLAGS 2>cleanup-stderr.log)
                   ;;
                 *)
                   # npm requires a literal `--` before forwarded flags;
                   # pnpm/yarn above do not.
                   # shellcheck disable=SC2086
-                  JSON=$(npm exec idd-audit-pr-cleanup -- $ARGS 2>cleanup-stderr.log)
+                  JSON=$(npm exec idd-audit-pr-cleanup -- --pr "$PR_NUMBER" $FLAGS 2>cleanup-stderr.log)
                   ;;
               esac
               ;;
             ephemeral-npx)
               SPEC="${PACKAGE_SPEC:-https://codeload.github.com/kurone-kito/idd-skill/tar.gz/refs/heads/main}"
               # shellcheck disable=SC2086
-              JSON=$(npx --yes --package "$SPEC" idd-audit-pr-cleanup $ARGS 2>cleanup-stderr.log)
+              JSON=$(npx --yes --package "$SPEC" idd-audit-pr-cleanup --pr "$PR_NUMBER" $FLAGS 2>cleanup-stderr.log)
               ;;
           esac
           HELPER_EXIT=$?
@@ -273,9 +288,18 @@ jobs:
           # post or be treated as a completed cleanup record (this is the
           # same trust-scoping every other IDD operational marker already
           # applies).
+          # This step runs under the default GitHub Actions bash flags
+          # (-eo pipefail), so a plain `jq ... .github/idd/config.json`
+          # would abort the whole step under `set -e` when the file is
+          # missing or unreadable (a repo still using only the legacy
+          # `idd-policy.json` name, or a non-template install) --
+          # `|| true` keeps that a soft "no extra trusted logins" read
+          # instead of a hard failure, preserving the fail-closed
+          # trust-only-github-actions-bot behavior below rather than
+          # silently skipping the whole duplicate-evidence check.
           TRUSTED_LOGINS=$(
             {
-              jq -r '(.trustedMarkerActors // [])[]' .github/idd/config.json 2>/dev/null
+              jq -r '(.trustedMarkerActors // [])[]' .github/idd/config.json 2>/dev/null || true
               echo 'github-actions[bot]'
             } | tr '[:upper:]' '[:lower:]'
           )
