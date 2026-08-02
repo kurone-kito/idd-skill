@@ -952,7 +952,13 @@ Interpretation rules:
   `node scripts/claim-approval-gate.mjs --issue <issue-number>`
 - Package-manager / ephemeral-npx command: use the
   profile-selected `idd:claim-approval-gate` command from the helper
-  runtime manifest wiring above
+  runtime manifest wiring above; the literal invocation is:
+
+  ```sh
+  npx --yes --package <helper-package-spec> \
+    idd-claim-approval-gate --issue <issue-number>
+  ```
+
 - Optional freshness override: append
   `--generated-plan-updated-at <ISO8601>` when the caller already has
   authoritative generated-plan freshness evidence to reuse
@@ -975,7 +981,18 @@ Interpretation rules:
   --claim-id <id> [--takeover]`
   and `node scripts/claim-lock.mjs --check --worktree <path>`
 - Package-manager / ephemeral-npx command: use the profile-selected
-  `idd:claim-lock` command from the helper runtime manifest wiring above
+  `idd:claim-lock` command from the helper runtime manifest wiring above;
+  the literal invocations are:
+
+  ```sh
+  npx --yes --package <helper-package-spec> \
+    idd-claim-lock --acquire --worktree <path> --agent-id <id> \
+    --claim-id <id> [--takeover]
+
+  npx --yes --package <helper-package-spec> \
+    idd-claim-lock --check --worktree <path>
+  ```
+
 - Same-machine fast path complementing the cross-machine claim check (see
   the [worktree-local lock file](../.github/instructions/idd-claim.instructions.md#worktree-local-lock-file-same-machine-collision)
   subsection of `idd-claim.instructions.md` for the full protocol)
@@ -1032,7 +1049,14 @@ Interpretation rules:
 - Source repo / vendored-node command:
   `node scripts/branch-name.mjs --number <issue-number> --title <issue-title>`
 - Package-manager / ephemeral-npx command: use the profile-selected
-  `idd:branch-name` command from the helper runtime manifest wiring above
+  `idd:branch-name` command from the helper runtime manifest wiring above;
+  the literal invocation is:
+
+  ```sh
+  npx --yes --package <helper-package-spec> \
+    idd-branch-name --number <issue-number> --title <issue-title>
+  ```
+
 - Prints a single plain line `issue/<number>-<slug>`, implementing the
   `idd-claim.instructions.md` pre-check (e) slug algorithm exactly
   (lowercase, replace `[^a-z0-9]` with `-`, drop empty tokens and the
@@ -1049,7 +1073,13 @@ Interpretation rules:
   `node scripts/select-desynced-index.mjs --token <session-token> --band-size <band-size>`
 - Package-manager / ephemeral-npx command: use the profile-selected
   `idd:select-desynced-index` command from the helper runtime manifest
-  wiring above
+  wiring above; the literal invocation is:
+
+  ```sh
+  npx --yes --package <helper-package-spec> \
+    idd-select-desynced-index --token <session-token> --band-size <band-size>
+  ```
+
 - Prints a single plain integer line: the band index chosen by the A4
   Step 2 `discover.selectionDesync: session-offset` rule, implementing
   `selectDesyncedIndex` (a pure FNV-1a 32-bit hash of the session token,
@@ -1066,7 +1096,14 @@ Interpretation rules:
   `node scripts/emit-marker.mjs --type <type> <fields...>` where `<type>` is
   `claimed-by`, `review-watermark`, or `review-baseline`
 - Package-manager / ephemeral-npx command: use the profile-selected
-  `idd:emit-marker` command from the helper runtime manifest wiring above
+  `idd:emit-marker` command from the helper runtime manifest wiring above;
+  the literal invocation is:
+
+  ```sh
+  npx --yes --package <helper-package-spec> \
+    idd-emit-marker --type <type> <fields...>
+  ```
+
 - Prints the exact ready-to-post marker body (HTML token + visible "Do not
   edit" note) to stdout; **emit-only, no network write** — the agent posts
   it via the documented HTTP path
@@ -1085,7 +1122,14 @@ Interpretation rules:
   (dry-run prints a JSON envelope whose `body` field is the marker); add
   `--apply` to POST it.
 - Package-manager / ephemeral-npx command: use the profile-selected
-  `idd:post-idd-marker` command from the helper runtime manifest wiring above
+  `idd:post-idd-marker` command from the helper runtime manifest wiring
+  above; the literal invocation is:
+
+  ```sh
+  npx --yes --package <helper-package-spec> \
+    idd-post-idd-marker --type <type> --target <issue|pr> <number> <fields...>
+  ```
+
 - Write-side companion to `emit-marker`: it renders the canonical body for
   each operational marker `<type>` (`claim`, `unclaim`, `activation-nonce`,
   `watermark`, `baseline`, `advisory`, `advisory-recovery`,
@@ -1218,7 +1262,13 @@ to post it is the consuming track's job.
   `node scripts/ci-wait-policy.mjs`
 - Package-manager / ephemeral-npx command: use the
   profile-selected `idd:ci-wait-policy` command from the helper runtime
-  manifest wiring above
+  manifest wiring above; the literal invocation is:
+
+  ```sh
+  npx --yes --package <helper-package-spec> \
+    idd-ci-wait-policy
+  ```
+
 - Optional rerun-budget evaluation: append
   `--rerun-count <count>` to the selected command
 - Stable fields consumed by instructions or helpers:
@@ -1235,7 +1285,13 @@ to post it is the consuming track's job.
   `node scripts/ci-wait-state.mjs --pr <pr-number>`
 - Package-manager / ephemeral-npx command: use the
   profile-selected `idd:ci-wait-state` command from the helper runtime
-  manifest wiring above
+  manifest wiring above; the literal invocation is:
+
+  ```sh
+  npx --yes --package <helper-package-spec> \
+    idd-ci-wait-state --pr <pr-number>
+  ```
+
 - Single-shot, read-only: fetches `gh pr view`'s
   `headRefOid`/`statusCheckRollup` plus the base branch's active rules and
   classic branch protection, then reuses the same
@@ -1283,7 +1339,13 @@ to post it is the consuming track's job.
 - Package-manager / ephemeral-npx command: use the
   profile-selected `idd:rerun-advisory-convergence` command from the
   helper runtime manifest wiring above, with `[--apply]` appended the
-  same way
+  same way; the literal invocation is:
+
+  ```sh
+  npx --yes --package <helper-package-spec> \
+    idd-rerun-advisory-convergence --pr <pr-number> [--apply]
+  ```
+
 - Rerun-plan diagnosis (#1431) for a stuck `idd-advisory-convergence`
   required-check rollup, read-only by default: fetches every check-run
   instance for the PR's current HEAD SHA (paged commit check-runs API,
