@@ -1039,33 +1039,18 @@ function collectFromGitHub(args) {
         ])
       : []),
   ]);
-  const claimEvents = pickResolvingClaimEvents(
-    claimCandidates,
-    trustedMarkerLogins,
-    Boolean(args.claimIssueNumber),
-  );
-  // #1686: ambiguity is a distinct signal from `claimEvents` above --
-  // `pickResolvingClaimEvents` deliberately collapses BOTH "zero candidates
-  // resolve" and "two or more candidates resolve" to `[]` (see its own doc
-  // comment), so this must be computed separately over the same
-  // `claimCandidates`/`trustedMarkerLogins` inputs rather than re-derived
-  // from the already-collapsed `claimEvents`.
-  const claimCandidateAmbiguous = classifyClaimCandidateAmbiguity(
-    claimCandidates,
-    trustedMarkerLogins,
-    Boolean(args.claimIssueNumber),
-  );
-  // #1686: true when ANY candidate claim issue ever carried a trusted,
-  // syntactically valid `claimed-by` marker -- computed over the union of
-  // every candidate's RAW comment stream (`claimCandidates`, not the
-  // resolved-and-possibly-emptied `claimEvents`), so a stale, released, or
-  // otherwise no-longer-active claim still counts as genuine IDD claim
-  // history. See `hasTrustedClaimMarkerHistory`'s doc comment for the full
-  // rationale and the module header's path 4.
-  const claimMarkerHistoryPresent = hasTrustedClaimMarkerHistory(
-    claimCandidates,
-    trustedMarkerLogins,
-  );
+  // #1810: delegates to `resolveClaimEvidence` (below `hasTrustedClaimMarker-
+  // History`'s definition) instead of calling `pickResolvingClaimEvents` /
+  // `classifyClaimCandidateAmbiguity` / `hasTrustedClaimMarkerHistory`
+  // separately here -- see that function's doc comment for why this call
+  // site's own compute-and-forward wiring needed a direct test, not just
+  // the three underlying helpers.
+  const { claimEvents, claimCandidateAmbiguous, claimMarkerHistoryPresent } =
+    resolveClaimEvidence(
+      claimCandidates,
+      trustedMarkerLogins,
+      Boolean(args.claimIssueNumber),
+    );
   const primaryBotLogin = readAdvisoryPrimaryBotLogin();
   const deadlineMinutes = readAdvisoryConvergenceDeadlineMinutes();
   // #1511: bounded same-HEAD reroll cap, plus the existing pendingWindow
@@ -1342,6 +1327,54 @@ export function hasTrustedClaimMarkerHistory(candidates, trustedMarkerLogins) {
       );
     }),
   );
+}
+/**
+ * Resolve all three claim-evidence fields `collectFromGitHub` forwards into
+ * {@link AdvisoryConvergenceInputs} from already-fetched claim candidates and
+ * resolved trust -- pure (no I/O), so it is directly unit-testable, mirroring
+ * {@link filterResolvingClaimCandidates}'s existing shared-helper extraction
+ * pattern. `collectFromGitHub` previously called
+ * {@link pickResolvingClaimEvents}, {@link classifyClaimCandidateAmbiguity},
+ * and {@link hasTrustedClaimMarkerHistory} separately and forwarded their
+ * results inline; that compute-and-forward wiring is itself the #1810 gap --
+ * each of the three helpers has direct unit tests, but nothing proved the
+ * real call site actually threads their outputs into the verdict inputs.
+ * Collapsing all three into one exported step makes the call site a trivial,
+ * visually obvious delegation and gives the wiring itself a direct test.
+ */
+export function resolveClaimEvidence(
+  candidates,
+  trustedMarkerLogins,
+  isExplicit,
+) {
+  const claimEvents = pickResolvingClaimEvents(
+    candidates,
+    trustedMarkerLogins,
+    isExplicit,
+  );
+  // #1686: ambiguity is a distinct signal from `claimEvents` above --
+  // `pickResolvingClaimEvents` deliberately collapses BOTH "zero candidates
+  // resolve" and "two or more candidates resolve" to `[]` (see its own doc
+  // comment), so this must be computed separately over the same
+  // `candidates`/`trustedMarkerLogins` inputs rather than re-derived from the
+  // already-collapsed `claimEvents`.
+  const claimCandidateAmbiguous = classifyClaimCandidateAmbiguity(
+    candidates,
+    trustedMarkerLogins,
+    isExplicit,
+  );
+  // #1686: true when ANY candidate claim issue ever carried a trusted,
+  // syntactically valid `claimed-by` marker -- computed over the union of
+  // every candidate's RAW comment stream (`candidates`, not the
+  // resolved-and-possibly-emptied `claimEvents`), so a stale, released, or
+  // otherwise no-longer-active claim still counts as genuine IDD claim
+  // history. See `hasTrustedClaimMarkerHistory`'s doc comment for the full
+  // rationale and the module header's path 4.
+  const claimMarkerHistoryPresent = hasTrustedClaimMarkerHistory(
+    candidates,
+    trustedMarkerLogins,
+  );
+  return { claimEvents, claimCandidateAmbiguous, claimMarkerHistoryPresent };
 }
 /**
  * Candidate collaborator-marker-trust logins: comment authors whose comment

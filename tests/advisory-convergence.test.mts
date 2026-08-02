@@ -12,6 +12,7 @@ import {
   hasTrustedClaimMarkerHistory,
   parseArgs,
   pickResolvingClaimEvents,
+  resolveClaimEvidence,
   runAdvisoryConvergence,
   SAME_HEAD_REROLL_INELIGIBLE_REASON,
   viewerProbeGhOptions,
@@ -2305,6 +2306,166 @@ test('hasTrustedClaimMarkerHistory: true for a STALE trusted claim -- a claimed-
     false,
   );
   assert.equal(hasTrustedClaimMarkerHistory([released], [TRUSTED]), true);
+});
+
+// --- resolveClaimEvidence (idd-skill#1810: collectFromGitHub's call-site
+// wiring, not just the three helpers above in isolation) --------------------
+//
+// #1810's audit found that `pickResolvingClaimEvents`,
+// `classifyClaimCandidateAmbiguity`, and `hasTrustedClaimMarkerHistory` each
+// have direct unit tests (above), and `computeAdvisoryConvergenceVerdict`'s
+// own `indeterminate` handling is directly tested too (the "idd-claimed
+// scope" tests earlier in this file) -- but nothing proved the real
+// `collectFromGitHub` call site actually COMPUTES and FORWARDS the two
+// #1686 fields from raw claim-candidate data, as opposed to those fields
+// silently defaulting to `false` (the exact fail-open #1686 exists to
+// close). `resolveClaimEvidence` is the extracted, directly-testable form of
+// that call site's wiring; the tests below exercise it with the same
+// realistic candidate shapes `classifyClaimCandidateAmbiguity` (path 2) and
+// `hasTrustedClaimMarkerHistory` (path 4) use above, then -- unlike the
+// "idd-claimed scope" tests earlier, which hand-supply
+// `claimCandidateAmbiguous`/`claimMarkerHistoryPresent` as booleans -- feed
+// `resolveClaimEvidence`'s own COMPUTED output straight into
+// `computeAdvisoryConvergenceVerdict`, proving the end-to-end wire.
+
+test('resolveClaimEvidence: happy path -- a lone candidate resolves cleanly, unambiguous', () => {
+  const claimA = [claimComment('claim-a')];
+  // `claimMarkerHistoryPresent` is `true` here too -- a resolving active
+  // claim always carries a trusted `claimed-by` marker, so the two are not
+  // mutually exclusive (see `AdvisoryConvergenceInputs.claimCandidateAmbiguous`'s
+  // doc comment); `claimCandidateAmbiguous: false` is what actually
+  // distinguishes this happy path from #1686 path 2 below.
+  assert.deepEqual(resolveClaimEvidence([claimA], [TRUSTED], false), {
+    claimEvents: claimA,
+    claimCandidateAmbiguous: false,
+    claimMarkerHistoryPresent: true,
+  });
+});
+
+test('resolveClaimEvidence: reproduces #1686 path 2 -- two candidates each independently resolve an active claim', () => {
+  const claimA = [claimComment('claim-a')];
+  const claimB = [claimComment('claim-b')];
+  assert.deepEqual(resolveClaimEvidence([claimA, claimB], [TRUSTED], false), {
+    claimEvents: [],
+    claimCandidateAmbiguous: true,
+    claimMarkerHistoryPresent: true,
+  });
+});
+
+test('resolveClaimEvidence: reproduces #1686 path 4 -- a stale/released trusted claim marker with no currently active claim', () => {
+  // Same fixture shape as the `hasTrustedClaimMarkerHistory` STALE test
+  // above: an old `claimed-by` followed by a trusted `unclaimed-by` release
+  // for the same agent/claim, so `activeClaimPresent` is false but genuine
+  // claim history exists.
+  const claimId = 'stale-claim-resolve-1';
+  const agentId = 'claude-test';
+  const released = [
+    claimComment(claimId),
+    {
+      author: { login: TRUSTED },
+      body: `<!-- unclaimed-by: ${agentId} ${claimId} ${RECENT} -->\n\n_${agentId}: issue claim released — IDD automation marker. Do not edit._`,
+      createdAt: RECENT,
+    },
+  ];
+  assert.deepEqual(resolveClaimEvidence([released], [TRUSTED], false), {
+    claimEvents: [],
+    claimCandidateAmbiguous: false,
+    claimMarkerHistoryPresent: true,
+  });
+});
+
+test('resolveClaimEvidence: an explicit --claim-issue candidate is returned unconditionally, never ambiguous', () => {
+  const untrustedOnlyClaim = [
+    {
+      author: { login: 'nobody-trusted' },
+      body: `<!-- claimed-by: ${AGENT_ID} ${CLAIM_ID} supersedes: none ${OLD} branch: issue/1234-test -->\n\n_${AGENT_ID}: issue claim — IDD automation marker. Do not edit._`,
+      createdAt: OLD,
+    },
+  ];
+  assert.deepEqual(
+    resolveClaimEvidence([untrustedOnlyClaim], [TRUSTED], true),
+    {
+      claimEvents: untrustedOnlyClaim,
+      claimCandidateAmbiguous: false,
+      claimMarkerHistoryPresent: false,
+    },
+  );
+});
+
+test('resolveClaimEvidence end-to-end: its COMPUTED path-2 output (not hand-supplied booleans) drives computeAdvisoryConvergenceVerdict to indeterminate', () => {
+  const claimA = [claimComment('claim-a')];
+  const claimB = [claimComment('claim-b')];
+  const evidence = resolveClaimEvidence([claimA, claimB], [TRUSTED], false);
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({
+      reviews: [copilotReview()],
+      claimEvents: evidence.claimEvents,
+      claimCandidateAmbiguous: evidence.claimCandidateAmbiguous,
+      claimMarkerHistoryPresent: evidence.claimMarkerHistoryPresent,
+    }),
+    baseOptions({
+      convergenceScope: 'idd-claimed',
+      prHeadRefName: 'issue/1234-test',
+    }),
+  );
+  assertValidVerdict(verdict);
+  assert.deepEqual(verdict.applicability, {
+    scope: 'idd-claimed',
+    status: 'indeterminate',
+    reason: 'idd-claimed-multiple-resolving-claim-candidates',
+  });
+  assert.equal(verdict.ready, false);
+});
+
+test('resolveClaimEvidence end-to-end: its COMPUTED path-4 output (not hand-supplied booleans) drives computeAdvisoryConvergenceVerdict to indeterminate', () => {
+  const claimId = 'stale-claim-e2e-1';
+  const agentId = 'claude-test';
+  const released = [
+    claimComment(claimId),
+    {
+      author: { login: TRUSTED },
+      body: `<!-- unclaimed-by: ${agentId} ${claimId} ${RECENT} -->\n\n_${agentId}: issue claim released — IDD automation marker. Do not edit._`,
+      createdAt: RECENT,
+    },
+  ];
+  const evidence = resolveClaimEvidence([released], [TRUSTED], false);
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({
+      reviews: [copilotReview()],
+      claimEvents: evidence.claimEvents,
+      claimCandidateAmbiguous: evidence.claimCandidateAmbiguous,
+      claimMarkerHistoryPresent: evidence.claimMarkerHistoryPresent,
+    }),
+    baseOptions({
+      convergenceScope: 'idd-claimed',
+      prHeadRefName: 'issue/1234-test',
+    }),
+  );
+  assertValidVerdict(verdict);
+  assert.deepEqual(verdict.applicability, {
+    scope: 'idd-claimed',
+    status: 'indeterminate',
+    reason: 'idd-claimed-claim-history-without-active-claim',
+  });
+  assert.equal(verdict.ready, false);
+});
+
+test('collectFromGitHub sources claimEvents/claimCandidateAmbiguous/claimMarkerHistoryPresent from resolveClaimEvidence (idd-skill#1810: pins the call-site forwarding shape)', () => {
+  // A lightweight structural pin, in the same spirit as this file's existing
+  // `forbiddenInvocation` source-text check: `resolveClaimEvidence` itself
+  // is proven correct above, so the one remaining risk at the real call
+  // site is someone re-inlining separate calls (or dropping the forward)
+  // instead of destructuring this single delegated call -- a regression
+  // that would otherwise have no test coverage at all, matching #1810's own
+  // "cover the call site, not just the extracted helper" framing.
+  const source = readFileSync(
+    new URL('../src/scripts/advisory-convergence.mts', import.meta.url),
+    'utf8',
+  );
+  assert.match(
+    source,
+    /const \{ claimEvents, claimCandidateAmbiguous, claimMarkerHistoryPresent \} =\s*\n?\s*resolveClaimEvidence\(/,
+  );
 });
 
 // --- parseArgs ---------------------------------------------------------------
