@@ -37,7 +37,7 @@ const TS = '2026-06-17T09:47:08Z';
 // fixture's one plain, never-dispositioned comment (`body: 'hi'`).
 const NO_DISPOSITION_EVIDENCE_WARNING_ONE_COMMENT =
   '1 comment has no disposition evidence as of this watermark, but its ' +
-  'max-activity-at/total-item-count already cover them -- dispose them ' +
+  'max-activity-at/total-item-count already cover it -- dispose it ' +
   '(or re-run --from-pr after doing so) before relying on this watermark.';
 
 const schema = loadJson('schemas/post-idd-marker.schema.json');
@@ -909,6 +909,10 @@ test('describeUnaddressedActivity warns (singular) for exactly one missing comme
   });
   assert.equal(warnings.length, 1);
   assert.match(warnings[0], /^1 comment has no disposition evidence/);
+  // #1833: pronoun must agree with the singular count too (Copilot review on
+  // PR #1848 caught the original "cover them -- dispose them" mismatch).
+  assert.match(warnings[0], /cover it -- dispose it\b/);
+  assert.doesNotMatch(warnings[0], /cover them|dispose them/);
 });
 
 test('describeUnaddressedActivity warns (plural) for multiple missing comments', () => {
@@ -948,6 +952,7 @@ test('describeUnaddressedActivity reports threads alone (singular)', () => {
   });
   assert.equal(warnings.length, 1);
   assert.match(warnings[0], /^1 thread has no disposition evidence/);
+  assert.match(warnings[0], /cover it -- dispose it\b/);
 });
 
 test('describeUnaddressedActivity fails open on negative/non-numeric counters (never throws)', () => {

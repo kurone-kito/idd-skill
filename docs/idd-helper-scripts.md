@@ -1180,8 +1180,8 @@ Interpretation rules:
   the JSON envelope (dry-run and `--apply` alike) carries an optional
   `warnings` string array, present only when the fresh snapshot's
   `dispositionEvidence.missingRegularCommentCount` /
-  `.missingThreadCount` are non-zero — comments or threads with **no**
-  disposition reply at all, whose activity this watermark's
+  `dispositionEvidence.missingThreadCount` are non-zero — comments or
+  threads with **no** disposition reply at all, whose activity this watermark's
   `max-activity-at` / `total-item-count` are about to fold in as if
   already reviewed. Surfaces the same evidence
   `missing-disposition-evidence` blocks on at F2, but at watermark-post

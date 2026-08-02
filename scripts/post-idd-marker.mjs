@@ -259,11 +259,12 @@ export function describeUnaddressedActivity(snapshot) {
   }
   const itemTotal = commentCount + threadCount;
   const verb = itemTotal === 1 ? 'has' : 'have';
+  const pronoun = itemTotal === 1 ? 'it' : 'them';
   return [
     `${parts.join(' and ')} ${verb} no disposition evidence as of this ` +
-      'watermark, but its max-activity-at/total-item-count already cover ' +
-      'them -- dispose them (or re-run --from-pr after doing so) before ' +
-      'relying on this watermark.',
+      `watermark, but its max-activity-at/total-item-count already cover ` +
+      `${pronoun} -- dispose ${pronoun} (or re-run --from-pr after doing ` +
+      'so) before relying on this watermark.',
   ];
 }
 /**
