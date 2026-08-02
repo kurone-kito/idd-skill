@@ -747,21 +747,25 @@ An existing hook manager (Husky or similar) can silently reset
 `core.hooksPath` back to its own hooks directory on every
 install/prepare lifecycle run — Husky v9's default `prepare: "husky"`
 script repoints `core.hooksPath` at `.husky/_` unconditionally, so a
-routine `pnpm install` after activation un-wires this guard again with
-no error. `idd-doctor`'s enabled-but-inert detection (below) correctly
+routine `pnpm install` after activation leaves this guard unwired
+again with no error. `idd-doctor`'s enabled-but-inert detection (below) correctly
 flags this again, but nothing about the reset itself is a bug — do not
 assume `core.hooksPath` is free to claim outright. Chain the existing
-hook to `exec` the corresponding `.githooks/*` script instead:
+hook to `exec` the corresponding `.githooks/*` script instead: append
+(don't replace) the existing hook file with a line that resolves the
+repository root explicitly, so the hook still works when git invokes
+it from a subdirectory:
 
 ```sh
-# .husky/pre-push
-exec .githooks/pre-push "$@"
+# Add as the last line of the existing .husky/pre-push:
+exec "$(git rev-parse --show-toplevel)/.githooks/pre-push" "$@"
 ```
 
 Fully replacing (not chaining) an existing hook manager under pnpm's
 `shellEmulator: true` needs a POSIX-control-flow-free replacement
 lifecycle script — no `if`/`then`/`fi`, which `shellEmulator`'s reduced
-grammar cannot parse. Use a short-circuit instead:
+grammar cannot parse. For example, a replacement `package.json`
+`"prepare"` script needs a short-circuit instead:
 
 ```sh
 git rev-parse --git-dir > /dev/null 2>&1 || exit 0; git config core.hooksPath .githooks && chmod +x .githooks/pre-commit .githooks/pre-push
