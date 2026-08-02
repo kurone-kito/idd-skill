@@ -1235,12 +1235,11 @@ test('readCleanupEvidenceTrustedLogins includes configured trustedMarkerActors p
       JSON.stringify({ trustedMarkerActors: ['kurone-kito'] }),
     );
     const logins = readCleanupEvidenceTrustedLogins(dir);
-    assert.ok(logins.has('kurone-kito'));
-    assert.ok(logins.has('github-actions[bot]'));
-    assert.ok(
-      !logins.has('some-untrusted-commenter'),
-      'an untrusted login must not be present in the trusted set',
-    );
+    // Exact-set assertion (not just membership): a regression that
+    // accidentally widens the trusted set with an extra login must fail
+    // this test even though it would still contain 'kurone-kito' and
+    // 'github-actions[bot]' (Copilot review, PR#1809).
+    assert.deepEqual(logins, new Set(['kurone-kito', 'github-actions[bot]']));
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -1257,11 +1256,22 @@ test('readCleanupEvidenceTrustedLogins fails closed to github-actions[bot] alone
       new Set(['github-actions[bot]']),
     );
 
-    // Present but empty trustedMarkerActors array -- a distinct code
-    // branch (Array.isArray true, then empty) from the try/catch
-    // failure cases below, even though the observable result is the
-    // same fail-closed set.
+    // Config present, valid JSON, but the trustedMarkerActors key is
+    // entirely absent -- a distinct code path (config?.trustedMarkerActors
+    // resolves via optional chaining to undefined, no throw at all) from
+    // both the missing-file case above and the malformed-JSON case below
+    // (Copilot review, PR#1809).
     mkdirSync(join(dir, '.github/idd'), { recursive: true });
+    writeFileSync(join(dir, '.github/idd/config.json'), JSON.stringify({}));
+    assert.deepEqual(
+      readCleanupEvidenceTrustedLogins(dir),
+      new Set(['github-actions[bot]']),
+    );
+
+    // Present but empty trustedMarkerActors array -- a further distinct
+    // code branch (Array.isArray true, then empty) from the case above
+    // (Array.isArray false on undefined), even though the observable
+    // result is the same fail-closed set.
     writeFileSync(
       join(dir, '.github/idd/config.json'),
       JSON.stringify({ trustedMarkerActors: [] }),
