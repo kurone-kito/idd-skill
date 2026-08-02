@@ -212,6 +212,62 @@ export function watermarkFieldsFromSnapshot(snapshot) {
   };
 }
 /**
+ * #1833: diagnostic-only warnings for a `--from-pr` watermark whose fresh
+ * `review-activity-snapshot` already carries `dispositionEvidence` evidence
+ * -- comments and/or threads with NO disposition reply at all, per the same
+ * `summarizeDispositionEvidenceForGate` the F2 `missing-disposition-evidence`
+ * gate uses. This is deliberately NOT `ackOnly.items`: that evidence is the
+ * carve-out `diffReviewSnapshot` reads to treat post-disposition advisory-bot
+ * courtesy acks as safe to fold into the watermark, so it is populated on
+ * the routine, benign path (an ack after a correct disposition) and would
+ * warn on exactly the cases that are fine. `dispositionEvidence`'s counters
+ * are the opposite: genuinely undispositioned items, which the watermark is
+ * about to silently mark "already reviewed" by folding their activity into
+ * its `max-activity-at` / `total-item-count` fields. Surfacing that now, in
+ * this command's own success output, lets the caller see it at post time
+ * instead of discovering it only later via the readiness report's
+ * `missing-disposition-evidence` route (or, if the item happens to look
+ * ack-only-shaped, via `reviewCurrency.comparisonRoute`).
+ *
+ * Returns `[]` when the snapshot carries no such evidence, including when
+ * `dispositionEvidence` is absent or malformed (diagnostic-only: fails open,
+ * never blocks or alters what gets POSTed).
+ */
+export function describeUnaddressedActivity(snapshot) {
+  const snap = snapshot ?? {};
+  const missingComments = Number(
+    snap.dispositionEvidence?.missingRegularCommentCount ?? 0,
+  );
+  const missingThreads = Number(
+    snap.dispositionEvidence?.missingThreadCount ?? 0,
+  );
+  const commentCount =
+    Number.isInteger(missingComments) && missingComments > 0
+      ? missingComments
+      : 0;
+  const threadCount =
+    Number.isInteger(missingThreads) && missingThreads > 0 ? missingThreads : 0;
+  if (commentCount === 0 && threadCount === 0) {
+    return [];
+  }
+  const parts = [];
+  if (commentCount > 0) {
+    parts.push(`${commentCount} comment${commentCount === 1 ? '' : 's'}`);
+  }
+  if (threadCount > 0) {
+    parts.push(`${threadCount} thread${threadCount === 1 ? '' : 's'}`);
+  }
+  const itemTotal = commentCount + threadCount;
+  const verb = itemTotal === 1 ? 'has' : 'have';
+  const pronoun = itemTotal === 1 ? 'it' : 'them';
+  return [
+    `${parts.join(' and ')} ${verb} no disposition evidence as of this ` +
+      `watermark, but its max-activity-at/total-item-count already cover ` +
+      `${pronoun} -- dispose ${pronoun} (or re-run --from-pr after doing ` +
+      'so) before relying on this watermark.',
+  ];
+}
+/**
  * Parse a whole-token positive integer, failing closed on a suffixed typo
  * (`1047abc`), a non-numeric token, or a non-positive / unsafe magnitude — a
  * mis-parsed target number could POST a marker to the wrong issue/PR.
@@ -419,6 +475,9 @@ if (import.meta.main) {
     process.exit(1);
     throw error;
   }
+  // #1833: populated only by the `--from-pr` snapshot-derivation branch
+  // below; carried into both the dry-run and `--apply` result envelopes.
+  let warnings = [];
   if (args.help) {
     process.stdout.write(USAGE);
     process.exit(0);
@@ -502,6 +561,7 @@ if (import.meta.main) {
         args.advisoryBotLogins,
       );
       Object.assign(args.fields, watermarkFieldsFromSnapshot(snapshot));
+      warnings = describeUnaddressedActivity(snapshot);
     } catch (error) {
       process.stderr.write(
         `failed to derive watermark fields from PR ${args.fromPr}: ${error.message}\n`,
@@ -561,6 +621,7 @@ if (import.meta.main) {
       target: args.target,
       number,
       body,
+      ...(warnings.length > 0 ? { warnings } : {}),
     };
     process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
     process.exit(0);
@@ -578,6 +639,7 @@ if (import.meta.main) {
     number,
     commentId: posted.id,
     url: posted.html_url,
+    ...(warnings.length > 0 ? { warnings } : {}),
   };
   process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
   process.exit(0);

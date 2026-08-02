@@ -12,6 +12,7 @@ import {
   parsePaginatedGhNdjson,
   resolveAdvisoryBotLogins,
   resolveTrustedMarkerActors,
+  summarizeDispositionEvidenceForGate,
 } from './protocol-helpers.mjs';
 
 // Flag-spec keys stay the dashed literal on purpose (never bare keys like
@@ -69,17 +70,30 @@ function main() {
       envValue: process.env.IDD_ADVISORY_BOT_LOGINS,
       config: iddConfig,
     });
-  const headSha = ghText([
+  // #1833: also reads `author.login` (not just `headRefOid`) in this same
+  // call -- `summarizeDispositionEvidenceForGate` below needs the PR
+  // author's login to exclude the author's own comments/thread replies from
+  // "missing disposition" (they never require one), the same way
+  // `buildPreMergeReadinessSummary`'s own call to that function does.
+  // `ghJson`'s empty-response fallback is `'[]'` (array-shaped, tuned for
+  // the paginated `checks` call above); on this object-shaped `pr view`
+  // call an empty response would leave `headRefOid`/`author` both
+  // undefined, so `headSha` below becomes `''` and
+  // `watermarkFieldsFromSnapshot` (post-idd-marker.mts) throws "missing a
+  // usable headSha" downstream -- fail-closed, not a silent bad watermark.
+  const prView = ghJson([
     'pr',
     'view',
     String(args.prNumber),
     '-R',
     repoRef,
     '--json',
-    'headRefOid',
-    '--jq',
-    '.headRefOid',
+    'headRefOid,author',
   ]);
+  const headSha = String(prView.headRefOid ?? '');
+  const prAuthorLogin = String(prView.author?.login ?? '')
+    .trim()
+    .toLowerCase();
   const checks = ghJson(
     [
       'pr',
@@ -103,11 +117,13 @@ function main() {
     true,
   );
   const threads = fetchReviewThreads(owner, repo, args.prNumber);
+  const normalizedComments = comments.map(normalizeComment);
+  const normalizedThreads = threads.map(normalizeThread);
   const summary = buildActivitySnapshotSummary(
     {
-      comments: comments.map(normalizeComment),
+      comments: normalizedComments,
       reviews: reviews.map(normalizeReview),
-      threads: threads.map(normalizeThread),
+      threads: normalizedThreads,
       checks,
     },
     {
@@ -117,6 +133,27 @@ function main() {
       // Advisory bots are excluded from disposition authorship inside the
       // summary builder, so the trusted-marker set is a safe default here.
       dispositionAuthorLogins: trustedMarkerLogins,
+    },
+  );
+  // #1833: exposed so a `--from-pr` watermark post (post-idd-marker.mts) can
+  // warn, in its own success output, when the fresh snapshot it is about to
+  // become the watermark still has comments/threads lacking disposition
+  // evidence -- instead of that only surfacing later via the readiness
+  // report's `reviewCurrency.comparisonRoute`. Trimmed to the two counters,
+  // mirroring `AdvisoryConvergenceDispositionEvidence`
+  // (advisory-convergence.mts) rather than re-exporting the full
+  // `DispositionEvidenceSummary` shape (`pre-merge-readiness.mjs`'s own
+  // richer `dispositionEvidence` field) -- no `snapshotBoundaryAt` is
+  // available here (no watermark exists yet at snapshot time), so the
+  // advisory-only ack sub-flags this function also returns would be
+  // meaningless; only the two counters are stable to expose.
+  const dispositionEvidence = summarizeDispositionEvidenceForGate(
+    { comments: normalizedComments, threads: normalizedThreads },
+    {
+      iddAgentLogins: trustedMarkerLogins,
+      advisoryBotLogins,
+      trustedMarkerLogins,
+      prAuthorLogin,
     },
   );
   process.stdout.write(
@@ -132,6 +169,11 @@ function main() {
         counts: summary.counts,
         ackOnly: summary.ackOnly,
         effective: summary.effective,
+        dispositionEvidence: {
+          missingRegularCommentCount:
+            dispositionEvidence.missingRegularCommentCount,
+          missingThreadCount: dispositionEvidence.missingThreadCount,
+        },
       },
       null,
       2,

@@ -413,6 +413,17 @@ export interface DispositionEvidenceSummary {
     authorLogin: string;
     createdAt: string;
     bodyPreview: string;
+    // #1833 diagnostic-only (present only when applicable): set when this
+    // missing comment is itself a recognized advisory non-review notice
+    // (`isAdvisoryNonReviewNotice`) AND a later IDD-agent reply starting with
+    // `**Rejected**` exists but does not match `isNonReviewNoticeDisposition`
+    // -- an attempted disposition that used the wrong phrase, so the generic
+    // 1:1 disposition pairing accepted it as SOME disposition while the
+    // notice-specific carry-forward still rejects it and the item stays
+    // blocking. Names the exact required phrase so an agent does not have to
+    // source-dive `isNonReviewNoticeDisposition` to discover it. Never
+    // changes `route`, `reason`, or any count above.
+    hint?: string;
   }[];
   // `ackOnlyPostDisposition` is advisory-only: true when this blocking resolved
   // thread blocks solely because of post-disposition advisory-bot ack-only
@@ -1736,6 +1747,18 @@ export function isNonReviewNoticeDisposition(comment: {
     /\bdid not review HEAD\b/i.test(body)
   );
 }
+
+// #1833 diagnostic-only hint text: single-sourced so
+// `summarizeDispositionEvidenceForGate`'s `missingRegularComments[].hint`
+// names the exact phrase `isNonReviewNoticeDisposition` requires, instead of
+// forcing an agent to source-dive this file to discover it. Never consumed by
+// any routing decision -- see the `hint` field's own doc comment on
+// `DispositionEvidenceSummary`.
+export const NON_REVIEW_NOTICE_DISPOSITION_HINT =
+  'disposition reply is missing the required non-review-notice phrase: it ' +
+  'must start with "**Rejected**" and match /\\bdid not review HEAD\\b/i -- ' +
+  'canonical form: "**Rejected** — {bot} did not review HEAD {sha} ' +
+  '({reason}); this is not a completed review"';
 
 // #1122 CodeRabbit summary-walkthrough auto-disposition classifiers.
 //
@@ -3578,6 +3601,32 @@ export function summarizeDispositionEvidenceForGate(
   const noticeDispositions = dispositionComments.filter((comment) =>
     isNonReviewNoticeDisposition({ body: comment.body }),
   );
+  // #1833 diagnostic-only (see `NON_REVIEW_NOTICE_DISPOSITION_HINT` /
+  // `DispositionEvidenceSummary.missingRegularComments[].hint`): IDD-agent
+  // replies that start with `**Rejected**` -- so `isDispositionComment` and
+  // the generic 1:1 pairing both accept them as SOME disposition -- but that
+  // do not match `isNonReviewNoticeDisposition`'s stricter `did not review
+  // HEAD` phrase requirement, so they can never satisfy the notice-specific
+  // carry-forward above. Kept separate from `noticeDispositions` (its exact
+  // complement within `**Rejected**`-prefixed replies) purely to power the
+  // hint; never feeds `carriedNoticeIndexes`, `dispositionTimes`, or any
+  // other routing input.
+  //
+  // Deliberately NOT attributed per-bot: `dispositionNamesAdvisoryBot`
+  // (the carry-forward's own bot-attribution helper) can only anchor on the
+  // canonical `did not review HEAD` template's span, so a wrong-phrase
+  // reply -- missing that exact phrase by definition -- can never be
+  // attributed to one bot over another by construction. In a multi-bot
+  // scenario (e.g. CodeRabbit's notice correctly dispositioned, Codex's
+  // still missing) the hint below attaches to every still-missing notice
+  // that ANY wrong-phrase reply postdates, not just the one it may have
+  // been intended for. Advisory-only, so this is a diagnostic false
+  // positive at worst, never a routing change.
+  const wrongPhraseRejectedDispositions = dispositionComments.filter(
+    (comment) =>
+      DISPOSITION_REJECTED_PREFIX_RE.test(comment.body.trimStart()) &&
+      !isNonReviewNoticeDisposition({ body: comment.body }),
+  );
   const outstandingNotices = outstandingComments.filter(
     (comment) =>
       isGateAdvisoryBotLogin(comment.authorLogin, advisoryBotLogins) &&
@@ -3650,12 +3699,40 @@ export function summarizeDispositionEvidenceForGate(
     }
   }
 
-  const missingRegularComments = missing.map((comment) => ({
-    id: comment.id || `comment-${comment.sortedIndex + 1}`,
-    authorLogin: comment.authorLogin || 'unknown',
-    createdAt: comment.createdAt,
-    bodyPreview: buildBodyPreview(comment.body),
-  }));
+  const missingRegularComments = missing.map((comment) => {
+    // #1833: only hint when this missing item is itself a recognized
+    // advisory non-review notice AND a wrong-phrase `**Rejected**` attempt
+    // exists that postdates the notice's original `createdAt` -- so the hint
+    // targets the specific comment a human/agent plausibly already tried
+    // (and mis-phrased) rather than every unrelated missing item whenever any
+    // wrong-phrase reply exists anywhere. Deliberately compares against
+    // `createdAt`, not the notice's (possibly bumped) `activityAt`: the
+    // motivating scenario is a wrong-phrase reply posted right after the
+    // notice first appeared, followed by a re-triggered bot bumping
+    // `updatedAt` past that reply -- which is exactly what strands the item
+    // in `missing` in the first place (see the `activityAt`-based general 1:1
+    // pairing above), so requiring the attempt to postdate the bumped
+    // `activityAt` would always be false in the one case this hint exists
+    // for.
+    const isNoticeComment =
+      isGateAdvisoryBotLogin(comment.authorLogin, advisoryBotLogins) &&
+      isAdvisoryNonReviewNotice(comment.body);
+    const hasWrongPhraseAttempt =
+      isNoticeComment &&
+      wrongPhraseRejectedDispositions.some(
+        (disposition) =>
+          compareIsoTimestamps(disposition.activityAt, comment.createdAt) > 0,
+      );
+    return {
+      id: comment.id || `comment-${comment.sortedIndex + 1}`,
+      authorLogin: comment.authorLogin || 'unknown',
+      createdAt: comment.createdAt,
+      bodyPreview: buildBodyPreview(comment.body),
+      ...(hasWrongPhraseAttempt
+        ? { hint: NON_REVIEW_NOTICE_DISPOSITION_HINT }
+        : {}),
+    };
+  });
 
   // #978 advisory-only diagnostic: a blocking resolved thread is
   // "ack-only-post-disposition" when a thread-local IDD disposition exists and

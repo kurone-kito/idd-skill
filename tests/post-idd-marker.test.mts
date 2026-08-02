@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url';
 
 import {
   buildMarkerBody,
+  describeUnaddressedActivity,
   MARKER_TYPES,
   parseArgs,
   watermarkFieldsFromSnapshot,
@@ -30,6 +31,14 @@ import {
 // A real 40-hex SHA — the watermark/baseline/advisory renderers require it.
 const SHA = '0123456789abcdef0123456789abcdef01234567';
 const TS = '2026-06-17T09:47:08Z';
+
+// #1833: the exact `describeUnaddressedActivity` warning text for the
+// `writeReviewActivitySnapshotGhStub` / inline "--from-pr CLI composes..."
+// fixture's one plain, never-dispositioned comment (`body: 'hi'`).
+const NO_DISPOSITION_EVIDENCE_WARNING_ONE_COMMENT =
+  '1 comment has no disposition evidence as of this watermark, but its ' +
+  'max-activity-at/total-item-count already cover it -- dispose it ' +
+  '(or re-run --from-pr after doing so) before relying on this watermark.';
 
 const schema = loadJson('schemas/post-idd-marker.schema.json');
 const REPO_ROOT = fileURLToPath(new URL('..', import.meta.url));
@@ -871,6 +880,93 @@ test('parseArgs reads --expected-head-sha as a structural flag, not a renderer f
   assert.deepEqual(args.fields, { 'agent-id': 'a', 'claim-id': 'c' });
 });
 
+// --- #1833: describeUnaddressedActivity (the --from-pr watermark warning) ---
+
+test('describeUnaddressedActivity returns [] when dispositionEvidence is absent', () => {
+  assert.deepEqual(describeUnaddressedActivity({}), []);
+  assert.deepEqual(describeUnaddressedActivity(null), []);
+  assert.deepEqual(describeUnaddressedActivity(undefined), []);
+});
+
+test('describeUnaddressedActivity returns [] when both counters are zero', () => {
+  assert.deepEqual(
+    describeUnaddressedActivity({
+      dispositionEvidence: {
+        missingRegularCommentCount: 0,
+        missingThreadCount: 0,
+      },
+    }),
+    [],
+  );
+});
+
+test('describeUnaddressedActivity warns (singular) for exactly one missing comment', () => {
+  const warnings = describeUnaddressedActivity({
+    dispositionEvidence: {
+      missingRegularCommentCount: 1,
+      missingThreadCount: 0,
+    },
+  });
+  assert.equal(warnings.length, 1);
+  assert.match(warnings[0], /^1 comment has no disposition evidence/);
+  // #1833: pronoun must agree with the singular count too (Copilot review on
+  // PR #1848 caught the original "cover them -- dispose them" mismatch).
+  assert.match(warnings[0], /cover it -- dispose it\b/);
+  assert.doesNotMatch(warnings[0], /cover them|dispose them/);
+});
+
+test('describeUnaddressedActivity warns (plural) for multiple missing comments', () => {
+  const warnings = describeUnaddressedActivity({
+    dispositionEvidence: {
+      missingRegularCommentCount: 3,
+      missingThreadCount: 0,
+    },
+  });
+  assert.equal(warnings.length, 1);
+  assert.match(warnings[0], /^3 comments have no disposition evidence/);
+});
+
+test('describeUnaddressedActivity reports both comments and threads together', () => {
+  const warnings = describeUnaddressedActivity({
+    dispositionEvidence: {
+      missingRegularCommentCount: 2,
+      missingThreadCount: 1,
+    },
+  });
+  assert.equal(warnings.length, 1);
+  assert.equal(
+    warnings[0],
+    '2 comments and 1 thread have no disposition evidence as of this ' +
+      'watermark, but its max-activity-at/total-item-count already cover ' +
+      'them -- dispose them (or re-run --from-pr after doing so) before ' +
+      'relying on this watermark.',
+  );
+});
+
+test('describeUnaddressedActivity reports threads alone (singular)', () => {
+  const warnings = describeUnaddressedActivity({
+    dispositionEvidence: {
+      missingRegularCommentCount: 0,
+      missingThreadCount: 1,
+    },
+  });
+  assert.equal(warnings.length, 1);
+  assert.match(warnings[0], /^1 thread has no disposition evidence/);
+  assert.match(warnings[0], /cover it -- dispose it\b/);
+});
+
+test('describeUnaddressedActivity fails open on negative/non-numeric counters (never throws)', () => {
+  assert.deepEqual(
+    describeUnaddressedActivity({
+      dispositionEvidence: {
+        missingRegularCommentCount: -1,
+        missingThreadCount: 'not-a-number',
+      },
+    }),
+    [],
+  );
+});
+
 test('--from-pr CLI composes review-activity-snapshot and prints the derived watermark (dry-run)', () => {
   // Stub `gh` on PATH so the real subprocess composition runs offline: the
   // post-idd-marker.mjs CLI resolves its sibling review-activity-snapshot.mjs,
@@ -883,7 +979,7 @@ test('--from-pr CLI composes review-activity-snapshot and prints the derived wat
 const fs = require('node:fs');
 const args = process.argv.slice(2);
 const out = (s) => { fs.writeSync(1, s); process.exit(0); };
-if (args[0] === 'pr' && args[1] === 'view') out('${SHA}\\n');
+if (args[0] === 'pr' && args[1] === 'view') out(JSON.stringify({ headRefOid: '${SHA}', author: { login: 'someone' } }));
 if (args[0] === 'pr' && args[1] === 'checks') {
   out(JSON.stringify([{ name: 'ci', state: 'SUCCESS', completedAt: '2026-06-25T11:00:00Z' }]));
 }
@@ -937,7 +1033,69 @@ process.exit(1);
       'total-item-count': '1',
       'ci-completed-at': '2026-06-25T11:00:00Z',
     }),
+    // #1833: the stub's one plain (never-dispositioned) comment has no
+    // disposition evidence, so the diagnostic warning fires -- see the
+    // dedicated `describeUnaddressedActivity` tests below for the field's
+    // own coverage.
+    warnings: [NO_DISPOSITION_EVIDENCE_WARNING_ONE_COMMENT],
   });
+});
+
+// #1833: end-to-end negative -- when the live snapshot has NO comments at
+// all, `dispositionEvidence`'s counters are both zero, so no `warnings` key
+// appears in the CLI's own success output (proving the wiring does not fire
+// on the routine/empty-PR path, not just that `describeUnaddressedActivity`
+// returns `[]` in isolation).
+test('--from-pr CLI omits warnings when the live snapshot has nothing missing a disposition', () => {
+  const tempRoot = mkdtempSync(join(tmpdir(), 'idd-from-pr-no-warning-'));
+  const ghPath = join(tempRoot, 'gh');
+  writeFileSync(
+    ghPath,
+    `#!/usr/bin/env node
+const fs = require('node:fs');
+const args = process.argv.slice(2);
+const out = (s) => { fs.writeSync(1, s); process.exit(0); };
+if (args[0] === 'pr' && args[1] === 'view') out(JSON.stringify({ headRefOid: '${SHA}', author: { login: 'someone' } }));
+if (args[0] === 'pr' && args[1] === 'checks') {
+  out(JSON.stringify([{ name: 'ci', state: 'SUCCESS', completedAt: '2026-06-25T11:00:00Z' }]));
+}
+if (args[0] === 'api' && args[1] === 'graphql') {
+  out(JSON.stringify({ data: { repository: { pullRequest: { reviewThreads: { pageInfo: { hasNextPage: false }, nodes: [] } } } } }));
+}
+if (args[0] === 'api' && /\\/reviews$/.test(args[1])) out('[]');
+if (args[0] === 'api' && /\\/comments$/.test(args[1])) out('[]');
+fs.writeSync(2, 'unexpected gh invocation: ' + args.join(' '));
+process.exit(1);
+`,
+  );
+  chmodSync(ghPath, 0o755);
+
+  const output = execFileSync(
+    process.execPath,
+    [
+      join(REPO_ROOT, 'scripts/post-idd-marker.mjs'),
+      '--type',
+      'watermark',
+      '--from-pr',
+      '1200',
+      '--owner',
+      'o',
+      '--repo',
+      'r',
+      '--agent-id',
+      'claude-02f8159e',
+      '--claim-id',
+      'claim-1134-02f8159e',
+    ],
+    {
+      cwd: REPO_ROOT,
+      encoding: 'utf8',
+      env: { ...process.env, PATH: `${tempRoot}:${process.env.PATH ?? ''}` },
+    },
+  );
+
+  const parsed = JSON.parse(output);
+  assert.equal('warnings' in parsed, false);
 });
 
 /**
@@ -957,7 +1115,7 @@ function writeReviewActivitySnapshotGhStub(
 const fs = require('node:fs');
 const args = process.argv.slice(2);
 const out = (s) => { fs.writeSync(1, s); process.exit(0); };
-if (args[0] === 'pr' && args[1] === 'view') out('${headSha}\\n');
+if (args[0] === 'pr' && args[1] === 'view') out(JSON.stringify({ headRefOid: '${headSha}', author: { login: 'someone' } }));
 if (args[0] === 'pr' && args[1] === 'checks') {
   out(JSON.stringify([{ name: 'ci', state: 'SUCCESS', completedAt: '2026-06-25T11:00:00Z' }]));
 }
@@ -1024,6 +1182,9 @@ test('--expected-head-sha lets a matching (even differently-cased) --from-pr sna
       'total-item-count': '1',
       'ci-completed-at': '2026-06-25T11:00:00Z',
     }),
+    // #1833: same one-plain-comment fixture as the "--from-pr CLI
+    // composes..." test above (shared stub function).
+    warnings: [NO_DISPOSITION_EVIDENCE_WARNING_ONE_COMMENT],
   };
 
   assert.deepEqual(runDryRun(SHA), expected);
