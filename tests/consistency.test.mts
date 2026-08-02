@@ -1246,12 +1246,14 @@ test('review-triage PATH A verify-before-accept and actor-permission-cap guidanc
   );
 
   for (const text of [reviewTriage, templateReviewTriage]) {
-    assert.match(text, /Verify before accept/);
-    assert.match(text, /actor-permission cap/i);
+    // \s+ between words tolerates a Markdown reflow (dprint) that moves a
+    // wrap point mid-phrase without changing the semantic content.
+    assert.match(text, /Verify\s+before\s+accept/);
+    assert.match(text, /actor-permission\s+cap/i);
     // Guards against reverting the PR#1796 hardening: an unprivileged
     // commenter's assertion alone must never force an Accept.
     assert.match(text, /collaborators\/\{username\}\/permission/);
-    assert.match(text, /assertion alone never reaches Accept forced/);
+    assert.match(text, /assertion\s+alone\s+never\s+reaches\s+Accept\s+forced/);
   }
 });
 
@@ -1272,11 +1274,13 @@ test('merge Duplicate-success-record skip rule still requires a trusted marker a
   );
 
   for (const text of [merge, templateMerge]) {
-    assert.match(text, /Duplicate-success-record skip rule/);
-    assert.match(text, /whose author is a trusted marker actor/);
+    // \s+ between words tolerates a Markdown reflow (dprint) that moves a
+    // wrap point mid-phrase without changing the semantic content.
+    assert.match(text, /Duplicate-success-record\s+skip\s+rule/);
+    assert.match(text, /whose\s+author\s+is\s+a\s+trusted\s+marker\s+actor/);
     assert.match(
       text,
-      /An untrusted commenter's\s+marker-prefixed comment never counts as evidence/,
+      /An\s+untrusted\s+commenter's\s+marker-prefixed\s+comment\s+never\s+counts\s+as\s+evidence/,
     );
   }
 });
