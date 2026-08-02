@@ -28,6 +28,7 @@ import {
   evaluateDependencyVersionDrift,
   evaluateMarkerPrefixConsistency,
   extractMarkerPrefixes,
+  filterIddBranchMergedPrs,
   findMissingWorkshopReferences,
   findMissingWorktreeHardening,
   findPlaceholders,
@@ -456,6 +457,42 @@ test('classifyPrimaryHead handles empty or non-string input as unknown', () => {
     isB1Violation: false,
     kind: 'unknown',
   });
+});
+
+test('filterIddBranchMergedPrs keeps issue/* and roadmap-audit/* head refs and drops a Dependabot-style branch (idd-skill#1829)', () => {
+  const result = filterIddBranchMergedPrs([
+    { number: 101, headRefName: 'issue/101-fix-foo' },
+    { number: 102, headRefName: 'roadmap-audit/45-bar' },
+    { number: 103, headRefName: 'dependabot/npm_and_yarn/lodash-4.17.21' },
+  ]);
+  assert.deepEqual(result, [{ number: 101 }, { number: 102 }]);
+});
+
+test('filterIddBranchMergedPrs drops malformed entries (missing headRefName, non-integer number)', () => {
+  const result = filterIddBranchMergedPrs([
+    { number: 201, headRefName: 'issue/201-ok' },
+    { number: 202 },
+    { headRefName: 'issue/203-no-number' },
+    { number: 'not-a-number', headRefName: 'issue/204-bad-number' },
+    null,
+  ]);
+  assert.deepEqual(result, [{ number: 201 }]);
+});
+
+test('filterIddBranchMergedPrs returns an empty array for non-array input', () => {
+  assert.deepEqual(filterIddBranchMergedPrs(undefined), []);
+  assert.deepEqual(filterIddBranchMergedPrs(null), []);
+  assert.deepEqual(filterIddBranchMergedPrs('not-an-array'), []);
+});
+
+test('filterIddBranchMergedPrs honors a custom pattern list instead of the default', () => {
+  const prs = [
+    { number: 301, headRefName: 'issue/301-fix' },
+    { number: 302, headRefName: 'chore/302-bump' },
+  ];
+  assert.deepEqual(filterIddBranchMergedPrs(prs, ['chore/*']), [
+    { number: 302 },
+  ]);
 });
 
 test('classifyWorktreeHeadFinding returns null when HEAD is not a violation', () => {

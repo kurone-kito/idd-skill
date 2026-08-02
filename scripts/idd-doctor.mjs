@@ -1677,6 +1677,38 @@ export function readCleanupEvidenceTrustedLogins(root) {
   });
   return new Set([...actors, 'github-actions[bot]']);
 }
+/**
+ * Filter a `gh pr list --json number,headRefName` result down to entries
+ * whose head ref matches the IDD branch-naming convention -- the same
+ * `worktreeGuard.branchPatterns` globs (`issue/*`, `roadmap-audit/*` by
+ * default; see `readWorktreeGuardBranchPatterns`) that `classifyPrimaryHead`
+ * already matches elsewhere in this file. A routine non-IDD merge (a
+ * Dependabot dependency bump, for example) never created a branch the
+ * post-merge cleanup backlog scan is responsible for, so it is dropped here
+ * before the backlog count, evidence-fetch loop, or `Examples: ...` list
+ * ever sees it (idd-skill#1829). Pure (no I/O) so it can be unit-tested
+ * without mocking `gh`.
+ */
+export function filterIddBranchMergedPrs(
+  prs,
+  patterns = DEFAULT_WORKTREE_GUARD_BRANCH_PATTERNS,
+) {
+  const matchers = patterns.map((pattern) => branchGlobToRegExp(pattern));
+  const filtered = [];
+  for (const pr of Array.isArray(prs) ? prs : []) {
+    const number = pr?.number;
+    const headRefName = pr?.headRefName;
+    if (
+      !Number.isInteger(number) ||
+      typeof headRefName !== 'string' ||
+      !matchers.some((matcher) => matcher.test(headRefName))
+    ) {
+      continue;
+    }
+    filtered.push({ number: number });
+  }
+  return filtered;
+}
 function checkPostMergeCleanupBacklog(root, options, report) {
   const windowDays = options.windowDays;
   const warnThreshold = options.warnThreshold;
@@ -1733,7 +1765,7 @@ function checkPostMergeCleanupBacklog(root, options, report) {
       '--search',
       `merged:>=${sinceIso}`,
       '--json',
-      'number',
+      'number,headRefName',
       '--limit',
       '1000',
     ],
@@ -1755,24 +1787,32 @@ function checkPostMergeCleanupBacklog(root, options, report) {
   if (!Array.isArray(mergedPrs) || mergedPrs.length === 0) {
     return;
   }
+  // Scope the scan to IDD-branch merged PRs only (idd-skill#1829) -- a
+  // routine non-IDD merge (Dependabot dependency bumps, for example) never
+  // created a branch the F4 cleanup-evidence contract applies to, so it
+  // must not count toward the backlog total or the `Examples: ...` list.
+  const iddMergedPrs = filterIddBranchMergedPrs(
+    mergedPrs,
+    readWorktreeGuardBranchPatterns(root),
+  );
+  if (iddMergedPrs.length === 0) {
+    return;
+  }
   // Stream per-PR progress to stderr so a slow, serial, network-bound scan of a
   // large merge burst is distinguishable from a hang. Progress must stay on
   // stderr so the `--json` report on stdout is never polluted.
   emitCleanupBacklogProgress(
-    formatCleanupBacklogScanPreamble(mergedPrs.length),
+    formatCleanupBacklogScanPreamble(iddMergedPrs.length),
   );
   const trustedLogins = readCleanupEvidenceTrustedLogins(root);
   const missing = [];
   const evidenceFailures = [];
   let scanned = 0;
-  for (const pr of mergedPrs) {
-    const number = pr?.number;
-    if (!Number.isInteger(number)) {
-      continue;
-    }
+  for (const pr of iddMergedPrs) {
+    const number = pr.number;
     scanned += 1;
     emitCleanupBacklogProgress(
-      formatCleanupBacklogScanProgress(scanned, mergedPrs.length, number),
+      formatCleanupBacklogScanProgress(scanned, iddMergedPrs.length, number),
     );
     const evidence = runCommand(
       'gh',
