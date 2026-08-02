@@ -9,6 +9,7 @@ import {
   checkClaimTimingConsistency,
   checkDependencyVersionDrift,
   checkLiveConfigSchema,
+  checkPolicySignals,
   checkProjectCommands,
   classifyBacklog,
   classifyClaimTimingConsistency,
@@ -2308,6 +2309,55 @@ test('checkClaimTimingConsistency pushes no warning when config and prose agree,
     checkClaimTimingConsistency(dir, missingConfigReport);
     assert.equal(missingConfigReport.warnings.length, 0);
     assert.equal(missingConfigReport.errors.length, 0);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('checkPolicySignals recognizes the hyphenated copilot-advisory literal (#1827)', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'idd-policy-signals-'));
+  try {
+    mkdirSync(join(dir, 'docs'), { recursive: true });
+    writeFileSync(
+      join(dir, 'docs/idd-policy.md'),
+      '# Review policy\n\nThis repository uses the copilot-advisory review policy profile.\n',
+    );
+    // A merge-policy signal must also be present so only the review-policy
+    // branch is under test here.
+    writeFileSync(
+      join(dir, 'AGENTS.md'),
+      'mergePolicy: fully_autonomous_merge\n',
+    );
+
+    const report = emptyReport(dir);
+    checkPolicySignals(dir, report);
+    assert.deepEqual(report.errors, []);
+    assert.deepEqual(report.warnings, []);
+    assert.ok(report.passes.includes('review policy signal found'));
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('checkPolicySignals still warns when no recognized review-policy signal is present', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'idd-policy-signals-'));
+  try {
+    mkdirSync(join(dir, 'docs'), { recursive: true });
+    writeFileSync(
+      join(dir, 'docs/idd-policy.md'),
+      '# Review policy\n\nNo recognized signal here.\n',
+    );
+    writeFileSync(
+      join(dir, 'AGENTS.md'),
+      'mergePolicy: fully_autonomous_merge\n',
+    );
+
+    const report = emptyReport(dir);
+    checkPolicySignals(dir, report);
+    assert.deepEqual(report.errors, []);
+    assert.deepEqual(report.warnings, [
+      'review policy signal not found in docs or entry files',
+    ]);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
