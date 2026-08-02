@@ -98,6 +98,52 @@ export interface CheckOutcome {
 }
 
 /**
+ * Resolve the exclusion-adjusted candidate-file set: `candidateFiles`
+ * normalized via `normalizeContentionPath`, with `highContentionFiles`
+ * (bundle + manifest files many unrelated issues touch) removed. This is
+ * the same filter chain `evaluateHighConfidenceDuplicate` applies before its
+ * own merged-PR loop, extracted (#1815) so
+ * `suitability-triage.mts`'s `fetchMergedPrFileOverlapEvidence` scan can
+ * reuse the identical resolution to detect a qualifying overlap PR-by-PR --
+ * and stop fetching further PRs' file lists once one is found -- instead of
+ * duplicating this normalize-then-exclude logic in a second copy that could
+ * silently drift from this one.
+ */
+export function resolveCandidateFileSet(
+  candidateFiles: string[],
+  highContentionFiles: string[],
+): Set<string> {
+  const highContention = new Set(
+    highContentionFiles.map((file) => normalizeContentionPath(file)),
+  );
+  return new Set(
+    candidateFiles
+      .map((file) => normalizeContentionPath(file))
+      .filter((file) => file.length > 0 && !highContention.has(file)),
+  );
+}
+
+/**
+ * Return the subset of `files` present in `candidateSet`, normalized via
+ * `normalizeContentionPath` (the same normalization `resolveCandidateFileSet`
+ * builds the set with). Always empty when `candidateSet` is empty, mirroring
+ * `evaluateHighConfidenceDuplicate`'s own "no exclusion-adjusted candidate
+ * files at all" early return -- a caller never needs to special-case an
+ * empty set itself.
+ */
+export function findCandidateFileOverlap(
+  files: string[],
+  candidateSet: Set<string>,
+): string[] {
+  if (candidateSet.size === 0) {
+    return [];
+  }
+  return [
+    ...new Set(files.map((file) => normalizeContentionPath(file))),
+  ].filter((file) => candidateSet.has(file));
+}
+
+/**
  * High-confidence Check 4 tier (#1484): evaluate the mechanical B2.0-style
  * signals -- a merged closing-PR reference on the candidate issue itself, or
  * a merged PR that already changed one of the issue's own declared
@@ -131,23 +177,13 @@ export function evaluateHighConfidenceDuplicate(
     };
   }
 
-  const highContention = new Set(
-    (Array.isArray(input.highContentionFiles)
-      ? input.highContentionFiles
-      : []
-    ).map((file) => normalizeContentionPath(file)),
+  const candidateSet = resolveCandidateFileSet(
+    Array.isArray(input.candidateFiles) ? input.candidateFiles : [],
+    Array.isArray(input.highContentionFiles) ? input.highContentionFiles : [],
   );
-  const candidateFiles = [
-    ...new Set(
-      (Array.isArray(input.candidateFiles) ? input.candidateFiles : [])
-        .map((file) => normalizeContentionPath(file))
-        .filter((file) => file.length > 0 && !highContention.has(file)),
-    ),
-  ];
-  if (candidateFiles.length === 0) {
+  if (candidateSet.size === 0) {
     return null;
   }
-  const candidateSet = new Set(candidateFiles);
 
   const mergedPrs: unknown[] = Array.isArray(input.mergedPrs)
     ? input.mergedPrs
@@ -163,9 +199,7 @@ export function evaluateHighConfidenceDuplicate(
       continue;
     }
     const files = Array.isArray(pr.files) ? pr.files : [];
-    const overlap = [
-      ...new Set(files.map((file) => normalizeContentionPath(file))),
-    ].filter((file) => candidateSet.has(file));
+    const overlap = findCandidateFileOverlap(files, candidateSet);
     if (overlap.length > 0) {
       const mergedAt = String(pr.mergedAt ?? '');
       return {

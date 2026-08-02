@@ -568,6 +568,232 @@ test('advisory bots do not block CHANGES_REQUESTED even when configured in polic
   assert.deepEqual(summary.blockingChangesRequestedLogins, []);
 });
 
+// #1818: buildPreMergeReadinessSummary threads options.primaryBotLogin to
+// buildAdvisoryWaitSummary, but the summarizeReviewerStates(reviews, {...})
+// call inside that same function only forwarded advisoryBotLogins -- a
+// configured custom primaryBotLogin (not one of isKnownReviewBot's hardcoded
+// Copilot forms, and not separately added to advisoryBotLogins) was silently
+// counted as a human approval. Exercised end to end through
+// buildPreMergeReadinessSummary, passing primaryBotLogin as its own option
+// the way a real caller would -- not by adding the custom login to
+// advisoryBotLogins in the test setup, which would validate the classifier
+// without proving the wiring gap is closed.
+test('buildPreMergeReadinessSummary: primaryBotLogin is excluded from human approval and codeowner-approval counting', () => {
+  const prHeadSha = '4444444444444444444444444444444444444444';
+  const customBotLogin = 'my-custom-review-bot[bot]';
+  const summary = buildPreMergeReadinessSummary(
+    {
+      prHeadSha,
+      reviews: [
+        {
+          author: { login: customBotLogin },
+          state: 'APPROVED',
+          commitId: prHeadSha,
+          submittedAt: '2026-08-02T00:00:00Z',
+        },
+      ],
+      changedFiles: ['README.md'],
+      codeownersText: `* @${customBotLogin}\n`,
+      branchRules: [
+        {
+          type: 'pull_request',
+          parameters: { require_code_owner_review: true },
+        },
+      ],
+      // Deliberately not 'APPROVED', so codeownerApprovalSatisfied cannot be
+      // trivially satisfied by reviewDecision alone -- it must come from
+      // codeownerApproved, the field this fix protects.
+      reviewDecision: 'REVIEW_REQUIRED',
+    },
+    {
+      now: '2026-08-02T00:05:00Z',
+      // The custom login is intentionally absent here -- proving the fix
+      // works via primaryBotLogin alone.
+      advisoryBotLogins: [],
+      primaryBotLogin: customBotLogin,
+    },
+  );
+
+  const reviewerStates = summary.reviewerStates as Record<string, unknown>;
+  assert.equal(reviewerStates.humanApprovedCount, 0);
+  assert.equal(reviewerStates.codeownerApprovalSatisfied, false);
+});
+
+test('buildPreMergeReadinessSummary: primaryBotLogin CHANGES_REQUESTED does not block via reviewer-approval counting', () => {
+  const prHeadSha = '5555555555555555555555555555555555555555';
+  const customBotLogin = 'my-custom-review-bot[bot]';
+  const summary = buildPreMergeReadinessSummary(
+    {
+      prHeadSha,
+      reviews: [
+        {
+          author: { login: customBotLogin },
+          state: 'CHANGES_REQUESTED',
+          commitId: prHeadSha,
+          submittedAt: '2026-08-02T00:00:00Z',
+        },
+      ],
+      changedFiles: ['README.md'],
+      codeownersText: `* @${customBotLogin}\n`,
+      branchRules: [
+        {
+          type: 'pull_request',
+          parameters: { require_code_owner_review: true },
+        },
+      ],
+      reviewDecision: 'REVIEW_REQUIRED',
+    },
+    {
+      now: '2026-08-02T00:05:00Z',
+      advisoryBotLogins: [],
+      primaryBotLogin: customBotLogin,
+    },
+  );
+
+  const reviewerStates = summary.reviewerStates as Record<string, unknown>;
+  assert.deepEqual(reviewerStates.blockingChangesRequestedLogins, []);
+});
+
+// #1818 (C1 critique follow-up): the same wiring gap applied to the literal
+// *default* primary bot login, not just a configured custom one --
+// `isKnownReviewBot` never recognized the bare `copilot` form (only the
+// `copilot-pull-request-reviewer*` forms), so a real caller like
+// `collectPreMergeReadiness` (which always sources `primaryBotLogin`,
+// defaulting to `'copilot'`) previously left a bare-`'copilot'` review
+// uncounted as an advisory bot even under fully default/unconfigured policy.
+// `isCopilotReviewerLogin` elsewhere in this file already treats `'copilot'`
+// as a genuine Copilot login form, so excluding it here is the intended
+// default-identity behavior, not a regression -- see the retroactive plan
+// comment on the issue for the full record.
+test('buildPreMergeReadinessSummary: the bare "copilot" default identity is excluded from human/codeowner approval counting under default primaryBotLogin', () => {
+  const prHeadSha = '6666666666666666666666666666666666666666';
+  const summary = buildPreMergeReadinessSummary(
+    {
+      prHeadSha,
+      reviews: [
+        {
+          author: { login: 'copilot' },
+          state: 'APPROVED',
+          commitId: prHeadSha,
+          submittedAt: '2026-08-02T00:00:00Z',
+        },
+      ],
+      changedFiles: ['README.md'],
+      codeownersText: '* @copilot\n',
+      branchRules: [
+        {
+          type: 'pull_request',
+          parameters: { require_code_owner_review: true },
+        },
+      ],
+      reviewDecision: 'REVIEW_REQUIRED',
+    },
+    {
+      now: '2026-08-02T00:05:00Z',
+      // Mirrors collectPreMergeReadiness's real default: no advisoryBotLogins
+      // configured, primaryBotLogin explicitly at its default value.
+      advisoryBotLogins: [],
+      primaryBotLogin: 'copilot',
+    },
+  );
+
+  const reviewerStates = summary.reviewerStates as Record<string, unknown>;
+  assert.equal(reviewerStates.humanApprovedCount, 0);
+  assert.equal(reviewerStates.codeownerApprovalSatisfied, false);
+});
+
+// #1818 (Copilot review follow-up, PR #1826): unlike `buildAdvisoryWaitSummary`
+// a few lines below in the same function (which normalizes and defaults
+// `primaryBotLogin` to `DEFAULT_ADVISORY_PRIMARY_BOT_LOGIN` when the option is
+// omitted/blank), the initial `reviewerStateAdvisoryBotLogins` fix unioned
+// `options.primaryBotLogin` directly -- an omitted option dropped out of the
+// union entirely (`normalizeTrustedMarkerLogins` filters empty strings), so a
+// caller that OMITS `primaryBotLogin` (relying on defaulting, unlike this
+// file's own `collectPreMergeReadiness`, which always resolves a non-empty
+// value) still would not classify a bare `'copilot'` review as advisory here.
+// This test omits `primaryBotLogin` entirely (the previous test above passes
+// it explicitly), proving the default-resolution path itself, not just the
+// explicit-value path.
+test('buildPreMergeReadinessSummary: bare "copilot" is excluded even when primaryBotLogin is omitted entirely (relies on default resolution)', () => {
+  const prHeadSha = '8888888888888888888888888888888888888888';
+  const summary = buildPreMergeReadinessSummary(
+    {
+      prHeadSha,
+      reviews: [
+        {
+          author: { login: 'copilot' },
+          state: 'APPROVED',
+          commitId: prHeadSha,
+          submittedAt: '2026-08-02T00:00:00Z',
+        },
+      ],
+      changedFiles: ['README.md'],
+      codeownersText: '* @copilot\n',
+      branchRules: [
+        {
+          type: 'pull_request',
+          parameters: { require_code_owner_review: true },
+        },
+      ],
+      reviewDecision: 'REVIEW_REQUIRED',
+    },
+    {
+      now: '2026-08-02T00:05:00Z',
+      advisoryBotLogins: [],
+      // primaryBotLogin intentionally omitted -- must still default.
+    },
+  );
+
+  const reviewerStates = summary.reviewerStates as Record<string, unknown>;
+  assert.equal(reviewerStates.humanApprovedCount, 0);
+  assert.equal(reviewerStates.codeownerApprovalSatisfied, false);
+});
+
+// #1818 (C1 critique round 2 follow-up): the `codeownerApproved` narrowing
+// (adding `review.isHuman` to its filter, see the change above) is a
+// behavior change for EVERY advisory bot recognized as an "advisory bot"
+// classification -- not just the primaryBotLogin cases covered above.
+// `isKnownReviewBot` already recognized `coderabbitai[bot]` before this
+// fix, so if such a bot is ever listed as a CODEOWNER, its own approval no
+// longer satisfies `codeownerApprovalSatisfied` -- previously it did,
+// since `codeownerApproved` never checked `isHuman`/`isAdvisoryBot` at all.
+// Locking this in explicitly so the default-identity behavior change is
+// covered by a named regression, not just inferred from the primaryBotLogin
+// tests above.
+test('buildPreMergeReadinessSummary: a default-recognized advisory bot (CodeRabbit) as sole CODEOWNER does not satisfy codeowner-approval', () => {
+  const prHeadSha = '7777777777777777777777777777777777777777';
+  const summary = buildPreMergeReadinessSummary(
+    {
+      prHeadSha,
+      reviews: [
+        {
+          author: { login: 'coderabbitai[bot]' },
+          state: 'APPROVED',
+          commitId: prHeadSha,
+          submittedAt: '2026-08-02T00:00:00Z',
+        },
+      ],
+      changedFiles: ['README.md'],
+      codeownersText: '* @coderabbitai[bot]\n',
+      branchRules: [
+        {
+          type: 'pull_request',
+          parameters: { require_code_owner_review: true },
+        },
+      ],
+      reviewDecision: 'REVIEW_REQUIRED',
+    },
+    {
+      now: '2026-08-02T00:05:00Z',
+      advisoryBotLogins: [],
+    },
+  );
+
+  const reviewerStates = summary.reviewerStates as Record<string, unknown>;
+  assert.equal(reviewerStates.humanApprovedCount, 0);
+  assert.equal(reviewerStates.codeownerApprovalSatisfied, false);
+});
+
 test('email-only CODEOWNERS rules still block codeowner approval', () => {
   const summary = summarizeReviewerStates([], {
     branchRules: [
