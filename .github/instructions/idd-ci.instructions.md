@@ -306,8 +306,16 @@ condition below accounts for this.
   collapse, the no-required-checks route, and the
   `ciWait.runningTimeout`/`generationTimeout` bound all stay with the
   algorithm above — track elapsed time and apply its rerun-or-hold
-  decision if a watch outlasts it. Neither watches Copilot review
-  state — see `idd-advisory-wait.instructions.md`. A bare `sleep` may
+  decision if a watch outlasts it. Issue that blocking call with an
+  execution-timeout override set at or near the calling tool's own
+  execution-timeout ceiling, not the tool's default, which can
+  hard-kill the wait well short of `ciWait.runningTimeout`; a
+  tool-timeout kill of the watch call is not a CI verdict — re-issue
+  the same blocking watch, keep accumulating elapsed time against the
+  bound above, and do not fall back to `run_in_background` or another
+  detached/backgrounded mechanism just because of the kill. Neither
+  watches Copilot review state — see
+  `idd-advisory-wait.instructions.md`. A bare `sleep` may
   be sandboxed or blocked in some runtimes (preventive; no observed
   incident yet); a `run_in_background` Bash task or other
   detached/backgrounded mechanism must not be used for this wait
