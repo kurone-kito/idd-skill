@@ -12,6 +12,19 @@ from 0.2.0 onward is also published as an annotated `v<iddVersion>`
 git tag once its release pull request merges; 0.1.0 predates the tag
 discipline and has no tag.
 
+## [Unreleased]
+
+### Removed
+
+- `skills/issue-authoring/agents/openai.yaml` is no longer part of the
+  distributed issue-authoring skill bundle: the file, its references in
+  `audit/sync-manifest.json`, and its mentions in `ONBOARDING.md`,
+  `README.md`, and the onboarding verification checklist have all been
+  removed. No repository doc named a consumer runtime for its
+  `$issue-authoring` macro syntax, and it had gone untouched since the
+  skill's scaffold commit. Adopters who already installed a copy of this
+  file may remove it manually; it is safe to delete.
+
 ## [0.4.0] - 2026-07-04
 
 TypeScript helper toolchain, autopilot-discovery, and merge-gate

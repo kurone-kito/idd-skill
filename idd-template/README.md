@@ -175,7 +175,6 @@ Optional companion artifact:
 
 ```text
 skills/issue-authoring/SKILL.md
-skills/issue-authoring/agents/openai.yaml
 skills/issue-authoring/references/contract.md
 skills/issue-authoring/references/draft-patterns.md
 skills/issue-authoring/references/workflow-boundary.md
