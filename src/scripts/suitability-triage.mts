@@ -1421,6 +1421,18 @@ export function loadHighContentionFiles(
   manifestPath: string,
   bundleIds: string[],
 ): string[] | null {
+  // Copilot review finding on this PR: `[].every(...)` is vacuously `true`,
+  // so an explicitly-empty (or whitespace-only, after --bundles parsing)
+  // override would otherwise sail through the completeness check below and
+  // resolve to a high-contention set containing only `extraFiles` (just the
+  // manifest path) -- the opposite of this tier's fail-safe contract, since
+  // a smaller exclusion set makes the overlap scan MORE permissive, not
+  // less. Treat an empty list the same as any other invalid/incomplete
+  // request: degrade to null (collection warning, exact-title-only) rather
+  // than silently accepting zero bundles as "all resolved".
+  if (bundleIds.length === 0) {
+    return null;
+  }
   try {
     const manifest = JSON.parse(
       readFileSync(resolve(process.cwd(), manifestPath), 'utf8'),

@@ -934,6 +934,17 @@ test('loadHighContentionFiles: a bundle ID absent from the manifest returns null
   assert.equal(resolved, null);
 });
 
+test('loadHighContentionFiles: an empty bundleIds list returns null, not a vacuously-"complete" empty set', () => {
+  // Regression guard for a Copilot review finding on this PR: `[].every(...)`
+  // is vacuously true, so an empty list must not sail through the
+  // completeness check below and resolve to a set containing only
+  // extraFiles (the manifest path itself) -- that would make the
+  // high-confidence overlap scan MORE permissive, the opposite of this
+  // tier's fail-safe contract.
+  const resolved = loadHighContentionFiles(DEFAULT_MANIFEST_PATH, []);
+  assert.equal(resolved, null);
+});
+
 test('loadHighContentionFiles: an unreadable manifest path returns null', () => {
   const resolved = loadHighContentionFiles(
     'no/such/manifest.json',
