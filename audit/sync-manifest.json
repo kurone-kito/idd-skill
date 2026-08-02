@@ -59,6 +59,7 @@
       "stripPrefix": "idd-template/",
       "sourceGlobs": [
         "idd-template/.github/idd/*.json",
+        "idd-template/.github/workflows/post-merge-cleanup.yml",
         "idd-template/.githooks/*",
         "idd-template/.github/instructions/idd-*.instructions.md",
         "idd-template/.github/instructions/lite/idd-*.instructions.md",
@@ -75,6 +76,7 @@
       ],
       "paths": [
         "idd-template/.github/idd/config.json",
+        "idd-template/.github/workflows/post-merge-cleanup.yml",
         "idd-template/.githooks/_idd-worktree-guard.sh",
         "idd-template/.githooks/pre-commit",
         "idd-template/.githooks/pre-push",

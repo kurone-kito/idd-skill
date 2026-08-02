@@ -658,6 +658,35 @@ test('resolveCoreTemplateFiles matches the ONBOARDING.md idd-template-core-files
   );
 });
 
+test('resolveCoreTemplateFiles includes post-merge-cleanup.yml in the core (auto-imported) file set (idd-skill#1832)', () => {
+  const resolved = resolveCoreTemplateFiles(REPO_ROOT);
+  const workflowFile = resolved.find(
+    (file) => file.targetPath === '.github/workflows/post-merge-cleanup.yml',
+  );
+  assert.ok(
+    workflowFile,
+    'expected .github/workflows/post-merge-cleanup.yml in the core template file set, so a fresh `idd-onboard.mjs --import` copies it without a separate opt-in step',
+  );
+  assert.equal(
+    workflowFile?.sourcePath,
+    'idd-template/.github/workflows/post-merge-cleanup.yml',
+  );
+
+  // resolveImportFiles vends the same core set for every profile
+  // (including no profile at all) -- unlike the vendored-node-only
+  // helper bundle, this file is not profile-conditional.
+  for (const profile of [undefined, ...PROFILE_NAMES]) {
+    const files = resolveImportFiles(REPO_ROOT, profile).files;
+    assert.ok(
+      files.some(
+        (file) =>
+          file.targetPath === '.github/workflows/post-merge-cleanup.yml',
+      ),
+      `expected post-merge-cleanup.yml in resolveImportFiles output for profile ${String(profile)}`,
+    );
+  }
+});
+
 test('resolveCoreTemplateFiles rejects a source tree without a readable manifest', () => {
   assert.throws(
     () => resolveCoreTemplateFiles(makeFixtureDir()),
