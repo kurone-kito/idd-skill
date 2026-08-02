@@ -770,10 +770,13 @@ adopter default stays opt-in **off**.
 
 ### Optional — run idd-doctor as a CI health gate
 
-For repositories that vendor the IDD helper scripts, running `idd-doctor`
-in CI catches repository-health regressions (config/schema drift,
-unresolved placeholders, marker-prefix inconsistency, missing required
-files) on every change. It is opt-in — add a workflow such as:
+Running `idd-doctor` in CI catches repository-health regressions
+(config/schema drift, unresolved placeholders, marker-prefix
+inconsistency, missing required files) on every change. It is opt-in —
+add a workflow such as one of the profile-specific examples below,
+matching the repository's confirmed helper-runtime profile.
+
+**`vendored-node`** — the helper bundle is copied into `scripts/`:
 
 ```yaml
 name: IDD doctor health gate
@@ -792,12 +795,67 @@ jobs:
       - run: node scripts/idd-doctor.mjs
 ```
 
-Adjust the command to your helper-runtime profile. This gate checks
-repository **health**, not the disposable-worktree rule: CI cannot detect
-a primary-worktree B1 violation (it leaves no trace in pushed history and
-CI checks out a detached HEAD), so worktree enforcement stays local — the
-`core.hooksPath` hook above, the cwd-vs-claim gate, and
-`idd-doctor --strict` run on a developer's machine.
+**`package-manager`** — the helper ships as an installed
+`devDependency` invoked through the repository's package manager. This
+example uses pnpm; swap the `pnpm/action-setup` step and the install /
+invoke commands for npm or yarn equivalents if the repository uses a
+different package manager:
+
+```yaml
+name: IDD doctor health gate
+on:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  idd-doctor:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }} # detached HEAD keeps the worktree check inert
+          persist-credentials: false
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.x
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm exec idd-doctor
+```
+
+**`ephemeral-npx`** — no helper files or `devDependency` are vendored;
+resolve the helper command one-shot instead. Replace
+`<reviewed-helper-spec>` with the same reviewed spec the repository's
+other helper invocations use (see
+[Onboarding Reference — Policy Decisions](docs/onboarding/policy-decisions.md#helper-runtime-profile)):
+
+```yaml
+name: IDD doctor health gate
+on:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  idd-doctor:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }} # detached HEAD keeps the worktree check inert
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.x
+      - run: npx --yes --package <reviewed-helper-spec> idd-doctor
+```
+
+This gate checks repository **health**, not the disposable-worktree rule:
+CI cannot detect a primary-worktree B1 violation (it leaves no trace in
+pushed history and CI checks out a detached HEAD), so worktree
+enforcement stays local — the `core.hooksPath` hook above, the
+cwd-vs-claim gate, and `idd-doctor --strict` run on a developer's
+machine.
 
 **Branch-glob vs CI-trigger.** Put PR-gating checks in the
 `pull_request`-triggered workflow (as above). A `push` workflow filtered to a

@@ -203,6 +203,41 @@ emit a reviewed tag, commit, tarball, or internal mirror URL. Treat
 `refs/heads/main` as a manual opt-in when the repository explicitly
 wants a mutable helper source instead of a reviewed pinned spec.
 
+**pnpm `allowBuilds` requirement for a git-hosted pinned spec.** When a
+`package-manager` repository using pnpm pins the `devDependencies` entry
+to a git-hosted spec (for example
+`"@kurone-kito/idd-skill": "github:kurone-kito/idd-skill#v0.4.0"`), a
+clean `pnpm install` fails:
+
+```text
+[ERR_PNPM_GIT_DEP_PREPARE_NOT_ALLOWED] Failed to prepare git-hosted
+package fetched from "https://codeload.github.com/kurone-kito/idd-skill/
+tar.gz/<sha>": The git-hosted package "@kurone-kito/idd-skill@0.4.0"
+needs to execute build scripts but is not in the "allowBuilds"
+allowlist.
+```
+
+pnpm treats a git-hosted dependency's build scripts as untrusted by
+default and refuses to run them until the repository explicitly allows
+it. Add an `allowBuilds` entry for the helper package to
+`pnpm-workspace.yaml` to unblock the install:
+
+```yaml
+allowBuilds:
+  "@kurone-kito/idd-skill@https://codeload.github.com/kurone-kito/idd-skill/tar.gz/<sha>": true
+```
+
+The allowlist key form differs for a git-hosted dependency. A
+**registry** dependency only needs the bare package name (for example
+`"@biomejs/biome": true`), but a **git-hosted** dependency needs the
+full `<name>@<resolved-tarball-url>` key — the bare package name alone
+silently does not match and reproduces the same
+`ERR_PNPM_GIT_DEP_PREPARE_NOT_ALLOWED` error. Copy the exact
+`fetched from "..."` URL from pnpm's own error output above rather than
+guessing the resolved-tarball-URL shape; it is not the same as the
+`github:owner/repo#ref` shorthand written in `devDependencies`, and it
+changes per resolved commit.
+
 ### IDD label names
 
 Confirm whether the repository keeps the three distributed IDD label
