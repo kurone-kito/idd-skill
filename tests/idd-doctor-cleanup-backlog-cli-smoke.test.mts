@@ -259,9 +259,12 @@ test('checkPostMergeCleanupBacklog CLI: excludes a merged PR whose head ref is n
       backlogWarning,
       `expected a cleanup-backlog warning, got: ${JSON.stringify(report.warnings)}`,
     );
+    // Match both "1 merged PR" and "1 merged PRs" -- this assertion targets
+    // the count/scoping behavior, not the production message's pluralization
+    // (idd-skill#1846 review).
     assert.match(
       backlogWarning ?? '',
-      /^post-merge cleanup backlog: 1 merged PRs/,
+      /^post-merge cleanup backlog: 1 merged PRs?\b/,
     );
     assert.match(backlogWarning ?? '', /#801/);
     assert.doesNotMatch(backlogWarning ?? '', /#802/);
