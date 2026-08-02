@@ -124,7 +124,11 @@ advisory-convergence hardening release.
   GitHub's own suggested-check picker — was unconditionally
   downgraded to `unknown`, permanently livelocking merge even with CI
   green; a new opt-in `ciGate.trustSourcePinnedRequiredChecks` policy
-  knob lets an operator who has verified the producer trust it.
+  knob lets an operator who has verified the producer trust it. A
+  configured `advisoryWait.primaryBotLogin` could be silently counted
+  as a human/CODEOWNER approval in the reviewer-approval gate — a
+  fail-open on a check meant to require a human — because only
+  `advisoryBotLogins` was excluded, not the primary bot too.
 - Advisory-convergence correctness: fails closed on IDD-shaped PRs
   with broken claim linkage and tightened reviewer identity, and
   requires claim-evidence input fields before proceeding.
