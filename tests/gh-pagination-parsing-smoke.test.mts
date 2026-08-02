@@ -212,6 +212,9 @@ test('stalled-session-quiet-check.mjs CLI: parses multi-line NDJSON output from 
 test('review-activity-snapshot.mjs CLI: parses multi-line NDJSON output from paginated review/comment endpoints', () => {
   const responses = new Map<string, string>([
     [
+      // #1833: review-activity-snapshot.mts now reads `author.login`
+      // alongside `headRefOid` in this same call (no `--jq`, so the
+      // response is the whole JSON object, not a bare SHA string).
       JSON.stringify([
         'pr',
         'view',
@@ -219,11 +222,9 @@ test('review-activity-snapshot.mjs CLI: parses multi-line NDJSON output from pag
         '-R',
         REPO_REF,
         '--json',
-        'headRefOid',
-        '--jq',
-        '.headRefOid',
+        'headRefOid,author',
       ]),
-      HEAD_SHA,
+      JSON.stringify({ headRefOid: HEAD_SHA, author: { login: 'pr-author' } }),
     ],
     [
       JSON.stringify([

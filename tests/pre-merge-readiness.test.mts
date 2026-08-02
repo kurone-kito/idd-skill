@@ -3260,6 +3260,96 @@ test('disposition evidence still blocks an undispositioned non-review notice', (
 
   assert.equal(summary.route, 'return-to-e1');
   assert.equal(summary.missingRegularCommentCount, 1);
+  // #1833: no wrong-phrase `**Rejected**` reply exists at all here, so no
+  // hint is attached -- confirms the hint is not a blanket default on every
+  // missing notice.
+  assert.equal(summary.missingRegularComments[0].hint, undefined);
+});
+
+// #1833: a disposition reply starting with `**Rejected**` but missing the
+// required `did not review HEAD` phrase passes the generic `isDispositionComment`
+// check (so the general 1:1 pairing accepts it as SOME disposition), but the
+// notice-specific carry-forward still rejects it. When the bot later re-triggers
+// (bumping `updatedAt` past the wrong-phrase reply -- the reported real-world
+// shape, kurone-kito/idd-skill#1833), the notice is stranded in `missing`
+// indefinitely with no diagnostic explaining why. The `hint` field names the
+// exact required phrase instead of forcing a source-dive.
+test('disposition evidence hints at the required phrase when a wrong-phrase **Rejected** reply exists', () => {
+  const summary = summarizeDispositionEvidenceForGate(
+    {
+      comments: [
+        {
+          id: 1,
+          createdAt: '2026-05-12T00:00:00Z',
+          // Re-triggered after the wrong-phrase reply below, so the general
+          // 1:1 pairing can no longer consume it either.
+          updatedAt: '2026-05-12T03:00:00Z',
+          body: 'You have reached your Codex usage limits for code reviews.',
+          author: { login: 'chatgpt-codex-connector[bot]' },
+        },
+        {
+          id: 2,
+          createdAt: '2026-05-12T00:00:30Z',
+          // Starts with `**Rejected**` (a real disposition attempt, per the
+          // issue's own example) but never says "did not review HEAD".
+          body: '**Rejected** — CodeRabbit rate-limited, no findings to triage.',
+          author: { login: 'idd-bot' },
+        },
+      ],
+      threads: [],
+    },
+    {
+      iddAgentLogins: ['idd-bot'],
+      advisoryBotLogins: ['chatgpt-codex-connector[bot]'],
+    },
+  );
+
+  // Existing pass/fail routing is unchanged -- only the diagnostic is added.
+  assert.equal(summary.route, 'return-to-e1');
+  assert.equal(summary.reason, 'missing-disposition-evidence');
+  assert.equal(summary.missingRegularCommentCount, 1);
+  assert.match(
+    summary.missingRegularComments[0].hint ?? '',
+    /did not review HEAD/,
+  );
+  assert.match(
+    summary.missingRegularComments[0].hint ?? '',
+    /\*\*Rejected\*\*/,
+  );
+});
+
+// #1833: a wrong-phrase reply posted BEFORE the notice's own original
+// `createdAt` cannot be the notice's disposition attempt (nothing can reply
+// to a comment before it exists), so no hint is attached even though a
+// wrong-phrase reply exists somewhere in the thread.
+test('disposition evidence does not hint from a wrong-phrase reply that predates the notice', () => {
+  const summary = summarizeDispositionEvidenceForGate(
+    {
+      comments: [
+        {
+          id: 1,
+          createdAt: '2026-05-12T00:00:30Z',
+          body: '**Rejected** — an unrelated earlier rejection, not this notice.',
+          author: { login: 'idd-bot' },
+        },
+        {
+          id: 2,
+          createdAt: '2026-05-12T01:00:00Z',
+          body: 'You have reached your Codex usage limits for code reviews.',
+          author: { login: 'chatgpt-codex-connector[bot]' },
+        },
+      ],
+      threads: [],
+    },
+    {
+      iddAgentLogins: ['idd-bot'],
+      advisoryBotLogins: ['chatgpt-codex-connector[bot]'],
+    },
+  );
+
+  assert.equal(summary.route, 'return-to-e1');
+  assert.equal(summary.missingRegularCommentCount, 1);
+  assert.equal(summary.missingRegularComments[0].hint, undefined);
 });
 
 // No regression (multi-bot): a disposition naming one advisory bot must NOT
