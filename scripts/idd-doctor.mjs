@@ -721,6 +721,7 @@ export function checkPolicySignals(root, report) {
   }
   const reviewPolicySignals = [
     'copilot-advisory',
+    'copilot advisory',
     'no-advisory',
     'human-required',
     'external-bot',

@@ -2339,6 +2339,34 @@ test('checkPolicySignals recognizes the hyphenated copilot-advisory literal (#18
   }
 });
 
+test('checkPolicySignals still recognizes the unhyphenated prose form "copilot advisory"', () => {
+  // Two adopter repositories worked around the pre-fix bug by rewording
+  // their docs to read naturally as "the Copilot advisory review
+  // profile" (#1827 Background) instead of recording the canonical
+  // hyphenated value. The hyphenated-literal fix must not regress this
+  // prose-only case for those repositories.
+  const dir = mkdtempSync(join(tmpdir(), 'idd-policy-signals-'));
+  try {
+    mkdirSync(join(dir, 'docs'), { recursive: true });
+    writeFileSync(
+      join(dir, 'docs/idd-policy.md'),
+      '# Review policy\n\nThis repository uses the Copilot advisory review profile.\n',
+    );
+    writeFileSync(
+      join(dir, 'AGENTS.md'),
+      'mergePolicy: fully_autonomous_merge\n',
+    );
+
+    const report = emptyReport(dir);
+    checkPolicySignals(dir, report);
+    assert.deepEqual(report.errors, []);
+    assert.deepEqual(report.warnings, []);
+    assert.ok(report.passes.includes('review policy signal found'));
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('checkPolicySignals still warns when no recognized review-policy signal is present', () => {
   const dir = mkdtempSync(join(tmpdir(), 'idd-policy-signals-'));
   try {

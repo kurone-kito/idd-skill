@@ -867,6 +867,7 @@ export function checkPolicySignals(root: string, report: DoctorReport) {
 
   const reviewPolicySignals = [
     'copilot-advisory',
+    'copilot advisory',
     'no-advisory',
     'human-required',
     'external-bot',
