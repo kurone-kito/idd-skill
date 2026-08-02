@@ -409,8 +409,9 @@ export interface AdvisoryConvergenceInputs {
    * `resolveClaimEvidence`, so an omitted field on this typed interface
    * would signal a broken forwarding path, not a legitimate "no history"
    * case (kurone-kito/idd-skill#1814). An untyped JS caller of the emitted
-   * `.mjs` that still omits it gets the same effective `false` at runtime,
-   * since it is read below as `inputs.claimMarkerHistoryPresent === true`. */
+   * `.mjs` that omits it (or passes a non-boolean) is rejected at runtime
+   * with a thrown `Error` instead of silently coercing to `false`
+   * (kurone-kito/idd-skill#1821). */
   claimMarkerHistoryPresent: boolean;
   /** #1686: true when two or more of the PR's candidate claim issues each
    * independently resolve an ACTIVE trusted claim -- the disambiguation
@@ -424,7 +425,11 @@ export interface AdvisoryConvergenceInputs {
    * reason wins -- an ambiguous set of candidates trivially also has claim
    * history (an active claim cannot exist without a valid marker), so the
    * two fields are not mutually exclusive; the check order is what makes
-   * the reported `reason` precise. */
+   * the reported `reason` precise. Validated the same way
+   * `claimMarkerHistoryPresent` is -- an untyped `.mjs` caller that omits
+   * it (or passes a non-boolean) is rejected at runtime with a thrown
+   * `Error` instead of silently coercing to `false`
+   * (kurone-kito/idd-skill#1821). */
   claimCandidateAmbiguous: boolean;
 }
 
@@ -569,8 +574,22 @@ export function computeAdvisoryConvergenceVerdict(
   // the applicability gate can tell a genuinely non-IDD PR apart from an
   // IDD-shaped PR whose claim linkage is currently broken. See each field's
   // own doc comment on `AdvisoryConvergenceInputs` for the full rationale.
-  const claimMarkerHistoryPresent = inputs.claimMarkerHistoryPresent === true;
-  const claimCandidateAmbiguous = inputs.claimCandidateAmbiguous === true;
+  //
+  // #1821: the TS type already requires both fields at compile time, but
+  // that guard is erased at emit -- an untyped caller of the exported
+  // `.mjs` (or a hand-written JS caller) can still pass `undefined` or a
+  // non-boolean value through. Reject that here instead of silently
+  // coercing it to `false`, matching this function's existing
+  // error-handling convention for invalid inputs (see the `now` /
+  // `prHeadSha` validation above).
+  if (typeof inputs.claimMarkerHistoryPresent !== 'boolean') {
+    throw new Error('claimMarkerHistoryPresent must be a boolean');
+  }
+  if (typeof inputs.claimCandidateAmbiguous !== 'boolean') {
+    throw new Error('claimCandidateAmbiguous must be a boolean');
+  }
+  const claimMarkerHistoryPresent = inputs.claimMarkerHistoryPresent;
+  const claimCandidateAmbiguous = inputs.claimCandidateAmbiguous;
   const applicability: AdvisoryConvergenceApplicability =
     convergenceScope === 'idd-claimed'
       ? !claim.activeClaimPresent

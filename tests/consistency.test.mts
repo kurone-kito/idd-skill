@@ -1285,6 +1285,30 @@ test('merge Duplicate-success-record skip rule still requires a trusted marker a
   }
 });
 
+test('autonomy contract main-merge row caveats the standing operator-confirmation gate independent of the Reversible classification (idd-skill#1627)', () => {
+  const autonomyContract = readFileSync(
+    new URL('../docs/idd-autonomy-contract.md', import.meta.url),
+    'utf8',
+  );
+  const templateAutonomyContract = readFileSync(
+    new URL('../idd-template/docs/idd-autonomy-contract.md', import.meta.url),
+    'utf8',
+  );
+
+  for (const text of [autonomyContract, templateAutonomyContract]) {
+    // \s+ between words tolerates a Markdown reflow (dprint) that moves a
+    // wrap point mid-phrase without changing the semantic content.
+    assert.match(
+      text,
+      /standing\s+operator\s+confirmation\s+before\s+this\s+merge\s+regardless\s+of\s+this\s+Reversible\s+classification/,
+    );
+    assert.match(text, /protects\s+reviewer\s+attention/);
+    assert.match(text, /not\s+against\s+data\s+loss/);
+    assert.match(text, /unresolved\s+review\s+threads/);
+    assert.match(text, /idd-review-fix-lite\.instructions\.md/);
+  }
+});
+
 test('pre-merge F2 own-agent-comment carve-out covers procedural/status comments beyond disposition replies (idd-skill#1811)', () => {
   const preMerge = readFileSync(
     new URL(
