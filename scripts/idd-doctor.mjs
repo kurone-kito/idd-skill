@@ -1661,7 +1661,7 @@ export function formatCleanupBacklogRemediation(profile, packageSpec = '') {
  * `github-actions[bot]` alone (config unreadable/malformed never widens
  * trust).
  */
-function readCleanupEvidenceTrustedLogins(root) {
+export function readCleanupEvidenceTrustedLogins(root) {
   let trustedMarkerActors;
   try {
     const config = JSON.parse(
