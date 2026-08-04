@@ -221,13 +221,22 @@ function findIndentedCodeRanges(text) {
   const ranges = [];
   let rangeStart = null;
   let rangeEnd = 0;
+  let previousLineBlank = true;
+  let previousLineBlockBoundary = true;
+  let previousContainerDepth = 0;
   let lineStart = 0;
   while (lineStart <= text.length) {
     const line = lineBounds(text, lineStart);
-    const parsed = parseContainerLine(text.slice(lineStart, line.end));
+    const rawLine = text.slice(lineStart, line.end);
+    const parsed = parseContainerLine(rawLine);
     const isIndented = /^(?: {4,}|\t)/u.test(parsed.content);
     const isBlank = parsed.content.trim() === '';
-    if (isIndented) {
+    const canStartCode =
+      rangeStart !== null ||
+      previousLineBlank ||
+      previousLineBlockBoundary ||
+      parsed.containerDepth !== previousContainerDepth;
+    if (isIndented && canStartCode) {
       rangeStart ??= lineStart;
       rangeEnd = line.next;
     } else if (isBlank && rangeStart !== null) {
@@ -240,6 +249,11 @@ function findIndentedCodeRanges(text) {
       rangeStart = null;
       rangeEnd = 0;
     }
+    previousLineBlank = isBlank;
+    previousLineBlockBoundary =
+      MARKDOWN_BLOCK_CONTENT_PATTERN.test(parsed.content) ||
+      parseFencedLine(rawLine) !== null;
+    previousContainerDepth = parsed.containerDepth;
     if (line.next === lineStart) {
       break;
     }
@@ -301,7 +315,7 @@ function findInlineCodeRanges(text, start, end) {
   }
   return ranges;
 }
-function findMarkdownCodeRanges(text) {
+export function findMarkdownCodeRanges(text) {
   const fencedRanges = findFencedCodeRanges(text);
   const structuralRanges = mergeMarkdownCodeRanges([
     ...fencedRanges,
@@ -317,14 +331,17 @@ function findMarkdownCodeRanges(text) {
   return mergeMarkdownCodeRanges(ranges);
 }
 /** Return the valid code region containing a source position, if any. */
-export function getMarkdownCodeRange(text, position) {
+export function getMarkdownCodeRange(
+  text,
+  position,
+  ranges = findMarkdownCodeRanges(text),
+) {
   if (!Number.isInteger(position) || position < 0 || position >= text.length) {
     return null;
   }
   return (
-    findMarkdownCodeRanges(text).find(
-      (range) => range.start <= position && position < range.end,
-    ) ?? null
+    ranges.find((range) => range.start <= position && position < range.end) ??
+    null
   );
 }
 /**
@@ -334,9 +351,12 @@ export function getMarkdownCodeRange(text, position) {
  * CommonMark's equal-length backtick delimiters and escaped-backtick rules so
  * malformed Markdown cannot hide an ordinary-prose policy directive.
  */
-export function maskMarkdownCodeRegionsPreservingPositions(text) {
+export function maskMarkdownCodeRegionsPreservingPositions(
+  text,
+  ranges = findMarkdownCodeRanges(text),
+) {
   const masked = text.split('');
-  for (const range of findMarkdownCodeRanges(text)) {
+  for (const range of ranges) {
     for (let index = range.start; index < range.end; index += 1) {
       if (masked[index] !== '\n' && masked[index] !== '\r') {
         masked[index] = ' ';

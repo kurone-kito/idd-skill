@@ -17,6 +17,7 @@ import {
 import { GH_TEXT_LOOP_TIMEOUT_OPTIONS, ghText } from './gh-exec.mjs';
 import { loadPolicyConfig } from './idd-config.mjs';
 import {
+  findMarkdownCodeRanges,
   getMarkdownCodeRange,
   maskMarkdownCodeRegionsPreservingPositions,
 } from './markdown-code.mjs';
@@ -401,14 +402,19 @@ export function checkTrustSafety(context) {
   // real directive. The position-preserving mask keeps evidence offsets exact
   // even when a fenced block precedes the match.
   const bodyOffset = issue.title.length + 1;
+  const bodyCodeRanges = findMarkdownCodeRanges(issue.body);
   const policyMatch = findPolicyOverrideMatch(
     corpus,
-    `${issue.title}\n${maskMarkdownCodeRegionsPreservingPositions(issue.body)}`,
+    `${issue.title}\n${maskMarkdownCodeRegionsPreservingPositions(issue.body, bodyCodeRanges)}`,
     (start) => {
       if (start < bodyOffset) {
         return null;
       }
-      const range = getMarkdownCodeRange(issue.body, start - bodyOffset);
+      const range = getMarkdownCodeRange(
+        issue.body,
+        start - bodyOffset,
+        bodyCodeRanges,
+      );
       return range === null
         ? null
         : {
