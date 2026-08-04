@@ -81,3 +81,158 @@ export function stripMarkdownCodeRegions(text: string): string {
       `${ticks}${inner.replace(/[^\r\n]/g, ' ')}${ticks}`,
   );
 }
+
+type MarkdownCodeRange = { start: number; end: number };
+
+function isEscapedBacktick(text: string, index: number): boolean {
+  let backslashCount = 0;
+  for (
+    let cursor = index - 1;
+    cursor >= 0 && text[cursor] === '\\';
+    cursor -= 1
+  ) {
+    backslashCount += 1;
+  }
+  return backslashCount % 2 === 1;
+}
+
+function hasBlankLine(text: string, start: number, end: number): boolean {
+  return /\r?\n[ \t]*\r?\n/u.test(text.slice(start, end));
+}
+
+function countBackticks(text: string, start: number, end: number): number {
+  let cursor = start;
+  while (cursor < end && text[cursor] === '`') {
+    cursor += 1;
+  }
+  return cursor - start;
+}
+
+function findFencedCodeRanges(text: string): MarkdownCodeRange[] {
+  const ranges: MarkdownCodeRange[] = [];
+  let fence: { char: string; length: number; start: number } | null = null;
+  let lineStart = 0;
+
+  while (lineStart <= text.length) {
+    const newlineIndex = text.indexOf('\n', lineStart);
+    const lineEnd =
+      newlineIndex === -1
+        ? text.length
+        : newlineIndex > lineStart && text[newlineIndex - 1] === '\r'
+          ? newlineIndex - 1
+          : newlineIndex;
+    const lineAfter = newlineIndex === -1 ? text.length : newlineIndex + 1;
+    const line = text.slice(lineStart, lineEnd);
+    const match = line.match(/^ {0,3}(`{3,}|~{3,})(.*)$/u);
+
+    if (match) {
+      const marker = match[1];
+      const info = match[2];
+      const fenceChar = marker[0];
+      if (fence === null) {
+        if (fenceChar !== '`' || !info.includes('`')) {
+          fence = { char: fenceChar, length: marker.length, start: lineStart };
+        }
+      } else if (
+        fenceChar === fence.char &&
+        marker.length >= fence.length &&
+        /^\s*$/u.test(info)
+      ) {
+        ranges.push({ start: fence.start, end: lineAfter });
+        fence = null;
+      }
+    }
+
+    if (newlineIndex === -1) {
+      break;
+    }
+    lineStart = lineAfter;
+  }
+
+  if (fence !== null) {
+    ranges.push({ start: fence.start, end: text.length });
+  }
+  return ranges;
+}
+
+function findInlineCodeRanges(
+  text: string,
+  start: number,
+  end: number,
+): MarkdownCodeRange[] {
+  const ranges: MarkdownCodeRange[] = [];
+  let cursor = start;
+
+  while (cursor < end) {
+    if (text[cursor] !== '`' || isEscapedBacktick(text, cursor)) {
+      cursor += 1;
+      continue;
+    }
+
+    const openingLength = countBackticks(text, cursor, end);
+    const contentStart = cursor + openingLength;
+    let candidate = contentStart;
+    let closed = false;
+
+    while (candidate < end) {
+      if (text[candidate] !== '`') {
+        candidate += 1;
+        continue;
+      }
+      const closingLength = countBackticks(text, candidate, end);
+      if (
+        closingLength === openingLength &&
+        !hasBlankLine(text, contentStart, candidate)
+      ) {
+        ranges.push({
+          start: cursor,
+          end: candidate + closingLength,
+        });
+        cursor = candidate + closingLength;
+        closed = true;
+        break;
+      }
+      candidate += closingLength;
+    }
+
+    if (!closed) {
+      cursor = contentStart;
+    }
+  }
+
+  return ranges;
+}
+
+function findMarkdownCodeRanges(text: string): MarkdownCodeRange[] {
+  const fencedRanges = findFencedCodeRanges(text);
+  const ranges = [...fencedRanges];
+  let cursor = 0;
+
+  for (const fencedRange of fencedRanges) {
+    ranges.push(...findInlineCodeRanges(text, cursor, fencedRange.start));
+    cursor = fencedRange.end;
+  }
+  ranges.push(...findInlineCodeRanges(text, cursor, text.length));
+  return ranges.sort((left, right) => left.start - right.start);
+}
+
+/**
+ * Mask Markdown code regions without changing UTF-16 character positions.
+ * Unlike {@link stripMarkdownCodeRegions}, this is intended for regex matches
+ * whose offsets must be mapped back to the original text. It also follows
+ * CommonMark's equal-length backtick delimiters and escaped-backtick rules so
+ * malformed Markdown cannot hide an ordinary-prose policy directive.
+ */
+export function maskMarkdownCodeRegionsPreservingPositions(
+  text: string,
+): string {
+  const masked = text.split('');
+  for (const range of findMarkdownCodeRanges(text)) {
+    for (let index = range.start; index < range.end; index += 1) {
+      if (masked[index] !== '\n' && masked[index] !== '\r') {
+        masked[index] = ' ';
+      }
+    }
+  }
+  return masked.join('');
+}

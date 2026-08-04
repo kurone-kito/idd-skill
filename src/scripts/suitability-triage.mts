@@ -18,7 +18,7 @@ import {
 } from './discover-shared-file-overlap.mts';
 import { GH_TEXT_LOOP_TIMEOUT_OPTIONS, ghText } from './gh-exec.mts';
 import { loadPolicyConfig } from './idd-config.mts';
-import { stripMarkdownCodeRegions } from './markdown-code.mts';
+import { maskMarkdownCodeRegionsPreservingPositions } from './markdown-code.mts';
 import { normalizePolicyConfig, POLICY_DEFAULTS } from './policy-helpers.mts';
 import {
   buildClosedByMergedPrArgs,
@@ -289,6 +289,54 @@ const ACCEPTANCE_CRITERIA_PATTERN = /^#+\s*Acceptance\s+Criteria\s*$/im;
 const RESOLVED_DECISION_PATTERN =
   /^#{1,6}\s+Decision\b(?![^\n]*\b(?:not(?:\s+yet)?(?:\s+been)?\s+resolved|(?:to\s+be|yet\s+to\s+be|remains?\s+to\s+be)\s+resolved|never(?:\s+been)?\s+resolved)\b)[^\n]*\bresolved\b/im;
 
+function findPolicyOverrideMatch(
+  text: string,
+  maskedText: string,
+): { index: number; text: string } | null {
+  const maskedMatch = POLICY_OVERRIDE_PATTERN.exec(maskedText);
+  if (maskedMatch?.index !== undefined) {
+    return {
+      index: maskedMatch.index,
+      text: text.slice(
+        maskedMatch.index,
+        maskedMatch.index + maskedMatch[0].length,
+      ),
+    };
+  }
+
+  // A real directive may wrap one of its tokens in inline code. The masked
+  // pass intentionally removes that token, so inspect raw matches as a
+  // fallback and retain only matches that are not wholly inside code.
+  const pattern = new RegExp(POLICY_OVERRIDE_PATTERN.source, 'gi');
+  for (const match of text.matchAll(pattern)) {
+    const index = match.index ?? -1;
+    if (index < 0) {
+      continue;
+    }
+    const end = index + match[0].length;
+    let sawMaskedCharacter = false;
+    let fullyMasked = true;
+    for (let cursor = index; cursor < end; cursor += 1) {
+      const rawCharacter = text[cursor];
+      if (
+        rawCharacter !== '\n' &&
+        rawCharacter !== '\r' &&
+        /\S/u.test(rawCharacter ?? '')
+      ) {
+        if (maskedText[cursor] !== ' ') {
+          fullyMasked = false;
+          break;
+        }
+        sawMaskedCharacter = true;
+      }
+    }
+    if (!fullyMasked || !sawMaskedCharacter) {
+      return { index, text: match[0] };
+    }
+  }
+  return null;
+}
+
 if (import.meta.main) {
   runCli();
 }
@@ -454,17 +502,25 @@ export function checkTrustSafety(context: Context): CheckOutcome {
     };
   }
 
-  // Check for explicit policy-override directives
-  const policyCorpus = stripMarkdownCodeRegions(corpus);
-  if (POLICY_OVERRIDE_PATTERN.test(policyCorpus)) {
-    const match = policyCorpus.match(POLICY_OVERRIDE_PATTERN);
-    const evidenceMatch =
-      match?.index === undefined
-        ? (match?.[0] ?? '')
-        : corpus.slice(match.index, match.index + (match[0]?.length ?? 0));
+  // Check for explicit policy-override directives. Issue titles are plain
+  // fields, not Markdown documents, so scan them raw. In the body, find the
+  // directive on raw text and ignore it only when the entire match is inside
+  // a valid Markdown code region. This keeps inert examples from firing while
+  // preserving fail-closed behavior when code formatting wraps only part of a
+  // real directive. The position-preserving mask keeps evidence offsets exact
+  // even when a fenced block precedes the match.
+  const titleMatch = POLICY_OVERRIDE_PATTERN.exec(issue.title);
+  const bodyMatch = findPolicyOverrideMatch(
+    issue.body,
+    maskMarkdownCodeRegionsPreservingPositions(issue.body),
+  );
+  const policyMatch = titleMatch
+    ? { index: titleMatch.index, text: titleMatch[0] }
+    : bodyMatch;
+  if (policyMatch) {
     return {
       pass: false,
-      evidence: `Policy-override directive detected: "${evidenceMatch}". Untrusted policy-manipulation instructions cannot be processed.`,
+      evidence: `Policy-override directive detected: "${policyMatch.text}". Untrusted policy-manipulation instructions cannot be processed.`,
     };
   }
 

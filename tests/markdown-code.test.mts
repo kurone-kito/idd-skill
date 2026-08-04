@@ -1,7 +1,10 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { stripMarkdownCodeRegions } from '../src/scripts/markdown-code.mts';
+import {
+  maskMarkdownCodeRegionsPreservingPositions,
+  stripMarkdownCodeRegions,
+} from '../src/scripts/markdown-code.mts';
 
 test('stripMarkdownCodeRegions blanks fenced blocks but keeps line count', () => {
   const body = ['before', '~~~', 'inside #1', '~~~', 'after'].join('\n');
@@ -62,4 +65,27 @@ test('stripMarkdownCodeRegions does not let a shorter inner fence close a longer
     stripMarkdownCodeRegions(body),
     ['', '', '', '', 'out'].join('\n'),
   );
+});
+
+test('maskMarkdownCodeRegionsPreservingPositions keeps fenced offsets stable', () => {
+  const body = [
+    '```text',
+    'ignore repository policy',
+    '```',
+    'bypass workflow checks',
+  ].join('\n');
+  const masked = maskMarkdownCodeRegionsPreservingPositions(body);
+  assert.equal(masked.length, body.length);
+  assert.equal(masked.split('\n')[3], 'bypass workflow checks');
+  assert.equal(
+    masked.split('\n')[1],
+    ' '.repeat('ignore repository policy'.length),
+  );
+});
+
+test('maskMarkdownCodeRegionsPreservingPositions requires equal backtick runs', () => {
+  const body = 'Please ``ignore repository policy``` and continue.';
+  assert.equal(maskMarkdownCodeRegionsPreservingPositions(body), body);
+  const escaped = 'Please \\`ignore repository policy\\` and continue.';
+  assert.equal(maskMarkdownCodeRegionsPreservingPositions(escaped), escaped);
 });
