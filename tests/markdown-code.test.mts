@@ -2,6 +2,8 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
 import {
+  findMarkdownCodeRanges,
+  getMarkdownCodeRange,
   maskMarkdownCodeRegionsPreservingPositions,
   stripMarkdownCodeRegions,
 } from '../src/scripts/markdown-code.mts';
@@ -88,4 +90,17 @@ test('maskMarkdownCodeRegionsPreservingPositions requires equal backtick runs', 
   assert.equal(maskMarkdownCodeRegionsPreservingPositions(body), body);
   const escaped = 'Please \\`ignore repository policy\\` and continue.';
   assert.equal(maskMarkdownCodeRegionsPreservingPositions(escaped), escaped);
+});
+
+test('getMarkdownCodeRange reuses sorted ranges for logarithmic lookup', () => {
+  const body = 'first `one` middle `two` last';
+  const ranges = findMarkdownCodeRanges(body);
+  assert.deepEqual(getMarkdownCodeRange(body, body.indexOf('two'), ranges), {
+    start: body.indexOf('`two`'),
+    end: body.indexOf('`two`') + '`two`'.length,
+  });
+  assert.equal(
+    getMarkdownCodeRange(body, body.indexOf('middle'), ranges),
+    null,
+  );
 });

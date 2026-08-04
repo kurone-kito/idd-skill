@@ -407,10 +407,23 @@ export function getMarkdownCodeRange(
   if (!Number.isInteger(position) || position < 0 || position >= text.length) {
     return null;
   }
-  return (
-    ranges.find((range) => range.start <= position && position < range.end) ??
-    null
-  );
+  let low = 0;
+  let high = ranges.length - 1;
+  while (low <= high) {
+    const middle = low + Math.floor((high - low) / 2);
+    const range = ranges[middle];
+    if (range === undefined) {
+      break;
+    }
+    if (position < range.start) {
+      high = middle - 1;
+    } else if (position >= range.end) {
+      low = middle + 1;
+    } else {
+      return range;
+    }
+  }
+  return null;
 }
 
 /**
