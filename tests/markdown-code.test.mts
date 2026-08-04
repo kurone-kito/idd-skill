@@ -69,6 +69,21 @@ test('stripMarkdownCodeRegions does not let a shorter inner fence close a longer
   );
 });
 
+test('stripMarkdownCodeRegions recognizes fences directly inside list items', () => {
+  const body = ['- ~~~text', '  inside #1', '  ~~~', 'after #2'].join('\n');
+  assert.equal(
+    stripMarkdownCodeRegions(body),
+    ['', '', '', 'after #2'].join('\n'),
+  );
+});
+
+test('findMarkdownCodeRanges recognizes list-item fence ranges', () => {
+  const body = ['- ~~~text', '  inside #1', '  ~~~', 'after #2'].join('\n');
+  assert.deepEqual(findMarkdownCodeRanges(body), [
+    { start: 0, end: body.indexOf('after #2') },
+  ]);
+});
+
 test('maskMarkdownCodeRegionsPreservingPositions keeps fenced offsets stable', () => {
   const body = [
     '```text',

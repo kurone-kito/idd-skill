@@ -25,30 +25,33 @@
 export function blankFencedCodeBlocks(text: string): string {
   const lines = text.split(/\r?\n/);
   const out: string[] = [];
-  let fence: { char: string; length: number } | null = null;
+  let fence: {
+    char: string;
+    length: number;
+    containerDepth: number;
+  } | null = null;
   for (const line of lines) {
-    // CommonMark §4.5: a fence marker may be indented by at most three spaces;
-    // a marker with four or more leading spaces is an indented code line, not a
-    // fence, so accepting arbitrary leading whitespace here would wrongly enter
-    // fence mode on `    ~~~` and blank the real content that follows it.
-    const openMatch = line.match(/^ {0,3}(`{3,}|~{3,})(.*)$/);
-    if (openMatch) {
-      const marker = openMatch[1];
-      const info = openMatch[2];
-      const fenceChar = marker[0];
+    const parsed = parseFencedLine(line);
+    if (parsed) {
+      const fenceChar = parsed.marker[0];
       if (fence === null) {
         // CommonMark §4.5: a backtick-fence opener's info string may not
         // contain a backtick (that would be ambiguous with a close or inline
         // code), so such a line is not a fence opener and stays content.
-        if (fenceChar !== '`' || !info.includes('`')) {
-          fence = { char: fenceChar, length: marker.length };
+        if (fenceChar !== '`' || !parsed.info.includes('`')) {
+          fence = {
+            char: fenceChar,
+            length: parsed.marker.length,
+            containerDepth: parsed.containerDepth,
+          };
           out.push('');
           continue;
         }
       } else if (
         fenceChar === fence.char &&
-        marker.length >= fence.length &&
-        /^\s*$/.test(info)
+        parsed.marker.length >= fence.length &&
+        parsed.containerDepth === fence.containerDepth &&
+        /^\s*$/.test(parsed.info)
       ) {
         fence = null;
         out.push('');
@@ -185,8 +188,20 @@ function parseContainerLine(line: string): ContainerLine {
   };
 }
 
+function stripListItemMarker(content: string): string {
+  const listItemMatch = content.match(
+    /^ {0,3}(?:[-+*]|\d{1,9}[.)])[ \t]+(.*)$/u,
+  );
+  return listItemMatch?.[1] ?? content;
+}
+
 function parseFencedLine(line: string): FencedLine | null {
-  const { content, containerDepth } = parseContainerLine(line);
+  const { content: containerContent, containerDepth } =
+    parseContainerLine(line);
+  // A fenced block may begin directly after a list marker (`- ~~~` or
+  // `1. ~~~`). The list marker is a container prefix, not part of the fence;
+  // continuation lines commonly carry only the list indentation (`  ~~~`).
+  const content = stripListItemMarker(containerContent);
   const fenceMatch = content.match(/^ {0,3}(`{3,}|~{3,})(.*)$/u);
   if (!fenceMatch) {
     return null;

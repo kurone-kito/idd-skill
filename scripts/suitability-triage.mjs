@@ -210,9 +210,10 @@ function findPolicyOverrideMatch(text, maskedText, getCodeRangeAt) {
       );
       if (codeOnlyMatch?.index === 0) {
         // The raw pattern may greedily span a code-only occurrence and a
-        // later prose occurrence. Resume just after the inert range so the
-        // later occurrence is evaluated independently.
-        pattern.lastIndex = codeRange.end;
+        // later prose occurrence. Resume just after the inert occurrence, not
+        // the entire code range: a later trigger in the same code span may
+        // still form a cross-boundary match with visible prose after it.
+        pattern.lastIndex = index + codeOnlyMatch[0].length;
         continue;
       }
     }
