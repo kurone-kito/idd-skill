@@ -238,6 +238,11 @@ jobs:
   # docs/policy-constants.md (ADVISORY_CONVERGENCE_CHECK_SELECTOR in
   # advisory-convergence.mts) -- keep all three in sync if this id ever
   # changes.
+  # Adding a `name:` display-name key or changing this job id changes the
+  # literal check-run context. This warning is preventive; no observed
+  # incident yet. If either edit is intentional, update every rerun-helper,
+  # advisory-wait, required-status-check, and external-check-waiver consumer
+  # to the new literal context together.
   idd-advisory-convergence:
     runs-on: ubuntu-slim
     # No observed run history yet (new workflow). Bounds pathological
