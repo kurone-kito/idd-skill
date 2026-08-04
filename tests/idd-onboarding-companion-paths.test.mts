@@ -96,6 +96,11 @@ test('companion policy and source-repository routing distinguish source from des
   );
   assert.match(verification, /source-versus-\s*destination contract/iu);
   assert.match(verification, /\.agents\/skills\/issue-authoring\/SKILL\.md/u);
+  assert.match(verification, /native destination[\s\S]*contains `SKILL\.md`/iu);
+  assert.doesNotMatch(
+    verification,
+    /`skills\/issue-authoring\/SKILL\.md`[\s\S]*`skills\/issue-authoring\/references\//u,
+  );
   assert.match(agents, /## Codex issue-authoring route/u);
   assert.match(agents, /canonical issue-authoring bundle/u);
   assert.match(agents, /\.claude\/skills\/issue-authoring\//u);

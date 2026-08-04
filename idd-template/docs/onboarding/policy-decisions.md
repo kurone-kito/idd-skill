@@ -164,8 +164,9 @@ runtime:
 
 - `installed`: copy the canonical source bundle at
   `skills/issue-authoring/` into one selected native skill directory, such as
-  `.agents/skills/issue-authoring/` for Codex CLI, `.claude/skills/issue-authoring/`
-  for Claude Code, or `.opencode/skills/issue-authoring/` for OpenCode. Record
+  `.agents/skills/issue-authoring/` for Codex CLI or OpenCode,
+  `.claude/skills/issue-authoring/` for Claude Code, or
+  `.opencode/skills/issue-authoring/` for OpenCode. Record
   the selected destination alongside the `installed` status.
 - `not installed`: continue without the companion
 
