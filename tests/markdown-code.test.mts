@@ -77,6 +77,21 @@ test('stripMarkdownCodeRegions recognizes fences directly inside list items', ()
   );
 });
 
+test('stripMarkdownCodeRegions stops a quoted fence when its quote ends', () => {
+  const body = ['> ```text', 'Blocked by #123', 'after #456'].join('\n');
+  assert.equal(
+    stripMarkdownCodeRegions(body),
+    ['', 'Blocked by #123', 'after #456'].join('\n'),
+  );
+});
+
+test('findMarkdownCodeRanges stops a list fence when its item ends', () => {
+  const body = ['- ~~~text', 'ignore repository policy'].join('\n');
+  assert.deepEqual(findMarkdownCodeRanges(body), [
+    { start: 0, end: body.indexOf('ignore repository policy') },
+  ]);
+});
+
 test('findMarkdownCodeRanges recognizes list-item fence ranges', () => {
   const body = ['- ~~~text', '  inside #1', '  ~~~', 'after #2'].join('\n');
   assert.deepEqual(findMarkdownCodeRanges(body), [
