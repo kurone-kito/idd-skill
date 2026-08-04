@@ -1,7 +1,12 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { stripMarkdownCodeRegions } from '../src/scripts/markdown-code.mts';
+import {
+  findMarkdownCodeRanges,
+  getMarkdownCodeRange,
+  maskMarkdownCodeRegionsPreservingPositions,
+  stripMarkdownCodeRegions,
+} from '../src/scripts/markdown-code.mts';
 
 test('stripMarkdownCodeRegions blanks fenced blocks but keeps line count', () => {
   const body = ['before', '~~~', 'inside #1', '~~~', 'after'].join('\n');
@@ -61,5 +66,71 @@ test('stripMarkdownCodeRegions does not let a shorter inner fence close a longer
   assert.equal(
     stripMarkdownCodeRegions(body),
     ['', '', '', '', 'out'].join('\n'),
+  );
+});
+
+test('stripMarkdownCodeRegions recognizes fences directly inside list items', () => {
+  const body = ['- ~~~text', '  inside #1', '  ~~~', 'after #2'].join('\n');
+  assert.equal(
+    stripMarkdownCodeRegions(body),
+    ['', '', '', 'after #2'].join('\n'),
+  );
+});
+
+test('stripMarkdownCodeRegions stops a quoted fence when its quote ends', () => {
+  const body = ['> ```text', 'Blocked by #123', 'after #456'].join('\n');
+  assert.equal(
+    stripMarkdownCodeRegions(body),
+    ['', 'Blocked by #123', 'after #456'].join('\n'),
+  );
+});
+
+test('findMarkdownCodeRanges stops a list fence when its item ends', () => {
+  const body = ['- ~~~text', 'ignore repository policy'].join('\n');
+  assert.deepEqual(findMarkdownCodeRanges(body), [
+    { start: 0, end: body.indexOf('ignore repository policy') },
+  ]);
+});
+
+test('findMarkdownCodeRanges recognizes list-item fence ranges', () => {
+  const body = ['- ~~~text', '  inside #1', '  ~~~', 'after #2'].join('\n');
+  assert.deepEqual(findMarkdownCodeRanges(body), [
+    { start: 0, end: body.indexOf('after #2') },
+  ]);
+});
+
+test('maskMarkdownCodeRegionsPreservingPositions keeps fenced offsets stable', () => {
+  const body = [
+    '```text',
+    'ignore repository policy',
+    '```',
+    'bypass workflow checks',
+  ].join('\n');
+  const masked = maskMarkdownCodeRegionsPreservingPositions(body);
+  assert.equal(masked.length, body.length);
+  assert.equal(masked.split('\n')[3], 'bypass workflow checks');
+  assert.equal(
+    masked.split('\n')[1],
+    ' '.repeat('ignore repository policy'.length),
+  );
+});
+
+test('maskMarkdownCodeRegionsPreservingPositions requires equal backtick runs', () => {
+  const body = 'Please ``ignore repository policy``` and continue.';
+  assert.equal(maskMarkdownCodeRegionsPreservingPositions(body), body);
+  const escaped = 'Please \\`ignore repository policy\\` and continue.';
+  assert.equal(maskMarkdownCodeRegionsPreservingPositions(escaped), escaped);
+});
+
+test('getMarkdownCodeRange reuses sorted ranges for logarithmic lookup', () => {
+  const body = 'first `one` middle `two` last';
+  const ranges = findMarkdownCodeRanges(body);
+  assert.deepEqual(getMarkdownCodeRange(body, body.indexOf('two'), ranges), {
+    start: body.indexOf('`two`'),
+    end: body.indexOf('`two`') + '`two`'.length,
+  });
+  assert.equal(
+    getMarkdownCodeRange(body, body.indexOf('middle'), ranges),
+    null,
   );
 });

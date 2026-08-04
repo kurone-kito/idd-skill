@@ -26,28 +26,41 @@ export function blankFencedCodeBlocks(text) {
   const out = [];
   let fence = null;
   for (const line of lines) {
-    // CommonMark §4.5: a fence marker may be indented by at most three spaces;
-    // a marker with four or more leading spaces is an indented code line, not a
-    // fence, so accepting arbitrary leading whitespace here would wrongly enter
-    // fence mode on `    ~~~` and blank the real content that follows it.
-    const openMatch = line.match(/^ {0,3}(`{3,}|~{3,})(.*)$/);
-    if (openMatch) {
-      const marker = openMatch[1];
-      const info = openMatch[2];
-      const fenceChar = marker[0];
+    const containerLine = parseContainerLine(line);
+    const parsed = parseFencedLine(line);
+    if (
+      fence !== null &&
+      ((fence.containerDepth > 0 &&
+        containerLine.containerDepth < fence.containerDepth) ||
+        (fence.listContentIndent !== null &&
+          !continuesListContainer(
+            containerLine.content,
+            fence.listContentIndent,
+          )))
+    ) {
+      fence = null;
+    }
+    if (parsed) {
+      const fenceChar = parsed.marker[0];
       if (fence === null) {
         // CommonMark §4.5: a backtick-fence opener's info string may not
         // contain a backtick (that would be ambiguous with a close or inline
         // code), so such a line is not a fence opener and stays content.
-        if (fenceChar !== '`' || !info.includes('`')) {
-          fence = { char: fenceChar, length: marker.length };
+        if (isValidFenceOpener(parsed)) {
+          fence = {
+            char: fenceChar,
+            length: parsed.marker.length,
+            containerDepth: parsed.containerDepth,
+            listContentIndent: parsed.listContentIndent,
+          };
           out.push('');
           continue;
         }
       } else if (
         fenceChar === fence.char &&
-        marker.length >= fence.length &&
-        /^\s*$/.test(info)
+        parsed.marker.length >= fence.length &&
+        parsed.containerDepth === fence.containerDepth &&
+        /^\s*$/.test(parsed.info)
       ) {
         fence = null;
         out.push('');
@@ -77,4 +90,373 @@ export function stripMarkdownCodeRegions(text) {
     (_match, ticks, inner) =>
       `${ticks}${inner.replace(/[^\r\n]/g, ' ')}${ticks}`,
   );
+}
+function isEscapedBacktick(text, index) {
+  let backslashCount = 0;
+  for (
+    let cursor = index - 1;
+    cursor >= 0 && text[cursor] === '\\';
+    cursor -= 1
+  ) {
+    backslashCount += 1;
+  }
+  return backslashCount % 2 === 1;
+}
+function hasBlankLine(text, start, end) {
+  return /\r?\n[ \t]*\r?\n/u.test(text.slice(start, end));
+}
+const MARKDOWN_BLOCK_CONTENT_PATTERN =
+  /^(?:#{1,6}(?:[ \t]|$)|(?:[-+*])[ \t]+|1[.)][ \t]+|(?:-{1,}|={1,}|_{3,}|\*{3,})[ \t]*$)/u;
+const MARKDOWN_INDENTED_CODE_PRECEDER_PATTERN =
+  /^(?:#{1,6}(?:[ \t]|$)|(?:-{1,}|={1,}|_{3,}|\*{3,})[ \t]*$)/u;
+function lineBounds(text, lineStart) {
+  const newlineIndex = text.indexOf('\n', lineStart);
+  const end =
+    newlineIndex === -1
+      ? text.length
+      : newlineIndex > lineStart && text[newlineIndex - 1] === '\r'
+        ? newlineIndex - 1
+        : newlineIndex;
+  return {
+    end,
+    next: newlineIndex === -1 ? text.length : newlineIndex + 1,
+  };
+}
+function findMarkdownBlockBoundary(text, start, end) {
+  const openingLineStart = text.lastIndexOf('\n', start - 1) + 1;
+  const openingLine = lineBounds(text, openingLineStart);
+  const openingContainerDepth = parseContainerLine(
+    text.slice(openingLineStart, openingLine.end),
+  ).containerDepth;
+  let lineStart = openingLine.next;
+  while (lineStart < end) {
+    const line = lineBounds(text, lineStart);
+    const parsed = parseContainerLine(text.slice(lineStart, line.end));
+    if (parsed.containerDepth !== openingContainerDepth) {
+      // A quote marker may continue an inline span only when it belongs to
+      // the same container. A quote that starts or ends here is a block break.
+      if (parsed.containerDepth > 0 || openingContainerDepth > 0) {
+        return lineStart;
+      }
+    }
+    if (MARKDOWN_BLOCK_CONTENT_PATTERN.test(parsed.content)) {
+      return lineStart;
+    }
+    if (line.next === lineStart) {
+      break;
+    }
+    lineStart = line.next;
+  }
+  return null;
+}
+function countBackticks(text, start, end) {
+  let cursor = start;
+  while (cursor < end && text[cursor] === '`') {
+    cursor += 1;
+  }
+  return cursor - start;
+}
+const LIST_ITEM_PATTERN = /^([ \t]{0,3})([-+*]|\d{1,9}[.)])([ \t]+)(.*)$/u;
+function indentationColumns(text) {
+  let columns = 0;
+  for (const character of text) {
+    if (character === ' ') {
+      columns += 1;
+    } else if (character === '\t') {
+      columns += 4 - (columns % 4);
+    } else {
+      break;
+    }
+  }
+  return columns;
+}
+function parseListItemMatch(content) {
+  const match = content.match(LIST_ITEM_PATTERN);
+  if (!match) {
+    return null;
+  }
+  return {
+    markerIndent: match[1],
+    marker: match[2],
+    spacing: match[3],
+    content: match[4],
+  };
+}
+function parseListItemContainer(content) {
+  const listItem = parseListItemMatch(content);
+  if (!listItem) {
+    return null;
+  }
+  return (
+    indentationColumns(listItem.markerIndent) +
+    listItem.marker.length +
+    indentationColumns(listItem.spacing)
+  );
+}
+function parseContainerLine(line) {
+  const quoteMatch = line.match(/^ {0,3}(?:(?:> ?)+)(.*)$/u);
+  const content = quoteMatch ? quoteMatch[1] : line;
+  return {
+    content,
+    containerDepth: quoteMatch ? (quoteMatch[0].match(/>/gu)?.length ?? 0) : 0,
+    listContentIndent: parseListItemContainer(content),
+  };
+}
+function stripListItemMarker(content) {
+  return parseListItemMatch(content)?.content ?? content;
+}
+function continuesListContainer(content, contentIndent) {
+  return content.trim() === '' || indentationColumns(content) >= contentIndent;
+}
+function parseFencedLine(line) {
+  const {
+    content: containerContent,
+    containerDepth,
+    listContentIndent,
+  } = parseContainerLine(line);
+  // A fenced block may begin directly after a list marker (`- ~~~` or
+  // `1. ~~~`). The list marker is a container prefix, not part of the fence;
+  // continuation lines commonly carry only the list indentation (`  ~~~`).
+  const content = stripListItemMarker(containerContent);
+  const fenceMatch = content.match(/^ {0,3}(`{3,}|~{3,})(.*)$/u);
+  if (!fenceMatch) {
+    return null;
+  }
+  return {
+    marker: fenceMatch[1],
+    info: fenceMatch[2],
+    containerDepth,
+    listContentIndent,
+  };
+}
+function isValidFenceOpener(fence) {
+  return fence.marker[0] !== '`' || !fence.info.includes('`');
+}
+function findFencedCodeRanges(text) {
+  const ranges = [];
+  let fence = null;
+  let lineStart = 0;
+  while (lineStart <= text.length) {
+    const newlineIndex = text.indexOf('\n', lineStart);
+    const lineEnd =
+      newlineIndex === -1
+        ? text.length
+        : newlineIndex > lineStart && text[newlineIndex - 1] === '\r'
+          ? newlineIndex - 1
+          : newlineIndex;
+    const lineAfter = newlineIndex === -1 ? text.length : newlineIndex + 1;
+    const line = text.slice(lineStart, lineEnd);
+    const containerLine = parseContainerLine(line);
+    const match = parseFencedLine(line);
+    if (
+      fence !== null &&
+      ((fence.containerDepth > 0 &&
+        containerLine.containerDepth < fence.containerDepth) ||
+        (fence.listContentIndent !== null &&
+          !continuesListContainer(
+            containerLine.content,
+            fence.listContentIndent,
+          )))
+    ) {
+      ranges.push({ start: fence.start, end: lineStart });
+      fence = null;
+    }
+    if (match) {
+      const marker = match.marker;
+      const info = match.info;
+      const fenceChar = marker[0];
+      if (fence === null) {
+        if (isValidFenceOpener(match)) {
+          fence = {
+            char: fenceChar,
+            length: marker.length,
+            start: lineStart,
+            containerDepth: match.containerDepth,
+            listContentIndent: match.listContentIndent,
+          };
+        }
+      } else if (
+        fenceChar === fence.char &&
+        marker.length >= fence.length &&
+        match.containerDepth === fence.containerDepth &&
+        /^\s*$/u.test(info)
+      ) {
+        ranges.push({ start: fence.start, end: lineAfter });
+        fence = null;
+      }
+    }
+    if (newlineIndex === -1) {
+      break;
+    }
+    lineStart = lineAfter;
+  }
+  if (fence !== null) {
+    ranges.push({ start: fence.start, end: text.length });
+  }
+  return ranges;
+}
+function findIndentedCodeRanges(text) {
+  const ranges = [];
+  let rangeStart = null;
+  let rangeEnd = 0;
+  let previousLineBlank = true;
+  let previousLineBlockBoundary = true;
+  let previousContainerDepth = 0;
+  let lineStart = 0;
+  while (lineStart <= text.length) {
+    const line = lineBounds(text, lineStart);
+    const rawLine = text.slice(lineStart, line.end);
+    const parsed = parseContainerLine(rawLine);
+    const isIndented = indentationColumns(parsed.content) >= 4;
+    const isBlank = parsed.content.trim() === '';
+    const canStartCode =
+      rangeStart !== null ||
+      previousLineBlank ||
+      previousLineBlockBoundary ||
+      parsed.containerDepth !== previousContainerDepth;
+    if (isIndented && canStartCode) {
+      rangeStart ??= lineStart;
+      rangeEnd = line.next;
+    } else if (isBlank && rangeStart !== null) {
+      // A blank line may occur inside an indented code block. Keeping it in
+      // the range is harmless for masking and lets the next indented line
+      // remain part of the same Markdown example.
+      rangeEnd = line.next;
+    } else if (rangeStart !== null) {
+      ranges.push({ start: rangeStart, end: rangeEnd });
+      rangeStart = null;
+      rangeEnd = 0;
+    }
+    previousLineBlank = isBlank;
+    previousLineBlockBoundary =
+      MARKDOWN_INDENTED_CODE_PRECEDER_PATTERN.test(parsed.content) ||
+      (() => {
+        const fencedLine = parseFencedLine(rawLine);
+        return fencedLine !== null && isValidFenceOpener(fencedLine);
+      })();
+    previousContainerDepth = parsed.containerDepth;
+    if (line.next === lineStart) {
+      break;
+    }
+    lineStart = line.next;
+  }
+  if (rangeStart !== null) {
+    ranges.push({ start: rangeStart, end: rangeEnd });
+  }
+  return ranges;
+}
+function mergeMarkdownCodeRanges(ranges) {
+  const merged = [];
+  for (const range of ranges.sort((left, right) => left.start - right.start)) {
+    const previous = merged.at(-1);
+    if (previous && range.start <= previous.end) {
+      previous.end = Math.max(previous.end, range.end);
+    } else {
+      merged.push({ ...range });
+    }
+  }
+  return merged;
+}
+function findInlineCodeRanges(text, start, end) {
+  const ranges = [];
+  let cursor = start;
+  while (cursor < end) {
+    if (text[cursor] !== '`' || isEscapedBacktick(text, cursor)) {
+      cursor += 1;
+      continue;
+    }
+    const openingLength = countBackticks(text, cursor, end);
+    const contentStart = cursor + openingLength;
+    let candidate = contentStart;
+    let closed = false;
+    const blockBoundary = findMarkdownBlockBoundary(text, contentStart, end);
+    const candidateEnd = blockBoundary ?? end;
+    while (candidate < candidateEnd) {
+      if (text[candidate] !== '`') {
+        candidate += 1;
+        continue;
+      }
+      const closingLength = countBackticks(text, candidate, end);
+      if (
+        closingLength === openingLength &&
+        !hasBlankLine(text, contentStart, candidate)
+      ) {
+        ranges.push({
+          start: cursor,
+          end: candidate + closingLength,
+        });
+        cursor = candidate + closingLength;
+        closed = true;
+        break;
+      }
+      candidate += closingLength;
+    }
+    if (!closed) {
+      cursor = contentStart;
+    }
+  }
+  return ranges;
+}
+export function findMarkdownCodeRanges(text) {
+  const fencedRanges = findFencedCodeRanges(text);
+  const structuralRanges = mergeMarkdownCodeRanges([
+    ...fencedRanges,
+    ...findIndentedCodeRanges(text),
+  ]);
+  const ranges = [...structuralRanges];
+  let cursor = 0;
+  for (const structuralRange of structuralRanges) {
+    ranges.push(...findInlineCodeRanges(text, cursor, structuralRange.start));
+    cursor = structuralRange.end;
+  }
+  ranges.push(...findInlineCodeRanges(text, cursor, text.length));
+  return mergeMarkdownCodeRanges(ranges);
+}
+/** Return the valid code region containing a source position, if any. */
+export function getMarkdownCodeRange(
+  text,
+  position,
+  ranges = findMarkdownCodeRanges(text),
+) {
+  if (!Number.isInteger(position) || position < 0 || position >= text.length) {
+    return null;
+  }
+  let low = 0;
+  let high = ranges.length - 1;
+  while (low <= high) {
+    const middle = low + Math.floor((high - low) / 2);
+    const range = ranges[middle];
+    if (range === undefined) {
+      break;
+    }
+    if (position < range.start) {
+      high = middle - 1;
+    } else if (position >= range.end) {
+      low = middle + 1;
+    } else {
+      return range;
+    }
+  }
+  return null;
+}
+/**
+ * Mask Markdown code regions without changing UTF-16 character positions.
+ * Unlike {@link stripMarkdownCodeRegions}, this is intended for regex matches
+ * whose offsets must be mapped back to the original text. It also follows
+ * CommonMark's equal-length backtick delimiters and escaped-backtick rules so
+ * malformed Markdown cannot hide an ordinary-prose policy directive.
+ */
+export function maskMarkdownCodeRegionsPreservingPositions(
+  text,
+  ranges = findMarkdownCodeRanges(text),
+) {
+  const masked = text.split('');
+  for (const range of ranges) {
+    for (let index = range.start; index < range.end; index += 1) {
+      if (masked[index] !== '\n' && masked[index] !== '\r') {
+        masked[index] = ' ';
+      }
+    }
+  }
+  return masked.join('');
 }

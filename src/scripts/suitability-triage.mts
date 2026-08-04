@@ -18,6 +18,11 @@ import {
 } from './discover-shared-file-overlap.mts';
 import { GH_TEXT_LOOP_TIMEOUT_OPTIONS, ghText } from './gh-exec.mts';
 import { loadPolicyConfig } from './idd-config.mts';
+import {
+  findMarkdownCodeRanges,
+  getMarkdownCodeRange,
+  maskMarkdownCodeRegionsPreservingPositions,
+} from './markdown-code.mts';
 import { normalizePolicyConfig, POLICY_DEFAULTS } from './policy-helpers.mts';
 import {
   buildClosedByMergedPrArgs,
@@ -288,6 +293,80 @@ const ACCEPTANCE_CRITERIA_PATTERN = /^#+\s*Acceptance\s+Criteria\s*$/im;
 const RESOLVED_DECISION_PATTERN =
   /^#{1,6}\s+Decision\b(?![^\n]*\b(?:not(?:\s+yet)?(?:\s+been)?\s+resolved|(?:to\s+be|yet\s+to\s+be|remains?\s+to\s+be)\s+resolved|never(?:\s+been)?\s+resolved)\b)[^\n]*\bresolved\b/im;
 
+function findPolicyOverrideMatch(
+  text: string,
+  maskedText: string,
+  getCodeRangeAt: (start: number) => { start: number; end: number } | null,
+): { index: number; text: string } | null {
+  const maskedMatch = POLICY_OVERRIDE_PATTERN.exec(maskedText);
+  if (maskedMatch?.index !== undefined) {
+    return {
+      index: maskedMatch.index,
+      text: text.slice(
+        maskedMatch.index,
+        maskedMatch.index + maskedMatch[0].length,
+      ),
+    };
+  }
+
+  // A real directive may wrap one of its tokens in inline code. The masked
+  // pass intentionally removes that token, so inspect raw matches as a
+  // fallback and retain only matches that are not wholly inside code.
+  const pattern = new RegExp(POLICY_OVERRIDE_PATTERN.source, 'gi');
+  let match: RegExpExecArray | null;
+  while (true) {
+    match = pattern.exec(text);
+    if (match === null) {
+      break;
+    }
+    const index = match.index ?? -1;
+    if (index < 0) {
+      continue;
+    }
+    const end = index + match[0].length;
+    const codeRange = getCodeRangeAt(index);
+    if (codeRange) {
+      const codeOnlyMatch = POLICY_OVERRIDE_PATTERN.exec(
+        text.slice(index, codeRange.end),
+      );
+      if (codeOnlyMatch?.index === 0) {
+        // The raw pattern may greedily span a code-only occurrence and a
+        // later prose occurrence. Resume just after the inert occurrence, not
+        // the entire code range: a later trigger in the same code span may
+        // still form a cross-boundary match with visible prose after it.
+        pattern.lastIndex = index + codeOnlyMatch[0].length;
+        continue;
+      }
+    }
+    let sawMaskedCharacter = false;
+    let fullyMasked = true;
+    for (let cursor = index; cursor < end; cursor += 1) {
+      const rawCharacter = text[cursor];
+      if (
+        rawCharacter !== '\n' &&
+        rawCharacter !== '\r' &&
+        /\S/u.test(rawCharacter ?? '')
+      ) {
+        if (maskedText[cursor] !== ' ') {
+          fullyMasked = false;
+          break;
+        }
+        sawMaskedCharacter = true;
+      }
+    }
+    if (
+      !fullyMasked ||
+      !sawMaskedCharacter ||
+      !codeRange ||
+      codeRange.start > index ||
+      end > codeRange.end
+    ) {
+      return { index, text: match[0] };
+    }
+  }
+  return null;
+}
+
 if (import.meta.main) {
   runCli();
 }
@@ -453,12 +532,39 @@ export function checkTrustSafety(context: Context): CheckOutcome {
     };
   }
 
-  // Check for explicit policy-override directives
-  if (POLICY_OVERRIDE_PATTERN.test(corpus)) {
-    const match = corpus.match(POLICY_OVERRIDE_PATTERN);
+  // Check for explicit policy-override directives. Issue titles are plain
+  // fields, not Markdown documents, so scan them raw. In the body, find the
+  // directive on raw text and ignore it only when the entire match is inside
+  // a valid Markdown code region. This keeps inert examples from firing while
+  // preserving fail-closed behavior when code formatting wraps only part of a
+  // real directive. The position-preserving mask keeps evidence offsets exact
+  // even when a fenced block precedes the match.
+  const bodyOffset = issue.title.length + 1;
+  const bodyCodeRanges = findMarkdownCodeRanges(issue.body);
+  const policyMatch = findPolicyOverrideMatch(
+    corpus,
+    `${issue.title}\n${maskMarkdownCodeRegionsPreservingPositions(issue.body, bodyCodeRanges)}`,
+    (start) => {
+      if (start < bodyOffset) {
+        return null;
+      }
+      const range = getMarkdownCodeRange(
+        issue.body,
+        start - bodyOffset,
+        bodyCodeRanges,
+      );
+      return range === null
+        ? null
+        : {
+            start: range.start + bodyOffset,
+            end: range.end + bodyOffset,
+          };
+    },
+  );
+  if (policyMatch) {
     return {
       pass: false,
-      evidence: `Policy-override directive detected: "${match?.[0] ?? ''}". Untrusted policy-manipulation instructions cannot be processed.`,
+      evidence: `Policy-override directive detected: "${policyMatch.text}". Untrusted policy-manipulation instructions cannot be processed.`,
     };
   }
 
