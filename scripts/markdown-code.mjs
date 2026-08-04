@@ -27,13 +27,17 @@ export function blankFencedCodeBlocks(text) {
   let fence = null;
   for (const line of lines) {
     const containerLine = parseContainerLine(line);
+    const listContinuationLine =
+      fence === null || fence.listContentIndent === null
+        ? containerLine.content
+        : stripContainerPrefixes(line, fence.containerDepth);
     if (
       fence !== null &&
       ((fence.containerDepth > 0 &&
         containerLine.containerDepth < fence.containerDepth) ||
         (fence.listContentIndent !== null &&
           !continuesListContainer(
-            containerLine.content,
+            listContinuationLine,
             fence.listContentIndent,
           )))
     ) {
@@ -284,24 +288,35 @@ function stripListItemMarker(content) {
     indentationColumns(listItem.markerIndent) + listItem.marker.length;
   const spacingColumns =
     indentationColumns(listItem.spacing, markerEndColumns) - markerEndColumns;
-  const literalSpacing = spacingColumns > 4 ? listItem.spacing.slice(1) : '';
+  const literalSpacing =
+    spacingColumns > 4
+      ? stripLeadingIndentColumns(
+          listItem.spacing,
+          markerEndColumns + 1,
+          markerEndColumns,
+        )
+      : '';
   return literalSpacing + listItem.content;
 }
 function continuesListContainer(content, contentIndent) {
   return content.trim() === '' || indentationColumns(content) >= contentIndent;
 }
-function stripLeadingIndentColumns(text, targetColumns) {
-  if (targetColumns <= 0) {
+function stripLeadingIndentColumns(text, targetColumns, initialColumns = 0) {
+  if (targetColumns <= initialColumns) {
     return text;
   }
-  let columns = 0;
+  let columns = initialColumns;
   let cursor = 0;
   while (cursor < text.length && columns < targetColumns) {
     const character = text[cursor];
     if (character === ' ') {
       columns += 1;
     } else if (character === '\t') {
-      columns += 4 - (columns % 4);
+      const nextTabStop = columns + 4 - (columns % 4);
+      if (nextTabStop > targetColumns) {
+        return ' '.repeat(nextTabStop - targetColumns) + text.slice(cursor + 1);
+      }
+      columns = nextTabStop;
     } else {
       return text;
     }
@@ -418,7 +433,7 @@ function findFencedCodeRanges(text) {
   }
   return ranges;
 }
-function findIndentedCodeRanges(text) {
+function findIndentedCodeRanges(text, fencedRanges) {
   const ranges = [];
   let rangeStart = null;
   let rangeEnd = 0;
@@ -429,9 +444,28 @@ function findIndentedCodeRanges(text) {
   let activeListContainerDepth = null;
   let activeListBlankLines = 0;
   let lineStart = 0;
+  let fencedRangeIndex = 0;
   while (lineStart <= text.length) {
     const line = lineBounds(text, lineStart);
     const rawLine = text.slice(lineStart, line.end);
+    while (
+      fencedRangeIndex < fencedRanges.length &&
+      lineStart >= (fencedRanges[fencedRangeIndex]?.end ?? text.length)
+    ) {
+      fencedRangeIndex += 1;
+    }
+    const fencedRange = fencedRanges[fencedRangeIndex];
+    const isOpaqueFenceContent =
+      fencedRange !== undefined &&
+      lineStart > fencedRange.start &&
+      lineStart < fencedRange.end;
+    if (isOpaqueFenceContent) {
+      if (line.next === lineStart) {
+        break;
+      }
+      lineStart = line.next;
+      continue;
+    }
     const parsed = parseContainerLine(rawLine);
     const listItem = parseListItemMatch(parsed.content);
     const isBlank = parsed.content.trim() === '';
@@ -453,15 +487,16 @@ function findIndentedCodeRanges(text) {
       activeListContainerDepth = null;
       activeListBlankLines = 0;
     }
-    const isNonInterruptingOrderedItem =
+    const isNonInterruptingListItem =
       listItem !== null &&
-      /^\d{1,9}[.)]$/u.test(listItem.marker) &&
-      !/^1[.)]$/u.test(listItem.marker) &&
       !previousLineBlank &&
       !previousLineBlockBoundary &&
       parsed.containerDepth === previousContainerDepth &&
-      activeListContentIndent === null;
-    const listContentIndent = isNonInterruptingOrderedItem
+      activeListContentIndent === null &&
+      (listItem.content.trim() === '' ||
+        (/^\d{1,9}[.)]$/u.test(listItem.marker) &&
+          !/^1[.)]$/u.test(listItem.marker)));
+    const listContentIndent = isNonInterruptingListItem
       ? null
       : parsed.listContentIndent;
     const isIndented =
@@ -575,7 +610,7 @@ export function findMarkdownCodeRanges(text) {
   const fencedRanges = findFencedCodeRanges(text);
   const structuralRanges = mergeMarkdownCodeRanges([
     ...fencedRanges,
-    ...findIndentedCodeRanges(text),
+    ...findIndentedCodeRanges(text, fencedRanges),
   ]);
   const ranges = [...structuralRanges];
   let cursor = 0;
