@@ -158,14 +158,26 @@ runtime does not enforce that explicit allowlist yet.
 
 ### Issue-authoring companion
 
-Confirm whether the operator wants the optional issue-authoring skill:
+Confirm whether the operator wants the optional issue-authoring skill and,
+when installed, record the one native destination selected for the target
+runtime:
 
-- `installed`: copy `skills/issue-authoring/` into the target repository
+- `installed`: copy the canonical source bundle at
+  `skills/issue-authoring/` into one selected native skill directory, such as
+  `.agents/skills/issue-authoring/` for Codex CLI or OpenCode,
+  `.claude/skills/issue-authoring/` for Claude Code, or
+  `.opencode/skills/issue-authoring/` for OpenCode. Record
+  the selected destination alongside the `installed` status.
 - `not installed`: continue without the companion
 
-The companion helps draft IDD-ready issues and roadmaps. It does not
-authorize publishing issues or starting the main execution loop on its
-own.
+The canonical source path and the installed destination are separate values:
+the destination is not a second source-of-truth copy. Do not add the same
+skill ID to multiple runtime roots by default (preventive; no observed incident
+yet); a mixed-runtime target should
+use one native copy plus an explicit manual route unless the operator
+deliberately accepts identical duplicates. The companion helps draft
+IDD-ready issues and roadmaps. It does not authorize publishing issues or
+starting the main execution loop on its own.
 
 ### Helper runtime profile
 
@@ -374,6 +386,8 @@ This repository uses the following IDD policies:
 ### Issue-Authoring Companion
 
 **Status**: `{installed | not installed}`
+
+**Native destination**: `{.agents/skills/issue-authoring/ | .claude/skills/issue-authoring/ | .opencode/skills/issue-authoring/ | not applicable}`
 
 - **`issueAuthoring.maxClarificationRounds`**:
   `{3 | custom finite bound}`

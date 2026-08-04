@@ -25,8 +25,9 @@ The template has three distribution surfaces:
 1. **Core template files** copied from `idd-template/` into the adopter
    repository. These include `.github/idd/`, `.github/instructions/`,
    `docs/`, and `profiles/`.
-2. **Optional issue-authoring companion files** copied from
-   `skills/issue-authoring/` only when the operator explicitly opts into
+2. **Optional issue-authoring companion files** read from the canonical
+   `skills/issue-authoring/` source bundle and installed under one selected
+   runtime-native destination only when the operator explicitly opts into
    pre-execution issue drafting.
 3. **Local-copy installs** where an agent copies the full
    `idd-template/` directory from a cloned `idd-skill` checkout instead
@@ -35,6 +36,13 @@ The template has three distribution surfaces:
 `idd-template/ONBOARDING.md` keeps the executable import snippets for
 the first two surfaces so a raw-URL onboarding run can still complete
 without opening this reference first.
+
+The companion generated block describes canonical source paths relative to
+the idd-skill checkout. It is not a target installation path: the onboarding
+examples use a separate `SKILL_DEST` value, with
+`.agents/skills/issue-authoring/` as the Codex example. Record the selected
+destination in the onboarding policy and do not add a second same-named
+runtime mirror by default (preventive; no observed incident yet).
 
 ## Generated file lists
 
@@ -164,8 +172,10 @@ maintainer decision, not a mechanical file-list edit.
 ## Remote fetch examples
 
 The `gh api` and `curl` loops in `idd-template/ONBOARDING.md` intentionally
-list every file instead of fetching directories. This keeps raw-content
-imports deterministic and makes missing files visible during onboarding.
+list every canonical source file instead of fetching directories. This keeps
+raw-content imports deterministic and makes missing files visible during
+onboarding. Their `SKILL_DEST` variable is deliberately separate from the
+source path and controls the selected runtime-native target directory.
 
 For a new core file, ensure that both loops include the path after the
 generated list is updated. The audit checks the shell lists against the
@@ -180,9 +190,12 @@ for each nested docs directory.
 ## Local-copy installs
 
 The local-copy path is intentionally broader than the remote-fetch path:
-copy the contents of `idd-template/` while preserving relative paths.
-That means new core files under `idd-template/` are automatically covered
-by local-copy installs after they are committed.
+copy the contents of `idd-template/` while preserving relative paths. That
+means new core files under `idd-template/` are automatically covered by
+local-copy installs after they are committed. The optional companion is
+different: copy its canonical `skills/issue-authoring/` source contents into
+the one selected native `SKILL_DEST`, rather than into a target
+`skills/issue-authoring/` directory by assumption.
 
 Keep the local-copy prose in `idd-template/ONBOARDING.md` short. Use this
 reference for maintenance details and the generated remote-fetch snippets
@@ -208,3 +221,5 @@ Before merging a distribution-surface change, verify:
   `idd-template/` path (its core half needs no manifest edit — a new
   `idd-template/**/*` path is picked up automatically).
 - `node scripts/audit-docs.mjs --check` passes.
+- the policy record names the selected companion destination when the
+  optional issue-authoring bundle is installed.
