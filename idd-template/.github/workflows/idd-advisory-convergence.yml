@@ -41,6 +41,11 @@ permissions:
   issues: read
   pull-requests: read
 jobs:
+  # The job id `idd-advisory-convergence` is the exact check-run context
+  # consumed by the rerun helper, advisory-wait policy, required status
+  # check, and external-check waiver selector. Do not add a `name:`
+  # display-name key here: GitHub would use it as the check-run context
+  # instead of this job id, so those consumers would no longer match.
   idd-advisory-convergence:
     runs-on: ubuntu-latest
     # Bounds pathological hangs; adjust to your own observed run duration

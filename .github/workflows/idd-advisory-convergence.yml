@@ -238,6 +238,10 @@ jobs:
   # docs/policy-constants.md (ADVISORY_CONVERGENCE_CHECK_SELECTOR in
   # advisory-convergence.mts) -- keep all three in sync if this id ever
   # changes.
+  # Do not add a `name:` display-name key here: GitHub would use it as the
+  # check-run context instead of this job id, so the rerun helper,
+  # advisory-wait policy, required status check, and external-check waiver
+  # selector would no longer match `idd-advisory-convergence`.
   idd-advisory-convergence:
     runs-on: ubuntu-slim
     # No observed run history yet (new workflow). Bounds pathological
