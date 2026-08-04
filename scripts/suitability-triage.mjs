@@ -17,7 +17,7 @@ import {
 import { GH_TEXT_LOOP_TIMEOUT_OPTIONS, ghText } from './gh-exec.mjs';
 import { loadPolicyConfig } from './idd-config.mjs';
 import {
-  isMarkdownCodeRange,
+  getMarkdownCodeRange,
   maskMarkdownCodeRegionsPreservingPositions,
 } from './markdown-code.mjs';
 import { normalizePolicyConfig, POLICY_DEFAULTS } from './policy-helpers.mjs';
@@ -176,7 +176,7 @@ const ACCEPTANCE_CRITERIA_PATTERN = /^#+\s*Acceptance\s+Criteria\s*$/im;
 // across JavaScript regex engines.
 const RESOLVED_DECISION_PATTERN =
   /^#{1,6}\s+Decision\b(?![^\n]*\b(?:not(?:\s+yet)?(?:\s+been)?\s+resolved|(?:to\s+be|yet\s+to\s+be|remains?\s+to\s+be)\s+resolved|never(?:\s+been)?\s+resolved)\b)[^\n]*\bresolved\b/im;
-function findPolicyOverrideMatch(text, maskedText, isCodeOnlyRange) {
+function findPolicyOverrideMatch(text, maskedText, getCodeRangeAt) {
   const maskedMatch = POLICY_OVERRIDE_PATTERN.exec(maskedText);
   if (maskedMatch?.index !== undefined) {
     return {
@@ -197,6 +197,15 @@ function findPolicyOverrideMatch(text, maskedText, isCodeOnlyRange) {
       continue;
     }
     const end = index + match[0].length;
+    const codeRange = getCodeRangeAt(index);
+    if (codeRange) {
+      const codeOnlyMatch = POLICY_OVERRIDE_PATTERN.exec(
+        text.slice(index, codeRange.end),
+      );
+      if (codeOnlyMatch?.index === 0) {
+        continue;
+      }
+    }
     let sawMaskedCharacter = false;
     let fullyMasked = true;
     for (let cursor = index; cursor < end; cursor += 1) {
@@ -213,7 +222,13 @@ function findPolicyOverrideMatch(text, maskedText, isCodeOnlyRange) {
         sawMaskedCharacter = true;
       }
     }
-    if (!fullyMasked || !sawMaskedCharacter || !isCodeOnlyRange(index, end)) {
+    if (
+      !fullyMasked ||
+      !sawMaskedCharacter ||
+      !codeRange ||
+      codeRange.start > index ||
+      end > codeRange.end
+    ) {
       return { index, text: match[0] };
     }
   }
@@ -380,9 +395,18 @@ export function checkTrustSafety(context) {
   const policyMatch = findPolicyOverrideMatch(
     corpus,
     `${issue.title}\n${maskMarkdownCodeRegionsPreservingPositions(issue.body)}`,
-    (start, end) =>
-      start >= bodyOffset &&
-      isMarkdownCodeRange(issue.body, start - bodyOffset, end - bodyOffset),
+    (start) => {
+      if (start < bodyOffset) {
+        return null;
+      }
+      const range = getMarkdownCodeRange(issue.body, start - bodyOffset);
+      return range === null
+        ? null
+        : {
+            start: range.start + bodyOffset,
+            end: range.end + bodyOffset,
+          };
+    },
   );
   if (policyMatch) {
     return {

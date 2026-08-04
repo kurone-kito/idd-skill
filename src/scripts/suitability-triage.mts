@@ -19,7 +19,7 @@ import {
 import { GH_TEXT_LOOP_TIMEOUT_OPTIONS, ghText } from './gh-exec.mts';
 import { loadPolicyConfig } from './idd-config.mts';
 import {
-  isMarkdownCodeRange,
+  getMarkdownCodeRange,
   maskMarkdownCodeRegionsPreservingPositions,
 } from './markdown-code.mts';
 import { normalizePolicyConfig, POLICY_DEFAULTS } from './policy-helpers.mts';
@@ -295,7 +295,7 @@ const RESOLVED_DECISION_PATTERN =
 function findPolicyOverrideMatch(
   text: string,
   maskedText: string,
-  isCodeOnlyRange: (start: number, end: number) => boolean,
+  getCodeRangeAt: (start: number) => { start: number; end: number } | null,
 ): { index: number; text: string } | null {
   const maskedMatch = POLICY_OVERRIDE_PATTERN.exec(maskedText);
   if (maskedMatch?.index !== undefined) {
@@ -318,6 +318,15 @@ function findPolicyOverrideMatch(
       continue;
     }
     const end = index + match[0].length;
+    const codeRange = getCodeRangeAt(index);
+    if (codeRange) {
+      const codeOnlyMatch = POLICY_OVERRIDE_PATTERN.exec(
+        text.slice(index, codeRange.end),
+      );
+      if (codeOnlyMatch?.index === 0) {
+        continue;
+      }
+    }
     let sawMaskedCharacter = false;
     let fullyMasked = true;
     for (let cursor = index; cursor < end; cursor += 1) {
@@ -334,7 +343,13 @@ function findPolicyOverrideMatch(
         sawMaskedCharacter = true;
       }
     }
-    if (!fullyMasked || !sawMaskedCharacter || !isCodeOnlyRange(index, end)) {
+    if (
+      !fullyMasked ||
+      !sawMaskedCharacter ||
+      !codeRange ||
+      codeRange.start > index ||
+      end > codeRange.end
+    ) {
       return { index, text: match[0] };
     }
   }
@@ -517,9 +532,18 @@ export function checkTrustSafety(context: Context): CheckOutcome {
   const policyMatch = findPolicyOverrideMatch(
     corpus,
     `${issue.title}\n${maskMarkdownCodeRegionsPreservingPositions(issue.body)}`,
-    (start, end) =>
-      start >= bodyOffset &&
-      isMarkdownCodeRange(issue.body, start - bodyOffset, end - bodyOffset),
+    (start) => {
+      if (start < bodyOffset) {
+        return null;
+      }
+      const range = getMarkdownCodeRange(issue.body, start - bodyOffset);
+      return range === null
+        ? null
+        : {
+            start: range.start + bodyOffset,
+            end: range.end + bodyOffset,
+          };
+    },
   );
   if (policyMatch) {
     return {

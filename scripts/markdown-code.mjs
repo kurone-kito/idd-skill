@@ -93,7 +93,7 @@ function hasBlankLine(text, start, end) {
   return /\r?\n[ \t]*\r?\n/u.test(text.slice(start, end));
 }
 const MARKDOWN_BLOCK_BOUNDARY_PATTERN =
-  /^[ \t]{0,3}(?:#{1,6}(?:[ \t]|$)|>[ \t]*|(?:[-+*])[ \t]+|\d{1,9}[.)][ \t]+)/mu;
+  /^[ \t]{0,3}(?:#{1,6}(?:[ \t]|$)|>[ \t]*|(?:[-+*])[ \t]+|\d{1,9}[.)][ \t]+|(?:-{3,}|_{3,}|\*{3,})[ \t]*$)/mu;
 function hasMarkdownBlockBoundary(text, start, end) {
   return MARKDOWN_BLOCK_BOUNDARY_PATTERN.test(text.slice(start, end));
 }
@@ -104,12 +104,15 @@ function countBackticks(text, start, end) {
   }
   return cursor - start;
 }
-function parseFencedLine(line) {
+function parseContainerLine(line) {
   const quoteMatch = line.match(/^ {0,3}(?:(?:> ?)+)(.*)$/u);
-  const containerDepth = quoteMatch
-    ? (quoteMatch[0].match(/>/gu)?.length ?? 0)
-    : 0;
-  const content = quoteMatch ? quoteMatch[1] : line;
+  return {
+    content: quoteMatch ? quoteMatch[1] : line,
+    containerDepth: quoteMatch ? (quoteMatch[0].match(/>/gu)?.length ?? 0) : 0,
+  };
+}
+function parseFencedLine(line) {
+  const { content, containerDepth } = parseContainerLine(line);
   const fenceMatch = content.match(/^ {0,3}(`{3,}|~{3,})(.*)$/u);
   if (!fenceMatch) {
     return null;
@@ -134,7 +137,16 @@ function findFencedCodeRanges(text) {
           : newlineIndex;
     const lineAfter = newlineIndex === -1 ? text.length : newlineIndex + 1;
     const line = text.slice(lineStart, lineEnd);
+    const containerLine = parseContainerLine(line);
     const match = parseFencedLine(line);
+    if (
+      fence !== null &&
+      fence.containerDepth > 0 &&
+      containerLine.containerDepth < fence.containerDepth
+    ) {
+      ranges.push({ start: fence.start, end: lineStart });
+      fence = null;
+    }
     if (match) {
       const marker = match.marker;
       const info = match.info;
@@ -188,7 +200,6 @@ function findInlineCodeRanges(text, start, end) {
       const closingLength = countBackticks(text, candidate, end);
       if (
         closingLength === openingLength &&
-        !isEscapedBacktick(text, candidate) &&
         !hasMarkdownBlockBoundary(text, contentStart, candidate) &&
         !hasBlankLine(text, contentStart, candidate)
       ) {
@@ -219,19 +230,15 @@ function findMarkdownCodeRanges(text) {
   ranges.push(...findInlineCodeRanges(text, cursor, text.length));
   return ranges.sort((left, right) => left.start - right.start);
 }
-/** Return whether a source range is fully contained by one valid code region. */
-export function isMarkdownCodeRange(text, start, end) {
-  if (
-    !Number.isInteger(start) ||
-    !Number.isInteger(end) ||
-    start < 0 ||
-    end <= start ||
-    end > text.length
-  ) {
-    return false;
+/** Return the valid code region containing a source position, if any. */
+export function getMarkdownCodeRange(text, position) {
+  if (!Number.isInteger(position) || position < 0 || position >= text.length) {
+    return null;
   }
-  return findMarkdownCodeRanges(text).some(
-    (range) => range.start <= start && end <= range.end,
+  return (
+    findMarkdownCodeRanges(text).find(
+      (range) => range.start <= position && position < range.end,
+    ) ?? null
   );
 }
 /**
