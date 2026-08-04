@@ -1236,7 +1236,7 @@ test('Codex critique guidance prefers a bounded reviewer with an explicit fallba
     'utf8',
   );
 
-  const codexRows = [workflow, templateWorkflow].map((text) => {
+  const critiqueSections = [workflow, templateWorkflow].map((text) => {
     const critiqueSectionStart = text.indexOf('## Critique pass invocation');
     assert.notEqual(
       critiqueSectionStart,
@@ -1250,30 +1250,39 @@ test('Codex critique guidance prefers a bounded reviewer with an explicit fallba
     assert.ok(codexRow, 'the workflow must keep a Codex critique row');
     assert.match(
       codexRow,
-      /Use bounded read-only native subagent review if suitable/,
+      /Use one bounded read-only native subagent review when supported and suitable/,
     );
-    assert.match(codexRow, /parent waits for result/);
+    assert.match(codexRow, /parent waits for and collects the result/);
     assert.match(codexRow, /structured self-critique/);
-    assert.match(codexRow, /delegation fails/);
+    assert.match(
+      codexRow,
+      /delegation is unavailable, disabled, unsuitable, or fails/,
+    );
     assert.doesNotMatch(
       codexRow,
       /Self-critique: add a "review the above for issues"/,
     );
+    assert.match(critiqueSection, /objective diff validation floor/);
     assert.match(
-      text,
-      /uniform C-phase\s+objective diff(?:-|\s+)validation floor/,
+      critiqueSection,
+      /This floor applies \*\*uniformly\*\* to every runtime/,
     );
     assert.match(
-      text,
+      critiqueSection,
       /parent collects the reviewer result before\s+continuing/,
     );
-    return codexRow.trim();
+    return { codexRow: codexRow.trim(), critiqueSection };
   });
 
   assert.deepEqual(
-    codexRows[0],
-    codexRows[1],
+    critiqueSections[0].codexRow,
+    critiqueSections[1].codexRow,
     'source and template Codex critique rows must stay equivalent',
+  );
+  assert.equal(
+    critiqueSections[0].critiqueSection,
+    critiqueSections[1].critiqueSection,
+    'source and template critique guidance must remain equivalent',
   );
 });
 
