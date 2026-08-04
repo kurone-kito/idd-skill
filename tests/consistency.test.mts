@@ -1229,6 +1229,50 @@ test('discover A2 roadmap node classification guidance is present in instruction
   assert.match(templateWorkflow, /classify roadmap/i);
 });
 
+test('Codex critique guidance prefers a bounded reviewer with an explicit fallback (idd-skill#1851)', () => {
+  const workflow = readFileSync(WORKFLOW_PATH, 'utf8');
+  const templateWorkflow = readFileSync(
+    new URL('../idd-template/docs/idd-workflow.md', import.meta.url),
+    'utf8',
+  );
+
+  const codexRows = [workflow, templateWorkflow].map((text) => {
+    const critiqueSection = text.slice(
+      text.indexOf('## Critique pass invocation'),
+    );
+    const codexRow = critiqueSection.match(
+      /^\| Codex CLI\s+\|([^\n]+)\|$/m,
+    )?.[1];
+    assert.ok(codexRow, 'the workflow must keep a Codex critique row');
+    assert.match(
+      codexRow,
+      /Use bounded read-only native subagent review if suitable/,
+    );
+    assert.match(codexRow, /parent waits for result/);
+    assert.match(codexRow, /structured self-critique/);
+    assert.match(codexRow, /delegation fails/);
+    assert.doesNotMatch(
+      codexRow,
+      /Self-critique: add a "review the above for issues"/,
+    );
+    assert.match(
+      text,
+      /uniform C-phase\s+objective diff(?:-|\s+)validation floor/,
+    );
+    assert.match(
+      text,
+      /parent collects the reviewer result before\s+continuing/,
+    );
+    return codexRow.trim();
+  });
+
+  assert.deepEqual(
+    codexRows[0],
+    codexRows[1],
+    'source and template Codex critique rows must stay equivalent',
+  );
+});
+
 test('review-triage PATH A verify-before-accept and actor-permission-cap guidance is present in instruction and template surfaces (idd-skill#1690, PR#1796)', () => {
   const reviewTriage = readFileSync(
     new URL(
