@@ -39,7 +39,11 @@ export function blankFencedCodeBlocks(text) {
     ) {
       fence = null;
     }
-    const parsed = parseFencedLine(line, fence?.listContentIndent ?? null);
+    const parsed = parseFencedLine(
+      line,
+      fence?.listContentIndent ?? null,
+      fence !== null,
+    );
     if (parsed) {
       const fenceChar = parsed.marker[0];
       if (fence === null) {
@@ -110,7 +114,7 @@ const MARKDOWN_BLOCK_CONTENT_PATTERN =
 const MARKDOWN_INDENTED_CODE_PRECEDER_PATTERN =
   /^ {0,3}(?:#{1,6}(?:[ \t]|$)|(?:-{1,}|={1,}|_{3,}|\*{3,})[ \t]*$)/u;
 const MARKDOWN_HTML_BLOCK_START_PATTERN =
-  /^ {0,3}(?:<!--|<\?|<![A-Z]|<!\[CDATA\[|<\/?(?:address|article|aside|base|basefont|blockquote|body|caption|center|col|colgroup|dd|details|dialog|dir|div|dl|dt|fieldset|figcaption|figure|footer|form|h[1-6]|head|header|hr|html|iframe|legend|li|link|main|menu|menuitem|nav|ol|p|pre|script|section|summary|table|tbody|td|tfoot|th|thead|title|tr|track|ul)(?:[ \t/>]|$))/u;
+  /^ {0,3}(?:<!--|<\?|<![A-Z]|<!\[CDATA\[|<\/?(?:address|article|aside|base|basefont|blockquote|body|caption|center|col|colgroup|dd|details|dialog|dir|div|dl|dt|fieldset|figcaption|figure|footer|form|h[1-6]|head|header|hr|html|iframe|legend|li|link|main|menu|menuitem|nav|ol|p|pre|script|section|style|summary|table|tbody|td|textarea|tfoot|th|thead|title|tr|track|ul)(?:[ \t/>]|$))/u;
 function lineBounds(text, lineStart) {
   const newlineIndex = text.indexOf('\n', lineStart);
   const end =
@@ -265,7 +269,11 @@ function stripLeadingIndentColumns(text, targetColumns) {
   }
   return columns >= targetColumns ? text.slice(cursor) : text;
 }
-function parseFencedLine(line, activeListContentIndent = null) {
+function parseFencedLine(
+  line,
+  activeListContentIndent = null,
+  fenceIsOpen = false,
+) {
   const {
     content: containerContent,
     containerDepth,
@@ -281,10 +289,9 @@ function parseFencedLine(line, activeListContentIndent = null) {
   // Once a fence is open, its contents are opaque. A line such as
   // `    - ~~~` must not be reparsed as a nested list item and mistaken for
   // the closing fence; strip a list marker only while recognizing an opener.
-  const content =
-    activeListContentIndent === null
-      ? stripListItemMarker(relativeContent)
-      : relativeContent;
+  const content = !fenceIsOpen
+    ? stripListItemMarker(relativeContent)
+    : relativeContent;
   const fenceMatch = content.match(/^ {0,3}(`{3,}|~{3,})(.*)$/u);
   if (!fenceMatch) {
     return null;
@@ -327,7 +334,11 @@ function findFencedCodeRanges(text) {
       ranges.push({ start: fence.start, end: lineStart });
       fence = null;
     }
-    const match = parseFencedLine(line, fence?.listContentIndent ?? null);
+    const match = parseFencedLine(
+      line,
+      fence?.listContentIndent ?? null,
+      fence !== null,
+    );
     if (match) {
       const marker = match.marker;
       const info = match.info;
@@ -389,7 +400,7 @@ function findIndentedCodeRanges(text) {
       indentationColumns(parsed.content) >=
       (activeListContentIndent === null ? 4 : activeListContentIndent + 4);
     const isBlank = parsed.content.trim() === '';
-    if (activeListContentIndent !== null) {
+    if (rangeStart === null && activeListContentIndent !== null) {
       if (isBlank) {
         activeListBlankLines += 1;
         if (activeListBlankLines >= 2) {
