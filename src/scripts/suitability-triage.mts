@@ -312,7 +312,12 @@ function findPolicyOverrideMatch(
   // pass intentionally removes that token, so inspect raw matches as a
   // fallback and retain only matches that are not wholly inside code.
   const pattern = new RegExp(POLICY_OVERRIDE_PATTERN.source, 'gi');
-  for (const match of text.matchAll(pattern)) {
+  let match: RegExpExecArray | null;
+  while (true) {
+    match = pattern.exec(text);
+    if (match === null) {
+      break;
+    }
     const index = match.index ?? -1;
     if (index < 0) {
       continue;
@@ -324,6 +329,10 @@ function findPolicyOverrideMatch(
         text.slice(index, codeRange.end),
       );
       if (codeOnlyMatch?.index === 0) {
+        // The raw pattern may greedily span a code-only occurrence and a
+        // later prose occurrence. Resume just after the inert range so the
+        // later occurrence is evaluated independently.
+        pattern.lastIndex = codeRange.end;
         continue;
       }
     }

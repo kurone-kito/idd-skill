@@ -100,15 +100,60 @@ function hasBlankLine(text: string, start: number, end: number): boolean {
   return /\r?\n[ \t]*\r?\n/u.test(text.slice(start, end));
 }
 
-const MARKDOWN_BLOCK_BOUNDARY_PATTERN =
-  /^[ \t]{0,3}(?:#{1,6}(?:[ \t]|$)|>[ \t]*|(?:[-+*])[ \t]+|\d{1,9}[.)][ \t]+|(?:-{3,}|_{3,}|\*{3,})[ \t]*$)/mu;
+const MARKDOWN_BLOCK_CONTENT_PATTERN =
+  /^(?:#{1,6}(?:[ \t]|$)|(?:[-+*])[ \t]+|\d{1,9}[.)][ \t]+|(?:-{1,}|={1,}|_{3,}|\*{3,})[ \t]*$)/u;
+
+function lineBounds(
+  text: string,
+  lineStart: number,
+): {
+  end: number;
+  next: number;
+} {
+  const newlineIndex = text.indexOf('\n', lineStart);
+  const end =
+    newlineIndex === -1
+      ? text.length
+      : newlineIndex > lineStart && text[newlineIndex - 1] === '\r'
+        ? newlineIndex - 1
+        : newlineIndex;
+  return {
+    end,
+    next: newlineIndex === -1 ? text.length : newlineIndex + 1,
+  };
+}
 
 function hasMarkdownBlockBoundary(
   text: string,
   start: number,
   end: number,
 ): boolean {
-  return MARKDOWN_BLOCK_BOUNDARY_PATTERN.test(text.slice(start, end));
+  const openingLineStart = text.lastIndexOf('\n', start - 1) + 1;
+  const openingLine = lineBounds(text, openingLineStart);
+  const openingContainerDepth = parseContainerLine(
+    text.slice(openingLineStart, openingLine.end),
+  ).containerDepth;
+  let lineStart = openingLine.next;
+
+  while (lineStart < end) {
+    const line = lineBounds(text, lineStart);
+    const parsed = parseContainerLine(text.slice(lineStart, line.end));
+    if (parsed.containerDepth !== openingContainerDepth) {
+      // A quote marker may continue an inline span only when it belongs to
+      // the same container. A quote that starts or ends here is a block break.
+      if (parsed.containerDepth > 0 || openingContainerDepth > 0) {
+        return true;
+      }
+    }
+    if (MARKDOWN_BLOCK_CONTENT_PATTERN.test(parsed.content)) {
+      return true;
+    }
+    if (line.next === lineStart) {
+      break;
+    }
+    lineStart = line.next;
+  }
+  return false;
 }
 
 function countBackticks(text: string, start: number, end: number): number {
@@ -219,6 +264,59 @@ function findFencedCodeRanges(text: string): MarkdownCodeRange[] {
   return ranges;
 }
 
+function findIndentedCodeRanges(text: string): MarkdownCodeRange[] {
+  const ranges: MarkdownCodeRange[] = [];
+  let rangeStart: number | null = null;
+  let rangeEnd = 0;
+  let lineStart = 0;
+
+  while (lineStart <= text.length) {
+    const line = lineBounds(text, lineStart);
+    const parsed = parseContainerLine(text.slice(lineStart, line.end));
+    const isIndented = /^(?: {4,}|\t)/u.test(parsed.content);
+    const isBlank = parsed.content.trim() === '';
+
+    if (isIndented) {
+      rangeStart ??= lineStart;
+      rangeEnd = line.next;
+    } else if (isBlank && rangeStart !== null) {
+      // A blank line may occur inside an indented code block. Keeping it in
+      // the range is harmless for masking and lets the next indented line
+      // remain part of the same Markdown example.
+      rangeEnd = line.next;
+    } else if (rangeStart !== null) {
+      ranges.push({ start: rangeStart, end: rangeEnd });
+      rangeStart = null;
+      rangeEnd = 0;
+    }
+
+    if (line.next === lineStart) {
+      break;
+    }
+    lineStart = line.next;
+  }
+
+  if (rangeStart !== null) {
+    ranges.push({ start: rangeStart, end: rangeEnd });
+  }
+  return ranges;
+}
+
+function mergeMarkdownCodeRanges(
+  ranges: MarkdownCodeRange[],
+): MarkdownCodeRange[] {
+  const merged: MarkdownCodeRange[] = [];
+  for (const range of ranges.sort((left, right) => left.start - right.start)) {
+    const previous = merged.at(-1);
+    if (previous && range.start <= previous.end) {
+      previous.end = Math.max(previous.end, range.end);
+    } else {
+      merged.push({ ...range });
+    }
+  }
+  return merged;
+}
+
 function findInlineCodeRanges(
   text: string,
   start: number,
@@ -270,15 +368,19 @@ function findInlineCodeRanges(
 
 function findMarkdownCodeRanges(text: string): MarkdownCodeRange[] {
   const fencedRanges = findFencedCodeRanges(text);
-  const ranges = [...fencedRanges];
+  const structuralRanges = mergeMarkdownCodeRanges([
+    ...fencedRanges,
+    ...findIndentedCodeRanges(text),
+  ]);
+  const ranges = [...structuralRanges];
   let cursor = 0;
 
-  for (const fencedRange of fencedRanges) {
-    ranges.push(...findInlineCodeRanges(text, cursor, fencedRange.start));
-    cursor = fencedRange.end;
+  for (const structuralRange of structuralRanges) {
+    ranges.push(...findInlineCodeRanges(text, cursor, structuralRange.start));
+    cursor = structuralRange.end;
   }
   ranges.push(...findInlineCodeRanges(text, cursor, text.length));
-  return ranges.sort((left, right) => left.start - right.start);
+  return mergeMarkdownCodeRanges(ranges);
 }
 
 /** Return the valid code region containing a source position, if any. */

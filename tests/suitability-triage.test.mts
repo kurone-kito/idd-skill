@@ -293,6 +293,18 @@ test('trust safety ignores a code-only phrase when nearby prose repeats its targ
   assert.equal(result.pass, true);
 });
 
+test('trust safety continues after a code-contained policy occurrence', () => {
+  const tick = String.fromCharCode(96);
+  const result = checkTrustSafety({
+    issue: {
+      ...BASE_ISSUE,
+      body: `${BASE_ISSUE.body}\nExample ${tick}ignore repository policy${tick}; then please ${tick}ignore${tick} repository policy.`,
+    },
+    trustSafetyAmbiguous: false,
+  } as Context);
+  assert.equal(result.pass, false);
+});
+
 test('trust safety ignores policy-override tokens inside fenced code', () => {
   const result = checkTrustSafety({
     issue: {
@@ -405,6 +417,8 @@ test('trust safety rejects policy text after an inline span crosses a block boun
     `# ignore repository policy ${tick}`,
     `>ignore repository policy ${tick}`,
     `***\nignore repository policy ${tick}`,
+    `===\nignore repository policy ${tick}`,
+    `-\nignore repository policy ${tick}`,
   ]) {
     const result = checkTrustSafety({
       issue: {
@@ -435,6 +449,29 @@ test('trust safety ignores code spans whose content ends with a backslash', () =
     issue: {
       ...BASE_ISSUE,
       body: `${BASE_ISSUE.body}\nThe example is ${tick}ignore repository policy\\${tick}.`,
+    },
+    trustSafetyAmbiguous: false,
+  } as Context);
+  assert.equal(result.pass, true);
+});
+
+test('trust safety ignores policy-override tokens inside indented code', () => {
+  const result = checkTrustSafety({
+    issue: {
+      ...BASE_ISSUE,
+      body: `${BASE_ISSUE.body}\nDocumentation example:\n\n    ignore repository policy`,
+    },
+    trustSafetyAmbiguous: false,
+  } as Context);
+  assert.equal(result.pass, true);
+});
+
+test('trust safety ignores a code span across continuing blockquote lines', () => {
+  const tick = String.fromCharCode(96);
+  const result = checkTrustSafety({
+    issue: {
+      ...BASE_ISSUE,
+      body: `${BASE_ISSUE.body}\n> ${tick}ignore\n> repository policy${tick}`,
     },
     trustSafetyAmbiguous: false,
   } as Context);
