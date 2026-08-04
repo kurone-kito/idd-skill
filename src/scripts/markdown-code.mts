@@ -179,6 +179,7 @@ function findMarkdownBlockBoundary(
     const isBlockStart =
       MARKDOWN_BLOCK_CONTENT_PATTERN.test(parsed.content) ||
       MARKDOWN_HTML_BLOCK_START_PATTERN.test(parsed.content) ||
+      MARKDOWN_CUSTOM_HTML_BLOCK_START_PATTERN.test(parsed.content) ||
       (fencedLine !== null && isValidFenceOpener(fencedLine));
     if (parsed.containerDepth !== openingContainerDepth) {
       // A quote marker may continue an inline span only when it belongs to

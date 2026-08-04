@@ -672,6 +672,18 @@ test('trust safety treats a custom HTML block as a quote boundary', () => {
   assert.equal(result.pass, false);
 });
 
+test('trust safety treats a custom HTML block after a quote as a boundary', () => {
+  const tick = String.fromCharCode(96);
+  const result = checkTrustSafety({
+    issue: {
+      ...BASE_ISSUE,
+      body: `${BASE_ISSUE.body}\n> Example ${tick}ignore\n<x>\nrepository policy${tick}`,
+    },
+    trustSafetyAmbiguous: false,
+  } as Context);
+  assert.equal(result.pass, false);
+});
+
 test('trust safety recognizes case-insensitive interrupting HTML blocks', () => {
   const tick = String.fromCharCode(96);
   for (const tag of ['DIV', 'TEXTAREA']) {
