@@ -93,7 +93,7 @@ function hasBlankLine(text, start, end) {
   return /\r?\n[ \t]*\r?\n/u.test(text.slice(start, end));
 }
 const MARKDOWN_BLOCK_BOUNDARY_PATTERN =
-  /^[ \t]{0,3}(?:#{1,6}(?:[ \t]|$)|>[ \t]+|(?:[-+*])[ \t]+|\d{1,9}[.)][ \t]+)/mu;
+  /^[ \t]{0,3}(?:#{1,6}(?:[ \t]|$)|>[ \t]*|(?:[-+*])[ \t]+|\d{1,9}[.)][ \t]+)/mu;
 function hasMarkdownBlockBoundary(text, start, end) {
   return MARKDOWN_BLOCK_BOUNDARY_PATTERN.test(text.slice(start, end));
 }

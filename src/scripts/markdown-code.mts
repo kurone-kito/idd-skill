@@ -101,7 +101,7 @@ function hasBlankLine(text: string, start: number, end: number): boolean {
 }
 
 const MARKDOWN_BLOCK_BOUNDARY_PATTERN =
-  /^[ \t]{0,3}(?:#{1,6}(?:[ \t]|$)|>[ \t]+|(?:[-+*])[ \t]+|\d{1,9}[.)][ \t]+)/mu;
+  /^[ \t]{0,3}(?:#{1,6}(?:[ \t]|$)|>[ \t]*|(?:[-+*])[ \t]+|\d{1,9}[.)][ \t]+)/mu;
 
 function hasMarkdownBlockBoundary(
   text: string,
