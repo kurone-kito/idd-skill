@@ -171,7 +171,8 @@ runtime:
 
 The canonical source path and the installed destination are separate values:
 the destination is not a second source-of-truth copy. Do not add the same
-skill ID to multiple runtime roots by default; a mixed-runtime target should
+skill ID to multiple runtime roots by default (preventive; no observed incident
+yet); a mixed-runtime target should
 use one native copy plus an explicit manual route unless the operator
 deliberately accepts identical duplicates. The companion helps draft
 IDD-ready issues and roadmaps. It does not authorize publishing issues or
@@ -381,14 +382,14 @@ This repository uses the following IDD policies:
 - **Missing-approval behavior**:
   `{explicit-target stop-before-claim + discovery approval-needed fallback bucket}`
 
-  ### Issue-Authoring Companion
+### Issue-Authoring Companion
 
-  **Status**: `{installed | not installed}`
+**Status**: `{installed | not installed}`
 
-  **Native destination**: `{.agents/skills/issue-authoring/ | .claude/skills/issue-authoring/ | .opencode/skills/issue-authoring/ | not applicable}`
+**Native destination**: `{.agents/skills/issue-authoring/ | .claude/skills/issue-authoring/ | .opencode/skills/issue-authoring/ | not applicable}`
 
-  - **`issueAuthoring.maxClarificationRounds`**:
-    `{3 | custom finite bound}`
+- **`issueAuthoring.maxClarificationRounds`**:
+  `{3 | custom finite bound}`
 ```
 
 When the repository uses a non-default merge, review, or thread policy,

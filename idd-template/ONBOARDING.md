@@ -251,7 +251,9 @@ require explicit operator confirmation:
    explicit config opt-out via `skipIssueAuthorApprovalGate: true`)
 9. maintainer approval actor policy (`owners-and-maintainers-only` by
    default, or `all-write-permission-actors`)
-10. issue-authoring companion status (`installed` or `not installed`)
+10. issue-authoring companion status (`installed` or `not installed`); when
+    installed, the selected native destination (`.agents/skills/`,
+    `.claude/skills/`, or `.opencode/skills/`)
 11. helper runtime profile (`instructions-only` by default, or an
     evidence-based helper profile recommendation that still requires
     explicit operator confirmation`)
@@ -388,7 +390,8 @@ for Codex CLI, `.claude/skills/` for Claude Code, or `.opencode/skills/` for
 OpenCode. The examples below use the Codex destination
 `.agents/skills/issue-authoring/`; change `SKILL_DEST` to the one selected
 destination before running any example. Do not install the same skill ID in
-multiple roots unless the operator explicitly accepts identical duplicates.
+multiple roots unless the operator explicitly accepts identical duplicates
+(preventive; no observed incident yet).
 Install it only when the operator explicitly wants pre-execution issue
 drafting or roadmap decomposition support.
 
@@ -594,6 +597,7 @@ for FILE in \
   "references/draft-patterns.md" \
   "references/workflow-boundary.md"
 do
+  mkdir -p "$(dirname "${SKILL_DEST}/${FILE}")"
   gh api -H "Accept: application/vnd.github.raw+json" \
     "repos/kurone-kito/idd-skill/contents/skills/issue-authoring/${FILE}" \
     > "${SKILL_DEST}/${FILE}" || { echo "Failed: ${FILE}" >&2; exit 1; }
@@ -695,6 +699,7 @@ for FILE in \
   "references/draft-patterns.md" \
   "references/workflow-boundary.md"
 do
+  mkdir -p "$(dirname "${SKILL_DEST}/${FILE}")"
   curl -fsSL "${BASE}/${FILE}" -o "${SKILL_DEST}/${FILE}" || { echo "Failed: ${FILE}" >&2; exit 1; }
 done
 ```
@@ -719,7 +724,8 @@ mkdir -p "${SKILL_DEST}/references"
 cp -R "${SOURCE}/." "${SKILL_DEST}/"
 ```
 
-Do not copy the same skill ID into additional runtime roots by default.
+Do not copy the same skill ID into additional runtime roots by default
+(preventive; no observed incident yet).
 
 ### Optional companion boundary
 
@@ -1174,7 +1180,7 @@ After completing the steps above, confirm each item:
       maintainer approval actor policy, and helper runtime profile are
       explicitly recorded.
 - [ ] If the operator opted into issue authoring, the companion skill
-      files are present.
+      files are present under the native destination recorded in the policy.
 - [ ] No `{{...}}` placeholders remain, the `Project commands` table is
       correct, and any `orphan-first` scope choice has a valid policy
       value.

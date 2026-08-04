@@ -181,7 +181,8 @@ workflow stub above to every session; the steps below are an
   `.claude/skills/`, `.opencode/skills/`, or `.agents/skills/` — it is
   already available without an additional copy. Keep the selected
   destination recorded in the onboarding policy; do not add the same skill
-  ID to another root merely to support a second runtime.
+  ID to another root merely to support a second runtime (preventive; no
+  observed incident yet).
 - If a target repository runs OpenCode as an autonomous worker under
   its own GitHub identity (not just an interactive assistant), add
   that login to `trustedMarkerActors` (and the advisory-bot lists if
@@ -204,7 +205,7 @@ destination contract separately from the entry-file checks:
 - A default onboarding import adds no checked-in `.agents/skills/` or
   `.opencode/skills/` mirror. A mixed-runtime target uses one native copy
   plus an explicit manual route unless the operator deliberately accepts
-  identical duplicates.
+  identical duplicates (preventive; no observed incident yet).
 
 ### GEMINI.md
 
@@ -305,9 +306,9 @@ checks, confirm the detailed items below.
 - [ ] The selected helper runtime profile is recorded, including whether
       the repository stays on `instructions-only` or opted into
       `package-manager`, `vendored-node`, or `ephemeral-npx`.
-- [ ] If the operator opted into issue authoring,
-      `skills/issue-authoring/SKILL.md` and the
-      `skills/issue-authoring/references/` files are present.
+- [ ] If the operator opted into issue authoring, the native destination
+      recorded in the policy contains `SKILL.md` and every bundled reference
+      file.
 
 ### Placeholder, marker, and config alignment
 

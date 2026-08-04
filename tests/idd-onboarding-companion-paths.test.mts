@@ -42,13 +42,18 @@ test('remote companion fetches keep canonical source paths separate from the nat
     ['gh api', ghApi],
     ['curl', curl],
   ] as const) {
-    assert.match(
-      shell,
-      /skills\/issue-authoring/u,
-      `${label} must fetch from the canonical source bundle`,
-    );
     assertNativeDestination(shell, label);
   }
+  assert.match(
+    ghApi,
+    /contents\/skills\/issue-authoring\/\$\{FILE\}/u,
+    'gh api must request the canonical source bundle',
+  );
+  assert.match(
+    curl,
+    /BASE="https:\/\/raw\.githubusercontent\.com\/kurone-kito\/idd-skill\/main\/skills\/issue-authoring"/u,
+    'curl must fetch from the canonical source bundle',
+  );
 });
 
 test('local companion copy uses the selected native destination', () => {
@@ -85,6 +90,10 @@ test('companion policy and source-repository routing distinguish source from des
   assert.match(policy, /selected destination alongside/iu);
   assert.match(policy, /\*\*Native destination\*\*:/u);
   assert.match(policy, /canonical source path and the installed destination/iu);
+  assert.match(
+    ONBOARDING,
+    /issue-authoring companion status[\s\S]*selected native destination/iu,
+  );
   assert.match(verification, /source-versus-\s*destination contract/iu);
   assert.match(verification, /\.agents\/skills\/issue-authoring\/SKILL\.md/u);
   assert.match(agents, /## Codex issue-authoring route/u);
@@ -114,5 +123,5 @@ test('the generated companion inventory remains canonical-source-only', () => {
       `missing canonical source path: ${path}`,
     );
   }
-  assert.doesNotMatch(inventory, /\.agents\/skills|\.opencode\/skills/u);
+  assert.doesNotMatch(inventory, /\.(?:agents|claude|opencode)\/skills/u);
 });

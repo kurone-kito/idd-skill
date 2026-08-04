@@ -117,5 +117,5 @@ For Codex CLI, read the canonical issue-authoring bundle explicitly from
 skill discovery there. The existing `.claude/skills/issue-authoring/` copy is
 the dogfood route for Claude Code and OpenCode compatibility; it is not the
 canonical source. Do not add checked-in `.agents/skills/` or
-`.opencode/skills/` mirrors by default, and do not assume the source path is
-automatically discovered by Codex.
+`.opencode/skills/` mirrors by default (preventive; no observed incident yet),
+and do not assume the source path is automatically discovered by Codex.

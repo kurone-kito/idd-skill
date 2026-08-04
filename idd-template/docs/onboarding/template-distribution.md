@@ -42,7 +42,7 @@ the idd-skill checkout. It is not a target installation path: the onboarding
 examples use a separate `SKILL_DEST` value, with
 `.agents/skills/issue-authoring/` as the Codex example. Record the selected
 destination in the onboarding policy and do not add a second same-named
-runtime mirror by default.
+runtime mirror by default (preventive; no observed incident yet).
 
 ## Generated file lists
 
