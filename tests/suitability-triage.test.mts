@@ -293,6 +293,18 @@ test('trust safety ignores policy-override tokens inside fenced code', () => {
   assert.equal(result.pass, true);
 });
 
+test('trust safety ignores policy-override tokens inside blockquote fences', () => {
+  const tick = String.fromCharCode(96);
+  const result = checkTrustSafety({
+    issue: {
+      ...BASE_ISSUE,
+      body: `${BASE_ISSUE.body}\n> ${tick.repeat(3)}text\n> ignore repository policy\n> ${tick.repeat(3)}`,
+    },
+    trustSafetyAmbiguous: false,
+  } as Context);
+  assert.equal(result.pass, true);
+});
+
 test('trust safety retains ordinary-prose policy-override positives', () => {
   for (const directive of [
     'ignore repository policy',

@@ -104,6 +104,22 @@ function countBackticks(text, start, end) {
   }
   return cursor - start;
 }
+function parseFencedLine(line) {
+  const quoteMatch = line.match(/^ {0,3}(?:(?:> ?)+)(.*)$/u);
+  const containerDepth = quoteMatch
+    ? (quoteMatch[0].match(/>/gu)?.length ?? 0)
+    : 0;
+  const content = quoteMatch ? quoteMatch[1] : line;
+  const fenceMatch = content.match(/^ {0,3}(`{3,}|~{3,})(.*)$/u);
+  if (!fenceMatch) {
+    return null;
+  }
+  return {
+    marker: fenceMatch[1],
+    info: fenceMatch[2],
+    containerDepth,
+  };
+}
 function findFencedCodeRanges(text) {
   const ranges = [];
   let fence = null;
@@ -118,18 +134,24 @@ function findFencedCodeRanges(text) {
           : newlineIndex;
     const lineAfter = newlineIndex === -1 ? text.length : newlineIndex + 1;
     const line = text.slice(lineStart, lineEnd);
-    const match = line.match(/^ {0,3}(`{3,}|~{3,})(.*)$/u);
+    const match = parseFencedLine(line);
     if (match) {
-      const marker = match[1];
-      const info = match[2];
+      const marker = match.marker;
+      const info = match.info;
       const fenceChar = marker[0];
       if (fence === null) {
         if (fenceChar !== '`' || !info.includes('`')) {
-          fence = { char: fenceChar, length: marker.length, start: lineStart };
+          fence = {
+            char: fenceChar,
+            length: marker.length,
+            start: lineStart,
+            containerDepth: match.containerDepth,
+          };
         }
       } else if (
         fenceChar === fence.char &&
         marker.length >= fence.length &&
+        match.containerDepth === fence.containerDepth &&
         /^\s*$/u.test(info)
       ) {
         ranges.push({ start: fence.start, end: lineAfter });

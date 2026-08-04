@@ -119,9 +119,37 @@ function countBackticks(text: string, start: number, end: number): number {
   return cursor - start;
 }
 
+type FencedLine = {
+  marker: string;
+  info: string;
+  containerDepth: number;
+};
+
+function parseFencedLine(line: string): FencedLine | null {
+  const quoteMatch = line.match(/^ {0,3}(?:(?:> ?)+)(.*)$/u);
+  const containerDepth = quoteMatch
+    ? (quoteMatch[0].match(/>/gu)?.length ?? 0)
+    : 0;
+  const content = quoteMatch ? quoteMatch[1] : line;
+  const fenceMatch = content.match(/^ {0,3}(`{3,}|~{3,})(.*)$/u);
+  if (!fenceMatch) {
+    return null;
+  }
+  return {
+    marker: fenceMatch[1],
+    info: fenceMatch[2],
+    containerDepth,
+  };
+}
+
 function findFencedCodeRanges(text: string): MarkdownCodeRange[] {
   const ranges: MarkdownCodeRange[] = [];
-  let fence: { char: string; length: number; start: number } | null = null;
+  let fence: {
+    char: string;
+    length: number;
+    start: number;
+    containerDepth: number;
+  } | null = null;
   let lineStart = 0;
 
   while (lineStart <= text.length) {
@@ -134,19 +162,25 @@ function findFencedCodeRanges(text: string): MarkdownCodeRange[] {
           : newlineIndex;
     const lineAfter = newlineIndex === -1 ? text.length : newlineIndex + 1;
     const line = text.slice(lineStart, lineEnd);
-    const match = line.match(/^ {0,3}(`{3,}|~{3,})(.*)$/u);
+    const match = parseFencedLine(line);
 
     if (match) {
-      const marker = match[1];
-      const info = match[2];
+      const marker = match.marker;
+      const info = match.info;
       const fenceChar = marker[0];
       if (fence === null) {
         if (fenceChar !== '`' || !info.includes('`')) {
-          fence = { char: fenceChar, length: marker.length, start: lineStart };
+          fence = {
+            char: fenceChar,
+            length: marker.length,
+            start: lineStart,
+            containerDepth: match.containerDepth,
+          };
         }
       } else if (
         fenceChar === fence.char &&
         marker.length >= fence.length &&
+        match.containerDepth === fence.containerDepth &&
         /^\s*$/u.test(info)
       ) {
         ranges.push({ start: fence.start, end: lineAfter });
