@@ -93,7 +93,9 @@ function hasBlankLine(text, start, end) {
   return /\r?\n[ \t]*\r?\n/u.test(text.slice(start, end));
 }
 const MARKDOWN_BLOCK_CONTENT_PATTERN =
-  /^(?:#{1,6}(?:[ \t]|$)|(?:[-+*])[ \t]+|\d{1,9}[.)][ \t]+|(?:-{1,}|={1,}|_{3,}|\*{3,})[ \t]*$)/u;
+  /^(?:#{1,6}(?:[ \t]|$)|(?:[-+*])[ \t]+|1[.)][ \t]+|(?:-{1,}|={1,}|_{3,}|\*{3,})[ \t]*$)/u;
+const MARKDOWN_INDENTED_CODE_PRECEDER_PATTERN =
+  /^(?:#{1,6}(?:[ \t]|$)|(?:-{1,}|={1,}|_{3,}|\*{3,})[ \t]*$)/u;
 function lineBounds(text, lineStart) {
   const newlineIndex = text.indexOf('\n', lineStart);
   const end =
@@ -107,7 +109,7 @@ function lineBounds(text, lineStart) {
     next: newlineIndex === -1 ? text.length : newlineIndex + 1,
   };
 }
-function hasMarkdownBlockBoundary(text, start, end) {
+function findMarkdownBlockBoundary(text, start, end) {
   const openingLineStart = text.lastIndexOf('\n', start - 1) + 1;
   const openingLine = lineBounds(text, openingLineStart);
   const openingContainerDepth = parseContainerLine(
@@ -121,18 +123,18 @@ function hasMarkdownBlockBoundary(text, start, end) {
       // A quote marker may continue an inline span only when it belongs to
       // the same container. A quote that starts or ends here is a block break.
       if (parsed.containerDepth > 0 || openingContainerDepth > 0) {
-        return true;
+        return lineStart;
       }
     }
     if (MARKDOWN_BLOCK_CONTENT_PATTERN.test(parsed.content)) {
-      return true;
+      return lineStart;
     }
     if (line.next === lineStart) {
       break;
     }
     lineStart = line.next;
   }
-  return false;
+  return null;
 }
 function countBackticks(text, start, end) {
   let cursor = start;
@@ -251,7 +253,7 @@ function findIndentedCodeRanges(text) {
     }
     previousLineBlank = isBlank;
     previousLineBlockBoundary =
-      MARKDOWN_BLOCK_CONTENT_PATTERN.test(parsed.content) ||
+      MARKDOWN_INDENTED_CODE_PRECEDER_PATTERN.test(parsed.content) ||
       parseFencedLine(rawLine) !== null;
     previousContainerDepth = parsed.containerDepth;
     if (line.next === lineStart) {
@@ -288,7 +290,9 @@ function findInlineCodeRanges(text, start, end) {
     const contentStart = cursor + openingLength;
     let candidate = contentStart;
     let closed = false;
-    while (candidate < end) {
+    const blockBoundary = findMarkdownBlockBoundary(text, contentStart, end);
+    const candidateEnd = blockBoundary ?? end;
+    while (candidate < candidateEnd) {
       if (text[candidate] !== '`') {
         candidate += 1;
         continue;
@@ -296,7 +300,6 @@ function findInlineCodeRanges(text, start, end) {
       const closingLength = countBackticks(text, candidate, end);
       if (
         closingLength === openingLength &&
-        !hasMarkdownBlockBoundary(text, contentStart, candidate) &&
         !hasBlankLine(text, contentStart, candidate)
       ) {
         ranges.push({
