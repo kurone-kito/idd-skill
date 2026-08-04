@@ -1237,9 +1237,13 @@ test('Codex critique guidance prefers a bounded reviewer with an explicit fallba
   );
 
   const codexRows = [workflow, templateWorkflow].map((text) => {
-    const critiqueSection = text.slice(
-      text.indexOf('## Critique pass invocation'),
+    const critiqueSectionStart = text.indexOf('## Critique pass invocation');
+    assert.notEqual(
+      critiqueSectionStart,
+      -1,
+      'the workflow must keep the critique section header',
     );
+    const critiqueSection = text.slice(critiqueSectionStart);
     const codexRow = critiqueSection.match(
       /^\| Codex CLI\s+\|([^\n]+)\|$/m,
     )?.[1];
