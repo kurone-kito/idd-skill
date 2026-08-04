@@ -18,7 +18,10 @@ import {
 } from './discover-shared-file-overlap.mts';
 import { GH_TEXT_LOOP_TIMEOUT_OPTIONS, ghText } from './gh-exec.mts';
 import { loadPolicyConfig } from './idd-config.mts';
-import { maskMarkdownCodeRegionsPreservingPositions } from './markdown-code.mts';
+import {
+  isMarkdownCodeRange,
+  maskMarkdownCodeRegionsPreservingPositions,
+} from './markdown-code.mts';
 import { normalizePolicyConfig, POLICY_DEFAULTS } from './policy-helpers.mts';
 import {
   buildClosedByMergedPrArgs,
@@ -292,6 +295,7 @@ const RESOLVED_DECISION_PATTERN =
 function findPolicyOverrideMatch(
   text: string,
   maskedText: string,
+  isCodeOnlyRange: (start: number, end: number) => boolean,
 ): { index: number; text: string } | null {
   const maskedMatch = POLICY_OVERRIDE_PATTERN.exec(maskedText);
   if (maskedMatch?.index !== undefined) {
@@ -330,7 +334,7 @@ function findPolicyOverrideMatch(
         sawMaskedCharacter = true;
       }
     }
-    if (!fullyMasked || !sawMaskedCharacter) {
+    if (!fullyMasked || !sawMaskedCharacter || !isCodeOnlyRange(index, end)) {
       return { index, text: match[0] };
     }
   }
@@ -509,9 +513,13 @@ export function checkTrustSafety(context: Context): CheckOutcome {
   // preserving fail-closed behavior when code formatting wraps only part of a
   // real directive. The position-preserving mask keeps evidence offsets exact
   // even when a fenced block precedes the match.
+  const bodyOffset = issue.title.length + 1;
   const policyMatch = findPolicyOverrideMatch(
     corpus,
     `${issue.title}\n${maskMarkdownCodeRegionsPreservingPositions(issue.body)}`,
+    (start, end) =>
+      start >= bodyOffset &&
+      isMarkdownCodeRange(issue.body, start - bodyOffset, end - bodyOffset),
   );
   if (policyMatch) {
     return {

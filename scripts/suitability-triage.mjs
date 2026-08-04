@@ -16,7 +16,10 @@ import {
 } from './discover-shared-file-overlap.mjs';
 import { GH_TEXT_LOOP_TIMEOUT_OPTIONS, ghText } from './gh-exec.mjs';
 import { loadPolicyConfig } from './idd-config.mjs';
-import { maskMarkdownCodeRegionsPreservingPositions } from './markdown-code.mjs';
+import {
+  isMarkdownCodeRange,
+  maskMarkdownCodeRegionsPreservingPositions,
+} from './markdown-code.mjs';
 import { normalizePolicyConfig, POLICY_DEFAULTS } from './policy-helpers.mjs';
 import {
   buildClosedByMergedPrArgs,
@@ -173,7 +176,7 @@ const ACCEPTANCE_CRITERIA_PATTERN = /^#+\s*Acceptance\s+Criteria\s*$/im;
 // across JavaScript regex engines.
 const RESOLVED_DECISION_PATTERN =
   /^#{1,6}\s+Decision\b(?![^\n]*\b(?:not(?:\s+yet)?(?:\s+been)?\s+resolved|(?:to\s+be|yet\s+to\s+be|remains?\s+to\s+be)\s+resolved|never(?:\s+been)?\s+resolved)\b)[^\n]*\bresolved\b/im;
-function findPolicyOverrideMatch(text, maskedText) {
+function findPolicyOverrideMatch(text, maskedText, isCodeOnlyRange) {
   const maskedMatch = POLICY_OVERRIDE_PATTERN.exec(maskedText);
   if (maskedMatch?.index !== undefined) {
     return {
@@ -210,7 +213,7 @@ function findPolicyOverrideMatch(text, maskedText) {
         sawMaskedCharacter = true;
       }
     }
-    if (!fullyMasked || !sawMaskedCharacter) {
+    if (!fullyMasked || !sawMaskedCharacter || !isCodeOnlyRange(index, end)) {
       return { index, text: match[0] };
     }
   }
@@ -373,9 +376,13 @@ export function checkTrustSafety(context) {
   // preserving fail-closed behavior when code formatting wraps only part of a
   // real directive. The position-preserving mask keeps evidence offsets exact
   // even when a fenced block precedes the match.
+  const bodyOffset = issue.title.length + 1;
   const policyMatch = findPolicyOverrideMatch(
     corpus,
     `${issue.title}\n${maskMarkdownCodeRegionsPreservingPositions(issue.body)}`,
+    (start, end) =>
+      start >= bodyOffset &&
+      isMarkdownCodeRange(issue.body, start - bodyOffset, end - bodyOffset),
   );
   if (policyMatch) {
     return {

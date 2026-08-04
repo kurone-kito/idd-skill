@@ -100,6 +100,17 @@ function hasBlankLine(text: string, start: number, end: number): boolean {
   return /\r?\n[ \t]*\r?\n/u.test(text.slice(start, end));
 }
 
+const MARKDOWN_BLOCK_BOUNDARY_PATTERN =
+  /^[ \t]{0,3}(?:#{1,6}(?:[ \t]|$)|>[ \t]+|(?:[-+*])[ \t]+|\d{1,9}[.)][ \t]+)/mu;
+
+function hasMarkdownBlockBoundary(
+  text: string,
+  start: number,
+  end: number,
+): boolean {
+  return MARKDOWN_BLOCK_BOUNDARY_PATTERN.test(text.slice(start, end));
+}
+
 function countBackticks(text: string, start: number, end: number): number {
   let cursor = start;
   while (cursor < end && text[cursor] === '`') {
@@ -182,6 +193,8 @@ function findInlineCodeRanges(
       const closingLength = countBackticks(text, candidate, end);
       if (
         closingLength === openingLength &&
+        !isEscapedBacktick(text, candidate) &&
+        !hasMarkdownBlockBoundary(text, contentStart, candidate) &&
         !hasBlankLine(text, contentStart, candidate)
       ) {
         ranges.push({
@@ -214,6 +227,26 @@ function findMarkdownCodeRanges(text: string): MarkdownCodeRange[] {
   }
   ranges.push(...findInlineCodeRanges(text, cursor, text.length));
   return ranges.sort((left, right) => left.start - right.start);
+}
+
+/** Return whether a source range is fully contained by one valid code region. */
+export function isMarkdownCodeRange(
+  text: string,
+  start: number,
+  end: number,
+): boolean {
+  if (
+    !Number.isInteger(start) ||
+    !Number.isInteger(end) ||
+    start < 0 ||
+    end <= start ||
+    end > text.length
+  ) {
+    return false;
+  }
+  return findMarkdownCodeRanges(text).some(
+    (range) => range.start <= start && end <= range.end,
+  );
 }
 
 /**
