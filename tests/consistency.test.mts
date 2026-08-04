@@ -1229,6 +1229,67 @@ test('discover A2 roadmap node classification guidance is present in instruction
   assert.match(templateWorkflow, /classify roadmap/i);
 });
 
+test('Codex critique guidance prefers a bounded reviewer with an explicit fallback (idd-skill#1851)', () => {
+  const workflow = readFileSync(WORKFLOW_PATH, 'utf8');
+  const templateWorkflow = readFileSync(
+    new URL('../idd-template/docs/idd-workflow.md', import.meta.url),
+    'utf8',
+  );
+
+  const critiqueSections = [workflow, templateWorkflow].map((text) => {
+    const critiqueSectionStart = text.indexOf('## Critique pass invocation');
+    assert.notEqual(
+      critiqueSectionStart,
+      -1,
+      'the workflow must keep the critique section header',
+    );
+    const nextSectionStart = text.indexOf('\n## ', critiqueSectionStart + 1);
+    const critiqueSection = text.slice(
+      critiqueSectionStart,
+      nextSectionStart === -1 ? undefined : nextSectionStart,
+    );
+    const codexRow = critiqueSection.match(
+      /^\| Codex CLI\s+\|([^\n]+)\|$/m,
+    )?.[1];
+    assert.ok(codexRow, 'the workflow must keep a Codex critique row');
+    assert.match(
+      codexRow,
+      /Use one bounded read-only native subagent review when supported and suitable/,
+    );
+    assert.match(codexRow, /parent waits for and collects the result/);
+    assert.match(codexRow, /structured self-critique/);
+    assert.match(
+      codexRow,
+      /delegation is unavailable, disabled, unsuitable, or fails/,
+    );
+    assert.doesNotMatch(
+      codexRow,
+      /Self-critique: add a "review the above for issues"/,
+    );
+    assert.match(critiqueSection, /objective diff validation floor/);
+    assert.match(
+      critiqueSection,
+      /This floor applies \*\*uniformly\*\* to every runtime/,
+    );
+    assert.match(
+      critiqueSection,
+      /parent collects the reviewer result before\s+continuing/,
+    );
+    return { codexRow: codexRow.trim(), critiqueSection };
+  });
+
+  assert.deepEqual(
+    critiqueSections[0].codexRow,
+    critiqueSections[1].codexRow,
+    'source and template Codex critique rows must stay equivalent',
+  );
+  assert.equal(
+    critiqueSections[0].critiqueSection,
+    critiqueSections[1].critiqueSection,
+    'source and template critique guidance must remain equivalent',
+  );
+});
+
 test('review-triage PATH A verify-before-accept and actor-permission-cap guidance is present in instruction and template surfaces (idd-skill#1690, PR#1796)', () => {
   const reviewTriage = readFileSync(
     new URL(

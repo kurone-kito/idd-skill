@@ -858,13 +858,16 @@ produces a list of issues with severity, correctness, and coverage
 assessment. The goal and expected output are the same regardless of
 agent; only the mechanism differs.
 
-| Agent           | How to run a critique pass                                                                                                                 |
-| --------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
-| Copilot         | Launch a subagent in Agent mode; use the calling phase's critique checklist as the prompt                                                  |
-| Claude Code     | `Agent(subagent_type="general-purpose")` with the calling phase's critique checklist                                                       |
-| Codex CLI       | Self-critique: add a "review the above for issues" step in the next response                                                               |
-| OpenCode        | Launch a subagent via OpenCode's Task tool (e.g. the built-in `general` subagent, or a `subtask: true` command) — an independent mechanism |
-| Antigravity CLI | Self-critique or use Antigravity's native multi-step task mechanism if available                                                           |
+| Agent           | How to run a critique pass                                                                                                                                                                                                 |
+| --------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Copilot         | Launch a subagent in Agent mode; use the calling phase's critique checklist as the prompt                                                                                                                                  |
+| Claude Code     | `Agent(subagent_type="general-purpose")` with the calling phase's critique checklist                                                                                                                                       |
+| Codex CLI       | Use one bounded read-only native subagent review when supported and suitable; parent waits for and collects the result. Fallback: structured self-critique when delegation is unavailable, disabled, unsuitable, or fails. |
+| OpenCode        | Launch a subagent via OpenCode's Task tool (e.g. the built-in `general` subagent, or a `subtask: true` command) — an independent mechanism                                                                                 |
+| Antigravity CLI | Self-critique or use Antigravity's native multi-step task mechanism if available                                                                                                                                           |
+
+For Codex delegation, the parent collects the reviewer result before
+continuing; if delegation fails, use the structured fallback.
 
 When a phase file says "run a critique pass", apply the row for your
 agent above. If no subagent mechanism is available, perform the critique
