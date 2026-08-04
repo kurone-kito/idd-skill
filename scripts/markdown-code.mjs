@@ -109,6 +109,8 @@ const MARKDOWN_BLOCK_CONTENT_PATTERN =
   /^ {0,3}(?:#{1,6}(?:[ \t]|$)|(?:[-+*])[ \t]+|1[.)][ \t]+|(?:-{1,}|={1,}|_{3,}|\*{3,})[ \t]*$)/u;
 const MARKDOWN_INDENTED_CODE_PRECEDER_PATTERN =
   /^ {0,3}(?:#{1,6}(?:[ \t]|$)|(?:-{1,}|={1,}|_{3,}|\*{3,})[ \t]*$)/u;
+const MARKDOWN_HTML_BLOCK_START_PATTERN =
+  /^ {0,3}(?:<!--|<\?|<![A-Z]|<!\[CDATA\[|<\/?(?:address|article|aside|base|basefont|blockquote|body|caption|center|col|colgroup|dd|details|dialog|dir|div|dl|dt|fieldset|figcaption|figure|footer|form|h[1-6]|head|header|hr|html|iframe|legend|li|link|main|menu|menuitem|nav|ol|p|pre|script|section|summary|table|tbody|td|tfoot|th|thead|title|tr|track|ul)(?:[ \t/>]|$))/u;
 function lineBounds(text, lineStart) {
   const newlineIndex = text.indexOf('\n', lineStart);
   const end =
@@ -135,6 +137,7 @@ function findMarkdownBlockBoundary(text, start, end) {
     const fencedLine = parseFencedLine(text.slice(lineStart, line.end));
     const isBlockStart =
       MARKDOWN_BLOCK_CONTENT_PATTERN.test(parsed.content) ||
+      MARKDOWN_HTML_BLOCK_START_PATTERN.test(parsed.content) ||
       (fencedLine !== null && isValidFenceOpener(fencedLine));
     if (parsed.containerDepth !== openingContainerDepth) {
       // A quote marker may continue an inline span only when it belongs to
@@ -183,7 +186,7 @@ function indentationColumns(text) {
 }
 function parseListItemMatch(content) {
   const match = content.match(LIST_ITEM_PATTERN);
-  if (!match) {
+  if (!match || indentationColumns(match[1]) >= 4) {
     return null;
   }
   return {
@@ -198,10 +201,16 @@ function parseListItemContainer(content) {
   if (!listItem) {
     return null;
   }
+  const spacingColumns = indentationColumns(listItem.spacing);
+  // CommonMark treats five or more spaces after a list marker as one
+  // separating space plus literal content indentation. Keeping the full
+  // padding here would make a valid four-column continuation look like
+  // ordinary prose instead of nested code.
+  const contentPadding = spacingColumns > 4 ? 1 : spacingColumns;
   return (
     indentationColumns(listItem.markerIndent) +
     listItem.marker.length +
-    indentationColumns(listItem.spacing)
+    contentPadding
   );
 }
 function parseContainerLine(line) {
@@ -269,7 +278,13 @@ function parseFencedLine(line, activeListContentIndent = null) {
     activeListContentIndent === null
       ? containerContent
       : stripLeadingIndentColumns(containerContent, activeListContentIndent);
-  const content = stripListItemMarker(relativeContent);
+  // Once a fence is open, its contents are opaque. A line such as
+  // `    - ~~~` must not be reparsed as a nested list item and mistaken for
+  // the closing fence; strip a list marker only while recognizing an opener.
+  const content =
+    activeListContentIndent === null
+      ? stripListItemMarker(relativeContent)
+      : relativeContent;
   const fenceMatch = content.match(/^ {0,3}(`{3,}|~{3,})(.*)$/u);
   if (!fenceMatch) {
     return null;
@@ -355,15 +370,36 @@ function findIndentedCodeRanges(text) {
   let previousLineBlockBoundary = true;
   let previousContainerDepth = 0;
   let activeListContentIndent = null;
+  let activeListContainerDepth = null;
+  let activeListBlankLines = 0;
   let lineStart = 0;
   while (lineStart <= text.length) {
     const line = lineBounds(text, lineStart);
     const rawLine = text.slice(lineStart, line.end);
     const parsed = parseContainerLine(rawLine);
+    if (
+      activeListContentIndent !== null &&
+      parsed.containerDepth !== activeListContainerDepth
+    ) {
+      activeListContentIndent = null;
+      activeListContainerDepth = null;
+      activeListBlankLines = 0;
+    }
     const isIndented =
       indentationColumns(parsed.content) >=
       (activeListContentIndent === null ? 4 : activeListContentIndent + 4);
     const isBlank = parsed.content.trim() === '';
+    if (activeListContentIndent !== null) {
+      if (isBlank) {
+        activeListBlankLines += 1;
+        if (activeListBlankLines >= 2) {
+          activeListContentIndent = null;
+          activeListContainerDepth = null;
+        }
+      } else {
+        activeListBlankLines = 0;
+      }
+    }
     const canStartCode =
       rangeStart !== null ||
       previousLineBlank ||
@@ -390,14 +426,18 @@ function findIndentedCodeRanges(text) {
         return fencedLine !== null && isValidFenceOpener(fencedLine);
       })();
     previousContainerDepth = parsed.containerDepth;
-    if (parsed.listContentIndent !== null) {
+    if (rangeStart === null && parsed.listContentIndent !== null) {
       activeListContentIndent = parsed.listContentIndent;
+      activeListContainerDepth = parsed.containerDepth;
+      activeListBlankLines = 0;
     } else if (
       !isBlank &&
       activeListContentIndent !== null &&
       indentationColumns(parsed.content) < activeListContentIndent
     ) {
       activeListContentIndent = null;
+      activeListContainerDepth = null;
+      activeListBlankLines = 0;
     }
     if (line.next === lineStart) {
       break;
