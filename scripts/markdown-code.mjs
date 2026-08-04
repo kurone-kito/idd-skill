@@ -115,6 +115,8 @@ const MARKDOWN_INDENTED_CODE_PRECEDER_PATTERN =
   /^ {0,3}(?:#{1,6}(?:[ \t]|$)|(?:-{1,}|={1,}|_{3,}|\*{3,})[ \t]*$)/u;
 const MARKDOWN_HTML_BLOCK_START_PATTERN =
   /^ {0,3}(?:<!--|<\?|<![A-Z]|<!\[CDATA\[|<\/?(?:address|article|aside|base|basefont|blockquote|body|caption|center|col|colgroup|dd|details|dialog|dir|div|dl|dt|fieldset|figcaption|figure|footer|form|h[1-6]|head|header|hr|html|iframe|legend|li|link|main|menu|menuitem|nav|ol|p|pre|script|section|style|summary|table|tbody|td|textarea|tfoot|th|thead|title|tr|track|ul)(?:[ \t]|\/?>|$))/iu;
+const MARKDOWN_CUSTOM_HTML_BLOCK_START_PATTERN =
+  /^ {0,3}<\/?[A-Za-z][A-Za-z0-9-]*(?:[ \t]+[^<>]*?)?[ \t]*\/?>/u;
 function lineBounds(text, lineStart) {
   const newlineIndex = text.indexOf('\n', lineStart);
   const end =
@@ -140,6 +142,7 @@ function findMarkdownBlockBoundary(text, start, end) {
   const openingIsParagraph =
     !MARKDOWN_BLOCK_CONTENT_PATTERN.test(openingParagraphContent) &&
     !MARKDOWN_HTML_BLOCK_START_PATTERN.test(openingParagraphContent) &&
+    !MARKDOWN_CUSTOM_HTML_BLOCK_START_PATTERN.test(openingParagraphContent) &&
     (openingFence === null || !isValidFenceOpener(openingFence));
   const openingContainerDepth = openingParsed.containerDepth;
   let lineStart = openingLine.next;
@@ -272,7 +275,16 @@ function stripContainerPrefixes(line, depth) {
   return line.slice(cursor);
 }
 function stripListItemMarker(content) {
-  return parseListItemMatch(content)?.content ?? content;
+  const listItem = parseListItemMatch(content);
+  if (!listItem) {
+    return content;
+  }
+  const markerEndColumns =
+    indentationColumns(listItem.markerIndent) + listItem.marker.length;
+  const spacingColumns =
+    indentationColumns(listItem.spacing, markerEndColumns) - markerEndColumns;
+  const literalSpacing = spacingColumns > 4 ? listItem.spacing.slice(1) : '';
+  return literalSpacing + listItem.content;
 }
 function continuesListContainer(content, contentIndent) {
   return content.trim() === '' || indentationColumns(content) >= contentIndent;
