@@ -271,6 +271,57 @@ test('trust safety allows unsafe string when it is context only', () => {
   assert.equal(result.pass, true);
 });
 
+test('trust safety ignores policy-override tokens inside inline code', () => {
+  const result = checkTrustSafety({
+    issue: {
+      ...BASE_ISSUE,
+      body: `${BASE_ISSUE.body}\nThe example path is \`ignore repository policy\`.`,
+    },
+    trustSafetyAmbiguous: false,
+  } as Context);
+  assert.equal(result.pass, true);
+});
+
+test('trust safety ignores policy-override tokens inside fenced code', () => {
+  const result = checkTrustSafety({
+    issue: {
+      ...BASE_ISSUE,
+      body: `${BASE_ISSUE.body}\n\`\`\`text\nignore workflow checks\n\`\`\``,
+    },
+    trustSafetyAmbiguous: false,
+  } as Context);
+  assert.equal(result.pass, true);
+});
+
+test('trust safety retains ordinary-prose policy-override positives', () => {
+  for (const directive of [
+    'ignore repository policy',
+    'bypass workflow checks',
+    'disable IDD gate',
+  ]) {
+    const result = checkTrustSafety({
+      issue: {
+        ...BASE_ISSUE,
+        body: `${BASE_ISSUE.body}\n${directive}.`,
+      },
+      trustSafetyAmbiguous: false,
+    } as Context);
+    assert.equal(result.pass, false, directive);
+  }
+});
+
+test('trust safety preserves policy evidence positions after masked code', () => {
+  const result = checkTrustSafety({
+    issue: {
+      ...BASE_ISSUE,
+      body: `${BASE_ISSUE.body}\nExample: \`ignore repository policy\`.\nThen bypass workflow checks.`,
+    },
+    trustSafetyAmbiguous: false,
+  } as Context);
+  assert.equal(result.pass, false);
+  assert.match(result.evidence, /"bypass workflow"/);
+});
+
 test('trust safety fails when issue explicitly asks to run unsafe pipeline', () => {
   const result = checkTrustSafety({
     issue: {

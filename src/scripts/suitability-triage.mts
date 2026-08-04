@@ -18,6 +18,7 @@ import {
 } from './discover-shared-file-overlap.mts';
 import { GH_TEXT_LOOP_TIMEOUT_OPTIONS, ghText } from './gh-exec.mts';
 import { loadPolicyConfig } from './idd-config.mts';
+import { stripMarkdownCodeRegions } from './markdown-code.mts';
 import { normalizePolicyConfig, POLICY_DEFAULTS } from './policy-helpers.mts';
 import {
   buildClosedByMergedPrArgs,
@@ -454,11 +455,16 @@ export function checkTrustSafety(context: Context): CheckOutcome {
   }
 
   // Check for explicit policy-override directives
-  if (POLICY_OVERRIDE_PATTERN.test(corpus)) {
-    const match = corpus.match(POLICY_OVERRIDE_PATTERN);
+  const policyCorpus = stripMarkdownCodeRegions(corpus);
+  if (POLICY_OVERRIDE_PATTERN.test(policyCorpus)) {
+    const match = policyCorpus.match(POLICY_OVERRIDE_PATTERN);
+    const evidenceMatch =
+      match?.index === undefined
+        ? (match?.[0] ?? '')
+        : corpus.slice(match.index, match.index + (match[0]?.length ?? 0));
     return {
       pass: false,
-      evidence: `Policy-override directive detected: "${match?.[0] ?? ''}". Untrusted policy-manipulation instructions cannot be processed.`,
+      evidence: `Policy-override directive detected: "${evidenceMatch}". Untrusted policy-manipulation instructions cannot be processed.`,
     };
   }
 
