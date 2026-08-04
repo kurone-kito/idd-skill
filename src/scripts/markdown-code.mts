@@ -127,7 +127,7 @@ const MARKDOWN_BLOCK_CONTENT_PATTERN =
 const MARKDOWN_INDENTED_CODE_PRECEDER_PATTERN =
   /^ {0,3}(?:#{1,6}(?:[ \t]|$)|(?:-{1,}|={1,}|_{3,}|\*{3,})[ \t]*$)/u;
 const MARKDOWN_HTML_BLOCK_START_PATTERN =
-  /^ {0,3}(?:<!--|<\?|<![A-Z]|<!\[CDATA\[|<\/?(?:address|article|aside|base|basefont|blockquote|body|caption|center|col|colgroup|dd|details|dialog|dir|div|dl|dt|fieldset|figcaption|figure|footer|form|h[1-6]|head|header|hr|html|iframe|legend|li|link|main|menu|menuitem|nav|ol|p|pre|script|section|style|summary|table|tbody|td|textarea|tfoot|th|thead|title|tr|track|ul)(?:[ \t/>]|$))/iu;
+  /^ {0,3}(?:<!--|<\?|<![A-Z]|<!\[CDATA\[|<\/?(?:address|article|aside|base|basefont|blockquote|body|caption|center|col|colgroup|dd|details|dialog|dir|div|dl|dt|fieldset|figcaption|figure|footer|form|h[1-6]|head|header|hr|html|iframe|legend|li|link|main|menu|menuitem|nav|ol|p|pre|script|section|style|summary|table|tbody|td|textarea|tfoot|th|thead|title|tr|track|ul)(?:[ \t]|\/?>|$))/iu;
 
 function lineBounds(
   text: string,
@@ -305,6 +305,26 @@ function parseContainerLine(line: string): ContainerLine {
   };
 }
 
+function stripContainerPrefixes(line: string, depth: number): string {
+  let cursor = 0;
+  for (let level = 0; level < depth; level += 1) {
+    const markerStart = cursor;
+    let leadingSpaces = 0;
+    while (leadingSpaces < 3 && line[cursor] === ' ') {
+      cursor += 1;
+      leadingSpaces += 1;
+    }
+    if (line[cursor] !== '>') {
+      return line.slice(markerStart);
+    }
+    cursor += 1;
+    if (line[cursor] === ' ') {
+      cursor += 1;
+    }
+  }
+  return line.slice(cursor);
+}
+
 function stripListItemMarker(content: string): string {
   return parseListItemMatch(content)?.content ?? content;
 }
@@ -401,18 +421,23 @@ function findFencedCodeRanges(text: string): MarkdownCodeRange[] {
     const line = text.slice(lineStart, lineEnd);
     const containerLine = parseContainerLine(line);
 
-    if (
-      fence !== null &&
-      ((fence.containerDepth > 0 &&
-        containerLine.containerDepth < fence.containerDepth) ||
+    if (fence !== null) {
+      const listContinuationLine =
+        fence.listContentIndent === null
+          ? containerLine.content
+          : stripContainerPrefixes(line, fence.containerDepth);
+      if (
+        (fence.containerDepth > 0 &&
+          containerLine.containerDepth < fence.containerDepth) ||
         (fence.listContentIndent !== null &&
           !continuesListContainer(
-            containerLine.content,
+            listContinuationLine,
             fence.listContentIndent,
-          )))
-    ) {
-      ranges.push({ start: fence.start, end: lineStart });
-      fence = null;
+          ))
+      ) {
+        ranges.push({ start: fence.start, end: lineStart });
+        fence = null;
+      }
     }
 
     const match = parseFencedLine(
@@ -475,6 +500,25 @@ function findIndentedCodeRanges(text: string): MarkdownCodeRange[] {
     const rawLine = text.slice(lineStart, line.end);
     const parsed = parseContainerLine(rawLine);
     const listItem = parseListItemMatch(parsed.content);
+    const isBlank = parsed.content.trim() === '';
+    if (
+      activeListContentIndent !== null &&
+      parsed.containerDepth !== activeListContainerDepth
+    ) {
+      activeListContentIndent = null;
+      activeListContainerDepth = null;
+      activeListBlankLines = 0;
+    }
+    if (
+      !isBlank &&
+      listItem === null &&
+      activeListContentIndent !== null &&
+      indentationColumns(parsed.content) < activeListContentIndent
+    ) {
+      activeListContentIndent = null;
+      activeListContainerDepth = null;
+      activeListBlankLines = 0;
+    }
     const isNonInterruptingOrderedItem: boolean =
       listItem !== null &&
       /^\d{1,9}[.)]$/u.test(listItem.marker) &&
@@ -486,18 +530,9 @@ function findIndentedCodeRanges(text: string): MarkdownCodeRange[] {
     const listContentIndent: number | null = isNonInterruptingOrderedItem
       ? null
       : parsed.listContentIndent;
-    if (
-      activeListContentIndent !== null &&
-      parsed.containerDepth !== activeListContainerDepth
-    ) {
-      activeListContentIndent = null;
-      activeListContainerDepth = null;
-      activeListBlankLines = 0;
-    }
     const isIndented =
       indentationColumns(parsed.content) >=
       (activeListContentIndent === null ? 4 : activeListContentIndent + 4);
-    const isBlank = parsed.content.trim() === '';
     if (rangeStart === null && activeListContentIndent !== null) {
       if (isBlank) {
         activeListBlankLines += 1;
@@ -540,14 +575,6 @@ function findIndentedCodeRanges(text: string): MarkdownCodeRange[] {
     if (rangeStart === null && listContentIndent !== null) {
       activeListContentIndent = listContentIndent;
       activeListContainerDepth = parsed.containerDepth;
-      activeListBlankLines = 0;
-    } else if (
-      !isBlank &&
-      activeListContentIndent !== null &&
-      indentationColumns(parsed.content) < activeListContentIndent
-    ) {
-      activeListContentIndent = null;
-      activeListContainerDepth = null;
       activeListBlankLines = 0;
     }
 
