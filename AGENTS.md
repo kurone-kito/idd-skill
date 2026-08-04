@@ -108,3 +108,14 @@ The canonical issue-authoring skill bundle lives at
 generated copy: `node scripts/sync-docs.mjs --apply` regenerates
 derived copies and `node scripts/audit-docs.mjs --check` fails on
 drift.
+
+## Codex issue-authoring route
+
+For Codex CLI, read the canonical issue-authoring bundle explicitly from
+`skills/issue-authoring/`, or install one selected copy under
+`.agents/skills/issue-authoring/` when the target runtime supports native
+skill discovery there. The existing `.claude/skills/issue-authoring/` copy is
+the dogfood route for Claude Code and OpenCode compatibility; it is not the
+canonical source. Do not add checked-in `.agents/skills/` or
+`.opencode/skills/` mirrors by default, and do not assume the source path is
+automatically discovered by Codex.

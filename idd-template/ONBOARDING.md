@@ -381,11 +381,16 @@ remote-fetch examples, see
 
 The issue-authoring skill is available as an optional companion artifact
 from `skills/issue-authoring/` in the idd-skill source repository. That path is
-the canonical source bundle; when you install it in a target repository,
-place the copied bundle in the agent-specific skill directory your
-runtime reads, such as `.github/skills/`, `.claude/skills/`, or
-`.agents/skills/`. Install it only when the operator explicitly wants
-pre-execution issue drafting or roadmap decomposition support.
+the canonical source bundle, not the target repository's discovery path.
+When you install it in a target repository, choose one agent-specific native
+skill directory that the selected runtime reads, such as `.agents/skills/`
+for Codex CLI, `.claude/skills/` for Claude Code, or `.opencode/skills/` for
+OpenCode. The examples below use the Codex destination
+`.agents/skills/issue-authoring/`; change `SKILL_DEST` to the one selected
+destination before running any example. Do not install the same skill ID in
+multiple roots unless the operator explicitly accepts identical duplicates.
+Install it only when the operator explicitly wants pre-execution issue
+drafting or roadmap decomposition support.
 
 Before importing files, re-check the policy choices confirmed in Step 1B:
 merge policy, PR review profile, review-thread resolution policy,
@@ -569,16 +574,19 @@ do
 done
 ```
 
-If the operator opts into the issue-authoring companion, fetch it
-separately and then move or copy it into the runtime-specific skill
-directory the target agent expects:
+If the operator opts into the issue-authoring companion, fetch its canonical
+source files separately and write them directly to the selected native skill
+destination. The Codex CLI example below uses `.agents/skills/`; set
+`SKILL_DEST` to a different single native destination when the target runtime
+requires it:
 
 <!-- audit:shell-list id=issue-authoring-companion-gh-api-loop -->
 
 ```sh
 DEST="."  # root of the target repository
+SKILL_DEST="${DEST}/.agents/skills/issue-authoring"  # Codex example; choose one native destination
 
-mkdir -p "${DEST}/skills/issue-authoring/references"
+mkdir -p "${SKILL_DEST}/references"
 
 for FILE in \
   "SKILL.md" \
@@ -588,7 +596,7 @@ for FILE in \
 do
   gh api -H "Accept: application/vnd.github.raw+json" \
     "repos/kurone-kito/idd-skill/contents/skills/issue-authoring/${FILE}" \
-    > "${DEST}/skills/issue-authoring/${FILE}" || { echo "Failed: ${FILE}" >&2; exit 1; }
+    > "${SKILL_DEST}/${FILE}" || { echo "Failed: ${FILE}" >&2; exit 1; }
 done
 ```
 
@@ -669,16 +677,17 @@ do
 done
 ```
 
-If the operator opts into the issue-authoring companion with `curl`,
-fetch it separately:
+If the operator opts into the issue-authoring companion with `curl`, fetch
+the same canonical source files to the selected native skill destination:
 
 <!-- audit:shell-list id=issue-authoring-companion-curl-loop -->
 
 ```sh
 BASE="https://raw.githubusercontent.com/kurone-kito/idd-skill/main/skills/issue-authoring"
 DEST="."  # root of the target repository
+SKILL_DEST="${DEST}/.agents/skills/issue-authoring"  # Codex example; choose one native destination
 
-mkdir -p "${DEST}/skills/issue-authoring/references"
+mkdir -p "${SKILL_DEST}/references"
 
 for FILE in \
   "SKILL.md" \
@@ -686,7 +695,7 @@ for FILE in \
   "references/draft-patterns.md" \
   "references/workflow-boundary.md"
 do
-  curl -fsSL "${BASE}/${FILE}" -o "${DEST}/skills/issue-authoring/${FILE}" || { echo "Failed: ${FILE}" >&2; exit 1; }
+  curl -fsSL "${BASE}/${FILE}" -o "${SKILL_DEST}/${FILE}" || { echo "Failed: ${FILE}" >&2; exit 1; }
 done
 ```
 
@@ -696,9 +705,21 @@ If you have cloned `https://github.com/kurone-kito/idd-skill`, copy
 the files from `idd-template/` into the target repository preserving
 their relative paths.
 
-If the operator opts into the issue-authoring companion, also copy
-`skills/issue-authoring/` from the idd-skill source repository to
-`skills/issue-authoring/` in the target repository.
+If the operator opts into the issue-authoring companion, copy the canonical
+`skills/issue-authoring/` source bundle from the idd-skill checkout to one
+selected native destination in the target repository. For example, from the
+idd-skill checkout:
+
+```sh
+SOURCE="skills/issue-authoring"
+TARGET_REPO="../target-repository"
+SKILL_DEST="${TARGET_REPO}/.agents/skills/issue-authoring"  # Codex example; choose one native destination
+
+mkdir -p "${SKILL_DEST}/references"
+cp -R "${SOURCE}/." "${SKILL_DEST}/"
+```
+
+Do not copy the same skill ID into additional runtime roots by default.
 
 ### Optional companion boundary
 
@@ -708,9 +729,13 @@ publishing issues, editing GitHub issues, or starting the Discover →
 Claim → Work loop unless the operator explicitly asks for that next
 step.
 
-Keep the companion separate from the execution instructions:
+Keep the companion separate from the execution instructions and distinguish
+its source from its installed destination:
 
-- `skills/issue-authoring/` is a helper for drafting issue sets.
+- `skills/issue-authoring/` is the canonical source helper for drafting issue
+  sets.
+- The selected native `SKILL_DEST` is the target repository's installed
+  destination; it is not another canonical source.
 - `.github/instructions/*.instructions.md` execute approved issues
   through the IDD loop.
 - In the source `idd-skill` repository, maintainers must keep

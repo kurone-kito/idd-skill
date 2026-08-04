@@ -158,14 +158,24 @@ runtime does not enforce that explicit allowlist yet.
 
 ### Issue-authoring companion
 
-Confirm whether the operator wants the optional issue-authoring skill:
+Confirm whether the operator wants the optional issue-authoring skill and,
+when installed, record the one native destination selected for the target
+runtime:
 
-- `installed`: copy `skills/issue-authoring/` into the target repository
+- `installed`: copy the canonical source bundle at
+  `skills/issue-authoring/` into one selected native skill directory, such as
+  `.agents/skills/issue-authoring/` for Codex CLI, `.claude/skills/issue-authoring/`
+  for Claude Code, or `.opencode/skills/issue-authoring/` for OpenCode. Record
+  the selected destination alongside the `installed` status.
 - `not installed`: continue without the companion
 
-The companion helps draft IDD-ready issues and roadmaps. It does not
-authorize publishing issues or starting the main execution loop on its
-own.
+The canonical source path and the installed destination are separate values:
+the destination is not a second source-of-truth copy. Do not add the same
+skill ID to multiple runtime roots by default; a mixed-runtime target should
+use one native copy plus an explicit manual route unless the operator
+deliberately accepts identical duplicates. The companion helps draft
+IDD-ready issues and roadmaps. It does not authorize publishing issues or
+starting the main execution loop on its own.
 
 ### Helper runtime profile
 
@@ -371,12 +381,14 @@ This repository uses the following IDD policies:
 - **Missing-approval behavior**:
   `{explicit-target stop-before-claim + discovery approval-needed fallback bucket}`
 
-### Issue-Authoring Companion
+  ### Issue-Authoring Companion
 
-**Status**: `{installed | not installed}`
+  **Status**: `{installed | not installed}`
 
-- **`issueAuthoring.maxClarificationRounds`**:
-  `{3 | custom finite bound}`
+  **Native destination**: `{.agents/skills/issue-authoring/ | .claude/skills/issue-authoring/ | .opencode/skills/issue-authoring/ | not applicable}`
+
+  - **`issueAuthoring.maxClarificationRounds`**:
+    `{3 | custom finite bound}`
 ```
 
 When the repository uses a non-default merge, review, or thread policy,
