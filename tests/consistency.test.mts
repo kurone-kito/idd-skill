@@ -1243,7 +1243,11 @@ test('Codex critique guidance prefers a bounded reviewer with an explicit fallba
       -1,
       'the workflow must keep the critique section header',
     );
-    const critiqueSection = text.slice(critiqueSectionStart);
+    const nextSectionStart = text.indexOf('\n## ', critiqueSectionStart + 1);
+    const critiqueSection = text.slice(
+      critiqueSectionStart,
+      nextSectionStart === -1 ? undefined : nextSectionStart,
+    );
     const codexRow = critiqueSection.match(
       /^\| Codex CLI\s+\|([^\n]+)\|$/m,
     )?.[1];
