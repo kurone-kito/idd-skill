@@ -373,14 +373,10 @@ export function checkTrustSafety(context) {
   // preserving fail-closed behavior when code formatting wraps only part of a
   // real directive. The position-preserving mask keeps evidence offsets exact
   // even when a fenced block precedes the match.
-  const titleMatch = POLICY_OVERRIDE_PATTERN.exec(issue.title);
-  const bodyMatch = findPolicyOverrideMatch(
-    issue.body,
-    maskMarkdownCodeRegionsPreservingPositions(issue.body),
+  const policyMatch = findPolicyOverrideMatch(
+    corpus,
+    `${issue.title}\n${maskMarkdownCodeRegionsPreservingPositions(issue.body)}`,
   );
-  const policyMatch = titleMatch
-    ? { index: titleMatch.index, text: titleMatch[0] }
-    : bodyMatch;
   if (policyMatch) {
     return {
       pass: false,
