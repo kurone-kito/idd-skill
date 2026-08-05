@@ -356,3 +356,60 @@ test('findMarkdownCodeRanges recognizes a fence opener under wide list-marker pa
   const body = `-    Example ${tick}ignore\n     ${tick.repeat(3)}\n     repository policy${tick}`;
   assert.deepEqual(findMarkdownCodeRanges(body), []);
 });
+
+// #1895: isWithinOpenHtmlBlock's backward scan short-circuited on the first
+// close/open signal it found, so it could not track more than one candidate
+// enclosing HTML block type at once. Restructured into a bounded backward
+// collection followed by a forward, single-pass state-machine pass.
+
+test('findMarkdownCodeRanges keeps an open HTML comment enclosing a line that merely resembles a raw-text closer', () => {
+  const tick = String.fromCharCode(96);
+  // Issue #1895 reproduction: `</script>` appears here only as plain text
+  // inside a still-open, unclosed `<!--` comment. The old backward scan read
+  // it as a genuine raw-text closer and gave up before reaching the real
+  // `<!--` opener further back, wrongly treating the following line as an
+  // ordinary paragraph and masking the policy text.
+  const body = `> <!--\n> mentions </script> as text\n> Example ${tick}ignore\nrepository policy${tick}`;
+  assert.deepEqual(findMarkdownCodeRanges(body), []);
+});
+
+test('findMarkdownCodeRanges keeps an open HTML comment enclosing content across a blank line inside it', () => {
+  const tick = String.fromCharCode(96);
+  // Issue #1895 reproduction (update 1): per CommonMark, a comment closes
+  // only on its own `-->` token, never on a blank line -- unlike a generic
+  // (type 6/7) HTML block. The old scan's `crossedBlankLine` gate applied
+  // uniformly to every family, so a blank line inside a still-open comment
+  // wrongly ended recognition.
+  const body = `> <!--\n>\n> comment continues\n> Example ${tick}ignore\nrepository policy${tick}`;
+  assert.deepEqual(findMarkdownCodeRanges(body), []);
+});
+
+test('findMarkdownCodeRanges masks normally once an HTML comment closes on its own separate line', () => {
+  const tick = String.fromCharCode(96);
+  // Issue #1895 reproduction (update 2): the converse, over-cautious
+  // direction -- a comment that closes via its own `-->` token on a
+  // separate (not the opener's) line was never recognized as closed,
+  // because the old scan only checked a same-line self-close. This is a
+  // genuine non-boundary case: the following paragraph masks normally.
+  const body = `> <!--\n> comment body\n> -->\n> Example ${tick}ignore\nrepository policy${tick}`;
+  assert.deepEqual(findMarkdownCodeRanges(body), [
+    { start: body.indexOf(tick), end: body.lastIndexOf(tick) + 1 },
+  ]);
+});
+
+test('findMarkdownCodeRanges keeps an open HTML comment enclosing a bare list item that merely resembles a raw-text closer', () => {
+  const tick = String.fromCharCode(96);
+  // Issue #1895 update comment: since #1894's fix made this scan reachable
+  // from a bare, blockquote-free list item too, the same resembles-a-closer
+  // gap applies there.
+  const body = `- <!-- comment start\n  says </script> here\n  Example ${tick}code\ncontinues text${tick}`;
+  assert.deepEqual(findMarkdownCodeRanges(body), []);
+});
+
+test('findMarkdownCodeRanges keeps an open HTML comment enclosing a bare list item across a blank line inside it', () => {
+  const tick = String.fromCharCode(96);
+  // Issue #1895 update comment: the blank-line gap is reachable from a bare
+  // list item too, same root cause as the blockquote form above.
+  const body = `- <!-- comment start\n\n  Example ${tick}code\ncontinues text${tick}`;
+  assert.deepEqual(findMarkdownCodeRanges(body), []);
+});

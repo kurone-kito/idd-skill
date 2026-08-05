@@ -170,6 +170,30 @@ function isHtmlClosingSyntax(content: string): boolean {
 }
 
 /**
+ * The literal token that closes the CommonMark special HTML block form
+ * (comment, processing instruction, declaration, CDATA) `content` opens, or
+ * `null` when `content` does not open one of these four forms. Used both to
+ * check a same-line self-close ({@link isSelfClosedSpecialHtmlBlock}) and,
+ * by {@link isWithinOpenHtmlBlock}'s forward state tracking, to know which
+ * token to watch for on a later line once the form is confirmed still open.
+ */
+function specialHtmlBlockCloseToken(content: string): string | null {
+  if (/^ {0,3}<!--/u.test(content)) {
+    return '-->';
+  }
+  if (/^ {0,3}<\?/u.test(content)) {
+    return '?>';
+  }
+  if (/^ {0,3}<!\[CDATA\[/iu.test(content)) {
+    return ']]>';
+  }
+  if (/^ {0,3}<![A-Z]/iu.test(content)) {
+    return '>';
+  }
+  return null;
+}
+
+/**
  * True when `content` opens one of CommonMark's four special HTML block
  * forms (comment, processing instruction, declaration, CDATA) and also
  * carries that form's own closing token later on the same line -- e.g.
@@ -179,19 +203,8 @@ function isHtmlClosingSyntax(content: string): boolean {
  * open block behind it.
  */
 function isSelfClosedSpecialHtmlBlock(content: string): boolean {
-  if (/^ {0,3}<!--/u.test(content)) {
-    return content.includes('-->');
-  }
-  if (/^ {0,3}<\?/u.test(content)) {
-    return content.includes('?>');
-  }
-  if (/^ {0,3}<!\[CDATA\[/iu.test(content)) {
-    return content.includes(']]>');
-  }
-  if (/^ {0,3}<![A-Z]/iu.test(content)) {
-    return content.includes('>');
-  }
-  return false;
+  const closeToken = specialHtmlBlockCloseToken(content);
+  return closeToken !== null && content.includes(closeToken);
 }
 
 function lineBounds(
@@ -231,100 +244,133 @@ function findPreviousLineStart(text: string, lineStart: number): number | null {
 }
 
 /**
- * True when the line at `openingLineStart` is still inside a raw or custom
- * HTML block opened on an earlier line at the same container depth (for
- * example, an unclosed `<script>` directly above a quoted paragraph) -- so it
- * must not be mistaken for an ordinary paragraph line. Scans backward
- * through consecutive, same-depth lines; a container-depth change ends the
- * search unconditionally (not enclosed).
+ * The single open-HTML-block hypothesis {@link isWithinOpenHtmlBlock}'s
+ * forward pass tracks at a time. Modeled as one discriminated variable
+ * (rather than several independent booleans) so "only one family is open
+ * at once" is structural, not merely an accident of check ordering.
  *
- * CommonMark's HTML block families close differently, so a line that
- * otherwise looks like a new block (heading, list, thematic break) never
- * ends any of them by itself -- their content stays completely literal
- * until their own close condition. This scan's handling of the blank-line
- * question, by family:
+ * - `raw-text`: an open `<script>`/`<pre>`/`<style>`/`<textarea>` element;
+ *   closes only on a line containing its matching end tag.
+ * - `special`: an open comment/processing-instruction/declaration/CDATA
+ *   block; closes only when `closeToken` (that form's own token -- `-->`,
+ *   `?>`, `]]>`, or `>`) appears on a later line, same-line or not.
+ * - `generic`: an open type-6/7 HTML block (`<div>` and the like); closes
+ *   at the next blank line, per CommonMark, and by nothing else.
+ * - `none`: no open HTML block hypothesis.
+ */
+type HtmlBlockScanState =
+  | { readonly type: 'none' }
+  | { readonly type: 'raw-text' }
+  | { readonly type: 'special'; readonly closeToken: string }
+  | { readonly type: 'generic' };
+
+/**
+ * True when the line at `openingLineStart` is still inside a raw, special,
+ * or generic HTML block opened on an earlier line at the same container
+ * depth (for example, an unclosed `<script>` directly above a quoted
+ * paragraph) -- so it must not be mistaken for an ordinary paragraph line.
  *
- * - Raw-text elements (`<script>`/`<pre>`/`<style>`/`<textarea>`) close only
- *   on a line containing their matching end tag; a blank line does not
- *   affect them, so the scan keeps looking for one past any number of blank
- *   lines.
- * - The special forms (comment/processing-instruction/declaration/CDATA)
- *   likewise close only on their own token per CommonMark, not on a blank
- *   line -- this scan currently only recognizes a same-line self-close
- *   (`isSelfClosedSpecialHtmlBlock`) for them; short of that, it falls back
- *   to the blank-line-terminated handling below, which is imprecise for a
- *   multi-line special block containing a blank line (tracked in #1895).
- * - Every generic HTML block type (`<div>` and the like) genuinely does
- *   close at a blank line. Once the scan has crossed one, an opener found
- *   further back no longer reaches the opening line and is ignored -- only
- *   a still-reachable raw-text opener can still apply.
+ * Two passes, per the CommonMark distinction the shared
+ * {@link HtmlBlockScanState} type documents:
  *
- * A closing tag for a non-raw-text element (e.g. `</div>`) proves nothing on
- * its own and is skipped rather than treated as a boundary or a find.
+ * 1. **Bounded backward collection.** Walk backward from
+ *    `openingLineStart` through consecutive same-depth lines (list-marker-
+ *    stripped, the same way the opening line's own marker already is,
+ *    which is what makes this scan reachable from a bare, blockquote-free
+ *    list item too, per #1894's follow-up fix, not only from inside a
+ *    blockquote). A container-depth change stops collection unconditionally
+ *    -- a block-type hypothesis from a different depth never reaches
+ *    `openingLineStart`.
+ * 2. **Forward, single-pass state tracking** over the collected lines (now
+ *    in document order, oldest first): thread exactly one
+ *    {@link HtmlBlockScanState} through them. Only a `none` state ever
+ *    considers opening a new hypothesis (via {@link specialHtmlBlockCloseToken}
+ *    and {@link isSelfClosedSpecialHtmlBlock} for the special forms, the
+ *    existing `!isHtmlClosingSyntax` guard preserved for the generic
+ *    branch so a lone closing tag like `</div>` still doesn't count as an
+ *    opener); once a state other than `none` is active, only that family's
+ *    own close condition can end it -- nothing else changes it. Returning
+ *    the final state's non-`none`-ness is what resolves the ambiguity a
+ *    single backward short-circuit scan could not: a literal `</script>`
+ *    encountered while `special` is active is never misread as a raw-text
+ *    close, and a blank line encountered while `special` or `raw-text` is
+ *    active never ends it (only `generic` closes on a blank line).
  *
- * A scanned line's own list-item marker (e.g. `- <script>`) is stripped
- * before testing it against the HTML patterns, the same way the opening
- * line's own marker already is. This affects a caller reachable through a
- * container-depth change (a list nested inside a blockquote; see
- * `findMarkdownBlockBoundary` below) and, since #1894's follow-up fix, a
- * bare, blockquote-free list item too -- `findMarkdownBlockBoundary` now
- * calls this scan at every container depth (via `openingIsParagraph`,
- * which gates its own `isLazyListContinuation` exception the same way it
- * already gated `isLazyQuoteContinuation`), not only inside a blockquote.
- *
- * **Known limitation.** This scan short-circuits on the first close/open
- * signal it finds, so it does not track more than one candidate enclosing
- * block type at once. A line whose literal content merely *resembles* a
- * raw-text closing tag (e.g. `</script>` appearing as plain text inside a
- * still-open, unclosed multi-line HTML comment) is read as a genuine
- * raw-text closer, ending the scan before it can reach the comment's real
- * opener further back -- a bounded backward scan cannot fully disambiguate
- * this without the kind of forward, single-pass block-state tracking the
- * rest of this module does not otherwise need. Tracked as a follow-up
- * (#1895) rather than folded into this pass; since #1894's follow-up fix,
- * this limitation is reachable from a bare, blockquote-free list item too,
- * not only a blockquote -- see #1895 for the current scope of that gap.
+ * **Deliberate side effect.** A stray raw-text-close-shaped line (e.g. a
+ * bare `</script>`) encountered while the state is still `none` -- no raw-
+ * text block open at all -- is now inert rather than ending the scan; this
+ * is the correct CommonMark reading (a lone closing tag proves nothing on
+ * its own) and the opposite of the single-hypothesis scan's behavior in
+ * this narrow sub-case. No reported case in #1895 exercises this
+ * specifically; noted here since it is an observable behavior change.
  */
 function isWithinOpenHtmlBlock(
   text: string,
   openingLineStart: number,
   containerDepth: number,
 ): boolean {
-  let crossedBlankLine = false;
+  const sameDepthLines: string[] = [];
   let lineStart = findPreviousLineStart(text, openingLineStart);
   while (lineStart !== null) {
     const line = lineBounds(text, lineStart);
     const parsed = parseContainerLine(text.slice(lineStart, line.end));
     if (parsed.containerDepth !== containerDepth) {
-      return false;
-    }
-    if (parsed.content.trim() === '') {
-      crossedBlankLine = true;
-      lineStart = findPreviousLineStart(text, lineStart);
-      continue;
+      break;
     }
     // A list marker (e.g. `- <script>`) is not part of the HTML tag itself;
     // test the content after it, the same way the opening-line check does.
-    const htmlContent =
-      parseListItemMatch(parsed.content)?.content ?? parsed.content;
-    if (HTML_RAW_TEXT_TAG_CLOSE_PATTERN.test(htmlContent)) {
-      return false;
-    }
-    if (HTML_RAW_TEXT_TAG_OPEN_PATTERN.test(htmlContent)) {
-      return true;
-    }
-    if (
-      !crossedBlankLine &&
-      !isHtmlClosingSyntax(htmlContent) &&
-      !isSelfClosedSpecialHtmlBlock(htmlContent) &&
-      (MARKDOWN_HTML_BLOCK_START_PATTERN.test(htmlContent) ||
-        MARKDOWN_CUSTOM_HTML_BLOCK_START_PATTERN.test(htmlContent))
-    ) {
-      return true;
-    }
+    sameDepthLines.push(
+      parseListItemMatch(parsed.content)?.content ?? parsed.content,
+    );
     lineStart = findPreviousLineStart(text, lineStart);
   }
-  return false;
+  sameDepthLines.reverse();
+
+  let state: HtmlBlockScanState = { type: 'none' };
+  for (const content of sameDepthLines) {
+    if (state.type === 'raw-text') {
+      if (HTML_RAW_TEXT_TAG_CLOSE_PATTERN.test(content)) {
+        state = { type: 'none' };
+      }
+      continue;
+    }
+    if (state.type === 'special') {
+      if (content.includes(state.closeToken)) {
+        state = { type: 'none' };
+      }
+      continue;
+    }
+    if (state.type === 'generic') {
+      if (content.trim() === '') {
+        state = { type: 'none' };
+      }
+      continue;
+    }
+    if (content.trim() === '') {
+      continue;
+    }
+    if (HTML_RAW_TEXT_TAG_OPEN_PATTERN.test(content)) {
+      if (!HTML_RAW_TEXT_TAG_CLOSE_PATTERN.test(content)) {
+        state = { type: 'raw-text' };
+      }
+      continue;
+    }
+    const closeToken = specialHtmlBlockCloseToken(content);
+    if (closeToken !== null) {
+      if (!isSelfClosedSpecialHtmlBlock(content)) {
+        state = { type: 'special', closeToken };
+      }
+      continue;
+    }
+    if (
+      !isHtmlClosingSyntax(content) &&
+      (MARKDOWN_HTML_BLOCK_START_PATTERN.test(content) ||
+        MARKDOWN_CUSTOM_HTML_BLOCK_START_PATTERN.test(content))
+    ) {
+      state = { type: 'generic' };
+    }
+  }
+  return state.type !== 'none';
 }
 
 /**
