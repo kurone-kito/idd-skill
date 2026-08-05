@@ -1935,7 +1935,7 @@ if (args[0] === 'pr' && args[1] === 'view') {
   if (number === '101') {
     process.stdout.write(JSON.stringify({ files: [{ path: 'unrelated/file.mjs' }], title: '', body: '', closingIssuesReferences: [] }));
   } else if (number === '102') {
-    process.stdout.write(JSON.stringify({ files: [{ path: 'scripts/target.mjs' }], title: 'unrelated sibling PR', body: '', closingIssuesReferences: [9999] }));
+    process.stdout.write(JSON.stringify({ files: [{ path: 'scripts/target.mjs' }], title: 'unrelated sibling PR', body: '', closingIssuesReferences: [{ number: 9999 }] }));
   } else {
     process.stdout.write(JSON.stringify({ files: [{ path: 'scripts/target.mjs' }], title: '', body: 'Closes #1862', closingIssuesReferences: [] }));
   }
