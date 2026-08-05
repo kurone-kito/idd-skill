@@ -25,9 +25,10 @@ import { normalizePolicyConfig, POLICY_DEFAULTS } from './policy-helpers.mjs';
 import {
   buildClosedByMergedPrArgs,
   buildMergedPrListArgs,
-  buildPrFilesArgs,
+  buildPrDetailArgs,
   evaluateHighConfidenceDuplicate,
   findCandidateFileOverlap,
+  prReferencesIssue,
   resolveCandidateFileSet,
 } from './supersession-detection.mjs';
 
@@ -491,6 +492,7 @@ export function checkTrustSafety(context) {
 export function checkDuplicateOrSuperseded(context) {
   const highConfidence = evaluateHighConfidenceDuplicate(
     context.highConfidenceDuplicate,
+    context.issue.number,
   );
   if (highConfidence) {
     return highConfidence;
@@ -890,6 +892,7 @@ function runCli() {
           issue.createdAt,
           candidateFiles,
           highContentionFiles,
+          issue.number,
         );
         mergedPrs = scanResult.mergedPrs;
         if (scanResult.truncatedByDeadline) {
@@ -1096,6 +1099,15 @@ function normalizeHighConfidenceMergedPrs(value) {
         number: Number(e.number),
         mergedAt: String(e.mergedAt ?? ''),
         files: normalizeStringArray(e.files),
+        // #1878: same-issue-reference evidence, normalized the same
+        // fail-safe way as every other field on this options boundary --
+        // a malformed shape degrades to "no reference" rather than crashing
+        // or manufacturing a match.
+        closingIssuesReferences: normalizePositiveIntArray(
+          e.closingIssuesReferences,
+        ),
+        title: String(e.title ?? ''),
+        body: String(e.body ?? ''),
       };
     })
     .filter((entry) => Number.isInteger(entry.number) && entry.number > 0);
@@ -1173,7 +1185,7 @@ function fetchDuplicateCandidates(repoRef, issue) {
 }
 // --- #1484: high-confidence Check 4 tier CLI glue ---------------------------
 // The pure argv-builders (`buildClosedByMergedPrArgs`, `buildMergedPrListArgs`,
-// `buildPrFilesArgs`) and the evaluation kernel (`evaluateHighConfidenceDuplicate`)
+// `buildPrDetailArgs`) and the evaluation kernel (`evaluateHighConfidenceDuplicate`)
 // moved to `supersession-detection.mts` (#1499); this file keeps only the
 // `gh`-executing orchestration below (fetch, try/catch, deadline budget,
 // `collectionWarnings`), which the issue does not name as part of the
@@ -1254,12 +1266,22 @@ function fetchClosedByMergedPrNumbers(owner, repo, issueNumber) {
  * `candidateFiles` / `highContentionFiles` (#1815) let the scan stop early:
  * `evaluateHighConfidenceDuplicate` only needs the FIRST merged PR (in scan
  * order) whose changed files overlap the exclusion-adjusted candidate set
- * to return a high-confidence fail -- every PR after it would otherwise be
- * fetched and then ignored. `resolveCandidateFileSet` /
- * `findCandidateFileOverlap` (`supersession-detection.mts`) are the exact
- * same helpers `evaluateHighConfidenceDuplicate` itself now uses, so the
- * PR this loop stops on is provably the same PR the downstream evaluation
- * would stop on -- no evidence-content change, only fewer PRs fetched.
+ * AND references `candidateIssueNumber` itself (#1878; see
+ * `prReferencesIssue` in `supersession-detection.mts`) to return a
+ * high-confidence fail -- every PR after it would otherwise be fetched and
+ * then ignored. `resolveCandidateFileSet` / `findCandidateFileOverlap` /
+ * `prReferencesIssue` (`supersession-detection.mts`) are the exact same
+ * helpers `evaluateHighConfidenceDuplicate` itself now uses, so the PR
+ * this loop stops on is provably the same PR the downstream evaluation
+ * would stop on -- no evidence-content change, only fewer PRs fetched. A
+ * merged PR whose files overlap but that never references the candidate
+ * (the #1862-vs-#1863/PR#1864 false positive #1878 fixes) no longer stops
+ * the scan -- every merged PR in the window is now fetched in that case,
+ * which is the fail-safe direction (worst case, a `truncatedByDeadline`
+ * scan degrades Check 4 to exact-title-only, never a false high-confidence
+ * hit) but does mean `MERGED_PR_SCAN_DEADLINE_MS` is reached far more
+ * often for a candidate whose files are shared across an entire roadmap of
+ * siblings, none of which reference it individually.
  * Exported (not just called) so `fetchMergedPrFileOverlapEvidence` can be
  * unit-tested directly against a stubbed `gh` on `PATH`, the way this
  * repo's other `gh`-calling functions are exercised (see
@@ -1270,6 +1292,7 @@ export function fetchMergedPrFileOverlapEvidence(
   sinceIso,
   candidateFiles,
   highContentionFiles,
+  candidateIssueNumber,
 ) {
   const list = ghJsonArray(buildMergedPrListArgs(repoRef, sinceIso));
   const mergedPrs = [];
@@ -1289,19 +1312,42 @@ export function fetchMergedPrFileOverlapEvidence(
     if (!Number.isInteger(number) || number <= 0) {
       continue;
     }
-    const files = runGh(buildPrFilesArgs(repoRef, number))
-      .split('\n')
-      .map((line) => line.trim())
+    const detail = ghJson(buildPrDetailArgs(repoRef, number));
+    const files = (Array.isArray(detail.files) ? detail.files : [])
+      .map((file) => String(file?.path ?? ''))
       .filter(Boolean);
-    mergedPrs.push({ number, mergedAt: String(pr.mergedAt ?? ''), files });
-    if (findCandidateFileOverlap(files, candidateSet).length > 0) {
-      // Qualifying overlap found (#1815): stop -- see the doc comment
-      // above. Deliberately a plain `break`, NOT `truncatedByDeadline =
-      // true`: this is a complete, successful scan that found its answer
-      // early, not a scan cut short before finishing. Setting the flag
-      // here would wrongly push a `collectionWarnings` entry in `runCli`,
-      // which degrades Check 4 to exact-title-only -- silently turning a
-      // genuine high-confidence hit into a false pass.
+    const closingIssuesReferences = (
+      Array.isArray(detail.closingIssuesReferences)
+        ? detail.closingIssuesReferences
+        : []
+    )
+      .map((ref) => Number(ref?.number))
+      .filter((n) => Number.isInteger(n) && n > 0);
+    const title = String(detail.title ?? '');
+    const body = String(detail.body ?? '');
+    mergedPrs.push({
+      number,
+      mergedAt: String(pr.mergedAt ?? ''),
+      files,
+      closingIssuesReferences,
+      title,
+      body,
+    });
+    if (
+      findCandidateFileOverlap(files, candidateSet).length > 0 &&
+      prReferencesIssue(
+        { closingIssuesReferences, title, body },
+        candidateIssueNumber,
+      )
+    ) {
+      // Qualifying overlap + same-issue reference found (#1815, #1878):
+      // stop -- see the doc comment above. Deliberately a plain `break`,
+      // NOT `truncatedByDeadline = true`: this is a complete, successful
+      // scan that found its answer early, not a scan cut short before
+      // finishing. Setting the flag here would wrongly push a
+      // `collectionWarnings` entry in `runCli`, which degrades Check 4 to
+      // exact-title-only -- silently turning a genuine high-confidence hit
+      // into a false pass.
       break;
     }
   }

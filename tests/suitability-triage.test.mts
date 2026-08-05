@@ -1352,6 +1352,109 @@ test('checkDuplicateOrSuperseded: a real high-confidence hit still fires even wh
   assert.match(result.evidence, /#99/);
 });
 
+// --- #1878: same-issue-reference requirement, at the checkDuplicateOrSuperseded /
+// evaluateSuitability integration level (candidateIssueNumber is threaded
+// through automatically via context.issue.number / BASE_ISSUE.number).
+// The kernel-level equivalents live in tests/supersession-detection.test.mts
+// per this issue's own acceptance criteria; these pin the real call-site
+// wiring (issue.number reaching evaluateHighConfidenceDuplicate) end to end.
+
+test('checkDuplicateOrSuperseded: file overlap with no reference to the candidate falls through to the weak heuristic (#1862 vs #1863/PR#1864)', () => {
+  const result = checkDuplicateOrSuperseded({
+    issue: BASE_ISSUE,
+    duplicateCandidates: [] as Context['duplicateCandidates'],
+    highConfidenceDuplicate: {
+      closedByMergedPrNumbers: [],
+      candidateFiles: ['src/scripts/markdown-code.mts'],
+      highContentionFiles: [],
+      mergedPrs: [
+        {
+          number: 1864,
+          mergedAt: '2026-08-04T00:00:00Z',
+          files: ['src/scripts/markdown-code.mts'],
+          // Closes a DIFFERENT sibling issue, never BASE_ISSUE.number (1).
+          closingIssuesReferences: [9999],
+          title: 'fix(markdown-code): preserve opaque fence state',
+          body: 'Closes #9999',
+        },
+      ],
+    },
+  } as unknown as Context);
+  // Falls through to the weak heuristic (empty duplicateCandidates, no
+  // free-text declaration) -- must pass, not report a duplicate.
+  assert.equal(result.pass, true);
+});
+
+test('evaluateSuitability: file overlap with no reference to the candidate no longer maps to the duplicate outcome (#1878)', () => {
+  const result = evaluateSuitability(BASE_ISSUE, {
+    highConfidenceDuplicate: {
+      closedByMergedPrNumbers: [],
+      candidateFiles: ['src/scripts/markdown-code.mts'],
+      highContentionFiles: [],
+      mergedPrs: [
+        {
+          number: 1864,
+          mergedAt: '2026-08-04T00:00:00Z',
+          files: ['src/scripts/markdown-code.mts'],
+          closingIssuesReferences: [9999],
+          title: 'fix(markdown-code): preserve opaque fence state',
+          body: 'Closes #9999',
+        },
+      ],
+    },
+  });
+  assert.equal(result.outcome, 'ready');
+  assert.equal(result.failedCheck, null);
+});
+
+test('checkDuplicateOrSuperseded: a same-candidate-files hit referencing the candidate issue still fails (true positive preserved)', () => {
+  const result = checkDuplicateOrSuperseded({
+    issue: BASE_ISSUE,
+    duplicateCandidates: [] as Context['duplicateCandidates'],
+    highConfidenceDuplicate: {
+      closedByMergedPrNumbers: [],
+      candidateFiles: ['src/scripts/markdown-code.mts'],
+      highContentionFiles: [],
+      mergedPrs: [
+        {
+          number: 1865,
+          mergedAt: '2026-08-04T00:00:00Z',
+          files: ['src/scripts/markdown-code.mts'],
+          // References BASE_ISSUE.number (1) directly.
+          closingIssuesReferences: [1],
+          title: 'fix: address issue',
+          body: '',
+        },
+      ],
+    },
+  } as unknown as Context);
+  assert.equal(result.pass, false);
+  assert.match(result.evidence, /High-confidence duplicate/);
+  assert.match(result.evidence, /#1865/);
+});
+
+test('evaluateSuitability: a same-candidate-files hit referencing the candidate issue still maps to the duplicate outcome (true positive preserved)', () => {
+  const result = evaluateSuitability(BASE_ISSUE, {
+    highConfidenceDuplicate: {
+      closedByMergedPrNumbers: [],
+      candidateFiles: ['src/scripts/markdown-code.mts'],
+      highContentionFiles: [],
+      mergedPrs: [
+        {
+          number: 1865,
+          mergedAt: '2026-08-04T00:00:00Z',
+          files: ['src/scripts/markdown-code.mts'],
+          closingIssuesReferences: [1],
+          title: 'fix: address issue',
+          body: '',
+        },
+      ],
+    },
+  });
+  assert.equal(result.outcome, 'duplicate');
+  assert.equal(result.failedCheck, 'duplicate_or_superseded');
+});
+
 test('checkDuplicateOrSuperseded: omitting highConfidenceDuplicate leaves the weak heuristic unchanged', () => {
   // No new field at all (as every pre-#1484 caller would omit it) must
   // behave byte-for-byte as before: BASE_ISSUE's own title is not present in
@@ -1761,7 +1864,15 @@ test('checkRepositoryFit / checkCoherence / checkTrustSafety: verdict is unaffec
 // has the qualifying overlap and no `gh pr view` call is made for PRs
 // after it").
 
-test('fetchMergedPrFileOverlapEvidence stops scanning once a qualifying overlap is found (#1815)', () => {
+// #1878: fetchMergedPrFileOverlapEvidence's per-PR stub now returns the
+// structured `gh pr view --json files,title,body,closingIssuesReferences`
+// shape (files as {path} objects, closingIssuesReferences as {number}
+// objects) instead of a plain-text file list, since the same-issue-
+// reference check needs title/body/closingIssuesReferences alongside
+// files. The candidate issue number (1862, reused across these fixtures)
+// is passed as fetchMergedPrFileOverlapEvidence's new fifth argument.
+
+test('fetchMergedPrFileOverlapEvidence stops scanning once a qualifying overlap is found (#1815, #1878)', () => {
   const { restore, readCount } = stubGhWithCounter(`
 if (args[0] === 'pr' && args[1] === 'list') {
   process.stdout.write(JSON.stringify([
@@ -1774,11 +1885,11 @@ if (args[0] === 'pr' && args[1] === 'list') {
 if (args[0] === 'pr' && args[1] === 'view') {
   const number = args[2];
   if (number === '101') {
-    process.stdout.write('unrelated/file.mjs\\n');
+    process.stdout.write(JSON.stringify({ files: [{ path: 'unrelated/file.mjs' }], title: '', body: '', closingIssuesReferences: [] }));
   } else if (number === '102') {
-    process.stdout.write('scripts/target.mjs\\n');
+    process.stdout.write(JSON.stringify({ files: [{ path: 'scripts/target.mjs' }], title: '', body: '', closingIssuesReferences: [{ number: 1862 }] }));
   } else {
-    process.stdout.write('should/not/be-scanned.mjs\\n');
+    process.stdout.write(JSON.stringify({ files: [{ path: 'should/not/be-scanned.mjs' }], title: '', body: '', closingIssuesReferences: [] }));
   }
   process.exit(0);
 }
@@ -1789,17 +1900,64 @@ if (args[0] === 'pr' && args[1] === 'view') {
       '2026-06-01T00:00:00Z',
       ['scripts/target.mjs'],
       [],
+      1862,
     );
     // #102 is the first (and only) PR whose files overlap the candidate
-    // set; #103 must never be fetched.
+    // set AND references the candidate issue (#1878); #103 must never be
+    // fetched.
     assert.deepEqual(
       result.mergedPrs.map((pr) => pr.number),
       [101, 102],
     );
     assert.equal(result.truncatedByDeadline, false);
-    // 1 `pr list` call + 2 `pr view` calls (#101, #102) -- #103's file list
-    // is never fetched once #102's qualifying overlap is found.
+    // 1 `pr list` call + 2 `pr view` calls (#101, #102) -- #103's detail
+    // is never fetched once #102's qualifying overlap+reference is found.
     assert.equal(readCount(), 3);
+  } finally {
+    restore();
+  }
+});
+
+test('fetchMergedPrFileOverlapEvidence: an overlap with no reference to the candidate does not stop the scan (#1878)', () => {
+  // #102 overlaps the candidate file set but never references candidate
+  // issue 1862 -- the scan must continue to #103, which does reference it.
+  const { restore, readCount } = stubGhWithCounter(`
+if (args[0] === 'pr' && args[1] === 'list') {
+  process.stdout.write(JSON.stringify([
+    { number: 101, mergedAt: '2026-07-01T00:00:00Z' },
+    { number: 102, mergedAt: '2026-07-02T00:00:00Z' },
+    { number: 103, mergedAt: '2026-07-03T00:00:00Z' },
+  ]));
+  process.exit(0);
+}
+if (args[0] === 'pr' && args[1] === 'view') {
+  const number = args[2];
+  if (number === '101') {
+    process.stdout.write(JSON.stringify({ files: [{ path: 'unrelated/file.mjs' }], title: '', body: '', closingIssuesReferences: [] }));
+  } else if (number === '102') {
+    process.stdout.write(JSON.stringify({ files: [{ path: 'scripts/target.mjs' }], title: 'unrelated sibling PR', body: '', closingIssuesReferences: [{ number: 9999 }] }));
+  } else {
+    process.stdout.write(JSON.stringify({ files: [{ path: 'scripts/target.mjs' }], title: '', body: 'Closes #1862', closingIssuesReferences: [] }));
+  }
+  process.exit(0);
+}
+`);
+  try {
+    const result = fetchMergedPrFileOverlapEvidence(
+      'o/r',
+      '2026-06-01T00:00:00Z',
+      ['scripts/target.mjs'],
+      [],
+      1862,
+    );
+    assert.deepEqual(
+      result.mergedPrs.map((pr) => pr.number),
+      [101, 102, 103],
+    );
+    assert.equal(result.truncatedByDeadline, false);
+    // All three PRs are fetched: #102's overlap alone never stops the
+    // scan, since it doesn't reference the candidate.
+    assert.equal(readCount(), 4);
   } finally {
     restore();
   }
@@ -1815,7 +1973,7 @@ if (args[0] === 'pr' && args[1] === 'list') {
   process.exit(0);
 }
 if (args[0] === 'pr' && args[1] === 'view') {
-  process.stdout.write('unrelated/file.mjs\\n');
+  process.stdout.write(JSON.stringify({ files: [{ path: 'unrelated/file.mjs' }], title: '', body: '', closingIssuesReferences: [] }));
   process.exit(0);
 }
 `);
@@ -1825,6 +1983,7 @@ if (args[0] === 'pr' && args[1] === 'view') {
       '2026-06-01T00:00:00Z',
       ['scripts/target.mjs'],
       [],
+      1862,
     );
     assert.deepEqual(
       result.mergedPrs.map((pr) => pr.number),
@@ -1846,7 +2005,7 @@ if (args[0] === 'pr' && args[1] === 'list') {
   process.exit(0);
 }
 if (args[0] === 'pr' && args[1] === 'view') {
-  process.stdout.write('anything.mjs\\n');
+  process.stdout.write(JSON.stringify({ files: [{ path: 'anything.mjs' }], title: '', body: '', closingIssuesReferences: [] }));
   process.exit(0);
 }
 `);
@@ -1856,6 +2015,7 @@ if (args[0] === 'pr' && args[1] === 'view') {
       '2026-06-01T00:00:00Z',
       [],
       [],
+      1862,
     );
     assert.deepEqual(
       result.mergedPrs.map((pr) => pr.number),
