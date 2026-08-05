@@ -137,10 +137,11 @@ const HTML_RAW_TEXT_TAG_OPEN_PATTERN =
  * stripped -- a caller-held list-item marker, if present, may still be in
  * place) starts a new Markdown block -- either the fixed-form patterns
  * above, or a thematic break whose repeated marker characters are separated
- * by spaces or tabs. The heading/list/thematic-break patterns this checks
- * are all anchored at the very start of `content`, so a leading list marker
- * (which none of them match) safely makes this return `false` rather than a
- * false positive.
+ * by spaces or tabs. `MARKDOWN_BLOCK_CONTENT_PATTERN`'s own list-item
+ * alternative already matches a leading `-`/`+`/`*`/`1.`/`1)` marker
+ * directly, correctly treating it as a block start on its own -- a list
+ * item is a genuine new block per CommonMark -- so no separate stripping is
+ * needed here regardless of whether the caller already stripped one.
  */
 function isMarkdownBlockStart(content) {
   return (
