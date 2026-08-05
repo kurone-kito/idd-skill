@@ -361,18 +361,41 @@ export function computeAdvisoryConvergenceVerdict(inputs, options) {
   // is already resolved and `itemCount` is still positive, no thread query
   // can explain it -- point directly at the review body instead of leaving
   // an agent to re-derive this by hand a second time.
+  //
+  // #1880: a related but distinct incident shape -- the primary bot's
+  // review on current HEAD carries `itemCount: 0` (zero POSTED comments)
+  // while its top-level body still embeds a `Suppressed comments (N)`
+  // block for a finding it chose not to post as a comment at all. The
+  // #1719 branch above only fires when `itemCount > 0`, so this case fell
+  // through to full convergence with an empty `reasons[]` until now (PR
+  // #1875 commit 9711d404). `review.satisfied` (review-clause.mts) is
+  // already gated on `suppressedCount === 0`, so `converged` is already
+  // correctly `false` here -- this branch only supplies the explanation.
   if (!scopeBlocksConvergenceEval && !pending && !review.satisfied) {
-    const itemCountReason =
-      review.itemCount === null
-        ? `latest ${primaryBotLogin} review on current HEAD carries an unknown number of actionable items (comment count unavailable)`
-        : `latest ${primaryBotLogin} review on current HEAD carries ${review.itemCount} actionable item(s)`;
-    reasons.push(
-      threadClause.satisfied &&
-        review.itemCount !== null &&
-        review.itemCount > 0
-        ? `${itemCountReason} -- no unresolved ${primaryBotLogin}-authored thread accounts for them; check the review body directly for an item suppressed due to low confidence, which counts toward itemCount but never appears in reviewThreads`
-        : itemCountReason,
-    );
+    if (review.itemCount === 0 && review.suppressedCount > 0) {
+      reasons.push(
+        `latest ${primaryBotLogin} review on current HEAD carries ${review.suppressedCount} suppressed comment(s) not reflected in itemCount (posted comment count is 0) -- check the review body directly, since a suppressed finding is never posted as a comment or review thread`,
+      );
+    } else {
+      const itemCountReason =
+        review.itemCount === null
+          ? `latest ${primaryBotLogin} review on current HEAD carries an unknown number of actionable items (comment count unavailable)`
+          : `latest ${primaryBotLogin} review on current HEAD carries ${review.itemCount} actionable item(s)`;
+      // A review can carry both posted comments (itemCount > 0) AND a
+      // suppressed-comments section at once; append a pointer to the
+      // latter rather than silently dropping it from the reported reason.
+      const suppressedSuffix =
+        review.suppressedCount > 0
+          ? ` (plus ${review.suppressedCount} suppressed comment(s) in the review body, not counted in itemCount)`
+          : '';
+      reasons.push(
+        threadClause.satisfied &&
+          review.itemCount !== null &&
+          review.itemCount > 0
+          ? `${itemCountReason}${suppressedSuffix} -- no unresolved ${primaryBotLogin}-authored thread accounts for them; check the review body directly for an item suppressed due to low confidence, which counts toward itemCount but never appears in reviewThreads`
+          : `${itemCountReason}${suppressedSuffix}`,
+      );
+    }
   }
   if (!scopeBlocksConvergenceEval && !threadClause.satisfied) {
     reasons.push(
@@ -423,6 +446,17 @@ export function computeAdvisoryConvergenceVerdict(inputs, options) {
   // `review-item-count-not-positive`), while `reviewItemCountKnownTerm &&
   // reviewItemCountPositiveTerm` together still reduce to exactly the
   // original `itemCount !== null && itemCount > 0` conjunct.
+  // #1880: `reviewItemCountPositiveTerm` ALSO counts `suppressedCount > 0`
+  // as "positive" -- `itemCount` and `suppressedCount` are both read from
+  // the SAME static review snapshot (never updated by later disposition
+  // activity, same as `itemCount`'s own doc comment on
+  // `AdvisoryConvergenceReviewClause`), so a suppressed-only block is the
+  // identical "nothing else can clear this except a fresh review" shape
+  // #1511's reroll exists for. The token's FAILURE condition stays exactly
+  // as precise as before: `REVIEW_ITEM_COUNT_NOT_POSITIVE` now fires only
+  // when itemCount is a known 0 AND suppressedCount is also 0 -- i.e.
+  // genuinely nothing (posted or suppressed) to reroll for, still an
+  // accurate reading of the existing token name/doc row.
   // #1686: `indeterminate` now also disqualifies a same-HEAD reroll --
   // offering to reroll Copilot is pointless while the underlying claim
   // linkage itself is broken/ambiguous, so this term (and its
@@ -435,7 +469,9 @@ export function computeAdvisoryConvergenceVerdict(inputs, options) {
     dispositionEvidence.missingRegularCommentCount === 0;
   const reviewItemCountKnownTerm = review.itemCount !== null;
   const reviewItemCountPositiveTerm =
-    review.itemCount === null || review.itemCount > 0;
+    review.itemCount === null ||
+    review.itemCount > 0 ||
+    review.suppressedCount > 0;
   const sameHeadRerollTerms = [
     {
       token: SAME_HEAD_REROLL_INELIGIBLE_REASON.SCOPE_NOT_APPLICABLE,

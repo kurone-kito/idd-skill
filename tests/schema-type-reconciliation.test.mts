@@ -562,6 +562,7 @@ const advisoryConvergenceFixture = {
     matchesHead: true,
     itemCount: 0,
     submittedAt: '2026-07-11T10:00:00Z',
+    suppressedCount: 0,
     satisfied: true,
   },
   threads: {
