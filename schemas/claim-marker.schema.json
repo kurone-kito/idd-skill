@@ -29,7 +29,7 @@
       "type": "string",
       "minLength": 1,
       "pattern": "^\\S+$",
-      "description": "Claim identifier replaced by this activation, or none for a fresh claim."
+      "description": "Claim identifier replaced by the activation that minted this claim lineage, or none for a fresh claim; a later heartbeat marker for the same agentId/claimId carries this field unchanged rather than re-evaluating it as a new activation."
     },
     "branch": {
       "type": "string",

@@ -416,7 +416,7 @@
                   "matchMode": {
                     "type": "string",
                     "enum": ["exact", "glob"],
-                    "description": "Matching mode used to compare the waivable selector with a check name."
+                    "description": "Matching mode used to compare the waivable selector with a check name; defaults to \"exact\" when omitted, so a wildcard selector such as \"CodeRabbit*\" must set this to \"glob\" to match as a wildcard rather than a literal string."
                   }
                 }
               },
