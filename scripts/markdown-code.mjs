@@ -163,6 +163,29 @@ function isHtmlClosingSyntax(content) {
   return /^ {0,3}<\//u.test(content);
 }
 /**
+ * The literal token that closes the CommonMark special HTML block form
+ * (comment, processing instruction, declaration, CDATA) `content` opens, or
+ * `null` when `content` does not open one of these four forms. Used both to
+ * check a same-line self-close ({@link isSelfClosedSpecialHtmlBlock}) and,
+ * by {@link isWithinOpenHtmlBlock}'s forward state tracking, to know which
+ * token to watch for on a later line once the form is confirmed still open.
+ */
+function specialHtmlBlockCloseToken(content) {
+  if (/^ {0,3}<!--/u.test(content)) {
+    return '-->';
+  }
+  if (/^ {0,3}<\?/u.test(content)) {
+    return '?>';
+  }
+  if (/^ {0,3}<!\[CDATA\[/iu.test(content)) {
+    return ']]>';
+  }
+  if (/^ {0,3}<![A-Z]/iu.test(content)) {
+    return '>';
+  }
+  return null;
+}
+/**
  * True when `content` opens one of CommonMark's four special HTML block
  * forms (comment, processing instruction, declaration, CDATA) and also
  * carries that form's own closing token later on the same line -- e.g.
@@ -172,19 +195,8 @@ function isHtmlClosingSyntax(content) {
  * open block behind it.
  */
 function isSelfClosedSpecialHtmlBlock(content) {
-  if (/^ {0,3}<!--/u.test(content)) {
-    return content.includes('-->');
-  }
-  if (/^ {0,3}<\?/u.test(content)) {
-    return content.includes('?>');
-  }
-  if (/^ {0,3}<!\[CDATA\[/iu.test(content)) {
-    return content.includes(']]>');
-  }
-  if (/^ {0,3}<![A-Z]/iu.test(content)) {
-    return content.includes('>');
-  }
-  return false;
+  const closeToken = specialHtmlBlockCloseToken(content);
+  return closeToken !== null && content.includes(closeToken);
 }
 function lineBounds(text, lineStart) {
   const newlineIndex = text.indexOf('\n', lineStart);
@@ -215,96 +227,115 @@ function findPreviousLineStart(text, lineStart) {
   return priorNewline === -1 ? 0 : priorNewline + 1;
 }
 /**
- * True when the line at `openingLineStart` is still inside a raw or custom
- * HTML block opened on an earlier line at the same container depth (for
- * example, an unclosed `<script>` directly above a quoted paragraph) -- so it
- * must not be mistaken for an ordinary paragraph line. Scans backward
- * through consecutive, same-depth lines; a container-depth change ends the
- * search unconditionally (not enclosed).
+ * True when the line at `openingLineStart` is still inside a raw, special,
+ * or generic HTML block opened on an earlier line at the same container
+ * depth (for example, an unclosed `<script>` directly above a quoted
+ * paragraph) -- so it must not be mistaken for an ordinary paragraph line.
  *
- * CommonMark's HTML block families close differently, so a line that
- * otherwise looks like a new block (heading, list, thematic break) never
- * ends any of them by itself -- their content stays completely literal
- * until their own close condition. This scan's handling of the blank-line
- * question, by family:
+ * Two passes, per the CommonMark distinction the shared
+ * {@link HtmlBlockScanState} type documents:
  *
- * - Raw-text elements (`<script>`/`<pre>`/`<style>`/`<textarea>`) close only
- *   on a line containing their matching end tag; a blank line does not
- *   affect them, so the scan keeps looking for one past any number of blank
- *   lines.
- * - The special forms (comment/processing-instruction/declaration/CDATA)
- *   likewise close only on their own token per CommonMark, not on a blank
- *   line -- this scan currently only recognizes a same-line self-close
- *   (`isSelfClosedSpecialHtmlBlock`) for them; short of that, it falls back
- *   to the blank-line-terminated handling below, which is imprecise for a
- *   multi-line special block containing a blank line (tracked in #1895).
- * - Every generic HTML block type (`<div>` and the like) genuinely does
- *   close at a blank line. Once the scan has crossed one, an opener found
- *   further back no longer reaches the opening line and is ignored -- only
- *   a still-reachable raw-text opener can still apply.
+ * 1. **Bounded backward collection.** Walk backward from
+ *    `openingLineStart` through consecutive same-depth lines (list-marker-
+ *    stripped, the same way the opening line's own marker already is,
+ *    which is what makes this scan reachable from a bare, blockquote-free
+ *    list item too, per #1894's follow-up fix, not only from inside a
+ *    blockquote). A container-depth change stops collection unconditionally
+ *    -- a block-type hypothesis from a different depth never reaches
+ *    `openingLineStart`.
+ * 2. **Forward, single-pass state tracking** over the collected lines (now
+ *    in document order, oldest first): thread exactly one
+ *    {@link HtmlBlockScanState} through them. Only a `none` state ever
+ *    considers opening a new hypothesis (via {@link specialHtmlBlockCloseToken}
+ *    and {@link isSelfClosedSpecialHtmlBlock} for the special forms, the
+ *    existing `!isHtmlClosingSyntax` guard preserved for the generic
+ *    branch so a lone closing tag like `</div>` still doesn't count as an
+ *    opener); once a state other than `none` is active, only that family's
+ *    own close condition can end it -- nothing else changes it. Returning
+ *    the final state's non-`none`-ness is what resolves the ambiguity a
+ *    single backward short-circuit scan could not: a literal `</script>`
+ *    encountered while `special` is active is never misread as a raw-text
+ *    close, and a blank line encountered while `special` or `raw-text` is
+ *    active never ends it (only `generic` closes on a blank line).
  *
- * A closing tag for a non-raw-text element (e.g. `</div>`) proves nothing on
- * its own and is skipped rather than treated as a boundary or a find.
- *
- * A scanned line's own list-item marker (e.g. `- <script>`) is stripped
- * before testing it against the HTML patterns, the same way the opening
- * line's own marker already is. This affects a caller reachable through a
- * container-depth change (a list nested inside a blockquote; see
- * `findMarkdownBlockBoundary` below) and, since #1894's follow-up fix, a
- * bare, blockquote-free list item too -- `findMarkdownBlockBoundary` now
- * calls this scan at every container depth (via `openingIsParagraph`,
- * which gates its own `isLazyListContinuation` exception the same way it
- * already gated `isLazyQuoteContinuation`), not only inside a blockquote.
- *
- * **Known limitation.** This scan short-circuits on the first close/open
- * signal it finds, so it does not track more than one candidate enclosing
- * block type at once. A line whose literal content merely *resembles* a
- * raw-text closing tag (e.g. `</script>` appearing as plain text inside a
- * still-open, unclosed multi-line HTML comment) is read as a genuine
- * raw-text closer, ending the scan before it can reach the comment's real
- * opener further back -- a bounded backward scan cannot fully disambiguate
- * this without the kind of forward, single-pass block-state tracking the
- * rest of this module does not otherwise need. Tracked as a follow-up
- * (#1895) rather than folded into this pass; since #1894's follow-up fix,
- * this limitation is reachable from a bare, blockquote-free list item too,
- * not only a blockquote -- see #1895 for the current scope of that gap.
+ * **Deliberate side effect.** A stray raw-text-close-shaped line (e.g. a
+ * bare `</script>`) encountered while the state is still `none` -- no raw-
+ * text block open at all -- is now inert rather than ending the scan. This
+ * only changes the observable result when a genuine opener (raw-text,
+ * special, or generic) is reachable further back past the stray closer: the
+ * old scan returned "not enclosed" as soon as it saw the closer, regardless
+ * of state, so it never reached that opener; the new scan correctly
+ * continues past it and finds the still-open block. With no such opener
+ * reachable, both scans agree (nothing was ever open to end). Verified
+ * empirically both ways; covered by the last two cases in
+ * `tests/markdown-code.test.mts`'s #1895 section.
  */
 function isWithinOpenHtmlBlock(text, openingLineStart, containerDepth) {
-  let crossedBlankLine = false;
+  const sameDepthLines = [];
   let lineStart = findPreviousLineStart(text, openingLineStart);
   while (lineStart !== null) {
     const line = lineBounds(text, lineStart);
     const parsed = parseContainerLine(text.slice(lineStart, line.end));
     if (parsed.containerDepth !== containerDepth) {
-      return false;
+      break;
     }
-    if (parsed.content.trim() === '') {
-      crossedBlankLine = true;
-      lineStart = findPreviousLineStart(text, lineStart);
-      continue;
-    }
-    // A list marker (e.g. `- <script>`) is not part of the HTML tag itself;
-    // test the content after it, the same way the opening-line check does.
-    const htmlContent =
-      parseListItemMatch(parsed.content)?.content ?? parsed.content;
-    if (HTML_RAW_TEXT_TAG_CLOSE_PATTERN.test(htmlContent)) {
-      return false;
-    }
-    if (HTML_RAW_TEXT_TAG_OPEN_PATTERN.test(htmlContent)) {
-      return true;
-    }
-    if (
-      !crossedBlankLine &&
-      !isHtmlClosingSyntax(htmlContent) &&
-      !isSelfClosedSpecialHtmlBlock(htmlContent) &&
-      (MARKDOWN_HTML_BLOCK_START_PATTERN.test(htmlContent) ||
-        MARKDOWN_CUSTOM_HTML_BLOCK_START_PATTERN.test(htmlContent))
-    ) {
-      return true;
-    }
+    // Blankness is judged on the container-stripped line as a whole (a
+    // marker-only line like `- ` is not itself a blank line), before a list
+    // marker (e.g. `- <script>`) is stripped for the HTML-pattern tests
+    // below -- stripping first would read that marker-only line's now-empty
+    // remainder as blank, wrongly closing an open `generic` state.
+    sameDepthLines.push({
+      content: parseListItemMatch(parsed.content)?.content ?? parsed.content,
+      isBlank: parsed.content.trim() === '',
+    });
     lineStart = findPreviousLineStart(text, lineStart);
   }
-  return false;
+  sameDepthLines.reverse();
+  let state = { type: 'none' };
+  for (const { content, isBlank } of sameDepthLines) {
+    if (state.type === 'raw-text') {
+      if (HTML_RAW_TEXT_TAG_CLOSE_PATTERN.test(content)) {
+        state = { type: 'none' };
+      }
+      continue;
+    }
+    if (state.type === 'special') {
+      if (content.includes(state.closeToken)) {
+        state = { type: 'none' };
+      }
+      continue;
+    }
+    if (state.type === 'generic') {
+      if (isBlank) {
+        state = { type: 'none' };
+      }
+      continue;
+    }
+    if (isBlank) {
+      continue;
+    }
+    if (HTML_RAW_TEXT_TAG_OPEN_PATTERN.test(content)) {
+      if (!HTML_RAW_TEXT_TAG_CLOSE_PATTERN.test(content)) {
+        state = { type: 'raw-text' };
+      }
+      continue;
+    }
+    const closeToken = specialHtmlBlockCloseToken(content);
+    if (closeToken !== null) {
+      if (!isSelfClosedSpecialHtmlBlock(content)) {
+        state = { type: 'special', closeToken };
+      }
+      continue;
+    }
+    if (
+      !isHtmlClosingSyntax(content) &&
+      (MARKDOWN_HTML_BLOCK_START_PATTERN.test(content) ||
+        MARKDOWN_CUSTOM_HTML_BLOCK_START_PATTERN.test(content))
+    ) {
+      state = { type: 'generic' };
+    }
+  }
+  return state.type !== 'none';
 }
 /**
  * True when `marker` is one of the "genuine", paragraph-interrupting list
@@ -341,6 +372,17 @@ function interruptingListContentIndent(content) {
  * marker, e.g. `10. `, only requires more) -- see {@link parseListItemContainer}.
  */
 const MINIMUM_LIST_CONTENT_INDENT = 2;
+/**
+ * True when `content` (a list-continuation line, container prefix already
+ * stripped) *looks like* a fence marker beyond {@link parseFencedLine}'s own
+ * 0-3 column allowance -- any amount of leading whitespace followed by a
+ * backtick/tilde run. A cheap shape check to gate
+ * {@link findEnclosingListContentIndent}'s real backward/forward scan: most
+ * indented list-continuation lines are ordinary prose, not a fence pushed
+ * past column 3, so testing the shape first avoids paying scan cost on
+ * every one of them (Copilot review finding on PR #1901).
+ */
+const INDENTED_FENCE_MARKER_SHAPE_PATTERN = /^[ \t]*(?:`{3,}|~{3,})/u;
 /**
  * Determine the active list-item content indent enclosing
  * `openingLineStart`, if any -- the list-continuation counterpart, for
@@ -446,16 +488,21 @@ function findEnclosingListContentIndent(
  * first non-whitespace character it meets -- the marker itself -- making any
  * indent this shortcut could return behaviorally equivalent to `null`.
  *
- * Gated on the line's own indentation and a failed bare parse first --
- * {@link findEnclosingListContentIndent}'s backward scan is real work, and
- * the common case (no active list, or a fence already within column 0-3)
- * must not pay for it -- the same concern #1894's PR addressed for
- * {@link isWithinOpenHtmlBlock}'s own backward scan (a Copilot review
- * finding on calling one unconditionally), applied here to this call site.
+ * Gated on the line's own indentation, its shape, and a failed bare parse
+ * first -- {@link findEnclosingListContentIndent}'s backward scan is real
+ * work, and the common case (no active list, a fence already within column
+ * 0-3, or an ordinary indented prose line that merely isn't a fence at all)
+ * must not pay for it. The shape check specifically avoids scanning for
+ * every indented list-continuation line -- most are prose, not a fence
+ * pushed past column 3 (Copilot review finding on PR #1901) -- the same
+ * concern #1894's PR addressed for {@link isWithinOpenHtmlBlock}'s own
+ * backward scan (a Copilot review finding on calling one unconditionally),
+ * applied here to this call site.
  */
 function resolveOpenerListContentIndent(text, lineStart, line, containerLine) {
   if (
     indentationColumns(containerLine.content) < MINIMUM_LIST_CONTENT_INDENT ||
+    !INDENTED_FENCE_MARKER_SHAPE_PATTERN.test(containerLine.content) ||
     parseFencedLine(line) !== null
   ) {
     return null;
