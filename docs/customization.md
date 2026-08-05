@@ -544,6 +544,33 @@ prefer project scripts; use `npx <tool>` only when `npx` is available
 and no relevant script exists; else use `true`. For other tools, use
 `true` when absent.
 
+### Documentation lint compatibility
+
+The **fix-validate**/**pre-push-validate**/**post-fix-validate** example
+commands above run `markdownlint-cli2` and `cspell` against every
+Markdown file, including the imported `.github/instructions/**` and
+`docs/**` bundle. A target repository with no pre-existing documentation
+lint configuration can otherwise pass onboarding `--verify` and still
+fail those commands on the imported files alone. To close that gap, the
+imported file set (see the Step 2 file list in `idd-template/ONBOARDING.md`)
+includes `.markdownlint.yml`, `.markdownlint-cli2.yaml`, and
+`.cspell.config.yml` at the repository root, carrying the rule
+overrides and word list this project's own documentation already needs
+to pass those same commands. Because `markdownlint-cli2`/`cspell`
+auto-discover root config, these files govern the target repository's
+entire Markdown surface once imported, not just the imported IDD
+documentation — expected given the `**`/`**/*.md` scope in the commands
+above, but worth knowing before the repository's own pre-existing
+documentation starts being spell-checked and style-linted too.
+
+This is non-destructive by construction: `idd-onboard.mjs --import`
+already refuses to overwrite an existing target file whose content
+differs unless `--force`, so a repository that already has its own
+`.markdownlint.yml`, `.markdownlint-cli2.yaml`, or `.cspell.config.yml`
+gets that overwrite reported under `blockedOverwrites` instead of a
+silent replacement or a silent gap — merge the template's rule overrides
+or word list into the existing file by hand.
+
 ### Template sync mapping
 
 When this repository is itself the source of a reusable IDD
