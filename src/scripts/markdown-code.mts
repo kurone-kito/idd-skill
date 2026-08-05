@@ -456,14 +456,20 @@ function interruptingListContentIndent(content: string): number | null {
 const MINIMUM_LIST_CONTENT_INDENT = 2;
 
 /**
- * Determine the active list-item content indent (and its opener's own line
- * start, since #1902's review -- used to bound {@link isWithinOpenHtmlBlock}'s
- * backward scan so it cannot reach past this opener into an earlier,
- * unrelated sibling item's content) enclosing `openingLineStart`, if any --
- * the list-continuation counterpart, for {@link findMarkdownBlockBoundary}'s
- * opening line, of {@link isWithinOpenHtmlBlock}'s own backward scan for
- * open HTML blocks. Returns `null` when `openingLineStart` is not inside an
- * active list item's content zone at `containerDepth`.
+ * A list-item content zone: the indent required for a line to continue it,
+ * paired with its opener's own line start (since #1902's review -- used to
+ * bound {@link isWithinOpenHtmlBlock}'s backward scan so it cannot reach
+ * past this opener into an earlier, unrelated sibling item's content).
+ */
+type ListContentZone = { contentIndent: number; openerLineStart: number };
+
+/**
+ * Determine the active list-item content zone enclosing `openingLineStart`,
+ * if any -- the list-continuation counterpart, for
+ * {@link findMarkdownBlockBoundary}'s opening line, of
+ * {@link isWithinOpenHtmlBlock}'s own backward scan for open HTML blocks.
+ * Returns `null` when `openingLineStart` is not inside an active list
+ * item's content zone at `containerDepth`.
  *
  * Phase 1 scans backward for the nearest same-depth list-item opener,
  * bounded only by a container-depth mismatch or a non-blank line whose
@@ -487,9 +493,7 @@ const MINIMUM_LIST_CONTENT_INDENT = 2;
  * earlier, unrelated list (separated only by a single blank line) would
  * wrongly inherit that list's indent.
  */
-type ListContentZone = { contentIndent: number; openerLineStart: number };
-
-function findEnclosingListContentIndent(
+function findEnclosingListContentZone(
   text: string,
   openingLineStart: number,
   containerDepth: number,
@@ -579,7 +583,7 @@ function findMarkdownBlockBoundary(
   );
   const openingEnclosingListZone =
     openingOwnListIndent === null
-      ? findEnclosingListContentIndent(
+      ? findEnclosingListContentZone(
           text,
           openingLineStart,
           openingContainerDepth,
@@ -605,7 +609,7 @@ function findMarkdownBlockBoundary(
       ? null
       : openingOwnListIndent === null
         ? openingEnclosingListZone
-        : findEnclosingListContentIndent(
+        : findEnclosingListContentZone(
             text,
             openingLineStart,
             openingContainerDepth,

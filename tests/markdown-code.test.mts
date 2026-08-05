@@ -328,7 +328,7 @@ test('findMarkdownCodeRanges still ends lazy list continuation at a genuine bloc
 
 test('findMarkdownCodeRanges finds the list opener past a block-start-shaped line still inside its content zone', () => {
   const tick = String.fromCharCode(96);
-  // Copilot review finding on #1894's PR: findEnclosingListContentIndent's
+  // Copilot review finding on #1894's PR: findEnclosingListContentZone's
   // backward scan (Phase 1) must not abort merely because an intermediate
   // line *looks like* a fresh block start (a heading here) -- such a line
   // can still legitimately continue an already-open list item's content

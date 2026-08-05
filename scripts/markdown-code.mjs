@@ -401,11 +401,37 @@ function interruptingListContentIndent(content) {
  * marker, e.g. `10. `, only requires more) -- see {@link parseListItemContainer}.
  */
 const MINIMUM_LIST_CONTENT_INDENT = 2;
-function findEnclosingListContentIndent(
-  text,
-  openingLineStart,
-  containerDepth,
-) {
+/**
+ * Determine the active list-item content zone enclosing `openingLineStart`,
+ * if any -- the list-continuation counterpart, for
+ * {@link findMarkdownBlockBoundary}'s opening line, of
+ * {@link isWithinOpenHtmlBlock}'s own backward scan for open HTML blocks.
+ * Returns `null` when `openingLineStart` is not inside an active list
+ * item's content zone at `containerDepth`.
+ *
+ * Phase 1 scans backward for the nearest same-depth list-item opener,
+ * bounded only by a container-depth mismatch or a non-blank line whose
+ * indentation falls below {@link MINIMUM_LIST_CONTENT_INDENT} (which can
+ * never continue *any* list's content zone, regardless of marker width) --
+ * deliberately not by whether an intermediate line merely *looks like* a
+ * fresh block start (heading/HTML/fence): such a line can still
+ * legitimately sit inside an already-open list item's content zone (the
+ * forward tracker in {@link findIndentedCodeRanges} only ends list state on
+ * an indentation drop or two consecutive blank lines, never on a line's
+ * shape), so aborting on shape alone produced false negatives -- Copilot
+ * review finding on #1894's PR. Phase 2 below is what actually verifies
+ * continuation, with the discovered opener's real indent, not Phase 1.
+ *
+ * Phase 2 verifies every line from that opener through `openingLineStart`
+ * itself continues the list per {@link continuesListContainer}, with the
+ * same two-consecutive-blank-line cutoff {@link findIndentedCodeRanges}
+ * applies (CommonMark ends a list after two blank lines in a row) -- the
+ * opening line must satisfy this too, not only the lines between it and
+ * the opener, or a call whose opening line has nothing to do with an
+ * earlier, unrelated list (separated only by a single blank line) would
+ * wrongly inherit that list's indent.
+ */
+function findEnclosingListContentZone(text, openingLineStart, containerDepth) {
   let openerLineStart = null;
   let openerContentIndent = null;
   let lineStart = findPreviousLineStart(text, openingLineStart);
@@ -486,7 +512,7 @@ function findMarkdownBlockBoundary(text, start, end) {
   );
   const openingEnclosingListZone =
     openingOwnListIndent === null
-      ? findEnclosingListContentIndent(
+      ? findEnclosingListContentZone(
           text,
           openingLineStart,
           openingContainerDepth,
@@ -512,7 +538,7 @@ function findMarkdownBlockBoundary(text, start, end) {
       ? null
       : openingOwnListIndent === null
         ? openingEnclosingListZone
-        : findEnclosingListContentIndent(
+        : findEnclosingListContentZone(
             text,
             openingLineStart,
             openingContainerDepth,
