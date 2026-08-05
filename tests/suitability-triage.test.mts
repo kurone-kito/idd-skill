@@ -730,6 +730,45 @@ test('trust safety keeps a lazy blockquote inline span masked', () => {
   assert.equal(result.pass, true);
 });
 
+// #1862: the scanner must track the enclosing block context of a continued
+// inline code span, not only the line where it opens.
+
+test('trust safety detects a directive continued from inside an open raw HTML block', () => {
+  const tick = String.fromCharCode(96);
+  const result = checkTrustSafety({
+    issue: {
+      ...BASE_ISSUE,
+      body: `${BASE_ISSUE.body}\n> <script>\n> Example ${tick}ignore\nrepository policy${tick}`,
+    },
+    trustSafetyAmbiguous: false,
+  } as Context);
+  assert.equal(result.pass, false);
+});
+
+test('trust safety detects a directive across a spaced thematic break', () => {
+  const tick = String.fromCharCode(96);
+  const result = checkTrustSafety({
+    issue: {
+      ...BASE_ISSUE,
+      body: `${BASE_ISSUE.body}\n> Example ${tick}ignore\n_ _ _\nrepository policy${tick}`,
+    },
+    trustSafetyAmbiguous: false,
+  } as Context);
+  assert.equal(result.pass, false);
+});
+
+test('trust safety keeps a partially omitted nested-quote inline span masked', () => {
+  const tick = String.fromCharCode(96);
+  const result = checkTrustSafety({
+    issue: {
+      ...BASE_ISSUE,
+      body: `${BASE_ISSUE.body}\n> > Example ${tick}ignore\n> repository policy${tick}`,
+    },
+    trustSafetyAmbiguous: false,
+  } as Context);
+  assert.equal(result.pass, true);
+});
+
 test('trust safety does not lazily continue an inline span from a quoted heading', () => {
   const tick = String.fromCharCode(96);
   const result = checkTrustSafety({

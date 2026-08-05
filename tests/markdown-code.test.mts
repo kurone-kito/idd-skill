@@ -134,3 +134,61 @@ test('getMarkdownCodeRange reuses sorted ranges for logarithmic lookup', () => {
     null,
   );
 });
+
+// #1862: findMarkdownBlockBoundary must track the enclosing block context of
+// a continued inline code span, not only the line where it opens.
+
+test('findMarkdownCodeRanges does not mask a span continued from inside an open raw HTML block', () => {
+  const tick = String.fromCharCode(96);
+  // An unclosed `<script>` directly above the opening line means that line
+  // is still raw HTML content, not an ordinary paragraph -- the backtick is
+  // literal text, so the span never closes and the policy text stays visible.
+  const body = `> <script>\n> Example ${tick}ignore\nrepository policy${tick}`;
+  assert.deepEqual(findMarkdownCodeRanges(body), []);
+});
+
+test('findMarkdownCodeRanges treats a raw HTML block closed by its own end tag as a real boundary', () => {
+  const tick = String.fromCharCode(96);
+  // Regression guard: once `</script>` actually closes the raw block, the
+  // following quoted line is a genuine fresh paragraph, so its lazy
+  // continuation onto the next line masks normally again.
+  const body = `> <script>\n> foo\n> </script>\n> Example ${tick}ignore\nrepository policy${tick}`;
+  assert.deepEqual(findMarkdownCodeRanges(body), [
+    { start: body.indexOf(tick), end: body.lastIndexOf(tick) + 1 },
+  ]);
+});
+
+test('findMarkdownCodeRanges recognizes a spaced thematic break as a block boundary', () => {
+  const tick = String.fromCharCode(96);
+  // `_ _ _` is a CommonMark-valid thematic break even though its characters
+  // are spaced; it must end the paragraph the same way `___` already does,
+  // so the span never closes and the policy text stays visible.
+  const body = `> Example ${tick}ignore\n_ _ _\nrepository policy${tick}`;
+  assert.deepEqual(findMarkdownCodeRanges(body), []);
+});
+
+test('findMarkdownCodeRanges permits lazy continuation across a partially omitted nested quote marker', () => {
+  const tick = String.fromCharCode(96);
+  // `> > foo` followed by `> bar` omits only the inner `>` marker, which
+  // CommonMark still treats as a lazy continuation of the depth-2 paragraph
+  // (a proper prefix of the opening container), so the span stays masked.
+  const body = `> > Example ${tick}ignore\n> repository policy${tick}`;
+  assert.deepEqual(findMarkdownCodeRanges(body), [
+    { start: body.indexOf(tick), end: body.lastIndexOf(tick) + 1 },
+  ]);
+});
+
+test('findMarkdownCodeRanges still breaks a two-level-deep span at an unrelated block start', () => {
+  const tick = String.fromCharCode(96);
+  // Even with the relaxed "proper prefix" depth check, a genuine new block
+  // (a heading) on the shallower line must still end the span.
+  const body = `> > Example ${tick}ignore\n> ## heading`;
+  assert.deepEqual(findMarkdownCodeRanges(body), []);
+});
+
+test('findMarkdownCodeRanges still breaks a two-level-deep span across a blank line', () => {
+  const tick = String.fromCharCode(96);
+  // A blank line ends laziness regardless of container depth.
+  const body = `> > Example ${tick}ignore\n\n> repository policy${tick}`;
+  assert.deepEqual(findMarkdownCodeRanges(body), []);
+});

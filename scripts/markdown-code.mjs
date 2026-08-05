@@ -121,6 +121,31 @@ const MARKDOWN_HTML_BLOCK_START_PATTERN =
   /^ {0,3}(?:<!--|<\?|<![A-Z]|<!\[CDATA\[|<\/?(?:address|article|aside|base|basefont|blockquote|body|caption|center|col|colgroup|dd|details|dialog|dir|div|dl|dt|fieldset|figcaption|figure|footer|form|h[1-6]|head|header|hr|html|iframe|legend|li|link|main|menu|menuitem|nav|ol|p|pre|script|section|style|summary|table|tbody|td|textarea|tfoot|th|thead|title|tr|track|ul)(?:[ \t]|\/?>|$))/iu;
 const MARKDOWN_CUSTOM_HTML_BLOCK_START_PATTERN =
   /^ {0,3}<\/?[A-Za-z][A-Za-z0-9-]*(?:[ \t]+[^<>]*?)?[ \t]*\/?>/u;
+// CommonMark §4.1: a thematic break is 3+ matching -, _, or * characters,
+// each optionally followed by spaces/tabs -- interior spacing is allowed
+// (e.g. `_ _ _`), unlike the tightly-packed run already covered above.
+const MARKDOWN_THEMATIC_BREAK_PATTERN =
+  /^ {0,3}([-_*])(?:[ \t]*\1){2,}[ \t]*$/u;
+// CommonMark type-1 raw-text HTML elements (script/pre/style/textarea) only
+// end at a line containing their matching closing tag -- unlike the other
+// HTML block types, a blank line does not close them.
+const HTML_RAW_TEXT_TAG_CLOSE_PATTERN = /<\/(?:script|pre|style|textarea)\b/iu;
+/**
+ * True when `content` (a line with any blockquote/list container prefix
+ * already stripped) starts a new Markdown block -- either the fixed-form
+ * patterns above, or a thematic break whose repeated marker characters are
+ * separated by spaces or tabs.
+ */
+function isMarkdownBlockStart(content) {
+  return (
+    MARKDOWN_BLOCK_CONTENT_PATTERN.test(content) ||
+    MARKDOWN_THEMATIC_BREAK_PATTERN.test(content)
+  );
+}
+/** True when `content` opens with an HTML closing-tag slash (`</tag>`). */
+function isHtmlClosingSyntax(content) {
+  return /^ {0,3}<\//u.test(content);
+}
 function lineBounds(text, lineStart) {
   const newlineIndex = text.indexOf('\n', lineStart);
   const end =
@@ -134,6 +159,63 @@ function lineBounds(text, lineStart) {
     next: newlineIndex === -1 ? text.length : newlineIndex + 1,
   };
 }
+/**
+ * Find the start offset of the line immediately before `lineStart`, or
+ * `null` when `lineStart` is already the first line of `text`.
+ */
+function findPreviousLineStart(text, lineStart) {
+  if (lineStart <= 0) {
+    return null;
+  }
+  const terminatorIndex = lineStart - 1;
+  if (terminatorIndex === 0) {
+    return 0;
+  }
+  const priorNewline = text.lastIndexOf('\n', terminatorIndex - 1);
+  return priorNewline === -1 ? 0 : priorNewline + 1;
+}
+/**
+ * True when the line at `openingLineStart` is still inside a raw or custom
+ * HTML block opened on an earlier line at the same container depth (for
+ * example, an unclosed `<script>` directly above a quoted paragraph) -- so it
+ * must not be mistaken for an ordinary paragraph line. Scans backward
+ * through consecutive, non-blank, same-depth lines: a blank line or a
+ * container-depth change ends the search (not enclosed); a raw-text tag's
+ * matching closing line (`</script>` etc.) ends it too, since that block
+ * type only closes on a matching end tag. A closing tag for any other
+ * element (e.g. `</div>`) proves nothing on its own -- CommonMark's other
+ * HTML block types close only at a blank line -- so it is skipped rather
+ * than treated as a boundary or a find.
+ */
+function isWithinOpenHtmlBlock(text, openingLineStart, containerDepth) {
+  let lineStart = findPreviousLineStart(text, openingLineStart);
+  while (lineStart !== null) {
+    const line = lineBounds(text, lineStart);
+    const parsed = parseContainerLine(text.slice(lineStart, line.end));
+    if (
+      parsed.containerDepth !== containerDepth ||
+      parsed.content.trim() === ''
+    ) {
+      return false;
+    }
+    if (HTML_RAW_TEXT_TAG_CLOSE_PATTERN.test(parsed.content)) {
+      return false;
+    }
+    if (!isHtmlClosingSyntax(parsed.content)) {
+      if (
+        MARKDOWN_HTML_BLOCK_START_PATTERN.test(parsed.content) ||
+        MARKDOWN_CUSTOM_HTML_BLOCK_START_PATTERN.test(parsed.content)
+      ) {
+        return true;
+      }
+      if (isMarkdownBlockStart(parsed.content)) {
+        return false;
+      }
+    }
+    lineStart = findPreviousLineStart(text, lineStart);
+  }
+  return false;
+}
 function findMarkdownBlockBoundary(text, start, end) {
   const openingLineStart = text.lastIndexOf('\n', start - 1) + 1;
   const openingLine = lineBounds(text, openingLineStart);
@@ -143,28 +225,32 @@ function findMarkdownBlockBoundary(text, start, end) {
   const openingParagraphContent =
     openingListItem?.content ?? openingParsed.content;
   const openingFence = parseFencedLine(openingRawLine);
+  const openingContainerDepth = openingParsed.containerDepth;
   const openingIsParagraph =
-    !MARKDOWN_BLOCK_CONTENT_PATTERN.test(openingParagraphContent) &&
+    !isMarkdownBlockStart(openingParagraphContent) &&
     !MARKDOWN_HTML_BLOCK_START_PATTERN.test(openingParagraphContent) &&
     !MARKDOWN_CUSTOM_HTML_BLOCK_START_PATTERN.test(openingParagraphContent) &&
-    (openingFence === null || !isValidFenceOpener(openingFence));
-  const openingContainerDepth = openingParsed.containerDepth;
+    (openingFence === null || !isValidFenceOpener(openingFence)) &&
+    !isWithinOpenHtmlBlock(text, openingLineStart, openingContainerDepth);
   let lineStart = openingLine.next;
   while (lineStart < end) {
     const line = lineBounds(text, lineStart);
     const parsed = parseContainerLine(text.slice(lineStart, line.end));
     const fencedLine = parseFencedLine(text.slice(lineStart, line.end));
     const isBlockStart =
-      MARKDOWN_BLOCK_CONTENT_PATTERN.test(parsed.content) ||
+      isMarkdownBlockStart(parsed.content) ||
       MARKDOWN_HTML_BLOCK_START_PATTERN.test(parsed.content) ||
       MARKDOWN_CUSTOM_HTML_BLOCK_START_PATTERN.test(parsed.content) ||
       (fencedLine !== null && isValidFenceOpener(fencedLine));
     if (parsed.containerDepth !== openingContainerDepth) {
-      // A quote marker may continue an inline span only when it belongs to
-      // the same container. A quote that starts or ends here is a block break.
+      // A quote marker may continue an inline span while it stays a proper
+      // prefix of the opening container -- CommonMark laziness permits
+      // omitting any number of trailing `>` markers, not only all of them.
+      // A quote that goes deeper, or a line that starts a new block, is a
+      // real break.
       const isLazyQuoteContinuation =
         openingContainerDepth > 0 &&
-        parsed.containerDepth === 0 &&
+        parsed.containerDepth < openingContainerDepth &&
         openingIsParagraph &&
         !isBlockStart;
       if (
