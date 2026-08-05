@@ -135,9 +135,10 @@ const HTML_RAW_TEXT_TAG_CLOSE_PATTERNS = {
   textarea: /<\/textarea\b/iu,
 };
 /**
- * The raw-text tag `content` opens (one of {@link HtmlRawTextTag}'s four
- * members), lower-cased for use as a {@link HTML_RAW_TEXT_TAG_CLOSE_PATTERNS}
- * key, or `null` when `content` does not open a raw-text element.
+ * The raw-text tag that `content` opens (one of {@link HtmlRawTextTag}'s
+ * four members), lower-cased for use as a
+ * {@link HTML_RAW_TEXT_TAG_CLOSE_PATTERNS} key, or `null` when `content`
+ * does not open a raw-text element.
  */
 function rawTextOpenTag(content) {
   const match = HTML_RAW_TEXT_TAG_OPEN_PATTERN.exec(content);
