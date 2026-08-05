@@ -369,6 +369,38 @@ test('prReferencesIssue: matches via closingIssuesReferences', () => {
   );
 });
 
+test('prReferencesIssue: matches via a raw { number } object entry (Copilot review finding, PR #1886)', () => {
+  // gh pr view --json closingIssuesReferences actually returns an array of
+  // { number, ... } objects, not raw numbers -- confirmed empirically. A
+  // caller that ever passes that unnormalized shape straight through must
+  // still match, not silently degrade to "no reference".
+  assert.equal(
+    prReferencesIssue(
+      {
+        closingIssuesReferences: [{ number: 1862 }],
+        title: '',
+        body: '',
+      },
+      1862,
+    ),
+    true,
+  );
+});
+
+test('prReferencesIssue: a { number } object entry with a different number still does not match', () => {
+  assert.equal(
+    prReferencesIssue(
+      {
+        closingIssuesReferences: [{ number: 9999 }],
+        title: '',
+        body: '',
+      },
+      1862,
+    ),
+    false,
+  );
+});
+
 test('prReferencesIssue: matches a plain "#1862" in the title', () => {
   assert.equal(
     prReferencesIssue(

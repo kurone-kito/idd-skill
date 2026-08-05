@@ -200,7 +200,22 @@ export function prReferencesIssue(
   const closing = Array.isArray(pr.closingIssuesReferences)
     ? pr.closingIssuesReferences
     : [];
-  if (closing.some((entry) => Number(entry) === issueNumber)) {
+  // Copilot review finding on PR #1886: accept both a raw number entry
+  // (the shape suitability-triage.mts's own caller already normalizes to
+  // before calling this function) and a raw `{ number }` object entry (the
+  // shape `gh pr view --json closingIssuesReferences` itself actually
+  // returns, confirmed empirically) -- `Number({ number: 1862 })` alone
+  // evaluates to `NaN` and would silently degrade a true match to "no
+  // reference" if a future caller ever passed the unnormalized `gh`
+  // payload straight through.
+  if (
+    closing.some((entry) => {
+      if (entry !== null && typeof entry === 'object') {
+        return Number((entry as { number?: unknown }).number) === issueNumber;
+      }
+      return Number(entry) === issueNumber;
+    })
+  ) {
     return true;
   }
   const pattern = new RegExp(`#${issueNumber}\\b`);
