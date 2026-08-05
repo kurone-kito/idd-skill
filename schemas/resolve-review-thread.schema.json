@@ -28,7 +28,7 @@
     },
     "alreadyResolved": {
       "type": "boolean",
-      "description": "Whether the owning review thread was already resolved before apply mode."
+      "description": "Whether the owning review thread was already resolved at inspection time, in either dry-run or apply mode."
     },
     "status": {
       "type": "string",
