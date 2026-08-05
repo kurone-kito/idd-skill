@@ -476,3 +476,21 @@ test('findMarkdownCodeRanges masks normally once a same-line self-closed raw-tex
     { start: body.indexOf(tick), end: body.lastIndexOf(tick) + 1 },
   ]);
 });
+
+test('findMarkdownCodeRanges matches the opened raw-text tag case-insensitively', () => {
+  const tick = String.fromCharCode(96);
+  // The opened tag is captured and lower-cased before being used as a
+  // HTML_RAW_TEXT_TAG_CLOSE_PATTERNS key -- verify that bridging holds for a
+  // mixed-case open and close, and that a mismatched close (still wrong
+  // regardless of case) does not end tracking early.
+  const body = `> <SCRIPT>\n> mentions </Style> as text\n> Example ${tick}ignore\nrepository policy${tick}`;
+  assert.deepEqual(findMarkdownCodeRanges(body), []);
+});
+
+test('findMarkdownCodeRanges keeps an open textarea block enclosing a line that merely resembles a pre closer', () => {
+  const tick = String.fromCharCode(96);
+  // Same bug, a different tag pair: the fix must not be script/style-specific
+  // -- any mismatched pair among the four raw-text tags must fail to close.
+  const body = `> <textarea>\n> mentions </pre> as text\n> Example ${tick}ignore\nrepository policy${tick}`;
+  assert.deepEqual(findMarkdownCodeRanges(body), []);
+});
