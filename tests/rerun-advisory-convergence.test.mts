@@ -929,6 +929,54 @@ test('does not offer a recovery-refresh plan when a genuine rerun-eligible insta
   assert.equal(plan.recoveryRefreshCaveat, '');
 });
 
+// Regression (#1806 E2 critique pass): a live-coverage-recovered instance
+// (classified rerun-eligible instead of awaiting-fresh-review) is a genuine
+// rerun-eligible instance for rule 1's purposes too -- when ITS OWN
+// runAttempt already exhausted the rerun-once budget, it must suppress
+// recoveryRefreshPlan for the whole rollup exactly the same way any other
+// budget-held rerun-eligible instance already does (see the "genuine
+// rerun-eligible instance already exists" test above), even though the
+// instance came from the #1806 recovery path rather than an ordinary
+// terminal failure. This locks in that the widened classification path does
+// not accidentally create a second, looser rule.
+test('#1806: a budget-exhausted live-coverage-recovered instance still suppresses recovery-refresh (rule 1 applies uniformly)', () => {
+  const plan = computeRerunPlan(
+    baseInput({
+      instances: [
+        baseInstance({
+          checkRunId: 'gated',
+          runId: '7001',
+          conclusion: 'action_required',
+        }),
+        baseInstance({
+          checkRunId: 'passing',
+          runId: '7002',
+          conclusion: 'success',
+          startedAt: '2026-07-16T11:00:00Z',
+        }),
+        baseInstance({
+          checkRunId: 'recovered',
+          runId: '7003',
+          conclusion: 'failure',
+          runAttempt: 2, // already used its one rerun-once budget
+          verdictReasons: [UNCOVERED_HEAD_HISTORICAL_REASON],
+        }),
+      ],
+    }),
+    baseOptions({ headCoverageSatisfied: true }),
+  );
+  // The recovered instance itself is classified rerun-eligible...
+  const recovered = plan.instances.find((i) => i.checkRunId === 'recovered');
+  assert.equal(recovered?.classification, 'rerun-eligible');
+  // ...but its own budget-exhaustion withholds it from `plan`...
+  assert.equal(recovered?.rerunBudgetHeld, true);
+  assert.equal(plan.plan.length, 0);
+  // ...and, per rule 1, that held-but-eligible instance suppresses
+  // recoveryRefreshPlan for the whole rollup, same as the pre-#1806 case.
+  assert.deepEqual(plan.recoveryRefreshPlan, []);
+  assert.notEqual(plan.rerunPolicyHoldNotice, '');
+});
+
 // Regression (#1745 Codex review on this same PR, P2): a bot-triggered
 // rerun-eligible instance (e.g. a CANCELLED sibling, narrowed out of
 // bot-gated-skip by this same PR) does NOT itself supply the "fresh

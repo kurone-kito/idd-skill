@@ -566,6 +566,22 @@ export function computeRerunPlan(
   //    own rerun already IS the needed non-bot trigger). Vacuously `true`
   //    when there is nothing in `plan` to begin with, preserving the
   //    original bot-gated-only case unchanged.
+  //
+  // #1806 interaction (intentional): a live-coverage-recovered instance
+  // (classified `rerun-eligible` instead of `awaiting-fresh-review` --
+  // see `classifyInstance`'s uncovered-HEAD step) enters `eligibleInstances`
+  // like any other rerun-eligible instance. If ITS OWN `runAttempt` already
+  // exhausted the rerun-once budget, rule 1 above applies to it exactly the
+  // same way it already applies to any other budget-held eligible instance:
+  // `anyEligibleHeld` becomes `true` and `recoveryRefreshPlan` is withheld
+  // for the WHOLE rollup, even when a separate, still-genuinely-stuck
+  // `bot-gated-skip` sibling exists. This is not a #1806-specific carve-out
+  // -- #1806 only widens which instances CAN reach `eligibleInstances` in
+  // the first place; rule 1's own boundary (a human must look at a
+  // budget-exhausted eligible instance rather than have the tool silently
+  // route around it via a different instance's rerun) applies uniformly
+  // once an instance is there, regardless of how it got classified
+  // `rerun-eligible`. See the "budget-exhausted recovered instance" test.
   const anyEligibleHeld = eligibleInstances.some(
     (instance) =>
       eligibleDecisions.get(instance.checkRunId)?.action !== 'rerun',
