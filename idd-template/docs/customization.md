@@ -547,9 +547,10 @@ and no relevant script exists; else use `true`. For other tools, use
 ### Documentation lint compatibility
 
 The **fix-validate**/**pre-push-validate**/**post-fix-validate** example
-commands above run `markdownlint-cli2` and `cspell` against every
-Markdown file, including the imported `.github/instructions/**` and
-`docs/**` bundle. A target repository with no pre-existing documentation
+commands above run `markdownlint-cli2` (`**/*.md`, Markdown files only)
+and `cspell` (`**`, every file the working tree contains) against the
+imported `.github/instructions/**` and `docs/**` bundle among everything
+else. A target repository with no pre-existing documentation
 lint configuration can otherwise pass onboarding `--verify` and still
 fail those commands on the imported files alone. To close that gap, the
 imported file set (see the Step 2 file list in `idd-template/ONBOARDING.md`)

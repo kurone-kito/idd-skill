@@ -2063,23 +2063,6 @@ const CSPELL_BIN = join(REPO_ROOT, 'node_modules', '.bin', 'cspell');
 const LINT_BINARIES_INSTALLED =
   existsSync(MARKDOWNLINT_BIN) && existsSync(CSPELL_BIN);
 
-/** Count every `*.md` file under `root`, recursively. */
-function countMarkdownFiles(root: string): number {
-  let count = 0;
-  const walk = (dir: string): void => {
-    for (const entry of readdirSync(dir, { withFileTypes: true })) {
-      const absolute = join(dir, entry.name);
-      if (entry.isDirectory()) {
-        walk(absolute);
-      } else if (entry.isFile() && entry.name.endsWith('.md')) {
-        count += 1;
-      }
-    }
-  };
-  walk(root);
-  return count;
-}
-
 test('a real import + substitute produces a doc tree that passes the documented markdownlint/cspell commands with full file coverage (idd-skill#1860)', (t) => {
   if (!LINT_BINARIES_INSTALLED) {
     // Expected on the bare-node lane (lint.yml), which runs this suite with
@@ -2149,6 +2132,15 @@ test('a real import + substitute produces a doc tree that passes the documented 
   // scanning .github/instructions/** -- assert real coverage instead of
   // trusting the exit code alone. cspell prints its summary line to
   // stderr, not stdout.
+  //
+  // Compare against the import plan's own entry count, not a Markdown-only
+  // file count (idd-skill#1875 review): `cspell lint "**"` scans every
+  // file type, not just `*.md`, so a Markdown-only count could still pass
+  // this assertion even with .github/instructions/**'s Markdown files
+  // silently never scanned, as long as enough non-Markdown files padded the
+  // total. The import plan's entry count has no such gap -- it is exactly
+  // the file count cspell should see if it examined everything --import
+  // wrote.
   const cspellOutput = `${cspellResult.stdout}${cspellResult.stderr}`;
   const filesCheckedMatch = /Files checked:\s*(\d+)/u.exec(cspellOutput);
   assert.ok(
@@ -2156,9 +2148,9 @@ test('a real import + substitute produces a doc tree that passes the documented 
     `could not find a "Files checked" count in cspell output:\n${cspellOutput}`,
   );
   const filesChecked = Number(filesCheckedMatch[1]);
-  const markdownFileCount = countMarkdownFiles(targetRoot);
+  const importedFileCount = (imported.verdict.plan as unknown[]).length;
   assert.ok(
-    filesChecked >= markdownFileCount,
-    `cspell only checked ${filesChecked} files, fewer than the ${markdownFileCount} imported Markdown files -- enableGlobDot may have regressed`,
+    filesChecked >= importedFileCount,
+    `cspell only checked ${filesChecked} files, fewer than the ${importedFileCount} files --import wrote -- enableGlobDot may have regressed`,
   );
 });

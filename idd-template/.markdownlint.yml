@@ -23,6 +23,7 @@ no-inline-html:
 # level-1 heading alongside the page's own `# H1`. The default pattern
 # (`^\s*title\s*[:=]`) matches both, firing
 # `MD025/single-title/single-h1 Multiple top-level headings` on every
-# conforming OKF page. See docs/okf-frontmatter.md.
+# conforming OKF page. See
+# docs/customization.md#docs-bundle-frontmatter-convention-okf.
 single-title:
   front_matter_title: ""
