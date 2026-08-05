@@ -169,17 +169,30 @@ export function findCandidateFileOverlap(
 }
 
 /**
- * Word-bounded `#<issueNumber>` cross-reference test (#1878), matched
- * against a merged PR's `closingIssuesReferences` connection first, falling
- * back to a plain regex scan of `title`/`body`. `\b` after the digits
- * rejects a longer number sharing the same prefix (`#18620` does not match
- * `issueNumber: 1862`, since two digits share no word boundary), while still
- * matching every form the issue names: `#1862`, `Refs #1862`,
- * `Closes #1862`. Deliberately does not mask markdown code regions first
- * (unlike `checkDuplicateOrSuperseded`'s own free-text declaration scan) --
- * the issue pins a plain substring/regex check with no masking step, and a
- * `#<number>` cross-reference inside a code span or fence is not a realistic
- * false-positive vector for this specific pattern.
+ * Closing-keyword-adjacent `#<issueNumber>` cross-reference test (#1878;
+ * narrowed by #1888), matched against a merged PR's
+ * `closingIssuesReferences` connection first, falling back to a regex scan
+ * of `title`/`body`. That regex scan **requires** a recognized GitHub
+ * closing keyword (`close(s|d)?`, `fix(es|ed)?`, `resolve(s|d)?`,
+ * case-insensitive) immediately before the reference, separated only by
+ * whitespace -- the same grammar `idd-pr-submit.instructions.md`'s D3.5
+ * step already documents for closing-keyword detection
+ * (`\b(close[sd]?|fix(e[sd])?|resolve[sd]?)\s+#<N>\b`). A bare `#<n>`
+ * mention with no adjacent closing keyword no longer counts as a reference:
+ * PR #1886 (closes only #1878) bare-mentioned "#1862" once as a narrative
+ * reproduction-example citation ("observed live: issue #1862 vs. merged PR
+ * #1864...") rather than declaring it implements #1862, which the prior
+ * unconditional bare-mention fallback (#1878) wrongly treated as evidence
+ * PR #1886 itself superseded #1862. `\b` after the digits still rejects a
+ * longer number sharing the same prefix (`Closes #18620` does not match
+ * `issueNumber: 1862`), and the mandatory `\s+` between keyword and `#`
+ * means a keyword glued directly to the reference (`closes#1862`, no
+ * whitespace) does not match either. Deliberately does not mask markdown
+ * code regions first (unlike `checkDuplicateOrSuperseded`'s own free-text
+ * declaration scan) -- the issue pins a plain substring/regex check with no
+ * masking step, and a closing-keyword-adjacent cross-reference inside a
+ * code span or fence is not a realistic false-positive vector for this
+ * specific pattern.
  *
  * Defensive against a malformed `pr` shape the same way the rest of this
  * kernel is: a non-array `closingIssuesReferences` or non-string
@@ -218,19 +231,24 @@ export function prReferencesIssue(
   ) {
     return true;
   }
-  // Copilot review finding on PR #1886: a trailing `\b` alone only rejects
-  // a longer number sharing the digit prefix (`#18620` vs `1862`) -- it
-  // does NOT reject a word character immediately before `#` (`\b` requires
-  // one side `\w`, so `\b#` would require a `\w` before `#`, the opposite
-  // of what's needed here). `foo#1862` matched with only a trailing `\b`,
-  // which is not "word-bounded" as the issue's algorithm describes and
-  // could reintroduce a false positive from an incidental substring in a
-  // PR title/body. `(?<!\w)` requires the character immediately before `#`
-  // (if any) to NOT be a word character, rejecting `foo#1862` while still
-  // matching every legitimate form (start-of-string, whitespace, or
-  // punctuation before `#`: `#1862`, `Refs #1862`, `Closes #1862`,
-  // `(#1862)`).
-  const pattern = new RegExp(`(?<!\\w)#${issueNumber}\\b`);
+  // #1888: narrowed from a bare `#<n>` scan (#1878) to require a
+  // recognized GitHub closing keyword immediately before the reference --
+  // "this PR references that issue as background/example context" is no
+  // longer treated the same as "this PR implements that issue's own
+  // deliverable". `\b` before the keyword group rejects a keyword glued to
+  // a longer word (`Autoclose` does not match `close`), the mandatory
+  // `\s+` requires at least one whitespace character between the keyword
+  // and `#` (rejecting both a keyword glued directly to the reference,
+  // e.g. `closes#1862`, and the #1878 `foo#1862` word-glued-`#` case --
+  // whitespace is never a word character, so nothing word-glued can
+  // precede `#` here), and the trailing `\b` still rejects a longer number
+  // sharing the same digit prefix (`Closes #18620` does not match
+  // `issueNumber: 1862`). Case-insensitive so `Closes`, `closes`, `CLOSES`,
+  // etc. all match.
+  const pattern = new RegExp(
+    `\\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\\s+#${issueNumber}\\b`,
+    'i',
+  );
   const title = typeof pr.title === 'string' ? pr.title : '';
   const body = typeof pr.body === 'string' ? pr.body : '';
   return pattern.test(title) || pattern.test(body);

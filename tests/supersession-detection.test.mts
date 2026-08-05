@@ -302,7 +302,14 @@ test('evaluateHighConfidenceDuplicate: true positive preserved via closingIssues
   assert.match(result?.evidence ?? '', /references issue #1862/);
 });
 
-test('evaluateHighConfidenceDuplicate: true positive preserved via a title/body #<number> cross-reference', () => {
+test('evaluateHighConfidenceDuplicate: true positive preserved via a title/body closing-keyword cross-reference (#1888)', () => {
+  // #1888 acceptance criterion 2: a closing-keyword mention (e.g.
+  // "Fixes #<B>") without closingIssuesReferences coverage still fails
+  // Check 4 as high-confidence. Prior to #1888 this test used a bare
+  // "Refs #1862" body, which the #1888 narrowing now correctly treats as
+  // NOT a reference (see the dedicated bare-mention test below) -- this
+  // slot is repurposed to a genuine closing-keyword form instead of just
+  // flipping the old assertion, so it still exercises a true positive.
   const result = evaluateHighConfidenceDuplicate(
     {
       closedByMergedPrNumbers: [],
@@ -315,7 +322,7 @@ test('evaluateHighConfidenceDuplicate: true positive preserved via a title/body 
           files: ['scripts/target.mjs'],
           closingIssuesReferences: [],
           title: 'fix: address feedback',
-          body: 'Refs #1862 for background.',
+          body: 'Fixes #1862 for the shared behavior.',
         },
       ],
     },
@@ -323,6 +330,37 @@ test('evaluateHighConfidenceDuplicate: true positive preserved via a title/body 
   );
   assert.equal(result?.pass, false);
   assert.match(result?.evidence ?? '', /#2001/);
+});
+
+test('evaluateHighConfidenceDuplicate: a bare "#<n>" citation with no closing keyword is not a hit (#1888; #1862 vs PR #1886 shape)', () => {
+  // #1888 acceptance criterion 1: reproduces the live false positive --
+  // merged PR #1886 closes only #1878, but its body bare-cites #1862 once
+  // as a narrative reproduction-example ("observed live: issue #1862 vs.
+  // merged PR #1864...") while also overlapping #1862's own declared
+  // candidate file. Before #1888, condition (b)'s unconditional bare-
+  // mention fallback treated that citation alone as evidence PR #1886
+  // superseded #1862; the narrowed regex requires an adjacent closing
+  // keyword, which this citation never had, so the verdict must now be
+  // `null` (falls through to the caller's weak heuristic), not a hit.
+  const result = evaluateHighConfidenceDuplicate(
+    {
+      closedByMergedPrNumbers: [],
+      candidateFiles: ['tests/suitability-triage.test.mts'],
+      highContentionFiles: [],
+      mergedPrs: [
+        {
+          number: 1886,
+          mergedAt: '2026-08-05T00:00:00Z',
+          files: ['tests/suitability-triage.test.mts'],
+          closingIssuesReferences: [1878],
+          title: "fix(suitability-triage): Check 4's bare-mention condition",
+          body: 'observed live: issue #1862 vs. merged PR #1864 reproduced the Check 4 bug this PR fixes.',
+        },
+      ],
+    },
+    1862,
+  );
+  assert.equal(result, null);
 });
 
 test('evaluateHighConfidenceDuplicate: scan continues past a non-qualifying overlap to a later qualifying PR', () => {
@@ -404,13 +442,17 @@ test('prReferencesIssue: a { number } object entry with a different number still
   );
 });
 
-test('prReferencesIssue: matches a plain "#1862" in the title', () => {
+test('prReferencesIssue: a bare "#1862" in the title with no closing keyword does not match (#1888)', () => {
+  // #1888: prior to this fix, any bare "#<n>" mention matched
+  // unconditionally (#1878) -- "Refs #1862" cites the issue without
+  // declaring the PR implements it, and must no longer count as a
+  // reference.
   assert.equal(
     prReferencesIssue(
       { closingIssuesReferences: [], title: 'Refs #1862', body: '' },
       1862,
     ),
-    true,
+    false,
   );
 });
 
@@ -424,33 +466,86 @@ test('prReferencesIssue: matches "Closes #1862" in the body', () => {
   );
 });
 
-test('prReferencesIssue: word-boundary rejects a longer number sharing the same prefix', () => {
-  // "#18620" must not match candidate 1862 -- there is no word boundary
-  // between two digits.
+test('prReferencesIssue: matches every recognized closing keyword, case-insensitively and in past tense (#1888)', () => {
+  for (const body of [
+    'Closes #1862',
+    'closes #1862',
+    'CLOSES #1862',
+    'Close #1862',
+    'closed #1862',
+    'Fixes #1862',
+    'fix #1862',
+    'FIXED #1862',
+    'Resolves #1862',
+    'resolve #1862',
+    'RESOLVED #1862',
+  ]) {
+    assert.equal(
+      prReferencesIssue({ closingIssuesReferences: [], title: '', body }, 1862),
+      true,
+      `expected a match for body: ${body}`,
+    );
+  }
+});
+
+test('prReferencesIssue: word-boundary rejects a longer number sharing the same prefix (#1888: keyword-adjacent form)', () => {
+  // "Closes #18620" must not match candidate 1862 -- there is no word
+  // boundary between two digits. Uses a closing-keyword form (#1888)
+  // instead of the pre-#1888 bare "Refs #18620", since a bare mention no
+  // longer matches for an unrelated reason (absent keyword) and would no
+  // longer exercise this specific digit-boundary regression.
   assert.equal(
     prReferencesIssue(
-      { closingIssuesReferences: [], title: 'Refs #18620', body: '' },
+      { closingIssuesReferences: [], title: 'Closes #18620', body: '' },
       1862,
     ),
     false,
   );
 });
 
-test('prReferencesIssue: word-boundary rejects a "#" immediately preceded by a word character (Copilot review finding, PR #1886)', () => {
-  // "foo#1862" must not match -- a trailing \b alone doesn't reject a word
-  // character directly before "#"; a genuine cross-reference needs no word
-  // character immediately preceding it either.
+test('prReferencesIssue: a keyword glued directly to "#" with no whitespace does not match (#1888)', () => {
+  // "closes#1862" must not match -- the narrowed regex requires at least
+  // one whitespace character between the closing keyword and the "#"
+  // reference (matching GitHub's own closing-reference grammar), so a
+  // keyword-glued reference is rejected the same way the pre-#1888 fix
+  // rejected a word character glued directly before "#" (Copilot review
+  // finding, PR #1886).
   assert.equal(
     prReferencesIssue(
-      { closingIssuesReferences: [], title: 'foo#1862', body: '' },
+      { closingIssuesReferences: [], title: 'closes#1862', body: '' },
       1862,
     ),
     false,
   );
 });
 
-test('prReferencesIssue: still matches every legitimate cross-reference form after the leading-boundary fix', () => {
-  for (const body of ['#1862', 'Refs #1862', 'Closes #1862', '(#1862)']) {
+test('prReferencesIssue: bare/non-keyword cross-reference forms no longer match (#1888)', () => {
+  // Every form here matched unconditionally before #1888 (#1878's
+  // unconditional bare-mention fallback); none has a closing keyword
+  // immediately adjacent to the "#1862" reference, so none should match
+  // after the #1888 narrowing.
+  for (const body of [
+    '#1862',
+    'Refs #1862',
+    '(#1862)',
+    'See #1862',
+    'closing #1862',
+  ]) {
+    assert.equal(
+      prReferencesIssue({ closingIssuesReferences: [], title: '', body }, 1862),
+      false,
+      `expected no match for body: ${body}`,
+    );
+  }
+});
+
+test('prReferencesIssue: keyword-adjacent forms still match after the #1888 narrowing', () => {
+  for (const body of [
+    'Closes #1862',
+    'Fixes #1862',
+    'Resolves #1862',
+    '(Closes #1862)',
+  ]) {
     assert.equal(
       prReferencesIssue({ closingIssuesReferences: [], title: '', body }, 1862),
       true,
