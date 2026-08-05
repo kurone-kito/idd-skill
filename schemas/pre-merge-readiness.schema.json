@@ -25,7 +25,7 @@
   "properties": {
     "protocolVersion": {
       "type": "string",
-      "description": "Schema protocol version for this readiness report. Only \"1\" has ever been emitted.",
+      "description": "Schema protocol version for this pre-merge readiness document.",
       "enum": [
         "1"
       ]
@@ -589,7 +589,7 @@
           "properties": {
             "status": {
               "type": "string",
-              "description": "Overall self-approval deadlock status: not_applicable, clear, possible_deadlock, or deadlock.",
+              "description": "Overall self-approval deadlock status, escalating from not applicable through a resolvable or unverifiable bypass to a genuine deadlock.",
               "enum": [
                 "not_applicable",
                 "clear",
@@ -636,7 +636,7 @@
             },
             "bypassMode": {
               "type": "string",
-              "description": "Kind of bypass detected: none, pull_request, always, exempt, or mixed across the relevant rulesets.",
+              "description": "Kind of pull-request bypass detected across the relevant rulesets, or none when no applicable bypass is configured.",
               "enum": [
                 "none",
                 "pull_request",
@@ -712,7 +712,7 @@
       "properties": {
         "outcome": {
           "type": "string",
-          "description": "E14/F2 advisory-wait outcome: SATISFIED, WAIT, REQUEST_NEEDED, RECOVERY_NEEDED, or CAP_EXHAUSTED.",
+          "description": "E14/F2 advisory-wait state machine's current outcome, evaluated from Copilot's pending/reviewed state, same-head markers, and the elapsed/settled windows below.",
           "enum": [
             "SATISFIED",
             "WAIT",
@@ -830,7 +830,7 @@
       "properties": {
         "status": {
           "type": "string",
-          "description": "Overall classification of the required checks: missing, success, pending, failed, or unknown.",
+          "description": "Rollup classification of the required checks, accounting for missing checks and the source-pinned downgrade of an otherwise-passing result.",
           "enum": [
             "missing",
             "success",
@@ -1064,7 +1064,7 @@
         },
         "reason": {
           "type": "string",
-          "description": "Specific reason the claim matched or did not: match, missing-active-claim, claim-id-mismatch, or agent-id-mismatch.",
+          "description": "Why claim-ownership resolution matched or failed.",
           "enum": [
             "match",
             "missing-active-claim",
@@ -1194,7 +1194,7 @@
               },
               "reason": {
                 "type": "string",
-                "description": "Why this thread is still outstanding: incomplete-thread-comments, missing-fresh-disposition, or unresolved-without-fresh-disposition.",
+                "description": "Why this thread is still outstanding, distinguishing an incomplete comment page from a missing or stale disposition.",
                 "enum": [
                   "incomplete-thread-comments",
                   "missing-fresh-disposition",
@@ -1432,7 +1432,7 @@
       "properties": {
         "mergeStateStatus": {
           "type": "string",
-          "description": "Live GitHub merge-state status for the PR head (e.g. CLEAN, BEHIND, BLOCKED), used to detect a stale head requiring an update before merge.",
+          "description": "Live GitHub merge-state status for the PR head, used to detect a stale head requiring an update before merge.",
           "enum": [
             "",
             "BEHIND",
