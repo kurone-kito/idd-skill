@@ -357,7 +357,7 @@
     },
     "waived": {
       "type": "boolean",
-      "description": "True when the scope is not not_applicable (applicable or indeterminate) and at least one valid external-check waiver covers this gate; deliberately still reachable when applicability.status is indeterminate."
+      "description": "True when applicability.status is applicable or indeterminate (never not_applicable) and at least one valid external-check waiver covers this gate; deliberately still reachable when indeterminate."
     },
     "ready": {
       "type": "boolean",
