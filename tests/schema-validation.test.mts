@@ -349,6 +349,25 @@ test('pre-merge-readiness valid fixture accepts fractional timestamp evidence', 
   assert.deepEqual(errors, []);
 });
 
+test('pre-merge-readiness valid fixture accepts activation-nonce-mismatch claim reason', () => {
+  const schema = loadJson('schemas/pre-merge-readiness.schema.json');
+  const fixture = JSON.parse(
+    JSON.stringify(loadJson('fixtures/schemas/pre-merge-readiness.valid.json')),
+  );
+  // Mirrors summarizeClaimValidation's fifth `reason` outcome (only
+  // reachable when both expectedClaimId and expectedNonce are supplied —
+  // see tests/pre-merge-readiness.test.mts's "mismatched nonce routes to
+  // the contested/stop path" for the functional coverage of the value
+  // itself). This test is schema-acceptance only: the enum previously
+  // listed just four values and rejected this one (#1873).
+  fixture.claim.reason = 'activation-nonce-mismatch';
+  fixture.claim.matchesExpectedClaim = false;
+  fixture.claim.claimLost = true;
+
+  const errors = validate(fixture, schema);
+  assert.deepEqual(errors, []);
+});
+
 test('pre-merge-readiness count fields require non-negative integers', () => {
   const schema = loadJson('schemas/pre-merge-readiness.schema.json');
   const fixture = JSON.parse(
