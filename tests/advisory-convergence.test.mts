@@ -1754,6 +1754,94 @@ test('reasons: itemCount > 0 with an unresolved blocking thread does NOT add the
   assert.match(verdict.reasons.join('\n'), /2 actionable item/);
 });
 
+// --- 9c. Suppressed-only Copilot review findings (#1880) --------------------
+
+const SUPPRESSED_COMMENTS_BODY = [
+  '<details>',
+  '<summary>Suppressed comments (1)</summary>',
+  '',
+  '**tests/idd-onboard.test.mts:2122**',
+  '* This test is described as exercising the documented `cspell lint',
+  '  "**" --no-progress` command path, but it adds an extra `--no-cache`',
+  "  flag that isn't present in the docs or in the repo's own",
+  '  `lint:minimum` script. ...',
+  '</details>',
+].join('\n');
+
+test('reasons: itemCount 0 with a suppressed-comments body section does NOT converge (PR #1875 commit 9711d404 shape)', () => {
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({
+      reviews: [
+        copilotReview({ itemCount: 0, body: SUPPRESSED_COMMENTS_BODY }),
+      ],
+    }),
+    baseOptions(),
+  );
+  assertValidVerdict(verdict);
+  assert.equal(verdict.pending, false);
+  assert.equal(verdict.review.itemCount, 0);
+  assert.equal(verdict.review.suppressedCount, 1);
+  assert.equal(verdict.review.satisfied, false);
+  assert.equal(verdict.threads.satisfied, true);
+  assert.equal(verdict.converged, false);
+  assert.equal(verdict.ready, false);
+  assert.notDeepEqual(verdict.reasons, []);
+  assert.match(verdict.reasons.join('\n'), /1 suppressed comment/);
+  assert.match(verdict.reasons.join('\n'), /check the review body directly/);
+});
+
+test('reasons: itemCount 0 with NO suppressed-comments section still converges normally (no false block)', () => {
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({
+      reviews: [
+        copilotReview({
+          itemCount: 0,
+          body: '<details>\n<summary>Some unrelated collapsed section</summary>\nnothing suppressed here\n</details>',
+        }),
+      ],
+    }),
+    baseOptions(),
+  );
+  assertValidVerdict(verdict);
+  assert.equal(verdict.review.suppressedCount, 0);
+  assert.equal(verdict.review.satisfied, true);
+  assert.equal(verdict.converged, true);
+  assert.equal(verdict.ready, true);
+  assert.deepEqual(verdict.reasons, []);
+});
+
+test('reasons: itemCount 0 with an empty/absent body still converges normally (no false block)', () => {
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({ reviews: [copilotReview({ itemCount: 0 })] }), // no body key
+    baseOptions(),
+  );
+  assertValidVerdict(verdict);
+  assert.equal(verdict.review.suppressedCount, 0);
+  assert.equal(verdict.converged, true);
+  assert.equal(verdict.ready, true);
+});
+
+test('reasons: itemCount > 0 AND a suppressed section both mentioned, existing #1719 hint path unaffected', () => {
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({
+      reviews: [
+        copilotReview({ itemCount: 2, body: SUPPRESSED_COMMENTS_BODY }),
+      ],
+    }),
+    baseOptions(),
+  );
+  assertValidVerdict(verdict);
+  assert.equal(verdict.review.itemCount, 2);
+  assert.equal(verdict.review.suppressedCount, 1);
+  assert.equal(verdict.converged, false);
+  assert.match(verdict.reasons.join('\n'), /2 actionable item/);
+  assert.match(
+    verdict.reasons.join('\n'),
+    /check the review body directly for an item suppressed due to low confidence/,
+  );
+  assert.match(verdict.reasons.join('\n'), /1 suppressed comment/);
+});
+
 test('dispositionEvidence: exposes missingRegularCommentCount feeding sameHeadReroll.eligible, plus its missingThreadCount sibling', () => {
   const verdict = computeAdvisoryConvergenceVerdict(
     baseInputs({

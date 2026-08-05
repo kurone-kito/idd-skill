@@ -41,6 +41,12 @@ export interface ReviewPayload {
   submittedAt?: string | null;
   commitId?: string | null;
   itemCount?: number | null;
+  /** #1880: the review's top-level body text. GitHub Copilot can fold a
+   * finding into a `<details><summary>Suppressed comments (N)</summary>`
+   * block here instead of posting it as a separate review comment, in
+   * which case `itemCount` (from `comments.totalCount`) stays `0` even
+   * though a real finding exists -- see {@link parseSuppressedCommentCount}. */
+  body?: string | null;
 }
 
 /** Latest-review clause evidence (Clause 1 of `advisory-convergence.mts`'s
@@ -51,6 +57,10 @@ export interface AdvisoryConvergenceReviewClause {
   matchesHead: boolean;
   itemCount: number | null;
   submittedAt: string;
+  /** #1880: count parsed from a `Suppressed comments (N)` heading in the
+   * review body, `0` when no such section is present (or the review is
+   * off-HEAD). See {@link parseSuppressedCommentCount}. */
+  suppressedCount: number;
   satisfied: boolean;
 }
 
@@ -70,6 +80,31 @@ interface RawReviewNode {
   submittedAt?: string | null;
   author?: GhAuthorPayload | null;
   comments?: { totalCount?: number | null } | null;
+  body?: string | null;
+}
+
+/** Matches GitHub Copilot's `Suppressed comments (N)` `<summary>` heading,
+ * case-insensitively -- the only structured signal a suppressed finding
+ * leaves in the review body (#1880). */
+const SUPPRESSED_COMMENTS_HEADING_PATTERN = /suppressed comments \((\d+)\)/i;
+
+/**
+ * Parse the `Suppressed comments (N)` count GitHub Copilot embeds in a
+ * review's top-level body when it folds a low-confidence finding into a
+ * collapsed `<details>` block instead of posting it as a separate review
+ * comment (kurone-kito/idd-skill#1880). Returns `0` when the body carries
+ * no such section, including an absent/empty/unparseable body -- unlike
+ * `itemCount`, there is no distinct "unknown" state to preserve here: a
+ * missing section unambiguously means zero suppressed comments.
+ */
+export function parseSuppressedCommentCount(
+  body: string | null | undefined,
+): number {
+  if (typeof body !== 'string' || body.length === 0) return 0;
+  const match = body.match(SUPPRESSED_COMMENTS_HEADING_PATTERN);
+  if (!match) return 0;
+  const count = Number(match[1]);
+  return Number.isFinite(count) ? count : 0;
 }
 
 /**
@@ -126,6 +161,7 @@ export function resolveLatestCopilotReviewClause(
       matchesHead: false,
       itemCount: null,
       submittedAt: '',
+      suppressedCount: 0,
       satisfied: false,
     };
   }
@@ -136,13 +172,21 @@ export function resolveLatestCopilotReviewClause(
       ? Number(latest.itemCount)
       : null
     : null;
+  // #1880: gated by `matchesHead`, mirroring `itemCount` above -- moot for
+  // `satisfied` itself (already gated by `matchesHead &&`), but keeps an
+  // off-HEAD review's report fields consistent with each other rather than
+  // parsing a body this clause is about to ignore anyway.
+  const suppressedCount = matchesHead
+    ? parseSuppressedCommentCount(latest.body)
+    : 0;
   return {
     found: true,
     commitId,
     matchesHead,
     itemCount,
     submittedAt: String(latest.submittedAt ?? ''),
-    satisfied: matchesHead && itemCount === 0,
+    suppressedCount,
+    satisfied: matchesHead && itemCount === 0 && suppressedCount === 0,
   };
 }
 
@@ -178,6 +222,7 @@ export function fetchReviewsAndHeadCommit(
                   submittedAt
                   author { login __typename }
                   comments { totalCount }
+                  body
                 }
               }
               commits(last: 1) {
@@ -223,6 +268,7 @@ export function fetchReviewsAndHeadCommit(
     submittedAt: node.submittedAt ?? null,
     commitId: node.commit?.oid ?? null,
     itemCount: node.comments?.totalCount ?? null,
+    body: node.body ?? null,
   }));
   return { reviews, headCommittedAt };
 }
