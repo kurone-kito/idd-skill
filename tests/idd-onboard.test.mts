@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import {
   chmodSync,
   cpSync,
@@ -1303,6 +1303,47 @@ test('bin/idd-onboard.mjs --import blocks on a differing existing target file wi
   assertTreeUnchanged(targetRoot, before);
 });
 
+test('bin/idd-onboard.mjs --import blocks on a pre-existing, differing doc-lint config instead of silently replacing it (idd-skill#1860)', () => {
+  const targetRoot = makeFixtureDir();
+  // Simulate a target repository that already has its own documentation
+  // lint configuration, differing from the template's copy.
+  writeFileSync(
+    join(targetRoot, '.cspell.config.yml'),
+    'words:\n  - preexisting\n',
+  );
+  writeFileSync(join(targetRoot, '.markdownlint.yml'), 'default: false\n');
+  writeFileSync(
+    join(targetRoot, '.markdownlint-cli2.yaml'),
+    'ignores:\n  - vendor/**\n',
+  );
+  const before = snapshotTree(targetRoot);
+
+  const { status, verdict } = runCliBin([
+    '--import',
+    '--source',
+    REPO_ROOT,
+    '--target',
+    targetRoot,
+  ]);
+  assert.equal(status, 1);
+  assert.equal(verdict.written, false);
+  const blocked = verdict.blockedOverwrites as string[];
+  for (const target of [
+    '.cspell.config.yml',
+    '.markdownlint.yml',
+    '.markdownlint-cli2.yaml',
+  ]) {
+    assert.ok(
+      blocked.includes(target),
+      `expected ${target} to be reported as a blocked overwrite instead of silently replaced`,
+    );
+  }
+  // The whole apply is fail-closed on any blocking finding (idd-onboard.mts
+  // writes nothing when blockedOverwrites is non-empty), so the adopter's
+  // pre-existing config is untouched, not just the 3 doc-lint files.
+  assertTreeUnchanged(targetRoot, before);
+});
+
 test('bin/idd-onboard.mjs --import --force overwrites a differing existing target file', () => {
   const targetRoot = makeFixtureDir();
   mkdirSync(join(targetRoot, '.github', 'idd'), { recursive: true });
@@ -1987,5 +2028,133 @@ test('the ONBOARDING.md CLI-assisted onboarding section anchors its --import fil
     markerCount,
     1,
     'the idd-template-core-files generated block must appear exactly once in ONBOARDING.md',
+  );
+});
+
+// ---------------------------------------------------------------------------
+// Documentation-lint compatibility (idd-skill#1860)
+//
+// A Tier A adopter-repository validation imported this template into a
+// minimal repo with no pre-existing lint config and found real markdownlint
+// findings (line length, table-column style, single-title, duplicate-heading)
+// and cspell findings (unrecognized IDD/tooling vocabulary and upstream
+// kurone-kito/idd-skill cross-references) against the imported files alone.
+// The end-to-end test below exercises the real
+// import -> substitute -> documented-lint-command path against this repo's
+// own installed markdownlint-cli2/cspell binaries, so a future documentation
+// change that reintroduces incompatible vocabulary or formatting fails here
+// instead of on an adopter's first CI run.
+//
+// This repo's `lint.yml` CI job deliberately dogfoods a toolless bare-node
+// adopter path -- it runs `node --test tests/*.test.mts` with NO
+// package-manager install, so node_modules/.bin/* is absent there by
+// design (dprint/cspell/markdownlint-cli2 run separately, once, in
+// pnpm-boundary.yml). The end-to-end test below self-skips when the
+// binaries it needs are not installed, instead of failing that lane.
+// ---------------------------------------------------------------------------
+
+const MARKDOWNLINT_BIN = join(
+  REPO_ROOT,
+  'node_modules',
+  '.bin',
+  'markdownlint-cli2',
+);
+const CSPELL_BIN = join(REPO_ROOT, 'node_modules', '.bin', 'cspell');
+const LINT_BINARIES_INSTALLED =
+  existsSync(MARKDOWNLINT_BIN) && existsSync(CSPELL_BIN);
+
+test('a real import + substitute produces a doc tree that passes the documented markdownlint/cspell commands with full file coverage (idd-skill#1860)', (t) => {
+  if (!LINT_BINARIES_INSTALLED) {
+    // Expected on the bare-node lane (lint.yml), which runs this suite with
+    // no package-manager install by design -- see the block comment above.
+    t.skip('markdownlint-cli2/cspell are not installed in this environment');
+    return;
+  }
+  const targetRoot = makeFixtureDir();
+
+  const imported = runCliBin([
+    '--import',
+    '--source',
+    REPO_ROOT,
+    '--target',
+    targetRoot,
+  ]);
+  assert.equal(imported.status, 0, JSON.stringify(imported.verdict));
+  assert.equal(imported.verdict.written, true);
+
+  // The 3 doc-lint compatibility files must actually be part of what a
+  // plain --import copies, not something this test seeds by hand.
+  for (const compatibilityFile of [
+    '.cspell.config.yml',
+    '.markdownlint.yml',
+    '.markdownlint-cli2.yaml',
+  ]) {
+    assert.ok(
+      existsSync(join(targetRoot, compatibilityFile)),
+      `expected --import to copy ${compatibilityFile}`,
+    );
+  }
+
+  const substituted = runCliBin([
+    '--substitute',
+    '--target',
+    targetRoot,
+    ...CLI_OVERRIDE_FLAGS,
+  ]);
+  assert.equal(substituted.status, 0, JSON.stringify(substituted.verdict));
+  assert.equal(substituted.verdict.written, true);
+  assert.deepEqual(substituted.verdict.residue, []);
+
+  const markdownlintResult = spawnSync(MARKDOWNLINT_BIN, ['**/*.md'], {
+    cwd: targetRoot,
+    encoding: 'utf8',
+  });
+  assert.equal(
+    markdownlintResult.status,
+    0,
+    `markdownlint-cli2 findings against the imported docs:\n${markdownlintResult.stdout}${markdownlintResult.stderr}`,
+  );
+
+  const cspellResult = spawnSync(CSPELL_BIN, ['lint', '**', '--no-progress'], {
+    cwd: targetRoot,
+    encoding: 'utf8',
+  });
+  assert.equal(
+    cspellResult.status,
+    0,
+    `cspell findings against the imported docs:\n${cspellResult.stdout}${cspellResult.stderr}`,
+  );
+
+  // Scope assertion, not just exit-0: cspell skips dot-directories by
+  // default, so a config regression that silently drops
+  // `enableGlobDot: true` would still exit 0 while quietly no longer
+  // scanning .github/instructions/** -- assert real coverage instead of
+  // trusting the exit code alone. cspell prints its summary line to
+  // stderr, not stdout.
+  //
+  // Compare against the import plan's own entry count, not a Markdown-only
+  // file count (idd-skill#1875 review): `cspell lint "**"` scans every
+  // file type, not just `*.md`, so a Markdown-only count could still pass
+  // this assertion even with .github/instructions/**'s Markdown files
+  // silently never scanned, as long as enough non-Markdown files padded the
+  // total. The import plan's entry count has no such gap -- it is exactly
+  // the file count cspell should see if it examined everything --import
+  // wrote.
+  const cspellOutput = `${cspellResult.stdout}${cspellResult.stderr}`;
+  const filesCheckedMatch = /Files checked:\s*(\d+)/u.exec(cspellOutput);
+  assert.ok(
+    filesCheckedMatch,
+    `could not find a "Files checked" count in cspell output:\n${cspellOutput}`,
+  );
+  const filesChecked = Number(filesCheckedMatch[1]);
+  const { plan } = imported.verdict;
+  assert.ok(
+    Array.isArray(plan),
+    `expected imported.verdict.plan to be an array, got: ${JSON.stringify(plan)}`,
+  );
+  const importedFileCount = plan.length;
+  assert.ok(
+    filesChecked >= importedFileCount,
+    `cspell only checked ${filesChecked} files, fewer than the ${importedFileCount} files --import wrote -- enableGlobDot may have regressed`,
   );
 });

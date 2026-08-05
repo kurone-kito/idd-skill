@@ -94,6 +94,17 @@ file drop:
 (npx-resolved profiles do not vend the core this way, so this note applies only
 when you copy helper files.)
 
+**Named gap: `.markdownlint.yml` / `.markdownlint-cli2.yaml` /
+`.cspell.config.yml`.** A repository onboarded before these files were
+added to the template's core file set gets an intentional, non-silent
+behavior change on the next re-import: `--verify`'s `manifestCompleteness`
+now reports them missing (blocking) until you re-run Step 2 for them, and
+`--import` reports a `blockedOverwrites` finding instead of silently
+skipping them if you already created same-named files of your own by
+then — merge the template's rule overrides / word list into your existing
+file by hand in that case, following the Step 2 file-list note on these
+files.
+
 When you then audit whether re-imported roadmap work is actually done, judge
 **completion by auditing the implementation against the acceptance criteria**,
 not by a child issue's closed state — a skeleton or scaffold PR can merge and
@@ -421,6 +432,9 @@ for the frontmatter convention its generated table follows.
 .githooks/_idd-worktree-guard.sh
 .githooks/pre-commit
 .githooks/pre-push
+.cspell.config.yml
+.markdownlint.yml
+.markdownlint-cli2.yaml
 .github/instructions/idd-overview-core.instructions.md
 .github/instructions/idd-overview-appendix.instructions.md
 .github/instructions/idd-discover.instructions.md
@@ -478,6 +492,34 @@ profiles/external-bot/README.md
 
 <!-- /audit:generated -->
 
+This file list includes `.markdownlint.yml`, `.markdownlint-cli2.yaml`, and
+`.cspell.config.yml`. They exist because a target repository with no
+pre-existing documentation-lint configuration can otherwise import a
+clean, verified tree and still fail its own ordinary
+`markdownlint-cli2`/`cspell` jobs on the imported files: an early adopter
+onboarding validation found real findings across a small set of repeated
+rule patterns (line length, table-column style, single-title, and
+duplicate-heading for `markdownlint`; unrecognized IDD/tooling
+vocabulary and upstream `kurone-kito/idd-skill` cross-references for
+`cspell`) against the imported files with no lint config present at all.
+These files close that gap out of the box; `.cspell.config.yml`'s
+`enableGlobDot: true` in particular is required for `cspell lint "**"` to
+scan `.github/instructions/**` at all — without it, that command
+silently skips those files rather than reporting them clean. If the
+target repository already has its own `.markdownlint.yml`,
+`.markdownlint-cli2.yaml`, or `.cspell.config.yml` with different
+content, `--import` refuses to overwrite it (reported under
+`blockedOverwrites`, same as any other differing file) — merge the
+relevant rule overrides or word list from the template's copy into the
+existing file by hand rather than forcing an overwrite or skipping the
+import for that file. This also means a **re-import** into an
+already-onboarded repository that predates these files is a named,
+intentional gap under
+[Re-importing](#re-importing-import-named-gaps-not-a-blind-resync)
+below, not a regression: `--verify` now expects them, and `--import`
+blocks instead of silently skipping them if a same-named file already
+exists with different content.
+
 Optional companion files:
 
 <!-- audit:generated id=issue-authoring-companion-files -->
@@ -516,6 +558,9 @@ for FILE in \
   ".githooks/_idd-worktree-guard.sh" \
   ".githooks/pre-commit" \
   ".githooks/pre-push" \
+  ".cspell.config.yml" \
+  ".markdownlint.yml" \
+  ".markdownlint-cli2.yaml" \
   ".github/instructions/idd-overview-core.instructions.md" \
   ".github/instructions/idd-overview-appendix.instructions.md" \
   ".github/instructions/idd-discover.instructions.md" \
@@ -622,6 +667,9 @@ for FILE in \
   ".githooks/_idd-worktree-guard.sh" \
   ".githooks/pre-commit" \
   ".githooks/pre-push" \
+  ".cspell.config.yml" \
+  ".markdownlint.yml" \
+  ".markdownlint-cli2.yaml" \
   ".github/instructions/idd-overview-core.instructions.md" \
   ".github/instructions/idd-overview-appendix.instructions.md" \
   ".github/instructions/idd-discover.instructions.md" \
@@ -1170,6 +1218,14 @@ After completing the steps above, confirm each item:
 
 - [ ] Every core execution file, supporting doc, and profile artifact
       listed in Step 2 is present in the imported repository.
+- [ ] `.markdownlint.yml`, `.markdownlint-cli2.yaml`, and
+      `.cspell.config.yml` are present, or — if `--import` reported a
+      `blockedOverwrites` finding for any of them because the target
+      already had its own differing file — the template's rule
+      overrides / word list were merged into the existing file by hand
+      rather than skipped, so the documented `markdownlint-cli2`/`cspell`
+      commands in the `Project commands` table still pass against the
+      imported documentation.
 - [ ] The selected PR review profile is recorded, and any non-default
       profile artifact and phase-file edits are complete.
 - [ ] The selected review-thread resolution policy and critique-loop

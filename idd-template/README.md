@@ -104,6 +104,7 @@ generated separately in `ONBOARDING.md`.
 
 ```text
 .claude/settings.json
+.cspell.config.yml
 .githooks/_idd-worktree-guard.sh
 .githooks/pre-commit
 .githooks/pre-push
@@ -139,6 +140,8 @@ generated separately in `ONBOARDING.md`.
 .github/instructions/lite/idd-work-lite.instructions.md
 .github/workflows/idd-advisory-convergence.yml
 .github/workflows/post-merge-cleanup.yml
+.markdownlint-cli2.yaml
+.markdownlint.yml
 docs/concepts.md
 docs/customization.md
 docs/getting-started.md

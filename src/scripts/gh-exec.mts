@@ -258,6 +258,31 @@ export function ghApiJson(
   return JSON.parse(raw.trim() || '{}');
 }
 
+/**
+ * Run a `gh api graphql` query with variables, returning the parsed JSON
+ * response. Extracted from `advisory-convergence.mts` (#1806) so
+ * `review-clause.mts` (and any other future GraphQL caller) can reuse the
+ * same query-execution wrapper instead of a second copy, matching this
+ * file's existing role as the shared `gh`-execution module for `ghText` /
+ * `ghApiJson`. Uses `ghText`'s own default timeout (no explicit override
+ * here, unchanged from this function's pre-extraction behavior).
+ */
+export function ghGraphql(
+  query: string,
+  variables: Record<string, string | number | null | undefined>,
+): unknown {
+  const args = ['api', 'graphql', '-f', `query=${query}`];
+  for (const [key, value] of Object.entries(variables)) {
+    if (value === null || value === undefined) continue;
+    if (typeof value === 'number') {
+      args.push('-F', `${key}=${value}`);
+      continue;
+    }
+    args.push('-f', `${key}=${value}`);
+  }
+  return JSON.parse(ghText(args).trim() || '{}');
+}
+
 /** Options accepted by {@link withBoundedRetry}. */
 export interface BoundedRetryOptions {
   /** Total attempts including the first. Default 3. */
