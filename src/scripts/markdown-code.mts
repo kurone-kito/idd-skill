@@ -141,10 +141,32 @@ const MARKDOWN_THEMATIC_BREAK_PATTERN =
   /^ {0,3}([-_*])(?:[ \t]*\1){2,}[ \t]*$/u;
 // CommonMark type-1 raw-text HTML elements (script/pre/style/textarea) only
 // end at a line containing their matching closing tag -- unlike the other
-// HTML block types, a blank line does not close them.
-const HTML_RAW_TEXT_TAG_CLOSE_PATTERN = /<\/(?:script|pre|style|textarea)\b/iu;
+// HTML block types, a blank line does not close them. #1900: closing
+// requires the *specific* tag that was opened, not any of the four -- a
+// mismatched closing tag (e.g. `</style>` while `<script>` is open) must
+// not end tracking.
+type HtmlRawTextTag = 'script' | 'pre' | 'style' | 'textarea';
 const HTML_RAW_TEXT_TAG_OPEN_PATTERN =
-  /^ {0,3}<(?:script|pre|style|textarea)\b/iu;
+  /^ {0,3}<(script|pre|style|textarea)\b/iu;
+const HTML_RAW_TEXT_TAG_CLOSE_PATTERNS: Readonly<
+  Record<HtmlRawTextTag, RegExp>
+> = {
+  script: /<\/script\b/iu,
+  pre: /<\/pre\b/iu,
+  style: /<\/style\b/iu,
+  textarea: /<\/textarea\b/iu,
+};
+
+/**
+ * The raw-text tag that `content` opens (one of {@link HtmlRawTextTag}'s
+ * four members), lower-cased for use as a
+ * {@link HTML_RAW_TEXT_TAG_CLOSE_PATTERNS} key, or `null` when `content`
+ * does not open a raw-text element.
+ */
+function rawTextOpenTag(content: string): HtmlRawTextTag | null {
+  const match = HTML_RAW_TEXT_TAG_OPEN_PATTERN.exec(content);
+  return match === null ? null : (match[1].toLowerCase() as HtmlRawTextTag);
+}
 
 /**
  * True when `content` (a line with any blockquote container prefix already
@@ -249,10 +271,11 @@ function findPreviousLineStart(text: string, lineStart: number): number | null {
  * (rather than several independent booleans) so "only one family is open
  * at once" is structural, not merely an accident of check ordering.
  *
- * - `raw-text`: an open `<script>`/`<pre>`/`<style>`/`<textarea>` element;
- *   closes on a line containing any of the four raw-text closing tags, not
- *   only the one that was actually opened (a known, pre-existing gap
- *   unrelated to this type's own tracking; see #1900).
+ * - `raw-text`: an open `<script>`/`<pre>`/`<style>`/`<textarea>` element,
+ *   carrying which of the four tags (`tag`) was actually opened; closes
+ *   only on a line containing that same tag's own closing form -- a
+ *   mismatched closing tag for a different raw-text element (e.g.
+ *   `</style>` while `<script>` is open) does not close it (#1900).
  * - `special`: an open comment/processing-instruction/declaration/CDATA
  *   block; closes only when `closeToken` (that form's own token -- `-->`,
  *   `?>`, `]]>`, or `>`) appears on a later line, same-line or not.
@@ -262,7 +285,7 @@ function findPreviousLineStart(text: string, lineStart: number): number | null {
  */
 type HtmlBlockScanState =
   | { readonly type: 'none' }
-  | { readonly type: 'raw-text' }
+  | { readonly type: 'raw-text'; readonly tag: HtmlRawTextTag }
   | { readonly type: 'special'; readonly closeToken: string }
   | { readonly type: 'generic' };
 
@@ -339,7 +362,7 @@ function isWithinOpenHtmlBlock(
   let state: HtmlBlockScanState = { type: 'none' };
   for (const { content, isBlank } of sameDepthLines) {
     if (state.type === 'raw-text') {
-      if (HTML_RAW_TEXT_TAG_CLOSE_PATTERN.test(content)) {
+      if (HTML_RAW_TEXT_TAG_CLOSE_PATTERNS[state.tag].test(content)) {
         state = { type: 'none' };
       }
       continue;
@@ -359,9 +382,10 @@ function isWithinOpenHtmlBlock(
     if (isBlank) {
       continue;
     }
-    if (HTML_RAW_TEXT_TAG_OPEN_PATTERN.test(content)) {
-      if (!HTML_RAW_TEXT_TAG_CLOSE_PATTERN.test(content)) {
-        state = { type: 'raw-text' };
+    const openTag = rawTextOpenTag(content);
+    if (openTag !== null) {
+      if (!HTML_RAW_TEXT_TAG_CLOSE_PATTERNS[openTag].test(content)) {
+        state = { type: 'raw-text', tag: openTag };
       }
       continue;
     }
