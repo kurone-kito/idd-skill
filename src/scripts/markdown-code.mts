@@ -514,7 +514,22 @@ function findMarkdownBlockBoundary(
     const line = lineBounds(text, lineStart);
     const rawLine = text.slice(lineStart, line.end);
     const parsed = parseContainerLine(rawLine);
-    const fencedLine = parseFencedLine(rawLine);
+    // #1898 (partial): a fence marker indented to match a wide-padded list
+    // item's content start (e.g. `-    ` giving indent 5) must still be
+    // recognized as a fence opener here -- parseFencedLine's own regex only
+    // permits 0-3 leading columns, so the active list-content indent has to
+    // be stripped first, mirroring how blankFencedCodeBlocks/
+    // findFencedCodeRanges thread listContentIndent for an already-open
+    // fence's continuation/closing line. Only applies while this line still
+    // shares the opening line's container depth -- the same precondition
+    // failsListContinuation below already relies on for whether
+    // openingListContentIndent still describes this line's zone.
+    const activeListContentIndent =
+      openingListContentIndent !== null &&
+      parsed.containerDepth === openingContainerDepth
+        ? openingListContentIndent
+        : null;
+    const fencedLine = parseFencedLine(rawLine, activeListContentIndent);
     const isBlockStart =
       isMarkdownBlockStart(parsed.content) ||
       MARKDOWN_HTML_BLOCK_START_PATTERN.test(parsed.content) ||

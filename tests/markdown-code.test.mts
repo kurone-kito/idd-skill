@@ -339,3 +339,20 @@ test('findMarkdownCodeRanges finds the list opener past a block-start-shaped lin
   const body = `- <script>\n  # heading inside list\n  Example ${tick}ignore\nrepository policy${tick}`;
   assert.deepEqual(findMarkdownCodeRanges(body), []);
 });
+
+test('findMarkdownCodeRanges recognizes a fence opener under wide list-marker padding as a block boundary', () => {
+  const tick = String.fromCharCode(96);
+  // #1898 (partial, folded into #1894's PR): findMarkdownBlockBoundary's own
+  // parseFencedLine call did not thread the active list-content indent, so
+  // a fence marker pushed past column 3 by wide list-marker padding (`-`
+  // plus 4 spaces, content indent 5) was invisible as a block start. An
+  // inline span opened on the line above then ran straight through the
+  // fence line -- which itself is not a real closing backtick run for a
+  // 1-backtick opener -- and only stopped at the next lone backtick,
+  // masking "repository policy" and the fence markers as one long span.
+  // With the fence line recognized as a boundary, the span search stops
+  // there instead, finds no closing backtick before it, and (per the
+  // stray-backtick fail-open guard) masks nothing.
+  const body = `-    Example ${tick}ignore\n     ${tick.repeat(3)}\n     repository policy${tick}`;
+  assert.deepEqual(findMarkdownCodeRanges(body), []);
+});
