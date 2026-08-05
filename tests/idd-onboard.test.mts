@@ -2115,11 +2115,10 @@ test('a real import + substitute produces a doc tree that passes the documented 
     `markdownlint-cli2 findings against the imported docs:\n${markdownlintResult.stdout}${markdownlintResult.stderr}`,
   );
 
-  const cspellResult = spawnSync(
-    CSPELL_BIN,
-    ['lint', '**', '--no-progress', '--no-cache'],
-    { cwd: targetRoot, encoding: 'utf8' },
-  );
+  const cspellResult = spawnSync(CSPELL_BIN, ['lint', '**', '--no-progress'], {
+    cwd: targetRoot,
+    encoding: 'utf8',
+  });
   assert.equal(
     cspellResult.status,
     0,
