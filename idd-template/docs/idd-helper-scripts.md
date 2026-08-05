@@ -1811,7 +1811,7 @@ structurally unable to disagree.
 | `unresolved-copilot-threads`              | `threads.satisfied` is `false` -- at least one Copilot-authored thread is neither resolved nor validly dispositioned.                                   |
 | `missing-regular-comment-disposition`     | `dispositionEvidence.missingRegularCommentCount` is non-zero -- an outstanding regular (non-thread) PR comment still lacks a fresh disposition marker.  |
 | `review-item-count-unknown`               | The latest review's comment count is unavailable -- either the review is off-HEAD (co-firing with `review-pending` above, since `resolveLatestCopilotReviewClause` reports `itemCount: null` for any non-matching-HEAD review), or it is on current HEAD but the count itself is unavailable (a GraphQL nullable-field edge case). |
-| `review-item-count-not-positive`          | The latest review's `itemCount` is a known, non-positive value (i.e. exactly `0` -- already fully converged, nothing to reroll).                        |
+| `review-item-count-not-positive`          | The latest review's `itemCount` is a known `0` AND `suppressedCount` (#1880) is also `0` -- already fully converged, nothing (posted or suppressed) to reroll for.                        |
 <!-- dprint-ignore-end -->
 
 When `review-item-count-not-positive` is absent but `converged` is still
@@ -1822,6 +1822,20 @@ check the review body directly -- the shape of the reported adopter
 incident: a "Comments suppressed due to low confidence" item embedded in
 the review's own body text counts toward `itemCount` but never surfaces
 as a review thread, so no thread query can ever explain it.
+
+**`suppressedCount` (#1880).** A distinct, `itemCount === 0` shape of the
+same underlying problem: GitHub Copilot can fold a finding into a
+`<details><summary>Suppressed comments (N)</summary>` block in the
+review's top-level `body` instead of posting it as a comment at all, so
+`comments.totalCount` (`itemCount`) stays `0` while a real finding still
+exists. `resolveLatestCopilotReviewClause` (review-clause.mts) parses
+this heading into `review.suppressedCount`, and Clause 1's `satisfied`
+computation and `reviewItemCountPositiveTerm` above both treat
+`suppressedCount > 0` the same way they already treat `itemCount > 0` --
+blocking convergence with a dedicated top-level reason, and keeping the
+same-HEAD reroll recovery path available for it, since `suppressedCount`
+is read from the same static per-submission review snapshot `itemCount`
+is.
 
 **AW6 procedure** (`idd-advisory-wait.instructions.md`), invoked only
 from F2 on a non-zero `--assert` exit:

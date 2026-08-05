@@ -1193,6 +1193,25 @@ test('sameHeadReroll: eligible when matchesHead, itemCount > 0, and no blocking 
   assert.equal(verdict.sameHeadReroll.requestable, true);
 });
 
+test('sameHeadReroll: eligible when itemCount is 0 but suppressedCount > 0 (#1880 -- the same static-snapshot recovery shape as itemCount > 0)', () => {
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({
+      reviews: [
+        copilotReview({
+          itemCount: 0,
+          body: '<details>\n<summary>Suppressed comments (1)</summary>\nnote\n</details>',
+        }),
+      ],
+    }),
+    baseOptions(),
+  );
+  assertValidVerdict(verdict);
+  assert.equal(verdict.converged, false);
+  assert.equal(verdict.sameHeadReroll.eligible, true);
+  assert.equal(verdict.sameHeadReroll.requestable, true);
+  assert.deepEqual(verdict.sameHeadReroll.ineligibleReasons, []);
+});
+
 test('sameHeadReroll: NOT eligible when itemCount is already 0 (already converged, nothing to reroll)', () => {
   const verdict = computeAdvisoryConvergenceVerdict(
     baseInputs({ reviews: [copilotReview()] }), // itemCount: 0 default

@@ -446,6 +446,17 @@ export function computeAdvisoryConvergenceVerdict(inputs, options) {
   // `review-item-count-not-positive`), while `reviewItemCountKnownTerm &&
   // reviewItemCountPositiveTerm` together still reduce to exactly the
   // original `itemCount !== null && itemCount > 0` conjunct.
+  // #1880: `reviewItemCountPositiveTerm` ALSO counts `suppressedCount > 0`
+  // as "positive" -- `itemCount` and `suppressedCount` are both read from
+  // the SAME static review snapshot (never updated by later disposition
+  // activity, same as `itemCount`'s own doc comment on
+  // `AdvisoryConvergenceReviewClause`), so a suppressed-only block is the
+  // identical "nothing else can clear this except a fresh review" shape
+  // #1511's reroll exists for. The token's FAILURE condition stays exactly
+  // as precise as before: `REVIEW_ITEM_COUNT_NOT_POSITIVE` now fires only
+  // when itemCount is a known 0 AND suppressedCount is also 0 -- i.e.
+  // genuinely nothing (posted or suppressed) to reroll for, still an
+  // accurate reading of the existing token name/doc row.
   // #1686: `indeterminate` now also disqualifies a same-HEAD reroll --
   // offering to reroll Copilot is pointless while the underlying claim
   // linkage itself is broken/ambiguous, so this term (and its
@@ -458,7 +469,9 @@ export function computeAdvisoryConvergenceVerdict(inputs, options) {
     dispositionEvidence.missingRegularCommentCount === 0;
   const reviewItemCountKnownTerm = review.itemCount !== null;
   const reviewItemCountPositiveTerm =
-    review.itemCount === null || review.itemCount > 0;
+    review.itemCount === null ||
+    review.itemCount > 0 ||
+    review.suppressedCount > 0;
   const sameHeadRerollTerms = [
     {
       token: SAME_HEAD_REROLL_INELIGIBLE_REASON.SCOPE_NOT_APPLICABLE,
