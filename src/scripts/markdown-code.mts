@@ -147,10 +147,14 @@ const HTML_RAW_TEXT_TAG_OPEN_PATTERN =
   /^ {0,3}<(?:script|pre|style|textarea)\b/iu;
 
 /**
- * True when `content` (a line with any blockquote/list container prefix
- * already stripped) starts a new Markdown block -- either the fixed-form
- * patterns above, or a thematic break whose repeated marker characters are
- * separated by spaces or tabs.
+ * True when `content` (a line with any blockquote container prefix already
+ * stripped -- a caller-held list-item marker, if present, may still be in
+ * place) starts a new Markdown block -- either the fixed-form patterns
+ * above, or a thematic break whose repeated marker characters are separated
+ * by spaces or tabs. The heading/list/thematic-break patterns this checks
+ * are all anchored at the very start of `content`, so a leading list marker
+ * (which none of them match) safely makes this return `false` rather than a
+ * false positive.
  */
 function isMarkdownBlockStart(content: string): boolean {
   return (
