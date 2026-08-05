@@ -31,7 +31,11 @@ export function blankFencedCodeBlocks(text: string): string {
     containerDepth: number;
     listContentIndent: number | null;
   } | null = null;
+  let nextLineStart = 0;
   for (const line of lines) {
+    const lineStart = nextLineStart;
+    nextLineStart +=
+      line.length + (text[lineStart + line.length] === '\r' ? 2 : 1);
     const containerLine = parseContainerLine(line);
     const listContinuationLine =
       fence === null || fence.listContentIndent === null
@@ -49,9 +53,13 @@ export function blankFencedCodeBlocks(text: string): string {
     ) {
       fence = null;
     }
+    const openerListContentIndent: number | null =
+      fence !== null
+        ? fence.listContentIndent
+        : resolveOpenerListContentIndent(text, lineStart, line, containerLine);
     const parsed = parseFencedLine(
       line,
-      fence?.listContentIndent ?? null,
+      openerListContentIndent,
       fence !== null,
     );
     if (parsed) {
@@ -65,7 +73,8 @@ export function blankFencedCodeBlocks(text: string): string {
             char: fenceChar,
             length: parsed.marker.length,
             containerDepth: parsed.containerDepth,
-            listContentIndent: parsed.listContentIndent,
+            listContentIndent:
+              openerListContentIndent ?? parsed.listContentIndent,
           };
           out.push('');
           continue;
@@ -455,6 +464,48 @@ function findEnclosingListContentIndent(
   return openerContentIndent;
 }
 
+/**
+ * The active list-content indent to thread into a `parseFencedLine` call
+ * that is searching for a *new* fence opener at `lineStart` (not already
+ * inside an open fence, whose own tracked `listContentIndent` applies
+ * directly instead) -- so a fence marker pushed past column 3 by wide
+ * list-marker padding is still recognized as an opener, the same way
+ * {@link findMarkdownBlockBoundary}'s own opener check already threads it
+ * (#1897). A bounded backward/forward scan for the nearest enclosing list
+ * item's content indent -- unlike {@link findMarkdownBlockBoundary}'s own
+ * `interruptingListContentIndent(...) ??` shortcut for an opening line that
+ * is itself a genuine list item, that shortcut is inert here: `line` has
+ * already failed a bare `parseFencedLine` below, so it still carries its own
+ * unstripped list marker, and {@link stripLeadingIndentColumns} halts at the
+ * first non-whitespace character it meets -- the marker itself -- making any
+ * indent this shortcut could return behaviorally equivalent to `null`.
+ *
+ * Gated on the line's own indentation and a failed bare parse first --
+ * {@link findEnclosingListContentIndent}'s backward scan is real work, and
+ * the common case (no active list, or a fence already within column 0-3)
+ * must not pay for it -- the same concern #1894's PR addressed for
+ * {@link isWithinOpenHtmlBlock}'s own backward scan (a Copilot review
+ * finding on calling one unconditionally), applied here to this call site.
+ */
+function resolveOpenerListContentIndent(
+  text: string,
+  lineStart: number,
+  line: string,
+  containerLine: ContainerLine,
+): number | null {
+  if (
+    indentationColumns(containerLine.content) < MINIMUM_LIST_CONTENT_INDENT ||
+    parseFencedLine(line) !== null
+  ) {
+    return null;
+  }
+  return findEnclosingListContentIndent(
+    text,
+    lineStart,
+    containerLine.containerDepth,
+  );
+}
+
 function findMarkdownBlockBoundary(
   text: string,
   start: number,
@@ -836,9 +887,13 @@ function findFencedCodeRanges(text: string): MarkdownCodeRange[] {
       }
     }
 
+    const openerListContentIndent: number | null =
+      fence !== null
+        ? fence.listContentIndent
+        : resolveOpenerListContentIndent(text, lineStart, line, containerLine);
     const match = parseFencedLine(
       line,
-      fence?.listContentIndent ?? null,
+      openerListContentIndent,
       fence !== null,
     );
 
@@ -853,7 +908,8 @@ function findFencedCodeRanges(text: string): MarkdownCodeRange[] {
             length: marker.length,
             start: lineStart,
             containerDepth: match.containerDepth,
-            listContentIndent: match.listContentIndent,
+            listContentIndent:
+              openerListContentIndent ?? match.listContentIndent,
           };
         }
       } else if (
@@ -987,7 +1043,10 @@ function findIndentedCodeRanges(
     previousLineBlockBoundary =
       MARKDOWN_INDENTED_CODE_PRECEDER_PATTERN.test(parsed.content) ||
       (() => {
-        const fencedLine = parseFencedLine(rawLine);
+        const fencedLine = parseFencedLine(
+          rawLine,
+          resolveOpenerListContentIndent(text, lineStart, rawLine, parsed),
+        );
         return fencedLine !== null && isValidFenceOpener(fencedLine);
       })();
     previousContainerDepth = parsed.containerDepth;

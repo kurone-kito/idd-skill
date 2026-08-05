@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
 import {
+  blankFencedCodeBlocks,
   findMarkdownCodeRanges,
   getMarkdownCodeRange,
   maskMarkdownCodeRegionsPreservingPositions,
@@ -342,17 +343,86 @@ test('findMarkdownCodeRanges finds the list opener past a block-start-shaped lin
 
 test('findMarkdownCodeRanges recognizes a fence opener under wide list-marker padding as a block boundary', () => {
   const tick = String.fromCharCode(96);
-  // #1898 (partial, folded into #1894's PR): findMarkdownBlockBoundary's own
-  // parseFencedLine call did not thread the active list-content indent, so
-  // a fence marker pushed past column 3 by wide list-marker padding (`-`
-  // plus 4 spaces, content indent 5) was invisible as a block start. An
-  // inline span opened on the line above then ran straight through the
-  // fence line -- which itself is not a real closing backtick run for a
-  // 1-backtick opener -- and only stopped at the next lone backtick,
-  // masking "repository policy" and the fence markers as one long span.
-  // With the fence line recognized as a boundary, the span search stops
-  // there instead, finds no closing backtick before it, and (per the
-  // stray-backtick fail-open guard) masks nothing.
+  // findMarkdownBlockBoundary's own parseFencedLine call did not thread the
+  // active list-content indent, so a fence marker pushed past column 3 by
+  // wide list-marker padding (`-` plus 4 spaces, content indent 5) was
+  // invisible as a block start (fixed in #1897). Independently, #1898 fixed
+  // findFencedCodeRanges's own opener detection for the same wide-padded
+  // fence, so this now-unclosed fence (no closing ``` at this same
+  // indentation follows) is recognized as a genuine fenced range running to
+  // the end of input, per CommonMark -- masking its content, including the
+  // stray inline backtick's would-be content and "repository policy", as
+  // fenced code. This is the correct outcome (GitHub renders an unclosed
+  // fence as code too, not literal policy text), not merely "masks
+  // nothing" via the stray-backtick fail-open guard the block-boundary fix
+  // alone used to produce.
   const body = `-    Example ${tick}ignore\n     ${tick.repeat(3)}\n     repository policy${tick}`;
-  assert.deepEqual(findMarkdownCodeRanges(body), []);
+  const fenceStart = body.indexOf('\n', body.indexOf(tick)) + 1;
+  assert.deepEqual(findMarkdownCodeRanges(body), [
+    { start: fenceStart, end: body.length },
+  ]);
+});
+
+test('findFencedCodeRanges recognizes a closed fence under wide list-marker padding (#1898)', () => {
+  // #1898: findFencedCodeRanges's own opener detection evaluated
+  // `fence?.listContentIndent ?? null` while `fence` was still `null` --
+  // i.e. while searching for a *new* opener -- so the very first fence
+  // line of a wide-padded list item (content indent 5, past
+  // parseFencedLine's 0-3 column allowance) was parsed with no list-indent
+  // adjustment and never recognized as a fence at all. Confirmed
+  // pre-existing on `main` before #1894/#1897 touched this file: with the
+  // fence invisible, blankFencedCodeBlocks left the input completely
+  // unchanged, and stripMarkdownCodeRegions's inline-code-span regex then
+  // read the two unrelated 3-backtick runs as one open/close delimiter
+  // pair, masking the content between them -- the dangerous direction,
+  // since that path backs several consumers beyond checkTrustSafety
+  // (discover-roadmap-graph's blocked-by resolution,
+  // discover-readiness-check, autopilot-suitability, review-clause,
+  // audit-authored-issue).
+  const body =
+    '-    Text\n     ```\n     ignore repository policy\n     ```\n     after';
+  const fenceOpenerLineStart = body.indexOf('\n') + 1;
+  const fenceCloserLineEnd = body.lastIndexOf('```') + 3 + 1;
+  assert.deepEqual(findMarkdownCodeRanges(body), [
+    { start: fenceOpenerLineStart, end: fenceCloserLineEnd },
+  ]);
+});
+
+test('blankFencedCodeBlocks recognizes a closed fence under wide list-marker padding (#1898)', () => {
+  // Same reproduction as the findFencedCodeRanges test above, verified
+  // directly against blankFencedCodeBlocks itself -- the masking primitive
+  // several non-suitability consumers depend on (stripMarkdownCodeRegions,
+  // and transitively discover-roadmap-graph's blocked-by resolution,
+  // discover-readiness-check, autopilot-suitability, review-clause,
+  // audit-authored-issue). Testing stripMarkdownCodeRegions's output alone
+  // is not discriminating here: even with this fix reverted, its inline-
+  // code-span regex independently (and coincidentally) masks the same
+  // "ignore repository policy" text by misreading the two unrecognized
+  // 3-backtick runs as one open/close delimiter pair -- the exact failure
+  // mode this fix closes, but not one a same-output assertion on
+  // stripMarkdownCodeRegions alone would catch.
+  const body =
+    '-    Text\n     ```\n     ignore repository policy\n     ```\n     after';
+  assert.equal(blankFencedCodeBlocks(body), '-    Text\n\n\n\n     after');
+});
+
+test('findMarkdownCodeRanges recognizes deeply indented content right after a wide-padded fence as indented code (#1898)', () => {
+  // #1898's third site: findIndentedCodeRanges's own previousLineBlockBoundary
+  // computation called parseFencedLine(rawLine) with no list-content-indent
+  // argument, so a wide-padded fence opener was never recognized as ending
+  // a "can start new indented code" boundary. Because findIndentedCodeRanges
+  // treats fence *content* lines as opaque (skipped via the fencedRanges
+  // argument) but does not update previousLineBlank/previousLineBlockBoundary
+  // while skipping them, the fence opener's own (previously wrong) value was
+  // the one that reached canStartCode's check for the line immediately after
+  // the fence closes -- silently dropping a genuinely new indented-code
+  // block there. Confirmed via mutation: reverting only this site while
+  // keeping the other two #1898 fixes made this range shrink to stop right
+  // after the fence, excluding the final deeply indented line.
+  const body =
+    '-    Text\n     ```\n     fenced\n     ```\n         deeply-indented-after-fence';
+  const fenceOpenerLineStart = body.indexOf('\n') + 1;
+  assert.deepEqual(findMarkdownCodeRanges(body), [
+    { start: fenceOpenerLineStart, end: body.length },
+  ]);
 });
