@@ -1683,14 +1683,30 @@ const CODEX_USAGE_LIMIT_TOKEN_PATTERN =
 // uses, so a comment that merely reuses those individual words near
 // SENTENCE_1's exact bot phrasing cannot piggyback a false accept (a gap
 // found and closed during this PR's own review-fix rounds).
+//
+// #1877: a THIRD, structurally distinct wording observed live on PR #1876
+// replaces the admin/credits sentence entirely with a dashboard pointer
+// ("You can see your limits in the [Codex usage dashboard](url).") — it is
+// an alternative closing sentence, not a continuation appended after
+// SENTENCE_1/SENTENCE_2, so it is a separate alternation branch
+// (SENTENCE_3) rather than a third optional suffix on the admin/credits
+// shape. SENTENCE_3 anchors the distinctive multi-word phrase "you can see
+// your limits" plus "Codex usage dashboard", with the same bounded,
+// gap-tolerant, non-exact-phrase approach as SENTENCE_1/SENTENCE_2. The
+// trailing markdown-link close `](url)` is matched structurally (bracket,
+// parens, non-`)` URL body) rather than an arbitrary-content character
+// budget, and is optional so a future plain-text rendering (no markdown
+// link) still matches.
 const CODEX_NOTICE_TRAILER_LEAD_IN =
   '[.!,;:\\s]{0,3}(?:\\bPlease\\b[.!,;:\\s]{0,3})?';
 const CODEX_NOTICE_TRAILER_SENTENCE_1 =
   '\\bcheck with the admins\\b[\\s\\S]{0,60}?\\bincrease the limits\\b[\\s\\S]{0,60}?\\badding credits\\b';
 const CODEX_NOTICE_TRAILER_SENTENCE_2 =
   '\\bcredits must be used\\b[\\s\\S]{0,40}?\\benable\\b[\\s\\S]{0,40}?\\brepository\\b[\\s\\S]{0,40}?\\b(?:code )?reviews?\\b';
+const CODEX_NOTICE_TRAILER_SENTENCE_3 =
+  '\\byou can see your limits\\b[\\s\\S]{0,60}?\\bCodex usage dashboard\\b(?:\\]\\([^)]*\\))?';
 const CODEX_NOTICE_TRAILER_CONTINUATION_PATTERN = new RegExp(
-  `^${CODEX_NOTICE_TRAILER_LEAD_IN}${CODEX_NOTICE_TRAILER_SENTENCE_1}(?:[.!,;:\\s]{0,5}${CODEX_NOTICE_TRAILER_SENTENCE_2})?[.!,;:\\s]*$`,
+  `^${CODEX_NOTICE_TRAILER_LEAD_IN}(?:${CODEX_NOTICE_TRAILER_SENTENCE_1}(?:[.!,;:\\s]{0,5}${CODEX_NOTICE_TRAILER_SENTENCE_2})?|${CODEX_NOTICE_TRAILER_SENTENCE_3})[.!,;:\\s]*$`,
   'i',
 );
 const CODEX_NOTICE_MAX_LENGTH = 220;

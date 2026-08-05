@@ -3715,6 +3715,54 @@ test('isAdvisoryNonReviewNotice matches only machine-generated non-review notice
     ),
     true,
   );
+  // #1877: a third live trailer wording (observed on PR #1876,
+  // 2026-08-05) points at the Codex usage dashboard instead of the
+  // admin/credits sentence — must still classify as a non-review notice.
+  // Literal text captured from
+  // https://github.com/kurone-kito/idd-skill/pull/1876#issuecomment-5187108915.
+  assert.equal(
+    isAdvisoryNonReviewNotice(
+      'You have reached your Codex usage limits for code reviews. You ' +
+        'can see your limits in the [Codex usage dashboard]' +
+        '(https://chatgpt.com/codex/cloud/settings/usage).',
+    ),
+    true,
+  );
+  // #1877: the same dashboard-pointer wording without markdown link syntax
+  // (a plausible plain-text rendering) must also match — the markdown
+  // link close is optional, not required.
+  assert.equal(
+    isAdvisoryNonReviewNotice(
+      'You have reached your Codex usage limits for code reviews. You ' +
+        'can see your limits in the Codex usage dashboard.',
+    ),
+    true,
+  );
+  // #1877: the dashboard-pointer trailer followed by further unrelated
+  // prose must still not match — SENTENCE_3 anchors the entire remainder,
+  // the same whole-remainder anchoring SENTENCE_1/SENTENCE_2 already
+  // enforce.
+  assert.equal(
+    isAdvisoryNonReviewNotice(
+      'You have reached your Codex usage limits for code reviews. You ' +
+        'can see your limits in the [Codex usage dashboard]' +
+        '(https://chatgpt.com/codex/cloud/settings/usage). By the way I ' +
+        'also noticed a bug in the retry logic.',
+    ),
+    false,
+  );
+  // #1877: a narrative lead-in before "you can see your limits" must not
+  // match either — mirrors the existing SENTENCE_1 narrative-lead-in
+  // guard; the lead-in before the trailer's core tokens must stay
+  // punctuation/whitespace plus the one known "Please" word, never
+  // arbitrary narrative content.
+  assert.equal(
+    isAdvisoryNonReviewNotice(
+      'You have reached your Codex usage limits for code reviews. We ' +
+        'think you can see your limits in the Codex usage dashboard.',
+    ),
+    false,
+  );
   assert.equal(isAdvisoryNonReviewNotice(''), false);
   assert.equal(isAdvisoryNonReviewNotice(null), false);
 });
