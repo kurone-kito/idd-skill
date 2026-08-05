@@ -148,6 +148,30 @@ function isMarkdownBlockStart(content) {
 function isHtmlClosingSyntax(content) {
   return /^ {0,3}<\//u.test(content);
 }
+/**
+ * True when `content` opens one of CommonMark's four special HTML block
+ * forms (comment, processing instruction, declaration, CDATA) and also
+ * carries that form's own closing token later on the same line -- e.g.
+ * `<!-- comment -->`. Unlike a raw-text or generic HTML block, these forms
+ * can be fully self-contained on one line; when they are, that line proves
+ * nothing about enclosing a later line and must not be read as leaving an
+ * open block behind it.
+ */
+function isSelfClosedSpecialHtmlBlock(content) {
+  if (/^ {0,3}<!--/u.test(content)) {
+    return content.includes('-->');
+  }
+  if (/^ {0,3}<\?/u.test(content)) {
+    return content.includes('?>');
+  }
+  if (/^ {0,3}<!\[CDATA\[/iu.test(content)) {
+    return content.includes(']]>');
+  }
+  if (/^ {0,3}<![A-Z]/iu.test(content)) {
+    return content.includes('>');
+  }
+  return false;
+}
 function lineBounds(text, lineStart) {
   const newlineIndex = text.indexOf('\n', lineStart);
   const end =
@@ -236,6 +260,7 @@ function isWithinOpenHtmlBlock(text, openingLineStart, containerDepth) {
     if (
       !crossedBlankLine &&
       !isHtmlClosingSyntax(htmlContent) &&
+      !isSelfClosedSpecialHtmlBlock(htmlContent) &&
       (MARKDOWN_HTML_BLOCK_START_PATTERN.test(htmlContent) ||
         MARKDOWN_CUSTOM_HTML_BLOCK_START_PATTERN.test(htmlContent))
     ) {

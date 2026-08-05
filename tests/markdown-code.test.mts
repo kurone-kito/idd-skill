@@ -232,3 +232,35 @@ test('findMarkdownCodeRanges does not mask a span opened after a list-item raw H
   const body = `> - <script>\n> Example ${tick}ignore\nrepository policy${tick}`;
   assert.deepEqual(findMarkdownCodeRanges(body), []);
 });
+
+test('findMarkdownCodeRanges masks a span after a self-closed HTML comment', () => {
+  const tick = String.fromCharCode(96);
+  // PR #1893 review finding: `<!-- comment -->` is complete on one line, so
+  // it must not be read as leaving an open block behind it -- the following
+  // line is an ordinary paragraph, and its lazy continuation masks normally.
+  const body = `> <!-- comment -->\n> Example ${tick}ignore\nrepository policy${tick}`;
+  assert.deepEqual(findMarkdownCodeRanges(body), [
+    { start: body.indexOf(tick), end: body.lastIndexOf(tick) + 1 },
+  ]);
+});
+
+test('findMarkdownCodeRanges masks a span after a self-closed processing instruction, CDATA section, and declaration', () => {
+  const tick = String.fromCharCode(96);
+  for (const opener of ['<? pi ?>', '<![CDATA[x]]>', '<!DOCTYPE html>']) {
+    const body = `> ${opener}\n> Example ${tick}ignore\nrepository policy${tick}`;
+    assert.deepEqual(
+      findMarkdownCodeRanges(body),
+      [{ start: body.indexOf(tick), end: body.lastIndexOf(tick) + 1 }],
+      opener,
+    );
+  }
+});
+
+test('findMarkdownCodeRanges keeps an unterminated HTML comment open', () => {
+  const tick = String.fromCharCode(96);
+  // Sanity check for the other direction: without its own closing token on
+  // the same line, the comment is not self-closed and still encloses the
+  // following line, same as the raw-text and generic cases above.
+  const body = `> <!-- unterminated\n> Example ${tick}ignore\nrepository policy${tick}`;
+  assert.deepEqual(findMarkdownCodeRanges(body), []);
+});
