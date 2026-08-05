@@ -238,19 +238,26 @@ function findPreviousLineStart(text: string, lineStart: number): number | null {
  * through consecutive, same-depth lines; a container-depth change ends the
  * search unconditionally (not enclosed).
  *
- * The two HTML block families close differently, so neither a blank line nor
- * a line that otherwise looks like a new block (heading, list, thematic
- * break) ends either one by itself -- CommonMark keeps their content
- * completely literal until their own close condition:
+ * CommonMark's HTML block families close differently, so a line that
+ * otherwise looks like a new block (heading, list, thematic break) never
+ * ends any of them by itself -- their content stays completely literal
+ * until their own close condition. This scan's handling of the blank-line
+ * question, by family:
  *
  * - Raw-text elements (`<script>`/`<pre>`/`<style>`/`<textarea>`) close only
  *   on a line containing their matching end tag; a blank line does not
  *   affect them, so the scan keeps looking for one past any number of blank
  *   lines.
- * - Every other HTML block type closes only at a blank line. Once the scan
- *   has crossed one, an opener found further back no longer reaches the
- *   opening line and is ignored -- only a still-reachable raw-text opener
- *   can still apply.
+ * - The special forms (comment/processing-instruction/declaration/CDATA)
+ *   likewise close only on their own token per CommonMark, not on a blank
+ *   line -- this scan currently only recognizes a same-line self-close
+ *   (`isSelfClosedSpecialHtmlBlock`) for them; short of that, it falls back
+ *   to the blank-line-terminated handling below, which is imprecise for a
+ *   multi-line special block containing a blank line (tracked in #1895).
+ * - Every generic HTML block type (`<div>` and the like) genuinely does
+ *   close at a blank line. Once the scan has crossed one, an opener found
+ *   further back no longer reaches the opening line and is ignored -- only
+ *   a still-reachable raw-text opener can still apply.
  *
  * A closing tag for a non-raw-text element (e.g. `</div>`) proves nothing on
  * its own and is skipped rather than treated as a boundary or a find.
