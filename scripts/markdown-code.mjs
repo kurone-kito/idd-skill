@@ -303,12 +303,18 @@ function findMarkdownBlockBoundary(text, start, end) {
     openingListItem?.content ?? openingParsed.content;
   const openingFence = parseFencedLine(openingRawLine);
   const openingContainerDepth = openingParsed.containerDepth;
+  // isWithinOpenHtmlBlock only ever changes the outcome below through
+  // isLazyQuoteContinuation, which already requires openingContainerDepth >
+  // 0 -- so skip the backward scan entirely outside a blockquote, where the
+  // result can never matter anyway (the common case, for ordinary
+  // unquoted bodies).
   const openingIsParagraph =
     !isMarkdownBlockStart(openingParagraphContent) &&
     !MARKDOWN_HTML_BLOCK_START_PATTERN.test(openingParagraphContent) &&
     !MARKDOWN_CUSTOM_HTML_BLOCK_START_PATTERN.test(openingParagraphContent) &&
     (openingFence === null || !isValidFenceOpener(openingFence)) &&
-    !isWithinOpenHtmlBlock(text, openingLineStart, openingContainerDepth);
+    (openingContainerDepth === 0 ||
+      !isWithinOpenHtmlBlock(text, openingLineStart, openingContainerDepth));
   let lineStart = openingLine.next;
   while (lineStart < end) {
     const line = lineBounds(text, lineStart);
