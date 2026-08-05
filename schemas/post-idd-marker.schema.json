@@ -8,7 +8,8 @@
   "properties": {
     "mode": {
       "type": "string",
-      "enum": ["dry-run", "apply"]
+      "enum": ["dry-run", "apply"],
+      "description": "Whether the helper previewed a marker or posted it."
     },
     "type": {
       "type": "string",
@@ -22,28 +23,35 @@
         "advisory-recovery",
         "advisory-reroll",
         "copilot-unavailable"
-      ]
+      ],
+      "description": "Operational marker type rendered for the comment."
     },
     "target": {
       "type": "string",
-      "enum": ["issue", "pr"]
+      "enum": ["issue", "pr"],
+      "description": "GitHub object kind receiving the marker comment."
     },
     "number": {
       "type": "integer",
-      "minimum": 1
+      "minimum": 1,
+      "description": "Issue or pull request number receiving the marker."
     },
     "body": {
-      "type": "string"
+      "type": "string",
+      "description": "Byte-exact marker body that dry-run would post; omitted in apply mode."
     },
     "commentId": {
       "type": "integer",
-      "minimum": 1
+      "minimum": 1,
+      "description": "Identifier of the comment created in apply mode."
     },
     "url": {
-      "type": "string"
+      "type": "string",
+      "description": "URL of the comment created in apply mode."
     },
     "warnings": {
       "type": "array",
+      "description": "Non-blocking diagnostics reported while preparing or posting the marker.",
       "items": {
         "type": "string"
       }

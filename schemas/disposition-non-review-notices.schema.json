@@ -8,71 +8,110 @@
   "properties": {
     "mode": {
       "type": "string",
-      "enum": ["dry-run", "apply"]
+      "enum": ["dry-run", "apply"],
+      "description": "Whether this document is a disposition plan or the result of applying it."
     },
     "prNumber": {
       "type": "integer",
-      "minimum": 1
+      "minimum": 1,
+      "description": "Pull request whose non-review notices were classified."
     },
     "headSha": {
       "type": "string",
-      "pattern": "^[0-9a-f]{40}$"
+      "pattern": "^[0-9a-f]{40}$",
+      "description": "PR head SHA to which the disposition plan or result is bound."
     },
     "planned": {
       "type": "array",
+      "description": "Notices or CodeRabbit summary walkthroughs selected for disposition and the response planned for each one.",
       "items": {
         "type": "object",
         "required": ["noticeId", "botLogin", "reason", "body"],
         "additionalProperties": false,
         "properties": {
-          "noticeId": { "type": "integer" },
-          "botLogin": { "type": "string" },
-          "reason": { "type": "string" },
+          "noticeId": {
+            "type": "integer",
+            "description": "GitHub comment identifier of the notice or summary walkthrough."
+          },
+          "botLogin": {
+            "type": "string",
+            "description": "Bot login associated with the notice or summary walkthrough."
+          },
+          "reason": {
+            "type": "string",
+            "description": "Reason the notice or summary walkthrough is eligible for the planned disposition."
+          },
           "body": {
             "type": "string",
-            "pattern": "^\\*\\*(Rejected|Accepted)\\*\\*"
+            "pattern": "^\\*\\*(Rejected|Accepted)\\*\\*",
+            "description": "Rendered disposition body beginning with the Accepted or Rejected decision."
           }
         }
       }
     },
     "status": {
       "type": "string",
-      "enum": ["applied", "failed"]
+      "enum": ["applied", "failed"],
+      "description": "Outcome of an apply-mode disposition attempt."
     },
     "applied": {
       "type": "array",
+      "description": "Notices or summary walkthroughs whose disposition was posted successfully in apply mode.",
       "items": {
         "type": "object",
         "required": ["noticeId", "commentId"],
         "additionalProperties": false,
         "properties": {
-          "noticeId": { "type": "integer" },
-          "commentId": { "type": "integer" }
+          "noticeId": {
+            "type": "integer",
+            "description": "GitHub comment identifier of the successfully handled notice or summary walkthrough."
+          },
+          "commentId": {
+            "type": "integer",
+            "description": "Identifier of the disposition comment created by the apply operation."
+          }
         }
       }
     },
     "failed": {
       "type": "array",
+      "description": "Notices or summary walkthroughs whose disposition could not be applied, with the reported error.",
       "items": {
         "type": "object",
         "required": ["noticeId", "error"],
         "additionalProperties": false,
         "properties": {
-          "noticeId": { "type": "integer" },
-          "error": { "type": "string" }
+          "noticeId": {
+            "type": "integer",
+            "description": "GitHub comment identifier of the notice or summary walkthrough that failed."
+          },
+          "error": {
+            "type": "string",
+            "description": "Error reported while applying the disposition."
+          }
         }
       }
     },
     "skipped": {
       "type": "array",
+      "description": "Notices or summary walkthroughs intentionally left unchanged by the disposition route.",
       "items": {
         "type": "object",
         "required": ["noticeId", "botLogin", "reason"],
         "additionalProperties": false,
         "properties": {
-          "noticeId": { "type": "integer" },
-          "botLogin": { "type": "string" },
-          "reason": { "type": "string" }
+          "noticeId": {
+            "type": "integer",
+            "description": "GitHub comment identifier of the skipped notice or summary walkthrough."
+          },
+          "botLogin": {
+            "type": "string",
+            "description": "Bot login associated with the skipped notice or summary walkthrough."
+          },
+          "reason": {
+            "type": "string",
+            "description": "Reason the notice or summary walkthrough was not selected for disposition."
+          }
         }
       }
     }

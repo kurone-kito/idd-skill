@@ -9,11 +9,13 @@
   "properties": {
     "version": {
       "type": "string",
-      "pattern": "^\\d+\\.\\d+\\.\\d+$"
+      "pattern": "^\\d+\\.\\d+\\.\\d+$",
+      "description": "Semantic version of the machine-readable phase graph."
     },
     "nodes": {
       "type": "array",
       "minItems": 1,
+      "description": "Phase nodes and their outgoing workflow transitions.",
       "items": {
         "type": "object",
         "additionalProperties": false,
@@ -21,10 +23,12 @@
         "properties": {
           "id": {
             "type": "string",
-            "pattern": "^[A-Z][A-Za-z0-9.-]*$"
+            "pattern": "^[A-Z][A-Za-z0-9.-]*$",
+            "description": "Unique identifier of an IDD phase node."
           },
           "next": {
             "type": "array",
+            "description": "Phase identifiers reachable after this node.",
             "items": {
               "type": "string",
               "pattern": "^[A-Z][A-Za-z0-9.-]*$"

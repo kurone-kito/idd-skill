@@ -20,6 +20,7 @@
   "properties": {
     "repository": {
       "type": "object",
+      "description": "Repository context used for quiet-window evidence collection.",
       "required": [
         "owner",
         "repo"
@@ -38,6 +39,7 @@
     },
     "pr": {
       "type": "object",
+      "description": "Pull request context whose activity is evaluated for a stalled-session quiet window.",
       "required": [
         "number",
         "title",
@@ -68,6 +70,7 @@
     },
     "policy": {
       "type": "object",
+      "description": "Policy inputs used for this quiet-window evaluation.",
       "required": [
         "quiet_window_ms",
         "claim_created_at"
@@ -129,6 +132,7 @@
     },
     "evidence": {
       "type": "object",
+      "description": "Activity evidence supporting the quiet-window result.",
       "required": [
         "activity_count_in_window",
         "blocking_activities",

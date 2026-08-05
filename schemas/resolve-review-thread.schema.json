@@ -9,32 +9,39 @@
   "properties": {
     "mode": {
       "type": "string",
-      "enum": ["dry-run", "apply"]
+      "enum": ["dry-run", "apply"],
+      "description": "Whether the helper planned or performed the reply-and-resolve operation."
     },
     "prNumber": {
       "type": "integer",
-      "minimum": 1
+      "minimum": 1,
+      "description": "Pull request containing the review comment and thread."
     },
     "commentId": {
       "type": "integer",
-      "minimum": 1
+      "minimum": 1,
+      "description": "Review comment identifier whose owning thread is located."
     },
     "threadId": {
       "description": "GraphQL node id of the resolved review thread; omitted when no thread owns the comment.",
       "type": "string"
     },
     "alreadyResolved": {
-      "type": "boolean"
+      "type": "boolean",
+      "description": "Whether the owning review thread was already resolved at inspection time, in either dry-run or apply mode."
     },
     "status": {
       "type": "string",
-      "enum": ["applied", "failed"]
+      "enum": ["applied", "failed"],
+      "description": "Outcome of the apply-mode reply-and-resolve attempt."
     },
     "replyId": {
-      "type": "integer"
+      "type": "integer",
+      "description": "Identifier of the reply comment created before resolving the thread."
     },
     "error": {
-      "type": "string"
+      "type": "string",
+      "description": "Error reported when the reply or thread resolution could not be completed."
     }
   }
 }

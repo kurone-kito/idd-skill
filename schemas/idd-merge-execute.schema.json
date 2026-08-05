@@ -20,51 +20,63 @@
   "properties": {
     "protocolVersion": {
       "type": "string",
-      "pattern": "^1$"
+      "pattern": "^1$",
+      "description": "Protocol version of the F3 merge-execution verdict."
     },
     "decisionAuthority": {
       "type": "string",
-      "enum": ["instructions"]
+      "enum": ["instructions"],
+      "description": "Source of the merge decision represented by this verdict."
     },
     "mode": {
       "type": "string",
-      "enum": ["dry-run", "apply"]
+      "enum": ["dry-run", "apply"],
+      "description": "Whether the helper produced a merge plan or attempted execution."
     },
     "prNumber": {
       "type": "integer",
-      "minimum": 1
+      "minimum": 1,
+      "description": "Pull request evaluated by the F3 merge gate."
     },
     "prHeadSha": {
       "type": "string",
-      "pattern": "^[0-9a-f]{40}$"
+      "pattern": "^[0-9a-f]{40}$",
+      "description": "PR head SHA bound to the readiness check and merge command."
     },
     "ready": {
-      "type": "boolean"
+      "type": "boolean",
+      "description": "Whether the merge-gate checklist has no blocking conditions."
     },
     "blockers": {
       "type": "array",
+      "description": "Merge-gate conditions that prevented readiness, if any.",
       "items": {
         "type": "object",
         "required": ["gate", "detail"],
         "properties": {
           "gate": {
-            "type": "string"
+            "type": "string",
+            "description": "Name of the merge gate that blocked readiness."
           },
           "detail": {
-            "type": "string"
+            "type": "string",
+            "description": "Evidence or explanation for the blocking gate."
           }
         },
         "additionalProperties": false
       }
     },
     "mergeCommand": {
-      "type": "string"
+      "type": "string",
+      "description": "Head-bound merge command planned or used by the helper."
     },
     "merged": {
-      "type": "boolean"
+      "type": "boolean",
+      "description": "Whether apply mode completed a successful merge."
     },
     "mergeResult": {
-      "type": "string"
+      "type": "string",
+      "description": "Human-readable result or error from merge execution."
     },
     "adminFallbackUsed": {
       "type": "boolean",

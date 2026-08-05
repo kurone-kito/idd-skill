@@ -20,59 +20,70 @@
     "oldAgentId": {
       "type": "string",
       "minLength": 1,
-      "pattern": "^(?!.*(?:<!--|-->))\\S+$"
+      "pattern": "^(?!.*(?:<!--|-->))\\S+$",
+      "description": "Agent identifier of the claim being handed off."
     },
     "oldClaimId": {
       "type": "string",
       "minLength": 1,
-      "pattern": "^(?!.*(?:<!--|-->))\\S+$"
+      "pattern": "^(?!.*(?:<!--|-->))\\S+$",
+      "description": "Claim identifier of the claim being handed off."
     },
     "newAgentId": {
       "type": "string",
       "minLength": 1,
-      "pattern": "^(?!.*(?:<!--|-->))\\S+$"
+      "pattern": "^(?!.*(?:<!--|-->))\\S+$",
+      "description": "Agent identifier named as the successor of the handoff."
     },
     "newClaimId": {
       "type": "string",
       "minLength": 1,
-      "pattern": "^(?!.*(?:<!--|-->))\\S+$"
+      "pattern": "^(?!.*(?:<!--|-->))\\S+$",
+      "description": "Claim identifier adopted by the successor."
     },
     "branch": {
       "type": "string",
       "minLength": 1,
-      "pattern": "^(?!.*(?:<!--|-->))[^\\s>]+$"
+      "pattern": "^(?!.*(?:<!--|-->))[^\\s>]+$",
+      "description": "Branch that remains associated with the transferred claim."
     },
     "linkedPr": {
       "type": "string",
       "minLength": 1,
-      "pattern": "^(?:[1-9]\\d*|https?://[^\\s<>\"]+)$"
+      "pattern": "^(?:[1-9]\\d*|https?://[^\\s<>\"]+)$",
+      "description": "PR number or URL used to bind an issue-plus-pr handoff to its backing pull request."
     },
     "forcedBy": {
       "type": "string",
       "minLength": 1,
-      "pattern": "^(?!.*(?:<!--|-->))\\S+$"
+      "pattern": "^(?!.*(?:<!--|-->))\\S+$",
+      "description": "Actor recorded as authorizing the forced handoff; callers verify that actor’s authority."
     },
     "reason": {
       "type": "string",
       "minLength": 1,
-      "pattern": "^(?!.*(?:-->)).+$"
+      "pattern": "^(?!.*(?:-->)).+$",
+      "description": "Human-readable reason recorded for the handoff."
     },
     "timestamp": {
       "type": "string",
       "format": "date-time",
-      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}Z$"
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}Z$",
+      "description": "UTC timestamp embedded in the forced-handoff marker."
     },
     "contextScope": {
       "type": "string",
       "enum": [
         "issue-only",
         "issue-plus-pr"
-      ]
+      ],
+      "description": "Scope in which the handoff is intended to be honored."
     },
     "createdAt": {
       "type": "string",
       "format": "date-time",
-      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}Z$"
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}Z$",
+      "description": "GitHub comment creation timestamp used to order and validate the handoff."
     }
   }
 }
