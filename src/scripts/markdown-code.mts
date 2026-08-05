@@ -264,11 +264,13 @@ function findPreviousLineStart(text: string, lineStart: number): number | null {
  *
  * A scanned line's own list-item marker (e.g. `- <script>`) is stripped
  * before testing it against the HTML patterns, the same way the opening
- * line's own marker already is. This only ever affects a caller reachable
- * through a container-depth change elsewhere (see `findMarkdownBlockBoundary`
- * below) -- a bare, blockquote-free list item never reaches this function,
- * since `findMarkdownBlockBoundary` does not itself track list-content
- * indentation continuation (a separate, pre-existing gap, out of scope here).
+ * line's own marker already is. This affects a caller reachable through a
+ * container-depth change (a list nested inside a blockquote; see
+ * `findMarkdownBlockBoundary` below) and, since #1894's follow-up fix, a
+ * bare, blockquote-free list item too -- `findMarkdownBlockBoundary` now
+ * calls this scan at every container depth (via `openingIsParagraph`,
+ * which gates its own `isLazyListContinuation` exception the same way it
+ * already gated `isLazyQuoteContinuation`), not only inside a blockquote.
  *
  * **Known limitation.** This scan short-circuits on the first close/open
  * signal it finds, so it does not track more than one candidate enclosing
@@ -279,7 +281,9 @@ function findPreviousLineStart(text: string, lineStart: number): number | null {
  * opener further back -- a bounded backward scan cannot fully disambiguate
  * this without the kind of forward, single-pass block-state tracking the
  * rest of this module does not otherwise need. Tracked as a follow-up
- * rather than folded into this pass.
+ * (#1895) rather than folded into this pass; since #1894's follow-up fix,
+ * this limitation is reachable from a bare, blockquote-free list item too,
+ * not only a blockquote -- see #1895 for the current scope of that gap.
  */
 function isWithinOpenHtmlBlock(
   text: string,
