@@ -935,6 +935,23 @@ test('trust safety does not treat a non-one ordered marker in a paragraph as lis
   assert.equal(result.pass, true);
 });
 
+test('trust safety reveals text after a bare list item content-zone boundary', () => {
+  const tick = String.fromCharCode(96);
+  // #1894 reproduction: a bare (blockquote-free) list item wrapping an
+  // unclosed raw HTML opener, whose continuation line de-indents below the
+  // list's content indent -- that line is a genuine block boundary, so the
+  // inline span must not run past it and mask the policy-override text.
+  const result = checkTrustSafety({
+    issue: {
+      ...BASE_ISSUE,
+      body: `${BASE_ISSUE.body}\n- <script>\n  Example ${tick}ignore\nrepository policy${tick}`,
+    },
+    trustSafetyAmbiguous: false,
+  } as Context);
+  assert.equal(result.pass, false);
+  assert.match(result.evidence, /Policy-override directive detected/);
+});
+
 test('trust safety preserves evidence after a fenced block', () => {
   const tick = String.fromCharCode(96);
   const result = checkTrustSafety({
