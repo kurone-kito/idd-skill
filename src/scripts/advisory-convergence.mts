@@ -14,10 +14,17 @@
 // with a hard exit code.
 //
 // Reuse map (no duplicated review-parsing logic):
-//   - `isCopilotReviewerLogin` / `readAdvisoryPrimaryBotLogin` /
-//     `resolveAdvisoryPrimaryBotLogin` -- Copilot identity resolution.
+//   - `readAdvisoryPrimaryBotLogin` / `resolveAdvisoryPrimaryBotLogin` --
+//     Copilot identity resolution.
 //   - `resolveAdvisoryBotLogins`, `resolveTrustedMarkerActors` -- the same
 //     trust/identity resolution every other helper uses.
+//   - `resolveLatestCopilotReviewClause`, `fetchReviewsAndHeadCommit`,
+//     `isVerifiedCopilotAuthor` (which itself reuses
+//     `isCopilotReviewerLogin`'s login-string check) -- the latest-review
+//     Clause 1 evidence, extracted to `review-clause.mts` (#1806) so
+//     `rerun-advisory-convergence.mts` can reuse the exact same evidence
+//     for its own live-coverage recovery signal, without importing this
+//     whole file.
 //   - `summarizeDispositionEvidenceForGate` -- reused UNFILTERED for
 //     per-thread disposition-marker validity; this file only adds a thin
 //     Copilot-authorship filter on top of its `missingThreads` output.
@@ -79,6 +86,7 @@ import {
   GH_TEXT_LOOP_OPTIONS,
   type GhTextOptions,
   ghApiJson,
+  ghGraphql,
   ghText,
   safeGhText,
 } from './gh-exec.mts';
@@ -92,7 +100,6 @@ import {
 import type { PrCommitPayload } from './protocol-helpers.mts';
 import {
   DEFAULT_STALE_AGE_MS,
-  isCopilotReviewerLogin,
   normalizeTrustedMarkerLogins,
   operationalMarkerPrefix,
   resolveAdvisoryBotLogins,
@@ -102,6 +109,21 @@ import {
   summarizeDispositionEvidenceForGate,
   summarizeExternalCheckWaivers,
 } from './protocol-helpers.mts';
+// #1806: the latest-review Clause 1 evidence (types + pure evaluator + the
+// GraphQL fetch behind it) moved to `review-clause.mts` so
+// `rerun-advisory-convergence.mts` can reuse the SAME evidence this gate
+// uses, without importing this whole file's claim/waiver/disposition
+// machinery. Re-imported here verbatim -- no behavior change to this file.
+import type {
+  AdvisoryConvergenceReviewClause,
+  GhAuthorPayload,
+  ReviewPayload,
+} from './review-clause.mts';
+import {
+  fetchReviewsAndHeadCommit,
+  isVerifiedCopilotAuthor,
+  resolveLatestCopilotReviewClause,
+} from './review-clause.mts';
 
 /** The external-check-waiver selector this gate recognizes (documented in
  * docs/idd-helper-scripts.md and docs/policy-constants.md; #1341's required
@@ -142,17 +164,15 @@ export const SAME_HEAD_REROLL_INELIGIBLE_REASON = {
 export type SameHeadRerollIneligibleReasonToken =
   (typeof SAME_HEAD_REROLL_INELIGIBLE_REASON)[keyof typeof SAME_HEAD_REROLL_INELIGIBLE_REASON];
 
-/** Author reference embedded in GitHub REST/GraphQL payloads.
- * `__typename` (#1686) is GraphQL-only -- this file's own `reviews` /
- * `reviewThreads` / thread-comment-page queries request it explicitly (see
- * `fetchReviewsAndHeadCommit` / `fetchReviewThreads` /
- * `fetchThreadCommentPages`), so every LIVE payload this gate evaluates
- * carries it; a fixture/test payload that omits it is treated as
- * "unknown", never as a rejection -- see {@link isVerifiedCopilotAuthor}. */
-interface GhAuthorPayload {
-  login?: string | null;
-  __typename?: string | null;
-}
+// `GhAuthorPayload` (author reference embedded in GitHub REST/GraphQL
+// payloads) now lives in `review-clause.mts` and is imported above --
+// `__typename` (#1686) is GraphQL-only; this file's own `reviewThreads` /
+// thread-comment-page queries request it explicitly (see
+// `fetchReviewThreads` / `fetchThreadCommentPages`, and
+// `fetchReviewsAndHeadCommit` in `review-clause.mts`), so every LIVE
+// payload this gate evaluates carries it; a fixture/test payload that
+// omits it is treated as "unknown", never as a rejection -- see
+// {@link isVerifiedCopilotAuthor} (also in `review-clause.mts`).
 
 /** Issue/PR comment payload fields consumed by this helper. */
 interface IssueCommentPayload {
@@ -166,13 +186,9 @@ interface IssueCommentPayload {
   updated_at?: string | null;
 }
 
-/** PR review payload, normalized from the GraphQL `reviews` connection. */
-interface ReviewPayload {
-  author?: GhAuthorPayload | null;
-  submittedAt?: string | null;
-  commitId?: string | null;
-  itemCount?: number | null;
-}
+// `ReviewPayload` (PR review payload, normalized from the GraphQL
+// `reviews` connection) now lives in `review-clause.mts` and is imported
+// above.
 
 /** Review-thread reply node (GraphQL `reviewThreads` comment). */
 interface ThreadCommentPayload {
@@ -213,15 +229,11 @@ interface ClosingIssueRefPayload {
   number?: number | null;
 }
 
-/** Latest-review clause evidence (Clause 1 of the `converged` definition). */
-export interface AdvisoryConvergenceReviewClause {
-  found: boolean;
-  commitId: string;
-  matchesHead: boolean;
-  itemCount: number | null;
-  submittedAt: string;
-  satisfied: boolean;
-}
+// `AdvisoryConvergenceReviewClause` (latest-review clause evidence,
+// Clause 1 of the `converged` definition below) now lives in
+// `review-clause.mts`; re-exported here so this file's existing public
+// export surface stays unchanged for any consumer importing it from here.
+export type { AdvisoryConvergenceReviewClause } from './review-clause.mts';
 
 /** Thread clause evidence (Clause 2 of the `converged` definition). A
  * Copilot-authored thread satisfies this clause when it is resolved
@@ -1072,94 +1084,13 @@ export function computeAdvisoryConvergenceVerdict(
   };
 }
 
-/**
- * #1686: defense-in-depth on top of `isCopilotReviewerLogin`'s login-string
- * check. GitHub's GraphQL API reports `__typename: "Bot"` consistently for
- * every App/bot account regardless of login spelling, and a real human
- * account can never report it -- so a *registrable* login lookalike (e.g. a
- * human account named `copilot-pull-request-reviewer`, distinct from the
- * real bot's own `[bot]`-suffixed login) still fails this check even though
- * it passes the login-string comparison. This file's own GraphQL queries
- * (`fetchReviewsAndHeadCommit` / `fetchReviewThreads` /
- * `fetchThreadCommentPages`) request `__typename` on every `author` field,
- * so every LIVE payload this gate evaluates carries it; a payload that
- * omits it (an older fixture, or a future caller not routed through this
- * file's own queries) is treated as "unknown" and does NOT fail the check
- * -- this stays a narrowing on top of the login match, never a new
- * blocking requirement for a caller this field predates. Deliberately kept
- * local to this file (mirroring `rerun-advisory-convergence.mts`'s own
- * "closes it locally without widening that shared function's behavior"
- * precedent) rather than folded into `isCopilotReviewerLogin` itself, which
- * many REST-payload callers across the codebase rely on and which has no
- * `__typename` to check.
- */
-function isVerifiedCopilotAuthor(
-  author: GhAuthorPayload | null | undefined,
-  primaryBotLogin: string,
-): boolean {
-  if (!isCopilotReviewerLogin(author?.login ?? '', primaryBotLogin)) {
-    return false;
-  }
-  const typename = author?.__typename;
-  return typename === undefined || typename === null || typename === 'Bot';
-}
-
-/** Evaluate Clause 1 against the single, absolute-latest Copilot review --
- * per the issue's literal wording ("the latest Copilot review's commit_id
- * equals current HEAD"), not "the latest review among those that happen to
- * target current HEAD". Those two differ when Copilot's most recent
- * activity targets a commit other than the current HEAD (e.g. an unusual
- * force-push/revert ordering, see PR #1343 review): only looking within
- * on-HEAD reviews could report `matchesHead: true` off a stale earlier
- * review while ignoring what Copilot's true latest signal actually says.
- * This simpler form still correctly handles a legitimate re-request
- * without a new push (this repo's own AW3 `REQUEST_NEEDED` flow, where a
- * later review supersedes an earlier dirty one on the *same* commit): the
- * absolute latest naturally IS that later, superseding review when both
- * target the current HEAD. "Latest" is fetch order, not `submittedAt`:
- * GitHub's GraphQL `reviews` connection returns reviews in submission
- * order, the same assumption this file's own `fetchThreadCommentPages` /
- * `fetchReviewThreads` already rely on (they append paginated results
- * without ever re-sorting). This deliberately does NOT sort by
- * `submittedAt` the way `findLastCopilotReviewCommit` does elsewhere in
- * this codebase (protocol-helpers.mts) -- that timestamp-sort approach is
- * exactly the footgun being avoided here: `submittedAt` can be missing or
- * invalid on a real payload (the field is nullable) and would otherwise
- * let an earlier, differently-ordered review win by comparator accident. */
-function resolveLatestCopilotReviewClause(
-  reviews: ReviewPayload[],
-  prHeadSha: string,
-  primaryBotLogin: string,
-): AdvisoryConvergenceReviewClause {
-  const latest = reviews
-    .filter((review) => isVerifiedCopilotAuthor(review.author, primaryBotLogin))
-    .at(-1);
-  if (!latest) {
-    return {
-      found: false,
-      commitId: '',
-      matchesHead: false,
-      itemCount: null,
-      submittedAt: '',
-      satisfied: false,
-    };
-  }
-  const commitId = String(latest.commitId ?? '').toLowerCase();
-  const matchesHead = commitId === prHeadSha;
-  const itemCount = matchesHead
-    ? Number.isFinite(latest.itemCount)
-      ? Number(latest.itemCount)
-      : null
-    : null;
-  return {
-    found: true,
-    commitId,
-    matchesHead,
-    itemCount,
-    submittedAt: String(latest.submittedAt ?? ''),
-    satisfied: matchesHead && itemCount === 0,
-  };
-}
+// `isVerifiedCopilotAuthor` (#1686 defense-in-depth on top of
+// `isCopilotReviewerLogin`'s login-string check) and
+// `resolveLatestCopilotReviewClause` (Clause 1 evaluation against the
+// single, absolute-latest Copilot review) now live in `review-clause.mts`
+// and are imported above -- both used here unchanged, with
+// `isVerifiedCopilotAuthor` also reused directly by
+// `classifyCopilotAuthoredThreadIds` below.
 
 /** Thread IDs whose *originating* (first) comment is Copilot-authored.
  * `summarizeReviewThreadsForGate` classifies by latest-commenter identity
@@ -1952,105 +1883,12 @@ function resolveTrustedCollaboratorMarkerLogins(
   });
 }
 
-function ghGraphql(
-  query: string,
-  variables: Record<string, string | number | null | undefined>,
-): unknown {
-  const args = ['api', 'graphql', '-f', `query=${query}`];
-  for (const [key, value] of Object.entries(variables)) {
-    if (value === null || value === undefined) continue;
-    if (typeof value === 'number') {
-      args.push('-F', `${key}=${value}`);
-      continue;
-    }
-    args.push('-f', `${key}=${value}`);
-  }
-  return JSON.parse(ghText(args).trim() || '{}');
-}
-
-interface RawReviewNode {
-  commit?: { oid?: string | null } | null;
-  submittedAt?: string | null;
-  author?: GhAuthorPayload | null;
-  comments?: { totalCount?: number | null } | null;
-}
-
-function fetchReviewsAndHeadCommit(
-  owner: string,
-  repo: string,
-  prNumber: number,
-): { reviews: ReviewPayload[]; headCommittedAt: string } {
-  const nodes: RawReviewNode[] = [];
-  let headCommittedAt = '';
-  let cursor: string | null | undefined = null;
-
-  // Paginate `reviews` the same way `fetchReviewThreads` paginates
-  // `reviewThreads` below: a PR with more than one page of reviews would
-  // otherwise silently evaluate Clause 1 against only the first 100,
-  // potentially missing a later, dirty, current-HEAD review (see PR #1343
-  // review). `commits(last: 1)` is fetched once, on the first page, since
-  // it never changes across pages.
-  while (true) {
-    const payload = ghGraphql(
-      `
-        query($owner: String!, $repo: String!, $number: Int!, $cursor: String) {
-          repository(owner: $owner, name: $repo) {
-            pullRequest(number: $number) {
-              reviews(first: 100, after: $cursor) {
-                pageInfo { hasNextPage endCursor }
-                nodes {
-                  commit { oid }
-                  submittedAt
-                  author { login __typename }
-                  comments { totalCount }
-                }
-              }
-              commits(last: 1) {
-                nodes { commit { committedDate } }
-              }
-            }
-          }
-        }`,
-      { owner, repo, number: prNumber, cursor },
-    ) as {
-      data?: {
-        repository?: {
-          pullRequest?: {
-            reviews?: {
-              pageInfo?: PageInfoPayload | null;
-              nodes?: RawReviewNode[] | null;
-            } | null;
-            commits?: {
-              nodes?: { commit?: { committedDate?: string | null } | null }[];
-            } | null;
-          } | null;
-        } | null;
-      } | null;
-    };
-
-    const pullRequest = payload?.data?.repository?.pullRequest;
-    nodes.push(...(pullRequest?.reviews?.nodes ?? []));
-    if (!headCommittedAt) {
-      headCommittedAt = String(
-        pullRequest?.commits?.nodes?.[0]?.commit?.committedDate ?? '',
-      );
-    }
-
-    if (!pullRequest?.reviews?.pageInfo?.hasNextPage) break;
-    if (!pullRequest.reviews.pageInfo.endCursor) {
-      throw new Error('review pagination payload is missing endCursor');
-    }
-    cursor = pullRequest.reviews.pageInfo.endCursor;
-  }
-
-  const reviews = nodes.map((node) => ({
-    author: node.author ?? null,
-    submittedAt: node.submittedAt ?? null,
-    commitId: node.commit?.oid ?? null,
-    itemCount: node.comments?.totalCount ?? null,
-  }));
-  return { reviews, headCommittedAt };
-}
+// `ghGraphql` now lives in `gh-exec.mts` (imported above) and
+// `fetchReviewsAndHeadCommit` (+ its local `RawReviewNode` shape) now
+// lives in `review-clause.mts` (imported above) -- both used here
+// unchanged. The other two `ghGraphql(...)` call sites in this file
+// (`fetchReviewThreads` and the claim-candidate fetch below) keep calling
+// the same function via the new import.
 
 function fetchReviewThreads(
   owner: string,
