@@ -445,10 +445,11 @@ const MINIMUM_LIST_CONTENT_INDENT = 2;
  * carries the already-known state forward at O(1) per line -- the fix for
  * the O(n^2) blowup a backward scan produces on a long run of
  * fence-shaped indented lines with no enclosing list (measured: ~5.6s at
- * 8000 lines before this tracker; the shape pre-check below only bounded
- * *how often* the scan ran, not its *cost per call*, so it never closed
- * the gap -- Copilot review findings on PR #1901 addressed the former,
- * this addresses the latter).
+ * 8000 lines before this tracker). An earlier mitigation attempt in the
+ * same PR #1901 review round added a cheap shape pre-check ahead of the
+ * backward scan (Copilot review finding), which only bounded *how often*
+ * the scan ran, not its *cost per call*, so it never closed the gap; this
+ * tracker replaces both the scan and that pre-check.
  */
 type ListContentIndentTrackerState = {
   contentIndent: number | null;
@@ -517,27 +518,41 @@ function resetListContentIndentTrackerForLine(
 
 /**
  * Second half of advancing `state` for the current line, in place -- adopts
- * a freshly seen list item's content indent (mirrors the adoption half of
- * {@link findIndentedCodeRanges}'s own `activeListContentIndent`
- * bookkeeping, minus the `isNonInterruptingListItem` refinement, which
- * depends on block-boundary state {@link blankFencedCodeBlocks}/
- * {@link findFencedCodeRanges} do not track -- verified behaviorally
- * equivalent for opener detection by differential testing against the
- * backward-scan implementation across the repository's own Markdown corpus
- * plus generated wide-list/fence shapes: no divergence found). Call this
- * **after** reading `state.contentIndent` as the current line's
- * `openerListContentIndent` (see {@link resetListContentIndentTrackerForLine}
- * for why the ordering matters) and only while not already inside an open
- * fence -- an open fence's own `fence.listContentIndent` applies directly
- * instead, mirroring {@link findIndentedCodeRanges}'s `rangeStart === null`
- * gate on its equivalent update.
+ * a freshly seen list item's content indent. Gated on
+ * {@link isInterruptingListMarker} via {@link interruptingListContentIndent}
+ * -- the same paragraph-interruption-blind predicate
+ * {@link findEnclosingListContentIndent} (the backward scan this tracker
+ * replaces at these two call sites) applies via its own
+ * `interruptingListContentIndent` call, restoring parity with it rather than
+ * {@link findIndentedCodeRanges}'s own richer, context-sensitive
+ * `isNonInterruptingListItem` refinement (which additionally excludes an
+ * empty-content or non-`1.`-numbered marker immediately continuing a
+ * paragraph -- context {@link blankFencedCodeBlocks}/
+ * {@link findFencedCodeRanges} do not track: `previousLineBlank` /
+ * `previousLineBlockBoundary` / `previousContainerDepth`). An earlier
+ * version adopted any `parsed.listContentIndent`, unfiltered -- confirmed
+ * wrong: `2.    fenced item marker` immediately after an ordinary paragraph
+ * line (no blank line between) does not start a list per CommonMark (a
+ * non-`1.` ordered marker never interrupts a paragraph), so content after a
+ * fence-shaped line at its indent must stay masked as ordinary paragraph
+ * text, not read as list-driven fenced code -- the unfiltered version
+ * wrongly did the latter, silently hiding real content
+ * (fail-open, worse than a missed fence, which merely leaves content
+ * unmasked). Call this **after** reading `state.contentIndent` as the
+ * current line's `openerListContentIndent` (see
+ * {@link resetListContentIndentTrackerForLine} for why the ordering
+ * matters) and only while not already inside an open fence -- an open
+ * fence's own `fence.listContentIndent` applies directly instead, mirroring
+ * {@link findIndentedCodeRanges}'s `rangeStart === null` gate on its
+ * equivalent update.
  */
 function adoptListContentIndentForLine(
   state: ListContentIndentTrackerState,
   parsed: ContainerLine,
 ): void {
-  if (parsed.listContentIndent !== null) {
-    state.contentIndent = parsed.listContentIndent;
+  const contentIndent = interruptingListContentIndent(parsed.content);
+  if (contentIndent !== null) {
+    state.contentIndent = contentIndent;
     state.containerDepth = parsed.containerDepth;
     state.blankLines = 0;
   }

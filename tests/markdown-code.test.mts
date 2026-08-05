@@ -468,6 +468,25 @@ test('blankFencedCodeBlocks stays linear-time on a long run of fence-shaped inde
   );
 });
 
+test('stripMarkdownCodeRegions keeps a non-1-numbered marker mid-paragraph as plain text, not a list (#1901 regression)', () => {
+  // A second regression the O(n^2) fix's forward tracker introduced (caught
+  // by an independent critique pass): the tracker's adoption step originally
+  // took ANY parsed.listContentIndent unfiltered, unlike
+  // findEnclosingListContentIndent (the backward scan it replaced here),
+  // which only ever adopts an interrupting marker (-, +, *, 1., 1)) via
+  // isInterruptingListMarker. Per CommonMark, a non-1-numbered ordered
+  // marker (e.g. "2.") immediately after an ordinary paragraph line does
+  // NOT interrupt that paragraph -- it stays plain text, so the following
+  // fence-shaped indented lines are themselves just paragraph continuation
+  // text, not a real fence. The unfiltered version wrongly treated "2." as
+  // a genuine list opener, masking the real "Blocked by #123" marker below
+  // it as fenced-code content -- a fail-open regression, worse than the
+  // fence simply going unrecognized.
+  const body =
+    'Some paragraph text.\n2.    fenced item marker\n      ```\n      Blocked by #123';
+  assert.equal(stripMarkdownCodeRegions(body), body);
+});
+
 // #1895: isWithinOpenHtmlBlock's backward scan short-circuited on the first
 // close/open signal it found, so it could not track more than one candidate
 // enclosing HTML block type at once. Restructured into a bounded backward
