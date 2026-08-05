@@ -49,6 +49,23 @@ export const MARKER_TYPES = [
 export type MarkerType = (typeof MARKER_TYPES)[number];
 
 /**
+ * The marker `type`s that accept `--from-pr <n>`. `watermark` derives all
+ * four snapshot fields via the full {@link runReviewActivitySnapshot}
+ * composition; the three advisory types (`advisory` / `advisory-recovery` /
+ * `advisory-reroll`, added in #1889) derive only `--head-sha` via the
+ * lighter {@link headShaFromPr} single `gh pr view` call, since those
+ * renderers accept no other snapshot-shaped field.
+ */
+export const FROM_PR_MARKER_TYPES = [
+  'watermark',
+  'advisory',
+  'advisory-recovery',
+  'advisory-reroll',
+] as const;
+
+export type FromPrMarkerType = (typeof FROM_PR_MARKER_TYPES)[number];
+
+/**
  * The kebab-case `--flag` field names each marker `type` requires, keyed
  * the same way {@link buildMarkerBody}'s own switch reads `fields` --
  * consulted by the `import.meta.main` CLI entry point below to report a
@@ -320,13 +337,19 @@ interface CliArgs {
   type: string;
   target: string;
   number: number | null;
-  /** `--from-pr <n>`: derive the watermark snapshot fields from PR <n>. */
+  /**
+   * `--from-pr <n>`: derive `--head-sha` from PR <n>'s live current HEAD.
+   * For `--type watermark`, also derives the three other snapshot fields
+   * via the full `review-activity-snapshot` composition; for the three
+   * advisory types (#1889), only `--head-sha` is derived. See
+   * {@link FROM_PR_MARKER_TYPES}.
+   */
   fromPr: number | null;
   /**
-   * `--expected-head-sha <sha>`: `--from-pr` only. The E1 Step 1 stored
-   * `{head-SHA}`. When set, fail closed (no post) if the fresh
-   * `--from-pr` snapshot's live HEAD no longer matches it — the branch
-   * moved between E1 Step 1 and this Step 2 call.
+   * `--expected-head-sha <sha>`: `--from-pr --type watermark` only. The E1
+   * Step 1 stored `{head-SHA}`. When set, fail closed (no post) if the
+   * fresh `--from-pr` snapshot's live HEAD no longer matches it — the
+   * branch moved between E1 Step 1 and this Step 2 call.
    */
   expectedHeadSha: string;
   apply: boolean;
@@ -437,16 +460,21 @@ its claim-revalidation gate before --apply, as the manual POST path it replaces.
   --type <type>        one of: ${MARKER_TYPES.join(', ')}
   --target <issue|pr>  the comment target kind (both use the issues comments API)
   <number>             issue or PR number (positional; required unless --from-pr)
-  --from-pr <n>        watermark only: derive --head-sha / --max-activity-at /
+  --from-pr <n>        watermark: derive --head-sha / --max-activity-at /
                        --total-item-count / --ci-completed-at from the live
-                       review-activity-snapshot of PR <n> and post the watermark
-                       to PR <n>, so only --agent-id / --claim-id (and --apply)
-                       are still needed (always targets the PR; an explicit
-                       non-pr --target is rejected). Not network-free.
-  --expected-head-sha <sha>  --from-pr only: the E1 Step 1 stored {head-SHA}.
-                       Fails closed (posts nothing) if the fresh snapshot's live
-                       HEAD no longer matches it, i.e. the branch moved between
-                       E1 Step 1 and this Step 2 call.
+                       review-activity-snapshot of PR <n>. advisory /
+                       advisory-recovery / advisory-reroll (#1889): derive
+                       only --head-sha from PR <n>'s live current head commit
+                       (a single lightweight gh pr view call, not the full
+                       snapshot). Either way the marker posts to PR <n>, so
+                       --head-sha never needs hand-typing (always targets the
+                       PR; an explicit non-pr --target is rejected). Not
+                       network-free.
+  --expected-head-sha <sha>  --from-pr --type watermark only: the E1 Step 1
+                       stored {head-SHA}. Fails closed (posts nothing) if the
+                       fresh snapshot's live HEAD no longer matches it, i.e.
+                       the branch moved between E1 Step 1 and this Step 2
+                       call.
   --apply              POST the marker (default: dry-run prints it in a JSON envelope)
   --owner <owner>      repo owner (default: gh repo view)
   --repo <repo>        repo name (default: gh repo view)
@@ -460,8 +488,11 @@ Per-type field flags:
                      (or --agent-id --claim-id --from-pr <n> [--expected-head-sha <sha>])
   baseline           --agent-id --claim-id --sha
   advisory           --agent-id --head-sha --timestamp
+                     (or --agent-id --from-pr <n> --timestamp)
   advisory-recovery  --agent-id --head-sha --timestamp [--claim-id --attempt]
+                     (or --agent-id --from-pr <n> --timestamp [--claim-id --attempt])
   advisory-reroll    --agent-id --head-sha --timestamp
+                     (or --agent-id --from-pr <n> --timestamp)
   copilot-unavailable --agent-id --claim-id --head-sha --attempt --timestamp
 
 --claim-id / --attempt on advisory-recovery are OPTIONAL (#1572): passing
@@ -469,14 +500,17 @@ both binds the marker to the active claim and an attempt number for
 recovery-cycle accounting (advisory-wait-state.mjs); passing neither renders
 the legacy 3-field form the shipped AW3-R recovery flow already posts.
 Passing only ONE of the two throws (half-bound, ambiguous) -- always pass
-both together or neither.
+both together or neither. This pairing works unchanged together with
+--from-pr.
 copilot-unavailable is a brand-new terminal marker with no legacy form, so
 all five fields are required.
 
 --from-pr forwards optional --trusted-marker-logins / --advisory-bot-logins to
-the snapshot child so its counts match the manual review-activity-snapshot path.
---expected-head-sha pins --from-pr to the Step 1 stored HEAD and fails closed
-(no post) on drift instead of silently posting a newer HEAD than Step 1 saw.
+the snapshot child (--type watermark only) so its counts match the manual
+review-activity-snapshot path.
+--expected-head-sha pins a --type watermark --from-pr to the Step 1 stored
+HEAD and fails closed (no post) on drift instead of silently posting a newer
+HEAD than Step 1 saw.
 `;
 
 /**
@@ -506,6 +540,39 @@ function postMarker(
     { input: JSON.stringify({ body }) },
   );
   return JSON.parse(out) as { id: number; html_url: string };
+}
+
+/**
+ * Fetch PR `<n>`'s current head commit SHA via a single lightweight `gh pr
+ * view` call -- the `--from-pr` derivation path for the three advisory
+ * marker types (#1889: `advisory` / `advisory-recovery` / `advisory-reroll`),
+ * which need only `--head-sha`, unlike `watermark`'s `--from-pr`, which
+ * composes the full four-field snapshot via
+ * {@link runReviewActivitySnapshot}. This is deliberately network-lighter
+ * than that snapshot: no CI checks, review threads, or comment pagination,
+ * just the one `headRefOid` field.
+ *
+ * Throws (fail-closed) when `headRefOid` comes back empty or missing, so a
+ * malformed `gh pr view` response can never post a marker with a blank
+ * `head-sha` -- mirrors {@link watermarkFieldsFromSnapshot}'s guard on the
+ * watermark path.
+ */
+function headShaFromPr(prNumber: number, owner: string, repo: string): string {
+  const headSha = ghText([
+    'pr',
+    'view',
+    String(prNumber),
+    '-R',
+    `${owner}/${repo}`,
+    '--json',
+    'headRefOid',
+    '--jq',
+    '.headRefOid',
+  ]);
+  if (!headSha) {
+    throw new Error(`PR ${prNumber} has no usable headRefOid`);
+  }
+  return headSha;
 }
 
 /**
@@ -572,30 +639,54 @@ if (import.meta.main) {
     );
     process.exit(1);
   }
-  // --expected-head-sha only guards the --from-pr derivation below; in manual
-  // mode the caller already supplies --head-sha directly, so there is nothing
-  // to compare it against.
+  // --expected-head-sha only guards the --from-pr --type watermark
+  // derivation below; in manual mode the caller already supplies --head-sha
+  // directly, so there is nothing to compare it against. It has no meaning
+  // for the three advisory --from-pr types (#1889): they have no E1 Step
+  // 1/Step 2 pinning concept, so reject the combination the same way rather
+  // than silently ignoring it.
   if (args.expectedHeadSha && args.fromPr === null) {
     process.stderr.write(
       '--expected-head-sha is only valid together with --from-pr\n',
     );
     process.exit(1);
   }
+  if (
+    args.expectedHeadSha &&
+    args.fromPr !== null &&
+    args.type !== 'watermark'
+  ) {
+    process.stderr.write(
+      '--expected-head-sha is only valid together with --from-pr --type watermark\n',
+    );
+    process.exit(1);
+  }
 
-  // `--from-pr <n>` snapshot-derivation mode (watermark only): default the post
-  // target to PR <n>, reject the manual snapshot fields as ambiguous, then
-  // derive head-sha / max-activity-at / total-item-count / ci-completed-at from
-  // the live review-activity-snapshot before the shared render + dry-run/apply
-  // path below. owner/repo are resolved here because the snapshot child needs
-  // them and the dry-run branch returns before the apply-path resolution.
+  // `--from-pr <n>` derivation mode: default the post target to PR <n>,
+  // reject the manually-supplied derived field(s) as ambiguous, then derive
+  // those fields from a live PR <n> read before the shared render +
+  // dry-run/apply path below. owner/repo are resolved here because the
+  // derivation needs them and the dry-run branch returns before the
+  // apply-path resolution.
+  //
+  // `--type watermark` derives all four snapshot fields via the full
+  // review-activity-snapshot composition (unchanged since #1134). The three
+  // advisory types (#1889: `advisory` / `advisory-recovery` /
+  // `advisory-reroll`) derive only `--head-sha`, via the lighter
+  // single-`gh pr view`-call `headShaFromPr` -- those renderers accept no
+  // other snapshot-shaped field, so composing the full snapshot for them
+  // would be needless extra network work.
   if (args.fromPr !== null) {
-    if (args.type !== 'watermark') {
-      process.stderr.write('--from-pr is only valid for --type watermark\n');
+    if (!FROM_PR_MARKER_TYPES.includes(args.type as FromPrMarkerType)) {
+      process.stderr.write(
+        `--from-pr is only valid for --type ${FROM_PR_MARKER_TYPES.join(', ')}\n`,
+      );
       process.exit(1);
     }
-    // --from-pr always posts the watermark to PR <n>. `--target` is
+    const isWatermark = args.type === 'watermark';
+    // --from-pr always posts the marker to PR <n>. `--target` is
     // descriptive-only (issue/pr both POST to the same /issues/<n>/comments
-    // endpoint), but an `issue`-targeted snapshot watermark is incoherent, so
+    // endpoint), but an `issue`-targeted PR-derived marker is incoherent, so
     // fail closed on an explicit non-pr target rather than recording it.
     if (args.target && args.target !== 'pr') {
       process.stderr.write(
@@ -612,25 +703,22 @@ if (import.meta.main) {
       );
       process.exit(1);
     }
-    const derivedFlags = [
-      'head-sha',
-      'max-activity-at',
-      'total-item-count',
-      'ci-completed-at',
-    ];
+    const derivedFlags = isWatermark
+      ? ['head-sha', 'max-activity-at', 'total-item-count', 'ci-completed-at']
+      : ['head-sha'];
     const conflicting = derivedFlags.filter((flag) => flag in args.fields);
     if (conflicting.length > 0) {
       process.stderr.write(
-        `--from-pr derives ${derivedFlags.join(' / ')} from the live snapshot; do not also pass: ${conflicting
+        `--from-pr derives ${derivedFlags.join(' / ')} from the live ${isWatermark ? 'snapshot' : 'PR'}; do not also pass: ${conflicting
           .map((flag) => `--${flag}`)
           .join(', ')}\n`,
       );
       process.exit(1);
     }
     // Resolve owner/repo inside the try: in --from-pr mode they are read
-    // eagerly (the snapshot child needs them and the dry-run branch returns
-    // before the apply-path resolution), so a `gh repo view` failure here is
-    // part of "derive from PR" and should report cleanly, not throw a raw stack.
+    // eagerly (the derivation needs them and the dry-run branch returns
+    // before the apply-path resolution), so a `gh` failure here is part of
+    // "derive from PR" and should report cleanly, not throw a raw stack.
     try {
       args.owner =
         args.owner ||
@@ -638,18 +726,26 @@ if (import.meta.main) {
       args.repo =
         args.repo ||
         ghText(['repo', 'view', '--json', 'name', '--jq', '.name']);
-      const snapshot = runReviewActivitySnapshot(
-        args.fromPr,
-        args.owner,
-        args.repo,
-        args.trustedMarkerLogins,
-        args.advisoryBotLogins,
-      );
-      Object.assign(args.fields, watermarkFieldsFromSnapshot(snapshot));
-      warnings = describeUnaddressedActivity(snapshot);
+      if (isWatermark) {
+        const snapshot = runReviewActivitySnapshot(
+          args.fromPr,
+          args.owner,
+          args.repo,
+          args.trustedMarkerLogins,
+          args.advisoryBotLogins,
+        );
+        Object.assign(args.fields, watermarkFieldsFromSnapshot(snapshot));
+        warnings = describeUnaddressedActivity(snapshot);
+      } else {
+        args.fields['head-sha'] = headShaFromPr(
+          args.fromPr,
+          args.owner,
+          args.repo,
+        );
+      }
     } catch (error) {
       process.stderr.write(
-        `failed to derive watermark fields from PR ${args.fromPr}: ${(error as Error).message}\n`,
+        `failed to derive ${isWatermark ? 'watermark fields' : 'head-sha'} from PR ${args.fromPr}: ${(error as Error).message}\n`,
       );
       process.exit(1);
     }
@@ -658,9 +754,12 @@ if (import.meta.main) {
     // HEAD through Step 3) and this Step 2 call: posting a watermark keyed to
     // a HEAD newer than the one E1 Step 1 actually snapshotted would silently
     // violate that single-stored-value invariant. Refuse to post; the caller
-    // reruns E1 from Step 1 against the moved branch instead.
+    // reruns E1 from Step 1 against the moved branch instead. Watermark-only:
+    // --expected-head-sha is rejected above for the advisory --from-pr types,
+    // so this never fires for them.
     const liveHeadSha = args.fields['head-sha'];
     if (
+      isWatermark &&
       args.expectedHeadSha &&
       liveHeadSha.toLowerCase() !== args.expectedHeadSha.toLowerCase()
     ) {

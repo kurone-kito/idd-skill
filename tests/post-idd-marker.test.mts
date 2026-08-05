@@ -9,6 +9,7 @@ import { fileURLToPath } from 'node:url';
 import {
   buildMarkerBody,
   describeUnaddressedActivity,
+  FROM_PR_MARKER_TYPES,
   MARKER_TYPES,
   parseArgs,
   watermarkFieldsFromSnapshot,
@@ -1277,7 +1278,11 @@ test('--from-pr rejects manual snapshot fields as ambiguous (before any gh call)
   assert.match(stderr, /--from-pr derives .* do not also pass: --head-sha/);
 });
 
-test('--from-pr is rejected for a non-watermark type', () => {
+test('--from-pr is rejected for a type outside FROM_PR_MARKER_TYPES', () => {
+  // #1889: --from-pr now supports watermark AND the three advisory types
+  // (see the dedicated tests below), but a structurally unrelated type like
+  // `claim` -- which has no head-sha field at all -- still fails exactly as
+  // before.
   const stderr = runCliExpectingFailure([
     join(REPO_ROOT, 'scripts/post-idd-marker.mjs'),
     '--type',
@@ -1289,7 +1294,19 @@ test('--from-pr is rejected for a non-watermark type', () => {
     '--claim-id',
     'c',
   ]);
-  assert.match(stderr, /--from-pr is only valid for --type watermark/);
+  assert.match(
+    stderr,
+    /--from-pr is only valid for --type watermark, advisory, advisory-recovery, advisory-reroll/,
+  );
+});
+
+test('FROM_PR_MARKER_TYPES lists exactly the four --from-pr-supported types', () => {
+  assert.deepEqual(FROM_PR_MARKER_TYPES, [
+    'watermark',
+    'advisory',
+    'advisory-recovery',
+    'advisory-reroll',
+  ]);
 });
 
 test('--from-pr fails closed on an explicit non-pr --target', () => {
@@ -1309,6 +1326,264 @@ test('--from-pr fails closed on an explicit non-pr --target', () => {
     'c',
   ]);
   assert.match(stderr, /--from-pr always targets the PR/);
+});
+
+// --- #1889: --from-pr live head-sha derivation for the advisory types ------
+//
+// Unlike watermark's --from-pr (full review-activity-snapshot composition),
+// the three advisory types derive ONLY --head-sha via a single lightweight
+// `gh pr view --json headRefOid --jq .headRefOid` call -- no CI checks,
+// review threads, or comment pagination.
+
+/**
+ * Stub `gh` on PATH so `headShaFromPr`'s single `gh pr view ... --jq
+ * .headRefOid` call resolves offline to `headSha`, without needing the full
+ * review-activity-snapshot stub the watermark tests use above. Any other
+ * invocation is treated as unexpected (proving the advisory --from-pr path
+ * never spawns the heavier snapshot child).
+ */
+function writeHeadShaOnlyGhStub(tempRoot: string, headSha: string): void {
+  const ghPath = join(tempRoot, 'gh');
+  writeFileSync(
+    ghPath,
+    `#!/usr/bin/env node
+const fs = require('node:fs');
+const args = process.argv.slice(2);
+const out = (s) => { fs.writeSync(1, s); process.exit(0); };
+if (args[0] === 'pr' && args[1] === 'view') out('${headSha}\\n');
+fs.writeSync(2, 'unexpected gh invocation: ' + args.join(' '));
+process.exit(1);
+`,
+  );
+  chmodSync(ghPath, 0o755);
+}
+
+function runFromPrCliDryRun(tempRoot: string, argv: string[]): unknown {
+  const output = execFileSync(
+    process.execPath,
+    [join(REPO_ROOT, 'scripts/post-idd-marker.mjs'), ...argv],
+    {
+      cwd: REPO_ROOT,
+      encoding: 'utf8',
+      env: { ...process.env, PATH: `${tempRoot}:${process.env.PATH ?? ''}` },
+    },
+  );
+  return JSON.parse(output);
+}
+
+test('--from-pr CLI derives only --head-sha for --type advisory (dry-run)', () => {
+  const tempRoot = mkdtempSync(join(tmpdir(), 'idd-from-pr-advisory-'));
+  writeHeadShaOnlyGhStub(tempRoot, SHA);
+
+  const result = runFromPrCliDryRun(tempRoot, [
+    '--type',
+    'advisory',
+    '--from-pr',
+    '1200',
+    '--owner',
+    'o',
+    '--repo',
+    'r',
+    '--agent-id',
+    'claude-02f8159e',
+    '--timestamp',
+    TS,
+  ]);
+
+  assert.deepEqual(result, {
+    mode: 'dry-run',
+    type: 'advisory',
+    target: 'pr',
+    number: 1200,
+    body: buildMarkerBody('advisory', {
+      'agent-id': 'claude-02f8159e',
+      'head-sha': SHA,
+      timestamp: TS,
+    }),
+  });
+});
+
+test('--from-pr CLI derives only --head-sha for --type advisory-reroll (dry-run)', () => {
+  const tempRoot = mkdtempSync(join(tmpdir(), 'idd-from-pr-reroll-'));
+  writeHeadShaOnlyGhStub(tempRoot, SHA);
+
+  const result = runFromPrCliDryRun(tempRoot, [
+    '--type',
+    'advisory-reroll',
+    '--from-pr',
+    '1200',
+    '--owner',
+    'o',
+    '--repo',
+    'r',
+    '--agent-id',
+    'claude-02f8159e',
+    '--timestamp',
+    TS,
+  ]);
+
+  assert.deepEqual(result, {
+    mode: 'dry-run',
+    type: 'advisory-reroll',
+    target: 'pr',
+    number: 1200,
+    body: buildMarkerBody('advisory-reroll', {
+      'agent-id': 'claude-02f8159e',
+      'head-sha': SHA,
+      timestamp: TS,
+    }),
+  });
+});
+
+test('--from-pr CLI derives only --head-sha for --type advisory-recovery, legacy 3-field form (dry-run)', () => {
+  const tempRoot = mkdtempSync(join(tmpdir(), 'idd-from-pr-recovery-legacy-'));
+  writeHeadShaOnlyGhStub(tempRoot, SHA);
+
+  const result = runFromPrCliDryRun(tempRoot, [
+    '--type',
+    'advisory-recovery',
+    '--from-pr',
+    '1200',
+    '--owner',
+    'o',
+    '--repo',
+    'r',
+    '--agent-id',
+    'claude-02f8159e',
+    '--timestamp',
+    TS,
+  ]);
+
+  assert.deepEqual(result, {
+    mode: 'dry-run',
+    type: 'advisory-recovery',
+    target: 'pr',
+    number: 1200,
+    body: buildMarkerBody('advisory-recovery', {
+      'agent-id': 'claude-02f8159e',
+      'head-sha': SHA,
+      timestamp: TS,
+    }),
+  });
+});
+
+test('--from-pr CLI + --claim-id/--attempt still renders the claim-bound advisory-recovery form (dry-run)', () => {
+  // #1572's optional claim-bound pairing must keep working unchanged
+  // alongside #1889's --from-pr derivation.
+  const tempRoot = mkdtempSync(join(tmpdir(), 'idd-from-pr-recovery-bound-'));
+  writeHeadShaOnlyGhStub(tempRoot, SHA);
+
+  const result = runFromPrCliDryRun(tempRoot, [
+    '--type',
+    'advisory-recovery',
+    '--from-pr',
+    '1200',
+    '--owner',
+    'o',
+    '--repo',
+    'r',
+    '--agent-id',
+    'claude-02f8159e',
+    '--timestamp',
+    TS,
+    '--claim-id',
+    'claude-8cb5b32f1100',
+    '--attempt',
+    '2',
+  ]);
+
+  assert.deepEqual(result, {
+    mode: 'dry-run',
+    type: 'advisory-recovery',
+    target: 'pr',
+    number: 1200,
+    body: buildMarkerBody('advisory-recovery', {
+      'agent-id': 'claude-02f8159e',
+      'head-sha': SHA,
+      timestamp: TS,
+      'claim-id': 'claude-8cb5b32f1100',
+      attempt: '2',
+    }),
+  });
+});
+
+test('--from-pr rejects manual --head-sha as ambiguous for an advisory type (before any gh call)', () => {
+  const stderr = runCliExpectingFailure([
+    join(REPO_ROOT, 'scripts/post-idd-marker.mjs'),
+    '--type',
+    'advisory',
+    '--from-pr',
+    '1200',
+    '--head-sha',
+    SHA,
+    '--agent-id',
+    'a',
+    '--timestamp',
+    TS,
+  ]);
+  assert.match(
+    stderr,
+    /--from-pr derives head-sha from the live PR; do not also pass: --head-sha/,
+  );
+});
+
+test('--expected-head-sha is rejected together with --from-pr for a non-watermark type', () => {
+  // #1889: the E1 Step 1/Step 2 HEAD-pinning concept is watermark-specific;
+  // an advisory --from-pr has no Step 1 counterpart to pin against, so the
+  // combination fails closed rather than silently ignoring the flag.
+  const stderr = runCliExpectingFailure([
+    join(REPO_ROOT, 'scripts/post-idd-marker.mjs'),
+    '--type',
+    'advisory',
+    '--from-pr',
+    '1200',
+    '--expected-head-sha',
+    SHA,
+    '--agent-id',
+    'a',
+    '--timestamp',
+    TS,
+  ]);
+  assert.match(
+    stderr,
+    /--expected-head-sha is only valid together with --from-pr --type watermark/,
+  );
+});
+
+test('--from-pr fails closed on an explicit non-pr --target for an advisory type', () => {
+  const stderr = runCliExpectingFailure([
+    join(REPO_ROOT, 'scripts/post-idd-marker.mjs'),
+    '--type',
+    'advisory',
+    '--target',
+    'issue',
+    '--from-pr',
+    '1200',
+    '--agent-id',
+    'a',
+    '--timestamp',
+    TS,
+  ]);
+  assert.match(stderr, /--from-pr always targets the PR/);
+});
+
+test('--from-pr rejects a positional number that disagrees for an advisory type', () => {
+  const stderr = runCliExpectingFailure([
+    join(REPO_ROOT, 'scripts/post-idd-marker.mjs'),
+    '--type',
+    'advisory',
+    '1201',
+    '--from-pr',
+    '1200',
+    '--agent-id',
+    'a',
+    '--timestamp',
+    TS,
+  ]);
+  assert.match(
+    stderr,
+    /in --from-pr mode the positional number must be omitted or equal --from-pr/,
+  );
 });
 
 // --- CLI-layer required-flag validation (#1722) -----------------------------
