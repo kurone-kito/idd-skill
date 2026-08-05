@@ -337,6 +337,33 @@ test('buildDispositionPlan plans a rejection for the current Codex usage-limit w
   assert.match(plan.planned[0]?.body ?? '', /did not review HEAD abc1234/);
 });
 
+test('buildDispositionPlan plans a rejection for the #1877 dashboard-pointer wording', () => {
+  // #1877 regression: a third live Codex wording (observed on PR #1876,
+  // 2026-08-05) points at the Codex usage dashboard instead of the
+  // admin/credits sentence — must still be recognized as a non-review
+  // notice and dispositioned. Literal text captured from
+  // https://github.com/kurone-kito/idd-skill/pull/1876#issuecomment-5187108915.
+  const plan = buildDispositionPlan(
+    {
+      headSha: 'abc1234',
+      comments: [
+        notice(
+          1,
+          CODEX,
+          'You have reached your Codex usage limits for code reviews. ' +
+            'You can see your limits in the [Codex usage dashboard]' +
+            '(https://chatgpt.com/codex/cloud/settings/usage).',
+        ),
+      ],
+    },
+    { trustedMarkerLogins: ['kurone-kito'] },
+  );
+  assert.equal(plan.planned.length, 1);
+  assert.equal(plan.planned[0]?.botLogin, CODEX);
+  assert.ok(plan.planned[0]?.body.startsWith('**Rejected**'));
+  assert.match(plan.planned[0]?.body ?? '', /did not review HEAD abc1234/);
+});
+
 test('buildDispositionPlan does not disposition the #1326 false-positive review comment', () => {
   // #1326: a genuine Codex review comment that combines "Codex", a
   // reach/exceed/hit verb, and "for code reviews" in ordinary prose (the
