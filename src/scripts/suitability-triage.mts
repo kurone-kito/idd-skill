@@ -987,16 +987,24 @@ function runCli(): void {
   });
   const existingRejectionCollectionWarnings: string[] = [];
   let existingRejection: SuitabilityRejectionRecord | null = null;
-  try {
-    const issueComments = fetchIssueComments(repoRef, args.issue);
-    existingRejection = findTrustedSuitabilityRejection(
-      issueComments,
-      trustedMarkerActors,
-    );
-  } catch (error) {
-    existingRejectionCollectionWarnings.push(
-      `existingRejection scan: ${error instanceof Error ? error.message : String(error)}`,
-    );
+  // Copilot review finding on PR #1890: findTrustedSuitabilityRejection can
+  // never return a match with zero trusted actors (it returns null before
+  // even looking at `comments`), so fetching the full, possibly-paginated
+  // comment thread in that case is guaranteed wasted `gh api` traffic with
+  // no observable benefit. Skip the fetch entirely rather than only
+  // skipping the (already-cheap) scan.
+  if (trustedMarkerActors.length > 0) {
+    try {
+      const issueComments = fetchIssueComments(repoRef, args.issue);
+      existingRejection = findTrustedSuitabilityRejection(
+        issueComments,
+        trustedMarkerActors,
+      );
+    } catch (error) {
+      existingRejectionCollectionWarnings.push(
+        `existingRejection scan: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
   }
 
   // #1815: repository_fit, coherence, and trust_safety are cheap, local,

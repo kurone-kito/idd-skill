@@ -1842,6 +1842,23 @@ test('fetchIssueComments argv requests the issue comments endpoint with paginati
   );
 });
 
+test('runCli: the issue-comments fetch is skipped entirely with zero trusted marker actors (PR #1890 review finding)', () => {
+  // findTrustedSuitabilityRejection can never return a match with an empty
+  // trusted-actor list (it returns null before inspecting `comments` at
+  // all), so fetching the full, possibly-paginated comment thread in that
+  // case is guaranteed wasted `gh api` traffic with no benefit. The fetch
+  // must be gated behind `trustedMarkerActors.length > 0`, not just the
+  // (already-cheap) scan.
+  const source = readFileSync(
+    new URL('../src/scripts/suitability-triage.mts', import.meta.url),
+    'utf8',
+  );
+  assert.match(
+    source,
+    /if \(trustedMarkerActors\.length > 0\) \{\s*\n\s*try \{\s*\n\s*const issueComments = fetchIssueComments\(/,
+  );
+});
+
 // C1 self-review finding (#1815): the structural pins above prove
 // `shouldCollectEvidence` is wired to these three checks, but not that the
 // minimal `preEvidenceContext` runCli builds (issue + repository only,
