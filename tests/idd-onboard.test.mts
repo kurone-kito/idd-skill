@@ -2148,7 +2148,12 @@ test('a real import + substitute produces a doc tree that passes the documented 
     `could not find a "Files checked" count in cspell output:\n${cspellOutput}`,
   );
   const filesChecked = Number(filesCheckedMatch[1]);
-  const importedFileCount = (imported.verdict.plan as unknown[]).length;
+  const { plan } = imported.verdict;
+  assert.ok(
+    Array.isArray(plan),
+    `expected imported.verdict.plan to be an array, got: ${JSON.stringify(plan)}`,
+  );
+  const importedFileCount = plan.length;
   assert.ok(
     filesChecked >= importedFileCount,
     `cspell only checked ${filesChecked} files, fewer than the ${importedFileCount} files --import wrote -- enableGlobDot may have regressed`,
