@@ -134,7 +134,14 @@ In the idd-skill source repository, the following optional helpers were adopted:
   review does not cover the current HEAD is classified
   `awaiting-fresh-review` rather than `rerun-eligible` (#1775), so the
   diagnosis (and `--apply`) never burn the rerun-once budget on a
-  failure only a fresh review can clear. When the rollup is stuck on a
+  failure only a fresh review can clear. That historical job-log verdict
+  is an immutable snapshot from when the run executed, so it can go
+  stale once a fresh review actually lands afterward — a live check
+  (reusing `advisory-convergence.mjs`'s own latest-review evidence)
+  recovers the instance back to `rerun-eligible` once the current HEAD
+  is genuinely covered; live coverage that is unreadable or not yet
+  established leaves the hold exactly as before (#1806). When the
+  rollup is stuck on a
   bot-gated instance alongside an already-passing non-bot
   pull_request-family instance, it additionally offers a
   `recoveryRefreshPlan` — populated even alongside a non-empty rerun
@@ -1373,6 +1380,19 @@ to post it is the consuming track's job.
   classified `awaiting-fresh-review` rather than `rerun-eligible`
   (#1775), so neither the diagnosis nor `--apply` burns the rerun-once
   budget on a failure only a fresh review can clear
+- That job-log verdict is an immutable snapshot from when the run
+  executed, so it can go stale once a fresh review lands after the run
+  already failed. `rerun-advisory-convergence.mjs` also checks a LIVE
+  signal (reusing `advisory-convergence.mjs`'s own latest-review
+  evidence: whether the latest trusted primary-bot review's commit now
+  matches the PR's current HEAD) and, when that live check confirms
+  coverage, reclassifies the instance back to `rerun-eligible` instead
+  of leaving it stuck forever -- the diagnosis JSON's per-instance
+  `reason` field distinguishes this live-coverage recovery from an
+  ordinary rerun-eligible instance. Live coverage that cannot be
+  established (unreadable, or genuinely not yet covered) leaves the
+  historical hold exactly as before this recovery path existed --
+  fail-closed, never an invented rerun (#1806)
 - Also reports a `recoveryRefreshPlan` when the rollup is stuck on a
   bot-gated instance alongside an already-passing non-bot
   pull_request-family instance — populated even alongside a non-empty

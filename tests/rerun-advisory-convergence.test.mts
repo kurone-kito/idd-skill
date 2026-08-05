@@ -531,6 +531,137 @@ test('#1775: applyRerunPlan never spends budget on an awaiting-fresh-review inst
   assert.equal(result.resolved, true);
 });
 
+// --- Classification: live-coverage recovery (#1806) ----------------------
+
+const UNCOVERED_HEAD_HISTORICAL_REASON =
+  'latest copilot review (commit dd0360511785c070a41da94f51de14aa2f2951f8) does not cover current HEAD a479827a75a92962222ce702a3467d1725135c1e';
+
+test('#1806: headCoverageSatisfied false keeps the historical uncovered-HEAD hold', () => {
+  const plan = computeRerunPlan(
+    baseInput({
+      instances: [
+        baseInstance({
+          conclusion: 'failure',
+          verdictReasons: [UNCOVERED_HEAD_HISTORICAL_REASON],
+        }),
+      ],
+    }),
+    baseOptions({ headCoverageSatisfied: false }),
+  );
+  assert.equal(plan.instances[0]?.classification, 'awaiting-fresh-review');
+  assert.equal(plan.counts.awaitingFreshReview, 1);
+  assert.equal(plan.counts.rerunEligible, 0);
+  assert.equal(plan.plan.length, 0);
+  assert.match(plan.instances[0]?.reason ?? '', /wait for a fresh review/);
+});
+
+test('#1806: headCoverageSatisfied omitted (undefined) fails closed to the historical hold', () => {
+  const plan = computeRerunPlan(
+    baseInput({
+      instances: [
+        baseInstance({
+          conclusion: 'failure',
+          verdictReasons: [UNCOVERED_HEAD_HISTORICAL_REASON],
+        }),
+      ],
+    }),
+    baseOptions(),
+  );
+  assert.equal(plan.instances[0]?.classification, 'awaiting-fresh-review');
+  assert.equal(plan.plan.length, 0);
+});
+
+test('#1806: headCoverageSatisfied explicit null fails closed to the historical hold', () => {
+  const plan = computeRerunPlan(
+    baseInput({
+      instances: [
+        baseInstance({
+          conclusion: 'failure',
+          verdictReasons: [UNCOVERED_HEAD_HISTORICAL_REASON],
+        }),
+      ],
+    }),
+    baseOptions({ headCoverageSatisfied: null }),
+  );
+  assert.equal(plan.instances[0]?.classification, 'awaiting-fresh-review');
+  assert.equal(plan.plan.length, 0);
+});
+
+test('#1806: headCoverageSatisfied true recovers the instance to rerun-eligible', () => {
+  const plan = computeRerunPlan(
+    baseInput({
+      instances: [
+        baseInstance({
+          conclusion: 'failure',
+          verdictReasons: [UNCOVERED_HEAD_HISTORICAL_REASON],
+        }),
+      ],
+    }),
+    baseOptions({ headCoverageSatisfied: true }),
+  );
+  assert.equal(plan.instances[0]?.classification, 'rerun-eligible');
+  assert.equal(plan.counts.rerunEligible, 1);
+  assert.equal(plan.counts.awaitingFreshReview, 0);
+  assert.equal(plan.plan.length, 1);
+  // The reason text must distinguish this recovery from an ordinary
+  // rerun-eligible instance (surfaces in the CLI's full JSON output).
+  assert.match(plan.instances[0]?.reason ?? '', /historically reported/);
+  assert.match(plan.instances[0]?.reason ?? '', /live check now confirms/);
+  assert.match(plan.instances[0]?.reason ?? '', /#1806/);
+});
+
+test('#1806: applyRerunPlan spends budget on a live-coverage-recovered instance', () => {
+  const initialPlan = computeRerunPlan(
+    baseInput({
+      instances: [
+        baseInstance({
+          conclusion: 'failure',
+          verdictReasons: [UNCOVERED_HEAD_HISTORICAL_REASON],
+        }),
+      ],
+    }),
+    baseOptions({ headCoverageSatisfied: true }),
+  );
+  assert.equal(initialPlan.plan.length, 1);
+
+  let rerunCalled = false;
+  const resolvedPlan = computeRerunPlan(
+    baseInput({ instances: [baseInstance({ conclusion: 'success' })] }),
+    baseOptions(),
+  );
+  const result = applyRerunPlan(initialPlan, {
+    rerunAndWait: () => {
+      rerunCalled = true;
+    },
+    recomputePlan: () => resolvedPlan,
+  });
+
+  assert.equal(rerunCalled, true);
+  assert.equal(result.executed.length, 1);
+  assert.equal(result.resolved, true);
+});
+
+test('#1806: existing #1775 behavior is unchanged when headCoverageSatisfied is not involved (non-coverage reason)', () => {
+  // Guards against a regression where the new step-7 branch accidentally
+  // widens beyond the uncovered-HEAD marker itself.
+  const plan = computeRerunPlan(
+    baseInput({
+      instances: [
+        baseInstance({
+          conclusion: 'failure',
+          verdictReasons: [
+            '1 copilot-authored review thread(s) are neither resolved nor validly dispositioned',
+          ],
+        }),
+      ],
+    }),
+    baseOptions({ headCoverageSatisfied: true }),
+  );
+  assert.equal(plan.instances[0]?.classification, 'rerun-eligible');
+  assert.equal(plan.plan.length, 1);
+  assert.doesNotMatch(plan.instances[0]?.reason ?? '', /#1806/);
+});
+
 // --- extractAdvisoryVerdictReasonsFromLog / uncovered-HEAD helpers ------
 
 test('#1775: extractAdvisoryVerdictReasonsFromLog parses gh-run-view-shaped logs', () => {

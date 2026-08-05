@@ -58,6 +58,22 @@
 //     `gh run rerun` invocations changes that outcome -- only a fresh
 //     review does -- so this is never placed in the plan and never
 //     spends the rerun-once budget (#1775, observed on PR #1772).
+//     #1806: this historical verdict is a snapshot of the workflow job
+//     log at the time THAT run executed, and the log is immutable -- so
+//     an instance that failed BEFORE a fresh review landed keeps
+//     reporting uncovered-HEAD forever, even once live coverage is
+//     satisfied (observed on PR #1854: the failed run's own log still
+//     said "does not cover current HEAD" after Copilot had already
+//     reviewed the real current HEAD with no new comments). When a LIVE
+//     check (reusing `advisory-convergence.mts`'s own Clause 1 evidence
+//     via `review-clause.mts`) confirms the current HEAD IS now covered,
+//     this classification recovers to `rerun-eligible` instead of
+//     staying stuck -- see `RerunPlanOptions.headCoverageSatisfied` and
+//     `classifyInstance`'s uncovered-HEAD step. Live coverage that is
+//     unreadable, not yet established, or simply not checked (no
+//     historical uncovered-HEAD reason to recover) leaves this hold
+//     exactly as it was before #1806 -- fail-closed, never an invented
+//     rerun.
 //   - `rerun-eligible`: non-pass, terminal, resolved -- goes into the
 //     ordered rerun plan (bot-triggered or not, unless gated per above).
 //
@@ -88,6 +104,17 @@
 //     bare top-level array, but the commit check-runs endpoint's shape is
 //     `{ total_count, check_runs: [...] }`, so this file's own
 //     `fetchCheckRunsForRef` passes `--jq '.check_runs[]'` instead.
+//   - `resolveLatestCopilotReviewClause`, `fetchReviewsAndHeadCommit`
+//     (review-clause.mts, #1806) -- the SAME latest-review Clause 1
+//     evidence `advisory-convergence.mts`'s own `converged` verdict is
+//     built on, reused here for the live-coverage recovery signal
+//     (`RerunPlanOptions.headCoverageSatisfied`) instead of a second,
+//     independent GraphQL path that could drift out of sync with the
+//     real gate's own notion of "covers current HEAD". Deliberately
+//     imported from the small `review-clause.mts` module rather than
+//     `advisory-convergence.mts` directly, keeping this read-only
+//     helper's dependency surface off that file's full claim/waiver/
+//     disposition machinery (see `review-clause.mts`'s own doc comment).
 //
 // This helper never mutates GitHub state: it only reads check-run/run data
 // and prints a diagnosis plus a plan of commands for a human (or a future
@@ -113,6 +140,19 @@ import {
   parsePaginatedGhNdjson,
   resolveAdvisoryBotLogins,
 } from './protocol-helpers.mts';
+// #1806: reuses `advisory-convergence.mts`'s own latest-review Clause 1
+// evidence (whether the latest trusted primary-bot review's commit
+// matches the PR's current HEAD) to recover a check-run instance whose
+// OWN historical job-log verdict is stale, instead of a second ad-hoc
+// GraphQL path. Imported from `review-clause.mts` (not
+// `advisory-convergence.mts` directly) -- see that module's own doc
+// comment and this file's module-header "Reuse map" above for why this
+// helper's dependency surface deliberately stays off the full
+// `advisory-convergence.mts` claim/waiver/disposition machinery.
+import {
+  fetchReviewsAndHeadCommit,
+  resolveLatestCopilotReviewClause,
+} from './review-clause.mts';
 import { loadJson, validateConfigSection } from './validate-schemas.mts';
 
 /** The check name this helper diagnoses. Matches
@@ -397,6 +437,22 @@ export interface RerunPlanOptions {
    * `plan` and `recoveryRefreshPlan` -- see
    * {@link RerunAdvisoryConvergencePlan.rerunPolicy}. */
   rerunPolicy?: string;
+  /**
+   * Live signal (#1806): whether the latest trusted primary-bot review's
+   * commit now matches the PR's current HEAD -- independent of any
+   * instance's own historical (job-log) verdict. `true` lets an instance
+   * whose historical `verdictReasons` report an uncovered-HEAD hold
+   * recover to `rerun-eligible` (see `classifyInstance`'s uncovered-HEAD
+   * step); `false`, `null`, or omitted all fail closed to the existing
+   * `awaiting-fresh-review` hold -- this never invents a rerun when live
+   * coverage could not be established or was never checked. Pure/DI: tests
+   * inject this directly with no network; production `collectFromGitHub`
+   * fills it (via `resolveLiveHeadCoverage`) only when at least one
+   * collected instance's own historical verdict already reports an
+   * uncovered-HEAD reason, reusing `review-clause.mts`'s
+   * `fetchReviewsAndHeadCommit` + `resolveLatestCopilotReviewClause`.
+   */
+  headCoverageSatisfied?: boolean | null;
 }
 
 /**
@@ -428,7 +484,14 @@ export function computeRerunPlan(
       .trim()
       .toLowerCase() || DEFAULT_ADVISORY_PRIMARY_BOT_LOGIN;
   const advisoryBotLogins = normalizeLoginList(options.advisoryBotLogins ?? []);
-  const classifyOptions = { primaryBotLogin, advisoryBotLogins };
+  const classifyOptions = {
+    primaryBotLogin,
+    advisoryBotLogins,
+    // #1806: `undefined` normalizes to `null` here so `classifyInstance`'s
+    // uncovered-HEAD step can use a single `=== true` check to fail closed
+    // on every non-`true` value (`false`, `null`, and omitted alike).
+    headCoverageSatisfied: options.headCoverageSatisfied ?? null,
+  };
 
   const instances = (input.instances ?? []).map((instance) =>
     classifyInstance(instance, classifyOptions),
@@ -741,7 +804,12 @@ function normalizeLoginList(logins: unknown[]): string[] {
  */
 function classifyInstance(
   instance: RerunPlanRawInstance,
-  options: { primaryBotLogin: string; advisoryBotLogins: string[] },
+  options: {
+    primaryBotLogin: string;
+    advisoryBotLogins: string[];
+    /** See {@link RerunPlanOptions.headCoverageSatisfied}. */
+    headCoverageSatisfied?: boolean | null;
+  },
 ): RerunPlanClassifiedInstance {
   const status = String(instance.status ?? '')
     .trim()
@@ -840,14 +908,31 @@ function classifyInstance(
   // in the plan and never spend the rerun-once budget on it. Only fires
   // when `verdictReasons` was actually consulted and matched; a missing
   // / unparsed log leaves classification unchanged (no invented hold).
+  //
+  // #1806 live-coverage recovery: the job log above is an IMMUTABLE
+  // snapshot from when THAT run executed, so it can go stale once a
+  // fresh review actually lands after the run failed (observed on PR
+  // #1854). `options.headCoverageSatisfied` is a LIVE, per-PR signal
+  // (see `RerunPlanOptions.headCoverageSatisfied`) that lets this hold
+  // recover instead of staying stuck forever. Only `=== true` recovers;
+  // `false`, `null`, and `undefined` all keep the historical hold exactly
+  // as before #1806 -- fail-closed, so an unreadable or not-yet-covered
+  // live signal never invents a rerun.
   if (hasUncoveredHeadVerdictReason(instance.verdictReasons)) {
     const matched =
       instance.verdictReasons?.find(isUncoveredHeadVerdictReason) ??
       UNCOVERED_HEAD_REASON_MARKER;
+    if (options.headCoverageSatisfied !== true) {
+      return {
+        ...instance,
+        classification: 'awaiting-fresh-review',
+        reason: `advisory-convergence verdict reports "${matched}"; rerunning cannot clear this -- wait for a fresh review covering the current HEAD rather than spending the rerun-once budget (#1775)`,
+      };
+    }
     return {
       ...instance,
-      classification: 'awaiting-fresh-review',
-      reason: `advisory-convergence verdict reports "${matched}"; rerunning cannot clear this -- wait for a fresh review covering the current HEAD rather than spending the rerun-once budget (#1775)`,
+      classification: 'rerun-eligible',
+      reason: `advisory-convergence verdict historically reported "${matched}", but a live check now confirms the current HEAD is covered by a fresh review; the historical hold is stale -- safe to rerun (live-coverage recovery, #1806)`,
     };
   }
 
@@ -1960,6 +2045,42 @@ export function sanitizeRemoteConfig(
   return sanitized as IddConfig;
 }
 
+/**
+ * Live counterpart to the uncovered-HEAD hold (#1806): re-derives whether
+ * the latest trusted primary-bot review's commit now matches the PR's
+ * current HEAD, reusing `review-clause.mts`'s own review-clause evidence
+ * (`fetchReviewsAndHeadCommit` + `resolveLatestCopilotReviewClause` -- the
+ * SAME evidence `advisory-convergence.mts`'s real `converged` verdict is
+ * built on) instead of a second ad-hoc GraphQL path. Only called from
+ * `collectFromGitHub` when at least one collected instance's own
+ * historical `verdictReasons` already reports an uncovered-HEAD reason --
+ * see that call site -- so a PR with no such instance never pays for this
+ * extra fetch.
+ *
+ * Fails closed to `null` ("evidence unreadable") on ANY error -- never
+ * `false` -- so a transient GraphQL/network failure can never be
+ * indistinguishable from "checked, not covered" if a future caller wants
+ * to tell the two apart; `classifyInstance`'s uncovered-HEAD step treats
+ * both `false` and `null` identically (hold), matching the existing
+ * `verdictReasons`-null pattern elsewhere in this file (a missing/failed
+ * fetch never invents a hold OR a rerun).
+ */
+function resolveLiveHeadCoverage(
+  owner: string,
+  repo: string,
+  prNumber: number,
+  prHeadSha: string,
+  primaryBotLogin: string,
+): boolean | null {
+  try {
+    const { reviews } = fetchReviewsAndHeadCommit(owner, repo, prNumber);
+    return resolveLatestCopilotReviewClause(reviews, prHeadSha, primaryBotLogin)
+      .matchesHead;
+  } catch {
+    return null;
+  }
+}
+
 function collectFromGitHub(args: RerunPlanArgs): {
   input: RerunPlanInput;
   options: RerunPlanOptions;
@@ -2172,6 +2293,24 @@ function collectFromGitHub(args: RerunPlanArgs): {
     (rawConfig as { ciWait?: unknown } | null)?.ciWait,
   );
 
+  // #1806: only pay for the live-coverage fetch when at least one
+  // collected instance's own historical verdict already reports an
+  // uncovered-HEAD reason -- the ONLY situation `classifyInstance`'s
+  // uncovered-HEAD step consults `headCoverageSatisfied` at all. A PR
+  // with no such instance never triggers the extra GraphQL round trip.
+  const anyHistoricalUncoveredHead = [...verdictReasonsByRunId.values()].some(
+    (reasons) => hasUncoveredHeadVerdictReason(reasons),
+  );
+  const headCoverageSatisfied = anyHistoricalUncoveredHead
+    ? resolveLiveHeadCoverage(
+        owner,
+        repo,
+        Number(args.prNumber),
+        prHeadSha,
+        primaryBotLogin,
+      )
+    : null;
+
   return {
     input: {
       prNumber: Number(args.prNumber),
@@ -2186,6 +2325,7 @@ function collectFromGitHub(args: RerunPlanArgs): {
       primaryBotLogin,
       advisoryBotLogins,
       rerunPolicy,
+      headCoverageSatisfied,
     },
   };
 }
