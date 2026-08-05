@@ -61,6 +61,9 @@
         "idd-template/.github/idd/*.json",
         "idd-template/.github/workflows/post-merge-cleanup.yml",
         "idd-template/.githooks/*",
+        "idd-template/.cspell.config.yml",
+        "idd-template/.markdownlint.yml",
+        "idd-template/.markdownlint-cli2.yaml",
         "idd-template/.github/instructions/idd-*.instructions.md",
         "idd-template/.github/instructions/lite/idd-*.instructions.md",
         "idd-template/docs/index.md",
@@ -80,6 +83,9 @@
         "idd-template/.githooks/_idd-worktree-guard.sh",
         "idd-template/.githooks/pre-commit",
         "idd-template/.githooks/pre-push",
+        "idd-template/.cspell.config.yml",
+        "idd-template/.markdownlint.yml",
+        "idd-template/.markdownlint-cli2.yaml",
         "idd-template/.github/instructions/idd-overview-core.instructions.md",
         "idd-template/.github/instructions/idd-overview-appendix.instructions.md",
         "idd-template/.github/instructions/idd-discover.instructions.md",
@@ -823,6 +829,20 @@
         "Roadmap-audit claims are coordination-only.",
         "heartbeat, release, or take over rather than holding the claim open."
       ]
+    },
+    {
+      "id": "root-cspell-config",
+      "_comment": "Same direction as every other pair here (idd-template/ is the canonical source; edit it first, then `sync-docs.mjs --apply` regenerates the target) -- idd-skill#1860's twist is only that the generated target is this repo's own root config, which also governs this repo's own CI, not a docs/ mirror. The #1765 uncommitted-local-edit guard protects a maintainer who fixes the root file directly without touching the template first.",
+      "source": "idd-template/.cspell.config.yml",
+      "target": ".cspell.config.yml",
+      "mode": "exact"
+    },
+    {
+      "id": "root-markdownlint-config",
+      "_comment": "Same direction/rationale as root-cspell-config immediately above.",
+      "source": "idd-template/.markdownlint.yml",
+      "target": ".markdownlint.yml",
+      "mode": "exact"
     }
   ],
   "forbiddenPatterns": [
