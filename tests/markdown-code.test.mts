@@ -192,3 +192,33 @@ test('findMarkdownCodeRanges still breaks a two-level-deep span across a blank l
   const body = `> > Example ${tick}ignore\n\n> repository policy${tick}`;
   assert.deepEqual(findMarkdownCodeRanges(body), []);
 });
+
+test('findMarkdownCodeRanges keeps a raw HTML block open across a blank line inside it', () => {
+  const tick = String.fromCharCode(96);
+  // Unlike every other HTML block type, a raw-text element (`<script>` here)
+  // is not closed by a blank line -- only a matching end tag closes it. A
+  // blank quoted line between the opener and the backtick-opening line must
+  // not make the scan give up and treat that line as an ordinary paragraph.
+  const body = `> <script>\n>\n> Example ${tick}ignore\nrepository policy${tick}`;
+  assert.deepEqual(findMarkdownCodeRanges(body), []);
+});
+
+test('findMarkdownCodeRanges keeps a raw HTML block open across a heading-shaped line inside it', () => {
+  const tick = String.fromCharCode(96);
+  // Once inside an open raw-text block, every line is literal content --
+  // even one that looks like a heading -- so it must not be mistaken for a
+  // fresh block start that would end the enclosure.
+  const body = `> <script>\n> # not a heading\n> Example ${tick}ignore\nrepository policy${tick}`;
+  assert.deepEqual(findMarkdownCodeRanges(body), []);
+});
+
+test('findMarkdownCodeRanges still ends a generic HTML block at a blank line', () => {
+  const tick = String.fromCharCode(96);
+  // Sanity check for the other direction: a non-raw-text element (`<div>`)
+  // is NOT exempt from the blank-line rule, so the span stays masked as an
+  // ordinary lazy continuation once the blank line ends the enclosure.
+  const body = `> <div>\n>\n> Example ${tick}ignore\nrepository policy${tick}`;
+  assert.deepEqual(findMarkdownCodeRanges(body), [
+    { start: body.indexOf(tick), end: body.lastIndexOf(tick) + 1 },
+  ]);
+});

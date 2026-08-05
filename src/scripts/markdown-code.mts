@@ -143,6 +143,8 @@ const MARKDOWN_THEMATIC_BREAK_PATTERN =
 // end at a line containing their matching closing tag -- unlike the other
 // HTML block types, a blank line does not close them.
 const HTML_RAW_TEXT_TAG_CLOSE_PATTERN = /<\/(?:script|pre|style|textarea)\b/iu;
+const HTML_RAW_TEXT_TAG_OPEN_PATTERN =
+  /^ {0,3}<(?:script|pre|style|textarea)\b/iu;
 
 /**
  * True when `content` (a line with any blockquote/list container prefix
@@ -203,42 +205,57 @@ function findPreviousLineStart(text: string, lineStart: number): number | null {
  * HTML block opened on an earlier line at the same container depth (for
  * example, an unclosed `<script>` directly above a quoted paragraph) -- so it
  * must not be mistaken for an ordinary paragraph line. Scans backward
- * through consecutive, non-blank, same-depth lines: a blank line or a
- * container-depth change ends the search (not enclosed); a raw-text tag's
- * matching closing line (`</script>` etc.) ends it too, since that block
- * type only closes on a matching end tag. A closing tag for any other
- * element (e.g. `</div>`) proves nothing on its own -- CommonMark's other
- * HTML block types close only at a blank line -- so it is skipped rather
- * than treated as a boundary or a find.
+ * through consecutive, same-depth lines; a container-depth change ends the
+ * search unconditionally (not enclosed).
+ *
+ * The two HTML block families close differently, so neither a blank line nor
+ * a line that otherwise looks like a new block (heading, list, thematic
+ * break) ends either one by itself -- CommonMark keeps their content
+ * completely literal until their own close condition:
+ *
+ * - Raw-text elements (`<script>`/`<pre>`/`<style>`/`<textarea>`) close only
+ *   on a line containing their matching end tag; a blank line does not
+ *   affect them, so the scan keeps looking for one past any number of blank
+ *   lines.
+ * - Every other HTML block type closes only at a blank line. Once the scan
+ *   has crossed one, an opener found further back no longer reaches the
+ *   opening line and is ignored -- only a still-reachable raw-text opener
+ *   can still apply.
+ *
+ * A closing tag for a non-raw-text element (e.g. `</div>`) proves nothing on
+ * its own and is skipped rather than treated as a boundary or a find.
  */
 function isWithinOpenHtmlBlock(
   text: string,
   openingLineStart: number,
   containerDepth: number,
 ): boolean {
+  let crossedBlankLine = false;
   let lineStart = findPreviousLineStart(text, openingLineStart);
   while (lineStart !== null) {
     const line = lineBounds(text, lineStart);
     const parsed = parseContainerLine(text.slice(lineStart, line.end));
-    if (
-      parsed.containerDepth !== containerDepth ||
-      parsed.content.trim() === ''
-    ) {
+    if (parsed.containerDepth !== containerDepth) {
       return false;
+    }
+    if (parsed.content.trim() === '') {
+      crossedBlankLine = true;
+      lineStart = findPreviousLineStart(text, lineStart);
+      continue;
     }
     if (HTML_RAW_TEXT_TAG_CLOSE_PATTERN.test(parsed.content)) {
       return false;
     }
-    if (!isHtmlClosingSyntax(parsed.content)) {
-      if (
-        MARKDOWN_HTML_BLOCK_START_PATTERN.test(parsed.content) ||
-        MARKDOWN_CUSTOM_HTML_BLOCK_START_PATTERN.test(parsed.content)
-      ) {
-        return true;
-      }
-      if (isMarkdownBlockStart(parsed.content)) {
-        return false;
-      }
+    if (HTML_RAW_TEXT_TAG_OPEN_PATTERN.test(parsed.content)) {
+      return true;
+    }
+    if (
+      !crossedBlankLine &&
+      !isHtmlClosingSyntax(parsed.content) &&
+      (MARKDOWN_HTML_BLOCK_START_PATTERN.test(parsed.content) ||
+        MARKDOWN_CUSTOM_HTML_BLOCK_START_PATTERN.test(parsed.content))
+    ) {
+      return true;
     }
     lineStart = findPreviousLineStart(text, lineStart);
   }
