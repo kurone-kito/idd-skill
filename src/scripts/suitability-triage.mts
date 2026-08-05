@@ -24,6 +24,7 @@ import {
   maskMarkdownCodeRegionsPreservingPositions,
 } from './markdown-code.mts';
 import { normalizePolicyConfig, POLICY_DEFAULTS } from './policy-helpers.mts';
+import { resolveTrustedMarkerActors } from './protocol-helpers.mts';
 import {
   buildClosedByMergedPrArgs,
   buildMergedPrListArgs,
@@ -31,10 +32,13 @@ import {
   type CheckOutcome,
   evaluateHighConfidenceDuplicate,
   findCandidateFileOverlap,
+  findTrustedSuitabilityRejection,
   type HighConfidenceDuplicateInput,
   type HighConfidenceMergedPr,
   prReferencesIssue,
   resolveCandidateFileSet,
+  type SuitabilityRejectionComment,
+  type SuitabilityRejectionRecord,
 } from './supersession-detection.mts';
 
 /**
@@ -962,7 +966,46 @@ function runCli(): void {
 
   const issue = fetchIssue(repoRef, args.issue);
   const duplicateCandidates = fetchDuplicateCandidates(repoRef, issue);
-  const labelsPolicy = normalizePolicyConfig(loadPolicy(args.policy)).labels;
+  const policyConfig = loadPolicy(args.policy);
+  const labelsPolicy = normalizePolicyConfig(policyConfig).labels;
+
+  // #1887: surface an existing, trusted `A4.5 suitability gate rejection`
+  // comment (if any) as a distinct output field, independent of the seven
+  // checks below and of the shouldCollectEvidence gate further down (that
+  // gate exists only to skip Check 4's own network-cost evidence when
+  // Checks 1-3 already fail) -- a prior trusted rejection matters
+  // regardless of which check a fresh run would fail today (the #1878
+  // scenario this issue documents: Check 7 fails fresh, but a human
+  // already ruled on it). Wrapped in its own try/catch: this is
+  // detect-only evidence, not a gate, so a transient `gh` failure here
+  // must degrade to `existingRejection: null` plus a warning, never crash
+  // the whole seven-check evaluation the way a genuine
+  // fetchIssue/fetchDuplicateCandidates failure still does.
+  const { actors: trustedMarkerActors } = resolveTrustedMarkerActors({
+    envValue: process.env.IDD_TRUSTED_MARKER_ACTORS ?? '',
+    config: policyConfig as { trustedMarkerActors?: unknown } | null,
+  });
+  const existingRejectionCollectionWarnings: string[] = [];
+  let existingRejection: SuitabilityRejectionRecord | null = null;
+  // Copilot review finding on PR #1890: findTrustedSuitabilityRejection can
+  // never return a match with zero trusted actors (it returns null before
+  // even looking at `comments`), so fetching the full, possibly-paginated
+  // comment thread in that case is guaranteed wasted `gh api` traffic with
+  // no observable benefit. Skip the fetch entirely rather than only
+  // skipping the (already-cheap) scan.
+  if (trustedMarkerActors.length > 0) {
+    try {
+      const issueComments = fetchIssueComments(repoRef, args.issue);
+      existingRejection = findTrustedSuitabilityRejection(
+        issueComments,
+        trustedMarkerActors,
+      );
+    } catch (error) {
+      existingRejectionCollectionWarnings.push(
+        `existingRejection scan: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+  }
 
   // #1815: repository_fit, coherence, and trust_safety are cheap, local,
   // no-I/O checks that run before duplicate_or_superseded (Check 4) in
@@ -1119,6 +1162,10 @@ function runCli(): void {
     passed: result.passed,
     outcome: result.outcome,
     failedCheck: result.failedCheck,
+    ...(existingRejection ? { existingRejection } : {}),
+    ...(existingRejectionCollectionWarnings.length > 0
+      ? { existingRejectionCollectionWarnings }
+      : {}),
     ...(collectionWarnings.length > 0
       ? { highConfidenceDuplicateCollectionWarnings: collectionWarnings }
       : {}),
@@ -1213,6 +1260,7 @@ Output schema:
   "passed": true,
   "outcome": "ready|unclear|needs-decision|blocked-by-human|duplicate|out-of-scope|invalid",
   "failedCheck": "repository_fit|...|null",
+  "existingRejection": {"author":"...","createdAt":"...","url":"...","outcome":"...|null","check":"...|null"},
   "checks": [{"id":"repository_fit","name":"Repository Fit","result":"pass|fail","evidence":"..."}]
 }
 
@@ -1220,6 +1268,14 @@ Each checks[] entry may also carry "tier":"high-confidence|weak" -- present
 only on a duplicate_or_superseded fail (absent on every pass and on every
 other check), distinguishing a high-confidence mechanical hit from the weak
 title/declaration heuristic.
+
+"existingRejection" (#1887) is present only when a trusted marker actor
+already posted a correctly-formatted "A4.5 suitability gate rejection"
+comment on this issue -- the most recent one, when more than one exists.
+Absent (not null) for the common never-triaged case, and never surfaced for
+a rejection-shaped comment from an untrusted actor. An optional sibling
+"existingRejectionCollectionWarnings" array is present only when fetching
+or scanning the comment thread itself failed.
 `);
 }
 
@@ -1421,6 +1477,35 @@ function fetchDuplicateCandidates(
     `search/issues?q=${encodeURIComponent(query)}&per_page=50`,
   ]) as { items?: unknown };
   return normalizeDuplicateCandidates(payload.items ?? []);
+}
+
+/**
+ * Paginated fetch of `<owner>/<repo>` issue `<issueNumber>`'s full comment
+ * thread (#1887), mirroring `resume-claim-routing.mts`'s own
+ * `fetchIssueComments` -- REST issue comments, 100 per page, until a
+ * short page signals the end. Feeds `findTrustedSuitabilityRejection`
+ * (`supersession-detection.mts`). Throws on a `gh` failure like every other
+ * `ghJson`-based fetch in this file; the caller wraps this call in its own
+ * try/catch so a failure here degrades `existingRejection` to `null` plus a
+ * warning instead of crashing the whole seven-check evaluation.
+ */
+function fetchIssueComments(
+  repoRef: string,
+  issueNumber: number,
+): SuitabilityRejectionComment[] {
+  const comments: SuitabilityRejectionComment[] = [];
+  const pageSize = 100;
+  for (let page = 1; ; page += 1) {
+    const pageItems = ghJson([
+      'api',
+      `repos/${repoRef}/issues/${issueNumber}/comments?per_page=${pageSize}&page=${page}`,
+    ]) as SuitabilityRejectionComment[];
+    comments.push(...pageItems);
+    if (pageItems.length < pageSize) {
+      break;
+    }
+  }
+  return comments;
 }
 
 // --- #1484: high-confidence Check 4 tier CLI glue ---------------------------
