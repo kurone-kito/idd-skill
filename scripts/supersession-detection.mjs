@@ -128,7 +128,19 @@ export function prReferencesIssue(pr, issueNumber) {
   ) {
     return true;
   }
-  const pattern = new RegExp(`#${issueNumber}\\b`);
+  // Copilot review finding on PR #1886: a trailing `\b` alone only rejects
+  // a longer number sharing the digit prefix (`#18620` vs `1862`) -- it
+  // does NOT reject a word character immediately before `#` (`\b` requires
+  // one side `\w`, so `\b#` would require a `\w` before `#`, the opposite
+  // of what's needed here). `foo#1862` matched with only a trailing `\b`,
+  // which is not "word-bounded" as the issue's algorithm describes and
+  // could reintroduce a false positive from an incidental substring in a
+  // PR title/body. `(?<!\w)` requires the character immediately before `#`
+  // (if any) to NOT be a word character, rejecting `foo#1862` while still
+  // matching every legitimate form (start-of-string, whitespace, or
+  // punctuation before `#`: `#1862`, `Refs #1862`, `Closes #1862`,
+  // `(#1862)`).
+  const pattern = new RegExp(`(?<!\\w)#${issueNumber}\\b`);
   const title = typeof pr.title === 'string' ? pr.title : '';
   const body = typeof pr.body === 'string' ? pr.body : '';
   return pattern.test(title) || pattern.test(body);

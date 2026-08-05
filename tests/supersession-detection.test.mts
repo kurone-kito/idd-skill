@@ -433,6 +433,29 @@ test('prReferencesIssue: word-boundary rejects a longer number sharing the same 
   );
 });
 
+test('prReferencesIssue: word-boundary rejects a "#" immediately preceded by a word character (Copilot review finding, PR #1886)', () => {
+  // "foo#1862" must not match -- a trailing \b alone doesn't reject a word
+  // character directly before "#"; a genuine cross-reference needs no word
+  // character immediately preceding it either.
+  assert.equal(
+    prReferencesIssue(
+      { closingIssuesReferences: [], title: 'foo#1862', body: '' },
+      1862,
+    ),
+    false,
+  );
+});
+
+test('prReferencesIssue: still matches every legitimate cross-reference form after the leading-boundary fix', () => {
+  for (const body of ['#1862', 'Refs #1862', 'Closes #1862', '(#1862)']) {
+    assert.equal(
+      prReferencesIssue({ closingIssuesReferences: [], title: '', body }, 1862),
+      true,
+      `expected a match for body: ${body}`,
+    );
+  }
+});
+
 test('prReferencesIssue: no match when neither signal references the issue', () => {
   assert.equal(
     prReferencesIssue(
