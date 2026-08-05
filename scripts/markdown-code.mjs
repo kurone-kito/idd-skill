@@ -250,14 +250,20 @@ function findPreviousLineStart(text, lineStart) {
  *    active never ends it (only `generic` closes on a blank line).
  *
  * `findMarkdownBlockBoundary` now calls this scan at every container depth,
- * guarded so it never fires when the opening line is itself a fresh
- * list-item opener (a list marker always starts a structurally new block
- * that cannot inherit an earlier sibling's open HTML state). Since #1896's
- * fix, a `true` result for a non-list-opener opening line now forces the
- * enclosing code span to never form at all (an unconditional block
- * boundary), rather than merely gating the `isLazyListContinuation` /
- * `isLazyQuoteContinuation` laziness exception for later lines the way it
- * still does for a list-opener opening line.
+ * including when the opening line itself looks like a fresh list-item
+ * opener -- the scan still runs there (it does not know or care whether
+ * its own starting line has a marker; only the *lines it walks backward
+ * through* have their own markers stripped before testing). Since #1896's
+ * fix, a `true` result forces the enclosing code span to never form at all
+ * (an unconditional block boundary), rather than merely gating the
+ * `isLazyListContinuation` / `isLazyQuoteContinuation` laziness exception
+ * for later lines -- *unless* the opening line is a genuine fresh sibling
+ * list-item opener (its own marker, and not itself still within an
+ * earlier, outer list item's content zone; see the guard in
+ * `findMarkdownBlockBoundary` below), in which case only the laziness-gate
+ * consumption still applies, so a legitimate same-line span opened by that
+ * fresh sibling right after an unclosed tag in the previous item is not
+ * destroyed.
  *
  * **Deliberate side effect.** A stray raw-text-close-shaped line (e.g. a
  * bare `</script>`) encountered while the state is still `none` -- no raw-
@@ -500,19 +506,47 @@ function findMarkdownBlockBoundary(text, start, end) {
   const openingIsWithinHtmlBlock =
     (openingContainerDepth > 0 || openingListContentIndent !== null) &&
     isWithinOpenHtmlBlock(text, openingLineStart, openingContainerDepth);
+  // PR #1902 review finding: the opening line's own content merely
+  // *matching* a list-item marker pattern (`openingListItem !== null`)
+  // does not by itself prove it is a genuine, structurally fresh sibling
+  // block. If it is still within reach of an EARLIER, OUTER list item's
+  // content zone -- checked here the same way #1894's own boundary check
+  // does, by indentation alone, deliberately ignoring whether this line's
+  // content also happens to look like a marker -- it is raw or nested
+  // content still inside whatever that outer zone encloses (e.g. a
+  // `<script>` body line that happens to start with `- `), not a block
+  // boundary. `isWithinOpenHtmlBlock`'s own backward scan already reaches
+  // such a line correctly (it strips a scanned line's marker before
+  // testing it, the same way the opening line's own marker already is);
+  // only excluding it from the early return below without this check was
+  // the gap. Only run this (otherwise avoidable) disambiguating scan when
+  // it can actually change the outcome: `openingListItem !== null` and an
+  // open HTML block was already found under the marker-inclusive indent
+  // above.
+  const openingListOpenerStillWithinOuterZone =
+    openingListItem !== null &&
+    openingIsWithinHtmlBlock &&
+    findEnclosingListContentIndent(
+      text,
+      openingLineStart,
+      openingContainerDepth,
+    ) !== null;
   // #1896: a still-open raw or custom HTML block enclosing the opening line
   // must prevent a code span from ever forming at all -- not merely gate a
   // later line's laziness exception (below), since CommonMark never runs
   // inline parsing inside such a block, at any container depth. Excluded
-  // when the opening line is itself a fresh list-item opener
-  // (`openingListItem !== null`): a list marker always starts a
-  // structurally new block, so it can never inherit an earlier sibling
-  // item's still-open HTML state -- isWithinOpenHtmlBlock's backward scan
-  // has no way to know that on its own (see its "Known limitation" note
-  // above), so treating its true result as unconditional here would
-  // destroy a legitimate same-line span opened by a fresh sibling list
-  // item right after an unclosed tag in the previous one.
-  if (openingListItem === null && openingIsWithinHtmlBlock) {
+  // only when the opening line is a genuine fresh sibling list-item opener
+  // (`openingListItem !== null` and, per the check above, not still within
+  // an outer enclosing zone): a list marker starts a structurally new
+  // block only when it is not itself raw/nested content the outer zone
+  // already encloses -- otherwise treating isWithinOpenHtmlBlock's true
+  // result as unconditional here would destroy a legitimate same-line span
+  // genuinely opened by a fresh sibling list item right after an unclosed
+  // tag in the previous one.
+  if (
+    openingIsWithinHtmlBlock &&
+    (openingListItem === null || openingListOpenerStillWithinOuterZone)
+  ) {
     return openingLineStart;
   }
   // #1894/#1896: openingIsParagraph now gates list-content-indent laziness
@@ -522,10 +556,10 @@ function findMarkdownBlockBoundary(text, start, end) {
   // still-open HTML block is a different block type with its own closing
   // rule, so it must not inherit laziness -- openingIsWithinHtmlBlock is
   // exactly the signal that tells the two apart. This is the residual case
-  // where the early return above did not fire (the opening line is itself a
-  // fresh list-item opener), so a still-open HTML block from an earlier
-  // sibling can still suppress a *later* line's laziness exception without
-  // destroying the opening line's own same-line span.
+  // where the early return above did not fire (the opening line is a
+  // genuine fresh sibling list-item opener), so a still-open HTML block
+  // from an earlier sibling can still suppress a *later* line's laziness
+  // exception without destroying the opening line's own same-line span.
   const openingIsParagraph =
     !isMarkdownBlockStart(openingParagraphContent) &&
     !MARKDOWN_HTML_BLOCK_START_PATTERN.test(openingParagraphContent) &&

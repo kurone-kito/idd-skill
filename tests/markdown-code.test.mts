@@ -495,3 +495,19 @@ test('findMarkdownCodeRanges still forms a same-line span opened by a fresh sibl
     );
   }
 });
+
+test('findMarkdownCodeRanges never forms a span on a marker-shaped line still within an outer open HTML zone', () => {
+  const tick = String.fromCharCode(96);
+  // Copilot review finding on this PR: the opening line's own content
+  // merely *looking like* a list-item marker (e.g. a `<script>` body line
+  // that happens to start with `- `) is not proof it is a genuine fresh
+  // sibling -- unlike the previous test, this line stays indented (2
+  // spaces) within the outer item's own content zone, so it is still raw
+  // content inside the still-open block, not a block-terminating sibling.
+  // Without the outer-zone disambiguation, the naive "openingListItem !==
+  // null" guard alone would wrongly let this masking-bypass span form.
+  for (const opener of ['<div>', '<script>']) {
+    const body = `- ${opener}\n  - raw content ${tick}that looks like${tick} a marker`;
+    assert.deepEqual(findMarkdownCodeRanges(body), [], opener);
+  }
+});
