@@ -298,10 +298,11 @@ type HtmlBlockScanState =
  *    close, and a blank line encountered while `special` or `raw-text` is
  *    active never ends it (only `generic` closes on a blank line).
  *
- * `findMarkdownBlockBoundary` now calls this scan at every container depth,
- * including when the opening line itself looks like a fresh list-item
- * opener -- the scan still runs there (it does not know or care whether
- * its own starting line has a marker; only the *lines it walks backward
+ * `findMarkdownBlockBoundary` now calls this scan whenever an active list
+ * zone is involved, not only inside a blockquote -- including when the
+ * opening line itself looks like a fresh list-item opener: the scan still
+ * runs there (it does not know or care whether its own starting
+ * line has a marker; only the *lines it walks backward
  * through* have their own markers stripped before testing). Since #1896's
  * fix, a `true` result forces the enclosing code span to never form at all
  * (an unconditional block boundary), rather than merely gating the
