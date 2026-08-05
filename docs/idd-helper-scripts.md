@@ -1786,16 +1786,16 @@ evidence, purely additively: `converged` / `waived` / `ready` are
 computed with **no reference to it at all**, so it can never let the
 gate pass on anything but the primary bot's own real signal.
 
-| Field               | Meaning                                                                                                                                                                                                                                                                                                                               |
-| ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `eligible`          | `matchesHead: true`, `itemCount > 0`, every Copilot-authored thread resolved or validly dispositioned, AND no outstanding regular-comment disposition evidence (`dispositionEvidence.missingRegularCommentCount === 0`) -- the static count is the ONLY thing keeping `converged` false, with no other triage work still outstanding. |
-| `ineligibleReasons` | `#1719`: one stable, machine-readable token per failing term of the `eligible` conjunction above (empty exactly when `eligible` is `true`), so a caller can self-diagnose a stuck reroll without re-deriving the rule by hand. See below for the token list and the report-mode example.                                              |
-| `count`             | Trusted `advisory-reroll:` marker count matching the current HEAD (resets on a new push, since a new HEAD's markers start over).                                                                                                                                                                                                      |
-| `cap`               | Configured bounded budget, `advisoryWait.sameHeadRerollCap` (default 2, deliberately conservative but > 1: same-SHA re-review is not a guaranteed one-shot off-ramp).                                                                                                                                                                 |
-| `exhausted`         | `count >= cap`: stop rerolling, fall through to the existing deadline-plus-maintainer-waiver backstop (#1512) or hold.                                                                                                                                                                                                                |
-| `latestAt`          | GitHub `created_at` of the latest trusted same-HEAD reroll marker, or `''` -- **never** the marker's embedded, agent-supplied timestamp (same anchor rule AW2 already states for `advisory-wait:`).                                                                                                                                   |
-| `inFlight`          | `true` while a reroll marker exists, no primary-bot review has been submitted after it yet, **and** the configured `advisoryWait.pendingWindow` has not yet elapsed since it was posted. Recomputed fresh from GitHub state on every call (never in-session memory), so a crash mid-poll can never cause a duplicate reroll request.  |
-| `requestable`       | `eligible && !exhausted && !inFlight` -- the exact instant it is safe to request a fresh same-HEAD reroll.                                                                                                                                                                                                                            |
+| Field               | Meaning                                                                                                                                                                                                                                                                                                                                                                                       |
+| ------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `eligible`          | `matchesHead: true`, `itemCount` known AND (`itemCount > 0` OR `suppressedCount > 0`, #1880), every Copilot-authored thread resolved or validly dispositioned, AND no outstanding regular-comment disposition evidence (`dispositionEvidence.missingRegularCommentCount === 0`) -- the static count is the ONLY thing keeping `converged` false, with no other triage work still outstanding. |
+| `ineligibleReasons` | `#1719`: one stable, machine-readable token per failing term of the `eligible` conjunction above (empty exactly when `eligible` is `true`), so a caller can self-diagnose a stuck reroll without re-deriving the rule by hand. See below for the token list and the report-mode example.                                                                                                      |
+| `count`             | Trusted `advisory-reroll:` marker count matching the current HEAD (resets on a new push, since a new HEAD's markers start over).                                                                                                                                                                                                                                                              |
+| `cap`               | Configured bounded budget, `advisoryWait.sameHeadRerollCap` (default 2, deliberately conservative but > 1: same-SHA re-review is not a guaranteed one-shot off-ramp).                                                                                                                                                                                                                         |
+| `exhausted`         | `count >= cap`: stop rerolling, fall through to the existing deadline-plus-maintainer-waiver backstop (#1512) or hold.                                                                                                                                                                                                                                                                        |
+| `latestAt`          | GitHub `created_at` of the latest trusted same-HEAD reroll marker, or `''` -- **never** the marker's embedded, agent-supplied timestamp (same anchor rule AW2 already states for `advisory-wait:`).                                                                                                                                                                                           |
+| `inFlight`          | `true` while a reroll marker exists, no primary-bot review has been submitted after it yet, **and** the configured `advisoryWait.pendingWindow` has not yet elapsed since it was posted. Recomputed fresh from GitHub state on every call (never in-session memory), so a crash mid-poll can never cause a duplicate reroll request.                                                          |
+| `requestable`       | `eligible && !exhausted && !inFlight` -- the exact instant it is safe to request a fresh same-HEAD reroll.                                                                                                                                                                                                                                                                                    |
 
 **`ineligibleReasons` tokens (`#1719`)**: one entry per failing term, in
 the same order the `eligible` conjunction is written in
@@ -1823,13 +1823,17 @@ incident: a "Comments suppressed due to low confidence" item embedded in
 the review's own body text counts toward `itemCount` but never surfaces
 as a review thread, so no thread query can ever explain it.
 
-**`suppressedCount` (#1880).** A distinct, `itemCount === 0` shape of the
-same underlying problem: GitHub Copilot can fold a finding into a
-`<details><summary>Suppressed comments (N)</summary>` block in the
-review's top-level `body` instead of posting it as a comment at all, so
-`comments.totalCount` (`itemCount`) stays `0` while a real finding still
-exists. `resolveLatestCopilotReviewClause` (review-clause.mts) parses
-this heading into `review.suppressedCount`, and Clause 1's `satisfied`
+**`suppressedCount` (kurone-kito/idd-skill#1880).** A distinct,
+`itemCount === 0` shape of the same underlying problem: GitHub Copilot
+can fold a finding into a `<details><summary>Suppressed comments
+(N)</summary>` block in the review's top-level `body` instead of
+posting it as a comment at all, so `comments.totalCount` (`itemCount`)
+stays `0` while a real finding still exists. Observed incident: PR
+kurone-kito/idd-skill#1875, merged 2026-08-05 (a Copilot review on that
+PR had `comments.totalCount: 0` with a body still containing an
+unaddressed `Suppressed comments (1)` finding).
+`resolveLatestCopilotReviewClause` (review-clause.mts) parses this
+heading into `review.suppressedCount`, and Clause 1's `satisfied`
 computation and `reviewItemCountPositiveTerm` above both treat
 `suppressedCount > 0` the same way they already treat `itemCount > 0` --
 blocking convergence with a dedicated top-level reason, and keeping the

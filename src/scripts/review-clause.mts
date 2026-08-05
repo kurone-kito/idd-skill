@@ -15,15 +15,18 @@
 // callers already relied on before the extraction.
 //
 // Kept deliberately small (only depends on `gh-exec.mts`'s shared
-// `ghGraphql` and `protocol-helpers.mts`'s shared `isCopilotReviewerLogin`)
-// so a read-only, low-dependency caller like `rerun-advisory-convergence.mts`
-// can import it without also pulling in `advisory-convergence.mts`'s full
-// claim/waiver/disposition machinery -- see that file's own module-header
-// "Reuse map" comment. Both dependencies are already reused directly by
-// `rerun-advisory-convergence.mts` itself today, so this adds no new
-// dependency surface to that caller.
+// `ghGraphql`, `protocol-helpers.mts`'s shared `isCopilotReviewerLogin`,
+// and -- as of #1880 -- `markdown-code.mts`'s shared
+// `stripMarkdownCodeRegions`) so a read-only, low-dependency caller like
+// `rerun-advisory-convergence.mts` can import it without also pulling in
+// `advisory-convergence.mts`'s full claim/waiver/disposition machinery --
+// see that file's own module-header "Reuse map" comment. The first two
+// dependencies are already reused directly by `rerun-advisory-convergence.mts`
+// itself today; `markdown-code.mts` has no imports of its own, so this adds
+// no heavy dependency surface to that caller either.
 
 import { ghGraphql } from './gh-exec.mts';
+import { stripMarkdownCodeRegions } from './markdown-code.mts';
 import { isCopilotReviewerLogin } from './protocol-helpers.mts';
 
 /** Minimal GitHub GraphQL author payload shape consumed here. `__typename`
@@ -94,7 +97,9 @@ interface RawReviewNode {
  * the real HTML tags -- the same prose-quoted-example false-positive class
  * a marker parser elsewhere in this codebase already hit once
  * (kurone-kito/idd-skill#1614). Requiring the literal tag pair keeps a
- * plain-text mention from matching. */
+ * plain-text mention from matching -- but is not sufficient alone: see
+ * {@link parseSuppressedCommentCount}'s own code-region stripping for the
+ * remaining case (the literal tags quoted INSIDE a code span/fence). */
 const SUPPRESSED_COMMENTS_HEADING_PATTERN =
   /<summary>\s*suppressed comments \((\d+)\)\s*<\/summary>/i;
 
@@ -106,12 +111,26 @@ const SUPPRESSED_COMMENTS_HEADING_PATTERN =
  * no such section, including an absent/empty/unparseable body -- unlike
  * `itemCount`, there is no distinct "unknown" state to preserve here: a
  * missing section unambiguously means zero suppressed comments.
+ *
+ * Strips fenced/inline Markdown code regions (`stripMarkdownCodeRegions`,
+ * markdown-code.mts) before matching, so a review body that quotes the
+ * literal `<summary>Suppressed comments (N)</summary>` tag pair inside
+ * backticks or a fenced code block (e.g. an advisory bot discussing this
+ * exact detection logic, as happened on this PR's own #1884 Copilot
+ * review) is not mistaken for a real suppressed-comments section -- the
+ * `<summary>`/`</summary>` anchoring above narrows the prose-quoting risk
+ * but does not by itself exclude a code-quoted example; stripping the code
+ * regions first closes that gap the same way #1614's marker-parser fix did.
+ * Real GitHub-rendered `<details>`/`<summary>` markup is raw HTML, never
+ * inside a code span/fence, so this never blanks the genuine heading.
  */
 export function parseSuppressedCommentCount(
   body: string | null | undefined,
 ): number {
   if (typeof body !== 'string' || body.length === 0) return 0;
-  const match = body.match(SUPPRESSED_COMMENTS_HEADING_PATTERN);
+  const match = stripMarkdownCodeRegions(body).match(
+    SUPPRESSED_COMMENTS_HEADING_PATTERN,
+  );
   if (!match) return 0;
   const count = Number(match[1]);
   return Number.isFinite(count) ? count : 0;

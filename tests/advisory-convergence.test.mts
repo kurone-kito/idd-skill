@@ -1864,6 +1864,52 @@ test('reasons: a PLAIN-TEXT mention of "Suppressed comments (N)" outside a <summ
   assert.equal(verdict.ready, true);
 });
 
+test('reasons: the literal <summary>...</summary> tag pair QUOTED INSIDE a code span does NOT false-block (PR #1884 Copilot review finding)', () => {
+  // A reviewer discussing this exact detection logic could quote the real
+  // HTML tags back in inline code or a fenced block rather than plain
+  // prose -- the <summary> anchoring alone does not exclude that case;
+  // parseSuppressedCommentCount must strip code regions first.
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({
+      reviews: [
+        copilotReview({
+          itemCount: 0,
+          body: 'consider guarding against a body that contains `<summary>Suppressed comments (1)</summary>` as a quoted example rather than a real heading.',
+        }),
+      ],
+    }),
+    baseOptions(),
+  );
+  assertValidVerdict(verdict);
+  assert.equal(verdict.review.suppressedCount, 0);
+  assert.equal(verdict.review.satisfied, true);
+  assert.equal(verdict.converged, true);
+  assert.equal(verdict.ready, true);
+});
+
+test('reasons: the literal <summary>...</summary> tag pair QUOTED INSIDE a fenced code block does NOT false-block', () => {
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({
+      reviews: [
+        copilotReview({
+          itemCount: 0,
+          body: [
+            'Example of the shape to guard against:',
+            '```html',
+            '<summary>Suppressed comments (1)</summary>',
+            '```',
+          ].join('\n'),
+        }),
+      ],
+    }),
+    baseOptions(),
+  );
+  assertValidVerdict(verdict);
+  assert.equal(verdict.review.suppressedCount, 0);
+  assert.equal(verdict.converged, true);
+  assert.equal(verdict.ready, true);
+});
+
 test('reasons: itemCount > 0 AND a suppressed section both mentioned, existing #1719 hint path unaffected', () => {
   const verdict = computeAdvisoryConvergenceVerdict(
     baseInputs({
