@@ -21,28 +21,35 @@
   "properties": {
     "protocolVersion": {
       "type": "string",
-      "pattern": "^1$"
+      "pattern": "^1$",
+      "description": "Protocol version of the branch-state evidence document."
     },
     "prNumber": {
       "type": "integer",
-      "minimum": 1
+      "minimum": 1,
+      "description": "Pull request number whose head and base are classified."
     },
     "prHeadSha": {
       "type": "string",
-      "pattern": "^$|^[0-9a-f]{40}$"
+      "pattern": "^$|^[0-9a-f]{40}$",
+      "description": "PR head commit SHA, or empty when the published head is unavailable."
     },
     "prBaseSha": {
       "type": "string",
-      "pattern": "^$|^[0-9a-f]{40}$"
+      "pattern": "^$|^[0-9a-f]{40}$",
+      "description": "PR base commit SHA, or empty when the published base is unavailable."
     },
     "published": {
-      "type": "boolean"
+      "type": "boolean",
+      "description": "Whether the published PR supplied a head SHA for classification."
     },
     "mergeable": {
-      "enum": ["MERGEABLE", "CONFLICTING", "UNKNOWN", null]
+      "enum": ["MERGEABLE", "CONFLICTING", "UNKNOWN", null],
+      "description": "GitHub mergeability value used as an input to branch classification, or null when unavailable."
     },
     "mergeStateStatus": {
-      "enum": ["CLEAN", "BLOCKED", "BEHIND", "DIRTY", "DRAFT", "HAS_HOOKS", "UNSTABLE", "UNKNOWN", null]
+      "enum": ["CLEAN", "BLOCKED", "BEHIND", "DIRTY", "DRAFT", "HAS_HOOKS", "UNSTABLE", "UNKNOWN", null],
+      "description": "GitHub merge-state status used as an input to branch classification, or null when unavailable."
     },
     "branchState": {
       "type": "string",
@@ -54,7 +61,8 @@
         "force-push-exception",
         "computing",
         "unknown"
-      ]
+      ],
+      "description": "Normalized classification of the PR branch relative to its base and local probes."
     },
     "syncRecommendation": {
       "type": "string",
@@ -65,29 +73,37 @@
         "force-push-exception",
         "recheck",
         "hold-unknown"
-      ]
+      ],
+      "description": "Recommended synchronization action derived from the branch-state classification."
     },
     "baseAdvancedSinceMergeBase": {
-      "type": "boolean"
+      "type": "boolean",
+      "description": "Whether the base advanced beyond the computed merge base; a clean mergeability result does not by itself prove current-base CI invariants."
     },
     "readOnly": {
-      "type": "boolean"
+      "type": "boolean",
+      "description": "Whether collection was read-only; this helper reports evidence without mutating GitHub or the worktree."
     },
     "worktreeUnchanged": {
-      "type": "boolean"
+      "type": "boolean",
+      "description": "Whether the local worktree was left unchanged by evidence collection."
     },
     "diagnostics": {
       "type": "object",
+      "description": "Supplemental sources, conflict paths, and notes supporting the normalized classification.",
       "properties": {
         "mergeableSource": {
-          "type": "string"
+          "type": "string",
+          "description": "Source used for the mergeability value in the classification."
         },
         "conflictFiles": {
           "type": "array",
+          "description": "Paths reported by the read-only conflict probe, when one was performed.",
           "items": { "type": "string" }
         },
         "notes": {
           "type": "array",
+          "description": "Additional diagnostic notes explaining classification limits or observations.",
           "items": { "type": "string" }
         }
       },

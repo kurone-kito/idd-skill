@@ -388,11 +388,13 @@
                 "properties": {
                   "selector": {
                     "type": "string",
-                    "minLength": 1
+                    "minLength": 1,
+                    "description": "Name or glob selector for a repo-external check classified as advisory by the local CI gate."
                   },
                   "matchMode": {
                     "type": "string",
-                    "enum": ["exact", "glob"]
+                    "enum": ["exact", "glob"],
+                    "description": "Matching mode used to compare the advisory selector with a check name."
                   }
                 }
               },
@@ -408,11 +410,13 @@
                 "properties": {
                   "selector": {
                     "type": "string",
-                    "minLength": 1
+                    "minLength": 1,
+                    "description": "Name or glob selector for a repo-external check eligible for a maintainer-authorized waiver."
                   },
                   "matchMode": {
                     "type": "string",
-                    "enum": ["exact", "glob"]
+                    "enum": ["exact", "glob"],
+                    "description": "Matching mode used to compare the waivable selector with a check name."
                   }
                 }
               },

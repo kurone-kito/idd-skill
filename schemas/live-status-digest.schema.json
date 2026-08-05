@@ -17,32 +17,39 @@
   "properties": {
     "phase": {
       "type": "string",
-      "minLength": 1
+      "minLength": 1,
+      "description": "Current IDD phase represented by the digest."
     },
     "claim": {
       "type": "string",
-      "minLength": 1
+      "minLength": 1,
+      "description": "Claim identity or status reference for the current work."
     },
     "branch": {
       "type": "string",
-      "minLength": 1
+      "minLength": 1,
+      "description": "Implementation or coordination branch associated with the digest."
     },
     "lastChecked": {
       "type": "string",
       "format": "date-time",
-      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?Z$"
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?Z$",
+      "description": "UTC time at which the represented state was last checked."
     },
     "openBlockers": {
       "type": "string",
-      "minLength": 1
+      "minLength": 1,
+      "description": "Current blocker summary, or none when no blocker is recorded."
     },
     "nextAction": {
       "type": "string",
-      "minLength": 1
+      "minLength": 1,
+      "description": "Next intended action in the IDD workflow."
     },
     "authoritativeBy": {
       "type": "string",
-      "minLength": 1
+      "minLength": 1,
+      "description": "Comment, commit, merge, or other evidence that authoritatively supports the digest."
     }
   }
 }

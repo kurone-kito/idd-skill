@@ -19,25 +19,31 @@
   "properties": {
     "protocolVersion": {
       "type": "string",
-      "pattern": "^1$"
+      "pattern": "^1$",
+      "description": "Protocol version of the A1.5 roadmap-audit verdict."
     },
     "decisionAuthority": {
       "type": "string",
-      "enum": ["instructions"]
+      "enum": ["instructions"],
+      "description": "Source of the roadmap completion decision represented by this verdict."
     },
     "mode": {
       "type": "string",
-      "enum": ["dry-run", "apply"]
+      "enum": ["dry-run", "apply"],
+      "description": "Whether the helper produced an audit plan or attempted roadmap mutation."
     },
     "roadmapNumber": {
       "type": "integer",
-      "minimum": 1
+      "minimum": 1,
+      "description": "Roadmap issue evaluated by the completion audit."
     },
     "ready": {
-      "type": "boolean"
+      "type": "boolean",
+      "description": "Whether the mechanical roadmap-completion preconditions passed; free-form success criteria still require caller review."
     },
     "blockers": {
       "type": "array",
+      "description": "Traversal or readiness conditions that prevent roadmap completion.",
       "items": {
         "type": "object",
         "required": ["kind", "detail"],
@@ -53,37 +59,45 @@
               "unresolved-reference",
               "inaccessible-reference",
               "cycle"
-            ]
+            ],
+            "description": "Classification of the roadmap completion blocker."
           },
           "target": {
             "type": "integer",
-            "minimum": 1
+            "minimum": 1,
+            "description": "Issue number associated with the blocker, when applicable."
           },
           "provenance": {
             "type": "array",
+            "description": "Roadmap and child issue path through which the blocker was discovered.",
             "items": {
               "type": "integer",
               "minimum": 1
             }
           },
           "detail": {
-            "type": "string"
+            "type": "string",
+            "description": "Evidence or explanation for the blocker."
           }
         },
         "additionalProperties": false
       }
     },
     "evidenceBody": {
-      "type": "string"
+      "type": "string",
+      "description": "Completion evidence body prepared for the roadmap audit comment."
     },
     "closed": {
-      "type": "boolean"
+      "type": "boolean",
+      "description": "Whether apply mode closed the roadmap issue."
     },
     "claimReleased": {
-      "type": "boolean"
+      "type": "boolean",
+      "description": "Whether apply mode released the roadmap-audit claim."
     },
     "result": {
-      "type": "string"
+      "type": "string",
+      "description": "Human-readable outcome of the roadmap audit or execution attempt."
     },
     "viewerLoginUnavailable": {
       "type": "boolean",
