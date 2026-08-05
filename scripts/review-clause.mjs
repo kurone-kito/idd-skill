@@ -25,10 +25,20 @@
 import { ghGraphql } from './gh-exec.mjs';
 import { isCopilotReviewerLogin } from './protocol-helpers.mjs';
 
-/** Matches GitHub Copilot's `Suppressed comments (N)` `<summary>` heading,
- * case-insensitively -- the only structured signal a suppressed finding
- * leaves in the review body (#1880). */
-const SUPPRESSED_COMMENTS_HEADING_PATTERN = /suppressed comments \((\d+)\)/i;
+/** Matches GitHub Copilot's `<summary>Suppressed comments (N)</summary>`
+ * heading, case-insensitively -- the only structured signal a suppressed
+ * finding leaves in the review body (#1880). Anchored to the surrounding
+ * `<summary>`/`</summary>` tags, not a bare `Suppressed comments (N)`
+ * substring search: this file's own diff (this pattern, its doc comments,
+ * and the regression test fixture) now contains that literal phrase, and
+ * an advisory bot reviewing THIS pull request could quote it back in
+ * ordinary prose (e.g. discussing the test fixture) without wrapping it in
+ * the real HTML tags -- the same prose-quoted-example false-positive class
+ * a marker parser elsewhere in this codebase already hit once
+ * (kurone-kito/idd-skill#1614). Requiring the literal tag pair keeps a
+ * plain-text mention from matching. */
+const SUPPRESSED_COMMENTS_HEADING_PATTERN =
+  /<summary>\s*suppressed comments \((\d+)\)\s*<\/summary>/i;
 /**
  * Parse the `Suppressed comments (N)` count GitHub Copilot embeds in a
  * review's top-level body when it folds a low-confidence finding into a

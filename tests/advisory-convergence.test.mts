@@ -1840,6 +1840,30 @@ test('reasons: itemCount 0 with an empty/absent body still converges normally (n
   assert.equal(verdict.ready, true);
 });
 
+test('reasons: a PLAIN-TEXT mention of "Suppressed comments (N)" outside a <summary> tag does NOT false-block (prose-quoted-example class, #1614)', () => {
+  // Simulates an advisory bot quoting the phrase back in ordinary review
+  // prose (e.g. discussing this very fix's test fixture) rather than a
+  // real GitHub-rendered suppressed-comments heading -- the parser must
+  // require the literal <summary>...</summary> wrapper, not a bare
+  // substring match, or reviewing THIS pull request could self-block it.
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({
+      reviews: [
+        copilotReview({
+          itemCount: 0,
+          body: 'nit: the test fixture hardcodes the string "Suppressed comments (1)" -- consider extracting it into a shared constant.',
+        }),
+      ],
+    }),
+    baseOptions(),
+  );
+  assertValidVerdict(verdict);
+  assert.equal(verdict.review.suppressedCount, 0);
+  assert.equal(verdict.review.satisfied, true);
+  assert.equal(verdict.converged, true);
+  assert.equal(verdict.ready, true);
+});
+
 test('reasons: itemCount > 0 AND a suppressed section both mentioned, existing #1719 hint path unaffected', () => {
   const verdict = computeAdvisoryConvergenceVerdict(
     baseInputs({
