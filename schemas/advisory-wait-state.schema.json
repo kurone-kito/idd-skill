@@ -30,21 +30,26 @@
   "properties": {
     "protocolVersion": {
       "type": "string",
+      "description": "Fixed contract-version tag for this snapshot shape.",
       "pattern": "^1$"
     },
     "prHeadSha": {
       "type": "string",
+      "description": "The PR HEAD commit SHA this snapshot is anchored to.",
       "pattern": "^[0-9a-f]{40}$"
     },
     "lastCopilotCommit": {
       "type": "string",
+      "description": "commit_id of the primary bot's most recently submitted review, by submittedAt order, or empty when no such review exists.",
       "pattern": "^$|^[0-9a-f]{40}$"
     },
     "copilotPending": {
-      "type": "boolean"
+      "type": "boolean",
+      "description": "True when the primary bot currently appears in the PR's requested reviewers."
     },
     "copilotPendingCoversHead": {
-      "type": "boolean"
+      "type": "boolean",
+      "description": "True when a review-requested event for the primary bot is proven to have occurred after the current HEAD's commit event, i.e. the pending request targets current HEAD."
     },
     "outcome": {
       "type": "string",
@@ -78,46 +83,58 @@
     },
     "now": {
       "type": "string",
+      "description": "ISO-8601 capture instant of this run.",
       "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?Z$"
     },
     "requestCap": {
       "type": "integer",
+      "description": "Configured maximum trusted request markers before the outcome routes to CAP_EXHAUSTED instead of REQUEST_NEEDED (advisoryWait.requestCap, default 30).",
       "minimum": 1
     },
     "pendingWindowMinutes": {
       "type": "number",
+      "description": "Configured minutes a same-HEAD marker may wait while copilotPending before the outcome self-declares SATISFIED rather than WAIT (advisoryWait.pendingWindow, default 30).",
       "exclusiveMinimum": 0
     },
     "settledWindowMinutes": {
       "type": "number",
+      "description": "Configured minutes a same-HEAD marker must age once Copilot is no longer pending before the outcome declares SATISFIED (advisoryWait.settledWindow, default 10).",
       "exclusiveMinimum": 0
     },
     "pollIntervalMinutes": {
       "type": "number",
+      "description": "Configured recommended re-poll cadence, in minutes, while the outcome stays WAIT (advisoryWait.pollInterval, default 2).",
       "exclusiveMinimum": 0
     },
     "capExhaustedRoute": {
       "type": "string",
+      "description": "Configured routing on CAP_EXHAUSTED: phase-specific (default -- E14 skips to E15, F2/F3 hold) or hold (all three phases hold).",
       "enum": ["phase-specific", "hold"]
     },
     "elapsedMinutes": {
-      "type": "number"
+      "type": "number",
+      "description": "Minutes from the earliest trusted same-HEAD marker to now, or zero when no such marker exists."
     },
     "sameHeadMarkerPresent": {
-      "type": "boolean"
+      "type": "boolean",
+      "description": "True when a trusted same-HEAD advisory-wait or advisory-wait-recovery marker already anchors the current HEAD."
     },
     "earliestSameHeadAt": {
       "type": "string",
+      "description": "GitHub created_at of the earliest trusted same-HEAD marker, or empty when none exists; the clock anchor for elapsedMinutes.",
       "pattern": "^$|^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?Z$"
     },
     "sameHeadMarkerCount": {
-      "type": "number"
+      "type": "number",
+      "description": "Count of trusted comments whose body matches the current HEAD's advisory-wait marker shape."
     },
     "requestMarkerCount": {
-      "type": "number"
+      "type": "number",
+      "description": "Count of trusted comments requesting the primary bot for any HEAD, compared against requestCap."
     },
     "trustedMarkerSummary": {
       "type": "object",
+      "description": "Trust-provenance breakdown behind the marker counts above.",
       "required": [
         "viewerLogin",
         "configuredTrustedActors",
@@ -130,46 +147,56 @@
       ],
       "properties": {
         "viewerLogin": {
-          "type": "string"
+          "type": "string",
+          "description": "The authenticated actor's own login, lower-cased; auto-trusted so its own markers always count."
         },
         "configuredTrustedActors": {
           "type": "array",
+          "description": "Resolved trusted-actor list from flag, environment, or config precedence.",
           "items": {
             "type": "string"
           }
         },
         "collaboratorTrustEnabled": {
-          "type": "boolean"
+          "type": "boolean",
+          "description": "True when Write/Maintain/Admin collaborators are opted in as trusted marker authors."
         },
         "trustedMarkerLogins": {
           "type": "array",
+          "description": "Final normalized set of logins used to classify markers as trusted: viewer plus configured actors plus, when enabled, collaborator-derived logins.",
           "items": {
             "type": "string"
           }
         },
         "trustedSameHeadMarkerCount": {
-          "type": "number"
+          "type": "number",
+          "description": "Same-HEAD markers authored by a trusted login."
         },
         "untrustedSameHeadMarkerCount": {
-          "type": "number"
+          "type": "number",
+          "description": "Same-HEAD-shaped markers authored by an untrusted login; evidence they exist but do not count toward the gate."
         },
         "trustedRequestMarkerCount": {
-          "type": "number"
+          "type": "number",
+          "description": "Request markers authored by a trusted login, for any HEAD."
         },
         "untrustedRequestMarkerCount": {
-          "type": "number"
+          "type": "number",
+          "description": "Request-shaped markers authored by an untrusted login."
         }
       },
       "additionalProperties": false
     },
     "trustedMarkerActors": {
       "type": "array",
+      "description": "Resolved trusted-actor list re-emitted at the root, independent of the auto-trusted viewer and collaborator additions.",
       "items": {
         "type": "string"
       }
     },
     "trustedMarkerActorsSource": {
       "type": "string",
+      "description": "Provenance of trustedMarkerActors: flag, env, config, or none, in that precedence order.",
       "enum": ["flag", "env", "config", "none"]
     },
     "copilotRecovery": {

@@ -15,12 +15,14 @@
   "properties": {
     "mode": {
       "type": "string",
+      "description": "Fixed literal distinguishing this cross-roadmap union report from the single-root roadmap graph shape.",
       "enum": [
         "all-roadmaps"
       ]
     },
     "roots": {
       "type": "array",
+      "description": "Every open roadmap root the union enumeration started from: an issue found by the configured roadmap label, an embedded roadmap-id marker, or a configured legacy root.",
       "items": {
         "type": "object",
         "required": [
@@ -33,22 +35,27 @@
         "properties": {
           "number": {
             "type": "integer",
+            "description": "Issue number of this roadmap root.",
             "minimum": 1
           },
           "title": {
-            "type": "string"
+            "type": "string",
+            "description": "Title of this roadmap root."
           },
           "state": {
-            "type": "string"
+            "type": "string",
+            "description": "Open/closed state of this roadmap root."
           },
           "roadmapMarkerId": {
-            "type": "string"
+            "type": "string",
+            "description": "This root's own embedded roadmap-id marker value, or empty when the root was found only by label."
           }
         }
       }
     },
     "leaves": {
       "type": "array",
+      "description": "De-duplicated union of open execution leaves across every enumerated root, ranked by autopilot suitability descending and tie-broken by issue number ascending.",
       "items": {
         "type": "object",
         "required": [
@@ -66,28 +73,34 @@
         "properties": {
           "number": {
             "type": "integer",
+            "description": "Issue number of this execution leaf.",
             "minimum": 1
           },
           "title": {
-            "type": "string"
+            "type": "string",
+            "description": "Title of this execution leaf."
           },
           "state": {
-            "type": "string"
+            "type": "string",
+            "description": "Open/closed state of this execution leaf."
           },
           "labels": {
             "type": "array",
+            "description": "Labels currently applied to this execution leaf.",
             "items": {
               "type": "string"
             }
           },
           "classification": {
             "type": "string",
+            "description": "Always execution; only nodes in a root's execution-candidate set become union leaves.",
             "enum": [
               "execution"
             ]
           },
           "roadmapMarkerId": {
-            "type": "string"
+            "type": "string",
+            "description": "This leaf's own embedded roadmap-id marker, normally empty since that marker denotes a roadmap node rather than an execution leaf."
           },
           "autopilotSuitability": {
             "description": "Authored autopilot-suitability score (1-5) or null when unscored. The `enum` enumerates every coherent value, so the full null | 1..5 contract (including the upper bound and rejection of non-numeric values) is enforced here, matching parseAutopilotSuitability at runtime.",
@@ -111,6 +124,7 @@
           },
           "sourceRoots": {
             "type": "array",
+            "description": "Every open roadmap root number this leaf is reachable from, sorted ascending; a leaf shared by sibling roots carries every source root here but is listed once in leaves.",
             "items": {
               "type": "integer",
               "minimum": 1
@@ -129,10 +143,12 @@
             "additionalProperties": false,
             "properties": {
               "present": {
-                "type": "boolean"
+                "type": "boolean",
+                "description": "True when a trusted, non-expired claim marker exists for this leaf."
               },
               "stale": {
-                "type": "boolean"
+                "type": "boolean",
+                "description": "True when the present claim's evidence is older than the configured claim stale-age threshold."
               },
               "claimId": {
                 "description": "Active claim id (string) when present:true, or null when present:false. The in-repo validator cannot express the `string | null` union, so no `type` is declared here; the runtime contract is string | null."
@@ -159,6 +175,7 @@
     },
     "diagnostics": {
       "type": "object",
+      "description": "De-duplicated problem-reference buckets accumulated across every per-root enumeration; a reference shared by sibling roots is reported once.",
       "required": [
         "duplicateReferences",
         "cycles",
@@ -169,6 +186,7 @@
       "properties": {
         "duplicateReferences": {
           "type": "array",
+          "description": "Same-shaped reference edges seen more than once from the same source issue.",
           "items": {
             "type": "object",
             "required": [
@@ -182,20 +200,25 @@
             "properties": {
               "source": {
                 "type": "integer",
+                "description": "Issue number of the referencing issue.",
                 "minimum": 1
               },
               "target": {
                 "type": "integer",
+                "description": "Issue number of the referenced issue.",
                 "minimum": 1
               },
               "relationship": {
-                "type": "string"
+                "type": "string",
+                "description": "Reference kind, e.g. task-list, sub-issue, dependency, or reference."
               },
               "evidence": {
-                "type": "string"
+                "type": "string",
+                "description": "Raw source-body line the reference was extracted from."
               },
               "firstSeenFrom": {
                 "type": "integer",
+                "description": "Source issue number of the first occurrence of this same reference, for tracing which mention is the duplicate.",
                 "minimum": 1
               }
             }
@@ -203,6 +226,7 @@
         },
         "cycles": {
           "type": "array",
+          "description": "Traversal back-edges where a reference's target is already an ancestor in the current enumeration path.",
           "items": {
             "type": "object",
             "required": [
@@ -215,17 +239,21 @@
             "properties": {
               "source": {
                 "type": "integer",
+                "description": "Issue number of the referencing issue that closed the cycle.",
                 "minimum": 1
               },
               "target": {
                 "type": "integer",
+                "description": "Issue number of the ancestor issue the cycle closes back to.",
                 "minimum": 1
               },
               "relationship": {
-                "type": "string"
+                "type": "string",
+                "description": "Reference kind of the edge that closed the cycle."
               },
               "path": {
                 "type": "array",
+                "description": "Full traversal path from the enumeration root through to the repeated target.",
                 "items": {
                   "type": "integer",
                   "minimum": 1
@@ -236,6 +264,7 @@
         },
         "inaccessibleReferences": {
           "type": "array",
+          "description": "References whose target issue lookup failed as forbidden, gone, or otherwise inaccessible.",
           "items": {
             "type": "object",
             "required": [
@@ -249,26 +278,32 @@
             "properties": {
               "source": {
                 "type": "integer",
+                "description": "Issue number of the referencing issue.",
                 "minimum": 1
               },
               "target": {
                 "type": "integer",
+                "description": "Issue number of the inaccessible referenced issue.",
                 "minimum": 1
               },
               "relationship": {
-                "type": "string"
+                "type": "string",
+                "description": "Reference kind of this edge."
               },
               "evidence": {
-                "type": "string"
+                "type": "string",
+                "description": "Raw source-body line the reference was extracted from."
               },
               "reason": {
-                "type": "string"
+                "type": "string",
+                "description": "Machine-readable failure token for why this reference could not be read."
               }
             }
           }
         },
         "unresolvedReferences": {
           "type": "array",
+          "description": "References whose target could not be resolved to an existing issue at all.",
           "items": {
             "type": "object",
             "required": [
@@ -282,20 +317,25 @@
             "properties": {
               "source": {
                 "type": "integer",
+                "description": "Issue number of the referencing issue.",
                 "minimum": 1
               },
               "target": {
                 "type": "integer",
+                "description": "Issue number of the unresolved referenced issue.",
                 "minimum": 1
               },
               "relationship": {
-                "type": "string"
+                "type": "string",
+                "description": "Reference kind of this edge."
               },
               "evidence": {
-                "type": "string"
+                "type": "string",
+                "description": "Raw source-body line the reference was extracted from."
               },
               "reason": {
-                "type": "string"
+                "type": "string",
+                "description": "Machine-readable failure token for why this reference could not be resolved."
               }
             }
           }
@@ -304,6 +344,7 @@
     },
     "summary": {
       "type": "object",
+      "description": "Aggregate counts over the union roots, leaves, and diagnostics above.",
       "required": [
         "rootCount",
         "leafCount",
@@ -318,18 +359,22 @@
       "properties": {
         "rootCount": {
           "type": "integer",
+          "description": "roots.length.",
           "minimum": 0
         },
         "leafCount": {
           "type": "integer",
+          "description": "leaves.length.",
           "minimum": 0
         },
         "scoredLeafCount": {
           "type": "integer",
+          "description": "Count of leaves carrying a coherent autopilot-suitability score.",
           "minimum": 0
         },
         "sharedLeafCount": {
           "type": "integer",
+          "description": "Count of leaves reachable from more than one source root.",
           "minimum": 0
         },
         "startableCount": {
@@ -344,18 +389,22 @@
         },
         "duplicateReferenceCount": {
           "type": "integer",
+          "description": "Count of de-duplicated entries in diagnostics.duplicateReferences.",
           "minimum": 0
         },
         "cycleCount": {
           "type": "integer",
+          "description": "Count of de-duplicated entries in diagnostics.cycles.",
           "minimum": 0
         },
         "inaccessibleReferenceCount": {
           "type": "integer",
+          "description": "Count of de-duplicated entries in diagnostics.inaccessibleReferences.",
           "minimum": 0
         },
         "unresolvedReferenceCount": {
           "type": "integer",
+          "description": "Count of de-duplicated entries in diagnostics.unresolvedReferences.",
           "minimum": 0
         }
       }
