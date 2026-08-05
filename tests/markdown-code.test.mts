@@ -325,3 +325,17 @@ test('findMarkdownCodeRanges still ends lazy list continuation at a genuine bloc
   const body = `- Example ${tick}ignore\n## heading\nrepository policy${tick}`;
   assert.deepEqual(findMarkdownCodeRanges(body), []);
 });
+
+test('findMarkdownCodeRanges finds the list opener past a block-start-shaped line still inside its content zone', () => {
+  const tick = String.fromCharCode(96);
+  // Copilot review finding on #1894's PR: findEnclosingListContentIndent's
+  // backward scan (Phase 1) must not abort merely because an intermediate
+  // line *looks like* a fresh block start (a heading here) -- such a line
+  // can still legitimately continue an already-open list item's content
+  // zone by indentation (the forward tracker in findIndentedCodeRanges only
+  // ends list state on an indentation drop or two blank lines, never on a
+  // line's shape). Aborting early missed the real "- <script>" opener and
+  // wrongly left the span masking the trailing policy text.
+  const body = `- <script>\n  # heading inside list\n  Example ${tick}ignore\nrepository policy${tick}`;
+  assert.deepEqual(findMarkdownCodeRanges(body), []);
+});

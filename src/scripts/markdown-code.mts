@@ -357,6 +357,15 @@ function interruptingListContentIndent(content: string): number | null {
 }
 
 /**
+ * The narrowest possible list-item content indent: a one-character marker
+ * (`-`, `+`, `*`) plus its one required separating space. Every genuine
+ * list-item opener requires at least this much indentation on any
+ * continuation line, regardless of the marker actually in play (a wider
+ * marker, e.g. `10. `, only requires more) -- see {@link parseListItemContainer}.
+ */
+const MINIMUM_LIST_CONTENT_INDENT = 2;
+
+/**
  * Determine the active list-item content indent enclosing
  * `openingLineStart`, if any -- the list-continuation counterpart, for
  * {@link findMarkdownBlockBoundary}'s opening line, of
@@ -364,9 +373,20 @@ function interruptingListContentIndent(content: string): number | null {
  * Returns `null` when `openingLineStart` is not inside an active list
  * item's content zone at `containerDepth`.
  *
- * Phase 1 scans backward for the nearest same-depth list-item opener not
- * separated from `openingLineStart` by an unrelated block start. Phase 2
- * then verifies every line from that opener through `openingLineStart`
+ * Phase 1 scans backward for the nearest same-depth list-item opener,
+ * bounded only by a container-depth mismatch or a non-blank line whose
+ * indentation falls below {@link MINIMUM_LIST_CONTENT_INDENT} (which can
+ * never continue *any* list's content zone, regardless of marker width) --
+ * deliberately not by whether an intermediate line merely *looks like* a
+ * fresh block start (heading/HTML/fence): such a line can still
+ * legitimately sit inside an already-open list item's content zone (the
+ * forward tracker in {@link findIndentedCodeRanges} only ends list state on
+ * an indentation drop or two consecutive blank lines, never on a line's
+ * shape), so aborting on shape alone produced false negatives -- Copilot
+ * review finding on #1894's PR. Phase 2 below is what actually verifies
+ * continuation, with the discovered opener's real indent, not Phase 1.
+ *
+ * Phase 2 verifies every line from that opener through `openingLineStart`
  * itself continues the list per {@link continuesListContainer}, with the
  * same two-consecutive-blank-line cutoff {@link findIndentedCodeRanges}
  * applies (CommonMark ends a list after two blank lines in a row) -- the
@@ -400,13 +420,7 @@ function findEnclosingListContentIndent(
       openerContentIndent = contentIndent;
       break;
     }
-    const fencedLine = parseFencedLine(raw);
-    if (
-      isMarkdownBlockStart(parsed.content) ||
-      MARKDOWN_HTML_BLOCK_START_PATTERN.test(parsed.content) ||
-      MARKDOWN_CUSTOM_HTML_BLOCK_START_PATTERN.test(parsed.content) ||
-      (fencedLine !== null && isValidFenceOpener(fencedLine))
-    ) {
+    if (indentationColumns(parsed.content) < MINIMUM_LIST_CONTENT_INDENT) {
       return null;
     }
     lineStart = findPreviousLineStart(text, lineStart);
