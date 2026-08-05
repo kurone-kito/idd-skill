@@ -126,12 +126,24 @@ const MARKDOWN_CUSTOM_HTML_BLOCK_START_PATTERN =
 // (e.g. `_ _ _`), unlike the tightly-packed run already covered above.
 const MARKDOWN_THEMATIC_BREAK_PATTERN =
   /^ {0,3}([-_*])(?:[ \t]*\1){2,}[ \t]*$/u;
-// CommonMark type-1 raw-text HTML elements (script/pre/style/textarea) only
-// end at a line containing their matching closing tag -- unlike the other
-// HTML block types, a blank line does not close them.
-const HTML_RAW_TEXT_TAG_CLOSE_PATTERN = /<\/(?:script|pre|style|textarea)\b/iu;
 const HTML_RAW_TEXT_TAG_OPEN_PATTERN =
-  /^ {0,3}<(?:script|pre|style|textarea)\b/iu;
+  /^ {0,3}<(script|pre|style|textarea)\b/iu;
+const HTML_RAW_TEXT_TAG_CLOSE_PATTERNS = {
+  script: /<\/script\b/iu,
+  pre: /<\/pre\b/iu,
+  style: /<\/style\b/iu,
+  textarea: /<\/textarea\b/iu,
+};
+/**
+ * The raw-text tag that `content` opens (one of {@link HtmlRawTextTag}'s
+ * four members), lower-cased for use as a
+ * {@link HTML_RAW_TEXT_TAG_CLOSE_PATTERNS} key, or `null` when `content`
+ * does not open a raw-text element.
+ */
+function rawTextOpenTag(content) {
+  const match = HTML_RAW_TEXT_TAG_OPEN_PATTERN.exec(content);
+  return match === null ? null : match[1].toLowerCase();
+}
 /**
  * True when `content` (a line with any blockquote container prefix already
  * stripped -- a caller-held list-item marker, if present, may still be in
@@ -324,7 +336,7 @@ function isWithinOpenHtmlBlock(
   let state = { type: 'none' };
   for (const { content, isBlank } of sameDepthLines) {
     if (state.type === 'raw-text') {
-      if (HTML_RAW_TEXT_TAG_CLOSE_PATTERN.test(content)) {
+      if (HTML_RAW_TEXT_TAG_CLOSE_PATTERNS[state.tag].test(content)) {
         state = { type: 'none' };
       }
       continue;
@@ -344,9 +356,10 @@ function isWithinOpenHtmlBlock(
     if (isBlank) {
       continue;
     }
-    if (HTML_RAW_TEXT_TAG_OPEN_PATTERN.test(content)) {
-      if (!HTML_RAW_TEXT_TAG_CLOSE_PATTERN.test(content)) {
-        state = { type: 'raw-text' };
+    const openTag = rawTextOpenTag(content);
+    if (openTag !== null) {
+      if (!HTML_RAW_TEXT_TAG_CLOSE_PATTERNS[openTag].test(content)) {
+        state = { type: 'raw-text', tag: openTag };
       }
       continue;
     }
