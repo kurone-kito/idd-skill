@@ -2035,13 +2035,22 @@ test('the ONBOARDING.md CLI-assisted onboarding section anchors its --import fil
 // Documentation-lint compatibility (idd-skill#1860)
 //
 // A Tier A adopter-repository validation imported this template into a
-// minimal repo with no pre-existing lint config and found 690 markdownlint
-// findings and (once cspell's default dot-directory skip is accounted for)
-// 505 cspell findings against the imported files alone. These tests exercise
-// the real import -> substitute -> documented-lint-command path end to end
-// against this repo's own installed markdownlint-cli2/cspell binaries, so a
-// future documentation change that reintroduces incompatible vocabulary or
-// formatting fails here instead of on an adopter's first CI run.
+// minimal repo with no pre-existing lint config and found real markdownlint
+// findings (line length, table-column style, single-title, duplicate-heading)
+// and cspell findings (unrecognized IDD/tooling vocabulary and upstream
+// kurone-kito/idd-skill cross-references) against the imported files alone.
+// The end-to-end test below exercises the real
+// import -> substitute -> documented-lint-command path against this repo's
+// own installed markdownlint-cli2/cspell binaries, so a future documentation
+// change that reintroduces incompatible vocabulary or formatting fails here
+// instead of on an adopter's first CI run.
+//
+// This repo's `lint.yml` CI job deliberately dogfoods a toolless bare-node
+// adopter path -- it runs `node --test tests/*.test.mts` with NO
+// package-manager install, so node_modules/.bin/* is absent there by
+// design (dprint/cspell/markdownlint-cli2 run separately, once, in
+// pnpm-boundary.yml). The end-to-end test below self-skips when the
+// binaries it needs are not installed, instead of failing that lane.
 // ---------------------------------------------------------------------------
 
 const MARKDOWNLINT_BIN = join(
@@ -2051,6 +2060,8 @@ const MARKDOWNLINT_BIN = join(
   'markdownlint-cli2',
 );
 const CSPELL_BIN = join(REPO_ROOT, 'node_modules', '.bin', 'cspell');
+const LINT_BINARIES_INSTALLED =
+  existsSync(MARKDOWNLINT_BIN) && existsSync(CSPELL_BIN);
 
 /** Count every `*.md` file under `root`, recursively. */
 function countMarkdownFiles(root: string): number {
@@ -2069,7 +2080,13 @@ function countMarkdownFiles(root: string): number {
   return count;
 }
 
-test('a real import + substitute produces a doc tree that passes the documented markdownlint/cspell commands with full file coverage (idd-skill#1860)', () => {
+test('a real import + substitute produces a doc tree that passes the documented markdownlint/cspell commands with full file coverage (idd-skill#1860)', (t) => {
+  if (!LINT_BINARIES_INSTALLED) {
+    // Expected on the bare-node lane (lint.yml), which runs this suite with
+    // no package-manager install by design -- see the block comment above.
+    t.skip('markdownlint-cli2/cspell are not installed in this environment');
+    return;
+  }
   const targetRoot = makeFixtureDir();
 
   const imported = runCliBin([
