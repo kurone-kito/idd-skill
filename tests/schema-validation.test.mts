@@ -195,7 +195,6 @@ test('every reachable property in every published schema has a description', () 
   );
 
   const missing: string[] = [];
-  const visited = { count: 0 };
   for (const file of schemaFiles) {
     const schema = loadJson(`schemas/${file}`) as {
       properties?: Record<string, SchemaPropertyNode>;
@@ -209,6 +208,11 @@ test('every reachable property in every published schema has a description', () 
       topLevelProperties.length > 0,
       `expected ${file} to declare at least one top-level property`,
     );
+    // A fresh counter per file, not a shared running total: otherwise one
+    // schema with a malformed properties map that makes the walker return
+    // early (e.g. a non-object property value) could hide behind other
+    // schemas' visit counts and still pass the aggregate threshold.
+    const visited = { count: 0 };
     for (const [key, child] of topLevelProperties) {
       collectMissingDescriptions(
         child,
@@ -218,16 +222,16 @@ test('every reachable property in every published schema has a description', () 
         true,
       );
     }
+    assert.ok(
+      visited.count > 0,
+      `expected the walker to visit at least one property in ${file}`,
+    );
   }
 
   assert.deepEqual(
     missing,
     [],
     `Missing "description" on: ${missing.join(', ')}`,
-  );
-  assert.ok(
-    visited.count >= schemaFiles.length,
-    'expected the walker to visit at least one property per schema file',
   );
 });
 
