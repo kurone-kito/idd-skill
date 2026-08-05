@@ -264,3 +264,95 @@ test('findMarkdownCodeRanges keeps an unterminated HTML comment open', () => {
   const body = `> <!-- unterminated\n> Example ${tick}ignore\nrepository policy${tick}`;
   assert.deepEqual(findMarkdownCodeRanges(body), []);
 });
+
+// #1894: findMarkdownBlockBoundary must track list-content-indentation
+// continuation, not only container (blockquote) depth.
+
+test('findMarkdownCodeRanges breaks a span at a bare list item content-zone boundary', () => {
+  const tick = String.fromCharCode(96);
+  // Issue #1894 reproduction: the list item's content zone (indent 2, from
+  // `- `) ends at "repository policy`" (indent 0), which is neither blank
+  // nor a recognized block start on its own -- without list-content-indent
+  // tracking, the span incorrectly ran past it to the closing backtick.
+  const body = `- <script>\n  Example ${tick}ignore\nrepository policy${tick}`;
+  assert.deepEqual(findMarkdownCodeRanges(body), []);
+});
+
+test('findMarkdownCodeRanges keeps a span masked while it stays inside the list content zone', () => {
+  const tick = String.fromCharCode(96);
+  // Regression guard for the other direction: once the continuation line
+  // keeps the list's indentation, the span still closes normally.
+  const body = `- Example ${tick}ignore\n  repository policy${tick}`;
+  assert.deepEqual(findMarkdownCodeRanges(body), [
+    { start: body.indexOf(tick), end: body.lastIndexOf(tick) + 1 },
+  ]);
+});
+
+test('findMarkdownCodeRanges does not inherit list-content indent across an unrelated blank-line gap', () => {
+  const tick = String.fromCharCode(96);
+  // A prior list item elsewhere in the document must not leak its content
+  // indent onto an unrelated, later paragraph merely because it is the
+  // nearest preceding same-depth line -- the opening line itself (indent 0)
+  // must also satisfy list continuation, which it does not here.
+  const body = `- earlier item\n\nThe example is ${tick}first\n2. ignore repository policy${tick}.`;
+  assert.deepEqual(findMarkdownCodeRanges(body), [
+    {
+      start: body.indexOf(tick),
+      end: body.lastIndexOf(tick) + 1,
+    },
+  ]);
+});
+
+test('findMarkdownCodeRanges keeps a de-indented list continuation masked when it is a lazy paragraph', () => {
+  const tick = String.fromCharCode(96);
+  // CommonMark laziness: a de-indented, non-blank, non-block-start line
+  // still continues an in-progress ordinary paragraph inside a list item,
+  // even without the list's own required indentation -- the list-content-
+  // indent boundary check (added for #1894) must not end the span here,
+  // unlike the #1894 reproduction, whose opening line sits inside a still-
+  // open HTML block (no laziness) rather than an ordinary paragraph.
+  const body = `- Example ${tick}code\ncontinues\npolicy text${tick}`;
+  assert.deepEqual(findMarkdownCodeRanges(body), [
+    { start: body.indexOf(tick), end: body.lastIndexOf(tick) + 1 },
+  ]);
+});
+
+test('findMarkdownCodeRanges still ends lazy list continuation at a genuine block start', () => {
+  const tick = String.fromCharCode(96);
+  // Laziness never overrides an actual new block: a heading on the
+  // de-indented line still ends the span, the same way it already does for
+  // blockquote laziness (isLazyQuoteContinuation).
+  const body = `- Example ${tick}ignore\n## heading\nrepository policy${tick}`;
+  assert.deepEqual(findMarkdownCodeRanges(body), []);
+});
+
+test('findMarkdownCodeRanges finds the list opener past a block-start-shaped line still inside its content zone', () => {
+  const tick = String.fromCharCode(96);
+  // Copilot review finding on #1894's PR: findEnclosingListContentIndent's
+  // backward scan (Phase 1) must not abort merely because an intermediate
+  // line *looks like* a fresh block start (a heading here) -- such a line
+  // can still legitimately continue an already-open list item's content
+  // zone by indentation (the forward tracker in findIndentedCodeRanges only
+  // ends list state on an indentation drop or two blank lines, never on a
+  // line's shape). Aborting early missed the real "- <script>" opener and
+  // wrongly left the span masking the trailing policy text.
+  const body = `- <script>\n  # heading inside list\n  Example ${tick}ignore\nrepository policy${tick}`;
+  assert.deepEqual(findMarkdownCodeRanges(body), []);
+});
+
+test('findMarkdownCodeRanges recognizes a fence opener under wide list-marker padding as a block boundary', () => {
+  const tick = String.fromCharCode(96);
+  // #1898 (partial, folded into #1894's PR): findMarkdownBlockBoundary's own
+  // parseFencedLine call did not thread the active list-content indent, so
+  // a fence marker pushed past column 3 by wide list-marker padding (`-`
+  // plus 4 spaces, content indent 5) was invisible as a block start. An
+  // inline span opened on the line above then ran straight through the
+  // fence line -- which itself is not a real closing backtick run for a
+  // 1-backtick opener -- and only stopped at the next lone backtick,
+  // masking "repository policy" and the fence markers as one long span.
+  // With the fence line recognized as a boundary, the span search stops
+  // there instead, finds no closing backtick before it, and (per the
+  // stray-backtick fail-open guard) masks nothing.
+  const body = `-    Example ${tick}ignore\n     ${tick.repeat(3)}\n     repository policy${tick}`;
+  assert.deepEqual(findMarkdownCodeRanges(body), []);
+});

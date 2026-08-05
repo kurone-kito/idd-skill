@@ -264,11 +264,13 @@ function findPreviousLineStart(text: string, lineStart: number): number | null {
  *
  * A scanned line's own list-item marker (e.g. `- <script>`) is stripped
  * before testing it against the HTML patterns, the same way the opening
- * line's own marker already is. This only ever affects a caller reachable
- * through a container-depth change elsewhere (see `findMarkdownBlockBoundary`
- * below) -- a bare, blockquote-free list item never reaches this function,
- * since `findMarkdownBlockBoundary` does not itself track list-content
- * indentation continuation (a separate, pre-existing gap, out of scope here).
+ * line's own marker already is. This affects a caller reachable through a
+ * container-depth change (a list nested inside a blockquote; see
+ * `findMarkdownBlockBoundary` below) and, since #1894's follow-up fix, a
+ * bare, blockquote-free list item too -- `findMarkdownBlockBoundary` now
+ * calls this scan at every container depth (via `openingIsParagraph`,
+ * which gates its own `isLazyListContinuation` exception the same way it
+ * already gated `isLazyQuoteContinuation`), not only inside a blockquote.
  *
  * **Known limitation.** This scan short-circuits on the first close/open
  * signal it finds, so it does not track more than one candidate enclosing
@@ -279,7 +281,9 @@ function findPreviousLineStart(text: string, lineStart: number): number | null {
  * opener further back -- a bounded backward scan cannot fully disambiguate
  * this without the kind of forward, single-pass block-state tracking the
  * rest of this module does not otherwise need. Tracked as a follow-up
- * rather than folded into this pass.
+ * (#1895) rather than folded into this pass; since #1894's follow-up fix,
+ * this limitation is reachable from a bare, blockquote-free list item too,
+ * not only a blockquote -- see #1895 for the current scope of that gap.
  */
 function isWithinOpenHtmlBlock(
   text: string,
@@ -323,6 +327,134 @@ function isWithinOpenHtmlBlock(
   return false;
 }
 
+/**
+ * True when `marker` is one of the "genuine", paragraph-interrupting list
+ * markers {@link isMarkdownBlockStart}'s own list branch recognizes (`-`,
+ * `+`, `*`, `1.`, `1)`) -- unlike {@link parseListItemContainer}, which
+ * accepts any ordered-list digit. CommonMark allows a non-"1" ordered
+ * marker (e.g. `2.`) to appear mid-paragraph without interrupting it, so
+ * such a marker must never anchor list-content-indent tracking.
+ */
+function isInterruptingListMarker(marker: string): boolean {
+  return (
+    marker === '-' ||
+    marker === '+' ||
+    marker === '*' ||
+    /^1[.)]$/u.test(marker)
+  );
+}
+
+/**
+ * The list-item content indent for `content` when it opens with a genuine,
+ * paragraph-interrupting list marker (see {@link isInterruptingListMarker}),
+ * else `null`.
+ */
+function interruptingListContentIndent(content: string): number | null {
+  const listItem = parseListItemMatch(content);
+  return listItem !== null && isInterruptingListMarker(listItem.marker)
+    ? parseListItemContainer(content)
+    : null;
+}
+
+/**
+ * The narrowest possible list-item content indent: a one-character marker
+ * (`-`, `+`, `*`) plus its one required separating space. Every genuine
+ * list-item opener requires at least this much indentation on any
+ * continuation line, regardless of the marker actually in play (a wider
+ * marker, e.g. `10. `, only requires more) -- see {@link parseListItemContainer}.
+ */
+const MINIMUM_LIST_CONTENT_INDENT = 2;
+
+/**
+ * Determine the active list-item content indent enclosing
+ * `openingLineStart`, if any -- the list-continuation counterpart, for
+ * {@link findMarkdownBlockBoundary}'s opening line, of
+ * {@link isWithinOpenHtmlBlock}'s backward scan for open HTML blocks.
+ * Returns `null` when `openingLineStart` is not inside an active list
+ * item's content zone at `containerDepth`.
+ *
+ * Phase 1 scans backward for the nearest same-depth list-item opener,
+ * bounded only by a container-depth mismatch or a non-blank line whose
+ * indentation falls below {@link MINIMUM_LIST_CONTENT_INDENT} (which can
+ * never continue *any* list's content zone, regardless of marker width) --
+ * deliberately not by whether an intermediate line merely *looks like* a
+ * fresh block start (heading/HTML/fence): such a line can still
+ * legitimately sit inside an already-open list item's content zone (the
+ * forward tracker in {@link findIndentedCodeRanges} only ends list state on
+ * an indentation drop or two consecutive blank lines, never on a line's
+ * shape), so aborting on shape alone produced false negatives -- Copilot
+ * review finding on #1894's PR. Phase 2 below is what actually verifies
+ * continuation, with the discovered opener's real indent, not Phase 1.
+ *
+ * Phase 2 verifies every line from that opener through `openingLineStart`
+ * itself continues the list per {@link continuesListContainer}, with the
+ * same two-consecutive-blank-line cutoff {@link findIndentedCodeRanges}
+ * applies (CommonMark ends a list after two blank lines in a row) -- the
+ * opening line must satisfy this too, not only the lines between it and
+ * the opener, or a call whose opening line has nothing to do with an
+ * earlier, unrelated list (separated only by a single blank line) would
+ * wrongly inherit that list's indent.
+ */
+function findEnclosingListContentIndent(
+  text: string,
+  openingLineStart: number,
+  containerDepth: number,
+): number | null {
+  let openerLineStart: number | null = null;
+  let openerContentIndent: number | null = null;
+  let lineStart = findPreviousLineStart(text, openingLineStart);
+  while (lineStart !== null) {
+    const line = lineBounds(text, lineStart);
+    const raw = text.slice(lineStart, line.end);
+    const parsed = parseContainerLine(raw);
+    if (parsed.containerDepth !== containerDepth) {
+      return null;
+    }
+    if (parsed.content.trim() === '') {
+      lineStart = findPreviousLineStart(text, lineStart);
+      continue;
+    }
+    const contentIndent = interruptingListContentIndent(parsed.content);
+    if (contentIndent !== null) {
+      openerLineStart = lineStart;
+      openerContentIndent = contentIndent;
+      break;
+    }
+    if (indentationColumns(parsed.content) < MINIMUM_LIST_CONTENT_INDENT) {
+      return null;
+    }
+    lineStart = findPreviousLineStart(text, lineStart);
+  }
+  if (openerLineStart === null || openerContentIndent === null) {
+    return null;
+  }
+  let blankRun = 0;
+  let cursor = lineBounds(text, openerLineStart).next;
+  while (cursor <= openingLineStart) {
+    const line = lineBounds(text, cursor);
+    const continuation = stripContainerPrefixes(
+      text.slice(cursor, line.end),
+      containerDepth,
+    );
+    if (continuation.trim() === '') {
+      blankRun += 1;
+      if (blankRun >= 2) {
+        return null;
+      }
+    } else {
+      blankRun = 0;
+      if (!continuesListContainer(continuation, openerContentIndent)) {
+        return null;
+      }
+    }
+    if (line.next === cursor) {
+      break;
+    }
+    cursor = line.next;
+  }
+  return openerContentIndent;
+}
+
 function findMarkdownBlockBoundary(
   text: string,
   start: number,
@@ -337,29 +469,86 @@ function findMarkdownBlockBoundary(
     openingListItem?.content ?? openingParsed.content;
   const openingFence = parseFencedLine(openingRawLine);
   const openingContainerDepth = openingParsed.containerDepth;
-  // isWithinOpenHtmlBlock only ever changes the outcome below through
-  // isLazyQuoteContinuation, which already requires openingContainerDepth >
-  // 0 -- so skip the backward scan entirely outside a blockquote, where the
-  // result can never matter anyway (the common case, for ordinary
-  // unquoted bodies).
+  // List-content-indent tracking (#1894): when the opening line is itself a
+  // genuine list-item opener, its own indent applies directly; otherwise a
+  // bounded backward/forward scan checks whether it continues an earlier
+  // list item's content zone. A later line that no longer continues that
+  // zone is a genuine block boundary, mirroring the listContentIndent /
+  // continuesListContainer pairing findIndentedCodeRanges and
+  // blankFencedCodeBlocks already use -- unless it is itself a lazy
+  // continuation of the opening paragraph (below), the list counterpart of
+  // isLazyQuoteContinuation. Computed before openingIsParagraph, which
+  // needs it to decide whether the (more expensive) backward HTML-block
+  // scan below is worth running at all.
+  const openingListContentIndent =
+    interruptingListContentIndent(openingParsed.content) ??
+    findEnclosingListContentIndent(
+      text,
+      openingLineStart,
+      openingContainerDepth,
+    );
+  // #1894/#1896: openingIsParagraph now gates list-content-indent laziness
+  // below too, not only isLazyQuoteContinuation (blockquote-only). CommonMark
+  // laziness (omitting a container's own required indentation/markers on a
+  // continuation line) only ever applies to an in-progress *paragraph*; a
+  // still-open HTML block is a different block type with its own closing
+  // rule, so it must not inherit laziness -- isWithinOpenHtmlBlock is
+  // exactly the signal that tells the two apart. Its backward scan only
+  // needs to run when a laziness exception could actually change the
+  // outcome below: quote laziness requires openingContainerDepth > 0, list
+  // laziness requires an active list zone (openingListContentIndent !==
+  // null) -- skip the scan entirely otherwise (Copilot review finding on
+  // #1894's PR: calling it unconditionally cost avoidable backward-scan
+  // work on every inline-code opening backtick, the common case being
+  // neither a blockquote nor an active list zone).
   const openingIsParagraph =
     !isMarkdownBlockStart(openingParagraphContent) &&
     !MARKDOWN_HTML_BLOCK_START_PATTERN.test(openingParagraphContent) &&
     !MARKDOWN_CUSTOM_HTML_BLOCK_START_PATTERN.test(openingParagraphContent) &&
     (openingFence === null || !isValidFenceOpener(openingFence)) &&
-    (openingContainerDepth === 0 ||
+    (!(openingContainerDepth > 0 || openingListContentIndent !== null) ||
       !isWithinOpenHtmlBlock(text, openingLineStart, openingContainerDepth));
   let lineStart = openingLine.next;
 
   while (lineStart < end) {
     const line = lineBounds(text, lineStart);
-    const parsed = parseContainerLine(text.slice(lineStart, line.end));
-    const fencedLine = parseFencedLine(text.slice(lineStart, line.end));
+    const rawLine = text.slice(lineStart, line.end);
+    const parsed = parseContainerLine(rawLine);
+    // #1898 (partial): a fence marker indented to match a wide-padded list
+    // item's content start (e.g. `-    ` giving indent 5) must still be
+    // recognized as a fence opener here -- parseFencedLine's own regex only
+    // permits 0-3 leading columns, so the active list-content indent has to
+    // be stripped first, mirroring how blankFencedCodeBlocks/
+    // findFencedCodeRanges thread listContentIndent for an already-open
+    // fence's continuation/closing line. Only applies while this line still
+    // shares the opening line's container depth -- the same precondition
+    // failsListContinuation below already relies on for whether
+    // openingListContentIndent still describes this line's zone.
+    const activeListContentIndent =
+      openingListContentIndent !== null &&
+      parsed.containerDepth === openingContainerDepth
+        ? openingListContentIndent
+        : null;
+    const fencedLine = parseFencedLine(rawLine, activeListContentIndent);
     const isBlockStart =
       isMarkdownBlockStart(parsed.content) ||
       MARKDOWN_HTML_BLOCK_START_PATTERN.test(parsed.content) ||
       MARKDOWN_CUSTOM_HTML_BLOCK_START_PATTERN.test(parsed.content) ||
       (fencedLine !== null && isValidFenceOpener(fencedLine));
+    // A de-indented line that would otherwise end the list item's content
+    // zone still lazily continues an in-progress ordinary paragraph --
+    // CommonMark laziness -- unless the opening line is itself inside a
+    // still-open HTML block (openingIsParagraph false), which has no such
+    // exception.
+    const isLazyListContinuation = openingIsParagraph && !isBlockStart;
+    const failsListContinuation =
+      openingListContentIndent !== null &&
+      parsed.containerDepth === openingContainerDepth &&
+      !isLazyListContinuation &&
+      !continuesListContainer(
+        stripContainerPrefixes(rawLine, openingContainerDepth),
+        openingListContentIndent,
+      );
     if (parsed.containerDepth !== openingContainerDepth) {
       // A quote marker may continue an inline span while it stays a proper
       // prefix of the opening container -- CommonMark laziness permits
@@ -378,7 +567,7 @@ function findMarkdownBlockBoundary(
         return lineStart;
       }
     }
-    if (isBlockStart) {
+    if (isBlockStart || failsListContinuation) {
       return lineStart;
     }
     if (line.next === lineStart) {
