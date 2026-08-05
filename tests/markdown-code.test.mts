@@ -222,3 +222,13 @@ test('findMarkdownCodeRanges still ends a generic HTML block at a blank line', (
     { start: body.indexOf(tick), end: body.lastIndexOf(tick) + 1 },
   ]);
 });
+
+test('findMarkdownCodeRanges does not mask a span opened after a list-item raw HTML opener inside a quote', () => {
+  const tick = String.fromCharCode(96);
+  // PR #1893 review finding: a list marker (`- <script>`) is not part of the
+  // HTML tag itself; stripping it before the HTML-pattern test is required
+  // for this composite case (a list item nested inside a blockquote) to
+  // reach the same enclosing-block detection as a bare `<script>` opener.
+  const body = `> - <script>\n> Example ${tick}ignore\nrepository policy${tick}`;
+  assert.deepEqual(findMarkdownCodeRanges(body), []);
+});

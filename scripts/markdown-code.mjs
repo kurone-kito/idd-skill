@@ -200,6 +200,14 @@ function findPreviousLineStart(text, lineStart) {
  *
  * A closing tag for a non-raw-text element (e.g. `</div>`) proves nothing on
  * its own and is skipped rather than treated as a boundary or a find.
+ *
+ * A scanned line's own list-item marker (e.g. `- <script>`) is stripped
+ * before testing it against the HTML patterns, the same way the opening
+ * line's own marker already is. This only ever affects a caller reachable
+ * through a container-depth change elsewhere (see `findMarkdownBlockBoundary`
+ * below) -- a bare, blockquote-free list item never reaches this function,
+ * since `findMarkdownBlockBoundary` does not itself track list-content
+ * indentation continuation (a separate, pre-existing gap, out of scope here).
  */
 function isWithinOpenHtmlBlock(text, openingLineStart, containerDepth) {
   let crossedBlankLine = false;
@@ -215,17 +223,21 @@ function isWithinOpenHtmlBlock(text, openingLineStart, containerDepth) {
       lineStart = findPreviousLineStart(text, lineStart);
       continue;
     }
-    if (HTML_RAW_TEXT_TAG_CLOSE_PATTERN.test(parsed.content)) {
+    // A list marker (e.g. `- <script>`) is not part of the HTML tag itself;
+    // test the content after it, the same way the opening-line check does.
+    const htmlContent =
+      parseListItemMatch(parsed.content)?.content ?? parsed.content;
+    if (HTML_RAW_TEXT_TAG_CLOSE_PATTERN.test(htmlContent)) {
       return false;
     }
-    if (HTML_RAW_TEXT_TAG_OPEN_PATTERN.test(parsed.content)) {
+    if (HTML_RAW_TEXT_TAG_OPEN_PATTERN.test(htmlContent)) {
       return true;
     }
     if (
       !crossedBlankLine &&
-      !isHtmlClosingSyntax(parsed.content) &&
-      (MARKDOWN_HTML_BLOCK_START_PATTERN.test(parsed.content) ||
-        MARKDOWN_CUSTOM_HTML_BLOCK_START_PATTERN.test(parsed.content))
+      !isHtmlClosingSyntax(htmlContent) &&
+      (MARKDOWN_HTML_BLOCK_START_PATTERN.test(htmlContent) ||
+        MARKDOWN_CUSTOM_HTML_BLOCK_START_PATTERN.test(htmlContent))
     ) {
       return true;
     }
