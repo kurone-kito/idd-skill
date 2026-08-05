@@ -86,20 +86,63 @@ export function findCandidateFileOverlap(files, candidateSet) {
   ].filter((file) => candidateSet.has(file));
 }
 /**
+ * Word-bounded `#<issueNumber>` cross-reference test (#1878), matched
+ * against a merged PR's `closingIssuesReferences` connection first, falling
+ * back to a plain regex scan of `title`/`body`. `\b` after the digits
+ * rejects a longer number sharing the same prefix (`#18620` does not match
+ * `issueNumber: 1862`, since two digits share no word boundary), while still
+ * matching every form the issue names: `#1862`, `Refs #1862`,
+ * `Closes #1862`. Deliberately does not mask markdown code regions first
+ * (unlike `checkDuplicateOrSuperseded`'s own free-text declaration scan) --
+ * the issue pins a plain substring/regex check with no masking step, and a
+ * `#<number>` cross-reference inside a code span or fence is not a realistic
+ * false-positive vector for this specific pattern.
+ *
+ * Defensive against a malformed `pr` shape the same way the rest of this
+ * kernel is: a non-array `closingIssuesReferences` or non-string
+ * `title`/`body` degrades to "no reference" rather than throwing, and an
+ * invalid `issueNumber` (non-positive-integer) always returns `false`.
+ */
+export function prReferencesIssue(pr, issueNumber) {
+  if (!Number.isInteger(issueNumber) || issueNumber <= 0) {
+    return false;
+  }
+  const closing = Array.isArray(pr.closingIssuesReferences)
+    ? pr.closingIssuesReferences
+    : [];
+  if (closing.some((entry) => Number(entry) === issueNumber)) {
+    return true;
+  }
+  const pattern = new RegExp(`#${issueNumber}\\b`);
+  const title = typeof pr.title === 'string' ? pr.title : '';
+  const body = typeof pr.body === 'string' ? pr.body : '';
+  return pattern.test(title) || pattern.test(body);
+}
+/**
  * High-confidence Check 4 tier (#1484): evaluate the mechanical B2.0-style
  * signals -- a merged closing-PR reference on the candidate issue itself, or
  * a merged PR that already changed one of the issue's own declared
- * `## Candidate files` (excluding high-contention/shared files, which many
- * unrelated issues touch and so are not on their own high-confidence
- * evidence that THIS issue was superseded). Returns `null` -- never a
- * synthesized verdict of its own -- whenever no strong signal fires, so the
- * caller falls through to its own existing weak title/declaration heuristic
- * unchanged. This is the fail-safe contract the issue requires: never fail
- * TOWARD a false high-confidence flag. `input` may be `undefined` (evidence
- * not collected by the caller) or a partially malformed shape; both degrade
- * to "no verdict" rather than a crash or a false hit.
+ * `## Candidate files` **and** references the candidate issue itself
+ * (#1878; see `prReferencesIssue` above) -- excluding high-contention/shared
+ * files, which many unrelated issues touch and so are not on their own
+ * high-confidence evidence that THIS issue was superseded. Returns `null`
+ * -- never a synthesized verdict of its own -- whenever no strong signal
+ * fires, so the caller falls through to its own existing weak
+ * title/declaration heuristic unchanged. This is the fail-safe contract the
+ * issue requires: never fail TOWARD a false high-confidence flag. `input`
+ * may be `undefined` (evidence not collected by the caller) or a partially
+ * malformed shape; both degrade to "no verdict" rather than a crash or a
+ * false hit.
+ *
+ * `candidateIssueNumber` is required (#1878, not optional/defaulted):
+ * Signal 2 below cannot decide "references the candidate" without knowing
+ * which issue is the candidate, and a silently-defaulted value (e.g. `0` or
+ * `NaN`) would either always or never match depending on the default
+ * chosen -- neither is a safe implicit behavior for a check whose whole
+ * contract is "never fail toward a false positive". A missing caller-side
+ * argument is a compile-time error instead.
  */
-export function evaluateHighConfidenceDuplicate(input) {
+export function evaluateHighConfidenceDuplicate(input, candidateIssueNumber) {
   if (!input) {
     return null;
   }
@@ -109,6 +152,11 @@ export function evaluateHighConfidenceDuplicate(input) {
       : []
   ).filter((n) => Number.isInteger(n) && n > 0);
   if (closedByMergedPrNumbers.length > 0) {
+    // #1878: already an inherent same-issue reference -- this signal comes
+    // from the CANDIDATE issue's own `closedByPullRequestsReferences`
+    // connection (`fetchClosedByMergedPrNumbers` in `suitability-triage.mts`),
+    // so a hit here already means a merged PR closes THIS issue. No
+    // additional `prReferencesIssue` check applies to this signal.
     return {
       pass: false,
       evidence: `High-confidence duplicate: issue is already referenced by merged closing PR(s) #${closedByMergedPrNumbers.join(', #')} (closedByPullRequestsReferences).`,
@@ -131,14 +179,25 @@ export function evaluateHighConfidenceDuplicate(input) {
     }
     const files = Array.isArray(pr.files) ? pr.files : [];
     const overlap = findCandidateFileOverlap(files, candidateSet);
-    if (overlap.length > 0) {
-      const mergedAt = String(pr.mergedAt ?? '');
-      return {
-        pass: false,
-        evidence: `High-confidence duplicate: merged PR #${number}${mergedAt ? ` (merged ${mergedAt})` : ''} already changed candidate file(s): ${overlap.sort().join(', ')}.`,
-        tier: 'high-confidence',
-      };
+    if (overlap.length === 0) {
+      continue;
     }
+    if (!prReferencesIssue(pr, candidateIssueNumber)) {
+      // #1878: file overlap alone is no longer sufficient -- a merged
+      // sibling-roadmap PR can legitimately touch the same shared file
+      // without ever mentioning THIS candidate issue (the #1862-vs-#1863/
+      // PR#1864 false positive this issue fixes). Fall through to the
+      // NEXT merged PR in scan order instead of returning here, so a
+      // later PR in the same window that both overlaps and references the
+      // candidate is still detected.
+      continue;
+    }
+    const mergedAt = String(pr.mergedAt ?? '');
+    return {
+      pass: false,
+      evidence: `High-confidence duplicate: merged PR #${number}${mergedAt ? ` (merged ${mergedAt})` : ''} already changed candidate file(s): ${overlap.sort().join(', ')} and references issue #${candidateIssueNumber}.`,
+      tier: 'high-confidence',
+    };
   }
   return null;
 }
@@ -197,8 +256,15 @@ export function buildMergedPrListArgs(repoRef, sinceIso) {
     String(MERGED_PR_SCAN_LIMIT),
   ];
 }
-/** Argv for one merged PR's changed-file list. */
-export function buildPrFilesArgs(repoRef, prNumber) {
+/**
+ * Argv for one merged PR's changed-file list plus the same-issue-reference
+ * evidence #1878 adds (`title`, `body`, `closingIssuesReferences`) --
+ * requested on this single existing `gh pr view` call rather than a second
+ * one, matching the issue's own "no new API calls needed" framing. Returns
+ * the full JSON object (no `--jq` projection) since the caller now needs
+ * more than one field; `.files[].path` extraction moves to the caller.
+ */
+export function buildPrDetailArgs(repoRef, prNumber) {
   return [
     'pr',
     'view',
@@ -206,8 +272,6 @@ export function buildPrFilesArgs(repoRef, prNumber) {
     '--repo',
     repoRef,
     '--json',
-    'files',
-    '--jq',
-    '.files[].path',
+    'files,title,body,closingIssuesReferences',
   ];
 }
