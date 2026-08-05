@@ -251,11 +251,15 @@ function findPreviousLineStart(text, lineStart) {
  *
  * **Deliberate side effect.** A stray raw-text-close-shaped line (e.g. a
  * bare `</script>`) encountered while the state is still `none` -- no raw-
- * text block open at all -- is now inert rather than ending the scan; this
- * is the correct CommonMark reading (a lone closing tag proves nothing on
- * its own) and the opposite of the single-hypothesis scan's behavior in
- * this narrow sub-case. No reported case in #1895 exercises this
- * specifically; noted here since it is an observable behavior change.
+ * text block open at all -- is now inert rather than ending the scan. This
+ * only changes the observable result when a genuine opener (raw-text,
+ * special, or generic) is reachable further back past the stray closer: the
+ * old scan returned "not enclosed" as soon as it saw the closer, regardless
+ * of state, so it never reached that opener; the new scan correctly
+ * continues past it and finds the still-open block. With no such opener
+ * reachable, both scans agree (nothing was ever open to end). Verified
+ * empirically both ways; covered by the last two cases in
+ * `tests/markdown-code.test.mts`'s #1895 section.
  */
 function isWithinOpenHtmlBlock(text, openingLineStart, containerDepth) {
   const sameDepthLines = [];
@@ -266,16 +270,20 @@ function isWithinOpenHtmlBlock(text, openingLineStart, containerDepth) {
     if (parsed.containerDepth !== containerDepth) {
       break;
     }
-    // A list marker (e.g. `- <script>`) is not part of the HTML tag itself;
-    // test the content after it, the same way the opening-line check does.
-    sameDepthLines.push(
-      parseListItemMatch(parsed.content)?.content ?? parsed.content,
-    );
+    // Blankness is judged on the container-stripped line as a whole (a
+    // marker-only line like `- ` is not itself a blank line), before a list
+    // marker (e.g. `- <script>`) is stripped for the HTML-pattern tests
+    // below -- stripping first would read that marker-only line's now-empty
+    // remainder as blank, wrongly closing an open `generic` state.
+    sameDepthLines.push({
+      content: parseListItemMatch(parsed.content)?.content ?? parsed.content,
+      isBlank: parsed.content.trim() === '',
+    });
     lineStart = findPreviousLineStart(text, lineStart);
   }
   sameDepthLines.reverse();
   let state = { type: 'none' };
-  for (const content of sameDepthLines) {
+  for (const { content, isBlank } of sameDepthLines) {
     if (state.type === 'raw-text') {
       if (HTML_RAW_TEXT_TAG_CLOSE_PATTERN.test(content)) {
         state = { type: 'none' };
@@ -289,12 +297,12 @@ function isWithinOpenHtmlBlock(text, openingLineStart, containerDepth) {
       continue;
     }
     if (state.type === 'generic') {
-      if (content.trim() === '') {
+      if (isBlank) {
         state = { type: 'none' };
       }
       continue;
     }
-    if (content.trim() === '') {
+    if (isBlank) {
       continue;
     }
     if (HTML_RAW_TEXT_TAG_OPEN_PATTERN.test(content)) {

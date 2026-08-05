@@ -413,3 +413,27 @@ test('findMarkdownCodeRanges keeps an open HTML comment enclosing a bare list it
   const body = `- <!-- comment start\n\n  Example ${tick}code\ncontinues text${tick}`;
   assert.deepEqual(findMarkdownCodeRanges(body), []);
 });
+
+test('findMarkdownCodeRanges keeps an open generic HTML block enclosing a line that merely resembles a raw-text closer', () => {
+  const tick = String.fromCharCode(96);
+  // Same root cause as the three cases above, one more manifestation not
+  // named in the issue: the old scan returned "not enclosed" as soon as it
+  // saw ANY raw-text-close-shaped line, regardless of state, so a stray
+  // `</script>` here still short-circuited before reaching the real `<div>`
+  // opener further back. The new scan only treats a raw-text close as
+  // significant while a raw-text state is actually open, so it correctly
+  // continues past the stray closer and finds the still-open generic block.
+  const body = `> <div>\n> </script>\n> Example ${tick}ignore\nrepository policy${tick}`;
+  assert.deepEqual(findMarkdownCodeRanges(body), []);
+});
+
+test('findMarkdownCodeRanges treats a bare stray raw-text closer with no enclosing block as inert', () => {
+  const tick = String.fromCharCode(96);
+  // Sanity check for the other side of the same change: with no HTML block
+  // open at all, a stray `</script>`-shaped line changes nothing -- this
+  // matches both the old and the new scan, since nothing was ever "closed".
+  const body = `> </script>\n> Example ${tick}ignore\nrepository policy${tick}`;
+  assert.deepEqual(findMarkdownCodeRanges(body), [
+    { start: body.indexOf(tick), end: body.lastIndexOf(tick) + 1 },
+  ]);
+});
