@@ -102,7 +102,8 @@ now reports them missing (blocking) until you re-run Step 2 for them, and
 `--import` reports a `blockedOverwrites` finding instead of silently
 skipping them if you already created same-named files of your own by
 then — merge the template's rule overrides / word list into your existing
-file by hand in that case, following Step 2's file-list note above.
+file by hand in that case, following the Step 2 file-list note on these
+3 files.
 
 When you then audit whether re-imported roadmap work is actually done, judge
 **completion by auditing the implementation against the acceptance criteria**,
