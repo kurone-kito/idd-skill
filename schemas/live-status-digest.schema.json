@@ -39,7 +39,7 @@
     "openBlockers": {
       "type": "string",
       "minLength": 1,
-      "description": "Current blocker summary, or none when no blocker is recorded."
+      "description": "Current blocker summary as free-form text supplied by the caller."
     },
     "nextAction": {
       "type": "string",
