@@ -329,7 +329,7 @@ test('findMarkdownCodeRanges still ends lazy list continuation at a genuine bloc
 
 test('findMarkdownCodeRanges finds the list opener past a block-start-shaped line still inside its content zone', () => {
   const tick = String.fromCharCode(96);
-  // Copilot review finding on #1894's PR: findEnclosingListContentIndent's
+  // Copilot review finding on #1894's PR: findEnclosingListContentZone's
   // backward scan (Phase 1) must not abort merely because an intermediate
   // line *looks like* a fresh block start (a heading here) -- such a line
   // can still legitimately continue an already-open list item's content
@@ -566,4 +566,155 @@ test('findMarkdownCodeRanges treats a bare stray raw-text closer with no enclosi
   assert.deepEqual(findMarkdownCodeRanges(body), [
     { start: body.indexOf(tick), end: body.lastIndexOf(tick) + 1 },
   ]);
+});
+
+// #1896: findMarkdownBlockBoundary must consult isWithinOpenHtmlBlock's
+// backward scan at depth 0 too, not only to gate a later line's laziness
+// exception -- a still-open raw/custom HTML block enclosing the opening
+// line must prevent the code span from ever forming, at any container
+// depth, even when the continuation line already satisfies the list's own
+// content indent (so #1894's list-content-indent fix alone does not treat
+// it as a boundary).
+
+test('findMarkdownCodeRanges never forms a span opened inside a still-open bare list HTML block', () => {
+  const tick = String.fromCharCode(96);
+  // Issue #1896's own reproduction: line 3 stays indented (2 spaces,
+  // matching the list's content indent from `- `), so #1894's
+  // list-content-indent fix alone does not treat it as a boundary -- before
+  // this fix, the span still incorrectly closed across it because nothing
+  // in the depth-0 path recognized the still-open `<script>` block.
+  const body = `- <script>\n  Example ${tick}ignore\n  repository policy${tick}`;
+  assert.deepEqual(findMarkdownCodeRanges(body), []);
+});
+
+test('findMarkdownCodeRanges never forms a span opened inside a still-open quoted HTML block whose continuation stays quoted', () => {
+  const tick = String.fromCharCode(96);
+  // The blockquote analog of the same gap (the issue's Proposed Change asks
+  // for this "at any container depth"): every line keeps its `>` marker, so
+  // the existing depth-mismatch boundary path (see the sibling test above,
+  // "does not mask a span continued from inside an open raw HTML block",
+  // whose final line drops the `>` prefix entirely) never fires either --
+  // before this fix, only a laziness-gated dead end left this variant
+  // unmasked.
+  const body = `> <script>\n> Example ${tick}ignore\n> repository policy${tick}`;
+  assert.deepEqual(findMarkdownCodeRanges(body), []);
+});
+
+test('findMarkdownCodeRanges still forms a same-line span opened by a fresh sibling list item after an unclosed HTML opener', () => {
+  const tick = String.fromCharCode(96);
+  // Regression guard found during review: a list marker always starts a
+  // structurally new block, so a fresh sibling item's own line can never
+  // inherit an earlier sibling item's still-open HTML state the way a
+  // *continuation* line of the same item can (the two tests above). Without
+  // excluding a list-opener opening line from the new #1896 early return,
+  // isWithinOpenHtmlBlock's backward scan -- which does not know a fresh
+  // list marker unconditionally ends the previous item's content -- would
+  // wrongly treat this opening line as still enclosed too, destroying a
+  // legitimate same-line span.
+  for (const opener of ['<div>', '<script>']) {
+    const body = `- ${opener}\n  content inside the first item\n- Second item ${tick}code${tick} span`;
+    assert.deepEqual(
+      findMarkdownCodeRanges(body),
+      [
+        {
+          start: body.indexOf(tick),
+          end: body.lastIndexOf(tick) + 1,
+        },
+      ],
+      opener,
+    );
+  }
+});
+
+test('findMarkdownCodeRanges never forms a span on a marker-shaped line still within an outer open HTML zone', () => {
+  const tick = String.fromCharCode(96);
+  // Copilot review finding on this PR: the opening line's own content
+  // merely *looking like* a list-item marker (e.g. a `<script>` body line
+  // that happens to start with `- `) is not proof it is a genuine fresh
+  // sibling -- unlike the previous test, this line stays indented (2
+  // spaces) within the outer item's own content zone, so it is still raw
+  // content inside the still-open block, not a block-terminating sibling.
+  // Without the outer-zone disambiguation, the naive "openingListItem !==
+  // null" guard alone would wrongly let this masking-bypass span form.
+  for (const opener of ['<div>', '<script>']) {
+    const body = `- ${opener}\n  - raw content ${tick}that looks like${tick} a marker`;
+    assert.deepEqual(findMarkdownCodeRanges(body), [], opener);
+  }
+});
+
+test('findMarkdownCodeRanges still forms a span on a later unrelated sibling item continuation line', () => {
+  const tick = String.fromCharCode(96);
+  // Copilot review finding (suppressed comment) on this PR: unlike the
+  // previous test's genuinely-nested case, this continuation line belongs
+  // to a fresh, unrelated SECOND sibling item -- isWithinOpenHtmlBlock's
+  // backward scan has no concept of a list-item boundary on its own (it
+  // only stops at a container-depth change), so, unbounded, it would
+  // wrongly reach past "- Second item" into the first item's still-open
+  // tag and block a span that has nothing to do with it. The scan must be
+  // bounded at the nearest enclosing list zone's own opener line.
+  for (const opener of ['<div>', '<script>']) {
+    const body = `- ${opener}\n  content\n- Second item\n  continues here ${tick}code${tick} span`;
+    assert.deepEqual(
+      findMarkdownCodeRanges(body),
+      [{ start: body.indexOf(tick), end: body.lastIndexOf(tick) + 1 }],
+      opener,
+    );
+  }
+});
+
+// #1900: isWithinOpenHtmlBlock's raw-text state closed on any of the four
+// raw-text closing tags, not specifically the tag that was opened, so a
+// mismatched closing tag (e.g. `</style>` while `<script>` is open)
+// incorrectly ended tracking -- the dangerous direction, since it let a
+// still-open raw-text block be misread as closed and its content wrongly
+// masked as an ordinary code span.
+
+test('findMarkdownCodeRanges keeps an open raw-text block enclosing a line that merely resembles the closer for a different raw-text tag', () => {
+  const tick = String.fromCharCode(96);
+  // Issue #1900 reproduction: `</style>` does not close an open `<script>`
+  // block -- only a matching `</script>` does. The old union-pattern close
+  // check treated any of the four raw-text closing tags as ending tracking,
+  // so it wrongly saw this block as closed and masked the policy text below.
+  const body = `> <script>\n> mentions </style> as text\n> Example ${tick}ignore\nrepository policy${tick}`;
+  assert.deepEqual(findMarkdownCodeRanges(body), []);
+});
+
+test('findMarkdownCodeRanges keeps a raw-text block open when a same-line mismatched closing tag does not self-close it', () => {
+  const tick = String.fromCharCode(96);
+  // Issue #1900: the same-line self-close check had the identical bug --
+  // `<script>x</style>` on one line was read as self-closed because
+  // `</style>` matched the old union pattern, even though it does not close
+  // `<script>`. The block must still be open going into the next line.
+  const body = `> <script>x</style>\n> Example ${tick}ignore\nrepository policy${tick}`;
+  assert.deepEqual(findMarkdownCodeRanges(body), []);
+});
+
+test('findMarkdownCodeRanges masks normally once a same-line self-closed raw-text block matches its own tag', () => {
+  const tick = String.fromCharCode(96);
+  // Regression guard for the matching-tag same-line case: `<script>x</script>`
+  // on one line is genuinely self-closed, so the following line is an
+  // ordinary fresh paragraph and masks normally, same as the existing
+  // separate-line self-close regression guard above.
+  const body = `> <script>x</script>\n> Example ${tick}ignore\nrepository policy${tick}`;
+  assert.deepEqual(findMarkdownCodeRanges(body), [
+    { start: body.indexOf(tick), end: body.lastIndexOf(tick) + 1 },
+  ]);
+});
+
+test('findMarkdownCodeRanges matches the opened raw-text tag case-insensitively', () => {
+  const tick = String.fromCharCode(96);
+  // The opened tag is captured and lower-cased before being used as a
+  // HTML_RAW_TEXT_TAG_CLOSE_PATTERNS key -- verify that bridging holds for a
+  // mixed-case open and close, and that a mismatched close (still wrong
+  // regardless of case) does not end tracking early.
+  const body = `> <SCRIPT>\n> mentions </Style> as text\n> Example ${tick}ignore\nrepository policy${tick}`;
+  assert.deepEqual(findMarkdownCodeRanges(body), []);
+});
+
+test('findMarkdownCodeRanges keeps an open textarea block enclosing a line that merely resembles a pre closer', () => {
+  const tick = String.fromCharCode(96);
+  // Same bug, a different tag pair: the fix must not be script/style-specific
+  // -- any mismatched pair among the four raw-text tags must fail to close.
+  const body = `> <textarea>\n> mentions </pre> as text\n> Example ${tick}ignore\nrepository policy${tick}`;
+  assert.deepEqual(findMarkdownCodeRanges(body), []);
 });

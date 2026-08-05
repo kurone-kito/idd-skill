@@ -154,10 +154,32 @@ const MARKDOWN_THEMATIC_BREAK_PATTERN =
   /^ {0,3}([-_*])(?:[ \t]*\1){2,}[ \t]*$/u;
 // CommonMark type-1 raw-text HTML elements (script/pre/style/textarea) only
 // end at a line containing their matching closing tag -- unlike the other
-// HTML block types, a blank line does not close them.
-const HTML_RAW_TEXT_TAG_CLOSE_PATTERN = /<\/(?:script|pre|style|textarea)\b/iu;
+// HTML block types, a blank line does not close them. #1900: closing
+// requires the *specific* tag that was opened, not any of the four -- a
+// mismatched closing tag (e.g. `</style>` while `<script>` is open) must
+// not end tracking.
+type HtmlRawTextTag = 'script' | 'pre' | 'style' | 'textarea';
 const HTML_RAW_TEXT_TAG_OPEN_PATTERN =
-  /^ {0,3}<(?:script|pre|style|textarea)\b/iu;
+  /^ {0,3}<(script|pre|style|textarea)\b/iu;
+const HTML_RAW_TEXT_TAG_CLOSE_PATTERNS: Readonly<
+  Record<HtmlRawTextTag, RegExp>
+> = {
+  script: /<\/script\b/iu,
+  pre: /<\/pre\b/iu,
+  style: /<\/style\b/iu,
+  textarea: /<\/textarea\b/iu,
+};
+
+/**
+ * The raw-text tag that `content` opens (one of {@link HtmlRawTextTag}'s
+ * four members), lower-cased for use as a
+ * {@link HTML_RAW_TEXT_TAG_CLOSE_PATTERNS} key, or `null` when `content`
+ * does not open a raw-text element.
+ */
+function rawTextOpenTag(content: string): HtmlRawTextTag | null {
+  const match = HTML_RAW_TEXT_TAG_OPEN_PATTERN.exec(content);
+  return match === null ? null : (match[1].toLowerCase() as HtmlRawTextTag);
+}
 
 /**
  * True when `content` (a line with any blockquote container prefix already
@@ -262,10 +284,11 @@ function findPreviousLineStart(text: string, lineStart: number): number | null {
  * (rather than several independent booleans) so "only one family is open
  * at once" is structural, not merely an accident of check ordering.
  *
- * - `raw-text`: an open `<script>`/`<pre>`/`<style>`/`<textarea>` element;
- *   closes on a line containing any of the four raw-text closing tags, not
- *   only the one that was actually opened (a known, pre-existing gap
- *   unrelated to this type's own tracking; see #1900).
+ * - `raw-text`: an open `<script>`/`<pre>`/`<style>`/`<textarea>` element,
+ *   carrying which of the four tags (`tag`) was actually opened; closes
+ *   only on a line containing that same tag's own closing form -- a
+ *   mismatched closing tag for a different raw-text element (e.g.
+ *   `</style>` while `<script>` is open) does not close it (#1900).
  * - `special`: an open comment/processing-instruction/declaration/CDATA
  *   block; closes only when `closeToken` (that form's own token -- `-->`,
  *   `?>`, `]]>`, or `>`) appears on a later line, same-line or not.
@@ -275,7 +298,7 @@ function findPreviousLineStart(text: string, lineStart: number): number | null {
  */
 type HtmlBlockScanState =
   | { readonly type: 'none' }
-  | { readonly type: 'raw-text' }
+  | { readonly type: 'raw-text'; readonly tag: HtmlRawTextTag }
   | { readonly type: 'special'; readonly closeToken: string }
   | { readonly type: 'generic' };
 
@@ -311,6 +334,23 @@ type HtmlBlockScanState =
  *    close, and a blank line encountered while `special` or `raw-text` is
  *    active never ends it (only `generic` closes on a blank line).
  *
+ * `findMarkdownBlockBoundary` now calls this scan whenever an active list
+ * zone is involved, not only inside a blockquote -- including when the
+ * opening line itself looks like a fresh list-item opener: the scan still
+ * runs there (it does not know or care whether its own starting
+ * line has a marker; only the *lines it walks backward
+ * through* have their own markers stripped before testing). Since #1896's
+ * fix, a `true` result forces the enclosing code span to never form at all
+ * (an unconditional block boundary), rather than merely gating the
+ * `isLazyListContinuation` / `isLazyQuoteContinuation` laziness exception
+ * for later lines -- *unless* the opening line is a genuine fresh sibling
+ * list-item opener (its own marker, and not itself still within an
+ * earlier, outer list item's content zone; see the guard in
+ * `findMarkdownBlockBoundary` below), in which case only the laziness-gate
+ * consumption still applies, so a legitimate same-line span opened by that
+ * fresh sibling right after an unclosed tag in the previous item is not
+ * destroyed.
+ *
  * **Deliberate side effect.** A stray raw-text-close-shaped line (e.g. a
  * bare `</script>`) encountered while the state is still `none` -- no raw-
  * text block open at all -- is now inert rather than ending the scan. This
@@ -322,15 +362,33 @@ type HtmlBlockScanState =
  * reachable, both scans agree (nothing was ever open to end). Verified
  * empirically both ways; covered by the last two cases in
  * `tests/markdown-code.test.mts`'s #1895 section.
+ *
+ * `earliestLineStart` (PR #1902 review finding): an optional lower bound on
+ * how far back this scan may walk. The scan otherwise has no concept of a
+ * list-item boundary -- it walks backward purely by same-`containerDepth`
+ * lines -- so, unbounded, it can reach *past* a genuine sibling list-item
+ * opener into an earlier, unrelated item's own open HTML block (a fresh
+ * sibling's own line does not reset `containerDepth`, only its list-content
+ * indent does, which this function does not track). `findMarkdownBlockBoundary`
+ * passes the nearest enclosing list zone's own opener line (or the opening
+ * line itself, when no such zone reaches it) whenever an active list zone
+ * is involved; omitted (unbounded) for the pure-blockquote case, where no
+ * sibling-item boundary concept applies and unbounded reachability across
+ * shape-only lines is the CommonMark-correct behavior already relied on by
+ * `tests/markdown-code.test.mts`'s pre-#1896 blockquote coverage.
  */
 function isWithinOpenHtmlBlock(
   text: string,
   openingLineStart: number,
   containerDepth: number,
+  earliestLineStart?: number,
 ): boolean {
   const sameDepthLines: { content: string; isBlank: boolean }[] = [];
   let lineStart = findPreviousLineStart(text, openingLineStart);
   while (lineStart !== null) {
+    if (earliestLineStart !== undefined && lineStart < earliestLineStart) {
+      break;
+    }
     const line = lineBounds(text, lineStart);
     const parsed = parseContainerLine(text.slice(lineStart, line.end));
     if (parsed.containerDepth !== containerDepth) {
@@ -352,7 +410,7 @@ function isWithinOpenHtmlBlock(
   let state: HtmlBlockScanState = { type: 'none' };
   for (const { content, isBlank } of sameDepthLines) {
     if (state.type === 'raw-text') {
-      if (HTML_RAW_TEXT_TAG_CLOSE_PATTERN.test(content)) {
+      if (HTML_RAW_TEXT_TAG_CLOSE_PATTERNS[state.tag].test(content)) {
         state = { type: 'none' };
       }
       continue;
@@ -372,9 +430,10 @@ function isWithinOpenHtmlBlock(
     if (isBlank) {
       continue;
     }
-    if (HTML_RAW_TEXT_TAG_OPEN_PATTERN.test(content)) {
-      if (!HTML_RAW_TEXT_TAG_CLOSE_PATTERN.test(content)) {
-        state = { type: 'raw-text' };
+    const openTag = rawTextOpenTag(content);
+    if (openTag !== null) {
+      if (!HTML_RAW_TEXT_TAG_CLOSE_PATTERNS[openTag].test(content)) {
+        state = { type: 'raw-text', tag: openTag };
       }
       continue;
     }
@@ -435,7 +494,7 @@ function interruptingListContentIndent(content: string): number | null {
 const MINIMUM_LIST_CONTENT_INDENT = 2;
 
 /**
- * Forward-tracked counterpart of {@link findEnclosingListContentIndent}'s
+ * Forward-tracked counterpart of {@link findEnclosingListContentZone}'s
  * backward scan: the active list-item content indent as of the most
  * recently advanced line, threaded by {@link blankFencedCodeBlocks} and
  * {@link findFencedCodeRanges} into their own opener-detection
@@ -521,7 +580,7 @@ function resetListContentIndentTrackerForLine(
  * a freshly seen list item's content indent. Gated on
  * {@link isInterruptingListMarker} via {@link interruptingListContentIndent}
  * -- the same paragraph-interruption-blind predicate
- * {@link findEnclosingListContentIndent} (the backward scan this tracker
+ * {@link findEnclosingListContentZone} (the backward scan this tracker
  * replaces at these two call sites) applies via its own
  * `interruptingListContentIndent` call, restoring parity with it rather than
  * {@link findIndentedCodeRanges}'s own richer, context-sensitive
@@ -559,10 +618,18 @@ function adoptListContentIndentForLine(
 }
 
 /**
- * Determine the active list-item content indent enclosing
- * `openingLineStart`, if any -- the list-continuation counterpart, for
+ * A list-item content zone: the indent required for a line to continue it,
+ * paired with its opener's own line start (since #1902's review -- used to
+ * bound {@link isWithinOpenHtmlBlock}'s backward scan so it cannot reach
+ * past this opener into an earlier, unrelated sibling item's content).
+ */
+type ListContentZone = { contentIndent: number; openerLineStart: number };
+
+/**
+ * Determine the active list-item content zone enclosing `openingLineStart`,
+ * if any -- the list-continuation counterpart, for
  * {@link findMarkdownBlockBoundary}'s opening line, of
- * {@link isWithinOpenHtmlBlock}'s backward scan for open HTML blocks.
+ * {@link isWithinOpenHtmlBlock}'s own backward scan for open HTML blocks.
  * Returns `null` when `openingLineStart` is not inside an active list
  * item's content zone at `containerDepth`.
  *
@@ -588,11 +655,11 @@ function adoptListContentIndentForLine(
  * earlier, unrelated list (separated only by a single blank line) would
  * wrongly inherit that list's indent.
  */
-function findEnclosingListContentIndent(
+function findEnclosingListContentZone(
   text: string,
   openingLineStart: number,
   containerDepth: number,
-): number | null {
+): ListContentZone | null {
   let openerLineStart: number | null = null;
   let openerContentIndent: number | null = null;
   let lineStart = findPreviousLineStart(text, openingLineStart);
@@ -645,7 +712,7 @@ function findEnclosingListContentIndent(
     }
     cursor = line.next;
   }
-  return openerContentIndent;
+  return { contentIndent: openerContentIndent, openerLineStart };
 }
 
 function findMarkdownBlockBoundary(
@@ -673,34 +740,110 @@ function findMarkdownBlockBoundary(
   // isLazyQuoteContinuation. Computed before openingIsParagraph, which
   // needs it to decide whether the (more expensive) backward HTML-block
   // scan below is worth running at all.
+  const openingOwnListIndent = interruptingListContentIndent(
+    openingParsed.content,
+  );
+  const openingEnclosingListZone =
+    openingOwnListIndent === null
+      ? findEnclosingListContentZone(
+          text,
+          openingLineStart,
+          openingContainerDepth,
+        )
+      : null;
   const openingListContentIndent =
-    interruptingListContentIndent(openingParsed.content) ??
-    findEnclosingListContentIndent(
+    openingOwnListIndent ?? openingEnclosingListZone?.contentIndent ?? null;
+  // PR #1902 review finding: isWithinOpenHtmlBlock's backward scan has no
+  // concept of a list-item boundary -- it walks backward purely by
+  // same-containerDepth lines -- so, unbounded, it can reach past a
+  // genuine sibling list-item opener into an earlier, unrelated item's own
+  // open HTML block. Resolve the same "ignoring this line's own apparent
+  // marker" zone lookup #1894's own boundary check already uses, reusing
+  // the one just computed above when possible, to bound the scan at that
+  // zone's own opener line (or at the opening line itself, when no such
+  // zone reaches it -- a genuinely unreachable fresh sibling). Only
+  // computed when there is an active list zone at all (`openingListContentIndent
+  // !== null`); the pure-blockquote case (no list zone) stays unbounded,
+  // matching the pre-#1896 CommonMark-correct reachability across
+  // shape-only lines that has no sibling-item concept to bound against.
+  const openingHtmlScanBoundZone =
+    openingListContentIndent === null
+      ? null
+      : openingOwnListIndent === null
+        ? openingEnclosingListZone
+        : findEnclosingListContentZone(
+            text,
+            openingLineStart,
+            openingContainerDepth,
+          );
+  const openingHtmlScanBound =
+    openingListContentIndent === null
+      ? undefined
+      : (openingHtmlScanBoundZone?.openerLineStart ?? openingLineStart);
+  // Its backward scan only needs to run when it could actually change the
+  // outcome below: not just the laziness exception (quote laziness
+  // requires openingContainerDepth > 0, list laziness requires an active
+  // list zone) but, since #1896, also the unconditional early-return
+  // boundary a few lines down -- both share the same precondition, so one
+  // guard covers both consumers. Skip the scan entirely otherwise (Copilot
+  // review finding on #1894's PR: calling it unconditionally cost
+  // avoidable backward-scan work on every inline-code opening backtick, the
+  // common case being neither a blockquote nor an active list zone).
+  const openingIsWithinHtmlBlock =
+    (openingContainerDepth > 0 || openingListContentIndent !== null) &&
+    isWithinOpenHtmlBlock(
       text,
       openingLineStart,
       openingContainerDepth,
+      openingHtmlScanBound,
     );
+  // The opening line's own content merely *matching* a list-item marker
+  // pattern (`openingListItem !== null`) does not by itself prove it is a
+  // genuine, structurally fresh sibling block. If it is still within reach
+  // of an EARLIER, OUTER list item's content zone -- the same
+  // `openingHtmlScanBoundZone` lookup already resolved above -- it is raw
+  // or nested content still inside whatever that outer zone encloses (e.g.
+  // a `<script>` body line that happens to start with `- `), not a block
+  // boundary (PR #1902 review finding).
+  const openingListOpenerStillWithinOuterZone =
+    openingListItem !== null &&
+    openingIsWithinHtmlBlock &&
+    openingHtmlScanBoundZone !== null;
+  // #1896: a still-open raw or custom HTML block enclosing the opening line
+  // must prevent a code span from ever forming at all -- not merely gate a
+  // later line's laziness exception (below), since CommonMark never runs
+  // inline parsing inside such a block, at any container depth. Excluded
+  // only when the opening line is a genuine fresh sibling list-item opener
+  // (`openingListItem !== null` and, per the check above, not still within
+  // an outer enclosing zone): a list marker starts a structurally new
+  // block only when it is not itself raw/nested content the outer zone
+  // already encloses -- otherwise treating isWithinOpenHtmlBlock's true
+  // result as unconditional here would destroy a legitimate same-line span
+  // genuinely opened by a fresh sibling list item right after an unclosed
+  // tag in the previous one.
+  if (
+    openingIsWithinHtmlBlock &&
+    (openingListItem === null || openingListOpenerStillWithinOuterZone)
+  ) {
+    return openingLineStart;
+  }
   // #1894/#1896: openingIsParagraph now gates list-content-indent laziness
   // below too, not only isLazyQuoteContinuation (blockquote-only). CommonMark
   // laziness (omitting a container's own required indentation/markers on a
   // continuation line) only ever applies to an in-progress *paragraph*; a
   // still-open HTML block is a different block type with its own closing
-  // rule, so it must not inherit laziness -- isWithinOpenHtmlBlock is
-  // exactly the signal that tells the two apart. Its backward scan only
-  // needs to run when a laziness exception could actually change the
-  // outcome below: quote laziness requires openingContainerDepth > 0, list
-  // laziness requires an active list zone (openingListContentIndent !==
-  // null) -- skip the scan entirely otherwise (Copilot review finding on
-  // #1894's PR: calling it unconditionally cost avoidable backward-scan
-  // work on every inline-code opening backtick, the common case being
-  // neither a blockquote nor an active list zone).
+  // rule, so it must not inherit laziness -- openingIsWithinHtmlBlock is
+  // exactly the signal that tells the two apart. This is the residual case
+  // where the early return above did not fire (the opening line is a
+  // genuine fresh sibling list-item opener), so a still-open HTML block
+  // from an earlier sibling can still suppress a *later* line's laziness
+  // exception without destroying the opening line's own same-line span.
   const openingIsParagraph =
     !isMarkdownBlockStart(openingParagraphContent) &&
     !MARKDOWN_HTML_BLOCK_START_PATTERN.test(openingParagraphContent) &&
     !MARKDOWN_CUSTOM_HTML_BLOCK_START_PATTERN.test(openingParagraphContent) &&
     (openingFence === null || !isValidFenceOpener(openingFence)) &&
-    (!(openingContainerDepth > 0 || openingListContentIndent !== null) ||
-      !isWithinOpenHtmlBlock(text, openingLineStart, openingContainerDepth));
+    !openingIsWithinHtmlBlock;
   let lineStart = openingLine.next;
 
   while (lineStart < end) {
