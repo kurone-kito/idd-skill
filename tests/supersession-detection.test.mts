@@ -786,6 +786,22 @@ test('findTrustedSuitabilityRejection: author comparison is case-insensitive', (
   assert.equal(result?.author, 'kurone-kito');
 });
 
+test('findTrustedSuitabilityRejection: a differently-cased outcome token is normalized to lowercase (Copilot review finding, PR #1890)', () => {
+  // The outcome pattern matches case-insensitively (`/i`), but a captured
+  // group returns the verbatim matched text by default -- an actor
+  // writing "outcome: DUPLICATE" must still surface the documented
+  // lowercase canonical token, not an uncanonicalized "DUPLICATE".
+  const result = findTrustedSuitabilityRejection(
+    [
+      makeRejectionComment({
+        body: `${SUITABILITY_REJECTION_PREFIX} — Check 4 (Duplicate or Superseded Work): reason.\n\noutcome: DUPLICATE`,
+      }),
+    ],
+    ['kurone-kito'],
+  );
+  assert.equal(result?.outcome, 'duplicate');
+});
+
 test('findTrustedSuitabilityRejection: an empty trusted-actor list never surfaces a match, even an exact one', () => {
   const result = findTrustedSuitabilityRejection([makeRejectionComment()], []);
   assert.equal(result, null);
