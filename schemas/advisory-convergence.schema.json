@@ -234,7 +234,7 @@
       "properties": {
         "eligible": {
           "type": "boolean",
-          "description": "True when the review is not pending, threads are satisfied, no disposition is missing, and the review's item count is known and positive -- the only case a stale item count alone still blocks converged."
+          "description": "True when the scope is applicable, the review is not pending, threads are satisfied, no regular-comment disposition is missing (missingThreadCount is not a term here), and the review's item count is known and positive -- the only case a stale item count alone still blocks converged."
         },
         "ineligibleReasons": {
           "type": "array",
@@ -357,7 +357,7 @@
     },
     "waived": {
       "type": "boolean",
-      "description": "True when the scope applies and at least one valid external-check waiver covers this gate."
+      "description": "True when the scope is not not_applicable (applicable or indeterminate) and at least one valid external-check waiver covers this gate; deliberately still reachable when applicability.status is indeterminate."
     },
     "ready": {
       "type": "boolean",

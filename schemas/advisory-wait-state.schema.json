@@ -126,7 +126,7 @@
     },
     "sameHeadMarkerCount": {
       "type": "number",
-      "description": "Count of trusted comments whose body matches the current HEAD's advisory-wait marker shape."
+      "description": "Count of trusted comments whose body matches the current HEAD's advisory-wait or advisory-wait-recovery marker shape."
     },
     "requestMarkerCount": {
       "type": "number",

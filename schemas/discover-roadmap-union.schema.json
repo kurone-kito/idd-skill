@@ -55,7 +55,7 @@
     },
     "leaves": {
       "type": "array",
-      "description": "De-duplicated union of open execution leaves across every enumerated root, ranked by autopilot suitability descending and tie-broken by issue number ascending.",
+      "description": "De-duplicated union of open execution leaves across every enumerated root, ordered by compareUnionLeaves: autopilot suitability descending (scored before unscored at the same effective score), then effort ascending (S before M before L), then issue number ascending.",
       "items": {
         "type": "object",
         "required": [
@@ -144,7 +144,7 @@
             "properties": {
               "present": {
                 "type": "boolean",
-                "description": "True when a trusted, non-expired claim marker exists for this leaf."
+                "description": "True when a trusted claim marker exists for this leaf, whether or not it is stale -- see stale below for takeover eligibility."
               },
               "stale": {
                 "type": "boolean",
