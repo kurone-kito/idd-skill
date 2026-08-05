@@ -29,63 +29,93 @@
   "properties": {
     "protocolVersion": {
       "type": "string",
+      "description": "Fixed contract-version tag for this verdict shape; not the tool's own version.",
       "enum": ["1"]
     },
     "decisionAuthority": {
       "type": "string",
+      "description": "Fixed marker that this verdict is read-only evidence advisory to the written instructions, not a self-authorizing merge decision.",
       "enum": ["instructions"]
     },
     "prNumber": {
       "type": "integer",
+      "description": "The pull request this verdict was computed for.",
       "minimum": 1
     },
     "prHeadSha": {
       "type": "string",
+      "description": "The PR HEAD commit SHA this verdict is anchored to.",
       "pattern": "^[0-9a-f]{40}$"
     },
     "now": {
       "type": "string",
+      "description": "ISO-8601 capture instant of this run; anchors the deadline, terminal, and sameHeadReroll clock calculations below.",
       "format": "date-time",
       "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?Z$"
     },
     "primaryBotLogin": {
       "type": "string",
+      "description": "Resolved primary advisory-bot login every review and thread clause below is scoped to.",
       "minLength": 1
     },
     "applicability": {
       "type": "object",
+      "description": "Scope-gate evidence for whether this convergence gate applies to the PR under the configured advisoryWait.convergenceScope.",
       "required": ["scope", "status", "reason"],
       "additionalProperties": false,
       "properties": {
         "scope": {
           "type": "string",
+          "description": "Configured scope mode in effect: all-prs (gate applies everywhere) or idd-claimed (gate narrows to verified IDD-owned PRs).",
           "enum": ["all-prs", "idd-claimed"]
         },
         "status": {
           "type": "string",
+          "description": "applicable, not_applicable, or indeterminate; indeterminate means claim evidence exists but cannot be cleanly resolved to this PR, so ordinary convergence cannot pass -- only the deadline/waiver escape hatch can.",
           "enum": ["applicable", "not_applicable", "indeterminate"]
         },
         "reason": {
           "type": "string",
+          "description": "Machine-readable token naming which scope-resolution branch produced status.",
           "minLength": 1
         }
       }
     },
     "review": {
       "type": "object",
+      "description": "Clause 1 evidence: identity and HEAD-coverage of the primary bot's latest review, by fetch order.",
       "required": ["found", "commitId", "matchesHead", "itemCount", "submittedAt", "satisfied"],
       "additionalProperties": false,
       "properties": {
-        "found": { "type": "boolean" },
-        "commitId": { "type": "string" },
-        "matchesHead": { "type": "boolean" },
-        "itemCount": { "type": ["integer", "null"] },
-        "submittedAt": { "type": "string" },
-        "satisfied": { "type": "boolean" }
+        "found": {
+          "type": "boolean",
+          "description": "True when at least one verified primary-bot review exists at all."
+        },
+        "commitId": {
+          "type": "string",
+          "description": "commit_id of the latest primary-bot review, or empty when none was found."
+        },
+        "matchesHead": {
+          "type": "boolean",
+          "description": "True when commitId equals the PR's current HEAD."
+        },
+        "itemCount": {
+          "type": ["integer", "null"],
+          "description": "Actionable-item count from the latest review, read only when matchesHead is true; a static snapshot taken at submission time that later disposition activity never updates."
+        },
+        "submittedAt": {
+          "type": "string",
+          "description": "submittedAt timestamp of the latest primary-bot review, or empty when none was found."
+        },
+        "satisfied": {
+          "type": "boolean",
+          "description": "True when the latest review covers HEAD and reports zero actionable items -- Clause 1's pass condition."
+        }
       }
     },
     "threads": {
       "type": "object",
+      "description": "Clause 2 evidence: resolution and disposition status of every current primary-bot-authored review thread.",
       "required": [
         "copilotThreadCount",
         "blockingIds",
@@ -94,38 +124,79 @@
       ],
       "additionalProperties": false,
       "properties": {
-        "copilotThreadCount": { "type": "integer", "minimum": 0 },
+        "copilotThreadCount": {
+          "type": "integer",
+          "description": "Count of review threads whose originating comment is authored by the primary bot.",
+          "minimum": 0
+        },
         "blockingIds": {
           "type": "array",
+          "description": "IDs of primary-bot-authored threads that are both unresolved and missing a fresh disposition marker.",
           "items": { "type": "string" }
         },
-        "blockingCount": { "type": "integer", "minimum": 0 },
-        "satisfied": { "type": "boolean" }
+        "blockingCount": {
+          "type": "integer",
+          "description": "blockingIds.length.",
+          "minimum": 0
+        },
+        "satisfied": {
+          "type": "boolean",
+          "description": "True when blockingCount is zero -- Clause 2's pass condition."
+        }
       }
     },
     "pending": {
-      "type": "boolean"
+      "type": "boolean",
+      "description": "True while the primary bot has not yet produced a review covering the current HEAD; forced false when applicability.status is not_applicable or indeterminate."
     },
     "deadline": {
       "type": "object",
+      "description": "Deadline-clock evidence anchored on the current HEAD commit's own commit timestamp, gating when the waiver escape hatch opens.",
       "required": ["minutes", "headCommittedAt", "elapsedMinutes", "passed"],
       "additionalProperties": false,
       "properties": {
-        "minutes": { "type": "number", "minimum": 0 },
-        "headCommittedAt": { "type": "string" },
-        "elapsedMinutes": { "type": ["number", "null"] },
-        "passed": { "type": "boolean" }
+        "minutes": {
+          "type": "number",
+          "description": "Configured advisory convergence deadline in minutes (advisoryWait.convergenceDeadline, default 1440 = 24h).",
+          "minimum": 0
+        },
+        "headCommittedAt": {
+          "type": "string",
+          "description": "ISO timestamp of the current HEAD commit itself."
+        },
+        "elapsedMinutes": {
+          "type": ["number", "null"],
+          "description": "Whole minutes elapsed from headCommittedAt to now, or null when headCommittedAt is invalid or absent."
+        },
+        "passed": {
+          "type": "boolean",
+          "description": "True when elapsedMinutes is known and has reached minutes."
+        }
       }
     },
     "waiver": {
       "type": "object",
+      "description": "Escape-hatch evidence for a maintainer-authorized external-check waiver, evaluated only once deadline.passed or terminal.state is COPILOT_UNAVAILABLE.",
       "required": ["mode", "checkSelector", "activeClaimId", "validCount"],
       "additionalProperties": false,
       "properties": {
-        "mode": { "type": "string" },
-        "checkSelector": { "type": "string" },
-        "activeClaimId": { "type": "string" },
-        "validCount": { "type": "integer", "minimum": 0 }
+        "mode": {
+          "type": "string",
+          "description": "Configured external-check waiver mode (ciGate.externalCheckWaivers.mode)."
+        },
+        "checkSelector": {
+          "type": "string",
+          "description": "The external-check selector a waiver marker must name to cover this gate."
+        },
+        "activeClaimId": {
+          "type": "string",
+          "description": "Active claim id resolved for the PR's linked issue, or empty when none is bound."
+        },
+        "validCount": {
+          "type": "integer",
+          "description": "Count of valid external-check-waiver markers matching checkSelector.",
+          "minimum": 0
+        }
       }
     },
     "dispositionEvidence": {
@@ -134,12 +205,21 @@
       "required": ["missingRegularCommentCount", "missingThreadCount"],
       "additionalProperties": false,
       "properties": {
-        "missingRegularCommentCount": { "type": "integer", "minimum": 0 },
-        "missingThreadCount": { "type": "integer", "minimum": 0 }
+        "missingRegularCommentCount": {
+          "type": "integer",
+          "description": "Outstanding non-thread regular PR comments still lacking a fresh disposition marker; the exact counter sameHeadReroll.eligible's missing-regular-comment-disposition term reads.",
+          "minimum": 0
+        },
+        "missingThreadCount": {
+          "type": "integer",
+          "description": "Review threads of any authorship still lacking a fresh disposition marker; adjacent diagnostic evidence, not itself a sameHeadReroll term.",
+          "minimum": 0
+        }
       }
     },
     "sameHeadReroll": {
       "type": "object",
+      "description": "Bounded same-HEAD advisory-reroll evidence (#1511); purely additive and never referenced by converged, waived, or ready.",
       "required": [
         "eligible",
         "ineligibleReasons",
@@ -152,7 +232,10 @@
       ],
       "additionalProperties": false,
       "properties": {
-        "eligible": { "type": "boolean" },
+        "eligible": {
+          "type": "boolean",
+          "description": "True when the scope is applicable, the review is not pending, threads are satisfied, no regular-comment disposition is missing (missingThreadCount is not a term here), and the review's item count is known and positive -- the only case a stale item count alone still blocks converged."
+        },
         "ineligibleReasons": {
           "type": "array",
           "description": "#1719: one stable, machine-readable token per failing term of the eligible conjunction (in conjunction order); empty exactly when eligible is true.",
@@ -168,12 +251,32 @@
             ]
           }
         },
-        "count": { "type": "integer", "minimum": 0 },
-        "cap": { "type": "integer", "minimum": 1 },
-        "exhausted": { "type": "boolean" },
-        "latestAt": { "type": "string" },
-        "inFlight": { "type": "boolean" },
-        "requestable": { "type": "boolean" }
+        "count": {
+          "type": "integer",
+          "description": "Count of trusted advisory-reroll markers whose embedded HEAD SHA matches the current HEAD.",
+          "minimum": 0
+        },
+        "cap": {
+          "type": "integer",
+          "description": "Configured cap on same-HEAD reroll requests (advisoryWait.sameHeadRerollCap, default 2).",
+          "minimum": 1
+        },
+        "exhausted": {
+          "type": "boolean",
+          "description": "True when count has reached cap."
+        },
+        "latestAt": {
+          "type": "string",
+          "description": "GitHub created_at of the latest trusted reroll marker, or empty when none exists."
+        },
+        "inFlight": {
+          "type": "boolean",
+          "description": "True while a reroll marker exists, no fresh primary-bot review has landed since it, and the pending window has not yet elapsed since it was posted."
+        },
+        "requestable": {
+          "type": "boolean",
+          "description": "True when eligible and neither exhausted nor inFlight -- the moment it is safe to request a fresh same-HEAD reroll."
+        }
       }
     },
     "terminal": {
@@ -194,36 +297,75 @@
       ],
       "additionalProperties": false,
       "properties": {
-        "cap": { "type": "integer", "minimum": 1 },
-        "completedCycleCount": { "type": "integer", "minimum": 0 },
-        "remainingBudget": { "type": "integer", "minimum": 0 },
-        "capExhausted": { "type": "boolean" },
-        "terminalWindowMinutes": { "type": "number", "exclusiveMinimum": 0 },
+        "cap": {
+          "type": "integer",
+          "description": "Configured per-PR-HEAD recovery-cycle cap (advisoryWait.recoveryCycleCap, default 2).",
+          "minimum": 1
+        },
+        "completedCycleCount": {
+          "type": "integer",
+          "description": "Count of trusted, claim-bound, current-HEAD-bound advisory-recovery markers.",
+          "minimum": 0
+        },
+        "remainingBudget": {
+          "type": "integer",
+          "description": "max(cap - completedCycleCount, 0).",
+          "minimum": 0
+        },
+        "capExhausted": {
+          "type": "boolean",
+          "description": "True when completedCycleCount has reached cap."
+        },
+        "terminalWindowMinutes": {
+          "type": "number",
+          "description": "Configured terminal-unavailability window in minutes (advisoryWait.terminalWindow, default 720 = 12h).",
+          "exclusiveMinimum": 0
+        },
         "clockAnchor": {
           "type": "string",
+          "description": "GitHub created_at of the earliest qualifying trusted recovery marker, or empty when none exists.",
           "pattern": "^$|^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?Z$"
         },
-        "elapsedMinutes": { "type": "number", "minimum": 0 },
-        "windowElapsed": { "type": "boolean" },
-        "activeClaimProvided": { "type": "boolean" },
+        "elapsedMinutes": {
+          "type": "number",
+          "description": "Minutes between clockAnchor and now; zero when there is no anchor.",
+          "minimum": 0
+        },
+        "windowElapsed": {
+          "type": "boolean",
+          "description": "True when clockAnchor is set and elapsedMinutes has reached terminalWindowMinutes."
+        },
+        "activeClaimProvided": {
+          "type": "boolean",
+          "description": "True only when both a claim id and an agent id were resolved to bind the recovery markers to the active claim."
+        },
         "state": {
           "type": "string",
+          "description": "COPILOT_UNAVAILABLE only when the recovery-cycle cap is exhausted, the terminal window has elapsed, and no current-HEAD primary-bot review exists; NOT_TERMINAL otherwise.",
           "enum": ["NOT_TERMINAL", "COPILOT_UNAVAILABLE"]
         },
-        "reason": { "type": "string", "minLength": 1 }
+        "reason": {
+          "type": "string",
+          "description": "Machine-readable reason token for the current terminal state.",
+          "minLength": 1
+        }
       }
     },
     "converged": {
-      "type": "boolean"
+      "type": "boolean",
+      "description": "True when the scope applies, the review is not pending, and both review and threads are satisfied -- the primary bot's own pass/fail signal, independent of sameHeadReroll."
     },
     "waived": {
-      "type": "boolean"
+      "type": "boolean",
+      "description": "True when applicability.status is applicable or indeterminate (never not_applicable) and at least one valid external-check waiver covers this gate; deliberately still reachable when indeterminate."
     },
     "ready": {
-      "type": "boolean"
+      "type": "boolean",
+      "description": "Overall pass gate: true when the scope does not apply, or converged is true, or the deadline has passed (or terminal is COPILOT_UNAVAILABLE) and the gate is waived."
     },
     "reasons": {
       "type": "array",
+      "description": "Human-readable strings explaining every unmet condition, accumulated in evaluation order.",
       "items": { "type": "string" }
     }
   }
