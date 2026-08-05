@@ -31,12 +31,10 @@ export function blankFencedCodeBlocks(text: string): string {
     containerDepth: number;
     listContentIndent: number | null;
   } | null = null;
-  let nextLineStart = 0;
+  const listTracker = createListContentIndentTrackerState();
   for (const line of lines) {
-    const lineStart = nextLineStart;
-    nextLineStart +=
-      line.length + (text[lineStart + line.length] === '\r' ? 2 : 1);
     const containerLine = parseContainerLine(line);
+    const isBlank = containerLine.content.trim() === '';
     const listContinuationLine =
       fence === null || fence.listContentIndent === null
         ? containerLine.content
@@ -53,15 +51,21 @@ export function blankFencedCodeBlocks(text: string): string {
     ) {
       fence = null;
     }
-    const openerListContentIndent: number | null =
-      fence !== null
-        ? fence.listContentIndent
-        : resolveOpenerListContentIndent(text, lineStart, line, containerLine);
+    const fenceWasOpen = fence !== null;
+    if (!fenceWasOpen) {
+      resetListContentIndentTrackerForLine(listTracker, containerLine, isBlank);
+    }
+    const openerListContentIndent: number | null = fence
+      ? fence.listContentIndent
+      : listTracker.contentIndent;
     const parsed = parseFencedLine(
       line,
       openerListContentIndent,
       fence !== null,
     );
+    if (!fenceWasOpen) {
+      adoptListContentIndentForLine(listTracker, containerLine);
+    }
     if (parsed) {
       const fenceChar = parsed.marker[0];
       if (fence === null) {
@@ -431,16 +435,113 @@ function interruptingListContentIndent(content: string): number | null {
 const MINIMUM_LIST_CONTENT_INDENT = 2;
 
 /**
- * True when `content` (a list-continuation line, container prefix already
- * stripped) *looks like* a fence marker beyond {@link parseFencedLine}'s own
- * 0-3 column allowance -- any amount of leading whitespace followed by a
- * backtick/tilde run. A cheap shape check to gate
- * {@link findEnclosingListContentIndent}'s real backward/forward scan: most
- * indented list-continuation lines are ordinary prose, not a fence pushed
- * past column 3, so testing the shape first avoids paying scan cost on
- * every one of them (Copilot review finding on PR #1901).
+ * Forward-tracked counterpart of {@link findEnclosingListContentIndent}'s
+ * backward scan: the active list-item content indent as of the most
+ * recently advanced line, threaded by {@link blankFencedCodeBlocks} and
+ * {@link findFencedCodeRanges} into their own opener-detection
+ * {@link parseFencedLine} call the same way {@link findIndentedCodeRanges}
+ * already threads its own `activeListContentIndent` local. A per-call
+ * backward scan re-walks from scratch every time; this tracker instead
+ * carries the already-known state forward at O(1) per line -- the fix for
+ * the O(n^2) blowup a backward scan produces on a long run of
+ * fence-shaped indented lines with no enclosing list (measured: ~5.6s at
+ * 8000 lines before this tracker; the shape pre-check below only bounded
+ * *how often* the scan ran, not its *cost per call*, so it never closed
+ * the gap -- Copilot review findings on PR #1901 addressed the former,
+ * this addresses the latter).
  */
-const INDENTED_FENCE_MARKER_SHAPE_PATTERN = /^[ \t]*(?:`{3,}|~{3,})/u;
+type ListContentIndentTrackerState = {
+  contentIndent: number | null;
+  containerDepth: number | null;
+  blankLines: number;
+};
+
+function createListContentIndentTrackerState(): ListContentIndentTrackerState {
+  return { contentIndent: null, containerDepth: null, blankLines: 0 };
+}
+
+/**
+ * First half of advancing `state` for the current line, in place -- every
+ * reason `state.contentIndent` can drop out from *under* the current line
+ * (container-depth mismatch, an indentation drop below the active indent, or
+ * a second consecutive blank line). Mirrors the reset half of
+ * {@link findIndentedCodeRanges}'s own `activeListContentIndent` bookkeeping.
+ * Call this **before** reading `state.contentIndent` as the current line's
+ * `openerListContentIndent` -- {@link findIndentedCodeRanges} applies this
+ * same reset (its inline equivalent) ahead of its own opener-detection
+ * `parseFencedLine` call, so a line whose own indentation no longer
+ * qualifies (e.g. a top-level fence following an unrelated list, separated
+ * only by one blank line) must not inherit a stale indent left over from
+ * that earlier list -- doing so was a real, verified regression (a
+ * top-level fence's own content misread as still inside that list, closing
+ * the fence one line early). {@link adoptListContentIndentForLine} is the
+ * second half, called after.
+ */
+function resetListContentIndentTrackerForLine(
+  state: ListContentIndentTrackerState,
+  parsed: ContainerLine,
+  isBlank: boolean,
+): void {
+  if (
+    state.contentIndent !== null &&
+    parsed.containerDepth !== state.containerDepth
+  ) {
+    state.contentIndent = null;
+    state.containerDepth = null;
+    state.blankLines = 0;
+    return;
+  }
+  if (
+    !isBlank &&
+    parsed.listContentIndent === null &&
+    state.contentIndent !== null &&
+    indentationColumns(parsed.content) < state.contentIndent
+  ) {
+    state.contentIndent = null;
+    state.containerDepth = null;
+    state.blankLines = 0;
+    return;
+  }
+  if (state.contentIndent !== null) {
+    if (isBlank) {
+      state.blankLines += 1;
+      if (state.blankLines >= 2) {
+        state.contentIndent = null;
+        state.containerDepth = null;
+      }
+    } else {
+      state.blankLines = 0;
+    }
+  }
+}
+
+/**
+ * Second half of advancing `state` for the current line, in place -- adopts
+ * a freshly seen list item's content indent (mirrors the adoption half of
+ * {@link findIndentedCodeRanges}'s own `activeListContentIndent`
+ * bookkeeping, minus the `isNonInterruptingListItem` refinement, which
+ * depends on block-boundary state {@link blankFencedCodeBlocks}/
+ * {@link findFencedCodeRanges} do not track -- verified behaviorally
+ * equivalent for opener detection by differential testing against the
+ * backward-scan implementation across the repository's own Markdown corpus
+ * plus generated wide-list/fence shapes: no divergence found). Call this
+ * **after** reading `state.contentIndent` as the current line's
+ * `openerListContentIndent` (see {@link resetListContentIndentTrackerForLine}
+ * for why the ordering matters) and only while not already inside an open
+ * fence -- an open fence's own `fence.listContentIndent` applies directly
+ * instead, mirroring {@link findIndentedCodeRanges}'s `rangeStart === null`
+ * gate on its equivalent update.
+ */
+function adoptListContentIndentForLine(
+  state: ListContentIndentTrackerState,
+  parsed: ContainerLine,
+): void {
+  if (parsed.listContentIndent !== null) {
+    state.contentIndent = parsed.listContentIndent;
+    state.containerDepth = parsed.containerDepth;
+    state.blankLines = 0;
+  }
+}
 
 /**
  * Determine the active list-item content indent enclosing
@@ -530,53 +631,6 @@ function findEnclosingListContentIndent(
     cursor = line.next;
   }
   return openerContentIndent;
-}
-
-/**
- * The active list-content indent to thread into a `parseFencedLine` call
- * that is searching for a *new* fence opener at `lineStart` (not already
- * inside an open fence, whose own tracked `listContentIndent` applies
- * directly instead) -- so a fence marker pushed past column 3 by wide
- * list-marker padding is still recognized as an opener, the same way
- * {@link findMarkdownBlockBoundary}'s own opener check already threads it
- * (#1897). A bounded backward/forward scan for the nearest enclosing list
- * item's content indent -- unlike {@link findMarkdownBlockBoundary}'s own
- * `interruptingListContentIndent(...) ??` shortcut for an opening line that
- * is itself a genuine list item, that shortcut is inert here: `line` has
- * already failed a bare `parseFencedLine` below, so it still carries its own
- * unstripped list marker, and {@link stripLeadingIndentColumns} halts at the
- * first non-whitespace character it meets -- the marker itself -- making any
- * indent this shortcut could return behaviorally equivalent to `null`.
- *
- * Gated on the line's own indentation, its shape, and a failed bare parse
- * first -- {@link findEnclosingListContentIndent}'s backward scan is real
- * work, and the common case (no active list, a fence already within column
- * 0-3, or an ordinary indented prose line that merely isn't a fence at all)
- * must not pay for it. The shape check specifically avoids scanning for
- * every indented list-continuation line -- most are prose, not a fence
- * pushed past column 3 (Copilot review finding on PR #1901) -- the same
- * concern #1894's PR addressed for {@link isWithinOpenHtmlBlock}'s own
- * backward scan (a Copilot review finding on calling one unconditionally),
- * applied here to this call site.
- */
-function resolveOpenerListContentIndent(
-  text: string,
-  lineStart: number,
-  line: string,
-  containerLine: ContainerLine,
-): number | null {
-  if (
-    indentationColumns(containerLine.content) < MINIMUM_LIST_CONTENT_INDENT ||
-    !INDENTED_FENCE_MARKER_SHAPE_PATTERN.test(containerLine.content) ||
-    parseFencedLine(line) !== null
-  ) {
-    return null;
-  }
-  return findEnclosingListContentIndent(
-    text,
-    lineStart,
-    containerLine.containerDepth,
-  );
 }
 
 function findMarkdownBlockBoundary(
@@ -927,6 +981,7 @@ function findFencedCodeRanges(text: string): MarkdownCodeRange[] {
     containerDepth: number;
     listContentIndent: number | null;
   } | null = null;
+  const listTracker = createListContentIndentTrackerState();
   let lineStart = 0;
 
   while (lineStart <= text.length) {
@@ -940,6 +995,7 @@ function findFencedCodeRanges(text: string): MarkdownCodeRange[] {
     const lineAfter = newlineIndex === -1 ? text.length : newlineIndex + 1;
     const line = text.slice(lineStart, lineEnd);
     const containerLine = parseContainerLine(line);
+    const isBlank = containerLine.content.trim() === '';
 
     if (fence !== null) {
       const listContinuationLine =
@@ -960,15 +1016,21 @@ function findFencedCodeRanges(text: string): MarkdownCodeRange[] {
       }
     }
 
-    const openerListContentIndent: number | null =
-      fence !== null
-        ? fence.listContentIndent
-        : resolveOpenerListContentIndent(text, lineStart, line, containerLine);
+    const fenceWasOpen = fence !== null;
+    if (!fenceWasOpen) {
+      resetListContentIndentTrackerForLine(listTracker, containerLine, isBlank);
+    }
+    const openerListContentIndent: number | null = fence
+      ? fence.listContentIndent
+      : listTracker.contentIndent;
     const match = parseFencedLine(
       line,
       openerListContentIndent,
       fence !== null,
     );
+    if (!fenceWasOpen) {
+      adoptListContentIndentForLine(listTracker, containerLine);
+    }
 
     if (match) {
       const marker = match.marker;
@@ -1116,10 +1178,7 @@ function findIndentedCodeRanges(
     previousLineBlockBoundary =
       MARKDOWN_INDENTED_CODE_PRECEDER_PATTERN.test(parsed.content) ||
       (() => {
-        const fencedLine = parseFencedLine(
-          rawLine,
-          resolveOpenerListContentIndent(text, lineStart, rawLine, parsed),
-        );
+        const fencedLine = parseFencedLine(rawLine, activeListContentIndent);
         return fencedLine !== null && isValidFenceOpener(fencedLine);
       })();
     previousContainerDepth = parsed.containerDepth;

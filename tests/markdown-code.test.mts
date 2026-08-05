@@ -427,6 +427,47 @@ test('findMarkdownCodeRanges recognizes deeply indented content right after a wi
   ]);
 });
 
+test('blankFencedCodeBlocks masks an unrelated top-level fence following a list item and one blank line (#1901 regression)', () => {
+  // A round of PR #1901 review (both Copilot and an independent critique
+  // pass) flagged the original per-call backward-scan fix
+  // (findEnclosingListContentIndent) as O(n^2) on a long run of
+  // fence-shaped indented lines with no enclosing list -- confirmed
+  // (~5.6s at 8000 lines). Replacing it with a forward-tracked
+  // listContentIndent (O(1) amortized per line, mirroring
+  // findIndentedCodeRanges's own activeListContentIndent) introduced a
+  // real regression during development: the tracker's "adopt a freshly
+  // seen list item's indent" step ran before an unrelated top-level fence
+  // (following the list by a single blank line, still within the
+  // two-consecutive-blank-line list-continuation window) had a chance to
+  // reset it, so the fence incorrectly inherited the list's stale content
+  // indent -- closing it one line early and leaving "foo" unmasked. Fixed
+  // by splitting the tracker into a reset-then-adopt pair so the reset
+  // (including the indentation-drop check) always runs before the current
+  // line reads the tracked indent, not after.
+  const body = '- [ ] tests pass\n\n```text\nfoo\n```';
+  assert.equal(blankFencedCodeBlocks(body), '- [ ] tests pass\n\n\n\n');
+});
+
+test('blankFencedCodeBlocks stays linear-time on a long run of fence-shaped indented lines with no enclosing list', () => {
+  // Regression guard for the O(n^2) backward-scan blowup above: a large N
+  // of indented, fence-shaped lines (no list anywhere) must not push
+  // runtime anywhere near quadratic. Empirically, the pre-fix backward
+  // scan took ~5.6s at N=8000; the forward tracker takes low
+  // single-digit milliseconds at N=20000. 2000ms is a wide margin over
+  // observed forward-tracker runtime (order of 10ms), while still being
+  // far below where the old quadratic scan would land at this N (tens of
+  // seconds) -- generous enough to avoid flaking on a loaded CI runner
+  // without masking a real regression back toward quadratic behavior.
+  const text = Array.from({ length: 20000 }, () => '    ```').join('\n');
+  const start = performance.now();
+  blankFencedCodeBlocks(text);
+  const elapsedMs = performance.now() - start;
+  assert.ok(
+    elapsedMs < 2000,
+    `expected roughly-linear runtime, took ${elapsedMs}ms for 20000 lines`,
+  );
+});
+
 // #1895: isWithinOpenHtmlBlock's backward scan short-circuited on the first
 // close/open signal it found, so it could not track more than one candidate
 // enclosing HTML block type at once. Restructured into a bounded backward
