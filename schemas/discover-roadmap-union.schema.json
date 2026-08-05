@@ -48,7 +48,7 @@
           },
           "roadmapMarkerId": {
             "type": "string",
-            "description": "This root's own embedded roadmap-id marker value, or empty when the root was found only by label."
+            "description": "This root's own embedded roadmap-id marker value, or empty when the root issue carries no such marker (e.g. found by label or as a configured legacy root)."
           }
         }
       }
