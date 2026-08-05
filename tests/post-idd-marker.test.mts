@@ -1350,7 +1350,18 @@ function writeHeadShaOnlyGhStub(tempRoot: string, headSha: string): void {
 const fs = require('node:fs');
 const args = process.argv.slice(2);
 const out = (s) => { fs.writeSync(1, s); process.exit(0); };
-if (args[0] === 'pr' && args[1] === 'view') out('${headSha}\\n');
+// Tightened to the exact lightweight call shape headShaFromPr() issues
+// (--json headRefOid --jq .headRefOid), not any \`gh pr view\` invocation --
+// proves the advisory --from-pr path never accidentally requests the
+// richer field set the watermark path uses (Copilot review, #1889/#1891).
+if (
+  args[0] === 'pr' &&
+  args[1] === 'view' &&
+  args.includes('headRefOid') &&
+  args.includes('.headRefOid')
+) {
+  out('${headSha}\\n');
+}
 fs.writeSync(2, 'unexpected gh invocation: ' + args.join(' '));
 process.exit(1);
 `,
@@ -1370,6 +1381,53 @@ function runFromPrCliDryRun(tempRoot: string, argv: string[]): unknown {
   );
   return JSON.parse(output);
 }
+
+test('--from-pr fails closed with a targeted error when gh pr view returns a non-SHA value', () => {
+  // Copilot review (#1889/#1891): headShaFromPr() must not just check for
+  // non-empty -- a non-SHA value (e.g. the literal text "null") should fail
+  // closed here with a specific message, not fall through to
+  // buildMarkerBody's generic "invalid advisory-wait marker payload".
+  const tempRoot = mkdtempSync(join(tmpdir(), 'idd-from-pr-bad-sha-'));
+  writeHeadShaOnlyGhStub(tempRoot, 'null');
+
+  try {
+    execFileSync(
+      process.execPath,
+      [
+        join(REPO_ROOT, 'scripts/post-idd-marker.mjs'),
+        '--type',
+        'advisory',
+        '--from-pr',
+        '1200',
+        '--owner',
+        'o',
+        '--repo',
+        'r',
+        '--agent-id',
+        'a',
+        '--timestamp',
+        TS,
+      ],
+      {
+        cwd: REPO_ROOT,
+        encoding: 'utf8',
+        env: {
+          ...process.env,
+          PATH: `${tempRoot}:${process.env.PATH ?? ''}`,
+        },
+      },
+    );
+  } catch (error) {
+    const failure = error as { status?: number; stderr?: string };
+    assert.equal(failure.status, 1);
+    assert.match(
+      failure.stderr ?? '',
+      /failed to derive head-sha from PR 1200: PR 1200 has no usable headRefOid \(expected a 40-hex-character SHA, got: null\)/,
+    );
+    return;
+  }
+  throw new Error('expected the CLI to exit non-zero');
+});
 
 test('--from-pr CLI derives only --head-sha for --type advisory (dry-run)', () => {
   const tempRoot = mkdtempSync(join(tmpdir(), 'idd-from-pr-advisory-'));

@@ -478,8 +478,16 @@ function headShaFromPr(prNumber, owner, repo) {
     '--jq',
     '.headRefOid',
   ]);
-  if (!headSha) {
-    throw new Error(`PR ${prNumber} has no usable headRefOid`);
+  // Validate the shape here (not just non-empty): a non-SHA value (e.g. the
+  // literal text "null" if `gh` ever printed that instead of a real SHA)
+  // would otherwise pass this check and only fail later inside
+  // buildMarkerBody's renderer with a generic "invalid ... marker payload"
+  // message that does not name the actual cause. Fail closed here instead
+  // with a targeted error (Copilot review, #1889/#1891).
+  if (!/^[0-9a-f]{40}$/i.test(headSha)) {
+    throw new Error(
+      `PR ${prNumber} has no usable headRefOid (expected a 40-hex-character SHA, got: ${headSha || '(empty)'})`,
+    );
   }
   return headSha;
 }
