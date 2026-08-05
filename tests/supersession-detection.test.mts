@@ -790,7 +790,7 @@ test('findTrustedSuitabilityRejection: a differently-cased outcome token is norm
   // The outcome pattern matches case-insensitively (`/i`), but a captured
   // group returns the verbatim matched text by default -- an actor
   // writing "outcome: DUPLICATE" must still surface the documented
-  // lowercase canonical token, not an uncanonicalized "DUPLICATE".
+  // lowercase canonical token, not a non-canonical "DUPLICATE".
   const result = findTrustedSuitabilityRejection(
     [
       makeRejectionComment({

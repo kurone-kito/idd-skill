@@ -366,7 +366,7 @@ export function findTrustedSuitabilityRejection(
       // Copilot review finding on PR #1890 (suppressed comment): the
       // pattern above is case-insensitive (`/i`), but a captured group
       // returns the verbatim matched text -- an actor writing e.g.
-      // "outcome: DUPLICATE" would otherwise surface an uncanonicalized
+      // "outcome: DUPLICATE" would otherwise surface a non-canonical
       // "DUPLICATE" instead of the documented lowercase token, making a
       // downstream string comparison brittle. Normalize before returning.
       outcome: outcomeMatch ? (outcomeMatch[1]?.toLowerCase() ?? null) : null,
