@@ -143,6 +143,11 @@ test('every reachable property in every published schema has a description', () 
     properties?: Record<string, SchemaPropertyNode>;
     items?: SchemaPropertyNode;
   }
+  function isSchemaObject(
+    node: SchemaPropertyNode | undefined,
+  ): node is SchemaPropertyNode {
+    return typeof node === 'object' && node !== null && !Array.isArray(node);
+  }
   function collectMissingDescriptions(
     node: SchemaPropertyNode | undefined,
     path: string,
@@ -150,16 +155,21 @@ test('every reachable property in every published schema has a description', () 
     visited: { count: number },
     requireDescription: boolean,
   ): void {
-    if (typeof node !== 'object' || node === null) return;
+    // A malformed node (non-object, null, or array) fails the description
+    // check itself rather than being silently skipped -- otherwise a
+    // broken `properties` entry could hide behind a sibling property that
+    // still counts toward the per-file visited guard.
     if (requireDescription) {
       visited.count += 1;
       if (
+        !isSchemaObject(node) ||
         typeof node.description !== 'string' ||
         node.description.trim() === ''
       ) {
         missing.push(path);
       }
     }
+    if (!isSchemaObject(node)) return;
     for (const [key, child] of Object.entries(node.properties ?? {})) {
       collectMissingDescriptions(
         child,
@@ -169,11 +179,7 @@ test('every reachable property in every published schema has a description', () 
         true,
       );
     }
-    if (
-      node.items &&
-      typeof node.items === 'object' &&
-      !Array.isArray(node.items)
-    ) {
+    if (isSchemaObject(node.items)) {
       collectMissingDescriptions(
         node.items,
         `${path}[]`,
