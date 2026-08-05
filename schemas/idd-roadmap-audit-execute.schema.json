@@ -89,7 +89,7 @@
     },
     "closed": {
       "type": "boolean",
-      "description": "Whether apply mode closed the roadmap issue."
+      "description": "Whether the roadmap is closed or known complete; in an idempotent apply retry, true can reflect trusted prior completion without mutation by this invocation."
     },
     "claimReleased": {
       "type": "boolean",
