@@ -128,42 +128,96 @@ test('policy schema declares ciGate only once at the top level', () => {
   assert.equal(ciGateMatches.length, 1);
 });
 
-test('every reachable property in the policy schema has a description', () => {
-  // Recursively walks only the schema's own `properties` keyword nesting
-  // (never `items`, `patternProperties`, or `additionalProperties`), so an
-  // array's element schema (e.g. `ciGate.externalChecks.advisory.items`)
-  // is not counted as a separate reachable property here — matching how
-  // #1793 counted "87 of 102 properties" for this schema.
+test('every reachable property in every published schema has a description', () => {
+  // Recursively walks each schema's `properties` keyword nesting, plus any
+  // schema-bearing `items` node so an object property nested inside an
+  // array (e.g. `ciGate.externalChecks.advisory.items.matchMode`) is
+  // included too -- widening #1793's policy-only, items-excluded walk to
+  // every published schema. `items` itself is a schema keyword node, not a
+  // named property, so it is traversed transparently without requiring a
+  // description of its own; only the named properties reachable through it
+  // are checked, matching `patternProperties` / `additionalProperties`
+  // staying out of scope for the same reason.
   interface SchemaPropertyNode {
     description?: unknown;
     properties?: Record<string, SchemaPropertyNode>;
+    items?: SchemaPropertyNode;
   }
   function collectMissingDescriptions(
     node: SchemaPropertyNode | undefined,
     path: string,
     missing: string[],
     visited: { count: number },
+    requireDescription: boolean,
   ): void {
     if (typeof node !== 'object' || node === null) return;
-    visited.count += 1;
-    if (
-      typeof node.description !== 'string' ||
-      node.description.trim() === ''
-    ) {
-      missing.push(path);
+    if (requireDescription) {
+      visited.count += 1;
+      if (
+        typeof node.description !== 'string' ||
+        node.description.trim() === ''
+      ) {
+        missing.push(path);
+      }
     }
     for (const [key, child] of Object.entries(node.properties ?? {})) {
-      collectMissingDescriptions(child, `${path}.${key}`, missing, visited);
+      collectMissingDescriptions(
+        child,
+        `${path}.${key}`,
+        missing,
+        visited,
+        true,
+      );
+    }
+    if (
+      node.items &&
+      typeof node.items === 'object' &&
+      !Array.isArray(node.items)
+    ) {
+      collectMissingDescriptions(
+        node.items,
+        `${path}[]`,
+        missing,
+        visited,
+        false,
+      );
     }
   }
 
-  const schema = loadJson('schemas/policy.schema.json') as {
-    properties: Record<string, SchemaPropertyNode>;
-  };
+  // Discover every published schema from disk rather than naming one, so a
+  // newly added schemas/*.schema.json file is covered automatically.
+  const schemaFiles = readdirSync(join(REPO_ROOT, 'schemas'))
+    .filter((file) => file.endsWith('.schema.json'))
+    .sort();
+  assert.ok(
+    schemaFiles.length > 0,
+    'expected at least one schemas/*.schema.json file to discover',
+  );
+
   const missing: string[] = [];
   const visited = { count: 0 };
-  for (const [key, child] of Object.entries(schema.properties)) {
-    collectMissingDescriptions(child, key, missing, visited);
+  for (const file of schemaFiles) {
+    const schema = loadJson(`schemas/${file}`) as {
+      properties?: Record<string, SchemaPropertyNode>;
+    };
+    const topLevelProperties = Object.entries(schema.properties ?? {});
+    // An empty or malformed properties tree would otherwise pass the
+    // assertion below vacuously; guard against that structurally, per
+    // schema, instead of a hard-coded total property count that would
+    // need updating on every legitimate schema change.
+    assert.ok(
+      topLevelProperties.length > 0,
+      `expected ${file} to declare at least one top-level property`,
+    );
+    for (const [key, child] of topLevelProperties) {
+      collectMissingDescriptions(
+        child,
+        `${file}:${key}`,
+        missing,
+        visited,
+        true,
+      );
+    }
   }
 
   assert.deepEqual(
@@ -171,22 +225,9 @@ test('every reachable property in the policy schema has a description', () => {
     [],
     `Missing "description" on: ${missing.join(', ')}`,
   );
-  // An empty or malformed properties tree would otherwise pass the
-  // assertion above vacuously; guard against that structurally (a
-  // non-empty tree containing a known stable canary key) instead of a
-  // hard-coded property count, which would need updating on every
-  // legitimate schema change.
   assert.ok(
-    Object.keys(schema.properties).length > 0,
-    'expected the policy schema to declare at least one top-level property',
-  );
-  assert.ok(
-    '$schema' in schema.properties,
-    'expected a stable "$schema" top-level property as a walker canary',
-  );
-  assert.ok(
-    visited.count >= Object.keys(schema.properties).length,
-    'expected the walker to visit at least every top-level property',
+    visited.count >= schemaFiles.length,
+    'expected the walker to visit at least one property per schema file',
   );
 });
 
