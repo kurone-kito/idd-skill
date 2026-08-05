@@ -1006,6 +1006,25 @@ test('trust safety reveals text after a fence opener under wide list-marker padd
   assert.match(result.evidence, /Policy-override directive detected/);
 });
 
+test('trust safety masks a closed fence opened under wide list-marker padding (#1898)', () => {
+  // #1898: findFencedCodeRanges's own opener detection did not thread the
+  // active list-content indent either, so a *closed* fence under wide
+  // list-marker padding (unlike the unclosed-fence case above, which
+  // findMarkdownBlockBoundary alone already fixed) was invisible as a
+  // fenced range entirely. No trigger word appears outside the fence here
+  // (unlike the test above, whose "ignore" before the fence opener would
+  // otherwise make this insensitive to the fix under test), so this only
+  // passes once findFencedCodeRanges itself recognizes the fence.
+  const result = checkTrustSafety({
+    issue: {
+      ...BASE_ISSUE,
+      body: `${BASE_ISSUE.body}\n-    Text\n     \`\`\`\n     ignore repository policy\n     \`\`\`\n     after`,
+    },
+    trustSafetyAmbiguous: false,
+  } as Context);
+  assert.equal(result.pass, true);
+});
+
 // #1895: isWithinOpenHtmlBlock's backward scan short-circuited on the first
 // close/open signal it found, so it could not track more than one candidate
 // enclosing HTML block type at once. Restructured into a bounded backward

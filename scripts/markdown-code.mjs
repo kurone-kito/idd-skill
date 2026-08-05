@@ -25,8 +25,10 @@ export function blankFencedCodeBlocks(text) {
   const lines = text.split(/\r?\n/);
   const out = [];
   let fence = null;
+  const listTracker = createListContentIndentTrackerState();
   for (const line of lines) {
     const containerLine = parseContainerLine(line);
+    const isBlank = containerLine.content.trim() === '';
     const listContinuationLine =
       fence === null || fence.listContentIndent === null
         ? containerLine.content
@@ -43,11 +45,21 @@ export function blankFencedCodeBlocks(text) {
     ) {
       fence = null;
     }
+    const fenceWasOpen = fence !== null;
+    if (!fenceWasOpen) {
+      resetListContentIndentTrackerForLine(listTracker, containerLine, isBlank);
+    }
+    const openerListContentIndent = fence
+      ? fence.listContentIndent
+      : listTracker.contentIndent;
     const parsed = parseFencedLine(
       line,
-      fence?.listContentIndent ?? null,
+      openerListContentIndent,
       fence !== null,
     );
+    if (!fenceWasOpen) {
+      adoptListContentIndentForLine(listTracker, containerLine);
+    }
     if (parsed) {
       const fenceChar = parsed.marker[0];
       if (fence === null) {
@@ -59,7 +71,8 @@ export function blankFencedCodeBlocks(text) {
             char: fenceChar,
             length: parsed.marker.length,
             containerDepth: parsed.containerDepth,
-            listContentIndent: parsed.listContentIndent,
+            listContentIndent:
+              openerListContentIndent ?? parsed.listContentIndent,
           };
           out.push('');
           continue;
@@ -415,6 +428,97 @@ function interruptingListContentIndent(content) {
  * marker, e.g. `10. `, only requires more) -- see {@link parseListItemContainer}.
  */
 const MINIMUM_LIST_CONTENT_INDENT = 2;
+function createListContentIndentTrackerState() {
+  return { contentIndent: null, containerDepth: null, blankLines: 0 };
+}
+/**
+ * First half of advancing `state` for the current line, in place -- every
+ * reason `state.contentIndent` can drop out from *under* the current line
+ * (container-depth mismatch, an indentation drop below the active indent, or
+ * a second consecutive blank line). Mirrors the reset half of
+ * {@link findIndentedCodeRanges}'s own `activeListContentIndent` bookkeeping.
+ * Call this **before** reading `state.contentIndent` as the current line's
+ * `openerListContentIndent` -- {@link findIndentedCodeRanges} applies this
+ * same reset (its inline equivalent) ahead of its own opener-detection
+ * `parseFencedLine` call, so a line whose own indentation no longer
+ * qualifies (e.g. a top-level fence following an unrelated list, separated
+ * only by one blank line) must not inherit a stale indent left over from
+ * that earlier list -- doing so was a real, verified regression (a
+ * top-level fence's own content misread as still inside that list, closing
+ * the fence one line early). {@link adoptListContentIndentForLine} is the
+ * second half, called after.
+ */
+function resetListContentIndentTrackerForLine(state, parsed, isBlank) {
+  if (
+    state.contentIndent !== null &&
+    parsed.containerDepth !== state.containerDepth
+  ) {
+    state.contentIndent = null;
+    state.containerDepth = null;
+    state.blankLines = 0;
+    return;
+  }
+  if (
+    !isBlank &&
+    parsed.listContentIndent === null &&
+    state.contentIndent !== null &&
+    indentationColumns(parsed.content) < state.contentIndent
+  ) {
+    state.contentIndent = null;
+    state.containerDepth = null;
+    state.blankLines = 0;
+    return;
+  }
+  if (state.contentIndent !== null) {
+    if (isBlank) {
+      state.blankLines += 1;
+      if (state.blankLines >= 2) {
+        state.contentIndent = null;
+        state.containerDepth = null;
+      }
+    } else {
+      state.blankLines = 0;
+    }
+  }
+}
+/**
+ * Second half of advancing `state` for the current line, in place -- adopts
+ * a freshly seen list item's content indent. Gated on
+ * {@link isInterruptingListMarker} via {@link interruptingListContentIndent}
+ * -- the same paragraph-interruption-blind predicate
+ * {@link findEnclosingListContentZone} (the backward scan this tracker
+ * replaces at these two call sites) applies via its own
+ * `interruptingListContentIndent` call, restoring parity with it rather than
+ * {@link findIndentedCodeRanges}'s own richer, context-sensitive
+ * `isNonInterruptingListItem` refinement (which additionally excludes an
+ * empty-content or non-`1.`-numbered marker immediately continuing a
+ * paragraph -- context {@link blankFencedCodeBlocks}/
+ * {@link findFencedCodeRanges} do not track: `previousLineBlank` /
+ * `previousLineBlockBoundary` / `previousContainerDepth`). An earlier
+ * version adopted any `parsed.listContentIndent`, unfiltered -- confirmed
+ * wrong: `2.    fenced item marker` immediately after an ordinary paragraph
+ * line (no blank line between) does not start a list per CommonMark (a
+ * non-`1.` ordered marker never interrupts a paragraph), so content after a
+ * fence-shaped line at its indent must stay masked as ordinary paragraph
+ * text, not read as list-driven fenced code -- the unfiltered version
+ * wrongly did the latter, silently hiding real content
+ * (fail-open, worse than a missed fence, which merely leaves content
+ * unmasked). Call this **after** reading `state.contentIndent` as the
+ * current line's `openerListContentIndent` (see
+ * {@link resetListContentIndentTrackerForLine} for why the ordering
+ * matters) and only while not already inside an open fence -- an open
+ * fence's own `fence.listContentIndent` applies directly instead, mirroring
+ * {@link findIndentedCodeRanges}'s `rangeStart === null` gate on its
+ * equivalent update.
+ */
+function adoptListContentIndentForLine(state, parsed) {
+  const contentIndent = interruptingListContentIndent(parsed.content);
+  if (contentIndent !== null) {
+    state.contentIndent = contentIndent;
+    state.containerDepth = parsed.containerDepth;
+    state.blankLines = 0;
+  }
+}
 /**
  * Determine the active list-item content zone enclosing `openingLineStart`,
  * if any -- the list-continuation counterpart, for
@@ -873,6 +977,7 @@ function isValidFenceOpener(fence) {
 function findFencedCodeRanges(text) {
   const ranges = [];
   let fence = null;
+  const listTracker = createListContentIndentTrackerState();
   let lineStart = 0;
   while (lineStart <= text.length) {
     const newlineIndex = text.indexOf('\n', lineStart);
@@ -885,6 +990,7 @@ function findFencedCodeRanges(text) {
     const lineAfter = newlineIndex === -1 ? text.length : newlineIndex + 1;
     const line = text.slice(lineStart, lineEnd);
     const containerLine = parseContainerLine(line);
+    const isBlank = containerLine.content.trim() === '';
     if (fence !== null) {
       const listContinuationLine =
         fence.listContentIndent === null
@@ -903,11 +1009,21 @@ function findFencedCodeRanges(text) {
         fence = null;
       }
     }
+    const fenceWasOpen = fence !== null;
+    if (!fenceWasOpen) {
+      resetListContentIndentTrackerForLine(listTracker, containerLine, isBlank);
+    }
+    const openerListContentIndent = fence
+      ? fence.listContentIndent
+      : listTracker.contentIndent;
     const match = parseFencedLine(
       line,
-      fence?.listContentIndent ?? null,
+      openerListContentIndent,
       fence !== null,
     );
+    if (!fenceWasOpen) {
+      adoptListContentIndentForLine(listTracker, containerLine);
+    }
     if (match) {
       const marker = match.marker;
       const info = match.info;
@@ -919,7 +1035,8 @@ function findFencedCodeRanges(text) {
             length: marker.length,
             start: lineStart,
             containerDepth: match.containerDepth,
-            listContentIndent: match.listContentIndent,
+            listContentIndent:
+              openerListContentIndent ?? match.listContentIndent,
           };
         }
       } else if (
@@ -1044,7 +1161,7 @@ function findIndentedCodeRanges(text, fencedRanges) {
     previousLineBlockBoundary =
       MARKDOWN_INDENTED_CODE_PRECEDER_PATTERN.test(parsed.content) ||
       (() => {
-        const fencedLine = parseFencedLine(rawLine);
+        const fencedLine = parseFencedLine(rawLine, activeListContentIndent);
         return fencedLine !== null && isValidFenceOpener(fencedLine);
       })();
     previousContainerDepth = parsed.containerDepth;
