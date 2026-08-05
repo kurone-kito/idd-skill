@@ -257,6 +257,17 @@ function findPreviousLineStart(text: string, lineStart: number): number | null {
  * below) -- a bare, blockquote-free list item never reaches this function,
  * since `findMarkdownBlockBoundary` does not itself track list-content
  * indentation continuation (a separate, pre-existing gap, out of scope here).
+ *
+ * **Known limitation.** This scan short-circuits on the first close/open
+ * signal it finds, so it does not track more than one candidate enclosing
+ * block type at once. A line whose literal content merely *resembles* a
+ * raw-text closing tag (e.g. `</script>` appearing as plain text inside a
+ * still-open, unclosed multi-line HTML comment) is read as a genuine
+ * raw-text closer, ending the scan before it can reach the comment's real
+ * opener further back -- a bounded backward scan cannot fully disambiguate
+ * this without the kind of forward, single-pass block-state tracking the
+ * rest of this module does not otherwise need. Tracked as a follow-up
+ * rather than folded into this pass.
  */
 function isWithinOpenHtmlBlock(
   text: string,
