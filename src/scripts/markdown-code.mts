@@ -298,6 +298,16 @@ type HtmlBlockScanState =
  *    close, and a blank line encountered while `special` or `raw-text` is
  *    active never ends it (only `generic` closes on a blank line).
  *
+ * `findMarkdownBlockBoundary` now calls this scan at every container depth,
+ * guarded so it never fires when the opening line is itself a fresh
+ * list-item opener (a list marker always starts a structurally new block
+ * that cannot inherit an earlier sibling's open HTML state). Since #1896's
+ * fix, a `true` result for a non-list-opener opening line now forces the
+ * enclosing code span to never form at all (an unconditional block
+ * boundary), rather than merely gating the `isLazyListContinuation` /
+ * `isLazyQuoteContinuation` laziness exception for later lines the way it
+ * still does for a list-opener opening line.
+ *
  * **Deliberate side effect.** A stray raw-text-close-shaped line (e.g. a
  * bare `</script>`) encountered while the state is still `none` -- no raw-
  * text block open at all -- is now inert rather than ending the scan. This
@@ -543,27 +553,48 @@ function findMarkdownBlockBoundary(
       openingLineStart,
       openingContainerDepth,
     );
+  // Its backward scan only needs to run when a laziness exception could
+  // actually change the outcome below: quote laziness requires
+  // openingContainerDepth > 0, list laziness requires an active list zone
+  // (openingListContentIndent !== null) -- skip the scan entirely otherwise
+  // (Copilot review finding on #1894's PR: calling it unconditionally cost
+  // avoidable backward-scan work on every inline-code opening backtick, the
+  // common case being neither a blockquote nor an active list zone).
+  const openingIsWithinHtmlBlock =
+    (openingContainerDepth > 0 || openingListContentIndent !== null) &&
+    isWithinOpenHtmlBlock(text, openingLineStart, openingContainerDepth);
+  // #1896: a still-open raw or custom HTML block enclosing the opening line
+  // must prevent a code span from ever forming at all -- not merely gate a
+  // later line's laziness exception (below), since CommonMark never runs
+  // inline parsing inside such a block, at any container depth. Excluded
+  // when the opening line is itself a fresh list-item opener
+  // (`openingListItem !== null`): a list marker always starts a
+  // structurally new block, so it can never inherit an earlier sibling
+  // item's still-open HTML state -- isWithinOpenHtmlBlock's backward scan
+  // has no way to know that on its own (see its "Known limitation" note
+  // above), so treating its true result as unconditional here would
+  // destroy a legitimate same-line span opened by a fresh sibling list
+  // item right after an unclosed tag in the previous one.
+  if (openingListItem === null && openingIsWithinHtmlBlock) {
+    return openingLineStart;
+  }
   // #1894/#1896: openingIsParagraph now gates list-content-indent laziness
   // below too, not only isLazyQuoteContinuation (blockquote-only). CommonMark
   // laziness (omitting a container's own required indentation/markers on a
   // continuation line) only ever applies to an in-progress *paragraph*; a
   // still-open HTML block is a different block type with its own closing
-  // rule, so it must not inherit laziness -- isWithinOpenHtmlBlock is
-  // exactly the signal that tells the two apart. Its backward scan only
-  // needs to run when a laziness exception could actually change the
-  // outcome below: quote laziness requires openingContainerDepth > 0, list
-  // laziness requires an active list zone (openingListContentIndent !==
-  // null) -- skip the scan entirely otherwise (Copilot review finding on
-  // #1894's PR: calling it unconditionally cost avoidable backward-scan
-  // work on every inline-code opening backtick, the common case being
-  // neither a blockquote nor an active list zone).
+  // rule, so it must not inherit laziness -- openingIsWithinHtmlBlock is
+  // exactly the signal that tells the two apart. This is the residual case
+  // where the early return above did not fire (the opening line is itself a
+  // fresh list-item opener), so a still-open HTML block from an earlier
+  // sibling can still suppress a *later* line's laziness exception without
+  // destroying the opening line's own same-line span.
   const openingIsParagraph =
     !isMarkdownBlockStart(openingParagraphContent) &&
     !MARKDOWN_HTML_BLOCK_START_PATTERN.test(openingParagraphContent) &&
     !MARKDOWN_CUSTOM_HTML_BLOCK_START_PATTERN.test(openingParagraphContent) &&
     (openingFence === null || !isValidFenceOpener(openingFence)) &&
-    (!(openingContainerDepth > 0 || openingListContentIndent !== null) ||
-      !isWithinOpenHtmlBlock(text, openingLineStart, openingContainerDepth));
+    !openingIsWithinHtmlBlock;
   let lineStart = openingLine.next;
 
   while (lineStart < end) {
