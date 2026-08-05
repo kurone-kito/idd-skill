@@ -302,3 +302,26 @@ test('findMarkdownCodeRanges does not inherit list-content indent across an unre
     },
   ]);
 });
+
+test('findMarkdownCodeRanges keeps a de-indented list continuation masked when it is a lazy paragraph', () => {
+  const tick = String.fromCharCode(96);
+  // CommonMark laziness: a de-indented, non-blank, non-block-start line
+  // still continues an in-progress ordinary paragraph inside a list item,
+  // even without the list's own required indentation -- the list-content-
+  // indent boundary check (added for #1894) must not end the span here,
+  // unlike the #1894 reproduction, whose opening line sits inside a still-
+  // open HTML block (no laziness) rather than an ordinary paragraph.
+  const body = `- Example ${tick}code\ncontinues\npolicy text${tick}`;
+  assert.deepEqual(findMarkdownCodeRanges(body), [
+    { start: body.indexOf(tick), end: body.lastIndexOf(tick) + 1 },
+  ]);
+});
+
+test('findMarkdownCodeRanges still ends lazy list continuation at a genuine block start', () => {
+  const tick = String.fromCharCode(96);
+  // Laziness never overrides an actual new block: a heading on the
+  // de-indented line still ends the span, the same way it already does for
+  // blockquote laziness (isLazyQuoteContinuation).
+  const body = `- Example ${tick}ignore\n## heading\nrepository policy${tick}`;
+  assert.deepEqual(findMarkdownCodeRanges(body), []);
+});

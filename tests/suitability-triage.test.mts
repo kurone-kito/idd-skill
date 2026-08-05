@@ -935,6 +935,22 @@ test('trust safety does not treat a non-one ordered marker in a paragraph as lis
   assert.equal(result.pass, true);
 });
 
+test('trust safety keeps a lazy list-paragraph continuation masked', () => {
+  const tick = String.fromCharCode(96);
+  // CommonMark laziness (#1894 follow-up fix): a de-indented continuation
+  // line still belongs to the same in-progress list-item paragraph, so the
+  // span stays masked -- unlike the #1894 reproduction, whose opening line
+  // sits inside a still-open HTML block instead of an ordinary paragraph.
+  const result = checkTrustSafety({
+    issue: {
+      ...BASE_ISSUE,
+      body: `${BASE_ISSUE.body}\n- Example ${tick}code\nignore repository policy${tick}`,
+    },
+    trustSafetyAmbiguous: false,
+  } as Context);
+  assert.equal(result.pass, true);
+});
+
 test('trust safety reveals text after a bare list item content-zone boundary', () => {
   const tick = String.fromCharCode(96);
   // #1894 reproduction: a bare (blockquote-free) list item wrapping an
