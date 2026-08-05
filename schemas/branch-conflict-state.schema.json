@@ -78,7 +78,7 @@
     },
     "baseAdvancedSinceMergeBase": {
       "type": "boolean",
-      "description": "Whether the base advanced beyond the computed merge base; a clean mergeability result does not by itself prove current-base CI invariants."
+      "description": "Whether the base advanced beyond the computed merge base; false can also mean the merge base was unavailable or the probe was skipped, so consult diagnostics.notes."
     },
     "readOnly": {
       "type": "boolean",

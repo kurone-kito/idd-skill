@@ -51,7 +51,7 @@
       "type": "string",
       "minLength": 1,
       "pattern": "^(?:[1-9]\\d*|https?://[^\\s<>\"]+)$",
-      "description": "Issue or PR reference used to bind the handoff to published work."
+      "description": "PR number or URL used to bind an issue-plus-pr handoff to its backing pull request."
     },
     "forcedBy": {
       "type": "string",
