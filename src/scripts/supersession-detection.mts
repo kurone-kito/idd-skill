@@ -236,6 +236,140 @@ export function prReferencesIssue(
   return pattern.test(title) || pattern.test(body);
 }
 
+/** Literal prefix a trusted-actor "A4.5 suitability gate rejection" comment
+ * must start with (after trimming leading whitespace) to be recognized as
+ * an authoritative prior verdict by {@link findTrustedSuitabilityRejection}
+ * (#1887). Exported so `suitability-triage.mts` and its tests reference the
+ * exact same literal the A4.5 posting convention itself uses
+ * (`idd-suitability.instructions.md`'s Mutation Policy section) instead of
+ * risking two copies drifting apart. */
+export const SUITABILITY_REJECTION_PREFIX = 'A4.5 suitability gate rejection';
+
+// Not anchored to line start/end: real rejection comments interleave the
+// `outcome: <token>` declaration with trailing prose on the same line (e.g.
+// "outcome: duplicate (mechanical, narrow false positive -- see above)"),
+// so a `^...$` anchor would silently miss it. The trailing `\b` still
+// prevents a longer word sharing the same prefix (e.g. "duplicated") from
+// matching. Restricted to the six canonical A4.5 outcome values
+// (`idd-suitability.instructions.md`'s Failure Outcomes table) so this
+// never invents a token the protocol doesn't recognize.
+const SUITABILITY_REJECTION_OUTCOME_PATTERN =
+  /outcome:\s*(unclear|needs-decision|blocked-by-human|duplicate|out-of-scope|invalid)\b/i;
+const SUITABILITY_REJECTION_CHECK_PATTERN = /Check\s+\d+\s*\([^)]+\)/i;
+
+/**
+ * One GitHub REST issue-comment entry, as consumed by
+ * {@link findTrustedSuitabilityRejection}. Loosely typed (every field
+ * `unknown`-safe) to match `gh api .../issues/<n>/comments`'s real payload
+ * shape without committing to its full schema -- mirrors
+ * `resume-claim-routing.mts`'s own `IssueCommentPayload`.
+ */
+export interface SuitabilityRejectionComment {
+  body?: unknown;
+  created_at?: unknown;
+  user?: { login?: unknown } | null;
+  html_url?: unknown;
+}
+
+/**
+ * An existing, trusted `A4.5 suitability gate rejection` comment already on
+ * record for an issue (#1887): the prior verdict a `suitability-triage.mjs`
+ * caller should see alongside its own freshly re-derived seven-check
+ * result, instead of never noticing it happened.
+ */
+export interface SuitabilityRejectionRecord {
+  /** Comment author login, lowercased. */
+  author: string;
+  /** Comment's GitHub `created_at` timestamp, verbatim. */
+  createdAt: string;
+  /** Comment permalink (`html_url`), when available. */
+  url: string;
+  /** Best-effort outcome token parsed from an `outcome: <token>`
+   * occurrence; `null` when the comment does not declare one in that
+   * recognized form. */
+  outcome: string | null;
+  /** Best-effort `Check N (<Name>)` excerpt parsed from the comment body's
+   * own headline convention; `null` when absent. */
+  check: string | null;
+}
+
+/**
+ * Scan `comments` for the most recent trusted-actor `A4.5 suitability gate
+ * rejection` comment (#1887): the acceptance-criteria-required detect-only
+ * evidence that a prior trusted run already recorded a specific outcome for
+ * this exact issue. A comment only qualifies when BOTH hold: its body,
+ * after trimming leading whitespace, starts with the literal
+ * {@link SUITABILITY_REJECTION_PREFIX} (the same "literal first bytes, not
+ * merely quoted or embedded mid-prose" anti-spoofing boundary
+ * `idd-claim.instructions.md` already applies to claim markers -- an
+ * untrusted actor pasting the phrase mid-sentence never qualifies either
+ * way, but this keeps the boundary consistent with the rest of the
+ * protocol); AND its author (case-insensitively) is one of
+ * `trustedMarkerLogins`. `trustedMarkerLogins` is expected pre-normalized
+ * (lowercased) by the caller via `resolveTrustedMarkerActors` in
+ * `protocol-helpers.mts` -- this function still lowercases defensively but
+ * does not import that module itself, keeping this file's own
+ * dependency-light, I/O-free kernel contract intact for a future
+ * non-suitability-triage consumer.
+ *
+ * Returns `null` -- never a synthesized verdict -- when no trusted match
+ * exists, whether because there is no such comment at all or because every
+ * rejection-shaped comment found was posted by an untrusted actor: both
+ * degrade to "nothing on record" the same way, matching this issue's
+ * fail-safe contract (an untrusted rejection-shaped comment is never
+ * treated as authoritative).
+ */
+export function findTrustedSuitabilityRejection(
+  comments: SuitabilityRejectionComment[] | null | undefined,
+  trustedMarkerLogins: string[] | null | undefined,
+): SuitabilityRejectionRecord | null {
+  const trusted = new Set(
+    (trustedMarkerLogins ?? [])
+      .map((login) =>
+        String(login ?? '')
+          .trim()
+          .toLowerCase(),
+      )
+      .filter(Boolean),
+  );
+  if (trusted.size === 0 || !Array.isArray(comments)) {
+    return null;
+  }
+
+  let latest: SuitabilityRejectionRecord | null = null;
+  let latestTimestamp = Number.NEGATIVE_INFINITY;
+  for (const raw of comments) {
+    const comment = (raw ?? {}) as SuitabilityRejectionComment;
+    const body = typeof comment.body === 'string' ? comment.body : '';
+    if (!body.trimStart().startsWith(SUITABILITY_REJECTION_PREFIX)) {
+      continue;
+    }
+    const author = String(comment.user?.login ?? '')
+      .trim()
+      .toLowerCase();
+    if (!author || !trusted.has(author)) {
+      continue;
+    }
+    const createdAt =
+      typeof comment.created_at === 'string' ? comment.created_at : '';
+    const timestamp = Date.parse(createdAt);
+    if (!Number.isFinite(timestamp) || timestamp <= latestTimestamp) {
+      continue;
+    }
+    latestTimestamp = timestamp;
+    const outcomeMatch = SUITABILITY_REJECTION_OUTCOME_PATTERN.exec(body);
+    const checkMatch = SUITABILITY_REJECTION_CHECK_PATTERN.exec(body);
+    latest = {
+      author,
+      createdAt,
+      url: typeof comment.html_url === 'string' ? comment.html_url : '',
+      outcome: outcomeMatch ? (outcomeMatch[1] ?? null) : null,
+      check: checkMatch ? checkMatch[0] : null,
+    };
+  }
+  return latest;
+}
+
 /**
  * High-confidence Check 4 tier (#1484): evaluate the mechanical B2.0-style
  * signals -- a merged closing-PR reference on the candidate issue itself, or

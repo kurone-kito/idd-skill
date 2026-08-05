@@ -7,8 +7,11 @@ import {
   buildPrDetailArgs,
   evaluateHighConfidenceDuplicate,
   findCandidateFileOverlap,
+  findTrustedSuitabilityRejection,
   prReferencesIssue,
   resolveCandidateFileSet,
+  SUITABILITY_REJECTION_PREFIX,
+  type SuitabilityRejectionComment,
 } from '../src/scripts/supersession-detection.mts';
 
 // --- #1499: relocated from tests/suitability-triage.test.mts ---------------
@@ -633,4 +636,185 @@ test('buildPrDetailArgs requests title, body, and closingIssuesReferences on the
   assert.equal(fields.includes('title'), true);
   assert.equal(fields.includes('body'), true);
   assert.equal(fields.includes('closingIssuesReferences'), true);
+});
+
+// --- #1887: findTrustedSuitabilityRejection ---------------------------------
+// suitability-triage.mjs and its Check 4 helper never read the target
+// issue's own comment thread, so a fresh run cannot tell "never triaged"
+// apart from "already triaged and rejected by a trusted actor". These tests
+// cover the three acceptance-criteria scenarios directly against the pure
+// scanner (no `gh` stubbing needed, mirroring evaluateHighConfidenceDuplicate
+// above): a trusted prior rejection is detected and surfaced; the same
+// rejection-shaped comment from an untrusted actor is ignored; no matching
+// comment returns null (the never-triaged case).
+
+function makeRejectionComment(
+  overrides: Partial<SuitabilityRejectionComment> = {},
+): SuitabilityRejectionComment {
+  return {
+    body: `${SUITABILITY_REJECTION_PREFIX} — Check 7 (Verifiability): reason.\n\noutcome: needs-decision`,
+    created_at: '2026-08-05T03:55:11Z',
+    user: { login: 'kurone-kito' },
+    html_url:
+      'https://github.com/kurone-kito/idd-skill/issues/1878#issuecomment-1',
+    ...overrides,
+  };
+}
+
+test('findTrustedSuitabilityRejection: SUITABILITY_REJECTION_PREFIX matches the A4.5 posting convention literal', () => {
+  assert.equal(SUITABILITY_REJECTION_PREFIX, 'A4.5 suitability gate rejection');
+});
+
+test('findTrustedSuitabilityRejection: a trusted-actor rejection is detected and surfaced', () => {
+  const result = findTrustedSuitabilityRejection(
+    [makeRejectionComment()],
+    ['kurone-kito'],
+  );
+  assert.notEqual(result, null);
+  assert.equal(result?.author, 'kurone-kito');
+  assert.equal(result?.createdAt, '2026-08-05T03:55:11Z');
+  assert.equal(
+    result?.url,
+    'https://github.com/kurone-kito/idd-skill/issues/1878#issuecomment-1',
+  );
+  assert.equal(result?.outcome, 'needs-decision');
+  assert.equal(result?.check, 'Check 7 (Verifiability)');
+});
+
+test('findTrustedSuitabilityRejection: the same rejection-shaped comment from an untrusted actor is not surfaced', () => {
+  const result = findTrustedSuitabilityRejection(
+    [makeRejectionComment({ user: { login: 'random-untrusted-user' } })],
+    ['kurone-kito'],
+  );
+  assert.equal(result, null);
+});
+
+test('findTrustedSuitabilityRejection: no matching comment returns null (never-triaged case)', () => {
+  const result = findTrustedSuitabilityRejection(
+    [
+      {
+        body: 'Just an ordinary comment, unrelated to A4.5.',
+        created_at: '2026-08-05T03:55:11Z',
+        user: { login: 'kurone-kito' },
+        html_url: 'https://example.com/1',
+      },
+    ],
+    ['kurone-kito'],
+  );
+  assert.equal(result, null);
+});
+
+test('findTrustedSuitabilityRejection: an empty comment list returns null', () => {
+  assert.equal(findTrustedSuitabilityRejection([], ['kurone-kito']), null);
+});
+
+test('findTrustedSuitabilityRejection: a mid-prose mention (not the literal first bytes) is never treated as live', () => {
+  // Mirrors the claim-marker anti-spoofing boundary in
+  // idd-claim.instructions.md: a marker merely quoted or embedded mid-prose
+  // is never treated as live.
+  const result = findTrustedSuitabilityRejection(
+    [
+      makeRejectionComment({
+        body: `Earlier discussion referenced an "${SUITABILITY_REJECTION_PREFIX}" pattern without actually posting one.`,
+      }),
+    ],
+    ['kurone-kito'],
+  );
+  assert.equal(result, null);
+});
+
+test('findTrustedSuitabilityRejection: leading whitespace before the literal prefix still matches', () => {
+  const result = findTrustedSuitabilityRejection(
+    [
+      makeRejectionComment({
+        body: `  \n${SUITABILITY_REJECTION_PREFIX} — Check 1 (Repository Fit): reason.`,
+      }),
+    ],
+    ['kurone-kito'],
+  );
+  assert.notEqual(result, null);
+});
+
+test('findTrustedSuitabilityRejection: among several trusted rejections, the most recent one wins', () => {
+  const older = makeRejectionComment({
+    created_at: '2026-08-04T22:45:02Z',
+    body: `${SUITABILITY_REJECTION_PREFIX} — high-confidence file overlap with merged PR #1864 prevents an implementation claim.`,
+  });
+  const newer = makeRejectionComment({
+    created_at: '2026-08-05T06:28:40Z',
+    body: `${SUITABILITY_REJECTION_PREFIX} — Check 4 (Duplicate or Superseded Work), high-confidence tier.\n\noutcome: duplicate (mechanical, narrow false positive — see above)`,
+  });
+  // Order in the input array intentionally does not match chronological
+  // order, to prove the function compares timestamps rather than trusting
+  // array order.
+  const result = findTrustedSuitabilityRejection(
+    [newer, older],
+    ['kurone-kito'],
+  );
+  assert.equal(result?.createdAt, '2026-08-05T06:28:40Z');
+  // Regression guard: a real #1862 comment ends "outcome: duplicate
+  // (mechanical, narrow false positive — see above)" -- trailing prose
+  // after the canonical token on the same line. A `^...$`-anchored regex
+  // would silently miss this; the token must still parse to "duplicate".
+  assert.equal(result?.outcome, 'duplicate');
+  assert.equal(result?.check, 'Check 4 (Duplicate or Superseded Work)');
+});
+
+test('findTrustedSuitabilityRejection: a trusted rejection with no outcome/check line still surfaces author/createdAt/url', () => {
+  // Mirrors a real #1862 comment that predates the "outcome:" convention
+  // entirely -- must degrade to null fields, not throw or drop the record.
+  const result = findTrustedSuitabilityRejection(
+    [
+      makeRejectionComment({
+        body: `${SUITABILITY_REJECTION_PREFIX} — high-confidence file overlap with merged PR #1864 prevents an implementation claim.`,
+      }),
+    ],
+    ['kurone-kito'],
+  );
+  assert.notEqual(result, null);
+  assert.equal(result?.author, 'kurone-kito');
+  assert.equal(result?.outcome, null);
+  assert.equal(result?.check, null);
+});
+
+test('findTrustedSuitabilityRejection: author comparison is case-insensitive', () => {
+  const result = findTrustedSuitabilityRejection(
+    [makeRejectionComment({ user: { login: 'Kurone-Kito' } })],
+    ['kurone-kito'],
+  );
+  assert.notEqual(result, null);
+  assert.equal(result?.author, 'kurone-kito');
+});
+
+test('findTrustedSuitabilityRejection: an empty trusted-actor list never surfaces a match, even an exact one', () => {
+  const result = findTrustedSuitabilityRejection([makeRejectionComment()], []);
+  assert.equal(result, null);
+});
+
+test('findTrustedSuitabilityRejection: malformed (non-array) comments input degrades to null rather than throwing', () => {
+  const result = findTrustedSuitabilityRejection(
+    'not-an-array' as unknown as SuitabilityRejectionComment[],
+    ['kurone-kito'],
+  );
+  assert.equal(result, null);
+});
+
+test('findTrustedSuitabilityRejection: a malformed individual comment entry is skipped, not thrown', () => {
+  const result = findTrustedSuitabilityRejection(
+    [null as unknown as SuitabilityRejectionComment, makeRejectionComment()],
+    ['kurone-kito'],
+  );
+  assert.notEqual(result, null);
+  assert.equal(result?.author, 'kurone-kito');
+});
+
+test('findTrustedSuitabilityRejection: an unparseable created_at is skipped rather than winning the "most recent" comparison', () => {
+  const result = findTrustedSuitabilityRejection(
+    [
+      makeRejectionComment({ created_at: 'not-a-date' }),
+      makeRejectionComment({ created_at: '2026-08-05T03:55:11Z' }),
+    ],
+    ['kurone-kito'],
+  );
+  assert.equal(result?.createdAt, '2026-08-05T03:55:11Z');
 });

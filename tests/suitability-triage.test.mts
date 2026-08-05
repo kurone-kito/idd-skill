@@ -1781,6 +1781,67 @@ test('runCli: shouldCollectEvidence is derived from repository_fit, coherence, a
   );
 });
 
+// --- #1887: existingRejection wiring ----------------------------------------
+// runCli itself isn't unit-tested for the same reason as the pins above
+// (real gh I/O); findTrustedSuitabilityRejection is proven correct in
+// isolation in tests/supersession-detection.test.mts. The remaining risk is
+// the wiring: that the call actually happens unconditionally (not nested
+// inside the shouldCollectEvidence gate, which exists only to skip Check 4's
+// own network-cost evidence -- a prior trusted rejection must still surface
+// even when Checks 1-3 would already fail fresh, per #1878), that a fetch
+// failure degrades gracefully instead of crashing the whole evaluation, and
+// that the output only adds the field when non-null.
+
+test('runCli: fetches issue comments and calls findTrustedSuitabilityRejection unconditionally, not gated behind shouldCollectEvidence (#1887)', () => {
+  const source = readFileSync(
+    new URL('../src/scripts/suitability-triage.mts', import.meta.url),
+    'utf8',
+  );
+  const shouldCollectIndex = source.indexOf('const shouldCollectEvidence =');
+  const existingRejectionCallIndex = source.indexOf(
+    'findTrustedSuitabilityRejection(',
+  );
+  assert.notEqual(existingRejectionCallIndex, -1);
+  assert.notEqual(shouldCollectIndex, -1);
+  // The existingRejection call site must appear BEFORE shouldCollectEvidence
+  // is even computed, proving it cannot be nested inside that gate's `if`
+  // block further down.
+  assert.equal(existingRejectionCallIndex < shouldCollectIndex, true);
+});
+
+test('runCli: the issue-comments fetch for existingRejection is wrapped in try/catch (degrade, not crash)', () => {
+  const source = readFileSync(
+    new URL('../src/scripts/suitability-triage.mts', import.meta.url),
+    'utf8',
+  );
+  assert.match(
+    source,
+    /try \{\s*\n\s*const issueComments = fetchIssueComments\([\s\S]*?\} catch \(error\) \{\s*\n\s*existingRejectionCollectionWarnings\.push\(/,
+  );
+});
+
+test('runCli: existingRejection is spread into output only when non-null (no regression for the never-triaged case)', () => {
+  const source = readFileSync(
+    new URL('../src/scripts/suitability-triage.mts', import.meta.url),
+    'utf8',
+  );
+  assert.match(
+    source,
+    /\.\.\.\(existingRejection \? \{ existingRejection \} : \{\}\)/,
+  );
+});
+
+test('fetchIssueComments argv requests the issue comments endpoint with pagination', () => {
+  const source = readFileSync(
+    new URL('../src/scripts/suitability-triage.mts', import.meta.url),
+    'utf8',
+  );
+  assert.match(
+    source,
+    /`repos\/\$\{repoRef\}\/issues\/\$\{issueNumber\}\/comments\?per_page=\$\{pageSize\}&page=\$\{page\}`/,
+  );
+});
+
 // C1 self-review finding (#1815): the structural pins above prove
 // `shouldCollectEvidence` is wired to these three checks, but not that the
 // minimal `preEvidenceContext` runCli builds (issue + repository only,
