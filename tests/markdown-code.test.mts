@@ -511,3 +511,23 @@ test('findMarkdownCodeRanges never forms a span on a marker-shaped line still wi
     assert.deepEqual(findMarkdownCodeRanges(body), [], opener);
   }
 });
+
+test('findMarkdownCodeRanges still forms a span on a later unrelated sibling item continuation line', () => {
+  const tick = String.fromCharCode(96);
+  // Copilot review finding (suppressed comment) on this PR: unlike the
+  // previous test's genuinely-nested case, this continuation line belongs
+  // to a fresh, unrelated SECOND sibling item -- isWithinOpenHtmlBlock's
+  // backward scan has no concept of a list-item boundary on its own (it
+  // only stops at a container-depth change), so, unbounded, it would
+  // wrongly reach past "- Second item" into the first item's still-open
+  // tag and block a span that has nothing to do with it. The scan must be
+  // bounded at the nearest enclosing list zone's own opener line.
+  for (const opener of ['<div>', '<script>']) {
+    const body = `- ${opener}\n  content\n- Second item\n  continues here ${tick}code${tick} span`;
+    assert.deepEqual(
+      findMarkdownCodeRanges(body),
+      [{ start: body.indexOf(tick), end: body.lastIndexOf(tick) + 1 }],
+      opener,
+    );
+  }
+});
