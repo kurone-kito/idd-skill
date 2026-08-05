@@ -250,7 +250,9 @@ function findPreviousLineStart(text: string, lineStart: number): number | null {
  * at once" is structural, not merely an accident of check ordering.
  *
  * - `raw-text`: an open `<script>`/`<pre>`/`<style>`/`<textarea>` element;
- *   closes only on a line containing its matching end tag.
+ *   closes on a line containing any of the four raw-text closing tags, not
+ *   only the one that was actually opened (a known, pre-existing gap
+ *   unrelated to this type's own tracking; see #1900).
  * - `special`: an open comment/processing-instruction/declaration/CDATA
  *   block; closes only when `closeToken` (that form's own token -- `-->`,
  *   `?>`, `]]>`, or `>`) appears on a later line, same-line or not.
