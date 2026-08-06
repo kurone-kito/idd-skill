@@ -267,7 +267,7 @@ require explicit operator confirmation:
     `.claude/skills/`, or `.opencode/skills/`)
 11. helper runtime profile (`instructions-only` by default, or an
     evidence-based helper profile recommendation that still requires
-    explicit operator confirmation`)
+    explicit operator confirmation)
 12. IDD label names (`labels.roadmapLabelName`,
     `labels.blockedByHumanLabelName`, and
     `labels.needsDecisionLabelName` — distributed defaults `roadmap`,
@@ -280,6 +280,12 @@ require explicit operator confirmation:
     restrict which labels it may apply. See
     [IDD label names](docs/onboarding/policy-decisions.md#idd-label-names)
     for the field evidence and the guard recipe.
+13. up-to-date-head ruleset check
+    (`required_status_checks.strict_required_status_checks_policy`,
+    recommended disabled — enabling it can force a `main`-sync merge on
+    every merely-`BEHIND` PR and multiplies advisory-review rounds
+    without review value; a before/after sample measured the sync-merge
+    share fall from ~27% to ~3.7%, kurone-kito/idd-skill#1817)
 
 Use
 [Onboarding Reference — Policy Decisions](docs/onboarding/policy-decisions.md)
@@ -410,7 +416,8 @@ Before importing files, re-check the policy choices confirmed in Step 1B:
 merge policy, PR review profile, review-thread resolution policy,
 critique-loop profile, credential scope, claim-timing defaults, CI wait
 policy defaults, issue-author approval gate, maintainer approval actor
-policy, issue-authoring companion status, and helper runtime profile.
+policy, issue-authoring companion status, helper runtime profile, IDD
+label names, and the up-to-date-head ruleset check.
 
 Use
 [Onboarding Reference — Policy Decisions](docs/onboarding/policy-decisions.md)

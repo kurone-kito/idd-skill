@@ -317,6 +317,28 @@ wait defaults:
 Record whether the repository keeps these defaults before unattended
 workers begin running.
 
+It should also confirm whether the repository's GitHub ruleset leaves
+"Require branches to be up to date before merging"
+(`required_status_checks.strict_required_status_checks_policy`)
+disabled:
+
+- Recommended: disabled. Measured evidence shows enabling it can force
+  a `main`-sync merge on every merely-`BEHIND` PR and multiplies Copilot
+  advisory-review rounds without adding review value — a before/after
+  commit sample measured the sync-merge share fall from ~27% to ~3.7%
+  once this repository disabled it
+  ([kurone-kito/idd-skill#1817](https://github.com/kurone-kito/idd-skill/issues/1817)).
+  This benefit only holds when the automation token can read the
+  ruleset — an unreadable ruleset read still fails closed to forcing
+  the sync path regardless of the live setting.
+- Trade-off: disabling it means the final pre-merge CI run may not
+  reflect the very latest `main`, which IDD's own conflict-triggered
+  `main`-sync merge (E11) and F1/F2 freshness checks still catch when
+  it matters for correctness.
+
+Record whether the repository keeps this setting disabled before
+unattended workers begin running.
+
 ## Recording the selected policies
 
 Create a local policy section in repository documentation (for example
@@ -356,6 +378,10 @@ This repository uses the following IDD policies:
 - **running timeout**: `PT30M` / 30 min (or repository override)
 - **generation timeout**: `PT10M` / 10 min (or repository override)
 - **rerun policy**: `{rerun-once | hold}`
+
+### Up-to-Date-Head Ruleset
+
+**Policy**: `{disabled (recommended) | enabled}`
 
 ### Credential Scope
 

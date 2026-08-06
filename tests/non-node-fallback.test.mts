@@ -219,7 +219,7 @@ test('onboarding keeps claim timing and CI wait policy in the explicit confirmat
   );
   assert.match(
     onboarding,
-    /critique-loop profile, credential scope, claim-timing defaults, CI wait\s+policy defaults, issue-author approval gate, maintainer approval actor\s+policy, issue-authoring companion status, and helper runtime\s+profile\./,
+    /critique-loop profile, credential scope, claim-timing defaults, CI wait\s+policy defaults, issue-author approval gate, maintainer approval actor\s+policy, issue-authoring companion status, helper runtime profile, IDD\s+label names, and the up-to-date-head ruleset check\./,
     'ONBOARDING Step 2 re-check must stay aligned with the Step 1B confirmation list',
   );
   assert.match(
@@ -243,7 +243,7 @@ test('helper runtime guidance uses evidence-based auto-proposals without bare pa
   const onboarding = readText('idd-template/ONBOARDING.md');
   assert.match(
     normalizeWhitespace(onboarding),
-    /helper runtime profile \(`instructions-only` by default, or an evidence-based helper profile recommendation that still requires explicit operator confirmation`\)/,
+    /helper runtime profile \(`instructions-only` by default, or an evidence-based helper profile recommendation that still requires explicit operator confirmation\)/,
     'ONBOARDING Step 1B must allow evidence-based helper profile recommendations without recording them automatically',
   );
 
