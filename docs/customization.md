@@ -759,9 +759,13 @@ jobs:
     # optionally also covering issueAuthoring.authoringLabelName.
     if: |-
       contains(fromJSON('["<labeler-bot-login-1>", "<labeler-bot-login-2>"]'), github.event.sender.login) && (github.event.label.name == '<roadmap-label-name>' || github.event.label.name == '<blocked-by-human-label-name>' || github.event.label.name == '<needs-decision-label-name>')
-    # ubuntu-latest here (a portable GitHub-hosted label) rather than
-    # this source repository's own ubuntu-slim runner label -- adjust
-    # to your own fleet's standard small runner.
+    # ubuntu-latest here for maximum portability across time and
+    # adopters. ubuntu-slim -- GitHub's own leaner hosted Ubuntu image,
+    # not a runner private to this source repository -- is a valid
+    # alternative for this recipe's single `gh` CLI call. Verify this
+    # job's actual tool needs against the target image's published
+    # toolchain before switching:
+    # https://github.com/actions/runner-images
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -1572,7 +1576,15 @@ integration branch split applies:
 **Right-size the runner to the job**: lightweight automation (label
 hygiene, stale sweeps, advisory gates) on the smallest runner class,
 standard or larger runners reserved for genuinely heavyweight build or
-test jobs.
+test jobs. `ubuntu-slim` is a concrete example: GitHub's own leaner,
+lower-cost hosted Ubuntu image (see
+[`actions/runner-images`](https://github.com/actions/runner-images) for
+its published toolchain and the full catalog). Verify a job's actual
+tool needs against that catalog before switching -- a leaner image
+ships less preinstalled software than `ubuntu-latest`. Current
+per-minute rates are billed per GitHub's own
+[Actions billing usage docs](https://docs.github.com/en/billing/managing-billing-for-your-products/managing-billing-for-github-actions/about-billing-for-github-actions);
+this guide does not hard-code a price since rates change.
 
 These are repository-local optimizations; they do not change the IDD merge gate
 or the cross-agent workflow.
