@@ -267,7 +267,7 @@ require explicit operator confirmation:
     `.claude/skills/`, or `.opencode/skills/`)
 11. helper runtime profile (`instructions-only` by default, or an
     evidence-based helper profile recommendation that still requires
-    explicit operator confirmation`)
+    explicit operator confirmation)
 12. IDD label names (`labels.roadmapLabelName`,
     `labels.blockedByHumanLabelName`, and
     `labels.needsDecisionLabelName` — distributed defaults `roadmap`,
