@@ -160,6 +160,16 @@ interface ExternalCheckWaiverPlanInput {
   reason?: string;
   expiresAt?: string;
   repoOwner?: string;
+  /**
+   * #1905: render a claimless waiver -- claim-id `none` -- instead of
+   * resolving the claim-id from a linked issue's active IDD claim. Skips
+   * the linked-issue-claim requirement entirely; blocks instead when a
+   * resolvable active claim IS found, since a claimless waiver only ever
+   * satisfies `summarizeExternalCheckWaivers` on a PR with no active
+   * claim, so posting one against a claimed PR would just be rejected as
+   * `wrongClaim` at the merge gate.
+   */
+  claimless?: boolean;
 }
 
 /** Structured waiver plan report. */
@@ -219,6 +229,7 @@ interface ExternalCheckWaiverArgs {
   apply: boolean;
   yes: boolean;
   format: string;
+  claimless: boolean;
   help: boolean;
 }
 
@@ -364,11 +375,20 @@ export function planExternalCheckWaiver(
     expiresKnown && Number.isFinite(maxValidity)
       ? expiresDate.getTime() - now.getTime() <= (maxValidity ?? 0)
       : false;
+  // #1905: still resolved even under --claimless -- not to gate on it (a
+  // claimless waiver never requires a linked-issue claim), but so a
+  // resolvable active claim can be surfaced as a blocking diagnostic below:
+  // a `none`-claim-id waiver only ever satisfies
+  // `summarizeExternalCheckWaivers` on a PR with NO active claim, so
+  // rendering one against a claimed PR would just be rejected `wrongClaim`
+  // at the merge gate -- better to block it here with a clear reason than
+  // let the operator post a waiver that can never take effect.
   const linkedIssue = selectLinkedIssueCandidate(issueCandidates, {
     issueNumber: input?.issueNumber,
     expectedClaimId: input?.expectedClaimId,
     headRefName: String(pr.headRefName ?? '').trim(),
   });
+  const claimless = Boolean(input?.claimless);
 
   const blockingReasons: string[] = [];
   if (String(pr.state ?? 'OPEN').toUpperCase() !== 'OPEN') {
@@ -380,7 +400,21 @@ export function planExternalCheckWaiver(
   ) {
     blockingReasons.push('external-check waiver mode is disabled');
   }
-  if (!linkedIssue.ok) {
+  if (claimless) {
+    if (linkedIssue.ok) {
+      blockingReasons.push(
+        'PR has a resolvable active IDD claim on a linked issue; a claimless (none) waiver only applies when no claim resolves -- use --issue/--claim-id instead',
+      );
+    }
+    // The normal path's agentId comes from the resolved claim, independent
+    // of `actor`; --claimless has no claim to fall back on, so an empty
+    // actor must surface here as a blocking reason like every other invalid
+    // input in this function, rather than reaching
+    // renderExternalCheckWaiverComment's own throw-on-empty-agentId guard.
+    if (!actor) {
+      blockingReasons.push('actor is empty');
+    }
+  } else if (!linkedIssue.ok) {
     blockingReasons.push(linkedIssue.reason);
   }
   if (!requestedSelector) {
@@ -427,16 +461,31 @@ export function planExternalCheckWaiver(
     );
   }
 
+  // #1905: --claimless binds the marker to the sentinel claim-id `none` and
+  // the acting maintainer's own identity as agentId (there is no
+  // issue-claim agentId to reuse when the PR carries no active claim by
+  // design); the normal path binds to the linked issue's active claim, same
+  // as before this change.
+  const claimBinding = claimless
+    ? actor
+      ? { agentId: actor, claimId: 'none' }
+      : null
+    : linkedIssue.ok
+      ? {
+          agentId: linkedIssue.issue.activeClaim.agentId,
+          claimId: linkedIssue.issue.activeClaim.claimId,
+        }
+      : null;
   const body =
+    claimBinding &&
     requestedSelector &&
     reason &&
     expiresKnown &&
-    linkedIssue.ok &&
     String(pr.headRefOid ?? '').match(/^[0-9a-f]{40}$/i)
       ? renderExternalCheckWaiverComment({
           actor,
-          agentId: linkedIssue.issue.activeClaim.agentId,
-          claimId: linkedIssue.issue.activeClaim.claimId,
+          agentId: claimBinding.agentId,
+          claimId: claimBinding.claimId,
           headSha: String(pr.headRefOid ?? '').toLowerCase(),
           checkSelector: requestedSelector,
           reason,
@@ -570,6 +619,7 @@ export async function runExternalCheckWaiver(
         now: options.now instanceof Date ? options.now : new Date(),
       }),
       repoOwner: owner,
+      claimless: args.claimless,
     },
     { now: options.now, repoOwner: owner },
   );
@@ -1171,6 +1221,7 @@ const EXTERNAL_CHECK_WAIVER_FLAG_SPEC = {
   '--apply': { type: 'boolean', default: false },
   '--yes': { type: 'boolean', default: false },
   '--format': { type: 'string', default: 'json' },
+  '--claimless': { type: 'boolean', default: false },
   '--help': { type: 'boolean', short: 'h' },
 } as const;
 
@@ -1206,6 +1257,7 @@ export function parseArgs(argv: string[]): ExternalCheckWaiverArgs {
     apply: values.apply as boolean,
     yes: values.yes as boolean,
     format,
+    claimless: values.claimless as boolean,
     help,
   };
 
@@ -1218,6 +1270,17 @@ export function parseArgs(argv: string[]): ExternalCheckWaiverArgs {
     }
     if (!parsed.reason) {
       throw new Error('missing required --reason <text> argument');
+    }
+    // #1905: --claimless renders claim-id `none` directly -- it never
+    // resolves a linked issue's active claim, so combining it with --issue
+    // or --claim-id is contradictory and almost certainly an operator
+    // mistake (one flag says "there is no claim", the other says "resolve
+    // this specific one").
+    if (parsed.claimless && parsed.issueNumber) {
+      throw new Error('--claimless cannot be combined with --issue');
+    }
+    if (parsed.claimless && parsed.claimId) {
+      throw new Error('--claimless cannot be combined with --claim-id');
     }
   }
 
@@ -1254,6 +1317,10 @@ function printUsage(): void {
 Options:
   --issue <number>                  linked issue to use for active claim resolution
   --claim-id <id>                   require the resolved active claim to match this claim id
+  --claimless                       render a claimless waiver (claim-id "none") instead of
+                                     resolving a linked issue's active claim; for a PR with
+                                     no IDD claim at all (e.g. Dependabot). Cannot combine
+                                     with --issue or --claim-id.
   --actor <login>                   override the GitHub actor used for authority evaluation
   --repo <owner/name>               repository override
   --apply                           post the canonical waiver comment after validation

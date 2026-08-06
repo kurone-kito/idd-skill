@@ -787,6 +787,76 @@ test("#1512: this repository's own .github/idd/config.json wires the maintainer-
   assert.equal(verdict.ready, true);
 });
 
+// --- #1905: claimless waiver (claim-id "none") escape hatch ----------------
+
+test('claimless waiver: a maintainer-posted none-claim-id waiver flips a stale-pending claimless PR ready', () => {
+  // A genuinely claimless PR (Dependabot, Renovate, ImgBot, or similar):
+  // no claim events at all, so `activeClaimId` resolves to '' inside the
+  // gate -- exactly the shape `advisoryWait.convergenceScope: "all-prs"`
+  // (the documented default) leaves stuck with no way to waive, before
+  // #1905's `none` sentinel.
+  const waiverBody = renderExternalCheckWaiverComment({
+    agentId: TRUSTED,
+    claimId: 'none',
+    headSha: HEAD,
+    checkSelector: 'idd-advisory-convergence',
+    reason: 'Dependabot PR has no IDD claim; Copilot review never lands',
+    expiresAt: '2026-07-12T00:00:00Z',
+    actor: TRUSTED,
+  });
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({
+      reviews: [], // still pending -- the primary bot never reviewed
+      claimEvents: [], // no IDD claim at all
+      comments: [
+        { author: { login: TRUSTED }, body: waiverBody, createdAt: RECENT },
+      ],
+    }),
+    baseOptions({
+      headCommittedAt: OLD,
+      waiverMode: 'maintainer-authorized',
+      waivableSelectors: ADVISORY_CONVERGENCE_WAIVABLE,
+    }),
+  );
+  assertValidVerdict(verdict);
+  assert.equal(verdict.pending, true);
+  assert.equal(verdict.deadline.passed, true);
+  assert.equal(verdict.waiver.activeClaimId, '');
+  assert.equal(verdict.waiver.validCount, 1);
+  assert.equal(verdict.waived, true);
+  assert.equal(verdict.converged, false);
+  assert.equal(verdict.ready, true);
+});
+
+test('claimless waiver: a non-none claim id posted on a claimless PR does not waive (still fails closed)', () => {
+  const waiverBody = renderExternalCheckWaiverComment({
+    agentId: TRUSTED,
+    claimId: CLAIM_ID, // not the "none" sentinel, and no claim resolves to match it
+    headSha: HEAD,
+    checkSelector: 'idd-advisory-convergence',
+    reason: 'attempted waiver on a claimless PR with the wrong claim id',
+    expiresAt: '2026-07-12T00:00:00Z',
+    actor: TRUSTED,
+  });
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({
+      reviews: [],
+      claimEvents: [],
+      comments: [
+        { author: { login: TRUSTED }, body: waiverBody, createdAt: RECENT },
+      ],
+    }),
+    baseOptions({
+      headCommittedAt: OLD,
+      waiverMode: 'maintainer-authorized',
+      waivableSelectors: ADVISORY_CONVERGENCE_WAIVABLE,
+    }),
+  );
+  assert.equal(verdict.waiver.validCount, 0);
+  assert.equal(verdict.waived, false);
+  assert.equal(verdict.ready, false);
+});
+
 // --- 7. deadline-passed-no-waiver -----------------------------------------
 
 test('deadline-passed-no-waiver: no waiver comment leaves a stale-pending PR blocked', () => {
