@@ -1603,16 +1603,26 @@ function collectFromGitHub(args: AdvisoryConvergenceArgs): {
   const staleAgeMs =
     parseIsoDurationToMs(policy.claimTiming.staleAge) ?? DEFAULT_STALE_AGE_MS;
 
-  // #1906: opt-in, off by default. Only fetch the PR's own author
-  // `__typename` when the policy flag is actually enabled -- a
-  // repository that never opts in pays for zero extra GraphQL round
-  // trips. Fails closed to `false` ("not a Bot-typed author", today's
+  const convergenceScope =
+    policy?.advisoryWait?.convergenceScope === 'idd-claimed'
+      ? 'idd-claimed'
+      : 'all-prs';
+
+  // #1906: opt-in, off by default, and only ever consulted under
+  // `all-prs` scope (`idd-claimed` never reaches the new applicability
+  // branch -- see `computeAdvisoryConvergenceVerdict`). Fetch the PR's
+  // own author `__typename` only when BOTH the flag is enabled AND
+  // scope is `all-prs`, so a repository that enables the flag under
+  // `idd-claimed` (where it can never apply) still pays for zero extra
+  // GraphQL round trips, matching the "no behavior/cost change unless
+  // genuinely applicable" goal the plain opt-in-off case already gets.
+  // Fails closed to `false` ("not a Bot-typed author", today's
   // `applicable`/`all-prs` outcome) on any fetch error, matching
   // `prFirstCommitAt` above: a transient GraphQL failure must never
   // widen what this gate accepts.
   const exemptBotAuthoredPrs = policy.advisoryWait.exemptBotAuthoredPrs;
   let prAuthorIsBot = false;
-  if (exemptBotAuthoredPrs) {
+  if (exemptBotAuthoredPrs && convergenceScope === 'all-prs') {
     try {
       prAuthorIsBot =
         fetchPrAuthor(owner, repo, Number(args.prNumber))?.__typename === 'Bot';
@@ -1638,10 +1648,7 @@ function collectFromGitHub(args: AdvisoryConvergenceArgs): {
       primaryBotLogin,
       trustedMarkerLogins,
       advisoryBotLogins,
-      convergenceScope:
-        policy?.advisoryWait?.convergenceScope === 'idd-claimed'
-          ? 'idd-claimed'
-          : 'all-prs',
+      convergenceScope,
       exemptBotAuthoredPrs,
       prHeadRefName,
       prAuthorLogin,

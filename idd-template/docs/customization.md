@@ -282,7 +282,9 @@ all resolves to `not_applicable` (reason `bot-authored-no-claim-history`)
 automatically, without a fresh per-PR maintainer waiver -- useful for a
 repository that receives frequent automated dependency-update PRs
 (Dependabot, Renovate, ImgBot, or similar) whose primary-bot review never
-lands. A Bot-typed author that DOES have claim-marker history, or any
+lands (observed 2026-08-05, #1904 -- 1 of 18 sampled `dependabot[bot]`-
+authored pull requests in this repository's own history ever received a
+Copilot review). A Bot-typed author that DOES have claim-marker history, or any
 human-authored PR, is never exempted regardless of this flag. Invalid
 values are rejected by schema, and runtime normalization falls back to
 `false` for untrusted config reads.
