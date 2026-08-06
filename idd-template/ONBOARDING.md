@@ -284,7 +284,8 @@ require explicit operator confirmation:
     (`required_status_checks.strict_required_status_checks_policy`,
     recommended disabled — enabling it can force a `main`-sync merge on
     every merely-`BEHIND` PR and multiplies advisory-review rounds
-    without review value)
+    without review value; a before/after sample measured the sync-merge
+    share fall from ~27% to ~3.7%, kurone-kito/idd-skill#1817)
 
 Use
 [Onboarding Reference — Policy Decisions](docs/onboarding/policy-decisions.md)
