@@ -14,6 +14,71 @@ discipline and has no tag.
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-08-07
+
+Markdown-code tokenizer hardening, advisory-convergence claimless
+waivers, and schema-documentation completeness release.
+
+### Added
+
+- `idd-advisory-convergence.yml`'s CI runner made overridable via a
+  `CI_RUNNER_LABEL` repository variable, and the `post-merge-cleanup.yml`
+  workflow mirrored into `idd-template/`.
+- Claimless external-check-waiver support: a claim-id `none` sentinel
+  recognized by the protocol helpers plus an authoring-CLI
+  `--claimless` flag, and an opt-in advisory-convergence applicability
+  exemption for bot-authored PRs with no claim history.
+- `--from-pr` live head-SHA derivation added to the `post-idd-marker`
+  helper for advisory marker types.
+- The pre-merge gate now hints at the missing-disposition phrase and a
+  stale-watermark case when it blocks.
+
+### Changed
+
+- Markdown-code fence/list/HTML-block-boundary tracking hardened
+  across a series of edge cases — nested container boundaries, opaque
+  fence state, an inline code span's enclosing-block context across
+  raw-text HTML elements and spaced thematic breaks, list-content
+  indentation inside block boundaries, multiple candidate enclosing
+  HTML block types, a fence opener under wide list padding, code
+  spans stopping inside an open HTML block, and opened-tag matching
+  when closing a raw-text block. Suitability-triage's Check 3
+  code-region masking depends on this shared tokenizer.
+- Suitability-triage hardening: masks Markdown code regions in Check
+  3, requires the PR to reference the candidate issue, and surfaces
+  existing A4.5 rejection comments instead of missing them.
+- Schema documentation completeness: per-property descriptions added
+  across the compact-contract, pre-merge-readiness, and
+  advisory/discovery-evidence published schemas, with a new test
+  enforcing that invariant repo-wide; a missing
+  `activation-nonce-mismatch` enum value added to
+  `pre-merge-readiness`'s `claim.reason`.
+- Onboarding hardening: package-manager/ephemeral-npx CI and
+  `allowBuilds` guidance completed, a hook-manager/`shellEmulator`
+  coexistence warning added, runtime-native issue-authoring paths
+  honored, doc-lint config shipped with the imported template, and a
+  recommendation to disable the ruleset's up-to-date-head requirement
+  for adopters who hit it.
+- `idd-doctor` fixes: granted GitHub API read scopes and `GH_TOKEN` in
+  CI, matches the hyphenated `copilot-advisory` literal, and scopes
+  its cleanup-backlog scan to IDD branches only.
+- `protocol-helpers` fixes: gates the `reviewDecision` `APPROVED`
+  bypass on data instead of trusting the label alone, and recognizes a
+  third Codex usage-limit notice trailer wording.
+- Misc docs: literal `npx` invocation forms shown per manifest-key, a
+  recommendation to prefer Codex reviewer subagents, a warning against
+  advisory job-name overrides, and a corrected `ubuntu-slim` ownership
+  claim.
+
+### Fixed
+
+- `rerun-advisory-convergence` recovers a stuck rollup when a live
+  review already covers HEAD.
+- `advisory-convergence` detects suppressed Copilot review findings.
+- `supersession-detection` requires an actual closing keyword next to
+  a PR reference, not just a bare reference, before treating it as a
+  superseding PR.
+
 ## [0.5.0] - 2026-08-02
 
 Weak-model "lite" profile, 128k context-budget ceiling, and
