@@ -42,6 +42,7 @@ interface RawConfig {
     pollInterval?: unknown;
     capExhaustedRoute?: unknown;
     convergenceScope?: unknown;
+    exemptBotAuthoredPrs?: unknown;
   };
   ciWait?: {
     runningTimeout?: unknown;
@@ -184,6 +185,9 @@ export const POLICY_DEFAULTS = Object.freeze({
     pollInterval: 'PT2M',
     capExhaustedRoute: 'phase-specific',
     convergenceScope: 'all-prs',
+    // #1906: opt-in, off by default -- no behavior change for a
+    // repository that does not explicitly set this to `true`.
+    exemptBotAuthoredPrs: false,
   }),
   ciWait: Object.freeze({
     runningTimeout: 'PT30M',
@@ -435,6 +439,11 @@ export function normalizePolicyConfig(config: unknown) {
         ADVISORY_CONVERGENCE_SCOPES,
         POLICY_DEFAULTS.advisoryWait.convergenceScope,
       ),
+      // #1906: same simple-boolean coercion style as
+      // `skipIssueAuthorApprovalGate` above -- only a literal `true`
+      // opts in, everything else (including a malformed value) keeps
+      // the conservative `false` default.
+      exemptBotAuthoredPrs: c?.advisoryWait?.exemptBotAuthoredPrs === true,
     },
     ciWait: {
       runningTimeout: parseDuration(

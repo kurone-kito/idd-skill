@@ -10,7 +10,7 @@ Shared advisory-wait protocol used by **E14**
 and **F3** (`idd-merge.instructions.md`). Policy constants (cap/windows)
 are named in
 [`docs/policy-constants.md`](../../docs/policy-constants.md); this file
-owns behavior.
+owns behavior; `advisoryWait.exemptBotAuthoredPrs` is convergence-only.
 
 ## Scope — Copilot-only settle/wait window
 

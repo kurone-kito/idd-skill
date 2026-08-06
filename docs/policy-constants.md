@@ -181,11 +181,11 @@ The current policy schema and helper runtime now support
 `advisoryWait.pollInterval`, `advisoryWait.capExhaustedRoute`,
 `advisoryWait.primaryBotLogin`, `advisoryWait.secondaryBotLogin`,
 `advisoryWait.convergenceDeadline`, `advisoryWait.sameHeadRerollCap`,
-`advisoryWait.recoveryCycleCap`, `advisoryWait.terminalWindow`, and
-`advisoryWait.convergenceScope`. Omitted keys keep the distributed defaults
-below. The duration keys (`pendingWindow`, `settledWindow`, `pollInterval`,
-`convergenceDeadline`, `terminalWindow`) accept positive whole-minute
-ISO 8601 durations only.
+`advisoryWait.recoveryCycleCap`, `advisoryWait.terminalWindow`,
+`advisoryWait.convergenceScope`, and `advisoryWait.exemptBotAuthoredPrs`.
+Omitted keys keep the distributed defaults below. The duration keys
+(`pendingWindow`, `settledWindow`, `pollInterval`, `convergenceDeadline`,
+`terminalWindow`) accept positive whole-minute ISO 8601 durations only.
 `advisoryWait.recoveryCycleCap` / `advisoryWait.terminalWindow` (#1572)
 define the terminal Copilot stall-recovery **state contract**, accounted
 independently of `requestCap` and `sameHeadRerollCap`: see
@@ -219,6 +219,16 @@ it equal to the primary) keeps behavior identical to the primary-only path.
 Configure it to a **requestable reviewer** whose `--add-reviewer` request
 appears on the PR timeline (like the primary); a bot that reviews via app
 install without a requestable-reviewer event cannot be tracked once per HEAD.
+`advisoryWait.exemptBotAuthoredPrs` (#1906) is an opt-in, off-by-default
+flag effective only under `advisoryWait.convergenceScope: "all-prs"`. When
+`true`, a PR whose author resolves to a GitHub Bot-typed account AND has no
+claim-marker history at all becomes `not_applicable` (reason
+`bot-authored-no-claim-history`), so a repository with frequent automated
+dependency-update PRs does not need a fresh per-PR maintainer waiver for
+each one. It has no effect under `idd-claimed` scope, where that same PR
+shape already resolves `not_applicable` via the existing
+`idd-claimed-no-verified-linked-issue-claim` branch; see
+[Helper scripts](idd-helper-scripts.md) for the full contract.
 
 | Policy default                                   | Distributed value                                                                                                                                                                                                                                                                                                                                            | Owning surface                                                                                                                                                                                                       | Onboarding expectation                                                                                                                                          |
 | ------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -236,6 +246,7 @@ install without a requestable-reviewer event cannot be tracked once per HEAD.
 | Copilot stall-recovery cycle cap                 | 2 recovery cycles per PR HEAD (`advisoryWait.recoveryCycleCap`)                                                                                                                                                                                                                                                                                              | [Advisory wait](../.github/instructions/idd-advisory-wait.instructions.md)                                                                                                                                           | Keep unless the repository needs a different bounded terminal-recovery budget; kept separate from `requestCap` and `sameHeadRerollCap` by design.               |
 | Copilot terminal-unavailability window           | 12 h (`advisoryWait.terminalWindow`)                                                                                                                                                                                                                                                                                                                         | [Advisory wait](../.github/instructions/idd-advisory-wait.instructions.md)                                                                                                                                           | Keep unless the repository needs a different window before `COPILOT_UNAVAILABLE` waiver eligibility applies.                                                    |
 | Advisory-convergence enforcement scope           | `all-prs` (`advisoryWait.convergenceScope`)                                                                                                                                                                                                                                                                                                                  | [Pre-merge](../.github/instructions/idd-pre-merge.instructions.md), [Helper scripts](idd-helper-scripts.md), [Customizing IDD](customization.md#policy-constants)                                                    | Keep `all-prs` for existing behavior; switch to `idd-claimed` only when the repository wants convergence to apply solely to verified IDD-owned PRs.             |
+| Bot-authored-PR exemption                        | `false` (`advisoryWait.exemptBotAuthoredPrs`)                                                                                                                                                                                                                                                                                                                | [Helper scripts](idd-helper-scripts.md), [Customizing IDD](customization.md#policy-constants)                                                                                                                        | Keep `false` unless the repository wants recurring Bot-authored, claimless PRs under `all-prs` scope to skip the maintainer-waiver path automatically.          |
 | Advisory-convergence required-check registration | Not registered by default (hosting the `idd-advisory-convergence` workflow is itself an opt-in step — see [ONBOARDING](https://github.com/kurone-kito/idd-skill/blob/main/idd-template/ONBOARDING.md#optional--host-idd-advisory-convergence-as-a-required-check-ci-workflow); once hosted, a required-status-check Ruleset entry is a separate manual step) | [Customizing IDD](customization.md#policy-constants), [Helper scripts](idd-helper-scripts.md)                                                                                                                        | Register `idd-advisory-convergence` as a required status check to make convergence non-bypassable; this is a maintainer GitHub-settings action, not agent work. |
 
 `idd-claimed` keeps genuinely claimless/manual dependency PRs out of the

@@ -774,6 +774,7 @@ test('policy normalization provides default-safe values and supports aliases', (
       settledWindow: 'PT10M',
       pollInterval: 'PT2M',
       capExhaustedRoute: 'phase-specific',
+      exemptBotAuthoredPrs: false,
     },
     ciWait: {
       runningTimeout: 'PT30M',
@@ -864,6 +865,7 @@ test('policy normalization provides default-safe values and supports aliases', (
         settledWindow: 'PT11M',
         pollInterval: 'PT3M',
         capExhaustedRoute: 'hold',
+        exemptBotAuthoredPrs: true,
       },
       ciWait: {
         runningTimeout: 'PT35M',
@@ -942,6 +944,7 @@ test('policy normalization provides default-safe values and supports aliases', (
         settledWindow: 'PT11M',
         pollInterval: 'PT3M',
         capExhaustedRoute: 'hold',
+        exemptBotAuthoredPrs: true,
       },
       ciWait: {
         runningTimeout: 'PT35M',
@@ -1042,6 +1045,7 @@ test('policy normalization provides default-safe values and supports aliases', (
       settledWindow: 'PT10M',
       pollInterval: 'PT2M',
       capExhaustedRoute: 'phase-specific',
+      exemptBotAuthoredPrs: false,
     },
   );
 

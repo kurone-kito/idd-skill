@@ -1766,6 +1766,22 @@ to post it is the consuming track's job.
     genuinely waivable). See
     `computeAdvisoryConvergenceVerdict`'s `AdvisoryConvergenceApplicability`
     doc comment (advisory-convergence.mts) for the full contract.
+- `advisoryWait.exemptBotAuthoredPrs` (#1906): opt-in, off by default,
+  and effective only under `convergenceScope: "all-prs"` (`idd-claimed`
+  already resolves the same PR shape `not_applicable` via the
+  `idd-claimed-no-verified-linked-issue-claim` branch just above, so this
+  flag changes nothing there). When `true`, a PR whose author resolves to
+  a GitHub Bot-typed account (fetched via a small dedicated GraphQL
+  `__typename` query) AND has no claim-marker history at all resolves
+  to `not_applicable` (reason `bot-authored-no-claim-history`), letting
+  a recurring automated dependency-update PR (Dependabot, Renovate,
+  ImgBot, or similar) pass
+  the gate without a fresh per-PR maintainer waiver. A Bot-typed author
+  that DOES have claim-marker history, or any human-authored PR, is
+  never exempted regardless of this flag. The `scope-not-applicable`
+  same-HEAD-reroll token below already covers this new `not_applicable`
+  cause too, since its underlying check reads `applicability.status`
+  generically, not `convergenceScope` specifically.
 
 #### Bounded same-HEAD advisory reroll (AW6, #1511)
 
@@ -1806,7 +1822,7 @@ structurally unable to disagree.
 <!-- dprint-ignore-start -->
 | Token                                    | Fires when...                                                                                                                                          |
 | ----------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `scope-not-applicable`                    | `applicability.status` is `not_applicable` OR `indeterminate` (#1686) -- `advisoryWait.convergenceScope: "idd-claimed"` and this PR either has no verified linked claim/branch, or has a broken/ambiguous claim linkage. Offering a same-HEAD reroll is pointless in either case. |
+| `scope-not-applicable`                    | `applicability.status` is `not_applicable` OR `indeterminate` (#1686) -- either `advisoryWait.convergenceScope: "idd-claimed"` and this PR has no verified linked claim/branch or has a broken/ambiguous claim linkage, or (#1906) `advisoryWait.exemptBotAuthoredPrs: true` under `"all-prs"` scope exempted a Bot-authored PR with no claim history. Offering a same-HEAD reroll is pointless in any of these cases. |
 | `review-pending`                          | The primary bot has not yet reviewed current HEAD (`pending: true`). Always co-occurs with `review-item-count-unknown` below, since an off-HEAD review reports no usable item count. |
 | `unresolved-copilot-threads`              | `threads.satisfied` is `false` -- at least one Copilot-authored thread is neither resolved nor validly dispositioned.                                   |
 | `missing-regular-comment-disposition`     | `dispositionEvidence.missingRegularCommentCount` is non-zero -- an outstanding regular (non-thread) PR comment still lacks a fresh disposition marker.  |

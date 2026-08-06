@@ -206,6 +206,12 @@ export function computeAdvisoryConvergenceVerdict(inputs, options) {
   }
   const claimMarkerHistoryPresent = inputs.claimMarkerHistoryPresent;
   const claimCandidateAmbiguous = inputs.claimCandidateAmbiguous;
+  // #1906: read as `=== true` on both sides -- see each field's own doc
+  // comment (`AdvisoryConvergenceInputs.prAuthorIsBot`,
+  // `AdvisoryConvergenceOptions.exemptBotAuthoredPrs`) for why neither is
+  // required-with-throw like the two claim-evidence booleans above.
+  const exemptBotAuthoredPrs = options.exemptBotAuthoredPrs === true;
+  const prAuthorIsBot = inputs.prAuthorIsBot === true;
   const applicability =
     convergenceScope === 'idd-claimed'
       ? !claim.activeClaimPresent
@@ -249,11 +255,21 @@ export function computeAdvisoryConvergenceVerdict(inputs, options) {
                   status: 'applicable',
                   reason: 'idd-claimed-branch-matched',
                 }
-      : {
-          scope: convergenceScope,
-          status: 'applicable',
-          reason: 'all-prs',
-        };
+      : // #1906: opt-in bot-authored-PR exemption, `all-prs` scope only --
+        // `idd-claimed` already resolves this exact PR shape to
+        // `not_applicable` via its own `idd-claimed-no-verified-linked-
+        // issue-claim` branch above, untouched by this addition.
+        exemptBotAuthoredPrs && prAuthorIsBot && !claimMarkerHistoryPresent
+        ? {
+            scope: convergenceScope,
+            status: 'not_applicable',
+            reason: 'bot-authored-no-claim-history',
+          }
+        : {
+            scope: convergenceScope,
+            status: 'applicable',
+            reason: 'all-prs',
+          };
   // `scopeNotApplicable` keeps its pre-#1686 meaning EXACTLY -- `status ===
   // 'not_applicable'` only -- since it still gates the waiver-evidence
   // bookkeeping (`waived` below) and the unconditional `ready` pass for a
@@ -1089,6 +1105,32 @@ function collectFromGitHub(args) {
   }
   const staleAgeMs =
     parseIsoDurationToMs(policy.claimTiming.staleAge) ?? DEFAULT_STALE_AGE_MS;
+  const convergenceScope =
+    policy?.advisoryWait?.convergenceScope === 'idd-claimed'
+      ? 'idd-claimed'
+      : 'all-prs';
+  // #1906: opt-in, off by default, and only ever consulted under
+  // `all-prs` scope (`idd-claimed` never reaches the new applicability
+  // branch -- see `computeAdvisoryConvergenceVerdict`). Fetch the PR's
+  // own author `__typename` only when BOTH the flag is enabled AND
+  // scope is `all-prs`, so a repository that enables the flag under
+  // `idd-claimed` (where it can never apply) still pays for zero extra
+  // GraphQL round trips, matching the "no behavior/cost change unless
+  // genuinely applicable" goal the plain opt-in-off case already gets.
+  // Fails closed to `false` ("not a Bot-typed author", today's
+  // `applicable`/`all-prs` outcome) on any fetch error, matching
+  // `prFirstCommitAt` above: a transient GraphQL failure must never
+  // widen what this gate accepts.
+  const exemptBotAuthoredPrs = policy.advisoryWait.exemptBotAuthoredPrs;
+  let prAuthorIsBot = false;
+  if (exemptBotAuthoredPrs && convergenceScope === 'all-prs') {
+    try {
+      prAuthorIsBot =
+        fetchPrAuthor(owner, repo, Number(args.prNumber))?.__typename === 'Bot';
+    } catch {
+      prAuthorIsBot = false;
+    }
+  }
   return {
     inputs: {
       prNumber: Number(args.prNumber),
@@ -1099,16 +1141,15 @@ function collectFromGitHub(args) {
       claimEvents,
       claimMarkerHistoryPresent,
       claimCandidateAmbiguous,
+      prAuthorIsBot,
     },
     options: {
       now: args.now || new Date().toISOString().replace('.000Z', 'Z'),
       primaryBotLogin,
       trustedMarkerLogins,
       advisoryBotLogins,
-      convergenceScope:
-        policy?.advisoryWait?.convergenceScope === 'idd-claimed'
-          ? 'idd-claimed'
-          : 'all-prs',
+      convergenceScope,
+      exemptBotAuthoredPrs,
       prHeadRefName,
       prAuthorLogin,
       headCommittedAt,
@@ -1417,6 +1458,32 @@ function resolveTrustedCollaboratorMarkerLogins(
 // unchanged. The other two `ghGraphql(...)` call sites in this file
 // (`fetchReviewThreads` and the claim-candidate fetch below) keep calling
 // the same function via the new import.
+/** #1906: fetch the PR's own author `login`/`__typename` via a small
+ * dedicated GraphQL query -- the REST-shaped `gh pr view --json author`
+ * fetch in `collectFromGitHub` only returns `login`, no type
+ * discriminator. Deliberately its own minimal round trip rather than
+ * folded into `fetchReviewThreads` below or `fetchReviewsAndHeadCommit`
+ * (review-clause.mts): both of those are narrowly-scoped Copilot-review
+ * evidence collectors, the latter shared verbatim with
+ * `rerun-advisory-convergence.mts`, and widening either with an unrelated
+ * PR-author field would blur that scope for no shared benefit. Called by
+ * `collectFromGitHub` only when the opt-in `exemptBotAuthoredPrs` policy
+ * is enabled (see the call site), so a repository that never sets the
+ * flag never pays for this extra request. */
+function fetchPrAuthor(owner, repo, prNumber) {
+  const payload = ghGraphql(
+    `
+      query($owner: String!, $repo: String!, $number: Int!) {
+        repository(owner: $owner, name: $repo) {
+          pullRequest(number: $number) {
+            author { login __typename }
+          }
+        }
+      }`,
+    { owner, repo, number: prNumber },
+  );
+  return payload?.data?.repository?.pullRequest?.author ?? null;
+}
 function fetchReviewThreads(owner, repo, prNumber) {
   const nodes = [];
   let cursor = null;

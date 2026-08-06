@@ -290,6 +290,10 @@
           "enum": ["all-prs", "idd-claimed"],
           "description": "Controls whether advisory convergence applies to every PR or only verified IDD-owned PRs. Default: all-prs. Invalid values are rejected by schema."
         },
+        "exemptBotAuthoredPrs": {
+          "type": "boolean",
+          "description": "Opt-in, off by default. When true AND convergenceScope is all-prs, a PR whose author resolves to a GitHub Bot-typed account (via GraphQL __typename) AND has no claim-marker history at all is classified applicability: not_applicable (reason bot-authored-no-claim-history), letting the check pass without a per-PR maintainer waiver. Has no effect under convergenceScope: idd-claimed, where that same PR shape already resolves not_applicable via the existing idd-claimed-no-verified-linked-issue-claim branch. A Bot-typed author that DOES have claim-marker history, or any human-authored PR, is never exempted regardless of this flag. Default: false."
+        },
         "requestCap": {
           "type": "integer",
           "minimum": 1,
