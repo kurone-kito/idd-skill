@@ -280,6 +280,11 @@ require explicit operator confirmation:
     restrict which labels it may apply. See
     [IDD label names](docs/onboarding/policy-decisions.md#idd-label-names)
     for the field evidence and the guard recipe.
+13. up-to-date-head ruleset check
+    (`required_status_checks.strict_required_status_checks_policy`,
+    recommended disabled — enabling it can force a `main`-sync merge on
+    every merely-`BEHIND` PR and multiplies advisory-review rounds
+    without review value)
 
 Use
 [Onboarding Reference — Policy Decisions](docs/onboarding/policy-decisions.md)

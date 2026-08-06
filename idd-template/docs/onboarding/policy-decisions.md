@@ -322,8 +322,8 @@ It should also confirm whether the repository's GitHub ruleset leaves
 (`required_status_checks.strict_required_status_checks_policy`)
 disabled:
 
-- Recommended: disabled. Measured evidence shows enabling it forces a
-  `main`-sync merge on every merely-`BEHIND` PR and multiplies Copilot
+- Recommended: disabled. Measured evidence shows enabling it can force
+  a `main`-sync merge on every merely-`BEHIND` PR and multiplies Copilot
   advisory-review rounds without adding review value
   ([kurone-kito/idd-skill#1817](https://github.com/kurone-kito/idd-skill/issues/1817)).
   This benefit only holds when the automation token can read the
