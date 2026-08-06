@@ -415,7 +415,8 @@ Before importing files, re-check the policy choices confirmed in Step 1B:
 merge policy, PR review profile, review-thread resolution policy,
 critique-loop profile, credential scope, claim-timing defaults, CI wait
 policy defaults, issue-author approval gate, maintainer approval actor
-policy, issue-authoring companion status, and helper runtime profile.
+policy, issue-authoring companion status, helper runtime profile, IDD
+label names, and the up-to-date-head ruleset check.
 
 Use
 [Onboarding Reference — Policy Decisions](docs/onboarding/policy-decisions.md)

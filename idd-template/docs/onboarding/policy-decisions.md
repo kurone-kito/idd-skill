@@ -324,18 +324,20 @@ disabled:
 
 - Recommended: disabled. Measured evidence shows enabling it can force
   a `main`-sync merge on every merely-`BEHIND` PR and multiplies Copilot
-  advisory-review rounds without adding review value
+  advisory-review rounds without adding review value — a before/after
+  commit sample measured the sync-merge share fall from ~27% to ~3.7%
+  once this repository disabled it
   ([kurone-kito/idd-skill#1817](https://github.com/kurone-kito/idd-skill/issues/1817)).
   This benefit only holds when the automation token can read the
-  ruleset — an unreadable read still fails closed to forcing the sync
-  path regardless of the live setting.
+  ruleset — an unreadable ruleset read still fails closed to forcing
+  the sync path regardless of the live setting.
 - Trade-off: disabling it means the final pre-merge CI run may not
   reflect the very latest `main`, which IDD's own conflict-triggered
   `main`-sync merge (E11) and F1/F2 freshness checks still catch when
   it matters for correctness.
 
-Record whether the repository keeps this default before unattended
-workers begin running.
+Record whether the repository keeps this setting disabled before
+unattended workers begin running.
 
 ## Recording the selected policies
 
