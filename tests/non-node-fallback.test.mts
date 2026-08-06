@@ -243,7 +243,7 @@ test('helper runtime guidance uses evidence-based auto-proposals without bare pa
   const onboarding = readText('idd-template/ONBOARDING.md');
   assert.match(
     normalizeWhitespace(onboarding),
-    /helper runtime profile \(`instructions-only` by default, or an evidence-based helper profile recommendation that still requires explicit operator confirmation`\)/,
+    /helper runtime profile \(`instructions-only` by default, or an evidence-based helper profile recommendation that still requires explicit operator confirmation\)/,
     'ONBOARDING Step 1B must allow evidence-based helper profile recommendations without recording them automatically',
   );
 
