@@ -2793,6 +2793,19 @@ test('collectFromGitHub sources claimEvents/claimCandidateAmbiguous/claimMarkerH
   );
 });
 
+test('collectFromGitHub sources prAuthorIsBot/exemptBotAuthoredPrs into the returned inputs/options (#1906: pins the call-site forwarding shape)', () => {
+  // Same "pin the call site" spirit as the #1810 test above: the computed
+  // `prAuthorIsBot` and `exemptBotAuthoredPrs` values are only useful if
+  // they actually reach the returned `inputs`/`options` objects a future
+  // refactor could otherwise silently drop, with no other test coverage.
+  const source = readFileSync(
+    new URL('../src/scripts/advisory-convergence.mts', import.meta.url),
+    'utf8',
+  );
+  assert.match(source, /inputs:\s*\{[^}]*\bprAuthorIsBot,[^}]*\}/s);
+  assert.match(source, /options:\s*\{[^}]*\bexemptBotAuthoredPrs,[^}]*\}/s);
+});
+
 // --- parseArgs ---------------------------------------------------------------
 
 test('parseArgs: parses --pr, --assert, and --claim-issue', () => {
