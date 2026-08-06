@@ -273,6 +273,20 @@ for the exact per-case waiver availability). Invalid values are
 rejected by schema, and runtime normalization falls back to `all-prs`
 for untrusted config reads.
 
+Repositories may also customize `advisoryWait.exemptBotAuthoredPrs`
+(#1906) in `.github/idd/config.json`. This opt-in, off-by-default flag
+takes effect only under `advisoryWait.convergenceScope: "all-prs"` (it
+never changes any `idd-claimed` outcome). When `true`, a PR whose author
+resolves to a GitHub Bot-typed account AND has no claim-marker history at
+all resolves to `not_applicable` (reason `bot-authored-no-claim-history`)
+automatically, without a fresh per-PR maintainer waiver -- useful for a
+repository that receives frequent automated dependency-update PRs
+(Dependabot, Renovate, ImgBot, or similar) whose primary-bot review never
+lands. A Bot-typed author that DOES have claim-marker history, or any
+human-authored PR, is never exempted regardless of this flag. Invalid
+values are rejected by schema, and runtime normalization falls back to
+`false` for untrusted config reads.
+
 `advisoryWait.primaryBotLogin` selects the advisory bot whose review the
 advisory-wait gate tracks (default Copilot), and
 `advisoryWait.secondaryBotLogin` names an **optional, non-gating** secondary
