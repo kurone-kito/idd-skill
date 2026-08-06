@@ -999,14 +999,21 @@ enable it. It is not wired in automatically by importing the rest of
 `idd-template/`, since adding a new required-status-check-able workflow
 is a deliberate adopter decision, not a default.
 
-Adjust the command to your helper-runtime profile, and `runs-on` / the
-`actions/checkout` version to your own runner labels — the mirrored
-file intentionally uses the portable `ubuntu-latest` + `@v4` forms.
-This source repository's own copy at
+Adjust the command to your helper-runtime profile, and the
+`actions/checkout` version if needed — the mirrored file intentionally
+uses the floating `@v4` form. Override the runner via the
+`CI_RUNNER_LABEL` repository variable (Settings > Secrets and
+variables > Actions > Variables) rather than hand-editing `runs-on`;
+it falls back to the portable `ubuntu-latest` when unset. Setting it
+is **required**, not optional, on GitHub Enterprise Server, which does
+not support GitHub-hosted runners at all — self-hosted runners are
+mandatory there, and the same variable also covers any organization
+that mandates self-hosted runners even on github.com/GHEC. This
+source repository's own copy at
 `.github/workflows/idd-advisory-convergence.yml` instead pins a
-specific `actions/checkout` SHA and a custom runner label, which is
-appropriate for its own hardened, dogfooded CI but not a requirement
-for adopters. This workflow is read-only: it never mutates GitHub
+specific `actions/checkout` SHA and hardcodes a custom runner label,
+which is appropriate for its own hardened, dogfooded CI but not a
+requirement for adopters. This workflow is read-only: it never mutates GitHub
 state, only queries the GitHub API for reviews, review threads, and
 waiver markers. `issues: read` is required in addition to
 `pull-requests: read` because the helper reads the PR's own

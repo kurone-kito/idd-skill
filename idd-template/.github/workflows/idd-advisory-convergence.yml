@@ -8,13 +8,26 @@ name: IDD advisory-convergence gate
 # required-status-check-able workflow is a deliberate adopter decision,
 # not a default.
 #
-# Adjust `runs-on`, the pinned `actions/checkout` SHA (or use the
-# floating `@v4` tag as shipped here), the checkout `ref:` (see below),
-# and the `node scripts/...` command to your own runner labels and
-# helper-runtime profile. This file intentionally uses the portable
-# `ubuntu-latest` + `@v4` forms rather than a repository-specific
-# pinned SHA or custom runner label, unlike this source repository's
-# own dogfooded copy at .github/workflows/idd-advisory-convergence.yml.
+# Runner override: `runs-on` below reads the `CI_RUNNER_LABEL`
+# repository variable, falling back to `ubuntu-latest` when unset. Set
+# it from Settings > Secrets and variables > Actions > Variables >
+# CI_RUNNER_LABEL -- no workflow file edit needed. The primary
+# motivating case is GitHub Enterprise Server: GHES does not support
+# GitHub-hosted runners at all (self-hosted runners are mandatory
+# there), so `ubuntu-latest` fails outright on GHES regardless of
+# which label this template ships as the fallback. Any organization
+# that mandates self-hosted runners even on github.com/GHEC hits the
+# same wall and can use the same variable. This mechanism works for
+# whatever the shipped fallback value is now or later, not
+# specifically `ubuntu-latest`.
+#
+# Adjust the pinned `actions/checkout` SHA (or use the floating `@v4`
+# tag as shipped here), the checkout `ref:` (see below), and the
+# `node scripts/...` command to your own helper-runtime profile. This
+# file intentionally uses the portable `ubuntu-latest` fallback +
+# `@v4` forms rather than a repository-specific pinned SHA or a
+# hardcoded custom runner label, unlike this source repository's own
+# dogfooded copy at .github/workflows/idd-advisory-convergence.yml.
 concurrency:
   cancel-in-progress: true
   # Grouped by PR number, not github.ref: pull_request_review and
@@ -48,7 +61,8 @@ jobs:
   # preventive; no observed incident yet. If either edit is intentional,
   # update every consumer to the new literal context together.
   idd-advisory-convergence:
-    runs-on: ubuntu-latest
+    # See the header comment above for the CI_RUNNER_LABEL override.
+    runs-on: ${{ vars.CI_RUNNER_LABEL || 'ubuntu-latest' }}
     # Bounds pathological hangs; adjust to your own observed run duration
     # once you have history (see idd-doctor.yml/lint.yml in the source
     # repository for the pattern of sizing this from real run durations).
