@@ -860,25 +860,29 @@ default `instructions-only` profile keep using the written shell /
 - Contract:
   - dry-run is the default; the helper prints the canonical comment body
     plus claim/check/authority evidence before any mutation
-  - `--apply` posts the PR comment only after verifying the linked
-    issue's active claim, the current PR HEAD SHA, the live check state,
-    waivable-selector coverage, and maintainer/admin authority
+  - in normal mode, `--apply` posts the PR comment only after verifying
+    the linked issue's active claim, the current PR HEAD SHA, the live
+    check state, waivable-selector coverage, and maintainer/admin
+    authority
   - non-interactive apply is refused unless `--yes` is provided after a
     prior dry-run review; interactive TTY runs may confirm with `y/N`
   - the helper fails closed when authority cannot distinguish owner,
     Maintain, or Admin from plain Write access, when the requested check
     is not configured in `ciGate.externalChecks.waivable`, or when the
     expiry exceeds `ciGate.externalCheckWaivers.maxValidity`
-  - `--claimless` (#1905) renders a claimless waiver -- literal claim-id
-    `none` -- instead of resolving a linked issue's active claim; use it
-    for a PR with no IDD claim at all (an automated dependency-update PR
-    such as Dependabot, Renovate, or ImgBot). Cannot combine with
-    `--issue` or `--claim-id`. The helper still blocks with a clear
-    reason if the PR turns out to have a resolvable active claim after
-    all -- a `none` waiver only ever satisfies the consumer-side gate
-    (`summarizeExternalCheckWaivers` in `protocol-helpers.mts`) when no
-    claim resolves there, so posting one against a claimed PR would just
-    be rejected `wrongClaim`.
+  - `--claimless` (#1905) mode renders a claimless waiver -- literal
+    claim-id `none` -- instead of resolving a linked issue's active
+    claim; use it for a PR with no IDD claim at all (an automated
+    dependency-update PR such as Dependabot, Renovate, or ImgBot).
+    Cannot combine with `--issue` or `--claim-id`. In this mode,
+    `--apply` verifies that no active claim resolves for the PR instead
+    of resolving one, while still applying the same HEAD, live-check,
+    selector, expiry, and authority checks as normal mode -- the helper
+    blocks with a clear reason if the PR turns out to have a resolvable
+    active claim after all, since a `none` waiver only ever satisfies
+    the consumer-side gate (`summarizeExternalCheckWaivers` in
+    `protocol-helpers.mts`) when no claim resolves there, so posting one
+    against a claimed PR would just be rejected `wrongClaim`.
 
 ### External-check waiver contract
 
@@ -938,7 +942,10 @@ Interpretation rules:
       --apply --yes
     ```
 
-  - claimless PR (dry-run), e.g. a stuck Dependabot PR with no IDD claim:
+  - claimless PR (dry-run), e.g. a Dependabot PR with no IDD claim whose
+    primary-bot review never lands (observed 2026-08-05, #1904 -- 1 of
+    18 sampled `dependabot[bot]`-authored pull requests in this
+    repository's own history ever received a Copilot review):
 
     ```sh
     idd-external-check-waiver --pr 123 \
