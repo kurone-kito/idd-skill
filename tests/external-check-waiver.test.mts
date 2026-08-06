@@ -309,6 +309,22 @@ test('planExternalCheckWaiver: claimless is blocked when the PR has a resolvable
   );
 });
 
+test('planExternalCheckWaiver: claimless with an empty actor blocks with a reason instead of throwing', () => {
+  const input = buildBaseInput();
+  input.claimless = true;
+  input.issueCandidates = [];
+  input.actor = '';
+
+  const report = planExternalCheckWaiver(input, {
+    now: new Date('2026-05-17T06:00:00Z'),
+    repoOwner: 'kurone-kito',
+  });
+
+  assert.equal(report.canApply, false);
+  assert.match(report.blockingReasons.join('\n'), /actor is empty/);
+  assert.equal(report.body, '');
+});
+
 test('planExternalCheckWaiver fails closed for unauthorized write-only actors', () => {
   const input = buildBaseInput();
   input.actor = 'write-collaborator';

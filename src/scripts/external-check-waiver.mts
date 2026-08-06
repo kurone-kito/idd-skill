@@ -406,6 +406,14 @@ export function planExternalCheckWaiver(
         'PR has a resolvable active IDD claim on a linked issue; a claimless (none) waiver only applies when no claim resolves -- use --issue/--claim-id instead',
       );
     }
+    // The normal path's agentId comes from the resolved claim, independent
+    // of `actor`; --claimless has no claim to fall back on, so an empty
+    // actor must surface here as a blocking reason like every other invalid
+    // input in this function, rather than reaching
+    // renderExternalCheckWaiverComment's own throw-on-empty-agentId guard.
+    if (!actor) {
+      blockingReasons.push('actor is empty');
+    }
   } else if (!linkedIssue.ok) {
     blockingReasons.push(linkedIssue.reason);
   }
@@ -459,7 +467,9 @@ export function planExternalCheckWaiver(
   // design); the normal path binds to the linked issue's active claim, same
   // as before this change.
   const claimBinding = claimless
-    ? { agentId: actor, claimId: 'none' }
+    ? actor
+      ? { agentId: actor, claimId: 'none' }
+      : null
     : linkedIssue.ok
       ? {
           agentId: linkedIssue.issue.activeClaim.agentId,
