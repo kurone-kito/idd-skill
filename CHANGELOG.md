@@ -42,9 +42,9 @@ waivers, and schema-documentation completeness release.
   indentation inside block boundaries, multiple candidate enclosing
   HTML block types, a fence opener under wide list padding, code
   spans stopping inside an open HTML block, and opened-tag matching
-  when closing a raw-text block — the shared tokenizer
-  suitability-triage's code-region masking depends on.
-- Suitability-triage hardening: masks markdown code regions in Check
+  when closing a raw-text block. Suitability-triage's Check 3
+  code-region masking depends on this shared tokenizer.
+- Suitability-triage hardening: masks Markdown code regions in Check
   3, requires the PR to reference the candidate issue, and surfaces
   existing A4.5 rejection comments instead of missing them.
 - Schema documentation completeness: per-property descriptions added
