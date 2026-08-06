@@ -88,6 +88,69 @@ test('parseArgs: rejects an unknown flag', () => {
   assert.throws(() => parseArgs(['--bogus']));
 });
 
+// --- #1905: claimless waiver authoring flag ---------------------------------
+
+test('parseArgs: parses --claimless', () => {
+  const args = parseArgs([
+    '--pr',
+    '5',
+    '--check',
+    'CodeRabbit',
+    '--reason',
+    'flaky',
+    '--claimless',
+  ]);
+  assert.equal(args.claimless, true);
+});
+
+test('parseArgs: --claimless defaults to false', () => {
+  const args = parseArgs([
+    '--pr',
+    '5',
+    '--check',
+    'CodeRabbit',
+    '--reason',
+    'flaky',
+  ]);
+  assert.equal(args.claimless, false);
+});
+
+test('parseArgs: --claimless combined with --issue throws', () => {
+  assert.throws(
+    () =>
+      parseArgs([
+        '--pr',
+        '5',
+        '--check',
+        'x',
+        '--reason',
+        'y',
+        '--claimless',
+        '--issue',
+        '3',
+      ]),
+    /--claimless cannot be combined with --issue/,
+  );
+});
+
+test('parseArgs: --claimless combined with --claim-id throws', () => {
+  assert.throws(
+    () =>
+      parseArgs([
+        '--pr',
+        '5',
+        '--check',
+        'x',
+        '--reason',
+        'y',
+        '--claimless',
+        '--claim-id',
+        'claim-1',
+      ]),
+    /--claimless cannot be combined with --claim-id/,
+  );
+});
+
 type PlanInput = Parameters<typeof planExternalCheckWaiver>[0];
 // The base-input builder always supplies these fields, so the test
 // mutations below may dereference them without optional guards.
@@ -206,6 +269,44 @@ test('planExternalCheckWaiver fails closed when no active linked claim is availa
 
   assert.equal(report.canApply, false);
   assert.match(report.blockingReasons.join('\n'), /active linked issue claim/);
+});
+
+// --- #1905: claimless waiver authoring path ---------------------------------
+
+test('planExternalCheckWaiver: claimless renders a none-claim-id waiver without any linked issue claim', () => {
+  const input = buildBaseInput();
+  input.claimless = true;
+  // A genuinely claimless PR (e.g. Dependabot) has no linked issue at all.
+  input.issueCandidates = [];
+
+  const report = planExternalCheckWaiver(input, {
+    now: new Date('2026-05-17T06:00:00Z'),
+    repoOwner: 'kurone-kito',
+  });
+
+  assert.equal(report.canApply, true);
+  assert.equal(report.blockingReasons.length, 0);
+  assert.equal(report.linkedIssue, null);
+  assert.match(report.body, /idd-external-check-waiver: kurone-kito none /);
+});
+
+test('planExternalCheckWaiver: claimless is blocked when the PR has a resolvable active claim', () => {
+  const input = buildBaseInput();
+  input.claimless = true;
+  // buildBaseInput() already wires a linked issue with an active claim --
+  // a claimless (none) waiver would just be rejected wrongClaim at the
+  // merge gate for a PR shaped like this, so it must be blocked up front.
+
+  const report = planExternalCheckWaiver(input, {
+    now: new Date('2026-05-17T06:00:00Z'),
+    repoOwner: 'kurone-kito',
+  });
+
+  assert.equal(report.canApply, false);
+  assert.match(
+    report.blockingReasons.join('\n'),
+    /resolvable active IDD claim/,
+  );
 });
 
 test('planExternalCheckWaiver fails closed for unauthorized write-only actors', () => {
