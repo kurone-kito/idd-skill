@@ -120,6 +120,15 @@ export interface ParsedForcedHandoffMarker {
 /** Parsed `<!-- idd-external-check-waiver: ... -->` marker. */
 export interface ParsedExternalCheckWaiver {
   agentId: string;
+  /**
+   * The marker's positional claim-id field, verbatim (case preserved). May
+   * be an arbitrary claim id, or the case-insensitive literal sentinel
+   * `none` (#1905) declaring a deliberately claimless waiver -- the
+   * consumer (`summarizeExternalCheckWaivers` in `protocol-helpers.mts`)
+   * decides whether the sentinel applies by comparing
+   * `claimId.toLowerCase() === 'none'` against its own resolved active
+   * claim; this parser does not special-case the token.
+   */
   claimId: string;
   headSha: string;
   checkSelector: string;
@@ -1004,6 +1013,13 @@ export function renderAdvisoryRerollMarker(payload: {
   return `advisory-reroll: ${agentId} ${headSha} ${timestamp}`;
 }
 
+// #1905: the grammar's positional claim-id field
+// (`{agent-id} {claim-id|none} {head-sha} ...`) already accepts an
+// arbitrary non-whitespace token, so the case-insensitive literal `none`
+// sentinel parses through the SAME `(\S+)` capture as any other claim id --
+// no regex change needed here. `parsed.claimId` carries the token verbatim
+// (case preserved); see `ParsedExternalCheckWaiver.claimId`'s doc comment
+// for how the consumer resolves the sentinel.
 export function parseExternalCheckWaiverComment(
   body: string,
   createdAt: string,

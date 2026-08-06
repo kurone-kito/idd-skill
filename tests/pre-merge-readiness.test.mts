@@ -4653,6 +4653,88 @@ test('summarizeExternalCheckWaivers: an empty active claim fails closed to wrong
   assert.equal(result.wrongClaim.length, 1);
 });
 
+// --- #1905: claimless waiver (claim-id "none") sentinel ---------------------
+
+test('summarizeExternalCheckWaivers: claim-id "none" on an unclaimed PR is valid (claimless-accept)', () => {
+  const head = 'f'.repeat(40);
+  const body = makeWaiverComment({ headSha: head, claimId: 'none' });
+  const comment = {
+    body,
+    author: { login: 'kurone-kito' },
+    createdAt: '2026-05-17T00:00:00Z',
+  };
+  // No active claim resolves at the gate -- the literal `none` sentinel
+  // explicitly declares this a claimless waiver, satisfying the
+  // claim-binding check only because the gate independently confirms no
+  // claim exists.
+  const result = summarizeExternalCheckWaivers([comment], {
+    prHeadSha: head,
+    activeClaimId: '',
+    trustedMarkerLogins: ['kurone-kito'],
+    now: '2026-05-17T00:00:00Z',
+  });
+  assert.equal(result.valid.length, 1);
+  assert.equal(result.wrongClaim.length, 0);
+});
+
+test('summarizeExternalCheckWaivers: "NONE"/"None" (any case) on an unclaimed PR is valid', () => {
+  const head = 'f'.repeat(40);
+  for (const sentinel of ['NONE', 'None', 'nOnE']) {
+    const body = makeWaiverComment({ headSha: head, claimId: sentinel });
+    const comment = {
+      body,
+      author: { login: 'kurone-kito' },
+      createdAt: '2026-05-17T00:00:00Z',
+    };
+    const result = summarizeExternalCheckWaivers([comment], {
+      prHeadSha: head,
+      activeClaimId: '',
+      trustedMarkerLogins: ['kurone-kito'],
+      now: '2026-05-17T00:00:00Z',
+    });
+    assert.equal(result.valid.length, 1, `sentinel ${sentinel} must validate`);
+  }
+});
+
+test('summarizeExternalCheckWaivers: a non-none, non-matching claim id on an unclaimed PR still fails to wrongClaim (regression #1077, claimless-reject-wrong-sentinel)', () => {
+  const head = 'f'.repeat(40);
+  const body = makeWaiverComment({ headSha: head, claimId: 'claim-123' });
+  const comment = {
+    body,
+    author: { login: 'kurone-kito' },
+    createdAt: '2026-05-17T00:00:00Z',
+  };
+  const result = summarizeExternalCheckWaivers([comment], {
+    prHeadSha: head,
+    activeClaimId: '',
+    trustedMarkerLogins: ['kurone-kito'],
+    now: '2026-05-17T00:00:00Z',
+  });
+  assert.equal(result.valid.length, 0, 'unbound waiver must not be valid');
+  assert.equal(result.wrongClaim.length, 1);
+});
+
+test('summarizeExternalCheckWaivers: claim-id "none" on a claimed PR is rejected to wrongClaim (claimed-PR-rejects-none)', () => {
+  const head = 'f'.repeat(40);
+  const body = makeWaiverComment({ headSha: head, claimId: 'none' });
+  const comment = {
+    body,
+    author: { login: 'kurone-kito' },
+    createdAt: '2026-05-17T00:00:00Z',
+  };
+  // A real claim resolves at the gate -- the `none` sentinel only applies
+  // when the gate independently confirms no claim exists, so it must never
+  // route around a genuine claim mismatch.
+  const result = summarizeExternalCheckWaivers([comment], {
+    prHeadSha: head,
+    activeClaimId: 'claim-123',
+    trustedMarkerLogins: ['kurone-kito'],
+    now: '2026-05-17T00:00:00Z',
+  });
+  assert.equal(result.valid.length, 0, 'none must not bind to a real claim');
+  assert.equal(result.wrongClaim.length, 1);
+});
+
 test('summarizeExternalCheckWaivers: an empty head SHA fails closed to wrongHead', () => {
   const head = 'a'.repeat(40);
   const body = makeWaiverComment({ headSha: head, claimId: 'claim-123' });

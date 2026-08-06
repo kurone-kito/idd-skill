@@ -190,8 +190,20 @@ export function summarizeExternalCheckWaivers(
     }
     // Fail closed on an empty active claim: when no claim resolves at the gate
     // (`activeClaimLower === ''`), a waiver cannot be bound to an owner and is
-    // rejected rather than passing unbound.
-    if (!activeClaimLower || parsed.claimId !== activeClaimLower) {
+    // rejected rather than passing unbound. #1905's one narrow exception: the
+    // case-insensitive literal sentinel `none` in the marker's claimId field
+    // explicitly declares "this is a claimless waiver" -- it satisfies the
+    // claim-binding check ONLY when the gate independently confirms no claim
+    // resolves (`!activeClaimLower`). A non-empty `activeClaimLower` always
+    // requires an exact `claimId` match; `none` is never accepted there, so
+    // the sentinel can never route around a genuine claim mismatch. Every
+    // other combination is unchanged: a non-`none` claimId on an unclaimed PR
+    // still falls into `wrongClaim` -- the exact regression #1077 fixed.
+    const claimIdIsNoneSentinel = parsed.claimId.toLowerCase() === 'none';
+    const claimBindingSatisfied = activeClaimLower
+      ? parsed.claimId === activeClaimLower
+      : claimIdIsNoneSentinel;
+    if (!claimBindingSatisfied) {
       wrongClaim.push({
         authorLogin,
         checkSelector: parsed.checkSelector,

@@ -706,6 +706,13 @@ export function renderAdvisoryRerollMarker(payload) {
   }
   return `advisory-reroll: ${agentId} ${headSha} ${timestamp}`;
 }
+// #1905: the grammar's positional claim-id field
+// (`{agent-id} {claim-id|none} {head-sha} ...`) already accepts an
+// arbitrary non-whitespace token, so the case-insensitive literal `none`
+// sentinel parses through the SAME `(\S+)` capture as any other claim id --
+// no regex change needed here. `parsed.claimId` carries the token verbatim
+// (case preserved); see `ParsedExternalCheckWaiver.claimId`'s doc comment
+// for how the consumer resolves the sentinel.
 export function parseExternalCheckWaiverComment(body, createdAt) {
   const match = body
     .trimEnd()
