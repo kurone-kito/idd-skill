@@ -51,6 +51,26 @@ test('advisoryWait.convergenceScope defaults to all-prs and accepts idd-claimed'
   );
 });
 
+test('advisoryWait.exemptBotAuthoredPrs defaults to false and only a literal true opts in (#1906)', () => {
+  assert.equal(POLICY_DEFAULTS.advisoryWait.exemptBotAuthoredPrs, false);
+  assert.equal(
+    normalizePolicyConfig({}).advisoryWait.exemptBotAuthoredPrs,
+    false,
+  );
+  assert.equal(
+    normalizePolicyConfig({
+      advisoryWait: { exemptBotAuthoredPrs: true },
+    }).advisoryWait.exemptBotAuthoredPrs,
+    true,
+  );
+  assert.equal(
+    normalizePolicyConfig({
+      advisoryWait: { exemptBotAuthoredPrs: 'true' },
+    }).advisoryWait.exemptBotAuthoredPrs,
+    false,
+  );
+});
+
 test('POLICY_DEFAULTS.labels exposes the three reserved label name defaults', () => {
   // Additive only (#1272): POLICY_DEFAULTS carries the literal defaults,
   // and normalizePolicyConfig normalizes this namespace too (for shape

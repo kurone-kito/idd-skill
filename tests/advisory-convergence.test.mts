@@ -415,6 +415,105 @@ test('idd-claimed scope: a PR without a verified linked claim is not applicable'
   assert.deepEqual(verdict.reasons, []);
 });
 
+// --- exemptBotAuthoredPrs (#1906) -------------------------------------------
+
+test('exemptBotAuthoredPrs: all-prs scope, flag on, Bot-typed author, no claim history -> not_applicable', () => {
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({
+      reviews: [copilotReview({ itemCount: 2 })],
+      claimEvents: [],
+      prAuthorIsBot: true,
+    }),
+    baseOptions({ exemptBotAuthoredPrs: true }),
+  );
+  assertValidVerdict(verdict);
+  assert.deepEqual(verdict.applicability, {
+    scope: 'all-prs',
+    status: 'not_applicable',
+    reason: 'bot-authored-no-claim-history',
+  });
+  assert.equal(verdict.pending, false);
+  assert.equal(verdict.ready, true);
+  assert.deepEqual(verdict.reasons, []);
+  // Bonus: the existing `scopeNotApplicable`-gated `ineligibleReasons`
+  // computation is scope-generic (reads `applicability.status`, not
+  // `convergenceScope`), so it already covers this new `all-prs` cause
+  // with no code change of its own -- confirm that holds.
+  assert.deepEqual(verdict.sameHeadReroll.ineligibleReasons, [
+    SAME_HEAD_REROLL_INELIGIBLE_REASON.SCOPE_NOT_APPLICABLE,
+  ]);
+});
+
+test('exemptBotAuthoredPrs: all-prs scope, flag on, Bot-typed author WITH claim history -> unchanged applicable/all-prs', () => {
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({
+      reviews: [copilotReview()],
+      claimEvents: [],
+      claimMarkerHistoryPresent: true,
+      prAuthorIsBot: true,
+    }),
+    baseOptions({ exemptBotAuthoredPrs: true }),
+  );
+  assertValidVerdict(verdict);
+  assert.deepEqual(verdict.applicability, {
+    scope: 'all-prs',
+    status: 'applicable',
+    reason: 'all-prs',
+  });
+});
+
+test('exemptBotAuthoredPrs: all-prs scope, flag on, human-authored PR -> unchanged applicable/all-prs', () => {
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({ reviews: [copilotReview()], claimEvents: [] }),
+    baseOptions({ exemptBotAuthoredPrs: true }),
+  );
+  assertValidVerdict(verdict);
+  assert.deepEqual(verdict.applicability, {
+    scope: 'all-prs',
+    status: 'applicable',
+    reason: 'all-prs',
+  });
+});
+
+test('exemptBotAuthoredPrs: idd-claimed scope never changes output, even for a Bot author with no claim history (#1906 AC)', () => {
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({ reviews: [], claimEvents: [], prAuthorIsBot: true }),
+    baseOptions({
+      convergenceScope: 'idd-claimed',
+      prHeadRefName: 'feature/no-claim',
+      exemptBotAuthoredPrs: true,
+    }),
+  );
+  assertValidVerdict(verdict);
+  // Same token as the pre-existing idd-claimed test above -- NOT the new
+  // `bot-authored-no-claim-history` reason. This is the one a careless
+  // implementation (hoisting the bot check above the scope ternary)
+  // would silently break.
+  assert.deepEqual(verdict.applicability, {
+    scope: 'idd-claimed',
+    status: 'not_applicable',
+    reason: 'idd-claimed-no-verified-linked-issue-claim',
+  });
+  assert.equal(verdict.ready, true);
+});
+
+test('exemptBotAuthoredPrs: flag unset (default false) -> unchanged applicable/all-prs even for a Bot author with no claim history', () => {
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({
+      reviews: [copilotReview()],
+      claimEvents: [],
+      prAuthorIsBot: true,
+    }),
+    baseOptions(),
+  );
+  assertValidVerdict(verdict);
+  assert.deepEqual(verdict.applicability, {
+    scope: 'all-prs',
+    status: 'applicable',
+    reason: 'all-prs',
+  });
+});
+
 test('regression: a re-request without a new push supersedes an earlier dirty on-HEAD review', () => {
   // Same commit reviewed twice (a legitimate re-request per this repo's own
   // advisory-wait protocol, AW3 REQUEST_NEEDED, without a new push): the
