@@ -37,11 +37,13 @@ waivers, and schema-documentation completeness release.
 
 - Markdown-code fence/list/HTML-block-boundary tracking hardened
   across a series of edge cases — nested container boundaries, opaque
-  fence state, list-content indentation inside block boundaries,
-  multiple candidate enclosing HTML block types, a fence opener under
-  wide list padding, code spans stopping inside an open HTML block,
-  and opened-tag matching when closing a raw-text block — the shared
-  tokenizer suitability-triage's code-region masking depends on.
+  fence state, an inline code span's enclosing-block context across
+  raw-text HTML elements and spaced thematic breaks, list-content
+  indentation inside block boundaries, multiple candidate enclosing
+  HTML block types, a fence opener under wide list padding, code
+  spans stopping inside an open HTML block, and opened-tag matching
+  when closing a raw-text block — the shared tokenizer
+  suitability-triage's code-region masking depends on.
 - Suitability-triage hardening: masks markdown code regions in Check
   3, requires the PR to reference the candidate issue, and surfaces
   existing A4.5 rejection comments instead of missing them.
