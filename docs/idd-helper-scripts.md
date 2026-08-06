@@ -1772,10 +1772,10 @@ to post it is the consuming track's job.
   `idd-claimed-no-verified-linked-issue-claim` branch just above, so this
   flag changes nothing there). When `true`, a PR whose author resolves to
   a GitHub Bot-typed account (fetched via a small dedicated GraphQL
-  `__typename` query) AND has no claim-marker history at all is
-  classified `applicability: { status: "not_applicable", reason:
-  "bot-authored-no-claim-history" }`, letting a recurring automated
-  dependency-update PR (Dependabot, Renovate, ImgBot, or similar) pass
+  `__typename` query) AND has no claim-marker history at all resolves
+  to `not_applicable` (reason `bot-authored-no-claim-history`), letting
+  a recurring automated dependency-update PR (Dependabot, Renovate,
+  ImgBot, or similar) pass
   the gate without a fresh per-PR maintainer waiver. A Bot-typed author
   that DOES have claim-marker history, or any human-authored PR, is
   never exempted regardless of this flag. The `scope-not-applicable`
