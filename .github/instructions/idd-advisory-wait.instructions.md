@@ -391,7 +391,7 @@ still needs a valid waiver), and F2/F3's `advisoryWait.copilotUnavailable`/
 > recovery cycle is exhausted and the terminal window elapsed with no
 > current-HEAD review. A maintainer must post an
 > `idd-external-check-waiver:` marker for selector
-> `idd-advisory-convergence`, this HEAD, and the active claim before
+> `idd-advisory-convergence`, this HEAD, and claim (or `none`) before
 > this PR can proceed.
 
 **Waived**: rerun the existing `idd-advisory-convergence` run (never

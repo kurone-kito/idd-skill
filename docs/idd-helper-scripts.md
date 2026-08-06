@@ -869,6 +869,16 @@ default `instructions-only` profile keep using the written shell /
     Maintain, or Admin from plain Write access, when the requested check
     is not configured in `ciGate.externalChecks.waivable`, or when the
     expiry exceeds `ciGate.externalCheckWaivers.maxValidity`
+  - `--claimless` (#1905) renders a claimless waiver -- literal claim-id
+    `none` -- instead of resolving a linked issue's active claim; use it
+    for a PR with no IDD claim at all (an automated dependency-update PR
+    such as Dependabot, Renovate, or ImgBot). Cannot combine with
+    `--issue` or `--claim-id`. The helper still blocks with a clear
+    reason if the PR turns out to have a resolvable active claim after
+    all -- a `none` waiver only ever satisfies the consumer-side gate
+    (`summarizeExternalCheckWaivers` in `protocol-helpers.mts`) when no
+    claim resolves there, so posting one against a claimed PR would just
+    be rejected `wrongClaim`.
 
 ### External-check waiver contract
 
@@ -877,7 +887,7 @@ facade and F-phase consumer land. The contract is intentionally
 auditable and fail-closed.
 
 ```md
-<!-- idd-external-check-waiver: {agent-id} {claim-id} {head-sha} check:{check-selector} reason:{reason-token} expires:{iso8601} -->
+<!-- idd-external-check-waiver: {agent-id} {claim-id|none} {head-sha} check:{check-selector} reason:{reason-token} expires:{iso8601} -->
 
 _{actor}: external check waiver for IDD F phase._
 ```
@@ -894,6 +904,14 @@ Interpretation rules:
 - Missing or unparseable body fields, unknown selectors, expired
   comments, wrong HEAD, wrong claim, or untrusted authors must fail
   closed.
+- `claim-id` accepts the case-insensitive literal sentinel `none`
+  (#1905) alongside an arbitrary claim id, declaring a deliberately
+  claimless waiver. It satisfies the claim-binding check only when the
+  gate independently confirms no claim resolves for the PR (an empty
+  active claim id) -- on a PR with a resolvable active claim, `none` is
+  never accepted and still fails closed to the same wrong-claim
+  rejection as any other mismatched claim id; this never weakens the
+  #1077 fail-closed-on-empty-claim guarantee for a non-`none` claim id.
 - A valid waiver can apply only to checks listed in
   `ciGate.externalChecks.waivable` and only when
   `ciGate.externalCheckWaivers.mode` enables maintainer authorization.
@@ -918,6 +936,16 @@ Interpretation rules:
       --reason "rate limit" \
       --expires-in PT2H \
       --apply --yes
+    ```
+
+  - claimless PR (dry-run), e.g. a stuck Dependabot PR with no IDD claim:
+
+    ```sh
+    idd-external-check-waiver --pr 123 \
+      --claimless \
+      --check "idd-advisory-convergence" \
+      --reason "Dependabot PR, Copilot review never lands" \
+      --expires-in PT2H
     ```
 
   - inspect the rendered body first; do not hand-write or copy raw
