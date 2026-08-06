@@ -372,8 +372,8 @@ alone never proves `COPILOT_UNAVAILABLE` (see **State**).
 ### Terminal routing (`#1570`)
 
 One `idd-external-check-waiver:` marker (selector
-`idd-advisory-convergence`, current HEAD, active claim) satisfies both
-consumers: the CI check's `terminal` field (its waiver hatch also opens
+`idd-advisory-convergence`, current HEAD, claim or `none`) satisfies
+both consumers: the CI check's `terminal` field (its waiver hatch also opens
 on `COPILOT_UNAVAILABLE` independent of `deadline.passed` — `ready`
 still needs a valid waiver), and F2/F3's `advisoryWait.copilotUnavailable`/
 `copilotUnavailableWaived` (`f3Outcome` unchanged; unwaived adds
