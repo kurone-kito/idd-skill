@@ -296,6 +296,11 @@ jobs:
       - name: Run advisory-convergence verdict (--assert)
         env:
           GH_TOKEN: ${{ github.token }}
+          # gh reads whichever of these two matches its resolved host
+          # (`gh help environment`), so setting both is inert on
+          # github.com and lets this same step authenticate on a
+          # self-hosted GHES host too.
+          GH_ENTERPRISE_TOKEN: ${{ github.token }}
           # workflow_dispatch's `pr_number` input is `type: number` in the
           # UI, but that constraint is not strictly enforced for direct API
           # dispatches, so route it through env: and reference it as a
