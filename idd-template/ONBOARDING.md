@@ -1086,18 +1086,34 @@ examples onto a GHES-hosted repository, keep both lines rather than
 deleting `GH_ENTERPRISE_TOKEN` as apparently redundant (preventive; no
 observed incident yet).
 
-**Setting the token alone is not sufficient on GHES.** The
-`idd-doctor`/`idd-advisory-convergence` helpers call `gh api` directly,
-and `gh api` resolves its target host from `GH_HOST`/`--hostname` (or
-the CLI's configured default), not from the checked-out repository's
-Git remote the way `gh pr view`/`gh issue edit` do — so on a
-GHES-hosted repository, an unset `GH_HOST` still sends these `gh api`
-calls to `api.github.com` using `GH_TOKEN`, and `GH_ENTERPRISE_TOKEN`
-is never read at all (observed 2026-08-11, a Codex advisory review on
+**Setting the token alone is not sufficient by itself on GHES.** `gh
+api`/`gh api graphql` resolve their target host from `GH_HOST`/
+`--hostname` (or the CLI's configured default), not from the
+checked-out repository's Git remote the way `gh pr view`/`gh issue
+edit` do — so on a GHES-hosted repository, an unset `GH_HOST` would
+otherwise send these calls to `api.github.com` using `GH_TOKEN`, with
+`GH_ENTERPRISE_TOKEN` never read at all (observed 2026-08-11, a Codex
+advisory review on
 [kurone-kito/idd-skill#1959](https://github.com/kurone-kito/idd-skill/pull/1959)).
-Resolving the correct host for these calls needs its own design — see
-kurone-kito/idd-skill#1962 — so a GHES adopter should treat the two
-examples above as necessary but not yet sufficient until that lands.
+`src/scripts/gh-exec.mts`'s shared `ghApiJson`/`ghGraphql` wrappers now
+resolve the correct `--hostname` automatically
+([kurone-kito/idd-skill#1962](https://github.com/kurone-kito/idd-skill/issues/1962)),
+preferring an explicit `GH_HOST` when set (in which case no
+`--hostname` is added — `gh` already resolves it correctly on its
+own) and otherwise, in GitHub Actions, deriving the host from the
+`GITHUB_SERVER_URL` default environment variable (no workflow `env:`
+change needed, and no behavior change at all on `github.com`, where it
+already equals the default host). Outside Actions (a local
+`idd-doctor` run) with neither signal set, they defer to `gh`'s own
+single-authenticated-host default, same as `gh` itself.
+`idd-advisory-convergence` (both the CI-hosted
+required-check workflow and its underlying `advisory-convergence.mts`
+GitHub-API calls) goes through these shared wrappers, so it is covered
+end to end. `idd-doctor.mts`'s own few direct `gh api` call sites do
+not route through `gh-exec.mts` and are **not** covered by this fix —
+a GHES adopter relying on `idd-doctor`'s GitHub-API-backed checks
+(post-merge cleanup backlog, autopilot-suitability) should still treat
+host resolution there as an open gap.
 
 This gate checks repository **health**, not the disposable-worktree rule:
 CI cannot detect a primary-worktree B1 violation (it leaves no trace in

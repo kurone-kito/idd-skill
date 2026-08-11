@@ -214,6 +214,68 @@ export interface GhApiJsonOptions {
 }
 
 /**
+ * Resolve the `--hostname` override {@link ghApiJson} / {@link ghGraphql}
+ * pass to `gh api` / `gh api graphql`, so a self-hosted GitHub Enterprise
+ * Server (GHES) repository's GitHub-API-backed calls target the correct
+ * host instead of silently defaulting to `api.github.com` (#1962).
+ *
+ * `gh api` resolves its target host from `GH_HOST` / `--hostname`, or the
+ * CLI's single configured/authenticated host, defaulting to `github.com`
+ * -- unlike higher-level subcommands (`gh pr view`, `gh issue edit`, ...),
+ * it does **not** infer the host from the checked-out repository's Git
+ * remote (`gh help environment`). On a GHES-hosted repository running in
+ * GitHub Actions, this means an unset `GH_HOST` still sends these calls to
+ * `api.github.com` using `GH_TOKEN`, and `GH_ENTERPRISE_TOKEN` (set
+ * alongside it by #1946) is never read at all, even though the workflow
+ * itself is genuinely running against the GHES host.
+ *
+ * Resolution order:
+ *
+ * 1. `GH_HOST`, when set -- `gh` already reads this itself (`gh help
+ *    environment`), so no `--hostname` override is needed here; returning
+ *    `undefined` avoids a second, potentially-redundant resolution path
+ *    for a case `gh` already handles, and leaves an operator's explicit
+ *    override unchanged.
+ * 2. `GITHUB_SERVER_URL` -- a GitHub Actions **default** environment
+ *    variable present in every job (no workflow `env:` entry required),
+ *    always a well-formed `scheme://host` URL supplied by the runner
+ *    itself (`https://github.com` or `https://<ghes-host>`), so this
+ *    strips the scheme instead of parsing untrusted input. When the
+ *    stripped host equals `github.com` (the overwhelming common case,
+ *    including every run of this repository's own CI), this returns
+ *    `undefined` so the emitted argv stays byte-identical to before this
+ *    change -- the "no behavior change on github.com" half of #1962's
+ *    acceptance criteria.
+ * 3. Otherwise (a non-Actions caller with no `GH_HOST` set, e.g. a local
+ *    `idd-doctor` run) -- `undefined`. `gh`'s own "single authenticated
+ *    host" default already resolves correctly for a developer
+ *    authenticated only to their GHES instance; a developer authenticated
+ *    to more than one host sets `GH_HOST` themselves (case 1), the same
+ *    convention `gh` itself documents. This deliberately adds no
+ *    git-remote-derived fallback here (contrast
+ *    `branch-conflict-state.mts`'s `resolveFetchOrigin`, which fetches
+ *    from a remote and has no other host signal available): that would
+ *    widen this change beyond `gh-exec.mts`'s two wrappers and risks
+ *    silently overriding a `gh` config that was already resolving
+ *    correctly. See `idd-template/ONBOARDING.md`'s GHES host-resolution
+ *    note for the fuller design record, including the still-open gap for
+ *    helpers (e.g. `idd-doctor.mts`) that call `gh api` directly instead
+ *    of through this module's shared wrappers.
+ */
+export function resolveGhApiHostname(
+  env: NodeJS.ProcessEnv = process.env,
+): string | undefined {
+  if (env.GH_HOST?.trim()) return undefined;
+  const serverUrl = env.GITHUB_SERVER_URL?.trim();
+  if (!serverUrl) return undefined;
+  const host = serverUrl
+    .replace(/^[a-z][a-z0-9+.-]*:\/\//i, '')
+    .replace(/\/+$/, '')
+    .toLowerCase();
+  return host && host !== 'github.com' ? host : undefined;
+}
+
+/**
  * Run `gh api <path>` and parse its output as JSON, optionally paginating
  * (NDJSON-compatible) and/or tolerating specific failure statuses.
  *
@@ -221,13 +283,22 @@ export interface GhApiJsonOptions {
  * replaces: `advisory-wait-state.mts`'s NDJSON-pagination handling and
  * `review-activity-snapshot.mts`'s `allowStatuses` tolerated-failure
  * fallback.
+ *
+ * Targets the correct GHES host via {@link resolveGhApiHostname} (#1962)
+ * instead of always defaulting to `github.com`.
  */
 export function ghApiJson(
   path: string,
   options: GhApiJsonOptions = {},
 ): unknown {
   const { paginate = false, extraArgs = [], allowStatuses = [] } = options;
-  const args = ['api', path, ...extraArgs];
+  const hostname = resolveGhApiHostname();
+  const args = [
+    'api',
+    path,
+    ...(hostname ? ['--hostname', hostname] : []),
+    ...extraArgs,
+  ];
   if (paginate) {
     args.push('--paginate', '--jq', '.[]');
   }
@@ -266,12 +337,22 @@ export function ghApiJson(
  * file's existing role as the shared `gh`-execution module for `ghText` /
  * `ghApiJson`. Uses `ghText`'s own default timeout (no explicit override
  * here, unchanged from this function's pre-extraction behavior).
+ *
+ * Targets the correct GHES host via {@link resolveGhApiHostname} (#1962)
+ * instead of always defaulting to `github.com`.
  */
 export function ghGraphql(
   query: string,
   variables: Record<string, string | number | null | undefined>,
 ): unknown {
-  const args = ['api', 'graphql', '-f', `query=${query}`];
+  const hostname = resolveGhApiHostname();
+  const args = [
+    'api',
+    'graphql',
+    ...(hostname ? ['--hostname', hostname] : []),
+    '-f',
+    `query=${query}`,
+  ];
   for (const [key, value] of Object.entries(variables)) {
     if (value === null || value === undefined) continue;
     if (typeof value === 'number') {
