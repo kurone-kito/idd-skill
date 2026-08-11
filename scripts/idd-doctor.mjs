@@ -5,7 +5,14 @@
 // above by `pnpm run build`. Edit the .mts source, never the generated
 // .mjs. See docs/typescript-sources.md.
 import { execFileSync } from 'node:child_process';
-import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
+import {
+  accessSync,
+  existsSync,
+  constants as fsConstants,
+  readdirSync,
+  readFileSync,
+  statSync,
+} from 'node:fs';
 import { isAbsolute, join, relative, resolve } from 'node:path';
 import {
   normalizeAutopilotSuitabilityFloor,
@@ -1441,6 +1448,79 @@ export function hookWiresWorktreeGuard(content) {
   );
 }
 /**
+ * True when a git hook file body chains execution to the corresponding
+ * shipped `.githooks/<hookName>` script via one of the two documented
+ * exec/invocation forms from ONBOARDING.md's "Coexisting with an existing
+ * hook manager" recipe:
+ *
+ * ```sh
+ * exec "$(git rev-parse --show-toplevel)/.githooks/<hookName>" "$@"
+ * "$(git rev-parse --show-toplevel)/.githooks/<hookName>" "$@" || exit $?
+ * ```
+ *
+ * Line-anchored and comment-immune the same way `hookWiresWorktreeGuard`
+ * is: a `#`-prefixed line (e.g. a leftover "was:" comment) never matches.
+ * The quoted path must begin the executed command token (immediately after
+ * an optional `exec`, with nothing else in between) — an unrelated leading
+ * command such as `echo "$(...)/.githooks/pre-commit" "$@"` never matches,
+ * since that would only *mention* the path rather than invoke it. The path
+ * must also use the documented `$(git rev-parse --show-toplevel)/` prefix
+ * exactly, not merely end in `.githooks/<hookName>` — an unrelated target
+ * such as `"$HOME/.githooks/<hookName>"` never matches, since that string
+ * has no relationship to this repository's own shipped script regardless
+ * of what happens to live at the fixed `.githooks/<hookName>` path this
+ * function's caller separately verifies. The non-`exec` form additionally
+ * requires the documented `|| exit $?` failure-propagation suffix
+ * immediately afterward (only whitespace may separate them) — without
+ * `exec`, a guard failure that isn't explicitly propagated can be silently
+ * swallowed by whatever the hook manager's own dispatcher runs next, so an
+ * invocation lacking that suffix is not accepted as reliable chaining
+ * evidence. Both forms must also end the line (only trailing whitespace and
+ * an optional `#` comment may follow) — a trailing shell operator such as
+ * `| cat` or a backgrounding `&` can decouple the line's own exit status
+ * from the guard's, so a line carrying either form of the two documented
+ * commands plus anything else is not accepted either. The trailing comment
+ * itself must be preceded by whitespace, matching real shell tokenizing: an
+ * adjacent `#` right after the closing quote (e.g. `"$@"#| cat`) is not a
+ * comment delimiter to the shell at all — it stays part of the same word —
+ * so accepting it here would let disguised trailing content back in through
+ * the very escape hatch meant only for a genuine, separated comment. A
+ * candidate line must also not be a backslash-continuation of the
+ * preceding physical line (a line ending in `\` before it) — the shell
+ * joins such a pair into one logical command, so e.g. a `printf '%s' \`
+ * line immediately followed by the exec form on the next physical line
+ * never actually invokes it; it only passes those words as arguments to
+ * the earlier command.
+ *
+ * Scope boundary: this is a bounded lexical heuristic for the two
+ * documented forms appearing as an ordinary standalone physical line, not
+ * a shell parser. It does not evaluate quoting edge cases, variable
+ * expansion, here-docs, `eval`, subshell wrapping, or any other
+ * adversarial or unusual shell construction that could still reach one of
+ * the two forms at runtime while lexically evading this check (or vice
+ * versa). This is a warning-level misconfiguration diagnostic, not a
+ * security boundary — an operator who wants to fool it can simply not
+ * enable the guard — so further hardening against constructions beyond
+ * the documented recipe is out of scope absent an observed incident.
+ * Pure (no I/O) so it can be unit-tested directly. A non-string
+ * (absent/unreadable hook) is treated as not chaining.
+ */
+export function hookChainsToGithooksScript(content, hookName) {
+  if (typeof content !== 'string') {
+    return false;
+  }
+  const escaped = escapeRegex(hookName);
+  const quotedPath = `"\\$\\(git rev-parse --show-toplevel\\)/\\.githooks/${escaped}"`;
+  const lineEnd = '(?:[ \\t]*$|[ \\t]+#.*$)';
+  const execForm = `exec[ \\t]+${quotedPath}[ \\t]+"\\$@"${lineEnd}`;
+  const nonExecForm = `${quotedPath}[ \\t]+"\\$@"[ \\t]*\\|\\|[ \\t]*exit[ \\t]+\\$\\?${lineEnd}`;
+  const notContinuedLine = '(?<!\\\\\\n)';
+  return new RegExp(
+    `${notContinuedLine}^[ \\t]*(?:${execForm}|${nonExecForm})`,
+    'm',
+  ).test(content);
+}
+/**
  * Decide whether the worktree guard is enabled-but-inert in the current
  * environment and, if so, produce a warning finding. Pure (no I/O) so it can
  * be unit-tested directly.
@@ -1480,27 +1560,92 @@ export function classifyWorktreeGuardActivation({
       `worktreeGuard.enabled is true but the commit/push guard is not active ` +
       `in this environment (core.hooksPath = ${shown}); B1 primary-worktree ` +
       `commits will NOT be blocked here. Wire it with: ` +
-      `git config core.hooksPath .githooks`,
+      `git config core.hooksPath .githooks && chmod +x ` +
+      `.githooks/pre-commit .githooks/pre-push — or, if an existing hook ` +
+      `manager already owns core.hooksPath here, chain each hook to the ` +
+      `corresponding .githooks/* script instead of repointing directly; see ` +
+      `ONBOARDING.md's "Coexisting with an existing hook manager" section`,
   };
 }
 /**
  * Read the `pre-commit` and `pre-push` hooks at the resolved `core.hooksPath`
- * and report whether both wire the B1 guard. A relative hooks path resolves
- * against the repository root; an absolute one is used as-is.
+ * and report whether both wire the B1 guard, directly or through a
+ * documented one-level chain. A relative hooks path resolves against the
+ * repository root; an absolute one is used as-is.
+ *
+ * A hook counts as wired when the file **actually present and executable
+ * at `hooksPath`** — the one git itself would invoke, and only when git
+ * would actually invoke it: git silently skips a hook file that exists but
+ * lacks the executable bit — either:
+ *  - sources `_idd-worktree-guard.sh` directly (the base, non-chained
+ *    activation path), or
+ *  - itself chains to the corresponding `.githooks/<hook>` script via a
+ *    documented exec/invocation line, or — **only when `hooksPath` resolves
+ *    to exactly `.husky/_`**, the precise shape Husky v9's own
+ *    `core.hooksPath = .husky/_` plus the committed `.husky/<hook>` file
+ *    takes (see ONBOARDING.md's "Coexisting with an existing hook
+ *    manager") — hands off to the sibling file in `hooksPath`'s **parent**
+ *    directory that does, with that `.githooks/<hook>` script itself
+ *    confirmed to both genuinely source the guard and be executable
+ *    (defense-in-depth against a chain line pointing at a missing,
+ *    non-executable, or tampered target).
+ *
+ * The parent-directory fallback checks the **full path** relative to the
+ * repository root, not merely `hooksPath`'s last path segment: matching on
+ * a bare trailing `_` would also fire for an unrelated directory that
+ * happens to end in `_` (e.g. `.other-hooks/_`), and matching on an
+ * arbitrary directory at all — without the executable-bit check above —
+ * would let an unrelated file that merely happens to sit in some other
+ * hooksPath's parent directory, and happens to contain a chain-shaped
+ * line, supply chain evidence for two files with no real dispatch
+ * relationship (Copilot + Codex review, PR #1969).
+ *
+ * This stays bounded to the documented recipe's two concrete file
+ * locations — it does not trace an arbitrary hook manager's own dispatch
+ * machinery.
  */
-function worktreeGuardWiredAt(root, hooksPath) {
+export function worktreeGuardWiredAt(root, hooksPath) {
   const directory = isAbsolute(hooksPath) ? hooksPath : join(root, hooksPath);
-  const read = (name) => {
+  const parentDirectory = join(directory, '..');
+  const isHuskyUnderscoreSplit =
+    relative(root, directory).split('\\').join('/') === '.husky/_';
+  const githooksDirectory = join(root, '.githooks');
+  const read = (dir, name) => {
     try {
-      return readFileSync(join(directory, name), 'utf8');
+      return readFileSync(join(dir, name), 'utf8');
     } catch {
       return null;
     }
   };
-  return (
-    hookWiresWorktreeGuard(read('pre-commit')) &&
-    hookWiresWorktreeGuard(read('pre-push'))
-  );
+  const isExecutable = (dir, name) => {
+    try {
+      accessSync(join(dir, name), fsConstants.X_OK);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+  const wired = (name) => {
+    const atHooksPath = read(directory, name);
+    // git silently skips a hook file that exists but isn't executable, so
+    // neither wiring form below is reachable without this bit set.
+    if (atHooksPath === null || !isExecutable(directory, name)) {
+      return false;
+    }
+    if (hookWiresWorktreeGuard(atHooksPath)) {
+      return true;
+    }
+    const chains =
+      hookChainsToGithooksScript(atHooksPath, name) ||
+      (isHuskyUnderscoreSplit &&
+        hookChainsToGithooksScript(read(parentDirectory, name), name));
+    return (
+      chains &&
+      hookWiresWorktreeGuard(read(githooksDirectory, name)) &&
+      isExecutable(githooksDirectory, name)
+    );
+  };
+  return wired('pre-commit') && wired('pre-push');
 }
 /**
  * Warn when `worktreeGuard.enabled` is true but the commit/push guard is not
