@@ -2004,6 +2004,19 @@ test('parseArgs still accepts a plain numeric --pr value', () => {
   assert.equal(parseArgs(['--pr', '1431']).prNumber, 1431);
 });
 
+// Disclosed behavior change (#1955 migration onto parseCliArgs(), C1
+// self-review): the pre-migration hand-rolled /^\d+$/ grammar accepted a
+// leading-zero value like "007" (Number.parseInt parsed it to 7).
+// parseCanonicalIntegerOrNull's stricter canonical-integer grammar
+// (/^(?:0|[1-9]\d*)$/) rejects any leading zero, resolving "007" to null
+// -- the same clean fail-closed outcome as any other malformed --pr
+// value, not a crash. GitHub never emits a zero-padded PR number, so
+// this narrows an already-unrealistic input rather than a real one; see
+// the function's own doc comment for the full disclosure.
+test('parseArgs resolves a leading-zero --pr value to null (behavior change from the pre-migration parser)', () => {
+  assert.equal(parseArgs(['--pr', '007']).prNumber, null);
+});
+
 // Regression (self-discovered while evaluating #1446's cli-args.mts,
 // user-directed fix): node:util's own parseArgs (strict: true) throws
 // ERR_PARSE_ARGS_INVALID_OPTION_VALUE for a bare `--pr -5` (a
@@ -2011,7 +2024,10 @@ test('parseArgs still accepts a plain numeric --pr value', () => {
 // verified to throw uncaught before this fix. A negative PR number is
 // never valid, but the failure mode must be the same clean
 // `prNumber: null` every other malformed --pr value already gets, not an
-// uncaught crash.
+// uncaught crash. Since #1955's migration onto parseCliArgs(), this
+// disambiguation is provided generically by cli-args.mts rather than by a
+// --pr-only local helper, but the observable outcome for this case is
+// unchanged.
 test('parseArgs resolves a dash-prefixed --pr value to null instead of throwing', () => {
   assert.equal(parseArgs(['--pr', '-5']).prNumber, null);
 });
@@ -2073,7 +2089,7 @@ test('parseArgs trims --check-name', () => {
 
 test('parseArgs fails fast when --check-name has a missing value', () => {
   assert.throws(() => parseArgs(['--pr', '1431', '--check-name']), {
-    code: 'ERR_PARSE_ARGS_INVALID_OPTION_VALUE',
+    message: 'missing value for argument: --check-name',
   });
 });
 
@@ -2092,68 +2108,85 @@ test('resolveCheckName honors a custom checkName', () => {
   );
 });
 
-// parseArgs delegates mechanical parsing to node:util's own stable
-// `parseArgs` (a maintainer's review suggestion, adopted -- see the
-// function's doc comment). Its `strict: true` mode raises Node's own
-// stable `ERR_PARSE_ARGS_*` error codes for an unknown option or a
-// missing/ambiguous value; these tests assert on the stable `code`
-// rather than message text, which is Node's own to change.
+// parseArgs delegates mechanical parsing to the shared parseCliArgs()
+// wrapper (cli-args.mts, #1446), migrated here from a direct node:util
+// parseArgs() call so this helper's parse errors get the same
+// bin/run-helper.mts shaped-error interception every other packaged
+// idd-* CLI command already gets (#1955; see the function's doc
+// comment). node:util's own strict-mode ERR_PARSE_ARGS_* error is
+// re-shaped by parseCliArgs()'s toRepoShapedError() into this
+// repository's established `unknown argument: --x` / `missing value for
+// argument: --x` idiom -- these tests assert on that shaped message text
+// (cli-args.mts's own contract), not Node's `.code`, which the shaped
+// Error no longer carries.
 test('parseArgs rejects an unknown argument', () => {
   assert.throws(() => parseArgs(['--bogus']), {
-    code: 'ERR_PARSE_ARGS_UNKNOWN_OPTION',
+    message: 'unknown argument: --bogus',
   });
 });
 
 // Regression (#1434 review, Copilot): `strict: true` alone only governs
 // unknown *options*, not leftover positional (non-option) tokens, so
 // `--pr 1431 extra` would otherwise silently accept `extra` instead of
-// failing fast on a likely typo. `allowPositionals: false` closes this.
+// failing fast on a likely typo. `allowPositionals: false` closes this;
+// parseCliArgs() re-shapes both the unknown-option and
+// unexpected-positional codes onto the same `unknown argument: ` prefix.
 test('parseArgs rejects an unexpected positional argument', () => {
   assert.throws(() => parseArgs(['--pr', '1431', 'extra']), {
-    code: 'ERR_PARSE_ARGS_UNEXPECTED_POSITIONAL',
+    message: 'unknown argument: extra',
   });
 });
 
 // Regression (#1434 review, Copilot + CodeRabbit): a value-taking flag
-// with no following token, or followed by another option -- long
-// (`--repo`) or short (`-h`) alike -- previously degraded into a
-// confusing "unknown argument" error (or, worse, silently accepted the
-// next flag as a value). node:util's parseArgs rejects all of these
-// forms natively.
+// with no following token, or followed by another long option, previously
+// degraded into a confusing "unknown argument" error (or, worse, silently
+// accepted the next flag as a value). node:util's parseArgs rejects both
+// forms natively; parseCliArgs() re-shapes the result onto this
+// repository's `missing value for argument: ` idiom.
 test('parseArgs fails fast when --owner is the last argument (missing value)', () => {
   assert.throws(() => parseArgs(['--pr', '1431', '--owner']), {
-    code: 'ERR_PARSE_ARGS_INVALID_OPTION_VALUE',
+    message: 'missing value for argument: --owner',
   });
 });
 
 test('parseArgs fails fast when --owner is immediately followed by another long flag', () => {
   assert.throws(
     () => parseArgs(['--pr', '1431', '--owner', '--repo', 'idd-skill']),
-    { code: 'ERR_PARSE_ARGS_INVALID_OPTION_VALUE' },
+    { message: 'missing value for argument: --owner' },
   );
 });
 
-test('parseArgs fails fast when --owner is immediately followed by the short help flag', () => {
-  assert.throws(() => parseArgs(['--owner', '-h']), {
-    code: 'ERR_PARSE_ARGS_INVALID_OPTION_VALUE',
-  });
+// parseCliArgs()'s own generic single-dash-value disambiguation (see
+// cli-args.mts's disambiguateSingleDashValues doc comment) now applies to
+// every declared string flag, not just --pr -- one of this migration's
+// intentional, disclosed behavior changes (#1955). `-h` after --owner no
+// longer looks like an ambiguous short option to node:util: it is
+// rewritten to `--owner=-h` up front, so --owner captures the literal
+// value "-h" (which passes the --owner identifier-character check) and
+// parsing instead fails on the --owner/--repo pairing rule below, since
+// --repo is still missing.
+test('parseArgs resolves --owner followed by the short help flag as a literal value, then fails the --owner/--repo pairing check', () => {
+  assert.throws(
+    () => parseArgs(['--owner', '-h']),
+    /provide both --owner and --repo, or neither/,
+  );
 });
 
 test('parseArgs fails fast when --repo has a missing value', () => {
   assert.throws(() => parseArgs(['--repo']), {
-    code: 'ERR_PARSE_ARGS_INVALID_OPTION_VALUE',
+    message: 'missing value for argument: --repo',
   });
 });
 
 test('parseArgs fails fast when --now has a missing value', () => {
   assert.throws(() => parseArgs(['--now']), {
-    code: 'ERR_PARSE_ARGS_INVALID_OPTION_VALUE',
+    message: 'missing value for argument: --now',
   });
 });
 
 test('parseArgs fails fast when --pr has a missing value', () => {
   assert.throws(() => parseArgs(['--pr']), {
-    code: 'ERR_PARSE_ARGS_INVALID_OPTION_VALUE',
+    message: 'missing value for argument: --pr',
   });
 });
 
