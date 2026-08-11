@@ -90,8 +90,8 @@ routes); **inconclusive** (neither confirmed nor contradicted — the
 needed check has no route here, not merely low confidence) → for an
 actor-permission-capped, reviewer-feedback PATH A item, route it
 through the CODEOWNER/required-reviewer AMD hold (E6) instead of
-`Rejected`, encoded `awaiting_maintainer`, E6's marker (a
-critique-pass finding stays under the unchanged cap above).
+`Rejected`, using E6's marker (a critique-pass finding stays under
+the unchanged cap above).
 
 **Resolved-thread duplicate pre-check (PATH B, before verification).**
 Before verification above, check whether a new PATH B item — a review
