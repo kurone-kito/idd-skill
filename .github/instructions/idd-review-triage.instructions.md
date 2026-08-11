@@ -89,13 +89,14 @@ maintainer confirmation for an unprivileged PATH A actor: confirmed →
 `Accept` and act; **false on the live evidence** → disposition it
 `Rejected` and cite the contradicting evidence (the code as read, the
 real run conclusion, file contents, or artifact) — a verified-false
-claim is a reasoned rejection, not an action item; **inconclusive**
-(neither confirmed nor contradicted, because the needed check has no
-route this environment can run, not merely low confidence) → for an
-actor-permission-capped PATH A item, route it through the
-CODEOWNER/required-reviewer AMD hold (E6) instead of `Rejected`.
-`Rejected` stays reserved for a claim the live evidence actually
-contradicts.
+claim is a reasoned rejection, not an action item (scoped to this
+verification only — not E4/E5's Low-severity/no-action `Rejected`
+routes); **inconclusive** (neither confirmed nor contradicted — the
+needed check has no route here, not merely low confidence) → for an
+actor-permission-capped, reviewer-feedback PATH A item, route it
+through the CODEOWNER/required-reviewer AMD hold (E6) instead of
+`Rejected` (a critique-pass finding stays under the unchanged cap
+above).
 
 **Resolved-thread duplicate pre-check (PATH B, before verification).**
 Before verification above, check whether a new PATH B item — a review
@@ -107,9 +108,7 @@ state of its own, but can still match a prior resolved thread's claim.
 
 - Match the new item against the index by file area and substantive
   claim, requiring the identical claim rather than merely a related
-  topic in the same file. (For example, a prior "raw SQL concatenation"
-  rejection on `db/query.mts` does not match a new "missing index"
-  comment on the same file: same file area, different claim.)
+  topic in the same file (same file, different claim, is not a match).
 - On a match, open the linked prior thread — the index disposition alone
   is not proof. Re-confirm the new item raises that **same underlying
   claim**, not just a related one, then confirm the prior thread
@@ -358,9 +357,9 @@ Before leaving triage, verify every ReviewItems_snapshot item has the
 evidence required by its path:
 
 - Every PATH A item has a recorded classification and an Accept,
-  Reject, or inconclusive (E5) decision. Every Accepted item cites its
-  "Verify before accept" evidence, or the maintainer confirmation reply
-  when actor-permission capped.
+  Reject, or inconclusive (E5, encoded `awaiting_maintainer`) decision.
+  Every Accepted item cites its "Verify before accept" evidence, or the
+  maintainer confirmation reply when actor-permission capped.
 - Every Rejected or inconclusive PATH A item whose source is reviewer
   feedback has the required rejection or
   `**Awaiting maintainer decision**` reply posted, and any non-AMD
