@@ -1089,9 +1089,13 @@ Ruleset, the same way other CI jobs are registered there. This is a
 maintainer GitHub-settings action taken outside of IDD automation, not
 something an agent applies on its own.
 
-**Avoid the classic-API pinning trap.** GitHub's classic
-branch-protection API silently rewrites a plain string-array `contexts`
-field into `app_id`-pinned `checks` entries: a `PUT .../protection`
+**Avoid the classic-API pinning trap.** This applies specifically to
+GitHub's **classic** branch-protection API (`.../protection/...`) — a
+separate mechanism from the Ruleset just described above; this section
+does not claim Rulesets are unaffected, only that the classic API is
+the one field-verified here. That classic API silently rewrites a
+plain string-array `contexts` field into `app_id`-pinned `checks`
+entries: a `PUT .../protection`
 call configuring `contexts` comes back with a `checks` array carrying
 an `app_id` (for example, `15368` for `github-actions[bot]` on
 github.com — an implementation detail of that specific integration, not

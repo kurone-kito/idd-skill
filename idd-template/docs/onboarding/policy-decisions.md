@@ -420,7 +420,7 @@ This repository uses the following IDD policies:
 ### Required-Check Registration
 
 **Classic-API `contexts` pinning trap avoided**:
-`{yes — explicit checks array with app_id | no / not applicable}`
+`{yes — explicit checks array, app_id: -1 (any producer) | no / not applicable}`
 
 ### Credential Scope
 
