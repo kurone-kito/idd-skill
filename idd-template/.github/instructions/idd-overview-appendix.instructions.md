@@ -86,9 +86,9 @@ For A0-T, A0-O, A1, A1.5, A3, and A4.5 repo-query rules, see
 
 ## Commit signing
 
-In non-interactive agent or CI environments where GPG pinentry cannot be
-presented, add `--no-gpg-sign` to all `git commit` and `git merge`
-commands to prevent blocking.
+Check `docs/idd-helper-scripts.md`'s signed-commit merge wrapper for a
+fallback, never permanently rewriting signing config; add
+`--no-gpg-sign` only when none resolves.
 
 Record material progress, decisions, and hold reasons as issue or PR
 comments at the time they are made. This ensures that any agent resuming
