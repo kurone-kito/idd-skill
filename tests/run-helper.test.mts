@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
-import { spawnSync } from 'node:child_process';
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { spawn, spawnSync } from 'node:child_process';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
@@ -71,20 +71,28 @@ function spawnCapture(
  * returns unchanged regardless of the `relativeScriptPath` name), then spawn
  * the wrapper and capture the result -- exercises the real interception
  * logic without needing a permanent bin/*.mjs entry for a synthetic case.
+ * Always removes its scratch directory on the way out, success or failure
+ * (Copilot review finding on an earlier revision of this suite: the
+ * directory was never cleaned up, leaking one per test run under the OS
+ * temp folder).
  */
 function spawnFixture(
   fixtureBody: string,
   args: readonly string[] = [],
 ): SpawnCapture {
   const tempRoot = mkdtempSync(join(tmpdir(), 'idd-run-helper-fixture-'));
-  const fixturePath = join(tempRoot, 'fixture.mjs');
-  writeFileSync(fixturePath, fixtureBody);
-  const wrapperPath = join(tempRoot, 'wrapper.mjs');
-  writeFileSync(
-    wrapperPath,
-    `import { runHelper } from ${JSON.stringify(RUN_HELPER_MJS)};\nrunHelper(${JSON.stringify(fixturePath)});\n`,
-  );
-  return spawnCapture(wrapperPath, args);
+  try {
+    const fixturePath = join(tempRoot, 'fixture.mjs');
+    writeFileSync(fixturePath, fixtureBody);
+    const wrapperPath = join(tempRoot, 'wrapper.mjs');
+    writeFileSync(
+      wrapperPath,
+      `import { runHelper } from ${JSON.stringify(RUN_HELPER_MJS)};\nrunHelper(${JSON.stringify(fixturePath)});\n`,
+    );
+    return spawnCapture(wrapperPath, args);
+  } finally {
+    rmSync(tempRoot, { recursive: true, force: true });
+  }
 }
 
 // --- Real fleet member: bin/idd-branch-name.mjs ------------------------------
@@ -175,11 +183,17 @@ test('runHelper(): an unrelated thrown error (not one of the three shaped forms)
   assert.match(result.stderr, /\n\s+at /);
 });
 
-test("runHelper(): a large unrelated error message is NOT truncated (regression test -- Node's own uncaught-exception write to a piped stderr silently caps around ~146 KiB; capturing via a temp file instead of a pipe avoids it)", () => {
-  // 300 KiB comfortably clears the ~146 KiB ceiling this test guards
-  // against while staying under this test harness's own spawnSync
-  // maxBuffer (Node's 1 MiB default) for the *outer* capture.
-  const payloadSize = 300 * 1024;
+test('runHelper(): a moderately large unrelated error message is not truncated within the documented ceiling', () => {
+  // 48 KiB stays safely clear of the ~146 KiB ceiling Node's own
+  // uncaught-exception write to a piped stderr is empirically capped at
+  // (see the design comment in src/bin/run-helper.mts) -- realistic for
+  // any diagnostic this repository's helpers actually produce. The far
+  // larger, multi-hundred-KiB case this suite previously asserted against
+  // is a disclosed, accepted limitation of the pipe-based redesign (traded
+  // for live streaming and no tmpdir dependency, both of which are
+  // required by real current behavior -- see the two run-helper.test.mts
+  // tests below), not something this suite still guards.
+  const payloadSize = 48 * 1024;
   const result = spawnFixture(
     `throw new Error('payload: ' + 'z'.repeat(${payloadSize}));\n`,
   );
@@ -194,6 +208,86 @@ test("runHelper(): a large unrelated error message is NOT truncated (regression 
     0,
   );
   assert.equal(longestRun, payloadSize);
+});
+
+test('runHelper(): does not require a writable temp directory for an ordinary invocation (regression test for a pipe-only redesign -- a prior temp-file-based capture made every invocation, including this one, hard-depend on os.tmpdir())', () => {
+  const result = spawnSync(
+    process.execPath,
+    [BRANCH_NAME_BIN, '--number', '42', '--title', 'foo'],
+    {
+      encoding: 'utf8',
+      timeout: 30_000,
+      env: { ...process.env, TMPDIR: '/definitely/missing/idd-temp' },
+    },
+  );
+  assert.equal(result.status, 0);
+  assert.equal(result.stdout, 'issue/42-foo\n');
+});
+
+test("runHelper(): a long-running helper's stderr streams live, not buffered until exit (regression test for idd-doctor's emitCleanupBacklogProgress UX)", async () => {
+  // Two lines a full second apart, well past the 200ms grace window --
+  // if streaming is broken (buffered until the child exits), both lines
+  // arrive in the same burst at the very end; if it works, the first line
+  // arrives promptly and the second only after the sleep.
+  const fixtureBody = [
+    "process.stderr.write('first\\n');",
+    'await new Promise((r) => setTimeout(r, 1000));',
+    "process.stderr.write('second\\n');",
+  ].join('\n');
+  const tempRoot = mkdtempSync(join(tmpdir(), 'idd-run-helper-fixture-'));
+  try {
+    const fixturePath = join(tempRoot, 'fixture.mjs');
+    writeFileSync(fixturePath, fixtureBody);
+    const wrapperPath = join(tempRoot, 'wrapper.mjs');
+    writeFileSync(
+      wrapperPath,
+      `import { runHelper } from ${JSON.stringify(RUN_HELPER_MJS)};\nrunHelper(${JSON.stringify(fixturePath)});\n`,
+    );
+
+    const child = spawn(process.execPath, [wrapperPath], {
+      stdio: ['ignore', 'ignore', 'pipe'],
+    });
+    let firstLineAt: number | null = null;
+    const start = Date.now();
+    child.stderr.on('data', (chunk: Buffer) => {
+      if (firstLineAt === null && chunk.toString('utf8').includes('first')) {
+        firstLineAt = Date.now() - start;
+      }
+    });
+    await new Promise<void>((resolvePromise, reject) => {
+      child.on('close', () => resolvePromise());
+      child.on('error', reject);
+    });
+
+    // assert.ok (unlike assert.notEqual) is a recognized TypeScript
+    // assertion signature, narrowing firstLineAt to `number` for the bound
+    // check below.
+    assert.ok(firstLineAt !== null, 'expected the first line to arrive');
+    // Generous bound (well under the ~1000ms gap to the second line) --
+    // this only needs to prove the first line didn't wait for the child
+    // to exit, not pin an exact latency.
+    assert.ok(
+      firstLineAt < 500,
+      `expected the first line to arrive well before exit, got ${firstLineAt}ms`,
+    );
+  } finally {
+    rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test('runHelper(): a shaped-looking error thrown after the grace window has elapsed streams live with its raw trace, not intercepted (documented design boundary, not an oversight)', () => {
+  const fixtureBody = [
+    "process.stderr.write('warming up\\n');",
+    'await new Promise((r) => setTimeout(r, 500));',
+    "throw new Error('unknown argument: --late');",
+  ].join('\n');
+  const result = spawnFixture(fixtureBody);
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /^warming up$/m);
+  // The raw trace streamed live -- it is NOT collapsed to the shaped
+  // one-liner the way an immediate (within-window) throw would be.
+  assert.match(result.stderr, /^Error: unknown argument: --late/m);
+  assert.match(result.stderr, /\n\s+at /);
 });
 
 test('runHelper(): a script with no --help support degrades to no usage line, still shaped', () => {

@@ -4,89 +4,134 @@
 // The bin/run-helper.mjs copy is generated from the .mts source named
 // above by `pnpm run build`. Edit the .mts source, never the generated
 // .mjs. See docs/typescript-sources.md.
-import { spawnSync } from 'node:child_process';
-import {
-  closeSync,
-  mkdtempSync,
-  openSync,
-  readFileSync,
-  rmSync,
-} from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { spawn, spawnSync } from 'node:child_process';
+import { resolve } from 'node:path';
 import { extractShapedCliParseErrorMessage } from '../scripts/cli-args.mjs';
 
 // Bounds the best-effort `--help` re-invocation used to fetch a usage line
 // below -- this must never hang the primary error-reporting path.
 const HELP_REINVOKE_TIMEOUT_MS = 5_000;
+// How long, after the child's *first* stderr chunk arrives, run-helper keeps
+// buffering (instead of forwarding live) to give a shaped parse error --
+// always an instant, synchronous crash right after startup -- a chance to
+// finish before it decides. Anchored to the first chunk rather than to
+// spawn time deliberately: anchoring to spawn would make the window race
+// against Node boot + this helper's own module-graph load (a heavier helper
+// pulling in gh-exec etc. can itself take a while on a loaded CI runner),
+// which could let a raw trace slip through live on a slow machine. Anchored
+// to first-chunk, the only question the timer answers is "did more output
+// keep arriving after that", which is independent of startup latency.
+const GRACE_WINDOW_MS = 200;
 export function runHelper(relativeScriptPath) {
   const binDirectory = import.meta.dirname;
   const scriptPath = resolve(binDirectory, relativeScriptPath);
-  // Capture the child's stderr via a real file, not spawnSync's own piped
-  // buffer -- required to inspect it for a shaped parse error (#1922)
-  // before deciding what to forward. A PIPE, specifically, turns out to be
-  // unsafe for this: when a Node child dies from an uncaught exception, its
-  // internal fatal-exception write to a *piped* stderr can be silently
-  // truncated (confirmed empirically -- a multi-MB thrown message caps
-  // around ~146 KiB over a pipe, every time, regardless of spawnSync's own
-  // maxBuffer), because that crash path does not wait for the pipe's
-  // buffer to drain before the process hard-exits. Writing to a real file
-  // has no such ceiling (verified with the same repro): a file write isn't
-  // subject to the OS pipe-buffer-fill race the crash path loses. This
-  // capture-via-file step is *why* stdin/stdout stay 'inherit' below (no
-  // behavior change there) while only stderr routes through this
-  // temporary file.
-  // The whole capture lifecycle (open, spawn, read) runs inside this try so
-  // captureDir is always removed on the way out -- including if openSync or
-  // spawnSync itself throws synchronously, not just the ordinary success
-  // path (E10 follow-up on this fix: the first version only guarded the
-  // read-back step, leaking captureDir on either earlier failure).
-  const captureDir = mkdtempSync(join(tmpdir(), 'idd-run-helper-stderr-'));
-  try {
-    const capturePath = join(captureDir, 'stderr.log');
-    const captureFd = openSync(capturePath, 'w');
-    let result;
-    try {
-      result = spawnSync(
-        process.execPath,
-        [scriptPath, ...process.argv.slice(2)],
-        {
-          stdio: ['inherit', 'inherit', captureFd],
-        },
-      );
-    } finally {
-      closeSync(captureFd);
+  // Stream the child's stderr through a pipe -- not a temp file -- and
+  // decide what to do with it in real time. An earlier version of this fix
+  // captured stderr via a real file specifically to avoid a pipe's crash-
+  // write truncation (see below), but that traded away two things every
+  // packaged CLI command needs: (1) live/incremental stderr for long-
+  // running helpers (idd-doctor's `emitCleanupBacklogProgress` writes each
+  // line to stderr specifically so a slow serial scan is distinguishable
+  // from a hang -- a temp-file capture buffers all of it until exit,
+  // silently breaking that UX), and (2) never requiring writable temp
+  // storage just to run a CLI command that itself does no filesystem I/O
+  // (a temp-file capture made *every* invocation, including `--help`,
+  // hard-depend on `os.tmpdir()` being writable). Buffering only for a
+  // short bounded window after the first chunk, then committing to live
+  // pass-through, restores both properties while still catching the
+  // scenario this fix targets: a shaped parse error is a synchronous throw
+  // within milliseconds of startup, always well inside the window.
+  //
+  // Trade-off, disclosed rather than silently dropped: a pipe is still
+  // subject to Node's own crash-write behavior on an uncaught exception --
+  // when a child dies with stderr connected to a pipe, its internal
+  // fatal-exception write can be silently capped (empirically, around
+  // ~146 KiB), regardless of how fast the parent drains it, because that
+  // crash path does not wait for the pipe to drain before hard-exiting.
+  // This is not a new regression, though: under the pre-#1922 plain
+  // 'inherit' stdio, any operator piping this process's own stderr
+  // onward (`... 2>&1 | tee log`, common in CI) already inherited that
+  // same ceiling one layer up. No helper in this repository throws an
+  // error anywhere near that size; a temp file would remove the ceiling
+  // but reintroduces both regressions above to do it, which is the worse
+  // trade for realistic use.
+  const child = spawn(
+    process.execPath,
+    [scriptPath, ...process.argv.slice(2)],
+    { stdio: ['inherit', 'inherit', 'pipe'] },
+  );
+  let buffered = [];
+  let streaming = false;
+  let graceTimer = null;
+  const commitToStreaming = () => {
+    if (streaming) {
+      return;
     }
-    if (result.error) {
-      throw result.error;
+    streaming = true;
+    if (graceTimer !== null) {
+      clearTimeout(graceTimer);
+      graceTimer = null;
     }
-    const capturedStderr = readFileSync(capturePath, 'utf8');
-    const exitCode = result.status ?? 1;
+    for (const chunk of buffered) {
+      process.stderr.write(chunk);
+    }
+    buffered = [];
+  };
+  child.stderr?.on('data', (chunk) => {
+    if (streaming) {
+      process.stderr.write(chunk);
+      return;
+    }
+    buffered.push(chunk);
+    if (graceTimer === null) {
+      graceTimer = setTimeout(commitToStreaming, GRACE_WINDOW_MS);
+      // Doesn't itself keep the process alive -- only the child's own open
+      // stdio handles should do that, so a fast successful exit inside the
+      // window isn't held open an extra 200ms waiting on this timer.
+      graceTimer.unref();
+    }
+  });
+  child.on('error', (error) => {
+    if (graceTimer !== null) {
+      clearTimeout(graceTimer);
+      graceTimer = null;
+    }
+    throw error;
+  });
+  // 'close' (not 'exit') is the right event to decide on: it fires only
+  // after every stdio stream has fully drained, guaranteeing every stderr
+  // 'data' event above has already run. Deciding on 'exit' instead would
+  // race the tail of the child's crash output -- possibly the "Error: "
+  // line itself -- out of the buffer.
+  child.on('close', (code) => {
+    if (graceTimer !== null) {
+      clearTimeout(graceTimer);
+      graceTimer = null;
+    }
+    const exitCode = code ?? 1;
+    if (streaming) {
+      // Already committed to live pass-through -- every chunk reached the
+      // real stderr as it arrived, so there is nothing buffered left to
+      // decide on. This includes an intentional boundary: a shaped-
+      // looking error thrown *after* the window has elapsed streams live,
+      // raw trace and all, exactly like any other output at that point.
+      process.exitCode = exitCode;
+      return;
+    }
+    const capturedStderr = Buffer.concat(buffered).toString('utf8');
     // Only a non-zero exit is even eligible for shaped-error interception --
     // a successful run's stderr (e.g. idd-doctor's streamed progress) is
     // never inspected, so it always falls through to the unconditional
     // forward below unchanged.
     const shapedMessage =
-      result.status !== 0
-        ? extractShapedCliParseErrorMessage(capturedStderr)
-        : null;
+      exitCode !== 0 ? extractShapedCliParseErrorMessage(capturedStderr) : null;
     if (shapedMessage === null) {
       // No recognized shaped parse error -- a successful run, or an
       // unrelated failure: forward the captured stderr through
       // byte-for-byte, preserving a genuine bug's full stack trace.
-      if (capturedStderr) {
-        process.stderr.write(capturedStderr);
+      for (const chunk of buffered) {
+        process.stderr.write(chunk);
       }
-      // Setting exitCode and letting the module finish naturally (instead
-      // of calling process.exit() here) is deliberate: a write to a piped
-      // stderr is asynchronous (a write to a real file, as used for the
-      // capture above, is actually synchronous on both POSIX and Windows --
-      // it's specifically the pipe this process's own stdout/stderr may
-      // itself be redirected through, one layer up, that's at risk), and
-      // process.exit() does not wait for a pending async write to flush.
-      // Node only exits once the event loop drains, which happens after
-      // the write completes, so this is the correct pattern rather than an
-      // explicit exit call right after a write.
       process.exitCode = exitCode;
       return;
     }
@@ -95,14 +140,8 @@ export function runHelper(relativeScriptPath) {
     if (usage !== null) {
       process.stderr.write(`${usage}\n`);
     }
-    // Same flush reasoning as above -- the shaped message and usage line
-    // are always short, but exiting right after a write that hasn't
-    // flushed yet is the wrong pattern to establish even where it
-    // doesn't yet bite.
     process.exitCode = exitCode;
-  } finally {
-    rmSync(captureDir, { recursive: true, force: true });
-  }
+  });
 }
 /**
  * Best-effort re-invocation of the failing script's own `--help` output, to
@@ -117,7 +156,7 @@ export function runHelper(relativeScriptPath) {
  * line rather than risking the primary error-reporting path above. Ordinary
  * piped stdout capture is fine here (unlike stderr above) -- a `--help`
  * exit is always a clean `process.exit(0)`, never the uncaught-exception
- * crash path that motivates the temp-file capture.
+ * crash path the buffering above exists to detect.
  */
 function fetchUsageLine(scriptPath) {
   const helpResult = spawnSync(process.execPath, [scriptPath, '--help'], {
