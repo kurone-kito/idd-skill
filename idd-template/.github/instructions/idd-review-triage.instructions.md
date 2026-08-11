@@ -151,7 +151,8 @@ PATH A — Rejected reviewer feedback:
 For each Rejected or inconclusive (E5) PATH A item whose source is
 reviewer feedback:
 
-- Reply using the format: `**Rejected** — {reason}`
+- Reply using the format: `**Rejected** — {reason}` — unless the
+  Exception below applies.
 - **Exception**: if the source is a CODEOWNER or required reviewer, or
   the item is E5's inconclusive outcome, do not reject unilaterally.
   Reply using the format:
