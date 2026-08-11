@@ -401,6 +401,33 @@ test('extractKeywordReferences drops a negated closing-keyword mention (#1964)',
   );
 });
 
+test('extractKeywordReferences keeps both targets in a "not only ... but also ..." construction (#1968 review)', () => {
+  // Copilot/Codex review on #1968: "not only" is an additive correlative
+  // construction, not a real negation. Before this guard, KEYWORD_NEGATION_PATTERN
+  // treated "not" in "not only closes #42" as negating #42, dropping a
+  // genuine edge — a regression this fix must not introduce.
+  const body = 'This not only closes #42 but also fixes #43';
+  assert.deepEqual(extractKeywordReferences(body), [
+    { target: 42, relationship: 'closing-keyword', evidence: body },
+    { target: 43, relationship: 'closing-keyword', evidence: body },
+  ]);
+});
+
+test('extractKeywordReferences still negates across long intervening words (#1968 review)', () => {
+  // Copilot/Codex review on #1968: an earlier revision bounded the negation
+  // scan to a fixed 30-character slice, which could truncate the negation
+  // term itself out of the scanned text when the (still only 2) intervening
+  // words were long — recreating the exact false-positive edge this fix
+  // exists to prevent. The scan must be bounded by token count, not a
+  // character-count slice.
+  assert.deepEqual(
+    extractKeywordReferences(
+      'This would not unconditionally automatically close #43',
+    ),
+    [],
+  );
+});
+
 test('extractKeywordReferences negates across 1-2 intervening word tokens, not just directly adjacent (#1964)', () => {
   // KEYWORD_NEGATION_PATTERN allows up to two intervening word tokens
   // between the negation term and the matched keyword

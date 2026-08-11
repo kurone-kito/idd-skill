@@ -93,11 +93,6 @@ const INACCESSIBLE_ISSUE_SENTINEL = Object.freeze({
 const INACCESSIBLE_HTTP_STATUSES = new Set([403, 410, 451]);
 const KEYWORD_REFERENCE_REGEX =
   /\b(Closes|Close|Closed|Fixes|Fixed|Fix|Resolves|Resolved|Resolve|Refs|Ref|Depends on|Blocked by|Sub-issue|Sub issue)\b/giu;
-// #1964: how many characters immediately before a KEYWORD_REFERENCE_REGEX
-// match to scan for a negation term. Short and deliberate — the negation must
-// sit directly ahead of the matched keyword (e.g. "does not close #176"), not
-// merely appear somewhere earlier in a long line.
-const KEYWORD_NEGATION_WINDOW_CHARS = 30;
 // #1964: a recognized closing/dependency/sub-issue keyword sitting next to a
 // `#N` reference inside a negation clause ("this does not close #176", "the
 // PR would not close #176" — both from #1931's own merged body, a
@@ -110,14 +105,23 @@ const KEYWORD_NEGATION_WINDOW_CHARS = 30;
 //
 // Deliberately end-anchored (`\s+(?:\w+\s+){0,2}$`, at most two intervening
 // word tokens, no intervening punctuation) rather than "negation anywhere in
-// the window" like suitability-triage.mts's looser `NEGATION_PATTERN` /
-// `DUPLICATE_NEGATION_PATTERN` (which have their own known false-positive
+// a fixed-size window" like suitability-triage.mts's looser `NEGATION_PATTERN`
+// / `DUPLICATE_NEGATION_PATTERN` (which have their own known false-positive
 // history in this repo): a loose match would also swallow a genuine close,
-// e.g. "The workaround did not work; closes #42" — "not" is within 20 chars
-// of "closes" but does not negate it. The semicolon breaks the required
-// unbroken `\w+\s+` chain here, so that case still keeps its real edge.
+// e.g. "The workaround did not work; closes #42" — the semicolon breaks the
+// required unbroken `\w+\s+` chain, so that case still keeps its real edge
+// regardless of how much text precedes it. Bounded structurally by token
+// count (at most 3 total: the negation term plus up to two intervening word
+// tokens) rather than by a character-count slice — an earlier revision used a
+// fixed 30-char slice, which silently dropped the negation term itself for
+// long intervening words (Copilot/Codex review on #1968, e.g. "would not
+// unconditionally automatically close #43" — "not" fell outside the slice —
+// recreating the exact false-positive edge this fix exists to prevent). The
+// `not(?!\s+only\b)` guard excludes the "not only … but also …" correlative
+// construction, which is additive, not a real negation (same review round:
+// "This not only closes #42 but also fixes #43" must keep the edge to #42).
 const KEYWORD_NEGATION_PATTERN =
-  /\b(?:not|never|cannot|no longer|(?:has|have|had|ca|do|does|did|is|was|are|were|wo|would|should|could)n['’]t)\s+(?:\w+\s+){0,2}$/iu;
+  /\b(?:not(?!\s+only\b)|never|cannot|no longer|(?:has|have|had|ca|do|does|did|is|was|are|were|wo|would|should|could)n['’]t)\s+(?:\w+\s+){0,2}$/iu;
 const SUB_ISSUES_QUERY = `
 query($owner:String!, $repo:String!, $number:Int!, $after:String) {
   repository(owner:$owner, name:$repo) {
@@ -1423,13 +1427,14 @@ export function extractKeywordReferences(body, options = {}) {
  * True when a negation term (`not`, `never`, `won't`, `doesn't`, ...) sits in
  * a short token window immediately before the matched keyword at
  * `matchIndex` on `line` — e.g. "This does not close #176" negates `close`.
- * See {@link KEYWORD_NEGATION_PATTERN} and {@link KEYWORD_NEGATION_WINDOW_CHARS}
- * for the pattern and window-size rationale (#1964).
+ * Tests the entire text of `line` before the match, not a fixed-size
+ * character slice: {@link KEYWORD_NEGATION_PATTERN}'s own `{0,2}`-token bound
+ * (plus its punctuation-breaks-the-chain behavior) is what keeps this from
+ * matching a distant, unrelated negation — see the pattern's own doc comment
+ * (#1964).
  */
 function isNegatedKeywordMatch(line, matchIndex) {
-  const windowStart = Math.max(0, matchIndex - KEYWORD_NEGATION_WINDOW_CHARS);
-  const contextBefore = line.slice(windowStart, matchIndex);
-  return KEYWORD_NEGATION_PATTERN.test(contextBefore);
+  return KEYWORD_NEGATION_PATTERN.test(line.slice(0, matchIndex));
 }
 function classifyKeywordRelationship(keyword) {
   const normalized = String(keyword ?? '').toLowerCase();
