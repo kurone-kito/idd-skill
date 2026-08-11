@@ -176,8 +176,17 @@ skill ID to multiple runtime roots by default (preventive; no observed incident
 yet); a mixed-runtime target should
 use one native copy plus an explicit manual route unless the operator
 deliberately accepts identical duplicates. The companion helps draft
-IDD-ready issues and roadmaps. It does not authorize publishing issues or
-starting the main execution loop on its own.
+IDD-ready issues and roadmaps. By default, it publishes each drafted
+`ready` body directly under the configured authoring label once it
+passes the mechanical pre-publish gate and the critique pass — no
+separate publish approval step — unless the current request explicitly
+asked for a preview instead. Releasing that authoring hold is the
+single boundary within the companion's own workflow that still needs an
+explicit request: publishing under the hold alone does not start the
+main execution loop, because Discover treats an issue carrying the
+authoring label as not startable while the hold remains. The
+issue-author approval gate described above still applies independently
+once the hold is released.
 
 ### Helper runtime profile
 
