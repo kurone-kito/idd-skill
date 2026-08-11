@@ -235,9 +235,11 @@ future inventory reviews do not need to re-infer their role from code.
   for all four profiles (`package-manager`, `vendored-node`,
   `ephemeral-npx`, and `instructions-only`). Its output always carries a
   `runningBuild: { version, commandListScope: "running-build" }` field
-  disclosing that the reported command list describes only the currently
-  running helper build, independent of any `--package-spec` target
-  (referenced in
+  disclosing that `commandCatalog` describes only the currently running
+  helper build, independent of any `--package-spec` target -- a per-profile
+  `profiles.<profile>.commands` entry still embeds the supplied
+  `--package-spec` in its composed install/invocation strings, but
+  `commandCatalog` itself never changes (referenced in
   [kurone-kito/idd-skill#1923](https://github.com/kurone-kito/idd-skill/issues/1923)).
 - `scripts/phase-id-resolver.mjs` (`idd-phase-id-resolver`) — phase ID
   normalization utility; resolves canonical phase IDs from aliases and
