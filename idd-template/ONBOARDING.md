@@ -1097,13 +1097,16 @@ advisory review on
 [kurone-kito/idd-skill#1959](https://github.com/kurone-kito/idd-skill/pull/1959)).
 `src/scripts/gh-exec.mts`'s shared `ghApiJson`/`ghGraphql` wrappers now
 resolve the correct `--hostname` automatically
-([kurone-kito/idd-skill#1962](https://github.com/kurone-kito/idd-skill/issues/1962)):
-in GitHub Actions they derive it from the `GITHUB_SERVER_URL` default
-environment variable (no workflow `env:` change needed, and no
-behavior change at all on `github.com`, where it already equals the
-default host); outside Actions (a local `gh-doctor` run) they defer to
-an explicit `GH_HOST` or `gh`'s own single-authenticated-host default,
-same as `gh` itself. `idd-advisory-convergence` (both the CI-hosted
+([kurone-kito/idd-skill#1962](https://github.com/kurone-kito/idd-skill/issues/1962)),
+preferring an explicit `GH_HOST` when set (in which case no
+`--hostname` is added — `gh` already resolves it correctly on its
+own) and otherwise, in GitHub Actions, deriving the host from the
+`GITHUB_SERVER_URL` default environment variable (no workflow `env:`
+change needed, and no behavior change at all on `github.com`, where it
+already equals the default host). Outside Actions (a local
+`idd-doctor` run) with neither signal set, they defer to `gh`'s own
+single-authenticated-host default, same as `gh` itself.
+`idd-advisory-convergence` (both the CI-hosted
 required-check workflow and its underlying `advisory-convergence.mts`
 GitHub-API calls) goes through these shared wrappers, so it is covered
 end to end. `idd-doctor.mts`'s own few direct `gh api` call sites do
