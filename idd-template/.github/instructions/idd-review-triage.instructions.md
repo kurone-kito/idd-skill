@@ -90,8 +90,8 @@ routes); **inconclusive** (neither confirmed nor contradicted — the
 needed check has no route here, not merely low confidence) → for an
 actor-permission-capped, reviewer-feedback PATH A item, route it
 through the CODEOWNER/required-reviewer AMD hold (E6) instead of
-`Rejected` (a critique-pass finding stays under the unchanged cap
-above).
+`Rejected`, encoded `awaiting_maintainer` like that path (a
+critique-pass finding stays under the unchanged cap above).
 
 **Resolved-thread duplicate pre-check (PATH B, before verification).**
 Before verification above, check whether a new PATH B item — a review
@@ -103,7 +103,8 @@ state of its own, but can still match a prior resolved thread's claim.
 
 - Match the new item against the index by file area and substantive
   claim, requiring the identical claim rather than merely a related
-  topic in the same file (same file, different claim, is not a match).
+  topic in the same file (same file but a different claim is not a
+  match).
 - On a match, open the linked prior thread — the index disposition alone
   is not proof. Re-confirm the new item raises that **same underlying
   claim**, not just a related one, then confirm the prior thread
@@ -132,8 +133,8 @@ state of its own, but can still match a prior resolved thread's claim.
 by reasoned rejection of peripheral or verified-false items — not every
 comment needs a code change. Record the reason in the disposition reply;
 "a bot raised it" alone never forces a change (e.g., a "credential
-leak" flag on a placeholders-only config file: `**Rejected** —
-verified: only public placeholders present`).
+leak" flag on a placeholders-only config file:
+`**Rejected** — verified placeholders-only`).
 
 ## E6 — Post disposition replies
 
@@ -145,7 +146,7 @@ PATH A — Accepted items:
   reviewer feedback is replied to after the fix work in
   `idd-review-fix.instructions.md`.
 
-PATH A — Rejected reviewer feedback:
+PATH A — Rejected/inconclusive reviewer feedback:
 
 For each Rejected or inconclusive (E5) PATH A item whose source is
 reviewer feedback:
@@ -352,9 +353,9 @@ Before leaving triage, verify every ReviewItems_snapshot item has the
 evidence required by its path:
 
 - Every PATH A item has a recorded classification and an Accept,
-  Reject, or inconclusive (E5, encoded `awaiting_maintainer`) decision.
-  Every Accepted item cites its "Verify before accept" evidence, or the
-  maintainer confirmation reply when actor-permission capped.
+  Reject, or inconclusive (E5) decision. Every Accepted item cites its
+  "Verify before accept" evidence, or the maintainer confirmation reply
+  when actor-permission capped.
 - Every Rejected or inconclusive PATH A item whose source is reviewer
   feedback has the required rejection or
   `**Awaiting maintainer decision**` reply posted, and any non-AMD
