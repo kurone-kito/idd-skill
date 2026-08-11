@@ -721,9 +721,9 @@ The recipe below adapts that workflow for adopters. Save it as
   runs. Build the complete list with a full-history sweep, not a single
   observed event: read the paginated
   `GET /repos/{owner}/{repo}/issues/events` endpoint to completion,
-  keeping only entries where `event == "labeled"` and the acting
-  actor's `type` is `Bot`. That endpoint returns issue and pull request
-  events together, so this one sweep needs no separate PR-side pass.
+  keeping only entries where `event == "labeled"` and the actor's
+  `type` is `Bot`. That endpoint returns issue and pull request events
+  together, so this one sweep needs no separate PR-side pass.
   Filter the sweep's results down to the actor(s) recognized as an
   untrusted semantic auto-labeler — exclude any bot already trusted to
   apply these labels on purpose (for example, this repository's own IDD
@@ -740,7 +740,10 @@ The recipe below adapts that workflow for adopters. Save it as
   the event's `sender` (not a GraphQL-rendered display name). This is
   independent of, and not necessarily identical to, any
   `advisoryBotLogins` configured for PR review — list only the
-  actor(s) that auto-label **issues**.
+  actor(s) that auto-label **issues**. ("Issues" here contrasts with
+  `advisoryBotLogins`' PR-review role — it does not exclude a bot the
+  sweep shows labeling only pull requests; the workflow's
+  `pull_request_target: labeled` trigger below uses this same list.)
 
 This recipe guards the three policy-decision labels only. If this
 repository also configures `issueAuthoring.authoringLabelName`
