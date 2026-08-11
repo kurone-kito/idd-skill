@@ -51,6 +51,22 @@
 
 import { parseArgs as nodeParseArgs } from 'node:util';
 
+// #1922: the three message-shape prefixes toRepoShapedError() below
+// produces. Named here (rather than inlined at each call site) so
+// extractShapedCliParseErrorMessage() can recognize the exact same shapes
+// from raw text -- across the bin/run-helper.mts subprocess boundary,
+// where only the child's captured stderr text is visible, never the
+// original Error object -- without either copy silently drifting out of
+// sync with the other.
+const UNKNOWN_ARGUMENT_PREFIX = 'unknown argument: ';
+const MISSING_VALUE_FOR_ARGUMENT_PREFIX = 'missing value for argument: ';
+const UNEXPECTED_VALUE_FOR_ARGUMENT_PREFIX = 'unexpected value for argument: ';
+const REPO_SHAPED_CLI_PARSE_ERROR_PREFIXES = [
+  UNKNOWN_ARGUMENT_PREFIX,
+  MISSING_VALUE_FOR_ARGUMENT_PREFIX,
+  UNEXPECTED_VALUE_FOR_ARGUMENT_PREFIX,
+] as const;
+
 /** Flag value type accepted by `util.parseArgs`. */
 export type CliFlagType = 'string' | 'boolean';
 
@@ -271,16 +287,44 @@ function toRepoShapedError(error: unknown): Error {
   switch (err.code) {
     case 'ERR_PARSE_ARGS_UNKNOWN_OPTION':
     case 'ERR_PARSE_ARGS_UNEXPECTED_POSITIONAL':
-      return new Error(`unknown argument: ${token}`);
+      return new Error(`${UNKNOWN_ARGUMENT_PREFIX}${token}`);
     case 'ERR_PARSE_ARGS_INVALID_OPTION_VALUE':
       return new Error(
         err.message.includes('does not take an argument')
-          ? `unexpected value for argument: ${token}`
-          : `missing value for argument: ${token}`,
+          ? `${UNEXPECTED_VALUE_FOR_ARGUMENT_PREFIX}${token}`
+          : `${MISSING_VALUE_FOR_ARGUMENT_PREFIX}${token}`,
       );
     default:
       return err;
   }
+}
+
+/**
+ * Recognize Node's default uncaught-exception stderr text for a shaped CLI
+ * parse error (#1922) and extract just the one-line message, discarding
+ * the source-line preview, stack frames, and trailing `Node.js vX.Y.Z`
+ * footer Node prints around it. Scans **every** `Error: ` -prefixed line in
+ * the text -- not just the first -- and returns the first whose message
+ * starts with one of the three shapes {@link toRepoShapedError} produces,
+ * so a script that logs its own unrelated `Error: ...` diagnostic before a
+ * later real crash can't mask the shaped line. Returns `null` when no line
+ * matches, the safe default: a caller should forward the original text
+ * unchanged in that case, exactly as it would for any other error class.
+ */
+export function extractShapedCliParseErrorMessage(
+  stderrText: string,
+): string | null {
+  for (const match of stderrText.matchAll(/^Error: (.+)$/gm)) {
+    const message = match[1];
+    if (
+      REPO_SHAPED_CLI_PARSE_ERROR_PREFIXES.some((prefix) =>
+        message.startsWith(prefix),
+      )
+    ) {
+      return message;
+    }
+  }
+  return null;
 }
 
 /**
@@ -332,7 +376,7 @@ export function parseCliArgs(
   // --`, since the second `--` becomes a rejected positional). The strip
   // above never repeats -- this is a single explicit check, not a loop.
   if (args[0] === '--') {
-    throw new Error('unknown argument: --');
+    throw new Error(`${UNKNOWN_ARGUMENT_PREFIX}--`);
   }
 
   let parsed: ReturnType<typeof nodeParseArgs>;

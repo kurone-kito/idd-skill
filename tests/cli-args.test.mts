@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
 import {
+  extractShapedCliParseErrorMessage,
   parseCanonicalIntegerOrNull,
   parseCanonicalIntegerOrThrow,
   parseCliArgs,
@@ -278,4 +279,108 @@ test('requireFlag: throws "--flag is required" on a non-string value (e.g. a boo
   assert.throws(() => requireFlag(null, '--head-sha'), {
     message: '--head-sha is required',
   });
+});
+
+// --- extractShapedCliParseErrorMessage (#1922) -------------------------------
+// bin/run-helper.mts intercepts a shaped parse error across the child-process
+// boundary by recognizing it in captured stderr text -- it never sees the
+// original Error object, only Node's default uncaught-exception rendering
+// (a source-line preview, then `Error: {message}`, then stack frames, then a
+// trailing `Node.js vX.Y.Z` line). These fixtures mirror that exact shape.
+
+const REAL_UNCAUGHT_STDERR_UNKNOWN_ARGUMENT = `file:///repo/scripts/cli-args.mjs:214
+      return new Error(\`unknown argument: \${token}\`);
+             ^
+
+Error: unknown argument: --bogus-flag
+    at toRepoShapedError (file:///repo/scripts/cli-args.mjs:214:14)
+    at parseCliArgs (file:///repo/scripts/cli-args.mjs:273:11)
+    at parseArgs (file:///repo/scripts/branch-name.mjs:119:28)
+    at runCli (file:///repo/scripts/branch-name.mjs:105:16)
+    at file:///repo/scripts/branch-name.mjs:52:3
+    at ModuleJob.run (node:internal/modules/esm/module_job:343:25)
+
+Node.js v22.22.2
+`;
+
+test('extractShapedCliParseErrorMessage: extracts "unknown argument: " from real Node uncaught-exception stderr text', () => {
+  assert.equal(
+    extractShapedCliParseErrorMessage(REAL_UNCAUGHT_STDERR_UNKNOWN_ARGUMENT),
+    'unknown argument: --bogus-flag',
+  );
+});
+
+test('extractShapedCliParseErrorMessage: extracts "missing value for argument: "', () => {
+  const stderrText = [
+    'Error: missing value for argument: --pr',
+    '    at toRepoShapedError (file:///repo/scripts/cli-args.mjs:214:14)',
+    '',
+    'Node.js v22.22.2',
+  ].join('\n');
+  assert.equal(
+    extractShapedCliParseErrorMessage(stderrText),
+    'missing value for argument: --pr',
+  );
+});
+
+test('extractShapedCliParseErrorMessage: extracts "unexpected value for argument: "', () => {
+  const stderrText = [
+    'Error: unexpected value for argument: --assert',
+    '    at toRepoShapedError (file:///repo/scripts/cli-args.mjs:214:14)',
+    '',
+    'Node.js v22.22.2',
+  ].join('\n');
+  assert.equal(
+    extractShapedCliParseErrorMessage(stderrText),
+    'unexpected value for argument: --assert',
+  );
+});
+
+test('extractShapedCliParseErrorMessage: returns null for an unrelated error class (stack trace must stay intact)', () => {
+  const stderrText = [
+    'Error: --number is required and must be a positive integer',
+    '    at runCli (file:///repo/scripts/branch-name.mjs:111:11)',
+    '',
+    'Node.js v22.22.2',
+  ].join('\n');
+  assert.equal(extractShapedCliParseErrorMessage(stderrText), null);
+});
+
+test('extractShapedCliParseErrorMessage: returns null for text with no "Error: " line at all', () => {
+  assert.equal(extractShapedCliParseErrorMessage(''), null);
+  assert.equal(
+    extractShapedCliParseErrorMessage('some warning to stderr\n'),
+    null,
+  );
+});
+
+test('extractShapedCliParseErrorMessage: a 4th, unrecognized shaped-looking prefix (e.g. "invalid value for argument: ") is NOT matched', () => {
+  // parseCanonicalIntegerOrThrow's "invalid value for argument: " shape is
+  // deliberately out of scope for this issue (#1922 scopes to the three
+  // toRepoShapedError() forms only) -- confirms the extractor doesn't
+  // over-match a shape it was never told to recognize.
+  const stderrText = [
+    'Error: invalid value for argument: --pr',
+    '    at parseCanonicalIntegerOrThrow (file:///repo/scripts/cli-args.mjs:1:1)',
+    '',
+    'Node.js v22.22.2',
+  ].join('\n');
+  assert.equal(extractShapedCliParseErrorMessage(stderrText), null);
+});
+
+test('extractShapedCliParseErrorMessage: scans every "Error: " line, not just the first, and returns the first shaped match', () => {
+  // A script that logs its own non-fatal "Error: ..." diagnostic to stderr
+  // before a later shaped crash must not have that earlier line mask the
+  // real one.
+  const stderrText = [
+    'Error: config not found, using defaults',
+    'Error: unknown argument: --typo',
+    '    at toRepoShapedError (file:///repo/scripts/cli-args.mjs:214:14)',
+    '',
+    'Node.js v22.22.2',
+  ].join('\n');
+  assert.equal(
+    extractShapedCliParseErrorMessage(stderrText),
+    'unknown argument: --typo',
+  );
 });
