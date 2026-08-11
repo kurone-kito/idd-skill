@@ -1490,8 +1490,20 @@ export function hookWiresWorktreeGuard(content) {
  * joins such a pair into one logical command, so e.g. a `printf '%s' \`
  * line immediately followed by the exec form on the next physical line
  * never actually invokes it; it only passes those words as arguments to
- * the earlier command. Pure (no I/O) so it can be unit-tested directly. A
- * non-string (absent/unreadable hook) is treated as not chaining.
+ * the earlier command.
+ *
+ * Scope boundary: this is a bounded lexical heuristic for the two
+ * documented forms appearing as an ordinary standalone physical line, not
+ * a shell parser. It does not evaluate quoting edge cases, variable
+ * expansion, here-docs, `eval`, subshell wrapping, or any other
+ * adversarial or unusual shell construction that could still reach one of
+ * the two forms at runtime while lexically evading this check (or vice
+ * versa). This is a warning-level misconfiguration diagnostic, not a
+ * security boundary — an operator who wants to fool it can simply not
+ * enable the guard — so further hardening against constructions beyond
+ * the documented recipe is out of scope absent an observed incident.
+ * Pure (no I/O) so it can be unit-tested directly. A non-string
+ * (absent/unreadable hook) is treated as not chaining.
  */
 export function hookChainsToGithooksScript(content, hookName) {
   if (typeof content !== 'string') {

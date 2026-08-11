@@ -897,6 +897,18 @@ only one hook is chained, or while the chain targets a missing or
 incorrect `.githooks/*` script, remains actionable as intended either
 way.
 
+Recognizing the two chain forms above is itself a bounded lexical
+heuristic, not a shell parser: it matches the documented forms as an
+ordinary standalone physical line and deliberately does not evaluate
+quoting edge cases, variable expansion, here-docs, `eval`, subshell
+wrapping, or other adversarial or unusual shell constructions that
+could reach one of the two forms at runtime while lexically evading
+this check, or vice versa (preventive; no observed incident yet). This
+is a warning-level misconfiguration diagnostic, not a security
+boundary — an operator who wants to fool it can simply not enable the
+guard — so hardening against constructions beyond the documented
+recipe stays out of scope absent an observed incident.
+
 Fully replacing an existing hook manager instead of chaining it removes
 that tool from the repository outright, so treat it as an alternative
 worth knowing about, not the default recommendation. Under pnpm's
