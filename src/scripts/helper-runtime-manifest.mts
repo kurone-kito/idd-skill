@@ -53,6 +53,18 @@ interface PackageMetadata {
   name: string;
   repository: string;
   nodeEngines: string;
+  version: string;
+}
+
+// Discloses that HELPER_COMMANDS / commandCatalog below describe only the
+// currently executing helper build, never the --package-spec target
+// (idd-skill#1923). A string enum (not a boolean) so it stays extensible if
+// the issue's explicitly-deferred larger alternative -- fetching the
+// --package-spec target's own bin field -- ever ships as its own follow-up
+// with a second scope value.
+interface RunningBuildDisclosure {
+  version: string;
+  commandListScope: 'running-build';
 }
 
 interface LockfileMatch {
@@ -131,6 +143,13 @@ const LIVE_CONFIG_CANDIDATE_FILES = [
   'idd-policy.json',
 ];
 const NODE_ENGINES = '^22.22.2 || >=24.2.0';
+// Deliberately not a hardcoded release number: a literal version string
+// would silently go stale at the next release with no drift guard (unlike
+// NODE_ENGINES, which audit-docs.mjs's ENGINES_RANGE_MIRRORS keeps honest)
+// -- exactly the misleading-output class idd-skill#1923 exists to fix. Only
+// reached for a foreign/missing package.json root; the source repo,
+// package-manager, and ephemeral-npx paths always read the real version.
+const PACKAGE_VERSION_FALLBACK = 'unknown';
 const SCRIPT_FILE_EXTENSIONS = ['.mjs', '.js', '.json'];
 // Runtime data files a helper reads at execution time (not via `import`),
 // so the import-graph walk cannot discover them. A consumer that vendors
@@ -681,6 +700,11 @@ export function buildHelperRuntimeManifest({
     ? { [normalizedProfile]: profileCatalog[normalizedProfile] }
     : profileCatalog;
 
+  const runningBuild: RunningBuildDisclosure = {
+    version: packageMetadata.version,
+    commandListScope: 'running-build',
+  };
+
   return {
     version: 1,
     sourceRepository: packageMetadata.repository,
@@ -689,6 +713,11 @@ export function buildHelperRuntimeManifest({
     packageSpecPinHint: PACKAGE_SPEC_PIN_HINT,
     nodeEngines: packageMetadata.nodeEngines,
     packageManager: normalizedPackageManager,
+    // commandCatalog above always reflects this running build's own
+    // HELPER_COMMANDS, never the --package-spec target -- runningBuild
+    // discloses that scope machine-readably, plus this build's own
+    // version, independent of --profile (idd-skill#1923).
+    runningBuild,
     recommendation,
     availableProfiles: [...PROFILE_NAMES],
     commandCatalog,
@@ -866,6 +895,7 @@ export function resolveSourcePackageMetadata(
     name: PACKAGE_NAME,
     repository: SOURCE_REPOSITORY,
     nodeEngines: NODE_ENGINES,
+    version: PACKAGE_VERSION_FALLBACK,
   };
   const packageJsonPath = resolve(packageRoot, 'package.json');
   if (!existsSync(packageJsonPath)) {
@@ -877,6 +907,7 @@ export function resolveSourcePackageMetadata(
       name?: unknown;
       repository?: unknown;
       engines?: { node?: unknown };
+      version?: unknown;
     };
     if (packageJson.name !== PACKAGE_NAME) {
       return fallback;
@@ -885,6 +916,7 @@ export function resolveSourcePackageMetadata(
       name: PACKAGE_NAME,
       repository: normalizeRepository(packageJson.repository),
       nodeEngines: String(packageJson.engines?.node ?? NODE_ENGINES),
+      version: String(packageJson.version ?? PACKAGE_VERSION_FALLBACK),
     };
   } catch {
     return fallback;
@@ -1102,6 +1134,11 @@ Options:
   --from-profile <package-manager|vendored-node|ephemeral-npx|instructions-only>
   --package-manager <npm|pnpm|yarn>
   --package-spec <npm-spec-or-tarball-url>
+                        Affects only composed install/invocation strings
+                        (ephemeral-npx, package-manager); the reported
+                        command list always reflects this running build,
+                        never the package-spec target (see "runningBuild"
+                        in the JSON output).
   --target-root <path>
   --help
 `);

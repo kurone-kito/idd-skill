@@ -327,6 +327,7 @@ test('source package metadata falls back when vendored into another repository',
     name: '@kurone-kito/idd-skill',
     repository: 'github:kurone-kito/idd-skill',
     nodeEngines: '^22.22.2 || >=24.2.0',
+    version: 'unknown',
   });
 
   const missingRoot = mkdtempSync(
@@ -336,6 +337,7 @@ test('source package metadata falls back when vendored into another repository',
     name: '@kurone-kito/idd-skill',
     repository: 'github:kurone-kito/idd-skill',
     nodeEngines: '^22.22.2 || >=24.2.0',
+    version: 'unknown',
   });
 });
 
@@ -354,6 +356,7 @@ test('source package metadata accepts repository objects with url', () => {
       engines: {
         node: '^22.22.2 || >=24.2.0',
       },
+      version: '9.9.9-test',
     }),
   );
 
@@ -361,7 +364,64 @@ test('source package metadata accepts repository objects with url', () => {
     name: '@kurone-kito/idd-skill',
     repository: 'https://github.com/kurone-kito/idd-skill.git',
     nodeEngines: '^22.22.2 || >=24.2.0',
+    version: '9.9.9-test',
   });
+});
+
+// idd-skill#1923: the manifest previously let HELPER_COMMANDS's fixed
+// command list be misread as describing whatever --package-spec target
+// was passed, when it always described only this executing build. The
+// running-build version is read dynamically from this repo's own
+// package.json (never a hardcoded literal) so a release-version bump
+// can't break this suite.
+const REPO_PACKAGE_VERSION = JSON.parse(
+  readFileSync(join(REPO_ROOT, 'package.json'), 'utf8'),
+).version;
+
+test('runningBuild discloses the running build version and command-list scope for every profile', () => {
+  for (const profile of [
+    'package-manager',
+    'vendored-node',
+    'ephemeral-npx',
+    'instructions-only',
+  ]) {
+    const manifest = buildHelperRuntimeManifest({
+      profile,
+      packageManager: profile === 'package-manager' ? 'pnpm' : '',
+      targetRoot: REPO_ROOT,
+    });
+    assert.deepEqual(
+      manifest.runningBuild,
+      { version: REPO_PACKAGE_VERSION, commandListScope: 'running-build' },
+      `profile ${profile}`,
+    );
+  }
+});
+
+test('a supplied --package-spec never changes the reported command list', () => {
+  const withDefaultSpec = buildHelperRuntimeManifest({
+    profile: 'ephemeral-npx',
+    targetRoot: REPO_ROOT,
+  });
+  const withCustomSpec = buildHelperRuntimeManifest({
+    profile: 'ephemeral-npx',
+    packageSpec: 'https://example.test/custom-tarball.tgz',
+    targetRoot: REPO_ROOT,
+  });
+
+  // The command catalog and running-build disclosure are identical --
+  // only composed install/invocation strings (which embed packageSpec)
+  // differ between the two manifests.
+  assert.deepEqual(
+    withDefaultSpec.commandCatalog,
+    withCustomSpec.commandCatalog,
+  );
+  assert.deepEqual(withDefaultSpec.runningBuild, withCustomSpec.runningBuild);
+  assert.notEqual(withDefaultSpec.packageSpec, withCustomSpec.packageSpec);
+  assert.notDeepEqual(
+    withDefaultSpec.profiles['ephemeral-npx'].commands,
+    withCustomSpec.profiles['ephemeral-npx'].commands,
+  );
 });
 
 test('empty targetRoot falls back to the current working directory', () => {
