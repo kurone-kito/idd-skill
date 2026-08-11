@@ -903,6 +903,8 @@ on:
   pull_request:
 permissions:
   contents: read
+  issues: read
+  pull-requests: read
 jobs:
   idd-doctor:
     runs-on: ubuntu-latest
@@ -912,6 +914,8 @@ jobs:
           ref: ${{ github.sha }} # detached HEAD keeps the worktree check inert
           persist-credentials: false
       - run: node scripts/idd-doctor.mjs
+        env:
+          GH_TOKEN: ${{ github.token }}
 ```
 
 **`package-manager`** — the helper ships as an installed
@@ -926,6 +930,8 @@ on:
   pull_request:
 permissions:
   contents: read
+  issues: read
+  pull-requests: read
 jobs:
   idd-doctor:
     runs-on: ubuntu-latest
@@ -941,6 +947,8 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm exec idd-doctor
+        env:
+          GH_TOKEN: ${{ github.token }}
 ```
 
 **`ephemeral-npx`** — no helper files or `devDependency` are vendored;
@@ -955,6 +963,8 @@ on:
   pull_request:
 permissions:
   contents: read
+  issues: read
+  pull-requests: read
 jobs:
   idd-doctor:
     runs-on: ubuntu-latest
@@ -967,7 +977,15 @@ jobs:
         with:
           node-version: 24.x
       - run: npx --yes --package <reviewed-helper-spec> idd-doctor
+        env:
+          GH_TOKEN: ${{ github.token }}
 ```
+
+Both the extra `permissions:` scopes and `GH_TOKEN` are required: without
+them, idd-doctor's GitHub-API-backed checks (post-merge cleanup backlog,
+branch protection, autopilot-suitability) silently degrade to a single
+warning line and the job still reports success — a green gate that
+checked less than it appears to.
 
 This gate checks repository **health**, not the disposable-worktree rule:
 CI cannot detect a primary-worktree B1 violation (it leaves no trace in
