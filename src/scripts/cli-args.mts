@@ -51,6 +51,22 @@
 
 import { parseArgs as nodeParseArgs } from 'node:util';
 
+// #1922: the three message-shape prefixes toRepoShapedError() below
+// produces. Named here (rather than inlined at each call site) so
+// extractShapedCliParseErrorMessage() can recognize the exact same shapes
+// from raw text -- across the bin/run-helper.mts subprocess boundary,
+// where only the child's captured stderr text is visible, never the
+// original Error object -- without either copy silently drifting out of
+// sync with the other.
+const UNKNOWN_ARGUMENT_PREFIX = 'unknown argument: ';
+const MISSING_VALUE_FOR_ARGUMENT_PREFIX = 'missing value for argument: ';
+const UNEXPECTED_VALUE_FOR_ARGUMENT_PREFIX = 'unexpected value for argument: ';
+const REPO_SHAPED_CLI_PARSE_ERROR_PREFIXES = [
+  UNKNOWN_ARGUMENT_PREFIX,
+  MISSING_VALUE_FOR_ARGUMENT_PREFIX,
+  UNEXPECTED_VALUE_FOR_ARGUMENT_PREFIX,
+] as const;
+
 /** Flag value type accepted by `util.parseArgs`. */
 export type CliFlagType = 'string' | 'boolean';
 
@@ -271,16 +287,111 @@ function toRepoShapedError(error: unknown): Error {
   switch (err.code) {
     case 'ERR_PARSE_ARGS_UNKNOWN_OPTION':
     case 'ERR_PARSE_ARGS_UNEXPECTED_POSITIONAL':
-      return new Error(`unknown argument: ${token}`);
+      return new Error(`${UNKNOWN_ARGUMENT_PREFIX}${token}`);
     case 'ERR_PARSE_ARGS_INVALID_OPTION_VALUE':
       return new Error(
         err.message.includes('does not take an argument')
-          ? `unexpected value for argument: ${token}`
-          : `missing value for argument: ${token}`,
+          ? `${UNEXPECTED_VALUE_FOR_ARGUMENT_PREFIX}${token}`
+          : `${MISSING_VALUE_FOR_ARGUMENT_PREFIX}${token}`,
       );
     default:
       return err;
   }
+}
+
+/**
+ * Recognize Node's default uncaught-exception stderr text for a shaped CLI
+ * parse error (#1922) and extract just the one-line message, discarding
+ * the source-line preview, stack frames, and trailing `Node.js vX.Y.Z`
+ * footer Node prints around it. Scans **every** `Error: ` -prefixed line in
+ * the text -- not just the first -- and returns the first whose message
+ * starts with one of the three shapes {@link toRepoShapedError} produces,
+ * so a script that logs its own unrelated `Error: ...` diagnostic before a
+ * later real crash can't mask the shaped line. Returns `null` when no line
+ * matches, the safe default: a caller should forward the original text
+ * unchanged in that case, exactly as it would for any other error class.
+ */
+// Node's own stack-frame rendering, always "    at ..." (4+ spaces). Used
+// to find where a captured message ends -- see extractShapedCliParseErrorMessage's
+// line-scan below.
+const STACK_FRAME_LINE_PATTERN = /^\s+at /;
+// A line starting a new "Error: " block. Reused both to *find* candidate
+// blocks and to know where the *previous* block's message ends (a second
+// "Error: " line immediately terminates the one before it, same as a
+// stack frame would).
+const ERROR_LINE_PATTERN = /^Error: (.*)$/;
+// `NODE_OPTIONS=--stack-trace-limit=0` (a supported Node runtime option, not
+// an adversarial input) changes Node's uncaught-exception rendering to a
+// single bracketed `[Error: message]` line with no stack frames at all
+// (chatgpt-codex-connector review finding) -- verified empirically:
+// `NODE_OPTIONS='--stack-trace-limit=0' node bin/idd-branch-name.mjs
+// --bogus` prints `[Error: unknown argument: --bogus]` with none of the
+// usual "Error: "-prefixed / "    at " structure this module otherwise
+// relies on. Handled as its own single-line case, not folded into the
+// line-scan loop above: a message that itself happens to span multiple
+// lines under this zero-stack bracketed form has no unambiguous
+// terminator to scan for (no stack frame ever follows to mark the end),
+// so that narrower intersection is a disclosed, accepted gap rather than
+// something this pattern attempts to solve.
+const BRACKETED_ZERO_STACK_ERROR_LINE_PATTERN = /^\[Error: (.*)\]$/;
+
+export function extractShapedCliParseErrorMessage(
+  stderrText: string,
+): string | null {
+  // Line-based, not a single regex: a shaped message can itself contain an
+  // embedded newline (e.g. a stray positional argument whose literal value
+  // spans multiple lines -- the underlying parseCliArgs() error already
+  // preserves that verbatim; this scan must too, rather than truncating at
+  // the first line via a `.`-based pattern, which silently drops
+  // everything after the first embedded newline). A message block runs
+  // from its own "Error: " line up to (but not including) whichever comes
+  // first: a stack-frame line, the next "Error: " line, or the end of the
+  // text.
+  //
+  // Split on `/\r?\n/`, not a plain `'\n'` (Copilot review finding): on
+  // CRLF stderr (e.g. Windows), a plain `'\n'` split leaves a trailing
+  // `\r` on every line, which does more than cosmetically taint the
+  // captured message with a stray `\r` -- ERROR_LINE_PATTERN's un-anchored
+  // (non-multiline) `$` cannot match before that leftover `\r` at all, so
+  // the "Error: " line fails to match this pattern altogether and the
+  // whole shaped error goes undetected, silently falling back to the raw
+  // stack trace on the one platform (Windows) this repository explicitly
+  // supports.
+  const lines = stderrText.split(/\r?\n/);
+  for (let index = 0; index < lines.length; index += 1) {
+    const bracketed = BRACKETED_ZERO_STACK_ERROR_LINE_PATTERN.exec(
+      lines[index],
+    );
+    if (bracketed !== null && isShapedMessage(bracketed[1])) {
+      return bracketed[1];
+    }
+
+    const match = ERROR_LINE_PATTERN.exec(lines[index]);
+    if (match === null) {
+      continue;
+    }
+    const messageLines = [match[1]];
+    let cursor = index + 1;
+    while (
+      cursor < lines.length &&
+      !STACK_FRAME_LINE_PATTERN.test(lines[cursor]) &&
+      !ERROR_LINE_PATTERN.test(lines[cursor])
+    ) {
+      messageLines.push(lines[cursor]);
+      cursor += 1;
+    }
+    const message = messageLines.join('\n');
+    if (isShapedMessage(message)) {
+      return message;
+    }
+  }
+  return null;
+}
+
+function isShapedMessage(message: string): boolean {
+  return REPO_SHAPED_CLI_PARSE_ERROR_PREFIXES.some((prefix) =>
+    message.startsWith(prefix),
+  );
 }
 
 /**
@@ -332,7 +443,7 @@ export function parseCliArgs(
   // --`, since the second `--` becomes a rejected positional). The strip
   // above never repeats -- this is a single explicit check, not a loop.
   if (args[0] === '--') {
-    throw new Error('unknown argument: --');
+    throw new Error(`${UNKNOWN_ARGUMENT_PREFIX}--`);
   }
 
   let parsed: ReturnType<typeof nodeParseArgs>;
