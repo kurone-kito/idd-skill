@@ -1754,9 +1754,14 @@ export function hookWiresWorktreeGuard(content: unknown): boolean {
  * adjacent `#` right after the closing quote (e.g. `"$@"#| cat`) is not a
  * comment delimiter to the shell at all — it stays part of the same word —
  * so accepting it here would let disguised trailing content back in through
- * the very escape hatch meant only for a genuine, separated comment. Pure
- * (no I/O) so it can be unit-tested directly. A non-string
- * (absent/unreadable hook) is treated as not chaining.
+ * the very escape hatch meant only for a genuine, separated comment. A
+ * candidate line must also not be a backslash-continuation of the
+ * preceding physical line (a line ending in `\` before it) — the shell
+ * joins such a pair into one logical command, so e.g. a `printf '%s' \`
+ * line immediately followed by the exec form on the next physical line
+ * never actually invokes it; it only passes those words as arguments to
+ * the earlier command. Pure (no I/O) so it can be unit-tested directly. A
+ * non-string (absent/unreadable hook) is treated as not chaining.
  */
 export function hookChainsToGithooksScript(
   content: unknown,
@@ -1770,9 +1775,11 @@ export function hookChainsToGithooksScript(
   const lineEnd = '(?:[ \\t]*$|[ \\t]+#.*$)';
   const execForm = `exec[ \\t]+${quotedPath}[ \\t]+"\\$@"${lineEnd}`;
   const nonExecForm = `${quotedPath}[ \\t]+"\\$@"[ \\t]*\\|\\|[ \\t]*exit[ \\t]+\\$\\?${lineEnd}`;
-  return new RegExp(`^[ \\t]*(?:${execForm}|${nonExecForm})`, 'm').test(
-    content,
-  );
+  const notContinuedLine = '(?<!\\\\\\n)';
+  return new RegExp(
+    `${notContinuedLine}^[ \\t]*(?:${execForm}|${nonExecForm})`,
+    'm',
+  ).test(content);
 }
 
 /**

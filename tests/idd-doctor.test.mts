@@ -753,6 +753,30 @@ test('hookChainsToGithooksScript rejects a "#" with no preceding whitespace (fal
   );
 });
 
+// Review feedback (PR #1969, chatgpt-codex-connector): the shell joins a
+// line ending in a backslash with the next physical line into one logical
+// command, so a chain-shaped line immediately following a backslash
+// continuation is not actually executed as its own command.
+test('hookChainsToGithooksScript rejects a chain line continued from the preceding backslash-terminated line (false-positive regression)', () => {
+  assert.equal(
+    hookChainsToGithooksScript(
+      'printf %s \\\nexec "$(git rev-parse --show-toplevel)/.githooks/pre-commit" "$@"\n',
+      'pre-commit',
+    ),
+    false,
+  );
+});
+
+test('hookChainsToGithooksScript still accepts a chain line following an ordinary (non-continued) line', () => {
+  assert.equal(
+    hookChainsToGithooksScript(
+      'echo hi\nexec "$(git rev-parse --show-toplevel)/.githooks/pre-commit" "$@"\n',
+      'pre-commit',
+    ),
+    true,
+  );
+});
+
 test('classifyWorktreeGuardActivation returns null when the guard is disabled', () => {
   assert.equal(
     classifyWorktreeGuardActivation({
