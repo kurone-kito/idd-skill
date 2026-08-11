@@ -870,12 +870,18 @@ git rev-parse --git-dir > /dev/null 2>&1 || exit 0; git config core.hooksPath .g
 
 Neither path — chaining or fully replacing — is wired automatically by
 this template: the operator (or an agent following this guide) has to
-author and commit the chaining line or replacement script explicitly.
-Once committed, that change reaches every future clone the next time
-the hook manager's own install/prepare lifecycle runs there — unlike
-the base `git config core.hooksPath` step above, which is local and
-uncommitted and needs a manual, standalone re-run per clone regardless
-of any lifecycle script.
+author and commit the chaining line or the replacement script
+explicitly. Once committed, propagation to a future clone happens
+through whichever install/prepare lifecycle now owns it there: the
+existing hook manager's own lifecycle for chaining, or the
+repository's own replacement lifecycle script for fully replacing —
+never by manually rerunning the plain `git config core.hooksPath
+.githooks` command from the base activation steps above (the one with
+no hook manager involved), which would repoint git directly at
+`.githooks` and bypass the coexisting hook manager. That plain command
+stays the right step only for a clone with no hook manager involved at
+all, where it remains a manual, standalone action with no lifecycle
+script to carry it forward.
 
 #### Activation in a coding-agent / ephemeral environment
 
