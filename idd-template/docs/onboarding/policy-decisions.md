@@ -360,10 +360,14 @@ through GitHub's classic branch-protection API uses the explicit
   (`ciGate.trustSourcePinnedRequiredChecks` — see the row in
   [Customizing IDD](../customization.md)) downgrades to unresolved even
   when green, so an operator who configures branch protection the
-  straightforward way walks into that gate on the very first PR. See
-  [ONBOARDING.md's required-status-check registration
+  straightforward way walks into that gate on the very first PR
+  (observed 2026-08-11 onboarding a companion repository;
+  [kurone-kito/idd-skill#1925](https://github.com/kurone-kito/idd-skill/issues/1925)).
+  See [ONBOARDING.md's required-status-check registration
   step](../../ONBOARDING.md#optional--host-idd-advisory-convergence-as-a-required-check-ci-workflow)
-  for the working `PATCH` snippet.
+  for the working `PATCH` snippet, including the merge caveat (`PATCH`
+  replaces the whole `checks` list) and the producer-pinning trade-off
+  of `app_id: -1`.
 
 Record whether the repository's required-check registration avoids the
 string-array `contexts` pinning trap before unattended workers begin
@@ -412,6 +416,11 @@ This repository uses the following IDD policies:
 ### Up-to-Date-Head Ruleset
 
 **Policy**: `{disabled (recommended) | enabled}`
+
+### Required-Check Registration
+
+**Classic-API `contexts` pinning trap avoided**:
+`{yes — explicit checks array with app_id | no / not applicable}`
 
 ### Credential Scope
 

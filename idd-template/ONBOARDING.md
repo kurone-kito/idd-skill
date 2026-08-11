@@ -1093,16 +1093,21 @@ something an agent applies on its own.
 branch-protection API silently rewrites a plain string-array `contexts`
 field into `app_id`-pinned `checks` entries: a `PUT .../protection`
 call configuring `contexts` comes back with a `checks` array carrying
-GitHub Actions' own `app_id` (`15368`). A pinned entry is exactly what
-the fail-closed "Source-pinned required-check trust" default
-(`ciGate.trustSourcePinnedRequiredChecks` — see the row in
-[Customizing IDD](docs/customization.md)) downgrades to unresolved even
-when green, so an operator who registers this or any other required
-check the straightforward way walks into that gate on the very first
-PR, for a reason nothing in the classic API response explains. Use the
-narrower `PATCH .../required_status_checks` endpoint instead, with an
-explicit `checks` array and `app_id: -1` (any producer) rather than a
-plain `contexts` array:
+an `app_id` (for example, `15368` for `github-actions[bot]` on
+github.com — an implementation detail of that specific integration, not
+a portable constant; a GHES instance or a future GitHub change can
+differ). A pinned entry is exactly what the fail-closed "Source-pinned
+required-check trust" default (`ciGate.trustSourcePinnedRequiredChecks`
+— see the row in [Customizing IDD](docs/customization.md)) downgrades
+to unresolved even when green, so an operator who registers this or any
+other required check the straightforward way walks into that gate on
+the very first PR, for a reason nothing in the classic API response
+explains (observed 2026-08-11 onboarding a companion repository;
+[kurone-kito/idd-skill#1925](https://github.com/kurone-kito/idd-skill/issues/1925)).
+
+Use the narrower `PATCH .../required_status_checks` endpoint instead,
+with an explicit `checks` array and `app_id: -1` (any producer) rather
+than a plain `contexts` array:
 
 ```sh
 gh api --method PATCH \
@@ -1111,6 +1116,32 @@ gh api --method PATCH \
 {"checks": [{"context": "idd-advisory-convergence", "app_id": -1}]}
 JSON
 ```
+
+**`PATCH` replaces the whole `checks` list — it does not merge into
+it.** If the branch already requires other checks (lint, build, tests,
+and so on), first fetch the current array:
+
+```sh
+gh api \
+  repos/{owner}/{repo}/branches/{branch}/protection/required_status_checks \
+  --jq '.checks'
+```
+
+Then include every existing entry alongside the new one in the
+`checks` array above. Copy-pasting the snippet unqualified on a branch
+that already has required checks silently drops them, weakening the
+merge gate to only the newly added check.
+
+`app_id: -1` also trades away GitHub's producer-identity enforcement
+for the check it names — a reasonable trade for
+`idd-advisory-convergence`, since only the adopter's own hosted
+workflow ever produces a check with that exact name, but not a blanket
+recommendation for every required check. Keep a specific `app_id` pin
+on any check where verifying the producer matters, and opt in to
+`ciGate.trustSourcePinnedRequiredChecks: true` (see the row in
+[Customizing IDD](docs/customization.md)) instead, once the operator
+has verified out-of-band that the pinned integration is the sole
+producer.
 
 **Waiver-after-deadline escape path.** `--assert` exits non-zero for
 any not-ready verdict, including the ordinary case where the primary
