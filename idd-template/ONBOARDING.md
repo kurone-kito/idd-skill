@@ -832,6 +832,11 @@ enforcement surface.
 
 #### Coexisting with an existing hook manager
 
+`core.hooksPath` is repository-wide git config, not scoped to whichever
+worktree set it: activating or resetting it from any one worktree of a
+clone changes hook resolution for every other worktree of that same
+clone too, including the primary worktree.
+
 An existing hook manager (Husky or similar) can silently reset
 `core.hooksPath` back to its own hooks directory on every
 install/prepare lifecycle run — Husky v9's default `prepare: "husky"`
@@ -850,15 +855,26 @@ it from a subdirectory:
 exec "$(git rev-parse --show-toplevel)/.githooks/pre-push" "$@"
 ```
 
-Fully replacing (not chaining) an existing hook manager under pnpm's
-`shellEmulator: true` needs a POSIX-control-flow-free replacement
-lifecycle script — no `if`/`then`/`fi`, which `shellEmulator`'s reduced
-grammar cannot parse. For example, a replacement `package.json`
-`"prepare"` script needs a short-circuit instead:
+Fully replacing an existing hook manager instead of chaining it removes
+that tool from the repository outright, so treat it as an alternative
+worth knowing about, not the default recommendation. Under pnpm's
+`shellEmulator: true`, a fully-replacing lifecycle script still needs
+to be POSIX-control-flow-free — no `if`/`then`/`fi`, which
+`shellEmulator`'s reduced grammar cannot parse. For example, a
+replacement `package.json` `"prepare"` script needs a short-circuit
+instead:
 
 ```sh
 git rev-parse --git-dir > /dev/null 2>&1 || exit 0; git config core.hooksPath .githooks && chmod +x .githooks/pre-commit .githooks/pre-push
 ```
+
+Neither path — chaining or fully replacing — is wired automatically by
+this template: the operator (or an agent following this guide) has to
+author and commit the chaining line or replacement script explicitly.
+Once committed, the hook manager's own lifecycle hook carries that
+change to every future clone on its own, unlike the base
+`git config core.hooksPath` step above, which is local and uncommitted
+and genuinely needs re-running per clone.
 
 #### Activation in a coding-agent / ephemeral environment
 
