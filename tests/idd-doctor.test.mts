@@ -670,6 +670,34 @@ test('hookChainsToGithooksScript rejects a bare mention with no exec/invocation 
   );
 });
 
+// Review feedback (PR #1969, CodeRabbit): the matcher required only that
+// the quoted path *end* in `.githooks/<hookName>`, so an unrelated target
+// like `$HOME/.githooks/<hookName>` matched too, even though it has no
+// relationship to this repository's own shipped `.githooks/<hookName>`.
+test('hookChainsToGithooksScript rejects a foreign path that only happens to end in .githooks/<hookName> (false-positive regression)', () => {
+  assert.equal(
+    hookChainsToGithooksScript(
+      'exec "$HOME/.githooks/pre-commit" "$@"\n',
+      'pre-commit',
+    ),
+    false,
+  );
+});
+
+// Review feedback (PR #1969, chatgpt-codex-connector): the non-exec form
+// was accepted even without its documented `|| exit $?` failure-propagation
+// suffix, so a guard failure could be silently swallowed by whatever the
+// hook manager's own dispatcher ran next.
+test('hookChainsToGithooksScript rejects a non-exec invocation missing the failure-propagation suffix (false-positive regression)', () => {
+  assert.equal(
+    hookChainsToGithooksScript(
+      '"$(git rev-parse --show-toplevel)/.githooks/pre-commit" "$@"\necho continuing anyway\n',
+      'pre-commit',
+    ),
+    false,
+  );
+});
+
 test('classifyWorktreeGuardActivation returns null when the guard is disabled', () => {
   assert.equal(
     classifyWorktreeGuardActivation({

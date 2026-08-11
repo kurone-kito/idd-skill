@@ -1726,9 +1726,20 @@ export function hookWiresWorktreeGuard(content: unknown): boolean {
  * The quoted path must begin the executed command token (immediately after
  * an optional `exec`, with nothing else in between) — an unrelated leading
  * command such as `echo "$(...)/.githooks/pre-commit" "$@"` never matches,
- * since that would only *mention* the path rather than invoke it. Pure (no
- * I/O) so it can be unit-tested directly. A non-string (absent/unreadable
- * hook) is treated as not chaining.
+ * since that would only *mention* the path rather than invoke it. The path
+ * must also use the documented `$(git rev-parse --show-toplevel)/` prefix
+ * exactly, not merely end in `.githooks/<hookName>` — an unrelated target
+ * such as `"$HOME/.githooks/<hookName>"` never matches, since that string
+ * has no relationship to this repository's own shipped script regardless
+ * of what happens to live at the fixed `.githooks/<hookName>` path this
+ * function's caller separately verifies. The non-`exec` form additionally
+ * requires the documented `|| exit $?` failure-propagation suffix
+ * immediately afterward (only whitespace may separate them) — without
+ * `exec`, a guard failure that isn't explicitly propagated can be silently
+ * swallowed by whatever the hook manager's own dispatcher runs next, so an
+ * invocation lacking that suffix is not accepted as reliable chaining
+ * evidence. Pure (no I/O) so it can be unit-tested directly. A non-string
+ * (absent/unreadable hook) is treated as not chaining.
  */
 export function hookChainsToGithooksScript(
   content: unknown,
@@ -1738,10 +1749,12 @@ export function hookChainsToGithooksScript(
     return false;
   }
   const escaped = escapeRegex(hookName);
-  return new RegExp(
-    `^[ \\t]*(?:exec[ \\t]+)?"[^"#\\n]*\\.githooks/${escaped}"[ \\t]+"\\$@"`,
-    'm',
-  ).test(content);
+  const quotedPath = `"\\$\\(git rev-parse --show-toplevel\\)/\\.githooks/${escaped}"`;
+  const execForm = `exec[ \\t]+${quotedPath}[ \\t]+"\\$@"`;
+  const nonExecForm = `${quotedPath}[ \\t]+"\\$@"[ \\t]*\\|\\|[ \\t]*exit[ \\t]+\\$\\?`;
+  return new RegExp(`^[ \\t]*(?:${execForm}|${nonExecForm})`, 'm').test(
+    content,
+  );
 }
 
 /**
