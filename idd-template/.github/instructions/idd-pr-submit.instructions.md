@@ -305,9 +305,10 @@ completion.
    (?im)\b(close[sd]?|fix(e[sd])?|resolve[sd]?)\s+#(\d+)\b
    ```
 
-   A match against the claimed issue's own number `<N>` is expected
-   (deliberate); only a captured number **outside** the deliberate
-   closing set from D3 is a stray commit-message close.
+   A match against any issue number in the deliberate closing set from
+   D3 is expected (deliberate — this covers both the single-issue `<N>`
+   case and "Multiple closing issues" above); only a captured number
+   **outside** that set is a stray commit-message close.
 
    **On a stray match**: amend the offending commit (`git commit
    --amend` for the tip commit, or an interactive rebase for an
