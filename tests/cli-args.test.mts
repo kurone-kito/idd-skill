@@ -149,6 +149,54 @@ test('parseCliArgs: positionals is always empty (allowPositionals: false)', () =
   assert.deepEqual(positionals, []);
 });
 
+// --- Leading `--` stripping (#1921) -----------------------------------------
+// pnpm forwards a literal `--` through `pnpm run <script> -- <flags>`
+// without stripping it (unlike npm, which strips its own separator first),
+// so every migrated helper crashed with "unknown argument: --help" under
+// that invocation form. parseCliArgs must strip exactly one leading `--`
+// before Node ever sees argv.
+
+test('parseCliArgs: a single leading -- is stripped, parsing identically to the bare form', () => {
+  const withSeparator = parseCliArgs(['--', '--help'], SAMPLE_SPEC);
+  const bare = parseCliArgs(['--help'], SAMPLE_SPEC);
+  assert.deepEqual(withSeparator, bare);
+});
+
+test('parseCliArgs: a leading -- still resolves a following flag to its value', () => {
+  const { values } = parseCliArgs(['--', '--pr', '7'], SAMPLE_SPEC);
+  assert.equal(values.pr, '7');
+});
+
+test('parseCliArgs: a doubled leading -- -- still throws (the strip never repeats)', () => {
+  // Only ONE leading `--` is ever stripped -- the resulting post-strip
+  // argv[0] is checked once, not looped, so a second literal `--` at
+  // position 0 remains a hard error rather than being silently consumed
+  // as Node's own end-of-options terminator.
+  assert.throws(() => parseCliArgs(['--', '--', '--help'], SAMPLE_SPEC), {
+    message: 'unknown argument: --',
+  });
+});
+
+test('parseCliArgs: a bare doubled -- -- (no trailing flag) still throws, not silently accepted', () => {
+  // Without the explicit post-strip guard, stripping the first `--` would
+  // leave a lone trailing `--` for Node to consume as its own terminator
+  // with zero positionals -- silently succeeding instead of erroring, and
+  // contradicting the established "a second literal -- stays an error"
+  // contract (verified against this repository's current, unpatched
+  // behavior for this exact input, which already throws this way).
+  assert.throws(() => parseCliArgs(['--', '--'], SAMPLE_SPEC), {
+    message: 'unknown argument: --',
+  });
+});
+
+test('parseCliArgs: a -- appearing anywhere other than index 0 keeps its current behavior', () => {
+  // A trailing (non-leading) `--` is consumed by Node as the end-of-options
+  // terminator with no positionals following it, so it parses successfully
+  // -- this must stay unchanged by the leading-only strip above.
+  const { values } = parseCliArgs(['--pr', '7', '--'], SAMPLE_SPEC);
+  assert.equal(values.pr, '7');
+});
+
 // --- parseCanonicalIntegerOrThrow / parseCanonicalIntegerOrNull -------------
 // Both integer contracts named in #1446's acceptance criteria: throw (e.g.
 // ci-wait-policy.mts's --rerun-count) and resolve-to-null (e.g.
