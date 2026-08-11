@@ -1086,6 +1086,19 @@ examples onto a GHES-hosted repository, keep both lines rather than
 deleting `GH_ENTERPRISE_TOKEN` as apparently redundant (preventive; no
 observed incident yet).
 
+**Setting the token alone is not sufficient on GHES.** The
+`idd-doctor`/`idd-advisory-convergence` helpers call `gh api` directly,
+and `gh api` resolves its target host from `GH_HOST`/`--hostname` (or
+the CLI's configured default), not from the checked-out repository's
+Git remote the way `gh pr view`/`gh issue edit` do — so on a
+GHES-hosted repository, an unset `GH_HOST` still sends these `gh api`
+calls to `api.github.com` using `GH_TOKEN`, and `GH_ENTERPRISE_TOKEN`
+is never read at all (observed 2026-08-11, a Codex advisory review on
+[kurone-kito/idd-skill#1959](https://github.com/kurone-kito/idd-skill/pull/1959)).
+Resolving the correct host for these calls needs its own design — see
+kurone-kito/idd-skill#1962 — so a GHES adopter should treat the two
+examples above as necessary but not yet sufficient until that lands.
+
 This gate checks repository **health**, not the disposable-worktree rule:
 CI cannot detect a primary-worktree B1 violation (it leaves no trace in
 pushed history and CI checks out a detached HEAD), so worktree
