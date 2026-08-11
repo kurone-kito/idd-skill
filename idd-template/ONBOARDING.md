@@ -981,15 +981,16 @@ jobs:
           GH_TOKEN: ${{ github.token }}
 ```
 
-Both the extra `permissions:` scopes and `GH_TOKEN` are required: without
-them, idd-doctor's GitHub-API-backed checks (post-merge cleanup backlog
-and autopilot-suitability) silently degrade to a single warning line and
-the job still reports success — a green gate that checked less than it
-appears to. The branch-protection probe stays unreadable either way:
-its endpoint needs `Administration: read`, which isn't an available
-`GITHUB_TOKEN` permissions scope, so `branch protection not readable` is
-an expected, permanent warning under `GITHUB_TOKEN` rather than
-something these scopes fix.
+Both the extra `permissions:` scopes and `GH_TOKEN` are required:
+without `GH_TOKEN`, `gh` has no credential, so idd-doctor's
+GitHub-API-backed checks silently skip or emit one generic warning,
+yet the job still reports success — a green gate that checked less
+than it appears to. With them, the post-merge cleanup backlog and
+autopilot-suitability checks actually run instead of being silently
+skipped. The branch-protection probe stays unreadable regardless: it
+needs a repository-administration permission that GitHub Actions'
+`permissions:` model can't grant to `GITHUB_TOKEN`, so it keeps
+warning even with these scopes added.
 
 This gate checks repository **health**, not the disposable-worktree rule:
 CI cannot detect a primary-worktree B1 violation (it leaves no trace in
