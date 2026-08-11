@@ -880,16 +880,21 @@ itself source the guard, it also checks the corresponding hook file in
 `core.hooksPath`'s **parent** directory — the shape Husky v9's own
 `.husky/_` split takes — for one of the two documented chain forms
 above, and confirms the referenced `.githooks/<hook>` script itself
-genuinely sources the guard
-([#1951](https://github.com/kurone-kito/idd-skill/issues/1951)). A
-setup that follows the recipe above for **both** hooks now reads as
+genuinely sources the guard (observed 2026-08-11 during PR #1948's
+review; [#1951](https://github.com/kurone-kito/idd-skill/issues/1951)).
+A setup that follows the recipe above for **both** hooks now reads as
 wired, not enabled-but-inert. The check still does not trace an
 arbitrary hook manager's own dispatch machinery beyond that one
-documented level, so a manager using a different indirection shape can
-still warn even when the guard is genuinely reachable through it; a
-warning while only one hook is chained, or while the chain targets a
-missing or incorrect `.githooks/*` script, remains actionable as
-intended either way.
+documented level: it confirms a hook file exists at `core.hooksPath`
+but does not verify that file's own content genuinely hands off to the
+parent sibling it trusts, so a present-but-inert or corrupted
+dispatcher stub can still read as wired even though git never reaches
+the parent chain (preventive; no observed incident yet). Conversely, a
+manager using a different indirection shape entirely can still warn
+even when the guard is genuinely reachable through it; a warning while
+only one hook is chained, or while the chain targets a missing or
+incorrect `.githooks/*` script, remains actionable as intended either
+way.
 
 Fully replacing an existing hook manager instead of chaining it removes
 that tool from the repository outright, so treat it as an alternative
@@ -966,10 +971,11 @@ Chain-line presence alone still isn't a safe substitute for running
 `idd-doctor`, though: a fresh ephemeral clone checks out the committed
 chain lines immediately, even when the setup lifecycle never ran and
 `core.hooksPath` is still unset, which `idd-doctor` still correctly
-reports as enabled-but-inert (`core.hooksPath = (unset)`). If a custom
-dispatch shape falls outside the documented one-level recipe (above),
-fall back to verifying both explicitly: that the committed chain lines
-are present in the manager's hook files, and that
+reports as enabled-but-inert (`core.hooksPath = (unset)`; preventive,
+no observed incident yet). If a custom dispatch shape falls outside
+the documented one-level recipe (above; also preventive, no observed
+incident yet), fall back to verifying both explicitly: that the
+committed chain lines are present in the manager's hook files, and that
 `git config --get core.hooksPath` resolves to the manager's own hooks
 directory (not empty), confirming its lifecycle actually ran and wired
 that value rather than just that the files exist. This is activation
