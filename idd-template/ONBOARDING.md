@@ -903,6 +903,8 @@ on:
   pull_request:
 permissions:
   contents: read
+  issues: read
+  pull-requests: read
 jobs:
   idd-doctor:
     runs-on: ubuntu-latest
@@ -912,6 +914,8 @@ jobs:
           ref: ${{ github.sha }} # detached HEAD keeps the worktree check inert
           persist-credentials: false
       - run: node scripts/idd-doctor.mjs
+        env:
+          GH_TOKEN: ${{ github.token }}
 ```
 
 **`package-manager`** — the helper ships as an installed
@@ -926,6 +930,8 @@ on:
   pull_request:
 permissions:
   contents: read
+  issues: read
+  pull-requests: read
 jobs:
   idd-doctor:
     runs-on: ubuntu-latest
@@ -941,6 +947,8 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm exec idd-doctor
+        env:
+          GH_TOKEN: ${{ github.token }}
 ```
 
 **`ephemeral-npx`** — no helper files or `devDependency` are vendored;
@@ -955,6 +963,8 @@ on:
   pull_request:
 permissions:
   contents: read
+  issues: read
+  pull-requests: read
 jobs:
   idd-doctor:
     runs-on: ubuntu-latest
@@ -967,7 +977,21 @@ jobs:
         with:
           node-version: 24.x
       - run: npx --yes --package <reviewed-helper-spec> idd-doctor
+        env:
+          GH_TOKEN: ${{ github.token }}
 ```
+
+Both the extra `permissions:` scopes and `GH_TOKEN` are required:
+without `GH_TOKEN`, `gh` has no credential, so idd-doctor's
+GitHub-API-backed checks silently skip or emit one generic warning,
+yet the job still reports success — a green gate that checked less
+than it appears to (observed on this repository's own workflow,
+kurone-kito/idd-skill#1828). With them, the post-merge cleanup backlog
+and autopilot-suitability checks actually run instead of being
+silently skipped. The branch-protection probe stays unreadable
+regardless: it needs a repository-administration permission that
+GitHub Actions' `permissions:` model can't grant to `GITHUB_TOKEN`, so
+it keeps warning even with these scopes added.
 
 This gate checks repository **health**, not the disposable-worktree rule:
 CI cannot detect a primary-worktree B1 violation (it leaves no trace in
