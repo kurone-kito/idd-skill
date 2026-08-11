@@ -245,7 +245,7 @@ Use these prefixes so that disposition is always unambiguous:
 - PATH B acceptance marker (only for a _completed_ review of the current
   HEAD): `**Accepted** — {what the advisory comment confirmed}`
 - Ordinary rejection: `**Rejected** — {reason}`
-- CODEOWNER / required reviewer exception:
+- CODEOWNER / required reviewer, or inconclusive (E5), exception:
   `**Awaiting maintainer decision** — {reasoning}`
 
 Two requirements make the F2/F3 disposition-evidence gate recognize an
