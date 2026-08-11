@@ -1059,11 +1059,13 @@ jobs:
           GH_ENTERPRISE_TOKEN: ${{ github.token }}
 ```
 
-Both the extra `permissions:` scopes and `GH_TOKEN` are required:
-without `GH_TOKEN`, `gh` has no credential, so idd-doctor's
-GitHub-API-backed checks silently skip or emit one generic warning,
-yet the job still reports success — a green gate that checked less
-than it appears to (observed on this repository's own workflow,
+Both the extra `permissions:` scopes and a host-matching token are
+required: without the correct host-scoped token (`GH_TOKEN` on
+`github.com`/`ghe.com`; `GH_ENTERPRISE_TOKEN` on GHES — see below),
+`gh` has no credential, so idd-doctor's GitHub-API-backed checks
+silently skip or emit one generic warning, yet the job still reports
+success — a green gate that checked less than it appears to (observed
+on this repository's own workflow,
 kurone-kito/idd-skill#1828). With them, the post-merge cleanup backlog
 and autopilot-suitability checks actually run instead of being
 silently skipped. The branch-protection probe stays unreadable
@@ -1081,7 +1083,8 @@ reads the variable that matches its resolved host, so the three
 examples above set both — harmless on `github.com` and additive on
 GHES — instead of branching per host. If you copy one of these
 examples onto a GHES-hosted repository, keep both lines rather than
-deleting `GH_ENTERPRISE_TOKEN` as apparently redundant.
+deleting `GH_ENTERPRISE_TOKEN` as apparently redundant (preventive; no
+observed incident yet).
 
 This gate checks repository **health**, not the disposable-worktree rule:
 CI cannot detect a primary-worktree B1 violation (it leaves no trace in
