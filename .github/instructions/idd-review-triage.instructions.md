@@ -358,9 +358,9 @@ Before leaving triage, verify every ReviewItems_snapshot item has the
 evidence required by its path:
 
 - Every PATH A item has a recorded classification and an Accept,
-  Reject, or AMD (E5 inconclusive) decision. Every Accepted item cites
-  its "Verify before accept" evidence, or the maintainer confirmation
-  reply when actor-permission capped.
+  Reject, or AMD decision (including E5 inconclusive). Every Accepted
+  item cites its "Verify before accept" evidence, or the maintainer
+  confirmation reply when actor-permission capped.
 - Every Rejected or inconclusive PATH A item whose source is reviewer
   feedback has the required rejection or
   `**Awaiting maintainer decision**` reply posted, and any non-AMD
