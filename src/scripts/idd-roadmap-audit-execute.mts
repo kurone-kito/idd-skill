@@ -24,6 +24,7 @@ import {
   enumerateRoadmapGraph,
   isClaimStaleByAge,
   parseClaimStaleAgeMs,
+  type RoadmapCycleDiagnostic,
   type RoadmapGraphReport,
 } from './discover-roadmap-graph.mts';
 import { GH_TEXT_LOOP_OPTIONS, ghText } from './gh-exec.mts';
@@ -149,11 +150,15 @@ interface RoadmapAuditExecuteArgs {
  * roadmap descendant, every traversal cycle, a blocked roadmap root, and a
  * childless/malformed roadmap is collected as a blocker; `ready` is true only
  * when no blocker is collected. The rules mirror the written A1.5 completion
- * criteria exactly — this helper adds no stricter sub-condition. One shape is
- * interpreted as safe rather than ambiguous (#1278): a `reference` back-edge
- * from a non-roadmap execution leaf is the provenance breadcrumb the A1.5
- * follow-up rule itself requires, so it never blocks as a cycle (an open
- * leaf still blocks as `open-child`). Pure and
+ * criteria exactly — this helper adds no stricter sub-condition. Two cycle
+ * shapes are interpreted as safe rather than ambiguous: a `reference`
+ * back-edge from a non-roadmap execution leaf (#1278) is the provenance
+ * breadcrumb the A1.5 follow-up rule itself requires, so it never blocks as
+ * a cycle (an open leaf still blocks as `open-child`); and, regardless of
+ * relationship type, a cycle whose **segment** (the suffix of the recorded
+ * path starting at the first occurrence of the back-edge target) never
+ * touches the audited roadmap and is entirely CLOSED (#1919) — such a loop
+ * has no closure order left to get wrong. Pure and
  * network-free so it is unit-testable apart from live GitHub.
  */
 export function evaluateRoadmapAuditGates(
@@ -288,23 +293,34 @@ export function evaluateRoadmapAuditGates(
     });
   }
 
-  // Cycles / ambiguous graph: do not guess a closure order. A `reference`
-  // back-edge whose source is a non-roadmap execution leaf is exempt (#1278):
-  // a closed leaf's `Refs #<roadmap>` breadcrumb is the provenance the A1.5
-  // follow-up rule requires, and an open leaf is already blocked above as
-  // `open-child`, so the audit still fails closed while reporting the true
-  // cause. Roadmap-source cycles, unknown-source cycles, stronger
-  // relationships (task-list / dependency / closing-keyword / sub-issue),
-  // and execution sources in any other state keep blocking.
+  // Cycles / ambiguous graph: do not guess a closure order. Two exemptions
+  // keep a genuinely-resolved cycle from blocking; every other cycle keeps
+  // blocking (fail closed):
+  //
+  //  - (#1278) A `reference` back-edge whose source is a non-roadmap
+  //    execution leaf is exempt: a closed leaf's `Refs #<roadmap>`
+  //    breadcrumb is the provenance the A1.5 follow-up rule requires, and an
+  //    open leaf is already blocked above as `open-child`, so the audit
+  //    still fails closed while reporting the true cause. This exemption is
+  //    also applied earlier, at the traversal level (`discover-roadmap-graph`
+  //    never even records the CLOSED-source case as a cycle), so only the
+  //    OPEN-source dedup case actually reaches this branch in practice.
+  //  - (#1919) Any cycle, of any relationship type, whose **segment** (see
+  //    `isResolvedCycleSegment`) excludes the audited roadmap and is
+  //    entirely CLOSED: such a loop has no closure order left to get wrong,
+  //    so it is recorded as informational provenance instead of a blocker.
   const openExecutionLeaves = new Set(report.executionCandidates);
   for (const cycle of report.diagnostics.cycles) {
     const sourceNode = report.nodes.find(
       (entry) => entry.number === cycle.source,
     );
-    if (
+    const isProvenanceBreadcrumb =
       cycle.relationship === 'reference' &&
       sourceNode?.classification === 'execution' &&
-      (sourceNode.state === 'CLOSED' || openExecutionLeaves.has(cycle.source))
+      (sourceNode.state === 'CLOSED' || openExecutionLeaves.has(cycle.source));
+    if (
+      isProvenanceBreadcrumb ||
+      isResolvedCycleSegment(cycle, report, rootNumber)
     ) {
       continue;
     }
@@ -317,6 +333,46 @@ export function evaluateRoadmapAuditGates(
   }
 
   return blockers;
+}
+
+/**
+ * The **cycle segment** (#1919): the suffix of a recorded cycle path
+ * starting at the first occurrence of the back-edge target. For the
+ * recorded path `1904 -> 1905 -> 1564 -> 1563 -> 1564` the segment is
+ * `1564 -> 1563 -> 1564` — the actual closed loop, excluding the acyclic
+ * prefix that merely reached it. `cycle.target` is always present in
+ * `cycle.path` (the traversal appends it as the path's last element), so the
+ * fallback to the full path never fires in practice; it exists only so this
+ * helper stays total for a malformed/hand-built diagnostic.
+ */
+function cycleSegment(cycle: RoadmapCycleDiagnostic): number[] {
+  const firstIndex = cycle.path.indexOf(cycle.target);
+  return firstIndex === -1 ? cycle.path : cycle.path.slice(firstIndex);
+}
+
+/**
+ * True when a cycle's segment (see {@link cycleSegment}) never touches the
+ * audited roadmap AND every node in it is CLOSED (#1919). A node absent from
+ * `report.nodes`, or carrying any state other than `CLOSED` (including
+ * `OPEN`), fails the all-CLOSED check — fail closed. Such a cycle has no
+ * closure order left to get wrong: every member issue is already closed and
+ * the loop never passes through the roadmap under audit, so it is
+ * informational provenance rather than a blocker.
+ */
+function isResolvedCycleSegment(
+  cycle: RoadmapCycleDiagnostic,
+  report: RoadmapGraphReport,
+  rootNumber: number,
+): boolean {
+  const segment = cycleSegment(cycle);
+  if (segment.includes(rootNumber)) {
+    return false;
+  }
+  return segment.every(
+    (segmentNumber) =>
+      report.nodes.find((entry) => entry.number === segmentNumber)?.state ===
+      'CLOSED',
+  );
 }
 
 /** First (sorted) root→target provenance path, or `[]` when none is recorded. */

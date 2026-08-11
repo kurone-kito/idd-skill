@@ -707,6 +707,116 @@ test('an unknown-source reference cycle still blocks (fail closed) (#1278)', () 
   );
 });
 
+// ---------------------------------------------------------------------------
+// #1919 — root-preserving exemption for cycles among fully-closed descendants
+// ---------------------------------------------------------------------------
+
+test('a cycle whose segment excludes the audited roadmap and is entirely CLOSED is not a blocker: dry-run is ready (#1919)', async () => {
+  // Mirrors the reported #1904 shape: a `dependency` back-edge (not
+  // `reference`, so #1278's own exemption never applies) between two CLOSED
+  // descendants that never routes back through the audited roadmap.
+  const issues = new Map<number, unknown>([
+    [ROADMAP, rawRoadmapIssue(ROADMAP, '- [x] #1300')],
+    [
+      1300,
+      rawExecutionIssue(1300, 'Follow-up work.\n\nBlocked by #1301', 'closed'),
+    ],
+    [
+      1301,
+      rawExecutionIssue(1301, 'Follow-up work.\n\nBlocked by #1300', 'closed'),
+    ],
+  ]);
+  const graph = await enumerateRoadmapGraph(ROADMAP, {
+    loadIssue: async (issueNumber) => issues.get(issueNumber) ?? null,
+  });
+  assert.deepEqual(
+    graph.diagnostics.cycles.map((cycle) => cycle.relationship),
+    ['dependency'],
+  );
+  const { deps, calls } = makeDeps(graph);
+  const { verdict, exitCode } = await runRoadmapAuditExecute(
+    ['--roadmap', String(ROADMAP)],
+    deps,
+  );
+
+  assert.equal(verdict.ready, true);
+  assert.deepEqual(verdict.blockers, []);
+  assert.equal(exitCode, 0);
+  assert.deepEqual(calls.closed, []);
+});
+
+test('a cycle blocks when its segment contains the audited roadmap, regardless of relationship type (#1919)', () => {
+  const report = readyReport();
+  report.nodes.push(
+    node({ number: 1560, state: 'CLOSED' }),
+    node({ number: 1561, state: 'CLOSED' }),
+  );
+  // `task-list` (not `reference`), and the roadmap sits mid-segment rather
+  // than at an endpoint -- the segment-inclusion check must scan the whole
+  // segment, not just its first/last element.
+  report.diagnostics.cycles = [
+    {
+      source: 1561,
+      target: 1560,
+      relationship: 'task-list',
+      path: [1560, ROADMAP, 1561, 1560],
+    },
+  ];
+  const blockers = evaluateRoadmapAuditGates(report);
+
+  assert.deepEqual(
+    blockers.map((blocker) => blocker.kind),
+    ['cycle'],
+  );
+});
+
+test('a cycle blocks when any segment node is OPEN, even though it excludes the audited roadmap (#1919)', () => {
+  const report = readyReport();
+  report.nodes.push(
+    node({ number: 1563, state: 'OPEN' }),
+    node({ number: 1564, state: 'CLOSED' }),
+  );
+  report.diagnostics.cycles = [
+    {
+      source: 1563,
+      target: 1564,
+      relationship: 'dependency',
+      path: [ROADMAP, 1564, 1563, 1564],
+    },
+  ];
+  const blockers = evaluateRoadmapAuditGates(report);
+
+  assert.deepEqual(
+    blockers.map((blocker) => blocker.kind),
+    ['cycle'],
+  );
+});
+
+test('a cycle blocks when a segment node is absent from the report, even though it excludes the audited roadmap (#1919)', () => {
+  const report = readyReport();
+  report.nodes.push(
+    node({ number: 1563, state: 'CLOSED' }),
+    node({ number: 1564, state: 'CLOSED' }),
+  );
+  // 9999 is deliberately absent from `report.nodes`: a mid-segment node that
+  // is neither the cycle's source nor its target still fails the all-CLOSED
+  // check (fail closed on an unresolvable state).
+  report.diagnostics.cycles = [
+    {
+      source: 1563,
+      target: 1564,
+      relationship: 'dependency',
+      path: [ROADMAP, 1564, 9999, 1563, 1564],
+    },
+  ];
+  const blockers = evaluateRoadmapAuditGates(report);
+
+  assert.deepEqual(
+    blockers.map((blocker) => blocker.kind),
+    ['cycle'],
+  );
+});
+
 test('a childless roadmap (no edges) is reported, never closed', () => {
   const report = readyReport();
   report.nodes = [
