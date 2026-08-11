@@ -718,11 +718,35 @@ The recipe below adapts that workflow for adopters. Save it as
   labels must guard the names it actually uses.
 - `<labeler-bot-login-1>`, `<labeler-bot-login-2>`, ...: the login(s) of
   whichever semantic issue auto-labeler(s) this repository actually
-  runs, confirmed via the REST simple-user object's `login` and
-  `type: Bot` fields directly on the event's `sender` (not a
-  GraphQL-rendered display name). This is independent of, and not
-  necessarily identical to, any `advisoryBotLogins` configured for PR
-  review — list only the actor(s) that auto-label **issues**.
+  runs. Build the complete list with a full-history sweep, not a single
+  observed event: read the paginated
+  `GET /repos/{owner}/{repo}/issues/events` endpoint to completion,
+  keeping only entries where `event == "labeled"` and the actor's
+  `type` is `Bot`. That endpoint returns issue and pull request events
+  together, so this one sweep needs no separate PR-side pass.
+  Filter the sweep's results down to the actor(s) recognized as an
+  untrusted semantic auto-labeler — exclude any bot already trusted to
+  apply these labels on purpose (for example, this repository's own IDD
+  or CI automation), or the guard will strip a label that automation
+  intentionally applied. The sweep also buys something a single
+  observed event cannot: it can confirm that, as of the sweep, a bot
+  has never labeled, so a configured review bot with no matching
+  history can be left out of this list on that evidence instead of
+  assumption (field-reported 2026-08-11, kurone-kito/idd-skill#1928).
+  That absence is not permanent — re-run the sweep after enabling new
+  automation or after a long gap, since a bot with no history yet can
+  still start labeling later (preventive; no observed incident yet).
+  Between sweeps, validate
+  any single newly observed labeler the same way — confirmed via the
+  REST simple-user object's `login` and `type: Bot` fields directly on
+  the event's `sender` (not a GraphQL-rendered display name). This is
+  independent of, and not necessarily identical to, any
+  `advisoryBotLogins` configured for PR review — list only the
+  actor(s) that auto-label **issues**. (This does not exclude a bot the
+  sweep shows labeling only pull requests: "issues" here contrasts with
+  `advisoryBotLogins`' PR-review role, not the events this actor list
+  guards — the workflow's `pull_request_target: labeled` trigger below
+  reuses this same list.)
 
 This recipe guards the three policy-decision labels only. If this
 repository also configures `issueAuthoring.authoringLabelName`
