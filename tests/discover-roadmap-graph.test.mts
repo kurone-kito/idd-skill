@@ -413,6 +413,24 @@ test('extractKeywordReferences keeps both targets in a "not only ... but also ..
   ]);
 });
 
+test('extractKeywordReferences keeps genuine edges in "not merely/just/simply ... but also ..." constructions (own E2 critique pass)', () => {
+  // A same-claim E2 critique pass on PR #1968 generalized the "not only"
+  // finding above: "merely", "just", and "simply" are the same additive
+  // correlative family and reproduced the identical false-negative before
+  // this widened guard.
+  for (const adverb of ['merely', 'just', 'simply']) {
+    const body = `This not ${adverb} closes #37 but also fixes #38`;
+    assert.deepEqual(
+      extractKeywordReferences(body),
+      [
+        { target: 37, relationship: 'closing-keyword', evidence: body },
+        { target: 38, relationship: 'closing-keyword', evidence: body },
+      ],
+      `adverb: ${adverb}`,
+    );
+  }
+});
+
 test('extractKeywordReferences still negates across long intervening words (#1968 review)', () => {
   // Copilot/Codex review on #1968: an earlier revision bounded the negation
   // scan to a fixed 30-character slice, which could truncate the negation
@@ -549,19 +567,23 @@ test('graph traversal excludes a negated closing-keyword mention as a phantom ne
   // Reproduces the live #1931 -> #176 shape at the graph level: a merged
   // child issue's field-report narrative mentions an unrelated,
   // already-closed historical roadmap using negated phrasing ("does not
-  // close #N" / "would not close #N"). Before this fix the mechanical
-  // extractor still recorded a
-  // closing-keyword edge to it, pulling the unrelated roadmap into the graph
-  // as a childless node and tripping idd-roadmap-audit-execute's
-  // nested-roadmap blocker for the real root. After the fix, #902 must be
-  // absent from the graph entirely — not merely relabeled — since traversal
-  // follows every edge regardless of relationship type.
+  // close #N" / "would not close #N"), each phrase kept on a single physical
+  // line (matching the real #1931 body — the negation window is per-line, so
+  // a phrase split across a line wrap would not even reach the negation
+  // check: the keyword and `#N` would already be on different lines and
+  // never pair up in the first place, negation aside). Before this fix the
+  // mechanical extractor still recorded a closing-keyword edge for both,
+  // pulling the unrelated roadmap into the graph as a childless node and
+  // tripping idd-roadmap-audit-execute's nested-roadmap blocker for the real
+  // root. After the fix, #902 must be absent from the graph entirely — not
+  // merely relabeled — since traversal follows every edge regardless of
+  // relationship type.
   const childBody = [
     '## Background',
     '',
-    'The B2 plan comment had stated in writing that the PR would not close',
-    '#902. The commit message contained a sentence written to explain the',
-    'scope boundary to a reader: "This does not close #902: verifying the',
+    'The B2 plan comment had stated in writing that the PR would not close #902.',
+    'The commit message contained a sentence written to explain the scope',
+    'boundary to a reader: "This does not close #902: verifying the',
     'acceptance criteria needs an actual green release run".',
   ].join('\n');
   const issues = new Map([

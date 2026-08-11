@@ -118,11 +118,15 @@ const KEYWORD_REFERENCE_REGEX =
 // long intervening words (Copilot/Codex review on #1968, e.g. "would not
 // unconditionally automatically close #43" — "not" fell outside the slice —
 // recreating the exact false-positive edge this fix exists to prevent). The
-// `not(?!\s+only\b)` guard excludes the "not only … but also …" correlative
-// construction, which is additive, not a real negation (same review round:
-// "This not only closes #42 but also fixes #43" must keep the edge to #42).
+// `not(?!\s+(?:only|merely|just|simply)\b)` guard excludes "not only …",
+// "not merely …", "not just …", and "not simply …" but-also-style additive
+// correlative constructions, none of which are a real negation (same review
+// round: "This not only closes #42 but also fixes #43" must keep the edge to
+// #42; own follow-up critique pass generalized the guard past "only" alone
+// after confirming "not merely closes #37 but also fixes #38" reproduced the
+// identical false-negative).
 const KEYWORD_NEGATION_PATTERN =
-  /\b(?:not(?!\s+only\b)|never|cannot|no longer|(?:has|have|had|ca|do|does|did|is|was|are|were|wo|would|should|could)n['’]t)\s+(?:\w+\s+){0,2}$/iu;
+  /\b(?:not(?!\s+(?:only|merely|just|simply)\b)|never|cannot|no longer|(?:has|have|had|ca|do|does|did|is|was|are|were|wo|would|should|could)n['’]t)\s+(?:\w+\s+){0,2}$/iu;
 const SUB_ISSUES_QUERY = `
 query($owner:String!, $repo:String!, $number:Int!, $after:String) {
   repository(owner:$owner, name:$repo) {
