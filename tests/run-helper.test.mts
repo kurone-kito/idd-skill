@@ -259,8 +259,15 @@ test("runHelper(): a long-running helper's stderr streams live, not buffered unt
     });
     let firstLineAt: number | null = null;
     const start = Date.now();
+    // Accumulate into a persistent buffer and search that, rather than
+    // testing each chunk in isolation (Copilot review finding): stream
+    // chunk boundaries are arbitrary, so "first" is not guaranteed to
+    // land wholly within a single 'data' event even though the fixture
+    // writes it in one process.stderr.write() call.
+    let seenSoFar = '';
     child.stderr.on('data', (chunk: Buffer) => {
-      if (firstLineAt === null && chunk.toString('utf8').includes('first')) {
+      seenSoFar += chunk.toString('utf8');
+      if (firstLineAt === null && seenSoFar.includes('first')) {
         firstLineAt = Date.now() - start;
       }
     });

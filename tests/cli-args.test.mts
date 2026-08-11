@@ -420,3 +420,23 @@ test('extractShapedCliParseErrorMessage: an embedded blank line inside the messa
     'unknown argument: foo\n\nbar',
   );
 });
+
+test('extractShapedCliParseErrorMessage: recognizes and cleans a CRLF-terminated shaped line (Copilot review finding on the line-based rewrite)', () => {
+  // A plain `split('\n')` (rather than `split(/\r?\n/)`) leaves a
+  // trailing "\r" on every line under CRLF stderr (e.g. Windows). That is
+  // not merely cosmetic: the un-anchored (non-multiline) `$` in
+  // ERROR_LINE_PATTERN cannot match before a leftover "\r", so the
+  // "Error: " line fails to match the pattern at all and the whole
+  // shaped error goes undetected -- verified as a real miss (returned
+  // null), not just a message with a stray "\r" appended.
+  const stderrText = [
+    'Error: unknown argument: --x\r',
+    '    at toRepoShapedError (file:///repo/scripts/cli-args.mjs:229:14)\r',
+    '\r',
+    'Node.js v22.22.2\r',
+  ].join('\n');
+  assert.equal(
+    extractShapedCliParseErrorMessage(stderrText),
+    'unknown argument: --x',
+  );
+});

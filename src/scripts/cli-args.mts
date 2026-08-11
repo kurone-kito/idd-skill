@@ -333,7 +333,17 @@ export function extractShapedCliParseErrorMessage(
   // from its own "Error: " line up to (but not including) whichever comes
   // first: a stack-frame line, the next "Error: " line, or the end of the
   // text.
-  const lines = stderrText.split('\n');
+  //
+  // Split on `/\r?\n/`, not a plain `'\n'` (Copilot review finding): on
+  // CRLF stderr (e.g. Windows), a plain `'\n'` split leaves a trailing
+  // `\r` on every line, which does more than cosmetically taint the
+  // captured message with a stray `\r` -- ERROR_LINE_PATTERN's un-anchored
+  // (non-multiline) `$` cannot match before that leftover `\r` at all, so
+  // the "Error: " line fails to match this pattern altogether and the
+  // whole shaped error goes undetected, silently falling back to the raw
+  // stack trace on the one platform (Windows) this repository explicitly
+  // supports.
+  const lines = stderrText.split(/\r?\n/);
   for (let index = 0; index < lines.length; index += 1) {
     const match = ERROR_LINE_PATTERN.exec(lines[index]);
     if (match === null) {
