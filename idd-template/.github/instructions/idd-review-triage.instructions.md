@@ -84,7 +84,14 @@ maintainer confirmation for an unprivileged PATH A actor: confirmed →
 `Accept` and act; **false on the live evidence** → disposition it
 `Rejected` and cite the contradicting evidence (the code as read, the
 real run conclusion, file contents, or artifact) — a verified-false
-claim is a reasoned rejection, not an action item.
+claim is a reasoned rejection, not an action item (scoped to this
+verification only — not E4/E5's Low-severity/no-action `Rejected`
+routes); **inconclusive** (neither confirmed nor contradicted — the
+needed check has no route here, not merely low confidence) → for an
+actor-permission-capped, reviewer-feedback PATH A item, route it
+through the CODEOWNER/required-reviewer AMD hold (E6) instead of
+`Rejected`, using E6's marker (a critique-pass finding stays under
+the unchanged cap above).
 
 **Resolved-thread duplicate pre-check (PATH B, before verification).**
 Before verification above, check whether a new PATH B item — a review
@@ -96,9 +103,8 @@ state of its own, but can still match a prior resolved thread's claim.
 
 - Match the new item against the index by file area and substantive
   claim, requiring the identical claim rather than merely a related
-  topic in the same file. (For example, a prior "raw SQL concatenation"
-  rejection on `db/query.mts` does not match a new "missing index"
-  comment on the same file: same file area, different claim.)
+  topic in the same file (same file but a different claim is not a
+  match).
 - On a match, open the linked prior thread — the index disposition alone
   is not proof. Re-confirm the new item raises that **same underlying
   claim**, not just a related one, then confirm the prior thread
@@ -123,22 +129,12 @@ state of its own, but can still match a prior resolved thread's claim.
   at current HEAD, or the new occurrence carries genuinely new
   information the prior thread did not address.
 
-**Worked example.** A bot re-raises "this workflow step needs
-`contents: write`" two rounds after an identical claim on the same file
-was rejected with evidence (the step only uploads an artifact). Confirm
-the claim and evidence still hold at current HEAD, reply `**Rejected**
-— same claim as {prior thread URL}: verified false there; unchanged at
-current HEAD.`, then resolve the thread.
-
 **Reasoned-rejection convergence.** The iterate-to-zero loop may converge
 by reasoned rejection of peripheral or verified-false items — not every
 comment needs a code change. Record the reason in the disposition reply;
-"a bot raised it" alone never forces a change.
-
-**Worked example.** A bot flags a "credential leak" on a config-only file
-that in fact holds only public placeholders. Reply `**Rejected** —
-verified: the flagged file contains only public placeholders; no
-credential is present.`
+"a bot raised it" alone never forces a change (e.g., a "credential
+leak" flag on a placeholders-only config file:
+`**Rejected** — verified placeholders-only`).
 
 ## E6 — Post disposition replies
 
@@ -150,15 +146,19 @@ PATH A — Accepted items:
   reviewer feedback is replied to after the fix work in
   `idd-review-fix.instructions.md`.
 
-PATH A — Rejected reviewer feedback:
+PATH A — Rejected/inconclusive reviewer feedback:
 
-For each Rejected PATH A item whose source is reviewer feedback:
+For each Rejected or inconclusive (E5) PATH A item whose source is
+reviewer feedback:
 
-- Reply using the format: `**Rejected** — {reason}`
-- **Exception**: if the source is a CODEOWNER or required reviewer, do
-  not reject unilaterally. Reply using the format:
-  `**Awaiting maintainer decision** — {your reasoning}` and wait for the
-  maintainer's response.
+- Reply using the format: `**Rejected** — {reason}` — unless the
+  Exception below applies.
+- **Exception**: if the source is a CODEOWNER or required reviewer, or
+  the item is E5's inconclusive outcome, do not reject unilaterally.
+  Reply using the format:
+  `**Awaiting maintainer decision** — {your reasoning}` (name the
+  unavailable check when inconclusive) and wait for the maintainer's
+  response.
 - After posting your reply, **immediately resolve the thread** — except
   for `**Awaiting maintainer decision**`. When helper runtime is enabled,
   the profile-selected resolve-review-thread command (`--pr <number>
@@ -176,8 +176,7 @@ For each Rejected PATH A item whose source is reviewer feedback:
   (CODEOWNER/required-reviewer feedback with no thread) cannot use that
   gate structurally — instead post the hold comment stating you will
   **not** merge until the decision appears, and stop. Either way, wait
-  for the response in a future E1 pass: agreement closes the AMD (reply
-  to confirm, remove the hold); an override moves it to Accepted.
+  for the response in a future E1 pass (see the transitions below).
 - **When an `Awaiting maintainer decision` thread re-appears in ReviewItems_snapshot**:
   scan the activity universe for a **qualifying response** — a reply on
   this thread, or a separate comment/review that clearly references
@@ -194,13 +193,12 @@ For each Rejected PATH A item whose source is reviewer feedback:
   in a future E1 pass.
 - **When the maintainer eventually responds** (their response surfaces
   in a future E1 pass as an unresolved thread or new reply):
-  - If the maintainer **agrees with your rejection**: reply summarizing
+  - If the maintainer **agrees no action is needed**: reply summarizing
     the agreed decision (e.g.,
     `**Rejection confirmed by maintainer** — {summary}`) and resolve the
     thread.
-  - If the maintainer **disagrees**: move the item from Rejected to
-    Accepted and proceed through the fix flow. Resolve the thread after
-    fixing.
+  - If the maintainer **disagrees**: move the item to Accepted and
+    proceed through the fix flow. Resolve the thread after fixing.
   - If the maintainer's response arrived in a separate PR comment or
     review rather than in the original thread: mirror the decision onto
     the original thread and resolve the thread. Also **reply to the
@@ -248,7 +246,7 @@ Use these prefixes so that disposition is always unambiguous:
 - PATH B acceptance marker (only for a _completed_ review of the current
   HEAD): `**Accepted** — {what the advisory comment confirmed}`
 - Ordinary rejection: `**Rejected** — {reason}`
-- CODEOWNER / required reviewer exception:
+- CODEOWNER / required reviewer, or inconclusive (E5), exception:
   `**Awaiting maintainer decision** — {reasoning}`
 
 Two requirements make the F2/F3 disposition-evidence gate recognize an
@@ -354,13 +352,14 @@ review state.
 Before leaving triage, verify every ReviewItems_snapshot item has the
 evidence required by its path:
 
-- Every PATH A item has a recorded classification and an Accept or
-  Reject decision. Every Accepted item cites its "Verify before accept"
-  evidence, or the maintainer confirmation reply when actor-permission
-  capped.
-- Every Rejected PATH A item whose source is reviewer feedback has the
-  required rejection or `**Awaiting maintainer decision**` reply posted,
-  and any non-AMD thread resolution is complete.
+- Every PATH A item has a recorded classification and an Accept,
+  Reject, or AMD decision (including E5 inconclusive). Every Accepted
+  item cites its "Verify before accept" evidence, or the maintainer
+  confirmation reply when actor-permission capped.
+- Every Rejected or inconclusive PATH A item whose source is reviewer
+  feedback has the required rejection or
+  `**Awaiting maintainer decision**` reply posted, and any non-AMD
+  thread resolution is complete.
 - Every PATH B item has a posted `**Accepted**` or `**Rejected**`
   marker. Review threads are resolved immediately after the marker.
 - Only Accepted PATH A items remain candidates for
