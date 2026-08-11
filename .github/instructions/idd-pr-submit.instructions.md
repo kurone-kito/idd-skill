@@ -294,10 +294,12 @@ completion.
    closing-keyword scan also reads commit messages (subject and body),
    not only the PR body, so a stray keyword there can auto-close an
    issue outside the deliberate set even when the PR body is clean.
-   List the branch's own commits:
+   List the branch's own commits, using a visible delimiter rather
+   than a NUL byte so common terminals and search tools don't treat
+   the output as binary:
 
    ```sh
-   git log origin/main..HEAD --pretty=format:'%H%n%B%n%x00'
+   git log origin/main..HEAD --pretty=format:'%H%n%B%n===commit-boundary==='
    ```
 
    For each commit's full message, search using step 3's same keyword
@@ -315,16 +317,27 @@ completion.
    **On a stray match**: amend the offending commit (`git commit
    --amend` for the tip commit, or an interactive rebase for an
    earlier one) using the same safe reordering as the Mirror
-   false-positive example above, then force-push the correction
-   (`git push --force-with-lease`) — this step runs before D4, ahead
-   of any review, so rewriting history here is a sanctioned exception
-   to D2's normal-push rule, not the exceptional recovery route D2
-   itself describes. **Amend before merge** — this scan runs at merge
-   time, so the fix must land before the PR merges; a commit message
-   caught only after merge cannot be amended, and recovery requires
-   reopening the affected issue by hand. Repeat this step once after
-   the amendment. If it still finds a stray match, post a hold note on
-   the issue citing the PR URL and stop. Do not proceed to D4.
+   false-positive example above. On a signed-commit repo whose primary
+   signing is non-interactive-hostile, run the amend or rebase through
+   the same D1 fallback-signing wrapper noted above, including any
+   rebase continuation — the plain command can stall the same way D1
+   already documents. Then force-push the correction (`git push
+   --force-with-lease`) only when repository policy permits
+   force-pushing a published branch, mirroring D2's own force-push
+   restriction; if it does not, hold for operator intervention instead
+   of rewriting published history. **Amend before merge** — this scan
+   runs at merge time, so the fix must land before the PR merges; a
+   commit message caught only after merge cannot be amended, and
+   recovery requires reopening the affected issue by hand. Repeat this
+   step once after the amendment. If it still finds a stray match,
+   post a hold note on the issue citing the PR URL and stop. Do not
+   proceed to D4.
+
+   **Re-run before merge**: this scan only covers commits present at
+   D3.5 time. Later branch commits — accepted review fixes
+   (`idd-review-fix.instructions.md` E9-E12) or a `main` merge — are
+   not automatically covered; re-run this step against the final HEAD
+   before F3 merges.
 
 ## D4 — Wait for CI
 
