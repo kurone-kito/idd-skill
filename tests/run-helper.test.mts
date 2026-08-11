@@ -175,6 +175,27 @@ test('runHelper(): an unrelated thrown error (not one of the three shaped forms)
   assert.match(result.stderr, /\n\s+at /);
 });
 
+test("runHelper(): a large unrelated error message is NOT truncated (regression test -- Node's own uncaught-exception write to a piped stderr silently caps around ~146 KiB; capturing via a temp file instead of a pipe avoids it)", () => {
+  // 300 KiB comfortably clears the ~146 KiB ceiling this test guards
+  // against while staying under this test harness's own spawnSync
+  // maxBuffer (Node's 1 MiB default) for the *outer* capture.
+  const payloadSize = 300 * 1024;
+  const result = spawnFixture(
+    `throw new Error('payload: ' + 'z'.repeat(${payloadSize}));\n`,
+  );
+  assert.notEqual(result.status, 0);
+  // Measure the longest contiguous run of "z" rather than asserting exact
+  // byte length -- Node's own uncaught-exception rendering echoes the
+  // throwing source line as a preview, which itself contains one isolated
+  // "z" (inside the literal `'z'.repeat(...)` call); matching a long run
+  // isolates the actual repeated payload from that single stray character.
+  const longestRun = (result.stderr.match(/z+/g) ?? []).reduce(
+    (max, run) => Math.max(max, run.length),
+    0,
+  );
+  assert.equal(longestRun, payloadSize);
+});
+
 test('runHelper(): a script with no --help support degrades to no usage line, still shaped', () => {
   const result = spawnFixture(
     "throw new Error('unknown argument: --bogus');\n",
