@@ -353,7 +353,11 @@ through GitHub's classic branch-protection API uses the explicit
 `checks` array rather than a plain string-array `contexts` field:
 
 - Recommended: register required checks with an explicit `checks`
-  array and `app_id: -1` (any producer). GitHub's classic API silently
+  array. Use `app_id: -1` (any producer) for `idd-advisory-convergence`
+  specifically — only the adopter's own hosted workflow ever produces a
+  check with that exact name — but not as a blanket choice for every
+  required check: keep a specific `app_id` pin on any check where
+  verifying the producer matters. GitHub's classic API silently
   rewrites a `contexts` `PUT` into `app_id`-pinned `checks` entries,
   and a pinned entry is exactly what the fail-closed "Source-pinned
   required-check trust" default

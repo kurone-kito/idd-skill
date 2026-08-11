@@ -1111,30 +1111,41 @@ explains (observed 2026-08-11 onboarding a companion repository;
 
 Use the narrower `PATCH .../required_status_checks` endpoint instead,
 with an explicit `checks` array and `app_id: -1` (any producer) rather
-than a plain `contexts` array:
+than a plain `contexts` array. Substitute `{base-branch}` below with
+the literal protected branch name (for example `main`) — do not use
+`gh api`'s own `{branch}` magic placeholder, which silently resolves to
+whatever branch is currently checked out locally, not the protected
+branch:
 
 ```sh
 gh api --method PATCH \
-  repos/{owner}/{repo}/branches/{branch}/protection/required_status_checks \
+  repos/{owner}/{repo}/branches/{base-branch}/protection/required_status_checks \
   --input - <<'JSON'
 {"checks": [{"context": "idd-advisory-convergence", "app_id": -1}]}
 JSON
 ```
 
 **`PATCH` replaces the whole `checks` list — it does not merge into
-it.** If the branch already requires other checks (lint, build, tests,
-and so on), first fetch the current array:
+it** (preventive; no observed incident yet). If the branch already
+requires other checks (lint, build, tests, and so on), first fetch the
+current array:
 
 ```sh
 gh api \
-  repos/{owner}/{repo}/branches/{branch}/protection/required_status_checks \
+  repos/{owner}/{repo}/branches/{base-branch}/protection/required_status_checks \
   --jq '.checks'
 ```
 
 Then include every existing entry alongside the new one in the
-`checks` array above. Copy-pasting the snippet unqualified on a branch
-that already has required checks silently drops them, weakening the
-merge gate to only the newly added check.
+`checks` array above — **except** an existing entry whose `context`
+already matches the check being added (for example, an existing
+pinned `idd-advisory-convergence` entry): replace that matching entry
+rather than appending a second one, since a duplicate context name
+where any entry is still pinned keeps the whole context classified as
+source-pinned regardless of the other, unpinned entry. Copy-pasting
+the snippet unqualified on a branch that already has required checks
+silently drops them, weakening the merge gate to only the newly added
+check.
 
 `app_id: -1` also trades away GitHub's producer-identity enforcement
 for the check it names — a reasonable trade for
