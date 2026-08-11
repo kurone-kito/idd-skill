@@ -1190,7 +1190,9 @@ than a plain `contexts` array. Substitute `{base-branch}` below with
 the literal protected branch name (for example `main`) — do not use
 `gh api`'s own `{branch}` magic placeholder, which silently resolves to
 whatever branch is currently checked out locally, not the protected
-branch:
+branch (preventive; no observed incident yet — verified against
+`gh api --help`'s own placeholder documentation, not a field-observed
+adopter incident):
 
 ```sh
 gh api --method PATCH \
@@ -1224,10 +1226,11 @@ silently drops them, weakening the merge gate to only the newly added
 check.
 
 `app_id: -1` also trades away GitHub's producer-identity enforcement
-for the check it names — a reasonable trade for
-`idd-advisory-convergence`, since only the adopter's own hosted
-workflow ever produces a check with that exact name, but not a blanket
-recommendation for every required check. Keep a specific `app_id` pin
+for the check it names (preventive; no observed incident yet) — a
+reasonable trade for `idd-advisory-convergence`, since only the
+adopter's own hosted workflow ever produces a check with that exact
+name, but not a blanket recommendation for every required check. Keep
+a specific `app_id` pin
 on any check where verifying the producer matters, and opt in to
 `ciGate.trustSourcePinnedRequiredChecks: true` (see the row in
 [Customizing IDD](docs/customization.md)) instead, once the operator
