@@ -1900,6 +1900,27 @@ same-HEAD reroll recovery path available for it, since `suppressedCount`
 is read from the same static per-submission review snapshot `itemCount`
 is.
 
+**`suppressedCount` reroll reliability caveat (kurone-kito/idd-skill#1934).**
+The mechanism-sharing argument above is a statement about how the two
+counts are read (same static per-submission snapshot), not a claim
+about convergence rate: `#1511`'s empirical basis -- 200 recent merged
+PRs, 678 Copilot reviews, 16 same-commit re-review groups -- covers
+`itemCount` transitions only, and no equivalent sample exists for
+`suppressedCount`. Field evidence contradicts treating the extension as
+equally reliable: two independent `kurone-kito/lints-config` PRs,
+observed 2026-08-10/11 (`#243`, `#245`), each ran the same-HEAD reroll
+to its `cap: 2` limit with no `suppressedCount: 0` outcome and no
+content change between reviews; both converged only after an actual
+content change plus a fresh, non-reroll review. Too small a sample to
+establish a rate, but
+sufficient to mark the `suppressedCount` reroll path **unvalidated for
+convergence** -- treat cap exhaustion on a suppressed-only block as an
+anticipated outcome routed to the deadline/waiver backstop **or hold**
+(same split as the `exhausted` field above and the AW6 procedure's own
+step 5, including for adopters who keep the distributed
+`ciGate.externalCheckWaivers.mode: disabled` default), not a diagnosis
+failure.
+
 **AW6 procedure** (`idd-advisory-wait.instructions.md`), invoked only
 from F2 on a non-zero `--assert` exit:
 
