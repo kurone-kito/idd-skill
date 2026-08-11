@@ -204,8 +204,8 @@ kept intentionally separate from `advisoryWait.requestCap`, so it can
 neither consume nor be masked by that cap. The cap's `#1511` empirical
 basis covers posted `itemCount` transitions only; the `suppressedCount`
 extension (`#1880`) has no convergence sample of its own and is
-unvalidated for convergence (`#1934`, field evidence
-`kurone-kito/lints-config#243`/`#245`).
+unvalidated for convergence (`#1934`, field evidence: PRs
+`#243`/`#245` in `kurone-kito/lints-config`).
 `advisoryWait.primaryBotLogin` selects the advisory bot whose review the
 advisory-wait gate tracks; it defaults to Copilot, so omitting it
 preserves the Copilot-advisory behavior exactly.

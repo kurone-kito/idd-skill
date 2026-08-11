@@ -323,7 +323,7 @@ this hold and stop:
 
 F2-only (`#1511`) on `sameHeadReroll.eligible`; see
 `docs/idd-helper-scripts.md`. `requestable`: post the marker below
-**before** requesting the review, then poll (not E14's loop).
+**before** requesting review, then poll (not E14's loop).
 `inFlight`: poll only. Else F2's route; `!inFlight`: E1.
 
 ```text
@@ -334,11 +334,11 @@ Plain text, no HTML comment (matches `advisory-wait:`/
 `advisory-wait-recovery:`'s shape). Helper-first: profile-selected
 post-idd-marker command (`--type advisory-reroll --target pr
 <pr-number> --agent-id <id> --head-sha <PR_HEAD_SHA> --timestamp
-<ISO8601> --apply`); manual `POST` is the fallback. If it cannot be
+<ISO8601> --apply`); manual `POST` is fallback. If it cannot be
 posted or verified, fail closed to AW4's **Recovery failed** hold.
 
 **`suppressedCount` unvalidated**: `#1511` is `itemCount`-only; never
-zeroed in `kurone-kito/lints-config#243`/`#245`.
+zeroed in `kurone-kito/lints-config` PRs `#243`/`#245`.
 
 ## Terminal Copilot stall-recovery contract (state, policy, markers, clock)
 
