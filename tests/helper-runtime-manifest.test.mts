@@ -368,6 +368,40 @@ test('source package metadata accepts repository objects with url', () => {
   });
 });
 
+// idd-skill#1947 review finding: a non-string version (malformed
+// package.json) must fall back to the sentinel rather than stringify to a
+// misleading value like "[object Object]".
+test('source package metadata falls back on a non-string version field', () => {
+  const nonStringVersionRoot = mkdtempSync(
+    join(tmpdir(), 'idd-helper-runtime-non-string-version-'),
+  );
+  writeFileSync(
+    join(nonStringVersionRoot, 'package.json'),
+    JSON.stringify({
+      name: '@kurone-kito/idd-skill',
+      version: { not: 'a string' },
+    }),
+  );
+  assert.deepEqual(resolveSourcePackageMetadata(nonStringVersionRoot), {
+    name: '@kurone-kito/idd-skill',
+    repository: 'github:kurone-kito/idd-skill',
+    nodeEngines: '^22.22.2 || >=24.2.0',
+    version: 'unknown',
+  });
+
+  const emptyStringVersionRoot = mkdtempSync(
+    join(tmpdir(), 'idd-helper-runtime-empty-version-'),
+  );
+  writeFileSync(
+    join(emptyStringVersionRoot, 'package.json'),
+    JSON.stringify({ name: '@kurone-kito/idd-skill', version: '' }),
+  );
+  assert.equal(
+    resolveSourcePackageMetadata(emptyStringVersionRoot).version,
+    'unknown',
+  );
+});
+
 // idd-skill#1923: the manifest previously let HELPER_COMMANDS's fixed
 // command list be misread as describing whatever --package-spec target
 // was passed, when it always described only this executing build. The

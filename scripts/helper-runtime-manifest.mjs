@@ -772,11 +772,20 @@ export function resolveSourcePackageMetadata(packageRoot = PACKAGE_ROOT) {
       name: PACKAGE_NAME,
       repository: normalizeRepository(packageJson.repository),
       nodeEngines: String(packageJson.engines?.node ?? NODE_ENGINES),
-      version: String(packageJson.version ?? PACKAGE_VERSION_FALLBACK),
+      version: normalizePackageVersion(packageJson.version),
     };
   } catch {
     return fallback;
   }
+}
+// A non-string version (e.g. an object, if package.json were malformed)
+// must fall back rather than stringify to a misleading value like
+// "[object Object]" -- the exact silently-wrong-output class idd-skill#1923
+// exists to fix (idd-skill#1947 review finding).
+function normalizePackageVersion(version) {
+  return typeof version === 'string' && version
+    ? version
+    : PACKAGE_VERSION_FALLBACK;
 }
 function normalizeRepository(repository) {
   if (typeof repository === 'string' && repository) {
