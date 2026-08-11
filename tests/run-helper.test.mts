@@ -14,9 +14,9 @@ import { fileURLToPath } from 'node:url';
 // trace. Every other error class must keep its stack trace untouched.
 //
 // Two coverage strategies:
-// - A real fleet member (bin/idd-branch-name.mjs): exercises the actual
-//   compiled artifacts end to end, mirroring
-//   tests/cli-entry-smoke.test.mts's shelling-out convention.
+// - Real fleet members (bin/idd-branch-name.mjs, bin/idd-review-disposition-
+//   verify.mjs): exercise the actual compiled artifacts end to end,
+//   mirroring tests/cli-entry-smoke.test.mts's shelling-out convention.
 // - Synthetic fixture scripts spawned through a temp wrapper that imports
 //   the real runHelper() (resolve()'s absolute-path short-circuit lets an
 //   absolute fixture path stand in for the normally-relative
@@ -28,6 +28,11 @@ import { fileURLToPath } from 'node:url';
 const REPO_ROOT = fileURLToPath(new URL('../', import.meta.url));
 const RUN_HELPER_MJS = join(REPO_ROOT, 'bin', 'run-helper.mjs');
 const BRANCH_NAME_BIN = join(REPO_ROOT, 'bin', 'idd-branch-name.mjs');
+const REVIEW_DISPOSITION_VERIFY_BIN = join(
+  REPO_ROOT,
+  'bin',
+  'idd-review-disposition-verify.mjs',
+);
 
 interface SpawnCapture {
   stdout: string;
@@ -133,6 +138,18 @@ test('bin/idd-branch-name.mjs: a normal successful run is unaffected (stdout int
   ]);
   assert.equal(result.status, 0);
   assert.equal(result.stdout, 'issue/42-add-oauth-login-flow\n');
+});
+
+// #1922: the only bin/*.mjs that previously bypassed runHelper() entirely
+// (its own hand-rolled spawn/exit/error handling) -- migrated onto
+// runHelper() so the shaped-error fix applies uniformly to every packaged
+// idd-* CLI command, not just the 33 that already used it.
+test('bin/idd-review-disposition-verify.mjs: now goes through runHelper() too -- an unknown flag is shaped, not a raw stack trace', () => {
+  const result = spawnCapture(REVIEW_DISPOSITION_VERIFY_BIN, ['--bogus-flag']);
+  assert.notEqual(result.status, 0);
+  const firstLine = result.stderr.split('\n')[0];
+  assert.equal(firstLine, 'unknown argument: --bogus-flag');
+  assert.doesNotMatch(result.stderr, /\n\s+at /);
 });
 
 // --- Synthetic fixtures: cases the real fleet can't easily exercise --------
