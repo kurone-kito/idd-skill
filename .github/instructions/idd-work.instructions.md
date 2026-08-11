@@ -92,6 +92,18 @@ branch name with every `/` replaced by `-`.
 Example: repo `idd-skill`, branch `issue/123-add-foo` → worktree path
 `../idd-skill.issue-123-add-foo`.
 
+**Harness-native worktree tools**: an agent harness's own worktree
+primitive — for example, Claude Code's `EnterWorktree` — is a third
+path outside the two enumerated below. Use one only when both its
+target directory can be pinned to the sibling path above and its
+branch can be pinned to the `issue/<number>-<slug>` branch — never a
+tool-chosen default of either (Claude Code's create action has no such
+override and always lands at a harness-chosen path like
+`.claude/worktrees/agent-<hash>` on a harness-chosen branch, so never
+use it to create the B1 worktree). When a harness-native tool cannot
+pin both, use the documented `git worktree add` path below (or
+WorkTrunk) instead.
+
 **Step 1 — Check for orphaned path**: if the target path already exists
 but is not listed in `git worktree list`, stop and report for manual
 cleanup before continuing.
