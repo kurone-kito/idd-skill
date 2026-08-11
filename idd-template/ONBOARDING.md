@@ -832,6 +832,11 @@ enforcement surface.
 
 #### Coexisting with an existing hook manager
 
+`core.hooksPath` is repository-wide git config, not scoped to whichever
+worktree set it: activating or resetting it from any one worktree of a
+clone changes hook resolution for every other worktree of that same
+clone too, including the primary worktree.
+
 An existing hook manager (Husky or similar) can silently reset
 `core.hooksPath` back to its own hooks directory on every
 install/prepare lifecycle run — Husky v9's default `prepare: "husky"`
@@ -839,26 +844,74 @@ script repoints `core.hooksPath` at `.husky/_` unconditionally, so a
 routine `pnpm install` after activation leaves this guard unwired
 again with no error. `idd-doctor`'s enabled-but-inert detection (below) correctly
 flags this again, but nothing about the reset itself is a bug — do not
-assume `core.hooksPath` is free to claim outright. Chain the existing
-hook to `exec` the corresponding `.githooks/*` script instead: append
-(don't replace) the existing hook file with a line that resolves the
-repository root explicitly, so the hook still works when git invokes
-it from a subdirectory:
+assume `core.hooksPath` is free to claim outright. Chain each existing
+hook to the corresponding `.githooks/*` script instead, resolving the
+repository root explicitly so the hook still works when git invokes it
+from a subdirectory. When the hook manager doesn't define that hook
+file yet (for example, Husky ships only `pre-commit` until an adopter
+adds `pre-push` themselves), create it with the chain line as its
+entire contents, using `exec` since nothing else needs to run
+afterward. When the file already exists but has no terminal `exec` or
+`exit` of its own, append the same `exec` form as its last line. When
+the file already ends in a terminal `exec` or `exit`, don't `exec` the
+chain line too — `exec` never returns, so it would swallow that
+terminal command exactly as surely as appending after it would.
+Instead insert an _invoked_ (not `exec`'d) call before it, propagating
+a nonzero exit so a failing guard still stops the hook, while a
+passing one lets control reach the manager's own terminal command
+afterward. The B1 guard needs both hooks chained:
 
 ```sh
-# Add as the last line of the existing .husky/pre-push:
-exec "$(git rev-parse --show-toplevel)/.githooks/pre-push" "$@"
+# .husky/pre-commit doesn't exist yet, or has no terminal exec/exit of its own
+# -- create or append this as the last line:
+exec "$(git rev-parse --show-toplevel)/.githooks/pre-commit" "$@"
+
+# .husky/pre-commit already ends in a terminal exec/exit -- insert this line
+# before it instead (not exec'd, so that command still runs):
+"$(git rev-parse --show-toplevel)/.githooks/pre-commit" "$@" || exit $?
 ```
 
-Fully replacing (not chaining) an existing hook manager under pnpm's
-`shellEmulator: true` needs a POSIX-control-flow-free replacement
-lifecycle script — no `if`/`then`/`fi`, which `shellEmulator`'s reduced
-grammar cannot parse. For example, a replacement `package.json`
-`"prepare"` script needs a short-circuit instead:
+The same two forms apply to `.husky/pre-push`, substituting
+`pre-push` for `pre-commit` throughout.
+
+`idd-doctor`'s enabled-but-inert check reads the hook files at the
+resolved `core.hooksPath` directly; it does not follow a hook
+manager's own dispatch into a committed chain line, so a correctly
+chained setup can still report enabled-but-inert even though the guard
+is genuinely reachable through the chain
+([#1951](https://github.com/kurone-kito/idd-skill/issues/1951)). Treat
+that specific combination — **both** hooks already chained,
+`idd-doctor` still warning — as a known detector gap, not proof the
+chain needs to be undone; a warning while only one hook is chained
+remains actionable as intended.
+
+Fully replacing an existing hook manager instead of chaining it removes
+that tool from the repository outright, so treat it as an alternative
+worth knowing about, not the default recommendation. Under pnpm's
+`shellEmulator: true`, a fully-replacing lifecycle script still needs
+to be POSIX-control-flow-free — no `if`/`then`/`fi`, which
+`shellEmulator`'s reduced grammar cannot parse. For example, a
+replacement `package.json` `"prepare"` script needs a short-circuit
+instead:
 
 ```sh
 git rev-parse --git-dir > /dev/null 2>&1 || exit 0; git config core.hooksPath .githooks && chmod +x .githooks/pre-commit .githooks/pre-push
 ```
+
+Neither path — chaining or fully replacing — is wired automatically by
+this template: the operator (or an agent following this guide) has to
+author and commit the chaining line or the replacement script
+explicitly. Once committed, propagation to a future clone happens
+through whichever install/prepare lifecycle now owns it there. For
+chaining, that's the existing hook manager's own lifecycle — never
+repoint git directly at `.githooks` there by manually repeating the
+base activation step above, since a manager is still present and that
+step would bypass it. For fully replacing, that's the repository's own
+replacement lifecycle script; repeating the base activation step there
+is harmless, since no manager remains to bypass and the step sets the
+identical value the replacement script would. That base step stays the
+right standalone action only for a clone with no hook manager involved
+at all, where there is no lifecycle script to carry it forward.
 
 #### Activation in a coding-agent / ephemeral environment
 
@@ -874,18 +927,40 @@ activation has to happen inside the agent's own setup.
 
 Wire the hooks as the agent's environment-setup step — the first thing it
 runs before any work, or the platform's setup mechanism (for the GitHub
-Copilot coding agent, its `copilot-setup-steps` workflow):
+Copilot coding agent, its `copilot-setup-steps` workflow). A
+repository that fully replaces a hook manager (above) can keep this
+command unconditional: no manager remains to bypass, and it sets the
+same value the replacement script would. A repository that instead
+chains an existing hook manager needs a different setup step: skip
+this direct command — it would repoint git at `.githooks` and bypass
+the chained manager — and instead make the agent's setup explicitly
+run that manager's own install/prepare lifecycle (for example, a
+`pnpm install` step), since a fresh ephemeral clone does not run it
+automatically either; skipping the command without also running that
+lifecycle leaves the guard unwired despite following this guidance.
+Otherwise, for a repository with no hook manager involved:
 
 ```sh
 git config core.hooksPath .githooks && chmod +x .githooks/pre-commit .githooks/pre-push
 ```
 
-Because the agent re-runs this every task, the guard stays active for the
-whole session. Confirm it actually took effect with `idd-doctor`, which
-surfaces an **enabled-but-inert** finding when `worktreeGuard.enabled` is
-`true` but `core.hooksPath` is not pointed at `.githooks` — the signal that
-the setup step silently did not run. This is activation guidance only; the
-adopter default stays opt-in **off**.
+For the direct or fully-replacing path, because the agent re-runs this
+every task, the guard stays active for the whole session — confirm it
+actually took effect with `idd-doctor`, which surfaces an
+**enabled-but-inert** finding when `worktreeGuard.enabled` is `true`
+but `core.hooksPath` is not pointed at `.githooks`, the signal that the
+setup step silently did not run. For the chaining path, `idd-doctor`'s
+confirmation is unreliable for the detector gap noted above, but
+chain-line presence alone isn't a safe substitute either: a fresh
+ephemeral clone checks out the committed chain lines immediately, even
+when the setup lifecycle never ran and `core.hooksPath` is still
+unset — the exact failure this confirmation step exists to catch.
+Verify both instead: that the committed chain lines are present in the
+manager's hook files, and that `git config --get core.hooksPath`
+resolves to the manager's own hooks directory (not empty), confirming
+its lifecycle actually ran and wired that value rather than just that
+the files exist. This is activation guidance only; the adopter default
+stays opt-in **off**.
 
 ### Optional — run idd-doctor as a CI health gate
 
