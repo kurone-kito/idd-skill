@@ -845,16 +845,24 @@ routine `pnpm install` after activation leaves this guard unwired
 again with no error. `idd-doctor`'s enabled-but-inert detection (below) correctly
 flags this again, but nothing about the reset itself is a bug — do not
 assume `core.hooksPath` is free to claim outright. Chain each existing
-hook to `exec` the corresponding `.githooks/*` script instead: append
-(don't replace) each existing hook file with a line that resolves the
-repository root explicitly, so the hook still works when git invokes
-it from a subdirectory. The B1 guard needs both hooks chained:
+hook to `exec` the corresponding `.githooks/*` script instead: add a
+line that resolves the repository root explicitly, so the hook still
+works when git invokes it from a subdirectory. Place that line before
+any terminal `exec` or `exit` already in the hook file — a line
+appended after one of those never runs — or, for a hook file with no
+terminal command, append it as the last line. When the hook manager
+doesn't define that hook file yet (for example, Husky ships only
+`pre-commit` until an adopter adds `pre-push` themselves), create it
+with that same chain line as its entire contents. The B1 guard needs
+both hooks chained:
 
 ```sh
-# Add as the last line of the existing .husky/pre-commit:
+# Add to .husky/pre-commit -- before any terminal exec/exit, else at the end
+# (create the file with just this line if it doesn't exist yet):
 exec "$(git rev-parse --show-toplevel)/.githooks/pre-commit" "$@"
 
-# Add as the last line of the existing .husky/pre-push:
+# Add to .husky/pre-push -- before any terminal exec/exit, else at the end
+# (create the file with just this line if it doesn't exist yet):
 exec "$(git rev-parse --show-toplevel)/.githooks/pre-push" "$@"
 ```
 
@@ -886,15 +894,16 @@ Neither path — chaining or fully replacing — is wired automatically by
 this template: the operator (or an agent following this guide) has to
 author and commit the chaining line or the replacement script
 explicitly. Once committed, propagation to a future clone happens
-through whichever install/prepare lifecycle now owns it there: the
-existing hook manager's own lifecycle for chaining, or the
-repository's own replacement lifecycle script for fully replacing —
-never by manually repeating the base activation step above (the one
-with no hook manager involved), which would repoint git directly at
-`.githooks` and bypass the coexisting hook manager. That base step
-stays the right one only for a clone with no hook manager involved at
-all, where it remains a manual, standalone action with no lifecycle
-script to carry it forward.
+through whichever install/prepare lifecycle now owns it there. For
+chaining, that's the existing hook manager's own lifecycle — never
+repoint git directly at `.githooks` there by manually repeating the
+base activation step above, since a manager is still present and that
+step would bypass it. For fully replacing, that's the repository's own
+replacement lifecycle script; repeating the base activation step there
+is harmless, since no manager remains to bypass and the step sets the
+identical value the replacement script would. That base step stays the
+right standalone action only for a clone with no hook manager involved
+at all, where there is no lifecycle script to carry it forward.
 
 #### Activation in a coding-agent / ephemeral environment
 
@@ -927,12 +936,16 @@ Otherwise, for a repository with no hook manager involved:
 git config core.hooksPath .githooks && chmod +x .githooks/pre-commit .githooks/pre-push
 ```
 
-Because the agent re-runs this every task, the guard stays active for the
-whole session. Confirm it actually took effect with `idd-doctor`, which
-surfaces an **enabled-but-inert** finding when `worktreeGuard.enabled` is
-`true` but `core.hooksPath` is not pointed at `.githooks` — the signal that
-the setup step silently did not run. This is activation guidance only; the
-adopter default stays opt-in **off**.
+For the direct or fully-replacing path, because the agent re-runs this
+every task, the guard stays active for the whole session — confirm it
+actually took effect with `idd-doctor`, which surfaces an
+**enabled-but-inert** finding when `worktreeGuard.enabled` is `true`
+but `core.hooksPath` is not pointed at `.githooks`, the signal that the
+setup step silently did not run. For the chaining path, `idd-doctor`'s
+confirmation is unreliable for the detector gap noted above: verify
+the committed chain lines are present in the manager's hook files
+instead of relying on a clean `idd-doctor` result. This is activation
+guidance only; the adopter default stays opt-in **off**.
 
 ### Optional — run idd-doctor as a CI health gate
 
