@@ -88,7 +88,7 @@ For A0-T, A0-O, A1, A1.5, A3, and A4.5 repo-query rules, see
 
 When it fails, check `docs/idd-helper-scripts.md`'s Signed-Commit
 Merge Wrapper; never permanently rewrite config. `--no-gpg-sign` on
-`git commit`/`merge` is the last resort.
+`git commit`/`git merge` is the last resort.
 
 Record material progress, decisions, and hold reasons as issue or PR
 comments at the time they are made. This ensures that any agent resuming
