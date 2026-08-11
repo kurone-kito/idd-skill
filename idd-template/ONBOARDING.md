@@ -855,6 +855,16 @@ it from a subdirectory:
 exec "$(git rev-parse --show-toplevel)/.githooks/pre-push" "$@"
 ```
 
+`idd-doctor`'s enabled-but-inert check reads the hook files at the
+resolved `core.hooksPath` directly; it does not follow a hook
+manager's own dispatch into a committed chain line, so a correctly
+chained setup can still report enabled-but-inert even though the guard
+is genuinely reachable through the chain
+([#1951](https://github.com/kurone-kito/idd-skill/issues/1951)). Treat
+that specific combination — chaining already in place, `idd-doctor`
+still warning — as a known detector gap, not proof the chain needs to
+be undone.
+
 Fully replacing an existing hook manager instead of chaining it removes
 that tool from the repository outright, so treat it as an alternative
 worth knowing about, not the default recommendation. Under pnpm's
@@ -896,7 +906,13 @@ activation has to happen inside the agent's own setup.
 
 Wire the hooks as the agent's environment-setup step — the first thing it
 runs before any work, or the platform's setup mechanism (for the GitHub
-Copilot coding agent, its `copilot-setup-steps` workflow):
+Copilot coding agent, its `copilot-setup-steps` workflow). Skip this
+specific command when the repository already chains or replaces an
+existing hook manager (above): running it here would repoint git
+directly at `.githooks` and bypass that manager on every task, since
+the chained or replacement setup already reaches a fresh clone once
+the manager's own install lifecycle runs there. Otherwise, for a
+repository with no hook manager involved:
 
 ```sh
 git config core.hooksPath .githooks && chmod +x .githooks/pre-commit .githooks/pre-push
