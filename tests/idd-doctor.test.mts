@@ -636,6 +636,40 @@ test('hookChainsToGithooksScript treats a non-string (absent hook) as not chaini
   assert.equal(hookChainsToGithooksScript(undefined, 'pre-push'), false);
 });
 
+// Review feedback (PR #1969, Copilot + chatgpt-codex-connector): the
+// unanchored `[^"#\n]*` prefix used to let ANY leading command that merely
+// *mentions* the .githooks path -- quoted or not -- read as a genuine
+// chain, even though nothing actually invokes the guard.
+test('hookChainsToGithooksScript rejects an unrelated leading command with an unquoted path (false-positive regression)', () => {
+  assert.equal(
+    hookChainsToGithooksScript(
+      'echo $(git rev-parse --show-toplevel)/.githooks/pre-commit "$@"\n',
+      'pre-commit',
+    ),
+    false,
+  );
+});
+
+test('hookChainsToGithooksScript rejects an unrelated leading command with a quoted path (false-positive regression)', () => {
+  assert.equal(
+    hookChainsToGithooksScript(
+      'echo "$(git rev-parse --show-toplevel)/.githooks/pre-commit" "$@"\n',
+      'pre-commit',
+    ),
+    false,
+  );
+});
+
+test('hookChainsToGithooksScript rejects a bare mention with no exec/invocation at all (false-positive regression)', () => {
+  assert.equal(
+    hookChainsToGithooksScript(
+      '#!/bin/sh\necho "chains to .githooks/pre-commit" "$@"\n',
+      'pre-commit',
+    ),
+    false,
+  );
+});
+
 test('classifyWorktreeGuardActivation returns null when the guard is disabled', () => {
   assert.equal(
     classifyWorktreeGuardActivation({
@@ -727,6 +761,14 @@ test('readWorktreeGuardEnabled reads worktreeGuard.enabled from config', () => {
 const GUARD_SOURCE_LINE = '. "$(dirname "$0")/_idd-worktree-guard.sh"\n';
 const chainLine = (hookName: string) =>
   `exec "$(git rev-parse --show-toplevel)/.githooks/${hookName}" "$@"\n`;
+// Husky v9's own generated core.hooksPath (.husky/_) dispatcher: present on
+// disk (git has something to invoke), but it neither sources the guard nor
+// chains anywhere itself -- the committed, adopter-edited chain line lives
+// one directory up, per ONBOARDING.md's recipe. Fixtures below must create
+// this stub at hooksPath itself, mirroring a real Husky install, or the
+// P1 "no active hook file" guard short-circuits every wired() check to
+// false regardless of what the test actually intends to isolate.
+const HUSKY_DISPATCHER_STUB = '#!/usr/bin/env sh\n. "$(dirname -- "$0")/h"\n';
 
 function writeFixtureFile(root: string, relativePath: string, content: string) {
   const full = join(root, relativePath);
@@ -768,7 +810,10 @@ test('worktreeGuardWiredAt: Husky-shape chain (core.hooksPath=.husky/_, committe
     );
     // Husky's generated dispatcher at core.hooksPath (.husky/_) does not
     // itself chain; the committed, adopter-edited file lives one directory
-    // up, per ONBOARDING.md's chaining recipe.
+    // up, per ONBOARDING.md's chaining recipe. It must still exist on disk
+    // for git to have anything to invoke at all.
+    writeFixtureFile(dir, '.husky/_/pre-commit', HUSKY_DISPATCHER_STUB);
+    writeFixtureFile(dir, '.husky/_/pre-push', HUSKY_DISPATCHER_STUB);
     writeFixtureFile(dir, '.husky/pre-commit', chainLine('pre-commit'));
     writeFixtureFile(dir, '.husky/pre-push', chainLine('pre-push'));
     assert.equal(worktreeGuardWiredAt(dir, '.husky/_'), true);
@@ -790,6 +835,8 @@ test('worktreeGuardWiredAt: only one hook chained still reads as unwired', () =>
       '.githooks/pre-push',
       `#!/bin/sh\n${GUARD_SOURCE_LINE}`,
     );
+    writeFixtureFile(dir, '.husky/_/pre-commit', HUSKY_DISPATCHER_STUB);
+    writeFixtureFile(dir, '.husky/_/pre-push', HUSKY_DISPATCHER_STUB);
     writeFixtureFile(dir, '.husky/pre-commit', chainLine('pre-commit'));
     // pre-push was never chained -- still enabled-but-inert overall.
     writeFixtureFile(
@@ -809,8 +856,38 @@ test('worktreeGuardWiredAt: a chain line pointing at a missing/unwired .githooks
     // .githooks/pre-commit does not exist at all -- a chain referencing it
     // must not read as wired just because a chain line is present.
     writeFixtureFile(dir, '.githooks/pre-push', 'echo not the guard\n');
+    writeFixtureFile(dir, '.husky/_/pre-commit', HUSKY_DISPATCHER_STUB);
+    writeFixtureFile(dir, '.husky/_/pre-push', HUSKY_DISPATCHER_STUB);
     writeFixtureFile(dir, '.husky/pre-commit', chainLine('pre-commit'));
     writeFixtureFile(dir, '.husky/pre-push', chainLine('pre-push'));
+    assert.equal(worktreeGuardWiredAt(dir, '.husky/_'), false);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// Review feedback (PR #1969, chatgpt-codex-connector P1): when core.hooksPath
+// resolves to the manager's own dispatch directory but its generated hook
+// files are absent -- a deleted/incomplete install -- git has nothing to
+// invoke there at all, so the committed parent-directory chain lines are
+// unreachable and must not read as wired.
+test('worktreeGuardWiredAt: no active hook file at core.hooksPath reads as unwired despite committed chain lines', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'idd-guard-chain-no-active-hook-'));
+  try {
+    writeFixtureFile(
+      dir,
+      '.githooks/pre-commit',
+      `#!/bin/sh\n${GUARD_SOURCE_LINE}`,
+    );
+    writeFixtureFile(
+      dir,
+      '.githooks/pre-push',
+      `#!/bin/sh\n${GUARD_SOURCE_LINE}`,
+    );
+    writeFixtureFile(dir, '.husky/pre-commit', chainLine('pre-commit'));
+    writeFixtureFile(dir, '.husky/pre-push', chainLine('pre-push'));
+    // .husky/_/pre-commit and .husky/_/pre-push (the files git would
+    // actually invoke) are deliberately never created.
     assert.equal(worktreeGuardWiredAt(dir, '.husky/_'), false);
   } finally {
     rmSync(dir, { recursive: true, force: true });

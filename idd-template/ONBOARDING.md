@@ -954,8 +954,11 @@ For the direct or fully-replacing path, because the agent re-runs this
 every task, the guard stays active for the whole session — confirm it
 actually took effect with `idd-doctor`, which surfaces an
 **enabled-but-inert** finding when `worktreeGuard.enabled` is `true`
-but `core.hooksPath` is not pointed at `.githooks`, the signal that the
-setup step silently did not run. For the chaining path, `idd-doctor`'s
+but `core.hooksPath` is not pointed at `.githooks` and no recognized
+chain is present, the signal that the setup step silently did not run
+(the chaining path below intentionally keeps `core.hooksPath` pointed
+at the manager's own directory instead, so that condition alone does
+not fire there). For the chaining path, `idd-doctor`'s
 confirmation now covers the documented recipe the same way it covers
 the direct/fully-replacing path above — a correctly chained setup
 reads as wired once the manager's lifecycle has actually run.

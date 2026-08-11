@@ -1723,8 +1723,12 @@ export function hookWiresWorktreeGuard(content: unknown): boolean {
  *
  * Line-anchored and comment-immune the same way `hookWiresWorktreeGuard`
  * is: a `#`-prefixed line (e.g. a leftover "was:" comment) never matches.
- * Pure (no I/O) so it can be unit-tested directly. A non-string
- * (absent/unreadable hook) is treated as not chaining.
+ * The quoted path must begin the executed command token (immediately after
+ * an optional `exec`, with nothing else in between) — an unrelated leading
+ * command such as `echo "$(...)/.githooks/pre-commit" "$@"` never matches,
+ * since that would only *mention* the path rather than invoke it. Pure (no
+ * I/O) so it can be unit-tested directly. A non-string (absent/unreadable
+ * hook) is treated as not chaining.
  */
 export function hookChainsToGithooksScript(
   content: unknown,
@@ -1735,7 +1739,7 @@ export function hookChainsToGithooksScript(
   }
   const escaped = escapeRegex(hookName);
   return new RegExp(
-    `^[ \\t]*(?:exec[ \\t]+)?"?[^"#\\n]*\\.githooks/${escaped}"?[ \\t]+"\\$@"`,
+    `^[ \\t]*(?:exec[ \\t]+)?"[^"#\\n]*\\.githooks/${escaped}"[ \\t]+"\\$@"`,
     'm',
   ).test(content);
 }
@@ -1793,17 +1797,24 @@ export function classifyWorktreeGuardActivation({
  * documented one-level chain. A relative hooks path resolves against the
  * repository root; an absolute one is used as-is.
  *
- * A hook counts as wired when either:
- *  - the file at `hooksPath` itself sources `_idd-worktree-guard.sh`
- *    directly (the base, non-chained activation path), or
- *  - the file at `hooksPath`, or the sibling file its manager hands off to
- *    in `hooksPath`'s **parent** directory (the shape Husky v9's
+ * A hook counts as wired when the file **actually present at
+ * `hooksPath`** — the one git itself would invoke — either:
+ *  - sources `_idd-worktree-guard.sh` directly (the base, non-chained
+ *    activation path), or
+ *  - itself chains to the corresponding `.githooks/<hook>` script via a
+ *    documented exec/invocation line, or hands off to the sibling file in
+ *    `hooksPath`'s **parent** directory that does (the shape Husky v9's
  *    `core.hooksPath = .husky/_` plus the committed `.husky/<hook>` file
  *    takes — see ONBOARDING.md's "Coexisting with an existing hook
- *    manager"), chains to the corresponding `.githooks/<hook>` script via a
- *    documented exec/invocation line, **and** that `.githooks/<hook>` script
- *    itself genuinely sources the guard (defense-in-depth against a chain
- *    line pointing at a missing or tampered target).
+ *    manager"), with that `.githooks/<hook>` script itself confirmed to
+ *    genuinely source the guard (defense-in-depth against a chain line
+ *    pointing at a missing or tampered target).
+ *
+ * The file at `hooksPath` must actually exist before either chain form is
+ * trusted: when a hook manager's install is deleted or incomplete, git has
+ * no active hook to invoke there at all, so a committed chain line living
+ * only in the parent directory is not reachable and must not read as
+ * wired just because it is present on disk.
  *
  * This stays bounded to the documented recipe's two concrete file
  * locations — it does not trace an arbitrary hook manager's own dispatch
@@ -1821,11 +1832,17 @@ export function worktreeGuardWiredAt(root: string, hooksPath: string): boolean {
     }
   };
   const wired = (name: string): boolean => {
-    if (hookWiresWorktreeGuard(read(directory, name))) {
+    const atHooksPath = read(directory, name);
+    if (hookWiresWorktreeGuard(atHooksPath)) {
       return true;
     }
+    // No active hook file at core.hooksPath at all: git has nothing to
+    // invoke here, so a committed chain line elsewhere is unreachable.
+    if (atHooksPath === null) {
+      return false;
+    }
     const chains =
-      hookChainsToGithooksScript(read(directory, name), name) ||
+      hookChainsToGithooksScript(atHooksPath, name) ||
       hookChainsToGithooksScript(read(parentDirectory, name), name);
     return chains && hookWiresWorktreeGuard(read(githooksDirectory, name));
   };
