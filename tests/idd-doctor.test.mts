@@ -738,6 +738,21 @@ test('hookChainsToGithooksScript still accepts a trailing comment after either d
   );
 });
 
+// Review feedback (PR #1969, chatgpt-codex-connector): a `#` with no
+// preceding whitespace is not a comment delimiter to a real shell -- it
+// stays part of the same word as the closing quote -- so accepting it
+// blindly let disguised trailing content (e.g. a pipe) back in through the
+// comment escape hatch the prior end-anchor fix added.
+test('hookChainsToGithooksScript rejects a "#" with no preceding whitespace (false-positive regression)', () => {
+  assert.equal(
+    hookChainsToGithooksScript(
+      'exec "$(git rev-parse --show-toplevel)/.githooks/pre-commit" "$@"# | cat\n',
+      'pre-commit',
+    ),
+    false,
+  );
+});
+
 test('classifyWorktreeGuardActivation returns null when the guard is disabled', () => {
   assert.equal(
     classifyWorktreeGuardActivation({

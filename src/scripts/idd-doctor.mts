@@ -1749,9 +1749,14 @@ export function hookWiresWorktreeGuard(content: unknown): boolean {
  * an optional `#` comment may follow) — a trailing shell operator such as
  * `| cat` or a backgrounding `&` can decouple the line's own exit status
  * from the guard's, so a line carrying either form of the two documented
- * commands plus anything else is not accepted either. Pure (no I/O) so it
- * can be unit-tested directly. A non-string (absent/unreadable hook) is
- * treated as not chaining.
+ * commands plus anything else is not accepted either. The trailing comment
+ * itself must be preceded by whitespace, matching real shell tokenizing: an
+ * adjacent `#` right after the closing quote (e.g. `"$@"#| cat`) is not a
+ * comment delimiter to the shell at all — it stays part of the same word —
+ * so accepting it here would let disguised trailing content back in through
+ * the very escape hatch meant only for a genuine, separated comment. Pure
+ * (no I/O) so it can be unit-tested directly. A non-string
+ * (absent/unreadable hook) is treated as not chaining.
  */
 export function hookChainsToGithooksScript(
   content: unknown,
@@ -1762,7 +1767,7 @@ export function hookChainsToGithooksScript(
   }
   const escaped = escapeRegex(hookName);
   const quotedPath = `"\\$\\(git rev-parse --show-toplevel\\)/\\.githooks/${escaped}"`;
-  const lineEnd = '[ \\t]*(?:#.*)?$';
+  const lineEnd = '(?:[ \\t]*$|[ \\t]+#.*$)';
   const execForm = `exec[ \\t]+${quotedPath}[ \\t]+"\\$@"${lineEnd}`;
   const nonExecForm = `${quotedPath}[ \\t]+"\\$@"[ \\t]*\\|\\|[ \\t]*exit[ \\t]+\\$\\?${lineEnd}`;
   return new RegExp(`^[ \\t]*(?:${execForm}|${nonExecForm})`, 'm').test(
