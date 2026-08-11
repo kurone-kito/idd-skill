@@ -1089,6 +1089,29 @@ Ruleset, the same way other CI jobs are registered there. This is a
 maintainer GitHub-settings action taken outside of IDD automation, not
 something an agent applies on its own.
 
+**Avoid the classic-API pinning trap.** GitHub's classic
+branch-protection API silently rewrites a plain string-array `contexts`
+field into `app_id`-pinned `checks` entries: a `PUT .../protection`
+call configuring `contexts` comes back with a `checks` array carrying
+GitHub Actions' own `app_id` (`15368`). A pinned entry is exactly what
+the fail-closed "Source-pinned required-check trust" default
+(`ciGate.trustSourcePinnedRequiredChecks` — see the row in
+[Customizing IDD](docs/customization.md)) downgrades to unresolved even
+when green, so an operator who registers this or any other required
+check the straightforward way walks into that gate on the very first
+PR, for a reason nothing in the classic API response explains. Use the
+narrower `PATCH .../required_status_checks` endpoint instead, with an
+explicit `checks` array and `app_id: -1` (any producer) rather than a
+plain `contexts` array:
+
+```sh
+gh api --method PATCH \
+  repos/{owner}/{repo}/branches/{branch}/protection/required_status_checks \
+  --input - <<'JSON'
+{"checks": [{"context": "idd-advisory-convergence", "app_id": -1}]}
+JSON
+```
+
 **Waiver-after-deadline escape path.** `--assert` exits non-zero for
 any not-ready verdict, including the ordinary case where the primary
 advisory bot has not yet reviewed the current PR HEAD — GitHub Actions

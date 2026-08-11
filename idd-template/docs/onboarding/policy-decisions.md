@@ -348,6 +348,27 @@ disabled:
 Record whether the repository keeps this setting disabled before
 unattended workers begin running.
 
+It should also confirm that any required status check registered
+through GitHub's classic branch-protection API uses the explicit
+`checks` array rather than a plain string-array `contexts` field:
+
+- Recommended: register required checks with an explicit `checks`
+  array and `app_id: -1` (any producer). GitHub's classic API silently
+  rewrites a `contexts` `PUT` into `app_id`-pinned `checks` entries,
+  and a pinned entry is exactly what the fail-closed "Source-pinned
+  required-check trust" default
+  (`ciGate.trustSourcePinnedRequiredChecks` — see the row in
+  [Customizing IDD](../customization.md)) downgrades to unresolved even
+  when green, so an operator who configures branch protection the
+  straightforward way walks into that gate on the very first PR. See
+  [ONBOARDING.md's required-status-check registration
+  step](../../ONBOARDING.md#optional--host-idd-advisory-convergence-as-a-required-check-ci-workflow)
+  for the working `PATCH` snippet.
+
+Record whether the repository's required-check registration avoids the
+string-array `contexts` pinning trap before unattended workers begin
+running.
+
 ## Recording the selected policies
 
 Create a local policy section in repository documentation (for example
