@@ -325,15 +325,16 @@ F2-only (`#1511`) on `sameHeadReroll.eligible`; see
 advisory-reroll: {agent-id} {PR_HEAD_SHA} {ISO8601-requested-at}
 ```
 
-Plain text, no HTML comment (matches `advisory-wait:`/
-`advisory-wait-recovery:`'s shape). Helper-first: profile-selected
-post-idd-marker command (`--type advisory-reroll --target pr
-<pr-number> --agent-id <id> --head-sha <PR_HEAD_SHA> --timestamp
-<ISO8601> --apply`); manual `POST` is fallback. If it cannot be
-posted or verified, fail closed to AW4's **Recovery failed** hold.
+Plain text (matches `advisory-wait:`'s shape). Helper-first:
+profile-selected post-idd-marker command (`--type advisory-reroll
+--target pr <pr-number> --agent-id <id> --head-sha <PR_HEAD_SHA>
+--timestamp <ISO8601> --apply`); manual `POST` is fallback. If it
+cannot be posted or verified, fail closed to AW4's **Recovery failed**
+hold.
 
-**`suppressedCount` unvalidated**: `#1511` is `itemCount`-only; never
-zeroed in `kurone-kito/lints-config` PRs `#243`/`#245`.
+**`suppressedCount` unvalidated**: `#1511` is `itemCount`-only; reroll
+never zeroed it in `kurone-kito/lints-config` PRs `#243`/`#245`
+(2026-08-10/11).
 
 ## Terminal Copilot stall-recovery contract (state, policy, markers, clock)
 
