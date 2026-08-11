@@ -963,11 +963,12 @@ Options:
   --from-profile <package-manager|vendored-node|ephemeral-npx|instructions-only>
   --package-manager <npm|pnpm|yarn>
   --package-spec <npm-spec-or-tarball-url>
-                        Affects only composed install/invocation strings
-                        (ephemeral-npx, package-manager); the reported
-                        command list always reflects this running build,
-                        never the package-spec target (see "runningBuild"
-                        in the JSON output).
+                        Affects package-spec-derived output only (composed
+                        install/invocation strings, the managed dependency
+                        pin, the echoed packageSpec value); never changes
+                        the reported command list, which always reflects
+                        this running build (see "runningBuild" in the JSON
+                        output).
   --target-root <path>
   --help
 `);
