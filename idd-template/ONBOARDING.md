@@ -844,13 +844,16 @@ script repoints `core.hooksPath` at `.husky/_` unconditionally, so a
 routine `pnpm install` after activation leaves this guard unwired
 again with no error. `idd-doctor`'s enabled-but-inert detection (below) correctly
 flags this again, but nothing about the reset itself is a bug — do not
-assume `core.hooksPath` is free to claim outright. Chain the existing
+assume `core.hooksPath` is free to claim outright. Chain each existing
 hook to `exec` the corresponding `.githooks/*` script instead: append
-(don't replace) the existing hook file with a line that resolves the
+(don't replace) each existing hook file with a line that resolves the
 repository root explicitly, so the hook still works when git invokes
-it from a subdirectory:
+it from a subdirectory. The B1 guard needs both hooks chained:
 
 ```sh
+# Add as the last line of the existing .husky/pre-commit:
+exec "$(git rev-parse --show-toplevel)/.githooks/pre-commit" "$@"
+
 # Add as the last line of the existing .husky/pre-push:
 exec "$(git rev-parse --show-toplevel)/.githooks/pre-push" "$@"
 ```
@@ -861,9 +864,10 @@ manager's own dispatch into a committed chain line, so a correctly
 chained setup can still report enabled-but-inert even though the guard
 is genuinely reachable through the chain
 ([#1951](https://github.com/kurone-kito/idd-skill/issues/1951)). Treat
-that specific combination — chaining already in place, `idd-doctor`
-still warning — as a known detector gap, not proof the chain needs to
-be undone.
+that specific combination — **both** hooks already chained,
+`idd-doctor` still warning — as a known detector gap, not proof the
+chain needs to be undone; a warning while only one hook is chained
+remains actionable as intended.
 
 Fully replacing an existing hook manager instead of chaining it removes
 that tool from the repository outright, so treat it as an alternative
@@ -906,13 +910,18 @@ activation has to happen inside the agent's own setup.
 
 Wire the hooks as the agent's environment-setup step — the first thing it
 runs before any work, or the platform's setup mechanism (for the GitHub
-Copilot coding agent, its `copilot-setup-steps` workflow). Skip this
-specific command when the repository already chains or replaces an
-existing hook manager (above): running it here would repoint git
-directly at `.githooks` and bypass that manager on every task, since
-the chained or replacement setup already reaches a fresh clone once
-the manager's own install lifecycle runs there. Otherwise, for a
-repository with no hook manager involved:
+Copilot coding agent, its `copilot-setup-steps` workflow). A
+repository that fully replaces a hook manager (above) can keep this
+command unconditional: no manager remains to bypass, and it sets the
+same value the replacement script would. A repository that instead
+chains an existing hook manager needs a different setup step: skip
+this direct command — it would repoint git at `.githooks` and bypass
+the chained manager — and instead make the agent's setup explicitly
+run that manager's own install/prepare lifecycle (for example, a
+`pnpm install` step), since a fresh ephemeral clone does not run it
+automatically either; skipping the command without also running that
+lifecycle leaves the guard unwired despite following this guidance.
+Otherwise, for a repository with no hook manager involved:
 
 ```sh
 git config core.hooksPath .githooks && chmod +x .githooks/pre-commit .githooks/pre-push
