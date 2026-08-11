@@ -92,7 +92,7 @@ For A0-T, A0-O, A1, A1.5, A3, and A4.5 repo-query rules, see
 ## Commit signing
 
 Check `docs/idd-helper-scripts.md`'s Signed-Commit Merge Wrapper for a
-fallback, never permanently rewriting signing config; add
+fallback and never permanently rewrite signing config; add
 `--no-gpg-sign` only when none resolves.
 
 Record material progress, decisions, and hold reasons as issue or PR
