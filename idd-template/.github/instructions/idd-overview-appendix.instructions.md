@@ -86,7 +86,7 @@ For A0-T, A0-O, A1, A1.5, A3, and A4.5 repo-query rules, see
 
 ## Commit signing
 
-When it hangs, check `docs/idd-helper-scripts.md`'s Signed-Commit
+When it blocks, check `docs/idd-helper-scripts.md`'s Signed-Commit
 Merge Wrapper; never permanently rewrite config. `--no-gpg-sign` on
 `git commit`/`git merge` is the last resort.
 
