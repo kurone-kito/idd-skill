@@ -871,10 +871,11 @@ git rev-parse --git-dir > /dev/null 2>&1 || exit 0; git config core.hooksPath .g
 Neither path — chaining or fully replacing — is wired automatically by
 this template: the operator (or an agent following this guide) has to
 author and commit the chaining line or replacement script explicitly.
-Once committed, the hook manager's own lifecycle hook carries that
-change to every future clone on its own, unlike the base
-`git config core.hooksPath` step above, which is local and uncommitted
-and genuinely needs re-running per clone.
+Once committed, that change reaches every future clone the next time
+the hook manager's own install/prepare lifecycle runs there — unlike
+the base `git config core.hooksPath` step above, which is local and
+uncommitted and needs a manual, standalone re-run per clone regardless
+of any lifecycle script.
 
 #### Activation in a coding-agent / ephemeral environment
 
