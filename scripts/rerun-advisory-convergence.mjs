@@ -119,7 +119,6 @@
 // This helper never mutates GitHub state: it only reads check-run/run data
 // and prints a diagnosis plus a plan of commands for a human (or a future
 // --apply follow-up) to execute.
-import { parseArgs as nodeParseArgs } from 'node:util';
 import {
   DEFAULT_ADVISORY_PRIMARY_BOT_LOGIN,
   resolveAdvisoryPrimaryBotLogin,
@@ -128,6 +127,7 @@ import {
   normalizeCiWaitPolicy,
   resolveCiRerunDecision,
 } from './ci-wait-policy.mjs';
+import { parseCanonicalIntegerOrNull, parseCliArgs } from './cli-args.mjs';
 import { GH_TEXT_LOOP_TIMEOUT_OPTIONS, ghText } from './gh-exec.mjs';
 import { deriveGhHttpStatus } from './gh-http-status.mjs';
 import { isValidIsoTimestamp } from './marker-helpers.mjs';
@@ -928,80 +928,51 @@ export function parseRunIdFromUrl(url) {
  * whitespace and shell metacharacters, not exactly replicating GitHub's
  * own registration rules. */
 const GITHUB_IDENTIFIER_PATTERN = /^[A-Za-z0-9_.-]+$/;
+// Flag-spec keys stay the dashed literal on purpose (never bare keys like
+// `pr:`): tests/flag-name-matrix.test.mts scans this file's *compiled*
+// .mjs source text for quoted flag literals such as the --pr spec key
+// below. See cli-args.mts's module header for the full invariant. (This
+// comment deliberately avoids writing that key inside matching quote
+// marks, so it cannot itself satisfy the scan if the real key is ever
+// renamed -- see #1446's PR description for why that matters.)
+const RERUN_ADVISORY_CONVERGENCE_FLAG_SPEC = {
+  '--pr': { type: 'string' },
+  '--owner': { type: 'string', default: '' },
+  '--repo': { type: 'string', default: '' },
+  '--now': { type: 'string', default: '' },
+  '--help': { type: 'boolean', short: 'h' },
+  '--apply': { type: 'boolean', default: false },
+  '--check-name': { type: 'string', default: '' },
+};
 /**
- * Rewrite a `--pr VALUE` pair into the single token `--pr=VALUE` whenever
- * `VALUE` starts with a single dash (not `--`) -- `node:util`'s own
- * `parseArgs` (`strict: true`) throws `ERR_PARSE_ARGS_INVALID_OPTION_VALUE`
- * ("... argument is ambiguous") for a bare `--pr -5`, since a
- * single-dash-prefixed value could plausibly be another short option
- * instead. Left uncaught, this crashed the CLI with a raw, uncaught Node
- * stack trace instead of this file's own documented `--pr` contract ("an
- * invalid --pr resolves to null (fails closed at the caller)") --
- * verified empirically (`--pr -5` threw before this fix; a negative PR
- * number is never valid, but the failure mode should be the same clean
- * `prNumber: null` every other malformed `--pr` value already gets, not
- * an uncaught crash) (self-discovered while evaluating #1446's shared
- * `cli-args.mts` wrapper, which solves this same class of gap generically
- * -- adopting it here is out of scope for #1431; this is the narrow,
- * `--pr`-only equivalent). Only `--pr` needs this: none of this file's
- * other flags (`--owner`, `--repo`, `--now`) can realistically take a
- * dash-prefixed value, and `--help`/`-h` is boolean (no value to
- * disambiguate).
- */
-function disambiguateSingleDashPrValue(argv) {
-  const rewritten = [];
-  for (let index = 0; index < argv.length; index += 1) {
-    const token = argv[index];
-    const next = argv[index + 1];
-    const isAmbiguousValue =
-      typeof next === 'string' &&
-      next.startsWith('-') &&
-      !next.startsWith('--');
-    if (token === '--pr' && isAmbiguousValue) {
-      rewritten.push(`--pr=${next}`);
-      index += 1;
-      continue;
-    }
-    rewritten.push(token);
-  }
-  return rewritten;
-}
-/**
- * Mechanical CLI-argument parsing is delegated to `node:util`'s own
- * stable (since Node 20; this repo's engines floor is `^22.22.2 || >=24`)
- * `parseArgs`, per a maintainer's review suggestion on PR #1434: it
- * already rejects a missing value, a value that looks like another
- * option (long `--foo` or short `-h` alike -- the hand-rolled
- * `requireFlagValue` this replaced only checked for `--`, so `--owner -h`
- * silently consumed `-h` as the owner instead of erroring), and an
- * unknown option, each with Node's own stable `ERR_PARSE_ARGS_*` error
- * codes. `allowPositionals: false` closes one more gap `strict: true`
- * alone does not: `strict` governs unknown *options*, not leftover
- * positional (non-option) tokens, so an invocation like
- * `--pr 1431 extra` would otherwise silently accept `extra` instead of
- * failing fast -- risky for a recovery/rerun helper where a typo should
- * error, not run against unintended, silently-ignored input (#1434
- * review, Copilot). This function's own job narrows to the
- * domain-specific validation `parseArgs` cannot express declaratively:
+ * Mechanical CLI-argument parsing is delegated to the shared
+ * `parseCliArgs()` wrapper (`cli-args.mts`, #1446) -- migrated here from a
+ * direct `node:util` `parseArgs` call, mirroring every other packaged
+ * `idd-*` helper (#1955). Before this migration, an unknown flag or a
+ * missing/ambiguous value threw Node's own raw `ERR_PARSE_ARGS_*` error
+ * text, which fell outside `bin/run-helper.mts`'s shaped-error
+ * interception (`extractShapedCliParseErrorMessage()`) entirely -- that
+ * mechanism only recognizes the exact message shapes `parseCliArgs`'s own
+ * `toRepoShapedError()` produces (#1922). Routing through `parseCliArgs`
+ * fixes the root cause once, rather than growing
+ * `extractShapedCliParseErrorMessage()`'s shape list with a fourth,
+ * helper-specific case. `parseCliArgs` also generically disambiguates a
+ * single-dash-prefixed value (e.g. `--pr -5`) for any declared
+ * `string`-type flag, so the narrow `--pr`-only
+ * `disambiguateSingleDashPrValue` helper this function used to call ahead
+ * of `node:util`'s own `parseArgs` is no longer needed and has been
+ * removed -- see cli-args.mts's `disambiguateSingleDashValues` doc
+ * comment for the generic version. This function's own job narrows to the
+ * domain-specific validation `parseCliArgs` cannot express declaratively:
  * the `--pr` value must be all digits (not just numeric-prefixed), and
  * `--owner`/`--repo` must be given together or not at all.
  */
 export function parseArgs(argv) {
-  const { values } = nodeParseArgs({
-    args: disambiguateSingleDashPrValue(argv),
-    options: {
-      pr: { type: 'string' },
-      owner: { type: 'string' },
-      repo: { type: 'string' },
-      now: { type: 'string' },
-      help: { type: 'boolean', short: 'h' },
-      apply: { type: 'boolean' },
-      'check-name': { type: 'string' },
-    },
-    strict: true,
-    allowPositionals: false,
-  });
-  if (values.help) {
+  const { values, help } = parseCliArgs(
+    argv,
+    RERUN_ADVISORY_CONVERGENCE_FLAG_SPEC,
+  );
+  if (help) {
     return {
       prNumber: null,
       owner: '',
@@ -1038,17 +1009,25 @@ export function parseArgs(argv) {
       '--repo must contain only letters, digits, hyphens, underscores, or periods',
     );
   }
-  // Number.parseInt parses only a leading numeric prefix ("1431abc" ->
-  // 1431), which would silently run this recovery helper -- and whatever
-  // `gh run rerun` plan it prints -- against the wrong PR on a typo.
-  // Require the entire value to be digits before parsing (#1434 review,
-  // Codex P2).
-  const rawPr = String(values.pr ?? '').trim();
-  const parsedPr = /^\d+$/.test(rawPr)
-    ? Number.parseInt(rawPr, 10)
-    : Number.NaN;
+  // parseCanonicalIntegerOrNull requires the ENTIRE (trimmed) value to be
+  // digits before parsing -- "1431abc" resolves to null rather than
+  // silently truncating to 1431, which would run this recovery helper --
+  // and whatever `gh run rerun` plan it prints -- against the wrong PR on
+  // a typo (#1434 review, Codex P2). Trimmed explicitly (unlike this
+  // wrapper's other `--pr` adopters) to keep this helper's pre-migration
+  // contract of tolerating incidental whitespace around an otherwise
+  // all-digit value.
+  //
+  // Disclosed behavior change (#1955 migration, C1 self-review): the
+  // pre-migration `/^\d+$/` grammar accepted a leading-zero value like
+  // "007" (parsing to 7 via Number.parseInt); parseCanonicalIntegerOrNull's
+  // stricter `/^(?:0|[1-9]\d*)$/` canonical-integer grammar rejects any
+  // leading zero (resolving "007" to null, same clean fail-closed outcome
+  // as any other malformed --pr value). GitHub never emits a
+  // zero-padded PR number, so this narrows an already-unrealistic input
+  // rather than a real one.
   return {
-    prNumber: Number.isInteger(parsedPr) && parsedPr >= 1 ? parsedPr : null,
+    prNumber: parseCanonicalIntegerOrNull(values.pr?.trim()),
     owner,
     repo,
     now: String(values.now ?? '').trim(),

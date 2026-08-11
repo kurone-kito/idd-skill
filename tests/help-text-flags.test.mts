@@ -186,6 +186,7 @@ const COVERED_HELPERS = [
   'merged-pr-feedback-sweep',
   'phase-id-resolver',
   'pre-merge-readiness',
+  'rerun-advisory-convergence',
   'resolve-review-thread',
   'resume-claim-routing',
   'resume-route-selection',
@@ -235,11 +236,6 @@ const EXCLUDED_HELPERS: readonly { helper: string; reason: string }[] = [
   },
   {
     helper: 'idd-onboard',
-    reason:
-      'hand-rolled parseArgs() loop, no declarative FLAG_SPEC object to compare',
-  },
-  {
-    helper: 'rerun-advisory-convergence',
     reason:
       'hand-rolled parseArgs() loop, no declarative FLAG_SPEC object to compare',
   },
