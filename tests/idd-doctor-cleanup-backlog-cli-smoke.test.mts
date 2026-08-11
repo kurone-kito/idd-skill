@@ -268,5 +268,38 @@ test('checkPostMergeCleanupBacklog CLI: excludes a merged PR whose head ref is n
     );
     assert.match(backlogWarning ?? '', /#801/);
     assert.doesNotMatch(backlogWarning ?? '', /#802/);
+    // idd-skill#1936: the warning must state the count is scoped to IDD
+    // branch patterns (and name the patterns in effect), so an operator
+    // reading a low count does not misread it as "no merged PRs in the
+    // window" -- it is unaware of the non-IDD traffic filtered out above.
+    assert.match(backlogWarning ?? '', /scoped to IDD branch patterns/);
+    assert.match(backlogWarning ?? '', /issue\/\*/);
+    assert.match(backlogWarning ?? '', /roadmap-audit\/\*/);
+  });
+});
+
+// idd-skill#1936: when every merged PR in the window is on a non-IDD branch,
+// the scan must produce no backlog warning at all -- not just an empty
+// examples list -- guarding the early return right after
+// `filterIddBranchMergedPrs` in `checkPostMergeCleanupBacklog`.
+test('checkPostMergeCleanupBacklog CLI: produces no backlog warning when every merged PR is on a non-IDD branch (idd-skill#1936)', () => {
+  withTempCwd((cwd) => {
+    const report = runIddDoctorReport(
+      cwd,
+      buildCleanupBacklogStubGh({
+        owner: 'o',
+        repo: 'r',
+        mergedPrNumbers: [901, 902],
+        evidenceByPr: new Map(),
+        headRefNameByPr: new Map([
+          [901, 'dependabot/npm_and_yarn/lodash-4.17.21'],
+          [902, 'renovate/eslint-9.x'],
+        ]),
+      }),
+    );
+    assert.ok(
+      !report.warnings.some((w) => w.includes(BACKLOG_WARNING_SUBSTRING)),
+      `expected no cleanup-backlog warning when every PR is non-IDD, got: ${JSON.stringify(report.warnings)}`,
+    );
   });
 });
