@@ -885,9 +885,10 @@ review; [#1951](https://github.com/kurone-kito/idd-skill/issues/1951)).
 A setup that follows the recipe above for **both** hooks now reads as
 wired, not enabled-but-inert. The check still does not trace an
 arbitrary hook manager's own dispatch machinery beyond that one
-documented level: it confirms a hook file exists at `core.hooksPath`
-but does not verify that file's own content genuinely hands off to the
-parent sibling it trusts, so a present-but-inert or corrupted
+documented level: it confirms a hook file exists **and is executable**
+at `core.hooksPath` — since git itself silently skips a non-executable
+one — but does not verify that file's own content genuinely hands off
+to the parent sibling it trusts, so a present-but-inert or corrupted
 dispatcher stub can still read as wired even though git never reaches
 the parent chain (preventive; no observed incident yet). Conversely, a
 manager using a different indirection shape entirely can still warn

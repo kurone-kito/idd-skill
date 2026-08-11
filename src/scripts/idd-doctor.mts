@@ -1810,10 +1810,11 @@ export function classifyWorktreeGuardActivation({
       `worktreeGuard.enabled is true but the commit/push guard is not active ` +
       `in this environment (core.hooksPath = ${shown}); B1 primary-worktree ` +
       `commits will NOT be blocked here. Wire it with: ` +
-      `git config core.hooksPath .githooks — or, if an existing hook manager ` +
-      `already owns core.hooksPath here, chain each hook to the corresponding ` +
-      `.githooks/* script instead of repointing directly; see ONBOARDING.md's ` +
-      `"Coexisting with an existing hook manager" section`,
+      `git config core.hooksPath .githooks && chmod +x ` +
+      `.githooks/pre-commit .githooks/pre-push — or, if an existing hook ` +
+      `manager already owns core.hooksPath here, chain each hook to the ` +
+      `corresponding .githooks/* script instead of repointing directly; see ` +
+      `ONBOARDING.md's "Coexisting with an existing hook manager" section`,
   };
 }
 
