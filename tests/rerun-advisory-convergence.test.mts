@@ -2157,19 +2157,24 @@ test('parseArgs fails fast when --owner is immediately followed by another long 
 });
 
 // parseCliArgs()'s own generic single-dash-value disambiguation (see
-// cli-args.mts's disambiguateSingleDashValues doc comment) now applies to
-// every declared string flag, not just --pr -- one of this migration's
-// intentional, disclosed behavior changes (#1955). `-h` after --owner no
-// longer looks like an ambiguous short option to node:util: it is
-// rewritten to `--owner=-h` up front, so --owner captures the literal
-// value "-h" (which passes the --owner identifier-character check) and
-// parsing instead fails on the --owner/--repo pairing rule below, since
-// --repo is still missing.
-test('parseArgs resolves --owner followed by the short help flag as a literal value, then fails the --owner/--repo pairing check', () => {
-  assert.throws(
-    () => parseArgs(['--owner', '-h']),
-    /provide both --owner and --repo, or neither/,
-  );
+// cli-args.mts's disambiguateSingleDashValues doc comment) applies to
+// every declared string flag, not just --pr -- disclosed as an
+// intentional #1955 migration behavior change at the time. That
+// disclosure named a real gap: `-h` after --owner used to look like an
+// ordinary ambiguous value to the rewrite, so it was captured as --owner's
+// literal value "-h" instead of ever being recognized as the declared
+// --help alias it actually is. #1961 closes that gap: a value token that
+// itself exactly matches one of the spec's own declared short option
+// forms (here, -h for --help) is now reserved and left un-rewritten, so
+// node:util's own strict-mode parser sees the genuinely ambiguous
+// `--owner -h` pair and reports its usual ambiguous-value error --
+// re-shaped by parseCliArgs() onto the same missing-value idiom every
+// other missing --owner value already gets, rather than resolving to a
+// value --owner can never actually mean.
+test('parseArgs fails fast when --owner is immediately followed by the short help flag, instead of silently swallowing it as a literal value (#1961)', () => {
+  assert.throws(() => parseArgs(['--owner', '-h']), {
+    message: 'missing value for argument: --owner',
+  });
 });
 
 test('parseArgs fails fast when --repo has a missing value', () => {

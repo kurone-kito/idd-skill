@@ -160,6 +160,24 @@ const NODE_OPTION_KEY_PATTERN = /^--[A-Za-z0-9][A-Za-z0-9-]*$/;
  * `string`-type flag is rewritten onto that flag's long `=` form before
  * `util.parseArgs` ever sees it: `-p=5` becomes `--pr=5`, `-p=-3` becomes
  * `--pr=-3`. A short letter with no matching flag entry is left untouched.
+ *
+ * **Declared-alias reservation (#1961).** The two-token rewrite above is
+ * only safe when the following token is a genuinely arbitrary value (a
+ * negative number, an unrelated string starting with a dash, and so on).
+ * When that token instead exactly matches a short alias the spec itself
+ * declares -- for any flag, not only a string-typed one, e.g. a boolean
+ * help flag's own short letter -- rewriting it would silently swallow a
+ * real flag as another flag's literal value instead of ever reaching
+ * `util.parseArgs` as itself. A declared long option form never hits this
+ * problem in the first place: it already falls outside the two-token
+ * rewrite entirely, since a value starting with `--` is excluded from
+ * `isAmbiguousValue` above. So every declared short form is carved out of
+ * the rewrite, left exactly as typed; `util.parseArgs` then reports its
+ * own ambiguous-value error for it (re-shaped by {@link toRepoShapedError}
+ * into this module's usual missing-value idiom), the same clear failure
+ * this module already produces when a flag's value is missing outright,
+ * rather than resolving to a wrong literal value one flag can never
+ * actually mean for another.
  */
 // Matches a short option's `=value` form as ONE argv token, e.g. `-p=5`
 // or `-p=-3` -- captures the short letter and everything after `=`
@@ -181,6 +199,16 @@ function disambiguateSingleDashValues(
       .filter(([, flagSpec]) => flagSpec.type === 'string' && flagSpec.short)
       .map(([dashedKey, flagSpec]) => [`-${flagSpec.short}`, dashedKey]),
   );
+  // #1961: every declared short alias, regardless of the owning flag's
+  // `type` -- unlike `shortToLong` above (string-typed flags only, since
+  // that map feeds the `-x=value` single-token rewrite, which only makes
+  // sense for a value-taking flag), a boolean flag's short alias (e.g. a
+  // help flag) is just as reservable as a string flag's.
+  const declaredShortForms = new Set(
+    Object.values(spec)
+      .filter((flagSpec) => flagSpec.short)
+      .map((flagSpec) => `-${flagSpec.short}`),
+  );
   const rewritten: string[] = [];
   for (let index = 0; index < argv.length; index += 1) {
     const token = argv[index];
@@ -201,12 +229,16 @@ function disambiguateSingleDashValues(
     }
 
     // Two-token case: `--flag VALUE` / `-p VALUE` where VALUE starts with
-    // a single dash and could plausibly be another option.
+    // a single dash and could plausibly be another option. Excludes a
+    // VALUE that is itself a declared short alias (#1961 above) -- that
+    // token is reserved, never rewritten into another flag's literal
+    // value, regardless of which flag precedes it.
     const next = argv[index + 1];
     const isAmbiguousValue =
       typeof next === 'string' &&
       next.startsWith('-') &&
-      !next.startsWith('--');
+      !next.startsWith('--') &&
+      !declaredShortForms.has(next);
     if (stringFlags.has(token) && isAmbiguousValue) {
       rewritten.push(`${token}=${next}`);
       index += 1;

@@ -109,6 +109,74 @@ test('parseCliArgs: a short alias still rejects a flag-shaped value', () => {
   });
 });
 
+// --- Declared-alias reservation (#1961) --------------------------------------
+// A value token that itself exactly matches one of the spec's own declared
+// short option forms must never be silently swallowed as a preceding string
+// flag's literal value -- reserve it so the caller gets a clear parse error
+// instead. Long option forms already can't hit this: a value starting with
+// -- is excluded from the ambiguity rewrite entirely (see the "rejects a
+// flag-shaped value" test above), so this section covers the short-form gap
+// #1961 reported (found on rerun-advisory-convergence.mts's --check-name,
+// reproduced generically here via SAMPLE_SPEC's --help/-h).
+
+test('parseCliArgs: a declared short alias (the help flag) after a string flag is reserved, not swallowed as its value', () => {
+  assert.throws(() => parseCliArgs(['--owner', '-h'], SAMPLE_SPEC), {
+    message: 'missing value for argument: --owner',
+  });
+});
+
+test('parseCliArgs: the reservation also covers a declared short alias for another STRING flag, not just a boolean one', () => {
+  // The reservation is not help-specific: --pr's own short alias (-p) must
+  // be just as reserved as --help's when it appears as another flag's
+  // candidate value.
+  assert.throws(() => parseCliArgs(['--owner', '-p'], SAMPLE_SPEC), {
+    message: 'missing value for argument: --owner',
+  });
+});
+
+test('parseCliArgs: the short-alias-as-flag two-token path also reserves a declared alias for its value', () => {
+  // Mirrors the '-p', '-3' passthrough test above, but with a reserved
+  // alias in the value position instead of an ordinary negative number:
+  // the token-itself-is-a-short-alias branch must apply the same
+  // reservation as the long-flag-token branch tested just above.
+  assert.throws(() => parseCliArgs(['-p', '-h'], SAMPLE_SPEC), {
+    message: 'missing value for argument: -p',
+  });
+});
+
+test('parseCliArgs: an UNDECLARED single-dash token is still accepted as a literal value (reservation is scoped to real aliases only)', () => {
+  // No flag in SAMPLE_SPEC declares -x as a short form, so it must keep
+  // flowing through as an ordinary value -- same established contract as
+  // the -3 negative-number case, just spelled with a letter.
+  const { values } = parseCliArgs(['--owner', '-x'], SAMPLE_SPEC);
+  assert.equal(values.owner, '-x');
+});
+
+test('parseCliArgs: standalone -h still resolves to help once nothing precedes it to swallow it', () => {
+  // The reservation only changes the two-token ambiguous-value path above;
+  // it must not regress -h's ordinary standalone recognition.
+  const result = parseCliArgs(['-h'], SAMPLE_SPEC);
+  assert.equal(result.help, true);
+});
+
+test('parseCliArgs: the exact #1961 reproduction shape (a --title/--number/--help spec mirroring branch-name.mts)', () => {
+  // node bin/idd-branch-name.mjs --title -h --number 5 used to print
+  // issue/5-h (exit 0) instead of showing help or failing -- --title had
+  // no short alias of its own, but -h (declared for --help) was still
+  // silently swallowed as --title's literal value. This spec mirrors
+  // branch-name.mts's real flags to keep the regression traceable to the
+  // reported command.
+  const REPRO_SPEC = {
+    '--number': { type: 'string' },
+    '--title': { type: 'string' },
+    '--help': { type: 'boolean', short: 'h' },
+  } as const;
+  assert.throws(
+    () => parseCliArgs(['--title', '-h', '--number', '5'], REPRO_SPEC),
+    { message: 'missing value for argument: --title' },
+  );
+});
+
 test('parseCliArgs: repeated non-multiple flags -- last one wins (Node native behavior)', () => {
   const { values } = parseCliArgs(['--pr', '1', '--pr', '2'], SAMPLE_SPEC);
   assert.equal(values.pr, '2');
