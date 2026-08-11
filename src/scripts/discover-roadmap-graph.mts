@@ -94,6 +94,31 @@ const INACCESSIBLE_ISSUE_SENTINEL = Object.freeze({
 const INACCESSIBLE_HTTP_STATUSES = new Set([403, 410, 451]);
 const KEYWORD_REFERENCE_REGEX =
   /\b(Closes|Close|Closed|Fixes|Fixed|Fix|Resolves|Resolved|Resolve|Refs|Ref|Depends on|Blocked by|Sub-issue|Sub issue)\b/giu;
+// #1964: how many characters immediately before a KEYWORD_REFERENCE_REGEX
+// match to scan for a negation term. Short and deliberate — the negation must
+// sit directly ahead of the matched keyword (e.g. "does not close #176"), not
+// merely appear somewhere earlier in a long line.
+const KEYWORD_NEGATION_WINDOW_CHARS = 30;
+// #1964: a recognized closing/dependency/sub-issue keyword sitting next to a
+// `#N` reference inside a negation clause ("this does not close #176", "the
+// PR would not close #176" — both from #1931's own merged body, a
+// field-report narrative about an unrelated already-closed roadmap #176, not
+// a real relationship) must not become a graph edge. Reclassifying alone is
+// not enough: `visitIssue` below traverses every edge's target regardless of
+// `relationship`, so the target would still enter the graph as a node and
+// still trip `idd-roadmap-audit-execute`'s nested-roadmap blocker. The match
+// is instead dropped entirely — see the `isNegatedKeywordMatch` call site.
+//
+// Deliberately end-anchored (`\s+(?:\w+\s+){0,2}$`, at most two intervening
+// word tokens, no intervening punctuation) rather than "negation anywhere in
+// the window" like suitability-triage.mts's looser `NEGATION_PATTERN` /
+// `DUPLICATE_NEGATION_PATTERN` (which have their own known false-positive
+// history in this repo): a loose match would also swallow a genuine close,
+// e.g. "The workaround did not work; closes #42" — "not" is within 20 chars
+// of "closes" but does not negate it. The semicolon breaks the required
+// unbroken `\w+\s+` chain here, so that case still keeps its real edge.
+const KEYWORD_NEGATION_PATTERN =
+  /\b(?:not|never|cannot|no longer|(?:has|have|had|ca|do|does|did|is|was|are|were|wo|would|should|could)n['’]t)\s+(?:\w+\s+){0,2}$/iu;
 const SUB_ISSUES_QUERY = `
 query($owner:String!, $repo:String!, $number:Int!, $after:String) {
   repository(owner:$owner, name:$repo) {
@@ -1970,7 +1995,13 @@ export function extractKeywordReferences(
     const keywordMatches = [...maskedLine.matchAll(KEYWORD_REFERENCE_REGEX)];
     for (let index = 0; index < keywordMatches.length; index += 1) {
       const match = keywordMatches[index];
-      const segmentStart = (match.index ?? 0) + match[0].length;
+      const matchIndex = match.index ?? 0;
+      // #1964: a negated keyword match ("does not close #176") produces no
+      // reference at all — see KEYWORD_NEGATION_PATTERN above.
+      if (isNegatedKeywordMatch(maskedLine, matchIndex)) {
+        continue;
+      }
+      const segmentStart = matchIndex + match[0].length;
       const segmentEnd = keywordMatches[index + 1]?.index ?? maskedLine.length;
       const segment = maskedLine.slice(segmentStart, segmentEnd);
       for (const target of extractKeywordReferenceTargets(
@@ -1989,6 +2020,19 @@ export function extractKeywordReferences(
     }
   }
   return references;
+}
+
+/**
+ * True when a negation term (`not`, `never`, `won't`, `doesn't`, ...) sits in
+ * a short token window immediately before the matched keyword at
+ * `matchIndex` on `line` — e.g. "This does not close #176" negates `close`.
+ * See {@link KEYWORD_NEGATION_PATTERN} and {@link KEYWORD_NEGATION_WINDOW_CHARS}
+ * for the pattern and window-size rationale (#1964).
+ */
+function isNegatedKeywordMatch(line: string, matchIndex: number): boolean {
+  const windowStart = Math.max(0, matchIndex - KEYWORD_NEGATION_WINDOW_CHARS);
+  const contextBefore = line.slice(windowStart, matchIndex);
+  return KEYWORD_NEGATION_PATTERN.test(contextBefore);
 }
 
 function classifyKeywordRelationship(keyword: unknown): string {
