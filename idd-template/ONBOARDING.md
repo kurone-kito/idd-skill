@@ -1142,7 +1142,8 @@ already matches the check being added (for example, an existing
 pinned `idd-advisory-convergence` entry): replace that matching entry
 rather than appending a second one, since a duplicate context name
 where any entry is still pinned keeps the whole context classified as
-source-pinned regardless of the other, unpinned entry. Copy-pasting
+source-pinned regardless of the other, unpinned entry (preventive; no
+observed incident yet). Copy-pasting
 the snippet unqualified on a branch that already has required checks
 silently drops them, weakening the merge gate to only the newly added
 check.
