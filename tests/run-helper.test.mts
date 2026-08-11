@@ -4,7 +4,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 // ---------------------------------------------------------------------------
 // #1922 — bin/run-helper.mts intercepts a shaped CLI parse error across the
@@ -27,6 +27,10 @@ import { fileURLToPath } from 'node:url';
 
 const REPO_ROOT = fileURLToPath(new URL('../', import.meta.url));
 const RUN_HELPER_MJS = join(REPO_ROOT, 'bin', 'run-helper.mjs');
+// A raw filesystem path is not a valid ESM import specifier on Windows
+// (backslashes) -- generated fixture wrappers below import via this
+// `file:` URL form instead (Copilot review finding), never the bare path.
+const RUN_HELPER_MJS_URL = pathToFileURL(RUN_HELPER_MJS).href;
 const BRANCH_NAME_BIN = join(REPO_ROOT, 'bin', 'idd-branch-name.mjs');
 const REVIEW_DISPOSITION_VERIFY_BIN = join(
   REPO_ROOT,
@@ -87,7 +91,7 @@ function spawnFixture(
     const wrapperPath = join(tempRoot, 'wrapper.mjs');
     writeFileSync(
       wrapperPath,
-      `import { runHelper } from ${JSON.stringify(RUN_HELPER_MJS)};\nrunHelper(${JSON.stringify(fixturePath)});\n`,
+      `import { runHelper } from ${JSON.stringify(RUN_HELPER_MJS_URL)};\nrunHelper(${JSON.stringify(fixturePath)});\n`,
     );
     return spawnCapture(wrapperPath, args);
   } finally {
@@ -251,7 +255,7 @@ test("runHelper(): a long-running helper's stderr streams live, not buffered unt
     const wrapperPath = join(tempRoot, 'wrapper.mjs');
     writeFileSync(
       wrapperPath,
-      `import { runHelper } from ${JSON.stringify(RUN_HELPER_MJS)};\nrunHelper(${JSON.stringify(fixturePath)});\n`,
+      `import { runHelper } from ${JSON.stringify(RUN_HELPER_MJS_URL)};\nrunHelper(${JSON.stringify(fixturePath)});\n`,
     );
 
     const child = spawn(process.execPath, [wrapperPath], {

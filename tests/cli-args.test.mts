@@ -440,3 +440,46 @@ test('extractShapedCliParseErrorMessage: recognizes and cleans a CRLF-terminated
     'unknown argument: --x',
   );
 });
+
+test('extractShapedCliParseErrorMessage: recognizes the bracketed zero-stack form (NODE_OPTIONS=--stack-trace-limit=0, chatgpt-codex-connector review finding)', () => {
+  // Verified empirically: `NODE_OPTIONS='--stack-trace-limit=0' node
+  // bin/idd-branch-name.mjs --bogus` prints `[Error: unknown argument:
+  // --bogus]` -- a single bracketed line with no "Error: " prefix line
+  // and no stack frames at all, which the ordinary line-scan above never
+  // matches.
+  const stderrText = '[Error: unknown argument: --bogus]\n\nNode.js v22.22.2\n';
+  assert.equal(
+    extractShapedCliParseErrorMessage(stderrText),
+    'unknown argument: --bogus',
+  );
+});
+
+test('extractShapedCliParseErrorMessage: the bracketed zero-stack form still rejects an unrelated message', () => {
+  const stderrText =
+    '[Error: --number is required and must be a positive integer]\n\nNode.js v22.22.2\n';
+  assert.equal(extractShapedCliParseErrorMessage(stderrText), null);
+});
+
+test('extractShapedCliParseErrorMessage: documented boundary -- a positional argument whose value itself contains a line that looks like a stack frame truncates at that line (chatgpt-codex-connector review finding, rejected: adversarial input, not a defect)', () => {
+  // Single-channel stderr-text inference cannot fully distinguish a
+  // message-embedded line that happens to look like "    at bar" (or
+  // another "Error: " line) from a real stack frame boundary -- this is
+  // architecturally inherent to scanning already-rendered text across the
+  // subprocess boundary, not an oversight. The exit code and the shaped
+  // classification (first line, prefix) both stay correct; only the
+  // cosmetic tail of an adversarially-crafted token is affected. Verified
+  // directly: `node bin/idd-branch-name.mjs $'foo\n    at bar'` prints
+  // "unknown argument: foo" (correct prefix, correct exit code),
+  // truncating before "    at bar" rather than including it.
+  const stderrText = [
+    'Error: unknown argument: foo',
+    '    at bar',
+    '    at toRepoShapedError (file:///repo/scripts/cli-args.mjs:229:14)',
+    '',
+    'Node.js v22.22.2',
+  ].join('\n');
+  assert.equal(
+    extractShapedCliParseErrorMessage(stderrText),
+    'unknown argument: foo',
+  );
+});

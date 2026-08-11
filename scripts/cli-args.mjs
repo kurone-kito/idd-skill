@@ -258,6 +258,20 @@ const STACK_FRAME_LINE_PATTERN = /^\s+at /;
 // "Error: " line immediately terminates the one before it, same as a
 // stack frame would).
 const ERROR_LINE_PATTERN = /^Error: (.*)$/;
+// `NODE_OPTIONS=--stack-trace-limit=0` (a supported Node runtime option, not
+// an adversarial input) changes Node's uncaught-exception rendering to a
+// single bracketed `[Error: message]` line with no stack frames at all
+// (chatgpt-codex-connector review finding) -- verified empirically:
+// `NODE_OPTIONS='--stack-trace-limit=0' node bin/idd-branch-name.mjs
+// --bogus` prints `[Error: unknown argument: --bogus]` with none of the
+// usual "Error: "-prefixed / "    at " structure this module otherwise
+// relies on. Handled as its own single-line case, not folded into the
+// line-scan loop above: a message that itself happens to span multiple
+// lines under this zero-stack bracketed form has no unambiguous
+// terminator to scan for (no stack frame ever follows to mark the end),
+// so that narrower intersection is a disclosed, accepted gap rather than
+// something this pattern attempts to solve.
+const BRACKETED_ZERO_STACK_ERROR_LINE_PATTERN = /^\[Error: (.*)\]$/;
 export function extractShapedCliParseErrorMessage(stderrText) {
   // Line-based, not a single regex: a shaped message can itself contain an
   // embedded newline (e.g. a stray positional argument whose literal value
@@ -280,6 +294,12 @@ export function extractShapedCliParseErrorMessage(stderrText) {
   // supports.
   const lines = stderrText.split(/\r?\n/);
   for (let index = 0; index < lines.length; index += 1) {
+    const bracketed = BRACKETED_ZERO_STACK_ERROR_LINE_PATTERN.exec(
+      lines[index],
+    );
+    if (bracketed !== null && isShapedMessage(bracketed[1])) {
+      return bracketed[1];
+    }
     const match = ERROR_LINE_PATTERN.exec(lines[index]);
     if (match === null) {
       continue;
@@ -295,15 +315,16 @@ export function extractShapedCliParseErrorMessage(stderrText) {
       cursor += 1;
     }
     const message = messageLines.join('\n');
-    if (
-      REPO_SHAPED_CLI_PARSE_ERROR_PREFIXES.some((prefix) =>
-        message.startsWith(prefix),
-      )
-    ) {
+    if (isShapedMessage(message)) {
       return message;
     }
   }
   return null;
+}
+function isShapedMessage(message) {
+  return REPO_SHAPED_CLI_PARSE_ERROR_PREFIXES.some((prefix) =>
+    message.startsWith(prefix),
+  );
 }
 /**
  * Parse `argv` against a declarative flag spec, using `util.parseArgs`
