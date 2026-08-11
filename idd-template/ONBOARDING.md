@@ -991,6 +991,7 @@ jobs:
       - run: node scripts/idd-doctor.mjs
         env:
           GH_TOKEN: ${{ github.token }}
+          GH_ENTERPRISE_TOKEN: ${{ github.token }}
 ```
 
 **`package-manager`** — the helper ships as an installed
@@ -1024,6 +1025,7 @@ jobs:
       - run: pnpm exec idd-doctor
         env:
           GH_TOKEN: ${{ github.token }}
+          GH_ENTERPRISE_TOKEN: ${{ github.token }}
 ```
 
 **`ephemeral-npx`** — no helper files or `devDependency` are vendored;
@@ -1054,6 +1056,7 @@ jobs:
       - run: npx --yes --package <reviewed-helper-spec> idd-doctor
         env:
           GH_TOKEN: ${{ github.token }}
+          GH_ENTERPRISE_TOKEN: ${{ github.token }}
 ```
 
 Both the extra `permissions:` scopes and `GH_TOKEN` are required:
@@ -1067,6 +1070,18 @@ silently skipped. The branch-protection probe stays unreadable
 regardless: it needs a repository-administration permission that
 GitHub Actions' `permissions:` model can't grant to `GITHUB_TOKEN`, so
 it keeps warning even with these scopes added.
+
+**Setting `GH_TOKEN` and `GH_ENTERPRISE_TOKEN` together.** `gh`'s
+environment-variable auth resolution is host-scoped (`gh help
+environment`): `GH_TOKEN`/`GITHUB_TOKEN` apply only when a command
+targets `github.com` or a `ghe.com` subdomain, while a self-hosted
+GitHub Enterprise Server (GHES) host reads
+`GH_ENTERPRISE_TOKEN`/`GITHUB_ENTERPRISE_TOKEN` instead. `gh` only
+reads the variable that matches its resolved host, so the three
+examples above set both — harmless on `github.com` and additive on
+GHES — instead of branching per host. If you copy one of these
+examples onto a GHES-hosted repository, keep both lines rather than
+deleting `GH_ENTERPRISE_TOKEN` as apparently redundant.
 
 This gate checks repository **health**, not the disposable-worktree rule:
 CI cannot detect a primary-worktree B1 violation (it leaves no trace in
