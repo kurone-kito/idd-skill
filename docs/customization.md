@@ -718,7 +718,17 @@ The recipe below adapts that workflow for adopters. Save it as
   labels must guard the names it actually uses.
 - `<labeler-bot-login-1>`, `<labeler-bot-login-2>`, ...: the login(s) of
   whichever semantic issue auto-labeler(s) this repository actually
-  runs, confirmed via the REST simple-user object's `login` and
+  runs. Build the complete list with a full-history sweep, not a single
+  observed event: read the paginated
+  `GET /repos/{owner}/{repo}/issues/events` endpoint to completion,
+  keeping only entries where `event == "labeled"` and the acting
+  actor's `type` is `Bot`. That endpoint returns issue and pull request
+  events together, so this one sweep needs no separate PR-side pass.
+  The sweep also buys something a single observed event cannot: it can
+  positively confirm a bot **never** labels, so a configured review bot
+  can be left out of this list on evidence instead of assumption.
+  Between sweeps, validate any single newly observed labeler the same
+  way — confirmed via the REST simple-user object's `login` and
   `type: Bot` fields directly on the event's `sender` (not a
   GraphQL-rendered display name). This is independent of, and not
   necessarily identical to, any `advisoryBotLogins` configured for PR
