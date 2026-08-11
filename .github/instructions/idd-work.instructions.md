@@ -132,8 +132,10 @@ If WorkTrunk is not available, choose the correct case:
 | Takeover — neither local nor remote (rare) | treat as fresh claim; preserve the inherited branch name |
 <!-- dprint-ignore-end -->
 
-For manual `git worktree add`, or WorkTrunk without an install hook,
-acquire the [worktree-local lock file](idd-claim.instructions.md#worktree-local-lock-file-same-machine-collision)
+For manual `git worktree add`, WorkTrunk without an install hook, or a
+compliant pinned harness-native tool (per "Harness-native worktree
+tools" above), acquire the
+[worktree-local lock file](idd-claim.instructions.md#worktree-local-lock-file-same-machine-collision)
 immediately after the worktree exists, **before Step 3** —
 `install-deps` itself writes into the worktree and runs lifecycle
 hooks, so acquiring the lock any later leaves that install unprotected.
