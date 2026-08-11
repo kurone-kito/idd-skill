@@ -732,9 +732,11 @@ The recipe below adapts that workflow for adopters. Save it as
   observed event cannot: it can confirm that, as of the sweep, a bot
   has never labeled, so a configured review bot with no matching
   history can be left out of this list on that evidence instead of
-  assumption. That absence is not permanent — re-run the sweep after
-  enabling new automation or after a long gap, since a bot with no
-  history yet can still start labeling later. Between sweeps, validate
+  assumption (field-reported 2026-08-11, kurone-kito/idd-skill#1928).
+  That absence is not permanent — re-run the sweep after enabling new
+  automation or after a long gap, since a bot with no history yet can
+  still start labeling later (preventive; no observed incident yet).
+  Between sweeps, validate
   any single newly observed labeler the same way — confirmed via the
   REST simple-user object's `login` and `type: Bot` fields directly on
   the event's `sender` (not a GraphQL-rendered display name). This is
