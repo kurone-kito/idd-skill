@@ -1250,8 +1250,11 @@ interface RerunPlanArgs {
    * {@link applyRerunPlan}. */
   apply: boolean;
   /** Raw `--check-name` value, trimmed but NOT yet defaulted -- an empty
-   * string means the flag was omitted. Resolve via {@link
-   * resolveCheckName} before use. Exists so an adopter whose job
+   * string means the flag was either omitted or given a
+   * whitespace-only value (indistinguishable after trimming, and
+   * treated identically by {@link resolveCheckName}: both fall back to
+   * {@link RERUN_PLAN_CHECK_NAME}). Resolve via {@link resolveCheckName}
+   * before use. Exists so an adopter whose job
    * definition carries a `name:` display-name override (changing the
    * actual check-run name away from the job id -- see the job-definition
    * comment in .github/workflows/idd-advisory-convergence.yml) can point
