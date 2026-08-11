@@ -35,6 +35,7 @@ import {
   formatCleanupBacklogRemediation,
   formatCleanupBacklogScanPreamble,
   formatCleanupBacklogScanProgress,
+  hookChainsToGithooksScript,
   hookWiresWorktreeGuard,
   isGithubBackLinkHost,
   parseIsoDurationToHours,
@@ -49,6 +50,7 @@ import {
   resolveConfiguredHelperRuntimeProfile,
   scanFileForPlaceholders,
   stripMarkdownNonText,
+  worktreeGuardWiredAt,
 } from '../src/scripts/idd-doctor.mts';
 import { loadJson } from '../src/scripts/validate-schemas.mts';
 
@@ -589,6 +591,51 @@ test('hookWiresWorktreeGuard treats a non-string (absent hook) as unwired', () =
   assert.equal(hookWiresWorktreeGuard(undefined), false);
 });
 
+test('hookChainsToGithooksScript detects the exec chain form', () => {
+  assert.equal(
+    hookChainsToGithooksScript(
+      '#!/bin/sh\nexec "$(git rev-parse --show-toplevel)/.githooks/pre-commit" "$@"\n',
+      'pre-commit',
+    ),
+    true,
+  );
+});
+
+test('hookChainsToGithooksScript detects the non-exec insertion form', () => {
+  assert.equal(
+    hookChainsToGithooksScript(
+      '#!/bin/sh\n"$(git rev-parse --show-toplevel)/.githooks/pre-push" "$@" || exit $?\nexec ./husky-real-hook\n',
+      'pre-push',
+    ),
+    true,
+  );
+});
+
+test('hookChainsToGithooksScript requires the matching hook name', () => {
+  assert.equal(
+    hookChainsToGithooksScript(
+      'exec "$(git rev-parse --show-toplevel)/.githooks/pre-commit" "$@"\n',
+      'pre-push',
+    ),
+    false,
+  );
+});
+
+test('hookChainsToGithooksScript ignores a commented-out chain line', () => {
+  assert.equal(
+    hookChainsToGithooksScript(
+      '#!/bin/sh\n# exec "$(git rev-parse --show-toplevel)/.githooks/pre-commit" "$@"\n',
+      'pre-commit',
+    ),
+    false,
+  );
+});
+
+test('hookChainsToGithooksScript treats a non-string (absent hook) as not chaining', () => {
+  assert.equal(hookChainsToGithooksScript(null, 'pre-commit'), false);
+  assert.equal(hookChainsToGithooksScript(undefined, 'pre-push'), false);
+});
+
 test('classifyWorktreeGuardActivation returns null when the guard is disabled', () => {
   assert.equal(
     classifyWorktreeGuardActivation({
@@ -636,6 +683,16 @@ test('classifyWorktreeGuardActivation warns (never errors) when enabled-but-iner
   assert.match(finding?.message ?? '', /worktreeGuard\.enabled is true/);
   assert.match(finding?.message ?? '', /core\.hooksPath = \.husky\/_/);
   assert.match(finding?.message ?? '', /git config core\.hooksPath \.githooks/);
+  // The remediation also points a chaining operator at the coexistence
+  // recipe instead of only telling them to repoint core.hooksPath directly.
+  assert.match(
+    finding?.message ?? '',
+    /existing hook manager already owns core\.hooksPath/,
+  );
+  assert.match(
+    finding?.message ?? '',
+    /Coexisting with an existing hook manager/,
+  );
 });
 
 test('classifyWorktreeGuardActivation shows (unset) when core.hooksPath is absent', () => {
@@ -662,6 +719,99 @@ test('readWorktreeGuardEnabled reads worktreeGuard.enabled from config', () => {
     assert.equal(readWorktreeGuardEnabled(dir), false);
     writeConfig({ markerPrefix: 'idd-skill' });
     assert.equal(readWorktreeGuardEnabled(dir), false);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+const GUARD_SOURCE_LINE = '. "$(dirname "$0")/_idd-worktree-guard.sh"\n';
+const chainLine = (hookName: string) =>
+  `exec "$(git rev-parse --show-toplevel)/.githooks/${hookName}" "$@"\n`;
+
+function writeFixtureFile(root: string, relativePath: string, content: string) {
+  const full = join(root, relativePath);
+  mkdirSync(join(full, '..'), { recursive: true });
+  writeFileSync(full, content);
+}
+
+test('worktreeGuardWiredAt: direct .githooks hooksPath wires both hooks (regression)', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'idd-guard-wired-'));
+  try {
+    writeFixtureFile(
+      dir,
+      '.githooks/pre-commit',
+      `#!/bin/sh\n${GUARD_SOURCE_LINE}`,
+    );
+    writeFixtureFile(
+      dir,
+      '.githooks/pre-push',
+      `#!/bin/sh\n${GUARD_SOURCE_LINE}`,
+    );
+    assert.equal(worktreeGuardWiredAt(dir, '.githooks'), true);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('worktreeGuardWiredAt: Husky-shape chain (core.hooksPath=.husky/_, committed .husky/<hook>) reads as wired', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'idd-guard-chain-'));
+  try {
+    writeFixtureFile(
+      dir,
+      '.githooks/pre-commit',
+      `#!/bin/sh\n${GUARD_SOURCE_LINE}`,
+    );
+    writeFixtureFile(
+      dir,
+      '.githooks/pre-push',
+      `#!/bin/sh\n${GUARD_SOURCE_LINE}`,
+    );
+    // Husky's generated dispatcher at core.hooksPath (.husky/_) does not
+    // itself chain; the committed, adopter-edited file lives one directory
+    // up, per ONBOARDING.md's chaining recipe.
+    writeFixtureFile(dir, '.husky/pre-commit', chainLine('pre-commit'));
+    writeFixtureFile(dir, '.husky/pre-push', chainLine('pre-push'));
+    assert.equal(worktreeGuardWiredAt(dir, '.husky/_'), true);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('worktreeGuardWiredAt: only one hook chained still reads as unwired', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'idd-guard-chain-partial-'));
+  try {
+    writeFixtureFile(
+      dir,
+      '.githooks/pre-commit',
+      `#!/bin/sh\n${GUARD_SOURCE_LINE}`,
+    );
+    writeFixtureFile(
+      dir,
+      '.githooks/pre-push',
+      `#!/bin/sh\n${GUARD_SOURCE_LINE}`,
+    );
+    writeFixtureFile(dir, '.husky/pre-commit', chainLine('pre-commit'));
+    // pre-push was never chained -- still enabled-but-inert overall.
+    writeFixtureFile(
+      dir,
+      '.husky/pre-push',
+      '#!/bin/sh\necho husky pre-push\n',
+    );
+    assert.equal(worktreeGuardWiredAt(dir, '.husky/_'), false);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('worktreeGuardWiredAt: a chain line pointing at a missing/unwired .githooks target reads as unwired', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'idd-guard-chain-broken-target-'));
+  try {
+    // .githooks/pre-commit does not exist at all -- a chain referencing it
+    // must not read as wired just because a chain line is present.
+    writeFixtureFile(dir, '.githooks/pre-push', 'echo not the guard\n');
+    writeFixtureFile(dir, '.husky/pre-commit', chainLine('pre-commit'));
+    writeFixtureFile(dir, '.husky/pre-push', chainLine('pre-push'));
+    assert.equal(worktreeGuardWiredAt(dir, '.husky/_'), false);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

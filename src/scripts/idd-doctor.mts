@@ -1711,6 +1711,36 @@ export function hookWiresWorktreeGuard(content: unknown): boolean {
 }
 
 /**
+ * True when a git hook file body chains execution to the corresponding
+ * shipped `.githooks/<hookName>` script via one of the two documented
+ * exec/invocation forms from ONBOARDING.md's "Coexisting with an existing
+ * hook manager" recipe:
+ *
+ * ```sh
+ * exec "$(git rev-parse --show-toplevel)/.githooks/<hookName>" "$@"
+ * "$(git rev-parse --show-toplevel)/.githooks/<hookName>" "$@" || exit $?
+ * ```
+ *
+ * Line-anchored and comment-immune the same way `hookWiresWorktreeGuard`
+ * is: a `#`-prefixed line (e.g. a leftover "was:" comment) never matches.
+ * Pure (no I/O) so it can be unit-tested directly. A non-string
+ * (absent/unreadable hook) is treated as not chaining.
+ */
+export function hookChainsToGithooksScript(
+  content: unknown,
+  hookName: string,
+): boolean {
+  if (typeof content !== 'string') {
+    return false;
+  }
+  const escaped = escapeRegex(hookName);
+  return new RegExp(
+    `^[ \\t]*(?:exec[ \\t]+)?"?[^"#\\n]*\\.githooks/${escaped}"?[ \\t]+"\\$@"`,
+    'm',
+  ).test(content);
+}
+
+/**
  * Decide whether the worktree guard is enabled-but-inert in the current
  * environment and, if so, produce a warning finding. Pure (no I/O) so it can
  * be unit-tested directly.
@@ -1750,28 +1780,56 @@ export function classifyWorktreeGuardActivation({
       `worktreeGuard.enabled is true but the commit/push guard is not active ` +
       `in this environment (core.hooksPath = ${shown}); B1 primary-worktree ` +
       `commits will NOT be blocked here. Wire it with: ` +
-      `git config core.hooksPath .githooks`,
+      `git config core.hooksPath .githooks — or, if an existing hook manager ` +
+      `already owns core.hooksPath here, chain each hook to the corresponding ` +
+      `.githooks/* script instead of repointing directly; see ONBOARDING.md's ` +
+      `"Coexisting with an existing hook manager" section`,
   };
 }
 
 /**
  * Read the `pre-commit` and `pre-push` hooks at the resolved `core.hooksPath`
- * and report whether both wire the B1 guard. A relative hooks path resolves
- * against the repository root; an absolute one is used as-is.
+ * and report whether both wire the B1 guard, directly or through a
+ * documented one-level chain. A relative hooks path resolves against the
+ * repository root; an absolute one is used as-is.
+ *
+ * A hook counts as wired when either:
+ *  - the file at `hooksPath` itself sources `_idd-worktree-guard.sh`
+ *    directly (the base, non-chained activation path), or
+ *  - the file at `hooksPath`, or the sibling file its manager hands off to
+ *    in `hooksPath`'s **parent** directory (the shape Husky v9's
+ *    `core.hooksPath = .husky/_` plus the committed `.husky/<hook>` file
+ *    takes — see ONBOARDING.md's "Coexisting with an existing hook
+ *    manager"), chains to the corresponding `.githooks/<hook>` script via a
+ *    documented exec/invocation line, **and** that `.githooks/<hook>` script
+ *    itself genuinely sources the guard (defense-in-depth against a chain
+ *    line pointing at a missing or tampered target).
+ *
+ * This stays bounded to the documented recipe's two concrete file
+ * locations — it does not trace an arbitrary hook manager's own dispatch
+ * machinery.
  */
-function worktreeGuardWiredAt(root: string, hooksPath: string): boolean {
+export function worktreeGuardWiredAt(root: string, hooksPath: string): boolean {
   const directory = isAbsolute(hooksPath) ? hooksPath : join(root, hooksPath);
-  const read = (name: string): string | null => {
+  const parentDirectory = join(directory, '..');
+  const githooksDirectory = join(root, '.githooks');
+  const read = (dir: string, name: string): string | null => {
     try {
-      return readFileSync(join(directory, name), 'utf8');
+      return readFileSync(join(dir, name), 'utf8');
     } catch {
       return null;
     }
   };
-  return (
-    hookWiresWorktreeGuard(read('pre-commit')) &&
-    hookWiresWorktreeGuard(read('pre-push'))
-  );
+  const wired = (name: string): boolean => {
+    if (hookWiresWorktreeGuard(read(directory, name))) {
+      return true;
+    }
+    const chains =
+      hookChainsToGithooksScript(read(directory, name), name) ||
+      hookChainsToGithooksScript(read(parentDirectory, name), name);
+    return chains && hookWiresWorktreeGuard(read(githooksDirectory, name));
+  };
+  return wired('pre-commit') && wired('pre-push');
 }
 
 /**
