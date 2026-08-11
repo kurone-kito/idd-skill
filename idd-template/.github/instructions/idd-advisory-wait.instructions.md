@@ -116,7 +116,6 @@ stalled `SATISFIED`) and request procedure:
 exclusively** (the **F3** column reads from it); `Outcome` governs
 **E14**, **F2**, and shell-fallback rows only (no `f3Outcome` there).
 
-- F3 must use `f3Outcome` when helper output is available.
 - If `copilotPending` is `false`, F3 treats advisory wait as satisfied.
 - If `copilotPending` is `true`, F3 must not merge on `WAIT`,
   `REQUEST_NEEDED`, or `RECOVERY_NEEDED`.
@@ -327,12 +326,14 @@ advisory-reroll: {agent-id} {PR_HEAD_SHA} {ISO8601-requested-at}
 ```
 
 Plain text, no HTML comment (matches `advisory-wait:`/
-`advisory-wait-recovery:`'s shape). Helper-first: the profile-selected
+`advisory-wait-recovery:`'s shape). Helper-first: profile-selected
 post-idd-marker command (`--type advisory-reroll --target pr
 <pr-number> --agent-id <id> --head-sha <PR_HEAD_SHA> --timestamp
-<ISO8601> --apply`); manual JSON `POST` is the fallback. If it cannot
-be posted or verified, fail closed to AW4's **Recovery failed** hold
-(mirrors AW3-R's routing on the same failure).
+<ISO8601> --apply`); manual `POST` is the fallback. If it cannot be
+posted or verified, fail closed to AW4's **Recovery failed** hold.
+
+**`suppressedCount` reroll unvalidated**: `#1511` covers `itemCount`
+(`kurone-kito/lints-config#243`/`#245` unresolved).
 
 ## Terminal Copilot stall-recovery contract (state, policy, markers, clock)
 
