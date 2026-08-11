@@ -1144,11 +1144,12 @@ Options:
   --from-profile <package-manager|vendored-node|ephemeral-npx|instructions-only>
   --package-manager <npm|pnpm|yarn>
   --package-spec <npm-spec-or-tarball-url>
-                        Affects package-spec-derived output only (composed
-                        install/invocation strings, the managed dependency
-                        pin, the echoed packageSpec value); never changes
-                        the reported command list, which always reflects
-                        this running build (see "runningBuild" in the JSON
+                        Affects package-spec-derived output only (each
+                        profile's composed install/invocation strings, the
+                        managed dependency pin, the echoed packageSpec
+                        value); never changes commandCatalog, which always
+                        reflects this running build regardless of profile
+                        or package-spec (see "runningBuild" in the JSON
                         output).
   --target-root <path>
   --help
