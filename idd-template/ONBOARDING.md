@@ -1164,6 +1164,79 @@ Ruleset, the same way other CI jobs are registered there. This is a
 maintainer GitHub-settings action taken outside of IDD automation, not
 something an agent applies on its own.
 
+**Avoid the classic-API pinning trap.** This applies specifically to
+GitHub's **classic** branch-protection API (`.../protection/...`) — a
+separate mechanism from the Ruleset just described above; this section
+does not claim Rulesets are unaffected, only that the classic API is
+the one field-verified here. That classic API silently rewrites a
+plain string-array `contexts` field into `app_id`-pinned `checks`
+entries: a `PUT .../protection`
+call configuring `contexts` comes back with a `checks` array carrying
+an `app_id` (for example, `15368` for `github-actions[bot]` on
+github.com — an implementation detail of that specific integration, not
+a portable constant; a GHES instance or a future GitHub change can
+differ). A pinned entry is exactly what the fail-closed "Source-pinned
+required-check trust" default (`ciGate.trustSourcePinnedRequiredChecks`
+— see the row in [Customizing IDD](docs/customization.md)) downgrades
+to unresolved even when green, so an operator who registers this or any
+other required check the straightforward way walks into that gate on
+the very first PR, for a reason nothing in the classic API response
+explains (observed 2026-08-11 onboarding a companion repository;
+[kurone-kito/idd-skill#1925](https://github.com/kurone-kito/idd-skill/issues/1925)).
+
+Use the narrower `PATCH .../required_status_checks` endpoint instead,
+with an explicit `checks` array and `app_id: -1` (any producer) rather
+than a plain `contexts` array. Substitute `{base-branch}` below with
+the literal protected branch name (for example `main`) — do not use
+`gh api`'s own `{branch}` magic placeholder, which silently resolves to
+whatever branch is currently checked out locally, not the protected
+branch (preventive; no observed incident yet — verified against
+`gh api --help`'s own placeholder documentation, not a field-observed
+adopter incident):
+
+```sh
+gh api --method PATCH \
+  repos/{owner}/{repo}/branches/{base-branch}/protection/required_status_checks \
+  --input - <<'JSON'
+{"checks": [{"context": "idd-advisory-convergence", "app_id": -1}]}
+JSON
+```
+
+**`PATCH` replaces the whole `checks` list — it does not merge into
+it** (preventive; no observed incident yet). If the branch already
+requires other checks (lint, build, tests, and so on), first fetch the
+current array:
+
+```sh
+gh api \
+  repos/{owner}/{repo}/branches/{base-branch}/protection/required_status_checks \
+  --jq '.checks'
+```
+
+Then include every existing entry alongside the new one in the
+`checks` array above — **except** an existing entry whose `context`
+already matches the check being added (for example, an existing
+pinned `idd-advisory-convergence` entry): replace that matching entry
+rather than appending a second one, since a duplicate context name
+where any entry is still pinned keeps the whole context classified as
+source-pinned regardless of the other, unpinned entry (preventive; no
+observed incident yet). Copy-pasting
+the snippet unqualified on a branch that already has required checks
+silently drops them, weakening the merge gate to only the newly added
+check.
+
+`app_id: -1` also trades away GitHub's producer-identity enforcement
+for the check it names (preventive; no observed incident yet) — a
+reasonable trade for `idd-advisory-convergence`, since only the
+adopter's own hosted workflow ever produces a check with that exact
+name, but not a blanket recommendation for every required check. Keep
+a specific `app_id` pin
+on any check where verifying the producer matters, and opt in to
+`ciGate.trustSourcePinnedRequiredChecks: true` (see the row in
+[Customizing IDD](docs/customization.md)) instead, once the operator
+has verified out-of-band that the pinned integration is the sole
+producer.
+
 **Waiver-after-deadline escape path.** `--assert` exits non-zero for
 any not-ready verdict, including the ordinary case where the primary
 advisory bot has not yet reviewed the current PR HEAD — GitHub Actions
