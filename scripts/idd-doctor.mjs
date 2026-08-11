@@ -6,7 +6,7 @@
 // .mjs. See docs/typescript-sources.md.
 import { execFileSync } from 'node:child_process';
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
-import { isAbsolute, join, relative, resolve } from 'node:path';
+import { basename, isAbsolute, join, relative, resolve } from 'node:path';
 import {
   normalizeAutopilotSuitabilityFloor,
   parseAutopilotSuitabilityMarker,
@@ -1540,13 +1540,21 @@ export function classifyWorktreeGuardActivation({
  *  - sources `_idd-worktree-guard.sh` directly (the base, non-chained
  *    activation path), or
  *  - itself chains to the corresponding `.githooks/<hook>` script via a
- *    documented exec/invocation line, or hands off to the sibling file in
- *    `hooksPath`'s **parent** directory that does (the shape Husky v9's
+ *    documented exec/invocation line, or — **only when `hooksPath`'s last
+ *    path segment is literally `_`**, the exact shape Husky v9's
  *    `core.hooksPath = .husky/_` plus the committed `.husky/<hook>` file
- *    takes — see ONBOARDING.md's "Coexisting with an existing hook
- *    manager"), with that `.githooks/<hook>` script itself confirmed to
- *    genuinely source the guard (defense-in-depth against a chain line
- *    pointing at a missing or tampered target).
+ *    takes (see ONBOARDING.md's "Coexisting with an existing hook
+ *    manager") — hands off to the sibling file in `hooksPath`'s **parent**
+ *    directory that does, with that `.githooks/<hook>` script itself
+ *    confirmed to genuinely source the guard (defense-in-depth against a
+ *    chain line pointing at a missing or tampered target).
+ *
+ * The parent-directory fallback is scoped to that one literal directory
+ * name deliberately: without it, a hook manager placing dispatchers at an
+ * arbitrary directory (e.g. `.other-hooks/dispatch`) could read as wired from
+ * an unrelated file that merely happens to sit in its parent directory and
+ * happens to contain a chain-shaped line, even though nothing connects the
+ * two files (Copilot review, PR #1969).
  *
  * The file at `hooksPath` must actually exist before either chain form is
  * trusted: when a hook manager's install is deleted or incomplete, git has
@@ -1561,6 +1569,7 @@ export function classifyWorktreeGuardActivation({
 export function worktreeGuardWiredAt(root, hooksPath) {
   const directory = isAbsolute(hooksPath) ? hooksPath : join(root, hooksPath);
   const parentDirectory = join(directory, '..');
+  const isHuskyUnderscoreSplit = basename(directory) === '_';
   const githooksDirectory = join(root, '.githooks');
   const read = (dir, name) => {
     try {
@@ -1581,7 +1590,8 @@ export function worktreeGuardWiredAt(root, hooksPath) {
     }
     const chains =
       hookChainsToGithooksScript(atHooksPath, name) ||
-      hookChainsToGithooksScript(read(parentDirectory, name), name);
+      (isHuskyUnderscoreSplit &&
+        hookChainsToGithooksScript(read(parentDirectory, name), name));
     return chains && hookWiresWorktreeGuard(read(githooksDirectory, name));
   };
   return wired('pre-commit') && wired('pre-push');

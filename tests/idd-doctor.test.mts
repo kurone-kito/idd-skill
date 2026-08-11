@@ -922,6 +922,47 @@ test('worktreeGuardWiredAt: no active hook file at core.hooksPath reads as unwir
   }
 });
 
+// Review feedback (PR #1969, Copilot suppressed comment): the
+// parent-directory fallback must be scoped to the documented Husky v9
+// `.husky/_` shape specifically -- otherwise an unrelated coincidental
+// file sitting in some other hooksPath's parent directory (no real
+// dispatch relationship to the active hook at all) could still read as
+// wired evidence.
+test('worktreeGuardWiredAt: parent-directory chain is ignored when hooksPath is not the Husky "_" shape', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'idd-guard-chain-non-underscore-'));
+  try {
+    writeFixtureFile(
+      dir,
+      '.githooks/pre-commit',
+      `#!/bin/sh\n${GUARD_SOURCE_LINE}`,
+    );
+    writeFixtureFile(
+      dir,
+      '.githooks/pre-push',
+      `#!/bin/sh\n${GUARD_SOURCE_LINE}`,
+    );
+    // The file git actually invokes at core.hooksPath: present, but a
+    // no-op that never dispatches anywhere.
+    writeFixtureFile(
+      dir,
+      '.other-hooks/dispatch/pre-commit',
+      '#!/bin/sh\nexit 0\n',
+    );
+    writeFixtureFile(
+      dir,
+      '.other-hooks/dispatch/pre-push',
+      '#!/bin/sh\nexit 0\n',
+    );
+    // A coincidental, unrelated file in the parent directory that happens
+    // to contain a chain-shaped line -- not a real Husky "_"-split sibling.
+    writeFixtureFile(dir, '.other-hooks/pre-commit', chainLine('pre-commit'));
+    writeFixtureFile(dir, '.other-hooks/pre-push', chainLine('pre-push'));
+    assert.equal(worktreeGuardWiredAt(dir, '.other-hooks/dispatch'), false);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('readWorktreeGuardEnabled returns false when config is missing or invalid', () => {
   const dir = mkdtempSync(join(tmpdir(), 'idd-guard-'));
   try {
