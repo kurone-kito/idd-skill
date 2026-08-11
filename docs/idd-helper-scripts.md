@@ -1914,8 +1914,11 @@ both converged only after an actual content change plus a fresh,
 non-reroll review. Too small a sample to establish a rate, but
 sufficient to mark the `suppressedCount` reroll path **unvalidated for
 convergence** -- treat cap exhaustion on a suppressed-only block as an
-anticipated outcome routed to the deadline/waiver backstop (AW6), not a
-diagnosis failure.
+anticipated outcome routed to the deadline/waiver backstop **or hold**
+(same split as the `exhausted` field above and the AW6 procedure's own
+step 5, including for adopters who keep the distributed
+`ciGate.externalCheckWaivers.mode: disabled` default), not a diagnosis
+failure.
 
 **AW6 procedure** (`idd-advisory-wait.instructions.md`), invoked only
 from F2 on a non-zero `--assert` exit:

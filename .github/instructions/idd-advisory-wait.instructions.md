@@ -337,8 +337,8 @@ post-idd-marker command (`--type advisory-reroll --target pr
 <ISO8601> --apply`); manual `POST` is the fallback. If it cannot be
 posted or verified, fail closed to AW4's **Recovery failed** hold.
 
-**`suppressedCount` reroll unvalidated**: `#1511` covers `itemCount`
-(`kurone-kito/lints-config#243`/`#245` not zeroed).
+**`suppressedCount` unvalidated**: `#1511` is `itemCount`-only; never
+zeroed in `kurone-kito/lints-config#243`/`#245`.
 
 ## Terminal Copilot stall-recovery contract (state, policy, markers, clock)
 
