@@ -384,3 +384,39 @@ test('extractShapedCliParseErrorMessage: scans every "Error: " line, not just th
     'unknown argument: --typo',
   );
 });
+
+test('extractShapedCliParseErrorMessage: preserves an embedded newline in the offending token instead of truncating at the first line (chatgpt-codex-connector review finding)', () => {
+  // A stray positional argument whose own value contains a literal
+  // newline (e.g. `node bin/idd-branch-name.mjs $'foo\nbar'`) makes
+  // toRepoShapedError() throw `Error: unknown argument: foo\nbar` -- a
+  // real Error whose .message already preserves the full verbatim token.
+  // Node's default uncaught-exception rendering then prints that message
+  // across two lines with no blank line or stack-frame marker between
+  // them before the stack trace begins, exactly like this fixture.
+  const stderrText = [
+    'Error: unknown argument: foo',
+    'bar',
+    '    at toRepoShapedError (file:///repo/scripts/cli-args.mjs:229:14)',
+    '',
+    'Node.js v22.22.2',
+  ].join('\n');
+  assert.equal(
+    extractShapedCliParseErrorMessage(stderrText),
+    'unknown argument: foo\nbar',
+  );
+});
+
+test('extractShapedCliParseErrorMessage: an embedded blank line inside the message is preserved too, not mistaken for the trailing Node.js-version blank line', () => {
+  const stderrText = [
+    'Error: unknown argument: foo',
+    '',
+    'bar',
+    '    at toRepoShapedError (file:///repo/scripts/cli-args.mjs:229:14)',
+    '',
+    'Node.js v22.22.2',
+  ].join('\n');
+  assert.equal(
+    extractShapedCliParseErrorMessage(stderrText),
+    'unknown argument: foo\n\nbar',
+  );
+});

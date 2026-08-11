@@ -106,6 +106,16 @@ test('bin/idd-branch-name.mjs: an unknown flag prints only the shaped one-line m
   assert.doesNotMatch(result.stderr, /ReferenceError/);
 });
 
+test('bin/idd-branch-name.mjs: a stray positional whose value contains an embedded newline is preserved in full, not truncated at the first line (chatgpt-codex-connector review finding)', () => {
+  const result = spawnCapture(BRANCH_NAME_BIN, ['foo\nbar']);
+  assert.notEqual(result.status, 0);
+  assert.equal(result.stderr.split('\n')[0], 'unknown argument: foo');
+  // The full token, including the embedded newline, is on the stream --
+  // this is what the earlier `.`-based (non-dotAll) line regex silently
+  // dropped.
+  assert.match(result.stderr, /^unknown argument: foo\nbar\nUsage:\n/);
+});
+
 test('bin/idd-branch-name.mjs: a missing value for a declared flag prints only the shaped message', () => {
   const result = spawnCapture(BRANCH_NAME_BIN, ['--number']);
   assert.notEqual(result.status, 0);
@@ -254,21 +264,39 @@ test("runHelper(): a long-running helper's stderr streams live, not buffered unt
         firstLineAt = Date.now() - start;
       }
     });
+    let closeAt: number | null = null;
     await new Promise<void>((resolvePromise, reject) => {
-      child.on('close', () => resolvePromise());
+      child.on('close', () => {
+        closeAt = Date.now() - start;
+        resolvePromise();
+      });
       child.on('error', reject);
     });
 
     // assert.ok (unlike assert.notEqual) is a recognized TypeScript
-    // assertion signature, narrowing firstLineAt to `number` for the bound
-    // check below.
+    // assertion signature, narrowing both timestamps to `number` for the
+    // gap check below.
     assert.ok(firstLineAt !== null, 'expected the first line to arrive');
-    // Generous bound (well under the ~1000ms gap to the second line) --
-    // this only needs to prove the first line didn't wait for the child
-    // to exit, not pin an exact latency.
+    assert.ok(closeAt !== null, 'expected the child to close');
+    // Measure the GAP between the first line arriving and the child
+    // closing, not an absolute wall-clock bound from spawn -- an absolute
+    // bound also counts two nested Node process boots (this test's own
+    // wrapper, then runHelper's spawned fixture) before the fixture's
+    // first line is even written, which a loaded CI runner can push past
+    // any reasonable fixed threshold on its own, independent of whether
+    // streaming actually works (chatgpt-codex-connector review finding on
+    // an earlier revision of this test: observed 532-582ms real CI
+    // latency against a naive 500ms bound, flaking a test proving a
+    // behavior that was in fact working). The gap check is immune to that
+    // startup latency: if streaming were broken (buffered until exit),
+    // the first line and the close would arrive together and the gap
+    // would be near zero regardless of how long startup took; a large gap
+    // is only possible if the first line really did arrive while the
+    // child was still running its ~1000ms sleep.
+    const gapMs = closeAt - firstLineAt;
     assert.ok(
-      firstLineAt < 500,
-      `expected the first line to arrive well before exit, got ${firstLineAt}ms`,
+      gapMs > 700,
+      `expected a gap of well over 700ms between the first line and child close (the fixture sleeps ~1000ms in between), got ${gapMs}ms`,
     );
   } finally {
     rmSync(tempRoot, { recursive: true, force: true });

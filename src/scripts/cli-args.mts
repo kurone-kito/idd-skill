@@ -311,11 +311,45 @@ function toRepoShapedError(error: unknown): Error {
  * matches, the safe default: a caller should forward the original text
  * unchanged in that case, exactly as it would for any other error class.
  */
+// Node's own stack-frame rendering, always "    at ..." (4+ spaces). Used
+// to find where a captured message ends -- see extractShapedCliParseErrorMessage's
+// line-scan below.
+const STACK_FRAME_LINE_PATTERN = /^\s+at /;
+// A line starting a new "Error: " block. Reused both to *find* candidate
+// blocks and to know where the *previous* block's message ends (a second
+// "Error: " line immediately terminates the one before it, same as a
+// stack frame would).
+const ERROR_LINE_PATTERN = /^Error: (.*)$/;
+
 export function extractShapedCliParseErrorMessage(
   stderrText: string,
 ): string | null {
-  for (const match of stderrText.matchAll(/^Error: (.+)$/gm)) {
-    const message = match[1];
+  // Line-based, not a single regex: a shaped message can itself contain an
+  // embedded newline (e.g. a stray positional argument whose literal value
+  // spans multiple lines -- the underlying parseCliArgs() error already
+  // preserves that verbatim; this scan must too, rather than truncating at
+  // the first line via a `.`-based pattern, which silently drops
+  // everything after the first embedded newline). A message block runs
+  // from its own "Error: " line up to (but not including) whichever comes
+  // first: a stack-frame line, the next "Error: " line, or the end of the
+  // text.
+  const lines = stderrText.split('\n');
+  for (let index = 0; index < lines.length; index += 1) {
+    const match = ERROR_LINE_PATTERN.exec(lines[index]);
+    if (match === null) {
+      continue;
+    }
+    const messageLines = [match[1]];
+    let cursor = index + 1;
+    while (
+      cursor < lines.length &&
+      !STACK_FRAME_LINE_PATTERN.test(lines[cursor]) &&
+      !ERROR_LINE_PATTERN.test(lines[cursor])
+    ) {
+      messageLines.push(lines[cursor]);
+      cursor += 1;
+    }
+    const message = messageLines.join('\n');
     if (
       REPO_SHAPED_CLI_PARSE_ERROR_PREFIXES.some((prefix) =>
         message.startsWith(prefix),
