@@ -10,11 +10,52 @@ import {
   GH_TEXT_LOOP_OPTIONS,
   GH_TEXT_LOOP_TIMEOUT_OPTIONS,
   ghApiJson,
+  ghGraphql,
   ghText,
   ghTextAsync,
+  resolveGhApiHostname,
   safeGhText,
   withBoundedRetry,
 } from '../src/scripts/gh-exec.mts';
+
+/**
+ * Save/restore `GH_HOST` and `GITHUB_SERVER_URL` around a test body (the
+ * `stubGh`/`process.env.PATH` pattern already used below) so a test that
+ * sets either variable can never leak into a later test -- both matter
+ * because CI itself defines `GITHUB_SERVER_URL=https://github.com` in the
+ * runner environment (#1962).
+ */
+function withGhHostEnv(
+  overrides: { GH_HOST?: string; GITHUB_SERVER_URL?: string },
+  run: () => void,
+): void {
+  const originalGhHost = process.env.GH_HOST;
+  const originalServerUrl = process.env.GITHUB_SERVER_URL;
+  if (overrides.GH_HOST === undefined) {
+    delete process.env.GH_HOST;
+  } else {
+    process.env.GH_HOST = overrides.GH_HOST;
+  }
+  if (overrides.GITHUB_SERVER_URL === undefined) {
+    delete process.env.GITHUB_SERVER_URL;
+  } else {
+    process.env.GITHUB_SERVER_URL = overrides.GITHUB_SERVER_URL;
+  }
+  try {
+    run();
+  } finally {
+    if (originalGhHost === undefined) {
+      delete process.env.GH_HOST;
+    } else {
+      process.env.GH_HOST = originalGhHost;
+    }
+    if (originalServerUrl === undefined) {
+      delete process.env.GITHUB_SERVER_URL;
+    } else {
+      process.env.GITHUB_SERVER_URL = originalServerUrl;
+    }
+  }
+}
 
 // Stub `gh` on PATH (the discover-roadmap-graph.test.mts / post-idd-marker.test.mts
 // pattern) so every scenario below exercises the real execFileSync + child-process
@@ -214,6 +255,119 @@ process.stdout.write('{}');
       'repos/o/r/issues/1',
       '--jq',
       '.title',
+    ]);
+  } finally {
+    restore();
+  }
+});
+
+test('resolveGhApiHostname returns undefined with no GH_HOST / GITHUB_SERVER_URL signal', () => {
+  withGhHostEnv({}, () => {
+    assert.equal(resolveGhApiHostname(), undefined);
+  });
+});
+
+test('resolveGhApiHostname returns undefined when GH_HOST is set, even alongside a GHES GITHUB_SERVER_URL (#1962)', () => {
+  withGhHostEnv(
+    {
+      GH_HOST: 'ghes.example.com',
+      GITHUB_SERVER_URL: 'https://other-ghes.example.com',
+    },
+    () => {
+      // gh already reads GH_HOST itself; a --hostname override here would
+      // be redundant at best and could disagree with an operator's
+      // explicit choice at worst.
+      assert.equal(resolveGhApiHostname(), undefined);
+    },
+  );
+});
+
+test('resolveGhApiHostname returns undefined for GITHUB_SERVER_URL=https://github.com (no behavior change on github.com, #1962)', () => {
+  withGhHostEnv({ GITHUB_SERVER_URL: 'https://github.com' }, () => {
+    assert.equal(resolveGhApiHostname(), undefined);
+  });
+});
+
+test('resolveGhApiHostname strips scheme and trailing slash for a GHES GITHUB_SERVER_URL (#1962)', () => {
+  withGhHostEnv({ GITHUB_SERVER_URL: 'https://ghes.example.com/' }, () => {
+    assert.equal(resolveGhApiHostname(), 'ghes.example.com');
+  });
+});
+
+test('resolveGhApiHostname lowercases a mixed-case GHES host and tolerates http scheme (#1962)', () => {
+  withGhHostEnv({ GITHUB_SERVER_URL: 'http://GHES.Example.com' }, () => {
+    assert.equal(resolveGhApiHostname(), 'ghes.example.com');
+  });
+});
+
+test('resolveGhApiHostname returns undefined for an empty GITHUB_SERVER_URL', () => {
+  withGhHostEnv({ GITHUB_SERVER_URL: '' }, () => {
+    assert.equal(resolveGhApiHostname(), undefined);
+  });
+});
+
+test('ghApiJson adds --hostname before extraArgs on a GHES GITHUB_SERVER_URL, and never on github.com (#1962)', () => {
+  const tempRoot = mkdtempSync(join(tmpdir(), 'idd-gh-exec-test-'));
+  const argsFile = join(tempRoot, 'args.json');
+  const restore = stubGh(`
+const fs = require('node:fs');
+fs.writeFileSync(${JSON.stringify(argsFile)}, JSON.stringify(process.argv.slice(2)));
+process.stdout.write('{}');
+`);
+  try {
+    withGhHostEnv({ GITHUB_SERVER_URL: 'https://ghes.example.com' }, () => {
+      ghApiJson('repos/o/r/issues/1', { extraArgs: ['--jq', '.title'] });
+    });
+    assert.deepEqual(JSON.parse(readFileSync(argsFile, 'utf8')), [
+      'api',
+      'repos/o/r/issues/1',
+      '--hostname',
+      'ghes.example.com',
+      '--jq',
+      '.title',
+    ]);
+    withGhHostEnv({ GITHUB_SERVER_URL: 'https://github.com' }, () => {
+      ghApiJson('repos/o/r/issues/1', { extraArgs: ['--jq', '.title'] });
+    });
+    assert.deepEqual(JSON.parse(readFileSync(argsFile, 'utf8')), [
+      'api',
+      'repos/o/r/issues/1',
+      '--jq',
+      '.title',
+    ]);
+  } finally {
+    restore();
+  }
+});
+
+test('ghGraphql adds --hostname before -f query on a GHES GITHUB_SERVER_URL, and never on github.com (#1962)', () => {
+  const tempRoot = mkdtempSync(join(tmpdir(), 'idd-gh-exec-test-'));
+  const argsFile = join(tempRoot, 'args.json');
+  const restore = stubGh(`
+const fs = require('node:fs');
+fs.writeFileSync(${JSON.stringify(argsFile)}, JSON.stringify(process.argv.slice(2)));
+process.stdout.write('{}');
+`);
+  try {
+    withGhHostEnv({ GITHUB_SERVER_URL: 'https://ghes.example.com' }, () => {
+      ghGraphql('query { viewer { login } }', {});
+    });
+    assert.deepEqual(JSON.parse(readFileSync(argsFile, 'utf8')), [
+      'api',
+      'graphql',
+      '--hostname',
+      'ghes.example.com',
+      '-f',
+      'query=query { viewer { login } }',
+    ]);
+    withGhHostEnv({ GITHUB_SERVER_URL: 'https://github.com' }, () => {
+      ghGraphql('query { viewer { login } }', {});
+    });
+    assert.deepEqual(JSON.parse(readFileSync(argsFile, 'utf8')), [
+      'api',
+      'graphql',
+      '-f',
+      'query=query { viewer { login } }',
     ]);
   } finally {
     restore();
