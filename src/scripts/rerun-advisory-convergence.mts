@@ -1249,6 +1249,18 @@ interface RerunPlanArgs {
    * via `gh run rerun` instead of only diagnosing them. See
    * {@link applyRerunPlan}. */
   apply: boolean;
+  /** Raw `--check-name` value, trimmed but NOT yet defaulted -- an empty
+   * string means the flag was either omitted or given a
+   * whitespace-only value (indistinguishable after trimming, and
+   * treated identically by {@link resolveCheckName}: both fall back to
+   * {@link RERUN_PLAN_CHECK_NAME}). Resolve via {@link resolveCheckName}
+   * before use. Exists so an adopter whose job
+   * definition carries a `name:` display-name override (changing the
+   * actual check-run name away from the job id -- see the job-definition
+   * comment in .github/workflows/idd-advisory-convergence.yml) can point
+   * this helper at the real name instead of it silently finding nothing
+   * (#1935). */
+  checkName: string;
 }
 
 /** A conservative GitHub owner/repo identifier character class --
@@ -1330,6 +1342,7 @@ export function parseArgs(argv: string[]): RerunPlanArgs {
       now: { type: 'string' },
       help: { type: 'boolean', short: 'h' },
       apply: { type: 'boolean' },
+      'check-name': { type: 'string' },
     },
     strict: true,
     allowPositionals: false,
@@ -1343,6 +1356,7 @@ export function parseArgs(argv: string[]): RerunPlanArgs {
       now: '',
       help: true,
       apply: false,
+      checkName: '',
     };
   }
 
@@ -1390,7 +1404,24 @@ export function parseArgs(argv: string[]): RerunPlanArgs {
     now: String(values.now ?? '').trim(),
     help: false,
     apply: Boolean(values.apply),
+    checkName: String(values['check-name'] ?? '').trim(),
   };
+}
+
+/**
+ * Resolve the check-run name {@link collectFromGitHub} searches for and
+ * reports, honoring `--check-name` when given and falling back to {@link
+ * RERUN_PLAN_CHECK_NAME} otherwise (an empty/whitespace-only value is
+ * treated the same as omitted, matching every other trimmed CLI string in
+ * this file). Extracted as its own pure, directly unit-testable function so
+ * the "omitting the flag keeps output byte-identical to before this flag
+ * existed" contract has direct test coverage instead of being reachable
+ * only through `collectFromGitHub`'s real `gh` I/O (#1935).
+ */
+export function resolveCheckName(
+  args: Pick<RerunPlanArgs, 'checkName'>,
+): string {
+  return args.checkName.trim() || RERUN_PLAN_CHECK_NAME;
 }
 
 /**
@@ -1537,7 +1568,7 @@ export function buildRerunPlanTextSections(
 
 function printHelp(): void {
   process.stdout.write(`Usage:
-  node scripts/rerun-advisory-convergence.mjs --pr <number> [--owner <owner> --repo <repo>] [--now <ISO8601>] [--apply] [--help]
+  node scripts/rerun-advisory-convergence.mjs --pr <number> [--owner <owner> --repo <repo>] [--now <ISO8601>] [--check-name <name>] [--apply] [--help]
 
 By default (without --apply): read-only. Fetches every
 "${RERUN_PLAN_CHECK_NAME}" check-run instance for the PR's current HEAD SHA
@@ -1569,6 +1600,16 @@ the target state resolved is printed to stderr.
 --owner and --repo must be given together (to inspect a PR outside the
 current checkout) or omitted together (to auto-detect the current
 checkout's own repository) -- providing only one is rejected.
+
+--check-name overrides the check-run name searched for and reported
+(default: "${RERUN_PLAN_CHECK_NAME}"). Use this when the job that
+produces the check has a "name:" display-name key on top of an
+unchanged job id -- GitHub Actions then names the check-run after that
+display name instead of the job id, so the default search silently
+finds nothing (field-reported, #1935; see the job-definition comment in
+.github/workflows/idd-advisory-convergence.yml for the full warning).
+Omitting this flag keeps output byte-identical to before this flag
+existed.
 
 Honors the inspected repository's configured ciWait.rerunPolicy: when
 it is "hold", both the rerun plan and the recovery-refresh plan stay
@@ -2150,12 +2191,8 @@ function collectFromGitHub(args: RerunPlanArgs): {
     GH_TEXT_LOOP_TIMEOUT_OPTIONS,
   ).toLowerCase();
 
-  const rawCheckRuns = fetchCheckRunsForRef(
-    owner,
-    repo,
-    prHeadSha,
-    RERUN_PLAN_CHECK_NAME,
-  );
+  const checkName = resolveCheckName(args);
+  const rawCheckRuns = fetchCheckRunsForRef(owner, repo, prHeadSha, checkName);
 
   // Resolve each unique run id exactly once (a direct by-ID GET, never a
   // list scan -- see fetchCheckRunsForRef's doc comment for why lists are
@@ -2331,7 +2368,7 @@ function collectFromGitHub(args: RerunPlanArgs): {
     input: {
       prNumber: Number(args.prNumber),
       prHeadSha,
-      checkName: RERUN_PLAN_CHECK_NAME,
+      checkName,
       owner,
       repo,
       instances,
