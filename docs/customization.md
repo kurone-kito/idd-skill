@@ -740,10 +740,11 @@ The recipe below adapts that workflow for adopters. Save it as
   the event's `sender` (not a GraphQL-rendered display name). This is
   independent of, and not necessarily identical to, any
   `advisoryBotLogins` configured for PR review — list only the
-  actor(s) that auto-label **issues**. ("Issues" here contrasts with
-  `advisoryBotLogins`' PR-review role — it does not exclude a bot the
-  sweep shows labeling only pull requests; the workflow's
-  `pull_request_target: labeled` trigger below uses this same list.)
+  actor(s) that auto-label **issues**. (This does not exclude a bot the
+  sweep shows labeling only pull requests: "issues" here contrasts with
+  `advisoryBotLogins`' PR-_review_ role, not the events this actor list
+  guards — the workflow's `pull_request_target: labeled` trigger below
+  reuses this same list.)
 
 This recipe guards the three policy-decision labels only. If this
 repository also configures `issueAuthoring.authoringLabelName`
