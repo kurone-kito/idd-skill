@@ -60,6 +60,13 @@ const LIVE_CONFIG_CANDIDATE_FILES = [
   'idd-policy.json',
 ];
 const NODE_ENGINES = '^22.22.2 || >=24.2.0';
+// Deliberately not a hardcoded release number: a literal version string
+// would silently go stale at the next release with no drift guard (unlike
+// NODE_ENGINES, which audit-docs.mjs's ENGINES_RANGE_MIRRORS keeps honest)
+// -- exactly the misleading-output class idd-skill#1923 exists to fix. Only
+// reached for a foreign/missing package.json root; the source repo,
+// package-manager, and ephemeral-npx paths always read the real version.
+const PACKAGE_VERSION_FALLBACK = 'unknown';
 const SCRIPT_FILE_EXTENSIONS = ['.mjs', '.js', '.json'];
 // Runtime data files a helper reads at execution time (not via `import`),
 // so the import-graph walk cannot discover them. A consumer that vendors
@@ -589,6 +596,10 @@ export function buildHelperRuntimeManifest({
   const selectedProfiles = normalizedProfile
     ? { [normalizedProfile]: profileCatalog[normalizedProfile] }
     : profileCatalog;
+  const runningBuild = {
+    version: packageMetadata.version,
+    commandListScope: 'running-build',
+  };
   return {
     version: 1,
     sourceRepository: packageMetadata.repository,
@@ -597,6 +608,11 @@ export function buildHelperRuntimeManifest({
     packageSpecPinHint: PACKAGE_SPEC_PIN_HINT,
     nodeEngines: packageMetadata.nodeEngines,
     packageManager: normalizedPackageManager,
+    // commandCatalog above always reflects this running build's own
+    // HELPER_COMMANDS, never the --package-spec target -- runningBuild
+    // discloses that scope machine-readably, plus this build's own
+    // version, independent of --profile (idd-skill#1923).
+    runningBuild,
     recommendation,
     availableProfiles: [...PROFILE_NAMES],
     commandCatalog,
@@ -741,6 +757,7 @@ export function resolveSourcePackageMetadata(packageRoot = PACKAGE_ROOT) {
     name: PACKAGE_NAME,
     repository: SOURCE_REPOSITORY,
     nodeEngines: NODE_ENGINES,
+    version: PACKAGE_VERSION_FALLBACK,
   };
   const packageJsonPath = resolve(packageRoot, 'package.json');
   if (!existsSync(packageJsonPath)) {
@@ -755,10 +772,20 @@ export function resolveSourcePackageMetadata(packageRoot = PACKAGE_ROOT) {
       name: PACKAGE_NAME,
       repository: normalizeRepository(packageJson.repository),
       nodeEngines: String(packageJson.engines?.node ?? NODE_ENGINES),
+      version: normalizePackageVersion(packageJson.version),
     };
   } catch {
     return fallback;
   }
+}
+// A non-string version (e.g. an object, if package.json were malformed)
+// must fall back rather than stringify to a misleading value like
+// "[object Object]" -- the exact silently-wrong-output class idd-skill#1923
+// exists to fix (idd-skill#1947 review finding).
+function normalizePackageVersion(version) {
+  return typeof version === 'string' && version
+    ? version
+    : PACKAGE_VERSION_FALLBACK;
 }
 function normalizeRepository(repository) {
   if (typeof repository === 'string' && repository) {
@@ -945,6 +972,13 @@ Options:
   --from-profile <package-manager|vendored-node|ephemeral-npx|instructions-only>
   --package-manager <npm|pnpm|yarn>
   --package-spec <npm-spec-or-tarball-url>
+                        Affects package-spec-derived output only (each
+                        profile's composed install/invocation strings, the
+                        managed dependency pin, the echoed packageSpec
+                        value); never changes commandCatalog, which always
+                        reflects this running build regardless of profile
+                        or package-spec (see "runningBuild" in the JSON
+                        output).
   --target-root <path>
   --help
 `);
