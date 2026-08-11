@@ -595,7 +595,7 @@
       "properties": {
         "enabled": {
           "type": "boolean",
-          "description": "Opt-in toggle for the disposable-worktree guard (default false; absent means false). When enabled, the guard's enforcement consumers treat a primary-worktree implementation-branch HEAD as a blocking error instead of an advisory warning: idd-doctor (and its --strict CI step) fail, and the optional core.hooksPath hook rejects the commit or push. Those consumers ship incrementally across the worktree-guard rollout, so enabling this flag alone has no effect until they are present. Absent or false preserves the historical advisory-only behavior."
+          "description": "Opt-in toggle for the disposable-worktree guard (default false; absent means false). When enabled, `idd-doctor` treats a primary-worktree implementation-branch HEAD as a blocking error instead of an advisory warning (the same effect as its `--strict` flag), and the optional local `core.hooksPath` hook rejects the commit or push once wired. Worktree enforcement stays local by design: a primary-worktree violation leaves no trace in pushed history, so no CI step enforces it. Absent or false preserves the historical advisory-only behavior."
         },
         "branchPatterns": {
           "type": "array",
