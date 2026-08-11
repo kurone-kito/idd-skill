@@ -41,6 +41,7 @@ import { execFileSync } from 'node:child_process';
 import {
   chmodSync,
   copyFileSync,
+  existsSync,
   lstatSync,
   mkdirSync,
   readdirSync,
@@ -465,15 +466,31 @@ export function resolvePlaceholderValues(
 const PLACEHOLDER_TOKEN_PATTERN = /\{\{[A-Z][A-Z0-9_]*\}\}/g;
 /** Directories never scanned for placeholder tokens. */
 const SCAN_EXCLUDED_DIRS = new Set(['.git', 'node_modules']);
+/**
+ * Paths (relative to the substitution target root, `/`-separated) that
+ * document the seven onboarding placeholders rather than consume them —
+ * they intentionally keep every worked-example token literal, so a blind
+ * global rewrite corrupts their headings and orphans prose that refers
+ * back to the token by name (#1924). Both `scanPlaceholderTokens` and
+ * `applySubstitutionPlan` skip these paths, so they neither contribute
+ * matches to a substitution plan nor get rewritten even if a plan is
+ * ever built from a hand-rolled scan. Extend this set in one place if a
+ * later meta-doc needs the same carve-out.
+ */
+export const SCAN_EXCLUDED_PATHS = new Set([
+  'docs/onboarding/placeholders.md',
+  'docs/customization.md',
+  'docs/onboarding/policy-decisions.md',
+]);
 function isProbablyBinary(content) {
   return content.includes(0);
 }
 /**
  * Walk the target tree (excluding `.git` and `node_modules`, skipping
- * binary files) and collect every placeholder-shaped `{{...}}` token per
- * file, in ascending path order. Symlinks are deliberately not followed:
- * imported template files are regular files, and following links could
- * escape the target tree.
+ * binary files and `SCAN_EXCLUDED_PATHS`) and collect every
+ * placeholder-shaped `{{...}}` token per file, in ascending path order.
+ * Symlinks are deliberately not followed: imported template files are
+ * regular files, and following links could escape the target tree.
  */
 export function scanPlaceholderTokens(targetDir) {
   const results = [];
@@ -498,6 +515,10 @@ export function scanPlaceholderTokens(targetDir) {
       if (!entry.isFile()) {
         continue;
       }
+      const relativePath = relative(targetDir, absolute).split('\\').join('/');
+      if (SCAN_EXCLUDED_PATHS.has(relativePath)) {
+        continue;
+      }
       const raw = readFileSync(absolute);
       if (isProbablyBinary(raw)) {
         continue;
@@ -510,7 +531,7 @@ export function scanPlaceholderTokens(targetDir) {
       }
       if (tokens.size > 0) {
         results.push({
-          file: relative(targetDir, absolute).split('\\').join('/'),
+          file: relativePath,
           tokens,
         });
       }
@@ -518,6 +539,17 @@ export function scanPlaceholderTokens(targetDir) {
   };
   walk(targetDir);
   return results;
+}
+/**
+ * The subset of `SCAN_EXCLUDED_PATHS` that exists under `targetDir`,
+ * sorted. `--substitute` reports this list as `skippedPaths` in its
+ * printed verdict so an operator can see the meta-doc carve-out applied
+ * rather than inferring it from an absent plan entry.
+ */
+export function listSkippedPlaceholderPaths(targetDir) {
+  return [...SCAN_EXCLUDED_PATHS]
+    .filter((path) => existsSync(resolve(targetDir, path)))
+    .sort();
 }
 /**
  * Combine the token scan with the resolved values into the substitution
@@ -567,11 +599,16 @@ export function buildSubstitutionPlan(scans, resolution) {
  * Apply the plan: rewrite each planned file in a single replacement pass
  * over the placeholder-token pattern, so a token injected by one
  * substitution value is never re-substituted by a later one. Returns the
- * count of files written.
+ * count of files written. `SCAN_EXCLUDED_PATHS` entries are skipped here
+ * too, defense-in-depth alongside `scanPlaceholderTokens`'s own skip, in
+ * case a caller ever builds a plan from a hand-rolled scan.
  */
 export function applySubstitutionPlan(targetDir, plan) {
   const byFile = new Map();
   for (const entry of plan.entries) {
+    if (SCAN_EXCLUDED_PATHS.has(entry.file)) {
+      continue;
+    }
     const tokens = byFile.get(entry.file) ?? new Map();
     tokens.set(entry.from, entry.to);
     byFile.set(entry.file, tokens);
@@ -1146,6 +1183,7 @@ function runCli() {
     plan: plan.entries,
     residue: plan.residue,
     unknownTokens: plan.unknownTokens,
+    skippedPaths: listSkippedPlaceholderPaths(targetDir),
     filesChanged,
     written: canWrite && filesChanged > 0,
   };
@@ -1248,9 +1286,13 @@ target tree that already contains the imported template files
 (auto-derived from repository evidence where
 idd-template/docs/onboarding/placeholders.md defines a derivation;
 explicit flags override; --trusted-marker-actor is always explicit) and
-rewrites the files. Prints a JSON verdict with the per-file,
-per-placeholder plan, blocking residue (unresolved onboarding
-placeholders), and informational unknown {{...}} tokens.
+rewrites the files. Skips the placeholder-reference meta-docs
+(docs/onboarding/placeholders.md, docs/customization.md,
+docs/onboarding/policy-decisions.md), which document the tokens rather
+than consume them and stay literal on purpose. Prints a JSON verdict
+with the per-file, per-placeholder plan, blocking residue (unresolved
+onboarding placeholders), informational unknown {{...}} tokens, and the
+skipped meta-doc paths present in the target.
 
 Exit codes: 0 converged; 1 residue would remain (apply writes nothing
 in that case); 2 usage or configuration error.

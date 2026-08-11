@@ -1183,8 +1183,16 @@ Use
 for the detailed placeholder meanings, no-op substitution rules, and
 marker-prefix guidance.
 
+**Three meta-docs stay literal on purpose**:
+`docs/onboarding/placeholders.md`, `docs/customization.md`, and
+`docs/onboarding/policy-decisions.md` document the seven placeholders
+with worked `{{...}}` examples rather than consuming them, so
+`--substitute` skips all three by path and never rewrites them (#1924).
+`--verify`'s placeholder-residue check applies the same skip, so their
+surviving tokens are expected and not reported as unresolved.
+
 After replacing, verify that no `{{...}}` placeholder strings remain in
-any copied file.
+any copied file other than those three meta-docs.
 
 ---
 

@@ -38,6 +38,7 @@ import {
   deriveMarkerPrefix,
   deriveValidateCommands,
   escapeJsonStringContent,
+  listSkippedPlaceholderPaths,
   MARKER_PREFIX_PATTERN,
   ONBOARDING_PLACEHOLDERS,
   parseRemoteRepoRef,
@@ -45,6 +46,7 @@ import {
   resolveImportFiles,
   resolvePlaceholderValues,
   runVerify,
+  SCAN_EXCLUDED_PATHS,
   scanPlaceholderTokens,
 } from '../src/scripts/idd-onboard.mts';
 
@@ -627,6 +629,104 @@ test('binary files and excluded directories are not scanned', () => {
 });
 
 // ---------------------------------------------------------------------------
+// #1924 — meta-docs that document the placeholders stay literal
+// ---------------------------------------------------------------------------
+
+/** Write a token-bearing copy of each `SCAN_EXCLUDED_PATHS` doc into `root`. */
+function writeExcludedMetaDocs(root: string): void {
+  for (const relativePath of SCAN_EXCLUDED_PATHS) {
+    const absolute = join(root, ...relativePath.split('/'));
+    mkdirSync(dirname(absolute), { recursive: true });
+    writeFileSync(
+      absolute,
+      `# Reference\n\n\`{{REPO_NAME}}\` names the repository.\n`,
+    );
+  }
+}
+
+test('scanPlaceholderTokens skips SCAN_EXCLUDED_PATHS meta-docs entirely', () => {
+  const root = makeFixtureDir();
+  writeExcludedMetaDocs(root);
+  writeFileSync(join(root, 'README.md'), '# {{REPO_NAME}}\n');
+  const scans = scanPlaceholderTokens(root);
+  assert.deepEqual(scans.map((scan) => scan.file).sort(), ['README.md']);
+});
+
+test('--substitute leaves the meta-docs byte-identical, including on a second re-sync run', () => {
+  const root = makeFixtureDir();
+  writeTemplateFixture(root);
+  writeExcludedMetaDocs(root);
+  const before = new Map(
+    [...SCAN_EXCLUDED_PATHS].map((relativePath) => [
+      relativePath,
+      readFileSync(join(root, ...relativePath.split('/'))),
+    ]),
+  );
+  const resolution = resolvePlaceholderValues(root, ALL_OVERRIDES, {
+    readRemoteUrl: () => null,
+  });
+  for (let run = 0; run < 2; run += 1) {
+    const plan = buildSubstitutionPlan(scanPlaceholderTokens(root), resolution);
+    // The meta-docs never contribute a plan entry.
+    assert.ok(
+      plan.entries.every((entry) => !SCAN_EXCLUDED_PATHS.has(entry.file)),
+    );
+    applySubstitutionPlan(root, plan);
+  }
+  for (const [relativePath, original] of before) {
+    const after = readFileSync(join(root, ...relativePath.split('/')));
+    assert.ok(original.equals(after), `byte mismatch: ${relativePath}`);
+  }
+  // Every non-excluded site still converges normally in the same run.
+  assert.equal(
+    readFileSync(join(root, 'README.md'), 'utf8'),
+    '# my-app\n\nWorktree example: ../my-app.issue-1-fix\n',
+  );
+});
+
+test('applySubstitutionPlan refuses to rewrite a SCAN_EXCLUDED_PATHS entry even from a hand-built plan', () => {
+  const root = makeFixtureDir();
+  writeExcludedMetaDocs(root);
+  const [excludedPath] = SCAN_EXCLUDED_PATHS;
+  const before = readFileSync(join(root, ...excludedPath.split('/')));
+  const filesChanged = applySubstitutionPlan(root, {
+    entries: [
+      {
+        file: excludedPath,
+        placeholder: 'REPO_NAME',
+        occurrences: 1,
+        from: '{{REPO_NAME}}',
+        to: 'my-app',
+      },
+    ],
+    residue: [],
+    unknownTokens: [],
+  });
+  assert.equal(filesChanged, 0);
+  assert.ok(
+    before.equals(readFileSync(join(root, ...excludedPath.split('/')))),
+  );
+});
+
+test('checkPlaceholderResidue does not report the meta-docs as unresolved residue', () => {
+  const root = makeFixtureDir();
+  writeExcludedMetaDocs(root);
+  const result = checkPlaceholderResidue(root);
+  assert.deepEqual(result.residue, []);
+  assert.deepEqual(result.unknownTokens, []);
+});
+
+test('listSkippedPlaceholderPaths reports only the meta-docs present in the target, sorted', () => {
+  const root = makeFixtureDir();
+  const [firstPath] = [...SCAN_EXCLUDED_PATHS].sort();
+  mkdirSync(dirname(join(root, ...firstPath.split('/'))), {
+    recursive: true,
+  });
+  writeFileSync(join(root, ...firstPath.split('/')), '# ref\n');
+  assert.deepEqual(listSkippedPlaceholderPaths(root), [firstPath]);
+});
+
+// ---------------------------------------------------------------------------
 // Wave 2: --import (manifest-driven fetch/copy)
 // ---------------------------------------------------------------------------
 
@@ -1177,6 +1277,32 @@ test('bin/idd-onboard.mjs --substitute --dry-run prints the plan and writes noth
   assertTreeUnchanged(root, before);
 });
 
+test('bin/idd-onboard.mjs --substitute summary lists the skipped meta-doc paths', () => {
+  const root = makeFixtureDir();
+  writeTemplateFixture(root);
+  writeExcludedMetaDocs(root);
+  const before = new Map(
+    [...SCAN_EXCLUDED_PATHS].map((relativePath) => [
+      relativePath,
+      readFileSync(join(root, ...relativePath.split('/'))),
+    ]),
+  );
+  const { status, verdict } = runCliBin([
+    '--substitute',
+    '--target',
+    root,
+    ...CLI_OVERRIDE_FLAGS,
+  ]);
+  assert.equal(status, 0);
+  assert.deepEqual(verdict.skippedPaths, [...SCAN_EXCLUDED_PATHS].sort());
+  for (const [relativePath, original] of before) {
+    assert.ok(
+      original.equals(readFileSync(join(root, ...relativePath.split('/')))),
+      `byte mismatch: ${relativePath}`,
+    );
+  }
+});
+
 test('bin/idd-onboard.mjs without --dry-run applies exactly the planned edits', () => {
   const dryRoot = makeFixtureDir();
   writeTemplateFixture(dryRoot);
@@ -1636,6 +1762,31 @@ test('checkPlaceholderResidue classifies a leftover onboarding placeholder as bl
 test('checkPlaceholderResidue reports nothing for a fully substituted target', () => {
   const targetRoot = makeFixtureDir();
   importAndSubstitute(targetRoot);
+  const result = checkPlaceholderResidue(targetRoot);
+  assert.deepEqual(result.residue, []);
+});
+
+test('#1924 regression: importing the real template keeps the meta-docs literal', () => {
+  // The three real idd-template/docs meta-docs carry live {{TOKEN}}
+  // worked examples today (the field-reported corruption source), so this
+  // exercises the actual distributed files rather than a synthetic
+  // fixture.
+  const targetRoot = makeFixtureDir();
+  importAndSubstitute(targetRoot);
+  for (const relativePath of SCAN_EXCLUDED_PATHS) {
+    const sourceBytes = readFileSync(
+      join(REPO_ROOT, 'idd-template', ...relativePath.split('/')),
+    );
+    const targetBytes = readFileSync(
+      join(targetRoot, ...relativePath.split('/')),
+    );
+    assert.ok(
+      sourceBytes.equals(targetBytes),
+      `byte mismatch after import+substitute: ${relativePath}`,
+    );
+  }
+  // --verify's residue check must not read their surviving tokens as
+  // unresolved placeholders.
   const result = checkPlaceholderResidue(targetRoot);
   assert.deepEqual(result.residue, []);
 });
