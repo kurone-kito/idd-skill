@@ -742,7 +742,7 @@ The recipe below adapts that workflow for adopters. Save it as
   `advisoryBotLogins` configured for PR review — list only the
   actor(s) that auto-label **issues**. (This does not exclude a bot the
   sweep shows labeling only pull requests: "issues" here contrasts with
-  `advisoryBotLogins`' PR-_review_ role, not the events this actor list
+  `advisoryBotLogins`' PR-review role, not the events this actor list
   guards — the workflow's `pull_request_target: labeled` trigger below
   reuses this same list.)
 
