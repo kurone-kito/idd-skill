@@ -232,11 +232,12 @@ future inventory reviews do not need to re-infer their role from code.
   `--cleanup-backlog-window-days 1` to keep it fast, mirroring CI.
 - `scripts/helper-runtime-manifest.mjs` (`idd-helper-bundle-manifest`) —
   import helper and manifest inspector; emits machine-readable helper wiring
-  for `package-manager`, `vendored-node`, and `ephemeral-npx` profiles. Its
-  output always carries a `runningBuild: { version, commandListScope:
-  "running-build" }` field disclosing that the reported command list
-  describes only the currently running helper build, independent of any
-  `--package-spec` target (referenced in
+  for all four profiles (`package-manager`, `vendored-node`,
+  `ephemeral-npx`, and `instructions-only`). Its output always carries a
+  `runningBuild: { version, commandListScope: "running-build" }` field
+  disclosing that the reported command list describes only the currently
+  running helper build, independent of any `--package-spec` target
+  (referenced in
   [kurone-kito/idd-skill#1923](https://github.com/kurone-kito/idd-skill/issues/1923)).
 - `scripts/phase-id-resolver.mjs` (`idd-phase-id-resolver`) — phase ID
   normalization utility; resolves canonical phase IDs from aliases and
