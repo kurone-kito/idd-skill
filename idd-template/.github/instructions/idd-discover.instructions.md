@@ -285,6 +285,19 @@ authorizes an alternate scope for the current run:
   unresolvable with the reason, skip that branch, and continue
   traversal. Not an enumeration failure.
 
+**Termination.** Do not re-expand a target already on the current
+traversal path; record the back-edge as a cycle with its path and
+continue with the next reference.
+
+**Single visit.** A node is identified by issue number; a node
+reached again through another path is the same node — collect it
+once, never enter it into the candidate set twice.
+
+**Provenance.** Keep and report every distinct path that reaches a
+node, not only the first — the same rule the cross-roadmap union
+below already applies to a leaf reachable from several roadmap
+roots.
+
 **Helper read timing.** The `discover-roadmap-graph` helper (see
 [IDD helper script evaluation](../../docs/idd-helper-scripts.md)) is
 long-running on large graphs, emitting the whole graph in one final
@@ -292,9 +305,9 @@ stdout write. Redirect stdout to a file and wait for process exit before
 parsing — a zero-byte or mid-run read is **"still running," not** an A2
 enumeration failure.
 
-Report every A2 execution candidate with its provenance path (e.g.
-`#222 → #228 → #257`), any open roadmap nodes, and unresolvable
-references before passing to A3.
+Report every A2 execution candidate with its provenance paths (e.g.
+`#222 → #228 → #257`), any open roadmap nodes, cycles, duplicate
+references, and unresolvable references before passing to A3.
 
 **Autopilot cross-roadmap union (optional, additive).** When A1 elected
 the cross-roadmap mode, enumerate from **each** open roadmap root and
