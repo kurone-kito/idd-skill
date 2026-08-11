@@ -313,7 +313,11 @@ completion.
    **On a stray match**: amend the offending commit (`git commit
    --amend` for the tip commit, or an interactive rebase for an
    earlier one) using the same safe reordering as the Mirror
-   false-positive example above. On a signed-commit repo whose primary
+   false-positive example above. If the branch already carries a merge
+   commit (for example, from an E-phase `main` sync), rebase with
+   `--rebase-merges` instead of a plain interactive rebase, so the
+   merge and its recorded conflict resolution aren't silently
+   linearized or dropped. On a signed-commit repo whose primary
    signing is non-interactive-hostile, run the amend or rebase through
    the same D1 fallback-signing wrapper noted above, including any
    rebase continuation — the plain command can stall the same way D1
