@@ -845,26 +845,34 @@ routine `pnpm install` after activation leaves this guard unwired
 again with no error. `idd-doctor`'s enabled-but-inert detection (below) correctly
 flags this again, but nothing about the reset itself is a bug — do not
 assume `core.hooksPath` is free to claim outright. Chain each existing
-hook to `exec` the corresponding `.githooks/*` script instead: add a
-line that resolves the repository root explicitly, so the hook still
-works when git invokes it from a subdirectory. Place that line before
-any terminal `exec` or `exit` already in the hook file — a line
-appended after one of those never runs — or, for a hook file with no
-terminal command, append it as the last line. When the hook manager
-doesn't define that hook file yet (for example, Husky ships only
-`pre-commit` until an adopter adds `pre-push` themselves), create it
-with that same chain line as its entire contents. The B1 guard needs
-both hooks chained:
+hook to the corresponding `.githooks/*` script instead, resolving the
+repository root explicitly so the hook still works when git invokes it
+from a subdirectory. When the hook manager doesn't define that hook
+file yet (for example, Husky ships only `pre-commit` until an adopter
+adds `pre-push` themselves), create it with the chain line as its
+entire contents, using `exec` since nothing else needs to run
+afterward. When the file already exists but has no terminal `exec` or
+`exit` of its own, append the same `exec` form as its last line. When
+the file already ends in a terminal `exec` or `exit`, don't `exec` the
+chain line too — `exec` never returns, so it would swallow that
+terminal command exactly as surely as appending after it would.
+Instead insert an _invoked_ (not `exec`'d) call before it, propagating
+a nonzero exit so a failing guard still stops the hook, while a
+passing one lets control reach the manager's own terminal command
+afterward. The B1 guard needs both hooks chained:
 
 ```sh
-# Add to .husky/pre-commit -- before any terminal exec/exit, else at the end
-# (create the file with just this line if it doesn't exist yet):
+# .husky/pre-commit doesn't exist yet, or has no terminal exec/exit of its own
+# -- create or append this as the last line:
 exec "$(git rev-parse --show-toplevel)/.githooks/pre-commit" "$@"
 
-# Add to .husky/pre-push -- before any terminal exec/exit, else at the end
-# (create the file with just this line if it doesn't exist yet):
-exec "$(git rev-parse --show-toplevel)/.githooks/pre-push" "$@"
+# .husky/pre-commit already ends in a terminal exec/exit -- insert this line
+# before it instead (not exec'd, so that command still runs):
+"$(git rev-parse --show-toplevel)/.githooks/pre-commit" "$@" || exit $?
 ```
+
+The same two forms apply to `.husky/pre-push`, substituting
+`pre-push` for `pre-commit` throughout.
 
 `idd-doctor`'s enabled-but-inert check reads the hook files at the
 resolved `core.hooksPath` directly; it does not follow a hook
@@ -942,10 +950,17 @@ actually took effect with `idd-doctor`, which surfaces an
 **enabled-but-inert** finding when `worktreeGuard.enabled` is `true`
 but `core.hooksPath` is not pointed at `.githooks`, the signal that the
 setup step silently did not run. For the chaining path, `idd-doctor`'s
-confirmation is unreliable for the detector gap noted above: verify
-the committed chain lines are present in the manager's hook files
-instead of relying on a clean `idd-doctor` result. This is activation
-guidance only; the adopter default stays opt-in **off**.
+confirmation is unreliable for the detector gap noted above, but
+chain-line presence alone isn't a safe substitute either: a fresh
+ephemeral clone checks out the committed chain lines immediately, even
+when the setup lifecycle never ran and `core.hooksPath` is still
+unset — the exact failure this confirmation step exists to catch.
+Verify both instead: that the committed chain lines are present in the
+manager's hook files, and that `git config --get core.hooksPath`
+resolves to the manager's own hooks directory (not empty), confirming
+its lifecycle actually ran and wired that value rather than just that
+the files exist. This is activation guidance only; the adopter default
+stays opt-in **off**.
 
 ### Optional — run idd-doctor as a CI health gate
 
