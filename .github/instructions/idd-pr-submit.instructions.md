@@ -315,13 +315,16 @@ completion.
    **On a stray match**: amend the offending commit (`git commit
    --amend` for the tip commit, or an interactive rebase for an
    earlier one) using the same safe reordering as the Mirror
-   false-positive example above, then re-push. **Amend before
-   merge** — this scan runs at merge time, so the fix must land before
-   the PR merges; a commit message caught only after merge cannot be
-   amended, and recovery requires reopening the affected issue by
-   hand. Repeat this step once after the amendment. If it still finds
-   a stray match, post a hold note on the issue citing the PR URL and
-   stop. Do not proceed to D4.
+   false-positive example above, then force-push the correction
+   (`git push --force-with-lease`) — this step runs before D4, ahead
+   of any review, so rewriting history here is a sanctioned exception
+   to D2's normal-push rule, not the exceptional recovery route D2
+   itself describes. **Amend before merge** — this scan runs at merge
+   time, so the fix must land before the PR merges; a commit message
+   caught only after merge cannot be amended, and recovery requires
+   reopening the affected issue by hand. Repeat this step once after
+   the amendment. If it still finds a stray match, post a hold note on
+   the issue citing the PR URL and stop. Do not proceed to D4.
 
 ## D4 — Wait for CI
 
