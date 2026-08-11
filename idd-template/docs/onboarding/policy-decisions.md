@@ -424,7 +424,8 @@ This repository uses the following IDD policies:
 ### Required-Check Registration
 
 **Classic-API `contexts` pinning trap avoided**:
-`{yes — explicit checks array, app_id: -1 (any producer) | yes — explicit checks array, intentionally pinned app_id plus ciGate.trustSourcePinnedRequiredChecks opt-in | no / not applicable}`
+`{yes, app_id: -1 (any producer) | yes, intentionally pinned plus
+trustSourcePinnedRequiredChecks opt-in | no / not applicable}`
 
 ### Credential Scope
 
