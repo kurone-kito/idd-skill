@@ -163,8 +163,9 @@ are installed:
   `[pre-start].install` in `.config/wt.toml`): The hook must acquire the
   lock before installing, as described above; after the hook succeeds,
   skip this step.
-- **Manual `git worktree add` or WorkTrunk without a hook**: `cd` into
-  the newly created worktree, then run **install-deps**.
+- **Manual `git worktree add`, WorkTrunk without a hook, or a
+  compliant pinned harness-native tool**: `cd` into the newly created
+  worktree, then run **install-deps**.
 
 `install-deps` must remain safe to rerun during retries, takeovers, and
 recreated worktrees without manual cleanup.
