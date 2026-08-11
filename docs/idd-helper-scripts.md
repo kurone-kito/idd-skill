@@ -1399,15 +1399,19 @@ to post it is the consuming track's job.
 ### Rerun-plan diagnosis (stuck advisory-convergence)
 
 - Source repo / vendored-node command:
-  `node scripts/rerun-advisory-convergence.mjs --pr <pr-number> [--apply]`
+
+  ```sh
+  node scripts/rerun-advisory-convergence.mjs --pr <pr-number> [--check-name <name>] [--apply]
+  ```
+
 - Package-manager / ephemeral-npx command: use the
   profile-selected `idd:rerun-advisory-convergence` command from the
-  helper runtime manifest wiring above, with `[--apply]` appended the
-  same way; the literal invocation is:
+  helper runtime manifest wiring above, with `[--check-name <name>]`
+  and `[--apply]` appended the same way; the literal invocation is:
 
   ```sh
   npx --yes --package <helper-package-spec> \
-    idd-rerun-advisory-convergence --pr <pr-number> [--apply]
+    idd-rerun-advisory-convergence --pr <pr-number> [--check-name <name>] [--apply]
   ```
 
 - Rerun-plan diagnosis (#1431) for a stuck `idd-advisory-convergence`
@@ -1456,6 +1460,17 @@ to post it is the consuming track's job.
   the next, and stops early once the recomputed plan is fully resolved --
   a `bot-gated-skip`, `awaiting-fresh-review`, or rerun-budget-held
   instance is never rerun
+- `--check-name <name>` (#1935) overrides the check-run name searched for
+  and reported, defaulting to `idd-advisory-convergence` when omitted
+  (byte-identical output to before this flag existed). Use it when the
+  job that produces the check has a `name:` display-name key on top of
+  an unchanged job id -- GitHub Actions then names the check-run after
+  that display name instead of the job id, so the default search
+  silently finds nothing; see the job-definition comment in
+  `.github/workflows/idd-advisory-convergence.yml` for the full warning.
+  The not-found message names whichever check-run name was actually
+  searched, so a mismatch names its own cause instead of only its
+  symptom
 
 ### Merge-gate evidence
 

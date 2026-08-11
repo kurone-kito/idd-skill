@@ -21,6 +21,7 @@ import {
   type RerunPlanInput,
   type RerunPlanOptions,
   type RerunPlanRawInstance,
+  resolveCheckName,
   resolveCheckRunUrl,
   runRerunAdvisoryConvergence,
   sanitizeRemoteConfig,
@@ -1409,6 +1410,23 @@ test('describeNoActionState reports no instances found when the batch is empty',
   );
 });
 
+// #1935: the not-found message must name the ACTUAL check-run name that
+// was searched, not the hardcoded default -- so a `--check-name` override
+// (an adopter's job carries a `name:` display-name key) names its own
+// cause instead of only its symptom.
+test('describeNoActionState names the custom check-run name that was searched, not the default', () => {
+  const plan = computeRerunPlan(
+    baseInput({
+      checkName: 'The idd-advisory-convergence check',
+      instances: [],
+    }),
+    baseOptions(),
+  );
+  const message = describeNoActionState(plan);
+  assert.match(message, /"The idd-advisory-convergence check"/);
+  assert.doesNotMatch(message, new RegExp(`"${RERUN_PLAN_CHECK_NAME}"`));
+});
+
 test('describeNoActionState surfaces pending, bot-gated, and unresolved counts instead of claiming nothing to do', () => {
   const plan = computeRerunPlan(
     baseInput({
@@ -1960,6 +1978,7 @@ test('parseArgs parses --pr, --owner, --repo, --now', () => {
     now: NOW,
     help: false,
     apply: false,
+    checkName: '',
   });
 });
 
@@ -2029,6 +2048,48 @@ test('parseArgs recognizes --help', () => {
 test('parseArgs recognizes --apply, defaulting to false when omitted', () => {
   assert.equal(parseArgs(['--pr', '1431']).apply, false);
   assert.equal(parseArgs(['--pr', '1431', '--apply']).apply, true);
+});
+
+// --- --check-name (#1935: escape hatch for a job `name:` override) ------
+
+test('parseArgs defaults checkName to the empty string when --check-name is omitted', () => {
+  assert.equal(parseArgs(['--pr', '1431']).checkName, '');
+});
+
+test('parseArgs parses --check-name', () => {
+  const args = parseArgs([
+    '--pr',
+    '1431',
+    '--check-name',
+    'The idd-advisory-convergence check',
+  ]);
+  assert.equal(args.checkName, 'The idd-advisory-convergence check');
+});
+
+test('parseArgs trims --check-name', () => {
+  const args = parseArgs(['--pr', '1431', '--check-name', '  custom-name  ']);
+  assert.equal(args.checkName, 'custom-name');
+});
+
+test('parseArgs fails fast when --check-name has a missing value', () => {
+  assert.throws(() => parseArgs(['--pr', '1431', '--check-name']), {
+    code: 'ERR_PARSE_ARGS_INVALID_OPTION_VALUE',
+  });
+});
+
+test('resolveCheckName falls back to RERUN_PLAN_CHECK_NAME when checkName is empty (flag omitted) -- keeps output byte-identical to before this flag existed', () => {
+  assert.equal(resolveCheckName({ checkName: '' }), RERUN_PLAN_CHECK_NAME);
+});
+
+test('resolveCheckName falls back to RERUN_PLAN_CHECK_NAME when checkName is whitespace-only', () => {
+  assert.equal(resolveCheckName({ checkName: '   ' }), RERUN_PLAN_CHECK_NAME);
+});
+
+test('resolveCheckName honors a custom checkName', () => {
+  assert.equal(
+    resolveCheckName({ checkName: 'The idd-advisory-convergence check' }),
+    'The idd-advisory-convergence check',
+  );
 });
 
 // parseArgs delegates mechanical parsing to node:util's own stable
@@ -2223,6 +2284,37 @@ test('runRerunAdvisoryConvergence returns the parsed args alongside the plan', (
   });
   assert.equal(result.args.prNumber, 1431);
   assert.equal(result.args.apply, true);
+});
+
+test('runRerunAdvisoryConvergence threads --check-name through to deps.collect', () => {
+  let receivedCheckName: string | null = null;
+  const result = runRerunAdvisoryConvergence(
+    ['--pr', '1431', '--check-name', 'The idd-advisory-convergence check'],
+    {
+      collect: (args) => {
+        receivedCheckName = args.checkName;
+        return {
+          input: baseInput({
+            checkName: args.checkName || RERUN_PLAN_CHECK_NAME,
+          }),
+          options: baseOptions(),
+        };
+      },
+    },
+  );
+  assert.equal(receivedCheckName, 'The idd-advisory-convergence check');
+  assert.equal(result.plan?.checkName, 'The idd-advisory-convergence check');
+});
+
+test('runRerunAdvisoryConvergence leaves checkName empty (default) when --check-name is omitted', () => {
+  let receivedCheckName: string | null = null;
+  runRerunAdvisoryConvergence(['--pr', '1431'], {
+    collect: (args) => {
+      receivedCheckName = args.checkName;
+      return { input: baseInput(), options: baseOptions() };
+    },
+  });
+  assert.equal(receivedCheckName, '');
 });
 
 // --- applyRerunPlan -------------------------------------------------------
