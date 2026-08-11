@@ -495,6 +495,17 @@ test('filterIddBranchMergedPrs honors a custom pattern list instead of the defau
   ]);
 });
 
+// idd-skill#1936: when every merged PR's head ref fails every configured
+// pattern (all non-IDD traffic in the window), the filter must return an
+// empty array rather than falling back to the unfiltered input.
+test('filterIddBranchMergedPrs returns an empty array when every entry is non-matching', () => {
+  const prs = [
+    { number: 401, headRefName: 'dependabot/npm_and_yarn/lodash-4.17.21' },
+    { number: 402, headRefName: 'renovate/eslint-9.x' },
+  ];
+  assert.deepEqual(filterIddBranchMergedPrs(prs), []);
+});
+
 test('classifyWorktreeHeadFinding returns null when HEAD is not a violation', () => {
   assert.equal(
     classifyWorktreeHeadFinding(

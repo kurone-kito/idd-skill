@@ -1791,10 +1791,10 @@ function checkPostMergeCleanupBacklog(root, options, report) {
   // routine non-IDD merge (Dependabot dependency bumps, for example) never
   // created a branch the F4 cleanup-evidence contract applies to, so it
   // must not count toward the backlog total or the `Examples: ...` list.
-  const iddMergedPrs = filterIddBranchMergedPrs(
-    mergedPrs,
-    readWorktreeGuardBranchPatterns(root),
-  );
+  // Hoisted into a named variable (idd-skill#1936) so the warning text
+  // below can name the patterns actually in effect, not just apply them.
+  const branchPatterns = readWorktreeGuardBranchPatterns(root);
+  const iddMergedPrs = filterIddBranchMergedPrs(mergedPrs, branchPatterns);
   if (iddMergedPrs.length === 0) {
     return;
   }
@@ -1873,8 +1873,13 @@ function checkPostMergeCleanupBacklog(root, options, report) {
   const examplesText = verdict.examples.map((n) => `#${n}`).join(', ');
   const { profile, packageSpec } = resolveConfiguredHelperRuntime(root);
   const remediation = formatCleanupBacklogRemediation(profile, packageSpec);
+  // State the scoping explicitly (idd-skill#1936) so an operator reading a
+  // low count does not misread it as "no merged PRs in the window" --
+  // non-IDD merges (Dependabot bumps, etc.) are already excluded above and
+  // never reach this count.
+  const patternsText = branchPatterns.join(', ');
   report.warnings.push(
-    `post-merge cleanup backlog: ${verdict.count} merged PRs in the last ${windowDays} days lack F4 cleanup evidence (warn threshold: ${warnThreshold}). Examples: ${examplesText}. ${remediation}`,
+    `post-merge cleanup backlog: ${verdict.count} merged PRs in the last ${windowDays} days lack F4 cleanup evidence (warn threshold: ${warnThreshold}; scoped to IDD branch patterns: ${patternsText}). Examples: ${examplesText}. ${remediation}`,
   );
 }
 // Default drift thresholds (idd-skill#1269): warn when the checked-out HEAD
