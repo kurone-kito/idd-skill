@@ -325,8 +325,8 @@ F2-only (`#1511`) on `sameHeadReroll.eligible`; see
 advisory-reroll: {agent-id} {PR_HEAD_SHA} {ISO8601-requested-at}
 ```
 
-Plain text (matches `advisory-wait:`'s shape). Helper-first:
-profile-selected post-idd-marker command (`--type advisory-reroll
+Plain text, no HTML comment (matches `advisory-wait:`'s shape).
+Helper-first: profile-selected post-idd-marker command (`--type advisory-reroll
 --target pr <pr-number> --agent-id <id> --head-sha <PR_HEAD_SHA>
 --timestamp <ISO8601> --apply`); manual `POST` is fallback. If it
 cannot be posted or verified, fail closed to AW4's **Recovery failed**
