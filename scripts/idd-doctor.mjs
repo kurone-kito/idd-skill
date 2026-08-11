@@ -5,8 +5,15 @@
 // above by `pnpm run build`. Edit the .mts source, never the generated
 // .mjs. See docs/typescript-sources.md.
 import { execFileSync } from 'node:child_process';
-import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
-import { basename, isAbsolute, join, relative, resolve } from 'node:path';
+import {
+  accessSync,
+  existsSync,
+  constants as fsConstants,
+  readdirSync,
+  readFileSync,
+  statSync,
+} from 'node:fs';
+import { isAbsolute, join, relative, resolve } from 'node:path';
 import {
   normalizeAutopilotSuitabilityFloor,
   parseAutopilotSuitabilityMarker,
@@ -1468,8 +1475,13 @@ export function hookWiresWorktreeGuard(content) {
  * `exec`, a guard failure that isn't explicitly propagated can be silently
  * swallowed by whatever the hook manager's own dispatcher runs next, so an
  * invocation lacking that suffix is not accepted as reliable chaining
- * evidence. Pure (no I/O) so it can be unit-tested directly. A non-string
- * (absent/unreadable hook) is treated as not chaining.
+ * evidence. Both forms must also end the line (only trailing whitespace and
+ * an optional `#` comment may follow) — a trailing shell operator such as
+ * `| cat` or a backgrounding `&` can decouple the line's own exit status
+ * from the guard's, so a line carrying either form of the two documented
+ * commands plus anything else is not accepted either. Pure (no I/O) so it
+ * can be unit-tested directly. A non-string (absent/unreadable hook) is
+ * treated as not chaining.
  */
 export function hookChainsToGithooksScript(content, hookName) {
   if (typeof content !== 'string') {
@@ -1477,8 +1489,9 @@ export function hookChainsToGithooksScript(content, hookName) {
   }
   const escaped = escapeRegex(hookName);
   const quotedPath = `"\\$\\(git rev-parse --show-toplevel\\)/\\.githooks/${escaped}"`;
-  const execForm = `exec[ \\t]+${quotedPath}[ \\t]+"\\$@"`;
-  const nonExecForm = `${quotedPath}[ \\t]+"\\$@"[ \\t]*\\|\\|[ \\t]*exit[ \\t]+\\$\\?`;
+  const lineEnd = '[ \\t]*(?:#.*)?$';
+  const execForm = `exec[ \\t]+${quotedPath}[ \\t]+"\\$@"${lineEnd}`;
+  const nonExecForm = `${quotedPath}[ \\t]+"\\$@"[ \\t]*\\|\\|[ \\t]*exit[ \\t]+\\$\\?${lineEnd}`;
   return new RegExp(`^[ \\t]*(?:${execForm}|${nonExecForm})`, 'm').test(
     content,
   );
@@ -1535,32 +1548,32 @@ export function classifyWorktreeGuardActivation({
  * documented one-level chain. A relative hooks path resolves against the
  * repository root; an absolute one is used as-is.
  *
- * A hook counts as wired when the file **actually present at
- * `hooksPath`** — the one git itself would invoke — either:
+ * A hook counts as wired when the file **actually present and executable
+ * at `hooksPath`** — the one git itself would invoke, and only when git
+ * would actually invoke it: git silently skips a hook file that exists but
+ * lacks the executable bit — either:
  *  - sources `_idd-worktree-guard.sh` directly (the base, non-chained
  *    activation path), or
  *  - itself chains to the corresponding `.githooks/<hook>` script via a
- *    documented exec/invocation line, or — **only when `hooksPath`'s last
- *    path segment is literally `_`**, the exact shape Husky v9's
+ *    documented exec/invocation line, or — **only when `hooksPath` resolves
+ *    to exactly `.husky/_`**, the precise shape Husky v9's own
  *    `core.hooksPath = .husky/_` plus the committed `.husky/<hook>` file
  *    takes (see ONBOARDING.md's "Coexisting with an existing hook
  *    manager") — hands off to the sibling file in `hooksPath`'s **parent**
  *    directory that does, with that `.githooks/<hook>` script itself
- *    confirmed to genuinely source the guard (defense-in-depth against a
- *    chain line pointing at a missing or tampered target).
+ *    confirmed to both genuinely source the guard and be executable
+ *    (defense-in-depth against a chain line pointing at a missing,
+ *    non-executable, or tampered target).
  *
- * The parent-directory fallback is scoped to that one literal directory
- * name deliberately: without it, a hook manager placing dispatchers at an
- * arbitrary directory (e.g. `.other-hooks/dispatch`) could read as wired from
- * an unrelated file that merely happens to sit in its parent directory and
- * happens to contain a chain-shaped line, even though nothing connects the
- * two files (Copilot review, PR #1969).
- *
- * The file at `hooksPath` must actually exist before either chain form is
- * trusted: when a hook manager's install is deleted or incomplete, git has
- * no active hook to invoke there at all, so a committed chain line living
- * only in the parent directory is not reachable and must not read as
- * wired just because it is present on disk.
+ * The parent-directory fallback checks the **full path** relative to the
+ * repository root, not merely `hooksPath`'s last path segment: matching on
+ * a bare trailing `_` would also fire for an unrelated directory that
+ * happens to end in `_` (e.g. `.other-hooks/_`), and matching on an
+ * arbitrary directory at all — without the executable-bit check above —
+ * would let an unrelated file that merely happens to sit in some other
+ * hooksPath's parent directory, and happens to contain a chain-shaped
+ * line, supply chain evidence for two files with no real dispatch
+ * relationship (Copilot + Codex review, PR #1969).
  *
  * This stays bounded to the documented recipe's two concrete file
  * locations — it does not trace an arbitrary hook manager's own dispatch
@@ -1569,7 +1582,8 @@ export function classifyWorktreeGuardActivation({
 export function worktreeGuardWiredAt(root, hooksPath) {
   const directory = isAbsolute(hooksPath) ? hooksPath : join(root, hooksPath);
   const parentDirectory = join(directory, '..');
-  const isHuskyUnderscoreSplit = basename(directory) === '_';
+  const isHuskyUnderscoreSplit =
+    relative(root, directory).split('\\').join('/') === '.husky/_';
   const githooksDirectory = join(root, '.githooks');
   const read = (dir, name) => {
     try {
@@ -1578,21 +1592,33 @@ export function worktreeGuardWiredAt(root, hooksPath) {
       return null;
     }
   };
+  const isExecutable = (dir, name) => {
+    try {
+      accessSync(join(dir, name), fsConstants.X_OK);
+      return true;
+    } catch {
+      return false;
+    }
+  };
   const wired = (name) => {
     const atHooksPath = read(directory, name);
+    // git silently skips a hook file that exists but isn't executable, so
+    // neither wiring form below is reachable without this bit set.
+    if (atHooksPath === null || !isExecutable(directory, name)) {
+      return false;
+    }
     if (hookWiresWorktreeGuard(atHooksPath)) {
       return true;
-    }
-    // No active hook file at core.hooksPath at all: git has nothing to
-    // invoke here, so a committed chain line elsewhere is unreachable.
-    if (atHooksPath === null) {
-      return false;
     }
     const chains =
       hookChainsToGithooksScript(atHooksPath, name) ||
       (isHuskyUnderscoreSplit &&
         hookChainsToGithooksScript(read(parentDirectory, name), name));
-    return chains && hookWiresWorktreeGuard(read(githooksDirectory, name));
+    return (
+      chains &&
+      hookWiresWorktreeGuard(read(githooksDirectory, name)) &&
+      isExecutable(githooksDirectory, name)
+    );
   };
   return wired('pre-commit') && wired('pre-push');
 }

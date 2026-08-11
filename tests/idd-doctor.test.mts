@@ -1,5 +1,11 @@
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  chmodSync,
+  mkdirSync,
+  mkdtempSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
@@ -698,6 +704,40 @@ test('hookChainsToGithooksScript rejects a non-exec invocation missing the failu
   );
 });
 
+// Review feedback (PR #1969, chatgpt-codex-connector): neither documented
+// form was end-anchored, so a trailing shell operator (piping, or
+// backgrounding) that decouples the line's own exit status from the
+// guard's could still match.
+test('hookChainsToGithooksScript rejects an exec form piped to another command (false-positive regression)', () => {
+  assert.equal(
+    hookChainsToGithooksScript(
+      'exec "$(git rev-parse --show-toplevel)/.githooks/pre-commit" "$@" | cat\n',
+      'pre-commit',
+    ),
+    false,
+  );
+});
+
+test('hookChainsToGithooksScript rejects a non-exec form backgrounded with &  (false-positive regression)', () => {
+  assert.equal(
+    hookChainsToGithooksScript(
+      '"$(git rev-parse --show-toplevel)/.githooks/pre-commit" "$@" || exit $? &\n',
+      'pre-commit',
+    ),
+    false,
+  );
+});
+
+test('hookChainsToGithooksScript still accepts a trailing comment after either documented form', () => {
+  assert.equal(
+    hookChainsToGithooksScript(
+      'exec "$(git rev-parse --show-toplevel)/.githooks/pre-commit" "$@"  # invoke the guard\n',
+      'pre-commit',
+    ),
+    true,
+  );
+});
+
 test('classifyWorktreeGuardActivation returns null when the guard is disabled', () => {
   assert.equal(
     classifyWorktreeGuardActivation({
@@ -802,6 +842,12 @@ function writeFixtureFile(root: string, relativePath: string, content: string) {
   const full = join(root, relativePath);
   mkdirSync(join(full, '..'), { recursive: true });
   writeFileSync(full, content);
+  // git skips a hook file lacking the executable bit; writeFileSync's
+  // default mode does not set it, so every fixture hook file must be made
+  // executable explicitly to be a faithful "active hook" stand-in. Callers
+  // that specifically need a non-executable fixture chmod it back off
+  // afterward.
+  chmodSync(full, 0o755);
 }
 
 test('worktreeGuardWiredAt: direct .githooks hooksPath wires both hooks (regression)', () => {
@@ -958,6 +1004,63 @@ test('worktreeGuardWiredAt: parent-directory chain is ignored when hooksPath is 
     writeFixtureFile(dir, '.other-hooks/pre-commit', chainLine('pre-commit'));
     writeFixtureFile(dir, '.other-hooks/pre-push', chainLine('pre-push'));
     assert.equal(worktreeGuardWiredAt(dir, '.other-hooks/dispatch'), false);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// Review feedback (PR #1969, chatgpt-codex-connector): the Husky
+// parent-directory fallback must key on the exact `.husky/_` path relative
+// to the repository root, not merely a trailing `_` path segment -- an
+// unrelated directory that happens to also end in `_` (e.g. `.other-hooks/_`)
+// has no real Husky dispatch relationship to its own parent directory.
+test('worktreeGuardWiredAt: a directory merely ending in "_" is not treated as the Husky shape', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'idd-guard-chain-fake-underscore-'));
+  try {
+    writeFixtureFile(
+      dir,
+      '.githooks/pre-commit',
+      `#!/bin/sh\n${GUARD_SOURCE_LINE}`,
+    );
+    writeFixtureFile(
+      dir,
+      '.githooks/pre-push',
+      `#!/bin/sh\n${GUARD_SOURCE_LINE}`,
+    );
+    writeFixtureFile(dir, '.other-hooks/_/pre-commit', '#!/bin/sh\nexit 0\n');
+    writeFixtureFile(dir, '.other-hooks/_/pre-push', '#!/bin/sh\nexit 0\n');
+    writeFixtureFile(dir, '.other-hooks/pre-commit', chainLine('pre-commit'));
+    writeFixtureFile(dir, '.other-hooks/pre-push', chainLine('pre-push'));
+    assert.equal(worktreeGuardWiredAt(dir, '.other-hooks/_'), false);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// Review feedback (PR #1969, chatgpt-codex-connector P1): git silently
+// skips a hook file that exists but lacks the executable bit, so an
+// existence-only check is not sufficient evidence that git would invoke it.
+test('worktreeGuardWiredAt: a present but non-executable active hook file reads as unwired', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'idd-guard-chain-non-executable-'));
+  try {
+    writeFixtureFile(
+      dir,
+      '.githooks/pre-commit',
+      `#!/bin/sh\n${GUARD_SOURCE_LINE}`,
+    );
+    writeFixtureFile(
+      dir,
+      '.githooks/pre-push',
+      `#!/bin/sh\n${GUARD_SOURCE_LINE}`,
+    );
+    writeFixtureFile(dir, '.husky/_/pre-commit', HUSKY_DISPATCHER_STUB);
+    // Readable, but not executable -- e.g. an incomplete install or a
+    // checkout that lost its mode bit.
+    chmodSync(join(dir, '.husky/_/pre-commit'), 0o644);
+    writeFixtureFile(dir, '.husky/_/pre-push', HUSKY_DISPATCHER_STUB);
+    writeFixtureFile(dir, '.husky/pre-commit', chainLine('pre-commit'));
+    writeFixtureFile(dir, '.husky/pre-push', chainLine('pre-push'));
+    assert.equal(worktreeGuardWiredAt(dir, '.husky/_'), false);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
