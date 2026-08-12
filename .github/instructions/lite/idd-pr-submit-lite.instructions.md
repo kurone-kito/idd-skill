@@ -219,8 +219,8 @@ loop instead of returning to this D1 rebase path.
    English if absent — see
    [Authoring Language](../../../docs/customization.md#authoring-language));
    the closing keyword line stays canonical English regardless —
-   GitHub's parser and step 4's own regex below match only the
-   English keyword forms.
+   GitHub's parser and D3.5's verification regex below match only
+   the English keyword forms.
 4. **Closing keyword**: write a plain-text line such as `Closes #N` for
    the claimed issue number, on its own line. GitHub recognizes these
    keyword forms (case-insensitive): `close`, `closes`, `closed`, `fix`,
