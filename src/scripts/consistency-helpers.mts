@@ -1184,6 +1184,67 @@ export function collectEnginesRangeMirrorViolations(
   return violations;
 }
 
+/**
+ * POSIX-shell single-quotes `value` so it copy-pastes as one literal
+ * argument regardless of embedded shell metacharacters (`$()`, spaces,
+ * single quotes, ...). Used only for building human-facing remediation
+ * text below -- `bin/**\/*.mjs` paths come from `git ls-files`, not
+ * untrusted input, but a repository path is still attacker-influenced in
+ * principle (e.g. a malicious branch), and the remediation command is
+ * meant to be copy-pasted straight into a shell.
+ */
+function quoteShellArgument(value: string): string {
+  return `'${value.replaceAll("'", `'"'"'`)}'`;
+}
+
+/**
+ * Collect executable-mode violations for `bin/**\/*.mjs` CLI entry-point
+ * scripts (#1971): every file whose first line is a `#!` shebang must be
+ * tracked executable (git mode `100755`), so a plain checkout or `npx
+ * idd-*` resolution both work without relying on a package manager's `bin`
+ * field to fix the mode up after the fact -- that side effect only ever
+ * touches the working-tree file, never git's own tracked mode, which is
+ * what causes a spurious mode-only `git status`/`git diff` after every
+ * fresh install. Pure (no direct I/O) so it can be unit-tested; the audit
+ * pipeline supplies the reader and the tracked-mode lookup (`git ls-files
+ * -s`).
+ */
+export function collectBinExecutableModeViolations(
+  binFiles: readonly string[],
+  readFile: (path: string) => string,
+  trackedMode: (path: string) => string | null,
+): string[] {
+  const violations: string[] = [];
+  for (const file of binFiles) {
+    let text: string;
+    try {
+      text = readFile(file);
+    } catch {
+      violations.push(`bin-executable-mode: ${file}: could not be read`);
+      continue;
+    }
+    if (!text.startsWith('#!')) {
+      continue;
+    }
+    const mode = trackedMode(file);
+    const quoted = quoteShellArgument(file);
+    if (mode === null) {
+      // `git update-index --chmod` only rewrites the mode bit of an
+      // existing index entry -- it errors ("cannot add to the index")
+      // on a path with no entry yet, so an untracked file needs its own
+      // remediation rather than the tracked-but-wrong-mode one below.
+      violations.push(
+        `bin-executable-mode: ${file} has a #! shebang but is not tracked by git; run \`chmod +x -- ${quoted} && git add -- ${quoted}\` and commit`,
+      );
+    } else if (mode !== '100755') {
+      violations.push(
+        `bin-executable-mode: ${file} has a #! shebang but is tracked ${mode} in git; run \`git update-index --chmod=+x -- ${quoted}\` and commit`,
+      );
+    }
+  }
+  return violations;
+}
+
 // --- generatedBlocks file resolution (#1703) --------------------------------
 //
 // sync-docs.mts and audit-docs.mts each independently decided how a

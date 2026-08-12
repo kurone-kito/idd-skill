@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import { test } from 'node:test';
@@ -7,6 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { ADVISORY_CONVERGENCE_CHECK_SELECTOR } from '../src/scripts/advisory-convergence.mts';
 import {
   buildOkfIndexRows,
+  collectBinExecutableModeViolations,
   collectDocBudgetDriftViolations,
   collectDuplicateSyncPairTargets,
   collectEnginesRangeMirrorViolations,
@@ -17,6 +19,7 @@ import {
   escapeMarkdownTableCell,
   extractOkfIndexFields,
   generatedFromBanner,
+  globFiles,
   injectGeneratedFromBanner,
   inspectHelperRuntimeConfig,
   isBannerScopedInstructionTarget,
@@ -29,6 +32,8 @@ import {
 } from '../src/scripts/consistency-helpers.mts';
 import { findPlaceholders } from '../src/scripts/idd-doctor.mts';
 import { readJson, readText } from './test-utils.mts';
+
+const REPO_ROOT = fileURLToPath(new URL('..', import.meta.url));
 
 const SUITABILITY_PATH = new URL(
   '../.github/instructions/idd-suitability.instructions.md',
@@ -1719,6 +1724,124 @@ test("audit/sync-manifest.json's guarded repo state: this repository's own engin
       { file: 'src/scripts/helper-runtime-manifest.mts', mode: 'full-range' },
     ],
     readText,
+  );
+  assert.deepEqual(violations, []);
+});
+
+// =============================================================================
+// collectBinExecutableModeViolations (#1971) -- the bin/*.mjs shebang vs.
+// tracked-executable-mode guard shared by audit-docs.mts's
+// checkBinExecutableMode.
+// =============================================================================
+
+test('collectBinExecutableModeViolations: passes when every shebanged file is tracked executable', () => {
+  const files: Record<string, string> = {
+    'bin/idd-example.mjs': '#!/usr/bin/env node\nconsole.log("hi");\n',
+    'bin/idd-helper.mjs': 'export const x = 1;\n', // no shebang, out of scope
+  };
+  const modes: Record<string, string> = {
+    'bin/idd-example.mjs': '100755',
+    'bin/idd-helper.mjs': '100644',
+  };
+  const violations = collectBinExecutableModeViolations(
+    Object.keys(files),
+    (file) => files[file],
+    (file) => modes[file] ?? null,
+  );
+  assert.deepEqual(violations, []);
+});
+
+test('collectBinExecutableModeViolations: reports a shebanged file tracked non-executable', () => {
+  const files: Record<string, string> = {
+    'bin/idd-broken.mjs': '#!/usr/bin/env node\nconsole.log("hi");\n',
+  };
+  const violations = collectBinExecutableModeViolations(
+    Object.keys(files),
+    (file) => files[file],
+    () => '100644',
+  );
+  assert.deepEqual(violations, [
+    "bin-executable-mode: bin/idd-broken.mjs has a #! shebang but is tracked 100644 in git; run `git update-index --chmod=+x -- 'bin/idd-broken.mjs'` and commit",
+  ]);
+});
+
+test('collectBinExecutableModeViolations: reports an untracked shebanged file', () => {
+  const violations = collectBinExecutableModeViolations(
+    ['bin/idd-new.mjs'],
+    () => '#!/usr/bin/env node\n',
+    () => null,
+  );
+  assert.deepEqual(violations, [
+    "bin-executable-mode: bin/idd-new.mjs has a #! shebang but is not tracked by git; run `chmod +x -- 'bin/idd-new.mjs' && git add -- 'bin/idd-new.mjs'` and commit",
+  ]);
+});
+
+test('collectBinExecutableModeViolations: shell-quotes a path containing shell-special characters', () => {
+  // A path with a single quote and a command substitution must stay one
+  // literal argument in the copy-pasteable remediation command instead
+  // of letting a shell interpret it (CodeRabbit finding on PR #1972).
+  const dollarPath = 'bin/idd-$(rm -rf ~).mjs';
+  const quotePath = "bin/idd-it's-weird.mjs";
+  const violations = collectBinExecutableModeViolations(
+    [dollarPath, quotePath],
+    () => '#!/usr/bin/env node\n',
+    () => '100644',
+  );
+  assert.deepEqual(violations, [
+    `bin-executable-mode: ${dollarPath} has a #! shebang but is tracked 100644 in git; run \`git update-index --chmod=+x -- '${dollarPath}'\` and commit`,
+    `bin-executable-mode: ${quotePath} has a #! shebang but is tracked 100644 in git; run \`git update-index --chmod=+x -- 'bin/idd-it'"'"'s-weird.mjs'\` and commit`,
+  ]);
+});
+
+test('collectBinExecutableModeViolations: ignores a non-shebang file even when tracked non-executable', () => {
+  const violations = collectBinExecutableModeViolations(
+    ['bin/idd-data.mjs'],
+    () => 'export const data = {};\n',
+    () => '100644',
+  );
+  assert.deepEqual(violations, []);
+});
+
+test('collectBinExecutableModeViolations: reports an unreadable file instead of throwing', () => {
+  const violations = collectBinExecutableModeViolations(
+    ['bin/idd-missing.mjs'],
+    () => {
+      throw new Error('ENOENT');
+    },
+    () => '100755',
+  );
+  assert.deepEqual(violations, [
+    'bin-executable-mode: bin/idd-missing.mjs: could not be read',
+  ]);
+});
+
+test("this repository's own bin/**/*.mjs files are currently all tracked executable (#1971 guarded repo state)", () => {
+  const repoFiles = execFileSync(
+    'git',
+    ['ls-files', '--cached', '--others', '--exclude-standard'],
+    { cwd: REPO_ROOT, encoding: 'utf8' },
+  )
+    .split(/\r?\n/)
+    .filter(Boolean)
+    .sort();
+  const binFiles = globFiles('bin/**/*.mjs', repoFiles);
+  assert.ok(binFiles.length > 0, 'expected at least one bin/*.mjs file');
+  const modeOutput = execFileSync(
+    'git',
+    ['ls-files', '-s', '--', ...binFiles],
+    { cwd: REPO_ROOT, encoding: 'utf8' },
+  );
+  const modes = new Map<string, string>();
+  for (const line of modeOutput.split(/\r?\n/).filter(Boolean)) {
+    const match = /^(\d+)\s+\S+\s+\S+\t(.+)$/.exec(line);
+    if (match) {
+      modes.set(match[2], match[1]);
+    }
+  }
+  const violations = collectBinExecutableModeViolations(
+    binFiles,
+    readText,
+    (file) => modes.get(file) ?? null,
   );
   assert.deepEqual(violations, []);
 });
