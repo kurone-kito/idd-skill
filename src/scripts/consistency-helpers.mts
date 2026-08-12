@@ -1184,6 +1184,45 @@ export function collectEnginesRangeMirrorViolations(
   return violations;
 }
 
+/**
+ * Collect executable-mode violations for `bin/**\/*.mjs` CLI entry-point
+ * scripts (#1971): every file whose first line is a `#!` shebang must be
+ * tracked executable (git mode `100755`), so a plain checkout or `npx
+ * idd-*` resolution both work without relying on a package manager's `bin`
+ * field to fix the mode up after the fact -- that side effect only ever
+ * touches the working-tree file, never git's own tracked mode, which is
+ * what causes a spurious mode-only `git status`/`git diff` after every
+ * fresh install. Pure (no direct I/O) so it can be unit-tested; the audit
+ * pipeline supplies the reader and the tracked-mode lookup (`git ls-files
+ * -s`).
+ */
+export function collectBinExecutableModeViolations(
+  binFiles: readonly string[],
+  readFile: (path: string) => string,
+  trackedMode: (path: string) => string | null,
+): string[] {
+  const violations: string[] = [];
+  for (const file of binFiles) {
+    let text: string;
+    try {
+      text = readFile(file);
+    } catch {
+      violations.push(`bin-executable-mode: ${file}: could not be read`);
+      continue;
+    }
+    if (!text.startsWith('#!')) {
+      continue;
+    }
+    const mode = trackedMode(file);
+    if (mode !== '100755') {
+      violations.push(
+        `bin-executable-mode: ${file} has a #! shebang but is tracked ${mode ?? 'as untracked'} in git; run \`git update-index --chmod=+x ${file}\` and commit`,
+      );
+    }
+  }
+  return violations;
+}
+
 // --- generatedBlocks file resolution (#1703) --------------------------------
 //
 // sync-docs.mts and audit-docs.mts each independently decided how a

@@ -20,6 +20,7 @@ import type {
 } from './consistency-helpers.mts';
 import {
   buildOkfIndexRows,
+  collectBinExecutableModeViolations,
   collectContextCeilingViolations,
   collectDocBudgetDriftViolations,
   collectDuplicateSyncPairTargets,
@@ -186,6 +187,7 @@ checkMarkdownLinkAudit(manifest.markdownLinkAudit ?? null);
 checkConfigInstructionDrift();
 checkGeneratedSourcePairs();
 checkEnginesRangeMirrors();
+checkBinExecutableMode();
 
 if (errors.length > 0) {
   console.error('documentation audit failed:');
@@ -257,6 +259,41 @@ function checkGeneratedSourcePairs() {
       );
     }
   }
+}
+
+// Guards against the executable-mode drift #1971 found: a bin/*.mjs CLI
+// entry-point script with a #! shebang tracked non-executable in git,
+// which surfaces as a spurious mode-only `git status`/`git diff` after
+// every fresh install (the package manager's `bin`-field resolution
+// chmods the working-tree file, but never git's own tracked mode).
+function checkBinExecutableMode() {
+  const binFiles = globFiles('bin/**/*.mjs', repoFiles);
+  const modes = trackedFileModes(binFiles);
+  errors.push(
+    ...collectBinExecutableModeViolations(
+      binFiles,
+      readText,
+      (file) => modes.get(file) ?? null,
+    ),
+  );
+}
+
+// The git-tracked mode (e.g. "100644"/"100755") for each of `files`, keyed
+// by path. A file absent from the returned map has no tracked index entry
+// (working-tree-only, or already deleted).
+function trackedFileModes(files: readonly string[]): Map<string, string> {
+  const modes = new Map<string, string>();
+  if (files.length === 0) {
+    return modes;
+  }
+  const output = git(['ls-files', '-s', '--', ...files]);
+  for (const line of output.split(/\r?\n/).filter(Boolean)) {
+    const match = /^(\d+)\s+\S+\s+\S+\t(.+)$/.exec(line);
+    if (match) {
+      modes.set(match[2], match[1]);
+    }
+  }
+  return modes;
 }
 
 function emittedPathForSource(source: string): string | null {
