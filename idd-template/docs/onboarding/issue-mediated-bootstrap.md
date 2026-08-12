@@ -41,6 +41,14 @@ automatic upgrade applied whenever a review bot happens to be available.
 If the operator does not state a preference, propose theirs-flow (the
 default) and only switch modes on explicit confirmation.
 
+**Prerequisite: the target repository needs a first commit.** GitHub
+cannot open a pull request against a repository with no commits at
+all — there is no default branch to target yet. A truly empty
+repository must get its base commit some other way (for example, an
+initial commit unrelated to IDD) before issue-mediated bootstrap's
+issue -> branch -> PR flow can run; creating that first commit is
+outside this alternate's own scope.
+
 ## Drafting the bootstrap issue
 
 Draft the bootstrap issue only after Steps 1A-1C conclude ("the
@@ -72,7 +80,7 @@ https://raw.githubusercontent.com/kurone-kito/idd-skill/<tag-or-sha>/idd-templat
 Never reference the unpinned `/main/` URL for this purpose: an unpinned
 reference can drift between when the issue is authored and when it is
 executed, so the steps a reviewer approved may not be the steps that
-actually ran.
+actually ran (preventive; no observed incident yet).
 
 **Pinning the entry-point link alone is not enough.** Step 2's own file
 fetch commands carry their own source reference independent of which
@@ -271,7 +279,7 @@ Step 6 verification, all land as one cohesive, atomically-reviewable
 change. A half-imported tree fails `--verify` — for example, agent entry
 files that reference an IDD workflow whose instruction files were never
 copied — so this work cannot be safely split across multiple issues or
-merged in a partial state.
+merged in a partial state (preventive; no observed incident yet).
 
 ## Optional add-ons stay separate follow-ups
 
