@@ -111,13 +111,24 @@ single-file direct download in
 supplies only `minimize-superseded-markers.mjs`, not the complete
 `vendored-node` bundle — per that section, getting every file the
 profile requires needs a full `idd-skill` clone (not just the
-`idd-template/` subtree), checked out at the same `<tag-or-sha>`, and
-`node scripts/idd-onboard.mjs --import --profile vendored-node` run
-from it, since neither Option A's remote fetch nor a plain Option B
-copy alone supplies the rest. Direct the issue's process section to
-that full-clone path rather than the single-file download, so this
-issue's own acceptance criterion below ("every file required by the
-selected helper runtime profile") is actually satisfiable.
+`idd-template/` subtree), checked out at the same `<tag-or-sha>`, with
+this run from it:
+
+```sh
+node scripts/idd-onboard.mjs --import \
+  --source <path-to-the-cloned-idd-skill-tree> \
+  --target <path-to-this-repository> --profile vendored-node
+```
+
+`--import` rejects calls without an explicit `--source`, and since the
+natural place to run this command is from inside that same clone,
+`--target` also needs to be explicit (its default is the current
+directory, which without an explicit value would import into the
+clone itself instead of the adopter repository). Direct the issue's
+process section to that full-clone path rather than the single-file
+download, so this issue's own acceptance criterion below ("every file
+required by the selected helper runtime profile") is actually
+satisfiable.
 
 ### The status:authoring hold still applies
 
@@ -137,7 +148,7 @@ issue-authoring skill's orphan-issue schema (`## Background`,
 autopilot-suitability footer); fill in every bracketed value from the
 hearing before publishing:
 
-```markdown
+````markdown
 ## Background
 
 This repository has not yet imported the IDD (Issue-Driven Development)
@@ -159,13 +170,22 @@ use `<tag-or-sha>` (not `main`) in the `curl` fallback's base URL, and
 check out `<tag-or-sha>` in the local clone before running Option B. If
 the confirmed helper runtime profile is `vendored-node`, its complete
 helper bundle needs a full `idd-skill` clone checked out at
-`<tag-or-sha>` plus
-`node scripts/idd-onboard.mjs --import --profile vendored-node` run
-from it — the single-file direct download documented in
-`template-distribution.md`'s "Profile-conditional helper files"
-section supplies only `minimize-superseded-markers.mjs`, not the rest
-of the profile's bundle, so it alone does not satisfy this issue's
-acceptance criterion below.
+`<tag-or-sha>`, with this run from it:
+
+```sh
+node scripts/idd-onboard.mjs --import \
+  --source <path-to-the-cloned-idd-skill-tree> \
+  --target <path-to-this-repository> --profile vendored-node
+```
+
+Both `--source` and an explicit `--target` are required — `--target`
+defaults to the current directory, which would import into the clone
+itself if left unset while running from inside it. The single-file
+direct download documented in `template-distribution.md`'s
+"Profile-conditional helper files" section supplies only
+`minimize-superseded-markers.mjs`, not the rest of the profile's
+bundle, so it alone does not satisfy this issue's acceptance criterion
+below.
 
 Use these operator-confirmed values, already collected during the
 hearing (Steps 1A-1C), instead of re-deriving them:
@@ -262,7 +282,7 @@ Discover-routable before import completes; a human or a
 narrowly-scoped, pre-authorized agent executes it directly instead._
 
 <!-- <marker-prefix>-autopilot-suitability: 1 -->
-```
+````
 
 Replace `<marker-prefix>` in the marker with the confirmed marker-prefix
 value from the hearing before publishing — see the `PROJECT_MARKER_PREFIX`
