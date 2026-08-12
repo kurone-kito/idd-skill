@@ -116,8 +116,8 @@ this run from it:
 
 ```sh
 node scripts/idd-onboard.mjs --import \
-  --source <path-to-the-cloned-idd-skill-tree> \
-  --target <path-to-this-repository> --profile vendored-node
+  --source "<path-to-the-cloned-idd-skill-tree>" \
+  --target "<path-to-this-repository>" --profile vendored-node
 ```
 
 `--import` rejects calls without an explicit `--source`, and since the
@@ -174,8 +174,8 @@ helper bundle needs a full `idd-skill` clone checked out at
 
 ```sh
 node scripts/idd-onboard.mjs --import \
-  --source <path-to-the-cloned-idd-skill-tree> \
-  --target <path-to-this-repository> --profile vendored-node
+  --source "<path-to-the-cloned-idd-skill-tree>" \
+  --target "<path-to-this-repository>" --profile vendored-node
 ```
 
 Both `--source` and an explicit `--target` are required — `--target`
@@ -299,8 +299,8 @@ value from Step 1B for both issue publication and label creation below —
 default to `status:blocked-by-human` only when that default was actually
 selected, never unconditionally. A pre-import repository may not have
 that label yet — create it first if `gh issue create --label
-<confirmed-label-name>` fails because the label is missing:
-`gh label create <confirmed-label-name>`.
+"<confirmed-label-name>"` fails because the label is missing:
+`gh label create "<confirmed-label-name>"`.
 
 ## Scope: exactly one issue
 
