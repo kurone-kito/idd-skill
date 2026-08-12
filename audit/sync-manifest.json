@@ -132,6 +132,7 @@
         "idd-template/docs/policy-constants.md",
         "idd-template/docs/reference.md",
         "idd-template/docs/onboarding/agent-entry-and-verification.md",
+        "idd-template/docs/onboarding/issue-mediated-bootstrap.md",
         "idd-template/docs/onboarding/placeholders.md",
         "idd-template/docs/onboarding/policy-decisions.md",
         "idd-template/docs/onboarding/template-distribution.md",

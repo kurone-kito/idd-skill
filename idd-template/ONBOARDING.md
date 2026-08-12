@@ -316,6 +316,18 @@ notes, and `blocked-by` guidance, see
 
 ---
 
+## Alternate: issue-mediated bootstrap
+
+By default, Steps 2, 4, 5, and 6 below import the template with a direct,
+unreviewed commit ("theirs-flow"). An operator may instead opt into
+**issue-mediated bootstrap**, which runs that same import through a
+reviewable issue -> branch -> PR -> merge cycle using the values already
+confirmed above. See
+[Onboarding Reference — Issue-Mediated Bootstrap](docs/onboarding/issue-mediated-bootstrap.md)
+for when to choose it and the full procedure.
+
+---
+
 ## CLI-assisted onboarding
 
 If you have a local clone of `kurone-kito/idd-skill` (Step 2 Option B
@@ -488,6 +500,7 @@ docs/customization.md
 docs/policy-constants.md
 docs/reference.md
 docs/onboarding/agent-entry-and-verification.md
+docs/onboarding/issue-mediated-bootstrap.md
 docs/onboarding/placeholders.md
 docs/onboarding/policy-decisions.md
 docs/onboarding/template-distribution.md
@@ -614,6 +627,7 @@ for FILE in \
   "docs/policy-constants.md" \
   "docs/reference.md" \
   "docs/onboarding/agent-entry-and-verification.md" \
+  "docs/onboarding/issue-mediated-bootstrap.md" \
   "docs/onboarding/placeholders.md" \
   "docs/onboarding/policy-decisions.md" \
   "docs/onboarding/template-distribution.md" \
@@ -723,6 +737,7 @@ for FILE in \
   "docs/policy-constants.md" \
   "docs/reference.md" \
   "docs/onboarding/agent-entry-and-verification.md" \
+  "docs/onboarding/issue-mediated-bootstrap.md" \
   "docs/onboarding/placeholders.md" \
   "docs/onboarding/policy-decisions.md" \
   "docs/onboarding/template-distribution.md" \
