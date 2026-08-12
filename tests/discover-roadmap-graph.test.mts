@@ -521,6 +521,57 @@ test('extractKeywordReferences recognizes "hasn\'t"/"no longer" negation contrac
   );
 });
 
+test('extractKeywordReferences treats a contrastive conjunction as a negation-clause boundary (#1968 review round 2)', () => {
+  // Codex review on #1968: "closes" and "but" both count as intervening
+  // words under the plain token-count bound, so "never closes but refs
+  // #44" wrongly classified the following "refs" as negated too. A
+  // contrastive conjunction ends the negation's clause instead of
+  // participating in it.
+  const body = 'This never closes but refs #44';
+  assert.deepEqual(extractKeywordReferences(body), [
+    { target: 44, relationship: 'reference', evidence: body },
+  ]);
+});
+
+test('extractKeywordReferences rejects a keyword inside a hyphenated compound (#1968 review round 2)', () => {
+  // Codex review on #1968: the keyword matcher recognized "close" after the
+  // hyphen in "auto-close"/"re-close", but the negation window's intervening
+  // token pattern can't consume a hyphen, so "does not auto-close #48" still
+  // emitted a phantom edge. GitHub itself does not recognize a hyphenated
+  // compound as a closing keyword, so the fix rejects the keyword match
+  // itself rather than trying to make negation detection cross the hyphen.
+  assert.deepEqual(
+    extractKeywordReferences('This does not auto-close #48'),
+    [],
+  );
+  assert.deepEqual(
+    extractKeywordReferences('A re-close of #49 is planned'),
+    [],
+  );
+});
+
+test('extractKeywordReferences recognizes "mustn\'t"/"mightn\'t"/"shan\'t" negation contractions (#1968 review round 2)', () => {
+  // Codex review on #1968: the contraction branch already covered
+  // "wouldn't"/"shouldn't"/"couldn't" but omitted these three standard
+  // negative contractions, so they fell through as phantom edges.
+  assert.deepEqual(extractKeywordReferences("This mustn't close #46"), []);
+  assert.deepEqual(extractKeywordReferences("This mightn't resolve #47"), []);
+  assert.deepEqual(extractKeywordReferences("This shan't fix #48"), []);
+});
+
+test('extractKeywordReferences preserves additive clauses after a negative contraction (#1968 review round 2)', () => {
+  // Codex review on #1968: the "not only/merely/just/simply … but also …"
+  // additive-correlative guard was attached only to the bare "not"
+  // alternative, so the identical construction using a contraction ("This
+  // doesn't just fix #42 but also resolves #43") still dropped the genuine
+  // edge to #42 after the bare-"not" case was already fixed.
+  const body = "This doesn't just fix #42 but also resolves #43";
+  assert.deepEqual(extractKeywordReferences(body), [
+    { target: 42, relationship: 'closing-keyword', evidence: body },
+    { target: 43, relationship: 'closing-keyword', evidence: body },
+  ]);
+});
+
 test('extractTaskListReferences ignores a checkbox quoted inside a fence (#1204)', () => {
   const fenced = ['```md', '- [ ] #900', '```', '- [ ] #901'].join('\n');
   assert.deepEqual(extractTaskListReferences(fenced), [
