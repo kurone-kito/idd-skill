@@ -76,17 +76,25 @@ actually ran.
 
 **Pinning the entry-point link alone is not enough.** Step 2's own file
 fetch commands carry their own source reference independent of which
-`ONBOARDING.md` revision you read them from: Option A's `gh api`/`curl`
-loops use a hardcoded `Base URL:`
-(`https://raw.githubusercontent.com/kurone-kito/idd-skill/main/idd-template/`),
-and Option B copies whatever revision is currently checked out in the
-local clone. Reading a pinned `ONBOARDING.md` does not, by itself,
-pin those fetches. In the issue's process section, explicitly instruct
-replacing `main` with the same `<tag-or-sha>` in Option A's base URL
-before running the fetch loops, and checking out that exact tag or SHA
-in the local clone before running Option B — otherwise the actual
-imported file contents can still drift even though the instructions
-document you read were pinned.
+`ONBOARDING.md` revision you read them from, and Option A has **two**
+independent fetch loops that each need pinning separately:
+
+- the recommended `gh api` loop calls the Contents API
+  (`repos/kurone-kito/idd-skill/contents/idd-template/{path}`) with no
+  `ref` parameter, so it always resolves the default branch regardless
+  of any URL elsewhere in the document — pin it by appending
+  `?ref=<tag-or-sha>` to that endpoint;
+- the `curl` fallback loop uses a hardcoded `Base URL:`
+  (`https://raw.githubusercontent.com/kurone-kito/idd-skill/main/idd-template/`)
+  — pin it by replacing `main` with the same `<tag-or-sha>` there.
+
+Option B copies whatever revision is currently checked out in the local
+clone — pin it by checking out that exact tag or SHA before running
+Option B. Reading a pinned `ONBOARDING.md` does not, by itself, pin any
+of these three fetches. In the issue's process section, explicitly
+instruct all three substitutions above — otherwise the actual imported
+file contents can still drift even though the instructions document
+you read were pinned.
 
 ### The status:authoring hold still applies
 
@@ -120,9 +128,12 @@ Import the IDD template into this repository by following
 `idd-template/ONBOARDING.md` Steps 2, 4, 5, and 6, pinned to
 [<tag-or-sha>](https://raw.githubusercontent.com/kurone-kito/idd-skill/<tag-or-sha>/idd-template/ONBOARDING.md)
 — never the unpinned `/main/` reference. This pin covers the
-instructions themselves; also pin the actual file fetch in Step 2: use
-`<tag-or-sha>` (not `main`) in Option A's base URL, or check out
-`<tag-or-sha>` in the local clone before running Option B.
+instructions themselves; also pin the actual file fetch in Step 2, all
+three of: append `?ref=<tag-or-sha>` to the `gh api` loop's Contents
+API endpoint (the recommended default — it has no `ref` and otherwise
+always resolves the default branch regardless of the curl base URL),
+use `<tag-or-sha>` (not `main`) in the `curl` fallback's base URL, and
+check out `<tag-or-sha>` in the local clone before running Option B.
 
 Use these operator-confirmed values, already collected during the
 hearing (Steps 1A-1C), instead of re-deriving them:
