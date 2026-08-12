@@ -74,6 +74,20 @@ reference can drift between when the issue is authored and when it is
 executed, so the steps a reviewer approved may not be the steps that
 actually ran.
 
+**Pinning the entry-point link alone is not enough.** Step 2's own file
+fetch commands carry their own source reference independent of which
+`ONBOARDING.md` revision you read them from: Option A's `gh api`/`curl`
+loops use a hardcoded `Base URL:`
+(`https://raw.githubusercontent.com/kurone-kito/idd-skill/main/idd-template/`),
+and Option B copies whatever revision is currently checked out in the
+local clone. Reading a pinned `ONBOARDING.md` does not, by itself,
+pin those fetches. In the issue's process section, explicitly instruct
+replacing `main` with the same `<tag-or-sha>` in Option A's base URL
+before running the fetch loops, and checking out that exact tag or SHA
+in the local clone before running Option B — otherwise the actual
+imported file contents can still drift even though the instructions
+document you read were pinned.
+
 ### The status:authoring hold still applies
 
 The issue-authoring skill's normal authoring-hold/release contract
@@ -105,7 +119,10 @@ import instead of an unreviewed direct commit.
 Import the IDD template into this repository by following
 `idd-template/ONBOARDING.md` Steps 2, 4, 5, and 6, pinned to
 [<tag-or-sha>](https://raw.githubusercontent.com/kurone-kito/idd-skill/<tag-or-sha>/idd-template/ONBOARDING.md)
-— never the unpinned `/main/` reference.
+— never the unpinned `/main/` reference. This pin covers the
+instructions themselves; also pin the actual file fetch in Step 2: use
+`<tag-or-sha>` (not `main`) in Option A's base URL, or check out
+`<tag-or-sha>` in the local clone before running Option B.
 
 Use these operator-confirmed values, already collected during the
 hearing (Steps 1A-1C), instead of re-deriving them:
@@ -131,7 +148,8 @@ recording action rather than a pinned remote-fetch step:
 - CI wait policy defaults: <value>
 - Issue-author approval gate: <value>
 - Maintainer approval actor policy: <value>
-- Issue-authoring companion status: <value>
+- Issue-authoring companion status: not installed (even if the operator's
+  ultimate preference is `installed` — see the note below)
 - Helper runtime profile: <value>
 - IDD label names: <value>
 - Up-to-date-head ruleset check: <value>
@@ -144,13 +162,25 @@ add-ons (worktree guard activation, the `idd-doctor` CI health gate, the
 companion install) are explicitly out of scope here — they follow as
 separate issues once this one merges.
 
+**Record `not installed` here even when the operator wants the
+companion.** Step 6's verification checklist requires the companion
+skill files to be present whenever the recorded policy says
+`installed` — since installing the companion is deferred to its own
+follow-up issue (below), recording anything other than `not installed`
+in this core bootstrap issue makes Step 6 unsatisfiable by design. Once
+the follow-up issue installs the companion, it also updates the
+recorded policy value to `installed`.
+
 Execution for this issue is issue -> branch -> PR -> (a human or a
 narrowly-scoped, pre-authorized agent) merge — not the full autonomous
 Discover -> Claim -> Work loop. Discover cannot select this issue: no
 `.github/instructions/idd-*.instructions.md` or `.github/idd/config.json`
-exist in this repository's tree yet to route it. CI and advisory review
-are not yet configured in this repository at this stage — that is
-expected, not a skipped gate.
+exist in this repository's tree yet to route it. IDD's own CI and
+advisory-review checks (`idd-doctor`, `idd-advisory-convergence`) are
+not yet configured in this repository at this stage — that is expected,
+not a skipped gate. This repository may already have its own CI,
+branch protection, or review bot from before choosing IDD; those keep
+gating this PR normally and are not affected by this note.
 
 ## Acceptance criteria
 
@@ -163,9 +193,12 @@ expected, not a skipped gate.
 - The confirmed Step 1B policy decisions are recorded in the imported
   repository per Step 3.
 
-_Autopilot suitability: 1 / 5 — this issue is not Discover-routable
-before import completes; a human or a narrowly-scoped, pre-authorized
-agent executes it directly instead._
+---
+
+_Autopilot suitability: 1 / 5 -- higher is more autopilot-suitable;
+below the configured floor is human-oriented. This issue is not
+Discover-routable before import completes; a human or a
+narrowly-scoped, pre-authorized agent executes it directly instead._
 
 <!-- <marker-prefix>-autopilot-suitability: 1 -->
 ```
@@ -180,7 +213,10 @@ judgment about the change itself; per the issue-authoring skill's
 contract, a score of `1` also carries the `status:blocked-by-human`
 label, which correctly signals that this issue needs a human or a
 narrowly-scoped, pre-authorized agent rather than the ordinary
-autonomous loop.
+autonomous loop. A pre-import repository may not have that label yet —
+create it first if `gh issue create --label status:blocked-by-human`
+(or the confirmed local label name) fails because the label is missing:
+`gh label create status:blocked-by-human`.
 
 ## Scope: exactly one issue
 
@@ -218,11 +254,17 @@ explicitly not the full autonomous Discover -> Claim -> Work loop:
   `.github/instructions/idd-*.instructions.md` or
   `.github/idd/config.json` exist in the target repository's tree yet to
   route it — there is nothing for Discover to read.
-- **CI and advisory-review gates are structurally inapplicable at this
-  stage, not silently skipped.** Name that explicitly in the PR
+- **IDD's own CI and advisory-review gates are structurally
+  inapplicable at this stage, not silently skipped** — only the
+  IDD-specific checks (`idd-doctor`, `idd-advisory-convergence`) have
+  nothing to run against yet, since the instruction and config files
+  they depend on don't exist pre-import. Name that explicitly in the PR
   description rather than leaving it implicit, so a reviewer does not
-  mistake the absence of CI runs or an advisory review for a skipped
-  gate on an otherwise-normal PR.
+  mistake the absence of those specific checks for a skipped gate on an
+  otherwise-normal PR. This does **not** extend to any CI, branch
+  protection, or review bot the target repository already had before
+  choosing IDD — those keep gating the bootstrap PR exactly as they did
+  before, and this note is never grounds for disregarding them.
 
 Once this PR merges, the repository is IDD-operational and every
 subsequent change — including the optional add-ons above — runs through
