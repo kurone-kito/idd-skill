@@ -18,11 +18,12 @@ an afterthought once a marker is already half-drafted.
   `idd-skill` in an installed bundle; use it only when the target
   repository actually configured that value.
 - If the prefix is not discoverable from the repository docs or user
-  context, stop and ask instead of emitting a guessed marker. A prefix
-  the operator already confirmed during an onboarding hearing (Steps
-  1A-1C of `idd-template/ONBOARDING.md`) counts as a resolved value
-  under "user context" — even before it is committed anywhere in the
-  target repository's tree — and does not require asking again.
+  context, stop and ask instead of emitting a guessed marker
+  (preventive; no observed incident yet). A prefix the operator already
+  confirmed during an onboarding hearing (Steps 1A-1C of
+  `idd-template/ONBOARDING.md`) counts as a resolved value under "user
+  context" — even before it is committed anywhere in the target
+  repository's tree — and does not require asking again.
 
 ## Trigger policy
 
