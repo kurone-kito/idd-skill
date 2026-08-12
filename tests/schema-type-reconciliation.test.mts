@@ -143,6 +143,7 @@ interface PolicyConfigFile {
     | 'fast-agent-resolve'
     | 'hybrid-reviewer-ack'
     | 'strict-reviewer-resolve';
+  authoringLanguage?: string;
   claimTiming: { staleAge: string; heartbeatInterval: string };
   trustedMarkerActors: readonly string[];
   advisoryBotLogins?: readonly string[];
@@ -389,6 +390,7 @@ export const policyConfigKeys = [
   'mergePolicy',
   'reviewPolicy',
   'threadResolutionPolicy',
+  'authoringLanguage',
   'claimTiming',
   'trustedMarkerActors',
   'advisoryBotLogins',

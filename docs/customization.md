@@ -41,6 +41,7 @@ behavior change too.
 | Advisory-convergence required check | Hosting the `idd-advisory-convergence` workflow is itself opt-in; once hosted, it reports on every PR but is **not** registered as a required status check by default                                                                                                                                                                                                                                                                                                                     | Add the workflow per [IDD template onboarding](https://github.com/kurone-kito/idd-skill/blob/main/idd-template/ONBOARDING.md#optional--host-idd-advisory-convergence-as-a-required-check-ci-workflow), then register `idd-advisory-convergence` as a required status check in the repository's branch-protection Ruleset to make Copilot-advisory convergence non-bypassable; see [policy constants](policy-constants.md#advisory-review-defaults). Until registered, the hosted workflow still runs and reports but never blocks a merge.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
 | Required-check-read trust           | Fail-closed by default — a `404` on the branch-protection or ruleset reads is treated as unreadable (same hold as a `403`), because none of those endpoints documents `403` as a possible response and GitHub can mask a permission failure as `404`                                                                                                                                                                                                                                      | Opt in to the pre-`#1377` trusting behavior (a `404` on these reads is genuinely empty) only when the repository operator has verified the automation token carries full read access to these endpoints, by setting `ciGate.trustEmptyProtectionReads: true` in `.github/idd/config.json`. This is a git-committed, human-authorized decision, not a runtime check of the caller's role or token scope. Absent or `false` keeps the fail-closed default; see [`idd-ci.instructions.md`](../.github/instructions/idd-ci.instructions.md) Required-check discovery step 4.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
 | Source-pinned required-check trust  | Fail-closed by default — a required check whose ruleset or classic branch-protection entry carries an `app_id`/`integration_id` (source-pinned) downgrades an otherwise-passing named check to unresolved (`unknown` in `pre-merge-readiness`, `source-pinned` in the ci-wait-state helper), because no producer-identity data is fetched anywhere in this codebase's check-run reads to verify it                                                                                        | Opt in only when the repository operator has verified out-of-band that the pinned integration is the sole producer of the named required check(s), by setting `ciGate.trustSourcePinnedRequiredChecks: true` in `.github/idd/config.json`. This is a git-committed, human-authorized decision, not a runtime check of actual producer identity. Absent or `false` keeps the fail-closed default; it never relaxes a fully unnamed pinned requirement (e.g. a ruleset `workflows` rule with no enumerable check name). See [`idd-ci.instructions.md`](../.github/instructions/idd-ci.instructions.md) Required-check discovery and the blocker detail in [helper scripts](idd-helper-scripts.md#merge-gate-evidence).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| Authoring language                  | Absent `authoringLanguage` behaves as `en` (fail-safe default)                                                                                                                                                                                                                                                                                                                                                                                                                            | Set `authoringLanguage` in `.github/idd/config.json` to a fixed BCP-47-shaped tag or the literal `match-source`; see [Authoring Language](#authoring-language). Schema-defined and documented now; the distributed discover/claim/issue-authoring/PR-submit runtime does not read or apply it yet — unlike `instructionProfile` above, the schema already accepts this field, so setting it is safe, it is simply inert until follow-up issues wire up consumption.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
 
 ## Non-Configurable Safety Invariants
 
@@ -207,6 +208,53 @@ resolution rule, and F2/F3 do not treat agent-handled human threads as
 merge-ready before the selected acknowledgement appears. Branch
 protection conversation-resolution requirements still override any local
 profile.
+
+## Authoring Language
+
+The distributed default is fail-safe: an absent `authoringLanguage`
+behaves as `en`, codifying today's actual emergent behavior, so no
+adopter's existing setup changes. Set `authoringLanguage` in
+`.github/idd/config.json` to make issue/PR body prose language an
+explicit, schema-validated choice instead:
+
+- A fixed BCP-47-shaped language tag (for example `en`, `ja`, `fr`,
+  `zh-Hans`, `pt-BR`) makes every newly-authored issue and PR body's
+  human-readable prose use that language.
+- The literal `match-source` matches the operator's live conversational
+  language during an interactive/hearing session (issue-authoring,
+  onboarding), and the language of the issue body being implemented
+  during unattended execution with no live operator (for example
+  PR-submit implementing an already-claimed issue).
+
+**Scope carve-out**: `authoringLanguage` governs human-readable prose
+sections only (Background, Proposed change, Acceptance criteria, PR
+descriptions, roadmap Goal/Tracks/Success criteria, and similar). It
+never changes any HTML-comment marker's machine-parsed format, nor any
+visible-line mirror whose exact wording a mechanical regex parses —
+concretely, the autopilot-suitability and effort footers' visible lines
+(`_Autopilot suitability: N / 5 ...` / `_Effort: S|M|L ...`), which
+`src/scripts/audit-authored-issue.mts` matches against a fixed
+English-phrase regex, must stay in their exact canonical English wording
+regardless of the configured language.
+
+**Cross-references**:
+
+- Adjacent bot configs keep their own independent language settings —
+  for example this repository's own `.coderabbit.yaml` sets
+  `language: en` — so an operator switching `authoringLanguage` away
+  from English should align those separately.
+- `idd-review-snapshot.instructions.md`'s existing "detect the PR body's
+  language for the visible note" rule already composes correctly with
+  this field with no code change required: once PR-submit applies
+  `authoringLanguage`, that rule will keep following whatever language
+  the PR body ends up in.
+
+**Landed vs. pending**: this field is schema-defined and
+documented now; the distributed discover, claim, issue-authoring, and
+PR-submit runtime does not read or apply it yet. Actual
+authoring-language enforcement ships in follow-up issues that apply the
+policy to PR body prose and to drafted issue prose, both blocked by the
+field landing here first.
 
 ## Policy Constants
 
