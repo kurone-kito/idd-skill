@@ -1772,7 +1772,7 @@ test('collectBinExecutableModeViolations: reports an untracked shebanged file', 
     () => null,
   );
   assert.deepEqual(violations, [
-    'bin-executable-mode: bin/idd-new.mjs has a #! shebang but is tracked as untracked in git; run `git update-index --chmod=+x bin/idd-new.mjs` and commit',
+    'bin-executable-mode: bin/idd-new.mjs has a #! shebang but is not tracked by git; run `chmod +x bin/idd-new.mjs && git add bin/idd-new.mjs` and commit',
   ]);
 });
 

@@ -1013,9 +1013,17 @@ export function collectBinExecutableModeViolations(
       continue;
     }
     const mode = trackedMode(file);
-    if (mode !== '100755') {
+    if (mode === null) {
+      // `git update-index --chmod` only rewrites the mode bit of an
+      // existing index entry -- it errors ("cannot add to the index")
+      // on a path with no entry yet, so an untracked file needs its own
+      // remediation rather than the tracked-but-wrong-mode one below.
       violations.push(
-        `bin-executable-mode: ${file} has a #! shebang but is tracked ${mode ?? 'as untracked'} in git; run \`git update-index --chmod=+x ${file}\` and commit`,
+        `bin-executable-mode: ${file} has a #! shebang but is not tracked by git; run \`chmod +x ${file} && git add ${file}\` and commit`,
+      );
+    } else if (mode !== '100755') {
+      violations.push(
+        `bin-executable-mode: ${file} has a #! shebang but is tracked ${mode} in git; run \`git update-index --chmod=+x ${file}\` and commit`,
       );
     }
   }
