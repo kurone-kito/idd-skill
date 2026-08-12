@@ -9,6 +9,7 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
 import { parseCanonicalIntegerOrThrow, parseCliArgs } from './cli-args.mts';
+import { GH_TEXT_LOOP_TIMEOUT_OPTIONS, ghText } from './gh-exec.mts';
 import { loadJson, validateConfigSection } from './validate-schemas.mts';
 
 const DEFAULT_RUNNING_TIMEOUT = 'PT30M';
@@ -35,6 +36,11 @@ interface CiRerunDecision {
   rerunCount: number;
 }
 
+/** Actions run-payload fields this file reads for `--run-id` resolution. */
+interface RawWorkflowRunPayload {
+  run_attempt?: number | null;
+}
+
 export const DEFAULT_CI_WAIT_POLICY = Object.freeze({
   runningTimeout: DEFAULT_RUNNING_TIMEOUT,
   runningTimeoutMs: 30 * 60 * 1000,
@@ -59,6 +65,9 @@ export const DEFAULT_CI_WAIT_POLICY = Object.freeze({
 const CI_WAIT_POLICY_FLAG_SPEC = {
   '--policy': { type: 'string', default: DEFAULT_POLICY_PATH },
   '--rerun-count': { type: 'string' },
+  '--run-id': { type: 'string' },
+  '--owner': { type: 'string', default: '' },
+  '--repo': { type: 'string', default: '' },
   '--help': { type: 'boolean', short: 'h' },
 } as const;
 
@@ -168,6 +177,63 @@ export function resolveCiRerunDecision({
   };
 }
 
+/**
+ * Derive the CI-wait rerun count mechanically from a live Actions run's
+ * `run_attempt` field: `run_attempt` starts at `1` for the original run and
+ * increments by one on every rerun (`gh run rerun`, regardless of which
+ * session or actor issued it, including a human clicking "Re-run failed
+ * jobs" in the GitHub UI), so `run_attempt - 1` is exactly "how many times
+ * has this run already been rerun" -- the same quantity `--rerun-count`
+ * otherwise requires the caller to track manually, session-locally (#1996).
+ *
+ * Mirrors `rerun-advisory-convergence.mts`'s `resolveInstanceRerunDecision`,
+ * which treats a missing or non-numeric `run_attempt` as fail-closed
+ * (`'run-attempt-unknown'`) rather than silently deriving `rerunCount: 0`
+ * from a guess -- the same reasoning applies here: `resolveCiRerunDecision`
+ * would otherwise resolve an invented `0` to `action: 'rerun'`, which is
+ * never something this helper should decide from unreadable data. A
+ * `run_attempt: 0` is rejected by the `>= 1` bound below for the same
+ * reason -- letting it through would produce `rerunCount: -1`, which
+ * `resolveCiRerunDecision`'s own non-negative-integer normalization
+ * silently collapses back to `0`, reintroducing the exact silent-zero this
+ * function exists to prevent.
+ */
+export function deriveRerunCountFromRunAttempt(runAttempt: unknown): number {
+  if (
+    typeof runAttempt === 'number' &&
+    Number.isInteger(runAttempt) &&
+    runAttempt >= 1
+  ) {
+    return runAttempt - 1;
+  }
+  throw new Error(
+    `cannot derive --rerun-count from run_attempt: expected a positive integer, got ${JSON.stringify(runAttempt)}`,
+  );
+}
+
+/**
+ * Fetch the live Actions run `runId` (`GET
+ * repos/{owner}/{repo}/actions/runs/{run_id}`) and derive its rerun count
+ * via {@link deriveRerunCountFromRunAttempt}. Reuses the same
+ * `ghText`/`GH_TEXT_LOOP_TIMEOUT_OPTIONS` timeout-guarded pattern
+ * `rerun-advisory-convergence.mts`'s `collectFromGitHub` already uses for
+ * the identical per-run `run_attempt` lookup, so a stalled or
+ * unexpectedly-interactive `gh` call here fails closed within a bounded
+ * timeout instead of hanging this policy resolver indefinitely.
+ */
+export function fetchRerunCountFromRunId(
+  owner: string,
+  repo: string,
+  runId: string,
+): number {
+  const raw = ghText(
+    ['api', `repos/${owner}/${repo}/actions/runs/${runId}`],
+    GH_TEXT_LOOP_TIMEOUT_OPTIONS,
+  );
+  const payload = JSON.parse(raw) as RawWorkflowRunPayload;
+  return deriveRerunCountFromRunAttempt(payload.run_attempt);
+}
+
 function normalizeDuration(value: unknown, fallback: string): string {
   if (parseDurationToMs(value) === null) {
     return fallback;
@@ -180,6 +246,29 @@ function normalizeRerunPolicy(value: unknown): string {
   return RERUN_POLICIES.has(text) ? text : DEFAULT_RERUN_POLICY;
 }
 
+// #1996: output shape when `--run-id` is not given must stay byte-for-byte
+// identical to the pre-#1996 `{policy, rerunDecision?}` shape -- the
+// existing `--rerun-count`-only CLI test asserts a `deepEqual` against
+// exactly that shape, and the issue's own acceptance criteria requires
+// `--rerun-count` to keep working "unchanged" when `--run-id` is absent.
+// The three `--run-id`-derived fields below are therefore only ever added
+// to `output` inside the `args.runId !== null` branch.
+interface CiWaitPolicyOutput {
+  policy: CiWaitPolicy;
+  rerunDecision?: CiRerunDecision;
+  /** Present only when `--run-id` was given: which source ultimately
+   * supplied `rerunDecision`'s `rerunCount` -- the live `run_attempt`
+   * lookup, or the `--rerun-count` fallback after that lookup failed. */
+  rerunCountSource?: 'run-id' | 'rerun-count';
+  /** Present only when `--run-id` was given and its live lookup succeeded:
+   * the fetched run's raw `run_attempt` value, for caller-side auditing. */
+  runAttempt?: number;
+  /** Present only when `--run-id` was given and its live lookup failed but
+   * a `--rerun-count` fallback was available -- the failure reason, so a
+   * caller silently falling back to the offline value can still see why. */
+  runIdLookupError?: string;
+}
+
 function runCli(): void {
   const args = parseArgs(process.argv.slice(2));
   if (args.help) {
@@ -188,14 +277,56 @@ function runCli(): void {
   }
 
   const policy = readCiWaitPolicy(args.policy);
-  const output: { policy: CiWaitPolicy; rerunDecision?: CiRerunDecision } = {
-    policy,
-  };
+  const output: CiWaitPolicyOutput = { policy };
 
-  if (args.rerunCount !== null) {
+  let rerunCount = args.rerunCount;
+
+  if (args.runId !== null) {
+    const owner =
+      args.owner ||
+      ghText(
+        ['repo', 'view', '--json', 'owner', '--jq', '.owner.login'],
+        GH_TEXT_LOOP_TIMEOUT_OPTIONS,
+      );
+    const repo =
+      args.repo ||
+      ghText(
+        ['repo', 'view', '--json', 'name', '--jq', '.name'],
+        GH_TEXT_LOOP_TIMEOUT_OPTIONS,
+      );
+    try {
+      rerunCount = fetchRerunCountFromRunId(owner, repo, args.runId);
+      output.rerunCountSource = 'run-id';
+      output.runAttempt = rerunCount + 1;
+    } catch (error) {
+      // #1996: unifies two distinct failure modes -- the `gh api` call
+      // itself failing (network/permission/transient), and the call
+      // succeeding but returning a payload with a missing or non-numeric
+      // `run_attempt` (deriveRerunCountFromRunAttempt's own throw) -- into
+      // one "the live lookup did not yield a usable rerunCount" outcome,
+      // matching how rerun-advisory-convergence.mts's own collection step
+      // unifies both into the same `runAttempt: null` signal. `--run-id`
+      // takes precedence over `--rerun-count` only when the live lookup
+      // actually succeeds; on either failure mode, fall back to an
+      // explicitly-given `--rerun-count` (the issue's own "explicit
+      // override / offline path" language), or fail closed with a clear,
+      // non-zero exit -- never a silent `rerunCount: 0`.
+      if (args.rerunCount === null) {
+        throw new Error(
+          `--run-id ${args.runId} lookup failed and no --rerun-count fallback was given: ${(error as Error).message}`,
+          { cause: error },
+        );
+      }
+      output.rerunCountSource = 'rerun-count';
+      output.runIdLookupError = (error as Error).message;
+      rerunCount = args.rerunCount;
+    }
+  }
+
+  if (rerunCount !== null) {
     output.rerunDecision = resolveCiRerunDecision({
       rerunPolicy: policy.rerunPolicy,
-      rerunCount: args.rerunCount,
+      rerunCount,
     });
   }
 
@@ -205,10 +336,21 @@ function runCli(): void {
 function parseArgs(argv: string[]): {
   policy: string;
   rerunCount: number | null;
+  runId: string | null;
+  owner: string;
+  repo: string;
   help: boolean;
 } {
   const { values, help } = parseCliArgs(argv, CI_WAIT_POLICY_FLAG_SPEC);
   const rerunCountToken = values['rerun-count'] as string | undefined;
+  const runIdToken = values['run-id'] as string | undefined;
+  const owner = (values.owner as string).trim();
+  const repo = (values.repo as string).trim();
+  if (Boolean(owner) !== Boolean(repo)) {
+    throw new Error(
+      '--owner and --repo must be given together (both or neither)',
+    );
+  }
   return {
     policy: values.policy as string,
     // `min: 0`: --rerun-count is a non-negative counter (0 is a valid
@@ -220,6 +362,15 @@ function parseArgs(argv: string[]): {
       rerunCountToken === undefined
         ? null
         : parseCanonicalIntegerOrThrow(rerunCountToken, '--rerun-count', 0),
+    // `min: 1`: a workflow run id is never `0` -- mirrors the positive-
+    // integer contract this file's `--rerun-count` sibling deliberately
+    // opts out of (see the `min: 0` note above).
+    runId:
+      runIdToken === undefined
+        ? null
+        : String(parseCanonicalIntegerOrThrow(runIdToken, '--run-id', 1)),
+    owner,
+    repo,
     help,
   };
 }
@@ -227,8 +378,20 @@ function parseArgs(argv: string[]): {
 function printHelp(): void {
   process.stdout.write(`Usage:
   node scripts/ci-wait-policy.mjs [--policy <path>] [--rerun-count <count>]
+    [--run-id <run-id> [--owner <owner> --repo <repo>]]
 
 Resolves the shared ciWait policy defaults from .github/idd/config.json.
 Optionally emits the deterministic rerun decision for a current rerun count.
+
+--run-id fetches the live Actions run via
+'gh api repos/{owner}/{repo}/actions/runs/{run-id}' and derives
+rerunCount = run_attempt - 1 mechanically, taking precedence over
+--rerun-count when the lookup succeeds. --owner/--repo default to the
+local checkout's own repository when omitted (gh repo view); pass both or
+neither. --rerun-count keeps working unchanged when --run-id is omitted,
+and serves as the explicit override/offline fallback when the --run-id
+lookup fails (network/permission error, or a missing/non-numeric
+run_attempt in the fetched payload) -- absent that fallback, the CLI exits
+non-zero rather than silently emitting rerunCount: 0.
 `);
 }

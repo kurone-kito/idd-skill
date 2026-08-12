@@ -1,6 +1,12 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  chmodSync,
+  mkdirSync,
+  mkdtempSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { test } from 'node:test';
@@ -8,6 +14,7 @@ import { fileURLToPath } from 'node:url';
 
 import {
   DEFAULT_CI_WAIT_POLICY,
+  deriveRerunCountFromRunAttempt,
   normalizeCiWaitPolicy,
   parseDurationToMs,
   readCiWaitPolicy,
@@ -15,6 +22,23 @@ import {
 } from '../src/scripts/ci-wait-policy.mts';
 
 const REPO_ROOT = fileURLToPath(new URL('..', import.meta.url));
+
+// Stub `gh` on PATH -- the tests/gh-exec.test.mts pattern, reused here so
+// the --run-id CLI tests below exercise the real execFileSync + child-
+// process contract without network access. Returns a cleanup callback
+// that restores PATH; callers must invoke it (ideally in a `finally`)
+// even when the assertion throws.
+function stubGh(scriptBody: string): () => void {
+  const tempRoot = mkdtempSync(join(tmpdir(), 'idd-ci-wait-policy-gh-'));
+  const ghPath = join(tempRoot, 'gh');
+  writeFileSync(ghPath, `#!/usr/bin/env node\n${scriptBody}`);
+  chmodSync(ghPath, 0o755);
+  const originalPath = process.env.PATH;
+  process.env.PATH = `${tempRoot}:${originalPath ?? ''}`;
+  return () => {
+    process.env.PATH = originalPath;
+  };
+}
 
 test('parseDurationToMs parses CI wait durations', () => {
   assert.equal(parseDurationToMs('PT30M'), 30 * 60 * 1000);
@@ -333,4 +357,205 @@ test('CLI --rerun-count 0 does not throw (0 is a valid non-negative value)', () 
     ),
   );
   assert.equal(output.rerunDecision.rerunCount, 0);
+});
+
+// #1996: deriveRerunCountFromRunAttempt is the pure core of the --run-id
+// derivation -- no `gh` call needed to exercise it directly.
+test('deriveRerunCountFromRunAttempt: run_attempt 1 (never rerun) derives rerunCount 0', () => {
+  assert.equal(deriveRerunCountFromRunAttempt(1), 0);
+});
+
+test('deriveRerunCountFromRunAttempt: run_attempt 2 (already rerun once) derives rerunCount 1', () => {
+  assert.equal(deriveRerunCountFromRunAttempt(2), 1);
+});
+
+test('deriveRerunCountFromRunAttempt: rejects a missing/non-numeric/zero run_attempt (fail closed, never a silent 0)', () => {
+  for (const runAttempt of [undefined, null, '2', 1.5, 0, -1, Number.NaN]) {
+    assert.throws(
+      () => deriveRerunCountFromRunAttempt(runAttempt),
+      /cannot derive --rerun-count from run_attempt/,
+      `expected run_attempt ${JSON.stringify(runAttempt)} to throw`,
+    );
+  }
+});
+
+// #1996: --run-id end-to-end CLI tests. Every case below passes explicit
+// --owner/--repo so the stubbed `gh` only ever needs to answer the single
+// `api repos/.../actions/runs/<id>` call, never `repo view` too.
+test('CLI --run-id derives rerunCount from a live run_attempt: 1 -> action rerun', () => {
+  const restore = stubGh(`
+if (process.argv[2] === 'api') {
+  process.stdout.write(JSON.stringify({ run_attempt: 1 }));
+} else {
+  process.stderr.write('unexpected gh invocation: ' + process.argv.slice(2).join(' '));
+  process.exit(1);
+}
+`);
+  try {
+    const output = JSON.parse(
+      execFileSync(
+        process.execPath,
+        [
+          join(REPO_ROOT, 'scripts/ci-wait-policy.mjs'),
+          '--run-id',
+          '31631273987',
+          '--owner',
+          'kurone-kito',
+          '--repo',
+          'idd-skill',
+        ],
+        { encoding: 'utf8' },
+      ),
+    );
+    assert.equal(output.rerunCountSource, 'run-id');
+    assert.equal(output.runAttempt, 1);
+    assert.deepEqual(output.rerunDecision, {
+      action: 'rerun',
+      reason: 'rerun-budget-available',
+      rerunPolicy: 'rerun-once',
+      rerunCount: 0,
+    });
+  } finally {
+    restore();
+  }
+});
+
+test('CLI --run-id derives rerunCount from a live run_attempt: 2 -> action hold (default rerun-once)', () => {
+  const restore = stubGh(`
+if (process.argv[2] === 'api') {
+  process.stdout.write(JSON.stringify({ run_attempt: 2 }));
+} else {
+  process.stderr.write('unexpected gh invocation: ' + process.argv.slice(2).join(' '));
+  process.exit(1);
+}
+`);
+  try {
+    const output = JSON.parse(
+      execFileSync(
+        process.execPath,
+        [
+          join(REPO_ROOT, 'scripts/ci-wait-policy.mjs'),
+          '--run-id',
+          '31631273987',
+          '--owner',
+          'kurone-kito',
+          '--repo',
+          'idd-skill',
+        ],
+        { encoding: 'utf8' },
+      ),
+    );
+    assert.equal(output.rerunCountSource, 'run-id');
+    assert.equal(output.runAttempt, 2);
+    assert.deepEqual(output.rerunDecision, {
+      action: 'hold',
+      reason: 'rerun-budget-exhausted',
+      rerunPolicy: 'rerun-once',
+      rerunCount: 1,
+    });
+  } finally {
+    restore();
+  }
+});
+
+test('CLI --run-id exits non-zero on a missing/non-numeric run_attempt with no --rerun-count fallback (graceful failure, never a silent rerunCount: 0)', () => {
+  const restore = stubGh(`
+if (process.argv[2] === 'api') {
+  process.stdout.write(JSON.stringify({ conclusion: 'success' }));
+} else {
+  process.stderr.write('unexpected gh invocation: ' + process.argv.slice(2).join(' '));
+  process.exit(1);
+}
+`);
+  try {
+    const { stderr } = runCliExpectFailure([
+      join(REPO_ROOT, 'scripts/ci-wait-policy.mjs'),
+      '--run-id',
+      '31631273987',
+      '--owner',
+      'kurone-kito',
+      '--repo',
+      'idd-skill',
+    ]);
+    assert.match(stderr, /--run-id 31631273987 lookup failed/);
+    assert.match(stderr, /cannot derive --rerun-count from run_attempt/);
+  } finally {
+    restore();
+  }
+});
+
+test('CLI --run-id falls back to an explicit --rerun-count when the live lookup itself fails (gh api error)', () => {
+  const restore = stubGh(`
+if (process.argv[2] === 'api') {
+  process.stderr.write('gh: Not Found (HTTP 404)');
+  process.exit(1);
+} else {
+  process.stderr.write('unexpected gh invocation: ' + process.argv.slice(2).join(' '));
+  process.exit(1);
+}
+`);
+  try {
+    const output = JSON.parse(
+      execFileSync(
+        process.execPath,
+        [
+          join(REPO_ROOT, 'scripts/ci-wait-policy.mjs'),
+          '--run-id',
+          '31631273987',
+          '--owner',
+          'kurone-kito',
+          '--repo',
+          'idd-skill',
+          '--rerun-count',
+          '1',
+        ],
+        { encoding: 'utf8' },
+      ),
+    );
+    assert.equal(output.rerunCountSource, 'rerun-count');
+    assert.ok(
+      typeof output.runIdLookupError === 'string' &&
+        output.runIdLookupError.length > 0,
+      'expected runIdLookupError to report why the live lookup failed',
+    );
+    assert.equal(output.runAttempt, undefined);
+    assert.deepEqual(output.rerunDecision, {
+      action: 'hold',
+      reason: 'rerun-budget-exhausted',
+      rerunPolicy: 'rerun-once',
+      rerunCount: 1,
+    });
+  } finally {
+    restore();
+  }
+});
+
+test('CLI --owner without --repo (or vice versa) throws -- both-or-neither', () => {
+  for (const args of [
+    ['--run-id', '1', '--owner', 'kurone-kito'],
+    ['--run-id', '1', '--repo', 'idd-skill'],
+  ]) {
+    const { stderr } = runCliExpectFailure([
+      join(REPO_ROOT, 'scripts/ci-wait-policy.mjs'),
+      ...args,
+    ]);
+    assert.match(stderr, /--owner and --repo must be given together/);
+  }
+});
+
+// #1996 output-shape backward compatibility (Fix #1 from the design
+// review): a --rerun-count-only invocation (no --run-id) must keep
+// producing the EXACT pre-#1996 {policy, rerunDecision} shape, with none
+// of the new --run-id-only fields present -- this is what lets the
+// existing 'readCiWaitPolicy reads nested ciWait config and CLI emits the
+// same resolution' test's deepEqual keep passing unmodified.
+test('CLI --rerun-count-only output omits every --run-id-only field (backward-compatible shape)', () => {
+  const output = JSON.parse(
+    execFileSync(
+      process.execPath,
+      [join(REPO_ROOT, 'scripts/ci-wait-policy.mjs'), '--rerun-count', '1'],
+      { encoding: 'utf8' },
+    ),
+  );
+  assert.deepEqual(Object.keys(output).sort(), ['policy', 'rerunDecision']);
 });
