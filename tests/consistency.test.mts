@@ -1761,7 +1761,7 @@ test('collectBinExecutableModeViolations: reports a shebanged file tracked non-e
     () => '100644',
   );
   assert.deepEqual(violations, [
-    'bin-executable-mode: bin/idd-broken.mjs has a #! shebang but is tracked 100644 in git; run `git update-index --chmod=+x bin/idd-broken.mjs` and commit',
+    "bin-executable-mode: bin/idd-broken.mjs has a #! shebang but is tracked 100644 in git; run `git update-index --chmod=+x -- 'bin/idd-broken.mjs'` and commit",
   ]);
 });
 
@@ -1772,7 +1772,24 @@ test('collectBinExecutableModeViolations: reports an untracked shebanged file', 
     () => null,
   );
   assert.deepEqual(violations, [
-    'bin-executable-mode: bin/idd-new.mjs has a #! shebang but is not tracked by git; run `chmod +x bin/idd-new.mjs && git add bin/idd-new.mjs` and commit',
+    "bin-executable-mode: bin/idd-new.mjs has a #! shebang but is not tracked by git; run `chmod +x -- 'bin/idd-new.mjs' && git add -- 'bin/idd-new.mjs'` and commit",
+  ]);
+});
+
+test('collectBinExecutableModeViolations: shell-quotes a path containing shell-special characters', () => {
+  // A path with a single quote and a command substitution must stay one
+  // literal argument in the copy-pasteable remediation command instead
+  // of letting a shell interpret it (CodeRabbit finding on PR #1972).
+  const dollarPath = 'bin/idd-$(rm -rf ~).mjs';
+  const quotePath = "bin/idd-it's-weird.mjs";
+  const violations = collectBinExecutableModeViolations(
+    [dollarPath, quotePath],
+    () => '#!/usr/bin/env node\n',
+    () => '100644',
+  );
+  assert.deepEqual(violations, [
+    `bin-executable-mode: ${dollarPath} has a #! shebang but is tracked 100644 in git; run \`git update-index --chmod=+x -- '${dollarPath}'\` and commit`,
+    `bin-executable-mode: ${quotePath} has a #! shebang but is tracked 100644 in git; run \`git update-index --chmod=+x -- 'bin/idd-it'"'"'s-weird.mjs'\` and commit`,
   ]);
 });
 

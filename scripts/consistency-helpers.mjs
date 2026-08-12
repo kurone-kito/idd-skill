@@ -984,6 +984,18 @@ export function collectEnginesRangeMirrorViolations(
   return violations;
 }
 /**
+ * POSIX-shell single-quotes `value` so it copy-pastes as one literal
+ * argument regardless of embedded shell metacharacters (`$()`, spaces,
+ * single quotes, ...). Used only for building human-facing remediation
+ * text below -- `bin/**\/*.mjs` paths come from `git ls-files`, not
+ * untrusted input, but a repository path is still attacker-influenced in
+ * principle (e.g. a malicious branch), and the remediation command is
+ * meant to be copy-pasted straight into a shell.
+ */
+function quoteShellArgument(value) {
+  return `'${value.replaceAll("'", `'"'"'`)}'`;
+}
+/**
  * Collect executable-mode violations for `bin/**\/*.mjs` CLI entry-point
  * scripts (#1971): every file whose first line is a `#!` shebang must be
  * tracked executable (git mode `100755`), so a plain checkout or `npx
@@ -1013,17 +1025,18 @@ export function collectBinExecutableModeViolations(
       continue;
     }
     const mode = trackedMode(file);
+    const quoted = quoteShellArgument(file);
     if (mode === null) {
       // `git update-index --chmod` only rewrites the mode bit of an
       // existing index entry -- it errors ("cannot add to the index")
       // on a path with no entry yet, so an untracked file needs its own
       // remediation rather than the tracked-but-wrong-mode one below.
       violations.push(
-        `bin-executable-mode: ${file} has a #! shebang but is not tracked by git; run \`chmod +x ${file} && git add ${file}\` and commit`,
+        `bin-executable-mode: ${file} has a #! shebang but is not tracked by git; run \`chmod +x -- ${quoted} && git add -- ${quoted}\` and commit`,
       );
     } else if (mode !== '100755') {
       violations.push(
-        `bin-executable-mode: ${file} has a #! shebang but is tracked ${mode} in git; run \`git update-index --chmod=+x ${file}\` and commit`,
+        `bin-executable-mode: ${file} has a #! shebang but is tracked ${mode} in git; run \`git update-index --chmod=+x -- ${quoted}\` and commit`,
       );
     }
   }
