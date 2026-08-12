@@ -138,6 +138,26 @@ when one exists:
   Include only context grounded in the issue discussion, commits, diff,
   or explicit operator instructions; omit rather than speculate.
 
+### PR body language
+
+The PR body's prose sections above (summary, background/rationale,
+follow-up notes) follow the resolved `authoringLanguage` value from
+`.github/idd/config.json`: a fixed language tag when configured, the
+claimed issue's own body language when the value is `match-source`
+(this file's unattended-execution case, with no live operator), or
+English when the field is absent. See the
+[Authoring Language](../../docs/customization.md#authoring-language)
+section for the full field definition.
+
+This never changes a machine-parsed marker or an exact-regex-matched
+visible line, which always stays in its canonical form regardless of
+`authoringLanguage`. Concretely here, the closing keyword line below
+(`Closes #N` and its variants) must keep its exact English keyword
+form: GitHub's own closing-keyword parser and this file's D3.5
+verification regex both match only the English keyword forms
+(`close[sd]?`/`fix(e[sd])?`/`resolve[sd]?`), so translating that line
+would silently break auto-close detection.
+
 ### Closing keyword
 
 The closing keyword must appear in the PR **body** (not the title) as
