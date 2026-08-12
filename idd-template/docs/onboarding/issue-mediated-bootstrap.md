@@ -195,8 +195,10 @@ gating this PR normally and are not affected by this note.
 
 ## Acceptance criteria
 
-- Every file listed in `idd-template/ONBOARDING.md` Step 2 is present in
-  this repository.
+- Every file listed in `idd-template/ONBOARDING.md` Step 2's core
+  `### File list` (plus any file required by the selected helper
+  runtime profile) is present in this repository — not the optional
+  issue-authoring companion files, which this issue defers (see above).
 - No onboarding placeholder strings remain, per Step 4 (outside the
   meta-docs that intentionally keep them literal).
 - Root agent entry files exist and reference the IDD workflow, per Step 5.
@@ -224,10 +226,13 @@ judgment about the change itself; per the issue-authoring skill's
 contract, a score of `1` also carries the `status:blocked-by-human`
 label, which correctly signals that this issue needs a human or a
 narrowly-scoped, pre-authorized agent rather than the ordinary
-autonomous loop. A pre-import repository may not have that label yet —
-create it first if `gh issue create --label status:blocked-by-human`
-(or the confirmed local label name) fails because the label is missing:
-`gh label create status:blocked-by-human`.
+autonomous loop. Use the operator-confirmed `labels.blockedByHumanLabelName`
+value from Step 1B for both issue publication and label creation below —
+default to `status:blocked-by-human` only when that default was actually
+selected, never unconditionally. A pre-import repository may not have
+that label yet — create it first if `gh issue create --label
+<confirmed-label-name>` fails because the label is missing:
+`gh label create <confirmed-label-name>`.
 
 ## Scope: exactly one issue
 
