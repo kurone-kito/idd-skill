@@ -99,7 +99,7 @@ Sequence:
    held claim's exact `{agent-id}` and `{claim-id}` (Claim-state
    parsing rule 5, `idd-claim.instructions.md`).
 3. Re-read the issue and confirm it now parses as unclaimed — the
-   release registered — before continuing.
+   release registered — before continuing; if not, stop and restart.
 4. Post a normal fresh A5 claim with `supersedes: none`, then continue
    to Step 1.
 
