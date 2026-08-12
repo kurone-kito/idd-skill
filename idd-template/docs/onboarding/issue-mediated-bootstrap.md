@@ -174,13 +174,18 @@ companion install) are explicitly out of scope here — they follow as
 separate issues once this one merges.
 
 **Record `not installed` here even when the operator wants the
-companion.** Step 6's verification checklist requires the companion
-skill files to be present whenever the recorded policy says
-`installed` — since installing the companion is deferred to its own
-follow-up issue (below), recording anything other than `not installed`
-in this core bootstrap issue makes Step 6 unsatisfiable by design. Once
-the follow-up issue installs the companion, it also updates the
-recorded policy value to `installed`.
+companion — and explicitly defer the matching Step 6 item, not just
+the recorded value.** `ONBOARDING.md`'s Step 6 checklist item
+("If the operator opted into issue authoring, the companion skill
+files are present…") triggers on the operator's **real hearing
+decision**, not on whatever this issue's policy field happens to
+record — recording `not installed` alone does not make that checklist
+item pass for an operator who genuinely opted in, since the files
+still won't be there. This issue's own acceptance criteria therefore
+explicitly exclude that one Step 6 item when the operator opted in (see
+below); do not claim "every Step 6 item passes" in that case without
+that carve-out. Once the follow-up issue installs the companion, it
+also updates the recorded policy value to `installed`.
 
 Execution for this issue is issue -> branch -> PR -> (a human or a
 narrowly-scoped, pre-authorized agent) merge — not the full autonomous
@@ -202,7 +207,11 @@ gating this PR normally and are not affected by this note.
 - No onboarding placeholder strings remain, per Step 4 (outside the
   meta-docs that intentionally keep them literal).
 - Root agent entry files exist and reference the IDD workflow, per Step 5.
-- Every Step 6 verification checklist item passes.
+- Every Step 6 verification checklist item passes, **except** the
+  issue-authoring-companion item when the operator opted into the
+  companion during the hearing — that one item is intentionally
+  deferred to the companion follow-up issue and does not gate this
+  issue's completion.
 - The confirmed Step 1B policy decisions are recorded in the imported
   repository per Step 3.
 
