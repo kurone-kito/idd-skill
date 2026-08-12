@@ -118,7 +118,9 @@ hearing (Steps 1A-1C), instead of re-deriving them:
 - Post-fix-validate commands: <value>
 - Install-deps command: <value>
 
-And these confirmed Step 1B policy decisions:
+And these confirmed Step 1B policy decisions — record them per Step 3
+alongside the Steps 2/4/5/6 import above, since Step 3 is a local
+recording action rather than a pinned remote-fetch step:
 
 - Merge policy: <value>
 - PR review policy profile: <value>
