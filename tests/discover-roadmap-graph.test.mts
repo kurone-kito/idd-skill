@@ -572,6 +572,57 @@ test('extractKeywordReferences preserves additive clauses after a negative contr
   ]);
 });
 
+test('extractKeywordReferences negates across the maximal "no longer" + 2-intervening-word span, at a non-zero token offset (#1970)', () => {
+  // #1970: pads the line with 7 leading filler tokens so the match sits well
+  // past NEGATION_LOOKBACK_TOKENS's window-start clamp-to-line-start path —
+  // without this padding, a test using this phrasing alone can't distinguish
+  // a correctly computed non-zero windowStart from one that only "works" by
+  // accidentally clamping to 0. "no longer" is the 2-token negation term
+  // (the longest one) plus 2 intervening words ("really truly") is the
+  // maximal 4-token span the pattern allows.
+  const body =
+    'aaa bbb ccc ddd eee fff ggg This no longer really truly closes #13';
+  assert.deepEqual(extractKeywordReferences(body), []);
+});
+
+test('extractKeywordReferences recognizes a negation term glued to preceding punctuation, mid-token (#1970)', () => {
+  // #1970: "note,not" is a single whitespace-delimited token (no internal
+  // whitespace), so the windowing helper's per-line tokenizer (which splits
+  // on `\S+`) must still find the negation term embedded inside it rather
+  // than only recognizing one that starts a token.
+  assert.deepEqual(extractKeywordReferences('per the note,not close #9'), []);
+});
+
+test('extractKeywordReferences stays linear-time and correct on a large keyword-dense line (#1970)', () => {
+  // #1970: Codex found `extractKeywordReferences` quadratic in the number of
+  // keyword occurrences on one line (re-slicing from line start and
+  // re-running an unanchored regex for every match). Repro: a several-KB
+  // line with several thousand keyword occurrences. This asserts BOTH
+  // correctness (the right reference count — catches "fast because broken")
+  // and a bounded-cost scaling check across two input sizes, using a ratio
+  // assertion rather than a tight wall-clock ceiling so it stays reliable
+  // under this repo's documented CI/concurrent-session flakiness. Kept small
+  // enough (a few thousand occurrences) to stay fast in the normal suite.
+  const buildLine = (count: number) => 'Closes #1 '.repeat(count);
+  const small = buildLine(500);
+  const large = buildLine(2000); // 4x the input size
+  const smallStart = performance.now();
+  const smallRefs = extractKeywordReferences(small);
+  const smallElapsed = Math.max(performance.now() - smallStart, 0.001);
+  const largeStart = performance.now();
+  const largeRefs = extractKeywordReferences(large);
+  const largeElapsed = Math.max(performance.now() - largeStart, 0.001);
+  assert.equal(smallRefs.length, 500);
+  assert.equal(largeRefs.length, 2000);
+  // A quadratic implementation would grow ~16x (4^2) for a 4x input size; a
+  // linear one grows ~4x. Allow generous slack for scheduling noise while
+  // still catching a real quadratic regression.
+  assert.ok(
+    largeElapsed < smallElapsed * 10 + 200,
+    `expected roughly linear growth, got small=${smallElapsed.toFixed(2)}ms large=${largeElapsed.toFixed(2)}ms`,
+  );
+});
+
 test('extractTaskListReferences ignores a checkbox quoted inside a fence (#1204)', () => {
   const fenced = ['```md', '- [ ] #900', '```', '- [ ] #901'].join('\n');
   assert.deepEqual(extractTaskListReferences(fenced), [
