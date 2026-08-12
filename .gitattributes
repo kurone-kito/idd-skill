@@ -82,6 +82,9 @@ idd-template/scripts/minimize-superseded-markers.mjs linguist-generated=true
 # Every bin/ shim is generated from src/bin/*.mts (whole directory).
 bin/**/*.mjs linguist-generated=true
 
+# Vendored lockfile
+pnpm-lock.yaml linguist-vendored
+
 # Binary files
 *.gif binary
 *.ico binary
@@ -94,4 +97,6 @@ bin/**/*.mjs linguist-generated=true
 .coderabbit.yaml export-ignore
 .gitattributes export-ignore
 .gitignore export-ignore
+.gitmessage export-ignore
+.husky/** export-ignore
 .imgbotconfig export-ignore

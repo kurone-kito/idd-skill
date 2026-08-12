@@ -1,5 +1,6 @@
 {
   "recommendations": [
+    "biomejs.biome",
     "davidanson.vscode-markdownlint",
     "editorconfig.editorconfig",
     "redhat.vscode-yaml",

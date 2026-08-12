@@ -1,10 +1,12 @@
 {
+  "editor.defaultFormatter": "biomejs.biome",
   "explorer.fileNesting.enabled": true,
   "explorer.fileNesting.expand": false,
   "explorer.fileNesting.patterns": {
     "*.md": "${capture}.*.md",
     ".gitattributes": ".gitignore, .gitmessage",
     ".markdownlint.*": ".markdownlint-cli2.*",
+    ".tool-versions": ".node-version, .nvmrc",
     "AGENTS.md": "CLAUDE.md, GEMINI.md",
     "package.json": "pnpm-lock.yaml, pnpm-workspace.yaml"
   },
@@ -12,6 +14,9 @@
     ".gitmessage": "git-commit",
     ".imgbotconfig": "json",
     "LICENSE": "plaintext"
+  },
+  "files.readonlyInclude": {
+    "**/node_modules/**/*": true
   },
   "files.watcherExclude": {
     "**/*.tgz": true,
