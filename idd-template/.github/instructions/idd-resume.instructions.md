@@ -1,9 +1,12 @@
 # IDD — Resume Phase
 
 Use this file when taking over a crashed or rate-limited session with no
-prior session context. Read `idd-overview-core.instructions.md` for shared
-definitions (claim format, stale threshold, abort, hold). For full narrative
-detail on each routing branch, see
+prior session context, or when a fresh session resumes an issue whose prior
+session left an active claim after its own deliberate, announced pause (see
+[Operator-present release](#operator-present-release-of-a-deliberately-paused-own-held-claim)
+below). Read `idd-overview-core.instructions.md` for shared definitions
+(claim format, stale threshold, abort, hold). For full narrative detail on
+each routing branch, see
 [`docs/idd-resume-detail.md`](../../docs/idd-resume-detail.md).
 
 Resume stale checks use the `claim-stale-age` policy default from
@@ -77,13 +80,16 @@ qualify and stays governed by the stale-takeover procedure in
 
 The release step still requires the durable, auditable
 trusted-marker-actor comment that Claim-state parsing rule 5 in
-`idd-claim.instructions.md` already requires — the operator's chat or
-conversational input is never itself the release; it is only content
-relayed through that comment. This path is unrelated to the TTY-gated
-forced-handoff safeguard above: it opts into no `forcedHandoff` policy
-and requires no `idd-force-handoff` `y/N` confirmation, and it does not
-loosen that safeguard, which governs a different mechanism (forced
-handoff) entirely.
+`idd-claim.instructions.md` already requires. The operator's chat or
+conversational input is never itself the release: it is recorded as
+the separate normal comment in step 1 below, and the trusted-marker-actor
+`unclaimed-by` in step 2 carries only its canonical marker body (the
+same nothing-appended-after-the-note rule as `review-watermark`/
+`claimed-by`) and performs the release on its own. This path is
+unrelated to the TTY-gated forced-handoff safeguard above: it opts
+into no `forcedHandoff` policy and requires no `idd-force-handoff`
+`y/N` confirmation, and it does not loosen that safeguard, which
+governs a different mechanism (forced handoff) entirely.
 
 Sequence:
 
@@ -92,7 +98,9 @@ Sequence:
 2. Post a trusted-marker-actor-authored `unclaimed-by` matching the
    held claim's exact `{agent-id}` and `{claim-id}` (Claim-state
    parsing rule 5, `idd-claim.instructions.md`).
-3. Post a normal fresh A5 claim with `supersedes: none`, then continue
+3. Re-read the issue and confirm it now parses as unclaimed — the
+   release registered — before continuing.
+4. Post a normal fresh A5 claim with `supersedes: none`, then continue
    to Step 1.
 
 The 30-minute quiet window and 24h stale threshold in
