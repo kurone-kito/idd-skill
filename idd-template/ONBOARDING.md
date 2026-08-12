@@ -488,6 +488,7 @@ docs/customization.md
 docs/policy-constants.md
 docs/reference.md
 docs/onboarding/agent-entry-and-verification.md
+docs/onboarding/issue-mediated-bootstrap.md
 docs/onboarding/placeholders.md
 docs/onboarding/policy-decisions.md
 docs/onboarding/template-distribution.md
@@ -614,6 +615,7 @@ for FILE in \
   "docs/policy-constants.md" \
   "docs/reference.md" \
   "docs/onboarding/agent-entry-and-verification.md" \
+  "docs/onboarding/issue-mediated-bootstrap.md" \
   "docs/onboarding/placeholders.md" \
   "docs/onboarding/policy-decisions.md" \
   "docs/onboarding/template-distribution.md" \
@@ -723,6 +725,7 @@ for FILE in \
   "docs/policy-constants.md" \
   "docs/reference.md" \
   "docs/onboarding/agent-entry-and-verification.md" \
+  "docs/onboarding/issue-mediated-bootstrap.md" \
   "docs/onboarding/placeholders.md" \
   "docs/onboarding/policy-decisions.md" \
   "docs/onboarding/template-distribution.md" \
