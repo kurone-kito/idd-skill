@@ -116,19 +116,25 @@ this run from it:
 
 ```sh
 node scripts/idd-onboard.mjs --import \
-  --source "<path-to-the-cloned-idd-skill-tree>" \
-  --target "<path-to-this-repository>" --profile vendored-node
+  --source "$CLONE_DIR" --target "$TARGET_REPO" --profile vendored-node
 ```
 
 `--import` rejects calls without an explicit `--source`, and since the
 natural place to run this command is from inside that same clone,
 `--target` also needs to be explicit (its default is the current
 directory, which without an explicit value would import into the
-clone itself instead of the adopter repository). Direct the issue's
-process section to that full-clone path rather than the single-file
-download, so this issue's own acceptance criterion below ("every file
-required by the selected helper runtime profile") is actually
-satisfiable.
+clone itself instead of the adopter repository). `$CLONE_DIR` and
+`$TARGET_REPO` are shell variables the executor sets at run time, not
+angle-bracket author-time fills — keep them as shell variables (never
+angle brackets) in the generated issue body, since the issue-authoring
+release contract's checklist requires no unsubstituted placeholder
+remain before the authoring hold is released
+(`skills/issue-authoring/references/contract.md`, "Authoring hold and
+release"), and this value has nothing to substitute until the
+executor actually runs the command. Direct the issue's process
+section to that full-clone path rather than the single-file download,
+so this issue's own acceptance criterion below ("every file required
+by the selected helper runtime profile") is actually satisfiable.
 
 ### The status:authoring hold still applies
 
@@ -183,14 +189,17 @@ helper bundle needs a full `idd-skill` clone checked out at
 
 ```sh
 node scripts/idd-onboard.mjs --import \
-  --source "<path-to-the-cloned-idd-skill-tree>" \
-  --target "<path-to-this-repository>" --profile vendored-node
+  --source "$CLONE_DIR" --target "$TARGET_REPO" --profile vendored-node
 ```
 
 Both `--source` and an explicit `--target` are required — `--target`
 defaults to the current directory, which would import into the clone
-itself if left unset while running from inside it. The single-file
-direct download documented in `template-distribution.md`'s
+itself if left unset while running from inside it. `$CLONE_DIR` and
+`$TARGET_REPO` stay shell variables (never angle brackets) in the
+published issue body: the release checklist requires no unsubstituted
+placeholder remain before the authoring hold is released, and these
+have nothing to substitute until the executor runs the command. The
+single-file direct download documented in `template-distribution.md`'s
 "Profile-conditional helper files" section supplies only
 `minimize-superseded-markers.mjs`, not the rest of the profile's
 bundle, so it alone does not satisfy this issue's acceptance criterion
