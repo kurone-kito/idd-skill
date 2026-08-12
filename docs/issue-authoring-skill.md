@@ -805,7 +805,11 @@ read safely.
 configured prefix, `idd-skill`, literally — this document describes
 this repository's own convention. Resolve the target repository's
 marker prefix before emitting any authoring marker in an installed
-bundle; never assume `idd-skill` outside this source repository. See
+bundle; never assume `idd-skill` outside this source repository. A
+prefix the operator already confirmed during an onboarding hearing
+(Steps 1A-1C of `idd-template/ONBOARDING.md`) counts as a resolved
+value under "user context" — even before it is committed anywhere in
+the target repository's tree — and does not require asking again. See
 the bundled `contract.md`'s
 [Target marker prefix](https://github.com/kurone-kito/idd-skill/blob/main/skills/issue-authoring/references/contract.md#target-marker-prefix)
 section for the adopter-facing, prefix-parameterized version of this
