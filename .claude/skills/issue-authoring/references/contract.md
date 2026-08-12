@@ -551,6 +551,32 @@ Validation expectations:
 - passes the `audit-authored-issue` mechanical pre-publish gate for the
   `child` shape (see [Mechanical pre-publish gate](#mechanical-pre-publish-gate))
 
+## Drafted issue prose language
+
+A drafted issue's human-readable prose sections — `## Background` (or
+`## Goal`/`## Why this matters`), `## Proposed change`,
+`## Acceptance criteria`, and the roadmap shape's `## Tracks` /
+`## Success criteria` — follow the target repository's resolved
+`authoringLanguage` value from `.github/idd/config.json`:
+
+- A fixed BCP-47-shaped tag (for example `en`, `ja`, `fr`) makes the
+  drafted prose use that language.
+- The literal `match-source` matches the operator's live conversational
+  language during an interactive/hearing issue-authoring session.
+- An absent field defaults to English, codifying today's actual
+  emergent behavior.
+
+See `docs/customization.md`'s Authoring Language section for the full
+field definition.
+
+**Marker/footer carve-out**: this never changes any HTML-comment
+marker's machine-parsed format, nor any visible-line mirror whose exact
+wording a mechanical regex parses. Concretely, the autopilot-suitability
+and effort footers' visible lines (`_Autopilot suitability: N / 5 ...`
+/ `_Effort: S | M | L ...`) must stay in their exact canonical English
+wording regardless of `authoringLanguage`, since `audit-authored-issue`
+matches them against a fixed English-phrase regex.
+
 ## A4.5 Suitability Gate Alignment
 
 When an issue is published and reaches the IDD discover phase, the A4.5
