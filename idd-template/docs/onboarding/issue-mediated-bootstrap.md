@@ -105,13 +105,19 @@ file contents can still drift even though the instructions document
 you read were pinned.
 
 **If the confirmed helper runtime profile is `vendored-node`**, its
-profile-conditional helper file also needs the same pin: the direct
-download in
+profile-conditional helper bundle needs more than a pin. The
+single-file direct download in
 [Profile-conditional helper files](template-distribution.md#profile-conditional-helper-files-vendored-node)
-uses its own hardcoded `/main/` URL, independent of everything above —
-replace `main` with the same `<tag-or-sha>` there too, or otherwise a
-tag-pinned core import can still combine with helper code that changed
-since the pinned release.
+supplies only `minimize-superseded-markers.mjs`, not the complete
+`vendored-node` bundle — per that section, getting every file the
+profile requires needs a full `idd-skill` clone (not just the
+`idd-template/` subtree), checked out at the same `<tag-or-sha>`, and
+`node scripts/idd-onboard.mjs --import --profile vendored-node` run
+from it, since neither Option A's remote fetch nor a plain Option B
+copy alone supplies the rest. Direct the issue's process section to
+that full-clone path rather than the single-file download, so this
+issue's own acceptance criterion below ("every file required by the
+selected helper runtime profile") is actually satisfiable.
 
 ### The status:authoring hold still applies
 
@@ -151,10 +157,15 @@ API endpoint (the recommended default — it has no `ref` and otherwise
 always resolves the default branch regardless of the curl base URL),
 use `<tag-or-sha>` (not `main`) in the `curl` fallback's base URL, and
 check out `<tag-or-sha>` in the local clone before running Option B. If
-the confirmed helper runtime profile is `vendored-node`, also replace
-`main` with `<tag-or-sha>` in the profile-conditional helper file's own
-direct-download URL (see `template-distribution.md`'s
-"Profile-conditional helper files" section).
+the confirmed helper runtime profile is `vendored-node`, its complete
+helper bundle needs a full `idd-skill` clone checked out at
+`<tag-or-sha>` plus
+`node scripts/idd-onboard.mjs --import --profile vendored-node` run
+from it — the single-file direct download documented in
+`template-distribution.md`'s "Profile-conditional helper files"
+section supplies only `minimize-superseded-markers.mjs`, not the rest
+of the profile's bundle, so it alone does not satisfy this issue's
+acceptance criterion below.
 
 Use these operator-confirmed values, already collected during the
 hearing (Steps 1A-1C), instead of re-deriving them:
