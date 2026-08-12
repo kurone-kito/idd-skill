@@ -3,6 +3,16 @@
   "version": "0.6.0",
   "private": true,
   "description": "Issue-Driven Development workflow assets",
+  "author": "kurone-kito <krone@kit.black> (https://kit.black/)",
+  "homepage": "https://github.com/kurone-kito/idd-skill#readme",
+  "bugs": "https://github.com/kurone-kito/idd-skill/issues",
+  "keywords": [
+    "issue-driven-development",
+    "ai-agent-workflow",
+    "github-native",
+    "multi-agent",
+    "pull-request-automation"
+  ],
   "license": "MIT",
   "repository": "github:kurone-kito/idd-skill",
   "type": "module",
