@@ -92,8 +92,65 @@ const INACCESSIBLE_ISSUE_SENTINEL = Object.freeze({
   __iddLookupStatus: 'inaccessible',
 });
 const INACCESSIBLE_HTTP_STATUSES = new Set([403, 410, 451]);
+// #1964/#1968: `(?<!-)` rejects a keyword immediately after a hyphen (e.g.
+// "auto-close", "re-close") rather than trying to make negation detection
+// cross the hyphen boundary — GitHub itself does not recognize a compound
+// hyphenated word as a closing keyword, so this also matches real close
+// semantics, not just this repo's own heuristic.
 const KEYWORD_REFERENCE_REGEX =
-  /\b(Closes|Close|Closed|Fixes|Fixed|Fix|Resolves|Resolved|Resolve|Refs|Ref|Depends on|Blocked by|Sub-issue|Sub issue)\b/giu;
+  /(?<!-)\b(Closes|Close|Closed|Fixes|Fixed|Fix|Resolves|Resolved|Resolve|Refs|Ref|Depends on|Blocked by|Sub-issue|Sub issue)\b/giu;
+// #1964: a recognized closing/dependency/sub-issue keyword sitting next to a
+// `#N` reference inside a negation clause (e.g. issue 1931's own merged
+// body — a field-report narrative about an unrelated already-closed
+// roadmap, not a real relationship) must not become a graph edge.
+// Reclassifying alone is not enough: `visitIssue` below traverses every
+// edge's target regardless of `relationship`, so the target would still
+// enter the graph as a node and still trip `idd-roadmap-audit-execute`'s
+// nested-roadmap blocker. The match is instead dropped entirely — see the
+// `isNegatedKeywordMatch` call site.
+//
+// This is a bounded lexical heuristic over clause-local negation, not a
+// grammar parser: it recognizes a fixed set of negation terms and
+// contractions in a short end-anchored token window, not arbitrary English
+// negation syntax. New negation phrasings this window doesn't cover are a
+// documented scope boundary, not an open-ended obligation to keep chasing
+// (see issue 1968's own review history: `not`/`never`/`cannot`/`no
+// longer`/modal contractions, hyphenated compounds, and clause-boundary
+// conjunctions are the covered set; matching this pattern is deliberately
+// not the standard this codebase holds itself to for its own review
+// process, "cite the observed incident" style — it holds itself to
+// covering only what's been empirically demonstrated).
+//
+// Deliberately end-anchored (`\s+(?:tok\s+){0,2}$`, at most two intervening
+// word tokens, no intervening punctuation) rather than "negation anywhere in
+// a fixed-size window" like suitability-triage.mts's looser `NEGATION_PATTERN`
+// / `DUPLICATE_NEGATION_PATTERN` (which have their own known false-positive
+// history in this repo): a loose match would also swallow a genuine close,
+// e.g. "The workaround did not work; closes #42" — the semicolon breaks the
+// required unbroken token chain, so that case still keeps its real edge
+// regardless of how much text precedes it. Bounded structurally by token
+// count (at most 3 total: the negation term plus up to two intervening word
+// tokens) rather than by a character-count slice — an earlier revision used a
+// fixed 30-char slice, which silently dropped the negation term itself for
+// long intervening words ("would not unconditionally automatically close" —
+// "not" fell outside the slice — recreating the exact false-positive edge
+// this fix exists to prevent).
+//
+// Each intervening token is itself excluded from matching a contrastive
+// conjunction (`but`/`however`/`yet`): without this, "This never closes but
+// refs #44" would count "closes" and "but" as the two allowed intervening
+// words and wrongly treat the following `refs` as negated too — a
+// conjunction ends the negation's clause instead of participating in it.
+//
+// The `(?!\s+(?:only|merely|just|simply)\b)` guard is attached to the whole
+// negation-term alternation (bare `not` and every contraction alike, not
+// just bare `not`) so it excludes "not only …", "doesn't just …", "not
+// merely …", and "not simply …" but-also-style additive correlative
+// constructions uniformly — none of those is a real negation, e.g. "This
+// doesn't just fix #42 but also resolves #43" must keep the edge to #42
+// regardless of which negation form introduces the clause.
+const KEYWORD_NEGATION_PATTERN =
+  /\b(?:not|never|cannot|no longer|(?:has|have|had|ca|do|does|did|is|was|are|were|wo|would|should|could|must|might|sha)n['’]t)(?!\s+(?:only|merely|just|simply)\b)\s+(?:(?!(?:but|however|yet)\b)\w+\s+){0,2}$/iu;
 const SUB_ISSUES_QUERY = `
 query($owner:String!, $repo:String!, $number:Int!, $after:String) {
   repository(owner:$owner, name:$repo) {
@@ -1970,7 +2027,13 @@ export function extractKeywordReferences(
     const keywordMatches = [...maskedLine.matchAll(KEYWORD_REFERENCE_REGEX)];
     for (let index = 0; index < keywordMatches.length; index += 1) {
       const match = keywordMatches[index];
-      const segmentStart = (match.index ?? 0) + match[0].length;
+      const matchIndex = match.index ?? 0;
+      // #1964: a negated keyword match ("does not close #176") produces no
+      // reference at all — see KEYWORD_NEGATION_PATTERN above.
+      if (isNegatedKeywordMatch(maskedLine, matchIndex)) {
+        continue;
+      }
+      const segmentStart = matchIndex + match[0].length;
       const segmentEnd = keywordMatches[index + 1]?.index ?? maskedLine.length;
       const segment = maskedLine.slice(segmentStart, segmentEnd);
       for (const target of extractKeywordReferenceTargets(
@@ -1989,6 +2052,20 @@ export function extractKeywordReferences(
     }
   }
   return references;
+}
+
+/**
+ * True when a negation term (`not`, `never`, `won't`, `doesn't`, ...) sits in
+ * a short token window immediately before the matched keyword at
+ * `matchIndex` on `line` — e.g. "This does not close #176" negates `close`.
+ * Tests the entire text of `line` before the match, not a fixed-size
+ * character slice: {@link KEYWORD_NEGATION_PATTERN}'s own `{0,2}`-token bound
+ * (plus its punctuation-breaks-the-chain behavior) is what keeps this from
+ * matching a distant, unrelated negation — see the pattern's own doc comment
+ * (#1964).
+ */
+function isNegatedKeywordMatch(line: string, matchIndex: number): boolean {
+  return KEYWORD_NEGATION_PATTERN.test(line.slice(0, matchIndex));
 }
 
 function classifyKeywordRelationship(keyword: unknown): string {

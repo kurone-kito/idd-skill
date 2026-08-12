@@ -382,6 +382,196 @@ test('extractKeywordReferences keeps a real ref while dropping a code-quoted one
   ]);
 });
 
+test('extractKeywordReferences drops a negated closing-keyword mention (#1964)', () => {
+  // Verbatim reproducer lines from issue #1931's own merged body (a
+  // field-report narrative about an unrelated, already-closed historical
+  // roadmap #176) — both are negated "does not/would not close" phrasings,
+  // not real relationships, and must produce no reference at all.
+  assert.deepEqual(
+    extractKeywordReferences(
+      'comment had stated in writing that the PR would not close #176. The',
+    ),
+    [],
+  );
+  assert.deepEqual(
+    extractKeywordReferences(
+      'boundary to a reader: "This does not close #176: verifying the',
+    ),
+    [],
+  );
+});
+
+test('extractKeywordReferences keeps both targets in a "not only ... but also ..." construction (#1968 review)', () => {
+  // Copilot/Codex review on #1968: "not only" is an additive correlative
+  // construction, not a real negation. Before this guard, KEYWORD_NEGATION_PATTERN
+  // treated "not" in "not only closes #42" as negating #42, dropping a
+  // genuine edge — a regression this fix must not introduce.
+  const body = 'This not only closes #42 but also fixes #43';
+  assert.deepEqual(extractKeywordReferences(body), [
+    { target: 42, relationship: 'closing-keyword', evidence: body },
+    { target: 43, relationship: 'closing-keyword', evidence: body },
+  ]);
+});
+
+test('extractKeywordReferences keeps genuine edges in "not merely/just/simply ... but also ..." constructions (own E2 critique pass)', () => {
+  // A same-claim E2 critique pass on PR #1968 generalized the "not only"
+  // finding above: "merely", "just", and "simply" are the same additive
+  // correlative family and reproduced the identical false-negative before
+  // this widened guard.
+  for (const adverb of ['merely', 'just', 'simply']) {
+    const body = `This not ${adverb} closes #37 but also fixes #38`;
+    assert.deepEqual(
+      extractKeywordReferences(body),
+      [
+        { target: 37, relationship: 'closing-keyword', evidence: body },
+        { target: 38, relationship: 'closing-keyword', evidence: body },
+      ],
+      `adverb: ${adverb}`,
+    );
+  }
+});
+
+test('extractKeywordReferences still negates across long intervening words (#1968 review)', () => {
+  // Copilot/Codex review on #1968: an earlier revision bounded the negation
+  // scan to a fixed 30-character slice, which could truncate the negation
+  // term itself out of the scanned text when the (still only 2) intervening
+  // words were long — recreating the exact false-positive edge this fix
+  // exists to prevent. The scan must be bounded by token count, not a
+  // character-count slice.
+  assert.deepEqual(
+    extractKeywordReferences(
+      'This would not unconditionally automatically close #43',
+    ),
+    [],
+  );
+});
+
+test('extractKeywordReferences negates across 1-2 intervening word tokens, not just directly adjacent (#1964)', () => {
+  // KEYWORD_NEGATION_PATTERN allows up to two intervening word tokens
+  // between the negation term and the matched keyword
+  // (`\s+(?:\w+\s+){0,2}$`) so phrasing like "not going to close" or "not
+  // really close" is still recognized, not just the zero-intervening-word
+  // case the other tests use.
+  assert.deepEqual(
+    extractKeywordReferences('This is not going to close #21 on its own'),
+    [],
+  );
+  assert.deepEqual(
+    extractKeywordReferences('This PR does not really fix #22 either'),
+    [],
+  );
+  // Three intervening words falls outside the window and is treated as a
+  // genuine (non-negated) match — the window is deliberately short.
+  assert.deepEqual(
+    extractKeywordReferences('This is not even remotely going to close #23'),
+    [
+      {
+        target: 23,
+        relationship: 'closing-keyword',
+        evidence: 'This is not even remotely going to close #23',
+      },
+    ],
+  );
+});
+
+test('extractKeywordReferences keeps a genuine close when "not" sits earlier but does not negate it (#1964)', () => {
+  // "not" is within the scan window of "closes" but a clause boundary (the
+  // semicolon) sits between them, so this is NOT a negated closing keyword —
+  // the real edge must still be recorded. Guards against an over-broad
+  // negation window silently dropping genuine closing keywords.
+  assert.deepEqual(extractKeywordReferences('did not work; closes #42'), [
+    {
+      target: 42,
+      relationship: 'closing-keyword',
+      evidence: 'did not work; closes #42',
+    },
+  ]);
+});
+
+test('extractKeywordReferences keeps a non-negated match and drops only the negated one on the same line (#1964)', () => {
+  const body = 'Closes #42 but does not close #43';
+  assert.deepEqual(extractKeywordReferences(body), [
+    { target: 42, relationship: 'closing-keyword', evidence: body },
+  ]);
+});
+
+test('extractKeywordReferences drops a negated dependency/sub-issue/reference keyword (#1964)', () => {
+  assert.deepEqual(
+    extractKeywordReferences('not blocked by #55, just related'),
+    [],
+  );
+  assert.deepEqual(
+    extractKeywordReferences('not a sub-issue #77 of this work'),
+    [],
+  );
+  assert.deepEqual(
+    extractKeywordReferences('This section does not Ref #61 for background'),
+    [],
+  );
+});
+
+test('extractKeywordReferences recognizes "hasn\'t"/"no longer" negation contractions (#1964)', () => {
+  assert.deepEqual(
+    extractKeywordReferences("The PR hasn't closed #12 yet"),
+    [],
+  );
+  assert.deepEqual(
+    extractKeywordReferences('This work no longer closes #13'),
+    [],
+  );
+});
+
+test('extractKeywordReferences treats a contrastive conjunction as a negation-clause boundary (#1968 review round 2)', () => {
+  // Codex review on #1968: "closes" and "but" both count as intervening
+  // words under the plain token-count bound, so "never closes but refs
+  // #44" wrongly classified the following "refs" as negated too. A
+  // contrastive conjunction ends the negation's clause instead of
+  // participating in it.
+  const body = 'This never closes but refs #44';
+  assert.deepEqual(extractKeywordReferences(body), [
+    { target: 44, relationship: 'reference', evidence: body },
+  ]);
+});
+
+test('extractKeywordReferences rejects a keyword inside a hyphenated compound (#1968 review round 2)', () => {
+  // Codex review on #1968: the keyword matcher recognized "close" after the
+  // hyphen in "auto-close"/"re-close", but the negation window's intervening
+  // token pattern can't consume a hyphen, so "does not auto-close #48" still
+  // emitted a phantom edge. GitHub itself does not recognize a hyphenated
+  // compound as a closing keyword, so the fix rejects the keyword match
+  // itself rather than trying to make negation detection cross the hyphen.
+  assert.deepEqual(
+    extractKeywordReferences('This does not auto-close #48'),
+    [],
+  );
+  assert.deepEqual(
+    extractKeywordReferences('A re-close of #49 is planned'),
+    [],
+  );
+});
+
+test('extractKeywordReferences recognizes "mustn\'t"/"mightn\'t"/"shan\'t" negation contractions (#1968 review round 2)', () => {
+  // Codex review on #1968: the contraction branch already covered
+  // "wouldn't"/"shouldn't"/"couldn't" but omitted these three standard
+  // negative contractions, so they fell through as phantom edges.
+  assert.deepEqual(extractKeywordReferences("This mustn't close #46"), []);
+  assert.deepEqual(extractKeywordReferences("This mightn't resolve #47"), []);
+  assert.deepEqual(extractKeywordReferences("This shan't fix #48"), []);
+});
+
+test('extractKeywordReferences preserves additive clauses after a negative contraction (#1968 review round 2)', () => {
+  // Codex review on #1968: the "not only/merely/just/simply … but also …"
+  // additive-correlative guard was attached only to the bare "not"
+  // alternative, so the identical construction using a contraction ("This
+  // doesn't just fix #42 but also resolves #43") still dropped the genuine
+  // edge to #42 after the bare-"not" case was already fixed.
+  const body = "This doesn't just fix #42 but also resolves #43";
+  assert.deepEqual(extractKeywordReferences(body), [
+    { target: 42, relationship: 'closing-keyword', evidence: body },
+    { target: 43, relationship: 'closing-keyword', evidence: body },
+  ]);
+});
+
 test('extractTaskListReferences ignores a checkbox quoted inside a fence (#1204)', () => {
   const fenced = ['```md', '- [ ] #900', '```', '- [ ] #901'].join('\n');
   assert.deepEqual(extractTaskListReferences(fenced), [
@@ -422,6 +612,54 @@ test('graph traversal creates no phantom edges from code-quoted refs in a child 
     },
   ]);
   assert.deepEqual(graph.executionCandidates, []);
+});
+
+test('graph traversal excludes a negated closing-keyword mention as a phantom nested-roadmap node (#1964)', async () => {
+  // Reproduces the live #1931 -> #176 shape at the graph level: a merged
+  // child issue's field-report narrative mentions an unrelated,
+  // already-closed historical roadmap using negated phrasing ("does not
+  // close #N" / "would not close #N"), each phrase kept on a single physical
+  // line (matching the real #1931 body — the negation window is per-line, so
+  // a phrase split across a line wrap would not even reach the negation
+  // check: the keyword and `#N` would already be on different lines and
+  // never pair up in the first place, negation aside). Before this fix the
+  // mechanical extractor still recorded a closing-keyword edge for both,
+  // pulling the unrelated roadmap into the graph as a childless node and
+  // tripping idd-roadmap-audit-execute's nested-roadmap blocker for the real
+  // root. After the fix, #902 must be absent from the graph entirely — not
+  // merely relabeled — since traversal follows every edge regardless of
+  // relationship type.
+  const childBody = [
+    '## Background',
+    '',
+    'The B2 plan comment had stated in writing that the PR would not close #902.',
+    'The commit message contained a sentence written to explain the scope',
+    'boundary to a reader: "This does not close #902: verifying the',
+    'acceptance criteria needs an actual green release run".',
+  ].join('\n');
+  const issues = new Map([
+    [900, roadmapIssue(900, '- [ ] #901', 'phantom-nested-roadmap')],
+    [901, executionIssue(901, childBody, 'closed')],
+    [902, roadmapIssue(902, '', 'unrelated-old-roadmap', 'closed')],
+  ]);
+
+  const graph = await enumerateRoadmapGraph(900, {
+    loadIssue: async (issueNumber) => issues.get(issueNumber) ?? null,
+  });
+
+  assert.deepEqual(graph.edges, [
+    {
+      source: 900,
+      target: 901,
+      relationship: 'task-list',
+      evidence: '- [ ] #901',
+    },
+  ]);
+  assert.equal(
+    graph.nodes.some((node) => node.number === 902),
+    false,
+  );
+  assert.deepEqual(graph.roadmapNodes, []);
 });
 
 test('enumerates a flat roadmap graph and separates execution candidates', async () => {
