@@ -572,6 +572,76 @@ test('extractKeywordReferences preserves additive clauses after a negative contr
   ]);
 });
 
+test('extractKeywordReferences negates across the maximal "no longer" + 2-intervening-word span, at a non-zero token offset (#1970)', () => {
+  // #1970: pads the line with 7 leading filler tokens so the match sits well
+  // past NEGATION_LOOKBACK_TOKENS's window-start clamp-to-line-start path —
+  // without this padding, a test using this phrasing alone can't distinguish
+  // a correctly computed non-zero windowStart from one that only "works" by
+  // accidentally clamping to 0. "no longer" is the 2-token negation term
+  // (the longest one) plus 2 intervening words ("really truly") is the
+  // maximal 4-token span the pattern allows.
+  const body =
+    'aaa bbb ccc ddd eee fff ggg This no longer really truly closes #13';
+  assert.deepEqual(extractKeywordReferences(body), []);
+});
+
+test('extractKeywordReferences recognizes a negation term glued to preceding punctuation, mid-token (#1970)', () => {
+  // #1970: "note,not" is a single whitespace-delimited token (no internal
+  // whitespace), so the windowing helper's per-line tokenizer (which splits
+  // on `\S+`) must still find the negation term embedded inside it rather
+  // than only recognizing one that starts a token.
+  assert.deepEqual(extractKeywordReferences('per the note,not close #9'), []);
+});
+
+test('extractKeywordReferences stays linear-time and correct on a large keyword-dense line (#1970)', () => {
+  // #1970: Codex found `extractKeywordReferences` quadratic in the number of
+  // keyword occurrences on one line (re-slicing from line start and
+  // re-running an unanchored regex for every match). Repro: a several-KB
+  // line with several thousand keyword occurrences (matching the issue's
+  // own 56 KB / 8,000-occurrence repro, measured at ~2.4s there and ~1970ms
+  // locally against the pre-fix implementation). This asserts BOTH
+  // correctness (the right reference count — catches "fast because broken")
+  // and a bounded-cost ceiling. A generous absolute ceiling (well above this
+  // fixed implementation's own ~20ms at this size, even under heavy CI/
+  // concurrent-session load) is used instead of a tight or small-magnitude
+  // ratio assertion — a same-size-comparison critique pass found a ratio
+  // check at smaller sizes has too little headroom between the old
+  // quadratic cost and the new linear one to reliably discriminate them.
+  const line = 'Closes #1 '.repeat(8000);
+  const start = performance.now();
+  const refs = extractKeywordReferences(line);
+  const elapsed = performance.now() - start;
+  assert.equal(refs.length, 8000);
+  assert.ok(
+    elapsed < 1000,
+    `expected linear-time completion well under 1000ms, got ${elapsed.toFixed(2)}ms`,
+  );
+});
+
+test('extractKeywordReferences stays linear-time on keyword matches glued by non-whitespace separators (#1970)', () => {
+  // #1970 critique pass: the token-window bound alone does not help when
+  // many keyword matches are joined by a separator that is not whitespace
+  // (e.g. commas) — `/\S+/gu` treats the whole comma-joined run as a
+  // single token, so the token-pointer walk never advances and the window
+  // start would otherwise stay pinned near line start while the match
+  // index grows, reintroducing O(n²). `isNegatedKeywordMatch`'s
+  // preceding-character short-circuit (every KEYWORD_NEGATION_PATTERN
+  // alternative requires whitespace immediately before the match) closes
+  // this specific gap by skipping the slice+test entirely whenever the
+  // character right before a keyword isn't whitespace.
+  const line = 'Closes,'.repeat(8000);
+  const start = performance.now();
+  const refs = extractKeywordReferences(line);
+  const elapsed = performance.now() - start;
+  // No "#N" targets follow any "Closes," occurrence, so no references are
+  // produced — this test is about cost, not reference count.
+  assert.equal(refs.length, 0);
+  assert.ok(
+    elapsed < 1000,
+    `expected linear-time completion well under 1000ms, got ${elapsed.toFixed(2)}ms`,
+  );
+});
+
 test('extractTaskListReferences ignores a checkbox quoted inside a fence (#1204)', () => {
   const fenced = ['```md', '- [ ] #900', '```', '- [ ] #901'].join('\n');
   assert.deepEqual(extractTaskListReferences(fenced), [

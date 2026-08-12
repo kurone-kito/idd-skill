@@ -148,8 +148,30 @@ const KEYWORD_REFERENCE_REGEX =
 // constructions uniformly — none of those is a real negation, e.g. "This
 // doesn't just fix #42 but also resolves #43" must keep the edge to #42
 // regardless of which negation form introduces the clause.
+//
+// #1970: the token-count bound above also lets `isNegatedKeywordMatch` test a
+// small, fixed-size *token* window instead of rescanning the whole line
+// prefix per match (the prior approach was quadratic — see that function's
+// doc comment). This is NOT the same class of bug as the 30-char fixed
+// *character* slice mentioned above: the earlier bug truncated by byte
+// count, which can slice through the middle of a long word; the windowing
+// here is bounded by whitespace-delimited *token count* (at most 4: the
+// negation term — up to 2 tokens for "no longer" — plus up to 2 intervening
+// tokens), so it always keeps whole tokens intact regardless of their
+// length.
 const KEYWORD_NEGATION_PATTERN =
   /\b(?:not|never|cannot|no longer|(?:has|have|had|ca|do|does|did|is|was|are|were|wo|would|should|could|must|might|sha)n['’]t)(?!\s+(?:only|merely|just|simply)\b)\s+(?:(?!(?:but|however|yet)\b)\w+\s+){0,2}$/iu;
+// #1970: KEYWORD_NEGATION_PATTERN's own grammar (above) bounds any match to
+// at most 4 whitespace-delimited tokens before the matched keyword — the
+// negation term is at most 2 tokens ("no longer"; every other alternative is
+// 1 token, though it may sit glued to preceding punctuation within its own
+// token, e.g. "note,not"), plus at most 2 intervening tokens (`{0,2}`), and
+// the pattern's own `\s+` requirement means a match always ends at a token
+// boundary. 6 gives 2 tokens of margin over that proven bound, so slicing
+// from the start of the token 6 positions back (instead of from line start)
+// can never change whether `KEYWORD_NEGATION_PATTERN` matches — see
+// `isNegatedKeywordMatch`'s doc comment for the full argument.
+const NEGATION_LOOKBACK_TOKENS = 6;
 const SUB_ISSUES_QUERY = `
 query($owner:String!, $repo:String!, $number:Int!, $after:String) {
   repository(owner:$owner, name:$repo) {
@@ -1423,12 +1445,36 @@ export function extractKeywordReferences(body, options = {}) {
     const maskedLine = maskedLines[lineIndex];
     const rawLine = rawLines[lineIndex] ?? maskedLine;
     const keywordMatches = [...maskedLine.matchAll(KEYWORD_REFERENCE_REGEX)];
+    // #1970: precompute this line's token-start offsets once (a single
+    // linear pass), only when the line actually has a keyword match to
+    // check — the majority of lines have none, and this pass would
+    // otherwise double their scan cost for no benefit. `tokenPointer` only
+    // ever advances forward across the loop below (matches are already in
+    // increasing-index order from `matchAll`), so the whole line's
+    // windowing cost stays O(tokens + matches), never re-scanned per match.
+    const tokenStarts =
+      keywordMatches.length > 0
+        ? [...maskedLine.matchAll(/\S+/gu)].map((token) => token.index ?? 0)
+        : [];
+    let tokenPointer = 0;
     for (let index = 0; index < keywordMatches.length; index += 1) {
       const match = keywordMatches[index];
       const matchIndex = match.index ?? 0;
+      while (
+        tokenPointer + 1 < tokenStarts.length &&
+        tokenStarts[tokenPointer + 1] <= matchIndex
+      ) {
+        tokenPointer += 1;
+      }
+      const windowStart =
+        tokenStarts.length > 0 && tokenStarts[tokenPointer] <= matchIndex
+          ? (tokenStarts[
+              Math.max(0, tokenPointer - NEGATION_LOOKBACK_TOKENS)
+            ] ?? 0)
+          : 0;
       // #1964: a negated keyword match ("does not close #176") produces no
       // reference at all — see KEYWORD_NEGATION_PATTERN above.
-      if (isNegatedKeywordMatch(maskedLine, matchIndex)) {
+      if (isNegatedKeywordMatch(maskedLine, matchIndex, windowStart)) {
         continue;
       }
       const segmentStart = matchIndex + match[0].length;
@@ -1455,14 +1501,40 @@ export function extractKeywordReferences(body, options = {}) {
  * True when a negation term (`not`, `never`, `won't`, `doesn't`, ...) sits in
  * a short token window immediately before the matched keyword at
  * `matchIndex` on `line` — e.g. "This does not close #176" negates `close`.
- * Tests the entire text of `line` before the match, not a fixed-size
- * character slice: {@link KEYWORD_NEGATION_PATTERN}'s own `{0,2}`-token bound
- * (plus its punctuation-breaks-the-chain behavior) is what keeps this from
- * matching a distant, unrelated negation — see the pattern's own doc comment
- * (#1964).
+ *
+ * Tests a bounded window (`line.slice(windowStart, matchIndex)`) rather than
+ * the entire prefix from line start — see `NEGATION_LOOKBACK_TOKENS` above
+ * for why `windowStart` is always far enough back that this gives the exact
+ * same answer as testing the full prefix would. This is bounded by *token
+ * count*, not a fixed *character* count: an earlier revision tried a fixed
+ * 30-character slice and broke on long intervening words (see
+ * `KEYWORD_NEGATION_PATTERN`'s own doc comment) — the token-count bound
+ * avoids that failure mode because `windowStart` always sits at the start of
+ * a whole token (never mid-token), so no token this window includes is ever
+ * truncated, regardless of how long it is.
  */
-function isNegatedKeywordMatch(line, matchIndex) {
-  return KEYWORD_NEGATION_PATTERN.test(line.slice(0, matchIndex));
+function isNegatedKeywordMatch(line, matchIndex, windowStart) {
+  // #1970: every KEYWORD_NEGATION_PATTERN alternative requires `\s+`
+  // immediately before the match position ($) — a negation term directly
+  // followed by whitespace (0 intervening tokens), or an intervening word
+  // itself followed by whitespace. So if the character right before
+  // `matchIndex` is not whitespace, no match is possible at all, and this
+  // returns false without slicing/testing. This also closes a residual
+  // quadratic path the token window alone does not: many keyword matches
+  // glued together by non-whitespace separators (e.g. repeated
+  // "Closes,Closes,Closes,...") never advance `tokenPointer` past the
+  // line's very first whitespace-delimited token (`\S+` treats the whole
+  // comma-joined run as one token), so `windowStart` would otherwise stay
+  // pinned near 0 while `matchIndex` grows — recreating an O(n) slice+test
+  // per match, and thus O(n²) overall, for that specific input shape.
+  // KEYWORD_REFERENCE_REGEX's own leading `\b` guarantees the character
+  // right before any real keyword match is always a non-word character
+  // (whitespace or punctuation), never a word character, so this is a
+  // clean two-way split: whitespace before, or definitively not negated.
+  if (matchIndex === 0 || !/\s/u.test(line[matchIndex - 1] ?? '')) {
+    return false;
+  }
+  return KEYWORD_NEGATION_PATTERN.test(line.slice(windowStart, matchIndex));
 }
 function classifyKeywordRelationship(keyword) {
   const normalized = String(keyword ?? '').toLowerCase();
