@@ -786,6 +786,44 @@ test('policy schema rejects an unknown issueScope value', () => {
   );
 });
 
+test('policy schema accepts authoringLanguage match-source and representative language tags', () => {
+  const schema = loadJson('schemas/policy.schema.json');
+  for (const authoringLanguage of [
+    'match-source',
+    'en',
+    'ja',
+    'fr',
+    'zh-Hans',
+    'pt-BR',
+  ]) {
+    const instance = JSON.parse(
+      JSON.stringify(loadJson('fixtures/schemas/policy.valid.json')),
+    );
+    instance.authoringLanguage = authoringLanguage;
+    const errors = validate(instance, schema);
+    assert.deepEqual(
+      errors,
+      [],
+      `${authoringLanguage}: ${JSON.stringify(errors)}`,
+    );
+  }
+});
+
+test('policy schema rejects a malformed or case-invalid authoringLanguage value', () => {
+  const schema = loadJson('schemas/policy.schema.json');
+  for (const authoringLanguage of ['EN', 'MATCH-SOURCE', 'en_US', 'e', '']) {
+    const instance = JSON.parse(
+      JSON.stringify(loadJson('fixtures/schemas/policy.valid.json')),
+    );
+    instance.authoringLanguage = authoringLanguage;
+    const errors = validate(instance, schema);
+    assert.ok(
+      errors.some((error) => error.includes('$.authoringLanguage')),
+      `${authoringLanguage}: ${errors.join('\n')}`,
+    );
+  }
+});
+
 test('policy schema accepts advisoryWait.convergenceScope values', () => {
   const schema = loadJson('schemas/policy.schema.json');
   for (const convergenceScope of ['all-prs', 'idd-claimed']) {
