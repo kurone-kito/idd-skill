@@ -159,19 +159,26 @@ recording action rather than a pinned remote-fetch step:
 - CI wait policy defaults: <value>
 - Issue-author approval gate: <value>
 - Maintainer approval actor policy: <value>
-- Issue-authoring companion status: not installed (even if the operator's
-  ultimate preference is `installed` — see the note below)
+- Issue-authoring companion status (core-bootstrap, temporary): not
+  installed (always, regardless of the operator's real choice below —
+  see the note below)
+- Issue-authoring companion target state (the operator's real Step 1B
+  choice, for the companion follow-up issue to read later): <installed,
+  native destination `<value>` | not installed>
 - Helper runtime profile: <value>
 - IDD label names: <value>
 - Up-to-date-head ruleset check: <value>
 
 This is a single, atomically-reviewable change: the core import,
 placeholder substitution, and agent-entry-file updates land together,
-and Step 6 verification confirms the result before merge. Optional
-add-ons (worktree guard activation, the `idd-doctor` CI health gate, the
-`idd-advisory-convergence` required-check workflow, the issue-authoring
-companion install) are explicitly out of scope here — they follow as
-separate issues once this one merges.
+and Step 6 verification confirms the result before merge. Worktree
+guard activation, the `idd-doctor` CI health gate, and the
+`idd-advisory-convergence` required-check workflow are explicitly out
+of scope here and may follow later as separate issues, at the
+operator's discretion, once this one merges. The issue-authoring
+companion install follows as its own separate issue **only when the
+companion target state above is `installed`** — do not draft a
+companion-install follow-up for an operator who chose `not installed`.
 
 **Record `not installed` here even when the operator wants the
 companion — and explicitly defer the matching Step 6 item, not just
@@ -255,13 +262,17 @@ merged in a partial state.
 
 ## Optional add-ons stay separate follow-ups
 
-Draft the following as separate follow-up issues instead of folding them
-into the core bootstrap issue:
+Draft any of the following as separate follow-up issues instead of
+folding them into the core bootstrap issue, when the operator wants
+them:
 
 - worktree guard activation
 - the `idd-doctor` CI health gate
 - the `idd-advisory-convergence` required-check workflow
-- the issue-authoring companion install
+- the issue-authoring companion install — **only** when the operator's
+  Step 1B companion decision was `installed`; do not draft this
+  follow-up for an operator who chose `not installed`, since there is
+  nothing for it to do
 
 None of these are required for the repository to become
 IDD-operational, and unlike the core import, each one can run through
