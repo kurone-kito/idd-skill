@@ -35,14 +35,14 @@ Collect all signals before routing. Use GitHub server timestamps only.
 
 Evaluate in order; take the first matching row.
 
-| Condition                                                                                                                                                                                                | Route                                                              |
-| -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------ |
-| Issue closed or PR merged                                                                                                                                                                                | Step 1 (cleanup only)                                              |
-| `forced-handoff: human-gated` + valid evidence matching active/inheritable state                                                                                                                         | Step 1 forced-handoff path (skip stall check)                      |
-| `forced-handoff: human-gated` + evidence exists but mismatches live claim/branch/PR state                                                                                                                | STOP — report mismatch; do not claim, push, or mutate review state |
-| Non-owned active claim + a recorded deliberate-pause note from the claiming session itself (e.g. `status:needs-decision`) + this session has received the operator-supplied input that note was awaiting | Operator-present release path (below); skip the stall file         |
-| Non-owned active claim + no valid forced-handoff evidence                                                                                                                                                | `idd-resume-stall.instructions.md`; then Step 1 if unblocked       |
-| Otherwise                                                                                                                                                                                                | Step 1                                                             |
+| Condition                                                                                                                                                                      | Route                                                              |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------ |
+| Issue closed or PR merged                                                                                                                                                      | Step 1 (cleanup only)                                              |
+| `forced-handoff: human-gated` + valid evidence matching active/inheritable state                                                                                               | Step 1 forced-handoff path (skip stall check)                      |
+| `forced-handoff: human-gated` + evidence exists but mismatches live claim/branch/PR state                                                                                      | STOP — report mismatch; do not claim, push, or mutate review state |
+| Non-owned active claim + a claimant-authored comment explicitly recording a deliberate pause + this session has received the operator-supplied input that comment was awaiting | Operator-present release path (below); skip the stall file         |
+| Non-owned active claim + no valid forced-handoff evidence                                                                                                                      | `idd-resume-stall.instructions.md`; then Step 1 if unblocked       |
+| Otherwise                                                                                                                                                                      | Step 1                                                             |
 
 Autopilot and unattended agents must never invent, request, or broaden
 forced handoff; they may only consume already-recorded human-gated evidence.
@@ -70,26 +70,31 @@ If stalled-session routing returns hold/inconclusive, stop.
 
 ### Operator-present release of a deliberately-paused own-held claim
 
-Use this path only when the non-owned active claim carries explicit
-evidence that the claiming session itself deliberately paused — a
-recorded `status:needs-decision` note or an equivalent explicit pause
-comment — and this session has now received the operator-supplied
-input that pause was waiting on. Mere silence or staleness does not
-qualify and stays governed by the stale-takeover procedure in
-`idd-resume-stall.instructions.md` instead.
+Use this path only when the non-owned active claim carries a
+claimant-authored comment explicitly recording a deliberate pause and
+the awaited input — a configured needs-decision label
+(`labels.needsDecisionLabelName`, default `status:needs-decision`) can
+corroborate but never substitute, since automation can apply it
+unattended. This session must have now
+received the operator-supplied input that comment was awaiting. Mere
+silence or staleness does not qualify and stays governed by the
+stale-takeover procedure in `idd-resume-stall.instructions.md` instead.
 
-The release step still requires the durable, auditable
-trusted-marker-actor comment that Claim-state parsing rule 5 in
-`idd-claim.instructions.md` already requires. The operator's chat or
+Steps 1-2 below are pre-claim actions, posted before this session holds
+any claim on the issue — like a fresh A5 claim's own pre-claim state,
+they precede the shared claim revalidation gate's own-claim-id
+precondition, which attaches starting with step 4. The release step
+still requires the durable, auditable trusted-marker-actor comment
+that Claim-state parsing rule 5 in `idd-claim.instructions.md` already
+requires. The operator's chat or
 conversational input is never itself the release: it is recorded as
 the separate normal comment in step 1 below, and the trusted-marker-actor
-`unclaimed-by` in step 2 carries only its canonical marker body (the
-same nothing-appended-after-the-note rule as `review-watermark`/
-`claimed-by`) and performs the release on its own. This path is
-unrelated to the TTY-gated forced-handoff safeguard above: it opts
-into no `forcedHandoff` policy and requires no `idd-force-handoff`
-`y/N` confirmation, and it does not loosen that safeguard, which
-governs a different mechanism (forced handoff) entirely.
+`unclaimed-by` in step 2 carries only its canonical marker body (same
+nothing-appended rule as other operational markers) and performs the
+release on its own. This path is unrelated to the TTY-gated
+forced-handoff safeguard above: it opts into no `forcedHandoff` policy
+and requires no `idd-force-handoff` `y/N` confirmation, and it does
+not loosen that safeguard.
 
 Sequence:
 
@@ -104,9 +109,8 @@ Sequence:
    to Step 1.
 
 The 30-minute quiet window and 24h stale threshold in
-`idd-resume-stall.instructions.md` exist to surface an _unannounced_
-stall; they have no bearing on a session's own already-announced,
-deliberate pause, so this path waits on neither.
+`idd-resume-stall.instructions.md` surface an _unannounced_ stall
+only; this path's own already-announced pause waits on neither.
 
 ## Step 1 — Identify claim state
 

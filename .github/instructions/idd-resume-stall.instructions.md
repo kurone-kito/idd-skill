@@ -92,11 +92,13 @@ the manual quiet-window check described in S2.
   stalled-session takeover case. Return to
   `idd-resume.instructions.md` Step 1 and use the forced-handoff route
   instead. Do not apply the quiet-window or stale-threshold gates here.
-- If the active claim carries a recorded deliberate-pause note from the
-  claiming session itself (e.g. `status:needs-decision`) and this
-  session has received the operator-supplied input that note was
-  awaiting, this is not a stalled-session takeover case either. Return
-  to `idd-resume.instructions.md` Step 0 and use the operator-present
+- If the active claim carries a claimant-authored comment explicitly
+  recording a deliberate pause (a configured needs-decision label,
+  `labels.needsDecisionLabelName`, default `status:needs-decision`, can
+  corroborate but never substitute) and this session has received the
+  operator-supplied input that comment was awaiting, this is not a
+  stalled-session takeover case either. Return to
+  `idd-resume.instructions.md` Step 0 and use the operator-present
   release path instead. Do not apply the quiet-window or stale-threshold
   gates here.
 - If the active claim belongs to another `{claim-id}`, continue.
