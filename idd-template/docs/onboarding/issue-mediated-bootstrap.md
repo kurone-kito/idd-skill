@@ -145,8 +145,17 @@ Use this as the starting shape so an onboarding agent does not have to
 improvise a self-contained body from scratch each time. It follows the
 issue-authoring skill's orphan-issue schema (`## Background`,
 `## Proposed change`, `## Acceptance criteria`, plus the
-autopilot-suitability footer); fill in every bracketed value from the
-hearing before publishing:
+autopilot-suitability footer). Fill in every bracketed value before
+publishing, but not all of them come from the same source: the named
+`<value>` fields (repository name, marker prefix, and so on) come from
+the Steps 1A-1C hearing; `<tag-or-sha>` is chosen separately, at pin
+time, not derived from the hearing itself; and the `vendored-node`
+clone/target path placeholders are executor run-time values, not
+author-time fills — they apply only when `vendored-node` is the
+confirmed helper runtime profile, so delete that entire conditional
+sentence and command block when a different profile was selected,
+rather than leaving unresolved placeholders or a command that does not
+apply behind:
 
 ````markdown
 ## Background
