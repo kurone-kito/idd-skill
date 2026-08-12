@@ -96,6 +96,15 @@ instruct all three substitutions above — otherwise the actual imported
 file contents can still drift even though the instructions document
 you read were pinned.
 
+**If the confirmed helper runtime profile is `vendored-node`**, its
+profile-conditional helper file also needs the same pin: the direct
+download in
+[Profile-conditional helper files](template-distribution.md#profile-conditional-helper-files-vendored-node)
+uses its own hardcoded `/main/` URL, independent of everything above —
+replace `main` with the same `<tag-or-sha>` there too, or otherwise a
+tag-pinned core import can still combine with helper code that changed
+since the pinned release.
+
 ### The status:authoring hold still applies
 
 The issue-authoring skill's normal authoring-hold/release contract
@@ -133,7 +142,11 @@ three of: append `?ref=<tag-or-sha>` to the `gh api` loop's Contents
 API endpoint (the recommended default — it has no `ref` and otherwise
 always resolves the default branch regardless of the curl base URL),
 use `<tag-or-sha>` (not `main`) in the `curl` fallback's base URL, and
-check out `<tag-or-sha>` in the local clone before running Option B.
+check out `<tag-or-sha>` in the local clone before running Option B. If
+the confirmed helper runtime profile is `vendored-node`, also replace
+`main` with `<tag-or-sha>` in the profile-conditional helper file's own
+direct-download URL (see `template-distribution.md`'s
+"Profile-conditional helper files" section).
 
 Use these operator-confirmed values, already collected during the
 hearing (Steps 1A-1C), instead of re-deriving them:
