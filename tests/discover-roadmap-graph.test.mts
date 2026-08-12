@@ -597,29 +597,48 @@ test('extractKeywordReferences stays linear-time and correct on a large keyword-
   // #1970: Codex found `extractKeywordReferences` quadratic in the number of
   // keyword occurrences on one line (re-slicing from line start and
   // re-running an unanchored regex for every match). Repro: a several-KB
-  // line with several thousand keyword occurrences. This asserts BOTH
+  // line with several thousand keyword occurrences (matching the issue's
+  // own 56 KB / 8,000-occurrence repro, measured at ~2.4s there and ~1970ms
+  // locally against the pre-fix implementation). This asserts BOTH
   // correctness (the right reference count — catches "fast because broken")
-  // and a bounded-cost scaling check across two input sizes, using a ratio
-  // assertion rather than a tight wall-clock ceiling so it stays reliable
-  // under this repo's documented CI/concurrent-session flakiness. Kept small
-  // enough (a few thousand occurrences) to stay fast in the normal suite.
-  const buildLine = (count: number) => 'Closes #1 '.repeat(count);
-  const small = buildLine(500);
-  const large = buildLine(2000); // 4x the input size
-  const smallStart = performance.now();
-  const smallRefs = extractKeywordReferences(small);
-  const smallElapsed = Math.max(performance.now() - smallStart, 0.001);
-  const largeStart = performance.now();
-  const largeRefs = extractKeywordReferences(large);
-  const largeElapsed = Math.max(performance.now() - largeStart, 0.001);
-  assert.equal(smallRefs.length, 500);
-  assert.equal(largeRefs.length, 2000);
-  // A quadratic implementation would grow ~16x (4^2) for a 4x input size; a
-  // linear one grows ~4x. Allow generous slack for scheduling noise while
-  // still catching a real quadratic regression.
+  // and a bounded-cost ceiling. A generous absolute ceiling (well above this
+  // fixed implementation's own ~20ms at this size, even under heavy CI/
+  // concurrent-session load) is used instead of a tight or small-magnitude
+  // ratio assertion — a same-size-comparison critique pass found a ratio
+  // check at smaller sizes has too little headroom between the old
+  // quadratic cost and the new linear one to reliably discriminate them.
+  const line = 'Closes #1 '.repeat(8000);
+  const start = performance.now();
+  const refs = extractKeywordReferences(line);
+  const elapsed = performance.now() - start;
+  assert.equal(refs.length, 8000);
   assert.ok(
-    largeElapsed < smallElapsed * 10 + 200,
-    `expected roughly linear growth, got small=${smallElapsed.toFixed(2)}ms large=${largeElapsed.toFixed(2)}ms`,
+    elapsed < 1000,
+    `expected linear-time completion well under 1000ms, got ${elapsed.toFixed(2)}ms`,
+  );
+});
+
+test('extractKeywordReferences stays linear-time on keyword matches glued by non-whitespace separators (#1970)', () => {
+  // #1970 critique pass: the token-window bound alone does not help when
+  // many keyword matches are joined by a separator that is not whitespace
+  // (e.g. commas) — `/\S+/gu` treats the whole comma-joined run as a
+  // single token, so the token-pointer walk never advances and the window
+  // start would otherwise stay pinned near line start while the match
+  // index grows, reintroducing O(n²). `isNegatedKeywordMatch`'s
+  // preceding-character short-circuit (every KEYWORD_NEGATION_PATTERN
+  // alternative requires whitespace immediately before the match) closes
+  // this specific gap by skipping the slice+test entirely whenever the
+  // character right before a keyword isn't whitespace.
+  const line = 'Closes,'.repeat(8000);
+  const start = performance.now();
+  const refs = extractKeywordReferences(line);
+  const elapsed = performance.now() - start;
+  // No "#N" targets follow any "Closes," occurrence, so no references are
+  // produced — this test is about cost, not reference count.
+  assert.equal(refs.length, 0);
+  assert.ok(
+    elapsed < 1000,
+    `expected linear-time completion well under 1000ms, got ${elapsed.toFixed(2)}ms`,
   );
 });
 

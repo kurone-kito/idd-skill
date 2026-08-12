@@ -1514,6 +1514,26 @@ export function extractKeywordReferences(body, options = {}) {
  * truncated, regardless of how long it is.
  */
 function isNegatedKeywordMatch(line, matchIndex, windowStart) {
+  // #1970: every KEYWORD_NEGATION_PATTERN alternative requires `\s+`
+  // immediately before the match position ($) — a negation term directly
+  // followed by whitespace (0 intervening tokens), or an intervening word
+  // itself followed by whitespace. So if the character right before
+  // `matchIndex` is not whitespace, no match is possible at all, and this
+  // returns false without slicing/testing. This also closes a residual
+  // quadratic path the token window alone does not: many keyword matches
+  // glued together by non-whitespace separators (e.g. repeated
+  // "Closes,Closes,Closes,...") never advance `tokenPointer` past the
+  // line's very first whitespace-delimited token (`\S+` treats the whole
+  // comma-joined run as one token), so `windowStart` would otherwise stay
+  // pinned near 0 while `matchIndex` grows — recreating an O(n) slice+test
+  // per match, and thus O(n²) overall, for that specific input shape.
+  // KEYWORD_REFERENCE_REGEX's own leading `\b` guarantees the character
+  // right before any real keyword match is always a non-word character
+  // (whitespace or punctuation), never a word character, so this is a
+  // clean two-way split: whitespace before, or definitively not negated.
+  if (matchIndex === 0 || !/\s/u.test(line[matchIndex - 1] ?? '')) {
+    return false;
+  }
   return KEYWORD_NEGATION_PATTERN.test(line.slice(windowStart, matchIndex));
 }
 function classifyKeywordRelationship(keyword) {
