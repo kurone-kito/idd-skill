@@ -245,9 +245,9 @@ regardless of the configured language.
   from English should align those separately.
 - `idd-review-snapshot.instructions.md`'s existing "detect the PR body's
   language for the visible note" rule already composes correctly with
-  this field with no code change required: once PR-submit applies
-  `authoringLanguage`, that rule will keep following whatever language
-  the PR body ends up in.
+  this field with no code change required: now that PR-submit applies
+  `authoringLanguage` (#1982), that rule keeps following whatever
+  language the PR body ends up in.
 
 **Landed vs. pending**: this field is schema-defined and documented now.
 PR-submit's D3 "Create PR" step applies it to PR body prose (#1982); the
