@@ -286,7 +286,7 @@ test('the marker-recognition fix only anchors a rejection-confirmed reply on a s
   // disposition from a reopened thread into an unrelated new advisory-bot
   // comment's classification.
   const reopenedThread = {
-    id: 'thread-reopened-rcbm',
+    id: 'thread-reopened-rejection-confirmed',
     isResolved: false,
     updatedAt: '',
     comments: {
