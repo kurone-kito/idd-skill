@@ -15,6 +15,14 @@ const DEFAULT_GENERATION_TIMEOUT = 'PT10M';
 const DEFAULT_RERUN_POLICY = 'rerun-once';
 const DEFAULT_POLICY_PATH = '.github/idd/config.json';
 const RERUN_POLICIES = new Set(['rerun-once', 'hold']);
+/** A conservative GitHub owner/repo identifier character class --
+ * alphanumeric, hyphen, underscore, period. Mirrors
+ * `rerun-advisory-convergence.mts`'s own `GITHUB_IDENTIFIER_PATTERN` for
+ * the identical `--owner`/`--repo` flags: not GitHub's exact validation
+ * rule, just a defensive CLI-input guard against whitespace or a shell
+ * metacharacter reaching the `gh api repos/{owner}/{repo}/...` path this
+ * file's `--run-id` resolution builds from these values. */
+const GITHUB_IDENTIFIER_PATTERN = /^[A-Za-z0-9_.-]+$/;
 const ISO_DURATION_PATTERN =
   /^P(?=\d|T\d)(?:(\d+)D)?(?:T(?=\d)(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?)?$/;
 const POLICY_SCHEMA = loadJson('schemas/policy.schema.json');
@@ -202,35 +210,48 @@ function runCli() {
   const output = { policy };
   let rerunCount = args.rerunCount;
   if (args.runId !== null) {
-    const owner =
-      args.owner ||
-      ghText(
-        ['repo', 'view', '--json', 'owner', '--jq', '.owner.login'],
-        GH_TEXT_LOOP_TIMEOUT_OPTIONS,
-      );
-    const repo =
-      args.repo ||
-      ghText(
-        ['repo', 'view', '--json', 'name', '--jq', '.name'],
-        GH_TEXT_LOOP_TIMEOUT_OPTIONS,
-      );
+    // #1996: owner/repo auto-detection (`gh repo view`) lives INSIDE this
+    // try block, not just the `fetchRerunCountFromRunId` call below -- a
+    // caller can give `--run-id` with neither `--owner` nor `--repo`, and
+    // a failure resolving either (same network/permission/transient class
+    // as the run lookup itself) is just as much "the live lookup did not
+    // yield a usable rerunCount" as a failure inside
+    // fetchRerunCountFromRunId. Excluding it from the try would let that
+    // one failure mode crash uncaught instead of falling back to an
+    // explicitly-given --rerun-count, silently breaking the documented
+    // fallback contract for exactly this path (caught by the C1 critique
+    // pass; regression-guarded by the "resolves owner/repo INSIDE the
+    // fallback" CLI test below).
     try {
+      const owner =
+        args.owner ||
+        ghText(
+          ['repo', 'view', '--json', 'owner', '--jq', '.owner.login'],
+          GH_TEXT_LOOP_TIMEOUT_OPTIONS,
+        );
+      const repo =
+        args.repo ||
+        ghText(
+          ['repo', 'view', '--json', 'name', '--jq', '.name'],
+          GH_TEXT_LOOP_TIMEOUT_OPTIONS,
+        );
       rerunCount = fetchRerunCountFromRunId(owner, repo, args.runId);
       output.rerunCountSource = 'run-id';
       output.runAttempt = rerunCount + 1;
     } catch (error) {
-      // #1996: unifies two distinct failure modes -- the `gh api` call
-      // itself failing (network/permission/transient), and the call
-      // succeeding but returning a payload with a missing or non-numeric
-      // `run_attempt` (deriveRerunCountFromRunAttempt's own throw) -- into
-      // one "the live lookup did not yield a usable rerunCount" outcome,
-      // matching how rerun-advisory-convergence.mts's own collection step
-      // unifies both into the same `runAttempt: null` signal. `--run-id`
-      // takes precedence over `--rerun-count` only when the live lookup
-      // actually succeeds; on either failure mode, fall back to an
-      // explicitly-given `--rerun-count` (the issue's own "explicit
-      // override / offline path" language), or fail closed with a clear,
-      // non-zero exit -- never a silent `rerunCount: 0`.
+      // #1996: unifies three distinct failure modes -- owner/repo
+      // auto-detection failing, the `gh api` run lookup itself failing
+      // (network/permission/transient), and the lookup succeeding but
+      // returning a payload with a missing or non-numeric `run_attempt`
+      // (deriveRerunCountFromRunAttempt's own throw) -- into one "the live
+      // lookup did not yield a usable rerunCount" outcome, matching how
+      // rerun-advisory-convergence.mts's own collection step unifies
+      // several failure sources into the same `runAttempt: null` signal.
+      // `--run-id` takes precedence over `--rerun-count` only when the
+      // live lookup actually succeeds; on any of these failure modes, fall
+      // back to an explicitly-given `--rerun-count` (the issue's own
+      // "explicit override / offline path" language), or fail closed with
+      // a clear, non-zero exit -- never a silent `rerunCount: 0`.
       if (args.rerunCount === null) {
         throw new Error(
           `--run-id ${args.runId} lookup failed and no --rerun-count fallback was given: ${error.message}`,
@@ -259,6 +280,16 @@ function parseArgs(argv) {
   if (Boolean(owner) !== Boolean(repo)) {
     throw new Error(
       '--owner and --repo must be given together (both or neither)',
+    );
+  }
+  if (owner && !GITHUB_IDENTIFIER_PATTERN.test(owner)) {
+    throw new Error(
+      '--owner must contain only letters, digits, hyphens, underscores, or periods',
+    );
+  }
+  if (repo && !GITHUB_IDENTIFIER_PATTERN.test(repo)) {
+    throw new Error(
+      '--repo must contain only letters, digits, hyphens, underscores, or periods',
     );
   }
   return {

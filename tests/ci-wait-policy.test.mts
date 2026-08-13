@@ -530,6 +530,54 @@ if (process.argv[2] === 'api') {
   }
 });
 
+// #1996 C1 critique regression: the owner/repo auto-detection (`gh repo
+// view`, used when --owner/--repo are omitted) must sit INSIDE the same
+// try/fallback as the run lookup itself -- a caller can give --run-id with
+// neither --owner nor --repo, and a failure resolving either must fall
+// back to an explicit --rerun-count exactly like a failed run-id lookup
+// does, not crash uncaught. This test omits --owner/--repo entirely so the
+// stub's `gh repo view` call is what fails.
+test('CLI --run-id falls back to --rerun-count when owner/repo auto-detection itself fails (not just the run lookup)', () => {
+  const restore = stubGh(`
+if (process.argv[2] === 'repo' && process.argv[3] === 'view') {
+  process.stderr.write('gh: authentication required');
+  process.exit(1);
+} else {
+  process.stderr.write('unexpected gh invocation: ' + process.argv.slice(2).join(' '));
+  process.exit(1);
+}
+`);
+  try {
+    const output = JSON.parse(
+      execFileSync(
+        process.execPath,
+        [
+          join(REPO_ROOT, 'scripts/ci-wait-policy.mjs'),
+          '--run-id',
+          '31631273987',
+          '--rerun-count',
+          '0',
+        ],
+        { encoding: 'utf8' },
+      ),
+    );
+    assert.equal(output.rerunCountSource, 'rerun-count');
+    assert.ok(
+      typeof output.runIdLookupError === 'string' &&
+        output.runIdLookupError.length > 0,
+      'expected runIdLookupError to report the owner/repo auto-detection failure',
+    );
+    assert.deepEqual(output.rerunDecision, {
+      action: 'rerun',
+      reason: 'rerun-budget-available',
+      rerunPolicy: 'rerun-once',
+      rerunCount: 0,
+    });
+  } finally {
+    restore();
+  }
+});
+
 test('CLI --owner without --repo (or vice versa) throws -- both-or-neither', () => {
   for (const args of [
     ['--run-id', '1', '--owner', 'kurone-kito'],
@@ -540,6 +588,27 @@ test('CLI --owner without --repo (or vice versa) throws -- both-or-neither', () 
       ...args,
     ]);
     assert.match(stderr, /--owner and --repo must be given together/);
+  }
+});
+
+// #1996 C1 critique: --owner/--repo validated against the same
+// conservative GitHub-identifier character class
+// rerun-advisory-convergence.mts already applies to the identical flags,
+// rejecting whitespace/shell-metacharacter values before they reach the
+// `gh api repos/{owner}/{repo}/...` path.
+test('CLI --owner/--repo reject values outside the GitHub identifier character class', () => {
+  for (const args of [
+    ['--run-id', '1', '--owner', 'invalid owner', '--repo', 'idd-skill'],
+    ['--run-id', '1', '--owner', 'kurone-kito', '--repo', 'idd;skill'],
+  ]) {
+    const { stderr } = runCliExpectFailure([
+      join(REPO_ROOT, 'scripts/ci-wait-policy.mjs'),
+      ...args,
+    ]);
+    assert.match(
+      stderr,
+      /must contain only letters, digits, hyphens, underscores, or periods/,
+    );
   }
 });
 

@@ -26,12 +26,11 @@ node scripts/ci-wait-policy.mjs
 <profile-selected-ci-wait-policy-command>
 ```
 
-Append `--run-id <run-id>` (mirrors
-`rerun-advisory-convergence.mts`) or `--rerun-count <count>` for the
-rerun decision. Resolve `<profile-selected-ci-wait-policy-command>` from
-`docs/idd-helper-scripts.md`. Do not hardcode
-`node scripts/ci-wait-policy.mjs` for profiles that don't vendor
-`scripts/`.
+Prefer `--run-id <run-id>` (from run_attempt; mirrors
+`rerun-advisory-convergence.mts`) to `--rerun-count <count>`. Resolve
+`<profile-selected-ci-wait-policy-command>` from
+`docs/idd-helper-scripts.md`. Do not hardcode `node
+scripts/ci-wait-policy.mjs` for profiles that don't vendor `scripts/`.
 
 ## Shared policy keys
 
