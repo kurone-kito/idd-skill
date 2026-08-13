@@ -432,6 +432,23 @@ Ask these checks:
    taxonomy. An owner/CODEOWNERS marker or a referenced tracking issue may
    also serve, but the code-comment convention is the recommended default.
    Do not hard-code any single consumer's divergence-tracking mechanism.
+4. When an issue drafts a **template resync or reimport** (pulling a
+   newer `idd-template/` revision into a repository that already
+   adopted IDD), consult `idd-template/ONBOARDING.md`'s "Re-importing"
+   section before treating any file as unchanged. Its named-gap
+   paragraph on `.markdownlint.yml` / `.markdownlint-cli2.yaml` /
+   `.cspell.config.yml` documents that an adopter's own rule
+   customizations for these files need a by-hand merge into the new
+   import rather than an assumed carry-forward, and that `--import`
+   reports a `blockedOverwrites` finding instead of silently keeping a
+   same-named local file as-is.
+5. When drafting a resync issue's Background, run a mechanical
+   placeholder-occurrence diff between the previous import commit's and
+   the new target commit's `idd-template/` trees — a plain `{{...}}`
+   token grep over the changed files, compared across the two
+   revisions — and name any file whose placeholder-occurrence count
+   changed, rather than asserting a file needs no placeholder
+   substitution as an unverified default.
 
 ## Alignment with A4.5 Suitability Gate
 
