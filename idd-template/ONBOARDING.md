@@ -286,6 +286,8 @@ require explicit operator confirmation:
     every merely-`BEHIND` PR and multiplies advisory-review rounds
     without review value; a before/after sample measured the sync-merge
     share fall from ~27% to ~3.7%, kurone-kito/idd-skill#1817)
+14. bootstrap execution mode (`direct-import` default, or
+    `issue-mediated`)
 
 Use
 [Onboarding Reference — Policy Decisions](docs/onboarding/policy-decisions.md)
