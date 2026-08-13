@@ -429,10 +429,14 @@ availability, or ordering constraint.
   describing the wait, rather than leaving it in place as inert
   history. This is more than tidiness: stale wait-explaining prose can
   trip `checkVerifiability`'s subjective-approval heuristic in
-  `suitability-triage.mts` (a line combining an authority-type noun
-  with an approval/sign-off/decision-type noun), even though the
-  structural dependency filter already correctly treats the closed
-  reference as unblocking
+  `suitability-triage.mts`, which matches either a single line
+  combining a subjective-subject word (`maintainer`, `stakeholder`,
+  `human`, `opinion`, `judgment`/`judgement`, `ux`, or `feel` — not
+  only authority nouns) with a gate word (`approval`, `sign-off`,
+  `decision`, or `preference`), or a gate word followed within 80
+  characters — including across lines — by a subjective-subject word.
+  This still fires even though the structural dependency filter
+  already correctly treats the closed reference as unblocking
 
 When an issue keeps a dependency edge, justify each dependency edge in
 the surrounding issue body and confirm that the split still preserves
