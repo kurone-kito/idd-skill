@@ -380,10 +380,11 @@ Before any mutating action in F3, apply the
    - `git -C <path> status --porcelain --ignored --untracked-files=all`
      (the explicit `--untracked-files` avoids a false-clean result under
      a repository- or user-level `status.showUntrackedFiles=no`)
-   - `git -C <path> submodule foreach --quiet --recursive 'git status
-     --porcelain --ignored --untracked-files=all'` (`--quiet` suppresses
-     the `Entering '<submodule>'` banner, which otherwise makes even a
-     clean result non-empty)
+   - `git -C <path> submodule foreach --recursive 'git status
+     --porcelain --ignored --untracked-files=all'` (keep the `Entering
+     '<submodule>'` banner — a banner-only line is a clean result, and
+     with more than one submodule the banner is what attributes a
+     finding to the right one)
 
    Generated dependency/build output (e.g. `node_modules/` from
    `install-deps`) is expected, disposable, and not a reason to stop.
