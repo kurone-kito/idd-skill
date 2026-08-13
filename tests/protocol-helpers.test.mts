@@ -185,3 +185,163 @@ test('reviewCurrency and dispositionEvidence agree a rejection-confirmed-by-main
     '2026-05-12T00:30:00Z',
   );
 });
+
+// Codex review findings on this PR (#2014), both verified against source
+// before accepting.
+
+test('the anchor-set fix honors the [bot]-suffix cross-product (Codex P1, #2014)', () => {
+  // `iddAgentLogins` carries GitHub's suffixed `dual-bot[bot]` author-login
+  // form while `advisoryBotLogins` is configured with the supported
+  // suffixless `dual-bot` form (or vice versa) -- a plain `Set.has` lookup
+  // would miss the match and let the advisory bot anchor a disposition
+  // anyway. The exclusion must use the same suffix-normalized identity
+  // (`isConfiguredAdvisoryBotLogin`) both producers already use elsewhere.
+  const make = (iddAgentLogin: string, advisoryBotLogin: string) => {
+    const thread = {
+      id: 'thread-dual-bot-suffix',
+      isResolved: true,
+      updatedAt: '',
+      comments: {
+        pageInfo: { hasNextPage: false },
+        nodes: [
+          {
+            id: 'TC-1',
+            author: { login: 'reviewer-a' },
+            body: 'please double check this',
+            createdAt: '2026-05-12T00:00:00Z',
+            updatedAt: '2026-05-12T00:00:00Z',
+          },
+          {
+            id: 'TC-2',
+            // GitHub always reports a bot's actual login with the [bot]
+            // suffix; the configured `iddAgentLogins`/`advisoryBotLogins`
+            // values below may or may not match this literally.
+            author: { login: 'dual-bot[bot]' },
+            body: '**Accepted** — looks fine.',
+            createdAt: '2026-05-12T00:30:00Z',
+            updatedAt: '2026-05-12T00:30:00Z',
+          },
+          {
+            id: 'TC-3',
+            author: { login: 'coderabbitai[bot]' },
+            body: 'Thanks for confirming.',
+            createdAt: '2026-05-12T02:00:00Z',
+            updatedAt: '2026-05-12T02:00:00Z',
+          },
+        ],
+      },
+    };
+
+    const dispositionSummary = summarizeDispositionEvidenceForGate(
+      { comments: [], threads: [thread] },
+      {
+        iddAgentLogins: [iddAgentLogin],
+        advisoryBotLogins: [advisoryBotLogin, 'coderabbitai[bot]'],
+        snapshotBoundaryAt: '2026-05-12T01:00:00Z',
+      },
+    );
+    const activitySummary = buildActivitySnapshotSummary(
+      { comments: [], reviews: [], threads: [thread], checks: [] },
+      {
+        trustedMarkerLogins: [iddAgentLogin],
+        advisoryBotLogins: [advisoryBotLogin, 'coderabbitai[bot]'],
+        advisoryBotLoginsSource: 'config',
+        dispositionAuthorLogins: [iddAgentLogin],
+      },
+    );
+    return { dispositionSummary, activitySummary };
+  };
+
+  // `iddAgentLogin` stays pinned to the actual GitHub-reported author form
+  // (`dual-bot[bot]`) across both cases -- only `advisoryBotLogin`'s
+  // suffix form varies, isolating the exclusion fix under test from the
+  // unrelated (and already-suffix-consistent) disposition-author
+  // recognition.
+  for (const [iddAgentLogin, advisoryBotLogin] of [
+    ['dual-bot[bot]', 'dual-bot'],
+    ['dual-bot[bot]', 'dual-bot[bot]'],
+  ] as const) {
+    const { dispositionSummary, activitySummary } = make(
+      iddAgentLogin,
+      advisoryBotLogin,
+    );
+    assert.equal(
+      dispositionSummary.missingThreads[0].ackOnlyPostDisposition,
+      false,
+      `advisory-bot config ${advisoryBotLogin} should exclude author dual-bot[bot] from anchoring`,
+    );
+    assert.deepEqual(
+      activitySummary.ackOnly.items,
+      [],
+      `advisory-bot config ${advisoryBotLogin} should exclude author dual-bot[bot] from anchoring`,
+    );
+  }
+});
+
+test('the marker-recognition fix only anchors a rejection-confirmed reply on a still-resolved thread (Codex P2, #2014)', () => {
+  // A thread carrying `**Rejection confirmed by maintainer**` that is later
+  // reopened must stop anchoring the global post-disposition window --
+  // `hasFreshDisposition` already stops recognizing the marker once a
+  // thread is reopened; the global ack-only anchor must not leak a stale
+  // disposition from a reopened thread into an unrelated new advisory-bot
+  // comment's classification.
+  const reopenedThread = {
+    id: 'thread-reopened-rcbm',
+    isResolved: false,
+    updatedAt: '',
+    comments: {
+      pageInfo: { hasNextPage: false },
+      nodes: [
+        {
+          id: 'RO-1',
+          author: { login: 'reviewer-a' },
+          body: 'please reconsider this',
+          createdAt: '2026-05-12T00:00:00Z',
+          updatedAt: '2026-05-12T00:00:00Z',
+        },
+        {
+          id: 'RO-2',
+          author: { login: 'idd-bot' },
+          body: '**Rejection confirmed by maintainer** — agreed, no action needed.',
+          createdAt: '2026-05-12T00:30:00Z',
+          updatedAt: '2026-05-12T00:30:00Z',
+        },
+        {
+          id: 'RO-3',
+          author: { login: 'reviewer-a' },
+          body: 'Actually, reopening -- I disagree now.',
+          createdAt: '2026-05-12T01:00:00Z',
+          updatedAt: '2026-05-12T01:00:00Z',
+        },
+      ],
+    },
+  };
+  const newFinding = {
+    id: 'C-NEW',
+    author: { login: 'coderabbitai[bot]' },
+    body: 'New finding: consider tightening this check.',
+    createdAt: '2026-05-12T02:00:00Z',
+    updatedAt: '2026-05-12T02:00:00Z',
+  };
+
+  const activitySummary = buildActivitySnapshotSummary(
+    {
+      comments: [newFinding],
+      reviews: [],
+      threads: [reopenedThread],
+      checks: [],
+    },
+    {
+      trustedMarkerLogins: ['idd-bot'],
+      advisoryBotLogins: ['coderabbitai[bot]'],
+      advisoryBotLoginsSource: 'config',
+      dispositionAuthorLogins: ['idd-bot'],
+    },
+  );
+
+  // The stale rejection-confirmed reply on the now-reopened thread must not
+  // anchor a post-disposition window at all, so CodeRabbit's brand-new
+  // finding is genuine new activity, not a misclassified courtesy ack.
+  assert.equal(activitySummary.ackOnly.dispositionsPresent, false);
+  assert.deepEqual(activitySummary.ackOnly.items, []);
+});

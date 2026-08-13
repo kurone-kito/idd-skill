@@ -2156,9 +2156,17 @@ export function buildActivitySnapshotSummary(
   );
   // An advisory bot can never anchor "dispositions exist": its own
   // **Accepted**/**Rejected**-shaped replies must not start the
-  // post-disposition window that classifies its later acks.
-  for (const login of advisoryBotLogins) {
-    dispositionAuthorLogins.delete(login);
+  // post-disposition window that classifies its later acks. Excludes via
+  // `isConfiguredAdvisoryBotLogin`, not a plain `Set.has`/`.delete`, so a
+  // `[bot]`-suffix mismatch between `dispositionAuthorLogins` and
+  // `advisoryBotLogins` (e.g. one storing GitHub's suffixed `dual-bot[bot]`
+  // author-login form, the other the supported suffixless `dual-bot` form,
+  // #2014) still excludes the shared login -- the same normalized identity
+  // every other advisory-bot recognition in this file already uses.
+  for (const login of [...dispositionAuthorLogins]) {
+    if (isConfiguredAdvisoryBotLogin(login, advisoryBotLogins)) {
+      dispositionAuthorLogins.delete(login);
+    }
   }
   const isAdvisoryBot = (login) =>
     isConfiguredAdvisoryBotLogin(login, advisoryBotLogins);
@@ -2180,6 +2188,19 @@ export function buildActivitySnapshotSummary(
   // classify the same post-disposition advisory-bot reply the same way.
   const isDispositionMarkerComment = (comment) =>
     isDispositionComment(comment) || isRejectionConfirmedDisposition(comment);
+  // Thread-scoped variant: recognizes the terminal rejection-confirmed
+  // marker only while its own thread is still resolved, mirroring
+  // `hasFreshDisposition`'s identical `threadResolved` gate above -- once a
+  // thread is reopened, the marker's "nothing more to do here" claim is
+  // stale for that thread. Needed specifically for the cross-thread global
+  // scan below (`dispositionCreatedAts`'s `threads.flatMap`), which pools
+  // every thread's replies into one PR-wide anchor: without this gate, a
+  // stale rejection-confirmed reply on a since-reopened thread could still
+  // anchor the window that misclassifies an unrelated, brand-new
+  // advisory-bot comment elsewhere on the PR as ack-only.
+  const isDispositionMarkerCommentForThread = (comment, threadResolved) =>
+    isDispositionComment(comment) ||
+    (threadResolved && isRejectionConfirmedDisposition(comment));
   const filteredComments = comments.filter((comment) => {
     if (!trustedMarkerLogins.has((comment.author?.login ?? '').toLowerCase())) {
       return true;
@@ -2205,7 +2226,10 @@ export function buildActivitySnapshotSummary(
         .filter(
           (comment) =>
             isDispositionAuthor(comment.author?.login) &&
-            isDispositionMarkerComment(comment),
+            isDispositionMarkerCommentForThread(
+              comment,
+              Boolean(thread.isResolved),
+            ),
         )
         .map((comment) => comment.createdAt),
     ),
@@ -2241,7 +2265,10 @@ export function buildActivitySnapshotSummary(
           .filter(
             (comment) =>
               isDispositionAuthor(comment.author?.login) &&
-              isDispositionMarkerComment(comment),
+              isDispositionMarkerCommentForThread(
+                comment,
+                Boolean(thread.isResolved),
+              ),
           )
           .map((comment) => comment.createdAt)
           .filter(isValidIsoTimestamp),
@@ -2625,8 +2652,16 @@ export function summarizeDispositionEvidenceForGate(
   // the "Pre-merge gate invariants" comment above `summarizeDispositionEvidenceForGate`:
   // each of those reacts differently (fail-open vs. fail-closed) to a global
   // change, so this subtraction must stay local to the ack-only diagnostic.
+  // Excludes via `isConfiguredAdvisoryBotLogin`, not a plain `Set.has`, so a
+  // `[bot]`-suffix mismatch between the two configured login sets (e.g.
+  // `iddAgentLogins` storing GitHub's `dual-bot[bot]` author-login form
+  // while `advisoryBotLogins` stores the supported suffixless `dual-bot`
+  // form) still excludes the shared login -- the same normalized identity
+  // every other advisory-bot recognition in this file already uses.
   const ackAnchorAuthorLogins = new Set(
-    [...iddAgentLogins].filter((login) => !advisoryBotLogins.has(login)),
+    [...iddAgentLogins].filter(
+      (login) => !isConfiguredAdvisoryBotLogin(login, advisoryBotLogins),
+    ),
   );
   const normalizedComments = comments
     .map((comment, inputIndex) => ({
