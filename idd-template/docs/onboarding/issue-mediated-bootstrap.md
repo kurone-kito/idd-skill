@@ -345,12 +345,41 @@ them:
   Step 1B companion decision was `installed`; do not draft this
   follow-up for an operator who chose `not installed`, since there is
   nothing for it to do
+- a welcome/next-steps issue — unlike its sibling bullets above, which
+  are drafted only on request, draft this one **by default** whenever
+  the operator chose issue-mediated bootstrap (details below)
 
 None of these are required for the repository to become
 IDD-operational, and unlike the core import, each one can run through
 the real Discover -> Claim -> Work loop once the core bootstrap issue
 merges — the local IDD instructions and policy files that Discover needs
-already exist by then.
+already exist by then — with one exception: the welcome/next-steps issue
+must not run through that loop at all (see below).
+
+**Welcome/next-steps issue, in detail.** Draft it automatically whenever
+the operator chose issue-mediated bootstrap — do not wait for a separate
+request. The whole premise of choosing the guided path over theirs-flow
+is that the operator is less likely to already know IDD, so gating this
+one add-on on a separate ask would defeat the point.
+
+This is also the one add-on that must stay off the Discover -> Claim ->
+Work loop entirely, unlike its four sibling bullets above: its whole
+body is a reference to read, not something to build, so an autopilot
+agent selecting it would attempt to "implement" prose that describes
+nothing. Give it the same autopilot-suitability score `1` and the
+operator-confirmed `labels.blockedByHumanLabelName` value the core
+bootstrap issue itself carries (Step 1B item 12) — never the
+distributed default label name unconditionally.
+
+Draft its body as 2-3 example prompts the operator can literally copy
+and try next, phrased as concrete requests mirroring the operator's own
+examples ("start issue authoring to implement {inferred gap}", "run the
+IDD loop"). Derive `{inferred gap}` and the other prompt content from
+the same repository-evidence read the optional Dry-run readiness report
+already performs
+([Dry-run — Readiness assessment](../../ONBOARDING.md#dry-run--readiness-assessment))
+— detected package manager, missing prerequisites, and so on — rather
+than inventing a new inference mechanism.
 
 ## Execution: issue -> branch -> PR -> merge, not the full loop
 
