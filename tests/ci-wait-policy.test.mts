@@ -4,6 +4,7 @@ import {
   chmodSync,
   mkdirSync,
   mkdtempSync,
+  readFileSync,
   rmSync,
   writeFileSync,
 } from 'node:fs';
@@ -382,6 +383,45 @@ test('deriveRerunCountFromRunAttempt: rejects a missing/non-numeric/zero run_att
 // #1996: --run-id end-to-end CLI tests. Every case below passes explicit
 // --owner/--repo so the stubbed `gh` only ever needs to answer the single
 // `api repos/.../actions/runs/<id>` call, never `repo view` too.
+
+// #1996 C1 critique (Copilot review, PR #1998): a run id above
+// Number.MAX_SAFE_INTEGER must reach the `gh api` call byte-for-byte, not
+// silently rounded by a Number round-trip (e.g. 9007199254740993 would
+// become 9007199254740992). Captures the exact argv the stub received to
+// prove the digits survive unmodified.
+test('CLI --run-id preserves a run id above Number.MAX_SAFE_INTEGER exactly (no precision loss)', () => {
+  const tempRoot = mkdtempSync(join(tmpdir(), 'idd-ci-wait-policy-run-id-'));
+  const argsFile = join(tempRoot, 'args.json');
+  const unsafeRunId = '9007199254740993'; // MAX_SAFE_INTEGER (2^53-1) + 2
+  const restore = stubGh(`
+const fs = require('node:fs');
+fs.writeFileSync(${JSON.stringify(argsFile)}, JSON.stringify(process.argv.slice(2)));
+process.stdout.write(JSON.stringify({ run_attempt: 1 }));
+`);
+  try {
+    execFileSync(
+      process.execPath,
+      [
+        join(REPO_ROOT, 'scripts/ci-wait-policy.mjs'),
+        '--run-id',
+        unsafeRunId,
+        '--owner',
+        'kurone-kito',
+        '--repo',
+        'idd-skill',
+      ],
+      { encoding: 'utf8' },
+    );
+    const capturedArgv = JSON.parse(readFileSync(argsFile, 'utf8')) as string[];
+    assert.deepEqual(capturedArgv, [
+      'api',
+      `repos/kurone-kito/idd-skill/actions/runs/${unsafeRunId}`,
+    ]);
+  } finally {
+    restore();
+  }
+});
+
 test('CLI --run-id derives rerunCount from a live run_attempt: 1 -> action rerun', () => {
   const restore = stubGh(`
 if (process.argv[2] === 'api') {

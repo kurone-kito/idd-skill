@@ -271,6 +271,21 @@ function runCli() {
   }
   process.stdout.write(`${JSON.stringify(output, null, 2)}\n`);
 }
+/**
+ * Validate `token` as a canonical positive-integer string (same format and
+ * `min: 1` bound `--rerun-count`'s sibling validation uses), but return the
+ * ORIGINAL string rather than `parseCanonicalIntegerOrThrow`'s numeric
+ * return value. A GitHub Actions run id is used only as an opaque path
+ * segment (`repos/{owner}/{repo}/actions/runs/{run-id}`) -- round-tripping
+ * it through a JavaScript `number` risks silent precision loss above
+ * `Number.MAX_SAFE_INTEGER` (Copilot review, PR #1998), which this
+ * function avoids by discarding the parsed number and keeping the
+ * caller-supplied digits verbatim once format/bound validation passes.
+ */
+function validateRunIdToken(token) {
+  parseCanonicalIntegerOrThrow(token, '--run-id', 1);
+  return token;
+}
 function parseArgs(argv) {
   const { values, help } = parseCliArgs(argv, CI_WAIT_POLICY_FLAG_SPEC);
   const rerunCountToken = values['rerun-count'];
@@ -305,11 +320,15 @@ function parseArgs(argv) {
         : parseCanonicalIntegerOrThrow(rerunCountToken, '--rerun-count', 0),
     // `min: 1`: a workflow run id is never `0` -- mirrors the positive-
     // integer contract this file's `--rerun-count` sibling deliberately
-    // opts out of (see the `min: 0` note above).
-    runId:
-      runIdToken === undefined
-        ? null
-        : String(parseCanonicalIntegerOrThrow(runIdToken, '--run-id', 1)),
+    // opts out of (see the `min: 0` note above). Deliberately keeps the
+    // ORIGINAL string token, not `String(parseCanonicalIntegerOrThrow(...))`
+    // -- a run id above `Number.MAX_SAFE_INTEGER` would silently round
+    // through that number round-trip (e.g. `9007199254740993` becomes
+    // `9007199254740992`), querying a different run than the caller
+    // requested (Copilot review, PR #1998). `parseCanonicalIntegerOrThrow`
+    // is still called for its format/bound validation and shaped-error
+    // throw -- its numeric return value is discarded on purpose.
+    runId: runIdToken === undefined ? null : validateRunIdToken(runIdToken),
     owner,
     repo,
     help,

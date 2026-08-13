@@ -371,11 +371,11 @@ than the run it supersedes. Once both have completed, the later
    external target rather than an Actions run; or its entry has `type:
    "check-run"` but an empty `url` (the upstream `detailsUrl` was
    itself absent). Otherwise resolve the rerun
-   decision from the
-   run's own history: `gh run view <run-id-from-url> --json attempt` —
-   GitHub's `attempt` starts at `1` for a never-rerun run, so pass
-   `attempt - 1` as `<count>` to `node scripts/ci-wait-policy.mjs
-   --rerun-count <count>`, never this wait's own memory. If it allows
+   decision directly from the run's own live state:
+   `node scripts/ci-wait-policy.mjs --run-id <run-id-from-url>`
+   (`--owner`/`--repo` when targeting a different repository) — this
+   derives the budget mechanically from the run's own `run_attempt`
+   field, never this wait's own memory. If it allows
    a rerun, rerun that check once as a **whole-run rerun, not
    `--failed`** (`gh run rerun <run-id-from-url>`) — a stalled check
    has no failed jobs to selectively rerun, only a run that never
