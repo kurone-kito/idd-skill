@@ -6292,7 +6292,11 @@ test('#2021: idd-advisory-convergence waiver posted but precondition window not 
   assert.ok(ciBlocker, 'expected a ci blocker');
   assert.match(
     ciBlocker?.detail ?? '',
-    /idd-advisory-convergence.*not yet active/,
+    /not yet covering "idd-advisory-convergence"/,
+  );
+  assert.match(
+    ciBlocker?.detail ?? '',
+    /deadline\/terminal precondition has not opened/,
   );
   assert.match(ciBlocker?.detail ?? '', /remainingMinutes=1380/);
 });
@@ -6362,6 +6366,169 @@ test('#2021: a glob-selector waiver (e.g. idd-*) is also withheld from coveredBy
   );
   assert.equal(blocked.ready, false);
   assert.deepEqual(blocked.blockers, computePreMergeReadinessBlockers(blocked));
+});
+
+// #2021 (Codex review finding 1 on PR #2033): a glob-selector waiver must
+// stay withheld from `coveredByWaiver` even AFTER the deadline/terminal
+// precondition opens -- `advisory-convergence.mts`'s own `waived`
+// computation only counts an EXACT selector match
+// (`entry.checkSelector === waiverCheckSelector`), never a glob, so a
+// glob-only waiver never converges that gate no matter how long the
+// deadline waits. Distinct from the sibling test above, which covers the
+// precondition-CLOSED case for the same glob selector.
+test('#2021: a glob-selector waiver (e.g. idd-*) still does not cover coveredByWaiver once the precondition opens (only an exact selector match does)', () => {
+  const fixture = readJson('fixtures/pre-merge-readiness/clean.json');
+  const input = withAdvisoryConvergenceRequiredCheck(fixture);
+  const waivableCheckSelectors = [{ selector: 'idd-*', matchMode: 'glob' }];
+  const waiverBody = renderExternalCheckWaiverComment({
+    agentId: fixture.options.expectedAgentId,
+    claimId: fixture.options.expectedClaimId,
+    headSha: fixture.input.prHeadSha,
+    checkSelector: 'idd-*',
+    reason: 'blanket idd-* waiver posted by mistake',
+    expiresAt: '2026-05-13T00:00:00Z',
+    actor: 'kurone-kito',
+  });
+
+  const blocked = buildPreMergeReadinessSummary(
+    {
+      ...input,
+      comments: [
+        ...(input.comments ?? []),
+        {
+          id: 'glob-waiver-open',
+          author: { login: 'kurone-kito' },
+          body: waiverBody,
+          createdAt: '2026-05-12T00:00:00Z',
+          updatedAt: '2026-05-12T00:00:00Z',
+        },
+      ],
+    },
+    {
+      ...fixture.options,
+      includeDispositionEvidence: true,
+      waivableCheckSelectors,
+      externalCheckWaiverMaxValidity: 'PT24H',
+      // Precondition OPEN this time: deadline has passed.
+      advisoryConvergenceHeadCommittedAt: '2026-05-10T23:00:00Z',
+    },
+  );
+
+  const precondition = (
+    blocked as {
+      advisoryConvergenceWaiverPrecondition: Record<string, unknown>;
+    }
+  ).advisoryConvergenceWaiverPrecondition;
+  assert.equal(
+    precondition.open,
+    true,
+    'sanity check: the precondition is open',
+  );
+
+  const check = ciCheckByName(blocked, 'idd-advisory-convergence');
+  assert.equal(
+    check?.coveredByWaiver,
+    undefined,
+    'a glob-only waiver must never cover this check, even once the precondition opens',
+  );
+  assert.equal(blocked.ready, false);
+  assert.deepEqual(blocked.blockers, computePreMergeReadinessBlockers(blocked));
+  const ciBlocker = (
+    blocked.blockers as { gate: string; detail: string }[]
+  ).find((blocker) => blocker.gate === 'ci');
+  assert.match(
+    ciBlocker?.detail ?? '',
+    /no posted waiver has a selector that EXACTLY equals/,
+  );
+});
+
+// #2021 (Codex review finding 2 on PR #2033): withholding coveredByWaiver
+// for idd-advisory-convergence must not strip the SAME glob waiver's
+// coverage of a completely unrelated check it also names -- the exclusion
+// must be surgical, per check name, not a removal of the whole waiver
+// entry.
+test('#2021: withholding coverage from idd-advisory-convergence does not remove the same glob waiver from an unrelated check', () => {
+  const fixture = readJson('fixtures/pre-merge-readiness/clean.json');
+  const branchRules = (
+    fixture.input.branchRules as Record<string, unknown>[]
+  ).map((rule) =>
+    rule.type === 'required_status_checks'
+      ? {
+          type: 'required_status_checks',
+          parameters: {
+            required_status_checks: [
+              { context: 'lint' },
+              { context: 'idd-advisory-convergence' },
+              { context: 'idd-security' },
+            ],
+          },
+        }
+      : rule,
+  );
+  const checks = [
+    ...(fixture.input.checks as Record<string, unknown>[]),
+    {
+      name: 'idd-advisory-convergence',
+      state: 'FAILURE',
+      completedAt: '2026-05-11T23:59:00Z',
+    },
+    {
+      name: 'idd-security',
+      state: 'FAILURE',
+      completedAt: '2026-05-11T23:59:00Z',
+    },
+  ];
+  const waivableCheckSelectors = [{ selector: 'idd-*', matchMode: 'glob' }];
+  const waiverBody = renderExternalCheckWaiverComment({
+    agentId: fixture.options.expectedAgentId,
+    claimId: fixture.options.expectedClaimId,
+    headSha: fixture.input.prHeadSha,
+    checkSelector: 'idd-*',
+    reason: 'blanket idd-* waiver covering multiple checks',
+    expiresAt: '2026-05-13T00:00:00Z',
+    actor: 'kurone-kito',
+  });
+
+  const summary = buildPreMergeReadinessSummary(
+    {
+      ...fixture.input,
+      branchRules,
+      checks,
+      comments: [
+        ...fixture.input.comments,
+        {
+          id: 'glob-waiver-multi',
+          author: { login: 'kurone-kito' },
+          body: waiverBody,
+          createdAt: '2026-05-12T00:00:00Z',
+          updatedAt: '2026-05-12T00:00:00Z',
+        },
+      ],
+    },
+    {
+      ...fixture.options,
+      includeDispositionEvidence: true,
+      waivableCheckSelectors,
+      externalCheckWaiverMaxValidity: 'PT24H',
+      // Precondition closed -- idd-advisory-convergence must stay
+      // uncovered, but idd-security must still be covered by the same
+      // glob waiver entry.
+      advisoryConvergenceHeadCommittedAt: '2026-05-11T23:00:00Z',
+    },
+  );
+
+  const convergenceCheck = ciCheckByName(summary, 'idd-advisory-convergence');
+  assert.equal(
+    convergenceCheck?.coveredByWaiver,
+    undefined,
+    'idd-advisory-convergence stays uncovered while its precondition is closed',
+  );
+  const securityCheck = ciCheckByName(summary, 'idd-security');
+  assert.equal(
+    securityCheck?.coveredByWaiver,
+    true,
+    'an unrelated check matched by the same glob waiver must remain covered',
+  );
 });
 
 test('#2021: idd-advisory-convergence waiver posted and the 24h deadline has passed is covered (unchanged coveredByWaiver behavior)', () => {

@@ -4257,11 +4257,26 @@ export function summarizeRequiredChecks(
     waivableSelectors = null,
     protectionReadsUnreadable = false,
     trustSourcePinnedRequiredChecks = false,
+    excludeFromWaiverCoverage = null,
   }: {
     waivers?: { valid?: { checkSelector?: unknown }[] | null } | null;
     waivableSelectors?: { selector?: unknown; matchMode?: unknown }[] | null;
     // #1377: see `buildPreMergeReadinessSummary`'s option of the same name.
     protectionReadsUnreadable?: boolean;
+    // #2021 (Codex review on PR #2033): surgical per-CHECK-NAME override that
+    // withholds `coveredByWaiver` for one specific check regardless of which
+    // `waivers.valid` entry would otherwise match it -- WITHOUT filtering
+    // that entry out of `waivers.valid` itself, so any OTHER check the same
+    // (e.g. glob) waiver entry also covers is completely unaffected. Exists
+    // because `buildPreMergeReadinessSummary`'s `idd-advisory-convergence`
+    // precondition gate (#2021) must withhold coverage for THAT one check
+    // when the precondition hasn't opened or only a glob (non-exact)
+    // selector matches it, but a caller-side pre-filter of `waivers.valid`
+    // would incorrectly also strip that same waiver's coverage of an
+    // unrelated check the glob also names. `null`/omitted (the default)
+    // never excludes anything -- unchanged pre-#2021 behavior for every
+    // caller that doesn't pass it.
+    excludeFromWaiverCoverage?: ((checkName: string) => boolean) | null;
     // #1689: `ciGate.trustSourcePinnedRequiredChecks` opt-in (mirrors
     // `ciGate.trustEmptyProtectionReads`'s shape). Default `false` keeps the
     // pre-#1689 conservative behavior: a required check whose ruleset entry
@@ -4297,6 +4312,10 @@ export function summarizeRequiredChecks(
     const state = String(check.state ?? '').toUpperCase();
     const coveredByWaiver =
       !CHECK_PASS_EQUIVALENT_STATES.has(state) &&
+      !(
+        typeof excludeFromWaiverCoverage === 'function' &&
+        excludeFromWaiverCoverage(name)
+      ) &&
       validWaivers.some((w) =>
         matchCheckSelectorLocal(name, w.checkSelector),
       ) &&
@@ -5663,21 +5682,36 @@ export function computePreMergeReadinessBlockers(
           ),
       );
     const waiverEvidenceForDetail = preMergeAsRecord(report.waiverEvidence);
-    const advisoryConvergenceValidWaiverCount = Array.isArray(
-      waiverEvidenceForDetail.valid,
-    )
-      ? (waiverEvidenceForDetail.valid as Record<string, unknown>[]).filter(
-          (entry) =>
-            matchCheckSelectorLocal(
-              advisoryConvergenceCheckSelector,
-              entry?.checkSelector,
-            ),
-        ).length
-      : 0;
+    const waiverEvidenceValidList = Array.isArray(waiverEvidenceForDetail.valid)
+      ? (waiverEvidenceForDetail.valid as Record<string, unknown>[])
+      : [];
+    // #2021 (Codex review on PR #2033): distinguish an EXACT-selector waiver
+    // (the only kind `advisory-convergence.mts`'s own gate ever counts, see
+    // `advisoryConvergenceExactWaiverValid` in `buildPreMergeReadinessSummary`)
+    // from a broader glob-only match, so this detail never implies "posting
+    // an exact waiver and waiting out the deadline is sufficient" when the
+    // real cause is that only a glob selector (e.g. `idd-*`) targets this
+    // check -- that never converges no matter how long the deadline waits.
+    const advisoryConvergenceExactWaiverCount = waiverEvidenceValidList.filter(
+      (entry) =>
+        String(entry?.checkSelector ?? '') === advisoryConvergenceCheckSelector,
+    ).length;
+    const advisoryConvergenceAnyWaiverCount = waiverEvidenceValidList.filter(
+      (entry) =>
+        matchCheckSelectorLocal(
+          advisoryConvergenceCheckSelector,
+          entry?.checkSelector,
+        ),
+    ).length;
+    const advisoryConvergencePreconditionOpenForDetail =
+      advisoryConvergencePrecondition.open === true;
     if (
       advisoryConvergenceCheckNonPassing &&
-      advisoryConvergenceValidWaiverCount > 0 &&
-      advisoryConvergencePrecondition.open !== true
+      advisoryConvergenceAnyWaiverCount > 0 &&
+      !(
+        advisoryConvergencePreconditionOpenForDetail &&
+        advisoryConvergenceExactWaiverCount > 0
+      )
     ) {
       const deadlineMinutes = Number(
         advisoryConvergencePrecondition.deadlineMinutes ?? 0,
@@ -5687,16 +5721,31 @@ export function computePreMergeReadinessBlockers(
         typeof elapsedMinutes === 'number'
           ? Math.max(0, deadlineMinutes - elapsedMinutes)
           : null;
+      const reasons: string[] = [];
+      if (!advisoryConvergencePreconditionOpenForDetail) {
+        reasons.push(
+          'its deadline/terminal precondition has not opened -- ' +
+            `deadlineMinutes=${deadlineMinutes}, ` +
+            `elapsedMinutes=${elapsedMinutes ?? 'unknown'}, ` +
+            `remainingMinutes=${remainingMinutes ?? 'unknown'}, ` +
+            `terminalUnavailable=${Boolean(
+              advisoryConvergencePrecondition.terminalUnavailable,
+            )}`,
+        );
+      }
+      if (advisoryConvergenceExactWaiverCount === 0) {
+        reasons.push(
+          'no posted waiver has a selector that EXACTLY equals ' +
+            `"${advisoryConvergenceCheckSelector}" (only a broader/glob ` +
+            "selector matches this check by name); advisory-convergence.mts's " +
+            'own gate never counts a glob match for its own selector, so ' +
+            'this check cannot converge via that waiver regardless of the ' +
+            'precondition',
+        );
+      }
       detail +=
-        ` (a posted external-check waiver for "${advisoryConvergenceCheckSelector}" ` +
-        'exists for current HEAD but is not yet active: its deadline/' +
-        'terminal precondition has not opened -- ' +
-        `deadlineMinutes=${deadlineMinutes}, ` +
-        `elapsedMinutes=${elapsedMinutes ?? 'unknown'}, ` +
-        `remainingMinutes=${remainingMinutes ?? 'unknown'}, ` +
-        `terminalUnavailable=${Boolean(
-          advisoryConvergencePrecondition.terminalUnavailable,
-        )})`;
+        ` (a posted external-check waiver exists for current HEAD but is ` +
+        `not yet covering "${advisoryConvergenceCheckSelector}": ${reasons.join('; ')})`;
     }
     blockers.push({ gate: 'ci', detail });
   }
@@ -6162,37 +6211,44 @@ export function buildPreMergeReadinessSummary(
     open: advisoryConvergencePreconditionOpen,
   };
 
-  // The waiver evidence the CI gate actually consumes: identical to
-  // `waiverEvidence` except any `valid` entry that would cover the
-  // `idd-advisory-convergence` CHECK is excluded while the precondition
-  // above has not opened. Excluded by the SAME matching semantics
-  // `summarizeRequiredChecks`'s own `coveredByWaiver` computation uses below
-  // (`matchCheckSelectorLocal(name, w.checkSelector)`, glob-aware) rather
-  // than a strict `===` -- a hand-authored waiver whose selector is a glob
-  // (e.g. `idd-*`) still glob-matches the check name and must not slip
-  // through the precondition gate just because its literal selector string
-  // differs from the constant. Every entry that does NOT cover this check is
-  // unaffected -- this precondition is specific to the gate
-  // `advisory-convergence.mts` itself enforces for its own selector.
-  const ciWaiverEvidence = advisoryConvergencePreconditionOpen
-    ? waiverEvidence
-    : {
-        ...waiverEvidence,
-        valid: waiverEvidence.valid.filter(
-          (entry) =>
-            !matchCheckSelectorLocal(
-              DEFAULT_ADVISORY_CONVERGENCE_CHECK_SELECTOR,
-              entry.checkSelector,
-            ),
-        ),
-      };
+  // #2021 (Codex review on PR #2033, two findings): `advisory-convergence.mts`'s
+  // own `waived` computation only counts a waiver whose `checkSelector` is an
+  // EXACT match to its selector constant (`entry.checkSelector ===
+  // waiverCheckSelector`, advisory-convergence.mts line ~1108) -- never a
+  // glob. A glob waiver such as `idd-*` (permitted when
+  // `waivableCheckSelectors` allows it) would still glob-match the
+  // `idd-advisory-convergence` CHECK NAME via `summarizeRequiredChecks`'s
+  // `matchCheckSelectorLocal`, so treating "precondition open" as sufficient
+  // to fall back to the raw, unfiltered `waiverEvidence` (as an earlier
+  // revision of this fix did) would report `coveredByWaiver: true` for a
+  // selector that gate would never itself accept -- reproducing this same
+  // issue's false-`ready` class for a different trigger. `genuinelyCovered`
+  // requires BOTH the precondition open AND an EXACT-match valid entry.
+  const advisoryConvergenceExactWaiverValid = waiverEvidence.valid.some(
+    (entry) =>
+      entry.checkSelector === DEFAULT_ADVISORY_CONVERGENCE_CHECK_SELECTOR,
+  );
+  const advisoryConvergenceGenuinelyCovered =
+    advisoryConvergencePreconditionOpen && advisoryConvergenceExactWaiverValid;
 
   const ci = summarizeRequiredChecks(checks, branchRules, branchProtection, {
-    waivers: ciWaiverEvidence,
+    // Raw, UNFILTERED `waiverEvidence` -- deliberately not a caller-side
+    // pre-filtered copy. A pre-filter that removed a whole `valid` entry
+    // (e.g. every occurrence of a glob waiver covering
+    // `idd-advisory-convergence`) would also strip that SAME entry's
+    // coverage of any OTHER check it glob-matches (e.g. a configured
+    // `idd-security`), turning a convergence-specific restriction into an
+    // unintended block on unrelated checks (Codex review finding on PR
+    // #2033). `excludeFromWaiverCoverage` below applies the restriction
+    // surgically, per check name, instead.
+    waivers: waiverEvidence,
     waivableSelectors: waivableCheckSelectors,
     protectionReadsUnreadable,
     trustSourcePinnedRequiredChecks:
       options.trustSourcePinnedRequiredChecks === true,
+    excludeFromWaiverCoverage: (name) =>
+      name === DEFAULT_ADVISORY_CONVERGENCE_CHECK_SELECTOR &&
+      !advisoryConvergenceGenuinelyCovered,
   });
 
   // #1570: reuse the SAME raw waiver evidence above (already validated for
