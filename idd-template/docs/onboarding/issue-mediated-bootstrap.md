@@ -238,6 +238,8 @@ recording action rather than a pinned remote-fetch step:
 - Helper runtime profile: <value>
 - IDD label names: <value>
 - Up-to-date-head ruleset check: <value>
+- Bootstrap execution mode: issue-mediated (this issue's own execution
+  path)
 
 This is a single, atomically-reviewable change: the core import,
 placeholder substitution, and agent-entry-file updates land together,
