@@ -376,28 +376,35 @@ Before any mutating action in F3, apply the
 3. Run from the **primary worktree**, never from inside the worktree
    being removed — deleting the directory underlying the running
    process's own cwd breaks every later step. Any removal (plain or
-   `--force`) silently discards ignored files, including ones inside an
-   initialized submodule — so **before the first removal attempt**,
-   scope both cleanliness checks explicitly to the target `<path>` (an
-   unqualified command run from the primary worktree checks the wrong
-   repository) and confirm both report nothing:
+   `--force`) silently discards ignored files too, including ones
+   inside an initialized submodule — so **before the first removal
+   attempt**, review what's there. Scope both inspection commands
+   explicitly to the target `<path>` (an unqualified command run from
+   the primary worktree inspects the wrong repository):
 
-   - `git -C <path> status --porcelain --ignored`
+   - `git -C <path> status --porcelain --ignored --untracked-files=all`
+     (the explicit `--untracked-files` avoids a false-clean result under
+     a repository- or user-level `status.showUntrackedFiles=no`)
    - `git -C <path> submodule foreach --quiet --recursive 'git status
-     --porcelain --ignored'` (`--quiet` suppresses the `Entering
-     '<submodule>'` banner, otherwise a clean result still isn't empty
-     output)
+     --porcelain --ignored --untracked-files=all'` (`--quiet` suppresses
+     the `Entering '<submodule>'` banner, which otherwise makes even a
+     clean result non-empty)
 
-   Only once both are confirmed empty, delete the worktree, then the
-   branch:
+   Generated dependency/build output (e.g. `node_modules/` from
+   `install-deps`) is expected, disposable, and not a reason to stop.
+   Anything else uncommitted, untracked, or ignored (local notes, an
+   untracked `.env`, unpushed WIP) needs to be preserved — commit, push,
+   or copy it out — before continuing. Then
+   delete the worktree, then the branch:
 
    - `git worktree remove <path>`. If it fails with `fatal: working
      trees containing submodules cannot be moved or removed`, a
      submodule-initializing step (e.g. `git submodule update --init
      --recursive`) ran inside that worktree — retry with `git worktree
      remove --force <path>`, which also overrides the uncommitted /
-     untracked / submodule block. Never use `--force` as an
-     unconditional default — only after the cleanliness checks above.
+     untracked / submodule block. Only reach for either form once the
+     review above found nothing worth preserving, not as an
+     unconditional default.
    - `git branch -d <branch-name>` (this baseline's Claude Code
      permission profile denies `git branch -D`; see
      `docs/permissions.md`'s "What the baseline denies"). If it fails
