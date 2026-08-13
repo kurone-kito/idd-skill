@@ -2168,6 +2168,18 @@ export function buildActivitySnapshotSummary(
         .trim()
         .toLowerCase(),
     );
+  // #2014: `isDispositionComment` alone (the `**Accepted**`/`**Rejected**`
+  // prefixes) misses the terminal `**Rejection confirmed by maintainer**`
+  // marker (`isRejectionConfirmedDisposition`) that E6
+  // (idd-review-triage.instructions.md) posts instead of a fresh
+  // `**Rejected**` re-post once a maintainer agrees an
+  // `**Awaiting maintainer decision**` item needs no action -- a disposition
+  // is a disposition regardless of which of the two terminal shapes it took.
+  // `summarizeDispositionEvidenceForGate`'s `classifyThreadAckOnlyPostDisposition`
+  // already recognizes both; recognize both here too so the two producers
+  // classify the same post-disposition advisory-bot reply the same way.
+  const isDispositionMarkerComment = (comment) =>
+    isDispositionComment(comment) || isRejectionConfirmedDisposition(comment);
   const filteredComments = comments.filter((comment) => {
     if (!trustedMarkerLogins.has((comment.author?.login ?? '').toLowerCase())) {
       return true;
@@ -2185,7 +2197,7 @@ export function buildActivitySnapshotSummary(
       .filter(
         (comment) =>
           isDispositionAuthor(comment.author?.login) &&
-          isDispositionComment(comment),
+          isDispositionMarkerComment(comment),
       )
       .map((comment) => comment.createdAt),
     ...threads.flatMap((thread) =>
@@ -2193,7 +2205,7 @@ export function buildActivitySnapshotSummary(
         .filter(
           (comment) =>
             isDispositionAuthor(comment.author?.login) &&
-            isDispositionComment(comment),
+            isDispositionMarkerComment(comment),
         )
         .map((comment) => comment.createdAt),
     ),
@@ -2206,7 +2218,7 @@ export function buildActivitySnapshotSummary(
     if (!isAdvisoryBot(comment.author?.login)) {
       return false;
     }
-    if (isDispositionComment(comment)) {
+    if (isDispositionMarkerComment(comment)) {
       return false;
     }
     const activityAt = comment.updatedAt ?? comment.createdAt;
@@ -2229,7 +2241,7 @@ export function buildActivitySnapshotSummary(
           .filter(
             (comment) =>
               isDispositionAuthor(comment.author?.login) &&
-              isDispositionComment(comment),
+              isDispositionMarkerComment(comment),
           )
           .map((comment) => comment.createdAt)
           .filter(isValidIsoTimestamp),
@@ -2249,7 +2261,7 @@ export function buildActivitySnapshotSummary(
       if (!isAdvisoryBot(comment.author?.login)) {
         return false;
       }
-      if (isDispositionComment(comment)) {
+      if (isDispositionMarkerComment(comment)) {
         return false;
       }
       const activityAt = effectiveThreadCommentActivityAt(comment);
@@ -2601,6 +2613,21 @@ export function summarizeDispositionEvidenceForGate(
   const prAuthorLogin = String(options.prAuthorLogin ?? '')
     .trim()
     .toLowerCase();
+  // #2014: An advisory bot can never anchor "dispositions exist", mirroring
+  // `buildActivitySnapshotSummary`'s identical `dispositionAuthorLogins`
+  // subtraction above (this file, "An advisory bot can never anchor..."
+  // comment) -- its own `**Accepted**`/`**Rejected**`-shaped reply must not
+  // open the post-disposition window that classifies a later advisory-bot
+  // reply as ack-only. Scoped to ONLY `classifyThreadAckOnlyPostDisposition`'s
+  // own anchor below -- the raw `iddAgentLogins` set is used unchanged
+  // everywhere else in this function (`hasFreshDisposition`,
+  // `outstandingComments`, the generic `dispositionComments` 1:1 pool), per
+  // the "Pre-merge gate invariants" comment above `summarizeDispositionEvidenceForGate`:
+  // each of those reacts differently (fail-open vs. fail-closed) to a global
+  // change, so this subtraction must stay local to the ack-only diagnostic.
+  const ackAnchorAuthorLogins = new Set(
+    [...iddAgentLogins].filter((login) => !advisoryBotLogins.has(login)),
+  );
   const normalizedComments = comments
     .map((comment, inputIndex) => ({
       id: String(comment.id ?? ''),
@@ -2901,7 +2928,7 @@ export function summarizeDispositionEvidenceForGate(
       nodes
         .filter(
           (comment) =>
-            iddAgentLogins.has(
+            ackAnchorAuthorLogins.has(
               String(comment.author?.login ?? '')
                 .trim()
                 .toLowerCase(),
