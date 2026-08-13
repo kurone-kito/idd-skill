@@ -3224,19 +3224,31 @@ function checkGithubReadiness(
   }
 }
 
-/** Fields consulted from one `rules/branches/{branch}` rule entry. */
-interface BranchRuleReadEntry {
-  type?: string | null;
-}
+/**
+ * One `rules/branches/{branch}` rule entry, as accepted by
+ * `summarizeBranchReviewRequirements()`'s branch-rules parameter
+ * (`protocol-helpers.mts`). Extracted via `Parameters<>` rather than
+ * duplicated: that helper's own `BranchRuleLike` type is not exported,
+ * and re-declaring a narrower local shape by hand previously drifted
+ * out of sync with what `summarizeBranchReviewRequirements()` actually
+ * reads from `rule.parameters` (idd-skill#2010 review).
+ */
+type BranchRuleReadEntry = NonNullable<
+  Parameters<typeof summarizeBranchReviewRequirements>[0]
+>[number];
 
-/** Fields consulted from a classic `branches/{branch}/protection` payload. */
-interface BranchProtectionReadPayload {
-  required_status_checks?: {
-    contexts?: string[] | null;
-    strict?: unknown;
-  } | null;
-  required_pull_request_reviews?: Record<string, unknown> | null;
-}
+/**
+ * A classic `branches/{branch}/protection` payload, as accepted by
+ * `summarizeBranchReviewRequirements()`'s branch-protection parameter.
+ * Extracted the same way as {@link BranchRuleReadEntry}. Both parameters
+ * are optional (default-valued) on `summarizeBranchReviewRequirements()`
+ * itself, which is why `Parameters<>` alone would include `| undefined`
+ * here; `NonNullable<>` strips that back out since every call site below
+ * always passes a concrete value.
+ */
+type BranchProtectionReadPayload = NonNullable<
+  Parameters<typeof summarizeBranchReviewRequirements>[1]
+>;
 
 /** Outcome of one `fetchGovernanceJson()` read (mirrors its own return shape). */
 interface GovernanceReadOutcome<T> {
