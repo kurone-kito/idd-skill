@@ -5,6 +5,7 @@
 // above by `pnpm run build`. Edit the .mts source, never the generated
 // .mjs. See docs/typescript-sources.md.
 import { readFileSync } from 'node:fs';
+import { setTimeout as sleep } from 'node:timers/promises';
 import { computeReportSummary } from './audit-pr-cleanup-summary.mjs';
 import { parseCliArgs } from './cli-args.mjs';
 import {
@@ -214,6 +215,17 @@ async function applyCandidatePass(
 }
 /** Default bound on whole-pass apply retries (#2011). */
 const DEFAULT_APPLY_RETRY_MAX_ATTEMPTS = 3;
+/** Base backoff (ms) before each rescan; linear-ish with jitter, matching
+ * {@link withBoundedRetry}'s formula in gh-exec.mts. */
+const DEFAULT_APPLY_RETRY_BACKOFF_MS = 200;
+/** Default backoff before a rescan: gives GraphQL read-after-write lag on
+ * the previous pass's minimizeComment calls a moment to settle (#2011). */
+async function defaultApplyRetryBackoff(attempt) {
+  await sleep(
+    DEFAULT_APPLY_RETRY_BACKOFF_MS * attempt +
+      Math.random() * DEFAULT_APPLY_RETRY_BACKOFF_MS,
+  );
+}
 /**
  * Retries a whole apply-and-rescan pass, bounded by `maxAttempts`, so a
  * candidate that only becomes eligible after the previous pass finished
@@ -221,11 +233,15 @@ const DEFAULT_APPLY_RETRY_MAX_ATTEMPTS = 3;
  * converges within one `--apply` invocation instead of requiring a second,
  * manual call.
  *
- * `applyPass` and `rescan` are injected rather than calling `buildReport`
- * / `gh` directly, so this orchestration is unit-testable with fakes.
- * `applyPass` must mutate its report argument's `applied` / `failed`
- * arrays in place (matching {@link applyCandidatePass}); `rescan` must
- * return a fresh dry-run-equivalent report reflecting current state.
+ * `applyPass`, `rescan`, and `backoff` are injected rather than calling
+ * `buildReport` / `gh` / real timers directly, so this orchestration is
+ * unit-testable with fakes. `applyPass` must mutate its report argument's
+ * `applied` / `failed` arrays in place (matching
+ * {@link applyCandidatePass}); `rescan` must return a fresh
+ * dry-run-equivalent report reflecting current state; `backoff` waits
+ * before each rescan (default: a short linear-ish delay with jitter, so
+ * GraphQL read-after-write lag on the pass's own mutations has a moment
+ * to settle before re-querying).
  *
  * Stops immediately, without any further rescan, the first time a pass
  * leaves `failed` non-empty (matches the pre-existing fail-fast
@@ -240,6 +256,7 @@ export async function runApplyWithRetry(
   applyPass,
   rescan,
   maxAttempts = DEFAULT_APPLY_RETRY_MAX_ATTEMPTS,
+  backoff = defaultApplyRetryBackoff,
 ) {
   let report = initialReport;
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
@@ -247,6 +264,10 @@ export async function runApplyWithRetry(
     if (report.failed.length > 0) {
       return { report, attempts: attempt, boundExhausted: false };
     }
+    // A short backoff before rescanning gives GraphQL read-after-write lag
+    // on this pass's minimizeComment calls a moment to settle, instead of
+    // immediately re-querying the same stale state.
+    await backoff(attempt);
     // Carry the accumulated `applied` list onto the fresh rescan so the
     // returned report's `candidates` / `skipped` reflect confirmed
     // post-apply state (e.g. cascade-minimized items now show up as

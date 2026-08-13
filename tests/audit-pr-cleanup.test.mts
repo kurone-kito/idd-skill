@@ -42,6 +42,10 @@ function createAuditReport(
   };
 }
 
+// Skips runApplyWithRetry's default real-timer backoff so these tests stay
+// fast and deterministic; the backoff's own timing is not under test here.
+async function noBackoff(): Promise<void> {}
+
 function createRow(subjectId: string) {
   return {
     subjectId,
@@ -79,6 +83,8 @@ test('runApplyWithRetry converges on the first pass when the rescan finds nothin
       rescanCalls += 1;
       return createAuditReport({ mode: 'dry-run', candidates: [] });
     },
+    undefined,
+    noBackoff,
   );
 
   assert.equal(applyPassCalls, 1);
@@ -115,6 +121,8 @@ test('runApplyWithRetry re-applies a candidate that only becomes eligible after 
         candidates: rescanCalls === 1 ? [createRow('c2')] : [],
       });
     },
+    undefined,
+    noBackoff,
   );
 
   assert.equal(rescanCalls, 2);
@@ -150,6 +158,7 @@ test('runApplyWithRetry reports boundExhausted when candidates keep reappearing 
       });
     },
     3,
+    noBackoff,
   );
 
   assert.equal(rescanCalls, 3);
@@ -187,4 +196,37 @@ test('runApplyWithRetry stops immediately, without rescanning, once a pass leave
   assert.equal(result.attempts, 1);
   assert.equal(result.boundExhausted, false);
   assert.equal(result.report.failed.length, 1);
+});
+
+test('runApplyWithRetry backs off before each rescan, once per retried attempt', async () => {
+  const { runApplyWithRetry } = await import(
+    '../src/scripts/audit-pr-cleanup.mts'
+  );
+  const initial = createAuditReport({ candidates: [createRow('c1')] });
+  const backoffAttempts: number[] = [];
+  let rescanCalls = 0;
+
+  await runApplyWithRetry(
+    initial,
+    async (report) => {
+      for (const candidate of report.candidates) {
+        report.applied.push({ ...candidate, isMinimized: true });
+      }
+    },
+    async () => {
+      rescanCalls += 1;
+      return createAuditReport({
+        mode: 'dry-run',
+        candidates: rescanCalls === 1 ? [createRow('c2')] : [],
+      });
+    },
+    undefined,
+    async (attempt) => {
+      backoffAttempts.push(attempt);
+    },
+  );
+
+  // Backed off before the attempt-1 rescan and the attempt-2 rescan, each
+  // tagged with its own attempt number.
+  assert.deepEqual(backoffAttempts, [1, 2]);
 });
