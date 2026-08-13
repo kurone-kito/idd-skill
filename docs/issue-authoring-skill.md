@@ -791,6 +791,16 @@ availability, or ordering constraint.
   track reports startable the moment its build foundation closes, and
   claiming it then means either failing its acceptance criteria or doing
   the siblings' unmerged work
+- once a `Blocked by #NNN` / `Depends on #NNN` reference resolves (the
+  referenced issue closes), revisit the blocked issue's own body and
+  remove the now-stale dependency line and any explanatory prose
+  describing the wait, rather than leaving it in place as inert
+  history. This is more than tidiness: stale wait-explaining prose can
+  trip `checkVerifiability`'s subjective-approval heuristic in
+  `suitability-triage.mts` (a line combining an authority-type noun
+  with an approval/sign-off/decision-type noun), even though the
+  structural dependency filter already correctly treats the closed
+  reference as unblocking
 
 When an issue keeps a dependency edge, justify each dependency edge in
 the surrounding issue body and confirm that the split still preserves
