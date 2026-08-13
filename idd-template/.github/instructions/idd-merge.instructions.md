@@ -370,22 +370,29 @@ Before any mutating action in F3, apply the
    format, and fallback GraphQL commands.
 3. Run from the **primary worktree**, never from inside the worktree
    being removed — deleting the directory underlying the running
-   process's own cwd breaks every later step. Delete the worktree, then
-   the branch:
+   process's own cwd breaks every later step. Any removal (plain or
+   `--force`) silently discards ignored files, including ones inside an
+   initialized submodule — so **before the first removal attempt**,
+   scope both cleanliness checks explicitly to the target `<path>` (an
+   unqualified command run from the primary worktree checks the wrong
+   repository) and confirm both report nothing:
+
+   - `git -C <path> status --porcelain --ignored`
+   - `git -C <path> submodule foreach --quiet --recursive 'git status
+     --porcelain --ignored'` (`--quiet` suppresses the `Entering
+     '<submodule>'` banner, otherwise a clean result still isn't empty
+     output)
+
+   Only once both are confirmed empty, delete the worktree, then the
+   branch:
 
    - `git worktree remove <path>`. If it fails with `fatal: working
      trees containing submodules cannot be moved or removed`, a
      submodule-initializing step (e.g. `git submodule update --init
      --recursive`) ran inside that worktree — retry with `git worktree
      remove --force <path>`, which also overrides the uncommitted /
-     untracked / submodule block. Any removal, forced or not, silently
-     discards ignored files too — including ones inside an initialized
-     submodule, which a worktree-root `git status --porcelain --ignored`
-     never surfaces. Before relying on `--force`, confirm both the
-     worktree root (`git status --porcelain --ignored`) and every
-     submodule (`git submodule foreach --recursive 'git status
-     --porcelain --ignored'`) report nothing — only once the worktree is
-     confirmed clean this way, not as an unconditional default.
+     untracked / submodule block. Never use `--force` as an
+     unconditional default — only after the cleanliness checks above.
    - `git branch -D <branch-name>`. Use `-D`, not `-d`: F3 already
      confirmed the merge via GitHub itself, so `-d`'s local ancestry
      re-check is redundant and can false-negative (`not fully merged`)
