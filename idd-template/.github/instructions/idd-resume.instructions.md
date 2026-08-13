@@ -78,12 +78,11 @@ branch/PR movement, or claimant-authored comment/review activity --
 this path's own step-1 input comment excepted) postdating that
 comment — later activity means work resumed, so fall back to the
 stale-takeover procedure in `idd-resume-stall.instructions.md`
-instead, per the shared fail-closed default. A configured
-needs-decision label (`labels.needsDecisionLabelName`, default
-`status:needs-decision`) can corroborate but never substitute, since
-automation can apply it unattended and separate sessions can share an
-`{agent-id}`. This session must have received the awaited operator
-input. Mere silence or staleness does not qualify either.
+instead, per the shared fail-closed default. The needs-decision label
+(`labels.needsDecisionLabelName`) can corroborate but never substitute
+-- automation can apply it unattended. This session must have received
+the awaited operator input. Mere silence or staleness does not qualify
+either.
 
 Steps 1-2 are pre-claim actions, like a fresh A5 claim's own pre-claim
 state; the shared claim revalidation gate's own-claim-id precondition
@@ -99,7 +98,9 @@ into no `forcedHandoff` policy and requires no `idd-force-handoff`
 Sequence:
 
 1. Post the operator-supplied input (with any acceptance-criteria
-   amendment it implies) as a normal issue comment.
+   amendment it implies) as a normal issue comment. If a configured
+   needs-decision/blocked-by-human label is present, also ask the
+   operator to remove it -- a human action only, never this session.
 2. Re-read the issue and confirm the active claim and the predicate
    above still hold — stop and restart if either changed since Step 0 —
    then post a trusted-marker-actor-authored `unclaimed-by` matching the
