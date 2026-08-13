@@ -97,25 +97,44 @@ name: IDD advisory-convergence gate
 # lands, independent of the separate `pull_request_review` trigger,
 # which only fires once the primary bot's own review actually lands
 # (typically 10-40s later) -- so a push that also needed a fresh review
-# used to get asserted, and fail, before that review existed, costing a
-# near-certain external rerun every time (the exact recovery documented
-# a few paragraphs below). `advisory-convergence.mjs`'s CLI entry point
-# now runs `runAdvisoryConvergenceWithPoll` instead of asserting
+# used to get asserted, and fail, before that review existed, costing an
+# external rerun most of the time (the exact recovery documented a few
+# paragraphs below). `advisory-convergence.mjs`'s CLI entry point now
+# runs `runAdvisoryConvergenceWithPoll` instead of asserting
 # immediately: when (and ONLY when) the verdict's sole blocking reason
 # is literally "{bot} has not reviewed this pull request yet" --
 # `isSoleCopilotNotReviewedYetReason` in the .mts source -- it polls a
-# short, bounded window (a few seconds apart, capped around a minute)
-# before its real assert-driven exit. Every OTHER not-ready reason
-# (a stale-HEAD review, unresolved threads, an indeterminate claim
-# scope, a deadline/terminal-unavailability reason, etc.) still fails
-# immediately on the first pass with no wait, exactly as before this
-# change. This does not weaken the check's required, fail-closed,
-# non-bypassable nature or change roadmap #1342's deterministic-
-# convergence policy in any way: if the review still has not landed by
-# the end of the window, or lands with outstanding items, the job fails
-# exactly as it always has -- this only absorbs a common, near-
-# universal race internally instead of costing an external rerun for it
-# every time.
+# short, bounded window (a few seconds apart, capped around a minute,
+# wall-clock bounded) before its real assert-driven exit. Every OTHER
+# not-ready reason (a stale-HEAD review, unresolved threads, an
+# indeterminate claim scope, a deadline/terminal-unavailability reason,
+# etc.) still fails immediately on the first pass with no wait, exactly
+# as before this change. This does not weaken the check's required,
+# fail-closed, non-bypassable nature or change roadmap #1342's
+# deterministic-convergence policy in any way: if the review still has
+# not landed by the end of the window, or lands with outstanding items,
+# the job fails exactly as it always has.
+#
+# Known residual (PR #2023 review): this job's own concurrency group
+# (below) is keyed by PR number ALONE across all three of its triggers,
+# with `cancel-in-progress: true`. If the primary bot's review actually
+# lands WHILE this poll is asleep, that submission starts a fresh
+# `pull_request_review`-triggered run in the SAME group, which cancels
+# THIS run before its next scheduled re-check ever observes the review
+# -- this run ends CANCELLED, and the fresh run becomes the one
+# responsible for reflecting convergence, subject to the exact same
+# stale-rollup risk `#1381` documents a few paragraphs below (whose
+# recovery, `rerun-advisory-convergence.mjs`, already handles a stale
+# CANCELLED sibling instance, not only a FAILURE one -- see "Rerun
+# mechanics" in `idd-ci.instructions.md`). Not a regression versus the
+# pre-#2015 baseline (before this change, the run always finished
+# FAILURE well before the review landed, so cancellation essentially
+# never happened, but the later review-triggered run's rollup update
+# was ALREADY subject to this same `#1381` risk) -- only a narrower win
+# than "no external rerun ever needed." See
+# `runAdvisoryConvergenceWithPoll`'s own doc comment
+# (`src/scripts/advisory-convergence.mts`) for the full analysis; no
+# safe mechanical fix was found within #2015's scope.
 #
 # Correction (kurone-kito/idd-skill#1381): in practice, workflow_dispatch
 # does NOT reliably flip the PR's required-check rollup for its own HEAD

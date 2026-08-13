@@ -1774,6 +1774,16 @@ to post it is the consuming track's job.
   indeterminate claim scope, a deadline/terminal reason, etc.) still fails
   immediately with no wait, exactly as before this addition — the
   exit-code contract and `ready` formula above are otherwise unchanged.
+  The poll's bound is wall-clock (a deadline, not a sleep-count), so a
+  slow `gh` collection pass cannot push the loop meaningfully past its
+  documented budget. Known residual (PR #2023 review): a review that
+  lands while this poll is asleep can still start a fresh
+  `pull_request_review`-triggered run in the hosting workflow's own
+  PR-scoped `cancel-in-progress` concurrency group, cancelling this run
+  before it observes the review — a narrower win than "never needs an
+  external rerun again"; see the full analysis in
+  `runAdvisoryConvergenceWithPoll`'s doc comment
+  (`src/scripts/advisory-convergence.mts`).
 - **Deadlock / deadline policy**: while the primary bot has not reviewed
   the current HEAD, `pending` is `true` and the gate is not ready. After
   `advisoryWait.convergenceDeadline` (default 24h; see

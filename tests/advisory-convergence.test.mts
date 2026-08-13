@@ -3051,13 +3051,29 @@ function pollDepsFor(
   return { deps, collectCalls: () => calls };
 }
 
-function fakeSleep(): { sleep: (ms: number) => void; calls: () => number } {
-  let calls = 0;
+// A combined fake sleep + fake clock: `sleep` advances the SAME virtual
+// `now()` it is paired with, so `runAdvisoryConvergenceWithPoll`'s
+// wall-clock deadline (`now() + maxWaitMs`) advances deterministically and
+// instantly instead of requiring real elapsed time. Faking `sleep` alone
+// (leaving `now` as the real `Date.now`) would hang the test for up to the
+// real `maxWaitMs`, since a real clock barely advances between near-instant
+// fake-sleep iterations.
+function fakeClock(startAt = 0): {
+  sleep: (ms: number) => void;
+  now: () => number;
+  calls: () => number;
+  sleptMs: () => number[];
+} {
+  let time = startAt;
+  const sleptMs: number[] = [];
   return {
-    sleep: () => {
-      calls += 1;
+    sleep: (ms: number) => {
+      sleptMs.push(ms);
+      time += ms;
     },
-    calls: () => calls,
+    now: () => time,
+    calls: () => sleptMs.length,
+    sleptMs: () => [...sleptMs],
   };
 }
 
@@ -3070,11 +3086,11 @@ test('runAdvisoryConvergenceWithPoll: review landing within the window resolves 
     ],
     baseOptions(),
   );
-  const { sleep, calls } = fakeSleep();
+  const { sleep, now, calls } = fakeClock();
   const { verdict, exitCode } = runAdvisoryConvergenceWithPoll(
     ['--pr', '1234', '--assert'],
     deps,
-    { maxWaitMs: 60_000, pollIntervalMs: 7_500, sleep },
+    { maxWaitMs: 60_000, pollIntervalMs: 7_500, sleep, now },
   );
   assert.equal(verdict?.ready, true);
   assert.equal(exitCode, 0);
@@ -3090,11 +3106,11 @@ test('runAdvisoryConvergenceWithPoll: review never landing still fails with the 
     [baseInputs({ reviews: [] })],
     baseOptions(),
   );
-  const { sleep, calls } = fakeSleep();
+  const { sleep, now, calls, sleptMs } = fakeClock();
   const { verdict, exitCode } = runAdvisoryConvergenceWithPoll(
     ['--pr', '1234', '--assert'],
     deps,
-    { maxWaitMs: 20_000, pollIntervalMs: 7_500, sleep },
+    { maxWaitMs: 20_000, pollIntervalMs: 7_500, sleep, now },
   );
   assert.equal(verdict?.ready, false);
   assert.deepEqual(verdict?.reasons, [
@@ -3105,6 +3121,50 @@ test('runAdvisoryConvergenceWithPoll: review never landing still fails with the 
   // plus the initial attempt.
   assert.equal(calls(), 3);
   assert.equal(collectCalls(), 4);
+  // The bound is wall-clock (a deadline), not a sum of nominal intervals:
+  // the final sleep is capped to the REMAINING budget (20_000 - 15_000 =
+  // 5_000), not the full 7_500 nominal interval -- PR #2023 review (Codex
+  // P2). Without this cap the loop would run 500ms past its documented
+  // 20s bound on this exact input.
+  assert.deepEqual(sleptMs(), [7_500, 7_500, 5_000]);
+  assert.equal(now(), 20_000);
+});
+
+test('runAdvisoryConvergenceWithPoll: slow collection time counts against the wall-clock budget, not just sleep time', () => {
+  // Simulate a slow `gh` collection pass (production `collectFromGitHub`
+  // performs several real, potentially paginated API calls per re-check)
+  // by having `collect()` itself advance the shared fake clock by 6s --
+  // exactly the scenario Codex's P2 finding warned a sleep-only budget
+  // would miss. With a 1s nominal poll interval and a 20s bound, a
+  // sleep-only-counting implementation (the pre-fix behavior, which summed
+  // only the nominal interval per iteration) would run roughly 20
+  // iterations before noticing the budget was exhausted. The wall-clock
+  // deadline fix must notice the extra 6s consumed by each collect() call
+  // too, and stop far sooner.
+  const { sleep, now } = fakeClock();
+  let collectCalls = 0;
+  const deps: AdvisoryConvergenceDeps = {
+    collect: () => {
+      collectCalls += 1;
+      sleep(6_000);
+      return { inputs: baseInputs({ reviews: [] }), options: baseOptions() };
+    },
+  };
+  const { verdict, exitCode } = runAdvisoryConvergenceWithPoll(
+    ['--pr', '1234', '--assert'],
+    deps,
+    { maxWaitMs: 20_000, pollIntervalMs: 1_000, sleep, now },
+  );
+  assert.equal(verdict?.ready, false);
+  assert.equal(exitCode, 1);
+  // A sleep-only-counting loop would need ~20 poll iterations (21 total
+  // collect() calls) before its naive waitedMs sum reached 20_000. The
+  // wall-clock deadline fix stops in single digits once real elapsed time
+  // (sleep + collection) crosses the bound.
+  assert.ok(
+    collectCalls < 10,
+    `expected far fewer than 10 collect() calls under the wall-clock fix, got ${collectCalls}`,
+  );
 });
 
 test('runAdvisoryConvergenceWithPoll: does not poll for any other not-ready reason', () => {
@@ -3116,11 +3176,11 @@ test('runAdvisoryConvergenceWithPoll: does not poll for any other not-ready reas
     ],
     baseOptions(),
   );
-  const { sleep, calls } = fakeSleep();
+  const { sleep, now, calls } = fakeClock();
   const { verdict, exitCode } = runAdvisoryConvergenceWithPoll(
     ['--pr', '1234', '--assert'],
     deps,
-    { sleep },
+    { sleep, now },
   );
   assert.equal(verdict?.ready, false);
   assert.equal(exitCode, 1);
@@ -3133,11 +3193,11 @@ test('runAdvisoryConvergenceWithPoll: without --assert never polls regardless of
     [baseInputs({ reviews: [] })],
     baseOptions(),
   );
-  const { sleep, calls } = fakeSleep();
+  const { sleep, now, calls } = fakeClock();
   const { verdict, exitCode } = runAdvisoryConvergenceWithPoll(
     ['--pr', '1234'],
     deps,
-    { sleep },
+    { sleep, now },
   );
   assert.equal(verdict?.ready, false);
   assert.equal(exitCode, 0);
@@ -3153,9 +3213,10 @@ test('runAdvisoryConvergenceWithPoll: --help short-circuits before collecting or
       return { inputs: baseInputs(), options: baseOptions() };
     },
   };
-  const { sleep, calls } = fakeSleep();
+  const { sleep, now, calls } = fakeClock();
   const { help, exitCode } = runAdvisoryConvergenceWithPoll(['--help'], deps, {
     sleep,
+    now,
   });
   assert.equal(help, true);
   assert.equal(exitCode, 0);
@@ -3171,11 +3232,11 @@ test('runAdvisoryConvergenceWithPoll: a reason change mid-poll stops the loop im
     ],
     baseOptions(),
   );
-  const { sleep, calls } = fakeSleep();
+  const { sleep, now, calls } = fakeClock();
   const { verdict, exitCode } = runAdvisoryConvergenceWithPoll(
     ['--pr', '1234', '--assert'],
     deps,
-    { maxWaitMs: 60_000, pollIntervalMs: 7_500, sleep },
+    { maxWaitMs: 60_000, pollIntervalMs: 7_500, sleep, now },
   );
   assert.equal(verdict?.ready, false);
   assert.equal(verdict?.review.found, true);
@@ -3198,11 +3259,11 @@ test('runAdvisoryConvergenceWithPoll: review lands on HEAD mid-poll with outstan
     ],
     baseOptions(),
   );
-  const { sleep, calls } = fakeSleep();
+  const { sleep, now, calls } = fakeClock();
   const { verdict, exitCode } = runAdvisoryConvergenceWithPoll(
     ['--pr', '1234', '--assert'],
     deps,
-    { maxWaitMs: 60_000, pollIntervalMs: 7_500, sleep },
+    { maxWaitMs: 60_000, pollIntervalMs: 7_500, sleep, now },
   );
   assert.equal(verdict?.review.found, true);
   assert.equal(verdict?.review.matchesHead, true);
