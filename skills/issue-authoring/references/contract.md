@@ -427,10 +427,13 @@ availability, or ordering constraint.
   the referenced issue closes **with its required outcome verified as
   delivered**, not merely closed as not-planned, superseded without an
   equivalent implementation, or later reopened — revisit the blocked
-  issue's own body and remove the now-stale dependency line and any
-  explanatory prose describing the wait, rather than leaving it in
-  place as inert history, but keep any prose identifying the delivered
-  artifact or interface this issue's own scope depends on. When the
+  issue's own body and remove that reference and its explanatory wait
+  prose, rather than leaving it in place as inert history, but keep
+  any prose identifying the delivered artifact or interface this
+  issue's own scope depends on. A line naming several references
+  (`Blocked by #10, #11`) keeps the still-open ones — remove only the
+  resolved reference, and remove the whole line only once every
+  reference on it has resolved. When the
   underlying constraint is not actually met, reopen the prerequisite
   issue or repoint the dependency line at an open replacement issue
   instead of leaving a stale edge in place:
