@@ -212,6 +212,20 @@ test('resolveActorLogin: a programmatic options.actor override wins over the CLI
   );
 });
 
+test('resolveActorLogin: a whitespace-only options.actor override falls through instead of collapsing to empty', () => {
+  assert.equal(
+    resolveActorLogin('   ', 'someone-else', 'maintainer-user'),
+    'someone-else',
+  );
+});
+
+test('resolveActorLogin: a whitespace-only argsActor falls through to the viewer', () => {
+  assert.equal(
+    resolveActorLogin(undefined, '   ', 'maintainer-user'),
+    'maintainer-user',
+  );
+});
+
 type PlanInput = Parameters<typeof planExternalCheckWaiver>[0];
 // The base-input builder always supplies these fields, so the test
 // mutations below may dereference them without optional guards.

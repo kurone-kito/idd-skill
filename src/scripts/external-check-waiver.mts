@@ -545,24 +545,28 @@ export function planExternalCheckWaiver(
  * programmatic override, else the CLI `--actor` flag, else the
  * authenticated `gh` viewer.
  *
- * Uses `||` rather than `??` for this specific chain: the CLI flag spec
- * gives `--actor` a parsed default of `''` (not `undefined`), so
- * `args.actor` is always a string and is `''` whenever the flag is
- * omitted. A `??` chain would treat that `''` as "provided" and never
- * fall through to `viewerLogin`, which is exactly the bug this scoped fix
- * addresses -- an empty string here must be treated the same as absent.
- * `options.actor` is genuinely optional (`string | undefined`) and an
- * empty override is equally meaningless, so the same `||` step covers it
- * too. No other fallback chain in this file changes.
+ * Trims each candidate _before_ testing it for truthiness and picks the
+ * first non-empty result, rather than a plain `a || b || c` chain -- a
+ * whitespace-only candidate (for example a programmatic `options.actor`
+ * override of `'   '`) is truthy as a raw string, so a post-trim `||`
+ * chain would select it and then collapse it to `''` without ever
+ * falling through to the next source. This also fixes the original bug
+ * this helper exists for: the CLI flag spec gives `--actor` a parsed
+ * default of `''` (not `undefined`), so `args.actor` is always a string
+ * and is `''` whenever the flag is omitted -- a `??` chain would treat
+ * that `''` as "provided" and never fall through to `viewerLogin`. No
+ * other fallback chain in this file changes.
  */
 export function resolveActorLogin(
   optionsActor: string | undefined,
   argsActor: string,
   viewerLogin: string,
 ): string {
-  return String(optionsActor || argsActor || viewerLogin)
-    .trim()
-    .toLowerCase();
+  return (
+    [optionsActor, argsActor, viewerLogin]
+      .map((actor) => actor?.trim() ?? '')
+      .find(Boolean) ?? ''
+  ).toLowerCase();
 }
 
 export async function runExternalCheckWaiver(
