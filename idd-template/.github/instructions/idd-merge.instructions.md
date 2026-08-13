@@ -388,9 +388,10 @@ Before any mutating action in F3, apply the
    Generated dependency/build output (e.g. `node_modules/` from
    `install-deps`) is expected, disposable, and not a reason to stop.
    Anything else uncommitted, untracked, or ignored (local notes, an
-   untracked `.env`, unpushed WIP) needs to be preserved — commit, push,
-   or copy it out — before continuing. Then
-   delete the worktree, then the branch:
+   untracked `.env`, unpushed WIP) needs to be preserved to a
+   **different** ref, or copied out — never `<branch-name>` itself,
+   which step 3's own deletion below discards next — before
+   continuing. Then delete the worktree, then the branch:
 
    - `git worktree remove <path>`. If it fails with `fatal: working
      trees containing submodules cannot be moved or removed`, a
