@@ -423,6 +423,36 @@ availability, or ordering constraint.
   track reports startable the moment its build foundation closes, and
   claiming it then means either failing its acceptance criteria or doing
   the siblings' unmerged work
+- once a `Blocked by #NNN` / `Depends on #NNN` reference resolves —
+  the referenced issue closes **with its required outcome verified as
+  delivered**, not merely closed as not-planned, superseded without an
+  equivalent implementation, or later reopened — revisit the blocked
+  issue's own body and remove that reference and its explanatory wait
+  prose, rather than leaving it in place as inert history, but keep
+  any prose identifying the delivered artifact or interface this
+  issue's own scope depends on. A line naming several references
+  (`Blocked by #10, #11`) keeps the still-open ones — remove only the
+  resolved reference, and remove the whole line only once every
+  reference on it has resolved. When the
+  underlying constraint is not actually met, reopen the prerequisite
+  issue or repoint the dependency line at an open replacement issue
+  instead of leaving a stale edge in place:
+  `discover-readiness-check` blocks only on an `OPEN` referenced
+  issue, regardless of why it closed, so retaining the edge alone does
+  not keep the dependent issue blocked. (Observed 2026-08-13 on issue
+  #1994's `Blocked by #1985` note, after #1985 closed; reported in
+  #2002.) This cleanup is more than tidiness: stale wait-explaining
+  prose can trip `checkVerifiability`'s subjective-approval heuristic
+  in
+  `suitability-triage.mts`, which matches either a single line
+  combining a subjective-subject word (`maintainer`, `stakeholder`,
+  `human`, `opinion`, `judgment`/`judgement`, `ux`, or `feel` — not
+  only authority nouns) with a gate word (`approval`, `sign-off`/
+  `signoff`, `decision`, or `preference`), or a gate word followed
+  within 80 characters — including across lines — by a
+  subjective-subject word.
+  This still fires even though the structural dependency filter
+  already correctly treats the closed reference as unblocking
 
 When an issue keeps a dependency edge, justify each dependency edge in
 the surrounding issue body and confirm that the split still preserves
