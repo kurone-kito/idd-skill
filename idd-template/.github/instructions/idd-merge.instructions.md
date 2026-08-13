@@ -393,11 +393,15 @@ Before any mutating action in F3, apply the
      remove --force <path>`, which also overrides the uncommitted /
      untracked / submodule block. Never use `--force` as an
      unconditional default — only after the cleanliness checks above.
-   - `git branch -D <branch-name>`. Use `-D`, not `-d`: F3 already
-     confirmed the merge via GitHub itself, so `-d`'s local ancestry
-     re-check is redundant and can false-negative (`not fully merged`)
-     before step 4 below fast-forwards local `main`, or once a `fetch
-     --prune` has already dropped the branch's remote-tracking ref.
+   - `git branch -d <branch-name>` (this baseline's Claude Code
+     permission profile denies `git branch -D`; see
+     `docs/permissions.md`'s "What the baseline denies"). If it fails
+     with `error: the branch '<branch>' is not fully merged` even
+     though the PR was just merged via GitHub — a `fetch --prune` can
+     drop the branch's remote-tracking ref before local `main` is
+     fast-forwarded — run step 4 first (`git fetch origin main && git
+     merge --ff-only origin/main`), then retry `git branch -d
+     <branch-name>`.
 4. Update the local `main` branch.
 5. If GitHub auto-delete is disabled: delete the remote branch too.
    (Worktrunk may be used for steps 3–5.)
