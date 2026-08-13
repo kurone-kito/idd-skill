@@ -6,7 +6,6 @@ import {
   assertNoGraphqlErrors,
   findThreadForComment,
   hasKnownDispositionMarkerPrefix,
-  isDispositionBodyValidForThread,
   parseArgs,
   type ResolveReviewThreadReport,
   type ReviewThreadNode,
@@ -325,33 +324,18 @@ test('hasKnownDispositionMarkerPrefix rejects a non-conforming body before any n
   );
 });
 
-test('isDispositionBodyValidForThread scopes the "Rejection confirmed by maintainer" form to already-resolved threads', () => {
+test('hasKnownDispositionMarkerPrefix accepts "Rejection confirmed by maintainer" regardless of thread resolution state', () => {
+  // Regression coverage for a Codex review finding on this PR: an earlier
+  // revision of this check required the target thread to already be
+  // resolved before accepting this marker. That broke the documented AMD
+  // "maintainer agrees" transition (idd-review-triage.instructions.md),
+  // which posts exactly this marker on a thread that is still
+  // *unresolved* at call time -- resolve-review-thread.mjs's own --apply
+  // path is what resolves it, in the same call. This predicate has no
+  // thread-state input at all, so it can never re-introduce that bug.
   const body =
     '**Rejection confirmed by maintainer** — agreed, no action needed';
-  assert.equal(isDispositionBodyValidForThread(body, true), true);
-  assert.equal(
-    isDispositionBodyValidForThread(body, false),
-    false,
-    'must be rejected on a currently-unresolved thread',
-  );
-});
-
-test('isDispositionBodyValidForThread accepts **Accepted**/**Rejected** regardless of thread resolution state', () => {
-  assert.equal(
-    isDispositionBodyValidForThread('**Accepted** — fixed in abc1234', false),
-    true,
-  );
-  assert.equal(
-    isDispositionBodyValidForThread('**Accepted** — fixed in abc1234', true),
-    true,
-  );
-  assert.equal(
-    isDispositionBodyValidForThread(
-      '**Rejected** — verified placeholders-only',
-      false,
-    ),
-    true,
-  );
+  assert.equal(hasKnownDispositionMarkerPrefix(body), true);
 });
 
 test('the dry-run and apply output envelopes validate against the schema', () => {
