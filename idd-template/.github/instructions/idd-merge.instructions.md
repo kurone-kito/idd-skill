@@ -368,7 +368,15 @@ Before any mutating action in F3, apply the
    See `docs/idd-comment-minimization.md` for the evidence comment
    format, cleanup-failure comment format, permission-blocked comment
    format, and fallback GraphQL commands.
-3. Delete the local worktree and local branch.
+3. Delete the local worktree and local branch: `git worktree remove
+   <path>`. If that fails with `fatal: working trees containing
+   submodules cannot be moved or removed`, a submodule-initializing step
+   (e.g. `git submodule update --init --recursive`) ran inside that
+   worktree at some point — retry with `git worktree remove --force
+   <path>`. `--force` also discards any uncommitted or untracked
+   changes, so confirm first that `git status --porcelain` in the
+   worktree is empty; only use it once the worktree is already known
+   clean, not as an unconditional default.
 4. Update the local `main` branch.
 5. If GitHub auto-delete is disabled: delete the remote branch too.
    (Worktrunk may be used for steps 3–5.)
