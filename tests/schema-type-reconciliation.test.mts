@@ -451,6 +451,7 @@ export const preMergeReadinessKeys = [
   'claim',
   'dispositionEvidence',
   'waiverEvidence',
+  'advisoryConvergenceWaiverPrecondition',
   'branchCurrency',
   'trustedMarkerActors',
   'trustedMarkerActorsSource',
@@ -1073,6 +1074,15 @@ const preMergeReadinessFixture = {
     unauthorized: [],
     malformed: [],
     notConfigured: [],
+  },
+  advisoryConvergenceWaiverPrecondition: {
+    checkSelector: 'idd-advisory-convergence',
+    deadlineMinutes: 1440,
+    headCommittedAt: 'none',
+    elapsedMinutes: null,
+    deadlinePassed: false,
+    terminalUnavailable: false,
+    open: false,
   },
   branchCurrency: {
     mergeStateStatus: 'CLEAN',

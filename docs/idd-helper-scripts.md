@@ -700,6 +700,17 @@ The adopted helper boundaries are intentionally narrow:
   `ciGate.externalChecks.waivable`; only a `valid` waiver for a
   configured-waivable check is reported with `coveredByWaiver: true` and
   treated as passing by the CI gate)
+- (`#2021`) a `valid` waiver for the `idd-advisory-convergence` selector
+  specifically only becomes `coveredByWaiver: true` once the SAME
+  deadline/terminal precondition `advisory-convergence.mjs`'s own gate
+  enforces has also opened — a 24h deadline anchored on the current HEAD
+  commit's own `committedDate`, or proven terminal Copilot
+  unavailability. The output's `advisoryConvergenceWaiverPrecondition`
+  field always reports this evaluation (`deadlineMinutes`,
+  `headCommittedAt`, `elapsedMinutes`, `deadlinePassed`,
+  `terminalUnavailable`, `open`), so an agent never has to re-derive the
+  remaining time-to-deadline by hand when a `ci` blocker cites a posted
+  but not-yet-active waiver
 - it does not replace the pre-merge or merge decision tables; it only
   reduces command-copy variance when collecting canonical merge-gate
   evidence
