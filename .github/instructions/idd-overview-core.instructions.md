@@ -39,7 +39,7 @@ post via direct HTTP `POST` with a JSON body; see
 helper runtime is enabled, the `post-idd-marker` helper (`--type claim
 --target issue <number> --apply` plus the claim fields) posts this
 marker through that JSON path (dry-run without `--apply`); the direct
-`POST` stays the canonical fallback.
+`POST` is the fallback.
 
 Every new HTML-comment operational marker must include a short visible
 note after the token: `review-watermark`/`review-baseline` use the
@@ -59,7 +59,7 @@ but never create new hidden-only claim comments.
   stale takeover. Reuse the same `{claim-id}` only for heartbeats of
   that already-verified claim. Reading an existing `{claim-id}` from
   issue comments does not by itself prove ownership; the current
-  session must have already recorded that token before the
+  session must have recorded that token before the
   revalidation step.
 - `{prior-claim-id}` is `none` for a fresh claim on an unclaimed issue.
   For a stale-claim takeover, set it to the currently active claim's
@@ -78,8 +78,7 @@ _{agent-id}: issue claim released — IDD automation marker. Do not edit._
 When helper runtime is enabled, post this with `post-idd-marker --type
 unclaim --target issue <number> --apply` (plus agent-id / claim-id /
 timestamp; see `docs/idd-helper-scripts.md`); without `--apply` it is
-dry-run. The direct HTTP `POST` above is the fallback when helper
-runtime is unavailable.
+dry-run. The direct HTTP `POST` above is the fallback.
 
 ## Trusted marker actors
 
@@ -227,7 +226,8 @@ Out of scope and explicitly **not** blocked:
   subsequent local `main` updates run from the primary worktree by
   design).
 - [Operator-present release](idd-resume.instructions.md#operator-present-release)
-  steps 1-2 (pre-claim; no claim held yet).
+  steps 1-2 (pre-claim for the resuming session; the issue's own
+  active claim is untouched until step 2).
 
 The claim and cwd checks are read-only and pre-mutation; the lock
 acquisition is the final local guard. When in scope, all of these checks
