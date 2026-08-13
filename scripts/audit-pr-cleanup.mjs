@@ -1144,8 +1144,12 @@ function writeReport(report, format) {
   }
   // Print summary header
   if (report.summary) {
+    const retrySuffix =
+      report.retryAttempts === undefined
+        ? ''
+        : `, retryAttempts=${report.retryAttempts}, retryBoundExhausted=${Boolean(report.retryBoundExhausted)}`;
     console.log(
-      `summary: status=${report.status}, candidates=${report.summary.candidate}, applied=${report.summary.applied}, failed=${report.summary.failed}, skipped=${report.summary.skipped}`,
+      `summary: status=${report.status}, candidates=${report.summary.candidate}, applied=${report.summary.applied}, failed=${report.summary.failed}, skipped=${report.summary.skipped}${retrySuffix}`,
     );
     console.log('');
   }
