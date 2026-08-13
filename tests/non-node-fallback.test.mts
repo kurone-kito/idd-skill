@@ -219,7 +219,7 @@ test('onboarding keeps claim timing and CI wait policy in the explicit confirmat
   );
   assert.match(
     onboarding,
-    /critique-loop profile, credential scope, claim-timing defaults, CI wait\s+policy defaults, issue-author approval gate, maintainer approval actor\s+policy, issue-authoring companion status, helper runtime profile, IDD\s+label names, and the up-to-date-head ruleset check\./,
+    /critique-loop profile, credential scope, claim-timing defaults, CI wait\s+policy defaults, issue-author approval gate, maintainer approval actor\s+policy, issue-authoring companion status, helper runtime profile, IDD\s+label names, the up-to-date-head ruleset check, and bootstrap execution\s+mode\./,
     'ONBOARDING Step 2 re-check must stay aligned with the Step 1B confirmation list',
   );
   assert.match(
