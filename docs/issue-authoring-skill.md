@@ -458,10 +458,15 @@ Ask these checks:
    Compare the actual `{{...}}` token identities per changed file, not
    only the aggregate occurrence count: a same-count one-for-one
    placeholder swap changes what an adopter must substitute without
-   changing the count. Name any file whose placeholder tokens changed,
-   rather than asserting a file needs no placeholder substitution as an
-   unverified default (observed 2026-08-12/13 on an adopter repository,
-   #2012).
+   changing the count. Exclude reference-only meta-docs whose `{{...}}`
+   tokens are deliberately kept literal to document the placeholder
+   syntax itself — the `SCAN_EXCLUDED_PATHS` set in
+   `src/scripts/idd-onboard.mts` (e.g. `docs/onboarding/placeholders.md`)
+   — diffing those would misidentify literal documentation as an
+   outstanding substitution. Name any file whose placeholder tokens
+   changed, rather than asserting a file needs no placeholder
+   substitution as an unverified default (observed 2026-08-12/13 on an
+   adopter repository, #2012).
 
 ## Alignment with A4.5 Suitability Gate
 
