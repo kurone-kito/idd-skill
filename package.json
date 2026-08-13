@@ -78,6 +78,7 @@
     "@commitlint/cli": "^21.2.1",
     "@commitlint/config-conventional": "^21.0.0",
     "@kurone-kito/biome-config": "0.22.0",
+    "@kurone-kito/cspell-config": "0.22.0",
     "@types/node": "26.1.2",
     "cspell": "^10.0.0",
     "dprint": "0.55.2",
