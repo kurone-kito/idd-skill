@@ -677,6 +677,15 @@ The adopted helper boundaries are intentionally narrow:
 - `ci-wait-policy.mjs` is read-only, resolves `ciWait.*` defaults from
   `.github/idd/config.json`, and can evaluate whether the current rerun
   count still permits an automatic rerun
+- `--run-id <run-id>` (with `--owner`/`--repo`, defaulting to the local
+  checkout's own repository) derives that rerun count mechanically from
+  the live run's `run_attempt` field via `gh api
+  repos/{owner}/{repo}/actions/runs/{run-id}`, the same pattern
+  `rerun-advisory-convergence.mjs` already uses for its own budget check
+  — preferred over passing `--rerun-count` by hand, since `run_attempt`
+  is live GitHub state and cross-session-safe by construction; `--rerun-count`
+  keeps working unchanged when `--run-id` is omitted, and serves as an
+  explicit fallback when the `--run-id` lookup fails
 - it does not poll CI, rerun workflows, or replace the CI decision
   table; it only reduces config-copy variance when callers need the
   shared CI wait defaults
@@ -1333,13 +1342,32 @@ to post it is the consuming track's job.
     idd-ci-wait-policy
   ```
 
-- Optional rerun-budget evaluation: append
-  `--rerun-count <count>` to the selected command
+- Optional rerun-budget evaluation, preferred mechanical form: append
+  `--run-id <run-id>` (with `--owner`/`--repo`, defaulting to the local
+  checkout's own repository when omitted) to derive `rerunCount =
+  run_attempt - 1` from the live Actions run (`gh api
+  repos/{owner}/{repo}/actions/runs/{run-id}`), the same `run_attempt`
+  pattern `rerun-advisory-convergence.mjs` already uses for its own
+  budget check
+- Optional rerun-budget evaluation, manual/offline form: append
+  `--rerun-count <count>` to the selected command instead — this keeps
+  working unchanged when `--run-id` is omitted, and serves as the
+  explicit fallback if `--run-id`'s live lookup fails (network/
+  permission error, or a missing/non-numeric `run_attempt` in the
+  fetched payload). `--run-id` takes precedence over `--rerun-count`
+  only when both are given and the live lookup succeeds; with no
+  `--rerun-count` fallback, a failed `--run-id` lookup exits non-zero
+  with a clear reason instead of silently resolving to a `0` rerun count
 - Stable fields consumed by instructions or helpers:
   `policy.runningTimeout`, `policy.runningTimeoutMs`,
   `policy.generationTimeout`, `policy.generationTimeoutMs`,
   `policy.rerunPolicy`, and optional `rerunDecision.action` /
-  `rerunDecision.reason`
+  `rerunDecision.reason`. When `--run-id` was given: `rerunCountSource`
+  (`"run-id"` or `"rerun-count"`, reporting which source ultimately
+  supplied `rerunDecision`'s `rerunCount`), `runAttempt` (the fetched
+  run's raw `run_attempt`, only present on a successful live lookup),
+  and `runIdLookupError` (only present when the live lookup failed but a
+  `--rerun-count` fallback was available)
 - it remains read-only; the command does not poll CI, rerun workflows,
   or post any GitHub comment
 
