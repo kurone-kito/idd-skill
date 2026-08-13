@@ -345,6 +345,19 @@ Before any mutating action in F3, apply the
      `viewer-cannot-minimize` counts for `applied`, or a converged
      `clean` record) so this run's work is recorded. Proceed to step 3.
 
+     The helper internally retries a whole scan-and-minimize pass, bounded,
+     when a fresh rescan still reports candidates after applying (a
+     candidate that only became eligible after the previous pass, e.g.
+     GraphQL read-after-write lag) — the common case still converges to
+     `applied`/`clean` within this one invocation. If the output also
+     reports `retryBoundExhausted: true` (visible as
+     `retryBoundExhausted=true` in table format), the retry bound was
+     reached while a rescan still found candidates: still follow the
+     `applied`/`clean` evidence-comment path above, not the
+     `failed`/`incomplete` cleanup-failure path below, but note the
+     `retryAttempts` count in the evidence comment as an informational,
+     non-blocking residual-lag signal rather than a defect.
+
      If the apply `status` is `failed` or `incomplete`: post the
      cleanup-failure comment format instead, including the
      `viewer-cannot-minimize` count when non-zero. Explicit evidence,
