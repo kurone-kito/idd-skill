@@ -431,7 +431,8 @@ merge policy, PR review profile, review-thread resolution policy,
 critique-loop profile, credential scope, claim-timing defaults, CI wait
 policy defaults, issue-author approval gate, maintainer approval actor
 policy, issue-authoring companion status, helper runtime profile, IDD
-label names, and the up-to-date-head ruleset check.
+label names, the up-to-date-head ruleset check, and bootstrap execution
+mode.
 
 Use
 [Onboarding Reference — Policy Decisions](docs/onboarding/policy-decisions.md)
