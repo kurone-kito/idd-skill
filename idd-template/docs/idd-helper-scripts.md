@@ -1759,6 +1759,21 @@ to post it is the consuming track's job.
   Without `--assert` it always exits `0` (report-only). With `--assert` it
   exits non-zero unless `ready` is `true` (`ready = converged || (deadline
   passed && validly waived)`).
+- **Bounded "not reviewed yet" poll (`#2015`)**: the CLI entry point runs
+  through `runAdvisoryConvergenceWithPoll`, not `runAdvisoryConvergence`
+  directly. When (and only when) the verdict's sole blocking reason is
+  literally "`{bot}` has not reviewed this pull request yet" — the primary
+  bot has never reviewed the PR at all yet, not merely an off-HEAD review —
+  it polls a short, bounded window (every
+  `DEFAULT_COPILOT_REVIEW_POLL_INTERVAL_MS`, default 7.5s, up to
+  `DEFAULT_COPILOT_REVIEW_POLL_MAX_WAIT_MS`, default 60s) before its real
+  `--assert`-driven exit, absorbing the common race where the hosting
+  workflow's `pull_request` `synchronize` trigger fires before the
+  separate `pull_request_review` trigger's review has landed. Every other
+  not-ready reason (an off-HEAD review, unresolved threads, an
+  indeterminate claim scope, a deadline/terminal reason, etc.) still fails
+  immediately with no wait, exactly as before this addition — the
+  exit-code contract and `ready` formula above are otherwise unchanged.
 - **Deadlock / deadline policy**: while the primary bot has not reviewed
   the current HEAD, `pending` is `true` and the gate is not ready. After
   `advisoryWait.convergenceDeadline` (default 24h; see
