@@ -31,6 +31,7 @@ import {
   decodeGithubReadmeBase64,
   emitCleanupBacklogProgress,
   evaluateAutopilotSuitabilityConsistency,
+  evaluateBranchProtectionFindings,
   evaluateDependencyVersionDrift,
   evaluateMarkerPrefixConsistency,
   extractMarkerPrefixes,
@@ -50,6 +51,7 @@ import {
   parseProjectCommandRows,
   parseThresholdsProseHours,
   readCleanupEvidenceTrustedLogins,
+  readTrustEmptyProtectionReads,
   readWorktreeGuardBranchPatterns,
   readWorktreeGuardEnabled,
   resolveConfiguredHelperRuntimePackageSpec,
@@ -3224,6 +3226,134 @@ test('checkDependencyVersionDrift skips silently when node_modules packages are 
     checkDependencyVersionDrift(dir, report);
     assert.equal(report.errors.length, 0);
     assert.equal(report.warnings.length, 0);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// idd-skill#2010: evaluateBranchProtectionFindings combines a classic
+// `branches/{branch}/protection` read with a GitHub Rulesets
+// `rules/branches/{branch}` read. This matrix exercises every source
+// combination `checkGithubReadiness` can see in production, without
+// mocking `gh` -- the function is pure.
+test('evaluateBranchProtectionFindings counts classic-only required checks and review policy', () => {
+  const findings = evaluateBranchProtectionFindings([], {
+    required_status_checks: { contexts: ['lint', 'test'], strict: true },
+    required_pull_request_reviews: { required_approving_review_count: 1 },
+  });
+  assert.deepEqual(findings, {
+    requiredCheckCount: 2,
+    requiredChecksStrict: true,
+    reviewPolicyConfigured: true,
+  });
+});
+
+test('evaluateBranchProtectionFindings counts Rulesets-only required checks and review policy', () => {
+  const findings = evaluateBranchProtectionFindings(
+    [
+      {
+        type: 'required_status_checks',
+        parameters: {
+          required_status_checks: [{ context: 'lint' }, { context: 'test' }],
+        },
+      },
+      { type: 'pull_request', parameters: {} },
+    ],
+    {},
+  );
+  assert.deepEqual(findings, {
+    requiredCheckCount: 2,
+    requiredChecksStrict: false,
+    reviewPolicyConfigured: true,
+  });
+});
+
+test('evaluateBranchProtectionFindings unions distinct check names from both sources without double-counting an overlapping name', () => {
+  const findings = evaluateBranchProtectionFindings(
+    [
+      {
+        type: 'required_status_checks',
+        parameters: { required_status_checks: [{ context: 'lint' }] },
+      },
+    ],
+    {
+      required_status_checks: { contexts: ['lint', 'test'], strict: false },
+      required_pull_request_reviews: null,
+    },
+  );
+  // 'lint' is required by both sources and counts once; 'test' is classic-
+  // only. Review policy comes from the Rulesets rule below in a sibling
+  // test -- here neither source configures one, so it stays unconfigured.
+  assert.deepEqual(findings, {
+    requiredCheckCount: 2,
+    requiredChecksStrict: false,
+    reviewPolicyConfigured: false,
+  });
+});
+
+test('evaluateBranchProtectionFindings reports neither source configured when both reads are empty', () => {
+  const findings = evaluateBranchProtectionFindings([], {});
+  assert.deepEqual(findings, {
+    requiredCheckCount: 0,
+    requiredChecksStrict: false,
+    reviewPolicyConfigured: false,
+  });
+});
+
+test('evaluateBranchProtectionFindings treats a zero-approval classic review requirement as configured (presence, not a minimum-count test)', () => {
+  const findings = evaluateBranchProtectionFindings([], {
+    required_pull_request_reviews: { required_approving_review_count: 0 },
+  });
+  assert.equal(findings.reviewPolicyConfigured, true);
+});
+
+test('readTrustEmptyProtectionReads is false when .github/idd/config.json is absent, lacks ciGate, or is malformed (idd-skill#2010)', () => {
+  const dir = mkdtempSync(
+    join(tmpdir(), 'idd-doctor-trust-empty-protection-reads-'),
+  );
+  try {
+    // No config file at all.
+    assert.equal(readTrustEmptyProtectionReads(dir), false);
+
+    // Config present but no ciGate key.
+    mkdirSync(join(dir, '.github/idd'), { recursive: true });
+    writeFileSync(join(dir, '.github/idd/config.json'), JSON.stringify({}));
+    assert.equal(readTrustEmptyProtectionReads(dir), false);
+
+    // ciGate present but trustEmptyProtectionReads explicitly false.
+    writeFileSync(
+      join(dir, '.github/idd/config.json'),
+      JSON.stringify({ ciGate: { trustEmptyProtectionReads: false } }),
+    );
+    assert.equal(readTrustEmptyProtectionReads(dir), false);
+
+    // Malformed JSON must never widen trust beyond the safe default.
+    writeFileSync(join(dir, '.github/idd/config.json'), '{ not json');
+    assert.equal(readTrustEmptyProtectionReads(dir), false);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('readTrustEmptyProtectionReads is true only when ciGate.trustEmptyProtectionReads is exactly true (idd-skill#2010)', () => {
+  const dir = mkdtempSync(
+    join(tmpdir(), 'idd-doctor-trust-empty-protection-reads-true-'),
+  );
+  try {
+    mkdirSync(join(dir, '.github/idd'), { recursive: true });
+    writeFileSync(
+      join(dir, '.github/idd/config.json'),
+      JSON.stringify({ ciGate: { trustEmptyProtectionReads: true } }),
+    );
+    assert.equal(readTrustEmptyProtectionReads(dir), true);
+
+    // A truthy-but-non-boolean value must not widen trust (mirrors
+    // pre-merge-readiness.mts's `=== true` comparison).
+    writeFileSync(
+      join(dir, '.github/idd/config.json'),
+      JSON.stringify({ ciGate: { trustEmptyProtectionReads: 'true' } }),
+    );
+    assert.equal(readTrustEmptyProtectionReads(dir), false);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

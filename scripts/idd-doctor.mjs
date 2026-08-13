@@ -25,7 +25,11 @@ import {
   POLICY_DEFAULTS,
   parseProjectCommandRows,
 } from './policy-helpers.mjs';
-import { resolveTrustedMarkerActors } from './protocol-helpers.mjs';
+import { fetchGovernanceJson } from './pre-merge-readiness.mjs';
+import {
+  resolveTrustedMarkerActors,
+  summarizeBranchReviewRequirements,
+} from './protocol-helpers.mjs';
 import { loadJson, validate } from './validate-schemas.mjs';
 
 const WORKSHOP_ENTRY_POINTS = ['README.md', 'README.ja.md', 'docs/index.md'];
@@ -2773,12 +2777,24 @@ function checkGithubReadiness(root, requireGithub, report) {
     }
     return;
   }
-  const protection = runCommand(
-    'gh',
-    ['api', `repos/${owner}/${repo}/branches/${branch}/protection`],
-    root,
-  );
-  if (!protection.ok) {
+  const trustEmptyProtectionReads = readTrustEmptyProtectionReads(root);
+  const encodedBranch = encodeURIComponent(branch);
+  let branchRulesRead;
+  let branchProtectionRead;
+  try {
+    branchRulesRead = fetchGovernanceJson(
+      `repos/${owner}/${repo}/rules/branches/${encodedBranch}`,
+      true,
+      trustEmptyProtectionReads,
+      [],
+    );
+    branchProtectionRead = fetchGovernanceJson(
+      `repos/${owner}/${repo}/branches/${encodedBranch}/protection`,
+      false,
+      trustEmptyProtectionReads,
+      {},
+    );
+  } catch {
     const message = `branch protection not readable for ${owner}/${repo}:${branch}`;
     if (requireGithub) {
       report.errors.push(message);
@@ -2787,11 +2803,8 @@ function checkGithubReadiness(root, requireGithub, report) {
     }
     return;
   }
-  let protectionJson;
-  try {
-    protectionJson = JSON.parse(protection.stdout);
-  } catch {
-    const message = 'branch protection response is not valid JSON';
+  if (branchRulesRead.unreadable || branchProtectionRead.unreadable) {
+    const message = `branch protection not readable for ${owner}/${repo}:${branch}`;
     if (requireGithub) {
       report.errors.push(message);
     } else {
@@ -2799,24 +2812,87 @@ function checkGithubReadiness(root, requireGithub, report) {
     }
     return;
   }
-  const requiredChecks = protectionJson.required_status_checks?.contexts ?? [];
-  const strict = protectionJson.required_status_checks?.strict ?? false;
-  if (requiredChecks.length === 0) {
+  const findings = evaluateBranchProtectionFindings(
+    branchRulesRead.value,
+    branchProtectionRead.value,
+  );
+  if (findings.requiredCheckCount === 0) {
     report.warnings.push(
       `branch protection is enabled but no required status checks are configured on ${branch}`,
     );
   } else {
     report.passes.push(
-      `required status checks configured on ${branch} (${requiredChecks.length}, strict=${strict})`,
+      `required status checks configured on ${branch} (${findings.requiredCheckCount}, strict=${findings.requiredChecksStrict})`,
     );
   }
-  const reviewConfig = protectionJson.required_pull_request_reviews;
-  if (!reviewConfig) {
+  if (!findings.reviewPolicyConfigured) {
     report.warnings.push(
       `required pull request reviews are not configured on ${branch}`,
     );
   } else {
     report.passes.push('required pull request review policy is configured');
+  }
+}
+/**
+ * Combine a classic `branches/{branch}/protection` read with a GitHub
+ * Rulesets `rules/branches/{branch}` read into the findings
+ * `checkGithubReadiness` reports. Pure and network-free so the
+ * classic-only / Rulesets-only / both / neither matrix is directly
+ * testable without mocking `gh`.
+ *
+ * Required-check counting reuses the already-exported
+ * `summarizeBranchReviewRequirements()` (`protocol-helpers.mts`), which
+ * already normalizes the field-name differences between classic
+ * `contexts` and a Rulesets `required_status_checks` rule's `parameters`
+ * into one deduplicated name set -- this function adds no separate
+ * name-extraction logic of its own (idd-skill#2010).
+ *
+ * Review-policy presence deliberately stays a presence check, not a
+ * minimum-approval-count check, matching this file's pre-existing
+ * classic-only behavior: a repository that requires a pull request but
+ * configures zero mandatory approvals still counts as configured. The
+ * same presence test is simply widened to also recognize a Rulesets
+ * `pull_request`-type rule.
+ */
+export function evaluateBranchProtectionFindings(
+  branchRules,
+  branchProtection,
+) {
+  const requiredCheckCount = summarizeBranchReviewRequirements(
+    branchRules,
+    branchProtection,
+  ).requiredCheckNames.length;
+  const reviewPolicyConfigured =
+    Boolean(branchProtection.required_pull_request_reviews) ||
+    branchRules.some((rule) => rule?.type === 'pull_request');
+  return {
+    requiredCheckCount,
+    requiredChecksStrict: Boolean(
+      branchProtection.required_status_checks?.strict,
+    ),
+    reviewPolicyConfigured,
+  };
+}
+/**
+ * Root-relative `ciGate.trustEmptyProtectionReads` reader
+ * (idd-skill#2010; #1377 introduced the flag). Deliberately not
+ * `pre-merge-readiness.mts`'s own `readTrustEmptyProtectionReads`, which
+ * reads `.github/idd/config.json` relative to `process.cwd()` --
+ * `idd-doctor.mts` supports `--repo-root <path>`, and this file already
+ * reads the same config file root-relative elsewhere (see
+ * `readCleanupEvidenceTrustedLogins`). Fails closed to `false` on a
+ * missing or unparseable config, matching
+ * `normalizePolicyConfig(null).ciGate.trustEmptyProtectionReads`'s
+ * default.
+ */
+export function readTrustEmptyProtectionReads(root) {
+  try {
+    const config = JSON.parse(
+      readFileSync(join(root, '.github/idd/config.json'), 'utf8'),
+    );
+    return config?.ciGate?.trustEmptyProtectionReads === true;
+  } catch {
+    return false;
   }
 }
 function runCommand(command, argv, cwd) {
