@@ -423,12 +423,20 @@ availability, or ordering constraint.
   track reports startable the moment its build foundation closes, and
   claiming it then means either failing its acceptance criteria or doing
   the siblings' unmerged work
-- once a `Blocked by #NNN` / `Depends on #NNN` reference resolves (the
-  referenced issue closes), revisit the blocked issue's own body and
-  remove the now-stale dependency line and any explanatory prose
-  describing the wait, rather than leaving it in place as inert
-  history. This is more than tidiness: stale wait-explaining prose can
-  trip `checkVerifiability`'s subjective-approval heuristic in
+- once a `Blocked by #NNN` / `Depends on #NNN` reference resolves —
+  the referenced issue closes **with its required outcome verified as
+  delivered**, not merely closed as not-planned, superseded without an
+  equivalent implementation, or later reopened — revisit the blocked
+  issue's own body and remove the now-stale dependency line and any
+  explanatory prose describing the wait, rather than leaving it in
+  place as inert history. Retain or restore the dependency edge
+  instead when the underlying constraint is not actually met: removing
+  it prematurely would let `discover-readiness-check` treat the
+  blocked issue as claimable despite the prerequisite still being
+  unresolved. (Observed 2026-08-13 on issue #1994's `Blocked by #1985`
+  note, after #1985 closed; reported in #2002.) This cleanup is more
+  than tidiness: stale wait-explaining prose can trip
+  `checkVerifiability`'s subjective-approval heuristic in
   `suitability-triage.mts`, which matches either a single line
   combining a subjective-subject word (`maintainer`, `stakeholder`,
   `human`, `opinion`, `judgment`/`judgement`, `ux`, or `feel` — not
