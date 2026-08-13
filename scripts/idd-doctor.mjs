@@ -27,6 +27,7 @@ import {
 } from './policy-helpers.mjs';
 import { fetchGovernanceJson } from './pre-merge-readiness.mjs';
 import {
+  parsePaginatedGhNdjson,
   resolveTrustedMarkerActors,
   summarizeBranchReviewRequirements,
 } from './protocol-helpers.mjs';
@@ -2787,12 +2788,14 @@ function checkGithubReadiness(root, requireGithub, report) {
       true,
       trustEmptyProtectionReads,
       [],
+      (path, paginate) => fetchGhApiJsonAt(root, path, paginate),
     );
     branchProtectionRead = fetchGovernanceJson(
       `repos/${owner}/${repo}/branches/${encodedBranch}/protection`,
       false,
       trustEmptyProtectionReads,
       {},
+      (path, paginate) => fetchGhApiJsonAt(root, path, paginate),
     );
   } catch {
     const message = `branch protection not readable for ${owner}/${repo}:${branch}`;
@@ -2816,9 +2819,16 @@ function checkGithubReadiness(root, requireGithub, report) {
     branchRulesRead.value,
     branchProtectionRead.value,
   );
-  if (findings.requiredCheckCount === 0) {
+  if (
+    findings.requiredCheckCount === 0 &&
+    !findings.requiredChecksSourcePinned
+  ) {
     report.warnings.push(
       `branch protection is enabled but no required status checks are configured on ${branch}`,
+    );
+  } else if (findings.requiredCheckCount === 0) {
+    report.passes.push(
+      `required status checks configured on ${branch} via a source-pinned requirement (e.g. a Rulesets "workflows" rule) with no enumerable check name`,
     );
   } else {
     report.passes.push(
@@ -2853,23 +2863,34 @@ function checkGithubReadiness(root, requireGithub, report) {
  * configures zero mandatory approvals still counts as configured. The
  * same presence test is simply widened to also recognize a Rulesets
  * `pull_request`-type rule.
+ *
+ * `requiredChecksStrict` also honors a Rulesets `required_status_checks`
+ * rule's own `strict_required_status_checks_policy` parameter, not just
+ * classic protection's `strict` field -- a Rulesets-only repository with
+ * that policy enabled previously always reported `strict=false`
+ * (idd-skill#2010 review).
  */
 export function evaluateBranchProtectionFindings(
   branchRules,
   branchProtection,
 ) {
-  const requiredCheckCount = summarizeBranchReviewRequirements(
+  const requirements = summarizeBranchReviewRequirements(
     branchRules,
     branchProtection,
-  ).requiredCheckNames.length;
+  );
   const reviewPolicyConfigured =
     Boolean(branchProtection.required_pull_request_reviews) ||
     branchRules.some((rule) => rule?.type === 'pull_request');
+  const rulesetStrict = branchRules.some(
+    (rule) =>
+      rule?.type === 'required_status_checks' &&
+      Boolean(rule.parameters?.strict_required_status_checks_policy),
+  );
   return {
-    requiredCheckCount,
-    requiredChecksStrict: Boolean(
-      branchProtection.required_status_checks?.strict,
-    ),
+    requiredCheckCount: requirements.requiredCheckNames.length,
+    requiredChecksSourcePinned: requirements.requiredCheckSourcePinned,
+    requiredChecksStrict:
+      Boolean(branchProtection.required_status_checks?.strict) || rulesetStrict,
     reviewPolicyConfigured,
   };
 }
@@ -2894,6 +2915,43 @@ export function readTrustEmptyProtectionReads(root) {
   } catch {
     return false;
   }
+}
+/**
+ * Root-scoped `gh api` fetch for {@link fetchGovernanceJson}'s injectable
+ * `fetchJson` parameter. That function's own default fetcher
+ * (`ghApiJson` in `pre-merge-readiness.mts`, via `runGh`/`ghText`) always
+ * runs `gh` from `process.cwd()` with no `cwd` override -- correct for
+ * that file's own CLI, which always operates on the repository it is
+ * invoked from, but `idd-doctor.mts` supports `--repo-root <path>`
+ * targeting a repository (potentially on a different GitHub host) other
+ * than the caller's own working directory, and `gh api` infers its
+ * target host from the current directory absent an explicit
+ * `--hostname`. Route through this file's own `runCommand()` instead,
+ * which already threads `root` as `cwd` for every other `gh` call in
+ * this function (idd-skill#2010 review), so `gh`'s host inference
+ * resolves against the target repository. Mirrors `ghApiJson`'s own
+ * `--paginate --jq '.[]'` NDJSON handling via the shared
+ * `parsePaginatedGhNdjson()`, and shapes a failure's thrown error the
+ * same way a real `execFileSync` failure would (`status`/`stderr`), so
+ * `fetchGovernanceJson()`'s `deriveGhHttpStatus()`-based 404 detection
+ * still works unchanged.
+ */
+function fetchGhApiJsonAt(root, path, paginate) {
+  const argv = paginate
+    ? ['api', path, '--paginate', '--jq', '.[]']
+    : ['api', path];
+  const result = runCommand('gh', argv, root);
+  if (!result.ok) {
+    throw Object.assign(new Error('gh api failed'), {
+      status: 1,
+      stderr: result.stderr ?? '',
+    });
+  }
+  const raw = result.stdout.trim();
+  if (!raw) {
+    return paginate ? [] : {};
+  }
+  return paginate ? parsePaginatedGhNdjson(raw) : JSON.parse(raw);
 }
 function runCommand(command, argv, cwd) {
   try {

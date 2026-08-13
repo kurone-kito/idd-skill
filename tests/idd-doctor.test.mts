@@ -3243,6 +3243,7 @@ test('evaluateBranchProtectionFindings counts classic-only required checks and r
   });
   assert.deepEqual(findings, {
     requiredCheckCount: 2,
+    requiredChecksSourcePinned: false,
     requiredChecksStrict: true,
     reviewPolicyConfigured: true,
   });
@@ -3263,6 +3264,7 @@ test('evaluateBranchProtectionFindings counts Rulesets-only required checks and 
   );
   assert.deepEqual(findings, {
     requiredCheckCount: 2,
+    requiredChecksSourcePinned: false,
     requiredChecksStrict: false,
     reviewPolicyConfigured: true,
   });
@@ -3286,6 +3288,7 @@ test('evaluateBranchProtectionFindings unions distinct check names from both sou
   // test -- here neither source configures one, so it stays unconfigured.
   assert.deepEqual(findings, {
     requiredCheckCount: 2,
+    requiredChecksSourcePinned: false,
     requiredChecksStrict: false,
     reviewPolicyConfigured: false,
   });
@@ -3295,9 +3298,55 @@ test('evaluateBranchProtectionFindings reports neither source configured when bo
   const findings = evaluateBranchProtectionFindings([], {});
   assert.deepEqual(findings, {
     requiredCheckCount: 0,
+    requiredChecksSourcePinned: false,
     requiredChecksStrict: false,
     reviewPolicyConfigured: false,
   });
+});
+
+test('evaluateBranchProtectionFindings treats a Rulesets "workflows" rule as configured despite zero enumerable check names (idd-skill#2010 review)', () => {
+  // A branch protected solely by a Rulesets required-workflows rule has
+  // real protection: summarizeBranchReviewRequirements() correctly cannot
+  // contribute a check NAME for it (workflow-based requirements have no
+  // enumerable context), but that must not read as "nothing configured".
+  const findings = evaluateBranchProtectionFindings(
+    [{ type: 'workflows', parameters: {} }],
+    {},
+  );
+  assert.equal(findings.requiredCheckCount, 0);
+  assert.equal(findings.requiredChecksSourcePinned, true);
+});
+
+test("evaluateBranchProtectionFindings honors a Rulesets required_status_checks rule's own strict policy (idd-skill#2010 review)", () => {
+  const findings = evaluateBranchProtectionFindings(
+    [
+      {
+        type: 'required_status_checks',
+        parameters: {
+          required_status_checks: [{ context: 'lint' }],
+          strict_required_status_checks_policy: true,
+        },
+      },
+    ],
+    {},
+  );
+  assert.equal(findings.requiredChecksStrict, true);
+});
+
+test('evaluateBranchProtectionFindings strict stays false when neither classic nor Rulesets configures an up-to-date-head policy', () => {
+  const findings = evaluateBranchProtectionFindings(
+    [
+      {
+        type: 'required_status_checks',
+        parameters: {
+          required_status_checks: [{ context: 'lint' }],
+          strict_required_status_checks_policy: false,
+        },
+      },
+    ],
+    { required_status_checks: { contexts: [], strict: false } },
+  );
+  assert.equal(findings.requiredChecksStrict, false);
 });
 
 test('evaluateBranchProtectionFindings treats a zero-approval classic review requirement as configured (presence, not a minimum-count test)', () => {
