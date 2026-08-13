@@ -6770,7 +6770,7 @@ function maxIsoTimestamp(values: unknown[]): string | null {
   return latest;
 }
 
-function summarizeRequiredCheckMetadata(
+export function summarizeRequiredCheckMetadata(
   parameters: RequiredCheckParametersLike,
 ) {
   const names = new Set<string>();

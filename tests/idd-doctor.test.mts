@@ -3333,6 +3333,29 @@ test("evaluateBranchProtectionFindings honors a Rulesets required_status_checks 
   assert.equal(findings.requiredChecksStrict, true);
 });
 
+test('evaluateBranchProtectionFindings ignores a Rulesets strict policy whose own rule has an empty check list, even when another source supplies the counted checks (idd-skill#2010 review, Codex round 2)', () => {
+  // GitHub's ruleset docs: strict_required_status_checks_policy "will not
+  // take effect unless at least one status check is enabled" -- scoped to
+  // that SAME rule's own check list, not the combined count from other
+  // sources. Classic protection supplies the one counted check here, so
+  // requiredCheckCount is 1, but the Rulesets rule claiming strict=true
+  // has zero checks of its own and must not contribute strict=true.
+  const findings = evaluateBranchProtectionFindings(
+    [
+      {
+        type: 'required_status_checks',
+        parameters: {
+          required_status_checks: [],
+          strict_required_status_checks_policy: true,
+        },
+      },
+    ],
+    { required_status_checks: { contexts: ['lint'], strict: false } },
+  );
+  assert.equal(findings.requiredCheckCount, 1);
+  assert.equal(findings.requiredChecksStrict, false);
+});
+
 test('evaluateBranchProtectionFindings strict stays false when neither classic nor Rulesets configures an up-to-date-head policy', () => {
   const findings = evaluateBranchProtectionFindings(
     [

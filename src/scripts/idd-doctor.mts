@@ -31,6 +31,7 @@ import {
   parsePaginatedGhNdjson,
   resolveTrustedMarkerActors,
   summarizeBranchReviewRequirements,
+  summarizeRequiredCheckMetadata,
 } from './protocol-helpers.mts';
 import { loadJson, validate } from './validate-schemas.mts';
 
@@ -3307,7 +3308,13 @@ export interface BranchProtectionFindings {
  * rule's own `strict_required_status_checks_policy` parameter, not just
  * classic protection's `strict` field -- a Rulesets-only repository with
  * that policy enabled previously always reported `strict=false`
- * (idd-skill#2010 review).
+ * (idd-skill#2010 review). GitHub's ruleset docs state that flag "will
+ * not take effect unless at least one status check is enabled", so it
+ * only counts here when that same rule's own check list is non-empty --
+ * the same non-empty-check guard `summarizeBranchCurrency()`
+ * (`protocol-helpers.mts`) already applies for the identical reason
+ * (`#1513`), reusing its `summarizeRequiredCheckMetadata()` extraction
+ * rather than a second name-counting implementation.
  */
 export function evaluateBranchProtectionFindings(
   branchRules: BranchRuleReadEntry[],
@@ -3323,7 +3330,8 @@ export function evaluateBranchProtectionFindings(
   const rulesetStrict = branchRules.some(
     (rule) =>
       rule?.type === 'required_status_checks' &&
-      Boolean(rule.parameters?.strict_required_status_checks_policy),
+      rule.parameters?.strict_required_status_checks_policy === true &&
+      summarizeRequiredCheckMetadata(rule.parameters ?? {}).names.length > 0,
   );
   return {
     requiredCheckCount: requirements.requiredCheckNames.length,
