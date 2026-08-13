@@ -286,6 +286,8 @@ require explicit operator confirmation:
     every merely-`BEHIND` PR and multiplies advisory-review rounds
     without review value; a before/after sample measured the sync-merge
     share fall from ~27% to ~3.7%, kurone-kito/idd-skill#1817)
+14. bootstrap execution mode (`direct-import` default, or
+    `issue-mediated`)
 
 Use
 [Onboarding Reference — Policy Decisions](docs/onboarding/policy-decisions.md)
@@ -429,7 +431,8 @@ merge policy, PR review profile, review-thread resolution policy,
 critique-loop profile, credential scope, claim-timing defaults, CI wait
 policy defaults, issue-author approval gate, maintainer approval actor
 policy, issue-authoring companion status, helper runtime profile, IDD
-label names, and the up-to-date-head ruleset check.
+label names, the up-to-date-head ruleset check, and bootstrap execution
+mode.
 
 Use
 [Onboarding Reference — Policy Decisions](docs/onboarding/policy-decisions.md)
@@ -1521,8 +1524,8 @@ After completing the steps above, confirm each item:
       customizations are complete.
 - [ ] The selected CI wait policy values, merge policy, credential
       scope, claim timing values, issue-author approval gate decision,
-      maintainer approval actor policy, and helper runtime profile are
-      explicitly recorded.
+      maintainer approval actor policy, helper runtime profile, and
+      bootstrap execution mode are explicitly recorded.
 - [ ] If the operator opted into issue authoring, the companion skill
       files are present under the native destination recorded in the policy.
 - [ ] No `{{...}}` placeholders remain, the `Project commands` table is
