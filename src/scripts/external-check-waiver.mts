@@ -540,6 +540,31 @@ export function planExternalCheckWaiver(
   };
 }
 
+/**
+ * Resolves the effective actor login for authority evaluation: an explicit
+ * programmatic override, else the CLI `--actor` flag, else the
+ * authenticated `gh` viewer.
+ *
+ * Uses `||` rather than `??` for this specific chain: the CLI flag spec
+ * gives `--actor` a parsed default of `''` (not `undefined`), so
+ * `args.actor` is always a string and is `''` whenever the flag is
+ * omitted. A `??` chain would treat that `''` as "provided" and never
+ * fall through to `viewerLogin`, which is exactly the bug this scoped fix
+ * addresses -- an empty string here must be treated the same as absent.
+ * `options.actor` is genuinely optional (`string | undefined`) and an
+ * empty override is equally meaningless, so the same `||` step covers it
+ * too. No other fallback chain in this file changes.
+ */
+export function resolveActorLogin(
+  optionsActor: string | undefined,
+  argsActor: string,
+  viewerLogin: string,
+): string {
+  return String(optionsActor || argsActor || viewerLogin)
+    .trim()
+    .toLowerCase();
+}
+
 export async function runExternalCheckWaiver(
   options: RunExternalCheckWaiverOptions = {},
 ): Promise<{ exitCode: number; report?: ExternalCheckWaiverReport }> {
@@ -565,9 +590,7 @@ export async function runExternalCheckWaiver(
   const viewerLogin = String(safeGhText(['api', 'user', '--jq', '.login']))
     .trim()
     .toLowerCase();
-  const actor = String(options.actor ?? args.actor ?? viewerLogin)
-    .trim()
-    .toLowerCase();
+  const actor = resolveActorLogin(options.actor, args.actor, viewerLogin);
   if (!actor) {
     throw new Error(
       'could not determine current GitHub user; ensure gh is authenticated',
