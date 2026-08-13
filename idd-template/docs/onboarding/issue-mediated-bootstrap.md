@@ -356,11 +356,12 @@ merges — the local IDD instructions and policy files that Discover needs
 already exist by then — with one exception: the welcome/next-steps issue
 must not run through that loop at all (see below).
 
-**Welcome/next-steps issue, in detail.** Draft it automatically whenever
-the operator chose issue-mediated bootstrap — do not wait for a separate
-request. The whole premise of choosing the guided path over theirs-flow
-is that the operator is less likely to already know IDD, so gating this
-one add-on on a separate ask would defeat the point.
+**Welcome/next-steps issue, in detail.** Once the core bootstrap issue
+merges, draft it automatically — do not wait for a separate request, the
+way its four sibling bullets do. The whole premise of choosing the
+guided path over theirs-flow is that the operator is less likely to
+already know IDD, so gating this one add-on on a separate ask would
+defeat the point.
 
 This is also the one add-on that must stay off the Discover -> Claim ->
 Work loop entirely, unlike its four sibling bullets above: its whole
@@ -379,7 +380,13 @@ the same repository-evidence read the optional Dry-run readiness report
 already performs
 ([Dry-run — Readiness assessment](../../ONBOARDING.md#dry-run--readiness-assessment))
 — detected package manager, missing prerequisites, and so on — rather
-than inventing a new inference mechanism.
+than inventing a new inference mechanism. Condition the prompt set on
+the recorded Step 1B companion decision: only include an issue-authoring
+prompt (e.g. "start issue authoring to implement {inferred gap}") when
+that decision was `installed`; for `not installed`, substitute a prompt
+that does not depend on the companion skill (e.g. "run the IDD loop" or
+a repository-evidence-derived task prompt), so every welcome issue's
+prompts are ones the operator can actually run.
 
 ## Execution: issue -> branch -> PR -> merge, not the full loop
 
@@ -405,4 +412,7 @@ explicitly not the full autonomous Discover -> Claim -> Work loop:
 
 Once this PR merges, the repository is IDD-operational and every
 subsequent change — including the optional add-ons above — runs through
-the normal claim -> work -> PR -> CI -> merge loop.
+the normal claim -> work -> PR -> CI -> merge loop, with the one
+exception already noted above: the welcome/next-steps issue stays off
+that loop and is instead executed directly, the same way the core
+bootstrap issue itself is.
