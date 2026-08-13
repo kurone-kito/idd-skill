@@ -422,7 +422,16 @@ process.stdout.write(JSON.stringify({ run_attempt: 1 }));
   }
 });
 
-test('CLI --run-id derives rerunCount from a live run_attempt: 1 -> action rerun', () => {
+// #1996 C1 critique (Copilot review, PR #1998, suppressed comment): the
+// prior version of this test passed ONLY --run-id, so it could not
+// distinguish "--run-id wins on a successful lookup" from "--rerun-count
+// was simply never given" -- the two "falls back" tests below only prove
+// --rerun-count wins when the lookup FAILS, leaving the success-path
+// precedence rule unproven. Also passing a CONFLICTING --rerun-count 1
+// here (which would produce action: 'hold' if it won instead) makes the
+// action: 'rerun' / rerunCount: 0 assertions below actually prove
+// --run-id's live lookup took precedence.
+test('CLI --run-id derives rerunCount from a live run_attempt: 1 -> action rerun (wins over a conflicting --rerun-count on success)', () => {
   const restore = stubGh(`
 if (process.argv[2] === 'api') {
   process.stdout.write(JSON.stringify({ run_attempt: 1 }));
@@ -443,6 +452,8 @@ if (process.argv[2] === 'api') {
           'kurone-kito',
           '--repo',
           'idd-skill',
+          '--rerun-count',
+          '1',
         ],
         { encoding: 'utf8' },
       ),
