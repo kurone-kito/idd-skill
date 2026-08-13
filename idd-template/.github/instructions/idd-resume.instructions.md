@@ -106,7 +106,9 @@ Sequence:
 
 1. Post the operator-supplied input (with any acceptance-criteria
    amendment it implies) as a normal issue comment.
-2. Post a trusted-marker-actor-authored `unclaimed-by` matching the
+2. Re-read the issue and confirm the active claim and the predicate
+   above still hold — stop and restart if either changed since Step 0 —
+   then post a trusted-marker-actor-authored `unclaimed-by` matching the
    held claim's exact `{agent-id}` and `{claim-id}` (Claim-state
    parsing rule 5, `idd-claim.instructions.md`).
 3. Re-read the issue and confirm it now parses as unclaimed — the
