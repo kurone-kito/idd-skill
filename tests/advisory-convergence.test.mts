@@ -10,10 +10,12 @@ import {
   classifyCopilotAuthoredThreadIds,
   computeAdvisoryConvergenceVerdict,
   hasTrustedClaimMarkerHistory,
+  isSoleCopilotNotReviewedYetReason,
   parseArgs,
   pickResolvingClaimEvents,
   resolveClaimEvidence,
   runAdvisoryConvergence,
+  runAdvisoryConvergenceWithPoll,
   SAME_HEAD_REROLL_INELIGIBLE_REASON,
   viewerProbeGhOptions,
 } from '../src/scripts/advisory-convergence.mts';
@@ -2981,6 +2983,208 @@ test('runAdvisoryConvergence: missing --pr throws before any collection happens'
   };
   assert.throws(() => runAdvisoryConvergence([], deps));
   assert.equal(called, false);
+});
+
+// --- isSoleCopilotNotReviewedYetReason / runAdvisoryConvergenceWithPoll ----
+// (#2015: bounded poll for the "not reviewed yet" race only)
+
+test('isSoleCopilotNotReviewedYetReason: true when the bot has never reviewed and that is the only reason', () => {
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({ reviews: [] }),
+    baseOptions(),
+  );
+  assert.equal(verdict.pending, true);
+  assert.equal(verdict.review.found, false);
+  assert.deepEqual(verdict.reasons, [
+    'copilot has not reviewed this pull request yet',
+  ]);
+  assert.equal(isSoleCopilotNotReviewedYetReason(verdict), true);
+});
+
+test('isSoleCopilotNotReviewedYetReason: false when the verdict is already ready', () => {
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({ reviews: [copilotReview()] }),
+    baseOptions(),
+  );
+  assert.equal(verdict.ready, true);
+  assert.equal(isSoleCopilotNotReviewedYetReason(verdict), false);
+});
+
+test('isSoleCopilotNotReviewedYetReason: false when the bot reviewed an older commit (different reason string)', () => {
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({ reviews: [copilotReview({ commitId: OTHER_SHA })] }),
+    baseOptions(),
+  );
+  assert.equal(verdict.pending, true);
+  assert.equal(verdict.review.found, true);
+  assert.equal(isSoleCopilotNotReviewedYetReason(verdict), false);
+});
+
+test('isSoleCopilotNotReviewedYetReason: false when an unrelated blocking reason accompanies the pending one', () => {
+  // Zero reviews (pending, review.found === false) BUT the deadline has
+  // already passed with no valid waiver, which appends its own reason
+  // alongside the pending one -- reasons.length > 1, so this must not poll.
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({ reviews: [] }),
+    baseOptions({ headCommittedAt: OLD, waiverMode: 'disabled' }),
+  );
+  assert.equal(verdict.pending, true);
+  assert.equal(verdict.review.found, false);
+  assert.ok(verdict.reasons.length > 1);
+  assert.equal(isSoleCopilotNotReviewedYetReason(verdict), false);
+});
+
+function pollDepsFor(
+  inputsSequence: AdvisoryConvergenceInputs[],
+  options: AdvisoryConvergenceOptions,
+): { deps: AdvisoryConvergenceDeps; collectCalls: () => number } {
+  let index = 0;
+  let calls = 0;
+  const deps: AdvisoryConvergenceDeps = {
+    collect: () => {
+      calls += 1;
+      const inputs = inputsSequence[Math.min(index, inputsSequence.length - 1)];
+      if (index < inputsSequence.length - 1) index += 1;
+      return { inputs, options };
+    },
+  };
+  return { deps, collectCalls: () => calls };
+}
+
+function fakeSleep(): { sleep: (ms: number) => void; calls: () => number } {
+  let calls = 0;
+  return {
+    sleep: () => {
+      calls += 1;
+    },
+    calls: () => calls,
+  };
+}
+
+test('runAdvisoryConvergenceWithPoll: review landing within the window resolves without exhausting it', () => {
+  const { deps, collectCalls } = pollDepsFor(
+    [
+      baseInputs({ reviews: [] }),
+      baseInputs({ reviews: [] }),
+      baseInputs({ reviews: [copilotReview()] }),
+    ],
+    baseOptions(),
+  );
+  const { sleep, calls } = fakeSleep();
+  const { verdict, exitCode } = runAdvisoryConvergenceWithPoll(
+    ['--pr', '1234', '--assert'],
+    deps,
+    { maxWaitMs: 60_000, pollIntervalMs: 7_500, sleep },
+  );
+  assert.equal(verdict?.ready, true);
+  assert.equal(exitCode, 0);
+  // 3 collect() calls total (1 initial + 2 poll re-checks); the loop must
+  // stop as soon as the review lands, well short of the 8-attempt max-wait
+  // budget (60_000 / 7_500 ~= 8).
+  assert.equal(collectCalls(), 3);
+  assert.equal(calls(), 2);
+});
+
+test('runAdvisoryConvergenceWithPoll: review never landing still fails with the existing reason string after the window', () => {
+  const { deps, collectCalls } = pollDepsFor(
+    [baseInputs({ reviews: [] })],
+    baseOptions(),
+  );
+  const { sleep, calls } = fakeSleep();
+  const { verdict, exitCode } = runAdvisoryConvergenceWithPoll(
+    ['--pr', '1234', '--assert'],
+    deps,
+    { maxWaitMs: 20_000, pollIntervalMs: 7_500, sleep },
+  );
+  assert.equal(verdict?.ready, false);
+  assert.deepEqual(verdict?.reasons, [
+    'copilot has not reviewed this pull request yet',
+  ]);
+  assert.equal(exitCode, 1);
+  // ceil(20_000 / 7_500) = 3 poll attempts once maxWaitMs is exhausted,
+  // plus the initial attempt.
+  assert.equal(calls(), 3);
+  assert.equal(collectCalls(), 4);
+});
+
+test('runAdvisoryConvergenceWithPoll: does not poll for any other not-ready reason', () => {
+  const { deps, collectCalls } = pollDepsFor(
+    [
+      baseInputs({
+        reviews: [copilotReview({ commitId: OTHER_SHA })],
+      }),
+    ],
+    baseOptions(),
+  );
+  const { sleep, calls } = fakeSleep();
+  const { verdict, exitCode } = runAdvisoryConvergenceWithPoll(
+    ['--pr', '1234', '--assert'],
+    deps,
+    { sleep },
+  );
+  assert.equal(verdict?.ready, false);
+  assert.equal(exitCode, 1);
+  assert.equal(collectCalls(), 1);
+  assert.equal(calls(), 0);
+});
+
+test('runAdvisoryConvergenceWithPoll: without --assert never polls regardless of verdict', () => {
+  const { deps, collectCalls } = pollDepsFor(
+    [baseInputs({ reviews: [] })],
+    baseOptions(),
+  );
+  const { sleep, calls } = fakeSleep();
+  const { verdict, exitCode } = runAdvisoryConvergenceWithPoll(
+    ['--pr', '1234'],
+    deps,
+    { sleep },
+  );
+  assert.equal(verdict?.ready, false);
+  assert.equal(exitCode, 0);
+  assert.equal(collectCalls(), 1);
+  assert.equal(calls(), 0);
+});
+
+test('runAdvisoryConvergenceWithPoll: --help short-circuits before collecting or sleeping', () => {
+  let called = false;
+  const deps: AdvisoryConvergenceDeps = {
+    collect: () => {
+      called = true;
+      return { inputs: baseInputs(), options: baseOptions() };
+    },
+  };
+  const { sleep, calls } = fakeSleep();
+  const { help, exitCode } = runAdvisoryConvergenceWithPoll(['--help'], deps, {
+    sleep,
+  });
+  assert.equal(help, true);
+  assert.equal(exitCode, 0);
+  assert.equal(called, false);
+  assert.equal(calls(), 0);
+});
+
+test('runAdvisoryConvergenceWithPoll: a reason change mid-poll stops the loop immediately instead of exhausting the window', () => {
+  const { deps, collectCalls } = pollDepsFor(
+    [
+      baseInputs({ reviews: [] }),
+      baseInputs({ reviews: [copilotReview({ commitId: OTHER_SHA })] }),
+    ],
+    baseOptions(),
+  );
+  const { sleep, calls } = fakeSleep();
+  const { verdict, exitCode } = runAdvisoryConvergenceWithPoll(
+    ['--pr', '1234', '--assert'],
+    deps,
+    { maxWaitMs: 60_000, pollIntervalMs: 7_500, sleep },
+  );
+  assert.equal(verdict?.ready, false);
+  assert.equal(verdict?.review.found, true);
+  assert.equal(exitCode, 1);
+  // Stops after the single re-check that reveals the new (off-HEAD) review
+  // -- must not keep polling out the rest of the 60s window once the
+  // blocking reason is no longer the sole "not reviewed yet" case.
+  assert.equal(calls(), 1);
+  assert.equal(collectCalls(), 2);
 });
 
 test('viewerProbeGhOptions captures gh stderr only under GitHub Actions', () => {

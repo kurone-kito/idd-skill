@@ -80,17 +80,42 @@ name: IDD advisory-convergence gate
 # triggers fires or a maintainer runs workflow_dispatch.
 #
 # workflow_dispatch (manual re-run) exists for a second reason beyond
-# the thread-resolve gap above: `--assert` exits non-zero for ANY
-# not-ready verdict, including the ordinary "Copilot has not reviewed
-# this HEAD yet" pending case -- GitHub Actions has no distinct
-# non-failing "pending" check state, so the check simply shows red
-# until it converges (by design; see roadmap #1342's stated deadlock
-# policy). That also means posting a maintainer waiver comment does
-# NOT by itself turn a previously-failed check green, because a PR
-# comment is not one of this workflow's trigger events and a completed
-# run's conclusion never changes on its own -- a new run has to
-# execute. workflow_dispatch gives that a one-click affordance instead
-# of relying solely on the Actions UI's generic "re-run failed jobs".
+# the thread-resolve gap above: `--assert` still exits non-zero for ANY
+# not-ready verdict that survives the bounded poll described below --
+# GitHub Actions has no distinct non-failing "pending" check state, so
+# the check simply shows red until it converges (by design; see
+# roadmap #1342's stated deadlock policy). That also means posting a
+# maintainer waiver comment does NOT by itself turn a previously-failed
+# check green, because a PR comment is not one of this workflow's
+# trigger events and a completed run's conclusion never changes on its
+# own -- a new run has to execute. workflow_dispatch gives that a
+# one-click affordance instead of relying solely on the Actions UI's
+# generic "re-run failed jobs".
+#
+# Bounded poll for the "not reviewed yet" race (#2015): the
+# `pull_request` `synchronize` trigger above fires the instant a push
+# lands, independent of the separate `pull_request_review` trigger,
+# which only fires once the primary bot's own review actually lands
+# (typically 10-40s later) -- so a push that also needed a fresh review
+# used to get asserted, and fail, before that review existed, costing a
+# near-certain external rerun every time (the exact recovery documented
+# a few paragraphs below). `advisory-convergence.mjs`'s CLI entry point
+# now runs `runAdvisoryConvergenceWithPoll` instead of asserting
+# immediately: when (and ONLY when) the verdict's sole blocking reason
+# is literally "{bot} has not reviewed this pull request yet" --
+# `isSoleCopilotNotReviewedYetReason` in the .mts source -- it polls a
+# short, bounded window (a few seconds apart, capped around a minute)
+# before its real assert-driven exit. Every OTHER not-ready reason
+# (a stale-HEAD review, unresolved threads, an indeterminate claim
+# scope, a deadline/terminal-unavailability reason, etc.) still fails
+# immediately on the first pass with no wait, exactly as before this
+# change. This does not weaken the check's required, fail-closed,
+# non-bypassable nature or change roadmap #1342's deterministic-
+# convergence policy in any way: if the review still has not landed by
+# the end of the window, or lands with outstanding items, the job fails
+# exactly as it always has -- this only absorbs a common, near-
+# universal race internally instead of costing an external rerun for it
+# every time.
 #
 # Correction (kurone-kito/idd-skill#1381): in practice, workflow_dispatch
 # does NOT reliably flip the PR's required-check rollup for its own HEAD
