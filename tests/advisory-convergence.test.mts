@@ -3187,6 +3187,39 @@ test('runAdvisoryConvergenceWithPoll: a reason change mid-poll stops the loop im
   assert.equal(collectCalls(), 2);
 });
 
+test('runAdvisoryConvergenceWithPoll: review lands on HEAD mid-poll with outstanding items still fails (no weakening)', () => {
+  // The issue's own acceptance criterion: "lands with outstanding items"
+  // must still fail exactly as today -- landing on HEAD is not itself
+  // enough to pass if the review carries actionable items.
+  const { deps, collectCalls } = pollDepsFor(
+    [
+      baseInputs({ reviews: [] }),
+      baseInputs({ reviews: [copilotReview({ itemCount: 1 })] }),
+    ],
+    baseOptions(),
+  );
+  const { sleep, calls } = fakeSleep();
+  const { verdict, exitCode } = runAdvisoryConvergenceWithPoll(
+    ['--pr', '1234', '--assert'],
+    deps,
+    { maxWaitMs: 60_000, pollIntervalMs: 7_500, sleep },
+  );
+  assert.equal(verdict?.review.found, true);
+  assert.equal(verdict?.review.matchesHead, true);
+  assert.equal(verdict?.review.satisfied, false);
+  assert.equal(verdict?.converged, false);
+  assert.equal(verdict?.ready, false);
+  assert.equal(exitCode, 1);
+  assert.ok(
+    verdict?.reasons.some((reason) => reason.includes('actionable item')),
+  );
+  // Stops after the single re-check that reveals the on-HEAD review with
+  // outstanding items -- not the sole "not reviewed yet" case anymore, so
+  // it must not keep polling out the rest of the window.
+  assert.equal(calls(), 1);
+  assert.equal(collectCalls(), 2);
+});
+
 test('viewerProbeGhOptions captures gh stderr only under GitHub Actions', () => {
   // Under Actions: capture stderr (pipe) so the expected `gh api user` 403 does
   // not leak into the run log; stdout is still piped so viewerLogin is read.
