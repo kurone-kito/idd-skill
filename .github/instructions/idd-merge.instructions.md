@@ -373,15 +373,29 @@ Before any mutating action in F3, apply the
    See `docs/idd-comment-minimization.md` for the evidence comment
    format, cleanup-failure comment format, permission-blocked comment
    format, and fallback GraphQL commands.
-3. Delete the local worktree and local branch: `git worktree remove
-   <path>`. If that fails with `fatal: working trees containing
-   submodules cannot be moved or removed`, a submodule-initializing step
-   (e.g. `git submodule update --init --recursive`) ran inside that
-   worktree at some point — retry with `git worktree remove --force
-   <path>`. `--force` also discards any uncommitted or untracked
-   changes, so confirm first that `git status --porcelain` in the
-   worktree is empty; only use it once the worktree is already known
-   clean, not as an unconditional default.
+3. Run from the **primary worktree**, never from inside the worktree
+   being removed — deleting the directory underlying the running
+   process's own cwd breaks every later step. Delete the worktree, then
+   the branch:
+
+   - `git worktree remove <path>`. If it fails with `fatal: working
+     trees containing submodules cannot be moved or removed`, a
+     submodule-initializing step (e.g. `git submodule update --init
+     --recursive`) ran inside that worktree — retry with `git worktree
+     remove --force <path>`, which also overrides the uncommitted /
+     untracked / submodule block. Any removal, forced or not, silently
+     discards ignored files too — including ones inside an initialized
+     submodule, which a worktree-root `git status --porcelain --ignored`
+     never surfaces. Before relying on `--force`, confirm both the
+     worktree root (`git status --porcelain --ignored`) and every
+     submodule (`git submodule foreach --recursive 'git status
+     --porcelain --ignored'`) report nothing — only once the worktree is
+     confirmed clean this way, not as an unconditional default.
+   - `git branch -D <branch-name>`. Use `-D`, not `-d`: F3 already
+     confirmed the merge via GitHub itself, so `-d`'s local ancestry
+     re-check is redundant and can false-negative (`not fully merged`)
+     before step 4 below fast-forwards local `main`, or once a `fetch
+     --prune` has already dropped the branch's remote-tracking ref.
 4. Update the local `main` branch.
 5. If GitHub auto-delete is disabled: delete the remote branch too.
    (Worktrunk may be used for steps 3–5.)
