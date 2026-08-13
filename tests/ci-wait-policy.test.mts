@@ -629,6 +629,65 @@ if (process.argv[2] === 'repo' && process.argv[3] === 'view') {
   }
 });
 
+// #1996 E2 critique pass (independent subagent review, PR #1998): every
+// other --run-id success test above passes explicit --owner/--repo, and
+// the only auto-detection test exercises the FAILURE path (gh repo view
+// itself failing) -- nothing proved the composed
+// repos/{owner}/{repo}/actions/runs/{run-id} path is correct when
+// owner/repo come from auto-detection rather than flags. This test omits
+// --owner/--repo entirely, has the stub answer both `gh repo view` calls
+// (--json owner and --json name) plus the run lookup, and captures the
+// final `gh api` call's argv to prove the auto-detected values were
+// composed into the URL correctly.
+test('CLI --run-id auto-detects --owner/--repo via gh repo view and composes the correct API path', () => {
+  const tempRoot = mkdtempSync(
+    join(tmpdir(), 'idd-ci-wait-policy-autodetect-'),
+  );
+  const argsFile = join(tempRoot, 'args.json');
+  const restore = stubGh(`
+const fs = require('node:fs');
+if (process.argv[2] === 'repo' && process.argv[3] === 'view' && process.argv[5] === 'owner') {
+  process.stdout.write('kurone-kito');
+} else if (process.argv[2] === 'repo' && process.argv[3] === 'view' && process.argv[5] === 'name') {
+  process.stdout.write('idd-skill');
+} else if (process.argv[2] === 'api') {
+  fs.writeFileSync(${JSON.stringify(argsFile)}, JSON.stringify(process.argv.slice(2)));
+  process.stdout.write(JSON.stringify({ run_attempt: 1 }));
+} else {
+  process.stderr.write('unexpected gh invocation: ' + process.argv.slice(2).join(' '));
+  process.exit(1);
+}
+`);
+  try {
+    const output = JSON.parse(
+      execFileSync(
+        process.execPath,
+        [
+          join(REPO_ROOT, 'scripts/ci-wait-policy.mjs'),
+          '--run-id',
+          '31631273987',
+        ],
+        { encoding: 'utf8' },
+      ),
+    );
+    const capturedArgv = JSON.parse(readFileSync(argsFile, 'utf8')) as string[];
+    assert.deepEqual(capturedArgv, [
+      'api',
+      'repos/kurone-kito/idd-skill/actions/runs/31631273987',
+    ]);
+    assert.equal(output.rerunCountSource, 'run-id');
+    assert.equal(output.runAttempt, 1);
+    assert.deepEqual(output.rerunDecision, {
+      action: 'rerun',
+      reason: 'rerun-budget-available',
+      rerunPolicy: 'rerun-once',
+      rerunCount: 0,
+    });
+  } finally {
+    restore();
+  }
+});
+
 test('CLI --owner without --repo (or vice versa) throws -- both-or-neither', () => {
   for (const args of [
     ['--run-id', '1', '--owner', 'kurone-kito'],
