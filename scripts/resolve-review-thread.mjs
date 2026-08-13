@@ -21,7 +21,11 @@ import {
   readForcedHandoffMode,
 } from './collaborator-permission.mjs';
 import { DEFAULT_GH_PAGINATED_TIMEOUT_MS, ghText } from './gh-exec.mjs';
-import { resolveActiveClaimForWriteGate } from './protocol-helpers.mjs';
+import {
+  isDispositionComment,
+  isRejectionConfirmedDisposition,
+  resolveActiveClaimForWriteGate,
+} from './protocol-helpers.mjs';
 /**
  * Find the review thread that owns the review comment whose REST database id is
  * `commentId`. The GraphQL `PullRequestReviewComment.databaseId` equals the REST
@@ -71,6 +75,41 @@ export function applyResolveReviewThread(deps) {
   deps.assertClaim();
   deps.resolveThread();
   return { replyId: reply.id };
+}
+/** The three marker forms `--apply` accepts, for use in error messages. */
+export const ACCEPTED_DISPOSITION_MARKERS =
+  '**Accepted**, **Rejected**, or **Rejection confirmed by maintainer** —';
+/**
+ * True when `body` starts with one of the marker prefixes
+ * `hasFreshDisposition` (`protocol-helpers.mts`) recognizes as a
+ * disposition, independent of thread-resolution state. Reuses
+ * `isDispositionComment` / `isRejectionConfirmedDisposition` directly so
+ * this posting-time check and the later merge-gate check can never drift
+ * out of sync (idd-skill#2005). Has no network dependency, so the CLI can
+ * call it before resolving `owner`/`repo` or looking up the thread — a
+ * malformed `--body` then fails closed without posting anything.
+ */
+export function hasKnownDispositionMarkerPrefix(body) {
+  const comment = { body };
+  return (
+    isDispositionComment(comment) || isRejectionConfirmedDisposition(comment)
+  );
+}
+/**
+ * The `**Rejection confirmed by maintainer**` form is valid only when the
+ * target thread is already resolved, matching
+ * `isRejectionConfirmedDisposition`'s own resolved-thread scoping inside
+ * `hasFreshDisposition`; `**Accepted**` / `**Rejected**` carry no such
+ * restriction. Only meaningful once `hasKnownDispositionMarkerPrefix` has
+ * already passed for the same `body` and the target thread's resolution
+ * state is known (i.e., after the thread lookup).
+ */
+export function isDispositionBodyValidForThread(body, threadIsResolved) {
+  const comment = { body };
+  if (isDispositionComment(comment)) {
+    return true;
+  }
+  return isRejectionConfirmedDisposition(comment) && threadIsResolved;
 }
 // Flag-spec keys stay the dashed literal on purpose (never bare keys like
 // `pr:`): tests/flag-name-matrix.test.mts scans this file's *compiled*
@@ -141,7 +180,9 @@ thread in one invocation (E13). Dry-run by default; --apply mutates.
 
   --pr <number>                  PR number (required)
   --comment-id <id>              review comment REST id whose thread to resolve (required)
-  --body <text>                  reply body (required with --apply)
+  --body <text>                  reply body (required with --apply; with --apply, must start
+                                 with **Accepted**, **Rejected**, or (resolved threads only)
+                                 **Rejection confirmed by maintainer** —)
   --owner <owner>                repo owner (default: gh repo view)
   --repo <repo>                  repo name (default: gh repo view)
   --claim-issue <number>         issue carrying the active claim (required with --apply)
@@ -402,6 +443,17 @@ if (import.meta.main) {
     );
     process.exit(1);
   }
+  // Fail closed before any network call: --apply must never post a --body
+  // the F2/F3 disposition-evidence gate (hasFreshDisposition) won't
+  // recognize as a disposition (idd-skill#2005). The resolved-thread-only
+  // scoping for the "Rejection confirmed by maintainer" form is checked
+  // separately below, once the target thread's resolution state is known.
+  if (args.apply && !hasKnownDispositionMarkerPrefix(args.body)) {
+    process.stderr.write(
+      `--apply requires --body to start with one of the accepted disposition markers: ${ACCEPTED_DISPOSITION_MARKERS}\n`,
+    );
+    process.exit(1);
+  }
   const pr = args.pr;
   const commentId = args.commentId;
   const owner =
@@ -432,6 +484,17 @@ if (import.meta.main) {
   if (!args.apply) {
     process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
     process.exit(0);
+  }
+  // The "Rejection confirmed by maintainer" form is only valid on an
+  // already-resolved thread (mirrors isRejectionConfirmedDisposition's own
+  // scoping) — the prefix alone (checked above) cannot know this, since it
+  // requires the thread lookup that just completed. Fail closed before
+  // mutating.
+  if (!isDispositionBodyValidForThread(args.body, match.isResolved)) {
+    report.status = 'failed';
+    report.error = `--body uses the "**Rejection confirmed by maintainer**" marker, which is only valid once review thread ${match.threadId} is already resolved (currently unresolved)`;
+    process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
+    process.exit(1);
   }
   // The reply targets the thread's top-level review comment, so a thread with
   // no exposed comment id cannot be replied to — fail closed before mutating.

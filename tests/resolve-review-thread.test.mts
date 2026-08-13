@@ -5,6 +5,8 @@ import {
   applyResolveReviewThread,
   assertNoGraphqlErrors,
   findThreadForComment,
+  hasKnownDispositionMarkerPrefix,
+  isDispositionBodyValidForThread,
   parseArgs,
   type ResolveReviewThreadReport,
   type ReviewThreadNode,
@@ -290,6 +292,66 @@ test('applyResolveReviewThread does not resolve the thread when the reply fails'
     /reply failed/,
   );
   assert.deepEqual(calls, ['claim']);
+});
+
+// --- #2005: validate the disposition marker prefix before posting ----------
+
+test('hasKnownDispositionMarkerPrefix accepts each of the three forms hasFreshDisposition recognizes', () => {
+  assert.equal(
+    hasKnownDispositionMarkerPrefix('**Accepted** — fixed in abc1234: ...'),
+    true,
+  );
+  assert.equal(
+    hasKnownDispositionMarkerPrefix(
+      '**Rejected** — verified placeholders-only',
+    ),
+    true,
+  );
+  assert.equal(
+    hasKnownDispositionMarkerPrefix(
+      '**Rejection confirmed by maintainer** — agreed, no action needed',
+    ),
+    true,
+  );
+});
+
+test('hasKnownDispositionMarkerPrefix rejects a non-conforming body before any network call', () => {
+  // This predicate has no network dependency at all -- the CLI calls it
+  // before resolving owner/repo or looking up the review thread, so a body
+  // like this is rejected before any gh/GraphQL call is made.
+  assert.equal(
+    hasKnownDispositionMarkerPrefix('**Fixed** — cleaned up the stray import'),
+    false,
+  );
+});
+
+test('isDispositionBodyValidForThread scopes the "Rejection confirmed by maintainer" form to already-resolved threads', () => {
+  const body =
+    '**Rejection confirmed by maintainer** — agreed, no action needed';
+  assert.equal(isDispositionBodyValidForThread(body, true), true);
+  assert.equal(
+    isDispositionBodyValidForThread(body, false),
+    false,
+    'must be rejected on a currently-unresolved thread',
+  );
+});
+
+test('isDispositionBodyValidForThread accepts **Accepted**/**Rejected** regardless of thread resolution state', () => {
+  assert.equal(
+    isDispositionBodyValidForThread('**Accepted** — fixed in abc1234', false),
+    true,
+  );
+  assert.equal(
+    isDispositionBodyValidForThread('**Accepted** — fixed in abc1234', true),
+    true,
+  );
+  assert.equal(
+    isDispositionBodyValidForThread(
+      '**Rejected** — verified placeholders-only',
+      false,
+    ),
+    true,
+  );
 });
 
 test('the dry-run and apply output envelopes validate against the schema', () => {
