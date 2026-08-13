@@ -229,6 +229,13 @@ let cachedConfiguredTrustedMarkerActorSources: {
 } | null = null;
 let cachedCurrentViewerLogin: string | null = null;
 
+/** Default bound on whole-pass apply retries (#2011). */
+const DEFAULT_APPLY_RETRY_MAX_ATTEMPTS = 3;
+
+/** Base backoff (ms) before each rescan; linear-ish with jitter, matching
+ * {@link withBoundedRetry}'s formula in gh-exec.mts. */
+const DEFAULT_APPLY_RETRY_BACKOFF_MS = 200;
+
 if (import.meta.main) {
   await main();
 }
@@ -408,13 +415,6 @@ async function applyCandidatePass(
     }
   }
 }
-
-/** Default bound on whole-pass apply retries (#2011). */
-const DEFAULT_APPLY_RETRY_MAX_ATTEMPTS = 3;
-
-/** Base backoff (ms) before each rescan; linear-ish with jitter, matching
- * {@link withBoundedRetry}'s formula in gh-exec.mts. */
-const DEFAULT_APPLY_RETRY_BACKOFF_MS = 200;
 
 /** Default backoff before a rescan: gives GraphQL read-after-write lag on
  * the previous pass's minimizeComment calls a moment to settle (#2011). */
