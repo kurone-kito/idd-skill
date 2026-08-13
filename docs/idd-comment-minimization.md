@@ -398,19 +398,28 @@ uses a simpler presence-only guard (it skips on any existing marker),
 which suffices for its single-shot post-merge run:
 
 ```markdown
-<!-- idd-cleanup-evidence: {status} applied:{N} failed:{N} skipped:{N} viewer-cannot-minimize:{N} -->
+<!-- idd-cleanup-evidence: {status} applied:{N} failed:{N} skipped:{N} viewer-cannot-minimize:{N} retry-attempts:{N} retry-bound-exhausted:{true|false} -->
 
 **F4 Cleanup Evidence**
 
-| Field              | Value                                  |
-| ------------------ | -------------------------------------- |
-| Status             | applied / failed / incomplete          |
-| Applied            | N                                      |
-| Failed             | N                                      |
-| Skipped            | N                                      |
-| Permission-blocked | N                                      |
-| Notes              | reason for any failed or skipped items |
+| Field                            | Value                                  |
+| -------------------------------- | -------------------------------------- |
+| Status                           | applied / failed / incomplete          |
+| Applied                          | N                                      |
+| Failed                           | N                                      |
+| Skipped                          | N                                      |
+| Permission-blocked               | N                                      |
+| Retry attempts (bound-exhausted) | N (true / false)                       |
+| Notes                            | reason for any failed or skipped items |
 ```
+
+`retry-attempts` / `retry-bound-exhausted` mirror
+`audit-pr-cleanup.mjs --apply`'s own `retryAttempts` /
+`retryBoundExhausted` JSON fields (its internal whole-pass retry, see
+issue 2011): a `true` bound-exhausted value with an otherwise
+`applied`/`clean` status is informational, not a cleanup failure — a
+fresh rescan still found candidates after the bound, not that
+anything went wrong.
 
 ### Cleanup-failure comment
 
