@@ -3120,7 +3120,7 @@ function checkGithubReadiness(
 ) {
   const repoView = runCommand(
     'gh',
-    ['repo', 'view', '--json', 'owner,name,defaultBranchRef'],
+    ['repo', 'view', '--json', 'owner,name,defaultBranchRef,url'],
     root,
   );
   if (!repoView.ok) {
@@ -3137,6 +3137,7 @@ function checkGithubReadiness(
     owner?: { login?: string };
     name?: string;
     defaultBranchRef?: { name?: string };
+    url?: string;
   };
   try {
     parsed = JSON.parse(repoView.stdout);
@@ -3154,6 +3155,7 @@ function checkGithubReadiness(
   const owner = parsed.owner?.login;
   const repo = parsed.name;
   const branch = parsed.defaultBranchRef?.name;
+  const ghHostname = resolveTargetGhHostname(parsed.url);
   if (!owner || !repo || !branch) {
     const message =
       'github checks skipped: repository owner/name/default branch is incomplete';
@@ -3175,14 +3177,14 @@ function checkGithubReadiness(
       true,
       trustEmptyProtectionReads,
       [],
-      (path, paginate) => fetchGhApiJsonAt(root, path, paginate),
+      (path, paginate) => fetchGhApiJsonAt(root, ghHostname, path, paginate),
     );
     branchProtectionRead = fetchGovernanceJson<BranchProtectionReadPayload>(
       `repos/${owner}/${repo}/branches/${encodedBranch}/protection`,
       false,
       trustEmptyProtectionReads,
       {},
-      (path, paginate) => fetchGhApiJsonAt(root, path, paginate),
+      (path, paginate) => fetchGhApiJsonAt(root, ghHostname, path, paginate),
     );
   } catch {
     const message = `branch protection not readable for ${owner}/${repo}:${branch}`;
@@ -3366,33 +3368,78 @@ export function readTrustEmptyProtectionReads(root: string): boolean {
 }
 
 /**
+ * Derive the `--hostname` value {@link fetchGhApiJsonAt} should pass to
+ * `gh api` from the target repository's own `gh repo view --json url`
+ * result (already fetched once by `checkGithubReadiness`, so this adds
+ * no extra `gh` call). `gh api` resolves its target host from `GH_HOST`
+ * / `--hostname` / the CLI's single authenticated host, defaulting to
+ * `github.com` -- unlike a higher-level subcommand such as `gh repo
+ * view`, it does **not** infer the host from the checked-out
+ * repository's Git remote at all, so routing the request through `cwd:
+ * root` (as every other `gh` call in this function already does) has no
+ * effect on which host `gh api` targets (`gh-exec.mts`'s
+ * `resolveGhApiHostname()` documents the identical `gh api` contract for
+ * its own GHES fix, `#1962`; idd-skill#2010 review, Codex round 2).
+ * `resolveGhApiHostname()` itself is env-based (`GH_HOST`/
+ * `GITHUB_SERVER_URL`) and deliberately does not derive a host from a
+ * git remote, by its own design -- the wrong signal here, since
+ * `idd-doctor --repo-root <path>` may target a repository on a
+ * different host than the calling environment's own default. Deriving
+ * from the target repository's own resolved `url` instead is the
+ * correct, `--repo-root`-specific signal. Returns `undefined` for the
+ * common `github.com` case (and any unparseable URL), so the emitted
+ * argv matches `resolveGhApiHostname()`'s own "no override on
+ * github.com" convention.
+ */
+export function resolveTargetGhHostname(
+  url: string | undefined,
+): string | undefined {
+  if (!url) {
+    return undefined;
+  }
+  let host: string;
+  try {
+    host = new URL(url).hostname.toLowerCase();
+  } catch {
+    return undefined;
+  }
+  return host && host !== 'github.com' ? host : undefined;
+}
+
+/**
  * Root-scoped `gh api` fetch for {@link fetchGovernanceJson}'s injectable
  * `fetchJson` parameter. That function's own default fetcher
- * (`ghApiJson` in `pre-merge-readiness.mts`, via `runGh`/`ghText`) always
- * runs `gh` from `process.cwd()` with no `cwd` override -- correct for
- * that file's own CLI, which always operates on the repository it is
- * invoked from, but `idd-doctor.mts` supports `--repo-root <path>`
- * targeting a repository (potentially on a different GitHub host) other
- * than the caller's own working directory, and `gh api` infers its
- * target host from the current directory absent an explicit
- * `--hostname`. Route through this file's own `runCommand()` instead,
- * which already threads `root` as `cwd` for every other `gh` call in
- * this function (idd-skill#2010 review), so `gh`'s host inference
- * resolves against the target repository. Mirrors `ghApiJson`'s own
- * `--paginate --jq '.[]'` NDJSON handling via the shared
- * `parsePaginatedGhNdjson()`, and shapes a failure's thrown error the
- * same way a real `execFileSync` failure would (`status`/`stderr`), so
- * `fetchGovernanceJson()`'s `deriveGhHttpStatus()`-based 404 detection
- * still works unchanged.
+ * (`ghApiJson` in `pre-merge-readiness.mts`, via `runGh`/`ghText`) never
+ * passes `--hostname` at all, so it always targets `gh`'s own default
+ * host resolution -- correct for that file's own CLI, which always
+ * operates on the repository it is invoked from (typically the same
+ * host the calling environment already authenticates against), but
+ * wrong for `idd-doctor.mts`'s `--repo-root <path>`, which can target a
+ * different repository (and GitHub host) than the caller's own working
+ * directory or environment. Pass the `hostname` {@link
+ * resolveTargetGhHostname} resolved from the target repository's own
+ * `gh repo view` result, and route through this file's own
+ * `runCommand()` (already `cwd`-scoped to `root` for every other `gh`
+ * call in this function -- harmless for `gh api`'s own host resolution,
+ * but keeps this call consistent with its siblings). Mirrors
+ * `ghApiJson`'s own `--paginate --jq '.[]'` NDJSON handling via the
+ * shared `parsePaginatedGhNdjson()`, and shapes a failure's thrown error
+ * the same way a real `execFileSync` failure would (`status`/`stderr`),
+ * so `fetchGovernanceJson()`'s `deriveGhHttpStatus()`-based 404
+ * detection still works unchanged.
  */
 function fetchGhApiJsonAt(
   root: string,
+  hostname: string | undefined,
   path: string,
   paginate: boolean,
 ): unknown {
-  const argv = paginate
-    ? ['api', path, '--paginate', '--jq', '.[]']
-    : ['api', path];
+  const argv = [
+    'api',
+    path,
+    ...(hostname ? ['--hostname', hostname] : []),
+    ...(paginate ? ['--paginate', '--jq', '.[]'] : []),
+  ];
   const result = runCommand('gh', argv, root);
   if (!result.ok) {
     throw Object.assign(new Error('gh api failed'), {

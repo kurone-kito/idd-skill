@@ -56,6 +56,7 @@ import {
   readWorktreeGuardEnabled,
   resolveConfiguredHelperRuntimePackageSpec,
   resolveConfiguredHelperRuntimeProfile,
+  resolveTargetGhHostname,
   scanFileForPlaceholders,
   stripMarkdownNonText,
   worktreeGuardWiredAt,
@@ -3429,4 +3430,25 @@ test('readTrustEmptyProtectionReads is true only when ciGate.trustEmptyProtectio
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+// idd-skill#2010 review (Codex round 2): `gh api` never infers its target
+// host from the checked-out repository's Git remote (unlike a higher-level
+// subcommand such as `gh repo view`), so idd-doctor.mts's governance reads
+// must derive and pass an explicit `--hostname` for a GHES-hosted target
+// repository instead of relying on `cwd`.
+test('resolveTargetGhHostname returns undefined for github.com and an absent/unparseable URL', () => {
+  assert.equal(
+    resolveTargetGhHostname('https://github.com/kurone-kito/idd-skill'),
+    undefined,
+  );
+  assert.equal(resolveTargetGhHostname(undefined), undefined);
+  assert.equal(resolveTargetGhHostname('not a url'), undefined);
+});
+
+test('resolveTargetGhHostname resolves a GHES hostname, lowercased', () => {
+  assert.equal(
+    resolveTargetGhHostname('https://GHE.example.com/owner/repo'),
+    'ghe.example.com',
+  );
 });
