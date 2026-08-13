@@ -174,6 +174,12 @@ export interface CleanupAuditReport extends CleanupReport {
    * `status`, computed by the shared, untouched `computeReportSummary`.
    */
   retryBoundExhausted?: boolean;
+  /**
+   * Set when a confirming rescan itself failed (#2011) — the report still
+   * carries every candidate this run genuinely applied before the
+   * failure, rather than losing that record to an uncaught exit.
+   */
+  rescanError?: string;
 }
 
 /** Active claim resolved from the trusted claim-marker stream. */
@@ -313,7 +319,10 @@ async function main(): Promise<void> {
       report,
       (pass) =>
         applyCandidatePass(owner, repo, prNumber, pass, args, claimContext),
-      () => buildReport(owner, repo, prNumber),
+      // throwOnError so a transient GraphQL/gh failure on this confirming
+      // rescan is catchable by runApplyWithRetry (which preserves the
+      // already-applied work) instead of exiting the process outright.
+      () => buildReport(owner, repo, prNumber, { throwOnError: true }),
     );
     finalReport.retryAttempts = attempts;
     if (boundExhausted) {
@@ -321,7 +330,7 @@ async function main(): Promise<void> {
     }
 
     computeReportSummary(finalReport);
-    if (finalReport.failed.length > 0) {
+    if (finalReport.failed.length > 0 || finalReport.rescanError) {
       writeReport(finalReport, args.format);
       process.exit(1);
     }
@@ -475,13 +484,41 @@ export async function runApplyWithRetry(
     // on this pass's minimizeComment calls a moment to settle, instead of
     // immediately re-querying the same stale state.
     await backoff(attempt);
+
+    let freshReport: CleanupAuditReport;
+    try {
+      freshReport = await rescan();
+    } catch (error) {
+      // Preserve the already-mutated report (including the accumulated
+      // `applied` list) instead of losing it to an uncaught rescan
+      // failure — `rescan` is expected to be called with a
+      // throw-on-error option so a transient GraphQL/gh hiccup lands
+      // here rather than exiting the process outright.
+      report.rescanError = (error as Error).message;
+      return { report, attempts: attempt, boundExhausted: false };
+    }
+    freshReport.mode = 'apply';
+    // Exclude subjects this run already applied from the fresh rescan's
+    // `candidates` / `skipped`: `buildReport` classifies a just-minimized
+    // comment as an already-minimized skip, so grafting `applied` onto an
+    // unfiltered rescan would place the same subject in both arrays
+    // (inflating skipped counts) and, left in `candidates`, would get
+    // re-mutated by the next pass (wasting the retry bound on rediscovering
+    // work already done instead of finding genuinely new candidates).
+    const appliedSubjectIds = new Set(
+      report.applied.map((row) => row.subjectId),
+    );
+    freshReport.candidates = freshReport.candidates.filter(
+      (row) => !appliedSubjectIds.has(row.subjectId),
+    );
+    freshReport.skipped = freshReport.skipped.filter(
+      (row) => !appliedSubjectIds.has(row.subjectId),
+    );
     // Carry the accumulated `applied` list onto the fresh rescan so the
     // returned report's `candidates` / `skipped` reflect confirmed
     // post-apply state (e.g. cascade-minimized items now show up as
     // already-minimized skips) rather than the stale pre-apply snapshot
     // that fed this pass.
-    const freshReport = await rescan();
-    freshReport.mode = 'apply';
     freshReport.applied = report.applied;
     if (freshReport.candidates.length === 0) {
       return { report: freshReport, attempts: attempt, boundExhausted: false };
@@ -1652,8 +1689,11 @@ function writeReport(report: CleanupAuditReport, format: string): void {
       report.retryAttempts === undefined
         ? ''
         : `, retryAttempts=${report.retryAttempts}, retryBoundExhausted=${Boolean(report.retryBoundExhausted)}`;
+    const rescanErrorSuffix = report.rescanError
+      ? `, rescanError=${report.rescanError}`
+      : '';
     console.log(
-      `summary: status=${report.status}, candidates=${report.summary.candidate}, applied=${report.summary.applied}, failed=${report.summary.failed}, skipped=${report.summary.skipped}${retrySuffix}`,
+      `summary: status=${report.status}, candidates=${report.summary.candidate}, applied=${report.summary.applied}, failed=${report.summary.failed}, skipped=${report.summary.skipped}${retrySuffix}${rescanErrorSuffix}`,
     );
     console.log('');
   }

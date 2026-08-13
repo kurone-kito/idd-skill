@@ -230,3 +230,64 @@ test('runApplyWithRetry backs off before each rescan, once per retried attempt',
   // tagged with its own attempt number.
   assert.deepEqual(backoffAttempts, [1, 2]);
 });
+
+test("runApplyWithRetry excludes already-applied subjects from the fresh rescan's candidates and skipped lists", async () => {
+  const { runApplyWithRetry } = await import(
+    '../src/scripts/audit-pr-cleanup.mts'
+  );
+  const initial = createAuditReport({
+    candidates: [createRow('c1'), createRow('c2')],
+  });
+
+  const result = await runApplyWithRetry(
+    initial,
+    async (report) => {
+      for (const candidate of report.candidates) {
+        report.applied.push({ ...candidate, isMinimized: true });
+      }
+    },
+    async () =>
+      createAuditReport({
+        mode: 'dry-run',
+        // c1 still shows as a stale candidate (its own lag hasn't resolved
+        // yet); c2 shows as an already-minimized skip (buildReport's fresh
+        // scan already reflects that mutation). Both were genuinely applied
+        // this run, so neither should survive filtering.
+        candidates: [createRow('c1')],
+        skipped: [{ ...createRow('c2'), isMinimized: true }],
+      }),
+    undefined,
+    noBackoff,
+  );
+
+  assert.equal(result.report.candidates.length, 0);
+  assert.equal(result.report.skipped.length, 0);
+  assert.deepEqual(
+    result.report.applied.map((row) => row.subjectId),
+    ['c1', 'c2'],
+  );
+  assert.equal(result.boundExhausted, false);
+});
+
+test('runApplyWithRetry preserves already-applied work when the confirming rescan fails', async () => {
+  const { runApplyWithRetry } = await import(
+    '../src/scripts/audit-pr-cleanup.mts'
+  );
+  const initial = createAuditReport({ candidates: [createRow('c1')] });
+
+  const result = await runApplyWithRetry(
+    initial,
+    async (report) => {
+      report.applied.push({ ...createRow('c1'), isMinimized: true });
+    },
+    async () => {
+      throw new Error('GraphQL: transient failure');
+    },
+    undefined,
+    noBackoff,
+  );
+
+  assert.equal(result.report.applied.length, 1);
+  assert.equal(result.report.rescanError, 'GraphQL: transient failure');
+  assert.equal(result.boundExhausted, false);
+});
