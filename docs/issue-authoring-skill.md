@@ -815,9 +815,10 @@ availability, or ordering constraint.
   `suitability-triage.mts`, which matches either a single line
   combining a subjective-subject word (`maintainer`, `stakeholder`,
   `human`, `opinion`, `judgment`/`judgement`, `ux`, or `feel` — not
-  only authority nouns) with a gate word (`approval`, `sign-off`,
-  `decision`, or `preference`), or a gate word followed within 80
-  characters — including across lines — by a subjective-subject word.
+  only authority nouns) with a gate word (`approval`, `sign-off`/
+  `signoff`, `decision`, or `preference`), or a gate word followed
+  within 80 characters — including across lines — by a
+  subjective-subject word.
   This still fires even though the structural dependency filter
   already correctly treats the closed reference as unblocking
 
