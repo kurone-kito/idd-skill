@@ -832,15 +832,8 @@
       ]
     },
     {
-      "id": "root-cspell-config",
-      "_comment": "Same direction as every other pair here (idd-template/ is the canonical source; edit it first, then `sync-docs.mjs --apply` regenerates the target) -- idd-skill#1860's twist is only that the generated target is this repo's own root config, which also governs this repo's own CI, not a docs/ mirror. The #1765 uncommitted-local-edit guard protects a maintainer who fixes the root file directly without touching the template first.",
-      "source": "idd-template/.cspell.config.yml",
-      "target": ".cspell.config.yml",
-      "mode": "exact"
-    },
-    {
       "id": "root-markdownlint-config",
-      "_comment": "Same direction/rationale as root-cspell-config immediately above.",
+      "_comment": "idd-template/ is the canonical source; edit it first, then `sync-docs.mjs --apply` regenerates the target -- idd-skill#1860's twist is only that the generated target is this repo's own root config, which also governs this repo's own CI, not a docs/ mirror. The #1765 uncommitted-local-edit guard protects a maintainer who fixes the root file directly without touching the template first. Unlike `.cspell.config.yml` (idd-skill#1974: root adopted an import-based `@kurone-kito/cspell-config` base, which would break ONBOARDING.md's self-contained-template guarantee if mirrored into idd-template/, so that pair was removed and the root file now diverges from its template independently), this pair still holds because both sides stay hand-declared with no import dependency.",
       "source": "idd-template/.markdownlint.yml",
       "target": ".markdownlint.yml",
       "mode": "exact"

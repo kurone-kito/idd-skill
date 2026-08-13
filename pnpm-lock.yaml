@@ -43,6 +43,9 @@ importers:
       '@kurone-kito/biome-config':
         specifier: 0.22.0
         version: 0.22.0(@biomejs/biome@2.5.6)
+      '@kurone-kito/cspell-config':
+        specifier: 0.22.0
+        version: 0.22.0(cspell@10.0.1)
       '@types/node':
         specifier: 26.1.2
         version: 26.1.2
@@ -543,6 +546,15 @@ packages:
       '@biomejs/biome': '>=2.3.x'
     peerDependenciesMeta:
       '@biomejs/biome':
+        optional: true
+
+  '@kurone-kito/cspell-config@0.22.0':
+    resolution: {integrity: sha512-tA1Q/uw2aEd1oabQ5/mjCmHt/4BYcgFdt9nXbjaXRxiwj5MOhneR4MpuDx82qHVym7fkPovmiYR722anX9xzEQ==}
+    engines: {node: ^20.11 || ^22 || >=24}
+    peerDependencies:
+      cspell: '*'
+    peerDependenciesMeta:
+      cspell:
         optional: true
 
   '@nodelib/fs.scandir@2.1.5':
@@ -1773,6 +1785,10 @@ snapshots:
   '@kurone-kito/biome-config@0.22.0(@biomejs/biome@2.5.6)':
     optionalDependencies:
       '@biomejs/biome': 2.5.6
+
+  '@kurone-kito/cspell-config@0.22.0(cspell@10.0.1)':
+    optionalDependencies:
+      cspell: 10.0.1
 
   '@nodelib/fs.scandir@2.1.5':
     dependencies:
