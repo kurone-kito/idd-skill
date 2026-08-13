@@ -1,19 +1,42 @@
-import:
-  - '@kurone-kito/cspell-config'
+allowCompoundWords: true
 cache:
   cacheFormat: universal
   cacheLocation: node_modules/.cache/cspell/.cspell.cache
   cacheStrategy: metadata
   useCache: true
+dictionaries:
+  - cpp
+  - en_US
+  - en-gb
+  - fullstack
+  - git
+  - markdown
+  - misc
+  - shellscript
+  - softwareTerms
+enableGlobDot: true
+features:
+  weighted-suggestions: true
+globRoot: ${cwd}
+ignorePaths:
+  - .*ignore
+  - .git
+  - .github/CODE_OF_CONDUCT.*
+  - .vscode/extensions.json
+  - pnpm-lock.yaml
 language: en,ja
+useGitignore: true
 version: '0.2'
 words:
   - desync
   - desynced
   - idd
   - isort
+  - kito
   - Kiro
+  - kuron
   - kurone
+  - kuroné
   - ONNX
   - pylint
   - pytest
