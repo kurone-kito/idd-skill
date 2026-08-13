@@ -429,14 +429,18 @@ availability, or ordering constraint.
   equivalent implementation, or later reopened — revisit the blocked
   issue's own body and remove the now-stale dependency line and any
   explanatory prose describing the wait, rather than leaving it in
-  place as inert history. Retain or restore the dependency edge
-  instead when the underlying constraint is not actually met: removing
-  it prematurely would let `discover-readiness-check` treat the
-  blocked issue as claimable despite the prerequisite still being
-  unresolved. (Observed 2026-08-13 on issue #1994's `Blocked by #1985`
-  note, after #1985 closed; reported in #2002.) This cleanup is more
-  than tidiness: stale wait-explaining prose can trip
-  `checkVerifiability`'s subjective-approval heuristic in
+  place as inert history, but keep any prose identifying the delivered
+  artifact or interface this issue's own scope depends on. When the
+  underlying constraint is not actually met, reopen the prerequisite
+  issue or repoint the dependency line at an open replacement issue
+  instead of leaving a stale edge in place:
+  `discover-readiness-check` blocks only on an `OPEN` referenced
+  issue, regardless of why it closed, so retaining the edge alone does
+  not keep the dependent issue blocked. (Observed 2026-08-13 on issue
+  #1994's `Blocked by #1985` note, after #1985 closed; reported in
+  #2002.) This cleanup is more than tidiness: stale wait-explaining
+  prose can trip `checkVerifiability`'s subjective-approval heuristic
+  in
   `suitability-triage.mts`, which matches either a single line
   combining a subjective-subject word (`maintainer`, `stakeholder`,
   `human`, `opinion`, `judgment`/`judgement`, `ux`, or `feel` — not
