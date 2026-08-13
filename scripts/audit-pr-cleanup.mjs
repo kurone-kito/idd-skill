@@ -106,7 +106,77 @@ async function main() {
   const report = await buildReport(owner, repo, prNumber);
   if (args.apply) {
     report.mode = 'apply';
-    for (const candidate of report.candidates) {
+    const {
+      report: finalReport,
+      attempts,
+      boundExhausted,
+    } = await runApplyWithRetry(
+      report,
+      (pass) =>
+        applyCandidatePass(owner, repo, prNumber, pass, args, claimContext),
+      () => buildReport(owner, repo, prNumber),
+    );
+    finalReport.retryAttempts = attempts;
+    if (boundExhausted) {
+      finalReport.retryBoundExhausted = true;
+    }
+    computeReportSummary(finalReport);
+    if (finalReport.failed.length > 0) {
+      writeReport(finalReport, args.format);
+      process.exit(1);
+    }
+    computeReportSummary(finalReport);
+    writeReport(finalReport, args.format);
+    return;
+  }
+  computeReportSummary(report);
+  writeReport(report, args.format);
+}
+/**
+ * Runs one whole apply pass over `report.candidates`, mutating
+ * `report.applied` / `report.failed` in place (#2011, extracted verbatim
+ * from the previous single-pass `main()` body). Re-validates the active
+ * claim before each candidate, and again after `revalidateCandidate`'s
+ * fresh per-candidate re-fetch, matching the pre-existing behavior.
+ */
+async function applyCandidatePass(
+  owner,
+  repo,
+  prNumber,
+  report,
+  args,
+  claimContext,
+) {
+  for (const candidate of report.candidates) {
+    if (!args.skipClaimCheck) {
+      try {
+        assertActiveClaim(
+          owner,
+          repo,
+          args.claimIssue,
+          args.agentId,
+          args.claimId,
+          claimContext,
+        );
+      } catch (error) {
+        report.failed.push({
+          ...candidate,
+          error: error.message,
+        });
+        break;
+      }
+    }
+    try {
+      const freshCandidate = await revalidateCandidate(
+        owner,
+        repo,
+        prNumber,
+        candidate,
+        report,
+      );
+      if (!freshCandidate) {
+        continue;
+      }
       if (!args.skipClaimCheck) {
         try {
           assertActiveClaim(
@@ -119,65 +189,79 @@ async function main() {
           );
         } catch (error) {
           report.failed.push({
-            ...candidate,
+            ...freshCandidate,
             error: error.message,
           });
           break;
         }
       }
-      try {
-        const freshCandidate = await revalidateCandidate(
-          owner,
-          repo,
-          prNumber,
-          candidate,
-          report,
-        );
-        if (!freshCandidate) {
-          continue;
-        }
-        if (!args.skipClaimCheck) {
-          try {
-            assertActiveClaim(
-              owner,
-              repo,
-              args.claimIssue,
-              args.agentId,
-              args.claimId,
-              claimContext,
-            );
-          } catch (error) {
-            report.failed.push({
-              ...freshCandidate,
-              error: error.message,
-            });
-            break;
-          }
-        }
-        const minimized = minimizeComment(
-          freshCandidate.subjectId,
-          freshCandidate.classifier,
-        );
-        report.applied.push({
-          ...freshCandidate,
-          isMinimized: minimized.isMinimized,
-          minimizedReason: minimized.minimizedReason,
-        });
-      } catch (error) {
-        report.failed.push({
-          ...candidate,
-          error: error.message,
-        });
-      }
-    }
-    computeReportSummary(report);
-    if (report.failed.length > 0) {
-      writeReport(report, args.format);
-      process.exit(1);
+      const minimized = minimizeComment(
+        freshCandidate.subjectId,
+        freshCandidate.classifier,
+      );
+      report.applied.push({
+        ...freshCandidate,
+        isMinimized: minimized.isMinimized,
+        minimizedReason: minimized.minimizedReason,
+      });
+    } catch (error) {
+      report.failed.push({
+        ...candidate,
+        error: error.message,
+      });
     }
   }
-  computeReportSummary(report);
-  writeReport(report, args.format);
+}
+/** Default bound on whole-pass apply retries (#2011). */
+const DEFAULT_APPLY_RETRY_MAX_ATTEMPTS = 3;
+/**
+ * Retries a whole apply-and-rescan pass, bounded by `maxAttempts`, so a
+ * candidate that only becomes eligible after the previous pass finished
+ * (e.g. GraphQL read-after-write lag on `minimizeComment`, #2011) still
+ * converges within one `--apply` invocation instead of requiring a second,
+ * manual call.
+ *
+ * `applyPass` and `rescan` are injected rather than calling `buildReport`
+ * / `gh` directly, so this orchestration is unit-testable with fakes.
+ * `applyPass` must mutate its report argument's `applied` / `failed`
+ * arrays in place (matching {@link applyCandidatePass}); `rescan` must
+ * return a fresh dry-run-equivalent report reflecting current state.
+ *
+ * Stops immediately, without any further rescan, the first time a pass
+ * leaves `failed` non-empty (matches the pre-existing fail-fast
+ * behavior). Otherwise rescans after every pass: zero candidates means
+ * converged; a non-empty rescan below the attempt bound starts another
+ * pass, carrying the accumulated `applied` list onto the fresh report;
+ * a non-empty rescan at the attempt bound is reported as
+ * `boundExhausted` rather than retried further.
+ */
+export async function runApplyWithRetry(
+  initialReport,
+  applyPass,
+  rescan,
+  maxAttempts = DEFAULT_APPLY_RETRY_MAX_ATTEMPTS,
+) {
+  let report = initialReport;
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    await applyPass(report);
+    if (report.failed.length > 0) {
+      return { report, attempts: attempt, boundExhausted: false };
+    }
+    const freshReport = await rescan();
+    if (freshReport.candidates.length === 0) {
+      return { report, attempts: attempt, boundExhausted: false };
+    }
+    if (attempt === maxAttempts) {
+      return { report, attempts: attempt, boundExhausted: true };
+    }
+    freshReport.mode = 'apply';
+    freshReport.applied = report.applied;
+    report = freshReport;
+  }
+  // Unreachable: maxAttempts <= 0 falls through the loop without ever
+  // attempting a pass. Guarded the same way the CLI's own arg parsing
+  // never produces a non-positive maxAttempts today.
+  return { report, attempts: 0, boundExhausted: true };
 }
 // Build an IDD-scoped disposition-author predicate from the resolved
 // trusted-marker actors (the accounts the IDD agent posts dispositions under).
