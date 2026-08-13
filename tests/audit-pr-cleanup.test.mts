@@ -86,6 +86,9 @@ test('runApplyWithRetry converges on the first pass when the rescan finds nothin
   assert.equal(result.attempts, 1);
   assert.equal(result.boundExhausted, false);
   assert.equal(result.report.applied.length, 1);
+  // The returned report reflects the confirming rescan (0 remaining), not
+  // the stale pre-apply candidate snapshot that fed the pass.
+  assert.equal(result.report.candidates.length, 0);
 });
 
 test('runApplyWithRetry re-applies a candidate that only becomes eligible after the first pass', async () => {
@@ -121,6 +124,7 @@ test('runApplyWithRetry re-applies a candidate that only becomes eligible after 
     result.report.applied.map((row) => row.subjectId),
     ['c1', 'c2'],
   );
+  assert.equal(result.report.candidates.length, 0);
 });
 
 test('runApplyWithRetry reports boundExhausted when candidates keep reappearing through the attempt bound', async () => {
@@ -152,6 +156,13 @@ test('runApplyWithRetry reports boundExhausted when candidates keep reappearing 
   assert.equal(result.attempts, 3);
   assert.equal(result.boundExhausted, true);
   assert.equal(result.report.applied.length, 3);
+  // The final rescan's still-outstanding candidate is preserved so the
+  // caller can see what remained, not the pre-apply snapshot from the
+  // last attempt.
+  assert.deepEqual(
+    result.report.candidates.map((row) => row.subjectId),
+    ['c4'],
+  );
 });
 
 test('runApplyWithRetry stops immediately, without rescanning, once a pass leaves a failed candidate', async () => {

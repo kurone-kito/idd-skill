@@ -247,15 +247,20 @@ export async function runApplyWithRetry(
     if (report.failed.length > 0) {
       return { report, attempts: attempt, boundExhausted: false };
     }
+    // Carry the accumulated `applied` list onto the fresh rescan so the
+    // returned report's `candidates` / `skipped` reflect confirmed
+    // post-apply state (e.g. cascade-minimized items now show up as
+    // already-minimized skips) rather than the stale pre-apply snapshot
+    // that fed this pass.
     const freshReport = await rescan();
-    if (freshReport.candidates.length === 0) {
-      return { report, attempts: attempt, boundExhausted: false };
-    }
-    if (attempt === maxAttempts) {
-      return { report, attempts: attempt, boundExhausted: true };
-    }
     freshReport.mode = 'apply';
     freshReport.applied = report.applied;
+    if (freshReport.candidates.length === 0) {
+      return { report: freshReport, attempts: attempt, boundExhausted: false };
+    }
+    if (attempt === maxAttempts) {
+      return { report: freshReport, attempts: attempt, boundExhausted: true };
+    }
     report = freshReport;
   }
   // Unreachable: maxAttempts <= 0 falls through the loop without ever
