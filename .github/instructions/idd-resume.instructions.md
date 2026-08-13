@@ -90,21 +90,16 @@ automation can apply it unattended and separate sessions can share an
 `{agent-id}`. This session must have received the awaited operator
 input. Mere silence or staleness does not qualify either.
 
-Steps 1-2 below are pre-claim actions, posted before this session holds
-any claim on the issue — like a fresh A5 claim's own pre-claim state,
-they precede the shared claim revalidation gate's own-claim-id
-precondition, which attaches starting with step 4. The release step
-still requires the durable, auditable trusted-marker-actor comment
-that Claim-state parsing rule 5 in `idd-claim.instructions.md` already
-requires. The operator's chat or
-conversational input is never itself the release: it is recorded as
-the separate normal comment in step 1 below, and the trusted-marker-actor
-`unclaimed-by` in step 2 carries only its canonical marker body (same
-nothing-appended rule as other operational markers) and performs the
-release on its own. This path is unrelated to the TTY-gated
-forced-handoff safeguard above: it opts into no `forcedHandoff` policy
-and requires no `idd-force-handoff` `y/N` confirmation, and it does
-not loosen that safeguard.
+Steps 1-2 are pre-claim actions, like a fresh A5 claim's own pre-claim
+state; the shared claim revalidation gate's own-claim-id precondition
+attaches from step 4, not before. The operator's chat input is never
+itself the release: it is recorded as the separate normal comment in
+step 1, and the trusted-marker-actor `unclaimed-by` in step 2 (rule 5)
+alone carries the canonical marker body (same nothing-appended rule as
+other operational markers) and performs the release. This path is
+unrelated to the TTY-gated forced-handoff safeguard above: it opts
+into no `forcedHandoff` policy and requires no `idd-force-handoff`
+`y/N` confirmation, and it does not loosen that safeguard.
 
 Sequence:
 
@@ -114,7 +109,10 @@ Sequence:
    above still hold — stop and restart if either changed since Step 0 —
    then post a trusted-marker-actor-authored `unclaimed-by` matching the
    held claim's exact `{agent-id}` and `{claim-id}` (Claim-state
-   parsing rule 5, `idd-claim.instructions.md`).
+   parsing rule 5, `idd-claim.instructions.md`). GitHub comments have no
+   compare-and-swap, so this narrows, not closes, the recheck-to-release
+   window; an accepted, bounded risk, since a resumed claimant's own
+   next revalidation check surfaces the loss rather than staying silent.
 3. Re-read the issue and confirm it now parses as unclaimed — the
    release registered — before continuing; if not, stop and restart.
 4. Post a normal fresh A5 claim with `supersedes: none`, then continue
