@@ -79,17 +79,16 @@ Use this path only when the non-owned active claim carries a
 claimant-authored comment, postdating that claim's latest valid
 `claimed-by` `created_at`, explicitly recording a deliberate pause and
 the awaited input, with no later trusted claimant activity (heartbeat,
-branch, or PR movement) postdating that comment — later activity means
-work resumed, so fall back to the stale-takeover procedure in
-`idd-resume-stall.instructions.md` instead, per the shared fail-closed
-default. A configured needs-decision label
-(`labels.needsDecisionLabelName`, default `status:needs-decision`) can
-corroborate but never substitute, since automation can apply it
-unattended and separate sessions can share an `{agent-id}` — the
-postdating requirement is what makes "claimant-authored" verifiable at
-all. This session must have now received the operator-supplied input
-that comment was awaiting. Mere silence or staleness does not qualify
-either.
+branch/PR movement, or claimant-authored comment/review activity --
+this path's own step-1 input comment excepted) postdating that
+comment — later activity means work resumed, so fall back to the
+stale-takeover procedure in `idd-resume-stall.instructions.md`
+instead, per the shared fail-closed default. A configured
+needs-decision label (`labels.needsDecisionLabelName`, default
+`status:needs-decision`) can corroborate but never substitute, since
+automation can apply it unattended and separate sessions can share an
+`{agent-id}`. This session must have received the awaited operator
+input. Mere silence or staleness does not qualify either.
 
 Steps 1-2 below are pre-claim actions, posted before this session holds
 any claim on the issue — like a fresh A5 claim's own pre-claim state,
