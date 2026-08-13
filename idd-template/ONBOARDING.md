@@ -1524,8 +1524,8 @@ After completing the steps above, confirm each item:
       customizations are complete.
 - [ ] The selected CI wait policy values, merge policy, credential
       scope, claim timing values, issue-author approval gate decision,
-      maintainer approval actor policy, and helper runtime profile are
-      explicitly recorded.
+      maintainer approval actor policy, helper runtime profile, and
+      bootstrap execution mode are explicitly recorded.
 - [ ] If the operator opted into issue authoring, the companion skill
       files are present under the native destination recorded in the policy.
 - [ ] No `{{...}}` placeholders remain, the `Project commands` table is
