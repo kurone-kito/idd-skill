@@ -368,7 +368,7 @@ Error: unknown argument: --bogus-flag
     at file:///repo/scripts/branch-name.mjs:52:3
     at ModuleJob.run (node:internal/modules/esm/module_job:343:25)
 
-Node.js v22.22.2
+Node.js v22.23.2
 `;
 
 test('extractShapedCliParseErrorMessage: extracts "unknown argument: " from real Node uncaught-exception stderr text', () => {
@@ -383,7 +383,7 @@ test('extractShapedCliParseErrorMessage: extracts "missing value for argument: "
     'Error: missing value for argument: --pr',
     '    at toRepoShapedError (file:///repo/scripts/cli-args.mjs:214:14)',
     '',
-    'Node.js v22.22.2',
+    'Node.js v22.23.2',
   ].join('\n');
   assert.equal(
     extractShapedCliParseErrorMessage(stderrText),
@@ -396,7 +396,7 @@ test('extractShapedCliParseErrorMessage: extracts "unexpected value for argument
     'Error: unexpected value for argument: --assert',
     '    at toRepoShapedError (file:///repo/scripts/cli-args.mjs:214:14)',
     '',
-    'Node.js v22.22.2',
+    'Node.js v22.23.2',
   ].join('\n');
   assert.equal(
     extractShapedCliParseErrorMessage(stderrText),
@@ -409,7 +409,7 @@ test('extractShapedCliParseErrorMessage: returns null for an unrelated error cla
     'Error: --number is required and must be a positive integer',
     '    at runCli (file:///repo/scripts/branch-name.mjs:111:11)',
     '',
-    'Node.js v22.22.2',
+    'Node.js v22.23.2',
   ].join('\n');
   assert.equal(extractShapedCliParseErrorMessage(stderrText), null);
 });
@@ -431,7 +431,7 @@ test('extractShapedCliParseErrorMessage: a 4th, unrecognized shaped-looking pref
     'Error: invalid value for argument: --pr',
     '    at parseCanonicalIntegerOrThrow (file:///repo/scripts/cli-args.mjs:1:1)',
     '',
-    'Node.js v22.22.2',
+    'Node.js v22.23.2',
   ].join('\n');
   assert.equal(extractShapedCliParseErrorMessage(stderrText), null);
 });
@@ -445,7 +445,7 @@ test('extractShapedCliParseErrorMessage: scans every "Error: " line, not just th
     'Error: unknown argument: --typo',
     '    at toRepoShapedError (file:///repo/scripts/cli-args.mjs:214:14)',
     '',
-    'Node.js v22.22.2',
+    'Node.js v22.23.2',
   ].join('\n');
   assert.equal(
     extractShapedCliParseErrorMessage(stderrText),
@@ -466,7 +466,7 @@ test('extractShapedCliParseErrorMessage: preserves an embedded newline in the of
     'bar',
     '    at toRepoShapedError (file:///repo/scripts/cli-args.mjs:229:14)',
     '',
-    'Node.js v22.22.2',
+    'Node.js v22.23.2',
   ].join('\n');
   assert.equal(
     extractShapedCliParseErrorMessage(stderrText),
@@ -481,7 +481,7 @@ test('extractShapedCliParseErrorMessage: an embedded blank line inside the messa
     'bar',
     '    at toRepoShapedError (file:///repo/scripts/cli-args.mjs:229:14)',
     '',
-    'Node.js v22.22.2',
+    'Node.js v22.23.2',
   ].join('\n');
   assert.equal(
     extractShapedCliParseErrorMessage(stderrText),
@@ -501,7 +501,7 @@ test('extractShapedCliParseErrorMessage: recognizes and cleans a CRLF-terminated
     'Error: unknown argument: --x\r',
     '    at toRepoShapedError (file:///repo/scripts/cli-args.mjs:229:14)\r',
     '\r',
-    'Node.js v22.22.2\r',
+    'Node.js v22.23.2\r',
   ].join('\n');
   assert.equal(
     extractShapedCliParseErrorMessage(stderrText),
@@ -515,7 +515,7 @@ test('extractShapedCliParseErrorMessage: recognizes the bracketed zero-stack for
   // --bogus]` -- a single bracketed line with no "Error: " prefix line
   // and no stack frames at all, which the ordinary line-scan above never
   // matches.
-  const stderrText = '[Error: unknown argument: --bogus]\n\nNode.js v22.22.2\n';
+  const stderrText = '[Error: unknown argument: --bogus]\n\nNode.js v22.23.2\n';
   assert.equal(
     extractShapedCliParseErrorMessage(stderrText),
     'unknown argument: --bogus',
@@ -524,7 +524,7 @@ test('extractShapedCliParseErrorMessage: recognizes the bracketed zero-stack for
 
 test('extractShapedCliParseErrorMessage: the bracketed zero-stack form still rejects an unrelated message', () => {
   const stderrText =
-    '[Error: --number is required and must be a positive integer]\n\nNode.js v22.22.2\n';
+    '[Error: --number is required and must be a positive integer]\n\nNode.js v22.23.2\n';
   assert.equal(extractShapedCliParseErrorMessage(stderrText), null);
 });
 
@@ -544,7 +544,7 @@ test('extractShapedCliParseErrorMessage: documented boundary -- a positional arg
     '    at bar',
     '    at toRepoShapedError (file:///repo/scripts/cli-args.mjs:229:14)',
     '',
-    'Node.js v22.22.2',
+    'Node.js v22.23.2',
   ].join('\n');
   assert.equal(
     extractShapedCliParseErrorMessage(stderrText),

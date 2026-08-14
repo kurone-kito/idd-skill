@@ -22,7 +22,7 @@ autopilot 运行能够在提交前强制执行最低限度的 lint 门槛。模�
 不需要 pnpm — 请使用你的项目现有的工具(详见
 [Tooling boundary](../docs/customization.md#tooling-boundary))。
 
-需要 Node.js `^22.22.2 || >=24.2.0`(本仓库 `package.json` 中定义的
+需要 Node.js `^22.23.2 || ^24.2.0 || >=26.0.0`(本仓库 `package.json` 中定义的
 `engines` 下限)。
 
 ```sh

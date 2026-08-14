@@ -1606,14 +1606,14 @@ test('audit/sync-manifest.json guards the .claude issue-authoring markdown mirro
 // mirror guard shared by audit-docs.mts's checkEnginesRangeMirrors.
 // =============================================================================
 
-const ENGINES_NODE = '^22.22.2 || >=24.2.0';
+const ENGINES_NODE = '^22.23.2 || ^24.2.0 || >=26.0.0';
 
 test('collectEnginesRangeMirrorViolations: passes when every mirror matches', () => {
   const files: Record<string, string> = {
-    '.nvmrc': '22.22.2\n',
+    '.nvmrc': '22.23.2\n',
     'workflow.yml': `some yaml\n${ENGINES_NODE}\nmore yaml`,
     'prose.md':
-      'Requires 22.22.2 or newer on the 22.x line, or 24.2.0 or newer',
+      'Requires 22.23.2 or newer on the 22.x line, or 24.2.0 or newer',
   };
   const violations = collectEnginesRangeMirrorViolations(
     ENGINES_NODE,
@@ -1634,7 +1634,7 @@ test('collectEnginesRangeMirrorViolations: catches a stale low-bound pin', () =>
     () => '22.20.0\n',
   );
   assert.deepEqual(violations, [
-    'engines-range-mirrors: .nvmrc pins "22.20.0", expected the engines.node low bound "22.22.2"',
+    'engines-range-mirrors: .nvmrc pins "22.20.0", expected the engines.node low bound "22.23.2"',
   ]);
 });
 
@@ -1654,10 +1654,10 @@ test('collectEnginesRangeMirrorViolations: components mode requires both bounds'
     ENGINES_NODE,
     [{ file: 'prose.md', mode: 'components' }],
     // Only mentions the low bound, not the high one.
-    () => 'Node.js 22.22.2 or newer',
+    () => 'Node.js 22.23.2 or newer',
   );
   assert.deepEqual(violations, [
-    `engines-range-mirrors: prose.md does not mention both engines.node bounds "22.22.2" and "24.2.0"`,
+    `engines-range-mirrors: prose.md does not mention both engines.node bounds "22.23.2" and "24.2.0"`,
   ]);
 });
 

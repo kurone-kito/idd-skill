@@ -157,7 +157,7 @@ advisory-convergence hardening release.
   helper output.
 - `engines.node`'s `>=24` branch narrowed to `>=24.2.0` (Node 24.0.0
   and 24.1.0 lacked `import.meta.main`, which several helpers now
-  rely on); the `^22.22.2` floor is unchanged.
+  rely on); the `^22.23.2` floor is unchanged.
 - An auto-labeler guard recipe documented for adopters, and pinned
   `packageSpec` support added for npx-based helper invocation text.
 - Dependency bumps: TypeScript 7.0.2, pnpm v11, `actions/setup-node`,
