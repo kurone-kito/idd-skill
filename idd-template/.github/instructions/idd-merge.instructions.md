@@ -405,7 +405,7 @@ Before any mutating action in F3, apply the
    - `git branch -d <branch-name>` (this baseline's Claude Code
      permission profile denies `git branch -D`; see
      `docs/permissions.md`'s "What the baseline denies"). If it fails
-     with `error: the branch '<branch>' is not fully merged` even
+     with `error: the branch '<branch-name>' is not fully merged` even
      though the PR was just merged via GitHub — a `fetch --prune` can
      drop the branch's remote-tracking ref before local `main` is
      fast-forwarded — run step 4 first (`git fetch origin main && git
