@@ -2998,9 +2998,17 @@ export function buildActivitySnapshotSummary(
   );
   // An advisory bot can never anchor "dispositions exist": its own
   // **Accepted**/**Rejected**-shaped replies must not start the
-  // post-disposition window that classifies its later acks.
-  for (const login of advisoryBotLogins) {
-    dispositionAuthorLogins.delete(login);
+  // post-disposition window that classifies its later acks. Excludes via
+  // `isConfiguredAdvisoryBotLogin`, not a plain `Set.has`/`.delete`, so a
+  // `[bot]`-suffix mismatch between `dispositionAuthorLogins` and
+  // `advisoryBotLogins` (e.g. one storing GitHub's suffixed `dual-bot[bot]`
+  // author-login form, the other the supported suffixless `dual-bot` form,
+  // #2014) still excludes the shared login -- the same normalized identity
+  // every other advisory-bot recognition in this file already uses.
+  for (const login of [...dispositionAuthorLogins]) {
+    if (isConfiguredAdvisoryBotLogin(login, advisoryBotLogins)) {
+      dispositionAuthorLogins.delete(login);
+    }
   }
   const isAdvisoryBot = (login: unknown) =>
     isConfiguredAdvisoryBotLogin(login, advisoryBotLogins);
@@ -3010,6 +3018,42 @@ export function buildActivitySnapshotSummary(
         .trim()
         .toLowerCase(),
     );
+  // #2014: `isDispositionComment` alone (the `**Accepted**`/`**Rejected**`
+  // prefixes) misses the terminal `**Rejection confirmed by maintainer**`
+  // marker (`isRejectionConfirmedDisposition`) that E6
+  // (idd-review-triage.instructions.md) posts instead of a fresh
+  // `**Rejected**` re-post once a maintainer agrees an
+  // `**Awaiting maintainer decision**` item needs no action -- a disposition
+  // is a disposition regardless of which of the two terminal shapes it took.
+  // `summarizeDispositionEvidenceForGate`'s `classifyThreadAckOnlyPostDisposition`
+  // already recognizes both, but ONLY as a reply on a resolved review thread
+  // (the marker's own contract, `isRejectionConfirmedDisposition`'s doc
+  // comment above). `filteredComments` below are plain top-level PR
+  // comments with no thread/resolved concept at all, so they must keep
+  // using plain `isDispositionComment` -- recognizing the terminal marker
+  // there would accept it as a disposition anchor with no resolved-thread
+  // context to validate it against (Copilot review, #2014 PR #2029).
+  // Thread-scoped variant: recognizes the terminal rejection-confirmed
+  // marker only while its own thread is still resolved, mirroring
+  // `hasFreshDisposition`'s identical `threadResolved` gate above -- once a
+  // thread is reopened, the marker's "nothing more to do here" claim is
+  // stale for that thread. Needed specifically for the cross-thread global
+  // scan below (`dispositionCreatedAts`'s `threads.flatMap`), which pools
+  // every thread's replies into one PR-wide anchor: without this gate, a
+  // stale rejection-confirmed reply on a since-reopened thread could still
+  // anchor the window that misclassifies an unrelated, brand-new
+  // advisory-bot comment elsewhere on the PR as ack-only. This is the ONLY
+  // place the combined (`isDispositionComment` OR
+  // `isRejectionConfirmedDisposition`) recognition applies outside a
+  // thread whose `isResolved` is already independently confirmed true.
+  const isDispositionMarkerComment = (comment: { body?: string | null }) =>
+    isDispositionComment(comment) || isRejectionConfirmedDisposition(comment);
+  const isDispositionMarkerCommentForThread = (
+    comment: { body?: string | null },
+    threadResolved: boolean,
+  ) =>
+    isDispositionComment(comment) ||
+    (threadResolved && isRejectionConfirmedDisposition(comment));
 
   const filteredComments = comments.filter((comment) => {
     if (!trustedMarkerLogins.has((comment.author?.login ?? '').toLowerCase())) {
@@ -3037,7 +3081,10 @@ export function buildActivitySnapshotSummary(
         .filter(
           (comment) =>
             isDispositionAuthor(comment.author?.login) &&
-            isDispositionComment(comment),
+            isDispositionMarkerCommentForThread(
+              comment,
+              Boolean(thread.isResolved),
+            ),
         )
         .map((comment) => comment.createdAt),
     ),
@@ -3075,7 +3122,10 @@ export function buildActivitySnapshotSummary(
           .filter(
             (comment) =>
               isDispositionAuthor(comment.author?.login) &&
-              isDispositionComment(comment),
+              isDispositionMarkerCommentForThread(
+                comment,
+                Boolean(thread.isResolved),
+              ),
           )
           .map((comment) => comment.createdAt)
           .filter(isValidIsoTimestamp),
@@ -3095,7 +3145,7 @@ export function buildActivitySnapshotSummary(
       if (!isAdvisoryBot(comment.author?.login)) {
         return false;
       }
-      if (isDispositionComment(comment)) {
+      if (isDispositionMarkerComment(comment)) {
         return false;
       }
       const activityAt = effectiveThreadCommentActivityAt(comment);
@@ -3493,6 +3543,29 @@ export function summarizeDispositionEvidenceForGate(
   const prAuthorLogin = String(options.prAuthorLogin ?? '')
     .trim()
     .toLowerCase();
+  // #2014: An advisory bot can never anchor "dispositions exist", mirroring
+  // `buildActivitySnapshotSummary`'s identical `dispositionAuthorLogins`
+  // subtraction above (this file, "An advisory bot can never anchor..."
+  // comment) -- its own `**Accepted**`/`**Rejected**`-shaped reply must not
+  // open the post-disposition window that classifies a later advisory-bot
+  // reply as ack-only. Scoped to ONLY `classifyThreadAckOnlyPostDisposition`'s
+  // own anchor below -- the raw `iddAgentLogins` set is used unchanged
+  // everywhere else in this function (`hasFreshDisposition`,
+  // `outstandingComments`, the generic `dispositionComments` 1:1 pool), per
+  // the "Pre-merge gate invariants" comment above `summarizeDispositionEvidenceForGate`:
+  // each of those reacts differently (fail-open vs. fail-closed) to a global
+  // change, so this subtraction must stay local to the ack-only diagnostic.
+  // Excludes via `isConfiguredAdvisoryBotLogin`, not a plain `Set.has`, so a
+  // `[bot]`-suffix mismatch between the two configured login sets (e.g.
+  // `iddAgentLogins` storing GitHub's `dual-bot[bot]` author-login form
+  // while `advisoryBotLogins` stores the supported suffixless `dual-bot`
+  // form) still excludes the shared login -- the same normalized identity
+  // every other advisory-bot recognition in this file already uses.
+  const ackAnchorAuthorLogins = new Set(
+    [...iddAgentLogins].filter(
+      (login) => !isConfiguredAdvisoryBotLogin(login, advisoryBotLogins),
+    ),
+  );
 
   const normalizedComments = comments
     .map((comment, inputIndex) => ({
@@ -3805,7 +3878,7 @@ export function summarizeDispositionEvidenceForGate(
       nodes
         .filter(
           (comment) =>
-            iddAgentLogins.has(
+            ackAnchorAuthorLogins.has(
               String(comment.author?.login ?? '')
                 .trim()
                 .toLowerCase(),
