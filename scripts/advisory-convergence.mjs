@@ -434,9 +434,25 @@ export function computeAdvisoryConvergenceVerdict(inputs, options) {
       latestReviewThreadIds.has(String(thread.id ?? '')) &&
       thread.isResolved === false,
   );
+  // #2054 review (Copilot + CodeRabbit, independently): the thread-evidence
+  // disjunct alone neither required a KNOWN itemCount, nor that the
+  // NUMBER of this-review-originated threads actually covers every posted
+  // item -- `itemCount: null` (unknown count), or `itemCount: 2` with only
+  // ONE such thread, would otherwise satisfy this on "at least one resolved
+  // thread exists," leaving other posted items unaccounted for.
+  // `latestReviewThreadIds.size >= review.itemCount` requires as many
+  // review-scoped threads as claimed items (each of the review's own
+  // comments originates at most one thread, so this count can never
+  // legitimately exceed `itemCount`, making `>=` and exact equality
+  // equivalent in practice; `>=` is the more defensive form).
+  // `review.itemCount !== null` fails closed on the unknown-count case,
+  // matching this file's other missing-evidence guards (e.g.
+  // `reviewItemCountKnownTerm` in the sameHeadReroll terms below).
   const itemCountClauseSatisfied =
     review.itemCount === 0 ||
-    (latestReviewThreadIds.size > 0 && latestReviewBlocking.length === 0);
+    (review.itemCount !== null &&
+      latestReviewThreadIds.size >= review.itemCount &&
+      latestReviewBlocking.length === 0);
   // `suppressedClauseSatisfied`: `suppressedCount === 0`, OR a valid
   // `review-ack` covers it.
   const suppressedClauseSatisfied =

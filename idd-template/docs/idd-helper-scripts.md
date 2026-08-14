@@ -2012,8 +2012,8 @@ in place of the raw mechanical value:
 
 ```text
 matchesHead
-  && (itemCount === 0 || (a thread THIS review opened exists AND all are
-      resolved/dispositioned))
+  && (itemCount === 0 || (itemCount is known AND >= 1 thread(s) THIS review
+      opened cover it AND all of them are resolved/dispositioned))
   && (suppressedCount === 0 || hasValidReviewAck)
 ```
 
@@ -2026,10 +2026,14 @@ thread from a DIFFERENT review must never stand in for the CURRENT
 review's own coverage, and `threads.satisfied` is additionally vacuous when
 zero Copilot-authored threads exist at all -- both variants of the same
 `#1719` incident shape above (a positive `itemCount` with no real thread
-evidence). `hasValidReviewAck` is `true` when a trusted `review-ack:`
-marker's OWN `created_at` postdates the latest Copilot review's
-`submittedAt` (never the marker's embedded timestamp), so any later review
-automatically invalidates a pre-existing ack.
+evidence). `itemCount: null` (unknown count) also fails closed here rather
+than treating "at least one resolved thread exists" as sufficient, and the
+number of covering threads must be at least `itemCount` -- one dispositioned
+thread does not cover a review that posted two items (Copilot + CodeRabbit
+review, PR #2054). `hasValidReviewAck` is `true` when a trusted
+`review-ack:` marker's OWN `created_at` postdates the latest Copilot
+review's `submittedAt` (never the marker's embedded timestamp), so any
+later review automatically invalidates a pre-existing ack.
 
 The `review-ack:` marker matches `advisory-reroll:`'s field shape and
 posting path exactly (see

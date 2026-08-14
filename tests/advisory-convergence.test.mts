@@ -2288,6 +2288,75 @@ test("review-ack: an OLDER, already-resolved thread from a DIFFERENT review does
   );
 });
 
+test('review-ack: an unknown itemCount (null) does not converge even with a resolved review-scoped thread (PR #2054 review)', () => {
+  // Copilot + CodeRabbit (independently, #2054 review): the thread-evidence
+  // disjunct must fail closed on itemCount: null, not treat "at least one
+  // resolved thread exists" as sufficient when the count itself is unknown.
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({
+      reviews: [copilotReview({ id: 'REVIEW_LATEST', itemCount: null })],
+      threads: [
+        {
+          id: 'PRT_UNKNOWN_COUNT',
+          isResolved: true,
+          comments: {
+            nodes: [
+              {
+                author: { login: COPILOT_LOGIN },
+                body: 'a finding under an unknown item count',
+                createdAt: RECENT,
+                updatedAt: RECENT,
+                pullRequestReview: { id: 'REVIEW_LATEST' },
+              },
+            ],
+          },
+        },
+      ],
+    }),
+    baseOptions(),
+  );
+  assertValidVerdict(verdict);
+  assert.equal(verdict.review.itemCount, null);
+  assert.equal(verdict.review.satisfied, false);
+  assert.equal(verdict.converged, false);
+  assert.equal(verdict.ready, false);
+});
+
+test('review-ack: itemCount 2 with only ONE review-scoped resolved thread does not converge (partial coverage, PR #2054 review)', () => {
+  // Copilot + CodeRabbit (independently, #2054 review): the thread-evidence
+  // disjunct must require as many review-scoped threads as claimed items,
+  // not merely "at least one" -- otherwise one posted item stays
+  // unaccounted for.
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({
+      reviews: [copilotReview({ id: 'REVIEW_LATEST', itemCount: 2 })],
+      threads: [
+        {
+          id: 'PRT_PARTIAL_1',
+          isResolved: true,
+          comments: {
+            nodes: [
+              {
+                author: { login: COPILOT_LOGIN },
+                body: 'the only dispositioned finding',
+                createdAt: RECENT,
+                updatedAt: RECENT,
+                pullRequestReview: { id: 'REVIEW_LATEST' },
+              },
+            ],
+          },
+        },
+      ],
+    }),
+    baseOptions(),
+  );
+  assertValidVerdict(verdict);
+  assert.equal(verdict.review.itemCount, 2);
+  assert.equal(verdict.review.satisfied, false);
+  assert.equal(verdict.converged, false);
+  assert.equal(verdict.ready, false);
+});
+
 test('review-ack: nonzero suppressedCount with a valid post-review ack converges', () => {
   const verdict = computeAdvisoryConvergenceVerdict(
     baseInputs({
