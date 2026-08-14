@@ -61,6 +61,35 @@
 // never let the gate pass on anything other than the primary bot's own
 // real signal -- it only tells a caller when requesting a reroll is safe
 // and how much budget remains.
+//
+// #2015: bounded poll for the "not reviewed yet" race. The hosting
+// workflow's `pull_request` `synchronize` trigger fires the instant a push
+// lands, independent of the separate `pull_request_review` trigger, which
+// only fires once the primary bot's own review actually lands (typically
+// 10-40s later) -- so a push that also needs a fresh review used to get
+// asserted, and fail, before that review existed, costing an external
+// rerun most of the time. The CLI entry point at the bottom of this file
+// now runs through `runAdvisoryConvergenceWithPoll` instead of
+// `runAdvisoryConvergence` directly: when (and ONLY when) the verdict's
+// sole blocking reason is that the primary bot has not reviewed the PR AT
+// ALL yet (`isSoleCopilotNotReviewedYetReason` -- excludes a stale-HEAD
+// review, unresolved threads, an indeterminate claim scope, or any other
+// reason, all of which still fail immediately with no wait, exactly as
+// before), it polls a short, bounded window (every
+// `DEFAULT_COPILOT_REVIEW_POLL_INTERVAL_MS`, up to
+// `DEFAULT_COPILOT_REVIEW_POLL_MAX_WAIT_MS` total, wall-clock bounded --
+// see `runAdvisoryConvergenceWithPoll`'s own doc comment) before its real
+// assert-driven exit. This changes nothing about `--assert`'s exit-code
+// contract, roadmap #1342's deterministic-convergence policy, or this
+// check's required/fail-closed/non-bypassable nature: if the review still
+// has not landed by the end of the window, or lands with outstanding
+// items, the job fails exactly as it always has. See
+// `runAdvisoryConvergenceWithPoll`'s own doc comment for a known residual
+// (PR #2023 review): a review landing WHILE this poll is asleep can still
+// need the pre-existing external-rerun recovery, via a different
+// mechanism (this run gets cancelled by the hosting workflow's own
+// concurrency group, not a plain immediate-assert failure) -- the poll's
+// actual win is narrower than "never needs a rerun again."
 
 import {
   DEFAULT_ADVISORY_CONVERGENCE_CHECK_SELECTOR,
@@ -1379,6 +1408,219 @@ export function runAdvisoryConvergence(
   return { verdict, exitCode, help: false };
 }
 
+/**
+ * #2015: `true` only for the narrow "primary bot has not reviewed this
+ * pull request AT ALL yet" verdict shape -- the one case
+ * {@link runAdvisoryConvergenceWithPoll} is allowed to poll on. Deliberately
+ * NOT true for "the bot's latest review targets an older commit" (a
+ * *different* `reasons[]` string, produced once `review.found` is `true`
+ * but `matchesHead` is `false` -- see the `pending`/`reasons.push` pair in
+ * {@link computeAdvisoryConvergenceVerdict}): once the bot has reviewed the
+ * PR at least once, `review.found` stays `true` forever, so this predicate
+ * can only ever fire before the bot's very first review lands. That is
+ * exactly the issue #2015 acceptance criterion ("the only reason a first
+ * check would fail is '{bot} has not reviewed this pull request yet' --
+ * not on any other failure reason"), not an accidental scope gap: a later
+ * push invalidating an earlier review is a different race with a different
+ * reason string, and is intentionally left to fail immediately with no
+ * wait, same as every other not-ready reason.
+ *
+ * `reasons.length === 1` is defense-in-depth, not redundant with the
+ * `pending`/`review.found` pair: an unusually short configured deadline
+ * (or a terminal-Copilot-unavailability state) can append its own reason
+ * alongside the pending one, and this predicate must not poll then either
+ * -- polling cannot help a deadline/terminal reason converge.
+ */
+export function isSoleCopilotNotReviewedYetReason(
+  verdict: AdvisoryConvergenceVerdict,
+): boolean {
+  return (
+    verdict.pending &&
+    !verdict.review.found &&
+    verdict.reasons.length === 1 &&
+    verdict.reasons[0] ===
+      `${verdict.primaryBotLogin} has not reviewed this pull request yet`
+  );
+}
+
+/** Poll interval for {@link runAdvisoryConvergenceWithPoll}'s bounded wait
+ * (#2015), within the issue's suggested 5-10s cadence. */
+export const DEFAULT_COPILOT_REVIEW_POLL_INTERVAL_MS = 7_500;
+
+/** Total bounded wait budget, across all poll attempts, for
+ * {@link runAdvisoryConvergenceWithPoll} (#2015) -- the issue's suggested
+ * ~60s ceiling. */
+export const DEFAULT_COPILOT_REVIEW_POLL_MAX_WAIT_MS = 60_000;
+
+/** Options accepted by {@link runAdvisoryConvergenceWithPoll}. All optional
+ * -- `sleep` and `now` exist solely so tests can inject a deterministic,
+ * instant fake clock instead of a real bounded wait; production always uses
+ * the real `sleepSync`/`Date.now` pair. Both must be supplied together for a
+ * fake clock to behave correctly (`sleep`'s fake advances must be the ONLY
+ * thing `now` reads) -- a test that fakes one but not the other either
+ * hangs (real `now`, faked instant `sleep`: the deadline never approaches
+ * except via genuine wall-clock time) or spins (faked `now`, real `sleep`:
+ * unlikely, but keep the pair together regardless). */
+export interface AdvisoryConvergencePollOptions {
+  pollIntervalMs?: number;
+  maxWaitMs?: number;
+  sleep?: (ms: number) => void;
+  /** Defaults to `Date.now` (not `performance.now`) -- matching the exact
+   * clock source `rerun-advisory-convergence.mts`'s own `waitForNewAttempt`
+   * deadline already uses for the identical bounded-poll shape. */
+  now?: () => number;
+}
+
+/** Falls back to `fallback` for a non-finite or non-positive value --
+ * mirrors `gh-exec.mts`'s `withBoundedRetry` guard on its own duration
+ * options, so a `NaN`/zero/negative caller-supplied interval or budget
+ * cannot silently defeat the bound (a zero interval against a real,
+ * non-faked clock would otherwise tight-loop until `maxWaitMs` elapses). */
+function positiveMsOrDefault(
+  value: number | undefined,
+  fallback: number,
+): number {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0
+    ? value
+    : fallback;
+}
+
+/** Synchronous bounded sleep via `Atomics.wait` on a throwaway
+ * `SharedArrayBuffer` -- the same technique
+ * `rerun-advisory-convergence.mts`'s own `sleepSync` uses, chosen there (and
+ * reused here rather than switching this file to `async`/`await`) so this
+ * file can stay fully synchronous like every other helper in this module
+ * family; duplicated as this one-line function rather than imported from
+ * that sibling file, mirroring that file's own precedent of duplicating a
+ * few lines over adding cross-file coupling for a narrow, already-stable
+ * reuse. */
+function sleepSync(ms: number): void {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+/**
+ * #2015: wraps {@link runAdvisoryConvergence} with a short, bounded poll
+ * for the narrow case {@link isSoleCopilotNotReviewedYetReason} identifies
+ * -- absorbing the common race where the `pull_request` `synchronize`
+ * trigger fires (and this CLI runs) before the separate
+ * `pull_request_review` trigger's review has actually landed (typically
+ * 10-40s later). Every other not-ready reason still fails on the very
+ * first pass with no wait, exactly as {@link runAdvisoryConvergence} alone
+ * already does -- this wrapper adds no new pass path, only absorbs a
+ * latency this one specific reason is known to resolve on its own. Does
+ * NOT change `--assert`'s exit-code contract or roadmap #1342's
+ * deterministic, fail-closed convergence policy: if the bot's review still
+ * has not landed by the end of the window, or lands with outstanding
+ * items, the final result fails exactly as `runAdvisoryConvergence` alone
+ * would have failed immediately.
+ *
+ * `exitCode !== 0` from the first attempt already implies `--assert` was
+ * passed and the verdict was not ready (the only way
+ * {@link runAdvisoryConvergence} returns non-zero), so this never needs to
+ * re-parse `argv` itself to check `--assert`.
+ *
+ * The bound is wall-clock, not sleep-count: `maxWaitMs` is a deadline
+ * (`now() + maxWaitMs`), and each iteration's actual sleep is capped to the
+ * REMAINING budget, not the nominal `pollIntervalMs` (PR #2023 review,
+ * Codex P2) -- production `collectFromGitHub` performs several real,
+ * potentially slow `gh` calls per re-check, and counting only requested
+ * sleep time (ignoring that collection time) could let the loop run well
+ * past its documented bound and risk the hosting workflow's own
+ * `timeout-minutes` before ever reaching its fail-closed exit.
+ *
+ * A re-check is never launched once a sleep has already consumed the full
+ * remaining budget (PR #2023 review round 2, Codex P2 + Copilot) --
+ * `collectFromGitHub` has its own independent `gh` timeouts (up to
+ * `DEFAULT_GH_PAGINATED_TIMEOUT_MS` = 120s, #1675) that this poll's
+ * `maxWaitMs` cannot bound from the outside, so starting a fresh collection
+ * pass exactly AT the deadline could otherwise blow the wall-clock bound
+ * wide open. KNOWN RESIDUAL: a collection that starts just BEFORE the
+ * deadline (i.e. while genuine budget remains) can still run long, bounded
+ * only by `gh-exec.mts`'s own per-call timeouts, not by `maxWaitMs` --
+ * threading a remaining-budget deadline into every `gh` call inside
+ * `collectFromGitHub` would close that gap but is a multi-call-site change
+ * out of scope for this narrow poll wrapper. One consequence: a
+ * `pollIntervalMs` configured `>=` `maxWaitMs` yields zero re-checks (the
+ * first sleep alone exhausts the budget) -- an edge case only reachable via
+ * an explicit non-default override, never the production defaults below.
+ *
+ * KNOWN RESIDUAL (PR #2023 review, Codex P1): the hosting workflow's
+ * concurrency group is keyed by PR number ALONE across all three of its
+ * triggers, with `cancel-in-progress: true` (see
+ * `idd-advisory-convergence.yml`'s own header). If the primary bot's review
+ * actually lands WHILE this poll is still sleeping, that submission starts
+ * a fresh `pull_request_review`-triggered run in the SAME concurrency
+ * group, which cancels this run before its next scheduled re-check ever
+ * observes the review -- this run ends CANCELLED, not SUCCESS, and the
+ * fresh run becomes the one responsible for reflecting the converged
+ * state. No safe mechanical fix was found for this within #2015's scope:
+ * narrowing the concurrency group would defeat the deliberate cross-trigger
+ * debouncing the workflow's own "Concurrency-hardening investigation"
+ * comment already documents as load-bearing, and there is no way for a
+ * script to detect an imminent cancellation from inside the run it is
+ * about to lose. This is NOT a regression versus the pre-#2015 baseline,
+ * only a narrower win than "no external rerun ever needed": before #2015,
+ * this run always finished FAILURE well before the review landed (10-40s
+ * later), so cancellation essentially never happened, but the resulting
+ * rollup update from the later review-triggered run was ALREADY subject to
+ * the exact same documented stale-rollup risk this residual describes (see
+ * `#1381` in that same investigation comment) -- the pre-existing recovery
+ * (`rerun-advisory-convergence.mjs`, which explicitly reruns a stale
+ * CANCELLED-conclusion sibling instance, not only a FAILURE one) covers
+ * this run's cancelled outcome exactly as it already covered the
+ * pre-#2015 case. The poll's actual win is narrower than the eliminate-
+ * every-rerun framing above: it resolves without any rerun specifically
+ * when a scheduled re-check happens to observe the landed review before a
+ * competing trigger's cancellation reaches this run -- which still occurs
+ * whenever the review lands close to (but not exactly inside) an active
+ * sleep, or after this poll's window has already closed.
+ */
+export function runAdvisoryConvergenceWithPoll(
+  argv: string[],
+  deps: AdvisoryConvergenceDeps = defaultDeps,
+  pollOptions: AdvisoryConvergencePollOptions = {},
+): {
+  verdict: AdvisoryConvergenceVerdict | null;
+  exitCode: number;
+  help: boolean;
+} {
+  let result = runAdvisoryConvergence(argv, deps);
+  if (
+    result.exitCode !== 0 &&
+    result.verdict &&
+    isSoleCopilotNotReviewedYetReason(result.verdict)
+  ) {
+    const pollIntervalMs = positiveMsOrDefault(
+      pollOptions.pollIntervalMs,
+      DEFAULT_COPILOT_REVIEW_POLL_INTERVAL_MS,
+    );
+    const maxWaitMs = positiveMsOrDefault(
+      pollOptions.maxWaitMs,
+      DEFAULT_COPILOT_REVIEW_POLL_MAX_WAIT_MS,
+    );
+    const sleep = pollOptions.sleep ?? sleepSync;
+    const now = pollOptions.now ?? Date.now;
+    const deadline = now() + maxWaitMs;
+    while (now() < deadline) {
+      sleep(Math.min(pollIntervalMs, deadline - now()));
+      // #2023 review round 2: don't launch a re-check once the sleep above
+      // has already consumed the entire remaining budget -- see this
+      // function's own doc comment for why (collection has its own
+      // unbounded-relative-to-maxWaitMs `gh` timeouts).
+      if (now() >= deadline) break;
+      result = runAdvisoryConvergence(argv, deps);
+      if (
+        result.exitCode === 0 ||
+        !result.verdict ||
+        !isSoleCopilotNotReviewedYetReason(result.verdict)
+      ) {
+        break;
+      }
+    }
+  }
+  return result;
+}
+
 // --- Production I/O: fetch PR/review/thread/comment evidence via `gh` ----
 
 /**
@@ -2157,7 +2399,7 @@ function fetchThreadCommentPages(
 // Guarded behind `import.meta.main` so importing this module (for unit
 // tests) never parses process.argv, prints usage, or makes a `gh` call.
 if (import.meta.main) {
-  const { verdict, exitCode, help } = runAdvisoryConvergence(
+  const { verdict, exitCode, help } = runAdvisoryConvergenceWithPoll(
     process.argv.slice(2),
   );
   if (help) {

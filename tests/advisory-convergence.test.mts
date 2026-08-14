@@ -10,10 +10,12 @@ import {
   classifyCopilotAuthoredThreadIds,
   computeAdvisoryConvergenceVerdict,
   hasTrustedClaimMarkerHistory,
+  isSoleCopilotNotReviewedYetReason,
   parseArgs,
   pickResolvingClaimEvents,
   resolveClaimEvidence,
   runAdvisoryConvergence,
+  runAdvisoryConvergenceWithPoll,
   SAME_HEAD_REROLL_INELIGIBLE_REASON,
   viewerProbeGhOptions,
 } from '../src/scripts/advisory-convergence.mts';
@@ -2981,6 +2983,349 @@ test('runAdvisoryConvergence: missing --pr throws before any collection happens'
   };
   assert.throws(() => runAdvisoryConvergence([], deps));
   assert.equal(called, false);
+});
+
+// --- isSoleCopilotNotReviewedYetReason / runAdvisoryConvergenceWithPoll ----
+// (#2015: bounded poll for the "not reviewed yet" race only)
+
+test('isSoleCopilotNotReviewedYetReason: true when the bot has never reviewed and that is the only reason', () => {
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({ reviews: [] }),
+    baseOptions(),
+  );
+  assert.equal(verdict.pending, true);
+  assert.equal(verdict.review.found, false);
+  assert.deepEqual(verdict.reasons, [
+    'copilot has not reviewed this pull request yet',
+  ]);
+  assert.equal(isSoleCopilotNotReviewedYetReason(verdict), true);
+});
+
+test('isSoleCopilotNotReviewedYetReason: false when the verdict is already ready', () => {
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({ reviews: [copilotReview()] }),
+    baseOptions(),
+  );
+  assert.equal(verdict.ready, true);
+  assert.equal(isSoleCopilotNotReviewedYetReason(verdict), false);
+});
+
+test('isSoleCopilotNotReviewedYetReason: false when the bot reviewed an older commit (different reason string)', () => {
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({ reviews: [copilotReview({ commitId: OTHER_SHA })] }),
+    baseOptions(),
+  );
+  assert.equal(verdict.pending, true);
+  assert.equal(verdict.review.found, true);
+  assert.equal(isSoleCopilotNotReviewedYetReason(verdict), false);
+});
+
+test('isSoleCopilotNotReviewedYetReason: false when an unrelated blocking reason accompanies the pending one', () => {
+  // Zero reviews (pending, review.found === false) BUT the deadline has
+  // already passed with no valid waiver, which appends its own reason
+  // alongside the pending one -- reasons.length > 1, so this must not poll.
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({ reviews: [] }),
+    baseOptions({ headCommittedAt: OLD, waiverMode: 'disabled' }),
+  );
+  assert.equal(verdict.pending, true);
+  assert.equal(verdict.review.found, false);
+  assert.ok(verdict.reasons.length > 1);
+  assert.equal(isSoleCopilotNotReviewedYetReason(verdict), false);
+});
+
+function pollDepsFor(
+  inputsSequence: AdvisoryConvergenceInputs[],
+  options: AdvisoryConvergenceOptions,
+): { deps: AdvisoryConvergenceDeps; collectCalls: () => number } {
+  let index = 0;
+  let calls = 0;
+  const deps: AdvisoryConvergenceDeps = {
+    collect: () => {
+      calls += 1;
+      const inputs = inputsSequence[Math.min(index, inputsSequence.length - 1)];
+      if (index < inputsSequence.length - 1) index += 1;
+      return { inputs, options };
+    },
+  };
+  return { deps, collectCalls: () => calls };
+}
+
+// A combined fake sleep + fake clock: `sleep` advances the SAME virtual
+// `now()` it is paired with, so `runAdvisoryConvergenceWithPoll`'s
+// wall-clock deadline (`now() + maxWaitMs`) advances deterministically and
+// instantly instead of requiring real elapsed time. Faking `sleep` alone
+// (leaving `now` as the real `Date.now`) would hang the test for up to the
+// real `maxWaitMs`, since a real clock barely advances between near-instant
+// fake-sleep iterations.
+function fakeClock(startAt = 0): {
+  sleep: (ms: number) => void;
+  now: () => number;
+  calls: () => number;
+  sleptMs: () => number[];
+} {
+  let time = startAt;
+  const sleptMs: number[] = [];
+  return {
+    sleep: (ms: number) => {
+      sleptMs.push(ms);
+      time += ms;
+    },
+    now: () => time,
+    calls: () => sleptMs.length,
+    sleptMs: () => [...sleptMs],
+  };
+}
+
+test('runAdvisoryConvergenceWithPoll: review landing within the window resolves without exhausting it', () => {
+  const { deps, collectCalls } = pollDepsFor(
+    [
+      baseInputs({ reviews: [] }),
+      baseInputs({ reviews: [] }),
+      baseInputs({ reviews: [copilotReview()] }),
+    ],
+    baseOptions(),
+  );
+  const { sleep, now, calls } = fakeClock();
+  const { verdict, exitCode } = runAdvisoryConvergenceWithPoll(
+    ['--pr', '1234', '--assert'],
+    deps,
+    { maxWaitMs: 60_000, pollIntervalMs: 7_500, sleep, now },
+  );
+  assert.equal(verdict?.ready, true);
+  assert.equal(exitCode, 0);
+  // 3 collect() calls total (1 initial + 2 poll re-checks); the loop must
+  // stop as soon as the review lands, well short of the 8-attempt max-wait
+  // budget (60_000 / 7_500 ~= 8).
+  assert.equal(collectCalls(), 3);
+  assert.equal(calls(), 2);
+});
+
+test('runAdvisoryConvergenceWithPoll: review never landing still fails with the existing reason string after the window', () => {
+  const { deps, collectCalls } = pollDepsFor(
+    [baseInputs({ reviews: [] })],
+    baseOptions(),
+  );
+  const { sleep, now, calls, sleptMs } = fakeClock();
+  const { verdict, exitCode } = runAdvisoryConvergenceWithPoll(
+    ['--pr', '1234', '--assert'],
+    deps,
+    { maxWaitMs: 20_000, pollIntervalMs: 7_500, sleep, now },
+  );
+  assert.equal(verdict?.ready, false);
+  assert.deepEqual(verdict?.reasons, [
+    'copilot has not reviewed this pull request yet',
+  ]);
+  assert.equal(exitCode, 1);
+  // 3 sleeps (7_500, 7_500, then capped to the remaining 5_000) but only 2
+  // in-loop re-checks (collectCalls() == 3 == 1 initial + 2): the 3rd sleep
+  // consumes the entire remaining budget, so the guard added in #2023
+  // review round 2 (Codex/Copilot: "avoid launching a recheck after the
+  // remaining budget is consumed") skips the re-check that would otherwise
+  // start exactly AT the deadline.
+  assert.equal(calls(), 3);
+  assert.equal(collectCalls(), 3);
+  // The bound is wall-clock (a deadline), not a sum of nominal intervals:
+  // the final sleep is capped to the REMAINING budget (20_000 - 15_000 =
+  // 5_000), not the full 7_500 nominal interval -- PR #2023 review (Codex
+  // P2). Without this cap the loop would run 500ms past its documented
+  // 20s bound on this exact input.
+  assert.deepEqual(sleptMs(), [7_500, 7_500, 5_000]);
+  assert.equal(now(), 20_000);
+});
+
+test('runAdvisoryConvergenceWithPoll: pollIntervalMs >= maxWaitMs yields zero re-checks, not an over-budget one', () => {
+  // Edge case flagged during #2023 review round 2's guard fix: a caller
+  // (never production, which always uses the < defaults below) configuring
+  // an interval at least as large as the whole budget means the first sleep
+  // alone exhausts it, so the guard must skip the re-check entirely rather
+  // than launch one over an already-consumed budget.
+  const { deps, collectCalls } = pollDepsFor(
+    [baseInputs({ reviews: [] })],
+    baseOptions(),
+  );
+  const { sleep, now, calls, sleptMs } = fakeClock();
+  const { verdict, exitCode } = runAdvisoryConvergenceWithPoll(
+    ['--pr', '1234', '--assert'],
+    deps,
+    { maxWaitMs: 10_000, pollIntervalMs: 30_000, sleep, now },
+  );
+  assert.equal(verdict?.ready, false);
+  assert.equal(exitCode, 1);
+  assert.equal(calls(), 1);
+  assert.deepEqual(sleptMs(), [10_000]);
+  // Only the initial (pre-loop) collect() call -- zero in-loop re-checks.
+  assert.equal(collectCalls(), 1);
+});
+
+test('runAdvisoryConvergenceWithPoll: slow collection time counts against the wall-clock budget, not just sleep time', () => {
+  // Simulate a slow `gh` collection pass (production `collectFromGitHub`
+  // performs several real, potentially paginated API calls per re-check)
+  // by having `collect()` itself advance the shared fake clock by 6s --
+  // exactly the scenario Codex's P2 finding warned a sleep-only budget
+  // would miss. With a 1s nominal poll interval and a 20s bound, a
+  // sleep-only-counting implementation (the pre-fix behavior, which summed
+  // only the nominal interval per iteration) would run roughly 20
+  // iterations before noticing the budget was exhausted. The wall-clock
+  // deadline fix must notice the extra 6s consumed by each collect() call
+  // too, and stop far sooner.
+  const { sleep, now } = fakeClock();
+  let collectCalls = 0;
+  const collectStartTimes: number[] = [];
+  const collectEndTimes: number[] = [];
+  const deps: AdvisoryConvergenceDeps = {
+    collect: () => {
+      collectCalls += 1;
+      collectStartTimes.push(now());
+      sleep(6_000);
+      collectEndTimes.push(now());
+      return { inputs: baseInputs({ reviews: [] }), options: baseOptions() };
+    },
+  };
+  const { verdict, exitCode } = runAdvisoryConvergenceWithPoll(
+    ['--pr', '1234', '--assert'],
+    deps,
+    { maxWaitMs: 20_000, pollIntervalMs: 1_000, sleep, now },
+  );
+  assert.equal(verdict?.ready, false);
+  assert.equal(exitCode, 1);
+  // A sleep-only-counting loop would need ~20 poll iterations (21 total
+  // collect() calls) before its naive waitedMs sum reached 20_000. The
+  // wall-clock deadline fix stops in single digits once real elapsed time
+  // (sleep + collection) crosses the bound.
+  assert.ok(
+    collectCalls < 10,
+    `expected far fewer than 10 collect() calls under the wall-clock fix, got ${collectCalls}`,
+  );
+  // #2023 review round 2 (Codex/Copilot, on this exact test): asserting
+  // only the call count missed that the LAST re-check could still start at
+  // or after the deadline and run long uncounted. Assert elapsed virtual
+  // time directly: `runAdvisoryConvergenceWithPoll` reads `now()` for its
+  // deadline right after the initial (pre-loop) collect() call returns, so
+  // the deadline is `collectEndTimes[0] + maxWaitMs`; no IN-LOOP re-check
+  // (every collectStartTimes entry after the first) may start at or after
+  // it -- that is exactly the guard this fix adds.
+  const deadline = collectEndTimes[0] + 20_000;
+  for (const startedAt of collectStartTimes.slice(1)) {
+    assert.ok(
+      startedAt < deadline,
+      `expected re-check start ${startedAt} to be before deadline ${deadline}`,
+    );
+  }
+});
+
+test('runAdvisoryConvergenceWithPoll: does not poll for any other not-ready reason', () => {
+  const { deps, collectCalls } = pollDepsFor(
+    [
+      baseInputs({
+        reviews: [copilotReview({ commitId: OTHER_SHA })],
+      }),
+    ],
+    baseOptions(),
+  );
+  const { sleep, now, calls } = fakeClock();
+  const { verdict, exitCode } = runAdvisoryConvergenceWithPoll(
+    ['--pr', '1234', '--assert'],
+    deps,
+    { sleep, now },
+  );
+  assert.equal(verdict?.ready, false);
+  assert.equal(exitCode, 1);
+  assert.equal(collectCalls(), 1);
+  assert.equal(calls(), 0);
+});
+
+test('runAdvisoryConvergenceWithPoll: without --assert never polls regardless of verdict', () => {
+  const { deps, collectCalls } = pollDepsFor(
+    [baseInputs({ reviews: [] })],
+    baseOptions(),
+  );
+  const { sleep, now, calls } = fakeClock();
+  const { verdict, exitCode } = runAdvisoryConvergenceWithPoll(
+    ['--pr', '1234'],
+    deps,
+    { sleep, now },
+  );
+  assert.equal(verdict?.ready, false);
+  assert.equal(exitCode, 0);
+  assert.equal(collectCalls(), 1);
+  assert.equal(calls(), 0);
+});
+
+test('runAdvisoryConvergenceWithPoll: --help short-circuits before collecting or sleeping', () => {
+  let called = false;
+  const deps: AdvisoryConvergenceDeps = {
+    collect: () => {
+      called = true;
+      return { inputs: baseInputs(), options: baseOptions() };
+    },
+  };
+  const { sleep, now, calls } = fakeClock();
+  const { help, exitCode } = runAdvisoryConvergenceWithPoll(['--help'], deps, {
+    sleep,
+    now,
+  });
+  assert.equal(help, true);
+  assert.equal(exitCode, 0);
+  assert.equal(called, false);
+  assert.equal(calls(), 0);
+});
+
+test('runAdvisoryConvergenceWithPoll: a reason change mid-poll stops the loop immediately instead of exhausting the window', () => {
+  const { deps, collectCalls } = pollDepsFor(
+    [
+      baseInputs({ reviews: [] }),
+      baseInputs({ reviews: [copilotReview({ commitId: OTHER_SHA })] }),
+    ],
+    baseOptions(),
+  );
+  const { sleep, now, calls } = fakeClock();
+  const { verdict, exitCode } = runAdvisoryConvergenceWithPoll(
+    ['--pr', '1234', '--assert'],
+    deps,
+    { maxWaitMs: 60_000, pollIntervalMs: 7_500, sleep, now },
+  );
+  assert.equal(verdict?.ready, false);
+  assert.equal(verdict?.review.found, true);
+  assert.equal(exitCode, 1);
+  // Stops after the single re-check that reveals the new (off-HEAD) review
+  // -- must not keep polling out the rest of the 60s window once the
+  // blocking reason is no longer the sole "not reviewed yet" case.
+  assert.equal(calls(), 1);
+  assert.equal(collectCalls(), 2);
+});
+
+test('runAdvisoryConvergenceWithPoll: review lands on HEAD mid-poll with outstanding items still fails (no weakening)', () => {
+  // The issue's own acceptance criterion: "lands with outstanding items"
+  // must still fail exactly as today -- landing on HEAD is not itself
+  // enough to pass if the review carries actionable items.
+  const { deps, collectCalls } = pollDepsFor(
+    [
+      baseInputs({ reviews: [] }),
+      baseInputs({ reviews: [copilotReview({ itemCount: 1 })] }),
+    ],
+    baseOptions(),
+  );
+  const { sleep, now, calls } = fakeClock();
+  const { verdict, exitCode } = runAdvisoryConvergenceWithPoll(
+    ['--pr', '1234', '--assert'],
+    deps,
+    { maxWaitMs: 60_000, pollIntervalMs: 7_500, sleep, now },
+  );
+  assert.equal(verdict?.review.found, true);
+  assert.equal(verdict?.review.matchesHead, true);
+  assert.equal(verdict?.review.satisfied, false);
+  assert.equal(verdict?.converged, false);
+  assert.equal(verdict?.ready, false);
+  assert.equal(exitCode, 1);
+  assert.ok(
+    verdict?.reasons.some((reason) => reason.includes('actionable item')),
+  );
+  // Stops after the single re-check that reveals the on-HEAD review with
+  // outstanding items -- not the sole "not reviewed yet" case anymore, so
+  // it must not keep polling out the rest of the window.
+  assert.equal(calls(), 1);
+  assert.equal(collectCalls(), 2);
 });
 
 test('viewerProbeGhOptions captures gh stderr only under GitHub Actions', () => {

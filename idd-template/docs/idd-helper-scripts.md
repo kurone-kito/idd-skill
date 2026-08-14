@@ -1759,6 +1759,37 @@ to post it is the consuming track's job.
   Without `--assert` it always exits `0` (report-only). With `--assert` it
   exits non-zero unless `ready` is `true` (`ready = converged || (deadline
   passed && validly waived)`).
+- **Bounded "not reviewed yet" poll (`#2015`)**: the CLI entry point runs
+  through `runAdvisoryConvergenceWithPoll`, not `runAdvisoryConvergence`
+  directly. When (and only when) the verdict's sole blocking reason is
+  literally "`{bot}` has not reviewed this pull request yet" — the primary
+  bot has never reviewed the PR at all yet, not merely an off-HEAD review —
+  it polls a short, bounded window (every
+  `DEFAULT_COPILOT_REVIEW_POLL_INTERVAL_MS`, default 7.5s, up to
+  `DEFAULT_COPILOT_REVIEW_POLL_MAX_WAIT_MS`, default 60s) before its real
+  `--assert`-driven exit, absorbing the common race where the hosting
+  workflow's `pull_request` `synchronize` trigger fires before the
+  separate `pull_request_review` trigger's review has landed. Every other
+  not-ready reason (an off-HEAD review, unresolved threads, an
+  indeterminate claim scope, a deadline/terminal reason, etc.) still fails
+  immediately with no wait, exactly as before this addition — the
+  exit-code contract and `ready` formula above are otherwise unchanged.
+  The poll's bound is wall-clock (a deadline, not a sleep-count): each
+  sleep is capped to the remaining budget, and a re-check is never
+  launched once a sleep has already consumed all of it (PR #2023 review
+  round 2). Known residuals (PR #2023 review): (1) a re-check that starts
+  just _before_ the deadline (while genuine budget remains) can still run
+  long, bounded only by `gh-exec.mts`'s own per-call `gh` timeouts (up to
+  120s for a paginated call, `#1675`), not by `maxWaitMs` — closing that
+  gap would mean threading a remaining-budget deadline into every `gh`
+  call inside `collectFromGitHub`, out of scope for this narrow poll
+  wrapper; (2) a review that lands while this poll is asleep can still
+  start a fresh `pull_request_review`-triggered run in the hosting
+  workflow's own PR-scoped `cancel-in-progress` concurrency group,
+  cancelling this run before it observes the review — a narrower win than
+  "never needs an external rerun again"; see the full analysis in
+  `runAdvisoryConvergenceWithPoll`'s doc comment
+  (`src/scripts/advisory-convergence.mts`).
 - **Deadlock / deadline policy**: while the primary bot has not reviewed
   the current HEAD, `pending` is `true` and the gate is not ready. After
   `advisoryWait.convergenceDeadline` (default 24h; see

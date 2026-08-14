@@ -80,17 +80,61 @@ name: IDD advisory-convergence gate
 # triggers fires or a maintainer runs workflow_dispatch.
 #
 # workflow_dispatch (manual re-run) exists for a second reason beyond
-# the thread-resolve gap above: `--assert` exits non-zero for ANY
-# not-ready verdict, including the ordinary "Copilot has not reviewed
-# this HEAD yet" pending case -- GitHub Actions has no distinct
-# non-failing "pending" check state, so the check simply shows red
-# until it converges (by design; see roadmap #1342's stated deadlock
-# policy). That also means posting a maintainer waiver comment does
-# NOT by itself turn a previously-failed check green, because a PR
-# comment is not one of this workflow's trigger events and a completed
-# run's conclusion never changes on its own -- a new run has to
-# execute. workflow_dispatch gives that a one-click affordance instead
-# of relying solely on the Actions UI's generic "re-run failed jobs".
+# the thread-resolve gap above: `--assert` still exits non-zero for ANY
+# not-ready verdict that survives the bounded poll described below --
+# GitHub Actions has no distinct non-failing "pending" check state, so
+# the check simply shows red until it converges (by design; see
+# roadmap #1342's stated deadlock policy). That also means posting a
+# maintainer waiver comment does NOT by itself turn a previously-failed
+# check green, because a PR comment is not one of this workflow's
+# trigger events and a completed run's conclusion never changes on its
+# own -- a new run has to execute. workflow_dispatch gives that a
+# one-click affordance instead of relying solely on the Actions UI's
+# generic "re-run failed jobs".
+#
+# Bounded poll for the "not reviewed yet" race (#2015): the
+# `pull_request` `synchronize` trigger above fires the instant a push
+# lands, independent of the separate `pull_request_review` trigger,
+# which only fires once the primary bot's own review actually lands
+# (typically 10-40s later) -- so a push that also needed a fresh review
+# used to get asserted, and fail, before that review existed, costing an
+# external rerun most of the time (the exact recovery documented a few
+# paragraphs below). `advisory-convergence.mjs`'s CLI entry point now
+# runs `runAdvisoryConvergenceWithPoll` instead of asserting
+# immediately: when (and ONLY when) the verdict's sole blocking reason
+# is literally "{bot} has not reviewed this pull request yet" --
+# `isSoleCopilotNotReviewedYetReason` in the .mts source -- it polls a
+# short, bounded window (a few seconds apart, capped around a minute,
+# wall-clock bounded) before its real assert-driven exit. Every OTHER
+# not-ready reason (a stale-HEAD review, unresolved threads, an
+# indeterminate claim scope, a deadline/terminal-unavailability reason,
+# etc.) still fails immediately on the first pass with no wait, exactly
+# as before this change. This does not weaken the check's required,
+# fail-closed, non-bypassable nature or change roadmap #1342's
+# deterministic-convergence policy in any way: if the review still has
+# not landed by the end of the window, or lands with outstanding items,
+# the job fails exactly as it always has.
+#
+# Known residual (PR #2023 review): this job's own concurrency group
+# (below) is keyed by PR number ALONE across all three of its triggers,
+# with `cancel-in-progress: true`. If the primary bot's review actually
+# lands WHILE this poll is asleep, that submission starts a fresh
+# `pull_request_review`-triggered run in the SAME group, which cancels
+# THIS run before its next scheduled re-check ever observes the review
+# -- this run ends CANCELLED, and the fresh run becomes the one
+# responsible for reflecting convergence, subject to the exact same
+# stale-rollup risk `#1381` documents a few paragraphs below (whose
+# recovery, `rerun-advisory-convergence.mjs`, already handles a stale
+# CANCELLED sibling instance, not only a FAILURE one -- see "Rerun
+# mechanics" in `idd-ci.instructions.md`). Not a regression versus the
+# pre-#2015 baseline (before this change, the run always finished
+# FAILURE well before the review landed, so cancellation essentially
+# never happened, but the later review-triggered run's rollup update
+# was ALREADY subject to this same `#1381` risk) -- only a narrower win
+# than "no external rerun ever needed." See
+# `runAdvisoryConvergenceWithPoll`'s own doc comment
+# (`src/scripts/advisory-convergence.mts`) for the full analysis; no
+# safe mechanical fix was found within #2015's scope.
 #
 # Correction (kurone-kito/idd-skill#1381): in practice, workflow_dispatch
 # does NOT reliably flip the PR's required-check rollup for its own HEAD
