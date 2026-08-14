@@ -402,15 +402,15 @@ which suffices for its single-shot post-merge run:
 
 **F4 Cleanup Evidence**
 
-| Field                            | Value                                  |
-| -------------------------------- | -------------------------------------- |
-| Status                           | applied / failed / incomplete          |
-| Applied                          | N                                      |
-| Failed                           | N                                      |
-| Skipped                          | N                                      |
-| Permission-blocked               | N                                      |
-| Retry attempts (bound-exhausted) | N (true / false)                       |
-| Notes                            | reason for any failed or skipped items |
+| Field                            | Value                                         |
+| -------------------------------- | --------------------------------------------- |
+| Status                           | applied / failed / incomplete / rescan-failed |
+| Applied                          | N                                             |
+| Failed                           | N                                             |
+| Skipped                          | N                                             |
+| Permission-blocked               | N                                             |
+| Retry attempts (bound-exhausted) | N (true / false)                              |
+| Notes                            | reason for any failed or skipped items        |
 ```
 
 `retry-attempts` / `retry-bound-exhausted` mirror
@@ -419,14 +419,20 @@ which suffices for its single-shot post-merge run:
 issue 2011): a `true` bound-exhausted value with an otherwise
 `applied`/`clean` status is informational, not a cleanup failure — a
 fresh rescan still found candidates after the bound, not that
-anything went wrong.
+anything went wrong. A `rescan-failed` status (below) always takes the
+cleanup-failure path regardless of `retry-bound-exhausted`, since the
+confirming rescan itself never completed.
 
 ### Cleanup-failure comment
 
-Post this comment when apply `status` is `failed` or `incomplete`. If
-`viewer-cannot-minimize > 0` is also non-zero, include the blocked count
-in the same comment rather than posting a separate permission-blocked
-comment:
+Post this comment when apply `status` is `failed`, `incomplete`, or
+`rescan-failed`. `rescan-failed` means the confirming rescan after a
+mutation errored (a transient GraphQL/`gh` failure) — already-applied
+work is preserved in the report, but convergence was never confirmed;
+note that distinction and suggest a re-run rather than describing it as
+a per-candidate failure. If `viewer-cannot-minimize > 0` is also
+non-zero, include the blocked count in the same comment rather than
+posting a separate permission-blocked comment:
 
 ```markdown
 <!-- idd-cleanup-evidence: {status} applied:{N} failed:{N} skipped:{N} viewer-cannot-minimize:{N} -->
@@ -435,7 +441,7 @@ comment:
 
 Cleanup candidates were detected but not all could be applied.
 
-- Status: failed / incomplete
+- Status: failed / incomplete / rescan-failed
 - Failed: N candidates (reason: ...)
 - Unapplied: N candidates
 - Permission-blocked: N candidates (if any)

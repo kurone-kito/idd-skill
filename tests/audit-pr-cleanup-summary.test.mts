@@ -195,6 +195,27 @@ test('computeReportSummary converges to applied when remaining candidates were c
   assert.equal(report.summary?.['viewer-cannot-minimize'], 0);
 });
 
+test('computeReportSummary emits rescan-failed when a confirming rescan errored, even with no failed candidates', () => {
+  // #2011 review finding: a fallback workflow trusts a parseable `status`
+  // even on a nonzero helper exit, so an unqualified applied/clean status
+  // here would publish false convergence evidence for a rescan that never
+  // actually confirmed the candidates converged.
+  const report = createReport({
+    mode: 'apply',
+    candidates: [{ subjectId: 'candidate-1' }],
+    skipped: [],
+    applied: [{ subjectId: 'candidate-1' }],
+    failed: [],
+    rescanError: 'GraphQL: transient failure',
+  });
+
+  computeReportSummary(report);
+
+  assert.equal(report.status, 'rescan-failed');
+  assert.equal(report.summary?.applied, 1);
+  assert.equal(report.summary?.failed, 0);
+});
+
 test('computeReportSummary emits failed when apply has both applied and failed candidates', () => {
   const report = createReport({
     mode: 'apply',
