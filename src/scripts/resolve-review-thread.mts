@@ -24,6 +24,8 @@ import {
 } from './collaborator-permission.mts';
 import { DEFAULT_GH_PAGINATED_TIMEOUT_MS, ghText } from './gh-exec.mts';
 import {
+  isDispositionComment,
+  isRejectionConfirmedDisposition,
   type ParsedClaimMarker,
   resolveActiveClaimForWriteGate,
 } from './protocol-helpers.mts';
@@ -126,6 +128,43 @@ export function applyResolveReviewThread(deps: {
   return { replyId: reply.id };
 }
 
+/** The three marker forms `--apply` accepts, for use in error messages. */
+export const ACCEPTED_DISPOSITION_MARKERS =
+  '**Accepted**, **Rejected**, or **Rejection confirmed by maintainer** —';
+
+/**
+ * True when `body` starts with one of the marker prefixes
+ * `hasFreshDisposition` (`protocol-helpers.mts`) recognizes as a
+ * disposition. Reuses `isDispositionComment` /
+ * `isRejectionConfirmedDisposition` directly so this posting-time check
+ * and the later merge-gate check can never drift out of sync
+ * (idd-skill#2005). Has no network dependency, so the CLI can call it
+ * before resolving `owner`/`repo` or looking up the thread — a malformed
+ * `--body` then fails closed without posting anything.
+ *
+ * Deliberately does NOT gate the `**Rejection confirmed by maintainer**`
+ * form on the target thread's *pre*-mutation resolution state.
+ * `isRejectionConfirmedDisposition`'s resolved-thread scoping inside
+ * `hasFreshDisposition` is evaluated later, by a downstream gate, against
+ * the thread's state *at that later evaluation time* — and
+ * `applyResolveReviewThread` below unconditionally resolves whatever
+ * thread it replies to, so a successful `--apply` call always leaves the
+ * thread resolved by the time any downstream gate looks at it, regardless
+ * of whether it was already resolved beforehand. The primary documented
+ * use of this exact marker (`idd-review-triage.instructions.md`'s AMD
+ * "maintainer agrees" transition) posts it on a thread that is still
+ * *unresolved* at call time by design, precisely because this call is
+ * what resolves it — an earlier revision of this check required
+ * pre-mutation resolution and would have rejected that call outright
+ * (caught by a Codex review on this PR).
+ */
+export function hasKnownDispositionMarkerPrefix(body: string): boolean {
+  const comment = { body };
+  return (
+    isDispositionComment(comment) || isRejectionConfirmedDisposition(comment)
+  );
+}
+
 // ---------------------------------------------------------------------------
 // CLI
 // ---------------------------------------------------------------------------
@@ -220,7 +259,9 @@ thread in one invocation (E13). Dry-run by default; --apply mutates.
 
   --pr <number>                  PR number (required)
   --comment-id <id>              review comment REST id whose thread to resolve (required)
-  --body <text>                  reply body (required with --apply)
+  --body <text>                  reply body (required with --apply; with --apply, must start
+                                 with **Accepted**, **Rejected**, or
+                                 **Rejection confirmed by maintainer** —)
   --owner <owner>                repo owner (default: gh repo view)
   --repo <repo>                  repo name (default: gh repo view)
   --claim-issue <number>         issue carrying the active claim (required with --apply)
@@ -532,6 +573,18 @@ if (import.meta.main) {
   ) {
     process.stderr.write(
       '--apply requires --body and the --claim-issue / --claim-id pair for the mandatory claim revalidation\n',
+    );
+    process.exit(1);
+  }
+  // Fail closed before any network call: --apply must never post a --body
+  // the F2/F3 disposition-evidence gate (hasFreshDisposition) won't
+  // recognize as a disposition (idd-skill#2005). See
+  // hasKnownDispositionMarkerPrefix's own doc comment for why this does
+  // not separately gate the "Rejection confirmed by maintainer" form on
+  // the thread's pre-mutation resolution state.
+  if (args.apply && !hasKnownDispositionMarkerPrefix(args.body)) {
+    process.stderr.write(
+      `--apply requires --body to start with one of the accepted disposition markers: ${ACCEPTED_DISPOSITION_MARKERS}\n`,
     );
     process.exit(1);
   }

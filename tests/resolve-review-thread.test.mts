@@ -1,16 +1,22 @@
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
+import { join } from 'node:path';
 import { test } from 'node:test';
+import { fileURLToPath } from 'node:url';
 
 import {
   applyResolveReviewThread,
   assertNoGraphqlErrors,
   findThreadForComment,
+  hasKnownDispositionMarkerPrefix,
   parseArgs,
   type ResolveReviewThreadReport,
   type ReviewThreadNode,
 } from '../src/scripts/resolve-review-thread.mts';
 import { loadJson, validate } from '../src/scripts/validate-schemas.mts';
 import { buildReviewThreadNode } from './test-utils.mts';
+
+const REPO_ROOT = fileURLToPath(new URL('..', import.meta.url));
 
 const resultSchema = loadJson('schemas/resolve-review-thread.schema.json');
 
@@ -290,6 +296,93 @@ test('applyResolveReviewThread does not resolve the thread when the reply fails'
     /reply failed/,
   );
   assert.deepEqual(calls, ['claim']);
+});
+
+// --- #2005: validate the disposition marker prefix before posting ----------
+
+test('hasKnownDispositionMarkerPrefix accepts each of the three forms hasFreshDisposition recognizes', () => {
+  assert.equal(
+    hasKnownDispositionMarkerPrefix('**Accepted** — fixed in abc1234: ...'),
+    true,
+  );
+  assert.equal(
+    hasKnownDispositionMarkerPrefix(
+      '**Rejected** — verified placeholders-only',
+    ),
+    true,
+  );
+  assert.equal(
+    hasKnownDispositionMarkerPrefix(
+      '**Rejection confirmed by maintainer** — agreed, no action needed',
+    ),
+    true,
+  );
+});
+
+test('hasKnownDispositionMarkerPrefix rejects a non-conforming body before any network call', () => {
+  // This predicate has no network dependency at all -- the CLI calls it
+  // before resolving owner/repo or looking up the review thread, so a body
+  // like this is rejected before any gh/GraphQL call is made.
+  assert.equal(
+    hasKnownDispositionMarkerPrefix('**Fixed** — cleaned up the stray import'),
+    false,
+  );
+});
+
+// The predicate test above proves `hasKnownDispositionMarkerPrefix` itself
+// rejects a non-conforming body, but not that the compiled CLI actually
+// calls it before any `gh` invocation -- a regression that moved or dropped
+// the `--apply` guard in `main()` would still leave that pure-function test
+// green. Run the real compiled entry point (docs/typescript-sources.md's
+// "never hand-edit scripts/*.mjs" source of truth) with `gh` scrubbed from
+// `PATH` (the tests/post-idd-marker.test.mts `runCliExpectingFailure`
+// pattern): if the guard fired, the process exits 1 with the documented
+// stderr message before ever shelling out; if it didn't, `gh` would be
+// invoked and fail with an unrelated ENOENT-style spawn error instead.
+test('--apply rejects a non-conforming --body before any gh call (compiled CLI)', () => {
+  try {
+    execFileSync(
+      process.execPath,
+      [
+        join(REPO_ROOT, 'scripts/resolve-review-thread.mjs'),
+        '--pr',
+        '42',
+        '--comment-id',
+        '1001',
+        '--claim-issue',
+        '2005',
+        '--claim-id',
+        'test-claim-id',
+        '--apply',
+        '--body',
+        '**Fixed** — cleaned up the stray import',
+      ],
+      { cwd: REPO_ROOT, encoding: 'utf8', env: { ...process.env, PATH: '' } },
+    );
+  } catch (error) {
+    const failure = error as { status?: number; stderr?: string };
+    assert.equal(failure.status, 1);
+    assert.match(
+      failure.stderr ?? '',
+      /--apply requires --body to start with one of the accepted disposition markers/,
+    );
+    return;
+  }
+  throw new Error('expected the CLI to exit non-zero');
+});
+
+test('hasKnownDispositionMarkerPrefix accepts "Rejection confirmed by maintainer" regardless of thread resolution state', () => {
+  // Regression coverage for a Codex review finding on this PR: an earlier
+  // revision of this check required the target thread to already be
+  // resolved before accepting this marker. That broke the documented AMD
+  // "maintainer agrees" transition (idd-review-triage.instructions.md),
+  // which posts exactly this marker on a thread that is still
+  // *unresolved* at call time -- resolve-review-thread.mjs's own --apply
+  // path is what resolves it, in the same call. This predicate has no
+  // thread-state input at all, so it can never re-introduce that bug.
+  const body =
+    '**Rejection confirmed by maintainer** — agreed, no action needed';
+  assert.equal(hasKnownDispositionMarkerPrefix(body), true);
 });
 
 test('the dry-run and apply output envelopes validate against the schema', () => {
