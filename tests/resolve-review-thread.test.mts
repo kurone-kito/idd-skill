@@ -1,5 +1,8 @@
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
+import { join } from 'node:path';
 import { test } from 'node:test';
+import { fileURLToPath } from 'node:url';
 
 import {
   applyResolveReviewThread,
@@ -12,6 +15,8 @@ import {
 } from '../src/scripts/resolve-review-thread.mts';
 import { loadJson, validate } from '../src/scripts/validate-schemas.mts';
 import { buildReviewThreadNode } from './test-utils.mts';
+
+const REPO_ROOT = fileURLToPath(new URL('..', import.meta.url));
 
 const resultSchema = loadJson('schemas/resolve-review-thread.schema.json');
 
@@ -322,6 +327,48 @@ test('hasKnownDispositionMarkerPrefix rejects a non-conforming body before any n
     hasKnownDispositionMarkerPrefix('**Fixed** — cleaned up the stray import'),
     false,
   );
+});
+
+// The predicate test above proves `hasKnownDispositionMarkerPrefix` itself
+// rejects a non-conforming body, but not that the compiled CLI actually
+// calls it before any `gh` invocation -- a regression that moved or dropped
+// the `--apply` guard in `main()` would still leave that pure-function test
+// green. Run the real compiled entry point (docs/typescript-sources.md's
+// "never hand-edit scripts/*.mjs" source of truth) with `gh` scrubbed from
+// `PATH` (the tests/post-idd-marker.test.mts `runCliExpectingFailure`
+// pattern): if the guard fired, the process exits 1 with the documented
+// stderr message before ever shelling out; if it didn't, `gh` would be
+// invoked and fail with an unrelated ENOENT-style spawn error instead.
+test('--apply rejects a non-conforming --body before any gh call (compiled CLI)', () => {
+  try {
+    execFileSync(
+      process.execPath,
+      [
+        join(REPO_ROOT, 'scripts/resolve-review-thread.mjs'),
+        '--pr',
+        '42',
+        '--comment-id',
+        '1001',
+        '--claim-issue',
+        '2005',
+        '--claim-id',
+        'test-claim-id',
+        '--apply',
+        '--body',
+        '**Fixed** — cleaned up the stray import',
+      ],
+      { cwd: REPO_ROOT, encoding: 'utf8', env: { ...process.env, PATH: '' } },
+    );
+  } catch (error) {
+    const failure = error as { status?: number; stderr?: string };
+    assert.equal(failure.status, 1);
+    assert.match(
+      failure.stderr ?? '',
+      /--apply requires --body to start with one of the accepted disposition markers/,
+    );
+    return;
+  }
+  throw new Error('expected the CLI to exit non-zero');
 });
 
 test('hasKnownDispositionMarkerPrefix accepts "Rejection confirmed by maintainer" regardless of thread resolution state', () => {
