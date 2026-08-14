@@ -194,16 +194,15 @@ check name.
 If GH CLI cannot resolve a run ID, use Actions REST endpoints directly
 for the same run before posting a hold.
 
-**`idd-advisory-convergence` specifically** (when hosted as a required
-check): `workflow_dispatch` does **not** reliably refresh the PR's
-required-check rollup for current HEAD — a manually dispatched run has
-no `pull_request` context to associate with the PR's HEAD SHA (full
-investigation: this repo's dogfooded
+**`idd-advisory-convergence`** (as a required check): `workflow_dispatch`
+does **not** reliably refresh the PR's required-check rollup for current
+HEAD — a manually dispatched run has no `pull_request` context to
+associate with the PR's HEAD SHA (full investigation: this repo's
+dogfooded
 [`.github/workflows/idd-advisory-convergence.yml`](https://github.com/kurone-kito/idd-skill/blob/main/.github/workflows/idd-advisory-convergence.yml)
 header comment — not present in the portable stub this template
-ships). For a stuck or stale rollup entry, apply the rerun mechanic
-above (`gh run rerun <run-id>` on the _existing_ PR-linked run)
-instead of `workflow_dispatch`.
+ships). For a stuck or stale rollup entry, rerun the _existing_
+PR-linked run (`gh run rerun <run-id>`) instead of `workflow_dispatch`.
 
 A second cause: GitHub gates a bot-triggered run (e.g. Copilot's
 `pull_request_review`/`pull_request_review_comment` event) to
@@ -219,23 +218,26 @@ subscription).
 
 **If rerunning the passing non-bot instance alone does not clear the
 rollup (`#1745`)**: a HEAD can carry several `idd-advisory-convergence`
-check-run instances at once (the check fires on `pull_request` plus
+check-run instances (the check fires on `pull_request` plus
 `pull_request_review`/`pull_request_review_comment`, and
 `cancel-in-progress` cancels most of them), and GitHub's own required-check
 rollup can stay pinned to a bot-triggered instance whose **conclusion** is
-`CANCELLED` — distinct from the `action_required` case above. Unlike
-`action_required`, a `CANCELLED`-conclusion bot-triggered instance is
-**not** gated: rerunning it completes normally and does not re-enter
-`action_required` (confirmed by direct experiment, `#1745`). If the
+`CANCELLED`. Unlike `action_required`, a `CANCELLED`-conclusion
+bot-triggered instance is **not** gated: rerunning it completes
+normally and does not re-enter `action_required` (confirmed by direct
+experiment, `#1745`). If the
 non-bot rerun above does not clear the block, rerun every
 `CANCELLED`-conclusion bot-triggered sibling instance for the same HEAD
-next (`gh run rerun <run-id>` on each, one at a time, per the sequential
-rule in the helper-first plan below) — only an `action_required`-conclusion
-instance stays withheld from rerun.
+next (`gh run rerun <run-id>` on each, per the plan below) — only an
+`action_required`-conclusion instance stays withheld from rerun.
+
+Note: this is a known Rulesets platform behavior, not an `idd-skill`
+dedup bug — GitHub can require every same-named instance non-failing,
+not just the dedup-selected latest.
 
 **Helper-first**: prints this diagnosis and ordered rerun plan, read-only
-by default; pass `--apply` to also execute it — the preferred one-shot
-recovery path when a helper runtime is available. `--apply` reruns each
+by default; pass `--apply` to also execute it — the preferred recovery
+path when available. `--apply` reruns each
 rerun-eligible instance in order (recovery-refresh first when one
 applies), waits for each to reach a terminal state before starting the
 next, and stops early as soon as the rollup resolves — never a
@@ -253,8 +255,8 @@ Resolve `<profile-selected-rerun-advisory-convergence-command>` from
 `docs/idd-helper-scripts.md`; do not hardcode `node scripts/...` for
 non-vendored profiles. On `instructions-only` (no helper runtime), fall
 back to the manual sequence: run the diagnostic, then `gh run rerun
-<run-id>` on each plan entry one at a time, waiting for each to finish
-before the next.
+<run-id>` on each plan entry, waiting for each to finish before the
+next.
 
 **Terminal-waiver recheck (`#1570`)**: once a maintainer waives a proven
 `COPILOT_UNAVAILABLE` state
