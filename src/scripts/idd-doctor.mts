@@ -3443,10 +3443,20 @@ export function readTrustEmptyProtectionReads(root: string): boolean {
  * `idd-doctor --repo-root <path>` may target a repository on a
  * different host than the calling environment's own default. Deriving
  * from the target repository's own resolved `url` instead is the
- * correct, `--repo-root`-specific signal. Returns `undefined` for the
- * common `github.com` case (and any unparseable URL), so the emitted
- * argv matches `resolveGhApiHostname()`'s own "no override on
- * github.com" convention.
+ * correct, `--repo-root`-specific signal. Returns the literal
+ * `'github.com'` for the common `github.com` case, as an explicit
+ * `--hostname` override -- unlike `resolveGhApiHostname()`'s own "no
+ * override on github.com" convention, an explicit override is required
+ * here: an explicit `--hostname` flag wins over `gh api`'s own
+ * environment-based `GH_HOST` fallback, but `undefined` (no
+ * `--hostname` at all) leaves `GH_HOST` in force, so a GHES-configured
+ * `GH_HOST` in the calling environment would otherwise leak into a
+ * governance read for a genuinely `github.com`-hosted target
+ * repository (idd-skill#2030). Preserves an explicit non-default port
+ * via `URL.host` rather than `URL.hostname` for a GHES target,
+ * mirroring `branch-conflict-state.mts`'s `parseGitFetchOrigin()`
+ * (idd-skill#2030, PR #2026 review). Returns `undefined` only for an
+ * unparseable or host-less `url`.
  */
 export function resolveTargetGhHostname(
   url: string | undefined,
@@ -3454,13 +3464,17 @@ export function resolveTargetGhHostname(
   if (!url) {
     return undefined;
   }
-  let host: string;
+  let parsed: URL;
   try {
-    host = new URL(url).hostname.toLowerCase();
+    parsed = new URL(url);
   } catch {
     return undefined;
   }
-  return host && host !== 'github.com' ? host : undefined;
+  const hostname = parsed.hostname.toLowerCase();
+  if (!hostname) {
+    return undefined;
+  }
+  return hostname === 'github.com' ? 'github.com' : parsed.host.toLowerCase();
 }
 
 /**

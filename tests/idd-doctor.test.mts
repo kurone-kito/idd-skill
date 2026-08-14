@@ -3660,10 +3660,10 @@ test('fetchGhApiJsonAt preserves a failed `gh api` call\'s stdout so fetchGovern
 // subcommand such as `gh repo view`), so idd-doctor.mts's governance reads
 // must derive and pass an explicit `--hostname` for a GHES-hosted target
 // repository instead of relying on `cwd`.
-test('resolveTargetGhHostname returns undefined for github.com and an absent/unparseable URL', () => {
+test('resolveTargetGhHostname returns the explicit "github.com" override for a github.com URL, and undefined for an absent/unparseable URL (idd-skill#2030)', () => {
   assert.equal(
     resolveTargetGhHostname('https://github.com/kurone-kito/idd-skill'),
-    undefined,
+    'github.com',
   );
   assert.equal(resolveTargetGhHostname(undefined), undefined);
   assert.equal(resolveTargetGhHostname('not a url'), undefined);
@@ -3673,5 +3673,18 @@ test('resolveTargetGhHostname resolves a GHES hostname, lowercased', () => {
   assert.equal(
     resolveTargetGhHostname('https://GHE.example.com/owner/repo'),
     'ghe.example.com',
+  );
+});
+
+// idd-skill#2030 (PR #2026 review, owner follow-up): a GHES remote on a
+// non-standard port must keep that port -- `URL.hostname` alone would
+// silently drop it and misdirect the governance read at the default
+// HTTPS port instead of the repository's actual server, mirroring the
+// same `.host`-over-`.hostname` fix `branch-conflict-state.mts`'s
+// `parseGitFetchOrigin()` already applies.
+test('resolveTargetGhHostname preserves an explicit non-default port for a GHES hostname', () => {
+  assert.equal(
+    resolveTargetGhHostname('https://ghe.example.com:8443/owner/repo'),
+    'ghe.example.com:8443',
   );
 });
