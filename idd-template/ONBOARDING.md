@@ -178,13 +178,65 @@ reasoning depth, not for routine IDD loop execution.
 ## Your task
 
 1. Read this document before changing files.
-2. Auto-derive candidate placeholder values from repository evidence.
-3. Confirm policy decisions with the operator.
-4. Fetch or copy the template files.
-5. Replace placeholders with the confirmed values.
-6. Record the selected policies where future IDD sessions will read them.
-7. Update the repository's agent entry files.
-8. Verify the imported result with the checklist at the bottom.
+2. Confirm the `gh` CLI is installed and authenticated.
+3. Auto-derive candidate placeholder values from repository evidence.
+4. Confirm policy decisions with the operator.
+5. Fetch or copy the template files.
+6. Replace placeholders with the confirmed values.
+7. Record the selected policies where future IDD sessions will read them.
+8. Update the repository's agent entry files.
+9. Verify the imported result with the checklist at the bottom.
+
+---
+
+## Step 0 — Prerequisite check
+
+Before Step 1A, confirm the `gh` CLI is installed and authenticated.
+IDD depends on `gh` throughout its own lifetime -- claim markers, PR
+submission, review-thread disposition, merge execution, and every
+later IDD phase -- independent of whatever tech stack the target
+repository itself uses. This is the operator's own local `gh` session
+used interactively during onboarding, distinct from the CI-side
+`GH_TOKEN`/`GH_ENTERPRISE_TOKEN` wiring a hosted `idd-doctor` workflow
+needs (see [Optional — run idd-doctor as a CI health gate](#optional--run-idd-doctor-as-a-ci-health-gate)).
+
+Run:
+
+```sh
+gh --version
+git remote get-url origin
+gh auth status --hostname <derived-host>
+```
+
+Bare `gh auth status` (no `--hostname`) reports on every host `gh`
+already knows about, not the repository being onboarded: it exits
+successfully only when **every** known host is authenticated, so an
+unrelated stale credential for some other project's host can fail this
+check even though the target repository's own host is fine (confirmed
+against a real `gh` binary) -- and, if the target host itself was
+never configured at all, the bare form silently omits it instead of
+reporting it missing. Both failure directions require scoping to the
+target host specifically, always -- unlike `gh api`'s own `--hostname`
+convention, `gh auth status` has no case where omitting it is correct,
+not even for `github.com` (confirmed: `gh auth status --hostname
+github.com` behaves identically to a clean bare invocation, so there
+is no cost to always passing it). Derive `<derived-host>` from `git
+remote get-url origin`'s URL (parse the host portion; a
+`github.com` URL yields `github.com` itself).
+
+- On success, continue to Step 1A without further comment.
+- On failure (not installed, or not authenticated to the target
+  repository's own host), report the exact remediation to the operator
+  -- the CLI install command, or `gh auth login --hostname
+  <derived-host>` -- and ask whether to proceed anyway before
+  continuing. This is a one-time setup conversation the operator stays
+  in control of, not a silent skip and not an unconditional hard stop.
+
+This check is scoped to `gh` only. IDD does not require Node.js or
+pnpm for the default instructions-only profile (see
+[Tooling boundary](docs/onboarding/placeholders.md#tooling-boundary));
+a Node.js check tied to the helper-runtime-profile choice belongs at
+Step 1B's helper-runtime-profile item instead, not here.
 
 ---
 
@@ -216,6 +268,11 @@ Return the report in this format:
 - Files that would be created:
 - Files that would be modified:
 ```
+
+`Missing prerequisites:` reports the same host-scoped `gh --version`/
+`gh auth status --hostname <derived-host>` check as Step 0 above, plus
+any other missing tooling this dry-run pass observes -- both surfaces
+agree on the `gh` check itself.
 
 This dry-run is for evaluators who want a quick import readiness summary
 before starting Step 1A.
