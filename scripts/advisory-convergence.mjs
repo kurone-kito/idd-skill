@@ -412,20 +412,31 @@ export function computeAdvisoryConvergenceVerdict(inputs, options) {
     trustedMarkerLogins,
     review.submittedAt,
   );
-  // `itemCountClauseSatisfied`: `itemCount === 0`, OR Clause 2's OWN
-  // thread-disposition evidence already covers every item Copilot posted
-  // (`threadClause.satisfied`) PROVIDED at least one Copilot-authored thread
-  // actually exists (`copilotThreadCount > 0`). That second conjunct matters:
-  // `threadClause.satisfied` is vacuously `true` when ZERO Copilot-authored
-  // threads exist at all (`blockingCount === 0` trivially), which would
-  // otherwise let a review with a positive `itemCount` and NO recorded
-  // thread evidence converge with nothing actually read or dispositioned --
-  // exactly the #1719 incident shape documented below (a "Comments
-  // suppressed due to low confidence" item counted in `itemCount` but
-  // invisible to any `reviewThreads` query).
+  // `itemCountClauseSatisfied`: `itemCount === 0`, OR every thread THIS
+  // SPECIFIC review opened is resolved or validly dispositioned. Bound to
+  // `review.reviewId` (Copilot review, this PR: `classifyThreadIdsForReview`)
+  // rather than reusing `threadClause` (Clause 2's PR-WIDE, review-agnostic
+  // set) directly: `threadClause.satisfied` can be vacuously true from an
+  // OLDER, already-dispositioned review's threads while the LATEST review's
+  // own items have no thread representation at all -- a resolved-but-stale
+  // thread must never stand in for the CURRENT review's own coverage. This
+  // also naturally handles the #1719 incident shape (a "Comments suppressed
+  // due to low confidence" item counted in `itemCount` but invisible to any
+  // `reviewThreads` query): `latestReviewThreadIds` stays empty and
+  // `itemCountClauseSatisfied` stays `false`.
+  const latestReviewThreadIds = classifyThreadIdsForReview(
+    threads,
+    primaryBotLogin,
+    review.reviewId,
+  );
+  const latestReviewBlocking = dispositionEvidence.missingThreads.filter(
+    (thread) =>
+      latestReviewThreadIds.has(String(thread.id ?? '')) &&
+      thread.isResolved === false,
+  );
   const itemCountClauseSatisfied =
     review.itemCount === 0 ||
-    (threadClause.satisfied && threadClause.copilotThreadCount > 0);
+    (latestReviewThreadIds.size > 0 && latestReviewBlocking.length === 0);
   // `suppressedClauseSatisfied`: `suppressedCount === 0`, OR a valid
   // `review-ack` covers it.
   const suppressedClauseSatisfied =
@@ -487,15 +498,16 @@ export function computeAdvisoryConvergenceVerdict(inputs, options) {
         review.suppressedCount > 0
           ? ` (plus ${review.suppressedCount} suppressed comment(s) in the review body, not counted in itemCount)`
           : '';
-      // #2050: only the zero-Copilot-thread shape still needs the "check
-      // the review body directly" pointer -- when real Copilot-authored
-      // threads exist and are all resolved/dispositioned,
+      // #2050: only the "this review opened zero threads" shape still needs
+      // the "check the review body directly" pointer -- when THIS review's
+      // own threads exist and are all resolved/dispositioned,
       // `itemCountClauseSatisfied` is already `true` and this `else` branch
       // is unreachable for that case; when they exist but are NOT all
       // resolved/dispositioned, the separate `threadClause.satisfied` reason
-      // below already names those threads directly.
+      // below already names those (PR-wide) blocking threads directly,
+      // which include this review's own unresolved ones.
       const noThreadEvidenceForItems =
-        threadClause.copilotThreadCount === 0 &&
+        latestReviewThreadIds.size === 0 &&
         review.itemCount !== null &&
         review.itemCount > 0;
       reasons.push(
@@ -857,6 +869,40 @@ export function classifyCopilotAuthoredThreadIds(threads, primaryBotLogin) {
       // `missingThreads[].id` fallback exactly (protocol-helpers.mts) so a
       // thread with an empty/missing GraphQL id still round-trips through
       // the `.has()` lookup in the caller instead of silently diverging.
+      ids.add(String(thread.id ?? '') || `thread-${index + 1}`);
+    }
+  });
+  return ids;
+}
+/**
+ * #2050: Copilot-authored thread IDs whose *originating* comment belongs to
+ * a SPECIFIC review (matched by GraphQL review node id), unlike
+ * {@link classifyCopilotAuthoredThreadIds}'s review-agnostic set (every
+ * Copilot-authored thread anywhere in the PR's history -- which Clause 2
+ * genuinely needs). Clause 1's `itemCount`-half needs narrower, review-bound
+ * evidence: `threadClause.satisfied` alone can be vacuously true from an
+ * OLDER, already-dispositioned review's threads while the LATEST review's
+ * own items have no thread representation at all -- a resolved-but-stale
+ * thread must never stand in for the CURRENT review's own coverage (Copilot
+ * review, this PR). Each thread's originating comment's `pullRequestReview`
+ * is already fetched by `fetchReviewThreads` below; matching on its `id`
+ * against a Copilot review's own `id` (review-clause.mts's `reviewId`) also
+ * proves Copilot authorship by construction (every comment in one GitHub
+ * review shares that review's single author), but `isVerifiedCopilotAuthor`
+ * is still checked directly for defense-in-depth, matching this file's
+ * existing convention. `reviewId === ''` (not found / off-HEAD) always
+ * returns an empty set, fail-closed.
+ */
+export function classifyThreadIdsForReview(threads, primaryBotLogin, reviewId) {
+  const ids = new Set();
+  if (!reviewId) return ids;
+  threads.forEach((thread, index) => {
+    const originating = (thread.comments?.nodes ?? [])[0];
+    if (
+      originating &&
+      isVerifiedCopilotAuthor(originating.author, primaryBotLogin) &&
+      String(originating.pullRequestReview?.id ?? '') === reviewId
+    ) {
       ids.add(String(thread.id ?? '') || `thread-${index + 1}`);
     }
   });

@@ -2001,21 +2001,35 @@ failure.
 
 **Disposition-aware resolution (kurone-kito/idd-skill#2050).** A
 same-HEAD reroll (above) is not the only escape hatch for `suppressedCount`
-today: `resolveLatestCopilotReviewClause`'s `satisfied` computation is now
-disposition-aware, not purely mechanical. `converged`'s Clause 1 becomes
-`matchesHead && (itemCount === 0 || threads.satisfied) && (suppressedCount
-=== 0 || hasValidReviewAck)`, computed as a thin override in
-`advisory-convergence.mts` (not inside `resolveLatestCopilotReviewClause`
-itself, since both halves need evidence -- `threads.satisfied`, PR comments,
-`trustedMarkerLogins` -- that pure function does not receive).
-`hasValidReviewAck` is `true` when a trusted `review-ack:` marker's OWN
-`created_at` postdates the latest Copilot review's `submittedAt` (never the
-marker's embedded timestamp), so any later review automatically invalidates
-a pre-existing ack. The `itemCount` half additionally requires
-`threads.copilotThreadCount > 0`: `threads.satisfied` alone is vacuously
-`true` when zero Copilot-authored threads exist at all, which would
-otherwise let a positive `itemCount` with no recorded thread evidence
-converge -- exactly the `#1719` incident shape above.
+today. `resolveLatestCopilotReviewClause` (review-clause.mts) itself stays
+purely mechanical -- `computeAdvisoryConvergenceVerdict`
+(advisory-convergence.mts) now computes a disposition-aware OVERRIDE of its
+`satisfied` field as a thin caller-side wrapper (not inside
+`resolveLatestCopilotReviewClause`, since the override needs evidence --
+review-scoped thread data, PR comments, `trustedMarkerLogins` -- that pure
+function does not receive), reported on the verdict's own `review.satisfied`
+in place of the raw mechanical value:
+
+```text
+matchesHead
+  && (itemCount === 0 || (a thread THIS review opened exists AND all are
+      resolved/dispositioned))
+  && (suppressedCount === 0 || hasValidReviewAck)
+```
+
+The `itemCount` half is bound to the LATEST review specifically
+(`classifyThreadIdsForReview`, matching each thread's originating comment's
+`pullRequestReview.id` against the review's own GraphQL node id, now also
+exposed as `review.reviewId`) -- NOT `threads.satisfied` (Clause 2's
+PR-WIDE, review-agnostic set) directly: an older, already-dispositioned
+thread from a DIFFERENT review must never stand in for the CURRENT
+review's own coverage, and `threads.satisfied` is additionally vacuous when
+zero Copilot-authored threads exist at all -- both variants of the same
+`#1719` incident shape above (a positive `itemCount` with no real thread
+evidence). `hasValidReviewAck` is `true` when a trusted `review-ack:`
+marker's OWN `created_at` postdates the latest Copilot review's
+`submittedAt` (never the marker's embedded timestamp), so any later review
+automatically invalidates a pre-existing ack.
 
 The `review-ack:` marker matches `advisory-reroll:`'s field shape and
 posting path exactly (see

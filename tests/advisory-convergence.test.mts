@@ -1915,7 +1915,7 @@ test('reasons: itemCount > 0 with every visible Copilot thread resolved points a
 test('reasons: itemCount > 0 with an unresolved blocking thread does NOT add the review-body pointer (a real thread already explains it)', () => {
   const verdict = computeAdvisoryConvergenceVerdict(
     baseInputs({
-      reviews: [copilotReview({ itemCount: 2 })],
+      reviews: [copilotReview({ id: 'REVIEW_BLOCK', itemCount: 2 })],
       threads: [
         {
           id: 'PRT_REAL_BLOCK',
@@ -1927,6 +1927,11 @@ test('reasons: itemCount > 0 with an unresolved blocking thread does NOT add the
                 body: 'nit: consider extracting this into a helper',
                 createdAt: OLD,
                 updatedAt: OLD,
+                // #2050: binds this thread to the review under test so
+                // classifyThreadIdsForReview recognizes it as real,
+                // review-scoped evidence (not the zero-thread-evidence
+                // shape this test is deliberately distinguishing from).
+                pullRequestReview: { id: 'REVIEW_BLOCK' },
               },
             ],
           },
@@ -2161,7 +2166,7 @@ function reviewAckComment(
 test('review-ack: nonzero itemCount with Clause 2 satisfied (via existing thread disposition) converges (#2039 shape)', () => {
   const verdict = computeAdvisoryConvergenceVerdict(
     baseInputs({
-      reviews: [copilotReview({ itemCount: 1 })],
+      reviews: [copilotReview({ id: 'REVIEW_LATEST', itemCount: 1 })],
       threads: [
         {
           id: 'PRT_ACK_1',
@@ -2173,6 +2178,11 @@ test('review-ack: nonzero itemCount with Clause 2 satisfied (via existing thread
                 body: 'nit: consider extracting this into a helper',
                 createdAt: OLD,
                 updatedAt: OLD,
+                // #2050: binds this thread to the LATEST review specifically
+                // (classifyThreadIdsForReview) -- a resolved/dispositioned
+                // thread from an OLDER, different review must not stand in
+                // for the current review's own coverage.
+                pullRequestReview: { id: 'REVIEW_LATEST' },
               },
               {
                 author: { login: TRUSTED },
@@ -2198,7 +2208,7 @@ test('review-ack: nonzero itemCount with Clause 2 satisfied (via existing thread
 test('review-ack: nonzero itemCount with Clause 2 NOT satisfied does not converge, even given a valid review-ack (#2050 acceptance criterion)', () => {
   const verdict = computeAdvisoryConvergenceVerdict(
     baseInputs({
-      reviews: [copilotReview({ itemCount: 1 })],
+      reviews: [copilotReview({ id: 'REVIEW_LATEST', itemCount: 1 })],
       threads: [
         {
           id: 'PRT_ACK_2',
@@ -2210,6 +2220,7 @@ test('review-ack: nonzero itemCount with Clause 2 NOT satisfied does not converg
                 body: 'nit: consider extracting this into a helper',
                 createdAt: OLD,
                 updatedAt: OLD,
+                pullRequestReview: { id: 'REVIEW_LATEST' },
               },
             ],
           },
@@ -2225,6 +2236,56 @@ test('review-ack: nonzero itemCount with Clause 2 NOT satisfied does not converg
   assert.equal(verdict.review.satisfied, false);
   assert.equal(verdict.converged, false);
   assert.equal(verdict.ready, false);
+});
+
+test("review-ack: an OLDER, already-resolved thread from a DIFFERENT review does not cover the LATEST review's own itemCount (PR #2054 review)", () => {
+  // A resolved Copilot thread exists PR-wide (threadClause.satisfied would
+  // be true, and copilotThreadCount > 0), but it belongs to an EARLIER
+  // review, not the current one -- the latest review's own itemCount: 1
+  // has NO thread representation at all. Reusing the PR-wide threadClause
+  // alone (without binding to review.reviewId) would incorrectly converge
+  // here; classifyThreadIdsForReview must keep it blocked.
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({
+      reviews: [
+        copilotReview({
+          id: 'REVIEW_OLD',
+          itemCount: 0,
+          submittedAt: OLD,
+        }),
+        copilotReview({ id: 'REVIEW_LATEST', itemCount: 1 }), // submittedAt: RECENT
+      ],
+      threads: [
+        {
+          id: 'PRT_OLD_RESOLVED',
+          isResolved: true,
+          comments: {
+            nodes: [
+              {
+                author: { login: COPILOT_LOGIN },
+                body: 'an older, already-resolved finding',
+                createdAt: OLD,
+                updatedAt: OLD,
+                pullRequestReview: { id: 'REVIEW_OLD' },
+              },
+            ],
+          },
+        },
+      ],
+    }),
+    baseOptions(),
+  );
+  assertValidVerdict(verdict);
+  assert.equal(verdict.review.itemCount, 1);
+  assert.equal(verdict.threads.copilotThreadCount, 1);
+  assert.equal(verdict.threads.satisfied, true);
+  assert.equal(verdict.review.satisfied, false);
+  assert.equal(verdict.converged, false);
+  assert.equal(verdict.ready, false);
+  assert.match(
+    verdict.reasons.join('\n'),
+    /no copilot-authored review-thread evidence accounts for them/,
+  );
 });
 
 test('review-ack: nonzero suppressedCount with a valid post-review ack converges', () => {

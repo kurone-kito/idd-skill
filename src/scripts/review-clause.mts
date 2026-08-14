@@ -40,6 +40,12 @@ export interface GhAuthorPayload {
 
 /** PR review payload, normalized from the GraphQL `reviews` connection. */
 export interface ReviewPayload {
+  /** #2050: the review's own GraphQL node id -- lets a caller bind evidence
+   * (e.g. a review thread's `pullRequestReview.id`) to THIS specific review,
+   * as opposed to any Copilot-authored thread anywhere in the PR's history.
+   * `''`/absent for a fixture that omits it (treated as "unknown", never a
+   * rejection, matching this file's other optional-field conventions). */
+  id?: string | null;
   author?: GhAuthorPayload | null;
   submittedAt?: string | null;
   commitId?: string | null;
@@ -56,6 +62,13 @@ export interface ReviewPayload {
  * `converged` definition). */
 export interface AdvisoryConvergenceReviewClause {
   found: boolean;
+  /** #2050: the matched review's own GraphQL node id (`''` when `!found` or
+   * off-HEAD) -- lets `advisory-convergence.mts` scope thread evidence to
+   * THIS specific review via each thread's originating comment's
+   * `pullRequestReview.id`, rather than any Copilot-authored thread
+   * anywhere in the PR's history (`classifyCopilotAuthoredThreadIds`'s
+   * broader, review-agnostic Clause 2 set). */
+  reviewId: string;
   commitId: string;
   matchesHead: boolean;
   itemCount: number | null;
@@ -79,6 +92,7 @@ interface PageInfoPayload {
 /** Raw GraphQL `reviews` connection node, before normalization into
  * {@link ReviewPayload}. */
 interface RawReviewNode {
+  id?: string | null;
   commit?: { oid?: string | null } | null;
   submittedAt?: string | null;
   author?: GhAuthorPayload | null;
@@ -186,6 +200,7 @@ export function resolveLatestCopilotReviewClause(
   if (!latest) {
     return {
       found: false,
+      reviewId: '',
       commitId: '',
       matchesHead: false,
       itemCount: null,
@@ -210,6 +225,10 @@ export function resolveLatestCopilotReviewClause(
     : 0;
   return {
     found: true,
+    // #2050: also gated by `matchesHead` -- an off-HEAD review's own id is
+    // never meaningful evidence for the caller's thread-scoping, mirroring
+    // `itemCount`/`suppressedCount` above.
+    reviewId: matchesHead ? String(latest.id ?? '') : '',
     commitId,
     matchesHead,
     itemCount,
@@ -247,6 +266,7 @@ export function fetchReviewsAndHeadCommit(
               reviews(first: 100, after: $cursor) {
                 pageInfo { hasNextPage endCursor }
                 nodes {
+                  id
                   commit { oid }
                   submittedAt
                   author { login __typename }
@@ -293,6 +313,7 @@ export function fetchReviewsAndHeadCommit(
   }
 
   const reviews = nodes.map((node) => ({
+    id: node.id ?? null,
     author: node.author ?? null,
     submittedAt: node.submittedAt ?? null,
     commitId: node.commit?.oid ?? null,

@@ -84,12 +84,16 @@
     "review": {
       "type": "object",
       "description": "Clause 1 evidence: identity and HEAD-coverage of the primary bot's latest review, by fetch order.",
-      "required": ["found", "commitId", "matchesHead", "itemCount", "submittedAt", "suppressedCount", "satisfied"],
+      "required": ["found", "reviewId", "commitId", "matchesHead", "itemCount", "submittedAt", "suppressedCount", "satisfied"],
       "additionalProperties": false,
       "properties": {
         "found": {
           "type": "boolean",
           "description": "True when at least one verified primary-bot review exists at all."
+        },
+        "reviewId": {
+          "type": "string",
+          "description": "GraphQL node id of the latest primary-bot review, read only when matchesHead is true; empty otherwise. kurone-kito/idd-skill#2050: used to bind Clause 1's itemCount-half thread evidence to THIS specific review (via each thread's originating comment's pullRequestReview.id), not any primary-bot-authored thread anywhere in the PR's history."
         },
         "commitId": {
           "type": "string",
@@ -114,7 +118,7 @@
         },
         "satisfied": {
           "type": "boolean",
-          "description": "True when the latest review covers HEAD, reports zero actionable items, AND has no suppressed-comments section -- Clause 1's pass condition."
+          "description": "kurone-kito/idd-skill#2050: disposition-aware, not purely mechanical -- reflects a caller-side override computed in advisory-convergence.mts, not resolveLatestCopilotReviewClause's own raw evaluation. True when the latest review covers HEAD (matchesHead) AND (itemCount is 0 OR every thread THIS review opened is resolved/dispositioned, requiring at least one such thread to exist) AND (suppressedCount is 0 OR a trusted review-ack marker posted after this review covers it) -- Clause 1's pass condition."
         }
       }
     },
