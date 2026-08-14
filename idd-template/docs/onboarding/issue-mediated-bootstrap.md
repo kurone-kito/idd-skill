@@ -252,6 +252,14 @@ companion install follows as its own separate issue **only when the
 companion target state above is `installed`** — do not draft a
 companion-install follow-up for an operator who chose `not installed`.
 
+Once this issue merges, also draft a welcome/next-steps issue by
+default — unlike the optional add-ons above, this one is not left to
+the operator's discretion. Give it the same autopilot-suitability
+score `1` and confirmed blocked-by-human label this issue carries (it
+must stay off the Discover -> Claim -> Work loop too), and derive its
+2-3 example next-step prompts from a fresh post-merge
+repository-evidence read, not the pre-import dry-run report.
+
 **Record `not installed` here even when the operator wants the
 companion — and explicitly defer the matching Step 6 item, not just
 the recorded value.** `ONBOARDING.md`'s Step 6 checklist item
@@ -367,7 +375,8 @@ This is also the one add-on that must stay off the Discover -> Claim ->
 Work loop entirely, unlike its four sibling bullets above: its whole
 body is a reference to read, not something to build, so an autopilot
 agent selecting it would attempt to "implement" prose that describes
-nothing. Give it the same autopilot-suitability score `1` and the
+nothing (preventive; no observed incident yet). Give it the same
+autopilot-suitability score `1` and the
 operator-confirmed `labels.blockedByHumanLabelName` value the core
 bootstrap issue itself carries (Step 1B item 12) — never the
 distributed default label name unconditionally.
@@ -375,12 +384,17 @@ distributed default label name unconditionally.
 Draft its body as 2-3 example prompts the operator can literally copy
 and try next, phrased as concrete requests mirroring the operator's own
 examples ("start issue authoring to implement {inferred gap}", "run the
-IDD loop"). Derive `{inferred gap}` and the other prompt content from
-the same repository-evidence read the optional Dry-run readiness report
-already performs
+IDD loop"). Derive `{inferred gap}` and the other prompt content using
+the same repository-evidence-read method the optional Dry-run readiness
+report already performs
 ([Dry-run — Readiness assessment](../../ONBOARDING.md#dry-run--readiness-assessment))
 — detected package manager, missing prerequisites, and so on — rather
-than inventing a new inference mechanism. Condition the prompt set on
+than inventing a new inference mechanism. Run that read **fresh, after
+this merge**, not reused from the pre-import dry-run's stored output:
+the repository's package manager, test commands, and missing
+prerequisites can differ once the bootstrap import lands, and a stale
+pre-import finding can prompt the operator to fix a gap the import
+already closed. Condition the prompt set on
 the recorded Step 1B companion decision: only include an issue-authoring
 prompt (e.g. "start issue authoring to implement {inferred gap}") when
 that decision was `installed`; for `not installed`, substitute a prompt
@@ -413,6 +427,9 @@ explicitly not the full autonomous Discover -> Claim -> Work loop:
 Once this PR merges, the repository is IDD-operational and every
 subsequent change — including the optional add-ons above — runs through
 the normal claim -> work -> PR -> CI -> merge loop, with the one
-exception already noted above: the welcome/next-steps issue stays off
-that loop and is instead executed directly, the same way the core
-bootstrap issue itself is.
+exception already noted above: the welcome/next-steps issue is not
+executed as code at all. Unlike this bootstrap issue's own
+issue -> branch -> PR -> merge execution, the welcome issue has nothing
+to implement, so a human (or the same narrowly-scoped, pre-authorized
+agent) reads it and closes it directly once acknowledged — no branch,
+PR, or merge.
