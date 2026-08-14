@@ -216,6 +216,26 @@ test('computeReportSummary emits rescan-failed when a confirming rescan errored,
   assert.equal(report.summary?.failed, 0);
 });
 
+test('computeReportSummary prioritizes rescan-failed over failed when both are present', () => {
+  // rescanError takes precedence even though this combination cannot arise
+  // from runApplyWithRetry today (it returns immediately once a pass leaves
+  // a failed candidate, before ever reaching the rescan): the confirming
+  // state is unknown either way, so it must not silently read as the
+  // narrower `failed` outcome.
+  const report = createReport({
+    mode: 'apply',
+    candidates: [{ subjectId: 'candidate-1' }],
+    skipped: [],
+    applied: [],
+    failed: [{ subjectId: 'candidate-1', error: 'boom' }],
+    rescanError: 'GraphQL: transient failure',
+  });
+
+  computeReportSummary(report);
+
+  assert.equal(report.status, 'rescan-failed');
+});
+
 test('computeReportSummary emits failed when apply has both applied and failed candidates', () => {
   const report = createReport({
     mode: 'apply',
