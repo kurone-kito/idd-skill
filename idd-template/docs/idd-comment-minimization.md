@@ -376,9 +376,9 @@ corresponding path:
 | `permission-blocked` | Post a cleanup-permission-blocked comment, then proceed to F4 |
 |                      | step 3.                                                       |
 
-After apply, if `status` is `failed` or `incomplete`, post a
-cleanup-failure comment. A cleanup failure after a successful F3 merge
-does not re-block the merge; it is an explicit record only.
+After apply, if `status` is `failed`, `incomplete`, or `rescan-failed`,
+post a cleanup-failure comment. A cleanup failure after a successful F3
+merge does not re-block the merge; it is an explicit record only.
 
 ### Cleanup evidence comment
 
