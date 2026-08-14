@@ -222,6 +222,17 @@ before starting Step 1A.
 
 ---
 
+> **Relay explanations, not just labels.** For each item you present
+> across Steps 1A, 1B, and 1C, pull its matching explanation from the
+> companion reference doc and relay it to the operator in plain
+> language before asking for confirmation or a choice — do not only
+> quote the terse item text. Draw from
+> [Onboarding Reference — Placeholder Values](docs/onboarding/placeholders.md)
+> for Steps 1A and 1C, and
+> [Onboarding Reference — Policy Decisions](docs/onboarding/policy-decisions.md)
+> for Step 1B. Also define, in plain language on first use, any term
+> already covered in [Core IDD Concepts](docs/concepts.md).
+
 ## Step 1A — Auto-derive candidate values
 
 Inspect the target repository and propose candidate values for all seven placeholders:
