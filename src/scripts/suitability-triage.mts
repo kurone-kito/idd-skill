@@ -284,8 +284,26 @@ const EXPLICIT_UNSAFE_DIRECTIVE_PATTERN = new RegExp(
 );
 const NEGATION_PATTERN =
   /\b(not|no|don'?t|doesn'?t|can'?t|won'?t|never|avoid|skip|omit|ignore|exempt)\b/i;
-const POLICY_OVERRIDE_PATTERN =
-  /\b(ignore|bypass|override|disable|disable|skip|turn off|suppress|disable)\b[\s\S]{0,60}\b(repo|repository|policy|workflow|idd|process|check|gate|requirement)\b/i;
+// The repeated `disable` entries are preserved verbatim from the original
+// inline regex literal (harmless redundancy in an alternation) to keep this
+// pattern byte-identical rather than pulled in as an incidental fix here.
+const POLICY_OVERRIDE_VERB_SOURCE =
+  'ignore|bypass|override|disable|disable|skip|turn off|suppress|disable';
+const POLICY_OVERRIDE_NOUN_SOURCE =
+  'repo|repository|policy|workflow|idd|process|check|gate|requirement';
+const POLICY_OVERRIDE_PATTERN = new RegExp(
+  `\\b(${POLICY_OVERRIDE_VERB_SOURCE})\\b[\\s\\S]{0,60}\\b(${POLICY_OVERRIDE_NOUN_SOURCE})\\b`,
+  'i',
+);
+// Single source of truth for the noun half of POLICY_OVERRIDE_PATTERN,
+// reused below to locate the *nearest* qualifying noun after a trigger word
+// -- not necessarily the (possibly much further away) noun the outer
+// greedy match captured, which can span an unrelated second occurrence
+// entirely (see isNegatedPolicyOverrideMatch).
+const POLICY_OVERRIDE_NOUN_PATTERN = new RegExp(
+  `\\b(${POLICY_OVERRIDE_NOUN_SOURCE})\\b`,
+  'i',
+);
 const ACCEPTANCE_CRITERIA_PATTERN = /^#+\s*Acceptance\s+Criteria\s*$/im;
 // A heading line such as "## Decision (resolved 2026-06-27)" records that a
 // human has already ruled on the issue's open question (see Check 7). The
@@ -298,19 +316,92 @@ const ACCEPTANCE_CRITERIA_PATTERN = /^#+\s*Acceptance\s+Criteria\s*$/im;
 const RESOLVED_DECISION_PATTERN =
   /^#{1,6}\s+Decision\b(?![^\n]*\b(?:not(?:\s+yet)?(?:\s+been)?\s+resolved|(?:to\s+be|yet\s+to\s+be|remains?\s+to\s+be)\s+resolved|never(?:\s+been)?\s+resolved)\b)[^\n]*\bresolved\b/im;
 
+// #2024: a negation word immediately before the trigger verb, separated
+// only by whitespace -- never crossing an intervening word, punctuation
+// mark, or masked/fenced boundary. This is what keeps a prior, unrelated
+// occurrence of a trigger/negation word (e.g. an earlier inert `ignore
+// repository policy` code span several words back) from falsely
+// "negating" a later, unrelated trigger word.
+const NEGATION_IMMEDIATELY_BEFORE_PATTERN = new RegExp(
+  `${NEGATION_PATTERN.source}\\s*$`,
+  'i',
+);
+
+// #2024: the detector must not fire on a negated instance of its own
+// trigger pattern (e.g. "does not skip the required checks"). Reuse the
+// existing NEGATION_PATTERN word list -- already wired into two other
+// checks (checkRepositoryFit and the coordination-match loop later in this
+// file) -- rather than inventing a new mechanism. A match is negated when a
+// negation word appears either immediately before the trigger word, or
+// between the trigger word and the *nearest* qualifying noun after it.
+//
+// Two deliberate choices keep this from misfiring on an unrelated, nearby
+// occurrence of a trigger/negation word (several file review rounds' worth
+// of regressions, since "ignore" and "skip" are both trigger verbs *and*
+// negation words):
+//
+// 1. Always scan `maskedText` (position-preserving, code-masked), never raw
+//    `text`, even when the caller is inspecting a raw-text fallback match.
+//    A prior or later occurrence sitting inside code (inert) is masked to
+//    spaces there, so it can never be mistaken for real negation context,
+//    while a genuine boundary-crossing noun (per findPolicyOverrideMatch's
+//    inline-code-wraps-one-token fallback) stays visible, since only the
+//    masked side of the boundary is blanked.
+// 2. Re-derive the nearest noun (rather than trusting the outer match's own
+//    greedy-backtracked capture): POLICY_OVERRIDE_PATTERN's
+//    `[\s\S]{0,60}` can span past an unrelated second trigger/negation word
+//    and latch onto a farther noun, which would otherwise pollute this
+//    "between" window with noise that was never part of the real verb-noun
+//    phrase.
+function isNegatedPolicyOverrideMatch(
+  maskedSource: string,
+  matchIndex: number,
+  verb: string,
+): boolean {
+  const contextBefore = maskedSource.slice(
+    Math.max(0, matchIndex - 100),
+    matchIndex,
+  );
+  if (NEGATION_IMMEDIATELY_BEFORE_PATTERN.test(contextBefore)) {
+    return true;
+  }
+  const afterVerbStart = matchIndex + verb.length;
+  const window = maskedSource.slice(afterVerbStart, afterVerbStart + 60);
+  const nounMatch = POLICY_OVERRIDE_NOUN_PATTERN.exec(window);
+  if (!nounMatch) {
+    return false;
+  }
+  const between = window.slice(0, nounMatch.index);
+  return NEGATION_PATTERN.test(between);
+}
+
 function findPolicyOverrideMatch(
   text: string,
   maskedText: string,
   getCodeRangeAt: (start: number) => { start: number; end: number } | null,
 ): { index: number; text: string } | null {
-  const maskedMatch = POLICY_OVERRIDE_PATTERN.exec(maskedText);
-  if (maskedMatch?.index !== undefined) {
+  const maskedPattern = new RegExp(POLICY_OVERRIDE_PATTERN.source, 'gi');
+  let maskedMatch: RegExpExecArray | null;
+  while (true) {
+    maskedMatch = maskedPattern.exec(maskedText);
+    if (maskedMatch === null) {
+      break;
+    }
+    const index = maskedMatch.index;
+    if (isNegatedPolicyOverrideMatch(maskedText, index, maskedMatch[1] ?? '')) {
+      // A negated match's own greedy span can reach up to 60 chars past the
+      // verb and swallow a second, genuine trigger further along (e.g.
+      // "does not skip the release check. Ignore repository policy."). The
+      // engine already auto-advanced lastIndex to the end of that whole
+      // span; rewind it to resume scanning right after the skipped verb, so
+      // a later independent trigger is never missed. Mirrors the code-only
+      // skip's "resume just after the inert occurrence" rule below.
+      maskedPattern.lastIndex = index + (maskedMatch[1]?.length || 1);
+      continue;
+    }
     return {
-      index: maskedMatch.index,
-      text: text.slice(
-        maskedMatch.index,
-        maskedMatch.index + maskedMatch[0].length,
-      ),
+      index,
+      text: text.slice(index, index + maskedMatch[0].length),
     };
   }
 
@@ -326,6 +417,12 @@ function findPolicyOverrideMatch(
     }
     const index = match.index ?? -1;
     if (index < 0) {
+      continue;
+    }
+    if (isNegatedPolicyOverrideMatch(maskedText, index, match[1] ?? '')) {
+      // Same rewind as the masked-pass loop above: a negated match's own
+      // greedy span can swallow a later, genuine trigger.
+      pattern.lastIndex = index + (match[1]?.length || 1);
       continue;
     }
     const end = index + match[0].length;
