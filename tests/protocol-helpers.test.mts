@@ -345,3 +345,55 @@ test('the marker-recognition fix only anchors a rejection-confirmed reply on a s
   assert.equal(activitySummary.ackOnly.dispositionsPresent, false);
   assert.deepEqual(activitySummary.ackOnly.items, []);
 });
+
+test('a top-level rejection-confirmed comment does not anchor the ack-only window (Copilot, #2014 PR #2029)', () => {
+  // `**Rejection confirmed by maintainer**` is only a valid disposition when
+  // it is a reply on a resolved review thread (`isRejectionConfirmedDisposition`'s
+  // doc comment). A plain top-level PR comment has no thread/resolved
+  // concept to validate the marker against, so it must NOT open the
+  // post-disposition ack-only window -- matching
+  // `summarizeDispositionEvidenceForGate`'s regular-comment pool
+  // (`dispositionComments`), which has only ever recognized
+  // `isDispositionComment` (`**Accepted**`/`**Rejected**`) for non-thread
+  // comments. Recognizing the marker here too would let a misplaced/quoted
+  // marker on an ordinary issue comment open the PR-wide ack window and
+  // suppress a genuinely new advisory-bot finding below.
+  const misplacedMarker = {
+    id: 'TL-1',
+    author: { login: 'idd-bot' },
+    body: '**Rejection confirmed by maintainer** — agreed, no action needed.',
+    createdAt: '2026-05-12T00:00:00Z',
+    updatedAt: '2026-05-12T00:00:00Z',
+  };
+  const newFinding = {
+    id: 'TL-2',
+    author: { login: 'coderabbitai[bot]' },
+    body: 'New finding: consider tightening this check.',
+    createdAt: '2026-05-12T01:00:00Z',
+    updatedAt: '2026-05-12T01:00:00Z',
+  };
+
+  const activitySummary = buildActivitySnapshotSummary(
+    {
+      comments: [misplacedMarker, newFinding],
+      reviews: [],
+      threads: [],
+      checks: [],
+    },
+    {
+      trustedMarkerLogins: ['idd-bot'],
+      advisoryBotLogins: ['coderabbitai[bot]'],
+      advisoryBotLoginsSource: 'config',
+      dispositionAuthorLogins: ['idd-bot'],
+    },
+  );
+
+  // No valid disposition anchor exists at the top level, so CodeRabbit's
+  // new finding is genuine new activity, not a misclassified courtesy ack.
+  assert.equal(activitySummary.ackOnly.dispositionsPresent, false);
+  assert.deepEqual(activitySummary.ackOnly.items, []);
+  assert.equal(
+    activitySummary.effective.maxActivityUpdatedAt,
+    '2026-05-12T01:00:00Z',
+  );
+});

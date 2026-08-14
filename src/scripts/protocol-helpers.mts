@@ -3026,10 +3026,13 @@ export function buildActivitySnapshotSummary(
   // `**Awaiting maintainer decision**` item needs no action -- a disposition
   // is a disposition regardless of which of the two terminal shapes it took.
   // `summarizeDispositionEvidenceForGate`'s `classifyThreadAckOnlyPostDisposition`
-  // already recognizes both; recognize both here too so the two producers
-  // classify the same post-disposition advisory-bot reply the same way.
-  const isDispositionMarkerComment = (comment: { body?: string | null }) =>
-    isDispositionComment(comment) || isRejectionConfirmedDisposition(comment);
+  // already recognizes both, but ONLY as a reply on a resolved review thread
+  // (the marker's own contract, `isRejectionConfirmedDisposition`'s doc
+  // comment above). `filteredComments` below are plain top-level PR
+  // comments with no thread/resolved concept at all, so they must keep
+  // using plain `isDispositionComment` -- recognizing the terminal marker
+  // there would accept it as a disposition anchor with no resolved-thread
+  // context to validate it against (Copilot review, #2014 PR #2029).
   // Thread-scoped variant: recognizes the terminal rejection-confirmed
   // marker only while its own thread is still resolved, mirroring
   // `hasFreshDisposition`'s identical `threadResolved` gate above -- once a
@@ -3039,7 +3042,12 @@ export function buildActivitySnapshotSummary(
   // every thread's replies into one PR-wide anchor: without this gate, a
   // stale rejection-confirmed reply on a since-reopened thread could still
   // anchor the window that misclassifies an unrelated, brand-new
-  // advisory-bot comment elsewhere on the PR as ack-only.
+  // advisory-bot comment elsewhere on the PR as ack-only. This is the ONLY
+  // place the combined (`isDispositionComment` OR
+  // `isRejectionConfirmedDisposition`) recognition applies outside a
+  // thread whose `isResolved` is already independently confirmed true.
+  const isDispositionMarkerComment = (comment: { body?: string | null }) =>
+    isDispositionComment(comment) || isRejectionConfirmedDisposition(comment);
   const isDispositionMarkerCommentForThread = (
     comment: { body?: string | null },
     threadResolved: boolean,
@@ -3065,7 +3073,7 @@ export function buildActivitySnapshotSummary(
       .filter(
         (comment) =>
           isDispositionAuthor(comment.author?.login) &&
-          isDispositionMarkerComment(comment),
+          isDispositionComment(comment),
       )
       .map((comment) => comment.createdAt),
     ...threads.flatMap((thread) =>
@@ -3090,7 +3098,7 @@ export function buildActivitySnapshotSummary(
     if (!isAdvisoryBot(comment.author?.login)) {
       return false;
     }
-    if (isDispositionMarkerComment(comment)) {
+    if (isDispositionComment(comment)) {
       return false;
     }
     const activityAt = comment.updatedAt ?? comment.createdAt;
