@@ -6,6 +6,7 @@ import {
   deriveGhApiStatusFromError,
   parseArgs,
   planExternalCheckWaiver,
+  resolveActorLogin,
 } from '../src/scripts/external-check-waiver.mts';
 import { normalizePolicyConfig } from '../src/scripts/policy-helpers.mts';
 import {
@@ -148,6 +149,80 @@ test('parseArgs: --claimless combined with --claim-id throws', () => {
         'claim-1',
       ]),
     /--claimless cannot be combined with --claim-id/,
+  );
+});
+
+// --- #2022: --actor empty-string fallback-chain bug ------------------------
+
+test('resolveActorLogin: no --actor flag falls through to the authenticated viewer', () => {
+  const args = parseArgs([
+    '--pr',
+    '5',
+    '--check',
+    'CodeRabbit',
+    '--reason',
+    'flaky',
+  ]);
+  assert.equal(args.actor, '');
+  assert.equal(
+    resolveActorLogin(undefined, args.actor, 'maintainer-user'),
+    'maintainer-user',
+  );
+});
+
+test('resolveActorLogin: --actor "" passed explicitly also falls through to the authenticated viewer', () => {
+  const args = parseArgs([
+    '--pr',
+    '5',
+    '--check',
+    'CodeRabbit',
+    '--reason',
+    'flaky',
+    '--actor',
+    '',
+  ]);
+  assert.equal(args.actor, '');
+  assert.equal(
+    resolveActorLogin(undefined, args.actor, 'maintainer-user'),
+    'maintainer-user',
+  );
+});
+
+test('resolveActorLogin: a non-empty --actor flag is preserved', () => {
+  const args = parseArgs([
+    '--pr',
+    '5',
+    '--check',
+    'CodeRabbit',
+    '--reason',
+    'flaky',
+    '--actor',
+    'someone-else',
+  ]);
+  assert.equal(
+    resolveActorLogin(undefined, args.actor, 'maintainer-user'),
+    'someone-else',
+  );
+});
+
+test('resolveActorLogin: a programmatic options.actor override wins over the CLI flag and viewer', () => {
+  assert.equal(
+    resolveActorLogin('override-actor', 'someone-else', 'maintainer-user'),
+    'override-actor',
+  );
+});
+
+test('resolveActorLogin: a whitespace-only options.actor override falls through instead of collapsing to empty', () => {
+  assert.equal(
+    resolveActorLogin('   ', 'someone-else', 'maintainer-user'),
+    'someone-else',
+  );
+});
+
+test('resolveActorLogin: a whitespace-only argsActor falls through to the viewer', () => {
+  assert.equal(
+    resolveActorLogin(undefined, '   ', 'maintainer-user'),
+    'maintainer-user',
   );
 });
 

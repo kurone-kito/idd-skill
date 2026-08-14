@@ -540,6 +540,35 @@ export function planExternalCheckWaiver(
   };
 }
 
+/**
+ * Resolves the effective actor login for authority evaluation: an explicit
+ * programmatic override, else the CLI `--actor` flag, else the
+ * authenticated `gh` viewer.
+ *
+ * Trims each candidate _before_ testing it for truthiness and picks the
+ * first non-empty result, rather than a plain `a || b || c` chain -- a
+ * whitespace-only candidate (for example a programmatic `options.actor`
+ * override of `'   '`) is truthy as a raw string, so a post-trim `||`
+ * chain would select it and then collapse it to `''` without ever
+ * falling through to the next source. This also fixes the original bug
+ * this helper exists for: the CLI flag spec gives `--actor` a parsed
+ * default of `''` (not `undefined`), so `args.actor` is always a string
+ * and is `''` whenever the flag is omitted -- a `??` chain would treat
+ * that `''` as "provided" and never fall through to `viewerLogin`. No
+ * other fallback chain in this file changes.
+ */
+export function resolveActorLogin(
+  optionsActor: string | undefined,
+  argsActor: string,
+  viewerLogin: string,
+): string {
+  return (
+    [optionsActor, argsActor, viewerLogin]
+      .map((actor) => actor?.trim() ?? '')
+      .find(Boolean) ?? ''
+  ).toLowerCase();
+}
+
 export async function runExternalCheckWaiver(
   options: RunExternalCheckWaiverOptions = {},
 ): Promise<{ exitCode: number; report?: ExternalCheckWaiverReport }> {
@@ -565,9 +594,7 @@ export async function runExternalCheckWaiver(
   const viewerLogin = String(safeGhText(['api', 'user', '--jq', '.login']))
     .trim()
     .toLowerCase();
-  const actor = String(options.actor ?? args.actor ?? viewerLogin)
-    .trim()
-    .toLowerCase();
+  const actor = resolveActorLogin(options.actor, args.actor, viewerLogin);
   if (!actor) {
     throw new Error(
       'could not determine current GitHub user; ensure gh is authenticated',
