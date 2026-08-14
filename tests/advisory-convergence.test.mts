@@ -3117,10 +3117,14 @@ test('runAdvisoryConvergenceWithPoll: review never landing still fails with the 
     'copilot has not reviewed this pull request yet',
   ]);
   assert.equal(exitCode, 1);
-  // ceil(20_000 / 7_500) = 3 poll attempts once maxWaitMs is exhausted,
-  // plus the initial attempt.
+  // 3 sleeps (7_500, 7_500, then capped to the remaining 5_000) but only 2
+  // in-loop re-checks (collectCalls() == 3 == 1 initial + 2): the 3rd sleep
+  // consumes the entire remaining budget, so the guard added in #2023
+  // review round 2 (Codex/Copilot: "avoid launching a recheck after the
+  // remaining budget is consumed") skips the re-check that would otherwise
+  // start exactly AT the deadline.
   assert.equal(calls(), 3);
-  assert.equal(collectCalls(), 4);
+  assert.equal(collectCalls(), 3);
   // The bound is wall-clock (a deadline), not a sum of nominal intervals:
   // the final sleep is capped to the REMAINING budget (20_000 - 15_000 =
   // 5_000), not the full 7_500 nominal interval -- PR #2023 review (Codex
@@ -3128,6 +3132,30 @@ test('runAdvisoryConvergenceWithPoll: review never landing still fails with the 
   // 20s bound on this exact input.
   assert.deepEqual(sleptMs(), [7_500, 7_500, 5_000]);
   assert.equal(now(), 20_000);
+});
+
+test('runAdvisoryConvergenceWithPoll: pollIntervalMs >= maxWaitMs yields zero re-checks, not an over-budget one', () => {
+  // Edge case flagged during #2023 review round 2's guard fix: a caller
+  // (never production, which always uses the < defaults below) configuring
+  // an interval at least as large as the whole budget means the first sleep
+  // alone exhausts it, so the guard must skip the re-check entirely rather
+  // than launch one over an already-consumed budget.
+  const { deps, collectCalls } = pollDepsFor(
+    [baseInputs({ reviews: [] })],
+    baseOptions(),
+  );
+  const { sleep, now, calls, sleptMs } = fakeClock();
+  const { verdict, exitCode } = runAdvisoryConvergenceWithPoll(
+    ['--pr', '1234', '--assert'],
+    deps,
+    { maxWaitMs: 10_000, pollIntervalMs: 30_000, sleep, now },
+  );
+  assert.equal(verdict?.ready, false);
+  assert.equal(exitCode, 1);
+  assert.equal(calls(), 1);
+  assert.deepEqual(sleptMs(), [10_000]);
+  // Only the initial (pre-loop) collect() call -- zero in-loop re-checks.
+  assert.equal(collectCalls(), 1);
 });
 
 test('runAdvisoryConvergenceWithPoll: slow collection time counts against the wall-clock budget, not just sleep time', () => {
@@ -3143,10 +3171,14 @@ test('runAdvisoryConvergenceWithPoll: slow collection time counts against the wa
   // too, and stop far sooner.
   const { sleep, now } = fakeClock();
   let collectCalls = 0;
+  const collectStartTimes: number[] = [];
+  const collectEndTimes: number[] = [];
   const deps: AdvisoryConvergenceDeps = {
     collect: () => {
       collectCalls += 1;
+      collectStartTimes.push(now());
       sleep(6_000);
+      collectEndTimes.push(now());
       return { inputs: baseInputs({ reviews: [] }), options: baseOptions() };
     },
   };
@@ -3165,6 +3197,21 @@ test('runAdvisoryConvergenceWithPoll: slow collection time counts against the wa
     collectCalls < 10,
     `expected far fewer than 10 collect() calls under the wall-clock fix, got ${collectCalls}`,
   );
+  // #2023 review round 2 (Codex/Copilot, on this exact test): asserting
+  // only the call count missed that the LAST re-check could still start at
+  // or after the deadline and run long uncounted. Assert elapsed virtual
+  // time directly: `runAdvisoryConvergenceWithPoll` reads `now()` for its
+  // deadline right after the initial (pre-loop) collect() call returns, so
+  // the deadline is `collectEndTimes[0] + maxWaitMs`; no IN-LOOP re-check
+  // (every collectStartTimes entry after the first) may start at or after
+  // it -- that is exactly the guard this fix adds.
+  const deadline = collectEndTimes[0] + 20_000;
+  for (const startedAt of collectStartTimes.slice(1)) {
+    assert.ok(
+      startedAt < deadline,
+      `expected re-check start ${startedAt} to be before deadline ${deadline}`,
+    );
+  }
 });
 
 test('runAdvisoryConvergenceWithPoll: does not poll for any other not-ready reason', () => {

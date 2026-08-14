@@ -1774,14 +1774,20 @@ to post it is the consuming track's job.
   indeterminate claim scope, a deadline/terminal reason, etc.) still fails
   immediately with no wait, exactly as before this addition — the
   exit-code contract and `ready` formula above are otherwise unchanged.
-  The poll's bound is wall-clock (a deadline, not a sleep-count), so a
-  slow `gh` collection pass cannot push the loop meaningfully past its
-  documented budget. Known residual (PR #2023 review): a review that
-  lands while this poll is asleep can still start a fresh
-  `pull_request_review`-triggered run in the hosting workflow's own
-  PR-scoped `cancel-in-progress` concurrency group, cancelling this run
-  before it observes the review — a narrower win than "never needs an
-  external rerun again"; see the full analysis in
+  The poll's bound is wall-clock (a deadline, not a sleep-count): each
+  sleep is capped to the remaining budget, and a re-check is never
+  launched once a sleep has already consumed all of it (PR #2023 review
+  round 2). Known residuals (PR #2023 review): (1) a re-check that starts
+  just _before_ the deadline (while genuine budget remains) can still run
+  long, bounded only by `gh-exec.mts`'s own per-call `gh` timeouts (up to
+  120s for a paginated call, `#1675`), not by `maxWaitMs` — closing that
+  gap would mean threading a remaining-budget deadline into every `gh`
+  call inside `collectFromGitHub`, out of scope for this narrow poll
+  wrapper; (2) a review that lands while this poll is asleep can still
+  start a fresh `pull_request_review`-triggered run in the hosting
+  workflow's own PR-scoped `cancel-in-progress` concurrency group,
+  cancelling this run before it observes the review — a narrower win than
+  "never needs an external rerun again"; see the full analysis in
   `runAdvisoryConvergenceWithPoll`'s doc comment
   (`src/scripts/advisory-convergence.mts`).
 - **Deadlock / deadline policy**: while the primary bot has not reviewed

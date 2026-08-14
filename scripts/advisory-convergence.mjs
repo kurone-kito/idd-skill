@@ -1023,6 +1023,22 @@ function sleepSync(ms) {
  * past its documented bound and risk the hosting workflow's own
  * `timeout-minutes` before ever reaching its fail-closed exit.
  *
+ * A re-check is never launched once a sleep has already consumed the full
+ * remaining budget (PR #2023 review round 2, Codex P2 + Copilot) --
+ * `collectFromGitHub` has its own independent `gh` timeouts (up to
+ * `DEFAULT_GH_PAGINATED_TIMEOUT_MS` = 120s, #1675) that this poll's
+ * `maxWaitMs` cannot bound from the outside, so starting a fresh collection
+ * pass exactly AT the deadline could otherwise blow the wall-clock bound
+ * wide open. KNOWN RESIDUAL: a collection that starts just BEFORE the
+ * deadline (i.e. while genuine budget remains) can still run long, bounded
+ * only by `gh-exec.mts`'s own per-call timeouts, not by `maxWaitMs` --
+ * threading a remaining-budget deadline into every `gh` call inside
+ * `collectFromGitHub` would close that gap but is a multi-call-site change
+ * out of scope for this narrow poll wrapper. One consequence: a
+ * `pollIntervalMs` configured `>=` `maxWaitMs` yields zero re-checks (the
+ * first sleep alone exhausts the budget) -- an edge case only reachable via
+ * an explicit non-default override, never the production defaults below.
+ *
  * KNOWN RESIDUAL (PR #2023 review, Codex P1): the hosting workflow's
  * concurrency group is keyed by PR number ALONE across all three of its
  * triggers, with `cancel-in-progress: true` (see
@@ -1078,6 +1094,11 @@ export function runAdvisoryConvergenceWithPoll(
     const deadline = now() + maxWaitMs;
     while (now() < deadline) {
       sleep(Math.min(pollIntervalMs, deadline - now()));
+      // #2023 review round 2: don't launch a re-check once the sleep above
+      // has already consumed the entire remaining budget -- see this
+      // function's own doc comment for why (collection has its own
+      // unbounded-relative-to-maxWaitMs `gh` timeouts).
+      if (now() >= deadline) break;
       result = runAdvisoryConvergence(argv, deps);
       if (
         result.exitCode === 0 ||
