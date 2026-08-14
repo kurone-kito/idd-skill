@@ -461,35 +461,23 @@ Ask these checks:
    imported.
    - **Baseline ref.** Resolve the exact tag or commit SHA actually
      imported at the adopter's prior onboarding: identify it from the
-     adopter's own git history (the import/resync commit's diff pins
-     the exact upstream content adopted). Absent that evidence, do not
-     content-match the adopter's files against a raw upstream
-     `idd-template/` tree directly — onboarding substitutes the seven
-     placeholders with concrete values
-     (`buildSubstitutionPlan`/`ONBOARDING_PLACEHOLDERS` in
-     `src/scripts/idd-onboard.mts`), so a normally onboarded adopter's
-     files never match any upstream commit's tree byte-for-byte — the
-     upstream tree still carries the literal `{{...}}` tokens.
-     Reverse-substitution is not a safe inverse here: a concrete
-     value (for example the literal `true` a command placeholder
-     takes when no relevant tool exists for that step, per Onboarding
-     Reference — Placeholder Values) can belong to more than one
-     placeholder, so a value found in the adopter's tree does not
-     identify a single token to restore, and a naive text replace can
-     also rewrite unrelated prose that happens to match the same
-     value. Transform each **candidate upstream tree forward**
-     instead, using the adopter's own recorded per-placeholder values
-     (`.github/idd/config.json`, the Step 3 recorded policy
-     decisions) through the same site-aware substitution the real
-     import applies (JSON sites receive an escaped value, every other
-     site takes it raw), then compare that transformed candidate
-     against the adopter's actual snapshot — this direction has no
-     ambiguity, since each placeholder's value is already known before
-     the transform runs. Account for any known intentional-divergence
-     markers (see the divergence-signal check above) as expected
-     differences rather than mismatches. Report the ambiguity in the
-     resync issue itself, rather than guessing, when more than one
-     candidate ref remains equivalent after this comparison. Do not
+     adopter's own git history — the import/resync commit's diff pins
+     the exact upstream content adopted. This is the only reliable
+     source: a normally onboarded adopter's files never match any raw
+     upstream `idd-template/` tree byte-for-byte (onboarding
+     substitutes the seven placeholders with concrete values), and
+     neither a reverse- nor a forward-substitution content-match
+     reconstructs the baseline reliably either — `.github/idd/config.json`
+     does not record every placeholder value (`REPO_NAME` among them),
+     Step 3 records the Step 1B policy decisions rather than a
+     placeholder-value map, and canonical onboarding explicitly
+     permits legitimate post-substitution edits (for example adding
+     extra trusted marker actors by hand after the first replacement),
+     so the adopter's current files can differ from the as-imported
+     snapshot for reasons that have nothing to do with which ref was
+     imported. When the adopter's git history carries no such evidence,
+     report the baseline as unresolved/ambiguous in the resync issue
+     itself instead of guessing one from content alone. Do not
      construct `v<iddVersion>`
      (`.github/idd/config.json`) as the baseline without this check:
      `iddVersion` is only a coarse signal and can be stale, an adopter
