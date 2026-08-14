@@ -205,20 +205,24 @@ Run:
 ```sh
 gh --version
 git remote get-url origin
-gh auth status
+gh auth status --hostname <derived-host>
 ```
 
-Bare `gh auth status` reports on every host `gh` already knows about,
-not the repository being onboarded -- it exits successfully as long as
-some known host is authenticated, even if the target repository's own
-host was never configured at all (confirmed: `gh auth status
---hostname <unconfigured-host>` fails with "You are not logged into
-any accounts on \<host\>", while the bare form silently omits an
-unknown host instead of reporting it missing). Derive the target
-host from `git remote get-url origin`'s URL (a `github.com` URL needs
-no override; any other host is a GHES target) and scope the check to
-it: `gh auth status --hostname <derived-host>` (omit `--hostname` for
-github.com, matching `gh`'s own no-override convention there).
+Bare `gh auth status` (no `--hostname`) reports on every host `gh`
+already knows about, not the repository being onboarded: it exits
+successfully only when **every** known host is authenticated, so an
+unrelated stale credential for some other project's host can fail this
+check even though the target repository's own host is fine (confirmed
+against a real `gh` binary) -- and, if the target host itself was
+never configured at all, the bare form silently omits it instead of
+reporting it missing. Both failure directions require scoping to the
+target host specifically, always -- unlike `gh api`'s own `--hostname`
+convention, `gh auth status` has no case where omitting it is correct,
+not even for `github.com` (confirmed: `gh auth status --hostname
+github.com` behaves identically to a clean bare invocation, so there
+is no cost to always passing it). Derive `<derived-host>` from `git
+remote get-url origin`'s URL (parse the host portion; a
+`github.com` URL yields `github.com` itself).
 
 - On success, continue to Step 1A without further comment.
 - On failure (not installed, or not authenticated to the target
