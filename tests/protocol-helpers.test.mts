@@ -397,3 +397,140 @@ test('a top-level rejection-confirmed comment does not anchor the ack-only windo
     '2026-05-12T01:00:00Z',
   );
 });
+
+test('reviewCurrency anchors an edited rejection-confirmed marker by its effective activity, matching dispositionEvidence (#2045)', () => {
+  // The maintainer's `**Rejection confirmed by maintainer**` reply is
+  // posted at 00:30 but edited afterward (e.g. a typo fix), so its
+  // updatedAt (01:30) postdates a genuine advisory-bot reply at 01:00 --
+  // between the marker's original createdAt and its edited updatedAt.
+  // dispositionEvidence already anchors the marker by effective
+  // (updatedAt-preferring) activity, so it correctly treats the 01:00
+  // reply as pre-disposition (genuine, not ack-only). Before this fix,
+  // reviewCurrency anchored the same marker by createdAt (00:30) alone,
+  // so it misclassified the 01:00 reply as post-disposition ack-only.
+  const thread = {
+    id: 'thread-edited-rejection-confirmed',
+    isResolved: true,
+    updatedAt: '',
+    comments: {
+      pageInfo: { hasNextPage: false },
+      nodes: [
+        {
+          id: 'ERC-1',
+          author: { login: 'reviewer-a' },
+          body: 'please reconsider this',
+          createdAt: '2026-05-12T00:00:00Z',
+          updatedAt: '2026-05-12T00:00:00Z',
+        },
+        {
+          id: 'ERC-2',
+          author: { login: 'idd-bot' },
+          body: '**Rejection confirmed by maintainer** — agreed, no action needed.',
+          createdAt: '2026-05-12T00:30:00Z',
+          updatedAt: '2026-05-12T01:30:00Z',
+        },
+        {
+          id: 'ERC-3',
+          author: { login: 'coderabbitai[bot]' },
+          body: 'Actually, one more concern before this closes.',
+          createdAt: '2026-05-12T01:00:00Z',
+          updatedAt: '2026-05-12T01:00:00Z',
+        },
+      ],
+    },
+  };
+
+  const dispositionSummary = summarizeDispositionEvidenceForGate(
+    { comments: [], threads: [thread] },
+    {
+      iddAgentLogins: ['idd-bot'],
+      advisoryBotLogins: ['coderabbitai[bot]'],
+      snapshotBoundaryAt: '2026-05-12T01:00:00Z',
+    },
+  );
+  const activitySummary = buildActivitySnapshotSummary(
+    { comments: [], reviews: [], threads: [thread], checks: [] },
+    {
+      trustedMarkerLogins: ['idd-bot'],
+      advisoryBotLogins: ['coderabbitai[bot]'],
+      advisoryBotLoginsSource: 'config',
+      dispositionAuthorLogins: ['idd-bot'],
+    },
+  );
+
+  // dispositionEvidence already treats the 01:00 reply as pre-disposition
+  // (genuine): the thread needs no fresh disposition of its own.
+  assert.equal(dispositionSummary.route, 'proceed');
+  assert.equal(dispositionSummary.blockingCount, 0);
+  assert.deepEqual(dispositionSummary.missingThreads, []);
+
+  // reviewCurrency now agrees: the marker's effective activity (01:30)
+  // anchors the disposition, so the 01:00 reply is genuine, not ack-only.
+  assert.equal(
+    activitySummary.ackOnly.latestDispositionAt,
+    '2026-05-12T01:30:00Z',
+  );
+  assert.deepEqual(activitySummary.ackOnly.items, []);
+});
+
+test('reviewCurrency still anchors an edited ordinary Accepted marker by createdAt, not effective activity (#2045)', () => {
+  // The intentional, pre-existing behavior for ordinary
+  // `**Accepted**`/`**Rejected**` markers -- "Dispositions are not
+  // SHA-bound here" (buildActivitySnapshotSummary's own comment) -- must
+  // NOT change as a side effect of this fix, which is scoped only to the
+  // `**Rejection confirmed by maintainer**` marker. Even though this
+  // `**Accepted**` reply is edited afterward (updatedAt 02:00, after the
+  // advisory-bot's 01:00 reply), it must still anchor by its createdAt
+  // (00:30), so the 01:00 reply stays classified as ack-only exactly as
+  // before this fix.
+  const thread = {
+    id: 'thread-edited-accepted',
+    isResolved: true,
+    updatedAt: '',
+    comments: {
+      pageInfo: { hasNextPage: false },
+      nodes: [
+        {
+          id: 'AC-1',
+          author: { login: 'reviewer-a' },
+          body: 'please double check this',
+          createdAt: '2026-05-12T00:00:00Z',
+          updatedAt: '2026-05-12T00:00:00Z',
+        },
+        {
+          id: 'AC-2',
+          author: { login: 'idd-bot' },
+          body: '**Accepted** — looks fine.',
+          createdAt: '2026-05-12T00:30:00Z',
+          updatedAt: '2026-05-12T02:00:00Z',
+        },
+        {
+          id: 'AC-3',
+          author: { login: 'coderabbitai[bot]' },
+          body: 'Thanks for confirming.',
+          createdAt: '2026-05-12T01:00:00Z',
+          updatedAt: '2026-05-12T01:00:00Z',
+        },
+      ],
+    },
+  };
+
+  const activitySummary = buildActivitySnapshotSummary(
+    { comments: [], reviews: [], threads: [thread], checks: [] },
+    {
+      trustedMarkerLogins: ['idd-bot'],
+      advisoryBotLogins: ['coderabbitai[bot]'],
+      advisoryBotLoginsSource: 'config',
+      dispositionAuthorLogins: ['idd-bot'],
+    },
+  );
+
+  assert.equal(
+    activitySummary.ackOnly.latestDispositionAt,
+    '2026-05-12T00:30:00Z',
+  );
+  assert.deepEqual(
+    activitySummary.ackOnly.items.map((item) => item.id),
+    ['AC-3'],
+  );
+});
