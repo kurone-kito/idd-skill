@@ -3020,11 +3020,12 @@ export function resolveTargetGhHostname(url) {
  * but keeps this call consistent with its siblings). Mirrors
  * `ghApiJson`'s own `--paginate --jq '.[]'` NDJSON handling via the
  * shared `parsePaginatedGhNdjson()`, and shapes a failure's thrown error
- * the same way a real `execFileSync` failure would (`status`/`stderr`),
- * so `fetchGovernanceJson()`'s `deriveGhHttpStatus()`-based 404
- * detection still works unchanged.
+ * the same way a real `execFileSync` failure would (`status`/`stderr`/
+ * `stdout`), so `fetchGovernanceJson()`'s `deriveGhHttpStatus()`-based
+ * 404 detection still works, including its stdout-carried JSON-body
+ * fallback. Exported for direct test coverage of that failure shape.
  */
-function fetchGhApiJsonAt(root, hostname, path, paginate) {
+export function fetchGhApiJsonAt(root, hostname, path, paginate) {
   const argv = [
     'api',
     path,
@@ -3036,6 +3037,7 @@ function fetchGhApiJsonAt(root, hostname, path, paginate) {
     throw Object.assign(new Error('gh api failed'), {
       status: 1,
       stderr: result.stderr ?? '',
+      stdout: result.stdout ?? '',
     });
   }
   const raw = result.stdout.trim();
@@ -3058,6 +3060,7 @@ function runCommand(command, argv, cwd) {
       ok: false,
       code: candidate.status,
       stderr: candidate.stderr?.toString?.() ?? '',
+      stdout: candidate.stdout?.toString?.() ?? '',
     };
   }
 }

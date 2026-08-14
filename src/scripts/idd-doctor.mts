@@ -102,7 +102,7 @@ interface SuitabilityIssueInput {
 
 type CommandResult =
   | { ok: true; stdout: string }
-  | { ok: false; code: number | undefined; stderr: string };
+  | { ok: false; code: number | undefined; stderr: string; stdout: string };
 
 interface DoctorCliArgs {
   root: string;
@@ -3481,11 +3481,12 @@ export function resolveTargetGhHostname(
  * but keeps this call consistent with its siblings). Mirrors
  * `ghApiJson`'s own `--paginate --jq '.[]'` NDJSON handling via the
  * shared `parsePaginatedGhNdjson()`, and shapes a failure's thrown error
- * the same way a real `execFileSync` failure would (`status`/`stderr`),
- * so `fetchGovernanceJson()`'s `deriveGhHttpStatus()`-based 404
- * detection still works unchanged.
+ * the same way a real `execFileSync` failure would (`status`/`stderr`/
+ * `stdout`), so `fetchGovernanceJson()`'s `deriveGhHttpStatus()`-based
+ * 404 detection still works, including its stdout-carried JSON-body
+ * fallback. Exported for direct test coverage of that failure shape.
  */
-function fetchGhApiJsonAt(
+export function fetchGhApiJsonAt(
   root: string,
   hostname: string | undefined,
   path: string,
@@ -3502,6 +3503,7 @@ function fetchGhApiJsonAt(
     throw Object.assign(new Error('gh api failed'), {
       status: 1,
       stderr: result.stderr ?? '',
+      stdout: result.stdout ?? '',
     });
   }
   const raw = result.stdout.trim();
@@ -3527,11 +3529,13 @@ function runCommand(
     const candidate = error as {
       status?: number;
       stderr?: { toString?: () => string };
+      stdout?: { toString?: () => string };
     };
     return {
       ok: false,
       code: candidate.status,
       stderr: candidate.stderr?.toString?.() ?? '',
+      stdout: candidate.stdout?.toString?.() ?? '',
     };
   }
 }
