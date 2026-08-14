@@ -286,21 +286,8 @@ function checkAutopilotSuitabilityConsistency(
     return;
   }
 
-  let floor: unknown;
-  let blockedByHumanLabelName: unknown;
-  try {
-    const config = JSON.parse(
-      readFileSync(join(root, '.github/idd/config.json'), 'utf8'),
-    ) as {
-      autopilotSuitability?: { floor?: unknown };
-      labels?: { blockedByHumanLabelName?: unknown };
-    } | null;
-    floor = config?.autopilotSuitability?.floor;
-    blockedByHumanLabelName = config?.labels?.blockedByHumanLabelName;
-  } catch {
-    floor = undefined;
-    blockedByHumanLabelName = undefined;
-  }
+  const { floor, blockedByHumanLabelName } =
+    resolveAutopilotSuitabilityPolicy(root);
 
   const { warnings } = evaluateAutopilotSuitabilityConsistency(issues, {
     floor,
@@ -1023,6 +1010,64 @@ export function resolveConfiguredHelperRuntimePackageSpec(
 }
 
 /**
+ * Resolve the repository's live IDD config document, preferring the
+ * canonical `.github/idd/config.json` and falling back to the legacy
+ * `idd-policy.json` only when the canonical file is entirely absent --
+ * the same first-present-candidate-wins-outright walk over
+ * `LIVE_CONFIG_CANDIDATE_FILES` as `resolveConfiguredHelperRuntime` above,
+ * never a per-key merge of the two files. Shared by every scalar policy
+ * reader below (`readWorktreeGuardEnabled`, `readWorktreeGuardBranchPatterns`,
+ * `readCleanupEvidenceTrustedLogins`, `readTrustEmptyProtectionReads`, and
+ * `checkAutopilotSuitabilityConsistency`'s floor/label read) so the
+ * two-file resolution invariant lives in exactly one place instead of five
+ * separate copies that only ever read the canonical filename
+ * (idd-skill#2028).
+ *
+ * Returns `{ config: null }` when no candidate file exists, or the first
+ * present candidate is not valid JSON -- each caller keeps its own
+ * fail-closed default for that case, matching every reader's behavior
+ * before this extraction.
+ */
+function resolveLiveConfigDocument(root: string): { config: unknown } {
+  for (const file of LIVE_CONFIG_CANDIDATE_FILES) {
+    const absolutePath = join(root, file);
+    if (!exists(absolutePath)) {
+      continue;
+    }
+    try {
+      return { config: JSON.parse(readFileSync(absolutePath, 'utf8')) };
+    } catch {
+      return { config: null };
+    }
+  }
+  return { config: null };
+}
+
+/**
+ * Resolve `autopilotSuitability.floor` and `labels.blockedByHumanLabelName`
+ * from the live IDD config (canonical-first, legacy-`idd-policy.json`
+ * fallback via {@link resolveLiveConfigDocument}), for
+ * `checkAutopilotSuitabilityConsistency`'s cross-field check. Extracted as
+ * its own exported reader -- matching `readWorktreeGuardEnabled` and its
+ * siblings -- so this one config read is independently unit-testable
+ * without mocking `gh issue list` (idd-skill#2028).
+ */
+export function resolveAutopilotSuitabilityPolicy(root: string): {
+  floor: unknown;
+  blockedByHumanLabelName: unknown;
+} {
+  const { config } = resolveLiveConfigDocument(root);
+  const typedConfig = config as {
+    autopilotSuitability?: { floor?: unknown };
+    labels?: { blockedByHumanLabelName?: unknown };
+  } | null;
+  return {
+    floor: typedConfig?.autopilotSuitability?.floor,
+    blockedByHumanLabelName: typedConfig?.labels?.blockedByHumanLabelName,
+  };
+}
+
+/**
  * Decide whether a parsed live-config document is a schema finding, given
  * the canonical policy schema and the file it was read from (for the
  * message). Pure (no I/O) so it can be unit-tested directly. Returns `null`
@@ -1504,14 +1549,11 @@ function checkTemplateVersionSignal(root: string, report: DoctorReport) {
 }
 
 export function readWorktreeGuardEnabled(root: string): boolean {
-  try {
-    const config = JSON.parse(
-      readFileSync(join(root, '.github/idd/config.json'), 'utf8'),
-    ) as { worktreeGuard?: { enabled?: unknown } } | null;
-    return config?.worktreeGuard?.enabled === true;
-  } catch {
-    return false;
-  }
+  const { config } = resolveLiveConfigDocument(root);
+  return (
+    (config as { worktreeGuard?: { enabled?: unknown } } | null)?.worktreeGuard
+      ?.enabled === true
+  );
 }
 
 /**
@@ -1521,26 +1563,22 @@ export function readWorktreeGuardEnabled(root: string): boolean {
  * the hook agree on which branches the guard covers.
  */
 export function readWorktreeGuardBranchPatterns(root: string): string[] {
-  try {
-    const config = JSON.parse(
-      readFileSync(join(root, '.github/idd/config.json'), 'utf8'),
-    ) as { worktreeGuard?: { branchPatterns?: unknown } } | null;
-    const patterns = config?.worktreeGuard?.branchPatterns;
-    if (
-      Array.isArray(patterns) &&
-      patterns.length > 0 &&
-      patterns.every((p) => typeof p === 'string' && p.trim().length > 0)
-    ) {
-      // Return trimmed patterns: a configured entry with surrounding
-      // whitespace (e.g. `"issue/* "`) otherwise passes validation but
-      // never matches a real branch, silently covering nothing. The
-      // validation above stays fail-closed — any empty/whitespace-only or
-      // non-string entry invalidates the whole list and falls back to the
-      // defaults — so every surviving entry is non-empty after trim.
-      return (patterns as string[]).map((pattern) => pattern.trim());
-    }
-  } catch {
-    // fall through to defaults
+  const { config } = resolveLiveConfigDocument(root);
+  const patterns = (
+    config as { worktreeGuard?: { branchPatterns?: unknown } } | null
+  )?.worktreeGuard?.branchPatterns;
+  if (
+    Array.isArray(patterns) &&
+    patterns.length > 0 &&
+    patterns.every((p) => typeof p === 'string' && p.trim().length > 0)
+  ) {
+    // Return trimmed patterns: a configured entry with surrounding
+    // whitespace (e.g. `"issue/* "`) otherwise passes validation but
+    // never matches a real branch, silently covering nothing. The
+    // validation above stays fail-closed — any empty/whitespace-only or
+    // non-string entry invalidates the whole list and falls back to the
+    // defaults — so every surviving entry is non-empty after trim.
+    return (patterns as string[]).map((pattern) => pattern.trim());
   }
   return DEFAULT_WORKTREE_GUARD_BRANCH_PATTERNS;
 }
@@ -2114,15 +2152,10 @@ export function formatCleanupBacklogRemediation(
  * trust).
  */
 export function readCleanupEvidenceTrustedLogins(root: string): Set<string> {
-  let trustedMarkerActors: unknown;
-  try {
-    const config = JSON.parse(
-      readFileSync(join(root, '.github/idd/config.json'), 'utf8'),
-    ) as { trustedMarkerActors?: unknown } | null;
-    trustedMarkerActors = config?.trustedMarkerActors;
-  } catch {
-    trustedMarkerActors = undefined;
-  }
+  const { config } = resolveLiveConfigDocument(root);
+  const trustedMarkerActors = (
+    config as { trustedMarkerActors?: unknown } | null
+  )?.trustedMarkerActors;
   const { actors } = resolveTrustedMarkerActors({
     config: { trustedMarkerActors },
   });
@@ -3380,14 +3413,11 @@ export function evaluateBranchProtectionFindings(
  * default.
  */
 export function readTrustEmptyProtectionReads(root: string): boolean {
-  try {
-    const config = JSON.parse(
-      readFileSync(join(root, '.github/idd/config.json'), 'utf8'),
-    ) as { ciGate?: { trustEmptyProtectionReads?: unknown } } | null;
-    return config?.ciGate?.trustEmptyProtectionReads === true;
-  } catch {
-    return false;
-  }
+  const { config } = resolveLiveConfigDocument(root);
+  return (
+    (config as { ciGate?: { trustEmptyProtectionReads?: unknown } } | null)
+      ?.ciGate?.trustEmptyProtectionReads === true
+  );
 }
 
 /**

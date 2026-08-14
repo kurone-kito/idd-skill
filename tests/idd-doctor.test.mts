@@ -55,6 +55,7 @@ import {
   readTrustEmptyProtectionReads,
   readWorktreeGuardBranchPatterns,
   readWorktreeGuardEnabled,
+  resolveAutopilotSuitabilityPolicy,
   resolveConfiguredHelperRuntimePackageSpec,
   resolveConfiguredHelperRuntimeProfile,
   resolveTargetGhHostname,
@@ -248,6 +249,72 @@ test('autopilot-suitability consistency: floor 1 treats score-1 + blocked-by-hum
     warnings.find((w) => /issue #23/.test(w)) ?? '',
     /issue #23 is scored 2 \(>= floor 1\) but carries status:blocked-by-human/,
   );
+});
+
+test('resolveAutopilotSuitabilityPolicy reads floor and blockedByHumanLabelName from the canonical config (idd-skill#2028)', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'idd-doctor-suitability-policy-'));
+  try {
+    mkdirSync(join(dir, '.github/idd'), { recursive: true });
+    writeFileSync(
+      join(dir, '.github/idd/config.json'),
+      JSON.stringify({
+        autopilotSuitability: { floor: 3 },
+        labels: { blockedByHumanLabelName: 'status:human-only' },
+      }),
+    );
+    assert.deepEqual(resolveAutopilotSuitabilityPolicy(dir), {
+      floor: 3,
+      blockedByHumanLabelName: 'status:human-only',
+    });
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('resolveAutopilotSuitabilityPolicy also reads the legacy idd-policy.json path when the canonical file is absent (idd-skill#2028)', () => {
+  const dir = mkdtempSync(
+    join(tmpdir(), 'idd-doctor-suitability-policy-legacy-'),
+  );
+  try {
+    writeFileSync(
+      join(dir, 'idd-policy.json'),
+      JSON.stringify({ autopilotSuitability: { floor: 2 } }),
+    );
+    assert.deepEqual(resolveAutopilotSuitabilityPolicy(dir), {
+      floor: 2,
+      blockedByHumanLabelName: undefined,
+    });
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('resolveAutopilotSuitabilityPolicy returns undefined fields when config is missing or malformed, never falling through a present canonical config (idd-skill#2028)', () => {
+  const dir = mkdtempSync(
+    join(tmpdir(), 'idd-doctor-suitability-policy-absent-'),
+  );
+  try {
+    // No config file at all.
+    assert.deepEqual(resolveAutopilotSuitabilityPolicy(dir), {
+      floor: undefined,
+      blockedByHumanLabelName: undefined,
+    });
+
+    // Malformed canonical JSON must fail closed, not fall through to a
+    // legacy file even if one is also present.
+    mkdirSync(join(dir, '.github/idd'), { recursive: true });
+    writeFileSync(join(dir, '.github/idd/config.json'), '{ not json');
+    writeFileSync(
+      join(dir, 'idd-policy.json'),
+      JSON.stringify({ autopilotSuitability: { floor: 4 } }),
+    );
+    assert.deepEqual(resolveAutopilotSuitabilityPolicy(dir), {
+      floor: undefined,
+      blockedByHumanLabelName: undefined,
+    });
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test('findPlaceholders returns template tokens', () => {
@@ -1121,6 +1188,34 @@ test('readWorktreeGuardEnabled returns false when config is missing or invalid',
   }
 });
 
+test('readWorktreeGuardEnabled also reads the legacy idd-policy.json path when the canonical file is absent (idd-skill#2028)', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'idd-guard-legacy-'));
+  try {
+    writeFileSync(
+      join(dir, 'idd-policy.json'),
+      JSON.stringify({ worktreeGuard: { enabled: true } }),
+    );
+    assert.equal(readWorktreeGuardEnabled(dir), true);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('readWorktreeGuardEnabled never falls through a present canonical config to a legacy one (idd-skill#2028)', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'idd-guard-no-fallthrough-'));
+  try {
+    mkdirSync(join(dir, '.github/idd'), { recursive: true });
+    writeFileSync(join(dir, '.github/idd/config.json'), JSON.stringify({}));
+    writeFileSync(
+      join(dir, 'idd-policy.json'),
+      JSON.stringify({ worktreeGuard: { enabled: true } }),
+    );
+    assert.equal(readWorktreeGuardEnabled(dir), false);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('readWorktreeGuardBranchPatterns trims configured patterns and falls back when invalid', () => {
   const dir = mkdtempSync(join(tmpdir(), 'idd-guard-'));
   try {
@@ -1362,6 +1457,19 @@ test('readWorktreeGuardBranchPatterns defaults when config is missing', () => {
       readWorktreeGuardBranchPatterns(dir),
       DEFAULT_WORKTREE_GUARD_BRANCH_PATTERNS,
     );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('readWorktreeGuardBranchPatterns also reads the legacy idd-policy.json path when the canonical file is absent (idd-skill#2028)', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'idd-bp-legacy-'));
+  try {
+    writeFileSync(
+      join(dir, 'idd-policy.json'),
+      JSON.stringify({ worktreeGuard: { branchPatterns: ['feature/*'] } }),
+    );
+    assert.deepEqual(readWorktreeGuardBranchPatterns(dir), ['feature/*']);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -1777,6 +1885,24 @@ test('readCleanupEvidenceTrustedLogins fails closed to github-actions[bot] alone
     assert.deepEqual(
       readCleanupEvidenceTrustedLogins(dir),
       new Set(['github-actions[bot]']),
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('readCleanupEvidenceTrustedLogins also reads the legacy idd-policy.json path when the canonical file is absent (idd-skill#2028)', () => {
+  const dir = mkdtempSync(
+    join(tmpdir(), 'idd-doctor-cleanup-evidence-trust-legacy-'),
+  );
+  try {
+    writeFileSync(
+      join(dir, 'idd-policy.json'),
+      JSON.stringify({ trustedMarkerActors: ['kurone-kito'] }),
+    );
+    assert.deepEqual(
+      readCleanupEvidenceTrustedLogins(dir),
+      new Set(['kurone-kito', 'github-actions[bot]']),
     );
   } finally {
     rmSync(dir, { recursive: true, force: true });
@@ -3462,6 +3588,21 @@ test('readTrustEmptyProtectionReads is true only when ciGate.trustEmptyProtectio
       JSON.stringify({ ciGate: { trustEmptyProtectionReads: 'true' } }),
     );
     assert.equal(readTrustEmptyProtectionReads(dir), false);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('readTrustEmptyProtectionReads also reads the legacy idd-policy.json path when the canonical file is absent (idd-skill#2028)', () => {
+  const dir = mkdtempSync(
+    join(tmpdir(), 'idd-doctor-trust-empty-protection-reads-legacy-'),
+  );
+  try {
+    writeFileSync(
+      join(dir, 'idd-policy.json'),
+      JSON.stringify({ ciGate: { trustEmptyProtectionReads: true } }),
+    );
+    assert.equal(readTrustEmptyProtectionReads(dir), true);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
