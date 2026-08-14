@@ -3086,7 +3086,16 @@ export function buildActivitySnapshotSummary(
               Boolean(thread.isResolved),
             ),
         )
-        .map((comment) => comment.createdAt),
+        .map((comment) =>
+          // An edited **Rejection confirmed by maintainer** marker anchors by
+          // its effective (updatedAt-preferring) activity, matching
+          // classifyThreadAckOnlyPostDisposition's choice for the same
+          // marker (#2045); ordinary Accepted/Rejected markers keep the
+          // pre-existing createdAt anchor.
+          isRejectionConfirmedDisposition(comment)
+            ? effectiveThreadCommentActivityAt(comment)
+            : comment.createdAt,
+        ),
     ),
   ].filter(isValidIsoTimestamp);
   const latestDispositionAt = maxIsoTimestamp(dispositionCreatedAts) ?? null;
@@ -3127,7 +3136,11 @@ export function buildActivitySnapshotSummary(
                 Boolean(thread.isResolved),
               ),
           )
-          .map((comment) => comment.createdAt)
+          .map((comment) =>
+            isRejectionConfirmedDisposition(comment)
+              ? effectiveThreadCommentActivityAt(comment)
+              : comment.createdAt,
+          )
           .filter(isValidIsoTimestamp),
       ) ?? null;
     // Per-reply attribution needs the reply timeline: when a caller
