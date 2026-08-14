@@ -35,6 +35,7 @@ import {
   evaluateDependencyVersionDrift,
   evaluateMarkerPrefixConsistency,
   extractMarkerPrefixes,
+  fetchGhApiJsonAt,
   filterIddBranchMergedPrs,
   findMissingWorkshopReferences,
   findMissingWorktreeHardening,
@@ -63,6 +64,7 @@ import {
   stripMarkdownNonText,
   worktreeGuardWiredAt,
 } from '../src/scripts/idd-doctor.mts';
+import { fetchGovernanceJson } from '../src/scripts/pre-merge-readiness.mts';
 import { loadJson } from '../src/scripts/validate-schemas.mts';
 
 const ap = (n: number | string) =>
@@ -3604,6 +3606,51 @@ test('readTrustEmptyProtectionReads also reads the legacy idd-policy.json path w
     );
     assert.equal(readTrustEmptyProtectionReads(dir), true);
   } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('fetchGhApiJsonAt preserves a failed `gh api` call\'s stdout so fetchGovernanceJson honors ciGate.trustEmptyProtectionReads from a JSON error body\'s "status" field (idd-skill#2044)', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'idd-doctor-fetch-gh-api-stdout-'));
+  const binDir = join(dir, 'bin');
+  const originalPath = process.env.PATH;
+  try {
+    mkdirSync(binDir, { recursive: true });
+    // Fake `gh` that fails a `gh api` call with a JSON error body on stdout
+    // only -- no stderr `(HTTP nnn)` suffix -- the failure shape
+    // deriveGhHttpStatus() falls back to a JSON body's "status" field for.
+    writeFileSync(
+      join(binDir, 'gh'),
+      '#!/bin/sh\necho \'{"message":"Not Found","status":"404"}\'\nexit 1\n',
+    );
+    chmodSync(join(binDir, 'gh'), 0o755);
+    process.env.PATH = `${binDir}:${originalPath ?? ''}`;
+
+    const fetchJson = (path: string, paginate: boolean) =>
+      fetchGhApiJsonAt(dir, undefined, path, paginate);
+
+    assert.deepEqual(
+      fetchGovernanceJson(
+        'repos/owner/repo/branches/main/protection',
+        false,
+        true,
+        {},
+        fetchJson,
+      ),
+      { value: {}, unreadable: false },
+    );
+    assert.deepEqual(
+      fetchGovernanceJson(
+        'repos/owner/repo/branches/main/protection',
+        false,
+        false,
+        {},
+        fetchJson,
+      ),
+      { value: {}, unreadable: true },
+    );
+  } finally {
+    process.env.PATH = originalPath;
     rmSync(dir, { recursive: true, force: true });
   }
 });
