@@ -2142,14 +2142,16 @@ export function formatCleanupBacklogRemediation(
 
 /**
  * Trusted authors for `<!-- idd-cleanup-evidence: ... -->` comments: the
- * repository's configured `trustedMarkerActors` (`.github/idd/config.json`)
- * plus `github-actions[bot]`, the identity `post-merge-cleanup.yml` posts
- * under via `GITHUB_TOKEN`. Any commenter outside this set can pre-post the
- * marker prefix on a public repo, so an untrusted-author match must never
- * count as genuine cleanup evidence -- the same trust-scoping every other
- * IDD operational marker already applies. Fails closed to
- * `github-actions[bot]` alone (config unreadable/malformed never widens
- * trust).
+ * repository's configured `trustedMarkerActors` (from the live IDD config,
+ * canonical `.github/idd/config.json` first, falling back to the legacy
+ * `idd-policy.json` when the canonical file is absent -- see
+ * {@link resolveLiveConfigDocument}) plus `github-actions[bot]`, the
+ * identity `post-merge-cleanup.yml` posts under via `GITHUB_TOKEN`. Any
+ * commenter outside this set can pre-post the marker prefix on a public
+ * repo, so an untrusted-author match must never count as genuine cleanup
+ * evidence -- the same trust-scoping every other IDD operational marker
+ * already applies. Fails closed to `github-actions[bot]` alone (config
+ * unreadable/malformed never widens trust).
  */
 export function readCleanupEvidenceTrustedLogins(root: string): Set<string> {
   const { config } = resolveLiveConfigDocument(root);
@@ -3404,12 +3406,14 @@ export function evaluateBranchProtectionFindings(
  * Root-relative `ciGate.trustEmptyProtectionReads` reader
  * (idd-skill#2010; #1377 introduced the flag). Deliberately not
  * `pre-merge-readiness.mts`'s own `readTrustEmptyProtectionReads`, which
- * reads `.github/idd/config.json` relative to `process.cwd()` --
- * `idd-doctor.mts` supports `--repo-root <path>`, and this file already
- * reads the same config file root-relative elsewhere (see
- * `readCleanupEvidenceTrustedLogins`). Fails closed to `false` on a
- * missing or unparseable config, matching
- * `normalizePolicyConfig(null).ciGate.trustEmptyProtectionReads`'s
+ * reads only `.github/idd/config.json` relative to `process.cwd()` and has
+ * no legacy fallback -- `idd-doctor.mts` supports `--repo-root <path>` and
+ * resolves the live config root-relative, canonical `.github/idd/config.json`
+ * first, falling back to the legacy `idd-policy.json` when the canonical
+ * file is absent (see {@link resolveLiveConfigDocument}, idd-skill#2028),
+ * the same two-file resolution every other scalar reader in this file
+ * shares. Fails closed to `false` on a missing or unparseable config,
+ * matching `normalizePolicyConfig(null).ciGate.trustEmptyProtectionReads`'s
  * default.
  */
 export function readTrustEmptyProtectionReads(root: string): boolean {
