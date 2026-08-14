@@ -470,15 +470,27 @@ Ask these checks:
      `src/scripts/idd-onboard.mts`), so a normally onboarded adopter's
      files never match any upstream commit's tree byte-for-byte — the
      upstream tree still carries the literal `{{...}}` tokens.
-     Reverse-substitute the adopter's own recorded
-     values (`.github/idd/config.json`, the Step 3 recorded policy
-     decisions) back to `{{...}}` token form first, account for any
-     known intentional-divergence markers (see the divergence-signal
-     check above) as expected differences rather than mismatches, and
-     only then compare the normalized tree against candidate upstream
-     commits. Report the ambiguity in the resync issue itself, rather
-     than guessing, when more than one candidate ref remains
-     equivalent after normalization. Do not construct `v<iddVersion>`
+     Reverse-substitution is not a safe inverse here: a concrete
+     value (for example the literal `true` a command placeholder
+     takes when no relevant tool exists for that step, per Onboarding
+     Reference — Placeholder Values) can belong to more than one
+     placeholder, so a value found in the adopter's tree does not
+     identify a single token to restore, and a naive text replace can
+     also rewrite unrelated prose that happens to match the same
+     value. Transform each **candidate upstream tree forward**
+     instead, using the adopter's own recorded per-placeholder values
+     (`.github/idd/config.json`, the Step 3 recorded policy
+     decisions) through the same site-aware substitution the real
+     import applies (JSON sites receive an escaped value, every other
+     site takes it raw), then compare that transformed candidate
+     against the adopter's actual snapshot — this direction has no
+     ambiguity, since each placeholder's value is already known before
+     the transform runs. Account for any known intentional-divergence
+     markers (see the divergence-signal check above) as expected
+     differences rather than mismatches. Report the ambiguity in the
+     resync issue itself, rather than guessing, when more than one
+     candidate ref remains equivalent after this comparison. Do not
+     construct `v<iddVersion>`
      (`.github/idd/config.json`) as the baseline without this check:
      `iddVersion` is only a coarse signal and can be stale, an adopter
      still on `0.1.0` has no matching tag at all (`CHANGELOG.md`
