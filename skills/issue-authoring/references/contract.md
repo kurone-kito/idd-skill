@@ -391,6 +391,41 @@ Ask these checks:
    taxonomy. An owner/CODEOWNERS marker or a referenced tracking issue may
    also serve, but the code-comment convention is the recommended default.
    Do not hard-code any single consumer's divergence-tracking mechanism.
+4. When an issue drafts a **template resync or reimport** (pulling a
+   newer `idd-template/` revision into a repository that already
+   adopted IDD), consult `docs/customization.md`'s "Documentation lint
+   compatibility" section before treating `.markdownlint.yml` /
+   `.markdownlint-cli2.yaml` / `.cspell.config.yml` as unchanged — it is
+   part of the same imported bundle, so it resolves in an installed or
+   adopter context, unlike `idd-template/ONBOARDING.md`'s "Re-importing"
+   section, whose source-checkout-relative path does not exist once the
+   authoring skill runs outside this repository. Either section
+   documents the same named gap: an adopter's own rule customizations
+   for these files need a by-hand merge into the new import rather than
+   an assumed carry-forward, and `idd-onboard.mjs --import` reports a
+   `blockedOverwrites` finding instead of silently keeping a same-named
+   local file as-is. From a source checkout of `idd-skill` itself,
+   `idd-template/ONBOARDING.md`'s "Re-importing" section is the more
+   detailed maintainer-facing version of the same guidance.
+5. When drafting a resync issue's Background, run a mechanical
+   placeholder diff against the **upstream `idd-skill` source
+   repository's** `idd-template/` trees at the two relevant refs — the
+   previously-adopted `v<iddVersion>` tag (`iddVersion` is recorded in
+   `.github/idd/config.json`) and the new target release/ref — never a
+   tree inside the target/adopter repository itself, which retains no
+   local `idd-template/` directory of its own once IDD is imported.
+   Compare the actual `{{...}}` token identities per changed file, not
+   only the aggregate occurrence count: a same-count one-for-one
+   placeholder swap changes what an adopter must substitute without
+   changing the count. Exclude reference-only meta-docs whose `{{...}}`
+   tokens are deliberately kept literal to document the placeholder
+   syntax itself — the `SCAN_EXCLUDED_PATHS` set in
+   `src/scripts/idd-onboard.mts` (e.g. `docs/onboarding/placeholders.md`)
+   — diffing those would misidentify literal documentation as an
+   outstanding substitution. Name any file whose placeholder tokens
+   changed, rather than asserting a file needs no placeholder
+   substitution as an unverified default (observed 2026-08-12/13 on an
+   adopter repository, #2012).
 
 ## Dependency minimization
 
