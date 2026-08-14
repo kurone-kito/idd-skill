@@ -2994,27 +2994,29 @@ export function readTrustEmptyProtectionReads(root) {
  * `--hostname` at all) leaves `GH_HOST` in force, so a GHES-configured
  * `GH_HOST` in the calling environment would otherwise leak into a
  * governance read for a genuinely `github.com`-hosted target
- * repository (idd-skill#2030). Preserves an explicit non-default port
- * via `URL.host` rather than `URL.hostname` for a GHES target,
- * mirroring `branch-conflict-state.mts`'s `parseGitFetchOrigin()`
- * (idd-skill#2030, PR #2026 review). Returns `undefined` only for an
+ * repository (idd-skill#2030). Deliberately keeps the bare hostname
+ * (`URL.hostname`, dropping any explicit port) for a GHES target, like
+ * `resolveGhApiHostname()` (`gh-exec.mts`) already does: `gh api
+ * --hostname` rejects any value containing a colon outright (confirmed
+ * against a real `gh` binary: `--hostname host:port` fails argv
+ * validation before a request is even attempted), so a ported GHES
+ * host cannot be routed through `--hostname` at all -- correctly
+ * routing one requires constructing an absolute API URL instead, which
+ * neither this resolver nor its `gh-exec.mts` sibling do yet (deferred
+ * to idd-skill#2052, PR #2051 review). Returns `undefined` only for an
  * unparseable or host-less `url`.
  */
 export function resolveTargetGhHostname(url) {
   if (!url) {
     return undefined;
   }
-  let parsed;
+  let hostname;
   try {
-    parsed = new URL(url);
+    hostname = new URL(url).hostname.toLowerCase();
   } catch {
     return undefined;
   }
-  const hostname = parsed.hostname.toLowerCase();
-  if (!hostname) {
-    return undefined;
-  }
-  return hostname === 'github.com' ? 'github.com' : parsed.host.toLowerCase();
+  return hostname ? hostname : undefined;
 }
 /**
  * Root-scoped `gh api` fetch for {@link fetchGovernanceJson}'s injectable

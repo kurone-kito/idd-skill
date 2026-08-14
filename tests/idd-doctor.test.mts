@@ -3676,15 +3676,15 @@ test('resolveTargetGhHostname resolves a GHES hostname, lowercased', () => {
   );
 });
 
-// idd-skill#2030 (PR #2026 review, owner follow-up): a GHES remote on a
-// non-standard port must keep that port -- `URL.hostname` alone would
-// silently drop it and misdirect the governance read at the default
-// HTTPS port instead of the repository's actual server, mirroring the
-// same `.host`-over-`.hostname` fix `branch-conflict-state.mts`'s
-// `parseGitFetchOrigin()` already applies.
-test('resolveTargetGhHostname preserves an explicit non-default port for a GHES hostname', () => {
+// idd-skill#2030 (PR #2051 review, Copilot): `gh api --hostname` rejects
+// any value containing a colon outright (confirmed against a real `gh`
+// binary), so this resolver must never emit a ported hostname -- keeping
+// the bare host, same as `gh-exec.mts`'s `resolveGhApiHostname()` sibling,
+// is deliberate here, not an oversight. Genuine port support needs an
+// absolute-URL request path instead of `--hostname`; deferred to #2052.
+test('resolveTargetGhHostname drops an explicit non-default port for a GHES hostname (gh api --hostname cannot carry one)', () => {
   assert.equal(
     resolveTargetGhHostname('https://ghe.example.com:8443/owner/repo'),
-    'ghe.example.com:8443',
+    'ghe.example.com',
   );
 });
