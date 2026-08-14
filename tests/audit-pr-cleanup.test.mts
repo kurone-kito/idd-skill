@@ -291,3 +291,72 @@ test('runApplyWithRetry preserves already-applied work when the confirming resca
   assert.equal(result.report.rescanError, 'GraphQL: transient failure');
   assert.equal(result.boundExhausted, false);
 });
+
+test('runApplyWithRetry falls back to the default attempt bound on a non-finite maxAttempts value (Copilot review, PR #2019)', async () => {
+  const { runApplyWithRetry } = await import(
+    '../src/scripts/audit-pr-cleanup.mts'
+  );
+  const initial = createAuditReport({ candidates: [createRow('c1')] });
+  let rescanCalls = 0;
+
+  const result = await runApplyWithRetry(
+    initial,
+    async (report) => {
+      for (const candidate of report.candidates) {
+        report.applied.push({ ...candidate, isMinimized: true });
+      }
+    },
+    async () => {
+      rescanCalls += 1;
+      // A churning comment stream: every rescan still finds one candidate.
+      // Without the Number.isFinite guard, `attempt <= Infinity` is always
+      // true, so the loop never terminates -- asserting a bounded rescan
+      // count (the default of 3, not an unbounded count) is the actual
+      // regression check.
+      return createAuditReport({
+        mode: 'dry-run',
+        candidates: [createRow(`c${rescanCalls + 1}`)],
+      });
+    },
+    Number.POSITIVE_INFINITY,
+    noBackoff,
+  );
+
+  assert.equal(rescanCalls, 3);
+  assert.equal(result.attempts, 3);
+  assert.equal(result.boundExhausted, true);
+});
+
+test('runApplyWithRetry truncates a fractional maxAttempts instead of misreporting attempts:0', async () => {
+  const { runApplyWithRetry } = await import(
+    '../src/scripts/audit-pr-cleanup.mts'
+  );
+  const initial = createAuditReport({ candidates: [createRow('c1')] });
+  let rescanCalls = 0;
+
+  const result = await runApplyWithRetry(
+    initial,
+    async (report) => {
+      for (const candidate of report.candidates) {
+        report.applied.push({ ...candidate, isMinimized: true });
+      }
+    },
+    async () => {
+      rescanCalls += 1;
+      return createAuditReport({
+        mode: 'dry-run',
+        candidates: [createRow(`c${rescanCalls + 1}`)],
+      });
+    },
+    2.5,
+    noBackoff,
+  );
+
+  // Math.trunc(2.5) === 2: without it, `attempt === maxAttempts` (an
+  // integer compared against 2.5) is never true and the loop falls through
+  // to the unreachable-path fallback, misreporting `attempts: 0` despite
+  // having run 2 real attempts.
+  assert.equal(rescanCalls, 2);
+  assert.equal(result.attempts, 2);
+  assert.equal(result.boundExhausted, true);
+});

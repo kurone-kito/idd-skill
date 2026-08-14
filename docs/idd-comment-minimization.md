@@ -402,15 +402,15 @@ which suffices for its single-shot post-merge run:
 
 **F4 Cleanup Evidence**
 
-| Field                            | Value                                         |
-| -------------------------------- | --------------------------------------------- |
-| Status                           | applied / failed / incomplete / rescan-failed |
-| Applied                          | N                                             |
-| Failed                           | N                                             |
-| Skipped                          | N                                             |
-| Permission-blocked               | N                                             |
-| Retry attempts (bound-exhausted) | N (true / false)                              |
-| Notes                            | reason for any failed or skipped items        |
+| Field                            | Value                                                 |
+| -------------------------------- | ----------------------------------------------------- |
+| Status                           | applied / clean / failed / incomplete / rescan-failed |
+| Applied                          | N                                                     |
+| Failed                           | N                                                     |
+| Skipped                          | N                                                     |
+| Permission-blocked               | N                                                     |
+| Retry attempts (bound-exhausted) | N (true / false)                                      |
+| Notes                            | reason for any failed or skipped items                |
 ```
 
 `retry-attempts` / `retry-bound-exhausted` mirror

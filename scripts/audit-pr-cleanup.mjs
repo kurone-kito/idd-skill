@@ -261,8 +261,16 @@ export async function runApplyWithRetry(
   maxAttempts = DEFAULT_APPLY_RETRY_MAX_ATTEMPTS,
   backoff = defaultApplyRetryBackoff,
 ) {
+  // A non-finite `maxAttempts` (`Infinity`) would defeat the bounded-retry
+  // contract with an unbounded loop; a fractional value (e.g. `2.5`) would
+  // never satisfy `attempt === maxAttempts` below and fall through to the
+  // fallback return with an incorrect `attempts: 0` (same class of bug as
+  // `withBoundedRetry`'s `attempts` guard, gh-exec.mts, #1394).
+  const totalAttempts = Number.isFinite(maxAttempts)
+    ? Math.max(1, Math.trunc(maxAttempts))
+    : DEFAULT_APPLY_RETRY_MAX_ATTEMPTS;
   let report = initialReport;
-  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+  for (let attempt = 1; attempt <= totalAttempts; attempt += 1) {
     await applyPass(report);
     if (report.failed.length > 0) {
       return { report, attempts: attempt, boundExhausted: false };
@@ -309,14 +317,13 @@ export async function runApplyWithRetry(
     if (freshReport.candidates.length === 0) {
       return { report: freshReport, attempts: attempt, boundExhausted: false };
     }
-    if (attempt === maxAttempts) {
+    if (attempt === totalAttempts) {
       return { report: freshReport, attempts: attempt, boundExhausted: true };
     }
     report = freshReport;
   }
-  // Unreachable: maxAttempts <= 0 falls through the loop without ever
-  // attempting a pass. Guarded the same way the CLI's own arg parsing
-  // never produces a non-positive maxAttempts today.
+  // Unreachable: totalAttempts is normalized to >= 1 above, so the loop
+  // always runs at least one attempt and returns from inside it.
   return { report, attempts: 0, boundExhausted: true };
 }
 // Build an IDD-scoped disposition-author predicate from the resolved
