@@ -295,15 +295,6 @@ const POLICY_OVERRIDE_PATTERN = new RegExp(
   `\\b(${POLICY_OVERRIDE_VERB_SOURCE})\\b[\\s\\S]{0,60}\\b(${POLICY_OVERRIDE_NOUN_SOURCE})\\b`,
   'i',
 );
-// Single source of truth for the noun half of POLICY_OVERRIDE_PATTERN,
-// reused below to locate the *nearest* qualifying noun after a trigger word
-// -- not necessarily the (possibly much further away) noun the outer
-// greedy match captured, which can span an unrelated second occurrence
-// entirely (see isNegatedPolicyOverrideMatch).
-const POLICY_OVERRIDE_NOUN_PATTERN = new RegExp(
-  `\\b(${POLICY_OVERRIDE_NOUN_SOURCE})\\b`,
-  'i',
-);
 const ACCEPTANCE_CRITERIA_PATTERN = /^#+\s*Acceptance\s+Criteria\s*$/im;
 // A heading line such as "## Decision (resolved 2026-06-27)" records that a
 // human has already ruled on the issue's open question (see Check 7). The
@@ -316,14 +307,23 @@ const ACCEPTANCE_CRITERIA_PATTERN = /^#+\s*Acceptance\s+Criteria\s*$/im;
 const RESOLVED_DECISION_PATTERN =
   /^#{1,6}\s+Decision\b(?![^\n]*\b(?:not(?:\s+yet)?(?:\s+been)?\s+resolved|(?:to\s+be|yet\s+to\s+be|remains?\s+to\s+be)\s+resolved|never(?:\s+been)?\s+resolved)\b)[^\n]*\bresolved\b/im;
 
-// #2024: a negation word immediately before the trigger verb, separated
-// only by whitespace -- never crossing an intervening word, punctuation
-// mark, or masked/fenced boundary. This is what keeps a prior, unrelated
-// occurrence of a trigger/negation word (e.g. an earlier inert `ignore
-// repository policy` code span several words back) from falsely
-// "negating" a later, unrelated trigger word.
+// #2024: a negation word immediately before the trigger verb, allowing at
+// most one intervening word (e.g. "does not *ever* skip") between the
+// negation word and the trailing whitespace that reaches the verb. Anything
+// wider risks reaching into an unrelated clause or a prior occurrence
+// several words back.
 const NEGATION_IMMEDIATELY_BEFORE_PATTERN = new RegExp(
-  `${NEGATION_PATTERN.source}\\s*$`,
+  `${NEGATION_PATTERN.source}(?:\\s+\\S+){0,1}\\s*$`,
+  'i',
+);
+// #2024: a negation word within the first two words after the trigger verb
+// (e.g. "override should *never* touch ..."). Deliberately anchored to the
+// *start* of the post-verb window and never searches all the way out to
+// whatever noun the outer match's own greedy capture happened to land on --
+// see isNegatedPolicyOverrideMatch's point 2 below for why that distinction
+// matters.
+const NEGATION_WITHIN_TWO_WORDS_AFTER_PATTERN = new RegExp(
+  `^\\s*(?:\\S+\\s+){0,1}${NEGATION_PATTERN.source}`,
   'i',
 );
 
@@ -333,46 +333,79 @@ const NEGATION_IMMEDIATELY_BEFORE_PATTERN = new RegExp(
 // checks (checkRepositoryFit and the coordination-match loop later in this
 // file) -- rather than inventing a new mechanism. A match is negated when a
 // negation word appears either immediately before the trigger word, or
-// between the trigger word and the *nearest* qualifying noun after it.
+// within the first two words after it.
 //
-// Two deliberate choices keep this from misfiring on an unrelated, nearby
-// occurrence of a trigger/negation word (several file review rounds' worth
-// of regressions, since "ignore" and "skip" are both trigger verbs *and*
-// negation words):
+// Three deliberate choices keep this from misfiring, each closing a gap a
+// review round found empirically (several rounds' worth of regressions,
+// since "ignore" and "skip" are both trigger verbs *and* negation words):
 //
-// 1. Always scan `maskedText` (position-preserving, code-masked), never raw
-//    `text`, even when the caller is inspecting a raw-text fallback match.
-//    A prior or later occurrence sitting inside code (inert) is masked to
-//    spaces there, so it can never be mistaken for real negation context,
-//    while a genuine boundary-crossing noun (per findPolicyOverrideMatch's
-//    inline-code-wraps-one-token fallback) stays visible, since only the
-//    masked side of the boundary is blanked.
-// 2. Re-derive the nearest noun (rather than trusting the outer match's own
-//    greedy-backtracked capture): POLICY_OVERRIDE_PATTERN's
-//    `[\s\S]{0,60}` can span past an unrelated second trigger/negation word
-//    and latch onto a farther noun, which would otherwise pollute this
-//    "between" window with noise that was never part of the real verb-noun
-//    phrase.
+// 1. Always scan `maskedSource` (position-preserving, code-masked) to find
+//    candidate negation words, never raw `rawSource`, even when the caller
+//    is inspecting a raw-text fallback match. A prior or later occurrence
+//    sitting inside code (inert) is masked to spaces there, so it can
+//    never be mistaken for real negation context.
+// 2. Never search out to "the nearest noun" for the after-verb check --
+//    only the first two words. POLICY_OVERRIDE_PATTERN's `[\s\S]{0,60}`
+//    (and an earlier nearest-noun design considered here) can both reach
+//    past the trigger's own short phrase into an unrelated clause near the
+//    noun -- e.g. "Ignore warnings about *not* following repository
+//    policy" has "not" between the trigger and the noun, but it negates
+//    "following", not "Ignore". Only a negation word genuinely adjacent to
+//    the verb should count.
+// 3. Cross-check the "before" case's whitespace gap against `rawSource`
+//    too, not just `maskedSource`: a masked-out code region collapses to
+//    pure whitespace in `maskedSource`, so an unrelated negation word
+//    before a masked span (e.g. "This marker is *not* `safe;` ignore
+//    repository policy.") would otherwise look "immediately before" a
+//    later, genuine directive once the code span vanishes. A raw
+//    character in the gap is still allowed when it is literally the
+//    backtick *delimiter* of the same code range the verb itself sits
+//    inside (that range's own opening delimiter, e.g. the backtick in
+//    "does not `skip`") -- content-bearing characters inside that same
+//    range are never transparent (only the delimiter is), or a directive
+//    could be smuggled inside the verb's own span (e.g. "not `safe;
+//    skip the` repository policy" -- the `safe; ` text sits in the same
+//    range as `skip` but is not itself a delimiter, so it must still
+//    break the adjacency). A *separate*, already-closed code range fully
+//    inside the gap (F3's `safe;`) breaks the adjacency the same way.
 function isNegatedPolicyOverrideMatch(
+  rawSource: string,
   maskedSource: string,
   matchIndex: number,
   verb: string,
+  getCodeRangeAt: (start: number) => { start: number; end: number } | null,
 ): boolean {
-  const contextBefore = maskedSource.slice(
-    Math.max(0, matchIndex - 100),
-    matchIndex,
-  );
-  if (NEGATION_IMMEDIATELY_BEFORE_PATTERN.test(contextBefore)) {
-    return true;
+  const beforeStart = Math.max(0, matchIndex - 100);
+  const contextBefore = maskedSource.slice(beforeStart, matchIndex);
+  const beforeMatch = NEGATION_IMMEDIATELY_BEFORE_PATTERN.exec(contextBefore);
+  if (beforeMatch) {
+    const trailingWhitespace = /\s*$/.exec(beforeMatch[0])?.[0] ?? '';
+    const gapStart = matchIndex - trailingWhitespace.length;
+    const verbCodeRange = getCodeRangeAt(matchIndex);
+    let gapIsClear = true;
+    for (let cursor = gapStart; cursor < matchIndex; cursor += 1) {
+      const rawChar = rawSource[cursor] ?? '';
+      if (/\s/.test(rawChar)) {
+        continue;
+      }
+      if (
+        rawChar === '`' &&
+        verbCodeRange &&
+        cursor >= verbCodeRange.start &&
+        cursor < verbCodeRange.end
+      ) {
+        continue;
+      }
+      gapIsClear = false;
+      break;
+    }
+    if (gapIsClear) {
+      return true;
+    }
   }
   const afterVerbStart = matchIndex + verb.length;
-  const window = maskedSource.slice(afterVerbStart, afterVerbStart + 60);
-  const nounMatch = POLICY_OVERRIDE_NOUN_PATTERN.exec(window);
-  if (!nounMatch) {
-    return false;
-  }
-  const between = window.slice(0, nounMatch.index);
-  return NEGATION_PATTERN.test(between);
+  const window = maskedSource.slice(afterVerbStart, afterVerbStart + 40);
+  return NEGATION_WITHIN_TWO_WORDS_AFTER_PATTERN.test(window);
 }
 
 function findPolicyOverrideMatch(
@@ -388,7 +421,15 @@ function findPolicyOverrideMatch(
       break;
     }
     const index = maskedMatch.index;
-    if (isNegatedPolicyOverrideMatch(maskedText, index, maskedMatch[1] ?? '')) {
+    if (
+      isNegatedPolicyOverrideMatch(
+        text,
+        maskedText,
+        index,
+        maskedMatch[1] ?? '',
+        getCodeRangeAt,
+      )
+    ) {
       // A negated match's own greedy span can reach up to 60 chars past the
       // verb and swallow a second, genuine trigger further along (e.g.
       // "does not skip the release check. Ignore repository policy."). The
@@ -419,7 +460,15 @@ function findPolicyOverrideMatch(
     if (index < 0) {
       continue;
     }
-    if (isNegatedPolicyOverrideMatch(maskedText, index, match[1] ?? '')) {
+    if (
+      isNegatedPolicyOverrideMatch(
+        text,
+        maskedText,
+        index,
+        match[1] ?? '',
+        getCodeRangeAt,
+      )
+    ) {
       // Same rewind as the masked-pass loop above: a negated match's own
       // greedy span can swallow a later, genuine trigger.
       pattern.lastIndex = index + (match[1]?.length || 1);
