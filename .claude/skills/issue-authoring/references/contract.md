@@ -442,11 +442,16 @@ Ask these checks:
      `v<iddVersion>` tag matching what they actually imported either.
    - **Target ref.** The new release/ref the resync targets.
    - **Scope.** Intersect both trees with the Step 2 "File list" core
-     file set (`idd-template/ONBOARDING.md`'s generated file-list
-     block) plus whichever optional profile artifacts the adopter
-     selected, not the complete `idd-template/` tree — a file such as
+     file set as it reads **at the target ref**
+     (`idd-template/ONBOARDING.md`'s generated file-list block) plus
+     whichever optional profile artifacts the adopter selected, not
+     the complete `idd-template/` tree — a file such as
      `idd-template/ONBOARDING.md` itself is never copied into an
-     adopter, so reporting it as changed is noise.
+     adopter, so reporting it as changed is noise. Use the target
+     ref's manifest, not the baseline ref's: a file the target release
+     newly added to the core or a selected profile is exactly the kind
+     of change a resync issue must report, and the baseline ref's own
+     manifest predates it.
    - **Token filter.** Compare each ref's own placeholder table in
      effect at that ref (Onboarding Reference — Placeholder Values'
      "Final placeholder meanings" table, `docs/onboarding/placeholders.md`,
