@@ -409,9 +409,10 @@ Ask these checks:
    customizations for these files need a by-hand merge into the new
    import rather than an assumed carry-forward, and
    `idd-onboard.mjs --import` reports a `blockedOverwrites` finding
-   instead of silently keeping a same-named local file as-is
-   (observed 2026-08-12/13 on an adopter repository, `setup.ubuntu`,
-   kurone-kito/idd-skill#2012).
+   instead of silently keeping a same-named local file as-is, unless
+   the import used `--force`, which silently overwrites the differing
+   file instead of recording it there (observed 2026-08-12/13 on an
+   adopter repository, `setup.ubuntu`, kurone-kito/idd-skill#2012).
 5. When drafting a resync issue's Background, run a mechanical
    placeholder diff against the **upstream `idd-skill` source
    repository's** `idd-template/` trees at the two relevant refs —
