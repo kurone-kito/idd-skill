@@ -26,7 +26,13 @@ import {
   POLICY_DEFAULTS,
   parseProjectCommandRows,
 } from './policy-helpers.mts';
-import { resolveTrustedMarkerActors } from './protocol-helpers.mts';
+import { fetchGovernanceJson } from './pre-merge-readiness.mts';
+import {
+  parsePaginatedGhNdjson,
+  resolveTrustedMarkerActors,
+  summarizeBranchReviewRequirements,
+  summarizeRequiredCheckMetadata,
+} from './protocol-helpers.mts';
 import { loadJson, validate } from './validate-schemas.mts';
 
 const WORKSHOP_ENTRY_POINTS = ['README.md', 'README.ja.md', 'docs/index.md'];
@@ -3114,7 +3120,7 @@ function checkGithubReadiness(
 ) {
   const repoView = runCommand(
     'gh',
-    ['repo', 'view', '--json', 'owner,name,defaultBranchRef'],
+    ['repo', 'view', '--json', 'owner,name,defaultBranchRef,url'],
     root,
   );
   if (!repoView.ok) {
@@ -3131,6 +3137,7 @@ function checkGithubReadiness(
     owner?: { login?: string };
     name?: string;
     defaultBranchRef?: { name?: string };
+    url?: string;
   };
   try {
     parsed = JSON.parse(repoView.stdout);
@@ -3148,6 +3155,7 @@ function checkGithubReadiness(
   const owner = parsed.owner?.login;
   const repo = parsed.name;
   const branch = parsed.defaultBranchRef?.name;
+  const ghHostname = resolveTargetGhHostname(parsed.url);
   if (!owner || !repo || !branch) {
     const message =
       'github checks skipped: repository owner/name/default branch is incomplete';
@@ -3159,12 +3167,26 @@ function checkGithubReadiness(
     return;
   }
 
-  const protection = runCommand(
-    'gh',
-    ['api', `repos/${owner}/${repo}/branches/${branch}/protection`],
-    root,
-  );
-  if (!protection.ok) {
+  const trustEmptyProtectionReads = readTrustEmptyProtectionReads(root);
+  const encodedBranch = encodeURIComponent(branch);
+  let branchRulesRead: GovernanceReadOutcome<BranchRuleReadEntry[]>;
+  let branchProtectionRead: GovernanceReadOutcome<BranchProtectionReadPayload>;
+  try {
+    branchRulesRead = fetchGovernanceJson<BranchRuleReadEntry[]>(
+      `repos/${owner}/${repo}/rules/branches/${encodedBranch}`,
+      true,
+      trustEmptyProtectionReads,
+      [],
+      (path, paginate) => fetchGhApiJsonAt(root, ghHostname, path, paginate),
+    );
+    branchProtectionRead = fetchGovernanceJson<BranchProtectionReadPayload>(
+      `repos/${owner}/${repo}/branches/${encodedBranch}/protection`,
+      false,
+      trustEmptyProtectionReads,
+      {},
+      (path, paginate) => fetchGhApiJsonAt(root, ghHostname, path, paginate),
+    );
+  } catch {
     const message = `branch protection not readable for ${owner}/${repo}:${branch}`;
     if (requireGithub) {
       report.errors.push(message);
@@ -3174,14 +3196,8 @@ function checkGithubReadiness(
     return;
   }
 
-  let protectionJson: {
-    required_status_checks?: { contexts?: string[]; strict?: boolean };
-    required_pull_request_reviews?: unknown;
-  };
-  try {
-    protectionJson = JSON.parse(protection.stdout);
-  } catch {
-    const message = 'branch protection response is not valid JSON';
+  if (isBranchProtectionUnreadable(branchRulesRead, branchProtectionRead)) {
+    const message = `branch protection not readable for ${owner}/${repo}:${branch}`;
     if (requireGithub) {
       report.errors.push(message);
     } else {
@@ -3190,26 +3206,275 @@ function checkGithubReadiness(
     return;
   }
 
-  const requiredChecks = protectionJson.required_status_checks?.contexts ?? [];
-  const strict = protectionJson.required_status_checks?.strict ?? false;
-  if (requiredChecks.length === 0) {
+  const findings = evaluateBranchProtectionFindings(
+    branchRulesRead.value,
+    branchProtectionRead.value,
+  );
+
+  if (
+    findings.requiredCheckCount === 0 &&
+    !findings.requiredChecksSourcePinned
+  ) {
     report.warnings.push(
       `branch protection is enabled but no required status checks are configured on ${branch}`,
     );
+  } else if (findings.requiredCheckCount === 0) {
+    report.passes.push(
+      `required status checks configured on ${branch} via a source-pinned requirement (e.g. a Rulesets "workflows" rule) with no enumerable check name`,
+    );
   } else {
     report.passes.push(
-      `required status checks configured on ${branch} (${requiredChecks.length}, strict=${strict})`,
+      `required status checks configured on ${branch} (${findings.requiredCheckCount}, strict=${findings.requiredChecksStrict})`,
     );
   }
 
-  const reviewConfig = protectionJson.required_pull_request_reviews;
-  if (!reviewConfig) {
+  if (!findings.reviewPolicyConfigured) {
     report.warnings.push(
       `required pull request reviews are not configured on ${branch}`,
     );
   } else {
     report.passes.push('required pull request review policy is configured');
   }
+}
+
+/**
+ * One `rules/branches/{branch}` rule entry, as accepted by
+ * `summarizeBranchReviewRequirements()`'s branch-rules parameter
+ * (`protocol-helpers.mts`). Extracted via `Parameters<>` rather than
+ * duplicated: that helper's own `BranchRuleLike` type is not exported,
+ * and re-declaring a narrower local shape by hand previously drifted
+ * out of sync with what `summarizeBranchReviewRequirements()` actually
+ * reads from `rule.parameters` (idd-skill#2010 review).
+ */
+type BranchRuleReadEntry = NonNullable<
+  Parameters<typeof summarizeBranchReviewRequirements>[0]
+>[number];
+
+/**
+ * A classic `branches/{branch}/protection` payload, as accepted by
+ * `summarizeBranchReviewRequirements()`'s branch-protection parameter.
+ * Extracted the same way as {@link BranchRuleReadEntry}. Both parameters
+ * are optional (default-valued) on `summarizeBranchReviewRequirements()`
+ * itself, which is why `Parameters<>` alone would include `| undefined`
+ * here; `NonNullable<>` strips that back out since every call site below
+ * always passes a concrete value.
+ */
+type BranchProtectionReadPayload = NonNullable<
+  Parameters<typeof summarizeBranchReviewRequirements>[1]
+>;
+
+/** Outcome of one `fetchGovernanceJson()` read (mirrors its own return shape). */
+interface GovernanceReadOutcome<T> {
+  value: T;
+  unreadable: boolean;
+}
+
+/**
+ * Whether `checkGithubReadiness` should report branch protection as
+ * unreadable, combining both governance reads' outcomes. Only `true` when
+ * **both** the Rulesets read (`rules/branches/{branch}`) and the classic
+ * read (`branches/{branch}/protection`) are unreadable -- matching
+ * idd-skill#2010's acceptance criteria ("When the Rulesets read succeeds,
+ * or the config key is `true`, drop the warning ... instead of returning
+ * early"). A repository on Rulesets-only protection legitimately 404s on
+ * the classic endpoint (GitHub's classic-protection endpoint never
+ * reflects Rulesets-only configuration); requiring only one read to
+ * succeed keeps that case from being misreported as unreadable even when
+ * `ciGate.trustEmptyProtectionReads` is unset (idd-skill#2010 review,
+ * Copilot round). Pure so the classic-only / Rulesets-only / both /
+ * neither matrix is directly testable without mocking `gh`, mirroring
+ * {@link evaluateBranchProtectionFindings}'s own rationale.
+ */
+export function isBranchProtectionUnreadable(
+  branchRulesRead: { unreadable: boolean },
+  branchProtectionRead: { unreadable: boolean },
+): boolean {
+  return branchRulesRead.unreadable && branchProtectionRead.unreadable;
+}
+
+/** Findings the branch-protection check reports for the doctor output. */
+export interface BranchProtectionFindings {
+  requiredCheckCount: number;
+  /**
+   * `true` when a Rulesets `workflows` rule (or any other
+   * source-pinned-but-unresolved requirement `summarizeBranchReviewRequirements()`
+   * detects) requires checks with no enumerable name -- distinct from
+   * `requiredCheckCount === 0` meaning "nothing configured" (idd-skill#2010
+   * review): a branch protected solely by a required-workflows Rulesets
+   * rule has real protection even though it contributes zero names.
+   */
+  requiredChecksSourcePinned: boolean;
+  requiredChecksStrict: boolean;
+  reviewPolicyConfigured: boolean;
+}
+
+/**
+ * Combine a classic `branches/{branch}/protection` read with a GitHub
+ * Rulesets `rules/branches/{branch}` read into the findings
+ * `checkGithubReadiness` reports. Pure and network-free so the
+ * classic-only / Rulesets-only / both / neither matrix is directly
+ * testable without mocking `gh`.
+ *
+ * Required-check counting reuses the already-exported
+ * `summarizeBranchReviewRequirements()` (`protocol-helpers.mts`), which
+ * already normalizes the field-name differences between classic
+ * `contexts` and a Rulesets `required_status_checks` rule's `parameters`
+ * into one deduplicated name set -- this function adds no separate
+ * name-extraction logic of its own (idd-skill#2010).
+ *
+ * Review-policy presence deliberately stays a presence check, not a
+ * minimum-approval-count check, matching this file's pre-existing
+ * classic-only behavior: a repository that requires a pull request but
+ * configures zero mandatory approvals still counts as configured. The
+ * same presence test is simply widened to also recognize a Rulesets
+ * `pull_request`-type rule.
+ *
+ * `requiredChecksStrict` also honors a Rulesets `required_status_checks`
+ * rule's own `strict_required_status_checks_policy` parameter, not just
+ * classic protection's `strict` field -- a Rulesets-only repository with
+ * that policy enabled previously always reported `strict=false`
+ * (idd-skill#2010 review). GitHub's ruleset docs state that flag "will
+ * not take effect unless at least one status check is enabled", so it
+ * only counts here when that same rule's own check list is non-empty --
+ * the same non-empty-check guard `summarizeBranchCurrency()`
+ * (`protocol-helpers.mts`) already applies for the identical reason
+ * (`#1513`), reusing its `summarizeRequiredCheckMetadata()` extraction
+ * rather than a second name-counting implementation.
+ */
+export function evaluateBranchProtectionFindings(
+  branchRules: BranchRuleReadEntry[],
+  branchProtection: BranchProtectionReadPayload,
+): BranchProtectionFindings {
+  const requirements = summarizeBranchReviewRequirements(
+    branchRules,
+    branchProtection,
+  );
+  const reviewPolicyConfigured =
+    Boolean(branchProtection.required_pull_request_reviews) ||
+    branchRules.some((rule) => rule?.type === 'pull_request');
+  const rulesetStrict = branchRules.some(
+    (rule) =>
+      rule?.type === 'required_status_checks' &&
+      rule.parameters?.strict_required_status_checks_policy === true &&
+      summarizeRequiredCheckMetadata(rule.parameters ?? {}).names.length > 0,
+  );
+  return {
+    requiredCheckCount: requirements.requiredCheckNames.length,
+    requiredChecksSourcePinned: requirements.requiredCheckSourcePinned,
+    requiredChecksStrict:
+      Boolean(branchProtection.required_status_checks?.strict) || rulesetStrict,
+    reviewPolicyConfigured,
+  };
+}
+
+/**
+ * Root-relative `ciGate.trustEmptyProtectionReads` reader
+ * (idd-skill#2010; #1377 introduced the flag). Deliberately not
+ * `pre-merge-readiness.mts`'s own `readTrustEmptyProtectionReads`, which
+ * reads `.github/idd/config.json` relative to `process.cwd()` --
+ * `idd-doctor.mts` supports `--repo-root <path>`, and this file already
+ * reads the same config file root-relative elsewhere (see
+ * `readCleanupEvidenceTrustedLogins`). Fails closed to `false` on a
+ * missing or unparseable config, matching
+ * `normalizePolicyConfig(null).ciGate.trustEmptyProtectionReads`'s
+ * default.
+ */
+export function readTrustEmptyProtectionReads(root: string): boolean {
+  try {
+    const config = JSON.parse(
+      readFileSync(join(root, '.github/idd/config.json'), 'utf8'),
+    ) as { ciGate?: { trustEmptyProtectionReads?: unknown } } | null;
+    return config?.ciGate?.trustEmptyProtectionReads === true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Derive the `--hostname` value {@link fetchGhApiJsonAt} should pass to
+ * `gh api` from the target repository's own `gh repo view --json url`
+ * result (already fetched once by `checkGithubReadiness`, so this adds
+ * no extra `gh` call). `gh api` resolves its target host from `GH_HOST`
+ * / `--hostname` / the CLI's single authenticated host, defaulting to
+ * `github.com` -- unlike a higher-level subcommand such as `gh repo
+ * view`, it does **not** infer the host from the checked-out
+ * repository's Git remote at all, so routing the request through `cwd:
+ * root` (as every other `gh` call in this function already does) has no
+ * effect on which host `gh api` targets (`gh-exec.mts`'s
+ * `resolveGhApiHostname()` documents the identical `gh api` contract for
+ * its own GHES fix, `#1962`; idd-skill#2010 review, Codex round 2).
+ * `resolveGhApiHostname()` itself is env-based (`GH_HOST`/
+ * `GITHUB_SERVER_URL`) and deliberately does not derive a host from a
+ * git remote, by its own design -- the wrong signal here, since
+ * `idd-doctor --repo-root <path>` may target a repository on a
+ * different host than the calling environment's own default. Deriving
+ * from the target repository's own resolved `url` instead is the
+ * correct, `--repo-root`-specific signal. Returns `undefined` for the
+ * common `github.com` case (and any unparseable URL), so the emitted
+ * argv matches `resolveGhApiHostname()`'s own "no override on
+ * github.com" convention.
+ */
+export function resolveTargetGhHostname(
+  url: string | undefined,
+): string | undefined {
+  if (!url) {
+    return undefined;
+  }
+  let host: string;
+  try {
+    host = new URL(url).hostname.toLowerCase();
+  } catch {
+    return undefined;
+  }
+  return host && host !== 'github.com' ? host : undefined;
+}
+
+/**
+ * Root-scoped `gh api` fetch for {@link fetchGovernanceJson}'s injectable
+ * `fetchJson` parameter. That function's own default fetcher
+ * (`ghApiJson` in `pre-merge-readiness.mts`, via `runGh`/`ghText`) never
+ * passes `--hostname` at all, so it always targets `gh`'s own default
+ * host resolution -- correct for that file's own CLI, which always
+ * operates on the repository it is invoked from (typically the same
+ * host the calling environment already authenticates against), but
+ * wrong for `idd-doctor.mts`'s `--repo-root <path>`, which can target a
+ * different repository (and GitHub host) than the caller's own working
+ * directory or environment. Pass the `hostname` {@link
+ * resolveTargetGhHostname} resolved from the target repository's own
+ * `gh repo view` result, and route through this file's own
+ * `runCommand()` (already `cwd`-scoped to `root` for every other `gh`
+ * call in this function -- harmless for `gh api`'s own host resolution,
+ * but keeps this call consistent with its siblings). Mirrors
+ * `ghApiJson`'s own `--paginate --jq '.[]'` NDJSON handling via the
+ * shared `parsePaginatedGhNdjson()`, and shapes a failure's thrown error
+ * the same way a real `execFileSync` failure would (`status`/`stderr`),
+ * so `fetchGovernanceJson()`'s `deriveGhHttpStatus()`-based 404
+ * detection still works unchanged.
+ */
+function fetchGhApiJsonAt(
+  root: string,
+  hostname: string | undefined,
+  path: string,
+  paginate: boolean,
+): unknown {
+  const argv = [
+    'api',
+    path,
+    ...(hostname ? ['--hostname', hostname] : []),
+    ...(paginate ? ['--paginate', '--jq', '.[]'] : []),
+  ];
+  const result = runCommand('gh', argv, root);
+  if (!result.ok) {
+    throw Object.assign(new Error('gh api failed'), {
+      status: 1,
+      stderr: result.stderr ?? '',
+    });
+  }
+  const raw = result.stdout.trim();
+  if (!raw) {
+    return paginate ? [] : {};
+  }
+  return paginate ? parsePaginatedGhNdjson(raw) : JSON.parse(raw);
 }
 
 function runCommand(

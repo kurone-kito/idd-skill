@@ -31,6 +31,7 @@ import {
   decodeGithubReadmeBase64,
   emitCleanupBacklogProgress,
   evaluateAutopilotSuitabilityConsistency,
+  evaluateBranchProtectionFindings,
   evaluateDependencyVersionDrift,
   evaluateMarkerPrefixConsistency,
   extractMarkerPrefixes,
@@ -43,6 +44,7 @@ import {
   formatCleanupBacklogScanProgress,
   hookChainsToGithooksScript,
   hookWiresWorktreeGuard,
+  isBranchProtectionUnreadable,
   isGithubBackLinkHost,
   parseIsoDurationToHours,
   parseLockfileImporterVersion,
@@ -50,10 +52,12 @@ import {
   parseProjectCommandRows,
   parseThresholdsProseHours,
   readCleanupEvidenceTrustedLogins,
+  readTrustEmptyProtectionReads,
   readWorktreeGuardBranchPatterns,
   readWorktreeGuardEnabled,
   resolveConfiguredHelperRuntimePackageSpec,
   resolveConfiguredHelperRuntimeProfile,
+  resolveTargetGhHostname,
   scanFileForPlaceholders,
   stripMarkdownNonText,
   worktreeGuardWiredAt,
@@ -3227,4 +3231,259 @@ test('checkDependencyVersionDrift skips silently when node_modules packages are 
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+// idd-skill#2010: evaluateBranchProtectionFindings combines a classic
+// `branches/{branch}/protection` read with a GitHub Rulesets
+// `rules/branches/{branch}` read. This matrix exercises every source
+// combination `checkGithubReadiness` can see in production, without
+// mocking `gh` -- the function is pure.
+test('evaluateBranchProtectionFindings counts classic-only required checks and review policy', () => {
+  const findings = evaluateBranchProtectionFindings([], {
+    required_status_checks: { contexts: ['lint', 'test'], strict: true },
+    required_pull_request_reviews: { required_approving_review_count: 1 },
+  });
+  assert.deepEqual(findings, {
+    requiredCheckCount: 2,
+    requiredChecksSourcePinned: false,
+    requiredChecksStrict: true,
+    reviewPolicyConfigured: true,
+  });
+});
+
+test('evaluateBranchProtectionFindings counts Rulesets-only required checks and review policy', () => {
+  const findings = evaluateBranchProtectionFindings(
+    [
+      {
+        type: 'required_status_checks',
+        parameters: {
+          required_status_checks: [{ context: 'lint' }, { context: 'test' }],
+        },
+      },
+      { type: 'pull_request', parameters: {} },
+    ],
+    {},
+  );
+  assert.deepEqual(findings, {
+    requiredCheckCount: 2,
+    requiredChecksSourcePinned: false,
+    requiredChecksStrict: false,
+    reviewPolicyConfigured: true,
+  });
+});
+
+test('evaluateBranchProtectionFindings unions distinct check names from both sources without double-counting an overlapping name', () => {
+  const findings = evaluateBranchProtectionFindings(
+    [
+      {
+        type: 'required_status_checks',
+        parameters: { required_status_checks: [{ context: 'lint' }] },
+      },
+    ],
+    {
+      required_status_checks: { contexts: ['lint', 'test'], strict: false },
+      required_pull_request_reviews: null,
+    },
+  );
+  // 'lint' is required by both sources and counts once; 'test' is classic-
+  // only. Review policy comes from the Rulesets rule below in a sibling
+  // test -- here neither source configures one, so it stays unconfigured.
+  assert.deepEqual(findings, {
+    requiredCheckCount: 2,
+    requiredChecksSourcePinned: false,
+    requiredChecksStrict: false,
+    reviewPolicyConfigured: false,
+  });
+});
+
+test('evaluateBranchProtectionFindings reports neither source configured when both reads are empty', () => {
+  const findings = evaluateBranchProtectionFindings([], {});
+  assert.deepEqual(findings, {
+    requiredCheckCount: 0,
+    requiredChecksSourcePinned: false,
+    requiredChecksStrict: false,
+    reviewPolicyConfigured: false,
+  });
+});
+
+test('evaluateBranchProtectionFindings treats a Rulesets "workflows" rule as configured despite zero enumerable check names (idd-skill#2010 review)', () => {
+  // A branch protected solely by a Rulesets required-workflows rule has
+  // real protection: summarizeBranchReviewRequirements() correctly cannot
+  // contribute a check NAME for it (workflow-based requirements have no
+  // enumerable context), but that must not read as "nothing configured".
+  const findings = evaluateBranchProtectionFindings(
+    [{ type: 'workflows', parameters: {} }],
+    {},
+  );
+  assert.equal(findings.requiredCheckCount, 0);
+  assert.equal(findings.requiredChecksSourcePinned, true);
+});
+
+test("evaluateBranchProtectionFindings honors a Rulesets required_status_checks rule's own strict policy (idd-skill#2010 review)", () => {
+  const findings = evaluateBranchProtectionFindings(
+    [
+      {
+        type: 'required_status_checks',
+        parameters: {
+          required_status_checks: [{ context: 'lint' }],
+          strict_required_status_checks_policy: true,
+        },
+      },
+    ],
+    {},
+  );
+  assert.equal(findings.requiredChecksStrict, true);
+});
+
+test('evaluateBranchProtectionFindings ignores a Rulesets strict policy whose own rule has an empty check list, even when another source supplies the counted checks (idd-skill#2010 review, Codex round 2)', () => {
+  // GitHub's ruleset docs: strict_required_status_checks_policy "will not
+  // take effect unless at least one status check is enabled" -- scoped to
+  // that SAME rule's own check list, not the combined count from other
+  // sources. Classic protection supplies the one counted check here, so
+  // requiredCheckCount is 1, but the Rulesets rule claiming strict=true
+  // has zero checks of its own and must not contribute strict=true.
+  const findings = evaluateBranchProtectionFindings(
+    [
+      {
+        type: 'required_status_checks',
+        parameters: {
+          required_status_checks: [],
+          strict_required_status_checks_policy: true,
+        },
+      },
+    ],
+    { required_status_checks: { contexts: ['lint'], strict: false } },
+  );
+  assert.equal(findings.requiredCheckCount, 1);
+  assert.equal(findings.requiredChecksStrict, false);
+});
+
+test('evaluateBranchProtectionFindings strict stays false when neither classic nor Rulesets configures an up-to-date-head policy', () => {
+  const findings = evaluateBranchProtectionFindings(
+    [
+      {
+        type: 'required_status_checks',
+        parameters: {
+          required_status_checks: [{ context: 'lint' }],
+          strict_required_status_checks_policy: false,
+        },
+      },
+    ],
+    { required_status_checks: { contexts: [], strict: false } },
+  );
+  assert.equal(findings.requiredChecksStrict, false);
+});
+
+test('evaluateBranchProtectionFindings treats a zero-approval classic review requirement as configured (presence, not a minimum-count test)', () => {
+  const findings = evaluateBranchProtectionFindings([], {
+    required_pull_request_reviews: { required_approving_review_count: 0 },
+  });
+  assert.equal(findings.reviewPolicyConfigured, true);
+});
+
+// idd-skill#2010 review (Copilot round): isBranchProtectionUnreadable must
+// warn only when BOTH governance reads are unreadable, not when either one
+// is -- a Rulesets-only repository legitimately 404s on the classic
+// `branches/{branch}/protection` endpoint even though its Rulesets read
+// (`rules/branches/{branch}`) succeeds, and that must not be reported as
+// unreadable even with `ciGate.trustEmptyProtectionReads` unset.
+test('isBranchProtectionUnreadable is false when only the Rulesets read succeeds (classic 404, Rulesets-only repository)', () => {
+  assert.equal(
+    isBranchProtectionUnreadable({ unreadable: false }, { unreadable: true }),
+    false,
+  );
+});
+
+test('isBranchProtectionUnreadable is false when only the classic read succeeds (Rulesets 404, classic-only repository)', () => {
+  assert.equal(
+    isBranchProtectionUnreadable({ unreadable: true }, { unreadable: false }),
+    false,
+  );
+});
+
+test('isBranchProtectionUnreadable is false when both reads succeed', () => {
+  assert.equal(
+    isBranchProtectionUnreadable({ unreadable: false }, { unreadable: false }),
+    false,
+  );
+});
+
+test('isBranchProtectionUnreadable is true only when both reads are unreadable', () => {
+  assert.equal(
+    isBranchProtectionUnreadable({ unreadable: true }, { unreadable: true }),
+    true,
+  );
+});
+
+test('readTrustEmptyProtectionReads is false when .github/idd/config.json is absent, lacks ciGate, or is malformed (idd-skill#2010)', () => {
+  const dir = mkdtempSync(
+    join(tmpdir(), 'idd-doctor-trust-empty-protection-reads-'),
+  );
+  try {
+    // No config file at all.
+    assert.equal(readTrustEmptyProtectionReads(dir), false);
+
+    // Config present but no ciGate key.
+    mkdirSync(join(dir, '.github/idd'), { recursive: true });
+    writeFileSync(join(dir, '.github/idd/config.json'), JSON.stringify({}));
+    assert.equal(readTrustEmptyProtectionReads(dir), false);
+
+    // ciGate present but trustEmptyProtectionReads explicitly false.
+    writeFileSync(
+      join(dir, '.github/idd/config.json'),
+      JSON.stringify({ ciGate: { trustEmptyProtectionReads: false } }),
+    );
+    assert.equal(readTrustEmptyProtectionReads(dir), false);
+
+    // Malformed JSON must never widen trust beyond the safe default.
+    writeFileSync(join(dir, '.github/idd/config.json'), '{ not json');
+    assert.equal(readTrustEmptyProtectionReads(dir), false);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('readTrustEmptyProtectionReads is true only when ciGate.trustEmptyProtectionReads is exactly true (idd-skill#2010)', () => {
+  const dir = mkdtempSync(
+    join(tmpdir(), 'idd-doctor-trust-empty-protection-reads-true-'),
+  );
+  try {
+    mkdirSync(join(dir, '.github/idd'), { recursive: true });
+    writeFileSync(
+      join(dir, '.github/idd/config.json'),
+      JSON.stringify({ ciGate: { trustEmptyProtectionReads: true } }),
+    );
+    assert.equal(readTrustEmptyProtectionReads(dir), true);
+
+    // A truthy-but-non-boolean value must not widen trust (mirrors
+    // pre-merge-readiness.mts's `=== true` comparison).
+    writeFileSync(
+      join(dir, '.github/idd/config.json'),
+      JSON.stringify({ ciGate: { trustEmptyProtectionReads: 'true' } }),
+    );
+    assert.equal(readTrustEmptyProtectionReads(dir), false);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// idd-skill#2010 review (Codex round 2): `gh api` never infers its target
+// host from the checked-out repository's Git remote (unlike a higher-level
+// subcommand such as `gh repo view`), so idd-doctor.mts's governance reads
+// must derive and pass an explicit `--hostname` for a GHES-hosted target
+// repository instead of relying on `cwd`.
+test('resolveTargetGhHostname returns undefined for github.com and an absent/unparseable URL', () => {
+  assert.equal(
+    resolveTargetGhHostname('https://github.com/kurone-kito/idd-skill'),
+    undefined,
+  );
+  assert.equal(resolveTargetGhHostname(undefined), undefined);
+  assert.equal(resolveTargetGhHostname('not a url'), undefined);
+});
+
+test('resolveTargetGhHostname resolves a GHES hostname, lowercased', () => {
+  assert.equal(
+    resolveTargetGhHostname('https://GHE.example.com/owner/repo'),
+    'ghe.example.com',
+  );
 });

@@ -5432,7 +5432,7 @@ function maxIsoTimestamp(values) {
   }
   return latest;
 }
-function summarizeRequiredCheckMetadata(parameters) {
+export function summarizeRequiredCheckMetadata(parameters) {
   const names = new Set();
   // #1689: the SPECIFIC subset of `names` whose rule entry is itself
   // source-pinned -- distinct from the aggregate `sourcePinned` flag below,
