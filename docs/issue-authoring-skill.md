@@ -459,26 +459,21 @@ Ask these checks:
    never a tree inside the target/adopter repository itself, which
    retains no local `idd-template/` directory of its own once IDD is
    imported.
-   - **Baseline ref.** Resolve the exact tag or commit SHA actually
-     imported at the adopter's prior onboarding: identify it from the
-     adopter's own git history — the import/resync commit's diff pins
-     the exact upstream content adopted. This is the only reliable
-     source: a normally onboarded adopter's files never match any raw
-     upstream `idd-template/` tree byte-for-byte (onboarding
-     substitutes the seven placeholders with concrete values), and
-     neither a reverse- nor a forward-substitution content-match
-     reconstructs the baseline reliably either — `.github/idd/config.json`
-     does not record every placeholder value (`REPO_NAME` among them),
-     Step 3 records the Step 1B policy decisions rather than a
-     placeholder-value map, and canonical onboarding explicitly
-     permits legitimate post-substitution edits (for example adding
-     extra trusted marker actors by hand after the first replacement),
-     so the adopter's current files can differ from the as-imported
-     snapshot for reasons that have nothing to do with which ref was
-     imported. When the adopter's git history carries no such evidence,
-     report the baseline as unresolved/ambiguous in the resync issue
-     itself instead of guessing one from content alone. Do not
-     construct `v<iddVersion>`
+   - **Baseline ref.** Use the exact tag or commit SHA actually
+     imported at the adopter's prior onboarding when it is explicitly
+     recorded (for example in the original onboarding PR/commit
+     message) or when the operator can confirm it directly. Do not
+     infer it from the adopter's current file content: neither a diff
+     against the import commit nor a reverse- or forward-substitution
+     content-match against a candidate upstream tree reliably pins a
+     single ref — onboarding substitutes placeholder values and
+     permits legitimate post-substitution edits, an import commit's
+     diff itself only records the already-transformed adopter
+     snapshot, and more than one upstream commit can plausibly yield
+     the same imported subset. When no explicit record or operator
+     confirmation is available, report the baseline as
+     unresolved/ambiguous in the resync issue itself rather than
+     guessing one from content alone. Do not construct `v<iddVersion>`
      (`.github/idd/config.json`) as the baseline without this check:
      `iddVersion` is only a coarse signal and can be stale, an adopter
      still on `0.1.0` has no matching tag at all (`CHANGELOG.md`
@@ -493,12 +488,18 @@ Ask these checks:
      selected, not the complete `idd-template/` tree — a file such as
      `idd-template/ONBOARDING.md` itself is never copied into an
      adopter, so reporting it as changed is noise.
-   - **Token filter.** Compare only the seven placeholders documented
-     in Onboarding Reference — Placeholder Values' "Final placeholder
-     meanings" table (`docs/onboarding/placeholders.md`), not every
-     `{{...}}`-shaped span — an unrestricted match also catches
-     ordinary GitHub Actions expressions such as `${{ github.token }}`
-     in an imported workflow file.
+   - **Token filter.** Compare each ref's own placeholder table in
+     effect at that ref (Onboarding Reference — Placeholder Values'
+     "Final placeholder meanings" table, `docs/onboarding/placeholders.md`,
+     as it read at the baseline ref and at the target ref
+     independently), not today's list applied to both — a placeholder
+     added or removed between the two refs is itself exactly the kind
+     of token-identity change this check exists to report, and reusing
+     one ref's list for the other's tree would hide that change. Never
+     match every `{{...}}`-shaped span unfiltered either way — an
+     unrestricted match also catches ordinary GitHub Actions
+     expressions such as `${{ github.token }}` in an imported workflow
+     file.
    - **Excluded paths.** Skip `docs/onboarding/placeholders.md`,
      `docs/customization.md`, and `docs/onboarding/policy-decisions.md`
      — these deliberately keep `{{...}}` tokens literal to document
