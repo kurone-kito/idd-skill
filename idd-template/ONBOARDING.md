@@ -204,13 +204,27 @@ Run:
 
 ```sh
 gh --version
+git remote get-url origin
 gh auth status
 ```
 
+Bare `gh auth status` reports on every host `gh` already knows about,
+not the repository being onboarded -- it exits successfully as long as
+some known host is authenticated, even if the target repository's own
+host was never configured at all (confirmed: `gh auth status
+--hostname <unconfigured-host>` fails with "You are not logged into
+any accounts on \<host\>", while the bare form silently omits an
+unknown host instead of reporting it missing). Derive the target
+host from `git remote get-url origin`'s URL (a `github.com` URL needs
+no override; any other host is a GHES target) and scope the check to
+it: `gh auth status --hostname <derived-host>` (omit `--hostname` for
+github.com, matching `gh`'s own no-override convention there).
+
 - On success, continue to Step 1A without further comment.
-- On failure (not installed, or not authenticated), report the exact
-  remediation to the operator -- the CLI install command, or
-  `gh auth login` -- and ask whether to proceed anyway before
+- On failure (not installed, or not authenticated to the target
+  repository's own host), report the exact remediation to the operator
+  -- the CLI install command, or `gh auth login --hostname
+  <derived-host>` -- and ask whether to proceed anyway before
   continuing. This is a one-time setup conversation the operator stays
   in control of, not a silent skip and not an unconditional hard stop.
 
@@ -251,9 +265,10 @@ Return the report in this format:
 - Files that would be modified:
 ```
 
-`Missing prerequisites:` reports the same `gh --version`/`gh auth
-status` check as Step 0 above, plus any other missing tooling this
-dry-run pass observes -- both surfaces agree on the `gh` check itself.
+`Missing prerequisites:` reports the same host-scoped `gh --version`/
+`gh auth status --hostname <derived-host>` check as Step 0 above, plus
+any other missing tooling this dry-run pass observes -- both surfaces
+agree on the `gh` check itself.
 
 This dry-run is for evaluators who want a quick import readiness summary
 before starting Step 1A.
