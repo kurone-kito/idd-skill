@@ -1947,18 +1947,21 @@ structurally unable to disagree.
 | `review-item-count-not-positive`          | The latest review's `itemCount` is a known `0` AND `suppressedCount` (#1880) is also `0` -- already fully converged, nothing (posted or suppressed) to reroll for.                        |
 <!-- dprint-ignore-end -->
 
-**Updated by kurone-kito/idd-skill#2050**: when `threads.copilotThreadCount`
-is zero (no Copilot-authored thread exists at all) and `review.itemCount >
-0`, the top-level `reasons` array's item-count entry is extended with a
+**Updated by kurone-kito/idd-skill#2050** (revised after PR #2054 review --
+scoped to the LATEST review, not the PR-wide `copilotThreadCount`): when
+zero threads THIS review opened exist at all and `review.itemCount > 0`,
+the top-level `reasons` array's item-count entry is extended with a
 pointer to check the review body directly -- the shape of the reported
 adopter incident: a "Comments suppressed due to low confidence" item
 embedded in the review's own body text counts toward `itemCount` but never
 surfaces as a review thread, so no thread query can ever explain it. When
-`copilotThreadCount > 0` instead (real Copilot-authored threads exist),
-`threads.satisfied: true` now lets `converged` proceed directly (Clause 1's
-`itemCount` half is satisfied via Clause 2's own thread-disposition
-evidence, `#2050`) -- the review-body pointer no longer applies to that
-case, since real thread evidence already accounts for the count.
+this review's own threads exist, are all resolved/dispositioned, AND their
+count covers `itemCount` instead, Clause 1's `itemCount` half is satisfied
+directly via that review-scoped thread-disposition evidence -- the
+review-body pointer no longer applies to that case. An older review's
+already-resolved thread, or a count of review-scoped threads smaller than
+`itemCount`, both still block (see the two dedicated regression tests
+added for each shape).
 
 **`suppressedCount` (kurone-kito/idd-skill#1880).** A distinct,
 `itemCount === 0` shape of the same underlying problem: GitHub Copilot
@@ -2048,8 +2051,11 @@ Plain text, no HTML comment. Post via `post-idd-marker.mjs --type
 review-ack --target pr <pr-number> --agent-id <id> --head-sha
 <PR_HEAD_SHA> --timestamp <ISO8601> --apply` (or `--from-pr <pr-number>`
 to derive `--head-sha` live) once the review's findings are fixed or
-dispositioned. Postable only by a `trustedMarkerActors` login -- an
-untrusted poster's marker is ignored. `idd-advisory-convergence` re-checks
+dispositioned. `post-idd-marker.mjs` itself performs no author gating (any
+caller with `gh` credentials can POST); only a marker authored by a
+`trustedMarkerActors` login is honored when `idd-advisory-convergence`
+later reads it back -- an untrusted poster's marker is ignored, not
+rejected at post time. `idd-advisory-convergence` re-checks
 live GitHub state, so re-run it (`gh run rerun <run-id>`) after posting --
 the marker itself does not retrigger the check.
 

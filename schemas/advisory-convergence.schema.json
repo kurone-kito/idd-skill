@@ -118,7 +118,7 @@
         },
         "satisfied": {
           "type": "boolean",
-          "description": "kurone-kito/idd-skill#2050: disposition-aware, not purely mechanical -- reflects a caller-side override computed in advisory-convergence.mts, not resolveLatestCopilotReviewClause's own raw evaluation. True when the latest review covers HEAD (matchesHead) AND (itemCount is 0 OR every thread THIS review opened is resolved/dispositioned, requiring at least one such thread to exist) AND (suppressedCount is 0 OR a trusted review-ack marker posted after this review covers it) -- Clause 1's pass condition."
+          "description": "kurone-kito/idd-skill#2050 (revised after PR #2054 review): disposition-aware, not purely mechanical -- reflects a caller-side override computed in advisory-convergence.mts, not resolveLatestCopilotReviewClause's own raw evaluation. True when the latest review covers HEAD (matchesHead) AND (itemCount is a KNOWN 0, OR itemCount is known-nonzero AND the number of threads THIS review opened is at least itemCount AND every one of them is resolved/dispositioned) AND (suppressedCount is 0 OR a trusted review-ack marker posted after this review covers it) -- Clause 1's pass condition. An unknown itemCount (null) always fails this condition."
         }
       }
     },

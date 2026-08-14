@@ -2471,6 +2471,65 @@ test('review-ack: a malformed marker (bad timestamp, or trailing prose) is not c
   );
   assertValidVerdict(trailingProse);
   assert.equal(trailingProse.review.satisfied, false);
+
+  // #2054 review: a digit-shaped but semantically invalid embedded
+  // calendar date/time (month 99, day 99, hour/minute/second 99) matches
+  // the bare digit-count regex but must still be rejected -- proves
+  // `isValidIsoTimestamp` is applied to the captured embedded field, not
+  // only the digit-shape match.
+  const invalidCalendarDate = computeAdvisoryConvergenceVerdict(
+    baseInputs({
+      reviews: [
+        copilotReview({ itemCount: 0, body: SUPPRESSED_COMMENTS_BODY }),
+      ],
+      comments: [
+        {
+          author: { login: TRUSTED },
+          body: `review-ack: ${AGENT_ID} ${HEAD} 2026-99-99T99:99:99Z`,
+          createdAt: ACK_AFTER_REVIEW,
+        },
+      ],
+    }),
+    baseOptions(),
+  );
+  assertValidVerdict(invalidCalendarDate);
+  assert.equal(invalidCalendarDate.review.satisfied, false);
+});
+
+test('review-ack: validity is governed by the GitHub createdAt, never the embedded timestamp (asymmetric trust-boundary cases, PR #2054 review)', () => {
+  // Post-review createdAt with an OLD/bogus embedded timestamp still
+  // counts -- the embedded field is untrusted operator input, never
+  // consulted for validity.
+  const oldEmbeddedStillCounts = computeAdvisoryConvergenceVerdict(
+    baseInputs({
+      reviews: [
+        copilotReview({ itemCount: 0, body: SUPPRESSED_COMMENTS_BODY }),
+      ],
+      comments: [reviewAckComment(ACK_AFTER_REVIEW, { embeddedAt: OLD })],
+    }),
+    baseOptions(),
+  );
+  assertValidVerdict(oldEmbeddedStillCounts);
+  assert.equal(oldEmbeddedStillCounts.review.satisfied, true);
+
+  // Pre-review createdAt with a FUTURE embedded timestamp must NOT count --
+  // an operator cannot fake freshness by writing a future date into the
+  // marker body; only the GitHub-assigned createdAt is authoritative.
+  const futureEmbeddedDoesNotCount = computeAdvisoryConvergenceVerdict(
+    baseInputs({
+      reviews: [
+        copilotReview({ itemCount: 0, body: SUPPRESSED_COMMENTS_BODY }),
+      ],
+      comments: [
+        reviewAckComment(ACK_BEFORE_REVIEW, {
+          embeddedAt: '2099-01-01T00:00:00Z',
+        }),
+      ],
+    }),
+    baseOptions(),
+  );
+  assertValidVerdict(futureEmbeddedDoesNotCount);
+  assert.equal(futureEmbeddedDoesNotCount.review.satisfied, false);
 });
 
 // --- 10. terminal Copilot unavailability (#1570/#1572) ----------------------

@@ -1436,8 +1436,15 @@ function summarizeSameHeadRerollMarkers(
 // per call: `resolveHasValidReviewAck` does not filter on the marker's own
 // embedded HEAD SHA (see its doc comment for why), so there is no per-call
 // value to embed.
+// #2054 review: captures the embedded timestamp field (group 1) so
+// `resolveHasValidReviewAck` can additionally validate it with
+// `isValidIsoTimestamp` -- the bare digit-shape match below alone accepts a
+// syntactically-digit-shaped but semantically invalid calendar date/time
+// (e.g. `2026-99-99T99:99:99Z`), which OPERATIONAL_MARKERS' shared shape
+// (and `summarizeSameHeadRerollMarkers`'s identical pattern above) also
+// does not reject on its own.
 const REVIEW_ACK_MARKER_PATTERN =
-  /^review-ack:\s+\S+\s+[0-9a-f]{40}\s+\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z\s*$/;
+  /^review-ack:\s+\S+\s+[0-9a-f]{40}\s+(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z)\s*$/;
 
 /**
  * #2050: disposition-aware Clause 1 escape hatch -- true when a trusted
@@ -1470,7 +1477,13 @@ function resolveHasValidReviewAck(
   const trusted = new Set(trustedMarkerLogins);
   return comments.some((comment) => {
     const body = String(comment.body ?? '').trimEnd();
-    if (!REVIEW_ACK_MARKER_PATTERN.test(body)) {
+    const match = body.match(REVIEW_ACK_MARKER_PATTERN);
+    // #2054 review: the embedded timestamp is otherwise never trusted for
+    // the createdAt-vs-submittedAt comparison below, but a marker whose OWN
+    // digit-shaped field is not a real calendar date/time is malformed --
+    // reject it here the same way `detectMalformedOperationalMarker`
+    // (marker-helpers.mts) rejects other structurally-invalid markers.
+    if (!match || !isValidIsoTimestamp(match[1])) {
       return false;
     }
     const login = String(comment.author?.login ?? comment.user?.login ?? '')
