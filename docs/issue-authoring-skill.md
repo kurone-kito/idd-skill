@@ -462,14 +462,28 @@ Ask these checks:
    - **Baseline ref.** Resolve the exact tag or commit SHA actually
      imported at the adopter's prior onboarding: identify it from the
      adopter's own git history (the import/resync commit's diff pins
-     the exact upstream content adopted), or, absent that evidence,
-     the nearest upstream commit whose `idd-template/` tree matches
-     the adopter's current files content-for-content. Do not
-     construct `v<iddVersion>` (`.github/idd/config.json`) as the
-     baseline without this check: `iddVersion` is only a coarse
-     signal and can be stale, an adopter still on `0.1.0` has no
-     matching tag at all (`CHANGELOG.md` records that `0.1.0`
-     predates the tag discipline), and an adopter who pinned a raw
+     the exact upstream content adopted). Absent that evidence, do not
+     content-match the adopter's files against a raw upstream
+     `idd-template/` tree directly — onboarding substitutes the seven
+     placeholders with concrete values
+     (`buildSubstitutionPlan`/`ONBOARDING_PLACEHOLDERS` in
+     `src/scripts/idd-onboard.mts`), so a normally onboarded adopter's
+     files never match any upstream commit's tree byte-for-byte — the
+     upstream tree still carries the literal `{{...}}` tokens.
+     Reverse-substitute the adopter's own recorded
+     values (`.github/idd/config.json`, the Step 3 recorded policy
+     decisions) back to `{{...}}` token form first, account for any
+     known intentional-divergence markers (see the divergence-signal
+     check above) as expected differences rather than mismatches, and
+     only then compare the normalized tree against candidate upstream
+     commits. Report the ambiguity in the resync issue itself, rather
+     than guessing, when more than one candidate ref remains
+     equivalent after normalization. Do not construct `v<iddVersion>`
+     (`.github/idd/config.json`) as the baseline without this check:
+     `iddVersion` is only a coarse signal and can be stale, an adopter
+     still on `0.1.0` has no matching tag at all (`CHANGELOG.md`
+     records that `0.1.0` predates the tag discipline), and an adopter
+     who pinned a raw
      commit SHA at import time instead of a tag may have no
      `v<iddVersion>` tag matching what they actually imported either.
    - **Target ref.** The new release/ref the resync targets.
