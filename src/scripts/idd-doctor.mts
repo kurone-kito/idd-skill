@@ -3196,7 +3196,7 @@ function checkGithubReadiness(
     return;
   }
 
-  if (branchRulesRead.unreadable || branchProtectionRead.unreadable) {
+  if (isBranchProtectionUnreadable(branchRulesRead, branchProtectionRead)) {
     const message = `branch protection not readable for ${owner}/${repo}:${branch}`;
     if (requireGithub) {
       report.errors.push(message);
@@ -3267,6 +3267,29 @@ type BranchProtectionReadPayload = NonNullable<
 interface GovernanceReadOutcome<T> {
   value: T;
   unreadable: boolean;
+}
+
+/**
+ * Whether `checkGithubReadiness` should report branch protection as
+ * unreadable, combining both governance reads' outcomes. Only `true` when
+ * **both** the Rulesets read (`rules/branches/{branch}`) and the classic
+ * read (`branches/{branch}/protection`) are unreadable -- matching
+ * idd-skill#2010's acceptance criteria ("When the Rulesets read succeeds,
+ * or the config key is `true`, drop the warning ... instead of returning
+ * early"). A repository on Rulesets-only protection legitimately 404s on
+ * the classic endpoint (GitHub's classic-protection endpoint never
+ * reflects Rulesets-only configuration); requiring only one read to
+ * succeed keeps that case from being misreported as unreadable even when
+ * `ciGate.trustEmptyProtectionReads` is unset (idd-skill#2010 review,
+ * Copilot round). Pure so the classic-only / Rulesets-only / both /
+ * neither matrix is directly testable without mocking `gh`, mirroring
+ * {@link evaluateBranchProtectionFindings}'s own rationale.
+ */
+export function isBranchProtectionUnreadable(
+  branchRulesRead: { unreadable: boolean },
+  branchProtectionRead: { unreadable: boolean },
+): boolean {
+  return branchRulesRead.unreadable && branchProtectionRead.unreadable;
 }
 
 /** Findings the branch-protection check reports for the doctor output. */

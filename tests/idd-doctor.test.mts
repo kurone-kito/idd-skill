@@ -44,6 +44,7 @@ import {
   formatCleanupBacklogScanProgress,
   hookChainsToGithooksScript,
   hookWiresWorktreeGuard,
+  isBranchProtectionUnreadable,
   isGithubBackLinkHost,
   parseIsoDurationToHours,
   parseLockfileImporterVersion,
@@ -3378,6 +3379,40 @@ test('evaluateBranchProtectionFindings treats a zero-approval classic review req
     required_pull_request_reviews: { required_approving_review_count: 0 },
   });
   assert.equal(findings.reviewPolicyConfigured, true);
+});
+
+// idd-skill#2010 review (Copilot round): isBranchProtectionUnreadable must
+// warn only when BOTH governance reads are unreadable, not when either one
+// is -- a Rulesets-only repository legitimately 404s on the classic
+// `branches/{branch}/protection` endpoint even though its Rulesets read
+// (`rules/branches/{branch}`) succeeds, and that must not be reported as
+// unreadable even with `ciGate.trustEmptyProtectionReads` unset.
+test('isBranchProtectionUnreadable is false when only the Rulesets read succeeds (classic 404, Rulesets-only repository)', () => {
+  assert.equal(
+    isBranchProtectionUnreadable({ unreadable: false }, { unreadable: true }),
+    false,
+  );
+});
+
+test('isBranchProtectionUnreadable is false when only the classic read succeeds (Rulesets 404, classic-only repository)', () => {
+  assert.equal(
+    isBranchProtectionUnreadable({ unreadable: true }, { unreadable: false }),
+    false,
+  );
+});
+
+test('isBranchProtectionUnreadable is false when both reads succeed', () => {
+  assert.equal(
+    isBranchProtectionUnreadable({ unreadable: false }, { unreadable: false }),
+    false,
+  );
+});
+
+test('isBranchProtectionUnreadable is true only when both reads are unreadable', () => {
+  assert.equal(
+    isBranchProtectionUnreadable({ unreadable: true }, { unreadable: true }),
+    true,
+  );
 });
 
 test('readTrustEmptyProtectionReads is false when .github/idd/config.json is absent, lacks ciGate, or is malformed (idd-skill#2010)', () => {
