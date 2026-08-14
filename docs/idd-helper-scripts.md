@@ -2015,8 +2015,8 @@ in place of the raw mechanical value:
 
 ```text
 matchesHead
-  && (itemCount === 0 || (itemCount is known AND >= 1 thread(s) THIS review
-      opened cover it AND all of them are resolved/dispositioned))
+  && (itemCount === 0 || (itemCount is known AND >= itemCount thread(s)
+      THIS review opened cover it AND all of them are resolved/dispositioned))
   && (suppressedCount === 0 || hasValidReviewAck)
 ```
 
