@@ -3660,10 +3660,10 @@ test('fetchGhApiJsonAt preserves a failed `gh api` call\'s stdout so fetchGovern
 // subcommand such as `gh repo view`), so idd-doctor.mts's governance reads
 // must derive and pass an explicit `--hostname` for a GHES-hosted target
 // repository instead of relying on `cwd`.
-test('resolveTargetGhHostname returns undefined for github.com and an absent/unparseable URL', () => {
+test('resolveTargetGhHostname returns the explicit "github.com" override for a github.com URL, and undefined for an absent/unparseable URL (idd-skill#2030)', () => {
   assert.equal(
     resolveTargetGhHostname('https://github.com/kurone-kito/idd-skill'),
-    undefined,
+    'github.com',
   );
   assert.equal(resolveTargetGhHostname(undefined), undefined);
   assert.equal(resolveTargetGhHostname('not a url'), undefined);
@@ -3672,6 +3672,19 @@ test('resolveTargetGhHostname returns undefined for github.com and an absent/unp
 test('resolveTargetGhHostname resolves a GHES hostname, lowercased', () => {
   assert.equal(
     resolveTargetGhHostname('https://GHE.example.com/owner/repo'),
+    'ghe.example.com',
+  );
+});
+
+// idd-skill#2030 (PR #2051 review, Copilot): `gh api --hostname` rejects
+// any value containing a colon outright (confirmed against a real `gh`
+// binary), so this resolver must never emit a ported hostname -- keeping
+// the bare host, same as `gh-exec.mts`'s `resolveGhApiHostname()` sibling,
+// is deliberate here, not an oversight. Genuine port support needs an
+// absolute-URL request path instead of `--hostname`; deferred to #2052.
+test('resolveTargetGhHostname drops an explicit non-default port for a GHES hostname (gh api --hostname cannot carry one)', () => {
+  assert.equal(
+    resolveTargetGhHostname('https://ghe.example.com:8443/owner/repo'),
     'ghe.example.com',
   );
 });

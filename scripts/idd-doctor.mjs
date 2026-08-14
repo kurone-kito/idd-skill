@@ -2985,22 +2985,38 @@ export function readTrustEmptyProtectionReads(root) {
  * `idd-doctor --repo-root <path>` may target a repository on a
  * different host than the calling environment's own default. Deriving
  * from the target repository's own resolved `url` instead is the
- * correct, `--repo-root`-specific signal. Returns `undefined` for the
- * common `github.com` case (and any unparseable URL), so the emitted
- * argv matches `resolveGhApiHostname()`'s own "no override on
- * github.com" convention.
+ * correct, `--repo-root`-specific signal. Returns the literal
+ * `'github.com'` for the common `github.com` case, as an explicit
+ * `--hostname` override -- unlike `resolveGhApiHostname()`'s own "no
+ * override on github.com" convention, an explicit override is required
+ * here: an explicit `--hostname` flag wins over `gh api`'s own
+ * environment-based `GH_HOST` fallback, but `undefined` (no
+ * `--hostname` at all) leaves `GH_HOST` in force, so a GHES-configured
+ * `GH_HOST` in the calling environment would otherwise leak into a
+ * governance read for a genuinely `github.com`-hosted target
+ * repository (idd-skill#2030). Deliberately keeps the bare hostname
+ * (`URL.hostname`, dropping any explicit port) for a GHES target, like
+ * `resolveGhApiHostname()` (`gh-exec.mts`) already does: `gh api
+ * --hostname` rejects any value containing a colon outright (confirmed
+ * against a real `gh` binary: `--hostname host:port` fails argv
+ * validation before a request is even attempted), so a ported GHES
+ * host cannot be routed through `--hostname` at all -- correctly
+ * routing one requires constructing an absolute API URL instead, which
+ * neither this resolver nor its `gh-exec.mts` sibling do yet (deferred
+ * to idd-skill#2052, PR #2051 review). Returns `undefined` only for an
+ * unparseable or host-less `url`.
  */
 export function resolveTargetGhHostname(url) {
   if (!url) {
     return undefined;
   }
-  let host;
+  let hostname;
   try {
-    host = new URL(url).hostname.toLowerCase();
+    hostname = new URL(url).hostname.toLowerCase();
   } catch {
     return undefined;
   }
-  return host && host !== 'github.com' ? host : undefined;
+  return hostname ? hostname : undefined;
 }
 /**
  * Root-scoped `gh api` fetch for {@link fetchGovernanceJson}'s injectable
