@@ -339,7 +339,7 @@ hold.
 
 **`suppressedCount` unvalidated**: `#1511` is `itemCount`-only; reroll
 never zeroed it in `kurone-kito/lints-config` PRs `#243`/`#245`
-(2026-08-10/11).
+(2026-08-10/11). #2050: `review-ack` marker fixes it.
 
 ## Terminal Copilot stall-recovery contract (state, policy, markers, clock)
 

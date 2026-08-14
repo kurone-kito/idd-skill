@@ -121,6 +121,27 @@ const OPERATIONAL_MARKER_ENTRIES = [
     startPattern: /^advisory-reroll:/,
   },
   {
+    // #2050: disposition-aware Clause 1 escape hatch. A trusted actor posts
+    // this after reading a specific primary-bot review's findings
+    // (including any body-embedded `Suppressed comments (N)` section, #1880)
+    // -- a whole-review acknowledgement rather than a per-finding identifier
+    // scheme (see the issue's "Decision" section for why). PLAIN-TEXT, same
+    // family shape as advisory-reroll: above (no visible note), for the same
+    // reason: the ack comment itself must never pollute review-currency/
+    // watermark computations. Same field shape as advisory-reroll:
+    // (`{agentId} {headSha} {timestamp}`) -- see post-idd-marker.mts's
+    // `--type review-ack`. This entry only recognizes/parses the marker's
+    // shape; validity (a trusted author whose OWN `created_at` postdates the
+    // latest primary-bot review's `submittedAt`) is evaluated by
+    // `advisory-convergence.mts`'s `resolveHasValidReviewAck`, not here.
+    label: 'review-ack:',
+    pattern:
+      /^review-ack:\s+\S+\s+[0-9a-f]{40}\s+\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z\s*$/,
+    // Case-sensitive on purpose (#1720), same reasoning as the
+    // advisory-wait: entry above.
+    startPattern: /^review-ack:/,
+  },
+  {
     // #1572: brand-new terminal marker type, no legacy form to preserve, so
     // the `claim:{claimId} attempt:{n}` binding suffix is unconditionally
     // required (unlike advisory-wait-recovery: above). PLAIN-TEXT, same
@@ -173,6 +194,7 @@ export const IDD_AGENT_DERIVED_MARKERS = new Set([
   'advisory-wait-recovery:',
   '<!-- advisory-wait:',
   'advisory-reroll:',
+  'review-ack:',
   'copilot-unavailable:',
 ]);
 const FORCED_HANDOFF_CONTEXT_SCOPES = new Set(['issue-only', 'issue-plus-pr']);
@@ -705,6 +727,27 @@ export function renderAdvisoryRerollMarker(payload) {
     throw new Error('invalid advisory-reroll marker payload');
   }
   return `advisory-reroll: ${agentId} ${headSha} ${timestamp}`;
+}
+// #2050: review-ack is ALSO a PLAIN-TEXT marker (no visible note), same
+// family shape as advisory-wait: / advisory-reroll: above -- a trusted actor
+// posts it after reading a specific primary-bot review's findings (including
+// any body-embedded suppressed-comments section), so Clause 1
+// (advisory-convergence.mts) can treat that review's `suppressedCount` as
+// covered without a per-finding identifier scheme. It carries the PR HEAD
+// SHA (not a claim id), matching the advisory-wait/advisory-reroll shape
+// exactly, though -- unlike advisory-reroll's same-HEAD filter -- Clause 1's
+// own validity check does not filter on it: see
+// `resolveHasValidReviewAck`'s doc comment (advisory-convergence.mts) for
+// why the marker's own `created_at` compared against the review's
+// `submittedAt` is sufficient on its own.
+export function renderReviewAckMarker(payload) {
+  const agentId = normalizeNonWhitespaceToken(payload?.agentId);
+  const headSha = normalizeNonWhitespaceToken(payload?.headSha).toLowerCase();
+  const timestamp = normalizeSecondPrecisionIsoTimestamp(payload?.timestamp);
+  if (!agentId || !/^[0-9a-f]{40}$/.test(headSha) || !timestamp) {
+    throw new Error('invalid review-ack marker payload');
+  }
+  return `review-ack: ${agentId} ${headSha} ${timestamp}`;
 }
 // #1905: the grammar's positional claim-id field
 // (`{agent-id} {claim-id|none} {head-sha} ...`) already accepts an

@@ -1947,14 +1947,18 @@ structurally unable to disagree.
 | `review-item-count-not-positive`          | The latest review's `itemCount` is a known `0` AND `suppressedCount` (#1880) is also `0` -- already fully converged, nothing (posted or suppressed) to reroll for.                        |
 <!-- dprint-ignore-end -->
 
-When `review-item-count-not-positive` is absent but `converged` is still
-`false` with `threads.satisfied: true` (every visible Copilot-authored
-thread already resolved) and `review.itemCount > 0`, the top-level
-`reasons` array's item-count entry is itself extended with a pointer to
-check the review body directly -- the shape of the reported adopter
-incident: a "Comments suppressed due to low confidence" item embedded in
-the review's own body text counts toward `itemCount` but never surfaces
-as a review thread, so no thread query can ever explain it.
+**Updated by kurone-kito/idd-skill#2050**: when `threads.copilotThreadCount`
+is zero (no Copilot-authored thread exists at all) and `review.itemCount >
+0`, the top-level `reasons` array's item-count entry is extended with a
+pointer to check the review body directly -- the shape of the reported
+adopter incident: a "Comments suppressed due to low confidence" item
+embedded in the review's own body text counts toward `itemCount` but never
+surfaces as a review thread, so no thread query can ever explain it. When
+`copilotThreadCount > 0` instead (real Copilot-authored threads exist),
+`threads.satisfied: true` now lets `converged` proceed directly (Clause 1's
+`itemCount` half is satisfied via Clause 2's own thread-disposition
+evidence, `#2050`) -- the review-body pointer no longer applies to that
+case, since real thread evidence already accounts for the count.
 
 **`suppressedCount` (kurone-kito/idd-skill#1880).** A distinct,
 `itemCount === 0` shape of the same underlying problem: GitHub Copilot
@@ -1994,6 +1998,42 @@ anticipated outcome routed to the deadline/waiver backstop **or hold**
 step 5, including for adopters who keep the distributed
 `ciGate.externalCheckWaivers.mode: disabled` default), not a diagnosis
 failure.
+
+**Disposition-aware resolution (kurone-kito/idd-skill#2050).** A
+same-HEAD reroll (above) is not the only escape hatch for `suppressedCount`
+today: `resolveLatestCopilotReviewClause`'s `satisfied` computation is now
+disposition-aware, not purely mechanical. `converged`'s Clause 1 becomes
+`matchesHead && (itemCount === 0 || threads.satisfied) && (suppressedCount
+=== 0 || hasValidReviewAck)`, computed as a thin override in
+`advisory-convergence.mts` (not inside `resolveLatestCopilotReviewClause`
+itself, since both halves need evidence -- `threads.satisfied`, PR comments,
+`trustedMarkerLogins` -- that pure function does not receive).
+`hasValidReviewAck` is `true` when a trusted `review-ack:` marker's OWN
+`created_at` postdates the latest Copilot review's `submittedAt` (never the
+marker's embedded timestamp), so any later review automatically invalidates
+a pre-existing ack. The `itemCount` half additionally requires
+`threads.copilotThreadCount > 0`: `threads.satisfied` alone is vacuously
+`true` when zero Copilot-authored threads exist at all, which would
+otherwise let a positive `itemCount` with no recorded thread evidence
+converge -- exactly the `#1719` incident shape above.
+
+The `review-ack:` marker matches `advisory-reroll:`'s field shape and
+posting path exactly (see
+[`idd-advisory-wait.instructions.md`](../.github/instructions/idd-advisory-wait.instructions.md)'s
+`suppressedCount`-unvalidated note in its AW6 section):
+
+```text
+review-ack: {agent-id} {PR_HEAD_SHA} {ISO8601-acknowledged-at}
+```
+
+Plain text, no HTML comment. Post via `post-idd-marker.mjs --type
+review-ack --target pr <pr-number> --agent-id <id> --head-sha
+<PR_HEAD_SHA> --timestamp <ISO8601> --apply` (or `--from-pr <pr-number>`
+to derive `--head-sha` live) once the review's findings are fixed or
+dispositioned. Postable only by a `trustedMarkerActors` login -- an
+untrusted poster's marker is ignored. `idd-advisory-convergence` re-checks
+live GitHub state, so re-run it (`gh run rerun <run-id>`) after posting --
+the marker itself does not retrigger the check.
 
 **AW6 procedure** (`idd-advisory-wait.instructions.md`), invoked only
 from F2 on a non-zero `--assert` exit:

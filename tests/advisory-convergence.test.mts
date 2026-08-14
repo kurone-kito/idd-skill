@@ -2131,6 +2131,218 @@ test('dispositionEvidence: missingRegularCommentCount is zero when nothing is ou
   assert.equal(verdict.dispositionEvidence.missingRegularCommentCount, 0);
 });
 
+// --- 9d. review-ack disposition-aware Clause 1 (#2050) ----------------------
+//
+// `copilotReview()`'s default `submittedAt` is `RECENT`
+// (2026-07-11T10:00:00Z) -- `ACK_AFTER_REVIEW` / `ACK_BEFORE_REVIEW` are
+// chosen relative to it.
+
+const ACK_AFTER_REVIEW = '2026-07-11T10:30:00Z'; // after RECENT
+const ACK_BEFORE_REVIEW = OLD; // well before RECENT
+
+/** `review-ack:` marker comment, matching `rerollMarkerComment`'s shape
+ * above -- `createdAt` is the GitHub server timestamp the code must use;
+ * `embeddedAt` (defaults to the same value) is the marker body's own
+ * agent-supplied timestamp, deliberately irrelevant to validity (#2050
+ * anchors on the comment's own `createdAt`, never the embedded text). */
+function reviewAckComment(
+  createdAt: string,
+  overrides: { login?: string; headSha?: string; embeddedAt?: string } = {},
+) {
+  const headSha = overrides.headSha ?? HEAD;
+  const embeddedAt = overrides.embeddedAt ?? createdAt;
+  return {
+    author: { login: overrides.login ?? TRUSTED },
+    body: `review-ack: ${AGENT_ID} ${headSha} ${embeddedAt}`,
+    createdAt,
+  };
+}
+
+test('review-ack: nonzero itemCount with Clause 2 satisfied (via existing thread disposition) converges (#2039 shape)', () => {
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({
+      reviews: [copilotReview({ itemCount: 1 })],
+      threads: [
+        {
+          id: 'PRT_ACK_1',
+          isResolved: false,
+          comments: {
+            nodes: [
+              {
+                author: { login: COPILOT_LOGIN },
+                body: 'nit: consider extracting this into a helper',
+                createdAt: OLD,
+                updatedAt: OLD,
+              },
+              {
+                author: { login: TRUSTED },
+                body: '**Rejected** — not applicable to this change.',
+                createdAt: RECENT,
+                updatedAt: RECENT,
+              },
+            ],
+          },
+        },
+      ],
+    }),
+    baseOptions(),
+  );
+  assertValidVerdict(verdict);
+  assert.equal(verdict.review.itemCount, 1);
+  assert.equal(verdict.threads.satisfied, true);
+  assert.equal(verdict.review.satisfied, true);
+  assert.equal(verdict.converged, true);
+  assert.equal(verdict.ready, true);
+});
+
+test('review-ack: nonzero itemCount with Clause 2 NOT satisfied does not converge, even given a valid review-ack (#2050 acceptance criterion)', () => {
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({
+      reviews: [copilotReview({ itemCount: 1 })],
+      threads: [
+        {
+          id: 'PRT_ACK_2',
+          isResolved: false,
+          comments: {
+            nodes: [
+              {
+                author: { login: COPILOT_LOGIN },
+                body: 'nit: consider extracting this into a helper',
+                createdAt: OLD,
+                updatedAt: OLD,
+              },
+            ],
+          },
+        },
+      ],
+      comments: [reviewAckComment(ACK_AFTER_REVIEW)],
+    }),
+    baseOptions(),
+  );
+  assertValidVerdict(verdict);
+  assert.equal(verdict.review.itemCount, 1);
+  assert.equal(verdict.threads.satisfied, false);
+  assert.equal(verdict.review.satisfied, false);
+  assert.equal(verdict.converged, false);
+  assert.equal(verdict.ready, false);
+});
+
+test('review-ack: nonzero suppressedCount with a valid post-review ack converges', () => {
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({
+      reviews: [
+        copilotReview({ itemCount: 0, body: SUPPRESSED_COMMENTS_BODY }),
+      ],
+      comments: [reviewAckComment(ACK_AFTER_REVIEW)],
+    }),
+    baseOptions(),
+  );
+  assertValidVerdict(verdict);
+  assert.equal(verdict.review.suppressedCount, 1);
+  assert.equal(verdict.review.satisfied, true);
+  assert.equal(verdict.converged, true);
+  assert.equal(verdict.ready, true);
+  assert.deepEqual(verdict.reasons, []);
+});
+
+test('review-ack: an ack predating the latest review does NOT cover a nonzero suppressedCount', () => {
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({
+      reviews: [
+        copilotReview({ itemCount: 0, body: SUPPRESSED_COMMENTS_BODY }),
+      ],
+      comments: [reviewAckComment(ACK_BEFORE_REVIEW)],
+    }),
+    baseOptions(),
+  );
+  assertValidVerdict(verdict);
+  assert.equal(verdict.review.suppressedCount, 1);
+  assert.equal(verdict.review.satisfied, false);
+  assert.equal(verdict.converged, false);
+  assert.equal(verdict.ready, false);
+  assert.match(verdict.reasons.join('\n'), /post a trusted review-ack marker/);
+});
+
+test('review-ack: an ack from an untrusted login does not count', () => {
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({
+      reviews: [
+        copilotReview({ itemCount: 0, body: SUPPRESSED_COMMENTS_BODY }),
+      ],
+      comments: [
+        reviewAckComment(ACK_AFTER_REVIEW, { login: 'random-contributor' }),
+      ],
+    }),
+    baseOptions(),
+  );
+  assertValidVerdict(verdict);
+  assert.equal(verdict.review.satisfied, false);
+  assert.equal(verdict.converged, false);
+});
+
+test('review-ack: a fresh review submitted after a valid ack invalidates it automatically, no separate invalidation step', () => {
+  // The same PR HEAD carries TWO Copilot reviews (an AW6 same-HEAD reroll is
+  // a live example) -- the ack posted after the FIRST review must not cover
+  // the SECOND, later one.
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({
+      reviews: [
+        copilotReview({
+          itemCount: 0,
+          body: SUPPRESSED_COMMENTS_BODY,
+          submittedAt: OLD,
+        }),
+        copilotReview({ itemCount: 0, body: SUPPRESSED_COMMENTS_BODY }), // submittedAt: RECENT
+      ],
+      // Posted after the FIRST review (OLD) but before the SECOND (RECENT).
+      comments: [reviewAckComment('2026-06-15T00:00:00Z')],
+    }),
+    baseOptions(),
+  );
+  assertValidVerdict(verdict);
+  assert.equal(verdict.review.submittedAt, RECENT);
+  assert.equal(verdict.review.satisfied, false);
+  assert.equal(verdict.converged, false);
+});
+
+test('review-ack: a malformed marker (bad timestamp, or trailing prose) is not counted, matching the canonical OPERATIONAL_MARKERS shape', () => {
+  const badTimestamp = computeAdvisoryConvergenceVerdict(
+    baseInputs({
+      reviews: [
+        copilotReview({ itemCount: 0, body: SUPPRESSED_COMMENTS_BODY }),
+      ],
+      comments: [
+        {
+          author: { login: TRUSTED },
+          body: `review-ack: ${AGENT_ID} ${HEAD} not-a-timestamp`,
+          createdAt: ACK_AFTER_REVIEW,
+        },
+      ],
+    }),
+    baseOptions(),
+  );
+  assertValidVerdict(badTimestamp);
+  assert.equal(badTimestamp.review.satisfied, false);
+
+  const trailingProse = computeAdvisoryConvergenceVerdict(
+    baseInputs({
+      reviews: [
+        copilotReview({ itemCount: 0, body: SUPPRESSED_COMMENTS_BODY }),
+      ],
+      comments: [
+        {
+          author: { login: TRUSTED },
+          body: `review-ack: ${AGENT_ID} ${HEAD} ${ACK_AFTER_REVIEW} please see above`,
+          createdAt: ACK_AFTER_REVIEW,
+        },
+      ],
+    }),
+    baseOptions(),
+  );
+  assertValidVerdict(trailingProse);
+  assert.equal(trailingProse.review.satisfied, false);
+});
+
 // --- 10. terminal Copilot unavailability (#1570/#1572) ----------------------
 // --- The `#1572` terminal-recovery contract (buildCopilotRecoverySummary,
 // --- advisory-wait-state.mts) is reused here unmodified: exhausting its
