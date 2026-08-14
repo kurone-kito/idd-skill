@@ -453,17 +453,21 @@ Ask these checks:
      of change a resync issue must report, and the baseline ref's own
      manifest predates it.
    - **Token filter.** Compare each ref's own placeholder table in
-     effect at that ref (Onboarding Reference — Placeholder Values'
-     "Final placeholder meanings" table, `docs/onboarding/placeholders.md`,
-     as it read at the baseline ref and at the target ref
-     independently), not today's list applied to both — a placeholder
-     added or removed between the two refs is itself exactly the kind
-     of token-identity change this check exists to report, and reusing
-     one ref's list for the other's tree would hide that change. Never
-     match every `{{...}}`-shaped span unfiltered either way — an
-     unrestricted match also catches ordinary GitHub Actions
-     expressions such as `${{ github.token }}` in an imported workflow
-     file.
+     effect at that ref, not today's list applied to both — a
+     placeholder added or removed between the two refs is itself
+     exactly the kind of token-identity change this check exists to
+     report, and reusing one ref's list for the other's tree would
+     hide that change. At a ref from commit `e55ccd9c` (2026-05-12)
+     onward, that table is Onboarding Reference — Placeholder Values'
+     "Final placeholder meanings" table
+     (`docs/onboarding/placeholders.md`). An older ref has no such
+     file — the placeholders were documented directly inside
+     `idd-template/ONBOARDING.md`'s own "Step 1C — Collect placeholder
+     values" section instead; use that section's list as the
+     allowlist for a baseline ref that old. Never match every
+     `{{...}}`-shaped span unfiltered either way — an unrestricted
+     match also catches ordinary GitHub Actions expressions such as
+     `${{ github.token }}` in an imported workflow file.
    - **Excluded paths.** Skip `docs/onboarding/placeholders.md`,
      `docs/customization.md`, and `docs/onboarding/policy-decisions.md`
      — these deliberately keep `{{...}}` tokens literal to document
