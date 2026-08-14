@@ -6,6 +6,7 @@
 // .mjs. See docs/typescript-sources.md.
 
 import { readFileSync } from 'node:fs';
+import { setTimeout as sleep } from 'node:timers/promises';
 import type { CleanupReport } from './audit-pr-cleanup-summary.mts';
 import { computeReportSummary } from './audit-pr-cleanup-summary.mts';
 import { parseCliArgs } from './cli-args.mts';
@@ -146,7 +147,7 @@ interface AssociatedThreadStats {
 }
 
 /** Full cleanup-audit report emitted by this helper. */
-interface CleanupAuditReport extends CleanupReport {
+export interface CleanupAuditReport extends CleanupReport {
   repository: string;
   pr: number;
   prUrl: string;
@@ -161,6 +162,24 @@ interface CleanupAuditReport extends CleanupReport {
   failed: ReportRow[];
   summary: Record<string, number> | null;
   status: string | null;
+  /**
+   * Number of internal whole-pass apply attempts `runApplyWithRetry` ran
+   * (#2011). Present only in apply mode.
+   */
+  retryAttempts?: number;
+  /**
+   * True when the internal retry bound was reached while a fresh rescan
+   * still reported candidates (#2011) — distinct from an ordinary
+   * `applied`/`clean` convergence, which leaves this unset. Does not alter
+   * `status`, computed by the shared, untouched `computeReportSummary`.
+   */
+  retryBoundExhausted?: boolean;
+  /**
+   * Set when a confirming rescan itself failed (#2011) — the report still
+   * carries every candidate this run genuinely applied before the
+   * failure, rather than losing that record to an uncaught exit.
+   */
+  rescanError?: string;
 }
 
 /** Active claim resolved from the trusted claim-marker stream. */
@@ -178,6 +197,16 @@ interface CleanupArgs {
   claimId?: string;
   agentId?: string;
   skipClaimCheck?: boolean;
+}
+
+/**
+ * Claim-check context threaded through apply-mode candidate processing
+ * (#2011's `applyCandidatePass`), matching {@link assertActiveClaim}'s
+ * `options` shape.
+ */
+interface ClaimContext {
+  expectedLinkedPrs?: string[];
+  prFirstCommitAt?: string | null;
 }
 
 // Flag-spec keys stay the dashed literal on purpose (never bare keys like
@@ -205,6 +234,13 @@ let cachedConfiguredTrustedMarkerActorSources: {
   sources: string[];
 } | null = null;
 let cachedCurrentViewerLogin: string | null = null;
+
+/** Default bound on whole-pass apply retries (#2011). */
+const DEFAULT_APPLY_RETRY_MAX_ATTEMPTS = 3;
+
+/** Base backoff (ms) before each rescan; linear-ish with jitter, matching
+ * {@link withBoundedRetry}'s formula in gh-exec.mts. */
+const DEFAULT_APPLY_RETRY_BACKOFF_MS = 200;
 
 if (import.meta.main) {
   await main();
@@ -275,7 +311,84 @@ async function main(): Promise<void> {
 
   if (args.apply) {
     report.mode = 'apply';
-    for (const candidate of report.candidates) {
+    const {
+      report: finalReport,
+      attempts,
+      boundExhausted,
+    } = await runApplyWithRetry(
+      report,
+      (pass) =>
+        applyCandidatePass(owner, repo, prNumber, pass, args, claimContext),
+      // throwOnError so a transient GraphQL/gh failure on this confirming
+      // rescan is catchable by runApplyWithRetry (which preserves the
+      // already-applied work) instead of exiting the process outright.
+      () => buildReport(owner, repo, prNumber, { throwOnError: true }),
+    );
+    finalReport.retryAttempts = attempts;
+    if (boundExhausted) {
+      finalReport.retryBoundExhausted = true;
+    }
+
+    computeReportSummary(finalReport);
+    if (finalReport.failed.length > 0 || finalReport.rescanError) {
+      writeReport(finalReport, args.format);
+      process.exit(1);
+    }
+
+    computeReportSummary(finalReport);
+    writeReport(finalReport, args.format);
+    return;
+  }
+
+  computeReportSummary(report);
+  writeReport(report, args.format);
+}
+
+/**
+ * Runs one whole apply pass over `report.candidates`, mutating
+ * `report.applied` / `report.failed` in place (#2011, extracted verbatim
+ * from the previous single-pass `main()` body). Re-validates the active
+ * claim before each candidate, and again after `revalidateCandidate`'s
+ * fresh per-candidate re-fetch, matching the pre-existing behavior.
+ */
+async function applyCandidatePass(
+  owner: string,
+  repo: string,
+  prNumber: number,
+  report: CleanupAuditReport,
+  args: CleanupArgs,
+  claimContext: ClaimContext,
+): Promise<void> {
+  for (const candidate of report.candidates) {
+    if (!args.skipClaimCheck) {
+      try {
+        assertActiveClaim(
+          owner,
+          repo,
+          args.claimIssue,
+          args.agentId,
+          args.claimId,
+          claimContext,
+        );
+      } catch (error) {
+        report.failed.push({
+          ...candidate,
+          error: (error as Error).message,
+        });
+        break;
+      }
+    }
+    try {
+      const freshCandidate = await revalidateCandidate(
+        owner,
+        repo,
+        prNumber,
+        candidate,
+        report,
+      );
+      if (!freshCandidate) {
+        continue;
+      }
       if (!args.skipClaimCheck) {
         try {
           assertActiveClaim(
@@ -288,67 +401,145 @@ async function main(): Promise<void> {
           );
         } catch (error) {
           report.failed.push({
-            ...candidate,
+            ...freshCandidate,
             error: (error as Error).message,
           });
           break;
         }
       }
-      try {
-        const freshCandidate = await revalidateCandidate(
-          owner,
-          repo,
-          prNumber,
-          candidate,
-          report,
-        );
-        if (!freshCandidate) {
-          continue;
-        }
-        if (!args.skipClaimCheck) {
-          try {
-            assertActiveClaim(
-              owner,
-              repo,
-              args.claimIssue,
-              args.agentId,
-              args.claimId,
-              claimContext,
-            );
-          } catch (error) {
-            report.failed.push({
-              ...freshCandidate,
-              error: (error as Error).message,
-            });
-            break;
-          }
-        }
-        const minimized = minimizeComment(
-          freshCandidate.subjectId,
-          freshCandidate.classifier,
-        );
-        report.applied.push({
-          ...freshCandidate,
-          isMinimized: minimized.isMinimized,
-          minimizedReason: minimized.minimizedReason,
-        });
-      } catch (error) {
-        report.failed.push({
-          ...candidate,
-          error: (error as Error).message,
-        });
-      }
-    }
-
-    computeReportSummary(report);
-    if (report.failed.length > 0) {
-      writeReport(report, args.format);
-      process.exit(1);
+      const minimized = minimizeComment(
+        freshCandidate.subjectId,
+        freshCandidate.classifier,
+      );
+      report.applied.push({
+        ...freshCandidate,
+        isMinimized: minimized.isMinimized,
+        minimizedReason: minimized.minimizedReason,
+      });
+    } catch (error) {
+      report.failed.push({
+        ...candidate,
+        error: (error as Error).message,
+      });
     }
   }
+}
 
-  computeReportSummary(report);
-  writeReport(report, args.format);
+/** Default backoff before a rescan: gives GraphQL read-after-write lag on
+ * the previous pass's minimizeComment calls a moment to settle (#2011). */
+async function defaultApplyRetryBackoff(attempt: number): Promise<void> {
+  await sleep(
+    DEFAULT_APPLY_RETRY_BACKOFF_MS * attempt +
+      Math.random() * DEFAULT_APPLY_RETRY_BACKOFF_MS,
+  );
+}
+
+/** Outcome of {@link runApplyWithRetry}. */
+export interface ApplyRetryResult {
+  report: CleanupAuditReport;
+  attempts: number;
+  boundExhausted: boolean;
+}
+
+/**
+ * Retries a whole apply-and-rescan pass, bounded by `maxAttempts`, so a
+ * candidate that only becomes eligible after the previous pass finished
+ * (e.g. GraphQL read-after-write lag on `minimizeComment`, #2011) still
+ * converges within one `--apply` invocation instead of requiring a second,
+ * manual call.
+ *
+ * `applyPass`, `rescan`, and `backoff` are injected rather than calling
+ * `buildReport` / `gh` / real timers directly, so this orchestration is
+ * unit-testable with fakes. `applyPass` must mutate its report argument's
+ * `applied` / `failed` arrays in place (matching
+ * {@link applyCandidatePass}); `rescan` must return a fresh
+ * dry-run-equivalent report reflecting current state; `backoff` waits
+ * before each rescan (default: a short linear-ish delay with jitter, so
+ * GraphQL read-after-write lag on the pass's own mutations has a moment
+ * to settle before re-querying).
+ *
+ * Stops immediately, without any further rescan, the first time a pass
+ * leaves `failed` non-empty (matches the pre-existing fail-fast
+ * behavior). Otherwise rescans after every pass: zero candidates means
+ * converged; a non-empty rescan below the attempt bound starts another
+ * pass, carrying the accumulated `applied` list onto the fresh report;
+ * a non-empty rescan at the attempt bound is reported as
+ * `boundExhausted` rather than retried further.
+ */
+export async function runApplyWithRetry(
+  initialReport: CleanupAuditReport,
+  applyPass: (report: CleanupAuditReport) => Promise<void>,
+  rescan: () => Promise<CleanupAuditReport>,
+  maxAttempts: number = DEFAULT_APPLY_RETRY_MAX_ATTEMPTS,
+  backoff: (attempt: number) => Promise<void> = defaultApplyRetryBackoff,
+): Promise<ApplyRetryResult> {
+  // A non-finite `maxAttempts` (`Infinity`) would defeat the bounded-retry
+  // contract with an unbounded loop; a fractional value (e.g. `2.5`) would
+  // never satisfy `attempt === maxAttempts` below and fall through to the
+  // fallback return with an incorrect `attempts: 0` (same class of bug as
+  // `withBoundedRetry`'s `attempts` guard, gh-exec.mts, #1394).
+  const totalAttempts = Number.isFinite(maxAttempts)
+    ? Math.max(1, Math.trunc(maxAttempts))
+    : DEFAULT_APPLY_RETRY_MAX_ATTEMPTS;
+  let report = initialReport;
+  for (let attempt = 1; attempt <= totalAttempts; attempt += 1) {
+    await applyPass(report);
+    if (report.failed.length > 0) {
+      return { report, attempts: attempt, boundExhausted: false };
+    }
+
+    // A short backoff before rescanning gives GraphQL read-after-write lag
+    // on this pass's minimizeComment calls a moment to settle, instead of
+    // immediately re-querying the same stale state.
+    await backoff(attempt);
+
+    let freshReport: CleanupAuditReport;
+    try {
+      freshReport = await rescan();
+    } catch (error) {
+      // Preserve the already-mutated report (including the accumulated
+      // `applied` list) instead of losing it to an uncaught rescan
+      // failure — `rescan` is expected to be called with a
+      // throw-on-error option so a transient GraphQL/gh hiccup lands
+      // here rather than exiting the process outright.
+      report.rescanError = (error as Error).message;
+      return { report, attempts: attempt, boundExhausted: false };
+    }
+    freshReport.mode = 'apply';
+    // Exclude subjects this run already applied from the fresh rescan's
+    // `candidates` / `skipped`: `buildReport` classifies a just-minimized
+    // comment as an already-minimized skip, so grafting `applied` onto an
+    // unfiltered rescan would place the same subject in both arrays
+    // (inflating skipped counts) and, left in `candidates`, would get
+    // re-mutated by the next pass (wasting the retry bound on rediscovering
+    // work already done instead of finding genuinely new candidates).
+    const appliedSubjectIds = new Set(
+      report.applied.map((row) => row.subjectId),
+    );
+    freshReport.candidates = freshReport.candidates.filter(
+      (row) => !appliedSubjectIds.has(row.subjectId),
+    );
+    freshReport.skipped = freshReport.skipped.filter(
+      (row) => !appliedSubjectIds.has(row.subjectId),
+    );
+    // Carry the accumulated `applied` list onto the fresh rescan so the
+    // returned report's `candidates` / `skipped` reflect confirmed
+    // post-apply state (e.g. cascade-minimized items now show up as
+    // already-minimized skips) rather than the stale pre-apply snapshot
+    // that fed this pass.
+    freshReport.applied = report.applied;
+    if (freshReport.candidates.length === 0) {
+      return { report: freshReport, attempts: attempt, boundExhausted: false };
+    }
+    if (attempt === totalAttempts) {
+      return { report: freshReport, attempts: attempt, boundExhausted: true };
+    }
+
+    report = freshReport;
+  }
+  // Unreachable: totalAttempts is normalized to >= 1 above, so the loop
+  // always runs at least one attempt and returns from inside it.
+  return { report, attempts: 0, boundExhausted: true };
 }
 
 // Build an IDD-scoped disposition-author predicate from the resolved
@@ -1501,8 +1692,15 @@ function writeReport(report: CleanupAuditReport, format: string): void {
 
   // Print summary header
   if (report.summary) {
+    const retrySuffix =
+      report.retryAttempts === undefined
+        ? ''
+        : `, retryAttempts=${report.retryAttempts}, retryBoundExhausted=${Boolean(report.retryBoundExhausted)}`;
+    const rescanErrorSuffix = report.rescanError
+      ? `, rescanError=${report.rescanError}`
+      : '';
     console.log(
-      `summary: status=${report.status}, candidates=${report.summary.candidate}, applied=${report.summary.applied}, failed=${report.summary.failed}, skipped=${report.summary.skipped}`,
+      `summary: status=${report.status}, candidates=${report.summary.candidate}, applied=${report.summary.applied}, failed=${report.summary.failed}, skipped=${report.summary.skipped}${retrySuffix}${rescanErrorSuffix}`,
     );
     console.log('');
   }

@@ -18,6 +18,7 @@ export interface CleanupReport {
   mode?: string;
   summary?: Record<string, number> | null;
   status?: string | null;
+  rescanError?: string;
 }
 
 export function computeReportSummary(report: CleanupReport): void {
@@ -53,6 +54,16 @@ export function computeReportSummary(report: CleanupReport): void {
   }
 
   if (report.mode === 'apply') {
+    // A confirming rescan that itself failed means convergence was never
+    // verified, regardless of what the pre-rescan applied/failed counts
+    // say -- this must never be reported as `applied`/`clean` (#2011
+    // review finding: a fallback workflow trusts a parseable `status` even
+    // on a nonzero helper exit, so an unqualified success status here would
+    // publish false convergence evidence).
+    if (report.rescanError) {
+      report.status = 'rescan-failed';
+      return;
+    }
     if (report.failed.length > 0) {
       report.status = 'failed';
       return;

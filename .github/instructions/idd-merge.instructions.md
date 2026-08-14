@@ -350,10 +350,32 @@ Before any mutating action in F3, apply the
      `viewer-cannot-minimize` counts for `applied`, or a converged
      `clean` record) so this run's work is recorded. Proceed to step 3.
 
-     If the apply `status` is `failed` or `incomplete`: post the
-     cleanup-failure comment format instead, including the
-     `viewer-cannot-minimize` count when non-zero. Explicit evidence,
-     not a merge gate — the merge already succeeded. Proceed to step 3.
+     The helper internally retries a whole scan-and-minimize pass, bounded,
+     when a fresh rescan still reports candidates after applying (a
+     candidate that only became eligible after the previous pass, e.g.
+     GraphQL read-after-write lag) — the common case still converges to
+     `applied`/`clean` within this one invocation. If the output also
+     reports `retryBoundExhausted: true` (visible as
+     `retryBoundExhausted=true` in table format), the retry bound was
+     reached while a rescan still found candidates. Route by the apply
+     `status` exactly as above, even then: if `status` is still
+     `applied`/`clean`, follow that evidence-comment path and note the
+     `retryAttempts` count as an informational, non-blocking
+     residual-lag signal rather than a defect; if `status` came back
+     `incomplete` (the fresh rescan found a genuine permission-blocked
+     remainder) or `failed`, follow the `failed`/`incomplete`
+     cleanup-failure path below instead — `retryBoundExhausted: true`
+     never overrides a non-success `status`.
+
+     If the apply `status` is `failed`, `incomplete`, or
+     `rescan-failed`: post the cleanup-failure comment format instead,
+     including the `viewer-cannot-minimize` count when non-zero.
+     `rescan-failed` means the confirming rescan itself errored after a
+     mutation (already-applied work is preserved in the report but
+     convergence was never confirmed) — note that distinction in the
+     comment and re-run `--apply` to confirm convergence. Explicit
+     evidence, not a merge gate — the merge already succeeded. Proceed
+     to step 3.
 
    - **`permission-blocked`**: skipped items exist with
      `viewerCanMinimize: false` and no apply-eligible candidates found.
