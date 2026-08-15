@@ -239,10 +239,10 @@ a Node.js check tied to the helper-runtime-profile choice belongs at
 Step 1B's helper-runtime-profile item instead, not here.
 
 **Execution-environment prerequisites.** Separately from the `gh`
-check above, the distributed workflow's `` ```sh ``/`` ```bash `` blocks
-assume a POSIX shell and common coreutils (`grep`, `sed`, `mkdir`,
+check above, the distributed workflow's `sh`/`bash` fenced blocks
+assume a POSIX shell and common Unix utilities (`grep`, `sed`, `mkdir`,
 `dirname`, `tr`, `head`, `sort`, `curl`). On Windows, get one from Git
-for Windows (Git Bash, which bundles those coreutils) or WSL — native
+for Windows (Git Bash, which bundles those utilities) or WSL — native
 `cmd.exe`/PowerShell cannot run these blocks unmodified. The
 `instructions-only` profile's advisory-wait shell fallback additionally
 needs a standalone `jq` binary on `PATH` (see
