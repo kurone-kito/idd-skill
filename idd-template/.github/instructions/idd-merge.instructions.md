@@ -395,9 +395,8 @@ Before any mutating action in F3, apply the
    later step. Any removal (plain or `--force`) silently discards
    ignored files too, including inside an initialized submodule — so
    **before the first removal attempt**, review what's there. Scope
-   both inspection commands explicitly to `<path>` (an unqualified
-   command run from the primary worktree inspects the wrong
-   repository):
+   both inspection commands explicitly to `<path>` — an unqualified
+   command inspects the wrong repository:
 
    - `git -C <path> status --porcelain --ignored --untracked-files=all`
      (avoids a false-clean result under `status.showUntrackedFiles=no`)
@@ -416,14 +415,14 @@ Before any mutating action in F3, apply the
      trees containing submodules cannot be moved or removed` (a
      submodule was initialized inside that worktree), retry with `git
      worktree remove --force <path>`, which also overrides the
-     uncommitted/untracked block. Use `--force` only once the review
-     above found nothing worth preserving, not as a default.
+     uncommitted/untracked block. Use `--force` only after that review
+     finds nothing worth preserving.
    - `git branch -d <branch-name>` (the baseline permission profile
      denies `-D`; see `docs/permissions.md`). If it fails with `error:
      the branch '<branch-name>' is not fully merged` despite the PR
      being merged — `fetch --prune` can drop the remote-tracking ref
-     before local `main` fast-forwards — run step 4 first (`git fetch
-     origin main && git merge --ff-only origin/main`), then retry.
+     before local `main` fast-forwards — run step 4's `fetch`/
+     `--ff-only` first, then retry.
 4. Update the local `main` branch.
 5. If GitHub auto-delete is disabled: delete the remote branch too.
    (Worktrunk may be used for steps 3–5.)
