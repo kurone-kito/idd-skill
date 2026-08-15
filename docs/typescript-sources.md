@@ -34,12 +34,12 @@ install-free bare-node CI lane working unchanged.
 
 ## `@types/node` vs. the engines floor
 
-`@types/node` is pinned to `26.1.0` — newer than every clause of the
-`^22.23.2 || ^24.2.0 || >=26.0.0` engines range except the `>=26.0.0`
-tail itself — so `pnpm run typecheck` validates against the Node 26
-API surface, not the lowest version this repository actually ships
-on. This is a deliberate trade-off, not an oversight (observed
-2026-08-01, #1706):
+`@types/node` is pinned to `26.1.0` — newer than the 22.x and 24.x
+floors of the `^22.23.2 || ^24.2.0 || >=26.0.0` engines range, and
+within its `>=26.0.0` clause — so `pnpm run typecheck` validates
+against the Node 26 API surface, not the lowest version this
+repository actually ships on. This is a deliberate trade-off, not an
+oversight (observed 2026-08-01, #1706):
 downgrading `@types/node` to match the 22.x floor would lose type
 coverage for code paths that intentionally target the newer 24.x/26.x
 clauses of the range, and TypeScript's structural typing means a
