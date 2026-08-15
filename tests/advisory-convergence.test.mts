@@ -1915,7 +1915,7 @@ test('reasons: itemCount > 0 with every visible Copilot thread resolved points a
 test('reasons: itemCount > 0 with an unresolved blocking thread does NOT add the review-body pointer (a real thread already explains it)', () => {
   const verdict = computeAdvisoryConvergenceVerdict(
     baseInputs({
-      reviews: [copilotReview({ itemCount: 2 })],
+      reviews: [copilotReview({ id: 'REVIEW_BLOCK', itemCount: 2 })],
       threads: [
         {
           id: 'PRT_REAL_BLOCK',
@@ -1927,6 +1927,11 @@ test('reasons: itemCount > 0 with an unresolved blocking thread does NOT add the
                 body: 'nit: consider extracting this into a helper',
                 createdAt: OLD,
                 updatedAt: OLD,
+                // #2050: binds this thread to the review under test so
+                // classifyThreadIdsForReview recognizes it as real,
+                // review-scoped evidence (not the zero-thread-evidence
+                // shape this test is deliberately distinguishing from).
+                pullRequestReview: { id: 'REVIEW_BLOCK' },
               },
             ],
           },
@@ -2129,6 +2134,402 @@ test('dispositionEvidence: missingRegularCommentCount is zero when nothing is ou
   );
   assertValidVerdict(verdict);
   assert.equal(verdict.dispositionEvidence.missingRegularCommentCount, 0);
+});
+
+// --- 9d. review-ack disposition-aware Clause 1 (#2050) ----------------------
+//
+// `copilotReview()`'s default `submittedAt` is `RECENT`
+// (2026-07-11T10:00:00Z) -- `ACK_AFTER_REVIEW` / `ACK_BEFORE_REVIEW` are
+// chosen relative to it.
+
+const ACK_AFTER_REVIEW = '2026-07-11T10:30:00Z'; // after RECENT
+const ACK_BEFORE_REVIEW = OLD; // well before RECENT
+
+/** `review-ack:` marker comment, matching `rerollMarkerComment`'s shape
+ * above -- `createdAt` is the GitHub server timestamp the code must use;
+ * `embeddedAt` (defaults to the same value) is the marker body's own
+ * agent-supplied timestamp, deliberately irrelevant to validity (#2050
+ * anchors on the comment's own `createdAt`, never the embedded text). */
+function reviewAckComment(
+  createdAt: string,
+  overrides: { login?: string; headSha?: string; embeddedAt?: string } = {},
+) {
+  const headSha = overrides.headSha ?? HEAD;
+  const embeddedAt = overrides.embeddedAt ?? createdAt;
+  return {
+    author: { login: overrides.login ?? TRUSTED },
+    body: `review-ack: ${AGENT_ID} ${headSha} ${embeddedAt}`,
+    createdAt,
+  };
+}
+
+test('review-ack: nonzero itemCount with Clause 2 satisfied (via existing thread disposition) converges (#2039 shape)', () => {
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({
+      reviews: [copilotReview({ id: 'REVIEW_LATEST', itemCount: 1 })],
+      threads: [
+        {
+          id: 'PRT_ACK_1',
+          isResolved: false,
+          comments: {
+            nodes: [
+              {
+                author: { login: COPILOT_LOGIN },
+                body: 'nit: consider extracting this into a helper',
+                createdAt: OLD,
+                updatedAt: OLD,
+                // #2050: binds this thread to the LATEST review specifically
+                // (classifyThreadIdsForReview) -- a resolved/dispositioned
+                // thread from an OLDER, different review must not stand in
+                // for the current review's own coverage.
+                pullRequestReview: { id: 'REVIEW_LATEST' },
+              },
+              {
+                author: { login: TRUSTED },
+                body: '**Rejected** — not applicable to this change.',
+                createdAt: RECENT,
+                updatedAt: RECENT,
+              },
+            ],
+          },
+        },
+      ],
+    }),
+    baseOptions(),
+  );
+  assertValidVerdict(verdict);
+  assert.equal(verdict.review.itemCount, 1);
+  assert.equal(verdict.threads.satisfied, true);
+  assert.equal(verdict.review.satisfied, true);
+  assert.equal(verdict.converged, true);
+  assert.equal(verdict.ready, true);
+});
+
+test('review-ack: nonzero itemCount with Clause 2 NOT satisfied does not converge, even given a valid review-ack (#2050 acceptance criterion)', () => {
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({
+      reviews: [copilotReview({ id: 'REVIEW_LATEST', itemCount: 1 })],
+      threads: [
+        {
+          id: 'PRT_ACK_2',
+          isResolved: false,
+          comments: {
+            nodes: [
+              {
+                author: { login: COPILOT_LOGIN },
+                body: 'nit: consider extracting this into a helper',
+                createdAt: OLD,
+                updatedAt: OLD,
+                pullRequestReview: { id: 'REVIEW_LATEST' },
+              },
+            ],
+          },
+        },
+      ],
+      comments: [reviewAckComment(ACK_AFTER_REVIEW)],
+    }),
+    baseOptions(),
+  );
+  assertValidVerdict(verdict);
+  assert.equal(verdict.review.itemCount, 1);
+  assert.equal(verdict.threads.satisfied, false);
+  assert.equal(verdict.review.satisfied, false);
+  assert.equal(verdict.converged, false);
+  assert.equal(verdict.ready, false);
+});
+
+test("review-ack: an OLDER, already-resolved thread from a DIFFERENT review does not cover the LATEST review's own itemCount (PR #2054 review)", () => {
+  // A resolved Copilot thread exists PR-wide (threadClause.satisfied would
+  // be true, and copilotThreadCount > 0), but it belongs to an EARLIER
+  // review, not the current one -- the latest review's own itemCount: 1
+  // has NO thread representation at all. Reusing the PR-wide threadClause
+  // alone (without binding to review.reviewId) would incorrectly converge
+  // here; classifyThreadIdsForReview must keep it blocked.
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({
+      reviews: [
+        copilotReview({
+          id: 'REVIEW_OLD',
+          itemCount: 0,
+          submittedAt: OLD,
+        }),
+        copilotReview({ id: 'REVIEW_LATEST', itemCount: 1 }), // submittedAt: RECENT
+      ],
+      threads: [
+        {
+          id: 'PRT_OLD_RESOLVED',
+          isResolved: true,
+          comments: {
+            nodes: [
+              {
+                author: { login: COPILOT_LOGIN },
+                body: 'an older, already-resolved finding',
+                createdAt: OLD,
+                updatedAt: OLD,
+                pullRequestReview: { id: 'REVIEW_OLD' },
+              },
+            ],
+          },
+        },
+      ],
+    }),
+    baseOptions(),
+  );
+  assertValidVerdict(verdict);
+  assert.equal(verdict.review.itemCount, 1);
+  assert.equal(verdict.threads.copilotThreadCount, 1);
+  assert.equal(verdict.threads.satisfied, true);
+  assert.equal(verdict.review.satisfied, false);
+  assert.equal(verdict.converged, false);
+  assert.equal(verdict.ready, false);
+  assert.match(
+    verdict.reasons.join('\n'),
+    /no copilot-authored review-thread evidence accounts for them/,
+  );
+});
+
+test('review-ack: an unknown itemCount (null) does not converge even with a resolved review-scoped thread (PR #2054 review)', () => {
+  // Copilot + CodeRabbit (independently, #2054 review): the thread-evidence
+  // disjunct must fail closed on itemCount: null, not treat "at least one
+  // resolved thread exists" as sufficient when the count itself is unknown.
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({
+      reviews: [copilotReview({ id: 'REVIEW_LATEST', itemCount: null })],
+      threads: [
+        {
+          id: 'PRT_UNKNOWN_COUNT',
+          isResolved: true,
+          comments: {
+            nodes: [
+              {
+                author: { login: COPILOT_LOGIN },
+                body: 'a finding under an unknown item count',
+                createdAt: RECENT,
+                updatedAt: RECENT,
+                pullRequestReview: { id: 'REVIEW_LATEST' },
+              },
+            ],
+          },
+        },
+      ],
+    }),
+    baseOptions(),
+  );
+  assertValidVerdict(verdict);
+  assert.equal(verdict.review.itemCount, null);
+  assert.equal(verdict.review.satisfied, false);
+  assert.equal(verdict.converged, false);
+  assert.equal(verdict.ready, false);
+});
+
+test('review-ack: itemCount 2 with only ONE review-scoped resolved thread does not converge (partial coverage, PR #2054 review)', () => {
+  // Copilot + CodeRabbit (independently, #2054 review): the thread-evidence
+  // disjunct must require as many review-scoped threads as claimed items,
+  // not merely "at least one" -- otherwise one posted item stays
+  // unaccounted for.
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({
+      reviews: [copilotReview({ id: 'REVIEW_LATEST', itemCount: 2 })],
+      threads: [
+        {
+          id: 'PRT_PARTIAL_1',
+          isResolved: true,
+          comments: {
+            nodes: [
+              {
+                author: { login: COPILOT_LOGIN },
+                body: 'the only dispositioned finding',
+                createdAt: RECENT,
+                updatedAt: RECENT,
+                pullRequestReview: { id: 'REVIEW_LATEST' },
+              },
+            ],
+          },
+        },
+      ],
+    }),
+    baseOptions(),
+  );
+  assertValidVerdict(verdict);
+  assert.equal(verdict.review.itemCount, 2);
+  assert.equal(verdict.review.satisfied, false);
+  assert.equal(verdict.converged, false);
+  assert.equal(verdict.ready, false);
+});
+
+test('review-ack: nonzero suppressedCount with a valid post-review ack converges', () => {
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({
+      reviews: [
+        copilotReview({ itemCount: 0, body: SUPPRESSED_COMMENTS_BODY }),
+      ],
+      comments: [reviewAckComment(ACK_AFTER_REVIEW)],
+    }),
+    baseOptions(),
+  );
+  assertValidVerdict(verdict);
+  assert.equal(verdict.review.suppressedCount, 1);
+  assert.equal(verdict.review.satisfied, true);
+  assert.equal(verdict.converged, true);
+  assert.equal(verdict.ready, true);
+  assert.deepEqual(verdict.reasons, []);
+});
+
+test('review-ack: an ack predating the latest review does NOT cover a nonzero suppressedCount', () => {
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({
+      reviews: [
+        copilotReview({ itemCount: 0, body: SUPPRESSED_COMMENTS_BODY }),
+      ],
+      comments: [reviewAckComment(ACK_BEFORE_REVIEW)],
+    }),
+    baseOptions(),
+  );
+  assertValidVerdict(verdict);
+  assert.equal(verdict.review.suppressedCount, 1);
+  assert.equal(verdict.review.satisfied, false);
+  assert.equal(verdict.converged, false);
+  assert.equal(verdict.ready, false);
+  assert.match(verdict.reasons.join('\n'), /post a trusted review-ack marker/);
+});
+
+test('review-ack: an ack from an untrusted login does not count', () => {
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({
+      reviews: [
+        copilotReview({ itemCount: 0, body: SUPPRESSED_COMMENTS_BODY }),
+      ],
+      comments: [
+        reviewAckComment(ACK_AFTER_REVIEW, { login: 'random-contributor' }),
+      ],
+    }),
+    baseOptions(),
+  );
+  assertValidVerdict(verdict);
+  assert.equal(verdict.review.satisfied, false);
+  assert.equal(verdict.converged, false);
+});
+
+test('review-ack: a fresh review submitted after a valid ack invalidates it automatically, no separate invalidation step', () => {
+  // The same PR HEAD carries TWO Copilot reviews (an AW6 same-HEAD reroll is
+  // a live example) -- the ack posted after the FIRST review must not cover
+  // the SECOND, later one.
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({
+      reviews: [
+        copilotReview({
+          itemCount: 0,
+          body: SUPPRESSED_COMMENTS_BODY,
+          submittedAt: OLD,
+        }),
+        copilotReview({ itemCount: 0, body: SUPPRESSED_COMMENTS_BODY }), // submittedAt: RECENT
+      ],
+      // Posted after the FIRST review (OLD) but before the SECOND (RECENT).
+      comments: [reviewAckComment('2026-06-15T00:00:00Z')],
+    }),
+    baseOptions(),
+  );
+  assertValidVerdict(verdict);
+  assert.equal(verdict.review.submittedAt, RECENT);
+  assert.equal(verdict.review.satisfied, false);
+  assert.equal(verdict.converged, false);
+});
+
+test('review-ack: a malformed marker (bad timestamp, or trailing prose) is not counted, matching the canonical OPERATIONAL_MARKERS shape', () => {
+  const badTimestamp = computeAdvisoryConvergenceVerdict(
+    baseInputs({
+      reviews: [
+        copilotReview({ itemCount: 0, body: SUPPRESSED_COMMENTS_BODY }),
+      ],
+      comments: [
+        {
+          author: { login: TRUSTED },
+          body: `review-ack: ${AGENT_ID} ${HEAD} not-a-timestamp`,
+          createdAt: ACK_AFTER_REVIEW,
+        },
+      ],
+    }),
+    baseOptions(),
+  );
+  assertValidVerdict(badTimestamp);
+  assert.equal(badTimestamp.review.satisfied, false);
+
+  const trailingProse = computeAdvisoryConvergenceVerdict(
+    baseInputs({
+      reviews: [
+        copilotReview({ itemCount: 0, body: SUPPRESSED_COMMENTS_BODY }),
+      ],
+      comments: [
+        {
+          author: { login: TRUSTED },
+          body: `review-ack: ${AGENT_ID} ${HEAD} ${ACK_AFTER_REVIEW} please see above`,
+          createdAt: ACK_AFTER_REVIEW,
+        },
+      ],
+    }),
+    baseOptions(),
+  );
+  assertValidVerdict(trailingProse);
+  assert.equal(trailingProse.review.satisfied, false);
+
+  // #2054 review: a digit-shaped but semantically invalid embedded
+  // calendar date/time (month 99, day 99, hour/minute/second 99) matches
+  // the bare digit-count regex but must still be rejected -- proves
+  // `isValidIsoTimestamp` is applied to the captured embedded field, not
+  // only the digit-shape match.
+  const invalidCalendarDate = computeAdvisoryConvergenceVerdict(
+    baseInputs({
+      reviews: [
+        copilotReview({ itemCount: 0, body: SUPPRESSED_COMMENTS_BODY }),
+      ],
+      comments: [
+        {
+          author: { login: TRUSTED },
+          body: `review-ack: ${AGENT_ID} ${HEAD} 2026-99-99T99:99:99Z`,
+          createdAt: ACK_AFTER_REVIEW,
+        },
+      ],
+    }),
+    baseOptions(),
+  );
+  assertValidVerdict(invalidCalendarDate);
+  assert.equal(invalidCalendarDate.review.satisfied, false);
+});
+
+test('review-ack: validity is governed by the GitHub createdAt, never the embedded timestamp (asymmetric trust-boundary cases, PR #2054 review)', () => {
+  // Post-review createdAt with an OLD/bogus embedded timestamp still
+  // counts -- the embedded field is untrusted operator input, never
+  // consulted for validity.
+  const oldEmbeddedStillCounts = computeAdvisoryConvergenceVerdict(
+    baseInputs({
+      reviews: [
+        copilotReview({ itemCount: 0, body: SUPPRESSED_COMMENTS_BODY }),
+      ],
+      comments: [reviewAckComment(ACK_AFTER_REVIEW, { embeddedAt: OLD })],
+    }),
+    baseOptions(),
+  );
+  assertValidVerdict(oldEmbeddedStillCounts);
+  assert.equal(oldEmbeddedStillCounts.review.satisfied, true);
+
+  // Pre-review createdAt with a FUTURE embedded timestamp must NOT count --
+  // an operator cannot fake freshness by writing a future date into the
+  // marker body; only the GitHub-assigned createdAt is authoritative.
+  const futureEmbeddedDoesNotCount = computeAdvisoryConvergenceVerdict(
+    baseInputs({
+      reviews: [
+        copilotReview({ itemCount: 0, body: SUPPRESSED_COMMENTS_BODY }),
+      ],
+      comments: [
+        reviewAckComment(ACK_BEFORE_REVIEW, {
+          embeddedAt: '2099-01-01T00:00:00Z',
+        }),
+      ],
+    }),
+    baseOptions(),
+  );
+  assertValidVerdict(futureEmbeddedDoesNotCount);
+  assert.equal(futureEmbeddedDoesNotCount.review.satisfied, false);
 });
 
 // --- 10. terminal Copilot unavailability (#1570/#1572) ----------------------

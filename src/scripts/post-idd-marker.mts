@@ -29,6 +29,7 @@ import {
   renderAdvisoryWaitRecoveryMarker,
   renderClaimedByMarker,
   renderCopilotUnavailableMarker,
+  renderReviewAckMarker,
   renderReviewBaselineMarker,
   renderReviewWatermarkMarker,
   renderUnclaimedByMarker,
@@ -43,6 +44,7 @@ export const MARKER_TYPES = [
   'advisory',
   'advisory-recovery',
   'advisory-reroll',
+  'review-ack',
   'copilot-unavailable',
 ] as const;
 
@@ -51,16 +53,17 @@ export type MarkerType = (typeof MARKER_TYPES)[number];
 /**
  * The marker `type`s that accept `--from-pr <n>`. `watermark` derives all
  * four snapshot fields via the full {@link runReviewActivitySnapshot}
- * composition; the three advisory types (`advisory` / `advisory-recovery` /
- * `advisory-reroll`, added in #1889) derive only `--head-sha` via the
- * lighter {@link headShaFromPr} single `gh pr view` call, since those
- * renderers accept no other snapshot-shaped field.
+ * composition; the advisory-family types (`advisory` / `advisory-recovery` /
+ * `advisory-reroll`, added in #1889; `review-ack`, added in #2050) derive
+ * only `--head-sha` via the lighter {@link headShaFromPr} single `gh pr
+ * view` call, since those renderers accept no other snapshot-shaped field.
  */
 export const FROM_PR_MARKER_TYPES = [
   'watermark',
   'advisory',
   'advisory-recovery',
   'advisory-reroll',
+  'review-ack',
 ] as const;
 
 export type FromPrMarkerType = (typeof FROM_PR_MARKER_TYPES)[number];
@@ -94,6 +97,7 @@ const REQUIRED_FIELDS_BY_TYPE: Record<MarkerType, readonly string[]> = {
   advisory: ['agent-id', 'head-sha', 'timestamp'],
   'advisory-recovery': ['agent-id', 'head-sha', 'timestamp'],
   'advisory-reroll': ['agent-id', 'head-sha', 'timestamp'],
+  'review-ack': ['agent-id', 'head-sha', 'timestamp'],
   'copilot-unavailable': [
     'agent-id',
     'claim-id',
@@ -202,6 +206,12 @@ export function buildMarkerBody(type: string, fields: MarkerFields): string {
       });
     case 'advisory-reroll':
       return renderAdvisoryRerollMarker({
+        agentId: fields['agent-id'],
+        headSha: fields['head-sha'],
+        timestamp: fields.timestamp,
+      });
+    case 'review-ack':
+      return renderReviewAckMarker({
         agentId: fields['agent-id'],
         headSha: fields['head-sha'],
         timestamp: fields.timestamp,
@@ -340,8 +350,8 @@ interface CliArgs {
   /**
    * `--from-pr <n>`: derive `--head-sha` from PR <n>'s live current HEAD.
    * For `--type watermark`, also derives the three other snapshot fields
-   * via the full `review-activity-snapshot` composition; for the three
-   * advisory types (#1889), only `--head-sha` is derived. See
+   * via the full `review-activity-snapshot` composition; for the
+   * advisory-family types (#1889 / #2050), only `--head-sha` is derived. See
    * {@link FROM_PR_MARKER_TYPES}.
    */
   fromPr: number | null;
@@ -462,11 +472,12 @@ its claim-revalidation gate before --apply, as the manual POST path it replaces.
   <number>             issue or PR number (positional; required unless --from-pr)
   --from-pr <n>        watermark: derive --head-sha / --max-activity-at /
                        --total-item-count / --ci-completed-at from the live
-                       review-activity-snapshot of PR <n>. advisory /
-                       advisory-recovery / advisory-reroll (#1889): derive
-                       only --head-sha from PR <n>'s live current head commit
-                       (a single lightweight gh pr view call, not the full
-                       snapshot). Either way the marker posts to PR <n>, so
+                       review-activity-snapshot of PR <n>. The advisory-family
+                       types (advisory / advisory-recovery / advisory-reroll,
+                       #1889; review-ack, #2050): derive only --head-sha from
+                       PR <n>'s live current head commit (a single
+                       lightweight gh pr view call, not the full snapshot).
+                       Either way the marker posts to PR <n>, so
                        --head-sha never needs hand-typing (always targets the
                        PR; an explicit non-pr --target is rejected). Not
                        network-free.
@@ -492,6 +503,8 @@ Per-type field flags:
   advisory-recovery  --agent-id --head-sha --timestamp [--claim-id --attempt]
                      (or --agent-id --from-pr <n> --timestamp [--claim-id --attempt])
   advisory-reroll    --agent-id --head-sha --timestamp
+                     (or --agent-id --from-pr <n> --timestamp)
+  review-ack         --agent-id --head-sha --timestamp
                      (or --agent-id --from-pr <n> --timestamp)
   copilot-unavailable --agent-id --claim-id --head-sha --attempt --timestamp
 
@@ -544,10 +557,10 @@ function postMarker(
 
 /**
  * Fetch PR `<n>`'s current head commit SHA via a single lightweight `gh pr
- * view` call -- the `--from-pr` derivation path for the three advisory
- * marker types (#1889: `advisory` / `advisory-recovery` / `advisory-reroll`),
- * which need only `--head-sha`, unlike `watermark`'s `--from-pr`, which
- * composes the full four-field snapshot via
+ * view` call -- the `--from-pr` derivation path for the advisory-family
+ * marker types (#1889: `advisory` / `advisory-recovery` / `advisory-reroll`;
+ * #2050: `review-ack`), which need only `--head-sha`, unlike `watermark`'s
+ * `--from-pr`, which composes the full four-field snapshot via
  * {@link runReviewActivitySnapshot}. This is deliberately network-lighter
  * than that snapshot: no CI checks, review threads, or comment pagination,
  * just the one `headRefOid` field.
@@ -650,9 +663,9 @@ if (import.meta.main) {
   // --expected-head-sha only guards the --from-pr --type watermark
   // derivation below; in manual mode the caller already supplies --head-sha
   // directly, so there is nothing to compare it against. It has no meaning
-  // for the three advisory --from-pr types (#1889): they have no E1 Step
-  // 1/Step 2 pinning concept, so reject the combination the same way rather
-  // than silently ignoring it.
+  // for the advisory-family --from-pr types (#1889 / #2050): they have no
+  // E1 Step 1/Step 2 pinning concept, so reject the combination the same way
+  // rather than silently ignoring it.
   if (args.expectedHeadSha && args.fromPr === null) {
     process.stderr.write(
       '--expected-head-sha is only valid together with --from-pr\n',
@@ -678,12 +691,12 @@ if (import.meta.main) {
   // apply-path resolution.
   //
   // `--type watermark` derives all four snapshot fields via the full
-  // review-activity-snapshot composition (unchanged since #1134). The three
-  // advisory types (#1889: `advisory` / `advisory-recovery` /
-  // `advisory-reroll`) derive only `--head-sha`, via the lighter
-  // single-`gh pr view`-call `headShaFromPr` -- those renderers accept no
-  // other snapshot-shaped field, so composing the full snapshot for them
-  // would be needless extra network work.
+  // review-activity-snapshot composition (unchanged since #1134). The
+  // advisory-family types (#1889: `advisory` / `advisory-recovery` /
+  // `advisory-reroll`; #2050: `review-ack`) derive only `--head-sha`, via
+  // the lighter single-`gh pr view`-call `headShaFromPr` -- those renderers
+  // accept no other snapshot-shaped field, so composing the full snapshot
+  // for them would be needless extra network work.
   if (args.fromPr !== null) {
     if (!FROM_PR_MARKER_TYPES.includes(args.type as FromPrMarkerType)) {
       process.stderr.write(

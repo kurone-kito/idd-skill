@@ -139,6 +139,17 @@ test('buildMarkerBody renders advisory markers as plain text with no visible not
   assert.equal(reroll, `advisory-reroll: claude-417b737f ${SHA} ${TS}`);
   assert.doesNotMatch(reroll, /<!--/);
   assert.doesNotMatch(reroll, /\n/);
+
+  // #2050: disposition-aware Clause 1 escape hatch marker -- same plain-text
+  // shape as advisory-reroll above.
+  const reviewAck = buildMarkerBody('review-ack', {
+    'agent-id': 'claude-417b737f',
+    'head-sha': SHA,
+    timestamp: TS,
+  });
+  assert.equal(reviewAck, `review-ack: claude-417b737f ${SHA} ${TS}`);
+  assert.doesNotMatch(reviewAck, /<!--/);
+  assert.doesNotMatch(reviewAck, /\n/);
 });
 
 test('buildMarkerBody normalizes an upper-case head SHA for advisory markers', () => {
@@ -550,7 +561,7 @@ test('buildMarkerBody throws on an invalid field set (renderer validation)', () 
   );
 });
 
-test('MARKER_TYPES lists exactly the nine supported types', () => {
+test('MARKER_TYPES lists exactly the ten supported types', () => {
   assert.deepEqual(
     [...MARKER_TYPES],
     [
@@ -562,6 +573,7 @@ test('MARKER_TYPES lists exactly the nine supported types', () => {
       'advisory',
       'advisory-recovery',
       'advisory-reroll',
+      'review-ack',
       'copilot-unavailable',
     ],
   );
@@ -621,6 +633,17 @@ test('an advisory-reroll envelope validates against the schema (PR #1517 review)
     target: 'pr',
     number: 1047,
     body: `advisory-reroll: a ${SHA} ${TS}`,
+  };
+  assert.deepEqual(validate(envelope, schema), []);
+});
+
+test('a review-ack envelope validates against the schema (#2050)', () => {
+  const envelope = {
+    mode: 'dry-run',
+    type: 'review-ack',
+    target: 'pr',
+    number: 1047,
+    body: `review-ack: a ${SHA} ${TS}`,
   };
   assert.deepEqual(validate(envelope, schema), []);
 });
@@ -1279,10 +1302,10 @@ test('--from-pr rejects manual snapshot fields as ambiguous (before any gh call)
 });
 
 test('--from-pr is rejected for a type outside FROM_PR_MARKER_TYPES', () => {
-  // #1889: --from-pr now supports watermark AND the three advisory types
-  // (see the dedicated tests below), but a structurally unrelated type like
-  // `claim` -- which has no head-sha field at all -- still fails exactly as
-  // before.
+  // #1889 / #2050: --from-pr now supports watermark AND the advisory-family
+  // types (see the dedicated tests below), but a structurally unrelated type
+  // like `claim` -- which has no head-sha field at all -- still fails
+  // exactly as before.
   const stderr = runCliExpectingFailure([
     join(REPO_ROOT, 'scripts/post-idd-marker.mjs'),
     '--type',
@@ -1296,16 +1319,17 @@ test('--from-pr is rejected for a type outside FROM_PR_MARKER_TYPES', () => {
   ]);
   assert.match(
     stderr,
-    /--from-pr is only valid for --type watermark, advisory, advisory-recovery, advisory-reroll/,
+    /--from-pr is only valid for --type watermark, advisory, advisory-recovery, advisory-reroll, review-ack/,
   );
 });
 
-test('FROM_PR_MARKER_TYPES lists exactly the four --from-pr-supported types', () => {
+test('FROM_PR_MARKER_TYPES lists exactly the five --from-pr-supported types', () => {
   assert.deepEqual(FROM_PR_MARKER_TYPES, [
     'watermark',
     'advisory',
     'advisory-recovery',
     'advisory-reroll',
+    'review-ack',
   ]);
 });
 
@@ -1328,10 +1352,11 @@ test('--from-pr fails closed on an explicit non-pr --target', () => {
   assert.match(stderr, /--from-pr always targets the PR/);
 });
 
-// --- #1889: --from-pr live head-sha derivation for the advisory types ------
+// --- #1889 / #2050: --from-pr live head-sha derivation for the advisory- --
+// --- family types ----------------------------------------------------------
 //
 // Unlike watermark's --from-pr (full review-activity-snapshot composition),
-// the three advisory types derive ONLY --head-sha via a single lightweight
+// the advisory-family types derive ONLY --head-sha via a single lightweight
 // `gh pr view --json headRefOid --jq .headRefOid` call -- no CI checks,
 // review threads, or comment pagination.
 
@@ -1486,6 +1511,38 @@ test('--from-pr CLI derives only --head-sha for --type advisory-reroll (dry-run)
     target: 'pr',
     number: 1200,
     body: buildMarkerBody('advisory-reroll', {
+      'agent-id': 'claude-02f8159e',
+      'head-sha': SHA,
+      timestamp: TS,
+    }),
+  });
+});
+
+test('--from-pr CLI derives only --head-sha for --type review-ack (dry-run, #2050)', () => {
+  const tempRoot = mkdtempSync(join(tmpdir(), 'idd-from-pr-review-ack-'));
+  writeHeadShaOnlyGhStub(tempRoot, SHA);
+
+  const result = runFromPrCliDryRun(tempRoot, [
+    '--type',
+    'review-ack',
+    '--from-pr',
+    '1200',
+    '--owner',
+    'o',
+    '--repo',
+    'r',
+    '--agent-id',
+    'claude-02f8159e',
+    '--timestamp',
+    TS,
+  ]);
+
+  assert.deepEqual(result, {
+    mode: 'dry-run',
+    type: 'review-ack',
+    target: 'pr',
+    number: 1200,
+    body: buildMarkerBody('review-ack', {
       'agent-id': 'claude-02f8159e',
       'head-sha': SHA,
       timestamp: TS,
@@ -1683,6 +1740,7 @@ const FULL_FIELDS_BY_TYPE: Record<string, Record<string, string>> = {
   advisory: { 'agent-id': 'a', 'head-sha': SHA, timestamp: TS },
   'advisory-recovery': { 'agent-id': 'a', 'head-sha': SHA, timestamp: TS },
   'advisory-reroll': { 'agent-id': 'a', 'head-sha': SHA, timestamp: TS },
+  'review-ack': { 'agent-id': 'a', 'head-sha': SHA, timestamp: TS },
   'copilot-unavailable': {
     'agent-id': 'a',
     'claim-id': 'c',

@@ -120,6 +120,7 @@ export function resolveLatestCopilotReviewClause(
   if (!latest) {
     return {
       found: false,
+      reviewId: '',
       commitId: '',
       matchesHead: false,
       itemCount: null,
@@ -144,6 +145,10 @@ export function resolveLatestCopilotReviewClause(
     : 0;
   return {
     found: true,
+    // #2050: also gated by `matchesHead` -- an off-HEAD review's own id is
+    // never meaningful evidence for the caller's thread-scoping, mirroring
+    // `itemCount`/`suppressedCount` above.
+    reviewId: matchesHead ? String(latest.id ?? '') : '',
     commitId,
     matchesHead,
     itemCount,
@@ -175,6 +180,7 @@ export function fetchReviewsAndHeadCommit(owner, repo, prNumber) {
               reviews(first: 100, after: $cursor) {
                 pageInfo { hasNextPage endCursor }
                 nodes {
+                  id
                   commit { oid }
                   submittedAt
                   author { login __typename }
@@ -204,6 +210,7 @@ export function fetchReviewsAndHeadCommit(owner, repo, prNumber) {
     cursor = pullRequest.reviews.pageInfo.endCursor;
   }
   const reviews = nodes.map((node) => ({
+    id: node.id ?? null,
     author: node.author ?? null,
     submittedAt: node.submittedAt ?? null,
     commitId: node.commit?.oid ?? null,

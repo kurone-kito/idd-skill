@@ -22,6 +22,7 @@
         "advisory",
         "advisory-recovery",
         "advisory-reroll",
+        "review-ack",
         "copilot-unavailable"
       ],
       "description": "Operational marker type rendered for the comment."

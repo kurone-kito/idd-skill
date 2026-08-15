@@ -123,6 +123,7 @@ import {
   resolveCollaboratorMarkerTrust,
 } from './policy-helpers.mjs';
 import {
+  compareIsoTimestamps,
   DEFAULT_STALE_AGE_MS,
   normalizeTrustedMarkerLogins,
   operationalMarkerPrefix,
@@ -388,12 +389,82 @@ export function computeAdvisoryConvergenceVerdict(inputs, options) {
     blockingCount: copilotBlocking.length,
     satisfied: copilotBlocking.length === 0,
   };
+  // --- #2050: disposition-aware Clause 1 override -------------------------
+  // The raw `review.satisfied` (review-clause.mts) is a purely mechanical
+  // `matchesHead && itemCount === 0 && suppressedCount === 0` check, with no
+  // awareness of whether a trusted actor already read and dispositioned
+  // those findings -- computed here as a thin caller-side override instead
+  // of inside `resolveLatestCopilotReviewClause` itself, since both halves
+  // below need evidence (`threadClause`, `comments`, `trustedMarkerLogins`)
+  // that pure, low-dependency function does not receive (and its OTHER
+  // caller, `rerun-advisory-convergence.mts`, only ever reads `.matchesHead`,
+  // never `.satisfied`, so this override cannot affect it).
+  //
+  // `hasValidReviewAck` (#2050): true when a trusted `review-ack:` marker's
+  // OWN GitHub `created_at` (never an embedded, agent-supplied timestamp --
+  // the same trust boundary `hasFreshDisposition`, protocol-helpers.mts, and
+  // `summarizeSameHeadRerollMarkers` above already apply) postdates the
+  // latest primary-bot review's `submittedAt`. A single whole-review
+  // acknowledgement, not a per-finding identifier scheme -- see the issue's
+  // "Decision" section for why.
+  const hasValidReviewAck = resolveHasValidReviewAck(
+    comments,
+    trustedMarkerLogins,
+    review.submittedAt,
+  );
+  // `itemCountClauseSatisfied`: `itemCount === 0`, OR every thread THIS
+  // SPECIFIC review opened is resolved or validly dispositioned. Bound to
+  // `review.reviewId` (Copilot review, this PR: `classifyThreadIdsForReview`)
+  // rather than reusing `threadClause` (Clause 2's PR-WIDE, review-agnostic
+  // set) directly: `threadClause.satisfied` can be vacuously true from an
+  // OLDER, already-dispositioned review's threads while the LATEST review's
+  // own items have no thread representation at all -- a resolved-but-stale
+  // thread must never stand in for the CURRENT review's own coverage. This
+  // also naturally handles the #1719 incident shape (a "Comments suppressed
+  // due to low confidence" item counted in `itemCount` but invisible to any
+  // `reviewThreads` query): `latestReviewThreadIds` stays empty and
+  // `itemCountClauseSatisfied` stays `false`.
+  const latestReviewThreadIds = classifyThreadIdsForReview(
+    threads,
+    primaryBotLogin,
+    review.reviewId,
+  );
+  const latestReviewBlocking = dispositionEvidence.missingThreads.filter(
+    (thread) =>
+      latestReviewThreadIds.has(String(thread.id ?? '')) &&
+      thread.isResolved === false,
+  );
+  // #2054 review (Copilot + CodeRabbit, independently): the thread-evidence
+  // disjunct alone neither required a KNOWN itemCount, nor that the
+  // NUMBER of this-review-originated threads actually covers every posted
+  // item -- `itemCount: null` (unknown count), or `itemCount: 2` with only
+  // ONE such thread, would otherwise satisfy this on "at least one resolved
+  // thread exists," leaving other posted items unaccounted for.
+  // `latestReviewThreadIds.size >= review.itemCount` requires as many
+  // review-scoped threads as claimed items (each of the review's own
+  // comments originates at most one thread, so this count can never
+  // legitimately exceed `itemCount`, making `>=` and exact equality
+  // equivalent in practice; `>=` is the more defensive form).
+  // `review.itemCount !== null` fails closed on the unknown-count case,
+  // matching this file's other missing-evidence guards (e.g.
+  // `reviewItemCountKnownTerm` in the sameHeadReroll terms below).
+  const itemCountClauseSatisfied =
+    review.itemCount === 0 ||
+    (review.itemCount !== null &&
+      latestReviewThreadIds.size >= review.itemCount &&
+      latestReviewBlocking.length === 0);
+  // `suppressedClauseSatisfied`: `suppressedCount === 0`, OR a valid
+  // `review-ack` covers it.
+  const suppressedClauseSatisfied =
+    review.suppressedCount === 0 || hasValidReviewAck;
+  const reviewSatisfied =
+    review.matchesHead && itemCountClauseSatisfied && suppressedClauseSatisfied;
   // Clause 1's "review is not clean" reason is pushed here, after Clause 2's
-  // `threadClause` is available -- deliberately deferred from the `pending`
-  // check above (whose own `if` already exhausts the pending case, so
-  // `reasons` order is unaffected: pending and not-satisfied are mutually
-  // exclusive, and this still precedes Clause 2's own thread-blocking
-  // reason below).
+  // `threadClause` and the disposition-aware overrides above are available
+  // -- deliberately deferred from the `pending` check above (whose own `if`
+  // already exhausts the pending case, so `reasons` order is unaffected:
+  // pending and not-satisfied are mutually exclusive, and this still
+  // precedes Clause 2's own thread-blocking reason below).
   //
   // #1719: reported adopter incident -- the primary bot's review on current
   // HEAD carried `itemCount: 1` while every visible GraphQL review thread
@@ -402,10 +473,10 @@ export function computeAdvisoryConvergenceVerdict(inputs, options) {
   // top-level BODY TEXT rather than posted as a review thread -- it
   // contributes to `itemCount` but is invisible to any `reviewThreads`
   // query, so it can never be resolved the normal way, and nothing in this
-  // gate's output pointed there. When every visible Copilot-authored thread
-  // is already resolved and `itemCount` is still positive, no thread query
-  // can explain it -- point directly at the review body instead of leaving
-  // an agent to re-derive this by hand a second time.
+  // gate's output pointed there. When zero Copilot-authored threads exist at
+  // all, no thread query can explain a positive `itemCount` -- point
+  // directly at the review body instead of leaving an agent to re-derive
+  // this by hand a second time.
   //
   // #1880: a related but distinct incident shape -- the primary bot's
   // review on current HEAD carries `itemCount: 0` (zero POSTED comments)
@@ -413,13 +484,23 @@ export function computeAdvisoryConvergenceVerdict(inputs, options) {
   // block for a finding it chose not to post as a comment at all. The
   // #1719 branch above only fires when `itemCount > 0`, so this case fell
   // through to full convergence with an empty `reasons[]` until now (PR
-  // #1875 commit 9711d404). `review.satisfied` (review-clause.mts) is
-  // already gated on `suppressedCount === 0`, so `converged` is already
-  // correctly `false` here -- this branch only supplies the explanation.
-  if (!scopeBlocksConvergenceEval && !pending && !review.satisfied) {
+  // #1875 commit 9711d404). `reviewSatisfied` is already gated on
+  // `suppressedClauseSatisfied`, so `converged` is already correctly
+  // `false` here -- this branch only supplies the explanation.
+  //
+  // #2050: `ackSuffix` names the recovery marker (not a profile-specific
+  // command path -- adopters on a non-vendored profile run a different
+  // `post-idd-marker` invocation) whenever a nonzero `suppressedCount` is
+  // still unresolved for lack of a valid `review-ack` -- computed once,
+  // shared by both branches below.
+  const ackSuffix =
+    review.suppressedCount > 0 && !hasValidReviewAck
+      ? '; post a trusted review-ack marker after this review to cover the suppressed comment(s)'
+      : '';
+  if (!scopeBlocksConvergenceEval && !pending && !reviewSatisfied) {
     if (review.itemCount === 0 && review.suppressedCount > 0) {
       reasons.push(
-        `latest ${primaryBotLogin} review on current HEAD carries ${review.suppressedCount} suppressed comment(s) not reflected in itemCount (posted comment count is 0) -- check the review body directly, since a suppressed finding is never posted as a comment or review thread`,
+        `latest ${primaryBotLogin} review on current HEAD carries ${review.suppressedCount} suppressed comment(s) not reflected in itemCount (posted comment count is 0) -- check the review body directly, since a suppressed finding is never posted as a comment or review thread${ackSuffix}`,
       );
     } else {
       const itemCountReason =
@@ -433,12 +514,22 @@ export function computeAdvisoryConvergenceVerdict(inputs, options) {
         review.suppressedCount > 0
           ? ` (plus ${review.suppressedCount} suppressed comment(s) in the review body, not counted in itemCount)`
           : '';
+      // #2050: only the "this review opened zero threads" shape still needs
+      // the "check the review body directly" pointer -- when THIS review's
+      // own threads exist and are all resolved/dispositioned,
+      // `itemCountClauseSatisfied` is already `true` and this `else` branch
+      // is unreachable for that case; when they exist but are NOT all
+      // resolved/dispositioned, the separate `threadClause.satisfied` reason
+      // below already names those (PR-wide) blocking threads directly,
+      // which include this review's own unresolved ones.
+      const noThreadEvidenceForItems =
+        latestReviewThreadIds.size === 0 &&
+        review.itemCount !== null &&
+        review.itemCount > 0;
       reasons.push(
-        threadClause.satisfied &&
-          review.itemCount !== null &&
-          review.itemCount > 0
-          ? `${itemCountReason}${suppressedSuffix} -- no unresolved ${primaryBotLogin}-authored thread accounts for them; check the review body directly for an item suppressed due to low confidence, which counts toward itemCount but never appears in reviewThreads`
-          : `${itemCountReason}${suppressedSuffix}`,
+        noThreadEvidenceForItems
+          ? `${itemCountReason}${suppressedSuffix}${ackSuffix} -- no ${primaryBotLogin}-authored review-thread evidence accounts for them; check the review body directly for an item suppressed due to low confidence, which counts toward itemCount but never appears in reviewThreads`
+          : `${itemCountReason}${suppressedSuffix}${ackSuffix}`,
       );
     }
   }
@@ -458,7 +549,7 @@ export function computeAdvisoryConvergenceVerdict(inputs, options) {
   const converged =
     !scopeBlocksConvergenceEval &&
     !pending &&
-    review.satisfied &&
+    reviewSatisfied &&
     threadClause.satisfied;
   // --- Same-HEAD advisory reroll evidence (#1511) ------------------------
   // Purely additive: `converged` above is already final and is never
@@ -740,7 +831,12 @@ export function computeAdvisoryConvergenceVerdict(inputs, options) {
     now,
     primaryBotLogin,
     applicability,
-    review,
+    // #2050: `satisfied` reported here is the disposition-aware override
+    // (`reviewSatisfied`), not the raw mechanical value
+    // `resolveLatestCopilotReviewClause` itself returns -- every other field
+    // (`matchesHead` / `itemCount` / `suppressedCount` / `submittedAt` /
+    // `found` / `commitId`) is untouched.
+    review: { ...review, satisfied: reviewSatisfied },
     threads: threadClause,
     pending,
     deadline,
@@ -789,6 +885,40 @@ export function classifyCopilotAuthoredThreadIds(threads, primaryBotLogin) {
       // `missingThreads[].id` fallback exactly (protocol-helpers.mts) so a
       // thread with an empty/missing GraphQL id still round-trips through
       // the `.has()` lookup in the caller instead of silently diverging.
+      ids.add(String(thread.id ?? '') || `thread-${index + 1}`);
+    }
+  });
+  return ids;
+}
+/**
+ * #2050: Copilot-authored thread IDs whose *originating* comment belongs to
+ * a SPECIFIC review (matched by GraphQL review node id), unlike
+ * {@link classifyCopilotAuthoredThreadIds}'s review-agnostic set (every
+ * Copilot-authored thread anywhere in the PR's history -- which Clause 2
+ * genuinely needs). Clause 1's `itemCount`-half needs narrower, review-bound
+ * evidence: `threadClause.satisfied` alone can be vacuously true from an
+ * OLDER, already-dispositioned review's threads while the LATEST review's
+ * own items have no thread representation at all -- a resolved-but-stale
+ * thread must never stand in for the CURRENT review's own coverage (Copilot
+ * review, this PR). Each thread's originating comment's `pullRequestReview`
+ * is already fetched by `fetchReviewThreads` below; matching on its `id`
+ * against a Copilot review's own `id` (review-clause.mts's `reviewId`) also
+ * proves Copilot authorship by construction (every comment in one GitHub
+ * review shares that review's single author), but `isVerifiedCopilotAuthor`
+ * is still checked directly for defense-in-depth, matching this file's
+ * existing convention. `reviewId === ''` (not found / off-HEAD) always
+ * returns an empty set, fail-closed.
+ */
+export function classifyThreadIdsForReview(threads, primaryBotLogin, reviewId) {
+  const ids = new Set();
+  if (!reviewId) return ids;
+  threads.forEach((thread, index) => {
+    const originating = (thread.comments?.nodes ?? [])[0];
+    if (
+      originating &&
+      isVerifiedCopilotAuthor(originating.author, primaryBotLogin) &&
+      String(originating.pullRequestReview?.id ?? '') === reviewId
+    ) {
       ids.add(String(thread.id ?? '') || `thread-${index + 1}`);
     }
   });
@@ -851,6 +981,80 @@ function summarizeSameHeadRerollMarkers(
     }
   }
   return { count, latestAt };
+}
+// #2050: requires the FULL canonical `review-ack:` marker shape -- a valid
+// trailing ISO-8601 timestamp, end-anchored -- matching the `review-ack:`
+// entry in `OPERATIONAL_MARKERS` (marker-helpers.mts) exactly, same
+// reasoning as `summarizeSameHeadRerollMarkers`'s own pattern above: a
+// malformed or truncated comment must never count as a valid ack. Unlike
+// that pattern, this one is a fixed module-level constant rather than built
+// per call: `resolveHasValidReviewAck` does not filter on the marker's own
+// embedded HEAD SHA (see its doc comment for why), so there is no per-call
+// value to embed.
+// #2054 review: captures the embedded timestamp field (group 1) so
+// `resolveHasValidReviewAck` can additionally validate it with
+// `isValidIsoTimestamp` -- the bare digit-shape match below alone accepts a
+// syntactically-digit-shaped but semantically invalid calendar date/time
+// (e.g. `2026-99-99T99:99:99Z`), which OPERATIONAL_MARKERS' shared shape
+// (and `summarizeSameHeadRerollMarkers`'s identical pattern above) also
+// does not reject on its own.
+const REVIEW_ACK_MARKER_PATTERN =
+  /^review-ack:\s+\S+\s+[0-9a-f]{40}\s+(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z)\s*$/;
+/**
+ * #2050: disposition-aware Clause 1 escape hatch -- true when a trusted
+ * `review-ack:` marker exists on the PR whose OWN GitHub-assigned
+ * `created_at` (never an embedded, agent-supplied timestamp -- the same
+ * "clock anchor is marker created_at, not embedded text" trust boundary
+ * `hasFreshDisposition` (protocol-helpers.mts) and
+ * `summarizeSameHeadRerollMarkers` above both already apply) is strictly
+ * after the latest primary-bot review's own `submittedAt`.
+ *
+ * Deliberately NOT scoped to the marker's own embedded HEAD SHA (unlike
+ * `summarizeSameHeadRerollMarkers`'s same-HEAD filter): the calling clause
+ * is already gated on `matchesHead`, and requiring the ack's `createdAt` to
+ * be strictly after `submittedAt` alone already makes any LATER review --
+ * on the same HEAD or not, e.g. an AW6 same-HEAD reroll -- automatically
+ * invalidate a pre-existing ack, with no extra bookkeeping. See the issue's
+ * "Proposed change" section for the full rationale.
+ *
+ * Fails closed (returns `false`) when `reviewSubmittedAt` is missing or
+ * invalid, since there is then no anchor to compare an ack against.
+ */
+function resolveHasValidReviewAck(
+  comments,
+  trustedMarkerLogins,
+  reviewSubmittedAt,
+) {
+  if (!isValidIsoTimestamp(reviewSubmittedAt)) {
+    return false;
+  }
+  const trusted = new Set(trustedMarkerLogins);
+  return comments.some((comment) => {
+    const body = String(comment.body ?? '').trimEnd();
+    const match = body.match(REVIEW_ACK_MARKER_PATTERN);
+    // #2054 review: the embedded timestamp is otherwise never trusted for
+    // the createdAt-vs-submittedAt comparison below, but a marker whose OWN
+    // digit-shaped field is not a real calendar date/time is malformed --
+    // reject it here the same way `detectMalformedOperationalMarker`
+    // (marker-helpers.mts) rejects other structurally-invalid markers.
+    if (!match || !isValidIsoTimestamp(match[1])) {
+      return false;
+    }
+    const login = String(comment.author?.login ?? comment.user?.login ?? '')
+      .trim()
+      .toLowerCase();
+    if (!trusted.has(login)) {
+      return false;
+    }
+    // GitHub server `createdAt`/`created_at` ONLY -- never the marker's own
+    // embedded (agent-supplied) timestamp field, same anchor rule AW2
+    // already states for `advisory-wait:`.
+    const createdAt = String(comment.createdAt ?? comment.created_at ?? '');
+    return (
+      isValidIsoTimestamp(createdAt) &&
+      compareIsoTimestamps(createdAt, reviewSubmittedAt) > 0
+    );
+  });
 }
 /** Whole minutes elapsed from `start` to `end`, clamped to 0 and floored --
  * matching `minutesBetweenIso` (protocol-helpers.mts) exactly, so a clock-

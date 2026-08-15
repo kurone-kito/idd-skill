@@ -561,6 +561,7 @@ const advisoryConvergenceFixture = {
   },
   review: {
     found: true,
+    reviewId: 'PRR_kwDOexample',
     commitId: '0123456789abcdef0123456789abcdef01234567',
     matchesHead: true,
     itemCount: 0,
