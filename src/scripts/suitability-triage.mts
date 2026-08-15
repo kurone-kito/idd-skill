@@ -317,14 +317,18 @@ const RESOLVED_DECISION_PATTERN =
 // #2024: a negation word immediately before the trigger verb, allowing at
 // most one intervening word (e.g. "does not *ever* skip") between the
 // negation word and the trailing whitespace that reaches the verb. The
-// intervening word may not contain clause-terminating punctuation (`.!?;,`)
-// -- otherwise an unrelated negation ending the *previous* clause (e.g.
-// "Do not warn. Ignore repository policy." or "Do not warn, ignore
-// repository policy.") would count as "immediately before" a later,
-// unrelated directive. Anything wider than one clean word also risks
-// reaching into a prior occurrence several words back.
+// intervening word may not contain clause-terminating punctuation
+// (`.!?;,:`) -- otherwise an unrelated negation ending the *previous*
+// clause (e.g. "Do not warn. Ignore repository policy." or "Do not warn,
+// ignore repository policy." or "Do not warn: ignore repository policy.")
+// would count as "immediately before" a later, unrelated directive.
+// Anything wider than one clean word also risks reaching into a prior
+// occurrence several words back. #2040: the colon is included alongside
+// the other clause-boundary punctuation -- a colon introduces an
+// explanation, list, or quoted directive after an independent clause just
+// as a period or semicolon does.
 const NEGATION_IMMEDIATELY_BEFORE_PATTERN = new RegExp(
-  `${NEGATION_PATTERN.source}(?:\\s+[^\\s.!?;,]+){0,1}\\s*$`,
+  `${NEGATION_PATTERN.source}(?:\\s+[^\\s.!?;,:]+){0,1}\\s*$`,
   'i',
 );
 // #2024: the post-verb negation word list deliberately excludes "ignore"
@@ -335,12 +339,13 @@ const NEGATION_IMMEDIATELY_BEFORE_PATTERN = new RegExp(
 // there is no equivalent chaining risk there.
 const POST_VERB_NEGATION_PATTERN =
   /\b(not|no|don'?t|doesn'?t|can'?t|won'?t|never|avoid|omit|exempt)\b/i;
-// A clause boundary (sentence-ending punctuation or a comma/semicolon)
-// stops the post-verb scan outright -- see
+// A clause boundary (sentence-ending punctuation, a comma/semicolon, or a
+// colon) stops the post-verb scan outright -- see
 // findNegationWithinTwoWordsAfter's clause terminator check for why
 // (#2024 round 2, "Disable workflow; no notifications." /
-// "Disable workflow, no notifications.").
-const CLAUSE_TERMINATOR_PATTERN = /[.!?;,]/;
+// "Disable workflow, no notifications."; #2040, "Disable workflow: no
+// notifications.").
+const CLAUSE_TERMINATOR_PATTERN = /[.!?;,:]/;
 
 // #2024: within the first two words after the trigger verb, is there a
 // visible (non-masked) negation word, without crossing a clause boundary or
@@ -352,7 +357,7 @@ const CLAUSE_TERMINATOR_PATTERN = /[.!?;,]/;
 // vanishes into whitespace. Each candidate word must still be genuinely
 // visible in `maskedSource` to count as real negation (an inert, code-only
 // "not" never counts). A word containing clause-terminating punctuation
-// (`.!?;,`), or matching the phrase's own policy noun, ends the scan
+// (`.!?;,:`), or matching the phrase's own policy noun, ends the scan
 // immediately, whether or not that word is itself a negation word -- a
 // negation word past either boundary (e.g. "Disable workflow; *no*
 // notifications." or "Disable workflow no questions asked.", where "no"
