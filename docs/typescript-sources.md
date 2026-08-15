@@ -34,7 +34,7 @@ install-free bare-node CI lane working unchanged.
 
 ## `@types/node` vs. the engines floor
 
-`@types/node` is pinned to `26.1.0` — newer than the 22.x and 24.x
+`@types/node` is pinned to `26.1.2` — newer than the 22.x and 24.x
 floors of the `^22.23.2 || ^24.2.0 || >=26.0.0` engines range, and
 within its `>=26.0.0` clause — so `pnpm run typecheck` validates
 against the Node 26 API surface, not the lowest version this
