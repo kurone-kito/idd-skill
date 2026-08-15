@@ -911,7 +911,8 @@ To enable it in the target repository:
 
 3. On a native-Windows checkout, add an explicit LF rule for the three
    shipped hook files to the target repository's own `.gitattributes`
-   (the template does not ship one — see "Out of scope" in idd-skill#2060):
+   (the template does not ship one — see "Out of scope" in
+   kurone-kito/idd-skill#2060):
 
    ```gitattributes
    .githooks/* text eol=lf
