@@ -29,6 +29,7 @@ import {
   containsWorkshopReference,
   DEFAULT_WORKTREE_GUARD_BRANCH_PATTERNS,
   decodeGithubReadmeBase64,
+  detectWorktreeGuardCrlfHookNames,
   emitCleanupBacklogProgress,
   evaluateAutopilotSuitabilityConsistency,
   evaluateBranchProtectionFindings,
@@ -44,6 +45,7 @@ import {
   formatCleanupBacklogScanPreamble,
   formatCleanupBacklogScanProgress,
   hookChainsToGithooksScript,
+  hookHasCrlfLineEndings,
   hookWiresWorktreeGuard,
   isBranchProtectionUnreadable,
   isGithubBackLinkHost,
@@ -670,6 +672,32 @@ test('hookWiresWorktreeGuard treats a non-string (absent hook) as unwired', () =
   assert.equal(hookWiresWorktreeGuard(undefined), false);
 });
 
+test('hookWiresWorktreeGuard still matches a CRLF-converted sourcing line (regression evidence for #2060)', () => {
+  // The trailing \r sits after the matched filename, not inside it, so the
+  // regex alone cannot distinguish this from a healthy LF hook -- this is
+  // exactly why `hookHasCrlfLineEndings` exists as an independent check.
+  assert.equal(
+    hookWiresWorktreeGuard(
+      '#!/bin/sh\r\n. "$(dirname "$0")/_idd-worktree-guard.sh"\r\n',
+    ),
+    true,
+  );
+});
+
+test('hookHasCrlfLineEndings detects a CRLF line ending', () => {
+  assert.equal(hookHasCrlfLineEndings('#!/bin/sh\r\necho hi\r\n'), true);
+});
+
+test('hookHasCrlfLineEndings rejects LF-only content', () => {
+  assert.equal(hookHasCrlfLineEndings('#!/bin/sh\necho hi\n'), false);
+  assert.equal(hookHasCrlfLineEndings(''), false);
+});
+
+test('hookHasCrlfLineEndings treats a non-string (absent hook) as CRLF-free', () => {
+  assert.equal(hookHasCrlfLineEndings(null), false);
+  assert.equal(hookHasCrlfLineEndings(undefined), false);
+});
+
 test('hookChainsToGithooksScript detects the exec chain form', () => {
   assert.equal(
     hookChainsToGithooksScript(
@@ -857,6 +885,7 @@ test('classifyWorktreeGuardActivation returns null when the guard is disabled', 
       headDetached: false,
       hooksPath: null,
       guardWired: false,
+      crlfHookNames: [],
     }),
     null,
   );
@@ -869,6 +898,7 @@ test('classifyWorktreeGuardActivation stays silent on a detached HEAD (CI-safe)'
       headDetached: true,
       hooksPath: null,
       guardWired: false,
+      crlfHookNames: [],
     }),
     null,
   );
@@ -881,6 +911,7 @@ test('classifyWorktreeGuardActivation returns null when the guard is wired', () 
       headDetached: false,
       hooksPath: '.githooks',
       guardWired: true,
+      crlfHookNames: [],
     }),
     null,
   );
@@ -892,6 +923,7 @@ test('classifyWorktreeGuardActivation warns (never errors) when enabled-but-iner
     headDetached: false,
     hooksPath: '.husky/_',
     guardWired: false,
+    crlfHookNames: [],
   });
   assert.equal(finding?.level, 'warning');
   assert.match(finding?.message ?? '', /worktreeGuard\.enabled is true/);
@@ -915,9 +947,52 @@ test('classifyWorktreeGuardActivation shows (unset) when core.hooksPath is absen
     headDetached: false,
     hooksPath: null,
     guardWired: false,
+    crlfHookNames: [],
   });
   assert.equal(finding?.level, 'warning');
   assert.match(finding?.message ?? '', /core\.hooksPath = \(unset\)/);
+});
+
+test('classifyWorktreeGuardActivation warns on CRLF hooks even when guardWired is (incorrectly) true', () => {
+  const finding = classifyWorktreeGuardActivation({
+    guardEnabled: true,
+    headDetached: false,
+    hooksPath: '.githooks',
+    guardWired: true,
+    crlfHookNames: ['pre-commit'],
+  });
+  assert.equal(finding?.level, 'warning');
+  assert.match(finding?.message ?? '', /pre-commit contains CRLF/);
+  assert.match(finding?.message ?? '', /core\.autocrlf=true/);
+  assert.match(finding?.message ?? '', /\.gitattributes/);
+  assert.match(finding?.message ?? '', /text eol=lf/);
+});
+
+test('classifyWorktreeGuardActivation lists every CRLF-affected hook with plural wording', () => {
+  const finding = classifyWorktreeGuardActivation({
+    guardEnabled: true,
+    headDetached: false,
+    hooksPath: '.githooks',
+    guardWired: false,
+    crlfHookNames: ['pre-commit', 'pre-push'],
+  });
+  assert.match(
+    finding?.message ?? '',
+    /pre-commit, pre-push contain CRLF line endings/,
+  );
+});
+
+test('classifyWorktreeGuardActivation stays silent on a detached HEAD even with CRLF hooks (CI-safe)', () => {
+  assert.equal(
+    classifyWorktreeGuardActivation({
+      guardEnabled: true,
+      headDetached: true,
+      hooksPath: null,
+      guardWired: false,
+      crlfHookNames: ['pre-commit'],
+    }),
+    null,
+  );
 });
 
 test('readWorktreeGuardEnabled reads worktreeGuard.enabled from config', () => {
@@ -961,6 +1036,66 @@ function writeFixtureFile(root: string, relativePath: string, content: string) {
   // afterward.
   chmodSync(full, 0o755);
 }
+
+test('detectWorktreeGuardCrlfHookNames: finds CRLF-converted shipped hooks (regression for #2060)', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'idd-guard-crlf-'));
+  try {
+    writeFixtureFile(
+      dir,
+      '.githooks/_idd-worktree-guard.sh',
+      '#!/bin/sh\r\necho guard\r\n',
+    );
+    writeFixtureFile(
+      dir,
+      '.githooks/pre-commit',
+      `#!/bin/sh\n${GUARD_SOURCE_LINE}`,
+    );
+    writeFixtureFile(
+      dir,
+      '.githooks/pre-push',
+      `#!/bin/sh\r\n${GUARD_SOURCE_LINE}`,
+    );
+    assert.deepEqual(detectWorktreeGuardCrlfHookNames(dir), [
+      '_idd-worktree-guard.sh',
+      'pre-push',
+    ]);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('detectWorktreeGuardCrlfHookNames: LF-only hooks report no CRLF names (unchanged case)', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'idd-guard-crlf-none-'));
+  try {
+    writeFixtureFile(
+      dir,
+      '.githooks/_idd-worktree-guard.sh',
+      '#!/bin/sh\necho guard\n',
+    );
+    writeFixtureFile(
+      dir,
+      '.githooks/pre-commit',
+      `#!/bin/sh\n${GUARD_SOURCE_LINE}`,
+    );
+    writeFixtureFile(
+      dir,
+      '.githooks/pre-push',
+      `#!/bin/sh\n${GUARD_SOURCE_LINE}`,
+    );
+    assert.deepEqual(detectWorktreeGuardCrlfHookNames(dir), []);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('detectWorktreeGuardCrlfHookNames: missing .githooks directory reports no CRLF names', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'idd-guard-crlf-missing-'));
+  try {
+    assert.deepEqual(detectWorktreeGuardCrlfHookNames(dir), []);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
 
 test('worktreeGuardWiredAt: direct .githooks hooksPath wires both hooks (regression)', () => {
   const dir = mkdtempSync(join(tmpdir(), 'idd-guard-wired-'));

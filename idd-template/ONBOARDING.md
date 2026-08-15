@@ -909,6 +909,23 @@ To enable it in the target repository:
    chmod +x .githooks/pre-commit .githooks/pre-push
    ```
 
+3. On a native-Windows checkout, add an explicit LF rule for the three
+   shipped hook files to the target repository's own `.gitattributes`
+   (the template does not ship one — see "Out of scope" in idd-skill#2060):
+
+   ```gitattributes
+   .githooks/* text eol=lf
+   ```
+
+   Git for Windows' installer defaults to `core.autocrlf=true`
+   ("Checkout Windows-style, commit Unix-style line endings"). With no
+   `.gitattributes` override, that setting checks these files out as
+   CRLF; the trailing `\r` then breaks the `.`/`source` line that loads
+   `_idd-worktree-guard.sh`, hard-blocking every commit and push. A
+   `*.sh` rule alone is not enough — `pre-commit` and `pre-push` ship
+   without an extension, so they need this explicit `.githooks/*` path
+   rule to be covered too.
+
 When `worktreeGuard.enabled` is absent or `false`, the hooks are a
 no-op. To bypass the guard for a single intentional commit or push,
 pass `--no-verify`. CI cannot detect this class of violation — a
