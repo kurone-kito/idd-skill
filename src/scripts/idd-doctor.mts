@@ -501,7 +501,43 @@ function checkRequiredFiles(_files: string[], report: DoctorReport) {
   }
 }
 
-function checkPlaceholders(
+/**
+ * True when `file` (a repo-relative, forward-slash path) is IDD-managed
+ * content `checkPlaceholders` should scan for unresolved `{{...}}` import
+ * placeholders -- not an adopter's own application source, which can
+ * legitimately use `{{...}}` as its own runtime template syntax (i18n,
+ * mustache-style templates, etc.) with nothing to do with IDD onboarding
+ * (idd-skill#2079). An allowlist, not a denylist: only these path classes
+ * are ever scanned, matching `checkRequiredFiles`'s file classes plus the
+ * vendored `scripts/`/`schemas/`/`fixtures/schemas/` bundle.
+ *
+ * `.github/instructions/` is included only in adopter mode
+ * (`distributionSource` false): in the source repository itself those
+ * files document the placeholder syntax with example tokens that are
+ * never meant to be "resolved", so scanning them there would self-trigger
+ * a false positive on every dogfooded run. Pure (no I/O) so it can be
+ * unit-tested directly.
+ */
+export function isIddManagedPlaceholderScanPath(
+  file: string,
+  distributionSource: boolean,
+): boolean {
+  if (file.startsWith('docs/') && file.endsWith('.md')) {
+    return true;
+  }
+  if (
+    file.startsWith('profiles/') ||
+    file.startsWith('.claude/skills/') ||
+    file.startsWith('scripts/') ||
+    file.startsWith('schemas/') ||
+    file.startsWith('fixtures/schemas/')
+  ) {
+    return true;
+  }
+  return !distributionSource && file.startsWith('.github/instructions/');
+}
+
+export function checkPlaceholders(
   root: string,
   files: string[],
   report: DoctorReport,
@@ -509,20 +545,10 @@ function checkPlaceholders(
   const distributionSource =
     exists(join(root, 'idd-template/ONBOARDING.md')) &&
     exists(join(root, 'audit/sync-manifest.json'));
-  const excludedPrefixes = [
-    'idd-template/',
-    'fixtures/',
-    'tests/fixtures/',
-    'tests/',
-    '.git/',
-  ];
-  if (distributionSource) {
-    excludedPrefixes.push('.github/instructions/', 'audit/');
-  }
   const hits: string[] = [];
 
   for (const file of files) {
-    if (excludedPrefixes.some((prefix) => file.startsWith(prefix))) {
+    if (!isIddManagedPlaceholderScanPath(file, distributionSource)) {
       continue;
     }
     const absolutePath = join(root, file);
