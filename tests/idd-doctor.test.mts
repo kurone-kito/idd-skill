@@ -3,7 +3,6 @@ import {
   chmodSync,
   mkdirSync,
   mkdtempSync,
-  readFileSync,
   rmSync,
   writeFileSync,
 } from 'node:fs';
@@ -71,6 +70,7 @@ import {
 } from '../src/scripts/idd-doctor.mts';
 import { fetchGovernanceJson } from '../src/scripts/pre-merge-readiness.mts';
 import { loadJson } from '../src/scripts/validate-schemas.mts';
+import { readText } from './test-utils.mts';
 
 const ap = (n: number | string) =>
   `<!-- idd-skill-autopilot-suitability: ${n} -->`;
@@ -572,9 +572,8 @@ test('isIddManagedPlaceholderScanPath scans .github/instructions/ only in adopte
 test('checkPlaceholders no longer flags a non-IDD-managed adopter file (idd-skill#2079 regression)', () => {
   const dir = mkdtempSync(join(tmpdir(), 'idd-doctor-placeholders-'));
   try {
-    const fixtureContent = readFileSync(
+    const fixtureContent = readText(
       'tests/fixtures/idd-doctor-placeholders/adopter-i18n-example.ts',
-      'utf8',
     );
     writeFixtureFile(dir, 'packages/web/src/i18n/en.ts', fixtureContent);
     const report = { root: dir, errors: [], warnings: [], passes: [] };
