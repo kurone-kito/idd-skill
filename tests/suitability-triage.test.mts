@@ -22,6 +22,7 @@ import {
   fetchMergedPrFileOverlapEvidence,
   loadHighContentionFiles,
   parseArgs,
+  resolveInputMode,
   splitLocalDraftTitleAndBody,
 } from '../src/scripts/suitability-triage.mts';
 
@@ -2710,6 +2711,43 @@ test('parseArgs recognizes --body-file and --stdin, defaulting both to absent/fa
   const issueArgs = parseArgs(['--issue', '42']);
   assert.equal(issueArgs.bodyFile, undefined);
   assert.equal(issueArgs.stdin, false);
+});
+
+test('resolveInputMode returns "issue" for --issue alone and "local" for --body-file or --stdin alone', () => {
+  assert.equal(
+    resolveInputMode({ issue: 42, bodyFile: undefined, stdin: false }),
+    'issue',
+  );
+  assert.equal(
+    resolveInputMode({ issue: null, bodyFile: 'draft.md', stdin: false }),
+    'local',
+  );
+  assert.equal(
+    resolveInputMode({ issue: null, bodyFile: undefined, stdin: true }),
+    'local',
+  );
+});
+
+test('resolveInputMode throws when no input mode is selected', () => {
+  assert.throws(
+    () => resolveInputMode({ issue: null, bodyFile: undefined, stdin: false }),
+    /one of --issue, --body-file, or --stdin is required/,
+  );
+});
+
+test('resolveInputMode throws when more than one input mode is selected', () => {
+  assert.throws(
+    () => resolveInputMode({ issue: 42, bodyFile: undefined, stdin: true }),
+    /choose only one of --issue, --body-file, or --stdin/,
+  );
+  assert.throws(
+    () => resolveInputMode({ issue: 42, bodyFile: 'draft.md', stdin: false }),
+    /choose only one of --issue, --body-file, or --stdin/,
+  );
+  assert.throws(
+    () => resolveInputMode({ issue: null, bodyFile: 'draft.md', stdin: true }),
+    /choose only one of --issue, --body-file, or --stdin/,
+  );
 });
 
 const LOCAL_GOOD_DRAFT = `# feat: add deterministic helper

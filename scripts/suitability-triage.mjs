@@ -974,15 +974,13 @@ export function checkVerifiability(context) {
       'Issue includes objective verification language and substantive criteria.',
   };
 }
-function runCli() {
-  const args = parseArgs(process.argv.slice(2));
-  if (args.help) {
-    printHelp();
-    process.exit(0);
-  }
-  // #2102: --issue, --body-file, and --stdin select mutually exclusive
-  // input modes; exactly one is required. --body-file/--stdin never touch
-  // the network -- validated before any of the --issue-only setup below.
+/**
+ * #2102: `--issue`, `--body-file`, and `--stdin` select mutually exclusive
+ * input modes; exactly one is required. Exported (and thus independently
+ * testable) so both `throw` branches can be exercised without invoking
+ * `runCli`'s own process-level side effects (env mutation, `gh` calls).
+ */
+export function resolveInputMode(args) {
   const inputModeCount =
     (args.issue !== null ? 1 : 0) +
     (args.bodyFile ? 1 : 0) +
@@ -993,7 +991,17 @@ function runCli() {
   if (inputModeCount > 1) {
     throw new Error('choose only one of --issue, --body-file, or --stdin');
   }
-  if (args.bodyFile || args.stdin) {
+  return args.bodyFile || args.stdin ? 'local' : 'issue';
+}
+function runCli() {
+  const args = parseArgs(process.argv.slice(2));
+  if (args.help) {
+    printHelp();
+    process.exit(0);
+  }
+  // #2102: --body-file/--stdin never touch the network -- resolved before
+  // any of the --issue-only setup below.
+  if (resolveInputMode(args) === 'local') {
     runLocalCli(args);
     return;
   }
