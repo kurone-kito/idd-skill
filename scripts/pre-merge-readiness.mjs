@@ -36,7 +36,6 @@ import {
   buildPreMergeReadinessSummary,
   DEFAULT_STALE_AGE_MS,
   deriveIddAgentLogins,
-  findLastCopilotReviewCommit,
   normalizeTrustedMarkerLogins,
   operationalMarkerPrefix,
   parsePaginatedGhNdjson,
@@ -47,7 +46,10 @@ import {
   resolveTrustedMarkerActors,
   selectCodeownersText,
 } from './protocol-helpers.mjs';
-import { fetchReviewsAndHeadCommit } from './review-clause.mjs';
+import {
+  fetchReviewsAndHeadCommit,
+  resolveLatestCopilotReviewClause,
+} from './review-clause.mjs';
 
 // GitHub's GraphQL `DateTime` scalar can't be null, so a `CheckRun` that
 // has not completed yet (and a `StatusContext`, which has no completedAt
@@ -375,6 +377,24 @@ export function collectPreMergeReadiness(argv) {
   const now = args.now || new Date().toISOString().replace('.000Z', 'Z');
   const normalizedComments = comments.map(normalizeComment);
   const normalizedReviews = reviews.map(normalizeReview);
+  // #2021: fetch the current HEAD commit's own `committedDate`, plus every
+  // PR review, via the SAME GraphQL query `advisory-convergence.mts`'s own
+  // deadline clock and Clause-1 review evidence both read
+  // (`fetchReviewsAndHeadCommit`, extracted to `review-clause.mts` precisely
+  // so a second, independent caller can reuse this exact evidence instead of
+  // a second ad-hoc GraphQL path that could drift out of sync with it -- see
+  // that module's header). Deliberately uncaught, same rationale as
+  // `copilotUnavailable` below: a lookup failure must crash this evidence
+  // collector rather than silently resolve to an empty `headCommittedAt`,
+  // which would make `advisoryConvergenceDeadlinePassed` fail closed to
+  // `false` for the wrong reason (masking a genuinely-open deadline as
+  // unreadable evidence instead of surfacing the fetch failure).
+  const {
+    reviews: advisoryConvergenceReviews,
+    headCommittedAt: advisoryConvergenceHeadCommittedAt,
+  } = fetchReviewsAndHeadCommit(owner, repo, args.prNumber);
+  const advisoryConvergenceDeadlineMinutes =
+    readAdvisoryConvergenceDeadlineMinutes();
   // #1570: precompute the `#1572` terminal Copilot-unavailability verdict
   // here (the CLI/orchestration layer) rather than inside
   // `buildPreMergeReadinessSummary` (protocol-helpers.mts), which cannot
@@ -393,10 +413,29 @@ export function collectPreMergeReadiness(argv) {
   // collectors only"): a crash here is evidence collection failing
   // loudly, and callers already know to fall back to the portable
   // gh/jq/API procedure rather than trust a helper that could not run.
-  const lastCopilotCommit = findLastCopilotReviewCommit(
-    normalizedReviews,
+  //
+  // #2042: `lastCopilotCommit` now resolves via
+  // `resolveLatestCopilotReviewClause` against the SAME GraphQL review
+  // evidence (`advisoryConvergenceReviews`, absolute-latest by fetch order)
+  // `advisory-convergence.mts`'s own required check uses for its identical
+  // `review.commitId` input (advisory-convergence.mts ~line 1087) -- not
+  // the separate REST/`submittedAt`-sorted `findLastCopilotReviewCommit`
+  // path this caller used before. That prior REST path is a second,
+  // independently-timed fetch that can disagree with the GraphQL evidence
+  // under a force-push/revert reordering (advisory-convergence.mts's own
+  // comment on this exact gap, ~line 1070); `copilotUnavailable` computed
+  // here is the sole evidence source for BOTH the `idd-advisory-convergence`
+  // waiver precondition below AND the dedicated `copilot-terminal-unavailable`
+  // blocker (`buildPreMergeReadinessSummary`'s `options.copilotUnavailable`,
+  // reported back as `advisoryWait.copilotUnavailable` -- there is no
+  // separate source to preserve for that second consumer; both already
+  // shared this single value before this fix, so unifying the evidence
+  // source here fixes both at once).
+  const lastCopilotCommit = resolveLatestCopilotReviewClause(
+    advisoryConvergenceReviews,
+    prHeadSha,
     primaryBotLogin,
-  );
+  ).commitId;
   const copilotRecovery = buildCopilotRecoverySummary(
     { comments: normalizedComments, prHeadSha, lastCopilotCommit },
     {
@@ -409,23 +448,6 @@ export function collectPreMergeReadiness(argv) {
     },
   );
   const copilotUnavailable = copilotRecovery.state === 'COPILOT_UNAVAILABLE';
-  // #2021: fetch the current HEAD commit's own `committedDate` via the SAME
-  // GraphQL field `advisory-convergence.mts`'s own deadline clock reads
-  // (`fetchReviewsAndHeadCommit`, extracted to `review-clause.mts` precisely
-  // so a second, independent caller can reuse this exact evidence instead of
-  // a second ad-hoc GraphQL path that could drift out of sync with it -- see
-  // that module's header). Only `headCommittedAt` is used here; the
-  // paginated `reviews` return value is discarded since this caller already
-  // fetched reviews separately via REST above. Deliberately uncaught, same
-  // rationale as `copilotUnavailable` immediately above: a lookup failure
-  // must crash this evidence collector rather than silently resolve to an
-  // empty `headCommittedAt`, which would make `advisoryConvergenceDeadlinePassed`
-  // fail closed to `false` for the wrong reason (masking a genuinely-open
-  // deadline as unreadable evidence instead of surfacing the fetch failure).
-  const { headCommittedAt: advisoryConvergenceHeadCommittedAt } =
-    fetchReviewsAndHeadCommit(owner, repo, args.prNumber);
-  const advisoryConvergenceDeadlineMinutes =
-    readAdvisoryConvergenceDeadlineMinutes();
   const summary = buildPreMergeReadinessSummary(
     {
       prHeadSha,

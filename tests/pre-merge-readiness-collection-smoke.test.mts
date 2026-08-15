@@ -165,6 +165,16 @@ function ndjson(items: unknown[]): string {
   return items.map((item) => JSON.stringify(item)).join('\n');
 }
 
+// #2042: `fetchReviewsAndHeadCommit`'s fixture `committedDate`, hoisted to
+// module scope so the stub script (which embeds it) and the end-to-end
+// assertion below (which checks the parsed value round-tripped correctly)
+// share one source of truth instead of two independently-typed literals.
+// 1h before this suite's fixed `--now` (2026-08-01T00:00:00Z), well inside
+// the 24h default deadline, so `advisoryConvergenceDeadlinePassed` stays
+// `false` and this fixture does not perturb either scenario's existing
+// `ready`/blockers assertions.
+const REVIEWS_AND_HEAD_COMMIT_COMMITTED_DATE = '2026-07-31T23:00:00Z';
+
 /**
  * Build a stub `gh` Node script answering every call
  * `collectPreMergeReadiness` makes for the fixed OWNER/REPO/PR_NUMBER/
@@ -246,6 +256,39 @@ function buildStubGhScript(threadResolved: boolean): string {
       },
     },
   };
+  // #2042: `fetchReviewsAndHeadCommit` (review-clause.mts) issues its OWN
+  // `gh api graphql` call, distinct from the review-threads query above --
+  // matches on the `reviewThreads(` field name unique to that query (see
+  // the stub script below).
+  const reviewsAndHeadCommitPayload = {
+    data: {
+      repository: {
+        pullRequest: {
+          reviews: {
+            pageInfo: { hasNextPage: false, endCursor: null },
+            nodes: [
+              {
+                commit: { oid: prView.headRefOid },
+                submittedAt: '2026-07-31T12:00:00Z',
+                author: { login: 'reviewer-user', __typename: 'User' },
+                comments: { totalCount: 0 },
+                body: '',
+              },
+            ],
+          },
+          commits: {
+            nodes: [
+              {
+                commit: {
+                  committedDate: REVIEWS_AND_HEAD_COMMIT_COMMITTED_DATE,
+                },
+              },
+            ],
+          },
+        },
+      },
+    },
+  };
 
   // Each branch below matches one distinct call `collectPreMergeReadiness`
   // makes. An unmatched call falls through to the final handler, which
@@ -271,7 +314,8 @@ if (a(0) === 'api' && a(1) === '${`repos/${REPO_REF}/pulls/${PR_NUMBER}/requeste
 if (a(0) === 'api' && a(1) === '${`repos/${REPO_REF}/issues/${PR_NUMBER}/timeline`}') out('');
 if (a(0) === 'api' && a(1) === '${`repos/${REPO_REF}/issues/${PR_NUMBER}/comments`}') out(${JSON.stringify(ndjson(prComments))});
 if (a(0) === 'api' && a(1) === '${`repos/${REPO_REF}/issues/${CLAIM_ISSUE}/comments`}') out(${JSON.stringify(ndjson(claimComments))});
-if (a(0) === 'api' && a(1) === 'graphql') out(${JSON.stringify(JSON.stringify(reviewThreadsPayload))});
+if (a(0) === 'api' && a(1) === 'graphql' && args.join(' ').includes('reviewThreads(')) out(${JSON.stringify(JSON.stringify(reviewThreadsPayload))});
+if (a(0) === 'api' && a(1) === 'graphql') out(${JSON.stringify(JSON.stringify(reviewsAndHeadCommitPayload))});
 if (a(0) === 'api' && a(1) === '${`repos/${REPO_REF}/pulls/${PR_NUMBER}/files`}') out(${JSON.stringify(ndjson(changedFiles))});
 if (a(0) === 'api' && String(a(1)).startsWith('${`repos/${REPO_REF}/contents/`}')) notFound();
 process.stderr.write('unexpected gh invocation: ' + args.join(' ') + '\\n');
@@ -375,6 +419,20 @@ test('pre-merge-readiness.mjs CLI: clean scenario collects and normalizes raw gh
   };
   assert.equal(dispositionEvidence.missingThreads[0]?.id, 'RT_1');
   assert.equal(dispositionEvidence.missingThreads[0]?.isResolved, true);
+
+  // #2042: `fetchReviewsAndHeadCommit`'s own `gh api graphql` call must
+  // receive `reviewsAndHeadCommitPayload`, not `reviewThreadsPayload` --
+  // asserting the parsed `headCommittedAt` end-to-end catches a stub (or
+  // production query) drift that would otherwise silently leave this call
+  // site fed the wrong payload shape (it would parse to `''`/"none"
+  // without failing this test, the exact gap #2042 closes).
+  const precondition = report.advisoryConvergenceWaiverPrecondition as {
+    headCommittedAt: string;
+  };
+  assert.equal(
+    precondition.headCommittedAt,
+    REVIEWS_AND_HEAD_COMMIT_COMMITTED_DATE,
+  );
 });
 
 test('pre-merge-readiness.mjs CLI: blocked scenario (one unresolved review thread) surfaces it end-to-end', () => {
