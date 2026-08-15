@@ -1226,7 +1226,8 @@
         "wrongClaim",
         "unauthorized",
         "malformed",
-        "notConfigured"
+        "notConfigured",
+        "modeDisabled"
       ],
       "additionalProperties": false,
       "properties": {
@@ -1395,6 +1396,33 @@
         "notConfigured": {
           "type": "array",
           "description": "Waivers that passed every validity check but name a check the policy never declared waivable; excluded from valid and never fold a check into requiredChecksPassing.",
+          "items": {
+            "type": "object",
+            "required": [
+              "authorLogin",
+              "checkSelector",
+              "expiresAt"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "authorLogin": {
+                "type": "string",
+                "description": "Login of the waiver's author, normalized to lowercase."
+              },
+              "checkSelector": {
+                "type": "string",
+                "description": "Check-name selector the waiver targets."
+              },
+              "expiresAt": {
+                "type": "string",
+                "description": "Waiver's recorded expiry timestamp."
+              }
+            }
+          }
+        },
+        "modeDisabled": {
+          "type": "array",
+          "description": "#2046: waivers that passed every validity and waivable-selector check but the policy's ciGate.externalCheckWaivers.mode is not maintainer-authorized; excluded from valid and never fold a check into requiredChecksPassing, mirroring advisory-convergence.mts's own mode guard.",
           "items": {
             "type": "object",
             "required": [

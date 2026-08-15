@@ -588,6 +588,7 @@ export function collectPreMergeReadiness(
   const forcedHandoffPermissionCache: CollaboratorPermissionCache = new Map();
   const waivableCheckSelectors = readWaivableCheckSelectors();
   const externalCheckWaiverMaxValidity = readExternalCheckWaiverMaxValidity();
+  const externalCheckWaiverMode = readExternalCheckWaiverMode();
   const trustSourcePinnedRequiredChecks = readTrustSourcePinnedRequiredChecks();
   const staleAgeMs = readClaimStaleAgeMs();
   const now = args.now || new Date().toISOString().replace('.000Z', 'Z');
@@ -701,6 +702,7 @@ export function collectPreMergeReadiness(
       advisoryConvergenceDeadlineMinutes,
       waivableCheckSelectors,
       externalCheckWaiverMaxValidity,
+      externalCheckWaiverMode,
       trustSourcePinnedRequiredChecks,
       staleAgeMs,
       forcedHandoffEnabled,
@@ -1514,6 +1516,22 @@ function readExternalCheckWaiverMaxValidity(): string {
     ).ciGate.externalCheckWaivers.maxValidity;
   } catch {
     return 'PT24H';
+  }
+}
+
+// Configured external-check waiver mode (`ciGate.externalCheckWaivers.mode`,
+// #2046). `mode` gates the WHOLE waiver mechanism independent of the
+// `waivable` selector list -- an absent or unreadable config falls back to
+// `normalizePolicyConfig`'s own schema default (`disabled`), matching
+// `advisory-convergence.mts`'s own guard rather than leaving an
+// otherwise-valid waiver uncovered by this check alone.
+function readExternalCheckWaiverMode(): string {
+  try {
+    return normalizePolicyConfig(
+      JSON.parse(readFileSync('.github/idd/config.json', 'utf8')),
+    ).ciGate.externalCheckWaivers.mode;
+  } catch {
+    return 'disabled';
   }
 }
 

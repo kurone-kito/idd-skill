@@ -346,6 +346,18 @@ export interface ExternalCheckWaiverEvidence {
     checkSelector: string;
     expiresAt: string;
   }[];
+  /**
+   * Waivers that passed every validity and waivable-selector check but the
+   * policy's `ciGate.externalCheckWaivers.mode` is not `maintainer-authorized`
+   * (#2046); they are excluded from `valid` and never fold a check into
+   * `requiredChecksPassing`, mirroring `advisory-convergence.mts`'s own
+   * mode guard.
+   */
+  modeDisabled: {
+    authorLogin: string;
+    checkSelector: string;
+    expiresAt: string;
+  }[];
 }
 
 /** Classification outcome for a single review thread at the gate. */
@@ -633,6 +645,7 @@ export function summarizeExternalCheckWaivers(
     now = '',
     waivableSelectors = null,
     maxValidity = '',
+    mode = '',
   }: {
     prHeadSha?: string;
     activeClaimId?: unknown;
@@ -644,6 +657,14 @@ export function summarizeExternalCheckWaivers(
     // direct callers that omit it keep the legacy behavior; the F2/F3 gate
     // always threads the policy value (default `PT24H`).
     maxValidity?: string;
+    // Configured `ciGate.externalCheckWaivers.mode` (#2046). An empty value
+    // (direct callers that omit it) leaves the mode gate off, matching the
+    // pre-#2046 legacy behavior; the F2/F3 gate always threads the policy
+    // value so an otherwise-valid waiver never counts while the schema
+    // default (`disabled`) is in effect, mirroring
+    // `advisory-convergence.mts`'s own `waiverMode === 'maintainer-authorized'`
+    // guard.
+    mode?: string;
   } = {},
 ): ExternalCheckWaiverEvidence {
   const trustedSet = new Set(normalizeTrustedMarkerLogins(trustedMarkerLogins));
@@ -659,6 +680,11 @@ export function summarizeExternalCheckWaivers(
   const unauthorized: ExternalCheckWaiverEvidence['unauthorized'] = [];
   const malformed: ExternalCheckWaiverEvidence['malformed'] = [];
   const notConfigured: ExternalCheckWaiverEvidence['notConfigured'] = [];
+  const modeDisabled: ExternalCheckWaiverEvidence['modeDisabled'] = [];
+  // An empty `mode` leaves this gate off (legacy/unit-caller default); a
+  // non-empty value must equal `maintainer-authorized` exactly, mirroring
+  // `advisory-convergence.mts`'s own guard.
+  const modeGateOpen = mode === '' || mode === 'maintainer-authorized';
 
   for (const comment of comments ?? []) {
     const body = String(comment?.body ?? '');
@@ -775,6 +801,22 @@ export function summarizeExternalCheckWaivers(
       continue;
     }
 
+    // #2046: `mode` gates the whole waiver mechanism, independent of the
+    // `waivable` selector list -- an otherwise-valid, correctly-configured
+    // waiver must never count while the policy's
+    // `ciGate.externalCheckWaivers.mode` is not `maintainer-authorized`
+    // (schema default: `disabled`), matching `advisory-convergence.mts`'s
+    // own required check, which never even evaluates waiver evidence
+    // outside that mode.
+    if (!modeGateOpen) {
+      modeDisabled.push({
+        authorLogin,
+        checkSelector: parsed.checkSelector,
+        expiresAt: parsed.expiresAt,
+      });
+      continue;
+    }
+
     valid.push({
       authorLogin,
       checkSelector: parsed.checkSelector,
@@ -791,6 +833,7 @@ export function summarizeExternalCheckWaivers(
     unauthorized,
     malformed,
     notConfigured,
+    modeDisabled,
   };
 }
 
@@ -6074,6 +6117,11 @@ export function buildPreMergeReadinessSummary(
     // (window check off); `collectPreMergeReadiness` always sources the policy
     // value (default `PT24H`).
     externalCheckWaiverMaxValidity?: string;
+    // Configured `ciGate.externalCheckWaivers.mode` (#2046), threaded to the
+    // consume-side mode gate. Omitted by unit callers (gate off, unchanged
+    // pre-#2046 behavior); `collectPreMergeReadiness` always sources the
+    // policy value (default `disabled`).
+    externalCheckWaiverMode?: string;
     // Configured `claimTiming.staleAge` (#1310), parsed to milliseconds and
     // threaded to the write-gate claim resolver below so the F2/F3 merge gate
     // honors it instead of the hardcoded 24h `isStaleAt` default. Omitted by
@@ -6250,6 +6298,7 @@ export function buildPreMergeReadinessSummary(
     now,
     waivableSelectors: waivableCheckSelectors,
     maxValidity: options.externalCheckWaiverMaxValidity ?? '',
+    mode: options.externalCheckWaiverMode ?? '',
   });
 
   // #1570: the caller-supplied terminal-unavailability verdict, reused below

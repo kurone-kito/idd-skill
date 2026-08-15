@@ -152,6 +152,7 @@ export function summarizeExternalCheckWaivers(
     now = '',
     waivableSelectors = null,
     maxValidity = '',
+    mode = '',
   } = {},
 ) {
   const trustedSet = new Set(normalizeTrustedMarkerLogins(trustedMarkerLogins));
@@ -166,6 +167,11 @@ export function summarizeExternalCheckWaivers(
   const unauthorized = [];
   const malformed = [];
   const notConfigured = [];
+  const modeDisabled = [];
+  // An empty `mode` leaves this gate off (legacy/unit-caller default); a
+  // non-empty value must equal `maintainer-authorized` exactly, mirroring
+  // `advisory-convergence.mts`'s own guard.
+  const modeGateOpen = mode === '' || mode === 'maintainer-authorized';
   for (const comment of comments ?? []) {
     const body = String(comment?.body ?? '');
     // Prefilter on a marker-start, case-insensitive match aligned with
@@ -272,6 +278,21 @@ export function summarizeExternalCheckWaivers(
       });
       continue;
     }
+    // #2046: `mode` gates the whole waiver mechanism, independent of the
+    // `waivable` selector list -- an otherwise-valid, correctly-configured
+    // waiver must never count while the policy's
+    // `ciGate.externalCheckWaivers.mode` is not `maintainer-authorized`
+    // (schema default: `disabled`), matching `advisory-convergence.mts`'s
+    // own required check, which never even evaluates waiver evidence
+    // outside that mode.
+    if (!modeGateOpen) {
+      modeDisabled.push({
+        authorLogin,
+        checkSelector: parsed.checkSelector,
+        expiresAt: parsed.expiresAt,
+      });
+      continue;
+    }
     valid.push({
       authorLogin,
       checkSelector: parsed.checkSelector,
@@ -287,6 +308,7 @@ export function summarizeExternalCheckWaivers(
     unauthorized,
     malformed,
     notConfigured,
+    modeDisabled,
   };
 }
 export function findLiveStatusDigestComments(comments) {
@@ -4912,6 +4934,7 @@ export function buildPreMergeReadinessSummary(
     now,
     waivableSelectors: waivableCheckSelectors,
     maxValidity: options.externalCheckWaiverMaxValidity ?? '',
+    mode: options.externalCheckWaiverMode ?? '',
   });
   // #1570: the caller-supplied terminal-unavailability verdict, reused below
   // both for the dedicated `copilot-terminal-unavailable` blocker and (#2021)

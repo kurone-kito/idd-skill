@@ -277,7 +277,8 @@
       "wrongClaim": [],
       "unauthorized": [],
       "malformed": [],
-      "notConfigured": []
+      "notConfigured": [],
+      "modeDisabled": []
     },
     "advisoryConvergenceWaiverPrecondition": {
       "checkSelector": "idd-advisory-convergence",
