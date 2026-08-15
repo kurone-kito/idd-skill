@@ -22,8 +22,9 @@ discipline and has no tag.
   header-memory issues and the CVE-2026-58043 Permission Model
   over-grant), the previously-unbounded `>=24.2.0` tail is now capped
   below the already-end-of-life 25.x line, and a new `>=26.0.0` clause
-  opens the current Active LTS-track line. The 24.x floor itself is
-  unchanged (still feature-motivated by `import.meta.main`).
+  opens the new Current line (enters Active LTS 2026-10-28). The 24.x
+  floor itself is unchanged (still feature-motivated by
+  `import.meta.main`).
 
 ## [0.6.0] - 2026-08-07
 

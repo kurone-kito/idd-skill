@@ -51,11 +51,14 @@ jobs:
           # including the patch/minor digits, so the error message's
           # claimed range is actually what the check enforces.
           node -e '
-            const [major, minor, patch] = process.versions.node.split(".").map(Number);
+            const versionParts = process.versions.node.split(".");
+            const [major, minor, patch] = versionParts.map(Number);
+            const isPrerelease = versionParts.some((part) => part.includes("-"));
             const ok =
-              (major === 22 && (minor > 23 || (minor === 23 && patch >= 2))) ||
-              (major === 24 && minor >= 2) ||
-              major >= 26;
+              !isPrerelease &&
+              ((major === 22 && (minor > 23 || (minor === 23 && patch >= 2))) ||
+                (major === 24 && minor >= 2) ||
+                major >= 26);
             if (!ok) {
               console.error(
                 "Node " + process.version + " does not satisfy this " +
