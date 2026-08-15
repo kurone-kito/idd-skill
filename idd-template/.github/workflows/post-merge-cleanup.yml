@@ -302,19 +302,24 @@ jobs:
           RETRY_ATTEMPTS: ${{ steps.cleanup.outputs.retry_attempts }}
           RETRY_BOUND_EXHAUSTED: ${{ steps.cleanup.outputs.retry_bound_exhausted }}
         run: |
-          # Avoid duplicate evidence comments. Workflow-level concurrency
-          # only serialises this workflow's own runs; an agent F4 (or a
-          # maintainer rerunning workflow_dispatch on the same PR) can
-          # still have posted an evidence comment outside this run. Skip
-          # if a <!-- idd-cleanup-evidence: ... --> comment already on the
-          # PR was posted by a trusted author -- this workflow's own posts
-          # are authored by `github-actions[bot]` (the GITHUB_TOKEN actor),
-          # and an agent's local F4 post is authored by a configured
-          # `trustedMarkerActors` login. An untrusted commenter pre-posting
-          # this marker prefix must never suppress the genuine evidence
-          # post or be treated as a completed cleanup record (this is the
-          # same trust-scoping every other IDD operational marker already
-          # applies).
+          # Avoid duplicate evidence comments, but only on a genuinely
+          # converged outcome. Workflow-level concurrency only serialises
+          # this workflow's own runs; an agent F4 (or a maintainer
+          # rerunning workflow_dispatch on the same PR) can still have
+          # posted an evidence comment outside this run. Skip only when
+          # the latest trusted <!-- idd-cleanup-evidence: {status} ... -->
+          # comment already records `applied` or `clean` -- a trusted
+          # comment recording any other status (`failed`, `incomplete`,
+          # `rescan-failed`, `permission-blocked`) invites a retry, so a
+          # rerun must post fresh evidence for its own outcome instead of
+          # leaving stale non-success evidence as the PR's only record.
+          # "Trusted" scoping: this workflow's own posts are authored by
+          # `github-actions[bot]` (the GITHUB_TOKEN actor), and an agent's
+          # local F4 post is authored by a configured `trustedMarkerActors`
+          # login. An untrusted commenter pre-posting this marker prefix
+          # must never suppress the genuine evidence post or be treated as
+          # a completed cleanup record (this is the same trust-scoping
+          # every other IDD operational marker already applies).
           # This step runs under the default GitHub Actions bash flags
           # (-eo pipefail), so a plain `jq ... .github/idd/config.json`
           # would abort the whole step under `set -e` when the file is
@@ -336,20 +341,27 @@ jobs:
           # empty and post a duplicate evidence comment on a transient
           # `gh api` failure (rate limit/network). A plain command
           # substitution assignment does trip `-e` on failure.
+          #
+          # The API returns issue comments in creation-ascending order, so
+          # iterating every match without an early `break` and keeping the
+          # last assignment leaves EXISTING/EXISTING_STATUS holding the
+          # *latest* trusted comment, not merely the first one found.
           COMMENTS_TSV=$(gh api --paginate \
             "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments" \
-            --jq '.[] | select(.body | startswith("<!-- idd-cleanup-evidence:")) | [.id, .user.login] | @tsv')
+            --jq '.[] | select(.body | startswith("<!-- idd-cleanup-evidence:")) | [.id, .user.login, (.body | split("\n")[0])] | @tsv')
           EXISTING=""
-          while IFS=$'\t' read -r candidate_id candidate_login; do
+          EXISTING_STATUS=""
+          while IFS=$'\t' read -r candidate_id candidate_login candidate_marker_line; do
             [ -z "$candidate_id" ] && continue
             lower_login=$(printf '%s' "$candidate_login" | tr '[:upper:]' '[:lower:]')
             if printf '%s\n' "$TRUSTED_LOGINS" | grep -Fxq "$lower_login"; then
               EXISTING="$candidate_id"
-              break
+              EXISTING_STATUS=$(printf '%s' "$candidate_marker_line" \
+                | sed -n 's/^<!-- idd-cleanup-evidence: \([^ ]*\) .*/\1/p')
             fi
           done <<< "$COMMENTS_TSV"
-          if [ -n "$EXISTING" ]; then
-            echo "::notice::PR #${PR_NUMBER} already has a trusted-author idd-cleanup-evidence comment (id: ${EXISTING}); skipping workflow post."
+          if [ -n "$EXISTING" ] && { [ "$EXISTING_STATUS" = "applied" ] || [ "$EXISTING_STATUS" = "clean" ]; }; then
+            echo "::notice::PR #${PR_NUMBER} already has a trusted-author idd-cleanup-evidence comment recording '${EXISTING_STATUS}' (id: ${EXISTING}); skipping workflow post."
             exit 0
           fi
           BODY=$(printf '%s\n\n%s\n\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n' \
