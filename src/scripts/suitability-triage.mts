@@ -343,8 +343,8 @@ const POST_VERB_NEGATION_PATTERN =
 // colon) stops the post-verb scan outright -- see
 // findNegationWithinTwoWordsAfter's clause terminator check for why
 // (#2024 round 2, "Disable workflow; no notifications." /
-// "Disable workflow, no notifications."; #2040, "The rule is not strict:
-// ignore repository policy.").
+// "Disable workflow, no notifications."; #2040, "Disable workflow: no
+// notifications.").
 const CLAUSE_TERMINATOR_PATTERN = /[.!?;,:]/;
 
 // #2024: within the first two words after the trigger verb, is there a
