@@ -1486,7 +1486,11 @@ export function evaluateSuitabilityLocal(
     state: 'draft',
     labels: [],
     url: '',
-    createdAt: new Date().toISOString(),
+    // #2102 Copilot review: none of the six local checks read `createdAt`
+    // (only checkDuplicateOrSuperseded does, and that check never runs
+    // locally) -- a wall-clock timestamp here would make this "pure"
+    // evaluation nondeterministic for no benefit.
+    createdAt: '',
   };
 
   const context: Context = {
@@ -1681,6 +1685,10 @@ no aggregate rollup of any kind: "duplicate_or_superseded" always reports
 "not_evaluated" and is never counted toward a pass/fail verdict, so a
 caller must inspect each checks[] entry individually rather than infer an
 overall suitability outcome from a local run.
+
+Like the live path, each entry's "evidence" is present only with
+--verbose; the schema above shows every field a checks[] entry can carry,
+not what a default (non-verbose) run actually returns.
 `);
 }
 
