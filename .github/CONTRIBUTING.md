@@ -31,7 +31,9 @@ existing tooling instead (see
 [Tooling boundary](../docs/customization.md#tooling-boundary)).
 
 Requires Node.js `^22.23.2 || ^24.2.0 || >=26.0.0` (this repository's `engines`
-floor in `package.json`).
+floor in `package.json`). Node.js 25 and newer no longer bundle
+Corepack — if `corepack enable` reports the command is unavailable,
+install it first with `npm install -g corepack`.
 
 ```sh
 corepack enable

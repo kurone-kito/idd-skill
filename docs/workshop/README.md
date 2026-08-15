@@ -46,8 +46,9 @@ agents use during the workshop:
   runtime (the already-end-of-life 25.x line is excluded).
 - Corepack enabled, so it provisions this repository's pinned pnpm
   version (`packageManager` in `package.json`) automatically for
-  validation commands; Node.js also includes npm for example-app
-  commands that use npm.
+  validation commands (on Node.js 25 and newer, which no longer
+  bundle Corepack, install it first with `npm install -g corepack`);
+  Node.js also includes npm for example-app commands that use npm.
 - Git and a GitHub account that can create branches, open pull requests,
   post issue and PR comments for IDD markers, request reviews, and read
   CI results.

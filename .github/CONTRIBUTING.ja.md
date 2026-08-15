@@ -33,7 +33,9 @@ Language: [🇬🇧](./CONTRIBUTING.md) | **🇯🇵** | [🇨🇳](./CONTRIBUTI
 [Tooling boundary](../docs/customization.md#tooling-boundary))。
 
 Node.js `^22.23.2 || ^24.2.0 || >=26.0.0`(このリポジトリの `package.json` が
-定める `engines` の下限)が必要です。
+定める `engines` の下限)が必要です。Node.js 25 以降は Corepack が同梱
+されなくなったため、`corepack enable` がコマンド未検出になる場合は
+先に `npm install -g corepack` でインストールしてください。
 
 ```sh
 corepack enable
