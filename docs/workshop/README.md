@@ -44,9 +44,10 @@ agents use during the workshop:
 - Node.js 22.23.2 or newer on the 22.x line, 24.2.0 or newer on the
   24.x line, or 26.0.0 or newer, matching this repository's supported
   runtime (the already-end-of-life 25.x line is excluded).
-- Corepack with pnpm 10 enabled for this repository's validation
-  commands; Node.js also includes npm for example-app commands that use
-  npm.
+- Corepack enabled, so it provisions this repository's pinned pnpm
+  version (`packageManager` in `package.json`) automatically for
+  validation commands; Node.js also includes npm for example-app
+  commands that use npm.
 - Git and a GitHub account that can create branches, open pull requests,
   post issue and PR comments for IDD markers, request reviews, and read
   CI results.
