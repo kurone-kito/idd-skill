@@ -238,6 +238,26 @@ pnpm for the default instructions-only profile (see
 a Node.js check tied to the helper-runtime-profile choice belongs at
 Step 1B's helper-runtime-profile item instead, not here.
 
+**Execution-environment prerequisites.** Separately from the `gh`
+check above, the distributed workflow's `sh`/`bash` fenced blocks
+assume a POSIX shell and common Unix utilities (`grep`, `sed`, `mkdir`,
+`dirname`, `tr`, `head`, `sort`, `curl`). On Windows, get one from Git
+for Windows (Git Bash, which bundles those utilities) or WSL — native
+`cmd.exe`/PowerShell cannot run these blocks unmodified. The
+`instructions-only` profile's advisory-wait shell fallback additionally
+needs a standalone `jq` binary on `PATH` (see
+[Advisory-Wait Shell Fallback](docs/idd-advisory-wait-shell-fallback.md));
+`gh api --jq` is built into `gh` and covers other call sites, but not
+this fallback's own commands piping into `jq -r`/`jq -s`, and neither
+`gh` nor Git for Windows installs a standalone `jq`.
+
+Native-Windows adopters should also set
+`git config --global core.longpaths true` (a one-time host-level
+setting, not a repository change): B1's sibling-worktree layout
+(`<repo>.<branch-with-slashes-dashed>` beside the primary worktree)
+combined with this repository's deep `.github/instructions/` paths can
+approach Windows' 260-character path limit.
+
 ---
 
 ## Dry-run — Readiness assessment

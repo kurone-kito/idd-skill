@@ -16,6 +16,12 @@ marker-posting and cleanup mutations.
 These commands only apply when helper-first cannot be trusted — see
 the "Fail-closed fallback trigger" section in the instruction file.
 
+**Prerequisite**: a standalone `jq` binary on `PATH`. `gh api --jq` is
+built into `gh` and needs nothing extra, but the commands below piping
+into `jq -r`/`jq -s` need the real binary, which neither `gh` nor Git
+for Windows installs (see ONBOARDING.md's Step 0 execution-environment
+prerequisites).
+
 The instruction file owns the contract (decision rules, ordering,
 fail-closed handling, and what each step must produce); this document
 is the command reference. If the contract and these commands diverge,
