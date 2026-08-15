@@ -333,13 +333,14 @@ this file in
 
 **Explicit fallback.** Every phase without a row above falls back to
 its standard instruction file — this is the documented default, not
-an implied gap. Every remaining phase is **permanently excluded by
-design**: A0-A4 Discover, A4.5 Suitability, E4-E8 Review-triage, and
-F3-F5 Merge stay on the standard file always — the design's
+an implied gap. A0-A4 Discover, A4.5 Suitability, E4-E8 Review-triage,
+and F3-F5 Merge are **permanently excluded by design**: the design's
 [non-goals](weak-model-lite-profile-design.md#target-model-class-and-non-goals)
 and phase-scoping table exclude open-ended selection, judgment-heavy
 classification, and autonomous merge from the condensed profile
-entirely, regardless of roadmap progress.
+entirely, regardless of roadmap progress. A future phase without a row
+and without a listed exclusion reason would instead mean an in-scope,
+not-yet-shipped lite file — none exist as of this writing.
 
 A lite-opted-in session encountering any of these phases reads the
 standard file the same way a standard-tier session would.
