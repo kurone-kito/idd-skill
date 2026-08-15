@@ -248,8 +248,8 @@ for Windows (Git Bash, which bundles those utilities) or WSL — native
 needs a standalone `jq` binary on `PATH` (see
 [Advisory-Wait Shell Fallback](docs/idd-advisory-wait-shell-fallback.md));
 `gh api --jq` is built into `gh` and covers other call sites, but not
-this fallback's own `jq -r`/`jq -s`-piped ones, and neither `gh` nor Git
-for Windows installs a standalone `jq`.
+this fallback's own commands piping into `jq -r`/`jq -s`, and neither
+`gh` nor Git for Windows installs a standalone `jq`.
 
 Native-Windows adopters should also set
 `git config --global core.longpaths true` (a one-time host-level
