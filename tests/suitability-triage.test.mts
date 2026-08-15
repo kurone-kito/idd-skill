@@ -2699,6 +2699,20 @@ test('splitLocalDraftTitleAndBody does not extract an H1 that is not the first c
   assert.equal(body, text);
 });
 
+test('splitLocalDraftTitleAndBody skips leading blank lines before the H1', () => {
+  const { title, body } = splitLocalDraftTitleAndBody(
+    '\n\n# feat: skip leading blanks\n\nbody text\n',
+  );
+  assert.equal(title, 'feat: skip leading blanks');
+  assert.equal(body, 'body text\n');
+});
+
+test('splitLocalDraftTitleAndBody extracts a title with no trailing newline', () => {
+  const { title, body } = splitLocalDraftTitleAndBody('# feat: only a title');
+  assert.equal(title, 'feat: only a title');
+  assert.equal(body, '');
+});
+
 test('parseArgs recognizes --body-file and --stdin, defaulting both to absent/false', () => {
   const bodyFileArgs = parseArgs(['--body-file', 'draft.md']);
   assert.equal(bodyFileArgs.bodyFile, 'draft.md');

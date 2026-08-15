@@ -1692,20 +1692,26 @@ overall suitability outcome from a local run.
  *
  * A leading `# Title` line (a single Markdown H1, the common convention
  * for a drafted issue file that mirrors what GitHub's own title field will
- * hold) is extracted as the title; any blank lines immediately following
- * it are also consumed so the remaining body does not start with stray
- * leading blank lines. Anything else -- no H1, or an H1 that is not the
- * very first non-blank content -- leaves the title empty and the entire
- * input becomes the body unchanged: `checkCoherence` and the other checks
- * below already tolerate an empty title (see the live path's own
- * `normalizeIssue`, which defaults a genuinely missing title to `''`), so
- * under-splitting fails safe rather than guessing.
+ * hold) is extracted as the title -- any blank lines *before* it are
+ * skipped first, so it need not be the literal first line, only the first
+ * non-blank content, and it needs no trailing newline of its own (a draft
+ * whose entire content is `# Title` still extracts correctly). Any blank
+ * lines immediately following the H1 line are also consumed so the
+ * remaining body does not start with stray leading blank lines. Anything
+ * else -- no H1, or an H1 preceded by non-blank content -- leaves the
+ * title empty and the entire input becomes the body unchanged:
+ * `checkCoherence` and the other checks below already tolerate an empty
+ * title (see the live path's own `normalizeIssue`, which defaults a
+ * genuinely missing title to `''`), so under-splitting fails safe rather
+ * than guessing.
  */
 export function splitLocalDraftTitleAndBody(text: string): {
   title: string;
   body: string;
 } {
-  const match = text.match(/^[ \t]*#[ \t]+(\S[^\n]*?)[ \t]*\r?\n/);
+  const match = text.match(
+    /^(?:[ \t]*\r?\n)*[ \t]*#[ \t]+(\S[^\n]*?)[ \t]*(?:\r?\n|$)/,
+  );
   if (!match) {
     return { title: '', body: text };
   }
