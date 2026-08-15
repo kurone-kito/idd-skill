@@ -4433,8 +4433,8 @@ export function summarizeRequiredChecks(
     // precondition opens, and (deadline path only) the precondition-open
     // moment is a real, computable timestamp later than the waiver's own
     // `createdAt` could be. The terminal-unavailability path has no natural
-    // timestamp to invent, so it is left unoverridden and falls back to the
-    // waiver's own `createdAt`, same as the generic path.
+    // timestamp to invent, so no override is applied and it falls back to
+    // the waiver's own `createdAt`, same as the generic path.
     waiverActiveSinceOverride?: ((checkName: string) => string | null) | null;
     // #1689: `ciGate.trustSourcePinnedRequiredChecks` opt-in (mirrors
     // `ciGate.trustEmptyProtectionReads`'s shape). Default `false` keeps the
