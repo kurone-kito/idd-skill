@@ -192,7 +192,7 @@ GH_TOKEN="${GH_TOKEN:-$(gh auth token)}"
 curl -X POST "https://api.github.com/repos/{owner}/{repo}/issues/{pr-number}/comments" \
   -H "Authorization: Bearer ${GH_TOKEN}" \
   -H "Content-Type: application/json" \
-  -d "{\"body\":\"advisory-wait-recovery: {agent-id} {PR_HEAD_SHA} {ISO8601-timestamp} claim:{claim-id} attempt:{n}\"}"
+  -d "{\"body\":\"advisory-wait-recovery: {agent-id} {PR_HEAD_SHA} {ISO8601-recovery-time} claim:{claim-id} attempt:{n}\"}"
 ```
 
 ## AW3-H
