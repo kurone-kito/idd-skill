@@ -1735,6 +1735,17 @@ test('collectEnginesRangeMirrorViolations: fails closed on content after the tra
   ]);
 });
 
+test('collectEnginesRangeMirrorViolations: fails closed on a bare ^ clause with no trailing >= clause', () => {
+  const violations = collectEnginesRangeMirrorViolations(
+    '^22.22.2',
+    [],
+    () => '',
+  );
+  assert.deepEqual(violations, [
+    'engines-range-mirrors: engines.node "^22.22.2" does not match the expected "^<v1> (|| ^<vN>)* || >=<high>" shape; cannot verify mirrors',
+  ]);
+});
+
 test('collectEnginesRangeMirrorViolations: reports an unreadable mirror file instead of throwing', () => {
   const violations = collectEnginesRangeMirrorViolations(
     ENGINES_NODE,
