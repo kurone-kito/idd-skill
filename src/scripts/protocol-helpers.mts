@@ -7,6 +7,7 @@
 import { Buffer } from 'node:buffer';
 import {
   DEFAULT_ADVISORY_CONVERGENCE_CHECK_SELECTOR,
+  DEFAULT_ADVISORY_CONVERGENCE_DEADLINE_MINUTES,
   DEFAULT_ADVISORY_PRIMARY_BOT_LOGIN,
   normalizeAdvisoryWaitRuntimeOptions,
 } from './advisory-wait-policy.mts';
@@ -545,6 +546,19 @@ export function parsePaginatedGhNdjson(raw: unknown): unknown[] {
       return Array.isArray(value) ? value : [value];
     });
 }
+
+/** Check-run states treated as pass-equivalent for the CI required-check
+ * gate: a check in one of these states is never eligible for waiver
+ * coverage (already passing, or intentionally not run) and never counts as
+ * a genuinely non-passing cause. Hoisted to module scope (#2021) so both
+ * {@link summarizeRequiredChecks} and {@link computePreMergeReadinessBlockers}
+ * share one definition instead of two independently-maintained copies. */
+const CHECK_PASS_EQUIVALENT_STATES = new Set([
+  'SUCCESS',
+  'SKIPPED',
+  'NEUTRAL',
+  'NOT_APPLICABLE',
+]);
 
 function matchCheckSelectorLocal(
   name: unknown,
@@ -4329,11 +4343,26 @@ export function summarizeRequiredChecks(
     waivableSelectors = null,
     protectionReadsUnreadable = false,
     trustSourcePinnedRequiredChecks = false,
+    excludeFromWaiverCoverage = null,
   }: {
     waivers?: { valid?: { checkSelector?: unknown }[] | null } | null;
     waivableSelectors?: { selector?: unknown; matchMode?: unknown }[] | null;
     // #1377: see `buildPreMergeReadinessSummary`'s option of the same name.
     protectionReadsUnreadable?: boolean;
+    // #2021 (Codex review on PR #2033): surgical per-CHECK-NAME override that
+    // withholds `coveredByWaiver` for one specific check regardless of which
+    // `waivers.valid` entry would otherwise match it -- WITHOUT filtering
+    // that entry out of `waivers.valid` itself, so any OTHER check the same
+    // (e.g. glob) waiver entry also covers is completely unaffected. Exists
+    // because `buildPreMergeReadinessSummary`'s `idd-advisory-convergence`
+    // precondition gate (#2021) must withhold coverage for THAT one check
+    // when the precondition hasn't opened or only a glob (non-exact)
+    // selector matches it, but a caller-side pre-filter of `waivers.valid`
+    // would incorrectly also strip that same waiver's coverage of an
+    // unrelated check the glob also names. `null`/omitted (the default)
+    // never excludes anything -- unchanged pre-#2021 behavior for every
+    // caller that doesn't pass it.
+    excludeFromWaiverCoverage?: ((checkName: string) => boolean) | null;
     // #1689: `ciGate.trustSourcePinnedRequiredChecks` opt-in (mirrors
     // `ciGate.trustEmptyProtectionReads`'s shape). Default `false` keeps the
     // pre-#1689 conservative behavior: a required check whose ruleset entry
@@ -4363,18 +4392,16 @@ export function summarizeRequiredChecks(
   const requiredCheckNames = branchReviewRequirements.requiredCheckNames;
   const requiredCheckNameSet = new Set(requiredCheckNames);
   const validWaivers = waivers?.valid ?? [];
-  const SUCCESS_STATES = new Set([
-    'SUCCESS',
-    'SKIPPED',
-    'NEUTRAL',
-    'NOT_APPLICABLE',
-  ]);
 
   const normalizedChecks = checks.map((check) => {
     const name = String(check.name ?? '');
     const state = String(check.state ?? '').toUpperCase();
     const coveredByWaiver =
-      !SUCCESS_STATES.has(state) &&
+      !CHECK_PASS_EQUIVALENT_STATES.has(state) &&
+      !(
+        typeof excludeFromWaiverCoverage === 'function' &&
+        excludeFromWaiverCoverage(name)
+      ) &&
       validWaivers.some((w) =>
         matchCheckSelectorLocal(name, w.checkSelector),
       ) &&
@@ -5700,7 +5727,7 @@ export function computePreMergeReadinessBlockers(
     // #1377: name the masked-403-as-404 cause explicitly when that is why the
     // gate is not all-passing, matching idd-ci.instructions.md's wording,
     // instead of the generic status/noRequiredChecksConfigured detail below.
-    const detail =
+    let detail =
       ci.protectionReadsUnreadable === true
         ? 'cannot determine required checks: protection/ruleset unreadable'
         : sourcePinnedDetail ||
@@ -5709,6 +5736,103 @@ export function computePreMergeReadinessBlockers(
           )}", noRequiredChecksConfigured=${Boolean(
             ci.noRequiredChecksConfigured,
           )}, presentRunConclusion="${String(ci.presentRunConclusion ?? '')}")`;
+
+    // #2021: when the `idd-advisory-convergence` check itself is present,
+    // required, and non-passing, and a posted otherwise-valid waiver exists
+    // for it but is not yet covering the check because its deadline/
+    // terminal precondition has not opened (see
+    // `advisoryConvergenceWaiverPrecondition` in
+    // `buildPreMergeReadinessSummary`), append that evidence -- including
+    // the remaining time-to-deadline -- so an agent reading this blocker
+    // does not have to independently re-derive it or mistake "waiver
+    // posted" for "check covered". Scoped to that specific check (not just
+    // "some ci blocker exists") so an unrelated failing check (e.g. lint)
+    // never gets this note appended.
+    const advisoryConvergencePrecondition = preMergeAsRecord(
+      report.advisoryConvergenceWaiverPrecondition,
+    );
+    const advisoryConvergenceCheckSelector = String(
+      advisoryConvergencePrecondition.checkSelector ?? '',
+    );
+    const advisoryConvergenceCheckNonPassing =
+      advisoryConvergenceCheckSelector &&
+      Array.isArray(ci.checks) &&
+      (ci.checks as Record<string, unknown>[]).some(
+        (check) =>
+          check?.required === true &&
+          check?.coveredByWaiver !== true &&
+          !CHECK_PASS_EQUIVALENT_STATES.has(String(check?.state ?? '')) &&
+          matchCheckSelectorLocal(
+            check?.name,
+            advisoryConvergenceCheckSelector,
+          ),
+      );
+    const waiverEvidenceForDetail = preMergeAsRecord(report.waiverEvidence);
+    const waiverEvidenceValidList = Array.isArray(waiverEvidenceForDetail.valid)
+      ? (waiverEvidenceForDetail.valid as Record<string, unknown>[])
+      : [];
+    // #2021 (Codex review on PR #2033): distinguish an EXACT-selector waiver
+    // (the only kind `advisory-convergence.mts`'s own gate ever counts, see
+    // `advisoryConvergenceExactWaiverValid` in `buildPreMergeReadinessSummary`)
+    // from a broader glob-only match, so this detail never implies "posting
+    // an exact waiver and waiting out the deadline is sufficient" when the
+    // real cause is that only a glob selector (e.g. `idd-*`) targets this
+    // check -- that never converges no matter how long the deadline waits.
+    const advisoryConvergenceExactWaiverCount = waiverEvidenceValidList.filter(
+      (entry) =>
+        String(entry?.checkSelector ?? '') === advisoryConvergenceCheckSelector,
+    ).length;
+    const advisoryConvergenceAnyWaiverCount = waiverEvidenceValidList.filter(
+      (entry) =>
+        matchCheckSelectorLocal(
+          advisoryConvergenceCheckSelector,
+          entry?.checkSelector,
+        ),
+    ).length;
+    const advisoryConvergencePreconditionOpenForDetail =
+      advisoryConvergencePrecondition.open === true;
+    if (
+      advisoryConvergenceCheckNonPassing &&
+      advisoryConvergenceAnyWaiverCount > 0 &&
+      !(
+        advisoryConvergencePreconditionOpenForDetail &&
+        advisoryConvergenceExactWaiverCount > 0
+      )
+    ) {
+      const deadlineMinutes = Number(
+        advisoryConvergencePrecondition.deadlineMinutes ?? 0,
+      );
+      const elapsedMinutes = advisoryConvergencePrecondition.elapsedMinutes;
+      const remainingMinutes =
+        typeof elapsedMinutes === 'number'
+          ? Math.max(0, deadlineMinutes - elapsedMinutes)
+          : null;
+      const reasons: string[] = [];
+      if (!advisoryConvergencePreconditionOpenForDetail) {
+        reasons.push(
+          'its deadline/terminal precondition has not opened -- ' +
+            `deadlineMinutes=${deadlineMinutes}, ` +
+            `elapsedMinutes=${elapsedMinutes ?? 'unknown'}, ` +
+            `remainingMinutes=${remainingMinutes ?? 'unknown'}, ` +
+            `terminalUnavailable=${Boolean(
+              advisoryConvergencePrecondition.terminalUnavailable,
+            )}`,
+        );
+      }
+      if (advisoryConvergenceExactWaiverCount === 0) {
+        reasons.push(
+          'no posted waiver has a selector that EXACTLY equals ' +
+            `"${advisoryConvergenceCheckSelector}" (only a broader/glob ` +
+            "selector matches this check by name); advisory-convergence.mts's " +
+            'own gate never counts a glob match for its own selector, so ' +
+            'this check cannot converge via that waiver regardless of the ' +
+            'precondition',
+        );
+      }
+      detail +=
+        ` (a posted external-check waiver exists for current HEAD but is ` +
+        `not yet covering "${advisoryConvergenceCheckSelector}": ${reasons.join('; ')})`;
+    }
     blockers.push({ gate: 'ci', detail });
   }
 
@@ -5928,6 +6052,23 @@ export function buildPreMergeReadinessSummary(
     // unavailable` blocker below, so an unmigrated caller sees unchanged
     // behavior.
     copilotUnavailable?: boolean;
+    // #2021: the current HEAD commit's own `committedDate` (GraphQL),
+    // anchoring the SAME 24h deadline clock `advisory-convergence.mts`'s own
+    // gate uses before treating a posted `idd-advisory-convergence` waiver as
+    // active. Sourced by the CALLER (`pre-merge-readiness.mts`, via the
+    // identical GraphQL field `review-clause.mts`'s `fetchReviewsAndHeadCommit`
+    // reads), mirroring how `copilotUnavailable` above is caller-precomputed.
+    // Omitted/invalid (the default) resolves `elapsedMinutes` to `null` and
+    // `deadlinePassed` to `false` -- the safer default, never falsely
+    // treating a still-open deadline as passed.
+    advisoryConvergenceHeadCommittedAt?: string | null;
+    // Configured `advisoryWait.convergenceDeadline` in minutes (#2021),
+    // resolved by the caller, mirroring `externalCheckWaiverMaxValidity`
+    // below's "policy value resolved by the CLI layer" pattern. Omitted by
+    // unit callers (falls back to the same 24h
+    // `DEFAULT_ADVISORY_CONVERGENCE_DEADLINE_MINUTES` default
+    // `advisory-convergence.mts` itself uses).
+    advisoryConvergenceDeadlineMinutes?: number;
     // Configured `ciGate.externalCheckWaivers.maxValidity` (ISO-8601 duration),
     // threaded to the consume-side waiver window check. Omitted by unit callers
     // (window check off); `collectPreMergeReadiness` always sources the policy
@@ -6110,23 +6251,104 @@ export function buildPreMergeReadinessSummary(
     waivableSelectors: waivableCheckSelectors,
     maxValidity: options.externalCheckWaiverMaxValidity ?? '',
   });
+
+  // #1570: the caller-supplied terminal-unavailability verdict, reused below
+  // both for the dedicated `copilot-terminal-unavailable` blocker and (#2021)
+  // as one of the two preconditions that must open before an
+  // `idd-advisory-convergence` waiver counts toward `ci.coveredByWaiver`.
+  const copilotUnavailable = options.copilotUnavailable === true;
+
+  // #2021: `advisory-convergence.mts`'s own gate never treats a posted
+  // `idd-advisory-convergence` waiver as active until ONE of two independent
+  // preconditions is ALSO true -- a 24h deadline anchored on the current HEAD
+  // commit's own `committedDate`, or proven terminal Copilot unavailability
+  // (`copilotUnavailable` above). Reported truthfully in `waiverEvidence`
+  // itself either way (the marker is real and otherwise valid), but a check
+  // only becomes `coveredByWaiver` here once this SAME precondition has
+  // opened -- otherwise this helper reports `coveredByWaiver: true` before
+  // `advisory-convergence.mts` itself would ever call the waiver `waived`,
+  // sending an otherwise-correct session into a `gh pr merge` GitHub rejects
+  // outright (root cause: kurone-kito/idd-skill#2021).
+  const advisoryConvergenceDeadlineMinutes = Number.isFinite(
+    options.advisoryConvergenceDeadlineMinutes,
+  )
+    ? Number(options.advisoryConvergenceDeadlineMinutes)
+    : DEFAULT_ADVISORY_CONVERGENCE_DEADLINE_MINUTES;
+  const advisoryConvergenceHeadCommittedAt = String(
+    options.advisoryConvergenceHeadCommittedAt ?? '',
+  );
+  const advisoryConvergenceElapsedMinutes = isValidIsoTimestamp(
+    advisoryConvergenceHeadCommittedAt,
+  )
+    ? minutesBetweenIso(advisoryConvergenceHeadCommittedAt, now)
+    : null;
+  const advisoryConvergenceDeadlinePassed =
+    advisoryConvergenceElapsedMinutes !== null &&
+    advisoryConvergenceElapsedMinutes >= advisoryConvergenceDeadlineMinutes;
+  const advisoryConvergencePreconditionOpen =
+    advisoryConvergenceDeadlinePassed || copilotUnavailable;
+  const advisoryConvergenceWaiverPrecondition = {
+    checkSelector: DEFAULT_ADVISORY_CONVERGENCE_CHECK_SELECTOR,
+    deadlineMinutes: advisoryConvergenceDeadlineMinutes,
+    headCommittedAt: advisoryConvergenceHeadCommittedAt || 'none',
+    elapsedMinutes: advisoryConvergenceElapsedMinutes,
+    deadlinePassed: advisoryConvergenceDeadlinePassed,
+    terminalUnavailable: copilotUnavailable,
+    open: advisoryConvergencePreconditionOpen,
+  };
+
+  // #2021 (Codex review on PR #2033, two findings): `advisory-convergence.mts`'s
+  // own `waived` computation only counts a waiver whose `checkSelector` is an
+  // EXACT match to its selector constant (`entry.checkSelector ===
+  // waiverCheckSelector`, advisory-convergence.mts line ~1108) -- never a
+  // glob. A glob waiver such as `idd-*` (permitted when
+  // `waivableCheckSelectors` allows it) would still glob-match the
+  // `idd-advisory-convergence` CHECK NAME via `summarizeRequiredChecks`'s
+  // `matchCheckSelectorLocal`, so treating "precondition open" as sufficient
+  // to fall back to the raw, unfiltered `waiverEvidence` (as an earlier
+  // revision of this fix did) would report `coveredByWaiver: true` for a
+  // selector that gate would never itself accept -- reproducing this same
+  // issue's false-`ready` class for a different trigger. `genuinelyCovered`
+  // requires BOTH the precondition open AND an EXACT-match valid entry.
+  const advisoryConvergenceExactWaiverValid = waiverEvidence.valid.some(
+    (entry) =>
+      entry.checkSelector === DEFAULT_ADVISORY_CONVERGENCE_CHECK_SELECTOR,
+  );
+  const advisoryConvergenceGenuinelyCovered =
+    advisoryConvergencePreconditionOpen && advisoryConvergenceExactWaiverValid;
+
   const ci = summarizeRequiredChecks(checks, branchRules, branchProtection, {
+    // Raw, UNFILTERED `waiverEvidence` -- deliberately not a caller-side
+    // pre-filtered copy. A pre-filter that removed a whole `valid` entry
+    // (e.g. every occurrence of a glob waiver covering
+    // `idd-advisory-convergence`) would also strip that SAME entry's
+    // coverage of any OTHER check it glob-matches (e.g. a configured
+    // `idd-security`), turning a convergence-specific restriction into an
+    // unintended block on unrelated checks (Codex review finding on PR
+    // #2033). `excludeFromWaiverCoverage` below applies the restriction
+    // surgically, per check name, instead.
     waivers: waiverEvidence,
     waivableSelectors: waivableCheckSelectors,
     protectionReadsUnreadable,
     trustSourcePinnedRequiredChecks:
       options.trustSourcePinnedRequiredChecks === true,
+    excludeFromWaiverCoverage: (name) =>
+      name === DEFAULT_ADVISORY_CONVERGENCE_CHECK_SELECTOR &&
+      !advisoryConvergenceGenuinelyCovered,
   });
 
-  // #1570: reuse the SAME waiver evidence above (already validated for
+  // #1570: reuse the SAME raw waiver evidence above (already validated for
   // selector/HEAD/claim/authority/expiry) to decide whether the caller-
   // supplied terminal-unavailability verdict is also validly waived, filtered
   // to the `idd-advisory-convergence` selector -- the identical selector
   // advisory-convergence.mts's own terminal-waiver path consumes, so a single
   // maintainer-posted waiver marker satisfies whichever gate (the CI
   // required-check, or this direct F2/F3 evidence collector) is currently
-  // asking.
-  const copilotUnavailable = options.copilotUnavailable === true;
+  // asking. Deliberately reads the RAW `waiverEvidence`, not
+  // `ciWaiverEvidence`: this blocker is itself gated on
+  // `copilotUnavailable === true` (the terminal precondition already proven),
+  // so the deadline-vs-terminal precondition split above would be redundant
+  // here.
   const copilotUnavailableWaived =
     copilotUnavailable &&
     waiverEvidence.valid.some(
@@ -6213,6 +6435,12 @@ export function buildPreMergeReadinessSummary(
     ci,
     claim,
     waiverEvidence,
+    // #2021: the deadline/terminal precondition evaluated above, reported
+    // unconditionally as its own field (never folded into `waiverEvidence`,
+    // whose shape is the schema-locked `ExternalCheckWaiverEvidence`) so a
+    // blocker detail or a resuming agent can cite the remaining
+    // time-to-deadline without re-deriving it.
+    advisoryConvergenceWaiverPrecondition,
     branchCurrency,
   };
 

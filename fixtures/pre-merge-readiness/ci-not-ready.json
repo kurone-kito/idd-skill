@@ -279,6 +279,15 @@
       "malformed": [],
       "notConfigured": []
     },
+    "advisoryConvergenceWaiverPrecondition": {
+      "checkSelector": "idd-advisory-convergence",
+      "deadlineMinutes": 1440,
+      "headCommittedAt": "none",
+      "elapsedMinutes": null,
+      "deadlinePassed": false,
+      "terminalUnavailable": false,
+      "open": false
+    },
     "branchCurrency": {
       "mergeStateStatus": "",
       "mergeable": "",

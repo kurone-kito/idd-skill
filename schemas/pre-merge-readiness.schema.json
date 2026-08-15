@@ -17,6 +17,7 @@
     "ci",
     "claim",
     "waiverEvidence",
+    "advisoryConvergenceWaiverPrecondition",
     "branchCurrency",
     "ready",
     "blockers"
@@ -1417,6 +1418,51 @@
               }
             }
           }
+        }
+      }
+    },
+    "advisoryConvergenceWaiverPrecondition": {
+      "type": "object",
+      "description": "#2021: deadline/terminal precondition gating whether a posted idd-advisory-convergence waiver counts toward ci.coveredByWaiver -- mirrors advisory-convergence.mts's own deadline clock (a 24h deadline anchored on the current HEAD commit's own committedDate) and its terminal Copilot-unavailability escape hatch, so this evidence collector never reports a check as covered before that gate itself would call the waiver waived.",
+      "required": [
+        "checkSelector",
+        "deadlineMinutes",
+        "headCommittedAt",
+        "elapsedMinutes",
+        "deadlinePassed",
+        "terminalUnavailable",
+        "open"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "checkSelector": {
+          "type": "string",
+          "description": "The idd-advisory-convergence check selector this precondition gates."
+        },
+        "deadlineMinutes": {
+          "type": "number",
+          "description": "Configured advisory convergence deadline in minutes (advisoryWait.convergenceDeadline, default 1440 = 24h).",
+          "minimum": 0
+        },
+        "headCommittedAt": {
+          "type": "string",
+          "description": "ISO timestamp of the current HEAD commit itself, or the literal 'none' when unavailable."
+        },
+        "elapsedMinutes": {
+          "type": ["integer", "null"],
+          "description": "Whole minutes elapsed from headCommittedAt to now, or null when headCommittedAt is invalid or absent."
+        },
+        "deadlinePassed": {
+          "type": "boolean",
+          "description": "True when elapsedMinutes is known and has reached deadlineMinutes."
+        },
+        "terminalUnavailable": {
+          "type": "boolean",
+          "description": "The caller-supplied #1572 terminal Copilot-unavailability verdict (same value as advisoryWait.copilotUnavailable)."
+        },
+        "open": {
+          "type": "boolean",
+          "description": "True when deadlinePassed or terminalUnavailable -- the precondition that must hold before a posted idd-advisory-convergence waiver counts toward ci.coveredByWaiver."
         }
       }
     },

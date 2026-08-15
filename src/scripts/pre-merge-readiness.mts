@@ -8,6 +8,7 @@
 import { readFileSync } from 'node:fs';
 
 import {
+  readAdvisoryConvergenceDeadlineMinutes,
   readAdvisoryPrimaryBotLogin,
   readAdvisoryRecoveryCycleCap,
   readAdvisoryTerminalWindowMinutes,
@@ -53,6 +54,7 @@ import {
   resolveTrustedMarkerActors,
   selectCodeownersText,
 } from './protocol-helpers.mts';
+import { fetchReviewsAndHeadCommit } from './review-clause.mts';
 
 /** Author reference embedded in GitHub REST/GraphQL payloads. */
 interface GhAuthorPayload {
@@ -627,6 +629,24 @@ export function collectPreMergeReadiness(
   );
   const copilotUnavailable = copilotRecovery.state === 'COPILOT_UNAVAILABLE';
 
+  // #2021: fetch the current HEAD commit's own `committedDate` via the SAME
+  // GraphQL field `advisory-convergence.mts`'s own deadline clock reads
+  // (`fetchReviewsAndHeadCommit`, extracted to `review-clause.mts` precisely
+  // so a second, independent caller can reuse this exact evidence instead of
+  // a second ad-hoc GraphQL path that could drift out of sync with it -- see
+  // that module's header). Only `headCommittedAt` is used here; the
+  // paginated `reviews` return value is discarded since this caller already
+  // fetched reviews separately via REST above. Deliberately uncaught, same
+  // rationale as `copilotUnavailable` immediately above: a lookup failure
+  // must crash this evidence collector rather than silently resolve to an
+  // empty `headCommittedAt`, which would make `advisoryConvergenceDeadlinePassed`
+  // fail closed to `false` for the wrong reason (masking a genuinely-open
+  // deadline as unreadable evidence instead of surfacing the fetch failure).
+  const { headCommittedAt: advisoryConvergenceHeadCommittedAt } =
+    fetchReviewsAndHeadCommit(owner, repo, args.prNumber);
+  const advisoryConvergenceDeadlineMinutes =
+    readAdvisoryConvergenceDeadlineMinutes();
+
   const summary = buildPreMergeReadinessSummary(
     {
       prHeadSha,
@@ -677,6 +697,8 @@ export function collectPreMergeReadiness(
       capExhaustedRoute: advisoryWaitPolicy.capExhaustedRoute,
       primaryBotLogin,
       copilotUnavailable,
+      advisoryConvergenceHeadCommittedAt,
+      advisoryConvergenceDeadlineMinutes,
       waivableCheckSelectors,
       externalCheckWaiverMaxValidity,
       trustSourcePinnedRequiredChecks,
