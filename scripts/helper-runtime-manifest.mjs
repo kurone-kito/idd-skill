@@ -59,7 +59,7 @@ const LIVE_CONFIG_CANDIDATE_FILES = [
   '.github/idd/config.json',
   'idd-policy.json',
 ];
-const NODE_ENGINES = '^22.22.2 || >=24.2.0';
+const NODE_ENGINES = '^22.23.2 || ^24.2.0 || >=26.0.0';
 // Deliberately not a hardcoded release number: a literal version string
 // would silently go stale at the next release with no drift guard (unlike
 // NODE_ENGINES, which audit-docs.mjs's ENGINES_RANGE_MIRRORS keeps honest)

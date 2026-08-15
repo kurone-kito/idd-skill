@@ -203,5 +203,7 @@ The helper throws an error if:
 ## Dependencies
 
 - `gh` CLI tool for GitHub API access
-- Node.js 22.22.2 or newer on the 22.x line, or Node.js 24.2.0 or newer
+- Node.js 22.23.2 or newer on the 22.x line, 24.2.0 or newer on the
+  24.x line, or 26.0.0 or newer (the already-end-of-life 25.x line is
+  excluded)
 - No external npm packages required (uses only Node.js built-ins)

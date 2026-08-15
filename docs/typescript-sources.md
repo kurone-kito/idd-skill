@@ -22,7 +22,8 @@ fails CI (`tests/inventory-ordering.test.mts`).
 ## Why generated `.mjs` are committed
 
 Node.js strips TypeScript types natively (default since 22.18; the
-repository's `engines` floor is `^22.22.2 || >=24.2.0`), but it refuses to
+repository's `engines` floor is
+`^22.23.2 || ^24.2.0 || >=26.0.0`), but it refuses to
 do so for files resolved inside `node_modules`
 (`ERR_UNSUPPORTED_NODE_MODULES_TYPE_STRIPPING`). The helper bundle is
 consumed through the `package-manager` and `ephemeral-npx` profiles,
@@ -33,20 +34,21 @@ install-free bare-node CI lane working unchanged.
 
 ## `@types/node` vs. the engines floor
 
-`@types/node` is pinned to `26.1.0` — newer than either half of the
-`^22.22.2 || >=24.2.0` engines range — so `pnpm run typecheck` validates
-against the Node 26 API surface, not the lowest version this repository
-actually ships on. This is a deliberate trade-off, not an oversight
-(#1706): downgrading `@types/node` to match the 22.x floor would lose
-type coverage for code paths that intentionally target the newer
-24.2.0+ half of the range, and TypeScript's structural typing means a
+`@types/node` is pinned to `26.1.0` — newer than every clause of the
+`^22.23.2 || ^24.2.0 || >=26.0.0` engines range except the `>=26.0.0`
+tail itself — so `pnpm run typecheck` validates against the Node 26
+API surface, not the lowest version this repository actually ships
+on. This is a deliberate trade-off, not an oversight (#1706):
+downgrading `@types/node` to match the 22.x floor would lose type
+coverage for code paths that intentionally target the newer 24.x/26.x
+clauses of the range, and TypeScript's structural typing means a
 too-new API passing typecheck doesn't reliably fail loudly at that
 type-only layer.
 
 The actual backstop is runtime, not type-level: the Node 22 CI lane
 (`pnpm-boundary-node22-floor.yml`) runs the full `pnpm run lint:minimum`
 suite — including the whole test suite and
-`verify-workshop-integrity.mts` — directly on Node 22.22.2. A helper
+`verify-workshop-integrity.mts` — directly on Node 22.23.2. A helper
 that calls an API present in the types-26 surface but missing or
 broken on the true floor version (the #1447 failure class) crashes
 there even though it typechecks cleanly, closing the gap that pinning

@@ -47,19 +47,19 @@ jobs:
           # 24.0.x/24.1.x (#1447), which would make this check pass
           # having checked nothing. Matches lint.yml's and
           # idd-advisory-convergence.yml's own Node-floor guard. Exact
-          # match to package.json's engines.node (^22.22.2 || >=24.2.0),
+          # match to package.json's engines.node (^22.23.2 || ^24.2.0 || >=26.0.0),
           # including the patch/minor digits, so the error message's
           # claimed range is actually what the check enforces.
           node -e '
             const [major, minor, patch] = process.versions.node.split(".").map(Number);
             const ok =
-              (major === 22 && (minor > 22 || (minor === 22 && patch >= 2))) ||
+              (major === 22 && (minor > 23 || (minor === 23 && patch >= 2))) ||
               (major === 24 && minor >= 2) ||
-              major > 24;
+              major >= 26;
             if (!ok) {
               console.error(
                 "Node " + process.version + " does not satisfy this " +
-                "repository'"'"'s engines.node range (^22.22.2 || >=24.2.0).",
+                "repository'"'"'s engines.node range (^22.23.2 || ^24.2.0 || >=26.0.0).",
               );
               process.exit(1);
             }
