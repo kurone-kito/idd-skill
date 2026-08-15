@@ -300,16 +300,17 @@ dogfoods its own lite-execution-profile roadmap and this table
 mirrors its current state), or none, depending on when you imported
 and whether your repository has authored any of its own:
 
-| Phase                    | Standard file                       | Lite file                                     |
-| ------------------------ | ----------------------------------- | --------------------------------------------- |
-| A5 Claim                 | `idd-claim.instructions.md`         | `lite/idd-claim-lite.instructions.md`         |
-| B1-C6 Work               | `idd-work.instructions.md`          | `lite/idd-work-lite.instructions.md`          |
-| D1-D4 PR-submit          | `idd-pr-submit.instructions.md`     | `lite/idd-pr-submit-lite.instructions.md`     |
-| E9-E15 Review-fix        | `idd-review-fix.instructions.md`    | `lite/idd-review-fix-lite.instructions.md`    |
-| F1-F2 helper-read subset | `idd-pre-merge.instructions.md`     | `lite/idd-pre-merge-lite.instructions.md`     |
-| F2.5 handoff-stop        | `idd-merge-handoff.instructions.md` | `lite/idd-merge-handoff-lite.instructions.md` |
-| Resume                   | `idd-resume.instructions.md`        | `lite/idd-resume-lite.instructions.md`        |
-| Resume-stall             | `idd-resume-stall.instructions.md`  | `lite/idd-resume-stall-lite.instructions.md`  |
+| Phase                    | Standard file                         | Lite file                                       |
+| ------------------------ | ------------------------------------- | ----------------------------------------------- |
+| A5 Claim                 | `idd-claim.instructions.md`           | `lite/idd-claim-lite.instructions.md`           |
+| B1-C6 Work               | `idd-work.instructions.md`            | `lite/idd-work-lite.instructions.md`            |
+| D1-D4 PR-submit          | `idd-pr-submit.instructions.md`       | `lite/idd-pr-submit-lite.instructions.md`       |
+| E1-E3 Review-snapshot    | `idd-review-snapshot.instructions.md` | `lite/idd-review-snapshot-lite.instructions.md` |
+| E9-E15 Review-fix        | `idd-review-fix.instructions.md`      | `lite/idd-review-fix-lite.instructions.md`      |
+| F1-F2 helper-read subset | `idd-pre-merge.instructions.md`       | `lite/idd-pre-merge-lite.instructions.md`       |
+| F2.5 handoff-stop        | `idd-merge-handoff.instructions.md`   | `lite/idd-merge-handoff-lite.instructions.md`   |
+| Resume                   | `idd-resume.instructions.md`          | `lite/idd-resume-lite.instructions.md`          |
+| Resume-stall             | `idd-resume-stall.instructions.md`    | `lite/idd-resume-stall-lite.instructions.md`    |
 
 The F1-F2 and F2.5 rows cover a **partial** slice of their standard
 files only: the lite F1-F2 file covers just F1's read-only branch
