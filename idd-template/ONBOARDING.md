@@ -947,6 +947,31 @@ To enable it in the target repository:
    without an extension, so they need this explicit `.githooks/*` path
    rule to be covered too.
 
+4. Native-Windows adopters chaining fork-heavy tooling after the guard
+   (a linter, `lint-staged`, and similar) are more exposed to a class
+   of Cygwin/MSYS `fork()` fragility unrelated to this template
+   (observed in `kurone-kito/builder-config`, 2026-08-14, cited in
+   kurone-kito/idd-skill#2068 — a native-Windows commit failed inside
+   `.githooks/pre-commit` with a Cygwin `dofork` failure ("died
+   unexpectedly"); root cause is generic Git-for-Windows/Cygwin
+   `fork()` emulation fragility, not a defect in this template or
+   repository — see
+   [git-for-windows/git#1176](https://github.com/git-for-windows/git/issues/1176)).
+   Standard host-level remediations, none of them actionable from
+   inside this repository, and each a temporary, last-resort
+   mitigation requiring the operator's own administrator approval —
+   restore the affected protection immediately once the guard's
+   commit or push succeeds, and scope any antivirus exclusion as
+   narrowly as the antivirus product allows (ideally just the
+   `.githooks/` directory, not the whole repository or Git-for-Windows
+   install tree, if the product supports that granularity): exclude
+   the affected path(s) from antivirus real-time scanning; remove any
+   duplicate or stale MSYS/Cygwin runtime DLL (`msys-2.0.dll` for Git
+   for Windows itself, or `cygwin1.dll` if a separate Cygwin install is
+   also on `PATH`) from `PATH`; and disable Mandatory ASLR for the
+   affected `sh.exe`/`bash.exe` via Windows Security's Exploit
+   Protection settings.
+
 When `worktreeGuard.enabled` is absent or `false`, the hooks are a
 no-op. To bypass the guard for a single intentional commit or push,
 pass `--no-verify`. CI cannot detect this class of violation — a

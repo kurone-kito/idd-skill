@@ -174,6 +174,49 @@ test('hook honors a custom worktreeGuard.branchPatterns override', () => {
   }
 });
 
+test('hook allows a detached HEAD in the primary worktree when enabled', () => {
+  const repo = setupRepo({ worktreeGuard: { enabled: true } });
+  try {
+    const head = gitOut(repo, ['rev-parse', 'HEAD']);
+    git(repo, ['checkout', '-q', '--detach', head]);
+    assert.equal(runHook(repo, 'pre-commit'), 0);
+  } finally {
+    rmSync(repo, { recursive: true, force: true });
+  }
+});
+
+test('hook allows an unborn HEAD in the primary worktree when enabled', () => {
+  // Deliberately does not use setupRepo: that helper always creates an
+  // initial commit, but this case is specifically about a repo with a
+  // config file present and no commits at all yet (idd-skill#2068).
+  const dir = mkdtempSync(join(tmpdir(), 'idd-hook-unborn-'));
+  try {
+    git(dir, ['init', '-b', 'issue/123-example']);
+    git(dir, ['config', 'user.email', 'test@example.com']);
+    git(dir, ['config', 'user.name', 'Test']);
+    mkdirSync(join(dir, '.github/idd'), { recursive: true });
+    writeFileSync(
+      join(dir, '.github/idd/config.json'),
+      JSON.stringify({ worktreeGuard: { enabled: true } }, null, 2),
+    );
+    cpSync(HOOKS_DIR, join(dir, '.githooks'), { recursive: true });
+    assert.equal(runHook(dir, 'pre-commit'), 0);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('hook is a no-op run from outside any work tree', () => {
+  const repo = setupRepo({ worktreeGuard: { enabled: true } });
+  const outside = mkdtempSync(join(tmpdir(), 'idd-hook-outside-'));
+  try {
+    assert.equal(runHook(repo, 'pre-commit', outside), 0);
+  } finally {
+    rmSync(repo, { recursive: true, force: true });
+    rmSync(outside, { recursive: true, force: true });
+  }
+});
+
 test('hook allows issue/* commits from a sibling worktree', () => {
   const repo = setupRepo({ worktreeGuard: { enabled: true } });
   const sibling = `${repo}-sibling`;
