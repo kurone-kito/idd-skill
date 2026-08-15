@@ -426,9 +426,9 @@ Before any mutating action in F3, apply the
      denies `-D`; see `docs/permissions.md`). If it fails with `error:
      the branch '<branch-name>' is not fully merged` despite the PR
      being merged — `fetch --prune` can drop the remote-tracking ref
-     before local `main` fast-forwards — run step 4's `fetch`/
-     `--ff-only` first, then retry.
-4. Update the local `main` branch.
+     before local `main` fast-forwards — run step 4 first, then retry.
+4. Update the local `main` branch (`git fetch origin main && git merge
+   --ff-only origin/main`).
 5. If GitHub auto-delete is disabled: delete the remote branch too.
    (Worktrunk may be used for steps 3–5.)
 
