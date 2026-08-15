@@ -258,6 +258,7 @@ test('discardedNonPassingRequiredChecks still surfaces a waived CANCELLED siblin
         checkSelector: 'lint',
         reason: 'known-flaky-cancel',
         expiresAt: '2099-01-01T00:00:00Z',
+        createdAt: '2026-07-17T00:00:00Z',
       },
     ],
     expired: [],

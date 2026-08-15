@@ -4489,6 +4489,40 @@ test('summarizeRequiredChecks: waiver covers failing required check', () => {
         checkSelector: 'CodeRabbit',
         reason: 'rate-limit',
         expiresAt: '2099-01-01T00:00:00Z',
+        createdAt: '2026-05-16T00:00:00Z',
+      },
+    ],
+    expired: [],
+    wrongHead: [],
+    wrongClaim: [],
+    unauthorized: [],
+    malformed: [],
+  };
+  const result = summarizeRequiredChecks(
+    [
+      {
+        name: 'CodeRabbit',
+        state: 'PENDING',
+        completedAt: '2026-05-17T00:00:00Z',
+      },
+    ],
+    [],
+    { required_status_checks: { contexts: ['CodeRabbit'] } },
+    { waivers },
+  );
+  assert.equal(result.checks[0].coveredByWaiver, true);
+  assert.equal(result.status, 'success');
+});
+
+test('summarizeRequiredChecks: a check with no live run at all is never covered by waiver, even a valid one (#2034 fail-closed)', () => {
+  const waivers = {
+    valid: [
+      {
+        authorLogin: 'kurone-kito',
+        checkSelector: 'CodeRabbit',
+        reason: 'rate-limit',
+        expiresAt: '2099-01-01T00:00:00Z',
+        createdAt: '2026-05-16T00:00:00Z',
       },
     ],
     expired: [],
@@ -4503,8 +4537,8 @@ test('summarizeRequiredChecks: waiver covers failing required check', () => {
     { required_status_checks: { contexts: ['CodeRabbit'] } },
     { waivers },
   );
-  assert.equal(result.checks[0].coveredByWaiver, true);
-  assert.equal(result.status, 'success');
+  assert.equal(result.checks[0].coveredByWaiver, undefined);
+  assert.notEqual(result.status, 'success');
 });
 
 test('summarizeRequiredChecks: waiver does not affect already-passing check', () => {
@@ -4882,6 +4916,7 @@ test('summarizeRequiredChecks: waiver with glob selector covers matching failing
         checkSelector: 'Code*',
         reason: 'test',
         expiresAt: '2099-01-01T00:00:00Z',
+        createdAt: '2026-05-16T00:00:00Z',
       },
     ],
     expired: [],
@@ -5086,6 +5121,7 @@ test('summarizeRequiredChecks: a configured-waivable check still folds in', () =
         checkSelector: 'CodeRabbit',
         reason: 'rate-limit',
         expiresAt: '2099-01-01T00:00:00Z',
+        createdAt: '2026-05-16T00:00:00Z',
       },
     ],
     expired: [],
@@ -5096,7 +5132,13 @@ test('summarizeRequiredChecks: a configured-waivable check still folds in', () =
     notConfigured: [],
   };
   const result = summarizeRequiredChecks(
-    [{ name: 'CodeRabbit', state: 'FAILURE', completedAt: '' }],
+    [
+      {
+        name: 'CodeRabbit',
+        state: 'FAILURE',
+        completedAt: '2026-05-17T00:00:00Z',
+      },
+    ],
     [],
     { required_status_checks: { contexts: ['CodeRabbit'] } },
     {
@@ -5204,6 +5246,7 @@ test('summarizeRequiredChecks: a glob waiver folds in an exact-configured-waivab
         checkSelector: 'Code*',
         reason: 'rate-limit',
         expiresAt: '2099-01-01T00:00:00Z',
+        createdAt: '2026-05-16T00:00:00Z',
       },
     ],
     expired: [],
@@ -5214,7 +5257,13 @@ test('summarizeRequiredChecks: a glob waiver folds in an exact-configured-waivab
     notConfigured: [],
   };
   const result = summarizeRequiredChecks(
-    [{ name: 'CodeRabbit', state: 'FAILURE', completedAt: '' }],
+    [
+      {
+        name: 'CodeRabbit',
+        state: 'FAILURE',
+        completedAt: '2026-05-17T00:00:00Z',
+      },
+    ],
     [],
     { required_status_checks: { contexts: ['CodeRabbit'] } },
     {
@@ -6264,7 +6313,11 @@ function withAdvisoryConvergenceRequiredCheck(fixture: {
     {
       name: 'idd-advisory-convergence',
       state: 'FAILURE',
-      completedAt: '2026-05-11T23:59:00Z',
+      // #2034: after every waiver `createdAt` (`2026-05-12T00:00:00Z`) this
+      // helper's callers post, so the rerun-freshness gate does not withhold
+      // coverage in the "should be covered" cases below -- those tests cover
+      // #2021's precondition and #2046's mode gating specifically, not #2034.
+      completedAt: '2026-05-12T00:30:00Z',
     },
   ];
   return { ...fixture.input, branchRules, checks };
@@ -6522,12 +6575,17 @@ test('#2021: withholding coverage from idd-advisory-convergence does not remove 
     {
       name: 'idd-advisory-convergence',
       state: 'FAILURE',
-      completedAt: '2026-05-11T23:59:00Z',
+      // #2034: after the glob waiver's own `createdAt` (`2026-05-12T00:00:00Z`
+      // below) so the unrelated idd-security assertion below is not entangled
+      // with the rerun-freshness gate this issue adds -- idd-advisory-convergence
+      // itself still stays uncovered here regardless, via the precondition-closed
+      // exclusion this test targets.
+      completedAt: '2026-05-12T00:30:00Z',
     },
     {
       name: 'idd-security',
       state: 'FAILURE',
-      completedAt: '2026-05-11T23:59:00Z',
+      completedAt: '2026-05-12T00:30:00Z',
     },
   ];
   const waivableCheckSelectors = [{ selector: 'idd-*', matchMode: 'glob' }];
@@ -6810,6 +6868,148 @@ test('#2046: idd-advisory-convergence waiver posted with the deadline passed and
         ...(input.comments ?? []),
         {
           id: 'mode-enabled-waiver',
+          author: { login: 'kurone-kito' },
+          body: waiverBody,
+          createdAt: '2026-05-12T00:00:00Z',
+          updatedAt: '2026-05-12T00:00:00Z',
+        },
+      ],
+    },
+    {
+      ...fixture.options,
+      includeDispositionEvidence: true,
+      waivableCheckSelectors,
+      externalCheckWaiverMaxValidity: 'PT24H',
+      externalCheckWaiverMode: 'maintainer-authorized',
+      advisoryConvergenceHeadCommittedAt: '2026-05-10T23:00:00Z',
+    },
+  );
+
+  const check = ciCheckByName(covered, 'idd-advisory-convergence');
+  assert.equal(check?.coveredByWaiver, true);
+  assert.equal((covered.ci as Record<string, unknown>).status, 'success');
+  const coveredGates = (covered.blockers as { gate: string }[]).map(
+    (blocker) => blocker.gate,
+  );
+  assert.ok(!coveredGates.includes('ci'));
+});
+
+// #2034: a valid, precondition-satisfied, mode-enabled waiver still never
+// covers a check whose own live run last completed BEFORE the waiver became
+// genuinely active -- the check was never actually re-run since, so
+// reporting it covered would diverge from what the real required check (and
+// GitHub's branch protection) still shows.
+test('#2034: idd-advisory-convergence waiver posted, precondition open, but the check last completed before the waiver took effect stays blocked, evidence names the stale run', () => {
+  const fixture = readJson('fixtures/pre-merge-readiness/clean.json');
+  const input = withAdvisoryConvergenceRequiredCheck(fixture);
+  const staleChecks = (input.checks ?? []).map((check) =>
+    check.name === 'idd-advisory-convergence'
+      ? { ...check, completedAt: '2026-05-11T23:30:00Z' }
+      : check,
+  );
+  const waivableCheckSelectors = [
+    { selector: 'idd-advisory-convergence', matchMode: 'exact' },
+  ];
+  const waiverBody = renderExternalCheckWaiverComment({
+    agentId: fixture.options.expectedAgentId,
+    claimId: fixture.options.expectedClaimId,
+    headSha: fixture.input.prHeadSha,
+    checkSelector: 'idd-advisory-convergence',
+    reason: 'idd-advisory-convergence would not converge across 3 rounds',
+    expiresAt: '2026-05-13T00:00:00Z',
+    actor: 'kurone-kito',
+  });
+
+  const blocked = buildPreMergeReadinessSummary(
+    {
+      ...input,
+      checks: staleChecks,
+      comments: [
+        ...(input.comments ?? []),
+        {
+          id: 'stale-run-waiver',
+          author: { login: 'kurone-kito' },
+          body: waiverBody,
+          createdAt: '2026-05-12T00:00:00Z',
+          updatedAt: '2026-05-12T00:00:00Z',
+        },
+      ],
+    },
+    {
+      ...fixture.options,
+      includeDispositionEvidence: true,
+      waivableCheckSelectors,
+      externalCheckWaiverMaxValidity: 'PT24H',
+      externalCheckWaiverMode: 'maintainer-authorized',
+      // Deadline opens at 2026-05-11T23:00:00Z (24h after HEAD committed);
+      // the check's own live run last completed before both that moment
+      // AND the waiver's own createdAt (2026-05-12T00:00:00Z).
+      advisoryConvergenceHeadCommittedAt: '2026-05-10T23:00:00Z',
+    },
+  );
+
+  const precondition = (
+    blocked as {
+      advisoryConvergenceWaiverPrecondition: Record<string, unknown>;
+    }
+  ).advisoryConvergenceWaiverPrecondition;
+  assert.equal(precondition.open, true);
+
+  const waiverEvidence = blocked.waiverEvidence as {
+    valid: Record<string, unknown>[];
+  };
+  assert.equal(waiverEvidence.valid.length, 1);
+  assert.equal(
+    waiverEvidence.valid[0].checkSelector,
+    'idd-advisory-convergence',
+  );
+
+  const check = ciCheckByName(blocked, 'idd-advisory-convergence');
+  assert.equal(check?.coveredByWaiver, undefined);
+  assert.equal(blocked.ready, false);
+  assert.deepEqual(blocked.blockers, computePreMergeReadinessBlockers(blocked));
+  const ciBlocker = (
+    blocked.blockers as { gate: string; detail: string }[]
+  ).find((blocker) => blocker.gate === 'ci');
+  assert.ok(ciBlocker, 'expected a ci blocker');
+  assert.match(
+    ciBlocker?.detail ?? '',
+    /its live run last completed at "2026-05-11T23:30:00Z"/,
+  );
+});
+
+// #2034: the same waiver covers the check once its live run completes AFTER
+// the waiver became genuinely active -- confirming the freshness gate does
+// not regress the intended-working, actually-rerun case.
+test('#2034: the same idd-advisory-convergence waiver is covered once the check completes a fresh run after the waiver took effect', () => {
+  const fixture = readJson('fixtures/pre-merge-readiness/clean.json');
+  const input = withAdvisoryConvergenceRequiredCheck(fixture);
+  const freshChecks = (input.checks ?? []).map((check) =>
+    check.name === 'idd-advisory-convergence'
+      ? { ...check, completedAt: '2026-05-12T00:15:00Z' }
+      : check,
+  );
+  const waivableCheckSelectors = [
+    { selector: 'idd-advisory-convergence', matchMode: 'exact' },
+  ];
+  const waiverBody = renderExternalCheckWaiverComment({
+    agentId: fixture.options.expectedAgentId,
+    claimId: fixture.options.expectedClaimId,
+    headSha: fixture.input.prHeadSha,
+    checkSelector: 'idd-advisory-convergence',
+    reason: 'idd-advisory-convergence would not converge across 3 rounds',
+    expiresAt: '2026-05-13T00:00:00Z',
+    actor: 'kurone-kito',
+  });
+
+  const covered = buildPreMergeReadinessSummary(
+    {
+      ...input,
+      checks: freshChecks,
+      comments: [
+        ...(input.comments ?? []),
+        {
+          id: 'fresh-run-waiver',
           author: { login: 'kurone-kito' },
           body: waiverBody,
           createdAt: '2026-05-12T00:00:00Z',

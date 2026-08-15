@@ -318,6 +318,14 @@ export interface ExternalCheckWaiverEvidence {
     checkSelector: string;
     reason: string;
     expiresAt: string;
+    // #2034: the waiver comment's own `createdAt` -- the moment a generic
+    // waivable check's waiver became genuinely active. `summarizeRequiredChecks`
+    // compares a matched check's `completedAt` against this (or a per-check
+    // override, e.g. `idd-advisory-convergence`'s deadline-open moment) before
+    // reporting `coveredByWaiver: true`, so a stale pre-waiver run stays
+    // blocked. `'none'` when the comment's `createdAt` was unparseable --
+    // fails closed (never covers).
+    createdAt: string;
   }[];
   expired: { authorLogin: string; checkSelector: string; expiresAt: string }[];
   wrongHead: {
@@ -822,6 +830,7 @@ export function summarizeExternalCheckWaivers(
       checkSelector: parsed.checkSelector,
       reason: parsed.reason,
       expiresAt: parsed.expiresAt,
+      createdAt: parsed.createdAt,
     });
   }
 
@@ -4387,8 +4396,11 @@ export function summarizeRequiredChecks(
     protectionReadsUnreadable = false,
     trustSourcePinnedRequiredChecks = false,
     excludeFromWaiverCoverage = null,
+    waiverActiveSinceOverride = null,
   }: {
-    waivers?: { valid?: { checkSelector?: unknown }[] | null } | null;
+    waivers?: {
+      valid?: { checkSelector?: unknown; createdAt?: unknown }[] | null;
+    } | null;
     waivableSelectors?: { selector?: unknown; matchMode?: unknown }[] | null;
     // #1377: see `buildPreMergeReadinessSummary`'s option of the same name.
     protectionReadsUnreadable?: boolean;
@@ -4406,6 +4418,25 @@ export function summarizeRequiredChecks(
     // never excludes anything -- unchanged pre-#2021 behavior for every
     // caller that doesn't pass it.
     excludeFromWaiverCoverage?: ((checkName: string) => boolean) | null;
+    // #2034: per-CHECK-NAME override of the moment a matched waiver became
+    // genuinely active, superseding the waiver's own `createdAt` when later.
+    // A matched check only counts as `coveredByWaiver` once its live run's
+    // `completedAt` is at or after this moment -- otherwise the check was
+    // never actually re-run since the waiver took effect, and reporting it
+    // covered would diverge from what the real required check (and GitHub's
+    // branch protection) still shows. Returning `null` (the default, and
+    // every caller that omits this option) leaves the waiver's own
+    // `createdAt` as the sole cutoff -- this is the ONLY cutoff source for a
+    // generic waivable check; #2034 changes that check's behavior too (a
+    // valid waiver no longer covers it unconditionally). `buildPreMergeReadinessSummary`
+    // passes an override for `idd-advisory-convergence` specifically: that
+    // check's waiver only becomes genuinely active once the #2021 deadline
+    // precondition opens, and the deadline-open moment is a real, computable
+    // timestamp later than the waiver's own `createdAt` could be. The
+    // terminal-unavailability precondition path has no equivalent timestamp
+    // to invent, so no override is applied there either, and it falls back
+    // to the waiver's own `createdAt`, same as the generic path.
+    waiverActiveSinceOverride?: ((checkName: string) => string | null) | null;
     // #1689: `ciGate.trustSourcePinnedRequiredChecks` opt-in (mirrors
     // `ciGate.trustEmptyProtectionReads`'s shape). Default `false` keeps the
     // pre-#1689 conservative behavior: a required check whose ruleset entry
@@ -4439,15 +4470,47 @@ export function summarizeRequiredChecks(
   const normalizedChecks = checks.map((check) => {
     const name = String(check.name ?? '');
     const state = String(check.state ?? '').toUpperCase();
+    const completedAt = String(check.completedAt ?? '');
+    const completedAtMs = isValidIsoTimestamp(completedAt)
+      ? new Date(completedAt).getTime()
+      : null;
+    const matchingWaivers = validWaivers.filter((w) =>
+      matchCheckSelectorLocal(name, w.checkSelector),
+    );
+    const activeSinceOverride =
+      typeof waiverActiveSinceOverride === 'function'
+        ? waiverActiveSinceOverride(name)
+        : null;
+    const activeSinceOverrideMs = isValidIsoTimestamp(activeSinceOverride)
+      ? new Date(activeSinceOverride).getTime()
+      : null;
+    // #2034: a matched waiver only covers a check whose live run's
+    // `completedAt` is at or after the moment the waiver became genuinely
+    // active -- otherwise the check was never actually re-run since the
+    // waiver took effect, so reporting it covered here would diverge from
+    // what the real required check (and GitHub's branch protection) still
+    // shows. Fails closed on a missing/unparseable `completedAt` (never run,
+    // still pending) or waiver `createdAt` (`'none'`).
+    const hasFreshWaiverCoverage =
+      completedAtMs !== null &&
+      matchingWaivers.some((w) => {
+        const waiverCreatedAtMs = isValidIsoTimestamp(w.createdAt)
+          ? new Date(w.createdAt).getTime()
+          : null;
+        if (waiverCreatedAtMs === null) return false;
+        const activeSinceMs =
+          activeSinceOverrideMs !== null
+            ? Math.max(waiverCreatedAtMs, activeSinceOverrideMs)
+            : waiverCreatedAtMs;
+        return completedAtMs >= activeSinceMs;
+      });
     const coveredByWaiver =
       !CHECK_PASS_EQUIVALENT_STATES.has(state) &&
       !(
         typeof excludeFromWaiverCoverage === 'function' &&
         excludeFromWaiverCoverage(name)
       ) &&
-      validWaivers.some((w) =>
-        matchCheckSelectorLocal(name, w.checkSelector),
-      ) &&
+      hasFreshWaiverCoverage &&
       // The check must also sit on the policy's waivable surface. A
       // null/undefined list keeps the legacy behavior with no gate; an empty
       // configured list covers nothing.
@@ -4456,7 +4519,7 @@ export function summarizeRequiredChecks(
     return {
       name,
       state,
-      completedAt: String(check.completedAt ?? ''),
+      completedAt,
       coveredByWaiver,
       // Producer-identity discriminator (#1483); see `CheckLike` and
       // `selectLatestCheckPerName` for how it disambiguates a same-name
@@ -5821,10 +5884,14 @@ export function computePreMergeReadinessBlockers(
     // an exact waiver and waiting out the deadline is sufficient" when the
     // real cause is that only a glob selector (e.g. `idd-*`) targets this
     // check -- that never converges no matter how long the deadline waits.
-    const advisoryConvergenceExactWaiverCount = waiverEvidenceValidList.filter(
-      (entry) =>
-        String(entry?.checkSelector ?? '') === advisoryConvergenceCheckSelector,
-    ).length;
+    const advisoryConvergenceExactWaiverEntries =
+      waiverEvidenceValidList.filter(
+        (entry) =>
+          String(entry?.checkSelector ?? '') ===
+          advisoryConvergenceCheckSelector,
+      );
+    const advisoryConvergenceExactWaiverCount =
+      advisoryConvergenceExactWaiverEntries.length;
     const advisoryConvergenceAnyWaiverCount = waiverEvidenceValidList.filter(
       (entry) =>
         matchCheckSelectorLocal(
@@ -5836,11 +5903,7 @@ export function computePreMergeReadinessBlockers(
       advisoryConvergencePrecondition.open === true;
     if (
       advisoryConvergenceCheckNonPassing &&
-      advisoryConvergenceAnyWaiverCount > 0 &&
-      !(
-        advisoryConvergencePreconditionOpenForDetail &&
-        advisoryConvergenceExactWaiverCount > 0
-      )
+      advisoryConvergenceAnyWaiverCount > 0
     ) {
       const deadlineMinutes = Number(
         advisoryConvergencePrecondition.deadlineMinutes ?? 0,
@@ -5872,9 +5935,55 @@ export function computePreMergeReadinessBlockers(
             'precondition',
         );
       }
-      detail +=
-        ` (a posted external-check waiver exists for current HEAD but is ` +
-        `not yet covering "${advisoryConvergenceCheckSelector}": ${reasons.join('; ')})`;
+      // #2034: precondition open AND an exact-match waiver exists, yet the
+      // check is still reported non-passing -- the only remaining cause is
+      // the rerun-freshness gate: the check's own live run last completed
+      // before the waiver became genuinely active. Name the stale run's
+      // `completedAt` and the waiver's own `createdAt` explicitly, mirroring
+      // the other two reasons, instead of leaving an agent to re-derive why
+      // an apparently-satisfied waiver still left the check blocked.
+      if (
+        advisoryConvergencePreconditionOpenForDetail &&
+        advisoryConvergenceExactWaiverCount > 0 &&
+        reasons.length === 0
+      ) {
+        const staleCheck = Array.isArray(ci.checks)
+          ? (ci.checks as Record<string, unknown>[]).find(
+              (check) =>
+                check?.required === true &&
+                check?.coveredByWaiver !== true &&
+                !CHECK_PASS_EQUIVALENT_STATES.has(String(check?.state ?? '')) &&
+                matchCheckSelectorLocal(
+                  check?.name,
+                  advisoryConvergenceCheckSelector,
+                ),
+            )
+          : undefined;
+        const staleCompletedAt =
+          String(staleCheck?.completedAt ?? '') || 'none';
+        const waiverCreatedAts = advisoryConvergenceExactWaiverEntries
+          .map((entry) => String(entry?.createdAt ?? 'none'))
+          .join(', ');
+        // The deadline path has a real, computable activation override (the
+        // deadline-open moment); the terminal-unavailability path does not,
+        // so the cutoff there is the waiver's own createdAt alone -- naming
+        // both unconditionally would misstate the terminal case.
+        const activeSinceDescription =
+          advisoryConvergencePrecondition.deadlinePassed === true
+            ? `not at or after the waiver's own createdAt (${waiverCreatedAts}) ` +
+              'or the #2021 deadline precondition-open moment, whichever is later'
+            : `not at or after the waiver's own createdAt (${waiverCreatedAts})`;
+        reasons.push(
+          `its live run last completed at "${staleCompletedAt}", which is ` +
+            `${activeSinceDescription} -- rerun the check so its live run ` +
+            'reflects the waiver before trusting this as covered',
+        );
+      }
+      if (reasons.length > 0) {
+        detail +=
+          ` (a posted external-check waiver exists for current HEAD but is ` +
+          `not yet covering "${advisoryConvergenceCheckSelector}": ${reasons.join('; ')})`;
+      }
     }
     blockers.push({ gate: 'ci', detail });
   }
@@ -6336,6 +6445,23 @@ export function buildPreMergeReadinessSummary(
     advisoryConvergenceElapsedMinutes >= advisoryConvergenceDeadlineMinutes;
   const advisoryConvergencePreconditionOpen =
     advisoryConvergenceDeadlinePassed || copilotUnavailable;
+  // #2034: the deadline-path precondition-open moment as an actual ISO
+  // timestamp, used to override the waiver-active cutoff `summarizeRequiredChecks`
+  // applies to `idd-advisory-convergence` specifically -- that check's waiver
+  // only becomes genuinely active once this precondition opens, which can be
+  // later than the waiver comment's own `createdAt`. Only computed for the
+  // deadline path (`advisoryConvergenceDeadlinePassed`); the terminal-
+  // unavailability path has no equivalent real timestamp to anchor on, so it
+  // intentionally falls back to the waiver's own `createdAt` (see
+  // `waiverActiveSinceOverride` below).
+  const advisoryConvergenceDeadlineOpensAt =
+    advisoryConvergenceDeadlinePassed &&
+    isValidIsoTimestamp(advisoryConvergenceHeadCommittedAt)
+      ? new Date(
+          new Date(advisoryConvergenceHeadCommittedAt).getTime() +
+            advisoryConvergenceDeadlineMinutes * 60000,
+        ).toISOString()
+      : '';
   const advisoryConvergenceWaiverPrecondition = {
     checkSelector: DEFAULT_ADVISORY_CONVERGENCE_CHECK_SELECTOR,
     deadlineMinutes: advisoryConvergenceDeadlineMinutes,
@@ -6384,6 +6510,14 @@ export function buildPreMergeReadinessSummary(
     excludeFromWaiverCoverage: (name) =>
       name === DEFAULT_ADVISORY_CONVERGENCE_CHECK_SELECTOR &&
       !advisoryConvergenceGenuinelyCovered,
+    // #2034: only override the cutoff for `idd-advisory-convergence` itself,
+    // and only on the deadline path -- an unrelated check's waiver stays
+    // anchored on its own comment's `createdAt`.
+    waiverActiveSinceOverride: (name) =>
+      name === DEFAULT_ADVISORY_CONVERGENCE_CHECK_SELECTOR &&
+      advisoryConvergenceDeadlineOpensAt
+        ? advisoryConvergenceDeadlineOpensAt
+        : null,
   });
 
   // #1570: reuse the SAME raw waiver evidence above (already validated for
