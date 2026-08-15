@@ -1568,10 +1568,10 @@ Confirm all three before running it:
    the marker format above) now covers that same HEAD and check
    selector, and is itself valid -- unexpired, correctly claim-bound,
    posted by a trusted actor.
-3. The held instance's recorded failure reason (its own
-   `rerunPolicyHoldNotice`, or the run's log) predates the waiver --
-   the waiver is the reason to reconsider this instance, not an
-   unrelated later development.
+3. The held instance's recorded failure reason (the rerun-plan
+   diagnosis's `rerunPolicyHoldNotice` for that instance, or the run's
+   own log) predates the waiver -- the waiver is the reason to
+   reconsider this instance, not an unrelated later development.
 
 Only once all three hold, issue `gh run rerun <run-id>` on that
 specific instance directly -- a one-time, visible, auditable exception
