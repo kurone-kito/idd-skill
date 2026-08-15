@@ -1522,9 +1522,10 @@ function readExternalCheckWaiverMaxValidity(): string {
 // Configured external-check waiver mode (`ciGate.externalCheckWaivers.mode`,
 // #2046). `mode` gates the WHOLE waiver mechanism independent of the
 // `waivable` selector list -- an absent or unreadable config falls back to
-// `normalizePolicyConfig`'s own schema default (`disabled`), matching
-// `advisory-convergence.mts`'s own guard rather than leaving an
-// otherwise-valid waiver uncovered by this check alone.
+// `normalizePolicyConfig`'s own schema default (`disabled`), the fail-closed
+// choice: an unreadable config can never make this check wrongly report an
+// otherwise-valid waiver as covered when the real required check would not
+// honor it, mirroring `advisory-convergence.mts`'s own fail-closed guard.
 function readExternalCheckWaiverMode(): string {
   try {
     return normalizePolicyConfig(
