@@ -17,9 +17,11 @@ idd_worktree_guard_check() {
   # Single combined `git rev-parse` replaces three separate forked
   # pipelines (--show-toplevel; `git worktree list --porcelain | sed |
   # head` to find the primary worktree; --abbrev-ref HEAD), leaving
-  # exactly two external-process forks on the common "enabled, not on a
-  # guarded branch" path: this call and the `tr` below. A later change
-  # must not silently regress that count.
+  # exactly two external-process forks -- this call and the `tr` below
+  # -- on the common "enabled, not on a guarded branch" path with the
+  # default worktreeGuard.branchPatterns; a configured override adds
+  # two more `tr` forks in the patterns= block further down. A later
+  # change must not silently regress either count.
   #
   # This must not gate on exit status: an unborn HEAD makes the
   # trailing --abbrev-ref HEAD resolution fail (git exits 128), but git
