@@ -185,9 +185,9 @@ record the workflow itself posted. A trusted comment recording any
 other status (`failed`, `incomplete`, `permission-blocked`,
 `rescan-failed`) does not suppress either side, so a
 `workflow_dispatch` rerun after a `rescan-failed` post still posts
-fresh evidence. The workflow's PR-keyed `concurrency` group only
-serializes workflow runs against each other; it does not gate the
-agent's local F4.
+fresh evidence (preventive; no observed incident yet — #2043). The
+workflow's PR-keyed `concurrency` group only serializes workflow runs
+against each other; it does not gate the agent's local F4.
 
 ## GitHub mechanism
 
@@ -401,7 +401,7 @@ prior success record exists, or to correct an existing `failed` /
 `rescan-failed` record in particular invites a retry, so a later
 `workflow_dispatch` rerun (or agent F4 re-run) must post fresh evidence
 for its own outcome rather than leave stale non-success evidence as the
-PR's only record:
+PR's only record (preventive; no observed incident yet — #2043):
 
 ```markdown
 <!-- idd-cleanup-evidence: {status} applied:{N} failed:{N} skipped:{N} viewer-cannot-minimize:{N} retry-attempts:{N} retry-bound-exhausted:{true|false} -->
