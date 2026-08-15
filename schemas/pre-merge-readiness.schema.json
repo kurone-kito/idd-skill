@@ -1240,7 +1240,8 @@
               "authorLogin",
               "checkSelector",
               "reason",
-              "expiresAt"
+              "expiresAt",
+              "createdAt"
             ],
             "additionalProperties": false,
             "properties": {
@@ -1259,6 +1260,10 @@
               "expiresAt": {
                 "type": "string",
                 "description": "Waiver's recorded expiry timestamp."
+              },
+              "createdAt": {
+                "type": "string",
+                "description": "Waiver comment's own creation timestamp (#2034), or 'none' when unparseable; the moment a generic waivable check's waiver became genuinely active, used to gate coveredByWaiver on a fresh post-waiver check run."
               }
             }
           }

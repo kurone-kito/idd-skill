@@ -717,6 +717,22 @@ The adopted helper boundaries are intentionally narrow:
   `terminalUnavailable`, `open`), so an agent never has to re-derive the
   remaining time-to-deadline by hand when a `ci` blocker cites a posted
   but not-yet-active waiver
+- (`#2034`) each `waiverEvidence.valid` entry now also carries the
+  waiver comment's own `createdAt` (`'none'` when unparseable, which
+  fails closed). A matched check only becomes `coveredByWaiver: true`
+  once its own live run's `completedAt` is at or after the moment the
+  waiver became genuinely active — the waiver's `createdAt` for a
+  generic waivable check, or (for `idd-advisory-convergence`
+  specifically) the later of that and the `#2021` deadline/terminal
+  precondition-open moment. A check whose live run last completed
+  before that moment stays reported as blocked even though a `valid`
+  waiver marker exists, since it was never actually re-run since the
+  waiver took effect — mirroring `idd-advisory-wait.instructions.md`'s
+  Terminal-routing guidance to rerun the check after posting a waiver,
+  instead of leaving that as an unenforced manual step. When this is
+  what withholds coverage for `idd-advisory-convergence`, the `ci`
+  blocker's detail names the stale run's `completedAt` and the
+  waiver's own `createdAt`
 - it does not replace the pre-merge or merge decision tables; it only
   reduces command-copy variance when collecting canonical merge-gate
   evidence
