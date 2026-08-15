@@ -18,9 +18,11 @@ import {
   checkTrustSafety,
   checkVerifiability,
   evaluateSuitability,
+  evaluateSuitabilityLocal,
   fetchMergedPrFileOverlapEvidence,
   loadHighContentionFiles,
   parseArgs,
+  splitLocalDraftTitleAndBody,
 } from '../src/scripts/suitability-triage.mts';
 
 // Stub `gh` on PATH with an invocation counter (the discover-roadmap-graph.
@@ -2662,4 +2664,124 @@ if (args[0] === 'pr' && args[1] === 'view') {
   } finally {
     restore();
   }
+});
+
+// #2102: local/offline dry-run mode (--body-file / --stdin).
+
+test('splitLocalDraftTitleAndBody extracts a leading H1 as the title', () => {
+  const { title, body } = splitLocalDraftTitleAndBody(
+    '# feat: add deterministic helper\n\n## Purpose\nAdd helper\n',
+  );
+  assert.equal(title, 'feat: add deterministic helper');
+  assert.equal(body, '## Purpose\nAdd helper\n');
+});
+
+test('splitLocalDraftTitleAndBody strips only the blank lines immediately after the title', () => {
+  const { title, body } = splitLocalDraftTitleAndBody(
+    '#   feat: with extra leading/trailing space   \n\n\n\nbody text\n',
+  );
+  assert.equal(title, 'feat: with extra leading/trailing space');
+  assert.equal(body, 'body text\n');
+});
+
+test('splitLocalDraftTitleAndBody leaves title empty and returns the whole input as body when there is no leading H1', () => {
+  const text = 'Just some body text, no H1 heading here.\n';
+  const { title, body } = splitLocalDraftTitleAndBody(text);
+  assert.equal(title, '');
+  assert.equal(body, text);
+});
+
+test('splitLocalDraftTitleAndBody does not extract an H1 that is not the first content', () => {
+  const text = 'Some intro line.\n# not a title\nmore body\n';
+  const { title, body } = splitLocalDraftTitleAndBody(text);
+  assert.equal(title, '');
+  assert.equal(body, text);
+});
+
+test('parseArgs recognizes --body-file and --stdin, defaulting both to absent/false', () => {
+  const bodyFileArgs = parseArgs(['--body-file', 'draft.md']);
+  assert.equal(bodyFileArgs.bodyFile, 'draft.md');
+  assert.equal(bodyFileArgs.stdin, false);
+
+  const stdinArgs = parseArgs(['--stdin']);
+  assert.equal(stdinArgs.stdin, true);
+  assert.equal(stdinArgs.bodyFile, undefined);
+
+  const issueArgs = parseArgs(['--issue', '42']);
+  assert.equal(issueArgs.bodyFile, undefined);
+  assert.equal(issueArgs.stdin, false);
+});
+
+const LOCAL_GOOD_DRAFT = `# feat: add deterministic helper
+
+## Purpose
+Add a deterministic helper function.
+
+## Scope
+Implement helper behavior in a single file.
+
+## Acceptance Criteria
+- [ ] tests pass
+- [ ] lint passes
+`;
+
+test('evaluateSuitabilityLocal runs six checks and marks duplicate_or_superseded not_evaluated', () => {
+  const result = evaluateSuitabilityLocal(LOCAL_GOOD_DRAFT);
+  assert.equal(result.mode, 'local');
+  assert.equal(result.issue.title, 'feat: add deterministic helper');
+  assert.equal(result.checks.length, 7);
+
+  const byId = new Map(result.checks.map((check) => [check.id, check]));
+  assert.equal(byId.get('duplicate_or_superseded')?.result, 'not_evaluated');
+  for (const id of [
+    'repository_fit',
+    'coherence',
+    'trust_safety',
+    'actionability',
+    'autonomy',
+    'verifiability',
+  ]) {
+    assert.equal(byId.get(id)?.result, 'pass', `expected ${id} to pass`);
+  }
+});
+
+test('evaluateSuitabilityLocal never returns an outcome/passed/failedCheck field, live or otherwise', () => {
+  const result = evaluateSuitabilityLocal(LOCAL_GOOD_DRAFT);
+  // #2102 acceptance criteria: the local-mode result must be structurally
+  // distinguishable from evaluateSuitability's live-mode SuitabilityResult
+  // by a caller that only checks for a recognized `outcome` value -- assert
+  // the key is absent outright, not merely holding a non-enum value.
+  assert.equal('outcome' in result, false);
+  assert.equal('passed' in result, false);
+  assert.equal('failedCheck' in result, false);
+});
+
+test('evaluateSuitabilityLocal reports duplicate_or_superseded as not_evaluated even when every other check fails', () => {
+  // Empty draft: fails repository_fit-adjacent coherence/verifiability
+  // checks outright. duplicate_or_superseded must still read
+  // "not_evaluated", never "fail" and never silently absent -- there is
+  // no live search index to have failed against.
+  const result = evaluateSuitabilityLocal('');
+  const duplicateCheck = result.checks.find(
+    (check) => check.id === 'duplicate_or_superseded',
+  );
+  assert.ok(duplicateCheck);
+  assert.equal(duplicateCheck.result, 'not_evaluated');
+  assert.ok(
+    result.checks.some((check) => check.result === 'fail'),
+    'expected at least one of the six evaluated checks to fail on an empty draft',
+  );
+});
+
+test('evaluateSuitabilityLocal honors configured blocked/needs-decision label names (moot for labels, but exercised for parity)', () => {
+  // The synthetic local issue always has an empty labels array, so a
+  // configured blockedByHumanLabelName can never match -- this just
+  // confirms passing the option through does not throw or change the
+  // synthetic issue's own checkAutonomy outcome.
+  const result = evaluateSuitabilityLocal(LOCAL_GOOD_DRAFT, {
+    blockedByHumanLabelName: 'status:blocked-by-human',
+    needsDecisionLabelName: 'status:needs-decision',
+  });
+  const autonomyCheck = result.checks.find((check) => check.id === 'autonomy');
+  assert.equal(autonomyCheck?.result, 'pass');
 });

@@ -59,7 +59,17 @@ In the idd-skill source repository, the following optional helpers were adopted:
   including Check 4's high-confidence duplicate/superseded tier
   (closing-PR reference and same-candidate-files overlap, excluding
   high-contention files) (referenced in
-  [kurone-kito/idd-skill#1484](https://github.com/kurone-kito/idd-skill/issues/1484))
+  [kurone-kito/idd-skill#1484](https://github.com/kurone-kito/idd-skill/issues/1484)).
+  `--body-file <path>` / `--stdin`, mutually exclusive with `--issue`, run
+  a local/offline dry-run of six of the seven checks (every check except
+  `duplicate_or_superseded`, which needs a live search index) against a
+  drafted issue's text before it is ever published -- the same exported
+  check functions the live path uses, not a reimplementation. The output
+  carries `"mode": "local"` and no `outcome`/`passed`/`failedCheck` field
+  of any kind, so a local six-of-seven pass can never be mistaken for a
+  live `--issue <n>` verdict; `duplicate_or_superseded` always reports
+  `"not_evaluated"`, never omitted (referenced in
+  [kurone-kito/idd-skill#2102](https://github.com/kurone-kito/idd-skill/issues/2102))
 - `scripts/claim-approval-gate.mjs` for A5(a) issue-author approval
   verification; A5(d) open-PR conflict checks remain manual by design
   (referenced in
