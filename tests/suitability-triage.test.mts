@@ -2764,6 +2764,20 @@ test('resolveInputMode throws when more than one input mode is selected', () => 
   );
 });
 
+test('resolveInputMode throws an actionable error for an empty --body-file value', () => {
+  assert.throws(
+    () => resolveInputMode({ issue: null, bodyFile: '', stdin: false }),
+    /--body-file requires a non-empty path/,
+  );
+});
+
+test('resolveInputMode still rejects multi-mode selection when --body-file is empty', () => {
+  assert.throws(
+    () => resolveInputMode({ issue: 42, bodyFile: '', stdin: false }),
+    /choose only one of --issue, --body-file, or --stdin/,
+  );
+});
+
 const LOCAL_GOOD_DRAFT = `# feat: add deterministic helper
 
 ## Purpose

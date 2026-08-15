@@ -981,9 +981,13 @@ export function checkVerifiability(context) {
  * `runCli`'s own process-level side effects (env mutation, `gh` calls).
  */
 export function resolveInputMode(args) {
+  // Checks flag *presence* (`!== undefined`), not truthiness: `--body-file=`
+  // parses to `''` under Node's util.parseArgs, and a truthy check would
+  // silently fold that into "no mode selected" instead of the explicit,
+  // actionable empty-path error thrown below.
   const inputModeCount =
     (args.issue !== null ? 1 : 0) +
-    (args.bodyFile ? 1 : 0) +
+    (args.bodyFile !== undefined ? 1 : 0) +
     (args.stdin ? 1 : 0);
   if (inputModeCount === 0) {
     throw new Error('one of --issue, --body-file, or --stdin is required');
@@ -991,7 +995,10 @@ export function resolveInputMode(args) {
   if (inputModeCount > 1) {
     throw new Error('choose only one of --issue, --body-file, or --stdin');
   }
-  return args.bodyFile || args.stdin ? 'local' : 'issue';
+  if (args.bodyFile === '') {
+    throw new Error('--body-file requires a non-empty path');
+  }
+  return args.bodyFile !== undefined || args.stdin ? 'local' : 'issue';
 }
 function runCli() {
   const args = parseArgs(process.argv.slice(2));
