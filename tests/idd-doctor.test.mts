@@ -15,6 +15,7 @@ import {
   checkClaimTimingConsistency,
   checkDependencyVersionDrift,
   checkLiveConfigSchema,
+  checkPlaceholders,
   checkPolicySignals,
   checkProjectCommands,
   classifyBacklog,
@@ -49,6 +50,7 @@ import {
   hookWiresWorktreeGuard,
   isBranchProtectionUnreadable,
   isGithubBackLinkHost,
+  isIddManagedPlaceholderScanPath,
   parseIsoDurationToHours,
   parseLockfileImporterVersion,
   parsePrimaryWorktreePath,
@@ -68,6 +70,7 @@ import {
 } from '../src/scripts/idd-doctor.mts';
 import { fetchGovernanceJson } from '../src/scripts/pre-merge-readiness.mts';
 import { loadJson } from '../src/scripts/validate-schemas.mts';
+import { readText } from './test-utils.mts';
 
 const ap = (n: number | string) =>
   `<!-- idd-skill-autopilot-suitability: ${n} -->`;
@@ -467,6 +470,151 @@ test('scanFileForPlaceholders scans non-docs files raw so code-span leftovers ar
     ),
     ['{{PROJECT_MARKER_PREFIX}}'],
   );
+});
+
+test('isIddManagedPlaceholderScanPath accepts every IDD-managed path class (idd-skill#2079)', () => {
+  for (const distributionSource of [true, false]) {
+    assert.equal(
+      isIddManagedPlaceholderScanPath(
+        'docs/getting-started.md',
+        distributionSource,
+      ),
+      true,
+    );
+    assert.equal(
+      isIddManagedPlaceholderScanPath(
+        'docs/onboarding/placeholders.md',
+        distributionSource,
+      ),
+      true,
+    );
+    assert.equal(
+      isIddManagedPlaceholderScanPath(
+        'profiles/human-required/README.md',
+        distributionSource,
+      ),
+      true,
+    );
+    assert.equal(
+      isIddManagedPlaceholderScanPath(
+        '.claude/skills/issue-authoring/SKILL.md',
+        distributionSource,
+      ),
+      true,
+    );
+    assert.equal(
+      isIddManagedPlaceholderScanPath(
+        'scripts/idd-doctor.mjs',
+        distributionSource,
+      ),
+      true,
+    );
+    assert.equal(
+      isIddManagedPlaceholderScanPath(
+        'schemas/idd-doctor.schema.json',
+        distributionSource,
+      ),
+      true,
+    );
+    assert.equal(
+      isIddManagedPlaceholderScanPath(
+        'fixtures/schemas/idd-doctor.schema.json',
+        distributionSource,
+      ),
+      true,
+    );
+    // idd-skill#2079 review follow-up: .github/idd/config.json is
+    // IDD-managed (validated by checkLiveConfigSchema) and templated
+    // in idd-template/.github/idd/config.json with
+    // {{PROJECT_MARKER_PREFIX}} -- the allowlist must not drop it.
+    assert.equal(
+      isIddManagedPlaceholderScanPath(
+        '.github/idd/config.json',
+        distributionSource,
+      ),
+      true,
+    );
+  }
+});
+
+test('isIddManagedPlaceholderScanPath rejects an adopter application source file (idd-skill#2079 regression)', () => {
+  // The reported kit.black#128 case: an adopter's own i18n dictionary
+  // using {{ year }} as its own runtime template syntax.
+  assert.equal(
+    isIddManagedPlaceholderScanPath('packages/web/src/i18n/en.ts', true),
+    false,
+  );
+  assert.equal(
+    isIddManagedPlaceholderScanPath('packages/web/src/i18n/en.ts', false),
+    false,
+  );
+  assert.equal(isIddManagedPlaceholderScanPath('README.md', true), false);
+  assert.equal(isIddManagedPlaceholderScanPath('package.json', false), false);
+  // A docs/ file with a non-.md extension is out of scope too -- the
+  // issue's proposed scope is docs/*.md specifically.
+  assert.equal(
+    isIddManagedPlaceholderScanPath('docs/some-data.json', true),
+    false,
+  );
+});
+
+test('isIddManagedPlaceholderScanPath scans .github/instructions/ only in adopter mode', () => {
+  // distributionSource=true (the idd-skill source repo itself): these
+  // files document the placeholder syntax with example tokens that are
+  // never meant to be "resolved" -- scanning them would self-trigger.
+  assert.equal(
+    isIddManagedPlaceholderScanPath(
+      '.github/instructions/idd-discover.instructions.md',
+      true,
+    ),
+    false,
+  );
+  // distributionSource=false (an adopter's own copy after import): a
+  // leftover unresolved placeholder here is a genuine import bug.
+  assert.equal(
+    isIddManagedPlaceholderScanPath(
+      '.github/instructions/idd-discover.instructions.md',
+      false,
+    ),
+    true,
+  );
+});
+
+test('checkPlaceholders no longer flags a non-IDD-managed adopter file (idd-skill#2079 regression)', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'idd-doctor-placeholders-'));
+  try {
+    const fixtureContent = readText(
+      'tests/fixtures/idd-doctor-placeholders/adopter-i18n-example.ts',
+    );
+    writeFixtureFile(dir, 'packages/web/src/i18n/en.ts', fixtureContent);
+    const report = { root: dir, errors: [], warnings: [], passes: [] };
+    checkPlaceholders(dir, ['packages/web/src/i18n/en.ts'], report);
+    assert.deepEqual(report.errors, []);
+    assert.match(
+      report.passes[0] ?? '',
+      /no unresolved \{\{\.\.\.\}\} placeholders/,
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('checkPlaceholders still flags an unresolved placeholder in an IDD-managed file', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'idd-doctor-placeholders-hit-'));
+  try {
+    writeFixtureFile(
+      dir,
+      'docs/getting-started.md',
+      'Welcome to {{PROJECT_MARKER_PREFIX}}!\n',
+    );
+    const report = { root: dir, errors: [], warnings: [], passes: [] };
+    checkPlaceholders(dir, ['docs/getting-started.md'], report);
+    assert.equal(report.errors.length, 1);
+    assert.match(report.errors[0], /docs\/getting-started\.md/);
+    assert.match(report.errors[0], /\{\{PROJECT_MARKER_PREFIX\}\}/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test('parsePrimaryWorktreePath returns the first worktree entry', () => {
