@@ -908,16 +908,30 @@ export function collectDuplicateSyncPairTargets(syncPairs) {
   return violations;
 }
 /**
- * Parses `^<low>.<x>.<y> || >=<high>.<x>.<y>` -- the only shape this
- * repository's `engines.node` has ever used -- into its two version
- * bounds. Returns null when the range doesn't match that exact shape
- * (fail closed rather than guess at a different range grammar).
+ * Parses `^<v1>.<x>.<y> (|| ^<vN>.<x>.<y>)* || >=<high>.<x>.<y>` -- one or
+ * more `^` clauses, in written order, followed by exactly one trailing `>=`
+ * clause -- into an ordered list of version strings (the `>=` clause last).
+ * Returns null when the range doesn't match that exact shape: zero `^`
+ * clauses, a `>=` clause anywhere but last, or content after the trailing
+ * `>=` clause (fail closed rather than guess at a different range grammar).
+ * `#1706`'s original two-clause repository state (`^22.22.2 || >=24.2.0`)
+ * still parses to a 2-element list under this grammar (#2077).
  */
-function parseTwoClauseEnginesRange(engines) {
-  const match = /^\^(\d+\.\d+\.\d+)\s*\|\|\s*>=(\d+\.\d+\.\d+)$/.exec(
-    engines.trim(),
-  );
-  return match ? { low: match[1], high: match[2] } : null;
+function parseEnginesRangeClauses(engines) {
+  const parts = engines.trim().split(/\s*\|\|\s*/);
+  // Fewer than 2 parts means zero `^` clauses (either just a bare `>=`
+  // clause, or an unsplittable string) -- always invalid.
+  if (parts.length < 2) return null;
+  const highMatch = /^>=(\d+\.\d+\.\d+)$/.exec(parts[parts.length - 1]);
+  if (!highMatch) return null;
+  const clauses = [];
+  for (let index = 0; index < parts.length - 1; index += 1) {
+    const caretMatch = /^\^(\d+\.\d+\.\d+)$/.exec(parts[index]);
+    if (!caretMatch) return null;
+    clauses.push(caretMatch[1]);
+  }
+  clauses.push(highMatch[1]);
+  return clauses;
 }
 export function collectEnginesRangeMirrorViolations(
   enginesNode,
@@ -930,13 +944,17 @@ export function collectEnginesRangeMirrorViolations(
       'engines-range-mirrors: package.json engines.node is missing or not a string',
     ];
   }
-  const bounds = parseTwoClauseEnginesRange(engines);
+  const clauses = parseEnginesRangeClauses(engines);
   const violations = [];
-  if (!bounds) {
+  if (!clauses) {
     violations.push(
-      `engines-range-mirrors: engines.node "${engines}" does not match the expected "^<low> || >=<high>" shape; cannot verify mirrors`,
+      `engines-range-mirrors: engines.node "${engines}" does not match the expected "^<v1> (|| ^<vN>)* || >=<high>" shape; cannot verify mirrors`,
     );
   }
+  // The first clause is always the low bound: an ordered `^` clause list's
+  // first entry, followed by exactly one trailing `>=` clause -- unchanged
+  // meaning from the two-clause case's `low`.
+  const low = clauses?.[0];
   for (const mirror of mirrors) {
     let text;
     try {
@@ -955,27 +973,26 @@ export function collectEnginesRangeMirrorViolations(
           );
         }
         break;
-      case 'components':
-        if (
-          bounds &&
-          (!text.includes(bounds.low) || !text.includes(bounds.high))
-        ) {
+      case 'components': {
+        const missing = clauses?.filter((clause) => !text.includes(clause));
+        if (missing && missing.length > 0) {
           violations.push(
-            `engines-range-mirrors: ${mirror.file} does not mention both engines.node bounds "${bounds.low}" and "${bounds.high}"`,
+            `engines-range-mirrors: ${mirror.file} does not mention all engines.node bounds ${missing.map((clause) => `"${clause}"`).join(', ')}`,
           );
         }
         break;
+      }
       case 'low-bound-line':
-        if (bounds && text.trim() !== bounds.low) {
+        if (low !== undefined && text.trim() !== low) {
           violations.push(
-            `engines-range-mirrors: ${mirror.file} pins "${text.trim()}", expected the engines.node low bound "${bounds.low}"`,
+            `engines-range-mirrors: ${mirror.file} pins "${text.trim()}", expected the engines.node low bound "${low}"`,
           );
         }
         break;
       case 'low-bound-contains':
-        if (bounds && !text.includes(bounds.low)) {
+        if (low !== undefined && !text.includes(low)) {
           violations.push(
-            `engines-range-mirrors: ${mirror.file} does not mention the engines.node low bound "${bounds.low}"`,
+            `engines-range-mirrors: ${mirror.file} does not mention the engines.node low bound "${low}"`,
           );
         }
         break;

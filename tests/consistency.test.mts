@@ -1649,7 +1649,7 @@ test('collectEnginesRangeMirrorViolations: catches a stale full-range mention', 
   ]);
 });
 
-test('collectEnginesRangeMirrorViolations: components mode requires both bounds', () => {
+test('collectEnginesRangeMirrorViolations: components mode requires every clause, naming only what is missing', () => {
   const violations = collectEnginesRangeMirrorViolations(
     ENGINES_NODE,
     [{ file: 'prose.md', mode: 'components' }],
@@ -1657,7 +1657,7 @@ test('collectEnginesRangeMirrorViolations: components mode requires both bounds'
     () => 'Node.js 22.22.2 or newer',
   );
   assert.deepEqual(violations, [
-    `engines-range-mirrors: prose.md does not mention both engines.node bounds "22.22.2" and "24.2.0"`,
+    `engines-range-mirrors: prose.md does not mention all engines.node bounds "24.2.0"`,
   ]);
 });
 
@@ -1679,7 +1679,59 @@ test('collectEnginesRangeMirrorViolations: fails closed on a missing or non-stri
 test('collectEnginesRangeMirrorViolations: fails closed on an unrecognized range shape', () => {
   const violations = collectEnginesRangeMirrorViolations('>=18', [], () => '');
   assert.deepEqual(violations, [
-    'engines-range-mirrors: engines.node ">=18" does not match the expected "^<low> || >=<high>" shape; cannot verify mirrors',
+    'engines-range-mirrors: engines.node ">=18" does not match the expected "^<v1> (|| ^<vN>)* || >=<high>" shape; cannot verify mirrors',
+  ]);
+});
+
+test('collectEnginesRangeMirrorViolations: parses a three-clause range and requires all three components', () => {
+  const threeClause = '^22.23.2 || ^24.2.0 || >=26.0.0';
+  const passing = collectEnginesRangeMirrorViolations(
+    threeClause,
+    [{ file: 'prose.md', mode: 'components' }],
+    () => 'Requires 22.23.2, 24.2.0, or 26.0.0 or newer',
+  );
+  assert.deepEqual(passing, []);
+
+  const missingMiddle = collectEnginesRangeMirrorViolations(
+    threeClause,
+    [{ file: 'prose.md', mode: 'components' }],
+    () => 'Requires 22.23.2 or 26.0.0 or newer',
+  );
+  assert.deepEqual(missingMiddle, [
+    'engines-range-mirrors: prose.md does not mention all engines.node bounds "24.2.0"',
+  ]);
+
+  // low-bound modes still resolve to the first (leftmost) clause with more
+  // than two clauses present.
+  const lowBoundViolations = collectEnginesRangeMirrorViolations(
+    threeClause,
+    [{ file: '.nvmrc', mode: 'low-bound-line' }],
+    () => '22.20.0\n',
+  );
+  assert.deepEqual(lowBoundViolations, [
+    'engines-range-mirrors: .nvmrc pins "22.20.0", expected the engines.node low bound "22.23.2"',
+  ]);
+});
+
+test('collectEnginesRangeMirrorViolations: fails closed when a >= clause is not last', () => {
+  const violations = collectEnginesRangeMirrorViolations(
+    '^22.23.2 || >=24.2.0 || ^26.0.0',
+    [],
+    () => '',
+  );
+  assert.deepEqual(violations, [
+    'engines-range-mirrors: engines.node "^22.23.2 || >=24.2.0 || ^26.0.0" does not match the expected "^<v1> (|| ^<vN>)* || >=<high>" shape; cannot verify mirrors',
+  ]);
+});
+
+test('collectEnginesRangeMirrorViolations: fails closed on content after the trailing >= clause', () => {
+  const violations = collectEnginesRangeMirrorViolations(
+    '^22.23.2 || >=24.2.0 || extra',
+    [],
+    () => '',
+  );
+  assert.deepEqual(violations, [
+    'engines-range-mirrors: engines.node "^22.23.2 || >=24.2.0 || extra" does not match the expected "^<v1> (|| ^<vN>)* || >=<high>" shape; cannot verify mirrors',
   ]);
 });
 
