@@ -4733,12 +4733,19 @@ export function computePreMergeReadinessBlockers(report) {
         const waiverCreatedAts = advisoryConvergenceExactWaiverEntries
           .map((entry) => String(entry?.createdAt ?? 'none'))
           .join(', ');
+        // The deadline path has a real, computable activation override (the
+        // deadline-open moment); the terminal-unavailability path does not,
+        // so the cutoff there is the waiver's own createdAt alone -- naming
+        // both unconditionally would misstate the terminal case.
+        const activeSinceDescription =
+          advisoryConvergencePrecondition.deadlinePassed === true
+            ? `not at or after the waiver's own createdAt (${waiverCreatedAts}) ` +
+              'or the #2021 deadline precondition-open moment, whichever is later'
+            : `not at or after the waiver's own createdAt (${waiverCreatedAts})`;
         reasons.push(
           `its live run last completed at "${staleCompletedAt}", which is ` +
-            `not at or after the waiver's own createdAt (${waiverCreatedAts}) ` +
-            'or the deadline/terminal precondition-open moment, whichever is ' +
-            'later -- rerun the check so its live run reflects the waiver ' +
-            'before trusting this as covered',
+            `${activeSinceDescription} -- rerun the check so its live run ` +
+            'reflects the waiver before trusting this as covered',
         );
       }
       if (reasons.length > 0) {

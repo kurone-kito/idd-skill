@@ -721,18 +721,23 @@ The adopted helper boundaries are intentionally narrow:
   waiver comment's own `createdAt` (`'none'` when unparseable, which
   fails closed). A matched check only becomes `coveredByWaiver: true`
   once its own live run's `completedAt` is at or after the moment the
-  waiver became genuinely active — the waiver's `createdAt` for a
-  generic waivable check, or (for `idd-advisory-convergence`
-  specifically) the later of that and the `#2021` deadline/terminal
-  precondition-open moment. A check whose live run last completed
-  before that moment stays reported as blocked even though a `valid`
-  waiver marker exists, since it was never actually re-run since the
-  waiver took effect — mirroring `idd-advisory-wait.instructions.md`'s
-  Terminal-routing guidance to rerun the check after posting a waiver,
-  instead of leaving that as an unenforced manual step. When this is
-  what withholds coverage for `idd-advisory-convergence`, the `ci`
-  blocker's detail names the stale run's `completedAt` and the
-  waiver's own `createdAt`
+  waiver became genuinely active — the waiver's `createdAt` alone for
+  a generic waivable check. For `idd-advisory-convergence`
+  specifically, that moment is the later of the waiver's `createdAt`
+  and the `#2021` deadline precondition-open moment when the
+  precondition opened via the 24h deadline (a real, computable
+  timestamp); when it opened via proven terminal Copilot
+  unavailability instead, there is no equivalent timestamp to compare
+  against, so the cutoff there is the waiver's `createdAt` alone, same
+  as the generic case. A check whose live run last completed before
+  its applicable cutoff stays reported as blocked even though a
+  `valid` waiver marker exists, since it was never actually re-run
+  since the waiver took effect — mirroring
+  `idd-advisory-wait.instructions.md`'s Terminal-routing guidance to
+  rerun the check after posting a waiver, instead of leaving that as
+  an unenforced manual step. When this is what withholds coverage for
+  `idd-advisory-convergence`, the `ci` blocker's detail names the
+  stale run's `completedAt` and the waiver's own `createdAt`
 - it does not replace the pre-merge or merge decision tables; it only
   reduces command-copy variance when collecting canonical merge-gate
   evidence

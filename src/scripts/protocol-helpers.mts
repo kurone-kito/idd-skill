@@ -4426,15 +4426,16 @@ export function summarizeRequiredChecks(
     // covered would diverge from what the real required check (and GitHub's
     // branch protection) still shows. Returning `null` (the default, and
     // every caller that omits this option) leaves the waiver's own
-    // `createdAt` as the sole cutoff -- unchanged pre-#2034 behavior for a
-    // generic waivable check. `buildPreMergeReadinessSummary` passes an
-    // override for `idd-advisory-convergence` specifically: that check's
-    // waiver only becomes genuinely active once the #2021 deadline/terminal
-    // precondition opens, and (deadline path only) the precondition-open
-    // moment is a real, computable timestamp later than the waiver's own
-    // `createdAt` could be. The terminal-unavailability path has no natural
-    // timestamp to invent, so no override is applied and it falls back to
-    // the waiver's own `createdAt`, same as the generic path.
+    // `createdAt` as the sole cutoff -- this is the ONLY cutoff source for a
+    // generic waivable check; #2034 changes that check's behavior too (a
+    // valid waiver no longer covers it unconditionally). `buildPreMergeReadinessSummary`
+    // passes an override for `idd-advisory-convergence` specifically: that
+    // check's waiver only becomes genuinely active once the #2021 deadline
+    // precondition opens, and the deadline-open moment is a real, computable
+    // timestamp later than the waiver's own `createdAt` could be. The
+    // terminal-unavailability precondition path has no equivalent timestamp
+    // to invent, so no override is applied there either, and it falls back
+    // to the waiver's own `createdAt`, same as the generic path.
     waiverActiveSinceOverride?: ((checkName: string) => string | null) | null;
     // #1689: `ciGate.trustSourcePinnedRequiredChecks` opt-in (mirrors
     // `ciGate.trustEmptyProtectionReads`'s shape). Default `false` keeps the
@@ -5963,12 +5964,19 @@ export function computePreMergeReadinessBlockers(
         const waiverCreatedAts = advisoryConvergenceExactWaiverEntries
           .map((entry) => String(entry?.createdAt ?? 'none'))
           .join(', ');
+        // The deadline path has a real, computable activation override (the
+        // deadline-open moment); the terminal-unavailability path does not,
+        // so the cutoff there is the waiver's own createdAt alone -- naming
+        // both unconditionally would misstate the terminal case.
+        const activeSinceDescription =
+          advisoryConvergencePrecondition.deadlinePassed === true
+            ? `not at or after the waiver's own createdAt (${waiverCreatedAts}) ` +
+              'or the #2021 deadline precondition-open moment, whichever is later'
+            : `not at or after the waiver's own createdAt (${waiverCreatedAts})`;
         reasons.push(
           `its live run last completed at "${staleCompletedAt}", which is ` +
-            `not at or after the waiver's own createdAt (${waiverCreatedAts}) ` +
-            'or the deadline/terminal precondition-open moment, whichever is ' +
-            'later -- rerun the check so its live run reflects the waiver ' +
-            'before trusting this as covered',
+            `${activeSinceDescription} -- rerun the check so its live run ` +
+            'reflects the waiver before trusting this as covered',
         );
       }
       if (reasons.length > 0) {
