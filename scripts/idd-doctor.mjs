@@ -401,8 +401,9 @@ function checkRequiredFiles(_files, report) {
  * legitimately use `{{...}}` as its own runtime template syntax (i18n,
  * mustache-style templates, etc.) with nothing to do with IDD onboarding
  * (idd-skill#2079). An allowlist, not a denylist: only these path classes
- * are ever scanned, matching `checkRequiredFiles`'s file classes plus the
- * vendored `scripts/`/`schemas/`/`fixtures/schemas/` bundle.
+ * are ever scanned -- `docs/*.md`, `profiles/`, `.claude/skills/`,
+ * `.github/idd/`, and the vendored `scripts/`/`schemas/`/
+ * `fixtures/schemas/` bundle.
  *
  * `.github/instructions/` is included only in adopter mode
  * (`distributionSource` false): in the source repository itself those
