@@ -63,6 +63,8 @@ const MERGED_PR_SCAN_DEADLINE_MS = 2 * 60 * 1000;
 // trigger fires (see ci-wait-policy.mts's identical note).
 const SUITABILITY_TRIAGE_FLAG_SPEC = {
   '--issue': { type: 'string' },
+  '--body-file': { type: 'string' },
+  '--stdin': { type: 'boolean', default: false },
   '--token': { type: 'string', default: '' },
   '--owner': { type: 'string', default: '' },
   '--repo': { type: 'string', default: '' },
@@ -972,11 +974,43 @@ export function checkVerifiability(context) {
       'Issue includes objective verification language and substantive criteria.',
   };
 }
+/**
+ * #2102: `--issue`, `--body-file`, and `--stdin` select mutually exclusive
+ * input modes; exactly one is required. Exported (and thus independently
+ * testable) so both `throw` branches can be exercised without invoking
+ * `runCli`'s own process-level side effects (env mutation, `gh` calls).
+ */
+export function resolveInputMode(args) {
+  // Checks flag *presence* (`!== undefined`), not truthiness: `--body-file=`
+  // parses to `''` under Node's util.parseArgs, and a truthy check would
+  // silently fold that into "no mode selected" instead of the explicit,
+  // actionable empty-path error thrown below.
+  const inputModeCount =
+    (args.issue !== null ? 1 : 0) +
+    (args.bodyFile !== undefined ? 1 : 0) +
+    (args.stdin ? 1 : 0);
+  if (inputModeCount === 0) {
+    throw new Error('one of --issue, --body-file, or --stdin is required');
+  }
+  if (inputModeCount > 1) {
+    throw new Error('choose only one of --issue, --body-file, or --stdin');
+  }
+  if (args.bodyFile === '') {
+    throw new Error('--body-file requires a non-empty path');
+  }
+  return args.bodyFile !== undefined || args.stdin ? 'local' : 'issue';
+}
 function runCli() {
   const args = parseArgs(process.argv.slice(2));
   if (args.help) {
     printHelp();
     process.exit(0);
+  }
+  // #2102: --body-file/--stdin never touch the network -- resolved before
+  // any of the --issue-only setup below.
+  if (resolveInputMode(args) === 'local') {
+    runLocalCli(args);
+    return;
   }
   if (args.issue === null || !Number.isInteger(args.issue) || args.issue <= 0) {
     throw new Error('--issue is required and must be a positive integer');
@@ -1209,6 +1243,107 @@ function runCli() {
   process.stdout.write(`${JSON.stringify(output, null, 2)}\n`);
 }
 /**
+ * #2102: local/offline dry-run core for `--body-file`/`--stdin`, mirroring
+ * `evaluateSuitability`'s split from `runCli`: this is the pure,
+ * exported-and-testable half; `runLocalCli` below is the thin I/O wrapper
+ * (read the file/stdin, call this, print JSON).
+ *
+ * Runs the same exported check functions `evaluateSuitability` calls for
+ * every check except `duplicate_or_superseded` (Check 4), which
+ * fundamentally needs a live `gh api search/issues` query and cannot run
+ * offline -- reported as its own explicit `"not_evaluated"` result value
+ * in every run, never silently omitted and never counted toward a
+ * pass/fail rollup. Unlike `evaluateSuitability`, this never short-circuits
+ * on the first failing check: a dry-run's whole purpose is surfacing every
+ * check's verdict in one pass, not the live path's checks-are-expensive
+ * early-exit (no check here does network I/O, so there is no cost to
+ * avoid).
+ *
+ * The return value has no `outcome` field at all, and no aggregate
+ * `passed` value: `mode: "local"` plus a per-check `checks[]` array is the
+ * entire contract, so a caller cannot mistake a six-of-seven local pass
+ * for a live `--issue <n>` verdict -- the same class of category error
+ * this repository's own prior finding flagged for
+ * `audit-authored-issue.mjs` (a structural-lint pass is not a
+ * `suitability-triage.mjs` semantic pass); this must not repeat one level
+ * down. Always returns every check's full evidence; `runLocalCli` applies
+ * the same verbose/non-verbose evidence filtering the live path uses.
+ */
+export function evaluateSuitabilityLocal(bodyText, options = {}) {
+  const { title, body } = splitLocalDraftTitleAndBody(bodyText);
+  const localIssue = {
+    number: 0,
+    title,
+    body,
+    state: 'draft',
+    labels: [],
+    url: '',
+    // #2102 Copilot review: none of the six local checks read `createdAt`
+    // (only checkDuplicateOrSuperseded does, and that check never runs
+    // locally) -- a wall-clock timestamp here would make this "pure"
+    // evaluation nondeterministic for no benefit.
+    createdAt: '',
+  };
+  const context = {
+    issue: localIssue,
+    repository: null,
+    duplicateCandidates: [],
+    trustSafetyAmbiguous: false,
+    blockedByHumanLabelName: normalizeConfiguredLabelName(
+      options.blockedByHumanLabelName,
+      POLICY_DEFAULTS.labels.blockedByHumanLabelName,
+    ),
+    needsDecisionLabelName: normalizeConfiguredLabelName(
+      options.needsDecisionLabelName,
+      POLICY_DEFAULTS.labels.needsDecisionLabelName,
+    ),
+  };
+  const checks = CHECKS.map((check) => {
+    if (check.id === 'duplicate_or_superseded') {
+      return {
+        id: check.id,
+        name: check.name,
+        result: 'not_evaluated',
+        evidence:
+          'Local dry-run mode has no live GitHub search index; this check cannot run offline.',
+      };
+    }
+    const outcome = check.evaluate(context);
+    return {
+      id: check.id,
+      name: check.name,
+      result: outcome.pass ? 'pass' : 'fail',
+      evidence: outcome.evidence,
+      ...(outcome.tier ? { tier: outcome.tier } : {}),
+    };
+  });
+  return { mode: 'local', issue: { title }, checks };
+}
+function runLocalCli(args) {
+  const bodyText = args.stdin
+    ? readFileSync(0, 'utf8')
+    : readFileSync(resolve(process.cwd(), args.bodyFile), 'utf8');
+  const policyConfig = loadPolicy(args.policy);
+  const labelsPolicy = normalizePolicyConfig(policyConfig).labels;
+  const result = evaluateSuitabilityLocal(bodyText, {
+    blockedByHumanLabelName: labelsPolicy.blockedByHumanLabelName,
+    needsDecisionLabelName: labelsPolicy.needsDecisionLabelName,
+  });
+  const output = {
+    mode: result.mode,
+    issue: result.issue,
+    checks: args.verbose
+      ? result.checks
+      : result.checks.map((check) => ({
+          id: check.id,
+          name: check.name,
+          result: check.result,
+          ...(check.tier ? { tier: check.tier } : {}),
+        })),
+  };
+  process.stdout.write(`${JSON.stringify(output, null, 2)}\n`);
+}
+/**
  * Restores this file's pre-#1450 permissive `Number.parseInt` contract:
  * absent resolves to `null` (the original `issue: null` default, never
  * overwritten when `--issue` is absent); present feeds the raw token
@@ -1233,6 +1368,8 @@ export function parseArgs(argv) {
   const { values, help } = parseCliArgs(argv, SUITABILITY_TRIAGE_FLAG_SPEC);
   return {
     issue: parseLenientIntegerOrNull(values.issue),
+    bodyFile: values['body-file'],
+    stdin: values.stdin,
     token: values.token,
     owner: values.owner,
     repo: values.repo,
@@ -1266,6 +1403,19 @@ function loadPolicy(policyPath) {
 function printHelp() {
   process.stdout.write(`Usage:
   node scripts/suitability-triage.mjs --issue <number> [--token <token>] [--owner <owner>] [--repo <repo>] [--policy <path>] [--manifest <path>] [--bundles <id1,id2>] [--verbose] [--help]
+  node scripts/suitability-triage.mjs (--body-file <path> | --stdin) [--policy <path>] [--verbose] [--help]
+
+--issue, --body-file, and --stdin are mutually exclusive; exactly one is
+required. --body-file/--stdin (#2102) run a local, offline dry-run against
+a drafted issue's text before it is ever published: six of the seven
+checks (every check except duplicate_or_superseded, Check 4, which
+fundamentally needs a live search index) run against the same exported
+check functions the live --issue path uses. A leading "# Title" line in
+the supplied text is extracted as the title; everything else, minus any
+blank lines immediately after the title, is the body. See "Local mode
+output schema" below -- it is a distinct, deliberately
+incompatible shape from the live --issue output directly below it, so a
+local dry-run result can never be mistaken for a live verdict.
 
 --manifest / --bundles override the Check 4 high-confidence tier's
 high-contention exclusion set (default: the same manifest path and bundle
@@ -1273,7 +1423,7 @@ IDs as discover-shared-file-overlap.mjs's own --manifest/--bundles), so a
 repository that customizes its A4 Step 2 contention bundles gets a matching
 Check-4 exclusion set instead of a stale hardcoded default.
 
-Output schema:
+Live (--issue) output schema:
 {
   "repository": {"owner": "...", "repo": "..."},
   "issue": {"number": 392, "title": "...", "state": "OPEN", "url": "..."},
@@ -1296,7 +1446,64 @@ Absent (not null) for the common never-triaged case, and never surfaced for
 a rejection-shaped comment from an untrusted actor. An optional sibling
 "existingRejectionCollectionWarnings" array is present only when fetching
 or scanning the comment thread itself failed.
+
+Local (--body-file/--stdin) output schema (#2102):
+{
+  "mode": "local",
+  "issue": {"title": "..."},
+  "checks": [
+    {"id":"repository_fit","name":"Repository Fit","result":"pass|fail","evidence":"..."},
+    {"id":"coherence","name":"Issue Coherence","result":"pass|fail","evidence":"..."},
+    {"id":"trust_safety","name":"Trust/Safety","result":"pass|fail","evidence":"..."},
+    {"id":"duplicate_or_superseded","name":"Duplicate or Superseded Work","result":"not_evaluated","evidence":"..."},
+    {"id":"actionability","name":"Actionability","result":"pass|fail","evidence":"..."},
+    {"id":"autonomy","name":"Autonomy","result":"pass|fail","evidence":"..."},
+    {"id":"verifiability","name":"Verifiability","result":"pass|fail","evidence":"..."}
+  ]
+}
+
+There is no "passed", "outcome", or "failedCheck" field in local mode, and
+no aggregate rollup of any kind: "duplicate_or_superseded" always reports
+"not_evaluated" and is never counted toward a pass/fail verdict, so a
+caller must inspect each checks[] entry individually rather than infer an
+overall suitability outcome from a local run.
+
+Like the live path, each entry's "evidence" is present only with
+--verbose; the schema above shows every field a checks[] entry can carry,
+not what a default (non-verbose) run actually returns.
 `);
+}
+/**
+ * #2102: split a locally-drafted `--body-file`/`--stdin` text blob into a
+ * title and a body, for the local dry-run mode. `audit-authored-issue.mts`
+ * has no equivalent split -- it validates body structure only, never a
+ * title -- so this convention is new here, not reused from that file.
+ *
+ * A leading `# Title` line (a single Markdown H1, the common convention
+ * for a drafted issue file that mirrors what GitHub's own title field will
+ * hold) is extracted as the title -- any blank lines *before* it are
+ * skipped first, so it need not be the literal first line, only the first
+ * non-blank content, and it needs no trailing newline of its own (a draft
+ * whose entire content is `# Title` still extracts correctly). Any blank
+ * lines immediately following the H1 line are also consumed so the
+ * remaining body does not start with stray leading blank lines. Anything
+ * else -- no H1, or an H1 preceded by non-blank content -- leaves the
+ * title empty and the entire input becomes the body unchanged:
+ * `checkCoherence` and the other checks below already tolerate an empty
+ * title (see the live path's own `normalizeIssue`, which defaults a
+ * genuinely missing title to `''`), so under-splitting fails safe rather
+ * than guessing.
+ */
+export function splitLocalDraftTitleAndBody(text) {
+  const match = text.match(
+    /^(?:[ \t]*\r?\n)*[ \t]*#[ \t]+(\S[^\n]*?)[ \t]*(?:\r?\n|$)/,
+  );
+  if (!match) {
+    return { title: '', body: text };
+  }
+  const title = match[1] ?? '';
+  const rest = text.slice(match[0].length).replace(/^(?:[ \t]*\r?\n)+/, '');
+  return { title, body: rest };
 }
 function normalizeIssue(issue) {
   const i = issue ?? {};
