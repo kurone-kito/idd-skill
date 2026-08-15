@@ -186,6 +186,13 @@ node scripts/post-idd-marker.mjs --type advisory-recovery --target pr <pr-number
 <profile-selected-post-idd-marker-command> --type advisory-recovery \
   --target pr <pr-number> --agent-id <id> --claim-id <id> \
   --head-sha <PR_HEAD_SHA> --attempt <n> --timestamp <ISO8601> --apply
+# instructions-only profile, or any profile if the helper is unavailable —
+# manually, matching the grammar renderAdvisoryWaitRecoveryMarker emits:
+GH_TOKEN="${GH_TOKEN:-$(gh auth token)}"
+curl -X POST "https://api.github.com/repos/{owner}/{repo}/issues/{pr-number}/comments" \
+  -H "Authorization: Bearer ${GH_TOKEN}" \
+  -H "Content-Type: application/json" \
+  -d "{\"body\":\"advisory-wait-recovery: {agent-id} {PR_HEAD_SHA} {ISO8601-recovery-time} claim:{claim-id} attempt:{n}\"}"
 ```
 
 ## AW3-H
