@@ -175,13 +175,17 @@ canonical, mandatory contract. The server-side workflow is a
 backstop, not a replacement: same helper, same candidate rules,
 same evidence comment shape, non-blocking on errors. Double-posting is
 prevented by the cleanup-evidence record itself, not by Actions
-concurrency: the workflow skips when a trusted-author
-`<!-- idd-cleanup-evidence:` comment already exists (posted by
-`github-actions[bot]` or a configured `trustedMarkerActors` login — an
-untrusted commenter's marker-prefixed comment never counts), and the
-agent F4 step skips its own post under the same trusted-author rule when
-a prior success record is already present — including the one the
-workflow posted. The workflow's PR-keyed `concurrency` group only
+concurrency: the workflow skips when the latest trusted-author
+`<!-- idd-cleanup-evidence:` comment already records a successful
+outcome (`applied` or `clean`; posted by `github-actions[bot]` or a
+configured `trustedMarkerActors` login — an untrusted commenter's
+marker-prefixed comment never counts), and the agent F4 step skips its
+own post under the same success-record rule — including a success
+record the workflow itself posted. A trusted comment recording any
+other status (`failed`, `incomplete`, `permission-blocked`,
+`rescan-failed`) does not suppress either side, so a
+`workflow_dispatch` rerun after a `rescan-failed` post still posts
+fresh evidence. The workflow's PR-keyed `concurrency` group only
 serializes workflow runs against each other; it does not gate the
 agent's local F4.
 
@@ -385,17 +389,19 @@ merge does not re-block the merge; it is an explicit record only.
 Post this comment to the PR after a successful or partial apply. The
 HTML comment token on the first line acts as a stable machine-readable
 marker so a resuming agent — or a concurrent `post-merge-cleanup`
-workflow run — can detect that evidence was already posted. The
-**agent-side** rule keys on the prior **success** record: **skip the
-post when a `<!-- idd-cleanup-evidence:` comment recording a successful
-outcome (`applied` / `clean`) already exists on the PR**, so the agent
-never stacks a duplicate success record — even when this run's own apply
-returned `applied` for residual markers a concurrent `post-merge-cleanup`
-workflow run minimized first; still post when no prior success record
-exists, or to correct an existing `failed` / `incomplete` /
-`permission-blocked` record. The `post-merge-cleanup` workflow instead
-uses a simpler presence-only guard (it skips on any existing marker),
-which suffices for its single-shot post-merge run:
+workflow run — can detect that evidence was already posted. Both the
+**agent-side** F4 step and the `post-merge-cleanup` workflow key on the
+prior **success** record: **skip the post when the latest trusted
+`<!-- idd-cleanup-evidence:` comment records a successful outcome
+(`applied` / `clean`)**, so neither side stacks a duplicate success
+record — even when this run's own apply returned `applied` for residual
+markers the other side already minimized first; still post when no
+prior success record exists, or to correct an existing `failed` /
+`incomplete` / `permission-blocked` / `rescan-failed` record — a
+`rescan-failed` record in particular invites a retry, so a later
+`workflow_dispatch` rerun (or agent F4 re-run) must post fresh evidence
+for its own outcome rather than leave stale non-success evidence as the
+PR's only record:
 
 ```markdown
 <!-- idd-cleanup-evidence: {status} applied:{N} failed:{N} skipped:{N} viewer-cannot-minimize:{N} retry-attempts:{N} retry-bound-exhausted:{true|false} -->
