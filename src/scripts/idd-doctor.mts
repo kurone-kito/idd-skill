@@ -1743,6 +1743,16 @@ export interface WorktreeGuardActivationInput {
   hooksPath: string | null;
   /** The resolved hooks path actually wires the B1 guard. */
   guardWired: boolean;
+  /**
+   * Names of the shipped `.githooks/` files found to contain CRLF line
+   * endings (any of `_idd-worktree-guard.sh`, `pre-commit`, `pre-push`),
+   * in file order; empty when none do. Checked independently of
+   * `guardWired`, since `hookWiresWorktreeGuard`'s regex still matches a
+   * CRLF-converted sourcing line (idd-skill#2060) -- a non-empty list
+   * always produces a warning even when `guardWired` is (incorrectly)
+   * `true`.
+   */
+  crlfHookNames: string[];
 }
 
 /**
@@ -1759,6 +1769,23 @@ export function hookWiresWorktreeGuard(content: unknown): boolean {
     typeof content === 'string' &&
     /^[ \t]*(?:\.|source)[ \t]+[^\n]*_idd-worktree-guard\.sh/m.test(content)
   );
+}
+
+/**
+ * True when hook file content contains a Windows-style CRLF line ending. A
+ * working tree checked out under Git for Windows' default
+ * `core.autocrlf=true`, with no adopter-side `.gitattributes` override,
+ * converts these shipped POSIX shell hook files to CRLF -- the trailing `\r`
+ * then becomes part of the sourced path (e.g.
+ * `. "$(dirname "$0")/_idd-worktree-guard.sh"\r`), which every POSIX shell
+ * rejects as "No such file", hard-blocking every commit/push even though
+ * `hookWiresWorktreeGuard`'s own regex still matches the text -- the `\r`
+ * sits after, not inside, the matched filename (idd-skill#2060). Pure (no
+ * I/O) so it can be unit-tested directly. A non-string (absent/unreadable
+ * hook) is treated as CRLF-free.
+ */
+export function hookHasCrlfLineEndings(content: unknown): boolean {
+  return typeof content === 'string' && content.includes('\r\n');
 }
 
 /**
@@ -1853,6 +1880,7 @@ export function classifyWorktreeGuardActivation({
   headDetached,
   hooksPath,
   guardWired,
+  crlfHookNames,
 }: WorktreeGuardActivationInput): WorktreeHeadFinding | null {
   // Only runs when the guard is opted in.
   if (!guardEnabled) {
@@ -1863,6 +1891,30 @@ export function classifyWorktreeGuardActivation({
   // `classifyPrimaryHead('HEAD')` reports no violation.
   if (headDetached) {
     return null;
+  }
+  // Checked ahead of `guardWired`, and regardless of its value: a
+  // CRLF-converted sourcing line still satisfies `hookWiresWorktreeGuard`'s
+  // regex, so `guardWired` alone cannot be trusted to catch this case.
+  if (crlfHookNames.length > 0) {
+    const names = crlfHookNames.join(', ');
+    const plural = crlfHookNames.length === 1 ? 's' : '';
+    return {
+      level: 'warning',
+      message:
+        `worktreeGuard.enabled is true but ${names} contain${plural} CRLF ` +
+        `line endings; the trailing \\r breaks the "." sourcing path (e.g. ` +
+        `". …: cannot open …/_idd-worktree-guard.sh: No such file") even ` +
+        `though the wiring check still matches the text. A CRLF-broken ` +
+        `hook HARD-BLOCKS any commit or push that invokes it -- via ` +
+        `core.hooksPath = .githooks directly, or a documented chain from ` +
+        `elsewhere -- not merely disables enforcement, so this must be ` +
+        `fixed before (or as part of) wiring core.hooksPath. Likely ` +
+        `cause: Git for Windows' default core.autocrlf=true with no ` +
+        `adopter-side .gitattributes override. Add an explicit LF rule ` +
+        `covering all three shipped .githooks/ files (for example ` +
+        `".githooks/* text eol=lf"); see ONBOARDING.md's worktree-guard ` +
+        `activation section`,
+    };
   }
   // Correctly wired → nothing to report.
   if (guardWired) {
@@ -1967,6 +2019,43 @@ export function worktreeGuardWiredAt(root: string, hooksPath: string): boolean {
   return wired('pre-commit') && wired('pre-push');
 }
 
+// The three shipped hook files a native-Windows checkout under
+// `core.autocrlf=true` can silently convert to CRLF, hard-blocking the guard
+// (idd-skill#2060). Always read from `.githooks/` regardless of the resolved
+// `core.hooksPath`: that is where the shipped files themselves live, and
+// where an adopter's own `.gitattributes` LF rule must apply, whether or not
+// `core.hooksPath` points directly at them or chains through another
+// directory (e.g. Husky's `.husky/_`).
+const WORKTREE_GUARD_HOOK_FILE_NAMES = [
+  '_idd-worktree-guard.sh',
+  'pre-commit',
+  'pre-push',
+];
+
+/**
+ * Read the three shipped `.githooks/` files and report which ones (if any)
+ * contain CRLF line endings, in `WORKTREE_GUARD_HOOK_FILE_NAMES` order. A
+ * missing or unreadable file is treated as CRLF-free (nothing to report;
+ * `worktreeGuardWiredAt`'s own executable/presence checks already cover a
+ * genuinely missing hook).
+ */
+export function detectWorktreeGuardCrlfHookNames(root: string): string[] {
+  const githooksDirectory = join(root, '.githooks');
+  const found: string[] = [];
+  for (const name of WORKTREE_GUARD_HOOK_FILE_NAMES) {
+    let content: string | null;
+    try {
+      content = readFileSync(join(githooksDirectory, name), 'utf8');
+    } catch {
+      content = null;
+    }
+    if (hookHasCrlfLineEndings(content)) {
+      found.push(name);
+    }
+  }
+  return found;
+}
+
 /**
  * Warn when `worktreeGuard.enabled` is true but the commit/push guard is not
  * actually wired in this environment (`core.hooksPath` unset or pointing at a
@@ -2011,6 +2100,7 @@ function checkWorktreeGuardActive(root: string, report: DoctorReport) {
     headDetached: false,
     hooksPath: hooksPath.length > 0 ? hooksPath : null,
     guardWired,
+    crlfHookNames: detectWorktreeGuardCrlfHookNames(root),
   });
   if (finding) {
     report.warnings.push(finding.message);
