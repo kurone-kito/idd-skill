@@ -434,39 +434,95 @@ Ask these checks:
    Do not hard-code any single consumer's divergence-tracking mechanism.
 4. When an issue drafts a **template resync or reimport** (pulling a
    newer `idd-template/` revision into a repository that already
-   adopted IDD), consult `docs/customization.md`'s "Documentation lint
-   compatibility" section before treating `.markdownlint.yml` /
-   `.markdownlint-cli2.yaml` / `.cspell.config.yml` as unchanged — it is
-   part of the same imported bundle, so it resolves in an installed or
-   adopter context, unlike `idd-template/ONBOARDING.md`'s "Re-importing"
-   section, whose source-checkout-relative path does not exist once the
-   authoring skill runs outside this repository. Either section
-   documents the same named gap: an adopter's own rule customizations
-   for these files need a by-hand merge into the new import rather than
-   an assumed carry-forward, and `idd-onboard.mjs --import` reports a
-   `blockedOverwrites` finding instead of silently keeping a same-named
-   local file as-is. From a source checkout of `idd-skill` itself,
-   `idd-template/ONBOARDING.md`'s "Re-importing" section is the more
-   detailed maintainer-facing version of the same guidance.
+   adopted IDD), consult the **upstream target ref's** copy of
+   `docs/customization.md`'s "Documentation lint compatibility"
+   section (added 2026-08-05, commit `6ceaa6dd`) before treating
+   `.markdownlint.yml` / `.markdownlint-cli2.yaml` / `.cspell.config.yml`
+   as unchanged. `docs/customization.md` is itself part of the
+   imported core file set, so it resolves in an installed or adopter
+   context once present — but an adopter whose prior import predates
+   that commit has no such section in their own local copy yet, which
+   is exactly the named gap to document in the resync issue, not a
+   documentation-consultation failure. Either the target ref's
+   `docs/customization.md` section or, from a source checkout of
+   `idd-skill` itself, `idd-template/ONBOARDING.md`'s "Re-importing"
+   section, documents the same named gap: an adopter's own rule
+   customizations for these files need a by-hand merge into the new
+   import rather than an assumed carry-forward, and
+   `idd-onboard.mjs --import` reports a `blockedOverwrites` finding
+   instead of silently keeping a same-named local file as-is, unless
+   the import used `--force`, which silently overwrites the differing
+   file instead of recording it there (observed 2026-08-12/13 on an
+   adopter repository, `setup.ubuntu`, kurone-kito/idd-skill#2012).
 5. When drafting a resync issue's Background, run a mechanical
    placeholder diff against the **upstream `idd-skill` source
-   repository's** `idd-template/` trees at the two relevant refs — the
-   previously-adopted `v<iddVersion>` tag (`iddVersion` is recorded in
-   `.github/idd/config.json`) and the new target release/ref — never a
-   tree inside the target/adopter repository itself, which retains no
-   local `idd-template/` directory of its own once IDD is imported.
-   Compare the actual `{{...}}` token identities per changed file, not
-   only the aggregate occurrence count: a same-count one-for-one
-   placeholder swap changes what an adopter must substitute without
-   changing the count. Exclude reference-only meta-docs whose `{{...}}`
-   tokens are deliberately kept literal to document the placeholder
-   syntax itself — the `SCAN_EXCLUDED_PATHS` set in
-   `src/scripts/idd-onboard.mts` (e.g. `docs/onboarding/placeholders.md`)
-   — diffing those would misidentify literal documentation as an
-   outstanding substitution. Name any file whose placeholder tokens
-   changed, rather than asserting a file needs no placeholder
-   substitution as an unverified default (observed 2026-08-12/13 on an
-   adopter repository, #2012).
+   repository's** `idd-template/` trees at the two relevant refs —
+   never a tree inside the target/adopter repository itself, which
+   retains no local `idd-template/` directory of its own once IDD is
+   imported.
+   - **Baseline ref.** Use the exact tag or commit SHA actually
+     imported at the adopter's prior onboarding when it is explicitly
+     recorded (for example in the original onboarding PR/commit
+     message) or when the operator can confirm it directly. Do not
+     infer it from the adopter's current file content: neither a diff
+     against the import commit nor a reverse- or forward-substitution
+     content-match against a candidate upstream tree reliably pins a
+     single ref — onboarding substitutes placeholder values and
+     permits legitimate post-substitution edits, an import commit's
+     diff itself only records the already-transformed adopter
+     snapshot, and more than one upstream commit can plausibly yield
+     the same imported subset. When no explicit record or operator
+     confirmation is available, report the baseline as
+     unresolved/ambiguous in the resync issue itself rather than
+     guessing one from content alone. Do not construct `v<iddVersion>`
+     (`.github/idd/config.json`) as the baseline without this check:
+     `iddVersion` is only a coarse signal and can be stale, an adopter
+     still on `0.1.0` has no matching tag at all (`CHANGELOG.md`
+     records that `0.1.0` predates the tag discipline), and an adopter
+     who pinned a raw
+     commit SHA at import time instead of a tag may have no
+     `v<iddVersion>` tag matching what they actually imported either.
+   - **Target ref.** The new release/ref the resync targets.
+   - **Scope.** Intersect both trees with the Step 2 "File list" core
+     file set as it reads **at the target ref**
+     (`idd-template/ONBOARDING.md`'s generated file-list block) plus
+     whichever optional profile artifacts the adopter selected, not
+     the complete `idd-template/` tree — a file such as
+     `idd-template/ONBOARDING.md` itself is never copied into an
+     adopter, so reporting it as changed is noise. Use the target
+     ref's manifest, not the baseline ref's: a file the target release
+     newly added to the core or a selected profile is exactly the kind
+     of change a resync issue must report, and the baseline ref's own
+     manifest predates it.
+   - **Token filter.** Compare each ref's own placeholder table in
+     effect at that ref, not today's list applied to both — a
+     placeholder added or removed between the two refs is itself
+     exactly the kind of token-identity change this check exists to
+     report, and reusing one ref's list for the other's tree would
+     hide that change. At a ref from commit `e55ccd9c` (2026-05-12)
+     onward, that table is Onboarding Reference — Placeholder Values'
+     "Final placeholder meanings" table
+     (`docs/onboarding/placeholders.md`). An older ref has no such
+     file — the placeholders were documented directly inside
+     `idd-template/ONBOARDING.md`'s own "Step 1C — Collect placeholder
+     values" section instead; use that section's list as the
+     allowlist for a baseline ref that old. Never match every
+     `{{...}}`-shaped span unfiltered either way — an unrestricted
+     match also catches ordinary GitHub Actions expressions such as
+     `${{ github.token }}` in an imported workflow file.
+   - **Excluded paths.** Skip `docs/onboarding/placeholders.md`,
+     `docs/customization.md`, and `docs/onboarding/policy-decisions.md`
+     — these deliberately keep `{{...}}` tokens literal to document
+     the placeholder syntax itself, so diffing them misidentifies
+     literal documentation as an outstanding substitution.
+
+   Compare the actual token identities per changed file, not only the
+   aggregate occurrence count: a same-count one-for-one placeholder
+   swap changes what an adopter must substitute without changing the
+   count. Name any file whose placeholder tokens changed, rather than
+   asserting a file needs no placeholder substitution as an unverified
+   default (observed 2026-08-12/13 on an adopter repository,
+   `setup.ubuntu`, kurone-kito/idd-skill#2012).
 
 ## Alignment with A4.5 Suitability Gate
 
