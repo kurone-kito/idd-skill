@@ -291,16 +291,17 @@ have it open the phase files below manually.
 `.github/instructions/lite/` before trusting this table to stay
 current):
 
-| Phase                    | Standard file                       | Lite file                                     |
-| ------------------------ | ----------------------------------- | --------------------------------------------- |
-| A5 Claim                 | `idd-claim.instructions.md`         | `lite/idd-claim-lite.instructions.md`         |
-| B1-C6 Work               | `idd-work.instructions.md`          | `lite/idd-work-lite.instructions.md`          |
-| D1-D4 PR-submit          | `idd-pr-submit.instructions.md`     | `lite/idd-pr-submit-lite.instructions.md`     |
-| E9-E15 Review-fix        | `idd-review-fix.instructions.md`    | `lite/idd-review-fix-lite.instructions.md`    |
-| F1-F2 helper-read subset | `idd-pre-merge.instructions.md`     | `lite/idd-pre-merge-lite.instructions.md`     |
-| F2.5 handoff-stop        | `idd-merge-handoff.instructions.md` | `lite/idd-merge-handoff-lite.instructions.md` |
-| Resume                   | `idd-resume.instructions.md`        | `lite/idd-resume-lite.instructions.md`        |
-| Resume-stall             | `idd-resume-stall.instructions.md`  | `lite/idd-resume-stall-lite.instructions.md`  |
+| Phase                    | Standard file                         | Lite file                                       |
+| ------------------------ | ------------------------------------- | ----------------------------------------------- |
+| A5 Claim                 | `idd-claim.instructions.md`           | `lite/idd-claim-lite.instructions.md`           |
+| B1-C6 Work               | `idd-work.instructions.md`            | `lite/idd-work-lite.instructions.md`            |
+| D1-D4 PR-submit          | `idd-pr-submit.instructions.md`       | `lite/idd-pr-submit-lite.instructions.md`       |
+| E1-E3 Review-snapshot    | `idd-review-snapshot.instructions.md` | `lite/idd-review-snapshot-lite.instructions.md` |
+| E9-E15 Review-fix        | `idd-review-fix.instructions.md`      | `lite/idd-review-fix-lite.instructions.md`      |
+| F1-F2 helper-read subset | `idd-pre-merge.instructions.md`       | `lite/idd-pre-merge-lite.instructions.md`       |
+| F2.5 handoff-stop        | `idd-merge-handoff.instructions.md`   | `lite/idd-merge-handoff-lite.instructions.md`   |
+| Resume                   | `idd-resume.instructions.md`          | `lite/idd-resume-lite.instructions.md`          |
+| Resume-stall             | `idd-resume-stall.instructions.md`    | `lite/idd-resume-stall-lite.instructions.md`    |
 
 The F1-F2 and F2.5 rows cover a **partial** slice of their standard
 files only, per the design's phase scoping: the lite F1-F2 file
@@ -332,22 +333,16 @@ this file in
 
 **Explicit fallback.** Every phase without a row above falls back to
 its standard instruction file — this is the documented default, not
-an implied gap. Two different reasons a phase can lack a lite file:
+an implied gap. A0-A4 Discover, A4.5 Suitability, E4-E8 Review-triage,
+and F3-F5 Merge are **permanently excluded by design**: the design's
+[non-goals](weak-model-lite-profile-design.md#target-model-class-and-non-goals)
+and phase-scoping table exclude open-ended selection, judgment-heavy
+classification, and autonomous merge from the condensed profile
+entirely, regardless of roadmap progress. A future phase without a row
+and without a listed exclusion reason would instead mean an in-scope,
+not-yet-shipped lite file — none exist as of this writing.
 
-- **In scope per design, not yet tracked**: E1-E3 review-snapshot is
-  listed in scope in `docs/weak-model-lite-profile-design.md`'s
-  [phase scoping](weak-model-lite-profile-design.md#phase-scoping),
-  but the lite-execution-profile roadmap's (#1539) decomposition list
-  has no corresponding follow-up issue for it as of this writing.
-- **Permanently excluded by design**: A0-A4 Discover, A4.5
-  Suitability, E4-E8 Review-triage, and F3-F5 Merge stay on the
-  standard file always — the design's
-  [non-goals](weak-model-lite-profile-design.md#target-model-class-and-non-goals)
-  and phase-scoping table exclude open-ended selection, judgment-heavy
-  classification, and autonomous merge from the condensed profile
-  entirely, regardless of roadmap progress.
-
-A lite-opted-in session encountering any of these cases reads the
+A lite-opted-in session encountering any of these phases reads the
 standard file the same way a standard-tier session would.
 
 ## IDD file map
