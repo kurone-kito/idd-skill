@@ -1609,9 +1609,12 @@ export function classifyWorktreeGuardActivation({
         `worktreeGuard.enabled is true but ${names} contain${plural} CRLF ` +
         `line endings; the trailing \\r breaks the "." sourcing path (e.g. ` +
         `". …: cannot open …/_idd-worktree-guard.sh: No such file") even ` +
-        `though the wiring check still matches the text -- this HARD-BLOCKS ` +
-        `every commit and push here, not merely disables enforcement. ` +
-        `Likely cause: Git for Windows' default core.autocrlf=true with no ` +
+        `though the wiring check still matches the text. A CRLF-broken ` +
+        `hook HARD-BLOCKS any commit or push that invokes it -- via ` +
+        `core.hooksPath = .githooks directly, or a documented chain from ` +
+        `elsewhere -- not merely disables enforcement, so this must be ` +
+        `fixed before (or as part of) wiring core.hooksPath. Likely ` +
+        `cause: Git for Windows' default core.autocrlf=true with no ` +
         `adopter-side .gitattributes override. Add an explicit LF rule ` +
         `covering all three shipped .githooks/ files (for example ` +
         `".githooks/* text eol=lf"); see ONBOARDING.md's worktree-guard ` +
