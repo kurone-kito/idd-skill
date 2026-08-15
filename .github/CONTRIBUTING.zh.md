@@ -23,9 +23,7 @@ autopilot 运行能够在提交前强制执行最低限度的 lint 门槛。模�
 [Tooling boundary](../docs/customization.md#tooling-boundary))。
 
 需要 Node.js `^22.23.2 || ^24.2.0 || >=26.0.0`(本仓库 `package.json` 中定义的
-`engines` 下限)。Node.js 25 及更高版本不再内置 Corepack —— 如果
-`corepack enable` 提示命令不存在,请先执行 `npm install -g corepack`
-进行安装。
+`engines` 下限)。
 
 ```sh
 corepack enable
