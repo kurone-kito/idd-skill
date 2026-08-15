@@ -257,9 +257,13 @@ function buildStubGhScript(threadResolved: boolean): string {
     },
   };
   // #2042: `fetchReviewsAndHeadCommit` (review-clause.mts) issues its OWN
-  // `gh api graphql` call, distinct from the review-threads query above --
-  // matches on the `reviewThreads(` field name unique to that query (see
-  // the stub script below).
+  // `gh api graphql` call, distinct from the review-threads query above.
+  // The stub script below matches each query on a field name unique to it
+  // (`reviewThreads` here, `committedDate` for this payload) rather than
+  // "the other query didn't match" -- so a third, genuinely unexpected
+  // GraphQL call falls through to the script's final `unexpected gh
+  // invocation` failure instead of silently receiving whichever fixture
+  // happened to be the catch-all.
   const reviewsAndHeadCommitPayload = {
     data: {
       repository: {
@@ -314,8 +318,8 @@ if (a(0) === 'api' && a(1) === '${`repos/${REPO_REF}/pulls/${PR_NUMBER}/requeste
 if (a(0) === 'api' && a(1) === '${`repos/${REPO_REF}/issues/${PR_NUMBER}/timeline`}') out('');
 if (a(0) === 'api' && a(1) === '${`repos/${REPO_REF}/issues/${PR_NUMBER}/comments`}') out(${JSON.stringify(ndjson(prComments))});
 if (a(0) === 'api' && a(1) === '${`repos/${REPO_REF}/issues/${CLAIM_ISSUE}/comments`}') out(${JSON.stringify(ndjson(claimComments))});
-if (a(0) === 'api' && a(1) === 'graphql' && args.join(' ').includes('reviewThreads(')) out(${JSON.stringify(JSON.stringify(reviewThreadsPayload))});
-if (a(0) === 'api' && a(1) === 'graphql') out(${JSON.stringify(JSON.stringify(reviewsAndHeadCommitPayload))});
+if (a(0) === 'api' && a(1) === 'graphql' && args.join(' ').includes('reviewThreads')) out(${JSON.stringify(JSON.stringify(reviewThreadsPayload))});
+if (a(0) === 'api' && a(1) === 'graphql' && args.join(' ').includes('committedDate')) out(${JSON.stringify(JSON.stringify(reviewsAndHeadCommitPayload))});
 if (a(0) === 'api' && a(1) === '${`repos/${REPO_REF}/pulls/${PR_NUMBER}/files`}') out(${JSON.stringify(ndjson(changedFiles))});
 if (a(0) === 'api' && String(a(1)).startsWith('${`repos/${REPO_REF}/contents/`}')) notFound();
 process.stderr.write('unexpected gh invocation: ' + args.join(' ') + '\\n');
