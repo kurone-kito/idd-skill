@@ -396,48 +396,39 @@ Before any mutating action in F3, apply the
    format, cleanup-failure comment format, permission-blocked comment
    format, and fallback GraphQL commands.
 3. Run from the **primary worktree**, never from inside the worktree
-   being removed — deleting the directory underlying the running
-   process's own cwd breaks every later step. Any removal (plain or
-   `--force`) silently discards ignored files too, including ones
-   inside an initialized submodule — so **before the first removal
-   attempt**, review what's there. Scope both inspection commands
-   explicitly to the target `<path>` (an unqualified command run from
-   the primary worktree inspects the wrong repository):
+   being removed — deleting the running process's own cwd breaks every
+   later step. Any removal (plain or `--force`) silently discards
+   ignored files too, including inside an initialized submodule — so
+   **before the first removal attempt**, review what's there. Scope
+   both inspection commands explicitly to `<path>` (an unqualified
+   command run from the primary worktree inspects the wrong
+   repository):
 
    - `git -C <path> status --porcelain --ignored --untracked-files=all`
-     (the explicit `--untracked-files` avoids a false-clean result under
-     a repository- or user-level `status.showUntrackedFiles=no`)
+     (avoids a false-clean result under `status.showUntrackedFiles=no`)
    - `git -C <path> submodule foreach --recursive 'git status
      --porcelain --ignored --untracked-files=all'` (keep the `Entering
-     '<submodule>'` banner — a banner-only line is a clean result, and
-     with more than one submodule the banner is what attributes a
-     finding to the right one)
+     '<submodule>'` banner — it attributes a clean/dirty result to the
+     right submodule)
 
-   Generated dependency/build output (e.g. `node_modules/` from
-   `install-deps`) is expected, disposable, and not a reason to stop.
-   Anything else uncommitted, untracked, or ignored (local notes, an
-   untracked `.env`, unpushed WIP) needs to be preserved to a
-   **different** ref, or copied out — never `<branch-name>` itself,
-   which step 3's own deletion below discards next — before
-   continuing. Then delete the worktree, then the branch:
+   Generated output (e.g. `node_modules/`) is disposable and not a
+   reason to stop. Anything else (local notes, an untracked `.env`,
+   unpushed WIP) must be preserved to a **different** ref or copied
+   out before continuing — not to `<branch-name>` itself, which this
+   step deletes next. Then delete the worktree, then the branch:
 
    - `git worktree remove <path>`. If it fails with `fatal: working
-     trees containing submodules cannot be moved or removed`, a
-     submodule-initializing step (e.g. `git submodule update --init
-     --recursive`) ran inside that worktree — retry with `git worktree
-     remove --force <path>`, which also overrides the uncommitted /
-     untracked / submodule block. Only reach for either form once the
-     review above found nothing worth preserving, not as an
-     unconditional default.
-   - `git branch -d <branch-name>` (this baseline's Claude Code
-     permission profile denies `git branch -D`; see
-     `docs/permissions.md`'s "What the baseline denies"). If it fails
-     with `error: the branch '<branch-name>' is not fully merged` even
-     though the PR was just merged via GitHub — a `fetch --prune` can
-     drop the branch's remote-tracking ref before local `main` is
-     fast-forwarded — run step 4 first (`git fetch origin main && git
-     merge --ff-only origin/main`), then retry `git branch -d
-     <branch-name>`.
+     trees containing submodules cannot be moved or removed` (a
+     submodule was initialized inside that worktree), retry with `git
+     worktree remove --force <path>`, which also overrides the
+     uncommitted/untracked block. Use `--force` only once the review
+     above found nothing worth preserving, not as a default.
+   - `git branch -d <branch-name>` (the baseline permission profile
+     denies `-D`; see `docs/permissions.md`). If it fails with `error:
+     the branch '<branch-name>' is not fully merged` despite the PR
+     being merged — `fetch --prune` can drop the remote-tracking ref
+     before local `main` fast-forwards — run step 4 first (`git fetch
+     origin main && git merge --ff-only origin/main`), then retry.
 4. Update the local `main` branch.
 5. If GitHub auto-delete is disabled: delete the remote branch too.
    (Worktrunk may be used for steps 3–5.)
