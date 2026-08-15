@@ -717,9 +717,10 @@ The adopted helper boundaries are intentionally narrow:
   `terminalUnavailable`, `open`), so an agent never has to re-derive the
   remaining time-to-deadline by hand when a `ci` blocker cites a posted
   but not-yet-active waiver
-- (`#2034`) each `waiverEvidence.valid` entry now also carries the
-  waiver comment's own `createdAt` (`'none'` when unparseable, which
-  fails closed). A matched check only becomes `coveredByWaiver: true`
+- (preventive; no observed incident yet — `#2034`) each
+  `waiverEvidence.valid` entry now also carries the waiver comment's
+  own `createdAt` (`'none'` when unparseable, which fails closed). A
+  matched check only becomes `coveredByWaiver: true`
   once its own live run's `completedAt` is at or after the moment the
   waiver became genuinely active — the waiver's `createdAt` alone for
   a generic waivable check. For `idd-advisory-convergence`
