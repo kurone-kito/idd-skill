@@ -131,7 +131,7 @@ the other files `collectVendoredFiles` manages under the source
 repository's own `scripts/` have an `idd-template/` mirror. Getting the
 **complete** `vendored-node` bundle requires running this from the clone
 (see
-[CLI-assisted onboarding](../../ONBOARDING.md#cli-assisted-onboarding)):
+[CLI-assisted onboarding](https://github.com/kurone-kito/idd-skill/blob/main/idd-template/ONBOARDING.md#cli-assisted-onboarding)):
 
 ```sh
 node scripts/idd-onboard.mjs --import --source <path-to-a-cloned-idd-skill-tree> \

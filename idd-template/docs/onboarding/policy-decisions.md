@@ -391,7 +391,7 @@ through GitHub's classic branch-protection API uses the explicit
   (observed 2026-08-11 onboarding a companion repository;
   [kurone-kito/idd-skill#1925](https://github.com/kurone-kito/idd-skill/issues/1925)).
   See [ONBOARDING.md's required-status-check registration
-  step](../../ONBOARDING.md#optional--host-idd-advisory-convergence-as-a-required-check-ci-workflow)
+  step](https://github.com/kurone-kito/idd-skill/blob/main/idd-template/ONBOARDING.md#optional--host-idd-advisory-convergence-as-a-required-check-ci-workflow)
   for the working `PATCH` snippet, including the merge caveat (`PATCH`
   replaces the whole `checks` list) and the producer-pinning trade-off
   of `app_id: -1`.
