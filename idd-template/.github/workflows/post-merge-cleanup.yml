@@ -80,6 +80,15 @@ permissions:
 concurrency:
   group: post-merge-cleanup-${{ github.event.pull_request.number || github.event.inputs.pr_number }}
   cancel-in-progress: false
+defaults:
+  run:
+    # Pins every run: step's shell regardless of runner OS -- GitHub
+    # Actions otherwise picks bash on Linux/macOS but PowerShell Core
+    # on Windows, which would silently misinterpret this file's POSIX
+    # command substitution and shell variable expansion instead of
+    # failing loudly. Available on every GitHub-hosted runner,
+    # including Windows via Git Bash.
+    shell: bash
 jobs:
   cleanup:
     if: github.event_name == 'workflow_dispatch' || github.event.pull_request.merged == true

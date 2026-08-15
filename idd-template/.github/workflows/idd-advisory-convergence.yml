@@ -19,7 +19,11 @@ name: IDD advisory-convergence gate
 # that mandates self-hosted runners even on github.com/GHEC hits the
 # same wall and can use the same variable. This mechanism works for
 # whatever the shipped fallback value is now or later, not
-# specifically `ubuntu-latest`.
+# specifically `ubuntu-latest`. Whatever label you point this at must
+# still be bash-capable: `defaults.run.shell` below pins every `run:`
+# step to `bash` regardless of runner OS, since GitHub Actions'
+# per-OS default shell (PowerShell Core on Windows) would otherwise
+# silently misinterpret this file's POSIX shell syntax.
 #
 # Adjust the pinned `actions/checkout` SHA (or use the floating `@v4`
 # tag as shipped here), the checkout `ref:` (see below), and the
@@ -53,6 +57,16 @@ permissions:
   contents: read
   issues: read
   pull-requests: read
+defaults:
+  run:
+    # Pins every run: step's shell regardless of runner OS -- GitHub
+    # Actions otherwise picks bash on Linux/macOS but PowerShell Core
+    # on Windows, which would silently misinterpret this file's POSIX
+    # shell syntax (e.g. "$PR_NUMBER" as an undefined PowerShell
+    # variable) instead of failing loudly. Available on every
+    # GitHub-hosted runner, including Windows via Git Bash, so this is
+    # a no-op on the runners this template ships for today.
+    shell: bash
 jobs:
   # The job id `idd-advisory-convergence` is the exact check-run context
   # consumed by the rerun helper, advisory-wait policy, required status
