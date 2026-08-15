@@ -752,7 +752,7 @@ export function computeExitCode(report: Report): number {
 
 /**
  * #1449: replaces a manual `readdirSync` recursion with `fs.globSync`
- * (stable since Node v22.17.0; this repo requires `^22.22.2 || >=24`).
+ * (stable since Node v22.17.0; this repo requires `^22.23.2 || ^24.2 || >=26`).
  * Three discovery-semantics deltas were checked and closed or documented
  * before this swap, each verified empirically against the real
  * `docs/workshop` tree (10 files) and synthetic fixtures:

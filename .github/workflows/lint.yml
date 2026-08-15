@@ -39,21 +39,24 @@ jobs:
       # falsy -- not an error -- on Node 24.0.x/24.1.x (#1447). A stale
       # runner image would therefore either mis-parse the .mts files or
       # let a CLI step silently no-op, so fail loudly first. Exact match
-      # to package.json's engines.node (^22.22.2 || >=24.2.0), including
+      # to package.json's engines.node (^22.23.2 || ^24.2.0 || >=26.0.0), including
       # the patch/minor digits, so the error message's claimed range is
       # actually what the check enforces.
       - name: Assert Node.js floor
         run: |
           node -e '
-            const [major, minor, patch] = process.versions.node.split(".").map(Number);
+            const versionParts = process.versions.node.split(".");
+            const [major, minor, patch] = versionParts.map(Number);
+            const isPrerelease = versionParts.some((part) => part.includes("-"));
             const ok =
-              (major === 22 && (minor > 22 || (minor === 22 && patch >= 2))) ||
-              (major === 24 && minor >= 2) ||
-              major > 24;
+              !isPrerelease &&
+              ((major === 22 && (minor > 23 || (minor === 23 && patch >= 2))) ||
+                (major === 24 && minor >= 2) ||
+                major >= 26);
             if (!ok) {
               console.error(
                 "Node " + process.version + " does not satisfy this " +
-                "repository'"'"'s engines.node range (^22.22.2 || >=24.2.0).",
+                "repository'"'"'s engines.node range (^22.23.2 || ^24.2.0 || >=26.0.0).",
               );
               process.exit(1);
             }

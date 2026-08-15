@@ -32,7 +32,7 @@ Language: [🇬🇧](./CONTRIBUTING.md) | **🇯🇵** | [🇨🇳](./CONTRIBUTI
 プロジェクト既存のツールを使ってください(詳細は
 [Tooling boundary](../docs/customization.md#tooling-boundary))。
 
-Node.js `^22.22.2 || >=24.2.0`(このリポジトリの `package.json` が
+Node.js `^22.23.2 || ^24.2.0 || >=26.0.0`(このリポジトリの `package.json` が
 定める `engines` の下限)が必要です。
 
 ```sh

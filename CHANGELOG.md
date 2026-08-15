@@ -14,6 +14,18 @@ discipline and has no tag.
 
 ## [Unreleased]
 
+### Changed
+
+- `engines.node` bumped to `^22.23.2 || ^24.2.0 || >=26.0.0`: the
+  22.x floor moves to the 2026-07-29 emergency security release
+  (fixes 11 CVEs including CVE-2026-56846/CVE-2026-56848 HTTP/2
+  header-memory issues and the CVE-2026-58043 Permission Model
+  over-grant), the previously-unbounded `>=24.2.0` tail is now capped
+  below the already-end-of-life 25.x line, and a new `>=26.0.0` clause
+  opens the new Current line (enters Active LTS 2026-10-28). The 24.x
+  floor itself is unchanged (still feature-motivated by
+  `import.meta.main`).
+
 ## [0.6.0] - 2026-08-07
 
 Markdown-code tokenizer hardening, advisory-convergence claimless
