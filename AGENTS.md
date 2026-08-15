@@ -91,6 +91,13 @@ own interaction model rather than following product terms literally.
   loop cannot converge on its own (Refs #1465). See
   [`.github/copilot-instructions.md`](.github/copilot-instructions.md#local-external-check-waiver-policy)
   for the full rationale.
+- **Advisory-convergence deadline**: This source repository also
+  records `advisoryWait.convergenceDeadline: "PT9H"` as a local IDD
+  dogfooding policy (applies only to `kurone-kito/idd-skill`),
+  shortening the maintainer-authorized-waiver deadline from the
+  distributed `idd-template/` default (`PT24H`) to fit this
+  repository's more autonomous, higher-concurrency dogfooding setup
+  (Refs #1465, #2076).
 
 ## For IDD work
 
