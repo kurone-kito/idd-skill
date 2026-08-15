@@ -1115,7 +1115,7 @@ export interface EnginesRangeMirrorSpec {
 function parseEnginesRangeClauses(engines: string): string[] | null {
   const parts = engines.trim().split(/\s*\|\|\s*/);
   // Fewer than 2 parts means zero `^` clauses (either just a bare `>=`
-  // clause, or an unsplittable string) -- always invalid.
+  // clause, or a string with no `||` separator at all) -- always invalid.
   if (parts.length < 2) return null;
 
   const highMatch = /^>=(\d+\.\d+\.\d+)$/.exec(parts[parts.length - 1]);
