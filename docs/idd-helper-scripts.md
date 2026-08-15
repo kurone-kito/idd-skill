@@ -1539,6 +1539,45 @@ to post it is the consuming track's job.
   searched, so a mismatch names its own cause instead of only its
   symptom
 
+### Manual recovery: budget-held instance after a waiver rebind
+
+`rerun-advisory-convergence.mjs --apply` deliberately never touches a
+`bot-gated-skip`, `awaiting-fresh-review`, or rerun-budget-held
+instance (see above) -- that withholding is correct and load-bearing
+on its own, and this section does not change it: the script keeps
+withholding these instances from its own plan, and gains no
+`--override-budget` flag or equivalent. A specific combination sits
+outside what the withholding alone can resolve: an
+`idd-advisory-convergence` instance already went `rerun-budget-held`
+from a genuinely-failed attempt, and only afterward does a maintainer
+post a valid `idd-external-check-waiver:` marker covering the current
+HEAD and check. The held instance's recorded failure predates the
+waiver and has nothing left to say about current mergeability, but the
+waiver alone does not make GitHub re-evaluate an already-completed
+check-run.
+
+This is a maintainer-authorized manual override, not a helper flag and
+not something a worker performs unprompted -- the same deliberate
+human-judgment-gate philosophy as
+`ciGate.externalCheckWaivers.mode: "maintainer-authorized"` itself.
+Confirm all three before running it:
+
+1. The held instance's own run targets the PR's current HEAD SHA, not
+   a stale, already-superseded push.
+2. A maintainer-authorized `idd-external-check-waiver:` marker (see
+   the marker format above) now covers that same HEAD and check
+   selector, and is itself valid -- unexpired, correctly claim-bound,
+   posted by a trusted actor.
+3. The held instance's recorded failure reason (its own
+   `rerunPolicyHoldNotice`, or the run's log) predates the waiver --
+   the waiver is the reason to reconsider this instance, not an
+   unrelated later development.
+
+Only once all three hold, issue `gh run rerun <run-id>` on that
+specific instance directly -- a one-time, visible, auditable exception
+to the budget withholding, not a config flag exercisable as
+reflexively as any other CLI option.
+
 ### Merge-gate evidence
 
 - When helper runtime is enabled, these commands are the preferred
