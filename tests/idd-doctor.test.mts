@@ -523,6 +523,17 @@ test('isIddManagedPlaceholderScanPath accepts every IDD-managed path class (idd-
       ),
       true,
     );
+    // idd-skill#2079 review follow-up: .github/idd/config.json is
+    // IDD-managed (validated by checkLiveConfigSchema) and templated
+    // in idd-template/.github/idd/config.json with
+    // {{PROJECT_MARKER_PREFIX}} -- the allowlist must not drop it.
+    assert.equal(
+      isIddManagedPlaceholderScanPath(
+        '.github/idd/config.json',
+        distributionSource,
+      ),
+      true,
+    );
   }
 });
 

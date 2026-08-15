@@ -420,7 +420,8 @@ export function isIddManagedPlaceholderScanPath(file, distributionSource) {
     file.startsWith('.claude/skills/') ||
     file.startsWith('scripts/') ||
     file.startsWith('schemas/') ||
-    file.startsWith('fixtures/schemas/')
+    file.startsWith('fixtures/schemas/') ||
+    file.startsWith('.github/idd/')
   ) {
     return true;
   }
