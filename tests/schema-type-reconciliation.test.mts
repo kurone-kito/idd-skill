@@ -1074,6 +1074,7 @@ const preMergeReadinessFixture = {
     unauthorized: [],
     malformed: [],
     notConfigured: [],
+    modeDisabled: [],
   },
   advisoryConvergenceWaiverPrecondition: {
     checkSelector: 'idd-advisory-convergence',

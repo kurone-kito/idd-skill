@@ -4321,6 +4321,7 @@ test('summarizeExternalCheckWaivers: empty comments returns all-empty evidence',
     unauthorized: [],
     malformed: [],
     notConfigured: [],
+    modeDisabled: [],
   });
 });
 
@@ -4869,6 +4870,7 @@ test('summarizeExternalCheckWaivers: non-waiver comments are skipped without err
     unauthorized: [],
     malformed: [],
     notConfigured: [],
+    modeDisabled: [],
   });
 });
 
@@ -4933,6 +4935,56 @@ test('summarizeExternalCheckWaivers: validity-passing waiver for a non-waivable 
   assert.equal(result.notConfigured.length, 1);
   assert.equal(result.notConfigured[0].checkSelector, 'CodeRabbit');
   assert.equal(result.notConfigured[0].authorLogin, 'kurone-kito');
+});
+
+test('summarizeExternalCheckWaivers: an otherwise-valid, configured-waivable waiver goes to modeDisabled when mode is not maintainer-authorized (#2046)', () => {
+  const head = 'e'.repeat(40);
+  const body = makeWaiverComment({ claimId: 'claim-123', headSha: head });
+  const result = summarizeExternalCheckWaivers(
+    [
+      {
+        body,
+        author: { login: 'kurone-kito' },
+        createdAt: '2026-05-17T00:00:00Z',
+      },
+    ],
+    {
+      prHeadSha: head,
+      activeClaimId: 'claim-123',
+      trustedMarkerLogins: ['kurone-kito'],
+      now: '2026-05-17T00:00:00Z',
+      waivableSelectors: [{ selector: 'CodeRabbit', matchMode: 'exact' }],
+      mode: 'disabled',
+    },
+  );
+  assert.equal(result.valid.length, 0);
+  assert.equal(result.notConfigured.length, 0);
+  assert.equal(result.modeDisabled.length, 1);
+  assert.equal(result.modeDisabled[0].checkSelector, 'CodeRabbit');
+  assert.equal(result.modeDisabled[0].authorLogin, 'kurone-kito');
+});
+
+test('summarizeExternalCheckWaivers: an empty mode leaves the mode gate off (legacy behavior for unmigrated callers)', () => {
+  const head = 'e'.repeat(40);
+  const body = makeWaiverComment({ claimId: 'claim-123', headSha: head });
+  const result = summarizeExternalCheckWaivers(
+    [
+      {
+        body,
+        author: { login: 'kurone-kito' },
+        createdAt: '2026-05-17T00:00:00Z',
+      },
+    ],
+    {
+      prHeadSha: head,
+      activeClaimId: 'claim-123',
+      trustedMarkerLogins: ['kurone-kito'],
+      now: '2026-05-17T00:00:00Z',
+      waivableSelectors: [{ selector: 'CodeRabbit', matchMode: 'exact' }],
+    },
+  );
+  assert.equal(result.valid.length, 1);
+  assert.equal(result.modeDisabled.length, 0);
 });
 
 test('summarizeExternalCheckWaivers: waiver naming a configured-waivable check stays valid', () => {
@@ -6655,6 +6707,133 @@ test('#2021: idd-advisory-convergence waiver posted and terminal Copilot unavail
   // the same waiver (#1570's pre-existing behavior, unaffected by #2021).
   assert.ok(!waivedGates.includes('copilot-terminal-unavailable'));
   assert.deepEqual(waived.blockers, computePreMergeReadinessBlockers(waived));
+});
+
+// #2046: a waiver that is otherwise valid, precondition-open, and
+// configured-waivable must still never cover a check while
+// ciGate.externalCheckWaivers.mode is not maintainer-authorized (schema
+// default: disabled) -- mirroring advisory-convergence.mts's own mode
+// guard. Before this fix, pre-merge-readiness.mjs never read `mode` at
+// all, so a `waivable` list left over from a prior maintainer-authorized
+// configuration (or copy-pasted from another repository's config without
+// also copying `mode`) would report coveredByWaiver: true /
+// advisoryConvergenceGenuinelyCovered: true for such a waiver, while
+// advisory-convergence.mts's own required check would never honor it.
+test('#2046: idd-advisory-convergence waiver posted with the deadline passed but mode not maintainer-authorized leaves the check blocked', () => {
+  const fixture = readJson('fixtures/pre-merge-readiness/clean.json');
+  const input = withAdvisoryConvergenceRequiredCheck(fixture);
+  const waivableCheckSelectors = [
+    { selector: 'idd-advisory-convergence', matchMode: 'exact' },
+  ];
+  const waiverBody = renderExternalCheckWaiverComment({
+    agentId: fixture.options.expectedAgentId,
+    claimId: fixture.options.expectedClaimId,
+    headSha: fixture.input.prHeadSha,
+    checkSelector: 'idd-advisory-convergence',
+    reason: 'idd-advisory-convergence would not converge across 3 rounds',
+    expiresAt: '2026-05-13T00:00:00Z',
+    actor: 'kurone-kito',
+  });
+
+  const blocked = buildPreMergeReadinessSummary(
+    {
+      ...input,
+      comments: [
+        ...(input.comments ?? []),
+        {
+          id: 'mode-disabled-waiver',
+          author: { login: 'kurone-kito' },
+          body: waiverBody,
+          createdAt: '2026-05-12T00:00:00Z',
+          updatedAt: '2026-05-12T00:00:00Z',
+        },
+      ],
+    },
+    {
+      ...fixture.options,
+      includeDispositionEvidence: true,
+      waivableCheckSelectors,
+      externalCheckWaiverMaxValidity: 'PT24H',
+      externalCheckWaiverMode: 'disabled',
+      // HEAD committed 25h before `now`: the 24h deadline has already
+      // passed, so the precondition is open -- isolating that mode
+      // gating, not the precondition, is what withholds coverage here.
+      advisoryConvergenceHeadCommittedAt: '2026-05-10T23:00:00Z',
+    },
+  );
+
+  const precondition = (
+    blocked as {
+      advisoryConvergenceWaiverPrecondition: Record<string, unknown>;
+    }
+  ).advisoryConvergenceWaiverPrecondition;
+  assert.equal(precondition.deadlinePassed, true);
+  assert.equal(precondition.open, true);
+
+  // The raw waiver evidence reports the marker as modeDisabled, not valid.
+  const waiverEvidence = blocked.waiverEvidence as {
+    valid: unknown[];
+    modeDisabled: unknown[];
+  };
+  assert.equal(waiverEvidence.valid.length, 0);
+  assert.equal(waiverEvidence.modeDisabled.length, 1);
+
+  const check = ciCheckByName(blocked, 'idd-advisory-convergence');
+  assert.equal(check?.coveredByWaiver, undefined);
+  assert.equal(blocked.ready, false);
+  assert.deepEqual(blocked.blockers, computePreMergeReadinessBlockers(blocked));
+});
+
+// #2046: the same precondition-open waiver, with mode correctly set to
+// maintainer-authorized, still covers the check -- confirming the mode
+// gate does not regress the intended-working configuration.
+test('#2046: idd-advisory-convergence waiver posted with the deadline passed and mode maintainer-authorized still covers the check', () => {
+  const fixture = readJson('fixtures/pre-merge-readiness/clean.json');
+  const input = withAdvisoryConvergenceRequiredCheck(fixture);
+  const waivableCheckSelectors = [
+    { selector: 'idd-advisory-convergence', matchMode: 'exact' },
+  ];
+  const waiverBody = renderExternalCheckWaiverComment({
+    agentId: fixture.options.expectedAgentId,
+    claimId: fixture.options.expectedClaimId,
+    headSha: fixture.input.prHeadSha,
+    checkSelector: 'idd-advisory-convergence',
+    reason: 'idd-advisory-convergence would not converge across 3 rounds',
+    expiresAt: '2026-05-13T00:00:00Z',
+    actor: 'kurone-kito',
+  });
+
+  const covered = buildPreMergeReadinessSummary(
+    {
+      ...input,
+      comments: [
+        ...(input.comments ?? []),
+        {
+          id: 'mode-enabled-waiver',
+          author: { login: 'kurone-kito' },
+          body: waiverBody,
+          createdAt: '2026-05-12T00:00:00Z',
+          updatedAt: '2026-05-12T00:00:00Z',
+        },
+      ],
+    },
+    {
+      ...fixture.options,
+      includeDispositionEvidence: true,
+      waivableCheckSelectors,
+      externalCheckWaiverMaxValidity: 'PT24H',
+      externalCheckWaiverMode: 'maintainer-authorized',
+      advisoryConvergenceHeadCommittedAt: '2026-05-10T23:00:00Z',
+    },
+  );
+
+  const check = ciCheckByName(covered, 'idd-advisory-convergence');
+  assert.equal(check?.coveredByWaiver, true);
+  assert.equal((covered.ci as Record<string, unknown>).status, 'success');
+  const coveredGates = (covered.blockers as { gate: string }[]).map(
+    (blocker) => blocker.gate,
+  );
+  assert.ok(!coveredGates.includes('ci'));
 });
 
 // #1377: a masked-403-as-404 on the branch-protection or ruleset reads must
