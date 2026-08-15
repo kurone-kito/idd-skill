@@ -966,9 +966,11 @@ To enable it in the target repository:
    `.githooks/` directory, not the whole repository or Git-for-Windows
    install tree, if the product supports that granularity): exclude
    the affected path(s) from antivirus real-time scanning; remove any
-   duplicate or stale `cygwin1.dll` from `PATH`; and disable Mandatory
-   ASLR for the affected `sh.exe`/`bash.exe` via Windows Security's
-   Exploit Protection settings.
+   duplicate or stale MSYS/Cygwin runtime DLL (`msys-2.0.dll` for Git
+   for Windows itself, or `cygwin1.dll` if a separate Cygwin install is
+   also on `PATH`) from `PATH`; and disable Mandatory ASLR for the
+   affected `sh.exe`/`bash.exe` via Windows Security's Exploit
+   Protection settings.
 
 When `worktreeGuard.enabled` is absent or `false`, the hooks are a
 no-op. To bypass the guard for a single intentional commit or push,
