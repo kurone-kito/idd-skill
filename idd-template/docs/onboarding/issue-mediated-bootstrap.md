@@ -370,7 +370,8 @@ way its four sibling bullets do. Unlike those four, which only matter to
 an operator who specifically wants them, a welcome/next-steps issue is a
 low-cost default worth surfacing regardless of _why_ the operator chose
 issue-mediated bootstrap over theirs-flow — gating it on a separate ask
-would just delay something worth having either way.
+would delay something worth having either way (preventive; no observed
+incident yet).
 
 This is also the one add-on that must stay off the Discover -> Claim ->
 Work loop entirely, unlike its four sibling bullets above: its whole
