@@ -1542,7 +1542,7 @@ to post it is the consuming track's job.
 ### Manual recovery: budget-held instance after a waiver rebind
 
 `rerun-advisory-convergence.mjs --apply` deliberately never touches a
-`bot-gated-skip`, `awaiting-fresh-review`, or rerun-budget-held
+`bot-gated-skip`, `awaiting-fresh-review`, or `rerun-budget-held`
 instance (see above) -- that withholding is correct and load-bearing
 on its own, and this section does not change it: the script keeps
 withholding these instances from its own plan, and gains no
