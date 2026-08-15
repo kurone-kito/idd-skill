@@ -1404,8 +1404,9 @@ a drafted issue's text before it is ever published: six of the seven
 checks (every check except duplicate_or_superseded, Check 4, which
 fundamentally needs a live search index) run against the same exported
 check functions the live --issue path uses. A leading "# Title" line in
-the supplied text is extracted as the title; everything else is the body.
-See "Local mode output schema" below -- it is a distinct, deliberately
+the supplied text is extracted as the title; everything else, minus any
+blank lines immediately after the title, is the body. See "Local mode
+output schema" below -- it is a distinct, deliberately
 incompatible shape from the live --issue output directly below it, so a
 local dry-run result can never be mistaken for a live verdict.
 
