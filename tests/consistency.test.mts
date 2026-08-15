@@ -1657,7 +1657,7 @@ test('collectEnginesRangeMirrorViolations: components mode requires every clause
     () => 'Node.js 22.22.2 or newer',
   );
   assert.deepEqual(violations, [
-    `engines-range-mirrors: prose.md does not mention all engines.node bounds "24.2.0"`,
+    `engines-range-mirrors: prose.md does not mention all engines.node clause versions "24.2.0"`,
   ]);
 });
 
@@ -1698,7 +1698,7 @@ test('collectEnginesRangeMirrorViolations: parses a three-clause range and requi
     () => 'Requires 22.23.2 or 26.0.0 or newer',
   );
   assert.deepEqual(missingMiddle, [
-    'engines-range-mirrors: prose.md does not mention all engines.node bounds "24.2.0"',
+    'engines-range-mirrors: prose.md does not mention all engines.node clause versions "24.2.0"',
   ]);
 
   // low-bound modes still resolve to the first (leftmost) clause with more

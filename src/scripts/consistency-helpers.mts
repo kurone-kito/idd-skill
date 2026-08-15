@@ -1179,7 +1179,7 @@ export function collectEnginesRangeMirrorViolations(
         const missing = clauses?.filter((clause) => !text.includes(clause));
         if (missing && missing.length > 0) {
           violations.push(
-            `engines-range-mirrors: ${mirror.file} does not mention all engines.node bounds ${missing.map((clause) => `"${clause}"`).join(', ')}`,
+            `engines-range-mirrors: ${mirror.file} does not mention all engines.node clause versions ${missing.map((clause) => `"${clause}"`).join(', ')}`,
           );
         }
         break;
