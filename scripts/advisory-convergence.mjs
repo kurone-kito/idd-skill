@@ -210,6 +210,7 @@ export function computeAdvisoryConvergenceVerdict(inputs, options) {
     staleAgeMs: options.staleAgeMs,
   });
   const activeClaimId = claim.activeClaim?.claimId ?? '';
+  const activeClaimSupersedes = claim.activeClaim?.supersedes ?? '';
   // `idd-claimed` narrows this gate to verified IDD-owned PRs; the default
   // `all-prs` behavior keeps the gate applicable everywhere else.
   const convergenceScope =
@@ -805,6 +806,7 @@ export function computeAdvisoryConvergenceVerdict(inputs, options) {
     const waiverEvidence = summarizeExternalCheckWaivers(comments, {
       prHeadSha,
       activeClaimId,
+      activeClaimSupersedes,
       trustedMarkerLogins,
       now,
       // The REAL configured `ciGate.externalChecks.waivable` list (not a

@@ -1304,6 +1304,62 @@ test('staleAgeMs: a configured shorter stale window allows a takeover the hardco
   assert.equal(underConfiguredWindow.waiver.activeClaimId, SUCCESSOR_CLAIM_ID);
 });
 
+test('waiver: a marker bound to the superseded claim still waives after an in-policy takeover (#2080)', () => {
+  const TAKEOVER_AT = '2026-06-01T02:00:00Z';
+  const takeoverClaim = {
+    author: { login: TRUSTED },
+    body: `<!-- claimed-by: ${SUCCESSOR_AGENT_ID} ${SUCCESSOR_CLAIM_ID} supersedes: ${CLAIM_ID} ${TAKEOVER_AT} branch: issue/1234-test -->\n\n_${SUCCESSOR_AGENT_ID}: issue claim — IDD automation marker. Do not edit._`,
+    createdAt: TAKEOVER_AT,
+  };
+  const predecessorWaiver = waiverComment({ claimId: CLAIM_ID });
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({
+      reviews: [],
+      claimEvents: [claimComment(), takeoverClaim],
+      comments: [predecessorWaiver],
+    }),
+    baseOptions({
+      headCommittedAt: OLD,
+      waiverMode: 'maintainer-authorized',
+      waivableSelectors: ADVISORY_CONVERGENCE_WAIVABLE,
+      staleAgeMs: 60 * 60 * 1000,
+    }),
+  );
+  assertValidVerdict(verdict);
+  assert.equal(verdict.waiver.activeClaimId, SUCCESSOR_CLAIM_ID);
+  assert.equal(verdict.waiver.validCount, 1);
+  assert.equal(verdict.waived, true);
+  assert.equal(verdict.ready, true);
+});
+
+test('waiver: a two-hop-old claim id does not waive after takeover (#2080)', () => {
+  const TAKEOVER_AT = '2026-06-01T02:00:00Z';
+  const takeoverClaim = {
+    author: { login: TRUSTED },
+    body: `<!-- claimed-by: ${SUCCESSOR_AGENT_ID} ${SUCCESSOR_CLAIM_ID} supersedes: ${CLAIM_ID} ${TAKEOVER_AT} branch: issue/1234-test -->\n\n_${SUCCESSOR_AGENT_ID}: issue claim — IDD automation marker. Do not edit._`,
+    createdAt: TAKEOVER_AT,
+  };
+  const staleWaiver = waiverComment({ claimId: 'claim-grandparent' });
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({
+      reviews: [],
+      claimEvents: [claimComment(), takeoverClaim],
+      comments: [staleWaiver],
+    }),
+    baseOptions({
+      headCommittedAt: OLD,
+      waiverMode: 'maintainer-authorized',
+      waivableSelectors: ADVISORY_CONVERGENCE_WAIVABLE,
+      staleAgeMs: 60 * 60 * 1000,
+    }),
+  );
+  assertValidVerdict(verdict);
+  assert.equal(verdict.waiver.activeClaimId, SUCCESSOR_CLAIM_ID);
+  assert.equal(verdict.waiver.validCount, 0);
+  assert.equal(verdict.waived, false);
+  assert.equal(verdict.ready, false);
+});
+
 // --- 9. sameHeadReroll (#1511) -----------------------------------------------
 // --- Bounded same-HEAD advisory reroll evidence: `itemCount` (Clause 1) is
 // --- a STATIC submission-time snapshot, so rejecting/resolving every item
