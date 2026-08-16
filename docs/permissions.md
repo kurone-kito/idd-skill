@@ -345,10 +345,11 @@ Keep approval labels and operational marker trust as separate controls:
 
 This section is **Claude Code-specific**: it documents the committed
 `.claude/settings.json` allow/deny baseline and its opt-in template
-counterpart. Every other harness this workflow supports (Copilot, Codex
-CLI, OpenCode, Antigravity CLI) has no equivalent file and simply
-ignores it -- this section is purely additive for those agents, not a
-cross-agent permission contract.
+counterpart. Copilot, Codex CLI, OpenCode, and Antigravity CLI have no
+equivalent file and ignore it. Grok Build is the exception: it merges
+that committed allow/deny baseline into its permission rules. This
+section is not a cross-agent permission contract for the harnesses that
+ignore the file.
 
 A fresh Claude Code session otherwise starts from an empty per-user
 `.claude/settings.local.json`, so every environment re-accumulates the
