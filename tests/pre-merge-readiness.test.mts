@@ -4770,6 +4770,66 @@ test('summarizeExternalCheckWaivers: claim-id "none" on a claimed PR is rejected
   assert.equal(result.wrongClaim.length, 1);
 });
 
+test('summarizeExternalCheckWaivers: a none-sentinel waiver still fails on a claimed PR whose supersedes is also none (#2080)', () => {
+  // Fresh claim: activeClaim.supersedes is the literal 'none' sentinel.
+  // Treating that as a bindable predecessor would make every claimless
+  // waiver validate on every freshly claimed PR.
+  const head = 'f'.repeat(40);
+  const body = makeWaiverComment({ headSha: head, claimId: 'none' });
+  const comment = {
+    body,
+    author: { login: 'kurone-kito' },
+    createdAt: '2026-05-17T00:00:00Z',
+  };
+  const result = summarizeExternalCheckWaivers([comment], {
+    prHeadSha: head,
+    activeClaimId: 'claim-123',
+    activeClaimSupersedes: 'none',
+    trustedMarkerLogins: ['kurone-kito'],
+    now: '2026-05-17T00:00:00Z',
+  });
+  assert.equal(result.valid.length, 0);
+  assert.equal(result.wrongClaim.length, 1);
+});
+
+test('summarizeExternalCheckWaivers: a waiver bound to the immediate supersedes predecessor stays valid after takeover (#2080)', () => {
+  const head = 'a'.repeat(40);
+  const body = makeWaiverComment({ headSha: head, claimId: 'claim-A' });
+  const comment = {
+    body,
+    author: { login: 'kurone-kito' },
+    createdAt: '2026-05-17T00:00:00Z',
+  };
+  const result = summarizeExternalCheckWaivers([comment], {
+    prHeadSha: head,
+    activeClaimId: 'claim-B',
+    activeClaimSupersedes: 'claim-A',
+    trustedMarkerLogins: ['kurone-kito'],
+    now: '2026-05-17T00:00:00Z',
+  });
+  assert.equal(result.valid.length, 1);
+  assert.equal(result.wrongClaim.length, 0);
+});
+
+test('summarizeExternalCheckWaivers: a two-hop-old claim id stays in wrongClaim (#2080)', () => {
+  const head = 'a'.repeat(40);
+  const body = makeWaiverComment({ headSha: head, claimId: 'claim-A' });
+  const comment = {
+    body,
+    author: { login: 'kurone-kito' },
+    createdAt: '2026-05-17T00:00:00Z',
+  };
+  const result = summarizeExternalCheckWaivers([comment], {
+    prHeadSha: head,
+    activeClaimId: 'claim-C',
+    activeClaimSupersedes: 'claim-B',
+    trustedMarkerLogins: ['kurone-kito'],
+    now: '2026-05-17T00:00:00Z',
+  });
+  assert.equal(result.valid.length, 0);
+  assert.equal(result.wrongClaim.length, 1);
+});
+
 test('summarizeExternalCheckWaivers: an empty head SHA fails closed to wrongHead', () => {
   const head = 'a'.repeat(40);
   const body = makeWaiverComment({ headSha: head, claimId: 'claim-123' });

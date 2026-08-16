@@ -148,6 +148,7 @@ export function summarizeExternalCheckWaivers(
   {
     prHeadSha = '',
     activeClaimId = '',
+    activeClaimSupersedes = '',
     trustedMarkerLogins = [],
     now = '',
     waivableSelectors = null,
@@ -218,9 +219,24 @@ export function summarizeExternalCheckWaivers(
     // the sentinel can never route around a genuine claim mismatch. Every
     // other combination is unchanged: a non-`none` claimId on an unclaimed PR
     // still falls into `wrongClaim` -- the exact regression #1077 fixed.
+    //
+    // #2080: one-hop takeover exception. A waiver bound to claim A remains
+    // valid after an in-policy takeover installs claim B whose
+    // `supersedes` field is A -- the waiver authorizes the PR, not the
+    // current session. The predecessor value is accepted only when it is
+    // non-empty and is NOT a case-insensitive `none` sentinel: a freshly
+    // claimed PR carries `supersedes: 'none'`, and treating that as a
+    // bindable predecessor would make every claimless waiver validate on
+    // every fresh claim (reopening #1077/#1905). A two-hop-old claim id
+    // (neither B nor B.supersedes) stays rejected; walking a full lineage
+    // is out of scope.
     const claimIdIsNoneSentinel = parsed.claimId.toLowerCase() === 'none';
+    const predecessorClaimId = String(activeClaimSupersedes ?? '').trim();
+    const predecessorIsBindable =
+      predecessorClaimId !== '' && predecessorClaimId.toLowerCase() !== 'none';
     const claimBindingSatisfied = activeClaimLower
-      ? parsed.claimId === activeClaimLower
+      ? parsed.claimId === activeClaimLower ||
+        (predecessorIsBindable && parsed.claimId === predecessorClaimId)
       : claimIdIsNoneSentinel;
     if (!claimBindingSatisfied) {
       wrongClaim.push({
@@ -2477,6 +2493,11 @@ export function resolveLatestReviewWatermark(comments, options = {}) {
     if (!parsed) {
       continue;
     }
+    // Exact claim-id match is intentional (#2080): a watermark records
+    // what THIS claim-holder verified. A takeover starts a new restore
+    // scope (`idd-review-snapshot.instructions.md`); do not treat the
+    // predecessor `supersedes` id as a match the way
+    // `summarizeExternalCheckWaivers` does for maintainer waivers.
     if (expectedClaimId && parsed.claimId !== expectedClaimId) {
       continue;
     }
@@ -5010,6 +5031,7 @@ export function buildPreMergeReadinessSummary(
   const waiverEvidence = summarizeExternalCheckWaivers(comments, {
     prHeadSha,
     activeClaimId: claim.activeClaim?.claimId ?? options.activeClaimId ?? '',
+    activeClaimSupersedes: claim.activeClaim?.supersedes ?? '',
     trustedMarkerLogins,
     now,
     waivableSelectors: waivableCheckSelectors,
