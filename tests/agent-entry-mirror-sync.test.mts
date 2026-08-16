@@ -11,7 +11,7 @@ type EntryFile = (typeof FILES)[number];
 
 const REQUIRED_TOOL_NAMES: Record<EntryFile, readonly string[]> = {
   'CLAUDE.md': ['Claude'],
-  'AGENTS.md': ['Codex', 'OpenCode'],
+  'AGENTS.md': ['Codex', 'OpenCode', 'Grok'],
   'GEMINI.md': ['Gemini'],
 };
 

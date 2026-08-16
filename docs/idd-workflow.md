@@ -9,7 +9,8 @@ tags: [workflow, phase-routing]
 
 This document is the neutral entry point for the repository's
 Issue-Driven Development (IDD) workflow across GitHub Copilot, Codex
-CLI, OpenCode, Claude Code, and Antigravity CLI (formerly Gemini CLI).
+CLI, OpenCode, Grok Build, Claude Code, and Antigravity CLI (formerly
+Gemini CLI).
 
 Use it when you need to answer three questions quickly:
 
@@ -36,13 +37,19 @@ you are reading this guide first, start at step 1.
 | GitHub Copilot surfaces | `.github/copilot-instructions.md` | `.github/instructions/idd-overview-core.instructions.md` for execution surfaces; package-scoped `.instructions.md` files in VS Code Copilot when editing matching paths | The routed phase file when the current step changes                                                                                                                                                                                 |
 | Codex CLI               | `AGENTS.md`                       | None from `.github/instructions/`                                                                                                                                       | `.github/instructions/idd-overview-core.instructions.md` and the routed phase file                                                                                                                                                  |
 | OpenCode                | `AGENTS.md`                       | `AGENTS.md` itself — OpenCode's native rules mechanism auto-loads it; none from `.github/instructions/`                                                                 | `.github/instructions/idd-overview-core.instructions.md` and the routed phase file                                                                                                                                                  |
+| Grok Build              | `AGENTS.md`                       | `AGENTS.md` and `CLAUDE.md` when both exist (same contract; Grok Build loads every matching filename, unlike OpenCode's first-match); none from `.github/instructions/` | `.github/instructions/idd-overview-core.instructions.md` and the routed phase file; see [B1's harness-native worktree tool caveat](../.github/instructions/idd-work.instructions.md#worktree-creation)                              |
 | Claude Code             | `CLAUDE.md`                       | None from `.github/instructions/` by default                                                                                                                            | `.github/instructions/idd-overview-core.instructions.md` and the routed phase file; see [B1's harness-native worktree tool caveat](../.github/instructions/idd-work.instructions.md#worktree-creation) before using `EnterWorktree` |
 | Antigravity CLI         | `GEMINI.md`                       | None from `.github/instructions/`                                                                                                                                       | `.github/instructions/idd-overview-core.instructions.md` and the routed phase file                                                                                                                                                  |
 
-OpenCode also discovers the `issue-authoring` skill bundle in this
-repository through its `.claude/skills/` compatibility, since
-`.claude/skills/issue-authoring/` is a generated, byte-identical copy
-of the canonical bundle at `skills/issue-authoring/`.
+OpenCode and Grok Build also discover the `issue-authoring` skill
+bundle in this repository through `.claude/skills/` compatibility,
+since `.claude/skills/issue-authoring/` is a generated, byte-identical
+copy of the canonical bundle at `skills/issue-authoring/`.
+
+During IDD, do not call Grok Build's `enter_plan_mode` (it blocks
+non-plan-file edits). Do not let the bundled `review`, `pr-babysit`, or
+`execute-plan` skills replace IDD E/F phases or spawn extra worktrees.
+(Preventive; no observed incident yet.)
 
 During onboarding, create or update `CLAUDE.md`, `AGENTS.md`, and
 `GEMINI.md` so each non-Copilot agent listed above has a stable first
@@ -886,6 +893,7 @@ agent; only the mechanism differs.
 | Claude Code     | `Agent(subagent_type="general-purpose")` with the calling phase's critique checklist                                                                                                                                       |
 | Codex CLI       | Use one bounded read-only native subagent review when supported and suitable; parent waits for and collects the result. Fallback: structured self-critique when delegation is unavailable, disabled, unsuitable, or fails. |
 | OpenCode        | Launch a subagent via OpenCode's Task tool (e.g. the built-in `general` subagent, or a `subtask: true` command) — an independent mechanism                                                                                 |
+| Grok Build      | Independent `spawn_subagent` with the calling phase's critique checklist                                                                                                                                                   |
 | Antigravity CLI | Self-critique or use Antigravity's native multi-step task mechanism if available                                                                                                                                           |
 
 For Codex delegation, the parent collects the reviewer result before

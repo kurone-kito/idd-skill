@@ -9,8 +9,8 @@ project.
 lives in
 [`.github/copilot-instructions.md`](.github/copilot-instructions.md).
 This file contains tool-specific guidance for agents that read the
-agents.md standard — currently Codex CLI and OpenCode. When
-Copilot-specific workflow names appear, apply the intent using your
+agents.md standard — currently Codex CLI, OpenCode, and Grok Build.
+When Copilot-specific workflow names appear, apply the intent using your
 own interaction model rather than following product terms literally.
 
 ## Minimum requirements
@@ -122,7 +122,8 @@ For Codex CLI, read the canonical issue-authoring bundle explicitly from
 `skills/issue-authoring/`, or install one selected copy under
 `.agents/skills/issue-authoring/` when the target runtime supports native
 skill discovery there. The existing `.claude/skills/issue-authoring/` copy is
-the dogfood route for Claude Code and OpenCode compatibility; it is not the
+the dogfood route for Claude Code, OpenCode, and Grok Build
+compatibility; it is not the
 canonical source. Do not add checked-in `.agents/skills/` or
 `.opencode/skills/` mirrors by default (preventive; no observed incident yet),
 and do not assume the source path is automatically discovered by Codex.
