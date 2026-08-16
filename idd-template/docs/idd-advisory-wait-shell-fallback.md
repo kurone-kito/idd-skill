@@ -275,8 +275,9 @@ fi
 CONJUNCT1=$([ "${LATEST_REVIEW_CID}" = "${PR_HEAD_SHA}" ] && echo true || echo false)
 CONJUNCT2=$([ "${ACTIONABLE_ITEM_COUNT}" = "0" ] && echo true || echo false)
 
-# Current-HEAD primary-bot threads: resolved OR a later **Accepted** /
-# **Rejected** reply. Paginate until hasNextPage is false.
+# Current-HEAD primary-bot threads: resolved OR a *fresh* **Accepted** /
+# **Rejected** reply (after the latest non-disposition comment).
+# Paginate until hasNextPage is false.
 THREADS_JSON=$(gh api graphql --paginate -f query='
   query($owner:String!, $repo:String!, $number:Int!, $endCursor:String) {
     repository(owner:$owner, name:$repo) {
@@ -297,7 +298,16 @@ THREADS_JSON=$(gh api graphql --paginate -f query='
   --jq '.data.repository.pullRequest.reviewThreads.nodes')
 
 # Originating comment is nodes[0]. A truncated comments page is unmet.
+# A disposition is fresh only when it is later than every non-disposition
+# comment on the thread (same rule as hasFreshDisposition).
 CONJUNCT3=$(printf '%s' "${THREADS_JSON}" | jq -rs --arg sha "${PR_HEAD_SHA}" '
+  def is_disp: (.body | startswith("**Accepted**") or startswith("**Rejected**"));
+  def latest_feedback:
+    [.comments.nodes[] | select(is_disp | not) | .createdAt]
+    | if length == 0 then null else max end;
+  def has_fresh_disp:
+    latest_feedback as $fb
+    | .comments.nodes | any(is_disp and ($fb == null or .createdAt > $fb));
   add
   | map(select(
       ((.comments.nodes[0].author.login == "copilot-pull-request-reviewer")
@@ -306,13 +316,7 @@ CONJUNCT3=$(printf '%s' "${THREADS_JSON}" | jq -rs --arg sha "${PR_HEAD_SHA}" '
       and (.comments.nodes | any((.commit.oid // "") == $sha))
     ))
   | all((.comments.pageInfo.hasNextPage | not)
-      and (.isResolved
-        or ((.comments.nodes[0].createdAt) as $t
-            | .comments.nodes | any(
-                (.createdAt > $t)
-                and (.body | startswith("**Accepted**")
-                  or startswith("**Rejected**"))
-              ))))
+      and (.isResolved or has_fresh_disp))
 ')
 
 CONVERGED=$([ "${CONJUNCT1}" = true ] && [ "${CONJUNCT2}" = true ] && [ "${CONJUNCT3}" = true ] && echo true || echo false)
@@ -348,12 +352,15 @@ MISSING_REGULAR=$(printf '%s\n' "${COMMENTS_JSON}" "${DISPOSITION_JSON}" | jq -s
   | .missing
 ')
 MISSING_THREADS=$(printf '%s' "${THREADS_JSON}" | jq -rs '
+  def is_disp: (.body | startswith("**Accepted**") or startswith("**Rejected**"));
+  def latest_feedback:
+    [.comments.nodes[] | select(is_disp | not) | .createdAt]
+    | if length == 0 then null else max end;
+  def has_fresh_disp:
+    latest_feedback as $fb
+    | .comments.nodes | any(is_disp and ($fb == null or .createdAt > $fb));
   add
-  | map(select(
-      (.comments.nodes | any(
-        .body | startswith("**Accepted**") or startswith("**Rejected**")
-      )) | not
-    ))
+  | map(select((.comments.pageInfo.hasNextPage | not) and (has_fresh_disp | not)))
   | length
 ')
 
