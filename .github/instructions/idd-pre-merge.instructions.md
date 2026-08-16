@@ -294,10 +294,10 @@ nonce was recorded for the active claim.
 - **Advisory convergence** (exit-code obligation for Copilot-authored
   review threads, not a judgment call): run `node
   scripts/advisory-convergence.mjs --pr {pr-number} --assert` (or the
-  profile-selected `idd-advisory-convergence` command). Non-zero exit is
-  a hard merge block — route to E1/E4 (check **AW6** first when
-  `sameHeadReroll.eligible`) using `reasons`; zero exit (`ready: true`)
-  satisfies this condition.
+  profile-selected `idd-advisory-convergence` command). Non-zero exit
+  routes to E1/E4 (check **AW6** first when
+  `sameHeadReroll.eligible`); `ready: true` satisfies. On
+  `instructions-only`, both halves use the [F2 `gh`/`jq` fallback](../../docs/idd-advisory-wait-shell-fallback.md#f2).
   Separately, require `dispositionEvidence.route` to be `proceed`
   (`dispositionEvidence.blockingCount == 0` — both
   `missingRegularComments` (any outstanding non-thread regular PR

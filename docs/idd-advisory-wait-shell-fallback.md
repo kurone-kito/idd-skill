@@ -1,15 +1,18 @@
 ---
 type: reference
-title: IDD — Advisory-Wait Shell Fallback (AW1 / AW2 / AW3-R / AW3-S / AW3-H detail)
-description: Provides the verbatim gh, gh api, jq, and curl commands the advisory-wait shell fallback uses when helper support cannot be trusted.
+title: IDD — Advisory-Wait Shell Fallback (AW1 / AW2 / AW3-R / AW3-S / AW3-H / F2 detail)
+description: Provides the verbatim gh, gh api, jq, and curl commands the advisory-wait and F2 advisory-convergence shell fallbacks use when helper support cannot be trusted.
 tags: [advisory-wait, shell-fallback]
 ---
 
-# IDD — Advisory-Wait Shell Fallback (AW1 / AW2 / AW3-R / AW3-S / AW3-H detail)
+# IDD — Advisory-Wait Shell Fallback (AW1 / AW2 / AW3-R / AW3-S / AW3-H / F2 detail)
 
 This document contains the verbatim commands used by the shell
-fallback for [advisory-wait](../.github/instructions/idd-advisory-wait.instructions.md):
-`gh`/`gh api`/`jq` for AW1/AW2 evidence collection, and a mix of
+fallback for [advisory-wait](../.github/instructions/idd-advisory-wait.instructions.md)
+and for F2's **Advisory convergence** bullet in
+[pre-merge](../.github/instructions/idd-pre-merge.instructions.md):
+`gh`/`gh api`/`jq` for AW1/AW2 evidence collection and the F2
+convergence / `dispositionEvidence` assertion, and a mix of
 `gh`/`gh api`/`curl`/`node scripts/...` for the AW3-R/AW3-S/AW3-H
 marker-posting and cleanup mutations.
 
@@ -211,4 +214,138 @@ node scripts/minimize-superseded-markers.mjs \
   --classifier OUTDATED \
   --trusted-marker-logins "<trusted-login-1>,<trusted-login-2>" \
   --apply
+```
+
+## F2
+
+F2's **Advisory convergence** bullet (see
+[pre-merge](../.github/instructions/idd-pre-merge.instructions.md))
+has two halves. Helper-first stays first: when a helper runtime
+exists, run `advisory-convergence.mjs --assert` (or the
+profile-selected command) and read
+`pre-merge-readiness` `dispositionEvidence`. Use this section only on
+`instructions-only`, or when those helpers are unavailable.
+
+**Convergence assertion — semantics.** `converged` is the three
+conjuncts from
+[Advisory convergence (F2)](idd-helper-scripts.md#advisory-convergence-f2),
+restated verbatim: the latest primary-bot review's `commit_id` equals
+the current HEAD **and** that review carries zero actionable items
+**and** every current-HEAD primary-bot-authored review thread is
+resolved **or** carries a valid disposition marker. Do not add or
+relax a conjunct. Treat a missing review, an unreadable
+`commit_id`/`HEAD`, or an unreadable item count as not converged.
+
+**`dispositionEvidence` half — semantics.** Derive the same
+conclusion F2 names in prose: `route` is `proceed` only when
+`blockingCount == 0`, meaning both `missingRegularComments` (any
+outstanding non-thread regular PR comment from a non-agent author,
+including the PR author, lacking a fresh disposition marker) and
+`missingThreads` (any review thread, resolved or unresolved, still
+lacking one) are empty. A missing or malformed result is unmet. The
+ack-only override stays in the instruction file; do not re-derive it
+here.
+
+```sh
+OWNER=$(gh repo view --json owner --jq '.owner.login')
+REPO=$(gh repo view --json name --jq '.name')
+PR_HEAD_SHA=$(gh pr view {pr-number} --json headRefOid --jq '.headRefOid')
+
+# Latest primary-bot review (same login set as AW1).
+LATEST_REVIEW_JSON=$(
+  gh api "repos/${OWNER}/${REPO}/pulls/{pr-number}/reviews" --paginate \
+    --jq '.[] | select(.user.login == "copilot-pull-request-reviewer"
+          or .user.login == "copilot-pull-request-reviewer[bot]") |
+          {sa: .submitted_at, cid: .commit_id, id: .id}' \
+  | jq -rs 'sort_by(.sa) | last // {}'
+)
+LATEST_REVIEW_CID=$(printf '%s' "${LATEST_REVIEW_JSON}" | jq -r '.cid // ""')
+LATEST_REVIEW_ID=$(printf '%s' "${LATEST_REVIEW_JSON}" | jq -r '.id // empty')
+
+# Actionable items = posted review comments on that review.
+if [ -n "${LATEST_REVIEW_ID}" ]; then
+  ACTIONABLE_ITEM_COUNT=$(
+    gh api "repos/${OWNER}/${REPO}/pulls/{pr-number}/reviews/${LATEST_REVIEW_ID}/comments" \
+      --paginate --jq 'length' | awk '{s+=$1} END {print s+0}'
+  )
+else
+  ACTIONABLE_ITEM_COUNT=""
+fi
+
+CONJUNCT1=$([ "${LATEST_REVIEW_CID}" = "${PR_HEAD_SHA}" ] && echo true || echo false)
+CONJUNCT2=$([ "${ACTIONABLE_ITEM_COUNT}" = "0" ] && echo true || echo false)
+
+# Current-HEAD primary-bot threads: resolved OR a later **Accepted** /
+# **Rejected** reply. Paginate until hasNextPage is false.
+THREADS_JSON=$(gh api graphql --paginate -f query='
+  query($owner:String!, $repo:String!, $number:Int!, $cursor:String) {
+    repository(owner:$owner, name:$repo) {
+      pullRequest(number:$number) {
+        reviewThreads(first:100, after:$cursor) {
+          pageInfo { hasNextPage endCursor }
+          nodes {
+            isResolved
+            comments(first:100) {
+              nodes { author { login } body createdAt commit { oid } }
+            }
+          }
+        }
+      }
+    }
+  }' -F owner="${OWNER}" -F repo="${REPO}" -F number={pr-number} \
+  --jq '.data.repository.pullRequest.reviewThreads.nodes')
+
+CONJUNCT3=$(printf '%s' "${THREADS_JSON}" | jq -rs --arg sha "${PR_HEAD_SHA}" '
+  add
+  | map(select(
+      (.comments.nodes | any(
+        .author.login == "copilot-pull-request-reviewer"
+        or .author.login == "copilot-pull-request-reviewer[bot]"
+      ))
+      and (.comments.nodes | any((.commit.oid // "") == $sha))
+    ))
+  | all(.isResolved
+      or (.comments.nodes | any(
+        (.body | startswith("**Accepted**") or startswith("**Rejected**"))
+      )))
+')
+
+CONVERGED=$([ "${CONJUNCT1}" = true ] && [ "${CONJUNCT2}" = true ] && [ "${CONJUNCT3}" = true ] && echo true || echo false)
+
+# dispositionEvidence: later **Accepted** / **Rejected** markers, 1:1
+# by count (E6). Non-agent regular comments and every review thread.
+COMMENTS_JSON=$(
+  gh api "repos/${OWNER}/${REPO}/issues/{pr-number}/comments" --paginate \
+    | jq -s 'add // []'
+)
+DISPOSITION_JSON=$(printf '%s' "${COMMENTS_JSON}" | jq -c '
+  map(select(.body | startswith("**Accepted**") or startswith("**Rejected**")))
+')
+MISSING_REGULAR=$(printf '%s\n' "${COMMENTS_JSON}" "${DISPOSITION_JSON}" | jq -s --argjson bots '["copilot-pull-request-reviewer","copilot-pull-request-reviewer[bot]","coderabbitai[bot]","chatgpt-codex-connector[bot]"]' '
+  .[0] as $comments | .[1] as $disp
+  | ($comments
+     | map(select(
+         (.user.login as $u | ($bots | index($u) | not))
+         and (.body | startswith("**Accepted**") or startswith("**Rejected**") | not)
+         and (.body | startswith("<!--") | not)
+       )))
+  | map(select(
+      .created_at as $t
+      | ($disp | map(select(.created_at > $t)) | length) == 0
+    ))
+  | length
+')
+MISSING_THREADS=$(printf '%s' "${THREADS_JSON}" | jq -rs '
+  add
+  | map(select(
+      (.comments.nodes | any(
+        .body | startswith("**Accepted**") or startswith("**Rejected**")
+      )) | not
+    ))
+  | length
+')
+
+echo "converged=${CONVERGED} conjuncts=${CONJUNCT1},${CONJUNCT2},${CONJUNCT3}"
+echo "missingRegularComments=${MISSING_REGULAR} missingThreads=${MISSING_THREADS}"
+# proceed iff CONVERGED is true AND both missing counts are 0.
 ```
