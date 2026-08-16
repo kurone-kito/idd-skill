@@ -1718,23 +1718,26 @@ test('regression: converged/waived/ready are identical with and without advisory
 });
 
 // --- 9b. sameHeadReroll.ineligibleReasons / dispositionEvidence (#1719) -----
-// --- `eligible` is a conjunction of six boolean terms (see the computation
-// --- in advisory-convergence.mts); `ineligibleReasons` is derived from the
-// --- SAME six terms (`.every()` / `.filter().map()` over one shared array),
-// --- so the two can never disagree. This section proves: the known-token
-// --- set stays pinned to exactly six (so a term added to the conjunction
-// --- without a paired token trips a test), the array is empty exactly when
-// --- eligible is true, each term produces its own token when it is the
-// --- (sole, where isolable) failing one, and the `dispositionEvidence`
-// --- counters that feed one of those terms are exposed on the report.
+// --- `eligible` is a conjunction of seven boolean terms (see the
+// --- computation in advisory-convergence.mts); `ineligibleReasons` is
+// --- derived from the SAME seven terms (`.every()` / `.filter().map()`
+// --- over one shared array), so the two can never disagree. This section
+// --- proves: the known-token set stays pinned to exactly seven (so a
+// --- term added to the conjunction without a paired token trips a test),
+// --- the array is empty exactly when eligible is true, each term
+// --- produces its own token when it is the (sole, where isolable)
+// --- failing one, and the `dispositionEvidence` counters that feed one
+// --- of those terms are exposed on the report.
 
-test('ineligibleReasons: the known-token set is pinned to exactly the six eligibility terms', () => {
-  // A 7th conjunct added to `sameHeadRerollEligible` without a paired token
-  // in `SAME_HEAD_REROLL_INELIGIBLE_REASON` would leave this set at 6,
-  // failing this pin -- the reviewer must touch this test to add one.
+test('ineligibleReasons: the known-token set is pinned to exactly the seven eligibility terms', () => {
+  // An 8th conjunct added to `sameHeadRerollEligible` without a paired
+  // token in `SAME_HEAD_REROLL_INELIGIBLE_REASON` would leave this set
+  // at 7, failing this pin -- the reviewer must touch this test to add
+  // one.
   assert.deepEqual(
     Object.values(SAME_HEAD_REROLL_INELIGIBLE_REASON).sort(),
     [
+      'already-satisfied-via-review-ack',
       'missing-regular-comment-disposition',
       'review-item-count-not-positive',
       'review-item-count-unknown',
@@ -2355,6 +2358,10 @@ test('review-ack: itemCount 2 with only ONE review-scoped resolved thread does n
   assert.equal(verdict.review.satisfied, false);
   assert.equal(verdict.converged, false);
   assert.equal(verdict.ready, false);
+  assert.match(
+    verdict.reasons.join('\n'),
+    /only 1 of 2 items have copilot-authored review-thread evidence/,
+  );
 });
 
 test('review-ack: nonzero suppressedCount with a valid post-review ack converges', () => {
@@ -2530,6 +2537,63 @@ test('review-ack: validity is governed by the GitHub createdAt, never the embedd
   );
   assertValidVerdict(futureEmbeddedDoesNotCount);
   assert.equal(futureEmbeddedDoesNotCount.review.satisfied, false);
+});
+
+test('review-ack: an ack whose embedded HEAD SHA is not current HEAD does not validate, even when createdAt postdates the newer review (#2056 delayed-POST race)', () => {
+  // Marker rendered against HEAD A, PR advances to HEAD B, Copilot
+  // reviews B, then the delayed POST lands with createdAt after B's
+  // submittedAt. Ordering alone would treat this as an ack of B.
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({
+      reviews: [
+        copilotReview({ itemCount: 0, body: SUPPRESSED_COMMENTS_BODY }),
+      ],
+      comments: [reviewAckComment(ACK_AFTER_REVIEW, { headSha: OTHER_SHA })],
+    }),
+    baseOptions(),
+  );
+  assertValidVerdict(verdict);
+  assert.equal(verdict.review.satisfied, false);
+  assert.equal(verdict.converged, false);
+  assert.equal(verdict.ready, false);
+});
+
+test('review-ack: sameHeadReroll is not eligible/requestable once a valid ack already satisfies the review (#2056)', () => {
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({
+      reviews: [
+        copilotReview({ itemCount: 0, body: SUPPRESSED_COMMENTS_BODY }),
+      ],
+      comments: [reviewAckComment(ACK_AFTER_REVIEW)],
+    }),
+    baseOptions(),
+  );
+  assertValidVerdict(verdict);
+  assert.equal(verdict.review.suppressedCount, 1);
+  assert.equal(verdict.review.satisfied, true);
+  assert.equal(verdict.converged, true);
+  assert.equal(verdict.sameHeadReroll.eligible, false);
+  assert.equal(verdict.sameHeadReroll.requestable, false);
+  assert.deepEqual(verdict.sameHeadReroll.ineligibleReasons, [
+    SAME_HEAD_REROLL_INELIGIBLE_REASON.ALREADY_SATISFIED_VIA_REVIEW_ACK,
+  ]);
+});
+
+test('review-ack: a negative itemCount with zero threads does not cover the review (#2056 fail-closed)', () => {
+  // Hand-constructed: GraphQL totalCount cannot be negative, but the
+  // boundary used to treat `0 >= -1` as coverage. The output itemCount
+  // stays the raw -1, which the report schema rejects (minimum: 0), so
+  // this case is asserted without assertValidVerdict.
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({
+      reviews: [copilotReview({ id: 'REVIEW_NEG', itemCount: -1 })],
+    }),
+    baseOptions(),
+  );
+  assert.equal(verdict.review.itemCount, -1);
+  assert.equal(verdict.review.satisfied, false);
+  assert.equal(verdict.converged, false);
+  assert.equal(verdict.ready, false);
 });
 
 // --- 10. terminal Copilot unavailability (#1570/#1572) ----------------------
