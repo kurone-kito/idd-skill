@@ -15,8 +15,8 @@ VS Code Copilot Chat because they are the primary tools used for
 day-to-day work and benchmarking.
 
 `AGENTS.md`, `CLAUDE.md`, and `GEMINI.md` exist as lightweight
-compatibility entry points: `AGENTS.md` serves Codex CLI and OpenCode,
-`CLAUDE.md` serves Claude Code, and `GEMINI.md` serves
+compatibility entry points: `AGENTS.md` serves Codex CLI, OpenCode, and
+Grok Build, `CLAUDE.md` serves Claude Code, and `GEMINI.md` serves
 Antigravity CLI (formerly Gemini CLI). Keep this file as the canonical,
 fully detailed guide unless benchmark results justify a more neutral
 layout.

@@ -42,7 +42,8 @@ IDD は、これらの動きをひとつの監査可能な GitHub ネイティ�
 - **ブラックボックスではない移植可能なルール** — 導入先リポジトリで
   そのまま読める Markdown。閲覧も、フォークも、カスタマイズも自由です。
 - **エージェントを選べる自由** — GitHub Copilot、Claude Code、OpenAI
-  Codex CLI、OpenCode、Antigravity CLI (formerly Gemini CLI) で動作。
+  Codex CLI、OpenCode、Grok Build、Antigravity CLI (formerly Gemini
+  CLI) で動作。
   標準の Copilot 助言レビューは
   [review policy profiles](docs/idd-review-policy-profiles.md) で
   差し替えられます。
@@ -140,14 +141,14 @@ stop rules を仕組みとして設計する考え方(Anthropic のいう
 
 ## 次の一歩
 
-| 目的                                                | まず読む場所                                                                                                                                                               |
-| --------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 概念を先に理解したい                                | [`docs/concepts.md`](docs/concepts.md)                                                                                                                                     |
-| 自分のリポジトリに IDD を導入したい                 | [`idd-template/ONBOARDING.md`](idd-template/ONBOARDING.md)                                                                                                                 |
-| このリポジトリでエージェントを動かしたい            | [`AGENTS.md`](AGENTS.md) (Codex CLI と OpenCode)、[`CLAUDE.md`](CLAUDE.md)、[`GEMINI.md`](GEMINI.md)、[`.github/copilot-instructions.md`](.github/copilot-instructions.md) |
-| ループの前に AI 向け issue を整備したい             | [`skills/issue-authoring/SKILL.md`](skills/issue-authoring/SKILL.md)                                                                                                       |
-| review・merge・CI・discovery のポリシーを調整したい | [`docs/customization.md`](docs/customization.md)                                                                                                                           |
-| それ以外のすべて — 完全なリファレンスマニュアル     | [`docs/index.md`](docs/index.md)                                                                                                                                           |
+| 目的                                                | まず読む場所                                                                                                                                                                         |
+| --------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| 概念を先に理解したい                                | [`docs/concepts.md`](docs/concepts.md)                                                                                                                                               |
+| 自分のリポジトリに IDD を導入したい                 | [`idd-template/ONBOARDING.md`](idd-template/ONBOARDING.md)                                                                                                                           |
+| このリポジトリでエージェントを動かしたい            | [`AGENTS.md`](AGENTS.md) (Codex CLI、OpenCode、Grok Build)、[`CLAUDE.md`](CLAUDE.md)、[`GEMINI.md`](GEMINI.md)、[`.github/copilot-instructions.md`](.github/copilot-instructions.md) |
+| ループの前に AI 向け issue を整備したい             | [`skills/issue-authoring/SKILL.md`](skills/issue-authoring/SKILL.md)                                                                                                                 |
+| review・merge・CI・discovery のポリシーを調整したい | [`docs/customization.md`](docs/customization.md)                                                                                                                                     |
+| それ以外のすべて — 完全なリファレンスマニュアル     | [`docs/index.md`](docs/index.md)                                                                                                                                                     |
 
 主なパッケージは [`idd-template/`](idd-template/) です。移植用の
 `.github/instructions/` ファイル、導入・ワークフロードキュメント、

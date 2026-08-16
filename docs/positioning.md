@@ -7,9 +7,9 @@ tags: [positioning, competitive-analysis]
 
 # IDD Skill — Competitive Landscape and Positioning
 
-Analysis date: 2026-05-07
+Analysis date: 2026-08-17
 
-> **Positioning snapshot — as of 2026-05-07.**
+> **Positioning snapshot — as of 2026-08-17.**
 > This comparison is a positioning snapshot, not a permanent claim.
 > Revalidate tool capabilities before using this document for external
 > marketing or publication.
@@ -64,15 +64,15 @@ current no-go recommendation.
 
 ## Comparison matrix
 
-| Criterion                         | idd-skill                                                         | GitHub Agentic Workflows        | Awesome-Copilot skills | Kiro / Factory.ai | OpenHands            |
-| --------------------------------- | ----------------------------------------------------------------- | ------------------------------- | ---------------------- | ----------------- | -------------------- |
-| Parallel agent coordination       | ✓ (claim/heartbeat)                                               | ✗                               | ✗                      | Varies            | ✗                    |
-| End-to-end phase coverage         | ✓ (full discovery-to-merge set)                                   | Partial                         | ✗                      | ✓ (proprietary)   | Partial              |
-| Zero infrastructure               | ✓ (Markdown files only)                                           | ✗ (GitHub servers)              | ✓                      | ✗ (SaaS account)  | ✗ (runtime required) |
-| Execution-agent neutral           | ✓ (Copilot, Claude, Codex, Antigravity CLI (formerly Gemini CLI)) | ✗ (GitHub Copilot only)         | ✓                      | ✗ (proprietary)   | ✗ (own runtime)      |
-| Fully auditable rules             | ✓ (plain Markdown)                                                | ✗                               | ✓                      | ✗                 | ✓ (open source)      |
-| GitHub-hosted CI integration      | ✓ (CI wait loop)                                                  | ✓                               | ✗                      | ✓                 | Varies               |
-| No separate orchestration service | ✓                                                                 | ✗ (GitHub-hosted agent service) | ✓                      | ✗                 | ✓                    |
+| Criterion                         | idd-skill                                                                               | GitHub Agentic Workflows        | Awesome-Copilot skills | Kiro / Factory.ai | OpenHands            |
+| --------------------------------- | --------------------------------------------------------------------------------------- | ------------------------------- | ---------------------- | ----------------- | -------------------- |
+| Parallel agent coordination       | ✓ (claim/heartbeat)                                                                     | ✗                               | ✗                      | Varies            | ✗                    |
+| End-to-end phase coverage         | ✓ (full discovery-to-merge set)                                                         | Partial                         | ✗                      | ✓ (proprietary)   | Partial              |
+| Zero infrastructure               | ✓ (Markdown files only)                                                                 | ✗ (GitHub servers)              | ✓                      | ✗ (SaaS account)  | ✗ (runtime required) |
+| Execution-agent neutral           | ✓ (Copilot, Claude, Codex, OpenCode, Antigravity CLI (formerly Gemini CLI), Grok Build) | ✗ (GitHub Copilot only)         | ✓                      | ✗ (proprietary)   | ✗ (own runtime)      |
+| Fully auditable rules             | ✓ (plain Markdown)                                                                      | ✗                               | ✓                      | ✗                 | ✓ (open source)      |
+| GitHub-hosted CI integration      | ✓ (CI wait loop)                                                                        | ✓                               | ✗                      | ✓                 | Varies               |
+| No separate orchestration service | ✓                                                                                       | ✗ (GitHub-hosted agent service) | ✓                      | ✗                 | ✓                    |
 
 The final row means idd-skill does not add its own IDD-specific SaaS
 account, orchestration account, scheduler, or server. Running the full
