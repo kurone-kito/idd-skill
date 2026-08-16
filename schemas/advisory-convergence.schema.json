@@ -105,6 +105,7 @@
         },
         "itemCount": {
           "type": ["integer", "null"],
+          "minimum": 0,
           "description": "Actionable-item count from the latest review, read only when matchesHead is true; a static snapshot taken at submission time that later disposition activity never updates."
         },
         "submittedAt": {
@@ -243,7 +244,7 @@
       "properties": {
         "eligible": {
           "type": "boolean",
-          "description": "True when the scope is applicable, the review is not pending, threads are satisfied, no regular-comment disposition is missing (missingThreadCount is not a term here), and the review's item count is known and positive -- the only case a stale item count alone still blocks converged."
+          "description": "True when the scope is applicable, the review is not pending, threads are satisfied, no regular-comment disposition is missing (missingThreadCount is not a term here), the review's item count is known and positive (or suppressedCount is positive), and the review is not already satisfied via a valid review-ack -- the only case a stale item/suppressed count alone still blocks converged."
         },
         "ineligibleReasons": {
           "type": "array",
@@ -256,7 +257,8 @@
               "unresolved-copilot-threads",
               "missing-regular-comment-disposition",
               "review-item-count-unknown",
-              "review-item-count-not-positive"
+              "review-item-count-not-positive",
+              "already-satisfied-via-review-ack"
             ]
           }
         },

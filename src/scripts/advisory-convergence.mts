@@ -182,6 +182,7 @@ export const SAME_HEAD_REROLL_INELIGIBLE_REASON = {
   MISSING_REGULAR_COMMENT_DISPOSITION: 'missing-regular-comment-disposition',
   REVIEW_ITEM_COUNT_UNKNOWN: 'review-item-count-unknown',
   REVIEW_ITEM_COUNT_NOT_POSITIVE: 'review-item-count-not-positive',
+  ALREADY_SATISFIED_VIA_REVIEW_ACK: 'already-satisfied-via-review-ack',
 } as const;
 
 /** The exact token union `sameHeadReroll.ineligibleReasons` may contain
@@ -345,16 +346,17 @@ export interface AdvisoryConvergenceDispositionEvidence {
  * header for the full rationale. Purely additive: never referenced by the
  * `converged` / `waived` / `ready` computation. */
 export interface AdvisoryConvergenceSameHeadReroll {
-  /** `matchesHead: true`, `itemCount > 0`, every Copilot-authored thread
-   * resolved or validly dispositioned, AND no outstanding regular-comment
-   * disposition evidence (`dispositionEvidence.missingRegularCommentCount
-   * === 0`) -- the static item count is the ONLY thing keeping `converged`
+  /** `matchesHead: true`, `itemCount > 0` (or `suppressedCount > 0`),
+   * every Copilot-authored thread resolved or validly dispositioned, no
+   * outstanding regular-comment disposition evidence, AND the review is
+   * not already `reviewSatisfied` via a valid `review-ack` (#2056) -- the
+   * static item/suppressed count is the ONLY thing keeping `converged`
    * false for this HEAD, with no other triage work still outstanding. */
   eligible: boolean;
   /** #1719: one stable, machine-readable token per failing term of the
-   * six-term `eligible` conjunction above
+   * seven-term `eligible` conjunction above
    * (`SAME_HEAD_REROLL_INELIGIBLE_REASON`), in conjunction order; empty
-   * exactly when `eligible` is `true`. Computed from the SAME six terms
+   * exactly when `eligible` is `true`. Computed from the SAME seven terms
    * `eligible` itself reduces from (see the computation below), so the
    * two can never disagree -- a report-mode caller no longer has to
    * re-derive the eligibility rule by hand to self-diagnose a stuck AW6
@@ -821,17 +823,19 @@ export function computeAdvisoryConvergenceVerdict(
   // caller, `rerun-advisory-convergence.mts`, only ever reads `.matchesHead`,
   // never `.satisfied`, so this override cannot affect it).
   //
-  // `hasValidReviewAck` (#2050): true when a trusted `review-ack:` marker's
-  // OWN GitHub `created_at` (never an embedded, agent-supplied timestamp --
-  // the same trust boundary `hasFreshDisposition`, protocol-helpers.mts, and
-  // `summarizeSameHeadRerollMarkers` above already apply) postdates the
-  // latest primary-bot review's `submittedAt`. A single whole-review
-  // acknowledgement, not a per-finding identifier scheme -- see the issue's
-  // "Decision" section for why.
+  // `hasValidReviewAck` (#2050 / #2056): true when a trusted `review-ack:`
+  // marker's OWN GitHub `created_at` (never an embedded, agent-supplied
+  // timestamp -- the same trust boundary `hasFreshDisposition`,
+  // protocol-helpers.mts, and `summarizeSameHeadRerollMarkers` already
+  // apply) postdates the latest primary-bot review's `submittedAt`, AND
+  // the marker's embedded HEAD SHA equals the current PR HEAD. A single
+  // whole-review acknowledgement, not a per-finding identifier scheme --
+  // see the issue's "Decision" section for why.
   const hasValidReviewAck = resolveHasValidReviewAck(
     comments,
     trustedMarkerLogins,
     review.submittedAt,
+    prHeadSha,
   );
   // `itemCountClauseSatisfied`: `itemCount === 0`, OR every thread THIS
   // SPECIFIC review opened is resolved or validly dispositioned. Bound to
@@ -869,9 +873,15 @@ export function computeAdvisoryConvergenceVerdict(
   // `review.itemCount !== null` fails closed on the unknown-count case,
   // matching this file's other missing-evidence guards (e.g.
   // `reviewItemCountKnownTerm` in the sameHeadReroll terms below).
+  // #2056: the nonzero branch requires a positive integer before trusting
+  // `>=` -- `itemCount: -1` with an empty thread set would otherwise
+  // satisfy `0 >= -1` and report the review covered with no real thread
+  // evidence. `itemCount === 0` stays the clean-review short-circuit.
   const itemCountClauseSatisfied =
     review.itemCount === 0 ||
     (review.itemCount !== null &&
+      Number.isInteger(review.itemCount) &&
+      review.itemCount > 0 &&
       latestReviewThreadIds.size >= review.itemCount &&
       latestReviewBlocking.length === 0);
   // `suppressedClauseSatisfied`: `suppressedCount === 0`, OR a valid
@@ -936,21 +946,30 @@ export function computeAdvisoryConvergenceVerdict(
         review.suppressedCount > 0
           ? ` (plus ${review.suppressedCount} suppressed comment(s) in the review body, not counted in itemCount)`
           : '';
-      // #2050: only the "this review opened zero threads" shape still needs
-      // the "check the review body directly" pointer -- when THIS review's
-      // own threads exist and are all resolved/dispositioned,
-      // `itemCountClauseSatisfied` is already `true` and this `else` branch
-      // is unreachable for that case; when they exist but are NOT all
-      // resolved/dispositioned, the separate `threadClause.satisfied` reason
-      // below already names those (PR-wide) blocking threads directly,
-      // which include this review's own unresolved ones.
-      const noThreadEvidenceForItems =
-        latestReviewThreadIds.size === 0 &&
+      // #2050 / #2056: the "check the review body directly" pointer is for
+      // items that have no review-thread representation at all -- zero
+      // scoped threads, or a resolved/dispositioned partial set whose
+      // count is still below itemCount. When THIS review's own threads
+      // exist but are still unresolved/undispositioned, the separate
+      // `threadClause.satisfied` reason below already names those
+      // blocking threads, so the body pointer would be a red herring.
+      const uncoveredItemCount =
         review.itemCount !== null &&
-        review.itemCount > 0;
+        Number.isInteger(review.itemCount) &&
+        review.itemCount > 0 &&
+        latestReviewThreadIds.size < review.itemCount;
+      const zeroThreadEvidence =
+        uncoveredItemCount && latestReviewThreadIds.size === 0;
+      const partialResolvedCoverage =
+        uncoveredItemCount &&
+        latestReviewThreadIds.size > 0 &&
+        latestReviewBlocking.length === 0;
+      const threadEvidenceGap = zeroThreadEvidence
+        ? `no ${primaryBotLogin}-authored review-thread evidence accounts for them`
+        : `only ${latestReviewThreadIds.size} of ${review.itemCount} items have ${primaryBotLogin}-authored review-thread evidence`;
       reasons.push(
-        noThreadEvidenceForItems
-          ? `${itemCountReason}${suppressedSuffix}${ackSuffix} -- no ${primaryBotLogin}-authored review-thread evidence accounts for them; check the review body directly for an item suppressed due to low confidence, which counts toward itemCount but never appears in reviewThreads`
+        zeroThreadEvidence || partialResolvedCoverage
+          ? `${itemCountReason}${suppressedSuffix}${ackSuffix} -- ${threadEvidenceGap}; check the review body directly for an item suppressed due to low confidence, which counts toward itemCount but never appears in reviewThreads`
           : `${itemCountReason}${suppressedSuffix}${ackSuffix}`,
       );
     }
@@ -991,9 +1010,9 @@ export function computeAdvisoryConvergenceVerdict(
   // that attempt is permanently consumed before the real blocker is even
   // cleared (PR #1517 review).
   //
-  // #1719: each of the six eligibility terms above is ALSO computed as its
-  // own named boolean, paired with a stable token in `sameHeadRerollTerms` --
-  // `sameHeadRerollEligible` (`.every()`) and
+  // #1719: each of the seven eligibility terms above is ALSO computed as
+  // its own named boolean, paired with a stable token in
+  // `sameHeadRerollTerms` -- `sameHeadRerollEligible` (`.every()`) and
   // `sameHeadRerollIneligibleReasons` (`.filter().map()`) are BOTH derived
   // from that one array, so they cannot disagree; a term added to the
   // conjunction without a paired token here would be a compile-time
@@ -1033,6 +1052,15 @@ export function computeAdvisoryConvergenceVerdict(
     review.itemCount === null ||
     review.itemCount > 0 ||
     review.suppressedCount > 0;
+  // #2056: a valid review-ack can make `reviewSatisfied` true while
+  // `suppressedCount` stays positive -- without this term, eligible /
+  // requestable would still tell a caller to spend an AW6 reroll on a
+  // review that is already covered. Scoped to ack-based satisfaction
+  // (`reviewSatisfied && hasValidReviewAck`) so a clean `itemCount: 0`
+  // review still reports ONLY `review-item-count-not-positive`.
+  const notAlreadySatisfiedViaReviewAckTerm = !(
+    reviewSatisfied && hasValidReviewAck
+  );
   const sameHeadRerollTerms: {
     token: SameHeadRerollIneligibleReasonToken;
     satisfied: boolean;
@@ -1061,6 +1089,11 @@ export function computeAdvisoryConvergenceVerdict(
     {
       token: SAME_HEAD_REROLL_INELIGIBLE_REASON.REVIEW_ITEM_COUNT_NOT_POSITIVE,
       satisfied: reviewItemCountPositiveTerm,
+    },
+    {
+      token:
+        SAME_HEAD_REROLL_INELIGIBLE_REASON.ALREADY_SATISFIED_VIA_REVIEW_ACK,
+      satisfied: notAlreadySatisfiedViaReviewAckTerm,
     },
   ];
   const sameHeadRerollEligible = sameHeadRerollTerms.every(
@@ -1427,63 +1460,63 @@ function summarizeSameHeadRerollMarkers(
   return { count, latestAt };
 }
 
-// #2050: requires the FULL canonical `review-ack:` marker shape -- a valid
-// trailing ISO-8601 timestamp, end-anchored -- matching the `review-ack:`
-// entry in `OPERATIONAL_MARKERS` (marker-helpers.mts) exactly, same
-// reasoning as `summarizeSameHeadRerollMarkers`'s own pattern above: a
-// malformed or truncated comment must never count as a valid ack. Unlike
-// that pattern, this one is a fixed module-level constant rather than built
-// per call: `resolveHasValidReviewAck` does not filter on the marker's own
-// embedded HEAD SHA (see its doc comment for why), so there is no per-call
-// value to embed.
-// #2054 review: captures the embedded timestamp field (group 1) so
-// `resolveHasValidReviewAck` can additionally validate it with
-// `isValidIsoTimestamp` -- the bare digit-shape match below alone accepts a
-// syntactically-digit-shaped but semantically invalid calendar date/time
-// (e.g. `2026-99-99T99:99:99Z`), which OPERATIONAL_MARKERS' shared shape
-// (and `summarizeSameHeadRerollMarkers`'s identical pattern above) also
-// does not reject on its own.
+// #2050 / #2056: requires the FULL canonical `review-ack:` marker shape --
+// a valid trailing ISO-8601 timestamp, end-anchored -- matching the
+// `review-ack:` entry in `OPERATIONAL_MARKERS` (marker-helpers.mts)
+// exactly, same reasoning as `summarizeSameHeadRerollMarkers`'s own
+// pattern above: a malformed or truncated comment must never count as a
+// valid ack. Kept as a fixed module-level constant: group 1 is the
+// embedded HEAD SHA (compared to the current PR HEAD in
+// `resolveHasValidReviewAck`) and group 2 is the embedded timestamp
+// (validated with `isValidIsoTimestamp` -- the bare digit-shape match
+// alone accepts a syntactically-digit-shaped but semantically invalid
+// calendar date/time, e.g. `2026-99-99T99:99:99Z`).
 const REVIEW_ACK_MARKER_PATTERN =
-  /^review-ack:\s+\S+\s+[0-9a-f]{40}\s+(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z)\s*$/;
+  /^review-ack:\s+\S+\s+([0-9a-f]{40})\s+(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z)\s*$/;
 
 /**
- * #2050: disposition-aware Clause 1 escape hatch -- true when a trusted
- * `review-ack:` marker exists on the PR whose OWN GitHub-assigned
+ * #2050 / #2056: disposition-aware Clause 1 escape hatch -- true when a
+ * trusted `review-ack:` marker exists on the PR whose OWN GitHub-assigned
  * `created_at` (never an embedded, agent-supplied timestamp -- the same
  * "clock anchor is marker created_at, not embedded text" trust boundary
  * `hasFreshDisposition` (protocol-helpers.mts) and
  * `summarizeSameHeadRerollMarkers` above both already apply) is strictly
- * after the latest primary-bot review's own `submittedAt`.
+ * after the latest primary-bot review's own `submittedAt`, AND whose
+ * embedded HEAD SHA equals the current PR HEAD (the same same-HEAD
+ * filter `summarizeSameHeadRerollMarkers` already applies to
+ * `advisory-reroll` markers).
  *
- * Deliberately NOT scoped to the marker's own embedded HEAD SHA (unlike
- * `summarizeSameHeadRerollMarkers`'s same-HEAD filter): the calling clause
- * is already gated on `matchesHead`, and requiring the ack's `createdAt` to
- * be strictly after `submittedAt` alone already makes any LATER review --
- * on the same HEAD or not, e.g. an AW6 same-HEAD reroll -- automatically
- * invalidate a pre-existing ack, with no extra bookkeeping. See the issue's
- * "Proposed change" section for the full rationale.
+ * The `createdAt > submittedAt` ordering still invalidates a pre-existing
+ * ack when a later review lands (same HEAD or not, e.g. an AW6 same-HEAD
+ * reroll). The SHA check closes the delayed-POST race the ordering
+ * check cannot: a marker that embedded HEAD A can still receive a
+ * GitHub `createdAt` after review B's `submittedAt` if the PR advanced
+ * between render and POST.
  *
  * Fails closed (returns `false`) when `reviewSubmittedAt` is missing or
- * invalid, since there is then no anchor to compare an ack against.
+ * invalid, or when `prHeadSha` is empty, since there is then no anchor
+ * to compare an ack against.
  */
 function resolveHasValidReviewAck(
   comments: IssueCommentPayload[],
   trustedMarkerLogins: string[],
   reviewSubmittedAt: string,
+  prHeadSha: string,
 ): boolean {
-  if (!isValidIsoTimestamp(reviewSubmittedAt)) {
+  if (!isValidIsoTimestamp(reviewSubmittedAt) || !prHeadSha) {
     return false;
   }
   const trusted = new Set(trustedMarkerLogins);
   return comments.some((comment) => {
     const body = String(comment.body ?? '').trimEnd();
     const match = body.match(REVIEW_ACK_MARKER_PATTERN);
-    // #2054 review: the embedded timestamp is otherwise never trusted for
-    // the createdAt-vs-submittedAt comparison below, but a marker whose OWN
+    // Group 1 = embedded HEAD SHA, group 2 = embedded timestamp.
+    // The timestamp is otherwise never trusted for the
+    // createdAt-vs-submittedAt comparison below, but a marker whose OWN
     // digit-shaped field is not a real calendar date/time is malformed --
     // reject it here the same way `detectMalformedOperationalMarker`
     // (marker-helpers.mts) rejects other structurally-invalid markers.
-    if (!match || !isValidIsoTimestamp(match[1])) {
+    if (!match || match[1] !== prHeadSha || !isValidIsoTimestamp(match[2])) {
       return false;
     }
     const login = String(comment.author?.login ?? comment.user?.login ?? '')

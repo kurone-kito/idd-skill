@@ -40,11 +40,14 @@ export interface GhAuthorPayload {
 
 /** PR review payload, normalized from the GraphQL `reviews` connection. */
 export interface ReviewPayload {
-  /** #2050: the review's own GraphQL node id -- lets a caller bind evidence
-   * (e.g. a review thread's `pullRequestReview.id`) to THIS specific review,
-   * as opposed to any Copilot-authored thread anywhere in the PR's history.
-   * `''`/absent for a fixture that omits it (treated as "unknown", never a
-   * rejection, matching this file's other optional-field conventions). */
+  /** #2050 / #2056: the review's own GraphQL node id -- lets a caller bind
+   * evidence (e.g. a review thread's `pullRequestReview.id`) to THIS
+   * specific review, as opposed to any Copilot-authored thread anywhere
+   * in the PR's history. Optional at this type's boundary (`''`/absent
+   * for a fixture that omits it is not itself a rejection here), but
+   * `classifyThreadIdsForReview` returns an empty set when the id is
+   * empty, so a positive-`itemCount` review with an omitted id can never
+   * satisfy Clause 1 via thread-disposition evidence. */
   id?: string | null;
   author?: GhAuthorPayload | null;
   submittedAt?: string | null;
