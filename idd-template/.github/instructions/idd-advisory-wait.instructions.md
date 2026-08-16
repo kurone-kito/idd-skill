@@ -34,7 +34,8 @@ one). Enter the full protocol below **only** when
 
 Keep the wait cheap per the
 [wake-up discipline](idd-ci.instructions.md#wake-up-discipline): one
-wake at the expected completion, or background only if topology-safe;
+wake at the expected completion, or background only if the
+topology-safety condition holds;
 otherwise wait synchronously. No `gh` command blocks on Copilot
 review state — run the protocol (helper-first, AW1-AW5 fallback) in
 the foreground, never `run_in_background` without that condition.
@@ -142,9 +143,9 @@ AW3 inputs:
 - `LAST_COPILOT_COMMIT` — `commit_id` of the latest Copilot review
   (empty if none); equals `PR_HEAD_SHA` short-circuits to **SATISFIED**.
 - `COPILOT_PENDING` — `true` if Copilot is in `requested_reviewers`.
-  Observed once: `"false"` can lag a re-request or empty on submit —
-  not idle proof. `LAST_COPILOT_COMMIT == PR_HEAD_SHA` is SATISFIED.
-  A same-head `"false"` uses the shorter settled window.
+  Observed once: `false` can lag a re-request or empty on submit —
+  not idle proof. `LAST_COPILOT_COMMIT == PR_HEAD_SHA` is
+  **SATISFIED**. A same-head `false` uses the shorter settled window.
 - `COPILOT_PENDING_COVERS_HEAD` — `true` if the latest Copilot
   `review_requested` event follows current HEAD's `committed` event.
 
