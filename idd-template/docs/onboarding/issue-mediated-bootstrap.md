@@ -396,13 +396,21 @@ this merge**, not reused from the pre-import dry-run's stored output:
 the repository's package manager, test commands, and missing
 prerequisites can differ once the bootstrap import lands, and a stale
 pre-import finding can prompt the operator to fix a gap the import
-already closed. Condition the prompt set on
-the recorded Step 1B companion decision: only include an issue-authoring
-prompt (e.g. "start issue authoring to implement {inferred gap}") when
-that decision was `installed`; for `not installed`, substitute a prompt
-that does not depend on the companion skill (e.g. "run the IDD loop" or
-a repository-evidence-derived task prompt), so every welcome issue's
-prompts are ones the operator can actually run.
+already closed. Condition the prompt set on whether the companion is
+**actually installed** at welcome-issue drafting time, not the recorded
+Step 1B **target** state alone — the two can diverge: the core
+bootstrap issue always records the companion status as `not installed`
+(see above), and even once the operator's real target state is
+`installed`, the companion files land only when the separate companion
+follow-up issue completes its own claim -> work -> PR -> merge cycle,
+on its own schedule, not guaranteed to finish before or alongside the
+welcome issue's drafting. Only include an issue-authoring prompt (e.g.
+"start issue authoring to implement {inferred gap}") once the companion
+is actually installed; until then — even with an `installed` target
+state — substitute a prompt that does not depend on the companion skill
+(e.g. "run the IDD loop" or a repository-evidence-derived task prompt),
+so every welcome issue's prompts are ones the operator can actually
+run.
 
 ## Execution: issue -> branch -> PR -> merge, not the full loop
 
