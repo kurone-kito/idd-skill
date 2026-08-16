@@ -354,7 +354,7 @@ DISPOSITION_JSON=$(printf '%s' "${COMMENTS_JSON}" | jq -c --argjson agents "${ID
       | ($agents | map(ascii_downcase) | index($u)) != null)
   ))
 ')
-MISSING_REGULAR=$(printf '%s\n' "${COMMENTS_JSON}" "${DISPOSITION_JSON}" | jq -s --argjson bots '["copilot-pull-request-reviewer","copilot-pull-request-reviewer[bot]","coderabbitai[bot]","coderabbitai","chatgpt-codex-connector[bot]"]' '
+MISSING_REGULAR=$(printf '%s\n' "${COMMENTS_JSON}" "${DISPOSITION_JSON}" | jq -s --argjson bots '["copilot-pull-request-reviewer","copilot-pull-request-reviewer[bot]","coderabbitai[bot]","coderabbitai","chatgpt-codex-connector","chatgpt-codex-connector[bot]"]' '
   .[0] as $comments | .[1] as $disp
   | ($comments
      | map(select(
