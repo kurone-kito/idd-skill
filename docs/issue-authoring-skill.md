@@ -451,8 +451,11 @@ Ask these checks:
    import rather than an assumed carry-forward, and
    `idd-onboard.mjs --import` reports a `blockedOverwrites` finding
    instead of silently keeping a same-named local file as-is, unless
-   the import used `--force`, which silently overwrites the differing
-   file instead of recording it there (observed 2026-08-12/13 on an
+   the import used `--force`, which still writes the file and reports
+   it in the verdict JSON (`plan` as an `overwrite` entry,
+   `filesChanged`, and `written`) but omits it from
+   `blockedOverwrites` so the import is not blocked (observed
+   2026-08-12/13 on an
    adopter repository, `setup.ubuntu`, kurone-kito/idd-skill#2012).
 5. When drafting a resync issue's Background, run a mechanical
    placeholder diff against the **upstream `idd-skill` source
