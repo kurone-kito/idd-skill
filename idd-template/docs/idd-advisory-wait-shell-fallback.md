@@ -392,7 +392,7 @@ MISSING_THREADS=$(printf '%s' "${THREADS_JSON}" | jq -rs --argjson agents "${IDD
     latest_feedback as $fb
     | .comments.nodes | any(is_disp and ($fb == null or .createdAt > $fb));
   add
-  | map(select((.comments.pageInfo.hasNextPage | not) and (has_fresh_disp | not)))
+  | map(select(.comments.pageInfo.hasNextPage or (has_fresh_disp | not)))
   | length
 ')
 
