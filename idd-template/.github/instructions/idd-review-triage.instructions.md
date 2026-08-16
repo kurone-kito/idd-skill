@@ -214,11 +214,9 @@ reviewer feedback:
       `PT24H`) with no response: escalate to a maintainer via issue or
       PR comment.
     - After `reviewEscalation.changesRequestedSecondEscalation` (default
-      `PT48H`) with no escalation response: consider adding the
-      configured needs-decision label
-      (`labels.needsDecisionLabelName`, default `status:needs-decision`)
-      and releasing the claim; remove the label and re-claim once
-      resolved.
+      `PT48H`) with no escalation response: apply the
+      **Needs-decision claim release** rule in
+      `idd-overview-appendix.instructions.md` (Hold / suspend).
   - Clearing F2's `CHANGES_REQUESTED` gate always requires the review
     **state** itself to change — a reviewer state change (re-submit as
     `COMMENTED`/`APPROVED`) or an admin dismissal via
