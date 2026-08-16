@@ -391,7 +391,7 @@ test('onboarding links extracted agent-entry and verification guidance', () => {
   );
   assert.match(
     reference,
-    /### AGENTS\.md \(for Codex CLI and OpenCode\)/,
+    /### AGENTS\.md \(for Codex CLI, OpenCode, and Grok Build\)/,
     'agent-entry reference must keep the AGENTS.md example outside ONBOARDING',
   );
   assert.match(
