@@ -46,6 +46,9 @@ LAST_COPILOT_COMMIT=$(
 
 COPILOT_PENDING=$(gh api "repos/${OWNER}/${REPO}/pulls/{pr-number}/requested_reviewers" \
   --jq '.users | any(.login == "Copilot" or .login == "copilot-pull-request-reviewer" or .login == "copilot-pull-request-reviewer[bot]")')
+# Observed once: requested_reviewers can lag a successful re-request
+# or empty on submit, so false is not idle proof.
+# LAST_COPILOT_COMMIT == PR_HEAD_SHA remains the SATISFIED signal.
 
 COPILOT_PENDING_COVERS_HEAD=$(
   gh api "repos/${OWNER}/${REPO}/issues/{pr-number}/timeline" \
