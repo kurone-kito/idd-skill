@@ -505,9 +505,9 @@ from `skills/issue-authoring/` in the idd-skill source repository. That path is
 the canonical source bundle, not the target repository's discovery path.
 When you install it in a target repository, choose one agent-specific native
 skill directory that the selected runtime reads, such as `.agents/skills/`
-for Codex CLI or OpenCode, `.claude/skills/` for Claude Code and Grok
-Build, or `.opencode/skills/` for OpenCode. Do not add a `.grok/skills/`
-install root. The examples below use the Codex destination
+for Codex CLI or OpenCode, `.claude/skills/` for Claude Code, OpenCode,
+and Grok Build, or `.opencode/skills/` for OpenCode. Do not add a
+`.grok/skills/` install root. The examples below use the Codex destination
 `.agents/skills/issue-authoring/`; change `SKILL_DEST` to the one selected
 destination before running any example. Do not install the same skill ID in
 multiple roots unless the operator explicitly accepts identical duplicates
