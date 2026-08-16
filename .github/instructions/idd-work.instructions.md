@@ -101,8 +101,13 @@ tool-chosen default of either. `EnterWorktree`'s create action always
 places the worktree under a harness-owned directory (observed as
 `.claude/worktrees/agent-<hash>`), never the sibling path above, so it
 can never satisfy the directory half of this rule — never use it to
-create the B1 worktree. When a harness-native tool cannot pin both, use
-the documented `git worktree add` path below (or WorkTrunk) instead.
+create the B1 worktree. Grok Build's `grok --worktree`, subagent
+`isolation: worktree`, and `x.ai/git/worktree/*` likewise place
+worktrees in a harness-owned location and cannot pin the sibling path
+or the `issue/<number>-<slug>` branch — never use them to create the
+B1 worktree (same failure class as #1930). When a harness-native tool
+cannot pin both, use the documented `git worktree add` path below (or
+WorkTrunk) instead.
 
 **Step 1 — Check for orphaned path**: if the target path already exists
 but is not listed in `git worktree list`, stop and report for manual
