@@ -278,14 +278,15 @@ CONJUNCT2=$([ "${ACTIONABLE_ITEM_COUNT}" = "0" ] && echo true || echo false)
 # Current-HEAD primary-bot threads: resolved OR a later **Accepted** /
 # **Rejected** reply. Paginate until hasNextPage is false.
 THREADS_JSON=$(gh api graphql --paginate -f query='
-  query($owner:String!, $repo:String!, $number:Int!, $cursor:String) {
+  query($owner:String!, $repo:String!, $number:Int!, $endCursor:String) {
     repository(owner:$owner, name:$repo) {
       pullRequest(number:$number) {
-        reviewThreads(first:100, after:$cursor) {
+        reviewThreads(first:100, after:$endCursor) {
           pageInfo { hasNextPage endCursor }
           nodes {
             isResolved
             comments(first:100) {
+              pageInfo { hasNextPage }
               nodes { author { login } body createdAt commit { oid } }
             }
           }
@@ -295,19 +296,23 @@ THREADS_JSON=$(gh api graphql --paginate -f query='
   }' -F owner="${OWNER}" -F repo="${REPO}" -F number={pr-number} \
   --jq '.data.repository.pullRequest.reviewThreads.nodes')
 
+# Originating comment is nodes[0]. A truncated comments page is unmet.
 CONJUNCT3=$(printf '%s' "${THREADS_JSON}" | jq -rs --arg sha "${PR_HEAD_SHA}" '
   add
   | map(select(
-      (.comments.nodes | any(
-        .author.login == "copilot-pull-request-reviewer"
-        or .author.login == "copilot-pull-request-reviewer[bot]"
-      ))
+      ((.comments.nodes[0].author.login == "copilot-pull-request-reviewer")
+        or (.comments.nodes[0].author.login
+            == "copilot-pull-request-reviewer[bot]"))
       and (.comments.nodes | any((.commit.oid // "") == $sha))
     ))
-  | all(.isResolved
-      or (.comments.nodes | any(
-        (.body | startswith("**Accepted**") or startswith("**Rejected**"))
-      )))
+  | all((.comments.pageInfo.hasNextPage | not)
+      and (.isResolved
+        or ((.comments.nodes[0].createdAt) as $t
+            | .comments.nodes | any(
+                (.createdAt > $t)
+                and (.body | startswith("**Accepted**")
+                  or startswith("**Rejected**"))
+              ))))
 ')
 
 CONVERGED=$([ "${CONJUNCT1}" = true ] && [ "${CONJUNCT2}" = true ] && [ "${CONJUNCT3}" = true ] && echo true || echo false)
@@ -328,12 +333,19 @@ MISSING_REGULAR=$(printf '%s\n' "${COMMENTS_JSON}" "${DISPOSITION_JSON}" | jq -s
          (.user.login as $u | ($bots | index($u) | not))
          and (.body | startswith("**Accepted**") or startswith("**Rejected**") | not)
          and (.body | startswith("<!--") | not)
-       )))
-  | map(select(
-      .created_at as $t
-      | ($disp | map(select(.created_at > $t)) | length) == 0
-    ))
-  | length
+       ))
+     | sort_by(.created_at)) as $out
+  | ($disp | sort_by(.created_at)) as $ds
+  | reduce $out[] as $c (
+      {unused: $ds, missing: 0};
+      ((.unused | to_entries
+        | map(select(.value.created_at > $c.created_at))
+        | first) as $hit
+      | if $hit == null then .missing += 1
+        else .unused |= del(.[$hit.key])
+        end)
+    )
+  | .missing
 ')
 MISSING_THREADS=$(printf '%s' "${THREADS_JSON}" | jq -rs '
   add
