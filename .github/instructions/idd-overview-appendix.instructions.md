@@ -19,12 +19,13 @@ without scanning every phase file.
 
 ## Live status digest
 
-Optional human-facing issue or PR comment whose first line is
-`<!-- idd-live-status: current -->`. It summarizes phase, claim, branch,
-last-checked time, blockers, and next action. It is never authority for
-IDD state transitions — decide from trusted operational markers and
-GitHub state. If multiple marked digests exist, preserve them, report
-the URLs, and choose none as authoritative in an unattended run. See
+The optional live status digest is a human-facing issue or PR comment
+whose first line is `<!-- idd-live-status: current -->`. It summarizes
+phase, claim, branch, last-checked time, blockers, and next action. It
+is never an authority for IDD state transitions — decide from trusted
+operational markers and GitHub state. If multiple marked digests exist,
+preserve them, report the URLs, and choose none as authoritative in an
+unattended run. See
 `docs/idd-comment-minimization.md` for the contract and the optional
 `node scripts/live-status-digest.mjs` helper (convenience only).
 
@@ -71,8 +72,10 @@ the claim and the 12 h heartbeat.
 is expected before a human responds, the holding session may apply the
 configured needs-decision label (`labels.needsDecisionLabelName`,
 default `status:needs-decision`) and release the claim. Any phase may
-do this, not only E6. After the decision lands, remove the label and
-re-claim.
+do this, not only E6. After release, stop heartbeating. Once a
+qualifying human decision resolves the hold, a later session removes
+the label and re-claims. A response that leaves the decision open
+does not re-enter.
 
 ## Roadmap markers
 
