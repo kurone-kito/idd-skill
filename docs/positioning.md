@@ -7,9 +7,9 @@ tags: [positioning, competitive-analysis]
 
 # IDD Skill — Competitive Landscape and Positioning
 
-Analysis date: 2026-05-07
+Analysis date: 2026-08-17
 
-> **Positioning snapshot — as of 2026-05-07.**
+> **Positioning snapshot — as of 2026-08-17.**
 > This comparison is a positioning snapshot, not a permanent claim.
 > Revalidate tool capabilities before using this document for external
 > marketing or publication.
