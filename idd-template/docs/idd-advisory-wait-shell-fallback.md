@@ -297,21 +297,31 @@ THREADS_JSON=$(gh api graphql --paginate -f query='
   }' -F owner="${OWNER}" -F repo="${REPO}" -F number={pr-number} \
   --jq '.data.repository.pullRequest.reviewThreads.nodes')
 
+# F2 accepts only IDD-agent / trusted-marker authors (same set the helper
+# reuses as iddAgentLogins). Empty set fails closed.
+CURRENT_MARKER_ACTOR=$(gh api user --jq '.login' 2>/dev/null || true)
+IDD_AGENT_LOGIN_JSON=$(
+  {
+    printf '%s\n' "${IDD_AGENT_LOGINS:-}" | tr ',' '\n'
+    printf '%s\n' "${IDD_TRUSTED_MARKER_ACTORS:-}" | tr ',' '\n'
+    if [ -n "${CURRENT_MARKER_ACTOR}" ]; then
+      printf '%s\n' "${CURRENT_MARKER_ACTOR}"
+    fi
+  } | sed '/^[[:space:]]*$/d' | sort -fu | jq -Rsc 'split("\n") | map(select(length > 0))'
+)
+
 # Originating comment is nodes[0]. A truncated comments page is unmet.
 # A disposition is fresh only when it is later than every non-disposition
-# comment on the thread (same rule as hasFreshDisposition). Known review
-# bots cannot author a valid marker (hasFreshDisposition default).
-CONJUNCT3=$(printf '%s' "${THREADS_JSON}" | jq -rs --arg sha "${PR_HEAD_SHA}" '
+# comment on the thread (same rule as hasFreshDisposition) and the
+# author is an IDD agent / trusted marker actor.
+CONJUNCT3=$(printf '%s' "${THREADS_JSON}" | jq -rs --arg sha "${PR_HEAD_SHA}" --argjson agents "${IDD_AGENT_LOGIN_JSON}" '
   def author_login: (.author.login // .user.login // "");
-  def is_review_bot:
-    (author_login == "copilot-pull-request-reviewer")
-    or (author_login == "copilot-pull-request-reviewer[bot]")
-    or (author_login == "coderabbitai[bot]")
-    or (author_login == "coderabbitai")
-    or (author_login == "chatgpt-codex-connector[bot]");
+  def is_idd_agent:
+    ((author_login | ascii_downcase) as $u
+      | ($agents | map(ascii_downcase) | index($u)) != null);
   def is_disp:
     ((.body | startswith("**Accepted**") or startswith("**Rejected**")))
-    and (is_review_bot | not);
+    and is_idd_agent;
   def latest_feedback:
     [.comments.nodes[] | select(is_disp | not) | .createdAt]
     | if length == 0 then null else max end;
@@ -337,10 +347,11 @@ COMMENTS_JSON=$(
   gh api "repos/${OWNER}/${REPO}/issues/{pr-number}/comments" --paginate \
     | jq -s 'add // []'
 )
-DISPOSITION_JSON=$(printf '%s' "${COMMENTS_JSON}" | jq -c --argjson bots '["copilot-pull-request-reviewer","copilot-pull-request-reviewer[bot]","coderabbitai[bot]","coderabbitai","chatgpt-codex-connector[bot]"]' '
+DISPOSITION_JSON=$(printf '%s' "${COMMENTS_JSON}" | jq -c --argjson agents "${IDD_AGENT_LOGIN_JSON}" '
   map(select(
     (.body | startswith("**Accepted**") or startswith("**Rejected**"))
-    and ((.user.login as $u | $bots | index($u)) | not)
+    and (((.user.login // "") | ascii_downcase) as $u
+      | ($agents | map(ascii_downcase) | index($u)) != null)
   ))
 ')
 MISSING_REGULAR=$(printf '%s\n' "${COMMENTS_JSON}" "${DISPOSITION_JSON}" | jq -s --argjson bots '["copilot-pull-request-reviewer","copilot-pull-request-reviewer[bot]","coderabbitai[bot]","coderabbitai","chatgpt-codex-connector[bot]"]' '
@@ -364,17 +375,14 @@ MISSING_REGULAR=$(printf '%s\n' "${COMMENTS_JSON}" "${DISPOSITION_JSON}" | jq -s
     )
   | .missing
 ')
-MISSING_THREADS=$(printf '%s' "${THREADS_JSON}" | jq -rs '
+MISSING_THREADS=$(printf '%s' "${THREADS_JSON}" | jq -rs --argjson agents "${IDD_AGENT_LOGIN_JSON}" '
   def author_login: (.author.login // .user.login // "");
-  def is_review_bot:
-    (author_login == "copilot-pull-request-reviewer")
-    or (author_login == "copilot-pull-request-reviewer[bot]")
-    or (author_login == "coderabbitai[bot]")
-    or (author_login == "coderabbitai")
-    or (author_login == "chatgpt-codex-connector[bot]");
+  def is_idd_agent:
+    ((author_login | ascii_downcase) as $u
+      | ($agents | map(ascii_downcase) | index($u)) != null);
   def is_disp:
     ((.body | startswith("**Accepted**") or startswith("**Rejected**")))
-    and (is_review_bot | not);
+    and is_idd_agent;
   def latest_feedback:
     [.comments.nodes[] | select(is_disp | not) | .createdAt]
     | if length == 0 then null else max end;
