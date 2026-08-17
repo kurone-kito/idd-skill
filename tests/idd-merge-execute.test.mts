@@ -292,6 +292,33 @@ test('ack-only-post-disposition review-currency does not add a review-currency b
   assert.deepEqual(evaluateMergeGates(report), []);
 });
 
+test('soleCauseAckOnly flag does not override garbled disposition route or count (#2125)', () => {
+  const report = readyReport();
+  report.dispositionEvidence = {
+    route: '',
+    blockingCount: 'nope',
+    soleCauseAckOnlyPostDisposition: true,
+  };
+  const blockers = evaluateMergeGates(report);
+  assert.deepEqual(
+    blockers.map((b) => b.gate),
+    ['disposition-evidence'],
+  );
+});
+
+test('garbled review-currency route still blocks even with an ack-only reason (#2125)', () => {
+  const report = readyReport();
+  report.reviewCurrency = {
+    comparisonRoute: '',
+    comparisonReason: 'ack-only-post-disposition',
+  };
+  const blockers = evaluateMergeGates(report);
+  assert.deepEqual(
+    blockers.map((b) => b.gate),
+    ['review-currency'],
+  );
+});
+
 test('ack-only override stays fail-closed when mixed with a non-ack disposition gap (#2125)', () => {
   const report = readyReport();
   report.reviewCurrency = {

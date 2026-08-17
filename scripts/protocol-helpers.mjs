@@ -4555,7 +4555,10 @@ export function computePreMergeReadinessBlockers(report) {
   // too, so F3 merge-execute does not livelock on CodeRabbit courtesy acks.
   if (
     comparisonRoute !== 'proceed' &&
-    comparisonReason !== 'ack-only-post-disposition'
+    !(
+      comparisonRoute === 'return-to-e1' &&
+      comparisonReason === 'ack-only-post-disposition'
+    )
   ) {
     blockers.push({
       gate: 'review-currency',
@@ -4821,7 +4824,10 @@ export function computePreMergeReadinessBlockers(report) {
     dispositionEvidence.blockingCount ?? -1,
   );
   const soleCauseAckOnlyPostDisposition =
-    dispositionEvidence.soleCauseAckOnlyPostDisposition === true;
+    dispositionEvidence.soleCauseAckOnlyPostDisposition === true &&
+    dispositionRoute === 'return-to-e1' &&
+    Number.isInteger(dispositionBlockingCount) &&
+    dispositionBlockingCount > 0;
   if (
     !soleCauseAckOnlyPostDisposition &&
     (dispositionRoute !== 'proceed' || dispositionBlockingCount !== 0)
