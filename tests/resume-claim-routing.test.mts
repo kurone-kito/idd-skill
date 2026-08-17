@@ -146,7 +146,7 @@ test('activation-nonce: no posted nonce marker skips the comparison (AC3 backwar
   assert.equal(result.evidence.activation_nonce_winner, null);
 });
 
-test('activation-nonce: omitting --nonce opts out of the comparison entirely', () => {
+test('activation-nonce: omitting --nonce with 2+ trusted markers is a cold-recovery collision (#1529)', () => {
   const result = evaluateResumeClaimRouting(
     {
       claimId: 'claim-abc',
@@ -172,10 +172,36 @@ test('activation-nonce: omitting --nonce opts out of the comparison entirely', (
     { isTrustedAuthor: trusted(['maintainer']) },
   );
 
-  // A real collision exists in the event stream, but this caller never
-  // supplied its own recorded nonce -- pre-#1522 behavior is preserved.
+  assert.equal(result.state, 'disputed');
+  assert.equal(result.action, 'stop');
+  assert.equal(result.reason, 'cold-recovery-activation-nonce-collision');
+  assert.equal(result.evidence.activation_nonce_count, 2);
+});
+
+test('activation-nonce: omitting --nonce with a single marker still skips comparison', () => {
+  const result = evaluateResumeClaimRouting(
+    {
+      claimId: 'claim-abc',
+      now: '2026-05-12T10:00:00Z',
+      events: [
+        {
+          createdAt: '2026-05-12T09:00:00Z',
+          author: { login: 'maintainer' },
+          body: '<!-- claimed-by: copilot claim-abc supersedes: none 2026-05-12T09:00:00Z branch: issue/1-task -->',
+        },
+        {
+          createdAt: '2026-05-12T09:00:05Z',
+          author: { login: 'maintainer' },
+          body: '<!-- activation-nonce: copilot claim-abc nonce-aaa 2026-05-12T09:00:05Z -->',
+        },
+      ],
+    },
+    { isTrustedAuthor: trusted(['maintainer']) },
+  );
+
   assert.equal(result.state, 'already_owned');
   assert.equal(result.reason, 'claim-id-match');
+  assert.equal(result.evidence.activation_nonce_count, 1);
 });
 
 test('returns non_inheritable for non-stale active claim from another session', () => {

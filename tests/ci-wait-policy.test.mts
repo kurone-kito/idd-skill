@@ -16,7 +16,9 @@ import { fileURLToPath } from 'node:url';
 import {
   DEFAULT_CI_WAIT_POLICY,
   deriveRerunCountFromRunAttempt,
+  evaluateSiblingWorkflowSweep,
   normalizeCiWaitPolicy,
+  normalizeFailureClass,
   parseDurationToMs,
   readCiWaitPolicy,
   resolveCiRerunDecision,
@@ -116,6 +118,123 @@ test('resolveCiRerunDecision allows only one automatic rerun by default', () => 
       rerunCount: 1,
     },
   );
+});
+
+test('resolveCiRerunDecision grants one evidence-gated extra rerun (#1997)', () => {
+  const siblingSweep = {
+    query: 'gh run list --workflow="Pnpm boundary guard" --limit 15',
+    allOthersSucceeded: true,
+    otherCount: 3,
+    otherConclusions: ['success', 'success', 'success'],
+  };
+  const decision = resolveCiRerunDecision({
+    rerunPolicy: 'rerun-once',
+    rerunCount: 1,
+    failureClass: 'timed_out',
+    siblingSweep,
+  });
+  assert.equal(decision.action, 'rerun');
+  assert.equal(decision.reason, 'evidence-gated-extra-rerun');
+  assert.equal(decision.hatch?.applied, true);
+  assert.equal(decision.hatch?.failureClass, 'timeout');
+});
+
+test('resolveCiRerunDecision withholds the #1997 hatch without corroboration', () => {
+  const noSiblings = {
+    query: 'gh run list --workflow="Pnpm boundary guard" --limit 15',
+    allOthersSucceeded: false,
+    otherCount: 0,
+    otherConclusions: [] as string[],
+  };
+  assert.equal(
+    resolveCiRerunDecision({
+      rerunPolicy: 'rerun-once',
+      rerunCount: 1,
+      failureClass: 'timeout',
+      siblingSweep: noSiblings,
+    }).reason,
+    'rerun-budget-exhausted',
+  );
+  const siblingFailed = {
+    ...noSiblings,
+    allOthersSucceeded: false,
+    otherCount: 2,
+    otherConclusions: ['success', 'failure'],
+  };
+  assert.equal(
+    resolveCiRerunDecision({
+      rerunPolicy: 'rerun-once',
+      rerunCount: 1,
+      failureClass: 'cancelled',
+      siblingSweep: siblingFailed,
+    }).hatch?.applied,
+    false,
+  );
+  assert.equal(
+    resolveCiRerunDecision({
+      rerunPolicy: 'rerun-once',
+      rerunCount: 1,
+      failureClass: 'failure',
+      siblingSweep: {
+        ...noSiblings,
+        allOthersSucceeded: true,
+        otherCount: 2,
+        otherConclusions: ['success', 'success'],
+      },
+    }).reason,
+    'rerun-budget-exhausted',
+  );
+  assert.equal(
+    resolveCiRerunDecision({
+      rerunPolicy: 'rerun-once',
+      rerunCount: 2,
+      failureClass: 'timeout',
+      siblingSweep: {
+        ...noSiblings,
+        allOthersSucceeded: true,
+        otherCount: 2,
+        otherConclusions: ['success', 'success'],
+      },
+    }).reason,
+    'rerun-budget-exhausted',
+  );
+});
+
+test('evaluateSiblingWorkflowSweep requires a same-window successful other run', () => {
+  const center = Date.parse('2026-08-12T12:00:00Z');
+  const query = 'gh run list --workflow="Pnpm boundary guard" --limit 15';
+  const sweep = evaluateSiblingWorkflowSweep(
+    [
+      {
+        id: '1',
+        status: 'completed',
+        conclusion: 'timed_out',
+        createdAt: '2026-08-12T12:00:00Z',
+      },
+      {
+        id: '2',
+        status: 'completed',
+        conclusion: 'success',
+        createdAt: '2026-08-12T12:20:00Z',
+      },
+    ],
+    {
+      currentRunId: '1',
+      windowStartMs: center - 60 * 60 * 1000,
+      windowEndMs: center + 60 * 60 * 1000,
+      query,
+    },
+  );
+  assert.equal(sweep.allOthersSucceeded, true);
+  assert.equal(sweep.otherCount, 1);
+  assert.deepEqual(sweep.otherConclusions, ['success']);
+  assert.equal(sweep.query, query);
+});
+
+test('normalizeFailureClass maps GitHub timed_out/cancelled conclusions', () => {
+  assert.equal(normalizeFailureClass('timed_out'), 'timeout');
+  assert.equal(normalizeFailureClass('CANCELLED'), 'cancelled');
+  assert.equal(normalizeFailureClass('failure'), null);
 });
 
 test('resolveCiRerunDecision honors hold policy', () => {
