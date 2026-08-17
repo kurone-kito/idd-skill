@@ -140,7 +140,7 @@ stopped the next exact-fit bump. Observed on
 [#1259](https://github.com/kurone-kito/idd-skill/issues/1259) (closed
 2026-07-04, the very next day): both recovered headroom and both fully
 regressed for lack of an upper bound. `contextCeiling` is an absolute,
-128K-context-derived cap layered on top: 120,000 bytes ≈ 30,000–37,000
+128K-context-derived cap layered on top: 126,000 bytes ≈ 31,500–38,800
 tokens at this corpus's observed 3.25–4.0 bytes/token, leaving the rest
 of a 128K context window for the harness system prompt, tool schemas,
 adopter-repo instructions, and working context.

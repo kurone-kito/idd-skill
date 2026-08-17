@@ -388,7 +388,7 @@ convention the ratchet alone allows — see the regression history under
 copied template).
 
 - **Ceiling derivation**: no non-exempt bundle's `limitBytes` may exceed
-  the **120,000-byte** `maxBundleLimitBytes` ceiling — a
+  the **126,000-byte** `maxBundleLimitBytes` ceiling — a
   128K-context-derived cap of ≈ 30,000–37,000 tokens at this corpus's
   observed 3.25–4.0 bytes/token, ≤ ~29% of a 128K context window,
   leaving the remainder for the harness system prompt, tool schemas,

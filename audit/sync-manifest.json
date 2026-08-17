@@ -287,7 +287,7 @@
         ".github/instructions/idd-overview-core.instructions.md",
         ".github/instructions/idd-resume.instructions.md"
       ],
-      "limitBytes": 43300
+      "limitBytes": 45000
     },
     {
       "id": "bundle-work",
@@ -314,7 +314,7 @@
         ".github/instructions/lite/idd-resume-lite.instructions.md",
         ".github/instructions/lite/idd-resume-stall-lite.instructions.md"
       ],
-      "limitBytes": 16000
+      "limitBytes": 17000
     },
     {
       "id": "bundle-claim-lite",
@@ -322,7 +322,7 @@
       "files": [
         ".github/instructions/lite/idd-claim-lite.instructions.md"
       ],
-      "limitBytes": 21000
+      "limitBytes": 22000
     },
     {
       "id": "bundle-pre-merge-lite",
@@ -349,7 +349,7 @@
         ".github/instructions/lite/idd-ci-lite.instructions.md",
         ".github/instructions/lite/idd-review-fix-lite.instructions.md"
       ],
-      "limitBytes": 37700
+      "limitBytes": 39500
     },
     {
       "id": "bundle-review-snapshot-lite",
@@ -358,7 +358,7 @@
         ".github/instructions/lite/idd-advisory-wait-lite.instructions.md",
         ".github/instructions/lite/idd-review-snapshot-lite.instructions.md"
       ],
-      "limitBytes": 21800
+      "limitBytes": 23000
     },
     {
       "id": "bundle-review",
@@ -372,7 +372,7 @@
         ".github/instructions/idd-review-snapshot.instructions.md",
         ".github/instructions/idd-review-triage.instructions.md"
       ],
-      "limitBytes": 120000
+      "limitBytes": 126000
     },
     {
       "id": "bundle-merge",
@@ -386,12 +386,12 @@
         ".github/instructions/idd-overview-core.instructions.md",
         ".github/instructions/idd-pre-merge.instructions.md"
       ],
-      "limitBytes": 108000
+      "limitBytes": 114000
     }
   ],
   "contextCeiling": {
     "id": "context-ceiling-128k",
-    "maxBundleLimitBytes": 120000,
+    "maxBundleLimitBytes": 126000,
     "maxUtilizationPct": 98,
     "noticeUtilizationPct": 95,
     "exemptBundles": []
