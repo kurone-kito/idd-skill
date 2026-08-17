@@ -394,19 +394,18 @@ Before any mutating action in F3, apply the
    being removed. Any removal (plain or `--force`) silently discards
    ignored files too, including inside a submodule. **Before the first
    removal attempt**, re-validate this session's claim and worktree
-   lock; stop if either is no longer ours. Then review what's there.
-   Scope every inspection to `<path>`.
+   lock (`idd-claim.instructions.md`); stop if either is no longer
+   ours. Scope every inspection to `<path>`.
 
    Use `--untracked-files=normal` (not `all`). Inspect any `-` path
    from `submodule status` directly (parent status hides them). A
-   clean submodule worktree can still hide a stash or detached-HEAD
-   commit remotes do not have:
+   clean submodule worktree can still hide a stash or unpushed commit:
 
    - `git -C <path> status --porcelain --ignored --untracked-files=normal`
    - `git -C <path> submodule status --recursive`
    - `git -C <path> submodule foreach --recursive 'git status
      --porcelain --ignored --untracked-files=normal; git stash list;
-     git log --all --not --remotes --oneline'`
+     git rev-list --all --not --remotes --count'`
 
    Generated output is disposable only if a configured project
    command can reproduce it. Preserve anything else first. Copy
