@@ -27,6 +27,7 @@ function readyReport(): Record<string, unknown> {
       requiredChecksPassing: true,
       noRequiredChecksConfigured: false,
       presentRunConclusion: 'all-passing',
+      discardedNonPassingRequiredChecks: [],
     },
     reviewerStates: {
       requiredApprovalsSatisfied: true,
@@ -317,6 +318,66 @@ test('garbled review-currency route still blocks even with an ack-only reason (#
     blockers.map((b) => b.gate),
     ['review-currency'],
   );
+});
+
+test('BLOCKED + discarded required-check siblings is a dedicated merge-gate (#2127)', () => {
+  const report = readyReport();
+  report.branchCurrency = {
+    ...(report.branchCurrency as Record<string, unknown>),
+    mergeStateStatus: 'BLOCKED',
+  };
+  report.ci = {
+    ...(report.ci as Record<string, unknown>),
+    discardedNonPassingRequiredChecks: [
+      { name: 'idd-advisory-convergence', discardedState: 'CANCELLED' },
+    ],
+  };
+  const blockers = evaluateMergeGates(report);
+  assert.deepEqual(
+    blockers.map((blocker) => blocker.gate),
+    ['discarded-required-check-siblings'],
+  );
+  assert.match(blockers[0]?.detail ?? '', /BLOCKED/);
+  const { deps, calls } = depsFor(report);
+  const { verdict, exitCode } = runMergeExecute(
+    [...BASE_ARGS, '--apply'],
+    deps,
+  );
+  assert.equal(verdict.ready, false);
+  assert.equal(verdict.merged, false);
+  assert.deepEqual(calls.merged, []);
+  assert.deepEqual(calls.adminMerged, []);
+  assert.equal(exitCode, 1);
+});
+
+test('CLEAN + discarded required-check siblings stays evidence-only (#2127)', () => {
+  const report = readyReport();
+  report.ci = {
+    ...(report.ci as Record<string, unknown>),
+    discardedNonPassingRequiredChecks: [
+      { name: 'idd-advisory-convergence', discardedState: 'CANCELLED' },
+    ],
+  };
+  assert.deepEqual(evaluateMergeGates(report), []);
+});
+
+test('BLOCKED with an empty or absent discarded-sibling list does not fire #2127', () => {
+  const empty = readyReport();
+  empty.branchCurrency = {
+    ...(empty.branchCurrency as Record<string, unknown>),
+    mergeStateStatus: 'BLOCKED',
+  };
+  assert.deepEqual(evaluateMergeGates(empty), []);
+
+  const absent = readyReport();
+  absent.branchCurrency = {
+    ...(absent.branchCurrency as Record<string, unknown>),
+    mergeStateStatus: 'BLOCKED',
+  };
+  const ci = { ...(absent.ci as Record<string, unknown>) };
+  delete ci.discardedNonPassingRequiredChecks;
+  absent.ci = ci;
+  assert.deepEqual(evaluateMergeGates(absent), []);
 });
 
 test('ack-only override stays fail-closed when mixed with a non-ack disposition gap (#2125)', () => {

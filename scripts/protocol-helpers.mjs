@@ -4534,7 +4534,9 @@ function isPreMergeReviewSatisfied(reviewerStates) {
  * evidence. Applies the written F2 ack-only overrides (#2125) so a
  * `fully_autonomous_merge` F3 session can complete when courtesy
  * advisory-bot acks are the sole remaining currency or disposition
- * blocker; any other cause still blocks.
+ * blocker; any other cause still blocks. A live `BLOCKED` merge state
+ * plus a non-empty discarded required-check sibling list is its own
+ * gate (#2127) and does not take the `--admin` path.
  */
 export function computePreMergeReadinessBlockers(report) {
   const blockers = [];
@@ -4855,6 +4857,22 @@ export function computePreMergeReadinessBlockers(report) {
     blockers.push({
       gate: 'branch-currency',
       detail: `mergeStateStatus is "BEHIND" and the base branch requires an up-to-date head before merge (requiresUpToDateHeadSource="${String(branchCurrency.requiresUpToDateHeadSource ?? 'unknown')}")`,
+    });
+  }
+  // #2127: discarded same-named required-check siblings stay evidence-only
+  // while GitHub is CLEAN/BEHIND (#1745). Combined with live BLOCKED they
+  // are the Rulesets all-instances split (helper latest-wins is green,
+  // GitHub still refuses merge). A non-array or missing list is treated
+  // as absent so a CODEOWNER-only BLOCKED path (#1663) stays silent here.
+  const discardedSiblings = ci.discardedNonPassingRequiredChecks;
+  if (
+    mergeStateStatus === 'BLOCKED' &&
+    Array.isArray(discardedSiblings) &&
+    discardedSiblings.length > 0
+  ) {
+    blockers.push({
+      gate: 'discarded-required-check-siblings',
+      detail: `mergeStateStatus is "BLOCKED" and ci.discardedNonPassingRequiredChecks has ${String(discardedSiblings.length)} discarded same-named required-check sibling(s); recover via rerun-advisory-convergence, do not merge or --admin`,
     });
   }
   return blockers;
