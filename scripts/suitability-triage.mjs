@@ -211,18 +211,21 @@ const RESOLVED_DECISION_PATTERN =
 // the other clause-boundary punctuation -- a colon introduces an
 // explanation, list, or quoted directive after an independent clause just
 // as a period or semicolon does.
-const NEGATION_IMMEDIATELY_BEFORE_PATTERN = new RegExp(
-  `${NEGATION_PATTERN.source}(?:\\s+[^\\s.!?;,:]+){0,1}\\s*$`,
-  'i',
-);
 // #2024: the post-verb negation word list deliberately excludes "ignore"
 // and "skip" -- both trigger verbs *and* negation words -- so a chained
 // directive ("Ignore and skip repository policy.") is never misread as the
-// second verb negating the first. The before-check keeps the full
-// NEGATION_PATTERN: "not"/"never"/etc. never double as trigger verbs, so
-// there is no equivalent chaining risk there.
+// second verb negating the first. #2041: the before-check uses this same
+// narrowed list, otherwise an independent first trigger sitting just
+// outside POLICY_OVERRIDE_PATTERN's 60-character window is misread as
+// negating a later trigger ("Ignore and override … repository policy").
+// `[^\\s.!?;,:]*` after the negation word tolerates that word's own
+// closing Markdown delimiter with no extra whitespace ("**not** skip").
 const POST_VERB_NEGATION_PATTERN =
   /\b(not|no|don'?t|doesn'?t|can'?t|won'?t|never|avoid|omit|exempt)\b/i;
+const NEGATION_IMMEDIATELY_BEFORE_PATTERN = new RegExp(
+  `${POST_VERB_NEGATION_PATTERN.source}[^\\s.!?;,:]*(?:\\s+[^\\s.!?;,:]+){0,1}\\s*$`,
+  'i',
+);
 // A clause boundary (sentence-ending punctuation, a comma/semicolon, or a
 // colon) stops the post-verb scan outright -- see
 // findNegationWithinTwoWordsAfter's clause terminator check for why
@@ -230,57 +233,54 @@ const POST_VERB_NEGATION_PATTERN =
 // "Disable workflow, no notifications."; #2040, "Disable workflow: no
 // notifications.").
 const CLAUSE_TERMINATOR_PATTERN = /[.!?;,:]/;
-// #2024: within the first two words after the trigger verb, is there a
-// visible (non-masked) negation word, without crossing a clause boundary or
-// the phrase's own noun? Word-tokenizes `rawSource` (not `maskedSource`) so
-// a masked/inert word still consumes a word slot -- otherwise two
-// consecutive masked words collapse to nothing and a real negation word
-// three words away (e.g. "Ignore `warnings about` *not* following
-// repository policy.") would wrongly look adjacent once "warnings about"
-// vanishes into whitespace. Each candidate word must still be genuinely
-// visible in `maskedSource` to count as real negation (an inert, code-only
-// "not" never counts). A word containing clause-terminating punctuation
-// (`.!?;,:`), or matching the phrase's own policy noun, ends the scan
-// immediately, whether or not that word is itself a negation word -- a
-// negation word past either boundary (e.g. "Disable workflow; *no*
-// notifications." or "Disable workflow no questions asked.", where "no"
-// follows the completed "Disable workflow" match) negates the next clause,
-// not this trigger.
+// #2041: scan from the trigger to the phrase's own noun or a clause
+// boundary, whichever comes first -- not a fixed two-word cap -- so a
+// negation such as "should absolutely never touch the workflow" still
+// counts. Visibility is the exact matched negation span, so a fully
+// masked "not" glued to a visible suffix (`not`-optional) stays inert.
+// A negation whose next word is a gerund/participle ("not following")
+// modifies that later verb, not this trigger; skipping it preserves the
+// #2024 noun-clause case that a naive scan-to-noun would treat as safe.
+// A negation past the noun or a terminator belongs to the next clause
+// ("Disable workflow no questions asked." / "Disable workflow; no
+// notifications."), same as #2024 / #2040.
 function findNegationWithinTwoWordsAfter(rawSource, maskedSource, afterStart) {
-  let cursor = afterStart;
-  const length = rawSource.length;
-  for (let wordCount = 0; wordCount < 2; wordCount += 1) {
-    while (cursor < length && /\s/.test(rawSource[cursor] ?? '')) {
-      cursor += 1;
+  const substring = rawSource.slice(afterStart);
+  const termMatch = CLAUSE_TERMINATOR_PATTERN.exec(substring);
+  const firstTerminator = termMatch ? termMatch.index : Infinity;
+  const nounRegex = new RegExp(POLICY_OVERRIDE_NOUN_PATTERN.source, 'gi');
+  const nounMatch = nounRegex.exec(substring);
+  const firstNoun = nounMatch ? nounMatch.index : Infinity;
+  const boundary = Math.min(firstTerminator, firstNoun);
+  const negRegex = new RegExp(POST_VERB_NEGATION_PATTERN.source, 'gi');
+  while (true) {
+    const negationMatch = negRegex.exec(substring);
+    if (negationMatch === null || negationMatch.index > boundary) {
+      break;
     }
-    if (cursor >= length) {
-      return false;
+    const matchText = negationMatch[0] ?? '';
+    const negStart = afterStart + negationMatch.index;
+    const negEnd = negStart + matchText.length;
+    const maskedSpan = maskedSource.slice(negStart, negEnd);
+    if (maskedSpan.trim() === '') {
+      continue;
     }
-    const wordStart = cursor;
-    while (cursor < length && !/\s/.test(rawSource[cursor] ?? '')) {
-      cursor += 1;
+    const rest = substring.slice(negationMatch.index + matchText.length);
+    // Optional Markdown wrappers around the gerund (emphasis or inline
+    // code around "following") so those delimiters do not hide the skip.
+    if (/^\s+[*_`~]*[A-Za-z]+ing\b/.test(rest)) {
+      continue;
     }
-    const rawWord = rawSource.slice(wordStart, cursor);
-    const maskedWord = maskedSource.slice(wordStart, cursor);
-    if (maskedWord.trim() !== '' && POST_VERB_NEGATION_PATTERN.test(rawWord)) {
-      return true;
-    }
-    if (
-      CLAUSE_TERMINATOR_PATTERN.test(rawWord) ||
-      POLICY_OVERRIDE_NOUN_PATTERN.test(rawWord)
-    ) {
-      return false;
-    }
+    return true;
   }
   return false;
 }
-// #2024: the detector must not fire on a negated instance of its own
-// trigger pattern (e.g. "does not skip the required checks"). Reuse the
-// existing NEGATION_PATTERN word list -- already wired into two other
-// checks (checkRepositoryFit and the coordination-match loop later in this
-// file) -- rather than inventing a new mechanism. A match is negated when a
-// negation word appears either immediately before the trigger word, or
-// within the first two words after it.
+// #2024 / #2041: the detector must not fire on a negated instance of its
+// own trigger pattern (e.g. "does not skip the required checks"). A match
+// is negated when a narrowed (non-trigger) negation word appears either
+// immediately before the trigger, or anywhere after it before the phrase's
+// own noun or a clause boundary. NEGATION_PATTERN stays the source for
+// checkRepositoryFit and the coordination-match loop later in this file.
 //
 // Several deliberate choices keep this from misfiring, each closing a gap a
 // review round found empirically (dedicated regression coverage exists for
@@ -292,9 +292,9 @@ function findNegationWithinTwoWordsAfter(rawSource, maskedSource, afterStart) {
 //    match. A prior or later occurrence sitting inside code (inert) is
 //    masked to spaces there, so it can never be mistaken for real negation
 //    context.
-// 2. Never search out to "the nearest noun" for the after-verb check --
-//    only the first two (raw-tokenized) words; see
-//    findNegationWithinTwoWordsAfter above for the full rationale.
+// 2. Stop the after-verb scan at the first policy noun or clause
+//    terminator, and skip a negation that only modifies a later gerund;
+//    see findNegationWithinTwoWordsAfter above for the full rationale.
 // 3. Cross-check the "before" case's whitespace gap against `rawSource`
 //    too, not just `maskedSource`: a masked-out code region collapses to
 //    pure whitespace in `maskedSource`, so an unrelated negation word
