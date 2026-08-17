@@ -140,7 +140,9 @@ authoritative replacement:
 - `state: stale` + `action: takeover` → stale-claim takeover route.
 - `state: non_inheritable` + `action: stop` → active non-stale claim
   stop route.
-- `state: disputed` + `action: stop` → contested-claim stop route.
+- `state: disputed` + `action: stop` → contested-claim stop route
+  (`cold-recovery-activation-nonce-collision`: no local nonce and 2+
+  trusted activation-nonce markers — #1529).
 
 If helper runtime is absent, helper output is invalid, or helper evidence
 disagrees with live GitHub state, use the written table below and treat
