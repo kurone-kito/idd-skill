@@ -441,5 +441,8 @@ exception already noted above: the welcome/next-steps issue is not
 executed as code at all. Unlike this bootstrap issue's own
 issue -> branch -> PR -> merge execution, the welcome issue has nothing
 to implement, so a human (or the same narrowly-scoped, pre-authorized
-agent) reads it and closes it directly once acknowledged — no branch,
-PR, or merge.
+agent) may read it, but neither actor may close it until the operator
+has left a recorded acknowledgment — a comment or reaction on the
+issue. The agent's own judgment that the content has been
+"acknowledged" is not enough. Close it directly after that operator
+signal — no branch, PR, or merge.
