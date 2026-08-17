@@ -266,7 +266,9 @@ function findNegationWithinTwoWordsAfter(rawSource, maskedSource, afterStart) {
       continue;
     }
     const rest = substring.slice(negationMatch.index + matchText.length);
-    if (/^\s+[A-Za-z]+ing\b/.test(rest)) {
+    // Optional Markdown wrappers around the gerund (emphasis or inline
+    // code around "following") so those delimiters do not hide the skip.
+    if (/^\s+[*_`~]*[A-Za-z]+ing\b/.test(rest)) {
       continue;
     }
     return true;
