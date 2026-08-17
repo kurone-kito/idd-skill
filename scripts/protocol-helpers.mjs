@@ -4530,12 +4530,11 @@ function isPreMergeReviewSatisfied(reviewerStates) {
  * ordered blocker list. This is the single source of the merge-gate AND:
  * `buildPreMergeReadinessSummary` embeds `{ ready, blockers }` computed from it,
  * and `idd-merge-execute.evaluateMergeGates` delegates to it, so no caller
- * re-implements the conjunction. The rollup is **strict** — it reads
- * `dispositionEvidence.route === 'proceed'` directly and does NOT apply the
- * `soleCauseAckOnlyPostDisposition` override (a separate flag the F2 checklist
- * layers on top), so the fully-autonomous F3 executor keeps its fail-closed
- * behavior. A gate whose evidence is missing or garbled fails closed (recorded
- * as a blocker) rather than passing vacuously.
+ * re-implements the conjunction. Fail-closed on missing or garbled
+ * evidence. Applies the written F2 ack-only overrides (#2125) so a
+ * `fully_autonomous_merge` F3 session can complete when courtesy
+ * advisory-bot acks are the sole remaining currency or disposition
+ * blocker; any other cause still blocks.
  */
 export function computePreMergeReadinessBlockers(report) {
   const blockers = [];
@@ -4551,10 +4550,16 @@ export function computePreMergeReadinessBlockers(report) {
   }
   const reviewCurrency = preMergeAsRecord(report.reviewCurrency);
   const comparisonRoute = String(reviewCurrency.comparisonRoute ?? '');
-  if (comparisonRoute !== 'proceed') {
+  const comparisonReason = String(reviewCurrency.comparisonReason ?? '');
+  // #2125: F2's ack-only-post-disposition carve-out is now applied here
+  // too, so F3 merge-execute does not livelock on CodeRabbit courtesy acks.
+  if (
+    comparisonRoute !== 'proceed' &&
+    comparisonReason !== 'ack-only-post-disposition'
+  ) {
     blockers.push({
       gate: 'review-currency',
-      detail: `comparisonRoute is "${comparisonRoute}" (expected "proceed"): ${String(reviewCurrency.comparisonReason ?? 'unknown')}`,
+      detail: `comparisonRoute is "${comparisonRoute}" (expected "proceed"): ${comparisonReason || 'unknown'}`,
     });
   }
   const threads = preMergeAsRecord(report.threads);
@@ -4808,13 +4813,19 @@ export function computePreMergeReadinessBlockers(report) {
   }
   const dispositionEvidence = preMergeAsRecord(report.dispositionEvidence);
   // The written F2/F3 gate requires BOTH `route === 'proceed'` AND
-  // `blockingCount === 0`. Fail closed on a non-zero or non-numeric
-  // blockingCount so a missing/garbled count is treated as a blocker.
+  // `blockingCount === 0`, except the documented F2 override when
+  // `soleCauseAckOnlyPostDisposition` is exactly true (#2125). Fail
+  // closed on a non-zero or non-numeric blockingCount otherwise.
   const dispositionRoute = String(dispositionEvidence.route ?? '');
   const dispositionBlockingCount = Number(
     dispositionEvidence.blockingCount ?? -1,
   );
-  if (dispositionRoute !== 'proceed' || dispositionBlockingCount !== 0) {
+  const soleCauseAckOnlyPostDisposition =
+    dispositionEvidence.soleCauseAckOnlyPostDisposition === true;
+  if (
+    !soleCauseAckOnlyPostDisposition &&
+    (dispositionRoute !== 'proceed' || dispositionBlockingCount !== 0)
+  ) {
     blockers.push({
       gate: 'disposition-evidence',
       detail: `dispositionEvidence.route is "${dispositionRoute || 'missing'}" (expected "proceed"), blockingCount=${dispositionBlockingCount} (expected 0)`,
@@ -5250,8 +5261,8 @@ export function buildPreMergeReadinessSummary(
   }
   // Top-level rollup so a consumer reads one `ready` boolean + `blockers[]`
   // instead of hand-ANDing ~8 nested gates (a dropped clause would fail open).
-  // Strict by construction (see `computePreMergeReadinessBlockers`): the F2
-  // checklist applies the ack-only override on top of this, not inside it.
+  // Includes the F2 ack-only overrides (#2125) so a fully-autonomous F3
+  // session does not livelock on courtesy advisory-bot acks.
   const blockers = computePreMergeReadinessBlockers(summary);
   summary.ready = blockers.length === 0;
   summary.blockers = blockers;
