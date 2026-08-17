@@ -1329,14 +1329,14 @@ is a deliberate adopter decision, not a default.
 
 Adjust the command to your helper-runtime profile, and the
 `actions/checkout` version if needed — the mirrored file intentionally
-uses the floating `@v4` form. Override the runner via the
+uses the floating `@v4` form. The shipped runner default is
+`ubuntu-slim`; override it via the `runner` workflow input or the
 `CI_RUNNER_LABEL` repository variable (Settings > Secrets and
-variables > Actions > Variables) rather than hand-editing `runs-on`;
-it falls back to the portable `ubuntu-latest` when unset. Setting it
-is **required**, not optional, on GitHub Enterprise Server, which does
-not support GitHub-hosted runners at all — self-hosted runners are
-mandatory there, and the same variable also covers any organization
-that mandates self-hosted runners even on github.com/GHEC. This
+variables > Actions > Variables) rather than hand-editing `runs-on`.
+Setting a self-hosted label is **required**, not optional, on GitHub
+Enterprise Server, which does not support GitHub-hosted runners at
+all — the same override also covers any organization that mandates
+self-hosted runners even on github.com/GHEC. This
 source repository's own copy at
 `.github/workflows/idd-advisory-convergence.yml` instead pins a
 specific `actions/checkout` SHA and hardcodes a custom runner label,
