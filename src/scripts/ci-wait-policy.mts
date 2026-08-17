@@ -514,9 +514,20 @@ function runCli(): void {
       output.rerunCountSource = 'run-id';
       output.runAttempt = rerunCount + 1;
       const failureClass = normalizeFailureClass(run.conclusion);
+      if (failureClass !== null) {
+        output.failureClass = failureClass;
+      }
       const workflowName = String(run.name ?? '').trim();
       const createdMs = Date.parse(String(run.created_at ?? ''));
-      if (failureClass !== null && workflowName && Number.isFinite(createdMs)) {
+      // #1997 hatch can change the decision only after the first
+      // rerun-once attempt. Skip the sibling-list call otherwise.
+      if (
+        policy.rerunPolicy === 'rerun-once' &&
+        rerunCount === 1 &&
+        failureClass !== null &&
+        workflowName &&
+        Number.isFinite(createdMs)
+      ) {
         const query = siblingSweepQuery(workflowName);
         const siblingRuns = fetchSiblingWorkflowRuns(owner, repo, workflowName);
         output.siblingSweep = evaluateSiblingWorkflowSweep(siblingRuns, {
@@ -525,7 +536,6 @@ function runCli(): void {
           windowEndMs: createdMs + SIBLING_SWEEP_HALF_WINDOW_MS,
           query,
         });
-        output.failureClass = failureClass;
       }
     } catch (error) {
       // #1996: unifies three distinct failure modes -- owner/repo
