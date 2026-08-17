@@ -397,14 +397,12 @@ Before any mutating action in F3, apply the
    format, and fallback GraphQL commands.
 3. Run from the **primary worktree**, never from inside the worktree
    being removed. Any removal (plain or `--force`) silently discards
-   ignored files too, including inside a submodule. **Before the first
-   removal attempt**, re-validate this session's claim and worktree
-   lock (`idd-claim.instructions.md`); stop if either is no longer
-   ours. Scope every inspection to `<path>`.
+   ignored files too, including inside a submodule. Scope every
+   inspection to `<path>` (or `<path>/<sub>` for a `-` submodule
+   path — parent status hides leftovers there).
 
-   Use `--untracked-files=normal` (not `all`). Inspect any `-` path
-   from `submodule status` directly (parent status hides them). A
-   clean submodule worktree can still hide a stash or unpushed commit:
+   Use `--untracked-files=normal` (not `all`). A clean submodule
+   worktree can still hide a stash or unpushed commit:
 
    - `git -C <path> status --porcelain --ignored --untracked-files=normal`
    - `git -C <path> submodule status --recursive`
@@ -416,8 +414,11 @@ Before any mutating action in F3, apply the
    command can reproduce it. Preserve anything else first. Copy
    secrets (e.g. `.env`) out only — never commit or push them.
    Non-secret work may go to a **different** ref or be copied out —
-   not to `<branch-name>` itself, which this step deletes next. Then
-   delete the worktree, then the branch:
+   not to `<branch-name>` itself, which this step deletes next.
+   Immediately before each `worktree remove`, re-validate this
+   session's claim and worktree lock (`idd-claim.instructions.md`);
+   stop if either is no longer ours.
+   Then delete the worktree, then the branch:
 
    - `git worktree remove <path>`. If it fails with `fatal: working
      trees containing submodules cannot be moved or removed`, retry
