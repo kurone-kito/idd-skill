@@ -63,7 +63,7 @@ on:
         type: string
       pr_number:
         description: PR number when this workflow is called without a pull_request event
-        required: false
+        required: true
         type: number
 permissions:
   contents: read
@@ -108,12 +108,13 @@ jobs:
           # default branch name if it differs.
           ref: main
           persist-credentials: false
-      # ubuntu-latest's preinstalled Node is not guaranteed to satisfy
-      # this repo's engines.node floor (package.json), unlike this
-      # source repository's own ubuntu-slim copy, whose preinstalled
-      # Node is already known to satisfy it (see idd-doctor.yml /
-      # lint.yml, neither of which sets up Node explicitly). Pin an
-      # explicit version so the mirrored template stays portable.
+      # Preinstalled Node on a hosted image is not guaranteed to satisfy
+      # this repo's engines.node floor (package.json), regardless of
+      # whether the job uses the shipped ubuntu-slim default or an
+      # override. Pin an explicit version so the mirrored template stays
+      # portable. This source repository's own copy can skip setup-node
+      # because its runner's preinstalled Node is already known-good
+      # (see idd-doctor.yml / lint.yml).
       - uses: actions/setup-node@v4
         with:
           node-version: 24.x
