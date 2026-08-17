@@ -417,7 +417,13 @@ merges — a maintainer must separately register `idd-advisory-convergence`
 as a **required** status check in the repository's branch-protection
 Ruleset; this is a GitHub-settings action taken outside of IDD
 automation, not something an agent applies on its own. Once
-registered, the check follows the same deadline/waiver escape path as
+registered, every review-thread reply, edit, or delete re-asserts the
+same Copilot verdict — ordinary human prose can fail that required
+check and cancel an in-flight run for that PR. This is
+`idd-advisory-convergence`, not `lint.yml`. Repositories that want
+human-led or gradual IDD adoption should not register the check as
+required until they intend the Copilot-advisory loop. After that
+registration, the check follows the same deadline/waiver escape path as
 any other external check: while the primary advisory bot has not yet
 reviewed the current PR HEAD, `--assert` exits non-zero and the check
 **shows as failing** (GitHub Actions has no separate non-failing

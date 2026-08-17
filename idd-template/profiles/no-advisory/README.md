@@ -6,6 +6,14 @@ rules configured outside IDD. Apply the complete surface below as one
 workflow change so later agents do not wait for a reviewer that the
 repository no longer uses.
 
+**Do not register `idd-advisory-convergence` as required under this
+profile.** Hosting that workflow is optional. Registering it as a
+required status check re-asserts Copilot convergence on every
+review-thread reply, edit, or delete, so ordinary human prose can fail
+the required check and cancel an in-flight run. Leave the check
+unregistered unless you later switch to a Copilot-advisory review
+policy.
+
 ## Adopter-Owned Values
 
 Record these values before editing phase behavior:
