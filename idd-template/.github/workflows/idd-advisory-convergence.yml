@@ -8,27 +8,24 @@ name: IDD advisory-convergence gate
 # required-status-check-able workflow is a deliberate adopter decision,
 # not a default.
 #
-# Runner override: `runs-on` below reads the `CI_RUNNER_LABEL`
-# repository variable, falling back to `ubuntu-latest` when unset. Set
-# it from Settings > Secrets and variables > Actions > Variables >
-# CI_RUNNER_LABEL -- no workflow file edit needed. The primary
-# motivating case is GitHub Enterprise Server: GHES does not support
-# GitHub-hosted runners at all (self-hosted runners are mandatory
-# there), so `ubuntu-latest` fails outright on GHES regardless of
-# which label this template ships as the fallback. Any organization
-# that mandates self-hosted runners even on github.com/GHEC hits the
-# same wall and can use the same variable. This mechanism works for
-# whatever the shipped fallback value is now or later, not
-# specifically `ubuntu-latest`. Whatever label you point this at must
-# still be bash-capable: `defaults.run.shell` below pins every `run:`
-# step to `bash` regardless of runner OS, since GitHub Actions'
-# per-OS default shell (PowerShell Core on Windows) would otherwise
-# silently misinterpret this file's POSIX shell syntax.
+# Runner: shipped default is `ubuntu-slim`. Override without editing
+# the file via the `runner` workflow_call / workflow_dispatch input
+# (same shape as this source repository's pnpm-boundary.yml) or the
+# `CI_RUNNER_LABEL` repository variable (Settings > Secrets and
+# variables > Actions > Variables). The variable is the pull_request
+# path's no-edit escape hatch. GHES does not support GitHub-hosted
+# runners, so set `CI_RUNNER_LABEL` (or pass `runner`) to a
+# bash-capable self-hosted label there; the same override covers any
+# organization that mandates self-hosted runners on github.com/GHEC.
+# `defaults.run.shell` pins every `run:` step to `bash` regardless of
+# runner OS, since GitHub Actions' per-OS default (PowerShell Core on
+# Windows) would otherwise silently misinterpret this file's POSIX
+# shell syntax.
 #
 # Adjust the pinned `actions/checkout` SHA (or use the floating `@v4`
 # tag as shipped here), the checkout `ref:` (see below), and the
 # `node scripts/...` command to your own helper-runtime profile. This
-# file intentionally uses the portable `ubuntu-latest` fallback +
+# file intentionally uses the portable `ubuntu-slim` fallback +
 # `@v4` forms rather than a repository-specific pinned SHA or a
 # hardcoded custom runner label, unlike this source repository's own
 # dogfooded copy at .github/workflows/idd-advisory-convergence.yml.
@@ -53,6 +50,21 @@ on:
         description: PR number to re-check (e.g. after posting a maintainer waiver)
         required: true
         type: number
+      runner:
+        description: Runner label (default ubuntu-slim)
+        required: false
+        type: string
+        default: ubuntu-slim
+  workflow_call:
+    inputs:
+      runner:
+        default: ubuntu-slim
+        required: false
+        type: string
+      pr_number:
+        description: PR number when this workflow is called without a pull_request event
+        required: true
+        type: number
 permissions:
   contents: read
   issues: read
@@ -75,8 +87,8 @@ jobs:
   # preventive; no observed incident yet. If either edit is intentional,
   # update every consumer to the new literal context together.
   idd-advisory-convergence:
-    # See the header comment above for the CI_RUNNER_LABEL override.
-    runs-on: ${{ vars.CI_RUNNER_LABEL || 'ubuntu-latest' }}
+    # See the header comment above for the runner / CI_RUNNER_LABEL override.
+    runs-on: ${{ inputs.runner || vars.CI_RUNNER_LABEL || 'ubuntu-slim' }}
     # Bounds pathological hangs; adjust to your own observed run duration
     # once you have history (see idd-doctor.yml/lint.yml in the source
     # repository for the pattern of sizing this from real run durations).
@@ -96,12 +108,13 @@ jobs:
           # default branch name if it differs.
           ref: main
           persist-credentials: false
-      # ubuntu-latest's preinstalled Node is not guaranteed to satisfy
-      # this repo's engines.node floor (package.json), unlike this
-      # source repository's own ubuntu-slim copy, whose preinstalled
-      # Node is already known to satisfy it (see idd-doctor.yml /
-      # lint.yml, neither of which sets up Node explicitly). Pin an
-      # explicit version so the mirrored template stays portable.
+      # Preinstalled Node on a hosted image is not guaranteed to satisfy
+      # this repo's engines.node floor (package.json), regardless of
+      # whether the job uses the shipped ubuntu-slim default or an
+      # override. Pin an explicit version so the mirrored template stays
+      # portable. This source repository's own copy can skip setup-node
+      # because its runner's preinstalled Node is already known-good
+      # (see idd-doctor.yml / lint.yml).
       - uses: actions/setup-node@v4
         with:
           node-version: 24.x
