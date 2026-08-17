@@ -436,6 +436,8 @@ export interface NonceEventLike {
  * matching `activation-nonce` marker exists -- callers must treat that as
  * "no comparison possible," not a mismatch (#1522 AC3).
  */
+/** Sorted activation-nonce values in `events` for `claimId`. Empty when
+ * none match. `events` must already be trust-filtered. */
 export function listActivationNonces(
   events: NonceEventLike[],
   claimId: string,

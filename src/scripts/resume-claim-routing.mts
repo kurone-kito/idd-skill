@@ -284,9 +284,9 @@ export function evaluateResumeClaimRouting(
       action = 'stop';
       reason = 'activation-nonce-mismatch';
     } else if (!nonceChecked && activationNonces.length >= 2) {
-      // #1529: a cold resume has no local nonce. Two or more trusted
-      // activation-nonce markers for this claim-id cannot identify a unique
-      // owner (`agent-id` is shared across concurrent same-type sessions).
+      // #1529: omitting --nonce is no longer a full opt-out once 2+
+      // trusted activation-nonce markers exist. A cold resume cannot tell
+      // which marker is its own (`agent-id` is shared), so fail closed.
       routeState = 'disputed';
       action = 'stop';
       reason = 'cold-recovery-activation-nonce-collision';
