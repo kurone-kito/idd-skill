@@ -32,8 +32,8 @@ and the checker never widens into them:
   that contract. They are also the tightest byte-budget surface in the
   repository — `instructionSizeBudgets` caps each file at 20,000 or
   33,000 bytes and `bundleBudgets` caps whole phase bundles at
-  104,000–120,000 bytes (see
-  [Policy constants](policy-constants.md)) — because every byte is
+  104,000–126,000 bytes
+  (see [Policy constants](policy-constants.md)) — because every byte is
   loaded verbatim into an agent's context on every session. Frontmatter
   metadata that provides no runtime value to the loop is not worth
   spending that budget on. A later session must not widen this bundle's
