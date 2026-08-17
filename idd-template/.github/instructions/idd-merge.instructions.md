@@ -391,37 +391,40 @@ Before any mutating action in F3, apply the
    format, cleanup-failure comment format, permission-blocked comment
    format, and fallback GraphQL commands.
 3. Run from the **primary worktree**, never from inside the worktree
-   being removed — deleting the running process's own cwd breaks every
-   later step. Any removal (plain or `--force`) silently discards
-   ignored files too, including inside an initialized submodule — so
-   **before the first removal attempt**, review what's there. Scope
-   both inspection commands explicitly to `<path>` — an unqualified
-   command inspects the wrong repository:
+   being removed. Any removal (plain or `--force`) silently discards
+   ignored files too, including inside a submodule. **Before the first
+   removal attempt**, re-validate this session's claim and worktree
+   lock; stop if either is no longer ours. Then review what's there.
+   Scope every inspection to `<path>`.
 
-   - `git -C <path> status --porcelain --ignored --untracked-files=all`
-     (avoids a false-clean result under `status.showUntrackedFiles=no`)
+   Use `--untracked-files=normal` (not `all`). Inspect any `-` path
+   from `submodule status` directly (parent status hides them). A
+   clean submodule worktree can still hide a stash or detached-HEAD
+   commit remotes do not have:
+
+   - `git -C <path> status --porcelain --ignored --untracked-files=normal`
+   - `git -C <path> submodule status --recursive`
    - `git -C <path> submodule foreach --recursive 'git status
-     --porcelain --ignored --untracked-files=all'` (keep the `Entering
-     '<submodule>'` banner — it attributes a clean/dirty result to the
-     right submodule)
+     --porcelain --ignored --untracked-files=normal; git stash list;
+     git log --all --not --remotes --oneline'`
 
-   Generated output (e.g. `node_modules/`) is disposable and not a
-   reason to stop. Anything else (local notes, an untracked `.env`,
-   unpushed WIP) must be preserved to a **different** ref or copied
-   out before continuing — not to `<branch-name>` itself, which this
-   step deletes next. Then delete the worktree, then the branch:
+   Generated output is disposable only if a configured project
+   command can reproduce it. Preserve anything else first. Copy
+   secrets (e.g. `.env`) out only — never commit or push them.
+   Non-secret work may go to a **different** ref or be copied out —
+   not to `<branch-name>` itself, which this step deletes next. Then
+   delete the worktree, then the branch:
 
    - `git worktree remove <path>`. If it fails with `fatal: working
-     trees containing submodules cannot be moved or removed` (a
-     submodule was initialized inside that worktree), retry with `git
-     worktree remove --force <path>`, which also overrides the
-     uncommitted/untracked block. Use `--force` only after that review
-     finds nothing worth preserving.
+     trees containing submodules cannot be moved or removed`, retry
+     with `git worktree remove --force <path>`. Use `--force` only
+     after that review finds nothing worth preserving.
    - `git branch -d <branch-name>` (the baseline permission profile
      denies `-D`; see `docs/permissions.md`). If it fails with `error:
      the branch '<branch-name>' is not fully merged` despite the PR
      being merged — `fetch --prune` can drop the remote-tracking ref
      before local `main` fast-forwards — run step 4 first, then retry.
+
 4. Update the local `main` branch (`git fetch origin main && git merge
    --ff-only origin/main`).
 5. If GitHub auto-delete is disabled: delete the remote branch too.
