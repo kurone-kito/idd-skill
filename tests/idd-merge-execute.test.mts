@@ -269,6 +269,74 @@ test('disposition-evidence blocks when route is proceed but blockingCount is non
   assert.equal(exitCode, 1);
 });
 
+test('soleCauseAckOnlyPostDisposition does not add a disposition-evidence blocker (#2125)', () => {
+  const report = readyReport();
+  report.dispositionEvidence = {
+    route: 'return-to-e1',
+    blockingCount: 2,
+    soleCauseAckOnlyPostDisposition: true,
+  };
+  assert.deepEqual(evaluateMergeGates(report), []);
+  const { deps } = depsFor(report);
+  const { verdict, exitCode } = runMergeExecute(BASE_ARGS, deps);
+  assert.equal(verdict.ready, true);
+  assert.equal(exitCode, 0);
+});
+
+test('ack-only-post-disposition review-currency does not add a review-currency blocker (#2125)', () => {
+  const report = readyReport();
+  report.reviewCurrency = {
+    comparisonRoute: 'return-to-e1',
+    comparisonReason: 'ack-only-post-disposition',
+  };
+  assert.deepEqual(evaluateMergeGates(report), []);
+});
+
+test('soleCauseAckOnly flag does not override garbled disposition route or count (#2125)', () => {
+  const report = readyReport();
+  report.dispositionEvidence = {
+    route: '',
+    blockingCount: 'nope',
+    soleCauseAckOnlyPostDisposition: true,
+  };
+  const blockers = evaluateMergeGates(report);
+  assert.deepEqual(
+    blockers.map((b) => b.gate),
+    ['disposition-evidence'],
+  );
+});
+
+test('garbled review-currency route still blocks even with an ack-only reason (#2125)', () => {
+  const report = readyReport();
+  report.reviewCurrency = {
+    comparisonRoute: '',
+    comparisonReason: 'ack-only-post-disposition',
+  };
+  const blockers = evaluateMergeGates(report);
+  assert.deepEqual(
+    blockers.map((b) => b.gate),
+    ['review-currency'],
+  );
+});
+
+test('ack-only override stays fail-closed when mixed with a non-ack disposition gap (#2125)', () => {
+  const report = readyReport();
+  report.reviewCurrency = {
+    comparisonRoute: 'return-to-e1',
+    comparisonReason: 'ack-only-post-disposition',
+  };
+  report.dispositionEvidence = {
+    route: 'return-to-e1',
+    blockingCount: 1,
+    soleCauseAckOnlyPostDisposition: false,
+  };
+  const blockers = evaluateMergeGates(report);
+  assert.deepEqual(
+    blockers.map((b) => b.gate),
+    ['disposition-evidence'],
+  );
+});
+
 test('CI all-passing accepts the no-required-checks fallback', () => {
   const report = readyReport();
   report.ci = {

@@ -159,6 +159,7 @@ unambiguous:
   same summary (see the E6 non-review-notice rule). Only a notice the
   bot replaces with an actual completed review needs a fresh
   disposition.
+- **Advisory courtesy acks**: do not re-disposition a courtesy bot ack.
 
 After E13 replies and resolutions are complete, upsert the PR live
 status digest before E14 if the next route is still review-fix or CI

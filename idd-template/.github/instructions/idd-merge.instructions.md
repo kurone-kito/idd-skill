@@ -65,10 +65,10 @@ Before any mutating action in F3, apply the
    execute `gh pr merge` in this pass.
 
    If the carried F2 evidence includes helper-side
-   `dispositionEvidence`, require `dispositionEvidence.route ==
-   "proceed"` and `dispositionEvidence.blockingCount == 0` before merge.
-   If either check fails, stop and return to E1/E4 with the reported
-   missing thread/comment disposition items. Use only the carried
+   `dispositionEvidence`, require `route == "proceed"` and
+   `blockingCount == 0` before merge, except the F2 override when
+   `soleCauseAckOnlyPostDisposition` is true. Any other missing item
+   still returns to E1/E4. Use only the carried
    `pre-merge-readiness` `dispositionEvidence` shape here; E7 verifier
    fields (`passed`, `items[]`) are not merge-gate substitutes.
 
