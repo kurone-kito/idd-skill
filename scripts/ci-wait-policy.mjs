@@ -26,6 +26,9 @@ const GITHUB_IDENTIFIER_PATTERN = /^[A-Za-z0-9_.-]+$/;
 const ISO_DURATION_PATTERN =
   /^P(?=\d|T\d)(?:(\d+)D)?(?:T(?=\d)(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?)?$/;
 const POLICY_SCHEMA = loadJson('schemas/policy.schema.json');
+/** Half-window on each side of the failed run's created_at (#1997). */
+export const SIBLING_SWEEP_HALF_WINDOW_MS = 60 * 60 * 1000;
+export const SIBLING_SWEEP_LIMIT = 15;
 export const DEFAULT_CI_WAIT_POLICY = Object.freeze({
   runningTimeout: DEFAULT_RUNNING_TIMEOUT,
   runningTimeoutMs: 30 * 60 * 1000,
@@ -108,6 +111,8 @@ export function readCiWaitPolicy(policyPath = DEFAULT_POLICY_PATH) {
 export function resolveCiRerunDecision({
   rerunPolicy = DEFAULT_RERUN_POLICY,
   rerunCount = 0,
+  failureClass,
+  siblingSweep,
 } = {}) {
   const normalizedPolicy = normalizeRerunPolicy(rerunPolicy);
   const normalizedCount =
@@ -132,11 +137,98 @@ export function resolveCiRerunDecision({
       rerunCount: normalizedCount,
     };
   }
+  const hatch = evaluateEvidenceGatedHatch({
+    rerunCount: normalizedCount,
+    failureClass,
+    siblingSweep,
+  });
+  if (hatch?.applied === true) {
+    return {
+      action: 'rerun',
+      reason: 'evidence-gated-extra-rerun',
+      rerunPolicy: normalizedPolicy,
+      rerunCount: normalizedCount,
+      hatch,
+    };
+  }
   return {
     action: 'hold',
     reason: 'rerun-budget-exhausted',
     rerunPolicy: normalizedPolicy,
     rerunCount: normalizedCount,
+    ...(hatch ? { hatch } : {}),
+  };
+}
+export function normalizeFailureClass(value) {
+  const text = String(value ?? '')
+    .trim()
+    .toLowerCase();
+  if (text === 'timed_out' || text === 'timeout') {
+    return 'timeout';
+  }
+  if (text === 'cancelled' || text === 'canceled') {
+    return 'cancelled';
+  }
+  return null;
+}
+function evaluateEvidenceGatedHatch({
+  rerunCount,
+  failureClass,
+  siblingSweep,
+}) {
+  if (siblingSweep === undefined && failureClass === undefined) {
+    return undefined;
+  }
+  const normalizedClass = normalizeFailureClass(failureClass);
+  const sweep = siblingSweep ?? {
+    query: '',
+    allOthersSucceeded: false,
+    otherCount: 0,
+    otherConclusions: [],
+  };
+  const applied =
+    rerunCount === 1 &&
+    normalizedClass !== null &&
+    sweep.allOthersSucceeded === true &&
+    sweep.otherCount > 0;
+  return {
+    applied,
+    failureClass: normalizedClass ?? String(failureClass ?? ''),
+    siblingSweep: sweep,
+  };
+}
+export function evaluateSiblingWorkflowSweep(
+  runs,
+  { currentRunId, windowStartMs, windowEndMs, query },
+) {
+  const others = [];
+  for (const run of runs) {
+    if (String(run.id) === currentRunId) {
+      continue;
+    }
+    if (String(run.status ?? '').toLowerCase() !== 'completed') {
+      continue;
+    }
+    const createdMs = Date.parse(String(run.createdAt ?? ''));
+    if (
+      !Number.isFinite(createdMs) ||
+      createdMs < windowStartMs ||
+      createdMs > windowEndMs
+    ) {
+      continue;
+    }
+    others.push(run);
+  }
+  const otherConclusions = others.map((run) =>
+    String(run.conclusion ?? '').toLowerCase(),
+  );
+  return {
+    query,
+    allOthersSucceeded:
+      others.length > 0 &&
+      otherConclusions.every((conclusion) => conclusion === 'success'),
+    otherCount: others.length,
+    otherConclusions,
   };
 }
 /**
@@ -183,12 +275,19 @@ export function deriveRerunCountFromRunAttempt(runAttempt) {
  * timeout instead of hanging this policy resolver indefinitely.
  */
 export function fetchRerunCountFromRunId(owner, repo, runId) {
+  return deriveRerunCountFromRunAttempt(
+    fetchWorkflowRun(owner, repo, runId).run_attempt,
+  );
+}
+export function fetchWorkflowRun(owner, repo, runId) {
   const raw = ghText(
     ['api', `repos/${owner}/${repo}/actions/runs/${runId}`],
     GH_TEXT_LOOP_TIMEOUT_OPTIONS,
   );
-  const payload = JSON.parse(raw);
-  return deriveRerunCountFromRunAttempt(payload.run_attempt);
+  return JSON.parse(raw);
+}
+export function siblingSweepQuery(workflowName) {
+  return `gh run list --workflow=${JSON.stringify(workflowName)} --limit ${String(SIBLING_SWEEP_LIMIT)}`;
 }
 function normalizeDuration(value, fallback) {
   if (parseDurationToMs(value) === null) {
@@ -199,6 +298,33 @@ function normalizeDuration(value, fallback) {
 function normalizeRerunPolicy(value) {
   const text = String(value ?? '').trim();
   return RERUN_POLICIES.has(text) ? text : DEFAULT_RERUN_POLICY;
+}
+function fetchSiblingWorkflowRuns(owner, repo, workflowName) {
+  const raw = ghText(
+    [
+      'run',
+      'list',
+      '--repo',
+      `${owner}/${repo}`,
+      '--workflow',
+      workflowName,
+      '--limit',
+      String(SIBLING_SWEEP_LIMIT),
+      '--json',
+      'databaseId,conclusion,status,createdAt',
+    ],
+    GH_TEXT_LOOP_TIMEOUT_OPTIONS,
+  );
+  const rows = JSON.parse(raw);
+  if (!Array.isArray(rows)) {
+    return [];
+  }
+  return rows.map((row) => ({
+    id: String(row.databaseId ?? ''),
+    conclusion: row.conclusion == null ? null : String(row.conclusion),
+    status: row.status == null ? null : String(row.status),
+    createdAt: row.createdAt == null ? null : String(row.createdAt),
+  }));
 }
 function runCli() {
   const args = parseArgs(process.argv.slice(2));
@@ -235,9 +361,34 @@ function runCli() {
           ['repo', 'view', '--json', 'name', '--jq', '.name'],
           GH_TEXT_LOOP_TIMEOUT_OPTIONS,
         );
-      rerunCount = fetchRerunCountFromRunId(owner, repo, args.runId);
+      const run = fetchWorkflowRun(owner, repo, args.runId);
+      rerunCount = deriveRerunCountFromRunAttempt(run.run_attempt);
       output.rerunCountSource = 'run-id';
       output.runAttempt = rerunCount + 1;
+      const failureClass = normalizeFailureClass(run.conclusion);
+      if (failureClass !== null) {
+        output.failureClass = failureClass;
+      }
+      const workflowName = String(run.name ?? '').trim();
+      const createdMs = Date.parse(String(run.created_at ?? ''));
+      // #1997 hatch can change the decision only after the first
+      // rerun-once attempt. Skip the sibling-list call otherwise.
+      if (
+        policy.rerunPolicy === 'rerun-once' &&
+        rerunCount === 1 &&
+        failureClass !== null &&
+        workflowName &&
+        Number.isFinite(createdMs)
+      ) {
+        const query = siblingSweepQuery(workflowName);
+        const siblingRuns = fetchSiblingWorkflowRuns(owner, repo, workflowName);
+        output.siblingSweep = evaluateSiblingWorkflowSweep(siblingRuns, {
+          currentRunId: args.runId,
+          windowStartMs: createdMs - SIBLING_SWEEP_HALF_WINDOW_MS,
+          windowEndMs: createdMs + SIBLING_SWEEP_HALF_WINDOW_MS,
+          query,
+        });
+      }
     } catch (error) {
       // #1996: unifies three distinct failure modes -- owner/repo
       // auto-detection failing, the `gh api` run lookup itself failing
@@ -267,6 +418,8 @@ function runCli() {
     output.rerunDecision = resolveCiRerunDecision({
       rerunPolicy: policy.rerunPolicy,
       rerunCount,
+      failureClass: output.failureClass,
+      siblingSweep: output.siblingSweep,
     });
   }
   process.stdout.write(`${JSON.stringify(output, null, 2)}\n`);
@@ -352,5 +505,10 @@ and serves as the explicit override/offline fallback when the --run-id
 lookup fails (network/permission error, or a missing/non-numeric
 run_attempt in the fetched payload) -- absent that fallback, the CLI exits
 non-zero rather than silently emitting rerunCount: 0.
+
+A --run-id lookup whose conclusion is timed_out or cancelled also
+sweeps sibling runs of the same workflow (limit 15, ±1 h) and may
+emit reason evidence-gated-extra-rerun after the first rerun-once
+attempt, only when every other completed sibling succeeded.
 `);
 }

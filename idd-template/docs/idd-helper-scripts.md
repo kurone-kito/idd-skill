@@ -1416,7 +1416,16 @@ to post it is the consuming track's job.
   supplied `rerunDecision`'s `rerunCount`), `runAttempt` (the fetched
   run's raw `run_attempt`, only present on a successful live lookup),
   and `runIdLookupError` (only present when the live lookup failed but a
-  `--rerun-count` fallback was available)
+  `--rerun-count` fallback was available). When `--run-id` resolves a
+  `timed_out`/`cancelled` conclusion, the helper also emits
+  `failureClass` and `siblingSweep` (a same-window
+  `gh run list --workflow=<name> --limit 15` of completed sibling runs)
+  and `resolveCiRerunDecision` may return
+  `reason: "evidence-gated-extra-rerun"` for exactly one extra attempt
+  after the default `rerun-once` budget is spent -- only when every
+  other completed sibling in the ±1 h window succeeded and at least one
+  such sibling exists (#1997). No corroboration, a sibling non-success,
+  `rerunCount >= 2`, or a non-timeout/cancelled conclusion still holds.
 - it remains read-only; the command does not poll CI, rerun workflows,
   or post any GitHub comment
 
