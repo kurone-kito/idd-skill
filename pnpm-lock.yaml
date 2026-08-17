@@ -46,6 +46,9 @@ importers:
       '@kurone-kito/cspell-config':
         specifier: 0.22.0
         version: 0.22.0(cspell@10.0.1)
+      '@kurone-kito/markdownlint-config':
+        specifier: 0.22.0
+        version: 0.22.0
       '@types/node':
         specifier: 26.1.2
         version: 26.1.2
@@ -556,6 +559,10 @@ packages:
     peerDependenciesMeta:
       cspell:
         optional: true
+
+  '@kurone-kito/markdownlint-config@0.22.0':
+    resolution: {integrity: sha512-eldayG/vr7tXDfbQczUwRr6YsR6Zlm/PS85ix7BL3MQjUTi6dP79zY/bq4usZ+bWPBIHswTBRSwpUOTax8gKiA==}
+    engines: {node: ^20.11 || ^22 || >=24}
 
   '@nodelib/fs.scandir@2.1.5':
     resolution: {integrity: sha512-vq24Bq3ym5HEQm2NKCr3yXDwjc7vTsEThRDnkp2DK9p1uqLR+DHurm/NOTo0KG7HYHU7eppKZj3MyqYuMBf62g==}
@@ -1789,6 +1796,8 @@ snapshots:
   '@kurone-kito/cspell-config@0.22.0(cspell@10.0.1)':
     optionalDependencies:
       cspell: 10.0.1
+
+  '@kurone-kito/markdownlint-config@0.22.0': {}
 
   '@nodelib/fs.scandir@2.1.5':
     dependencies:
