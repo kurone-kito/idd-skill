@@ -392,9 +392,9 @@ Before any mutating action in F3, apply the
    format, and fallback GraphQL commands.
 3. Run from the **primary worktree**, never from inside the worktree
    being removed. Any removal (plain or `--force`) silently discards
-   ignored files too, including inside a submodule. Scope every
-   inspection to `<path>` (or `<path>/<sub>` for a `-` submodule
-   path — parent status hides leftovers there).
+   ignored files too, including inside a submodule. Scope Git
+   commands to `<path>`. Inspect leftover files under a `-`
+   submodule path directly (not a repo).
 
    Use `--untracked-files=normal` (not `all`). A clean submodule
    worktree can still hide a stash or unpushed commit:
