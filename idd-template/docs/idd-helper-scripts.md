@@ -1657,9 +1657,15 @@ reflexively as any other CLI option.
   instance the dedup selected as "latest", the live PR #1741 divergence
   where `ci.status: "success"` disagreed with GitHub's own
   `statusCheckRollup.state: "FAILURE"` for the same commit. Evidence only
-  (empty array, never omitted, when nothing was discarded) -- it does not
-  itself gate F2/F3; a non-empty list is a prompt to double-check the live
-  GitHub rollup directly rather than trusting a bare `ci.status: "success"`.
+  (empty array, never omitted, when nothing was discarded) when GitHub's
+  live `mergeStateStatus` is not `BLOCKED`. A non-empty list is always a
+  prompt to double-check the live GitHub rollup rather than trusting a
+  bare `ci.status: "success"`. Combined with live
+  `mergeStateStatus: "BLOCKED"` it is also a
+  `discarded-required-check-siblings` merge-gate blocker (#2127): recover
+  via `rerun-advisory-convergence`, do not merge or `--admin`. An empty
+  or absent list never fires that gate, so a CODEOWNER-only `BLOCKED`
+  path is unchanged.
 - `ci.sourcePinnedRequiredCheckNames` (#1689) lists the required check
   names whose green state was downgraded to `ci.status: "unknown"` because
   their ruleset/classic-protection entry is source-pinned
@@ -1765,6 +1771,9 @@ reflexively as any other CLI option.
   live `mergeStateStatus: "BEHIND"` paired with a confirmed-or-assumed
   `branchCurrency.requiresUpToDateHead: true` fails closed as a
   `branch-currency` blocker before `--apply` ever calls `gh pr merge`).
+  A live `mergeStateStatus: "BLOCKED"` paired with a non-empty
+  `ci.discardedNonPassingRequiredChecks` list is a
+  `discarded-required-check-siblings` blocker (#2127).
   Each failing gate is listed in `blockers[]`
   as `{ gate, detail }`.
 - Dry-run (default) is read-only: it prints `ready`, `blockers`, and
