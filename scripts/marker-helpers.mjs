@@ -250,14 +250,17 @@ export function parseActivationNonceComment(body, createdAt) {
  * matching `activation-nonce` marker exists -- callers must treat that as
  * "no comparison possible," not a mismatch (#1522 AC3).
  */
-export function findActivationNonceWinner(events, claimId) {
-  const nonces = events
+export function listActivationNonces(events, claimId) {
+  return events
     .map((event) =>
       parseActivationNonceComment(event.body ?? '', event.createdAt ?? ''),
     )
     .filter((marker) => Boolean(marker) && marker?.claimId === claimId)
     .map((marker) => marker.nonce)
     .sort();
+}
+export function findActivationNonceWinner(events, claimId) {
+  const nonces = listActivationNonces(events, claimId);
   return nonces.length > 0 ? nonces[0] : null;
 }
 export function parseReleaseComment(body) {

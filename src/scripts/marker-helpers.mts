@@ -436,11 +436,11 @@ export interface NonceEventLike {
  * matching `activation-nonce` marker exists -- callers must treat that as
  * "no comparison possible," not a mismatch (#1522 AC3).
  */
-export function findActivationNonceWinner(
+export function listActivationNonces(
   events: NonceEventLike[],
   claimId: string,
-): string | null {
-  const nonces = events
+): string[] {
+  return events
     .map((event) =>
       parseActivationNonceComment(event.body ?? '', event.createdAt ?? ''),
     )
@@ -450,6 +450,13 @@ export function findActivationNonceWinner(
     )
     .map((marker) => marker.nonce)
     .sort();
+}
+
+export function findActivationNonceWinner(
+  events: NonceEventLike[],
+  claimId: string,
+): string | null {
+  const nonces = listActivationNonces(events, claimId);
   return nonces.length > 0 ? nonces[0] : null;
 }
 

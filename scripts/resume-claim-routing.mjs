@@ -8,11 +8,11 @@ import { parseCliArgs } from './cli-args.mjs';
 import { isAuthorizedForcedHandoffActor } from './collaborator-permission.mjs';
 import { GH_TEXT_LOOP_TIMEOUT_OPTIONS, ghText } from './gh-exec.mjs';
 import { loadPolicyConfig } from './idd-config.mjs';
+import { listActivationNonces } from './marker-helpers.mjs';
 import { normalizePolicyConfig } from './policy-helpers.mjs';
 import {
   buildForcedHandoffEnableGate,
   DEFAULT_STALE_AGE_MS,
-  findActivationNonceWinner,
   isStaleByAge,
   normalizeLinkedPrReference,
   parseClaimComment,
@@ -105,9 +105,11 @@ export function evaluateResumeClaimRouting(input, options = {}) {
   const laterCompetingClaim = state.activeClaim
     ? findLaterCompetingClaim(events, state.activeClaim)
     : null;
-  const activationNonceWinner = state.activeClaim
-    ? findActivationNonceWinner(events, state.activeClaim.claimId)
-    : null;
+  const activationNonces = state.activeClaim
+    ? listActivationNonces(events, state.activeClaim.claimId)
+    : [];
+  const activationNonceWinner =
+    activationNonces.length > 0 ? activationNonces[0] : null;
   const nonceChecked = normalizeToken(input.nonce);
   const warnings = [...state.warnings];
   let routeState = 'unclaimed';
@@ -173,6 +175,13 @@ export function evaluateResumeClaimRouting(input, options = {}) {
       routeState = 'disputed';
       action = 'stop';
       reason = 'activation-nonce-mismatch';
+    } else if (!nonceChecked && activationNonces.length >= 2) {
+      // #1529: a cold resume has no local nonce. Two or more trusted
+      // activation-nonce markers for this claim-id cannot identify a unique
+      // owner (`agent-id` is shared across concurrent same-type sessions).
+      routeState = 'disputed';
+      action = 'stop';
+      reason = 'cold-recovery-activation-nonce-collision';
     } else {
       routeState = 'already_owned';
       action = 'keep';
@@ -234,6 +243,7 @@ export function evaluateResumeClaimRouting(input, options = {}) {
       same_second_contenders: sameSecondContenders,
       later_competing_claim: laterCompetingClaim,
       activation_nonce_winner: activationNonceWinner,
+      activation_nonce_count: activationNonces.length,
     },
   };
 }
@@ -708,9 +718,11 @@ function printHelp() {
                       earliest nonce among however many were posted). A
                       mismatch means a second, independent session activated
                       the identical claim-id -- routes to "disputed" the same
-                      as a later-competing-claim loss. Omit --nonce, or leave
-                      the claim-id's nonce not posted, to skip the comparison
-                      (unchanged pre-#1522 behavior).
+                      as a later-competing-claim loss. Omit --nonce when
+                      the claim-id has 0 or 1 trusted nonce to skip the
+                      comparison. Omit --nonce when 2+ trusted nonces exist
+                      and this session has no local nonce: route to
+                      disputed/stop (cold-recovery collision, #1529).
 
 Output (selected fields; the JSON also carries repository / issue / policy /
 warnings / evidence):
