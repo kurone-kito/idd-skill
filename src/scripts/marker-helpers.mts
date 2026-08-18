@@ -416,17 +416,21 @@ export function hasReviewReplyStamp(
   markerPrefix: string = DEFAULT_REVIEW_REPLY_MARKER_PREFIX,
 ): boolean {
   const prefix = normalizeReviewReplyMarkerPrefix(markerPrefix);
-  const match = createMarkerRegex(prefix, REVIEW_REPLY_STAMP_SUFFIX).exec(
-    body ?? '',
-  );
-  if (!match) {
-    return false;
-  }
+  const coarse = createMarkerRegex(prefix, REVIEW_REPLY_STAMP_SUFFIX);
   const exact = new RegExp(
     `^<!--\\s*${escapeRegex(prefix)}-${REVIEW_REPLY_STAMP_SUFFIX}\\s*-->$`,
     'i',
   );
-  return exact.test(match[0]);
+  // createMarkerRegex is non-global and will stop at the first suffix
+  // lookalike. Scan every match so an earlier `review-reply-extra` does
+  // not hide a later valid stamp (and so append stays idempotent).
+  const global = new RegExp(coarse.source, 'gi');
+  for (const match of (body ?? '').matchAll(global)) {
+    if (exact.test(match[0])) {
+      return true;
+    }
+  }
+  return false;
 }
 
 /**

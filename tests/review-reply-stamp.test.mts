@@ -66,6 +66,16 @@ test('hasReviewReplyStamp rejects hyphen-extended suffixes that createMarkerRege
   assert.equal(hasReviewReplyStamp('<!-- idd-skill-review-reply   -->'), true);
 });
 
+test('hasReviewReplyStamp still finds a valid stamp after an earlier lookalike', () => {
+  const body = [
+    '<!-- idd-skill-review-reply-extra -->',
+    '**Accepted** — later stamp',
+    '<!-- idd-skill-review-reply -->',
+  ].join('\n');
+  assert.equal(hasReviewReplyStamp(body), true);
+  assert.equal(appendReviewReplyStamp(body), body);
+});
+
 test('hasReviewReplyStamp honors an adopter markerPrefix and does not cross prefixes', () => {
   const adopter = '<!-- org-project-review-reply -->';
   assert.equal(hasReviewReplyStamp(adopter, 'org-project'), true);
