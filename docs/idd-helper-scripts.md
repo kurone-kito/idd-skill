@@ -2536,10 +2536,17 @@ arbitrary git subcommands, run the **merge** step — including a
 plain command (`git fetch` creates no commit and needs no signing):
 
 ```sh
-git -c gpg.format=ssh -c user.signingkey=<abs-path> -c commit.gpgsign=true merge origin/main
+git -c gpg.format=ssh -c user.signingkey=<abs-path> -c commit.gpgsign=true merge -m "chore: merge origin/main into the claimed branch" origin/main
 # resolve conflicts if any, then:
 git -c gpg.format=ssh -c user.signingkey=<abs-path> -c commit.gpgsign=true merge --continue
 ```
+
+Include the conventional `-m` subject so a `commit-msg` hook that runs
+commitlint accepts the merge commit (a subject without a `type:` prefix
+fails the hook and leaves `MERGE_HEAD` in place). Repositories without
+that hook can keep the same subject; it does not change unsigned
+`git merge` elsewhere. `merge --continue` reuses `MERGE_MSG` and needs
+no second `-m`.
 
 Pass the `-c` flags to `git` itself, before the subcommand (`git -c …
 merge`, not `git merge -c …`); a commit-only alias such as `git

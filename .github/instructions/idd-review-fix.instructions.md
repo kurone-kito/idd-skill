@@ -80,7 +80,10 @@ git merge origin/main`), resolve them, and complete the merge. On a
 signed-commit repo with non-interactive-hostile primary signing (GPG
 pinentry / hardware-touch), use the
 [signed-commit merge wrapper](../../docs/idd-helper-scripts.md#signed-commit-merge-wrapper-shared-git-procedure)
-for the whole operation instead of the plain command.
+for the whole operation instead of the plain command. That wrapper's
+merge invocation includes a conventional `-m` subject (for example
+`chore: merge origin/main into the claimed branch`) so a commitlint
+`commit-msg` hook does not reject the merge commit.
 
 **Active review gate**: same check as
 `idd-review-triage.instructions.md`'s sync path step 1 — unresolved
