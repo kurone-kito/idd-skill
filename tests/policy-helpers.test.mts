@@ -317,6 +317,14 @@ test('selectDesyncedIndex spreads distinct session tokens across the band', () =
   );
 });
 
+// Locks the A4 Step 2 helper-unavailable worked example in both
+// idd-template/.github/instructions/idd-discover.instructions.md and
+// .github/instructions/idd-discover.instructions.md. A later hash
+// change must update that prose in both structure-pair copies.
+test('selectDesyncedIndex matches the discover-instruction worked example', () => {
+  assert.equal(selectDesyncedIndex('copilot-8122ca35', 3), 1);
+});
+
 // #1449: clone() swapped from JSON.parse(JSON.stringify(value)) to
 // structuredClone(value). Two-level coverage — a direct clone() assertion
 // showing structuredClone preserves an undefined-valued key would only
