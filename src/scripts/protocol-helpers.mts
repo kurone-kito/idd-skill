@@ -27,6 +27,7 @@ export { DEFAULT_ADVISORY_BOT_LOGINS } from './advisory-wait-policy.mts';
 // rule (it must never import back from this file).
 export * from './marker-helpers.mts';
 
+import { loadIddConfig } from './idd-config.mts';
 import type {
   ParsedClaimMarker,
   ParsedForcedHandoffMarker,
@@ -3705,7 +3706,13 @@ export function summarizeDispositionEvidenceForGate(
   const prAuthorLogin = String(options.prAuthorLogin ?? '')
     .trim()
     .toLowerCase();
-  const markerPrefix = options.markerPrefix;
+  const explicitMarkerPrefix =
+    typeof options.markerPrefix === 'string' ? options.markerPrefix.trim() : '';
+  const configuredMarkerPrefix = String(
+    loadIddConfig()?.markerPrefix ?? '',
+  ).trim();
+  const markerPrefix =
+    explicitMarkerPrefix || configuredMarkerPrefix || undefined;
   // #2014: An advisory bot can never anchor "dispositions exist", mirroring
   // `buildActivitySnapshotSummary`'s identical `dispositionAuthorLogins`
   // subtraction above (this file, "An advisory bot can never anchor..."
@@ -4180,10 +4187,11 @@ export function summarizeDispositionEvidenceForGate(
         return null;
       }
       // #2139: unmarked later replies on a *human-authored* thread are
-      // presence-only. Advisory-authored threads (Copilot / configured
-      // advisory bots) keep marker-first so an unmarked `ok` cannot
-      // satisfy Clause 2. An IDD-originated later reply that failed the
-      // freshness check above still falls through.
+      // presence-only only when no IDD-originated reply exists in the
+      // thread. After a stamped or legacy trusted disposition, later
+      // human feedback still re-opens freshness (#978). Advisory-authored
+      // threads keep marker-first so an unmarked `ok` cannot satisfy
+      // Clause 2.
       if (!isAdvisoryAuthoredThread(thread, advisoryBotLogins)) {
         const laterReplies = commentsInThread.slice(1);
         const hasUnmarkedHumanPresence =

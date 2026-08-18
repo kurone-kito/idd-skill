@@ -2740,6 +2740,82 @@ test('disposition evidence clears a Copilot thread with a legacy trusted Accepte
   assert.equal(summary.missingThreadCount, 0);
 });
 
+test('disposition evidence keeps freshness after an IDD reply even if later human prose arrives (#2139)', () => {
+  const stamp = renderReviewReplyStamp();
+  const summary = summarizeDispositionEvidenceForGate(
+    {
+      comments: [],
+      threads: [
+        {
+          id: 'thread-stale-then-human',
+          isResolved: false,
+          comments: {
+            pageInfo: { hasNextPage: false },
+            nodes: [
+              {
+                author: { login: 'reviewer-a' },
+                createdAt: '2026-05-12T00:00:00Z',
+                body: 'please fix the naming',
+              },
+              {
+                author: { login: 'idd-bot' },
+                createdAt: '2026-05-12T00:00:02Z',
+                body: `**Accepted** — renamed in abc\n\n${stamp}`,
+              },
+              {
+                author: { login: 'reviewer-a' },
+                createdAt: '2026-05-12T00:00:04Z',
+                body: 'please reopen — still a problem',
+              },
+            ],
+          },
+        },
+      ],
+    },
+    { iddAgentLogins: ['idd-bot'] },
+  );
+
+  assert.equal(summary.route, 'return-to-e1');
+  assert.equal(
+    summary.missingThreads[0].reason,
+    'unresolved-without-fresh-disposition',
+  );
+});
+
+test('disposition evidence recognizes a stamped Accepted under a custom markerPrefix (#2139)', () => {
+  const stamp = renderReviewReplyStamp('org-project');
+  const summary = summarizeDispositionEvidenceForGate(
+    {
+      comments: [],
+      threads: [
+        {
+          id: 'thread-custom-prefix',
+          isResolved: false,
+          comments: {
+            pageInfo: { hasNextPage: false },
+            nodes: [
+              {
+                author: { login: 'copilot' },
+                createdAt: '2026-05-12T00:00:00Z',
+                body: 'consider extracting this helper',
+              },
+              {
+                author: { login: 'someone-else' },
+                createdAt: '2026-05-12T00:00:02Z',
+                body: `**Accepted** — extracted in abc123\n\n${stamp}`,
+              },
+            ],
+          },
+        },
+      ],
+    },
+    { iddAgentLogins: ['idd-bot'], markerPrefix: 'org-project' },
+  );
+
+  assert.equal(summary.route, 'proceed');
+  assert.equal(summary.missingThreadCount, 0);
+});
+
 test('disposition evidence classifies a trusted maintainer LGTM as a human reply (#2139)', () => {
   const summary = summarizeDispositionEvidenceForGate(
     {
