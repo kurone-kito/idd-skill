@@ -172,8 +172,8 @@ Surfaces tried on kurone-kito/idd-skill (2026-08-18):
   `GET /repos/{owner}/{repo}/rulesets/rule-suites` with `ref` set to
   the matching ref (here `refs/heads/main`), a `time_period` that
   covers the SHA (`day` is the default 24 h window; use `week` or
-  `month` for older pushes), and pagination (`per_page` up to 100;
-  follow `page` / Link headers — the default page is 30), then
+  `month` for older pushes), and pagination (`per_page` up to 100,
+  default 30; follow `page` / Link headers), then
   `GET /repos/{owner}/{repo}/rulesets/rule-suites/{id}`. List
   entries include `after_sha`; the detail's `rule_evaluations[]`
   includes `{ "rule_type": "code_quality", "result": "pass" }` (or
