@@ -20,7 +20,7 @@
 // resolution machinery there (normalizeTrustedMarkerLogins and friends), and
 // moving them here would force exactly that forbidden back-import. Only the
 // single-marker parse/render primitives move in this wave.
-import { createMarkerRegex } from './marker-regex.mjs';
+import { createMarkerRegex, escapeRegex } from './marker-regex.mjs';
 
 const ISO8601_UTC_PATTERN = /\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z/;
 const OPTIONAL_IDD_VISIBLE_NOTE_PATTERN = String.raw`(?:\s*|\s*\n\s*_[^\n]*\bIDD\b[^\n]*_\s*)`;
@@ -229,17 +229,28 @@ export function renderReviewReplyStamp(
 /**
  * True when `body` carries a prefix-aware `review-reply` stamp anywhere
  * (typically after the visible disposition). Mid-body match is required:
- * the stamp is not first-bytes. An E1 `review-watermark` comment does not
- * match because the suffix is a different token.
+ * the stamp is not first-bytes. The stamp has no payload, so after the
+ * shared `createMarkerRegex` hit we require the matched comment to be
+ * exactly `<!-- {prefix}-review-reply -->` (optional whitespace). That
+ * rejects suffix extensions such as `review-reply-extra` that `\b`
+ * would otherwise accept before a hyphen.
  */
 export function hasReviewReplyStamp(
   body,
   markerPrefix = DEFAULT_REVIEW_REPLY_MARKER_PREFIX,
 ) {
-  return createMarkerRegex(
-    normalizeReviewReplyMarkerPrefix(markerPrefix),
-    REVIEW_REPLY_STAMP_SUFFIX,
-  ).test(body ?? '');
+  const prefix = normalizeReviewReplyMarkerPrefix(markerPrefix);
+  const match = createMarkerRegex(prefix, REVIEW_REPLY_STAMP_SUFFIX).exec(
+    body ?? '',
+  );
+  if (!match) {
+    return false;
+  }
+  const exact = new RegExp(
+    `^<!--\\s*${escapeRegex(prefix)}-${REVIEW_REPLY_STAMP_SUFFIX}\\s*-->$`,
+    'i',
+  );
+  return exact.test(match[0]);
 }
 /**
  * Classify a comment as IDD-originated from the reply-identity stamp alone.

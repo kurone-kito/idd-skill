@@ -53,6 +53,19 @@ test('hasReviewReplyStamp does not treat an E1 review-watermark as a reply stamp
   assert.equal(isIddOriginatedReply(watermark), false);
 });
 
+test('hasReviewReplyStamp rejects hyphen-extended suffixes that createMarkerRegex would accept', () => {
+  assert.equal(
+    hasReviewReplyStamp('<!-- idd-skill-review-reply-extra -->'),
+    false,
+  );
+  assert.equal(
+    hasReviewReplyStamp('<!-- idd-skill-review-reply-watermark -->'),
+    false,
+  );
+  assert.equal(hasReviewReplyStamp('<!-- idd-skill-review-reply -->'), true);
+  assert.equal(hasReviewReplyStamp('<!-- idd-skill-review-reply   -->'), true);
+});
+
 test('hasReviewReplyStamp honors an adopter markerPrefix and does not cross prefixes', () => {
   const adopter = '<!-- org.project-review-reply -->';
   assert.equal(hasReviewReplyStamp(adopter, 'org.project'), true);
