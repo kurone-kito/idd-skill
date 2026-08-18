@@ -69,5 +69,6 @@
   "converged": true,
   "waived": false,
   "ready": true,
-  "reasons": []
+  "reasons": [],
+  "nextActions": []
 }

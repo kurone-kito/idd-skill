@@ -3,11 +3,13 @@ import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 
 import {
+  ADVISORY_CONVERGENCE_NEXT_ACTION_TOKEN,
   type AdvisoryConvergenceDeps,
   type AdvisoryConvergenceInputs,
   type AdvisoryConvergenceOptions,
   classifyClaimCandidateAmbiguity,
   classifyCopilotAuthoredThreadIds,
+  collectAssertNextActions,
   computeAdvisoryConvergenceVerdict,
   formatAssertNextActions,
   hasTrustedClaimMarkerHistory,
@@ -4184,6 +4186,87 @@ test('formatAssertNextActions covers indeterminate applicability (#2142)', () =>
   assert.match(text, /indeterminate/);
   assert.match(text, /claimed-by/);
   assert.doesNotMatch(text, /external-check waiver/);
+});
+
+test('nextActions token catalog is pinned and matches the schema enum (#2143)', () => {
+  const tokens = Object.values(ADVISORY_CONVERGENCE_NEXT_ACTION_TOKEN).sort();
+  assert.deepEqual(
+    tokens,
+    [
+      'ack-suppressed',
+      'disposition-posted-items',
+      'disposition-threads',
+      'hold-deadline',
+      'hold-terminal',
+      'indeterminate-applicability',
+      'request-re-review',
+      'request-review',
+      'reread-verdict',
+      'same-head-reroll',
+      'waiver-deadline',
+      'waiver-terminal',
+    ].sort(),
+  );
+  const schemaTokens = (
+    SCHEMA as {
+      properties: {
+        nextActions: {
+          items: { properties: { token: { enum: string[] } } };
+        };
+      };
+    }
+  ).properties.nextActions.items.properties.token.enum;
+  assert.deepEqual([...schemaTokens].sort(), tokens);
+});
+
+test('computeAdvisoryConvergenceVerdict: ready nextActions is empty (#2143)', () => {
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({
+      reviews: [
+        {
+          author: { login: COPILOT_LOGIN },
+          submittedAt: RECENT,
+          commitId: HEAD,
+          itemCount: 0,
+          body: '',
+        },
+      ],
+    }),
+    baseOptions(),
+  );
+  assertValidVerdict(verdict);
+  assert.equal(verdict.ready, true);
+  assert.deepEqual(verdict.nextActions, []);
+  assert.deepEqual(collectAssertNextActions(verdict), []);
+});
+
+test('computeAdvisoryConvergenceVerdict: not-ready nextActions match stderr (#2143)', () => {
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs(),
+    baseOptions(),
+  );
+  assertValidVerdict(verdict);
+  assert.equal(verdict.ready, false);
+  assert.ok(verdict.nextActions.length > 0);
+  const first = verdict.nextActions[0];
+  assert.equal(
+    first?.token,
+    ADVISORY_CONVERGENCE_NEXT_ACTION_TOKEN.REQUEST_REVIEW,
+  );
+  assert.ok(first);
+  const stderr = formatAssertNextActions(verdict);
+  assert.match(stderr, /has not reviewed this PR/);
+  for (const line of first.pointer.split('\n')) {
+    assert.ok(
+      stderr.includes(line),
+      `stderr must contain pointer line: ${line}`,
+    );
+  }
+  assert.deepEqual(collectAssertNextActions(verdict), verdict.nextActions);
+  assert.doesNotMatch(
+    JSON.stringify(verdict.reasons),
+    /request-review|nextActions/,
+  );
 });
 
 test('writeAdvisoryConvergenceCliOutput writes guidance before JSON (#2142)', () => {

@@ -167,6 +167,25 @@ export const SAME_HEAD_REROLL_INELIGIBLE_REASON = {
   REVIEW_ITEM_COUNT_NOT_POSITIVE: 'review-item-count-not-positive',
   ALREADY_SATISFIED_VIA_REVIEW_ACK: 'already-satisfied-via-review-ack',
 };
+/** #2143: stable tokens for `nextActions[].token` -- one per branch of
+ * {@link collectAssertNextActions}, the same catalog the stderr track
+ * (`formatAssertNextActions`) already prints. Exported so tests can pin
+ * the set. The schema `enum` is hand-maintained beside this object and
+ * must stay in sync; the pin test compares both. */
+export const ADVISORY_CONVERGENCE_NEXT_ACTION_TOKEN = {
+  INDETERMINATE_APPLICABILITY: 'indeterminate-applicability',
+  REQUEST_REVIEW: 'request-review',
+  REQUEST_RE_REVIEW: 'request-re-review',
+  DISPOSITION_POSTED_ITEMS: 'disposition-posted-items',
+  DISPOSITION_THREADS: 'disposition-threads',
+  ACK_SUPPRESSED: 'ack-suppressed',
+  WAIVER_TERMINAL: 'waiver-terminal',
+  HOLD_TERMINAL: 'hold-terminal',
+  WAIVER_DEADLINE: 'waiver-deadline',
+  HOLD_DEADLINE: 'hold-deadline',
+  SAME_HEAD_REROLL: 'same-head-reroll',
+  REREAD_VERDICT: 'reread-verdict',
+};
 /** #2137: exact `reviewPolicy` values that skip Copilot / primary-bot
  * clauses. Mapped to the `applicability.reason` token so tests and
  * operators can tell which policy produced the short-circuit. */
@@ -886,6 +905,25 @@ export function computeAdvisoryConvergenceVerdict(inputs, options) {
     scopeNotApplicable ||
     converged ||
     ((deadlinePassed || terminalUnavailable) && waived);
+  const reviewReport = {
+    ...review,
+    satisfied: reviewSatisfied,
+  };
+  // #2143: same catalog as the stderr track. Computed AFTER `ready` so a
+  // ready verdict is always `[]`; `ready` itself never reads this field.
+  const nextActions = collectAssertNextActions({
+    ready,
+    prNumber: inputs.prNumber,
+    prHeadSha,
+    primaryBotLogin,
+    applicability,
+    review: reviewReport,
+    threads: threadClause,
+    deadline,
+    waiver,
+    sameHeadReroll,
+    terminal,
+  });
   return {
     protocolVersion: '1',
     decisionAuthority: 'instructions',
@@ -899,7 +937,7 @@ export function computeAdvisoryConvergenceVerdict(inputs, options) {
     // `resolveLatestCopilotReviewClause` itself returns -- every other field
     // (`matchesHead` / `itemCount` / `suppressedCount` / `submittedAt` /
     // `found` / `commitId`) is untouched.
-    review: { ...review, satisfied: reviewSatisfied },
+    review: reviewReport,
     threads: threadClause,
     pending,
     deadline,
@@ -911,6 +949,7 @@ export function computeAdvisoryConvergenceVerdict(inputs, options) {
     waived,
     ready,
     reasons,
+    nextActions,
   };
 }
 // `isVerifiedCopilotAuthor` (#1686 defense-in-depth on top of
@@ -2062,41 +2101,54 @@ function fetchThreadCommentPages(threadId, afterCursor) {
   return nodes;
 }
 /**
- * Compact next-action guidance for a non-ready `--assert` verdict (#2142).
+ * Structured next-action catalog for a non-ready verdict (#2143).
  * Derived from structured verdict fields, never from parsing `reasons[]`.
  * Empty when `ready` is true. Script-authored English; not LLM prose.
+ * Shared by the stdout JSON field and the stderr formatter so the two
+ * channels cannot disagree.
  */
-export function formatAssertNextActions(verdict) {
+export function collectAssertNextActions(verdict) {
   if (verdict.ready) {
-    return '';
+    return [];
   }
   const pr = verdict.prNumber;
   const sha = verdict.prHeadSha;
   const bot = verdict.primaryBotLogin || 'copilot';
   const restLogin =
     bot === 'copilot' ? 'copilot-pull-request-reviewer[bot]' : bot;
-  const lines = ['Next action (idd-advisory-convergence --assert failed):'];
+  const T = ADVISORY_CONVERGENCE_NEXT_ACTION_TOKEN;
+  const items = [];
   if (verdict.applicability.status === 'indeterminate') {
     const waiverReady =
       (verdict.deadline.passed ||
         verdict.terminal.state === 'COPILOT_UNAVAILABLE') &&
       verdict.waiver.mode === 'maintainer-authorized';
-    lines.push(
-      waiverReady
-        ? `- Applicability is indeterminate (${verdict.applicability.reason}). Repair the claim linkage (claimed-by branch vs PR head) or post a maintainer external-check waiver for selector "${verdict.waiver.checkSelector}" on HEAD ${sha}, then: node scripts/advisory-convergence.mjs --pr ${pr} --assert`
-        : `- Applicability is indeterminate (${verdict.applicability.reason}). Repair the claim linkage (claimed-by branch vs PR head), then: node scripts/advisory-convergence.mjs --pr ${pr} --assert`,
-    );
+    const pointer = `node scripts/advisory-convergence.mjs --pr ${pr} --assert`;
+    items.push({
+      token: T.INDETERMINATE_APPLICABILITY,
+      summary: waiverReady
+        ? `Applicability is indeterminate (${verdict.applicability.reason}). Repair the claim linkage (claimed-by branch vs PR head) or post a maintainer external-check waiver for selector "${verdict.waiver.checkSelector}" on HEAD ${sha}, then: ${pointer}`
+        : `Applicability is indeterminate (${verdict.applicability.reason}). Repair the claim linkage (claimed-by branch vs PR head), then: ${pointer}`,
+      pointer,
+    });
   }
   if (!verdict.review.found) {
-    lines.push(
-      `- ${bot} has not reviewed this PR. Request a review (E14) then post an advisory-wait marker:`,
-      `  gh pr edit ${pr} --add-reviewer ${bot === 'copilot' ? 'copilot' : restLogin}`,
-      `  node scripts/post-idd-marker.mjs --type advisory --target pr ${pr} --agent-id <id> --head-sha ${sha} --timestamp <ISO8601> --apply`,
-    );
+    const reviewer = bot === 'copilot' ? 'copilot' : restLogin;
+    items.push({
+      token: T.REQUEST_REVIEW,
+      summary: `${bot} has not reviewed this PR. Request a review (E14) then post an advisory-wait marker:`,
+      pointer: [
+        `gh pr edit ${pr} --add-reviewer ${reviewer}`,
+        `node scripts/post-idd-marker.mjs --type advisory --target pr ${pr} --agent-id <id> --head-sha ${sha} --timestamp <ISO8601> --apply`,
+      ].join('\n'),
+    });
   } else if (!verdict.review.matchesHead) {
-    lines.push(
-      `- Latest ${bot} review covers ${verdict.review.commitId || '<unknown>'}, not HEAD ${sha}. Request a re-review of the current HEAD (E14 / AW3 REQUEST_NEEDED) and wait with: node scripts/advisory-wait-state.mjs --pr ${pr}`,
-    );
+    const pointer = `node scripts/advisory-wait-state.mjs --pr ${pr}`;
+    items.push({
+      token: T.REQUEST_RE_REVIEW,
+      summary: `Latest ${bot} review covers ${verdict.review.commitId || '<unknown>'}, not HEAD ${sha}. Request a re-review of the current HEAD (E14 / AW3 REQUEST_NEEDED) and wait with: ${pointer}`,
+      pointer,
+    });
   }
   const itemCount = verdict.review.itemCount;
   if (
@@ -2104,52 +2156,101 @@ export function formatAssertNextActions(verdict) {
     typeof itemCount === 'number' &&
     itemCount > 0
   ) {
-    lines.push(
-      `- Latest ${bot} review on HEAD has ${itemCount} posted item(s). Disposition each thread (E6/E13): node scripts/resolve-review-thread.mjs --pr ${pr} --comment-id <id> --body "**Accepted** — …" --claim-issue <n> --claim-id <id> --apply`,
-    );
+    const pointer = `node scripts/resolve-review-thread.mjs --pr ${pr} --comment-id <id> --body "**Accepted** — …" --claim-issue <n> --claim-id <id> --apply`;
+    items.push({
+      token: T.DISPOSITION_POSTED_ITEMS,
+      summary: `Latest ${bot} review on HEAD has ${itemCount} posted item(s). Disposition each thread (E6/E13): ${pointer}`,
+      pointer,
+    });
   }
   if (verdict.threads.blockingCount > 0) {
     const ids =
       verdict.threads.blockingIds.join(', ') || '(see threads.blockingIds)';
-    lines.push(
-      `- ${verdict.threads.blockingCount} Copilot thread(s) are unresolved and lack a valid disposition (${ids}). Reply with a stamped **Accepted**/**Rejected** and resolve via resolve-review-thread (E6/E13).`,
-    );
+    const pointer = 'resolve-review-thread (E6/E13)';
+    items.push({
+      token: T.DISPOSITION_THREADS,
+      summary: `${verdict.threads.blockingCount} Copilot thread(s) are unresolved and lack a valid disposition (${ids}). Reply with a stamped **Accepted**/**Rejected** and resolve via ${pointer}.`,
+      pointer,
+    });
   }
   if (verdict.review.suppressedCount > 0) {
-    lines.push(
-      `- Latest ${bot} review reports ${verdict.review.suppressedCount} suppressed comment(s). After reading the review body, post a trusted review-ack if they are handled: node scripts/post-idd-marker.mjs --type review-ack --target pr ${pr} --agent-id <id> --head-sha ${sha} --timestamp <ISO8601> --apply`,
-    );
+    const pointer = `node scripts/post-idd-marker.mjs --type review-ack --target pr ${pr} --agent-id <id> --head-sha ${sha} --timestamp <ISO8601> --apply`;
+    items.push({
+      token: T.ACK_SUPPRESSED,
+      summary: `Latest ${bot} review reports ${verdict.review.suppressedCount} suppressed comment(s). After reading the review body, post a trusted review-ack if they are handled: ${pointer}`,
+      pointer,
+    });
   }
   if (verdict.terminal.state === 'COPILOT_UNAVAILABLE') {
     if (verdict.waiver.mode === 'maintainer-authorized') {
-      lines.push(
-        `- Copilot is terminally unavailable. Post a maintainer external-check waiver for selector "${verdict.waiver.checkSelector}" on HEAD ${sha} (idd-pre-merge F2 / external-check-waiver), then: node scripts/rerun-advisory-convergence.mjs --pr ${pr}`,
-      );
+      const pointer = `node scripts/rerun-advisory-convergence.mjs --pr ${pr}`;
+      items.push({
+        token: T.WAIVER_TERMINAL,
+        summary: `Copilot is terminally unavailable. Post a maintainer external-check waiver for selector "${verdict.waiver.checkSelector}" on HEAD ${sha} (idd-pre-merge F2 / external-check-waiver), then: ${pointer}`,
+        pointer,
+      });
     } else {
-      lines.push(
-        `- Copilot is terminally unavailable and waivers are not enabled (mode "${verdict.waiver.mode}"). Hold for a maintainer; do not auto-merge.`,
-      );
+      const pointer = 'Hold for a maintainer; do not auto-merge.';
+      items.push({
+        token: T.HOLD_TERMINAL,
+        summary: `Copilot is terminally unavailable and waivers are not enabled (mode "${verdict.waiver.mode}"). ${pointer}`,
+        pointer,
+      });
     }
   } else if (verdict.deadline.passed) {
     if (verdict.waiver.mode === 'maintainer-authorized') {
-      lines.push(
-        `- Convergence deadline (${verdict.deadline.minutes}m) has passed. Post a maintainer external-check waiver for selector "${verdict.waiver.checkSelector}" on HEAD ${sha}, then rerun the required check.`,
-      );
+      const pointer = `Post a maintainer external-check waiver for selector "${verdict.waiver.checkSelector}" on HEAD ${sha}, then rerun the required check.`;
+      items.push({
+        token: T.WAIVER_DEADLINE,
+        summary: `Convergence deadline (${verdict.deadline.minutes}m) has passed. ${pointer}`,
+        pointer,
+      });
     } else {
-      lines.push(
-        `- Convergence deadline (${verdict.deadline.minutes}m) has passed and waivers are not enabled (mode "${verdict.waiver.mode}"). Hold for a maintainer.`,
-      );
+      const pointer = 'Hold for a maintainer.';
+      items.push({
+        token: T.HOLD_DEADLINE,
+        summary: `Convergence deadline (${verdict.deadline.minutes}m) has passed and waivers are not enabled (mode "${verdict.waiver.mode}"). ${pointer}`,
+        pointer,
+      });
     }
   }
   if (verdict.sameHeadReroll.requestable) {
-    lines.push(
-      `- Same-HEAD reroll is still requestable. Diagnose and rerun one instance at a time: node scripts/rerun-advisory-convergence.mjs --pr ${pr}`,
-    );
+    const pointer = `node scripts/rerun-advisory-convergence.mjs --pr ${pr}`;
+    items.push({
+      token: T.SAME_HEAD_REROLL,
+      summary: `Same-HEAD reroll is still requestable. Diagnose and rerun one instance at a time: ${pointer}`,
+      pointer,
+    });
   }
-  if (lines.length === 1) {
-    lines.push(
-      `- Re-read the JSON verdict on stdout and follow idd-advisory-wait.instructions.md / idd-pre-merge.instructions.md F2. Then: node scripts/advisory-convergence.mjs --pr ${pr} --assert`,
-    );
+  if (items.length === 0) {
+    const pointer = `node scripts/advisory-convergence.mjs --pr ${pr} --assert`;
+    items.push({
+      token: T.REREAD_VERDICT,
+      summary: `Re-read the JSON verdict on stdout and follow idd-advisory-wait.instructions.md / idd-pre-merge.instructions.md F2. Then: ${pointer}`,
+      pointer,
+    });
+  }
+  return items;
+}
+/**
+ * Compact next-action guidance for a non-ready `--assert` verdict (#2142).
+ * Formats {@link collectAssertNextActions}; does not read
+ * `verdict.nextActions`, so a spread-mutated verdict stays consistent
+ * with its own fields. Empty when `ready` is true.
+ */
+export function formatAssertNextActions(verdict) {
+  const items = collectAssertNextActions(verdict);
+  if (items.length === 0) {
+    return '';
+  }
+  const lines = ['Next action (idd-advisory-convergence --assert failed):'];
+  for (const item of items) {
+    lines.push(`- ${item.summary}`);
+    if (item.pointer.includes('\n')) {
+      for (const extra of item.pointer.split('\n')) {
+        lines.push(`  ${extra}`);
+      }
+    }
   }
   return `${lines.join('\n')}\n`;
 }

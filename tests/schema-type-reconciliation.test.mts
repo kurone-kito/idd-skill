@@ -264,6 +264,7 @@ export const advisoryConvergenceKeys = [
   'waived',
   'ready',
   'reasons',
+  'nextActions',
 ] as const satisfies readonly (keyof AdvisoryConvergenceVerdict)[];
 
 export const advisoryWaitStateKeys = [
@@ -619,6 +620,7 @@ const advisoryConvergenceFixture = {
   waived: false,
   ready: true,
   reasons: [],
+  nextActions: [],
 } satisfies AdvisoryConvergenceVerdict;
 
 const advisoryWaitStateFixture = {
