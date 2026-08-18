@@ -39,6 +39,10 @@ const SAMPLE_NAMES = [
   'IDD_AGENT_DERIVED_MARKERS',
   'isValidIsoTimestamp',
   'OPERATIONAL_MARKERS',
+  'REVIEW_REPLY_STAMP_SUFFIX',
+  'hasReviewReplyStamp',
+  'appendReviewReplyStamp',
+  'isIddOriginatedReply',
 ] as const;
 
 test('protocol-helpers re-exports every sampled marker-helpers name by identity', () => {

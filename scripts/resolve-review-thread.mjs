@@ -21,6 +21,8 @@ import {
   readForcedHandoffMode,
 } from './collaborator-permission.mjs';
 import { DEFAULT_GH_PAGINATED_TIMEOUT_MS, ghText } from './gh-exec.mjs';
+import { loadIddConfig } from './idd-config.mjs';
+import { appendReviewReplyStamp } from './marker-helpers.mjs';
 import {
   isDispositionComment,
   isRejectionConfirmedDisposition,
@@ -182,7 +184,8 @@ thread in one invocation (E13). Dry-run by default; --apply mutates.
   --comment-id <id>              review comment REST id whose thread to resolve (required)
   --body <text>                  reply body (required with --apply; with --apply, must start
                                  with **Accepted**, **Rejected**, or
-                                 **Rejection confirmed by maintainer** —)
+                                 **Rejection confirmed by maintainer** —; the helper
+                                 appends the reply-identity stamp)
   --owner <owner>                repo owner (default: gh repo view)
   --repo <repo>                  repo name (default: gh repo view)
   --claim-issue <number>         issue carrying the active claim (required with --apply)
@@ -193,9 +196,6 @@ thread in one invocation (E13). Dry-run by default; --apply mutates.
   --apply                        post the reply and resolve the thread (default: dry-run)
   -h, --help                     show this help
 `;
-function ghJson(args) {
-  return JSON.parse(ghText(args));
-}
 /**
  * Fetch a paginated list endpoint as an array. `gh api --paginate` concatenates
  * one JSON array per page; `--jq '.[]'` flattens each page to one JSON value per
@@ -340,14 +340,22 @@ function fetchThreadCommentIds(threadId, afterCursor) {
 }
 /** Post a reply to the review thread that owns `commentId` (REST). */
 function postReply(owner, repo, pr, commentId, body) {
-  return ghJson([
-    'api',
-    '--method',
-    'POST',
-    `repos/${owner}/${repo}/pulls/${pr}/comments/${commentId}/replies`,
-    '-f',
-    `body=${body}`,
-  ]);
+  // JSON `--input -` is required: the reply-identity stamp is an HTML
+  // comment after the visible disposition, so `-f body=` can drop or
+  // truncate the multiline body.
+  return JSON.parse(
+    ghText(
+      [
+        'api',
+        '--method',
+        'POST',
+        `repos/${owner}/${repo}/pulls/${pr}/comments/${commentId}/replies`,
+        '--input',
+        '-',
+      ],
+      { input: JSON.stringify({ body }) },
+    ),
+  );
 }
 /** Resolve a review thread by its GraphQL node id, confirming the result. */
 function resolveThread(threadId) {
@@ -457,6 +465,17 @@ if (import.meta.main) {
   }
   const pr = args.pr;
   const commentId = args.commentId;
+  const markerPrefixRaw = loadIddConfig()?.markerPrefix;
+  // `--body` is optional in dry-run. `parseCliArgs` defaults it to '', but
+  // coerce anyway so a missing value cannot throw on `.trim()` before the
+  // report is written.
+  const rawBody = typeof args.body === 'string' ? args.body : '';
+  const stampedBody = rawBody.trim()
+    ? appendReviewReplyStamp(
+        rawBody,
+        typeof markerPrefixRaw === 'string' ? markerPrefixRaw : undefined,
+      )
+    : '';
   const owner =
     args.owner ||
     ghText(['repo', 'view', '--json', 'owner', '--jq', '.owner.login']);
@@ -472,6 +491,7 @@ if (import.meta.main) {
     commentId,
     ...(match ? { threadId: match.threadId } : {}),
     alreadyResolved: match?.isResolved ?? false,
+    ...(stampedBody ? { body: stampedBody } : {}),
   };
   if (!match) {
     report.error = `no review thread found for comment ${commentId} on PR #${pr}`;
@@ -566,7 +586,7 @@ if (import.meta.main) {
         }
       },
       postReply: () => {
-        const posted = postReply(owner, repo, pr, rootCommentId, args.body);
+        const posted = postReply(owner, repo, pr, rootCommentId, stampedBody);
         postedReplyId = posted.id;
         return posted;
       },

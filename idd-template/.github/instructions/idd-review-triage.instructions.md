@@ -258,6 +258,13 @@ separate PATH A signal, not part of this pairing):
   marker fails this on its own — the fence delimiters, not the marker,
   are the first bytes), or the gate counts zero dispositions for that
   comment.
+- After the visible prefix, include the prefix-aware reply-identity
+  stamp
+  `<!-- {markerPrefix}-review-reply -->`
+  (use the repository `markerPrefix`, default `idd-skill`; helpers
+  inject it; a manual `gh api` JSON body must append it). The stamp is
+  utterance identity, not an E1 `review-watermark`, and it must not
+  replace the required `**Accepted**` / `**Rejected**` first bytes.
 - Post **one disposition reply per advisory item** — never combine
   several markers into one comment; the 1:1 pairing clears only one item
   per comment, leaving the rest flagged `missing-disposition-evidence`.

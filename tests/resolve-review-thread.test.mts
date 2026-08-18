@@ -20,6 +20,12 @@ const REPO_ROOT = fileURLToPath(new URL('..', import.meta.url));
 
 const resultSchema = loadJson('schemas/resolve-review-thread.schema.json');
 
+test('parseArgs defaults a missing --body to an empty string for dry-run', () => {
+  const args = parseArgs(['--pr', '42', '--comment-id', '1001']);
+  assert.equal(args.body, '');
+  assert.equal(args.body.trim(), '');
+});
+
 test('parseArgs reads the call shape and defaults to dry-run', () => {
   const args = parseArgs([
     '--pr',
@@ -412,6 +418,7 @@ test('the dry-run and apply output envelopes validate against the schema', () =>
     alreadyResolved: false,
     status: 'applied',
     replyId: 4242,
+    body: '**Accepted** — fixed in abc\n\n<!-- idd-skill-review-reply -->',
   };
   assert.equal(validate(apply, resultSchema).length, 0, 'apply output');
 });

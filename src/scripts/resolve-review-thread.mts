@@ -23,6 +23,8 @@ import {
   readForcedHandoffMode,
 } from './collaborator-permission.mts';
 import { DEFAULT_GH_PAGINATED_TIMEOUT_MS, ghText } from './gh-exec.mts';
+import { loadIddConfig } from './idd-config.mts';
+import { appendReviewReplyStamp } from './marker-helpers.mts';
 import {
   isDispositionComment,
   isRejectionConfirmedDisposition,
@@ -64,6 +66,12 @@ export interface ResolveReviewThreadReport {
   /** Omitted when no review thread owns the comment. */
   threadId?: string;
   alreadyResolved: boolean;
+  /**
+   * Reply body that will be posted (dry-run) or was posted (apply),
+   * including the injected reply-identity stamp. Omitted when `--body`
+   * is empty.
+   */
+  body?: string;
   status?: 'applied' | 'failed';
   replyId?: number;
   error?: string;
@@ -261,7 +269,8 @@ thread in one invocation (E13). Dry-run by default; --apply mutates.
   --comment-id <id>              review comment REST id whose thread to resolve (required)
   --body <text>                  reply body (required with --apply; with --apply, must start
                                  with **Accepted**, **Rejected**, or
-                                 **Rejection confirmed by maintainer** —)
+                                 **Rejection confirmed by maintainer** —; the helper
+                                 appends the reply-identity stamp)
   --owner <owner>                repo owner (default: gh repo view)
   --repo <repo>                  repo name (default: gh repo view)
   --claim-issue <number>         issue carrying the active claim (required with --apply)
@@ -272,10 +281,6 @@ thread in one invocation (E13). Dry-run by default; --apply mutates.
   --apply                        post the reply and resolve the thread (default: dry-run)
   -h, --help                     show this help
 `;
-
-function ghJson(args: string[]): unknown {
-  return JSON.parse(ghText(args));
-}
 
 /**
  * Fetch a paginated list endpoint as an array. `gh api --paginate` concatenates
@@ -462,14 +467,22 @@ function postReply(
   commentId: number,
   body: string,
 ): { id: number } {
-  return ghJson([
-    'api',
-    '--method',
-    'POST',
-    `repos/${owner}/${repo}/pulls/${pr}/comments/${commentId}/replies`,
-    '-f',
-    `body=${body}`,
-  ]) as { id: number };
+  // JSON `--input -` is required: the reply-identity stamp is an HTML
+  // comment after the visible disposition, so `-f body=` can drop or
+  // truncate the multiline body.
+  return JSON.parse(
+    ghText(
+      [
+        'api',
+        '--method',
+        'POST',
+        `repos/${owner}/${repo}/pulls/${pr}/comments/${commentId}/replies`,
+        '--input',
+        '-',
+      ],
+      { input: JSON.stringify({ body }) },
+    ),
+  ) as { id: number };
 }
 
 /** Resolve a review thread by its GraphQL node id, confirming the result. */
@@ -590,6 +603,17 @@ if (import.meta.main) {
   }
   const pr = args.pr as number;
   const commentId = args.commentId as number;
+  const markerPrefixRaw = loadIddConfig()?.markerPrefix;
+  // `--body` is optional in dry-run. `parseCliArgs` defaults it to '', but
+  // coerce anyway so a missing value cannot throw on `.trim()` before the
+  // report is written.
+  const rawBody = typeof args.body === 'string' ? args.body : '';
+  const stampedBody = rawBody.trim()
+    ? appendReviewReplyStamp(
+        rawBody,
+        typeof markerPrefixRaw === 'string' ? markerPrefixRaw : undefined,
+      )
+    : '';
   const owner =
     args.owner ||
     ghText(['repo', 'view', '--json', 'owner', '--jq', '.owner.login']);
@@ -607,6 +631,7 @@ if (import.meta.main) {
     commentId,
     ...(match ? { threadId: match.threadId } : {}),
     alreadyResolved: match?.isResolved ?? false,
+    ...(stampedBody ? { body: stampedBody } : {}),
   };
 
   if (!match) {
@@ -708,7 +733,7 @@ if (import.meta.main) {
         }
       },
       postReply: () => {
-        const posted = postReply(owner, repo, pr, rootCommentId, args.body);
+        const posted = postReply(owner, repo, pr, rootCommentId, stampedBody);
         postedReplyId = posted.id;
         return posted;
       },

@@ -21,6 +21,8 @@
 // moving them here would force exactly that forbidden back-import. Only the
 // single-marker parse/render primitives move in this wave.
 
+import { createMarkerRegex, escapeRegex } from './marker-regex.mts';
+
 /** Operational marker matcher entry. */
 export interface OperationalMarker {
   label: string;
@@ -367,6 +369,102 @@ export const IDD_AGENT_DERIVED_MARKERS: ReadonlySet<string> = new Set([
   'review-ack:',
   'copilot-unavailable:',
 ]);
+
+// ---------------------------------------------------------------------------
+// Review-reply identity stamp (#2135)
+//
+// Utterance identity on a visible E6/E13 reply body — not an E1 activity
+// snapshot. Deliberately absent from OPERATIONAL_MARKERS and
+// IDD_AGENT_DERIVED_MARKERS so F4 minimization never hides a stamped
+// disposition as OUTDATED and deriveIddAgentLogins never treats the stamp
+// as a first-bytes operational marker. The token rides AFTER the visible
+// **Accepted** / **Rejected** prefix; first bytes stay the disposition.
+// ---------------------------------------------------------------------------
+
+/** Distributed default `markerPrefix` when config is absent. */
+const DEFAULT_REVIEW_REPLY_MARKER_PREFIX = 'idd-skill';
+
+/**
+ * Suffix passed to {@link createMarkerRegex} for the reply-identity stamp.
+ * Must not be `watermark` or `review-watermark` — those are the E1 snapshot.
+ */
+export const REVIEW_REPLY_STAMP_SUFFIX = 'review-reply';
+
+function normalizeReviewReplyMarkerPrefix(markerPrefix: unknown): string {
+  const trimmed = typeof markerPrefix === 'string' ? markerPrefix.trim() : '';
+  return trimmed.length > 0 ? trimmed : DEFAULT_REVIEW_REPLY_MARKER_PREFIX;
+}
+
+/** Render `<!-- {prefix}-review-reply -->` for the configured marker prefix. */
+export function renderReviewReplyStamp(
+  markerPrefix: string = DEFAULT_REVIEW_REPLY_MARKER_PREFIX,
+): string {
+  return `<!-- ${normalizeReviewReplyMarkerPrefix(markerPrefix)}-${REVIEW_REPLY_STAMP_SUFFIX} -->`;
+}
+
+/**
+ * True when `body` carries a prefix-aware `review-reply` stamp anywhere
+ * (typically after the visible disposition). Mid-body match is required:
+ * the stamp is not first-bytes. The stamp has no payload, so after the
+ * shared `createMarkerRegex` hit we require the matched comment to be
+ * exactly `<!-- {prefix}-review-reply -->` (optional whitespace). That
+ * rejects suffix extensions such as `review-reply-extra` that `\b`
+ * would otherwise accept before a hyphen.
+ */
+export function hasReviewReplyStamp(
+  body: string,
+  markerPrefix: string = DEFAULT_REVIEW_REPLY_MARKER_PREFIX,
+): boolean {
+  const prefix = normalizeReviewReplyMarkerPrefix(markerPrefix);
+  const coarse = createMarkerRegex(prefix, REVIEW_REPLY_STAMP_SUFFIX);
+  const exact = new RegExp(
+    `^<!--\\s*${escapeRegex(prefix)}-${REVIEW_REPLY_STAMP_SUFFIX}\\s*-->$`,
+    'i',
+  );
+  // createMarkerRegex is non-global and will stop at the first suffix
+  // lookalike. Scan every match so an earlier `review-reply-extra` does
+  // not hide a later valid stamp (and so append stays idempotent).
+  const global = new RegExp(coarse.source, 'gi');
+  for (const match of (body ?? '').matchAll(global)) {
+    if (exact.test(match[0])) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Classify a comment as IDD-originated from the reply-identity stamp alone.
+ * Ordinary human prose (`LGTM`, `thanks, fixed`) is not originated. A
+ * well-formed stamp is sufficient; this does not inspect author login and
+ * does not satisfy Copilot Clause 2 by itself (that still needs a valid
+ * disposition body).
+ */
+export function isIddOriginatedReply(
+  body: string,
+  markerPrefix: string = DEFAULT_REVIEW_REPLY_MARKER_PREFIX,
+): boolean {
+  return hasReviewReplyStamp(body, markerPrefix);
+}
+
+/**
+ * Append the reply-identity stamp after a visible reply body. Empty input
+ * is left unchanged. Already-stamped input is not double-stamped. The
+ * visible first bytes are preserved so `isDispositionComment` still matches.
+ */
+export function appendReviewReplyStamp(
+  body: string,
+  markerPrefix: string = DEFAULT_REVIEW_REPLY_MARKER_PREFIX,
+): string {
+  const text = body ?? '';
+  if (text.trim() === '') {
+    return text;
+  }
+  if (hasReviewReplyStamp(text, markerPrefix)) {
+    return text;
+  }
+  return `${text.replace(/\s+$/, '')}\n\n${renderReviewReplyStamp(markerPrefix)}`;
+}
 
 const FORCED_HANDOFF_CONTEXT_SCOPES = new Set(['issue-only', 'issue-plus-pr']);
 const FORCED_HANDOFF_LINKED_PR_PATTERN = /^(?:[1-9]\d*|https?:\/\/[^\s<>"]+)$/;
