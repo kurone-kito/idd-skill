@@ -16,6 +16,12 @@ discipline and has no tag.
 
 ### Added
 
+- Present-tense hybrid review-reply identity contract on the
+  operator docs: IDD replies carry the prefix-aware stamp (not an
+  E1 `review-watermark`); unmarked human replies on human threads
+  are presence-only; Copilot threads still need an IDD disposition;
+  the required `idd-advisory-convergence` job is not created by
+  unmarked human review chatter; `reviewPolicy` is honored.
 - Prefix-aware review-reply identity stamp
   (`<!-- {markerPrefix}-review-reply -->`) for IDD-originated E6/E13
   replies, with helper injection and a shared recognizer. The stamp
