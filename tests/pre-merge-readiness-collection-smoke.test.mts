@@ -183,13 +183,20 @@ const REVIEWS_AND_HEAD_COMMIT_COMMITTED_DATE = '2026-07-31T23:00:00Z';
  * `threadResolved` is the one field that differs between the clean and
  * blocked scenarios (see the two tests below).
  */
-function buildStubGhScript(threadResolved: boolean): string {
+function buildStubGhScript(
+  threadResolved: boolean,
+  options: {
+    closingIssuesReferences?: unknown[];
+    failOnClaimComments?: boolean;
+  } = {},
+): string {
   const prView = {
     headRefOid: 'a'.repeat(40),
     baseRefName: BASE_REF,
     url: `https://github.com/${REPO_REF}/pull/${PR_NUMBER}`,
     author: { login: 'author-user' },
     reviewDecision: 'APPROVED',
+    closingIssuesReferences: options.closingIssuesReferences ?? [],
     statusCheckRollup: [
       {
         __typename: 'CheckRun',
@@ -317,7 +324,9 @@ if (a(0) === 'api' && a(1) === '${`repos/${REPO_REF}/pulls/${PR_NUMBER}/reviews`
 if (a(0) === 'api' && a(1) === '${`repos/${REPO_REF}/pulls/${PR_NUMBER}/requested_reviewers`}') out('{"users":[]}');
 if (a(0) === 'api' && a(1) === '${`repos/${REPO_REF}/issues/${PR_NUMBER}/timeline`}') out('');
 if (a(0) === 'api' && a(1) === '${`repos/${REPO_REF}/issues/${PR_NUMBER}/comments`}') out(${JSON.stringify(ndjson(prComments))});
-if (a(0) === 'api' && a(1) === '${`repos/${REPO_REF}/issues/${CLAIM_ISSUE}/comments`}') out(${JSON.stringify(ndjson(claimComments))});
+if (a(0) === 'api' && a(1) === '${`repos/${REPO_REF}/issues/${CLAIM_ISSUE}/comments`}') {
+  ${options.failOnClaimComments ? "process.stderr.write('claim comments must not be fetched under --claimless\\\\n'); process.exit(1);" : `out(${JSON.stringify(ndjson(claimComments))});`}
+}
 if (a(0) === 'api' && a(1) === 'graphql' && args.join(' ').includes('reviewThreads')) out(${JSON.stringify(JSON.stringify(reviewThreadsPayload))});
 if (a(0) === 'api' && a(1) === 'graphql' && args.join(' ').includes('committedDate')) out(${JSON.stringify(JSON.stringify(reviewsAndHeadCommitPayload))});
 if (a(0) === 'api' && a(1) === '${`repos/${REPO_REF}/pulls/${PR_NUMBER}/files`}') out(${JSON.stringify(ndjson(changedFiles))});
@@ -437,6 +446,114 @@ test('pre-merge-readiness.mjs CLI: clean scenario collects and normalizes raw gh
     precondition.headCommittedAt,
     REVIEWS_AND_HEAD_COMMIT_COMMITTED_DATE,
   );
+});
+
+test('pre-merge-readiness.mjs CLI: --claimless on an empty-references PR skips claim fetch (#2017)', () => {
+  const tempRoot = mkdtempSync(join(tmpdir(), 'idd-pre-merge-claimless-cli-'));
+  const cwdRoot = mkdtempSync(join(tmpdir(), 'idd-pre-merge-claimless-cwd-'));
+  try {
+    const ghPath = join(tempRoot, 'gh');
+    writeFileSync(
+      ghPath,
+      buildStubGhScript(true, { failOnClaimComments: true }),
+    );
+    chmodSync(ghPath, 0o755);
+    const output = execFileSync(
+      process.execPath,
+      [
+        join(REPO_ROOT, 'scripts/pre-merge-readiness.mjs'),
+        '--pr',
+        String(PR_NUMBER),
+        '--claimless',
+        '--owner',
+        OWNER,
+        '--repo',
+        REPO,
+        '--now',
+        '2026-08-01T00:00:00Z',
+      ],
+      {
+        cwd: cwdRoot,
+        encoding: 'utf8',
+        env: { ...process.env, PATH: `${tempRoot}:${process.env.PATH ?? ''}` },
+        timeout: 60_000,
+      },
+    );
+    const report = JSON.parse(output) as {
+      claim: {
+        reason: string;
+        claimLost: boolean;
+        expectedClaimId: string;
+        activeClaim: { claimId: string };
+      };
+      ci: unknown;
+      reviewCurrency: unknown;
+      advisoryWait: unknown;
+      threads: unknown;
+      branchCurrency: unknown;
+    };
+    assert.equal(report.claim.reason, 'not-applicable');
+    assert.equal(report.claim.claimLost, false);
+    assert.equal(report.claim.expectedClaimId, 'none');
+    assert.equal(report.claim.activeClaim.claimId, 'none');
+    assert.ok(report.ci);
+    assert.ok(report.reviewCurrency);
+    assert.ok(report.advisoryWait);
+    assert.ok(report.threads);
+    assert.ok(report.branchCurrency);
+  } finally {
+    rmSync(tempRoot, { recursive: true, force: true });
+    rmSync(cwdRoot, { recursive: true, force: true });
+  }
+});
+
+test('pre-merge-readiness.mjs CLI: --claimless fails closed when closingIssuesReferences is non-empty (#2017)', () => {
+  const tempRoot = mkdtempSync(join(tmpdir(), 'idd-pre-merge-claimless-fail-'));
+  const cwdRoot = mkdtempSync(
+    join(tmpdir(), 'idd-pre-merge-claimless-fail-cwd-'),
+  );
+  try {
+    const ghPath = join(tempRoot, 'gh');
+    writeFileSync(
+      ghPath,
+      buildStubGhScript(true, {
+        closingIssuesReferences: [{ number: 99 }],
+        failOnClaimComments: true,
+      }),
+    );
+    chmodSync(ghPath, 0o755);
+    assert.throws(
+      () =>
+        execFileSync(
+          process.execPath,
+          [
+            join(REPO_ROOT, 'scripts/pre-merge-readiness.mjs'),
+            '--pr',
+            String(PR_NUMBER),
+            '--claimless',
+            '--owner',
+            OWNER,
+            '--repo',
+            REPO,
+            '--now',
+            '2026-08-01T00:00:00Z',
+          ],
+          {
+            cwd: cwdRoot,
+            encoding: 'utf8',
+            env: {
+              ...process.env,
+              PATH: `${tempRoot}:${process.env.PATH ?? ''}`,
+            },
+            timeout: 60_000,
+          },
+        ),
+      /closingIssuesReferences/,
+    );
+  } finally {
+    rmSync(tempRoot, { recursive: true, force: true });
+    rmSync(cwdRoot, { recursive: true, force: true });
+  }
 });
 
 test('pre-merge-readiness.mjs CLI: blocked scenario (one unresolved review thread) surfaces it end-to-end', () => {

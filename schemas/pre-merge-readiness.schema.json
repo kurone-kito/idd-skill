@@ -1071,7 +1071,8 @@
             "missing-active-claim",
             "claim-id-mismatch",
             "agent-id-mismatch",
-            "activation-nonce-mismatch"
+            "activation-nonce-mismatch",
+            "not-applicable"
           ]
         }
       }

@@ -6476,6 +6476,22 @@ test('parseArgs: valid --pr / --claim-issue parse to positive integers', () => {
   const args = parseArgs(['--pr', '1082', '--claim-issue', '1076']);
   assert.equal(args.prNumber, 1082);
   assert.equal(args.claimIssueNumber, 1076);
+  assert.equal(args.claimless, false);
+});
+
+test('parseArgs: --claimless is accepted alone and rejects claim flags (#2017)', () => {
+  const args = parseArgs(['--pr', '1082', '--claimless']);
+  assert.equal(args.prNumber, 1082);
+  assert.equal(args.claimIssueNumber, null);
+  assert.equal(args.claimless, true);
+  assert.throws(
+    () => parseArgs(['--pr', '1082', '--claimless', '--claim-issue', '1076']),
+    /--claimless cannot be combined with --claim-issue/,
+  );
+  assert.throws(
+    () => parseArgs(['--pr', '1082', '--claimless', '--claim-id', 'abc']),
+    /--claimless cannot be combined with --claim-id/,
+  );
 });
 
 test('parseArgs: --nonce (#1528) defaults to empty and round-trips when given', () => {
@@ -6515,6 +6531,31 @@ test('parseArgs: a non-positive / non-integer number throws a clear message', ()
   assert.throws(
     () => parseArgs(['--claim-issue', '0']),
     /invalid --claim-issue value/,
+  );
+});
+
+test('buildPreMergeReadinessSummary: claimless emits not-applicable ownership (#2017)', () => {
+  const fixture = readJson('fixtures/pre-merge-readiness/clean.json');
+  const summary = buildPreMergeReadinessSummary(fixture.input, {
+    ...fixture.options,
+    claimless: true,
+  });
+  const claim = summary.claim as {
+    reason: string;
+    claimLost: boolean;
+    expectedClaimId: string;
+    activeClaimPresent: boolean;
+    activeClaim: { claimId: string };
+  };
+  assert.equal(claim.reason, 'not-applicable');
+  assert.equal(claim.claimLost, false);
+  assert.equal(claim.expectedClaimId, 'none');
+  assert.equal(claim.activeClaimPresent, false);
+  assert.equal(claim.activeClaim.claimId, 'none');
+  const blockers = summary.blockers as { gate: string }[];
+  assert.equal(
+    blockers.some((blocker) => blocker.gate === 'claim-ownership'),
+    false,
   );
 });
 

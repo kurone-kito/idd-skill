@@ -153,6 +153,7 @@ const PRE_MERGE_READINESS_FLAG_SPEC = {
   '--expected-agent-id': { type: 'string' },
   '--nonce': { type: 'string' },
   '--now': { type: 'string' },
+  '--claimless': { type: 'boolean', default: false },
   '--help': { type: 'boolean', short: 'h' },
 };
 /**
@@ -174,7 +175,7 @@ export function collectPreMergeReadiness(argv) {
   if (!args.prNumber) {
     throw new Error('missing required --pr <number> argument');
   }
-  if (!args.claimIssueNumber) {
+  if (!args.claimless && !args.claimIssueNumber) {
     throw new Error('missing required --claim-issue <number> argument');
   }
   const owner =
@@ -222,7 +223,7 @@ export function collectPreMergeReadiness(argv) {
     // new network round-trip) so the branch-currency gate below can pair a
     // live `BEHIND` state with the up-to-date-head requirement resolved
     // from `branchRules`/`branchProtection`.
-    'headRefOid,baseRefName,url,author,reviewDecision,statusCheckRollup,mergeable,mergeStateStatus',
+    'headRefOid,baseRefName,url,author,reviewDecision,statusCheckRollup,mergeable,mergeStateStatus,closingIssuesReferences',
     '--jq',
     '.',
   ]);
@@ -233,6 +234,16 @@ export function collectPreMergeReadiness(argv) {
   const reviewDecision = String(pr.reviewDecision ?? '');
   const mergeable = String(pr.mergeable ?? '');
   const mergeStateStatus = String(pr.mergeStateStatus ?? '');
+  if (args.claimless) {
+    const closingRefs = Array.isArray(pr.closingIssuesReferences)
+      ? pr.closingIssuesReferences
+      : [];
+    if (closingRefs.length > 0) {
+      throw new Error(
+        '--claimless requires a PR with no closingIssuesReferences; pass --claim-issue instead',
+      );
+    }
+  }
   const encodedBaseRefName = encodeURIComponent(baseRefName);
   // #1483: sourced from the same `gh pr view` call above (the
   // `statusCheckRollup` field), not a separate `gh pr checks` call --
@@ -300,10 +311,12 @@ export function collectPreMergeReadiness(argv) {
     `repos/${owner}/${repo}/issues/${args.prNumber}/comments`,
     true,
   );
-  const claimComments = ghApiJson(
-    `repos/${owner}/${repo}/issues/${args.claimIssueNumber}/comments`,
-    true,
-  );
+  const claimComments = args.claimless
+    ? []
+    : ghApiJson(
+        `repos/${owner}/${repo}/issues/${args.claimIssueNumber}/comments`,
+        true,
+      );
   const threads = fetchReviewThreads(owner, repo, args.prNumber);
   const changedFiles = ghApiJson(
     `repos/${owner}/${repo}/pulls/${args.prNumber}/files`,
@@ -490,6 +503,7 @@ export function collectPreMergeReadiness(argv) {
       expectedClaimId: args.expectedClaimId,
       expectedAgentId: args.expectedAgentId,
       expectedNonce: args.nonce,
+      claimless: args.claimless,
       includeDispositionEvidence: true,
       requestCap: advisoryWaitPolicy.requestCap,
       pendingWindowMinutes: advisoryWaitPolicy.pendingWindowMinutes,
@@ -635,6 +649,13 @@ export function parseArgs(argv) {
   if (expectedAgentIdToken !== undefined) {
     warnDeprecatedFlag('--expected-agent-id', '--agent-id');
   }
+  const claimless = Boolean(values.claimless);
+  if (claimless && values['claim-issue'] !== undefined) {
+    throw new Error('--claimless cannot be combined with --claim-issue');
+  }
+  if (claimless && claimId) {
+    throw new Error('--claimless cannot be combined with --claim-id');
+  }
   return {
     prNumber: requirePositiveInteger(values.pr, '--pr'),
     claimIssueNumber: requirePositiveInteger(
@@ -651,11 +672,13 @@ export function parseArgs(argv) {
     nonce: values.nonce ?? '',
     now: values.now ?? '',
     help,
+    claimless: Boolean(values.claimless),
   };
 }
 function printHelp() {
   process.stdout.write(`Usage:
   node scripts/pre-merge-readiness.mjs --pr <number> --claim-issue <number> [--owner <owner>] [--repo <repo>] [--trusted-marker-logins <login1,login2>] [--idd-agent-logins <login1,login2>] [--advisory-bot-logins <login1,login2>] [--claim-id <claim-id>] [--agent-id <agent-id>] [--nonce <token>] [--now <ISO8601>]
+  node scripts/pre-merge-readiness.mjs --pr <number> --claimless [--owner <owner>] [--repo <repo>] [--trusted-marker-logins <login1,login2>] [--idd-agent-logins <login1,login2>] [--advisory-bot-logins <login1,login2>] [--now <ISO8601>]
   Deprecated aliases (one release): --expected-claim-id -> --claim-id, --expected-agent-id -> --agent-id
 
   --nonce <token>  this session's own recorded activation-nonce (#1522): when
@@ -665,6 +688,10 @@ function printHelp() {
                     catching a second, independent activation of the same
                     claim-id as a collision. Omit --nonce, or leave it empty,
                     to skip this comparison entirely (backward compatible).
+  --claimless      skip claim fetch/revalidation (#2017). Only for a PR
+                    whose closingIssuesReferences is empty; cannot combine
+                    with --claim-issue or --claim-id. Claim-ownership in
+                    the report is the not-applicable / unclaimed shape.
 `);
 }
 /**
