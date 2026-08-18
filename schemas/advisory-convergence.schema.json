@@ -23,7 +23,8 @@
     "converged",
     "waived",
     "ready",
-    "reasons"
+    "reasons",
+    "nextActions"
   ],
   "additionalProperties": false,
   "properties": {
@@ -378,6 +379,45 @@
       "type": "array",
       "description": "Human-readable strings explaining every unmet condition, accumulated in evaluation order.",
       "items": { "type": "string" }
+    },
+    "nextActions": {
+      "type": "array",
+      "description": "Structured next-action catalog (#2143) shared with the stderr --assert failure block. Empty exactly when ready is true. Never feeds ready. Each item is a stable token, a one-line English summary, and the command or phase pointer the stderr block already printed.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["token", "summary", "pointer"],
+        "properties": {
+          "token": {
+            "type": "string",
+            "description": "Stable machine-readable token naming which catalog branch produced this item.",
+            "enum": [
+              "indeterminate-applicability",
+              "request-review",
+              "request-re-review",
+              "disposition-posted-items",
+              "disposition-threads",
+              "ack-suppressed",
+              "waiver-terminal",
+              "hold-terminal",
+              "waiver-deadline",
+              "hold-deadline",
+              "same-head-reroll",
+              "reread-verdict"
+            ]
+          },
+          "summary": {
+            "type": "string",
+            "description": "One-line English summary of the recovery step.",
+            "minLength": 1
+          },
+          "pointer": {
+            "type": "string",
+            "description": "Concrete command or phase pointer already printed on the stderr block for this branch. Multi-command pointers are newline-separated.",
+            "minLength": 1
+          }
+        }
+      }
     }
   }
 }

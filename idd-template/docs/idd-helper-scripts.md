@@ -134,10 +134,14 @@ In the idd-skill source repository, the following optional helpers were adopted:
   English next-action block is written to stderr _before_ that JSON so
   a GitHub Actions log surfaces the recovery command first (`#2142`).
   The block is derived from verdict fields, not from rewriting
-  `reasons[]`. Under `GITHUB_ACTIONS=true` a `::notice::` line is
-  added as extra surfacing; it is not a substitute for the stderr
-  block. `reasons[]` wording and the `--assert` exit-code contract
-  stay unchanged.
+  `reasons[]`. The same catalog is also emitted on the verdict as
+  `nextActions` (`#2143`): each item is a stable `token`, a one-line
+  English `summary`, and the command or phase `pointer` the stderr
+  block already printed. A ready verdict has `nextActions: []`; `ready`
+  does not depend on the field. Under `GITHUB_ACTIONS=true` a
+  `::notice::` line is added as extra surfacing; it is not a substitute
+  for the stderr block. `reasons[]` wording and the `--assert`
+  exit-code contract stay unchanged.
 - `scripts/rerun-advisory-convergence.mjs` (#1431) for a rerun-plan
   diagnosis of stuck `idd-advisory-convergence` check-run rollups,
   read-only by default: fetches every check-run instance for a PR's
@@ -1874,6 +1878,14 @@ reflexively as any other CLI option.
   exits non-zero unless `ready` is `true` (`ready = not_applicable ||
   converged || ((deadline passed || terminal-unavailable) && validly
   waived)`).
+- **Structured `nextActions` (`#2143`)**: the verdict also reports a
+  `nextActions` array populated from the same catalog the `--assert`
+  failure stderr block uses (`collectAssertNextActions`). Each item
+  has `token` (stable enum), `summary` (one-line English), and
+  `pointer` (the command or phase pointer already printed on stderr;
+  multi-command pointers are newline-separated). Ready verdicts emit
+  `nextActions: []`. `ready` does not depend on this field, and
+  `reasons[]` stays diagnostic state -- do not overload it.
 - **Review-policy applicability (`#2137`)**: this helper reads
   `reviewPolicy` from `.github/idd/config.json`. Exact
   `human-required` or `no-advisory` classifies the PR `not_applicable`
