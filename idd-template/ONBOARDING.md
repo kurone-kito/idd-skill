@@ -1396,9 +1396,10 @@ refresh the required run. This is `idd-advisory-convergence`, not
 `lint.yml`.
 The shipped hybrid contract is present-tense: IDD replies carry
 `<!-- {markerPrefix}-review-reply -->` after the visible
-disposition prefix (this is **not** the E1 `review-watermark`);
-unmarked human replies on human threads are presence-only; Copilot
-threads still need an IDD disposition;
+disposition body (this is **not** the E1 `review-watermark`);
+unmarked human replies on human threads are presence-only and do
+not let the owning session post bare prose on its own items;
+Copilot threads still need an IDD disposition;
 `reviewPolicy: human-required` / `no-advisory` makes Copilot clauses
 `not_applicable`. See
 [Hybrid review-reply identity](docs/idd-review-policy-profiles.md#hybrid-review-reply-identity-shipped).

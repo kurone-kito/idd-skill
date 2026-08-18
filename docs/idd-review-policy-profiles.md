@@ -270,8 +270,8 @@ warning.
 
 - **IDD-originated reply identity.** An IDD disposition or E13 reply
   starts with the visible `**Accepted**` / `**Rejected**` (or
-  `**Awaiting maintainer decision**`) prefix. After that prefix it
-  carries the prefix-aware HTML-comment stamp
+  `**Awaiting maintainer decision**`) prefix. After the visible
+  disposition body it carries the prefix-aware HTML-comment stamp
   `<!-- {markerPrefix}-review-reply -->` (default `idd-skill`).
   Helpers such as `resolve-review-thread --apply` and
   `disposition-non-review-notices --apply` inject the stamp. A

@@ -179,8 +179,9 @@ chosen policy actually wants an advisory-bot gate.
 The shipped hybrid review-reply identity is documented in
 [Hybrid review-reply identity](idd-review-policy-profiles.md#hybrid-review-reply-identity-shipped):
 IDD replies carry `<!-- {markerPrefix}-review-reply -->` after the
-visible disposition prefix (not an E1 `review-watermark`); unmarked
-human replies on human threads are presence-only; Copilot threads
+visible disposition body (not an E1 `review-watermark`); unmarked
+human replies on human threads are presence-only and do not let the
+owning session post bare prose on its own items; Copilot threads
 still need an IDD disposition; the required job is not created by
 unmarked human review chatter.
 
