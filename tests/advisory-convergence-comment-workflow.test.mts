@@ -60,6 +60,11 @@ test('comment-refresh workflows are non-required and use a different job id', ()
     assert.match(text, /pull_request_review_comment:/);
     assert.match(text, /rerun-advisory-convergence/);
     assert.match(text, /review-comment-origin/);
+    assert.match(
+      text,
+      /cancel-in-progress:\s*false/,
+      `${path} must not cancel an in-flight IDD refresh`,
+    );
   }
 });
 

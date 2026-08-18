@@ -13,7 +13,9 @@
 #
 # Job id is deliberately NOT `idd-advisory-convergence`.
 concurrency:
-  cancel-in-progress: true
+  # Do not cancel: a later human LGTM must not abort an in-flight
+  # IDD-originated refresh before it reruns the required check (#2136).
+  cancel-in-progress: false
   group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
 name: IDD advisory-convergence comment refresh
 on:
@@ -37,6 +39,27 @@ jobs:
           ref: main
           fetch-depth: 1
           persist-credentials: false
+      - name: Assert Node.js floor
+        run: |
+          # Same engines.node floor as the required companion job so a
+          # stale runner cannot silently skip the IDD-originated rerun.
+          node -e '
+            const versionParts = process.versions.node.split(".");
+            const [major, minor, patch] = versionParts.map(Number);
+            const isPrerelease = versionParts.some((part) => part.includes("-"));
+            const ok =
+              !isPrerelease &&
+              ((major === 22 && (minor > 23 || (minor === 23 && patch >= 2))) ||
+                (major === 24 && minor >= 2) ||
+                major >= 26);
+            if (!ok) {
+              console.error(
+                "Node " + process.version + " does not satisfy this " +
+                "repository'"'"'s engines.node range (^22.23.2 || ^24.2.0 || >=26.0.0).",
+              );
+              process.exit(1);
+            }
+          '
       - name: Classify review comment
         id: origin
         env:

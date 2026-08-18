@@ -18,7 +18,9 @@
 # workflow. `defaults.run.shell` pins every `run:` step to `bash`.
 name: IDD advisory-convergence comment refresh
 concurrency:
-  cancel-in-progress: true
+  # Do not cancel: a later human LGTM must not abort an in-flight
+  # IDD-originated refresh before it reruns the required check (#2136).
+  cancel-in-progress: false
   group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
 on:
   pull_request_review_comment:
