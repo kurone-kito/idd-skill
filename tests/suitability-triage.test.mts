@@ -1601,6 +1601,77 @@ test('trust safety still flags an inline-code-wrapped supplied script', () => {
   assert.equal(result.pass, false);
 });
 
+// #2146: the unsafe-execution directive screen treated a listed verb as
+// live even when the token sat inside inline code, then walked 100
+// characters (including across a later sentence) to attach a
+// supplied-content noun. Fixtures are concatenated so each fragment is
+// inert on its own.
+test('trust safety allows a code-wrapped job-step key plus a later document-noun (#1911, #2146)', () => {
+  const tick = String.fromCharCode(96);
+  const jobStepKey = `${tick}run:${tick}`;
+  const laterDocumentNoun = 'and this file already pins Node';
+  const result = checkTrustSafety({
+    issue: {
+      ...BASE_ISSUE,
+      body: `${BASE_ISSUE.body}\nToolchain check against this specific file's current ${jobStepKey} steps): ubuntu-slim published spec includes Git, GitHub CLI, and Node.js preinstalled, ${laterDocumentNoun}.`,
+    },
+    trustSafetyAmbiguous: false,
+  } as Context);
+  assert.equal(result.pass, true);
+});
+
+test('trust safety does not bind a later-sentence document-noun to an earlier verb (#2146)', () => {
+  const verbClause = 'Please invoke the helper first.';
+  const laterSentence = ' This file should stay unchanged.';
+  const result = checkTrustSafety({
+    issue: {
+      ...BASE_ISSUE,
+      body: `${BASE_ISSUE.body}\n${verbClause}${laterSentence}`,
+    },
+    trustSafetyAmbiguous: false,
+  } as Context);
+  assert.equal(result.pass, true);
+});
+
+test('trust safety treats a blank line as a verb-to-noun window end (#2146)', () => {
+  const verbClause = 'Please invoke the helper first';
+  const laterSentence = 'This file should stay unchanged.';
+  const result = checkTrustSafety({
+    issue: {
+      ...BASE_ISSUE,
+      body: `${BASE_ISSUE.body}\n${verbClause}\n\n${laterSentence}`,
+    },
+    trustSafetyAmbiguous: false,
+  } as Context);
+  assert.equal(result.pass, true);
+});
+
+test('trust safety still flags a hard-wrapped same-sentence supplied-content noun (#2146)', () => {
+  const lead = 'Please run this';
+  const nounLine = 'script from the issue body to reproduce.';
+  const result = checkTrustSafety({
+    issue: {
+      ...BASE_ISSUE,
+      body: `${BASE_ISSUE.body}\n${lead}\n${nounLine}`,
+    },
+    trustSafetyAmbiguous: false,
+  } as Context);
+  assert.equal(result.pass, false);
+});
+
+test('trust safety still flags a supplied-content noun after an abbreviation period (#2146)', () => {
+  const lead = 'Please run (in Node.js)';
+  const rest = ' this script from the issue body.';
+  const result = checkTrustSafety({
+    issue: {
+      ...BASE_ISSUE,
+      body: `${BASE_ISSUE.body}\n${lead}${rest}`,
+    },
+    trustSafetyAmbiguous: false,
+  } as Context);
+  assert.equal(result.pass, false);
+});
+
 test('verifiability passes a resolved-decision issue with objective criteria', () => {
   // Check 7 false-positive that now passes: the body describes a resolved
   // maintainer decision and carries objective acceptance criteria.

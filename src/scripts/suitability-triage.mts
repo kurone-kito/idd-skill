@@ -21,6 +21,7 @@ import { loadPolicyConfig } from './idd-config.mts';
 import {
   findMarkdownCodeRanges,
   getMarkdownCodeRange,
+  type MarkdownCodeRange,
   maskMarkdownCodeRegionsPreservingPositions,
 } from './markdown-code.mts';
 import { normalizePolicyConfig, POLICY_DEFAULTS } from './policy-helpers.mts';
@@ -284,10 +285,8 @@ const SUPPLIED_CONTENT_NOUN =
 // a String.raw template) lets the noun be wrapped in inline code, so
 // "run this `script`" is still caught.
 const SUPPLIED_CONTENT_REFERENCE = String.raw`(?:this|that|following|attached|pasted|provided|the\s+(?:following|above|below|attached|pasted|provided))\s+(?:\S+\s+){0,2}?[\x60'"]?${SUPPLIED_CONTENT_NOUN}`;
-const EXPLICIT_UNSAFE_DIRECTIVE_PATTERN = new RegExp(
-  String.raw`\b${UNSAFE_DIRECTIVE_VERB}\b[\s\S]{0,100}\b(?:untrusted|user-provided|user input|(?:from|by)\s+(?:the\s+)?user|${SUPPLIED_CONTENT_REFERENCE})\b`,
-  'i',
-);
+const UNSAFE_DIRECTIVE_TARGET_SOURCE = String.raw`\b(?:untrusted|user-provided|user input|(?:from|by)\s+(?:the\s+)?user|${SUPPLIED_CONTENT_REFERENCE})\b`;
+const UNSAFE_DIRECTIVE_WINDOW_CHARS = 100;
 const NEGATION_PATTERN =
   /\b(not|no|don'?t|doesn'?t|can'?t|won'?t|never|avoid|skip|omit|ignore|exempt)\b/i;
 // The repeated `disable` entries are preserved verbatim from the original
@@ -597,6 +596,122 @@ function findPolicyOverrideMatch(
   return null;
 }
 
+function isUnsafeDirectiveSentenceEnd(raw: string, index: number): boolean {
+  const char = raw[index];
+  if (char !== '.' && char !== '?' && char !== '!') {
+    return false;
+  }
+  let cursor = index + 1;
+  while (
+    raw[cursor] === ' ' ||
+    raw[cursor] === '\t' ||
+    raw[cursor] === '\n' ||
+    raw[cursor] === '\r'
+  ) {
+    cursor += 1;
+  }
+  if (cursor >= raw.length) {
+    return true;
+  }
+  const next = raw[cursor] ?? '';
+  return /[A-Z]/.test(next);
+}
+
+// #2146: bound the verb-to-noun window at a sentence end or a blank line
+// only. Comma, colon, and a single wrap newline are not clause ends —
+// GitHub issue bodies are hard-wrapped, and `CLAUSE_TERMINATOR_PATTERN`
+// exists to attribute negation on the other Check 3 screen. A `.` inside
+// an identifier (Node.js) is not a sentence end: require following
+// whitespace and an uppercase letter, or the end of the window.
+function sliceUnsafeDirectiveWindow(source: string, start: number): string {
+  const raw = source.slice(start, start + UNSAFE_DIRECTIVE_WINDOW_CHARS);
+  for (let index = 0; index < raw.length; index += 1) {
+    const char = raw[index];
+    if (char === undefined) {
+      break;
+    }
+    if (isUnsafeDirectiveSentenceEnd(raw, index)) {
+      return raw.slice(0, index);
+    }
+    if (char !== '\n' && char !== '\r') {
+      continue;
+    }
+    let cursor = index + 1;
+    if (char === '\r' && raw[cursor] === '\n') {
+      cursor += 1;
+    }
+    while (raw[cursor] === ' ' || raw[cursor] === '\t') {
+      cursor += 1;
+    }
+    if (raw[cursor] === '\n' || raw[cursor] === '\r') {
+      return raw.slice(0, index);
+    }
+  }
+  return raw;
+}
+
+function isVerbWhollyInBodyCode(
+  verbStart: number,
+  verbLength: number,
+  bodyOffset: number,
+  body: string,
+  bodyCodeRanges: MarkdownCodeRange[],
+): boolean {
+  if (verbStart < bodyOffset) {
+    return false;
+  }
+  const bodyStart = verbStart - bodyOffset;
+  const range = getMarkdownCodeRange(body, bodyStart, bodyCodeRanges);
+  return range !== null && bodyStart + verbLength <= range.end;
+}
+
+// #2146: new skip rules on this screen only. Do not copy
+// findPolicyOverrideMatch — its raw fallback still fires when the whole
+// match is not inside one code range, which is exactly the #1911
+// false-positive (code-wrapped verb + later visible noun).
+function findUnsafeExecutionDirectiveMatch(
+  corpus: string,
+  bodyOffset: number,
+  body: string,
+  bodyCodeRanges: MarkdownCodeRange[],
+): string | null {
+  const verbPattern = new RegExp(
+    String.raw`\b${UNSAFE_DIRECTIVE_VERB}\b`,
+    'gi',
+  );
+  const targetPattern = new RegExp(UNSAFE_DIRECTIVE_TARGET_SOURCE, 'i');
+  let verbMatch: RegExpExecArray | null = verbPattern.exec(corpus);
+  while (verbMatch) {
+    const verbStart = verbMatch.index;
+    const verbText = verbMatch[0] ?? '';
+    if (
+      !isVerbWhollyInBodyCode(
+        verbStart,
+        verbText.length,
+        bodyOffset,
+        body,
+        bodyCodeRanges,
+      )
+    ) {
+      const window = sliceUnsafeDirectiveWindow(
+        corpus,
+        verbStart + verbText.length,
+      );
+      const targetMatch = targetPattern.exec(window);
+      if (targetMatch) {
+        const targetStart = targetMatch.index ?? 0;
+        const targetText = targetMatch[0] ?? '';
+        return corpus.slice(
+          verbStart,
+          verbStart + verbText.length + targetStart + targetText.length,
+        );
+      }
+    }
+    verbMatch = verbPattern.exec(corpus);
+  }
+  return null;
+}
+
 if (import.meta.main) {
   runCli();
 }
@@ -798,12 +913,20 @@ export function checkTrustSafety(context: Context): CheckOutcome {
     };
   }
 
-  // Check for explicit unsafe execution directives
-  if (EXPLICIT_UNSAFE_DIRECTIVE_PATTERN.test(corpus)) {
-    const match = corpus.match(EXPLICIT_UNSAFE_DIRECTIVE_PATTERN);
+  // Check for explicit unsafe execution directives. #2146: skip a verb
+  // wholly inside a body code region, and stop the verb-to-noun window
+  // at `.` / `?` / `!` or a blank line. Do not whole-corpus-mask — a
+  // visible verb with a code-wrapped noun must still fail.
+  const unsafeDirective = findUnsafeExecutionDirectiveMatch(
+    corpus,
+    bodyOffset,
+    issue.body,
+    bodyCodeRanges,
+  );
+  if (unsafeDirective) {
     return {
       pass: false,
-      evidence: `Explicit unsafe execution directive detected: "${match?.[0] ?? ''}". Cannot execute untrusted user-provided instructions.`,
+      evidence: `Explicit unsafe execution directive detected: "${unsafeDirective}". Cannot execute untrusted user-provided instructions.`,
     };
   }
 
