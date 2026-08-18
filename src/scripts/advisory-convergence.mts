@@ -2642,6 +2642,145 @@ function fetchThreadCommentPages(
   return nodes;
 }
 
+/**
+ * Compact next-action guidance for a non-ready `--assert` verdict (#2142).
+ * Derived from structured verdict fields, never from parsing `reasons[]`.
+ * Empty when `ready` is true. Script-authored English; not LLM prose.
+ */
+export function formatAssertNextActions(
+  verdict: AdvisoryConvergenceVerdict,
+): string {
+  if (verdict.ready) {
+    return '';
+  }
+  const pr = verdict.prNumber;
+  const sha = verdict.prHeadSha;
+  const bot = verdict.primaryBotLogin || 'copilot';
+  const restLogin =
+    bot === 'copilot' ? 'copilot-pull-request-reviewer[bot]' : bot;
+  const lines: string[] = [
+    'Next action (idd-advisory-convergence --assert failed):',
+  ];
+
+  if (verdict.applicability.status === 'indeterminate') {
+    const waiverReady =
+      (verdict.deadline.passed ||
+        verdict.terminal.state === 'COPILOT_UNAVAILABLE') &&
+      verdict.waiver.mode === 'maintainer-authorized';
+    lines.push(
+      waiverReady
+        ? `- Applicability is indeterminate (${verdict.applicability.reason}). Repair the claim linkage (claimed-by branch vs PR head) or post a maintainer external-check waiver for selector "${verdict.waiver.checkSelector}" on HEAD ${sha}, then: node scripts/advisory-convergence.mjs --pr ${pr} --assert`
+        : `- Applicability is indeterminate (${verdict.applicability.reason}). Repair the claim linkage (claimed-by branch vs PR head), then: node scripts/advisory-convergence.mjs --pr ${pr} --assert`,
+    );
+  }
+
+  if (!verdict.review.found) {
+    lines.push(
+      `- ${bot} has not reviewed this PR. Request a review (E14) then post an advisory-wait marker:`,
+      `  gh pr edit ${pr} --add-reviewer ${bot === 'copilot' ? 'copilot' : restLogin}`,
+      `  node scripts/post-idd-marker.mjs --type advisory --target pr ${pr} --agent-id <id> --head-sha ${sha} --timestamp <ISO8601> --apply`,
+    );
+  } else if (!verdict.review.matchesHead) {
+    lines.push(
+      `- Latest ${bot} review covers ${verdict.review.commitId || '<unknown>'}, not HEAD ${sha}. Request a re-review of the current HEAD (E14 / AW3 REQUEST_NEEDED) and wait with: node scripts/advisory-wait-state.mjs --pr ${pr}`,
+    );
+  }
+
+  const itemCount = verdict.review.itemCount;
+  if (
+    verdict.review.matchesHead &&
+    typeof itemCount === 'number' &&
+    itemCount > 0
+  ) {
+    lines.push(
+      `- Latest ${bot} review on HEAD has ${itemCount} posted item(s). Disposition each thread (E6/E13): node scripts/resolve-review-thread.mjs --pr ${pr} --comment-id <id> --body "**Accepted** — …" --claim-issue <n> --claim-id <id> --apply`,
+    );
+  }
+
+  if (verdict.threads.blockingCount > 0) {
+    const ids =
+      verdict.threads.blockingIds.join(', ') || '(see threads.blockingIds)';
+    lines.push(
+      `- ${verdict.threads.blockingCount} Copilot thread(s) are unresolved and lack a valid disposition (${ids}). Reply with a stamped **Accepted**/**Rejected** and resolve via resolve-review-thread (E6/E13).`,
+    );
+  }
+
+  if (verdict.review.suppressedCount > 0) {
+    lines.push(
+      `- Latest ${bot} review reports ${verdict.review.suppressedCount} suppressed comment(s). After reading the review body, post a trusted review-ack if they are handled: node scripts/post-idd-marker.mjs --type review-ack --target pr ${pr} --agent-id <id> --head-sha ${sha} --timestamp <ISO8601> --apply`,
+    );
+  }
+
+  if (verdict.terminal.state === 'COPILOT_UNAVAILABLE') {
+    if (verdict.waiver.mode === 'maintainer-authorized') {
+      lines.push(
+        `- Copilot is terminally unavailable. Post a maintainer external-check waiver for selector "${verdict.waiver.checkSelector}" on HEAD ${sha} (idd-pre-merge F2 / external-check-waiver), then: node scripts/rerun-advisory-convergence.mjs --pr ${pr}`,
+      );
+    } else {
+      lines.push(
+        `- Copilot is terminally unavailable and waivers are not enabled (mode "${verdict.waiver.mode}"). Hold for a maintainer; do not auto-merge.`,
+      );
+    }
+  } else if (verdict.deadline.passed) {
+    if (verdict.waiver.mode === 'maintainer-authorized') {
+      lines.push(
+        `- Convergence deadline (${verdict.deadline.minutes}m) has passed. Post a maintainer external-check waiver for selector "${verdict.waiver.checkSelector}" on HEAD ${sha}, then rerun the required check.`,
+      );
+    } else {
+      lines.push(
+        `- Convergence deadline (${verdict.deadline.minutes}m) has passed and waivers are not enabled (mode "${verdict.waiver.mode}"). Hold for a maintainer.`,
+      );
+    }
+  }
+
+  if (verdict.sameHeadReroll.requestable) {
+    lines.push(
+      `- Same-HEAD reroll is still requestable. Diagnose and rerun one instance at a time: node scripts/rerun-advisory-convergence.mjs --pr ${pr}`,
+    );
+  }
+
+  if (lines.length === 1) {
+    lines.push(
+      `- Re-read the JSON verdict on stdout and follow idd-advisory-wait.instructions.md / idd-pre-merge.instructions.md F2. Then: node scripts/advisory-convergence.mjs --pr ${pr} --assert`,
+    );
+  }
+
+  return `${lines.join('\n')}\n`;
+}
+
+/** Write next-action guidance (stderr, first) then the JSON verdict (stdout).
+ * Guidance is emitted only when `emitGuidance` is true (the `--assert`
+ * failure path). Report-only runs keep stdout JSON and a silent stderr. */
+export function writeAdvisoryConvergenceCliOutput(
+  verdict: AdvisoryConvergenceVerdict,
+  options: {
+    emitGuidance?: boolean;
+    stdout?: { write: (chunk: string) => void };
+    stderr?: { write: (chunk: string) => void };
+    env?: NodeJS.ProcessEnv;
+  } = {},
+): void {
+  const stdout = options.stdout ?? process.stdout;
+  const stderr = options.stderr ?? process.stderr;
+  const env = options.env ?? process.env;
+  if (options.emitGuidance && !verdict.ready) {
+    const next = formatAssertNextActions(verdict);
+    if (next) {
+      stderr.write(next);
+      if (env.GITHUB_ACTIONS === 'true') {
+        const summary = next
+          .split('\n')
+          .find((line) => line.startsWith('- '))
+          ?.replace(/^- /, '');
+        if (summary) {
+          stderr.write(`::notice::${summary}\n`);
+        }
+      }
+    }
+  }
+  stdout.write(`${JSON.stringify(verdict, null, 2)}\n`);
+}
+
 // CLI: emit the verdict as JSON and set the exit code when invoked directly.
 // Guarded behind `import.meta.main` so importing this module (for unit
 // tests) never parses process.argv, prints usage, or makes a `gh` call.
@@ -2652,7 +2791,9 @@ if (import.meta.main) {
   if (help) {
     printHelp();
   } else if (verdict) {
-    process.stdout.write(`${JSON.stringify(verdict, null, 2)}\n`);
+    writeAdvisoryConvergenceCliOutput(verdict, {
+      emitGuidance: exitCode !== 0,
+    });
   }
   process.exit(exitCode);
 }

@@ -9,6 +9,7 @@ import {
   classifyClaimCandidateAmbiguity,
   classifyCopilotAuthoredThreadIds,
   computeAdvisoryConvergenceVerdict,
+  formatAssertNextActions,
   hasTrustedClaimMarkerHistory,
   isSoleCopilotNotReviewedYetReason,
   parseArgs,
@@ -18,6 +19,7 @@ import {
   runAdvisoryConvergenceWithPoll,
   SAME_HEAD_REROLL_INELIGIBLE_REASON,
   viewerProbeGhOptions,
+  writeAdvisoryConvergenceCliOutput,
 } from '../src/scripts/advisory-convergence.mts';
 import {
   renderAdvisoryWaitRecoveryMarker,
@@ -3865,4 +3867,225 @@ test('viewerProbeGhOptions captures gh stderr only under GitHub Actions', () => 
   );
   // Only the literal string 'true' opts in (matches GitHub's own value).
   assert.deepEqual(viewerProbeGhOptions({ GITHUB_ACTIONS: '1' }).stdio, local);
+});
+
+test('formatAssertNextActions is empty when the verdict is ready (#2142)', () => {
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({
+      reviews: [
+        {
+          author: { login: COPILOT_LOGIN },
+          submittedAt: RECENT,
+          commitId: HEAD,
+          itemCount: 0,
+          body: '',
+        },
+      ],
+    }),
+    baseOptions(),
+  );
+  assert.equal(verdict.ready, true);
+  assert.equal(formatAssertNextActions(verdict), '');
+});
+
+test('formatAssertNextActions covers no-review and off-HEAD (#2142)', () => {
+  const none = computeAdvisoryConvergenceVerdict(baseInputs(), baseOptions());
+  const noneText = formatAssertNextActions(none);
+  assert.match(noneText, /has not reviewed this PR/);
+  assert.match(noneText, /gh pr edit \d+ --add-reviewer copilot/);
+  assert.match(noneText, /post-idd-marker\.mjs --type advisory/);
+  assert.doesNotMatch(
+    noneText,
+    /copilot has not reviewed this pull request yet/,
+  );
+
+  const offHead = computeAdvisoryConvergenceVerdict(
+    baseInputs({
+      reviews: [
+        {
+          author: { login: COPILOT_LOGIN },
+          submittedAt: RECENT,
+          commitId: OTHER_SHA,
+          itemCount: 0,
+          body: '',
+        },
+      ],
+    }),
+    baseOptions(),
+  );
+  const offText = formatAssertNextActions(offHead);
+  assert.match(offText, /not HEAD/);
+  assert.match(offText, /advisory-wait-state\.mjs/);
+});
+
+test('formatAssertNextActions covers posted items, threads, and suppressed (#2142)', () => {
+  const posted = computeAdvisoryConvergenceVerdict(
+    baseInputs({
+      reviews: [
+        {
+          author: { login: COPILOT_LOGIN },
+          submittedAt: RECENT,
+          commitId: HEAD,
+          itemCount: 2,
+          body: '',
+        },
+      ],
+    }),
+    baseOptions(),
+  );
+  assert.match(formatAssertNextActions(posted), /2 posted item/);
+  assert.match(formatAssertNextActions(posted), /resolve-review-thread/);
+
+  const threads = computeAdvisoryConvergenceVerdict(
+    baseInputs({
+      reviews: [
+        {
+          author: { login: COPILOT_LOGIN },
+          submittedAt: RECENT,
+          commitId: HEAD,
+          itemCount: 0,
+          body: '',
+        },
+      ],
+      threads: [
+        {
+          id: 'thread-copilot-1',
+          isResolved: false,
+          comments: {
+            nodes: [
+              {
+                author: { login: COPILOT_LOGIN },
+                body: 'please extract this',
+                createdAt: RECENT,
+              },
+            ],
+          },
+        },
+      ],
+    }),
+    baseOptions(),
+  );
+  const threadText = formatAssertNextActions(threads);
+  assert.match(threadText, /thread-copilot-1/);
+  assert.match(threadText, /resolve-review-thread/);
+
+  const suppressed = computeAdvisoryConvergenceVerdict(
+    baseInputs({
+      reviews: [
+        {
+          author: { login: COPILOT_LOGIN },
+          submittedAt: RECENT,
+          commitId: HEAD,
+          itemCount: 0,
+          body: '<details><summary>Suppressed comments (2)</summary></details>',
+        },
+      ],
+    }),
+    baseOptions(),
+  );
+  assert.match(formatAssertNextActions(suppressed), /suppressed comment/);
+  assert.match(formatAssertNextActions(suppressed), /--type review-ack/);
+});
+
+test('formatAssertNextActions covers deadline, terminal, and reroll (#2142)', () => {
+  const deadline = computeAdvisoryConvergenceVerdict(
+    baseInputs(),
+    baseOptions({ headCommittedAt: OLD, waiverMode: 'maintainer-authorized' }),
+  );
+  assert.equal(deadline.deadline.passed, true);
+  assert.match(formatAssertNextActions(deadline), /deadline/);
+  assert.match(formatAssertNextActions(deadline), /external-check waiver/);
+
+  const terminal = computeAdvisoryConvergenceVerdict(
+    baseInputs(),
+    baseOptions(),
+  );
+  const terminalText = formatAssertNextActions({
+    ...terminal,
+    ready: false,
+    terminal: { ...terminal.terminal, state: 'COPILOT_UNAVAILABLE' },
+    waiver: { ...terminal.waiver, mode: 'disabled' },
+  });
+  assert.match(terminalText, /terminally unavailable/);
+  assert.match(terminalText, /Hold for a maintainer/);
+
+  const reroll = formatAssertNextActions({
+    ...terminal,
+    ready: false,
+    sameHeadReroll: { ...terminal.sameHeadReroll, requestable: true },
+  });
+  assert.match(reroll, /Same-HEAD reroll/);
+  assert.match(reroll, /rerun-advisory-convergence/);
+});
+
+test('formatAssertNextActions covers indeterminate applicability (#2142)', () => {
+  const base = computeAdvisoryConvergenceVerdict(baseInputs(), baseOptions());
+  const text = formatAssertNextActions({
+    ...base,
+    ready: false,
+    applicability: {
+      scope: 'idd-claimed',
+      status: 'indeterminate',
+      reason: 'idd-claimed-branch-mismatch',
+    },
+  });
+  assert.match(text, /indeterminate/);
+  assert.match(text, /claimed-by/);
+  assert.doesNotMatch(text, /external-check waiver/);
+});
+
+test('writeAdvisoryConvergenceCliOutput writes guidance before JSON (#2142)', () => {
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs(),
+    baseOptions(),
+  );
+  assert.equal(verdict.ready, false);
+  let stdout = '';
+  let stderr = '';
+  writeAdvisoryConvergenceCliOutput(verdict, {
+    emitGuidance: true,
+    stdout: {
+      write: (chunk) => {
+        stdout += chunk;
+      },
+    },
+    stderr: {
+      write: (chunk) => {
+        stderr += chunk;
+      },
+    },
+    env: {},
+  });
+  assert.match(stderr, /Next action/);
+  assert.match(stderr, /has not reviewed this PR/);
+  const parsed = JSON.parse(stdout) as { ready: boolean; reasons: string[] };
+  assert.equal(parsed.ready, false);
+  assert.ok(parsed.reasons.length > 0);
+  assert.doesNotMatch(stdout, /Next action/);
+
+  let actionsErr = '';
+  writeAdvisoryConvergenceCliOutput(verdict, {
+    emitGuidance: true,
+    stdout: { write: () => undefined },
+    stderr: {
+      write: (chunk) => {
+        actionsErr += chunk;
+      },
+    },
+    env: { GITHUB_ACTIONS: 'true' },
+  });
+  assert.match(actionsErr, /::notice::/);
+
+  let reportErr = '';
+  writeAdvisoryConvergenceCliOutput(verdict, {
+    emitGuidance: false,
+    stdout: { write: () => undefined },
+    stderr: {
+      write: (chunk) => {
+        reportErr += chunk;
+      },
+    },
+    env: { GITHUB_ACTIONS: 'true' },
+  });
+  assert.equal(reportErr, '');
 });

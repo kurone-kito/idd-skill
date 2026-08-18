@@ -129,7 +129,15 @@ In the idd-skill source repository, the following optional helpers were adopted:
 - `scripts/advisory-convergence.mjs` for the F2 advisory/disposition
   sub-gate (#1340): a deterministic `converged`/`ready` verdict with an
   exit-code contract via `--assert`, claim-independent so it also works
-  as a required-check-able CI verdict
+  as a required-check-able CI verdict. Stdout is always the JSON
+  verdict only. When `--assert` fails (`ready` is false), a compact
+  English next-action block is written to stderr _before_ that JSON so
+  a GitHub Actions log surfaces the recovery command first (`#2142`).
+  The block is derived from verdict fields, not from rewriting
+  `reasons[]`. Under `GITHUB_ACTIONS=true` a `::notice::` line is
+  added as extra surfacing; it is not a substitute for the stderr
+  block. `reasons[]` wording and the `--assert` exit-code contract
+  stay unchanged.
 - `scripts/rerun-advisory-convergence.mjs` (#1431) for a rerun-plan
   diagnosis of stuck `idd-advisory-convergence` check-run rollups,
   read-only by default: fetches every check-run instance for a PR's
