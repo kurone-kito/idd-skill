@@ -1383,6 +1383,19 @@ or a maintainer runs the workflow's fourth trigger,
 for that case, taking a `pr_number` input since a manually dispatched
 run has no PR context of its own.
 
+**Human-reply retrigger.** Those same comment and review triggers fire
+for every review-thread reply, edit, or delete — including ordinary
+human prose, not just IDD disposition markers. If you register
+`idd-advisory-convergence` as a required status check, that reply
+re-asserts the fail-closed Copilot verdict. The PR's required check
+can fail (Checks tab / merge rollup), and, because the workflow
+shares a PR-number concurrency group with `cancel-in-progress: true`,
+can cancel an in-flight run for that PR (observed 2026-08-17 on
+PR #2130). This is `idd-advisory-convergence`, not `lint.yml`.
+Repositories that want human-led or gradual IDD adoption should
+leave the check unregistered until they intend the Copilot-advisory
+loop.
+
 **Register it as a required status check.** Hosting the workflow alone
 does not block merge — a maintainer must separately register
 `idd-advisory-convergence` (the job id, which is also the
