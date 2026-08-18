@@ -3892,6 +3892,7 @@ test('formatAssertNextActions covers no-review and off-HEAD (#2142)', () => {
   const none = computeAdvisoryConvergenceVerdict(baseInputs(), baseOptions());
   const noneText = formatAssertNextActions(none);
   assert.match(noneText, /has not reviewed this PR/);
+  assert.match(noneText, /gh pr edit \d+ --add-reviewer copilot/);
   assert.match(noneText, /post-idd-marker\.mjs --type advisory/);
   assert.doesNotMatch(
     noneText,
@@ -4030,6 +4031,7 @@ test('formatAssertNextActions covers indeterminate applicability (#2142)', () =>
   });
   assert.match(text, /indeterminate/);
   assert.match(text, /claimed-by/);
+  assert.doesNotMatch(text, /external-check waiver/);
 });
 
 test('writeAdvisoryConvergenceCliOutput writes guidance before JSON (#2142)', () => {
@@ -4040,22 +4042,20 @@ test('writeAdvisoryConvergenceCliOutput writes guidance before JSON (#2142)', ()
   assert.equal(verdict.ready, false);
   let stdout = '';
   let stderr = '';
-  writeAdvisoryConvergenceCliOutput(
-    verdict,
-    {
-      stdout: {
-        write: (chunk) => {
-          stdout += chunk;
-        },
-      },
-      stderr: {
-        write: (chunk) => {
-          stderr += chunk;
-        },
+  writeAdvisoryConvergenceCliOutput(verdict, {
+    emitGuidance: true,
+    stdout: {
+      write: (chunk) => {
+        stdout += chunk;
       },
     },
-    {},
-  );
+    stderr: {
+      write: (chunk) => {
+        stderr += chunk;
+      },
+    },
+    env: {},
+  });
   assert.match(stderr, /Next action/);
   assert.match(stderr, /has not reviewed this PR/);
   const parsed = JSON.parse(stdout) as { ready: boolean; reasons: string[] };
@@ -4064,17 +4064,28 @@ test('writeAdvisoryConvergenceCliOutput writes guidance before JSON (#2142)', ()
   assert.doesNotMatch(stdout, /Next action/);
 
   let actionsErr = '';
-  writeAdvisoryConvergenceCliOutput(
-    verdict,
-    {
-      stdout: { write: () => undefined },
-      stderr: {
-        write: (chunk) => {
-          actionsErr += chunk;
-        },
+  writeAdvisoryConvergenceCliOutput(verdict, {
+    emitGuidance: true,
+    stdout: { write: () => undefined },
+    stderr: {
+      write: (chunk) => {
+        actionsErr += chunk;
       },
     },
-    { GITHUB_ACTIONS: 'true' },
-  );
+    env: { GITHUB_ACTIONS: 'true' },
+  });
   assert.match(actionsErr, /::notice::/);
+
+  let reportErr = '';
+  writeAdvisoryConvergenceCliOutput(verdict, {
+    emitGuidance: false,
+    stdout: { write: () => undefined },
+    stderr: {
+      write: (chunk) => {
+        reportErr += chunk;
+      },
+    },
+    env: { GITHUB_ACTIONS: 'true' },
+  });
+  assert.equal(reportErr, '');
 });

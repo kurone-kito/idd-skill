@@ -2038,14 +2038,20 @@ export function formatAssertNextActions(verdict) {
     bot === 'copilot' ? 'copilot-pull-request-reviewer[bot]' : bot;
   const lines = ['Next action (idd-advisory-convergence --assert failed):'];
   if (verdict.applicability.status === 'indeterminate') {
+    const waiverReady =
+      (verdict.deadline.passed ||
+        verdict.terminal.state === 'COPILOT_UNAVAILABLE') &&
+      verdict.waiver.mode === 'maintainer-authorized';
     lines.push(
-      `- Applicability is indeterminate (${verdict.applicability.reason}). Repair the claim linkage on issue comments (claimed-by branch vs PR head) or post a maintainer external-check waiver, then re-run: node scripts/advisory-convergence.mjs --pr ${pr} --assert`,
+      waiverReady
+        ? `- Applicability is indeterminate (${verdict.applicability.reason}). Repair the claim linkage (claimed-by branch vs PR head) or post a maintainer external-check waiver for selector "${verdict.waiver.checkSelector}" on HEAD ${sha}, then: node scripts/advisory-convergence.mjs --pr ${pr} --assert`
+        : `- Applicability is indeterminate (${verdict.applicability.reason}). Repair the claim linkage (claimed-by branch vs PR head), then: node scripts/advisory-convergence.mjs --pr ${pr} --assert`,
     );
   }
   if (!verdict.review.found) {
     lines.push(
       `- ${bot} has not reviewed this PR. Request a review (E14) then post an advisory-wait marker:`,
-      `  gh api repos/<owner>/<repo>/pulls/${pr}/requested_reviewers -X POST -f "reviewers[]=${restLogin}"`,
+      `  gh pr edit ${pr} --add-reviewer ${bot === 'copilot' ? 'copilot' : restLogin}`,
       `  node scripts/post-idd-marker.mjs --type advisory --target pr ${pr} --agent-id <id> --head-sha ${sha} --timestamp <ISO8601> --apply`,
     );
   } else if (!verdict.review.matchesHead) {
@@ -2108,28 +2114,29 @@ export function formatAssertNextActions(verdict) {
   }
   return `${lines.join('\n')}\n`;
 }
-/** Write next-action guidance (stderr, first) then the JSON verdict (stdout). */
-export function writeAdvisoryConvergenceCliOutput(
-  verdict,
-  streams = process,
-  env = process.env,
-) {
-  if (!verdict.ready) {
+/** Write next-action guidance (stderr, first) then the JSON verdict (stdout).
+ * Guidance is emitted only when `emitGuidance` is true (the `--assert`
+ * failure path). Report-only runs keep stdout JSON and a silent stderr. */
+export function writeAdvisoryConvergenceCliOutput(verdict, options = {}) {
+  const stdout = options.stdout ?? process.stdout;
+  const stderr = options.stderr ?? process.stderr;
+  const env = options.env ?? process.env;
+  if (options.emitGuidance && !verdict.ready) {
     const next = formatAssertNextActions(verdict);
     if (next) {
-      streams.stderr.write(next);
+      stderr.write(next);
       if (env.GITHUB_ACTIONS === 'true') {
         const summary = next
           .split('\n')
           .find((line) => line.startsWith('- '))
           ?.replace(/^- /, '');
         if (summary) {
-          streams.stderr.write(`::notice::${summary}\n`);
+          stderr.write(`::notice::${summary}\n`);
         }
       }
     }
   }
-  streams.stdout.write(`${JSON.stringify(verdict, null, 2)}\n`);
+  stdout.write(`${JSON.stringify(verdict, null, 2)}\n`);
 }
 // CLI: emit the verdict as JSON and set the exit code when invoked directly.
 // Guarded behind `import.meta.main` so importing this module (for unit
@@ -2141,7 +2148,9 @@ if (import.meta.main) {
   if (help) {
     printHelp();
   } else if (verdict) {
-    writeAdvisoryConvergenceCliOutput(verdict);
+    writeAdvisoryConvergenceCliOutput(verdict, {
+      emitGuidance: exitCode !== 0,
+    });
   }
   process.exit(exitCode);
 }
