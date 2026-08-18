@@ -302,13 +302,21 @@ nonce was recorded for the active claim.
   (`dispositionEvidence.blockingCount == 0` — both
   `missingRegularComments` (any outstanding non-thread regular PR
   comment from a non-agent author, including the PR author, lacking a
-  fresh disposition marker) and `missingThreads` (any review thread,
-  resolved or unresolved, still lacking one) are empty). The
-  `advisory-convergence.mjs --assert` check above only enforces the
-  _unresolved_ Copilot-authored subset of `missingThreads` (resolution
-  alone satisfies its own Clause 2 without a fresh disposition); it
-  never covers a non-Copilot thread or any `missingRegularComments`
-  entry, so this check stays necessary even when that one passes. Treat
+  later IDD-agent reply — a fresh disposition marker for advisory-bot
+  comments, or any later IDD-agent body for a human comment) and
+  `missingThreads` (any review thread still lacking a clearing reply)
+  are empty). Evaluation splits by origin: a **human-authored** thread
+  whose latest item is unmarked human prose is presence-only and is
+  not `unresolved-without-fresh-disposition` solely for lacking
+  `**Accepted**`; a **Copilot / configured-advisory-bot** thread still
+  needs a stamped or legacy trusted IDD disposition (or resolution for
+  Clause 2). An unmarked human `ok` must not clear those advisory
+  threads. The `advisory-convergence.mjs --assert` check above only
+  enforces the _unresolved_ Copilot-authored subset of `missingThreads`
+  (resolution alone satisfies its own Clause 2 without a fresh
+  disposition); it never covers a non-Copilot thread or any
+  `missingRegularComments` entry, so this check stays necessary even
+  when that one passes. Treat
   a missing or malformed `dispositionEvidence` object, or a non-list
   `missingRegularComments`/`missingThreads`, as unmet, never vacuously
   satisfied. A `route: return-to-e1` result routes to E1/E4 with that

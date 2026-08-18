@@ -166,6 +166,19 @@ test('checkPathAItem: Rejected — no reply → fail', () => {
   assert.equal(result.checks.markerPresent, false);
 });
 
+test('checkPathAItem: Rejected — unmarked human prose is not a disposition (#2139)', () => {
+  const result = checkPathAItem({
+    id: 'a5-unmarked',
+    path: 'A',
+    type: 'review_thread',
+    decision: 'rejected',
+    markerReply: 'LGTM thanks, fixed',
+    threadResolved: true,
+  });
+  assert.equal(result.passed, false);
+  assert.equal(result.checks.markerPresent, false);
+});
+
 test('checkPathAItem: Rejected — regular_comment, null threadResolved → pass', () => {
   const result = checkPathAItem({
     id: 'a6',
