@@ -1390,10 +1390,10 @@ fires.
 
 **Human-reply retrigger.** A casual human reply used to start the
 required `idd-advisory-convergence` job, fail or cancel the SHA
-verdict, and look like "the reply got linted" (observed 2026-08-17 on
-PR #2130). That path is now the companion comment workflow above,
-and only IDD-originated comments refresh the required run. This is
-`idd-advisory-convergence`, not `lint.yml`.
+verdict, and look like "the reply got linted." That path is now the
+companion comment workflow above, and only IDD-originated comments
+refresh the required run. This is `idd-advisory-convergence`, not
+`lint.yml`.
 Repositories that want human-led or gradual IDD adoption should
 leave the check unregistered until they intend the Copilot-advisory
 loop.
