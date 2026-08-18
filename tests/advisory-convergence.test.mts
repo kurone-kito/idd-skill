@@ -15,6 +15,7 @@ import {
   parseArgs,
   pickResolvingClaimEvents,
   resolveClaimEvidence,
+  reviewPolicyNotApplicableReason,
   runAdvisoryConvergence,
   runAdvisoryConvergenceWithPoll,
   SAME_HEAD_REROLL_INELIGIBLE_REASON,
@@ -516,6 +517,149 @@ test('exemptBotAuthoredPrs: flag unset (default false) -> unchanged applicable/a
     status: 'applicable',
     reason: 'all-prs',
   });
+});
+
+// --- reviewPolicy applicability (#2137) -------------------------------------
+
+test('reviewPolicyNotApplicableReason: exact human-required / no-advisory only', () => {
+  assert.equal(
+    reviewPolicyNotApplicableReason('human-required'),
+    'review-policy-human-required',
+  );
+  assert.equal(
+    reviewPolicyNotApplicableReason('no-advisory'),
+    'review-policy-no-advisory',
+  );
+  assert.equal(reviewPolicyNotApplicableReason('copilot-advisory'), null);
+  assert.equal(reviewPolicyNotApplicableReason('external-bot'), null);
+  assert.equal(reviewPolicyNotApplicableReason(undefined), null);
+  assert.equal(reviewPolicyNotApplicableReason(''), null);
+  assert.equal(reviewPolicyNotApplicableReason('HUMAN-REQUIRED'), null);
+  assert.equal(reviewPolicyNotApplicableReason('not-a-real-policy'), null);
+});
+
+test('reviewPolicy human-required: no Copilot review is not_applicable and ready, not fake-converged', () => {
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({ reviews: [], claimEvents: [] }),
+    baseOptions({ reviewPolicy: 'human-required' }),
+  );
+  assertValidVerdict(verdict);
+  assert.deepEqual(verdict.applicability, {
+    scope: 'all-prs',
+    status: 'not_applicable',
+    reason: 'review-policy-human-required',
+  });
+  assert.equal(verdict.pending, false);
+  assert.equal(verdict.converged, false);
+  assert.equal(verdict.ready, true);
+  assert.deepEqual(verdict.reasons, []);
+});
+
+test('reviewPolicy no-advisory: no Copilot review is not_applicable and ready, not fake-converged', () => {
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({ reviews: [], claimEvents: [] }),
+    baseOptions({ reviewPolicy: 'no-advisory' }),
+  );
+  assertValidVerdict(verdict);
+  assert.deepEqual(verdict.applicability, {
+    scope: 'all-prs',
+    status: 'not_applicable',
+    reason: 'review-policy-no-advisory',
+  });
+  assert.equal(verdict.pending, false);
+  assert.equal(verdict.converged, false);
+  assert.equal(verdict.ready, true);
+  assert.deepEqual(verdict.reasons, []);
+});
+
+test('reviewPolicy copilot-advisory: same fixture still fails until Copilot converges', () => {
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({ reviews: [], claimEvents: [] }),
+    baseOptions({ reviewPolicy: 'copilot-advisory' }),
+  );
+  assertValidVerdict(verdict);
+  assert.deepEqual(verdict.applicability, {
+    scope: 'all-prs',
+    status: 'applicable',
+    reason: 'all-prs',
+  });
+  assert.equal(verdict.pending, true);
+  assert.equal(verdict.ready, false);
+});
+
+test('reviewPolicy absent: same fixture still fails until Copilot converges', () => {
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({ reviews: [], claimEvents: [] }),
+    baseOptions(),
+  );
+  assertValidVerdict(verdict);
+  assert.equal(verdict.applicability.status, 'applicable');
+  assert.equal(verdict.pending, true);
+  assert.equal(verdict.ready, false);
+});
+
+test('reviewPolicy invalid: does not widen past copilot-advisory applicability', () => {
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({ reviews: [], claimEvents: [] }),
+    baseOptions({ reviewPolicy: 'not-a-real-policy' }),
+  );
+  assertValidVerdict(verdict);
+  assert.deepEqual(verdict.applicability, {
+    scope: 'all-prs',
+    status: 'applicable',
+    reason: 'all-prs',
+  });
+  assert.equal(verdict.pending, true);
+  assert.equal(verdict.ready, false);
+});
+
+test('reviewPolicy external-bot: keeps the configured primaryBotLogin path', () => {
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({ reviews: [], claimEvents: [] }),
+    baseOptions({ reviewPolicy: 'external-bot' }),
+  );
+  assertValidVerdict(verdict);
+  assert.deepEqual(verdict.applicability, {
+    scope: 'all-prs',
+    status: 'applicable',
+    reason: 'all-prs',
+  });
+  assert.equal(verdict.pending, true);
+  assert.equal(verdict.ready, false);
+});
+
+test('reviewPolicy human-required wins under idd-claimed with a matching claim (hybrid PR)', () => {
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({
+      reviews: [],
+      claimEvents: [claimComment()],
+    }),
+    baseOptions({
+      reviewPolicy: 'human-required',
+      convergenceScope: 'idd-claimed',
+      prHeadRefName: 'issue/1234-test',
+    }),
+  );
+  assertValidVerdict(verdict);
+  assert.deepEqual(verdict.applicability, {
+    scope: 'idd-claimed',
+    status: 'not_applicable',
+    reason: 'review-policy-human-required',
+  });
+  assert.equal(verdict.converged, false);
+  assert.equal(verdict.ready, true);
+  assert.deepEqual(verdict.reasons, []);
+});
+
+test('reviewPolicy human-required does not treat a dirty Copilot review as converged', () => {
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({ reviews: [copilotReview({ itemCount: 3 })] }),
+    baseOptions({ reviewPolicy: 'human-required' }),
+  );
+  assertValidVerdict(verdict);
+  assert.equal(verdict.applicability.status, 'not_applicable');
+  assert.equal(verdict.converged, false);
+  assert.equal(verdict.ready, true);
 });
 
 test('regression: a re-request without a new push supersedes an earlier dirty on-HEAD review', () => {
@@ -3399,6 +3543,14 @@ test('collectFromGitHub sources prAuthorIsBot/exemptBotAuthoredPrs into the retu
   );
   assert.match(source, /inputs:\s*\{[^}]*\bprAuthorIsBot,[^}]*\}/s);
   assert.match(source, /options:\s*\{[^}]*\bexemptBotAuthoredPrs,[^}]*\}/s);
+});
+
+test('collectFromGitHub sources reviewPolicy into the returned options (#2137: pins the call-site forwarding shape)', () => {
+  const source = readFileSync(
+    new URL('../src/scripts/advisory-convergence.mts', import.meta.url),
+    'utf8',
+  );
+  assert.match(source, /options:\s*\{[^}]*\breviewPolicy,[^}]*\}/s);
 });
 
 // --- parseArgs ---------------------------------------------------------------
