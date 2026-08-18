@@ -596,14 +596,33 @@ function findPolicyOverrideMatch(
   return null;
 }
 
-function isUnsafeDirectiveSentenceEnd(char: string): boolean {
-  return char === '.' || char === '?' || char === '!';
+function isUnsafeDirectiveSentenceEnd(raw: string, index: number): boolean {
+  const char = raw[index];
+  if (char !== '.' && char !== '?' && char !== '!') {
+    return false;
+  }
+  let cursor = index + 1;
+  while (
+    raw[cursor] === ' ' ||
+    raw[cursor] === '\t' ||
+    raw[cursor] === '\n' ||
+    raw[cursor] === '\r'
+  ) {
+    cursor += 1;
+  }
+  if (cursor >= raw.length) {
+    return true;
+  }
+  const next = raw[cursor] ?? '';
+  return /[A-Z]/.test(next);
 }
 
 // #2146: bound the verb-to-noun window at a sentence end or a blank line
 // only. Comma, colon, and a single wrap newline are not clause ends —
 // GitHub issue bodies are hard-wrapped, and `CLAUSE_TERMINATOR_PATTERN`
-// exists to attribute negation on the other Check 3 screen.
+// exists to attribute negation on the other Check 3 screen. A `.` inside
+// an identifier (Node.js) is not a sentence end: require following
+// whitespace and an uppercase letter, or the end of the window.
 function sliceUnsafeDirectiveWindow(source: string, start: number): string {
   const raw = source.slice(start, start + UNSAFE_DIRECTIVE_WINDOW_CHARS);
   for (let index = 0; index < raw.length; index += 1) {
@@ -611,7 +630,7 @@ function sliceUnsafeDirectiveWindow(source: string, start: number): string {
     if (char === undefined) {
       break;
     }
-    if (isUnsafeDirectiveSentenceEnd(char)) {
+    if (isUnsafeDirectiveSentenceEnd(raw, index)) {
       return raw.slice(0, index);
     }
     if (char !== '\n' && char !== '\r') {

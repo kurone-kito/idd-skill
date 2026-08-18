@@ -1659,6 +1659,19 @@ test('trust safety still flags a hard-wrapped same-sentence supplied-content nou
   assert.equal(result.pass, false);
 });
 
+test('trust safety still flags a supplied-content noun after an abbreviation period (#2146)', () => {
+  const lead = 'Please run (in Node.js)';
+  const rest = ' this script from the issue body.';
+  const result = checkTrustSafety({
+    issue: {
+      ...BASE_ISSUE,
+      body: `${BASE_ISSUE.body}\n${lead}${rest}`,
+    },
+    trustSafetyAmbiguous: false,
+  } as Context);
+  assert.equal(result.pass, false);
+});
+
 test('verifiability passes a resolved-decision issue with objective criteria', () => {
   // Check 7 false-positive that now passes: the body describes a resolved
   // maintainer decision and carries objective acceptance criteria.
