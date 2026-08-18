@@ -1398,8 +1398,8 @@ The shipped hybrid contract is present-tense: IDD replies carry
 `<!-- {markerPrefix}-review-reply -->` after the visible
 disposition prefix (this is **not** the E1 `review-watermark`);
 unmarked human replies on human threads are presence-only; Copilot
-threads still need an IDD disposition; `reviewPolicy:
-human-required` / `no-advisory` makes Copilot clauses
+threads still need an IDD disposition;
+`reviewPolicy: human-required` / `no-advisory` makes Copilot clauses
 `not_applicable`. See
 [Hybrid review-reply identity](docs/idd-review-policy-profiles.md#hybrid-review-reply-identity-shipped).
 Repositories that want human-led or gradual IDD adoption should
