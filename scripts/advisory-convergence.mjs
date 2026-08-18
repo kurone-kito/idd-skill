@@ -1597,9 +1597,11 @@ function collectFromGitHub(args) {
   // `prFirstCommitAt` above: a transient GraphQL failure must never
   // widen what this gate accepts.
   const exemptBotAuthoredPrs = policy.advisoryWait.exemptBotAuthoredPrs;
-  // #2137: exact string only. Invalid / non-string / absent stay
-  // undefined so computeAdvisoryConvergenceVerdict keeps today's
-  // Copilot / primaryBotLogin applicability.
+  // #2137: forward any string (including invalid enum values).
+  // Non-string / absent stay undefined. computeAdvisoryConvergenceVerdict
+  // treats only exact human-required / no-advisory as skip, so an
+  // invalid string still keeps today's Copilot / primaryBotLogin
+  // applicability.
   const reviewPolicy =
     typeof rawConfig?.reviewPolicy === 'string'
       ? rawConfig.reviewPolicy
