@@ -191,6 +191,7 @@ const COVERED_HELPERS = [
   'resume-claim-routing',
   'resume-route-selection',
   'review-activity-snapshot',
+  'review-comment-origin',
   'review-disposition-verify',
   'select-desynced-index',
   'stalled-session-quiet-check',

@@ -24,6 +24,11 @@ discipline and has no tag.
 
 ### Changed
 
+- The required `idd-advisory-convergence` job no longer runs on
+  `pull_request_review_comment`. Ordinary human review chatter no
+  longer creates or cancels that required check. IDD-originated
+  comments refresh the existing HEAD run from a separate
+  non-required companion workflow.
 - `engines.node` bumped to `^22.23.2 || ^24.2.0 || >=26.0.0`: the
   22.x floor moves to the 2026-07-29 emergency security release
   (fixes 11 CVEs including CVE-2026-56846/CVE-2026-56848 HTTP/2

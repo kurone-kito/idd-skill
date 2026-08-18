@@ -138,6 +138,7 @@ generated separately in `ONBOARDING.md`.
 .github/instructions/lite/idd-review-fix-lite.instructions.md
 .github/instructions/lite/idd-review-snapshot-lite.instructions.md
 .github/instructions/lite/idd-work-lite.instructions.md
+.github/workflows/idd-advisory-convergence-comment.yml
 .github/workflows/idd-advisory-convergence.yml
 .github/workflows/post-merge-cleanup.yml
 .markdownlint-cli2.yaml

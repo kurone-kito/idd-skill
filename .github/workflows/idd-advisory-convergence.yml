@@ -1,11 +1,12 @@
 concurrency:
   cancel-in-progress: true
-  # Grouped by PR number, not github.ref: pull_request_review and
-  # pull_request_review_comment are not pull_request-family events, so
-  # github.ref is not guaranteed to resolve the same way for them as it
-  # does for a pull_request-only workflow (see idd-doctor.yml / lint.yml).
-  # workflow_dispatch has no pull_request context either, so it falls
-  # back to its own inputs.
+  # Grouped by PR number, not github.ref: pull_request_review is not
+  # a pull_request-family event, so github.ref is not guaranteed to
+  # resolve the same way for it as it does for a pull_request-only
+  # workflow (see idd-doctor.yml / lint.yml). Review-thread comments
+  # live in a separate non-required workflow (#2136) and must not
+  # share this group. workflow_dispatch has no pull_request context
+  # either, so it falls back to its own inputs.
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || inputs.pr_number }}
 name: IDD advisory-convergence gate
 # Required-check gate (#1341): asserts that the primary advisory bot's
@@ -53,16 +54,15 @@ name: IDD advisory-convergence gate
 # session that would also need to get past review.
 #
 # CI topology: unlike lint.yml/idd-doctor.yml's pull_request-only
-# trigger, convergence can also change WITHOUT a new push -- when
-# Copilot submits its review (pull_request_review), or when a
-# disposition marker (or any other reply/edit/delete) is posted on a
-# review thread (pull_request_review_comment) -- so both are added
-# alongside pull_request. The latter matters because Clause 2 of the
-# verdict (every Copilot-authored thread resolved-or-dispositioned)
-# changes exactly when an E6 disposition reply is posted; without this
-# trigger the check would only refresh on the next push, review
-# submission, or manual workflow_dispatch run, leaving it stuck on a
-# stale failing verdict after triage already resolved every thread.
+# trigger, convergence can also change WITHOUT a new push when Copilot
+# submits its review (`pull_request_review`). That trigger stays here
+# on the required job. Review-thread *comments* do not: a casual
+# human reply used to start this same required job, overwrite or
+# cancel the SHA's verdict, and show up as "the reply got linted"
+# (#2136). IDD-originated comments (disposition / stamp / operational
+# marker) refresh the existing HEAD-associated required run from the
+# companion `idd-advisory-convergence-comment.yml` workflow instead,
+# via `rerun-advisory-convergence --apply`.
 #
 # Known gap vs. the issue's original three-trigger proposal:
 # `pull_request_review_thread` (thread resolved/unresolved) is a real
@@ -259,11 +259,6 @@ on:
   pull_request_review:
     types:
       - submitted
-  pull_request_review_comment:
-    types:
-      - created
-      - edited
-      - deleted
   workflow_dispatch:
     inputs:
       pr_number:
