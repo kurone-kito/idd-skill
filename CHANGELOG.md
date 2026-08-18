@@ -30,6 +30,11 @@ discipline and has no tag.
 
 ### Changed
 
+- A5 collectors fall back when REST `GET /user` or collaborators
+  permission reads return 5xx: `resume-claim-routing` tries GraphQL
+  `viewer { login }` once, and `claim-approval-gate` treats a live
+  issue `author_association` of `OWNER` or `MEMBER` as sufficient
+  self-authorization without a successful permission read.
 - `advisory-convergence` honors `reviewPolicy`: `human-required` and
   `no-advisory` make the check `not_applicable` (ready without Copilot
   clauses) instead of judging every applicable PR as Copilot-advisory.

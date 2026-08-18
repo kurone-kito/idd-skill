@@ -14,7 +14,9 @@ import {
   ghText,
   ghTextAsync,
   resolveGhApiHostname,
+  resolveViewerLogin,
   safeGhText,
+  viewerLoginFailureIsGraphqlEligible,
   withBoundedRetry,
 } from '../src/scripts/gh-exec.mts';
 
@@ -702,4 +704,142 @@ test('withBoundedRetry falls back to the default backoff on a non-finite baseDel
   // the call still completes and resolves normally under the fallback.
   assert.equal(result, 'ok');
   assert.equal(calls, 2);
+});
+
+test('resolveViewerLogin uses REST /user when it returns a login', () => {
+  let graphqlCalls = 0;
+  const login = resolveViewerLogin(
+    {},
+    {
+      rest: () => ' kurone-kito ',
+      graphql: () => {
+        graphqlCalls += 1;
+        return 'graphql-user';
+      },
+    },
+  );
+  assert.equal(login, 'kurone-kito');
+  assert.equal(graphqlCalls, 0);
+});
+
+test('resolveViewerLogin falls back to GraphQL viewer after REST 503', () => {
+  const restError = Object.assign(new Error('HTTP 503'), {
+    stderr: 'gh: Service Unavailable (HTTP 503)',
+  });
+  const login = resolveViewerLogin(
+    {},
+    {
+      rest: () => {
+        throw restError;
+      },
+      graphql: () => 'graphql-user',
+    },
+  );
+  assert.equal(login, 'graphql-user');
+});
+
+test('resolveViewerLogin falls back to GraphQL when REST returns an empty body', () => {
+  const login = resolveViewerLogin(
+    {},
+    {
+      rest: () => '',
+      graphql: () => 'graphql-user',
+    },
+  );
+  assert.equal(login, 'graphql-user');
+});
+
+test('resolveViewerLogin does not fall back on REST 403', () => {
+  const restError = Object.assign(new Error('HTTP 403'), {
+    stderr: 'gh: Resource not accessible by integration (HTTP 403)',
+  });
+  assert.equal(viewerLoginFailureIsGraphqlEligible(restError), false);
+  assert.throws(
+    () =>
+      resolveViewerLogin(
+        {},
+        {
+          rest: () => {
+            throw restError;
+          },
+          graphql: () => 'graphql-user',
+        },
+      ),
+    restError,
+  );
+});
+
+test('resolveViewerLogin rethrows the REST error when GraphQL also fails after 503', () => {
+  const restError = Object.assign(new Error('HTTP 503'), {
+    stderr: 'gh: Service Unavailable (HTTP 503)',
+  });
+  assert.throws(
+    () =>
+      resolveViewerLogin(
+        {},
+        {
+          rest: () => {
+            throw restError;
+          },
+          graphql: () => {
+            throw new Error('graphql down');
+          },
+        },
+      ),
+    restError,
+  );
+});
+
+test('viewerLoginFailureIsGraphqlEligible treats timeout as eligible', () => {
+  assert.equal(
+    viewerLoginFailureIsGraphqlEligible(
+      Object.assign(new Error('timeout'), { code: 'ETIMEDOUT' }),
+    ),
+    true,
+  );
+});
+
+test('viewerLoginFailureIsGraphqlEligible treats unclassified errors as fail-closed', () => {
+  assert.equal(
+    viewerLoginFailureIsGraphqlEligible(new Error('something went wrong')),
+    false,
+  );
+});
+
+test('resolveViewerLogin does not fall back on an unclassified REST error', () => {
+  const restError = new Error('gh: mysterious failure');
+  assert.throws(
+    () =>
+      resolveViewerLogin(
+        {},
+        {
+          rest: () => {
+            throw restError;
+          },
+          graphql: () => 'graphql-user',
+        },
+      ),
+    restError,
+  );
+});
+
+test('resolveViewerLogin live seam: REST 503 then GraphQL viewer login', () => {
+  const restore = stubGh(`
+const args = process.argv.slice(2);
+if (args[0] === 'api' && args[1] === 'user') {
+  process.stderr.write('gh: Service Unavailable (HTTP 503)\\n');
+  process.exit(1);
+}
+if (args[0] === 'api' && args[1] === 'graphql') {
+  process.stdout.write(JSON.stringify({ data: { viewer: { login: 'graphql-user' } } }) + '\\n');
+  process.exit(0);
+}
+process.stderr.write('unexpected: ' + args.join(' ') + '\\n');
+process.exit(1);
+`);
+  try {
+    assert.equal(resolveViewerLogin(), 'graphql-user');
+  } finally {
+    restore();
+  }
 });

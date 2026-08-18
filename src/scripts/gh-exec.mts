@@ -20,6 +20,7 @@ import { execFile, execFileSync } from 'node:child_process';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { promisify } from 'node:util';
 
+import { deriveGhHttpStatus } from './gh-http-status.mts';
 import { parsePaginatedGhNdjson } from './protocol-helpers.mts';
 
 /**
@@ -362,6 +363,84 @@ export function ghGraphql(
     args.push('-f', `${key}=${value}`);
   }
   return JSON.parse(ghText(args).trim() || '{}');
+}
+
+/** #2148: REST `GET /user` failures that may still have a live GraphQL
+ * `viewer { login }` — 5xx, timeout, or a killed child. Unclassified
+ * errors and 4xx stay fail-closed on REST (no GraphQL fallback), so an
+ * unparsable 4xx cannot leak through `deriveGhHttpStatus() === null`. */
+export function viewerLoginFailureIsGraphqlEligible(error: unknown): boolean {
+  const code = String((error as { code?: unknown } | null)?.code ?? '');
+  if (code === 'ETIMEDOUT' || code === 'ABORT_ERR') {
+    return true;
+  }
+  if ((error as { killed?: unknown } | null)?.killed === true) {
+    return true;
+  }
+  const status = deriveGhHttpStatus(error);
+  if (status == null) {
+    return false;
+  }
+  return status >= 500 && status <= 599;
+}
+
+function defaultRestViewerLogin(options: GhTextOptions = {}): string {
+  return ghText(['api', 'user', '--jq', '.login'], options);
+}
+
+function defaultGraphqlViewerLogin(): string {
+  const payload = ghGraphql('query { viewer { login } }', {});
+  const root = payload as {
+    data?: { viewer?: { login?: unknown } };
+    viewer?: { login?: unknown };
+  };
+  return String(root.data?.viewer?.login ?? root.viewer?.login ?? '').trim();
+}
+
+/** Resolve the current GitHub actor login for A5 collectors (#2148).
+ *
+ * REST `GET /user` first. On 5xx, timeout, or empty body, try GraphQL
+ * `viewer { login }` once. 4xx does not fall back. If both fail, the
+ * original REST error is rethrown (today's fail-closed abort). */
+export function resolveViewerLogin(
+  options: GhTextOptions = {},
+  deps: {
+    rest?: () => string;
+    graphql?: () => string;
+  } = {},
+): string {
+  const rest = deps.rest ?? (() => defaultRestViewerLogin(options));
+  const graphql = deps.graphql ?? defaultGraphqlViewerLogin;
+  try {
+    const login = rest().trim();
+    if (login) {
+      return login;
+    }
+  } catch (error) {
+    if (!viewerLoginFailureIsGraphqlEligible(error)) {
+      throw error;
+    }
+    try {
+      const fallback = graphql().trim();
+      if (fallback) {
+        return fallback;
+      }
+    } catch {
+      // Keep the REST error as the fail-closed abort.
+    }
+    throw error;
+  }
+  try {
+    const fallback = graphql().trim();
+    if (fallback) {
+      return fallback;
+    }
+  } catch {
+    // Empty REST body plus GraphQL failure is still unavailable.
+  }
+  throw new Error(
+    'viewer login unavailable from REST /user and GraphQL viewer',
+  );
 }
 
 /** Options accepted by {@link withBoundedRetry}. */

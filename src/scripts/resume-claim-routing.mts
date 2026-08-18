@@ -8,7 +8,11 @@
 import { parseCliArgs } from './cli-args.mts';
 import type { CollaboratorPermissionCache } from './collaborator-permission.mts';
 import { isAuthorizedForcedHandoffActor } from './collaborator-permission.mts';
-import { GH_TEXT_LOOP_TIMEOUT_OPTIONS, ghText } from './gh-exec.mts';
+import {
+  GH_TEXT_LOOP_TIMEOUT_OPTIONS,
+  ghText,
+  resolveViewerLogin,
+} from './gh-exec.mts';
 import { loadPolicyConfig } from './idd-config.mts';
 import { listActivationNonces } from './marker-helpers.mts';
 import { normalizePolicyConfig } from './policy-helpers.mts';
@@ -444,10 +448,7 @@ function runCli(): void {
   const trustedLogins = resolveTrustedLogins({
     fromArgs: args.trustedMarkerLogins,
     fromPolicy: policy.trustedMarkerActors,
-    currentLogin: ghText(
-      ['api', 'user', '--jq', '.login'],
-      GH_TEXT_LOOP_TIMEOUT_OPTIONS,
-    ),
+    currentLogin: resolveViewerLogin(GH_TEXT_LOOP_TIMEOUT_OPTIONS),
   });
   const trustedSet = new Set(trustedLogins.map((login) => login.toLowerCase()));
   const comments = fetchIssueComments(repository, args.issue);

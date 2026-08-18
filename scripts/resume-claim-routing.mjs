@@ -6,7 +6,11 @@
 // generated .mjs. See docs/typescript-sources.md.
 import { parseCliArgs } from './cli-args.mjs';
 import { isAuthorizedForcedHandoffActor } from './collaborator-permission.mjs';
-import { GH_TEXT_LOOP_TIMEOUT_OPTIONS, ghText } from './gh-exec.mjs';
+import {
+  GH_TEXT_LOOP_TIMEOUT_OPTIONS,
+  ghText,
+  resolveViewerLogin,
+} from './gh-exec.mjs';
 import { loadPolicyConfig } from './idd-config.mjs';
 import { listActivationNonces } from './marker-helpers.mjs';
 import { normalizePolicyConfig } from './policy-helpers.mjs';
@@ -316,10 +320,7 @@ function runCli() {
   const trustedLogins = resolveTrustedLogins({
     fromArgs: args.trustedMarkerLogins,
     fromPolicy: policy.trustedMarkerActors,
-    currentLogin: ghText(
-      ['api', 'user', '--jq', '.login'],
-      GH_TEXT_LOOP_TIMEOUT_OPTIONS,
-    ),
+    currentLogin: resolveViewerLogin(GH_TEXT_LOOP_TIMEOUT_OPTIONS),
   });
   const trustedSet = new Set(trustedLogins.map((login) => login.toLowerCase()));
   const comments = fetchIssueComments(repository, args.issue);

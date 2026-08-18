@@ -91,11 +91,17 @@ export function evaluateClaimApprovalGate(input, options = {}) {
   const authorPermission = issueAuthor
     ? normalizePermissionResult(resolvePermission(issueAuthor))
     : { known: false, permission: '', error: 'issue author missing' };
-  const authorSelfAuthorized = isAuthorizedByPolicy(
-    authorPermission.permission,
+  const associationSelfAuthorized = authorAssociationSelfAuthorizes(
+    issue.authorAssociation,
     policyState.maintainerApprovalActorPolicy,
   );
-  if (!authorPermission.known) {
+  const authorSelfAuthorized =
+    isAuthorizedByPolicy(
+      authorPermission.permission,
+      policyState.maintainerApprovalActorPolicy,
+    ) ||
+    (!authorPermission.known && associationSelfAuthorized);
+  if (!authorPermission.known && !associationSelfAuthorized) {
     ambiguity.push('issue-author-permission-unavailable');
     permissionAmbiguity = true;
   }
@@ -104,7 +110,9 @@ export function evaluateClaimApprovalGate(input, options = {}) {
     name: 'Issue author self-authorized',
     result: authorSelfAuthorized ? 'pass' : 'fail',
     evidence: authorSelfAuthorized
-      ? `Issue author ${issueAuthor} satisfies policy ${policyState.maintainerApprovalActorPolicy}.`
+      ? authorPermission.known
+        ? `Issue author ${issueAuthor} satisfies policy ${policyState.maintainerApprovalActorPolicy}.`
+        : `Issue author ${issueAuthor} author_association ${issue.authorAssociation} satisfies policy ${policyState.maintainerApprovalActorPolicy} without a collaborators-permission read (#2148).`
       : `Issue author ${issueAuthor || '(missing)'} does not satisfy policy ${policyState.maintainerApprovalActorPolicy}.`,
   });
   const latestSubstantiveEditAt = resolveLatestSubstantiveEditAt(
@@ -327,6 +335,9 @@ function normalizeIssue(issue) {
   const i = issue;
   return {
     authorLogin: String(i?.user?.login ?? '')
+      .trim()
+      .toLowerCase(),
+    authorAssociation: String(i?.author_association ?? '')
       .trim()
       .toLowerCase(),
     labels: normalizeLabels(i?.labels),
@@ -581,6 +592,23 @@ function deriveReason(state) {
     return 'ready-comment-fresh';
   }
   return 'gate-disabled';
+}
+/** #2148: live issue `author_association` is enough for self-authorization
+ * when the collaborators-permission endpoint is unavailable. OWNER is
+ * always sufficient; MEMBER is accepted under the default
+ * owners-and-maintainers-only policy (the observed payload for an org
+ * owner when REST /permission 503s). */
+function authorAssociationSelfAuthorizes(association, policy) {
+  if (association === 'owner') {
+    return true;
+  }
+  if (association === 'member') {
+    return (
+      policy === 'owners-and-maintainers-only' ||
+      policy === 'all-write-permission-actors'
+    );
+  }
+  return false;
 }
 function isAuthorizedByPolicy(permission, policy) {
   if (policy === 'all-write-permission-actors') {
