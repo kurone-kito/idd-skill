@@ -1394,6 +1394,14 @@ verdict, and look like "the reply got linted." That path is now the
 companion comment workflow above, and only IDD-originated comments
 refresh the required run. This is `idd-advisory-convergence`, not
 `lint.yml`.
+The shipped hybrid contract is present-tense: IDD replies carry
+`<!-- {markerPrefix}-review-reply -->` after the visible
+disposition prefix (this is **not** the E1 `review-watermark`);
+unmarked human replies on human threads are presence-only; Copilot
+threads still need an IDD disposition; `reviewPolicy:
+human-required` / `no-advisory` makes Copilot clauses
+`not_applicable`. See
+[Hybrid review-reply identity](docs/idd-review-policy-profiles.md#hybrid-review-reply-identity-shipped).
 Repositories that want human-led or gradual IDD adoption should
 leave the check unregistered until they intend the Copilot-advisory
 loop.

@@ -872,6 +872,13 @@ The adopted helper boundaries are intentionally narrow:
   thread) and resolves the thread (GraphQL `resolveReviewThread`). Reply
   first, resolve second, so a failed reply never resolves the thread without a
   disposition.
+- **`--apply` appends the reply-identity stamp**
+  `<!-- {markerPrefix}-review-reply -->` after the visible
+  `**Accepted**` / `**Rejected**` body (same injection as
+  `disposition-non-review-notices --apply`). A manual `gh api` JSON
+  body must append that stamp itself. The stamp is utterance
+  identity; it is not an E1 `review-watermark`. See
+  [Hybrid review-reply identity](idd-review-policy-profiles.md#hybrid-review-reply-identity-shipped).
 - **Dry-run** reports the resolved `threadId` and current `alreadyResolved`
   state without posting; a comment with no owning thread omits `threadId`
   and includes an `error` note.
