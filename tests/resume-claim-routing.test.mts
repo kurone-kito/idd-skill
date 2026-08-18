@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 
 import {
@@ -1084,4 +1085,12 @@ test('evaluateFreshClaimGate: released competing claim is claimable, not already
   assert.equal(gate.verdict, 'claimable');
   assert.equal(gate.reason, 'no-active-claim');
   assert.equal(gate.winningClaimId, null);
+});
+
+test('runCli sources currentLogin from resolveViewerLogin (#2148)', () => {
+  const source = readFileSync(
+    new URL('../src/scripts/resume-claim-routing.mts', import.meta.url),
+    'utf8',
+  );
+  assert.match(source, /resolveViewerLogin\(GH_TEXT_LOOP_TIMEOUT_OPTIONS\)/);
 });

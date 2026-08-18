@@ -93,6 +93,86 @@ test('write collaborator is not self-authorized under default policy', () => {
   assert.equal(result.approved, false);
 });
 
+test('OWNER author_association self-authorizes when permission read is unknown (#2148)', () => {
+  const result = evaluateClaimApprovalGate(
+    {
+      issue: { ...BASE_ISSUE, author_association: 'OWNER' },
+      policy: { maintainerApprovalActorPolicy: 'owners-and-maintainers-only' },
+      timeline: BASE_TIMELINE,
+    },
+    {
+      resolvePermission: permissionResolver({
+        author: {
+          known: false,
+          permission: '',
+          error: 'permission lookup failed: 503',
+        },
+      }),
+    },
+  );
+  assert.equal(result.approved, true);
+  assert.equal(result.reason, 'author-self-authorized');
+  assert.equal(findCheck(result, 'ambiguity_guard')?.result, 'pass');
+});
+
+test('MEMBER author_association self-authorizes under default policy when permission read is unknown (#2148)', () => {
+  const result = evaluateClaimApprovalGate(
+    {
+      issue: { ...BASE_ISSUE, author_association: 'MEMBER' },
+      policy: { maintainerApprovalActorPolicy: 'owners-and-maintainers-only' },
+      timeline: BASE_TIMELINE,
+    },
+    {
+      resolvePermission: permissionResolver({
+        author: {
+          known: false,
+          permission: '',
+          error: 'permission lookup failed: 503',
+        },
+      }),
+    },
+  );
+  assert.equal(result.approved, true);
+  assert.equal(result.reason, 'author-self-authorized');
+});
+
+test('CONTRIBUTOR author_association does not self-authorize when permission read is unknown', () => {
+  const result = evaluateClaimApprovalGate(
+    {
+      issue: { ...BASE_ISSUE, author_association: 'CONTRIBUTOR' },
+      policy: { maintainerApprovalActorPolicy: 'owners-and-maintainers-only' },
+      timeline: BASE_TIMELINE,
+    },
+    {
+      resolvePermission: permissionResolver({
+        author: {
+          known: false,
+          permission: '',
+          error: 'permission lookup failed: 503',
+        },
+      }),
+    },
+  );
+  assert.equal(result.approved, false);
+  assert.equal(result.reason, 'approval-ambiguous');
+});
+
+test('known write permission is not overridden by OWNER association', () => {
+  const result = evaluateClaimApprovalGate(
+    {
+      issue: { ...BASE_ISSUE, author_association: 'OWNER' },
+      policy: { maintainerApprovalActorPolicy: 'owners-and-maintainers-only' },
+      timeline: BASE_TIMELINE,
+    },
+    {
+      resolvePermission: permissionResolver({
+        author: { known: true, permission: 'write' },
+      }),
+    },
+  );
+  assert.equal(result.approved, false);
+});
+
 test('write collaborator is self-authorized under all-write policy', () => {
   const result = evaluateClaimApprovalGate(
     {
