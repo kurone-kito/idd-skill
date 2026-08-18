@@ -169,8 +169,9 @@ export const SAME_HEAD_REROLL_INELIGIBLE_REASON = {
 };
 /** #2143: stable tokens for `nextActions[].token` -- one per branch of
  * {@link collectAssertNextActions}, the same catalog the stderr track
- * (`formatAssertNextActions`) already prints. Exported so tests and the
- * schema enum share a single source of truth. */
+ * (`formatAssertNextActions`) already prints. Exported so tests can pin
+ * the set. The schema `enum` is hand-maintained beside this object and
+ * must stay in sync; the pin test compares both. */
 export const ADVISORY_CONVERGENCE_NEXT_ACTION_TOKEN = {
   INDETERMINATE_APPLICABILITY: 'indeterminate-applicability',
   REQUEST_REVIEW: 'request-review',

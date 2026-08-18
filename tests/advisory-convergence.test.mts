@@ -4188,6 +4188,37 @@ test('formatAssertNextActions covers indeterminate applicability (#2142)', () =>
   assert.doesNotMatch(text, /external-check waiver/);
 });
 
+test('nextActions token catalog is pinned and matches the schema enum (#2143)', () => {
+  const tokens = Object.values(ADVISORY_CONVERGENCE_NEXT_ACTION_TOKEN).sort();
+  assert.deepEqual(
+    tokens,
+    [
+      'ack-suppressed',
+      'disposition-posted-items',
+      'disposition-threads',
+      'hold-deadline',
+      'hold-terminal',
+      'indeterminate-applicability',
+      'request-re-review',
+      'request-review',
+      'reread-verdict',
+      'same-head-reroll',
+      'waiver-deadline',
+      'waiver-terminal',
+    ].sort(),
+  );
+  const schemaTokens = (
+    SCHEMA as {
+      properties: {
+        nextActions: {
+          items: { properties: { token: { enum: string[] } } };
+        };
+      };
+    }
+  ).properties.nextActions.items.properties.token.enum;
+  assert.deepEqual([...schemaTokens].sort(), tokens);
+});
+
 test('computeAdvisoryConvergenceVerdict: ready nextActions is empty (#2143)', () => {
   const verdict = computeAdvisoryConvergenceVerdict(
     baseInputs({
