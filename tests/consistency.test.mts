@@ -1775,6 +1775,10 @@ test("audit/sync-manifest.json's guarded repo state: this repository's own engin
         mode: 'full-range',
       },
       {
+        file: '.github/workflows/idd-advisory-convergence-comment.yml',
+        mode: 'full-range',
+      },
+      {
         file: '.github/workflows/pnpm-boundary-node22-floor.yml',
         mode: 'low-bound-contains',
       },

@@ -31,19 +31,19 @@ name: IDD advisory-convergence gate
 # dogfooded copy at .github/workflows/idd-advisory-convergence.yml.
 concurrency:
   cancel-in-progress: true
-  # Grouped by PR number, not github.ref: pull_request_review and
-  # pull_request_review_comment are not pull_request-family events, so
-  # github.ref does not resolve the same way for them as it does for a
-  # pull_request-only workflow. workflow_dispatch has no pull_request
-  # context either, so it falls back to its own input.
+  # Grouped by PR number, not github.ref: pull_request_review is not a
+  # pull_request-family event, so github.ref does not resolve the same
+  # way for it as it does for a pull_request-only workflow.
+  # Review-thread comments live in the companion
+  # idd-advisory-convergence-comment.yml workflow and must not share
+  # this group. workflow_dispatch has no pull_request context either,
+  # so it falls back to its own input.
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || inputs.pr_number }}
 on:
   pull_request:
     types: [opened, reopened, synchronize]
   pull_request_review:
     types: [submitted]
-  pull_request_review_comment:
-    types: [created, edited, deleted]
   workflow_dispatch:
     inputs:
       pr_number:

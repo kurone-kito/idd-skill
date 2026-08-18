@@ -1,0 +1,59 @@
+# Non-required companion to idd-advisory-convergence.yml (#2136).
+#
+# Human review-thread chatter must not create or cancel the required
+# `idd-advisory-convergence` check-run. This workflow has a different
+# name, job id, and concurrency group so it cannot overwrite that SHA
+# verdict or cancel an in-flight required run.
+#
+# When the comment is IDD-originated (reply-identity stamp, disposition
+# prefix, or an operational marker the required check already honors),
+# it reuses `rerun-advisory-convergence.mjs --apply` to refresh the
+# existing pull_request-family required run for the current HEAD SHA.
+# It never asserts `ready` itself.
+#
+# Job id is deliberately NOT `idd-advisory-convergence`.
+#
+# Runner: shipped default is `ubuntu-slim`. Override via the
+# `CI_RUNNER_LABEL` repository variable, matching the required
+# workflow. `defaults.run.shell` pins every `run:` step to `bash`.
+name: IDD advisory-convergence comment refresh
+concurrency:
+  # Do not cancel: a later human LGTM must not abort an in-flight
+  # IDD-originated refresh before it reruns the required check (#2136).
+  cancel-in-progress: false
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
+on:
+  pull_request_review_comment:
+    types: [created, edited, deleted]
+permissions:
+  contents: read
+  issues: read
+  pull-requests: read
+  actions: write
+defaults:
+  run:
+    shell: bash
+jobs:
+  refresh-if-idd-originated:
+    runs-on: ${{ vars.CI_RUNNER_LABEL || 'ubuntu-slim' }}
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.x
+      - name: Classify review comment
+        id: origin
+        env:
+          COMMENT_BODY: ${{ github.event.comment.body }}
+        run: node scripts/review-comment-origin.mjs
+      - name: Rerun required HEAD check
+        if: steps.origin.outputs.idd_originated == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_ENTERPRISE_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: node scripts/rerun-advisory-convergence.mjs --pr "$PR_NUMBER" --apply

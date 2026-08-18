@@ -1321,11 +1321,15 @@ workflow turns "Copilot's review converged on the current PR HEAD" from
 an instruction the execution model must choose to honor into a
 status check GitHub itself can enforce. It is opt-in — the template
 already mirrors the workflow at
-[`idd-template/.github/workflows/idd-advisory-convergence.yml`](.github/workflows/idd-advisory-convergence.yml);
-copy that one file into your repository's `.github/workflows/` to
-enable it. It is not wired in automatically by importing the rest of
-`idd-template/`, since adding a new required-status-check-able workflow
-is a deliberate adopter decision, not a default.
+[`idd-template/.github/workflows/idd-advisory-convergence.yml`](.github/workflows/idd-advisory-convergence.yml)
+and its comment-refresh companion
+[`idd-template/.github/workflows/idd-advisory-convergence-comment.yml`](.github/workflows/idd-advisory-convergence-comment.yml);
+copy both files into your repository's `.github/workflows/` to
+enable it. Register only the required job id
+`idd-advisory-convergence` as a status check — the companion is
+non-required. They are not wired in automatically by importing the
+rest of `idd-template/`, since adding a new required-status-check-able
+workflow is a deliberate adopter decision, not a default.
 
 Adjust the command to your helper-runtime profile, and the
 `actions/checkout` version if needed — the mirrored file intentionally
@@ -1361,37 +1365,35 @@ drives every live GitHub API call the script makes (reviews, threads,
 comments), independent of what is checked out locally, so pinning the
 checkout to the trusted branch costs nothing functionally.
 
-Three automatic trigger types keep the verdict current: `pull_request`
-for the normal push case, plus two triggers for the ways convergence
-can change **without** a new push — `pull_request_review` for
-Copilot's review submission, and `pull_request_review_comment` for a
-reply posted, edited, or deleted on a review thread, including the
-disposition markers (`**Accepted**` / `**Rejected**`) triage posts,
-since those are exactly what flips a thread from blocking to
-dispositioned. A thread being resolved or
-unresolved via the "Resolve conversation" button
-(`pull_request_review_thread`) is a real GitHub webhook event, but it
-is **not** one of the events GitHub Actions supports as a workflow
-`on:` trigger — including it makes the whole workflow file fail
-GitHub's schema validation (confirmed both against GitHub's own
+Two automatic trigger types keep the required verdict current:
+`pull_request` for the normal push case, and `pull_request_review` for
+Copilot's review submission. Review-thread comments are **not** on
+that required job. IDD-originated comments (a disposition prefix, the
+reply-identity stamp, or an operational marker the check already
+honors) refresh the existing HEAD-associated required run from the
+companion `idd-advisory-convergence-comment.yml` workflow, which
+calls `rerun-advisory-convergence --apply` and never reports
+`ready` itself. Ordinary human prose (`LGTM`) does not create or
+cancel the required check.
+
+A thread being resolved or unresolved via the "Resolve conversation"
+button (`pull_request_review_thread`) is a real GitHub webhook event,
+but it is **not** one of the events GitHub Actions supports as a
+workflow `on:` trigger — including it makes the whole workflow file
+fail GitHub's schema validation (confirmed both against GitHub's own
 trigger-events reference and empirically). Residual gap: if a
 Copilot-authored thread is resolved or reopened with no accompanying
-comment, push, or fresh Copilot review, this check keeps reporting its
-last computed verdict until one of the three automatic triggers fires
-or a maintainer runs the workflow's fourth trigger,
-`workflow_dispatch`, manually — an explicit "Run workflow" affordance
-for that case, taking a `pr_number` input since a manually dispatched
-run has no PR context of its own.
+comment, push, or fresh Copilot review, this check keeps reporting
+its last computed verdict until a push, a Copilot review, an
+IDD-originated comment refresh, or a maintainer `workflow_dispatch`
+fires.
 
-**Human-reply retrigger.** Those same comment and review triggers fire
-for every review-thread reply, edit, or delete — including ordinary
-human prose, not just IDD disposition markers. If you register
-`idd-advisory-convergence` as a required status check, that reply
-re-asserts the fail-closed Copilot verdict. The PR's required check
-can fail (Checks tab / merge rollup), and, because the workflow
-shares a PR-number concurrency group with `cancel-in-progress: true`,
-can cancel an in-flight run for that PR (observed 2026-08-17 on
-PR #2130). This is `idd-advisory-convergence`, not `lint.yml`.
+**Human-reply retrigger.** A casual human reply used to start the
+required `idd-advisory-convergence` job, fail or cancel the SHA
+verdict, and look like "the reply got linted." That path is now the
+companion comment workflow above, and only IDD-originated comments
+refresh the required run. This is `idd-advisory-convergence`, not
+`lint.yml`.
 Repositories that want human-led or gradual IDD adoption should
 leave the check unregistered until they intend the Copilot-advisory
 loop.
