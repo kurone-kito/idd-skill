@@ -366,8 +366,9 @@ export function ghGraphql(
 }
 
 /** #2148: REST `GET /user` failures that may still have a live GraphQL
- * `viewer { login }` — 5xx, timeout, empty body, or an unclassified
- * transport error. 4xx stays fail-closed on REST (no GraphQL fallback). */
+ * `viewer { login }` — 5xx, timeout, or a killed child. Unclassified
+ * errors and 4xx stay fail-closed on REST (no GraphQL fallback), so an
+ * unparsable 4xx cannot leak through `deriveGhHttpStatus() === null`. */
 export function viewerLoginFailureIsGraphqlEligible(error: unknown): boolean {
   const code = String((error as { code?: unknown } | null)?.code ?? '');
   if (code === 'ETIMEDOUT' || code === 'ABORT_ERR') {
@@ -378,7 +379,7 @@ export function viewerLoginFailureIsGraphqlEligible(error: unknown): boolean {
   }
   const status = deriveGhHttpStatus(error);
   if (status == null) {
-    return true;
+    return false;
   }
   return status >= 500 && status <= 599;
 }

@@ -799,6 +799,30 @@ test('viewerLoginFailureIsGraphqlEligible treats timeout as eligible', () => {
   );
 });
 
+test('viewerLoginFailureIsGraphqlEligible treats unclassified errors as fail-closed', () => {
+  assert.equal(
+    viewerLoginFailureIsGraphqlEligible(new Error('something went wrong')),
+    false,
+  );
+});
+
+test('resolveViewerLogin does not fall back on an unclassified REST error', () => {
+  const restError = new Error('gh: mysterious failure');
+  assert.throws(
+    () =>
+      resolveViewerLogin(
+        {},
+        {
+          rest: () => {
+            throw restError;
+          },
+          graphql: () => 'graphql-user',
+        },
+      ),
+    restError,
+  );
+});
+
 test('resolveViewerLogin live seam: REST 503 then GraphQL viewer login', () => {
   const restore = stubGh(`
 const args = process.argv.slice(2);
