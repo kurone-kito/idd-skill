@@ -1933,9 +1933,12 @@ reflexively as any other CLI option.
   from `deadline`. When `terminal.state` is `COPILOT_UNAVAILABLE`, the
   SAME waiver escape hatch above also opens — independent of whether the
   ordinary deadline has passed — but `ready` still requires a valid
-  waiver in addition (`ready = converged || ((deadline.passed ||
-  terminal.state == "COPILOT_UNAVAILABLE") && waived)`); the terminal
-  state alone never sets `ready: true`. Observed incident:
+  waiver in addition (`ready = not_applicable || converged ||
+  ((deadline.passed || terminal.state == "COPILOT_UNAVAILABLE") &&
+  waived)`); the terminal state alone never sets `ready: true`. A
+  `not_applicable` applicability (including `reviewPolicy`
+  `human-required` / `no-advisory`) is an independent ready path and
+  does not change this waiver rule. Observed incident:
   kurone-kito/idd-skill#1562. See `idd-advisory-wait.instructions.md`'s
   Terminal routing section for the full hold/rerun sequence.
 - **Eligibility-relevant disposition-evidence counters (`#1719`)**: the

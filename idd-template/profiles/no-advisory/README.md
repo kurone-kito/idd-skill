@@ -11,10 +11,11 @@ profile unless this policy actually wants an advisory-bot gate.**
 Hosting that workflow is optional. Set `reviewPolicy` to
 `no-advisory` in `.github/idd/config.json` so a later session does
 not re-host the check against a no-advisory policy. Registering the
-job as a required status check re-asserts Copilot convergence on
-hybrid or IDD-claimed PRs even after the phase files drop the
-advisory wait. Leave the check unregistered unless you later switch
-to a Copilot-advisory or `external-bot` review policy.
+job as a required status check still adds an extra required CI
+gate and extra runs, even though the helper no longer demands
+Copilot under `no-advisory`. Leave the check unregistered unless
+you later switch to a Copilot-advisory or `external-bot` review
+policy, or you explicitly want that extra required check.
 
 ## Adopter-Owned Values
 
