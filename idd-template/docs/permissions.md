@@ -117,8 +117,8 @@ merges:
 
 The `--admin` retry's settled-state helper
 (`isSafeSoloCodeownerAdminMergeState`) still refuses
-`mergeStateStatus: BLOCKED`. That is the distributed contract, not a
-kurone-kito/idd-skill-only quirk: field evidence showed `BLOCKED` from
+`mergeStateStatus: "BLOCKED"`. That is the distributed contract, not a
+kurone-kito/idd-skill-only quirk: field evidence showed `"BLOCKED"` from
 cancelled or stale required-check instances, a missing
 review-watermark, or incomplete F2, and widening the retry would merge
 past a still-red required check.
@@ -130,18 +130,24 @@ actor):
 
 - `codeownerSelfApproval.status` reads `not_applicable`, so the retry
   trigger (`status: "clear"`) never matches.
-- Observed `BLOCKED` on #1660, #1741, #1914, and #2123 was
-  cancelled/stale required checks, a missing review-watermark, or
-  incomplete F2 — not a confirmed CODEOWNER deadlock.
-- #1867 is topology evidence, not another stale-check incident: F2 was
-  `ready: true`, the retry correctly stayed off because of
-  `not_applicable`, and a human `--admin` completed the merge.
+- Observed `"BLOCKED"` on kurone-kito/idd-skill#1660 (2026-07-23),
+  kurone-kito/idd-skill#1741 (2026-08-01),
+  kurone-kito/idd-skill#1914 (2026-08-06), and
+  kurone-kito/idd-skill#2123 (2026-08-17) was cancelled/stale required
+  checks, a missing review-watermark, or incomplete F2 — not a
+  confirmed CODEOWNER deadlock.
+- kurone-kito/idd-skill#1867 (2026-08-05) is topology evidence, not
+  another stale-check incident: F2 was `ready: true`, the retry
+  correctly stayed off because of `not_applicable`, and a human
+  `--admin` completed the merge.
 - When a plain `gh pr merge` still fails with "the base branch policy
   prohibits the merge" after F2 is clean **on this topology**, escalate
   with a human `--admin` (or `hold-and-report`). Distributed
   `auto-admin-retry` is unchanged for repositories where
-  `status: "clear"` and `prAuthorIsSoleEligibleCodeowner: true` hold.
-- `BLOCKED` plus discarded required-check siblings is a separate
+  `status: "clear"` with a bypass-available `reason`,
+  `prAuthorIsSoleEligibleCodeowner: true`, and
+  `codeownerEligibilityUnreadable: false` hold.
+- `"BLOCKED"` plus discarded required-check siblings is a separate
   CI-recovery gate (kurone-kito/idd-skill#2127), not a reason to widen
   the `--admin` retry.
 
@@ -153,23 +159,27 @@ CODEOWNERS mismatch as substitutes for a satisfiable GitHub merge gate.
 ## Reading the `code_quality` ruleset rule
 
 This source repository's `main` ruleset includes a `code_quality` rule
-(`severity: errors`). As of 2026-08-19, a per-SHA pass/fail **after a
+(`severity: errors`). As of 2026-08-18, a per-SHA pass/fail **after a
 push to a matching ref** is readable via ruleset rule-suites. A live
 PR-head verdict for F3 is not: the `main` ruleset matches
 `~DEFAULT_BRANCH`, and observed suites were `refs/heads/main` only.
-Automated F3 inspection therefore stays out of scope. A `BLOCKED`
+Automated F3 inspection therefore stays out of scope. A `"BLOCKED"`
 merge state is not evidence of a `code_quality` finding.
 
-Surfaces tried on kurone-kito/idd-skill (2026-08-19):
+Surfaces tried on kurone-kito/idd-skill (2026-08-18):
 
 - REST rule-suites — a post-push evaluation. List
-  `GET /repos/{owner}/{repo}/rulesets/rule-suites`, then
+  `GET /repos/{owner}/{repo}/rulesets/rule-suites` with `ref` set to
+  the matching ref (here `refs/heads/main`), a `time_period` that
+  covers the SHA (`day` is the default 24 h window; use `week` or
+  `month` for older pushes), and pagination (`per_page` up to 100;
+  follow `page` / Link headers — the default page is 30), then
   `GET /repos/{owner}/{repo}/rulesets/rule-suites/{id}`. List
   entries include `after_sha`; the detail's `rule_evaluations[]`
   includes `{ "rule_type": "code_quality", "result": "pass" }` (or
   `fail`). Filter the list for `after_sha` equal to the head when a
-  suite exists. This is not a pre-merge PR-head gate on this
-  topology.
+  suite exists. A 404 can mean the token cannot list rule suites.
+  This is not a pre-merge PR-head gate on this topology.
 - REST `GET /repos/{owner}/{repo}/code-quality/findings` — HTTP 404
   here (product API documented; not enabled on this repository). The
   documented sample payload has no commit SHA.

@@ -221,8 +221,9 @@ Before any mutating action in F3, apply the
        states have not been a confirmed CODEOWNER deadlock, and the
        remaining escalation on **this topology** is a human `--admin`
        (or `hold-and-report`). Distributed `auto-admin-retry` is
-       unchanged when `status: "clear"` and
-       `prAuthorIsSoleEligibleCodeowner: true` hold. See
+       unchanged when `status: "clear"` with a bypass-available
+       `reason`, `prAuthorIsSoleEligibleCodeowner: true`, and
+       `codeownerEligibilityUnreadable: false` hold. See
        `docs/permissions.md` (kurone-kito/idd-skill#1663).
        `idd-merge-execute.mjs --apply` applies this automatically and
        records the outcome in the verdict's `adminFallbackUsed` field.
