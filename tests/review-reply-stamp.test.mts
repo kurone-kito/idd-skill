@@ -25,8 +25,8 @@ test('REVIEW_REPLY_STAMP_SUFFIX is review-reply, not a watermark token', () => {
 test('renderReviewReplyStamp uses the configured prefix and default', () => {
   assert.equal(renderReviewReplyStamp(), STAMP);
   assert.equal(
-    renderReviewReplyStamp('org.project'),
-    '<!-- org.project-review-reply -->',
+    renderReviewReplyStamp('org-project'),
+    '<!-- org-project-review-reply -->',
   );
 });
 
@@ -67,10 +67,10 @@ test('hasReviewReplyStamp rejects hyphen-extended suffixes that createMarkerRege
 });
 
 test('hasReviewReplyStamp honors an adopter markerPrefix and does not cross prefixes', () => {
-  const adopter = '<!-- org.project-review-reply -->';
-  assert.equal(hasReviewReplyStamp(adopter, 'org.project'), true);
+  const adopter = '<!-- org-project-review-reply -->';
+  assert.equal(hasReviewReplyStamp(adopter, 'org-project'), true);
   assert.equal(hasReviewReplyStamp(adopter, 'idd-skill'), false);
-  assert.equal(hasReviewReplyStamp(STAMP, 'org.project'), false);
+  assert.equal(hasReviewReplyStamp(STAMP, 'org-project'), false);
 });
 
 test('appendReviewReplyStamp is idempotent and preserves first-byte disposition', () => {
