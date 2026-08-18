@@ -20,6 +20,12 @@ const REPO_ROOT = fileURLToPath(new URL('..', import.meta.url));
 
 const resultSchema = loadJson('schemas/resolve-review-thread.schema.json');
 
+test('parseArgs defaults a missing --body to an empty string for dry-run', () => {
+  const args = parseArgs(['--pr', '42', '--comment-id', '1001']);
+  assert.equal(args.body, '');
+  assert.equal(args.body.trim(), '');
+});
+
 test('parseArgs reads the call shape and defaults to dry-run', () => {
   const args = parseArgs([
     '--pr',

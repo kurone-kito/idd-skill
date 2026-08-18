@@ -604,9 +604,13 @@ if (import.meta.main) {
   const pr = args.pr as number;
   const commentId = args.commentId as number;
   const markerPrefixRaw = loadIddConfig()?.markerPrefix;
-  const stampedBody = args.body.trim()
+  // `--body` is optional in dry-run. `parseCliArgs` defaults it to '', but
+  // coerce anyway so a missing value cannot throw on `.trim()` before the
+  // report is written.
+  const rawBody = typeof args.body === 'string' ? args.body : '';
+  const stampedBody = rawBody.trim()
     ? appendReviewReplyStamp(
-        args.body,
+        rawBody,
         typeof markerPrefixRaw === 'string' ? markerPrefixRaw : undefined,
       )
     : '';
