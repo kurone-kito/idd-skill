@@ -222,7 +222,7 @@ Before any mutating action in F3, apply the
        `isSafeSoloCodeownerAdminMergeState` still refuses
        `mergeStateStatus: "BLOCKED"`. On kurone-kito/idd-skill's
        current `main` ruleset (`require_code_owner_review: false`), the
-       `status: "clear"` trigger never matches, observed `BLOCKED`
+       `status: "clear"` trigger never matches, observed `"BLOCKED"`
        states have not been a confirmed CODEOWNER deadlock, and the
        remaining escalation on **this topology** is a human `--admin`
        (or `hold-and-report`). Distributed `auto-admin-retry` is
