@@ -1,7 +1,10 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { renderExternalCheckWaiverComment } from '../src/scripts/marker-helpers.mts';
+import {
+  renderExternalCheckWaiverComment,
+  renderReviewReplyStamp,
+} from '../src/scripts/marker-helpers.mts';
 import {
   fetchBranchRulesets,
   fetchGovernanceJson,
@@ -2281,7 +2284,7 @@ test('regular comment gate keeps forced-handoff markers visible without explicit
   );
 });
 
-test('disposition evidence blocks when a regular comment has no disposition marker reply', () => {
+test('disposition evidence accepts an unmarked IDD-agent reply to a regular human comment (#2139)', () => {
   const summary = summarizeDispositionEvidenceForGate(
     {
       comments: [
@@ -2303,10 +2306,39 @@ test('disposition evidence blocks when a regular comment has no disposition mark
     { iddAgentLogins: ['idd-bot'] },
   );
 
-  assert.equal(summary.route, 'return-to-e1');
-  assert.equal(summary.blockingCount, 1);
-  assert.equal(summary.missingRegularCommentCount, 1);
+  assert.equal(summary.route, 'proceed');
+  assert.equal(summary.blockingCount, 0);
+  assert.equal(summary.missingRegularCommentCount, 0);
   assert.equal(summary.missingThreadCount, 0);
+});
+
+test('disposition evidence still requires a disposition for an advisory-bot regular comment with unmarked prose (#2139)', () => {
+  const summary = summarizeDispositionEvidenceForGate(
+    {
+      comments: [
+        {
+          id: 1,
+          createdAt: '2026-05-12T00:00:00Z',
+          body: '<!-- This is an auto-generated comment: summarize by coderabbit.ai -->\n\nWalkthrough.',
+          author: { login: 'coderabbitai[bot]' },
+        },
+        {
+          id: 2,
+          createdAt: '2026-05-12T00:00:01Z',
+          body: 'Thanks, updating now.',
+          author: { login: 'idd-bot' },
+        },
+      ],
+      threads: [],
+    },
+    {
+      iddAgentLogins: ['idd-bot'],
+      advisoryBotLogins: ['coderabbitai[bot]'],
+    },
+  );
+
+  assert.equal(summary.route, 'return-to-e1');
+  assert.equal(summary.missingRegularCommentCount, 1);
 });
 
 test('disposition evidence treats PATH A and PATH B as complete when both have markers', () => {
@@ -2503,7 +2535,7 @@ test('disposition evidence blocks unresolved threads without fresh disposition m
   );
 });
 
-test('disposition evidence rejects reviewer-authored Accepted marker in threads', () => {
+test('disposition evidence treats a reviewer-authored Accepted marker on a human thread as presence-only (#2139)', () => {
   const summary = summarizeDispositionEvidenceForGate(
     {
       comments: [],
@@ -2532,9 +2564,216 @@ test('disposition evidence rejects reviewer-authored Accepted marker in threads'
     { iddAgentLogins: ['idd-bot'] },
   );
 
+  assert.equal(summary.route, 'proceed');
+  assert.equal(summary.missingThreadCount, 0);
+});
+
+test('disposition evidence treats unmarked human prose on a human-authored thread as presence-only (#2139)', () => {
+  const summary = summarizeDispositionEvidenceForGate(
+    {
+      comments: [],
+      threads: [
+        {
+          id: 'thread-human-lgtm',
+          isResolved: false,
+          comments: {
+            pageInfo: { hasNextPage: false },
+            nodes: [
+              {
+                author: { login: 'reviewer-a' },
+                createdAt: '2026-05-12T00:00:00Z',
+                body: 'please fix the naming',
+              },
+              {
+                author: { login: 'reviewer-a' },
+                createdAt: '2026-05-12T00:00:02Z',
+                body: 'LGTM, the rename looks good',
+              },
+            ],
+          },
+        },
+      ],
+    },
+    { iddAgentLogins: ['idd-bot'], trustedMarkerLogins: ['maintainer'] },
+  );
+
+  assert.equal(summary.route, 'proceed');
+  assert.equal(summary.missingThreadCount, 0);
+});
+
+test('disposition evidence still flags a human-authored thread with no reply (#2139)', () => {
+  const summary = summarizeDispositionEvidenceForGate(
+    {
+      comments: [],
+      threads: [
+        {
+          id: 'thread-human-open',
+          isResolved: false,
+          comments: {
+            pageInfo: { hasNextPage: false },
+            nodes: [
+              {
+                author: { login: 'reviewer-a' },
+                createdAt: '2026-05-12T00:00:00Z',
+                body: 'please fix the naming',
+              },
+            ],
+          },
+        },
+      ],
+    },
+    { iddAgentLogins: ['idd-bot'] },
+  );
+
   assert.equal(summary.route, 'return-to-e1');
   assert.equal(summary.missingThreadCount, 1);
-  assert.equal(summary.missingThreads[0].reason, 'missing-fresh-disposition');
+  assert.equal(
+    summary.missingThreads[0].reason,
+    'unresolved-without-fresh-disposition',
+  );
+});
+
+test('disposition evidence still flags a Copilot thread whose only reply is unmarked human prose (#2139)', () => {
+  const summary = summarizeDispositionEvidenceForGate(
+    {
+      comments: [],
+      threads: [
+        {
+          id: 'thread-copilot-ok',
+          isResolved: false,
+          comments: {
+            pageInfo: { hasNextPage: false },
+            nodes: [
+              {
+                author: { login: 'copilot' },
+                createdAt: '2026-05-12T00:00:00Z',
+                body: 'consider extracting this helper',
+              },
+              {
+                author: { login: 'reviewer-a' },
+                createdAt: '2026-05-12T00:00:02Z',
+                body: 'ok',
+              },
+            ],
+          },
+        },
+      ],
+    },
+    { iddAgentLogins: ['idd-bot'] },
+  );
+
+  assert.equal(summary.route, 'return-to-e1');
+  assert.equal(summary.missingThreadCount, 1);
+  assert.equal(
+    summary.missingThreads[0].reason,
+    'unresolved-without-fresh-disposition',
+  );
+});
+
+test('disposition evidence clears a Copilot thread with a stamped Accepted reply (#2139)', () => {
+  const stamp = renderReviewReplyStamp();
+  const summary = summarizeDispositionEvidenceForGate(
+    {
+      comments: [],
+      threads: [
+        {
+          id: 'thread-copilot-stamped',
+          isResolved: false,
+          comments: {
+            pageInfo: { hasNextPage: false },
+            nodes: [
+              {
+                author: { login: 'copilot' },
+                createdAt: '2026-05-12T00:00:00Z',
+                body: 'consider extracting this helper',
+              },
+              {
+                author: { login: 'idd-bot' },
+                createdAt: '2026-05-12T00:00:02Z',
+                body: `**Accepted** — extracted in abc123\n\n${stamp}`,
+              },
+            ],
+          },
+        },
+      ],
+    },
+    { iddAgentLogins: ['idd-bot'] },
+  );
+
+  assert.equal(summary.route, 'proceed');
+  assert.equal(summary.missingThreadCount, 0);
+});
+
+test('disposition evidence clears a Copilot thread with a legacy trusted Accepted reply (#2139)', () => {
+  const summary = summarizeDispositionEvidenceForGate(
+    {
+      comments: [],
+      threads: [
+        {
+          id: 'thread-copilot-legacy',
+          isResolved: false,
+          comments: {
+            pageInfo: { hasNextPage: false },
+            nodes: [
+              {
+                author: { login: 'copilot' },
+                createdAt: '2026-05-12T00:00:00Z',
+                body: 'consider extracting this helper',
+              },
+              {
+                author: { login: 'maintainer' },
+                createdAt: '2026-05-12T00:00:02Z',
+                body: '**Accepted** — extracted in abc123',
+              },
+            ],
+          },
+        },
+      ],
+    },
+    {
+      iddAgentLogins: ['idd-bot'],
+      trustedMarkerLogins: ['maintainer'],
+    },
+  );
+
+  assert.equal(summary.route, 'proceed');
+  assert.equal(summary.missingThreadCount, 0);
+});
+
+test('disposition evidence classifies a trusted maintainer LGTM as a human reply (#2139)', () => {
+  const summary = summarizeDispositionEvidenceForGate(
+    {
+      comments: [],
+      threads: [
+        {
+          id: 'thread-maintainer-lgtm',
+          isResolved: false,
+          comments: {
+            pageInfo: { hasNextPage: false },
+            nodes: [
+              {
+                author: { login: 'reviewer-a' },
+                createdAt: '2026-05-12T00:00:00Z',
+                body: 'please fix the naming',
+              },
+              {
+                author: { login: 'maintainer' },
+                createdAt: '2026-05-12T00:00:02Z',
+                body: 'LGTM',
+              },
+            ],
+          },
+        },
+      ],
+    },
+    {
+      iddAgentLogins: ['idd-bot'],
+      trustedMarkerLogins: ['maintainer'],
+    },
+  );
+
+  assert.equal(summary.route, 'proceed');
+  assert.equal(summary.missingThreadCount, 0);
 });
 
 test('disposition evidence accepts a resolved Rejection-confirmed-by-maintainer marker', () => {

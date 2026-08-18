@@ -270,6 +270,14 @@ separate PATH A signal, not part of this pairing):
   inject it; a manual `gh api` JSON body must append it). The stamp is
   utterance identity, not an E1 `review-watermark`, and it must not
   replace the required `**Accepted**` / `**Rejected**` first bytes.
+  F2 treats an unmarked human reply on a **human-authored** thread as
+  presence-only; it does **not** treat that as a completed IDD
+  disposition. Copilot / configured-advisory-bot threads still require
+  a stamped or legacy trusted IDD disposition (or resolution). E7
+  still fails a recorded PATH A agent reply that lacks this marker
+  contract — presence-only is an evaluation rule for other people's
+  replies, not a license to post bare prose on the session's own
+  items.
 - Post **one disposition reply per advisory item** — never combine
   several markers into one comment; the 1:1 pairing clears only one item
   per comment, leaving the rest flagged `missing-disposition-evidence`.

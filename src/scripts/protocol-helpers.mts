@@ -35,6 +35,7 @@ import type {
 import {
   findActivationNonceWinner,
   IDD_AGENT_DERIVED_MARKERS,
+  isIddOriginatedReply,
   isValidIsoTimestamp,
   operationalMarkerPrefix,
   operationalMarkerPrefixByStart,
@@ -1582,7 +1583,10 @@ function inferReviewerReopenedAt(thread: ThreadLike): string {
 
 export function hasFreshDisposition(
   thread: ThreadLike,
-  options: { isDispositionAuthor?: (login: string) => boolean } = {},
+  options: {
+    isDispositionAuthor?: (login: string) => boolean;
+    isIddOriginatedBody?: (body: string) => boolean;
+  } = {},
 ): boolean {
   // IMPORTANT: The default disposition-author predicate rejects known bots but accepts any human.
   // For F2/F3 merge-gate contexts (E7 disposition evidence), callers MUST pass
@@ -1590,10 +1594,18 @@ export function hasFreshDisposition(
   // Callers that require IDD-only dispositions (e.g., audit-pr-cleanup) should pass:
   //   { isDispositionAuthor: (login) => iddAgentLogins.has(login) }
   // This design trades stricter default behavior for backward compatibility with utility functions.
+  // `isIddOriginatedBody` (#2139) additionally accepts a stamped disposition
+  // regardless of author login: the #2135 review-reply stamp is utterance
+  // identity, so a stamped `**Accepted**` still clears an advisory thread
+  // even when the same trusted account also posts unmarked human prose.
   const dispositionAuthorPredicate =
     typeof options.isDispositionAuthor === 'function'
       ? options.isDispositionAuthor
       : (login: string) => !isKnownReviewBot(login);
+  const originatedBodyPredicate =
+    typeof options.isIddOriginatedBody === 'function'
+      ? options.isIddOriginatedBody
+      : null;
   const comments = thread.comments?.nodes ?? [];
   // A resolved thread may be terminally dispositioned with the documented
   // `**Rejection confirmed by maintainer**` marker instead of a fresh
@@ -1603,25 +1615,30 @@ export function hasFreshDisposition(
   const isDisposition = (comment: { body?: string | null }): boolean =>
     isDispositionComment(comment) ||
     (threadResolved && isRejectionConfirmedDisposition(comment));
+  const isIddDisposition = (comment: {
+    author?: AuthorRef | null;
+    body?: string | null;
+  }): boolean => {
+    if (!isDisposition(comment)) {
+      return false;
+    }
+    const authorLogin = String(comment.author?.login ?? '')
+      .trim()
+      .toLowerCase();
+    if (dispositionAuthorPredicate(authorLogin)) {
+      return true;
+    }
+    return Boolean(originatedBodyPredicate?.(String(comment.body ?? '')));
+  };
   const latestFeedbackAt = maxIsoTimestamp(
     comments
-      .filter((comment) => {
-        const authorLogin = String(comment.author?.login ?? '')
-          .trim()
-          .toLowerCase();
-        return !(
-          isDisposition(comment) && dispositionAuthorPredicate(authorLogin)
-        );
-      })
+      .filter((comment) => !isIddDisposition(comment))
       .map((comment) => effectiveThreadCommentActivityAt(comment))
       .filter(isValidIsoTimestamp),
   );
 
   return comments.some((comment) => {
-    const authorLogin = String(comment.author?.login ?? '')
-      .trim()
-      .toLowerCase();
-    if (!(isDisposition(comment) && dispositionAuthorPredicate(authorLogin))) {
+    if (!isIddDisposition(comment)) {
       return false;
     }
     const dispositionActivityAt = effectiveThreadCommentActivityAt(comment);
@@ -3616,6 +3633,46 @@ export function summarizeRegularCommentsForGate(
 // Working rule: verify every advisory finding on this code with a byte-exact
 // repro before accepting it. #1182 / PR #1184 cycled through five advisory
 // rounds, each surfacing a distinct fail mode of exactly these gates.
+function isAdvisoryAuthoredThread(
+  thread: ThreadLike,
+  advisoryBotLogins: Set<string>,
+): boolean {
+  const originating = (thread.comments?.nodes ?? [])[0];
+  return (
+    isCopilotReviewerLogin(originating?.author?.login) ||
+    isGateAdvisoryBotLogin(originating?.author?.login, advisoryBotLogins)
+  );
+}
+
+function isIddOriginatedThreadReply(
+  comment: { author?: AuthorRef | null; body?: string | null },
+  options: {
+    iddAgentLogins: Set<string>;
+    trustedMarkerLogins: Set<string>;
+    markerPrefix?: string;
+  },
+): boolean {
+  const body = String(comment.body ?? '');
+  if (isIddOriginatedReply(body, options.markerPrefix)) {
+    return true;
+  }
+  const authorLogin = String(comment.author?.login ?? '')
+    .trim()
+    .toLowerCase();
+  if (
+    !authorLogin ||
+    !(
+      options.iddAgentLogins.has(authorLogin) ||
+      options.trustedMarkerLogins.has(authorLogin)
+    )
+  ) {
+    return false;
+  }
+  return (
+    isDispositionComment({ body }) || isRejectionConfirmedDisposition({ body })
+  );
+}
+
 export function summarizeDispositionEvidenceForGate(
   {
     comments = [],
@@ -3627,6 +3684,7 @@ export function summarizeDispositionEvidenceForGate(
     trustedMarkerLogins?: unknown[] | null;
     prAuthorLogin?: string | null;
     snapshotBoundaryAt?: string | null;
+    markerPrefix?: string;
   } = {},
 ): DispositionEvidenceSummary {
   const iddAgentLogins = new Set(
@@ -3647,6 +3705,7 @@ export function summarizeDispositionEvidenceForGate(
   const prAuthorLogin = String(options.prAuthorLogin ?? '')
     .trim()
     .toLowerCase();
+  const markerPrefix = options.markerPrefix;
   // #2014: An advisory bot can never anchor "dispositions exist", mirroring
   // `buildActivitySnapshotSummary`'s identical `dispositionAuthorLogins`
   // subtraction above (this file, "An advisory bot can never anchor..."
@@ -3871,15 +3930,29 @@ export function summarizeDispositionEvidenceForGate(
   // Walk the outstanding comments oldest-first and greedily consume the
   // earliest disposition marker strictly newer than each (markers that are not
   // newer than the current comment cannot address it or any later comment).
-  const dispositionTimes = dispositionComments
+  // 1:1 pairing of later IDD-agent replies. Advisory-bot outstanding
+  // comments still require a real disposition prefix. Human outstanding
+  // comments also accept an unmarked later IDD-agent reply (presence-only,
+  // #2139) so "thanks, fixed" clears the human item without hollowing out
+  // Copilot / CodeRabbit pairing.
+  const agentReplyComments = normalizedComments
     .filter(
-      (comment) => !consumedNoticeDispositionIndexes.has(comment.sortedIndex),
+      (comment) =>
+        iddAgentLogins.has(comment.authorLogin) &&
+        !consumedNoticeDispositionIndexes.has(comment.sortedIndex) &&
+        isValidIsoTimestamp(comment.activityAt) &&
+        !isOperationalOrDigestCommentForGate(
+          comment.body,
+          comment.authorLogin,
+          trustedMarkerLogins,
+        ),
     )
-    .map((comment) => comment.activityAt)
-    .filter(isValidIsoTimestamp)
-    .sort((left, right) => Date.parse(left) - Date.parse(right));
+    .sort((left, right) => {
+      const byTime = compareIsoTimestamps(left.activityAt, right.activityAt);
+      return byTime !== 0 ? byTime : left.sortedIndex - right.sortedIndex;
+    });
 
-  let markerCursor = 0;
+  const usedReplyIndexes = new Set<number>();
   const missing: typeof outstandingComments = [];
   for (const comment of outstandingComments) {
     if (
@@ -3888,17 +3961,27 @@ export function summarizeDispositionEvidenceForGate(
     ) {
       continue;
     }
-    while (
-      markerCursor < dispositionTimes.length &&
-      compareIsoTimestamps(
-        dispositionTimes[markerCursor],
-        comment.activityAt,
-      ) <= 0
-    ) {
-      markerCursor += 1;
-    }
-    if (markerCursor < dispositionTimes.length) {
-      markerCursor += 1;
+    const requiresDispositionPrefix = isGateAdvisoryBotLogin(
+      comment.authorLogin,
+      advisoryBotLogins,
+    );
+    const reply = agentReplyComments.find((candidate) => {
+      if (usedReplyIndexes.has(candidate.sortedIndex)) {
+        return false;
+      }
+      if (compareIsoTimestamps(candidate.activityAt, comment.activityAt) <= 0) {
+        return false;
+      }
+      if (
+        requiresDispositionPrefix &&
+        !isDispositionComment({ body: candidate.body })
+      ) {
+        return false;
+      }
+      return true;
+    });
+    if (reply) {
+      usedReplyIndexes.add(reply.sortedIndex);
     } else {
       missing.push(comment);
     }
@@ -4084,10 +4167,37 @@ export function summarizeDispositionEvidenceForGate(
               String(login ?? '')
                 .trim()
                 .toLowerCase(),
+            ) ||
+            trustedMarkerLogins.has(
+              String(login ?? '')
+                .trim()
+                .toLowerCase(),
             ),
+          isIddOriginatedBody: (body) =>
+            isIddOriginatedReply(body, markerPrefix),
         })
       ) {
         return null;
+      }
+      // #2139: unmarked later replies on a *human-authored* thread are
+      // presence-only. Advisory-authored threads (Copilot / configured
+      // advisory bots) keep marker-first so an unmarked `ok` cannot
+      // satisfy Clause 2. An IDD-originated later reply that failed the
+      // freshness check above still falls through.
+      if (!isAdvisoryAuthoredThread(thread, advisoryBotLogins)) {
+        const laterReplies = commentsInThread.slice(1);
+        const hasUnmarkedHumanPresence =
+          laterReplies.length > 0 &&
+          !laterReplies.some((comment) =>
+            isIddOriginatedThreadReply(comment, {
+              iddAgentLogins,
+              trustedMarkerLogins,
+              markerPrefix,
+            }),
+          );
+        if (hasUnmarkedHumanPresence) {
+          return null;
+        }
       }
       // E1 only snapshots UNRESOLVED non-awaiting threads, and E7 only requires
       // dispositions for snapshot items. A thread that is already resolved and
