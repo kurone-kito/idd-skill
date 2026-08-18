@@ -1169,6 +1169,7 @@ const resolveReviewThreadKeys = [
   'commentId',
   'threadId',
   'alreadyResolved',
+  'body',
   'status',
   'replyId',
   'error',
@@ -1180,6 +1181,7 @@ const resolveReviewThreadFixture = {
   commentId: 1001,
   threadId: 'thread-node-id',
   alreadyResolved: false,
+  body: '**Accepted** — fixed in abc\n\n<!-- idd-skill-review-reply -->',
   status: 'applied',
   replyId: 4242,
 } satisfies ResolveReviewThreadReport;

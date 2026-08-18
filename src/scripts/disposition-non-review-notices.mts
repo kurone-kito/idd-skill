@@ -40,6 +40,7 @@ import {
 } from './collaborator-permission.mts';
 import { DEFAULT_GH_PAGINATED_TIMEOUT_MS, ghText } from './gh-exec.mts';
 import { loadIddConfig } from './idd-config.mts';
+import { appendReviewReplyStamp } from './marker-helpers.mts';
 import {
   advisoryBotIdentityToken,
   compareIsoTimestamps,
@@ -95,6 +96,11 @@ export interface FailedDisposition {
   error: string;
 }
 
+function resolveConfiguredMarkerPrefix(): string {
+  const raw = loadIddConfig()?.markerPrefix;
+  return typeof raw === 'string' ? raw : '';
+}
+
 /** The CLI output envelope for both `dry-run` and `--apply` modes. */
 export interface DispositionReport {
   mode: 'dry-run' | 'apply';
@@ -142,8 +148,12 @@ export function buildDispositionBody(
   headSha: string,
   reason: string,
   noticeId: number,
+  markerPrefix?: string,
 ): string {
-  return `**Rejected** — ${botLogin} did not review HEAD ${headSha} (${reason}); this is not a completed review (source: #issuecomment-${noticeId})`;
+  return appendReviewReplyStamp(
+    `**Rejected** — ${botLogin} did not review HEAD ${headSha} (${reason}); this is not a completed review (source: #issuecomment-${noticeId})`,
+    markerPrefix,
+  );
 }
 
 /**
@@ -160,8 +170,12 @@ export function buildDispositionBody(
 export function buildSummaryDispositionBody(
   botLogin: string,
   headSha: string,
+  markerPrefix?: string,
 ): string {
-  return `**Accepted** — ${botLogin} summary walkthrough at HEAD ${headSha}; actionable comments, if any, are dispositioned as their own review threads`;
+  return appendReviewReplyStamp(
+    `**Accepted** — ${botLogin} summary walkthrough at HEAD ${headSha}; actionable comments, if any, are dispositioned as their own review threads`,
+    markerPrefix,
+  );
 }
 
 /**
@@ -188,6 +202,7 @@ export function buildDispositionPlan(
   options: {
     advisoryBotLogins?: unknown[] | null;
     trustedMarkerLogins?: unknown[] | null;
+    markerPrefix?: string;
   } = {},
 ): DispositionPlan {
   // Key all advisory-bot comparisons by the suffix-insensitive identity token
@@ -295,7 +310,13 @@ export function buildDispositionPlan(
       noticeId: comment.id,
       botLogin: comment.login,
       reason,
-      body: buildDispositionBody(comment.login, headSha, reason, comment.id),
+      body: buildDispositionBody(
+        comment.login,
+        headSha,
+        reason,
+        comment.id,
+        options.markerPrefix,
+      ),
     });
   }
 
@@ -389,7 +410,11 @@ export function buildDispositionPlan(
       noticeId: comment.id,
       botLogin: comment.login,
       reason: 'summary walkthrough',
-      body: buildSummaryDispositionBody(comment.login, headSha),
+      body: buildSummaryDispositionBody(
+        comment.login,
+        headSha,
+        options.markerPrefix,
+      ),
     });
   }
 
@@ -479,10 +504,6 @@ export function parseArgs(argv: string[]): CliArgs {
     apply: values.apply as boolean,
     help,
   };
-}
-
-function ghJson(args: string[]): unknown {
-  return JSON.parse(ghText(args));
 }
 
 /**
@@ -580,18 +601,23 @@ function postDisposition(
   pr: number,
   body: string,
 ): { id: number } {
-  // A disposition body is plain text starting with `**Rejected**` (notice) or
-  // `**Accepted**` (summary walkthrough) — not an HTML-comment-first marker — so
-  // the `-f body=` field path posts it reliably; gh sends `{"body": <value>}` to
-  // the comments API.
-  return ghJson([
-    'api',
-    '--method',
-    'POST',
-    `repos/${owner}/${repo}/issues/${pr}/comments`,
-    '-f',
-    `body=${body}`,
-  ]) as { id: number };
+  // JSON `--input -` is required: the reply-identity stamp is an HTML
+  // comment after the visible disposition, so `-f body=` can drop or
+  // truncate the multiline body the same way it drops HTML-comment-first
+  // markers.
+  return JSON.parse(
+    ghText(
+      [
+        'api',
+        '--method',
+        'POST',
+        `repos/${owner}/${repo}/issues/${pr}/comments`,
+        '--input',
+        '-',
+      ],
+      { input: JSON.stringify({ body }) },
+    ),
+  ) as { id: number };
 }
 
 /** Ids of all comments on the PR authored by `viewerLogin`. */
@@ -844,9 +870,10 @@ if (import.meta.main) {
       // updatedAt-aware activity.
       updatedAt: comment.updated_at ?? '',
     }));
+    const markerPrefix = resolveConfiguredMarkerPrefix();
     return buildDispositionPlan(
       { headSha, comments },
-      { advisoryBotLogins, trustedMarkerLogins },
+      { advisoryBotLogins, trustedMarkerLogins, markerPrefix },
     );
   };
 

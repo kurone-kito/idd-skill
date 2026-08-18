@@ -412,6 +412,7 @@ test('the dry-run and apply output envelopes validate against the schema', () =>
     alreadyResolved: false,
     status: 'applied',
     replyId: 4242,
+    body: '**Accepted** — fixed in abc\n\n<!-- idd-skill-review-reply -->',
   };
   assert.equal(validate(apply, resultSchema).length, 0, 'apply output');
 });

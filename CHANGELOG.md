@@ -14,6 +14,14 @@ discipline and has no tag.
 
 ## [Unreleased]
 
+### Added
+
+- Prefix-aware review-reply identity stamp
+  (`<!-- {markerPrefix}-review-reply -->`) for IDD-originated E6/E13
+  replies, with helper injection and a shared recognizer. The stamp
+  rides after the visible disposition prefix and is not an E1
+  `review-watermark` or F4 operational marker.
+
 ### Changed
 
 - `engines.node` bumped to `^22.23.2 || ^24.2.0 || >=26.0.0`: the

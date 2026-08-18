@@ -12,6 +12,7 @@ import {
   noticeReason,
   parseArgs,
 } from '../src/scripts/disposition-non-review-notices.mts';
+import { hasReviewReplyStamp } from '../src/scripts/marker-helpers.mts';
 import {
   dispositionNamesAdvisoryBot,
   isDispositionComment,
@@ -113,8 +114,9 @@ test('buildDispositionBody is marker-first and names the bot login + head sha', 
   // disambiguator naming the source notice's own comment id.
   assert.match(
     body,
-    /\(review limit reached\); this is not a completed review \(source: #issuecomment-501\)$/,
+    /\(review limit reached\); this is not a completed review \(source: #issuecomment-501\)/,
   );
+  assert.ok(hasReviewReplyStamp(body));
 });
 
 test('buildDispositionPlan produces distinguishable bodies for two same-bot, same-HEAD, same-reason notices', () => {
@@ -137,8 +139,10 @@ test('buildDispositionPlan produces distinguishable bodies for two same-bot, sam
   assert.equal(plan.planned.length, 2);
   const [first, second] = plan.planned;
   assert.notEqual(first?.body, second?.body);
-  assert.match(first?.body ?? '', /\(source: #issuecomment-101\)$/);
-  assert.match(second?.body ?? '', /\(source: #issuecomment-102\)$/);
+  assert.match(first?.body ?? '', /\(source: #issuecomment-101\)/);
+  assert.match(second?.body ?? '', /\(source: #issuecomment-102\)/);
+  assert.ok(hasReviewReplyStamp(first?.body ?? ''));
+  assert.ok(hasReviewReplyStamp(second?.body ?? ''));
 });
 
 test('isDispositionComment and dispositionNamesAdvisoryBot recognize the extended body', () => {
@@ -183,7 +187,8 @@ test('dispositionNamesAdvisoryBot does not falsely match the #1482 source-notice
     'review limit reached',
     999,
   );
-  assert.match(body, /\(source: #issuecomment-999\)$/);
+  assert.match(body, /\(source: #issuecomment-999\)/);
+  assert.ok(hasReviewReplyStamp(body));
   assert.equal(dispositionNamesAdvisoryBot(body, 'issuecomment[bot]'), false);
 });
 
@@ -269,7 +274,8 @@ test('gate agreement: the extended **Rejected** body still clears a notice from 
     { trustedMarkerLogins: ['kurone-kito'] },
   );
   assert.equal(plan.planned.length, 1);
-  assert.match(plan.planned[0]?.body ?? '', /\(source: #issuecomment-201\)$/);
+  assert.match(plan.planned[0]?.body ?? '', /\(source: #issuecomment-201\)/);
+  assert.ok(hasReviewReplyStamp(plan.planned[0]?.body ?? ''));
   const disposition = {
     id: 202,
     author: { login: 'kurone-kito' },
@@ -597,6 +603,7 @@ test('buildSummaryDispositionBody is marker-first, names the login + head sha, a
   // RESOLVED path permanently clear the summary instead of per-HEAD
   // re-disposition, so the body must use the login form only.
   assert.doesNotMatch(body, /\bCodeRabbit\b/);
+  assert.ok(hasReviewReplyStamp(body));
 });
 
 test('buildDispositionPlan plans an **Accepted** for an undispositioned CodeRabbit summary', () => {

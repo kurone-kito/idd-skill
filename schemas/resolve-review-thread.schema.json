@@ -30,6 +30,10 @@
       "type": "boolean",
       "description": "Whether the owning review thread was already resolved at inspection time, in either dry-run or apply mode."
     },
+    "body": {
+      "type": "string",
+      "description": "Reply body that will be posted (dry-run) or was posted (apply), including the injected reply-identity stamp. Omitted when --body is empty."
+    },
     "status": {
       "type": "string",
       "enum": ["applied", "failed"],

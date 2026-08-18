@@ -38,6 +38,7 @@ import {
 } from './collaborator-permission.mjs';
 import { DEFAULT_GH_PAGINATED_TIMEOUT_MS, ghText } from './gh-exec.mjs';
 import { loadIddConfig } from './idd-config.mjs';
+import { appendReviewReplyStamp } from './marker-helpers.mjs';
 import {
   advisoryBotIdentityToken,
   compareIsoTimestamps,
@@ -52,6 +53,11 @@ import {
   resolveActiveClaimForWriteGate,
   resolveAdvisoryBotLogins,
 } from './protocol-helpers.mjs';
+
+function resolveConfiguredMarkerPrefix() {
+  const raw = loadIddConfig()?.markerPrefix;
+  return typeof raw === 'string' ? raw : '';
+}
 /**
  * Derive the short `({reason})` clause for a non-review notice from its body.
  * Tightly tied to the categories `isAdvisoryNonReviewNotice` recognizes; falls
@@ -81,8 +87,17 @@ export function noticeReason(body) {
  * break gate recognition; it also never becomes a machine-readable pairing
  * key for `summarizeDispositionEvidenceForGate`'s count-based carry-forward.
  */
-export function buildDispositionBody(botLogin, headSha, reason, noticeId) {
-  return `**Rejected** — ${botLogin} did not review HEAD ${headSha} (${reason}); this is not a completed review (source: #issuecomment-${noticeId})`;
+export function buildDispositionBody(
+  botLogin,
+  headSha,
+  reason,
+  noticeId,
+  markerPrefix,
+) {
+  return appendReviewReplyStamp(
+    `**Rejected** — ${botLogin} did not review HEAD ${headSha} (${reason}); this is not a completed review (source: #issuecomment-${noticeId})`,
+    markerPrefix,
+  );
 }
 /**
  * Build the canonical `**Accepted**` disposition body for a CodeRabbit summary
@@ -95,8 +110,11 @@ export function buildDispositionBody(botLogin, headSha, reason, noticeId) {
  * re-disposition. The `summary walkthrough` phrase is what `isReviewSummaryDisposition`
  * keys on, so keep the two in lockstep.
  */
-export function buildSummaryDispositionBody(botLogin, headSha) {
-  return `**Accepted** — ${botLogin} summary walkthrough at HEAD ${headSha}; actionable comments, if any, are dispositioned as their own review threads`;
+export function buildSummaryDispositionBody(botLogin, headSha, markerPrefix) {
+  return appendReviewReplyStamp(
+    `**Accepted** — ${botLogin} summary walkthrough at HEAD ${headSha}; actionable comments, if any, are dispositioned as their own review threads`,
+    markerPrefix,
+  );
 }
 /**
  * Plan the dispositions for a PR's regular comments. Pure: takes the fetched
@@ -220,7 +238,13 @@ export function buildDispositionPlan(input, options = {}) {
       noticeId: comment.id,
       botLogin: comment.login,
       reason,
-      body: buildDispositionBody(comment.login, headSha, reason, comment.id),
+      body: buildDispositionBody(
+        comment.login,
+        headSha,
+        reason,
+        comment.id,
+        options.markerPrefix,
+      ),
     });
   }
   // CodeRabbit summary walkthrough auto-disposition (#1122). Separate from the
@@ -312,7 +336,11 @@ export function buildDispositionPlan(input, options = {}) {
       noticeId: comment.id,
       botLogin: comment.login,
       reason: 'summary walkthrough',
-      body: buildSummaryDispositionBody(comment.login, headSha),
+      body: buildSummaryDispositionBody(
+        comment.login,
+        headSha,
+        options.markerPrefix,
+      ),
     });
   }
   return { headSha, planned, skipped };
@@ -379,9 +407,6 @@ export function parseArgs(argv) {
     apply: values.apply,
     help,
   };
-}
-function ghJson(args) {
-  return JSON.parse(ghText(args));
 }
 /**
  * Fetch a paginated list endpoint as an array. `gh api --paginate` concatenates
@@ -464,18 +489,23 @@ function claimStillActive(
   return active?.claimId === claimId;
 }
 function postDisposition(owner, repo, pr, body) {
-  // A disposition body is plain text starting with `**Rejected**` (notice) or
-  // `**Accepted**` (summary walkthrough) — not an HTML-comment-first marker — so
-  // the `-f body=` field path posts it reliably; gh sends `{"body": <value>}` to
-  // the comments API.
-  return ghJson([
-    'api',
-    '--method',
-    'POST',
-    `repos/${owner}/${repo}/issues/${pr}/comments`,
-    '-f',
-    `body=${body}`,
-  ]);
+  // JSON `--input -` is required: the reply-identity stamp is an HTML
+  // comment after the visible disposition, so `-f body=` can drop or
+  // truncate the multiline body the same way it drops HTML-comment-first
+  // markers.
+  return JSON.parse(
+    ghText(
+      [
+        'api',
+        '--method',
+        'POST',
+        `repos/${owner}/${repo}/issues/${pr}/comments`,
+        '--input',
+        '-',
+      ],
+      { input: JSON.stringify({ body }) },
+    ),
+  );
 }
 /** Ids of all comments on the PR authored by `viewerLogin`. */
 function viewerCommentIds(owner, repo, pr, viewerLogin) {
@@ -670,9 +700,10 @@ if (import.meta.main) {
       // updatedAt-aware activity.
       updatedAt: comment.updated_at ?? '',
     }));
+    const markerPrefix = resolveConfiguredMarkerPrefix();
     return buildDispositionPlan(
       { headSha, comments },
-      { advisoryBotLogins, trustedMarkerLogins },
+      { advisoryBotLogins, trustedMarkerLogins, markerPrefix },
     );
   };
   if (!args.apply) {
