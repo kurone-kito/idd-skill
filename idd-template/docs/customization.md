@@ -419,10 +419,11 @@ Ruleset; this is a GitHub-settings action taken outside of IDD
 automation, not something an agent applies on its own. Once
 registered, every review-thread reply, edit, or delete re-asserts the
 same Copilot verdict — ordinary human prose can fail that required
-check and cancel an in-flight run for that PR. This is
-`idd-advisory-convergence`, not `lint.yml`. Repositories that want
-human-led or gradual IDD adoption should not register the check as
-required until they intend the Copilot-advisory loop. After that
+check on the PR and cancel an in-flight run (observed 2026-08-17 on
+PR #2130). This is `idd-advisory-convergence`, not `lint.yml`.
+Repositories that want human-led or gradual IDD adoption should not
+register the check as required until they intend the Copilot-advisory
+loop. After that
 registration, the check follows the same deadline/waiver escape path as
 any other external check: while the primary advisory bot has not yet
 reviewed the current PR HEAD, `--assert` exits non-zero and the check

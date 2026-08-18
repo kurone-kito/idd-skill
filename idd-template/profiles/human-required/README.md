@@ -9,9 +9,9 @@ profile active.
 profile.** Hosting that workflow is optional. Registering it as a
 required status check re-asserts Copilot convergence on every
 review-thread reply, edit, or delete, so ordinary human prose can fail
-the required check and cancel an in-flight run. Leave the check
-unregistered unless you later switch to a Copilot-advisory review
-policy.
+the required check on the PR and cancel an in-flight run (observed
+2026-08-17 on PR #2130). Leave the check unregistered unless you later
+switch to a Copilot-advisory review policy.
 
 ## Adopter-Owned Values
 
