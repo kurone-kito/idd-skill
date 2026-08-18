@@ -218,9 +218,19 @@ Before any mutating action in F3, apply the
        time passes between the plain merge's failure and the retry, and
        `--admin` bypasses the entire ruleset), with a fresh GitHub merge
        state of `mergeable: "MERGEABLE"` and `mergeStateStatus` settled
-       to `"CLEAN"` or `"BEHIND"` also required. `idd-merge-execute.mjs
-       --apply` applies this automatically and records the outcome in
-       the verdict's `adminFallbackUsed` field.
+       to `"CLEAN"` or `"BEHIND"` also required.
+       `isSafeSoloCodeownerAdminMergeState` still refuses
+       `mergeStateStatus: "BLOCKED"`. On kurone-kito/idd-skill's
+       current `main` ruleset (`require_code_owner_review: false`), the
+       `status: "clear"` trigger never matches, observed `BLOCKED`
+       states have not been a confirmed CODEOWNER deadlock, and the
+       remaining escalation on **this topology** is a human `--admin`
+       (or `hold-and-report`). Distributed `auto-admin-retry` is
+       unchanged when `status: "clear"` and
+       `prAuthorIsSoleEligibleCodeowner: true` hold. See
+       `docs/permissions.md` (kurone-kito/idd-skill#1663).
+       `idd-merge-execute.mjs --apply` applies this automatically and
+       records the outcome in the verdict's `adminFallbackUsed` field.
 
        ```sh
        gh pr merge {pr-number} --merge --match-head-commit "${PR_HEAD_SHA_F3}" --admin

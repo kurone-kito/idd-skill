@@ -1847,9 +1847,17 @@ reflexively as any other CLI option.
   retry it also requires live GitHub merge state
   `mergeable: "MERGEABLE"` and `mergeStateStatus: "CLEAN"` or
   `"BEHIND"`; blocked, unknown, or unreadable state aborts the fallback
-  rather than allowing a generic policy error to trigger `--admin`. The verdict's
-  `adminFallbackUsed` field records whether the fallback fired
-  (`true`) whenever it was attempted, regardless of whether the
+  rather than allowing a generic policy error to trigger `--admin`.
+  `BLOCKED` stays excluded because field evidence
+  (kurone-kito/idd-skill#1663) showed it is often cancelled or stale
+  required-check instances, a missing review-watermark, or incomplete
+  F2 — not a confirmed CODEOWNER deadlock. A live `BLOCKED` paired with
+  discarded required-check siblings is the separate
+  `discarded-required-check-siblings` gate (#2127), not a reason to
+  admit `BLOCKED` into the `--admin` retry. See `docs/permissions.md`
+  for the `code_quality` ruleset-rule read path and its F3 limitation.
+  The verdict's `adminFallbackUsed` field records whether the fallback
+  fired (`true`) whenever it was attempted, regardless of whether the
   `--admin` retry itself ultimately succeeded. Any merge failure that
   does not match this exact shape — a different error, an ineligible
   topology, or the opt-in `hold-and-report` policy — falls through
