@@ -196,6 +196,9 @@ the authoritative review gate.
   `.github/instructions/idd-review-triage.instructions.md`: keep human
   comments in the review universe and remove assumptions that Copilot
   advisory PATH B items must appear.
+- `.github/idd/config.json`: set `reviewPolicy` to `human-required`.
+  Do not register `idd-advisory-convergence` as a required check
+  unless this policy actually wants an advisory-bot gate.
 - Repository settings: configure CODEOWNERS, required reviews, or branch
   protection outside IDD.
 - Verification evidence: capture a dry-run or PR-state example showing
@@ -214,6 +217,9 @@ branch protection, and any human review rules configured outside IDD.
 - `.github/instructions/idd-advisory-wait.instructions.md`: mark the
   advisory wait helper unused by this profile, or remove local
   references to it from the customized phase flow.
+- `.github/idd/config.json`: set `reviewPolicy` to `no-advisory`.
+  Do not register `idd-advisory-convergence` as a required check
+  unless this policy actually wants an advisory-bot gate.
 - `docs/idd-advisory-wait-shell-fallback.md`: mark the doc unused by
   this profile, or remove local references to it, matching the
   `idd-advisory-wait.instructions.md` disposition above.

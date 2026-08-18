@@ -1863,8 +1863,24 @@ reflexively as any other CLI option.
   [`advisory-convergence.schema.json`][advisory-convergence-schema]
 - Every invocation other than `--help`/`-h` prints the JSON verdict.
   Without `--assert` it always exits `0` (report-only). With `--assert` it
-  exits non-zero unless `ready` is `true` (`ready = converged || (deadline
-  passed && validly waived)`).
+  exits non-zero unless `ready` is `true` (`ready = not_applicable ||
+  converged || ((deadline passed || terminal-unavailable) && validly
+  waived)`).
+- **Review-policy applicability (`#2137`)**: this helper reads
+  `reviewPolicy` from `.github/idd/config.json`. Exact
+  `human-required` or `no-advisory` classifies the PR `not_applicable`
+  (reasons `review-policy-human-required` /
+  `review-policy-no-advisory`) so `--assert` exits 0 through the
+  existing `scopeNotApplicable` path, not by faking `converged`.
+  Copilot review/thread clauses do not apply; human approval and
+  conversation resolution stay on branch protection and the phase
+  files. `copilot-advisory`, absent, or an invalid value keep today's
+  fail-closed Copilot applicability. `external-bot` keeps the
+  configured `primaryBotLogin` path. A trusted human approve is never
+  a Copilot substitute under `copilot-advisory`. Do not invent a new
+  `convergenceScope` value for this. Do not register
+  `idd-advisory-convergence` as a required check unless the policy
+  actually wants an advisory-bot gate.
 - **Bounded "not reviewed yet" poll (`#2015`)**: the CLI entry point runs
   through `runAdvisoryConvergenceWithPoll`, not `runAdvisoryConvergence`
   directly. When (and only when) the verdict's sole blocking reason is

@@ -506,6 +506,15 @@ export interface AdvisoryConvergenceOptions {
    * (flag unset, `idd-claimed` scope, non-Bot author, or claim history
    * present) leaves today's behavior completely unchanged. */
   exemptBotAuthoredPrs?: boolean;
+  /** #2137: `reviewPolicy` from `.github/idd/config.json`. Exact
+   * `human-required` / `no-advisory` make this gate `not_applicable`
+   * (ready through the existing `scopeNotApplicable` path, never a fake
+   * `converged`). `copilot-advisory`, `external-bot`, absent, or any
+   * other value keep today's Copilot / `primaryBotLogin` applicability
+   * (fail-closed: invalid does not widen). Not a new
+   * `convergenceScope` value; a trusted human approve is never a
+   * Copilot substitute under `copilot-advisory`. */
+  reviewPolicy?: string;
   prHeadRefName?: string | null;
   /** The PR author's login, excluded from "external feedback" the same way
    * `summarizeDispositionEvidenceForGate` excludes it elsewhere. */
@@ -579,6 +588,29 @@ export interface AdvisoryConvergenceOptions {
    * observes -- so this is only a behavior change for a repository that
    * has configured a non-default `claimTiming.staleAge`. */
   staleAgeMs?: number;
+}
+
+/** #2137: exact `reviewPolicy` values that skip Copilot / primary-bot
+ * clauses. Mapped to the `applicability.reason` token so tests and
+ * operators can tell which policy produced the short-circuit. */
+const REVIEW_POLICY_NOT_APPLICABLE_REASON = {
+  'human-required': 'review-policy-human-required',
+  'no-advisory': 'review-policy-no-advisory',
+} as const;
+
+/** Return the `not_applicable` reason for a human-only / no-advisory
+ * `reviewPolicy`, or `null` when today's Copilot / `primaryBotLogin`
+ * applicability should run. Exact enum match only: absent, invalid,
+ * `copilot-advisory`, and `external-bot` all return `null`. */
+export function reviewPolicyNotApplicableReason(
+  reviewPolicy: unknown,
+):
+  | (typeof REVIEW_POLICY_NOT_APPLICABLE_REASON)[keyof typeof REVIEW_POLICY_NOT_APPLICABLE_REASON]
+  | null {
+  if (reviewPolicy === 'human-required' || reviewPolicy === 'no-advisory') {
+    return REVIEW_POLICY_NOT_APPLICABLE_REASON[reviewPolicy];
+  }
+  return null;
 }
 
 /**
@@ -663,8 +695,20 @@ export function computeAdvisoryConvergenceVerdict(
   // required-with-throw like the two claim-evidence booleans above.
   const exemptBotAuthoredPrs = options.exemptBotAuthoredPrs === true;
   const prAuthorIsBot = inputs.prAuthorIsBot === true;
-  const applicability: AdvisoryConvergenceApplicability =
-    convergenceScope === 'idd-claimed'
+  // #2137: honor reviewPolicy first. human-required / no-advisory must
+  // not demand Copilot even on an `idd-claimed` hybrid PR (that scope
+  // is the wrong substitute). Ready comes from the existing
+  // `scopeNotApplicable` path, never a fake `converged`.
+  const reviewPolicySkipReason = reviewPolicyNotApplicableReason(
+    options.reviewPolicy,
+  );
+  const applicability: AdvisoryConvergenceApplicability = reviewPolicySkipReason
+    ? {
+        scope: convergenceScope,
+        status: 'not_applicable',
+        reason: reviewPolicySkipReason,
+      }
+    : convergenceScope === 'idd-claimed'
       ? !claim.activeClaimPresent
         ? claimCandidateAmbiguous
           ? {
@@ -2110,6 +2154,13 @@ function collectFromGitHub(args: AdvisoryConvergenceArgs): {
   // `prFirstCommitAt` above: a transient GraphQL failure must never
   // widen what this gate accepts.
   const exemptBotAuthoredPrs = policy.advisoryWait.exemptBotAuthoredPrs;
+  // #2137: exact string only. Invalid / non-string / absent stay
+  // undefined so computeAdvisoryConvergenceVerdict keeps today's
+  // Copilot / primaryBotLogin applicability.
+  const reviewPolicy =
+    typeof rawConfig?.reviewPolicy === 'string'
+      ? rawConfig.reviewPolicy
+      : undefined;
   let prAuthorIsBot = false;
   if (exemptBotAuthoredPrs && convergenceScope === 'all-prs') {
     try {
@@ -2139,6 +2190,7 @@ function collectFromGitHub(args: AdvisoryConvergenceArgs): {
       advisoryBotLogins,
       convergenceScope,
       exemptBotAuthoredPrs,
+      reviewPolicy,
       prHeadRefName,
       prAuthorLogin,
       headCommittedAt,

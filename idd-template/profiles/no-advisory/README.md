@@ -7,12 +7,14 @@ workflow change so later agents do not wait for a reviewer that the
 repository no longer uses.
 
 **Do not register `idd-advisory-convergence` as required under this
-profile.** Hosting that workflow is optional. Registering it as a
-required status check re-asserts Copilot convergence on every
-review-thread reply, edit, or delete, so ordinary human prose can fail
-the required check on the PR and cancel an in-flight run (observed
-2026-08-17 on PR #2130). Leave the check unregistered unless you later
-switch to a Copilot-advisory review policy.
+profile unless this policy actually wants an advisory-bot gate.**
+Hosting that workflow is optional. Set `reviewPolicy` to
+`no-advisory` in `.github/idd/config.json` so a later session does
+not re-host the check against a no-advisory policy. Registering the
+job as a required status check re-asserts Copilot convergence on
+hybrid or IDD-claimed PRs even after the phase files drop the
+advisory wait. Leave the check unregistered unless you later switch
+to a Copilot-advisory or `external-bot` review policy.
 
 ## Adopter-Owned Values
 
@@ -27,17 +29,18 @@ Record these values before editing phase behavior:
 
 ## Patch Surface
 
-| File                                                       | Required local edit                                                                                                                        |
-| ---------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
-| `.github/instructions/idd-review-fix.instructions.md`      | Remove the E14 advisory request and wait path.                                                                                             |
-| `.github/instructions/idd-advisory-wait.instructions.md`   | Mark the advisory wait helper unused by this profile, or remove local references to it from the customized phase flow.                     |
-| `docs/idd-advisory-wait-shell-fallback.md`                 | Mark the doc unused by this profile, or remove local references to it, matching the `idd-advisory-wait.instructions.md` disposition above. |
-| `.github/instructions/idd-pre-merge.instructions.md`       | Gate on CI, branch protection, unresolved conversations, freshness, and claim evidence without requiring an advisory reviewer.             |
-| `.github/instructions/idd-merge.instructions.md`           | Remove final advisory rechecks while keeping CI, claim, freshness, branch protection, and unresolved-thread checks.                        |
-| `.github/instructions/idd-review-snapshot.instructions.md` | Keep human comments in scope and remove advisory-only PATH B requirements.                                                                 |
-| `.github/instructions/idd-review-triage.instructions.md`   | Keep human review comments in the review universe and remove advisory-only disposition requirements.                                       |
-| `docs/idd-review-policy-profiles.md`                       | Record the selected `no-advisory` profile and link to the local verification evidence.                                                     |
-| `docs/customization.md` or another local policy document   | Record why no IDD-managed advisory reviewer is used and which outside gates still protect merges.                                          |
+| File                                                       | Required local edit                                                                                                                                         |
+| ---------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `.github/idd/config.json`                                  | Set `reviewPolicy` to `no-advisory`. Do not register `idd-advisory-convergence` as a required check unless this policy actually wants an advisory-bot gate. |
+| `.github/instructions/idd-review-fix.instructions.md`      | Remove the E14 advisory request and wait path.                                                                                                              |
+| `.github/instructions/idd-advisory-wait.instructions.md`   | Mark the advisory wait helper unused by this profile, or remove local references to it from the customized phase flow.                                      |
+| `docs/idd-advisory-wait-shell-fallback.md`                 | Mark the doc unused by this profile, or remove local references to it, matching the `idd-advisory-wait.instructions.md` disposition above.                  |
+| `.github/instructions/idd-pre-merge.instructions.md`       | Gate on CI, branch protection, unresolved conversations, freshness, and claim evidence without requiring an advisory reviewer.                              |
+| `.github/instructions/idd-merge.instructions.md`           | Remove final advisory rechecks while keeping CI, claim, freshness, branch protection, and unresolved-thread checks.                                         |
+| `.github/instructions/idd-review-snapshot.instructions.md` | Keep human comments in scope and remove advisory-only PATH B requirements.                                                                                  |
+| `.github/instructions/idd-review-triage.instructions.md`   | Keep human review comments in the review universe and remove advisory-only disposition requirements.                                                        |
+| `docs/idd-review-policy-profiles.md`                       | Record the selected `no-advisory` profile and link to the local verification evidence.                                                                      |
+| `docs/customization.md` or another local policy document   | Record why no IDD-managed advisory reviewer is used and which outside gates still protect merges.                                                           |
 
 ## Verification Evidence
 

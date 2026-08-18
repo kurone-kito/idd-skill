@@ -168,6 +168,14 @@ authority:
 - `external-bot` when a non-Copilot reviewer has a stable actor identity
   and a current-head completion signal.
 
+`advisory-convergence` reads `reviewPolicy` when deciding
+applicability. `human-required` and `no-advisory` make the check
+`not_applicable` (ready without Copilot clauses). `copilot-advisory`,
+`external-bot`, absent, or an invalid value keep today's
+primary-bot applicability. Do not register
+`idd-advisory-convergence` as a required status check unless the
+chosen policy actually wants an advisory-bot gate.
+
 When importing the template, keep the `profiles/` directory with the
 copied docs. For any non-default PR review profile, use the matching
 `profiles/<profile>/README.md` artifact as the reusable patch surface.

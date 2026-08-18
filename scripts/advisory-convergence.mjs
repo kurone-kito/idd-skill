@@ -167,6 +167,23 @@ export const SAME_HEAD_REROLL_INELIGIBLE_REASON = {
   REVIEW_ITEM_COUNT_NOT_POSITIVE: 'review-item-count-not-positive',
   ALREADY_SATISFIED_VIA_REVIEW_ACK: 'already-satisfied-via-review-ack',
 };
+/** #2137: exact `reviewPolicy` values that skip Copilot / primary-bot
+ * clauses. Mapped to the `applicability.reason` token so tests and
+ * operators can tell which policy produced the short-circuit. */
+const REVIEW_POLICY_NOT_APPLICABLE_REASON = {
+  'human-required': 'review-policy-human-required',
+  'no-advisory': 'review-policy-no-advisory',
+};
+/** Return the `not_applicable` reason for a human-only / no-advisory
+ * `reviewPolicy`, or `null` when today's Copilot / `primaryBotLogin`
+ * applicability should run. Exact enum match only: absent, invalid,
+ * `copilot-advisory`, and `external-bot` all return `null`. */
+export function reviewPolicyNotApplicableReason(reviewPolicy) {
+  if (reviewPolicy === 'human-required' || reviewPolicy === 'no-advisory') {
+    return REVIEW_POLICY_NOT_APPLICABLE_REASON[reviewPolicy];
+  }
+  return null;
+}
 /**
  * Compute the deterministic advisory-convergence verdict from already-
  * fetched PR evidence. Pure (no I/O), so it is directly unit-testable with
@@ -244,8 +261,20 @@ export function computeAdvisoryConvergenceVerdict(inputs, options) {
   // required-with-throw like the two claim-evidence booleans above.
   const exemptBotAuthoredPrs = options.exemptBotAuthoredPrs === true;
   const prAuthorIsBot = inputs.prAuthorIsBot === true;
-  const applicability =
-    convergenceScope === 'idd-claimed'
+  // #2137: honor reviewPolicy first. human-required / no-advisory must
+  // not demand Copilot even on an `idd-claimed` hybrid PR (that scope
+  // is the wrong substitute). Ready comes from the existing
+  // `scopeNotApplicable` path, never a fake `converged`.
+  const reviewPolicySkipReason = reviewPolicyNotApplicableReason(
+    options.reviewPolicy,
+  );
+  const applicability = reviewPolicySkipReason
+    ? {
+        scope: convergenceScope,
+        status: 'not_applicable',
+        reason: reviewPolicySkipReason,
+      }
+    : convergenceScope === 'idd-claimed'
       ? !claim.activeClaimPresent
         ? claimCandidateAmbiguous
           ? {
@@ -1568,6 +1597,13 @@ function collectFromGitHub(args) {
   // `prFirstCommitAt` above: a transient GraphQL failure must never
   // widen what this gate accepts.
   const exemptBotAuthoredPrs = policy.advisoryWait.exemptBotAuthoredPrs;
+  // #2137: exact string only. Invalid / non-string / absent stay
+  // undefined so computeAdvisoryConvergenceVerdict keeps today's
+  // Copilot / primaryBotLogin applicability.
+  const reviewPolicy =
+    typeof rawConfig?.reviewPolicy === 'string'
+      ? rawConfig.reviewPolicy
+      : undefined;
   let prAuthorIsBot = false;
   if (exemptBotAuthoredPrs && convergenceScope === 'all-prs') {
     try {
@@ -1596,6 +1632,7 @@ function collectFromGitHub(args) {
       advisoryBotLogins,
       convergenceScope,
       exemptBotAuthoredPrs,
+      reviewPolicy,
       prHeadRefName,
       prAuthorLogin,
       headCommittedAt,

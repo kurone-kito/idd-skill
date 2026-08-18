@@ -43,7 +43,7 @@
         "no-advisory",
         "external-bot"
       ],
-      "description": "Selects the PR review-authority profile enforced by the E/F-phase instructions. Required; the distributed default is the Copilot-advisory profile, where CI, branch protection, and claim checks still gate the merge."
+      "description": "Selects the PR review-authority profile enforced by the E/F-phase instructions. Required; the distributed default is the Copilot-advisory profile, where CI, branch protection, and claim checks still gate the merge. `advisory-convergence` also reads this field: `human-required` and `no-advisory` make the check `not_applicable` (ready without Copilot clauses); `copilot-advisory`, `external-bot`, absent, or an invalid value keep today's Copilot/`primaryBotLogin` applicability. Do not register `idd-advisory-convergence` as a required check unless this policy actually wants an advisory-bot gate."
     },
     "threadResolutionPolicy": {
       "type": "string",

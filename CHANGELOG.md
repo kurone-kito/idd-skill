@@ -24,6 +24,13 @@ discipline and has no tag.
 
 ### Changed
 
+- `advisory-convergence` honors `reviewPolicy`: `human-required` and
+  `no-advisory` make the check `not_applicable` (ready without Copilot
+  clauses) instead of judging every applicable PR as Copilot-advisory.
+  `copilot-advisory`, absent, or an invalid value keep today's
+  fail-closed behavior. Profile artifacts now list the config field
+  and the "do not register this check unless you want an advisory-bot
+  gate" note on the same patch surface as the phase-file edits.
 - The required `idd-advisory-convergence` job no longer runs on
   `pull_request_review_comment`. Ordinary human review chatter no
   longer creates or cancels that required check. IDD-originated
