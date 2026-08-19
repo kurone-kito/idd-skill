@@ -76,11 +76,11 @@ signed-commit repo with non-interactive-hostile primary signing (GPG
 pinentry / hardware-touch), use the
 [signed-commit merge wrapper](../../docs/idd-helper-scripts.md#signed-commit-merge-wrapper-shared-git-procedure)
 for the whole operation instead of the plain command — see
-`idd-review-triage.instructions.md`'s sync-path step 2 for the
+`idd-review-triage.instructions.md`'s Sync path step 2 for the
 wrapper's `-m` subject requirement.
 
 **Active review gate**: same check as
-`idd-review-triage.instructions.md`'s sync path step 1.
+`idd-review-triage.instructions.md`'s Sync path step 1.
 
 ## E12 — Lint, test, push
 
