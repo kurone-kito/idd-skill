@@ -1819,6 +1819,53 @@ export function computeCopilotPendingCoversHead(
   return headIndex !== -1 && requestIndex !== -1 && requestIndex > headIndex;
 }
 /**
+ * #2167: REST `requested_reviewers` can report empty (`{"users":[]}`) even
+ * when Copilot review is still genuinely outstanding for the current HEAD --
+ * observed on this source repository during PR #2158, where REST returned
+ * an empty list (HTTP 200, not a 5xx) while GraphQL `reviewRequests` still
+ * listed the primary bot and `computeCopilotPendingCoversHead` was already
+ * `true`. `isCopilotPending` alone is REST-only and misses that case;
+ * `evaluateAdvisoryWaitOutcome` / `evaluateAdvisoryWaitF3Outcome` and the
+ * AW3 table are unchanged -- callers pass this corrected boolean into
+ * `outcomeInput` exactly where the uncorrected `isCopilotPending` result
+ * used to go, so the corrected pending bit flows through the existing
+ * formulas unmodified.
+ *
+ * Precedence, cheapest signal first:
+ * 1. REST `requestedReviewers` already lists the primary bot -> `true`.
+ * 2. Already-fetched timeline evidence (`copilotPendingCoversHead`) shows
+ *    the primary bot is still requested as of a HEAD the latest Copilot
+ *    review does not cover -> `true`, no extra HTTP call needed.
+ * 3. `graphqlRequestedReviewerLogins` -- an optional, already-fetched
+ *    GraphQL `reviewRequests` login list; `null`/`undefined` means "not
+ *    attempted, or the attempt failed" -- lists the primary bot -> `true`.
+ * 4. Otherwise -> `false`, including when the optional GraphQL check was
+ *    skipped or failed: an absent or failed GraphQL result keeps the
+ *    REST-derived result rather than assuming pending.
+ */
+export function resolveCopilotPending(
+  requestedReviewers,
+  copilotPendingCoversHead,
+  lastCopilotCommit,
+  prHeadSha,
+  graphqlRequestedReviewerLogins,
+  primaryBotLogin = DEFAULT_ADVISORY_PRIMARY_BOT_LOGIN,
+) {
+  if (isCopilotPending(requestedReviewers, primaryBotLogin)) {
+    return true;
+  }
+  if (copilotPendingCoversHead && lastCopilotCommit !== prHeadSha) {
+    return true;
+  }
+  if (graphqlRequestedReviewerLogins) {
+    return isCopilotPending(
+      [...graphqlRequestedReviewerLogins],
+      primaryBotLogin,
+    );
+  }
+  return false;
+}
+/**
  * True when the OPTIONAL secondary advisory bot has already been requested for
  * the current HEAD — i.e. a `review_requested` event for `secondaryBotLogin`
  * follows the current HEAD's `committed` event in the PR timeline. This is the
@@ -2103,6 +2150,7 @@ export function buildAdvisoryWaitSummary(
     requestedReviewers = [],
     timelineEvents = [],
     comments = [],
+    graphqlRequestedReviewerLogins = null,
   },
   options = {},
 ) {
@@ -2135,10 +2183,17 @@ export function buildAdvisoryWaitSummary(
     reviews,
     primaryBotLogin,
   );
-  const copilotPending = isCopilotPending(requestedReviewers, primaryBotLogin);
   const copilotPendingCoversHead = computeCopilotPendingCoversHead(
     timelineEvents,
     prHeadSha,
+    primaryBotLogin,
+  );
+  const copilotPending = resolveCopilotPending(
+    requestedReviewers,
+    copilotPendingCoversHead,
+    lastCopilotCommit,
+    prHeadSha,
+    graphqlRequestedReviewerLogins,
     primaryBotLogin,
   );
   const {
