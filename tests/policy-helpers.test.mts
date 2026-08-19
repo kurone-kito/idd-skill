@@ -342,6 +342,32 @@ test('critiqueLoop.delegate fails safe to undefined on an unknown property (#220
   );
 });
 
+test('critiqueLoop.delegate fails safe to undefined on an inherited (non-own) command property (#2207 review)', () => {
+  // A plain property read (candidate.command) walks the prototype chain
+  // even though Object.keys() only sees own properties -- a crafted
+  // object with `command` supplied via its prototype must be rejected
+  // the same as a genuinely missing command, not silently accepted.
+  const proto = { command: 'evil-inherited-command' };
+  const candidate = Object.create(proto);
+  candidate.mode = 'fallback';
+  assert.equal(
+    normalizePolicyConfig({ critiqueLoop: { delegate: candidate } })
+      .critiqueLoop.delegate,
+    undefined,
+  );
+});
+
+test('critiqueLoop.delegate ignores an inherited (non-own) mode property, defaulting to fallback (#2207 review)', () => {
+  const proto = { mode: 'combined' };
+  const candidate = Object.create(proto);
+  candidate.command = 'coderabbit review --plain';
+  assert.deepEqual(
+    normalizePolicyConfig({ critiqueLoop: { delegate: candidate } })
+      .critiqueLoop.delegate,
+    { command: 'coderabbit review --plain', mode: 'fallback' },
+  );
+});
+
 test('critiqueLoop.delegate is absent (not an own key) when unconfigured, matching POLICY_DEFAULTS (#2207 review)', () => {
   // POLICY_DEFAULTS never carries an undefined-valued property (see the
   // clone() doc comment) -- the resolved object must match that shape

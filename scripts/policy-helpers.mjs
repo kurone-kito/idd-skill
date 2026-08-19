@@ -762,13 +762,23 @@ function parseCritiqueLoopDelegate(value) {
   if (candidateKeys.some((key) => key !== 'command' && key !== 'mode')) {
     return undefined;
   }
+  // Object.keys() above already excludes inherited keys, but a plain
+  // property read (candidate.command) still walks the prototype chain --
+  // require command/mode to be own properties so a crafted object (e.g.
+  // Object.create({ command: '...' })) can't supply either through
+  // inheritance instead of being rejected as absent (#2207 review).
+  if (!Object.hasOwn(candidate, 'command')) {
+    return undefined;
+  }
   const command = parseNonEmptyString(candidate.command, '');
   if (!command || command.trim() === '') {
     return undefined;
   }
   return {
     command,
-    mode: parseEnum(candidate.mode, CRITIQUE_LOOP_DELEGATE_MODES, 'fallback'),
+    mode: Object.hasOwn(candidate, 'mode')
+      ? parseEnum(candidate.mode, CRITIQUE_LOOP_DELEGATE_MODES, 'fallback')
+      : 'fallback',
   };
 }
 function hasConfiguredCollaboratorMarkerTrust(config) {
