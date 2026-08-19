@@ -1887,6 +1887,56 @@ test('verifiability fails when approval wording comes before subjective actor', 
   assert.equal(result.pass, false);
 });
 
+test('verifiability passes a hyphenated needs-decision tail match reproducing #2190 verbatim (#2205)', () => {
+  // Check 7 false-positive that now passes: `needs-decision` is a literal
+  // label-name reference, not free prose describing a pending decision. Both
+  // the per-line and whole-body proximity paths see this on one line.
+  const result = checkVerifiability({
+    issue: {
+      ...BASE_ISSUE,
+      body: `${BASE_ISSUE.body}\n#2181 (\`needs-decision\`) recorded this situation and the maintainer's chosen resolution here.`,
+    },
+  } as Context);
+  assert.equal(result.pass, true);
+});
+
+test('verifiability passes a hyphenated blocked-by-human tail match spanning lines (#2205)', () => {
+  // Exercises the whole-body proximity path specifically: the gate and
+  // subject words are on different lines, so only the cross-line [\s\S]{0,80}
+  // window sees them together. `human` is the tail of `blocked-by-human`.
+  const result = checkVerifiability({
+    issue: {
+      ...BASE_ISSUE,
+      body: `${BASE_ISSUE.body}\nThe sign-off command below only quotes the\nstatus:blocked-by-human label name for reference.`,
+    },
+  } as Context);
+  assert.equal(result.pass, true);
+});
+
+test('verifiability still fails a freestanding subjective decision on one line (#2205)', () => {
+  // True-positive that still fails: genuine freestanding prose, not a
+  // hyphenated label tail, so the per-line path still catches it.
+  const result = checkVerifiability({
+    issue: {
+      ...BASE_ISSUE,
+      body: `${BASE_ISSUE.body}\nThis needs the maintainer's decision before shipping.`,
+    },
+  } as Context);
+  assert.equal(result.pass, false);
+});
+
+test('verifiability still fails a freestanding subjective sign-off spanning lines (#2205)', () => {
+  // True-positive that still fails via the whole-body proximity path: both
+  // words are freestanding (no adjacent hyphen), just split across lines.
+  const result = checkVerifiability({
+    issue: {
+      ...BASE_ISSUE,
+      body: `${BASE_ISSUE.body}\nFinal sign-off is required before merge, since the\nmaintainer must personally review the visual design.`,
+    },
+  } as Context);
+  assert.equal(result.pass, false);
+});
+
 test('repository fit fails when external system access is required', () => {
   const result = checkRepositoryFit({
     issue: {
