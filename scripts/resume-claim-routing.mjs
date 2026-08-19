@@ -12,10 +12,7 @@ import {
   resolveViewerLogin,
 } from './gh-exec.mjs';
 import { loadPolicyConfig } from './idd-config.mjs';
-import {
-  listActivationNonces,
-  parseForcedHandoffComment,
-} from './marker-helpers.mjs';
+import { listActivationNonces } from './marker-helpers.mjs';
 import { normalizePolicyConfig } from './policy-helpers.mjs';
 import {
   buildForcedHandoffEnableGate,
@@ -24,7 +21,7 @@ import {
   normalizeLinkedPrReference,
   parseClaimComment,
   parseReleaseComment,
-  resolveActiveClaim,
+  resolveActiveClaimWithForcedHandoffTrace,
 } from './protocol-helpers.mjs';
 
 const LEGACY_CLAIM_PATTERN =
@@ -118,13 +115,6 @@ export function evaluateResumeClaimRouting(input, options = {}) {
   const activationNonceWinner =
     activationNonces.length > 0 ? activationNonces[0] : null;
   const nonceChecked = normalizeToken(input.nonce);
-  const forcedHandoffApplied =
-    state.activeClaim && state.mode === 'new-format'
-      ? findAppliedForcedHandoff(events, state.activeClaim, {
-          isForcedHandoffEnabled,
-          isAuthorizedForcedHandoff,
-        })
-      : null;
   const warnings = [...state.warnings];
   let routeState = 'unclaimed';
   let action = 're_claim';
@@ -258,73 +248,22 @@ export function evaluateResumeClaimRouting(input, options = {}) {
       later_competing_claim: laterCompetingClaim,
       activation_nonce_winner: activationNonceWinner,
       activation_nonce_count: activationNonces.length,
-      forced_handoff: forcedHandoffApplied,
+      forced_handoff: toForcedHandoffEvidence(state.appliedForcedHandoff),
     },
   };
 }
-/**
- * Find the trusted, rule-7-valid `forced-handoff` marker (if any) whose
- * transfer produced `activeClaim` — i.e. `newAgentId`/`newClaimId`/`branch`
- * match `activeClaim` exactly, and the same enable/author-binding/authority
- * checks `applyClaimEvent` requires to honor a handoff all pass
- * independently here. A fresh `claimId` is effectively unique per
- * activation, so at most one trusted marker can validly target it; on the
- * rare chance more than one candidate passes, the earliest by GitHub
- * `created_at` wins, mirroring the chronological reduction
- * `resolveActiveClaim` itself performs.
- */
-function findAppliedForcedHandoff(events, activeClaim, options) {
-  const candidates = events
-    .map((event) => ({
-      event,
-      forcedHandoff: parseForcedHandoffComment(
-        event.body ?? '',
-        event.createdAt ?? '',
-      ),
-    }))
-    .filter((entry) => entry.forcedHandoff !== null)
-    .filter(
-      ({ forcedHandoff }) =>
-        forcedHandoff.newAgentId === activeClaim.agentId &&
-        forcedHandoff.newClaimId === activeClaim.claimId &&
-        forcedHandoff.branch === activeClaim.branch,
-    )
-    .filter(({ event, forcedHandoff }) => {
-      if (!options.isForcedHandoffEnabled(forcedHandoff, event)) {
-        return false;
-      }
-      const authorLogin = String(event.author?.login ?? '')
-        .trim()
-        .toLowerCase();
-      const forcedByLower = String(forcedHandoff.forcedBy ?? '')
-        .trim()
-        .toLowerCase();
-      if (!authorLogin || authorLogin !== forcedByLower) {
-        return false;
-      }
-      return options.isAuthorizedForcedHandoff(
-        forcedHandoff.forcedBy,
-        forcedHandoff,
-        event,
-      );
-    })
-    .sort((left, right) =>
-      compareIso(
-        left.forcedHandoff.createdAt ?? left.event.createdAt,
-        right.forcedHandoff.createdAt ?? right.event.createdAt,
-      ),
-    );
-  if (candidates.length === 0) {
+/** Render {@link ActiveClaimResolution.appliedForcedHandoff} for JSON output. */
+function toForcedHandoffEvidence(applied) {
+  if (!applied) {
     return null;
   }
-  const winner = candidates[0].forcedHandoff;
   return {
-    old_agent_id: winner.oldAgentId,
-    old_claim_id: winner.oldClaimId,
-    new_agent_id: winner.newAgentId,
-    new_claim_id: winner.newClaimId,
-    forced_by: winner.forcedBy,
-    timestamp: winner.createdAt ?? '',
+    old_agent_id: applied.oldAgentId,
+    old_claim_id: applied.oldClaimId,
+    new_agent_id: applied.newAgentId,
+    new_claim_id: applied.newClaimId,
+    forced_by: applied.forcedBy,
+    timestamp: applied.createdAt ?? '',
   };
 }
 /**
@@ -524,8 +463,8 @@ function resolveClaimState(events, nowIso, staleAgeMs, options = {}) {
       );
     }
   };
-  const activeClaim = hasNewFormatClaim
-    ? resolveActiveClaim(events, {
+  const claimTrace = hasNewFormatClaim
+    ? resolveActiveClaimWithForcedHandoffTrace(events, {
         isTrustedAuthor: () => true, // events were already filtered by caller
         isForcedHandoffEnabled,
         isAuthorizedForcedHandoff,
@@ -548,7 +487,8 @@ function resolveClaimState(events, nowIso, staleAgeMs, options = {}) {
   if (hasNewFormatClaim) {
     return {
       mode: 'new-format',
-      activeClaim,
+      activeClaim: claimTrace?.activeClaim ?? null,
+      appliedForcedHandoff: claimTrace?.appliedForcedHandoff ?? null,
       warnings,
       legacyClaim: null,
       legacyReleased: false,
@@ -559,6 +499,7 @@ function resolveClaimState(events, nowIso, staleAgeMs, options = {}) {
   return {
     mode: 'legacy-only',
     activeClaim: null,
+    appliedForcedHandoff: null,
     warnings,
     legacyClaim: legacy.claim,
     legacyReleased: legacy.released,

@@ -565,6 +565,63 @@ test('evidence.forced_handoff stays null when a forced-handoff marker exists but
   assert.equal(result.evidence.forced_handoff, null);
 });
 
+test('evidence.forced_handoff is not misattributed to a stale, never-applied duplicate handoff sharing the same new-claim target', () => {
+  // Regression for the review finding on #2178's first draft: a naive
+  // scan for "which forced-handoff marker's new* fields match the final
+  // active claim" can pick a marker that was never actually applied by
+  // the real reducer, when a later, correctly-applied marker happens to
+  // target the identical new-claim-id (e.g. a human retries a handoff
+  // after realizing their first attempt cited stale old* fields, reusing
+  // the same intended successor claim-id both times).
+  //
+  // Timeline: fresh claim (agent-A/claim-1) -> stale takeover to
+  // agent-D/claim-9 (>24h later) -> a stray forced-handoff still citing
+  // the ORIGINAL agent-A/claim-1 as old* (never applied: active was
+  // already agent-D/claim-9 by then) -> the real forced-handoff citing
+  // agent-D/claim-9 as old*, both targeting the same agent-B/claim-2.
+  const events = [
+    {
+      createdAt: '2026-06-01T10:00:00Z',
+      author: { login: 'maintainer' },
+      body: '<!-- claimed-by: agent-A claim-1 supersedes: none 2026-06-01T10:00:00Z branch: issue/50-task -->',
+    },
+    {
+      createdAt: '2026-06-02T11:00:00Z',
+      author: { login: 'maintainer' },
+      body: '<!-- claimed-by: agent-D claim-9 supersedes: claim-1 2026-06-02T11:00:00Z branch: issue/50-task -->',
+    },
+    {
+      createdAt: '2026-06-02T11:05:00Z',
+      author: { login: 'maintainer' },
+      body: '<!-- forced-handoff: {"oldAgentId":"agent-A","oldClaimId":"claim-1","newAgentId":"agent-B","newClaimId":"claim-2","branch":"issue/50-task","forcedBy":"maintainer","reason":"stray retry citing stale old-claim","timestamp":"2026-06-02T11:05:00Z","contextScope":"issue-only"} -->\n\n_maintainer: forced handoff — IDD automation marker. Do not edit._',
+    },
+    {
+      createdAt: '2026-06-02T11:10:00Z',
+      author: { login: 'maintainer' },
+      body: '<!-- forced-handoff: {"oldAgentId":"agent-D","oldClaimId":"claim-9","newAgentId":"agent-B","newClaimId":"claim-2","branch":"issue/50-task","forcedBy":"maintainer","reason":"actual handoff","timestamp":"2026-06-02T11:10:00Z","contextScope":"issue-only"} -->\n\n_maintainer: forced handoff — IDD automation marker. Do not edit._',
+    },
+  ];
+
+  const result = evaluateResumeClaimRouting(
+    { now: '2026-06-02T12:00:00Z', events },
+    {
+      isTrustedAuthor: trusted(['maintainer']),
+      isForcedHandoffEnabled: () => true,
+      isAuthorizedForcedHandoff: (forcedBy) => forcedBy === 'maintainer',
+    },
+  );
+
+  assert.equal(result.active_claim?.claim_id, 'claim-2');
+  assert.deepEqual(result.evidence.forced_handoff, {
+    old_agent_id: 'agent-D',
+    old_claim_id: 'claim-9',
+    new_agent_id: 'agent-B',
+    new_claim_id: 'claim-2',
+    forced_by: 'maintainer',
+    timestamp: '2026-06-02T11:10:00Z',
+  });
+});
+
 test('forced-handoff is ignored when forced-handoff mode is disabled', () => {
   const result = evaluateResumeClaimRouting(
     {
