@@ -323,6 +323,14 @@ ack / error, as defined in E4):
   has, disposition that review instead and take a fresh E1 snapshot, so
   the rejection's later timestamp doesn't filter the completed review
   out of the next pass.
+- **Paraphrase, never reproduce, a bot's trigger or command string in
+  `{reason}`.** Advisory bots scan comment bodies for their own
+  command-trigger strings even inside Markdown code spans, so quoting
+  a bot's literal review-request mention verbatim — fenced or not —
+  can fire it as though a fresh review had been manually requested.
+  Describe the situation in your own words instead. Canonical
+  paraphrase for the low-star / manual-trigger skip-review case:
+  "requires a manually triggered review for low-star repositories".
 - **Carry the rejection forward across pushes.** Once a notice carries a
   `**Rejected** — {bot} did not review HEAD …` reply, that disposition
   persists across later HEAD changes and pushes while the same notice
