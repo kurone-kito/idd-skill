@@ -319,6 +319,39 @@ test('critiqueLoop.delegate fails safe to undefined on a missing or empty comman
       .critiqueLoop.delegate,
     undefined,
   );
+  // Whitespace-only command: mirrors worktreeGuard.branchPatterns' `\S`
+  // schema rejection so a normalizePolicyConfig caller cannot accept a
+  // configuration the schema would reject (#2207 review).
+  assert.equal(
+    normalizePolicyConfig({ critiqueLoop: { delegate: { command: '   ' } } })
+      .critiqueLoop.delegate,
+    undefined,
+  );
+});
+
+test('critiqueLoop.delegate fails safe to undefined on an unknown property (#2207 review)', () => {
+  // Mirrors parseCheckSelectors' exact-key-set rejection: the schema's
+  // additionalProperties: false already rejects an unrecognized key, and
+  // the resolver must reject the same shape for a direct
+  // normalizePolicyConfig caller that bypasses schema validation.
+  assert.equal(
+    normalizePolicyConfig({
+      critiqueLoop: { delegate: { command: 'coderabbit review', bogus: 1 } },
+    }).critiqueLoop.delegate,
+    undefined,
+  );
+});
+
+test('critiqueLoop.delegate is absent (not an own key) when unconfigured, matching POLICY_DEFAULTS (#2207 review)', () => {
+  // POLICY_DEFAULTS never carries an undefined-valued property (see the
+  // clone() doc comment) -- the resolved object must match that shape
+  // exactly, not merely resolve `.delegate` to `undefined` via a missing
+  // lookup.
+  assert.equal(
+    Object.hasOwn(normalizePolicyConfig({}).critiqueLoop, 'delegate'),
+    false,
+  );
+  assert.equal(Object.hasOwn(POLICY_DEFAULTS.critiqueLoop, 'delegate'), false);
 });
 
 test('selectDesyncedIndex returns 0 for empty, singleton, or invalid bands', () => {

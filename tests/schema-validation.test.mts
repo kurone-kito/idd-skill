@@ -753,6 +753,23 @@ test('policy schema rejects a critiqueLoop.delegate with an empty command', () =
   );
 });
 
+test('policy schema rejects a critiqueLoop.delegate with a whitespace-only command (#2207 review)', () => {
+  const schema = loadJson('schemas/policy.schema.json');
+  const instance = JSON.parse(
+    JSON.stringify(loadJson('fixtures/schemas/policy.valid.json')),
+  );
+  // A whitespace-only command can never run anything actionable; the `\S`
+  // pattern rejects it at validation time the same way
+  // worktreeGuard.branchPatterns does, instead of silently accepting a
+  // non-actionable delegate.
+  instance.critiqueLoop = { delegate: { command: '   ' } };
+  const errors = validate(instance, schema);
+  assert.ok(
+    errors.some((error) => error.includes('$.critiqueLoop.delegate.command')),
+    errors.join('\n'),
+  );
+});
+
 test('policy schema rejects an unrecognized critiqueLoop.delegate.mode', () => {
   const schema = loadJson('schemas/policy.schema.json');
   const instance = JSON.parse(

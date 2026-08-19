@@ -921,6 +921,16 @@ High/Medium/Low process; no new machine-readable output schema is
 introduced. Absent `critiqueLoop.delegate` entirely keeps today's
 per-agent-only behavior with zero change.
 
+Configuration-time fail-safe (distinct from the `mode: fallback`
+runtime behavior above): a non-object `critiqueLoop.delegate`, or one
+whose `command` is missing, empty, whitespace-only, or non-string, is
+treated the same as an absent delegate — C1 uses the per-agent
+mechanism, never attempting the delegate at all. A valid `command`
+paired with an unrecognized `mode` value still configures the
+delegate, defaulting `mode` to `fallback`; `.github/idd/config.json`
+schema validation separately rejects an unsupported `mode` value or
+any key other than `command`/`mode` before the file is accepted.
+
 The C-phase's objective diff validation floor described below applies
 **uniformly** whether a delegate is configured or not, in either mode,
 and regardless of what the delegate reports — this surface changes

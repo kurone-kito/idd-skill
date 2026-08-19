@@ -527,7 +527,8 @@
             "command": {
               "type": "string",
               "minLength": 1,
-              "description": "Shell command C1 runs against the branch's current diff, in place of (or alongside, under `combined` mode) the per-agent Critique pass invocation table. Required within this object."
+              "pattern": "\\S",
+              "description": "Shell command C1 runs against the branch's current diff, in place of (or alongside, under `combined` mode) the per-agent Critique pass invocation table. Required within this object; must contain a non-whitespace character (the `\\S` pattern rejects a whitespace-only value the same way `worktreeGuard.branchPatterns` does, instead of silently accepting a non-actionable command)."
             },
             "mode": {
               "type": "string",

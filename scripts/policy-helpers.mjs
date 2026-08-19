@@ -143,9 +143,6 @@ export const POLICY_DEFAULTS = Object.freeze({
   critiqueLoop: Object.freeze({
     cPhaseLowSeveritySkipAfter: 3,
     e10NoProgressHoldAfter: 3,
-    // No default value -- absence means "no delegate configured," not a
-    // concrete fallback object; see parseCritiqueLoopDelegate.
-    delegate: undefined,
   }),
   reviewEscalation: Object.freeze({
     changesRequestedFirstEscalation: 'PT24H',
@@ -266,6 +263,9 @@ export function normalizePolicyConfig(config) {
     c?.markerTrust?.allowCollaboratorMarkers,
     c?.markerTrustAllowCollaboratorMarkers,
     c?.allowCollaboratorMarkers,
+  );
+  const critiqueLoopDelegate = parseCritiqueLoopDelegate(
+    c?.critiqueLoop?.delegate,
   );
   return {
     issueScope: parseEnum(
@@ -421,7 +421,10 @@ export function normalizePolicyConfig(config) {
         c?.critiqueLoop?.e10NoProgressHoldAfter,
         POLICY_DEFAULTS.critiqueLoop.e10NoProgressHoldAfter,
       ),
-      delegate: parseCritiqueLoopDelegate(c?.critiqueLoop?.delegate),
+      // Own-property omitted (not set to `undefined`) when no delegate is
+      // configured, matching POLICY_DEFAULTS -- see the clone() doc comment
+      // on why POLICY_DEFAULTS itself never carries an undefined-valued key.
+      ...(critiqueLoopDelegate ? { delegate: critiqueLoopDelegate } : {}),
     },
     reviewEscalation: {
       changesRequestedFirstEscalation: parseDuration(
@@ -731,18 +734,23 @@ function parseCheckSelectors(value, fallback) {
 }
 /**
  * Parse `critiqueLoop.delegate`. Unlike the other `critiqueLoop` fields,
- * absence is not defaulted to a concrete value -- a missing, non-object, or
- * malformed `command` normalizes to `undefined` (no delegate configured,
- * matching the schema's fail-safe-on-malformed-input pattern for this
- * object).
+ * absence is not defaulted to a concrete value -- a non-object, an unknown
+ * nested key, or a missing/whitespace-only `command` all normalize to
+ * `undefined` (no delegate configured) so a direct `normalizePolicyConfig`
+ * caller can never accept a shape the schema's `additionalProperties: false`
+ * / `command` pattern would reject (#2207 review).
  */
 function parseCritiqueLoopDelegate(value) {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) {
     return undefined;
   }
   const candidate = value;
+  const candidateKeys = Object.keys(candidate);
+  if (candidateKeys.some((key) => key !== 'command' && key !== 'mode')) {
+    return undefined;
+  }
   const command = parseNonEmptyString(candidate.command, '');
-  if (!command) {
+  if (!command || command.trim() === '') {
     return undefined;
   }
   return {

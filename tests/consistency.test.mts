@@ -810,7 +810,6 @@ test('policy normalization provides default-safe values and supports aliases', (
     critiqueLoop: {
       cPhaseLowSeveritySkipAfter: 3,
       e10NoProgressHoldAfter: 3,
-      delegate: undefined,
     },
     reviewEscalation: {
       changesRequestedFirstEscalation: 'PT24H',
@@ -981,7 +980,6 @@ test('policy normalization provides default-safe values and supports aliases', (
       critiqueLoop: {
         cPhaseLowSeveritySkipAfter: 4,
         e10NoProgressHoldAfter: 2,
-        delegate: undefined,
       },
       reviewEscalation: {
         changesRequestedFirstEscalation: 'PT18H',
