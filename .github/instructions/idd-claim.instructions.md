@@ -52,6 +52,8 @@ gate-enable, actor-policy, approval-signal, and fail-closed rules as
 
 A bare organization `MEMBER` association never counts as approval;
 neither do issue body text, a generated plan, or operator attention.
+See A3.5's self-authorization fallback (#2148) for the one exception,
+which applies only when the permission read itself is unavailable.
 
 - If approval is missing for a roadmap/default discovery run, return to
   Discover using the same selection mode that produced this target so
