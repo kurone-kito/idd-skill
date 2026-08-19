@@ -148,7 +148,8 @@ unambiguous:
 - **Review threads**: after posting your reply, **immediately resolve
   the thread**, using the same resolve-review-thread mechanism as
   `idd-review-triage.instructions.md`'s E6 (profile-selected helper
-  command, reply-before-resolve, GraphQL fallback — see
+  command, reply-before-resolve, manual REST + GraphQL
+  `resolveReviewThread` fallback — see
   `idd-review-triage.instructions.md`'s E6 for the exact command and
   flags). Resolution means "agent acted", not "reviewer agreed" — a
   disagreeing reviewer can reopen the thread, re-surfacing it in the
