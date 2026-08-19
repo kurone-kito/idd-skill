@@ -14,53 +14,187 @@ discipline and has no tag.
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-08-20
+
+Issue-mediated onboarding bootstrap, orchestrator-delegation and
+advisory-convergence hardening, and suitability-triage false-positive
+closures release.
+
 ### Added
 
-- `pre-merge-readiness --claimless` for PRs with no
-  `closingIssuesReferences`: skips claim fetch/revalidation and
-  reports the not-applicable / unclaimed ownership shape. Combining
-  the flag with `--claim-issue` or `--claim-id` is rejected, and a
-  PR that still closes an issue fails closed.
-- Present-tense hybrid review-reply identity contract on the
-  operator docs: IDD replies carry the prefix-aware stamp (not an
-  E1 `review-watermark`); unmarked human replies on human threads
-  are presence-only; Copilot threads still need an IDD disposition;
-  the required `idd-advisory-convergence` job is not created by
-  unmarked human review chatter; `reviewPolicy` is honored.
+- Issue-mediated bootstrap: an alternate onboarding path that drafts a
+  welcome issue after the bootstrap PR merges instead of requiring a
+  live interactive hearing, with its own execution-mode tracking
+  through Steps 1B/2/6, a Step 0 `gh` CLI prerequisite check, and a
+  gated welcome-issue prompt that checks actual companion state before
+  firing.
+- `critiqueLoop.delegate`: an optional policy field letting a
+  repository point the C1 self-review pass at a configured external
+  command (for example a local CLI reviewer) instead of the hardcoded
+  per-agent critique table, with a `fallback`/`combined` mode and
+  validation against whitespace/unknown-key configs.
+- `authoringLanguage` policy field: drafted issue and PR body prose
+  follows a configured BCP-47 tag or the operator's live conversational
+  language, applied consistently by issue-authoring and PR-submit.
 - Prefix-aware review-reply identity stamp
   (`<!-- {markerPrefix}-review-reply -->`) for IDD-originated E6/E13
-  replies, with helper injection and a shared recognizer. The stamp
-  rides after the visible disposition prefix and is not an E1
-  `review-watermark` or F4 operational marker.
+  replies, with helper injection and a shared recognizer, alongside
+  the present-tense hybrid review-reply identity contract: unmarked
+  human replies on human threads are presence-only, Copilot threads
+  still need an IDD disposition, and the required
+  `idd-advisory-convergence` job is not created by unmarked human
+  review chatter.
+- `advisory-convergence` verdicts carry structured `nextActions`
+  diagnostics, printed on assert failure, and a disposition-aware
+  review-ack marker.
+- `suitability-triage --body-file`/`--stdin`: a local, offline dry-run
+  mode that runs six of the seven A4.5 checks against a drafted issue's
+  text before publication, without a live search index.
+- `pre-merge-readiness --claimless` for PRs with no
+  `closingIssuesReferences`: skips claim fetch/revalidation and reports
+  the not-applicable/unclaimed ownership shape; combining the flag with
+  `--claim-issue`/`--claim-id` is rejected, and a PR that still closes
+  an issue fails closed.
+- `ci-wait-policy` derives `--rerun-count` from `run_attempt` via a new
+  `--run-id` input, and one evidence-gated extra rerun is allowed after
+  the `rerun-once` budget is spent.
+- `audit-docs` guards `bin/*.mjs` executable mode against drift, and
+  `consistency`'s mirror guard supports an N-clause `engines.node`
+  range.
+- The shipped `idd-advisory-convergence.yml` workflow's CI runner is
+  overridable via a `runner` input (`workflow_call`/`workflow_dispatch`)
+  or the `CI_RUNNER_LABEL` repository variable, defaulting to
+  `ubuntu-slim`.
 
 ### Changed
 
-- A5 collectors fall back when REST `GET /user` or collaborators
-  permission reads return 5xx: `resume-claim-routing` tries GraphQL
-  `viewer { login }` once, and `claim-approval-gate` treats a live
-  issue `author_association` of `OWNER` or `MEMBER` as sufficient
-  self-authorization without a successful permission read.
-- `advisory-convergence` honors `reviewPolicy`: `human-required` and
-  `no-advisory` make the check `not_applicable` (ready without Copilot
-  clauses) instead of judging every applicable PR as Copilot-advisory.
-  `copilot-advisory`, absent, or an invalid value keep today's
-  fail-closed behavior. Profile artifacts now list the config field
-  and the "do not register this check unless you want an advisory-bot
-  gate" note on the same patch surface as the phase-file edits.
-- The required `idd-advisory-convergence` job no longer runs on
-  `pull_request_review_comment`. Ordinary human review chatter no
-  longer creates or cancels that required check. IDD-originated
-  comments refresh the existing HEAD run from a separate
-  non-required companion workflow.
-- `engines.node` bumped to `^22.23.2 || ^24.2.0 || >=26.0.0`: the
-  22.x floor moves to the 2026-07-29 emergency security release
-  (fixes 11 CVEs including CVE-2026-56846/CVE-2026-56848 HTTP/2
+- Orchestrator fan-out delegation hardened: a delegation brief must
+  state the delegate's sole-worker role explicitly when the delegate
+  inherits the orchestrator's full conversation context (closing an
+  observed context-inheritance confusion), and must carry the
+  CI/advisory-wait wake-up-discipline topology-safety condition so a
+  worker never assumes an unconfirmed background wait resumes its own
+  turn. Claim approval also falls back to a live issue
+  `author_association` of `OWNER`/`MEMBER` when the collaborator
+  permission API returns 5xx, and the claim-lock helper documents the
+  already-claimed-by-self takeover case.
+- `advisory-convergence` honors `reviewPolicy` (`human-required`/
+  `no-advisory` make the check `not_applicable`), no longer runs on
+  `pull_request_review_comment` so ordinary human review chatter can't
+  create or cancel the required check, requires full thread coverage
+  of `itemCount`, validates the review-ack embedded timestamp and
+  reroll eligibility, widens its GraphQL reviewer page, and
+  `rerun-advisory-convergence --check-name` can override the check
+  search.
+- Suitability-triage hardening: excludes hyphenated-token matches from
+  Check 7's subjective-approval patterns (`needs-decision`,
+  `blocked-by-human`, and similar no longer self-trip the gate),
+  closes several Check 3 negation-bypass and unsafe-directive-verb
+  gaps, skips markdown-wrapped noun-clause gerunds and abbreviation
+  periods inside the directive window, and masks Markdown code
+  regions.
+- `discover-roadmap-graph`'s dependency-negation detection closes
+  several review-found gaps (a residual quadratic re-scan path,
+  not-only negation generalization, negated keyword mentions
+  incorrectly treated as edges) and no longer re-scans quadratically.
+- `idd-doctor` governance reads honor GitHub Rulesets and
+  `trustEmptyProtectionReads`, pin an explicit `--hostname` for the
+  target repository (including GHES), and recognize a chained
+  hook-manager setup as wired; `worktree-guard` detects CRLF-broken
+  hooks without overclaiming active blocking for inert ones, and cuts
+  common-path forks for a documented Windows-risk performance gain.
+- F4 merge/cleanup hardened: worktree cleanup inspection and submodule
+  ref checks are bounded and re-scoped to the target worktree,
+  `audit-pr-cleanup` retries `--apply` internally until convergence
+  with backoff and surfaces retry fields in its table output, and
+  bundle-merge's byte-budget headroom was widened twice after a second
+  ceiling breach.
+- CLI/helper error handling hardened: shaped CLI errors print instead
+  of a raw stack trace, `run-helper` streams subprocess stderr live via
+  a temp file instead of a pipe, the ambiguous `--token` GitHub-auth
+  flag was renamed to `--gh-token` (`--token` kept one release as a
+  deprecated alias), and a declared flag's own alias is reserved before
+  disambiguation so a pnpm-forwarded leading `--` is stripped correctly.
+- `engines.node` bumped to `^22.23.2 || ^24.2.0 || >=26.0.0`: the 22.x
+  floor moves to the 2026-07-29 emergency security release (fixes 11
+  CVEs including the CVE-2026-56846/CVE-2026-56848 HTTP/2
   header-memory issues and the CVE-2026-58043 Permission Model
   over-grant), the previously-unbounded `>=24.2.0` tail is now capped
   below the already-end-of-life 25.x line, and a new `>=26.0.0` clause
-  opens the new Current line (enters Active LTS 2026-10-28). The 24.x
+  opens the new Current line (enters Active LTS 2026-10-28); the 24.x
   floor itself is unchanged (still feature-motivated by
   `import.meta.main`).
+- Context-ceiling budget management: `bundle-review`'s `limitBytes` was
+  raised from 120,000 to 126,000 (and `maxBundleLimitBytes` raised to
+  match), the other seven bundles sitting in the 95%+ notice band were
+  raised too, `bundle-discovery`'s own limit was widened after a second
+  ceiling breach, and this source repository's own
+  `idd-advisory-convergence` maintainer-waiver deadline was shortened
+  to `PT9H` to fit its higher-concurrency dogfooding setup.
+- Adopted the shared `@kurone-kito/markdownlint-config` and
+  `@kurone-kito/cspell-config` packages as the lint/spell-check base,
+  keeping `idd-template`'s own cspell config self-contained.
+- Extensive onboarding and customization-doc precision fixes: hook-
+  manager/`shellEmulator` coexistence gaps closed, resync
+  baseline-diff correctness improved (token-filter binding, forward
+  rather than reverse tree comparison, dropped an unreliable
+  content-match fallback), `blockedOverwrites` qualified for a
+  `--force` import, `GH_TOKEN`/`GH_ENTERPRISE_TOKEN` scoped correctly
+  across `gh auth`/`gh api` call sites (including CI), and the
+  Corepack/pnpm-version notes made version-agnostic.
+- Review-triage, advisory-wait, and resume protocol docs tightened:
+  review-ack trust gating and its Clause 1 escape-hatch role
+  clarified, the AMD marker's inconclusive-routing scope narrowed, the
+  operator-present release path's cold-recovery, pause-evidence, and
+  no-later-activity handling closed several review-found gaps, and
+  hold-release/digest wording plus needs-decision claim-release
+  routing were generalized.
+- Misc docs: the lite phase map gained its shipped E1-E3 row, the
+  commit-signing note realigned with the tiered SSH fallback and its
+  actual blocking condition (a non-default outcome, including
+  `--no-gpg-sign`, must now be recorded like other material progress),
+  `policy-constants`' token range aligned with the real 126,000-byte
+  bundle limit, shipped workflow run steps pinned to bash, and small
+  precision fixes across `docs/idd-comment-minimization.md`,
+  permissions (`per_page` default is 30, not page), the bundle-review
+  split-feasibility investigation, and repo dev-experience defaults
+  (`.gitattributes`, VS Code settings).
+
+### Fixed
+
+- 32 of the 41 `bin/*.mjs` CLI entry-point scripts were tracked in git
+  as non-executable (`100644`) despite their `#!/usr/bin/env node`
+  shebang and `package.json` `bin` listing, which could break
+  `npx idd-*` resolution for a package manager that trusts the
+  execute bit over the shebang; all are now tracked executable.
+- `pre-merge-readiness` requires an exact selector for a convergence
+  waiver, gates `coveredByWaiver` on both `waivers.mode` and a fresh
+  rerun against the deadline/terminal precondition, and corrects its
+  waiver-freshness wording.
+- `protocol-helpers` scopes rejection-confirmed recognition to actual
+  threads, anchors an edited rejection marker by activity, keeps a
+  waiver valid after a one-hop claim takeover, and honors bot-suffix
+  and reopened-thread cases for skip-review markers.
+- `resume-claim-routing` tightens the forced-handoff evidence contract,
+  stops misattributing forced-handoff evidence, and fails closed
+  (`disputed`/`stop`) on a cold-recovery activation-nonce collision
+  when 2+ trusted nonce markers exist for the active claim and no
+  local nonce is held.
+- `merge-execute` treats BLOCKED discarded check siblings as a gate and
+  fails closed on garbled ack-only evidence; `post-merge-cleanup` adds
+  a status-aware duplicate-evidence guard.
+- Review-reply markers: a valid stamp is found after a lookalike, and
+  hyphen-extended stamps are rejected.
+- `external-check-waiver` trims actor candidates and fixes an
+  empty-string `--actor` fallback; `helper-runtime-manifest` never
+  coerces a non-string version and scopes its `--package-spec`/build-
+  command help text accurately.
+- `idd-advisory-convergence`'s poll loop uses a wall-clock deadline and
+  stops re-checking past it.
+- `merged-pr-feedback-sweep` flags `COMMENTED`-state review findings
+  outside the diff, closing a detection gap; `resolve-review-thread`
+  tolerates a missing `--body` in dry-run; `roadmap-audit` no longer
+  blocks A1.5 on a closed-descendant cycle.
 
 ## [0.6.0] - 2026-08-07
 
