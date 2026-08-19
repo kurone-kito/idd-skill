@@ -122,6 +122,60 @@ test('parseArgs: --help is recognized without requiring --issue', () => {
   assert.equal(args.help, true);
 });
 
+// --- #2195: --token was ambiguous against select-desynced-index.mjs's
+// unrelated same-named session-desync token; --gh-token is now canonical
+// and --token stays a deprecated alias for one release. -------------------
+
+test('parseArgs: --gh-token resolves to ghToken', () => {
+  const args = parseArgs(['--gh-token', 'canonical-test-token']);
+  assert.equal(args.ghToken, 'canonical-test-token');
+});
+
+test('parseArgs: --token still resolves to ghToken and warns as a deprecated alias', () => {
+  const originalWrite = process.stderr.write.bind(process.stderr);
+  let stderr = '';
+  process.stderr.write = ((chunk: unknown) => {
+    stderr += String(chunk);
+    return true;
+  }) as typeof process.stderr.write;
+  let args: ReturnType<typeof parseArgs>;
+  try {
+    args = parseArgs(['--token', 'deprecated-test-token']);
+  } finally {
+    process.stderr.write = originalWrite;
+  }
+  assert.equal(args.ghToken, 'deprecated-test-token');
+  assert.match(stderr, /--token is deprecated; use --gh-token instead\./);
+});
+
+test('parseArgs: an absent --gh-token/--token resolves to an empty string, no warning', () => {
+  const originalWrite = process.stderr.write.bind(process.stderr);
+  let stderr = '';
+  process.stderr.write = ((chunk: unknown) => {
+    stderr += String(chunk);
+    return true;
+  }) as typeof process.stderr.write;
+  let args: ReturnType<typeof parseArgs>;
+  try {
+    args = parseArgs(['--issue', '42']);
+  } finally {
+    process.stderr.write = originalWrite;
+  }
+  assert.equal(args.ghToken, '');
+  assert.equal(stderr, '');
+});
+
+test('parseArgs: when both --gh-token and --token are given, the last one in argv wins', () => {
+  assert.equal(
+    parseArgs(['--gh-token', 'first', '--token', 'second']).ghToken,
+    'second',
+  );
+  assert.equal(
+    parseArgs(['--token', 'first', '--gh-token', 'second']).ghToken,
+    'second',
+  );
+});
+
 // --- #1499: --manifest / --bundles override surface -------------------------
 
 test('parseArgs: --manifest defaults to the shared DEFAULT_MANIFEST_PATH', () => {

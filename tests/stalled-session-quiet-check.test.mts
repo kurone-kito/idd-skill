@@ -1,7 +1,12 @@
 #!/usr/bin/env node
 
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
+import { chmodSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, it } from 'node:test';
+import { fileURLToPath } from 'node:url';
 
 import { evaluateQuietWindow } from '../src/scripts/stalled-session-quiet-check.mts';
 
@@ -117,5 +122,112 @@ describe('stalled-session-quiet-check', () => {
       () => evaluateQuietWindow({ now: 'invalid-timestamp', activities: [] }),
       /input\.now must be a valid ISO8601 timestamp/u,
     );
+  });
+});
+
+// #2195: --token substituted GH_TOKEN/GITHUB_TOKEN for gh auth, ambiguous
+// against select-desynced-index.mjs's unrelated same-named session-desync
+// token. --gh-token is now canonical; --token stays a deprecated alias for
+// one release. A fake `gh` on PATH dumps GH_TOKEN/GITHUB_TOKEN to a side
+// file before failing (any real network call is out of scope for this
+// flag-propagation test), so the CLI process always exits non-zero -- only
+// the dumped env values matter here.
+const REPO_ROOT = fileURLToPath(new URL('..', import.meta.url));
+
+function ghTokenPropagationFixture() {
+  const tempRoot = mkdtempSync(
+    join(tmpdir(), 'idd-stalled-session-quiet-check-token-'),
+  );
+  const ghPath = join(tempRoot, 'gh');
+  const dumpPath = join(tempRoot, 'env-dump.json');
+  writeFileSync(
+    ghPath,
+    `#!/usr/bin/env node
+require('fs').writeFileSync(process.env.ENV_DUMP_PATH, JSON.stringify({
+  ghToken: process.env.GH_TOKEN ?? null,
+  githubToken: process.env.GITHUB_TOKEN ?? null,
+}));
+process.exit(1);
+`,
+  );
+  chmodSync(ghPath, 0o755);
+  return { tempRoot, ghPath, dumpPath };
+}
+
+function runStalledSessionQuietCheckCli(
+  extraArgs: string[],
+  fixture: ReturnType<typeof ghTokenPropagationFixture>,
+) {
+  assert.throws(() =>
+    execFileSync(
+      process.execPath,
+      [
+        join(REPO_ROOT, 'scripts/stalled-session-quiet-check.mjs'),
+        '--pr',
+        '1',
+        ...extraArgs,
+      ],
+      {
+        cwd: REPO_ROOT,
+        encoding: 'utf8',
+        env: {
+          ...process.env,
+          PATH: `${fixture.tempRoot}:${process.env.PATH ?? ''}`,
+          ENV_DUMP_PATH: fixture.dumpPath,
+        },
+      },
+    ),
+  );
+  return JSON.parse(readFileSync(fixture.dumpPath, 'utf8')) as {
+    ghToken: string | null;
+    githubToken: string | null;
+  };
+}
+
+describe('stalled-session-quiet-check CLI --gh-token / --token', () => {
+  it('--gh-token sets GH_TOKEN/GITHUB_TOKEN for gh auth', () => {
+    const fixture = ghTokenPropagationFixture();
+    const dump = runStalledSessionQuietCheckCli(
+      ['--gh-token', 'canonical-test-token'],
+      fixture,
+    );
+    assert.equal(dump.ghToken, 'canonical-test-token');
+    assert.equal(dump.githubToken, 'canonical-test-token');
+  });
+
+  it('--token still sets GH_TOKEN/GITHUB_TOKEN and warns as a deprecated alias', () => {
+    const fixture = ghTokenPropagationFixture();
+    let stderr = '';
+    try {
+      execFileSync(
+        process.execPath,
+        [
+          join(REPO_ROOT, 'scripts/stalled-session-quiet-check.mjs'),
+          '--pr',
+          '1',
+          '--token',
+          'deprecated-test-token',
+        ],
+        {
+          cwd: REPO_ROOT,
+          encoding: 'utf8',
+          env: {
+            ...process.env,
+            PATH: `${fixture.tempRoot}:${process.env.PATH ?? ''}`,
+            ENV_DUMP_PATH: fixture.dumpPath,
+          },
+        },
+      );
+      assert.fail('expected the CLI to exit non-zero');
+    } catch (error) {
+      stderr = String((error as { stderr?: unknown }).stderr ?? '');
+    }
+    const dump = JSON.parse(readFileSync(fixture.dumpPath, 'utf8')) as {
+      ghToken: string | null;
+      githubToken: string | null;
+    };
+    assert.equal(dump.ghToken, 'deprecated-test-token');
+    assert.equal(dump.githubToken, 'deprecated-test-token');
+    assert.match(stderr, /--token is deprecated; use --gh-token instead\./);
   });
 });

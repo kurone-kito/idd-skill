@@ -106,6 +106,7 @@ const CLAIM_APPROVAL_GATE_FLAG_SPEC = {
   '--owner': { type: 'string' },
   '--repo': { type: 'string' },
   '--policy': { type: 'string' },
+  '--gh-token': { type: 'string' },
   '--token': { type: 'string' },
   '--generated-plan-updated-at': { type: 'string' },
   '--verbose': { type: 'boolean', default: false },
@@ -313,9 +314,9 @@ function runCli(): void {
   if (!Number.isInteger(args.issue) || (args.issue ?? 0) <= 0) {
     throw new Error('--issue is required and must be a positive integer');
   }
-  if (args.token) {
-    process.env.GH_TOKEN = args.token;
-    process.env.GITHUB_TOKEN = args.token;
+  if (args.ghToken) {
+    process.env.GH_TOKEN = args.ghToken;
+    process.env.GITHUB_TOKEN = args.ghToken;
   }
 
   const owner =
@@ -397,15 +398,78 @@ interface ParsedArgs {
   owner: string;
   repo: string;
   policy: string;
-  token: string;
+  ghToken: string;
   generatedPlanUpdatedAt: string;
   verbose: boolean;
   help: boolean;
 }
 
+function warnDeprecatedFlag(deprecated: string, canonical: string): void {
+  process.stderr.write(
+    `warning: ${deprecated} is deprecated; use ${canonical} instead.\n`,
+  );
+}
+
+/**
+ * Find `flag`'s last occurrence in `argv`, recognizing both the
+ * two-token form (`--flag value`) and the single-token `--flag=value`
+ * form `parseCliArgs` also accepts.
+ */
+function findLastFlagOccurrenceIndex(
+  argv: readonly string[],
+  flag: string,
+): number {
+  const equalsPrefix = `${flag}=`;
+  for (let index = argv.length - 1; index >= 0; index -= 1) {
+    if (argv[index] === flag || argv[index].startsWith(equalsPrefix)) {
+      return index;
+    }
+  }
+  return -1;
+}
+
+/**
+ * Resolve a canonical/deprecated flag pair: whichever flag's LAST
+ * occurrence comes later in argv wins when both spellings are given
+ * together (matches `pre-merge-readiness.mts`'s `--claim-id` /
+ * `--expected-claim-id` precedent). `-1` (never given) sorts before any
+ * real index, so an absent flag never wins against one that was
+ * actually passed.
+ */
+function resolveLastGivenAlias(
+  argv: readonly string[],
+  canonicalFlag: string,
+  canonicalValue: string | undefined,
+  deprecatedFlag: string,
+  deprecatedValue: string | undefined,
+): string | undefined {
+  if (canonicalValue === undefined) {
+    return deprecatedValue;
+  }
+  if (deprecatedValue === undefined) {
+    return canonicalValue;
+  }
+  const lastCanonicalIndex = findLastFlagOccurrenceIndex(argv, canonicalFlag);
+  const lastDeprecatedIndex = findLastFlagOccurrenceIndex(argv, deprecatedFlag);
+  return lastDeprecatedIndex > lastCanonicalIndex
+    ? deprecatedValue
+    : canonicalValue;
+}
+
 function parseArgs(argv: string[]): ParsedArgs {
   const { values, help } = parseCliArgs(argv, CLAIM_APPROVAL_GATE_FLAG_SPEC);
   const issueToken = values.issue as string | undefined;
+  const ghToken = resolveLastGivenAlias(
+    argv,
+    '--gh-token',
+    values['gh-token'] as string | undefined,
+    '--token',
+    values.token as string | undefined,
+  );
+  const deprecatedTokenValue = values.token as string | undefined;
+  if (deprecatedTokenValue !== undefined) {
+    warnDeprecatedFlag('--token', '--gh-token');
+  }
   return {
     // Kept as lenient Number.parseInt (not the canonical-integer helper),
     // matching the pre-migration contract exactly: this file's own
@@ -417,7 +481,7 @@ function parseArgs(argv: string[]): ParsedArgs {
     owner: (values.owner as string | undefined) ?? '',
     repo: (values.repo as string | undefined) ?? '',
     policy: (values.policy as string | undefined) ?? '',
-    token: (values.token as string | undefined) ?? '',
+    ghToken: ghToken ?? '',
     generatedPlanUpdatedAt:
       (values['generated-plan-updated-at'] as string | undefined) ?? '',
     verbose: values.verbose as boolean,
@@ -427,7 +491,8 @@ function parseArgs(argv: string[]): ParsedArgs {
 
 function printHelp(): void {
   process.stdout.write(`Usage:
-  node scripts/claim-approval-gate.mjs --issue <number> [--token <token>] [--owner <owner>] [--repo <repo>] [--policy <path>] [--generated-plan-updated-at <ISO8601>] [--verbose]
+  node scripts/claim-approval-gate.mjs --issue <number> [--gh-token <token>] [--owner <owner>] [--repo <repo>] [--policy <path>] [--generated-plan-updated-at <ISO8601>] [--verbose]
+  Deprecated aliases (one release): --token -> --gh-token
 
 Output schema:
 {

@@ -65,7 +65,8 @@ const SUITABILITY_TRIAGE_FLAG_SPEC = {
   '--issue': { type: 'string' },
   '--body-file': { type: 'string' },
   '--stdin': { type: 'boolean', default: false },
-  '--token': { type: 'string', default: '' },
+  '--gh-token': { type: 'string' },
+  '--token': { type: 'string' },
   '--owner': { type: 'string', default: '' },
   '--repo': { type: 'string', default: '' },
   '--policy': { type: 'string', default: '' },
@@ -1133,9 +1134,9 @@ function runCli() {
   if (args.issue === null || !Number.isInteger(args.issue) || args.issue <= 0) {
     throw new Error('--issue is required and must be a positive integer');
   }
-  if (args.token) {
-    process.env.GH_TOKEN = args.token;
-    process.env.GITHUB_TOKEN = args.token;
+  if (args.ghToken) {
+    process.env.GH_TOKEN = args.ghToken;
+    process.env.GITHUB_TOKEN = args.ghToken;
   }
   const owner =
     args.owner ||
@@ -1482,13 +1483,70 @@ function runLocalCli(args) {
 function parseLenientIntegerOrNull(token) {
   return token === undefined ? null : Number.parseInt(token, 10);
 }
+function warnDeprecatedFlag(deprecated, canonical) {
+  process.stderr.write(
+    `warning: ${deprecated} is deprecated; use ${canonical} instead.\n`,
+  );
+}
+/**
+ * Find `flag`'s last occurrence in `argv`, recognizing both the
+ * two-token form (`--flag value`) and the single-token `--flag=value`
+ * form `parseCliArgs` also accepts.
+ */
+function findLastFlagOccurrenceIndex(argv, flag) {
+  const equalsPrefix = `${flag}=`;
+  for (let index = argv.length - 1; index >= 0; index -= 1) {
+    if (argv[index] === flag || argv[index].startsWith(equalsPrefix)) {
+      return index;
+    }
+  }
+  return -1;
+}
+/**
+ * Resolve a canonical/deprecated flag pair: whichever flag's LAST
+ * occurrence comes later in argv wins when both spellings are given
+ * together (matches `pre-merge-readiness.mts`'s `--claim-id` /
+ * `--expected-claim-id` precedent). `-1` (never given) sorts before any
+ * real index, so an absent flag never wins against one that was
+ * actually passed.
+ */
+function resolveLastGivenAlias(
+  argv,
+  canonicalFlag,
+  canonicalValue,
+  deprecatedFlag,
+  deprecatedValue,
+) {
+  if (canonicalValue === undefined) {
+    return deprecatedValue;
+  }
+  if (deprecatedValue === undefined) {
+    return canonicalValue;
+  }
+  const lastCanonicalIndex = findLastFlagOccurrenceIndex(argv, canonicalFlag);
+  const lastDeprecatedIndex = findLastFlagOccurrenceIndex(argv, deprecatedFlag);
+  return lastDeprecatedIndex > lastCanonicalIndex
+    ? deprecatedValue
+    : canonicalValue;
+}
 export function parseArgs(argv) {
   const { values, help } = parseCliArgs(argv, SUITABILITY_TRIAGE_FLAG_SPEC);
+  const ghToken = resolveLastGivenAlias(
+    argv,
+    '--gh-token',
+    values['gh-token'],
+    '--token',
+    values.token,
+  );
+  const deprecatedTokenValue = values.token;
+  if (deprecatedTokenValue !== undefined) {
+    warnDeprecatedFlag('--token', '--gh-token');
+  }
   return {
     issue: parseLenientIntegerOrNull(values.issue),
     bodyFile: values['body-file'],
     stdin: values.stdin,
-    token: values.token,
+    ghToken: ghToken ?? '',
     owner: values.owner,
     repo: values.repo,
     policy: values.policy,
@@ -1520,8 +1578,9 @@ function loadPolicy(policyPath) {
 }
 function printHelp() {
   process.stdout.write(`Usage:
-  node scripts/suitability-triage.mjs --issue <number> [--token <token>] [--owner <owner>] [--repo <repo>] [--policy <path>] [--manifest <path>] [--bundles <id1,id2>] [--verbose] [--help]
+  node scripts/suitability-triage.mjs --issue <number> [--gh-token <token>] [--owner <owner>] [--repo <repo>] [--policy <path>] [--manifest <path>] [--bundles <id1,id2>] [--verbose] [--help]
   node scripts/suitability-triage.mjs (--body-file <path> | --stdin) [--policy <path>] [--verbose] [--help]
+  Deprecated aliases (one release): --token -> --gh-token
 
 --issue, --body-file, and --stdin are mutually exclusive; exactly one is
 required. --body-file/--stdin (#2102) run a local, offline dry-run against
