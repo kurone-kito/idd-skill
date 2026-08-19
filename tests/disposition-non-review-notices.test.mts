@@ -645,6 +645,15 @@ test('#2161: isReviewSummaryComment is false and isAdvisoryNonReviewNotice is tr
   assert.equal(isAdvisoryNonReviewNotice(CODERABBIT_SKIP_REVIEW), true);
 });
 
+test('#2161: isReviewSummaryComment and isAdvisoryNonReviewNotice agree on a casing-only skip-review marker variation', () => {
+  const upperCased = CODERABBIT_SKIP_REVIEW.replace(
+    'skip review by coderabbit.ai',
+    'Skip Review By CodeRabbit.ai',
+  );
+  assert.equal(isReviewSummaryComment(upperCased), false);
+  assert.equal(isAdvisoryNonReviewNotice(upperCased), true);
+});
+
 test('#2161: a genuine walkthrough (no inner skip-review marker) is still a summary walkthrough, not a notice', () => {
   assert.equal(isReviewSummaryComment(CODERABBIT_SUMMARY), true);
   assert.equal(isAdvisoryNonReviewNotice(CODERABBIT_SUMMARY), false);

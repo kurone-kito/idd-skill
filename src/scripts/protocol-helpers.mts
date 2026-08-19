@@ -1070,6 +1070,17 @@ export const CODERABBIT_SUMMARY_MARKER =
 export const CODERABBIT_SKIP_REVIEW_MARKER =
   '<!-- This is an auto-generated comment: skip review by coderabbit.ai -->';
 
+// Case-insensitive: CodeRabbit's own outer-marker matching elsewhere in this
+// file (see the rate-limit / summarize markers above) tolerates whitespace
+// and casing drift, so this must too -- a case-sensitive `includes()` check
+// here previously let `isReviewSummaryComment` and `isAdvisoryNonReviewNotice`
+// disagree on a casing-only marker variation (kurone-kito/idd-skill#2161
+// review). Single-sourced so both predicates share the exact same test.
+const CODERABBIT_SKIP_REVIEW_MARKER_RE = new RegExp(
+  escapeRegExp(CODERABBIT_SKIP_REVIEW_MARKER),
+  'i',
+);
+
 export function classifyRegularBotComment(
   comment: CommentLike,
   comments: CommentLike[],
@@ -1734,7 +1745,7 @@ const ADVISORY_NON_REVIEW_NOTICE_PATTERNS: RegExp[] = [
   // `summarize by coderabbit.ai` wrapper as a genuine walkthrough (see
   // CODERABBIT_SKIP_REVIEW_MARKER above) -- carries no review content even
   // though the outer wrapper alone cannot tell it apart from a real summary.
-  new RegExp(escapeRegExp(CODERABBIT_SKIP_REVIEW_MARKER), 'i'),
+  CODERABBIT_SKIP_REVIEW_MARKER_RE,
 ];
 
 // Codex usage / quota exhaustion for code reviews. Token-anchored on all
@@ -1929,7 +1940,7 @@ export function isReviewSummaryComment(body: unknown): boolean {
   const text = String(body ?? '').trimStart();
   return (
     text.startsWith(CODERABBIT_SUMMARY_MARKER) &&
-    !text.includes(CODERABBIT_SKIP_REVIEW_MARKER)
+    !CODERABBIT_SKIP_REVIEW_MARKER_RE.test(text)
   );
 }
 
