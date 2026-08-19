@@ -357,6 +357,26 @@ function threadHasIddAmd(
   );
 }
 
+// #2194: GitHub embeds a review finding directly in the review `body` field
+// (never as a separate review thread or regular comment) when the finding
+// targets a line the diff-hunk view cannot host -- CodeRabbit's stable
+// `<summary>⚠️ Outside diff range comments (N)</summary>` heading. A
+// non-`CHANGES_REQUESTED` review carrying such a block still holds a real
+// finding this sweep must not miss. `N === 0` (or an absent block) is an
+// ordinary walkthrough/summary review with nothing outside the diff, not a
+// finding.
+const OUTSIDE_DIFF_RANGE_COMMENTS_RE =
+  /<summary>\s*⚠️\s*Outside diff range comments\s*\((\d+)\)\s*<\/summary>/;
+
+function hasOutsideDiffRangeFindings(reviewBody: string): boolean {
+  const match = OUTSIDE_DIFF_RANGE_COMMENTS_RE.exec(reviewBody);
+  if (!match) {
+    return false;
+  }
+  const count = Number.parseInt(match[1], 10);
+  return Number.isFinite(count) && count >= 1;
+}
+
 function collectUnaddressedComments(
   comments: SweepCommentInput[],
   reviews: SweepReviewInput[],
@@ -452,10 +472,21 @@ function collectUnaddressedComments(
   }
 
   for (const review of reviews) {
-    if (review.state !== 'CHANGES_REQUESTED') {
+    const author = authorLogin(review);
+    // #2194: a non-`CHANGES_REQUESTED` review is still surfaced when it is
+    // from a *configured* advisory bot (matching the same narrower gate the
+    // comment loop above uses, not the broader `isAdvisoryBot`) and its body
+    // carries an outside-diff-range finding GitHub could not host as a
+    // normal inline comment.
+    if (
+      review.state !== 'CHANGES_REQUESTED' &&
+      !(
+        isConfiguredAdvisoryBotIdentity(author) &&
+        hasOutsideDiffRangeFindings(String(review.body ?? ''))
+      )
+    ) {
       continue;
     }
-    const author = authorLogin(review);
     // Same author rule as comments: exclude only explicit IDD agents; a
     // missing/unknown author is surfaced with `author: null`.
     if (isIdd(author)) {

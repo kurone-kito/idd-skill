@@ -586,6 +586,90 @@ test('a COMMENTED (non-CHANGES_REQUESTED) review body is not feedback', () => {
   assert.equal(result.prs.length, 0);
 });
 
+// #2194: a COMMENTED-state review from a configured advisory bot can still
+// carry a real finding GitHub embeds directly in the review body -- an
+// "Outside diff range comments" block, for content the diff-hunk view
+// cannot host as a normal inline review comment.
+test('a COMMENTED review with an outside-diff-range block is surfaced', () => {
+  const prs: MergedPrInput[] = [
+    {
+      number: 20,
+      reviews: [
+        {
+          body: '<details><summary>⚠️ Outside diff range comments (1)</summary>\n\nsome finding\n\n</details>',
+          state: 'COMMENTED',
+          submittedAt: '2026-08-19T00:00:00Z',
+          url: 'https://example/r20',
+          author: { login: 'coderabbitai[bot]' },
+        },
+      ],
+    },
+  ];
+  const result = buildMergedPrFeedbackSweep(prs, OPTIONS);
+  assert.equal(result.prs.length, 1);
+  assert.equal(result.prs[0].unaddressedComments.length, 1);
+  assert.equal(result.prs[0].unaddressedComments[0].kind, 'review');
+  assert.equal(
+    result.prs[0].unaddressedComments[0].author,
+    'coderabbitai[bot]',
+  );
+  assert.equal(result.prs[0].unaddressedComments[0].advisoryBot, true);
+});
+
+test('a COMMENTED review from a configured advisory bot without an outside-diff-range block is not feedback', () => {
+  const prs: MergedPrInput[] = [
+    {
+      number: 21,
+      reviews: [
+        {
+          body: 'Reviewed the changes, no actionable comments posted.',
+          state: 'COMMENTED',
+          submittedAt: '2026-08-19T00:00:00Z',
+          author: { login: 'coderabbitai[bot]' },
+        },
+      ],
+    },
+  ];
+  const result = buildMergedPrFeedbackSweep(prs, OPTIONS);
+  assert.equal(result.prs.length, 0);
+});
+
+test('a COMMENTED review with an outside-diff-range block from a non-configured author is not feedback', () => {
+  const prs: MergedPrInput[] = [
+    {
+      number: 22,
+      reviews: [
+        {
+          body: '<details><summary>⚠️ Outside diff range comments (1)</summary>\n\nsome finding\n\n</details>',
+          state: 'COMMENTED',
+          submittedAt: '2026-08-19T00:00:00Z',
+          author: { login: 'a-human' },
+        },
+      ],
+    },
+  ];
+  const result = buildMergedPrFeedbackSweep(prs, OPTIONS);
+  assert.equal(result.prs.length, 0);
+});
+
+test('a COMMENTED review with an outside-diff-range count of 0 is not feedback', () => {
+  const prs: MergedPrInput[] = [
+    {
+      number: 23,
+      reviews: [
+        {
+          body: '<details><summary>⚠️ Outside diff range comments (0)</summary>\n\n</details>',
+          state: 'COMMENTED',
+          submittedAt: '2026-08-19T00:00:00Z',
+          author: { login: 'coderabbitai[bot]' },
+        },
+      ],
+    },
+  ];
+  const result = buildMergedPrFeedbackSweep(prs, OPTIONS);
+  assert.equal(result.prs.length, 0);
+});
+
 test('summary aggregates across PRs and skips clean PRs', () => {
   const prs: MergedPrInput[] = [
     {
