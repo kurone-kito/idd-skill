@@ -5620,9 +5620,14 @@ function isStrictlyBeforeIso(left, right) {
   }
   return leftTime < rightTime;
 }
-export function resolveActiveClaim(events, isTrustedAuthor = () => true) {
-  const options = normalizeClaimResolutionOptions(isTrustedAuthor);
-  const orderedEvents = events
+/**
+ * Chronological ordering `resolveActiveClaim` and
+ * `resolveActiveClaimWithForcedHandoffTrace` both reduce over: by GitHub
+ * `created_at` second, tie-broken by claim-id (same-second contenders),
+ * then by sub-second time, then by original array index.
+ */
+function sortClaimEvents(events) {
+  return events
     .map((event, index) => {
       const claim = parseClaimComment(event.body ?? '', event.createdAt ?? '');
       return {
@@ -5666,11 +5671,61 @@ export function resolveActiveClaim(events, isTrustedAuthor = () => true) {
       return left.index - right.index;
     })
     .map(({ event }) => event);
+}
+/**
+ * Same reduction as {@link resolveActiveClaim}, but also tracks which
+ * specific forced-handoff marker (if any) produced the final active
+ * claim's identity. `resolveActiveClaim`'s state machine has no memory of
+ * *why* the active claim changed, so a caller that needs forced-handoff
+ * provenance (`resume-claim-routing.mts`'s `evidence.forced_handoff`,
+ * kurone-kito/idd-skill#2178) cannot reconstruct it safely by
+ * independently re-scanning events for a `new*`-field match against the
+ * final active claim: a stale or never-applied forced-handoff marker
+ * whose `new*` fields merely coincide with the real active claim's
+ * identity (for example a duplicate/retried handoff attempt posted after
+ * a first one already succeeded) would misattribute the wrong `old*`
+ * fields as evidence. Replaying the identical single-pass reduction here
+ * -- the one place that already knows the true before/after state at each
+ * step -- is what answers "which marker actually caused this transition"
+ * correctly.
+ */
+export function resolveActiveClaimWithForcedHandoffTrace(
+  events,
+  isTrustedAuthor = () => true,
+) {
+  const options = normalizeClaimResolutionOptions(isTrustedAuthor);
+  const orderedEvents = sortClaimEvents(events);
   let active = null;
+  let appliedForcedHandoff = null;
   for (const event of orderedEvents) {
-    active = applyClaimEvent(active, event, options);
+    const previous = active;
+    const next = applyClaimEvent(previous, event, options);
+    const identityChanged =
+      (next?.claimId ?? null) !== (previous?.claimId ?? null) ||
+      (next?.agentId ?? null) !== (previous?.agentId ?? null);
+    if (identityChanged) {
+      const candidate = previous
+        ? parseForcedHandoffComment(event.body ?? '', event.createdAt ?? '')
+        : null;
+      appliedForcedHandoff =
+        candidate &&
+        next &&
+        previous &&
+        candidate.oldAgentId === previous.agentId &&
+        candidate.oldClaimId === previous.claimId &&
+        candidate.branch === previous.branch &&
+        candidate.newAgentId === next.agentId &&
+        candidate.newClaimId === next.claimId
+          ? candidate
+          : null;
+    }
+    active = next;
   }
-  return active;
+  return { activeClaim: active, appliedForcedHandoff };
+}
+export function resolveActiveClaim(events, isTrustedAuthor = () => true) {
+  return resolveActiveClaimWithForcedHandoffTrace(events, isTrustedAuthor)
+    .activeClaim;
 }
 export function applyClaimEvent(activeClaim, event, options = {}) {
   const normalizedOptions = normalizeClaimResolutionOptions(options);

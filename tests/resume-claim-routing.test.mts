@@ -498,6 +498,130 @@ test('authorized forced-handoff marker promotes successor claim before routing',
   assert.equal(result.active_claim?.claim_id, 'claim-new');
 });
 
+test('evidence.forced_handoff is populated on a bare --issue call (no --claim-id) against a valid forced-handoff successor (#2178)', () => {
+  const result = evaluateResumeClaimRouting(
+    {
+      // claimId omitted: exercises the exact "bare --issue call" gap named
+      // in #2178 -- the routing verdict stays non_inheritable/stop for
+      // backward compatibility, but the new evidence field must still
+      // populate so the caller can retry with --claim-id.
+      now: '2026-05-12T11:00:00Z',
+      events: FORCED_HANDOFF_EVENTS,
+    },
+    {
+      isTrustedAuthor: trusted(['maintainer']),
+      isForcedHandoffEnabled: () => true,
+      isAuthorizedForcedHandoff: (forcedBy) => forcedBy === 'maintainer',
+    },
+  );
+
+  assert.equal(result.state, 'non_inheritable');
+  assert.equal(result.action, 'stop');
+  assert.equal(result.reason, 'active-claim-non-stale');
+  assert.deepEqual(result.evidence.forced_handoff, {
+    old_agent_id: 'copilot',
+    old_claim_id: 'claim-old',
+    new_agent_id: 'copilot',
+    new_claim_id: 'claim-new',
+    forced_by: 'maintainer',
+    timestamp: '2026-05-12T10:01:00Z',
+  });
+});
+
+test('evidence.forced_handoff is null when no forced-handoff marker applies', () => {
+  const result = evaluateResumeClaimRouting(
+    {
+      now: '2026-05-12T10:30:00Z',
+      events: [
+        {
+          createdAt: '2026-05-12T10:00:00Z',
+          author: { login: 'maintainer' },
+          body: '<!-- claimed-by: copilot claim-plain supersedes: none 2026-05-12T10:00:00Z branch: issue/12-task -->',
+        },
+      ],
+    },
+    { isTrustedAuthor: trusted(['maintainer']) },
+  );
+
+  assert.equal(result.evidence.forced_handoff, null);
+});
+
+test('evidence.forced_handoff stays null when a forced-handoff marker exists but is ignored (mode disabled)', () => {
+  const result = evaluateResumeClaimRouting(
+    {
+      now: '2026-05-12T11:00:00Z',
+      events: FORCED_HANDOFF_EVENTS,
+    },
+    {
+      isTrustedAuthor: trusted(['maintainer']),
+      // isForcedHandoffEnabled omitted -> defaults to () => false, so the
+      // marker never transfers ownership and must not be reported as
+      // applied evidence either.
+      isAuthorizedForcedHandoff: () => true,
+    },
+  );
+
+  assert.equal(result.active_claim?.claim_id, 'claim-old');
+  assert.equal(result.evidence.forced_handoff, null);
+});
+
+test('evidence.forced_handoff is not misattributed to a stale, never-applied duplicate handoff sharing the same new-claim target', () => {
+  // Regression for the review finding on #2178's first draft: a naive
+  // scan for "which forced-handoff marker's new* fields match the final
+  // active claim" can pick a marker that was never actually applied by
+  // the real reducer, when a later, correctly-applied marker happens to
+  // target the identical new-claim-id (e.g. a human retries a handoff
+  // after realizing their first attempt cited stale old* fields, reusing
+  // the same intended successor claim-id both times).
+  //
+  // Timeline: fresh claim (agent-A/claim-1) -> stale takeover to
+  // agent-D/claim-9 (>24h later) -> a stray forced-handoff still citing
+  // the ORIGINAL agent-A/claim-1 as old* (never applied: active was
+  // already agent-D/claim-9 by then) -> the real forced-handoff citing
+  // agent-D/claim-9 as old*, both targeting the same agent-B/claim-2.
+  const events = [
+    {
+      createdAt: '2026-06-01T10:00:00Z',
+      author: { login: 'maintainer' },
+      body: '<!-- claimed-by: agent-A claim-1 supersedes: none 2026-06-01T10:00:00Z branch: issue/50-task -->',
+    },
+    {
+      createdAt: '2026-06-02T11:00:00Z',
+      author: { login: 'maintainer' },
+      body: '<!-- claimed-by: agent-D claim-9 supersedes: claim-1 2026-06-02T11:00:00Z branch: issue/50-task -->',
+    },
+    {
+      createdAt: '2026-06-02T11:05:00Z',
+      author: { login: 'maintainer' },
+      body: '<!-- forced-handoff: {"oldAgentId":"agent-A","oldClaimId":"claim-1","newAgentId":"agent-B","newClaimId":"claim-2","branch":"issue/50-task","forcedBy":"maintainer","reason":"stray retry citing stale old-claim","timestamp":"2026-06-02T11:05:00Z","contextScope":"issue-only"} -->\n\n_maintainer: forced handoff — IDD automation marker. Do not edit._',
+    },
+    {
+      createdAt: '2026-06-02T11:10:00Z',
+      author: { login: 'maintainer' },
+      body: '<!-- forced-handoff: {"oldAgentId":"agent-D","oldClaimId":"claim-9","newAgentId":"agent-B","newClaimId":"claim-2","branch":"issue/50-task","forcedBy":"maintainer","reason":"actual handoff","timestamp":"2026-06-02T11:10:00Z","contextScope":"issue-only"} -->\n\n_maintainer: forced handoff — IDD automation marker. Do not edit._',
+    },
+  ];
+
+  const result = evaluateResumeClaimRouting(
+    { now: '2026-06-02T12:00:00Z', events },
+    {
+      isTrustedAuthor: trusted(['maintainer']),
+      isForcedHandoffEnabled: () => true,
+      isAuthorizedForcedHandoff: (forcedBy) => forcedBy === 'maintainer',
+    },
+  );
+
+  assert.equal(result.active_claim?.claim_id, 'claim-2');
+  assert.deepEqual(result.evidence.forced_handoff, {
+    old_agent_id: 'agent-D',
+    old_claim_id: 'claim-9',
+    new_agent_id: 'agent-B',
+    new_claim_id: 'claim-2',
+    forced_by: 'maintainer',
+    timestamp: '2026-06-02T11:10:00Z',
+  });
+});
+
 test('forced-handoff is ignored when forced-handoff mode is disabled', () => {
   const result = evaluateResumeClaimRouting(
     {

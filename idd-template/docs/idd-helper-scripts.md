@@ -1340,6 +1340,17 @@ Interpretation rules:
   a mismatch routes `state`/`reason` to `disputed` /
   `activation-nonce-mismatch` instead of `already_owned`. Omit it (or leave
   the claim-id's nonce not posted) to skip the comparison unchanged.
+- `evidence.forced_handoff` (kurone-kito/idd-skill#2178): populated on
+  **any** call, including a bare `--issue` call with no `--claim-id`,
+  whenever a trusted, rule-7-valid `forced-handoff` marker's successor
+  pair (`{old_agent_id, old_claim_id, new_agent_id, new_claim_id,
+  forced_by, timestamp}`, `timestamp` the transferring comment's GitHub
+  `created_at`) matches the resolved active claim; `null` otherwise. A
+  bare `--issue` call whose `evidence.forced_handoff` is non-null but
+  whose `state`/`action` still reads `non_inheritable`/`stop` should
+  retry with `--claim-id <evidence.forced_handoff.new_claim_id>` to
+  check adoption eligibility — that second call is what can turn the
+  verdict into `already_owned`/`keep`.
 
 - Step 3 route command:
   `node scripts/resume-route-selection.mjs --issue <issue-number>`
