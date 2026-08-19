@@ -153,10 +153,11 @@ unambiguous:
 - **Review threads**: after posting your reply, **immediately resolve
   the thread**, using the same resolve-review-thread mechanism as
   `idd-review-triage.instructions.md`'s E6 (profile-selected helper
-  command, reply-before-resolve, GraphQL fallback — see E6 for the
-  exact command and flags). Resolution means "agent acted", not
-  "reviewer agreed" — a disagreeing reviewer can reopen the thread,
-  re-surfacing it in the next E1 pass.
+  command, reply-before-resolve, GraphQL fallback — see
+  `idd-review-triage.instructions.md`'s E6 for the exact command and
+  flags). Resolution means "agent acted", not "reviewer agreed" — a
+  disagreeing reviewer can reopen the thread, re-surfacing it in the
+  next E1 pass.
 - **Regular comments**: reply only; do not resolve.
 - **Persistent non-review notices**: a non-review notice already
   dispositioned `**Rejected** — {bot} did not review HEAD …` in a prior
