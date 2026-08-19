@@ -2813,6 +2813,8 @@ export function collectAssertNextActions(
       summary: `${bot} has not reviewed this PR. Request a review (E14) then post an advisory-wait marker:`,
       pointer: [
         `gh pr edit ${pr} --add-reviewer ${reviewer}`,
+        `# on GraphQL login-resolution failure ("Could not resolve user with login '${reviewer}'"):`,
+        `gh api repos/{owner}/{repo}/pulls/${pr}/requested_reviewers -X POST -f "reviewers[]=${restLogin}"`,
         `node scripts/post-idd-marker.mjs --type advisory --target pr ${pr} --agent-id <id> --head-sha ${sha} --timestamp <ISO8601> --apply`,
       ].join('\n'),
     });

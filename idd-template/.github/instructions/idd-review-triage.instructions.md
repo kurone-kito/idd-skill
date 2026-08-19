@@ -293,6 +293,41 @@ PATH B — Advisory items (completed review of the current HEAD):
 - Do not send PATH B items to review-fix. Their work is complete once
   the marker is posted and any thread resolution is done.
 
+**`review-ack:` marker — Clause 1 vs Clause 2.** Posting `**Accepted**`
+/ `**Rejected**` above satisfies advisory-convergence's Clause 2
+(thread / comment disposition) only. When the latest Copilot review on
+current HEAD also reports `suppressedCount > 0` (a finding folded into
+a `<details><summary>Suppressed comments (N)</summary>` block instead
+of a comment, so it has no thread or comment ID of its own to reply
+to — see `docs/idd-helper-scripts.md`), Clause 1's `suppressedCount`
+term needs its own coverage
+(`suppressedCount === 0 || hasValidReviewAck`) regardless of any
+Clause 2 disposition elsewhere in the same review. After reading the
+review body and confirming the suppressed finding(s) are handled
+(fixed, or judged as needing no action), post `review-ack:` for the
+current HEAD SHA. `post-idd-marker.mjs` itself performs no author
+gating — anyone with `gh` credentials can post the comment — but
+`idd-advisory-convergence` only honors a marker whose GitHub author is
+a `trustedMarkerActors` login; an untrusted poster's marker is ignored,
+not rejected at post time (helper-first: `post-idd-marker --type
+review-ack --from-pr <pr-number> --agent-id <id> --timestamp
+<ISO8601> --apply`):
+
+```text
+review-ack: {agent-id} {PR_HEAD_SHA} {ISO8601-acknowledged-at}
+```
+
+_Worked example_: a review posts one regular-comment finding plus a
+suppressed one; after replying `**Rejected** — verified
+placeholders-only` to the regular-comment finding, also post
+`review-ack: claude-code-1a2b3c4d 4b825dc642cb6eb9a060e54bf8d69288fbee4904 2026-08-19T00:10:00Z`
+to cover the suppressed one — the regular-comment rejection alone
+never sets `converged`; the `suppressedCount` term needs the marker
+too. Plain text, no HTML comment (matches `advisory-reroll:`'s
+shape). This is not a license to skip **AW6** or the fix flow when a
+suppressed finding needs a code change — `review-ack:` asserts the
+finding was read and handled, not that it required no action.
+
 PATH B — Advisory non-review notice (rate-limit / quota / queued / bare
 ack / error, as defined in E4):
 
