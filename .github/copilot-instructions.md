@@ -307,16 +307,16 @@ feat: add auth system and refactor database layer and update docs
 - **Bare issue/PR reference wrapping**: a bare `#NNN` citation must
   never land as the first token of a paragraph, list item, or wrapped
   continuation line in prose Markdown. `dprint fmt`'s automatic
-  line-wrap can relocate a bare `#NNN` there, and CommonMark's
-  ATX-heading rule — enforced here by markdownlint's MD018 — then
-  reads the relocated text as a malformed heading instead of a
-  citation. Whenever a reference could plausibly open a sentence,
-  bullet, or wrapped line, phrase it as "issue `#NNN`" (or any
-  equivalent that keeps a word before the `#`) instead of leaving it
-  bare. No dedicated script is needed to detect this — the existing
-  `markdownlint-cli2` MD018 rule already catches every instance
-  mechanically; this bullet only documents the cause so the
-  format → lint → diagnose → reword round-trip is avoided up front.
+  line-wrap can relocate a bare `#NNN` there, and markdownlint's MD018
+  rule (`no-missing-space-atx`) then flags the relocated text as a
+  malformed heading, even though CommonMark itself still renders a
+  `#NNN` with no following space as plain text, not a real heading.
+  MD018 only fires when the line has zero leading indentation, so it
+  misses the same drift inside an indented list-item continuation
+  line — do not treat the linter as a complete safety net. Whenever a
+  reference could plausibly open a sentence, bullet, or wrapped line,
+  phrase it as "issue `#NNN`" (or any equivalent that keeps a word
+  before the `#`) instead of leaving it bare.
 
 ## Guardrails
 
