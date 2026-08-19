@@ -2479,7 +2479,16 @@ same as `AW4`/`AW5`.
     from the in-thread disposition check), and regular comments /
     `CHANGES_REQUESTED` review bodies from non-IDD-agent authors that have
     **no later IDD-agent disposition** (`**Accepted**` / `**Rejected**` /
-    `**Awaiting maintainer decision**`). Trusted IDD operational markers, IDD
+    `**Awaiting maintainer decision**`). A non-`CHANGES_REQUESTED` review from
+    a _configured_ advisory-bot author (the same narrower identity check as
+    the summary-walkthrough exclusion below, not the broader `isKnownReviewBot`)
+    is also surfaced when its body carries a CodeRabbit
+    `<summary>⚠️ Outside diff range comments (N)</summary>`-shaped block with
+    `N >= 1` (#2194) — GitHub embeds a finding directly in the review body
+    text, rather than as a normal inline review comment, when it targets a
+    line the diff-hunk view cannot host; `N == 0` or an absent block is an
+    ordinary walkthrough/summary review with nothing outside the diff and
+    stays unsurfaced. Trusted IDD operational markers, IDD
     disposition comments, any HTML comment beginning with `<!-- idd-` (for
     example cleanup-evidence, excluded regardless of author — including CI
     automation such as `github-actions[bot]`), and a genuine CodeRabbit
