@@ -339,6 +339,12 @@ hold.
 never zeroed it in `kurone-kito/lints-config` PRs `#243`/`#245`
 (2026-08-10/11). PR #2054 fixes it.
 
+**Already-dispositioned escape hatch**: when the blocking suppressed
+finding(s) already have a trusted `**Accepted**` / `**Rejected**`
+disposition, a reroll is unnecessary — see
+`idd-review-triage.instructions.md`'s `review-ack:` paragraph (E6)
+instead.
+
 ## Terminal Copilot stall-recovery contract (state, policy, markers, clock)
 
 `#1572` defines the state/policy/marker contract for a terminal

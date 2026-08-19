@@ -296,7 +296,10 @@ nonce was recorded for the active claim.
   scripts/advisory-convergence.mjs --pr {pr-number} --assert` (or the
   profile-selected `idd-advisory-convergence` command). Non-zero exit
   routes to E1/E4 (check **AW6** first when
-  `sameHeadReroll.eligible`); `ready: true` satisfies. On
+  `sameHeadReroll.eligible`; an `ack-suppressed` next-action means
+  Clause 1 is blocked solely on `suppressedCount` — see
+  `idd-review-triage.instructions.md`'s `review-ack:` paragraph (E6)
+  instead of rerolling); `ready: true` satisfies. On
   `instructions-only`, both halves use the [F2 `gh`/`jq` fallback](../../docs/idd-advisory-wait-shell-fallback.md#f2).
   Separately, require `dispositionEvidence.route` to be `proceed`
   (`dispositionEvidence.blockingCount == 0` — both

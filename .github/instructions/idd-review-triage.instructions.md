@@ -295,6 +295,34 @@ PATH B — Advisory items (completed review of the current HEAD):
 - Do not send PATH B items to review-fix. Their work is complete once
   the marker is posted and any thread resolution is done.
 
+**`review-ack:` marker — Clause 1 vs Clause 2.** Posting `**Accepted**`
+/ `**Rejected**` above satisfies advisory-convergence's Clause 2
+(thread / comment disposition) only. When the latest Copilot review on
+current HEAD also reports `suppressedCount > 0` (a finding folded into
+a `<details><summary>Suppressed comments (N)</summary>` block instead
+of a comment — see `docs/idd-helper-scripts.md`), Clause 1 stays unmet
+by disposition alone: it requires either `suppressedCount === 0` or a
+valid `review-ack:` marker
+(`suppressedCount === 0 || hasValidReviewAck`). Once a trusted actor
+has recorded `**Accepted**` / `**Rejected**` for every suppressed
+finding, post `review-ack:` for the current HEAD SHA (helper-first:
+`post-idd-marker --type review-ack --from-pr <pr-number> --agent-id
+<id> --apply`):
+
+```text
+review-ack: {agent-id} {PR_HEAD_SHA} {ISO8601-acknowledged-at}
+```
+
+_Worked example_: after replying
+`**Rejected** — verified placeholders-only` to a suppressed finding,
+also post
+`review-ack: claude-code-1a2b3c4d 4b825dc642cb6eb9a060e54bf8d69288fbee4904 2026-08-19T00:10:00Z`
+— the rejection reply alone never sets `converged`; Clause 1 needs the
+marker too. Plain text, no HTML comment (matches `advisory-wait:`'s
+shape). This is not a license to skip **AW6** or the fix flow when a
+suppressed finding is Accepted and needs a code change — `review-ack:`
+covers already-dispositioned findings only.
+
 PATH B — Advisory non-review notice (rate-limit / quota / queued / bare
 ack / error, as defined in E4):
 
