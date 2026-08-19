@@ -468,6 +468,25 @@ export function isCodeRabbitLogin(login) {
 // byte-for-byte the same marker and cannot drift.
 export const CODERABBIT_SUMMARY_MARKER =
   '<!-- This is an auto-generated comment: summarize by coderabbit.ai -->';
+// #2161: CodeRabbit nests this inner marker inside a comment that also
+// starts with `CODERABBIT_SUMMARY_MARKER` when no review content exists
+// (billing failure, or a repository below the star-count manual-trigger
+// gate) -- the outer wrapper is byte-for-byte identical to a genuine
+// summary walkthrough, so this inner marker is the only signal
+// distinguishing the two. Single-sourced here so `isAdvisoryNonReviewNotice`
+// and `isReviewSummaryComment` agree on the same marker and cannot drift.
+export const CODERABBIT_SKIP_REVIEW_MARKER =
+  '<!-- This is an auto-generated comment: skip review by coderabbit.ai -->';
+// Case-insensitive, matching CodeRabbit's own outer-marker patterns
+// elsewhere in this file (see the rate-limit marker above) -- a
+// case-sensitive `includes()` check here previously let
+// `isReviewSummaryComment` and `isAdvisoryNonReviewNotice` disagree on a
+// casing-only marker variation (kurone-kito/idd-skill#2161 review).
+// Single-sourced so both predicates share the exact same test.
+const CODERABBIT_SKIP_REVIEW_MARKER_RE = new RegExp(
+  escapeRegExp(CODERABBIT_SKIP_REVIEW_MARKER),
+  'i',
+);
 export function classifyRegularBotComment(
   comment,
   comments,
@@ -1012,6 +1031,11 @@ const ADVISORY_NON_REVIEW_NOTICE_PATTERNS = [
   // the `summarize by coderabbit.ai` review marker) and its warning heading.
   /<!--\s*This is an auto-generated comment:\s*rate limited by coderabbit\.ai\s*-->/i,
   /^[>\s]*#{1,6}\s*Review limit reached\b/im,
+  // #2161: CodeRabbit skip-review notice, nested inside the same outer
+  // `summarize by coderabbit.ai` wrapper as a genuine walkthrough (see
+  // CODERABBIT_SKIP_REVIEW_MARKER above) -- carries no review content even
+  // though the outer wrapper alone cannot tell it apart from a real summary.
+  CODERABBIT_SKIP_REVIEW_MARKER_RE,
 ];
 // Codex usage / quota exhaustion for code reviews. Token-anchored on all
 // three of "Codex usage limit(s)", a reach/exceed/hit-family verb, and "for
@@ -1188,10 +1212,16 @@ export const NON_REVIEW_NOTICE_DISPOSITION_HINT =
 // True when a regular comment is a CodeRabbit summary walkthrough. Detection is
 // start-anchored on the exact single-sourced marker (after trimming leading
 // whitespace) so a comment that merely quotes the marker in prose is not matched.
+// #2161: a comment that also nests CODERABBIT_SKIP_REVIEW_MARKER carries no
+// review content despite starting with the summary marker, so it is excluded
+// here too -- never a summary walkthrough, always a non-review notice (see
+// isAdvisoryNonReviewNotice / ADVISORY_NON_REVIEW_NOTICE_PATTERNS).
 export function isReviewSummaryComment(body) {
-  return String(body ?? '')
-    .trimStart()
-    .startsWith(CODERABBIT_SUMMARY_MARKER);
+  const text = String(body ?? '').trimStart();
+  return (
+    text.startsWith(CODERABBIT_SUMMARY_MARKER) &&
+    !CODERABBIT_SKIP_REVIEW_MARKER_RE.test(text)
+  );
 }
 // A trusted IDD disposition of a CodeRabbit summary walkthrough: the canonical
 // `**Accepted** — {bot} summary walkthrough …` reply the helper posts. Requires

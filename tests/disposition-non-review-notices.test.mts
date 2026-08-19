@@ -15,7 +15,9 @@ import {
 import { hasReviewReplyStamp } from '../src/scripts/marker-helpers.mts';
 import {
   dispositionNamesAdvisoryBot,
+  isAdvisoryNonReviewNotice,
   isDispositionComment,
+  isReviewSummaryComment,
   summarizeDispositionEvidenceForGate,
 } from '../src/scripts/protocol-helpers.mts';
 import { loadJson, validate } from '../src/scripts/validate-schemas.mts';
@@ -37,6 +39,14 @@ const CODERABBIT_NOTICE =
   '<!-- This is an auto-generated comment: rate limited by coderabbit.ai -->\n> ## Review limit reached';
 const CODERABBIT_SUMMARY =
   '<!-- This is an auto-generated comment: summarize by coderabbit.ai -->\n## Walkthrough\nSome walkthrough text.';
+// #2161: CodeRabbit wraps a content-free skip-review notice (billing failure,
+// or a repo below the star-count manual-trigger gate) in the SAME outer
+// summarize-by-coderabbit.ai marker as a genuine walkthrough, distinguished
+// only by this nested inner marker.
+const CODERABBIT_SKIP_REVIEW =
+  '<!-- This is an auto-generated comment: summarize by coderabbit.ai -->\n' +
+  '<!-- This is an auto-generated comment: skip review by coderabbit.ai -->\n' +
+  '> [!WARNING]\n> ## Review skipped\nReview was skipped due to path filters.';
 // A full 40-char head SHA for the cases that validate against the schema, which
 // now constrains `headSha` to `^[0-9a-f]{40}$`.
 const HEAD_SHA = '0123456789abcdef0123456789abcdef01234567';
@@ -302,6 +312,10 @@ test('noticeReason derives the category-specific reason', () => {
     'Codex usage limits for code reviews reached',
   );
   assert.equal(noticeReason('something else'), 'advisory non-review notice');
+  assert.equal(
+    noticeReason(CODERABBIT_SKIP_REVIEW),
+    'review skipped (billing failure or below the manual-trigger star-count gate)',
+  );
 });
 
 test('buildDispositionPlan plans one disposition per undispositioned notice', () => {
@@ -623,6 +637,42 @@ test('buildDispositionPlan plans an **Accepted** for an undispositioned CodeRabb
     /coderabbitai\[bot\] summary walkthrough at HEAD abc1234/,
   );
   assert.doesNotMatch(entry.body, /\bCodeRabbit\b/);
+  assert.equal(plan.skipped.length, 0);
+});
+
+test('#2161: isReviewSummaryComment is false and isAdvisoryNonReviewNotice is true for a CodeRabbit skip-review notice nested in the summary marker', () => {
+  assert.equal(isReviewSummaryComment(CODERABBIT_SKIP_REVIEW), false);
+  assert.equal(isAdvisoryNonReviewNotice(CODERABBIT_SKIP_REVIEW), true);
+});
+
+test('#2161: isReviewSummaryComment and isAdvisoryNonReviewNotice agree on a casing-only skip-review marker variation', () => {
+  const upperCased = CODERABBIT_SKIP_REVIEW.replace(
+    'skip review by coderabbit.ai',
+    'Skip Review By CodeRabbit.ai',
+  );
+  assert.equal(isReviewSummaryComment(upperCased), false);
+  assert.equal(isAdvisoryNonReviewNotice(upperCased), true);
+});
+
+test('#2161: a genuine walkthrough (no inner skip-review marker) is still a summary walkthrough, not a notice', () => {
+  assert.equal(isReviewSummaryComment(CODERABBIT_SUMMARY), true);
+  assert.equal(isAdvisoryNonReviewNotice(CODERABBIT_SUMMARY), false);
+});
+
+test('#2161: buildDispositionPlan proposes **Rejected**, never **Accepted**, for a CodeRabbit skip-review notice', () => {
+  const plan = buildDispositionPlan(
+    {
+      headSha: 'abc1234',
+      comments: [notice(1, CODERABBIT, CODERABBIT_SKIP_REVIEW)],
+    },
+    { trustedMarkerLogins: ['kurone-kito'] },
+  );
+  assert.equal(plan.planned.length, 1);
+  const entry = plan.planned[0];
+  assert.equal(entry.botLogin, CODERABBIT);
+  assert.ok(entry.body.startsWith('**Rejected**'));
+  assert.doesNotMatch(entry.body, /\*\*Accepted\*\*/);
+  assert.match(entry.body, /did not review HEAD abc1234/);
   assert.equal(plan.skipped.length, 0);
 });
 

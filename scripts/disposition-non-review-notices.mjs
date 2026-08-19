@@ -72,6 +72,9 @@ export function noticeReason(body) {
   if (/Codex usage limits/i.test(text)) {
     return 'Codex usage limits for code reviews reached';
   }
+  if (/skip review by coderabbit\.ai/i.test(text)) {
+    return 'review skipped (billing failure or below the manual-trigger star-count gate)';
+  }
   return 'advisory non-review notice';
 }
 /**
