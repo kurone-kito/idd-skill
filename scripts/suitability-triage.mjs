@@ -144,11 +144,26 @@ const EXTERNAL_SYSTEM_ACCESS_PATTERN =
 const DUPLICATE_DECLARATION_PATTERN =
   /\b(duplicate of|superseded by)\s*(?:#\d+|https?:\/\/\S+?\/(?:issues|pull)\/\d+)\b/gi;
 const DUPLICATE_NEGATION_PATTERN = /\b(not|no|avoid)\b[\s\S]{0,30}$/i;
+// A bare `\b` treats a hyphen as a non-word character, so it also matches the
+// tail of this repository's own hyphenated outcome/label vocabulary (e.g.
+// `decision` inside `needs-decision`, `human` inside `blocked-by-human`).
+// `(?<![\w-])`/`(?![\w-])` reject a match immediately adjacent to a hyphen
+// (part of a larger hyphenated token) while still matching a freestanding
+// use of the same word (#2205).
 const SUBJECTIVE_SUBJECT_PATTERN =
-  /\b(maintainer|stakeholder|human|opinion|judgment|judgement|ux|feel)\b/i;
-const SUBJECTIVE_GATE_PATTERN = /\b(approval|sign-?off|decision|preference)\b/i;
+  /(?<![\w-])(maintainer|stakeholder|human|opinion|judgment|judgement|ux|feel)(?![\w-])/i;
+const SUBJECTIVE_GATE_PATTERN =
+  /(?<![\w-])(approval|sign-?off|decision|preference)(?![\w-])/i;
 const OUTCOME_SIGNAL_PATTERN =
   /\b(pass|fail|result|output|contains|include|present|required|objective|measurable|deterministic)\b/i;
+// Whole-body proximity variant of the subjective-approval check, built from
+// the same two pattern sources above (not hand-duplicated) so the
+// hyphen-boundary fix (#2205) applies to both the per-line and whole-body
+// test paths.
+const SUBJECTIVE_PROXIMITY_PATTERN = new RegExp(
+  `${SUBJECTIVE_GATE_PATTERN.source}[\\s\\S]{0,80}${SUBJECTIVE_SUBJECT_PATTERN.source}`,
+  'i',
+);
 // Check 3 precision: an unsafe execution directive tells the agent to act on
 // *supplied / untrusted* content, not any command verb that merely lands near
 // the ordinary determiner "this". Match the strong untrusted-origin signals, or
@@ -1065,10 +1080,7 @@ export function checkVerifiability(context) {
         (line) =>
           SUBJECTIVE_SUBJECT_PATTERN.test(line) &&
           SUBJECTIVE_GATE_PATTERN.test(line),
-      ) ||
-      /\b(approval|sign-?off|decision|preference)\b[\s\S]{0,80}\b(maintainer|stakeholder|human|opinion|judgment|judgement|ux|feel)\b/i.test(
-        body,
-      )
+      ) || SUBJECTIVE_PROXIMITY_PATTERN.test(body)
     );
   })();
   // A body that carries BOTH a resolved-decision marker (a
