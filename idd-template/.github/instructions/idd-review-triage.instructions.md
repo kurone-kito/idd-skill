@@ -317,16 +317,14 @@ review-ack --from-pr <pr-number> --agent-id <id> --timestamp
 review-ack: {agent-id} {PR_HEAD_SHA} {ISO8601-acknowledged-at}
 ```
 
-_Worked example_: a review posts one regular-comment finding plus a
-suppressed one; after replying `**Rejected** — verified
-placeholders-only` to the regular-comment finding, also post
+_Worked example_: a review posts a regular-comment finding plus a
+suppressed one. Disposition the regular-comment finding normally
+(`**Rejected** — verified placeholders-only`), then also post
 `review-ack: claude-code-1a2b3c4d 4b825dc642cb6eb9a060e54bf8d69288fbee4904 2026-08-19T00:10:00Z`
-to cover the suppressed one — the regular-comment rejection alone
-never sets `converged`; the `suppressedCount` term needs the marker
-too. Plain text, no HTML comment (matches `advisory-reroll:`'s
-shape). This is not a license to skip **AW6** or the fix flow when a
-suppressed finding needs a code change — `review-ack:` asserts the
-finding was read and handled, not that it required no action.
+(plain text, no HTML comment) to cover the suppressed one — the
+regular-comment rejection alone never sets `converged`, and this is
+not a license to skip **AW6** or the fix flow when the suppressed
+finding needs a code change.
 
 PATH B — Advisory non-review notice (rate-limit / quota / queued / bare
 ack / error, as defined in E4):
@@ -572,10 +570,9 @@ the loop — bind the merge to current HEAD and proceed. An **ack-only**
 comment opens no new thread, carries no `CHANGES_REQUESTED`, and raises
 no new finding; anything else re-opens the loop normally.
 
-_Example_: after you disposition a CodeRabbit thread `**Rejected**`,
-CodeRabbit replies "Thanks for confirming" on it — no new thread or
-finding, so the `updatedAt` advance is ignored; continue to F-phase on
-the current HEAD.
+_Example_: CodeRabbit replies "Thanks for confirming" after your
+`**Rejected**` disposition — no new thread or finding, so continue to
+F-phase on the current HEAD despite the `updatedAt` advance.
 
 **Helper evidence**: when the advisory-bot identity is configured, the
 activity-snapshot / `pre-merge-readiness` evidence emits the structural
