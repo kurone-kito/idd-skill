@@ -273,6 +273,113 @@ test('discover.legacyRoots fails safe to [] on invalid input', () => {
   );
 });
 
+test('critiqueLoop.delegate resolves to undefined when absent (#2199)', () => {
+  assert.equal(normalizePolicyConfig({}).critiqueLoop.delegate, undefined);
+});
+
+test('critiqueLoop.delegate resolves a valid command, defaulting mode to fallback (#2199)', () => {
+  assert.deepEqual(
+    normalizePolicyConfig({
+      critiqueLoop: { delegate: { command: 'coderabbit review --plain' } },
+    }).critiqueLoop.delegate,
+    { command: 'coderabbit review --plain', mode: 'fallback' },
+  );
+});
+
+test('critiqueLoop.delegate preserves an explicit combined mode (#2199)', () => {
+  assert.deepEqual(
+    normalizePolicyConfig({
+      critiqueLoop: {
+        delegate: { command: 'coderabbit review --plain', mode: 'combined' },
+      },
+    }).critiqueLoop.delegate,
+    { command: 'coderabbit review --plain', mode: 'combined' },
+  );
+});
+
+test('critiqueLoop.delegate fails safe to undefined on a missing or empty command (#2199)', () => {
+  assert.equal(
+    normalizePolicyConfig({ critiqueLoop: { delegate: {} } }).critiqueLoop
+      .delegate,
+    undefined,
+  );
+  assert.equal(
+    normalizePolicyConfig({ critiqueLoop: { delegate: { command: '' } } })
+      .critiqueLoop.delegate,
+    undefined,
+  );
+  assert.equal(
+    normalizePolicyConfig({
+      critiqueLoop: { delegate: { command: 123 } },
+    }).critiqueLoop.delegate,
+    undefined,
+  );
+  assert.equal(
+    normalizePolicyConfig({ critiqueLoop: { delegate: 'not-an-object' } })
+      .critiqueLoop.delegate,
+    undefined,
+  );
+  // Whitespace-only command: mirrors worktreeGuard.branchPatterns' `\S`
+  // schema rejection so a normalizePolicyConfig caller cannot accept a
+  // configuration the schema would reject (#2207 review).
+  assert.equal(
+    normalizePolicyConfig({ critiqueLoop: { delegate: { command: '   ' } } })
+      .critiqueLoop.delegate,
+    undefined,
+  );
+});
+
+test('critiqueLoop.delegate fails safe to undefined on an unknown property (#2207 review)', () => {
+  // Mirrors parseCheckSelectors' exact-key-set rejection: the schema's
+  // additionalProperties: false already rejects an unrecognized key, and
+  // the resolver must reject the same shape for a direct
+  // normalizePolicyConfig caller that bypasses schema validation.
+  assert.equal(
+    normalizePolicyConfig({
+      critiqueLoop: { delegate: { command: 'coderabbit review', bogus: 1 } },
+    }).critiqueLoop.delegate,
+    undefined,
+  );
+});
+
+test('critiqueLoop.delegate fails safe to undefined on an inherited (non-own) command property (#2207 review)', () => {
+  // A plain property read (candidate.command) walks the prototype chain
+  // even though Object.keys() only sees own properties -- a crafted
+  // object with `command` supplied via its prototype must be rejected
+  // the same as a genuinely missing command, not silently accepted.
+  const proto = { command: 'evil-inherited-command' };
+  const candidate = Object.create(proto);
+  candidate.mode = 'fallback';
+  assert.equal(
+    normalizePolicyConfig({ critiqueLoop: { delegate: candidate } })
+      .critiqueLoop.delegate,
+    undefined,
+  );
+});
+
+test('critiqueLoop.delegate ignores an inherited (non-own) mode property, defaulting to fallback (#2207 review)', () => {
+  const proto = { mode: 'combined' };
+  const candidate = Object.create(proto);
+  candidate.command = 'coderabbit review --plain';
+  assert.deepEqual(
+    normalizePolicyConfig({ critiqueLoop: { delegate: candidate } })
+      .critiqueLoop.delegate,
+    { command: 'coderabbit review --plain', mode: 'fallback' },
+  );
+});
+
+test('critiqueLoop.delegate is absent (not an own key) when unconfigured, matching POLICY_DEFAULTS (#2207 review)', () => {
+  // POLICY_DEFAULTS never carries an undefined-valued property (see the
+  // clone() doc comment) -- the resolved object must match that shape
+  // exactly, not merely resolve `.delegate` to `undefined` via a missing
+  // lookup.
+  assert.equal(
+    Object.hasOwn(normalizePolicyConfig({}).critiqueLoop, 'delegate'),
+    false,
+  );
+  assert.equal(Object.hasOwn(POLICY_DEFAULTS.critiqueLoop, 'delegate'), false);
+});
+
 test('selectDesyncedIndex returns 0 for empty, singleton, or invalid bands', () => {
   assert.equal(selectDesyncedIndex('any-token', 0), 0);
   assert.equal(selectDesyncedIndex('any-token', 1), 0);

@@ -16,6 +16,17 @@ interface RawForcedHandoff {
   authorityPolicy?: unknown;
 }
 
+interface CritiqueLoopDelegate {
+  command: string;
+  mode: 'fallback' | 'combined';
+}
+
+interface CritiqueLoopPolicy {
+  cPhaseLowSeveritySkipAfter: number;
+  e10NoProgressHoldAfter: number;
+  delegate?: CritiqueLoopDelegate;
+}
+
 // Structural view of the untrusted config object parsed from an
 // adopter-controlled JSON file. Every field is optional and weakly
 // typed; the runtime guards below perform the real validation.
@@ -68,6 +79,7 @@ interface RawConfig {
   critiqueLoop?: {
     cPhaseLowSeveritySkipAfter?: unknown;
     e10NoProgressHoldAfter?: unknown;
+    delegate?: { command?: unknown; mode?: unknown };
   };
   reviewEscalation?: {
     changesRequestedFirstEscalation?: unknown;
@@ -113,6 +125,7 @@ const EXTERNAL_CHECK_WAIVER_MODES = new Set([
   'maintainer-authorized',
 ]);
 const CHECK_SELECTOR_MATCH_MODES = new Set(['exact', 'glob']);
+const CRITIQUE_LOOP_DELEGATE_MODES = new Set(['fallback', 'combined']);
 const LEGACY_ADVISORY_CAP_ROUTE_ALIASES = new Map([
   ['phase-default', 'phase-specific'],
   ['strict-hold', 'hold'],
@@ -224,10 +237,16 @@ export const POLICY_DEFAULTS = Object.freeze({
   claim: Object.freeze({
     verifySettleDelay: 'PT5S',
   }),
+  // Cast (not a literal `delegate` field) so this shares one declared type
+  // with the resolver's `critiqueLoop` below -- without it, TypeScript
+  // infers a two-branch union across normalizePolicyConfig's early
+  // `clone(POLICY_DEFAULTS)` return and its main return, and rejects
+  // `.critiqueLoop.delegate` on every caller. The runtime object still has
+  // no `delegate` key at all -- see the clone() doc comment's invariant.
   critiqueLoop: Object.freeze({
     cPhaseLowSeveritySkipAfter: 3,
     e10NoProgressHoldAfter: 3,
-  }),
+  }) as Readonly<CritiqueLoopPolicy>,
   reviewEscalation: Object.freeze({
     changesRequestedFirstEscalation: 'PT24H',
     changesRequestedSecondEscalation: 'PT48H',
@@ -366,6 +385,29 @@ export function normalizePolicyConfig(config: unknown) {
     c?.markerTrustAllowCollaboratorMarkers,
     c?.allowCollaboratorMarkers,
   );
+  const critiqueLoopDelegate = parseCritiqueLoopDelegate(
+    c?.critiqueLoop?.delegate,
+  );
+  // Explicitly typed so the optional `delegate` key is part of one stable
+  // object type rather than a conditional-spread union TypeScript can't
+  // narrow -- see the Own-property-omitted comment below for why the key
+  // itself is conditionally present.
+  const critiqueLoop: CritiqueLoopPolicy = {
+    cPhaseLowSeveritySkipAfter: parsePositiveInteger(
+      c?.critiqueLoop?.cPhaseLowSeveritySkipAfter,
+      POLICY_DEFAULTS.critiqueLoop.cPhaseLowSeveritySkipAfter,
+    ),
+    e10NoProgressHoldAfter: parsePositiveInteger(
+      c?.critiqueLoop?.e10NoProgressHoldAfter,
+      POLICY_DEFAULTS.critiqueLoop.e10NoProgressHoldAfter,
+    ),
+  };
+  // Own-property omitted (not set to `undefined`) when no delegate is
+  // configured, matching POLICY_DEFAULTS -- see the clone() doc comment on
+  // why POLICY_DEFAULTS itself never carries an undefined-valued key.
+  if (critiqueLoopDelegate) {
+    critiqueLoop.delegate = critiqueLoopDelegate;
+  }
 
   return {
     issueScope: parseEnum(
@@ -512,16 +554,7 @@ export function normalizePolicyConfig(config: unknown) {
         POLICY_DEFAULTS.claim.verifySettleDelay,
       ),
     },
-    critiqueLoop: {
-      cPhaseLowSeveritySkipAfter: parsePositiveInteger(
-        c?.critiqueLoop?.cPhaseLowSeveritySkipAfter,
-        POLICY_DEFAULTS.critiqueLoop.cPhaseLowSeveritySkipAfter,
-      ),
-      e10NoProgressHoldAfter: parsePositiveInteger(
-        c?.critiqueLoop?.e10NoProgressHoldAfter,
-        POLICY_DEFAULTS.critiqueLoop.e10NoProgressHoldAfter,
-      ),
-    },
+    critiqueLoop,
     reviewEscalation: {
       changesRequestedFirstEscalation: parseDuration(
         c?.reviewEscalation?.changesRequestedFirstEscalation,
@@ -871,6 +904,50 @@ function parseCheckSelectors(
   }
 
   return normalized;
+}
+
+/**
+ * Parse `critiqueLoop.delegate`. Unlike the other `critiqueLoop` fields,
+ * absence is not defaulted to a concrete value -- a non-object, an unknown
+ * nested key, or a missing/whitespace-only `command` all normalize to
+ * `undefined` (no delegate configured) so a direct `normalizePolicyConfig`
+ * caller can never accept a shape the schema's `additionalProperties: false`
+ * / `command` pattern would reject (#2207 review).
+ */
+function parseCritiqueLoopDelegate(
+  value: unknown,
+): CritiqueLoopDelegate | undefined {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    return undefined;
+  }
+
+  const candidate = value as { command?: unknown; mode?: unknown };
+  const candidateKeys = Object.keys(candidate);
+  if (candidateKeys.some((key) => key !== 'command' && key !== 'mode')) {
+    return undefined;
+  }
+  // Object.keys() above already excludes inherited keys, but a plain
+  // property read (candidate.command) still walks the prototype chain --
+  // require command/mode to be own properties so a crafted object (e.g.
+  // Object.create({ command: '...' })) can't supply either through
+  // inheritance instead of being rejected as absent (#2207 review).
+  if (!Object.hasOwn(candidate, 'command')) {
+    return undefined;
+  }
+
+  const command = parseNonEmptyString(candidate.command, '');
+  if (!command || command.trim() === '') {
+    return undefined;
+  }
+
+  return {
+    command,
+    mode: Object.hasOwn(candidate, 'mode')
+      ? (parseEnum(candidate.mode, CRITIQUE_LOOP_DELEGATE_MODES, 'fallback') as
+          | 'fallback'
+          | 'combined')
+      : 'fallback',
+  };
 }
 
 function hasConfiguredCollaboratorMarkerTrust(config: unknown): boolean {

@@ -518,6 +518,25 @@
           "type": "integer",
           "minimum": 1,
           "description": "Number of consecutive E10 review-fix critique passes without meaningful progress before the auto-loop stops and posts a hold for a maintainer decision. Optional; defaults to `3`."
+        },
+        "delegate": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["command"],
+          "properties": {
+            "command": {
+              "type": "string",
+              "minLength": 1,
+              "pattern": "\\S",
+              "description": "Shell command C1 runs against the branch's current diff, in place of (or alongside, under `combined` mode) the per-agent Critique pass invocation table. Required within this object; must contain a non-whitespace character (the `\\S` pattern rejects a whitespace-only value the same way `worktreeGuard.branchPatterns` does, instead of silently accepting a non-actionable command)."
+            },
+            "mode": {
+              "type": "string",
+              "enum": ["fallback", "combined"],
+              "description": "`fallback` (default): run `command`; fall through to the per-agent mechanism when it is absent, exits non-zero, times out, or its output cannot be read as a findings list. `combined`: run both every pass and union their reported issues."
+            }
+          },
+          "description": "Repository-configurable C1 critique delegate. Optional; absent keeps today's per-agent-only behavior with zero change."
         }
       },
       "description": "Container for the C-phase and E10 critique-loop convergence guardrails. Optional; omitting any nested key keeps that key's own distributed default."
