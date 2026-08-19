@@ -124,8 +124,8 @@ ran and must not be re-entered (no A1 ↔ A0-O or A4 ↔ A0-O loop).
 - For `none` and `maintainer-approved`, continue with A0-O.
 
 Search all open issues in the repository. Collect every issue that does
-NOT contain a `{{PROJECT_MARKER_PREFIX}}-roadmap-id` marker (not itself
-a roadmap) or a `{{PROJECT_MARKER_PREFIX}}-blocked-by` marker, AND
+NOT contain an `{{PROJECT_MARKER_PREFIX}}-roadmap-id` marker (not itself
+a roadmap) or an `{{PROJECT_MARKER_PREFIX}}-blocked-by` marker, AND
 otherwise passes A3's own readiness bullets (no configured
 blocked-by-human/needs-decision label, no configured authoring label,
 no open blocking dependent issue via either visible `Blocked by #NNN`

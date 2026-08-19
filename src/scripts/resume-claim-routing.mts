@@ -27,7 +27,7 @@ import {
   normalizeLinkedPrReference,
   parseClaimComment,
   parseReleaseComment,
-  resolveActiveClaim,
+  resolveActiveClaimWithForcedHandoffTrace,
 } from './protocol-helpers.mts';
 
 /** Author reference embedded in GitHub REST payloads. */
@@ -101,6 +101,23 @@ interface LegacyClaimMarker {
   agentId: string;
   createdAt: string;
   branch: string;
+}
+
+/**
+ * Evidence that a trusted, rule-7-valid `forced-handoff` marker transferred
+ * the active claim to the pair currently active. `timestamp` is the
+ * transferring comment's GitHub `created_at` (the same authority every other
+ * marker in this file uses), not the marker's own embedded `timestamp`
+ * field; `null` when that comment metadata is unavailable, never an empty
+ * string.
+ */
+interface AppliedForcedHandoffEvidence {
+  old_agent_id: string;
+  old_claim_id: string;
+  new_agent_id: string;
+  new_claim_id: string;
+  forced_by: string;
+  timestamp: string | null;
 }
 
 /** Parsed CLI arguments. */
@@ -357,7 +374,25 @@ export function evaluateResumeClaimRouting(
       later_competing_claim: laterCompetingClaim,
       activation_nonce_winner: activationNonceWinner,
       activation_nonce_count: activationNonces.length,
+      forced_handoff: toForcedHandoffEvidence(state.appliedForcedHandoff),
     },
+  };
+}
+
+/** Render {@link ActiveClaimResolution.appliedForcedHandoff} for JSON output. */
+function toForcedHandoffEvidence(
+  applied: ParsedForcedHandoffMarker | null,
+): AppliedForcedHandoffEvidence | null {
+  if (!applied) {
+    return null;
+  }
+  return {
+    old_agent_id: applied.oldAgentId,
+    old_claim_id: applied.oldClaimId,
+    new_agent_id: applied.newAgentId,
+    new_claim_id: applied.newClaimId,
+    forced_by: applied.forcedBy,
+    timestamp: applied.createdAt ?? null,
   };
 }
 
@@ -620,8 +655,8 @@ function resolveClaimState(
     }
   };
 
-  const activeClaim = hasNewFormatClaim
-    ? resolveActiveClaim(events, {
+  const claimTrace = hasNewFormatClaim
+    ? resolveActiveClaimWithForcedHandoffTrace(events, {
         isTrustedAuthor: () => true, // events were already filtered by caller
         isForcedHandoffEnabled,
         isAuthorizedForcedHandoff,
@@ -645,7 +680,8 @@ function resolveClaimState(
   if (hasNewFormatClaim) {
     return {
       mode: 'new-format',
-      activeClaim,
+      activeClaim: claimTrace?.activeClaim ?? null,
+      appliedForcedHandoff: claimTrace?.appliedForcedHandoff ?? null,
       warnings,
       legacyClaim: null,
       legacyReleased: false,
@@ -657,6 +693,7 @@ function resolveClaimState(
   return {
     mode: 'legacy-only',
     activeClaim: null,
+    appliedForcedHandoff: null,
     warnings,
     legacyClaim: legacy.claim,
     legacyReleased: legacy.released,

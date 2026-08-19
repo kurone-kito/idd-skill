@@ -21,7 +21,7 @@ import {
   normalizeLinkedPrReference,
   parseClaimComment,
   parseReleaseComment,
-  resolveActiveClaim,
+  resolveActiveClaimWithForcedHandoffTrace,
 } from './protocol-helpers.mjs';
 
 const LEGACY_CLAIM_PATTERN =
@@ -248,7 +248,22 @@ export function evaluateResumeClaimRouting(input, options = {}) {
       later_competing_claim: laterCompetingClaim,
       activation_nonce_winner: activationNonceWinner,
       activation_nonce_count: activationNonces.length,
+      forced_handoff: toForcedHandoffEvidence(state.appliedForcedHandoff),
     },
+  };
+}
+/** Render {@link ActiveClaimResolution.appliedForcedHandoff} for JSON output. */
+function toForcedHandoffEvidence(applied) {
+  if (!applied) {
+    return null;
+  }
+  return {
+    old_agent_id: applied.oldAgentId,
+    old_claim_id: applied.oldClaimId,
+    new_agent_id: applied.newAgentId,
+    new_claim_id: applied.newClaimId,
+    forced_by: applied.forcedBy,
+    timestamp: applied.createdAt ?? null,
   };
 }
 /**
@@ -448,8 +463,8 @@ function resolveClaimState(events, nowIso, staleAgeMs, options = {}) {
       );
     }
   };
-  const activeClaim = hasNewFormatClaim
-    ? resolveActiveClaim(events, {
+  const claimTrace = hasNewFormatClaim
+    ? resolveActiveClaimWithForcedHandoffTrace(events, {
         isTrustedAuthor: () => true, // events were already filtered by caller
         isForcedHandoffEnabled,
         isAuthorizedForcedHandoff,
@@ -472,7 +487,8 @@ function resolveClaimState(events, nowIso, staleAgeMs, options = {}) {
   if (hasNewFormatClaim) {
     return {
       mode: 'new-format',
-      activeClaim,
+      activeClaim: claimTrace?.activeClaim ?? null,
+      appliedForcedHandoff: claimTrace?.appliedForcedHandoff ?? null,
       warnings,
       legacyClaim: null,
       legacyReleased: false,
@@ -483,6 +499,7 @@ function resolveClaimState(events, nowIso, staleAgeMs, options = {}) {
   return {
     mode: 'legacy-only',
     activeClaim: null,
+    appliedForcedHandoff: null,
     warnings,
     legacyClaim: legacy.claim,
     legacyReleased: legacy.released,
