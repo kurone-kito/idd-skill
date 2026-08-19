@@ -307,9 +307,13 @@ term needs its own coverage
 Clause 2 disposition elsewhere in the same review. After reading the
 review body and confirming the suppressed finding(s) are handled
 (fixed, or judged as needing no action), post `review-ack:` for the
-current HEAD SHA (helper-first: `post-idd-marker --type review-ack
---from-pr <pr-number> --agent-id <id> --timestamp <ISO8601>
---apply`):
+current HEAD SHA. `post-idd-marker.mjs` itself performs no author
+gating — anyone with `gh` credentials can post the comment — but
+`idd-advisory-convergence` only honors a marker whose GitHub author is
+a `trustedMarkerActors` login; an untrusted poster's marker is ignored,
+not rejected at post time (helper-first: `post-idd-marker --type
+review-ack --from-pr <pr-number> --agent-id <id> --timestamp
+<ISO8601> --apply`):
 
 ```text
 review-ack: {agent-id} {PR_HEAD_SHA} {ISO8601-acknowledged-at}
