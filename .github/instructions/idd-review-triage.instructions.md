@@ -307,7 +307,7 @@ valid `review-ack:` marker
 has recorded `**Accepted**` / `**Rejected**` for every suppressed
 finding, post `review-ack:` for the current HEAD SHA (helper-first:
 `post-idd-marker --type review-ack --from-pr <pr-number> --agent-id
-<id> --apply`):
+<id> --timestamp <ISO8601> --apply`):
 
 ```text
 review-ack: {agent-id} {PR_HEAD_SHA} {ISO8601-acknowledged-at}
