@@ -701,6 +701,98 @@ test('policy schema rejects an invalid mergeGate.soloCodeownerAdminFallback valu
   );
 });
 
+// --- #2199: critiqueLoop.delegate --------------------------------------
+
+test('policy schema accepts a critiqueLoop.delegate with command only', () => {
+  const schema = loadJson('schemas/policy.schema.json');
+  const instance = JSON.parse(
+    JSON.stringify(loadJson('fixtures/schemas/policy.valid.json')),
+  );
+  instance.critiqueLoop = {
+    delegate: { command: 'coderabbit review --plain --type uncommitted' },
+  };
+  const errors = validate(instance, schema);
+  assert.deepEqual(errors, []);
+});
+
+test('policy schema accepts a critiqueLoop.delegate with explicit combined mode', () => {
+  const schema = loadJson('schemas/policy.schema.json');
+  const instance = JSON.parse(
+    JSON.stringify(loadJson('fixtures/schemas/policy.valid.json')),
+  );
+  instance.critiqueLoop = {
+    delegate: { command: 'coderabbit review --plain', mode: 'combined' },
+  };
+  const errors = validate(instance, schema);
+  assert.deepEqual(errors, []);
+});
+
+test('policy schema rejects a critiqueLoop.delegate missing command', () => {
+  const schema = loadJson('schemas/policy.schema.json');
+  const instance = JSON.parse(
+    JSON.stringify(loadJson('fixtures/schemas/policy.valid.json')),
+  );
+  instance.critiqueLoop = { delegate: { mode: 'fallback' } };
+  const errors = validate(instance, schema);
+  assert.ok(
+    errors.some((error) => error.includes('$.critiqueLoop.delegate')),
+    errors.join('\n'),
+  );
+});
+
+test('policy schema rejects a critiqueLoop.delegate with an empty command', () => {
+  const schema = loadJson('schemas/policy.schema.json');
+  const instance = JSON.parse(
+    JSON.stringify(loadJson('fixtures/schemas/policy.valid.json')),
+  );
+  instance.critiqueLoop = { delegate: { command: '' } };
+  const errors = validate(instance, schema);
+  assert.ok(
+    errors.some((error) => error.includes('$.critiqueLoop.delegate.command')),
+    errors.join('\n'),
+  );
+});
+
+test('policy schema rejects an unrecognized critiqueLoop.delegate.mode', () => {
+  const schema = loadJson('schemas/policy.schema.json');
+  const instance = JSON.parse(
+    JSON.stringify(loadJson('fixtures/schemas/policy.valid.json')),
+  );
+  instance.critiqueLoop = {
+    delegate: { command: 'coderabbit review --plain', mode: 'always' },
+  };
+  const errors = validate(instance, schema);
+  assert.ok(
+    errors.some((error) => error.includes('$.critiqueLoop.delegate.mode')),
+    errors.join('\n'),
+  );
+});
+
+test('policy schema rejects an unknown critiqueLoop.delegate subkey', () => {
+  const schema = loadJson('schemas/policy.schema.json');
+  const instance = JSON.parse(
+    JSON.stringify(loadJson('fixtures/schemas/policy.valid.json')),
+  );
+  instance.critiqueLoop = {
+    delegate: { command: 'coderabbit review --plain', bogus: 1 },
+  };
+  const errors = validate(instance, schema);
+  assert.ok(
+    errors.some((error) => error.includes('$.critiqueLoop.delegate')),
+    errors.join('\n'),
+  );
+});
+
+test('policy schema treats missing critiqueLoop.delegate as the fail-safe default', () => {
+  const schema = loadJson('schemas/policy.schema.json');
+  const instance = JSON.parse(
+    JSON.stringify(loadJson('fixtures/schemas/policy.valid.json')),
+  );
+  delete instance.critiqueLoop;
+  const errors = validate(instance, schema);
+  assert.deepEqual(errors, []);
+});
+
 test('policy schema rejects a whitespace-only branchPatterns entry', () => {
   const schema = loadJson('schemas/policy.schema.json');
   const instance = JSON.parse(

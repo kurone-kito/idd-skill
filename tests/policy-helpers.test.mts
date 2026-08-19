@@ -273,6 +273,54 @@ test('discover.legacyRoots fails safe to [] on invalid input', () => {
   );
 });
 
+test('critiqueLoop.delegate resolves to undefined when absent (#2199)', () => {
+  assert.equal(normalizePolicyConfig({}).critiqueLoop.delegate, undefined);
+});
+
+test('critiqueLoop.delegate resolves a valid command, defaulting mode to fallback (#2199)', () => {
+  assert.deepEqual(
+    normalizePolicyConfig({
+      critiqueLoop: { delegate: { command: 'coderabbit review --plain' } },
+    }).critiqueLoop.delegate,
+    { command: 'coderabbit review --plain', mode: 'fallback' },
+  );
+});
+
+test('critiqueLoop.delegate preserves an explicit combined mode (#2199)', () => {
+  assert.deepEqual(
+    normalizePolicyConfig({
+      critiqueLoop: {
+        delegate: { command: 'coderabbit review --plain', mode: 'combined' },
+      },
+    }).critiqueLoop.delegate,
+    { command: 'coderabbit review --plain', mode: 'combined' },
+  );
+});
+
+test('critiqueLoop.delegate fails safe to undefined on a missing or empty command (#2199)', () => {
+  assert.equal(
+    normalizePolicyConfig({ critiqueLoop: { delegate: {} } }).critiqueLoop
+      .delegate,
+    undefined,
+  );
+  assert.equal(
+    normalizePolicyConfig({ critiqueLoop: { delegate: { command: '' } } })
+      .critiqueLoop.delegate,
+    undefined,
+  );
+  assert.equal(
+    normalizePolicyConfig({
+      critiqueLoop: { delegate: { command: 123 } },
+    }).critiqueLoop.delegate,
+    undefined,
+  );
+  assert.equal(
+    normalizePolicyConfig({ critiqueLoop: { delegate: 'not-an-object' } })
+      .critiqueLoop.delegate,
+    undefined,
+  );
+});
+
 test('selectDesyncedIndex returns 0 for empty, singleton, or invalid bands', () => {
   assert.equal(selectDesyncedIndex('any-token', 0), 0);
   assert.equal(selectDesyncedIndex('any-token', 1), 0);

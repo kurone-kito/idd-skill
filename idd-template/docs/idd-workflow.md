@@ -882,6 +882,30 @@ When a phase file says "run a critique pass", apply the row for your
 agent above. If no subagent mechanism is available, perform the critique
 as a structured self-review step within the same response.
 
+### Repository-configurable critique delegate
+
+A repository may point C1 at a reviewer other than the per-agent
+mechanism above by setting `critiqueLoop.delegate` in
+`.github/idd/config.json` (see
+[Customization Surfaces](customization.md#customization-surfaces) and
+[Configuration Authority Hierarchy](policy-constants.md#configuration-authority-hierarchy)):
+a `command` string is a shell command run against the branch's current
+diff, and `mode` selects `fallback` (default: run `command`; fall
+through to the per-agent mechanism above when it is absent, exits
+non-zero, times out, or its output cannot be read as a findings list)
+or `combined` (run both every pass and union their reported issues).
+Delegate output is read the same way a subagent's critique response is
+read today — free-form findings scored through the existing C3
+High/Medium/Low process; no new machine-readable output schema is
+introduced. Absent `critiqueLoop.delegate` entirely keeps today's
+per-agent-only behavior with zero change.
+
+The C-phase's objective diff validation floor described below applies
+**uniformly** whether a delegate is configured or not, in either mode,
+and regardless of what the delegate reports — this surface changes
+which mechanism produces critique findings, never the load-bearing
+`fix-validate` gate.
+
 When a runtime falls back to structured same-response self-review
 instead of an independent subagent mechanism (see the table above; a
 runtime's own native multi-step mechanism, such as Antigravity's when

@@ -29,6 +29,7 @@ const EXTERNAL_CHECK_WAIVER_MODES = new Set([
   'maintainer-authorized',
 ]);
 const CHECK_SELECTOR_MATCH_MODES = new Set(['exact', 'glob']);
+const CRITIQUE_LOOP_DELEGATE_MODES = new Set(['fallback', 'combined']);
 const LEGACY_ADVISORY_CAP_ROUTE_ALIASES = new Map([
   ['phase-default', 'phase-specific'],
   ['strict-hold', 'hold'],
@@ -142,6 +143,9 @@ export const POLICY_DEFAULTS = Object.freeze({
   critiqueLoop: Object.freeze({
     cPhaseLowSeveritySkipAfter: 3,
     e10NoProgressHoldAfter: 3,
+    // No default value -- absence means "no delegate configured," not a
+    // concrete fallback object; see parseCritiqueLoopDelegate.
+    delegate: undefined,
   }),
   reviewEscalation: Object.freeze({
     changesRequestedFirstEscalation: 'PT24H',
@@ -417,6 +421,7 @@ export function normalizePolicyConfig(config) {
         c?.critiqueLoop?.e10NoProgressHoldAfter,
         POLICY_DEFAULTS.critiqueLoop.e10NoProgressHoldAfter,
       ),
+      delegate: parseCritiqueLoopDelegate(c?.critiqueLoop?.delegate),
     },
     reviewEscalation: {
       changesRequestedFirstEscalation: parseDuration(
@@ -723,6 +728,27 @@ function parseCheckSelectors(value, fallback) {
     });
   }
   return normalized;
+}
+/**
+ * Parse `critiqueLoop.delegate`. Unlike the other `critiqueLoop` fields,
+ * absence is not defaulted to a concrete value -- a missing, non-object, or
+ * malformed `command` normalizes to `undefined` (no delegate configured,
+ * matching the schema's fail-safe-on-malformed-input pattern for this
+ * object).
+ */
+function parseCritiqueLoopDelegate(value) {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    return undefined;
+  }
+  const candidate = value;
+  const command = parseNonEmptyString(candidate.command, '');
+  if (!command) {
+    return undefined;
+  }
+  return {
+    command,
+    mode: parseEnum(candidate.mode, CRITIQUE_LOOP_DELEGATE_MODES, 'fallback'),
+  };
 }
 function hasConfiguredCollaboratorMarkerTrust(config) {
   const c = config;
