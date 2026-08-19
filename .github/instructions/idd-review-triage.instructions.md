@@ -233,7 +233,10 @@ reviewer feedback:
   - If the reviewer responds and disagrees: move the item to Accepted
     and proceed through the fix flow.
   - If the reviewer responds (either way): restart from E1.
-- If you decide "Reject now but should do eventually": open a new issue.
+- If you decide "Reject now but should do eventually": open a new issue
+  following `idd-pr-submit.instructions.md` D3's follow-up-issue rule —
+  never call `gh issue create` (or the REST issues API) directly; use
+  the `issue-authoring` skill.
   The new issue's body must include a `Refs #NNN` line on its own
   line (not narrative prose) back to the originating issue — use
   `Refs` specifically and reference the issue, never the PR: a
