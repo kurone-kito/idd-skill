@@ -402,6 +402,18 @@ collaborator permission API.
 A bare organization `MEMBER` association, by itself, is not approval;
 neither is issue body text, a generated plan, nor operator attention.
 
+**Self-authorization fallback when the permission read is unavailable
+(#2148).** The bare-`MEMBER` rule above governs an approval-comment
+actor or the `idd:ready` label actor, both of which require a
+successful permission read. For the issue-author self-authorization
+signal specifically, when the collaborators-permission API is
+unavailable (503, empty, or otherwise unreadable), the issue's own
+live `author_association` substitutes instead of failing closed:
+`OWNER` always self-authorizes; `MEMBER` self-authorizes under both
+`owners-and-maintainers-only` and `all-write-permission-actors`. This
+matches `claim-approval-gate.mjs`'s shipped behavior and does not
+widen either other signal.
+
 **Approval signals** (any one satisfies, when the gate is enabled):
 
 - the issue author is self-authorized under the current
