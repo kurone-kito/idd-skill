@@ -498,6 +498,73 @@ test('authorized forced-handoff marker promotes successor claim before routing',
   assert.equal(result.active_claim?.claim_id, 'claim-new');
 });
 
+test('evidence.forced_handoff is populated on a bare --issue call (no --claim-id) against a valid forced-handoff successor (#2178)', () => {
+  const result = evaluateResumeClaimRouting(
+    {
+      // claimId omitted: exercises the exact "bare --issue call" gap named
+      // in #2178 -- the routing verdict stays non_inheritable/stop for
+      // backward compatibility, but the new evidence field must still
+      // populate so the caller can retry with --claim-id.
+      now: '2026-05-12T11:00:00Z',
+      events: FORCED_HANDOFF_EVENTS,
+    },
+    {
+      isTrustedAuthor: trusted(['maintainer']),
+      isForcedHandoffEnabled: () => true,
+      isAuthorizedForcedHandoff: (forcedBy) => forcedBy === 'maintainer',
+    },
+  );
+
+  assert.equal(result.state, 'non_inheritable');
+  assert.equal(result.action, 'stop');
+  assert.equal(result.reason, 'active-claim-non-stale');
+  assert.deepEqual(result.evidence.forced_handoff, {
+    old_agent_id: 'copilot',
+    old_claim_id: 'claim-old',
+    new_agent_id: 'copilot',
+    new_claim_id: 'claim-new',
+    forced_by: 'maintainer',
+    timestamp: '2026-05-12T10:01:00Z',
+  });
+});
+
+test('evidence.forced_handoff is absent when no forced-handoff marker applies', () => {
+  const result = evaluateResumeClaimRouting(
+    {
+      now: '2026-05-12T10:30:00Z',
+      events: [
+        {
+          createdAt: '2026-05-12T10:00:00Z',
+          author: { login: 'maintainer' },
+          body: '<!-- claimed-by: copilot claim-plain supersedes: none 2026-05-12T10:00:00Z branch: issue/12-task -->',
+        },
+      ],
+    },
+    { isTrustedAuthor: trusted(['maintainer']) },
+  );
+
+  assert.equal(result.evidence.forced_handoff, null);
+});
+
+test('evidence.forced_handoff stays null when a forced-handoff marker exists but is ignored (mode disabled)', () => {
+  const result = evaluateResumeClaimRouting(
+    {
+      now: '2026-05-12T11:00:00Z',
+      events: FORCED_HANDOFF_EVENTS,
+    },
+    {
+      isTrustedAuthor: trusted(['maintainer']),
+      // isForcedHandoffEnabled omitted -> defaults to () => false, so the
+      // marker never transfers ownership and must not be reported as
+      // applied evidence either.
+      isAuthorizedForcedHandoff: () => true,
+    },
+  );
+
+  assert.equal(result.active_claim?.claim_id, 'claim-old');
+  assert.equal(result.evidence.forced_handoff, null);
+});
+
 test('forced-handoff is ignored when forced-handoff mode is disabled', () => {
   const result = evaluateResumeClaimRouting(
     {
