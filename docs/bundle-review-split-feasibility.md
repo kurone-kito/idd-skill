@@ -30,37 +30,37 @@ continuous, same-session execution from the prior sub-phase:
 
 - `idd-review-triage.instructions.md` (E4-E8) opens: "Read this file
   after `idd-review-snapshot.instructions.md` (E3) finds
-  `ReviewItems_snapshot` non-empty" (line 8-10) — written as a
-  continuation, not a cold-start entry point.
+  `ReviewItems_snapshot` non-empty" — written as a continuation, not a
+  cold-start entry point.
 - `idd-review-fix.instructions.md` (E9-E15) opens the same way: "Read this
   file after `idd-review-triage.instructions.md` (E8) finds Accepted
-  PATH A items" (line 8-9).
-- `idd-review-snapshot.instructions.md` states explicitly that its own
-  output is not meant to survive a session boundary: "`ReviewItems_snapshot`
-  is session-local; don't inherit a previous claim's critique findings
-  unless persisted as reviewer-visible comments" (line 233, in the E2
-  incremental-review section).
+  PATH A items."
+- `idd-review-snapshot.instructions.md`'s E2 incremental-review section
+  states explicitly that its own output is not meant to survive a
+  session boundary: "`ReviewItems_snapshot` is session-local; don't
+  inherit a previous claim's critique findings unless persisted as
+  reviewer-visible comments."
 - `docs/idd-workflow.md`'s Autopilot Operating Model section names
-  **F4-complete / F5** as "the recommended **safe session-exit boundary**"
-  (line 554) and frames Resume as recovery from "an uncontrolled failure"
-  — a session dying mid-flight — converted into "a controlled handoff"
-  (lines 554-561), not a planned mid-review split point. No sentence in
-  that section, or anywhere else checked, names an E1-E3/E4-E8 or
+  **F4-complete / F5** as "the recommended **safe session-exit
+  boundary**" and frames Resume as recovery from "an uncontrolled
+  failure" — a session dying mid-flight — converted into "a controlled
+  handoff," not a planned mid-review split point. No sentence in that
+  section, or anywhere else checked, names an E1-E3/E4-E8 or
   E4-E8/E9-E15 boundary as a recommended or supported session-exit point.
 - `.github/instructions/idd-resume.instructions.md` — the file that
   actually drives resume behavior — contains **zero** references to
   `ReviewItems_snapshot`, `idd-review-triage`, `idd-review-fix`, `E4`, or
   `E9`. The routing table that names `idd-review-snapshot.instructions.md`
   (E1-E3) and `idd-review-triage.instructions.md` (E4-E8) as destinations
-  for different live-PR states lives in
-  `idd-overview-core.instructions.md` (lines 308-312), not in the resume
-  file itself, and it names only which file to read next — it carries no
-  procedure for reconstructing `ReviewItems_snapshot`'s actual classified
-  contents (which items are PATH A vs. PATH B, which already have an E4
-  score or an E6 disposition) before handing off.
-- `idd-pre-merge.instructions.md`'s only "return to E1" reference (line
-  250-253) describes re-running E1 within the same F2 pass when new
-  review activity is detected — the same in-session-loop pattern already
+  for different live-PR states lives in `idd-overview-core.instructions.md`'s
+  own routing table, not in the resume file itself, and it names only
+  which file to read next — it carries no procedure for reconstructing
+  `ReviewItems_snapshot`'s actual classified contents (which items are
+  PATH A vs. PATH B, which already have an E4 score or an E6
+  disposition) before handing off.
+- `idd-pre-merge.instructions.md`'s only "return to E1" reference
+  describes re-running E1 within the same F2 pass when new review
+  activity is detected — the same in-session-loop pattern already
   identified in this issue's Background, not a session-restart mechanic.
 
 **Conclusion**: no real re-entry boundary exists between E1-E3, E4-E8, or
@@ -77,17 +77,17 @@ entries as evidence that splitting `bundle-review` by phase is workable.
 Checking the lite profile's actual design narrows that claim
 substantially:
 
-`docs/idd-workflow.md`'s lite phase-mapping table (lines 301-311) lists a
-lite sibling for E1-E3 (`lite/idd-review-snapshot-lite.instructions.md`)
-and for E9-E15 (`lite/idd-review-fix-lite.instructions.md`) — but **not**
-for E4-E8. The very next paragraph states this is deliberate: "A0-A4
-Discover, A4.5 Suitability, **E4-E8 Review-triage**, and F3-F5 Merge are
-**permanently excluded by design**... the design's non-goals and
-phase-scoping table exclude open-ended selection, judgment-heavy
-classification, and autonomous merge from the condensed profile entirely"
-(lines 343-347). A lite-opted-in session reads the full, standard
+`docs/idd-workflow.md`'s "Phase → lite file mapping" table lists a lite
+sibling for E1-E3 (`lite/idd-review-snapshot-lite.instructions.md`) and
+for E9-E15 (`lite/idd-review-fix-lite.instructions.md`) — but **not** for
+E4-E8. The very next paragraph, on "Explicit fallback," states this is
+deliberate: "A0-A4 Discover, A4.5 Suitability, **E4-E8 Review-triage**,
+and F3-F5 Merge are **permanently excluded by design**... the design's
+non-goals and phase-scoping table exclude open-ended selection,
+judgment-heavy classification, and autonomous merge from the condensed
+profile entirely." A lite-opted-in session reads the full, standard
 `idd-review-triage.instructions.md` for E4-E8 exactly like a
-standard-tier session (line 352-353).
+standard-tier session.
 
 Confirmed against the live manifest (`audit/sync-manifest.json`):
 
@@ -113,8 +113,9 @@ JSON blob in a marker comment, no structured forge state) — but its
 _constituent decisions_ already accumulate as durable, reviewer-visible
 GitHub state as E1-E15 progress:
 
-- E1 Step 3's filter (`idd-review-snapshot.instructions.md` lines
-  191-218) is a deterministic function of **live, durable** GitHub state:
+- `idd-review-snapshot.instructions.md`'s E1 Step 3 filter ("Filter into
+  ReviewItems_snapshot") is a deterministic function of **live,
+  durable** GitHub state:
   unresolved threads not yet answered by an IDD agent, `CHANGES_REQUESTED`
   reviews not yet replied-and-re-review-requested, and comments with no
   IDD-agent reply since. Items already handled are excluded by
