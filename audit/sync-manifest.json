@@ -517,7 +517,13 @@
       "id": "idd-discover-instructions",
       "source": "idd-template/.github/instructions/idd-discover.instructions.md",
       "target": ".github/instructions/idd-discover.instructions.md",
-      "mode": "structure"
+      "mode": "concreted",
+      "replacements": [
+        {
+          "from": "{{PROJECT_MARKER_PREFIX}}",
+          "to": "idd-skill"
+        }
+      ]
     },
     {
       "id": "idd-helper-scripts-doc",
