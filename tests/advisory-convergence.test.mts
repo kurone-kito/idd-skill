@@ -4047,6 +4047,13 @@ test('formatAssertNextActions covers no-review and off-HEAD (#2142)', () => {
   const noneText = formatAssertNextActions(none);
   assert.match(noneText, /has not reviewed this PR/);
   assert.match(noneText, /gh pr edit \d+ --add-reviewer copilot/);
+  // #2159: the gh add-reviewer form alone is not sufficient for the
+  // default bot login (GraphQL fails to resolve it) — the REST
+  // requested_reviewers fallback from E14 must also be present.
+  assert.match(
+    noneText,
+    /gh api repos\/\{owner\}\/\{repo\}\/pulls\/\d+\/requested_reviewers -X POST -f "reviewers\[\]=copilot-pull-request-reviewer\[bot\]"/,
+  );
   assert.match(noneText, /post-idd-marker\.mjs --type advisory/);
   assert.doesNotMatch(
     noneText,
