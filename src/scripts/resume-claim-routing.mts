@@ -108,7 +108,8 @@ interface LegacyClaimMarker {
  * the active claim to the pair currently active. `timestamp` is the
  * transferring comment's GitHub `created_at` (the same authority every other
  * marker in this file uses), not the marker's own embedded `timestamp`
- * field.
+ * field; `null` when that comment metadata is unavailable, never an empty
+ * string.
  */
 interface AppliedForcedHandoffEvidence {
   old_agent_id: string;
@@ -116,7 +117,7 @@ interface AppliedForcedHandoffEvidence {
   new_agent_id: string;
   new_claim_id: string;
   forced_by: string;
-  timestamp: string;
+  timestamp: string | null;
 }
 
 /** Parsed CLI arguments. */
@@ -391,7 +392,7 @@ function toForcedHandoffEvidence(
     new_agent_id: applied.newAgentId,
     new_claim_id: applied.newClaimId,
     forced_by: applied.forcedBy,
-    timestamp: applied.createdAt ?? '',
+    timestamp: applied.createdAt ?? null,
   };
 }
 

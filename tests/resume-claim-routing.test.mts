@@ -528,7 +528,7 @@ test('evidence.forced_handoff is populated on a bare --issue call (no --claim-id
   });
 });
 
-test('evidence.forced_handoff is absent when no forced-handoff marker applies', () => {
+test('evidence.forced_handoff is null when no forced-handoff marker applies', () => {
   const result = evaluateResumeClaimRouting(
     {
       now: '2026-05-12T10:30:00Z',

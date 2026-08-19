@@ -263,7 +263,7 @@ function toForcedHandoffEvidence(applied) {
     new_agent_id: applied.newAgentId,
     new_claim_id: applied.newClaimId,
     forced_by: applied.forcedBy,
-    timestamp: applied.createdAt ?? '',
+    timestamp: applied.createdAt ?? null,
   };
 }
 /**
