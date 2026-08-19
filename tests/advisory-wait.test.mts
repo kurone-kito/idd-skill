@@ -26,6 +26,7 @@ import {
   computeSecondaryRequestedForHead,
   isCopilotReviewerLogin,
   operationalMarkerPrefix,
+  resolveCopilotPending,
   unsafeTextReason,
 } from '../src/scripts/protocol-helpers.mts';
 import { loadJson, validate } from '../src/scripts/validate-schemas.mts';
@@ -982,6 +983,149 @@ test('advisory wait summary resolves coverage against a configured primary bot',
   });
   assert.equal(defaultBot.lastCopilotCommit, 'c'.repeat(40));
   assert.equal(defaultBot.copilotPending, false);
+});
+
+// #2167: REST `requested_reviewers` can report empty while Copilot review
+// is still genuinely outstanding for the current HEAD (observed on this
+// source repository during PR #2158 -- REST returned `{"users":[]}` while
+// GraphQL `reviewRequests` still listed the primary bot and the timeline
+// already proved `copilotPendingCoversHead: true`). These cases exercise
+// `resolveCopilotPending`'s precedence directly, and via
+// `buildAdvisoryWaitSummary`'s `graphqlRequestedReviewerLogins` input.
+test('resolveCopilotPending: REST empty, timeline coverage true -> pending true without any GraphQL data', () => {
+  assert.equal(
+    resolveCopilotPending(
+      [],
+      /* copilotPendingCoversHead */ true,
+      /* lastCopilotCommit */ 'a'.repeat(40),
+      /* prHeadSha */ 'b'.repeat(40),
+      /* graphqlRequestedReviewerLogins */ null,
+    ),
+    true,
+  );
+});
+
+test('resolveCopilotPending: REST empty, timeline inconclusive, GraphQL lists the bot -> pending true', () => {
+  assert.equal(
+    resolveCopilotPending(
+      [],
+      /* copilotPendingCoversHead */ false,
+      /* lastCopilotCommit */ '',
+      /* prHeadSha */ 'b'.repeat(40),
+      /* graphqlRequestedReviewerLogins */ ['copilot-pull-request-reviewer'],
+    ),
+    true,
+  );
+});
+
+test('resolveCopilotPending: REST empty, timeline inconclusive, GraphQL empty -> pending false', () => {
+  assert.equal(
+    resolveCopilotPending(
+      [],
+      /* copilotPendingCoversHead */ false,
+      /* lastCopilotCommit */ '',
+      /* prHeadSha */ 'b'.repeat(40),
+      /* graphqlRequestedReviewerLogins */ [],
+    ),
+    false,
+  );
+});
+
+test('resolveCopilotPending: REST empty, timeline inconclusive, GraphQL failed (null) -> keeps the REST result (false)', () => {
+  // A `null` graphqlRequestedReviewerLogins means "not attempted, or the
+  // attempt failed" -- a GraphQL 4xx (or any other failure) must never be
+  // read as pending.
+  assert.equal(
+    resolveCopilotPending(
+      [],
+      /* copilotPendingCoversHead */ false,
+      /* lastCopilotCommit */ '',
+      /* prHeadSha */ 'b'.repeat(40),
+      /* graphqlRequestedReviewerLogins */ null,
+    ),
+    false,
+  );
+});
+
+test('resolveCopilotPending: REST already pending short-circuits before consulting timeline or GraphQL', () => {
+  assert.equal(
+    resolveCopilotPending(
+      [{ login: 'copilot-pull-request-reviewer' }],
+      /* copilotPendingCoversHead */ false,
+      /* lastCopilotCommit */ 'a'.repeat(40),
+      /* prHeadSha */ 'a'.repeat(40),
+      /* graphqlRequestedReviewerLogins */ null,
+    ),
+    true,
+  );
+});
+
+test('buildAdvisoryWaitSummary: empty REST requestedReviewers plus timeline coverage yields copilotPending true without any GraphQL evidence', () => {
+  // Reproduces the observed #2158 incident end-to-end through the public
+  // summary function: REST requested_reviewers is empty, but the timeline
+  // already proves the primary bot was re-requested after the current
+  // HEAD's own commit event, and no prior Copilot review covers this HEAD.
+  const headSha = 'e'.repeat(40);
+  const priorHeadSha = 'f'.repeat(40);
+  const summary = buildAdvisoryWaitSummary(
+    {
+      prHeadSha: headSha,
+      reviews: [
+        {
+          user: { login: 'copilot-pull-request-reviewer' },
+          submitted_at: '2026-08-18T23:00:00Z',
+          commit_id: priorHeadSha,
+        },
+      ],
+      requestedReviewers: [],
+      timelineEvents: [
+        { event: 'committed', sha: priorHeadSha },
+        { event: 'committed', sha: headSha },
+        {
+          event: 'review_requested',
+          requested_reviewer: { login: 'copilot-pull-request-reviewer' },
+        },
+      ],
+      comments: [],
+      graphqlRequestedReviewerLogins: null,
+    },
+    { now: '2026-08-19T00:00:00Z' },
+  );
+  assert.equal(summary.lastCopilotCommit, priorHeadSha);
+  assert.equal(summary.copilotPendingCoversHead, true);
+  assert.equal(summary.copilotPending, true);
+});
+
+test('buildAdvisoryWaitSummary: empty REST requestedReviewers plus a GraphQL-listed bot yields copilotPending true', () => {
+  const headSha = 'd'.repeat(40);
+  const summary = buildAdvisoryWaitSummary(
+    {
+      prHeadSha: headSha,
+      reviews: [],
+      requestedReviewers: [],
+      timelineEvents: [],
+      comments: [],
+      graphqlRequestedReviewerLogins: ['copilot-pull-request-reviewer'],
+    },
+    { now: '2026-08-19T00:00:00Z' },
+  );
+  assert.equal(summary.copilotPending, true);
+});
+
+test('buildAdvisoryWaitSummary: empty REST requestedReviewers and no GraphQL evidence yields copilotPending false', () => {
+  const headSha = 'd'.repeat(40);
+  const summary = buildAdvisoryWaitSummary(
+    {
+      prHeadSha: headSha,
+      reviews: [],
+      requestedReviewers: [],
+      timelineEvents: [],
+      comments: [],
+      graphqlRequestedReviewerLogins: null,
+    },
+    { now: '2026-08-19T00:00:00Z' },
+  );
+  assert.equal(summary.copilotPending, false);
 });
 
 test('primary advisory bot login resolves defaults, overrides, and fail-safe fallbacks', () => {

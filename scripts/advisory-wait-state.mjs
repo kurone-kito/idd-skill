@@ -16,6 +16,7 @@ import {
 import { parseCliArgs } from './cli-args.mjs';
 import {
   DEFAULT_GH_PAGINATED_TIMEOUT_MS,
+  ghGraphql,
   ghText,
   safeGhText,
 } from './gh-exec.mjs';
@@ -24,6 +25,8 @@ import {
   buildAdvisoryWaitSummary,
   compareIsoTimestamps,
   computeCopilotPendingCoversHead,
+  findLastCopilotReviewCommit,
+  isCopilotPending,
   isValidIsoTimestamp,
   normalizeTrustedMarkerLogins,
   parseAdvisoryRecoveryComment,
@@ -405,13 +408,38 @@ function main() {
   const advisoryWaitPolicy = readAdvisoryWaitPolicy();
   const primaryBotLogin = readAdvisoryPrimaryBotLogin();
   const secondaryBotLogin = readAdvisorySecondaryBotLogin();
+  // #2167: only pay for the optional GraphQL reviewRequests call when the
+  // cheaper REST + timeline signals are both inconclusive -- mirrors
+  // resolveCopilotPending's own precedence (protocol-helpers.mts) so this
+  // pre-check and the pure function it feeds never disagree on when a
+  // GraphQL fallback is actually needed.
+  const restRequestedReviewers = requestedReviewers.users ?? [];
+  const restCopilotPending = isCopilotPending(
+    restRequestedReviewers,
+    primaryBotLogin,
+  );
+  const lastCopilotCommitForGraphqlGate = findLastCopilotReviewCommit(
+    reviews,
+    primaryBotLogin,
+  );
+  const copilotPendingCoversHeadForGraphqlGate =
+    computeCopilotPendingCoversHead(timelineEvents, prHeadSha, primaryBotLogin);
+  const graphqlRequestedReviewerLogins =
+    !restCopilotPending &&
+    !(
+      copilotPendingCoversHeadForGraphqlGate &&
+      lastCopilotCommitForGraphqlGate !== prHeadSha
+    )
+      ? fetchGraphqlRequestedReviewerLogins(owner, repo, args.prNumber)
+      : null;
   const summary = buildAdvisoryWaitSummary(
     {
       prHeadSha,
       reviews,
-      requestedReviewers: requestedReviewers.users ?? [],
+      requestedReviewers: restRequestedReviewers,
       timelineEvents,
       comments: comments.map(normalizeComment),
+      graphqlRequestedReviewerLogins,
     },
     {
       now: args.now || new Date().toISOString().replace('.000Z', 'Z'),
@@ -565,4 +593,50 @@ function ghApiJson(path, paginate = false, extraArgs = []) {
     );
   }
   return JSON.parse(ghText(args));
+}
+/**
+ * #2167: REST `requested_reviewers` can report empty even when Copilot
+ * review is still genuinely outstanding -- see `resolveCopilotPending`'s
+ * doc comment in protocol-helpers.mts for the observed incident this
+ * fixes. `main()` below calls this only when REST and already-fetched
+ * timeline evidence are both inconclusive, so this optional GraphQL call
+ * is skipped whenever a cheaper signal already resolves pending state.
+ *
+ * Returns the requested-reviewer login list on success, or `null` on any
+ * failure (network error, non-2xx response, unparsable payload) so the
+ * caller falls back to the REST-derived result rather than assuming
+ * pending -- a GraphQL 4xx must never read as "pending".
+ */
+function fetchGraphqlRequestedReviewerLogins(owner, repo, prNumber) {
+  try {
+    const query = `
+      query($owner: String!, $repo: String!, $number: Int!) {
+        repository(owner: $owner, name: $repo) {
+          pullRequest(number: $number) {
+            reviewRequests(first: 100) {
+              nodes {
+                requestedReviewer {
+                  ... on Bot { login }
+                  ... on User { login }
+                  ... on Mannequin { login }
+                }
+              }
+            }
+          }
+        }
+      }
+    `;
+    const payload = ghGraphql(query, {
+      owner,
+      repo,
+      number: prNumber,
+    });
+    const nodes =
+      payload.data?.repository?.pullRequest?.reviewRequests?.nodes ?? [];
+    return nodes
+      .map((node) => String(node?.requestedReviewer?.login ?? ''))
+      .filter((login) => login !== '');
+  } catch {
+    return null;
+  }
 }
