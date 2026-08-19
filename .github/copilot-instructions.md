@@ -304,6 +304,19 @@ feat: add auth system and refactor database layer and update docs
   part of the real value, delete it instead of just relocating the
   break. Enforced by `node scripts/audit-code-span-wrap.mjs`
   (repository-local; not part of the distributed `idd-template/`).
+- **Bare issue/PR reference wrapping**: a bare `#NNN` citation must
+  never land as the first token of a paragraph, list item, or wrapped
+  continuation line in prose Markdown. `dprint fmt`'s automatic
+  line-wrap can relocate a bare `#NNN` there, and CommonMark's
+  ATX-heading rule — enforced here by markdownlint's MD018 — then
+  reads the relocated text as a malformed heading instead of a
+  citation. Whenever a reference could plausibly open a sentence,
+  bullet, or wrapped line, phrase it as "issue `#NNN`" (or any
+  equivalent that keeps a word before the `#`) instead of leaving it
+  bare. No dedicated script is needed to detect this — the existing
+  `markdownlint-cli2` MD018 rule already catches every instance
+  mechanically; this bullet only documents the cause so the
+  format → lint → diagnose → reword round-trip is avoided up front.
 
 ## Guardrails
 

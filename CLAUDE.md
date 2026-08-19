@@ -54,6 +54,15 @@ terms literally.
   the real value, delete it instead of just relocating the break.
   Enforced by `node scripts/audit-code-span-wrap.mjs`
   (repository-local; not distributed to `idd-template/`).
+- **Bare issue/PR reference wrapping**: a bare `#NNN` reference must
+  never be the first token of a paragraph, list item, or wrapped
+  continuation line in prose Markdown — `dprint fmt`'s automatic
+  line-wrap can relocate it there, and CommonMark/markdownlint's MD018
+  rule then reads it as a malformed ATX heading. Prefer "issue `#NNN`"
+  (or another phrasing that keeps a word before the `#`) whenever the
+  reference could plausibly open a sentence, bullet, or wrapped line.
+  No dedicated script is needed — `markdownlint-cli2`'s existing MD018
+  rule already catches every instance mechanically.
 
 ## Key workflow rules
 
