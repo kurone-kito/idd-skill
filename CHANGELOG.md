@@ -16,6 +16,11 @@ discipline and has no tag.
 
 ### Added
 
+- `pre-merge-readiness --claimless` for PRs with no
+  `closingIssuesReferences`: skips claim fetch/revalidation and
+  reports the not-applicable / unclaimed ownership shape. Combining
+  the flag with `--claim-issue` or `--claim-id` is rejected, and a
+  PR that still closes an issue fails closed.
 - Present-tense hybrid review-reply identity contract on the
   operator docs: IDD replies carry the prefix-aware stamp (not an
   E1 `review-watermark`); unmarked human replies on human threads

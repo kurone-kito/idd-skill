@@ -6436,6 +6436,9 @@ export function buildPreMergeReadinessSummary(
     // collision check below. Omitted by every caller that predates this
     // option (unchanged pre-#1528 behavior).
     expectedNonce?: unknown;
+    // #2017: skip claim-marker fetch/revalidation and emit the
+    // not-applicable / unclaimed ownership shape (claim-id `none`).
+    claimless?: boolean;
     viewerLogin?: string | null;
     viewerTeamSlugs?: unknown[];
     viewerAppSlug?: string | null;
@@ -6660,19 +6663,35 @@ export function buildPreMergeReadinessSummary(
       primaryBotLogin: options.primaryBotLogin,
     },
   );
-  const claim = summarizeClaimValidation(claimEvents, {
-    trustedMarkerLogins,
-    forcedHandoffEnabled: options.forcedHandoffEnabled === true,
-    expectedLinkedPrs: options.expectedLinkedPrs ?? [],
-    prFirstCommitAt: options.prFirstCommitAt ?? null,
-    authorizedForcedHandoffLogins: options.authorizedForcedHandoffLogins,
-    isAuthorizedForcedHandoff: options.isAuthorizedForcedHandoff,
-    isForcedHandoffEnabled: options.isForcedHandoffEnabled,
-    expectedClaimId: options.expectedClaimId,
-    expectedAgentId: options.expectedAgentId,
-    expectedNonce: options.expectedNonce,
-    staleAgeMs: options.staleAgeMs,
-  });
+  const claim = options.claimless
+    ? {
+        expectedClaimId: 'none',
+        expectedAgentId: '',
+        activeClaimPresent: false,
+        activeClaim: {
+          agentId: '',
+          claimId: 'none',
+          supersedes: '',
+          branch: '',
+          createdAt: '',
+        },
+        matchesExpectedClaim: true,
+        claimLost: false,
+        reason: 'not-applicable',
+      }
+    : summarizeClaimValidation(claimEvents, {
+        trustedMarkerLogins,
+        forcedHandoffEnabled: options.forcedHandoffEnabled === true,
+        expectedLinkedPrs: options.expectedLinkedPrs ?? [],
+        prFirstCommitAt: options.prFirstCommitAt ?? null,
+        authorizedForcedHandoffLogins: options.authorizedForcedHandoffLogins,
+        isAuthorizedForcedHandoff: options.isAuthorizedForcedHandoff,
+        isForcedHandoffEnabled: options.isForcedHandoffEnabled,
+        expectedClaimId: options.expectedClaimId,
+        expectedAgentId: options.expectedAgentId,
+        expectedNonce: options.expectedNonce,
+        staleAgeMs: options.staleAgeMs,
+      });
   const waivableCheckSelectors = options.waivableCheckSelectors ?? null;
   const waiverEvidence = summarizeExternalCheckWaivers(comments, {
     prHeadSha,

@@ -1659,7 +1659,14 @@ reflexively as any other CLI option.
   kurone-kito/idd-skill#1522, kurone-kito/idd-skill#1528 — omit when no
   nonce was recorded for the active claim, which stays backward
   compatible), and
-  `--trusted-marker-logins "<trusted-login-1>,<trusted-login-2>"`
+  `--trusted-marker-logins "<trusted-login-1>,<trusted-login-2>"`.
+  `--claimless` (#2017) is the no-issue alternative: it cannot combine
+  with `--claim-issue` or `--claim-id`, and it is honored only when the
+  PR's `closingIssuesReferences` is empty (otherwise fail closed and
+  pass `--claim-issue`). It skips claim fetch/revalidation and emits
+  the not-applicable / unclaimed ownership shape (claim-id `none`); CI,
+  review, advisory, thread, and branch-currency gates still run.
+  `idd-merge-execute` still requires `--claim-issue`.
 - Stable contract:
   [`pre-merge-readiness.schema.json`][pre-merge-readiness-schema]
 - Stable sections consumed by the instructions: `reviewCurrency`,
