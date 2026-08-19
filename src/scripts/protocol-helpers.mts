@@ -1060,6 +1060,16 @@ export function isCodeRabbitLogin(login: string): boolean {
 export const CODERABBIT_SUMMARY_MARKER =
   '<!-- This is an auto-generated comment: summarize by coderabbit.ai -->';
 
+// #2161: CodeRabbit nests this inner marker inside a comment that also
+// starts with `CODERABBIT_SUMMARY_MARKER` when no review content exists
+// (billing failure, or a repository below the star-count manual-trigger
+// gate) -- the outer wrapper is byte-for-byte identical to a genuine
+// summary walkthrough, so this inner marker is the only signal
+// distinguishing the two. Single-sourced here so `isAdvisoryNonReviewNotice`
+// and `isReviewSummaryComment` agree on the same marker and cannot drift.
+export const CODERABBIT_SKIP_REVIEW_MARKER =
+  '<!-- This is an auto-generated comment: skip review by coderabbit.ai -->';
+
 export function classifyRegularBotComment(
   comment: CommentLike,
   comments: CommentLike[],
@@ -1720,6 +1730,11 @@ const ADVISORY_NON_REVIEW_NOTICE_PATTERNS: RegExp[] = [
   // the `summarize by coderabbit.ai` review marker) and its warning heading.
   /<!--\s*This is an auto-generated comment:\s*rate limited by coderabbit\.ai\s*-->/i,
   /^[>\s]*#{1,6}\s*Review limit reached\b/im,
+  // #2161: CodeRabbit skip-review notice, nested inside the same outer
+  // `summarize by coderabbit.ai` wrapper as a genuine walkthrough (see
+  // CODERABBIT_SKIP_REVIEW_MARKER above) -- carries no review content even
+  // though the outer wrapper alone cannot tell it apart from a real summary.
+  new RegExp(escapeRegExp(CODERABBIT_SKIP_REVIEW_MARKER), 'i'),
 ];
 
 // Codex usage / quota exhaustion for code reviews. Token-anchored on all
@@ -1906,10 +1921,16 @@ export const NON_REVIEW_NOTICE_DISPOSITION_HINT =
 // True when a regular comment is a CodeRabbit summary walkthrough. Detection is
 // start-anchored on the exact single-sourced marker (after trimming leading
 // whitespace) so a comment that merely quotes the marker in prose is not matched.
+// #2161: a comment that also nests CODERABBIT_SKIP_REVIEW_MARKER carries no
+// review content despite starting with the summary marker, so it is excluded
+// here too -- never a summary walkthrough, always a non-review notice (see
+// isAdvisoryNonReviewNotice / ADVISORY_NON_REVIEW_NOTICE_PATTERNS).
 export function isReviewSummaryComment(body: unknown): boolean {
-  return String(body ?? '')
-    .trimStart()
-    .startsWith(CODERABBIT_SUMMARY_MARKER);
+  const text = String(body ?? '').trimStart();
+  return (
+    text.startsWith(CODERABBIT_SUMMARY_MARKER) &&
+    !text.includes(CODERABBIT_SKIP_REVIEW_MARKER)
+  );
 }
 
 // A trusted IDD disposition of a CodeRabbit summary walkthrough: the canonical
