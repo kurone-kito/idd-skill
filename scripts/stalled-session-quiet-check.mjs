@@ -29,6 +29,7 @@ const STALLED_SESSION_QUIET_CHECK_FLAG_SPEC = {
   '--pr': { type: 'string' },
   '--owner': { type: 'string' },
   '--repo': { type: 'string' },
+  '--gh-token': { type: 'string' },
   '--token': { type: 'string' },
   '--now': { type: 'string' },
   '--quiet-window-ms': { type: 'string' },
@@ -143,9 +144,9 @@ function runCli() {
   if (args.pr === null || !Number.isInteger(args.pr) || args.pr <= 0) {
     throw new Error('--pr is required and must be a positive integer');
   }
-  if (args.token) {
-    process.env.GH_TOKEN = args.token;
-    process.env.GITHUB_TOKEN = args.token;
+  if (args.ghToken) {
+    process.env.GH_TOKEN = args.ghToken;
+    process.env.GITHUB_TOKEN = args.ghToken;
   }
   const owner =
     args.owner ||
@@ -309,6 +310,52 @@ function parseDurationToMs(value) {
   const seconds = Number.parseInt(match[4] ?? '0', 10);
   return (((days * 24 + hours) * 60 + minutes) * 60 + seconds) * 1000;
 }
+function warnDeprecatedFlag(deprecated, canonical) {
+  process.stderr.write(
+    `warning: ${deprecated} is deprecated; use ${canonical} instead.\n`,
+  );
+}
+/**
+ * Find `flag`'s last occurrence in `argv`, recognizing both the
+ * two-token form (`--flag value`) and the single-token `--flag=value`
+ * form `parseCliArgs` also accepts.
+ */
+function findLastFlagOccurrenceIndex(argv, flag) {
+  const equalsPrefix = `${flag}=`;
+  for (let index = argv.length - 1; index >= 0; index -= 1) {
+    if (argv[index] === flag || argv[index].startsWith(equalsPrefix)) {
+      return index;
+    }
+  }
+  return -1;
+}
+/**
+ * Resolve a canonical/deprecated flag pair: whichever flag's LAST
+ * occurrence comes later in argv wins when both spellings are given
+ * together (matches `pre-merge-readiness.mts`'s `--claim-id` /
+ * `--expected-claim-id` precedent). `-1` (never given) sorts before any
+ * real index, so an absent flag never wins against one that was
+ * actually passed.
+ */
+function resolveLastGivenAlias(
+  argv,
+  canonicalFlag,
+  canonicalValue,
+  deprecatedFlag,
+  deprecatedValue,
+) {
+  if (canonicalValue === undefined) {
+    return deprecatedValue;
+  }
+  if (deprecatedValue === undefined) {
+    return canonicalValue;
+  }
+  const lastCanonicalIndex = findLastFlagOccurrenceIndex(argv, canonicalFlag);
+  const lastDeprecatedIndex = findLastFlagOccurrenceIndex(argv, deprecatedFlag);
+  return lastDeprecatedIndex > lastCanonicalIndex
+    ? deprecatedValue
+    : canonicalValue;
+}
 function parseArgs(argv) {
   const { values, help } = parseCliArgs(
     argv,
@@ -316,6 +363,17 @@ function parseArgs(argv) {
   );
   const prToken = values.pr;
   const quietWindowMsToken = values['quiet-window-ms'];
+  const ghToken = resolveLastGivenAlias(
+    argv,
+    '--gh-token',
+    values['gh-token'],
+    '--token',
+    values.token,
+  );
+  const deprecatedTokenValue = values.token;
+  if (deprecatedTokenValue !== undefined) {
+    warnDeprecatedFlag('--token', '--gh-token');
+  }
   return {
     // Both --pr and --quiet-window-ms are kept as lenient Number.parseInt
     // (not the canonical-integer helper), matching the pre-migration
@@ -329,7 +387,7 @@ function parseArgs(argv) {
     pr: prToken === undefined ? null : Number.parseInt(prToken, 10),
     owner: values.owner ?? '',
     repo: values.repo ?? '',
-    token: values.token ?? '',
+    ghToken: ghToken ?? '',
     now: values.now ?? '',
     quietWindowMs:
       quietWindowMsToken === undefined
@@ -343,8 +401,9 @@ function parseArgs(argv) {
 function printHelp() {
   process.stdout.write(`Usage:
   node scripts/stalled-session-quiet-check.mjs --pr <number> [--owner <owner>] [--repo <repo>]
-    [--token <token>] [--now <ISO8601>] [--quiet-window-ms <ms>]
+    [--gh-token <token>] [--now <ISO8601>] [--quiet-window-ms <ms>]
     [--claim-created-at <ISO8601>] [--policy <path>]
+  Deprecated aliases (one release): --token -> --gh-token
 
 Evaluates the S2 quiet-window check for stalled-session detection.
 Outputs JSON with quiet_window_met and evidence fields.

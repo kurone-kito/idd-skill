@@ -64,7 +64,7 @@ interface SuitabilityTriageArgs {
   bodyFile?: string;
   /** #2102: local/offline dry-run input, mutually exclusive with --issue. */
   stdin: boolean;
-  token: string;
+  ghToken: string;
   owner: string;
   repo: string;
   policy: string;
@@ -98,7 +98,8 @@ const SUITABILITY_TRIAGE_FLAG_SPEC = {
   '--issue': { type: 'string' },
   '--body-file': { type: 'string' },
   '--stdin': { type: 'boolean', default: false },
-  '--token': { type: 'string', default: '' },
+  '--gh-token': { type: 'string' },
+  '--token': { type: 'string' },
   '--owner': { type: 'string', default: '' },
   '--repo': { type: 'string', default: '' },
   '--policy': { type: 'string', default: '' },
@@ -1330,9 +1331,9 @@ function runCli(): void {
   if (args.issue === null || !Number.isInteger(args.issue) || args.issue <= 0) {
     throw new Error('--issue is required and must be a positive integer');
   }
-  if (args.token) {
-    process.env.GH_TOKEN = args.token;
-    process.env.GITHUB_TOKEN = args.token;
+  if (args.ghToken) {
+    process.env.GH_TOKEN = args.ghToken;
+    process.env.GITHUB_TOKEN = args.ghToken;
   }
 
   const owner =
@@ -1716,13 +1717,76 @@ function parseLenientIntegerOrNull(token: string | undefined): number | null {
   return token === undefined ? null : Number.parseInt(token, 10);
 }
 
+function warnDeprecatedFlag(deprecated: string, canonical: string): void {
+  process.stderr.write(
+    `warning: ${deprecated} is deprecated; use ${canonical} instead.\n`,
+  );
+}
+
+/**
+ * Find `flag`'s last occurrence in `argv`, recognizing both the
+ * two-token form (`--flag value`) and the single-token `--flag=value`
+ * form `parseCliArgs` also accepts.
+ */
+function findLastFlagOccurrenceIndex(
+  argv: readonly string[],
+  flag: string,
+): number {
+  const equalsPrefix = `${flag}=`;
+  for (let index = argv.length - 1; index >= 0; index -= 1) {
+    if (argv[index] === flag || argv[index].startsWith(equalsPrefix)) {
+      return index;
+    }
+  }
+  return -1;
+}
+
+/**
+ * Resolve a canonical/deprecated flag pair: whichever flag's LAST
+ * occurrence comes later in argv wins when both spellings are given
+ * together (matches `pre-merge-readiness.mts`'s `--claim-id` /
+ * `--expected-claim-id` precedent). `-1` (never given) sorts before any
+ * real index, so an absent flag never wins against one that was
+ * actually passed.
+ */
+function resolveLastGivenAlias(
+  argv: readonly string[],
+  canonicalFlag: string,
+  canonicalValue: string | undefined,
+  deprecatedFlag: string,
+  deprecatedValue: string | undefined,
+): string | undefined {
+  if (canonicalValue === undefined) {
+    return deprecatedValue;
+  }
+  if (deprecatedValue === undefined) {
+    return canonicalValue;
+  }
+  const lastCanonicalIndex = findLastFlagOccurrenceIndex(argv, canonicalFlag);
+  const lastDeprecatedIndex = findLastFlagOccurrenceIndex(argv, deprecatedFlag);
+  return lastDeprecatedIndex > lastCanonicalIndex
+    ? deprecatedValue
+    : canonicalValue;
+}
+
 export function parseArgs(argv: string[]): SuitabilityTriageArgs {
   const { values, help } = parseCliArgs(argv, SUITABILITY_TRIAGE_FLAG_SPEC);
+  const ghToken = resolveLastGivenAlias(
+    argv,
+    '--gh-token',
+    values['gh-token'] as string | undefined,
+    '--token',
+    values.token as string | undefined,
+  );
+  const deprecatedTokenValue = values.token as string | undefined;
+  if (deprecatedTokenValue !== undefined) {
+    warnDeprecatedFlag('--token', '--gh-token');
+  }
   return {
     issue: parseLenientIntegerOrNull(values.issue as string | undefined),
     bodyFile: values['body-file'] as string | undefined,
     stdin: values.stdin as boolean,
-    token: values.token as string,
+    ghToken: ghToken ?? '',
     owner: values.owner as string,
     repo: values.repo as string,
     policy: values.policy as string,
@@ -1756,8 +1820,9 @@ function loadPolicy(policyPath: string): unknown {
 
 function printHelp(): void {
   process.stdout.write(`Usage:
-  node scripts/suitability-triage.mjs --issue <number> [--token <token>] [--owner <owner>] [--repo <repo>] [--policy <path>] [--manifest <path>] [--bundles <id1,id2>] [--verbose] [--help]
+  node scripts/suitability-triage.mjs --issue <number> [--gh-token <token>] [--owner <owner>] [--repo <repo>] [--policy <path>] [--manifest <path>] [--bundles <id1,id2>] [--verbose] [--help]
   node scripts/suitability-triage.mjs (--body-file <path> | --stdin) [--policy <path>] [--verbose] [--help]
+  Deprecated aliases (one release): --token -> --gh-token
 
 --issue, --body-file, and --stdin are mutually exclusive; exactly one is
 required. --body-file/--stdin (#2102) run a local, offline dry-run against

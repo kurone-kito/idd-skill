@@ -107,6 +107,23 @@ const FLAG_CONCEPTS = [
       'review-activity-snapshot.mjs',
     ],
   },
+  {
+    concept: 'GitHub auth token',
+    canonical: '--gh-token',
+    deprecated: '--token',
+    helpers: [
+      'claim-approval-gate.mjs',
+      'resume-claim-routing.mjs',
+      'resume-route-selection.mjs',
+      'stalled-session-quiet-check.mjs',
+      'suitability-triage.mjs',
+    ],
+    // select-desynced-index.mjs's own '--token' flag is the unrelated A4
+    // Step 2 session-desync token (idd-discover.instructions.md), not a
+    // GH-auth-token substitution -- exclude it from the broad deprecated-
+    // alias scan below so it never false-positives against this pair (#2195).
+    deprecatedScanExclude: ['select-desynced-index.mjs'],
+  },
 ];
 
 // Known near-miss spellings a future helper might plausibly introduce.
@@ -119,7 +136,13 @@ const NEAR_MISS_VARIANTS = [
   { variant: '--bot-logins', canonical: '--advisory-bot-logins' },
 ];
 
-for (const { concept, canonical, deprecated, helpers } of FLAG_CONCEPTS) {
+for (const {
+  concept,
+  canonical,
+  deprecated,
+  helpers,
+  deprecatedScanExclude,
+} of FLAG_CONCEPTS) {
   test(`every ${concept} helper exposes the canonical ${canonical}`, () => {
     for (const helper of helpers) {
       const src = readScript(helper);
@@ -136,6 +159,9 @@ for (const { concept, canonical, deprecated, helpers } of FLAG_CONCEPTS) {
 
   test(`no helper accepts ${deprecated} without the canonical ${canonical}`, () => {
     for (const file of scriptFiles) {
+      if (deprecatedScanExclude?.includes(file)) {
+        continue;
+      }
       const src = readScript(file);
       if (includesQuotedFlag(src, deprecated)) {
         assert.ok(
@@ -148,6 +174,9 @@ for (const { concept, canonical, deprecated, helpers } of FLAG_CONCEPTS) {
 
   test(`${deprecated} alias emits a stderr deprecation warning`, () => {
     for (const file of scriptFiles) {
+      if (deprecatedScanExclude?.includes(file)) {
+        continue;
+      }
       const src = readScript(file);
       if (!includesQuotedFlag(src, deprecated)) {
         continue;
