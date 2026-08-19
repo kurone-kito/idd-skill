@@ -277,7 +277,7 @@
         ".github/instructions/idd-overview-core.instructions.md",
         ".github/instructions/idd-suitability.instructions.md"
       ],
-      "limitBytes": 104000
+      "limitBytes": 109700
     },
     {
       "id": "bundle-resume",
