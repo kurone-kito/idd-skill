@@ -1142,8 +1142,9 @@ Interpretation rules:
   retry with `--takeover` only after
   `resume-claim-routing.mjs --fresh-claim-gate` authorizes it: a
   `claimable` verdict, a `stale-reclaimable` verdict, or an
-  `already-claimed` verdict whose `winning_claim_id` matches a claim-id
-  the caller has already independently verified as its own). A `holder`
+  `already-claimed` verdict whose `winning_claim_id` matches a
+  `claim-id` the caller has already independently verified as its own).
+  A `holder`
   snapshot of the previous occupant is reported on **both** a plain
   `collision` and an authorized takeover, not only on takeover.
 - The `--acquire` CLI exits `0` only for `acquired` and exits `2` for
