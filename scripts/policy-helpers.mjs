@@ -140,6 +140,12 @@ export const POLICY_DEFAULTS = Object.freeze({
   claim: Object.freeze({
     verifySettleDelay: 'PT5S',
   }),
+  // Cast (not a literal `delegate` field) so this shares one declared type
+  // with the resolver's `critiqueLoop` below -- without it, TypeScript
+  // infers a two-branch union across normalizePolicyConfig's early
+  // `clone(POLICY_DEFAULTS)` return and its main return, and rejects
+  // `.critiqueLoop.delegate` on every caller. The runtime object still has
+  // no `delegate` key at all -- see the clone() doc comment's invariant.
   critiqueLoop: Object.freeze({
     cPhaseLowSeveritySkipAfter: 3,
     e10NoProgressHoldAfter: 3,
@@ -267,6 +273,26 @@ export function normalizePolicyConfig(config) {
   const critiqueLoopDelegate = parseCritiqueLoopDelegate(
     c?.critiqueLoop?.delegate,
   );
+  // Explicitly typed so the optional `delegate` key is part of one stable
+  // object type rather than a conditional-spread union TypeScript can't
+  // narrow -- see the Own-property-omitted comment below for why the key
+  // itself is conditionally present.
+  const critiqueLoop = {
+    cPhaseLowSeveritySkipAfter: parsePositiveInteger(
+      c?.critiqueLoop?.cPhaseLowSeveritySkipAfter,
+      POLICY_DEFAULTS.critiqueLoop.cPhaseLowSeveritySkipAfter,
+    ),
+    e10NoProgressHoldAfter: parsePositiveInteger(
+      c?.critiqueLoop?.e10NoProgressHoldAfter,
+      POLICY_DEFAULTS.critiqueLoop.e10NoProgressHoldAfter,
+    ),
+  };
+  // Own-property omitted (not set to `undefined`) when no delegate is
+  // configured, matching POLICY_DEFAULTS -- see the clone() doc comment on
+  // why POLICY_DEFAULTS itself never carries an undefined-valued key.
+  if (critiqueLoopDelegate) {
+    critiqueLoop.delegate = critiqueLoopDelegate;
+  }
   return {
     issueScope: parseEnum(
       c?.issueScope,
@@ -412,20 +438,7 @@ export function normalizePolicyConfig(config) {
         POLICY_DEFAULTS.claim.verifySettleDelay,
       ),
     },
-    critiqueLoop: {
-      cPhaseLowSeveritySkipAfter: parsePositiveInteger(
-        c?.critiqueLoop?.cPhaseLowSeveritySkipAfter,
-        POLICY_DEFAULTS.critiqueLoop.cPhaseLowSeveritySkipAfter,
-      ),
-      e10NoProgressHoldAfter: parsePositiveInteger(
-        c?.critiqueLoop?.e10NoProgressHoldAfter,
-        POLICY_DEFAULTS.critiqueLoop.e10NoProgressHoldAfter,
-      ),
-      // Own-property omitted (not set to `undefined`) when no delegate is
-      // configured, matching POLICY_DEFAULTS -- see the clone() doc comment
-      // on why POLICY_DEFAULTS itself never carries an undefined-valued key.
-      ...(critiqueLoopDelegate ? { delegate: critiqueLoopDelegate } : {}),
-    },
+    critiqueLoop,
     reviewEscalation: {
       changesRequestedFirstEscalation: parseDuration(
         c?.reviewEscalation?.changesRequestedFirstEscalation,
