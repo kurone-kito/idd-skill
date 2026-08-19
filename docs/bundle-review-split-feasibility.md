@@ -58,10 +58,17 @@ continuous, same-session execution from the prior sub-phase:
   `ReviewItems_snapshot`'s actual classified contents (which items are
   PATH A vs. PATH B, which already have an E4 score or an E6
   disposition) before handing off.
-- `idd-pre-merge.instructions.md`'s only "return to E1" reference
-  describes re-running E1 within the same F2 pass when new review
-  activity is detected — the same in-session-loop pattern already
-  identified in this issue's Background, not a session-restart mechanic.
+- `idd-pre-merge.instructions.md`'s Review Currency gate names several
+  "return to E1" triggers, not just one: new review activity detected
+  within the same F2 pass (the in-session-loop pattern already
+  identified in this issue's Background), and — closer to a real
+  session-boundary case — "with no trusted same-claim watermark for the
+  successor claim, return to E1 and rebuild review state there" for a
+  forced-handoff/takeover successor claim. Even that closer case still
+  routes all the way back to full E1, never into E4-E8 or E9-E15
+  directly; a claim takeover is the one scenario this file names that
+  plausibly spans a session boundary, and its answer is "rebuild from
+  E1," not a documented cold entry into a later sub-phase.
 
 **Conclusion**: no real re-entry boundary exists between E1-E3, E4-E8, or
 E9-E15 in the standard profile today. Every "resume"/"return to E1"
