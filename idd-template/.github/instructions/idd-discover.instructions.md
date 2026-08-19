@@ -406,7 +406,7 @@ neither is issue body text, a generated plan, nor operator attention.
 (#2148).** The bare-`MEMBER` rule above governs an approval-comment
 actor or the `idd:ready` label actor, both of which require a
 successful permission read. For the issue-author self-authorization
-signal specifically, when the collaborators-permission API is
+signal specifically, when the collaborator permission API is
 unavailable (503, empty, or otherwise unreadable), the issue's own
 live `author_association` substitutes instead of failing closed:
 `OWNER` always self-authorizes; `MEMBER` self-authorizes under both
