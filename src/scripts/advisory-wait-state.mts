@@ -861,13 +861,12 @@ function fetchGraphqlRequestedReviewerLogins(
       query($owner: String!, $repo: String!, $number: Int!) {
         repository(owner: $owner, name: $repo) {
           pullRequest(number: $number) {
-            reviewRequests(first: 20) {
+            reviewRequests(first: 100) {
               nodes {
                 requestedReviewer {
                   ... on Bot { login }
                   ... on User { login }
                   ... on Mannequin { login }
-                  ... on Team { slug }
                 }
               }
             }
