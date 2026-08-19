@@ -358,7 +358,9 @@ round-trip -- this is the fast path used before every mutation. A different
 existing lock is: this helper never judges staleness locally. Pass
 --takeover only after independently re-verifying live GitHub claim state
 (e.g. via \`resume-claim-routing.mjs --fresh-claim-gate\` reporting
-\`claimable\` or \`stale-reclaimable\`) to override a collision; \`holder\`
+\`claimable\`, \`stale-reclaimable\`, or \`already-claimed\` with a
+\`winning_claim_id\` that matches a \`claim-id\` the caller has already
+independently verified as its own) to override a collision; \`holder\`
 in the JSON output reports the previous occupant on both a plain collision
 and an authorized takeover.
 
