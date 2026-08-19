@@ -1143,15 +1143,32 @@ supports these keys:
 Use this mapping when A4.5 rejects a candidate. The goal is to preserve
 non-ready work as explicit outcomes, not to silently drop it.
 
-| A4.5 outcome       | Recommended labels                                 | Default action                                                                                                                                |
-| ------------------ | -------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
-| `ready`            | none                                               | Continue to A5 claim checks.                                                                                                                  |
-| `unclear`          | `status:needs-decision` (preferred), `question`    | Keep the issue open, post a clarification request, remove it from the current A4.5 candidate set, and continue scanning remaining candidates. |
-| `needs-decision`   | `status:needs-decision` (if available), `question` | Keep the issue open, request maintainer decision, remove it from the current candidate set, and continue scanning.                            |
-| `blocked-by-human` | `status:blocked-by-human` (if available)           | Keep the issue open with a hold comment, remove it from the current candidate set, and continue scanning autonomous candidates.               |
-| `duplicate`        | `duplicate`, optional `triage:duplicate`           | Default is read-only triage (comment/link and continue). Only allow close/extra labels after the repository customizes A4.5 mutation policy.  |
-| `out-of-scope`     | optional `triage:out-of-scope`                     | Default is read-only triage (comment-and-stop for that issue). Close/label mutations require explicit A4.5 mutation-policy customization.     |
-| `invalid`          | optional `triage:invalid`                          | Default is read-only triage and immediate stop for `invalid` outcomes. Close/label mutations require explicit A4.5 mutation-policy updates.   |
+| A4.5 outcome       | Recommended labels                                 | Default action                                                                                                                                                                                                                                                                                                                                         |
+| ------------------ | -------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `ready`            | none                                               | Continue to A5 claim checks.                                                                                                                                                                                                                                                                                                                           |
+| `unclear`          | `status:needs-decision` (preferred), `question`    | Keep the issue open, post a clarification request, remove it from the current A4.5 candidate set, and continue scanning remaining candidates. Applying the recommended label(s) requires the same A4.5 mutation-policy customization as the rows below; the default is the diagnostic comment alone (optionally the transient `triage:unclear` label). |
+| `needs-decision`   | `status:needs-decision` (if available), `question` | Keep the issue open, request maintainer decision, remove it from the current candidate set, and continue scanning. Applying the recommended label(s) requires the same A4.5 mutation-policy customization as the rows below; the default is the diagnostic comment alone (optionally the transient `triage:needs-decision` label).                     |
+| `blocked-by-human` | `status:blocked-by-human` (if available)           | Keep the issue open with a hold comment, remove it from the current candidate set, and continue scanning autonomous candidates. Applying the recommended label requires the same A4.5 mutation-policy customization as the rows below; the default is the diagnostic comment alone (optionally the transient `triage:blocked-by-human` label).         |
+| `duplicate`        | `duplicate`, optional `triage:duplicate`           | Default is read-only triage (comment/link and continue). Only allow close/extra labels after the repository customizes A4.5 mutation policy.                                                                                                                                                                                                           |
+| `out-of-scope`     | optional `triage:out-of-scope`                     | Default is read-only triage (comment-and-stop for that issue). Close/label mutations require explicit A4.5 mutation-policy customization.                                                                                                                                                                                                              |
+| `invalid`          | optional `triage:invalid`                          | Default is read-only triage and immediate stop for `invalid` outcomes. Close/label mutations require explicit A4.5 mutation-policy updates.                                                                                                                                                                                                            |
+
+Every non-`ready` row shares one default: the diagnostic comment plus
+an optional transient `triage:{outcome}` label is the ceiling; any
+other label -- including the ones named in "Recommended labels" above
+-- is an opt-in repository customization of the A4.5 mutation policy,
+never the default (`idd-suitability.instructions.md`'s "Mutation
+Policy and Coordination Rule" section). Turning that customization on
+trades a faster re-scan for a manual-review cost: a wrongly-classified
+rejection then keeps the issue out of the candidate pool on every
+later pass until someone reviews the label by hand, instead of today's
+default of a fresh seven-check re-run each pass. That fresh re-run is
+not a gap left for the customization to fill -- issue #1887 shipped
+`suitability-triage.mjs`'s `existingRejection` field, which already
+surfaces any prior "A4.5 suitability gate rejection" comment from a
+trusted marker actor to every later caller, so a rejected candidate is
+neither silently retried from scratch nor permanently hidden by
+default.
 
 When confidence is low, keep the issue open and route via a concise
 comment. "Uncertain means open" is the safe default, and selection
