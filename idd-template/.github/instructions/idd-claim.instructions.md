@@ -454,6 +454,18 @@ later forced-handoff collision the orchestrator never saw) means the
 worker is no longer the winning activation — treat that the same as any
 other lost claim.
 
+**State the worker role explicitly when the delegate inherits full
+context.** Some delegation mechanisms give the worker the
+orchestrator's own complete conversation context instead of a clean
+slate limited to the brief. There, the worker can carry over the
+orchestrator's own framing — mistaking itself for the session that
+launched several workers and is waiting on their replies — instead of
+recognizing the brief reassigns it to a single-issue worker role. The
+delegation brief must state explicitly that the delegate is the sole
+worker for the named issue, that no peer workers exist for it to
+coordinate with or wait on, and that it must perform the implementation
+work itself rather than re-delegate or wait for a reply (#2179).
+
 ### Hide displaced claim chain on takeover
 
 When the verified new claim was posted with `supersedes: <prior-id>`
