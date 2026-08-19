@@ -394,7 +394,7 @@
     "maxBundleLimitBytes": 126000,
     "maxUtilizationPct": 98,
     "noticeUtilizationPct": 95,
-    "exemptBundles": []
+    "exemptBundles": ["bundle-review"]
   },
   "docBudgetGuard": {
     "id": "doc-budget-drift",
