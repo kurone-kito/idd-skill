@@ -1354,21 +1354,29 @@ GitHub gates under the Issues permission category even when the issue
 number is a pull request.
 
 **Protect the workflow definition with CODEOWNERS.** A
-`pull_request`-triggered workflow resolves its own definition from the
-PR head before any job step can perform the trusted `main` checkout.
-That checkout protects the helper and configuration that the job runs,
-but it cannot protect a workflow definition that was changed before the
-checkout began. Add a CODEOWNERS entry for the workflow itself, for
-example:
+`pull_request`-triggered workflow runs its definition from the pull
+request's synthetic merge commit/ref before any job step can perform the
+trusted `main` checkout. That checkout protects the helper and
+configuration that the job runs, but it cannot protect a workflow
+definition changed in the pull request. This is preventive guidance; no
+observed incident is being claimed here. Add CODEOWNERS entries for the
+workflow and, when using `.github/CODEOWNERS`, for the ownership file
+itself, for example:
 
 ```text
-/.github/workflows/idd-advisory-convergence.yml @your-maintainer-team
+/.github/workflows/idd-advisory-convergence.yml @maintainer-user
+/.github/CODEOWNERS @maintainer-user
 ```
 
-Replace `@your-maintainer-team` with the maintainer or team responsible
-for the repository. The dry-run readiness report's `CODEOWNERS present`
-item above is the quick check that this prerequisite exists; it does not
-replace verifying that the entry covers this workflow path.
+Replace `@maintainer-user` with a maintainer who has write access. For a
+team, use the full `@organization/team-name` form. Then enable **Require
+review from Code Owners** on the protected default branch, or the
+equivalent repository-ruleset requirement; without that setting,
+CODEOWNERS only requests or routes a review and does not make approval a
+merge gate. The [dry-run — Readiness assessment](#dry-run--readiness-assessment)
+report's `CODEOWNERS present` item checks only that a CODEOWNERS file
+exists; it does not verify this workflow-path entry or the required-review
+setting.
 
 **Trusted-code checkout.** The checkout step pins `ref: main` (adjust
 if your default branch differs) rather than the PR's own head, for
