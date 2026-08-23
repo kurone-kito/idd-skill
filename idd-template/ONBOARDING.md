@@ -1394,7 +1394,7 @@ emit the same required-check name. A credentials holder with
 CODEOWNERS covers workflow-file changes only. Either explicitly trust every
 credential that can publish checks, or use a producer-pinned required check
 with a specific integration `app_id` after verifying that IDD can read and
-enforce that topology. A Rulesets `workflows` rule is not a drop-in
+enforce that topology. A ruleset `workflows` rule is not a drop-in
 source-bound alternative here: IDD cannot correlate its unnamed result to a
 check run and will keep CI unresolved, so plan for a human merge or hold
 until the runtime supports it. Then enable **Require review from Code
