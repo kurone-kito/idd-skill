@@ -637,6 +637,30 @@ test('readExistingCommandsTable and restoreExistingCommandsTable never follow a 
   assert.ok(lstatSync(symlinkPath).isSymbolicLink());
 });
 
+test('readExistingCommandsTable and restoreExistingCommandsTable never follow a symlinked ancestor directory either (#2254 review)', () => {
+  const outsideRoot = makeFixtureDir();
+  writeFileSync(
+    join(outsideRoot, 'config.json'),
+    JSON.stringify({ commands: { 'fix-validate': 'leaked-secret-command' } }),
+  );
+
+  const targetRoot = makeFixtureDir();
+  mkdirSync(join(targetRoot, '.github'), { recursive: true });
+  // .github/idd itself is a symlink to an external directory -- a plain
+  // fileExists lstat on the leaf config.json alone would not catch this,
+  // since the leaf lstat follows the symlinked parent to resolve its path.
+  symlinkSync(outsideRoot, join(targetRoot, '.github', 'idd'));
+
+  assert.equal(readExistingCommandsTable(targetRoot), null);
+
+  restoreExistingCommandsTable(targetRoot, { 'fix-validate': 'restored' });
+  assert.equal(
+    readFileSync(join(outsideRoot, 'config.json'), 'utf8'),
+    JSON.stringify({ commands: { 'fix-validate': 'leaked-secret-command' } }),
+  );
+  assert.ok(lstatSync(join(targetRoot, '.github', 'idd')).isSymbolicLink());
+});
+
 // ---------------------------------------------------------------------------
 // Resolution rules
 // ---------------------------------------------------------------------------
