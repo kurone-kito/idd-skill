@@ -1373,9 +1373,10 @@ location that is active. For example, with `.github/CODEOWNERS`:
 
 Replace `@maintainer-user` with an eligible non-author maintainer who has
 write access. For a team, use the full `@organization/team-name` form;
-the team must be visible and have explicit write access. The PR author
-cannot approve their own pull request, so choose a separate eligible
-owner or document the intended reviewer or ruleset-bypass topology. If
+the team must be visible and have explicit write access. An approval from
+the PR author does not count toward required review or Code Owner gates,
+so choose a separate eligible owner or document the intended reviewer or
+ruleset-bypass topology. If
 the required check is registered with `app_id: -1` (any producer), an
 exact single-file rule does not bind the check to that workflow: protect
 `/.github/workflows/` (or `/.github/`) as well, or use a source-bound
