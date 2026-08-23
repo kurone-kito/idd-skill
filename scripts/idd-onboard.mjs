@@ -295,7 +295,10 @@ const WHOLE_PLACEHOLDER_TOKEN_PATTERN = /^\{\{[A-Z][A-Z0-9_]*\}\}$/;
  * Read the target tree's existing `.github/idd/config.json` `commands`
  * table, when present, parseable, and non-empty (#2222). A row still
  * holding an unsubstituted placeholder token — a freshly imported tree
- * before `--substitute` has run, e.g. `{{FIX_VALIDATE_COMMANDS}}` — is
+ * before `--substitute` has run, e.g. the raw doubled-brace
+ * FIX_VALIDATE_COMMANDS token (spelled without braces here per this
+ * module's own comment convention below, so this file's own generated
+ * `.mjs` copy never registers as leftover template residue) — is
  * treated as unset rather than as a real existing value. Returns `null`
  * for a missing file, unparseable JSON, or an absent/non-object/empty
  * `commands` table; every such case means first-time onboarding, so the
@@ -453,8 +456,10 @@ const RESTORABLE_COMMAND_KEYS = new Set([
  * copies `.github/idd/config.json` byte-for-byte from source — including
  * on a re-import over an already-onboarded target, where it clobbers a
  * deliberately customized `commands` table with the source template's raw
- * `{{PLACEHOLDER}}` tokens. Without this restore, `deriveValidateCommands`
- * above has nothing left to prefer by the time `--substitute` runs.
+ * doubled-brace placeholder tokens (spelled without braces in comments
+ * per this module's own convention below). Without this restore,
+ * `deriveValidateCommands` above has nothing left to prefer by the time
+ * `--substitute` runs.
  *
  * Call this **after** `applyImportPlan` has copied the target tree, passing
  * the `commands` snapshot `readExistingCommandsTable` captured from the
