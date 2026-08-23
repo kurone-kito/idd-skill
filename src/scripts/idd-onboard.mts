@@ -343,23 +343,31 @@ export interface ValidateCommandRows {
   postFixValidate: string | null;
 }
 
-// Whole-string match only (no `g` flag): a config row is either exactly an
-// unsubstituted placeholder token or a real value, never a mix worth
-// partially matching.
-const WHOLE_PLACEHOLDER_TOKEN_PATTERN = /^\{\{[A-Z][A-Z0-9_]*\}\}$/;
+// The exact set of doubled-brace tokens this module's own onboarding
+// substitution ever writes/reads (ONBOARDING_PLACEHOLDERS above). An
+// adopter's own commands row can legitimately hold a `{{...}}`-shaped
+// literal value that has nothing to do with this onboarding flow (their
+// own downstream template syntax); only a row matching one of *our* seven
+// known tokens is unresolved onboarding residue worth treating as unset,
+// not any string that merely has the same doubled-brace shape (Copilot
+// review on PR #2254).
+const KNOWN_PLACEHOLDER_TOKENS: ReadonlySet<string> = new Set(
+  ONBOARDING_PLACEHOLDERS.map((entry) => entry.token),
+);
 
 /**
  * Read the target tree's existing `.github/idd/config.json` `commands`
  * table, when present, parseable, and non-empty (#2222). A row still
- * holding an unsubstituted placeholder token — a freshly imported tree
- * before `--substitute` has run, e.g. the raw doubled-brace
- * FIX_VALIDATE_COMMANDS token (spelled without braces here per this
- * module's own comment convention below, so this file's own generated
- * `.mjs` copy never registers as leftover template residue) — is
- * treated as unset rather than as a real existing value. Returns `null`
- * for a missing file, unparseable JSON, or an absent/non-object/empty
- * `commands` table; every such case means first-time onboarding, so the
- * caller falls back to the package.json-derived heuristic unchanged.
+ * holding one of this module's own unsubstituted onboarding placeholder
+ * tokens — a freshly imported tree before `--substitute` has run, e.g.
+ * the raw doubled-brace FIX_VALIDATE_COMMANDS token (spelled without
+ * braces here per this module's own comment convention below, so this
+ * file's own generated `.mjs` copy never registers as leftover template
+ * residue) — is treated as unset rather than as a real existing value.
+ * Returns `null` for a missing file, unparseable JSON, or an
+ * absent/non-object/empty `commands` table; every such case means
+ * first-time onboarding, so the caller falls back to the
+ * package.json-derived heuristic unchanged.
  *
  * Exported so `runImportCli` can snapshot the pre-import table before
  * `--import` overwrites `.github/idd/config.json`, restoring it afterward
@@ -399,7 +407,7 @@ export function readExistingCommandsTable(
     commands as Record<string, unknown>,
   )) {
     const trimmed = typeof value === 'string' ? value.trim() : '';
-    if (trimmed !== '' && !WHOLE_PLACEHOLDER_TOKEN_PATTERN.test(trimmed)) {
+    if (trimmed !== '' && !KNOWN_PLACEHOLDER_TOKENS.has(trimmed)) {
       table[key] = value as string;
     }
   }

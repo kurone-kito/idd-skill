@@ -416,6 +416,26 @@ test('deriveValidateCommands treats an unsubstituted placeholder row as unset, n
   });
 });
 
+test('deriveValidateCommands preserves a row that merely has the same doubled-brace shape as an onboarding token but is not one of ours (#2254 review)', () => {
+  const root = makeFixtureDir();
+  writeFileSync(
+    join(root, 'package.json'),
+    JSON.stringify({ scripts: { 'lint:fix': 'x', lint: 'x', test: 'x' } }),
+  );
+  writeFileSync(join(root, 'pnpm-lock.yaml'), '');
+  // An adopter's own downstream template syntax, unrelated to this
+  // onboarding flow's seven known placeholder tokens -- must survive
+  // as a real existing value, not be discarded as unresolved residue.
+  writeExistingCommandsConfig(root, {
+    'fix-validate': '{{CI_COMMAND}}',
+  });
+  assert.deepEqual(deriveValidateCommands(root), {
+    fixValidate: '{{CI_COMMAND}}',
+    prePushValidate: 'pnpm run lint && pnpm run test',
+    postFixValidate: 'pnpm run lint:fix && pnpm run lint && pnpm run test',
+  });
+});
+
 test('deriveValidateCommands ignores a missing, empty, or unparseable commands table', () => {
   const goRoot = makeFixtureDir();
   writeFileSync(join(goRoot, 'go.mod'), 'module x\n');
