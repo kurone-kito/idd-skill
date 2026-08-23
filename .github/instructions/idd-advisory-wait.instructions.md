@@ -94,6 +94,12 @@ distributed defaults in `docs/policy-constants.md`: `REQUEST_CAP`,
 (default) — E14 skips to E15, F2/F3 hold; `hold` — E14, F2, and F3 all
 hold on `CAP_EXHAUSTED`.
 
+**Diagnostic note**: when every documented recovery route below fails
+identically and repeatedly, an organization-level review-quota outage
+(unrelated to this PR) is a plausible cause worth checking — for
+example via the review provider's own status or admin surface — before
+continuing to retry the same recovery cycle.
+
 ### Caller mapping
 
 <!-- dprint-ignore-start -->
