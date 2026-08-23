@@ -1437,9 +1437,9 @@ accepted integration (preventive; no observed incident yet). For
 rule does not bind the check to that workflow. A credential holder with
 `statuses: write` or `checks: write` can still publish that name
 directly; CODEOWNERS covers workflow-file changes only (preventive; no
-observed incident yet). Either
-explicitly trust every credential that can publish checks, or use a
-producer-pinned required check with a specific integration `app_id`
+observed incident yet). Either explicitly trust every credential that
+can publish checks, or use a producer-pinned required check with a
+specific integration `app_id`
 after verifying that IDD can read and enforce that topology. A ruleset
 `workflows` rule is not a drop-in source-bound alternative here
 (preventive; no observed incident yet): IDD
