@@ -343,14 +343,91 @@ export interface ValidateCommandRows {
   postFixValidate: string | null;
 }
 
+// Whole-string match only (no `g` flag): a config row is either exactly an
+// unsubstituted placeholder token or a real value, never a mix worth
+// partially matching.
+const WHOLE_PLACEHOLDER_TOKEN_PATTERN = /^\{\{[A-Z][A-Z0-9_]*\}\}$/;
+
+/**
+ * Read the target tree's existing `.github/idd/config.json` `commands`
+ * table, when present, parseable, and non-empty (#2222). A row still
+ * holding an unsubstituted placeholder token — a freshly imported tree
+ * before `--substitute` has run, e.g. `{{FIX_VALIDATE_COMMANDS}}` — is
+ * treated as unset rather than as a real existing value. Returns `null`
+ * for a missing file, unparseable JSON, or an absent/non-object/empty
+ * `commands` table; every such case means first-time onboarding, so the
+ * caller falls back to the package.json-derived heuristic unchanged.
+ *
+ * Exported so `runImportCli` can snapshot the pre-import table before
+ * `--import` overwrites `.github/idd/config.json`, restoring it afterward
+ * via `restoreExistingCommandsTable` below.
+ */
+export function readExistingCommandsTable(
+  targetDir: string,
+): Record<string, string> | null {
+  const configText = readTextIfPresent(targetDir, '.github/idd/config.json');
+  if (configText === null) {
+    return null;
+  }
+  let parsed: { commands?: unknown };
+  try {
+    parsed = JSON.parse(configText) as { commands?: unknown };
+  } catch {
+    return null;
+  }
+  const commands = parsed.commands;
+  if (
+    commands === null ||
+    typeof commands !== 'object' ||
+    Array.isArray(commands)
+  ) {
+    return null;
+  }
+  const table: Record<string, string> = {};
+  for (const [key, value] of Object.entries(
+    commands as Record<string, unknown>,
+  )) {
+    const trimmed = typeof value === 'string' ? value.trim() : '';
+    if (trimmed !== '' && !WHOLE_PLACEHOLDER_TOKEN_PATTERN.test(trimmed)) {
+      table[key] = value as string;
+    }
+  }
+  return Object.keys(table).length > 0 ? table : null;
+}
+
 /**
  * Derive the three validate-command rows from the target tree per the
  * reference patterns: Node trees read the existing `package.json` scripts;
  * `go.mod` / `Cargo.toml` trees use the fixed rows; a tree with no
  * recognized tooling at all takes the no-op `true` rows. Anything else
  * stays unresolved so the operator supplies flags.
+ *
+ * A re-import against a tree that already carries a populated `commands`
+ * table in `.github/idd/config.json` (#2222) prefers each existing row
+ * over this re-derivation instead of silently overwriting a deliberately
+ * customized command with a mechanically re-derived one; the caller's own
+ * `--*-commands` flag overrides still take priority over both (applied by
+ * `resolvePlaceholderValues`, not here). Only a row the existing table
+ * leaves unset falls through to the heuristic below, and a first-time
+ * onboarding (no existing table) leaves every row on the heuristic exactly
+ * as before.
  */
 export function deriveValidateCommands(targetDir: string): ValidateCommandRows {
+  const heuristic = deriveValidateCommandsFromTooling(targetDir);
+  const existing = readExistingCommandsTable(targetDir);
+  if (existing === null) {
+    return heuristic;
+  }
+  return {
+    fixValidate: existing['fix-validate'] ?? heuristic.fixValidate,
+    prePushValidate: existing['pre-push-validate'] ?? heuristic.prePushValidate,
+    postFixValidate: existing['post-fix-validate'] ?? heuristic.postFixValidate,
+  };
+}
+
+function deriveValidateCommandsFromTooling(
+  targetDir: string,
+): ValidateCommandRows {
   const packageJsonText = readTextIfPresent(targetDir, 'package.json');
   if (packageJsonText !== null) {
     let scripts: Record<string, unknown> = {};
@@ -422,6 +499,73 @@ export function deriveValidateCommands(targetDir: string): ValidateCommandRows {
     };
   }
   return { fixValidate: null, prePushValidate: null, postFixValidate: null };
+}
+
+/** Escape a literal string for embedding in a `RegExp` source. */
+function escapeRegExpLiteral(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&');
+}
+
+// Scope matches deriveValidateCommands above exactly (#2222's three
+// validate-command rows). install-deps is deliberately excluded: the issue
+// scopes only fix-validate/pre-push-validate/post-fix-validate, and
+// INSTALL_DEPS_COMMAND already has its own independent re-derivation
+// (deriveInstallDepsCommand) that this restore step must not shadow.
+const RESTORABLE_COMMAND_KEYS: ReadonlySet<string> = new Set([
+  'fix-validate',
+  'pre-push-validate',
+  'post-fix-validate',
+]);
+
+/**
+ * Restore a target's pre-import validate-command row values into its
+ * freshly-copied `.github/idd/config.json` (#2222). `--import` always
+ * copies `.github/idd/config.json` byte-for-byte from source — including
+ * on a re-import over an already-onboarded target, where it clobbers a
+ * deliberately customized `commands` table with the source template's raw
+ * `{{PLACEHOLDER}}` tokens. Without this restore, `deriveValidateCommands`
+ * above has nothing left to prefer by the time `--substitute` runs.
+ *
+ * Call this **after** `applyImportPlan` has copied the target tree, passing
+ * the `commands` snapshot `readExistingCommandsTable` captured from the
+ * **pre-import** target. Only restores the three rows in
+ * `RESTORABLE_COMMAND_KEYS`, and only a row that is still the raw
+ * placeholder token right after the copy — a source-provided literal value
+ * (no `{{...}}` template site for that key) is left untouched, since there
+ * is nothing to substitute later and overwriting it would silently discard
+ * an intentional source-side change instead. No-op when the snapshot is
+ * null/empty, the target has no `.github/idd/config.json`, or a given
+ * snapshot row has no matching placeholder-token site left to restore into.
+ */
+export function restoreExistingCommandsTable(
+  targetDir: string,
+  existingCommands: Record<string, string> | null,
+): void {
+  if (existingCommands === null || Object.keys(existingCommands).length === 0) {
+    return;
+  }
+  const configRelativePath = '.github/idd/config.json';
+  const text = readTextIfPresent(targetDir, configRelativePath);
+  if (text === null) {
+    return;
+  }
+  let updated = text;
+  for (const [key, value] of Object.entries(existingCommands)) {
+    if (!RESTORABLE_COMMAND_KEYS.has(key)) {
+      continue;
+    }
+    const rowPattern = new RegExp(
+      `("${escapeRegExpLiteral(key)}"\\s*:\\s*)"\\{\\{[A-Z][A-Z0-9_]*\\}\\}"`,
+    );
+    updated = updated.replace(
+      rowPattern,
+      (_match, prefix: string) =>
+        `${prefix}"${escapeJsonStringContent(value)}"`,
+    );
+  }
+  if (updated !== text) {
+    writeFileSync(join(targetDir, ...configRelativePath.split('/')), updated);
+  }
 }
 
 /** How a placeholder value was established. */
@@ -1521,6 +1665,11 @@ function runImportCli(args: ParsedArgs): void {
   if (!statSync(targetDir).isDirectory()) {
     throw new Error(`--target is not a directory: ${args.target}`);
   }
+  // Snapshot before the copy: --import always overwrites
+  // .github/idd/config.json byte-for-byte from source (#2222), so a
+  // re-import's already-customized commands table must be captured now,
+  // before applyImportPlan below replaces it with the raw template.
+  const existingCommandsSnapshot = readExistingCommandsTable(targetDir);
   const plan = buildImportPlan(sourceDir, targetDir, {
     profile: args.profile,
     force: args.force,
@@ -1537,6 +1686,9 @@ function runImportCli(args: ParsedArgs): void {
   const filesChanged = canWrite
     ? applyImportPlan(sourceDir, targetDir, plan)
     : 0;
+  if (canWrite && filesChanged > 0) {
+    restoreExistingCommandsTable(targetDir, existingCommandsSnapshot);
+  }
   const verdict = {
     protocolVersion: '1',
     mode: args.dryRun ? 'dry-run' : 'apply',

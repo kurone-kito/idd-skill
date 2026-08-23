@@ -42,9 +42,11 @@ import {
   MARKER_PREFIX_PATTERN,
   ONBOARDING_PLACEHOLDERS,
   parseRemoteRepoRef,
+  readExistingCommandsTable,
   resolveCoreTemplateFiles,
   resolveImportFiles,
   resolvePlaceholderValues,
+  restoreExistingCommandsTable,
   runVerify,
   SCAN_EXCLUDED_PATHS,
   scanPlaceholderTokens,
@@ -342,6 +344,232 @@ test('deriveValidateCommands uses fixed rows for go and the no-op for bare trees
     prePushValidate: null,
     postFixValidate: null,
   });
+});
+
+function writeExistingCommandsConfig(
+  root: string,
+  commands: Record<string, string>,
+): void {
+  mkdirSync(join(root, '.github', 'idd'), { recursive: true });
+  writeFileSync(
+    join(root, '.github', 'idd', 'config.json'),
+    JSON.stringify({ commands }),
+  );
+}
+
+test('deriveValidateCommands prefers an existing populated commands table on re-import (#2222)', () => {
+  const root = makeFixtureDir();
+  writeFileSync(
+    join(root, 'package.json'),
+    JSON.stringify({ scripts: { 'lint:fix': 'x', lint: 'x', test: 'x' } }),
+  );
+  writeFileSync(join(root, 'pnpm-lock.yaml'), '');
+  writeExistingCommandsConfig(root, {
+    'fix-validate': 'npx biome check --write',
+    'pre-push-validate': 'npx biome check',
+    'post-fix-validate': 'npx biome check --write',
+  });
+  // The heuristic would derive pnpm lint:fix/lint/test rows; the existing
+  // deliberately customized table wins for every row it sets.
+  assert.deepEqual(deriveValidateCommands(root), {
+    fixValidate: 'npx biome check --write',
+    prePushValidate: 'npx biome check',
+    postFixValidate: 'npx biome check --write',
+  });
+});
+
+test('deriveValidateCommands falls back to the heuristic only for rows the existing table leaves unset', () => {
+  const root = makeFixtureDir();
+  writeFileSync(
+    join(root, 'package.json'),
+    JSON.stringify({ scripts: { 'lint:fix': 'x', lint: 'x', test: 'x' } }),
+  );
+  writeFileSync(join(root, 'pnpm-lock.yaml'), '');
+  writeExistingCommandsConfig(root, {
+    'fix-validate': 'npx biome check --write',
+  });
+  assert.deepEqual(deriveValidateCommands(root), {
+    fixValidate: 'npx biome check --write',
+    prePushValidate: 'pnpm run lint && pnpm run test',
+    postFixValidate: 'pnpm run lint:fix && pnpm run lint && pnpm run test',
+  });
+});
+
+test('deriveValidateCommands treats an unsubstituted placeholder row as unset, not as an existing value', () => {
+  const root = makeFixtureDir();
+  writeFileSync(
+    join(root, 'package.json'),
+    JSON.stringify({ scripts: { 'lint:fix': 'x', lint: 'x', test: 'x' } }),
+  );
+  writeFileSync(join(root, 'pnpm-lock.yaml'), '');
+  // A freshly imported tree before --substitute has run still carries the
+  // raw template tokens — those must not be read back as real commands.
+  writeExistingCommandsConfig(root, {
+    'fix-validate': '{{FIX_VALIDATE_COMMANDS}}',
+    'pre-push-validate': '{{PRE_PUSH_VALIDATE_COMMANDS}}',
+    'post-fix-validate': '{{POST_FIX_VALIDATE_COMMANDS}}',
+  });
+  assert.deepEqual(deriveValidateCommands(root), {
+    fixValidate: 'pnpm run lint:fix && pnpm run lint',
+    prePushValidate: 'pnpm run lint && pnpm run test',
+    postFixValidate: 'pnpm run lint:fix && pnpm run lint && pnpm run test',
+  });
+});
+
+test('deriveValidateCommands ignores a missing, empty, or unparseable commands table', () => {
+  const goRoot = makeFixtureDir();
+  writeFileSync(join(goRoot, 'go.mod'), 'module x\n');
+  writeExistingCommandsConfig(goRoot, {});
+  assert.deepEqual(deriveValidateCommands(goRoot), {
+    fixValidate: 'go fmt ./...',
+    prePushValidate: 'go vet ./... && go test ./...',
+    postFixValidate: 'go fmt ./... && go vet ./... && go test ./...',
+  });
+
+  const malformedRoot = makeFixtureDir();
+  writeFileSync(join(malformedRoot, 'go.mod'), 'module x\n');
+  mkdirSync(join(malformedRoot, '.github', 'idd'), { recursive: true });
+  writeFileSync(
+    join(malformedRoot, '.github', 'idd', 'config.json'),
+    '{ not valid json',
+  );
+  assert.deepEqual(deriveValidateCommands(malformedRoot), {
+    fixValidate: 'go fmt ./...',
+    prePushValidate: 'go vet ./... && go test ./...',
+    postFixValidate: 'go fmt ./... && go vet ./... && go test ./...',
+  });
+});
+
+test('a first-time onboarding (no existing commands table) still derives from package.json exactly as before', () => {
+  const root = makeFixtureDir();
+  writeFileSync(
+    join(root, 'package.json'),
+    JSON.stringify({ scripts: { 'lint:fix': 'x', lint: 'x', test: 'x' } }),
+  );
+  writeFileSync(join(root, 'pnpm-lock.yaml'), '');
+  assert.deepEqual(deriveValidateCommands(root), {
+    fixValidate: 'pnpm run lint:fix && pnpm run lint',
+    prePushValidate: 'pnpm run lint && pnpm run test',
+    postFixValidate: 'pnpm run lint:fix && pnpm run lint && pnpm run test',
+  });
+});
+
+test('resolvePlaceholderValues re-import: existing config commands win, an explicit flag still overrides them', () => {
+  const root = makeFixtureDir();
+  writeFileSync(
+    join(root, 'package.json'),
+    JSON.stringify({ scripts: { 'lint:fix': 'x', lint: 'x', test: 'x' } }),
+  );
+  writeFileSync(join(root, 'pnpm-lock.yaml'), '');
+  writeExistingCommandsConfig(root, {
+    'fix-validate': 'npx biome check --write',
+    'pre-push-validate': 'npx biome check',
+    'post-fix-validate': 'npx biome check --write',
+  });
+  const resolution = resolvePlaceholderValues(
+    root,
+    { PRE_PUSH_VALIDATE_COMMANDS: 'npm run ci' },
+    { readRemoteUrl: () => null },
+  );
+  assert.deepEqual(resolution.values.FIX_VALIDATE_COMMANDS, {
+    value: 'npx biome check --write',
+    source: 'derived',
+  });
+  assert.deepEqual(resolution.values.PRE_PUSH_VALIDATE_COMMANDS, {
+    value: 'npm run ci',
+    source: 'flag',
+  });
+  assert.deepEqual(resolution.values.POST_FIX_VALIDATE_COMMANDS, {
+    value: 'npx biome check --write',
+    source: 'derived',
+  });
+});
+
+test('readExistingCommandsTable is a generic commands-table reader (not scoped to the three validate rows)', () => {
+  const root = makeFixtureDir();
+  writeExistingCommandsConfig(root, {
+    'install-deps': 'npm install',
+    'fix-validate': 'npx biome check --write',
+  });
+  // deriveValidateCommands only reads the three keys it needs from this;
+  // the #2222 restore-scope boundary is enforced in
+  // restoreExistingCommandsTable below, not here.
+  assert.deepEqual(readExistingCommandsTable(root), {
+    'install-deps': 'npm install',
+    'fix-validate': 'npx biome check --write',
+  });
+});
+
+test('restoreExistingCommandsTable never restores install-deps, even when the snapshot includes it (#2222 scope)', () => {
+  const root = makeFixtureDir();
+  mkdirSync(join(root, '.github', 'idd'), { recursive: true });
+  writeFileSync(
+    join(root, '.github', 'idd', 'config.json'),
+    JSON.stringify({
+      commands: {
+        'install-deps': '{{INSTALL_DEPS_COMMAND}}',
+        'fix-validate': '{{FIX_VALIDATE_COMMANDS}}',
+      },
+    }),
+  );
+  restoreExistingCommandsTable(root, {
+    'install-deps': 'npm install',
+    'fix-validate': 'npx biome check --write',
+  });
+  const restored = JSON.parse(
+    readFileSync(join(root, '.github', 'idd', 'config.json'), 'utf8'),
+  ) as { commands: Record<string, string> };
+  assert.equal(restored.commands['fix-validate'], 'npx biome check --write');
+  // install-deps is out of #2222's scope: the placeholder token is left
+  // exactly as --import wrote it, for the normal --substitute flow to
+  // resolve independently via deriveInstallDepsCommand.
+  assert.equal(restored.commands['install-deps'], '{{INSTALL_DEPS_COMMAND}}');
+});
+
+test('restoreExistingCommandsTable only rewrites a row still holding the raw placeholder token', () => {
+  const root = makeFixtureDir();
+  mkdirSync(join(root, '.github', 'idd'), { recursive: true });
+  writeFileSync(
+    join(root, '.github', 'idd', 'config.json'),
+    JSON.stringify({
+      commands: {
+        // Source already provided a real value for this key (no
+        // placeholder site) — restoring must not clobber it.
+        'fix-validate': 'go fmt ./...',
+        'pre-push-validate': '{{PRE_PUSH_VALIDATE_COMMANDS}}',
+      },
+    }),
+  );
+  restoreExistingCommandsTable(root, {
+    'fix-validate': 'npx biome check --write',
+    'pre-push-validate': 'npx biome check',
+  });
+  const result = JSON.parse(
+    readFileSync(join(root, '.github', 'idd', 'config.json'), 'utf8'),
+  ) as { commands: Record<string, string> };
+  assert.equal(result.commands['fix-validate'], 'go fmt ./...');
+  assert.equal(result.commands['pre-push-validate'], 'npx biome check');
+});
+
+test('restoreExistingCommandsTable is a no-op for a null/empty snapshot or a missing config.json', () => {
+  const root = makeFixtureDir();
+  mkdirSync(join(root, '.github', 'idd'), { recursive: true });
+  const configPath = join(root, '.github', 'idd', 'config.json');
+  writeFileSync(
+    configPath,
+    JSON.stringify({
+      commands: { 'fix-validate': '{{FIX_VALIDATE_COMMANDS}}' },
+    }),
+  );
+  const before = readFileSync(configPath, 'utf8');
+  restoreExistingCommandsTable(root, null);
+  restoreExistingCommandsTable(root, {});
+  assert.equal(readFileSync(configPath, 'utf8'), before);
+
+  const noConfigRoot = makeFixtureDir();
+  // Must not throw when .github/idd/config.json does not exist at all.
+  restoreExistingCommandsTable(noConfigRoot, { 'fix-validate': 'x' });
+  assert.equal(existsSync(join(noConfigRoot, '.github', 'idd')), false);
 });
 
 // ---------------------------------------------------------------------------
@@ -1493,6 +1721,102 @@ test('bin/idd-onboard.mjs --import --force overwrites a differing existing targe
       join(REPO_ROOT, 'idd-template', '.github', 'idd', 'config.json'),
       'utf8',
     ),
+  );
+});
+
+test('bin/idd-onboard.mjs --import --force preserves a customized commands table across a real re-import (#2222)', () => {
+  // Reproduces the actual re-import workflow end to end: fresh import,
+  // substitute with customized validate commands, then re-import with
+  // --force (the only way a real re-import can proceed once any template
+  // file differs) must not silently discard those customized rows even
+  // though --import always copies .github/idd/config.json byte-for-byte
+  // from source.
+  const targetRoot = makeFixtureDir();
+  execFileSync(process.execPath, [
+    BIN_PATH,
+    '--import',
+    '--source',
+    REPO_ROOT,
+    '--target',
+    targetRoot,
+  ]);
+  execFileSync(process.execPath, [
+    BIN_PATH,
+    '--substitute',
+    '--target',
+    targetRoot,
+    '--repo-name',
+    'my-app',
+    '--marker-prefix',
+    'my-app',
+    '--trusted-marker-actor',
+    'trusted-user-a',
+    '--fix-validate-commands',
+    'npx biome check --write (customized)',
+    '--pre-push-validate-commands',
+    'npx biome check (customized)',
+    '--post-fix-validate-commands',
+    'npx biome check --write (customized)',
+    '--install-deps-command',
+    'npm install',
+  ]);
+
+  const { status, verdict } = runCliBin([
+    '--import',
+    '--force',
+    '--source',
+    REPO_ROOT,
+    '--target',
+    targetRoot,
+  ]);
+  assert.equal(status, 0);
+  assert.equal(verdict.written, true);
+
+  const config = JSON.parse(
+    readFileSync(join(targetRoot, '.github', 'idd', 'config.json'), 'utf8'),
+  ) as { commands: Record<string, string> };
+  // The three validate-command rows survive the re-import unchanged...
+  assert.equal(
+    config.commands['fix-validate'],
+    'npx biome check --write (customized)',
+  );
+  assert.equal(
+    config.commands['pre-push-validate'],
+    'npx biome check (customized)',
+  );
+  assert.equal(
+    config.commands['post-fix-validate'],
+    'npx biome check --write (customized)',
+  );
+  // ...while install-deps (out of #2222's scope) reverts to the raw
+  // template placeholder token exactly like every other re-imported file,
+  // ready for the next --substitute to re-resolve it normally.
+  assert.equal(config.commands['install-deps'], '{{INSTALL_DEPS_COMMAND}}');
+
+  // A follow-up --substitute converges cleanly: install-deps takes its new
+  // override, and the three preserved rows need no override at all.
+  const followUp = runCliBin([
+    '--substitute',
+    '--target',
+    targetRoot,
+    '--repo-name',
+    'my-app',
+    '--marker-prefix',
+    'my-app',
+    '--trusted-marker-actor',
+    'trusted-user-a',
+    '--install-deps-command',
+    'npm ci',
+  ]);
+  assert.equal(followUp.status, 0);
+  assert.deepEqual(followUp.verdict.residue, []);
+  const finalConfig = JSON.parse(
+    readFileSync(join(targetRoot, '.github', 'idd', 'config.json'), 'utf8'),
+  ) as { commands: Record<string, string> };
+  assert.equal(finalConfig.commands['install-deps'], 'npm ci');
+  assert.equal(
+    finalConfig.commands['fix-validate'],
+    'npx biome check --write (customized)',
   );
 });
 
