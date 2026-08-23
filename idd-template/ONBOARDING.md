@@ -1373,10 +1373,22 @@ location that is active. For example, with `.github/CODEOWNERS`:
 
 Replace `@maintainer-user` with an eligible non-author maintainer who has
 write access. For a team, use the full `@organization/team-name` form;
-the team must be visible and have explicit write access. An approval from
-the PR author does not count toward required review or Code Owner gates,
-so choose a separate eligible owner or document the intended reviewer or
-ruleset-bypass topology.
+the team must be visible and have explicit write access. The autonomous
+pre-merge helper currently resolves direct user owners, not team
+membership, so a team-only owner can leave Code Owner approval ambiguous;
+use a direct user owner for autonomous merging or plan for a human merge
+until team-membership resolution is supported (preventive; no observed
+incident yet). An approval from the PR author does not count toward
+required review or Code Owner gates, so choose a separate eligible owner
+or document the intended reviewer or ruleset-bypass topology.
+
+CODEOWNERS can nominate owners for other changed paths as well; an
+approval from one of those owners can satisfy a repository-wide Code Owner
+review without proving that the owner resolved for the protected workflow
+or input paths approved. Keep every owner reachable through those changed
+paths within the same trust boundary, or require a gate that verifies
+approval from the owner resolved for the protected paths (preventive; no
+observed incident yet).
 
 Place these protection entries after broader or overlapping patterns. When
 extending the file, move them after any new rule that also matches these
@@ -1384,7 +1396,8 @@ paths; CODEOWNERS uses the last matching rule. If the active file is
 `/CODEOWNERS` or
 `/docs/CODEOWNERS`, also add ownership entries for every higher-priority
 supported location that could replace it (`/.github/CODEOWNERS`, and for
-`/docs/CODEOWNERS`, `/CODEOWNERS` as well).
+`/docs/CODEOWNERS`, `/CODEOWNERS` as well) (preventive; no observed
+incident yet).
 
 For every candidate location that an adopter may activate, put its
 self-ownership entry in that candidate file before introducing it:
@@ -1393,7 +1406,8 @@ self-ownership entry in that candidate file before introducing it:
 `/docs/CODEOWNERS @maintainer-user` in the docs file, where each file is
 used. A higher-priority file becomes active as soon as it exists, so
 perform this preparation in the trusted preliminary change as well.
-Keep each self-ownership entry after overlapping rules in its own file.
+Keep each self-ownership entry after overlapping rules in its own file
+(preventive; no observed incident yet).
 
 Establish the active CODEOWNERS file and the **Require review from Code
 Owners** setting in a trusted preliminary change before introducing this
@@ -1401,7 +1415,7 @@ workflow or registering its required check. If bootstrapping both in one
 PR is unavoidable, require equivalent explicit maintainer validation;
 GitHub evaluates CODEOWNERS from the base branch when it requests
 reviews, so a new CODEOWNERS file in the same PR cannot protect that
-bootstrap change.
+bootstrap change (preventive; no observed incident yet).
 
 Also protect every trusted input that the workflow checks out from
 `main`, not only the workflow file — for example `/.github/idd/`,
@@ -1410,7 +1424,7 @@ Also protect every trusted input that the workflow checks out from
 adopter's imports; inspect the workflow and helper before finalizing
 the entries. The current PR run cannot be weakened by PR copies of
 these paths because it checks out `main`, but later runs would trust
-them after merge.
+them after merge (preventive; no observed incident yet).
 
 Protect `/.github/workflows/` (or `/.github/`) regardless of whether
 the required check uses `app_id: -1` or a producer-pinned Actions
@@ -1418,10 +1432,12 @@ integration, unless that integration is dedicated exclusively to this
 check. An `app_id` identifies an integration, not an individual
 workflow, so broad workflow ownership remains necessary to prevent
 another workflow from emitting the same required-check name under the
-accepted integration. For `app_id: -1` (any producer), a single-file
+accepted integration (preventive; no observed incident yet). For
+`app_id: -1` (any producer), a single-file
 rule does not bind the check to that workflow. A credential holder with
 `statuses: write` or `checks: write` can still publish that name
-directly; CODEOWNERS covers workflow-file changes only. Either
+directly; CODEOWNERS covers workflow-file changes only (preventive; no
+observed incident yet). Either
 explicitly trust every credential that can publish checks, or use a
 producer-pinned required check with a specific integration `app_id`
 after verifying that IDD can read and enforce that topology. A ruleset
