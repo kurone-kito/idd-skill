@@ -90,9 +90,9 @@ distributed defaults in `docs/policy-constants.md`: `REQUEST_CAP`,
 hold on `CAP_EXHAUSTED`.
 
 **Diagnostic note**: when every documented recovery route below fails
-identically and repeatedly, an organization-level review-quota outage
-(unrelated to this PR) is a plausible cause worth checking — for
-example via the review provider's own status or admin surface — before
+identically and repeatedly, an organization-level Copilot review-quota
+outage (unrelated to this PR) is a plausible cause worth checking — for
+example via Copilot/GitHub status or an org admin surface — before
 continuing to retry the same recovery cycle.
 
 ### Caller mapping
