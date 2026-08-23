@@ -1359,24 +1359,37 @@ request's synthetic merge commit/ref before any job step can perform the
 trusted `main` checkout. That checkout protects the helper and
 configuration that the job runs, but it cannot protect a workflow
 definition changed in the pull request. This is preventive guidance; no
-observed incident is being claimed here. Add CODEOWNERS entries for the
-workflow and, when using `.github/CODEOWNERS`, for the ownership file
-itself, for example:
+observed incident is being claimed here.
+
+Add CODEOWNERS coverage for the workflow and for the active CODEOWNERS
+file itself. GitHub searches for `CODEOWNERS` in `.github/`, the
+repository root, then `docs/`, so add the self-ownership entry at the
+location that is active. For example, with `.github/CODEOWNERS`:
 
 ```text
 /.github/workflows/idd-advisory-convergence.yml @maintainer-user
 /.github/CODEOWNERS @maintainer-user
 ```
 
-Replace `@maintainer-user` with a maintainer who has write access. For a
-team, use the full `@organization/team-name` form. Then enable **Require
-review from Code Owners** on the protected default branch, or the
-equivalent repository-ruleset requirement; without that setting,
-CODEOWNERS only requests or routes a review and does not make approval a
-merge gate. The [dry-run — Readiness assessment](#dry-run--readiness-assessment)
+Replace `@maintainer-user` with an eligible non-author maintainer who has
+write access. For a team, use the full `@organization/team-name` form;
+the team must be visible and have explicit write access. The PR author
+cannot approve their own pull request, so choose a separate eligible
+owner or document the intended reviewer or ruleset-bypass topology. If
+the required check is registered with `app_id: -1` (any producer), an
+exact single-file rule does not bind the check to that workflow: protect
+`/.github/workflows/` (or `/.github/`) as well, or use a source-bound
+required-workflow/ruleset rule, so another workflow cannot emit the same
+required-check name. Then enable **Require review from Code Owners** on
+the protected default branch, or the equivalent repository-ruleset
+requirement, and enable **Dismiss stale pull request approvals when new
+commits are pushed** (or its equivalent) so approval applies to the
+workflow revision that will merge. Without those settings, CODEOWNERS
+only requests or routes a review and does not make approval a merge gate.
+The [dry-run — Readiness assessment](#dry-run--readiness-assessment)
 report's `CODEOWNERS present` item checks only that a CODEOWNERS file
-exists; it does not verify this workflow-path entry or the required-review
-setting.
+exists; it does not verify workflow-path coverage, producer binding, or
+these required-review settings.
 
 **Trusted-code checkout.** The checkout step pins `ref: main` (adjust
 if your default branch differs) rather than the PR's own head, for
@@ -1504,11 +1517,11 @@ silently drops them, weakening the merge gate to only the newly added
 check.
 
 `app_id: -1` also trades away GitHub's producer-identity enforcement
-for the check it names (preventive; no observed incident yet) — a
-reasonable trade for `idd-advisory-convergence`, since only the
-adopter's own hosted workflow ever produces a check with that exact
-name, but not a blanket recommendation for every required check. Keep
-a specific `app_id` pin
+for the check it names (preventive; no observed incident yet). Use it
+only when the adopter separately protects all workflow paths that could
+produce that literal check name, or uses a source-bound ruleset; it is
+not a blanket recommendation for every required check. Keep a specific
+`app_id` pin
 on any check where verifying the producer matters, and opt in to
 `ciGate.trustSourcePinnedRequiredChecks: true` (see the row in
 [Customizing IDD](docs/customization.md)) instead, once the operator
