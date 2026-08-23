@@ -1386,24 +1386,45 @@ paths; CODEOWNERS uses the last matching rule. If the active file is
 supported location that could replace it (`/.github/CODEOWNERS`, and for
 `/docs/CODEOWNERS`, `/CODEOWNERS` as well).
 
-If the required check is registered with `app_id: -1` (any producer), a
-single-file rule does not bind the check to that workflow. Protect
-`/.github/workflows/` (or `/.github/`) as well, so another workflow cannot
-emit the same required-check name. A credentials holder with
-`statuses: write` or `checks: write` can still publish that name directly;
-CODEOWNERS covers workflow-file changes only. Either explicitly trust every
-credential that can publish checks, or use a producer-pinned required check
-with a specific integration `app_id` after verifying that IDD can read and
-enforce that topology. A ruleset `workflows` rule is not a drop-in
-source-bound alternative here: IDD cannot correlate its unnamed result to a
-check run and will keep CI unresolved, so plan for a human merge or hold
-until the runtime supports it. Then enable **Require review from Code
-Owners** on the protected default branch, or the equivalent
-repository-ruleset requirement, and enable **Dismiss stale pull request
-approvals when new commits are pushed** (or its equivalent) so approval
-applies to the workflow revision that will merge. Without those settings,
-CODEOWNERS only requests or routes a review and does not make approval a
-merge gate.
+Establish the active CODEOWNERS file and the **Require review from Code
+Owners** setting in a trusted preliminary change before introducing this
+workflow or registering its required check. If bootstrapping both in one
+PR is unavoidable, require equivalent explicit maintainer validation;
+GitHub evaluates CODEOWNERS from the base branch when it requests
+reviews, so a new CODEOWNERS file in the same PR cannot protect that
+bootstrap change.
+
+Also protect every trusted input that the workflow checks out from
+`main`, not only the workflow file — for example `/.github/idd/`,
+`/scripts/advisory-convergence.mjs`, and its transitive runtime inputs
+(or an immutable protected artifact). The exact set depends on the
+adopter's imports; inspect the workflow and helper before finalizing
+the entries. The current PR run cannot be weakened by PR copies of
+these paths because it checks out `main`, but later runs would trust
+them after merge.
+
+Protect `/.github/workflows/` (or `/.github/`) regardless of whether
+the required check uses `app_id: -1` or a producer-pinned Actions
+integration, unless that integration is dedicated exclusively to this
+check. An `app_id` identifies an integration, not an individual
+workflow, so broad workflow ownership remains necessary to prevent
+another workflow from emitting the same required-check name under the
+accepted integration. For `app_id: -1` (any producer), a single-file
+rule does not bind the check to that workflow. A credential holder with
+`statuses: write` or `checks: write` can still publish that name
+directly; CODEOWNERS covers workflow-file changes only. Either
+explicitly trust every credential that can publish checks, or use a
+producer-pinned required check with a specific integration `app_id`
+after verifying that IDD can read and enforce that topology. A ruleset
+`workflows` rule is not a drop-in source-bound alternative here: IDD
+cannot correlate its unnamed result to a check run and will keep CI
+unresolved, so plan for a human merge or hold until the runtime supports
+it. Then enable **Require review from Code Owners** on the protected
+default branch, or the equivalent repository-ruleset requirement, and
+enable **Dismiss stale pull request approvals when new commits are
+pushed** (or its equivalent) so approval applies to the workflow
+revision that will merge. Without those settings, CODEOWNERS only
+requests or routes a review and does not make approval a merge gate.
 The [dry-run — Readiness assessment](#dry-run--readiness-assessment)
 report's `CODEOWNERS present` item checks only that a CODEOWNERS file
 exists; it does not verify workflow-path coverage, producer binding, or
@@ -1540,6 +1561,9 @@ allows any credential with `statuses: write` or `checks: write` to publish
 that literal name. Use it only when the adopter explicitly accepts that
 trust scope and separately protects all workflow paths that could produce
 the name; it is not a blanket recommendation for every required check.
+A producer pin does not identify an individual workflow; keep broad
+workflow ownership unless the integration is dedicated exclusively to
+this check.
 Keep a specific `app_id` pin
 on any check where verifying the producer matters, and opt in to
 `ciGate.trustSourcePinnedRequiredChecks: true` (see the row in
