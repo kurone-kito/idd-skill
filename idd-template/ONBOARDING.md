@@ -1386,6 +1386,15 @@ paths; CODEOWNERS uses the last matching rule. If the active file is
 supported location that could replace it (`/.github/CODEOWNERS`, and for
 `/docs/CODEOWNERS`, `/CODEOWNERS` as well).
 
+For every candidate location that an adopter may activate, put its
+self-ownership entry in that candidate file before introducing it:
+`/.github/CODEOWNERS @maintainer-user` in `.github/CODEOWNERS`,
+`/CODEOWNERS @maintainer-user` in the repository-root file, and
+`/docs/CODEOWNERS @maintainer-user` in the docs file, where each file is
+used. A higher-priority file becomes active as soon as it exists, so
+perform this preparation in the trusted preliminary change as well.
+Keep each self-ownership entry after overlapping rules in its own file.
+
 Establish the active CODEOWNERS file and the **Require review from Code
 Owners** setting in a trusted preliminary change before introducing this
 workflow or registering its required check. If bootstrapping both in one
@@ -1416,7 +1425,8 @@ directly; CODEOWNERS covers workflow-file changes only. Either
 explicitly trust every credential that can publish checks, or use a
 producer-pinned required check with a specific integration `app_id`
 after verifying that IDD can read and enforce that topology. A ruleset
-`workflows` rule is not a drop-in source-bound alternative here: IDD
+`workflows` rule is not a drop-in source-bound alternative here
+(preventive; no observed incident yet): IDD
 cannot correlate its unnamed result to a check run and will keep CI
 unresolved, so plan for a human merge or hold until the runtime supports
 it. Then enable **Require review from Code Owners** on the protected
