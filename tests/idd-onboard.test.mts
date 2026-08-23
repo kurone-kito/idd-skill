@@ -610,6 +610,33 @@ test('restoreExistingCommandsTable is a no-op for a null/empty snapshot or a mis
   assert.equal(existsSync(join(noConfigRoot, '.github', 'idd')), false);
 });
 
+test('readExistingCommandsTable and restoreExistingCommandsTable never follow a symlinked config.json out of the target (#2254 review)', () => {
+  const outsideRoot = makeFixtureDir();
+  const outsideConfigPath = join(outsideRoot, 'secret-config.json');
+  writeFileSync(
+    outsideConfigPath,
+    JSON.stringify({ commands: { 'fix-validate': 'leaked-secret-command' } }),
+  );
+
+  const targetRoot = makeFixtureDir();
+  mkdirSync(join(targetRoot, '.github', 'idd'), { recursive: true });
+  const symlinkPath = join(targetRoot, '.github', 'idd', 'config.json');
+  symlinkSync(outsideConfigPath, symlinkPath);
+
+  // A symlinked config.json is treated as absent, never followed to read
+  // content from outside the target tree.
+  assert.equal(readExistingCommandsTable(targetRoot), null);
+
+  // Nor written through: restoring must not touch the outside file, and
+  // must leave the symlink itself untouched too.
+  restoreExistingCommandsTable(targetRoot, { 'fix-validate': 'restored' });
+  assert.equal(
+    readFileSync(outsideConfigPath, 'utf8'),
+    JSON.stringify({ commands: { 'fix-validate': 'leaked-secret-command' } }),
+  );
+  assert.ok(lstatSync(symlinkPath).isSymbolicLink());
+});
+
 // ---------------------------------------------------------------------------
 // Resolution rules
 // ---------------------------------------------------------------------------

@@ -317,6 +317,14 @@ const KNOWN_PLACEHOLDER_TOKENS = new Set(
  * via `restoreExistingCommandsTable` below.
  */
 export function readExistingCommandsTable(targetDir) {
+  // fileExists uses lstatSync (never follows symlinks), matching this
+  // module's existing convention (see the lstatSync note above) --
+  // readTextIfPresent's plain readFileSync would otherwise happily follow
+  // a symlinked config.json and let its target-boundary-external content
+  // leak into the substitution verdict and target files (#2254 review).
+  if (!fileExists(targetDir, '.github/idd/config.json')) {
+    return null;
+  }
   const configText = readTextIfPresent(targetDir, '.github/idd/config.json');
   if (configText === null) {
     return null;
@@ -493,6 +501,12 @@ export function restoreExistingCommandsTable(targetDir, existingCommands) {
     return;
   }
   const configRelativePath = '.github/idd/config.json';
+  // Same lstatSync-based symlink rejection as readExistingCommandsTable
+  // above -- a symlinked config.json here would otherwise let this
+  // function write through it to a target-boundary-external file.
+  if (!fileExists(targetDir, configRelativePath)) {
+    return;
+  }
   const text = readTextIfPresent(targetDir, configRelativePath);
   if (text === null) {
     return;
