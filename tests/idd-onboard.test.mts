@@ -438,6 +438,24 @@ test('deriveValidateCommands ignores a missing, empty, or unparseable commands t
     prePushValidate: 'go vet ./... && go test ./...',
     postFixValidate: 'go fmt ./... && go vet ./... && go test ./...',
   });
+
+  // A valid JSON document can still parse to a non-object root (`null`, a
+  // bare number/string, or an array) -- must not throw on property access.
+  for (const nonObjectRoot of ['null', '42', '"just a string"', '[1, 2]']) {
+    const root = makeFixtureDir();
+    writeFileSync(join(root, 'go.mod'), 'module x\n');
+    mkdirSync(join(root, '.github', 'idd'), { recursive: true });
+    writeFileSync(join(root, '.github', 'idd', 'config.json'), nonObjectRoot);
+    assert.deepEqual(
+      deriveValidateCommands(root),
+      {
+        fixValidate: 'go fmt ./...',
+        prePushValidate: 'go vet ./... && go test ./...',
+        postFixValidate: 'go fmt ./... && go vet ./... && go test ./...',
+      },
+      `config.json root: ${nonObjectRoot}`,
+    );
+  }
 });
 
 test('a first-time onboarding (no existing commands table) still derives from package.json exactly as before', () => {

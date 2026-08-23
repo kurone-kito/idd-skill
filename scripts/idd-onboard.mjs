@@ -319,6 +319,14 @@ export function readExistingCommandsTable(targetDir) {
   } catch {
     return null;
   }
+  // A valid JSON document can still parse to a non-object root (`null`, a
+  // number, a bare string, an array) -- guard before reading `.commands`
+  // off it, since a `null` root would otherwise throw on property access
+  // rather than being treated as "no commands table" like every other
+  // malformed-config case above.
+  if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    return null;
+  }
   const commands = parsed.commands;
   if (
     commands === null ||
