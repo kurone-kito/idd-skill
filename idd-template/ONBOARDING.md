@@ -1378,16 +1378,32 @@ the PR author does not count toward required review or Code Owner gates,
 so choose a separate eligible owner or document the intended reviewer or
 ruleset-bypass topology.
 
-If the required check is registered with `app_id: -1` (any producer), an
-exact single-file rule does not bind the check to that workflow: protect
-`/.github/workflows/` (or `/.github/`) as well, or use a source-bound
-required-workflow/ruleset rule, so another workflow cannot emit the same
-required-check name. Then enable **Require review from Code Owners** on
-the protected default branch, or the equivalent repository-ruleset
-requirement, and enable **Dismiss stale pull request approvals when new
-commits are pushed** (or its equivalent) so approval applies to the
-workflow revision that will merge. Without those settings, CODEOWNERS
-only requests or routes a review and does not make approval a merge gate.
+Place these protection entries after broader or overlapping patterns. When
+extending the file, move them after any new rule that also matches these
+paths; CODEOWNERS uses the last matching rule. If the active file is
+`/CODEOWNERS` or
+`/docs/CODEOWNERS`, also add ownership entries for every higher-priority
+supported location that could replace it (`/.github/CODEOWNERS`, and for
+`/docs/CODEOWNERS`, `/CODEOWNERS` as well).
+
+If the required check is registered with `app_id: -1` (any producer), a
+single-file rule does not bind the check to that workflow. Protect
+`/.github/workflows/` (or `/.github/`) as well, so another workflow cannot
+emit the same required-check name. A credentials holder with
+`statuses: write` or `checks: write` can still publish that name directly;
+CODEOWNERS covers workflow-file changes only. Either explicitly trust every
+credential that can publish checks, or use a producer-pinned required check
+with a specific integration `app_id` after verifying that IDD can read and
+enforce that topology. A Rulesets `workflows` rule is not a drop-in
+source-bound alternative here: IDD cannot correlate its unnamed result to a
+check run and will keep CI unresolved, so plan for a human merge or hold
+until the runtime supports it. Then enable **Require review from Code
+Owners** on the protected default branch, or the equivalent
+repository-ruleset requirement, and enable **Dismiss stale pull request
+approvals when new commits are pushed** (or its equivalent) so approval
+applies to the workflow revision that will merge. Without those settings,
+CODEOWNERS only requests or routes a review and does not make approval a
+merge gate.
 The [dry-run — Readiness assessment](#dry-run--readiness-assessment)
 report's `CODEOWNERS present` item checks only that a CODEOWNERS file
 exists; it does not verify workflow-path coverage, producer binding, or
@@ -1519,11 +1535,12 @@ silently drops them, weakening the merge gate to only the newly added
 check.
 
 `app_id: -1` also trades away GitHub's producer-identity enforcement
-for the check it names (preventive; no observed incident yet). Use it
-only when the adopter separately protects all workflow paths that could
-produce that literal check name, or uses a source-bound ruleset; it is
-not a blanket recommendation for every required check. Keep a specific
-`app_id` pin
+for the check it names (preventive; no observed incident yet). It also
+allows any credential with `statuses: write` or `checks: write` to publish
+that literal name. Use it only when the adopter explicitly accepts that
+trust scope and separately protects all workflow paths that could produce
+the name; it is not a blanket recommendation for every required check.
+Keep a specific `app_id` pin
 on any check where verifying the producer matters, and opt in to
 `ciGate.trustSourcePinnedRequiredChecks: true` (see the row in
 [Customizing IDD](docs/customization.md)) instead, once the operator
