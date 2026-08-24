@@ -122,7 +122,7 @@ paginated anchor log with bounded retries. A successful POST or verification
 timeout is inconclusive: a discovered trusted marker keeps labels absent and
 closes the set, while an absent marker after retries requires restoring the
 labels and leaving the generations open. Absent labels or a session-local
-reread are not completion evidence. If a new issue's marker POST or
+re-read are not completion evidence. If a new issue's marker POST or
 verification is uncertain, reconcile the returned comment ID and paginated log
 with bounded retries; a discovered trusted marker keeps the label and requires
 recovery or reopening before publication continues, while an absent marker
