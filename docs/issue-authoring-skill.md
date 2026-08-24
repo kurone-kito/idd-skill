@@ -726,7 +726,9 @@ insufficient. If permission cannot be verified and no explicit bot/app trust
 applies, ignore and report the marker; syntax alone never grants ownership.
 For `acquire`, `bootstrap`, and `resume`, `owner` is a newly generated
 opaque per-target owner token; `supersedes=none` for `acquire` and
-`bootstrap`, while `resume` names the prior owner token.
+`bootstrap`, while `resume` names the prior owner token. For `release`, keep
+the current owner token in `owner` and set `supersedes` to that same current
+owner token; `supersedes=none` is invalid for a release marker.
 Within an open generation, the first valid acquisition, bootstrap, or
 resume marker by GitHub comment order wins. A
 `resume` marker opens a new generation only for the exact interrupted set
@@ -745,6 +747,15 @@ marker for that set. These append-only comments are the durable set and
 target membership record; a resume may include only targets whose valid
 markers identify that exact set. Never infer set membership from the shared
 label alone.
+
+Acquire one set anchor before acquiring any other target: use the parent
+roadmap when one exists, otherwise use the designated lead target. Freshly
+verify that anchor's trusted owner marker and set ID before acquiring child
+targets or wiring relationships. The anchor winner serializes acquisition for
+the whole set; no session may acquire children independently. If any target
+cannot be acquired under that anchor, stop all body and relationship edits,
+leave labels and append-only markers in place, and require an exact verified
+resume of that set rather than allowing a split ownership set.
 
 Immediately before every body or roadmap relationship update, re-fetch the
 target and require the same owner to remain the winner and the expected
@@ -792,16 +803,20 @@ body, and the `audit-authored-issue` linter (or its manual fallback) is green
 on every published body in the set — and the user explicitly requests
 release from the authoring hold. First append a `mode=release` marker
 matching each target's current owner and set while every label is still
-present, re-fetch to verify every marker, and complete that preflight for the
-whole set before removing any label. Then remove labels one target at a time
-and re-fetch each result. The generation closes only after every target's
-marker and label removal are verified. If a later mutation or verification
-fails, re-fetch all already processed targets, restore their labels while the
-current owner/set still match, and verify the restored set state; leave the
-generation open and stop. If restoration cannot be completed or a newer owner
-has appeared, record a set-level recovery hold and never claim a partial
-release. This release checklist plus the user's explicit request together
-form the single approval boundary in this contract.
+present, with `supersedes` equal to that current owner token, re-fetch to
+verify every marker, and complete that preflight for the whole set before
+removing any label. Then, immediately before each label removal, re-fetch the
+target and require the same current owner/set, release marker, and expected
+label/body snapshot; remove labels one target at a time and re-fetch each
+result. The generation closes only after every target's marker and label
+removal are verified. If a later mutation or verification fails, re-fetch all
+already processed targets, retrying a failed post-removal read with a bounded
+fresh read, restore their labels while the current owner/set still match, and
+verify the restored set state; leave the generation open and stop. If
+restoration cannot be completed or a newer owner has appeared, record a
+set-level recovery hold and never claim a partial release. This release
+checklist plus the user's explicit request together form the single approval
+boundary in this contract.
 
 Removing the authoring label releases the Discover guard and
 authorizes IDD execution for the released issues. Do it only as part

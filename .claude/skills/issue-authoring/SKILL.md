@@ -97,6 +97,10 @@ needs-decision, blocked-by-human, and out-of-scope.
    - generate one opaque set ID at Stage 1 start and reuse it in every
      owner marker for that set; never infer set membership from the label
      alone
+   - acquire and verify one set anchor first (the parent roadmap when one
+     exists, otherwise the designated lead target); do not acquire children
+     independently, and stop all edits if any target cannot join that anchor's
+     verified set
    - create new issues only through a capability-checked publication command
      that applies the authoring label atomically; if that operation is
      unavailable, use a documented Discover-excluded quarantine or stop before
@@ -118,10 +122,13 @@ needs-decision, blocked-by-human, and out-of-scope.
      the markers preserve the set identity for a later verified resume
    - after the release checklist passes and the user explicitly requests
      release, preflight and verify a matching `mode=release` marker for every
-     target before removing any label; remove labels one at a time and verify
-     the whole set. If a later removal or verification fails, restore labels
-     for already processed targets while the owner/set still match, verify
-     the restored set, and leave the generation open
+     target (with `supersedes` equal to the current owner token) before
+     removing any label; recheck the owner/set and expected snapshot
+     immediately before each removal, then remove labels one at a time and
+     verify the whole set. If a later removal or verification fails, retry a
+     failed post-removal read with a bounded fresh read, restore labels for
+     already processed targets while the owner/set still match, verify the
+     restored set, and leave the generation open
 8. Stop at the single approval boundary: release. Publishing under the
    hold does not by itself authorize starting the IDD execution loop —
    only the user's explicit release request does.
