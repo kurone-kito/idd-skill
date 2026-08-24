@@ -412,6 +412,15 @@ const HELPER_COMMANDS = [
     description: 'Collect read-only review activity and CI snapshot evidence.',
   },
   {
+    id: 'review-comment-origin',
+    scriptName: 'idd:review-comment-origin',
+    binName: 'idd-review-comment-origin',
+    entryPath: 'scripts/review-comment-origin.mjs',
+    vendoredCommand: 'node scripts/review-comment-origin.mjs',
+    description:
+      'Classify review-thread comments as IDD-originated or ordinary human chatter.',
+  },
+  {
     id: 'review-disposition-verify',
     scriptName: 'idd:review-disposition-verify',
     binName: 'idd-review-disposition-verify',
