@@ -385,9 +385,14 @@ through GitHub's classic branch-protection API uses the explicit
   merging, keep every owner reachable through changed workflow or input
   paths within the same trust boundary, or use a dedicated gate that
   verifies approval from the protected-path owner; otherwise plan for a
-  human merge or hold. This is not a blanket choice for every required
-  check: keep a specific `app_id` pin on any check where verifying the
-  producer matters. GitHub's classic API silently
+  human merge or hold (preventive; no observed incident yet). Also enable
+  **Require review from Code Owners** on the protected default branch, or
+  the equivalent repository-ruleset requirement, and enable **Dismiss
+  stale pull request approvals when new commits are pushed** (or its
+  equivalent). Without those settings, CODEOWNERS only routes or requests
+  a review and does not make approval a merge gate. This is not a blanket
+  choice for every required check: keep a specific `app_id` pin on any
+  check where verifying the producer matters. GitHub's classic API silently
   rewrites a `contexts` `PUT` into `app_id`-pinned `checks` entries,
   and a pinned entry is exactly what the fail-closed "Source-pinned
   required-check trust" default
