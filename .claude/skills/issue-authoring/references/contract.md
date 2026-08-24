@@ -1034,7 +1034,7 @@ only approval boundary.
   record:
 
   ```html
-  <!-- <marker-prefix>-authoring-publication-intent: target=<opaque-target-id>; anchor=<opaque-anchor-id>; set=<opaque-set-id>; session=<opaque-session-id>; token=<opaque-publication-token>; issue=<owner>/<repo>#<number|none>; state=<pending|member|cleanup|abandoned> -->
+  <!-- <marker-prefix>-authoring-publication-intent: target=<opaque-target-id>; anchor=<opaque-anchor-id>; set=<opaque-set-id>; session=<opaque-session-id>; token=<opaque-publication-token>; journal=<owner>/<repo>#<number>; issue=<owner>/<repo>#<number>|none; actor=<trusted-marker-actor>; state=<pending|member|cleanup|abandoned> -->
   ```
 
   `issue` is the returned canonical issue identity or `none`. Append
@@ -1046,8 +1046,19 @@ only approval boundary.
   tuple; missing, conflicting, or out-of-order records fail closed, while
   `pending` and `cleanup` remain recovery holds.
 
+  `journal` is the durable record location. For an existing set, use the
+  verified originating Stage 1 hold; for a standalone set with no existing
+  issue or anchor, use a pre-existing repository-level authoring journal
+  target designated by repository policy. Do not create that journal as part
+  of the same set. If neither location exists or its identity cannot be
+  verified, stop with `blocked-by-human` before creating any target. On every
+  paginated replay, require `actor` to equal the API author and verify that
+  actor is a trusted marker login with the required write-level permission or
+  configured bot/app trust. An untrusted, malformed, or conflicting
+  exact-token record is not valid evidence; fail closed and retain the hold.
+
   Persist the preallocated target/anchor IDs, exact token, and `state=pending`
-  in the originating hold before issuing the create. After a successful create,
+  in that journal before issuing the create. After a successful create,
   attach and verify the returned issue identities on that pending record before
   appending the owner marker. If the pre-create hold write cannot be verified,
   do not create; if the post-create identity attachment cannot be verified,

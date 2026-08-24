@@ -717,7 +717,7 @@ atomic create:
 The originating Stage 1 hold uses this append-only publication-intent record:
 
 ```html
-<!-- <marker-prefix>-authoring-publication-intent: target=<opaque-target-id>; anchor=<opaque-anchor-id>; set=<opaque-set-id>; session=<opaque-session-id>; token=<opaque-publication-token>; issue=<owner>/<repo>#<number|none>; state=<pending|member|cleanup|abandoned> -->
+<!-- <marker-prefix>-authoring-publication-intent: target=<opaque-target-id>; anchor=<opaque-anchor-id>; set=<opaque-set-id>; session=<opaque-session-id>; token=<opaque-publication-token>; journal=<owner>/<repo>#<number>; issue=<owner>/<repo>#<number>|none; actor=<trusted-marker-actor>; state=<pending|member|cleanup|abandoned> -->
 ```
 
 `issue` is the returned canonical issue identity or `none`. Append
@@ -729,10 +729,21 @@ the hold log and select the latest valid record for the exact token tuple;
 missing, conflicting, or out-of-order records fail closed, while `pending`
 and `cleanup` remain recovery holds.
 
+`journal` is the durable record location. For an existing set, use the
+verified originating Stage 1 hold; for a standalone set with no existing issue
+or anchor, use a pre-existing repository-level authoring journal target
+designated by repository policy. Do not create that journal as part of the
+same set. If neither location exists or its identity cannot be verified, stop
+with `blocked-by-human` before creating any target. On every paginated replay,
+require `actor` to equal the API author and verify that actor is a trusted
+marker login with the required write-level permission or configured bot/app
+trust. An untrusted, malformed, or conflicting exact-token record is not valid
+evidence; fail closed and retain the hold.
+
 Generate the opaque target/anchor IDs and token before creation because issue
 numbers are not yet known. Before issuing the create, persist those
-preallocated IDs, the exact token, and `state=pending` in the originating
-Stage 1 hold. After a successful create, attach and verify the returned issue
+preallocated IDs, the exact token, and `state=pending` in that journal. After a
+successful create, attach and verify the returned issue
 identities on that pending record before appending the owner marker. If the
 pre-create hold write cannot be verified, do not create; if the post-create
 identity attachment cannot be verified, leave the returned issue held for
@@ -756,8 +767,8 @@ cleanup read is uncertain, retain `state=cleanup`, leave the issue held, and
 report the recovery hold.
 
 An atomically labeled publication is not set membership until its owner marker
-is verified. Persist each returned target identity in the durable originating
-Stage 1 hold before appending the marker. On resume, reconcile recorded
+is verified. Persist each returned target identity in the durable journal before
+appending the marker. On resume, reconcile recorded
 identities and only issues carrying this set's exact publication token; an
 incomplete scan or unmarked match is a recovery hold, so never infer membership
 or completion from the shared label alone.
