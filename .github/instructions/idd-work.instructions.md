@@ -320,10 +320,11 @@ or commits.
 
 **Unplanned follow-up work**: If B-phase work reveals a separate
 follow-up, do not call `gh issue create` or the REST issues API directly.
-Invoke the `issue-authoring` skill and follow its Stage 1 hold and
-contract; do not improvise a parallel worker-side authoring path. This
-guard is preventive for this repository; the field-reported misuse
-motivating it is tracked by issue `#2231`.
+When the optional `issue-authoring` companion is installed, invoke it and
+follow its Stage 1 hold and contract. If it is unavailable, record the
+proposed follow-up in the issue or PR notes for D3's recommended
+follow-up prose and maintainer authoring; do not create it ad hoc. Do not
+improvise a parallel worker-side authoring path.
 
 ---
 
