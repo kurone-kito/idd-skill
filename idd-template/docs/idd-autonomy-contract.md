@@ -122,10 +122,14 @@ absent label, and expected body before appending and verifying the anchor-only
 `mode=release-complete` marker; reconcile its returned comment ID and the
 paginated anchor log with bounded retries. A successful POST or verification
 timeout is inconclusive: a discovered trusted marker keeps labels absent and
-closes the set, while an absent marker after retries requires restoring the
-labels and leaving the generations open. Absent labels or a session-local
-re-read are not completion evidence. If a new issue's marker POST or
-verification is uncertain, reconcile the returned comment ID and paginated log
+closes the set, while a complete fresh read that conclusively proves no trusted
+marker was appended requires restoring the labels and leaving the generations
+open. If reads remain inconclusive, keep the release guard and current
+labels/state in place, leave the set held, and record a recovery hold. Never
+infer marker absence or roll back from a verification timeout. Absent labels or
+a session-local re-read are not completion evidence. If a new issue's marker
+POST or verification is uncertain, reconcile the returned comment ID and
+paginated log
 with bounded retries; a discovered trusted marker keeps the label and requires
 recovery or reopening before publication continues, while an absent marker
 permits the guarded close.

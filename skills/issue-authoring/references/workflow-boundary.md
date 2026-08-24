@@ -54,10 +54,12 @@ approval boundary that hands off to IDD execution.
 - **Per-target ownership is separate from the hold label.** The configured
   authoring label is a shared claim-suppression lock, not a session lock. Before
   editing an existing issue or roadmap, the skill must fetch a fresh target
-  snapshot and re-read its active `claimed-by` and open-PR state. Any active
-  execution is a conflict, so do not establish the hold. Apply the label if it
-  is absent, then append a hidden owner comment using the resolved marker
-  prefix:
+  snapshot and resolve its complete claim state, including trusted forced-handoff
+  successors and activation-nonce winners, plus its active `claimed-by` and
+  open-PR state. A trusted forced-handoff successor is active even without a new
+  `claimed-by`; any active execution is a conflict, so do not establish the
+  hold. Apply the label if it is absent, then append a hidden owner comment
+  using the resolved marker prefix:
 
   ```html
   <!-- <marker-prefix>-authoring-owner: target=<owner>/<repo>#<number>; anchor=<owner>/<repo>#<number>; mode=acquire|resume|bootstrap|heartbeat|release|release-guard|release-complete; owner=<opaque-owner-token>; set=<opaque-set-id>; session=<opaque-session-id>; supersedes=<opaque-owner-token|none> -->
@@ -270,10 +272,13 @@ approval boundary that hands off to IDD execution.
   anchor's paginated owner-marker log with bounded retries, requiring the exact
   current owner, set, anchor, session, and marker body. Treat a successful POST
   or a verification timeout as inconclusive until reconciliation finishes: if
-  the trusted marker is found, keep the labels absent and close the set; if it
-  is not found after the retries, reapply the authoring label to every target
-  and leave the set generations open. Do not infer completion from a
-  session-local re-read or from absent labels. Treat every release marker,
+  the trusted marker is found, keep the labels absent and close the set; if a
+  complete fresh read conclusively proves that no trusted marker was appended,
+  reapply the authoring label to every target and leave the set generations
+  open; if reads remain inconclusive, keep the release guard and current
+  labels/state in place, leave the set held, and record a recovery hold. Never
+  infer marker absence or roll back from a verification timeout. Treat every
+  release marker,
   heartbeat, label removal, and completion marker as provisional: no target
   generation closes until every target's release marker and label removal are
   verified and the durable completion marker is reconciled, at which point the

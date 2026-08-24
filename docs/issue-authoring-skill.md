@@ -719,10 +719,12 @@ before stopping.
 
 The configured authoring label is a shared **claim-suppression lock**, not
 a session owner token. Before editing an existing issue or roadmap, take a
-fresh target snapshot and re-read its active `claimed-by` and open-PR state.
-Any active execution is a conflict, so do not establish the hold. Apply the
-label if it is absent, and append a hidden owner comment using the resolved
-marker prefix:
+fresh target snapshot and resolve its complete claim state, including trusted
+forced-handoff successors and activation-nonce winners, plus its active
+`claimed-by` and open-PR state. A trusted forced-handoff successor is active
+even without a new `claimed-by`; any active execution is a conflict, so do not
+establish the hold. Apply the label if it is absent, and append a hidden owner
+comment using the resolved marker prefix:
 
 ```html
 <!-- <marker-prefix>-authoring-owner: target=<owner>/<repo>#<number>; anchor=<owner>/<repo>#<number>; mode=acquire|resume|bootstrap|heartbeat|release|release-guard|release-complete; owner=<opaque-owner-token>; set=<opaque-set-id>; session=<opaque-session-id>; supersedes=<opaque-owner-token|none> -->
@@ -938,9 +940,13 @@ anchor-only
 `mode=release-complete` marker and record its comment ID. Reconcile that ID
 and the paginated anchor log with bounded retries; a successful POST or
 verification timeout is inconclusive. If the trusted marker is found, keep
-labels absent and close the set. Otherwise reapply the authoring label to
-every target and leave the set generations open. Do not infer completion from
-absent labels or a session-local read. Treat every release marker, heartbeat,
+labels absent and close the set. If a complete fresh read conclusively proves
+that no trusted marker was appended, reapply the authoring label to every
+target and leave the set generations open. If reads remain inconclusive, keep
+the release guard and current labels/state in place, leave the set held, and
+record a recovery hold. Never infer marker absence or roll back from a
+verification timeout. Do not infer completion from absent labels or a
+session-local read. Treat every release marker, heartbeat,
 label removal, and completion marker as provisional: no target generation
 closes until every target's release marker and label removal are verified and
 the durable completion marker is reconciled, at which point the set-level
