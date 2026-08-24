@@ -1042,6 +1042,12 @@ only approval boundary.
   paginated owner-marker log again, and close only if that final read proves no
   competing claim or owner marker; otherwise leave it open and report the
   recovery hold.
+- An atomically labeled publication is not set membership until its owner
+  marker is verified. Persist each returned target identity in the durable
+  originating Stage 1 hold before appending the marker. On resume, enumerate
+  recorded identities and every authoring-labeled issue created during this
+  set's hold; an incomplete scan or any unmarked candidate is a recovery hold,
+  so never infer membership or completion from the label alone.
 - **Per-target ownership.** The configured label is a shared
   claim-suppression lock, not a session owner token. Before editing an
   existing issue or roadmap, fetch a fresh snapshot and resolve its complete

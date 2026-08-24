@@ -411,10 +411,10 @@ for why this path needs its own nonce). Verify it the same way step 5
 above does: wait `claim.verifySettleDelay`, recompute the nonce winner
 for `new-claim-id`, and confirm it is yours — the only nonce check
 that fires here, since posting no `claimed-by` means this path never
-enters _Claim verification_ above. On mismatch or either guard hold,
-re-resolve the assigned pair and nonce; if the pair still owns the claim and
-nonce (or no competing nonce exists), post and verify `unclaimed-by` before
-Discover; otherwise leave the successor claim.
+enters _Claim verification_ above. After nonce verification, repeat that
+guard; on mismatch or either hold, re-resolve pair/nonce before fallback. If
+the pair still owns claim and nonce (or none competes), post/verify
+`unclaimed-by`; else leave successor claim.
 
 Always use the assigned pair verbatim: never invent `claimed-by` or reuse the
 displaced `{claim-id}`. A native agent-id that is not the assigned value fails

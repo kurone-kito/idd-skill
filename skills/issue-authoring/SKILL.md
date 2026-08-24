@@ -129,6 +129,12 @@ needs-decision, blocked-by-human, and out-of-scope.
    - immediately after a new issue is created and labeled, append its
      `mode=acquire` owner marker with the current set ID, then re-fetch the
      labels, body, and owner comments before treating it as a set member
+   - an atomically labeled publication is not set membership until its owner
+     marker is verified; persist each returned target identity in the durable
+     originating Stage 1 hold before appending the marker. On resume,
+     enumerate recorded identities and every authoring-labeled issue created
+     during this set's hold; an incomplete scan or any unmarked candidate is a
+     recovery hold, so never infer membership or completion from the label alone
    - if owner-marker append or verification is uncertain for a new issue,
      reconcile the returned comment ID and the paginated owner-marker log with
      bounded retries before closing; if a trusted marker is found, retain the

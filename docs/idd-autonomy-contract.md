@@ -155,6 +155,12 @@ generation is open or the prior exact set has a trusted `release-complete`; a
 `resume` starts the next generation only for the exact interrupted set and
 matching prior owner. Within an open generation, the first valid acquisition
 or permitted resume wins and later conflicting activations are contested.
+A `resume` is valid only when the exact interrupted set's latest trusted
+generation marker is older than `issueAuthoring.authoringStaleAge`; a
+`bootstrap` with an existing authoring hold additionally requires its
+authoring-label event or legacy hold to be older than that age. A fresh marker
+or label blocks recovery; staleness is a prerequisite, not ownership or
+completion evidence.
 Owner tokens are per target, while `anchor`, `set`, and `session` must match
 the set. A `heartbeat` must match and supersede the current owner, set, anchor,
 and session and only refreshes freshness. A `release` must match and supersede
