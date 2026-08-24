@@ -172,10 +172,14 @@ When the optional `issue-authoring` companion is installed, invoke it and
 follow its Stage 1 hold and contract. Before it reuses an existing issue or
 roadmap, require its reuse-first check to verify that the target is not under
 another Stage 1 authoring hold. Treat a target carrying the configured
-authoring label outside this session's published set as unavailable; do not
-edit it or remove its hold. Use a different safe target through the companion
-or record the proposed follow-up in a separate issue comment. Once it
-completes Stage 1 for the full
+authoring label outside this session's published set as unavailable unless the
+companion explicitly identifies it as the interrupted set this Stage 1 pass is
+resuming under its contract. For that resumed set, verify the set identity and
+add its already-published issues to this session's working set before editing;
+unrelated held targets remain unavailable. Do not remove a held target's
+label. Use a different safe target through the companion or record the
+proposed follow-up in a separate issue comment. Once it completes Stage 1 for
+the full
 follow-up set (publishing every ready child before roadmaps and wiring the real
 issue numbers), the authoring step ends; leave every newly published issue
 under the configured authoring label and immediately resume this issue's B–C
