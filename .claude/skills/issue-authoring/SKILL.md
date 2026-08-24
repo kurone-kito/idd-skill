@@ -103,8 +103,8 @@ needs-decision, blocked-by-human, and out-of-scope.
      verified set
    - create new issues only through a capability-checked publication command
      that applies the authoring label atomically; if that operation is
-     unavailable, use a documented Discover-excluded quarantine or stop before
-     creating the issue — never intentionally create an unlabelled issue
+     unavailable, stop before creating the issue — never intentionally create
+     an unlabelled issue
    - immediately after a new issue is created and labeled, append its
      `mode=acquire` owner marker with the current set ID, then re-fetch the
      labels, body, and owner comments before treating it as a set member

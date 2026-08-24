@@ -29,10 +29,8 @@ approval boundary that hands off to IDD execution.
   updating issue content
 - For new issues, bundled skill requires a capability-checked publication
   command that creates the issue with the authoring label atomically. If the
-  target runtime cannot provide that operation, use a documented
-  Discover-excluded quarantine when one is available; otherwise stop before
-  creating the issue. Never intentionally create an unlabelled issue for the
-  Stage 1 set
+  target runtime cannot provide that operation, stop before creating the
+  issue. Never intentionally create an unlabelled issue for the Stage 1 set
 - Immediately after a new issue is created and labeled, bundled skill
   appends its `mode=acquire` owner marker with the current set ID, then
   re-fetches labels, body, and owner comments before treating it as a set

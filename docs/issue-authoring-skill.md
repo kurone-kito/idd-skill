@@ -692,9 +692,8 @@ For existing issues, apply the authoring label before updating issue
 content. For new issues, require a capability-checked publication command
 that creates the issue with the authoring label atomically, such as
 `gh issue create --label` when the bundled GitHub CLI flow can use it. If the
-target runtime cannot provide that operation, use a documented
-Discover-excluded quarantine when one is available; otherwise stop before
-creating the issue. Never intentionally create an unlabelled issue for the
+target runtime cannot provide that operation, stop before creating the issue.
+Never intentionally create an unlabelled issue for the
 Stage 1 set. If an allegedly atomic request unexpectedly returns an
 unlabelled issue, close it before stopping and report the failed capability
 or permission check. Deletion needs admin permission the authoring agent

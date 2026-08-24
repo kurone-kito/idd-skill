@@ -1020,12 +1020,11 @@ only approval boundary.
   identity and target membership for a later verified resume.
 - **New-issue ownership.** New-issue publication requires a
   capability-checked create-with-label operation: if the target runtime
-  cannot create the issue and apply the authoring label atomically, use a
-  documented Discover-excluded quarantine when available or stop before
-  creation. Never intentionally create an unlabelled issue for the Stage 1
-  set. If an allegedly atomic request unexpectedly returns an unlabelled
-  issue, close it before stopping and report the failed capability or
-  permission check. Immediately after a successfully labelled issue is
+  cannot create the issue and apply the authoring label atomically, stop
+  before creation. Never intentionally create an unlabelled issue for the
+  Stage 1 set. If an allegedly atomic request unexpectedly returns an
+  unlabelled issue, close it before stopping and report the failed capability
+  or permission check. Immediately after a successfully labelled issue is
   created, append a `mode=acquire` owner marker with the current set ID and a
   new owner token. Re-fetch labels, body, and owner comments before treating
   the issue as a set member. If marker append or verification fails, leave
