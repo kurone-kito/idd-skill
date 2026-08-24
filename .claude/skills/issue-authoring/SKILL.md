@@ -135,9 +135,14 @@ needs-decision, blocked-by-human, and out-of-scope.
      label and recover or reopen the issue as a set member, otherwise leave the
      label in place and close before stopping
    - if an allegedly atomic create unexpectedly returns an unlabeled issue,
-     close it before stopping and report the failed capability or permission
-     check; deletion needs admin permission and is not the default recovery
-     path
+     re-fetch its labels, body, current `claimed-by` state, and paginated
+     owner-marker log before closing. If a trusted claim or owner marker from
+     another session/set is present, do not close or overwrite the exposed
+     issue; report the ownership conflict and stop. If no competing claim is
+     present, apply and verify the authoring label as a safe hold before
+     closing. If that hold cannot be verified, leave the issue open and report
+     the recovery hold. Deletion needs admin permission and is not the default
+     recovery path
    - held issues under the label ARE the drafts: do in-place body
      edits, roadmap relationship wiring, and re-lint of already-published
      bodies on the published issue itself, under the same label
@@ -150,7 +155,9 @@ needs-decision, blocked-by-human, and out-of-scope.
      release, preflight and verify or reuse a matching `mode=release` marker
      for every target (with `supersedes` equal to the current owner token)
      before removing any label; record its GitHub comment ID, never append a
-     duplicate on retry, keep the set anchor held, and remove it last. Recheck
+     duplicate on retry, append and reconcile an anchor-only
+     `mode=release-guard` marker before the first label removal, keep the set
+     anchor held, and remove it last. Recheck
      each target's expected owner token independently, plus the shared
      set/anchor/session, recorded marker, and expected snapshot immediately
      before each removal. Renew and verify a target/anchor heartbeat at that
@@ -163,7 +170,9 @@ needs-decision, blocked-by-human, and out-of-scope.
      inconclusive. If the trusted marker is found, keep labels absent and
      close the set. Otherwise restore labels for every target and leave every
      target generation open. Do not infer completion from absent labels or a
-     session-local read. Treat each release marker, removal, and completion
+     session-local read. Discover must treat the reconciled release guard as
+     suppressing every target until the anchor completion marker is found.
+     Treat each release marker, removal, and completion
      marker as provisional until the durable completion event is reconciled.
      If a later removal or verification fails, retry a failed post-removal
      read with a bounded fresh read, restore labels for already processed

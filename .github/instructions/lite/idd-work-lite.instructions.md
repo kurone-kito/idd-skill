@@ -188,9 +188,11 @@ Before every edit, require per-target atomic or append-only owner-marker
 acquisition and a fresh body/label re-read; on conflict, keep the label, stop,
 and use another target or a separate comment.
 
-After Stage 1 publishes every ready child, then roadmaps and wires real
-numbers, leave the authoring label on every published or updated target
-(issues and roadmaps) and resume B–C. If interrupted, leave labels on every
+After Stage 1 publishes and acquires a valid parent roadmap shell as the set
+anchor (or the designated lead when no parent roadmap exists), then
+publishes/acquires every ready child under that anchor and wires real numbers
+into the roadmap, leave the authoring label on every published or updated
+target (issues and roadmaps) and resume B–C. If interrupted, leave labels on every
 published or updated target (issues and roadmaps), stop B–C, and resume only
 after a later pass completes
 the set. If Stage 1 publishes nothing (including after clarification or a
