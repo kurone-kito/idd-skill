@@ -176,8 +176,8 @@ needs-decision, blocked-by-human, and out-of-scope.
      `mode=acquire` owner marker with the current set ID, then re-fetch the
      labels, body, and owner comments before treating it as a set member
    - an atomically labeled publication is not set membership until its owner
-     marker is verified; persist each returned target identity in the durable
-     durable journal before appending the marker. On resume, reconcile
+     marker is verified; persist each returned target identity in the journal
+     before appending the marker. On resume, reconcile
      recorded identities and only issues carrying this set's exact publication
      token; an incomplete scan or unmarked match is a recovery hold, so never
      infer membership or completion from the shared label alone
