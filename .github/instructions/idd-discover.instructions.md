@@ -29,9 +29,9 @@ The configured authoring label is `issueAuthoring.authoringLabelName`
 as the draft marker for a held issue (issue-authoring skill's Stage 1)
 and the claim-suppression lock this guard enforces — Discover treats
 either role the same way: skip the issue while the label is present.
-Unlabeled follow `anchor` logs. `release`/`release-guard` without
+Unlabeled issues follow `anchor` logs. `release`/`release-guard` without
 anchor/set/session `release-complete` is not startable; ambiguity fails closed.
-Labels never clear; later generation does.
+Later-generation release clears labels.
 
 A0-T, A0-O, and A3 must treat a matching label as not startable. A0-T
 reports `Issue #N is currently being authored` and stops before claim;

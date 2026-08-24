@@ -270,7 +270,7 @@ verification_ below). Determine `{prior-claim-id}`:
 
 **Immediately before claim POST**, re-fetch labels and owner/claim logs.
 Authoring label or `release`/`release-guard` lacking anchor/set/session
-completion blocks claim; ambiguity fails closed. Stop; route above.
+completion blocks claim; ambiguity fails closed. Stop; apply A5(c).
 
 Post the claim comment using the exact format and posting mechanics
 already defined in
