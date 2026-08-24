@@ -123,26 +123,29 @@ needs-decision, blocked-by-human, and out-of-scope.
      coincide), re-fetch and verify both, and stop if renewal or ownership
      verification fails
    - create new issues only through a capability-checked publication command
-     that applies the authoring label atomically; if that operation is
-     unavailable, stop before creating the issue — never intentionally create
-     an unlabeled issue
+     that applies the authoring label atomically and carries an exact hidden
+     publication token for target, anchor, set, and session; if that operation
+     is unavailable, stop before creating the issue — never intentionally
+     create an unlabeled issue
    - immediately after a new issue is created and labeled, append its
      `mode=acquire` owner marker with the current set ID, then re-fetch the
      labels, body, and owner comments before treating it as a set member
    - an atomically labeled publication is not set membership until its owner
      marker is verified; persist each returned target identity in the durable
-     originating Stage 1 hold before appending the marker. On resume,
-     enumerate recorded identities and every authoring-labeled issue created
-     during this set's hold; an incomplete scan or any unmarked candidate is a
-     recovery hold, so never infer membership or completion from the label alone
+     originating Stage 1 hold before appending the marker. On resume, reconcile
+     recorded identities and only issues carrying this set's exact publication
+     token; an incomplete scan or unmarked match is a recovery hold, so never
+     infer membership or completion from the shared label alone
    - if owner-marker append or verification is uncertain for a new issue,
      reconcile the returned comment ID and the paginated owner-marker log with
      bounded retries before closing; if a trusted marker is found, retain the
-     label and recover or reopen the issue as a set member, otherwise leave the
-     label in place, re-fetch labels, body, current `claimed-by` state, and the
-     paginated owner-marker log again, and close only if that final read proves
-     no competing claim or owner marker; otherwise leave it open and report
-     the recovery hold
+     label and recover or reopen the issue as a set member. Otherwise re-fetch
+     labels, body, current `claimed-by` state, and the paginated owner-marker
+     log; only if that final read proves no competing claim or owner marker may
+     you terminally mark the persisted identity abandoned in the originating
+     hold, close the issue, remove and verify the authoring label, and re-fetch
+     its closed/label-absent state. If any disposition or cleanup read is
+     uncertain, leave it open and report the recovery hold
    - if an allegedly atomic create unexpectedly returns an unlabeled issue,
      re-fetch its labels, body, current `claimed-by` state, and paginated
      owner-marker log before closing. If a trusted claim or owner marker from

@@ -1019,12 +1019,13 @@ only approval boundary.
   selecting the unfinished set, while its owner markers preserve the set
   identity and target membership for a later verified resume.
 - **New-issue ownership.** New-issue publication requires a
-  capability-checked create-with-label operation: if the target runtime
-  cannot create the issue and apply the authoring label atomically, stop
-  before creation. Never intentionally create an unlabeled issue for the
-  Stage 1 set. If an allegedly atomic request unexpectedly returns an
-  unlabeled issue, re-fetch its labels, body, current `claimed-by` state, and
-  paginated owner-marker log before closing. If a trusted claim or owner
+  capability-checked create-with-label operation that creates the issue with
+  the authoring label atomically and carries an exact hidden publication token
+  for target, anchor, set, and session. If the target runtime cannot provide
+  that operation, stop before creation. Never intentionally create an unlabeled
+  issue for the Stage 1 set. If an allegedly atomic request unexpectedly
+  returns an unlabeled issue, re-fetch its labels, body, current `claimed-by`
+  state, and paginated owner-marker log before closing. If a trusted claim or
   marker from another session or set is present, do not close or overwrite
   the exposed issue; report the ownership conflict and stop. If no competing
   claim is present, apply and verify the authoring label as a safe hold before
@@ -1039,15 +1040,21 @@ only approval boundary.
   bounded retries before closing. If a trusted marker is found, retain the
   label and recover or reopen the issue as a set member; otherwise leave the
   label in place, re-fetch labels, body, current `claimed-by` state, and the
-  paginated owner-marker log again, and close only if that final read proves no
-  competing claim or owner marker; otherwise leave it open and report the
-  recovery hold.
+  paginated owner-marker log again. If the final read proves no competing claim
+  or owner marker, terminally mark the persisted identity abandoned in the
+  originating hold, close the issue, remove and verify the authoring label, and
+  re-fetch closed/label-absent state; if any disposition or cleanup read is
+  uncertain, leave it open and report the recovery hold.
 - An atomically labeled publication is not set membership until its owner
   marker is verified. Persist each returned target identity in the durable
-  originating Stage 1 hold before appending the marker. On resume, enumerate
-  recorded identities and every authoring-labeled issue created during this
-  set's hold; an incomplete scan or any unmarked candidate is a recovery hold,
-  so never infer membership or completion from the label alone.
+  originating Stage 1 hold before appending the marker. On resume, reconcile
+  recorded identities and only issues carrying this set's exact publication
+  token; an incomplete scan or unmarked match is a recovery hold, so never
+  infer membership or completion from the shared label alone. If the final
+  safe-close read proves no competing claim or marker, terminally mark the
+  persisted identity abandoned in the originating hold, close the issue,
+  remove and verify the authoring label, and re-fetch closed/label-absent state;
+  otherwise leave the identity and label held for recovery.
 - **Per-target ownership.** The configured label is a shared
   claim-suppression lock, not a session owner token. Before editing an
   existing issue or roadmap, fetch a fresh snapshot and resolve its complete

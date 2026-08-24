@@ -690,7 +690,8 @@ label is a publishing blocker, not a warning.
 
 For existing issues, apply the authoring label before updating issue
 content. For new issues, require a capability-checked publication command
-that creates the issue with the authoring label atomically, such as
+that creates the issue with the authoring label atomically and carries an
+exact hidden publication token for target, anchor, set, and session, such as
 `gh issue create --label` when the bundled GitHub CLI flow can use it. If the
 target runtime cannot provide that operation, stop before creating the issue.
 Never intentionally create an unlabeled issue for the
@@ -712,17 +713,20 @@ token. Re-fetch labels, body, and owner comments before treating the issue as
 a set member. If marker append or verification is uncertain, reconcile the
 returned comment ID and the paginated owner-marker log with bounded retries
 before closing. If a trusted marker is found, retain the label and recover or
-reopen the issue as a set member; otherwise leave the label in place, re-fetch
-labels, body, current `claimed-by` state, and the paginated owner-marker log
-again, and close only if that final read proves no competing claim or owner
-marker; otherwise leave it open and report the recovery hold.
+reopen the issue as a set member. Otherwise re-fetch labels, body, current
+`claimed-by` state, and the paginated owner-marker log; only if that final read
+proves no competing claim or owner marker may you terminally mark the persisted
+identity abandoned in the originating hold, close the issue, remove and verify
+the authoring label, and re-fetch its closed/label-absent state. If any
+disposition or cleanup read is uncertain, leave it open and report the recovery
+hold.
 
 An atomically labeled publication is not set membership until its owner marker
 is verified. Persist each returned target identity in the durable originating
-Stage 1 hold before appending the marker. On resume, enumerate recorded
-identities and every authoring-labeled issue created during this set's hold; an
-incomplete scan or any unmarked candidate is a recovery hold, so never infer
-membership or completion from the label alone.
+Stage 1 hold before appending the marker. On resume, reconcile recorded
+identities and only issues carrying this set's exact publication token; an
+incomplete scan or unmarked match is a recovery hold, so never infer membership
+or completion from the shared label alone.
 
 ### Per-target ownership and conflict handling
 
