@@ -40,7 +40,7 @@ approval as missing.
 
 ## Pre-checks (all five must pass)
 
-Re-fetch issue before checks. A5 is target-local except child release:
+Re-fetch the issue before checks. A5 is target-local except child release:
 follow its persisted anchor's paginated log for exact generation; related
 claims do not block.
 
@@ -274,8 +274,8 @@ verification_ below). Determine `{prior-claim-id}`:
 
 Immediately before claim POST, re-fetch labels and owner/claim logs.
 Incomplete authoring state blocks; child release needs exact anchor/set/session
-completion in anchor log. Repeat this read after verify; any authoring marker
-contests—Discover.
+completion in anchor log. Repeat after verification; an authoring marker
+contests Discover.
 
 Post the claim comment using the exact format and posting mechanics
 already defined in
