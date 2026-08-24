@@ -169,13 +169,15 @@ addendum resolves it.
 **Unplanned follow-up work**: If work in the B–C phases reveals a separate
 follow-up, do not call `gh issue create` or the REST issues API directly.
 When the optional `issue-authoring` companion is installed, invoke it and
-follow its Stage 1 hold and contract. Once it publishes a follow-up, the
-authoring step ends; leave the new issue under the configured authoring label
-and immediately resume this issue's B–C work. Do not release the follow-up or
-start a second execution loop. If it is unavailable, record the proposed
-follow-up in a separate issue comment; once a PR exists, include it in the PR
-body's recommended follow-ups. Do not create it ad hoc. Do not improvise a
-parallel worker-side authoring path.
+follow its Stage 1 hold and contract. Once it completes Stage 1 for the full
+follow-up set (publishing every ready child before roadmaps and wiring the real
+issue numbers), or reports an explicit Stage 1 stop with no unfinished
+published set, the authoring step ends; leave every newly published issue
+under the configured authoring label and immediately resume this issue's B–C
+work. Do not release any follow-up issue or start a second execution loop. If
+it is unavailable, record the proposed follow-up in a separate issue comment;
+once a PR exists, include it in the PR body's recommended follow-ups. Do not
+create it ad hoc. Do not improvise a parallel worker-side authoring path.
 
 ## C — Self-review
 
