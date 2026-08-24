@@ -338,10 +338,11 @@ If Stage 1 stops without publishing a follow-up, including after exhausting
 clarification or assigning a non-ready bucket, record that outcome in a
 separate issue comment before resuming B–C; once a PR exists, include it in the
 PR body's recommended follow-ups. There is no held set to release. Do not
-release any follow-up issue or start a second execution loop. If it is
-unavailable, record the proposed follow-up in a separate issue comment; once a
-PR exists, include it in the PR body's recommended follow-ups. Do not create
-it ad hoc. Do not improvise a parallel worker-side authoring path.
+release any follow-up issue or start a second execution loop. If the
+`issue-authoring` companion is unavailable or not installed, record the
+proposed follow-up in a separate issue comment; once a PR exists, include it
+in the PR body's recommended follow-ups. Do not create it ad hoc. Do not
+improvise a parallel worker-side authoring path.
 
 ---
 
