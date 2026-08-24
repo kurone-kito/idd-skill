@@ -19,9 +19,6 @@
     "pre-push-validate": "{{PRE_PUSH_VALIDATE_COMMANDS}}",
     "post-fix-validate": "{{POST_FIX_VALIDATE_COMMANDS}}"
   },
-  "helperRuntime": {
-    "profile": "package-manager"
-  },
   "issueScope": "roadmap-first",
   "orphanFirstPolicy": "none",
   "advisoryWait": {

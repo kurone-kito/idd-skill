@@ -528,6 +528,11 @@ Use
 for the detailed defaults, non-default consequences, and the policy
 recording template you will apply in Step 3.
 
+The pristine `.github/idd/config.json` intentionally leaves
+`helperRuntime` absent. Do not add that key during the import when the
+confirmed profile is `instructions-only`; Step 4 records the key only for
+an explicitly selected helper profile.
+
 ### File list
 
 This list includes `docs/index.md`, the entry point and topic map for
@@ -1717,6 +1722,23 @@ surviving tokens are expected and not reported as unresolved.
 
 After replacing, verify that no `{{...}}` placeholder strings remain in
 any copied file other than those three meta-docs.
+
+Apply the confirmed helper runtime profile after placeholder replacement:
+leave `helperRuntime` absent from `.github/idd/config.json` for the
+`instructions-only` default, which means no helper command is configured.
+Only when the operator explicitly selects another supported profile should
+you add the object below, replacing the example value with
+`package-manager`, `vendored-node`, or `ephemeral-npx` as appropriate:
+
+```json
+"helperRuntime": {
+  "profile": "package-manager"
+},
+```
+
+Keep this object aligned with the confirmed profile recorded in the local
+policy section; do not add it merely to record the `instructions-only`
+default.
 
 ---
 
