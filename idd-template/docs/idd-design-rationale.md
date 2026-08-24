@@ -324,6 +324,14 @@ The B–C guard now routes that work through Stage 1 or preserves it in a
 durable issue comment when the companion is unavailable
 (kurone-kito/idd-skill#2231).
 
+### Stage 1 — Shared hold ownership conflict
+
+On 2026-08-24, issue #2231 also recorded that a shared authoring label did
+not identify the session holding a follow-up target, leaving concurrent
+passes able to race through reuse and body wiring. The per-target trusted
+owner-marker protocol, fresh re-reads, and append-only generation markers
+close that observed conflict path (kurone-kito/idd-skill#2231).
+
 ### B3 — Dependency drift vs. own diff: a typecheck/lint diagnostic
 
 A `typecheck`/`lint` failure in a file the current diff never touched

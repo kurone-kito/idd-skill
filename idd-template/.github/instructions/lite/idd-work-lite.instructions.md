@@ -176,6 +176,9 @@ authoring label outside this session's set is unavailable unless this pass
 explicitly resumes that interrupted set; verify its set identity from the
 companion's durable owner markers and add its
 published issues to the working set first. Unrelated holds stay unavailable.
+If the companion's optional spec-unit probe builds a throwaway implementation,
+run it in a separate temporary worktree; otherwise skip it. Never run or
+discard that probe in the current issue worktree.
 Before every edit, require per-target atomic or append-only owner-marker
 acquisition and a fresh body/label re-read; on conflict, keep the label, stop,
 and use another target or a separate comment.

@@ -1031,22 +1031,26 @@ only approval boundary.
   prefix:
 
   ```html
-  <!-- <marker-prefix>-authoring-owner: target=<owner>/<repo>#<number>; mode=acquire|resume|release; owner=<opaque-owner-token>; set=<opaque-set-id>; session=<opaque-session-id>; supersedes=<opaque-owner-token|none> -->
+  <!-- <marker-prefix>-authoring-owner: target=<owner>/<repo>#<number>; mode=acquire|resume|bootstrap|release; owner=<opaque-owner-token>; set=<opaque-set-id>; session=<opaque-session-id>; supersedes=<opaque-owner-token|none> -->
   ```
 
   Only a trusted target-repository marker actor makes a marker valid: the
   current authenticated actor after posting and verifying it, a configured
   trusted bot or app, or an explicitly enabled Write/Maintain/Admin
   collaborator. Ignore and report other marker-shaped comments; syntax alone
-  never grants ownership. For `acquire` and `resume`, `owner` is a newly
-  generated opaque per-target owner token; `supersedes=none` for `acquire`,
-  while `resume` names the prior owner token. Within an open generation, the
-  first valid acquisition or resume marker by GitHub comment order wins. A
+  never grants ownership. For `acquire`, `bootstrap`, and `resume`, `owner`
+  is a newly generated opaque per-target owner token; `supersedes=none` for
+  `acquire` and `bootstrap`, while `resume` names the prior owner token.
+  Within an open generation, the first valid acquisition, bootstrap, or
+  resume marker by GitHub comment order wins. A
   `resume` marker opens a new generation only for the exact interrupted set
   and matching prior owner token. A `release` marker must match the current
   owner and set, and closes that generation only after a fresh re-read
   confirms Stage 2 removed the label; a later `acquire` then starts a new
-  generation. The current generation's winner owns the target; any other
+  generation. The active generation's freshness is the GitHub `created_at`
+  of its latest trusted acquisition or resume marker; a resume marker
+  refreshes that clock, and the label event alone never supersedes a fresh
+  owner marker. The current generation's winner owns the target; any other
   session must stop without editing and leave the label in place. Owner
   comments are append-only and must not be edited or deleted.
 - Generate one opaque set ID at Stage 1 start and reuse it in every owner
@@ -1067,18 +1071,28 @@ only approval boundary.
   resume only when the invocation identifies the exact interrupted set and
   the hold is past `issueAuthoring.authoringStaleAge`; append a
   `mode=resume` owner marker with a new owner token and `supersedes` value
-  matching the prior owner token before repeating the acquisition check. A
-  held target with no valid owner marker is legacy-unowned and follows the
-  same first-resume-wins rule. Staleness alone never authorizes takeover, and
-  a competing active marker still stops the session.
+  matching the prior owner token before repeating the acquisition check. For
+  a stale held target with no valid owner marker, append a trusted
+  `mode=bootstrap` marker with the current set ID, a new owner token, and
+  `supersedes=none`; this starts a new generation and is not evidence of any
+  prior set membership. The first valid bootstrap marker wins. Staleness
+  alone never authorizes takeover: use the latest trusted generation marker's
+  GitHub `created_at` for marked targets, and the label event only for
+  legacy-unowned bootstrap. A competing active marker still stops the
+  session.
 - **Stage 2 — release.** Before removing the authoring label, run a
   release checklist: every child issue is referenced from its parent
   roadmap's `## Tracks` list; no unsubstituted placeholder remains in
   any published body; the `audit-authored-issue` linter (or its manual
   fallback) is green on every published body in the set. Remove the
-  label only after that checklist passes and the user explicitly
-  requests release from the authoring hold. Release is a human action;
-  nothing in this bundle auto-releases a held issue set.
+  checklist passes and the user explicitly requests release from the
+  authoring hold. For every target, append a `mode=release` marker matching
+  its current owner and set while the label is present, re-fetch to verify it,
+  then remove the label and re-fetch labels and owner comments again. The
+  generation closes only after that verified marker is followed by label
+  removal; if either mutation or verification fails, leave the label in place
+  and stop. Release is a human action; nothing in this bundle auto-releases
+  a held issue set.
 
 ## Publication boundary
 
