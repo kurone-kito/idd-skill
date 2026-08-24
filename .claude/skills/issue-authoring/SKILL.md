@@ -133,16 +133,17 @@ needs-decision, blocked-by-human, and out-of-scope.
      reconcile the returned comment ID and the paginated owner-marker log with
      bounded retries before closing; if a trusted marker is found, retain the
      label and recover or reopen the issue as a set member, otherwise leave the
-     label in place and close before stopping
+     label in place and close only after the no-competing-claim safe-hold check
    - if an allegedly atomic create unexpectedly returns an unlabeled issue,
      re-fetch its labels, body, current `claimed-by` state, and paginated
      owner-marker log before closing. If a trusted claim or owner marker from
      another session/set is present, do not close or overwrite the exposed
      issue; report the ownership conflict and stop. If no competing claim is
-     present, apply and verify the authoring label as a safe hold before
-     closing. If that hold cannot be verified, leave the issue open and report
-     the recovery hold. Deletion needs admin permission and is not the default
-     recovery path
+     present, apply and verify the authoring label as a safe hold, then
+     re-fetch its labels, body, current `claimed-by` state, and paginated
+     owner-marker log again before closing. If that hold or final re-read
+     cannot be verified, leave the issue open and report the recovery hold.
+     Deletion needs admin permission and is not the default recovery path
    - held issues under the label ARE the drafts: do in-place body
      edits, roadmap relationship wiring, and re-lint of already-published
      bodies on the published issue itself, under the same label
@@ -169,9 +170,12 @@ needs-decision, blocked-by-human, and out-of-scope.
      its comment ID. Reconcile that ID and the paginated anchor log with
      bounded retries; a successful POST or verification timeout is
      inconclusive. If the trusted marker is found, keep labels absent and
-     close the set. Otherwise restore labels for every target and leave every
-     target generation open. Do not infer completion from absent labels or a
-     session-local read. Discover must treat the reconciled release guard as
+     close the set. If a complete fresh read conclusively proves that no
+     trusted marker was appended, restore labels for every target and leave
+     every target generation open. If reads remain inconclusive, keep the
+     release guard and current labels/state in place, leave the set held, and
+     record a recovery hold. Never infer marker absence or roll back from a
+     verification timeout. Discover must treat the reconciled release guard as
      suppressing every target until the anchor completion marker is found.
      Treat each release marker, removal, and completion
      marker as provisional until the durable completion event is reconciled.

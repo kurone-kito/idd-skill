@@ -1124,10 +1124,13 @@ only approval boundary.
   marker for that set. When resuming an interrupted set, recover and verify
   its persisted set ID from the exact trusted owner markers and reuse it
   instead of generating a replacement. Persist the resolved anchor identity in
-  every marker as well. These append-only comments are the durable set, anchor,
-  and target membership record; a resume may include only targets whose valid
-  markers identify that exact set and anchor. Never infer set membership or the
-  anchor from the shared label alone.
+  every marker as well. Before resuming, enumerate the anchor's `## Tracks`
+  and a repository-wide paginated issue-comment scan scoped to trusted owner
+  markers whose exact `anchor` and `set` match; merge the results by comment
+  order and block if enumeration is incomplete. These append-only comments
+  are the durable set, anchor, and target membership record; a resume may
+  include only targets whose valid markers identify that exact set and anchor.
+  Never infer set membership or the anchor from the shared label alone.
 - A non-anchor target cannot prove that its previous set finished from its
   local owner-marker log alone. Before accepting a fresh `mode=acquire` for a
   child whose prior generation has a `mode=release` or
