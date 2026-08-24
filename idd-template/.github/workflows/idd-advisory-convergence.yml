@@ -36,9 +36,10 @@ concurrency:
   # way for it as it does for a pull_request-only workflow.
   # Review-thread comments live in the companion
   # idd-advisory-convergence-comment.yml workflow and must not share
-  # this group. workflow_dispatch has no pull_request context either,
-  # so it falls back to its own input.
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || inputs.pr_number }}
+  # this group. Keep pull_request and pull_request_review in their
+  # existing group, but isolate workflow_dispatch so a manual re-check
+  # cannot cancel an in-flight PR-linked run.
+  group: ${{ github.workflow }}-${{ github.event_name == 'workflow_dispatch' && format('dispatch-{0}', inputs.pr_number) || github.event.pull_request.number }}
 on:
   pull_request:
     types: [opened, reopened, synchronize]
