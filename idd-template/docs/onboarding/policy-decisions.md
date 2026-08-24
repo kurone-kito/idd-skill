@@ -383,7 +383,10 @@ through GitHub's classic branch-protection API uses the explicit
   name (preventive; no observed incident yet). Protect the active CODEOWNERS
   file and any higher-priority candidate locations, as well as all workflow
   paths and trusted helper/configuration inputs, with CODEOWNERS. For
-  autonomous merging, keep every owner reachable through changed workflow or
+  runner-selection variables and self-hosted runner administration and
+  integrity, require an equivalent protected trust boundary as well
+  (preventive; no observed incident yet). For autonomous merging, keep
+  every owner reachable through changed workflow or
   input paths within the same trust boundary, or use a dedicated gate that
   verifies approval from the protected-path owner; otherwise plan for a
   human merge or hold (preventive; no observed incident yet). Also enable

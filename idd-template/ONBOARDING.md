@@ -1430,6 +1430,11 @@ the entries. The current PR run cannot be weakened by PR copies of
 these paths because it checks out `main`, but later runs would trust
 them after merge (preventive; no observed incident yet).
 
+Also review repository or organization variables that select the runner,
+such as `CI_RUNNER_LABEL`, together with self-hosted runner administration
+and runner integrity. Require an equivalent protected trust boundary for
+any self-hosted runner label (preventive; no observed incident yet).
+
 Protect `/.github/workflows/` (or `/.github/`) regardless of whether
 the required check uses `app_id: -1` or a producer-pinned Actions
 integration, unless that integration is dedicated exclusively to this
