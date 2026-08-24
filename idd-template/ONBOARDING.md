@@ -1435,11 +1435,11 @@ such as `CI_RUNNER_LABEL`, together with self-hosted runner administration
 and runner integrity. Require an equivalent protected trust boundary for
 any self-hosted runner label (preventive; no observed incident yet).
 
-Pin every action used by this merge gate to a verified full commit SHA.
-The shipped workflow's `@v4` references are portable examples only; replace
-them before enabling the required check. If mutable action references remain,
-explicitly accept and record the action publishers and tag-movement trust
-scope instead of treating CODEOWNERS as sufficient protection
+Before enabling the required check, either pin every action used by this
+merge gate to a verified full commit SHA, or explicitly accept and record the
+action publishers and tag-movement trust scope for any mutable references.
+The shipped workflow's `@v4` references are portable examples only; do not
+treat CODEOWNERS as sufficient protection for mutable action references
 (preventive; no observed incident yet).
 
 Protect `/.github/workflows/` (or `/.github/`) regardless of whether

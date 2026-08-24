@@ -380,9 +380,10 @@ through GitHub's classic branch-protection API uses the explicit
   adopter explicitly accepts that trust scope: the value identifies no
   individual workflow, so another workflow or any credential with
   `statuses: write` or `checks: write` can publish a check with that exact
-  name (preventive; no observed incident yet). Protect the active CODEOWNERS
-  file and any higher-priority candidate locations, as well as all workflow
-  paths and trusted helper/configuration inputs, with CODEOWNERS. For
+  name (preventive; no observed incident yet). Regardless of whether the
+  check uses `app_id: -1` or a specific producer pin, protect the active
+  CODEOWNERS file and any higher-priority candidate locations, as well as all
+  workflow paths and trusted helper/configuration inputs, with CODEOWNERS. For
   runner-selection variables and self-hosted runner administration and
   integrity, require an equivalent protected trust boundary as well
   (preventive; no observed incident yet). For autonomous merging, keep
