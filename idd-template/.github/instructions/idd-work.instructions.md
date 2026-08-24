@@ -274,7 +274,7 @@ comment must already exist on the issue; posting it before implementation
 is the only normal path. If it does not, stop and return to B2. The
 following is a repair path only for an ordering violation that has
 already occurred, not an alternative route: disclose the deviation on
-the issue, name the skipped checkpoint step (for example, the B2
+the issue, name the skipped checkpoint step (for example, the B3
 plan-comment checkpoint), post the plan retroactively with an explicit
 note about the reordering, and run the C1 critique pass against the
 completed diff.
