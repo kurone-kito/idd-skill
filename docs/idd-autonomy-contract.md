@@ -239,6 +239,8 @@ autopilot never performs them — only a human maintainer does:
 This page was derived from a full sweep of every
 `.github/instructions/*.instructions.md` file and every
 `.github/instructions/lite/*.instructions.md` file in this repository at
-authoring time, plus the optional `issue-authoring` companion contract under
-`skills/issue-authoring/` that the B3–C Stage 1/2 rows delegate to. Generated
-runtime copies are covered by their synchronization audit.
+authoring time, plus the optional `issue-authoring` companion contract installed
+at the target's selected native skill directory, which the B3–C Stage 1/2 rows
+delegate to. In this source repository, `skills/issue-authoring/` is the
+canonical source rather than a required adopter path. Generated runtime copies
+are covered by their synchronization audit.
