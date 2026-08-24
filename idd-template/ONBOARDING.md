@@ -1728,12 +1728,16 @@ leave `helperRuntime` absent from `.github/idd/config.json` for the
 `instructions-only` default, which means no helper command is configured.
 Only when the operator explicitly selects another supported profile should
 you add the object below, replacing the example value with
-`package-manager`, `vendored-node`, or `ephemeral-npx` as appropriate:
+`package-manager`, `vendored-node`, or `ephemeral-npx` as appropriate.
+Merge it into the top-level object in `.github/idd/config.json` and keep the
+surrounding member commas valid.
 
 ```json
-"helperRuntime": {
-  "profile": "package-manager"
-},
+{
+  "helperRuntime": {
+    "profile": "package-manager"
+  }
+}
 ```
 
 Keep this object aligned with the confirmed profile recorded in the local
