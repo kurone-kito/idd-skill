@@ -97,11 +97,13 @@ approval boundary that hands off to IDD execution.
   owner marker. The current generation's winner owns the target; any other
   session must stop without editing and leave the label in place. Do not
   edit or delete owner comments.
-- Generate one opaque set ID at Stage 1 start and reuse it in every owner
-  marker for that set. Persist the resolved anchor identity in every marker
-  as well. These append-only comments are the durable set, anchor, and target
-  membership record; a resume may include only targets whose valid markers
-  identify that exact set and anchor. Never infer set membership or the
+- For a new Stage 1 set, generate one opaque set ID and reuse it in every owner
+  marker for that set. When resuming an interrupted set, recover and verify
+  its persisted set ID from the exact trusted owner markers and reuse it
+  instead of generating a replacement. Persist the resolved anchor identity in
+  every marker as well. These append-only comments are the durable set, anchor,
+  and target membership record; a resume may include only targets whose valid
+  markers identify that exact set and anchor. Never infer set membership or the
   anchor from the shared label alone.
 - Acquire one set anchor before acquiring any other target: use the parent
   roadmap when one exists, otherwise use the designated lead target. Freshly

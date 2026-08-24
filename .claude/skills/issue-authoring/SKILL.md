@@ -94,9 +94,11 @@ needs-decision, blocked-by-human, and out-of-scope.
      [references/workflow-boundary.md](references/workflow-boundary.md)
      and stop without editing when ownership or the target snapshot
      conflicts
-   - generate one opaque set ID at Stage 1 start and reuse it in every
-     owner marker for that set; never infer set membership from the label
-     alone
+   - for a new Stage 1 set, generate one opaque set ID and reuse it in every
+     owner marker for that set; when resuming an interrupted set, recover and
+     verify its persisted set ID from the exact trusted owner markers and
+     reuse it instead of generating a replacement; never infer set membership
+     from the label alone
    - acquire and verify one set anchor first (the parent roadmap when one
      exists, otherwise the designated lead target); do not acquire children
      independently, and stop all edits if any target cannot join that anchor's
