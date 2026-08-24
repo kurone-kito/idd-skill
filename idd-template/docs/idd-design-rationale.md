@@ -332,6 +332,15 @@ passes able to race through reuse and body wiring. The per-target trusted
 owner-marker protocol, fresh re-reads, and append-only generation markers
 close that observed conflict path (kurone-kito/idd-skill#2231).
 
+### Stage 1 — Non-atomic new-issue publication window
+
+During the 2026-08-24 remediation of issue #2231, review verified a concrete
+create-then-label race: a newly created follow-up could exist without the
+authoring label between two separate mutations, allowing another Discover
+pass to see it before the hold was applied. The atomic create-with-label
+requirement, capability check, and quarantine-or-stop fallback close that
+publication window (kurone-kito/idd-skill#2231).
+
 ### B3 — Dependency drift vs. own diff: a typecheck/lint diagnostic
 
 A `typecheck`/`lint` failure in a file the current diff never touched

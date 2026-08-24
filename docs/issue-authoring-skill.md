@@ -801,22 +801,23 @@ checklist passes — every child issue is referenced from its parent roadmap's
 `## Tracks` list, no unsubstituted placeholder remains in any published
 body, and the `audit-authored-issue` linter (or its manual fallback) is green
 on every published body in the set — and the user explicitly requests
-release from the authoring hold. First append a `mode=release` marker
-matching each target's current owner and set while every label is still
-present, with `supersedes` equal to that current owner token, re-fetch to
-verify every marker, and complete that preflight for the whole set before
-removing any label. Then, immediately before each label removal, re-fetch the
-target and require the same current owner/set, release marker, and expected
-label/body snapshot; remove labels one target at a time and re-fetch each
-result. The generation closes only after every target's marker and label
-removal are verified. If a later mutation or verification fails, re-fetch all
-already processed targets, retrying a failed post-removal read with a bounded
-fresh read, restore their labels while the current owner/set still match, and
-verify the restored set state; leave the generation open and stop. If
-restoration cannot be completed or a newer owner has appeared, record a
-set-level recovery hold and never claim a partial release. This release
-checklist plus the user's explicit request together form the single approval
-boundary in this contract.
+release from the authoring hold. Keep the set anchor held until every other
+target's label removal is verified, and remove the anchor label last. First
+append a `mode=release` marker matching each target's current owner and set
+while every label is still present, with `supersedes` equal to that current
+owner token, re-fetch to verify every marker, and complete that preflight for
+the whole set before removing any label. Then, immediately before each label
+removal, re-fetch both the target and the set anchor and require the same
+current owner/set, release marker, and expected label/body snapshot; remove
+non-anchor labels one target at a time and re-fetch each result. The
+generation closes only after every target's marker and label removal are
+verified. If a later mutation or verification fails, re-fetch all already
+processed targets, retrying a failed post-removal read with a bounded fresh
+read, restore their labels while the current owner/set still match, and verify
+the restored set state; leave the generation open and stop. If restoration
+cannot be completed or a newer owner has appeared, record a set-level recovery
+hold and never claim a partial release. This release checklist plus the user's
+explicit request together form the single approval boundary in this contract.
 
 Removing the authoring label releases the Discover guard and
 authorizes IDD execution for the released issues. Do it only as part

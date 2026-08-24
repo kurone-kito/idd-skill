@@ -123,8 +123,9 @@ needs-decision, blocked-by-human, and out-of-scope.
    - after the release checklist passes and the user explicitly requests
      release, preflight and verify a matching `mode=release` marker for every
      target (with `supersedes` equal to the current owner token) before
-     removing any label; recheck the owner/set and expected snapshot
-     immediately before each removal, then remove labels one at a time and
+     removing any label; keep the set anchor held and remove it last. Recheck
+     both the owner/set and the anchor plus the expected snapshot immediately
+     before each removal, then remove non-anchor labels one at a time and
      verify the whole set. If a later removal or verification fails, retry a
      failed post-removal read with a bounded fresh read, restore labels for
      already processed targets while the owner/set still match, verify the

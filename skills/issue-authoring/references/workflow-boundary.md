@@ -137,20 +137,22 @@ approval boundary that hands off to IDD execution.
     stand-in, or similar) remains in any published body
   - the `audit-authored-issue` linter (or its manual fallback under
     `instructions-only`) is green on every published body in the set
-- For every target, first append a `mode=release` marker matching its current
-  owner and set while the label is still present, with `supersedes` equal to
-  that current owner token, re-fetch to verify it, and complete that preflight
-  for the whole set before removing any label. Then, immediately before each
-  label removal, re-fetch the target and require the same current owner/set,
-  release marker, and expected label/body snapshot; remove labels one target
-  at a time and re-fetch each result. The generation closes only after every
-  target's release marker and label removal are verified. If any later removal
-  or verification fails, re-fetch every target already processed, retrying a
-  failed post-removal read with a bounded fresh read, restore its authoring
-  label while the current owner/set still matches, and verify the restored set
-  state; leave the generation open and stop. If restoration cannot be
-  completed or a newer owner has appeared, record a set-level recovery hold
-  and never claim a partial release.
+- Keep the set anchor held until every other target's label removal is
+  verified, and remove the anchor label last. For every target, first append a
+  `mode=release` marker matching its current owner and set while the label is
+  still present, with `supersedes` equal to that current owner token, re-fetch
+  to verify it, and complete that preflight for the whole set before removing
+  any label. Then, immediately before each label removal, re-fetch both the
+  target and the set anchor and require the same current owner/set, release
+  marker, and expected label/body snapshot; remove non-anchor labels one
+  target at a time and re-fetch each result. The generation closes only after
+  every target's release marker and label removal are verified. If any later
+  removal or verification fails, re-fetch every target already processed,
+  retrying a failed post-removal read with a bounded fresh read, restore its
+  authoring label while the current owner/set still matches, and verify the
+  restored set state; leave the generation open and stop. If restoration
+  cannot be completed or a newer owner has appeared, record a set-level
+  recovery hold and never claim a partial release.
 - Bundled skill removes the authoring label from all published issues
   only after the release checklist passes and the user's release
   request is explicit

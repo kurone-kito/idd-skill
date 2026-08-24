@@ -1103,15 +1103,17 @@ only approval boundary.
   release checklist: every child issue is referenced from its parent
   roadmap's `## Tracks` list; no unsubstituted placeholder remains in
   any published body; the `audit-authored-issue` linter (or its manual
-  fallback) is green on every published body in the set. Remove the
-  checklist passes and the user explicitly requests release from the
-  authoring hold. For every target, first append a `mode=release` marker
-  matching its current owner and set while the label is present, with
-  `supersedes` equal to that current owner token, re-fetch to verify it, and
-  complete that preflight for the whole set before removing any label. Then,
-  immediately before each label removal, re-fetch the target and require the
+  fallback) is green on every published body in the set. Keep the authoring
+  label in place until the checklist passes and the user explicitly requests
+  release from the authoring hold. Keep the set anchor held until every other
+  target's label removal is verified, and remove the anchor label last. For
+  every target, first append a `mode=release` marker matching its current
+  owner and set while the label is present, with `supersedes` equal to that
+  current owner token, re-fetch to verify it, and complete that preflight for
+  the whole set before removing any label. Then, immediately before each
+  label removal, re-fetch both the target and the set anchor and require the
   same current owner/set, release marker, and expected label/body snapshot;
-  remove labels one target at a time and re-fetch each result.
+  remove non-anchor labels one target at a time and re-fetch each result.
   The generation closes only after every target's release marker and label
   removal are verified. If any later removal or verification fails, re-fetch
   every target already processed, retrying a failed post-removal read with a
