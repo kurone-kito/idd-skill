@@ -268,6 +268,10 @@ verification_ below). Determine `{prior-claim-id}`:
 - **Migration from a legacy claim**, **fresh claim**, or claim after a
   released / unclaimed state → `none`
 
+**Immediately before claim POST**, re-fetch labels and owner/claim logs.
+Authoring label or `release`/`release-guard` lacking anchor/set/session
+completion blocks claim; ambiguity fails closed. Stop; route above.
+
 Post the claim comment using the exact format and posting mechanics
 already defined in
 [Claim format](idd-overview-core.instructions.md#claim-format) — do not

@@ -803,14 +803,17 @@ A non-anchor target cannot prove that its previous set finished from its local
 owner-marker log alone. Before accepting a fresh `mode=acquire` for a child
 whose prior generation has a `mode=release` or `mode=release-guard` marker,
 follow its exact persisted `anchor` identity and fetch that anchor's paginated
-owner-marker log. Require an exact trusted current-owner/set/session
-`mode=release-complete` marker there. If the completion marker is absent,
-malformed, or cannot be fetched conclusively, treat the prior release as
-interrupted: do not acquire the child as a new set, and instead resume that
-exact set or leave its hold in place. A child log, an absent label, or a
-session-local read is never completion evidence. Once the anchor completion is
-reconciled, the old set is closed and a new acquisition may start a new
-generation.
+owner-marker log. Require a trusted `mode=release-complete` marker for the
+exact anchor/set/session generation represented by the child's current release
+marker, including the current anchor owner for that release generation; never
+accept an older or newer set's completion. Owner tokens are per target, so do
+not compare the child owner token literally with the anchor owner token. If the
+completion marker is absent, malformed, or cannot be fetched conclusively,
+treat the prior release as interrupted: do not acquire the child as a new set,
+and instead resume that exact set or leave its hold in place. A child log, an
+absent label, or a session-local read is never completion evidence. Once the
+anchor completion is reconciled, the old set is closed and a new acquisition
+may start a new generation.
 
 Acquire one set anchor before acquiring any other target: when the set has a
 parent roadmap, first publish a valid roadmap shell under the authoring hold,
@@ -844,9 +847,10 @@ otherwise this append-only conflict check is mandatory, including for
 `instructions-only` installs.
 
 After that conflict check and immediately before the body or relationship
-mutation, append and verify a trusted `mode=heartbeat` marker for both the
-edited target and the set anchor (one marker serves both roles when they are
-the same target). Re-fetch both targets after the heartbeat and require each
+mutation, append and verify a trusted `mode=heartbeat` marker for the set
+anchor first, then re-fetch and verify its current owner, set, anchor, and
+session. Only after the anchor renewal succeeds, append and verify the edited
+target's heartbeat when it is distinct, then re-fetch both and require each
 target's expected owner token independently, plus the same set, anchor, owning
 session, and expected target snapshot. If either heartbeat cannot be posted or
 verified, or a newer owner appears, stop without editing. A heartbeat never
@@ -903,11 +907,13 @@ current owner, set, anchor, session, and marker body. If that guard is not
 found conclusively, leave all labels in place and stop. The guard suppresses
 Discover for the whole set during the provisional label-removal window; it
 does not close the set. Then, immediately before each label removal, append
-and verify a `mode=heartbeat` marker for the target and
-set anchor (one marker when they coincide), re-fetch both, and require each
-target's expected owner token independently, plus the shared set/anchor/session,
-recorded release-marker comment, and expected label/body snapshot. Remove
-non-anchor labels one target at a time and re-fetch each result. After the
+and verify the set anchor's `mode=heartbeat` first, re-fetching it and requiring
+its current owner, set, anchor, and session. Only after that succeeds, append
+and verify the target heartbeat when it is distinct (one marker serves both
+roles when they coincide), then re-fetch both and require each target's expected
+owner token independently, plus the shared set/anchor/session, recorded
+release-marker comment, and expected label/body snapshot. Remove non-anchor
+labels one target at a time and re-fetch each result. After the
 final anchor label removal is verified, reuse or append the anchor-only
 `mode=release-complete` marker and record its comment ID. Reconcile that ID
 and the paginated anchor log with bounded retries; a successful POST or

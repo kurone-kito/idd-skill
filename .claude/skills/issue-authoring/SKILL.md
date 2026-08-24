@@ -160,9 +160,10 @@ needs-decision, blocked-by-human, and out-of-scope.
      anchor held, and remove it last. Recheck
      each target's expected owner token independently, plus the shared
      set/anchor/session, recorded marker, and expected snapshot immediately
-     before each removal. Renew and verify a target/anchor heartbeat at that
-     point (one marker when they coincide), then remove non-anchor labels one
-     at a time and
+     before each removal. Renew and verify the set anchor heartbeat first,
+     re-fetching its current owner, set, anchor, and session; only then renew
+     and verify the target heartbeat when distinct (one marker when they
+     coincide). Remove non-anchor labels one at a time and
      verify the whole set. After the final anchor label removal is verified,
      reuse or append the anchor-only `mode=release-complete` marker and record
      its comment ID. Reconcile that ID and the paginated anchor log with
