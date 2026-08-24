@@ -475,6 +475,8 @@ This repository uses the following IDD policies:
   not applicable}`
 - **Runner-selection and self-hosted runner integrity protection
   recorded**: `{yes | no | not applicable}`
+- **Merge-gate action dependency trust recorded**: `{full commit-SHA pins |
+  mutable publisher/tag scope accepted | not applicable}`
 - **`Require review from Code Owners` enabled**: `{yes | no | unknown}`
 - **Dismiss stale pull request approvals when new commits are pushed**:
   `{yes | no | unknown}`
