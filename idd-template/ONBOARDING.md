@@ -462,6 +462,13 @@ error), so an agent can gate on the exit code without parsing prose.
     [--dry-run] [--repo-name <value> ...]
   ```
 
+  The `--substitute` shortcut resolves placeholders only; it does not
+  select or persist `helperRuntime.profile`. If Step 1B selected a
+  non-default helper runtime, apply the manual Step 4 configuration
+  instruction after running this command. The `--profile` option on
+  `--import` and `--verify` controls profile-conditional file selection and
+  completeness, not policy recording.
+
 - **Step 6 (verification checklist) → `--verify`**: a mechanical pass/fail
   check for a target tree after `--import` and `--substitute` have run,
   replacing a manual walkthrough of the checklist below with three check
@@ -527,6 +534,13 @@ Use
 [Onboarding Reference — Policy Decisions](docs/onboarding/policy-decisions.md)
 for the detailed defaults, non-default consequences, and the policy
 recording template you will apply in Step 3.
+
+The pristine `.github/idd/config.json` intentionally leaves
+`helperRuntime` absent. Do not add that key during the import when the
+confirmed profile is `instructions-only`; Step 4 records the key only for
+an explicitly selected helper profile.
+This rule is preventive; no observed incident yet. Issue `#2229` tracks the
+configuration inconsistency that prompted the correction.
 
 ### File list
 
@@ -1717,6 +1731,27 @@ surviving tokens are expected and not reported as unresolved.
 
 After replacing, verify that no `{{...}}` placeholder strings remain in
 any copied file other than those three meta-docs.
+
+Apply the confirmed helper runtime profile after placeholder replacement:
+leave `helperRuntime` absent from `.github/idd/config.json` for the
+`instructions-only` default, which means no helper command is configured.
+Only when the operator explicitly selects another supported profile should
+you add the object below, replacing the example value with
+`package-manager`, `vendored-node`, or `ephemeral-npx` as appropriate.
+Merge it into the top-level object in `.github/idd/config.json` and keep the
+surrounding member commas valid.
+
+```json
+{
+  "helperRuntime": {
+    "profile": "package-manager"
+  }
+}
+```
+
+Keep this object aligned with the confirmed profile recorded in the local
+policy section; do not add it merely to record the `instructions-only`
+default.
 
 ---
 
