@@ -149,17 +149,17 @@ needs-decision, blocked-by-human, and out-of-scope.
      exact token tuple; missing, conflicting, or out-of-order records fail
      closed, while `pending` and `cleanup` remain recovery holds.
 
-   Generate the opaque IDs and token before creation because issue numbers
-   are not yet known; before issuing the create, persist those preallocated
-   IDs, the exact token, and `state=pending` in the originating hold. After
-   a successful create, attach and verify the returned issue identities on
-   that pending record before appending the owner marker. If the pre-create
-   hold write cannot be verified, do not create; if the post-create identity
-   attachment cannot be verified, leave the returned issue held for recovery.
-   Transition to `member` only after owner-marker verification or
-   `abandoned` only after the verified safe close and label removal. On
-   resume, match the exact token and persisted identities; an incomplete
-   scan or state mismatch is recovery.
+     Generate the opaque IDs and token before creation because issue numbers
+     are not yet known; before issuing the create, persist those preallocated
+     IDs, the exact token, and `state=pending` in the originating hold. After
+     a successful create, attach and verify the returned issue identities on
+     that pending record before appending the owner marker. If the pre-create
+     hold write cannot be verified, do not create; if the post-create identity
+     attachment cannot be verified, leave the returned issue held for recovery.
+     Transition to `member` only after owner-marker verification or
+     `abandoned` only after the verified safe close and label removal. On
+     resume, match the exact token and persisted identities; an incomplete
+     scan or state mismatch is recovery.
    - immediately after a new issue is created and labeled, append its
      `mode=acquire` owner marker with the current set ID, then re-fetch the
      labels, body, and owner comments before treating it as a set member
