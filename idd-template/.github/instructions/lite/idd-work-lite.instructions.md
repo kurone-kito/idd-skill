@@ -190,10 +190,13 @@ into the roadmap, leave the authoring label on every published or updated
 target (issues and roadmaps) and resume B–C. If interrupted, leave labels on every
 published or updated target (issues and roadmaps), stop B–C, and resume only
 after a later pass completes
-the set. If Stage 1 publishes nothing (including after clarification or a
-non-ready bucket), comment that outcome before resuming and, once a PR exists,
-list it in the PR's recommended follow-ups. There is no hold to release; never
-release a follow-up or start a second loop. If the companion is unavailable,
+the set. After anchor acquisition, persist and verify exact `anchor`/`set`
+identities in the originating issue's durable Stage 1 hold; resume must recover
+it, not infer from the label or choose another lead. If Stage 1 publishes
+nothing (including after clarification or a non-ready bucket), comment that
+outcome before resuming and, once a PR exists,
+list it in the PR's recommended follow-ups. Do not release the Stage 1 B–C
+hold; never release a follow-up or start a second loop. If the companion is unavailable,
 record the proposal in a separate comment and PR follow-ups; do not create it
 ad hoc or improvise worker-side authoring.
 

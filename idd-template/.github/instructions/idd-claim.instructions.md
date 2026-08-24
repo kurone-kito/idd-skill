@@ -267,9 +267,9 @@ verification_ below). Determine `{prior-claim-id}`:
   released / unclaimed state → `none`
 
 Immediately before claim POST, re-fetch labels and owner/claim logs. An
-authoring marker or incomplete generation blocks; child release requires exact
-anchor/set/session completion. Route directly to already-claimed/Discover
-fallback (A0-T stops), never A5(c).
+incomplete/current authoring hold blocks; only exact anchor/set/session
+`release-complete` allows a completed generation.
+Route directly to already-claimed/Discover fallback (A0-T stops), never A5(c).
 
 Post the claim comment using the exact format and posting mechanics
 already defined in
@@ -400,7 +400,10 @@ rule 7). Adopt **both fields verbatim** as your own `{agent-id}` /
 fresh claim-id or keeping your own native agent-id; no separate
 `claimed-by supersedes: none` post is required for the transfer itself.
 
-**Adopt-verbatim is still an activation**: post your own
+**Adopt-verbatim is still an activation**: immediately before every activation
+nonce, including this nonce-only handoff, repeat the label/authoring-state
+guard above.
+Post your own
 [activation-nonce marker](#activation-nonce-format) for `new-claim-id`
 too (see the
 [rationale](../../docs/idd-design-rationale.md#activation-nonce-why-a-separate-marker-and-what-stays-deferred)
@@ -410,17 +413,13 @@ for `new-claim-id`, and confirm it is yours — the only nonce check
 that fires here, since posting no `claimed-by` means this path never
 enters _Claim verification_ above. On mismatch, treat the claim as
 contested and return to Discover, exactly as the "If any check fails"
-clause above.
+clause above. Repeat that guard after nonce verification; a hold at either
+check contests activation and follows the same fallback.
 
-Always use the marker's assigned `new-agent-id` / `new-claim-id`
-exactly as recorded — never invent an ad hoc `claimed-by`, and never
-reuse the displaced old `{claim-id}` as your own (`{agent-id}` may
-legitimately equal the displaced claim's agent-id; only `{claim-id}`
-must always be the fresh marker-assigned value). An invented native
-agent-id silently fails every later heartbeat or F2/F3 check as
-`agent-id-mismatch` / `claimLost`. Cite the trusted forced-handoff
-evidence in the issue digest or resume report's `Authoritative by`
-field.
+Always use the assigned pair verbatim: never invent `claimed-by` or reuse the
+displaced `{claim-id}`. A native agent-id that is not the assigned value fails
+later heartbeat or F2/F3 checks. Cite trusted forced-handoff evidence in the
+issue digest or resume report's `Authoritative by` field.
 
 **The successor claim is sticky**, not a one-shot unlock: forced-handoff
 re-derives the adopted pair as the active claim on every resolution

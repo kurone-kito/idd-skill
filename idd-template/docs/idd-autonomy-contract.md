@@ -143,19 +143,28 @@ comment with this exact field grammar:
 Resolve `<marker-prefix>` from the target repository before parsing or posting;
 never guess it. Only the authenticated actor after a successful
 Write/Maintain/Admin permission check, a configured trusted bot/app, or an
-explicitly trusted collaborator may create a valid marker. Read every issue
-comment page and order valid markers by GitHub `created_at`, then comment ID.
-The first valid `acquire`, `bootstrap`, or `resume` marker wins its open
-generation; owner tokens are per target, while `anchor`, `set`, and `session`
-must match the set. A child `release` or `release-guard` is provisional: the
-anchor log must contain a trusted `release-complete` for the exact anchor, set,
-session, and current release generation only after every target's release
-marker, absent authoring label, and expected body has been re-fetched and
-verified. A child log, absent label, or session-local read is never completion
-evidence. When resuming, enumerate the anchor's `## Tracks` plus a paginated
-repository comment scan scoped to the exact anchor/set markers. Malformed,
-untrusted, incomplete, or ambiguous evidence fails closed: leave the
-authoring label in place and do not edit, claim, release, or close.
+explicitly enabled Write/Maintain/Admin collaborator may create a valid marker.
+Read every issue comment page and order valid markers by GitHub `created_at`,
+then comment ID. Replay that ordered log as a state machine: an
+`acquire`/`bootstrap` with `supersedes=none` starts a generation only when no
+generation is open or the prior exact set has a trusted `release-complete`; a
+`resume` starts the next generation only for the exact interrupted set and
+matching prior owner. Within an open generation, the first valid acquisition
+or permitted resume wins and later conflicting activations are contested.
+Owner tokens are per target, while `anchor`, `set`, and `session` must match
+the set. A `heartbeat` must match and supersede the current owner, set, anchor,
+and session and only refreshes freshness. A `release` must match and supersede
+the current owner and set and remains provisional; `release-guard` is
+anchor-only. A
+`release-complete` closes only the exact anchor/set/session release generation
+after every target's release marker, absent authoring label, and expected body
+has been re-fetched and verified; only then may a later `acquire` start a fresh
+generation. A child log, absent label, or session-local read is never
+completion evidence. When resuming, enumerate the anchor's `## Tracks` plus a
+paginated repository comment scan scoped to the exact anchor/set markers.
+Malformed, untrusted, out-of-order, incomplete, or ambiguous evidence fails
+closed: leave the authoring label in place and do not edit, claim, release, or
+close.
 
 ### PR publication (D2-D3.5)
 

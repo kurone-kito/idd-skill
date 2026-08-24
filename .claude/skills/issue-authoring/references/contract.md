@@ -1028,8 +1028,10 @@ only approval boundary.
   marker from another session or set is present, do not close or overwrite
   the exposed issue; report the ownership conflict and stop. If no competing
   claim is present, apply and verify the authoring label as a safe hold before
-  closing. If that hold cannot be verified, leave the issue open and report
-  the recovery hold. Immediately after a successfully labeled issue is
+  closing. Re-fetch the current claim and paginated owner log again after that
+  recovery hold is verified and before closing. If either the hold or final
+  re-read cannot be verified, leave the issue open and report the recovery
+  hold. Immediately after a successfully labeled issue is
   created, append a `mode=acquire` owner marker with the current set ID and a
   new owner token. Re-fetch labels, body, and owner comments before treating
   the issue as a set member. If marker append or verification is uncertain,
@@ -1039,9 +1041,10 @@ only approval boundary.
   label in place and close only after the no-competing-claim safe-hold check.
 - **Per-target ownership.** The configured label is a shared
   claim-suppression lock, not a session owner token. Before editing an
-  existing issue or roadmap, fetch a fresh snapshot, apply the label if it
-  is absent, and append a hidden owner comment with the resolved marker
-  prefix:
+  existing issue or roadmap, fetch a fresh snapshot and re-read its active
+  `claimed-by` and open-PR state. Any active execution is a conflict; do not
+  establish the authoring hold. Apply the label if it is absent, then append a
+  hidden owner comment with the resolved marker prefix:
 
   ```html
   <!-- <marker-prefix>-authoring-owner: target=<owner>/<repo>#<number>; anchor=<owner>/<repo>#<number>; mode=acquire|resume|bootstrap|heartbeat|release|release-guard|release-complete; owner=<opaque-owner-token>; set=<opaque-set-id>; session=<opaque-session-id>; supersedes=<opaque-owner-token|none> -->
@@ -1051,7 +1054,10 @@ only approval boundary.
 
   Append this HTML-first body with a direct JSON `POST` to the issue-comments
   endpoint; do not rely on `gh issue comment` or `gh api -f body=` for the
-  owner marker. Verify the returned comment ID and body after posting.
+  owner marker. Verify the returned comment ID and body after posting, then
+  re-fetch the target's active claim and open-PR state again. If execution
+  began during acquisition, stop without editing and leave the verified hold
+  for explicit recovery.
 
   Owner tokens are per target: never compare a child target's `owner` value
   literally with the anchor's `owner` value. Every owner-marker log read for a
@@ -1157,10 +1163,13 @@ only approval boundary.
   After each `acquire`/`resume`/`bootstrap` marker POST, wait the configured
   `claim.verifySettleDelay`, replay the full paginated log, and choose the
   winner by deterministic comment order; an immediate local read never
-  authorizes edits.
+  authorizes edits. Apply the same settle delay and full paginated replay after
+  every heartbeat before it authorizes an edit or label removal.
 - **Conflict check before every edit.** Immediately before each body or
   roadmap relationship update, re-fetch both the target and the set anchor
   (the same fresh snapshot serves both roles when the target is the anchor).
+  Re-read the target's active `claimed-by` and open-PR state as well; any
+  active execution is a conflict, even when the body and label are unchanged.
   Require each target's expected owner token independently, plus the same set,
   anchor, and owning session, and require the expected body/label snapshot on
   the edited target to remain unchanged. An unexpected change, competing owner,

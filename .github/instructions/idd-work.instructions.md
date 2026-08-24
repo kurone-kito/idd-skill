@@ -340,13 +340,15 @@ anchor before any child; its `## Tracks` may be empty until child numbers
 exist. Then publish/acquire ready children under that anchor, renew/revalidate
 it around each acquisition, wire their numbers into the roadmap, and leave the
 authoring label on every published or updated target (issues and roadmaps).
-If interrupted, leave those labels, stop B–C, and resume only after a later
-pass completes the set. If Stage 1 publishes nothing (including after a
-non-ready bucket), comment that outcome before resuming and, once a PR exists,
-list it in the PR's recommended follow-ups. There is no hold to release; never
-release a follow-up or start a second loop. If the companion is unavailable,
-record the proposal in a separate comment and PR follow-ups; do not create it
-ad hoc or improvise worker-side authoring.
+After anchor acquisition, persist/verify exact `anchor`/`set` in the originating
+issue's durable Stage 1 hold; resume must recover it, not infer from label or
+choose another lead. On interruption, retain labels, stop B–C, and resume only
+after completion. If Stage 1 publishes nothing (including after a non-ready
+bucket), comment it before resuming and list it in PR follow-ups once PR
+exists. Keep Stage 1 B–C hold; never release
+a follow-up or start a second loop. If the companion is unavailable, record the
+proposal in a comment/PR follow-ups; never create it ad hoc or improvise
+worker-side authoring.
 
 ---
 

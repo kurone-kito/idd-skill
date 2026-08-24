@@ -719,14 +719,20 @@ before stopping.
 
 The configured authoring label is a shared **claim-suppression lock**, not
 a session owner token. Before editing an existing issue or roadmap, take a
-fresh target snapshot, apply the label if it is absent, and append a hidden
-owner comment using the resolved marker prefix:
+fresh target snapshot and re-read its active `claimed-by` and open-PR state.
+Any active execution is a conflict, so do not establish the hold. Apply the
+label if it is absent, and append a hidden owner comment using the resolved
+marker prefix:
 
 ```html
 <!-- <marker-prefix>-authoring-owner: target=<owner>/<repo>#<number>; anchor=<owner>/<repo>#<number>; mode=acquire|resume|bootstrap|heartbeat|release|release-guard|release-complete; owner=<opaque-owner-token>; set=<opaque-set-id>; session=<opaque-session-id>; supersedes=<opaque-owner-token|none> -->
 ```
 
 _Issue-authoring ownership marker. Do not edit or delete._
+
+Verify the returned comment ID and body after posting, then re-read the active
+claim and open-PR state again. If execution began during acquisition, stop
+without editing and leave the verified hold for explicit recovery.
 
 Owner tokens are per target: never compare a child target's `owner` value
 literally with the anchor's `owner` value. Every owner-marker log read for a
