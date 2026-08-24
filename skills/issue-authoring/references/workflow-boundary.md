@@ -65,13 +65,14 @@ approval boundary that hands off to IDD execution.
   configured bot/app trust. An untrusted, malformed, or conflicting
   exact-token record is not valid evidence; fail closed and retain the hold.
 
-  Generate it before creation and persist the preallocated IDs, exact token,
-  and `state=pending` in that journal before issuing the create. After
-  a successful create, attach and verify the returned issue identities before
-  appending the owner marker; an unverifiable pre-create write blocks creation,
-  while an unverifiable post-create attachment leaves the issue held for
-  recovery. Only verified owner-marker acquisition changes it to `member`, and
-  only verified safe close changes it to `abandoned`
+  Generate the opaque target/anchor IDs and publication token before creation
+  and persist those preallocated IDs, the exact token, and `state=pending` in
+  that journal before issuing the create. After a successful create, attach and
+  verify the returned issue identities before appending the owner marker; an
+  unverifiable pre-create write blocks creation, while an unverifiable
+  post-create attachment leaves the issue held for recovery. Only verified
+  owner-marker acquisition changes it to `member`, and only verified safe close
+  changes it to `abandoned`
 - Immediately after a new issue is created and labeled, bundled skill
   appends its `mode=acquire` owner marker with the current set ID, then
   re-fetches labels, body, and owner comments before treating it as a set
