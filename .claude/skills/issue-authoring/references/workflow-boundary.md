@@ -40,8 +40,11 @@ approval boundary that hands off to IDD execution.
   permission check; deletion needs admin permission the authoring agent
   typically lacks (and `docs/permissions.md` forbids for normal IDD), so it
   is not the default recovery path
-- If owner-marker append or verification fails for a new issue, leave the
-  authoring label in place and close the created issue before stopping
+- If owner-marker append or verification is uncertain for a new issue,
+  reconcile the returned comment ID and the paginated owner-marker log with
+  bounded retries before closing. If a trusted marker is found, retain the
+  label and recover or reopen the issue as a set member; otherwise leave the
+  label in place and close before stopping.
 - **Per-target ownership is separate from the hold label.** The configured
   authoring label is a shared claim-suppression lock, not a session lock. Before
   editing an existing issue or roadmap, the skill must fetch a fresh target
@@ -57,6 +60,12 @@ approval boundary that hands off to IDD execution.
   Append this HTML-first body with a direct JSON `POST` to the issue-comments
   endpoint; do not rely on `gh issue comment` or `gh api -f body=` for the
   owner marker. Verify the returned comment ID and body after posting.
+
+  Owner tokens are per target: never compare a child target's `owner` value
+  literally with the anchor's `owner` value. Every owner-marker log read for a
+  target or anchor must use paginated issue-comment retrieval (for example,
+  `gh api --paginate` or an API equivalent) and deterministic GitHub comment
+  order (`created_at`, then comment ID); never rely on a single API page.
 
   Resolve the set anchor before appending any target marker. `anchor` records
   the canonical owner/repository/issue identity of that anchor; the anchor's
@@ -115,20 +124,22 @@ approval boundary that hands off to IDD execution.
   verified resume of that set rather than allowing a split ownership set.
 - **Re-read before every edit.** Immediately before each body or roadmap
   relationship update, re-fetch both the target and the set anchor (the same
-  fresh snapshot serves both roles when the target is the anchor). Require the
-  same owner and set to remain the winners on both targets, and require the
-  expected body/label snapshot on the edited target to remain unchanged. An
-  unexpected change, competing owner, malformed owner marker, or inability to
-  prove a unique owner on either target is a conflict: stop without editing,
-  leave the authoring label in place, and record the safe alternative.
+  fresh snapshot serves both roles when the target is the anchor). Require each
+  target's expected owner token independently, plus the same set, anchor, and
+  owning session, and require the expected body/label snapshot on the edited
+  target to remain unchanged. An unexpected change, competing owner, malformed
+  owner marker, or inability to prove a unique owner on either target is a
+  conflict: stop without editing, leave the authoring label in place, and
+  record the safe alternative.
 - **Renew before every edit.** After that conflict check and immediately
   before the body or relationship mutation, append and verify a trusted
   `mode=heartbeat` marker for both the edited target and the set anchor (one
   marker serves both roles when they are the same target). Re-fetch both
-  targets after the heartbeat and require the same owner, set, anchor, and
-  expected target snapshot. If either heartbeat cannot be posted or verified,
-  or a newer owner appears, stop without editing. A heartbeat never starts a
-  new generation and never authorizes release.
+  targets after the heartbeat and require each target's expected owner token
+  independently, plus the same set, anchor, owning session, and expected target
+  snapshot. If either heartbeat cannot be posted or verified, or a newer owner
+  appears, stop without editing. A heartbeat never starts a new generation and
+  never authorizes release.
 - A target already held by another set is unavailable. A later session may
   resume only when the invocation identifies the exact interrupted set and
   the hold is past `issueAuthoring.authoringStaleAge`; it must append a
@@ -178,11 +189,13 @@ approval boundary that hands off to IDD execution.
   Complete that preflight for the whole set before removing any label. A
   retry of an open generation must reuse the recorded or earliest matching
   marker and never append an indistinguishable duplicate. Then, immediately
-  before each label removal, re-fetch both the target and the set anchor and
-  require the same current owner/set, that recorded release-marker comment,
-  and the expected label/body snapshot; remove non-anchor labels one
-  target at a time and re-fetch each result. Treat every release marker and
-  label removal as provisional: no target generation closes until every
+  before each label removal, append and verify a `mode=heartbeat` marker for
+  the target and set anchor (one marker when they coincide), then re-fetch both
+  and require each target's expected owner token independently, plus the shared
+  set/anchor/session, recorded release-marker comment, and expected label/body
+  snapshot. Remove non-anchor labels one target at a time and re-fetch each
+  result. Treat every release marker, heartbeat, and label removal as
+  provisional: no target generation closes until every
   target's release marker and label removal are verified, at which point the
   set-level release closes all target generations together. If any later
   removal or verification fails, re-fetch every target already processed,

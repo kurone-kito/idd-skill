@@ -703,8 +703,11 @@ not the default recovery path.
 Immediately after a new issue is created and its authoring label is applied,
 append a `mode=acquire` owner marker with the current set ID and a new owner
 token. Re-fetch labels, body, and owner comments before treating the issue as
-a set member. If marker append or verification fails, leave the label in
-place and close the new issue before stopping.
+a set member. If marker append or verification is uncertain, reconcile the
+returned comment ID and the paginated owner-marker log with bounded retries
+before closing. If a trusted marker is found, retain the label and recover or
+reopen the issue as a set member; otherwise leave the label in place and close
+before stopping.
 
 ### Per-target ownership and conflict handling
 
@@ -718,6 +721,12 @@ owner comment using the resolved marker prefix:
 ```
 
 _Issue-authoring ownership marker. Do not edit or delete._
+
+Owner tokens are per target: never compare a child target's `owner` value
+literally with the anchor's `owner` value. Every owner-marker log read for a
+target or anchor must use paginated issue-comment retrieval (for example,
+`gh api --paginate` or an API equivalent) and deterministic GitHub comment
+order (`created_at`, then comment ID); never rely on a single API page.
 
 Append this HTML-first body with a direct JSON `POST` to the issue-comments
 endpoint; do not rely on `gh issue comment` or `gh api -f body=` for the owner
@@ -782,22 +791,24 @@ resume of that set rather than allowing a split ownership set.
 
 Immediately before every body or roadmap relationship update, re-fetch both
 the target and the set anchor (the same fresh snapshot serves both roles when
-the target is the anchor). Require the same owner and set to remain the
-winners on both targets, and require the expected body/label snapshot on the
-edited target to remain unchanged. An unexpected change, competing owner,
-malformed owner marker, or inability to prove a unique owner on either target
-is a conflict: do not overwrite the target, leave the authoring label in
-place, and record a safe alternative. Prefer an atomic acquisition helper
-when the target runtime provides one; otherwise this append-only conflict
-check is mandatory, including for `instructions-only` installs.
+the target is the anchor). Require each target's expected owner token
+independently, plus the same set, anchor, and owning session, and require the
+expected body/label snapshot on the edited target to remain unchanged. An
+unexpected change, competing owner, malformed owner marker, or inability to
+prove a unique owner on either target is a conflict: do not overwrite the
+target, leave the authoring label in place, and record a safe alternative.
+Prefer an atomic acquisition helper when the target runtime provides one;
+otherwise this append-only conflict check is mandatory, including for
+`instructions-only` installs.
 
 After that conflict check and immediately before the body or relationship
 mutation, append and verify a trusted `mode=heartbeat` marker for both the
 edited target and the set anchor (one marker serves both roles when they are
-the same target). Re-fetch both targets after the heartbeat and require the
-same owner, set, anchor, and expected target snapshot. If either heartbeat
-cannot be posted or verified, or a newer owner appears, stop without editing.
-A heartbeat never starts a new generation and never authorizes release.
+the same target). Re-fetch both targets after the heartbeat and require each
+target's expected owner token independently, plus the same set, anchor, owning
+session, and expected target snapshot. If either heartbeat cannot be posted or
+verified, or a newer owner appears, stop without editing. A heartbeat never
+starts a new generation and never authorizes release.
 
 A target already held by another set is unavailable. A later session may
 resume only when the invocation identifies the exact interrupted set and
@@ -843,11 +854,13 @@ the current owner token, re-fetch to verify it, and record its comment ID.
 Complete that preflight for the whole set before removing any label. A retry
 of an open generation must reuse the recorded or earliest matching marker and
 never append an indistinguishable duplicate. Then, immediately before each
-label removal, re-fetch both the target and the set anchor and require the
-same current owner/set, that recorded release-marker comment, and the expected
-label/body snapshot; remove non-anchor labels one target at a time and re-fetch
-each result. Treat every
-release marker and label removal as provisional: no target generation closes
+label removal, append and verify a `mode=heartbeat` marker for the target and
+set anchor (one marker when they coincide), re-fetch both, and require each
+target's expected owner token independently, plus the shared set/anchor/session,
+recorded release-marker comment, and expected label/body snapshot. Remove
+non-anchor labels one target at a time and re-fetch each result. Treat every
+release marker, heartbeat, and label removal as provisional: no target
+generation closes
 until every target's release marker and label removal are verified, at which
 point the set-level release closes all target generations together. If a later
 mutation or verification fails, re-fetch all already processed targets,

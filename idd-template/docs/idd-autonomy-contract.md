@@ -108,6 +108,16 @@ claim, scoped to the roadmap issue only.
 | Merge `main` into the feature branch (post-publication sync)                                                                               | Reversible                | `git merge --abort` / local reset — but only before its own push; once pushed it joins the Push row below and is no longer separately undoable. Caveat: while the PR carries unresolved review threads, unreplied comments, or a reviewer's `CHANGES_REQUESTED` state, `idd-review-fix.instructions.md`, `idd-review-triage.instructions.md`, and `idd-review-fix-lite.instructions.md` require standing operator confirmation before this merge regardless of this Reversible classification — the gate protects reviewer attention from an unreviewed merge commit appearing mid-review, not against data loss. | E11, E-phase branch-sync check (`idd-review-fix.instructions.md`, `idd-review-triage.instructions.md`, `idd-review-fix-lite.instructions.md`) |
 | Delete local worktree + branch                                                                                                             | Reversible                | Can be recreated from the remote branch or claim state                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            | F4 (`idd-merge.instructions.md`)                                                                                                              |
 
+For the issue-authoring rows above, owner tokens are per target and must be
+validated independently; only the set ID, anchor identity, and owning session
+are shared across the set. Every owner-marker log read uses paginated,
+deterministically ordered issue-comment retrieval. Immediately before each
+Stage 2 label removal, a verified target/anchor heartbeat and fresh read are
+required. If a new issue's marker POST or verification is uncertain, reconcile
+the returned comment ID and paginated log with bounded retries; a discovered
+trusted marker keeps the label and requires recovery or reopening before
+publication continues, while an absent marker permits the guarded close.
+
 ### PR publication (D2-D3.5)
 
 | Mutation                                 | Reversible / Irreversible | Undo path / Governing gate                                                                                                                                                  | Source                                                                      |

@@ -107,12 +107,13 @@ needs-decision, blocked-by-human, and out-of-scope.
      marker for the set; the anchor marker points to itself, and a resume must
      stop if the interrupted set's anchor cannot be proven
    - immediately before every Stage 1 body or relationship edit, re-fetch both
-     the edited target and the set anchor; require the same owner/set on both
-     and an unchanged expected target snapshot before editing
+     the edited target and the set anchor; require each target's expected owner
+     token independently, plus the same set, anchor, and owning session, and
+     require an unchanged expected target snapshot before editing
    - immediately before that edit, renew both generations with a trusted
-     same-owner heartbeat marker (one marker when target and anchor coincide),
-     re-fetch and verify both, and stop if renewal or ownership verification
-     fails
+     same-owner-per-target heartbeat marker (one marker when target and anchor
+     coincide), re-fetch and verify both, and stop if renewal or ownership
+     verification fails
    - create new issues only through a capability-checked publication command
      that applies the authoring label atomically; if that operation is
      unavailable, stop before creating the issue — never intentionally create
@@ -120,8 +121,11 @@ needs-decision, blocked-by-human, and out-of-scope.
    - immediately after a new issue is created and labeled, append its
      `mode=acquire` owner marker with the current set ID, then re-fetch the
      labels, body, and owner comments before treating it as a set member
-   - if owner-marker append or verification fails for a new issue, leave the
-     authoring label in place and close the created issue before stopping
+   - if owner-marker append or verification is uncertain for a new issue,
+     reconcile the returned comment ID and the paginated owner-marker log with
+     bounded retries before closing; if a trusted marker is found, retain the
+     label and recover or reopen the issue as a set member, otherwise leave the
+     label in place and close before stopping
    - if an allegedly atomic create unexpectedly returns an unlabeled issue,
      close it before stopping and report the failed capability or permission
      check; deletion needs admin permission and is not the default recovery
@@ -132,14 +136,18 @@ needs-decision, blocked-by-human, and out-of-scope.
    - if a session is interrupted before the set is fully wired, leave the
      label and owner markers in place — the label suppresses Discover and
      the markers preserve the set identity for a later verified resume
+   - read every target and anchor owner-marker log with paginated retrieval and
+     deterministic comment order; never rely on a single API page
    - after the release checklist passes and the user explicitly requests
      release, preflight and verify or reuse a matching `mode=release` marker
      for every target (with `supersedes` equal to the current owner token)
      before removing any label; record its GitHub comment ID, never append a
      duplicate on retry, keep the set anchor held, and remove it last. Recheck
-     both the owner/set and the anchor plus that recorded marker and expected
-     snapshot immediately before each removal, then remove non-anchor labels
-     one at a time and
+     each target's expected owner token independently, plus the shared
+     set/anchor/session, recorded marker, and expected snapshot immediately
+     before each removal. Renew and verify a target/anchor heartbeat at that
+     point (one marker when they coincide), then remove non-anchor labels one
+     at a time and
      verify the whole set. Treat each release marker and removal as
      provisional until every target succeeds. If a later removal or
      verification fails, retry a failed post-removal read with a bounded fresh
