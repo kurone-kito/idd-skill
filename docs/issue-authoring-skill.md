@@ -714,8 +714,14 @@ fresh target snapshot, apply the label if it is absent, and append a hidden
 owner comment using the resolved marker prefix:
 
 ```html
-<!-- <marker-prefix>-authoring-owner: target=<owner>/<repo>#<number>; anchor=<owner>/<repo>#<number>; mode=acquire|resume|bootstrap|release; owner=<opaque-owner-token>; set=<opaque-set-id>; session=<opaque-session-id>; supersedes=<opaque-owner-token|none> -->
+<!-- <marker-prefix>-authoring-owner: target=<owner>/<repo>#<number>; anchor=<owner>/<repo>#<number>; mode=acquire|resume|bootstrap|heartbeat|release; owner=<opaque-owner-token>; set=<opaque-set-id>; session=<opaque-session-id>; supersedes=<opaque-owner-token|none> -->
 ```
+
+_Issue-authoring ownership marker. Do not edit or delete._
+
+Append this HTML-first body with a direct JSON `POST` to the issue-comments
+endpoint; do not rely on `gh issue comment` or `gh api -f body=` for the owner
+marker. Verify the returned comment ID and body after posting.
 
 Resolve the set anchor before appending any target marker. `anchor` records
 the canonical owner/repository/issue identity of that anchor; the anchor's
@@ -737,6 +743,9 @@ opaque per-target owner token; `supersedes=none` for `acquire` and
 `bootstrap`, while `resume` names the prior owner token. For `release`, keep
 the current owner token in `owner` and set `supersedes` to that same current
 owner token; `supersedes=none` is invalid for a release marker.
+For `heartbeat`, retain the current owner, set, and anchor, set `supersedes`
+to that same owner token, and do not open or close a generation; it only
+renews the current owner's freshness.
 Within an open generation, the first valid acquisition, bootstrap, or
 resume marker by GitHub comment order wins. A
 `resume` marker opens a new generation only for the exact interrupted set
@@ -747,7 +756,7 @@ generation. Only after a fresh re-read verifies every target's release
 marker and label removal does the set-level release close all target
 generations, after which a later `acquire` starts a new generation. The
 active generation's freshness is the GitHub `created_at` of
-its latest trusted acquisition or resume marker; a resume marker refreshes
+its latest trusted acquisition, resume, or heartbeat marker; a resume marker refreshes
 that clock, and the label event alone never supersedes a fresh owner marker.
 The current generation's winner owns the target; any other session must stop
 without editing and leave the label in place. Owner comments are append-only
@@ -779,6 +788,14 @@ is a conflict: do not overwrite the target, leave the authoring label in
 place, and record a safe alternative. Prefer an atomic acquisition helper
 when the target runtime provides one; otherwise this append-only conflict
 check is mandatory, including for `instructions-only` installs.
+
+After that conflict check and immediately before the body or relationship
+mutation, append and verify a trusted `mode=heartbeat` marker for both the
+edited target and the set anchor (one marker serves both roles when they are
+the same target). Re-fetch both targets after the heartbeat and require the
+same owner, set, anchor, and expected target snapshot. If either heartbeat
+cannot be posted or verified, or a newer owner appears, stop without editing.
+A heartbeat never starts a new generation and never authorizes release.
 
 A target already held by another set is unavailable. A later session may
 resume only when the invocation identifies the exact interrupted set and

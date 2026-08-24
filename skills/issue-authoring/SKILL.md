@@ -107,6 +107,10 @@ needs-decision, blocked-by-human, and out-of-scope.
    - immediately before every Stage 1 body or relationship edit, re-fetch both
      the edited target and the set anchor; require the same owner/set on both
      and an unchanged expected target snapshot before editing
+   - immediately before that edit, renew both generations with a trusted
+     same-owner heartbeat marker (one marker when target and anchor coincide),
+     re-fetch and verify both, and stop if renewal or ownership verification
+     fails
    - create new issues only through a capability-checked publication command
      that applies the authoring label atomically; if that operation is
      unavailable, stop before creating the issue — never intentionally create

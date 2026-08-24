@@ -327,8 +327,9 @@ durable issue comment when the companion is unavailable
 On 2026-08-24, issue #2231 also recorded that a shared authoring label did
 not identify the session holding a follow-up target, leaving concurrent
 passes able to race through reuse and body wiring. The per-target trusted
-owner-marker protocol, fresh re-reads, and append-only generation markers
-close that observed conflict path (kurone-kito/idd-skill#2231).
+owner-marker protocol, visible-note JSON posting, persisted anchor identity,
+fresh re-reads, and same-owner heartbeat renewal before edits close that
+observed conflict path (kurone-kito/idd-skill#2231).
 
 ### Stage 1 — Non-atomic new-issue publication window
 
