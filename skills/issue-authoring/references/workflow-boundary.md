@@ -68,9 +68,12 @@ approval boundary that hands off to IDD execution.
   resume marker by GitHub comment order wins. A
   `resume` marker opens a new generation only for the exact interrupted set
   and matching prior owner token. A `release` marker must match the current
-  owner and set, and closes that generation only after a fresh re-read
-  confirms Stage 2 removed the label; a later `acquire` then starts a new
-  generation. The active generation's freshness is the GitHub `created_at`
+  owner and set, but remains provisional while its set release is in
+  progress; an individual label removal never closes that target's
+  generation. Only after a fresh re-read verifies every target's release
+  marker and label removal does the set-level release close all target
+  generations, after which a later `acquire` starts a new generation. The
+  active generation's freshness is the GitHub `created_at`
   of its latest trusted acquisition or resume marker; a resume marker
   refreshes that clock, and the label event alone never supersedes a fresh
   owner marker. The current generation's winner owns the target; any other
@@ -90,11 +93,13 @@ approval boundary that hands off to IDD execution.
   edits, leave labels and append-only markers in place, and require an exact
   verified resume of that set rather than allowing a split ownership set.
 - **Re-read before every edit.** Immediately before each body or roadmap
-  relationship update, re-fetch the target and require the same owner to
-  remain the winner and the expected body/label snapshot to remain unchanged.
-  An unexpected change, competing owner, malformed owner marker, or inability
-  to prove a unique owner is a conflict: stop without editing, leave the
-  authoring label in place, and record the safe alternative.
+  relationship update, re-fetch both the target and the set anchor (the same
+  fresh snapshot serves both roles when the target is the anchor). Require the
+  same owner and set to remain the winners on both targets, and require the
+  expected body/label snapshot on the edited target to remain unchanged. An
+  unexpected change, competing owner, malformed owner marker, or inability to
+  prove a unique owner on either target is a conflict: stop without editing,
+  leave the authoring label in place, and record the safe alternative.
 - A target already held by another set is unavailable. A later session may
   resume only when the invocation identifies the exact interrupted set and
   the hold is past `issueAuthoring.authoringStaleAge`; it must append a
@@ -143,14 +148,16 @@ approval boundary that hands off to IDD execution.
   any label. Then, immediately before each label removal, re-fetch both the
   target and the set anchor and require the same current owner/set, release
   marker, and expected label/body snapshot; remove non-anchor labels one
-  target at a time and re-fetch each result. The generation closes only after
-  every target's release marker and label removal are verified. If any later
+  target at a time and re-fetch each result. Treat every release marker and
+  label removal as provisional: no target generation closes until every
+  target's release marker and label removal are verified, at which point the
+  set-level release closes all target generations together. If any later
   removal or verification fails, re-fetch every target already processed,
   retrying a failed post-removal read with a bounded fresh read, restore its
   authoring label while the current owner/set still matches, and verify the
-  restored set state; leave the generation open and stop. If restoration
-  cannot be completed or a newer owner has appeared, record a set-level
-  recovery hold and never claim a partial release.
+  restored set state; leave every target generation open and stop. If
+  restoration cannot be completed or a newer owner has appeared, record a
+  set-level recovery hold and never claim a partial release.
 - Bundled skill removes the authoring label from all published issues
   only after the release checklist passes and the user's release
   request is explicit

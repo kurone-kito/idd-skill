@@ -341,6 +341,15 @@ pass to see it before the hold was applied. The atomic create-with-label
 requirement, capability check, and stop-before-create fallback close that
 publication window (kurone-kito/idd-skill#2231).
 
+### Stage 2 — Set-level release rollback safety
+
+The same remediation exposed a set-level rollback hazard: if an early label
+removal closed its target generation before a later removal failed, the
+restoration owner check could fail and leave that target visible to Discover.
+Release markers are therefore provisional until every target, with the anchor
+last, has been verified, and every Stage 1 edit re-reads both the target and
+the set anchor (kurone-kito/idd-skill#2231).
+
 ### B3 — Dependency drift vs. own diff: a typecheck/lint diagnostic
 
 A `typecheck`/`lint` failure in a file the current diff never touched

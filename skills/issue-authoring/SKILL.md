@@ -101,6 +101,9 @@ needs-decision, blocked-by-human, and out-of-scope.
      exists, otherwise the designated lead target); do not acquire children
      independently, and stop all edits if any target cannot join that anchor's
      verified set
+   - immediately before every Stage 1 body or relationship edit, re-fetch both
+     the edited target and the set anchor; require the same owner/set on both
+     and an unchanged expected target snapshot before editing
    - create new issues only through a capability-checked publication command
      that applies the authoring label atomically; if that operation is
      unavailable, stop before creating the issue — never intentionally create
@@ -126,10 +129,12 @@ needs-decision, blocked-by-human, and out-of-scope.
      removing any label; keep the set anchor held and remove it last. Recheck
      both the owner/set and the anchor plus the expected snapshot immediately
      before each removal, then remove non-anchor labels one at a time and
-     verify the whole set. If a later removal or verification fails, retry a
-     failed post-removal read with a bounded fresh read, restore labels for
-     already processed targets while the owner/set still match, verify the
-     restored set, and leave the generation open
+     verify the whole set. Treat each release marker and removal as
+     provisional until every target succeeds. If a later removal or
+     verification fails, retry a failed post-removal read with a bounded fresh
+     read, restore labels for already processed targets while the owner/set
+     still match, verify the restored set, and leave every target generation
+     open
 8. Stop at the single approval boundary: release. Publishing under the
    hold does not by itself authorize starting the IDD execution loop —
    only the user's explicit release request does.

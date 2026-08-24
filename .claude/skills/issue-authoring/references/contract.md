@@ -1055,9 +1055,12 @@ only approval boundary.
   resume marker by GitHub comment order wins. A
   `resume` marker opens a new generation only for the exact interrupted set
   and matching prior owner token. A `release` marker must match the current
-  owner and set, and closes that generation only after a fresh re-read
-  confirms Stage 2 removed the label; a later `acquire` then starts a new
-  generation. The active generation's freshness is the GitHub `created_at`
+  owner and set, but remains provisional while its set release is in
+  progress; an individual label removal never closes that target's
+  generation. Only after a fresh re-read verifies every target's release
+  marker and label removal does the set-level release close all target
+  generations, after which a later `acquire` starts a new generation. The
+  active generation's freshness is the GitHub `created_at`
   of its latest trusted acquisition or resume marker; a resume marker
   refreshes that clock, and the label event alone never supersedes a fresh
   owner marker. The current generation's winner owns the target; any other
@@ -1077,11 +1080,14 @@ only approval boundary.
   edits, leave labels and append-only markers in place, and require an exact
   verified resume of that set rather than allowing a split ownership set.
 - **Conflict check before every edit.** Immediately before each body or
-  roadmap relationship update, re-fetch the target and require the same
-  owner to remain the winner and the expected body/label snapshot to remain
+  roadmap relationship update, re-fetch both the target and the set anchor
+  (the same fresh snapshot serves both roles when the target is the anchor).
+  Require the same owner and set to remain the winners on both targets, and
+  require the expected body/label snapshot on the edited target to remain
   unchanged. An unexpected change, competing owner, malformed owner marker,
-  or inability to prove a unique owner is a conflict: do not overwrite the
-  target, leave the authoring label in place, and record a safe alternative.
+  or inability to prove a unique owner on either target is a conflict: do not
+  overwrite the target, leave the authoring label in place, and record a safe
+  alternative.
   Prefer an atomic acquisition helper when the target runtime provides one;
   otherwise this append-only conflict check is mandatory, including for
   `instructions-only` installs.
@@ -1113,12 +1119,14 @@ only approval boundary.
   label removal, re-fetch both the target and the set anchor and require the
   same current owner/set, release marker, and expected label/body snapshot;
   remove non-anchor labels one target at a time and re-fetch each result.
-  The generation closes only after every target's release marker and label
-  removal are verified. If any later removal or verification fails, re-fetch
-  every target already processed, retrying a failed post-removal read with a
-  bounded fresh read, restore its authoring label while the current owner/set
-  still matches, and verify the restored set state; leave the generation open
-  and stop. If restoration cannot be completed or a newer owner has appeared,
+  Treat every release marker and label removal as provisional: no target
+  generation closes until every target's release marker and label removal are
+  verified, at which point the set-level release closes all target generations
+  together. If any later removal or verification fails, re-fetch every target
+  already processed, retrying a failed post-removal read with a bounded fresh
+  read, restore its authoring label while the current owner/set still matches,
+  and verify the restored set state; leave every target generation open and
+  stop. If restoration cannot be completed or a newer owner has appeared,
   record a set-level recovery hold and never claim a partial release. Release
   is a human action; nothing in this bundle auto-releases a held issue set.
 
