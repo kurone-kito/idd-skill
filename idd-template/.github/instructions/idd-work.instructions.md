@@ -330,11 +330,11 @@ Before every edit, require per-target atomic or append-only owner-marker
 acquisition and a fresh body/label re-read; on conflict, keep the label, stop,
 and use another target or a separate comment.
 
-For a set with a parent roadmap, publish/acquire a valid roadmap shell as
-anchor before any child; its `## Tracks` may be empty until child numbers
-exist. Then publish/acquire ready children under that anchor, renew/revalidate
-it around each acquisition, wire numbers into the roadmap, leave the authoring
-label on every target (issues and roadmaps), then resume B–C.
+For a set, use a valid parent roadmap shell as anchor when present; otherwise
+use the designated lead. A roadmap's `## Tracks` may be empty until child
+numbers exist. Then publish/acquire ready children under that anchor,
+renew/revalidate it around each acquisition, wire numbers into any roadmap,
+leave the authoring label on every target, then resume B–C.
 After anchor acquisition, persist/verify exact `anchor`/`set` in the originating
 issue's durable Stage 1 hold; resume must recover it, not infer from label or
 choose another lead. On interruption, retain labels, stop B–C, and resume only
