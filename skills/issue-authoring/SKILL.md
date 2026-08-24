@@ -127,6 +127,19 @@ needs-decision, blocked-by-human, and out-of-scope.
      publication token for target, anchor, set, and session; if that operation
      is unavailable, stop before creating the issue — never intentionally
      create an unlabeled issue
+   - the hidden publication token is this exact HTML-first body line:
+
+     ```html
+     <!-- <marker-prefix>-authoring-publication: target=<opaque-target-id>; anchor=<opaque-anchor-id>; set=<opaque-set-id>; session=<opaque-session-id>; token=<opaque-publication-token> -->
+     ```
+
+     Generate the opaque IDs and token before creation because issue numbers
+     are not yet known; persist the returned target/anchor identities, exact
+     token, and `state=pending` in the originating hold, then transition to
+     `member` only after owner-marker verification or `abandoned` only after
+     the verified safe close and label removal. On resume, match the exact
+     token and persisted identities; an incomplete scan or state mismatch is
+     recovery.
    - immediately after a new issue is created and labeled, append its
      `mode=acquire` owner marker with the current set ID, then re-fetch the
      labels, body, and owner comments before treating it as a set member

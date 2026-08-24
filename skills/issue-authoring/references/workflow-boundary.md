@@ -33,6 +33,16 @@ approval boundary that hands off to IDD execution.
   session. If the target runtime cannot provide that operation, stop before
   creating the issue. Never intentionally create an unlabeled issue for the
   Stage 1 set
+- The publication token uses this exact HTML-first format:
+
+  ```html
+  <!-- <marker-prefix>-authoring-publication: target=<opaque-target-id>; anchor=<opaque-anchor-id>; set=<opaque-set-id>; session=<opaque-session-id>; token=<opaque-publication-token> -->
+  ```
+
+  Generate it before creation and persist its returned identities with
+  `state=pending` in the originating hold; only verified owner-marker
+  acquisition changes it to `member`, and only verified safe close changes it
+  to `abandoned`
 - Immediately after a new issue is created and labeled, bundled skill
   appends its `mode=acquire` owner marker with the current set ID, then
   re-fetches labels, body, and owner comments before treating it as a set
@@ -79,10 +89,16 @@ approval boundary that hands off to IDD execution.
   using the resolved marker prefix:
 
   ```html
-  <!-- <marker-prefix>-authoring-owner: target=<owner>/<repo>#<number>; anchor=<owner>/<repo>#<number>; mode=acquire|resume|bootstrap|heartbeat|release|release-guard|release-complete; owner=<opaque-owner-token>; set=<opaque-set-id>; session=<opaque-session-id>; supersedes=<opaque-owner-token|none> -->
+  <!-- <marker-prefix>-authoring-owner: target=<owner>/<repo>#<number>; anchor=<owner>/<repo>#<number>; mode=acquire|resume|bootstrap|heartbeat|release|release-guard|release-complete; owner=<opaque-owner-token>; set=<opaque-set-id>; session=<opaque-session-id>; body-sha256=<64-lowercase-hex|none>; snapshot-sha256=<64-lowercase-hex|none>; supersedes=<opaque-owner-token|none> -->
   ```
 
   _Issue-authoring ownership marker. Do not edit or delete._
+
+  Use the same `body-sha256` and `snapshot-sha256` semantics as the portable
+  owner protocol: target markers persist the exact fresh body digest, and the
+  anchor-only `release-complete` marker carries the recomputed set snapshot.
+  New markers missing these fields are not valid for a new generation; legacy
+  markers are migration input only and cannot prove completion.
 
   Append this HTML-first body with a direct JSON `POST` to the issue-comments
   endpoint; do not rely on `gh issue comment` or `gh api -f body=` for the

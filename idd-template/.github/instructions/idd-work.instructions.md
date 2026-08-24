@@ -333,8 +333,8 @@ and use another target or a separate comment.
 For a set with a parent roadmap, publish/acquire a valid roadmap shell as
 anchor before any child; its `## Tracks` may be empty until child numbers
 exist. Then publish/acquire ready children under that anchor, renew/revalidate
-it around each acquisition, wire their numbers into the roadmap, and leave the
-authoring label on every published or updated target (issues and roadmaps).
+it around each acquisition, wire numbers into the roadmap, leave the authoring
+label on every target (issues and roadmaps), then resume B–C.
 After anchor acquisition, persist/verify exact `anchor`/`set` in the originating
 issue's durable Stage 1 hold; resume must recover it, not infer from label or
 choose another lead. On interruption, retain labels, stop B–C, and resume only

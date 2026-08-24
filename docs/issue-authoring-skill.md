@@ -707,6 +707,21 @@ admin permission the authoring agent typically lacks (and
 `docs/permissions.md` forbids for normal IDD), so it is not the default
 recovery path.
 
+The exact hidden publication token is an HTML-first body line carried by the
+atomic create:
+
+```html
+<!-- <marker-prefix>-authoring-publication: target=<opaque-target-id>; anchor=<opaque-anchor-id>; set=<opaque-set-id>; session=<opaque-session-id>; token=<opaque-publication-token> -->
+```
+
+Generate the opaque target/anchor IDs and token before creation because issue
+numbers are not yet known. Persist the returned target/anchor identities, the
+exact token, and `state=pending` in the originating Stage 1 hold. Transition
+that record to `member` only after the owner marker is verified, or to
+`abandoned` only after the verified safe close and label removal. On resume,
+match the exact token and persisted identities; an incomplete scan or state
+mismatch is a recovery hold.
+
 Immediately after a new issue is created and its authoring label is applied,
 append a `mode=acquire` owner marker with the current set ID and a new owner
 token. Re-fetch labels, body, and owner comments before treating the issue as
@@ -740,10 +755,19 @@ establish the hold. Apply the label if it is absent, and append a hidden owner
 comment using the resolved marker prefix:
 
 ```html
-<!-- <marker-prefix>-authoring-owner: target=<owner>/<repo>#<number>; anchor=<owner>/<repo>#<number>; mode=acquire|resume|bootstrap|heartbeat|release|release-guard|release-complete; owner=<opaque-owner-token>; set=<opaque-set-id>; session=<opaque-session-id>; supersedes=<opaque-owner-token|none> -->
+<!-- <marker-prefix>-authoring-owner: target=<owner>/<repo>#<number>; anchor=<owner>/<repo>#<number>; mode=acquire|resume|bootstrap|heartbeat|release|release-guard|release-complete; owner=<opaque-owner-token>; set=<opaque-set-id>; session=<opaque-session-id>; body-sha256=<64-lowercase-hex|none>; snapshot-sha256=<64-lowercase-hex|none>; supersedes=<opaque-owner-token|none> -->
 ```
 
 _Issue-authoring ownership marker. Do not edit or delete._
+
+The companion uses the same `body-sha256` and `snapshot-sha256` semantics as
+the portable owner protocol. Target markers hash the exact UTF-8 body from the
+fresh read immediately before posting; anchor-only `release-guard` uses
+`body-sha256=none`, while anchor-only `release-complete` carries the required
+canonical set snapshot digest. Persist the per-target body digests and
+snapshot inputs in the originating hold and re-fetch/recompute them before
+accepting completion. New markers missing these fields are not valid for a new
+generation; legacy markers are migration input only and cannot prove completion.
 
 Verify the returned comment ID and body after posting, then re-read the active
 claim and open-PR state again. If execution began during acquisition, stop

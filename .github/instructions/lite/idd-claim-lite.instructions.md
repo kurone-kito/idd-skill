@@ -256,10 +256,9 @@ gh api "repos/{owner}/{repo}/git/matching-refs/heads/issue/<N>-" \
 No remote branch with the computed name may already exist unless it is
 inheritable per the table above.
 
-Before claim activation, re-fetch the authoring label and paginated
-owner-marker log through the portable resolver. A current/incomplete hold
-blocks; only exact anchor/set/session `release-complete` with verified body
-snapshots permits activation.
+Before activation, re-fetch the authoring label and paginated owner log
+through the resolver. A current/incomplete hold blocks; only exact
+anchor/set/session `release-complete` with verified snapshots permits activation.
 
 ## Claim execution
 
@@ -369,11 +368,12 @@ comments, and check:
 5. If you posted an activation-nonce for this `{claim-id}`, recompute
    its winner and confirm it is yours (no marker posted → treat as
    passed).
-6. Re-fetch the authoring label and paginated owner-marker log through the
-   portable resolver. A current/incomplete hold contests this claim; only
-   exact anchor/set/session `release-complete` with verified body snapshots
-   passes. On an ambiguous/failed guard, retain the claim and stop; never
-   release.
+6. Re-fetch the authoring label and paginated owner log through the resolver.
+   A current/incomplete hold contests this claim; only exact
+   anchor/set/session `release-complete` with verified snapshots passes. If it
+   contests the claim but steps 1–5 passed and the pair is still active, post
+   and verify `unclaimed-by` before stopping. If ownership/nonce is ambiguous,
+   retain the claim and stop; never release on failed evidence.
 
 Any failure → claim contested → **STOP**, do not proceed. **Exception:
 only step 4 fails** (1-3 passed — the claim is genuinely yours) → post

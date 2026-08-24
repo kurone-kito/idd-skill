@@ -1022,8 +1022,21 @@ only approval boundary.
   capability-checked create-with-label operation that creates the issue with
   the authoring label atomically and carries an exact hidden publication token
   for target, anchor, set, and session. If the target runtime cannot provide
-  that operation, stop before creation. Never intentionally create an unlabeled
-  issue for the Stage 1 set. If an allegedly atomic request unexpectedly
+  that operation, stop before creation. Before the create, generate the
+  opaque target/anchor IDs and token because issue numbers are not yet known,
+  and carry this exact HTML-first body line:
+
+  ```html
+  <!-- <marker-prefix>-authoring-publication: target=<opaque-target-id>; anchor=<opaque-anchor-id>; set=<opaque-set-id>; session=<opaque-session-id>; token=<opaque-publication-token> -->
+  ```
+
+  Persist the returned target/anchor identities, exact token, and
+  `state=pending` in the originating hold; transition to `member` only after
+  owner-marker verification or `abandoned` only after verified safe close and
+  label removal. On resume, match the exact token and persisted identities;
+  an incomplete scan or state mismatch is a recovery hold. Never
+  intentionally create an unlabeled issue for the Stage 1 set. If an
+  allegedly atomic request unexpectedly
   returns an unlabeled issue, re-fetch its labels, body, current `claimed-by`
   state, and paginated owner-marker log before closing. If a trusted claim or
   marker from another session or set is present, do not close or overwrite
@@ -1066,10 +1079,20 @@ only approval boundary.
   hidden owner comment with the resolved marker prefix:
 
   ```html
-  <!-- <marker-prefix>-authoring-owner: target=<owner>/<repo>#<number>; anchor=<owner>/<repo>#<number>; mode=acquire|resume|bootstrap|heartbeat|release|release-guard|release-complete; owner=<opaque-owner-token>; set=<opaque-set-id>; session=<opaque-session-id>; supersedes=<opaque-owner-token|none> -->
+  <!-- <marker-prefix>-authoring-owner: target=<owner>/<repo>#<number>; anchor=<owner>/<repo>#<number>; mode=acquire|resume|bootstrap|heartbeat|release|release-guard|release-complete; owner=<opaque-owner-token>; set=<opaque-set-id>; session=<opaque-session-id>; body-sha256=<64-lowercase-hex|none>; snapshot-sha256=<64-lowercase-hex|none>; supersedes=<opaque-owner-token|none> -->
   ```
 
   _Issue-authoring ownership marker. Do not edit or delete._
+
+  The companion uses the same `body-sha256` and `snapshot-sha256` fields as the
+  portable owner protocol. Target markers hash the exact UTF-8 body from the
+  fresh read immediately before posting; anchor-only `release-guard` uses
+  `body-sha256=none`, while anchor-only `release-complete` carries the required
+  canonical set snapshot digest. Persist the per-target body digests and
+  snapshot inputs in the originating hold and re-fetch/recompute them before
+  accepting completion. New markers missing these fields are not valid for a
+  new generation; treat legacy markers only as migration input and fail closed
+  when the required snapshot cannot be verified.
 
   Append this HTML-first body with a direct JSON `POST` to the issue-comments
   endpoint; do not rely on `gh issue comment` or `gh api -f body=` for the
