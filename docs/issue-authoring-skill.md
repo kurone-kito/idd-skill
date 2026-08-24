@@ -718,6 +718,12 @@ current generation's winner owns the target; any other session must stop
 without editing and leave the label in place. Owner comments are append-only
 and must not be edited or deleted.
 
+Generate one opaque set ID at Stage 1 start and reuse it in every owner
+marker for that set. These append-only comments are the durable set and
+target membership record; a resume may include only targets whose valid
+markers identify that exact set. Never infer set membership from the shared
+label alone.
+
 Immediately before every body or roadmap relationship update, re-fetch the
 target and require the same owner to remain the winner and the expected
 body/label snapshot to remain unchanged. An unexpected change, competing
@@ -747,10 +753,10 @@ session-local buffer a later session cannot see.
 
 These guards keep partially published issue sets visible to the IDD
 discover guard while the full set is still being wired. If a session
-is interrupted before the set is stable, leave the label in place —
-the label alone is what keeps Discover from selecting the unfinished
-set; no other bookkeeping is required for a later session to find and
-finish the work.
+is interrupted before the set is stable, leave the label and owner markers
+in place. The label suppresses Discover while the markers preserve set
+identity and target membership for a later verified resume; a later session
+must not infer either from the label alone.
 
 Remove the label from all published issues only after: the release
 checklist passes — every child issue is referenced from its parent

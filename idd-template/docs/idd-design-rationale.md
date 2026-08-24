@@ -315,6 +315,15 @@ function bodies otherwise looked equivalent. It was caught only by an
 ad hoc critique pass and a reviewer comment, not by written
 implementation guidance (kurone-kito/idd-skill#1238).
 
+### B–C — Follow-up discovery bypassed issue authoring
+
+On 2026-08-24, issue #2231 recorded that B-phase workers discovering
+separate follow-up work had no unconditional in-file route to the optional
+issue-authoring companion and had been observed creating issues directly.
+The B–C guard now routes that work through Stage 1 or preserves it in a
+durable issue comment when the companion is unavailable
+(kurone-kito/idd-skill#2231).
+
 ### B3 — Dependency drift vs. own diff: a typecheck/lint diagnostic
 
 A `typecheck`/`lint` failure in a file the current diff never touched

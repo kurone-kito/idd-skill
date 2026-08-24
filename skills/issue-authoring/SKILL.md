@@ -94,6 +94,9 @@ needs-decision, blocked-by-human, and out-of-scope.
      [references/workflow-boundary.md](references/workflow-boundary.md)
      and stop without editing when ownership or the target snapshot
      conflicts
+   - generate one opaque set token at Stage 1 start and reuse it in every
+     owner marker for that set; never infer set membership from the label
+     alone
    - create new issues with the label when supported, or apply the label
      immediately after creation
    - if post-create label application fails, close the created issue
@@ -103,9 +106,9 @@ needs-decision, blocked-by-human, and out-of-scope.
    - held issues under the label ARE the drafts: do in-place body
      edits, roadmap relationship wiring, and re-lint of already-published
      bodies on the published issue itself, under the same label
-   - if a session is interrupted before the set is fully wired, leave
-     the label in place — it alone keeps Discover from selecting the
-     unfinished set until a later session finishes the work
+   - if a session is interrupted before the set is fully wired, leave the
+     label and owner markers in place — the label suppresses Discover and
+     the markers preserve the set identity for a later verified resume
    - remove the label from all published issues only after the release
      checklist passes (every child referenced from its roadmap's
      `## Tracks` list, no unsubstituted placeholders, linter green on

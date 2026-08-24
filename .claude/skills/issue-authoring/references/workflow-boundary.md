@@ -52,6 +52,11 @@ approval boundary that hands off to IDD execution.
   wins. The current generation's winner owns the target; any other session
   must stop without editing and leave the label in place. Do not edit or
   delete owner comments.
+- Generate one opaque set ID at Stage 1 start and reuse it in every owner
+  marker for that set. These append-only comments are the durable set and
+  target membership record; a resume may include only targets whose valid
+  markers identify that exact set. Never infer set membership from the
+  shared label alone.
 - **Re-read before every edit.** Immediately before each body or roadmap
   relationship update, re-fetch the target and require the same owner to
   remain the winner and the expected body/label snapshot to remain unchanged.
@@ -75,10 +80,10 @@ approval boundary that hands off to IDD execution.
   session-local buffer that a later session cannot see
 - **Interrupted-session guard.** If a Stage 1 session stops before the
   set is fully wired and stable, the authoring label stays on every
-  issue it already published. The label alone is what keeps Discover
-  from selecting an unfinished set, so a later session (or the same
-  session, resumed) can find and finish the work with no extra
-  bookkeeping
+  issue it already published, and its owner markers stay in place. The
+  label suppresses Discover while the markers preserve set identity and
+  target membership for a later verified resume; a later session must not
+  infer either from the label alone.
 
 ### Stage 2: Release (the single approval boundary)
 

@@ -1015,9 +1015,9 @@ only approval boundary.
   selecting it: held issues ARE the drafts, so in-place edits, roadmap
   relationship wiring, and re-lint of already-published bodies all
   happen under that same lock. If a session is interrupted before the
-  set is fully wired, leave the label in place — that alone keeps
-  Discover from selecting the unfinished set until a later session
-  finishes the work.
+  set is fully wired, leave the label in place — that keeps Discover from
+  selecting the unfinished set, while its owner markers preserve the set
+  identity and target membership for a later verified resume.
 - **Per-target ownership.** The configured label is a shared
   claim-suppression lock, not a session owner token. Before editing an
   existing issue or roadmap, fetch a fresh snapshot, apply the label if it
@@ -1036,6 +1036,11 @@ only approval boundary.
   current generation's winner owns the target; any other session must stop
   without editing and leave the label in place. Owner comments are append-
   only and must not be edited or deleted.
+- Generate one opaque set ID at Stage 1 start and reuse it in every owner
+  marker for that set. These append-only comments are the durable set and
+  target membership record; a resume may include only targets whose valid
+  markers identify that exact set. Never infer set membership from the
+  shared label alone.
 - **Conflict check before every edit.** Immediately before each body or
   roadmap relationship update, re-fetch the target and require the same
   owner to remain the winner and the expected body/label snapshot to remain

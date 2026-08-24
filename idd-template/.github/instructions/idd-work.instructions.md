@@ -314,11 +314,14 @@ record of unfinished work; material decisions still need issue comments
 or commits.
 
 **Unplanned follow-up work**: If B–C reveals a separate follow-up, do not call
-`gh issue create` or the REST issues API. If the optional `issue-authoring`
+`gh issue create` or the REST issues API. This direct-creation anti-pattern is
+documented in the [B–C design rationale](../../docs/idd-design-rationale.md#work-and-self-review).
+If the optional `issue-authoring`
 companion is installed, invoke its Stage 1 hold/contract. Its reuse-first
 check must reject targets under another hold. A target with the configured
 authoring label outside this session's set is unavailable unless this pass
-explicitly resumes that interrupted set; verify its set identity and add its
+explicitly resumes that interrupted set; verify its set identity from the
+companion's durable owner markers and add its
 published issues to the working set first. Unrelated holds stay unavailable.
 Before every edit, require per-target atomic or append-only owner-marker
 acquisition and a fresh body/label re-read; on conflict, keep the label, stop,
