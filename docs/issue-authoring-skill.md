@@ -877,16 +877,18 @@ set anchor (one marker when they coincide), re-fetch both, and require each
 target's expected owner token independently, plus the shared set/anchor/session,
 recorded release-marker comment, and expected label/body snapshot. Remove
 non-anchor labels one target at a time and re-fetch each result. After the
-final anchor label removal is verified, append and verify the anchor-only
-`mode=release-complete` marker. Do not infer completion from a session-local
-re-read or from absent labels: if this marker cannot be posted and verified,
-reapply the authoring label to every target and leave the set generations
-open. Treat every release marker, heartbeat, label removal, and completion
-marker as provisional: no target generation closes until every target's
-release marker and label removal are verified and the durable completion
-marker is present, at which point the set-level release closes all target
-generations together. If any later mutation or verification fails, re-fetch
-all already processed targets,
+final anchor label removal is verified, reuse or append the anchor-only
+`mode=release-complete` marker and record its comment ID. Reconcile that ID
+and the paginated anchor log with bounded retries; a successful POST or
+verification timeout is inconclusive. If the trusted marker is found, keep
+labels absent and close the set. Otherwise reapply the authoring label to
+every target and leave the set generations open. Do not infer completion from
+absent labels or a session-local read. Treat every release marker, heartbeat,
+label removal, and completion marker as provisional: no target generation
+closes until every target's release marker and label removal are verified and
+the durable completion marker is reconciled, at which point the set-level
+release closes all target generations together. If any later mutation or
+verification fails, re-fetch all already processed targets,
 retrying a failed post-removal read with a bounded fresh read, restore their
 labels while the current owner/set still match, and verify the restored set
 state; leave every target generation open and stop. If restoration cannot be

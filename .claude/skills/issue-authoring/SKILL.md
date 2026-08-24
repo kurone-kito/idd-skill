@@ -157,15 +157,18 @@ needs-decision, blocked-by-human, and out-of-scope.
      point (one marker when they coincide), then remove non-anchor labels one
      at a time and
      verify the whole set. After the final anchor label removal is verified,
-     append and verify the anchor-only `mode=release-complete` marker. Do not
-     infer completion from absent labels or a session-local read; if the
-     completion marker is uncertain, restore labels for every target and leave
-     every target generation open. Treat each release marker, removal, and
-     completion marker as provisional until the durable completion event is
-     verified. If a later removal or verification fails, retry a failed
-     post-removal read with a bounded fresh read, restore labels for already
-     processed targets while the owner/set still match, verify the restored
-     set, and leave every target generation open
+     reuse or append the anchor-only `mode=release-complete` marker and record
+     its comment ID. Reconcile that ID and the paginated anchor log with
+     bounded retries; a successful POST or verification timeout is
+     inconclusive. If the trusted marker is found, keep labels absent and
+     close the set. Otherwise restore labels for every target and leave every
+     target generation open. Do not infer completion from absent labels or a
+     session-local read. Treat each release marker, removal, and completion
+     marker as provisional until the durable completion event is reconciled.
+     If a later removal or verification fails, retry a failed post-removal
+     read with a bounded fresh read, restore labels for already processed
+     targets while the owner/set still match, verify the restored set, and
+     leave every target generation open
 8. Stop at the single approval boundary: release. Publishing under the
    hold does not by itself authorize starting the IDD execution loop —
    only the user's explicit release request does.
