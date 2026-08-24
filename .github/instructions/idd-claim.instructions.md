@@ -42,7 +42,8 @@ approval as missing.
 
 Re-fetch the issue before checks. A5 is target-local except child release:
 follow its persisted anchor's paginated log for exact generation; related
-claims do not block.
+claims do not block. Owner protocol:
+`docs/idd-autonomy-contract.md#portable-authoring-owner-protocol`.
 
 **(a) Issue-author approval gate** — Re-evaluate the repository-wide
 issue-author approval rule immediately before claim, using the same
@@ -92,11 +93,9 @@ already-claimed | stale-reclaimable` with the winning `{claim-id}`:
   stop instead of falling back to Discover, per
   `idd-discover.instructions.md`'s A0-T stop-don't-fallback rule.
 
-GitHub issue comments have no compare-and-swap, so this narrows — rather
-than closes — the claim→write TOCTOU window; the 24 h stale-takeover
-and same-second tie-break below remain the race-recovery backstop. If
-the helper is unavailable or malformed, fall back to the written rules
-below, which stay authoritative.
+GitHub comments lack compare-and-swap, so this only narrows claim→write
+TOCTOU window; stale-takeover and same-second tie-break remain. If the helper
+is unavailable or malformed, use the authoritative rules below.
 
 Use the `claim-stale-age` policy default from `docs/policy-constants.md`
 for these stale checks (distributed default: `24 h`).
@@ -272,10 +271,10 @@ verification_ below). Determine `{prior-claim-id}`:
 - **Migration from a legacy claim**, **fresh claim**, or claim after a
   released / unclaimed state → `none`
 
-Immediately before claim POST, re-fetch labels and owner/claim logs.
-Incomplete authoring state blocks; child release needs exact anchor/set/session
-completion in anchor log. Repeat after verification; an authoring marker
-contests Discover.
+Immediately before claim POST, re-fetch labels and owner/claim logs. An
+authoring marker or incomplete generation blocks; child release requires exact
+anchor/set/session completion. Route directly to already-claimed/Discover
+fallback (A0-T stops), never A5(c).
 
 Post the claim comment using the exact format and posting mechanics
 already defined in
@@ -315,15 +314,11 @@ verification_ below); never skip it for any activation path:
 _{agent-id}: claim activation nonce — IDD automation marker. Do not edit._
 ```
 
-`{nonce}` is a fresh opaque token; record it locally alongside `{agent-id}`
-/ `{claim-id}`. When 2+ trusted markers exist for one `{claim-id}` (a
-collision), the winner is the lexicographically earliest `{nonce}`
-(mirrors the `{claim-id}` same-second tie-break in _Claim verification_).
-No marker posted for a `{claim-id}` means no comparison, never a mismatch.
-When helper runtime is enabled, post it with
+`{nonce}` is fresh; record it with `{agent-id}` / `{claim-id}`. For multiple
+trusted markers sharing a claim, the lexicographically earliest nonce wins;
+no marker means no comparison. With helper runtime, post it using
 `post-idd-marker --type activation-nonce --target issue <number> --apply`
-(agent-id / claim-id / nonce / timestamp fields; see
-`docs/idd-helper-scripts.md`).
+with the four fields defined in `docs/idd-helper-scripts.md`.
 
 ## Heartbeat posting
 
@@ -363,6 +358,10 @@ race-safe checks below:
    catches a second session that adopted the identical `{claim-id}` via
    forced-handoff, where steps 1–4 see nothing to disagree about (both
    `{claim-id}`s genuinely match). No marker posted: treat as passed.
+
+6. Re-fetch labels and the paginated authoring-owner log; a new authoring hold
+   contests this claim. If your claim is active, release and verify
+   `unclaimed-by`, then use the same fallback (A0-T stops), never A5(c).
 
 If any check fails, treat the claim as contested.
 

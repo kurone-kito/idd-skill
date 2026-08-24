@@ -699,9 +699,10 @@ unlabeled issue, re-fetch its labels, body, current `claimed-by` state, and
 paginated owner-marker log before closing. If a trusted claim or owner marker
 from another session or set is present, do not close or overwrite the exposed
 issue; report the ownership conflict and stop. If no competing claim is
-present, apply and verify the authoring label as a safe hold before closing.
-If that hold cannot be verified, leave the issue open and report the recovery
-hold. Deletion needs admin permission the authoring agent typically lacks (and
+present, apply and verify the authoring label as a safe hold, then re-fetch the
+claim and owner logs again before closing. If that hold or final re-read cannot
+be verified, leave the issue open and report the recovery hold. Deletion needs
+admin permission the authoring agent typically lacks (and
 `docs/permissions.md` forbids for normal IDD), so it is not the default
 recovery path.
 
@@ -794,10 +795,13 @@ For a new Stage 1 set, generate one opaque set ID and reuse it in every owner
 marker for that set. When resuming an interrupted set, recover and verify its
 persisted set ID from the exact trusted owner markers and reuse it instead of
 generating a replacement. Persist the resolved anchor identity in every marker
-as well. These append-only comments are the durable set, anchor, and target
-membership record; a resume may include only targets whose valid markers
-identify that exact set and anchor. Never infer set membership or the anchor
-from the shared label alone.
+as well. Before resuming, enumerate the anchor's `## Tracks` and a
+repository-wide paginated issue-comment scan scoped to trusted owner markers
+whose exact `anchor` and `set` match; merge the results by comment order and
+block if enumeration is incomplete. These append-only comments are the durable
+set, anchor, and target membership record; a resume may include only targets
+whose valid markers identify that exact set and anchor. Never infer set
+membership or the anchor from the shared label alone.
 
 A non-anchor target cannot prove that its previous set finished from its local
 owner-marker log alone. Before accepting a fresh `mode=acquire` for a child
@@ -836,16 +840,19 @@ rather than allowing a split ownership set.
 After each `acquire`/`resume`/`bootstrap` marker POST, wait the configured
 `claim.verifySettleDelay`, replay the full paginated log, and choose the
 winner by deterministic comment order; an immediate local read never
-authorizes edits.
+authorizes edits. Apply the same settle delay and full paginated replay after
+every heartbeat before it authorizes an edit or label removal.
 
 Immediately before every body or roadmap relationship update, re-fetch both
 the target and the set anchor (the same fresh snapshot serves both roles when
 the target is the anchor). Require each target's expected owner token
 independently, plus the same set, anchor, and owning session, and require the
-expected body/label snapshot on the edited target to remain unchanged. An
-unexpected change, competing owner, malformed owner marker, or inability to
-prove a unique owner on either target is a conflict: do not overwrite the
-target, leave the authoring label in place, and record a safe alternative.
+expected body/label snapshot on the edited target to remain unchanged. Also
+re-read its active `claimed-by` and open-PR state; any active claim or open PR
+is a conflict. An unexpected change, competing owner, malformed owner marker,
+or inability to prove a unique owner on either target is a conflict: do not
+overwrite the target, leave the authoring label in place, and record a safe
+alternative.
 Prefer an atomic acquisition helper when the target runtime provides one;
 otherwise this append-only conflict check is mandatory, including for
 `instructions-only` installs.
