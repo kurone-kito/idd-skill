@@ -468,6 +468,9 @@ This repository uses the following IDD policies:
 - **Workflow/trusted-input protection and protected-owner boundary
   recorded**: `{same trust boundary | dedicated gate | human merge/hold |
   not applicable}`
+- **`Require review from Code Owners` enabled**: `{yes | no | unknown}`
+- **Dismiss stale pull request approvals when new commits are pushed**:
+  `{yes | no | unknown}`
 - **If intentionally pinned, `ciGate.trustSourcePinnedRequiredChecks`
   opt-in recorded**: `{yes | no / not applicable}`
 
