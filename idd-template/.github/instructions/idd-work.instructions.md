@@ -313,6 +313,13 @@ blocking condition before stopping. Do not use the digest as the only
 record of unfinished work; material decisions still need issue comments
 or commits.
 
+**Unplanned follow-up work**: If B-phase work reveals a separate
+follow-up, do not call `gh issue create` or the REST issues API directly.
+Invoke the `issue-authoring` skill and follow its Stage 1 hold and
+contract; do not improvise a parallel worker-side authoring path. This
+guard is preventive for this repository; the field-reported misuse
+motivating it is tracked by issue `#2231`.
+
 ---
 
 ## C — Self-Review Loop
