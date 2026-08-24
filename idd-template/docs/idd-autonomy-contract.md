@@ -118,7 +118,8 @@ acquisition. Every owner-marker log read uses paginated, deterministically
 ordered issue-comment retrieval. Immediately before each Stage 2 label
 removal, a verified target/anchor heartbeat and fresh read are required. After
 the final label removal, re-fetch every target and verify its release marker,
-absent label, and expected body before appending and verifying the anchor-only
+absent label, and current body SHA-256 against the persisted per-target
+snapshot before recomputing and appending the anchor-only
 `mode=release-complete` marker; reconcile its returned comment ID and the
 paginated anchor log with bounded retries. A successful POST or verification
 timeout is inconclusive: a discovered trusted marker keeps labels absent and
@@ -141,7 +142,7 @@ issue-authoring companion is unavailable. An owner marker is an HTML-first
 comment with this exact field grammar:
 
 ```html
-<!-- <marker-prefix>-authoring-owner: target=<owner>/<repo>#<number>; anchor=<owner>/<repo>#<number>; mode=acquire|resume|bootstrap|heartbeat|release|release-guard|release-complete; owner=<opaque-owner-token>; set=<opaque-set-id>; session=<opaque-session-id>; supersedes=<opaque-owner-token|none> -->
+<!-- <marker-prefix>-authoring-owner: target=<owner>/<repo>#<number>; anchor=<owner>/<repo>#<number>; mode=acquire|resume|bootstrap|heartbeat|release|release-guard|release-complete; owner=<opaque-owner-token>; set=<opaque-set-id>; session=<opaque-session-id>; body-sha256=<64-lowercase-hex|none>; snapshot-sha256=<64-lowercase-hex|none>; supersedes=<opaque-owner-token|none> -->
 ```
 
 Resolve `<marker-prefix>` from the target repository before parsing or posting;
@@ -154,6 +155,22 @@ trusted bot/app login, or an explicitly enabled collaborator whose permission
 can be re-read; the current-session exception cannot establish historical
 membership by itself. Without a durable trust source, leave the label and hold
 in place and stop.
+For `acquire`, `resume`, `bootstrap`, `heartbeat`, and `release`,
+`body-sha256` is the SHA-256 digest of the exact UTF-8 issue body returned by
+the fresh read immediately before the marker POST; do not normalize or
+rewrite the body before hashing. Anchor-only `release-guard` uses
+`body-sha256=none` and `snapshot-sha256=none`. The anchor-only
+`release-complete` marker uses `body-sha256=none` and a required
+`snapshot-sha256`.
+The originating durable hold persists, for every target, its verified
+release-marker ID, absent-label result, and expected `body-sha256`. It also
+persists the canonical set snapshot as the SHA-256 digest of the
+lexicographically sorted lines `target=<target>;body-sha256=<digest>;release-marker=<comment-id>`;
+the same `snapshot-sha256` must be carried by `release-complete`. A later
+session must re-fetch every target, recompute and compare each body digest,
+verify the release marker and absent label, and recompute the set snapshot
+before accepting `release-complete`. Missing, mismatched, or unverifiable
+snapshot evidence fails closed and leaves the hold and labels in place.
 Read every issue comment page and order valid markers by GitHub `created_at`,
 then comment ID. Replay that ordered log as a state machine: an
 `acquire`/`bootstrap` with `supersedes=none` starts a generation only when no
@@ -173,10 +190,12 @@ and session and only refreshes freshness. A `release` must match and supersede
 the current owner and set and remains provisional; `release-guard` is
 anchor-only. A
 `release-complete` closes only the exact anchor/set/session release generation
-after every target's release marker, absent authoring label, and expected body
-has been re-fetched and verified; only then may a later `acquire` start a fresh
-generation. A child log, absent label, or session-local read is never
-completion evidence. When resuming, enumerate the anchor's `## Tracks` plus a
+after every target's release marker and absent authoring label have been
+re-fetched and its body SHA-256 has matched the persisted snapshot; the
+canonical set snapshot must also match the marker. Only then may a later
+`acquire` start a fresh generation. A child log, absent label, or session-local
+read is never completion evidence. When resuming, enumerate the anchor's
+`## Tracks` plus a
 paginated repository comment scan scoped to the exact anchor/set markers.
 Malformed, untrusted, out-of-order, incomplete, or ambiguous evidence fails
 closed: leave the authoring label in place and do not edit, claim, release, or
