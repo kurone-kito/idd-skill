@@ -1399,14 +1399,18 @@ supported location that could replace it (`/.github/CODEOWNERS`, and for
 `/docs/CODEOWNERS`, `/CODEOWNERS` as well) (preventive; no observed
 incident yet).
 
-For every candidate location that an adopter may activate, put its
-self-ownership entry in that candidate file before introducing it:
+For every candidate location that an adopter may activate, copy the
+complete workflow, broad-workflow, trusted-input, and active-CODEOWNERS
+protection set into that candidate file before introducing it. Put its
+self-ownership entry in that same complete set:
 `/.github/CODEOWNERS @maintainer-user` in `.github/CODEOWNERS`,
 `/CODEOWNERS @maintainer-user` in the repository-root file, and
 `/docs/CODEOWNERS @maintainer-user` in the docs file, where each file is
-used. A higher-priority file becomes active as soon as it exists, so
-perform this preparation in the trusted preliminary change as well.
-Keep each self-ownership entry after overlapping rules in its own file
+used. A higher-priority file becomes active as soon as it exists, so a
+candidate containing only its self-entry would replace the lower-priority
+file and drop the workflow or trusted-input protections. Perform this
+complete preparation in the trusted preliminary change as well, and keep
+each self-ownership entry after overlapping rules in its own file
 (preventive; no observed incident yet).
 
 Establish the active CODEOWNERS file and the **Require review from Code

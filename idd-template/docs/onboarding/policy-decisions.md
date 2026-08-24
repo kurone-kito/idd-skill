@@ -381,10 +381,13 @@ through GitHub's classic branch-protection API uses the explicit
   individual workflow, so another workflow or any credential with
   `statuses: write` or `checks: write` can publish a check with that exact
   name (preventive; no observed incident yet). Protect all workflow paths
-  and trusted helper/configuration inputs with CODEOWNERS and require the
-  corresponding Code Owner review. This is not a blanket choice for every
-  required check: keep a specific `app_id` pin on any check where
-  verifying the producer matters. GitHub's classic API silently
+  and trusted helper/configuration inputs with CODEOWNERS. For autonomous
+  merging, keep every owner reachable through changed workflow or input
+  paths within the same trust boundary, or use a dedicated gate that
+  verifies approval from the protected-path owner; otherwise plan for a
+  human merge or hold. This is not a blanket choice for every required
+  check: keep a specific `app_id` pin on any check where verifying the
+  producer matters. GitHub's classic API silently
   rewrites a `contexts` `PUT` into `app_id`-pinned `checks` entries,
   and a pinned entry is exactly what the fail-closed "Source-pinned
   required-check trust" default
@@ -454,6 +457,12 @@ This repository uses the following IDD policies:
   `{yes | no / not applicable}`
 - **Producer-identity choice**: `{app_id: -1 (any producer) |
   intentionally pinned}`
+- **If `app_id: -1` is selected, explicit trust-scope acceptance and
+  check-publishing credential review recorded**: `{yes | no / not
+  applicable}`
+- **Workflow/trusted-input protection and protected-owner boundary
+  recorded**: `{same trust boundary | dedicated gate | human merge/hold |
+  not applicable}`
 - **If intentionally pinned, `ciGate.trustSourcePinnedRequiredChecks`
   opt-in recorded**: `{yes | no / not applicable}`
 
