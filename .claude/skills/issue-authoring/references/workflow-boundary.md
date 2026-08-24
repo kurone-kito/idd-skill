@@ -34,6 +34,40 @@ approval boundary that hands off to IDD execution.
   issue before stopping; deletion needs admin permission the authoring
   agent typically lacks (and `docs/permissions.md` forbids for normal IDD),
   so it is not the default path
+- **Per-target ownership is separate from the hold label.** The configured
+  authoring label is shared claim suppression, not a session lock. Before
+  editing an existing issue or roadmap, the skill must fetch a fresh target
+  snapshot, apply the label if it is absent, and append a hidden owner
+  comment using the resolved marker prefix:
+
+  ```html
+  <!-- <marker-prefix>-authoring-owner: target=<owner>/<repo>#<number>; mode=acquire|resume; set=<opaque-set-id>; session=<opaque-session-id>; supersedes=<opaque-owner-token> -->
+  ```
+
+  It must then re-fetch the labels, body, and owner comments. The first
+  valid `mode=acquire` owner comment for a target's initial generation (by
+  GitHub comment order) wins the acquisition. A valid `mode=resume` comment
+  opens a new generation only for the exact interrupted set and prior owner
+  named by `supersedes`; the first valid resume comment for that generation
+  wins. The current generation's winner owns the target; any other session
+  must stop without editing and leave the label in place. Do not edit or
+  delete owner comments.
+- **Re-read before every edit.** Immediately before each body or roadmap
+  relationship update, re-fetch the target and require the same owner to
+  remain the winner and the expected body/label snapshot to remain unchanged.
+  An unexpected change, competing owner, malformed owner marker, or inability
+  to prove a unique owner is a conflict: stop without editing, leave the
+  authoring label in place, and record the safe alternative.
+- A target already held by another set is unavailable. A later session may
+  resume only when the invocation identifies the exact interrupted set and
+  the hold is past `issueAuthoring.authoringStaleAge`; it must append a
+  `mode=resume` owner marker referencing the prior owner before re-running
+  the same acquisition check. A held target with no valid owner marker is
+  legacy-unowned and follows the same first-resume-wins rule. Staleness alone
+  never authorizes takeover, and a competing active marker still stops the
+  session. If the target runtime provides an atomic acquisition helper, use
+  it; otherwise this append-only conflict check is mandatory, including for
+  `instructions-only` installs.
 - **The held issue IS the draft.** In-place body edits, roadmap
   relationship wiring (children first, then roadmaps once the real
   issue numbers exist), and re-lint of already-published bodies all

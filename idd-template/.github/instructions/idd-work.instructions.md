@@ -313,35 +313,26 @@ blocking condition before stopping. Do not use the digest as the only
 record of unfinished work; material decisions still need issue comments
 or commits.
 
-**Unplanned follow-up work**: If work in the B–C phases reveals a separate
-follow-up, do not call `gh issue create` or the REST issues API directly.
-When the optional `issue-authoring` companion is installed, invoke it and
-follow its Stage 1 hold and contract. Before it reuses an existing issue or
-roadmap, require its reuse-first check to verify that the target is not under
-another Stage 1 authoring hold. Treat a target carrying the configured
-authoring label outside this session's published set as unavailable unless the
-companion explicitly identifies it as the interrupted set this Stage 1 pass is
-resuming under its contract. For that resumed set, verify the set identity and
-add its already-published issues to this session's working set before editing;
-unrelated held targets remain unavailable. Do not remove a held target's
-label. Use a different safe target through the companion or record the
-proposed follow-up in a separate issue comment. Once it completes Stage 1 for
-the full
-follow-up set (publishing every ready child before roadmaps and wiring the real
-issue numbers), the authoring step ends; leave every newly published issue
-under the configured authoring label and immediately resume this issue's B–C
-work. If Stage 1 is interrupted before the set is fully wired, leave the
-authoring label on every issue already published, stop this issue's B–C work,
-and resume only after a later Stage 1 pass publishes and wires the full set.
-If Stage 1 stops without publishing a follow-up, including after exhausting
-clarification or assigning a non-ready bucket, record that outcome in a
-separate issue comment before resuming B–C; once a PR exists, include it in the
-PR body's recommended follow-ups. There is no held set to release. Do not
-release any follow-up issue or start a second execution loop. If the
-`issue-authoring` companion is unavailable or not installed, record the
-proposed follow-up in a separate issue comment; once a PR exists, include it
-in the PR body's recommended follow-ups. Do not create it ad hoc. Do not
-improvise a parallel worker-side authoring path.
+**Unplanned follow-up work**: If B–C reveals a separate follow-up, do not call
+`gh issue create` or the REST issues API. If the optional `issue-authoring`
+companion is installed, invoke its Stage 1 hold/contract. Its reuse-first
+check must reject targets under another hold. A target with the configured
+authoring label outside this session's set is unavailable unless this pass
+explicitly resumes that interrupted set; verify its set identity and add its
+published issues to the working set first. Unrelated holds stay unavailable.
+Before every edit, require per-target atomic or append-only owner-marker
+acquisition and a fresh body/label re-read; on conflict, keep the label, stop,
+and use another target or a separate comment.
+
+After Stage 1 publishes every ready child, then roadmaps and wires real
+numbers, leave new issues labeled and resume B–C. If interrupted, leave labels
+on published issues, stop B–C, and resume only after a later pass completes
+the set. If Stage 1 publishes nothing (including after clarification or a
+non-ready bucket), comment that outcome before resuming and, once a PR exists,
+list it in the PR's recommended follow-ups. There is no hold to release; never
+release a follow-up or start a second loop. If the companion is unavailable,
+record the proposal in a separate comment and PR follow-ups; do not create it
+ad hoc or improvise worker-side authoring.
 
 ---
 

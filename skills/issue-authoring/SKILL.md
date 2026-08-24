@@ -88,6 +88,12 @@ needs-decision, blocked-by-human, and out-of-scope.
      target repository does not already have it
    - treat label creation or application failure as a publishing blocker
    - apply the label before updating an existing issue
+   - acquire per-target ownership before editing an existing issue or
+     roadmap; the shared label is a claim-suppression lock, not an owner
+     token. Follow the append-only owner-marker and re-read protocol in
+     [references/workflow-boundary.md](references/workflow-boundary.md)
+     and stop without editing when ownership or the target snapshot
+     conflicts
    - create new issues with the label when supported, or apply the label
      immediately after creation
    - if post-create label application fails, close the created issue

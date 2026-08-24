@@ -1018,6 +1018,41 @@ only approval boundary.
   set is fully wired, leave the label in place — that alone keeps
   Discover from selecting the unfinished set until a later session
   finishes the work.
+- **Per-target ownership.** The configured label is a shared
+  claim-suppression lock, not a session owner token. Before editing an
+  existing issue or roadmap, fetch a fresh snapshot, apply the label if it
+  is absent, and append a hidden owner comment with the resolved marker
+  prefix:
+
+  ```html
+  <!-- <marker-prefix>-authoring-owner: target=<owner>/<repo>#<number>; mode=acquire|resume; set=<opaque-set-id>; session=<opaque-session-id>; supersedes=<opaque-owner-token> -->
+  ```
+
+  Re-fetch labels, body, and owner comments immediately afterward. The
+  first valid `mode=acquire` owner comment for a target's initial generation
+  by GitHub comment order wins. A valid `mode=resume` comment opens a new
+  generation only for the exact interrupted set and prior owner named by
+  `supersedes`; the first valid resume comment for that generation wins. The
+  current generation's winner owns the target; any other session must stop
+  without editing and leave the label in place. Owner comments are append-
+  only and must not be edited or deleted.
+- **Conflict check before every edit.** Immediately before each body or
+  roadmap relationship update, re-fetch the target and require the same
+  owner to remain the winner and the expected body/label snapshot to remain
+  unchanged. An unexpected change, competing owner, malformed owner marker,
+  or inability to prove a unique owner is a conflict: do not overwrite the
+  target, leave the authoring label in place, and record a safe alternative.
+  Prefer an atomic acquisition helper when the target runtime provides one;
+  otherwise this append-only conflict check is mandatory, including for
+  `instructions-only` installs.
+- A target already held by another set is unavailable. A later session may
+  resume only when the invocation identifies the exact interrupted set and
+  the hold is past `issueAuthoring.authoringStaleAge`; append a
+  `mode=resume` owner marker referencing the prior owner before repeating
+  the acquisition check. A held target with no valid owner marker is
+  legacy-unowned and follows the same first-resume-wins rule. Staleness alone
+  never authorizes takeover, and a competing active marker still stops the
+  session.
 - **Stage 2 — release.** Before removing the authoring label, run a
   release checklist: every child issue is referenced from its parent
   roadmap's `## Tracks` list; no unsubstituted placeholder remains in
