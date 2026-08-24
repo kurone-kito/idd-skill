@@ -375,10 +375,14 @@ It should also confirm that any required status check registered
 through GitHub's classic branch-protection API uses the explicit
 `checks` array rather than a plain string-array `contexts` field:
 
-- Recommended: register required checks with an explicit `checks`
-  array. Use `app_id: -1` (any producer) for `idd-advisory-convergence`
-  specifically — only the adopter's own hosted workflow ever produces a
-  check with that exact name — but not as a blanket choice for every
+- Register required checks with an explicit `checks` array. Use
+  `app_id: -1` (any producer) for `idd-advisory-convergence` only when the
+  adopter explicitly accepts that trust scope: the value identifies no
+  individual workflow, so another workflow or any credential with
+  `statuses: write` or `checks: write` can publish a check with that exact
+  name (preventive; no observed incident yet). Protect all workflow paths
+  and trusted helper/configuration inputs with CODEOWNERS and require the
+  corresponding Code Owner review. This is not a blanket choice for every
   required check: keep a specific `app_id` pin on any check where
   verifying the producer matters. GitHub's classic API silently
   rewrites a `contexts` `PUT` into `app_id`-pinned `checks` entries,
