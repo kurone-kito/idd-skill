@@ -462,6 +462,13 @@ error), so an agent can gate on the exit code without parsing prose.
     [--dry-run] [--repo-name <value> ...]
   ```
 
+  The `--substitute` shortcut resolves placeholders only; it does not
+  select or persist `helperRuntime.profile`. If Step 1B selected a
+  non-default helper runtime, apply the manual Step 4 configuration
+  instruction after running this command. The `--profile` option on
+  `--import` and `--verify` controls profile-conditional file selection and
+  completeness, not policy recording.
+
 - **Step 6 (verification checklist) → `--verify`**: a mechanical pass/fail
   check for a target tree after `--import` and `--substitute` have run,
   replacing a manual walkthrough of the checklist below with three check
@@ -532,6 +539,8 @@ The pristine `.github/idd/config.json` intentionally leaves
 `helperRuntime` absent. Do not add that key during the import when the
 confirmed profile is `instructions-only`; Step 4 records the key only for
 an explicitly selected helper profile.
+This rule is preventive; no observed incident yet. Issue `#2229` tracks the
+configuration inconsistency that prompted the correction.
 
 ### File list
 
