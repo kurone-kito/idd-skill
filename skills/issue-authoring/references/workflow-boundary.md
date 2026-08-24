@@ -107,6 +107,13 @@ approval boundary that hands off to IDD execution.
   grants ownership. For `acquire`, `bootstrap`, and `resume`, `owner` is a
   newly generated opaque per-target owner token; `supersedes=none` for
   `acquire` and `bootstrap`, while `resume` names the prior owner token.
+  For any owner marker needed by a later session, the author's trust must also
+  be re-evaluable from durable policy: `trustedMarkerActors`, a configured
+  trusted bot or app, or an explicitly enabled collaborator whose permission
+  can be re-read. The current-session actor path is provisional and cannot
+  make a historical marker trusted by itself. Without a durable trust source,
+  leave the label and hold in place and report recovery; do not treat the
+  marker as set membership or ownership evidence.
   For `release`, retain the current owner token in `owner` and set
   `supersedes` to that same current owner token; `supersedes=none` is invalid
   for a release marker. For `heartbeat`, retain the current owner, set, and

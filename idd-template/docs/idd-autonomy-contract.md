@@ -148,6 +148,12 @@ Resolve `<marker-prefix>` from the target repository before parsing or posting;
 never guess it. Only the authenticated actor after a successful
 Write/Maintain/Admin permission check, a configured trusted bot/app, or an
 explicitly enabled Write/Maintain/Admin collaborator may create a valid marker.
+For a marker needed by a later session, the author's trust must also be
+re-evaluable from a durable policy such as `trustedMarkerActors`, a configured
+trusted bot/app login, or an explicitly enabled collaborator whose permission
+can be re-read; the current-session exception cannot establish historical
+membership by itself. Without a durable trust source, leave the label and hold
+in place and stop.
 Read every issue comment page and order valid markers by GitHub `created_at`,
 then comment ID. Replay that ordered log as a state machine: an
 `acquire`/`bootstrap` with `supersedes=none` starts a generation only when no

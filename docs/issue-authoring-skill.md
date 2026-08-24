@@ -770,6 +770,13 @@ Write/Maintain/Admin permission check, a configured trusted bot or app, or an
 explicitly enabled Write/Maintain/Admin collaborator. Comment-only access is
 insufficient. If permission cannot be verified and no explicit bot/app trust
 applies, ignore and report the marker; syntax alone never grants ownership.
+For an owner marker that must support a later session, the author's trust must
+also be re-evaluable from a durable policy: a login in `trustedMarkerActors`, a
+configured trusted bot or app, or an explicitly enabled collaborator whose
+current permission can be re-read. The current-session actor path is
+provisional and cannot make a historical marker trusted by itself. Without a
+durable trust source, leave the label and hold in place and report recovery;
+do not treat the marker as set membership or ownership evidence.
 For `acquire`, `bootstrap`, and `resume`, `owner` is a newly generated
 opaque per-target owner token; `supersedes=none` for `acquire` and
 `bootstrap`, while `resume` names the prior owner token. For `release`, keep

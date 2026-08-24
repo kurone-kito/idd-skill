@@ -359,9 +359,9 @@ race-safe checks below:
    forced-handoff, where steps 1–4 see nothing to disagree about (both
    `{claim-id}`s genuinely match). No marker posted: treat as passed.
 
-6. Re-fetch labels and the paginated authoring-owner log; a new authoring hold
-   contests this claim. If your claim is active, release and verify
-   `unclaimed-by`, then use the same fallback (A0-T stops), never A5(c).
+6. Re-fetch labels/paginated owner log; a hold contests this claim. If active and
+   step 5 passed, release/verify `unclaimed-by`, then use `(A0-T)`, not A5(c).
+   If step 5 failed, retain it; never release on nonce mismatch.
 
 If any check fails, treat the claim as contested.
 
