@@ -712,8 +712,10 @@ token. Re-fetch labels, body, and owner comments before treating the issue as
 a set member. If marker append or verification is uncertain, reconcile the
 returned comment ID and the paginated owner-marker log with bounded retries
 before closing. If a trusted marker is found, retain the label and recover or
-reopen the issue as a set member; otherwise leave the label in place and close
-before stopping.
+reopen the issue as a set member; otherwise leave the label in place, re-fetch
+labels, body, current `claimed-by` state, and the paginated owner-marker log
+again, and close only if that final read proves no competing claim or owner
+marker; otherwise leave it open and report the recovery hold.
 
 ### Per-target ownership and conflict handling
 

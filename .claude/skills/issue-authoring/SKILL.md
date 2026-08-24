@@ -133,7 +133,10 @@ needs-decision, blocked-by-human, and out-of-scope.
      reconcile the returned comment ID and the paginated owner-marker log with
      bounded retries before closing; if a trusted marker is found, retain the
      label and recover or reopen the issue as a set member, otherwise leave the
-     label in place and close only after the no-competing-claim safe-hold check
+     label in place, re-fetch labels, body, current `claimed-by` state, and the
+     paginated owner-marker log again, and close only if that final read proves
+     no competing claim or owner marker; otherwise leave it open and report
+     the recovery hold
    - if an allegedly atomic create unexpectedly returns an unlabeled issue,
      re-fetch its labels, body, current `claimed-by` state, and paginated
      owner-marker log before closing. If a trusted claim or owner marker from

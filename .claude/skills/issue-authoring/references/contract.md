@@ -1038,7 +1038,10 @@ only approval boundary.
   reconcile the returned comment ID and the paginated owner-marker log with
   bounded retries before closing. If a trusted marker is found, retain the
   label and recover or reopen the issue as a set member; otherwise leave the
-  label in place and close only after the no-competing-claim safe-hold check.
+  label in place, re-fetch labels, body, current `claimed-by` state, and the
+  paginated owner-marker log again, and close only if that final read proves no
+  competing claim or owner marker; otherwise leave it open and report the
+  recovery hold.
 - **Per-target ownership.** The configured label is a shared
   claim-suppression lock, not a session owner token. Before editing an
   existing issue or roadmap, fetch a fresh snapshot and resolve its complete
