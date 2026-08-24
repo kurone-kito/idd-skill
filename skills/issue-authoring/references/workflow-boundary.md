@@ -39,6 +39,21 @@ approval boundary that hands off to IDD execution.
   <!-- <marker-prefix>-authoring-publication: target=<opaque-target-id>; anchor=<opaque-anchor-id>; set=<opaque-set-id>; session=<opaque-session-id>; token=<opaque-publication-token> -->
   ```
 
+  The originating Stage 1 hold uses this append-only publication-intent
+  record:
+
+  ```html
+  <!-- <marker-prefix>-authoring-publication-intent: target=<opaque-target-id>; anchor=<opaque-anchor-id>; set=<opaque-set-id>; session=<opaque-session-id>; token=<opaque-publication-token>; issue=<owner>/<repo>#<number|none>; state=<pending|member|cleanup|abandoned> -->
+  ```
+
+  Append `state=pending; issue=none` before creation, append the returned issue
+  identity while it remains `pending`, append `member` only after owner-marker
+  verification, and append `cleanup` before any safe-close mutation. Append
+  `abandoned` only after closed/label-absent verification. The append-only
+  replay selects the latest valid record for the exact token tuple; missing,
+  conflicting, or out-of-order records fail closed, while `pending` and
+  `cleanup` remain recovery holds.
+
   Generate it before creation and persist the preallocated IDs, exact token,
   and `state=pending` in the originating hold before issuing the create. After
   a successful create, attach and verify the returned issue identities before
@@ -66,21 +81,21 @@ approval boundary that hands off to IDD execution.
   bounded retries before closing. If a trusted marker is found, retain the
   label and recover or reopen the issue as a set member. Otherwise re-fetch
   labels, body, current `claimed-by` state, and the paginated owner-marker log;
-  only if that final read proves no competing claim or owner marker may you
-  terminally mark the persisted identity abandoned in the originating hold,
-  close the issue, remove and verify the authoring label, and re-fetch its
-  closed/label-absent state. If any disposition or cleanup read is uncertain,
-  leave it open and report the recovery hold.
+  if that final read proves no competing claim or owner marker, append
+  `state=cleanup` before closing the issue or removing its authoring label.
+  Re-fetch and verify closed/label-absent state, then append
+  `state=abandoned`. If any disposition or cleanup read is uncertain, retain
+  `state=cleanup`, leave the issue held, and report the recovery hold.
 - An atomically labeled publication is not set membership until its owner
   marker is verified. Persist each returned target identity in the durable
   originating Stage 1 hold before appending the marker. On resume, reconcile
   recorded identities and only issues carrying this set's exact publication
   token; an incomplete scan or unmarked match is a recovery hold, so never
   infer membership or completion from the shared label alone. If the final
-  safe-close read proves no competing claim or marker, terminally mark the
-  persisted identity abandoned in the originating hold, close the issue,
-  remove and verify the authoring label, and re-fetch closed/label-absent state;
-  otherwise leave the identity and label held for recovery.
+  safe-close read proves no competing claim or marker, append `state=cleanup`
+  before closing the issue or removing its authoring label. Re-fetch and verify
+  closed/label-absent state, then append `state=abandoned`; otherwise leave the
+  identity and label held for recovery.
 - **Per-target ownership is separate from the hold label.** The configured
   authoring label is a shared claim-suppression lock, not a session lock. Before
   editing an existing issue or roadmap, the skill must fetch a fresh target

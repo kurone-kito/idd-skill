@@ -714,6 +714,21 @@ atomic create:
 <!-- <marker-prefix>-authoring-publication: target=<opaque-target-id>; anchor=<opaque-anchor-id>; set=<opaque-set-id>; session=<opaque-session-id>; token=<opaque-publication-token> -->
 ```
 
+The originating Stage 1 hold uses this append-only publication-intent record:
+
+```html
+<!-- <marker-prefix>-authoring-publication-intent: target=<opaque-target-id>; anchor=<opaque-anchor-id>; set=<opaque-set-id>; session=<opaque-session-id>; token=<opaque-publication-token>; issue=<owner>/<repo>#<number|none>; state=<pending|member|cleanup|abandoned> -->
+```
+
+`issue` is the returned canonical issue identity or `none`. Append
+`state=pending; issue=none` before creation, then append the returned identity
+while it remains `pending`, append `member` only after the owner marker is
+verified, and append `cleanup` before any safe-close mutation. Append
+`abandoned` only after closed/label-absent verification. On resume, paginate
+the hold log and select the latest valid record for the exact token tuple;
+missing, conflicting, or out-of-order records fail closed, while `pending`
+and `cleanup` remain recovery holds.
+
 Generate the opaque target/anchor IDs and token before creation because issue
 numbers are not yet known. Before issuing the create, persist those
 preallocated IDs, the exact token, and `state=pending` in the originating
@@ -733,12 +748,12 @@ a set member. If marker append or verification is uncertain, reconcile the
 returned comment ID and the paginated owner-marker log with bounded retries
 before closing. If a trusted marker is found, retain the label and recover or
 reopen the issue as a set member. Otherwise re-fetch labels, body, current
-`claimed-by` state, and the paginated owner-marker log; only if that final read
-proves no competing claim or owner marker may you terminally mark the persisted
-identity abandoned in the originating hold, close the issue, remove and verify
-the authoring label, and re-fetch its closed/label-absent state. If any
-disposition or cleanup read is uncertain, leave it open and report the recovery
-hold.
+`claimed-by` state, and the paginated owner-marker log; if that final read
+proves no competing claim or owner marker, append `state=cleanup` before
+closing the issue or removing its authoring label. Re-fetch and verify
+closed/label-absent state, then append `state=abandoned`. If any disposition or
+cleanup read is uncertain, retain `state=cleanup`, leave the issue held, and
+report the recovery hold.
 
 An atomically labeled publication is not set membership until its owner marker
 is verified. Persist each returned target identity in the durable originating
