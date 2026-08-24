@@ -165,6 +165,10 @@ approval boundary that hands off to IDD execution.
   relationship edits, leave labels and append-only markers in place, and
   require an exact verified resume of that set rather than allowing a split
   ownership set.
+  After each `acquire`/`resume`/`bootstrap` marker POST, wait the configured
+  `claim.verifySettleDelay`, replay the full paginated log, and choose the
+  winner by deterministic comment order; an immediate local read never
+  authorizes edits.
 - **Re-read before every edit.** Immediately before each body or roadmap
   relationship update, re-fetch both the target and the set anchor (the same
   fresh snapshot serves both roles when the target is the anchor). Require each
@@ -247,7 +251,9 @@ approval boundary that hands off to IDD execution.
   independently, plus the shared set/anchor/session, recorded release-marker
   comment, and expected label/body snapshot. Remove non-anchor labels one
   target at a time and re-fetch each result. After the final anchor label
-  removal is verified, reuse the earliest
+  removal is verified, re-fetch every target and verify its current release
+  marker, absent label, and expected body snapshot; any drift leaves the set
+  open and prevents completion. Then reuse the earliest
   valid current-owner/set/session `mode=release-complete` marker on the anchor,
   or append one and record its returned comment ID. Re-fetch that ID and the
   anchor's paginated owner-marker log with bounded retries, requiring the exact

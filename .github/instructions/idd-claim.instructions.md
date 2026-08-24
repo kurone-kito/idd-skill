@@ -40,10 +40,9 @@ approval as missing.
 
 ## Pre-checks (all five must pass)
 
-Re-fetch the issue immediately before running these checks.
-All A5 checks are target-issue local: claims on related roadmap or
-child issues do not block this check unless they appear on the selected
-issue itself.
+Re-fetch issue before checks. A5 is target-local except child release:
+follow its persisted anchor's paginated log for exact generation; related
+claims do not block.
 
 **(a) Issue-author approval gate** — Re-evaluate the repository-wide
 issue-author approval rule immediately before claim, using the same
@@ -273,9 +272,10 @@ verification_ below). Determine `{prior-claim-id}`:
 - **Migration from a legacy claim**, **fresh claim**, or claim after a
   released / unclaimed state → `none`
 
-**Immediately before claim POST**, re-fetch labels and owner/claim logs.
-Authoring label or `release`/`release-guard` lacking anchor/set/session
-completion blocks claim; ambiguity fails closed. Stop; apply A5(c).
+Immediately before claim POST, re-fetch labels and owner/claim logs.
+Incomplete authoring state blocks; child release needs exact anchor/set/session
+completion in anchor log. Repeat this read after verify; any authoring marker
+contests—Discover.
 
 Post the claim comment using the exact format and posting mechanics
 already defined in
