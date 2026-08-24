@@ -101,19 +101,22 @@ needs-decision, blocked-by-human, and out-of-scope.
      exists, otherwise the designated lead target); do not acquire children
      independently, and stop all edits if any target cannot join that anchor's
      verified set
+   - persist the anchor's canonical repository/issue identity in every owner
+     marker for the set; the anchor marker points to itself, and a resume must
+     stop if the interrupted set's anchor cannot be proven
    - immediately before every Stage 1 body or relationship edit, re-fetch both
      the edited target and the set anchor; require the same owner/set on both
      and an unchanged expected target snapshot before editing
    - create new issues only through a capability-checked publication command
      that applies the authoring label atomically; if that operation is
      unavailable, stop before creating the issue — never intentionally create
-     an unlabelled issue
+     an unlabeled issue
    - immediately after a new issue is created and labeled, append its
      `mode=acquire` owner marker with the current set ID, then re-fetch the
      labels, body, and owner comments before treating it as a set member
    - if owner-marker append or verification fails for a new issue, leave the
      authoring label in place and close the created issue before stopping
-   - if an allegedly atomic create unexpectedly returns an unlabelled issue,
+   - if an allegedly atomic create unexpectedly returns an unlabeled issue,
      close it before stopping and report the failed capability or permission
      check; deletion needs admin permission and is not the default recovery
      path
@@ -124,11 +127,13 @@ needs-decision, blocked-by-human, and out-of-scope.
      label and owner markers in place — the label suppresses Discover and
      the markers preserve the set identity for a later verified resume
    - after the release checklist passes and the user explicitly requests
-     release, preflight and verify a matching `mode=release` marker for every
-     target (with `supersedes` equal to the current owner token) before
-     removing any label; keep the set anchor held and remove it last. Recheck
-     both the owner/set and the anchor plus the expected snapshot immediately
-     before each removal, then remove non-anchor labels one at a time and
+     release, preflight and verify or reuse a matching `mode=release` marker
+     for every target (with `supersedes` equal to the current owner token)
+     before removing any label; record its GitHub comment ID, never append a
+     duplicate on retry, keep the set anchor held, and remove it last. Recheck
+     both the owner/set and the anchor plus that recorded marker and expected
+     snapshot immediately before each removal, then remove non-anchor labels
+     one at a time and
      verify the whole set. Treat each release marker and removal as
      provisional until every target succeeds. If a later removal or
      verification fails, retry a failed post-removal read with a bounded fresh

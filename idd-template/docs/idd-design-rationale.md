@@ -347,8 +347,10 @@ The same remediation exposed a set-level rollback hazard: if an early label
 removal closed its target generation before a later removal failed, the
 restoration owner check could fail and leave that target visible to Discover.
 Release markers are therefore provisional until every target, with the anchor
-last, has been verified, and every Stage 1 edit re-reads both the target and
-the set anchor (kurone-kito/idd-skill#2231).
+last, has been verified; release retries reuse the verified marker comment ID
+instead of appending an indistinguishable duplicate. Anchor identity is
+persisted in every owner marker, and every Stage 1 edit re-reads both the
+target and the set anchor (kurone-kito/idd-skill#2231).
 
 ### B3 — Dependency drift vs. own diff: a typecheck/lint diagnostic
 

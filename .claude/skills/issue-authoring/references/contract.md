@@ -1021,10 +1021,10 @@ only approval boundary.
 - **New-issue ownership.** New-issue publication requires a
   capability-checked create-with-label operation: if the target runtime
   cannot create the issue and apply the authoring label atomically, stop
-  before creation. Never intentionally create an unlabelled issue for the
+  before creation. Never intentionally create an unlabeled issue for the
   Stage 1 set. If an allegedly atomic request unexpectedly returns an
-  unlabelled issue, close it before stopping and report the failed capability
-  or permission check. Immediately after a successfully labelled issue is
+  unlabeled issue, close it before stopping and report the failed capability
+  or permission check. Immediately after a successfully labeled issue is
   created, append a `mode=acquire` owner marker with the current set ID and a
   new owner token. Re-fetch labels, body, and owner comments before treating
   the issue as a set member. If marker append or verification fails, leave
@@ -1036,8 +1036,17 @@ only approval boundary.
   prefix:
 
   ```html
-  <!-- <marker-prefix>-authoring-owner: target=<owner>/<repo>#<number>; mode=acquire|resume|bootstrap|release; owner=<opaque-owner-token>; set=<opaque-set-id>; session=<opaque-session-id>; supersedes=<opaque-owner-token|none> -->
+  <!-- <marker-prefix>-authoring-owner: target=<owner>/<repo>#<number>; anchor=<owner>/<repo>#<number>; mode=acquire|resume|bootstrap|release; owner=<opaque-owner-token>; set=<opaque-set-id>; session=<opaque-session-id>; supersedes=<opaque-owner-token|none> -->
   ```
+
+  Resolve the set anchor before appending any target marker. `anchor` records
+  the canonical owner/repository/issue identity of that anchor; the anchor's
+  own marker uses its `target` as the `anchor`, and every other marker in the
+  set repeats the same value. A missing or mismatching `anchor` makes a
+  marker invalid for set membership, resume, or release. A legacy marker
+  without an anchor cannot resume a multi-target set; when no parent roadmap
+  identifies the anchor, stop and bootstrap a fresh explicitly designated
+  anchor instead of choosing a different lead implicitly.
 
   Only a trusted target-repository marker actor makes a marker valid: the
   current authenticated actor after posting and verifying it **and** passing
@@ -1067,10 +1076,11 @@ only approval boundary.
   session must stop without editing and leave the label in place. Owner
   comments are append-only and must not be edited or deleted.
 - Generate one opaque set ID at Stage 1 start and reuse it in every owner
-  marker for that set. These append-only comments are the durable set and
-  target membership record; a resume may include only targets whose valid
-  markers identify that exact set. Never infer set membership from the
-  shared label alone.
+  marker for that set. Persist the resolved anchor identity in every marker
+  as well. These append-only comments are the durable set, anchor, and target
+  membership record; a resume may include only targets whose valid markers
+  identify that exact set and anchor. Never infer set membership or the
+  anchor from the shared label alone.
 - Acquire one set anchor before acquiring any other target: use the parent
   roadmap when one exists, otherwise use the designated lead target. Freshly
   verify that anchor's trusted owner marker and set ID before acquiring child
@@ -1112,13 +1122,17 @@ only approval boundary.
   label in place until the checklist passes and the user explicitly requests
   release from the authoring hold. Keep the set anchor held until every other
   target's label removal is verified, and remove the anchor label last. For
-  every target, first append a `mode=release` marker matching its current
-  owner and set while the label is present, with `supersedes` equal to that
-  current owner token, re-fetch to verify it, and complete that preflight for
-  the whole set before removing any label. Then, immediately before each
-  label removal, re-fetch both the target and the set anchor and require the
-  same current owner/set, release marker, and expected label/body snapshot;
-  remove non-anchor labels one target at a time and re-fetch each result.
+  every target, first re-fetch owner comments during release-marker preflight.
+  If a valid current-owner/set `mode=release` marker already exists, reuse the
+  earliest matching GitHub comment ID; otherwise append one with `supersedes`
+  equal to the current owner token, re-fetch to verify it, and record its
+  comment ID. Complete that preflight for the whole set before removing any
+  label. A retry of an open generation must reuse the recorded or earliest
+  matching marker and never append an indistinguishable duplicate. Then,
+  immediately before each label removal, re-fetch both the target and the set
+  anchor and require the same current owner/set, that recorded release-marker
+  comment, and the expected label/body snapshot; remove non-anchor labels one
+  target at a time and re-fetch each result.
   Treat every release marker and label removal as provisional: no target
   generation closes until every target's release marker and label removal are
   verified, at which point the set-level release closes all target generations
