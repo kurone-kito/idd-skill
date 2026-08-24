@@ -698,6 +698,12 @@ stopping. Deletion needs admin permission the authoring agent typically
 lacks (and `docs/permissions.md` forbids for normal IDD), so it is not the
 default path.
 
+Immediately after a new issue is created and its authoring label is applied,
+append a `mode=acquire` owner marker with the current set ID and a new owner
+token. Re-fetch labels, body, and owner comments before treating the issue as
+a set member. If marker append or verification fails, leave the label in
+place and close the new issue before stopping.
+
 ### Per-target ownership and conflict handling
 
 The configured authoring label is a shared **claim-suppression lock**, not

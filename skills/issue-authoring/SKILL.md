@@ -99,6 +99,11 @@ needs-decision, blocked-by-human, and out-of-scope.
      alone
    - create new issues with the label when supported, or apply the label
      immediately after creation
+   - immediately after a new issue is created and labeled, append its
+     `mode=acquire` owner marker with the current set ID, then re-fetch the
+     labels, body, and owner comments before treating it as a set member
+   - if owner-marker append or verification fails for a new issue, leave the
+     authoring label in place and close the created issue before stopping
    - if post-create label application fails, close the created issue
      before stopping; deletion needs admin permission the authoring
      agent typically lacks (and `docs/permissions.md` forbids for normal

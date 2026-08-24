@@ -1018,6 +1018,12 @@ only approval boundary.
   set is fully wired, leave the label in place — that keeps Discover from
   selecting the unfinished set, while its owner markers preserve the set
   identity and target membership for a later verified resume.
+- **New-issue ownership.** Immediately after a new issue is created and
+  its authoring label is applied, append a `mode=acquire` owner marker with
+  the current set ID and a new owner token. Re-fetch labels, body, and owner
+  comments before treating the issue as a set member. If marker append or
+  verification fails, leave the label in place and close the new issue before
+  stopping.
 - **Per-target ownership.** The configured label is a shared
   claim-suppression lock, not a session owner token. Before editing an
   existing issue or roadmap, fetch a fresh snapshot, apply the label if it

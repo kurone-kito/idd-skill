@@ -30,10 +30,16 @@ approval boundary that hands off to IDD execution.
 - For new issues, bundled skill creates the issue with the authoring label
   when the publication command supports that; otherwise it applies the
   label immediately after creation
+- Immediately after a new issue is created and labeled, bundled skill
+  appends its `mode=acquire` owner marker with the current set ID, then
+  re-fetches labels, body, and owner comments before treating it as a set
+  member
 - If post-create label application fails, bundled skill closes the created
   issue before stopping; deletion needs admin permission the authoring
   agent typically lacks (and `docs/permissions.md` forbids for normal IDD),
   so it is not the default path
+- If owner-marker append or verification fails for a new issue, leave the
+  authoring label in place and close the created issue before stopping
 - **Per-target ownership is separate from the hold label.** The configured
   authoring label is a shared claim-suppression lock, not a session lock. Before
   editing an existing issue or roadmap, the skill must fetch a fresh target
