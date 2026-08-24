@@ -1353,6 +1353,125 @@ conversation comments via the issue-comments REST endpoint, which
 GitHub gates under the Issues permission category even when the issue
 number is a pull request.
 
+**Protect the workflow definition with CODEOWNERS.** A
+`pull_request`-triggered workflow runs its definition from the pull
+request's synthetic merge commit/ref before any job step can perform the
+trusted `main` checkout. That checkout protects the helper and
+configuration that the job runs, but it cannot protect a workflow
+definition changed in the pull request. This is preventive guidance; no
+observed incident is being claimed here.
+
+Add CODEOWNERS coverage for the workflow and for the active CODEOWNERS
+file itself. GitHub searches for `CODEOWNERS` in `.github/`, the
+repository root, then `docs/`, so add the self-ownership entry at the
+location that is active. For example, with `.github/CODEOWNERS`:
+
+```text
+/.github/workflows/idd-advisory-convergence.yml @maintainer-user
+/.github/CODEOWNERS @maintainer-user
+```
+
+Replace `@maintainer-user` with an eligible non-author maintainer who has
+write access. For a team, use the full `@organization/team-name` form;
+the team must be visible and have explicit write access. The autonomous
+pre-merge helper currently resolves direct user owners, not team
+membership, so a team-only owner can leave Code Owner approval ambiguous;
+use a direct user owner for autonomous merging or plan for a human merge
+until team-membership resolution is supported (preventive; no observed
+incident yet). An approval from the PR author does not count toward
+required review or Code Owner gates, so choose a separate eligible owner
+or document the intended reviewer or ruleset-bypass topology.
+
+CODEOWNERS can nominate owners for other changed paths as well; an
+approval from one of those owners can satisfy a repository-wide Code Owner
+review without proving that the owner resolved for the protected workflow
+or input paths approved. Keep every owner reachable through those changed
+paths within the same trust boundary, or require a gate that verifies
+approval from the owner resolved for the protected paths (preventive; no
+observed incident yet).
+
+Place these protection entries after broader or overlapping patterns. When
+extending the file, move them after any new rule that also matches these
+paths; CODEOWNERS uses the last matching rule. If the active file is
+`/CODEOWNERS` or
+`/docs/CODEOWNERS`, also add ownership entries for every higher-priority
+supported location that could replace it (`/.github/CODEOWNERS`, and for
+`/docs/CODEOWNERS`, `/CODEOWNERS` as well) (preventive; no observed
+incident yet).
+
+For every candidate location that an adopter may activate, copy the
+complete workflow, broad-workflow, trusted-input, and active-CODEOWNERS
+protection set into that candidate file before introducing it. Put its
+self-ownership entry in that same complete set:
+`/.github/CODEOWNERS @maintainer-user` in `.github/CODEOWNERS`,
+`/CODEOWNERS @maintainer-user` in the repository-root file, and
+`/docs/CODEOWNERS @maintainer-user` in the docs file, where each file is
+used. A higher-priority file becomes active as soon as it exists, so a
+candidate containing only its self-entry would replace the lower-priority
+file and drop the workflow or trusted-input protections. Perform this
+complete preparation in the trusted preliminary change as well, and keep
+each self-ownership entry after overlapping rules in its own file
+(preventive; no observed incident yet).
+
+Establish the active CODEOWNERS file and the **Require review from Code
+Owners** setting in a trusted preliminary change before introducing this
+workflow or registering its required check. If bootstrapping both in one
+PR is unavoidable, require equivalent explicit maintainer validation;
+GitHub evaluates CODEOWNERS from the base branch when it requests
+reviews, so a new CODEOWNERS file in the same PR cannot protect that
+bootstrap change (preventive; no observed incident yet).
+
+Also protect every trusted input that the workflow checks out from
+`main`, not only the workflow file — for example `/.github/idd/`,
+`/scripts/advisory-convergence.mjs`, and its transitive runtime inputs
+(or an immutable protected artifact). The exact set depends on the
+adopter's imports; inspect the workflow and helper before finalizing
+the entries. The current PR run cannot be weakened by PR copies of
+these paths because it checks out `main`, but later runs would trust
+them after merge (preventive; no observed incident yet).
+
+Also review repository or organization variables that select the runner,
+such as `CI_RUNNER_LABEL`, together with self-hosted runner administration
+and runner integrity. Require an equivalent protected trust boundary for
+any self-hosted runner label (preventive; no observed incident yet).
+
+Before enabling the required check, either pin every action used by this
+merge gate to a verified full commit SHA, or explicitly accept and record the
+action publishers and tag-movement trust scope for any mutable references.
+The shipped workflow's `@v4` references are portable examples only; do not
+treat CODEOWNERS as sufficient protection for mutable action references
+(preventive; no observed incident yet).
+
+Protect `/.github/workflows/` (or `/.github/`) regardless of whether
+the required check uses `app_id: -1` or a producer-pinned Actions
+integration, unless that integration is dedicated exclusively to this
+check. An `app_id` identifies an integration, not an individual
+workflow, so broad workflow ownership remains necessary to prevent
+another workflow from emitting the same required-check name under the
+accepted integration (preventive; no observed incident yet). For
+`app_id: -1` (any producer), a single-file
+rule does not bind the check to that workflow. A credential holder with
+`statuses: write` or `checks: write` can still publish that name
+directly; CODEOWNERS covers workflow-file changes only (preventive; no
+observed incident yet). Either explicitly trust every credential that
+can publish checks, or use a producer-pinned required check with a
+specific integration `app_id`
+after verifying that IDD can read and enforce that topology. A ruleset
+`workflows` rule is not a drop-in source-bound alternative here
+(preventive; no observed incident yet): IDD
+cannot correlate its unnamed result to a check run and will keep CI
+unresolved, so plan for a human merge or hold until the runtime supports
+it. Then enable **Require review from Code Owners** on the protected
+default branch, or the equivalent repository-ruleset requirement, and
+enable **Dismiss stale pull request approvals when new commits are
+pushed** (or its equivalent) so approval applies to the workflow
+revision that will merge. Without those settings, CODEOWNERS only
+requests or routes a review and does not make approval a merge gate.
+The [dry-run — Readiness assessment](#dry-run--readiness-assessment)
+report's `CODEOWNERS present` item checks only that a CODEOWNERS file
+exists; it does not verify workflow-path coverage, producer binding, or
+these required-review settings (preventive; no observed incident yet).
+
 **Trusted-code checkout.** The checkout step pins `ref: main` (adjust
 if your default branch differs) rather than the PR's own head, for
 every trigger type including `workflow_dispatch`. The enforcement
@@ -1479,11 +1598,15 @@ silently drops them, weakening the merge gate to only the newly added
 check.
 
 `app_id: -1` also trades away GitHub's producer-identity enforcement
-for the check it names (preventive; no observed incident yet) — a
-reasonable trade for `idd-advisory-convergence`, since only the
-adopter's own hosted workflow ever produces a check with that exact
-name, but not a blanket recommendation for every required check. Keep
-a specific `app_id` pin
+for the check it names (preventive; no observed incident yet). It also
+allows any credential with `statuses: write` or `checks: write` to publish
+that literal name. Use it only when the adopter explicitly accepts that
+trust scope and separately protects all workflow paths that could produce
+the name; it is not a blanket recommendation for every required check.
+A producer pin does not identify an individual workflow; keep broad
+workflow ownership unless the integration is dedicated exclusively to
+this check.
+Keep a specific `app_id` pin
 on any check where verifying the producer matters, and opt in to
 `ciGate.trustSourcePinnedRequiredChecks: true` (see the row in
 [Customizing IDD](docs/customization.md)) instead, once the operator
