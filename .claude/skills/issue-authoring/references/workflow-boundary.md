@@ -35,23 +35,30 @@ approval boundary that hands off to IDD execution.
   agent typically lacks (and `docs/permissions.md` forbids for normal IDD),
   so it is not the default path
 - **Per-target ownership is separate from the hold label.** The configured
-  authoring label is shared claim suppression, not a session lock. Before
+  authoring label is a shared claim-suppression lock, not a session lock. Before
   editing an existing issue or roadmap, the skill must fetch a fresh target
   snapshot, apply the label if it is absent, and append a hidden owner
   comment using the resolved marker prefix:
 
   ```html
-  <!-- <marker-prefix>-authoring-owner: target=<owner>/<repo>#<number>; mode=acquire|resume; set=<opaque-set-id>; session=<opaque-session-id>; supersedes=<opaque-owner-token> -->
+  <!-- <marker-prefix>-authoring-owner: target=<owner>/<repo>#<number>; mode=acquire|resume|release; owner=<opaque-owner-token>; set=<opaque-set-id>; session=<opaque-session-id>; supersedes=<opaque-owner-token|none> -->
   ```
 
-  It must then re-fetch the labels, body, and owner comments. The first
-  valid `mode=acquire` owner comment for a target's initial generation (by
-  GitHub comment order) wins the acquisition. A valid `mode=resume` comment
-  opens a new generation only for the exact interrupted set and prior owner
-  named by `supersedes`; the first valid resume comment for that generation
-  wins. The current generation's winner owns the target; any other session
-  must stop without editing and leave the label in place. Do not edit or
-  delete owner comments.
+  Only a trusted target-repository marker actor makes a marker valid: the
+  current authenticated actor after posting and verifying it, a configured
+  trusted bot or app, or an explicitly enabled Write/Maintain/Admin
+  collaborator. Ignore and report other marker-shaped comments; syntax alone
+  never grants ownership. For `acquire` and `resume`, `owner` is a newly
+  generated opaque per-target owner token; `supersedes=none` for `acquire`,
+  while `resume` names the prior owner token. Within an open generation, the
+  first valid acquisition or resume marker by GitHub comment order wins. A
+  `resume` marker opens a new generation only for the exact interrupted set
+  and matching prior owner token. A `release` marker must match the current
+  owner and set, and closes that generation only after a fresh re-read
+  confirms Stage 2 removed the label; a later `acquire` then starts a new
+  generation. The current generation's winner owns the target; any other
+  session must stop without editing and leave the label in place. Do not
+  edit or delete owner comments.
 - Generate one opaque set ID at Stage 1 start and reuse it in every owner
   marker for that set. These append-only comments are the durable set and
   target membership record; a resume may include only targets whose valid
@@ -66,13 +73,13 @@ approval boundary that hands off to IDD execution.
 - A target already held by another set is unavailable. A later session may
   resume only when the invocation identifies the exact interrupted set and
   the hold is past `issueAuthoring.authoringStaleAge`; it must append a
-  `mode=resume` owner marker referencing the prior owner before re-running
-  the same acquisition check. A held target with no valid owner marker is
-  legacy-unowned and follows the same first-resume-wins rule. Staleness alone
-  never authorizes takeover, and a competing active marker still stops the
-  session. If the target runtime provides an atomic acquisition helper, use
-  it; otherwise this append-only conflict check is mandatory, including for
-  `instructions-only` installs.
+  `mode=resume` owner marker with a new owner token and `supersedes` value
+  matching the prior owner token before re-running the same acquisition check.
+  A held target with no valid owner marker is legacy-unowned and follows the
+  same first-resume-wins rule. Staleness alone never authorizes takeover, and
+  a competing active marker still stops the session. If the target runtime
+  provides an atomic acquisition helper, use it; otherwise this append-only
+  conflict check is mandatory, including for `instructions-only` installs.
 - **The held issue IS the draft.** In-place body edits, roadmap
   relationship wiring (children first, then roadmaps once the real
   issue numbers exist), and re-lint of already-published bodies all

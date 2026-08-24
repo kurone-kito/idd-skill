@@ -1025,17 +1025,24 @@ only approval boundary.
   prefix:
 
   ```html
-  <!-- <marker-prefix>-authoring-owner: target=<owner>/<repo>#<number>; mode=acquire|resume; set=<opaque-set-id>; session=<opaque-session-id>; supersedes=<opaque-owner-token> -->
+  <!-- <marker-prefix>-authoring-owner: target=<owner>/<repo>#<number>; mode=acquire|resume|release; owner=<opaque-owner-token>; set=<opaque-set-id>; session=<opaque-session-id>; supersedes=<opaque-owner-token|none> -->
   ```
 
-  Re-fetch labels, body, and owner comments immediately afterward. The
-  first valid `mode=acquire` owner comment for a target's initial generation
-  by GitHub comment order wins. A valid `mode=resume` comment opens a new
-  generation only for the exact interrupted set and prior owner named by
-  `supersedes`; the first valid resume comment for that generation wins. The
-  current generation's winner owns the target; any other session must stop
-  without editing and leave the label in place. Owner comments are append-
-  only and must not be edited or deleted.
+  Only a trusted target-repository marker actor makes a marker valid: the
+  current authenticated actor after posting and verifying it, a configured
+  trusted bot or app, or an explicitly enabled Write/Maintain/Admin
+  collaborator. Ignore and report other marker-shaped comments; syntax alone
+  never grants ownership. For `acquire` and `resume`, `owner` is a newly
+  generated opaque per-target owner token; `supersedes=none` for `acquire`,
+  while `resume` names the prior owner token. Within an open generation, the
+  first valid acquisition or resume marker by GitHub comment order wins. A
+  `resume` marker opens a new generation only for the exact interrupted set
+  and matching prior owner token. A `release` marker must match the current
+  owner and set, and closes that generation only after a fresh re-read
+  confirms Stage 2 removed the label; a later `acquire` then starts a new
+  generation. The current generation's winner owns the target; any other
+  session must stop without editing and leave the label in place. Owner
+  comments are append-only and must not be edited or deleted.
 - Generate one opaque set ID at Stage 1 start and reuse it in every owner
   marker for that set. These append-only comments are the durable set and
   target membership record; a resume may include only targets whose valid
@@ -1053,11 +1060,11 @@ only approval boundary.
 - A target already held by another set is unavailable. A later session may
   resume only when the invocation identifies the exact interrupted set and
   the hold is past `issueAuthoring.authoringStaleAge`; append a
-  `mode=resume` owner marker referencing the prior owner before repeating
-  the acquisition check. A held target with no valid owner marker is
-  legacy-unowned and follows the same first-resume-wins rule. Staleness alone
-  never authorizes takeover, and a competing active marker still stops the
-  session.
+  `mode=resume` owner marker with a new owner token and `supersedes` value
+  matching the prior owner token before repeating the acquisition check. A
+  held target with no valid owner marker is legacy-unowned and follows the
+  same first-resume-wins rule. Staleness alone never authorizes takeover, and
+  a competing active marker still stops the session.
 - **Stage 2 — release.** Before removing the authoring label, run a
   release checklist: every child issue is referenced from its parent
   roadmap's `## Tracks` list; no unsubstituted placeholder remains in
