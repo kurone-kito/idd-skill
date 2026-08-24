@@ -1458,7 +1458,7 @@ requests or routes a review and does not make approval a merge gate.
 The [dry-run — Readiness assessment](#dry-run--readiness-assessment)
 report's `CODEOWNERS present` item checks only that a CODEOWNERS file
 exists; it does not verify workflow-path coverage, producer binding, or
-these required-review settings.
+these required-review settings (preventive; no observed incident yet).
 
 **Trusted-code checkout.** The checkout step pins `ref: main` (adjust
 if your default branch differs) rather than the PR's own head, for

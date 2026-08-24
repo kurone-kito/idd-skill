@@ -380,18 +380,20 @@ through GitHub's classic branch-protection API uses the explicit
   adopter explicitly accepts that trust scope: the value identifies no
   individual workflow, so another workflow or any credential with
   `statuses: write` or `checks: write` can publish a check with that exact
-  name (preventive; no observed incident yet). Protect all workflow paths
-  and trusted helper/configuration inputs with CODEOWNERS. For autonomous
-  merging, keep every owner reachable through changed workflow or input
-  paths within the same trust boundary, or use a dedicated gate that
+  name (preventive; no observed incident yet). Protect the active CODEOWNERS
+  file and any higher-priority candidate locations, as well as all workflow
+  paths and trusted helper/configuration inputs, with CODEOWNERS. For
+  autonomous merging, keep every owner reachable through changed workflow or
+  input paths within the same trust boundary, or use a dedicated gate that
   verifies approval from the protected-path owner; otherwise plan for a
   human merge or hold (preventive; no observed incident yet). Also enable
   **Require review from Code Owners** on the protected default branch, or
   the equivalent repository-ruleset requirement, and enable **Dismiss
   stale pull request approvals when new commits are pushed** (or its
   equivalent). Without those settings, CODEOWNERS only routes or requests
-  a review and does not make approval a merge gate. This is not a blanket
-  choice for every required check: keep a specific `app_id` pin on any
+  a review and does not make approval a merge gate (preventive; no observed
+  incident yet). This is not a blanket choice for every required check: keep
+  a specific `app_id` pin on any
   check where verifying the producer matters. GitHub's classic API silently
   rewrites a `contexts` `PUT` into `app_id`-pinned `checks` entries,
   and a pinned entry is exactly what the fail-closed "Source-pinned
