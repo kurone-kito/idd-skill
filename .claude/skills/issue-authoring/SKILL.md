@@ -94,7 +94,7 @@ needs-decision, blocked-by-human, and out-of-scope.
      [references/workflow-boundary.md](references/workflow-boundary.md)
      and stop without editing when ownership or the target snapshot
      conflicts
-   - generate one opaque set token at Stage 1 start and reuse it in every
+   - generate one opaque set ID at Stage 1 start and reuse it in every
      owner marker for that set; never infer set membership from the label
      alone
    - create new issues with the label when supported, or apply the label
