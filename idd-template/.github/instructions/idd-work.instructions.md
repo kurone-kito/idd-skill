@@ -317,9 +317,10 @@ or commits.
 follow-up, do not call `gh issue create` or the REST issues API directly.
 When the optional `issue-authoring` companion is installed, invoke it and
 follow its Stage 1 hold and contract. If it is unavailable, record the
-proposed follow-up in the issue or PR notes so it can be included in the
-PR body's recommended follow-ups; do not create it ad hoc. Do not
-improvise a parallel worker-side authoring path.
+proposed follow-up in the issue's live status digest or an issue comment;
+once a PR exists, include it in the PR body's recommended follow-ups. Do
+not create it ad hoc. Do not improvise a parallel worker-side authoring
+path.
 
 ---
 
