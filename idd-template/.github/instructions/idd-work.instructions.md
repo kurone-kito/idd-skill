@@ -331,8 +331,9 @@ acquisition and a fresh body/label re-read; on conflict, keep the label, stop,
 and use another target or a separate comment.
 
 After Stage 1 publishes every ready child, then roadmaps and wires real
-numbers, leave new issues labeled and resume B–C. If interrupted, leave labels
-on published issues, stop B–C, and resume only after a later pass completes
+numbers, leave the authoring label on every published or updated target
+(issues and roadmaps) and resume B–C. If interrupted, leave labels on
+published issues, stop B–C, and resume only after a later pass completes
 the set. If Stage 1 publishes nothing (including after clarification or a
 non-ready bucket), comment that outcome before resuming and, once a PR exists,
 list it in the PR's recommended follow-ups. There is no hold to release; never

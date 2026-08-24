@@ -689,14 +689,17 @@ GitHub CLI publication flow, create a missing label with
 label is a publishing blocker, not a warning.
 
 For existing issues, apply the authoring label before updating issue
-content. For new issues, prefer creating the issue with the authoring
-label in the same publication command, such as `gh issue create --label`
-when the bundled GitHub CLI flow can use it. If the flow cannot label
-the issue atomically, apply the label immediately after creation. If
-post-create label application fails, close the created issue before
-stopping. Deletion needs admin permission the authoring agent typically
-lacks (and `docs/permissions.md` forbids for normal IDD), so it is not the
-default path.
+content. For new issues, require a capability-checked publication command
+that creates the issue with the authoring label atomically, such as
+`gh issue create --label` when the bundled GitHub CLI flow can use it. If the
+target runtime cannot provide that operation, use a documented
+Discover-excluded quarantine when one is available; otherwise stop before
+creating the issue. Never intentionally create an unlabelled issue for the
+Stage 1 set. If an allegedly atomic request unexpectedly returns an
+unlabelled issue, close it before stopping and report the failed capability
+or permission check. Deletion needs admin permission the authoring agent
+typically lacks (and `docs/permissions.md` forbids for normal IDD), so it is
+not the default recovery path.
 
 Immediately after a new issue is created and its authoring label is applied,
 append a `mode=acquire` owner marker with the current set ID and a new owner
@@ -716,12 +719,14 @@ owner comment using the resolved marker prefix:
 ```
 
 Only a trusted target-repository marker actor makes a marker valid: the
-current authenticated actor after posting and verifying it, a configured
-trusted bot or app, or an explicitly enabled Write/Maintain/Admin
-collaborator. Ignore and report other marker-shaped comments; syntax alone
-never grants ownership. For `acquire`, `bootstrap`, and `resume`, `owner`
-is a newly generated opaque per-target owner token; `supersedes=none` for
-`acquire` and `bootstrap`, while `resume` names the prior owner token.
+current authenticated actor after posting and verifying it **and** passing a
+Write/Maintain/Admin permission check, a configured trusted bot or app, or an
+explicitly enabled Write/Maintain/Admin collaborator. Comment-only access is
+insufficient. If permission cannot be verified and no explicit bot/app trust
+applies, ignore and report the marker; syntax alone never grants ownership.
+For `acquire`, `bootstrap`, and `resume`, `owner` is a newly generated
+opaque per-target owner token; `supersedes=none` for `acquire` and
+`bootstrap`, while `resume` names the prior owner token.
 Within an open generation, the first valid acquisition, bootstrap, or
 resume marker by GitHub comment order wins. A
 `resume` marker opens a new generation only for the exact interrupted set
@@ -781,18 +786,22 @@ identity and target membership for a later verified resume; a later session
 must not infer either from the label alone.
 
 Remove the label from all published issues only after: the release
-checklist passes — every child issue is referenced from its parent
-roadmap's `## Tracks` list, no unsubstituted placeholder remains in
-any published body, and the `audit-authored-issue` linter (or its
-manual fallback) is green on every published body in the set — and the
-user explicitly requests release from the authoring hold. For every target,
-append a `mode=release` marker matching its current owner and set while the
-label is present, re-fetch to verify it, then remove the label and re-fetch
-labels and owner comments again. The generation closes only after that
-verified marker is followed by label removal; if either mutation or
-verification fails, leave the label in place and stop. This release checklist
-plus the user's explicit request together form the single approval boundary
-in this contract.
+checklist passes — every child issue is referenced from its parent roadmap's
+`## Tracks` list, no unsubstituted placeholder remains in any published
+body, and the `audit-authored-issue` linter (or its manual fallback) is green
+on every published body in the set — and the user explicitly requests
+release from the authoring hold. First append a `mode=release` marker
+matching each target's current owner and set while every label is still
+present, re-fetch to verify every marker, and complete that preflight for the
+whole set before removing any label. Then remove labels one target at a time
+and re-fetch each result. The generation closes only after every target's
+marker and label removal are verified. If a later mutation or verification
+fails, re-fetch all already processed targets, restore their labels while the
+current owner/set still match, and verify the restored set state; leave the
+generation open and stop. If restoration cannot be completed or a newer owner
+has appeared, record a set-level recovery hold and never claim a partial
+release. This release checklist plus the user's explicit request together
+form the single approval boundary in this contract.
 
 Removing the authoring label releases the Discover guard and
 authorizes IDD execution for the released issues. Do it only as part

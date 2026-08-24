@@ -97,28 +97,31 @@ needs-decision, blocked-by-human, and out-of-scope.
    - generate one opaque set ID at Stage 1 start and reuse it in every
      owner marker for that set; never infer set membership from the label
      alone
-   - create new issues with the label when supported, or apply the label
-     immediately after creation
+   - create new issues only through a capability-checked publication command
+     that applies the authoring label atomically; if that operation is
+     unavailable, use a documented Discover-excluded quarantine or stop before
+     creating the issue — never intentionally create an unlabelled issue
    - immediately after a new issue is created and labeled, append its
      `mode=acquire` owner marker with the current set ID, then re-fetch the
      labels, body, and owner comments before treating it as a set member
    - if owner-marker append or verification fails for a new issue, leave the
      authoring label in place and close the created issue before stopping
-   - if post-create label application fails, close the created issue
-     before stopping; deletion needs admin permission the authoring
-     agent typically lacks (and `docs/permissions.md` forbids for normal
-     IDD), so it is not the default path
+   - if an allegedly atomic create unexpectedly returns an unlabelled issue,
+     close it before stopping and report the failed capability or permission
+     check; deletion needs admin permission and is not the default recovery
+     path
    - held issues under the label ARE the drafts: do in-place body
      edits, roadmap relationship wiring, and re-lint of already-published
      bodies on the published issue itself, under the same label
    - if a session is interrupted before the set is fully wired, leave the
      label and owner markers in place — the label suppresses Discover and
      the markers preserve the set identity for a later verified resume
-   - remove the label from all published issues only after the release
-     checklist passes (every child referenced from its roadmap's
-     `## Tracks` list, no unsubstituted placeholders, linter green on
-     every published body) and the user explicitly requests release
-     from the authoring hold
+   - after the release checklist passes and the user explicitly requests
+     release, preflight and verify a matching `mode=release` marker for every
+     target before removing any label; remove labels one at a time and verify
+     the whole set. If a later removal or verification fails, restore labels
+     for already processed targets while the owner/set still match, verify
+     the restored set, and leave the generation open
 8. Stop at the single approval boundary: release. Publishing under the
    hold does not by itself authorize starting the IDD execution loop —
    only the user's explicit release request does.

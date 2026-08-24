@@ -27,17 +27,21 @@ approval boundary that hands off to IDD execution.
   application failure blocks publishing
 - For existing issues, bundled skill applies the authoring label before
   updating issue content
-- For new issues, bundled skill creates the issue with the authoring label
-  when the publication command supports that; otherwise it applies the
-  label immediately after creation
+- For new issues, bundled skill requires a capability-checked publication
+  command that creates the issue with the authoring label atomically. If the
+  target runtime cannot provide that operation, use a documented
+  Discover-excluded quarantine when one is available; otherwise stop before
+  creating the issue. Never intentionally create an unlabelled issue for the
+  Stage 1 set
 - Immediately after a new issue is created and labeled, bundled skill
   appends its `mode=acquire` owner marker with the current set ID, then
   re-fetches labels, body, and owner comments before treating it as a set
   member
-- If post-create label application fails, bundled skill closes the created
-  issue before stopping; deletion needs admin permission the authoring
-  agent typically lacks (and `docs/permissions.md` forbids for normal IDD),
-  so it is not the default path
+- If an allegedly atomic create unexpectedly returns an unlabelled issue,
+  close that issue before stopping and report the failed capability or
+  permission check; deletion needs admin permission the authoring agent
+  typically lacks (and `docs/permissions.md` forbids for normal IDD), so it
+  is not the default recovery path
 - If owner-marker append or verification fails for a new issue, leave the
   authoring label in place and close the created issue before stopping
 - **Per-target ownership is separate from the hold label.** The configured
@@ -51,11 +55,13 @@ approval boundary that hands off to IDD execution.
   ```
 
   Only a trusted target-repository marker actor makes a marker valid: the
-  current authenticated actor after posting and verifying it, a configured
-  trusted bot or app, or an explicitly enabled Write/Maintain/Admin
-  collaborator. Ignore and report other marker-shaped comments; syntax alone
-  never grants ownership. For `acquire`, `bootstrap`, and `resume`, `owner`
-  is a newly generated opaque per-target owner token; `supersedes=none` for
+  current authenticated actor after posting and verifying it **and** passing
+  a Write/Maintain/Admin permission check, a configured trusted bot or app,
+  or an explicitly enabled Write/Maintain/Admin collaborator. Comment-only
+  access is insufficient. If permission cannot be verified and no explicit
+  bot/app trust applies, ignore and report the marker; syntax alone never
+  grants ownership. For `acquire`, `bootstrap`, and `resume`, `owner` is a
+  newly generated opaque per-target owner token; `supersedes=none` for
   `acquire` and `bootstrap`, while `resume` names the prior owner token.
   Within an open generation, the first valid acquisition, bootstrap, or
   resume marker by GitHub comment order wins. A
@@ -120,12 +126,16 @@ approval boundary that hands off to IDD execution.
     stand-in, or similar) remains in any published body
   - the `audit-authored-issue` linter (or its manual fallback under
     `instructions-only`) is green on every published body in the set
-- For every target, append a `mode=release` marker matching its current
-  owner and set while the label is still present, re-fetch to verify it, then
-  remove the label and re-fetch labels and owner comments again. The
-  generation is closed only when that verified marker is followed by label
-  removal; if either mutation or verification fails, leave the label in place
-  and stop.
+- For every target, first append a `mode=release` marker matching its current
+  owner and set while the label is still present, re-fetch to verify it, and
+  complete that preflight for the whole set before removing any label. Then
+  remove labels one target at a time and re-fetch each result. The generation
+  closes only after every target's release marker and label removal are
+  verified. If any later removal or verification fails, re-fetch every target
+  already processed, restore its authoring label while the current owner/set
+  still matches, and verify the restored set state; leave the generation open
+  and stop. If restoration cannot be completed or a newer owner has appeared,
+  record a set-level recovery hold and never claim a partial release.
 - Bundled skill removes the authoring label from all published issues
   only after the release checklist passes and the user's release
   request is explicit

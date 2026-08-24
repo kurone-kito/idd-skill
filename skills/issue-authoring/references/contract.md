@@ -1018,12 +1018,18 @@ only approval boundary.
   set is fully wired, leave the label in place — that keeps Discover from
   selecting the unfinished set, while its owner markers preserve the set
   identity and target membership for a later verified resume.
-- **New-issue ownership.** Immediately after a new issue is created and
-  its authoring label is applied, append a `mode=acquire` owner marker with
-  the current set ID and a new owner token. Re-fetch labels, body, and owner
-  comments before treating the issue as a set member. If marker append or
-  verification fails, leave the label in place and close the new issue before
-  stopping.
+- **New-issue ownership.** New-issue publication requires a
+  capability-checked create-with-label operation: if the target runtime
+  cannot create the issue and apply the authoring label atomically, use a
+  documented Discover-excluded quarantine when available or stop before
+  creation. Never intentionally create an unlabelled issue for the Stage 1
+  set. If an allegedly atomic request unexpectedly returns an unlabelled
+  issue, close it before stopping and report the failed capability or
+  permission check. Immediately after a successfully labelled issue is
+  created, append a `mode=acquire` owner marker with the current set ID and a
+  new owner token. Re-fetch labels, body, and owner comments before treating
+  the issue as a set member. If marker append or verification fails, leave
+  the label in place and close the new issue before stopping.
 - **Per-target ownership.** The configured label is a shared
   claim-suppression lock, not a session owner token. Before editing an
   existing issue or roadmap, fetch a fresh snapshot, apply the label if it
@@ -1035,11 +1041,13 @@ only approval boundary.
   ```
 
   Only a trusted target-repository marker actor makes a marker valid: the
-  current authenticated actor after posting and verifying it, a configured
-  trusted bot or app, or an explicitly enabled Write/Maintain/Admin
-  collaborator. Ignore and report other marker-shaped comments; syntax alone
-  never grants ownership. For `acquire`, `bootstrap`, and `resume`, `owner`
-  is a newly generated opaque per-target owner token; `supersedes=none` for
+  current authenticated actor after posting and verifying it **and** passing
+  a Write/Maintain/Admin permission check, a configured trusted bot or app,
+  or an explicitly enabled Write/Maintain/Admin collaborator. Comment-only
+  access is insufficient. If permission cannot be verified and no explicit
+  bot/app trust applies, ignore and report the marker; syntax alone never
+  grants ownership. For `acquire`, `bootstrap`, and `resume`, `owner` is a
+  newly generated opaque per-target owner token; `supersedes=none` for
   `acquire` and `bootstrap`, while `resume` names the prior owner token.
   Within an open generation, the first valid acquisition, bootstrap, or
   resume marker by GitHub comment order wins. A
@@ -1086,13 +1094,18 @@ only approval boundary.
   any published body; the `audit-authored-issue` linter (or its manual
   fallback) is green on every published body in the set. Remove the
   checklist passes and the user explicitly requests release from the
-  authoring hold. For every target, append a `mode=release` marker matching
-  its current owner and set while the label is present, re-fetch to verify it,
-  then remove the label and re-fetch labels and owner comments again. The
-  generation closes only after that verified marker is followed by label
-  removal; if either mutation or verification fails, leave the label in place
-  and stop. Release is a human action; nothing in this bundle auto-releases
-  a held issue set.
+  authoring hold. For every target, first append a `mode=release` marker
+  matching its current owner and set while the label is present, re-fetch to
+  verify it, and complete that preflight for the whole set before removing
+  any label. Then remove labels one target at a time and re-fetch each result.
+  The generation closes only after every target's release marker and label
+  removal are verified. If any later removal or verification fails, re-fetch
+  every target already processed, restore its authoring label while the
+  current owner/set still matches, and verify the restored set state; leave
+  the generation open and stop. If restoration cannot be completed or a newer
+  owner has appeared, record a set-level recovery hold and never claim a
+  partial release. Release is a human action; nothing in this bundle
+  auto-releases a held issue set.
 
 ## Publication boundary
 
