@@ -269,12 +269,15 @@ plan comment and verified claim.
 
 ## B3 — Implement
 
-**Plan-comment checkpoint**: before writing any implementation code,
-confirm the B2 plan comment already exists on the issue. If it does
-not, stop and return to B2. If code was already written before this
-checkpoint is noticed, disclose the ordering deviation on the issue,
-post the plan retroactively with an explicit note about the
-reordering, and run the C1 critique pass against the completed diff.
+**Plan-comment checkpoint**: before implementation begins, the B2 plan
+comment must already exist on the issue; posting it before implementation
+is the only normal path. If it does not, stop and return to B2. The
+following is a repair path only for an ordering violation that has
+already occurred, not an alternative route: disclose the deviation on
+the issue, name the skipped checkpoint step (for example, the B2
+plan-comment checkpoint), post the plan retroactively with an explicit
+note about the reordering, and run the C1 critique pass against the
+completed diff.
 
 Implement the plan, running **fix-validate** before each atomic commit
 (one logical change per commit).
