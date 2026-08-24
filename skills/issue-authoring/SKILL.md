@@ -99,10 +99,18 @@ needs-decision, blocked-by-human, and out-of-scope.
      verify its persisted set ID from the exact trusted owner markers and
      reuse it instead of generating a replacement; never infer set membership
      from the label alone
-   - acquire and verify one set anchor first (the parent roadmap when one
-     exists, otherwise the designated lead target); do not acquire children
-     independently, and stop all edits if any target cannot join that anchor's
-     verified set
+   - when a set includes a parent roadmap, publish a valid roadmap shell under
+     the authoring hold before any child; acquire and verify that roadmap as
+     the set anchor, leaving its `## Tracks` list empty only until child issue
+     numbers exist. Without a parent roadmap, use the designated lead target
+     as the anchor
+   - acquire and verify the set anchor before publishing or acquiring any
+     child; do not acquire children independently, and stop all edits if any
+     target cannot join that anchor's verified set
+   - before each child acquisition or resume, append and verify a same-owner
+     anchor heartbeat, re-fetch the anchor's paginated log, then append the
+     child marker and immediately re-fetch both anchor and child. Stop with
+     the label in place if anchor ownership changed between those reads
    - persist the anchor's canonical repository/issue identity in every owner
      marker for the set; the anchor marker points to itself, and a resume must
      stop if the interrupted set's anchor cannot be proven
@@ -148,12 +156,16 @@ needs-decision, blocked-by-human, and out-of-scope.
      before each removal. Renew and verify a target/anchor heartbeat at that
      point (one marker when they coincide), then remove non-anchor labels one
      at a time and
-     verify the whole set. Treat each release marker and removal as
-     provisional until every target succeeds. If a later removal or
-     verification fails, retry a failed post-removal read with a bounded fresh
-     read, restore labels for already processed targets while the owner/set
-     still match, verify the restored set, and leave every target generation
-     open
+     verify the whole set. After the final anchor label removal is verified,
+     append and verify the anchor-only `mode=release-complete` marker. Do not
+     infer completion from absent labels or a session-local read; if the
+     completion marker is uncertain, restore labels for every target and leave
+     every target generation open. Treat each release marker, removal, and
+     completion marker as provisional until the durable completion event is
+     verified. If a later removal or verification fails, retry a failed
+     post-removal read with a bounded fresh read, restore labels for already
+     processed targets while the owner/set still match, verify the restored
+     set, and leave every target generation open
 8. Stop at the single approval boundary: release. Publishing under the
    hold does not by itself authorize starting the IDD execution loop —
    only the user's explicit release request does.

@@ -335,12 +335,13 @@ Before every edit, require per-target atomic or append-only owner-marker
 acquisition and a fresh body/label re-read; on conflict, keep the label, stop,
 and use another target or a separate comment.
 
-After Stage 1 publishes every ready child, then roadmaps and wires real
-numbers, leave the authoring label on every published or updated target
-(issues and roadmaps) and resume B–C. If interrupted, leave labels on every
-published or updated target (issues and roadmaps), stop B–C, and resume only
-after a later pass completes
-the set. If Stage 1 publishes nothing (including after clarification or a
+For a set with a parent roadmap, publish/acquire a valid roadmap shell as
+anchor before any child; its `## Tracks` may be empty until child numbers
+exist. Then publish/acquire ready children under that anchor, renew/revalidate
+it around each acquisition, wire their numbers into the roadmap, and leave the
+authoring label on every published or updated target (issues and roadmaps).
+If interrupted, leave those labels, stop B–C, and resume only after a later
+pass completes the set. If Stage 1 publishes nothing (including after a
 non-ready bucket), comment that outcome before resuming and, once a PR exists,
 list it in the PR's recommended follow-ups. There is no hold to release; never
 release a follow-up or start a second loop. If the companion is unavailable,

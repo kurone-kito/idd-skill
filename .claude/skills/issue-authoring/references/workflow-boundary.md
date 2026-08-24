@@ -52,7 +52,7 @@ approval boundary that hands off to IDD execution.
   comment using the resolved marker prefix:
 
   ```html
-  <!-- <marker-prefix>-authoring-owner: target=<owner>/<repo>#<number>; anchor=<owner>/<repo>#<number>; mode=acquire|resume|bootstrap|heartbeat|release; owner=<opaque-owner-token>; set=<opaque-set-id>; session=<opaque-session-id>; supersedes=<opaque-owner-token|none> -->
+  <!-- <marker-prefix>-authoring-owner: target=<owner>/<repo>#<number>; anchor=<owner>/<repo>#<number>; mode=acquire|resume|bootstrap|heartbeat|release|release-complete; owner=<opaque-owner-token>; set=<opaque-set-id>; session=<opaque-session-id>; supersedes=<opaque-owner-token|none> -->
   ```
 
   _Issue-authoring ownership marker. Do not edit or delete._
@@ -90,6 +90,12 @@ approval boundary that hands off to IDD execution.
   for a release marker. For `heartbeat`, retain the current owner, set, and
   anchor, set `supersedes` to that same owner token, and do not open or close
   a generation; it only renews the current owner's freshness.
+  `release-complete` is valid only on the set anchor. It retains the
+  anchor's current owner, set, anchor, and session, and sets `supersedes`
+  to that owner token. Append and verify it only after every target's
+  release marker and label removal has been verified. It is the durable
+  terminal event for the set: a later reapplication of the authoring label
+  must start a fresh set generation rather than resuming the completed set.
   Within an open generation, the first valid acquisition, bootstrap, or
   resume marker by GitHub comment order wins. A
   `resume` marker opens a new generation only for the exact interrupted set
@@ -97,8 +103,9 @@ approval boundary that hands off to IDD execution.
   owner and set, but remains provisional while its set release is in
   progress; an individual label removal never closes that target's
   generation. Only after a fresh re-read verifies every target's release
-  marker and label removal does the set-level release close all target
-  generations, after which a later `acquire` starts a new generation. The
+  marker and label removal and the anchor's `release-complete` marker does
+  the set-level release close all target generations, after which a later
+  `acquire` starts a new generation. The
   active generation's freshness is the GitHub `created_at`
   of its latest trusted acquisition, resume, or heartbeat marker; a resume
   marker
@@ -114,14 +121,25 @@ approval boundary that hands off to IDD execution.
   and target membership record; a resume may include only targets whose valid
   markers identify that exact set and anchor. Never infer set membership or the
   anchor from the shared label alone.
-- Acquire one set anchor before acquiring any other target: use the parent
-  roadmap when one exists, otherwise use the designated lead target. Freshly
-  verify that anchor's trusted owner marker and set ID before acquiring child
-  targets or wiring relationships. The anchor winner serializes acquisition
-  for the whole set; no session may acquire children independently. If any
-  target cannot be acquired under that anchor, stop all body and relationship
-  edits, leave labels and append-only markers in place, and require an exact
-  verified resume of that set rather than allowing a split ownership set.
+- Acquire one set anchor before acquiring any other target: when the set has
+  a parent roadmap, first publish a valid roadmap shell under the authoring
+  hold, with all required roadmap headings/markers and an empty `## Tracks`
+  list allowed only until child issue numbers exist; then acquire and verify
+  that roadmap as the set anchor. Only after that anchor is verified may the
+  session publish and acquire child targets, and it must wire their real
+  numbers into `## Tracks` before release. When no parent roadmap exists, use
+  the designated lead target as the anchor. The anchor winner serializes
+  acquisition for the whole set; no session may publish or acquire children
+  independently. Before each child acquisition or resume, append and verify
+  a same-owner heartbeat on the anchor, re-fetch the anchor's paginated log,
+  and require its current owner token, set, anchor, and session. Append the
+  child marker only after that validation, then immediately re-fetch both
+  anchor and child and require the same anchor ownership; if either read
+  changes, leave the child hold in place and stop rather than forming a split
+  set. If any target cannot be acquired under that anchor, stop all body and
+  relationship edits, leave labels and append-only markers in place, and
+  require an exact verified resume of that set rather than allowing a split
+  ownership set.
 - **Re-read before every edit.** Immediately before each body or roadmap
   relationship update, re-fetch both the target and the set anchor (the same
   fresh snapshot serves both roles when the target is the anchor). Require each
@@ -156,10 +174,10 @@ approval boundary that hands off to IDD execution.
   it; otherwise this append-only conflict check is mandatory, including for
   `instructions-only` installs.
 - **The held issue IS the draft.** In-place body edits, roadmap
-  relationship wiring (children first, then roadmaps once the real
-  issue numbers exist), and re-lint of already-published bodies all
-  happen on the published issue, under the same label — not in a
-  session-local buffer that a later session cannot see
+  relationship wiring (publish/acquire the roadmap anchor first, then
+  publish/acquire children and wire their real issue numbers), and re-lint of
+  already-published bodies all happen on the published issue, under the same
+  label — not in a session-local buffer that a later session cannot see
 - **Interrupted-session guard.** If a Stage 1 session stops before the
   set is fully wired and stable, the authoring label stays on every
   issue it already published, and its owner markers stay in place. The
@@ -194,11 +212,16 @@ approval boundary that hands off to IDD execution.
   and require each target's expected owner token independently, plus the shared
   set/anchor/session, recorded release-marker comment, and expected label/body
   snapshot. Remove non-anchor labels one target at a time and re-fetch each
-  result. Treat every release marker, heartbeat, and label removal as
-  provisional: no target generation closes until every
-  target's release marker and label removal are verified, at which point the
-  set-level release closes all target generations together. If any later
-  removal or verification fails, re-fetch every target already processed,
+  result. After the final anchor label removal is verified, append and verify
+  the anchor-only `mode=release-complete` marker. Do not infer completion from
+  a session-local re-read or from absent labels: if this marker cannot be
+  posted and verified, reapply the authoring label to every target and leave
+  the set generations open. Treat every release marker, heartbeat, label
+  removal, and completion marker as provisional: no target generation closes
+  until every target's release marker and label removal are verified and the
+  durable completion marker is present, at which point the set-level release
+  closes all target generations together. If any later removal or
+  verification fails, re-fetch every target already processed,
   retrying a failed post-removal read with a bounded fresh read, restore its
   authoring label while the current owner/set still matches, and verify the
   restored set state; leave every target generation open and stop. If
