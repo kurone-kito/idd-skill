@@ -715,12 +715,16 @@ atomic create:
 ```
 
 Generate the opaque target/anchor IDs and token before creation because issue
-numbers are not yet known. Persist the returned target/anchor identities, the
-exact token, and `state=pending` in the originating Stage 1 hold. Transition
-that record to `member` only after the owner marker is verified, or to
-`abandoned` only after the verified safe close and label removal. On resume,
-match the exact token and persisted identities; an incomplete scan or state
-mismatch is a recovery hold.
+numbers are not yet known. Before issuing the create, persist those
+preallocated IDs, the exact token, and `state=pending` in the originating
+Stage 1 hold. After a successful create, attach and verify the returned issue
+identities on that pending record before appending the owner marker. If the
+pre-create hold write cannot be verified, do not create; if the post-create
+identity attachment cannot be verified, leave the returned issue held for
+recovery. Transition that record to `member` only after the owner marker is
+verified, or to `abandoned` only after the verified safe close and label
+removal. On resume, match the exact token and persisted identities; an
+incomplete scan or state mismatch is a recovery hold.
 
 Immediately after a new issue is created and its authoring label is applied,
 append a `mode=acquire` owner marker with the current set ID and a new owner

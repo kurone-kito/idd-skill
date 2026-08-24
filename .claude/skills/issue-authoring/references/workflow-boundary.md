@@ -39,10 +39,13 @@ approval boundary that hands off to IDD execution.
   <!-- <marker-prefix>-authoring-publication: target=<opaque-target-id>; anchor=<opaque-anchor-id>; set=<opaque-set-id>; session=<opaque-session-id>; token=<opaque-publication-token> -->
   ```
 
-  Generate it before creation and persist its returned identities with
-  `state=pending` in the originating hold; only verified owner-marker
-  acquisition changes it to `member`, and only verified safe close changes it
-  to `abandoned`
+  Generate it before creation and persist the preallocated IDs, exact token,
+  and `state=pending` in the originating hold before issuing the create. After
+  a successful create, attach and verify the returned issue identities before
+  appending the owner marker; an unverifiable pre-create write blocks creation,
+  while an unverifiable post-create attachment leaves the issue held for
+  recovery. Only verified owner-marker acquisition changes it to `member`, and
+  only verified safe close changes it to `abandoned`
 - Immediately after a new issue is created and labeled, bundled skill
   appends its `mode=acquire` owner marker with the current set ID, then
   re-fetches labels, body, and owner comments before treating it as a set

@@ -1030,11 +1030,15 @@ only approval boundary.
   <!-- <marker-prefix>-authoring-publication: target=<opaque-target-id>; anchor=<opaque-anchor-id>; set=<opaque-set-id>; session=<opaque-session-id>; token=<opaque-publication-token> -->
   ```
 
-  Persist the returned target/anchor identities, exact token, and
-  `state=pending` in the originating hold; transition to `member` only after
+  Persist the preallocated target/anchor IDs, exact token, and `state=pending`
+  in the originating hold before issuing the create. After a successful create,
+  attach and verify the returned issue identities on that pending record before
+  appending the owner marker. If the pre-create hold write cannot be verified,
+  do not create; if the post-create identity attachment cannot be verified,
+  leave the returned issue held for recovery. Transition to `member` only after
   owner-marker verification or `abandoned` only after verified safe close and
-  label removal. On resume, match the exact token and persisted identities;
-  an incomplete scan or state mismatch is a recovery hold. Never
+  label removal. On resume, match the exact token and persisted identities; an
+  incomplete scan or state mismatch is a recovery hold. Never
   intentionally create an unlabeled issue for the Stage 1 set. If an
   allegedly atomic request unexpectedly
   returns an unlabeled issue, re-fetch its labels, body, current `claimed-by`

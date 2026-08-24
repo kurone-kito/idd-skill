@@ -342,15 +342,14 @@ the stale clock. Skip step 5 (activation-nonce).
 ## Claim verification
 
 **Already-owned continuation (no new post)**: pre-check (c)'s
-top-branch `already_owned` result already constitutes verification —
-skip the rest of this section (see the skip note under Claim
-execution). The steps below need a freshly posted event's timestamp to
-anchor them, so they apply only after a new `claimed-by` (fresh claim,
-takeover, or legacy migration).
+top-branch `already_owned` result verifies ownership. Skip checks 1–5, but run
+step 6's authoring guard; post no new `claimed-by` or nonce. Checks 1–5
+require a fresh `claimed-by` and apply only to fresh claims, takeovers, and
+legacy migrations.
 
-After posting `claimed-by`, wait the settle delay
-(`claim.verifySettleDelay`, default `PT5S`), re-read all issue
-comments, and check:
+For fresh activation, after posting `claimed-by`, wait the settle delay
+(`claim.verifySettleDelay`, default `PT5S`), re-read all issue comments, then
+check steps 1–5. Step 6 applies to both paths:
 
 1. Build the same-second contender set: every trusted `claimed-by`
    (including yours) sharing your event's `created_at` second.
