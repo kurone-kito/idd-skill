@@ -171,6 +171,41 @@ addendum resolves it.
 13. If B3 or C must stop for a hold, post the hold reason, update the digest,
     and stop.
 
+**Unplanned follow-up work**: If B–C reveals a separate follow-up, do not call
+`gh issue create` or the REST issues API. This direct-creation anti-pattern is
+documented in the [B–C design rationale](../../../docs/idd-design-rationale.md#work-and-self-review).
+If the optional `issue-authoring`
+companion is installed, invoke its Stage 1 hold/contract. Its reuse-first
+check must reject targets under another hold. A target with the configured
+authoring label outside this session's set is unavailable unless this pass
+explicitly resumes that interrupted set; verify its set identity from the
+companion's durable owner markers and add its
+published issues to the working set first. Unrelated holds stay unavailable.
+If the companion builds an optional discarded validation probe
+(throwaway, unpublished), run it in a separate temporary worktree;
+otherwise skip it. Never run or discard that probe in the current issue
+worktree.
+Before every edit, require per-target atomic or append-only owner-marker
+acquisition and a fresh body/label re-read; on conflict, keep the label, stop,
+and use another target or a separate comment.
+
+After Stage 1 publishes and acquires a valid parent roadmap shell as the set
+anchor (or the designated lead when no parent roadmap exists), then
+publishes/acquires every ready child under that anchor and wires real numbers
+into the roadmap, leave the authoring label on every published or updated
+target (issues and roadmaps) and resume B–C. If interrupted, leave labels on every
+published or updated target (issues and roadmaps), stop B–C, and resume only
+after a later pass completes
+the set. After anchor acquisition, persist and verify exact `anchor`/`set`
+identities in the originating issue's durable Stage 1 hold; resume must recover
+it, not infer from the label or choose another lead. If Stage 1 publishes
+nothing (including after clarification or a non-ready bucket), comment that
+outcome before resuming and, once a PR exists,
+list it in the PR's recommended follow-ups. Do not release the Stage 1 B–C
+hold; never release a follow-up or start a second loop. If the companion is unavailable,
+record the proposal in a separate comment and PR follow-ups; do not create it
+ad hoc or improvise worker-side authoring.
+
 ## C — Self-review
 
 ### C1 — Critique pass

@@ -60,7 +60,8 @@ human-gated forced-handoff evidence from a trusted actor.
 
 Re-fetch the issue immediately before running these checks. All five
 are target-issue local: claims on related roadmap or child issues do
-not block this check.
+not block this check. Owner protocol:
+`docs/idd-autonomy-contract.md#portable-authoring-owner-protocol`.
 
 ### (a) Issue-author approval
 
@@ -250,6 +251,11 @@ gh api "repos/{owner}/{repo}/git/matching-refs/heads/issue/<N>-" \
 No remote branch with the computed name may already exist unless it is
 inheritable per the table above.
 
+Before activation, re-fetch the authoring label and paginated owner
+log. A current/incomplete hold blocks; only exact
+anchor/set/session `release-complete` with verified snapshots permits
+activation.
+
 ## Claim execution
 
 Skip step 4 (the `claimed-by` post) in two cases, and treat them
@@ -337,15 +343,14 @@ the stale clock. Skip step 5 (activation-nonce).
 ## Claim verification
 
 **Already-owned continuation (no new post)**: pre-check (c)'s
-top-branch `already_owned` result already constitutes verification —
-skip the rest of this section (see the skip note under Claim
-execution). The steps below need a freshly posted event's timestamp to
-anchor them, so they apply only after a new `claimed-by` (fresh claim,
-takeover, or legacy migration).
+top-branch `already_owned` result verifies ownership. Skip checks 1–5, but run
+step 6's authoring guard; post no new `claimed-by` or nonce. Checks 1–5
+require a fresh `claimed-by` and apply only to fresh claims, takeovers, and
+legacy migrations.
 
-After posting `claimed-by`, wait the settle delay
-(`claim.verifySettleDelay`, default `PT5S`), re-read all issue
-comments, and check:
+For fresh activation, after posting `claimed-by`, wait the settle delay
+(`claim.verifySettleDelay`, default `PT5S`), re-read all issue comments, then
+check steps 1–5. Step 6 applies to both paths:
 
 1. Build the same-second contender set: every trusted `claimed-by`
    (including yours) sharing your event's `created_at` second.
@@ -358,6 +363,13 @@ comments, and check:
 5. If you posted an activation-nonce for this `{claim-id}`, recompute
    its winner and confirm it is yours (no marker posted → treat as
    passed).
+6. Re-fetch the authoring label and paginated owner log. A
+   current/incomplete hold contests this claim; only exact
+   anchor/set/session `release-complete` with verified snapshots
+   passes. If it
+   contests the claim but steps 1–5 passed and the pair is still active, post
+   and verify `unclaimed-by` before stopping. If ownership/nonce is ambiguous,
+   retain the claim and stop; never release on failed evidence.
 
 Any failure → claim contested → **STOP**, do not proceed. **Exception:
 only step 4 fails** (1-3 passed — the claim is genuinely yours) → post
@@ -366,10 +378,13 @@ provably hold it), **then STOP**. Step 5 also failing (alone or with
 step 4) → never release (shares that exact pair) — STOP as usual.
 
 **Forced-handoff adopt-verbatim** only: skip steps 1-4 (no
-`claimed-by` was posted for this path); only step 5 applies — wait the
-settle delay (`claim.verifySettleDelay`, default `PT5S`), then
-recompute the nonce winner for the adopted `newClaimId` and confirm it
-is yours.
+`claimed-by` was posted for this path). Repeat the authoring guard above
+before posting the activation nonce; only step 5 applies — wait the settle
+delay (`claim.verifySettleDelay`, default `PT5S`), then recompute the nonce
+winner for the adopted `newClaimId` and confirm it is yours. Repeat the
+authoring guard after nonce verification; on a mismatch or hold, re-resolve
+the pair and nonce before fallback, and release only after both remain
+verified.
 The successor pair is **sticky**: it re-activates on every resolution
 pass, so a later plain `claimed-by supersedes: none` will not take
 effect. To move off it, either keep adopting it verbatim, or post

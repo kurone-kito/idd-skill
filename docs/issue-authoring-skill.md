@@ -689,40 +689,349 @@ GitHub CLI publication flow, create a missing label with
 label is a publishing blocker, not a warning.
 
 For existing issues, apply the authoring label before updating issue
-content. For new issues, prefer creating the issue with the authoring
-label in the same publication command, such as `gh issue create --label`
-when the bundled GitHub CLI flow can use it. If the flow cannot label
-the issue atomically, apply the label immediately after creation. If
-post-create label application fails, close the created issue before
-stopping. Deletion needs admin permission the authoring agent typically
-lacks (and `docs/permissions.md` forbids for normal IDD), so it is not the
-default path.
+content. For new issues, require a capability-checked publication command
+that creates the issue with the authoring label atomically and carries an
+exact hidden publication token for target, anchor, set, and session, such as
+`gh issue create --label` when the bundled GitHub CLI flow can use it. If the
+target runtime cannot provide that operation, stop before creating the issue.
+Never intentionally create an unlabeled issue for the
+Stage 1 set. If an allegedly atomic request unexpectedly returns an
+unlabeled issue, re-fetch its labels, body, current `claimed-by` state, and
+paginated owner-marker log before closing. If a trusted claim or owner marker
+from another session or set is present, do not close or overwrite the exposed
+issue; report the ownership conflict and stop. If no competing claim is
+present, apply and verify the authoring label as a safe hold, then re-fetch the
+claim and owner logs again before closing. If that hold or final re-read cannot
+be verified, leave the issue open and report the recovery hold. Deletion needs
+admin permission the authoring agent typically lacks (and
+`docs/permissions.md` forbids for normal IDD), so it is not the default
+recovery path.
+
+The exact hidden publication token is an HTML-first body line carried by the
+atomic create:
+
+```html
+<!-- <marker-prefix>-authoring-publication: target=<opaque-target-id>; anchor=<opaque-anchor-id>; set=<opaque-set-id>; session=<opaque-session-id>; token=<opaque-publication-token> -->
+```
+
+The originating Stage 1 hold uses this append-only publication-intent record:
+
+```html
+<!-- <marker-prefix>-authoring-publication-intent: target=<opaque-target-id>; anchor=<opaque-anchor-id>; set=<opaque-set-id>; session=<opaque-session-id>; token=<opaque-publication-token>; journal=<owner>/<repo>#<number>; issue=<owner>/<repo>#<number>|none; actor=<trusted-marker-actor>; state=<pending|member|cleanup|abandoned> -->
+```
+
+`issue` is the returned canonical issue identity or `none`. Append
+`state=pending; issue=none` before creation, then append the returned identity
+while it remains `pending`, append `member` only after the owner marker is
+verified, and append `cleanup` before any safe-close mutation. Append
+`abandoned` only after closed/label-absent verification. On resume, paginate
+the hold log and select the latest valid record for the exact token tuple;
+missing, conflicting, or out-of-order records fail closed, while `pending`
+and `cleanup` remain recovery holds.
+
+`journal` is the durable record location. For an existing set, use the
+verified originating Stage 1 hold; for a standalone set with no existing issue
+or anchor, use a pre-existing repository-level authoring journal target
+designated by repository policy. Do not create that journal as part of the
+same set. If neither location exists or its identity cannot be verified, stop
+with `blocked-by-human` before creating any target. On every paginated replay,
+require `actor` to equal the API author and verify that actor is a trusted
+marker login with the required write-level permission or configured bot/app
+trust. An untrusted, malformed, or conflicting exact-token record is not valid
+evidence; fail closed and retain the hold.
+
+Generate the opaque target/anchor IDs and token before creation because issue
+numbers are not yet known. Before issuing the create, persist those
+preallocated IDs, the exact token, and `state=pending` in that journal. After a
+successful create, attach and verify the returned issue
+identities on that pending record before appending the owner marker. If the
+pre-create hold write cannot be verified, do not create; if the post-create
+identity attachment cannot be verified, leave the returned issue held for
+recovery. Transition that record to `member` only after the owner marker is
+verified, or to `abandoned` only after the verified safe close and label
+removal. On resume, match the exact token and persisted identities; an
+incomplete scan or state mismatch is a recovery hold.
+
+Immediately after a new issue is created and its authoring label is applied,
+append a `mode=acquire` owner marker with the current set ID and a new owner
+token. Re-fetch labels, body, and owner comments before treating the issue as
+a set member. If marker append or verification is uncertain, reconcile the
+returned comment ID and the paginated owner-marker log with bounded retries
+before closing. If a trusted marker is found, retain the label and recover or
+reopen the issue as a set member. Otherwise re-fetch labels, body, current
+`claimed-by` state, and the paginated owner-marker log; if that final read
+proves no competing claim or owner marker, append `state=cleanup` before
+closing the issue or removing its authoring label. Re-fetch and verify
+closed/label-absent state, then append `state=abandoned`. If any disposition or
+cleanup read is uncertain, retain `state=cleanup`, leave the issue held, and
+report the recovery hold.
+
+An atomically labeled publication is not set membership until its owner marker
+is verified. Persist each returned target identity in the durable journal before
+appending the marker. On resume, reconcile recorded
+identities and only issues carrying this set's exact publication token; an
+incomplete scan or unmarked match is a recovery hold, so never infer membership
+or completion from the shared label alone.
+
+### Per-target ownership and conflict handling
+
+The configured authoring label is a shared **claim-suppression lock**, not
+a session owner token. Before editing an existing issue or roadmap, take a
+fresh target snapshot and resolve its complete claim state, including trusted
+forced-handoff successors and activation-nonce winners, plus its active
+`claimed-by` and open-PR state. A trusted forced-handoff successor is active
+even without a new `claimed-by`; any active execution is a conflict, so do not
+establish the hold. Apply the label if it is absent, and append a hidden owner
+comment using the resolved marker prefix:
+
+```html
+<!-- <marker-prefix>-authoring-owner: target=<owner>/<repo>#<number>; anchor=<owner>/<repo>#<number>; mode=acquire|resume|bootstrap|heartbeat|release|release-guard|release-complete; owner=<opaque-owner-token>; set=<opaque-set-id>; session=<opaque-session-id>; body-sha256=<64-lowercase-hex|none>; snapshot-sha256=<64-lowercase-hex|none>; supersedes=<opaque-owner-token|none> -->
+```
+
+_Issue-authoring ownership marker. Do not edit or delete._
+
+The companion uses the same `body-sha256` and `snapshot-sha256` semantics as
+the portable owner protocol. Target markers hash the exact UTF-8 body from the
+fresh read immediately before posting; anchor-only `release-guard` uses
+`body-sha256=none`, while anchor-only `release-complete` carries the required
+canonical set snapshot digest. Persist the per-target body digests and
+snapshot inputs in the originating hold and re-fetch/recompute them before
+accepting completion. New markers missing these fields are not valid for a new
+generation; legacy markers are migration input only and cannot prove completion.
+
+Verify the returned comment ID and body after posting, then re-read the active
+claim and open-PR state again. If execution began during acquisition, stop
+without editing and leave the verified hold for explicit recovery.
+
+Owner tokens are per target: never compare a child target's `owner` value
+literally with the anchor's `owner` value. Every owner-marker log read for a
+target or anchor must use paginated issue-comment retrieval (for example,
+`gh api --paginate` or an API equivalent) and deterministic GitHub comment
+order (`created_at`, then comment ID); never rely on a single API page.
+
+Append this HTML-first body with a direct JSON `POST` to the issue-comments
+endpoint; do not rely on `gh issue comment` or `gh api -f body=` for the owner
+marker. Verify the returned comment ID and body after posting.
+
+Resolve the set anchor before appending any target marker. `anchor` records
+the canonical owner/repository/issue identity of that anchor; the anchor's
+own marker uses its `target` as the `anchor`, and every other marker in the
+set repeats the same value. A missing or mismatching `anchor` makes a marker
+invalid for set membership, resume, or release. A legacy marker without an
+anchor cannot resume a multi-target set; when no parent roadmap identifies the
+anchor, stop and bootstrap a fresh explicitly designated anchor instead of
+choosing a different lead implicitly.
+
+Only a trusted target-repository marker actor makes a marker valid: the
+current authenticated actor after posting and verifying it **and** passing a
+Write/Maintain/Admin permission check, a configured trusted bot or app, or an
+explicitly enabled Write/Maintain/Admin collaborator. Comment-only access is
+insufficient. If permission cannot be verified and no explicit bot/app trust
+applies, ignore and report the marker; syntax alone never grants ownership.
+For an owner marker that must support a later session, the author's trust must
+also be re-evaluable from a durable policy: a login in `trustedMarkerActors`, a
+configured trusted bot or app, or an explicitly enabled collaborator whose
+current permission can be re-read. The current-session actor path is
+provisional and cannot make a historical marker trusted by itself. Without a
+durable trust source, leave the label and hold in place and report recovery;
+do not treat the marker as set membership or ownership evidence.
+For `acquire`, `bootstrap`, and `resume`, `owner` is a newly generated
+opaque per-target owner token; `supersedes=none` for `acquire` and
+`bootstrap`, while `resume` names the prior owner token. For `release`, keep
+the current owner token in `owner` and set `supersedes` to that same current
+owner token; `supersedes=none` is invalid for a release marker.
+For `heartbeat`, retain the current owner, set, and anchor, set `supersedes`
+to that same owner token, and do not open or close a generation; it only
+renews the current owner's freshness.
+`release-guard` is valid only on the set anchor. It retains the anchor's
+current owner, set, anchor, and session, and sets `supersedes` to that owner
+token. Append and reconcile it after release-marker preflight but before the
+first label removal. It is the Discover-visible guard for a provisional set
+release: it does not close any generation, and it remains active until the
+anchor's durable `release-complete` marker is reconciled.
+`release-complete` is valid only on the set anchor. It retains the anchor's
+current owner, set, anchor, and session, and sets `supersedes` to that owner
+token. Append and verify it only after every target's release marker and label
+removal has been verified. It is the durable terminal event for the set: a
+later reapplication of the authoring label must start a fresh set generation
+rather than resuming the completed set.
+Within an open generation, the first valid acquisition, bootstrap, or
+resume marker by GitHub comment order wins. A
+`resume` marker opens a new generation only for the exact interrupted set
+and matching prior owner token. A `release` marker must match the current
+owner and set, but remains provisional while its set release is in
+progress; an individual label removal never closes that target's
+generation. Only after a fresh re-read verifies every target's release marker
+and label removal and the anchor's `release-complete` marker does the set-level
+release close all target generations, after which a later `acquire` starts a
+new generation. The
+active generation's freshness is the GitHub `created_at` of
+its latest trusted acquisition, bootstrap, resume, or heartbeat marker; a
+resume marker refreshes that clock, and the label event alone never
+supersedes a fresh owner marker.
+The current generation's winner owns the target; any other session must stop
+without editing and leave the label in place. Owner comments are append-only
+and must not be edited or deleted.
+
+For a new Stage 1 set, generate one opaque set ID and reuse it in every owner
+marker for that set. When resuming an interrupted set, recover and verify its
+persisted set ID from the exact trusted owner markers and reuse it instead of
+generating a replacement. Persist the resolved anchor identity in every marker
+as well. Before resuming, enumerate the anchor's `## Tracks` and a
+repository-wide paginated issue-comment scan scoped to trusted owner markers
+whose exact `anchor` and `set` match; merge the results by comment order and
+block if enumeration is incomplete. These append-only comments are the durable
+set, anchor, and target membership record; a resume may include only targets
+whose valid markers identify that exact set and anchor. Never infer set
+membership or the anchor from the shared label alone.
+
+A non-anchor target cannot prove that its previous set finished from its local
+owner-marker log alone. Before accepting a fresh `mode=acquire` for a child
+whose prior generation has a `mode=release` or `mode=release-guard` marker,
+follow its exact persisted `anchor` identity and fetch that anchor's paginated
+owner-marker log. Require a trusted `mode=release-complete` marker for the
+exact anchor/set/session generation represented by the child's current release
+marker, including the current anchor owner for that release generation; never
+accept an older or newer set's completion. Owner tokens are per target, so do
+not compare the child owner token literally with the anchor owner token. If the
+completion marker is absent, malformed, or cannot be fetched conclusively,
+treat the prior release as interrupted: do not acquire the child as a new set,
+and instead resume that exact set or leave its hold in place. A child log, an
+absent label, or a session-local read is never completion evidence. Once the
+anchor completion is reconciled, the old set is closed and a new acquisition
+may start a new generation.
+
+Acquire one set anchor before acquiring any other target: when the set has a
+parent roadmap, first publish a valid roadmap shell under the authoring hold,
+with all required roadmap headings/markers and an empty `## Tracks` list
+allowed only until child issue numbers exist; then acquire and verify that
+roadmap as the set anchor. Only after that anchor is verified may the session
+publish and acquire child targets, and it must wire their real numbers into
+`## Tracks` before release. When no parent roadmap exists, use the designated
+lead target as the anchor. The anchor winner serializes acquisition for the
+whole set; no session may publish or acquire children independently. Before
+each child acquisition or resume, append and verify a same-owner heartbeat on
+the anchor, re-fetch the anchor's paginated log, and require its current owner
+token, set, anchor, and session. Append the child marker only after that
+validation, then immediately re-fetch both anchor and child and require the
+same anchor ownership; if either read changes, leave the child hold in place
+and stop rather than forming a split set. If any target cannot be acquired
+under that anchor, stop all body and relationship edits, leave labels and
+append-only markers in place, and require an exact verified resume of that set
+rather than allowing a split ownership set.
+After each `acquire`/`resume`/`bootstrap` marker POST, wait the configured
+`claim.verifySettleDelay`, replay the full paginated log, and choose the
+winner by deterministic comment order; an immediate local read never
+authorizes edits. Apply the same settle delay and full paginated replay after
+every heartbeat before it authorizes an edit or label removal.
+
+Immediately before every body or roadmap relationship update, re-fetch both
+the target and the set anchor (the same fresh snapshot serves both roles when
+the target is the anchor). Require each target's expected owner token
+independently, plus the same set, anchor, and owning session, and require the
+expected body/label snapshot on the edited target to remain unchanged. Also
+re-read its active `claimed-by` and open-PR state; any active claim or open PR
+is a conflict. An unexpected change, competing owner, malformed owner marker,
+or inability to prove a unique owner on either target is a conflict: do not
+overwrite the target, leave the authoring label in place, and record a safe
+alternative.
+Prefer an atomic acquisition helper when the target runtime provides one;
+otherwise this append-only conflict check is mandatory, including for
+`instructions-only` installs.
+
+After that conflict check and immediately before the body or relationship
+mutation, append and verify a trusted `mode=heartbeat` marker for the set
+anchor first, then re-fetch and verify its current owner, set, anchor, and
+session. Only after the anchor renewal succeeds, append and verify the edited
+target's heartbeat when it is distinct, then re-fetch both and require each
+target's expected owner token independently, plus the same set, anchor, owning
+session, and expected target snapshot. If either heartbeat cannot be posted or
+verified, or a newer owner appears, stop without editing. A heartbeat never
+starts a new generation and never authorizes release.
+
+A target already held by another set is unavailable. A later session may
+resume only when the invocation identifies the exact interrupted set and
+the hold is past `issueAuthoring.authoringStaleAge`; append a `mode=resume`
+owner marker with a new owner token and `supersedes` value matching the prior
+owner token before repeating the acquisition check. For a stale held target
+with no valid owner marker, append a trusted `mode=bootstrap` marker with the
+current set ID, a new owner token, and `supersedes=none`; this starts a new
+generation and is not evidence of any prior set membership. The first valid
+bootstrap marker wins. Staleness alone never authorizes takeover: use the
+latest trusted generation marker's GitHub `created_at` for marked targets, and
+the label event only for legacy-unowned bootstrap. A competing active marker
+still stops the session.
 
 Publishing under this label needs no separate user approval: once a
 drafted `ready` body passes the mechanical `audit-authored-issue` gate
 and the critique pass, the skill publishes it directly (see
 [Approval boundary](#approval-boundary) below for the one exception).
 The held issue **is** the draft — in-place body edits, roadmap
-relationship wiring (children first, then roadmaps once the real issue
-numbers exist), and re-lint of already-published bodies all happen on
+relationship wiring (publish/acquire the roadmap anchor first, then
+publish/acquire children and wire their real issue numbers), and re-lint of
+already-published bodies all happen on
 the published issue itself, under the same label, rather than in a
 session-local buffer a later session cannot see.
 
 These guards keep partially published issue sets visible to the IDD
 discover guard while the full set is still being wired. If a session
-is interrupted before the set is stable, leave the label in place —
-the label alone is what keeps Discover from selecting the unfinished
-set; no other bookkeeping is required for a later session to find and
-finish the work.
+is interrupted before the set is stable, leave the label and owner markers
+in place. The label suppresses Discover while the markers preserve set
+identity and target membership for a later verified resume; a later session
+must not infer either from the label alone.
 
 Remove the label from all published issues only after: the release
-checklist passes — every child issue is referenced from its parent
-roadmap's `## Tracks` list, no unsubstituted placeholder remains in
-any published body, and the `audit-authored-issue` linter (or its
-manual fallback) is green on every published body in the set — and the
-user explicitly requests release from the authoring hold. This release
-checklist plus the user's explicit request together form the single
-approval boundary in this contract.
+checklist passes — every child issue is referenced from its parent roadmap's
+`## Tracks` list, no unsubstituted placeholder remains in any published
+body, and the `audit-authored-issue` linter (or its manual fallback) is green
+on every published body in the set — and the user explicitly requests
+release from the authoring hold. Keep the set anchor held until every other
+target's label removal is verified, and remove the anchor label last. First
+re-fetch owner comments during release-marker preflight. If a valid
+current-owner/set `mode=release` marker already exists, reuse the earliest
+matching GitHub comment ID; otherwise append one with `supersedes` equal to
+the current owner token, re-fetch to verify it, and record its comment ID.
+Complete that preflight for the whole set before removing any label. A retry
+of an open generation must reuse the recorded or earliest matching marker and
+never append an indistinguishable duplicate. Then, before removing any label,
+append or reuse the anchor-only `mode=release-guard` marker and re-fetch the
+anchor's paginated owner-marker log with bounded retries, requiring the exact
+current owner, set, anchor, session, and marker body. If that guard is not
+found conclusively, leave all labels in place and stop. The guard suppresses
+Discover for the whole set during the provisional label-removal window; it
+does not close the set. Then, immediately before each label removal, append
+and verify the set anchor's `mode=heartbeat` first, re-fetching it and requiring
+its current owner, set, anchor, and session. Only after that succeeds, append
+and verify the target heartbeat when it is distinct (one marker serves both
+roles when they coincide), then re-fetch both and require each target's expected
+owner token independently, plus the shared set/anchor/session, recorded
+release-marker comment, and expected label/body snapshot. Remove non-anchor
+labels one target at a time and re-fetch each result. After the
+final anchor label removal is verified, re-fetch every target and verify its
+current release marker, absent label, and expected body snapshot; any drift
+leaves the set open and prevents completion. Then reuse or append the
+anchor-only
+`mode=release-complete` marker and record its comment ID. Reconcile that ID
+and the paginated anchor log with bounded retries; a successful POST or
+verification timeout is inconclusive. If the trusted marker is found, keep
+labels absent and close the set. If a complete fresh read conclusively proves
+that no trusted marker was appended, reapply the authoring label to every
+target and leave the set generations open. If reads remain inconclusive, keep
+the release guard and current labels/state in place, leave the set held, and
+record a recovery hold. Never infer marker absence or roll back from a
+verification timeout. Do not infer completion from absent labels or a
+session-local read. Treat every release marker, heartbeat,
+label removal, and completion marker as provisional: no target generation
+closes until every target's release marker and label removal are verified and
+the durable completion marker is reconciled, at which point the set-level
+release closes all target generations together. If any later mutation or
+verification fails, re-fetch all already processed targets,
+retrying a failed post-removal read with a bounded fresh read, restore their
+labels while the current owner/set still match, and verify the restored set
+state; leave every target generation open and stop. If restoration cannot be
+completed or a newer owner has appeared, record a set-level recovery hold and
+never claim a partial release. This release checklist plus the user's
+explicit request together form the single approval boundary in this contract.
 
 Removing the authoring label releases the Discover guard and
 authorizes IDD execution for the released issues. Do it only as part

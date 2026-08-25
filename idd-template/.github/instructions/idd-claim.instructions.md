@@ -35,10 +35,10 @@ approval as missing.
 
 ## Pre-checks (all five must pass)
 
-Re-fetch the issue immediately before running these checks.
-All A5 checks are target-issue local: claims on related roadmap or
-child issues do not block this check unless they appear on the selected
-issue itself.
+Re-fetch the issue before checks. A5 is target-local except child release:
+follow its persisted anchor's paginated log for exact generation; related
+claims do not block. Owner protocol:
+`docs/idd-autonomy-contract.md#portable-authoring-owner-protocol`.
 
 **(a) Issue-author approval gate** — Re-evaluate the repository-wide
 issue-author approval rule immediately before claim, using the same
@@ -88,11 +88,9 @@ already-claimed | stale-reclaimable` with the winning `{claim-id}`:
   stop instead of falling back to Discover, per
   `idd-discover.instructions.md`'s A0-T stop-don't-fallback rule.
 
-GitHub issue comments have no compare-and-swap, so this narrows — rather
-than closes — the claim→write TOCTOU window; the 24 h stale-takeover
-and same-second tie-break below remain the race-recovery backstop. If
-the helper is unavailable or malformed, fall back to the written rules
-below, which stay authoritative.
+GitHub comments lack compare-and-swap, so this only narrows claim→write
+TOCTOU window; stale-takeover and same-second tie-break remain. If the helper
+is unavailable or malformed, use the authoritative rules below.
 
 Use the `claim-stale-age` policy default from `docs/policy-constants.md`
 for these stale checks (distributed default: `24 h`).
@@ -268,6 +266,11 @@ verification_ below). Determine `{prior-claim-id}`:
 - **Migration from a legacy claim**, **fresh claim**, or claim after a
   released / unclaimed state → `none`
 
+Immediately before claim POST, re-fetch labels and owner/claim logs. An
+incomplete/current authoring hold blocks; only exact anchor/set/session
+`release-complete` allows a completed generation.
+Route directly to already-claimed/Discover fallback (A0-T stops), never A5(c).
+
 Post the claim comment using the exact format and posting mechanics
 already defined in
 [Claim format](idd-overview-core.instructions.md#claim-format) — do not
@@ -306,15 +309,11 @@ verification_ below); never skip it for any activation path:
 _{agent-id}: claim activation nonce — IDD automation marker. Do not edit._
 ```
 
-`{nonce}` is a fresh opaque token; record it locally alongside `{agent-id}`
-/ `{claim-id}`. When 2+ trusted markers exist for one `{claim-id}` (a
-collision), the winner is the lexicographically earliest `{nonce}`
-(mirrors the `{claim-id}` same-second tie-break in _Claim verification_).
-No marker posted for a `{claim-id}` means no comparison, never a mismatch.
-When helper runtime is enabled, post it with
+`{nonce}` is fresh; record it with `{agent-id}` / `{claim-id}`. For multiple
+trusted markers sharing a claim, the lexicographically earliest nonce wins;
+no marker means no comparison. With helper runtime, post it using
 `post-idd-marker --type activation-nonce --target issue <number> --apply`
-(agent-id / claim-id / nonce / timestamp fields; see
-`docs/idd-helper-scripts.md`).
+with the four fields defined in `docs/idd-helper-scripts.md`.
 
 ## Heartbeat posting
 
@@ -354,6 +353,10 @@ race-safe checks below:
    catches a second session that adopted the identical `{claim-id}` via
    forced-handoff, where steps 1–4 see nothing to disagree about (both
    `{claim-id}`s genuinely match). No marker posted: treat as passed.
+
+6. Re-fetch labels/paginated owner log; a hold contests this claim. If active and
+   step 5 passed, release/verify `unclaimed-by`, then use `(A0-T)`, not A5(c).
+   If step 5 failed, retain it; never release on nonce mismatch.
 
 If any check fails, treat the claim as contested.
 
@@ -397,7 +400,10 @@ rule 7). Adopt **both fields verbatim** as your own `{agent-id}` /
 fresh claim-id or keeping your own native agent-id; no separate
 `claimed-by supersedes: none` post is required for the transfer itself.
 
-**Adopt-verbatim is still an activation**: post your own
+**Adopt-verbatim is still an activation**: immediately before every activation
+nonce, including this nonce-only handoff, repeat the label/authoring-state
+guard above.
+Post your own
 [activation-nonce marker](#activation-nonce-format) for `new-claim-id`
 too (see the
 [rationale](../../docs/idd-design-rationale.md#activation-nonce-why-a-separate-marker-and-what-stays-deferred)
@@ -405,19 +411,15 @@ for why this path needs its own nonce). Verify it the same way step 5
 above does: wait `claim.verifySettleDelay`, recompute the nonce winner
 for `new-claim-id`, and confirm it is yours — the only nonce check
 that fires here, since posting no `claimed-by` means this path never
-enters _Claim verification_ above. On mismatch, treat the claim as
-contested and return to Discover, exactly as the "If any check fails"
-clause above.
+enters _Claim verification_ above. After nonce verification, repeat that
+guard; on mismatch or either hold, re-resolve pair/nonce before fallback. If
+the pair still owns claim and nonce (or none competes), post/verify
+`unclaimed-by`; else leave successor claim.
 
-Always use the marker's assigned `new-agent-id` / `new-claim-id`
-exactly as recorded — never invent an ad hoc `claimed-by`, and never
-reuse the displaced old `{claim-id}` as your own (`{agent-id}` may
-legitimately equal the displaced claim's agent-id; only `{claim-id}`
-must always be the fresh marker-assigned value). An invented native
-agent-id silently fails every later heartbeat or F2/F3 check as
-`agent-id-mismatch` / `claimLost`. Cite the trusted forced-handoff
-evidence in the issue digest or resume report's `Authoritative by`
-field.
+Always use the assigned pair verbatim: never invent `claimed-by` or reuse the
+displaced `{claim-id}`. A native agent-id that is not the assigned value fails
+later heartbeat or F2/F3 checks. Cite trusted forced-handoff evidence in the
+issue digest or resume report's `Authoritative by` field.
 
 **The successor claim is sticky**, not a one-shot unlock: forced-handoff
 re-derives the adopted pair as the active claim on every resolution

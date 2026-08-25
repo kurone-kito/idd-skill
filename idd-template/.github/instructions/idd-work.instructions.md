@@ -313,6 +313,39 @@ blocking condition before stopping. Do not use the digest as the only
 record of unfinished work; material decisions still need issue comments
 or commits.
 
+**Unplanned follow-up work**: If B–C reveals a separate follow-up, do not call
+`gh issue create` or the REST issues API. This direct-creation anti-pattern is
+documented in the [B–C design rationale](../../docs/idd-design-rationale.md#work-and-self-review).
+If the optional `issue-authoring`
+companion is installed, invoke its Stage 1 hold/contract. Its reuse-first
+check must reject targets under another hold. A target with the configured
+authoring label outside this session's set is unavailable unless this pass
+explicitly resumes that interrupted set; verify its set identity from the
+companion's durable owner markers and add its
+published issues to the working set first. Unrelated holds stay unavailable.
+If the companion builds an optional discarded validation probe
+(throwaway, unpublished), run it in a separate temporary worktree;
+otherwise skip it. Never run or discard that probe in the current issue
+worktree.
+Before every edit, require per-target atomic or append-only owner-marker
+acquisition and a fresh body/label re-read; on conflict, keep the label, stop,
+and use another target or a separate comment.
+
+For a set, use a valid parent roadmap shell as anchor when present; otherwise
+use the designated lead. A roadmap's `## Tracks` may be empty until child
+numbers exist. Then publish/acquire ready children under that anchor,
+renew/revalidate it around each acquisition, wire numbers into any roadmap,
+leave the authoring label on every target, then resume B–C.
+After anchor acquisition, persist/verify exact `anchor`/`set` in the originating
+issue's durable Stage 1 hold; resume must recover it, not infer from label or
+choose another lead. On interruption, retain labels, stop B–C, and resume only
+after completion. If Stage 1 publishes nothing (including after a non-ready
+bucket), comment it before resuming and list it in PR follow-ups once PR
+exists. Keep Stage 1 B–C hold; never release
+a follow-up or start a second loop. If the companion is unavailable, record the
+proposal in a comment/PR follow-ups; never create it ad hoc or improvise
+worker-side authoring.
+
 ---
 
 ## C — Self-Review Loop
