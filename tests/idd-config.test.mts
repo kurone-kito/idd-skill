@@ -253,6 +253,21 @@ test('resolveUserGlobalConfigPath does not consult process.env when env is injec
   assert.equal(resolveUserGlobalConfigPath({ env: {} }), undefined);
 });
 
+test('resolveUserGlobalConfigPath ignores a relative XDG_CONFIG_HOME and requires an absolute HOME (#2257)', () => {
+  assert.equal(
+    resolveUserGlobalConfigPath({
+      env: { XDG_CONFIG_HOME: 'config', HOME: '/home/operator' },
+    }),
+    join('/home/operator', '.config', 'idd-skill', 'config.json'),
+  );
+  assert.equal(
+    resolveUserGlobalConfigPath({
+      env: { HOME: 'relative-home' },
+    }),
+    undefined,
+  );
+});
+
 test('loadUserGlobalPolicyDocument treats a missing file as absent (#2257)', () => {
   const sandbox = mkdtempSync(join(tmpdir(), 'idd-user-global-missing-'));
   const result = loadUserGlobalPolicyDocument({
@@ -292,6 +307,27 @@ test('loadUserGlobalPolicyDocument ignores keys other than critiqueLoop.delegate
     status: 'global',
     source: 'user-global',
     delegate: { command: 'global-review', mode: 'fallback' },
+  });
+});
+
+test('resolveEffectiveCritiqueLoopDelegateFromEnv skips the global file when local policy already decides (#2257)', () => {
+  const sandbox = mkdtempSync(join(tmpdir(), 'idd-user-global-skipped-'));
+  const path = join(sandbox, 'config.json');
+  writeFileSync(
+    path,
+    JSON.stringify({
+      critiqueLoop: { delegate: { command: 'must-not-load' } },
+    }),
+  );
+  const resolved = resolveEffectiveCritiqueLoopDelegateFromEnv({
+    localConfig: { critiqueLoop: { delegate: { command: 'local-review' } } },
+    globalConfigPath: path,
+    env: {},
+  });
+  assert.deepEqual(resolved, {
+    status: 'local',
+    source: 'repository-local',
+    delegate: { command: 'local-review', mode: 'fallback' },
   });
 });
 

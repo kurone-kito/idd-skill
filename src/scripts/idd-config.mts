@@ -32,10 +32,11 @@
 // residual up knowingly.
 
 import { readFileSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { isAbsolute, join, resolve } from 'node:path';
 
 import {
   type EffectiveCritiqueLoopDelegate,
+  inspectCritiqueLoopDelegateLayer,
   resolveEffectiveCritiqueLoopDelegate,
 } from './policy-helpers.mts';
 
@@ -213,7 +214,7 @@ export function resolveUserGlobalConfigPath(
   const env = options?.env ?? process.env;
   const xdg =
     typeof env.XDG_CONFIG_HOME === 'string' ? env.XDG_CONFIG_HOME.trim() : '';
-  if (xdg.length > 0) {
+  if (xdg.length > 0 && isAbsolute(xdg)) {
     return join(xdg, USER_GLOBAL_CONFIG_DIRNAME, USER_GLOBAL_CONFIG_FILENAME);
   }
 
@@ -224,7 +225,7 @@ export function resolveUserGlobalConfigPath(
         ? env.HOME
         : '';
   const home = homeCandidate.trim();
-  if (home.length === 0) {
+  if (home.length === 0 || !isAbsolute(home)) {
     return undefined;
   }
   return join(
@@ -281,6 +282,11 @@ export function resolveEffectiveCritiqueLoopDelegateFromEnv(
     options && Object.hasOwn(options, 'localConfig')
       ? options.localConfig
       : loadPolicyConfig(options?.localPolicyPath).config;
+
+  const local = inspectCritiqueLoopDelegateLayer(localConfig);
+  if (local.status !== 'absent') {
+    return resolveEffectiveCritiqueLoopDelegate({ localConfig });
+  }
 
   const global = loadUserGlobalPolicyDocument({
     env: options?.env,
