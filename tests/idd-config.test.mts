@@ -268,6 +268,21 @@ test('resolveUserGlobalConfigPath ignores a relative XDG_CONFIG_HOME and require
   );
 });
 
+test('resolveUserGlobalConfigPath rejects a Windows current-drive root such as \\config (#2257)', () => {
+  assert.equal(
+    resolveUserGlobalConfigPath({
+      env: { XDG_CONFIG_HOME: '\\config', HOME: '/home/operator' },
+    }),
+    join('/home/operator', '.config', 'idd-skill', 'config.json'),
+  );
+  assert.equal(
+    resolveUserGlobalConfigPath({
+      env: { HOME: '\\config' },
+    }),
+    undefined,
+  );
+});
+
 test('loadUserGlobalPolicyDocument treats a missing file as absent (#2257)', () => {
   const sandbox = mkdtempSync(join(tmpdir(), 'idd-user-global-missing-'));
   const result = loadUserGlobalPolicyDocument({

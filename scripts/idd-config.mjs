@@ -31,7 +31,7 @@
 // wider-review change #1721 does not attempt. A later session may pick that
 // residual up knowingly.
 import { readFileSync } from 'node:fs';
-import { isAbsolute, join, resolve } from 'node:path';
+import { join, resolve } from 'node:path';
 import {
   inspectCritiqueLoopDelegateLayer,
   resolveEffectiveCritiqueLoopDelegate,
@@ -124,6 +124,18 @@ function describeJsonValueKind(value) {
   }
   return `a ${typeof value}`;
 }
+/**
+ * True for a config-root that cannot be resolved against the process cwd.
+ * Accepts POSIX `/…` (not `//…`) and Windows drive-letter or UNC roots.
+ * Rejects relative paths and Windows current-drive roots such as `\config`,
+ * which `path.isAbsolute` treats as absolute on win32.
+ */
+function isQualifiedConfigRoot(value) {
+  if (/^[A-Za-z]:[\\/]/.test(value) || value.startsWith('\\\\')) {
+    return true;
+  }
+  return value.startsWith('/') && !value.startsWith('//');
+}
 /** True when `error` is a Node.js filesystem error with `code: 'ENOENT'`. */
 function isEnoentError(error) {
   return typeof error === 'object' && error !== null && error.code === 'ENOENT';
@@ -142,7 +154,7 @@ export function resolveUserGlobalConfigPath(options) {
   const env = options?.env ?? process.env;
   const xdg =
     typeof env.XDG_CONFIG_HOME === 'string' ? env.XDG_CONFIG_HOME.trim() : '';
-  if (xdg.length > 0 && isAbsolute(xdg)) {
+  if (xdg.length > 0 && isQualifiedConfigRoot(xdg)) {
     return join(xdg, USER_GLOBAL_CONFIG_DIRNAME, USER_GLOBAL_CONFIG_FILENAME);
   }
   const homeCandidate =
@@ -152,7 +164,7 @@ export function resolveUserGlobalConfigPath(options) {
         ? env.HOME
         : '';
   const home = homeCandidate.trim();
-  if (home.length === 0 || !isAbsolute(home)) {
+  if (home.length === 0 || !isQualifiedConfigRoot(home)) {
     return undefined;
   }
   return join(
