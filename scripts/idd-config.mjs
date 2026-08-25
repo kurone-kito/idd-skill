@@ -134,6 +134,11 @@ function isQualifiedConfigRoot(value) {
   if (/^[A-Za-z]:[\\/]/.test(value) || value.startsWith('\\\\')) {
     return true;
   }
+  // POSIX `/…` is only a cwd-independent root off Windows. On win32,
+  // `/config` and Git Bash `/c/Users/…` become a current-drive path.
+  if (process.platform === 'win32') {
+    return false;
+  }
   return value.startsWith('/') && !value.startsWith('//');
 }
 /** True when `error` is a Node.js filesystem error with `code: 'ENOENT'`. */

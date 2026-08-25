@@ -283,6 +283,24 @@ test('resolveUserGlobalConfigPath rejects a Windows current-drive root such as \
   );
 });
 
+test('resolveUserGlobalConfigPath documents that POSIX slash roots are Unix-only (#2257)', () => {
+  if (process.platform === 'win32') {
+    assert.equal(
+      resolveUserGlobalConfigPath({
+        env: { XDG_CONFIG_HOME: '/config', HOME: 'C:\\Users\\operator' },
+      }),
+      join('C:\\Users\\operator', '.config', 'idd-skill', 'config.json'),
+    );
+    return;
+  }
+  assert.equal(
+    resolveUserGlobalConfigPath({
+      env: { XDG_CONFIG_HOME: '/xdg-config' },
+    }),
+    join('/xdg-config', 'idd-skill', 'config.json'),
+  );
+});
+
 test('loadUserGlobalPolicyDocument treats a missing file as absent (#2257)', () => {
   const sandbox = mkdtempSync(join(tmpdir(), 'idd-user-global-missing-'));
   const result = loadUserGlobalPolicyDocument({
@@ -301,7 +319,7 @@ test('loadUserGlobalPolicyDocument treats malformed JSON as absent (#2257)', () 
   assert.equal(result.path, path);
 });
 
-test('loadUserGlobalPolicyDocument ignores keys other than critiqueLoop.delegate (#2257)', () => {
+test('resolveEffectiveCritiqueLoopDelegateFromEnv ignores global keys other than critiqueLoop.delegate (#2257)', () => {
   const sandbox = mkdtempSync(join(tmpdir(), 'idd-user-global-extra-'));
   const path = join(sandbox, 'config.json');
   writeFileSync(
