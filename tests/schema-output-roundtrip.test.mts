@@ -153,8 +153,10 @@ const SCHEMA_OUTPUT_COVERAGE: CoverageEntry[] = [
     reason:
       'onboarding-hearing-transcript.schema.json describes a confirmed ' +
       'hearing transcript document later CLI stages will write, not a ' +
-      'current helper stdout envelope -- fixture coverage lives in ' +
-      'schema-validation.test.mts.',
+      'current helper stdout envelope -- the valid/invalid fixture pair is ' +
+      'exercised by discoverSchemaCases / scripts/validate-schemas.mjs, ' +
+      'which enumerates schemas/*.schema.json against ' +
+      'fixtures/schemas/*.{valid,invalid}.json.',
   },
   {
     schema: 'phase-graph.schema.json',

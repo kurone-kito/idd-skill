@@ -139,12 +139,7 @@
       "step": "1B",
       "kind": "policy",
       "prompt": "What is the narrowest credential profile that can complete the intended IDD phases?",
-      "explanation": "Review docs/permissions.md before granting unattended or merge-capable credentials. Record the selected boundary next to the merge policy so later sessions can tell whether worker credentials and merge-capable credentials differ. This is a docs-only decision.",
-      "options": [
-        { "value": "fully_autonomous_merge" },
-        { "value": "human_merge" },
-        { "value": "separate_merge_agent" }
-      ]
+      "explanation": "Review docs/permissions.md before granting unattended or merge-capable credentials. Record the selected boundary next to the merge policy so later sessions can tell whether worker credentials and merge-capable credentials differ. This is a docs-only freeform decision, not a merge-policy enum."
     },
     {
       "id": "claim-timing",
