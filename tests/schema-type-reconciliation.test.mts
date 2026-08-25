@@ -964,6 +964,18 @@ const contextTaxSampleFixture = {
   endedAt: '2026-08-25T16:00:00Z',
   vendorSessionId: 'sess',
   issueNumber: 2288,
+  stages: [
+    {
+      id: 'work',
+      usage: {
+        inputUncached: 1,
+        cacheRead: 0,
+        cacheCreation: 0,
+        output: 1,
+        reasoning: 0,
+      },
+    },
+  ],
 } satisfies ContextTaxSample;
 
 const contextTaxEventFixture = {

@@ -53,10 +53,8 @@ export interface ContextTaxStageUsage {
   usage: ContextTaxUsage;
 }
 
-/** One harvested sample. Matches schemas/context-tax-sample.schema.json. */
-export interface ContextTaxSample {
+interface ContextTaxSampleBase {
   schemaVersion: 1;
-  kind: ContextTaxKind;
   vendor: ContextTaxVendor;
   model: string;
   attribution: ContextTaxAttribution;
@@ -66,8 +64,6 @@ export interface ContextTaxSample {
   startedAt: string;
   endedAt: string;
   vendorSessionId: string;
-  issueNumber?: number;
-  stages?: readonly ContextTaxStageUsage[];
   claimId?: string | null;
   prNumber?: number | null;
   effort?: ContextTaxEffort | null;
@@ -76,6 +72,29 @@ export interface ContextTaxSample {
   includesSubagents?: boolean;
   ambiguous?: boolean;
 }
+
+/** Per-issue harvested sample. issueNumber and stages are required. */
+export interface ContextTaxIssueLoopSample extends ContextTaxSampleBase {
+  kind: 'issue-loop';
+  issueNumber: number;
+  stages: readonly ContextTaxStageUsage[];
+}
+
+/** Unscoped session sample. Join fields stay optional. */
+export interface ContextTaxSessionSample extends ContextTaxSampleBase {
+  kind: 'session';
+  issueNumber?: number;
+  stages?: readonly ContextTaxStageUsage[];
+}
+
+/**
+ * One harvested sample. Matches schemas/context-tax-sample.schema.json.
+ * JSON Schema cannot express the issue-loop conditional without oneOf;
+ * the TypeScript union and assertContextTaxSample enforce it.
+ */
+export type ContextTaxSample =
+  | ContextTaxIssueLoopSample
+  | ContextTaxSessionSample;
 
 /** One explicit phase enter/exit line. */
 export interface ContextTaxEvent {
@@ -139,8 +158,7 @@ const DROPPED_KEYS = new Set([
   'home',
 ]);
 
-const PATH_LIKE =
-  /(?:^|[\s"'`=(])(?:\/(?:home|Users|tmp|var|opt|usr)\/|\w:\\|\\\\|[.~]\/|ghq\/|issue\/\d+-|\.issue-\d+-)/i;
+const PATH_LIKE = /(?:^|[\s"'`=(])(?:\/[^\s"'`]+|[A-Za-z]:\\|[.~]\/)|ghq\//i;
 
 const SECRET_LIKE =
   /\b(?:ghp_|gho_|ghs_|ghu_|github_pat_|sk-|xox(?:b|a|p|r|s)-)[A-Za-z0-9_-]+/;
@@ -188,8 +206,9 @@ export function redactContextTaxRecord(input: unknown): unknown {
 
 /**
  * Infer an issue number from a worktree or cwd *basename* only
- * (`issue/<n>-…` or `.issue-<n>-…`). A value that still contains a
- * path separator is treated as a path and ignored.
+ * (`issue-<n>-…` or `.issue-<n>-…`, including B1 `repo.issue-<n>-…`).
+ * A value that still contains a path separator is treated as a path
+ * and ignored.
  */
 export function inferIssueNumberFromBasename(
   basename: string,
@@ -197,10 +216,36 @@ export function inferIssueNumberFromBasename(
   if (basename.includes('/') || basename.includes('\\')) {
     return undefined;
   }
-  const match = basename.match(/issue[/.-](\d+)/);
+  const match = basename.match(/(?:^|\.)issue-(\d+)(?:-|$)/);
   if (!match) {
     return undefined;
   }
   const n = Number(match[1]);
   return Number.isInteger(n) && n > 0 ? n : undefined;
+}
+
+export function isIssueLoopSample(
+  sample: ContextTaxSample,
+): sample is ContextTaxIssueLoopSample {
+  return (
+    sample.kind === 'issue-loop' &&
+    typeof sample.issueNumber === 'number' &&
+    Array.isArray(sample.stages)
+  );
+}
+
+/**
+ * Enforce the issue-loop join contract the JSON Schema cannot express
+ * without oneOf. Session samples pass through.
+ */
+export function assertContextTaxSample(sample: ContextTaxSample): void {
+  if (sample.kind !== 'issue-loop') {
+    return;
+  }
+  if (typeof sample.issueNumber !== 'number' || sample.issueNumber <= 0) {
+    throw new Error('issue-loop sample requires a positive issueNumber');
+  }
+  if (!Array.isArray(sample.stages)) {
+    throw new Error('issue-loop sample requires stages');
+  }
 }
