@@ -498,6 +498,54 @@ test('resolveEffectiveCritiqueLoopDelegate fails closed on a non-object local cr
   });
 });
 
+test('inspectCritiqueLoopDelegateLayer treats an explicit invalid mode as malformed (#2257)', () => {
+  assert.deepEqual(
+    inspectCritiqueLoopDelegateLayer({
+      critiqueLoop: {
+        delegate: { command: 'review', mode: 'always' },
+      },
+    }),
+    {
+      status: 'malformed',
+      reason: 'invalid-repository-local-delegate',
+    },
+  );
+  assert.deepEqual(
+    inspectCritiqueLoopDelegateLayer({
+      critiqueLoop: {
+        delegate: { command: 'review', mode: 1 },
+      },
+    }),
+    {
+      status: 'malformed',
+      reason: 'invalid-repository-local-delegate',
+    },
+  );
+});
+
+test('resolveEffectiveCritiqueLoopDelegate does not inherit a global invalid mode (#2257)', () => {
+  const result = resolveEffectiveCritiqueLoopDelegate({
+    localConfig: {},
+    globalConfig: {
+      critiqueLoop: {
+        delegate: { command: 'global-review', mode: 'always' },
+      },
+    },
+  });
+  assert.deepEqual(result, { status: 'none', source: 'none' });
+});
+
+test('normalizePolicyConfig still fail-safes an invalid explicit mode to fallback (#2199)', () => {
+  assert.deepEqual(
+    normalizePolicyConfig({
+      critiqueLoop: {
+        delegate: { command: 'review', mode: 'always' },
+      },
+    }).critiqueLoop.delegate,
+    { command: 'review', mode: 'fallback' },
+  );
+});
+
 test('resolveEffectiveCritiqueLoopDelegate treats a malformed global fragment as absent (#2257)', () => {
   const result = resolveEffectiveCritiqueLoopDelegate({
     localConfig: {},

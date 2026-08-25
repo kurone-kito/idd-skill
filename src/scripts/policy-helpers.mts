@@ -1027,6 +1027,19 @@ export function inspectCritiqueLoopDelegateLayer(
     return { status: 'disabled' };
   }
 
+  if (typeof value === 'object' && value !== null && !Array.isArray(value)) {
+    const candidate = value as { mode?: unknown };
+    if (Object.hasOwn(candidate, 'mode')) {
+      const mode = candidate.mode;
+      if (typeof mode !== 'string' || !CRITIQUE_LOOP_DELEGATE_MODES.has(mode)) {
+        return {
+          status: 'malformed',
+          reason: INVALID_LOCAL_DELEGATE_REASON,
+        };
+      }
+    }
+  }
+
   const parsed = parseCritiqueLoopDelegate(value);
   if (parsed) {
     return { status: 'configured', delegate: parsed };
