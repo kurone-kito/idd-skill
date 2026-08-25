@@ -1,0 +1,10 @@
+{
+  "schemaVersion": 1,
+  "event": "enter",
+  "stageId": "work",
+  "at": "2026-08-25T15:10:00Z",
+  "vendor": "claude",
+  "vendorSessionId": "sess_opaque_2",
+  "issueNumber": 2288,
+  "usage": null
+}
