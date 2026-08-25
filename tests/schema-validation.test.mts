@@ -810,6 +810,16 @@ test('policy schema treats missing critiqueLoop.delegate as the fail-safe defaul
   assert.deepEqual(errors, []);
 });
 
+test('policy schema accepts critiqueLoop.delegate JSON null as the local disable sentinel (#2257)', () => {
+  const schema = loadJson('schemas/policy.schema.json');
+  const instance = JSON.parse(
+    JSON.stringify(loadJson('fixtures/schemas/policy.valid.json')),
+  );
+  instance.critiqueLoop = { delegate: null };
+  const errors = validate(instance, schema);
+  assert.deepEqual(errors, []);
+});
+
 test('policy schema rejects a whitespace-only branchPatterns entry', () => {
   const schema = loadJson('schemas/policy.schema.json');
   const instance = JSON.parse(

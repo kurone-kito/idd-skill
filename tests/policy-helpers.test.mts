@@ -4,9 +4,11 @@ import { test } from 'node:test';
 import {
   clone,
   getReviewEscalationChangesRequestedPolicy,
+  inspectCritiqueLoopDelegateLayer,
   normalizePolicyConfig,
   POLICY_DEFAULTS,
   parseIsoDurationToMs,
+  resolveEffectiveCritiqueLoopDelegate,
   selectDesyncedIndex,
 } from '../src/scripts/policy-helpers.mts';
 
@@ -378,6 +380,125 @@ test('critiqueLoop.delegate is absent (not an own key) when unconfigured, matchi
     false,
   );
   assert.equal(Object.hasOwn(POLICY_DEFAULTS.critiqueLoop, 'delegate'), false);
+});
+
+test('inspectCritiqueLoopDelegateLayer distinguishes absent, disabled, configured, and malformed (#2257)', () => {
+  assert.deepEqual(inspectCritiqueLoopDelegateLayer({}), { status: 'absent' });
+  assert.deepEqual(
+    inspectCritiqueLoopDelegateLayer({ critiqueLoop: { delegate: null } }),
+    { status: 'disabled' },
+  );
+  assert.deepEqual(
+    inspectCritiqueLoopDelegateLayer({
+      critiqueLoop: { delegate: { command: 'coderabbit review --plain' } },
+    }),
+    {
+      status: 'configured',
+      delegate: { command: 'coderabbit review --plain', mode: 'fallback' },
+    },
+  );
+  assert.deepEqual(
+    inspectCritiqueLoopDelegateLayer({
+      critiqueLoop: { delegate: { command: 'coderabbit review', bogus: 1 } },
+    }),
+    {
+      status: 'malformed',
+      reason: 'invalid-repository-local-delegate',
+    },
+  );
+});
+
+test('normalizePolicyConfig still fail-safes a local null delegate to absent (#2257)', () => {
+  // CI/merge helpers keep the pre-#2257 collapse; only the opt-in layered
+  // resolver treats JSON null as the disable sentinel.
+  assert.equal(
+    Object.hasOwn(
+      normalizePolicyConfig({ critiqueLoop: { delegate: null } }).critiqueLoop,
+      'delegate',
+    ),
+    false,
+  );
+});
+
+test('resolveEffectiveCritiqueLoopDelegate prefers a local object over a global object (#2257)', () => {
+  const result = resolveEffectiveCritiqueLoopDelegate({
+    localConfig: {
+      critiqueLoop: { delegate: { command: 'local-review' } },
+    },
+    globalConfig: {
+      critiqueLoop: {
+        delegate: { command: 'global-review', mode: 'combined' },
+      },
+    },
+  });
+  assert.deepEqual(result, {
+    status: 'local',
+    source: 'repository-local',
+    delegate: { command: 'local-review', mode: 'fallback' },
+  });
+});
+
+test('resolveEffectiveCritiqueLoopDelegate honors local JSON null over a valid global object (#2257)', () => {
+  const result = resolveEffectiveCritiqueLoopDelegate({
+    localConfig: { critiqueLoop: { delegate: null } },
+    globalConfig: {
+      critiqueLoop: { delegate: { command: 'global-review' } },
+    },
+  });
+  assert.deepEqual(result, {
+    status: 'disabled',
+    source: 'repository-local',
+  });
+});
+
+test('resolveEffectiveCritiqueLoopDelegate inherits a global object when local is absent (#2257)', () => {
+  const result = resolveEffectiveCritiqueLoopDelegate({
+    localConfig: {},
+    globalConfig: {
+      mergePolicy: 'must-not-leak',
+      critiqueLoop: {
+        delegate: { command: 'global-review', mode: 'combined' },
+      },
+    },
+  });
+  assert.deepEqual(result, {
+    status: 'global',
+    source: 'user-global',
+    delegate: { command: 'global-review', mode: 'combined' },
+  });
+});
+
+test('resolveEffectiveCritiqueLoopDelegate fails closed on a malformed local delegate (#2257)', () => {
+  const result = resolveEffectiveCritiqueLoopDelegate({
+    localConfig: {
+      critiqueLoop: { delegate: { command: 'local-review', bogus: 1 } },
+    },
+    globalConfig: {
+      critiqueLoop: { delegate: { command: 'global-review' } },
+    },
+  });
+  assert.deepEqual(result, {
+    status: 'local-malformed',
+    source: 'repository-local',
+    reason: 'invalid-repository-local-delegate',
+  });
+});
+
+test('resolveEffectiveCritiqueLoopDelegate treats a malformed global fragment as absent (#2257)', () => {
+  const result = resolveEffectiveCritiqueLoopDelegate({
+    localConfig: {},
+    globalConfig: {
+      critiqueLoop: { delegate: { command: 'global-review', bogus: 1 } },
+    },
+  });
+  assert.deepEqual(result, { status: 'none', source: 'none' });
+});
+
+test('resolveEffectiveCritiqueLoopDelegate returns none when both layers are absent (#2257)', () => {
+  assert.deepEqual(resolveEffectiveCritiqueLoopDelegate({ localConfig: {} }), {
+    status: 'none',
+    source: 'none',
+  });
 });
 
 test('selectDesyncedIndex returns 0 for empty, singleton, or invalid bands', () => {

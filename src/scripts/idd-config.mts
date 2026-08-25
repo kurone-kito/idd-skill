@@ -32,7 +32,12 @@
 // residual up knowingly.
 
 import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { join, resolve } from 'node:path';
+
+import {
+  type EffectiveCritiqueLoopDelegate,
+  resolveEffectiveCritiqueLoopDelegate,
+} from './policy-helpers.mts';
 
 /**
  * Weakly-typed, partial view of `.github/idd/config.json`. Every field is
@@ -160,4 +165,131 @@ function isEnoentError(error: unknown): boolean {
     error !== null &&
     (error as { code?: unknown }).code === 'ENOENT'
   );
+}
+
+/** Directory name under XDG/`$HOME/.config` for the operator-global IDD file. */
+export const USER_GLOBAL_CONFIG_DIRNAME = 'idd-skill';
+
+/** Basename of the operator-global IDD policy file. */
+export const USER_GLOBAL_CONFIG_FILENAME = 'config.json';
+
+export interface UserGlobalConfigPathOptions {
+  /**
+   * Environment used to resolve `XDG_CONFIG_HOME` then `HOME`. When
+   * provided, `process.env` is not consulted — tests inject a sandbox
+   * env so the real operator configuration is never read.
+   */
+  env?: NodeJS.ProcessEnv;
+  /** Explicit `$HOME` override, consulted after `XDG_CONFIG_HOME`. */
+  homedir?: string;
+}
+
+export interface UserGlobalPolicyDocumentLoad {
+  status: 'absent' | 'present';
+  path?: string;
+  config?: unknown;
+}
+
+export interface ResolveEffectiveCritiqueLoopDelegateFromEnvOptions {
+  /** Raw repository-local policy object. When omitted, load from disk. */
+  localConfig?: unknown;
+  /** Path forwarded to {@link loadPolicyConfig} when `localConfig` is omitted. */
+  localPolicyPath?: string;
+  env?: NodeJS.ProcessEnv;
+  /** Injected user-global file path; skips XDG/`HOME` resolution. */
+  globalConfigPath?: string;
+  homedir?: string;
+}
+
+/**
+ * Resolve the user-global IDD config path: `$XDG_CONFIG_HOME/idd-skill/config.json`
+ * when `XDG_CONFIG_HOME` is a non-empty string, otherwise
+ * `$HOME/.config/idd-skill/config.json`. Returns `undefined` when neither
+ * base directory is available. Never calls `os.homedir()`.
+ */
+export function resolveUserGlobalConfigPath(
+  options?: UserGlobalConfigPathOptions,
+): string | undefined {
+  const env = options?.env ?? process.env;
+  const xdg =
+    typeof env.XDG_CONFIG_HOME === 'string' ? env.XDG_CONFIG_HOME.trim() : '';
+  if (xdg.length > 0) {
+    return join(xdg, USER_GLOBAL_CONFIG_DIRNAME, USER_GLOBAL_CONFIG_FILENAME);
+  }
+
+  const homeCandidate =
+    typeof options?.homedir === 'string' && options.homedir.length > 0
+      ? options.homedir
+      : typeof env.HOME === 'string'
+        ? env.HOME
+        : '';
+  const home = homeCandidate.trim();
+  if (home.length === 0) {
+    return undefined;
+  }
+  return join(
+    home,
+    '.config',
+    USER_GLOBAL_CONFIG_DIRNAME,
+    USER_GLOBAL_CONFIG_FILENAME,
+  );
+}
+
+/**
+ * Read the operator-global policy file for C1 delegate inheritance.
+ *
+ * Missing, unreadable, non-JSON, and non-object documents are `absent`
+ * (non-fatal). Callers must not merge any key other than
+ * `critiqueLoop.delegate` into repository policy — pass the document to
+ * {@link resolveEffectiveCritiqueLoopDelegate}, which reads only that
+ * fragment. Opt-in to local C1 execution; CI and merge helpers must not
+ * call this.
+ */
+export function loadUserGlobalPolicyDocument(options?: {
+  env?: NodeJS.ProcessEnv;
+  path?: string;
+  homedir?: string;
+}): UserGlobalPolicyDocumentLoad {
+  const path =
+    typeof options?.path === 'string' && options.path.length > 0
+      ? options.path
+      : resolveUserGlobalConfigPath(options);
+  if (path === undefined) {
+    return { status: 'absent' };
+  }
+
+  try {
+    const parsed: unknown = JSON.parse(readFileSync(path, 'utf8'));
+    if (!isPlainObject(parsed)) {
+      return { status: 'absent', path };
+    }
+    return { status: 'present', path, config: parsed };
+  } catch {
+    return { status: 'absent', path };
+  }
+}
+
+/**
+ * Opt-in C1 entry: resolve the effective critique delegate from the
+ * repository-local document plus an optional user-global file. Does not
+ * run as a side effect of {@link loadIddConfig} or {@link loadPolicyConfig}.
+ */
+export function resolveEffectiveCritiqueLoopDelegateFromEnv(
+  options?: ResolveEffectiveCritiqueLoopDelegateFromEnvOptions,
+): EffectiveCritiqueLoopDelegate {
+  const localConfig =
+    options && Object.hasOwn(options, 'localConfig')
+      ? options.localConfig
+      : loadPolicyConfig(options?.localPolicyPath).config;
+
+  const global = loadUserGlobalPolicyDocument({
+    env: options?.env,
+    path: options?.globalConfigPath,
+    homedir: options?.homedir,
+  });
+
+  return resolveEffectiveCritiqueLoopDelegate({
+    localConfig,
+    globalConfig: global.status === 'present' ? global.config : undefined,
+  });
 }

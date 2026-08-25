@@ -31,7 +31,8 @@
 // wider-review change #1721 does not attempt. A later session may pick that
 // residual up knowingly.
 import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { join, resolve } from 'node:path';
+import { resolveEffectiveCritiqueLoopDelegate } from './policy-helpers.mjs';
 /**
  * Read and parse `.github/idd/config.json` from the current working
  * directory, returning `null` when the file is missing, unreadable, or
@@ -123,4 +124,86 @@ function describeJsonValueKind(value) {
 /** True when `error` is a Node.js filesystem error with `code: 'ENOENT'`. */
 function isEnoentError(error) {
   return typeof error === 'object' && error !== null && error.code === 'ENOENT';
+}
+/** Directory name under XDG/`$HOME/.config` for the operator-global IDD file. */
+export const USER_GLOBAL_CONFIG_DIRNAME = 'idd-skill';
+/** Basename of the operator-global IDD policy file. */
+export const USER_GLOBAL_CONFIG_FILENAME = 'config.json';
+/**
+ * Resolve the user-global IDD config path: `$XDG_CONFIG_HOME/idd-skill/config.json`
+ * when `XDG_CONFIG_HOME` is a non-empty string, otherwise
+ * `$HOME/.config/idd-skill/config.json`. Returns `undefined` when neither
+ * base directory is available. Never calls `os.homedir()`.
+ */
+export function resolveUserGlobalConfigPath(options) {
+  const env = options?.env ?? process.env;
+  const xdg =
+    typeof env.XDG_CONFIG_HOME === 'string' ? env.XDG_CONFIG_HOME.trim() : '';
+  if (xdg.length > 0) {
+    return join(xdg, USER_GLOBAL_CONFIG_DIRNAME, USER_GLOBAL_CONFIG_FILENAME);
+  }
+  const homeCandidate =
+    typeof options?.homedir === 'string' && options.homedir.length > 0
+      ? options.homedir
+      : typeof env.HOME === 'string'
+        ? env.HOME
+        : '';
+  const home = homeCandidate.trim();
+  if (home.length === 0) {
+    return undefined;
+  }
+  return join(
+    home,
+    '.config',
+    USER_GLOBAL_CONFIG_DIRNAME,
+    USER_GLOBAL_CONFIG_FILENAME,
+  );
+}
+/**
+ * Read the operator-global policy file for C1 delegate inheritance.
+ *
+ * Missing, unreadable, non-JSON, and non-object documents are `absent`
+ * (non-fatal). Callers must not merge any key other than
+ * `critiqueLoop.delegate` into repository policy — pass the document to
+ * {@link resolveEffectiveCritiqueLoopDelegate}, which reads only that
+ * fragment. Opt-in to local C1 execution; CI and merge helpers must not
+ * call this.
+ */
+export function loadUserGlobalPolicyDocument(options) {
+  const path =
+    typeof options?.path === 'string' && options.path.length > 0
+      ? options.path
+      : resolveUserGlobalConfigPath(options);
+  if (path === undefined) {
+    return { status: 'absent' };
+  }
+  try {
+    const parsed = JSON.parse(readFileSync(path, 'utf8'));
+    if (!isPlainObject(parsed)) {
+      return { status: 'absent', path };
+    }
+    return { status: 'present', path, config: parsed };
+  } catch {
+    return { status: 'absent', path };
+  }
+}
+/**
+ * Opt-in C1 entry: resolve the effective critique delegate from the
+ * repository-local document plus an optional user-global file. Does not
+ * run as a side effect of {@link loadIddConfig} or {@link loadPolicyConfig}.
+ */
+export function resolveEffectiveCritiqueLoopDelegateFromEnv(options) {
+  const localConfig =
+    options && Object.hasOwn(options, 'localConfig')
+      ? options.localConfig
+      : loadPolicyConfig(options?.localPolicyPath).config;
+  const global = loadUserGlobalPolicyDocument({
+    env: options?.env,
+    path: options?.globalConfigPath,
+    homedir: options?.homedir,
+  });
+  return resolveEffectiveCritiqueLoopDelegate({
+    localConfig,
+    globalConfig: global.status === 'present' ? global.config : undefined,
+  });
 }

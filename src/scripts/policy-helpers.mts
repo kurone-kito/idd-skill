@@ -16,7 +16,7 @@ interface RawForcedHandoff {
   authorityPolicy?: unknown;
 }
 
-interface CritiqueLoopDelegate {
+export interface CritiqueLoopDelegate {
   command: string;
   mode: 'fallback' | 'combined';
 }
@@ -25,6 +25,43 @@ interface CritiqueLoopPolicy {
   cPhaseLowSeveritySkipAfter: number;
   e10NoProgressHoldAfter: number;
   delegate?: CritiqueLoopDelegate;
+}
+
+/** How one policy document presents `critiqueLoop.delegate`. */
+export type CritiqueLoopDelegateLayerStatus =
+  | 'absent'
+  | 'disabled'
+  | 'configured'
+  | 'malformed';
+
+export interface CritiqueLoopDelegateLayer {
+  status: CritiqueLoopDelegateLayerStatus;
+  delegate?: CritiqueLoopDelegate;
+  reason?: string;
+}
+
+/**
+ * Outcome of layered C1 delegate resolution. `local-malformed` is
+ * fail-closed: a bad repository-local `delegate` must not inherit a
+ * user-global object.
+ */
+export type EffectiveCritiqueLoopDelegateStatus =
+  | 'local'
+  | 'disabled'
+  | 'global'
+  | 'none'
+  | 'local-malformed';
+
+export type CritiqueLoopDelegateSource =
+  | 'repository-local'
+  | 'user-global'
+  | 'none';
+
+export interface EffectiveCritiqueLoopDelegate {
+  status: EffectiveCritiqueLoopDelegateStatus;
+  source: CritiqueLoopDelegateSource;
+  delegate?: CritiqueLoopDelegate;
+  reason?: string;
 }
 
 // Structural view of the untrusted config object parsed from an
@@ -948,6 +985,92 @@ function parseCritiqueLoopDelegate(
           | 'combined')
       : 'fallback',
   };
+}
+
+const INVALID_LOCAL_DELEGATE_REASON = 'invalid-repository-local-delegate';
+
+/**
+ * Inspect `critiqueLoop.delegate` on a raw policy document without applying
+ * `normalizePolicyConfig`'s fail-safe-to-undefined collapse. Distinguishes
+ * absence, the explicit JSON `null` disable sentinel, a configured object,
+ * and a present-but-malformed value.
+ */
+export function inspectCritiqueLoopDelegateLayer(
+  config: unknown,
+): CritiqueLoopDelegateLayer {
+  if (typeof config !== 'object' || config === null || Array.isArray(config)) {
+    return { status: 'absent' };
+  }
+
+  const critiqueLoop = (config as RawConfig).critiqueLoop;
+  if (
+    typeof critiqueLoop !== 'object' ||
+    critiqueLoop === null ||
+    Array.isArray(critiqueLoop) ||
+    !Object.hasOwn(critiqueLoop, 'delegate')
+  ) {
+    return { status: 'absent' };
+  }
+
+  const value = (critiqueLoop as { delegate: unknown }).delegate;
+  if (value === null) {
+    return { status: 'disabled' };
+  }
+
+  const parsed = parseCritiqueLoopDelegate(value);
+  if (parsed) {
+    return { status: 'configured', delegate: parsed };
+  }
+
+  return { status: 'malformed', reason: INVALID_LOCAL_DELEGATE_REASON };
+}
+
+/**
+ * Resolve the effective C1 delegate from a repository-local document and an
+ * optional user-global document. Pure: callers supply already-loaded JSON
+ * (or `undefined` for an absent global file). Never reads the filesystem.
+ *
+ * Order: local object, local `null` disable, global object, then none.
+ * A malformed local delegate is fail-closed and does not inherit global.
+ * A malformed or disabled global fragment is treated as absent.
+ */
+export function resolveEffectiveCritiqueLoopDelegate(input: {
+  localConfig: unknown;
+  globalConfig?: unknown;
+}): EffectiveCritiqueLoopDelegate {
+  const local = inspectCritiqueLoopDelegateLayer(input.localConfig);
+  if (local.status === 'configured' && local.delegate) {
+    return {
+      status: 'local',
+      source: 'repository-local',
+      delegate: local.delegate,
+    };
+  }
+  if (local.status === 'disabled') {
+    return { status: 'disabled', source: 'repository-local' };
+  }
+  if (local.status === 'malformed') {
+    return {
+      status: 'local-malformed',
+      source: 'repository-local',
+      reason: local.reason ?? INVALID_LOCAL_DELEGATE_REASON,
+    };
+  }
+
+  if (input.globalConfig === undefined || input.globalConfig === null) {
+    return { status: 'none', source: 'none' };
+  }
+
+  const global = inspectCritiqueLoopDelegateLayer(input.globalConfig);
+  if (global.status === 'configured' && global.delegate) {
+    return {
+      status: 'global',
+      source: 'user-global',
+      delegate: global.delegate,
+    };
+  }
+
+  return { status: 'none', source: 'none' };
 }
 
 function hasConfiguredCollaboratorMarkerTrust(config: unknown): boolean {

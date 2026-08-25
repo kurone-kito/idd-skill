@@ -214,6 +214,10 @@ interface PolicyConfigFile {
   critiqueLoop?: {
     cPhaseLowSeveritySkipAfter?: number;
     e10NoProgressHoldAfter?: number;
+    delegate?: {
+      command: string;
+      mode?: 'fallback' | 'combined';
+    } | null;
   };
   reviewEscalation?: {
     changesRequestedFirstEscalation?: string;
