@@ -520,7 +520,7 @@
           "description": "Number of consecutive E10 review-fix critique passes without meaningful progress before the auto-loop stops and posts a hold for a maintainer decision. Optional; defaults to `3`."
         },
         "delegate": {
-          "type": "object",
+          "type": ["object", "null"],
           "additionalProperties": false,
           "required": ["command"],
           "properties": {
@@ -536,7 +536,7 @@
               "description": "`fallback` (default): run `command`; fall through to the per-agent mechanism when it is absent, exits non-zero, times out, or its output cannot be read as a findings list. `combined`: run both every pass and union their reported issues."
             }
           },
-          "description": "Repository-configurable C1 critique delegate. Optional; absent keeps today's per-agent-only behavior with zero change."
+          "description": "Repository-configurable C1 critique delegate. Optional; absent keeps today's per-agent-only behavior. An explicit JSON `null` is the local disable sentinel: it prevents inheriting a user-global delegate without installing a local command. `required` and `properties` apply only when the value is an object."
         }
       },
       "description": "Container for the C-phase and E10 critique-loop convergence guardrails. Optional; omitting any nested key keeps that key's own distributed default."

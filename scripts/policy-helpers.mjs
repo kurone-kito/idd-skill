@@ -781,6 +781,97 @@ function parseCritiqueLoopDelegate(value) {
       : 'fallback',
   };
 }
+const INVALID_LOCAL_DELEGATE_REASON = 'invalid-repository-local-delegate';
+/**
+ * Inspect `critiqueLoop.delegate` on a raw policy document without applying
+ * `normalizePolicyConfig`'s fail-safe-to-undefined collapse. Distinguishes
+ * absence, the explicit JSON `null` disable sentinel, a configured object,
+ * and a present-but-malformed value.
+ */
+export function inspectCritiqueLoopDelegateLayer(config) {
+  if (typeof config !== 'object' || config === null || Array.isArray(config)) {
+    return { status: 'absent' };
+  }
+  if (!Object.hasOwn(config, 'critiqueLoop')) {
+    return { status: 'absent' };
+  }
+  const critiqueLoop = config.critiqueLoop;
+  if (
+    typeof critiqueLoop !== 'object' ||
+    critiqueLoop === null ||
+    Array.isArray(critiqueLoop)
+  ) {
+    // A present non-object `critiqueLoop` is a local configuration error:
+    // fail closed rather than treating it as "no delegate" and inheriting
+    // a user-global object.
+    return { status: 'malformed', reason: INVALID_LOCAL_DELEGATE_REASON };
+  }
+  if (!Object.hasOwn(critiqueLoop, 'delegate')) {
+    return { status: 'absent' };
+  }
+  const value = critiqueLoop.delegate;
+  if (value === null) {
+    return { status: 'disabled' };
+  }
+  if (typeof value === 'object' && value !== null && !Array.isArray(value)) {
+    const candidate = value;
+    if (Object.hasOwn(candidate, 'mode')) {
+      const mode = candidate.mode;
+      if (typeof mode !== 'string' || !CRITIQUE_LOOP_DELEGATE_MODES.has(mode)) {
+        return {
+          status: 'malformed',
+          reason: INVALID_LOCAL_DELEGATE_REASON,
+        };
+      }
+    }
+  }
+  const parsed = parseCritiqueLoopDelegate(value);
+  if (parsed) {
+    return { status: 'configured', delegate: parsed };
+  }
+  return { status: 'malformed', reason: INVALID_LOCAL_DELEGATE_REASON };
+}
+/**
+ * Resolve the effective C1 delegate from a repository-local document and an
+ * optional user-global document. Pure: callers supply already-loaded JSON
+ * (or `undefined` for an absent global file). Never reads the filesystem.
+ *
+ * Order: local object, local `null` disable, global object, then none.
+ * A malformed local delegate is fail-closed and does not inherit global.
+ * A malformed or disabled global fragment is treated as absent.
+ */
+export function resolveEffectiveCritiqueLoopDelegate(input) {
+  const local = inspectCritiqueLoopDelegateLayer(input.localConfig);
+  if (local.status === 'configured' && local.delegate) {
+    return {
+      status: 'local',
+      source: 'repository-local',
+      delegate: local.delegate,
+    };
+  }
+  if (local.status === 'disabled') {
+    return { status: 'disabled', source: 'repository-local' };
+  }
+  if (local.status === 'malformed') {
+    return {
+      status: 'local-malformed',
+      source: 'repository-local',
+      reason: local.reason ?? INVALID_LOCAL_DELEGATE_REASON,
+    };
+  }
+  if (input.globalConfig === undefined || input.globalConfig === null) {
+    return { status: 'none', source: 'none' };
+  }
+  const global = inspectCritiqueLoopDelegateLayer(input.globalConfig);
+  if (global.status === 'configured' && global.delegate) {
+    return {
+      status: 'global',
+      source: 'user-global',
+      delegate: global.delegate,
+    };
+  }
+  return { status: 'none', source: 'none' };
+}
 function hasConfiguredCollaboratorMarkerTrust(config) {
   const c = config;
   return (

@@ -5,7 +5,13 @@ import { join, resolve } from 'node:path';
 import { platform } from 'node:process';
 import { test } from 'node:test';
 
-import { loadIddConfig, loadPolicyConfig } from '../src/scripts/idd-config.mts';
+import {
+  loadIddConfig,
+  loadPolicyConfig,
+  loadUserGlobalPolicyDocument,
+  resolveEffectiveCritiqueLoopDelegateFromEnv,
+  resolveUserGlobalConfigPath,
+} from '../src/scripts/idd-config.mts';
 
 // Every scenario runs inside its own freshly `mkdtempSync`-created sandbox
 // (never the real repo cwd), mirroring the sandboxing already used by
@@ -219,5 +225,173 @@ test('loadPolicyConfig default path: throws (not silently absent) on a permissio
     } finally {
       chmodSync(configPath, 0o644);
     }
+  });
+});
+
+test('resolveUserGlobalConfigPath prefers XDG_CONFIG_HOME over HOME (#2257)', () => {
+  assert.equal(
+    resolveUserGlobalConfigPath({
+      env: {
+        XDG_CONFIG_HOME: '/xdg-config',
+        HOME: '/home/operator',
+      },
+    }),
+    join('/xdg-config', 'idd-skill', 'config.json'),
+  );
+});
+
+test('resolveUserGlobalConfigPath falls back to HOME/.config when XDG_CONFIG_HOME is empty (#2257)', () => {
+  assert.equal(
+    resolveUserGlobalConfigPath({
+      env: { XDG_CONFIG_HOME: '  ', HOME: '/home/operator' },
+    }),
+    join('/home/operator', '.config', 'idd-skill', 'config.json'),
+  );
+});
+
+test('resolveUserGlobalConfigPath does not consult process.env when env is injected (#2257)', () => {
+  assert.equal(resolveUserGlobalConfigPath({ env: {} }), undefined);
+});
+
+test('resolveUserGlobalConfigPath ignores a relative XDG_CONFIG_HOME and requires an absolute HOME (#2257)', () => {
+  assert.equal(
+    resolveUserGlobalConfigPath({
+      env: { XDG_CONFIG_HOME: 'config', HOME: '/home/operator' },
+    }),
+    join('/home/operator', '.config', 'idd-skill', 'config.json'),
+  );
+  assert.equal(
+    resolveUserGlobalConfigPath({
+      env: { HOME: 'relative-home' },
+    }),
+    undefined,
+  );
+});
+
+test('resolveUserGlobalConfigPath rejects a Windows current-drive root such as \\config (#2257)', () => {
+  assert.equal(
+    resolveUserGlobalConfigPath({
+      env: { XDG_CONFIG_HOME: '\\config', HOME: '/home/operator' },
+    }),
+    join('/home/operator', '.config', 'idd-skill', 'config.json'),
+  );
+  assert.equal(
+    resolveUserGlobalConfigPath({
+      env: { HOME: '\\config' },
+    }),
+    undefined,
+  );
+});
+
+test('resolveUserGlobalConfigPath ignores a Windows drive root on POSIX (#2257)', {
+  skip: process.platform === 'win32',
+}, () => {
+  assert.equal(
+    resolveUserGlobalConfigPath({
+      env: { XDG_CONFIG_HOME: 'C:\\Users\\op', HOME: '/home/operator' },
+    }),
+    join('/home/operator', '.config', 'idd-skill', 'config.json'),
+  );
+});
+
+test('resolveUserGlobalConfigPath documents that POSIX slash roots are Unix-only (#2257)', () => {
+  if (process.platform === 'win32') {
+    assert.equal(
+      resolveUserGlobalConfigPath({
+        env: { XDG_CONFIG_HOME: '/config', HOME: 'C:\\Users\\operator' },
+      }),
+      join('C:\\Users\\operator', '.config', 'idd-skill', 'config.json'),
+    );
+    return;
+  }
+  assert.equal(
+    resolveUserGlobalConfigPath({
+      env: { XDG_CONFIG_HOME: '/xdg-config' },
+    }),
+    join('/xdg-config', 'idd-skill', 'config.json'),
+  );
+});
+
+test('loadUserGlobalPolicyDocument treats a missing file as absent (#2257)', () => {
+  const sandbox = mkdtempSync(join(tmpdir(), 'idd-user-global-missing-'));
+  const result = loadUserGlobalPolicyDocument({
+    path: join(sandbox, 'missing.json'),
+  });
+  assert.equal(result.status, 'absent');
+  assert.equal(result.config, undefined);
+});
+
+test('loadUserGlobalPolicyDocument treats malformed JSON as absent (#2257)', () => {
+  const sandbox = mkdtempSync(join(tmpdir(), 'idd-user-global-badjson-'));
+  const path = join(sandbox, 'config.json');
+  writeFileSync(path, '{ not json');
+  const result = loadUserGlobalPolicyDocument({ path });
+  assert.equal(result.status, 'absent');
+  assert.equal(result.path, path);
+});
+
+test('resolveEffectiveCritiqueLoopDelegateFromEnv ignores global keys other than critiqueLoop.delegate (#2257)', () => {
+  const sandbox = mkdtempSync(join(tmpdir(), 'idd-user-global-extra-'));
+  const path = join(sandbox, 'config.json');
+  writeFileSync(
+    path,
+    JSON.stringify({
+      mergePolicy: 'must-not-apply',
+      critiqueLoop: { delegate: { command: 'global-review' } },
+    }),
+  );
+  const result = loadUserGlobalPolicyDocument({ path });
+  assert.equal(result.status, 'present');
+  const resolved = resolveEffectiveCritiqueLoopDelegateFromEnv({
+    localConfig: {},
+    globalConfigPath: path,
+    env: {},
+  });
+  assert.deepEqual(resolved, {
+    status: 'global',
+    source: 'user-global',
+    delegate: { command: 'global-review', mode: 'fallback' },
+  });
+});
+
+test('resolveEffectiveCritiqueLoopDelegateFromEnv skips the global file when local policy already decides (#2257)', () => {
+  const sandbox = mkdtempSync(join(tmpdir(), 'idd-user-global-skipped-'));
+  const path = join(sandbox, 'config.json');
+  writeFileSync(
+    path,
+    JSON.stringify({
+      critiqueLoop: { delegate: { command: 'must-not-load' } },
+    }),
+  );
+  const resolved = resolveEffectiveCritiqueLoopDelegateFromEnv({
+    localConfig: { critiqueLoop: { delegate: { command: 'local-review' } } },
+    globalConfigPath: path,
+    env: {},
+  });
+  assert.deepEqual(resolved, {
+    status: 'local',
+    source: 'repository-local',
+    delegate: { command: 'local-review', mode: 'fallback' },
+  });
+});
+
+test('resolveEffectiveCritiqueLoopDelegateFromEnv does not read HOME when path is injected (#2257)', () => {
+  const sandbox = mkdtempSync(join(tmpdir(), 'idd-user-global-injected-'));
+  const path = join(sandbox, 'config.json');
+  writeFileSync(
+    path,
+    JSON.stringify({
+      critiqueLoop: { delegate: { command: 'injected-review' } },
+    }),
+  );
+  const resolved = resolveEffectiveCritiqueLoopDelegateFromEnv({
+    localConfig: {},
+    globalConfigPath: path,
+    env: { HOME: '/this-must-not-be-read', XDG_CONFIG_HOME: '/neither' },
+  });
+  assert.deepEqual(resolved, {
+    status: 'global',
+    source: 'user-global',
+    delegate: { command: 'injected-review', mode: 'fallback' },
   });
 });
