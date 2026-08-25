@@ -139,6 +139,24 @@ const SCHEMA_OUTPUT_COVERAGE: CoverageEntry[] = [
       'test-only change (#1723 proposed change #2).',
   },
   {
+    schema: 'onboarding-hearing-catalog.schema.json',
+    status: 'uncovered',
+    reason:
+      'onboarding-hearing-catalog.schema.json describes the static ' +
+      'idd-template/docs/onboarding/hearing-catalog.json source artifact, ' +
+      'not a helper stdout envelope -- it is already validated by ' +
+      'schema-validation.test.mts and tests/onboarding-hearing.test.mts.',
+  },
+  {
+    schema: 'onboarding-hearing-transcript.schema.json',
+    status: 'uncovered',
+    reason:
+      'onboarding-hearing-transcript.schema.json describes a confirmed ' +
+      'hearing transcript document later CLI stages will write, not a ' +
+      'current helper stdout envelope -- fixture coverage lives in ' +
+      'schema-validation.test.mts.',
+  },
+  {
     schema: 'phase-graph.schema.json',
     status: 'uncovered',
     reason:

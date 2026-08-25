@@ -1191,6 +1191,15 @@ test('phase-graph.json data validates against phase-graph schema', () => {
   assert.ok(ok, errors.join('\n'));
 });
 
+test('live hearing catalog validates against onboarding-hearing-catalog schema', () => {
+  const { ok, errors } = validateFixture(
+    'schemas/onboarding-hearing-catalog.schema.json',
+    'idd-template/docs/onboarding/hearing-catalog.json',
+    true,
+  );
+  assert.ok(ok, errors.join('\n'));
+});
+
 test('.github/idd/config.json validates against policy schema', () => {
   const { ok, errors } = validateFixture(
     'schemas/policy.schema.json',

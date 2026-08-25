@@ -1,0 +1,90 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://kurone-kito.github.io/idd-skill/schemas/onboarding-hearing-catalog.schema.json",
+  "title": "Onboarding Hearing Catalog",
+  "description": "Machine-readable catalog of onboarding hearing items consumed by idd-onboard and instructions-only agents.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version", "items"],
+  "properties": {
+    "version": {
+      "type": "string",
+      "pattern": "^\\d+\\.\\d+\\.\\d+$",
+      "description": "Semantic version of the catalog document shape."
+    },
+    "items": {
+      "type": "array",
+      "minItems": 1,
+      "description": "Hearing items in Step 0, placeholder, then Step 1B order.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "step", "kind", "prompt", "explanation"],
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "^[A-Za-z][A-Za-z0-9_-]*$",
+            "description": "Stable item identity. Placeholder items use the ONBOARDING_PLACEHOLDERS name."
+          },
+          "step": {
+            "type": "string",
+            "enum": ["0", "1A", "1B", "1C"],
+            "description": "Onboarding step this item belongs to."
+          },
+          "kind": {
+            "type": "string",
+            "enum": ["check", "placeholder", "policy"],
+            "description": "Whether the item is a prerequisite check, a template placeholder, or a Step 1B policy decision."
+          },
+          "prompt": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Short English question --hear prints instead of loading the companion docs."
+          },
+          "explanation": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Short English explanation printed with the prompt."
+          },
+          "options": {
+            "type": "array",
+            "minItems": 1,
+            "description": "Enum choices when the template already documents discrete values.",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["value"],
+              "properties": {
+                "value": {
+                  "type": "string",
+                  "minLength": 1,
+                  "description": "Canonical option token recorded in a transcript."
+                },
+                "isDefault": {
+                  "type": "boolean",
+                  "description": "True when this value is the template's documented default."
+                }
+              }
+            }
+          },
+          "derivationHook": {
+            "type": "string",
+            "pattern": "^derive[A-Z][A-Za-z0-9]*$",
+            "description": "Name of an existing derive* function in idd-onboard.mts."
+          },
+          "mapsToPlaceholder": {
+            "type": "string",
+            "pattern": "^[A-Z][A-Z0-9_]*$",
+            "description": "ONBOARDING_PLACEHOLDERS name this item fills."
+          },
+          "mapsToConfig": {
+            "type": "string",
+            "pattern": "^(/[A-Za-z][A-Za-z0-9_-]*)+$",
+            "description": "JSON pointer into .github/idd/config.json. Absent for docs-only items."
+          }
+        }
+      }
+    }
+  }
+}
