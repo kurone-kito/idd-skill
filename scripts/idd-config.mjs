@@ -126,18 +126,14 @@ function describeJsonValueKind(value) {
 }
 /**
  * True for a config-root that cannot be resolved against the process cwd.
- * Accepts POSIX `/…` (not `//…`) and Windows drive-letter or UNC roots.
+ * On Windows: drive-letter (`C:\…` / `C:/…`) or UNC (`\\server\…`) only.
+ * On POSIX: `/…` only (not `//…`, not a Windows drive or UNC string).
  * Rejects relative paths and Windows current-drive roots such as `\config`,
  * which `path.isAbsolute` treats as absolute on win32.
  */
 function isQualifiedConfigRoot(value) {
-  if (/^[A-Za-z]:[\\/]/.test(value) || value.startsWith('\\\\')) {
-    return true;
-  }
-  // POSIX `/…` is only a cwd-independent root off Windows. On win32,
-  // `/config` and Git Bash `/c/Users/…` become a current-drive path.
   if (process.platform === 'win32') {
-    return false;
+    return /^[A-Za-z]:[\\/]/.test(value) || value.startsWith('\\\\');
   }
   return value.startsWith('/') && !value.startsWith('//');
 }
@@ -151,9 +147,12 @@ export const USER_GLOBAL_CONFIG_DIRNAME = 'idd-skill';
 export const USER_GLOBAL_CONFIG_FILENAME = 'config.json';
 /**
  * Resolve the user-global IDD config path: `$XDG_CONFIG_HOME/idd-skill/config.json`
- * when `XDG_CONFIG_HOME` is a non-empty string, otherwise
- * `$HOME/.config/idd-skill/config.json`. Returns `undefined` when neither
- * base directory is available. Never calls `os.homedir()`.
+ * when `XDG_CONFIG_HOME` is a non-empty **qualified** root, otherwise
+ * `$HOME/.config/idd-skill/config.json` when `$HOME` is a qualified root.
+ * A qualified root is platform-specific (POSIX `/…`; Windows drive letter
+ * or UNC) — a non-empty but relative or cross-platform-unsafe value is
+ * ignored rather than joined against the process cwd. Returns `undefined`
+ * when neither base directory is usable. Never calls `os.homedir()`.
  */
 export function resolveUserGlobalConfigPath(options) {
   const env = options?.env ?? process.env;

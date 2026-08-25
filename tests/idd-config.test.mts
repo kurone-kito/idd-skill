@@ -283,6 +283,17 @@ test('resolveUserGlobalConfigPath rejects a Windows current-drive root such as \
   );
 });
 
+test('resolveUserGlobalConfigPath ignores a Windows drive root on POSIX (#2257)', {
+  skip: process.platform === 'win32',
+}, () => {
+  assert.equal(
+    resolveUserGlobalConfigPath({
+      env: { XDG_CONFIG_HOME: 'C:\\Users\\op', HOME: '/home/operator' },
+    }),
+    join('/home/operator', '.config', 'idd-skill', 'config.json'),
+  );
+});
+
 test('resolveUserGlobalConfigPath documents that POSIX slash roots are Unix-only (#2257)', () => {
   if (process.platform === 'win32') {
     assert.equal(
