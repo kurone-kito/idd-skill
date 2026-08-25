@@ -1002,13 +1002,23 @@ export function inspectCritiqueLoopDelegateLayer(
     return { status: 'absent' };
   }
 
+  if (!Object.hasOwn(config, 'critiqueLoop')) {
+    return { status: 'absent' };
+  }
+
   const critiqueLoop = (config as RawConfig).critiqueLoop;
   if (
     typeof critiqueLoop !== 'object' ||
     critiqueLoop === null ||
-    Array.isArray(critiqueLoop) ||
-    !Object.hasOwn(critiqueLoop, 'delegate')
+    Array.isArray(critiqueLoop)
   ) {
+    // A present non-object `critiqueLoop` is a local configuration error:
+    // fail closed rather than treating it as "no delegate" and inheriting
+    // a user-global object.
+    return { status: 'malformed', reason: INVALID_LOCAL_DELEGATE_REASON };
+  }
+
+  if (!Object.hasOwn(critiqueLoop, 'delegate')) {
     return { status: 'absent' };
   }
 

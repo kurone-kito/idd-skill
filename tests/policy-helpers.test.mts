@@ -484,6 +484,20 @@ test('resolveEffectiveCritiqueLoopDelegate fails closed on a malformed local del
   });
 });
 
+test('resolveEffectiveCritiqueLoopDelegate fails closed on a non-object local critiqueLoop (#2257)', () => {
+  const result = resolveEffectiveCritiqueLoopDelegate({
+    localConfig: { critiqueLoop: 'not-an-object' },
+    globalConfig: {
+      critiqueLoop: { delegate: { command: 'global-review' } },
+    },
+  });
+  assert.deepEqual(result, {
+    status: 'local-malformed',
+    source: 'repository-local',
+    reason: 'invalid-repository-local-delegate',
+  });
+});
+
 test('resolveEffectiveCritiqueLoopDelegate treats a malformed global fragment as absent (#2257)', () => {
   const result = resolveEffectiveCritiqueLoopDelegate({
     localConfig: {},
