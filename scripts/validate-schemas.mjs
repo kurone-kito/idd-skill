@@ -415,6 +415,14 @@ if (import.meta.main) {
     fixturePath: 'schemas/phase-graph.json',
     expectValid: true,
   });
+  // Live hearing catalog is an onboarding-time source artifact, not a
+  // fixtures/schemas pair. Validate it the same way phase-graph.json is
+  // validated as extra live data (#2279).
+  cases.push({
+    schemaPath: 'schemas/onboarding-hearing-catalog.schema.json',
+    fixturePath: 'idd-template/docs/onboarding/hearing-catalog.json',
+    expectValid: true,
+  });
   let failed = 0;
   for (const { schemaPath, fixturePath, expectValid } of cases) {
     const result = validateFixture(schemaPath, fixturePath, expectValid);

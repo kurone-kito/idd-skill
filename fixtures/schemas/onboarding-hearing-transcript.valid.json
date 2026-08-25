@@ -1,0 +1,10 @@
+{
+  "version": "1.0.0",
+  "confirmedAt": "2026-08-25T15:00:00Z",
+  "answers": [
+    {
+      "id": "merge-policy",
+      "value": "fully_autonomous_merge"
+    }
+  ]
+}

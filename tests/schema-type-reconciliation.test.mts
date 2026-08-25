@@ -10,6 +10,10 @@ import type { RoadmapGraphUnionReport } from '../src/scripts/discover-roadmap-gr
 import type { DispositionReport } from '../src/scripts/disposition-non-review-notices.mts';
 import type { IddMergeExecuteVerdict } from '../src/scripts/idd-merge-execute.mts';
 import type { IddRoadmapAuditExecuteVerdict } from '../src/scripts/idd-roadmap-audit-execute.mts';
+import type {
+  OnboardingHearingCatalog,
+  OnboardingHearingTranscript,
+} from '../src/scripts/onboarding-hearing.mts';
 import type { PostIddMarkerResult } from '../src/scripts/post-idd-marker.mts';
 import type { PreMergeReadinessReport } from '../src/scripts/pre-merge-readiness.mts';
 import type {
@@ -388,6 +392,17 @@ export const phaseGraphKeys = [
   'nodes',
 ] as const satisfies readonly (keyof PhaseGraphDocument)[];
 
+export const onboardingHearingCatalogKeys = [
+  'version',
+  'items',
+] as const satisfies readonly (keyof OnboardingHearingCatalog)[];
+
+export const onboardingHearingTranscriptKeys = [
+  'version',
+  'confirmedAt',
+  'answers',
+] as const satisfies readonly (keyof OnboardingHearingTranscript)[];
+
 export const policyConfigKeys = [
   '$schema',
   'iddVersion',
@@ -526,6 +541,14 @@ const exhaustivenessWitnesses: {
     PhaseGraphDocument,
     (typeof phaseGraphKeys)[number]
   >;
+  onboardingHearingCatalog: CoversAllKeysOf<
+    OnboardingHearingCatalog,
+    (typeof onboardingHearingCatalogKeys)[number]
+  >;
+  onboardingHearingTranscript: CoversAllKeysOf<
+    OnboardingHearingTranscript,
+    (typeof onboardingHearingTranscriptKeys)[number]
+  >;
   policyConfig: CoversAllKeysOf<
     PolicyConfigFile,
     (typeof policyConfigKeys)[number]
@@ -544,6 +567,8 @@ const exhaustivenessWitnesses: {
   iddRoadmapAuditExecute: true,
   liveStatusDigest: true,
   phaseGraph: true,
+  onboardingHearingCatalog: true,
+  onboardingHearingTranscript: true,
   policyConfig: true,
   stalledSessionQuietCheck: true,
 };
@@ -836,6 +861,25 @@ const phaseGraphFixture = {
     { id: 'B1', next: [] },
   ],
 } satisfies PhaseGraphDocument;
+
+const onboardingHearingCatalogFixture = {
+  version: '1.0.0',
+  items: [
+    {
+      id: 'gh-cli',
+      step: '0',
+      kind: 'check',
+      prompt: 'Is gh installed and authenticated?',
+      explanation: 'IDD depends on the gh CLI.',
+    },
+  ],
+} satisfies OnboardingHearingCatalog;
+
+const onboardingHearingTranscriptFixture = {
+  version: '1.0.0',
+  confirmedAt: '2026-08-25T15:00:00Z',
+  answers: [{ id: 'merge-policy', value: 'fully_autonomous_merge' }],
+} satisfies OnboardingHearingTranscript;
 
 const policyConfigFixture = {
   iddVersion: '1.0.0',
@@ -1304,6 +1348,20 @@ const SCHEMA_TYPE_MAP: readonly SchemaTypeMapping[] = [
       'schemas/phase-graph.json via src/scripts/validate-schemas.mts',
     keys: phaseGraphKeys,
     fixture: phaseGraphFixture,
+  },
+  {
+    schemaFile: 'onboarding-hearing-catalog.schema.json',
+    exportedType: 'OnboardingHearingCatalog',
+    owningModule: 'src/scripts/onboarding-hearing.mts',
+    keys: onboardingHearingCatalogKeys,
+    fixture: onboardingHearingCatalogFixture,
+  },
+  {
+    schemaFile: 'onboarding-hearing-transcript.schema.json',
+    exportedType: 'OnboardingHearingTranscript',
+    owningModule: 'src/scripts/onboarding-hearing.mts',
+    keys: onboardingHearingTranscriptKeys,
+    fixture: onboardingHearingTranscriptFixture,
   },
   {
     schemaFile: 'policy.schema.json',

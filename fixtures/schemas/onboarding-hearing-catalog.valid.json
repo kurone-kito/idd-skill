@@ -1,0 +1,12 @@
+{
+  "version": "1.0.0",
+  "items": [
+    {
+      "id": "gh-cli",
+      "step": "0",
+      "kind": "check",
+      "prompt": "Is gh installed and authenticated?",
+      "explanation": "IDD depends on the gh CLI."
+    }
+  ]
+}
