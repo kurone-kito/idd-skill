@@ -128,7 +128,12 @@ yourself: see
 [Remote fetch examples](template-distribution.md#remote-fetch-examples)
 (the `issue-authoring-companion-gh-api-loop` / `-curl-loop` blocks) or
 [Local-copy installs](template-distribution.md#local-copy-installs)
-for the exact commands.
+for the exact commands. Record the confirmed destination in the
+policy document written by `--write-policy-doc` — append it next to
+the companion status line before linking that file from the agent
+entry files (Step 5) — since Step 6's verification checklist expects
+the recorded policy to state which runtime root owns the installed
+skill.
 
 ## Command-row retuning
 

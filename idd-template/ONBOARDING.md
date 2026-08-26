@@ -201,11 +201,15 @@ below instead.
 
 1. Read-only propose: catalog items with any derived candidate and
    documented default, Step 0 evidence, and helper-runtime evidence.
-   Relay each item's `prompt` and `explanation` to the operator and
-   collect their confirmed answers. `--propose` is required even when
-   also running the TTY wizard next — the wizard alone skips every
-   `check`-kind item (Step 0's `gh`/host/execution-environment checks)
-   and never gathers helper-runtime evidence.
+   Relay each **non-`check`-kind** item's `prompt` and `explanation` to
+   the operator and collect their confirmed answers for `<answers-file>`
+   below — inspect the three `check`-kind items (Step 0's
+   `gh`/host/execution-environment evidence) yourself instead of asking
+   the operator, and do not add them to `<answers-file>`:
+   `--hear --apply` treats any id it does not recognize as unresolved
+   and exits `1`. `--propose` is required even when also running the
+   TTY wizard next — the wizard alone skips every `check`-kind item and
+   never gathers helper-runtime evidence.
 
    ```sh
    node scripts/idd-onboard.mjs --hear --propose --target <target-repo>

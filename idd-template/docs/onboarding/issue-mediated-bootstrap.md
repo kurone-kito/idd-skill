@@ -71,8 +71,13 @@ review-thread resolution policy, and the rest of the list in
 **Pin the process reference.** The issue's process section must point
 at idd-skill's own canonical `idd-template/ONBOARDING.md` Steps 2
 (fetch or copy template files), 4 (replace placeholders), 5 (update
-agent entry files), and 6 (verification checklist) — pinned to a
-specific released tag or commit SHA, for example:
+agent entry files), and 6 (verification checklist), plus
+[Onboarding Reference — Project Tuning](project-tuning.md) for the
+judgment calls those steps do not cover (helper-runtime profile
+wiring, non-default review-policy artifacts, extra trusted marker
+actors, the reserved-label guard, and the issue-authoring companion
+install/destination) — pinned to a specific released tag or commit
+SHA, for example:
 
 ```text
 https://raw.githubusercontent.com/kurone-kito/idd-skill/<tag-or-sha>/idd-template/ONBOARDING.md
