@@ -96,6 +96,14 @@ test('a missing top-level sessionId falls back to the project filename', () => {
   assert.equal(sample.vendorSessionId, 'session-no-session-id');
 });
 
+test('a path-shaped fileBasename falls back to just its basename, not the full path', () => {
+  const { sample } = claudeAdapter.harvest({
+    records: readFixtureRecords('session-no-session-id.jsonl'),
+    fileBasename: '/some/caller/mistake/session-no-session-id.jsonl',
+  });
+  assert.equal(sample.vendorSessionId, 'session-no-session-id');
+});
+
 test('a worktree cwd with an issue number yields joinHints.issueNumber, never a path string', () => {
   const { sample, joinHints } = harvestFixture(
     'session-issue-worktree-cwd.jsonl',

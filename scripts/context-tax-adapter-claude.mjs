@@ -95,11 +95,18 @@ function extractSessionId(records) {
   }
   return undefined;
 }
+/**
+ * Normalizes with `path.basename()` first (never trusts a caller's
+ * `fileBasename` to already be path-free) so a full path passed in by
+ * mistake can't survive into a path-like fallback `vendorSessionId` that
+ * `redactContextTaxRecord()` would later strip to `undefined`, silently
+ * producing a schema-invalid sample instead of failing closed.
+ */
 function deriveFallbackSessionId(fileBasename) {
   if (!fileBasename) {
     return undefined;
   }
-  const stripped = fileBasename.replace(/\.jsonl$/i, '');
+  const stripped = basename(fileBasename).replace(/\.jsonl$/i, '');
   return stripped.length > 0 ? stripped : undefined;
 }
 /** The first non-empty top-level `cwd` across `records`, in file order. */
