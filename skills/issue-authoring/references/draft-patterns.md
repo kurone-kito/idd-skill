@@ -170,7 +170,9 @@ Before you publish a `ready` issue, confirm:
 - `## Background` or `## Goal`
 - `## Proposed change`
 - `## Acceptance criteria`
-- optional `## Candidate files`
+- optional `## Candidate files` — see
+  [contract.md's Candidate files format](contract.md#candidate-files-format)
+  for the exact parse contract before populating it
 - an autopilot-suitability footer at the end of the body (visible
   line + `<!-- <marker-prefix>-autopilot-suitability: N -->` marker)
 
