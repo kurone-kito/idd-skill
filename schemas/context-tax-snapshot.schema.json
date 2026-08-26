@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://kurone-kito.github.io/idd-skill/schemas/context-tax-snapshot.schema.json",
   "title": "Context-tax snapshot",
-  "description": "Committed aggregates a later reporter renders into docs/README. This issue only describes the shape.",
+  "description": "Committed aggregates the context-tax-report reporter renders into docs/README. Fields beyond the publish gate are always present -- zero-valued and empty when sampleCount is 0.",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -12,7 +12,14 @@
     "minPublishableVendors",
     "publishable",
     "sampleCount",
-    "vendors"
+    "vendors",
+    "asOf",
+    "totalUsage",
+    "stageUsage",
+    "compactionCount",
+    "cacheHitRatio",
+    "successRateByModel",
+    "successRateByVendor"
   ],
   "properties": {
     "schemaVersion": {
@@ -51,6 +58,129 @@
         "type": "string",
         "enum": ["grok", "claude", "codex"],
         "description": "A harvested agent vendor."
+      }
+    },
+    "asOf": {
+      "type": "string",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$",
+      "description": "UTC calendar date the rendered blurb should cite, e.g. 2026-08-26."
+    },
+    "totalUsage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["inputUncached", "cacheRead", "cacheCreation", "output", "reasoning"],
+      "description": "p25/p50/p75 across all aggregated samples, per usage field. Zero-valued when sampleCount is 0.",
+      "properties": {
+        "inputUncached": { "type": "object", "additionalProperties": false, "required": ["p25", "p50", "p75"], "properties": { "p25": { "type": "number", "minimum": 0 }, "p50": { "type": "number", "minimum": 0 }, "p75": { "type": "number", "minimum": 0 } } },
+        "cacheRead": { "type": "object", "additionalProperties": false, "required": ["p25", "p50", "p75"], "properties": { "p25": { "type": "number", "minimum": 0 }, "p50": { "type": "number", "minimum": 0 }, "p75": { "type": "number", "minimum": 0 } } },
+        "cacheCreation": { "type": "object", "additionalProperties": false, "required": ["p25", "p50", "p75"], "properties": { "p25": { "type": "number", "minimum": 0 }, "p50": { "type": "number", "minimum": 0 }, "p75": { "type": "number", "minimum": 0 } } },
+        "output": { "type": "object", "additionalProperties": false, "required": ["p25", "p50", "p75"], "properties": { "p25": { "type": "number", "minimum": 0 }, "p50": { "type": "number", "minimum": 0 }, "p75": { "type": "number", "minimum": 0 } } },
+        "reasoning": { "type": "object", "additionalProperties": false, "required": ["p25", "p50", "p75"], "properties": { "p25": { "type": "number", "minimum": 0 }, "p50": { "type": "number", "minimum": 0 }, "p75": { "type": "number", "minimum": 0 } } }
+      }
+    },
+    "stageUsage": {
+      "type": "array",
+      "description": "Per-stage p25/p50/p75 usage. Empty when sampleCount is 0.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "usage"],
+        "properties": {
+          "id": {
+            "type": "string",
+            "enum": ["discover", "claim", "work", "submit-pr", "review", "merge", "cleanup"]
+          },
+          "usage": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["inputUncached", "cacheRead", "cacheCreation", "output", "reasoning"],
+            "properties": {
+              "inputUncached": { "type": "object", "additionalProperties": false, "required": ["p25", "p50", "p75"], "properties": { "p25": { "type": "number", "minimum": 0 }, "p50": { "type": "number", "minimum": 0 }, "p75": { "type": "number", "minimum": 0 } } },
+              "cacheRead": { "type": "object", "additionalProperties": false, "required": ["p25", "p50", "p75"], "properties": { "p25": { "type": "number", "minimum": 0 }, "p50": { "type": "number", "minimum": 0 }, "p75": { "type": "number", "minimum": 0 } } },
+              "cacheCreation": { "type": "object", "additionalProperties": false, "required": ["p25", "p50", "p75"], "properties": { "p25": { "type": "number", "minimum": 0 }, "p50": { "type": "number", "minimum": 0 }, "p75": { "type": "number", "minimum": 0 } } },
+              "output": { "type": "object", "additionalProperties": false, "required": ["p25", "p50", "p75"], "properties": { "p25": { "type": "number", "minimum": 0 }, "p50": { "type": "number", "minimum": 0 }, "p75": { "type": "number", "minimum": 0 } } },
+              "reasoning": { "type": "object", "additionalProperties": false, "required": ["p25", "p50", "p75"], "properties": { "p25": { "type": "number", "minimum": 0 }, "p50": { "type": "number", "minimum": 0 }, "p75": { "type": "number", "minimum": 0 } } }
+            }
+          }
+        }
+      }
+    },
+    "compactionCount": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["p25", "p50", "p75"],
+      "description": "p25/p50/p75 compaction count across all aggregated samples.",
+      "properties": {
+        "p25": { "type": "number", "minimum": 0 },
+        "p50": { "type": "number", "minimum": 0 },
+        "p75": { "type": "number", "minimum": 0 }
+      }
+    },
+    "cacheHitRatio": {
+      "type": "number",
+      "minimum": 0,
+      "description": "cacheRead / max(1, cacheRead + cacheCreation + inputUncached) across aggregated total usage. In [0, 1]; the validator has no maximum keyword, enforced instead by assertContextTaxSnapshot."
+    },
+    "successRateByModel": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Keyed by model name. Empty when sampleCount is 0.",
+      "patternProperties": {
+        "^.+$": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["merged", "aborted", "unclaimed", "humanHandoff", "rate"],
+          "properties": {
+            "merged": { "type": "integer", "minimum": 0 },
+            "aborted": { "type": "integer", "minimum": 0 },
+            "unclaimed": { "type": "integer", "minimum": 0 },
+            "humanHandoff": { "type": "integer", "minimum": 0 },
+            "rate": { "type": "number", "minimum": 0 }
+          }
+        }
+      }
+    },
+    "successRateByVendor": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Keyed by vendor. Only vendors present in `vendors` appear.",
+      "properties": {
+        "grok": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["merged", "aborted", "unclaimed", "humanHandoff", "rate"],
+          "properties": {
+            "merged": { "type": "integer", "minimum": 0 },
+            "aborted": { "type": "integer", "minimum": 0 },
+            "unclaimed": { "type": "integer", "minimum": 0 },
+            "humanHandoff": { "type": "integer", "minimum": 0 },
+            "rate": { "type": "number", "minimum": 0 }
+          }
+        },
+        "claude": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["merged", "aborted", "unclaimed", "humanHandoff", "rate"],
+          "properties": {
+            "merged": { "type": "integer", "minimum": 0 },
+            "aborted": { "type": "integer", "minimum": 0 },
+            "unclaimed": { "type": "integer", "minimum": 0 },
+            "humanHandoff": { "type": "integer", "minimum": 0 },
+            "rate": { "type": "number", "minimum": 0 }
+          }
+        },
+        "codex": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["merged", "aborted", "unclaimed", "humanHandoff", "rate"],
+          "properties": {
+            "merged": { "type": "integer", "minimum": 0 },
+            "aborted": { "type": "integer", "minimum": 0 },
+            "unclaimed": { "type": "integer", "minimum": 0 },
+            "humanHandoff": { "type": "integer", "minimum": 0 },
+            "rate": { "type": "number", "minimum": 0 }
+          }
+        }
       }
     }
   }

@@ -13,6 +13,24 @@ import {
 } from '../src/scripts/context-tax-core.mts';
 import { loadJson, validate } from '../src/scripts/validate-schemas.mts';
 
+const ZERO_PERCENTILES = { p25: 0, p50: 0, p75: 0 };
+const ZERO_USAGE_PERCENTILES = {
+  inputUncached: ZERO_PERCENTILES,
+  cacheRead: ZERO_PERCENTILES,
+  cacheCreation: ZERO_PERCENTILES,
+  output: ZERO_PERCENTILES,
+  reasoning: ZERO_PERCENTILES,
+};
+const SNAPSHOT_BASE_FIELDS = {
+  asOf: '2026-08-25',
+  totalUsage: ZERO_USAGE_PERCENTILES,
+  stageUsage: [],
+  compactionCount: ZERO_PERCENTILES,
+  cacheHitRatio: 0,
+  successRateByModel: {},
+  successRateByVendor: {},
+};
+
 test('stage id list is the seven IDD stages', () => {
   assert.deepEqual(
     [...CONTEXT_TAX_STAGE_IDS],
@@ -261,6 +279,7 @@ test('assertContextTaxSnapshot rejects duplicate vendors', () => {
     publishable: false,
     sampleCount: 3,
     vendors: ['grok', 'claude'],
+    ...SNAPSHOT_BASE_FIELDS,
   };
   assert.doesNotThrow(() => assertContextTaxSnapshot(snapshot));
   assert.throws(
@@ -278,6 +297,7 @@ test('assertContextTaxSnapshot requires publishable to match the sample/vendor g
     publishable: true,
     sampleCount: 10,
     vendors: ['grok', 'claude'],
+    ...SNAPSHOT_BASE_FIELDS,
   };
   assert.doesNotThrow(() => assertContextTaxSnapshot(eligible));
   assert.throws(
@@ -396,4 +416,141 @@ test('committed sample fixture validates against the sample schema', () => {
     loadJson('schemas/context-tax-sample.schema.json'),
   );
   assert.deepEqual(errors, []);
+});
+
+test('committed snapshot fixture validates against the snapshot schema', () => {
+  const errors = validate(
+    loadJson('fixtures/schemas/context-tax-snapshot.valid.json'),
+    loadJson('schemas/context-tax-snapshot.schema.json'),
+  );
+  assert.deepEqual(errors, []);
+});
+
+test('assertContextTaxSnapshot rejects an out-of-order percentile triple', () => {
+  const snapshot: ContextTaxSnapshot = {
+    schemaVersion: 1,
+    generatedAt: '2026-08-25T00:00:00Z',
+    minPublishableSamples: 10,
+    minPublishableVendors: 2,
+    publishable: false,
+    sampleCount: 3,
+    vendors: ['grok'],
+    ...SNAPSHOT_BASE_FIELDS,
+  };
+  assert.doesNotThrow(() => assertContextTaxSnapshot(snapshot));
+  assert.throws(
+    () =>
+      assertContextTaxSnapshot({
+        ...snapshot,
+        totalUsage: {
+          ...ZERO_USAGE_PERCENTILES,
+          inputUncached: { p25: 100, p50: 50, p75: 200 },
+        },
+      }),
+    /totalUsage\.inputUncached percentiles must satisfy p25 <= p50 <= p75/,
+  );
+  assert.throws(
+    () =>
+      assertContextTaxSnapshot({
+        ...snapshot,
+        compactionCount: { p25: 5, p50: 4, p75: 6 },
+      }),
+    /compactionCount percentiles must satisfy p25 <= p50 <= p75/,
+  );
+  assert.throws(
+    () =>
+      assertContextTaxSnapshot({
+        ...snapshot,
+        stageUsage: [
+          {
+            id: 'work',
+            usage: {
+              ...ZERO_USAGE_PERCENTILES,
+              output: { p25: 10, p50: 20, p75: 15 },
+            },
+          },
+        ],
+      }),
+    /stageUsage\[work\]\.usage\.output percentiles must satisfy p25 <= p50 <= p75/,
+  );
+});
+
+test('assertContextTaxSnapshot rejects cacheHitRatio outside [0, 1]', () => {
+  const snapshot: ContextTaxSnapshot = {
+    schemaVersion: 1,
+    generatedAt: '2026-08-25T00:00:00Z',
+    minPublishableSamples: 10,
+    minPublishableVendors: 2,
+    publishable: false,
+    sampleCount: 3,
+    vendors: ['grok'],
+    ...SNAPSHOT_BASE_FIELDS,
+  };
+  assert.throws(
+    () => assertContextTaxSnapshot({ ...snapshot, cacheHitRatio: 1.1 }),
+    /snapshot cacheHitRatio must be in \[0, 1\]/,
+  );
+  assert.throws(
+    () => assertContextTaxSnapshot({ ...snapshot, cacheHitRatio: -0.1 }),
+    /snapshot cacheHitRatio must be in \[0, 1\]/,
+  );
+});
+
+test('assertContextTaxSnapshot rejects a success rate that disagrees with its own counts', () => {
+  const snapshot: ContextTaxSnapshot = {
+    schemaVersion: 1,
+    generatedAt: '2026-08-25T00:00:00Z',
+    minPublishableSamples: 10,
+    minPublishableVendors: 2,
+    publishable: false,
+    sampleCount: 3,
+    vendors: ['grok'],
+    ...SNAPSHOT_BASE_FIELDS,
+  };
+  assert.doesNotThrow(() =>
+    assertContextTaxSnapshot({
+      ...snapshot,
+      successRateByModel: {
+        'grok-4.6': {
+          merged: 3,
+          aborted: 1,
+          unclaimed: 0,
+          humanHandoff: 0,
+          rate: 0.75,
+        },
+      },
+    }),
+  );
+  assert.throws(
+    () =>
+      assertContextTaxSnapshot({
+        ...snapshot,
+        successRateByModel: {
+          'grok-4.6': {
+            merged: 3,
+            aborted: 1,
+            unclaimed: 0,
+            humanHandoff: 0,
+            rate: 0.5,
+          },
+        },
+      }),
+    /successRateByModel\[grok-4\.6\] rate must equal merged \/ \(merged \+ aborted \+ unclaimed \+ humanHandoff\)/,
+  );
+  assert.throws(
+    () =>
+      assertContextTaxSnapshot({
+        ...snapshot,
+        successRateByVendor: {
+          grok: {
+            merged: 3,
+            aborted: 1,
+            unclaimed: 0,
+            humanHandoff: 0,
+            rate: 1.2,
+          },
+        },
+      }),
+    /successRateByVendor\[grok\] rate must be in \[0, 1\]/,
+  );
 });

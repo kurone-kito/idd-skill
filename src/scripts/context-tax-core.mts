@@ -108,6 +108,36 @@ export interface ContextTaxEvent {
   usage?: ContextTaxUsage | null;
 }
 
+/** p25/p50/p75 for one measured quantity. */
+export interface ContextTaxPercentiles {
+  p25: number;
+  p50: number;
+  p75: number;
+}
+
+/** p25/p50/p75 for every {@link ContextTaxUsage} field. */
+export interface ContextTaxUsagePercentiles {
+  inputUncached: ContextTaxPercentiles;
+  cacheRead: ContextTaxPercentiles;
+  cacheCreation: ContextTaxPercentiles;
+  output: ContextTaxPercentiles;
+  reasoning: ContextTaxPercentiles;
+}
+
+export interface ContextTaxStageUsagePercentiles {
+  id: ContextTaxStageId;
+  usage: ContextTaxUsagePercentiles;
+}
+
+/** merged/(merged+aborted+unclaimed+humanHandoff), plus the raw counts. */
+export interface ContextTaxSuccessRate {
+  merged: number;
+  aborted: number;
+  unclaimed: number;
+  humanHandoff: number;
+  rate: number;
+}
+
 /** Committed aggregates a later reporter renders. */
 export interface ContextTaxSnapshot {
   schemaVersion: 1;
@@ -117,6 +147,17 @@ export interface ContextTaxSnapshot {
   publishable: boolean;
   sampleCount: number;
   vendors: readonly ContextTaxVendor[];
+  /** UTC calendar date (`YYYY-MM-DD`) the rendered blurb should cite. */
+  asOf: string;
+  totalUsage: ContextTaxUsagePercentiles;
+  stageUsage: readonly ContextTaxStageUsagePercentiles[];
+  compactionCount: ContextTaxPercentiles;
+  /** cacheRead / max(1, cacheRead + cacheCreation + inputUncached), in [0, 1]. */
+  cacheHitRatio: number;
+  successRateByModel: Readonly<Record<string, ContextTaxSuccessRate>>;
+  successRateByVendor: Readonly<
+    Partial<Record<ContextTaxVendor, ContextTaxSuccessRate>>
+  >;
 }
 
 /**
@@ -298,12 +339,54 @@ export function assertContextTaxSample(sample: ContextTaxSample): void {
   }
 }
 
+function assertPercentileOrder(label: string, p: ContextTaxPercentiles): void {
+  if (!(p.p25 <= p.p50 && p.p50 <= p.p75)) {
+    throw new Error(
+      `snapshot ${label} percentiles must satisfy p25 <= p50 <= p75`,
+    );
+  }
+}
+
+function assertUsagePercentileOrder(
+  label: string,
+  usage: ContextTaxUsagePercentiles,
+): void {
+  for (const field of [
+    'inputUncached',
+    'cacheRead',
+    'cacheCreation',
+    'output',
+    'reasoning',
+  ] as const) {
+    assertPercentileOrder(`${label}.${field}`, usage[field]);
+  }
+}
+
+function assertRateInUnitInterval(
+  label: string,
+  rate: ContextTaxSuccessRate,
+): void {
+  if (!(rate.rate >= 0 && rate.rate <= 1)) {
+    throw new Error(`snapshot ${label} rate must be in [0, 1]`);
+  }
+  const denom = rate.merged + rate.aborted + rate.unclaimed + rate.humanHandoff;
+  const expected = denom === 0 ? 0 : rate.merged / denom;
+  if (Math.abs(rate.rate - expected) > 1e-9) {
+    throw new Error(
+      `snapshot ${label} rate must equal merged / (merged + aborted + unclaimed + humanHandoff)`,
+    );
+  }
+}
+
 /**
  * Enforce the constraints the JSON Schema cannot express: distinct
  * `vendors` (`uniqueItems` is outside `validate-schemas.mts`'s enforced
- * keyword subset), and that `publishable` agrees with the
+ * keyword subset), that `publishable` agrees with the
  * `sampleCount`/`vendors` gate the schema documents but cannot compare
- * across fields on its own.
+ * across fields on its own, that every percentile triple is ordered
+ * (the schema has no `maximum`/cross-field comparison keyword), that
+ * `cacheHitRatio` and every success rate fall in `[0, 1]`, and that each
+ * success rate's `rate` field agrees with its own raw counts.
  */
 export function assertContextTaxSnapshot(snapshot: ContextTaxSnapshot): void {
   if (new Set(snapshot.vendors).size !== snapshot.vendors.length) {
@@ -316,5 +399,21 @@ export function assertContextTaxSnapshot(snapshot: ContextTaxSnapshot): void {
     throw new Error(
       'snapshot publishable must match the sampleCount/vendors gate',
     );
+  }
+  assertUsagePercentileOrder('totalUsage', snapshot.totalUsage);
+  for (const stage of snapshot.stageUsage) {
+    assertUsagePercentileOrder(`stageUsage[${stage.id}].usage`, stage.usage);
+  }
+  assertPercentileOrder('compactionCount', snapshot.compactionCount);
+  if (!(snapshot.cacheHitRatio >= 0 && snapshot.cacheHitRatio <= 1)) {
+    throw new Error('snapshot cacheHitRatio must be in [0, 1]');
+  }
+  for (const [model, rate] of Object.entries(snapshot.successRateByModel)) {
+    assertRateInUnitInterval(`successRateByModel[${model}]`, rate);
+  }
+  for (const [vendor, rate] of Object.entries(snapshot.successRateByVendor)) {
+    if (rate !== undefined) {
+      assertRateInUnitInterval(`successRateByVendor[${vendor}]`, rate);
+    }
   }
 }
