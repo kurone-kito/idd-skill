@@ -1,0 +1,318 @@
+// idd-generated-from: src/scripts/context-tax-adapter-codex.mts
+//
+// The scripts/context-tax-adapter-codex.mjs copy is generated from the
+// .mts source named above by `pnpm run build`. Edit the .mts source,
+// never the generated .mjs. See docs/typescript-sources.md.
+//
+// Codex CLI adapter (#2291) for the context-tax measurement contract
+// (#2288). Source-repo only: not HELPER_COMMANDS, not idd-template/. A
+// pure library module -- no CLI, no shebang, mirroring
+// context-tax-core.mts's own shape -- so it needs no HELPER_COMMANDS
+// registration or SOURCE_REPO_INTERNAL_ENTRY_PATHS entry.
+//
+// Reads Codex CLI rollout files
+// (`~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl`), each a newline-
+// delimited stream of `{ timestamp, type, payload }` lines. This module
+// documents the specific record shapes it reads (`session_meta`,
+// `turn_context`, `token_count`, `compacted`) as local structural types;
+// only the fields actually consumed are declared, and every extraction
+// degrades gracefully (never throws) except when the harvested session
+// has no usable timestamp at all, which fails closed as a malformed
+// rollout.
+import { globSync, readFileSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { basename, join } from 'node:path';
+import {
+  assertContextTaxSample,
+  inferIssueNumberFromBasename,
+  redactContextTaxRecord,
+} from './context-tax-core.mjs';
+
+function isPlainObject(value) {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+function getPayload(record) {
+  if (!isPlainObject(record)) {
+    return undefined;
+  }
+  const payload = record.payload;
+  return isPlainObject(payload) ? payload : undefined;
+}
+function getStringField(obj, key) {
+  const value = obj?.[key];
+  return typeof value === 'string' && value.length > 0 ? value : undefined;
+}
+function getObjectField(obj, key) {
+  const value = obj?.[key];
+  return isPlainObject(value) ? value : undefined;
+}
+function isRecordOfType(record, type) {
+  return isPlainObject(record) && record.type === type;
+}
+function findRecordByType(records, type) {
+  return records.find((record) => isRecordOfType(record, type));
+}
+/** Parse a Codex rollout JSONL file's text into raw, untyped records, tolerating a malformed or truncated trailing line from an interrupted process (unlike context-tax-report.mts's committed-artifact strict parse, this reads real local logs outside this repo's control). */
+export function parseCodexRolloutLines(text) {
+  const out = [];
+  for (const rawLine of text.split('\n')) {
+    const line = rawLine.trim();
+    if (line.length === 0) {
+      continue;
+    }
+    try {
+      out.push(JSON.parse(line));
+    } catch {}
+  }
+  return out;
+}
+/** The session's working directory, from `session_meta.payload.cwd` first, falling back to any record carrying a `payload.cwd` string. */
+export function extractSessionCwd(records) {
+  const sessionMeta = findRecordByType(records, 'session_meta');
+  const fromMeta = getStringField(getPayload(sessionMeta), 'cwd');
+  if (fromMeta) {
+    return fromMeta;
+  }
+  for (const record of records) {
+    const cwd = getStringField(getPayload(record), 'cwd');
+    if (cwd) {
+      return cwd;
+    }
+  }
+  return undefined;
+}
+/** Whether a session's cwd names an idd-skill worktree or clone. */
+export function isIddSkillCwd(cwd) {
+  return typeof cwd === 'string' && cwd.includes('idd-skill');
+}
+function extractSessionId(sessionMeta) {
+  return getStringField(getPayload(sessionMeta), 'id');
+}
+function deriveFallbackSessionId(fileBasename) {
+  if (!fileBasename) {
+    return undefined;
+  }
+  // basename() first: a caller-supplied fileBasename is never trusted to
+  // already be path-free, so a full path here would otherwise redact
+  // away as PATH_LIKE and fail closed downstream instead of just here.
+  const stripped = basename(fileBasename).replace(/\.jsonl$/i, '');
+  return stripped.length > 0 ? stripped : undefined;
+}
+/** Most recently reported `payload.model` string across every record, or undefined when none exists. */
+function extractModel(records) {
+  let model;
+  for (const record of records) {
+    const candidate = getStringField(getPayload(record), 'model');
+    if (candidate) {
+      model = candidate;
+    }
+  }
+  return model;
+}
+function toValidTimestamp(value) {
+  if (typeof value !== 'string') {
+    return undefined;
+  }
+  return Number.isFinite(Date.parse(value)) ? value : undefined;
+}
+/** First and last valid record `timestamp` fields, in file order. Undefined when no record has one. */
+function extractTimestamps(records) {
+  let startedAt;
+  let endedAt;
+  for (const record of records) {
+    if (!isPlainObject(record)) {
+      continue;
+    }
+    const ts = toValidTimestamp(record.timestamp);
+    if (!ts) {
+      continue;
+    }
+    if (startedAt === undefined) {
+      startedAt = ts;
+    }
+    endedAt = ts;
+  }
+  return startedAt !== undefined && endedAt !== undefined
+    ? { startedAt, endedAt }
+    : undefined;
+}
+function toNonNegativeInt(value) {
+  const n = typeof value === 'number' ? value : Number(value);
+  return Number.isFinite(n) && n > 0 ? Math.trunc(n) : 0;
+}
+/**
+ * Map one `token_count` payload's raw fields to {@link ContextTaxUsage}.
+ * `input_tokens` may already include the cache reads/writes it reports
+ * separately (an inclusive total) or may already exclude them
+ * (already-uncached) -- Codex CLI does not flag which. Mirrors the Grok
+ * adapter's inclusive-check: when `input_tokens >= cacheRead +
+ * cacheCreation`, the total is inclusive, so `inputUncached` is the
+ * remainder after subtracting both; otherwise `input_tokens` is already
+ * exclusive of cache and is used as `inputUncached` directly.
+ */
+function usageFromTokenCounts(raw) {
+  const inputTokens = toNonNegativeInt(raw.input_tokens);
+  const cacheRead = toNonNegativeInt(raw.cached_input_tokens);
+  const cacheCreation = toNonNegativeInt(raw.cache_write_input_tokens);
+  const inputUncached =
+    inputTokens >= cacheRead + cacheCreation
+      ? inputTokens - cacheRead - cacheCreation
+      : inputTokens;
+  return {
+    inputUncached,
+    cacheRead,
+    cacheCreation,
+    output: toNonNegativeInt(raw.output_tokens),
+    reasoning: toNonNegativeInt(raw.reasoning_output_tokens),
+  };
+}
+const ZERO_USAGE = {
+  inputUncached: 0,
+  cacheRead: 0,
+  cacheCreation: 0,
+  output: 0,
+  reasoning: 0,
+};
+function addUsage(a, b) {
+  return {
+    inputUncached: a.inputUncached + b.inputUncached,
+    cacheRead: a.cacheRead + b.cacheRead,
+    cacheCreation: a.cacheCreation + b.cacheCreation,
+    output: a.output + b.output,
+    reasoning: a.reasoning + b.reasoning,
+  };
+}
+/**
+ * Prefer the latest `token_count` payload's `total_token_usage` snapshot
+ * (a cumulative total) when any `token_count` record carries one;
+ * otherwise sum every record's `last_token_usage` (per-event deltas). A
+ * session with no `token_count` records at all yields all-zero usage,
+ * which is a valid, publishable-gate-excluded sample, not an error.
+ */
+function extractUsage(records) {
+  const tokenCountPayloads = [];
+  for (const record of records) {
+    if (isRecordOfType(record, 'token_count')) {
+      const payload = getPayload(record);
+      if (payload) {
+        tokenCountPayloads.push(payload);
+      }
+    }
+  }
+  for (let i = tokenCountPayloads.length - 1; i >= 0; i--) {
+    const total = getObjectField(tokenCountPayloads[i], 'total_token_usage');
+    if (total) {
+      return usageFromTokenCounts(total);
+    }
+  }
+  let summed = ZERO_USAGE;
+  for (const payload of tokenCountPayloads) {
+    const last = getObjectField(payload, 'last_token_usage');
+    if (last) {
+      summed = addUsage(summed, usageFromTokenCounts(last));
+    }
+  }
+  return summed;
+}
+function countCompactions(records) {
+  let count = 0;
+  for (const record of records) {
+    if (isRecordOfType(record, 'compacted')) {
+      count += 1;
+    }
+  }
+  return count;
+}
+function asCodexHarvestInput(input) {
+  if (!isPlainObject(input) || !Array.isArray(input.records)) {
+    throw new Error(
+      'context-tax-adapter-codex: harvest input must be { records: unknown[] }',
+    );
+  }
+  const fileBasename =
+    typeof input.fileBasename === 'string' ? input.fileBasename : undefined;
+  return { records: input.records, fileBasename };
+}
+/** Codex CLI vendor adapter. `input` must satisfy {@link CodexHarvestInput}. */
+export const codexAdapter = {
+  harvest(input) {
+    const { records, fileBasename } = asCodexHarvestInput(input);
+    const sessionMeta = findRecordByType(records, 'session_meta');
+    const vendorSessionId =
+      extractSessionId(sessionMeta) ?? deriveFallbackSessionId(fileBasename);
+    if (!vendorSessionId) {
+      throw new Error(
+        'context-tax-adapter-codex: unable to determine a vendorSessionId',
+      );
+    }
+    const timestamps = extractTimestamps(records);
+    if (!timestamps) {
+      throw new Error(
+        'context-tax-adapter-codex: no record has a valid timestamp',
+      );
+    }
+    const cwd = extractSessionCwd(records);
+    const issueNumber = cwd
+      ? inferIssueNumberFromBasename(basename(cwd))
+      : undefined;
+    const sample = {
+      schemaVersion: 1,
+      kind: 'session',
+      vendor: 'codex',
+      model: extractModel(records) ?? 'unknown',
+      attribution: 'session-unscoped',
+      outcome: 'unknown',
+      usage: extractUsage(records),
+      compactionCount: countCompactions(records),
+      startedAt: timestamps.startedAt,
+      endedAt: timestamps.endedAt,
+      vendorSessionId,
+    };
+    const redacted = redactContextTaxRecord(sample);
+    assertContextTaxSample(redacted);
+    return issueNumber === undefined
+      ? { sample: redacted }
+      : { sample: redacted, joinHints: { issueNumber } };
+  },
+};
+/** `~/.codex/sessions`, the default rollout root. */
+export function defaultCodexSessionsDir() {
+  return join(homedir(), '.codex', 'sessions');
+}
+/**
+ * Scan `sessionsDir` (default `~/.codex/sessions`) for
+ * `**\/rollout-*.jsonl` files, keep only sessions whose cwd names an
+ * idd-skill worktree or clone, and harvest each into a
+ * {@link ContextTaxAdapterResult}.
+ */
+export function scanCodexSessions(options) {
+  const sessionsDir = options?.sessionsDir ?? defaultCodexSessionsDir();
+  const files = globSync('**/rollout-*.jsonl', {
+    cwd: sessionsDir,
+    withFileTypes: true,
+  })
+    .filter((entry) => entry.isFile())
+    .map((entry) => join(entry.parentPath, entry.name))
+    .sort();
+  const results = [];
+  for (const file of files) {
+    // Read, parse, cwd-filter, and harvest all live inside one try: Codex
+    // rotates/deletes rollout files while sessions run, so readFileSync
+    // itself can throw (ENOENT/EACCES) between globSync and this line,
+    // not only harvest() on malformed content -- either failure must
+    // skip just this one file, never abort the whole scan.
+    try {
+      const records = parseCodexRolloutLines(readFileSync(file, 'utf8'));
+      if (!isIddSkillCwd(extractSessionCwd(records))) {
+        continue;
+      }
+      results.push(
+        codexAdapter.harvest({
+          records,
+          fileBasename: basename(file),
+        }),
+      );
+    } catch {}
+  }
+  return results;
+}
