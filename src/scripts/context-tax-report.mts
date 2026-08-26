@@ -58,26 +58,39 @@ const DOCS_END = '<!-- context-tax-docs:end -->';
 // JSONL input
 // ---------------------------------------------------------------------------
 
-/** Parse one JSONL file into non-blank, trimmed lines. */
-function readJsonlLines(path: string): string[] {
+/** One non-blank, trimmed JSONL line with its 1-based line number. */
+interface JsonlLine {
+  lineNumber: number;
+  text: string;
+}
+
+/** Parse one JSONL file into non-blank, trimmed lines, each tagged with its line number. */
+function readJsonlLines(path: string): JsonlLine[] {
   const raw = readFileSync(path, 'utf8');
   return raw
     .split('\n')
-    .map((line) => line.trim())
-    .filter((line) => line.length > 0);
+    .map((text, index) => ({ lineNumber: index + 1, text: text.trim() }))
+    .filter((line) => line.text.length > 0);
 }
 
 /**
  * Read and validate every `--in` file's samples. A line that fails to
- * parse as JSON or fails {@link assertContextTaxSample} throws immediately
- * (fail closed -- a malformed harvested record must not silently vanish
- * from the aggregate).
+ * parse as JSON or fails {@link assertContextTaxSample} throws immediately,
+ * quoting the source file and line number (fail closed -- a malformed
+ * harvested record must not silently vanish from the aggregate).
  */
 export function readSamples(paths: readonly string[]): ContextTaxSample[] {
   const samples: ContextTaxSample[] = [];
   for (const path of paths) {
-    for (const line of readJsonlLines(path)) {
-      const sample = JSON.parse(line) as ContextTaxSample;
+    for (const { lineNumber, text } of readJsonlLines(path)) {
+      let sample: ContextTaxSample;
+      try {
+        sample = JSON.parse(text) as ContextTaxSample;
+      } catch (error) {
+        throw new Error(
+          `${path}:${lineNumber}: invalid JSON (${(error as Error).message})`,
+        );
+      }
       assertContextTaxSample(sample);
       samples.push(sample);
     }
@@ -97,10 +110,19 @@ export function readSamples(paths: readonly string[]): ContextTaxSample[] {
 export function readEvents(paths: readonly string[]): unknown[] {
   const events: unknown[] = [];
   for (const path of paths) {
-    for (const line of readJsonlLines(path)) {
-      const event = JSON.parse(line);
+    for (const { lineNumber, text } of readJsonlLines(path)) {
+      let event: unknown;
+      try {
+        event = JSON.parse(text);
+      } catch (error) {
+        throw new Error(
+          `${path}:${lineNumber}: invalid JSON (${(error as Error).message})`,
+        );
+      }
       if (typeof event !== 'object' || event === null) {
-        throw new Error(`${path}: event line is not a JSON object: ${line}`);
+        throw new Error(
+          `${path}:${lineNumber}: event line is not a JSON object: ${text}`,
+        );
       }
       events.push(event);
     }
@@ -310,7 +332,35 @@ function wrapProse(text: string, width = 76): string {
   return lines.join('\n');
 }
 
-function renderReadmeRegionEn(snapshot: ContextTaxSnapshot): string {
+/**
+ * Wrap Japanese (space-free) prose at `、`/`。` boundaries so every line
+ * stays within `width`. Unlike {@link wrapProse}, a chunk boundary is a
+ * punctuation mark, not whitespace: joining chunks with a bare `\n`
+ * (no inserted space) keeps the rendered text correct, since CommonMark
+ * renders a soft line break as a space and Japanese prose has none there
+ * naturally. A single chunk longer than `width` on its own (for example
+ * one holding the markdown link) is still emitted as its own line rather
+ * than being force-split mid-token.
+ */
+function wrapCjkProse(text: string, width = 38): string {
+  const chunks = text.split(/(?<=[、。])/);
+  const lines: string[] = [];
+  let current = '';
+  for (const chunk of chunks) {
+    if (current.length > 0 && current.length + chunk.length > width) {
+      lines.push(current);
+      current = chunk;
+    } else {
+      current += chunk;
+    }
+  }
+  if (current.length > 0) {
+    lines.push(current);
+  }
+  return lines.join('\n');
+}
+
+export function renderReadmeRegionEn(snapshot: ContextTaxSnapshot): string {
   if (!snapshot.publishable) {
     return wrapProse(
       'Context-tax measurement is in progress; see [`docs/context-tax.md`](docs/context-tax.md) for the methodology.',
@@ -325,24 +375,49 @@ function renderReadmeRegionEn(snapshot: ContextTaxSnapshot): string {
   );
 }
 
-function renderReadmeRegionJa(snapshot: ContextTaxSnapshot): string {
+export function renderReadmeRegionJa(snapshot: ContextTaxSnapshot): string {
   if (!snapshot.publishable) {
-    return 'コンテキスト税の計測は現在進行中です。詳しい方法論は [`docs/context-tax.md`](docs/context-tax.md) を参照してください。';
+    return wrapCjkProse(
+      'コンテキスト税の計測は現在進行中です。詳しい方法論は [`docs/context-tax.md`](docs/context-tax.md) を参照してください。',
+    );
   }
   const cacheHitPct = Math.round(snapshot.cacheHitRatio * 100);
-  return (
+  return wrapCjkProse(
     `コンテキスト税: issue ループ1件あたり中央値 ${Math.round(snapshot.totalUsage.inputUncached.p50)} 入力トークン、` +
-    `キャッシュヒット率 ${cacheHitPct}%、コンパクション ${Math.round(snapshot.compactionCount.p50)} 回` +
-    `(n=${snapshot.sampleCount}、${formatVendorList(snapshot.vendors)}、${snapshot.asOf} 時点)。` +
-    '詳しい方法論は [`docs/context-tax.md`](docs/context-tax.md) を参照してください。'
+      `キャッシュヒット率 ${cacheHitPct}%、コンパクション ${Math.round(snapshot.compactionCount.p50)} 回` +
+      `(n=${snapshot.sampleCount}、${formatVendorList(snapshot.vendors)}、${snapshot.asOf} 時点)。` +
+      '詳しい方法論は [`docs/context-tax.md`](docs/context-tax.md) を参照してください。',
   );
 }
 
-function renderDocsTableRegion(snapshot: ContextTaxSnapshot): string {
+function renderSuccessRateTable(
+  title: string,
+  rates: Readonly<Record<string, ContextTaxSuccessRate>>,
+): string[] {
+  const keys = Object.keys(rates).sort();
+  if (keys.length === 0) {
+    return [];
+  }
+  return [
+    `### ${title}`,
+    '',
+    '| Key | Merged | Aborted | Unclaimed | Human handoff | Rate |',
+    '| --- | --- | --- | --- | --- | --- |',
+    ...keys.map((key) => {
+      const r = rates[key];
+      return `| ${key} | ${r.merged} | ${r.aborted} | ${r.unclaimed} | ${r.humanHandoff} | ${(r.rate * 100).toFixed(1)}% |`;
+    }),
+    '',
+  ];
+}
+
+export function renderDocsTableRegion(snapshot: ContextTaxSnapshot): string {
   if (!snapshot.publishable) {
     return `Not yet publishable, n=${snapshot.sampleCount}.`;
   }
   const lines = [
+    '### Total usage',
+    '',
     '| Metric | p25 | p50 | p75 |',
     '| --- | --- | --- | --- |',
     ...USAGE_FIELDS.map((field) => {
@@ -351,8 +426,37 @@ function renderDocsTableRegion(snapshot: ContextTaxSnapshot): string {
     }),
     `| compactionCount | ${Math.round(snapshot.compactionCount.p25)} | ${Math.round(snapshot.compactionCount.p50)} | ${Math.round(snapshot.compactionCount.p75)} |`,
     '',
-    `n=${snapshot.sampleCount}, vendors=${formatVendorList(snapshot.vendors)}, cache-hit ratio=${(snapshot.cacheHitRatio * 100).toFixed(1)}%, as of ${snapshot.asOf}.`,
   ];
+  if (snapshot.stageUsage.length > 0) {
+    lines.push(
+      '### By stage (inputUncached)',
+      '',
+      '| Stage | p25 | p50 | p75 |',
+      '| --- | --- | --- | --- |',
+    );
+    for (const stage of snapshot.stageUsage) {
+      const p = stage.usage.inputUncached;
+      lines.push(
+        `| ${stage.id} | ${Math.round(p.p25)} | ${Math.round(p.p50)} | ${Math.round(p.p75)} |`,
+      );
+    }
+    lines.push('');
+  }
+  lines.push(
+    ...renderSuccessRateTable(
+      'Success rate by model',
+      snapshot.successRateByModel,
+    ),
+  );
+  lines.push(
+    ...renderSuccessRateTable(
+      'Success rate by vendor',
+      snapshot.successRateByVendor,
+    ),
+  );
+  lines.push(
+    `n=${snapshot.sampleCount}, vendors=${formatVendorList(snapshot.vendors)}, cache-hit ratio=${(snapshot.cacheHitRatio * 100).toFixed(1)}%, as of ${snapshot.asOf}.`,
+  );
   return lines.join('\n');
 }
 
@@ -364,8 +468,15 @@ export function replaceMarkedRegion(
   innerContent: string,
 ): string {
   const startIndex = text.indexOf(startMarker);
-  const endIndex = text.indexOf(endMarker);
-  if (startIndex === -1 || endIndex === -1 || endIndex < startIndex) {
+  // Search for endMarker only after startMarker, not from the start of the
+  // file -- otherwise a same-named marker (or endMarker text) appearing
+  // earlier in the file would match first and silently pick the wrong
+  // region boundary.
+  const endIndex =
+    startIndex === -1
+      ? -1
+      : text.indexOf(endMarker, startIndex + startMarker.length);
+  if (startIndex === -1 || endIndex === -1) {
     throw new Error(`marked region ${startMarker} .. ${endMarker} not found`);
   }
   const before = text.slice(0, startIndex + startMarker.length);

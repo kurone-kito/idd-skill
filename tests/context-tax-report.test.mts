@@ -10,6 +10,9 @@ import {
   checkRenderedFiles,
   readEvents,
   readSamples,
+  renderDocsTableRegion,
+  renderReadmeRegionEn,
+  renderReadmeRegionJa,
   replaceMarkedRegion,
 } from '../src/scripts/context-tax-report.mts';
 
@@ -23,7 +26,7 @@ const DOCS_END = '<!-- context-tax-docs:end -->';
 const UNPUBLISHABLE_EN =
   'Context-tax measurement is in progress; see\n[`docs/context-tax.md`](docs/context-tax.md) for the methodology.';
 const UNPUBLISHABLE_JA =
-  'コンテキスト税の計測は現在進行中です。詳しい方法論は [`docs/context-tax.md`](docs/context-tax.md) を参照してください。';
+  'コンテキスト税の計測は現在進行中です。\n詳しい方法論は [`docs/context-tax.md`](docs/context-tax.md) を参照してください。';
 const UNPUBLISHABLE_DOCS = 'Not yet publishable, n=0.';
 
 function stubReadmeText(): string {
@@ -258,23 +261,6 @@ test("aggregateSnapshot cacheHitRatio is the median of each sample's own ratio, 
   assert.equal(snapshot.cacheHitRatio, 0.5);
 });
 
-test('readSamples rejects a malformed line', () => {
-  withSandboxCwd(() => {
-    writeFileSync(
-      'samples.jsonl',
-      `${JSON.stringify(issueLoopSample({ issueNumber: 1 }))}\nnot json\n`,
-    );
-    assert.throws(() => readSamples(['samples.jsonl']));
-  });
-});
-
-test('readEvents rejects a non-object line', () => {
-  withSandboxCwd(() => {
-    writeFileSync('events.jsonl', '"just a string"\n');
-    assert.throws(() => readEvents(['events.jsonl']), /not a JSON object/);
-  });
-});
-
 test('replaceMarkedRegion swaps only the content between the markers', () => {
   const text = `before\n${README_START}\nold\n${README_END}\nafter`;
   const result = replaceMarkedRegion(
@@ -337,5 +323,95 @@ test('checkRenderedFiles reports drift when the docs table region is mutated wit
     const drifted = checkRenderedFiles(snapshot);
     assert.equal(drifted.length, 1);
     assert.match(drifted[0], /context-tax\.md/);
+  });
+});
+
+test('renderReadmeRegionEn/Ja never exceed markdownlint MD013 line length (80) even with large dynamic values', () => {
+  // Deliberately large-magnitude figures, well beyond any realistic
+  // sample, to guard against a future regression once real data flows
+  // through this path (#2294's snapshot data is currently only a
+  // synthetic n=0 stub).
+  const samples = Array.from({ length: 12 }, (_, i) =>
+    issueLoopSample({
+      issueNumber: 800 + i,
+      vendor: i % 2 === 0 ? 'grok' : 'claude',
+      usage: {
+        inputUncached: 1234567,
+        cacheRead: 234567,
+        cacheCreation: 3456,
+        output: 4567,
+        reasoning: 567,
+      },
+      compactionCount: 4321,
+    }),
+  );
+  const snapshot = aggregateSnapshot(samples, NOW);
+  assert.equal(snapshot.publishable, true);
+  for (const line of renderReadmeRegionEn(snapshot).split('\n')) {
+    assert.ok(
+      line.length <= 80,
+      `EN line exceeds 80 chars: "${line}" (${line.length})`,
+    );
+  }
+  for (const line of renderReadmeRegionJa(snapshot).split('\n')) {
+    assert.ok(
+      line.length <= 80,
+      `JA line exceeds 80 chars: "${line}" (${line.length})`,
+    );
+  }
+});
+
+test('renderDocsTableRegion includes per-stage usage and success-rate breakdowns when publishable', () => {
+  const samples = Array.from({ length: 10 }, (_, i) =>
+    issueLoopSample({
+      issueNumber: 700 + i,
+      vendor: i % 2 === 0 ? 'grok' : 'claude',
+      model: 'grok-4.6',
+      outcome: i < 9 ? 'merged' : 'aborted',
+    }),
+  );
+  const snapshot = aggregateSnapshot(samples, NOW);
+  assert.equal(snapshot.publishable, true);
+  const rendered = renderDocsTableRegion(snapshot);
+  assert.match(rendered, /### Total usage/);
+  assert.match(rendered, /### By stage \(inputUncached\)/);
+  assert.match(rendered, /\| work \|/);
+  assert.match(rendered, /### Success rate by model/);
+  assert.match(rendered, /\| grok-4\.6 \| 9 \| 1 \| 0 \| 0 \| 90\.0% \|/);
+  assert.match(rendered, /### Success rate by vendor/);
+});
+
+test('replaceMarkedRegion searches for the end marker only after the start marker', () => {
+  const text = `${README_END}\nnoise\n${README_START}\nold\n${README_END}\nafter`;
+  const result = replaceMarkedRegion(text, README_START, README_END, 'new');
+  // The first line (a stray END marker before START) must be left alone;
+  // only the pair after START should be replaced.
+  assert.match(result, new RegExp(`^${README_END}\\nnoise\\n${README_START}`));
+  assert.equal(
+    result,
+    `${README_END}\nnoise\n${README_START}\n\nnew\n\n${README_END}\nafter`,
+  );
+});
+
+test('readSamples reports the source path and line number on invalid JSON', () => {
+  withSandboxCwd(() => {
+    writeFileSync(
+      'samples.jsonl',
+      `${JSON.stringify(issueLoopSample({ issueNumber: 1 }))}\nnot json\n`,
+    );
+    assert.throws(
+      () => readSamples(['samples.jsonl']),
+      /samples\.jsonl:2: invalid JSON/,
+    );
+  });
+});
+
+test('readEvents reports the source path and line number on a non-object line', () => {
+  withSandboxCwd(() => {
+    writeFileSync('events.jsonl', '{}\n"just a string"\n');
+    assert.throws(
+      () => readEvents(['events.jsonl']),
+      /events\.jsonl:2: event line is not a JSON object/,
+    );
   });
 });

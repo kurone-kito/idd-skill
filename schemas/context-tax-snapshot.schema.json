@@ -221,7 +221,7 @@
     "cacheHitRatio": {
       "type": "number",
       "minimum": 0,
-      "description": "cacheRead / max(1, cacheRead + cacheCreation + inputUncached) across aggregated total usage. In [0, 1]; the validator has no maximum keyword, enforced instead by assertContextTaxSnapshot."
+      "description": "Median across samples of each sample's own cacheRead / max(1, cacheRead + cacheCreation + inputUncached), not the ratio of the independent totalUsage medians. In [0, 1]; the validator has no maximum keyword, enforced instead by assertContextTaxSnapshot."
     },
     "successRateByModel": {
       "type": "object",

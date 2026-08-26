@@ -66,7 +66,8 @@ _2026-07 時点。_
 
 <!-- context-tax-readme:start -->
 
-コンテキスト税の計測は現在進行中です。詳しい方法論は [`docs/context-tax.md`](docs/context-tax.md) を参照してください。
+コンテキスト税の計測は現在進行中です。
+詳しい方法論は [`docs/context-tax.md`](docs/context-tax.md) を参照してください。
 
 <!-- context-tax-readme:end -->
 
