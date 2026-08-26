@@ -3,8 +3,10 @@ import { test } from 'node:test';
 
 import {
   assertContextTaxSample,
+  assertContextTaxSnapshot,
   CONTEXT_TAX_STAGE_IDS,
   type ContextTaxSample,
+  type ContextTaxSnapshot,
   type ContextTaxVendorAdapter,
   inferIssueNumberFromBasename,
   redactContextTaxRecord,
@@ -139,6 +141,68 @@ test('redaction drops compound prompt/assistant/tool-input field names', () => {
   assert.equal(clean.assistantMessage, undefined);
   assert.equal(clean.toolInput, undefined);
   assert.equal(clean.inputUncached, 5);
+});
+
+test('assertContextTaxSample couples attribution to kind', () => {
+  const issueLoop: ContextTaxSample = {
+    schemaVersion: 1,
+    kind: 'issue-loop',
+    vendor: 'codex',
+    model: 'gpt-test',
+    attribution: 'marker-join',
+    outcome: 'unknown',
+    usage: {
+      inputUncached: 0,
+      cacheRead: 0,
+      cacheCreation: 0,
+      output: 0,
+      reasoning: 0,
+    },
+    compactionCount: 0,
+    startedAt: '2026-08-25T00:00:00Z',
+    endedAt: '2026-08-25T00:01:00Z',
+    vendorSessionId: 'sess',
+    issueNumber: 2288,
+    stages: [],
+  };
+  assert.doesNotThrow(() => assertContextTaxSample(issueLoop));
+  assert.throws(
+    () =>
+      assertContextTaxSample({
+        ...issueLoop,
+        attribution: 'session-unscoped',
+      }),
+    /issue-loop sample cannot use session-unscoped attribution/,
+  );
+  const session: ContextTaxSample = {
+    ...issueLoop,
+    kind: 'session',
+    issueNumber: undefined,
+    stages: undefined,
+    attribution: 'session-unscoped',
+  };
+  assert.doesNotThrow(() => assertContextTaxSample(session));
+  assert.throws(
+    () => assertContextTaxSample({ ...session, attribution: 'marker-join' }),
+    /session sample must use session-unscoped attribution/,
+  );
+});
+
+test('assertContextTaxSnapshot rejects duplicate vendors', () => {
+  const snapshot: ContextTaxSnapshot = {
+    schemaVersion: 1,
+    generatedAt: '2026-08-25T00:00:00Z',
+    minPublishableSamples: 10,
+    minPublishableVendors: 2,
+    publishable: false,
+    sampleCount: 3,
+    vendors: ['grok', 'claude'],
+  };
+  assert.doesNotThrow(() => assertContextTaxSnapshot(snapshot));
+  assert.throws(
+    () => assertContextTaxSnapshot({ ...snapshot, vendors: ['grok', 'grok'] }),
+    /snapshot vendors must be distinct/,
+  );
 });
 
 test('assertContextTaxSample rejects a non-integer issueNumber', () => {

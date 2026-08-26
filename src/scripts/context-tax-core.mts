@@ -254,10 +254,15 @@ export function isIssueLoopSample(
 
 /**
  * Enforce the issue-loop join contract the JSON Schema cannot express
- * without oneOf. Session samples pass through.
+ * without oneOf: `issueNumber`/`stages` for `issue-loop`, and that
+ * `attribution` agrees with `kind` (a `session-unscoped` sample was never
+ * joined to an issue, so it cannot claim `issue-loop`, and vice versa).
  */
 export function assertContextTaxSample(sample: ContextTaxSample): void {
   if (sample.kind !== 'issue-loop') {
+    if (sample.attribution !== 'session-unscoped') {
+      throw new Error('session sample must use session-unscoped attribution');
+    }
     return;
   }
   if (!Number.isInteger(sample.issueNumber) || sample.issueNumber <= 0) {
@@ -265,5 +270,21 @@ export function assertContextTaxSample(sample: ContextTaxSample): void {
   }
   if (!Array.isArray(sample.stages)) {
     throw new Error('issue-loop sample requires stages');
+  }
+  if (sample.attribution === 'session-unscoped') {
+    throw new Error(
+      'issue-loop sample cannot use session-unscoped attribution',
+    );
+  }
+}
+
+/**
+ * Enforce the distinct-vendors constraint the JSON Schema cannot express
+ * (`uniqueItems` is outside `validate-schemas.mts`'s enforced keyword
+ * subset).
+ */
+export function assertContextTaxSnapshot(snapshot: ContextTaxSnapshot): void {
+  if (new Set(snapshot.vendors).size !== snapshot.vendors.length) {
+    throw new Error('snapshot vendors must be distinct');
   }
 }
