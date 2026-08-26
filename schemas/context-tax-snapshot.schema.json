@@ -1,0 +1,57 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://kurone-kito.github.io/idd-skill/schemas/context-tax-snapshot.schema.json",
+  "title": "Context-tax snapshot",
+  "description": "Committed aggregates a later reporter renders into docs/README. This issue only describes the shape.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "generatedAt",
+    "minPublishableSamples",
+    "minPublishableVendors",
+    "publishable",
+    "sampleCount",
+    "vendors"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "type": "integer",
+      "enum": [1],
+      "description": "Literal schema version. Always 1 for this contract."
+    },
+    "generatedAt": {
+      "type": "string",
+      "format": "date-time",
+      "description": "UTC time this snapshot was produced."
+    },
+    "minPublishableSamples": {
+      "type": "integer",
+      "enum": [10],
+      "description": "Publish-gate constant: at least 10 issue-loop samples."
+    },
+    "minPublishableVendors": {
+      "type": "integer",
+      "enum": [2],
+      "description": "Publish-gate constant: at least 2 distinct vendors."
+    },
+    "publishable": {
+      "type": "boolean",
+      "description": "True when sampleCount and vendors satisfy the publish-gate constants."
+    },
+    "sampleCount": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Number of issue-loop samples in this snapshot."
+    },
+    "vendors": {
+      "type": "array",
+      "description": "Distinct vendors represented in this snapshot.",
+      "items": {
+        "type": "string",
+        "enum": ["grok", "claude", "codex"],
+        "description": "A harvested agent vendor."
+      }
+    }
+  }
+}

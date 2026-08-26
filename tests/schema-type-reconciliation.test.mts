@@ -6,6 +6,11 @@ import { fileURLToPath } from 'node:url';
 import type { AdvisoryConvergenceVerdict } from '../src/scripts/advisory-convergence.mts';
 import type { AdvisoryWaitStateReport } from '../src/scripts/advisory-wait-state.mts';
 import type { BranchConflictResult } from '../src/scripts/branch-conflict-state.mts';
+import type {
+  ContextTaxEvent,
+  ContextTaxSample,
+  ContextTaxSnapshot,
+} from '../src/scripts/context-tax-core.mts';
 import type { RoadmapGraphUnionReport } from '../src/scripts/discover-roadmap-graph.mts';
 import type { DispositionReport } from '../src/scripts/disposition-non-review-notices.mts';
 import type { IddMergeExecuteVerdict } from '../src/scripts/idd-merge-execute.mts';
@@ -407,6 +412,50 @@ export const onboardingHearingTranscriptKeys = [
   'answers',
 ] as const satisfies readonly (keyof OnboardingHearingTranscript)[];
 
+export const contextTaxSampleKeys = [
+  'schemaVersion',
+  'kind',
+  'vendor',
+  'model',
+  'attribution',
+  'outcome',
+  'usage',
+  'compactionCount',
+  'startedAt',
+  'endedAt',
+  'vendorSessionId',
+  'issueNumber',
+  'stages',
+  'claimId',
+  'prNumber',
+  'effort',
+  'toolCallCount',
+  'turnCount',
+  'includesSubagents',
+  'ambiguous',
+] as const satisfies readonly (keyof ContextTaxSample)[];
+
+export const contextTaxEventKeys = [
+  'schemaVersion',
+  'event',
+  'stageId',
+  'at',
+  'vendor',
+  'vendorSessionId',
+  'issueNumber',
+  'usage',
+] as const satisfies readonly (keyof ContextTaxEvent)[];
+
+export const contextTaxSnapshotKeys = [
+  'schemaVersion',
+  'generatedAt',
+  'minPublishableSamples',
+  'minPublishableVendors',
+  'publishable',
+  'sampleCount',
+  'vendors',
+] as const satisfies readonly (keyof ContextTaxSnapshot)[];
+
 export const policyConfigKeys = [
   '$schema',
   'iddVersion',
@@ -562,6 +611,18 @@ const exhaustivenessWitnesses: {
     StalledSessionQuietCheckReport,
     (typeof stalledSessionQuietCheckKeys)[number]
   >;
+  contextTaxSample: CoversAllKeysOf<
+    ContextTaxSample,
+    (typeof contextTaxSampleKeys)[number]
+  >;
+  contextTaxEvent: CoversAllKeysOf<
+    ContextTaxEvent,
+    (typeof contextTaxEventKeys)[number]
+  >;
+  contextTaxSnapshot: CoversAllKeysOf<
+    ContextTaxSnapshot,
+    (typeof contextTaxSnapshotKeys)[number]
+  >;
 } = {
   advisoryWaitState: true,
   branchConflictState: true,
@@ -576,6 +637,9 @@ const exhaustivenessWitnesses: {
   onboardingHearingTranscript: true,
   policyConfig: true,
   stalledSessionQuietCheck: true,
+  contextTaxSample: true,
+  contextTaxEvent: true,
+  contextTaxSnapshot: true,
 };
 
 // ---------------------------------------------------------------------------
@@ -885,6 +949,57 @@ const onboardingHearingTranscriptFixture = {
   confirmedAt: '2026-08-25T15:00:00Z',
   answers: [{ id: 'merge-policy', value: 'fully_autonomous_merge' }],
 } satisfies OnboardingHearingTranscript;
+
+const contextTaxSampleFixture = {
+  schemaVersion: 1,
+  kind: 'issue-loop',
+  vendor: 'grok',
+  model: 'grok-4.6',
+  attribution: 'marker-join',
+  outcome: 'merged',
+  usage: {
+    inputUncached: 1,
+    cacheRead: 0,
+    cacheCreation: 0,
+    output: 1,
+    reasoning: 0,
+  },
+  compactionCount: 0,
+  startedAt: '2026-08-25T15:00:00Z',
+  endedAt: '2026-08-25T16:00:00Z',
+  vendorSessionId: 'sess',
+  issueNumber: 2288,
+  stages: [
+    {
+      id: 'work',
+      usage: {
+        inputUncached: 1,
+        cacheRead: 0,
+        cacheCreation: 0,
+        output: 1,
+        reasoning: 0,
+      },
+    },
+  ],
+} satisfies ContextTaxSample;
+
+const contextTaxEventFixture = {
+  schemaVersion: 1,
+  event: 'enter',
+  stageId: 'work',
+  at: '2026-08-25T15:10:00Z',
+  vendor: 'claude',
+} satisfies ContextTaxEvent;
+
+const contextTaxSnapshotFixture = {
+  schemaVersion: 1,
+  generatedAt: '2026-08-25T16:00:00Z',
+  minPublishableSamples: 10,
+  minPublishableVendors: 2,
+  publishable: false,
+  sampleCount: 0,
+  vendors: [],
+} satisfies ContextTaxSnapshot;
 
 const policyConfigFixture = {
   iddVersion: '1.0.0',
@@ -1310,6 +1425,27 @@ const SCHEMA_TYPE_MAP: readonly SchemaTypeMapping[] = [
     owningModule: 'src/scripts/protocol-helpers.mts',
     keys: claimMarkerKeys,
     fixture: claimMarkerFixture,
+  },
+  {
+    schemaFile: 'context-tax-event.schema.json',
+    exportedType: 'ContextTaxEvent',
+    owningModule: 'src/scripts/context-tax-core.mts',
+    keys: contextTaxEventKeys,
+    fixture: contextTaxEventFixture,
+  },
+  {
+    schemaFile: 'context-tax-sample.schema.json',
+    exportedType: 'ContextTaxSample',
+    owningModule: 'src/scripts/context-tax-core.mts',
+    keys: contextTaxSampleKeys,
+    fixture: contextTaxSampleFixture,
+  },
+  {
+    schemaFile: 'context-tax-snapshot.schema.json',
+    exportedType: 'ContextTaxSnapshot',
+    owningModule: 'src/scripts/context-tax-core.mts',
+    keys: contextTaxSnapshotKeys,
+    fixture: contextTaxSnapshotFixture,
   },
   {
     schemaFile: 'discover-roadmap-union.schema.json',

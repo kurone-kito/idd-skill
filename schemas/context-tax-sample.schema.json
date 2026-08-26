@@ -1,0 +1,212 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://kurone-kito.github.io/idd-skill/schemas/context-tax-sample.schema.json",
+  "title": "Context-tax sample",
+  "description": "One harvested IDD loop or unscoped session record. README aggregates consume only issue-loop samples.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "kind",
+    "vendor",
+    "model",
+    "attribution",
+    "outcome",
+    "usage",
+    "compactionCount",
+    "startedAt",
+    "endedAt",
+    "vendorSessionId"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "type": "integer",
+      "enum": [1],
+      "description": "Literal schema version. Always 1 for this contract."
+    },
+    "kind": {
+      "type": "string",
+      "enum": ["issue-loop", "session"],
+      "description": "issue-loop is per-issue and README-publishable; session is unscoped history."
+    },
+    "vendor": {
+      "type": "string",
+      "enum": ["grok", "claude", "codex"],
+      "description": "Harvested agent vendor."
+    },
+    "model": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Vendor model identifier. Never a filesystem path."
+    },
+    "attribution": {
+      "type": "string",
+      "enum": ["marker-join", "phase-event", "session-unscoped"],
+      "description": "How this sample was joined to an issue, or session-unscoped when it was not."
+    },
+    "outcome": {
+      "type": "string",
+      "enum": ["merged", "aborted", "unclaimed", "human-handoff", "unknown"],
+      "description": "Terminal outcome of the harvested loop or session."
+    },
+    "usage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "inputUncached",
+        "cacheRead",
+        "cacheCreation",
+        "output",
+        "reasoning"
+      ],
+      "description": "Token usage for the whole sample. All counts are >= 0.",
+      "properties": {
+        "inputUncached": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Uncached input tokens."
+        },
+        "cacheRead": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Cache-read tokens."
+        },
+        "cacheCreation": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Cache-creation tokens."
+        },
+        "output": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Output tokens."
+        },
+        "reasoning": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Reasoning tokens. 0 when the vendor has no signal."
+        }
+      }
+    },
+    "compactionCount": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Compaction events in this sample. 0 when the vendor has no signal."
+    },
+    "startedAt": {
+      "type": "string",
+      "format": "date-time",
+      "description": "UTC start of the harvested window."
+    },
+    "endedAt": {
+      "type": "string",
+      "format": "date-time",
+      "description": "UTC end of the harvested window."
+    },
+    "vendorSessionId": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Opaque vendor session id. Never a filesystem path."
+    },
+    "issueNumber": {
+      "type": "integer",
+      "exclusiveMinimum": 0,
+      "description": "Required on issue-loop samples. Optional on session samples."
+    },
+    "stages": {
+      "type": "array",
+      "description": "Per-stage usage. Required on issue-loop samples. Optional on session samples.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "usage"],
+        "properties": {
+          "id": {
+            "type": "string",
+            "enum": [
+              "discover",
+              "claim",
+              "work",
+              "submit-pr",
+              "review",
+              "merge",
+              "cleanup"
+            ],
+            "description": "IDD stage this usage belongs to."
+          },
+          "usage": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "inputUncached",
+              "cacheRead",
+              "cacheCreation",
+              "output",
+              "reasoning"
+            ],
+            "description": "Token usage for this stage.",
+            "properties": {
+              "inputUncached": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "Uncached input tokens."
+              },
+              "cacheRead": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "Cache-read tokens."
+              },
+              "cacheCreation": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "Cache-creation tokens."
+              },
+              "output": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "Output tokens."
+              },
+              "reasoning": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "Reasoning tokens."
+              }
+            }
+          }
+        }
+      }
+    },
+    "claimId": {
+      "type": ["string", "null"],
+      "description": "Opaque claim-id when known. Null when unknown."
+    },
+    "prNumber": {
+      "type": ["integer", "null"],
+      "exclusiveMinimum": 0,
+      "description": "Linked PR number when known."
+    },
+    "effort": {
+      "type": ["string", "null"],
+      "enum": ["S", "M", "L", null],
+      "description": "Authored effort hint when known."
+    },
+    "toolCallCount": {
+      "type": ["integer", "null"],
+      "minimum": 0,
+      "description": "Tool-call count when the vendor reports one."
+    },
+    "turnCount": {
+      "type": ["integer", "null"],
+      "minimum": 0,
+      "description": "Turn count when the vendor reports one."
+    },
+    "includesSubagents": {
+      "type": "boolean",
+      "description": "True when harvested usage includes subagent work."
+    },
+    "ambiguous": {
+      "type": "boolean",
+      "description": "True when overlapping sessions share this issue; reporters drop these from medians."
+    }
+  }
+}

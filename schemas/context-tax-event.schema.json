@@ -1,0 +1,92 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://kurone-kito.github.io/idd-skill/schemas/context-tax-event.schema.json",
+  "title": "Context-tax phase event",
+  "description": "One explicit phase enter/exit line a later helper writes. Not a harvested vendor log.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "event", "stageId", "at", "vendor"],
+  "properties": {
+    "schemaVersion": {
+      "type": "integer",
+      "enum": [1],
+      "description": "Literal schema version. Always 1 for this contract."
+    },
+    "event": {
+      "type": "string",
+      "enum": ["enter", "exit"],
+      "description": "Whether this line marks entering or leaving the stage."
+    },
+    "stageId": {
+      "type": "string",
+      "enum": [
+        "discover",
+        "claim",
+        "work",
+        "submit-pr",
+        "review",
+        "merge",
+        "cleanup"
+      ],
+      "description": "IDD stage this event belongs to."
+    },
+    "at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "UTC timestamp of the enter or exit."
+    },
+    "vendor": {
+      "type": "string",
+      "enum": ["grok", "claude", "codex"],
+      "description": "Agent vendor writing the event."
+    },
+    "vendorSessionId": {
+      "type": ["string", "null"],
+      "description": "Opaque vendor session id when known. Never a filesystem path."
+    },
+    "issueNumber": {
+      "type": ["integer", "null"],
+      "exclusiveMinimum": 0,
+      "description": "Issue number when the event is issue-scoped."
+    },
+    "usage": {
+      "type": ["object", "null"],
+      "additionalProperties": false,
+      "required": [
+        "inputUncached",
+        "cacheRead",
+        "cacheCreation",
+        "output",
+        "reasoning"
+      ],
+      "description": "Optional token usage snapshot at this event.",
+      "properties": {
+        "inputUncached": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Uncached input tokens."
+        },
+        "cacheRead": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Cache-read tokens."
+        },
+        "cacheCreation": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Cache-creation tokens."
+        },
+        "output": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Output tokens."
+        },
+        "reasoning": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Reasoning tokens."
+        }
+      }
+    }
+  }
+}
