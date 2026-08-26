@@ -1986,15 +1986,28 @@ const RECORD_POLICY_NO_LITERAL_CONFIG_IDS = new Set([
 ]);
 
 /**
+ * Sentinel patch value meaning "remove this key from the merged config"
+ * rather than "set it to this value". Used when a confirmed transcript
+ * answer reconfirms a distributed default that has no on-the-wire
+ * representation of its own (an absent key already means default) --
+ * without this, reconfirming the default would silently leave a stale
+ * non-default value from a prior run in place (#2282 review follow-up).
+ */
+const DELETE_CONFIG_KEY = Symbol('idd-record-policy-delete-config-key');
+
+/**
  * Translate one confirmed hearing answer into a `.github/idd/config.json`
- * patch entry (a dotted key path plus the value to write), or `null`
- * when the item is docs-only, has no literal config value (see
- * {@link RECORD_POLICY_NO_LITERAL_CONFIG_IDS}), or is one of the two
- * items whose "distributed default" answer needs no explicit record
+ * patch entry (a dotted key path plus the value to write, where the value
+ * may be {@link DELETE_CONFIG_KEY}), or `null` when the item is docs-only
+ * or has no literal config value (see
+ * {@link RECORD_POLICY_NO_LITERAL_CONFIG_IDS}). The two items whose
+ * "distributed default" answer has no positive on-the-wire representation
  * (`helper-runtime-profile`'s `instructions-only`,
- * `issue-author-approval-gate`'s `enabled-by-default`). Every other
- * mapped item's confirmed value is written verbatim, including when it
- * happens to equal that item's own documented default.
+ * `issue-author-approval-gate`'s `enabled-by-default`) delete their key
+ * instead, so reconfirming the default clears a stale override from a
+ * prior run rather than preserving it. Every other mapped item's
+ * confirmed value is written verbatim, including when it happens to
+ * equal that item's own documented default.
  */
 function translateRecordPolicyAnswer(
   item: HearingCatalogItem,
@@ -2005,14 +2018,18 @@ function translateRecordPolicyAnswer(
   }
   if (item.id === 'helper-runtime-profile' && value === 'instructions-only') {
     // The whole `helperRuntime` key defaults to the instructions-only
-    // fallback when absent (schema); omit it rather than writing the
-    // value literally.
-    return null;
+    // fallback when absent (schema); delete it rather than writing the
+    // value literally, clearing any stale non-default profile.
+    return { path: ['helperRuntime'], value: DELETE_CONFIG_KEY };
   }
   if (item.id === 'issue-author-approval-gate') {
     if (value === 'enabled-by-default') {
-      // Schema default (omitted or `false`) already keeps the gate on.
-      return null;
+      // Schema default (omitted or `false`) already keeps the gate on;
+      // delete a stale `true` opt-out rather than preserving it.
+      return {
+        path: ['skipIssueAuthorApprovalGate'],
+        value: DELETE_CONFIG_KEY,
+      };
     }
     return { path: ['skipIssueAuthorApprovalGate'], value: true };
   }
@@ -2044,7 +2061,8 @@ function setNestedValue(
  * Recursively merge `patch` into `target`, preserving sibling keys in
  * any nested object both sides declare (e.g. merging `ciWait.rerunPolicy`
  * must not discard an existing `ciWait.runningTimeout`). Scalars and
- * arrays in `patch` overwrite `target` outright.
+ * arrays in `patch` overwrite `target` outright. A {@link DELETE_CONFIG_KEY}
+ * patch value removes that key from the result instead of setting it.
  */
 function deepMergeConfigPatch(
   target: Record<string, unknown>,
@@ -2052,6 +2070,10 @@ function deepMergeConfigPatch(
 ): Record<string, unknown> {
   const result: Record<string, unknown> = { ...target };
   for (const [key, value] of Object.entries(patch)) {
+    if (value === DELETE_CONFIG_KEY) {
+      delete result[key];
+      continue;
+    }
     const existing = result[key];
     if (
       typeof value === 'object' &&
@@ -2070,6 +2092,25 @@ function deepMergeConfigPatch(
     }
   }
   return result;
+}
+
+/**
+ * Render a config patch for the JSON verdict: a {@link DELETE_CONFIG_KEY}
+ * sentinel isn't itself meaningful JSON, so it renders as an explicit
+ * marker string instead of silently vanishing (a bare `Symbol` value is
+ * dropped by `JSON.stringify`).
+ */
+function renderPatchForVerdict(
+  patch: Record<string, unknown>,
+): Record<string, unknown> {
+  const rendered: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(patch)) {
+    rendered[key] =
+      value === DELETE_CONFIG_KEY
+        ? '(reset to distributed default: key removed)'
+        : value;
+  }
+  return rendered;
 }
 
 /** One row of the filled policy-decisions Markdown template. */
@@ -2289,7 +2330,7 @@ function runRecordPolicyCli(args: ParsedArgs): void {
     mode: canWrite ? 'apply' : 'dry-run',
     target: targetDir,
     transcript: resolve(args.transcript),
-    configPatch: patch,
+    configPatch: renderPatchForVerdict(patch),
     policyDocument,
     writtenPolicyDocPath:
       canWrite && args.writePolicyDoc ? resolve(args.writePolicyDoc) : null,

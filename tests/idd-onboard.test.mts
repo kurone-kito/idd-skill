@@ -3373,7 +3373,7 @@ test('bin/idd-onboard.mjs --record-policy --dry-run --apply does not write: --dr
   assertTreeUnchanged(root, before);
 });
 
-test('bin/idd-onboard.mjs --record-policy omits the helperRuntime key when the confirmed profile is instructions-only', () => {
+test('bin/idd-onboard.mjs --record-policy leaves no helperRuntime key when the confirmed profile is instructions-only and none pre-existed', () => {
   const root = makeFixtureDir();
   writeRecordPolicyFixture(root);
   const answers = buildValidHearAnswers();
@@ -3391,7 +3391,41 @@ test('bin/idd-onboard.mjs --record-policy omits the helperRuntime key when the c
     '--apply',
   ]);
   const patch = verdict.configPatch as Record<string, unknown>;
-  assert.equal('helperRuntime' in patch, false);
+  assert.equal(
+    patch.helperRuntime,
+    '(reset to distributed default: key removed)',
+  );
+  const config = JSON.parse(
+    readFileSync(join(root, '.github', 'idd', 'config.json'), 'utf8'),
+  ) as Record<string, unknown>;
+  assert.equal('helperRuntime' in config, false);
+});
+
+test('bin/idd-onboard.mjs --record-policy removes a pre-existing non-default helperRuntime when the transcript reconfirms instructions-only (#2282 review follow-up)', () => {
+  const root = makeFixtureDir();
+  writeRecordPolicyFixture(root);
+  const existing = JSON.parse(
+    readFileSync(join(root, '.github', 'idd', 'config.json'), 'utf8'),
+  ) as Record<string, unknown>;
+  existing.helperRuntime = { profile: 'package-manager' };
+  writeFileSync(
+    join(root, '.github', 'idd', 'config.json'),
+    `${JSON.stringify(existing, null, 2)}\n`,
+  );
+  const answers = buildValidHearAnswers();
+  answers['helper-runtime-profile'] = 'instructions-only';
+  const transcript = confirmTranscript(root, answers);
+  const transcriptPath = join(root, 'transcript.json');
+  writeFileSync(transcriptPath, JSON.stringify(transcript));
+
+  runCliBin([
+    '--record-policy',
+    '--transcript',
+    transcriptPath,
+    '--target',
+    root,
+    '--apply',
+  ]);
   const config = JSON.parse(
     readFileSync(join(root, '.github', 'idd', 'config.json'), 'utf8'),
   ) as Record<string, unknown>;
@@ -3470,7 +3504,41 @@ test('bin/idd-onboard.mjs --record-policy writes skipIssueAuthorApprovalGate tru
     '--apply',
   ]);
   const patch2 = verdict2.configPatch as Record<string, unknown>;
-  assert.equal('skipIssueAuthorApprovalGate' in patch2, false);
+  assert.equal(
+    patch2.skipIssueAuthorApprovalGate,
+    '(reset to distributed default: key removed)',
+  );
+});
+
+test('bin/idd-onboard.mjs --record-policy removes a pre-existing skipIssueAuthorApprovalGate:true when the transcript reconfirms enabled-by-default (#2282 review follow-up)', () => {
+  const root = makeFixtureDir();
+  writeRecordPolicyFixture(root);
+  const existing = JSON.parse(
+    readFileSync(join(root, '.github', 'idd', 'config.json'), 'utf8'),
+  ) as Record<string, unknown>;
+  existing.skipIssueAuthorApprovalGate = true;
+  writeFileSync(
+    join(root, '.github', 'idd', 'config.json'),
+    `${JSON.stringify(existing, null, 2)}\n`,
+  );
+  const answers = buildValidHearAnswers();
+  answers['issue-author-approval-gate'] = 'enabled-by-default';
+  const transcript = confirmTranscript(root, answers);
+  const transcriptPath = join(root, 'transcript.json');
+  writeFileSync(transcriptPath, JSON.stringify(transcript));
+
+  runCliBin([
+    '--record-policy',
+    '--transcript',
+    transcriptPath,
+    '--target',
+    root,
+    '--apply',
+  ]);
+  const config = JSON.parse(
+    readFileSync(join(root, '.github', 'idd', 'config.json'), 'utf8'),
+  ) as Record<string, unknown>;
+  assert.equal('skipIssueAuthorApprovalGate' in config, false);
 });
 
 test('bin/idd-onboard.mjs --record-policy never turns a docs-only or meta-choice answer into a config key', () => {
