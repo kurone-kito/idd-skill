@@ -247,14 +247,18 @@ below instead.
    scope, critique-loop profile, issue-authoring companion status, the
    up-to-date-head ruleset check, and bootstrap execution mode) are
    docs-only and exist **only** in this filled Markdown template, not
-   in `.github/idd/config.json` — dropping the flag loses them. Link
-   the written file from the repository's agent entry files (Step 5
-   below) so future sessions can find it.
+   in `.github/idd/config.json` — dropping the flag loses them. Root
+   `<path>` under `<target-repo>` explicitly — `--record-policy`
+   resolves a relative path against the current working directory, not
+   `--target`, so a bare relative path run from this clone silently
+   writes into the clone instead of the target repository. Link the
+   written file from the repository's agent entry files (Step 5 below)
+   so future sessions can find it.
 
    ```sh
    node scripts/idd-onboard.mjs --record-policy \
      --transcript <transcript-file> --target <target-repo> \
-     --apply --write-policy-doc <policy-doc-path>
+     --apply --write-policy-doc <target-repo>/<policy-doc-path>
    ```
 
 6. Read

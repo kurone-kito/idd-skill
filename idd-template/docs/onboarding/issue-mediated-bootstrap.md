@@ -236,6 +236,20 @@ for the companion follow-up issue to read later): <installed, native
 destination `<value>` | not installed>
 ```
 
+**The raw transcript is also not enough for a `repository-override`
+claim-timing or `custom-taxonomy` label-names answer.** The catalog's
+`claim-timing` and `idd-label-names` items only capture whether the
+repository overrides the distributed defaults, not the literal
+override values — no catalog field carries the actual ISO-8601
+duration pair or label strings (see
+[Onboarding Reference — Project Tuning](project-tuning.md#claim-timing-overrides-and-custom-label-names)
+for the same gap on the direct-import path). When either answer is not
+`distributed-defaults`, add the literal values as an explicit override
+block alongside the embedded transcript, using that same reference's
+field names (`claimTiming.staleAge` / `claimTiming.heartbeatInterval`,
+or `labels.roadmapLabelName` / `labels.blockedByHumanLabelName` /
+`labels.needsDecisionLabelName`).
+
 Use these operator-confirmed values, already collected during the
 hearing (Steps 1A-1C), instead of re-deriving them:
 
