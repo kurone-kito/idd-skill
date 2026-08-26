@@ -962,16 +962,24 @@ GitHub-hosted or other remote agent surface has no such operator home
 directory and never consults this layer. Resolution order: repo-local
 `critiqueLoop.delegate` (a configured object, an explicit JSON `null`
 disable, or a malformed value) always wins outright and never inherits
-the global layer — a malformed repo-local value fails closed to the
-per-agent mechanism rather than falling through; only when repo-local
-is entirely absent does the global file apply; absent both, the
-per-agent mechanism above runs unchanged.
+the global layer — an explicit repo-local `null` forces the per-agent
+mechanism even when a global delegate exists, and a malformed
+repo-local value fails closed to the per-agent mechanism the same way;
+only when repo-local is entirely absent does the global file apply;
+absent both, the per-agent mechanism above runs unchanged. A malformed
+or explicit-`null` **global** fragment is treated the same as a
+missing one — silently falls back to the per-agent mechanism — which
+is distinct from repo-local `null`'s stronger role of actively
+disabling any inherited delegate.
 
 The global file lives at `$XDG_CONFIG_HOME/idd-skill/config.json`,
 falling back to `$HOME/.config/idd-skill/config.json` when
-`XDG_CONFIG_HOME` is unset or not a qualified root. A missing,
-unreadable, or non-object global file is silently treated as absent —
-this layer is opt-in and never required for OSS adopters. Only the
+`XDG_CONFIG_HOME` is unset or not a **qualified root** (a usable
+absolute path: POSIX `/…`, or a Windows drive letter or UNC path — a
+relative or otherwise unsafe value is ignored rather than joined
+against the process's working directory). A missing, unreadable, or
+non-object global file is silently treated as absent — this layer is
+opt-in and never required for OSS adopters. Only the
 `critiqueLoop.delegate` fragment is read from it; every other key is
 ignored, and repository-local `.github/idd/config.json` stays the sole
 authority for every other policy surface.
