@@ -103,8 +103,18 @@ async function main() {
   // cachedConfiguredTrustedMarkerActorSources, cachedCurrentViewerLogin) are
   // process-lifetime state, so a --prs batch already shares that
   // per-invocation setup cost across every PR in the loop below.
+  //
+  // Table-format batches print a header before each PR's block: the table
+  // renderer's summary/candidate rows never include the `pr`/`repository`
+  // fields (unlike JSON, where each report object already self-identifies
+  // via its own `pr` field), so consecutive same-shaped blocks would
+  // otherwise be indistinguishable (Copilot review, PR #2305).
+  const printBatchHeader = args.format === 'table' && prNumbers.length > 1;
   let anyFailed = false;
   for (const prNumber of prNumbers) {
+    if (printBatchHeader) {
+      console.log(`=== PR #${prNumber} ===`);
+    }
     if (await processOnePr(owner, repo, prNumber, args)) {
       anyFailed = true;
     }
