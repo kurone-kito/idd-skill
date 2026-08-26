@@ -56,6 +56,9 @@ import {
   PROFILE_NAMES,
 } from './helper-runtime-manifest.mjs';
 import { findMissingWorktreeHardening } from './idd-doctor.mjs';
+import { loadOnboardingHearingCatalog } from './onboarding-hearing.mjs';
+import { makeReadlinePrompt } from './readline-prompt.mjs';
+import { loadJson, validate } from './validate-schemas.mjs';
 
 function placeholder(name, kind, flag) {
   return { name, token: `{{${name}}}`, kind, flag };
@@ -1158,17 +1161,334 @@ export function runVerify(sourceRoot, targetRoot, profile) {
     blocking,
   };
 }
-if (import.meta.main) {
+// --hear (#2281): the operator-facing hearing CLI. Wires the catalog
+// loader (#2279) and the existing placeholder-derivation hooks
+// (deriveMarkerPrefix, deriveInstallDepsCommand, deriveValidateCommands
+// via resolvePlaceholderValues, collectHelperRuntimeEvidence) into
+// three modes: --propose (read-only JSON), --apply --answers <file>
+// (validate a flat id->value map, print a confirmed transcript), and a
+// bare TTY wizard producing the same transcript shape. --hear never
+// persists config or rewrites ONBOARDING.md.
+/** Catalog item kinds the hearing transcript records an answer for. */
+function isAnswerableHearingItem(item) {
+  return item.kind !== 'check';
+}
+function buildHearCatalogItemViews(items, targetDir) {
+  const resolution = resolvePlaceholderValues(targetDir);
+  return items.map((item) => {
+    const documentedDefault =
+      item.options?.find((o) => o.isDefault)?.value ?? null;
+    const resolved = resolution.values[item.id];
+    const derived =
+      resolved != null && resolved.source === 'derived' ? resolved.value : null;
+    const view = {
+      id: item.id,
+      step: item.step,
+      kind: item.kind,
+      prompt: item.prompt,
+      explanation: item.explanation,
+      documentedDefault,
+      derived,
+    };
+    if (item.options) {
+      view.options = item.options;
+    }
+    return view;
+  });
+}
+function execSucceeds(command, execArgs) {
   try {
-    runCli();
-  } catch (error) {
+    execFileSync(command, execArgs, { stdio: 'ignore' });
+    return true;
+  } catch {
+    return false;
+  }
+}
+function safeExecOutput(command, execArgs) {
+  try {
+    return execFileSync(command, execArgs, {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+    }).trim();
+  } catch {
+    return null;
+  }
+}
+/** Derive the `gh --hostname` value from the target's git remote (#2279's gh-cli / git-remote-host catalog items). */
+function deriveGitRemoteHost(targetDir) {
+  const remoteUrl = readGitRemoteUrl(targetDir);
+  if (remoteUrl === null) {
+    return null;
+  }
+  const scpMatch = remoteUrl.match(/^[\w.-]+@([\w.-]+):/);
+  if (scpMatch) {
+    return scpMatch[1] ?? null;
+  }
+  try {
+    return new URL(remoteUrl).host || null;
+  } catch {
+    return null;
+  }
+}
+function collectGhCliEvidence(host) {
+  const versionOutput = safeExecOutput('gh', ['--version']);
+  const available = versionOutput !== null;
+  const version = available ? (versionOutput.split('\n')[0] ?? null) : null;
+  const hostAuthenticated =
+    available && host !== null
+      ? execSucceeds('gh', ['auth', 'status', '--hostname', host])
+      : null;
+  return { available, version, hostAuthenticated };
+}
+// Fenced-block utilities the distributed workflow instructions assume
+// (idd-template/docs/onboarding/hearing-catalog.json's execution-environment
+// item explanation) -- `sh`/`bash` themselves are checked separately below.
+const HEAR_REQUIRED_UTILITIES = [
+  'grep',
+  'sed',
+  'mkdir',
+  'dirname',
+  'tr',
+  'head',
+  'sort',
+  'curl',
+];
+function isUtilityAvailable(name) {
+  return execSucceeds('sh', ['-c', `command -v -- ${name}`]);
+}
+function collectExecutionEnvironmentEvidence() {
+  const posixShell = execSucceeds('sh', ['-c', 'true']);
+  const missingUtilities = posixShell
+    ? HEAR_REQUIRED_UTILITIES.filter((name) => !isUtilityAvailable(name))
+    : [...HEAR_REQUIRED_UTILITIES];
+  return { posixShell, missingUtilities };
+}
+function isValidHearAnswerValue(item, value) {
+  if (value.length === 0) {
+    return false;
+  }
+  if (item.options && item.options.length > 0) {
+    return item.options.some((option) => option.value === value);
+  }
+  return true;
+}
+/**
+ * Validate a flat `{catalogItemId: value}` map against the answerable
+ * (non-`check`) catalog items: every answerable id must be present with
+ * a value valid for that item (enum membership when `options` is set,
+ * any non-empty string otherwise); any key outside the answerable id
+ * set is unknown and also fails closed.
+ */
+function validateHearAnswers(items, answersMap) {
+  const answerable = items.filter(isAnswerableHearingItem);
+  const answerableIds = new Set(answerable.map((item) => item.id));
+  const unresolved = new Set(
+    Object.keys(answersMap).filter((key) => !answerableIds.has(key)),
+  );
+  const answers = [];
+  for (const item of answerable) {
+    const raw = answersMap[item.id];
+    if (typeof raw !== 'string' || !isValidHearAnswerValue(item, raw)) {
+      unresolved.add(item.id);
+      continue;
+    }
+    answers.push({ id: item.id, value: raw });
+  }
+  return {
+    valid: unresolved.size === 0,
+    unresolved: [...unresolved].sort(),
+    answers,
+  };
+}
+/** Confirmed transcript document, matching schemas/onboarding-hearing-transcript.schema.json. */
+function buildHearTranscript(answers) {
+  return { version: '1.0.0', confirmedAt: new Date().toISOString(), answers };
+}
+function validateHearTranscriptShape(transcript) {
+  const schema = loadJson('schemas/onboarding-hearing-transcript.schema.json');
+  return validate(transcript, schema);
+}
+export const HEAR_NON_TTY_ERROR =
+  'operator interaction is required; run idd-onboard --hear in an interactive TTY, or use --hear --propose / --hear --apply';
+/**
+ * Bounds the TTY wizard's per-item retry loop: a non-interactive caller
+ * (a scripted PromptFn, or a closed/EOF stdin under a spoofed isTTY) that
+ * never supplies a valid answer must fail loudly instead of spinning
+ * forever.
+ */
+const HEAR_WIZARD_MAX_ATTEMPTS_PER_ITEM = 5;
+export async function runHearWizard(catalog, targetDir, options = {}) {
+  const {
+    isTTY = Boolean(process.stdin.isTTY && process.stdout.isTTY),
+    prompt: promptFn,
+  } = options;
+  if (!isTTY) {
+    throw new Error(HEAR_NON_TTY_ERROR);
+  }
+  const ask = promptFn ?? makeReadlinePrompt();
+  const views = buildHearCatalogItemViews(catalog.items, targetDir).filter(
+    (view) => view.kind !== 'check',
+  );
+  const byId = new Map(catalog.items.map((item) => [item.id, item]));
+  const answers = [];
+  for (const view of views) {
+    const item = byId.get(view.id);
+    if (!item) {
+      continue;
+    }
+    const effectiveDefault = view.derived ?? view.documentedDefault;
+    process.stdout.write(`\n${view.prompt}\n${view.explanation}\n`);
+    if (view.options && view.options.length > 0) {
+      process.stdout.write(
+        `Options: ${view.options.map((option) => option.value).join(', ')}\n`,
+      );
+    }
+    let value = null;
+    for (
+      let attempt = 0;
+      value === null && attempt < HEAR_WIZARD_MAX_ATTEMPTS_PER_ITEM;
+      attempt += 1
+    ) {
+      const suffix = effectiveDefault !== null ? ` [${effectiveDefault}]` : '';
+      const raw = (await ask(`${view.id}${suffix}: `)).trim();
+      const candidate =
+        raw === '' && effectiveDefault !== null ? effectiveDefault : raw;
+      if (isValidHearAnswerValue(item, candidate)) {
+        value = candidate;
+      } else {
+        process.stdout.write('Invalid answer; please try again.\n');
+      }
+    }
+    if (value === null) {
+      ask.close?.();
+      throw new Error(
+        `no valid answer for ${view.id} after ${HEAR_WIZARD_MAX_ATTEMPTS_PER_ITEM} attempts`,
+      );
+    }
+    answers.push({ id: view.id, value });
+  }
+  ask.close?.();
+  return answers;
+}
+function runHearProposeCli(catalog, targetDir) {
+  const items = buildHearCatalogItemViews(catalog.items, targetDir);
+  const gitRemoteHost = deriveGitRemoteHost(targetDir);
+  const verdict = {
+    protocolVersion: '1',
+    mode: 'propose',
+    target: targetDir,
+    catalogVersion: catalog.version,
+    items,
+    stepZeroEvidence: {
+      ghCli: collectGhCliEvidence(gitRemoteHost),
+      gitRemoteHost,
+      executionEnvironment: collectExecutionEnvironmentEvidence(),
+    },
+    helperRuntimeEvidence: collectHelperRuntimeEvidence(targetDir),
+  };
+  process.stdout.write(`${JSON.stringify(verdict, null, 2)}\n`);
+  process.exit(0);
+}
+function runHearApplyCli(catalog, answersPath) {
+  const raw = readFileSync(resolve(answersPath), 'utf8');
+  let answersMap;
+  try {
+    answersMap = JSON.parse(raw);
+  } catch {
+    throw new Error(`--answers file is not valid JSON: ${answersPath}`);
+  }
+  if (
+    typeof answersMap !== 'object' ||
+    answersMap === null ||
+    Array.isArray(answersMap)
+  ) {
+    throw new Error(
+      '--answers file must be a JSON object mapping catalog item id to value',
+    );
+  }
+  const result = validateHearAnswers(catalog.items, answersMap);
+  if (!result.valid) {
+    process.stdout.write(
+      `${JSON.stringify(
+        {
+          protocolVersion: '1',
+          mode: 'apply',
+          valid: false,
+          unresolved: result.unresolved,
+        },
+        null,
+        2,
+      )}\n`,
+    );
+    process.exit(1);
+  }
+  const transcript = buildHearTranscript(result.answers);
+  const schemaErrors = validateHearTranscriptShape(transcript);
+  if (schemaErrors.length > 0) {
+    process.stdout.write(
+      `${JSON.stringify(
+        {
+          protocolVersion: '1',
+          mode: 'apply',
+          valid: false,
+          unresolved: schemaErrors,
+        },
+        null,
+        2,
+      )}\n`,
+    );
+    process.exit(1);
+  }
+  process.stdout.write(
+    `${JSON.stringify({ protocolVersion: '1', mode: 'apply', valid: true, transcript }, null, 2)}\n`,
+  );
+  process.exit(0);
+}
+async function runHearCli(args) {
+  const targetDir = resolve(args.target);
+  if (!statSync(targetDir).isDirectory()) {
+    throw new Error(`--target is not a directory: ${args.target}`);
+  }
+  if (args.propose && args.applyHear) {
+    throw new Error(
+      '--hear --propose and --hear --apply are mutually exclusive',
+    );
+  }
+  const catalog = loadOnboardingHearingCatalog();
+  if (args.propose) {
+    runHearProposeCli(catalog, targetDir);
+    return;
+  }
+  if (args.applyHear) {
+    if (!args.answers) {
+      throw new Error('--hear --apply requires --answers <file>');
+    }
+    runHearApplyCli(catalog, args.answers);
+    return;
+  }
+  const answers = await runHearWizard(catalog, targetDir);
+  const transcript = buildHearTranscript(answers);
+  const schemaErrors = validateHearTranscriptShape(transcript);
+  if (schemaErrors.length > 0) {
+    throw new Error(
+      `generated transcript failed schema validation: ${schemaErrors.join('; ')}`,
+    );
+  }
+  process.stdout.write(`${JSON.stringify(transcript, null, 2)}\n`);
+  process.exit(0);
+}
+function main() {
+  runCli().catch((error) => {
     // Usage/config errors exit 2, keeping exit 1 unambiguous as the
     // residue signal (same split as audit-pr-cleanup's fail()).
     process.stderr.write(
       `idd-onboard: ${error instanceof Error ? error.message : String(error)}\n`,
     );
     process.exit(2);
-  }
+  });
+}
+if (import.meta.main) {
+  main();
 }
 // Excluded from the #1446 cli-args.mts wrapper: the placeholder-override
 // flags below (`flagToName`) are data-driven from `ONBOARDING_PLACEHOLDERS`
@@ -1180,6 +1500,10 @@ function parseArgs(argv) {
     substitute: false,
     importMode: false,
     verify: false,
+    hear: false,
+    propose: false,
+    applyHear: false,
+    answers: undefined,
     source: undefined,
     target: '.',
     dryRun: false,
@@ -1210,6 +1534,23 @@ function parseArgs(argv) {
     }
     if (token === '--verify') {
       parsed.verify = true;
+      continue;
+    }
+    if (token === '--hear') {
+      parsed.hear = true;
+      continue;
+    }
+    if (token === '--propose') {
+      parsed.propose = true;
+      continue;
+    }
+    if (token === '--apply') {
+      parsed.applyHear = true;
+      continue;
+    }
+    if (token === '--answers') {
+      parsed.answers = requireValue();
+      index += 1;
       continue;
     }
     if (token === '--source') {
@@ -1285,19 +1626,26 @@ function verifyForeignFlagsPresent(args) {
   }
   return present;
 }
-function runCli() {
+async function runCli() {
   const args = parseArgs(process.argv.slice(2));
   if (args.help) {
     printHelp();
     process.exit(0);
   }
-  const modeCount = [args.substitute, args.importMode, args.verify].filter(
-    Boolean,
-  ).length;
+  const modeCount = [
+    args.substitute,
+    args.importMode,
+    args.verify,
+    args.hear,
+  ].filter(Boolean).length;
   if (modeCount > 1) {
     throw new Error(
-      '--substitute, --import, and --verify are mutually exclusive',
+      '--substitute, --import, --verify, and --hear are mutually exclusive',
     );
+  }
+  if (args.hear) {
+    await runHearCli(args);
+    return;
   }
   if (args.importMode) {
     // parseArgs collects every known flag regardless of the active stage,
@@ -1324,7 +1672,7 @@ function runCli() {
   }
   if (!args.substitute) {
     throw new Error(
-      'pass --substitute, --import, or --verify to select a stage',
+      'pass --substitute, --import, --verify, or --hear to select a stage',
     );
   }
   const foreign = importOnlyFlagsPresent(args);
@@ -1458,6 +1806,9 @@ function printHelp() {
   process.stdout.write(`usage: node scripts/idd-onboard.mjs --substitute [options]
        node scripts/idd-onboard.mjs --import --source <dir> --target <dir> [options]
        node scripts/idd-onboard.mjs --verify --source <dir> --target <dir> [options]
+       node scripts/idd-onboard.mjs --hear --propose --target <dir>
+       node scripts/idd-onboard.mjs --hear --apply --answers <file> --target <dir>
+       node scripts/idd-onboard.mjs --hear --target <dir>   (interactive TTY wizard)
 
 Onboarding automation.
 
@@ -1529,5 +1880,39 @@ or placeholder residue); 2 usage or configuration error.
   --target <dir>                     target repository to verify (default: current directory)
   --profile <name>                   ${PROFILE_NAMES.join(' | ')}
   --help, -h                         show this help
+
+--hear (#2281): the operator-facing hearing CLI over the catalog and
+transcript schemas #2279 ships (idd-template/docs/onboarding/hearing-catalog.json).
+Derives candidates for the 21 answerable (non-check) catalog items by
+reusing --substitute's own derivation hooks
+(resolvePlaceholderValues / deriveMarkerPrefix / deriveInstallDepsCommand /
+deriveValidateCommands) and reports helper-runtime evidence
+(collectHelperRuntimeEvidence). Never edits idd-template/ONBOARDING.md,
+never writes .github/idd/config.json, never requires --source.
+
+  --hear --propose            read-only: print catalog items (with any
+                               derived candidate and documented default),
+                               Step 0 gh-cli / git-remote-host /
+                               execution-environment evidence, and
+                               helper-runtime evidence as JSON. Exit 0.
+  --hear --apply --answers <file>
+                               validate a JSON object mapping catalog
+                               item id -> confirmed value against the
+                               catalog and the transcript schema, then
+                               print the confirmed transcript. Exit 0
+                               valid; 1 a required id is missing, an id
+                               is unknown, or a value is not one of that
+                               item's options (nothing is written
+                               either way).
+  --hear (no --propose/--apply)
+                               interactive TTY wizard over the same 21
+                               items; shows each item's explanation,
+                               accepts empty input to confirm the shown
+                               default, and prints the same transcript
+                               shape as --apply. Exit 2 when stdin/stdout
+                               is not a TTY.
+  --target <dir>               target repository (default: current directory)
+  --answers <file>              path to the --apply answers JSON file
+  --help, -h                    show this help
 `);
 }
