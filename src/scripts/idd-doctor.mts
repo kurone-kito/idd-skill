@@ -1405,18 +1405,34 @@ export interface MergePolicyAckFinding {
  * participates in F2.5/F3 merge-authority resolution and this check never
  * changes what any `mergePolicy` value authorizes.
  *
+ * `file` names the live-config candidate `config` was actually read from
+ * (`.github/idd/config.json` or the legacy `idd-policy.json`) so the
+ * remediation text points at the file the operator needs to edit, not
+ * always the canonical name (idd-skill#2301 review) -- setting
+ * `mergePolicyAck` in a *different* candidate than the one this doctor
+ * run selected would not silence the warning.
+ *
  * Returns null (no finding) for every `mergePolicy` value other than
  * `fully_autonomous_merge`, for a missing/absent `mergePolicy` key, or
  * when `mergePolicyAck` already equals `"fully_autonomous_merge"` --
  * scoped to that exact value rather than a boolean, so flipping
- * `mergePolicy` away and back drops a stale ack and the warning resumes
- * until re-confirmed.
+ * `mergePolicy` to a *different* value and back to `fully_autonomous_merge`
+ * makes the finding return null (since it only fires the moment
+ * `mergePolicy` is `fully_autonomous_merge`) rather than resuming from
+ * that different value. A round trip that lands back on the exact same
+ * `fully_autonomous_merge` value with the acknowledgement never cleared in
+ * between does not resume the warning -- this diagnostics-only field has
+ * no timestamp or generation counter to detect that narrow case, a known,
+ * accepted limitation of the deliberately value-scoped (not boolean, not
+ * time-scoped) design (idd-skill#2301 review, rejected as a follow-up
+ * beyond this issue's locked scope).
  */
 export function classifyMergePolicyAcknowledgement(
   config:
     | { mergePolicy?: unknown; mergePolicyAck?: unknown }
     | null
     | undefined,
+  file: string = '.github/idd/config.json',
 ): MergePolicyAckFinding | null {
   if (config?.mergePolicy !== 'fully_autonomous_merge') {
     return null;
@@ -1429,8 +1445,8 @@ export function classifyMergePolicyAcknowledgement(
     message:
       'mergePolicy is "fully_autonomous_merge", an explicit opt-in against ' +
       'the distributed "human_merge" default -- confirm this choice by ' +
-      'setting mergePolicyAck: "fully_autonomous_merge" in ' +
-      '.github/idd/config.json to silence this reminder.',
+      `setting mergePolicyAck: "fully_autonomous_merge" in ${file} to ` +
+      'silence this reminder.',
   };
 }
 
@@ -1460,6 +1476,7 @@ export function checkMergePolicyAcknowledgement(
     }
     const finding = classifyMergePolicyAcknowledgement(
       config as { mergePolicy?: unknown; mergePolicyAck?: unknown } | null,
+      file,
     );
     if (finding) {
       report.warnings.push(finding.message);
