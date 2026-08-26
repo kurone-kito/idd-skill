@@ -1,7 +1,11 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import type { CleanupAuditReport } from '../src/scripts/audit-pr-cleanup.mts';
+import type {
+  CleanupArgs,
+  CleanupAuditReport,
+} from '../src/scripts/audit-pr-cleanup.mts';
+import { parsePrNumbers } from '../src/scripts/audit-pr-cleanup.mts';
 
 // Importing the CLI module directly is only possible now that its top-level
 // statements are guarded behind `import.meta.main` (#1210, migrated from
@@ -359,4 +363,73 @@ test('runApplyWithRetry truncates a fractional maxAttempts instead of misreporti
   assert.equal(rescanCalls, 2);
   assert.equal(result.attempts, 2);
   assert.equal(result.boundExhausted, true);
+});
+
+// #2224: --prs <n1,n2,...> batch-mode parsing. --pr itself is untouched
+// (still a single string flag, asserted by the pass-through case below);
+// parsePrNumbers only resolves whichever of --pr/--prs the caller already
+// validated as present.
+
+function cleanupArgs(overrides: Partial<CleanupArgs> = {}): CleanupArgs {
+  return { format: 'json', ...overrides };
+}
+
+/** Stubs process.exit (and silences console.error) so a `fail()`-triggering
+ * path can be asserted with assert.throws instead of killing the test
+ * process. */
+function stubExitOnFail(): () => void {
+  const originalExit = process.exit;
+  const originalError = console.error;
+  process.exit = ((code?: number): never => {
+    throw new Error(`process.exit(${code})`);
+  }) as typeof process.exit;
+  console.error = () => {};
+  return () => {
+    process.exit = originalExit;
+    console.error = originalError;
+  };
+}
+
+test('parsePrNumbers: --pr passes through as a single-element list unchanged', () => {
+  assert.deepEqual(parsePrNumbers(cleanupArgs({ pr: '42' })), [42]);
+});
+
+test('parsePrNumbers: --prs splits a comma-separated list in order', () => {
+  assert.deepEqual(parsePrNumbers(cleanupArgs({ prs: '1,2,3' })), [1, 2, 3]);
+});
+
+test('parsePrNumbers: --prs trims whitespace around each token', () => {
+  assert.deepEqual(
+    parsePrNumbers(cleanupArgs({ prs: ' 1 , 2 ,3  ' })),
+    [1, 2, 3],
+  );
+});
+
+test('parsePrNumbers: --prs drops empty tokens from stray commas', () => {
+  assert.deepEqual(parsePrNumbers(cleanupArgs({ prs: '1,,2,' })), [1, 2]);
+});
+
+test('parsePrNumbers: --prs de-duplicates while preserving first-seen order', () => {
+  assert.deepEqual(
+    parsePrNumbers(cleanupArgs({ prs: '3,1,3,2,1' })),
+    [3, 1, 2],
+  );
+});
+
+test('parsePrNumbers: --prs with only empty/whitespace tokens fails', () => {
+  const restore = stubExitOnFail();
+  try {
+    assert.throws(() => parsePrNumbers(cleanupArgs({ prs: ' , , ' })));
+  } finally {
+    restore();
+  }
+});
+
+test('parsePrNumbers: an invalid --prs token fails the same way as --pr', () => {
+  const restore = stubExitOnFail();
+  try {
+    assert.throws(() => parsePrNumbers(cleanupArgs({ prs: '1,not-a-number' })));
+  } finally {
+    restore();
+  }
 });
