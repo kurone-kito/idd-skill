@@ -366,9 +366,9 @@ test('runApplyWithRetry truncates a fractional maxAttempts instead of misreporti
 });
 
 // #2224: --prs <n1,n2,...> batch-mode parsing. --pr itself is untouched
-// (still a single string flag, asserted by the pass-through case below);
-// parsePrNumbers only resolves whichever of --pr/--prs the caller already
-// validated as present.
+// (still a single string flag, asserted by the pass-through case below).
+// parsePrNumbers validates that exactly one of --pr/--prs is present
+// itself, regardless of the caller.
 
 function cleanupArgs(overrides: Partial<CleanupArgs> = {}): CleanupArgs {
   return { format: 'json', ...overrides };
