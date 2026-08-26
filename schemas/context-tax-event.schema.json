@@ -62,27 +62,27 @@
       "description": "Optional token usage snapshot at this event.",
       "properties": {
         "inputUncached": {
-          "type": "number",
+          "type": "integer",
           "minimum": 0,
           "description": "Uncached input tokens."
         },
         "cacheRead": {
-          "type": "number",
+          "type": "integer",
           "minimum": 0,
           "description": "Cache-read tokens."
         },
         "cacheCreation": {
-          "type": "number",
+          "type": "integer",
           "minimum": 0,
           "description": "Cache-creation tokens."
         },
         "output": {
-          "type": "number",
+          "type": "integer",
           "minimum": 0,
           "description": "Output tokens."
         },
         "reasoning": {
-          "type": "number",
+          "type": "integer",
           "minimum": 0,
           "description": "Reasoning tokens."
         }

@@ -62,27 +62,27 @@
       "description": "Token usage for the whole sample. All counts are >= 0.",
       "properties": {
         "inputUncached": {
-          "type": "number",
+          "type": "integer",
           "minimum": 0,
           "description": "Uncached input tokens."
         },
         "cacheRead": {
-          "type": "number",
+          "type": "integer",
           "minimum": 0,
           "description": "Cache-read tokens."
         },
         "cacheCreation": {
-          "type": "number",
+          "type": "integer",
           "minimum": 0,
           "description": "Cache-creation tokens."
         },
         "output": {
-          "type": "number",
+          "type": "integer",
           "minimum": 0,
           "description": "Output tokens."
         },
         "reasoning": {
-          "type": "number",
+          "type": "integer",
           "minimum": 0,
           "description": "Reasoning tokens. 0 when the vendor has no signal."
         }
@@ -147,27 +147,27 @@
             "description": "Token usage for this stage.",
             "properties": {
               "inputUncached": {
-                "type": "number",
+                "type": "integer",
                 "minimum": 0,
                 "description": "Uncached input tokens."
               },
               "cacheRead": {
-                "type": "number",
+                "type": "integer",
                 "minimum": 0,
                 "description": "Cache-read tokens."
               },
               "cacheCreation": {
-                "type": "number",
+                "type": "integer",
                 "minimum": 0,
                 "description": "Cache-creation tokens."
               },
               "output": {
-                "type": "number",
+                "type": "integer",
                 "minimum": 0,
                 "description": "Output tokens."
               },
               "reasoning": {
-                "type": "number",
+                "type": "integer",
                 "minimum": 0,
                 "description": "Reasoning tokens."
               }
