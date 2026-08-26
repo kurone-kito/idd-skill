@@ -17,8 +17,9 @@
 // `type: "system", subtype: "compact_boundary"` records) as local
 // structural types; only the fields actually consumed are declared, and
 // every extraction degrades gracefully (never throws) except when the
-// harvested session has no usable timestamp at all, which fails closed as
-// a malformed project log. Compaction is not a first-class event type in
+// harvested session has no usable timestamp or no derivable
+// vendorSessionId, either of which fails closed as a malformed project
+// log. Compaction is not a first-class event type in
 // sampled logs and is counted best-effort: any record whose `subtype`
 // clearly names a compaction (`compact_boundary` and similar) counts;
 // none matching emits `0` rather than guessing from message gaps.
@@ -382,8 +383,14 @@ export function scanClaudeSessions(
 
   const results: ContextTaxAdapterResult[] = [];
   for (const file of files) {
-    const records = parseClaudeProjectLines(readFileSync(file, 'utf8'));
+    // Read, parse, and harvest all live inside one try: a live Claude Code
+    // session can still be writing (or an unrelated process can delete) a
+    // project JSONL file between globSync and this line, so readFileSync
+    // itself can throw (ENOENT/EACCES), not only harvest() on malformed
+    // content -- either failure must skip just this one file, never abort
+    // the whole scan.
     try {
+      const records = parseClaudeProjectLines(readFileSync(file, 'utf8'));
       results.push(
         claudeAdapter.harvest({
           records,
