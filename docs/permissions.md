@@ -41,16 +41,17 @@ production.
 Choose and record one merge policy in repository documentation before
 granting unattended agent credentials:
 
-| Merge policy             | Who may merge                                                            | Worker credential boundary                                                                                                   |
-| ------------------------ | ------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------- |
-| `human_merge`            | A human maintainer performs the final merge and any post-merge cleanup.  | This conservative opt-out profile keeps worker sessions at the default F2.5/F3 handoff gates for human review.               |
-| `separate_merge_agent`   | A trusted merge-capable session performs only the final merge phase.     | Worker sessions stop at the default F2.5/F3 gates; repository guidance names the merge-capable actor and resume condition.   |
-| `fully_autonomous_merge` | One trusted agent session may complete the merge and cleanup phases too. | Worker and merge-capable authority are combined when the repository keeps this distributed default or records it explicitly. |
+| Merge policy             | Who may merge                                                            | Worker credential boundary                                                                                                 |
+| ------------------------ | ------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------- |
+| `human_merge`            | A human maintainer performs the final merge and any post-merge cleanup.  | This is the distributed default profile; it keeps worker sessions at the default F2.5/F3 handoff gates for human review.   |
+| `separate_merge_agent`   | A trusted merge-capable session performs only the final merge phase.     | Worker sessions stop at the default F2.5/F3 gates; repository guidance names the merge-capable actor and resume condition. |
+| `fully_autonomous_merge` | One trusted agent session may complete the merge and cleanup phases too. | Worker and merge-capable authority are combined only when the repository explicitly records this opt-in.                   |
 
-The distributed default is `fully_autonomous_merge` when merge policy is
-missing from repository docs. Public or OSS repositories that do not
-want unattended merges should explicitly opt out to `human_merge` before
-granting worker credentials. `separate_merge_agent` remains a distinct
+The distributed default is `human_merge` when merge policy is
+missing from repository docs. Repositories that want an unattended
+merge loop should explicitly opt in to `fully_autonomous_merge` before
+granting worker credentials, after confirming the operator understands
+the consequences. `separate_merge_agent` remains a distinct
 non-default split-authority profile for repositories that want a
 dedicated merge-capable session. If a recorded merge policy value is
 unknown, the merge phase must stop with a maintainer hold until the

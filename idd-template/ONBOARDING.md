@@ -105,6 +105,16 @@ then — merge the template's rule overrides / word list into your existing
 file by hand in that case, following the Step 2 file-list note on these
 files.
 
+**Named gap: `mergePolicy` on a forced re-import.** `--import` without
+`--force` already reports `blockedOverwrites` for an existing
+`.github/idd/config.json` (it differs from the source template like any
+other tracked file). `--force` overwrites that file byte-for-byte from
+the source template, including `mergePolicy` — an operator who
+previously opted in to `fully_autonomous_merge` (or
+`separate_merge_agent`) must re-record that choice after a forced
+re-import, since the file reverts to the shipped `human_merge` default
+along with it.
+
 When you then audit whether re-imported roadmap work is actually done, judge
 **completion by auditing the implementation against the acceptance criteria**,
 not by a child issue's closed state — a skeleton or scaffold PR can merge and
@@ -144,20 +154,21 @@ Before granting credentials to unattended or merge-capable agents, read
 complete the intended phase.
 Also choose a merge policy before the first unattended run:
 `human_merge`, `separate_merge_agent`, or `fully_autonomous_merge`.
-The distributed default is `fully_autonomous_merge`, which gives one
-trusted agent session merge authority to continue through merge execution
-in F3. Ask whether the operator wants an explicit opt-out to
-`human_merge` before unattended runs begin, or prefers
-`separate_merge_agent` as a non-default split-authority handoff profile.
-For public/OSS repositories, or whenever human validation is required
-before merge, recommend an explicit opt-out to `human_merge` before
-granting unattended credentials. Normal worker sessions stop before
-merge under `human_merge` and `separate_merge_agent`; only the trusted
-merge-capable session configured for `separate_merge_agent` continues
-past the default F2.5/F3 gates after the required customization. Record
+The distributed default is `human_merge`, where normal worker sessions
+stop at the merge-policy handoff gate for a human maintainer. Ask
+whether the operator wants to opt in to `fully_autonomous_merge`, which
+gives one trusted agent session merge authority to continue through
+merge execution in F3, or prefers `separate_merge_agent` as a
+non-default split-authority handoff profile. For production
+repositories that want an unattended merge loop, confirm the operator
+understands the consequences before recording an explicit opt-in to
+`fully_autonomous_merge`. Normal worker sessions stop before merge under
+`human_merge` and `separate_merge_agent`; only the trusted merge-capable
+session configured for `separate_merge_agent` continues past the
+default F2.5/F3 gates after the required customization. Record
 the selected policy in repository
 documentation that future IDD sessions read. Missing policy defaults to
-`fully_autonomous_merge`; unknown recorded policy values must stop with
+`human_merge`; unknown recorded policy values must stop with
 a maintainer hold until corrected.
 
 If you keep the distributed advisory/CI defaults, record that choice

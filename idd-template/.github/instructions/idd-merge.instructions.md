@@ -18,7 +18,7 @@ Before any mutating action in F3, apply the
    different `{claim-id}` (even under the same agent ID), the claim was
    lost — report and stop.
 2. Defensive route check: re-read the repository's recorded merge
-   policy (missing → treat as `fully_autonomous_merge`, the distributed
+   policy (missing → treat as `human_merge`, the distributed
    default). Then apply:
    - `fully_autonomous_merge`: continue.
    - `separate_merge_agent`: continue only when repository documentation

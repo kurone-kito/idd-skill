@@ -26,22 +26,21 @@ Keep the operator-confirmation boundary explicit.
 
 Choose exactly one merge policy before unattended runs begin:
 
-- `fully_autonomous_merge` (distributed default): one trusted agent
-  session may execute merge phase F3 after the normal claim, freshness,
-  CI, advisory, and review gates pass
-- `human_merge`: worker sessions stop at the merge-policy handoff gate
-  and a human maintainer performs the merge
+- `human_merge` (distributed default): worker sessions stop at the
+  merge-policy handoff gate and a human maintainer performs the merge
+- `fully_autonomous_merge`: one trusted agent session may execute merge
+  phase F3 after the normal claim, freshness, CI, advisory, and review
+  gates pass
 - `separate_merge_agent`: worker sessions stop at the default handoff
   gate and a separately authorized merge-capable actor performs the
   final merge path
 
-Use `fully_autonomous_merge` as the proposed default unless the
-operator explicitly opts out. For public or OSS repositories, recommend
-`human_merge` before granting unattended credentials. For repositories
-where lightweight-tier ("weak-model") sessions run the loop unattended,
-recommend `human_merge` or `separate_merge_agent` instead of
-`fully_autonomous_merge`, since that tier should not run the
-autonomous merge phases. See
+Propose `human_merge` as the default unless the operator explicitly
+opts in to `fully_autonomous_merge`. For public or OSS repositories, or
+whenever lightweight-tier ("weak-model") sessions run the loop
+unattended, recommend keeping `human_merge` (or `separate_merge_agent`)
+instead of opting in to `fully_autonomous_merge`, since that tier
+should not run the autonomous merge phases. See
 [Model capability expectations](../idd-workflow.md#model-capability-expectations).
 
 ### Credential scope
