@@ -1757,9 +1757,9 @@ function runRecordPolicyCli(args) {
   // Validate only the sections this patch touched (#1359 pattern via
   // validateConfigSection), never the whole document: --record-policy
   // runs post-import, pre-substitute, so the "pristine imported"
-  // config.json still carries unresolved {{PLACEHOLDER}} tokens in
-  // required fields like markerPrefix -- a whole-document validate
-  // would reject every real invocation.
+  // config.json still carries unresolved double-brace placeholder
+  // tokens in required fields like markerPrefix -- a whole-document
+  // validate would reject every real invocation.
   const schema = loadJson('schemas/policy.schema.json');
   const schemaErrors = Object.keys(patch).flatMap((key) =>
     validateConfigSection(mergedConfig, schema, key),
