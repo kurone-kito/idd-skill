@@ -51,10 +51,11 @@ outside this alternate's own scope.
 
 ## Drafting the bootstrap issue
 
-Draft the bootstrap issue only after Steps 1A-1C conclude ("the
-hearing"): the operator-confirmed placeholder values and the Step 1B
-policy decisions must already be settled, because the issue body has to
-carry them.
+Draft the bootstrap issue only after a confirmed `--hear` transcript
+exists (or, for a session with no helper runtime, after Steps 1A-1C
+conclude by prose — "the hearing"): the operator-confirmed placeholder
+values and the Step 1B policy decisions must already be settled,
+because the issue body has to carry them.
 
 **The issue body must be self-contained.** Unlike a normal IDD issue,
 there is no `.github/idd/config.json` yet in the target repository for
@@ -204,6 +205,16 @@ single-file direct download documented in `template-distribution.md`'s
 `minimize-superseded-markers.mjs`, not the rest of the profile's
 bundle, so it alone does not satisfy this issue's acceptance criterion
 below.
+
+**Prefer embedding the confirmed `--hear` transcript itself.** If the
+hearing produced a confirmed transcript (`--hear --apply`'s or the TTY
+wizard's printed JSON), paste it verbatim as a fenced JSON block in the
+issue body instead of re-typing the Step 1B list from prose — the
+transcript already carries every placeholder and policy answer this
+issue needs, keyed by catalog `id`, and the executing session reads it
+directly rather than re-deriving anything. Only fall back to the
+per-value list below for a no-helper-runtime hearing that produced no
+transcript:
 
 Use these operator-confirmed values, already collected during the
 hearing (Steps 1A-1C), instead of re-deriving them:

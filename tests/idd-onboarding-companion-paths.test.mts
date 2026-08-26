@@ -3,17 +3,25 @@ import { test } from 'node:test';
 
 import { readText } from './test-utils.mts';
 
+// The companion gh-api/curl shell lists and the Option B local-copy
+// example moved from ONBOARDING.md into template-distribution.md's
+// "Remote fetch examples" / "Local-copy installs" sections (#2283); the
+// generated companion inventory block and the Step 1B/2 prose stayed in
+// ONBOARDING.md.
 const ONBOARDING = readText('idd-template/ONBOARDING.md');
+const TEMPLATE_DISTRIBUTION = readText(
+  'idd-template/docs/onboarding/template-distribution.md',
+);
 
 function extractShellList(id: string): string {
   const marker = `<!-- audit:shell-list id=${id} -->`;
-  const markerIndex = ONBOARDING.indexOf(marker);
+  const markerIndex = TEMPLATE_DISTRIBUTION.indexOf(marker);
   assert.notEqual(markerIndex, -1, `missing shell-list marker: ${id}`);
-  const fenceStart = ONBOARDING.indexOf('```sh', markerIndex);
+  const fenceStart = TEMPLATE_DISTRIBUTION.indexOf('```sh', markerIndex);
   assert.notEqual(fenceStart, -1, `missing shell block: ${id}`);
-  const fenceEnd = ONBOARDING.indexOf('\n```', fenceStart);
+  const fenceEnd = TEMPLATE_DISTRIBUTION.indexOf('\n```', fenceStart);
   assert.notEqual(fenceEnd, -1, `unterminated shell block: ${id}`);
-  return ONBOARDING.slice(fenceStart, fenceEnd);
+  return TEMPLATE_DISTRIBUTION.slice(fenceStart, fenceEnd);
 }
 
 function assertNativeDestination(shell: string, label: string): void {
@@ -57,14 +65,16 @@ test('remote companion fetches keep canonical source paths separate from the nat
 });
 
 test('local companion copy uses the selected native destination', () => {
-  const optionBStart = ONBOARDING.indexOf('### Option B — Local copy');
-  const boundary = ONBOARDING.indexOf(
-    '### Optional companion boundary',
-    optionBStart,
+  const localCopyStart = TEMPLATE_DISTRIBUTION.indexOf(
+    '## Local-copy installs',
   );
-  assert.notEqual(optionBStart, -1, 'missing local-copy section');
-  assert.notEqual(boundary, -1, 'missing companion boundary section');
-  const localCopy = ONBOARDING.slice(optionBStart, boundary);
+  const boundary = TEMPLATE_DISTRIBUTION.indexOf(
+    '## Maintenance checklist',
+    localCopyStart,
+  );
+  assert.notEqual(localCopyStart, -1, 'missing local-copy section');
+  assert.notEqual(boundary, -1, 'missing maintenance checklist section');
+  const localCopy = TEMPLATE_DISTRIBUTION.slice(localCopyStart, boundary);
 
   assert.match(localCopy, /SOURCE="skills\/issue-authoring"/u);
   assert.match(localCopy, /TARGET_REPO=/u);

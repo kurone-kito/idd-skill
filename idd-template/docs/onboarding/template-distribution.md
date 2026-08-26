@@ -18,6 +18,31 @@ repository. Adopters who receive it with the copied template can treat it
 as background unless they intentionally customize their local template
 distribution lists.
 
+## Anatomy of a helper re-import (`vendored-node` profile)
+
+If you vendor the shared helper bundle — the `vendored-node` profile,
+which physically copies the shared `protocol-helpers` core — a new
+**leaf helper** is rarely a standalone file drop:
+
+1. **Diff the shared core first.** The new helper usually imports a newer
+   `protocol-helpers` shared-core API absent from your older snapshot, so the
+   real work is a shared-core bump — budget that prerequisite before scoping the
+   leaf-helper slices. The shared core is no longer always a single file: a
+   façade split (e.g. `protocol-helpers` re-exporting `marker-helpers`) can
+   move an API to a focused module that the entry file only re-exports, so
+   vendor every file the shared-core entry point re-exports from, not just the
+   entry file itself.
+2. **Reconcile a hardened core additively.** If you hardened that core, treat
+   the bump as additive named-divergence reconciliation gated on your protected
+   tests: preserve the local hardening and append only the new exports rather
+   than wholesale-vendoring the core over it.
+3. **Watch the silent revert.** A wholesale core vendor can green-build while
+   silently reverting your protected local tests, so verify against those tests,
+   not just a clean compile.
+
+(npx-resolved profiles do not vend the core this way, so this note applies only
+when you copy helper files.)
+
 ## Distribution surfaces
 
 The template has three distribution surfaces:
@@ -54,7 +79,7 @@ The authoritative generated lists are configured in
 - `generatedBlocks[].id == "issue-authoring-companion-files"` owns the
   optional issue-authoring companion list.
 - `shellFileLists` ties each generated list to the `gh api` and `curl`
-  loops in `idd-template/ONBOARDING.md`.
+  loops in [Remote fetch examples](#remote-fetch-examples) below.
 - `generatedBlocks[].id == "idd-template-readme-core-files"` and
   `"idd-template-readme-issue-authoring-files"` own the descriptive
   file inventory in `idd-template/README.md`'s "Files" section. This is
@@ -171,11 +196,234 @@ maintainer decision, not a mechanical file-list edit.
 
 ## Remote fetch examples
 
-The `gh api` and `curl` loops in `idd-template/ONBOARDING.md` intentionally
-list every canonical source file instead of fetching directories. This keeps
-raw-content imports deterministic and makes missing files visible during
-onboarding. Their `SKILL_DEST` variable is deliberately separate from the
-source path and controls the selected runtime-native target directory.
+These `gh api` and `curl` loops intentionally list every canonical
+source file instead of fetching directories. This keeps raw-content
+imports deterministic and makes missing files visible during
+onboarding. Their `SKILL_DEST` variable is deliberately separate from
+the source path and controls the selected runtime-native target
+directory. `idd-template/ONBOARDING.md`'s Option A points here instead
+of inlining these loops.
+
+Use `gh api` or `curl` to download each file from the raw-content
+endpoint. Replace `{DEST}` with the root of the target repository.
+
+Base URL: `https://raw.githubusercontent.com/kurone-kito/idd-skill/main/idd-template/`
+
+Fetch all files with `gh api` (recommended — handles auth automatically):
+
+<!-- audit:shell-list id=idd-template-core-gh-api-loop -->
+
+```sh
+DEST="."  # root of the target repository
+
+mkdir -p "${DEST}/.github/idd" "${DEST}/.github/workflows" \
+  "${DEST}/.github/instructions" "${DEST}/docs" "${DEST}/docs/onboarding"
+
+for FILE in \
+  ".github/idd/config.json" \
+  ".github/workflows/post-merge-cleanup.yml" \
+  ".githooks/_idd-worktree-guard.sh" \
+  ".githooks/pre-commit" \
+  ".githooks/pre-push" \
+  ".cspell.config.yml" \
+  ".markdownlint.yml" \
+  ".markdownlint-cli2.yaml" \
+  ".github/instructions/idd-overview-core.instructions.md" \
+  ".github/instructions/idd-overview-appendix.instructions.md" \
+  ".github/instructions/idd-discover.instructions.md" \
+  ".github/instructions/idd-roadmap-audit.instructions.md" \
+  ".github/instructions/idd-suitability.instructions.md" \
+  ".github/instructions/idd-claim.instructions.md" \
+  ".github/instructions/idd-work.instructions.md" \
+  ".github/instructions/idd-pr-submit.instructions.md" \
+  ".github/instructions/idd-ci.instructions.md" \
+  ".github/instructions/idd-advisory-wait.instructions.md" \
+  ".github/instructions/idd-review-snapshot.instructions.md" \
+  ".github/instructions/idd-review-triage.instructions.md" \
+  ".github/instructions/idd-review-fix.instructions.md" \
+  ".github/instructions/idd-pre-merge.instructions.md" \
+  ".github/instructions/idd-merge-handoff.instructions.md" \
+  ".github/instructions/idd-merge.instructions.md" \
+  ".github/instructions/idd-resume.instructions.md" \
+  ".github/instructions/idd-resume-stall.instructions.md" \
+  ".github/instructions/lite/idd-claim-lite.instructions.md" \
+  ".github/instructions/lite/idd-work-lite.instructions.md" \
+  ".github/instructions/lite/idd-pr-submit-lite.instructions.md" \
+  ".github/instructions/lite/idd-review-snapshot-lite.instructions.md" \
+  ".github/instructions/lite/idd-pre-merge-lite.instructions.md" \
+  ".github/instructions/lite/idd-merge-handoff-lite.instructions.md" \
+  ".github/instructions/lite/idd-review-fix-lite.instructions.md" \
+  ".github/instructions/lite/idd-resume-lite.instructions.md" \
+  ".github/instructions/lite/idd-resume-stall-lite.instructions.md" \
+  ".github/instructions/lite/idd-ci-lite.instructions.md" \
+  ".github/instructions/lite/idd-advisory-wait-lite.instructions.md" \
+  "docs/index.md" \
+  "docs/idd-workflow.md" \
+  "docs/idd-review-policy-profiles.md" \
+  "docs/idd-helper-scripts.md" \
+  "docs/idd-autonomy-contract.md" \
+  "docs/idd-comment-minimization.md" \
+  "docs/idd-resume-detail.md" \
+  "docs/idd-advisory-wait-shell-fallback.md" \
+  "docs/idd-design-rationale.md" \
+  "docs/idd-concept-ownership.md" \
+  "docs/permissions.md" \
+  "docs/getting-started.md" \
+  "docs/concepts.md" \
+  "docs/customization.md" \
+  "docs/policy-constants.md" \
+  "docs/reference.md" \
+  "docs/onboarding/agent-entry-and-verification.md" \
+  "docs/onboarding/issue-mediated-bootstrap.md" \
+  "docs/onboarding/optional-host-setup.md" \
+  "docs/onboarding/placeholders.md" \
+  "docs/onboarding/policy-decisions.md" \
+  "docs/onboarding/project-tuning.md" \
+  "docs/onboarding/template-distribution.md" \
+  "profiles/README.md" \
+  "profiles/human-required/README.md" \
+  "profiles/no-advisory/README.md" \
+  "profiles/external-bot/README.md"
+do
+  mkdir -p "$(dirname "${DEST}/${FILE}")"
+  gh api -H "Accept: application/vnd.github.raw+json" \
+    "repos/kurone-kito/idd-skill/contents/idd-template/${FILE}" \
+    > "${DEST}/${FILE}" || { echo "Failed: ${FILE}" >&2; exit 1; }
+done
+```
+
+If the operator opts into the issue-authoring companion, fetch its canonical
+source files separately and write them directly to the selected native skill
+destination. The Codex CLI example below uses `.agents/skills/`; set
+`SKILL_DEST` to a different single native destination when the target runtime
+requires it:
+
+<!-- audit:shell-list id=issue-authoring-companion-gh-api-loop -->
+
+```sh
+DEST="."  # root of the target repository
+SKILL_DEST="${DEST}/.agents/skills/issue-authoring"  # Codex example; choose one native destination
+
+mkdir -p "${SKILL_DEST}/references"
+
+for FILE in \
+  "SKILL.md" \
+  "references/contract.md" \
+  "references/draft-patterns.md" \
+  "references/workflow-boundary.md"
+do
+  mkdir -p "$(dirname "${SKILL_DEST}/${FILE}")"
+  gh api -H "Accept: application/vnd.github.raw+json" \
+    "repos/kurone-kito/idd-skill/contents/skills/issue-authoring/${FILE}" \
+    > "${SKILL_DEST}/${FILE}" || { echo "Failed: ${FILE}" >&2; exit 1; }
+done
+```
+
+Alternatively, use `curl` (no authentication required — idd-skill is a public
+repository):
+
+<!-- audit:shell-list id=idd-template-core-curl-loop -->
+
+```sh
+BASE="https://raw.githubusercontent.com/kurone-kito/idd-skill/main/idd-template"
+DEST="."  # root of the target repository
+
+mkdir -p "${DEST}/.github/idd" "${DEST}/.github/workflows" \
+  "${DEST}/.github/instructions" "${DEST}/docs" "${DEST}/docs/onboarding"
+
+for FILE in \
+  ".github/idd/config.json" \
+  ".github/workflows/post-merge-cleanup.yml" \
+  ".githooks/_idd-worktree-guard.sh" \
+  ".githooks/pre-commit" \
+  ".githooks/pre-push" \
+  ".cspell.config.yml" \
+  ".markdownlint.yml" \
+  ".markdownlint-cli2.yaml" \
+  ".github/instructions/idd-overview-core.instructions.md" \
+  ".github/instructions/idd-overview-appendix.instructions.md" \
+  ".github/instructions/idd-discover.instructions.md" \
+  ".github/instructions/idd-roadmap-audit.instructions.md" \
+  ".github/instructions/idd-suitability.instructions.md" \
+  ".github/instructions/idd-claim.instructions.md" \
+  ".github/instructions/idd-work.instructions.md" \
+  ".github/instructions/idd-pr-submit.instructions.md" \
+  ".github/instructions/idd-ci.instructions.md" \
+  ".github/instructions/idd-advisory-wait.instructions.md" \
+  ".github/instructions/idd-review-snapshot.instructions.md" \
+  ".github/instructions/idd-review-triage.instructions.md" \
+  ".github/instructions/idd-review-fix.instructions.md" \
+  ".github/instructions/idd-pre-merge.instructions.md" \
+  ".github/instructions/idd-merge-handoff.instructions.md" \
+  ".github/instructions/idd-merge.instructions.md" \
+  ".github/instructions/idd-resume.instructions.md" \
+  ".github/instructions/idd-resume-stall.instructions.md" \
+  ".github/instructions/lite/idd-claim-lite.instructions.md" \
+  ".github/instructions/lite/idd-work-lite.instructions.md" \
+  ".github/instructions/lite/idd-pr-submit-lite.instructions.md" \
+  ".github/instructions/lite/idd-review-snapshot-lite.instructions.md" \
+  ".github/instructions/lite/idd-pre-merge-lite.instructions.md" \
+  ".github/instructions/lite/idd-merge-handoff-lite.instructions.md" \
+  ".github/instructions/lite/idd-review-fix-lite.instructions.md" \
+  ".github/instructions/lite/idd-resume-lite.instructions.md" \
+  ".github/instructions/lite/idd-resume-stall-lite.instructions.md" \
+  ".github/instructions/lite/idd-ci-lite.instructions.md" \
+  ".github/instructions/lite/idd-advisory-wait-lite.instructions.md" \
+  "docs/index.md" \
+  "docs/idd-workflow.md" \
+  "docs/idd-review-policy-profiles.md" \
+  "docs/idd-helper-scripts.md" \
+  "docs/idd-autonomy-contract.md" \
+  "docs/idd-comment-minimization.md" \
+  "docs/idd-resume-detail.md" \
+  "docs/idd-advisory-wait-shell-fallback.md" \
+  "docs/idd-design-rationale.md" \
+  "docs/idd-concept-ownership.md" \
+  "docs/permissions.md" \
+  "docs/getting-started.md" \
+  "docs/concepts.md" \
+  "docs/customization.md" \
+  "docs/policy-constants.md" \
+  "docs/reference.md" \
+  "docs/onboarding/agent-entry-and-verification.md" \
+  "docs/onboarding/issue-mediated-bootstrap.md" \
+  "docs/onboarding/optional-host-setup.md" \
+  "docs/onboarding/placeholders.md" \
+  "docs/onboarding/policy-decisions.md" \
+  "docs/onboarding/project-tuning.md" \
+  "docs/onboarding/template-distribution.md" \
+  "profiles/README.md" \
+  "profiles/human-required/README.md" \
+  "profiles/no-advisory/README.md" \
+  "profiles/external-bot/README.md"
+do
+  mkdir -p "$(dirname "${DEST}/${FILE}")"
+  curl -fsSL "${BASE}/${FILE}" -o "${DEST}/${FILE}" || { echo "Failed: ${FILE}" >&2; exit 1; }
+done
+```
+
+If the operator opts into the issue-authoring companion with `curl`, fetch
+the same canonical source files to the selected native skill destination:
+
+<!-- audit:shell-list id=issue-authoring-companion-curl-loop -->
+
+```sh
+BASE="https://raw.githubusercontent.com/kurone-kito/idd-skill/main/skills/issue-authoring"
+DEST="."  # root of the target repository
+SKILL_DEST="${DEST}/.agents/skills/issue-authoring"  # Codex example; choose one native destination
+
+mkdir -p "${SKILL_DEST}/references"
+
+for FILE in \
+  "SKILL.md" \
+  "references/contract.md" \
+  "references/draft-patterns.md" \
+  "references/workflow-boundary.md"
+do
+  mkdir -p "$(dirname "${SKILL_DEST}/${FILE}")"
+  curl -fsSL "${BASE}/${FILE}" -o "${SKILL_DEST}/${FILE}" || { echo "Failed: ${FILE}" >&2; exit 1; }
+done
+```
 
 For a new core file, ensure that both loops include the path after the
 generated list is updated. The audit checks the shell lists against the
@@ -184,8 +432,8 @@ other is treated as stale documentation.
 
 For nested documentation such as `docs/onboarding/*.md`, the existing
 loop body creates parent directories with `mkdir -p "$(dirname
-"${DEST}/${FILE}")"`. No extra top-level `mkdir -p` entry is required
-for each nested docs directory.
+"${DEST}/${FILE}")"`. No extra top-level `mkdir -p` entry is
+required for each nested docs directory.
 
 ## Local-copy installs
 
@@ -195,11 +443,29 @@ means new core files under `idd-template/` are automatically covered by
 local-copy installs after they are committed. The optional companion is
 different: copy its canonical `skills/issue-authoring/` source contents into
 the one selected native `SKILL_DEST`, rather than into a target
-`skills/issue-authoring/` directory by assumption.
+`skills/issue-authoring/` directory by assumption. `idd-template/ONBOARDING.md`'s
+Option B points here for the copy example.
 
-Keep the local-copy prose in `idd-template/ONBOARDING.md` short. Use this
-reference for maintenance details and the generated remote-fetch snippets
-for exact file coverage.
+If you have cloned `https://github.com/kurone-kito/idd-skill`, copy
+the files from `idd-template/` into the target repository preserving
+their relative paths.
+
+If the operator opts into the issue-authoring companion, copy the canonical
+`skills/issue-authoring/` source bundle from the idd-skill checkout to one
+selected native destination in the target repository. For example, from the
+idd-skill checkout:
+
+```sh
+SOURCE="skills/issue-authoring"
+TARGET_REPO="../target-repository"
+SKILL_DEST="${TARGET_REPO}/.agents/skills/issue-authoring"  # Codex example; choose one native destination
+
+mkdir -p "${SKILL_DEST}/references"
+cp -R "${SOURCE}/." "${SKILL_DEST}/"
+```
+
+Do not copy the same skill ID into additional runtime roots by default
+(preventive; no observed incident yet).
 
 ## Maintenance checklist
 
@@ -208,8 +474,8 @@ Before merging a distribution-surface change, verify:
 - `audit/sync-manifest.json` includes every required new core file.
 - the generated core file block in `idd-template/ONBOARDING.md` includes
   the new path.
-- the `gh api` and `curl` loops in `idd-template/ONBOARDING.md` include
-  the same path.
+- the `gh api` and `curl` loops in [Remote fetch examples](#remote-fetch-examples)
+  above include the same path.
 - optional issue-authoring files remain in the optional companion list.
 - a new issue-authoring companion file is also added to the
   `idd-template-readme-issue-authoring-files` `paths` list (its

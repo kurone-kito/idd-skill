@@ -106,8 +106,11 @@ GitHub MCP 連携)、`jq`、`curl` などの REST クライアント、そして
 https://raw.githubusercontent.com/kurone-kito/idd-skill/main/idd-template/ONBOARDING.md
 ```
 
-コピーするファイル、埋める placeholder、更新する導入先リポジトリの
-入口ファイルが説明されています。
+これは薄いオーケストレーターです: コピーするファイル、埋める
+placeholder、更新する導入先リポジトリの入口ファイルが説明されており、
+対応するヘルパーランタイムが利用可能な場合はポリシー/placeholder の
+コンパニオンドキュメントを手作業でたどる代わりに `idd-onboard --hear`
+の実行を案内します。
 
 ## 仕組み
 
