@@ -71,16 +71,66 @@
       "required": ["inputUncached", "cacheRead", "cacheCreation", "output", "reasoning"],
       "description": "p25/p50/p75 across all aggregated samples, per usage field. Zero-valued when sampleCount is 0.",
       "properties": {
-        "inputUncached": { "type": "object", "additionalProperties": false, "required": ["p25", "p50", "p75"], "properties": { "p25": { "type": "number", "minimum": 0 }, "p50": { "type": "number", "minimum": 0 }, "p75": { "type": "number", "minimum": 0 } } },
-        "cacheRead": { "type": "object", "additionalProperties": false, "required": ["p25", "p50", "p75"], "properties": { "p25": { "type": "number", "minimum": 0 }, "p50": { "type": "number", "minimum": 0 }, "p75": { "type": "number", "minimum": 0 } } },
-        "cacheCreation": { "type": "object", "additionalProperties": false, "required": ["p25", "p50", "p75"], "properties": { "p25": { "type": "number", "minimum": 0 }, "p50": { "type": "number", "minimum": 0 }, "p75": { "type": "number", "minimum": 0 } } },
-        "output": { "type": "object", "additionalProperties": false, "required": ["p25", "p50", "p75"], "properties": { "p25": { "type": "number", "minimum": 0 }, "p50": { "type": "number", "minimum": 0 }, "p75": { "type": "number", "minimum": 0 } } },
-        "reasoning": { "type": "object", "additionalProperties": false, "required": ["p25", "p50", "p75"], "properties": { "p25": { "type": "number", "minimum": 0 }, "p50": { "type": "number", "minimum": 0 }, "p75": { "type": "number", "minimum": 0 } } }
+        "inputUncached": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["p25", "p50", "p75"],
+          "description": "p25/p50/p75 of total (whole-sample) uncached input token count.",
+          "properties": {
+            "p25": { "type": "number", "minimum": 0, "description": "25th percentile." },
+            "p50": { "type": "number", "minimum": 0, "description": "50th percentile (median)." },
+            "p75": { "type": "number", "minimum": 0, "description": "75th percentile." }
+          }
+        },
+        "cacheRead": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["p25", "p50", "p75"],
+          "description": "p25/p50/p75 of total (whole-sample) cache-read token count.",
+          "properties": {
+            "p25": { "type": "number", "minimum": 0, "description": "25th percentile." },
+            "p50": { "type": "number", "minimum": 0, "description": "50th percentile (median)." },
+            "p75": { "type": "number", "minimum": 0, "description": "75th percentile." }
+          }
+        },
+        "cacheCreation": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["p25", "p50", "p75"],
+          "description": "p25/p50/p75 of total (whole-sample) cache-creation token count.",
+          "properties": {
+            "p25": { "type": "number", "minimum": 0, "description": "25th percentile." },
+            "p50": { "type": "number", "minimum": 0, "description": "50th percentile (median)." },
+            "p75": { "type": "number", "minimum": 0, "description": "75th percentile." }
+          }
+        },
+        "output": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["p25", "p50", "p75"],
+          "description": "p25/p50/p75 of total (whole-sample) output token count.",
+          "properties": {
+            "p25": { "type": "number", "minimum": 0, "description": "25th percentile." },
+            "p50": { "type": "number", "minimum": 0, "description": "50th percentile (median)." },
+            "p75": { "type": "number", "minimum": 0, "description": "75th percentile." }
+          }
+        },
+        "reasoning": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["p25", "p50", "p75"],
+          "description": "p25/p50/p75 of total (whole-sample) reasoning token count.",
+          "properties": {
+            "p25": { "type": "number", "minimum": 0, "description": "25th percentile." },
+            "p50": { "type": "number", "minimum": 0, "description": "50th percentile (median)." },
+            "p75": { "type": "number", "minimum": 0, "description": "75th percentile." }
+          }
+        }
       }
     },
     "stageUsage": {
       "type": "array",
-      "description": "Per-stage p25/p50/p75 usage. Empty when sampleCount is 0.",
+      "description": "Per-stage p25/p50/p75 usage, one entry per stage id that has at least one data point. Empty when sampleCount is 0.",
       "items": {
         "type": "object",
         "additionalProperties": false,
@@ -88,18 +138,70 @@
         "properties": {
           "id": {
             "type": "string",
-            "enum": ["discover", "claim", "work", "submit-pr", "review", "merge", "cleanup"]
+            "enum": ["discover", "claim", "work", "submit-pr", "review", "merge", "cleanup"],
+            "description": "The IDD stage this usage percentile bucket covers."
           },
           "usage": {
             "type": "object",
             "additionalProperties": false,
             "required": ["inputUncached", "cacheRead", "cacheCreation", "output", "reasoning"],
+            "description": "p25/p50/p75 across samples that reported usage for this stage.",
             "properties": {
-              "inputUncached": { "type": "object", "additionalProperties": false, "required": ["p25", "p50", "p75"], "properties": { "p25": { "type": "number", "minimum": 0 }, "p50": { "type": "number", "minimum": 0 }, "p75": { "type": "number", "minimum": 0 } } },
-              "cacheRead": { "type": "object", "additionalProperties": false, "required": ["p25", "p50", "p75"], "properties": { "p25": { "type": "number", "minimum": 0 }, "p50": { "type": "number", "minimum": 0 }, "p75": { "type": "number", "minimum": 0 } } },
-              "cacheCreation": { "type": "object", "additionalProperties": false, "required": ["p25", "p50", "p75"], "properties": { "p25": { "type": "number", "minimum": 0 }, "p50": { "type": "number", "minimum": 0 }, "p75": { "type": "number", "minimum": 0 } } },
-              "output": { "type": "object", "additionalProperties": false, "required": ["p25", "p50", "p75"], "properties": { "p25": { "type": "number", "minimum": 0 }, "p50": { "type": "number", "minimum": 0 }, "p75": { "type": "number", "minimum": 0 } } },
-              "reasoning": { "type": "object", "additionalProperties": false, "required": ["p25", "p50", "p75"], "properties": { "p25": { "type": "number", "minimum": 0 }, "p50": { "type": "number", "minimum": 0 }, "p75": { "type": "number", "minimum": 0 } } }
+              "inputUncached": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["p25", "p50", "p75"],
+                "description": "p25/p50/p75 of this stage's uncached input token count.",
+                "properties": {
+                  "p25": { "type": "number", "minimum": 0, "description": "25th percentile." },
+                  "p50": { "type": "number", "minimum": 0, "description": "50th percentile (median)." },
+                  "p75": { "type": "number", "minimum": 0, "description": "75th percentile." }
+                }
+              },
+              "cacheRead": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["p25", "p50", "p75"],
+                "description": "p25/p50/p75 of this stage's cache-read token count.",
+                "properties": {
+                  "p25": { "type": "number", "minimum": 0, "description": "25th percentile." },
+                  "p50": { "type": "number", "minimum": 0, "description": "50th percentile (median)." },
+                  "p75": { "type": "number", "minimum": 0, "description": "75th percentile." }
+                }
+              },
+              "cacheCreation": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["p25", "p50", "p75"],
+                "description": "p25/p50/p75 of this stage's cache-creation token count.",
+                "properties": {
+                  "p25": { "type": "number", "minimum": 0, "description": "25th percentile." },
+                  "p50": { "type": "number", "minimum": 0, "description": "50th percentile (median)." },
+                  "p75": { "type": "number", "minimum": 0, "description": "75th percentile." }
+                }
+              },
+              "output": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["p25", "p50", "p75"],
+                "description": "p25/p50/p75 of this stage's output token count.",
+                "properties": {
+                  "p25": { "type": "number", "minimum": 0, "description": "25th percentile." },
+                  "p50": { "type": "number", "minimum": 0, "description": "50th percentile (median)." },
+                  "p75": { "type": "number", "minimum": 0, "description": "75th percentile." }
+                }
+              },
+              "reasoning": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["p25", "p50", "p75"],
+                "description": "p25/p50/p75 of this stage's reasoning token count.",
+                "properties": {
+                  "p25": { "type": "number", "minimum": 0, "description": "25th percentile." },
+                  "p50": { "type": "number", "minimum": 0, "description": "50th percentile (median)." },
+                  "p75": { "type": "number", "minimum": 0, "description": "75th percentile." }
+                }
+              }
             }
           }
         }
@@ -111,9 +213,9 @@
       "required": ["p25", "p50", "p75"],
       "description": "p25/p50/p75 compaction count across all aggregated samples.",
       "properties": {
-        "p25": { "type": "number", "minimum": 0 },
-        "p50": { "type": "number", "minimum": 0 },
-        "p75": { "type": "number", "minimum": 0 }
+        "p25": { "type": "number", "minimum": 0, "description": "25th percentile." },
+        "p50": { "type": "number", "minimum": 0, "description": "50th percentile (median)." },
+        "p75": { "type": "number", "minimum": 0, "description": "75th percentile." }
       }
     },
     "cacheHitRatio": {
@@ -130,12 +232,13 @@
           "type": "object",
           "additionalProperties": false,
           "required": ["merged", "aborted", "unclaimed", "humanHandoff", "rate"],
+          "description": "Outcome counts and success rate for one model.",
           "properties": {
-            "merged": { "type": "integer", "minimum": 0 },
-            "aborted": { "type": "integer", "minimum": 0 },
-            "unclaimed": { "type": "integer", "minimum": 0 },
-            "humanHandoff": { "type": "integer", "minimum": 0 },
-            "rate": { "type": "number", "minimum": 0 }
+            "merged": { "type": "integer", "minimum": 0, "description": "Merged issue-loop count." },
+            "aborted": { "type": "integer", "minimum": 0, "description": "Aborted issue-loop count." },
+            "unclaimed": { "type": "integer", "minimum": 0, "description": "Unclaimed issue-loop count." },
+            "humanHandoff": { "type": "integer", "minimum": 0, "description": "Human-handoff issue-loop count." },
+            "rate": { "type": "number", "minimum": 0, "description": "merged / (merged + aborted + unclaimed + humanHandoff), in [0, 1]." }
           }
         }
       }
@@ -149,36 +252,39 @@
           "type": "object",
           "additionalProperties": false,
           "required": ["merged", "aborted", "unclaimed", "humanHandoff", "rate"],
+          "description": "Outcome counts and success rate for the grok vendor.",
           "properties": {
-            "merged": { "type": "integer", "minimum": 0 },
-            "aborted": { "type": "integer", "minimum": 0 },
-            "unclaimed": { "type": "integer", "minimum": 0 },
-            "humanHandoff": { "type": "integer", "minimum": 0 },
-            "rate": { "type": "number", "minimum": 0 }
+            "merged": { "type": "integer", "minimum": 0, "description": "Merged issue-loop count." },
+            "aborted": { "type": "integer", "minimum": 0, "description": "Aborted issue-loop count." },
+            "unclaimed": { "type": "integer", "minimum": 0, "description": "Unclaimed issue-loop count." },
+            "humanHandoff": { "type": "integer", "minimum": 0, "description": "Human-handoff issue-loop count." },
+            "rate": { "type": "number", "minimum": 0, "description": "merged / (merged + aborted + unclaimed + humanHandoff), in [0, 1]." }
           }
         },
         "claude": {
           "type": "object",
           "additionalProperties": false,
           "required": ["merged", "aborted", "unclaimed", "humanHandoff", "rate"],
+          "description": "Outcome counts and success rate for the claude vendor.",
           "properties": {
-            "merged": { "type": "integer", "minimum": 0 },
-            "aborted": { "type": "integer", "minimum": 0 },
-            "unclaimed": { "type": "integer", "minimum": 0 },
-            "humanHandoff": { "type": "integer", "minimum": 0 },
-            "rate": { "type": "number", "minimum": 0 }
+            "merged": { "type": "integer", "minimum": 0, "description": "Merged issue-loop count." },
+            "aborted": { "type": "integer", "minimum": 0, "description": "Aborted issue-loop count." },
+            "unclaimed": { "type": "integer", "minimum": 0, "description": "Unclaimed issue-loop count." },
+            "humanHandoff": { "type": "integer", "minimum": 0, "description": "Human-handoff issue-loop count." },
+            "rate": { "type": "number", "minimum": 0, "description": "merged / (merged + aborted + unclaimed + humanHandoff), in [0, 1]." }
           }
         },
         "codex": {
           "type": "object",
           "additionalProperties": false,
           "required": ["merged", "aborted", "unclaimed", "humanHandoff", "rate"],
+          "description": "Outcome counts and success rate for the codex vendor.",
           "properties": {
-            "merged": { "type": "integer", "minimum": 0 },
-            "aborted": { "type": "integer", "minimum": 0 },
-            "unclaimed": { "type": "integer", "minimum": 0 },
-            "humanHandoff": { "type": "integer", "minimum": 0 },
-            "rate": { "type": "number", "minimum": 0 }
+            "merged": { "type": "integer", "minimum": 0, "description": "Merged issue-loop count." },
+            "aborted": { "type": "integer", "minimum": 0, "description": "Aborted issue-loop count." },
+            "unclaimed": { "type": "integer", "minimum": 0, "description": "Unclaimed issue-loop count." },
+            "humanHandoff": { "type": "integer", "minimum": 0, "description": "Human-handoff issue-loop count." },
+            "rate": { "type": "number", "minimum": 0, "description": "merged / (merged + aborted + unclaimed + humanHandoff), in [0, 1]." }
           }
         }
       }

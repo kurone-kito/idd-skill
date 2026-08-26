@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-08-26T00:00:00.000Z",
+  "minPublishableSamples": 10,
+  "minPublishableVendors": 2,
+  "publishable": false,
+  "sampleCount": 0,
+  "vendors": [],
+  "asOf": "2026-08-26",
+  "totalUsage": {
+    "inputUncached": { "p25": 0, "p50": 0, "p75": 0 },
+    "cacheRead": { "p25": 0, "p50": 0, "p75": 0 },
+    "cacheCreation": { "p25": 0, "p50": 0, "p75": 0 },
+    "output": { "p25": 0, "p50": 0, "p75": 0 },
+    "reasoning": { "p25": 0, "p50": 0, "p75": 0 }
+  },
+  "stageUsage": [],
+  "compactionCount": { "p25": 0, "p50": 0, "p75": 0 },
+  "cacheHitRatio": 0,
+  "successRateByModel": {},
+  "successRateByVendor": {}
+}
