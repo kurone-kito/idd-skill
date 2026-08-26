@@ -65,7 +65,11 @@ import type {
 import { loadOnboardingHearingCatalog } from './onboarding-hearing.mts';
 import type { PromptFn } from './readline-prompt.mts';
 import { makeReadlinePrompt } from './readline-prompt.mts';
-import { loadJson, validate } from './validate-schemas.mts';
+import {
+  loadJson,
+  validate,
+  validateConfigSection,
+} from './validate-schemas.mts';
 
 /** Substitution role of a placeholder: only `command` rows may be `true`. */
 export type OnboardingPlaceholderKind = 'identity' | 'command';
@@ -1879,7 +1883,7 @@ async function runHearCli(args: ParsedArgs): Promise<void> {
   if (!statSync(targetDir).isDirectory()) {
     throw new Error(`--target is not a directory: ${args.target}`);
   }
-  if (args.propose && args.applyHear) {
+  if (args.propose && args.apply) {
     throw new Error(
       '--hear --propose and --hear --apply are mutually exclusive',
     );
@@ -1889,7 +1893,7 @@ async function runHearCli(args: ParsedArgs): Promise<void> {
     runHearProposeCli(catalog, targetDir);
     return;
   }
-  if (args.applyHear) {
+  if (args.apply) {
     if (!args.answers) {
       throw new Error('--hear --apply requires --answers <file>');
     }
@@ -1905,6 +1909,342 @@ async function runHearCli(args: ParsedArgs): Promise<void> {
     );
   }
   process.stdout.write(`${JSON.stringify(transcript, null, 2)}\n`);
+  process.exit(0);
+}
+
+/** Confirmed transcript document shape consumed by --from-transcript / --record-policy. */
+interface HearTranscriptDocument {
+  version: string;
+  confirmedAt?: string;
+  answers: readonly HearAnswer[];
+}
+
+/**
+ * Read, parse, and schema-validate a confirmed hearing transcript file
+ * (the output of `--hear --apply` or the interactive wizard). Throws
+ * only on unparseable JSON (a usage error, exit 2, matching `--hear
+ * --apply`'s own file-reading check); a schema mismatch is returned as
+ * `errors` instead, so the caller can print the same
+ * `{valid:false, unresolved}` shape `--hear --apply` prints and exit 1
+ * -- "reject a transcript that fails the transcript schema... (exit 1,
+ * no writes)" per #2282.
+ */
+function readAndValidateTranscript(path: string):
+  | { transcript: HearTranscriptDocument; errors: readonly [] }
+  | {
+      transcript: null;
+      errors: readonly string[];
+    } {
+  const raw = readFileSync(resolve(path), 'utf8');
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    throw new Error(`transcript file is not valid JSON: ${path}`);
+  }
+  const schemaErrors = validateHearTranscriptShape(parsed);
+  if (schemaErrors.length > 0) {
+    return { transcript: null, errors: schemaErrors };
+  }
+  return { transcript: parsed as HearTranscriptDocument, errors: [] };
+}
+
+/**
+ * Map a confirmed transcript's answers onto `resolvePlaceholderValues`
+ * overrides, using each catalog item's `mapsToPlaceholder` field. An
+ * answer for an item with no `mapsToPlaceholder` (a policy or check
+ * item) is not a placeholder override and is ignored here.
+ */
+function buildTranscriptPlaceholderOverrides(
+  catalog: OnboardingHearingCatalog,
+  transcript: HearTranscriptDocument,
+): PlaceholderOverrides {
+  const byId = new Map(catalog.items.map((item) => [item.id, item]));
+  const overrides: PlaceholderOverrides = {};
+  for (const answer of transcript.answers) {
+    const placeholderName = byId.get(answer.id)?.mapsToPlaceholder;
+    if (placeholderName !== undefined) {
+      overrides[placeholderName] = answer.value;
+    }
+  }
+  return overrides;
+}
+
+/**
+ * Catalog item ids whose confirmed answer is a meta-choice about
+ * whether to override the distributed default, not the override value
+ * itself -- `claimTiming` needs an ISO-duration pair
+ * (`staleAge`/`heartbeatInterval`) and `labels` needs actual label-name
+ * strings, neither derivable from `distributed-defaults` /
+ * `repository-override` / `custom-taxonomy` alone. `--record-policy`
+ * surfaces these in the filled Markdown template but never invents a
+ * config value for them (see #2282 B2 plan).
+ */
+const RECORD_POLICY_NO_LITERAL_CONFIG_IDS = new Set([
+  'claim-timing',
+  'idd-label-names',
+]);
+
+/**
+ * Translate one confirmed hearing answer into a `.github/idd/config.json`
+ * patch entry (a dotted key path plus the value to write), or `null`
+ * when the item is docs-only, has no literal config value (see
+ * {@link RECORD_POLICY_NO_LITERAL_CONFIG_IDS}), or is one of the two
+ * items whose "distributed default" answer needs no explicit record
+ * (`helper-runtime-profile`'s `instructions-only`,
+ * `issue-author-approval-gate`'s `enabled-by-default`). Every other
+ * mapped item's confirmed value is written verbatim, including when it
+ * happens to equal that item's own documented default.
+ */
+function translateRecordPolicyAnswer(
+  item: HearingCatalogItem,
+  value: string,
+): { path: readonly string[]; value: unknown } | null {
+  if (!item.mapsToConfig || RECORD_POLICY_NO_LITERAL_CONFIG_IDS.has(item.id)) {
+    return null;
+  }
+  if (item.id === 'helper-runtime-profile' && value === 'instructions-only') {
+    // The whole `helperRuntime` key defaults to the instructions-only
+    // fallback when absent (schema); omit it rather than writing the
+    // value literally.
+    return null;
+  }
+  if (item.id === 'issue-author-approval-gate') {
+    if (value === 'enabled-by-default') {
+      // Schema default (omitted or `false`) already keeps the gate on.
+      return null;
+    }
+    return { path: ['skipIssueAuthorApprovalGate'], value: true };
+  }
+  const path = item.mapsToConfig
+    .split('/')
+    .filter((segment) => segment.length > 0);
+  return { path, value };
+}
+
+/** Set a value at a nested key path, creating intermediate objects as needed. */
+function setNestedValue(
+  target: Record<string, unknown>,
+  path: readonly string[],
+  value: unknown,
+): void {
+  let cursor = target;
+  for (let depth = 0; depth < path.length - 1; depth += 1) {
+    const key = path[depth];
+    const next = cursor[key];
+    if (typeof next !== 'object' || next === null || Array.isArray(next)) {
+      cursor[key] = {};
+    }
+    cursor = cursor[key] as Record<string, unknown>;
+  }
+  cursor[path[path.length - 1]] = value;
+}
+
+/**
+ * Recursively merge `patch` into `target`, preserving sibling keys in
+ * any nested object both sides declare (e.g. merging `ciWait.rerunPolicy`
+ * must not discard an existing `ciWait.runningTimeout`). Scalars and
+ * arrays in `patch` overwrite `target` outright.
+ */
+function deepMergeConfigPatch(
+  target: Record<string, unknown>,
+  patch: Record<string, unknown>,
+): Record<string, unknown> {
+  const result: Record<string, unknown> = { ...target };
+  for (const [key, value] of Object.entries(patch)) {
+    const existing = result[key];
+    if (
+      typeof value === 'object' &&
+      value !== null &&
+      !Array.isArray(value) &&
+      typeof existing === 'object' &&
+      existing !== null &&
+      !Array.isArray(existing)
+    ) {
+      result[key] = deepMergeConfigPatch(
+        existing as Record<string, unknown>,
+        value as Record<string, unknown>,
+      );
+    } else {
+      result[key] = value;
+    }
+  }
+  return result;
+}
+
+/** One row of the filled policy-decisions Markdown template. */
+interface RecordPolicyDocRow {
+  id: string;
+  heading: string;
+  label: string;
+}
+
+/**
+ * Catalog-item-id-ordered rows for the filled Markdown template,
+ * mirroring `idd-template/docs/onboarding/policy-decisions.md`'s
+ * "Recording the selected policies" example structure. Only items the
+ * hearing catalog can actually answer (policy-kind items) are listed;
+ * the three Step 0 `check`-kind items are evidence, not a policy
+ * decision, and are not part of this template.
+ */
+const RECORD_POLICY_DOC_ROWS: readonly RecordPolicyDocRow[] = [
+  { id: 'merge-policy', heading: 'Merge Policy', label: 'Policy' },
+  { id: 'review-policy', heading: 'PR Review Policy', label: 'Profile' },
+  {
+    id: 'thread-resolution-policy',
+    heading: 'Review-Thread Resolution Policy',
+    label: 'Policy',
+  },
+  {
+    id: 'critique-loop-profile',
+    heading: 'Critique-Loop Profile',
+    label: 'Profile',
+  },
+  { id: 'credential-scope', heading: 'Credential Scope', label: 'Scope' },
+  { id: 'claim-timing', heading: 'Claim Timing', label: 'Selection' },
+  { id: 'ci-wait-policy', heading: 'CI Wait Policy', label: 'Rerun policy' },
+  {
+    id: 'issue-author-approval-gate',
+    heading: 'Issue-Author Approval Gate',
+    label: 'Selection',
+  },
+  {
+    id: 'maintainer-approval-actor-policy',
+    heading: 'Maintainer Approval Actor Policy',
+    label: 'Policy',
+  },
+  {
+    id: 'issue-authoring-companion',
+    heading: 'Issue-Authoring Companion',
+    label: 'Status',
+  },
+  {
+    id: 'helper-runtime-profile',
+    heading: 'Helper Runtime Profile',
+    label: 'Profile',
+  },
+  { id: 'idd-label-names', heading: 'IDD Label Names', label: 'Selection' },
+  {
+    id: 'up-to-date-head-ruleset',
+    heading: 'Up-to-Date-Head Ruleset',
+    label: 'Policy',
+  },
+  {
+    id: 'bootstrap-execution-mode',
+    heading: 'Bootstrap Execution Mode',
+    label: 'Mode',
+  },
+];
+
+/**
+ * Render the filled `## IDD Policy Configuration` Markdown document from
+ * a confirmed transcript's answers, following the structure shown in
+ * `idd-template/docs/onboarding/policy-decisions.md`'s
+ * "Recording the selected policies" section. An item with no confirmed
+ * answer is omitted rather than printed with a placeholder value.
+ */
+function buildFilledPolicyDocument(answers: readonly HearAnswer[]): string {
+  const valueById = new Map(answers.map((answer) => [answer.id, answer.value]));
+  const sections = RECORD_POLICY_DOC_ROWS.filter((row) =>
+    valueById.has(row.id),
+  ).map(
+    (row) =>
+      `### ${row.heading}\n\n**${row.label}**: \`${valueById.get(row.id)}\``,
+  );
+  return [
+    '## IDD Policy Configuration',
+    '',
+    'This repository uses the following IDD policies:',
+    '',
+    sections.join('\n\n'),
+  ].join('\n');
+}
+
+function runRecordPolicyCli(args: ParsedArgs): void {
+  if (!args.transcript) {
+    throw new Error('--record-policy requires --transcript <file>');
+  }
+  const targetDir = resolve(args.target);
+  if (!statSync(targetDir).isDirectory()) {
+    throw new Error(`--target is not a directory: ${args.target}`);
+  }
+  const configPath = join(targetDir, '.github', 'idd', 'config.json');
+  if (!existsSync(configPath)) {
+    throw new Error(
+      `--record-policy is post-import only; missing ${configPath}`,
+    );
+  }
+  const result = readAndValidateTranscript(args.transcript);
+  if (result.transcript === null) {
+    // Matches --hear --apply's own schema-failure shape and exit code.
+    process.stdout.write(
+      `${JSON.stringify(
+        {
+          protocolVersion: '1',
+          mode: args.apply ? 'apply' : 'dry-run',
+          valid: false,
+          unresolved: result.errors,
+        },
+        null,
+        2,
+      )}\n`,
+    );
+    process.exit(1);
+  }
+  const transcript = result.transcript;
+  const catalog = loadOnboardingHearingCatalog();
+  const byId = new Map(catalog.items.map((item) => [item.id, item]));
+  const patch: Record<string, unknown> = {};
+  for (const answer of transcript.answers) {
+    const item = byId.get(answer.id);
+    if (!item) {
+      continue;
+    }
+    const translated = translateRecordPolicyAnswer(item, answer.value);
+    if (translated) {
+      setNestedValue(patch, translated.path, translated.value);
+    }
+  }
+  const existingConfig = JSON.parse(readFileSync(configPath, 'utf8')) as Record<
+    string,
+    unknown
+  >;
+  const mergedConfig = deepMergeConfigPatch(existingConfig, patch);
+  // Validate only the sections this patch touched (#1359 pattern via
+  // validateConfigSection), never the whole document: --record-policy
+  // runs post-import, pre-substitute, so the "pristine imported"
+  // config.json still carries unresolved {{PLACEHOLDER}} tokens in
+  // required fields like markerPrefix -- a whole-document validate
+  // would reject every real invocation.
+  const schema = loadJson('schemas/policy.schema.json');
+  const schemaErrors = Object.keys(patch).flatMap((key) =>
+    validateConfigSection(mergedConfig, schema, key),
+  );
+  if (schemaErrors.length > 0) {
+    throw new Error(
+      `config.json patch failed schema validation: ${schemaErrors.join('; ')}`,
+    );
+  }
+  const policyDocument = buildFilledPolicyDocument(transcript.answers);
+  const canWrite = args.apply;
+  if (canWrite) {
+    writeFileSync(configPath, `${JSON.stringify(mergedConfig, null, 2)}\n`);
+    if (args.writePolicyDoc) {
+      writeFileSync(resolve(args.writePolicyDoc), `${policyDocument}\n`);
+    }
+  }
+  const verdict = {
+    protocolVersion: '1',
+    mode: canWrite ? 'apply' : 'dry-run',
+    target: targetDir,
+    transcript: resolve(args.transcript),
+    configPatch: patch,
+    policyDocument,
+    writtenPolicyDocPath:
+      canWrite && args.writePolicyDoc ? resolve(args.writePolicyDoc) : null,
+    written: canWrite,
+  };
+  process.stdout.write(`${JSON.stringify(verdict, null, 2)}\n`);
   process.exit(0);
 }
 
@@ -1928,9 +2268,14 @@ interface ParsedArgs {
   importMode: boolean;
   verify: boolean;
   hear: boolean;
+  recordPolicy: boolean;
   propose: boolean;
-  applyHear: boolean;
+  /** Bare `--apply`, shared by `--hear --apply` and `--record-policy --apply`. */
+  apply: boolean;
   answers: string | undefined;
+  fromTranscript: string | undefined;
+  transcript: string | undefined;
+  writePolicyDoc: string | undefined;
   source: string | undefined;
   target: string;
   dryRun: boolean;
@@ -1951,9 +2296,13 @@ function parseArgs(argv: string[]): ParsedArgs {
     importMode: false,
     verify: false,
     hear: false,
+    recordPolicy: false,
     propose: false,
-    applyHear: false,
+    apply: false,
     answers: undefined,
+    fromTranscript: undefined,
+    transcript: undefined,
+    writePolicyDoc: undefined,
     source: undefined,
     target: '.',
     dryRun: false,
@@ -1990,16 +2339,35 @@ function parseArgs(argv: string[]): ParsedArgs {
       parsed.hear = true;
       continue;
     }
+    if (token === '--record-policy') {
+      parsed.recordPolicy = true;
+      continue;
+    }
     if (token === '--propose') {
       parsed.propose = true;
       continue;
     }
     if (token === '--apply') {
-      parsed.applyHear = true;
+      parsed.apply = true;
       continue;
     }
     if (token === '--answers') {
       parsed.answers = requireValue();
+      index += 1;
+      continue;
+    }
+    if (token === '--from-transcript') {
+      parsed.fromTranscript = requireValue();
+      index += 1;
+      continue;
+    }
+    if (token === '--transcript') {
+      parsed.transcript = requireValue();
+      index += 1;
+      continue;
+    }
+    if (token === '--write-policy-doc') {
+      parsed.writePolicyDoc = requireValue();
       index += 1;
       continue;
     }
@@ -2056,11 +2424,30 @@ function importOnlyFlagsPresent(args: ParsedArgs): string[] {
   return present;
 }
 
-/** Substitute-only placeholder-override flags the user explicitly passed. */
+/**
+ * Substitute-only flags the user explicitly passed: every placeholder
+ * override flag, plus `--from-transcript`.
+ */
 function substituteOnlyFlagsPresent(args: ParsedArgs): string[] {
-  return ONBOARDING_PLACEHOLDERS.filter(
+  const present = ONBOARDING_PLACEHOLDERS.filter(
     (entry) => args.overrides[entry.name] !== undefined,
   ).map((entry) => entry.flag);
+  if (args.fromTranscript !== undefined) {
+    present.push('--from-transcript');
+  }
+  return present;
+}
+
+/** --record-policy-only flags the user explicitly passed (present regardless of mode). */
+function recordPolicyOnlyFlagsPresent(args: ParsedArgs): string[] {
+  const present: string[] = [];
+  if (args.transcript !== undefined) {
+    present.push('--transcript');
+  }
+  if (args.writePolicyDoc !== undefined) {
+    present.push('--write-policy-doc');
+  }
+  return present;
 }
 
 /**
@@ -2080,13 +2467,20 @@ function verifyForeignFlagsPresent(args: ParsedArgs): string[] {
   return present;
 }
 
-/** --hear-only flags the user explicitly passed (present regardless of mode). */
+/**
+ * --hear-only flags the user explicitly passed (present regardless of
+ * mode). Bare `--apply` is shared with `--record-policy` and reported
+ * here as `--apply`; callers that also reject record-policy-only flags
+ * separately via {@link recordPolicyOnlyFlagsPresent} still catch a
+ * `--record-policy --apply` combination through that function's own
+ * `--transcript`/`--write-policy-doc` checks.
+ */
 function hearOnlyFlagsPresent(args: ParsedArgs): string[] {
   const present: string[] = [];
   if (args.propose) {
     present.push('--propose');
   }
-  if (args.applyHear) {
+  if (args.apply) {
     present.push('--apply');
   }
   if (args.answers !== undefined) {
@@ -2097,12 +2491,17 @@ function hearOnlyFlagsPresent(args: ParsedArgs): string[] {
 
 /**
  * Flags --hear does not accept: every import-only flag (`--source`,
- * `--force`, `--profile` -- --hear never imports or overwrites) plus every
+ * `--force`, `--profile` -- --hear never imports or overwrites), every
  * substitute-only placeholder-override flag (--hear derives candidates
- * read-only via the same hooks; it never accepts an explicit override).
+ * read-only via the same hooks; it never accepts an explicit override),
+ * and every record-policy-only flag.
  */
 function hearForeignFlagsPresent(args: ParsedArgs): string[] {
-  return [...importOnlyFlagsPresent(args), ...substituteOnlyFlagsPresent(args)];
+  return [
+    ...importOnlyFlagsPresent(args),
+    ...substituteOnlyFlagsPresent(args),
+    ...recordPolicyOnlyFlagsPresent(args),
+  ];
 }
 
 async function runCli(): Promise<void> {
@@ -2116,10 +2515,11 @@ async function runCli(): Promise<void> {
     args.importMode,
     args.verify,
     args.hear,
+    args.recordPolicy,
   ].filter(Boolean).length;
   if (modeCount > 1) {
     throw new Error(
-      '--substitute, --import, --verify, and --hear are mutually exclusive',
+      '--substitute, --import, --verify, --hear, and --record-policy are mutually exclusive',
     );
   }
   if (args.hear) {
@@ -2132,6 +2532,23 @@ async function runCli(): Promise<void> {
     await runHearCli(args);
     return;
   }
+  if (args.recordPolicy) {
+    // Not hearOnlyFlagsPresent(args): that set includes bare --apply,
+    // which --record-policy shares and must accept.
+    const foreign = [
+      ...importOnlyFlagsPresent(args),
+      ...substituteOnlyFlagsPresent(args),
+      ...(args.propose ? ['--propose'] : []),
+      ...(args.answers !== undefined ? ['--answers'] : []),
+    ];
+    if (foreign.length > 0) {
+      throw new Error(
+        `--record-policy does not accept flag(s) it never uses: ${foreign.join(', ')}`,
+      );
+    }
+    runRecordPolicyCli(args);
+    return;
+  }
   if (args.importMode) {
     // parseArgs collects every known flag regardless of the active stage,
     // so a stage-foreign flag (e.g. a placeholder override alongside
@@ -2139,10 +2556,11 @@ async function runCli(): Promise<void> {
     const foreign = [
       ...substituteOnlyFlagsPresent(args),
       ...hearOnlyFlagsPresent(args),
+      ...recordPolicyOnlyFlagsPresent(args),
     ];
     if (foreign.length > 0) {
       throw new Error(
-        `--import does not accept substitute-only flag(s) or --hear-only flag(s): ${foreign.join(', ')}`,
+        `--import does not accept substitute-only flag(s), --hear-only flag(s), or --record-policy-only flag(s): ${foreign.join(', ')}`,
       );
     }
     runImportCli(args);
@@ -2152,6 +2570,7 @@ async function runCli(): Promise<void> {
     const foreign = [
       ...verifyForeignFlagsPresent(args),
       ...hearOnlyFlagsPresent(args),
+      ...recordPolicyOnlyFlagsPresent(args),
     ];
     if (foreign.length > 0) {
       throw new Error(
@@ -2163,23 +2582,54 @@ async function runCli(): Promise<void> {
   }
   if (!args.substitute) {
     throw new Error(
-      'pass --substitute, --import, --verify, or --hear to select a stage',
+      'pass --substitute, --import, --verify, --hear, or --record-policy to select a stage',
     );
   }
   const foreign = [
     ...importOnlyFlagsPresent(args),
     ...hearOnlyFlagsPresent(args),
+    ...recordPolicyOnlyFlagsPresent(args),
   ];
   if (foreign.length > 0) {
     throw new Error(
-      `--substitute does not accept import-only flag(s) or --hear-only flag(s): ${foreign.join(', ')}`,
+      `--substitute does not accept import-only flag(s), --hear-only flag(s), or --record-policy-only flag(s): ${foreign.join(', ')}`,
     );
   }
   const targetDir = resolve(args.target);
   if (!statSync(targetDir).isDirectory()) {
     throw new Error(`--target is not a directory: ${args.target}`);
   }
-  const resolution = resolvePlaceholderValues(targetDir, args.overrides);
+  let transcriptOverrides: PlaceholderOverrides = {};
+  if (args.fromTranscript !== undefined) {
+    const result = readAndValidateTranscript(args.fromTranscript);
+    if (result.transcript === null) {
+      // Matches --hear --apply's own schema-failure shape and exit code.
+      process.stdout.write(
+        `${JSON.stringify(
+          {
+            protocolVersion: '1',
+            mode: args.dryRun ? 'dry-run' : 'apply',
+            valid: false,
+            unresolved: result.errors,
+          },
+          null,
+          2,
+        )}\n`,
+      );
+      process.exit(1);
+    }
+    transcriptOverrides = buildTranscriptPlaceholderOverrides(
+      loadOnboardingHearingCatalog(),
+      result.transcript,
+    );
+  }
+  // Explicit per-placeholder flags win over the transcript, matching
+  // today's "explicit flags override derivation" rule.
+  const mergedOverrides: PlaceholderOverrides = {
+    ...transcriptOverrides,
+    ...args.overrides,
+  };
+  const resolution = resolvePlaceholderValues(targetDir, mergedOverrides);
   const plan = buildSubstitutionPlan(
     scanPlaceholderTokens(targetDir),
     resolution,
@@ -2301,11 +2751,13 @@ function printHelp(): void {
       `  ${entry.flag} <value>${entry.kind === 'command' ? ' (accepts the no-op "true")' : ''}`,
   ).join('\n');
   process.stdout.write(`usage: node scripts/idd-onboard.mjs --substitute [options]
+       node scripts/idd-onboard.mjs --substitute --from-transcript <file> [options]
        node scripts/idd-onboard.mjs --import --source <dir> --target <dir> [options]
        node scripts/idd-onboard.mjs --verify --source <dir> --target <dir> [options]
        node scripts/idd-onboard.mjs --hear --propose --target <dir>
        node scripts/idd-onboard.mjs --hear --apply --answers <file> --target <dir>
        node scripts/idd-onboard.mjs --hear --target <dir>   (interactive TTY wizard)
+       node scripts/idd-onboard.mjs --record-policy --transcript <file> --target <dir> [--apply] [--write-policy-doc <path>]
 
 Onboarding automation.
 
@@ -2327,6 +2779,11 @@ in that case); 2 usage or configuration error.
 
   --substitute         run the substitution stage
   --target <dir>       target tree to rewrite (default: current directory)
+  --from-transcript <file>
+                       read placeholder answers from a confirmed --hear
+                       transcript (mapsToPlaceholder items); an explicit
+                       placeholder override flag below still wins over
+                       the transcript when both are present
   --dry-run            print the plan without writing anything
   --help, -h           show this help
 
@@ -2410,6 +2867,35 @@ never writes .github/idd/config.json, never requires --source.
                                is not a TTY.
   --target <dir>               target repository (default: current directory)
   --answers <file>              path to the --apply answers JSON file
+  --help, -h                    show this help
+
+--record-policy (#2282): consumes a confirmed --hear transcript's
+policy-kind answers. Post-import only: --target must already contain
+.github/idd/config.json. Never edits ONBOARDING.md, CLAUDE.md,
+AGENTS.md, or GEMINI.md.
+
+  --record-policy --transcript <file> --target <dir>
+                               dry-run (default): print the JSON verdict
+                               (config.json patch + filled Markdown
+                               policy-decisions template) without
+                               writing anything.
+  --apply                      merge the patch into .github/idd/config.json
+                               and write it. helperRuntime is omitted
+                               when the confirmed profile is
+                               instructions-only; skipIssueAuthorApprovalGate
+                               is written true only when the operator
+                               opted out. Docs-only answers (critique-loop
+                               profile, credential scope, issue-authoring
+                               companion, up-to-date-head ruleset,
+                               bootstrap execution mode) and the
+                               claim-timing / idd-label-names meta-choices
+                               never become invented config keys -- they
+                               appear in the filled Markdown template only.
+  --write-policy-doc <path>    also write the filled Markdown template to
+                               <path> (--apply only); without this flag the
+                               template is stdout-only.
+  --target <dir>               target repository (default: current directory)
+  --transcript <file>          path to the confirmed --hear transcript
   --help, -h                    show this help
 `);
 }
