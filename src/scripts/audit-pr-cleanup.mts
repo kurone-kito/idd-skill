@@ -261,14 +261,6 @@ async function main(): Promise<void> {
     process.exit(0);
   }
 
-  if (!args.pr && !args.prs) {
-    fail('missing required --pr <number> or --prs <n1,n2,...>');
-  }
-
-  if (args.pr && args.prs) {
-    fail('choose only one of --pr or --prs');
-  }
-
   if (args.apply && args.dryRun) {
     fail('choose only one of --dry-run or --apply');
   }
@@ -322,12 +314,22 @@ async function main(): Promise<void> {
 }
 
 /**
- * Resolves `--pr`/`--prs` (exactly one is required by the caller before this
- * runs) into an ordered, de-duplicated list of PR numbers. `--prs` splits on
- * `,`, trims whitespace, drops empty tokens, and validates each remaining
- * token with the same {@link parsePositiveInteger} used by `--pr`.
+ * Resolves `--pr`/`--prs` into an ordered, de-duplicated list of PR numbers.
+ * Validates that exactly one of the two is present itself (Copilot review,
+ * PR #2305) rather than trusting the caller to have checked first — an
+ * unconditional `args.prs as string` cast on a direct call with neither flag
+ * would otherwise throw a raw `TypeError` instead of failing consistently
+ * through {@link fail}. `--prs` splits on `,`, trims whitespace, drops empty
+ * tokens, and validates each remaining token with the same
+ * {@link parsePositiveInteger} used by `--pr`.
  */
 export function parsePrNumbers(args: CleanupArgs): number[] {
+  if (!args.pr && !args.prs) {
+    fail('missing required --pr <number> or --prs <n1,n2,...>');
+  }
+  if (args.pr && args.prs) {
+    fail('choose only one of --pr or --prs');
+  }
   if (args.pr) {
     return [parsePositiveInteger(args.pr, '--pr')];
   }

@@ -416,6 +416,28 @@ test('parsePrNumbers: --prs de-duplicates while preserving first-seen order', ()
   );
 });
 
+test('parsePrNumbers: neither --pr nor --prs fails instead of throwing a raw TypeError (Copilot review, PR #2305)', () => {
+  const restore = stubExitOnFail();
+  try {
+    assert.throws(
+      () => parsePrNumbers(cleanupArgs()),
+      /process\.exit/,
+      'must fail via fail()/process.exit, not an unrelated TypeError from a bare .split() on undefined',
+    );
+  } finally {
+    restore();
+  }
+});
+
+test('parsePrNumbers: both --pr and --prs fails', () => {
+  const restore = stubExitOnFail();
+  try {
+    assert.throws(() => parsePrNumbers(cleanupArgs({ pr: '1', prs: '2,3' })));
+  } finally {
+    restore();
+  }
+});
+
 test('parsePrNumbers: --prs with only empty/whitespace tokens fails', () => {
   const restore = stubExitOnFail();
   try {
