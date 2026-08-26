@@ -188,23 +188,28 @@ reasoning depth, not for routine IDD loop execution.
 **Requires a local clone of `kurone-kito/idd-skill`** (Step 2 Option B
 below) — `scripts/idd-onboard.mjs` exists only in that checkout, not in
 a target repository fetched via Option A alone. If this session has
-such a clone plus a working Node.js/`npx` helper runtime, run the
-onboarding CLI end to end instead of reading the rest of this file or
+such a clone plus a working Node.js/`npx` helper runtime, this run
+order replaces the manual Steps 0-4 and 6 procedures below and
 [Onboarding Reference — Policy Decisions](docs/onboarding/policy-decisions.md) /
 [Onboarding Reference — Placeholder Values](docs/onboarding/placeholders.md)
-— open those companions only if one of the steps below fails. Without
+— open those two companions only if one of the steps below fails.
+Step 5 (agent-entry files) and the
+[Project Tuning](docs/onboarding/project-tuning.md) companion in step
+6 below still need reading; this path does not automate them. Without
 a clone, use the [Instructions-only path](#instructions-only-path)
 below instead.
 
-1. Read-only propose (or run bare `--hear` for the TTY wizard
-   instead): catalog items with any derived candidate and documented
-   default, Step 0 evidence, and helper-runtime evidence. Relay each
-   item's `prompt` and `explanation` to the operator and collect their
-   confirmed answers.
+1. Read-only propose: catalog items with any derived candidate and
+   documented default, Step 0 evidence, and helper-runtime evidence.
+   Relay each item's `prompt` and `explanation` to the operator and
+   collect their confirmed answers. `--propose` is required even when
+   also running the TTY wizard next — the wizard alone skips every
+   `check`-kind item (Step 0's `gh`/host/execution-environment checks)
+   and never gathers helper-runtime evidence.
 
    ```sh
    node scripts/idd-onboard.mjs --hear --propose --target <target-repo>
-   node scripts/idd-onboard.mjs --hear --target <target-repo>  # TTY wizard
+   node scripts/idd-onboard.mjs --hear --target <target-repo>  # optional TTY wizard, after propose
    ```
 
 2. Validate the operator's answers against the catalog and print the
@@ -214,6 +219,13 @@ below instead.
    node scripts/idd-onboard.mjs --hear --apply \
      --answers <answers-file> --target <target-repo>
    ```
+
+   **Check the transcript's `bootstrap-execution-mode` answer before
+   continuing.** If it is `issue-mediated`, stop here — switch to
+   [Onboarding Reference — Issue-Mediated
+   Bootstrap](docs/onboarding/issue-mediated-bootstrap.md) instead of
+   running steps 3-5 below, which write the template with a direct,
+   unreviewed commit (the `direct-import` default only).
 
 3. Import the core template file set (add `--profile vendored-node`
    when that profile was confirmed).

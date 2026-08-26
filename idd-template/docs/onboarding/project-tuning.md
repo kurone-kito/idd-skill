@@ -75,13 +75,21 @@ the real values to `.github/idd/config.json` by hand after
 
 ## Reserved-label guard
 
-When the hearing's nested auto-labeler follow-up answer is yes (a
-semantic issue auto-labeler such as CodeRabbit's issue enrichment is
-active), the configured IDD label names — whether the distributed
-defaults or the custom values just recorded above — need a guard so
-the labeler cannot silently apply one of them to an ordinary issue.
-See [IDD label names](policy-decisions.md#idd-label-names) for the
-field evidence and
+**The hearing catalog cannot answer this for you.** Unlike the other
+sections here, this is not a case of "the catalog asked but the CLI
+didn't apply it" — `hearing-catalog.json` has no nested auto-labeler
+follow-up item at all (the TTY wizard only iterates catalog items, and
+`--hear --apply` rejects any answer id it does not recognize), so no
+transcript ever carries an answer to ask about it. Ask the operator
+directly, regardless of which path produced the transcript: does
+anything in this repository, or an installed GitHub App, auto-apply
+labels to issues based on content (a semantic auto-labeler such as
+CodeRabbit's issue enrichment)? If yes, the configured IDD label
+names — whether the distributed defaults or the custom values just
+recorded above — need a guard so the labeler cannot silently apply one
+of them to an ordinary issue. See
+[IDD label names](policy-decisions.md#idd-label-names) for the field
+evidence and
 [Customizing IDD — Reserved-label guard recipe](../customization.md#reserved-label-guard-recipe)
 for the recipe itself; neither `--record-policy` nor any other
 `idd-onboard` mode configures the labeler.

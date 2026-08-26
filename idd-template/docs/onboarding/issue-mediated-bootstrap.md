@@ -214,7 +214,27 @@ transcript already carries every placeholder and policy answer this
 issue needs, keyed by catalog `id`, and the executing session reads it
 directly rather than re-deriving anything. Only fall back to the
 per-value list below for a no-helper-runtime hearing that produced no
-transcript:
+transcript.
+
+**The raw transcript is not enough for the issue-authoring companion
+item on its own.** The transcript's `issue-authoring-companion` answer
+only carries the operator's real choice (`installed` / `not
+installed`). This bootstrap issue always defers those files (see
+"Do not draft this" below) and, when the real choice is `installed`,
+also needs the confirmed native destination for the companion
+follow-up issue to read later — neither the forced `not installed`
+core-bootstrap override nor the destination has its own transcript
+field. Add both as an explicit override note directly below the
+embedded transcript:
+
+```markdown
+Issue-authoring companion status (core-bootstrap, temporary): not
+installed (always, regardless of the transcript's real
+`issue-authoring-companion` answer — see the note below).
+Issue-authoring companion target state (the transcript's real answer,
+for the companion follow-up issue to read later): <installed, native
+destination `<value>` | not installed>
+```
 
 Use these operator-confirmed values, already collected during the
 hearing (Steps 1A-1C), instead of re-deriving them:
