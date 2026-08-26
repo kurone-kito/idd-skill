@@ -3066,3 +3066,709 @@ test('a real import + substitute produces a doc tree that passes the documented 
     `cspell only checked ${filesChecked} files, fewer than the ${importedFileCount} files --import wrote -- enableGlobDot may have regressed`,
   );
 });
+
+// ---------------------------------------------------------------------------
+// --substitute --from-transcript / --record-policy (#2282)
+// ---------------------------------------------------------------------------
+
+/** Confirms a valid answers map into a transcript via the real --hear --apply CLI path. */
+function confirmTranscript(
+  root: string,
+  answers: Record<string, string>,
+): Record<string, unknown> {
+  const answersPath = join(root, 'hear-answers.json');
+  writeFileSync(answersPath, JSON.stringify(answers));
+  const { status, verdict } = runCliBin([
+    '--hear',
+    '--apply',
+    '--answers',
+    answersPath,
+  ]);
+  assert.equal(
+    status,
+    0,
+    `expected a valid transcript, got: ${JSON.stringify(verdict)}`,
+  );
+  return verdict;
+}
+
+test('bin/idd-onboard.mjs --substitute --from-transcript resolves placeholders from a confirmed transcript', () => {
+  const root = makeFixtureDir();
+  writeTemplateFixture(root);
+  const answers = buildValidHearAnswers();
+  for (const [key, value] of Object.entries(ALL_OVERRIDES)) {
+    answers[key] = value;
+  }
+  const transcript = confirmTranscript(root, answers);
+  const transcriptPath = join(root, 'transcript.json');
+  writeFileSync(transcriptPath, JSON.stringify(transcript));
+
+  const { status, verdict } = runCliBin([
+    '--substitute',
+    '--from-transcript',
+    transcriptPath,
+    '--target',
+    root,
+  ]);
+  assert.equal(status, 0);
+  assert.equal(verdict.written, true);
+  assert.deepEqual(verdict.residue, []);
+  const values = verdict.values as Record<
+    string,
+    { value: string; source: string }
+  >;
+  assert.equal(values.REPO_NAME.value, ALL_OVERRIDES.REPO_NAME);
+  assert.equal(values.REPO_NAME.source, 'flag');
+  const config = readFileSync(
+    join(root, '.github', 'idd', 'config.json'),
+    'utf8',
+  );
+  assert.match(config, /"markerPrefix": "my-app"/);
+});
+
+test('bin/idd-onboard.mjs --substitute --from-transcript: an explicit placeholder flag still wins over the transcript', () => {
+  const root = makeFixtureDir();
+  writeTemplateFixture(root);
+  const answers = buildValidHearAnswers();
+  for (const [key, value] of Object.entries(ALL_OVERRIDES)) {
+    answers[key] = value;
+  }
+  const transcript = confirmTranscript(root, answers);
+  const transcriptPath = join(root, 'transcript.json');
+  writeFileSync(transcriptPath, JSON.stringify(transcript));
+
+  const { status, verdict } = runCliBin([
+    '--substitute',
+    '--from-transcript',
+    transcriptPath,
+    '--target',
+    root,
+    '--repo-name',
+    'explicit-wins',
+  ]);
+  assert.equal(status, 0);
+  const values = verdict.values as Record<
+    string,
+    { value: string; source: string }
+  >;
+  assert.equal(values.REPO_NAME.value, 'explicit-wins');
+  assert.equal(values.REPO_NAME.source, 'flag');
+});
+
+test('bin/idd-onboard.mjs --substitute --from-transcript exits 1, no writes, when the transcript omits a placeholder answer entirely', () => {
+  const root = makeFixtureDir();
+  writeTemplateFixture(root);
+  const answers = buildValidHearAnswers();
+  // Every OTHER placeholder gets a pattern-valid value so the only
+  // remaining unresolved token after trimming is TRUSTED_MARKER_ACTOR
+  // (which has no automatic derivation).
+  for (const [key, value] of Object.entries(ALL_OVERRIDES)) {
+    answers[key] = value;
+  }
+  const transcript = confirmTranscript(root, answers);
+  const trimmed = {
+    ...transcript,
+    answers: (transcript.answers as { id: string; value: string }[]).filter(
+      (answer) => answer.id !== 'TRUSTED_MARKER_ACTOR',
+    ),
+  };
+  const transcriptPath = join(root, 'transcript.json');
+  writeFileSync(transcriptPath, JSON.stringify(trimmed));
+  const before = snapshotTree(root);
+
+  const { status, verdict } = runCliBin([
+    '--substitute',
+    '--from-transcript',
+    transcriptPath,
+    '--target',
+    root,
+  ]);
+  assert.equal(status, 1);
+  assert.equal(verdict.written, false);
+  assert.ok(
+    (verdict.residue as unknown[]).length > 0 ||
+      (verdict.unresolved as unknown[])?.includes('TRUSTED_MARKER_ACTOR'),
+  );
+  assertTreeUnchanged(root, before);
+});
+
+test('bin/idd-onboard.mjs --substitute --from-transcript exits 1 on a malformed transcript, without touching the tree', () => {
+  const root = makeFixtureDir();
+  writeTemplateFixture(root);
+  const transcriptPath = join(root, 'transcript.json');
+  writeFileSync(transcriptPath, JSON.stringify({ version: '1.0.0' }));
+  const before = snapshotTree(root);
+
+  const { status, verdict } = runCliBin([
+    '--substitute',
+    '--from-transcript',
+    transcriptPath,
+    '--target',
+    root,
+    ...CLI_OVERRIDE_FLAGS,
+  ]);
+  assert.equal(status, 1);
+  assert.equal(verdict.valid, false);
+  assert.ok(Array.isArray(verdict.unresolved) && verdict.unresolved.length > 0);
+  assertTreeUnchanged(root, before);
+});
+
+test('bin/idd-onboard.mjs --substitute rejects --record-policy-only flags (--transcript, --write-policy-doc)', () => {
+  const root = makeFixtureDir();
+  writeTemplateFixture(root);
+  const result = spawnSync(
+    process.execPath,
+    [
+      BIN_PATH,
+      '--substitute',
+      '--target',
+      root,
+      '--transcript',
+      'x.json',
+      ...CLI_OVERRIDE_FLAGS,
+    ],
+    { encoding: 'utf8' },
+  );
+  assert.equal(result.status, 2);
+});
+
+/** A pristine, post-import config.json (unsubstituted placeholders, as --record-policy expects). */
+function writeRecordPolicyFixture(root: string): void {
+  mkdirSync(join(root, '.github', 'idd'), { recursive: true });
+  writeFileSync(
+    join(root, '.github', 'idd', 'config.json'),
+    [
+      '{',
+      '  "markerPrefix": "{{PROJECT_MARKER_PREFIX}}",',
+      '  "trustedMarkerActors": ["{{TRUSTED_MARKER_ACTOR}}"],',
+      '  "commands": {',
+      '    "install-deps": "{{INSTALL_DEPS_COMMAND}}",',
+      '    "fix-validate": "{{FIX_VALIDATE_COMMANDS}}",',
+      '    "pre-push-validate": "{{PRE_PUSH_VALIDATE_COMMANDS}}",',
+      '    "post-fix-validate": "{{POST_FIX_VALIDATE_COMMANDS}}"',
+      '  }',
+      '}',
+      '',
+    ].join('\n'),
+  );
+}
+
+test('bin/idd-onboard.mjs --record-policy dry-run prints the config patch and filled template, writing nothing', () => {
+  const root = makeFixtureDir();
+  writeRecordPolicyFixture(root);
+  const answers = buildValidHearAnswers();
+  const transcript = confirmTranscript(root, answers);
+  const transcriptPath = join(root, 'transcript.json');
+  writeFileSync(transcriptPath, JSON.stringify(transcript));
+  const before = snapshotTree(root);
+
+  const { status, verdict } = runCliBin([
+    '--record-policy',
+    '--transcript',
+    transcriptPath,
+    '--target',
+    root,
+  ]);
+  assert.equal(status, 0);
+  assert.equal(verdict.mode, 'dry-run');
+  assert.equal(verdict.written, false);
+  const patch = verdict.configPatch as Record<string, unknown>;
+  assert.equal(patch.mergePolicy, answers['merge-policy']);
+  assert.match(verdict.policyDocument as string, /## IDD Policy Configuration/);
+  assert.match(verdict.policyDocument as string, /### Merge Policy/);
+  // Claim Timing / CI Wait Policy render as the template's own bulleted
+  // sub-fields, not one flattened line, when the catalog's meta answer
+  // is the distributed-defaults choice (#2282 review follow-up).
+  assert.match(
+    verdict.policyDocument as string,
+    /### Claim Timing\n\n- \*\*claim-stale-age\*\*: 24 h \(distributed default\)\n- \*\*claim-heartbeat-interval\*\*: 12 h \(distributed default\)/,
+  );
+  assert.match(
+    verdict.policyDocument as string,
+    /### CI Wait Policy\n\n- \*\*running timeout\*\*: `PT30M` \/ 30 min \(distributed default, not confirmed by this hearing item\)\n- \*\*generation timeout\*\*: `PT10M` \/ 10 min \(distributed default, not confirmed by this hearing item\)\n- \*\*rerun policy\*\*: `rerun-once`/,
+  );
+  assertTreeUnchanged(root, before);
+});
+
+test('bin/idd-onboard.mjs --record-policy fills a Claim Timing override with the confirmed selection, not invented sub-values, and carries a confirmed CI Wait rerun policy into its bullet', () => {
+  const root = makeFixtureDir();
+  writeRecordPolicyFixture(root);
+  const answers = buildValidHearAnswers();
+  answers['claim-timing'] = 'repository-override';
+  answers['ci-wait-policy'] = 'hold';
+  const transcript = confirmTranscript(root, answers);
+  const transcriptPath = join(root, 'transcript.json');
+  writeFileSync(transcriptPath, JSON.stringify(transcript));
+
+  const { verdict } = runCliBin([
+    '--record-policy',
+    '--transcript',
+    transcriptPath,
+    '--target',
+    root,
+  ]);
+  const doc = verdict.policyDocument as string;
+  assert.match(
+    doc,
+    /### Claim Timing\n\n\*\*Selection\*\*: `repository-override` \(override values not captured by this hearing item -- record them manually\)/,
+  );
+  assert.doesNotMatch(doc, /claim-stale-age/);
+  assert.match(
+    doc,
+    /### CI Wait Policy\n\n- \*\*running timeout\*\*[\s\S]*?\n- \*\*generation timeout\*\*[\s\S]*?\n- \*\*rerun policy\*\*: `hold`/,
+  );
+});
+
+test('bin/idd-onboard.mjs --record-policy --apply merges only mapsToConfig fields into config.json', () => {
+  const root = makeFixtureDir();
+  writeRecordPolicyFixture(root);
+  const answers = buildValidHearAnswers();
+  answers['merge-policy'] = 'fully_autonomous_merge';
+  answers['review-policy'] = 'human-required';
+  const transcript = confirmTranscript(root, answers);
+  const transcriptPath = join(root, 'transcript.json');
+  writeFileSync(transcriptPath, JSON.stringify(transcript));
+
+  const { status, verdict } = runCliBin([
+    '--record-policy',
+    '--transcript',
+    transcriptPath,
+    '--target',
+    root,
+    '--apply',
+  ]);
+  assert.equal(status, 0);
+  assert.equal(verdict.mode, 'apply');
+  assert.equal(verdict.written, true);
+  const config = JSON.parse(
+    readFileSync(join(root, '.github', 'idd', 'config.json'), 'utf8'),
+  ) as Record<string, unknown>;
+  assert.equal(config.mergePolicy, 'fully_autonomous_merge');
+  assert.equal(config.reviewPolicy, 'human-required');
+  // The pristine placeholder fields survive untouched.
+  assert.equal(config.markerPrefix, '{{PROJECT_MARKER_PREFIX}}');
+});
+
+test('bin/idd-onboard.mjs --record-policy --dry-run --apply does not write: --dry-run always wins', () => {
+  const root = makeFixtureDir();
+  writeRecordPolicyFixture(root);
+  const answers = buildValidHearAnswers();
+  const transcript = confirmTranscript(root, answers);
+  const transcriptPath = join(root, 'transcript.json');
+  writeFileSync(transcriptPath, JSON.stringify(transcript));
+  const before = snapshotTree(root);
+
+  const { status, verdict } = runCliBin([
+    '--record-policy',
+    '--transcript',
+    transcriptPath,
+    '--target',
+    root,
+    '--dry-run',
+    '--apply',
+  ]);
+  assert.equal(status, 0);
+  assert.equal(verdict.mode, 'dry-run');
+  assert.equal(verdict.written, false);
+  assertTreeUnchanged(root, before);
+});
+
+test('bin/idd-onboard.mjs --record-policy leaves no helperRuntime key when the confirmed profile is instructions-only and none pre-existed', () => {
+  const root = makeFixtureDir();
+  writeRecordPolicyFixture(root);
+  const answers = buildValidHearAnswers();
+  answers['helper-runtime-profile'] = 'instructions-only';
+  const transcript = confirmTranscript(root, answers);
+  const transcriptPath = join(root, 'transcript.json');
+  writeFileSync(transcriptPath, JSON.stringify(transcript));
+
+  const { verdict } = runCliBin([
+    '--record-policy',
+    '--transcript',
+    transcriptPath,
+    '--target',
+    root,
+    '--apply',
+  ]);
+  const patch = verdict.configPatch as Record<string, unknown>;
+  assert.equal(
+    patch.helperRuntime,
+    '(reset to distributed default: key removed)',
+  );
+  const config = JSON.parse(
+    readFileSync(join(root, '.github', 'idd', 'config.json'), 'utf8'),
+  ) as Record<string, unknown>;
+  assert.equal('helperRuntime' in config, false);
+});
+
+test('bin/idd-onboard.mjs --record-policy removes a pre-existing non-default helperRuntime when the transcript reconfirms instructions-only (#2282 review follow-up)', () => {
+  const root = makeFixtureDir();
+  writeRecordPolicyFixture(root);
+  const existing = JSON.parse(
+    readFileSync(join(root, '.github', 'idd', 'config.json'), 'utf8'),
+  ) as Record<string, unknown>;
+  existing.helperRuntime = { profile: 'package-manager' };
+  writeFileSync(
+    join(root, '.github', 'idd', 'config.json'),
+    `${JSON.stringify(existing, null, 2)}\n`,
+  );
+  const answers = buildValidHearAnswers();
+  answers['helper-runtime-profile'] = 'instructions-only';
+  const transcript = confirmTranscript(root, answers);
+  const transcriptPath = join(root, 'transcript.json');
+  writeFileSync(transcriptPath, JSON.stringify(transcript));
+
+  runCliBin([
+    '--record-policy',
+    '--transcript',
+    transcriptPath,
+    '--target',
+    root,
+    '--apply',
+  ]);
+  const config = JSON.parse(
+    readFileSync(join(root, '.github', 'idd', 'config.json'), 'utf8'),
+  ) as Record<string, unknown>;
+  assert.equal('helperRuntime' in config, false);
+});
+
+test('bin/idd-onboard.mjs --record-policy writes helperRuntime.profile for a non-default confirmed profile, preserving sibling ciWait keys', () => {
+  const root = makeFixtureDir();
+  writeRecordPolicyFixture(root);
+  const existing = JSON.parse(
+    readFileSync(join(root, '.github', 'idd', 'config.json'), 'utf8'),
+  ) as Record<string, unknown>;
+  existing.ciWait = { runningTimeout: 'PT30M' };
+  writeFileSync(
+    join(root, '.github', 'idd', 'config.json'),
+    `${JSON.stringify(existing, null, 2)}\n`,
+  );
+  const answers = buildValidHearAnswers();
+  answers['helper-runtime-profile'] = 'package-manager';
+  answers['ci-wait-policy'] = 'hold';
+  const transcript = confirmTranscript(root, answers);
+  const transcriptPath = join(root, 'transcript.json');
+  writeFileSync(transcriptPath, JSON.stringify(transcript));
+
+  runCliBin([
+    '--record-policy',
+    '--transcript',
+    transcriptPath,
+    '--target',
+    root,
+    '--apply',
+  ]);
+  const config = JSON.parse(
+    readFileSync(join(root, '.github', 'idd', 'config.json'), 'utf8'),
+  ) as Record<string, unknown>;
+  assert.deepEqual(config.helperRuntime, { profile: 'package-manager' });
+  assert.deepEqual(config.ciWait, {
+    runningTimeout: 'PT30M',
+    rerunPolicy: 'hold',
+  });
+});
+
+test('bin/idd-onboard.mjs --record-policy writes skipIssueAuthorApprovalGate true only when the operator opted out', () => {
+  const root = makeFixtureDir();
+  writeRecordPolicyFixture(root);
+  const answers = buildValidHearAnswers();
+  answers['issue-author-approval-gate'] = 'skip-gate';
+  const transcript = confirmTranscript(root, answers);
+  const transcriptPath = join(root, 'transcript.json');
+  writeFileSync(transcriptPath, JSON.stringify(transcript));
+
+  const { verdict } = runCliBin([
+    '--record-policy',
+    '--transcript',
+    transcriptPath,
+    '--target',
+    root,
+    '--apply',
+  ]);
+  const patch = verdict.configPatch as Record<string, unknown>;
+  assert.equal(patch.skipIssueAuthorApprovalGate, true);
+
+  const root2 = makeFixtureDir();
+  writeRecordPolicyFixture(root2);
+  const answers2 = buildValidHearAnswers();
+  answers2['issue-author-approval-gate'] = 'enabled-by-default';
+  const transcript2 = confirmTranscript(root2, answers2);
+  const transcriptPath2 = join(root2, 'transcript.json');
+  writeFileSync(transcriptPath2, JSON.stringify(transcript2));
+  const { verdict: verdict2 } = runCliBin([
+    '--record-policy',
+    '--transcript',
+    transcriptPath2,
+    '--target',
+    root2,
+    '--apply',
+  ]);
+  const patch2 = verdict2.configPatch as Record<string, unknown>;
+  assert.equal(
+    patch2.skipIssueAuthorApprovalGate,
+    '(reset to distributed default: key removed)',
+  );
+});
+
+test('bin/idd-onboard.mjs --record-policy removes a pre-existing skipIssueAuthorApprovalGate:true when the transcript reconfirms enabled-by-default (#2282 review follow-up)', () => {
+  const root = makeFixtureDir();
+  writeRecordPolicyFixture(root);
+  const existing = JSON.parse(
+    readFileSync(join(root, '.github', 'idd', 'config.json'), 'utf8'),
+  ) as Record<string, unknown>;
+  existing.skipIssueAuthorApprovalGate = true;
+  writeFileSync(
+    join(root, '.github', 'idd', 'config.json'),
+    `${JSON.stringify(existing, null, 2)}\n`,
+  );
+  const answers = buildValidHearAnswers();
+  answers['issue-author-approval-gate'] = 'enabled-by-default';
+  const transcript = confirmTranscript(root, answers);
+  const transcriptPath = join(root, 'transcript.json');
+  writeFileSync(transcriptPath, JSON.stringify(transcript));
+
+  runCliBin([
+    '--record-policy',
+    '--transcript',
+    transcriptPath,
+    '--target',
+    root,
+    '--apply',
+  ]);
+  const config = JSON.parse(
+    readFileSync(join(root, '.github', 'idd', 'config.json'), 'utf8'),
+  ) as Record<string, unknown>;
+  assert.equal('skipIssueAuthorApprovalGate' in config, false);
+});
+
+test('bin/idd-onboard.mjs --record-policy never turns a docs-only or meta-choice answer into a config key', () => {
+  const root = makeFixtureDir();
+  writeRecordPolicyFixture(root);
+  const answers = buildValidHearAnswers();
+  answers['claim-timing'] = 'repository-override';
+  answers['idd-label-names'] = 'custom-taxonomy';
+  const transcript = confirmTranscript(root, answers);
+  const transcriptPath = join(root, 'transcript.json');
+  writeFileSync(transcriptPath, JSON.stringify(transcript));
+
+  const { verdict } = runCliBin([
+    '--record-policy',
+    '--transcript',
+    transcriptPath,
+    '--target',
+    root,
+  ]);
+  const patch = verdict.configPatch as Record<string, unknown>;
+  const docsOnlyIds = [
+    'critique-loop-profile',
+    'credential-scope',
+    'issue-authoring-companion',
+    'up-to-date-head-ruleset',
+    'bootstrap-execution-mode',
+  ];
+  for (const id of docsOnlyIds) {
+    const item = loadOnboardingHearingCatalog().items.find(
+      (entry) => entry.id === id,
+    );
+    assert.ok(item, `catalog missing ${id}`);
+    const topLevelKey = item?.mapsToConfig?.split('/').filter(Boolean)[0];
+    if (topLevelKey !== undefined) {
+      assert.equal(topLevelKey in patch, false, `${id} leaked into the patch`);
+    }
+  }
+  assert.equal('claimTiming' in patch, false);
+  assert.equal('labels' in patch, false);
+  // Still surfaced for a human, just never as an invented config key.
+  assert.match(verdict.policyDocument as string, /### Claim Timing/);
+  assert.match(verdict.policyDocument as string, /repository-override/);
+  assert.match(verdict.policyDocument as string, /### IDD Label Names/);
+  assert.match(verdict.policyDocument as string, /custom-taxonomy/);
+  assert.doesNotMatch(
+    verdict.policyDocument as string,
+    /### Merge Policy[\s\S]*### Merge Policy/,
+  );
+});
+
+test('bin/idd-onboard.mjs --record-policy --write-policy-doc writes the template only under --apply, never without it', () => {
+  const root = makeFixtureDir();
+  writeRecordPolicyFixture(root);
+  const answers = buildValidHearAnswers();
+  const transcript = confirmTranscript(root, answers);
+  const transcriptPath = join(root, 'transcript.json');
+  writeFileSync(transcriptPath, JSON.stringify(transcript));
+  const docPath = join(root, 'policy-doc.md');
+
+  const dryRun = runCliBin([
+    '--record-policy',
+    '--transcript',
+    transcriptPath,
+    '--target',
+    root,
+    '--write-policy-doc',
+    docPath,
+  ]);
+  assert.equal(dryRun.status, 0);
+  assert.equal(existsSync(docPath), false);
+
+  const applied = runCliBin([
+    '--record-policy',
+    '--transcript',
+    transcriptPath,
+    '--target',
+    root,
+    '--apply',
+    '--write-policy-doc',
+    docPath,
+  ]);
+  assert.equal(applied.status, 0);
+  assert.equal(existsSync(docPath), true);
+  assert.equal(applied.verdict.writtenPolicyDocPath, resolve(docPath));
+
+  const root2 = makeFixtureDir();
+  writeRecordPolicyFixture(root2);
+  const transcript2 = confirmTranscript(root2, buildValidHearAnswers());
+  const transcriptPath2 = join(root2, 'transcript.json');
+  writeFileSync(transcriptPath2, JSON.stringify(transcript2));
+  const appliedNoDocFlag = runCliBin([
+    '--record-policy',
+    '--transcript',
+    transcriptPath2,
+    '--target',
+    root2,
+    '--apply',
+  ]);
+  assert.equal(appliedNoDocFlag.status, 0);
+  assert.equal(appliedNoDocFlag.verdict.writtenPolicyDocPath, null);
+});
+
+test('bin/idd-onboard.mjs --record-policy exits 2 when config.json does not already exist (post-import only)', () => {
+  const root = makeFixtureDir();
+  const transcriptPath = join(root, 'transcript.json');
+  writeFileSync(
+    transcriptPath,
+    JSON.stringify({
+      version: '1.0.0',
+      confirmedAt: new Date().toISOString(),
+      answers: [],
+    }),
+  );
+  const result = spawnSync(
+    process.execPath,
+    [
+      BIN_PATH,
+      '--record-policy',
+      '--transcript',
+      transcriptPath,
+      '--target',
+      root,
+    ],
+    { encoding: 'utf8' },
+  );
+  assert.equal(result.status, 2);
+});
+
+test('bin/idd-onboard.mjs --record-policy exits 2 and writes nothing when config.json parses to a non-object root (#2282 review follow-up)', () => {
+  const root = makeFixtureDir();
+  mkdirSync(join(root, '.github', 'idd'), { recursive: true });
+  writeFileSync(join(root, '.github', 'idd', 'config.json'), 'null\n');
+  const answers = buildValidHearAnswers();
+  const transcript = confirmTranscript(root, answers);
+  const transcriptPath = join(root, 'transcript.json');
+  writeFileSync(transcriptPath, JSON.stringify(transcript));
+  const before = snapshotTree(root);
+
+  const result = spawnSync(
+    process.execPath,
+    [
+      BIN_PATH,
+      '--record-policy',
+      '--transcript',
+      transcriptPath,
+      '--target',
+      root,
+      '--apply',
+    ],
+    { encoding: 'utf8' },
+  );
+  assert.equal(result.status, 2);
+  assertTreeUnchanged(root, before);
+});
+
+test('bin/idd-onboard.mjs --record-policy requires --transcript', () => {
+  const root = makeFixtureDir();
+  writeRecordPolicyFixture(root);
+  const result = spawnSync(
+    process.execPath,
+    [BIN_PATH, '--record-policy', '--target', root],
+    { encoding: 'utf8' },
+  );
+  assert.equal(result.status, 2);
+});
+
+test('bin/idd-onboard.mjs --record-policy exits 1 on a malformed transcript, mode reflects --dry-run even with --apply also passed (#2282 review follow-up)', () => {
+  const root = makeFixtureDir();
+  writeRecordPolicyFixture(root);
+  const transcriptPath = join(root, 'transcript.json');
+  writeFileSync(transcriptPath, JSON.stringify({ version: '1.0.0' }));
+  const before = snapshotTree(root);
+
+  const { status, verdict } = runCliBin([
+    '--record-policy',
+    '--transcript',
+    transcriptPath,
+    '--target',
+    root,
+    '--dry-run',
+    '--apply',
+  ]);
+  assert.equal(status, 1);
+  assert.equal(verdict.valid, false);
+  assert.equal(verdict.mode, 'dry-run');
+  assert.ok(Array.isArray(verdict.unresolved) && verdict.unresolved.length > 0);
+  assertTreeUnchanged(root, before);
+});
+
+test('bin/idd-onboard.mjs exits 2 when --record-policy is combined with --import, --substitute, --verify, or --hear', () => {
+  const root = makeFixtureDir();
+  writeRecordPolicyFixture(root);
+  const combos = [
+    ['--record-policy', '--import', '--target', root],
+    ['--record-policy', '--substitute', '--target', root],
+    ['--record-policy', '--verify', '--target', root],
+    ['--record-policy', '--hear', '--target', root],
+  ];
+  for (const args of combos) {
+    const result = spawnSync(process.execPath, [BIN_PATH, ...args], {
+      encoding: 'utf8',
+    });
+    assert.equal(result.status, 2, `expected exit 2 for: ${args.join(' ')}`);
+  }
+});
+
+test('bin/idd-onboard.mjs --hear rejects --record-policy-only flags (--transcript, --write-policy-doc)', () => {
+  const root = makeFixtureDir();
+  const result = spawnSync(
+    process.execPath,
+    [
+      BIN_PATH,
+      '--hear',
+      '--propose',
+      '--target',
+      root,
+      '--transcript',
+      'x.json',
+    ],
+    { encoding: 'utf8' },
+  );
+  assert.equal(result.status, 2);
+});
+
+test('bin/idd-onboard.mjs --help documents --record-policy, --transcript, and --write-policy-doc', () => {
+  const help = execFileSync(process.execPath, [BIN_PATH, '--help'], {
+    encoding: 'utf8',
+  });
+  assert.match(help, /--record-policy/);
+  assert.match(help, /--transcript/);
+  assert.match(help, /--write-policy-doc/);
+  assert.match(help, /--from-transcript/);
+});
