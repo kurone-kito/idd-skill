@@ -113,7 +113,7 @@ the source template, including `mergePolicy` — an operator who
 previously opted in to `fully_autonomous_merge` (or
 `separate_merge_agent`) must re-record that choice after a forced
 re-import, since the file reverts to the shipped `human_merge` default
-along with it.
+along with it. This rule is preventive; no observed incident yet.
 
 When you then audit whether re-imported roadmap work is actually done, judge
 **completion by auditing the implementation against the acceptance criteria**,
