@@ -63,9 +63,10 @@ imply merge authority. Before granting unattended credentials, choose
 `human_merge`, `separate_merge_agent`, or `fully_autonomous_merge` in
 `docs/customization.md` and `docs/permissions.md`, and record the choice
 in repository documentation that future IDD sessions read. The
-distributed default is `fully_autonomous_merge`; choose `human_merge` or
-`separate_merge_agent` as explicit opt-out profiles when normal worker
-sessions must hand off before F3.
+distributed default is `human_merge`, where normal worker sessions hand
+off before F3; opt in to `fully_autonomous_merge` for an unattended
+merge loop, or choose `separate_merge_agent` as a non-default
+split-authority profile.
 
 ## Optional machine-readable config
 

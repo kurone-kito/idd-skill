@@ -68,11 +68,11 @@ not just documentation preferences.
 ### Merge policy
 
 Before unattended runs begin, choose and record a merge policy with
-`fully_autonomous_merge` preselected as the distributed default, and ask
-whether the operator wants an explicit opt-out to `human_merge` or
+`human_merge` preselected as the distributed default, and ask
+whether the operator wants to opt in to `fully_autonomous_merge` or
 prefers `separate_merge_agent` as a non-default split-authority profile.
 Keep the selected policy in repository documentation that future IDD
-sessions read. Missing policy defaults to `fully_autonomous_merge`;
+sessions read. Missing policy defaults to `human_merge`;
 unknown recorded policy values must stop with a maintainer hold until
 corrected.
 

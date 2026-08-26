@@ -80,7 +80,8 @@ terms literally.
   [`.github/copilot-instructions.md`](.github/copilot-instructions.md#branch-strategy)
   for full rules.
 - **Merge policy**: This source repository records
-  `fully_autonomous_merge` as its local IDD dogfooding policy
+  `fully_autonomous_merge` as an explicit local IDD dogfooding opt-in
+  against the distributed `human_merge` default
   (applies only to `kurone-kito/idd-skill`). An IDD session may
   continue through F3 merge execution only after normal claim,
   freshness, CI, advisory, review, and unresolved-thread gates

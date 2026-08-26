@@ -95,15 +95,16 @@ through a pull request.
 
 ## Local merge policy
 
-This source repository records `fully_autonomous_merge` as its local IDD
-dogfooding policy. The setting applies only to `kurone-kito/idd-skill`
+This source repository records `fully_autonomous_merge` as an explicit
+local IDD dogfooding opt-in against the distributed `human_merge`
+default. The setting applies only to `kurone-kito/idd-skill`
 and does not change the exported template default for adopter
 repositories.
 
 F2.5 (`idd-merge-handoff.instructions.md`) resolves the recorded
 merge policy before F3 merge execution: a missing recorded policy
-resolves to `fully_autonomous_merge` (the distributed default) and
-continues; `human_merge` always stops for a human handoff;
+resolves to `human_merge` (the distributed default) and stops for a
+human handoff; a recorded `human_merge` always stops for a human handoff;
 `separate_merge_agent` continues only when repository documentation
 designates the current session as the merge-capable actor and its
 documented resume condition is satisfied, and otherwise stops; an

@@ -1534,6 +1534,18 @@ test('#1512: this repository opts into the advisory-convergence maintainer-waive
   assert.deepEqual(templatePolicy.ciGate.externalChecks.waivable, []);
 });
 
+test('#2284: this repository keeps fully_autonomous_merge as its local dogfood opt-in, while the distributed template config defaults to human_merge', () => {
+  const repoConfig = readJson('.github/idd/config.json') as {
+    mergePolicy: string;
+  };
+  assert.equal(repoConfig.mergePolicy, 'fully_autonomous_merge');
+
+  const templateConfig = readJson('idd-template/.github/idd/config.json') as {
+    mergePolicy: string;
+  };
+  assert.equal(templateConfig.mergePolicy, 'human_merge');
+});
+
 test('collectDuplicateSyncPairTargets flags repeated targets and ignores unique ones', () => {
   assert.deepEqual(
     collectDuplicateSyncPairTargets([

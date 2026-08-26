@@ -14,6 +14,15 @@ discipline and has no tag.
 
 ## [Unreleased]
 
+### Changed
+
+- **BREAKING**: the distributed merge-policy default flips from
+  `fully_autonomous_merge` to `human_merge`. An unrecorded merge policy
+  and a fresh template `.github/idd/config.json` no longer grant F3
+  merge authority to a worker session — both now stop at the F2.5
+  handoff gate for a human maintainer. A repository that already
+  recorded `fully_autonomous_merge` explicitly is unaffected.
+
 ## [0.7.0] - 2026-08-20
 
 Issue-mediated onboarding bootstrap, orchestrator-delegation and
