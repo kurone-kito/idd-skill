@@ -1,7 +1,14 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import type { CleanupAuditReport } from '../src/scripts/audit-pr-cleanup.mts';
+import type {
+  CleanupArgs,
+  CleanupAuditReport,
+} from '../src/scripts/audit-pr-cleanup.mts';
+import {
+  assertBatchApplyClaimScope,
+  parsePrNumbers,
+} from '../src/scripts/audit-pr-cleanup.mts';
 
 // Importing the CLI module directly is only possible now that its top-level
 // statements are guarded behind `import.meta.main` (#1210, migrated from
@@ -359,4 +366,136 @@ test('runApplyWithRetry truncates a fractional maxAttempts instead of misreporti
   assert.equal(rescanCalls, 2);
   assert.equal(result.attempts, 2);
   assert.equal(result.boundExhausted, true);
+});
+
+// #2224: --prs <n1,n2,...> batch-mode parsing. --pr itself is untouched
+// (still a single string flag, asserted by the pass-through case below).
+// parsePrNumbers validates that exactly one of --pr/--prs is present
+// itself, regardless of the caller.
+
+function cleanupArgs(overrides: Partial<CleanupArgs> = {}): CleanupArgs {
+  return { format: 'json', ...overrides };
+}
+
+/** Stubs process.exit (and silences console.error) so a `fail()`-triggering
+ * path can be asserted with assert.throws instead of killing the test
+ * process. */
+function stubExitOnFail(): () => void {
+  const originalExit = process.exit;
+  const originalError = console.error;
+  process.exit = ((code?: number): never => {
+    throw new Error(`process.exit(${code})`);
+  }) as typeof process.exit;
+  console.error = () => {};
+  return () => {
+    process.exit = originalExit;
+    console.error = originalError;
+  };
+}
+
+test('parsePrNumbers: --pr passes through as a single-element list unchanged', () => {
+  assert.deepEqual(parsePrNumbers(cleanupArgs({ pr: '42' })), [42]);
+});
+
+test('parsePrNumbers: --prs splits a comma-separated list in order', () => {
+  assert.deepEqual(parsePrNumbers(cleanupArgs({ prs: '1,2,3' })), [1, 2, 3]);
+});
+
+test('parsePrNumbers: --prs trims whitespace around each token', () => {
+  assert.deepEqual(
+    parsePrNumbers(cleanupArgs({ prs: ' 1 , 2 ,3  ' })),
+    [1, 2, 3],
+  );
+});
+
+test('parsePrNumbers: --prs drops empty tokens from stray commas', () => {
+  assert.deepEqual(parsePrNumbers(cleanupArgs({ prs: '1,,2,' })), [1, 2]);
+});
+
+test('parsePrNumbers: --prs de-duplicates while preserving first-seen order', () => {
+  assert.deepEqual(
+    parsePrNumbers(cleanupArgs({ prs: '3,1,3,2,1' })),
+    [3, 1, 2],
+  );
+});
+
+test('parsePrNumbers: neither --pr nor --prs fails instead of throwing a raw TypeError (Copilot review, PR #2305)', () => {
+  const restore = stubExitOnFail();
+  try {
+    assert.throws(
+      () => parsePrNumbers(cleanupArgs()),
+      /process\.exit/,
+      'must fail via fail()/process.exit, not an unrelated TypeError from a bare .split() on undefined',
+    );
+  } finally {
+    restore();
+  }
+});
+
+test('parsePrNumbers: both --pr and --prs fails', () => {
+  const restore = stubExitOnFail();
+  try {
+    assert.throws(() => parsePrNumbers(cleanupArgs({ pr: '1', prs: '2,3' })));
+  } finally {
+    restore();
+  }
+});
+
+test('parsePrNumbers: --prs with only empty/whitespace tokens fails', () => {
+  const restore = stubExitOnFail();
+  try {
+    assert.throws(() => parsePrNumbers(cleanupArgs({ prs: ' , , ' })));
+  } finally {
+    restore();
+  }
+});
+
+test('parsePrNumbers: an invalid --prs token fails the same way as --pr', () => {
+  const restore = stubExitOnFail();
+  try {
+    assert.throws(
+      () => parsePrNumbers(cleanupArgs({ prs: '1,not-a-number' })),
+      /process\.exit/,
+    );
+  } finally {
+    restore();
+  }
+});
+
+// #2224 (CodeRabbit review, PR #2305): a claim-gated --apply batch must not
+// let one active claim authorize --apply across every PR in the batch.
+
+test('assertBatchApplyClaimScope: --prs with --apply and no --skip-claim-check fails', () => {
+  const restore = stubExitOnFail();
+  try {
+    assert.throws(() =>
+      assertBatchApplyClaimScope(
+        cleanupArgs({ apply: true, prs: '1,2', claimIssue: '9', claimId: 'x' }),
+      ),
+    );
+  } finally {
+    restore();
+  }
+});
+
+test('assertBatchApplyClaimScope: --prs with --apply and --skip-claim-check is allowed', () => {
+  assert.doesNotThrow(() =>
+    assertBatchApplyClaimScope(
+      cleanupArgs({ apply: true, prs: '1,2', skipClaimCheck: true }),
+    ),
+  );
+});
+
+test('assertBatchApplyClaimScope: --pr with --apply and no --skip-claim-check is unaffected', () => {
+  assert.doesNotThrow(() =>
+    assertBatchApplyClaimScope(
+      cleanupArgs({ apply: true, pr: '1', claimIssue: '9', claimId: 'x' }),
+    ),
+  );
+});
+
+test('assertBatchApplyClaimScope: dry-run (no --apply) is never gated', () => {
+  assert.doesNotThrow(() =>
+    assertBatchApplyClaimScope(cleanupArgs({ prs: '1,2' })),
+  );
 });

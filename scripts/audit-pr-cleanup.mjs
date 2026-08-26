@@ -36,6 +36,7 @@ import {
 const AUDIT_PR_CLEANUP_FLAG_SPEC = {
   '--help': { type: 'boolean', short: 'h', default: false },
   '--pr': { type: 'string' },
+  '--prs': { type: 'string' },
   '--repo': { type: 'string' },
   '--dry-run': { type: 'boolean', default: false },
   '--apply': { type: 'boolean', default: false },
@@ -69,9 +70,6 @@ async function main() {
     printUsage();
     process.exit(0);
   }
-  if (!args.pr) {
-    fail('missing required --pr <number>');
-  }
   if (args.apply && args.dryRun) {
     fail('choose only one of --dry-run or --apply');
   }
@@ -92,9 +90,105 @@ async function main() {
       '--apply requires --claim-issue and --claim-id, or explicit --skip-claim-check',
     );
   }
+  assertBatchApplyClaimScope(args);
   const repository = args.repo ?? detectRepository();
   const [owner, repo] = parseRepository(repository);
-  const prNumber = parsePositiveInteger(args.pr, '--pr');
+  const prNumbers = parsePrNumbers(args);
+  if (args.claimIssue) {
+    args.claimIssue = String(
+      parsePositiveInteger(args.claimIssue, '--claim-issue'),
+    );
+  }
+  // #2224: owner/repo detection above and the module-level trust/permission
+  // caches (trustedMarkerAuthorCache, collaboratorPermissionCache,
+  // cachedConfiguredTrustedMarkerActorSources, cachedCurrentViewerLogin) are
+  // process-lifetime state, so a --prs batch already shares that
+  // per-invocation setup cost across every PR in the loop below.
+  //
+  // Table-format batches print a header before each PR's block: the table
+  // renderer's summary/candidate rows never include the `pr`/`repository`
+  // fields (unlike JSON, where each report object already self-identifies
+  // via its own `pr` field), so consecutive same-shaped blocks would
+  // otherwise be indistinguishable (Copilot review, PR #2305).
+  const printBatchHeader = args.format === 'table' && prNumbers.length > 1;
+  let anyFailed = false;
+  for (const prNumber of prNumbers) {
+    if (printBatchHeader) {
+      console.log(`=== PR #${prNumber} ===`);
+    }
+    if (await processOnePr(owner, repo, prNumber, args)) {
+      anyFailed = true;
+    }
+  }
+  if (anyFailed) {
+    process.exit(1);
+  }
+}
+/**
+ * Rejects a claim-gated `--apply` batch (#2224, CodeRabbit review on PR
+ * #2305): `assertActiveClaim` only verifies the caller holds
+ * `--claim-issue`'s active claim; it does not bind that claim to any
+ * specific PR (`expectedLinkedPrs` only feeds forced-handoff resolution). A
+ * single-PR `--apply` already carries that weak binding, but `--prs` would
+ * let one active claim authorize `--apply` mutations across every PR in the
+ * batch at once, widening the blast radius of a single claim check.
+ * `--skip-claim-check` (the explicit maintainer override) opts out of this
+ * guard, same as it does for the existing single-PR claim requirement.
+ */
+export function assertBatchApplyClaimScope(args) {
+  if (args.apply && args.prs && !args.skipClaimCheck) {
+    fail(
+      '--prs with --apply requires --skip-claim-check (a single active claim would otherwise authorize --apply across every PR in the batch)',
+    );
+  }
+}
+/**
+ * Resolves `--pr`/`--prs` into an ordered, de-duplicated list of PR numbers.
+ * Validates that exactly one of the two is present itself (Copilot review,
+ * PR #2305) rather than trusting the caller to have checked first — an
+ * unconditional `args.prs as string` cast on a direct call with neither flag
+ * would otherwise throw a raw `TypeError` instead of failing consistently
+ * through {@link fail}. `--prs` splits on `,`, trims whitespace, drops empty
+ * tokens, and validates each remaining token with the same
+ * {@link parsePositiveInteger} used by `--pr`.
+ */
+export function parsePrNumbers(args) {
+  if (!args.pr && !args.prs) {
+    fail('missing required --pr <number> or --prs <n1,n2,...>');
+  }
+  if (args.pr && args.prs) {
+    fail('choose only one of --pr or --prs');
+  }
+  if (args.pr) {
+    return [parsePositiveInteger(args.pr, '--pr')];
+  }
+  const seen = new Set();
+  const numbers = [];
+  for (const token of args.prs.split(',')) {
+    const trimmed = token.trim();
+    if (trimmed === '') {
+      continue;
+    }
+    const value = parsePositiveInteger(trimmed, '--prs');
+    if (!seen.has(value)) {
+      seen.add(value);
+      numbers.push(value);
+    }
+  }
+  if (numbers.length === 0) {
+    fail('--prs must contain at least one PR number');
+  }
+  return numbers;
+}
+/**
+ * Runs the audit-and-optionally-apply pass for one PR (extracted verbatim
+ * from the pre-#2224 single-PR `main()` body) and prints its report in the
+ * existing single-PR output shape. Returns whether this PR's report
+ * indicates a failure instead of calling `process.exit(1)` directly, so a
+ * `--prs` batch's aggregate exit code (set by the caller) reflects any PR's
+ * failure without one PR's failure skipping the rest of the batch.
+ */
+async function processOnePr(owner, repo, prNumber, args) {
   const claimContext = {
     expectedLinkedPrs: buildExpectedLinkedPrReferences(owner, repo, prNumber),
     // The PR's first-commit time backs the Part B forced-handoff rule (#1058):
@@ -104,11 +198,6 @@ async function main() {
       ? fetchPrFirstCommitAt(owner, repo, prNumber)
       : null,
   };
-  if (args.claimIssue) {
-    args.claimIssue = String(
-      parsePositiveInteger(args.claimIssue, '--claim-issue'),
-    );
-  }
   const report = await buildReport(owner, repo, prNumber);
   if (args.apply) {
     report.mode = 'apply';
@@ -132,14 +221,15 @@ async function main() {
     computeReportSummary(finalReport);
     if (finalReport.failed.length > 0 || finalReport.rescanError) {
       writeReport(finalReport, args.format);
-      process.exit(1);
+      return true;
     }
     computeReportSummary(finalReport);
     writeReport(finalReport, args.format);
-    return;
+    return false;
   }
   computeReportSummary(report);
   writeReport(report, args.format);
+  return false;
 }
 /**
  * Runs one whole apply pass over `report.candidates`, mutating
@@ -1289,6 +1379,7 @@ function parseArgs(argv) {
     return token;
   };
   const pr = requireNonEmpty(values.pr, '--pr');
+  const prs = requireNonEmpty(values.prs, '--prs');
   const repo = requireNonEmpty(values.repo, '--repo');
   const format = requireNonEmpty(values.format, '--format');
   if (!['json', 'table'].includes(format)) {
@@ -1301,6 +1392,7 @@ function parseArgs(argv) {
     format,
     help,
     pr,
+    prs,
     repo,
     dryRun: values['dry-run'],
     apply: values.apply,
@@ -1317,9 +1409,14 @@ function parsePositiveInteger(value, flag) {
   return Number.parseInt(value, 10);
 }
 function printUsage() {
-  console.log(`usage: node scripts/audit-pr-cleanup.mjs --pr <number> [options]
+  console.log(`usage: node scripts/audit-pr-cleanup.mjs (--pr <number> | --prs <n1,n2,...>) [options]
 
 Options:
+  --pr <number>                     single-PR mode (mutually exclusive with --prs)
+  --prs <n1,n2,...>                 batch mode: audit several PRs in one
+                                     invocation, emitting one report per PR
+                                     in the existing output shape (mutually
+                                     exclusive with --pr)
   --dry-run                         list candidates without mutating (default)
   --apply                           minimize safe candidates
   --claim-issue <number>            issue whose active claim protects apply mode
