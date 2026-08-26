@@ -258,7 +258,8 @@ ordering dependency, even though the tracks' own edited files never
 overlap. `gh run rerun` re-resolves against the PR branch's own copy
 of the workflow file, so a fix merged to `main` on a sibling track
 stays invisible until the dependent branch pulls it in (see
-`idd-ci.instructions.md`'s Rerun mechanics). Note this dependency in
+`.github/instructions/idd-ci.instructions.md`'s Rerun mechanics). Note
+this dependency in
 the roadmap's parallel note rather than assuming disjoint files always
 mean safe parallelism.
 
