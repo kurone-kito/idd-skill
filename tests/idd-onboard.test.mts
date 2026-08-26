@@ -38,6 +38,7 @@ import {
   deriveMarkerPrefix,
   deriveValidateCommands,
   escapeJsonStringContent,
+  HEAR_NON_TTY_ERROR,
   listSkippedPlaceholderPaths,
   MARKER_PREFIX_PATTERN,
   ONBOARDING_PLACEHOLDERS,
@@ -47,10 +48,14 @@ import {
   resolveImportFiles,
   resolvePlaceholderValues,
   restoreExistingCommandsTable,
+  runHearWizard,
   runVerify,
   SCAN_EXCLUDED_PATHS,
   scanPlaceholderTokens,
 } from '../src/scripts/idd-onboard.mts';
+import { loadOnboardingHearingCatalog } from '../src/scripts/onboarding-hearing.mts';
+import type { PromptFn } from '../src/scripts/readline-prompt.mts';
+import { loadJson, validate } from '../src/scripts/validate-schemas.mts';
 
 const REPO_ROOT = resolve(fileURLToPath(import.meta.url), '..', '..');
 const PLACEHOLDERS_DOC = join(
@@ -2473,6 +2478,345 @@ test('bin/idd-onboard.mjs --help documents --verify and lists --profile values s
   assert.match(help, /manifestCompleteness/);
   assert.match(help, /placeholderResidue/);
   assert.match(help, /staleImportSignal/);
+});
+
+// ---------------------------------------------------------------------------
+// --hear (#2281)
+// ---------------------------------------------------------------------------
+
+/** A target tree with the evidence deriveInstallDepsCommand / a git remote need. */
+function writeHearFixture(root: string): void {
+  execFileSync('git', ['init', '--initial-branch=main', root], {
+    stdio: 'ignore',
+  });
+  execFileSync(
+    'git',
+    [
+      '-C',
+      root,
+      'remote',
+      'add',
+      'origin',
+      'git@github.com:trusted-user-a/hear-fixture.git',
+    ],
+    { stdio: 'ignore' },
+  );
+  writeFileSync(
+    join(root, 'package.json'),
+    '{"packageManager":"pnpm@9.0.0"}\n',
+  );
+  writeFileSync(join(root, 'pnpm-lock.yaml'), '');
+}
+
+/** One valid, complete answers map: documented default per option-bearing item, a fixture value otherwise. */
+function buildValidHearAnswers(): Record<string, string> {
+  const catalog = loadOnboardingHearingCatalog();
+  const answers: Record<string, string> = {};
+  for (const item of catalog.items) {
+    if (item.kind === 'check') {
+      continue;
+    }
+    const documentedDefault = item.options?.find(
+      (option) => option.isDefault,
+    )?.value;
+    answers[item.id] = documentedDefault ?? `fixture-${item.id}`;
+  }
+  return answers;
+}
+
+test('bin/idd-onboard.mjs --hear --propose lists every catalog item id, derives PROJECT_MARKER_PREFIX and the install-deps candidate, and reports helper-runtime evidence', () => {
+  const root = makeFixtureDir();
+  writeHearFixture(root);
+  const { status, verdict } = runCliBin([
+    '--hear',
+    '--propose',
+    '--target',
+    root,
+  ]);
+  assert.equal(status, 0);
+  assert.equal(verdict.mode, 'propose');
+  const catalog = loadOnboardingHearingCatalog();
+  const items = verdict.items as {
+    id: string;
+    derived: string | null;
+  }[];
+  assert.deepEqual(
+    items.map((item) => item.id).sort(),
+    catalog.items.map((item) => item.id).sort(),
+  );
+  const byId = new Map(items.map((item) => [item.id, item]));
+  assert.equal(byId.get('PROJECT_MARKER_PREFIX')?.derived, 'hear-fixture');
+  assert.equal(byId.get('INSTALL_DEPS_COMMAND')?.derived, 'pnpm install');
+  assert.ok(verdict.helperRuntimeEvidence);
+  assert.equal(
+    (verdict.helperRuntimeEvidence as { detectedPackageManager: string })
+      .detectedPackageManager,
+    'pnpm',
+  );
+  assert.ok(verdict.stepZeroEvidence);
+});
+
+test('bin/idd-onboard.mjs --hear --apply confirms a complete, valid answers map into a schema-valid transcript', () => {
+  const root = makeFixtureDir();
+  const answersPath = join(root, 'answers.json');
+  writeFileSync(answersPath, JSON.stringify(buildValidHearAnswers()));
+  const { status, verdict } = runCliBin([
+    '--hear',
+    '--apply',
+    '--answers',
+    answersPath,
+  ]);
+  assert.equal(status, 0);
+  // The success output IS the transcript document -- no wrapper --
+  // matching the interactive --hear wizard's own output.
+  const transcript = verdict as unknown as {
+    answers: { id: string; value: string }[];
+  };
+  const schema = loadJson('schemas/onboarding-hearing-transcript.schema.json');
+  assert.deepEqual(validate(transcript, schema), []);
+  const catalog = loadOnboardingHearingCatalog();
+  const answerableIds = catalog.items
+    .filter((item) => item.kind !== 'check')
+    .map((item) => item.id)
+    .sort();
+  assert.deepEqual(
+    transcript.answers.map((answer) => answer.id).sort(),
+    answerableIds,
+  );
+});
+
+test('bin/idd-onboard.mjs --hear --apply exits 1 and names a missing answerable id, writing nothing', () => {
+  const root = makeFixtureDir();
+  const answers = buildValidHearAnswers();
+  delete answers['merge-policy'];
+  const answersPath = join(root, 'answers.json');
+  writeFileSync(answersPath, JSON.stringify(answers));
+  const { status, verdict } = runCliBin([
+    '--hear',
+    '--apply',
+    '--answers',
+    answersPath,
+  ]);
+  assert.equal(status, 1);
+  assert.equal(verdict.valid, false);
+  assert.ok((verdict.unresolved as string[]).includes('merge-policy'));
+});
+
+test('bin/idd-onboard.mjs --hear --apply exits 1 on an unknown answer key', () => {
+  const root = makeFixtureDir();
+  const answers = buildValidHearAnswers();
+  answers['not-a-real-catalog-id'] = 'x';
+  const answersPath = join(root, 'answers.json');
+  writeFileSync(answersPath, JSON.stringify(answers));
+  const { status, verdict } = runCliBin([
+    '--hear',
+    '--apply',
+    '--answers',
+    answersPath,
+  ]);
+  assert.equal(status, 1);
+  assert.ok((verdict.unresolved as string[]).includes('not-a-real-catalog-id'));
+});
+
+test('bin/idd-onboard.mjs --hear --apply exits 1 when a value is outside the item enum', () => {
+  const root = makeFixtureDir();
+  const answers = buildValidHearAnswers();
+  answers['merge-policy'] = 'not-a-real-option';
+  const answersPath = join(root, 'answers.json');
+  writeFileSync(answersPath, JSON.stringify(answers));
+  const { status, verdict } = runCliBin([
+    '--hear',
+    '--apply',
+    '--answers',
+    answersPath,
+  ]);
+  assert.equal(status, 1);
+  assert.ok((verdict.unresolved as string[]).includes('merge-policy'));
+});
+
+test('bin/idd-onboard.mjs --hear --apply trims a whitespace-only answer, same as the TTY wizard, so it fails validation rather than passing as a real value', () => {
+  const root = makeFixtureDir();
+  const answers = buildValidHearAnswers();
+  answers.TRUSTED_MARKER_ACTOR = '   ';
+  const answersPath = join(root, 'answers.json');
+  writeFileSync(answersPath, JSON.stringify(answers));
+  const { status, verdict } = runCliBin([
+    '--hear',
+    '--apply',
+    '--answers',
+    answersPath,
+  ]);
+  assert.equal(status, 1);
+  assert.ok((verdict.unresolved as string[]).includes('TRUSTED_MARKER_ACTOR'));
+});
+
+test("bin/idd-onboard.mjs --hear rejects import/substitute-only flags (--source, --force, --profile, a placeholder override), matching the other stages' own foreign-flag guards", () => {
+  const root = makeFixtureDir();
+  for (const foreignArgs of [
+    ['--source', root],
+    ['--force'],
+    ['--profile', 'package-manager'],
+    ['--repo-name', 'x'],
+  ]) {
+    try {
+      execFileSync(
+        process.execPath,
+        [BIN_PATH, '--hear', '--propose', '--target', root, ...foreignArgs],
+        { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] },
+      );
+      assert.fail(`expected a non-zero exit for --hear + ${foreignArgs[0]}`);
+    } catch (error) {
+      const failed = error as { status?: number; stderr?: string };
+      assert.equal(failed.status, 2);
+      assert.match(String(failed.stderr), /does not accept/);
+    }
+  }
+});
+
+test('bin/idd-onboard.mjs rejects --hear-only flags (--propose, --apply, --answers) when --hear is not selected', () => {
+  const root = makeFixtureDir();
+  for (const [stage, extra] of [
+    ['--substitute', ['--propose']],
+    ['--import', ['--apply']],
+    ['--verify', ['--answers', 'answers.json']],
+  ] as const) {
+    try {
+      execFileSync(
+        process.execPath,
+        [BIN_PATH, stage, '--target', root, ...extra],
+        { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] },
+      );
+      assert.fail(`expected a non-zero exit for ${stage} + ${extra[0]}`);
+    } catch (error) {
+      const failed = error as { status?: number; stderr?: string };
+      assert.equal(failed.status, 2);
+      assert.match(String(failed.stderr), /does not accept/);
+    }
+  }
+});
+
+test('bin/idd-onboard.mjs --hear exits 2 in a non-TTY context, without --propose or --apply', () => {
+  const root = makeFixtureDir();
+  try {
+    execFileSync(process.execPath, [BIN_PATH, '--hear', '--target', root], {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    assert.fail('expected a non-zero exit');
+  } catch (error) {
+    const failed = error as { status?: number; stderr?: string };
+    assert.equal(failed.status, 2);
+    assert.match(String(failed.stderr), /interactive TTY/);
+  }
+});
+
+test('bin/idd-onboard.mjs exits 2 when --hear is combined with --import, --substitute, or --verify', () => {
+  for (const other of ['--import', '--substitute', '--verify']) {
+    try {
+      execFileSync(
+        process.execPath,
+        [BIN_PATH, '--hear', '--propose', other, '--target', makeFixtureDir()],
+        { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] },
+      );
+      assert.fail(`expected a non-zero exit for --hear + ${other}`);
+    } catch (error) {
+      const failed = error as { status?: number; stderr?: string };
+      assert.equal(failed.status, 2);
+      assert.match(String(failed.stderr), /mutually exclusive/);
+    }
+  }
+});
+
+test('bin/idd-onboard.mjs --help documents --hear, --propose, --apply, and --answers', () => {
+  const help = execFileSync(process.execPath, [BIN_PATH, '--help'], {
+    encoding: 'utf8',
+  });
+  assert.match(help, /--hear/);
+  assert.match(help, /--propose/);
+  assert.match(help, /--apply/);
+  assert.match(help, /--answers/);
+});
+
+test('runHearWizard rejects a non-TTY context with HEAR_NON_TTY_ERROR', async () => {
+  const root = makeFixtureDir();
+  const catalog = loadOnboardingHearingCatalog();
+  await assert.rejects(
+    runHearWizard(catalog, root, { isTTY: false }),
+    new RegExp(HEAR_NON_TTY_ERROR.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&')),
+  );
+});
+
+test('runHearWizard shows each explanation, confirms the shown default on empty input, and produces a schema-valid transcript', async () => {
+  const root = makeFixtureDir();
+  writeHearFixture(root);
+  const catalog = loadOnboardingHearingCatalog();
+  const noDefaultAnswers: Record<string, string> = {
+    TRUSTED_MARKER_ACTOR: 'trusted-user-a',
+    'credential-scope': 'repository-scoped-pat',
+  };
+  const seenQuestions: string[] = [];
+  const prompt: PromptFn = async (question: string) => {
+    seenQuestions.push(question);
+    // A shown "[default]" suffix confirms via empty input; an item with
+    // no default (no derivation and no documented default -- currently
+    // TRUSTED_MARKER_ACTOR and credential-scope, plus the three command
+    // placeholders when this fixture's package.json declares no
+    // lint/build/test scripts) needs an explicit fallback so this mock
+    // always terminates within runHearWizard's bounded retry.
+    const hasShownDefault = / \[/.test(question);
+    if (hasShownDefault) {
+      return '';
+    }
+    const id = question.split(/ \[|: /)[0] ?? '';
+    return noDefaultAnswers[id] ?? `fixture-${id}`;
+  };
+  const stdoutChunks: string[] = [];
+  const originalStdoutWrite = process.stdout.write;
+  process.stdout.write = ((chunk: string) => {
+    stdoutChunks.push(String(chunk));
+    return true;
+  }) as typeof process.stdout.write;
+  let answers: Awaited<ReturnType<typeof runHearWizard>>;
+  try {
+    answers = await runHearWizard(catalog, root, { isTTY: true, prompt });
+  } finally {
+    process.stdout.write = originalStdoutWrite;
+  }
+  const answerableIds = catalog.items
+    .filter((item) => item.kind !== 'check')
+    .map((item) => item.id)
+    .sort();
+  assert.deepEqual(answers.map((answer) => answer.id).sort(), answerableIds);
+  assert.equal(seenQuestions.length, answerableIds.length);
+  // Every answerable item's explanation (not just its terse prompt) was
+  // actually printed to stdout, not merely relied on inside the mock.
+  const mergePolicyItem = catalog.items.find(
+    (item) => item.id === 'merge-policy',
+  );
+  assert.ok(mergePolicyItem);
+  assert.ok(
+    stdoutChunks.some((chunk) => chunk.includes(mergePolicyItem.explanation)),
+    'expected the merge-policy explanation to be printed to stdout',
+  );
+  // merge-policy has no derivation hook, so empty input confirms its
+  // documented default.
+  assert.equal(
+    answers.find((answer) => answer.id === 'merge-policy')?.value,
+    'human_merge',
+  );
+  // PROJECT_MARKER_PREFIX has no documented default but does derive from
+  // the fixture's git remote, so empty input confirms that instead.
+  assert.equal(
+    answers.find((answer) => answer.id === 'PROJECT_MARKER_PREFIX')?.value,
+    'hear-fixture',
+  );
+  const transcript = {
+    version: '1.0.0',
+    confirmedAt: new Date().toISOString(),
+    answers,
+  };
+  const schema = loadJson('schemas/onboarding-hearing-transcript.schema.json');
+  assert.deepEqual(validate(transcript, schema), []);
 });
 
 test('importing idd-onboard.mts has no import-time side effect', async () => {
