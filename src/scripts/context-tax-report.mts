@@ -12,8 +12,8 @@
 // `~/.codex`) -- `--check` only compares the committed snapshot against the
 // committed regions, so it never needs `--in`. Not registered in
 // HELPER_COMMANDS: this is a maintainer/CI-only dogfood tool, never an
-// adopter-facing helper (see SOURCE_REPO_INTERNAL_ENTRY_PATHS /
-// DOGFOOD_ONLY_CONCRETE_TOOLS in the two guard test files).
+// adopter-facing helper (see SOURCE_REPO_INTERNAL_ENTRY_PATHS in
+// tests/helper-invocation-profile.test.mts).
 
 import { readFileSync, writeFileSync } from 'node:fs';
 import { parseCliArgs } from './cli-args.mts';
@@ -170,11 +170,20 @@ function computeStageUsage(
   return out;
 }
 
-function computeCacheHitRatio(totalUsage: ContextTaxUsagePercentiles): number {
-  const cacheRead = totalUsage.cacheRead.p50;
-  const cacheCreation = totalUsage.cacheCreation.p50;
-  const inputUncached = totalUsage.inputUncached.p50;
-  return cacheRead / Math.max(1, cacheRead + cacheCreation + inputUncached);
+/**
+ * Median of each sample's own cache-hit ratio, not the ratio of the three
+ * usage fields' independent medians -- each field's p50 can come from a
+ * different sample, so dividing them directly can report a figure outside
+ * every observed per-sample ratio on a skewed sample set.
+ */
+function computeCacheHitRatio(
+  samples: readonly ContextTaxIssueLoopSample[],
+): number {
+  const ratios = samples.map(({ usage }) => {
+    const denom = usage.cacheRead + usage.cacheCreation + usage.inputUncached;
+    return usage.cacheRead / Math.max(1, denom);
+  });
+  return computePercentiles(ratios).p50;
 }
 
 function computeSuccessRate<K extends string>(
@@ -251,7 +260,7 @@ export function aggregateSnapshot(
     compactionCount: computePercentiles(
       issueLoopSamples.map((sample) => sample.compactionCount),
     ),
-    cacheHitRatio: computeCacheHitRatio(totalUsage),
+    cacheHitRatio: computeCacheHitRatio(issueLoopSamples),
     successRateByModel: computeSuccessRate(
       issueLoopSamples,
       (sample) => sample.model,

@@ -213,6 +213,51 @@ test('aggregateSnapshot computes cache-hit ratio and per-model/vendor success ra
   assert.equal(snapshot.successRateByVendor.claude?.rate, 1);
 });
 
+test("aggregateSnapshot cacheHitRatio is the median of each sample's own ratio, not the ratio of independent medians", () => {
+  // Three samples with wildly different per-sample cache-hit ratios:
+  // 0.0, 0.5, and 1.0. The ratio-of-medians bug this test guards against
+  // would divide the p50 of each usage field independently -- which,
+  // because each field's median can come from a different sample, need
+  // not equal any real sample's own ratio.
+  const samples = [
+    issueLoopSample({
+      issueNumber: 600,
+      usage: {
+        inputUncached: 1000,
+        cacheRead: 0,
+        cacheCreation: 0,
+        output: 1,
+        reasoning: 1,
+      },
+    }),
+    issueLoopSample({
+      issueNumber: 601,
+      usage: {
+        inputUncached: 500,
+        cacheRead: 500,
+        cacheCreation: 0,
+        output: 1,
+        reasoning: 1,
+      },
+    }),
+    issueLoopSample({
+      issueNumber: 602,
+      usage: {
+        inputUncached: 0,
+        cacheRead: 1000,
+        cacheCreation: 0,
+        output: 1,
+        reasoning: 1,
+      },
+    }),
+  ];
+  const snapshot = aggregateSnapshot(samples, NOW);
+  assert.equal(snapshot.sampleCount, 3);
+  // Per-sample ratios sorted: [0, 0.5, 1] -> median 0.5, matching the
+  // middle sample's own ratio exactly.
+  assert.equal(snapshot.cacheHitRatio, 0.5);
+});
+
 test('readSamples rejects a malformed line', () => {
   withSandboxCwd(() => {
     writeFileSync(

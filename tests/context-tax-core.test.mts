@@ -554,3 +554,78 @@ test('assertContextTaxSnapshot rejects a success rate that disagrees with its ow
     /successRateByVendor\[grok\] rate must be in \[0, 1\]/,
   );
 });
+
+test('assertContextTaxSnapshot rejects a schema-valid but nonexistent asOf date', () => {
+  const snapshot: ContextTaxSnapshot = {
+    schemaVersion: 1,
+    generatedAt: '2026-08-25T00:00:00Z',
+    minPublishableSamples: 10,
+    minPublishableVendors: 2,
+    publishable: false,
+    sampleCount: 3,
+    vendors: ['grok'],
+    ...SNAPSHOT_BASE_FIELDS,
+  };
+  assert.doesNotThrow(() => assertContextTaxSnapshot(snapshot));
+  assert.throws(
+    () => assertContextTaxSnapshot({ ...snapshot, asOf: '2026-02-30' }),
+    /snapshot asOf must be a valid UTC calendar date/,
+  );
+  assert.throws(
+    () => assertContextTaxSnapshot({ ...snapshot, asOf: 'not-a-date' }),
+    /snapshot asOf must be a valid UTC calendar date/,
+  );
+});
+
+test('assertContextTaxSnapshot rejects a duplicate stageUsage entry', () => {
+  const snapshot: ContextTaxSnapshot = {
+    schemaVersion: 1,
+    generatedAt: '2026-08-25T00:00:00Z',
+    minPublishableSamples: 10,
+    minPublishableVendors: 2,
+    publishable: false,
+    sampleCount: 3,
+    vendors: ['grok'],
+    ...SNAPSHOT_BASE_FIELDS,
+  };
+  assert.throws(
+    () =>
+      assertContextTaxSnapshot({
+        ...snapshot,
+        stageUsage: [
+          { id: 'work', usage: ZERO_USAGE_PERCENTILES },
+          { id: 'work', usage: ZERO_USAGE_PERCENTILES },
+        ],
+      }),
+    /snapshot stageUsage has a duplicate entry for "work"/,
+  );
+});
+
+test('assertContextTaxSnapshot rejects a successRateByVendor key absent from vendors', () => {
+  const snapshot: ContextTaxSnapshot = {
+    schemaVersion: 1,
+    generatedAt: '2026-08-25T00:00:00Z',
+    minPublishableSamples: 10,
+    minPublishableVendors: 2,
+    publishable: false,
+    sampleCount: 3,
+    vendors: ['grok'],
+    ...SNAPSHOT_BASE_FIELDS,
+  };
+  assert.throws(
+    () =>
+      assertContextTaxSnapshot({
+        ...snapshot,
+        successRateByVendor: {
+          claude: {
+            merged: 1,
+            aborted: 0,
+            unclaimed: 0,
+            humanHandoff: 0,
+            rate: 1,
+          },
+        },
+      }),
+    /successRateByVendor names "claude", which is not present in vendors/,
+  );
+});

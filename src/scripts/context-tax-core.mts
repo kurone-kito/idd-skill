@@ -378,15 +378,29 @@ function assertRateInUnitInterval(
   }
 }
 
+function assertUtcCalendarDate(value: string): void {
+  const parsed = new Date(`${value}T00:00:00.000Z`);
+  if (
+    !/^\d{4}-\d{2}-\d{2}$/.test(value) ||
+    Number.isNaN(parsed.getTime()) ||
+    parsed.toISOString().slice(0, 10) !== value
+  ) {
+    throw new Error('snapshot asOf must be a valid UTC calendar date');
+  }
+}
+
 /**
  * Enforce the constraints the JSON Schema cannot express: distinct
  * `vendors` (`uniqueItems` is outside `validate-schemas.mts`'s enforced
  * keyword subset), that `publishable` agrees with the
  * `sampleCount`/`vendors` gate the schema documents but cannot compare
- * across fields on its own, that every percentile triple is ordered
- * (the schema has no `maximum`/cross-field comparison keyword), that
- * `cacheHitRatio` and every success rate fall in `[0, 1]`, and that each
- * success rate's `rate` field agrees with its own raw counts.
+ * across fields on its own, that `asOf` is a real UTC calendar date (the
+ * schema's `pattern` accepts a shape like `2026-02-30`), that every
+ * percentile triple is ordered (the schema has no `maximum`/cross-field
+ * comparison keyword), that `stageUsage` has at most one entry per stage
+ * id, that `cacheHitRatio` and every success rate fall in `[0, 1]`, that
+ * each success rate's `rate` field agrees with its own raw counts, and
+ * that `successRateByVendor` names only vendors present in `vendors`.
  */
 export function assertContextTaxSnapshot(snapshot: ContextTaxSnapshot): void {
   if (new Set(snapshot.vendors).size !== snapshot.vendors.length) {
@@ -400,8 +414,16 @@ export function assertContextTaxSnapshot(snapshot: ContextTaxSnapshot): void {
       'snapshot publishable must match the sampleCount/vendors gate',
     );
   }
+  assertUtcCalendarDate(snapshot.asOf);
   assertUsagePercentileOrder('totalUsage', snapshot.totalUsage);
+  const seenStageIds = new Set<string>();
   for (const stage of snapshot.stageUsage) {
+    if (seenStageIds.has(stage.id)) {
+      throw new Error(
+        `snapshot stageUsage has a duplicate entry for "${stage.id}"`,
+      );
+    }
+    seenStageIds.add(stage.id);
     assertUsagePercentileOrder(`stageUsage[${stage.id}].usage`, stage.usage);
   }
   assertPercentileOrder('compactionCount', snapshot.compactionCount);
@@ -411,9 +433,16 @@ export function assertContextTaxSnapshot(snapshot: ContextTaxSnapshot): void {
   for (const [model, rate] of Object.entries(snapshot.successRateByModel)) {
     assertRateInUnitInterval(`successRateByModel[${model}]`, rate);
   }
+  const vendorSet = new Set(snapshot.vendors);
   for (const [vendor, rate] of Object.entries(snapshot.successRateByVendor)) {
-    if (rate !== undefined) {
-      assertRateInUnitInterval(`successRateByVendor[${vendor}]`, rate);
+    if (rate === undefined) {
+      continue;
     }
+    if (!vendorSet.has(vendor as ContextTaxVendor)) {
+      throw new Error(
+        `snapshot successRateByVendor names "${vendor}", which is not present in vendors`,
+      );
+    }
+    assertRateInUnitInterval(`successRateByVendor[${vendor}]`, rate);
   }
 }
