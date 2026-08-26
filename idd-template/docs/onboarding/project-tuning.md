@@ -75,12 +75,13 @@ the real values to `.github/idd/config.json` by hand after
 
 ## Reserved-label guard
 
-**The hearing catalog cannot answer this for you.** Unlike the other
+**No transcript ever carries an answer to this.** Unlike the other
 sections here, this is not a case of "the catalog asked but the CLI
-didn't apply it" — `hearing-catalog.json` has no nested auto-labeler
-follow-up item at all (the TTY wizard only iterates catalog items, and
-`--hear --apply` rejects any answer id it does not recognize), so no
-transcript ever carries an answer to ask about it. Ask the operator
+didn't apply it": the `idd-label-names` catalog item's own explanation
+text _describes_ the auto-labeler follow-up, but the follow-up itself
+has no separate catalog `id` — the TTY wizard only iterates catalog
+items and `--hear --apply` rejects any answer id it does not
+recognize, so there is no field to answer it into. Ask the operator
 directly, regardless of which path produced the transcript: does
 anything in this repository, or an installed GitHub App, auto-apply
 labels to issues based on content (a semantic auto-labeler such as

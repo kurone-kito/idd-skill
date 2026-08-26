@@ -58,9 +58,11 @@ The template has three distribution surfaces:
    `idd-template/` directory from a cloned `idd-skill` checkout instead
    of fetching individual files.
 
-`idd-template/ONBOARDING.md` keeps the executable import snippets for
-the first two surfaces so a raw-URL onboarding run can still complete
-without opening this reference first.
+This page keeps the executable import snippets for the first two
+surfaces (see [Remote fetch examples](#remote-fetch-examples) and
+[Local-copy installs](#local-copy-installs) below);
+`idd-template/ONBOARDING.md` Option A/B point here for the exact
+commands instead of inlining them.
 
 The companion generated block describes canonical source paths relative to
 the idd-skill checkout. It is not a target installation path: the onboarding
