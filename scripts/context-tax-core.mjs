@@ -155,12 +155,22 @@ export function assertContextTaxSample(sample) {
   }
 }
 /**
- * Enforce the distinct-vendors constraint the JSON Schema cannot express
- * (`uniqueItems` is outside `validate-schemas.mts`'s enforced keyword
- * subset).
+ * Enforce the constraints the JSON Schema cannot express: distinct
+ * `vendors` (`uniqueItems` is outside `validate-schemas.mts`'s enforced
+ * keyword subset), and that `publishable` agrees with the
+ * `sampleCount`/`vendors` gate the schema documents but cannot compare
+ * across fields on its own.
  */
 export function assertContextTaxSnapshot(snapshot) {
   if (new Set(snapshot.vendors).size !== snapshot.vendors.length) {
     throw new Error('snapshot vendors must be distinct');
+  }
+  const eligible =
+    snapshot.sampleCount >= snapshot.minPublishableSamples &&
+    snapshot.vendors.length >= snapshot.minPublishableVendors;
+  if (snapshot.publishable !== eligible) {
+    throw new Error(
+      'snapshot publishable must match the sampleCount/vendors gate',
+    );
   }
 }

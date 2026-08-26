@@ -217,6 +217,32 @@ test('assertContextTaxSnapshot rejects duplicate vendors', () => {
   );
 });
 
+test('assertContextTaxSnapshot requires publishable to match the sample/vendor gate', () => {
+  const eligible: ContextTaxSnapshot = {
+    schemaVersion: 1,
+    generatedAt: '2026-08-25T00:00:00Z',
+    minPublishableSamples: 10,
+    minPublishableVendors: 2,
+    publishable: true,
+    sampleCount: 10,
+    vendors: ['grok', 'claude'],
+  };
+  assert.doesNotThrow(() => assertContextTaxSnapshot(eligible));
+  assert.throws(
+    () =>
+      assertContextTaxSnapshot({
+        ...eligible,
+        publishable: true,
+        sampleCount: 3,
+      }),
+    /snapshot publishable must match the sampleCount\/vendors gate/,
+  );
+  assert.throws(
+    () => assertContextTaxSnapshot({ ...eligible, publishable: false }),
+    /snapshot publishable must match the sampleCount\/vendors gate/,
+  );
+});
+
 test('assertContextTaxSample rejects a non-integer issueNumber', () => {
   const base: ContextTaxSample = {
     schemaVersion: 1,
