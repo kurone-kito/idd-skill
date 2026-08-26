@@ -1831,7 +1831,20 @@ function runRecordPolicyCli(args) {
       setNestedValue(patch, translated.path, translated.value);
     }
   }
-  const existingConfig = JSON.parse(readFileSync(configPath, 'utf8'));
+  // A syntactically valid config.json can still parse to a non-object root
+  // (`null`, a number, a bare string, an array); deepMergeConfigPatch would
+  // silently spread that into `{}` (or an index-keyed object for an array)
+  // and --apply would overwrite the file with the patch alone, losing the
+  // original document. Same guard convention as readExistingCommandsTable.
+  const parsedConfig = JSON.parse(readFileSync(configPath, 'utf8'));
+  if (
+    typeof parsedConfig !== 'object' ||
+    parsedConfig === null ||
+    Array.isArray(parsedConfig)
+  ) {
+    throw new Error(`--record-policy requires a JSON object at ${configPath}`);
+  }
+  const existingConfig = parsedConfig;
   const mergedConfig = deepMergeConfigPatch(existingConfig, patch);
   // Validate only the sections this patch touched (#1359 pattern via
   // validateConfigSection), never the whole document: --record-policy

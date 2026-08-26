@@ -3571,6 +3571,10 @@ test('bin/idd-onboard.mjs --record-policy never turns a docs-only or meta-choice
       (entry) => entry.id === id,
     );
     assert.ok(item, `catalog missing ${id}`);
+    const topLevelKey = item?.mapsToConfig?.split('/').filter(Boolean)[0];
+    if (topLevelKey !== undefined) {
+      assert.equal(topLevelKey in patch, false, `${id} leaked into the patch`);
+    }
   }
   assert.equal('claimTiming' in patch, false);
   assert.equal('labels' in patch, false);
@@ -3661,6 +3665,33 @@ test('bin/idd-onboard.mjs --record-policy exits 2 when config.json does not alre
     { encoding: 'utf8' },
   );
   assert.equal(result.status, 2);
+});
+
+test('bin/idd-onboard.mjs --record-policy exits 2 and writes nothing when config.json parses to a non-object root (#2282 review follow-up)', () => {
+  const root = makeFixtureDir();
+  mkdirSync(join(root, '.github', 'idd'), { recursive: true });
+  writeFileSync(join(root, '.github', 'idd', 'config.json'), 'null\n');
+  const answers = buildValidHearAnswers();
+  const transcript = confirmTranscript(root, answers);
+  const transcriptPath = join(root, 'transcript.json');
+  writeFileSync(transcriptPath, JSON.stringify(transcript));
+  const before = snapshotTree(root);
+
+  const result = spawnSync(
+    process.execPath,
+    [
+      BIN_PATH,
+      '--record-policy',
+      '--transcript',
+      transcriptPath,
+      '--target',
+      root,
+      '--apply',
+    ],
+    { encoding: 'utf8' },
+  );
+  assert.equal(result.status, 2);
+  assertTreeUnchanged(root, before);
 });
 
 test('bin/idd-onboard.mjs --record-policy requires --transcript', () => {
