@@ -1449,9 +1449,11 @@ function runHearApplyCli(catalog, answersPath) {
     );
     process.exit(1);
   }
-  process.stdout.write(
-    `${JSON.stringify({ protocolVersion: '1', mode: 'apply', valid: true, transcript }, null, 2)}\n`,
-  );
+  // Print the transcript document itself (matching the interactive
+  // --hear wizard's own output), not a wrapper -- the printed JSON must
+  // validate against onboarding-hearing-transcript.schema.json directly
+  // (#2304 review).
+  process.stdout.write(`${JSON.stringify(transcript, null, 2)}\n`);
   process.exit(0);
 }
 async function runHearCli(args) {

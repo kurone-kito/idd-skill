@@ -2567,8 +2567,9 @@ test('bin/idd-onboard.mjs --hear --apply confirms a complete, valid answers map 
     answersPath,
   ]);
   assert.equal(status, 0);
-  assert.equal(verdict.valid, true);
-  const transcript = verdict.transcript as {
+  // The success output IS the transcript document -- no wrapper --
+  // matching the interactive --hear wizard's own output.
+  const transcript = verdict as unknown as {
     answers: { id: string; value: string }[];
   };
   const schema = loadJson('schemas/onboarding-hearing-transcript.schema.json');
