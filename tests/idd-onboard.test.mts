@@ -3276,7 +3276,47 @@ test('bin/idd-onboard.mjs --record-policy dry-run prints the config patch and fi
   assert.equal(patch.mergePolicy, answers['merge-policy']);
   assert.match(verdict.policyDocument as string, /## IDD Policy Configuration/);
   assert.match(verdict.policyDocument as string, /### Merge Policy/);
+  // Claim Timing / CI Wait Policy render as the template's own bulleted
+  // sub-fields, not one flattened line, when the catalog's meta answer
+  // is the distributed-defaults choice (#2282 review follow-up).
+  assert.match(
+    verdict.policyDocument as string,
+    /### Claim Timing\n\n- \*\*claim-stale-age\*\*: 24 h \(distributed default\)\n- \*\*claim-heartbeat-interval\*\*: 12 h \(distributed default\)/,
+  );
+  assert.match(
+    verdict.policyDocument as string,
+    /### CI Wait Policy\n\n- \*\*running timeout\*\*: `PT30M` \/ 30 min \(distributed default, not confirmed by this hearing item\)\n- \*\*generation timeout\*\*: `PT10M` \/ 10 min \(distributed default, not confirmed by this hearing item\)\n- \*\*rerun policy\*\*: `rerun-once`/,
+  );
   assertTreeUnchanged(root, before);
+});
+
+test('bin/idd-onboard.mjs --record-policy fills a Claim Timing override with the confirmed selection, not invented sub-values, and carries a confirmed CI Wait rerun policy into its bullet', () => {
+  const root = makeFixtureDir();
+  writeRecordPolicyFixture(root);
+  const answers = buildValidHearAnswers();
+  answers['claim-timing'] = 'repository-override';
+  answers['ci-wait-policy'] = 'hold';
+  const transcript = confirmTranscript(root, answers);
+  const transcriptPath = join(root, 'transcript.json');
+  writeFileSync(transcriptPath, JSON.stringify(transcript));
+
+  const { verdict } = runCliBin([
+    '--record-policy',
+    '--transcript',
+    transcriptPath,
+    '--target',
+    root,
+  ]);
+  const doc = verdict.policyDocument as string;
+  assert.match(
+    doc,
+    /### Claim Timing\n\n\*\*Selection\*\*: `repository-override` \(override values not captured by this hearing item -- record them manually\)/,
+  );
+  assert.doesNotMatch(doc, /claim-stale-age/);
+  assert.match(
+    doc,
+    /### CI Wait Policy\n\n- \*\*running timeout\*\*[\s\S]*?\n- \*\*generation timeout\*\*[\s\S]*?\n- \*\*rerun policy\*\*: `hold`/,
+  );
 });
 
 test('bin/idd-onboard.mjs --record-policy --apply merges only mapsToConfig fields into config.json', () => {
@@ -3564,6 +3604,29 @@ test('bin/idd-onboard.mjs --record-policy requires --transcript', () => {
     { encoding: 'utf8' },
   );
   assert.equal(result.status, 2);
+});
+
+test('bin/idd-onboard.mjs --record-policy exits 1 on a malformed transcript, mode reflects --dry-run even with --apply also passed (#2282 review follow-up)', () => {
+  const root = makeFixtureDir();
+  writeRecordPolicyFixture(root);
+  const transcriptPath = join(root, 'transcript.json');
+  writeFileSync(transcriptPath, JSON.stringify({ version: '1.0.0' }));
+  const before = snapshotTree(root);
+
+  const { status, verdict } = runCliBin([
+    '--record-policy',
+    '--transcript',
+    transcriptPath,
+    '--target',
+    root,
+    '--dry-run',
+    '--apply',
+  ]);
+  assert.equal(status, 1);
+  assert.equal(verdict.valid, false);
+  assert.equal(verdict.mode, 'dry-run');
+  assert.ok(Array.isArray(verdict.unresolved) && verdict.unresolved.length > 0);
+  assertTreeUnchanged(root, before);
 });
 
 test('bin/idd-onboard.mjs exits 2 when --record-policy is combined with --import, --substitute, --verify, or --hear', () => {

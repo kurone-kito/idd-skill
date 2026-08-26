@@ -2077,7 +2077,24 @@ interface RecordPolicyDocRow {
   id: string;
   heading: string;
   label: string;
+  /**
+   * Override the default `**label**: `value`` line with a structured
+   * bullet body for a row whose template section
+   * (`idd-template/docs/onboarding/policy-decisions.md`) documents more
+   * sub-fields than the hearing catalog item actually confirms.
+   */
+  renderBody?: (value: string) => string;
 }
+
+/** Distributed-default sub-values the hearing catalog does not itself elicit. */
+const CLAIM_TIMING_DEFAULTS = {
+  staleAge: '24 h',
+  heartbeatInterval: '12 h',
+} as const;
+const CI_WAIT_DEFAULTS = {
+  runningTimeout: '`PT30M` / 30 min',
+  generationTimeout: '`PT10M` / 10 min',
+} as const;
 
 /**
  * Catalog-item-id-ordered rows for the filled Markdown template,
@@ -2101,8 +2118,36 @@ const RECORD_POLICY_DOC_ROWS: readonly RecordPolicyDocRow[] = [
     label: 'Profile',
   },
   { id: 'credential-scope', heading: 'Credential Scope', label: 'Scope' },
-  { id: 'claim-timing', heading: 'Claim Timing', label: 'Selection' },
-  { id: 'ci-wait-policy', heading: 'CI Wait Policy', label: 'Rerun policy' },
+  {
+    id: 'claim-timing',
+    heading: 'Claim Timing',
+    label: 'Selection',
+    // The catalog item confirms only the defaults-vs-override meta
+    // choice, not override sub-values, so the distributed constants
+    // are rendered as the known baseline and an override is flagged
+    // as needing manual recording rather than invented.
+    renderBody: (value) =>
+      value === 'distributed-defaults'
+        ? [
+            `- **claim-stale-age**: ${CLAIM_TIMING_DEFAULTS.staleAge} (distributed default)`,
+            `- **claim-heartbeat-interval**: ${CLAIM_TIMING_DEFAULTS.heartbeatInterval} (distributed default)`,
+          ].join('\n')
+        : `**Selection**: \`${value}\` (override values not captured by this hearing item -- record them manually)`,
+  },
+  {
+    id: 'ci-wait-policy',
+    heading: 'CI Wait Policy',
+    label: 'Rerun policy',
+    // Only rerunPolicy is a confirmed answer here; the running/generation
+    // timeouts are the distributed constants, not something this catalog
+    // item elicits, so they are labeled as unconfirmed defaults.
+    renderBody: (value) =>
+      [
+        `- **running timeout**: ${CI_WAIT_DEFAULTS.runningTimeout} (distributed default, not confirmed by this hearing item)`,
+        `- **generation timeout**: ${CI_WAIT_DEFAULTS.generationTimeout} (distributed default, not confirmed by this hearing item)`,
+        `- **rerun policy**: \`${value}\``,
+      ].join('\n'),
+  },
   {
     id: 'issue-author-approval-gate',
     heading: 'Issue-Author Approval Gate',
@@ -2147,10 +2192,13 @@ function buildFilledPolicyDocument(answers: readonly HearAnswer[]): string {
   const valueById = new Map(answers.map((answer) => [answer.id, answer.value]));
   const sections = RECORD_POLICY_DOC_ROWS.filter((row) =>
     valueById.has(row.id),
-  ).map(
-    (row) =>
-      `### ${row.heading}\n\n**${row.label}**: \`${valueById.get(row.id)}\``,
-  );
+  ).map((row) => {
+    const value = valueById.get(row.id) as string;
+    const body = row.renderBody
+      ? row.renderBody(value)
+      : `**${row.label}**: \`${value}\``;
+    return `### ${row.heading}\n\n${body}`;
+  });
   return [
     '## IDD Policy Configuration',
     '',
@@ -2177,11 +2225,13 @@ function runRecordPolicyCli(args: ParsedArgs): void {
   const result = readAndValidateTranscript(args.transcript);
   if (result.transcript === null) {
     // Matches --hear --apply's own schema-failure shape and exit code.
+    // --dry-run always wins over --apply here too, matching the success
+    // path's canWrite convention below.
     process.stdout.write(
       `${JSON.stringify(
         {
           protocolVersion: '1',
-          mode: args.apply ? 'apply' : 'dry-run',
+          mode: args.apply && !args.dryRun ? 'apply' : 'dry-run',
           valid: false,
           unresolved: result.errors,
         },
