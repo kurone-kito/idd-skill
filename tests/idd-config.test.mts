@@ -395,3 +395,114 @@ test('resolveEffectiveCritiqueLoopDelegateFromEnv does not read HOME when path i
     delegate: { command: 'injected-review', mode: 'fallback' },
   });
 });
+
+// #2258: close the remaining gaps in layered C1 delegate coverage --
+// unreadable/top-level-invalid global documents, broader leak-proofing
+// beyond a single `mergePolicy` key, and the env-level entry point's own
+// fail-safe branches (previously only exercised through the pure
+// `resolveEffectiveCritiqueLoopDelegate` in policy-helpers.test.mts).
+
+test('loadUserGlobalPolicyDocument treats a top-level JSON array as absent (#2258)', () => {
+  const sandbox = mkdtempSync(join(tmpdir(), 'idd-user-global-array-'));
+  const path = join(sandbox, 'config.json');
+  writeFileSync(path, '[]');
+  const result = loadUserGlobalPolicyDocument({ path });
+  assert.equal(result.status, 'absent');
+  assert.equal(result.path, path);
+});
+
+test('loadUserGlobalPolicyDocument treats a top-level JSON number as absent (#2258)', () => {
+  const sandbox = mkdtempSync(join(tmpdir(), 'idd-user-global-number-'));
+  const path = join(sandbox, 'config.json');
+  writeFileSync(path, '42');
+  const result = loadUserGlobalPolicyDocument({ path });
+  assert.equal(result.status, 'absent');
+  assert.equal(result.path, path);
+});
+
+test('loadUserGlobalPolicyDocument treats an unreadable (permission-denied) file as absent (#2258)', {
+  skip: !canTestPermissionDenied,
+}, () => {
+  const sandbox = mkdtempSync(join(tmpdir(), 'idd-user-global-denied-'));
+  const path = join(sandbox, 'config.json');
+  writeFileSync(
+    path,
+    JSON.stringify({ critiqueLoop: { delegate: { command: 'x' } } }),
+  );
+  chmodSync(path, 0o000);
+  try {
+    const result = loadUserGlobalPolicyDocument({ path });
+    assert.equal(result.status, 'absent');
+    assert.equal(result.path, path);
+  } finally {
+    chmodSync(path, 0o644);
+  }
+});
+
+test('resolveEffectiveCritiqueLoopDelegateFromEnv: commands, mergePolicy, reviewPolicy, and CI-related global keys do not leak into the resolved delegate (#2258)', () => {
+  const sandbox = mkdtempSync(join(tmpdir(), 'idd-user-global-leak-'));
+  const path = join(sandbox, 'config.json');
+  writeFileSync(
+    path,
+    JSON.stringify({
+      commands: { 'pre-push-validate': 'echo must-not-apply' },
+      mergePolicy: 'fully_autonomous_merge',
+      reviewPolicy: 'copilot-advisory',
+      ciWait: { runningTimeout: 'PT99H' },
+      critiqueLoop: { delegate: { command: 'global-review' } },
+    }),
+  );
+  const resolved = resolveEffectiveCritiqueLoopDelegateFromEnv({
+    localConfig: {},
+    globalConfigPath: path,
+    env: {},
+  });
+  assert.deepEqual(resolved, {
+    status: 'global',
+    source: 'user-global',
+    delegate: { command: 'global-review', mode: 'fallback' },
+  });
+});
+
+test('resolveEffectiveCritiqueLoopDelegateFromEnv honors a repository-local null disable even when a global delegate file exists (#2258)', () => {
+  const sandbox = mkdtempSync(join(tmpdir(), 'idd-user-global-disabled-'));
+  const path = join(sandbox, 'config.json');
+  writeFileSync(
+    path,
+    JSON.stringify({
+      critiqueLoop: { delegate: { command: 'must-not-apply' } },
+    }),
+  );
+  const resolved = resolveEffectiveCritiqueLoopDelegateFromEnv({
+    localConfig: { critiqueLoop: { delegate: null } },
+    globalConfigPath: path,
+    env: {},
+  });
+  assert.deepEqual(resolved, {
+    status: 'disabled',
+    source: 'repository-local',
+  });
+});
+
+test('resolveEffectiveCritiqueLoopDelegateFromEnv fails closed on a malformed repository-local delegate without inheriting the global object (#2258)', () => {
+  const sandbox = mkdtempSync(join(tmpdir(), 'idd-user-global-malformed-'));
+  const path = join(sandbox, 'config.json');
+  writeFileSync(
+    path,
+    JSON.stringify({
+      critiqueLoop: { delegate: { command: 'must-not-apply' } },
+    }),
+  );
+  const resolved = resolveEffectiveCritiqueLoopDelegateFromEnv({
+    localConfig: {
+      critiqueLoop: { delegate: { command: 'local-review', bogus: 1 } },
+    },
+    globalConfigPath: path,
+    env: {},
+  });
+  assert.deepEqual(resolved, {
+    status: 'local-malformed',
+    source: 'repository-local',
+    reason: 'invalid-repository-local-delegate',
+  });
+});
