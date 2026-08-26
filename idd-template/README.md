@@ -160,6 +160,7 @@ docs/index.md
 docs/onboarding/agent-entry-and-verification.md
 docs/onboarding/hearing-catalog.json
 docs/onboarding/issue-mediated-bootstrap.md
+docs/onboarding/optional-host-setup.md
 docs/onboarding/placeholders.md
 docs/onboarding/policy-decisions.md
 docs/onboarding/template-distribution.md
