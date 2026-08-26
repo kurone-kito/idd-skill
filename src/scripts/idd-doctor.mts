@@ -1414,18 +1414,21 @@ export interface MergePolicyAckFinding {
  *
  * Returns null (no finding) for every `mergePolicy` value other than
  * `fully_autonomous_merge`, for a missing/absent `mergePolicy` key, or
- * when `mergePolicyAck` already equals `"fully_autonomous_merge"` --
- * scoped to that exact value rather than a boolean, so flipping
- * `mergePolicy` to a *different* value and back to `fully_autonomous_merge`
- * makes the finding return null (since it only fires the moment
- * `mergePolicy` is `fully_autonomous_merge`) rather than resuming from
- * that different value. A round trip that lands back on the exact same
- * `fully_autonomous_merge` value with the acknowledgement never cleared in
- * between does not resume the warning -- this diagnostics-only field has
- * no timestamp or generation counter to detect that narrow case, a known,
- * accepted limitation of the deliberately value-scoped (not boolean, not
- * time-scoped) design (idd-skill#2301 review, rejected as a follow-up
- * beyond this issue's locked scope).
+ * when `mergePolicyAck` already equals `"fully_autonomous_merge"`.
+ *
+ * The ack is scoped to that exact value rather than a boolean: while
+ * `mergePolicy` is any value *other than* `fully_autonomous_merge`, this
+ * always returns null regardless of `mergePolicyAck` (the check only
+ * fires for that one value). But this is NOT a full time/generation-scoped
+ * reset -- a round trip that later lands back on the exact same
+ * `fully_autonomous_merge` value, with `mergePolicyAck` still
+ * (unrelatedly) equal to `"fully_autonomous_merge"` from an earlier
+ * confirmation that was never cleared in between, does **not** resume the
+ * warning: it silently returns null again. This diagnostics-only field
+ * has no timestamp or generation counter to detect that narrow case -- a
+ * known, accepted limitation of the deliberately value-scoped (not
+ * boolean, not time-scoped) design (idd-skill#2301 review, rejected as a
+ * follow-up beyond this issue's locked scope).
  */
 export function classifyMergePolicyAcknowledgement(
   config:
