@@ -2226,7 +2226,8 @@ function runRecordPolicyCli(args: ParsedArgs): void {
     );
   }
   const policyDocument = buildFilledPolicyDocument(transcript.answers);
-  const canWrite = args.apply;
+  // --dry-run always wins over --apply, matching runImportCli's convention.
+  const canWrite = args.apply && !args.dryRun;
   if (canWrite) {
     writeFileSync(configPath, `${JSON.stringify(mergedConfig, null, 2)}\n`);
     if (args.writePolicyDoc) {

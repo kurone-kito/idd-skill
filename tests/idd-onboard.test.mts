@@ -3309,6 +3309,30 @@ test('bin/idd-onboard.mjs --record-policy --apply merges only mapsToConfig field
   assert.equal(config.markerPrefix, '{{PROJECT_MARKER_PREFIX}}');
 });
 
+test('bin/idd-onboard.mjs --record-policy --dry-run --apply does not write: --dry-run always wins', () => {
+  const root = makeFixtureDir();
+  writeRecordPolicyFixture(root);
+  const answers = buildValidHearAnswers();
+  const transcript = confirmTranscript(root, answers);
+  const transcriptPath = join(root, 'transcript.json');
+  writeFileSync(transcriptPath, JSON.stringify(transcript));
+  const before = snapshotTree(root);
+
+  const { status, verdict } = runCliBin([
+    '--record-policy',
+    '--transcript',
+    transcriptPath,
+    '--target',
+    root,
+    '--dry-run',
+    '--apply',
+  ]);
+  assert.equal(status, 0);
+  assert.equal(verdict.mode, 'dry-run');
+  assert.equal(verdict.written, false);
+  assertTreeUnchanged(root, before);
+});
+
 test('bin/idd-onboard.mjs --record-policy omits the helperRuntime key when the confirmed profile is instructions-only', () => {
   const root = makeFixtureDir();
   writeRecordPolicyFixture(root);
