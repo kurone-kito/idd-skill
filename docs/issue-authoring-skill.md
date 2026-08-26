@@ -1177,22 +1177,32 @@ availability, or ordering constraint.
   reviewed and verified independently
 - do not split one natural, cohesive change into artificial sibling
   issues only to widen parallel execution
-- when authoring a **docs or operator-help child that documents
-  behavior implemented by sibling issues**, encode `Blocked by #NNN` for
-  those implementation issues (or otherwise sequence the docs child to run
+- whenever an issue's own narrative states that its work cannot safely
+  start until another named issue resolves, encode `Blocked by #NNN`
+  for that issue (or otherwise sequence it to run after the dependency
+  resolves) rather than leaving the constraint as prose-only
+  sequencing. Discover and A4.5 honor the hard `Blocked by` edge, not
+  a narrative "runs after #NNN" note: A4.5 Actionability inspects the
+  body, not completability, so a narrative-only dependency reports the
+  issue startable the moment its other filters pass, and claiming it
+  then means either violating the asserted constraint or doing the
+  referenced issue's unresolved work first. This rule is general, not
+  limited to a fixed list of cases; the two recurring patterns below
+  are illustrative, not exhaustive
+- **example — docs or operator-help child that documents behavior
+  implemented by sibling issues**: encode `Blocked by #NNN` for those
+  implementation issues (or otherwise sequence the docs child to run
   after they merge) so the documentation is written against **shipped**
   behavior. Describing designed-but-unshipped behavior in the present
   tense is a recurring advisory-review-thrash pattern; "describe shipped
   behavior" is a true ordering constraint, so this edge is consistent
   with the encode-only-a-real-constraint rule above
-- when authoring a **finalize or verify track whose acceptance criteria
-  assert state produced by sibling implementation tracks**, encode
+- **example — finalize or verify track whose acceptance criteria
+  assert state produced by sibling implementation tracks**: encode
   `Blocked by #NNN` on **each** such sibling rather than stating the
-  ordering only in prose. Discover and A4.5 honor the hard `Blocked by`
-  edge, not a prose "runs after the siblings" note: A4.5 Actionability
-  inspects the body, not completability, so a prose-sequenced finalize
-  track reports startable the moment its build foundation closes, and
-  claiming it then means either failing its acceptance criteria or doing
+  ordering only in prose. A prose-sequenced finalize track reports
+  startable the moment its build foundation closes, and claiming it
+  then means either failing its acceptance criteria or doing
   the siblings' unmerged work
 - once a `Blocked by #NNN` / `Depends on #NNN` reference resolves —
   the referenced issue closes **with its required outcome verified as
