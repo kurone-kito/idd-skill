@@ -2708,16 +2708,34 @@ test('runHearWizard shows each explanation, confirms the shown default on empty 
     const id = question.split(/ \[|: /)[0] ?? '';
     return noDefaultAnswers[id] ?? `fixture-${id}`;
   };
-  const answers = await runHearWizard(catalog, root, {
-    isTTY: true,
-    prompt,
-  });
+  const stdoutChunks: string[] = [];
+  const originalStdoutWrite = process.stdout.write;
+  process.stdout.write = ((chunk: string) => {
+    stdoutChunks.push(String(chunk));
+    return true;
+  }) as typeof process.stdout.write;
+  let answers: Awaited<ReturnType<typeof runHearWizard>>;
+  try {
+    answers = await runHearWizard(catalog, root, { isTTY: true, prompt });
+  } finally {
+    process.stdout.write = originalStdoutWrite;
+  }
   const answerableIds = catalog.items
     .filter((item) => item.kind !== 'check')
     .map((item) => item.id)
     .sort();
   assert.deepEqual(answers.map((answer) => answer.id).sort(), answerableIds);
   assert.equal(seenQuestions.length, answerableIds.length);
+  // Every answerable item's explanation (not just its terse prompt) was
+  // actually printed to stdout, not merely relied on inside the mock.
+  const mergePolicyItem = catalog.items.find(
+    (item) => item.id === 'merge-policy',
+  );
+  assert.ok(mergePolicyItem);
+  assert.ok(
+    stdoutChunks.some((chunk) => chunk.includes(mergePolicyItem.explanation)),
+    'expected the merge-policy explanation to be printed to stdout',
+  );
   // merge-policy has no derivation hook, so empty input confirms its
   // documented default.
   assert.equal(

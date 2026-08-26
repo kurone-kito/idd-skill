@@ -1604,7 +1604,13 @@ const HEAR_REQUIRED_UTILITIES = [
 ] as const;
 
 function isUtilityAvailable(name: string): boolean {
-  return execSucceeds('sh', ['-c', `command -v -- ${name}`]);
+  // `name` is always one of the fixed HEAR_REQUIRED_UTILITIES literals
+  // above, never dash-prefixed or otherwise untrusted, so the `--`
+  // end-of-options guard buys no real safety here -- and some /bin/sh
+  // implementations treat `--` as the command_name argument to the
+  // `command` builtin instead of an option terminator, which would
+  // misreport every utility as missing (#2304 review).
+  return execSucceeds('sh', ['-c', `command -v ${name}`]);
 }
 
 interface HearExecutionEnvironmentEvidence {
