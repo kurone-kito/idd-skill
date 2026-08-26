@@ -1,0 +1,2 @@
+{"timestamp":"2026-08-26T05:00:00.000Z","type":"session_meta","payload":{"id":"sess-joinhint-0007","cwd":"/home/kurone-kito/ghq/github.com/kurone-kito/idd-skill.issue-4242-some-slug"}}
+{"timestamp":"2026-08-26T05:10:00.000Z","type":"token_count","payload":{"total_token_usage":{"input_tokens":600,"cached_input_tokens":0,"cache_write_input_tokens":0,"output_tokens":60,"reasoning_output_tokens":0}}}
