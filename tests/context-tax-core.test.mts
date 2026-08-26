@@ -99,6 +99,53 @@ test('redaction drops unlisted POSIX absolute paths', () => {
   assert.equal(clean.keep, 'ok');
 });
 
+test('redaction drops absolute paths preceded by a delimiter other than whitespace/quote', () => {
+  const dirty = {
+    cwdNote: 'cwd:/workspace/acme/private.ts',
+    fileUrl: 'file:///etc/passwd',
+    uncPath: String.raw`\\server\share\private.txt`,
+    winNote: 'path:C:\\Users\\me',
+    keep: 'ok',
+  };
+  const clean = redactContextTaxRecord(dirty) as Record<string, unknown>;
+  assert.equal(clean.cwdNote, undefined);
+  assert.equal(clean.fileUrl, undefined);
+  assert.equal(clean.uncPath, undefined);
+  assert.equal(clean.winNote, undefined);
+  assert.equal(clean.keep, 'ok');
+});
+
+test('assertContextTaxSample rejects a non-integer issueNumber', () => {
+  const base: ContextTaxSample = {
+    schemaVersion: 1,
+    kind: 'issue-loop',
+    vendor: 'codex',
+    model: 'gpt-test',
+    attribution: 'marker-join',
+    outcome: 'unknown',
+    usage: {
+      inputUncached: 0,
+      cacheRead: 0,
+      cacheCreation: 0,
+      output: 0,
+      reasoning: 0,
+    },
+    compactionCount: 0,
+    startedAt: '2026-08-25T00:00:00Z',
+    endedAt: '2026-08-25T00:01:00Z',
+    vendorSessionId: 'sess',
+    issueNumber: 2288,
+    stages: [],
+  };
+  assert.doesNotThrow(() => assertContextTaxSample(base));
+  for (const issueNumber of [0.5, Number.NaN, Number.POSITIVE_INFINITY]) {
+    assert.throws(
+      () => assertContextTaxSample({ ...base, issueNumber }),
+      /issue-loop sample requires a positive issueNumber/,
+    );
+  }
+});
+
 test('assertContextTaxSample requires join fields on issue-loop samples', () => {
   const session: ContextTaxSample = {
     schemaVersion: 1,

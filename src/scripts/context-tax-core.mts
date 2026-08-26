@@ -158,7 +158,8 @@ const DROPPED_KEYS = new Set([
   'home',
 ]);
 
-const PATH_LIKE = /(?:^|[\s"'`=(])(?:\/[^\s"'`]+|[A-Za-z]:\\|[.~]\/)|ghq\//i;
+const PATH_LIKE =
+  /(?:^|[\s"'`=(:])(?:\/[^\s"'`]+|[A-Za-z]:[\\/][^\s"'`]*|[.~]\/[^\s"'`]*)|\\\\[^\s\\]+\\[^\s\\]*|ghq\//i;
 
 const SECRET_LIKE =
   /\b(?:ghp_|gho_|ghs_|ghu_|github_pat_|sk-|xox(?:b|a|p|r|s)-)[A-Za-z0-9_-]+/;
@@ -242,7 +243,7 @@ export function assertContextTaxSample(sample: ContextTaxSample): void {
   if (sample.kind !== 'issue-loop') {
     return;
   }
-  if (typeof sample.issueNumber !== 'number' || sample.issueNumber <= 0) {
+  if (!Number.isInteger(sample.issueNumber) || sample.issueNumber <= 0) {
     throw new Error('issue-loop sample requires a positive issueNumber');
   }
   if (!Array.isArray(sample.stages)) {
