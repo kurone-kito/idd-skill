@@ -163,11 +163,13 @@ const DROPPED_KEYS = new Set([
  * Boundary-agnostic path detection: the POSIX/drive/dot-relative branch
  * requires only that the match not be glued to an alphanumeric run (no
  * delimiter whitelist -- ":", ",", ";", etc. all work without enumerating
- * each one); the UNC and `ghq/` branches have no boundary requirement at
- * all and match anywhere in the string.
+ * each one); the backslash-segment branch (single-leading-backslash
+ * Windows-root-relative paths and UNC paths alike -- both are just
+ * "backslash, segment, backslash, segment") and the `ghq/` branch have no
+ * boundary requirement at all and match anywhere in the string.
  */
 const PATH_LIKE =
-  /(?<![A-Za-z0-9])(?:\/[^\s"'`]+|[A-Za-z]:[\\/][^\s"'`]*|[.~]\/[^\s"'`]*)|\\\\[^\s\\]+\\[^\s\\]*|ghq\//i;
+  /(?<![A-Za-z0-9])(?:\/[^\s"'`]+|[A-Za-z]:[\\/][^\s"'`]*|[.~]\/[^\s"'`]*)|\\[^\s\\]+\\[^\s\\]*|ghq\//i;
 
 const SECRET_LIKE =
   /\b(?:ghp_|gho_|ghs_|ghu_|github_pat_|sk-|xox(?:b|a|p|r|s)-)[A-Za-z0-9_-]+/;

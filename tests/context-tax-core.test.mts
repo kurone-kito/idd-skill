@@ -143,6 +143,18 @@ test('redaction drops compound prompt/assistant/tool-input field names', () => {
   assert.equal(clean.inputUncached, 5);
 });
 
+test('redaction drops single-leading-backslash Windows-root-relative paths', () => {
+  const dirty = {
+    rooted: String.raw`\Users\alice\private.ts`,
+    system: String.raw`\Windows\System32\config\SAM`,
+    keep: 'ok',
+  };
+  const clean = redactContextTaxRecord(dirty) as Record<string, unknown>;
+  assert.equal(clean.rooted, undefined);
+  assert.equal(clean.system, undefined);
+  assert.equal(clean.keep, 'ok');
+});
+
 test('assertContextTaxSample couples attribution to kind', () => {
   const issueLoop: ContextTaxSample = {
     schemaVersion: 1,
