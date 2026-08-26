@@ -283,8 +283,8 @@ Without a helper runtime, fetch the hearing catalog
 as this file. For each catalog item, present its `prompt` and
 `explanation` to the operator, accept their confirmed value, and write
 the answers into an object keyed by catalog `id`. Then continue with
-the Step 2 file list and Option A fetch loop below (or Option B for a
-local clone) to fetch the template, apply the confirmed placeholder and
+the Step 2 file list and Option A (or Option B for a local clone)
+below to fetch the template, apply the confirmed placeholder and
 policy values by hand (Steps 1A-1C, 3, and 4 below spell out the same
 items the catalog just asked), and finish with Steps 5 and 6.
 
