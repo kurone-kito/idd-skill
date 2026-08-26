@@ -956,9 +956,10 @@ falling back to `$HOME/.config/idd-skill/config.json` when
 `XDG_CONFIG_HOME` is unset or not a **qualified root** (a usable
 absolute path: POSIX `/…`, or a Windows drive letter or UNC path — a
 relative or otherwise unsafe value is ignored rather than joined
-against the process's working directory). A missing, unreadable, or
-non-object global file is silently treated as absent — this layer is
-opt-in and never required for OSS adopters. Only the
+against the process's working directory). A missing, unreadable,
+invalid-JSON, or non-object global file is silently treated as
+absent — this layer is opt-in and never required for OSS adopters.
+Only the
 `critiqueLoop.delegate` fragment is read from it; every other key is
 ignored, and repository-local `.github/idd/config.json` stays the sole
 authority for every other policy surface.
