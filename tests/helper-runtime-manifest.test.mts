@@ -723,12 +723,6 @@ const DOGFOOD_ONLY_CONCRETE_TOOLS = new Set([
   'scripts/verify-install-deps.mjs',
   'scripts/audit-docs.mjs',
   'scripts/audit-code-span-wrap.mjs',
-  // context-tax-report.mjs (#2294): dogfood-only reporter concreted into
-  // this repository's own pre-push-validate/post-fix-validate rows, same
-  // reason as the four entries above -- see
-  // tests/helper-invocation-profile.test.mts's SOURCE_REPO_INTERNAL_ENTRY_PATHS
-  // for the fuller justification.
-  'scripts/context-tax-report.mjs',
 ]);
 
 // Collect every helper the instruction files tell adopters to RUN as
