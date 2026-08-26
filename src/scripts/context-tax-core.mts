@@ -200,8 +200,9 @@ function redactString(value: string): string | undefined {
  * Drop or replace privacy-sensitive fields from an untrusted harvested
  * record. Absolute paths, secret-shaped strings, and known
  * prompt/assistant/tool-argument key names (including recognizable
- * compound variants) do not survive. This is a defense-in-depth net for
- * stray fields, not a substitute for an adapter choosing what to extract:
+ * compound variants) do not survive -- as values or as object keys. This
+ * is a defense-in-depth net for stray fields, not a substitute for an
+ * adapter choosing what to extract:
  * `ContextTaxSample`/`ContextTaxEvent` have no field for raw conversational
  * text, so a correctly built adapter never passes a role/message/tool-call
  * container through here in the first place.
@@ -220,7 +221,7 @@ export function redactContextTaxRecord(input: unknown): unknown {
   }
   const out: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(input as Record<string, unknown>)) {
-    if (isDroppedKey(key)) {
+    if (isDroppedKey(key) || redactString(key) === undefined) {
       continue;
     }
     const redacted = redactContextTaxRecord(value);

@@ -143,6 +143,17 @@ test('redaction drops compound prompt/assistant/tool-input field names', () => {
   assert.equal(clean.inputUncached, 5);
 });
 
+test('redaction drops path-like and secret-shaped object keys', () => {
+  const dirty = {
+    '/workspace/acme/private.ts': 3,
+    'C:\\Users\\alice\\secret.ts': 1,
+    keep: 'ok',
+  };
+  const clean = redactContextTaxRecord(dirty) as Record<string, unknown>;
+  assert.equal(Object.keys(clean).length, 1);
+  assert.equal(clean.keep, 'ok');
+});
+
 test('redaction drops single-leading-backslash Windows-root-relative paths', () => {
   const dirty = {
     rooted: String.raw`\Users\alice\private.ts`,
