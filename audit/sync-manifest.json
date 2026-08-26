@@ -136,6 +136,7 @@
         "idd-template/docs/onboarding/optional-host-setup.md",
         "idd-template/docs/onboarding/placeholders.md",
         "idd-template/docs/onboarding/policy-decisions.md",
+        "idd-template/docs/onboarding/project-tuning.md",
         "idd-template/docs/onboarding/template-distribution.md",
         "idd-template/profiles/README.md",
         "idd-template/profiles/human-required/README.md",
@@ -230,23 +231,23 @@
   "shellFileLists": [
     {
       "id": "idd-template-core-gh-api-loop",
-      "file": "idd-template/ONBOARDING.md",
+      "file": "idd-template/docs/onboarding/template-distribution.md",
       "generatedBlock": "idd-template-core-files"
     },
     {
       "id": "issue-authoring-companion-gh-api-loop",
-      "file": "idd-template/ONBOARDING.md",
+      "file": "idd-template/docs/onboarding/template-distribution.md",
       "generatedBlock": "issue-authoring-companion-files",
       "stripPrefix": "skills/issue-authoring/"
     },
     {
       "id": "idd-template-core-curl-loop",
-      "file": "idd-template/ONBOARDING.md",
+      "file": "idd-template/docs/onboarding/template-distribution.md",
       "generatedBlock": "idd-template-core-files"
     },
     {
       "id": "issue-authoring-companion-curl-loop",
-      "file": "idd-template/ONBOARDING.md",
+      "file": "idd-template/docs/onboarding/template-distribution.md",
       "generatedBlock": "issue-authoring-companion-files",
       "stripPrefix": "skills/issue-authoring/"
     }

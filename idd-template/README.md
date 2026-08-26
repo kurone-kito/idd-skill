@@ -163,6 +163,7 @@ docs/onboarding/issue-mediated-bootstrap.md
 docs/onboarding/optional-host-setup.md
 docs/onboarding/placeholders.md
 docs/onboarding/policy-decisions.md
+docs/onboarding/project-tuning.md
 docs/onboarding/template-distribution.md
 docs/permissions.md
 docs/policy-constants.md

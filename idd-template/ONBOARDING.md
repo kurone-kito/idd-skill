@@ -70,29 +70,12 @@ IDD, treat the upgrade as a **named-gap import**, not a blind resync:
 3. Re-apply the Step 2 file import for the changed files, then re-run the
    Step 6 verification checklist and `idd-doctor` after reconciling.
 
-**Anatomy of a helper re-import (`vendored-node` profile).** If you vendor the
-shared helper bundle — the `vendored-node` profile, which physically copies the
-shared `protocol-helpers` core — a new **leaf helper** is rarely a standalone
-file drop:
-
-1. **Diff the shared core first.** The new helper usually imports a newer
-   `protocol-helpers` shared-core API absent from your older snapshot, so the
-   real work is a shared-core bump — budget that prerequisite before scoping the
-   leaf-helper slices. The shared core is no longer always a single file: a
-   façade split (e.g. `protocol-helpers` re-exporting `marker-helpers`) can
-   move an API to a focused module that the entry file only re-exports, so
-   vendor every file the shared-core entry point re-exports from, not just the
-   entry file itself.
-2. **Reconcile a hardened core additively.** If you hardened that core, treat
-   the bump as additive named-divergence reconciliation gated on your protected
-   tests: preserve the local hardening and append only the new exports rather
-   than wholesale-vendoring the core over it.
-3. **Watch the silent revert.** A wholesale core vendor can green-build while
-   silently reverting your protected local tests, so verify against those tests,
-   not just a clean compile.
-
-(npx-resolved profiles do not vend the core this way, so this note applies only
-when you copy helper files.)
+**Anatomy of a helper re-import (`vendored-node` profile).** If you vendor
+the shared helper bundle, a new leaf helper is rarely a standalone file
+drop — see
+[Anatomy of a helper re-import](docs/onboarding/template-distribution.md#anatomy-of-a-helper-re-import-vendored-node-profile)
+for the shared-core diff, additive-reconciliation, and silent-revert
+checks to run before trusting a green build.
 
 **Named gap: `.markdownlint.yml` / `.markdownlint-cli2.yaml` /
 `.cspell.config.yml`.** A repository onboarded before these files were
@@ -200,6 +183,133 @@ reasoning depth, not for routine IDD loop execution.
 
 ---
 
+## Helper-assisted path
+
+**Requires a local clone of `kurone-kito/idd-skill`** (Step 2 Option B
+below) — `scripts/idd-onboard.mjs` exists only in that checkout, not in
+a target repository fetched via Option A alone. If this session has
+such a clone plus a working Node.js/`npx` helper runtime, this run
+order replaces the manual Steps 0-4 and 6 procedures below and
+[Onboarding Reference — Policy Decisions](docs/onboarding/policy-decisions.md) /
+[Onboarding Reference — Placeholder Values](docs/onboarding/placeholders.md)
+— open those two companions only if one of the steps below fails.
+Step 5 (agent-entry files) and the
+[Project Tuning](docs/onboarding/project-tuning.md) companion in step
+6 below still need reading; this path does not automate them. Without
+a clone, use the [Instructions-only path](#instructions-only-path)
+below instead.
+
+1. Read-only propose: catalog items with any derived candidate and
+   documented default, Step 0 evidence, and helper-runtime evidence.
+   Relay each **non-`check`-kind** item's `prompt` and `explanation` to
+   the operator and collect their confirmed answers for `<answers-file>`
+   below — inspect the three `check`-kind items (Step 0's
+   `gh`/host/execution-environment evidence) yourself instead of asking
+   the operator, and do not add them to `<answers-file>`:
+   `--hear --apply` treats any id it does not recognize as unresolved
+   and exits `1`. `--propose` is required even when also running the
+   TTY wizard next — the wizard alone skips every `check`-kind item and
+   never gathers helper-runtime evidence.
+
+   ```sh
+   node scripts/idd-onboard.mjs --hear --propose --target <target-repo>
+   node scripts/idd-onboard.mjs --hear --target <target-repo>  # optional TTY wizard, after propose
+   ```
+
+2. Validate the operator's answers against the catalog and print the
+   confirmed transcript. Save that transcript to a file.
+
+   ```sh
+   node scripts/idd-onboard.mjs --hear --apply \
+     --answers <answers-file> --target <target-repo>
+   ```
+
+   **Check the transcript's `bootstrap-execution-mode` answer before
+   continuing.** If it is `issue-mediated`, stop here — switch to
+   [Onboarding Reference — Issue-Mediated
+   Bootstrap](docs/onboarding/issue-mediated-bootstrap.md) instead of
+   running steps 3-5 below, which write the template with a direct,
+   unreviewed commit (the `direct-import` default only).
+
+3. Import the core template file set (add `--profile vendored-node`
+   when that profile was confirmed).
+
+   ```sh
+   node scripts/idd-onboard.mjs --import \
+     --source <idd-skill-clone> --target <target-repo>
+   ```
+
+4. Replace the seven placeholders from the confirmed transcript.
+
+   ```sh
+   node scripts/idd-onboard.mjs --substitute \
+     --from-transcript <transcript-file> --target <target-repo>
+   ```
+
+5. Record the confirmed policy decisions. Always pass
+   `--write-policy-doc <path>`: several confirmed answers (credential
+   scope, critique-loop profile, issue-authoring companion status, the
+   up-to-date-head ruleset check, and bootstrap execution mode) are
+   docs-only and exist **only** in this filled Markdown template, not
+   in `.github/idd/config.json` — dropping the flag loses them. Root
+   `<path>` under `<target-repo>` explicitly — `--record-policy`
+   resolves a relative path against the current working directory, not
+   `--target`, so a bare relative path run from this clone silently
+   writes into the clone instead of the target repository. Link the
+   written file from the repository's agent entry files (Step 5 below)
+   so future sessions can find it.
+
+   ```sh
+   node scripts/idd-onboard.mjs --record-policy \
+     --transcript <transcript-file> --target <target-repo> \
+     --apply --write-policy-doc <target-repo>/<policy-doc-path>
+   ```
+
+6. Read
+   [Onboarding Reference — Project Tuning](docs/onboarding/project-tuning.md)
+   for the judgment calls the CLI does not automate.
+7. Verify the imported result. Pass the same `--profile` used for
+   `--import` in step 3 (if any) — `--verify` resolves
+   `manifestCompleteness` from `--source` and `--profile` together, so
+   omitting a non-default profile here hides a missing or
+   failed-to-copy profile-conditional file.
+
+   ```sh
+   node scripts/idd-onboard.mjs --verify \
+     --source <idd-skill-clone> --target <target-repo> [--profile <name>]
+   ```
+
+If any step reports a blocking finding, open the referenced companion
+doc — Step 1B below documents every policy decision in full, and
+[Placeholder Values](docs/onboarding/placeholders.md) documents every
+placeholder — to resolve it, then resume from that step.
+
+## Instructions-only path
+
+Without a helper runtime, fetch the hearing catalog
+(`docs/onboarding/hearing-catalog.json`) from the same raw GitHub tree
+as this file. For each **non-`check`-kind** catalog item, present its
+`prompt` and `explanation` to the operator and record their confirmed
+value. Execute and inspect the three `check`-kind items yourself
+instead of asking the operator for a value (Step 0's `gh`/host/
+execution-environment checks) — do not skip them and proceed to Step 2
+on unauthenticated `gh` or an unsupported shell.
+
+**Check the operator's `bootstrap-execution-mode` answer before Step
+2.** If it is `issue-mediated`, switch to
+[Onboarding Reference — Issue-Mediated
+Bootstrap](docs/onboarding/issue-mediated-bootstrap.md) instead of
+continuing below — Steps 2, 4, and 5 write the template with a direct,
+unreviewed commit (the `direct-import` default only).
+
+Otherwise continue with the Step 2 file list and Option A (or Option B
+for a local clone) below to fetch the template, apply the confirmed
+placeholder and policy values by hand (Steps 1A-1C, 3, and 4 below
+spell out the same items the catalog just asked), and finish with
+Steps 5 and 6.
+
+---
+
 ## Step 0 — Prerequisite check
 
 Before Step 1A, confirm the `gh` CLI is installed and authenticated.
@@ -273,17 +383,11 @@ approach Windows' 260-character path limit.
 
 ## Dry-run — Readiness assessment
 
-Before making any file changes, you may run a read-only readiness pass
-for the target repository.
-
-Use this prompt:
-
-```md
-Assess this repository for IDD readiness. Do not modify any files.
-Produce a readiness report with the following fields.
-```
-
-Return the report in this format:
+Before making any file changes, run
+`node scripts/idd-onboard.mjs --hear --propose --target <target-repo>`
+for a read-only readiness pass over the target repository — see
+[Helper-assisted path](#helper-assisted-path) above. Its JSON payload
+approximates this shape:
 
 ```md
 ## IDD readiness report
@@ -304,6 +408,14 @@ Return the report in this format:
 `gh auth status --hostname <derived-host>` check as Step 0 above, plus
 any other missing tooling this dry-run pass observes -- both surfaces
 agree on the `gh` check itself.
+
+For a session with no helper runtime, use this prompt instead and
+return the report in the same format:
+
+```md
+Assess this repository for IDD readiness. Do not modify any files.
+Produce a readiness report with the following fields.
+```
 
 This dry-run is for evaluators who want a quick import readiness summary
 before starting Step 1A.
@@ -433,16 +545,40 @@ for when to choose it and the full procedure.
 
 If you have a local clone of `kurone-kito/idd-skill` (Step 2 Option B
 below), the `idd-onboard` CLI shipped in that clone
-(`scripts/idd-onboard.mjs`) can automate Steps 2, 4, and 6. **The manual
-steps remain canonical**; this CLI is a mechanical, optional shortcut for
-the same three steps. `--import` and `--verify` both require
+(`scripts/idd-onboard.mjs`) can automate Steps 0, 1A, 1B, and 1C (via
+`--hear`), Step 2 (via `--import`), Step 3 (via `--record-policy`),
+Step 4 (via `--substitute`), and Step 6 (via `--verify`). **The manual
+steps remain canonical**; this CLI is a mechanical, optional shortcut
+for the same steps. See
+[Helper-assisted path](#helper-assisted-path) above for the full
+run order. `--import` and `--verify` both require
 `--source <path-to-a-cloned-idd-skill-tree>` and therefore only replace
 the Option B local-clone flow, never Option A's remote fetch;
 `--substitute` takes no `--source` at all (it only rewrites an already-
 imported `--target` tree) and works the same regardless of how that tree
-was populated. Each mode prints a JSON verdict and exits `0` (converged),
-`1` (a blocking or residue finding — nothing is written), or `2` (a usage
+was populated. `--hear` and `--record-policy` also take no `--source`.
+Each mode prints a JSON verdict and exits `0` (converged), `1` (a
+blocking or residue finding — nothing is written), or `2` (a usage
 error), so an agent can gate on the exit code without parsing prose.
+
+- **Steps 0, 1A, 1B, 1C (the hearing) → `--hear`**: derives candidates for
+  the catalog's answerable items by reusing `--substitute`'s own
+  derivation hooks and reports Step 0 evidence and helper-runtime
+  evidence. `--hear --propose --target <dir>` prints that JSON
+  read-only; `--hear --apply --answers <file> --target <dir>` validates
+  a confirmed answers file against the catalog and transcript schema
+  and prints the confirmed transcript; bare
+  `--hear --target <dir>` runs an interactive TTY wizard over the same
+  catalog and prints the same transcript shape. Never edits
+  `ONBOARDING.md`, never writes `.github/idd/config.json`, never
+  requires `--source`.
+
+  ```sh
+  node scripts/idd-onboard.mjs --hear --propose --target <target-repo>
+  node scripts/idd-onboard.mjs --hear --apply --answers <answers-file> \
+    --target <target-repo>
+  node scripts/idd-onboard.mjs --hear --target <target-repo>
+  ```
 
 - **Step 2 (fetch or copy) → `--import`**: copies the core template file
   set from `--source` into `--target`. The file set it copies is the same
@@ -460,17 +596,19 @@ error), so an agent can gate on the exit code without parsing prose.
   ```
 
 - **Step 4 (replace placeholders) → `--substitute`**: resolves the seven
-  placeholders using Step 1A's auto-derivation rules, or explicit
+  placeholders using Step 1A's auto-derivation rules, a confirmed
+  `--hear` transcript (`--from-transcript <file>`), or explicit
   overrides (`--repo-name`, `--marker-prefix`, `--trusted-marker-actor`,
   `--fix-validate-commands`, `--pre-push-validate-commands`,
-  `--post-fix-validate-commands`, `--install-deps-command`), then rewrites
+  `--post-fix-validate-commands`, `--install-deps-command`, which always
+  win over a transcript value when both are present), then rewrites
   the target tree in place. Add `--dry-run` to print the plan without
   writing; apply mode refuses to write anything while any placeholder
   would remain unresolved.
 
   ```sh
   node scripts/idd-onboard.mjs --substitute --target <target-repo> \
-    [--dry-run] [--repo-name <value> ...]
+    [--from-transcript <transcript-file>] [--dry-run] [--repo-name <value> ...]
   ```
 
   The `--substitute` shortcut resolves placeholders only; it does not
@@ -479,6 +617,23 @@ error), so an agent can gate on the exit code without parsing prose.
   instruction after running this command. The `--profile` option on
   `--import` and `--verify` controls profile-conditional file selection and
   completeness, not policy recording.
+
+- **Step 3 (record policy decisions) → `--record-policy`**: consumes a
+  confirmed `--hear` transcript's policy-kind answers. Post-import
+  only — `--target` must already contain `.github/idd/config.json`.
+  Default is dry-run (prints the config-patch and filled Markdown
+  policy-decisions template without writing); `--apply` merges the
+  patch into `.github/idd/config.json` (omitting `helperRuntime` for a
+  confirmed `instructions-only` profile, and writing
+  `skipIssueAuthorApprovalGate` only when the operator opted out); add
+  `--write-policy-doc <path>` (with `--apply` — it has no effect during
+  the dry-run default) to also write the filled template to that path.
+  Never edits `ONBOARDING.md`, `CLAUDE.md`, `AGENTS.md`, or `GEMINI.md`.
+
+  ```sh
+  node scripts/idd-onboard.mjs --record-policy --transcript <transcript-file> \
+    --target <target-repo> [--apply] [--write-policy-doc <path>]
+  ```
 
 - **Step 6 (verification checklist) → `--verify`**: a mechanical pass/fail
   check for a target tree after `--import` and `--substitute` have run,
@@ -495,8 +650,8 @@ error), so an agent can gate on the exit code without parsing prose.
   ```
 
 Run `node scripts/idd-onboard.mjs --help` for the full flag reference —
-this section documents only the flags relevant to Steps 2, 4, and 6, not
-every accepted argument.
+this section documents only the flags relevant to Steps 0, 1A-1C, 2, 3,
+4, and 6, not every accepted argument.
 
 ---
 
@@ -621,6 +776,7 @@ docs/onboarding/issue-mediated-bootstrap.md
 docs/onboarding/optional-host-setup.md
 docs/onboarding/placeholders.md
 docs/onboarding/policy-decisions.md
+docs/onboarding/project-tuning.md
 docs/onboarding/template-distribution.md
 profiles/README.md
 profiles/human-required/README.md
@@ -676,246 +832,19 @@ Create the target directories if they do not exist.
 ### Option A — Remote fetch (no local clone required)
 
 Use `gh api` or `curl` to download each file from the raw-content
-endpoint. Replace `{DEST}` with the root of the target repository.
-
-Base URL: `https://raw.githubusercontent.com/kurone-kito/idd-skill/main/idd-template/`
-
-Fetch all files with `gh api` (recommended — handles auth automatically):
-
-<!-- audit:shell-list id=idd-template-core-gh-api-loop -->
-
-```sh
-DEST="."  # root of the target repository
-
-mkdir -p "${DEST}/.github/idd" "${DEST}/.github/workflows" \
-  "${DEST}/.github/instructions" "${DEST}/docs" "${DEST}/docs/onboarding"
-
-for FILE in \
-  ".github/idd/config.json" \
-  ".github/workflows/post-merge-cleanup.yml" \
-  ".githooks/_idd-worktree-guard.sh" \
-  ".githooks/pre-commit" \
-  ".githooks/pre-push" \
-  ".cspell.config.yml" \
-  ".markdownlint.yml" \
-  ".markdownlint-cli2.yaml" \
-  ".github/instructions/idd-overview-core.instructions.md" \
-  ".github/instructions/idd-overview-appendix.instructions.md" \
-  ".github/instructions/idd-discover.instructions.md" \
-  ".github/instructions/idd-roadmap-audit.instructions.md" \
-  ".github/instructions/idd-suitability.instructions.md" \
-  ".github/instructions/idd-claim.instructions.md" \
-  ".github/instructions/idd-work.instructions.md" \
-  ".github/instructions/idd-pr-submit.instructions.md" \
-  ".github/instructions/idd-ci.instructions.md" \
-  ".github/instructions/idd-advisory-wait.instructions.md" \
-  ".github/instructions/idd-review-snapshot.instructions.md" \
-  ".github/instructions/idd-review-triage.instructions.md" \
-  ".github/instructions/idd-review-fix.instructions.md" \
-  ".github/instructions/idd-pre-merge.instructions.md" \
-  ".github/instructions/idd-merge-handoff.instructions.md" \
-  ".github/instructions/idd-merge.instructions.md" \
-  ".github/instructions/idd-resume.instructions.md" \
-  ".github/instructions/idd-resume-stall.instructions.md" \
-  ".github/instructions/lite/idd-claim-lite.instructions.md" \
-  ".github/instructions/lite/idd-work-lite.instructions.md" \
-  ".github/instructions/lite/idd-pr-submit-lite.instructions.md" \
-  ".github/instructions/lite/idd-review-snapshot-lite.instructions.md" \
-  ".github/instructions/lite/idd-pre-merge-lite.instructions.md" \
-  ".github/instructions/lite/idd-merge-handoff-lite.instructions.md" \
-  ".github/instructions/lite/idd-review-fix-lite.instructions.md" \
-  ".github/instructions/lite/idd-resume-lite.instructions.md" \
-  ".github/instructions/lite/idd-resume-stall-lite.instructions.md" \
-  ".github/instructions/lite/idd-ci-lite.instructions.md" \
-  ".github/instructions/lite/idd-advisory-wait-lite.instructions.md" \
-  "docs/index.md" \
-  "docs/idd-workflow.md" \
-  "docs/idd-review-policy-profiles.md" \
-  "docs/idd-helper-scripts.md" \
-  "docs/idd-autonomy-contract.md" \
-  "docs/idd-comment-minimization.md" \
-  "docs/idd-resume-detail.md" \
-  "docs/idd-advisory-wait-shell-fallback.md" \
-  "docs/idd-design-rationale.md" \
-  "docs/idd-concept-ownership.md" \
-  "docs/permissions.md" \
-  "docs/getting-started.md" \
-  "docs/concepts.md" \
-  "docs/customization.md" \
-  "docs/policy-constants.md" \
-  "docs/reference.md" \
-  "docs/onboarding/agent-entry-and-verification.md" \
-  "docs/onboarding/issue-mediated-bootstrap.md" \
-  "docs/onboarding/optional-host-setup.md" \
-  "docs/onboarding/placeholders.md" \
-  "docs/onboarding/policy-decisions.md" \
-  "docs/onboarding/template-distribution.md" \
-  "profiles/README.md" \
-  "profiles/human-required/README.md" \
-  "profiles/no-advisory/README.md" \
-  "profiles/external-bot/README.md"
-do
-  mkdir -p "$(dirname "${DEST}/${FILE}")"
-  gh api -H "Accept: application/vnd.github.raw+json" \
-    "repos/kurone-kito/idd-skill/contents/idd-template/${FILE}" \
-    > "${DEST}/${FILE}" || { echo "Failed: ${FILE}" >&2; exit 1; }
-done
-```
-
-If the operator opts into the issue-authoring companion, fetch its canonical
-source files separately and write them directly to the selected native skill
-destination. The Codex CLI example below uses `.agents/skills/`; set
-`SKILL_DEST` to a different single native destination when the target runtime
-requires it:
-
-<!-- audit:shell-list id=issue-authoring-companion-gh-api-loop -->
-
-```sh
-DEST="."  # root of the target repository
-SKILL_DEST="${DEST}/.agents/skills/issue-authoring"  # Codex example; choose one native destination
-
-mkdir -p "${SKILL_DEST}/references"
-
-for FILE in \
-  "SKILL.md" \
-  "references/contract.md" \
-  "references/draft-patterns.md" \
-  "references/workflow-boundary.md"
-do
-  mkdir -p "$(dirname "${SKILL_DEST}/${FILE}")"
-  gh api -H "Accept: application/vnd.github.raw+json" \
-    "repos/kurone-kito/idd-skill/contents/skills/issue-authoring/${FILE}" \
-    > "${SKILL_DEST}/${FILE}" || { echo "Failed: ${FILE}" >&2; exit 1; }
-done
-```
-
-Alternatively, use `curl` (no authentication required — idd-skill is a public
-repository):
-
-<!-- audit:shell-list id=idd-template-core-curl-loop -->
-
-```sh
-BASE="https://raw.githubusercontent.com/kurone-kito/idd-skill/main/idd-template"
-DEST="."  # root of the target repository
-
-mkdir -p "${DEST}/.github/idd" "${DEST}/.github/workflows" \
-  "${DEST}/.github/instructions" "${DEST}/docs" "${DEST}/docs/onboarding"
-
-for FILE in \
-  ".github/idd/config.json" \
-  ".github/workflows/post-merge-cleanup.yml" \
-  ".githooks/_idd-worktree-guard.sh" \
-  ".githooks/pre-commit" \
-  ".githooks/pre-push" \
-  ".cspell.config.yml" \
-  ".markdownlint.yml" \
-  ".markdownlint-cli2.yaml" \
-  ".github/instructions/idd-overview-core.instructions.md" \
-  ".github/instructions/idd-overview-appendix.instructions.md" \
-  ".github/instructions/idd-discover.instructions.md" \
-  ".github/instructions/idd-roadmap-audit.instructions.md" \
-  ".github/instructions/idd-suitability.instructions.md" \
-  ".github/instructions/idd-claim.instructions.md" \
-  ".github/instructions/idd-work.instructions.md" \
-  ".github/instructions/idd-pr-submit.instructions.md" \
-  ".github/instructions/idd-ci.instructions.md" \
-  ".github/instructions/idd-advisory-wait.instructions.md" \
-  ".github/instructions/idd-review-snapshot.instructions.md" \
-  ".github/instructions/idd-review-triage.instructions.md" \
-  ".github/instructions/idd-review-fix.instructions.md" \
-  ".github/instructions/idd-pre-merge.instructions.md" \
-  ".github/instructions/idd-merge-handoff.instructions.md" \
-  ".github/instructions/idd-merge.instructions.md" \
-  ".github/instructions/idd-resume.instructions.md" \
-  ".github/instructions/idd-resume-stall.instructions.md" \
-  ".github/instructions/lite/idd-claim-lite.instructions.md" \
-  ".github/instructions/lite/idd-work-lite.instructions.md" \
-  ".github/instructions/lite/idd-pr-submit-lite.instructions.md" \
-  ".github/instructions/lite/idd-review-snapshot-lite.instructions.md" \
-  ".github/instructions/lite/idd-pre-merge-lite.instructions.md" \
-  ".github/instructions/lite/idd-merge-handoff-lite.instructions.md" \
-  ".github/instructions/lite/idd-review-fix-lite.instructions.md" \
-  ".github/instructions/lite/idd-resume-lite.instructions.md" \
-  ".github/instructions/lite/idd-resume-stall-lite.instructions.md" \
-  ".github/instructions/lite/idd-ci-lite.instructions.md" \
-  ".github/instructions/lite/idd-advisory-wait-lite.instructions.md" \
-  "docs/index.md" \
-  "docs/idd-workflow.md" \
-  "docs/idd-review-policy-profiles.md" \
-  "docs/idd-helper-scripts.md" \
-  "docs/idd-autonomy-contract.md" \
-  "docs/idd-comment-minimization.md" \
-  "docs/idd-resume-detail.md" \
-  "docs/idd-advisory-wait-shell-fallback.md" \
-  "docs/idd-design-rationale.md" \
-  "docs/idd-concept-ownership.md" \
-  "docs/permissions.md" \
-  "docs/getting-started.md" \
-  "docs/concepts.md" \
-  "docs/customization.md" \
-  "docs/policy-constants.md" \
-  "docs/reference.md" \
-  "docs/onboarding/agent-entry-and-verification.md" \
-  "docs/onboarding/issue-mediated-bootstrap.md" \
-  "docs/onboarding/optional-host-setup.md" \
-  "docs/onboarding/placeholders.md" \
-  "docs/onboarding/policy-decisions.md" \
-  "docs/onboarding/template-distribution.md" \
-  "profiles/README.md" \
-  "profiles/human-required/README.md" \
-  "profiles/no-advisory/README.md" \
-  "profiles/external-bot/README.md"
-do
-  mkdir -p "$(dirname "${DEST}/${FILE}")"
-  curl -fsSL "${BASE}/${FILE}" -o "${DEST}/${FILE}" || { echo "Failed: ${FILE}" >&2; exit 1; }
-done
-```
-
-If the operator opts into the issue-authoring companion with `curl`, fetch
-the same canonical source files to the selected native skill destination:
-
-<!-- audit:shell-list id=issue-authoring-companion-curl-loop -->
-
-```sh
-BASE="https://raw.githubusercontent.com/kurone-kito/idd-skill/main/skills/issue-authoring"
-DEST="."  # root of the target repository
-SKILL_DEST="${DEST}/.agents/skills/issue-authoring"  # Codex example; choose one native destination
-
-mkdir -p "${SKILL_DEST}/references"
-
-for FILE in \
-  "SKILL.md" \
-  "references/contract.md" \
-  "references/draft-patterns.md" \
-  "references/workflow-boundary.md"
-do
-  mkdir -p "$(dirname "${SKILL_DEST}/${FILE}")"
-  curl -fsSL "${BASE}/${FILE}" -o "${SKILL_DEST}/${FILE}" || { echo "Failed: ${FILE}" >&2; exit 1; }
-done
-```
+endpoint. See
+[Remote fetch examples](docs/onboarding/template-distribution.md#remote-fetch-examples)
+for the exact `gh api` and `curl` loops (core files and the optional
+issue-authoring companion), including the Codex `SKILL_DEST` example.
 
 ### Option B — Local copy (idd-skill cloned)
 
 If you have cloned `https://github.com/kurone-kito/idd-skill`, copy
 the files from `idd-template/` into the target repository preserving
-their relative paths.
-
-If the operator opts into the issue-authoring companion, copy the canonical
-`skills/issue-authoring/` source bundle from the idd-skill checkout to one
-selected native destination in the target repository. For example, from the
-idd-skill checkout:
-
-```sh
-SOURCE="skills/issue-authoring"
-TARGET_REPO="../target-repository"
-SKILL_DEST="${TARGET_REPO}/.agents/skills/issue-authoring"  # Codex example; choose one native destination
-
-mkdir -p "${SKILL_DEST}/references"
-cp -R "${SOURCE}/." "${SKILL_DEST}/"
-```
-
-Do not copy the same skill ID into additional runtime roots by default
-(preventive; no observed incident yet).
+their relative paths. See
+[Local-copy installs](docs/onboarding/template-distribution.md#local-copy-installs)
+for the optional issue-authoring companion copy example and the
+do-not-duplicate-native-roots rule.
 
 ### Optional companion boundary
 

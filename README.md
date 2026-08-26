@@ -112,8 +112,11 @@ onboard IDD, fetch this file first and follow it exactly:
 https://raw.githubusercontent.com/kurone-kito/idd-skill/main/idd-template/ONBOARDING.md
 ```
 
-It explains which files to copy, which placeholders to fill, and which
-target-repository entry files to update.
+It is a thin orchestrator: it explains which files to copy, which
+placeholders to fill, and which target-repository entry files to
+update, and — when a capable helper runtime is available — points a
+session at `idd-onboard --hear` instead of walking through the policy
+and placeholder companions by hand.
 
 ## How it works
 

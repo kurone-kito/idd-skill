@@ -2880,6 +2880,8 @@ const CLI_SECTION_CORE_FLAGS = [
   '--import',
   '--substitute',
   '--verify',
+  '--hear',
+  '--record-policy',
   '--source',
   '--target',
   '--profile',
