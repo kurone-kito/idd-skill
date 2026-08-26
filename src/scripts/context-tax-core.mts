@@ -160,9 +160,11 @@ const DROPPED_KEYS = new Set([
 ]);
 
 /**
- * Path detection is boundary-agnostic (no delimiter whitelist): a match
- * simply must not be glued to an alphanumeric run, so it fires after any
- * delimiter (":", ",", ";", ...) without enumerating them one by one.
+ * Boundary-agnostic path detection: the POSIX/drive/dot-relative branch
+ * requires only that the match not be glued to an alphanumeric run (no
+ * delimiter whitelist -- ":", ",", ";", etc. all work without enumerating
+ * each one); the UNC and `ghq/` branches have no boundary requirement at
+ * all and match anywhere in the string.
  */
 const PATH_LIKE =
   /(?<![A-Za-z0-9])(?:\/[^\s"'`]+|[A-Za-z]:[\\/][^\s"'`]*|[.~]\/[^\s"'`]*)|\\\\[^\s\\]+\\[^\s\\]*|ghq\//i;
@@ -194,8 +196,13 @@ function redactString(value: string): string | undefined {
 
 /**
  * Drop or replace privacy-sensitive fields from an untrusted harvested
- * record. Absolute paths, prompt/assistant/tool-argument text, file
- * contents, and secret-shaped strings do not survive.
+ * record. Absolute paths, secret-shaped strings, and known
+ * prompt/assistant/tool-argument key names (including recognizable
+ * compound variants) do not survive. This is a defense-in-depth net for
+ * stray fields, not a substitute for an adapter choosing what to extract:
+ * `ContextTaxSample`/`ContextTaxEvent` have no field for raw conversational
+ * text, so a correctly built adapter never passes a role/message/tool-call
+ * container through here in the first place.
  */
 export function redactContextTaxRecord(input: unknown): unknown {
   if (typeof input === 'string') {
