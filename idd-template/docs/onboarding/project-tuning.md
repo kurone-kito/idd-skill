@@ -1,7 +1,7 @@
 ---
 type: reference
 title: Onboarding Reference — Project Tuning
-description: The post-hearing judgment calls idd-onboard's CLI does not automate — agent-entry file surgery, non-default profile artifacts, extra trusted marker actors, the reserved-label guard, and command-row retuning.
+description: The post-hearing judgment calls idd-onboard's CLI does not automate — agent-entry file surgery, non-default profile artifacts, extra trusted marker actors, claim-timing/label-name overrides, the reserved-label guard, the issue-authoring companion install, and command-row retuning.
 tags: [onboarding, project-tuning]
 ---
 
@@ -53,18 +53,52 @@ trusted logins as additional quoted array entries by hand after the
 first substitution — see [`{{TRUSTED_MARKER_ACTOR}}`](placeholders.md)
 for the single-login replacement step this extends.
 
+## Claim-timing overrides and custom label names
+
+The catalog's `claim-timing` and `idd-label-names` items only capture
+**whether** the repository keeps the distributed defaults or overrides
+them (`distributed-defaults` / `repository-override` /
+`custom-taxonomy`) — `--record-policy` deliberately never writes a
+literal value for either, since the actual override (an ISO-8601
+duration pair, or real label strings) has no representation in the
+catalog. If the confirmed answer is not `distributed-defaults`, add
+the real values to `.github/idd/config.json` by hand after
+`--record-policy --apply` runs:
+
+- **Claim timing** (`repository-override`): set `claimTiming.staleAge`
+  and `claimTiming.heartbeatInterval` (both required together) as
+  ISO-8601 durations.
+- **IDD label names** (`custom-taxonomy`): set
+  `labels.roadmapLabelName`, `labels.blockedByHumanLabelName`, and
+  `labels.needsDecisionLabelName` to the repository's real label
+  strings.
+
 ## Reserved-label guard
 
 When the hearing's nested auto-labeler follow-up answer is yes (a
 semantic issue auto-labeler such as CodeRabbit's issue enrichment is
-active), the configured IDD label names
-(`labels.roadmapLabelName`, `labels.blockedByHumanLabelName`,
-`labels.needsDecisionLabelName`) need a guard so the labeler cannot
-silently apply one of them to an ordinary issue. See
-[IDD label names](policy-decisions.md#idd-label-names) for the field
-evidence and the guard recipe; `--record-policy` records the chosen
-label names but
-does not configure the labeler itself.
+active), the configured IDD label names — whether the distributed
+defaults or the custom values just recorded above — need a guard so
+the labeler cannot silently apply one of them to an ordinary issue.
+See [IDD label names](policy-decisions.md#idd-label-names) for the
+field evidence and
+[Customizing IDD — Reserved-label guard recipe](../customization.md#reserved-label-guard-recipe)
+for the recipe itself; neither `--record-policy` nor any other
+`idd-onboard` mode configures the labeler.
+
+## Issue-authoring companion install
+
+When the hearing's `issue-authoring-companion` answer is `installed`,
+neither `--import` nor `--record-policy` copies the companion
+bundle — `--import` only ever copies the core template file set, and
+`--record-policy` only writes config/docs. Fetch or copy the
+`skills/issue-authoring/` bundle into the confirmed native destination
+yourself: see
+[Remote fetch examples](template-distribution.md#remote-fetch-examples)
+(the `issue-authoring-companion-gh-api-loop` / `-curl-loop` blocks) or
+[Local-copy installs](template-distribution.md#local-copy-installs)
+for the exact commands, using the native destination recorded in the
+policy document.
 
 ## Command-row retuning
 

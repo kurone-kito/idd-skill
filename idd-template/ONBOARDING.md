@@ -185,11 +185,16 @@ reasoning depth, not for routine IDD loop execution.
 
 ## Helper-assisted path
 
-If this session has a working Node.js/`npx` helper runtime, run the
+**Requires a local clone of `kurone-kito/idd-skill`** (Step 2 Option B
+below) — `scripts/idd-onboard.mjs` exists only in that checkout, not in
+a target repository fetched via Option A alone. If this session has
+such a clone plus a working Node.js/`npx` helper runtime, run the
 onboarding CLI end to end instead of reading the rest of this file or
 [Onboarding Reference — Policy Decisions](docs/onboarding/policy-decisions.md) /
 [Onboarding Reference — Placeholder Values](docs/onboarding/placeholders.md)
-— open those companions only if one of the steps below fails.
+— open those companions only if one of the steps below fails. Without
+a clone, use the [Instructions-only path](#instructions-only-path)
+below instead.
 
 1. Read-only propose (or run bare `--hear` for the TTY wizard
    instead): catalog items with any derived candidate and documented
@@ -225,22 +230,33 @@ onboarding CLI end to end instead of reading the rest of this file or
      --from-transcript <transcript-file> --target <target-repo>
    ```
 
-5. Record the confirmed policy decisions (add `--write-policy-doc
-   <path>` to also write the filled Markdown template).
+5. Record the confirmed policy decisions. Always pass
+   `--write-policy-doc <path>`: several confirmed answers (credential
+   scope, critique-loop profile, issue-authoring companion status, the
+   up-to-date-head ruleset check, and bootstrap execution mode) are
+   docs-only and exist **only** in this filled Markdown template, not
+   in `.github/idd/config.json` — dropping the flag loses them. Link
+   the written file from the repository's agent entry files (Step 5
+   below) so future sessions can find it.
 
    ```sh
    node scripts/idd-onboard.mjs --record-policy \
-     --transcript <transcript-file> --target <target-repo> --apply
+     --transcript <transcript-file> --target <target-repo> \
+     --apply --write-policy-doc <policy-doc-path>
    ```
 
 6. Read
    [Onboarding Reference — Project Tuning](docs/onboarding/project-tuning.md)
    for the judgment calls the CLI does not automate.
-7. Verify the imported result.
+7. Verify the imported result. Pass the same `--profile` used for
+   `--import` in step 3 (if any) — `--verify` resolves
+   `manifestCompleteness` from `--source` and `--profile` together, so
+   omitting a non-default profile here hides a missing or
+   failed-to-copy profile-conditional file.
 
    ```sh
    node scripts/idd-onboard.mjs --verify \
-     --source <idd-skill-clone> --target <target-repo>
+     --source <idd-skill-clone> --target <target-repo> [--profile <name>]
    ```
 
 If any step reports a blocking finding, open the referenced companion
@@ -495,11 +511,13 @@ for when to choose it and the full procedure.
 
 ## CLI-assisted onboarding
 
-The `idd-onboard` CLI (`scripts/idd-onboard.mjs`) can automate Steps 0,
-1A, 1B, and 1C (via `--hear`), Step 2 (via `--import`), Step 3 (via
-`--record-policy`), Step 4 (via `--substitute`), and Step 6 (via
-`--verify`). **The manual steps remain canonical**; this CLI is a
-mechanical, optional shortcut for the same steps. See
+If you have a local clone of `kurone-kito/idd-skill` (Step 2 Option B
+below), the `idd-onboard` CLI shipped in that clone
+(`scripts/idd-onboard.mjs`) can automate Steps 0, 1A, 1B, and 1C (via
+`--hear`), Step 2 (via `--import`), Step 3 (via `--record-policy`),
+Step 4 (via `--substitute`), and Step 6 (via `--verify`). **The manual
+steps remain canonical**; this CLI is a mechanical, optional shortcut
+for the same steps. See
 [Helper-assisted path](#helper-assisted-path) above for the full
 run order. `--import` and `--verify` both require
 `--source <path-to-a-cloned-idd-skill-tree>` and therefore only replace
