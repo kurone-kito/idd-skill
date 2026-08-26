@@ -288,13 +288,25 @@ placeholder — to resolve it, then resume from that step.
 
 Without a helper runtime, fetch the hearing catalog
 (`docs/onboarding/hearing-catalog.json`) from the same raw GitHub tree
-as this file. For each catalog item, present its `prompt` and
-`explanation` to the operator, accept their confirmed value, and write
-the answers into an object keyed by catalog `id`. Then continue with
-the Step 2 file list and Option A (or Option B for a local clone)
-below to fetch the template, apply the confirmed placeholder and
-policy values by hand (Steps 1A-1C, 3, and 4 below spell out the same
-items the catalog just asked), and finish with Steps 5 and 6.
+as this file. For each **non-`check`-kind** catalog item, present its
+`prompt` and `explanation` to the operator and record their confirmed
+value. Execute and inspect the three `check`-kind items yourself
+instead of asking the operator for a value (Step 0's `gh`/host/
+execution-environment checks) — do not skip them and proceed to Step 2
+on unauthenticated `gh` or an unsupported shell.
+
+**Check the operator's `bootstrap-execution-mode` answer before Step
+2.** If it is `issue-mediated`, switch to
+[Onboarding Reference — Issue-Mediated
+Bootstrap](docs/onboarding/issue-mediated-bootstrap.md) instead of
+continuing below — Steps 2, 4, and 5 write the template with a direct,
+unreviewed commit (the `direct-import` default only).
+
+Otherwise continue with the Step 2 file list and Option A (or Option B
+for a local clone) below to fetch the template, apply the confirmed
+placeholder and policy values by hand (Steps 1A-1C, 3, and 4 below
+spell out the same items the catalog just asked), and finish with
+Steps 5 and 6.
 
 ---
 
