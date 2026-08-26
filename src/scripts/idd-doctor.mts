@@ -1052,24 +1052,30 @@ export function resolveConfiguredHelperRuntimePackageSpec(
  * separate copies that only ever read the canonical filename
  * (idd-skill#2028).
  *
- * Returns `{ config: null }` when no candidate file exists, or the first
- * present candidate is not valid JSON -- each caller keeps its own
- * fail-closed default for that case, matching every reader's behavior
- * before this extraction.
+ * Returns `{ config: null, file: null }` when no candidate file exists;
+ * `{ config: null, file }` when the first present candidate (`file`) is
+ * not valid JSON -- each caller keeps its own fail-closed default for
+ * either case, matching every reader's behavior before this extraction.
+ * `file` names which candidate was selected (idd-skill#2301 review) so a
+ * caller building a remediation message can point at the file actually
+ * read instead of assuming the canonical name.
  */
-function resolveLiveConfigDocument(root: string): { config: unknown } {
+function resolveLiveConfigDocument(root: string): {
+  config: unknown;
+  file: string | null;
+} {
   for (const file of LIVE_CONFIG_CANDIDATE_FILES) {
     const absolutePath = join(root, file);
     if (!exists(absolutePath)) {
       continue;
     }
     try {
-      return { config: JSON.parse(readFileSync(absolutePath, 'utf8')) };
+      return { config: JSON.parse(readFileSync(absolutePath, 'utf8')), file };
     } catch {
-      return { config: null };
+      return { config: null, file };
     }
   }
-  return { config: null };
+  return { config: null, file: null };
 }
 
 /**
@@ -1454,11 +1460,11 @@ export function classifyMergePolicyAcknowledgement(
 }
 
 /**
- * Checks the first present live-config candidate (same
- * {@link LIVE_CONFIG_CANDIDATE_FILES} order and first-present-wins rule as
- * {@link resolveConfiguredHelperRuntime}) for the mergePolicy
- * acknowledgement finding above. Never errors: an unreadable or malformed
- * config is already surfaced by {@link checkLiveConfigSchema} /
+ * Checks the resolved live-config candidate ({@link resolveLiveConfigDocument},
+ * the same first-present-wins walk every other scalar policy reader in
+ * this file shares, idd-skill#2028) for the mergePolicy acknowledgement
+ * finding above. Never errors: an unreadable or malformed config is
+ * already surfaced by {@link checkLiveConfigSchema} /
  * {@link checkHelperRuntimeConfig}, so this silently skips instead of
  * double-reporting.
  */
@@ -1466,25 +1472,16 @@ export function checkMergePolicyAcknowledgement(
   root: string,
   report: DoctorReport,
 ) {
-  for (const file of LIVE_CONFIG_CANDIDATE_FILES) {
-    const absolutePath = join(root, file);
-    if (!exists(absolutePath)) {
-      continue;
-    }
-    let config: unknown;
-    try {
-      config = JSON.parse(readFileSync(absolutePath, 'utf8'));
-    } catch {
-      return;
-    }
-    const finding = classifyMergePolicyAcknowledgement(
-      config as { mergePolicy?: unknown; mergePolicyAck?: unknown } | null,
-      file,
-    );
-    if (finding) {
-      report.warnings.push(finding.message);
-    }
+  const { config, file } = resolveLiveConfigDocument(root);
+  if (config === null || file === null) {
     return;
+  }
+  const finding = classifyMergePolicyAcknowledgement(
+    config as { mergePolicy?: unknown; mergePolicyAck?: unknown } | null,
+    file,
+  );
+  if (finding) {
+    report.warnings.push(finding.message);
   }
 }
 
