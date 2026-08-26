@@ -479,9 +479,9 @@ topology-safety condition from [idd-ci.instructions.md's Wake-up
 discipline](idd-ci.instructions.md#wake-up-discipline) (also in
 [docs/idd-workflow.md's Orchestrator fan-out
 variant](../../docs/idd-workflow.md#orchestrator-fan-out-variant));
-without it a worker can stall indefinitely on an unconfirmed
+without it, a worker can stall indefinitely on an unconfirmed
 backgrounded wait (#2210). Default: the worker takes one non-blocking
-snapshot, reports it, stops if incomplete — never poll or wait on a
+snapshot, reports it, stops if incomplete, never polls or waits on a
 notification. The orchestrator alone polls and resumes via a
 follow-up message (a fresh delegate re-inherits stale context and
 no-ops).
