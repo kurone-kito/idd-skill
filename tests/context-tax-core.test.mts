@@ -200,6 +200,39 @@ test('assertContextTaxSample couples attribution to kind', () => {
   );
 });
 
+test('assertContextTaxSample rejects endedAt preceding startedAt', () => {
+  const session: ContextTaxSample = {
+    schemaVersion: 1,
+    kind: 'session',
+    vendor: 'codex',
+    model: 'gpt-test',
+    attribution: 'session-unscoped',
+    outcome: 'unknown',
+    usage: {
+      inputUncached: 0,
+      cacheRead: 0,
+      cacheCreation: 0,
+      output: 0,
+      reasoning: 0,
+    },
+    compactionCount: 0,
+    startedAt: '2026-08-25T00:01:00Z',
+    endedAt: '2026-08-25T00:00:00Z',
+    vendorSessionId: 'sess',
+  };
+  assert.throws(
+    () => assertContextTaxSample(session),
+    /sample endedAt must not precede startedAt/,
+  );
+  assert.doesNotThrow(() =>
+    assertContextTaxSample({
+      ...session,
+      startedAt: '2026-08-25T00:00:00Z',
+      endedAt: '2026-08-25T00:01:00Z',
+    }),
+  );
+});
+
 test('assertContextTaxSnapshot rejects duplicate vendors', () => {
   const snapshot: ContextTaxSnapshot = {
     schemaVersion: 1,

@@ -262,12 +262,19 @@ export function isIssueLoopSample(
 }
 
 /**
- * Enforce the issue-loop join contract the JSON Schema cannot express
- * without oneOf: `issueNumber`/`stages` for `issue-loop`, and that
- * `attribution` agrees with `kind` (a `session-unscoped` sample was never
- * joined to an issue, so it cannot claim `issue-loop`, and vice versa).
+ * Enforce cross-field constraints the JSON Schema cannot express:
+ * `endedAt` must not precede `startedAt` (any kind); the issue-loop join
+ * contract without `oneOf` -- `issueNumber`/`stages` for `issue-loop`; and
+ * that `attribution` agrees with `kind` (a `session-unscoped` sample was
+ * never joined to an issue, so it cannot claim `issue-loop`, and vice
+ * versa).
  */
 export function assertContextTaxSample(sample: ContextTaxSample): void {
+  if (
+    new Date(sample.endedAt).getTime() < new Date(sample.startedAt).getTime()
+  ) {
+    throw new Error('sample endedAt must not precede startedAt');
+  }
   if (sample.kind !== 'issue-loop') {
     if (sample.attribution !== 'session-unscoped') {
       throw new Error('session sample must use session-unscoped attribution');
