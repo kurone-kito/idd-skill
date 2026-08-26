@@ -61,9 +61,9 @@ function isAssistantRecord(record) {
 function isSidechainRecord(record) {
   return isPlainObject(record) && record.isSidechain === true;
 }
-/** `type: "system"` records name their kind via `subtype`, e.g. `compact_boundary`. Matched by substring so a future vendor-added variant (`compaction`, etc.) still counts without an enum update here. */
+/** `type: "system"` records name their kind via `subtype`, e.g. `compact_boundary`. Requires `type === 'system'` so an unrelated record kind that happens to carry a compaction-shaped `subtype` is never miscounted; `subtype` is matched by substring so a future vendor-added variant (`compaction`, etc.) still counts without an enum update here. A record with no documented compact `subtype` at all is not counted -- see the module doc comment on best-effort compaction counting. */
 function isCompactionRecord(record) {
-  if (!isPlainObject(record)) {
+  if (!isPlainObject(record) || record.type !== 'system') {
     return false;
   }
   const subtype = getStringField(record, 'subtype');

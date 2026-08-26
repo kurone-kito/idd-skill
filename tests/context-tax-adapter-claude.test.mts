@@ -48,7 +48,9 @@ test('two assistant usages sum into a schema-valid sample', () => {
   assert.equal(sample.endedAt, '2026-08-20T10:00:10.000Z');
   // The fixture cwd basename ("idd-skill") carries no issue-<n> suffix.
   assert.equal(joinHints, undefined);
-  assert.doesNotMatch(JSON.stringify(sample), /ghq|\/home\/|main/);
+  assert.equal(Object.hasOwn(sample, 'cwd'), false);
+  assert.equal(Object.hasOwn(sample, 'gitBranch'), false);
+  assert.doesNotMatch(JSON.stringify(sample), /ghq|\/home\//);
   assert.deepEqual(
     validate(sample, loadJson('schemas/context-tax-sample.schema.json')),
     [],
@@ -82,6 +84,11 @@ test('an ephemeral cache_creation split is summed instead of trusting the stale 
 test('three compact_boundary records yield compactionCount 3', () => {
   const { sample } = harvestFixture('session-three-compactions.jsonl');
   assert.equal(sample.compactionCount, 3);
+});
+
+test('a non-system record with a compact-shaped subtype is not counted as a compaction', () => {
+  const { sample } = harvestFixture('session-non-system-compact-subtype.jsonl');
+  assert.equal(sample.compactionCount, 0);
 });
 
 test('a missing top-level sessionId falls back to the project filename', () => {
