@@ -417,6 +417,7 @@ test('loadUserGlobalPolicyDocument treats a top-level JSON number as absent (#22
   writeFileSync(path, '42');
   const result = loadUserGlobalPolicyDocument({ path });
   assert.equal(result.status, 'absent');
+  assert.equal(result.path, path);
 });
 
 test('loadUserGlobalPolicyDocument treats an unreadable (permission-denied) file as absent (#2258)', {
