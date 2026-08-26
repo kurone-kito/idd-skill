@@ -1379,6 +1379,7 @@ function printUsage() {
   console.log(`usage: node scripts/audit-pr-cleanup.mjs (--pr <number> | --prs <n1,n2,...>) [options]
 
 Options:
+  --pr <number>                     single-PR mode (mutually exclusive with --prs)
   --prs <n1,n2,...>                 batch mode: audit several PRs in one
                                      invocation, emitting one report per PR
                                      in the existing output shape (mutually
