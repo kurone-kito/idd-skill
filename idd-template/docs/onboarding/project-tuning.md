@@ -44,6 +44,21 @@ thread resolution), read
 apply the matching artifact from `profiles/`, and complete the listed
 phase-file edits by hand before running unattended PR review loops.
 
+## Helper-runtime profile wiring
+
+`--substitute`/`--record-policy` set `helperRuntime.profile` in
+`.github/idd/config.json`, but neither runs the setup a non-default
+profile needs. `--import --profile vendored-node` alone copies the
+`vendored-node` helper bundle; for either `vendored-node` or
+`package-manager`, still run
+[`idd-helper-bundle-manifest`](../idd-helper-scripts.md#profile-wiring-surface)
+(published as `scripts/helper-runtime-manifest.mjs`) to get the
+package-manager install command, the `@kurone-kito/idd-skill` helper
+dependency, and the `package.json` scripts block (for
+`package-manager`), or the managed-file copy list and
+`recommendedGitattributes` lines (for `vendored-node`) — apply its
+output before treating either profile as wired.
+
 ## Extra trusted marker actors
 
 `--substitute` (or a `--hear` transcript) resolves exactly one
@@ -100,14 +115,20 @@ for the recipe itself; neither `--record-policy` nor any other
 When the hearing's `issue-authoring-companion` answer is `installed`,
 neither `--import` nor `--record-policy` copies the companion
 bundle — `--import` only ever copies the core template file set, and
-`--record-policy` only writes config/docs. Fetch or copy the
-`skills/issue-authoring/` bundle into the confirmed native destination
+`--record-policy` only writes config/docs. The policy document also
+does not carry the native destination on its own: the hearing catalog
+records only `installed`/`not installed`, never which of
+`.agents/skills/`, `.claude/skills/`, or `.opencode/skills/` was
+chosen. Ask the operator directly which single native destination to
+use (see
+[Optional companion boundary](../../ONBOARDING.md#optional-companion-boundary)
+for the allowed values and the do-not-duplicate rule), then fetch or
+copy the `skills/issue-authoring/` bundle into that destination
 yourself: see
 [Remote fetch examples](template-distribution.md#remote-fetch-examples)
 (the `issue-authoring-companion-gh-api-loop` / `-curl-loop` blocks) or
 [Local-copy installs](template-distribution.md#local-copy-installs)
-for the exact commands, using the native destination recorded in the
-policy document.
+for the exact commands.
 
 ## Command-row retuning
 
