@@ -932,6 +932,44 @@ self-classifying as "no-subagent". Uniform application keeps the gate
 deterministic and avoids relying on fragile runtime self-detection that
 a weak model could get wrong.
 
+### User-global critique delegate default
+
+A local runtime (one that reads the operator's own `$HOME`) may also
+inherit a `critiqueLoop.delegate` from an operator-global file when the
+repository leaves the repo-local field genuinely absent — a
+GitHub-hosted or other remote agent surface has no such operator home
+directory and never consults this layer. Resolution order: repo-local
+`critiqueLoop.delegate` (a configured object, an explicit JSON `null`
+disable, or a malformed value) always wins outright and never inherits
+the global layer — a malformed repo-local value fails closed to the
+per-agent mechanism rather than falling through; only when repo-local
+is entirely absent does the global file apply; absent both, the
+per-agent mechanism above runs unchanged.
+
+The global file lives at `$XDG_CONFIG_HOME/idd-skill/config.json`,
+falling back to `$HOME/.config/idd-skill/config.json` when
+`XDG_CONFIG_HOME` is unset or not a qualified root. A missing,
+unreadable, or non-object global file is silently treated as absent —
+this layer is opt-in and never required for OSS adopters. Only the
+`critiqueLoop.delegate` fragment is read from it; every other key is
+ignored, and repository-local `.github/idd/config.json` stays the sole
+authority for every other policy surface.
+
+Example (a generic local reviewer, not a specific product):
+
+```json
+{ "critiqueLoop": { "delegate": { "command": "my-local-reviewer --diff" } } }
+```
+
+Any configured delegate command — repo-local or user-global — is
+executable configuration: it may transmit source code or other data
+available to its process to an external service, so enabling one is a
+deliberate operator/repository choice, and neither config file should
+hold secrets. This surface changes only which mechanism supplies
+critique findings; the C-phase objective diff validation floor above,
+the E-phase Copilot advisory-convergence policy, required checks, and
+merge gates are all unchanged.
+
 ### Mutation / write-side helper lens
 
 When the diff under critique implements a helper that **mutates GitHub
