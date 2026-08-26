@@ -605,6 +605,27 @@ Validation expectations:
 
 ## Required draft content
 
+### Candidate files format
+
+The optional `## Candidate files` section is not free-form prose: the
+`discover-shared-file-overlap` evidence helper parses it as machine input
+for the A4 Step 2 high-contention shared-file check (see
+[High-contention shared-file overlap](https://github.com/kurone-kito/idd-skill/blob/main/docs/policy-constants.md#high-contention-shared-files)).
+Populate it accurately rather than as a loose reading aid for humans.
+
+- List each candidate file path inside backticks, one path (or one
+  bullet) per line — for example `` - `src/scripts/idd-onboard.mts` ``.
+  The parser extracts every backtick-quoted path in the section,
+  including continuation lines of a multi-line bullet.
+- A bullet with no backticks at all still falls back to its leading
+  path-like token, but backtick-quoting every path is the reliable form
+  and should always be used.
+- The section ends at the next Markdown heading, **of any level** —
+  even a deeper subheading closes it. Anything inside it that looks
+  like a path — backtick-quoted or a bare bulleted leading token — is
+  parsed as a candidate file, so keep unrelated notes, caveats, or
+  subheadings outside the section.
+
 ### Orphan issue
 
 - title with a concise user-facing summary
