@@ -250,6 +250,19 @@ verified independently. The roadmap keeps both tasks visible in its task
 list, and the short note explains the safe parallelism without adding a
 fake `Blocked by` edge.
 
+**Caveat — shared CI check definitions.** File-disjoint tracks are not
+automatically execution-order-independent: if one track edits a shared
+CI check's own workflow _definition_ (e.g. a `.yml` file), any other
+in-flight track whose CI run relies on that check inherits a hidden
+ordering dependency, even though the tracks' own edited files never
+overlap. `gh run rerun` re-resolves against the PR branch's own copy
+of the workflow file, so a fix merged to `main` on a sibling track
+stays invisible until the dependent branch pulls it in (see
+`.github/instructions/idd-ci.instructions.md`'s Rerun mechanics). Note
+this dependency in
+the roadmap's parallel note rather than assuming disjoint files always
+mean safe parallelism.
+
 ### Artificial decomposition
 
 Bad serial chain:
