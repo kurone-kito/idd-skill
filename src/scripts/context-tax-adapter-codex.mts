@@ -134,7 +134,10 @@ function deriveFallbackSessionId(
   if (!fileBasename) {
     return undefined;
   }
-  const stripped = fileBasename.replace(/\.jsonl$/i, '');
+  // basename() first: a caller-supplied fileBasename is never trusted to
+  // already be path-free, so a full path here would otherwise redact
+  // away as PATH_LIKE and fail closed downstream instead of just here.
+  const stripped = basename(fileBasename).replace(/\.jsonl$/i, '');
   return stripped.length > 0 ? stripped : undefined;
 }
 
@@ -367,11 +370,16 @@ export function scanCodexSessions(
 
   const results: ContextTaxAdapterResult[] = [];
   for (const file of files) {
-    const records = parseCodexRolloutLines(readFileSync(file, 'utf8'));
-    if (!isIddSkillCwd(extractSessionCwd(records))) {
-      continue;
-    }
+    // Read, parse, cwd-filter, and harvest all live inside one try: Codex
+    // rotates/deletes rollout files while sessions run, so readFileSync
+    // itself can throw (ENOENT/EACCES) between globSync and this line,
+    // not only harvest() on malformed content -- either failure must
+    // skip just this one file, never abort the whole scan.
     try {
+      const records = parseCodexRolloutLines(readFileSync(file, 'utf8'));
+      if (!isIddSkillCwd(extractSessionCwd(records))) {
+        continue;
+      }
       results.push(
         codexAdapter.harvest({
           records,

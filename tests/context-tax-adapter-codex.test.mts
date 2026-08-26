@@ -1,5 +1,11 @@
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import {
+  chmodSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
@@ -173,6 +179,35 @@ test('scanCodexSessions skips a malformed session that fails to harvest, keeping
 
   assert.equal(results.length, 1);
   assert.equal(results[0].sample.vendorSessionId, 'sess-basic-0001');
+});
+
+test('scanCodexSessions skips an unreadable file, keeping the rest', () => {
+  const sandbox = mkdtempSync(
+    join(tmpdir(), 'idd-context-tax-adapter-codex-test-'),
+  );
+  const dayDir = join(sandbox, '2026', '08', '26');
+  mkdirSync(dayDir, { recursive: true });
+  const unreadable = join(
+    dayDir,
+    'rollout-2026-08-26T00-00-00-unreadable.jsonl',
+  );
+  writeFileSync(
+    unreadable,
+    readFileSync(join(FIXTURE_DIR, 'rollout-basic.jsonl'), 'utf8'),
+  );
+  chmodSync(unreadable, 0o000);
+  writeFileSync(
+    join(dayDir, 'rollout-2026-08-26T01-00-00-kept.jsonl'),
+    readFileSync(join(FIXTURE_DIR, 'rollout-summed-last-usage.jsonl'), 'utf8'),
+  );
+
+  try {
+    const results = scanCodexSessions({ sessionsDir: sandbox });
+    assert.equal(results.length, 1);
+    assert.equal(results[0].sample.vendorSessionId, 'sess-summed-0004');
+  } finally {
+    chmodSync(unreadable, 0o644);
+  }
 });
 
 test('scanCodexSessions on an empty directory returns no results', () => {
