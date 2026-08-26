@@ -145,6 +145,7 @@ const DROPPED_KEYS = new Set([
   'arguments',
   'toolarguments',
   'toolargs',
+  'toolinput',
   'filecontents',
   'filecontent',
   'cwd',
@@ -158,14 +159,30 @@ const DROPPED_KEYS = new Set([
   'home',
 ]);
 
+/**
+ * Path detection is boundary-agnostic (no delimiter whitelist): a match
+ * simply must not be glued to an alphanumeric run, so it fires after any
+ * delimiter (":", ",", ";", ...) without enumerating them one by one.
+ */
 const PATH_LIKE =
-  /(?:^|[\s"'`=(:])(?:\/[^\s"'`]+|[A-Za-z]:[\\/][^\s"'`]*|[.~]\/[^\s"'`]*)|\\\\[^\s\\]+\\[^\s\\]*|ghq\//i;
+  /(?<![A-Za-z0-9])(?:\/[^\s"'`]+|[A-Za-z]:[\\/][^\s"'`]*|[.~]\/[^\s"'`]*)|\\\\[^\s\\]+\\[^\s\\]*|ghq\//i;
 
 const SECRET_LIKE =
   /\b(?:ghp_|gho_|ghs_|ghu_|github_pat_|sk-|xox(?:b|a|p|r|s)-)[A-Za-z0-9_-]+/;
 
+/**
+ * Match by substring, not exact key, so compound vendor field names
+ * (`systemPrompt`, `assistantMessage`, `toolInput`) are dropped without
+ * enumerating every variant of each sensitive keyword.
+ */
 function isDroppedKey(key: string): boolean {
-  return DROPPED_KEYS.has(key.replace(/[_-]/g, '').toLowerCase());
+  const normalized = key.replace(/[_-]/g, '').toLowerCase();
+  for (const dropped of DROPPED_KEYS) {
+    if (normalized.includes(dropped)) {
+      return true;
+    }
+  }
+  return false;
 }
 
 function redactString(value: string): string | undefined {

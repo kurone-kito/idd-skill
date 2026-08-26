@@ -115,6 +115,32 @@ test('redaction drops absolute paths preceded by a delimiter other than whitespa
   assert.equal(clean.keep, 'ok');
 });
 
+test('redaction drops absolute paths after any delimiter, not just a whitelisted set', () => {
+  const dirty = {
+    csvNote: 'note,/etc/shadow',
+    semicolonNote: 'a;/etc/shadow',
+    keep: 'ok',
+  };
+  const clean = redactContextTaxRecord(dirty) as Record<string, unknown>;
+  assert.equal(clean.csvNote, undefined);
+  assert.equal(clean.semicolonNote, undefined);
+  assert.equal(clean.keep, 'ok');
+});
+
+test('redaction drops compound prompt/assistant/tool-input field names', () => {
+  const dirty = {
+    systemPrompt: 'you are a helpful assistant',
+    assistantMessage: 'sure, here is the answer',
+    toolInput: '{"query": "secret"}',
+    inputUncached: 5,
+  };
+  const clean = redactContextTaxRecord(dirty) as Record<string, unknown>;
+  assert.equal(clean.systemPrompt, undefined);
+  assert.equal(clean.assistantMessage, undefined);
+  assert.equal(clean.toolInput, undefined);
+  assert.equal(clean.inputUncached, 5);
+});
+
 test('assertContextTaxSample rejects a non-integer issueNumber', () => {
   const base: ContextTaxSample = {
     schemaVersion: 1,
