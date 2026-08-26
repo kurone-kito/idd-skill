@@ -620,10 +620,10 @@ Populate it accurately rather than as a loose reading aid for humans.
 - A bullet with no backticks at all still falls back to its leading
   path-like token, but backtick-quoting every path is the reliable form
   and should always be used.
-- The section ends at the next heading of the same or higher level;
-  keep unrelated notes or caveats outside it, or they will not
-  interfere with parsing only if they do not look like a path
-  themselves.
+- The section ends at the next heading of the same or higher level.
+  Anything inside it that looks like a path — backtick-quoted or a
+  bare bulleted leading token — is parsed as a candidate file, so keep
+  unrelated notes or caveats outside the section.
 
 ### Orphan issue
 
