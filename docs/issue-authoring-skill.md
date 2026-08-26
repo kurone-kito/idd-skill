@@ -1179,8 +1179,7 @@ availability, or ordering constraint.
   issues only to widen parallel execution
 - whenever an issue's own narrative states that its work cannot safely
   start until another named issue resolves, encode `Blocked by #NNN`
-  for that issue (or otherwise sequence it to run after the dependency
-  resolves) rather than leaving the constraint as prose-only
+  for that issue rather than leaving the constraint as prose-only
   sequencing. Discover and A4.5 honor the hard `Blocked by` edge, not
   a narrative "runs after #NNN" note: A4.5 Actionability inspects the
   body, not completability, so a narrative-only dependency reports the
