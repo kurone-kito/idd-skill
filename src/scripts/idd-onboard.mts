@@ -1592,6 +1592,8 @@ function collectGhCliEvidence(host: string | null): HearGhCliEvidence {
 // Fenced-block utilities the distributed workflow instructions assume
 // (idd-template/docs/onboarding/hearing-catalog.json's execution-environment
 // item explanation) -- `sh`/`bash` themselves are checked separately below.
+// `jq` is the item's own separately-called-out requirement for the
+// instructions-only advisory-wait fallback (#2304 review).
 const HEAR_REQUIRED_UTILITIES = [
   'grep',
   'sed',
@@ -1601,29 +1603,37 @@ const HEAR_REQUIRED_UTILITIES = [
   'head',
   'sort',
   'curl',
+  'jq',
 ] as const;
 
-function isUtilityAvailable(name: string): boolean {
+function isUtilityAvailable(shell: string, name: string): boolean {
   // `name` is always one of the fixed HEAR_REQUIRED_UTILITIES literals
   // above, never dash-prefixed or otherwise untrusted, so the `--`
   // end-of-options guard buys no real safety here -- and some /bin/sh
   // implementations treat `--` as the command_name argument to the
   // `command` builtin instead of an option terminator, which would
   // misreport every utility as missing (#2304 review).
-  return execSucceeds('sh', ['-c', `command -v ${name}`]);
+  return execSucceeds(shell, ['-c', `command -v ${name}`]);
 }
 
 interface HearExecutionEnvironmentEvidence {
-  posixShell: boolean;
+  shAvailable: boolean;
+  bashAvailable: boolean;
   missingUtilities: string[];
 }
 
 function collectExecutionEnvironmentEvidence(): HearExecutionEnvironmentEvidence {
-  const posixShell = execSucceeds('sh', ['-c', 'true']);
-  const missingUtilities = posixShell
-    ? HEAR_REQUIRED_UTILITIES.filter((name) => !isUtilityAvailable(name))
+  const shAvailable = execSucceeds('sh', ['-c', 'true']);
+  const bashAvailable = execSucceeds('bash', ['-c', 'true']);
+  // Probe utilities through whichever POSIX-ish shell is actually
+  // present -- the catalog item accepts either (#2304 review).
+  const probeShell = shAvailable ? 'sh' : bashAvailable ? 'bash' : null;
+  const missingUtilities = probeShell
+    ? HEAR_REQUIRED_UTILITIES.filter(
+        (name) => !isUtilityAvailable(probeShell, name),
+      )
     : [...HEAR_REQUIRED_UTILITIES];
-  return { posixShell, missingUtilities };
+  return { shAvailable, bashAvailable, missingUtilities };
 }
 
 function isValidHearAnswerValue(
