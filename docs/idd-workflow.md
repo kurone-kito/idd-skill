@@ -956,7 +956,7 @@ a weak model could get wrong.
 ### User-global critique delegate default
 
 A local runtime (one that reads the operator's own `$HOME`) may also
-inherit a `critiqueLoop.delegate` from an operator-global file when the
+inherit a `critiqueLoop.delegate` from a user-global file when the
 repository leaves the repo-local field genuinely absent — a
 GitHub-hosted or other remote agent surface has no such operator home
 directory and never consults this layer. Resolution order: repo-local
