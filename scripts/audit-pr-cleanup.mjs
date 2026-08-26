@@ -90,6 +90,7 @@ async function main() {
       '--apply requires --claim-issue and --claim-id, or explicit --skip-claim-check',
     );
   }
+  assertBatchApplyClaimScope(args);
   const repository = args.repo ?? detectRepository();
   const [owner, repo] = parseRepository(repository);
   const prNumbers = parsePrNumbers(args);
@@ -121,6 +122,24 @@ async function main() {
   }
   if (anyFailed) {
     process.exit(1);
+  }
+}
+/**
+ * Rejects a claim-gated `--apply` batch (#2224, CodeRabbit review on PR
+ * #2305): `assertActiveClaim` only verifies the caller holds
+ * `--claim-issue`'s active claim; it does not bind that claim to any
+ * specific PR (`expectedLinkedPrs` only feeds forced-handoff resolution). A
+ * single-PR `--apply` already carries that weak binding, but `--prs` would
+ * let one active claim authorize `--apply` mutations across every PR in the
+ * batch at once, widening the blast radius of a single claim check.
+ * `--skip-claim-check` (the explicit maintainer override) opts out of this
+ * guard, same as it does for the existing single-PR claim requirement.
+ */
+export function assertBatchApplyClaimScope(args) {
+  if (args.apply && args.prs && !args.skipClaimCheck) {
+    fail(
+      '--prs with --apply requires --skip-claim-check (a single active claim would otherwise authorize --apply across every PR in the batch)',
+    );
   }
 }
 /**

@@ -5,7 +5,10 @@ import type {
   CleanupArgs,
   CleanupAuditReport,
 } from '../src/scripts/audit-pr-cleanup.mts';
-import { parsePrNumbers } from '../src/scripts/audit-pr-cleanup.mts';
+import {
+  assertBatchApplyClaimScope,
+  parsePrNumbers,
+} from '../src/scripts/audit-pr-cleanup.mts';
 
 // Importing the CLI module directly is only possible now that its top-level
 // statements are guarded behind `import.meta.main` (#1210, migrated from
@@ -450,8 +453,49 @@ test('parsePrNumbers: --prs with only empty/whitespace tokens fails', () => {
 test('parsePrNumbers: an invalid --prs token fails the same way as --pr', () => {
   const restore = stubExitOnFail();
   try {
-    assert.throws(() => parsePrNumbers(cleanupArgs({ prs: '1,not-a-number' })));
+    assert.throws(
+      () => parsePrNumbers(cleanupArgs({ prs: '1,not-a-number' })),
+      /process\.exit/,
+    );
   } finally {
     restore();
   }
+});
+
+// #2224 (CodeRabbit review, PR #2305): a claim-gated --apply batch must not
+// let one active claim authorize --apply across every PR in the batch.
+
+test('assertBatchApplyClaimScope: --prs with --apply and no --skip-claim-check fails', () => {
+  const restore = stubExitOnFail();
+  try {
+    assert.throws(() =>
+      assertBatchApplyClaimScope(
+        cleanupArgs({ apply: true, prs: '1,2', claimIssue: '9', claimId: 'x' }),
+      ),
+    );
+  } finally {
+    restore();
+  }
+});
+
+test('assertBatchApplyClaimScope: --prs with --apply and --skip-claim-check is allowed', () => {
+  assert.doesNotThrow(() =>
+    assertBatchApplyClaimScope(
+      cleanupArgs({ apply: true, prs: '1,2', skipClaimCheck: true }),
+    ),
+  );
+});
+
+test('assertBatchApplyClaimScope: --pr with --apply and no --skip-claim-check is unaffected', () => {
+  assert.doesNotThrow(() =>
+    assertBatchApplyClaimScope(
+      cleanupArgs({ apply: true, pr: '1', claimIssue: '9', claimId: 'x' }),
+    ),
+  );
+});
+
+test('assertBatchApplyClaimScope: dry-run (no --apply) is never gated', () => {
+  assert.doesNotThrow(() =>
+    assertBatchApplyClaimScope(cleanupArgs({ prs: '1,2' })),
+  );
 });
