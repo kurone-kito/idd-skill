@@ -541,7 +541,16 @@ if (import.meta.main) {
     process.exit(2);
   }
   const snapshotPath = values.snapshot;
-  const now = values.now ? new Date(values.now) : new Date();
+  let now = new Date();
+  if (values.now) {
+    now = new Date(values.now);
+    if (Number.isNaN(now.getTime())) {
+      process.stderr.write(
+        `--now is not a valid ISO8601 timestamp: ${values.now}\n`,
+      );
+      process.exit(2);
+    }
+  }
   if (apply) {
     const inPaths = values.in ?? [];
     if (inPaths.length === 0) {

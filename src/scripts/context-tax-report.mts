@@ -612,7 +612,16 @@ if (import.meta.main) {
     process.exit(2);
   }
   const snapshotPath = values.snapshot as string;
-  const now = values.now ? new Date(values.now as string) : new Date();
+  let now = new Date();
+  if (values.now) {
+    now = new Date(values.now as string);
+    if (Number.isNaN(now.getTime())) {
+      process.stderr.write(
+        `--now is not a valid ISO8601 timestamp: ${values.now as string}\n`,
+      );
+      process.exit(2);
+    }
+  }
 
   if (apply) {
     const inPaths = (values.in as string[] | undefined) ?? [];

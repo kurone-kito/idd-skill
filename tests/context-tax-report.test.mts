@@ -1,8 +1,10 @@
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
+import { fileURLToPath } from 'node:url';
 
 import type { ContextTaxSample } from '../src/scripts/context-tax-core.mts';
 import {
@@ -15,6 +17,8 @@ import {
   renderReadmeRegionJa,
   replaceMarkedRegion,
 } from '../src/scripts/context-tax-report.mts';
+
+const REPO_ROOT = fileURLToPath(new URL('..', import.meta.url));
 
 const NOW = new Date('2026-08-26T00:00:00Z');
 
@@ -413,5 +417,33 @@ test('readEvents reports the source path and line number on a non-object line', 
       () => readEvents(['events.jsonl']),
       /events\.jsonl:2: event line is not a JSON object/,
     );
+  });
+});
+
+test('CLI: --now rejects an invalid timestamp with a clean usage error, not a raw exception', () => {
+  withSandboxCwd(() => {
+    let threw = false;
+    try {
+      execFileSync(
+        process.execPath,
+        [
+          join(REPO_ROOT, 'scripts/context-tax-report.mjs'),
+          '--check',
+          '--now',
+          'not-a-date',
+        ],
+        { encoding: 'utf8', stdio: 'pipe' },
+      );
+    } catch (error) {
+      threw = true;
+      const e = error as { status: number; stderr: string };
+      assert.equal(e.status, 2);
+      assert.match(
+        e.stderr,
+        /--now is not a valid ISO8601 timestamp: not-a-date/,
+      );
+      assert.doesNotMatch(e.stderr, /RangeError|Invalid time value/);
+    }
+    assert.ok(threw, 'expected the CLI to exit non-zero');
   });
 });
