@@ -576,9 +576,9 @@ error), so an agent can gate on the exit code without parsing prose.
   patch into `.github/idd/config.json` (omitting `helperRuntime` for a
   confirmed `instructions-only` profile, and writing
   `skipIssueAuthorApprovalGate` only when the operator opted out); add
-  `--write-policy-doc <path>` to also write the filled template to that
-  path. Never edits `ONBOARDING.md`, `CLAUDE.md`, `AGENTS.md`, or
-  `GEMINI.md`.
+  `--write-policy-doc <path>` (with `--apply` — it has no effect during
+  the dry-run default) to also write the filled template to that path.
+  Never edits `ONBOARDING.md`, `CLAUDE.md`, `AGENTS.md`, or `GEMINI.md`.
 
   ```sh
   node scripts/idd-onboard.mjs --record-policy --transcript <transcript-file> \
