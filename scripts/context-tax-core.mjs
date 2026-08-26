@@ -165,12 +165,58 @@ export function assertContextTaxSample(sample) {
     );
   }
 }
+function assertPercentileOrder(label, p) {
+  if (!(p.p25 <= p.p50 && p.p50 <= p.p75)) {
+    throw new Error(
+      `snapshot ${label} percentiles must satisfy p25 <= p50 <= p75`,
+    );
+  }
+}
+function assertUsagePercentileOrder(label, usage) {
+  for (const field of [
+    'inputUncached',
+    'cacheRead',
+    'cacheCreation',
+    'output',
+    'reasoning',
+  ]) {
+    assertPercentileOrder(`${label}.${field}`, usage[field]);
+  }
+}
+function assertRateInUnitInterval(label, rate) {
+  if (!(rate.rate >= 0 && rate.rate <= 1)) {
+    throw new Error(`snapshot ${label} rate must be in [0, 1]`);
+  }
+  const denom = rate.merged + rate.aborted + rate.unclaimed + rate.humanHandoff;
+  const expected = denom === 0 ? 0 : rate.merged / denom;
+  if (Math.abs(rate.rate - expected) > 1e-9) {
+    throw new Error(
+      `snapshot ${label} rate must equal merged / (merged + aborted + unclaimed + humanHandoff)`,
+    );
+  }
+}
+function assertUtcCalendarDate(value) {
+  const parsed = new Date(`${value}T00:00:00.000Z`);
+  if (
+    !/^\d{4}-\d{2}-\d{2}$/.test(value) ||
+    Number.isNaN(parsed.getTime()) ||
+    parsed.toISOString().slice(0, 10) !== value
+  ) {
+    throw new Error('snapshot asOf must be a valid UTC calendar date');
+  }
+}
 /**
  * Enforce the constraints the JSON Schema cannot express: distinct
  * `vendors` (`uniqueItems` is outside `validate-schemas.mts`'s enforced
- * keyword subset), and that `publishable` agrees with the
+ * keyword subset), that `publishable` agrees with the
  * `sampleCount`/`vendors` gate the schema documents but cannot compare
- * across fields on its own.
+ * across fields on its own, that `asOf` is a real UTC calendar date (the
+ * schema's `pattern` accepts a shape like `2026-02-30`), that every
+ * percentile triple is ordered (the schema has no `maximum`/cross-field
+ * comparison keyword), that `stageUsage` has at most one entry per stage
+ * id, that `cacheHitRatio` and every success rate fall in `[0, 1]`, that
+ * each success rate's `rate` field agrees with its own raw counts, and
+ * that `successRateByVendor` names only vendors present in `vendors`.
  */
 export function assertContextTaxSnapshot(snapshot) {
   if (new Set(snapshot.vendors).size !== snapshot.vendors.length) {
@@ -183,5 +229,36 @@ export function assertContextTaxSnapshot(snapshot) {
     throw new Error(
       'snapshot publishable must match the sampleCount/vendors gate',
     );
+  }
+  assertUtcCalendarDate(snapshot.asOf);
+  assertUsagePercentileOrder('totalUsage', snapshot.totalUsage);
+  const seenStageIds = new Set();
+  for (const stage of snapshot.stageUsage) {
+    if (seenStageIds.has(stage.id)) {
+      throw new Error(
+        `snapshot stageUsage has a duplicate entry for "${stage.id}"`,
+      );
+    }
+    seenStageIds.add(stage.id);
+    assertUsagePercentileOrder(`stageUsage[${stage.id}].usage`, stage.usage);
+  }
+  assertPercentileOrder('compactionCount', snapshot.compactionCount);
+  if (!(snapshot.cacheHitRatio >= 0 && snapshot.cacheHitRatio <= 1)) {
+    throw new Error('snapshot cacheHitRatio must be in [0, 1]');
+  }
+  for (const [model, rate] of Object.entries(snapshot.successRateByModel)) {
+    assertRateInUnitInterval(`successRateByModel[${model}]`, rate);
+  }
+  const vendorSet = new Set(snapshot.vendors);
+  for (const [vendor, rate] of Object.entries(snapshot.successRateByVendor)) {
+    if (rate === undefined) {
+      continue;
+    }
+    if (!vendorSet.has(vendor)) {
+      throw new Error(
+        `snapshot successRateByVendor names "${vendor}", which is not present in vendors`,
+      );
+    }
+    assertRateInUnitInterval(`successRateByVendor[${vendor}]`, rate);
   }
 }

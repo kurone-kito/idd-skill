@@ -173,6 +173,7 @@ const COVERED_HELPERS = [
   'ci-wait-state',
   'claim-approval-gate',
   'claim-lock',
+  'context-tax-report',
   'discover-readiness-check',
   'discover-shared-file-overlap',
   'discover-viability-gate',

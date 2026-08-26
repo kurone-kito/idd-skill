@@ -1,0 +1,79 @@
+---
+type: reference
+title: Context-Tax Methodology
+description: Documents how this repository measures its own agent context-window cost per completed IDD issue loop.
+tags: [context-tax, dogfood, measurement]
+---
+
+# Context-Tax Methodology
+
+This page is dogfood-only: it is not distributed to adopter repositories.
+It documents how `kurone-kito/idd-skill` measures the agent
+context-window cost of running its own IDD loop on itself.
+
+## Scope
+
+- **Unit of measurement**: one completed IDD issue loop (claim through
+  merge or another terminal outcome), not a raw agent session. A single
+  vendor session may span multiple issue loops, or a single issue loop may
+  span multiple vendor sessions (handoffs, resumes); samples are joined
+  to the issue loop they belong to, not to a session boundary.
+- **Stages**: `discover`, `claim`, `work`, `submit-pr`, `review`, `merge`,
+  `cleanup` — the same seven IDD phases named throughout
+  [`docs/idd-workflow.md`](idd-workflow.md).
+- **Success**: an issue loop counts as `merged` only when its claim
+  lineage ends in a merged pull request. `aborted`, `unclaimed`, and
+  `human-handoff` are the other tracked outcomes; `unknown` is excluded
+  from every aggregate figure on this page.
+- **Attribution**: historical samples are reconstructed via a
+  marker-join (claim comments, PR references, timestamps) when no
+  better signal exists; an explicit phase-enter/exit event, when
+  present, wins over the marker-join reconstruction for that sample.
+- **Privacy**: raw agent logs, prompts, and file paths never enter git.
+  Only token-usage counts, timestamps, and coarse outcome/vendor/model
+  labels are committed, via the snapshot artifact described below.
+- **Cost unit**: figures on this page are token counts (a static
+  `bundleBudgets` byte budget, tracked separately per issue `#1659`,
+  measures Markdown bytes, not billed tokens). No USD figures are
+  published here or anywhere else in this repository.
+- **Coverage (v1)**: Grok, Claude Code, and Codex CLI sessions. GitHub
+  Copilot, OpenCode, and Antigravity CLI sessions are out of scope for
+  the first version of this measurement.
+
+## How the snapshot is produced
+
+Harvested samples are local JSONL files under each vendor's own session
+directory (`~/.grok`, `~/.claude`, `~/.codex`) — never committed. CI runs
+on GitHub and cannot see those directories, so the only committed
+artifact is [`docs/context-tax-snapshot.json`](context-tax-snapshot.json):
+aggregated percentiles, cache-hit ratio, and success rates, with no raw
+records.
+
+`node scripts/context-tax-report.mjs`:
+
+- `--in <samples.jsonl> [--in <samples.jsonl> ...] --apply` aggregates
+  local samples into a fresh snapshot and refreshes this page's table
+  below plus the [`README.md`](../README.md) /
+  [`README.ja.md`](../README.ja.md) blurb.
+- `--check` verifies the committed snapshot still matches the rendered
+  regions in those three files — it never re-harvests or reads raw
+  samples, only the committed snapshot. Wiring `--check` into this
+  repository's own `pre-push-validate` / `post-fix-validate` chain is
+  deferred: doing so would push the `bundle-work` documentation
+  context-ceiling budget over its configured threshold (see issue
+  `#2294`'s implementation notes), and the fix belongs to a separate,
+  deliberate byte-budget decision rather than this reporter's own
+  scope.
+
+A snapshot is `publishable` only once it has at least 10 issue-loop
+samples across at least 2 distinct vendors. Below that gate, the
+README blurb and the table below stay on an unpublished stub — no
+number is ever invented to fill the gap.
+
+## Current snapshot
+
+<!-- context-tax-docs:start -->
+
+Not yet publishable, n=0.
+
+<!-- context-tax-docs:end -->

@@ -31,6 +31,7 @@ scripts/code-span-wrap.mjs linguist-generated=true
 scripts/collaborator-permission.mjs linguist-generated=true
 scripts/consistency-helpers.mjs linguist-generated=true
 scripts/context-tax-core.mjs linguist-generated=true
+scripts/context-tax-report.mjs linguist-generated=true
 scripts/discover-orphan-filter.mjs linguist-generated=true
 scripts/discover-readiness-check.mjs linguist-generated=true
 scripts/discover-roadmap-graph.mjs linguist-generated=true

@@ -89,6 +89,13 @@ const SOURCE_REPO_INTERNAL_ENTRY_PATHS = new Set([
   // check-untracked-artifacts.mjs: `build:check`-internal verification
   // tooling (see docs/typescript-sources.md), never adopter-facing.
   'scripts/check-untracked-artifacts.mjs',
+  // context-tax-report.mjs (#2294): this repository's own dogfood
+  // measurement reporter, named in docs/context-tax.md's own usage
+  // examples. It reads only local JSONL under `~/.grok`/`~/.claude`/
+  // `~/.codex` -- never committed to git -- and is never distributed to
+  // idd-template/; an adopter repository has no context-tax data to
+  // report.
+  'scripts/context-tax-report.mjs',
 ]);
 
 // A helper name that appears only as a *proposed*, not-yet-built script

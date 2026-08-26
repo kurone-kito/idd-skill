@@ -454,6 +454,13 @@ export const contextTaxSnapshotKeys = [
   'publishable',
   'sampleCount',
   'vendors',
+  'asOf',
+  'totalUsage',
+  'stageUsage',
+  'compactionCount',
+  'cacheHitRatio',
+  'successRateByModel',
+  'successRateByVendor',
 ] as const satisfies readonly (keyof ContextTaxSnapshot)[];
 
 export const policyConfigKeys = [
@@ -991,6 +998,15 @@ const contextTaxEventFixture = {
   vendor: 'claude',
 } satisfies ContextTaxEvent;
 
+const contextTaxZeroPercentiles = { p25: 0, p50: 0, p75: 0 };
+const contextTaxZeroUsagePercentiles = {
+  inputUncached: contextTaxZeroPercentiles,
+  cacheRead: contextTaxZeroPercentiles,
+  cacheCreation: contextTaxZeroPercentiles,
+  output: contextTaxZeroPercentiles,
+  reasoning: contextTaxZeroPercentiles,
+};
+
 const contextTaxSnapshotFixture = {
   schemaVersion: 1,
   generatedAt: '2026-08-25T16:00:00Z',
@@ -999,6 +1015,13 @@ const contextTaxSnapshotFixture = {
   publishable: false,
   sampleCount: 0,
   vendors: [],
+  asOf: '2026-08-25',
+  totalUsage: contextTaxZeroUsagePercentiles,
+  stageUsage: [],
+  compactionCount: contextTaxZeroPercentiles,
+  cacheHitRatio: 0,
+  successRateByModel: {},
+  successRateByVendor: {},
 } satisfies ContextTaxSnapshot;
 
 const policyConfigFixture = {
