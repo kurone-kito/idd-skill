@@ -132,16 +132,19 @@ export function isIssueLoopSample(sample) {
 }
 /**
  * Enforce cross-field constraints the JSON Schema cannot express:
- * `endedAt` must not precede `startedAt` (any kind); the issue-loop join
- * contract without `oneOf` -- `issueNumber`/`stages` for `issue-loop`; and
- * that `attribution` agrees with `kind` (a `session-unscoped` sample was
- * never joined to an issue, so it cannot claim `issue-loop`, and vice
- * versa).
+ * `startedAt`/`endedAt` must both parse to a valid instant and `endedAt`
+ * must not precede `startedAt` (any kind); the issue-loop join contract
+ * without `oneOf` -- `issueNumber`/`stages` for `issue-loop`; and that
+ * `attribution` agrees with `kind` (a `session-unscoped` sample was never
+ * joined to an issue, so it cannot claim `issue-loop`, and vice versa).
  */
 export function assertContextTaxSample(sample) {
-  if (
-    new Date(sample.endedAt).getTime() < new Date(sample.startedAt).getTime()
-  ) {
+  const startedAtMs = new Date(sample.startedAt).getTime();
+  const endedAtMs = new Date(sample.endedAt).getTime();
+  if (!Number.isFinite(startedAtMs) || !Number.isFinite(endedAtMs)) {
+    throw new Error('sample startedAt/endedAt must be valid timestamps');
+  }
+  if (endedAtMs < startedAtMs) {
     throw new Error('sample endedAt must not precede startedAt');
   }
   if (sample.kind !== 'issue-loop') {

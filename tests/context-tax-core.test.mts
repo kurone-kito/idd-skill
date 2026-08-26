@@ -242,6 +242,14 @@ test('assertContextTaxSample rejects endedAt preceding startedAt', () => {
       endedAt: '2026-08-25T00:01:00Z',
     }),
   );
+  assert.throws(
+    () => assertContextTaxSample({ ...session, startedAt: 'not-a-date' }),
+    /sample startedAt\/endedAt must be valid timestamps/,
+  );
+  assert.throws(
+    () => assertContextTaxSample({ ...session, endedAt: 'not-a-date' }),
+    /sample startedAt\/endedAt must be valid timestamps/,
+  );
 });
 
 test('assertContextTaxSnapshot rejects duplicate vendors', () => {
