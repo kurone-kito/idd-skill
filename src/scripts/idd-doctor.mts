@@ -1421,9 +1421,9 @@ export interface MergePolicyAckFinding {
  * always returns null regardless of `mergePolicyAck` (the check only
  * fires for that one value). But this is NOT a full time/generation-scoped
  * reset -- a round trip that later lands back on the exact same
- * `fully_autonomous_merge` value, with `mergePolicyAck` still
- * (unrelatedly) equal to `"fully_autonomous_merge"` from an earlier
- * confirmation that was never cleared in between, does **not** resume the
+ * `fully_autonomous_merge` value, with `mergePolicyAck` still equal to
+ * `"fully_autonomous_merge"` from an earlier, now-stale confirmation
+ * that was never cleared in between, does **not** resume the
  * warning: it silently returns null again. This diagnostics-only field
  * has no timestamp or generation counter to detect that narrow case -- a
  * known, accepted limitation of the deliberately value-scoped (not
