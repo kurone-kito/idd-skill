@@ -1,0 +1,4 @@
+{"timestamp":"2026-08-23T07:00:00.000Z","type":"session_meta","payload":{"id":"sess-summed-0004","cwd":"/home/testuser/ghq/github.com/kurone-kito/idd-skill"}}
+{"timestamp":"2026-08-23T07:05:00.000Z","type":"token_count","payload":{"last_token_usage":{"input_tokens":100,"cached_input_tokens":0,"cache_write_input_tokens":0,"output_tokens":20,"reasoning_output_tokens":5}}}
+{"timestamp":"2026-08-23T07:10:00.000Z","type":"token_count","payload":{"last_token_usage":{"input_tokens":150,"cached_input_tokens":50,"cache_write_input_tokens":0,"output_tokens":30,"reasoning_output_tokens":10}}}
+{"timestamp":"2026-08-23T07:15:00.000Z","type":"token_count","payload":{"last_token_usage":{"input_tokens":80,"cached_input_tokens":0,"cache_write_input_tokens":0,"output_tokens":15,"reasoning_output_tokens":0}}}

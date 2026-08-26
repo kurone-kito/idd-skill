@@ -1,0 +1,4 @@
+{"timestamp":"2026-08-20T10:00:00.000Z","type":"session_meta","payload":{"id":"sess-basic-0001","cwd":"/home/testuser/ghq/github.com/kurone-kito/idd-skill","originator":"codex_cli_rs"}}
+{"timestamp":"2026-08-20T10:00:01.000Z","type":"turn_context","payload":{"model":"gpt-5.1-codex","cwd":"/home/testuser/ghq/github.com/kurone-kito/idd-skill"}}
+{"timestamp":"2026-08-20T10:05:30.000Z","type":"event_msg","payload":{"kind":"agent_message","text":"working on it"}}
+{"timestamp":"2026-08-20T10:10:00.000Z","type":"token_count","payload":{"total_token_usage":{"input_tokens":15000,"cached_input_tokens":12000,"cache_write_input_tokens":1000,"output_tokens":800,"reasoning_output_tokens":300},"last_token_usage":{"input_tokens":500,"cached_input_tokens":400,"cache_write_input_tokens":0,"output_tokens":80,"reasoning_output_tokens":20}}}
