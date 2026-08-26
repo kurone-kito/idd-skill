@@ -2633,6 +2633,67 @@ test('bin/idd-onboard.mjs --hear --apply exits 1 when a value is outside the ite
   assert.ok((verdict.unresolved as string[]).includes('merge-policy'));
 });
 
+test('bin/idd-onboard.mjs --hear --apply trims a whitespace-only answer, same as the TTY wizard, so it fails validation rather than passing as a real value', () => {
+  const root = makeFixtureDir();
+  const answers = buildValidHearAnswers();
+  answers.TRUSTED_MARKER_ACTOR = '   ';
+  const answersPath = join(root, 'answers.json');
+  writeFileSync(answersPath, JSON.stringify(answers));
+  const { status, verdict } = runCliBin([
+    '--hear',
+    '--apply',
+    '--answers',
+    answersPath,
+  ]);
+  assert.equal(status, 1);
+  assert.ok((verdict.unresolved as string[]).includes('TRUSTED_MARKER_ACTOR'));
+});
+
+test("bin/idd-onboard.mjs --hear rejects import/substitute-only flags (--source, --force, --profile, a placeholder override), matching the other stages' own foreign-flag guards", () => {
+  const root = makeFixtureDir();
+  for (const foreignArgs of [
+    ['--source', root],
+    ['--force'],
+    ['--profile', 'package-manager'],
+    ['--repo-name', 'x'],
+  ]) {
+    try {
+      execFileSync(
+        process.execPath,
+        [BIN_PATH, '--hear', '--propose', '--target', root, ...foreignArgs],
+        { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] },
+      );
+      assert.fail(`expected a non-zero exit for --hear + ${foreignArgs[0]}`);
+    } catch (error) {
+      const failed = error as { status?: number; stderr?: string };
+      assert.equal(failed.status, 2);
+      assert.match(String(failed.stderr), /does not accept/);
+    }
+  }
+});
+
+test('bin/idd-onboard.mjs rejects --hear-only flags (--propose, --apply, --answers) when --hear is not selected', () => {
+  const root = makeFixtureDir();
+  for (const [stage, extra] of [
+    ['--substitute', ['--propose']],
+    ['--import', ['--apply']],
+    ['--verify', ['--answers', 'answers.json']],
+  ] as const) {
+    try {
+      execFileSync(
+        process.execPath,
+        [BIN_PATH, stage, '--target', root, ...extra],
+        { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] },
+      );
+      assert.fail(`expected a non-zero exit for ${stage} + ${extra[0]}`);
+    } catch (error) {
+      const failed = error as { status?: number; stderr?: string };
+      assert.equal(failed.status, 2);
+      assert.match(String(failed.stderr), /does not accept/);
+    }
+  }
+});
+
 test('bin/idd-onboard.mjs --hear exits 2 in a non-TTY context, without --propose or --apply', () => {
   const root = makeFixtureDir();
   try {

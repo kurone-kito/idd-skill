@@ -1671,11 +1671,15 @@ function validateHearAnswers(
   const answers: HearAnswer[] = [];
   for (const item of answerable) {
     const raw = answersMap[item.id];
-    if (typeof raw !== 'string' || !isValidHearAnswerValue(item, raw)) {
+    // Trim to match the TTY wizard's own input handling, so a
+    // whitespace-only answers-file value is treated the same as an
+    // empty one instead of silently passing option-less validation.
+    const value = typeof raw === 'string' ? raw.trim() : raw;
+    if (typeof value !== 'string' || !isValidHearAnswerValue(item, value)) {
       unresolved.add(item.id);
       continue;
     }
-    answers.push({ id: item.id, value: raw });
+    answers.push({ id: item.id, value });
   }
   return {
     valid: unresolved.size === 0,
@@ -2064,6 +2068,31 @@ function verifyForeignFlagsPresent(args: ParsedArgs): string[] {
   return present;
 }
 
+/** --hear-only flags the user explicitly passed (present regardless of mode). */
+function hearOnlyFlagsPresent(args: ParsedArgs): string[] {
+  const present: string[] = [];
+  if (args.propose) {
+    present.push('--propose');
+  }
+  if (args.applyHear) {
+    present.push('--apply');
+  }
+  if (args.answers !== undefined) {
+    present.push('--answers');
+  }
+  return present;
+}
+
+/**
+ * Flags --hear does not accept: every import-only flag (`--source`,
+ * `--force`, `--profile` -- --hear never imports or overwrites) plus every
+ * substitute-only placeholder-override flag (--hear derives candidates
+ * read-only via the same hooks; it never accepts an explicit override).
+ */
+function hearForeignFlagsPresent(args: ParsedArgs): string[] {
+  return [...importOnlyFlagsPresent(args), ...substituteOnlyFlagsPresent(args)];
+}
+
 async function runCli(): Promise<void> {
   const args = parseArgs(process.argv.slice(2));
   if (args.help) {
@@ -2082,6 +2111,12 @@ async function runCli(): Promise<void> {
     );
   }
   if (args.hear) {
+    const foreign = hearForeignFlagsPresent(args);
+    if (foreign.length > 0) {
+      throw new Error(
+        `--hear does not accept flag(s) it never uses: ${foreign.join(', ')}`,
+      );
+    }
     await runHearCli(args);
     return;
   }
@@ -2089,17 +2124,23 @@ async function runCli(): Promise<void> {
     // parseArgs collects every known flag regardless of the active stage,
     // so a stage-foreign flag (e.g. a placeholder override alongside
     // --import) would otherwise be silently ignored instead of reported.
-    const foreign = substituteOnlyFlagsPresent(args);
+    const foreign = [
+      ...substituteOnlyFlagsPresent(args),
+      ...hearOnlyFlagsPresent(args),
+    ];
     if (foreign.length > 0) {
       throw new Error(
-        `--import does not accept substitute-only flag(s): ${foreign.join(', ')}`,
+        `--import does not accept substitute-only flag(s) or --hear-only flag(s): ${foreign.join(', ')}`,
       );
     }
     runImportCli(args);
     return;
   }
   if (args.verify) {
-    const foreign = verifyForeignFlagsPresent(args);
+    const foreign = [
+      ...verifyForeignFlagsPresent(args),
+      ...hearOnlyFlagsPresent(args),
+    ];
     if (foreign.length > 0) {
       throw new Error(
         `--verify does not accept flag(s) it never uses: ${foreign.join(', ')}`,
@@ -2113,10 +2154,13 @@ async function runCli(): Promise<void> {
       'pass --substitute, --import, --verify, or --hear to select a stage',
     );
   }
-  const foreign = importOnlyFlagsPresent(args);
+  const foreign = [
+    ...importOnlyFlagsPresent(args),
+    ...hearOnlyFlagsPresent(args),
+  ];
   if (foreign.length > 0) {
     throw new Error(
-      `--substitute does not accept import-only flag(s): ${foreign.join(', ')}`,
+      `--substitute does not accept import-only flag(s) or --hear-only flag(s): ${foreign.join(', ')}`,
     );
   }
   const targetDir = resolve(args.target);
