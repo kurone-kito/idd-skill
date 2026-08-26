@@ -473,17 +473,18 @@ worker for the named issue, that no peer workers exist for it to
 coordinate with or wait on, and that it must perform the implementation
 work itself rather than re-delegate or wait for a reply (#2179).
 
-**Restate the CI/advisory-wait topology-safety condition.** The
-delegation brief must also carry — verbatim or by direct reference —
-the CI/advisory-wait topology-safety condition from [idd-ci.instructions.md's
-Wake-up discipline](idd-ci.instructions.md#wake-up-discipline), the same
-requirement already stated for this delegation pattern in
+**Restate the CI/advisory-wait topology-safety condition; use the
+snapshot-then-stop pattern.** Carry — verbatim or by reference — the
+topology-safety condition from [idd-ci.instructions.md's Wake-up
+discipline](idd-ci.instructions.md#wake-up-discipline) (also in
 [docs/idd-workflow.md's Orchestrator fan-out
-variant](../../docs/idd-workflow.md#orchestrator-fan-out-variant). Without
-it, a worker can end its turn on a Monitor-style or backgrounded wait
-assuming an unconfirmed notification resumes it — under a
-supervisor/worker topology, only the supervisor is notified, so the
-worker's own turn stalls indefinitely (#2210).
+variant](../../docs/idd-workflow.md#orchestrator-fan-out-variant));
+without it a worker can stall indefinitely on an unconfirmed
+backgrounded wait (#2210). Default: the worker takes one non-blocking
+snapshot, reports it, stops if incomplete — never poll or wait on a
+notification. The orchestrator alone polls and resumes via a
+follow-up message (a fresh delegate re-inherits stale context and
+no-ops).
 
 ### Hide displaced claim chain on takeover
 
