@@ -33,7 +33,7 @@
     "mergePolicy": {
       "type": "string",
       "enum": ["fully_autonomous_merge", "human_merge", "separate_merge_agent"],
-      "description": "Selects which session is authorized to execute the F3 merge. Required; changing it is a workflow behavior change needing matching phase-file updates. An absent `config.json` is treated as the `human_merge` profile."
+      "description": "Selects which session is authorized to execute the F3 merge. Required when `config.json` exists; changing it is a workflow behavior change needing matching phase-file updates. An absent `config.json` is treated as the `human_merge` profile."
     },
     "reviewPolicy": {
       "type": "string",
