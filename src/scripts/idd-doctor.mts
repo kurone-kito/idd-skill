@@ -146,6 +146,7 @@ export function runDoctor({
   checkHelperRuntimeConfig(root, report);
   checkLiveConfigSchema(root, report);
   checkClaimTimingConsistency(root, report);
+  checkMergePolicyAcknowledgement(root, report);
   checkDependencyVersionDrift(root, report);
   checkAgentEntryFiles(root, report);
   checkTemplateVersionSignal(root, report);
@@ -1051,24 +1052,30 @@ export function resolveConfiguredHelperRuntimePackageSpec(
  * separate copies that only ever read the canonical filename
  * (idd-skill#2028).
  *
- * Returns `{ config: null }` when no candidate file exists, or the first
- * present candidate is not valid JSON -- each caller keeps its own
- * fail-closed default for that case, matching every reader's behavior
- * before this extraction.
+ * Returns `{ config: null, file: null }` when no candidate file exists;
+ * `{ config: null, file }` when the first present candidate (`file`) is
+ * not valid JSON -- each caller keeps its own fail-closed default for
+ * either case, matching every reader's behavior before this extraction.
+ * `file` names which candidate was selected (idd-skill#2301 review) so a
+ * caller building a remediation message can point at the file actually
+ * read instead of assuming the canonical name.
  */
-function resolveLiveConfigDocument(root: string): { config: unknown } {
+function resolveLiveConfigDocument(root: string): {
+  config: unknown;
+  file: string | null;
+} {
   for (const file of LIVE_CONFIG_CANDIDATE_FILES) {
     const absolutePath = join(root, file);
     if (!exists(absolutePath)) {
       continue;
     }
     try {
-      return { config: JSON.parse(readFileSync(absolutePath, 'utf8')) };
+      return { config: JSON.parse(readFileSync(absolutePath, 'utf8')), file };
     } catch {
-      return { config: null };
+      return { config: null, file };
     }
   }
-  return { config: null };
+  return { config: null, file: null };
 }
 
 /**
@@ -1382,6 +1389,97 @@ export function checkClaimTimingConsistency(
     | undefined;
 
   const finding = classifyClaimTimingConsistency(claimTiming, overviewCoreText);
+  if (finding) {
+    report.warnings.push(finding.message);
+  }
+}
+
+/** One reportable finding from the mergePolicy acknowledgement check. */
+export interface MergePolicyAckFinding {
+  level: 'warning';
+  message: string;
+}
+
+/**
+ * `fully_autonomous_merge` grants an agent unattended F3 merge authority
+ * and is an explicit opt-in against the distributed `human_merge` default
+ * (idd-skill#2284). This reminds an operator who has `mergePolicy:
+ * "fully_autonomous_merge"` recorded -- including one who reached it via
+ * the old distributed default before it flipped -- that the profile is
+ * now an explicit choice, unless they have confirmed it with a matching
+ * `mergePolicyAck`. `mergePolicyAck` is diagnostics-only: it never
+ * participates in F2.5/F3 merge-authority resolution and this check never
+ * changes what any `mergePolicy` value authorizes.
+ *
+ * `file` names the live-config candidate `config` was actually read from
+ * (`.github/idd/config.json` or the legacy `idd-policy.json`) so the
+ * remediation text points at the file the operator needs to edit, not
+ * always the canonical name (idd-skill#2301 review) -- setting
+ * `mergePolicyAck` in a *different* candidate than the one this doctor
+ * run selected would not silence the warning.
+ *
+ * Returns null (no finding) for every `mergePolicy` value other than
+ * `fully_autonomous_merge`, for a missing/absent `mergePolicy` key, or
+ * when `mergePolicyAck` already equals `"fully_autonomous_merge"`.
+ *
+ * The ack is scoped to that exact value rather than a boolean: while
+ * `mergePolicy` is any value *other than* `fully_autonomous_merge`, this
+ * always returns null regardless of `mergePolicyAck` (the check only
+ * fires for that one value). But this is NOT a full time/generation-scoped
+ * reset -- a round trip that later lands back on the exact same
+ * `fully_autonomous_merge` value, with `mergePolicyAck` still equal to
+ * `"fully_autonomous_merge"` from an earlier, now-stale confirmation
+ * that was never cleared in between, does **not** resume the
+ * warning: it silently returns null again. This diagnostics-only field
+ * has no timestamp or generation counter to detect that narrow case -- a
+ * known, accepted limitation of the deliberately value-scoped (not
+ * boolean, not time-scoped) design (idd-skill#2301 review, rejected as a
+ * follow-up beyond this issue's locked scope).
+ */
+export function classifyMergePolicyAcknowledgement(
+  config:
+    | { mergePolicy?: unknown; mergePolicyAck?: unknown }
+    | null
+    | undefined,
+  file: string = '.github/idd/config.json',
+): MergePolicyAckFinding | null {
+  if (config?.mergePolicy !== 'fully_autonomous_merge') {
+    return null;
+  }
+  if (config.mergePolicyAck === 'fully_autonomous_merge') {
+    return null;
+  }
+  return {
+    level: 'warning',
+    message:
+      'mergePolicy is "fully_autonomous_merge", an explicit opt-in against ' +
+      'the distributed "human_merge" default -- confirm this choice by ' +
+      `setting mergePolicyAck: "fully_autonomous_merge" in ${file} to ` +
+      'silence this reminder.',
+  };
+}
+
+/**
+ * Checks the resolved live-config candidate ({@link resolveLiveConfigDocument},
+ * the same first-present-wins walk every other scalar policy reader in
+ * this file shares, idd-skill#2028) for the mergePolicy acknowledgement
+ * finding above. Never errors: an unreadable or malformed config is
+ * already surfaced by {@link checkLiveConfigSchema} /
+ * {@link checkHelperRuntimeConfig}, so this silently skips instead of
+ * double-reporting.
+ */
+export function checkMergePolicyAcknowledgement(
+  root: string,
+  report: DoctorReport,
+) {
+  const { config, file } = resolveLiveConfigDocument(root);
+  if (config === null || file === null) {
+    return;
+  }
+  const finding = classifyMergePolicyAcknowledgement(
+    config as { mergePolicy?: unknown; mergePolicyAck?: unknown } | null,
+    file,
+  );
   if (finding) {
     report.warnings.push(finding.message);
   }

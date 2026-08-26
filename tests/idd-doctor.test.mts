@@ -15,12 +15,14 @@ import {
   checkClaimTimingConsistency,
   checkDependencyVersionDrift,
   checkLiveConfigSchema,
+  checkMergePolicyAcknowledgement,
   checkPlaceholders,
   checkPolicySignals,
   checkProjectCommands,
   classifyBacklog,
   classifyClaimTimingConsistency,
   classifyLiveConfigSchemaFinding,
+  classifyMergePolicyAcknowledgement,
   classifyPrimaryHead,
   classifyReleaseTagDrift,
   classifyWorktreeGuardActivation,
@@ -3210,6 +3212,122 @@ test('checkClaimTimingConsistency pushes no warning when config and prose agree,
     checkClaimTimingConsistency(dir, missingConfigReport);
     assert.equal(missingConfigReport.warnings.length, 0);
     assert.equal(missingConfigReport.errors.length, 0);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('classifyMergePolicyAcknowledgement warns when fully_autonomous_merge is unacknowledged', () => {
+  const finding = classifyMergePolicyAcknowledgement({
+    mergePolicy: 'fully_autonomous_merge',
+  });
+  assert.equal(finding?.level, 'warning');
+  assert.match(finding?.message ?? '', /fully_autonomous_merge/);
+  assert.match(finding?.message ?? '', /human_merge/);
+  assert.match(finding?.message ?? '', /mergePolicyAck/);
+  assert.match(finding?.message ?? '', /\.github\/idd\/config\.json/);
+});
+
+test('classifyMergePolicyAcknowledgement names the legacy file when that is what was read (#2301 review)', () => {
+  const finding = classifyMergePolicyAcknowledgement(
+    { mergePolicy: 'fully_autonomous_merge' },
+    'idd-policy.json',
+  );
+  assert.match(finding?.message ?? '', /idd-policy\.json/);
+  assert.doesNotMatch(finding?.message ?? '', /\.github\/idd\/config\.json/);
+});
+
+test('classifyMergePolicyAcknowledgement returns null when acknowledged', () => {
+  assert.equal(
+    classifyMergePolicyAcknowledgement({
+      mergePolicy: 'fully_autonomous_merge',
+      mergePolicyAck: 'fully_autonomous_merge',
+    }),
+    null,
+  );
+});
+
+test('classifyMergePolicyAcknowledgement warns when the ack value is stale (mismatched)', () => {
+  const finding = classifyMergePolicyAcknowledgement({
+    mergePolicy: 'fully_autonomous_merge',
+    mergePolicyAck: 'human_merge',
+  });
+  assert.equal(finding?.level, 'warning');
+});
+
+test('classifyMergePolicyAcknowledgement returns null for a different mergePolicy value, ack present or not', () => {
+  assert.equal(
+    classifyMergePolicyAcknowledgement({ mergePolicy: 'human_merge' }),
+    null,
+  );
+  assert.equal(
+    classifyMergePolicyAcknowledgement({
+      mergePolicy: 'separate_merge_agent',
+      mergePolicyAck: 'fully_autonomous_merge',
+    }),
+    null,
+  );
+});
+
+test('classifyMergePolicyAcknowledgement returns null for a missing/absent mergePolicy', () => {
+  assert.equal(classifyMergePolicyAcknowledgement(undefined), null);
+  assert.equal(classifyMergePolicyAcknowledgement(null), null);
+  assert.equal(classifyMergePolicyAcknowledgement({}), null);
+});
+
+test('checkMergePolicyAcknowledgement pushes a warning when unacknowledged, none when acknowledged or missing', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'idd-merge-policy-ack-'));
+  try {
+    mkdirSync(join(dir, '.github/idd'), { recursive: true });
+    writeFileSync(
+      join(dir, '.github/idd/config.json'),
+      JSON.stringify({ mergePolicy: 'fully_autonomous_merge' }),
+    );
+
+    const unacknowledgedReport = emptyReport(dir);
+    checkMergePolicyAcknowledgement(dir, unacknowledgedReport);
+    assert.equal(unacknowledgedReport.errors.length, 0);
+    assert.equal(unacknowledgedReport.warnings.length, 1);
+    assert.match(unacknowledgedReport.warnings[0], /mergePolicyAck/);
+
+    writeFileSync(
+      join(dir, '.github/idd/config.json'),
+      JSON.stringify({
+        mergePolicy: 'fully_autonomous_merge',
+        mergePolicyAck: 'fully_autonomous_merge',
+      }),
+    );
+    const acknowledgedReport = emptyReport(dir);
+    checkMergePolicyAcknowledgement(dir, acknowledgedReport);
+    assert.equal(acknowledgedReport.warnings.length, 0);
+    assert.equal(acknowledgedReport.errors.length, 0);
+
+    // No config.json at all: this check is not the file-presence gate —
+    // it skips rather than erroring.
+    rmSync(join(dir, '.github/idd/config.json'));
+    const missingConfigReport = emptyReport(dir);
+    checkMergePolicyAcknowledgement(dir, missingConfigReport);
+    assert.equal(missingConfigReport.warnings.length, 0);
+    assert.equal(missingConfigReport.errors.length, 0);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('checkMergePolicyAcknowledgement names idd-policy.json when only the legacy candidate is present (#2301 review)', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'idd-merge-policy-ack-legacy-'));
+  try {
+    writeFileSync(
+      join(dir, 'idd-policy.json'),
+      JSON.stringify({ mergePolicy: 'fully_autonomous_merge' }),
+    );
+
+    const report = emptyReport(dir);
+    checkMergePolicyAcknowledgement(dir, report);
+    assert.equal(report.errors.length, 0);
+    assert.equal(report.warnings.length, 1);
+    assert.match(report.warnings[0], /idd-policy\.json/);
+    assert.doesNotMatch(report.warnings[0], /\.github\/idd\/config\.json/);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
