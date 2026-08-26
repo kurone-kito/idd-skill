@@ -35,6 +35,11 @@
       "enum": ["fully_autonomous_merge", "human_merge", "separate_merge_agent"],
       "description": "Selects which session is authorized to execute the F3 merge. Required when `config.json` exists; changing it is a workflow behavior change needing matching phase-file updates. An absent `config.json` is treated as the `human_merge` profile."
     },
+    "mergePolicyAck": {
+      "type": "string",
+      "enum": ["fully_autonomous_merge", "human_merge", "separate_merge_agent"],
+      "description": "Diagnostics-only confirmation that the operator has explicitly reconsidered the current `mergePolicy` value. Optional; never participates in F2.5/F3 merge-authority resolution and never changes what any `mergePolicy` value authorizes. `idd-doctor` warns when `mergePolicy` is `fully_autonomous_merge` and this field is absent or does not equal that same value; any other value here (including one that does not match the live `mergePolicy`) still validates against this schema."
+    },
     "reviewPolicy": {
       "type": "string",
       "enum": [

@@ -73,6 +73,7 @@ export function runDoctor({
   checkHelperRuntimeConfig(root, report);
   checkLiveConfigSchema(root, report);
   checkClaimTimingConsistency(root, report);
+  checkMergePolicyAcknowledgement(root, report);
   checkDependencyVersionDrift(root, report);
   checkAgentEntryFiles(root, report);
   checkTemplateVersionSignal(root, report);
@@ -1170,6 +1171,68 @@ export function checkClaimTimingConsistency(root, report) {
   const finding = classifyClaimTimingConsistency(claimTiming, overviewCoreText);
   if (finding) {
     report.warnings.push(finding.message);
+  }
+}
+/**
+ * `fully_autonomous_merge` grants an agent unattended F3 merge authority
+ * and is an explicit opt-in against the distributed `human_merge` default
+ * (idd-skill#2284). This reminds an operator who has `mergePolicy:
+ * "fully_autonomous_merge"` recorded -- including one who reached it via
+ * the old distributed default before it flipped -- that the profile is
+ * now an explicit choice, unless they have confirmed it with a matching
+ * `mergePolicyAck`. `mergePolicyAck` is diagnostics-only: it never
+ * participates in F2.5/F3 merge-authority resolution and this check never
+ * changes what any `mergePolicy` value authorizes.
+ *
+ * Returns null (no finding) for every `mergePolicy` value other than
+ * `fully_autonomous_merge`, for a missing/absent `mergePolicy` key, or
+ * when `mergePolicyAck` already equals `"fully_autonomous_merge"` --
+ * scoped to that exact value rather than a boolean, so flipping
+ * `mergePolicy` away and back drops a stale ack and the warning resumes
+ * until re-confirmed.
+ */
+export function classifyMergePolicyAcknowledgement(config) {
+  if (config?.mergePolicy !== 'fully_autonomous_merge') {
+    return null;
+  }
+  if (config.mergePolicyAck === 'fully_autonomous_merge') {
+    return null;
+  }
+  return {
+    level: 'warning',
+    message:
+      'mergePolicy is "fully_autonomous_merge", an explicit opt-in against ' +
+      'the distributed "human_merge" default -- confirm this choice by ' +
+      'setting mergePolicyAck: "fully_autonomous_merge" in ' +
+      '.github/idd/config.json to silence this reminder.',
+  };
+}
+/**
+ * Checks the first present live-config candidate (same
+ * {@link LIVE_CONFIG_CANDIDATE_FILES} order and first-present-wins rule as
+ * {@link resolveConfiguredHelperRuntime}) for the mergePolicy
+ * acknowledgement finding above. Never errors: an unreadable or malformed
+ * config is already surfaced by {@link checkLiveConfigSchema} /
+ * {@link checkHelperRuntimeConfig}, so this silently skips instead of
+ * double-reporting.
+ */
+export function checkMergePolicyAcknowledgement(root, report) {
+  for (const file of LIVE_CONFIG_CANDIDATE_FILES) {
+    const absolutePath = join(root, file);
+    if (!exists(absolutePath)) {
+      continue;
+    }
+    let config;
+    try {
+      config = JSON.parse(readFileSync(absolutePath, 'utf8'));
+    } catch {
+      return;
+    }
+    const finding = classifyMergePolicyAcknowledgement(config);
+    if (finding) {
+      report.warnings.push(finding.message);
+    }
+    return;
   }
 }
 // The two packages implicated in the #1164 incident: a stale node_modules

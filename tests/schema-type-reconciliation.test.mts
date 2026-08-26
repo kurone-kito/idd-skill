@@ -138,6 +138,10 @@ interface PolicyConfigFile {
     | 'fully_autonomous_merge'
     | 'human_merge'
     | 'separate_merge_agent';
+  mergePolicyAck?:
+    | 'fully_autonomous_merge'
+    | 'human_merge'
+    | 'separate_merge_agent';
   reviewPolicy:
     | 'copilot-advisory'
     | 'human-required'
@@ -408,6 +412,7 @@ export const policyConfigKeys = [
   'iddVersion',
   'markerPrefix',
   'mergePolicy',
+  'mergePolicyAck',
   'reviewPolicy',
   'threadResolutionPolicy',
   'authoringLanguage',
