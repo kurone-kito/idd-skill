@@ -455,6 +455,39 @@ test('policy valid fixture passes validation', () => {
   assert.ok(ok, errors.join('\n'));
 });
 
+test('policy schema accepts every critiqueLoop.delegate mode (#2324)', () => {
+  const schema = loadJson('schemas/policy.schema.json');
+  for (const mode of ['fallback', 'combined', 'on-success', 'never']) {
+    const instance = JSON.parse(
+      JSON.stringify(loadJson('fixtures/schemas/policy.valid.json')),
+    );
+    instance.critiqueLoop = {
+      ...instance.critiqueLoop,
+      delegate: { command: 'coderabbit review --plain', mode },
+    };
+    assert.deepEqual(
+      validate(instance, schema),
+      [],
+      `expected mode ${mode} to validate`,
+    );
+  }
+});
+
+test('policy schema rejects a critiqueLoop.delegate mode outside the enum (#2324)', () => {
+  const schema = loadJson('schemas/policy.schema.json');
+  const instance = JSON.parse(
+    JSON.stringify(loadJson('fixtures/schemas/policy.valid.json')),
+  );
+  instance.critiqueLoop = {
+    ...instance.critiqueLoop,
+    delegate: { command: 'coderabbit review --plain', mode: 'on-failure' },
+  };
+  assert.ok(
+    validate(instance, schema).length > 0,
+    'expected an unlisted delegate mode to be rejected',
+  );
+});
+
 test('policy schema accepts the worktreeGuard opt-in object', () => {
   const schema = loadJson('schemas/policy.schema.json');
   const instance = JSON.parse(

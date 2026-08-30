@@ -563,6 +563,109 @@ test('resolveEffectiveCritiqueLoopDelegate returns none when both layers are abs
   });
 });
 
+// #2324: `mode` widened from fallback/combined to a four-value enum
+// answering "when does the per-agent critique pass also run". The two
+// added values are exercised through every layer the existing two
+// already cover, so a future narrowing cannot pass by only keeping the
+// original pair working.
+const ADDED_CRITIQUE_LOOP_DELEGATE_MODES = ['on-success', 'never'] as const;
+
+test('critiqueLoop.delegate preserves each added mode (#2324)', () => {
+  for (const mode of ADDED_CRITIQUE_LOOP_DELEGATE_MODES) {
+    assert.deepEqual(
+      normalizePolicyConfig({
+        critiqueLoop: {
+          delegate: { command: 'coderabbit review --plain', mode },
+        },
+      }).critiqueLoop.delegate,
+      { command: 'coderabbit review --plain', mode },
+      `expected mode ${mode} to survive normalization`,
+    );
+  }
+});
+
+test('inspectCritiqueLoopDelegateLayer reports configured for each added mode (#2324)', () => {
+  for (const mode of ADDED_CRITIQUE_LOOP_DELEGATE_MODES) {
+    assert.deepEqual(
+      inspectCritiqueLoopDelegateLayer({
+        critiqueLoop: {
+          delegate: { command: 'coderabbit review --plain', mode },
+        },
+      }),
+      {
+        status: 'configured',
+        delegate: { command: 'coderabbit review --plain', mode },
+      },
+      `expected mode ${mode} to inspect as configured`,
+    );
+  }
+});
+
+test('resolveEffectiveCritiqueLoopDelegate carries each added mode through the repository-local layer (#2324)', () => {
+  for (const mode of ADDED_CRITIQUE_LOOP_DELEGATE_MODES) {
+    assert.deepEqual(
+      resolveEffectiveCritiqueLoopDelegate({
+        localConfig: {
+          critiqueLoop: { delegate: { command: 'local-review', mode } },
+        },
+        globalConfig: {
+          critiqueLoop: {
+            delegate: { command: 'global-review', mode: 'combined' },
+          },
+        },
+      }),
+      {
+        status: 'local',
+        source: 'repository-local',
+        delegate: { command: 'local-review', mode },
+      },
+      `expected local mode ${mode} to win over the global layer`,
+    );
+  }
+});
+
+test('resolveEffectiveCritiqueLoopDelegate carries each added mode through the user-global layer (#2324)', () => {
+  for (const mode of ADDED_CRITIQUE_LOOP_DELEGATE_MODES) {
+    assert.deepEqual(
+      resolveEffectiveCritiqueLoopDelegate({
+        localConfig: {},
+        globalConfig: {
+          critiqueLoop: { delegate: { command: 'global-review', mode } },
+        },
+      }),
+      {
+        status: 'global',
+        source: 'user-global',
+        delegate: { command: 'global-review', mode },
+      },
+      `expected global mode ${mode} to be inherited`,
+    );
+  }
+});
+
+test('an unrecognized mode still fails closed after the widening (#2324)', () => {
+  // The four accepted values are not a wildcard: a value outside them
+  // stays malformed at the layer level (fail-closed, never inheriting a
+  // global delegate) while a direct normalizePolicyConfig caller still
+  // collapses it to the fallback default.
+  assert.deepEqual(
+    inspectCritiqueLoopDelegateLayer({
+      critiqueLoop: {
+        delegate: { command: 'coderabbit review --plain', mode: 'on-failure' },
+      },
+    }),
+    { status: 'malformed', reason: 'invalid-repository-local-delegate' },
+  );
+  assert.deepEqual(
+    normalizePolicyConfig({
+      critiqueLoop: {
+        delegate: { command: 'coderabbit review --plain', mode: 'on-failure' },
+      },
+    }).critiqueLoop.delegate,
+    { command: 'coderabbit review --plain', mode: 'fallback' },
+  );
+});
+
 test('selectDesyncedIndex returns 0 for empty, singleton, or invalid bands', () => {
   assert.equal(selectDesyncedIndex('any-token', 0), 0);
   assert.equal(selectDesyncedIndex('any-token', 1), 0);
