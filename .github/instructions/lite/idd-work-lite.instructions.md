@@ -215,18 +215,28 @@ requirements are satisfied, whether coverage is adequate, and whether any other
 problems exist. Every mechanism below answers those questions. They are what a
 pass asks, never a separate pass to run on top of the one that ran.
 
-1. Read `critiqueLoop.delegate` in `.github/idd/config.json`. If the key is
-   absent, a local runtime may inherit one from
-   `$XDG_CONFIG_HOME/idd-skill/config.json` (or
-   `$HOME/.config/idd-skill/config.json`).
-2. A delegate is **unusable** — never merely failed — when its value is `null`,
-   is not an object, its `command` is missing, empty, whitespace-only, or not a
-   string, or its `mode` is present but is not one of the four values in step
-   5. A repository-local unusable value stops there: it never runs, and it
-   never inherits the user-global layer. An unusable user-global fragment
-   counts as absent instead. This configuration fail-safe is separate from the
-   runtime failure in step 4, and an unusable delegate never applies `mode` at
-   all.
+1. Read `critiqueLoop.delegate` in `.github/idd/config.json`. If that key is
+   absent, a local runtime may inherit one from a user-global file. Use
+   `$XDG_CONFIG_HOME/idd-skill/config.json` only when `XDG_CONFIG_HOME` is a
+   **qualified root** — an absolute POSIX path, a Windows drive letter, or a
+   UNC path. Ignore a relative or otherwise unsafe value rather than joining it
+   against the current directory, and fall back to
+   `$HOME/.config/idd-skill/config.json`; if neither root qualifies, use no
+   global file at all.
+2. A delegate is **usable** only when every one of these holds. Read this as a
+   closed list: anything it does not admit is **unusable** — never merely
+   failed.
+   - The value is an object: not `null`, not an array.
+   - Its keys are exactly `command`, plus optionally `mode`. **Any** additional
+     key, including a typo, makes it unusable.
+   - `command` is its own property (not inherited) and is a string carrying at
+     least one non-whitespace character.
+   - `mode`, when present, is one of the four values in step 5.
+
+   A repository-local unusable value stops there: it never runs, and it never
+   inherits the user-global layer. An unusable user-global fragment counts as
+   absent instead. This configuration fail-safe is separate from the runtime
+   failure in step 4, and an unusable delegate never applies `mode` at all.
 3. If no usable delegate remains, run the per-agent critique pass on the branch
    diff and go to step 7.
 4. Otherwise run the delegate's `command` against the branch diff. It **failed**
