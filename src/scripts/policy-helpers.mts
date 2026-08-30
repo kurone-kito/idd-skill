@@ -18,7 +18,7 @@ interface RawForcedHandoff {
 
 export interface CritiqueLoopDelegate {
   command: string;
-  mode: 'fallback' | 'combined';
+  mode: 'fallback' | 'combined' | 'on-success' | 'never';
 }
 
 interface CritiqueLoopPolicy {
@@ -162,7 +162,12 @@ const EXTERNAL_CHECK_WAIVER_MODES = new Set([
   'maintainer-authorized',
 ]);
 const CHECK_SELECTOR_MATCH_MODES = new Set(['exact', 'glob']);
-const CRITIQUE_LOOP_DELEGATE_MODES = new Set(['fallback', 'combined']);
+const CRITIQUE_LOOP_DELEGATE_MODES = new Set([
+  'fallback',
+  'combined',
+  'on-success',
+  'never',
+]);
 const LEGACY_ADVISORY_CAP_ROUTE_ALIASES = new Map([
   ['phase-default', 'phase-specific'],
   ['strict-hold', 'hold'],
@@ -982,7 +987,9 @@ function parseCritiqueLoopDelegate(
     mode: Object.hasOwn(candidate, 'mode')
       ? (parseEnum(candidate.mode, CRITIQUE_LOOP_DELEGATE_MODES, 'fallback') as
           | 'fallback'
-          | 'combined')
+          | 'combined'
+          | 'on-success'
+          | 'never')
       : 'fallback',
   };
 }

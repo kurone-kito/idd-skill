@@ -229,7 +229,7 @@ interface PolicyConfigFile {
     e10NoProgressHoldAfter?: number;
     delegate?: {
       command: string;
-      mode?: 'fallback' | 'combined';
+      mode?: 'fallback' | 'combined' | 'on-success' | 'never';
     } | null;
   };
   reviewEscalation?: {
