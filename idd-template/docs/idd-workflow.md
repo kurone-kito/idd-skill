@@ -928,6 +928,13 @@ has produced critique — those findings are the pass's output and C1
 continues to C3 scoring on them. `fallback`'s fall-through to the
 per-agent mechanism is unchanged.
 
+The hold turns on a **missing or unreadable** findings list, never on
+an empty one. A delegate that succeeded and reported no issues has
+produced a readable findings list that happens to be empty: that is a
+genuine clean verdict, and C2 proceeds to the objective diff validation
+floor exactly as it would with no delegate configured. Only the
+no-readable-list state is vacuous.
+
 Delegate output is read the same way a subagent's critique response is
 read today — free-form findings scored through the existing C3
 High/Medium/Low process; no new machine-readable output schema is
