@@ -6,6 +6,7 @@
 
 import { readFileSync } from 'node:fs';
 
+import { isValidIsoTimestamp } from './marker-helpers.mts';
 import { loadJson, validateConfigSection } from './validate-schemas.mts';
 
 export const DEFAULT_ADVISORY_REQUEST_CAP = 30;
@@ -475,4 +476,92 @@ function parseConfiguredDurationToMs(value: unknown): number | null {
     return null;
   }
   return totalMilliseconds;
+}
+
+/**
+ * The `idd-advisory-convergence` waiver precondition, in the shape
+ * `pre-merge-readiness` publishes it as
+ * `advisoryConvergenceWaiverPrecondition`.
+ */
+export interface AdvisoryConvergenceWaiverPrecondition {
+  checkSelector: string;
+  deadlineMinutes: number;
+  headCommittedAt: string;
+  elapsedMinutes: number | null;
+  deadlinePassed: boolean;
+  terminalUnavailable: boolean;
+  open: boolean;
+}
+
+/**
+ * Build the `idd-advisory-convergence` waiver precondition (#2021) from its
+ * two independent openers: a deadline anchored on the current HEAD commit's
+ * own timestamp, and proven terminal Copilot unavailability (#1570).
+ *
+ * Extracted from `pre-merge-readiness`'s reducer (#2328) so every consumer
+ * reads one implementation. `external-check-waiver.mts` accepted and posted
+ * a waiver while this precondition was closed, disagreeing with the gate it
+ * is supposed to predict; a second copy of this arithmetic is exactly how
+ * that disagreement arose, so callers must not re-derive it.
+ *
+ * `terminalUnavailable` is supplied by the caller rather than computed here:
+ * proving it needs trusted advisory-wait recovery-marker state, which not
+ * every caller has. A caller that cannot evaluate it passes `false` and must
+ * report the resulting verdict as "deadline not passed" rather than as a bare
+ * closed hatch, since the terminal opener may still be open unseen.
+ *
+ * `deadlineOpensAt` is the deadline path's open moment as a real timestamp
+ * (#2034), used to override a waiver's active-since cutoff. It is empty
+ * unless the deadline itself has passed: the terminal path has no equivalent
+ * anchor and intentionally falls back to the waiver comment's own
+ * `createdAt`.
+ */
+export function buildAdvisoryConvergenceWaiverPrecondition({
+  headCommittedAt,
+  deadlineMinutes,
+  terminalUnavailable = false,
+  now,
+}: {
+  headCommittedAt?: unknown;
+  deadlineMinutes?: unknown;
+  terminalUnavailable?: boolean;
+  now: string;
+}): {
+  precondition: AdvisoryConvergenceWaiverPrecondition;
+  deadlineOpensAt: string;
+} {
+  const resolvedDeadlineMinutes = Number.isFinite(deadlineMinutes)
+    ? Number(deadlineMinutes)
+    : DEFAULT_ADVISORY_CONVERGENCE_DEADLINE_MINUTES;
+  const resolvedHeadCommittedAt = String(headCommittedAt ?? '');
+  const headCommittedAtValid = isValidIsoTimestamp(resolvedHeadCommittedAt);
+  const elapsedMinutes = headCommittedAtValid
+    ? Math.floor(
+        (new Date(now).getTime() -
+          new Date(resolvedHeadCommittedAt).getTime()) /
+          60000,
+      )
+    : null;
+  const deadlinePassed =
+    elapsedMinutes !== null && elapsedMinutes >= resolvedDeadlineMinutes;
+  const resolvedTerminalUnavailable = terminalUnavailable === true;
+
+  return {
+    precondition: {
+      checkSelector: DEFAULT_ADVISORY_CONVERGENCE_CHECK_SELECTOR,
+      deadlineMinutes: resolvedDeadlineMinutes,
+      headCommittedAt: resolvedHeadCommittedAt || 'none',
+      elapsedMinutes,
+      deadlinePassed,
+      terminalUnavailable: resolvedTerminalUnavailable,
+      open: deadlinePassed || resolvedTerminalUnavailable,
+    },
+    deadlineOpensAt:
+      deadlinePassed && headCommittedAtValid
+        ? new Date(
+            new Date(resolvedHeadCommittedAt).getTime() +
+              resolvedDeadlineMinutes * 60000,
+          ).toISOString()
+        : '',
+  };
 }

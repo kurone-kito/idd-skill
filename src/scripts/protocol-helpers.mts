@@ -6,6 +6,7 @@
 
 import { Buffer } from 'node:buffer';
 import {
+  buildAdvisoryConvergenceWaiverPrecondition,
   DEFAULT_ADVISORY_CONVERGENCE_CHECK_SELECTOR,
   DEFAULT_ADVISORY_CONVERGENCE_DEADLINE_MINUTES,
   DEFAULT_ADVISORY_PRIMARY_BOT_LOGIN,
@@ -6721,50 +6722,21 @@ export function buildPreMergeReadinessSummary(
   // `advisory-convergence.mts` itself would ever call the waiver `waived`,
   // sending an otherwise-correct session into a `gh pr merge` GitHub rejects
   // outright (root cause: kurone-kito/idd-skill#2021).
-  const advisoryConvergenceDeadlineMinutes = Number.isFinite(
-    options.advisoryConvergenceDeadlineMinutes,
-  )
-    ? Number(options.advisoryConvergenceDeadlineMinutes)
-    : DEFAULT_ADVISORY_CONVERGENCE_DEADLINE_MINUTES;
-  const advisoryConvergenceHeadCommittedAt = String(
-    options.advisoryConvergenceHeadCommittedAt ?? '',
-  );
-  const advisoryConvergenceElapsedMinutes = isValidIsoTimestamp(
-    advisoryConvergenceHeadCommittedAt,
-  )
-    ? minutesBetweenIso(advisoryConvergenceHeadCommittedAt, now)
-    : null;
+  const advisoryConvergencePreconditionResult =
+    buildAdvisoryConvergenceWaiverPrecondition({
+      headCommittedAt: options.advisoryConvergenceHeadCommittedAt,
+      deadlineMinutes: options.advisoryConvergenceDeadlineMinutes,
+      terminalUnavailable: copilotUnavailable,
+      now,
+    });
+  const advisoryConvergenceWaiverPrecondition =
+    advisoryConvergencePreconditionResult.precondition;
   const advisoryConvergenceDeadlinePassed =
-    advisoryConvergenceElapsedMinutes !== null &&
-    advisoryConvergenceElapsedMinutes >= advisoryConvergenceDeadlineMinutes;
+    advisoryConvergenceWaiverPrecondition.deadlinePassed;
   const advisoryConvergencePreconditionOpen =
-    advisoryConvergenceDeadlinePassed || copilotUnavailable;
-  // #2034: the deadline-path precondition-open moment as an actual ISO
-  // timestamp, used to override the waiver-active cutoff `summarizeRequiredChecks`
-  // applies to `idd-advisory-convergence` specifically -- that check's waiver
-  // only becomes genuinely active once this precondition opens, which can be
-  // later than the waiver comment's own `createdAt`. Only computed for the
-  // deadline path (`advisoryConvergenceDeadlinePassed`); the terminal-
-  // unavailability path has no equivalent real timestamp to anchor on, so it
-  // intentionally falls back to the waiver's own `createdAt` (see
-  // `waiverActiveSinceOverride` below).
+    advisoryConvergenceWaiverPrecondition.open;
   const advisoryConvergenceDeadlineOpensAt =
-    advisoryConvergenceDeadlinePassed &&
-    isValidIsoTimestamp(advisoryConvergenceHeadCommittedAt)
-      ? new Date(
-          new Date(advisoryConvergenceHeadCommittedAt).getTime() +
-            advisoryConvergenceDeadlineMinutes * 60000,
-        ).toISOString()
-      : '';
-  const advisoryConvergenceWaiverPrecondition = {
-    checkSelector: DEFAULT_ADVISORY_CONVERGENCE_CHECK_SELECTOR,
-    deadlineMinutes: advisoryConvergenceDeadlineMinutes,
-    headCommittedAt: advisoryConvergenceHeadCommittedAt || 'none',
-    elapsedMinutes: advisoryConvergenceElapsedMinutes,
-    deadlinePassed: advisoryConvergenceDeadlinePassed,
-    terminalUnavailable: copilotUnavailable,
-    open: advisoryConvergencePreconditionOpen,
-  };
+    advisoryConvergencePreconditionResult.deadlineOpensAt;
 
   // #2021 (Codex review on PR #2033, two findings): `advisory-convergence.mts`'s
   // own `waived` computation only counts a waiver whose `checkSelector` is an
