@@ -890,31 +890,67 @@ mechanism above by setting `critiqueLoop.delegate` in
 [Customization Surfaces](customization.md#customization-surfaces) and
 [Configuration Authority Hierarchy](policy-constants.md#configuration-authority-hierarchy)):
 a `command` string is a shell command run against the branch's current
-diff, and `mode` selects `fallback` (default: run `command`; fall
-through to the per-agent mechanism above when it is absent, exits
-non-zero, times out, or its output cannot be read as a findings list)
-or `combined` (run both every pass and union their reported issues).
+diff, and `mode` selects **when the per-agent mechanism above also
+runs**:
+
+<!-- dprint-ignore-start -->
+| `mode` | delegate succeeded | delegate failed |
+| --- | --- | --- |
+| `combined` | per-agent pass runs | per-agent pass runs |
+| `fallback` (default) | no per-agent pass | per-agent pass runs |
+| `on-success` | per-agent pass runs | no per-agent pass |
+| `never` | no per-agent pass | no per-agent pass |
+<!-- dprint-ignore-end -->
+
+`combined` is the one value that does not consult the delegate's
+outcome — it runs both mechanisms on every pass. The other three
+observe that outcome first. Wherever both mechanisms run in the same
+pass (always under `combined`, and after a successful delegate under
+`on-success`), their reported issues are unioned.
+
+**Delegate failed** means the same set of conditions in every mode: the
+command is absent, exits non-zero, times out, or its output cannot be
+read as a findings list. It is never narrowed to the process exit
+status alone, so a delegate that exits `0` but returns unreadable
+output counts as failed under `fallback` and `on-success` alike.
+Exit-code conventions differ between reviewers — a lint-style tool
+signals _findings exist_ with a non-zero exit rather than _the tool
+broke_ — which is why `on-success` exists at all.
+
+**Fail-closed hold.** Under `on-success` and `never`, a failed delegate
+can leave C1 with no critique findings at all. The hold condition is
+that state itself, not the failure classification: when the mechanisms
+that actually ran produced no readable findings list, C1 records a hold
+rather than a clean "zero issues reported" verdict, and C2 does not
+advance to PR submission on that vacuous result. A delegate that trips
+one of the conditions above but still emitted a readable findings list
+has produced critique — those findings are the pass's output and C1
+continues to C3 scoring on them. `fallback`'s fall-through to the
+per-agent mechanism is unchanged.
+
 Delegate output is read the same way a subagent's critique response is
 read today — free-form findings scored through the existing C3
 High/Medium/Low process; no new machine-readable output schema is
 introduced. Absent `critiqueLoop.delegate` entirely keeps today's
 per-agent-only behavior with zero change.
 
-Configuration-time fail-safe (distinct from the `mode: fallback`
-runtime behavior above): a non-object `critiqueLoop.delegate`, or one
-whose `command` is missing, empty, whitespace-only, or non-string, is
-treated the same as an absent delegate — C1 uses the per-agent
-mechanism, never attempting the delegate at all. A valid `command`
-paired with an unrecognized `mode` value still configures the
-delegate, defaulting `mode` to `fallback`; `.github/idd/config.json`
-schema validation separately rejects an unsupported `mode` value or
-any key other than `command`/`mode` before the file is accepted.
+Configuration-time fail-safe (distinct from the runtime behavior
+above): a non-object `critiqueLoop.delegate`, or one whose `command` is
+missing, empty, whitespace-only, or non-string, is treated the same as
+an absent delegate — C1 uses the per-agent mechanism, never attempting
+the delegate at all. A valid `command` paired with an unrecognized
+`mode` value still configures the delegate, defaulting `mode` to
+`fallback`; `.github/idd/config.json` schema validation separately
+rejects an unsupported `mode` value or any key other than
+`command`/`mode` before the file is accepted.
 
 The C-phase's objective diff validation floor described below applies
-**uniformly** whether a delegate is configured or not, in either mode,
+**uniformly** whether a delegate is configured or not, in every mode,
 and regardless of what the delegate reports — this surface changes
 which mechanism produces critique findings, never the load-bearing
-`fix-validate` gate.
+`fix-validate` gate. That holds for the fail-closed hold above too: the
+hold stops a vacuous clean verdict from advancing, it never lets one
+through.
 
 When a runtime falls back to structured same-response self-review
 instead of an independent subagent mechanism (see the table above; a

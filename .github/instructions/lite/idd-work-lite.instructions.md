@@ -221,10 +221,14 @@ ad hoc or improvise worker-side authoring.
 ### C2 — Check for issues
 
 1. If the critique pass reports one or more issues, continue to C3.
-2. Otherwise, if the critique pass reports zero issues, check the `fix-validate`
+2. Otherwise, if zero issues came back because no mechanism produced a readable
+   findings list — a `critiqueLoop.delegate` `mode` of `on-success` or `never`
+   whose delegate failed — that verdict is vacuous, not clean. Post a hold and
+   stop; do not treat it as zero issues.
+3. Otherwise, if the critique pass reports zero issues, check the `fix-validate`
    floor.
-3. If the floor has not passed, continue to C5 to repair validation.
-4. If the floor has passed, open and follow `idd-pr-submit-lite.instructions.md`
+4. If the floor has not passed, continue to C5 to repair validation.
+5. If the floor has passed, open and follow `idd-pr-submit-lite.instructions.md`
    now.
 
 ### C3 — Score issues
