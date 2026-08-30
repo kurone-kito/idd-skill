@@ -942,10 +942,16 @@ introduced. Absent `critiqueLoop.delegate` entirely keeps today's
 per-agent-only behavior with zero change.
 
 Configuration-time fail-safe (distinct from the runtime behavior
-above): a non-object `critiqueLoop.delegate`, or one whose `command` is
-missing, empty, whitespace-only, or non-string, is treated the same as
-an absent delegate — C1 uses the per-agent mechanism, never attempting
-the delegate at all. A present but **unrecognized `mode`** is
+above): a non-object `critiqueLoop.delegate`, one whose `command` is
+missing, empty, whitespace-only, non-string, or supplied through the
+prototype chain rather than as an own property, or one carrying any key
+beyond `command`/`mode`, is treated the same as an absent delegate — C1
+uses the per-agent mechanism, never attempting the delegate at all. A
+present but non-object **`critiqueLoop`** parent (a string, array, or
+`null`) is a repository-local configuration error rather than an absent
+key: it fails closed to the per-agent mechanism and, like a malformed
+`delegate`, blocks user-global inheritance instead of letting a global
+delegate stand in for it. A present but **unrecognized `mode`** is
 unusable the same way: effective C1 resolution reports a
 repository-local one as malformed, so it neither runs nor inherits the
 user-global layer, and reports an unusable user-global fragment as
@@ -1004,10 +1010,16 @@ disabling any inherited delegate.
 
 The global file lives at `$XDG_CONFIG_HOME/idd-skill/config.json`,
 falling back to `$HOME/.config/idd-skill/config.json` when
-`XDG_CONFIG_HOME` is unset or not a **qualified root** (a usable
-absolute path: POSIX `/…`, or a Windows drive letter or UNC path — a
-relative or otherwise unsafe value is ignored rather than joined
-against the process's working directory). A missing, unreadable,
+`XDG_CONFIG_HOME` is unset or not a **qualified root**. A qualified
+root is judged against the **running platform**, not accepted in any
+form: on Windows only a drive-letter root (`C:\…` or `C:/…`) or a UNC
+root (`\\server\…`) qualifies, and on POSIX only a `/…` path does —
+`//…` is excluded there, as is a Windows-shaped value, and a
+current-drive root such as `\config` is excluded on Windows even though
+`path.isAbsolute` calls it absolute. A relative or otherwise unqualified
+value is ignored rather than joined against the process's working
+directory, so the global config can never resolve inside the checkout
+under review. A missing, unreadable,
 invalid-JSON, or non-object global file is silently treated as
 absent — this layer is opt-in and never required for OSS adopters.
 Only the

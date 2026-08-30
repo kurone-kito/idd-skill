@@ -215,28 +215,23 @@ requirements are satisfied, whether coverage is adequate, and whether any other
 problems exist. Every mechanism below answers those questions. They are what a
 pass asks, never a separate pass to run on top of the one that ran.
 
-1. Read `critiqueLoop.delegate` in `.github/idd/config.json`. If that key is
-   absent, a local runtime may inherit one from a user-global file. Use
-   `$XDG_CONFIG_HOME/idd-skill/config.json` only when `XDG_CONFIG_HOME` is a
-   **qualified root** — an absolute POSIX path, a Windows drive letter, or a
-   UNC path. Ignore a relative or otherwise unsafe value rather than joining it
-   against the current directory, and fall back to
-   `$HOME/.config/idd-skill/config.json`; if neither root qualifies, use no
-   global file at all.
-2. A delegate is **usable** only when every one of these holds. Read this as a
-   closed list: anything it does not admit is **unusable** — never merely
-   failed.
-   - The value is an object: not `null`, not an array.
-   - Its keys are exactly `command`, plus optionally `mode`. **Any** additional
-     key, including a typo, makes it unusable.
-   - `command` is its own property (not inherited) and is a string carrying at
-     least one non-whitespace character.
-   - `mode`, when present, is one of the four values in step 5.
-
-   A repository-local unusable value stops there: it never runs, and it never
-   inherits the user-global layer. An unusable user-global fragment counts as
-   absent instead. This configuration fail-safe is separate from the runtime
-   failure in step 4, and an unusable delegate never applies `mode` at all.
+1. Resolve the effective delegate. It comes from `critiqueLoop.delegate` in
+   `.github/idd/config.json`, or — only when the repository config supplies
+   none — from the operator's user-global file, which a local runtime may
+   inherit.
+2. Do not judge the configuration against a checklist copied into this file. A
+   value is **usable** only when it satisfies the effective-resolution contract
+   in `docs/idd-workflow.md`'s "Critique pass invocation" and "User-global
+   critique delegate default" sections, which define the platform-specific
+   config-root rules, the accepted `critiqueLoop` and `delegate` shapes, the
+   exact `command`/`mode` key set, and the four `mode` values. That document is
+   the single definition; anything it rejects is **unusable** here, never
+   merely failed. Three consequences apply directly to the steps below:
+   - an unusable value in the repository config blocks user-global inheritance
+     entirely — it never runs, and nothing is inherited in its place;
+   - an unusable user-global fragment counts as absent instead;
+   - an unusable delegate never applies `mode` at all. This configuration
+     fail-safe is separate from the runtime failure in step 4.
 3. If no usable delegate remains, run the per-agent critique pass on the branch
    diff and go to step 7.
 4. Otherwise run the delegate's `command` against the branch diff. It **failed**
