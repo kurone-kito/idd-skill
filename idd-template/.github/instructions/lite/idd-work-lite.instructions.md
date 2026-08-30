@@ -210,20 +210,39 @@ requirements are satisfied, whether coverage is adequate, and whether any other
 problems exist. Every mechanism below answers those questions. They are what a
 pass asks, never a separate pass to run on top of the one that ran.
 
-1. Resolve the effective delegate. It comes from `critiqueLoop.delegate` in
-   `.github/idd/config.json`, or — only when the repository config supplies
-   none — from the operator's user-global file, which a local runtime may
-   inherit.
-2. Do not judge the configuration against a checklist copied into this file. A
-   value is **usable** only when it satisfies the effective-resolution contract
-   in `docs/idd-workflow.md`'s "Critique pass invocation" and "User-global
-   critique delegate default" sections, which define the platform-specific
-   config-root rules, the accepted `critiqueLoop` and `delegate` shapes, the
-   exact `command`/`mode` key set, and the four `mode` values. That document is
-   the single definition; anything it rejects is **unusable** here, never
-   merely failed. Three consequences apply directly to the steps below:
-   - an unusable value in the repository config blocks user-global inheritance
-     entirely — it never runs, and nothing is inherited in its place;
+1. Find the delegate configuration. Read `critiqueLoop.delegate` in
+   `.github/idd/config.json` first.
+   - Only when the repository config has no `critiqueLoop` key, or has one
+     whose `delegate` key is absent, may a local runtime read a user-global
+     file instead.
+   - Use `$XDG_CONFIG_HOME/idd-skill/config.json` only when
+     `XDG_CONFIG_HOME` is a qualified root **for the platform you are running
+     on**. On Windows that is a drive root (`C:\…` or `C:/…`) or a UNC root
+     (`\\server\…`); `\config` does not qualify. On POSIX it is a path
+     starting with `/` but not with `//`.
+   - A Windows-shaped value on POSIX, or a POSIX-shaped value on Windows, does
+     not qualify. Never join an unqualified value against the current
+     directory.
+   - Otherwise use `$HOME/.config/idd-skill/config.json`. If neither root
+     qualifies, use no user-global file.
+   - Treat a missing, unreadable, invalid-JSON, or non-object user-global file
+     as absent.
+2. Decide whether that configuration is **usable**. Each bullet below makes it
+   **unusable** — never merely failed.
+   - `critiqueLoop` is present but is not an object: a string, an array, or
+     `null`.
+   - `delegate` is `null`, the explicit disable.
+   - `delegate` is not an object, or is an array.
+   - `delegate` carries any key other than `command` and `mode`, a typo
+     included.
+   - `command` is not `delegate`'s own property, is not a string, or holds no
+     non-whitespace character.
+   - `mode` is present but is not one of the four values in step 5.
+
+   An absent `critiqueLoop` or `delegate` key is not unusable; it simply means
+   no delegate at this layer. Then apply the verdict:
+   - an unusable value in the repository config never runs, and it blocks the
+     user-global layer — nothing is inherited in its place;
    - an unusable user-global fragment counts as absent instead;
    - an unusable delegate never applies `mode` at all. This configuration
      fail-safe is separate from the runtime failure in step 4.
