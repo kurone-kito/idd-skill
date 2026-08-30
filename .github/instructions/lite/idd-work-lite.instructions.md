@@ -211,24 +211,33 @@ ad hoc or improvise worker-side authoring.
 ### C1 — Critique pass
 
 1. Read `critiqueLoop.delegate` in `.github/idd/config.json`. If the key is
-   JSON `null`, there is no delegate. If the key is absent, a local runtime may
-   inherit one from `$XDG_CONFIG_HOME/idd-skill/config.json` (or
-   `$HOME/.config/idd-skill/config.json`); an explicit `null` never inherits.
-2. If there is no delegate, run the per-agent critique pass on the branch diff
-   and go to step 6.
-3. Otherwise run the delegate's `command` against the branch diff. It **failed**
+   absent, a local runtime may inherit one from
+   `$XDG_CONFIG_HOME/idd-skill/config.json` (or
+   `$HOME/.config/idd-skill/config.json`); an explicit JSON `null` never
+   inherits.
+2. Treat the delegate as **absent** — never as failed — when its value is
+   `null`, is not an object, or its `command` is missing, empty,
+   whitespace-only, or not a string. This configuration fail-safe is separate
+   from the runtime failure in step 4, and an absent delegate never applies
+   `mode` at all.
+3. If the delegate is absent, run the per-agent critique pass on the branch
+   diff and go to step 7.
+4. Otherwise run the delegate's `command` against the branch diff. It **failed**
    if the command is absent, exits non-zero, times out, or its output cannot be
    read as a findings list. Otherwise it **succeeded** — including when it
-   returns a readable list with no issues in it.
-4. Read `mode` (default `fallback`) to decide whether the per-agent pass also
-   runs: `combined` always, without waiting on the delegate's outcome;
-   `fallback` only when the delegate failed; `on-success` only when it
-   succeeded; `never` not at all. Run the per-agent pass when `mode` says to.
-5. If both ran, union their reported issues.
-6. Ask whether the implementation is correct, whether the issue's requirements
+   returns a readable list with no issues in it. Failure only decides whether
+   the per-agent pass runs in step 5; it never discards a readable findings
+   list the delegate did emit, which stays part of this pass's output.
+5. Read `mode` (default `fallback`; an unrecognized value also means
+   `fallback`) to decide whether the per-agent pass also runs: `combined`
+   always, without waiting on the delegate's outcome; `fallback` only when the
+   delegate failed; `on-success` only when it succeeded; `never` not at all.
+   Run the per-agent pass when `mode` says to.
+6. If both ran, union their reported issues.
+7. Ask whether the implementation is correct, whether the issue's requirements
    are satisfied, whether coverage is adequate, and whether any other problems
    exist.
-7. The floor (referenced in C2, C4, and C5) is `fix-validate` passing against
+8. The floor (referenced in C2, C4, and C5) is `fix-validate` passing against
    the branch's current HEAD. Re-run it after every new commit; it does not
    substitute for D2's `pre-push-validate` gate.
 
@@ -237,10 +246,11 @@ ad hoc or improvise worker-side authoring.
 1. If the critique pass reports one or more issues, continue to C3.
 2. Otherwise, if zero issues came back because no mechanism produced a readable
    findings list — a `critiqueLoop.delegate` `mode` of `on-success` or `never`
-   whose delegate failed at C1 step 3 — that verdict is vacuous, not clean. Post
-   a hold and stop; do not treat it as zero issues. A delegate that succeeded
-   and returned a readable list with no issues in it is not this case: that is a
-   genuine zero-issue result, so continue to step 3.
+   whose delegate failed at C1 step 4 without emitting one — that verdict is
+   vacuous, not clean. Post a hold and stop; do not treat it as zero issues.
+   Neither a delegate that succeeded and returned a readable list with no issues
+   in it, nor one that failed but still emitted a readable list, is this case:
+   both are genuine results, so continue to step 3.
 3. Otherwise, if the critique pass reports zero issues, check the `fix-validate`
    floor.
 4. If the floor has not passed, continue to C5 to repair validation.
