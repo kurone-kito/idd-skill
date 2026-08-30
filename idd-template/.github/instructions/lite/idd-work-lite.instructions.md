@@ -213,14 +213,16 @@ pass asks, never a separate pass to run on top of the one that ran.
 1. Read `critiqueLoop.delegate` in `.github/idd/config.json`. If the key is
    absent, a local runtime may inherit one from
    `$XDG_CONFIG_HOME/idd-skill/config.json` (or
-   `$HOME/.config/idd-skill/config.json`); an explicit JSON `null` never
-   inherits.
-2. Treat the delegate as **absent** — never as failed — when its value is
-   `null`, is not an object, or its `command` is missing, empty,
-   whitespace-only, or not a string. This configuration fail-safe is separate
-   from the runtime failure in step 4, and an absent delegate never applies
-   `mode` at all.
-3. If the delegate is absent, run the per-agent critique pass on the branch
+   `$HOME/.config/idd-skill/config.json`).
+2. A delegate is **unusable** — never merely failed — when its value is `null`,
+   is not an object, its `command` is missing, empty, whitespace-only, or not a
+   string, or its `mode` is present but is not one of the four values in step
+   5. A repository-local unusable value stops there: it never runs, and it
+   never inherits the user-global layer. An unusable user-global fragment
+   counts as absent instead. This configuration fail-safe is separate from the
+   runtime failure in step 4, and an unusable delegate never applies `mode` at
+   all.
+3. If no usable delegate remains, run the per-agent critique pass on the branch
    diff and go to step 7.
 4. Otherwise run the delegate's `command` against the branch diff. It **failed**
    if the command is absent, exits non-zero, times out, or its output cannot be
@@ -228,8 +230,9 @@ pass asks, never a separate pass to run on top of the one that ran.
    returns a readable list with no issues in it. Failure only decides whether
    the per-agent pass runs in step 5; it never discards a readable findings
    list the delegate did emit, which stays part of this pass's output.
-5. Read `mode` (default `fallback`; an unrecognized value also means
-   `fallback`) to decide whether the per-agent pass also runs: `combined`
+5. Read `mode` (`fallback` when the key is absent; a present unrecognized value
+   was already routed out by step 2) to decide whether the per-agent pass also
+   runs: `combined`
    always, without waiting on the delegate's outcome; `fallback` only when the
    delegate failed; `on-success` only when it succeeded; `never` not at all.
    Run the per-agent pass when `mode` says to. When `mode` withholds it, do not

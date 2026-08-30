@@ -945,11 +945,19 @@ Configuration-time fail-safe (distinct from the runtime behavior
 above): a non-object `critiqueLoop.delegate`, or one whose `command` is
 missing, empty, whitespace-only, or non-string, is treated the same as
 an absent delegate — C1 uses the per-agent mechanism, never attempting
-the delegate at all. A valid `command` paired with an unrecognized
-`mode` value still configures the delegate, defaulting `mode` to
-`fallback`; `.github/idd/config.json` schema validation separately
-rejects an unsupported `mode` value or any key other than
-`command`/`mode` before the file is accepted.
+the delegate at all. A present but **unrecognized `mode`** is
+unusable the same way: effective C1 resolution reports a
+repository-local one as malformed, so it neither runs nor inherits the
+user-global layer, and reports an unusable user-global fragment as
+absent. Either way C1 falls back to the per-agent mechanism rather than
+running the delegate under an assumed default. (A direct
+`normalizePolicyConfig` caller — a different consumer, not the C1
+resolution path — still collapses such a value to the `fallback`
+default, which is why both behaviors have their own regression tests.)
+`.github/idd/config.json` schema validation separately rejects an
+unsupported `mode` value or any key other than `command`/`mode` before
+the file is accepted, so this state normally reaches C1 only through
+the unvalidated user-global file.
 
 The C-phase's objective diff validation floor described below applies
 **uniformly** whether a delegate is configured or not, in every mode,
