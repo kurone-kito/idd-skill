@@ -205,21 +205,83 @@ ad hoc or improvise worker-side authoring.
 
 ### C1 — Critique pass
 
-1. Run a critique pass on the branch diff.
-2. Ask whether the implementation is correct, whether the issue's requirements
-   are satisfied, whether coverage is adequate, and whether any other problems
-   exist.
-3. The floor (referenced in C2, C4, and C5) is `fix-validate` passing against
+A critique pass asks whether the implementation is correct, whether the issue's
+requirements are satisfied, whether coverage is adequate, and whether any other
+problems exist. Every mechanism below answers those questions. They are what a
+pass asks, never a separate pass to run on top of the one that ran.
+
+1. Find the delegate configuration. Read `critiqueLoop.delegate` in
+   `.github/idd/config.json` first.
+   - Only when the repository config has no `critiqueLoop` key, or has one
+     whose `delegate` key is absent, may a local runtime read a user-global
+     file instead.
+   - Use `$XDG_CONFIG_HOME/idd-skill/config.json` only when
+     `XDG_CONFIG_HOME` is a qualified root **for the platform you are running
+     on**. On Windows that is a drive root (`C:\…` or `C:/…`) or a UNC root
+     (`\\server\…`); `\config` does not qualify. On POSIX it is a path
+     starting with `/` but not with `//`.
+   - A Windows-shaped value on POSIX, or a POSIX-shaped value on Windows, does
+     not qualify. Never join an unqualified value against the current
+     directory.
+   - Otherwise use `$HOME/.config/idd-skill/config.json`. If neither root
+     qualifies, use no user-global file.
+   - Treat a missing, unreadable, invalid-JSON, or non-object user-global file
+     as absent.
+2. Decide whether that configuration is **usable**. Each bullet below makes it
+   **unusable** — never merely failed.
+   - `critiqueLoop` is present but is not an object: a string, an array, or
+     `null`.
+   - `delegate` is `null`, the explicit disable.
+   - `delegate` is not an object, or is an array.
+   - `delegate` carries any key other than `command` and `mode`, a typo
+     included.
+   - `command` is not `delegate`'s own property, is not a string, or holds no
+     non-whitespace character.
+   - `mode` is present but is not one of the four values in step 5.
+
+   An absent `critiqueLoop` or `delegate` key is not unusable; it simply means
+   no delegate at this layer. Then apply the verdict:
+   - an unusable value in the repository config never runs, and it blocks the
+     user-global layer — nothing is inherited in its place;
+   - an unusable user-global fragment counts as absent instead;
+   - an unusable delegate never applies `mode` at all. This configuration
+     fail-safe is separate from the runtime failure in step 4.
+3. If no usable delegate remains, run the per-agent critique pass on the branch
+   diff and go to step 7.
+4. Otherwise run the delegate's `command` against the branch diff. It **failed**
+   if the command is absent, exits non-zero, times out, or its output cannot be
+   read as a findings list. Otherwise it **succeeded** — including when it
+   returns a readable list with no issues in it. Failure only decides whether
+   the per-agent pass runs in step 5; it never discards a readable findings
+   list the delegate did emit, which stays part of this pass's output.
+5. Read `mode` (`fallback` when the key is absent; a present unrecognized value
+   was already routed out by step 2) to decide whether the per-agent pass also
+   runs: `combined`
+   always, without waiting on the delegate's outcome; `fallback` only when the
+   delegate failed; `on-success` only when it succeeded; `never` not at all.
+   Run the per-agent pass when `mode` says to. When `mode` withholds it, do not
+   answer the questions above yourself instead — the delegate's findings are
+   this pass's whole output, which is the duplicate cost `never` exists to
+   avoid.
+6. If both ran, union their reported issues.
+7. The floor (referenced in C2, C4, and C5) is `fix-validate` passing against
    the branch's current HEAD. Re-run it after every new commit; it does not
    substitute for D2's `pre-push-validate` gate.
 
 ### C2 — Check for issues
 
 1. If the critique pass reports one or more issues, continue to C3.
-2. Otherwise, if the critique pass reports zero issues, check the `fix-validate`
+2. Otherwise, if zero issues came back because no mechanism produced a readable
+   findings list — a `critiqueLoop.delegate` `mode` of `on-success` or `never`
+   whose delegate failed at C1 step 4 without emitting one — that verdict is
+   vacuous, not clean. Post a hold and stop; do not treat it as zero issues.
+   Neither a delegate that succeeded and returned a readable list with no issues
+   in it, nor one that failed but still emitted a readable list, is this case:
+   both are genuine results, so continue to step 3.
+3. Otherwise, if the critique pass reports zero issues, check the `fix-validate`
    floor.
-3. If the floor has not passed, continue to C5 to repair validation.
-4. If the floor has passed, open and follow `idd-pr-submit-lite.instructions.md`
+4. If the floor has not passed, continue to C5 to repair validation.
+5. If the floor has passed, open and follow `idd-pr-submit-lite.instructions.md`
    now.
 
 ### C3 — Score issues

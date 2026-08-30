@@ -29,7 +29,12 @@ const EXTERNAL_CHECK_WAIVER_MODES = new Set([
   'maintainer-authorized',
 ]);
 const CHECK_SELECTOR_MATCH_MODES = new Set(['exact', 'glob']);
-const CRITIQUE_LOOP_DELEGATE_MODES = new Set(['fallback', 'combined']);
+const CRITIQUE_LOOP_DELEGATE_MODES = new Set([
+  'fallback',
+  'combined',
+  'on-success',
+  'never',
+]);
 const LEGACY_ADVISORY_CAP_ROUTE_ALIASES = new Map([
   ['phase-default', 'phase-specific'],
   ['strict-hold', 'hold'],

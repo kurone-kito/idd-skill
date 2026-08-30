@@ -533,12 +533,12 @@
               "type": "string",
               "minLength": 1,
               "pattern": "\\S",
-              "description": "Shell command C1 runs against the branch's current diff, in place of (or alongside, under `combined` mode) the per-agent Critique pass invocation table. Required within this object; must contain a non-whitespace character (the `\\S` pattern rejects a whitespace-only value the same way `worktreeGuard.branchPatterns` does, instead of silently accepting a non-actionable command)."
+              "description": "Shell command C1 runs against the branch's current diff, in place of or alongside the per-agent Critique pass invocation table, depending on `mode`. Required within this object; must contain a non-whitespace character (the `\\S` pattern rejects a whitespace-only value the same way `worktreeGuard.branchPatterns` does, instead of silently accepting a non-actionable command)."
             },
             "mode": {
               "type": "string",
-              "enum": ["fallback", "combined"],
-              "description": "`fallback` (default): run `command`; fall through to the per-agent mechanism when it is absent, exits non-zero, times out, or its output cannot be read as a findings list. `combined`: run both every pass and union their reported issues."
+              "enum": ["fallback", "combined", "on-success", "never"],
+              "description": "Selects when the per-agent Critique pass invocation table also runs. `fallback` (default): only when the delegate fails. `combined`: always, without consulting the delegate's outcome — the one value that does not observe it — unioning both mechanisms' reported issues every pass. `on-success`: only when the delegate succeeded, unioning both the same way. `never`: not at all. \"Delegate failed\" means the same set of conditions in every value — the command is absent, exits non-zero, times out, or its output cannot be read as a findings list — and is never narrowed to the process exit status alone. Under `on-success` and `never` a failed delegate can leave C1 with no findings at all; C1 then records a hold rather than a clean zero-issues verdict. See `docs/idd-workflow.md`'s Critique pass invocation section for the full table and the fail-closed hold."
             }
           },
           "description": "Repository-configurable C1 critique delegate. Optional; absent keeps today's per-agent-only behavior. An explicit JSON `null` is the local disable sentinel: it prevents inheriting a user-global delegate without installing a local command. `required` and `properties` apply only when the value is an object."

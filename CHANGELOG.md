@@ -14,6 +14,18 @@ discipline and has no tag.
 
 ## [Unreleased]
 
+### Added
+
+- `critiqueLoop.delegate.mode` gains `on-success` and `never`,
+  completing the answer to "when does the per-agent critique pass also
+  run": always (`combined`), only on delegate failure (`fallback`, the
+  unchanged default), only on delegate success (`on-success`), or not
+  at all (`never`). `on-success` suits a reviewer whose non-zero exit
+  means _findings exist_ rather than _the tool broke_. Under the two
+  new values a failed delegate can leave C1 with no findings, so C1
+  records a fail-closed hold instead of a clean zero-issues verdict.
+  Both existing values keep their current name and meaning.
+
 ### Changed
 
 - **BREAKING**: the distributed merge-policy default flips from
