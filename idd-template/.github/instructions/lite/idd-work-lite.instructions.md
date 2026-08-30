@@ -205,6 +205,11 @@ ad hoc or improvise worker-side authoring.
 
 ### C1 — Critique pass
 
+A critique pass asks whether the implementation is correct, whether the issue's
+requirements are satisfied, whether coverage is adequate, and whether any other
+problems exist. Every mechanism below answers those questions. They are what a
+pass asks, never a separate pass to run on top of the one that ran.
+
 1. Read `critiqueLoop.delegate` in `.github/idd/config.json`. If the key is
    absent, a local runtime may inherit one from
    `$XDG_CONFIG_HOME/idd-skill/config.json` (or
@@ -227,12 +232,12 @@ ad hoc or improvise worker-side authoring.
    `fallback`) to decide whether the per-agent pass also runs: `combined`
    always, without waiting on the delegate's outcome; `fallback` only when the
    delegate failed; `on-success` only when it succeeded; `never` not at all.
-   Run the per-agent pass when `mode` says to.
+   Run the per-agent pass when `mode` says to. When `mode` withholds it, do not
+   answer the questions above yourself instead — the delegate's findings are
+   this pass's whole output, which is the duplicate cost `never` exists to
+   avoid.
 6. If both ran, union their reported issues.
-7. Ask whether the implementation is correct, whether the issue's requirements
-   are satisfied, whether coverage is adequate, and whether any other problems
-   exist.
-8. The floor (referenced in C2, C4, and C5) is `fix-validate` passing against
+7. The floor (referenced in C2, C4, and C5) is `fix-validate` passing against
    the branch's current HEAD. Re-run it after every new commit; it does not
    substitute for D2's `pre-push-validate` gate.
 
