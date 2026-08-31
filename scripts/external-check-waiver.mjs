@@ -543,10 +543,21 @@ export async function runExternalCheckWaiver(options = {}) {
             .mode,
         })
       : null;
+  // The marker this invocation would post defines the binding a reusable
+  // waiver must share; the predecessor claim is accepted too, matching the
+  // gate's one-hop takeover exception.
+  const allowedClaimIds = wouldPost
+    ? [
+        wouldPost.claimId,
+        String(report.linkedIssue?.activeClaim?.supersedes ?? ''),
+      ].filter((value) => value && value !== 'none')
+    : [];
   const existingWaiver = findReusableWaiverComment({
     comments: prComments,
     evidence: buildWaiverEvidence(prComments),
     checkSelector: report.requested.selector,
+    expectedHeadSha: wouldPost?.headSha ?? '',
+    allowedClaimIds,
   });
   if (existingWaiver) {
     const reusedReport = {
@@ -609,6 +620,8 @@ export async function runExternalCheckWaiver(options = {}) {
           comments: postWriteComments,
           evidence: buildWaiverEvidence(postWriteComments),
           checkSelector: report.requested.selector,
+          expectedHeadSha: wouldPost?.headSha ?? '',
+          allowedClaimIds,
         })
       : [];
   if (concurrentWaivers.length > 1) {
@@ -680,6 +693,8 @@ export function collectValidWaiverComments({
   comments,
   evidence,
   checkSelector,
+  expectedHeadSha = '',
+  allowedClaimIds = [],
 }) {
   const selector = String(checkSelector ?? '').trim();
   if (!selector) return [];
@@ -711,6 +726,30 @@ export function collectValidWaiverComments({
     )
       .trim()
       .toLowerCase();
+    // The evidence entry carries no HEAD or claim binding, so those are
+    // checked against the expected values directly. Without this a
+    // wrong-HEAD or wrong-claim marker sharing all four entry fields with a
+    // genuinely valid sibling would still correlate.
+    const normalizedHead = String(expectedHeadSha ?? '')
+      .trim()
+      .toLowerCase();
+    if (
+      normalizedHead &&
+      String(parsed.headSha ?? '')
+        .trim()
+        .toLowerCase() !== normalizedHead
+    ) {
+      continue;
+    }
+    const acceptedClaimIds = (allowedClaimIds ?? [])
+      .map((value) => String(value ?? '').trim())
+      .filter((value) => value.length > 0);
+    if (
+      acceptedClaimIds.length > 0 &&
+      !acceptedClaimIds.includes(String(parsed.claimId ?? '').trim())
+    ) {
+      continue;
+    }
     const matchesValidEntry = validForSelector.some(
       (entry) =>
         entry.authorLogin === commentAuthorLogin &&

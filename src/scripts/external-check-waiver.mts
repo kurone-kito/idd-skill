@@ -883,10 +883,21 @@ export async function runExternalCheckWaiver(
             .mode,
         })
       : null;
+  // The marker this invocation would post defines the binding a reusable
+  // waiver must share; the predecessor claim is accepted too, matching the
+  // gate's one-hop takeover exception.
+  const allowedClaimIds = wouldPost
+    ? [
+        wouldPost.claimId,
+        String(report.linkedIssue?.activeClaim?.supersedes ?? ''),
+      ].filter((value) => value && value !== 'none')
+    : [];
   const existingWaiver = findReusableWaiverComment({
     comments: prComments,
     evidence: buildWaiverEvidence(prComments),
     checkSelector: report.requested.selector,
+    expectedHeadSha: wouldPost?.headSha ?? '',
+    allowedClaimIds,
   });
   if (existingWaiver) {
     const reusedReport = {
@@ -953,6 +964,8 @@ export async function runExternalCheckWaiver(
           comments: postWriteComments,
           evidence: buildWaiverEvidence(postWriteComments),
           checkSelector: report.requested.selector,
+          expectedHeadSha: wouldPost?.headSha ?? '',
+          allowedClaimIds,
         })
       : [];
   if (concurrentWaivers.length > 1) {
@@ -1045,6 +1058,8 @@ export function findReusableWaiverComment(input: {
   comments: WaiverCommentPayload[] | null | undefined;
   evidence: ExternalCheckWaiverEvidence | null | undefined;
   checkSelector: string;
+  expectedHeadSha?: string;
+  allowedClaimIds?: string[];
 }): ReusableWaiver | null {
   return collectValidWaiverComments(input)[0] ?? null;
 }
@@ -1059,10 +1074,26 @@ export function collectValidWaiverComments({
   comments,
   evidence,
   checkSelector,
+  expectedHeadSha = '',
+  allowedClaimIds = [],
 }: {
   comments: WaiverCommentPayload[] | null | undefined;
   evidence: ExternalCheckWaiverEvidence | null | undefined;
   checkSelector: string;
+  /**
+   * #2328 (review): the HEAD the waiver must bind to. The summarizer keeps a
+   * wrong-HEAD marker out of `valid`, but a wrong-HEAD comment can still
+   * match a valid entry produced by a DIFFERENT comment when author, reason,
+   * expiry, and second all coincide — the entry carries no binding of its
+   * own to rule that out. Empty skips the check.
+   */
+  expectedHeadSha?: string;
+  /**
+   * #2328 (review): the claim ids a waiver may bind to — the active claim,
+   * plus its immediate predecessor for the gate's one-hop takeover
+   * exception. Empty skips the check.
+   */
+  allowedClaimIds?: string[];
 }): ReusableWaiver[] {
   const selector = String(checkSelector ?? '').trim();
   if (!selector) return [];
@@ -1095,6 +1126,30 @@ export function collectValidWaiverComments({
     )
       .trim()
       .toLowerCase();
+    // The evidence entry carries no HEAD or claim binding, so those are
+    // checked against the expected values directly. Without this a
+    // wrong-HEAD or wrong-claim marker sharing all four entry fields with a
+    // genuinely valid sibling would still correlate.
+    const normalizedHead = String(expectedHeadSha ?? '')
+      .trim()
+      .toLowerCase();
+    if (
+      normalizedHead &&
+      String(parsed.headSha ?? '')
+        .trim()
+        .toLowerCase() !== normalizedHead
+    ) {
+      continue;
+    }
+    const acceptedClaimIds = (allowedClaimIds ?? [])
+      .map((value) => String(value ?? '').trim())
+      .filter((value) => value.length > 0);
+    if (
+      acceptedClaimIds.length > 0 &&
+      !acceptedClaimIds.includes(String(parsed.claimId ?? '').trim())
+    ) {
+      continue;
+    }
     const matchesValidEntry = validForSelector.some(
       (entry) =>
         entry.authorLogin === commentAuthorLogin &&

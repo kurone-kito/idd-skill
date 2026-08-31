@@ -1540,3 +1540,69 @@ test('collectValidWaiverComments distinguishes entries by reason too (#2328 revi
     ['200'],
   );
 });
+
+test('collectValidWaiverComments rejects a wrong-HEAD or wrong-claim twin (#2328 review)', () => {
+  // The summarizer keeps a wrong-HEAD or wrong-claim marker out of `valid`,
+  // but the entry it produces for a genuine sibling carries no binding of its
+  // own. A twin sharing author, reason, expiry, and second would therefore
+  // still correlate to that entry unless the binding is checked directly.
+  const sameSecond = '2026-08-30T22:05:01Z';
+  const genuine = waiverComment({ id: 100, createdAt: sameSecond });
+  const wrongHead = {
+    ...genuine,
+    id: 101,
+    body: renderExternalCheckWaiverComment({
+      actor: 'kurone-kito',
+      agentId: 'claude-6043e89f',
+      claimId: 'claim-abc',
+      headSha: 'c'.repeat(40),
+      checkSelector: 'idd-advisory-convergence',
+      reason: 'rate limit',
+      expiresAt: '2026-08-31T10:00:00Z',
+    }),
+  };
+  const wrongClaim = {
+    ...genuine,
+    id: 102,
+    body: renderExternalCheckWaiverComment({
+      actor: 'kurone-kito',
+      agentId: 'claude-6043e89f',
+      claimId: 'claim-someone-else',
+      headSha: REUSE_HEAD_SHA,
+      checkSelector: 'idd-advisory-convergence',
+      reason: 'rate limit',
+      expiresAt: '2026-08-31T10:00:00Z',
+    }),
+  };
+  const evidence = evidenceWithValid([
+    {
+      checkSelector: 'idd-advisory-convergence',
+      expiresAt: '2026-08-31T10:00:00Z',
+      createdAt: sameSecond,
+    },
+  ]);
+
+  assert.deepEqual(
+    collectValidWaiverComments({
+      comments: [wrongHead, wrongClaim, genuine],
+      evidence,
+      checkSelector: 'idd-advisory-convergence',
+      expectedHeadSha: REUSE_HEAD_SHA,
+      allowedClaimIds: ['claim-abc'],
+    }).map((entry) => entry.commentId),
+    ['100'],
+  );
+
+  // The predecessor claim is accepted, matching the gate's one-hop takeover
+  // exception, so a takeover does not append a second marker.
+  assert.deepEqual(
+    collectValidWaiverComments({
+      comments: [wrongClaim, genuine],
+      evidence,
+      checkSelector: 'idd-advisory-convergence',
+      expectedHeadSha: REUSE_HEAD_SHA,
+      allowedClaimIds: ['claim-successor', 'claim-abc'],
+    }).map((entry) => entry.commentId),
+    ['100'],
+  );
+});
