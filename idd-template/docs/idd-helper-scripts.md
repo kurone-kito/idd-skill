@@ -999,6 +999,16 @@ default `instructions-only` profile keep using the written shell /
     one carrying the new value, matching the release-marker rule that a
     retry must never append an indistinguishable duplicate. To change an
     expiry, let the existing waiver lapse or supersede it deliberately.
+  - the reuse check and the post are **not** one atomic step, and GitHub
+    comments have no compare-and-swap -- the same limitation the claim
+    protocol records for its own markers. Two concurrent `--apply` runs
+    can therefore both observe no waiver and both post. That is reconciled
+    after the fact rather than prevented: the helper re-reads once the post
+    lands, and when more than one valid waiver exists for the selector it
+    reports them all in `concurrentWaivers`, warns on stderr, and names the
+    earliest, which is the one a deterministic reader resolves to. It does
+    not delete the extras -- removing a marker another session just posted
+    is a maintainer's call, not the helper's -- so minimize them by hand.
 
 ### External-check waiver contract
 

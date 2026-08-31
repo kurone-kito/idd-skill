@@ -6,6 +6,7 @@ import { test } from 'node:test';
 import { readAdvisoryConvergenceDeadlineMinutes } from '../src/scripts/advisory-wait-policy.mts';
 import {
   buildTrustedMarkerLogins,
+  collectValidWaiverComments,
   deriveGhApiStatusFromError,
   findReusableWaiverComment,
   parseArgs,
@@ -1103,4 +1104,203 @@ test('runExternalCheckWaiver fails closed when the comment list cannot be read (
   // An unreadable list must never be read as "no existing waiver": posting
   // then would recreate the duplicate this change removes.
   assert.equal(postCalls, 0);
+});
+
+// --- #2328 review: the check-then-post race ---------------------------------
+// The reuse scan and the POST are not one atomic step, and GitHub comments
+// have no compare-and-swap. Two concurrent applies can both see no waiver and
+// both post, so the duplicate is reconciled after the fact instead.
+
+test('collectValidWaiverComments returns every valid marker, earliest first (#2328 review)', () => {
+  const comments = [
+    waiverComment({ id: 200, createdAt: '2026-08-30T22:05:13Z' }),
+    waiverComment({ id: 100, createdAt: '2026-08-30T22:05:01Z' }),
+  ];
+  const found = collectValidWaiverComments({
+    comments,
+    evidence: evidenceWithValid([
+      {
+        checkSelector: 'idd-advisory-convergence',
+        expiresAt: '2026-08-31T10:00:00Z',
+        createdAt: '2026-08-30T22:05:01Z',
+      },
+      {
+        checkSelector: 'idd-advisory-convergence',
+        expiresAt: '2026-08-31T10:00:00Z',
+        createdAt: '2026-08-30T22:05:13Z',
+      },
+    ]),
+    checkSelector: 'idd-advisory-convergence',
+  });
+
+  assert.deepEqual(
+    found.map((entry) => entry.commentId),
+    ['100', '200'],
+  );
+  // The reuse scan is the first element of this same list, so the two can
+  // never disagree about which marker is authoritative.
+  assert.equal(
+    findReusableWaiverComment({
+      comments,
+      evidence: evidenceWithValid([
+        {
+          checkSelector: 'idd-advisory-convergence',
+          expiresAt: '2026-08-31T10:00:00Z',
+          createdAt: '2026-08-30T22:05:01Z',
+        },
+      ]),
+      checkSelector: 'idd-advisory-convergence',
+    })?.commentId,
+    '100',
+  );
+});
+
+test('runExternalCheckWaiver reports a waiver that raced its own post (#2328 review)', async () => {
+  let reads = 0;
+  const raced = waiverComment({
+    id: 300,
+    createdAt: '2026-08-30T22:29:00Z',
+    claimId: 'claim-20260830T222316Z-2328',
+  });
+  const mine = waiverComment({
+    id: 400,
+    createdAt: '2026-08-30T22:30:00Z',
+    claimId: 'claim-20260830T222316Z-2328',
+  });
+
+  const { report } = await runExternalCheckWaiver({
+    args: {
+      ...parseArgs([
+        '--pr',
+        '2325',
+        '--check',
+        'idd-advisory-convergence',
+        '--reason',
+        'rate limit',
+        '--expires-in',
+        'PT8H',
+        '--apply',
+        '--yes',
+        '--allow-closed-precondition',
+      ]),
+      repo: 'kurone-kito/idd-skill',
+      issueNumber: 2328,
+    },
+    actor: 'kurone-kito',
+    authority: { known: true, permission: 'admin', roleName: 'admin' },
+    pr: {
+      number: 2325,
+      state: 'OPEN',
+      url: 'https://github.com/kurone-kito/idd-skill/pull/2325',
+      headRefName: 'issue/2328-fix-external-check-waiver-refuse-waiver',
+      headRefOid: REUSE_HEAD_SHA,
+      statusCheckRollup: [
+        {
+          __typename: 'CheckRun',
+          name: 'idd-advisory-convergence',
+          status: 'COMPLETED',
+          conclusion: 'FAILURE',
+        },
+      ],
+    },
+    issueCandidates: [
+      {
+        number: 2328,
+        url: 'https://github.com/kurone-kito/idd-skill/issues/2328',
+        activeClaim: {
+          agentId: 'claude-6043e89f',
+          claimId: 'claim-20260830T222316Z-2328',
+          supersedes: 'none',
+          branch: 'issue/2328-fix-external-check-waiver-refuse-waiver',
+          createdAt: '2026-08-30T22:23:26Z',
+        },
+      },
+    ],
+    // First read: empty, so the reuse scan lets the post through. Later
+    // reads: a competitor's marker plus this run's own — the race.
+    prComments: () => {
+      reads += 1;
+      return reads === 1 ? [] : [raced, mine];
+    },
+    headCommittedAt: '2026-08-30T18:13:24Z',
+    now: new Date('2026-08-30T22:30:00Z'),
+    isTTY: false,
+    postComment: () => ({ html_url: 'https://example.invalid/posted' }),
+  });
+
+  assert.equal(report?.applied, true);
+  assert.deepEqual(
+    report?.concurrentWaivers?.map((entry) => entry.commentId),
+    ['300', '400'],
+  );
+});
+
+test('runExternalCheckWaiver reports no race when its own marker stands alone (#2328 review)', async () => {
+  let reads = 0;
+  const mine = waiverComment({
+    id: 400,
+    createdAt: '2026-08-30T22:30:00Z',
+    claimId: 'claim-20260830T222316Z-2328',
+  });
+
+  const { report } = await runExternalCheckWaiver({
+    args: {
+      ...parseArgs([
+        '--pr',
+        '2325',
+        '--check',
+        'idd-advisory-convergence',
+        '--reason',
+        'rate limit',
+        '--expires-in',
+        'PT8H',
+        '--apply',
+        '--yes',
+        '--allow-closed-precondition',
+      ]),
+      repo: 'kurone-kito/idd-skill',
+      issueNumber: 2328,
+    },
+    actor: 'kurone-kito',
+    authority: { known: true, permission: 'admin', roleName: 'admin' },
+    pr: {
+      number: 2325,
+      state: 'OPEN',
+      url: 'https://github.com/kurone-kito/idd-skill/pull/2325',
+      headRefName: 'issue/2328-fix-external-check-waiver-refuse-waiver',
+      headRefOid: REUSE_HEAD_SHA,
+      statusCheckRollup: [
+        {
+          __typename: 'CheckRun',
+          name: 'idd-advisory-convergence',
+          status: 'COMPLETED',
+          conclusion: 'FAILURE',
+        },
+      ],
+    },
+    issueCandidates: [
+      {
+        number: 2328,
+        url: 'https://github.com/kurone-kito/idd-skill/issues/2328',
+        activeClaim: {
+          agentId: 'claude-6043e89f',
+          claimId: 'claim-20260830T222316Z-2328',
+          supersedes: 'none',
+          branch: 'issue/2328-fix-external-check-waiver-refuse-waiver',
+          createdAt: '2026-08-30T22:23:26Z',
+        },
+      },
+    ],
+    prComments: () => {
+      reads += 1;
+      return reads === 1 ? [] : [mine];
+    },
+    headCommittedAt: '2026-08-30T18:13:24Z',
+    now: new Date('2026-08-30T22:30:00Z'),
+    isTTY: false,
+    postComment: () => ({ html_url: 'https://example.invalid/posted' }),
+  });
+
+  assert.equal(report?.applied, true);
+  assert.equal(report?.concurrentWaivers, undefined);
 });

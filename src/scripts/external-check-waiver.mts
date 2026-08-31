@@ -266,6 +266,11 @@ interface ExternalCheckWaiverReport {
    * selector and reused it rather than appending a second marker.
    */
   reusedWaiver?: ReusableWaiver;
+  /**
+   * #2328 (review): every valid waiver for this selector after the POST,
+   * present only when a concurrent apply raced this one into a duplicate.
+   */
+  concurrentWaivers?: ReusableWaiver[];
 }
 
 /** Parsed CLI arguments. */
@@ -815,11 +820,14 @@ export async function runExternalCheckWaiver(
   // #2328: appending is not idempotent, so look for an existing valid waiver
   // for this selector first. A repeated `--apply` previously posted a second
   // identical marker, leaving two live waivers on the pull request.
-  const prComments =
+  // Repeatable: called again after the POST for the concurrency reconcile
+  // below, so the second read observes anything that landed meanwhile.
+  const readPrComments = (): WaiverCommentPayload[] =>
     typeof options.prComments === 'function'
       ? options.prComments()
       : (options.prComments ??
         fetchPrComments({ owner, repo: name, prNumber: args.prNumber }));
+  const prComments = readPrComments();
   // The marker this invocation would post is the exact context a reusable
   // waiver must match, so recover the HEAD and claim from it rather than
   // threading them separately and risking a mismatch.
@@ -827,10 +835,11 @@ export async function runExternalCheckWaiver(
     report.body,
     new Date().toISOString(),
   );
-  const existingWaiver = wouldPost
-    ? findReusableWaiverComment({
-        comments: prComments,
-        evidence: summarizeExternalCheckWaivers(prComments, {
+  // One evidence build for both the pre-write scan and the post-write
+  // reconcile, so the two can never classify the same marker differently.
+  const buildWaiverEvidence = (comments: WaiverCommentPayload[]) =>
+    wouldPost
+      ? summarizeExternalCheckWaivers(comments, {
           prHeadSha: wouldPost.headSha,
           activeClaimId: wouldPost.claimId,
           // The gate accepts a waiver bound to the immediate predecessor
@@ -860,10 +869,13 @@ export async function runExternalCheckWaiver(
               .maxValidity,
           mode: normalizePolicyConfig(rawConfig).ciGate.externalCheckWaivers
             .mode,
-        }),
-        checkSelector: report.requested.selector,
-      })
-    : null;
+        })
+      : null;
+  const existingWaiver = findReusableWaiverComment({
+    comments: prComments,
+    evidence: buildWaiverEvidence(prComments),
+    checkSelector: report.requested.selector,
+  });
   if (existingWaiver) {
     const reusedReport = {
       ...report,
@@ -886,10 +898,37 @@ export async function runExternalCheckWaiver(
         `body=${report.body}`,
       ]) as PostedCommentPayload);
 
+  // #2328 (review): the reuse check above and this POST are not one atomic
+  // step, and GitHub comments have no compare-and-swap -- the same limitation
+  // `idd-claim.instructions.md` records for claim markers. Two concurrent
+  // `--apply` runs can therefore both observe no waiver and both post.
+  // Reconcile after the fact the way the claim protocol does: re-read, and
+  // when more than one valid waiver now exists for this selector, name them
+  // all and identify the earliest, which is the one a deterministic reader
+  // resolves to. Reporting rather than deleting -- removing a marker another
+  // session just posted is not this helper's call to make.
+  const concurrentWaivers = wouldPost
+    ? collectValidWaiverComments({
+        comments: readPrComments(),
+        evidence: buildWaiverEvidence(readPrComments()),
+        checkSelector: report.requested.selector,
+      })
+    : [];
+  if (concurrentWaivers.length > 1) {
+    const earliest = concurrentWaivers[0];
+    process.stderr.write(
+      `warning: ${concurrentWaivers.length} valid ${report.requested.selector} waivers now exist on PR #${args.prNumber} ` +
+        `(comment ids ${concurrentWaivers.map((entry) => entry.commentId).join(', ')}). ` +
+        `A concurrent apply raced this one. Readers resolve to the earliest, ${earliest?.commentId}; ` +
+        'minimize the rest so a later session does not have to disambiguate.\n',
+    );
+  }
+
   const appliedReport = {
     ...report,
     applied: true,
     commentUrl: String(result.html_url ?? result.url ?? ''),
+    ...(concurrentWaivers.length > 1 ? { concurrentWaivers } : {}),
   };
   renderReport(appliedReport, args.format);
   return { exitCode: 0, report: appliedReport };
@@ -960,7 +999,21 @@ export interface ReusableWaiver {
  * reuse-the-earliest rule, so a retry converges on one marker rather than
  * picking a different one each pass.
  */
-export function findReusableWaiverComment({
+export function findReusableWaiverComment(input: {
+  comments: WaiverCommentPayload[] | null | undefined;
+  evidence: ExternalCheckWaiverEvidence | null | undefined;
+  checkSelector: string;
+}): ReusableWaiver | null {
+  return collectValidWaiverComments(input)[0] ?? null;
+}
+
+/**
+ * #2328 (review): every valid waiver for one selector, earliest first. The
+ * reuse scan takes the first; the post-write reconcile uses the whole list to
+ * detect a concurrent apply that raced this one. Sharing this function keeps
+ * the two from classifying the same marker differently.
+ */
+export function collectValidWaiverComments({
   comments,
   evidence,
   checkSelector,
@@ -968,19 +1021,20 @@ export function findReusableWaiverComment({
   comments: WaiverCommentPayload[] | null | undefined;
   evidence: ExternalCheckWaiverEvidence | null | undefined;
   checkSelector: string;
-}): ReusableWaiver | null {
+}): ReusableWaiver[] {
   const selector = String(checkSelector ?? '').trim();
-  if (!selector) return null;
+  if (!selector) return [];
   const validForSelector = (evidence?.valid ?? []).filter(
     (entry) => entry.checkSelector === selector,
   );
-  if (validForSelector.length === 0) return null;
+  if (validForSelector.length === 0) return [];
 
   const ordered = [...(comments ?? [])].sort((left, right) =>
     String(left?.created_at ?? '').localeCompare(
       String(right?.created_at ?? ''),
     ),
   );
+  const found: ReusableWaiver[] = [];
   for (const comment of ordered) {
     const parsed = parseExternalCheckWaiverComment(
       String(comment?.body ?? ''),
@@ -993,14 +1047,14 @@ export function findReusableWaiverComment({
         entry.createdAt === parsed.createdAt,
     );
     if (!matchesValidEntry) continue;
-    return {
+    found.push({
       commentId: String(comment?.id ?? ''),
       commentUrl: String(comment?.html_url ?? comment?.url ?? ''),
       checkSelector: selector,
       expiresAt: parsed.expiresAt,
-    };
+    });
   }
-  return null;
+  return found;
 }
 
 function selectorRequestsGlob(selector: unknown): boolean {
