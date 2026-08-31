@@ -1009,6 +1009,11 @@ default `instructions-only` profile keep using the written shell /
     earliest, which is the one a deterministic reader resolves to. It does
     not delete the extras -- removing a marker another session just posted
     is a maintainer's call, not the helper's -- so minimize them by hand.
+    That post-write read degrades to a warning rather than failing closed:
+    the waiver already exists and the write cannot be undone, so a read
+    failure reports `reconcileInconclusive` and still renders the applied
+    result with its comment url. Only the pre-write read fails closed, where
+    an unreadable list could actually cause the duplicate.
 
 ### External-check waiver contract
 

@@ -1391,3 +1391,77 @@ test('runExternalCheckWaiver reads one post-write snapshot for the reconcile (#2
     ['300', '400'],
   );
 });
+
+test('runExternalCheckWaiver keeps the applied result when the reconcile read fails (#2328 review)', async () => {
+  // Fail-closed is correct before the post, where an unreadable list can
+  // cause a duplicate. After it the write already happened and is
+  // irreversible, so throwing would report a failed apply for successful
+  // work and withhold the comment URL.
+  let reads = 0;
+  const { report, exitCode } = await runExternalCheckWaiver({
+    args: {
+      ...parseArgs([
+        '--pr',
+        '2325',
+        '--check',
+        'idd-advisory-convergence',
+        '--reason',
+        'rate limit',
+        '--expires-in',
+        'PT8H',
+        '--apply',
+        '--yes',
+        '--allow-closed-precondition',
+      ]),
+      repo: 'kurone-kito/idd-skill',
+      issueNumber: 2328,
+    },
+    actor: 'kurone-kito',
+    authority: { known: true, permission: 'admin', roleName: 'admin' },
+    pr: {
+      number: 2325,
+      state: 'OPEN',
+      url: 'https://github.com/kurone-kito/idd-skill/pull/2325',
+      headRefName: 'issue/2328-fix-external-check-waiver-refuse-waiver',
+      headRefOid: REUSE_HEAD_SHA,
+      statusCheckRollup: [
+        {
+          __typename: 'CheckRun',
+          name: 'idd-advisory-convergence',
+          status: 'COMPLETED',
+          conclusion: 'FAILURE',
+        },
+      ],
+    },
+    issueCandidates: [
+      {
+        number: 2328,
+        url: 'https://github.com/kurone-kito/idd-skill/issues/2328',
+        activeClaim: {
+          agentId: 'claude-6043e89f',
+          claimId: 'claim-20260830T222316Z-2328',
+          supersedes: 'none',
+          branch: 'issue/2328-fix-external-check-waiver-refuse-waiver',
+          createdAt: '2026-08-30T22:23:26Z',
+        },
+      },
+    ],
+    // Read 1 (pre-write) succeeds and lets the post through; read 2
+    // (post-write reconcile) fails.
+    prComments: () => {
+      reads += 1;
+      if (reads === 1) return [];
+      throw new Error('gh api failed');
+    },
+    headCommittedAt: '2026-08-30T18:13:24Z',
+    now: new Date('2026-08-30T22:30:00Z'),
+    isTTY: false,
+    postComment: () => ({ html_url: 'https://example.invalid/posted' }),
+  });
+
+  assert.equal(exitCode, 0);
+  assert.equal(report?.applied, true);
+  assert.equal(report?.commentUrl, 'https://example.invalid/posted');
+  assert.equal(report?.reconcileInconclusive, true);
+  assert.equal(report?.concurrentWaivers, undefined);
+});

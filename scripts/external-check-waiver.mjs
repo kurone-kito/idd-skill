@@ -583,14 +583,34 @@ export async function runExternalCheckWaiver(options = {}) {
   // `comments`, so the newer marker would be dropped and the duplicate
   // silently missed — a snapshot mismatch inside the code that exists to
   // catch mismatches.
-  const postWriteComments = wouldPost ? readPrComments() : [];
-  const concurrentWaivers = wouldPost
-    ? collectValidWaiverComments({
-        comments: postWriteComments,
-        evidence: buildWaiverEvidence(postWriteComments),
-        checkSelector: report.requested.selector,
-      })
-    : [];
+  //
+  // Failing closed is right BEFORE the post, where an unreadable list can
+  // cause a duplicate. After it the waiver already exists and the write is
+  // irreversible, so throwing here would report a failed apply for work that
+  // succeeded and would withhold the posted comment URL — pushing an operator
+  // toward a retry that can only make things worse. Degrade to a warning and
+  // still render the applied result; only duplicate detection is lost.
+  let postWriteComments = [];
+  let reconcileInconclusive = false;
+  if (wouldPost) {
+    try {
+      postWriteComments = readPrComments();
+    } catch (error) {
+      reconcileInconclusive = true;
+      process.stderr.write(
+        `warning: the waiver was posted, but re-reading PR #${args.prNumber} comments failed, ` +
+          `so a concurrent duplicate could not be ruled out: ${String(error?.message ?? error)}\n`,
+      );
+    }
+  }
+  const concurrentWaivers =
+    wouldPost && !reconcileInconclusive
+      ? collectValidWaiverComments({
+          comments: postWriteComments,
+          evidence: buildWaiverEvidence(postWriteComments),
+          checkSelector: report.requested.selector,
+        })
+      : [];
   if (concurrentWaivers.length > 1) {
     const earliest = concurrentWaivers[0];
     process.stderr.write(
@@ -605,6 +625,7 @@ export async function runExternalCheckWaiver(options = {}) {
     applied: true,
     commentUrl: String(result.html_url ?? result.url ?? ''),
     ...(concurrentWaivers.length > 1 ? { concurrentWaivers } : {}),
+    ...(reconcileInconclusive ? { reconcileInconclusive: true } : {}),
   };
   renderReport(appliedReport, args.format);
   return { exitCode: 0, report: appliedReport };
