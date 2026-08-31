@@ -447,13 +447,20 @@ export function buildAdvisoryConvergenceWaiverPrecondition({
     : DEFAULT_ADVISORY_CONVERGENCE_DEADLINE_MINUTES;
   const resolvedHeadCommittedAt = String(headCommittedAt ?? '');
   const headCommittedAtValid = isValidIsoTimestamp(resolvedHeadCommittedAt);
-  const elapsedMinutes = headCommittedAtValid
-    ? Math.floor(
-        (new Date(now).getTime() -
-          new Date(resolvedHeadCommittedAt).getTime()) /
-          60000,
-      )
-    : null;
+  // Clamped exactly as `minutesBetweenIso` does, which is what
+  // `pre-merge-readiness` used before this extraction and what
+  // `advisory-convergence.mts` still uses: a HEAD commit dated ahead of the
+  // runner clock yields 0, never a negative elapsed. Subtracting directly
+  // would make this shared report disagree with the gate on a clock-skewed
+  // or deliberately future-dated commit.
+  const nowMs = Date.parse(now);
+  const headMs = Date.parse(resolvedHeadCommittedAt);
+  const elapsedMinutes =
+    headCommittedAtValid && Number.isFinite(nowMs) && Number.isFinite(headMs)
+      ? nowMs < headMs
+        ? 0
+        : Math.floor((nowMs - headMs) / 60000)
+      : null;
   const deadlinePassed =
     elapsedMinutes !== null && elapsedMinutes >= resolvedDeadlineMinutes;
   const resolvedTerminalUnavailable = terminalUnavailable === true;

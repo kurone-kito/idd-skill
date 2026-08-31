@@ -504,6 +504,12 @@ export async function runExternalCheckWaiver(options = {}) {
         evidence: summarizeExternalCheckWaivers(prComments, {
           prHeadSha: wouldPost.headSha,
           activeClaimId: wouldPost.claimId,
+          // The gate accepts a waiver bound to the immediate predecessor
+          // claim through its one-hop takeover exception. Omitting this
+          // would classify such a waiver `wrongClaim` here and append a
+          // second one after every takeover.
+          activeClaimSupersedes:
+            report.linkedIssue?.activeClaim?.supersedes ?? '',
           trustedMarkerLogins: [
             ...buildTrustedMarkerLogins({
               owner,

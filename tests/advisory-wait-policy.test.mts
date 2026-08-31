@@ -233,3 +233,29 @@ test('buildAdvisoryConvergenceWaiverPrecondition defaults the deadline when it i
     assert.equal(precondition.deadlineMinutes, 1440);
   }
 });
+
+test('buildAdvisoryConvergenceWaiverPrecondition clamps a future-dated HEAD commit to zero (#2328 review)', () => {
+  // `minutesBetweenIso` — what pre-merge-readiness used before this
+  // extraction, and what advisory-convergence still uses — returns 0 when the
+  // end precedes the start. A raw subtraction would report a negative elapsed
+  // and disagree with the gate on a clock-skewed or deliberately future-dated
+  // commit.
+  const { precondition } = buildAdvisoryConvergenceWaiverPrecondition({
+    headCommittedAt: '2026-08-31T06:00:00Z',
+    deadlineMinutes: 540,
+    now: '2026-08-30T22:00:00Z',
+  });
+  assert.equal(precondition.elapsedMinutes, 0);
+  assert.equal(precondition.deadlinePassed, false);
+  assert.equal(precondition.open, false);
+});
+
+test('buildAdvisoryConvergenceWaiverPrecondition reports null elapsed on an unusable now (#2328 review)', () => {
+  const { precondition } = buildAdvisoryConvergenceWaiverPrecondition({
+    headCommittedAt: '2026-08-30T18:13:24Z',
+    deadlineMinutes: 540,
+    now: 'not-a-timestamp',
+  });
+  assert.equal(precondition.elapsedMinutes, null);
+  assert.equal(precondition.deadlinePassed, false);
+});
