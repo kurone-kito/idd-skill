@@ -699,8 +699,22 @@ export function collectValidWaiverComments({
       String(comment?.created_at ?? ''),
     );
     if (!parsed || parsed.checkSelector !== selector) continue;
+    // #2328 (review): correlate on EVERY field the evidence entry carries,
+    // not just expiry and timestamp. `created_at` has second resolution, so a
+    // valid maintainer waiver and an unauthorized, wrong-HEAD, or wrong-claim
+    // marker posted in the same second would otherwise both correlate to the
+    // single valid entry — letting the reuse path report the invalid comment
+    // as authoritative, and the reconcile invent a duplicate and point the
+    // operator at the genuinely valid marker to minimize.
+    const commentAuthorLogin = String(
+      comment?.author?.login ?? comment?.user?.login ?? '',
+    )
+      .trim()
+      .toLowerCase();
     const matchesValidEntry = validForSelector.some(
       (entry) =>
+        entry.authorLogin === commentAuthorLogin &&
+        entry.reason === parsed.reason &&
         entry.expiresAt === parsed.expiresAt &&
         entry.createdAt === parsed.createdAt,
     );

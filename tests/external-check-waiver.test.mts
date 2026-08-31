@@ -1465,3 +1465,78 @@ test('runExternalCheckWaiver keeps the applied result when the reconcile read fa
   assert.equal(report?.reconcileInconclusive, true);
   assert.equal(report?.concurrentWaivers, undefined);
 });
+
+test('collectValidWaiverComments does not correlate a same-second impostor (#2328 review)', () => {
+  // `created_at` has second resolution. A valid maintainer waiver and an
+  // unauthorized marker posted in the same second share selector, expiry, and
+  // timestamp, so correlating on those three alone matches both against the
+  // one valid entry: the reuse path could report the impostor as
+  // authoritative, and the reconcile could invent a duplicate and point the
+  // operator at the genuine marker to minimize.
+  const sameSecond = '2026-08-30T22:05:01Z';
+  const genuine = {
+    ...waiverComment({ id: 100, createdAt: sameSecond }),
+    user: { login: 'kurone-kito' },
+  };
+  const impostor = {
+    ...waiverComment({ id: 101, createdAt: sameSecond }),
+    user: { login: 'drive-by-contributor' },
+  };
+
+  const found = collectValidWaiverComments({
+    // The impostor sorts first on a stable sort, so a correlation that
+    // ignores the author would return it as the earliest.
+    comments: [impostor, genuine],
+    evidence: evidenceWithValid([
+      {
+        checkSelector: 'idd-advisory-convergence',
+        expiresAt: '2026-08-31T10:00:00Z',
+        createdAt: sameSecond,
+      },
+    ]),
+    checkSelector: 'idd-advisory-convergence',
+  });
+
+  assert.deepEqual(
+    found.map((entry) => entry.commentId),
+    ['100'],
+    'only the comment whose author matches the valid entry correlates',
+  );
+});
+
+test('collectValidWaiverComments distinguishes entries by reason too (#2328 review)', () => {
+  // Same author, selector, expiry, and second — different reason. Only the
+  // marker whose reason matches the evidence entry is the valid one.
+  const sameSecond = '2026-08-30T22:05:01Z';
+  const matching = waiverComment({ id: 200, createdAt: sameSecond });
+  const other = {
+    ...matching,
+    id: 201,
+    body: renderExternalCheckWaiverComment({
+      actor: 'kurone-kito',
+      agentId: 'claude-6043e89f',
+      claimId: 'claim-abc',
+      headSha: REUSE_HEAD_SHA,
+      checkSelector: 'idd-advisory-convergence',
+      reason: 'a different reason',
+      expiresAt: '2026-08-31T10:00:00Z',
+    }),
+  };
+
+  const found = collectValidWaiverComments({
+    comments: [other, matching],
+    evidence: evidenceWithValid([
+      {
+        checkSelector: 'idd-advisory-convergence',
+        expiresAt: '2026-08-31T10:00:00Z',
+        createdAt: sameSecond,
+      },
+    ]),
+    checkSelector: 'idd-advisory-convergence',
+  });
+
+  assert.deepEqual(
+    found.map((entry) => entry.commentId),
+    ['200'],
+  );
+});
