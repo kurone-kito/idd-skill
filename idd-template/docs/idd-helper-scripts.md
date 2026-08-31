@@ -968,6 +968,32 @@ default `instructions-only` profile keep using the written shell /
     the consumer-side gate (`summarizeExternalCheckWaivers` in
     `protocol-helpers.mts`) when no claim resolves there, so posting one
     against a claimed PR would just be rejected `wrongClaim`.
+  - for the `idd-advisory-convergence` selector specifically (#2328), the
+    report carries `advisoryConvergenceWaiverPrecondition`, built by the
+    same shared function `pre-merge-readiness` publishes it from, and a
+    closed hatch is a blocking reason. That check never treats a posted
+    waiver as active until its precondition opens, so posting one earlier
+    produces a marker the gate ignores. Only the exact selector is gated:
+    the gate itself never counts a glob waiver for this check either.
+  - the helper evaluates only the **deadline** opener, never terminal
+    Copilot unavailability, which needs trusted advisory-wait
+    recovery-marker state it does not collect. The report says so with
+    `terminalEvaluated: false`, and the blocking reason states that the
+    deadline has not passed rather than claiming no opener applies.
+    `--allow-closed-precondition` posts anyway, for an operator who knows
+    the terminal opener does apply; the precondition is still reported as
+    closed, so the override is visible in the output.
+  - the deadline itself is read from the **raw** policy document, not the
+    normalized one: `normalizePolicyConfig` does not carry
+    `advisoryWait.convergenceDeadline` through, so reading it from the
+    normalized policy would silently substitute the 24h default for a
+    repository that configured something shorter.
+  - `--apply` is idempotent (#2328): it reuses an existing valid waiver
+    for the same selector, HEAD, and claim instead of appending a second
+    marker, reporting `reusedWaiver` with that comment's id and url and
+    posting nothing. The earliest match wins, so a retry converges on one
+    marker. Validity comes from `summarizeExternalCheckWaivers`, so an
+    expired, wrong-HEAD, or wrong-claim waiver is never reused.
 
 ### External-check waiver contract
 

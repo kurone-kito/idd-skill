@@ -716,7 +716,7 @@ test('planExternalCheckWaiver keeps the hatch shut without a HEAD commit anchor 
   assert.match(report.blockingReasons.join(' | '), /elapsed unknown/);
 });
 
-test('planExternalCheckWaiver leaves other selectors ungated (#2328)', () => {
+test('planExternalCheckWaiver leaves other selectors unaffected (#2328)', () => {
   // A glob waiver is never treated as covering idd-advisory-convergence by
   // the gate either (#2021), so gating one here would block for the wrong
   // reason; an unrelated selector must be untouched.
