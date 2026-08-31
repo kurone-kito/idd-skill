@@ -8,6 +8,7 @@ import {
   parseArgs,
   planExternalCheckWaiver,
   resolveActorLogin,
+  runExternalCheckWaiver,
 } from '../src/scripts/external-check-waiver.mts';
 import { normalizePolicyConfig } from '../src/scripts/policy-helpers.mts';
 import {
@@ -894,4 +895,110 @@ test('findReusableWaiverComment ignores non-waiver comments and empty input (#23
     }),
     null,
   );
+});
+
+test('findReusableWaiverComment reuses regardless of a newly requested expiry (#2328)', () => {
+  // The reused marker keeps its own expiry: a retry must never append an
+  // indistinguishable duplicate carrying a different one, mirroring the
+  // release-marker rule. Documented so the discarded request is not a
+  // surprise.
+  const comments = [
+    waiverComment({
+      id: 100,
+      createdAt: '2026-08-30T22:05:01Z',
+      expiresAt: '2026-08-31T10:00:00Z',
+    }),
+  ];
+  const found = findReusableWaiverComment({
+    comments,
+    evidence: evidenceWithValid([
+      {
+        checkSelector: 'idd-advisory-convergence',
+        expiresAt: '2026-08-31T10:00:00Z',
+        createdAt: '2026-08-30T22:05:01Z',
+      },
+    ]),
+    checkSelector: 'idd-advisory-convergence',
+  });
+
+  assert.equal(found?.commentId, '100');
+  assert.equal(found?.expiresAt, '2026-08-31T10:00:00Z');
+});
+
+test('runExternalCheckWaiver posts nothing when it reuses an existing waiver (#2328)', async () => {
+  let postCalls = 0;
+  const comments = [
+    waiverComment({
+      id: 100,
+      createdAt: '2026-08-30T22:05:01Z',
+      checkSelector: 'idd-advisory-convergence',
+      claimId: 'claim-20260830T222316Z-2328',
+      headSha: REUSE_HEAD_SHA,
+    }),
+  ];
+
+  const { report } = await runExternalCheckWaiver({
+    args: {
+      ...parseArgs([
+        '--pr',
+        '2325',
+        '--check',
+        'idd-advisory-convergence',
+        '--reason',
+        'rate limit',
+        '--expires-in',
+        'PT8H',
+        '--apply',
+        '--yes',
+        '--allow-closed-precondition',
+      ]),
+      repo: 'kurone-kito/idd-skill',
+      issueNumber: 2328,
+    },
+    actor: 'kurone-kito',
+    authority: { known: true, permission: 'admin', roleName: 'admin' },
+    pr: {
+      number: 2325,
+      state: 'OPEN',
+      url: 'https://github.com/kurone-kito/idd-skill/pull/2325',
+      headRefName: 'issue/2328-fix-external-check-waiver-refuse-waiver',
+      headRefOid: REUSE_HEAD_SHA,
+      statusCheckRollup: [
+        {
+          __typename: 'CheckRun',
+          name: 'idd-advisory-convergence',
+          status: 'COMPLETED',
+          conclusion: 'FAILURE',
+        },
+      ],
+    },
+    issueCandidates: [
+      {
+        number: 2328,
+        url: 'https://github.com/kurone-kito/idd-skill/issues/2328',
+        activeClaim: {
+          agentId: 'claude-6043e89f',
+          claimId: 'claim-20260830T222316Z-2328',
+          supersedes: 'none',
+          branch: 'issue/2328-fix-external-check-waiver-refuse-waiver',
+          createdAt: '2026-08-30T22:23:26Z',
+        },
+      },
+    ],
+    prComments: comments,
+    headCommittedAt: '2026-08-30T18:13:24Z',
+    now: new Date('2026-08-30T22:30:00Z'),
+    isTTY: false,
+    postComment: () => {
+      postCalls += 1;
+      return { html_url: 'should-not-be-reached' };
+    },
+  });
+
+  // The AC clause this covers directly: nothing is appended, so the pull
+  // request's comment count is unchanged.
+  assert.equal(postCalls, 0);
+  assert.equal(report?.applied, false);
+  assert.equal(report?.reusedWaiver?.commentId, '100');
+  assert.match(String(report?.commentUrl), /issuecomment-100$/);
 });

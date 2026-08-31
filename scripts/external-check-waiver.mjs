@@ -430,11 +430,13 @@ export async function runExternalCheckWaiver(options = {}) {
       }),
       repoOwner: owner,
       claimless: args.claimless,
-      headCommittedAt: fetchHeadCommittedAt({
-        owner,
-        repo: name,
-        headRefOid: String(pr.headRefOid ?? '').trim(),
-      }),
+      headCommittedAt:
+        options.headCommittedAt ??
+        fetchHeadCommittedAt({
+          owner,
+          repo: name,
+          headRefOid: String(pr.headRefOid ?? '').trim(),
+        }),
       allowClosedPrecondition: args.allowClosedPrecondition,
       advisoryConvergenceDeadlineMinutes:
         resolveAdvisoryConvergenceDeadlineMinutes(rawConfig),

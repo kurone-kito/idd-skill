@@ -315,6 +315,8 @@ interface RunExternalCheckWaiverOptions {
   prompt?: PromptFn;
   /** #2328: injected PR issue comments, for the reuse scan under test. */
   prComments?: WaiverCommentPayload[];
+  /** #2328: injected HEAD commit timestamp, so tests skip the commit read. */
+  headCommittedAt?: string;
   postComment?: (
     prNumber: number,
     body: string,
@@ -748,11 +750,13 @@ export async function runExternalCheckWaiver(
       }),
       repoOwner: owner,
       claimless: args.claimless,
-      headCommittedAt: fetchHeadCommittedAt({
-        owner,
-        repo: name,
-        headRefOid: String(pr.headRefOid ?? '').trim(),
-      }),
+      headCommittedAt:
+        options.headCommittedAt ??
+        fetchHeadCommittedAt({
+          owner,
+          repo: name,
+          headRefOid: String(pr.headRefOid ?? '').trim(),
+        }),
       allowClosedPrecondition: args.allowClosedPrecondition,
       advisoryConvergenceDeadlineMinutes:
         resolveAdvisoryConvergenceDeadlineMinutes(rawConfig),

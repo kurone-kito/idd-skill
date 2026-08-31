@@ -993,7 +993,12 @@ default `instructions-only` profile keep using the written shell /
     marker, reporting `reusedWaiver` with that comment's id and url and
     posting nothing. The earliest match wins, so a retry converges on one
     marker. Validity comes from `summarizeExternalCheckWaivers`, so an
-    expired, wrong-HEAD, or wrong-claim waiver is never reused.
+    expired, wrong-HEAD, or wrong-claim waiver is never reused. Reuse wins
+    over a freshly requested expiry: re-running with a different
+    `--expires-in` reports the existing marker rather than posting a second
+    one carrying the new value, matching the release-marker rule that a
+    retry must never append an indistinguishable duplicate. To change an
+    expiry, let the existing waiver lapse or supersede it deliberately.
 
 ### External-check waiver contract
 
