@@ -6,7 +6,11 @@
 // .mjs. See docs/typescript-sources.md.
 
 import { readFileSync } from 'node:fs';
-
+import {
+  buildAdvisoryConvergenceWaiverPrecondition,
+  DEFAULT_ADVISORY_CONVERGENCE_CHECK_SELECTOR,
+  readAdvisoryConvergenceDeadlineMinutes,
+} from './advisory-wait-policy.mts';
 import { parseCliArgs } from './cli-args.mts';
 import { resolveTrustedCollaboratorMarkerLogins } from './collaborator-permission.mts';
 import { resolveHelperActiveClaim } from './forced-handoff-marker.mts';
@@ -21,10 +25,15 @@ import {
   parseIsoDurationToMs,
   resolveCollaboratorMarkerTrust,
 } from './policy-helpers.mts';
-import type { ClaimValidationSummary } from './protocol-helpers.mts';
+import type {
+  ClaimValidationSummary,
+  ExternalCheckWaiverEvidence,
+} from './protocol-helpers.mts';
 import {
+  parseExternalCheckWaiverComment,
   parsePaginatedGhNdjson,
   renderExternalCheckWaiverComment,
+  summarizeExternalCheckWaivers,
 } from './protocol-helpers.mts';
 import type { PromptFn } from './readline-prompt.mts';
 import { makeReadlinePrompt } from './readline-prompt.mts';
@@ -161,6 +170,28 @@ interface ExternalCheckWaiverPlanInput {
   expiresAt?: string;
   repoOwner?: string;
   /**
+   * #2328: the current HEAD commit's own timestamp, the anchor the
+   * `idd-advisory-convergence` waiver deadline is measured from. Absent or
+   * unparseable keeps the hatch shut, which is the safe direction.
+   */
+  headCommittedAt?: string;
+  /**
+   * #2328: the configured `advisoryWait.convergenceDeadline` in minutes.
+   * Supplied by the caller from the RAW policy document, exactly as
+   * `pre-merge-readiness` receives it: `normalizePolicyConfig` does not carry
+   * `convergenceDeadline` through, so reading it off the normalized policy
+   * would silently substitute the 24h default for a repository that
+   * configured something shorter.
+   */
+  advisoryConvergenceDeadlineMinutes?: number;
+  /**
+   * #2328: post an `idd-advisory-convergence` waiver even though its hatch
+   * has not opened. The marker is inert until the hatch opens, so this is
+   * for an operator who knows the terminal opener applies -- which this
+   * helper does not evaluate.
+   */
+  allowClosedPrecondition?: boolean;
+  /**
    * #1905: render a claimless waiver -- claim-id `none` -- instead of
    * resolving the claim-id from a linked issue's active IDD claim. Skips
    * the linked-issue-claim requirement entirely; blocks instead when a
@@ -210,9 +241,42 @@ interface ExternalCheckWaiverReport {
     uncoveredChecks: NormalizedCheck[];
   };
   blockingReasons: string[];
+  /**
+   * #2328: present only for the precondition-gated
+   * `idd-advisory-convergence` selector. `terminalUnavailable` is always
+   * `false` here: this helper evaluates the deadline opener only, so a
+   * closed verdict means "the deadline has not passed", never "no opener
+   * applies".
+   */
+  advisoryConvergenceWaiverPrecondition?: {
+    checkSelector: string;
+    deadlineMinutes: number;
+    headCommittedAt: string;
+    elapsedMinutes: number | null;
+    deadlinePassed: boolean;
+    terminalUnavailable: boolean;
+    open: boolean;
+    terminalEvaluated: boolean;
+  };
   body: string;
   applied?: boolean;
   commentUrl?: string;
+  /**
+   * #2328: set when `--apply` found an existing valid waiver for this
+   * selector and reused it rather than appending a second marker.
+   */
+  reusedWaiver?: ReusableWaiver;
+  /**
+   * #2328 (review): every valid waiver for this selector after the POST,
+   * present only when a concurrent apply raced this one into a duplicate.
+   */
+  concurrentWaivers?: ReusableWaiver[];
+  /**
+   * #2328 (review): the waiver was posted, but the post-write re-read failed,
+   * so a concurrent duplicate could not be ruled out. The apply still
+   * succeeded — only the reconcile is unknown.
+   */
+  reconcileInconclusive?: boolean;
 }
 
 /** Parsed CLI arguments. */
@@ -230,6 +294,7 @@ interface ExternalCheckWaiverArgs {
   yes: boolean;
   format: string;
   claimless: boolean;
+  allowClosedPrecondition: boolean;
   help: boolean;
 }
 
@@ -259,6 +324,20 @@ interface RunExternalCheckWaiverOptions {
   now?: Date;
   isTTY?: boolean;
   prompt?: PromptFn;
+  /**
+   * #2328: injected PR issue comments for the reuse scan under test. A
+   * function is called, so a test can exercise the fail-closed path by
+   * throwing from it.
+   */
+  prComments?: WaiverCommentPayload[] | (() => WaiverCommentPayload[]);
+  /** #2328: injected HEAD commit timestamp, so tests skip the commit read. */
+  headCommittedAt?: string;
+  /**
+   * #2328 (review): injected linked-issue resolver, called once before the
+   * post and once for the reconcile, so a test can model a takeover landing
+   * between them.
+   */
+  resolveIssueCandidates?: () => IssueCandidatePayload[];
   postComment?: (
     prNumber: number,
     body: string,
@@ -461,6 +540,48 @@ export function planExternalCheckWaiver(
     );
   }
 
+  // #2328: `idd-advisory-convergence` never treats a posted waiver as active
+  // until its own precondition opens, so rendering one before then produces a
+  // marker the gate ignores. Report that precondition from the shared builder
+  // -- the same one `pre-merge-readiness` uses -- and block on a closed hatch,
+  // rather than reporting no blocking reasons while the gate reports the hatch
+  // shut. Only the EXACT selector is gated: a glob waiver is never treated as
+  // covering this check by the gate either (#2021), so gating one here would
+  // block for the wrong reason.
+  //
+  // The terminal opener is deliberately NOT evaluated: proving it needs
+  // trusted advisory-wait recovery-marker state this helper does not collect.
+  // The blocking reason therefore says the deadline has not passed, never that
+  // no opener applies -- an unevaluated terminal opener may well be open.
+  const preconditionGatedSelector =
+    requestedMatchMode === 'exact' &&
+    requestedSelector === DEFAULT_ADVISORY_CONVERGENCE_CHECK_SELECTOR;
+  const advisoryConvergenceWaiverPrecondition = preconditionGatedSelector
+    ? (() => {
+        const { precondition } = buildAdvisoryConvergenceWaiverPrecondition({
+          headCommittedAt: input?.headCommittedAt,
+          deadlineMinutes: input?.advisoryConvergenceDeadlineMinutes,
+          now: now.toISOString(),
+        });
+        return { ...precondition, terminalEvaluated: false };
+      })()
+    : undefined;
+  const allowClosedPrecondition = input?.allowClosedPrecondition === true;
+  if (
+    advisoryConvergenceWaiverPrecondition &&
+    !advisoryConvergenceWaiverPrecondition.open &&
+    !allowClosedPrecondition
+  ) {
+    const elapsed = advisoryConvergenceWaiverPrecondition.elapsedMinutes;
+    blockingReasons.push(
+      `${DEFAULT_ADVISORY_CONVERGENCE_CHECK_SELECTOR} waiver deadline has not passed ` +
+        `(${elapsed === null ? 'elapsed unknown' : `${elapsed} of ${advisoryConvergenceWaiverPrecondition.deadlineMinutes} minutes`}` +
+        `, anchored on HEAD commit ${advisoryConvergenceWaiverPrecondition.headCommittedAt}); ` +
+        'terminal Copilot unavailability was not evaluated here, so pass ' +
+        '--allow-closed-precondition if that opener already applies',
+    );
+  }
+
   // #1905: --claimless binds the marker to the sentinel claim-id `none` and
   // the acting maintainer's own identity as agentId (there is no
   // issue-claim agentId to reuse when the PR carries no active claim by
@@ -536,6 +657,9 @@ export function planExternalCheckWaiver(
       uncoveredChecks,
     },
     blockingReasons,
+    ...(advisoryConvergenceWaiverPrecondition
+      ? { advisoryConvergenceWaiverPrecondition }
+      : {}),
     body,
   };
 }
@@ -614,6 +738,7 @@ export async function runExternalCheckWaiver(
     fetchPullRequest({ owner, repo: name, prNumber: args.prNumber });
   const issueCandidates =
     options.issueCandidates ??
+    options.resolveIssueCandidates?.() ??
     resolveLinkedIssueCandidates({
       owner,
       repo: name,
@@ -647,6 +772,22 @@ export async function runExternalCheckWaiver(
       }),
       repoOwner: owner,
       claimless: args.claimless,
+      headCommittedAt:
+        options.headCommittedAt ??
+        fetchHeadCommittedAt({
+          owner,
+          repo: name,
+          headRefOid: String(pr.headRefOid ?? '').trim(),
+        }),
+      allowClosedPrecondition: args.allowClosedPrecondition,
+      // Read through the SAME validating reader the gate uses, not the raw
+      // resolver: the gate rejects the whole `advisoryWait` section when any
+      // sibling key is schema-invalid and falls back to the 24h default. A
+      // resolver that skips that validation would report the configured value
+      // where the gate reports the default, reproducing the very disagreement
+      // this change removes.
+      advisoryConvergenceDeadlineMinutes:
+        readAdvisoryConvergenceDeadlineMinutes(),
     },
     { now: options.now, repoOwner: owner },
   );
@@ -689,6 +830,100 @@ export async function runExternalCheckWaiver(
     }
   }
 
+  // #2328: appending is not idempotent, so look for an existing valid waiver
+  // for this selector first. A repeated `--apply` previously posted a second
+  // identical marker, leaving two live waivers on the pull request.
+  // Repeatable: called again after the POST for the concurrency reconcile
+  // below, so the second read observes anything that landed meanwhile.
+  const readPrComments = (): WaiverCommentPayload[] =>
+    typeof options.prComments === 'function'
+      ? options.prComments()
+      : (options.prComments ??
+        fetchPrComments({ owner, repo: name, prNumber: args.prNumber }));
+  const prComments = readPrComments();
+  // The marker this invocation would post is the exact context a reusable
+  // waiver must match, so recover the HEAD and claim from it rather than
+  // threading them separately and risking a mismatch.
+  const wouldPost = parseExternalCheckWaiverComment(
+    report.body,
+    new Date().toISOString(),
+  );
+  // One evidence build for both the pre-write scan and the post-write
+  // reconcile, so the two can never classify the same marker differently.
+  const buildWaiverEvidence = (
+    comments: WaiverCommentPayload[],
+    binding: { claimId: string; supersedes: string },
+  ) =>
+    wouldPost
+      ? summarizeExternalCheckWaivers(comments, {
+          prHeadSha: wouldPost.headSha,
+          activeClaimId: binding.claimId,
+          // The gate accepts a waiver bound to the immediate predecessor
+          // claim through its one-hop takeover exception. Omitting this
+          // would classify such a waiver `wrongClaim` here and append a
+          // second one after every takeover.
+          activeClaimSupersedes: binding.supersedes,
+          // Derived from the SAME snapshot being summarized, never from the
+          // pre-write one. With collaborator-marker trust enabled, a
+          // maintainer absent from the earlier read would otherwise be
+          // classified unauthorized here while the gate — which derives
+          // trust from the final comments — accepts their waiver, so the
+          // reconcile would miss exactly the duplicate it exists to find.
+          trustedMarkerLogins: [
+            ...buildTrustedMarkerLogins({
+              owner,
+              repo: name,
+              rawConfig,
+              viewerLogin: actor,
+              issueComments: comments,
+            }),
+          ],
+          now: (options.now instanceof Date
+            ? options.now
+            : new Date()
+          ).toISOString(),
+          waivableSelectors: [
+            ...normalizePolicyConfig(rawConfig).ciGate.externalChecks.waivable,
+          ],
+          maxValidity:
+            normalizePolicyConfig(rawConfig).ciGate.externalCheckWaivers
+              .maxValidity,
+          mode: normalizePolicyConfig(rawConfig).ciGate.externalCheckWaivers
+            .mode,
+        })
+      : null;
+  // The marker this invocation would post defines the binding a reusable
+  // waiver must share; the predecessor claim is accepted too, matching the
+  // gate's one-hop takeover exception.
+  const toAllowedClaimIds = (binding: {
+    claimId: string;
+    supersedes: string;
+  }): string[] =>
+    [binding.claimId, binding.supersedes].filter(
+      (value) => value && value !== 'none',
+    );
+  const preWriteBinding = {
+    claimId: wouldPost?.claimId ?? '',
+    supersedes: String(report.linkedIssue?.activeClaim?.supersedes ?? ''),
+  };
+  const existingWaiver = findReusableWaiverComment({
+    comments: prComments,
+    evidence: buildWaiverEvidence(prComments, preWriteBinding),
+    checkSelector: report.requested.selector,
+    expectedHeadSha: wouldPost?.headSha ?? '',
+    allowedClaimIds: toAllowedClaimIds(preWriteBinding),
+  });
+  if (existingWaiver) {
+    const reusedReport = {
+      ...report,
+      applied: false,
+      reusedWaiver: existingWaiver,
+      commentUrl: existingWaiver.commentUrl,
+    };
+    renderReport(reusedReport, args.format);
+    return { exitCode: 0, report: reusedReport };
+  }
+
   const result = options.postComment
     ? await options.postComment(args.prNumber, report.body)
     : (ghJson([
@@ -700,13 +935,297 @@ export async function runExternalCheckWaiver(
         `body=${report.body}`,
       ]) as PostedCommentPayload);
 
+  // #2328 (review): the reuse check above and this POST are not one atomic
+  // step, and GitHub comments have no compare-and-swap -- the same limitation
+  // `idd-claim.instructions.md` records for claim markers. Two concurrent
+  // `--apply` runs can therefore both observe no waiver and both post.
+  // Reconcile after the fact the way the claim protocol does: re-read, and
+  // when more than one valid waiver now exists for this selector, name them
+  // all and identify the earliest, which is the one a deterministic reader
+  // resolves to. Reporting rather than deleting -- removing a marker another
+  // session just posted is not this helper's call to make.
+  // ONE snapshot for both arguments. Two sequential reads would let a waiver
+  // land between them, leaving `comments` older than `evidence`;
+  // `collectValidWaiverComments` can only correlate entries it can find in
+  // `comments`, so the newer marker would be dropped and the duplicate
+  // silently missed — a snapshot mismatch inside the code that exists to
+  // catch mismatches.
+  //
+  // Failing closed is right BEFORE the post, where an unreadable list can
+  // cause a duplicate. After it the waiver already exists and the write is
+  // irreversible, so throwing here would report a failed apply for work that
+  // succeeded and would withhold the posted comment URL — pushing an operator
+  // toward a retry that can only make things worse. Degrade to a warning and
+  // still render the applied result; only duplicate detection is lost.
+  let postWriteComments: WaiverCommentPayload[] = [];
+  let reconcileInconclusive = false;
+  if (wouldPost) {
+    try {
+      postWriteComments = readPrComments();
+    } catch (error) {
+      reconcileInconclusive = true;
+      process.stderr.write(
+        `warning: the waiver was posted, but re-reading PR #${args.prNumber} comments failed, ` +
+          `so a concurrent duplicate could not be ruled out: ${String(
+            (error as { message?: unknown })?.message ?? error,
+          )}\n`,
+      );
+    }
+  }
+  // #2328 (review): re-resolve the claim for the reconcile rather than
+  // reusing the pre-write binding. If a takeover lands between the two, the
+  // gate resolves the successor with the predecessor as `supersedes` and
+  // accepts BOTH waivers, while a summarizer still pinned to the predecessor
+  // classifies the successor's as `wrongClaim` and reports no duplicate --
+  // silence exactly where the operator most needs the warning. A failure to
+  // re-resolve makes the reconcile inconclusive rather than wrong; the apply
+  // itself already succeeded and is never retracted for this.
+  let postWriteBinding = preWriteBinding;
+  if (wouldPost && !reconcileInconclusive) {
+    try {
+      const refreshed = selectLinkedIssueCandidate(
+        options.issueCandidates ??
+          options.resolveIssueCandidates?.() ??
+          resolveLinkedIssueCandidates({
+            owner,
+            repo: name,
+            rawConfig,
+            viewerLogin: actor,
+            linkedIssues: pr.closingIssuesReferences,
+            issueNumber: args.issueNumber,
+            expectedClaimId: '',
+            headRefName: pr.headRefName,
+            prNumber: args.prNumber,
+          }),
+        {
+          issueNumber: args.issueNumber,
+          headRefName: String(pr.headRefName ?? ''),
+        },
+      );
+      if (refreshed.ok) {
+        postWriteBinding = {
+          claimId: refreshed.issue.activeClaim.claimId,
+          supersedes: String(refreshed.issue.activeClaim.supersedes ?? ''),
+        };
+      }
+    } catch (error) {
+      reconcileInconclusive = true;
+      process.stderr.write(
+        `warning: the waiver was posted, but re-resolving the active claim failed, ` +
+          `so a concurrent duplicate could not be ruled out: ${String(
+            (error as { message?: unknown })?.message ?? error,
+          )}\n`,
+      );
+    }
+  }
+  const concurrentWaivers =
+    wouldPost && !reconcileInconclusive
+      ? collectValidWaiverComments({
+          comments: postWriteComments,
+          evidence: buildWaiverEvidence(postWriteComments, postWriteBinding),
+          checkSelector: report.requested.selector,
+          expectedHeadSha: wouldPost?.headSha ?? '',
+          allowedClaimIds: toAllowedClaimIds(postWriteBinding),
+        })
+      : [];
+  if (concurrentWaivers.length > 1) {
+    const earliest = concurrentWaivers[0];
+    process.stderr.write(
+      `warning: ${concurrentWaivers.length} valid ${report.requested.selector} waivers now exist on PR #${args.prNumber} ` +
+        `(comment ids ${concurrentWaivers.map((entry) => entry.commentId).join(', ')}). ` +
+        `A concurrent apply raced this one. Readers resolve to the earliest, ${earliest?.commentId}; ` +
+        'minimize the rest so a later session does not have to disambiguate.\n',
+    );
+  }
+
   const appliedReport = {
     ...report,
     applied: true,
     commentUrl: String(result.html_url ?? result.url ?? ''),
+    ...(concurrentWaivers.length > 1 ? { concurrentWaivers } : {}),
+    ...(reconcileInconclusive ? { reconcileInconclusive: true } : {}),
   };
   renderReport(appliedReport, args.format);
   return { exitCode: 0, report: appliedReport };
+}
+
+/**
+ * #2328: the pull request's own issue comments, where waiver markers live.
+ * Paginated so a long conversation cannot hide an existing waiver and cause
+ * a duplicate to be appended.
+ */
+function fetchPrComments({
+  owner,
+  repo,
+  prNumber,
+}: {
+  owner: string;
+  repo: string;
+  prNumber: number;
+}): WaiverCommentPayload[] {
+  // Never fail open: an unreadable list is not an empty one. Swallowing the
+  // error would hide an existing waiver and let `--apply` append a duplicate,
+  // which is the regression this change exists to remove.
+  const payload = ghJson(
+    ['api', '--paginate', `repos/${owner}/${repo}/issues/${prNumber}/comments`],
+    true,
+  );
+  if (!Array.isArray(payload)) {
+    throw new Error(
+      `external-check waiver apply blocked: could not read PR #${prNumber} comments to check for an existing waiver`,
+    );
+  }
+  return payload as WaiverCommentPayload[];
+}
+
+/** One issue comment, in the shape the GitHub REST list endpoint returns. */
+interface WaiverCommentPayload {
+  id?: string | number | null;
+  html_url?: string | null;
+  url?: string | null;
+  body?: string | null;
+  created_at?: string | null;
+  user?: GhAuthorPayload | null;
+  author?: GhAuthorPayload | null;
+}
+
+/** An existing waiver this invocation should reuse instead of appending. */
+export interface ReusableWaiver {
+  commentId: string;
+  commentUrl: string;
+  checkSelector: string;
+  expiresAt: string;
+}
+
+/**
+ * #2328: find an existing valid waiver for this exact selector so a repeated
+ * `--apply` reuses it instead of appending a second marker. Re-running the
+ * same command posted a duplicate on pull request #2325, leaving two live
+ * waivers a later session had to disambiguate by hand.
+ *
+ * Validity is not re-derived here: `summarizeExternalCheckWaivers` already
+ * classifies every marker into valid / expired / wrong-HEAD / wrong-claim,
+ * and both `pre-merge-readiness` and `advisory-convergence` read it. This
+ * function only correlates a `valid` entry back to the comment that carried
+ * it, so an expired, wrong-HEAD, or wrong-claim waiver is never reused —
+ * it simply never appears in `evidence.valid`.
+ *
+ * The earliest matching comment wins, mirroring the release-marker path's
+ * reuse-the-earliest rule, so a retry converges on one marker rather than
+ * picking a different one each pass.
+ */
+export function findReusableWaiverComment(input: {
+  comments: WaiverCommentPayload[] | null | undefined;
+  evidence: ExternalCheckWaiverEvidence | null | undefined;
+  checkSelector: string;
+  expectedHeadSha?: string;
+  allowedClaimIds?: string[];
+}): ReusableWaiver | null {
+  return collectValidWaiverComments(input)[0] ?? null;
+}
+
+/**
+ * #2328 (review): every valid waiver for one selector, earliest first. The
+ * reuse scan takes the first; the post-write reconcile uses the whole list to
+ * detect a concurrent apply that raced this one. Sharing this function keeps
+ * the two from classifying the same marker differently.
+ */
+export function collectValidWaiverComments({
+  comments,
+  evidence,
+  checkSelector,
+  expectedHeadSha = '',
+  allowedClaimIds = [],
+}: {
+  comments: WaiverCommentPayload[] | null | undefined;
+  evidence: ExternalCheckWaiverEvidence | null | undefined;
+  checkSelector: string;
+  /**
+   * #2328 (review): the HEAD the waiver must bind to. The summarizer keeps a
+   * wrong-HEAD marker out of `valid`, but a wrong-HEAD comment can still
+   * match a valid entry produced by a DIFFERENT comment when author, reason,
+   * expiry, and second all coincide — the entry carries no binding of its
+   * own to rule that out. Empty skips the check.
+   */
+  expectedHeadSha?: string;
+  /**
+   * #2328 (review): the claim ids a waiver may bind to — the active claim,
+   * plus its immediate predecessor for the gate's one-hop takeover
+   * exception. Empty skips the check.
+   */
+  allowedClaimIds?: string[];
+}): ReusableWaiver[] {
+  const selector = String(checkSelector ?? '').trim();
+  if (!selector) return [];
+  const validForSelector = (evidence?.valid ?? []).filter(
+    (entry) => entry.checkSelector === selector,
+  );
+  if (validForSelector.length === 0) return [];
+
+  const ordered = [...(comments ?? [])].sort((left, right) =>
+    String(left?.created_at ?? '').localeCompare(
+      String(right?.created_at ?? ''),
+    ),
+  );
+  const found: ReusableWaiver[] = [];
+  for (const comment of ordered) {
+    const parsed = parseExternalCheckWaiverComment(
+      String(comment?.body ?? ''),
+      String(comment?.created_at ?? ''),
+    );
+    if (!parsed || parsed.checkSelector !== selector) continue;
+    // #2328 (review): correlate on EVERY field the evidence entry carries,
+    // not just expiry and timestamp. `created_at` has second resolution, so a
+    // valid maintainer waiver and an unauthorized, wrong-HEAD, or wrong-claim
+    // marker posted in the same second would otherwise both correlate to the
+    // single valid entry — letting the reuse path report the invalid comment
+    // as authoritative, and the reconcile invent a duplicate and point the
+    // operator at the genuinely valid marker to minimize.
+    const commentAuthorLogin = String(
+      comment?.author?.login ?? comment?.user?.login ?? '',
+    )
+      .trim()
+      .toLowerCase();
+    // The evidence entry carries no HEAD or claim binding, so those are
+    // checked against the expected values directly. Without this a
+    // wrong-HEAD or wrong-claim marker sharing all four entry fields with a
+    // genuinely valid sibling would still correlate.
+    const normalizedHead = String(expectedHeadSha ?? '')
+      .trim()
+      .toLowerCase();
+    if (
+      normalizedHead &&
+      String(parsed.headSha ?? '')
+        .trim()
+        .toLowerCase() !== normalizedHead
+    ) {
+      continue;
+    }
+    const acceptedClaimIds = (allowedClaimIds ?? [])
+      .map((value) => String(value ?? '').trim())
+      .filter((value) => value.length > 0);
+    if (
+      acceptedClaimIds.length > 0 &&
+      !acceptedClaimIds.includes(String(parsed.claimId ?? '').trim())
+    ) {
+      continue;
+    }
+    const matchesValidEntry = validForSelector.some(
+      (entry) =>
+        entry.authorLogin === commentAuthorLogin &&
+        entry.reason === parsed.reason &&
+        entry.expiresAt === parsed.expiresAt &&
+        entry.createdAt === parsed.createdAt,
+    );
+    if (!matchesValidEntry) continue;
+    found.push({
+      commentId: String(comment?.id ?? ''),
+      commentUrl: String(comment?.html_url ?? comment?.url ?? ''),
+      checkSelector: selector,
+      expiresAt: parsed.expiresAt,
+    });
+  }
+  return found;
 }
 
 function selectorRequestsGlob(selector: unknown): boolean {
@@ -1016,6 +1535,34 @@ function fetchPullRequest({
   ]) as PrPayload;
 }
 
+/**
+ * #2328: the HEAD commit's own `committer.date`, the anchor the
+ * `idd-advisory-convergence` waiver deadline is measured from. Returns an
+ * empty string on any failure — a missing anchor keeps the hatch shut, which
+ * is the safe direction, and never blocks a selector that is not
+ * precondition-gated.
+ */
+function fetchHeadCommittedAt({
+  owner,
+  repo,
+  headRefOid,
+}: {
+  owner: string;
+  repo: string;
+  headRefOid: string;
+}): string {
+  if (!headRefOid) return '';
+  try {
+    const payload = ghJson([
+      'api',
+      `repos/${owner}/${repo}/commits/${headRefOid}`,
+    ]) as { commit?: { committer?: { date?: unknown } } } | null;
+    return String(payload?.commit?.committer?.date ?? '').trim();
+  } catch {
+    return '';
+  }
+}
+
 function resolveCollaboratorAuthority({
   owner,
   repo,
@@ -1249,6 +1796,7 @@ const EXTERNAL_CHECK_WAIVER_FLAG_SPEC = {
   '--yes': { type: 'boolean', default: false },
   '--format': { type: 'string', default: 'json' },
   '--claimless': { type: 'boolean', default: false },
+  '--allow-closed-precondition': { type: 'boolean', default: false },
   '--help': { type: 'boolean', short: 'h' },
 } as const;
 
@@ -1285,6 +1833,7 @@ export function parseArgs(argv: string[]): ExternalCheckWaiverArgs {
     yes: values.yes as boolean,
     format,
     claimless: values.claimless as boolean,
+    allowClosedPrecondition: values['allow-closed-precondition'] as boolean,
     help,
   };
 
@@ -1348,6 +1897,11 @@ Options:
                                      resolving a linked issue's active claim; for a PR with
                                      no IDD claim at all (e.g. Dependabot). Cannot combine
                                      with --issue or --claim-id.
+  --allow-closed-precondition       post an idd-advisory-convergence waiver even though its
+                                     deadline has not passed. The marker stays inert until a
+                                     precondition opens; use it when terminal Copilot
+                                     unavailability already applies, which this helper does
+                                     not evaluate.
   --actor <login>                   override the GitHub actor used for authority evaluation
   --repo <owner/name>               repository override
   --apply                           post the canonical waiver comment after validation

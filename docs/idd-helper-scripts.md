@@ -968,6 +968,52 @@ default `instructions-only` profile keep using the written shell /
     the consumer-side gate (`summarizeExternalCheckWaivers` in
     `protocol-helpers.mts`) when no claim resolves there, so posting one
     against a claimed PR would just be rejected `wrongClaim`.
+  - for the `idd-advisory-convergence` selector specifically (#2328), the
+    report carries `advisoryConvergenceWaiverPrecondition`, built by the
+    same shared function `pre-merge-readiness` publishes it from, and a
+    closed hatch is a blocking reason. That check never treats a posted
+    waiver as active until its precondition opens, so posting one earlier
+    produces a marker the gate ignores. Only the exact selector is gated:
+    the gate itself never counts a glob waiver for this check either.
+  - the helper evaluates only the **deadline** opener, never terminal
+    Copilot unavailability, which needs trusted advisory-wait
+    recovery-marker state it does not collect. The report says so with
+    `terminalEvaluated: false`, and the blocking reason states that the
+    deadline has not passed rather than claiming no opener applies.
+    `--allow-closed-precondition` posts anyway, for an operator who knows
+    the terminal opener does apply; the precondition is still reported as
+    closed, so the override is visible in the output.
+  - the deadline itself is read from the **raw** policy document, not the
+    normalized one: `normalizePolicyConfig` does not carry
+    `advisoryWait.convergenceDeadline` through, so reading it from the
+    normalized policy would silently substitute the 24h default for a
+    repository that configured something shorter.
+  - `--apply` is idempotent (#2328): it reuses an existing valid waiver
+    for the same selector, HEAD, and claim instead of appending a second
+    marker, reporting `reusedWaiver` with that comment's id and url and
+    posting nothing. The earliest match wins, so a retry converges on one
+    marker. Validity comes from `summarizeExternalCheckWaivers`, so an
+    expired, wrong-HEAD, or wrong-claim waiver is never reused. Reuse wins
+    over a freshly requested expiry: re-running with a different
+    `--expires-in` reports the existing marker rather than posting a second
+    one carrying the new value, matching the release-marker rule that a
+    retry must never append an indistinguishable duplicate. To change an
+    expiry, let the existing waiver lapse or supersede it deliberately.
+  - the reuse check and the post are **not** one atomic step, and GitHub
+    comments have no compare-and-swap -- the same limitation the claim
+    protocol records for its own markers. Two concurrent `--apply` runs
+    can therefore both observe no waiver and both post. That is reconciled
+    after the fact rather than prevented: the helper re-reads once the post
+    lands, and when more than one valid waiver exists for the selector it
+    reports them all in `concurrentWaivers`, warns on stderr, and names the
+    earliest, which is the one a deterministic reader resolves to. It does
+    not delete the extras -- removing a marker another session just posted
+    is a maintainer's call, not the helper's -- so minimize them by hand.
+    That post-write read degrades to a warning rather than failing closed:
+    the waiver already exists and the write cannot be undone, so a read
+    failure reports `reconcileInconclusive` and still renders the applied
+    result with its comment url. Only the pre-write read fails closed, where
+    an unreadable list could actually cause the duplicate.
 
 ### External-check waiver contract
 
