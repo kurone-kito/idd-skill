@@ -1063,3 +1063,47 @@ review then surfaced one finding per round:
   helper actually produces and mirror sibling-helper strictness (SHA
   patterns, enums), so the published contract is no looser than the
   runtime.
+
+### Gate-mirroring helper lens
+
+When the diff under critique implements a helper whose purpose is to
+**predict, mirror, or pre-check a decision some other gate makes** —
+where "agrees with that gate" is the whole contract — also apply this
+lens. It is orthogonal to the write-side lens above rather than an
+alternative to it: a helper that both mutates state and mirrors a gate
+gets both, and their checks do not overlap.
+
+Extracting the shared decision into one function is the right first
+move and does not finish the job, because **sharing a function
+equalizes the computation, not the arguments**. Two callers still
+diverge whenever one passes fewer inputs, a laxer validation path, an
+older snapshot, or a stale point in time. Enumerate the gate's inputs
+once, against this list, rather than discovering them one per review
+round:
+
+- **Validation-path parity**: the helper reads configuration through the
+  same validating reader the gate uses, not a rawer resolver that skips
+  a schema or subtree check. A gate that rejects a whole config section
+  when any sibling key is invalid, and falls back to a default, must not
+  be mirrored by a helper that reads the one key directly.
+- **Input completeness**: every optional argument that widens or narrows
+  the gate's own verdict is passed, not just the ones the happy path
+  needs. An omitted exception parameter silently removes the exception.
+- **Whole-identity comparison**: every field the gate binds on is
+  compared — both the fields the shared value carries and the ones it
+  does not, which the caller must then supply itself. A shared record
+  that omits an identity field is not evidence that the field does not
+  matter.
+- **Snapshot identity**: all inputs to one verdict come from a single
+  read. Two reads that can straddle a change produce a verdict about no
+  state that ever existed.
+- **Point-in-time parity**: state re-read after a mutation is
+  re-resolved rather than reused from before it, whenever the gate would
+  see the newer state.
+
+Each check names a way a mirror can disagree with its gate while the
+shared code is itself correct, so a passing unit test on the shared
+function is not evidence for any of them. The gap class was observed on
+[kurone-kito/idd-skill#2330](https://github.com/kurone-kito/idd-skill/pull/2330),
+where a correct extraction still took seven advisory rounds, five of
+them this one shape.
