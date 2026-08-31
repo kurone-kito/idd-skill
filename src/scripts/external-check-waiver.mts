@@ -9,7 +9,7 @@ import { readFileSync } from 'node:fs';
 import {
   buildAdvisoryConvergenceWaiverPrecondition,
   DEFAULT_ADVISORY_CONVERGENCE_CHECK_SELECTOR,
-  resolveAdvisoryConvergenceDeadlineMinutes,
+  readAdvisoryConvergenceDeadlineMinutes,
 } from './advisory-wait-policy.mts';
 import { parseCliArgs } from './cli-args.mts';
 import { resolveTrustedCollaboratorMarkerLogins } from './collaborator-permission.mts';
@@ -313,8 +313,12 @@ interface RunExternalCheckWaiverOptions {
   now?: Date;
   isTTY?: boolean;
   prompt?: PromptFn;
-  /** #2328: injected PR issue comments, for the reuse scan under test. */
-  prComments?: WaiverCommentPayload[];
+  /**
+   * #2328: injected PR issue comments for the reuse scan under test. A
+   * function is called, so a test can exercise the fail-closed path by
+   * throwing from it.
+   */
+  prComments?: WaiverCommentPayload[] | (() => WaiverCommentPayload[]);
   /** #2328: injected HEAD commit timestamp, so tests skip the commit read. */
   headCommittedAt?: string;
   postComment?: (
@@ -758,8 +762,14 @@ export async function runExternalCheckWaiver(
           headRefOid: String(pr.headRefOid ?? '').trim(),
         }),
       allowClosedPrecondition: args.allowClosedPrecondition,
+      // Read through the SAME validating reader the gate uses, not the raw
+      // resolver: the gate rejects the whole `advisoryWait` section when any
+      // sibling key is schema-invalid and falls back to the 24h default. A
+      // resolver that skips that validation would report the configured value
+      // where the gate reports the default, reproducing the very disagreement
+      // this change removes.
       advisoryConvergenceDeadlineMinutes:
-        resolveAdvisoryConvergenceDeadlineMinutes(rawConfig),
+        readAdvisoryConvergenceDeadlineMinutes(),
     },
     { now: options.now, repoOwner: owner },
   );
@@ -806,8 +816,10 @@ export async function runExternalCheckWaiver(
   // for this selector first. A repeated `--apply` previously posted a second
   // identical marker, leaving two live waivers on the pull request.
   const prComments =
-    options.prComments ??
-    fetchPrComments({ owner, repo: name, prNumber: args.prNumber });
+    typeof options.prComments === 'function'
+      ? options.prComments()
+      : (options.prComments ??
+        fetchPrComments({ owner, repo: name, prNumber: args.prNumber }));
   // The marker this invocation would post is the exact context a reusable
   // waiver must match, so recover the HEAD and claim from it rather than
   // threading them separately and risking a mismatch.
@@ -891,19 +903,19 @@ function fetchPrComments({
   repo: string;
   prNumber: number;
 }): WaiverCommentPayload[] {
-  try {
-    const payload = ghJson(
-      [
-        'api',
-        '--paginate',
-        `repos/${owner}/${repo}/issues/${prNumber}/comments`,
-      ],
-      true,
+  // Never fail open: an unreadable list is not an empty one. Swallowing the
+  // error would hide an existing waiver and let `--apply` append a duplicate,
+  // which is the regression this change exists to remove.
+  const payload = ghJson(
+    ['api', '--paginate', `repos/${owner}/${repo}/issues/${prNumber}/comments`],
+    true,
+  );
+  if (!Array.isArray(payload)) {
+    throw new Error(
+      `external-check waiver apply blocked: could not read PR #${prNumber} comments to check for an existing waiver`,
     );
-    return Array.isArray(payload) ? (payload as WaiverCommentPayload[]) : [];
-  } catch {
-    return [];
   }
+  return payload as WaiverCommentPayload[];
 }
 
 /** One issue comment, in the shape the GitHub REST list endpoint returns. */
