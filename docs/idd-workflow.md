@@ -1125,6 +1125,6 @@ round:
 Each check names a way a mirror can disagree with its gate while the
 shared code is itself correct, so a passing unit test on the shared
 function is not evidence for any of them. The gap class was observed on
-[kurone-kito/idd-skill#2330](https://github.com/kurone-kito/idd-skill/pull/2330),
-where a correct extraction still took seven advisory rounds, five of
-them this one shape.
+[#2330](https://github.com/kurone-kito/idd-skill/pull/2330), where a
+correct extraction still took seven advisory rounds, five of them this
+one shape.
