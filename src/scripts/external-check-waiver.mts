@@ -848,13 +848,19 @@ export async function runExternalCheckWaiver(
           // second one after every takeover.
           activeClaimSupersedes:
             report.linkedIssue?.activeClaim?.supersedes ?? '',
+          // Derived from the SAME snapshot being summarized, never from the
+          // pre-write one. With collaborator-marker trust enabled, a
+          // maintainer absent from the earlier read would otherwise be
+          // classified unauthorized here while the gate — which derives
+          // trust from the final comments — accepts their waiver, so the
+          // reconcile would miss exactly the duplicate it exists to find.
           trustedMarkerLogins: [
             ...buildTrustedMarkerLogins({
               owner,
               repo: name,
               rawConfig,
               viewerLogin: actor,
-              issueComments: prComments,
+              issueComments: comments,
             }),
           ],
           now: (options.now instanceof Date
@@ -907,10 +913,17 @@ export async function runExternalCheckWaiver(
   // all and identify the earliest, which is the one a deterministic reader
   // resolves to. Reporting rather than deleting -- removing a marker another
   // session just posted is not this helper's call to make.
+  // ONE snapshot for both arguments. Two sequential reads would let a waiver
+  // land between them, leaving `comments` older than `evidence`;
+  // `collectValidWaiverComments` can only correlate entries it can find in
+  // `comments`, so the newer marker would be dropped and the duplicate
+  // silently missed — a snapshot mismatch inside the code that exists to
+  // catch mismatches.
+  const postWriteComments = wouldPost ? readPrComments() : [];
   const concurrentWaivers = wouldPost
     ? collectValidWaiverComments({
-        comments: readPrComments(),
-        evidence: buildWaiverEvidence(readPrComments()),
+        comments: postWriteComments,
+        evidence: buildWaiverEvidence(postWriteComments),
         checkSelector: report.requested.selector,
       })
     : [];

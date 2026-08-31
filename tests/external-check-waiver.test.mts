@@ -1304,3 +1304,90 @@ test('runExternalCheckWaiver reports no race when its own marker stands alone (#
   assert.equal(report?.applied, true);
   assert.equal(report?.concurrentWaivers, undefined);
 });
+
+test('runExternalCheckWaiver reads one post-write snapshot for the reconcile (#2328 review)', async () => {
+  // Two sequential reads would leave `comments` older than `evidence`, and
+  // the correlation can only find markers present in `comments` — so a
+  // waiver landing between them would be dropped and the duplicate missed.
+  // Counting reads pins the single-snapshot contract: one before the post,
+  // one after.
+  let reads = 0;
+  const raced = waiverComment({
+    id: 300,
+    createdAt: '2026-08-30T22:29:00Z',
+    claimId: 'claim-20260830T222316Z-2328',
+  });
+  const mine = waiverComment({
+    id: 400,
+    createdAt: '2026-08-30T22:30:00Z',
+    claimId: 'claim-20260830T222316Z-2328',
+  });
+
+  const { report } = await runExternalCheckWaiver({
+    args: {
+      ...parseArgs([
+        '--pr',
+        '2325',
+        '--check',
+        'idd-advisory-convergence',
+        '--reason',
+        'rate limit',
+        '--expires-in',
+        'PT8H',
+        '--apply',
+        '--yes',
+        '--allow-closed-precondition',
+      ]),
+      repo: 'kurone-kito/idd-skill',
+      issueNumber: 2328,
+    },
+    actor: 'kurone-kito',
+    authority: { known: true, permission: 'admin', roleName: 'admin' },
+    pr: {
+      number: 2325,
+      state: 'OPEN',
+      url: 'https://github.com/kurone-kito/idd-skill/pull/2325',
+      headRefName: 'issue/2328-fix-external-check-waiver-refuse-waiver',
+      headRefOid: REUSE_HEAD_SHA,
+      statusCheckRollup: [
+        {
+          __typename: 'CheckRun',
+          name: 'idd-advisory-convergence',
+          status: 'COMPLETED',
+          conclusion: 'FAILURE',
+        },
+      ],
+    },
+    issueCandidates: [
+      {
+        number: 2328,
+        url: 'https://github.com/kurone-kito/idd-skill/issues/2328',
+        activeClaim: {
+          agentId: 'claude-6043e89f',
+          claimId: 'claim-20260830T222316Z-2328',
+          supersedes: 'none',
+          branch: 'issue/2328-fix-external-check-waiver-refuse-waiver',
+          createdAt: '2026-08-30T22:23:26Z',
+        },
+      },
+    ],
+    // Read 1 (pre-write): empty. Read 2 (post-write): the race. A third
+    // read would mean the reconcile took two snapshots, which is the defect.
+    prComments: () => {
+      reads += 1;
+      if (reads === 1) return [];
+      if (reads === 2) return [raced, mine];
+      throw new Error(`reconcile took ${reads} snapshots; expected exactly 2`);
+    },
+    headCommittedAt: '2026-08-30T18:13:24Z',
+    now: new Date('2026-08-30T22:30:00Z'),
+    isTTY: false,
+    postComment: () => ({ html_url: 'https://example.invalid/posted' }),
+  });
+
+  assert.equal(reads, 2, 'exactly one pre-write and one post-write read');
+  assert.deepEqual(
+    report?.concurrentWaivers?.map((entry) => entry.commentId),
+    ['300', '400'],
+  );
+});
