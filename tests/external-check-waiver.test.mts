@@ -596,3 +596,143 @@ test('planExternalCheckWaiver fails closed when authority lookup returns unknown
   assert.equal(report.canApply, false);
   assert.ok(report.blockingReasons.some((r) => /authority|proven/.test(r)));
 });
+
+// --- #2328: the idd-advisory-convergence waiver precondition ---------------
+// The gate never treats a posted waiver as active until its precondition
+// opens, so rendering one before then produces a marker the gate ignores.
+// Observed live: this helper reported no blocking reasons while
+// pre-merge-readiness reported the hatch shut for the same PR and HEAD.
+
+/** Base input aimed at the precondition-gated selector. */
+function buildAdvisoryConvergenceInput(): BaseInput {
+  const input = buildBaseInput();
+  input.policy = normalizePolicyConfig({
+    ciGate: {
+      externalChecks: {
+        waivable: [
+          { selector: 'idd-advisory-convergence', matchMode: 'exact' },
+        ],
+      },
+      externalCheckWaivers: {
+        mode: 'maintainer-authorized',
+        authorityPolicy: 'owners-and-maintainers-only',
+        maxValidity: 'PT24H',
+      },
+    },
+  });
+  input.pr.statusCheckRollup = [
+    {
+      __typename: 'CheckRun',
+      name: 'idd-advisory-convergence',
+      status: 'COMPLETED',
+      conclusion: 'FAILURE',
+    },
+  ];
+  input.requestedSelector = 'idd-advisory-convergence';
+  input.headCommittedAt = '2026-08-30T18:13:24Z';
+  // Supplied by the caller from the RAW config, as pre-merge-readiness
+  // receives it: normalizePolicyConfig drops `convergenceDeadline`, so
+  // reading it off the normalized policy would silently use the 24h default
+  // for this repository's configured PT9H.
+  input.advisoryConvergenceDeadlineMinutes = 540;
+  // The base fixture's expiry predates every `now` used below; leaving it
+  // would add an unrelated expiry blocker and mask what these cases assert.
+  input.expiresAt = '2026-08-31T09:00:00Z';
+  return input;
+}
+
+test('planExternalCheckWaiver blocks an advisory-convergence waiver before its deadline (#2328)', () => {
+  const report = planExternalCheckWaiver(buildAdvisoryConvergenceInput(), {
+    // 229 of 540 minutes -- the live observation this issue was filed from.
+    now: new Date('2026-08-30T22:02:24Z'),
+    repoOwner: 'kurone-kito',
+  });
+
+  assert.equal(report.canApply, false);
+  assert.deepEqual(report.advisoryConvergenceWaiverPrecondition, {
+    checkSelector: 'idd-advisory-convergence',
+    deadlineMinutes: 540,
+    headCommittedAt: '2026-08-30T18:13:24Z',
+    elapsedMinutes: 229,
+    deadlinePassed: false,
+    terminalUnavailable: false,
+    open: false,
+    terminalEvaluated: false,
+  });
+  const blocked = report.blockingReasons.join(' | ');
+  assert.match(blocked, /deadline has not passed/);
+  assert.match(blocked, /229 of 540 minutes/);
+  // The reason must not claim the hatch is shut outright: the terminal
+  // opener is never evaluated here, so it may be open unseen.
+  assert.match(blocked, /terminal Copilot unavailability was not evaluated/);
+});
+
+test('planExternalCheckWaiver allows an advisory-convergence waiver once the deadline passes (#2328)', () => {
+  const report = planExternalCheckWaiver(buildAdvisoryConvergenceInput(), {
+    now: new Date('2026-08-31T03:13:24Z'),
+    repoOwner: 'kurone-kito',
+  });
+
+  assert.equal(report.advisoryConvergenceWaiverPrecondition?.open, true);
+  assert.equal(report.canApply, true);
+  assert.equal(
+    report.blockingReasons.filter((entry) =>
+      /deadline has not passed/.test(entry),
+    ).length,
+    0,
+  );
+});
+
+test('planExternalCheckWaiver honors the closed-precondition opt-in (#2328)', () => {
+  const input = buildAdvisoryConvergenceInput();
+  input.allowClosedPrecondition = true;
+
+  const report = planExternalCheckWaiver(input, {
+    now: new Date('2026-08-30T22:02:24Z'),
+    repoOwner: 'kurone-kito',
+  });
+
+  // The precondition is still reported honestly as closed; only the block
+  // is lifted, so the operator sees exactly what they are overriding.
+  assert.equal(report.advisoryConvergenceWaiverPrecondition?.open, false);
+  assert.equal(report.canApply, true);
+});
+
+test('planExternalCheckWaiver keeps the hatch shut without a HEAD commit anchor (#2328)', () => {
+  const input = buildAdvisoryConvergenceInput();
+  input.headCommittedAt = '';
+
+  const report = planExternalCheckWaiver(input, {
+    now: new Date('2026-08-31T03:13:24Z'),
+    repoOwner: 'kurone-kito',
+  });
+
+  assert.equal(
+    report.advisoryConvergenceWaiverPrecondition?.elapsedMinutes,
+    null,
+  );
+  assert.equal(report.canApply, false);
+  assert.match(report.blockingReasons.join(' | '), /elapsed unknown/);
+});
+
+test('planExternalCheckWaiver leaves other selectors ungated (#2328)', () => {
+  // A glob waiver is never treated as covering idd-advisory-convergence by
+  // the gate either (#2021), so gating one here would block for the wrong
+  // reason; an unrelated selector must be untouched.
+  const report = planExternalCheckWaiver(buildBaseInput(), {
+    now: new Date('2026-05-17T06:00:00Z'),
+    repoOwner: 'kurone-kito',
+  });
+
+  assert.equal(report.advisoryConvergenceWaiverPrecondition, undefined);
+  assert.equal(report.canApply, true);
+});
+
+test('parseArgs: --allow-closed-precondition defaults off and parses (#2328)', () => {
+  const base = ['--pr', '5', '--check', 'x', '--reason', 'y'];
+  assert.equal(parseArgs(base).allowClosedPrecondition, false);
+  assert.equal(
+    parseArgs([...base, '--allow-closed-precondition']).allowClosedPrecondition,
+    true,
+  );
+});

@@ -6,7 +6,11 @@
 // .mjs. See docs/typescript-sources.md.
 
 import { readFileSync } from 'node:fs';
-
+import {
+  buildAdvisoryConvergenceWaiverPrecondition,
+  DEFAULT_ADVISORY_CONVERGENCE_CHECK_SELECTOR,
+  resolveAdvisoryConvergenceDeadlineMinutes,
+} from './advisory-wait-policy.mts';
 import { parseCliArgs } from './cli-args.mts';
 import { resolveTrustedCollaboratorMarkerLogins } from './collaborator-permission.mts';
 import { resolveHelperActiveClaim } from './forced-handoff-marker.mts';
@@ -161,6 +165,28 @@ interface ExternalCheckWaiverPlanInput {
   expiresAt?: string;
   repoOwner?: string;
   /**
+   * #2328: the current HEAD commit's own timestamp, the anchor the
+   * `idd-advisory-convergence` waiver deadline is measured from. Absent or
+   * unparseable keeps the hatch shut, which is the safe direction.
+   */
+  headCommittedAt?: string;
+  /**
+   * #2328: the configured `advisoryWait.convergenceDeadline` in minutes.
+   * Supplied by the caller from the RAW policy document, exactly as
+   * `pre-merge-readiness` receives it: `normalizePolicyConfig` does not carry
+   * `convergenceDeadline` through, so reading it off the normalized policy
+   * would silently substitute the 24h default for a repository that
+   * configured something shorter.
+   */
+  advisoryConvergenceDeadlineMinutes?: number;
+  /**
+   * #2328: post an `idd-advisory-convergence` waiver even though its hatch
+   * has not opened. The marker is inert until the hatch opens, so this is
+   * for an operator who knows the terminal opener applies -- which this
+   * helper does not evaluate.
+   */
+  allowClosedPrecondition?: boolean;
+  /**
    * #1905: render a claimless waiver -- claim-id `none` -- instead of
    * resolving the claim-id from a linked issue's active IDD claim. Skips
    * the linked-issue-claim requirement entirely; blocks instead when a
@@ -210,6 +236,23 @@ interface ExternalCheckWaiverReport {
     uncoveredChecks: NormalizedCheck[];
   };
   blockingReasons: string[];
+  /**
+   * #2328: present only for the precondition-gated
+   * `idd-advisory-convergence` selector. `terminalUnavailable` is always
+   * `false` here: this helper evaluates the deadline opener only, so a
+   * closed verdict means "the deadline has not passed", never "no opener
+   * applies".
+   */
+  advisoryConvergenceWaiverPrecondition?: {
+    checkSelector: string;
+    deadlineMinutes: number;
+    headCommittedAt: string;
+    elapsedMinutes: number | null;
+    deadlinePassed: boolean;
+    terminalUnavailable: boolean;
+    open: boolean;
+    terminalEvaluated: boolean;
+  };
   body: string;
   applied?: boolean;
   commentUrl?: string;
@@ -230,6 +273,7 @@ interface ExternalCheckWaiverArgs {
   yes: boolean;
   format: string;
   claimless: boolean;
+  allowClosedPrecondition: boolean;
   help: boolean;
 }
 
@@ -461,6 +505,48 @@ export function planExternalCheckWaiver(
     );
   }
 
+  // #2328: `idd-advisory-convergence` never treats a posted waiver as active
+  // until its own precondition opens, so rendering one before then produces a
+  // marker the gate ignores. Report that precondition from the shared builder
+  // -- the same one `pre-merge-readiness` uses -- and block on a closed hatch,
+  // rather than reporting no blocking reasons while the gate reports the hatch
+  // shut. Only the EXACT selector is gated: a glob waiver is never treated as
+  // covering this check by the gate either (#2021), so gating one here would
+  // block for the wrong reason.
+  //
+  // The terminal opener is deliberately NOT evaluated: proving it needs
+  // trusted advisory-wait recovery-marker state this helper does not collect.
+  // The blocking reason therefore says the deadline has not passed, never that
+  // no opener applies -- an unevaluated terminal opener may well be open.
+  const preconditionGatedSelector =
+    requestedMatchMode === 'exact' &&
+    requestedSelector === DEFAULT_ADVISORY_CONVERGENCE_CHECK_SELECTOR;
+  const advisoryConvergenceWaiverPrecondition = preconditionGatedSelector
+    ? (() => {
+        const { precondition } = buildAdvisoryConvergenceWaiverPrecondition({
+          headCommittedAt: input?.headCommittedAt,
+          deadlineMinutes: input?.advisoryConvergenceDeadlineMinutes,
+          now: now.toISOString(),
+        });
+        return { ...precondition, terminalEvaluated: false };
+      })()
+    : undefined;
+  const allowClosedPrecondition = input?.allowClosedPrecondition === true;
+  if (
+    advisoryConvergenceWaiverPrecondition &&
+    !advisoryConvergenceWaiverPrecondition.open &&
+    !allowClosedPrecondition
+  ) {
+    const elapsed = advisoryConvergenceWaiverPrecondition.elapsedMinutes;
+    blockingReasons.push(
+      `${DEFAULT_ADVISORY_CONVERGENCE_CHECK_SELECTOR} waiver deadline has not passed ` +
+        `(${elapsed === null ? 'elapsed unknown' : `${elapsed} of ${advisoryConvergenceWaiverPrecondition.deadlineMinutes} minutes`}` +
+        `, anchored on HEAD commit ${advisoryConvergenceWaiverPrecondition.headCommittedAt}); ` +
+        'terminal Copilot unavailability was not evaluated here, so pass ' +
+        '--allow-closed-precondition if that opener already applies',
+    );
+  }
+
   // #1905: --claimless binds the marker to the sentinel claim-id `none` and
   // the acting maintainer's own identity as agentId (there is no
   // issue-claim agentId to reuse when the PR carries no active claim by
@@ -536,6 +622,9 @@ export function planExternalCheckWaiver(
       uncoveredChecks,
     },
     blockingReasons,
+    ...(advisoryConvergenceWaiverPrecondition
+      ? { advisoryConvergenceWaiverPrecondition }
+      : {}),
     body,
   };
 }
@@ -647,6 +736,14 @@ export async function runExternalCheckWaiver(
       }),
       repoOwner: owner,
       claimless: args.claimless,
+      headCommittedAt: fetchHeadCommittedAt({
+        owner,
+        repo: name,
+        headRefOid: String(pr.headRefOid ?? '').trim(),
+      }),
+      allowClosedPrecondition: args.allowClosedPrecondition,
+      advisoryConvergenceDeadlineMinutes:
+        resolveAdvisoryConvergenceDeadlineMinutes(rawConfig),
     },
     { now: options.now, repoOwner: owner },
   );
@@ -1016,6 +1113,34 @@ function fetchPullRequest({
   ]) as PrPayload;
 }
 
+/**
+ * #2328: the HEAD commit's own `committer.date`, the anchor the
+ * `idd-advisory-convergence` waiver deadline is measured from. Returns an
+ * empty string on any failure — a missing anchor keeps the hatch shut, which
+ * is the safe direction, and never blocks a selector that is not
+ * precondition-gated.
+ */
+function fetchHeadCommittedAt({
+  owner,
+  repo,
+  headRefOid,
+}: {
+  owner: string;
+  repo: string;
+  headRefOid: string;
+}): string {
+  if (!headRefOid) return '';
+  try {
+    const payload = ghJson([
+      'api',
+      `repos/${owner}/${repo}/commits/${headRefOid}`,
+    ]) as { commit?: { committer?: { date?: unknown } } } | null;
+    return String(payload?.commit?.committer?.date ?? '').trim();
+  } catch {
+    return '';
+  }
+}
+
 function resolveCollaboratorAuthority({
   owner,
   repo,
@@ -1249,6 +1374,7 @@ const EXTERNAL_CHECK_WAIVER_FLAG_SPEC = {
   '--yes': { type: 'boolean', default: false },
   '--format': { type: 'string', default: 'json' },
   '--claimless': { type: 'boolean', default: false },
+  '--allow-closed-precondition': { type: 'boolean', default: false },
   '--help': { type: 'boolean', short: 'h' },
 } as const;
 
@@ -1285,6 +1411,7 @@ export function parseArgs(argv: string[]): ExternalCheckWaiverArgs {
     yes: values.yes as boolean,
     format,
     claimless: values.claimless as boolean,
+    allowClosedPrecondition: values['allow-closed-precondition'] as boolean,
     help,
   };
 
@@ -1348,6 +1475,11 @@ Options:
                                      resolving a linked issue's active claim; for a PR with
                                      no IDD claim at all (e.g. Dependabot). Cannot combine
                                      with --issue or --claim-id.
+  --allow-closed-precondition       post an idd-advisory-convergence waiver even though its
+                                     deadline has not passed. The marker stays inert until a
+                                     precondition opens; use it when terminal Copilot
+                                     unavailability already applies, which this helper does
+                                     not evaluate.
   --actor <login>                   override the GitHub actor used for authority evaluation
   --repo <owner/name>               repository override
   --apply                           post the canonical waiver comment after validation
