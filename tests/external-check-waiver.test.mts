@@ -1606,3 +1606,98 @@ test('collectValidWaiverComments rejects a wrong-HEAD or wrong-claim twin (#2328
     ['100'],
   );
 });
+
+test('runExternalCheckWaiver reconciles against the refreshed claim after a takeover (#2328 review)', async () => {
+  // Claim B supersedes A between the initial resolution and the post-write
+  // read. The gate resolves B with `supersedes: A` and accepts both waivers,
+  // so a summarizer still pinned to A classifies B's as wrongClaim and
+  // reports no duplicate — silence exactly where the warning matters.
+  let reads = 0;
+  let candidateCalls = 0;
+  const claimA = 'claim-A';
+  const claimB = 'claim-B';
+  const mine = waiverComment({
+    id: 500,
+    createdAt: '2026-08-30T22:29:00Z',
+    claimId: claimA,
+  });
+  const theirs = waiverComment({
+    id: 501,
+    createdAt: '2026-08-30T22:29:30Z',
+    claimId: claimB,
+  });
+  const candidateFor = (claimId: string, supersedes: string) => [
+    {
+      number: 2328,
+      url: 'https://github.com/kurone-kito/idd-skill/issues/2328',
+      activeClaim: {
+        agentId: 'claude-6043e89f',
+        claimId,
+        supersedes,
+        branch: 'issue/2328-fix-external-check-waiver-refuse-waiver',
+        createdAt: '2026-08-30T22:23:26Z',
+      },
+    },
+  ];
+
+  const { report } = await runExternalCheckWaiver({
+    args: {
+      ...parseArgs([
+        '--pr',
+        '2325',
+        '--check',
+        'idd-advisory-convergence',
+        '--reason',
+        'rate limit',
+        '--expires-in',
+        'PT8H',
+        '--apply',
+        '--yes',
+        '--allow-closed-precondition',
+      ]),
+      repo: 'kurone-kito/idd-skill',
+      issueNumber: 2328,
+    },
+    actor: 'kurone-kito',
+    authority: { known: true, permission: 'admin', roleName: 'admin' },
+    pr: {
+      number: 2325,
+      state: 'OPEN',
+      url: 'https://github.com/kurone-kito/idd-skill/pull/2325',
+      headRefName: 'issue/2328-fix-external-check-waiver-refuse-waiver',
+      headRefOid: REUSE_HEAD_SHA,
+      statusCheckRollup: [
+        {
+          __typename: 'CheckRun',
+          name: 'idd-advisory-convergence',
+          status: 'COMPLETED',
+          conclusion: 'FAILURE',
+        },
+      ],
+    },
+    // First resolution binds to A; the reconcile re-resolves and sees B
+    // superseding A.
+    issueCandidates: undefined,
+    resolveIssueCandidates: () => {
+      candidateCalls += 1;
+      return candidateCalls === 1
+        ? candidateFor(claimA, 'none')
+        : candidateFor(claimB, claimA);
+    },
+    prComments: () => {
+      reads += 1;
+      return reads === 1 ? [] : [mine, theirs];
+    },
+    headCommittedAt: '2026-08-30T18:13:24Z',
+    now: new Date('2026-08-30T22:30:00Z'),
+    isTTY: false,
+    postComment: () => ({ html_url: 'https://example.invalid/posted' }),
+  });
+
+  assert.equal(report?.applied, true);
+  assert.deepEqual(
+    report?.concurrentWaivers?.map((entry) => entry.commentId),
+    ['500', '501'],
+    'both the A-bound and B-bound waivers are live to the gate after the takeover',
+  );
+});

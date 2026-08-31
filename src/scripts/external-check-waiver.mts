@@ -332,6 +332,12 @@ interface RunExternalCheckWaiverOptions {
   prComments?: WaiverCommentPayload[] | (() => WaiverCommentPayload[]);
   /** #2328: injected HEAD commit timestamp, so tests skip the commit read. */
   headCommittedAt?: string;
+  /**
+   * #2328 (review): injected linked-issue resolver, called once before the
+   * post and once for the reconcile, so a test can model a takeover landing
+   * between them.
+   */
+  resolveIssueCandidates?: () => IssueCandidatePayload[];
   postComment?: (
     prNumber: number,
     body: string,
@@ -732,6 +738,7 @@ export async function runExternalCheckWaiver(
     fetchPullRequest({ owner, repo: name, prNumber: args.prNumber });
   const issueCandidates =
     options.issueCandidates ??
+    options.resolveIssueCandidates?.() ??
     resolveLinkedIssueCandidates({
       owner,
       repo: name,
@@ -843,17 +850,19 @@ export async function runExternalCheckWaiver(
   );
   // One evidence build for both the pre-write scan and the post-write
   // reconcile, so the two can never classify the same marker differently.
-  const buildWaiverEvidence = (comments: WaiverCommentPayload[]) =>
+  const buildWaiverEvidence = (
+    comments: WaiverCommentPayload[],
+    binding: { claimId: string; supersedes: string },
+  ) =>
     wouldPost
       ? summarizeExternalCheckWaivers(comments, {
           prHeadSha: wouldPost.headSha,
-          activeClaimId: wouldPost.claimId,
+          activeClaimId: binding.claimId,
           // The gate accepts a waiver bound to the immediate predecessor
           // claim through its one-hop takeover exception. Omitting this
           // would classify such a waiver `wrongClaim` here and append a
           // second one after every takeover.
-          activeClaimSupersedes:
-            report.linkedIssue?.activeClaim?.supersedes ?? '',
+          activeClaimSupersedes: binding.supersedes,
           // Derived from the SAME snapshot being summarized, never from the
           // pre-write one. With collaborator-marker trust enabled, a
           // maintainer absent from the earlier read would otherwise be
@@ -886,18 +895,23 @@ export async function runExternalCheckWaiver(
   // The marker this invocation would post defines the binding a reusable
   // waiver must share; the predecessor claim is accepted too, matching the
   // gate's one-hop takeover exception.
-  const allowedClaimIds = wouldPost
-    ? [
-        wouldPost.claimId,
-        String(report.linkedIssue?.activeClaim?.supersedes ?? ''),
-      ].filter((value) => value && value !== 'none')
-    : [];
+  const toAllowedClaimIds = (binding: {
+    claimId: string;
+    supersedes: string;
+  }): string[] =>
+    [binding.claimId, binding.supersedes].filter(
+      (value) => value && value !== 'none',
+    );
+  const preWriteBinding = {
+    claimId: wouldPost?.claimId ?? '',
+    supersedes: String(report.linkedIssue?.activeClaim?.supersedes ?? ''),
+  };
   const existingWaiver = findReusableWaiverComment({
     comments: prComments,
-    evidence: buildWaiverEvidence(prComments),
+    evidence: buildWaiverEvidence(prComments, preWriteBinding),
     checkSelector: report.requested.selector,
     expectedHeadSha: wouldPost?.headSha ?? '',
-    allowedClaimIds,
+    allowedClaimIds: toAllowedClaimIds(preWriteBinding),
   });
   if (existingWaiver) {
     const reusedReport = {
@@ -958,14 +972,60 @@ export async function runExternalCheckWaiver(
       );
     }
   }
+  // #2328 (review): re-resolve the claim for the reconcile rather than
+  // reusing the pre-write binding. If a takeover lands between the two, the
+  // gate resolves the successor with the predecessor as `supersedes` and
+  // accepts BOTH waivers, while a summarizer still pinned to the predecessor
+  // classifies the successor's as `wrongClaim` and reports no duplicate --
+  // silence exactly where the operator most needs the warning. A failure to
+  // re-resolve makes the reconcile inconclusive rather than wrong; the apply
+  // itself already succeeded and is never retracted for this.
+  let postWriteBinding = preWriteBinding;
+  if (wouldPost && !reconcileInconclusive) {
+    try {
+      const refreshed = selectLinkedIssueCandidate(
+        options.issueCandidates ??
+          options.resolveIssueCandidates?.() ??
+          resolveLinkedIssueCandidates({
+            owner,
+            repo: name,
+            rawConfig,
+            viewerLogin: actor,
+            linkedIssues: pr.closingIssuesReferences,
+            issueNumber: args.issueNumber,
+            expectedClaimId: '',
+            headRefName: pr.headRefName,
+            prNumber: args.prNumber,
+          }),
+        {
+          issueNumber: args.issueNumber,
+          headRefName: String(pr.headRefName ?? ''),
+        },
+      );
+      if (refreshed.ok) {
+        postWriteBinding = {
+          claimId: refreshed.issue.activeClaim.claimId,
+          supersedes: String(refreshed.issue.activeClaim.supersedes ?? ''),
+        };
+      }
+    } catch (error) {
+      reconcileInconclusive = true;
+      process.stderr.write(
+        `warning: the waiver was posted, but re-resolving the active claim failed, ` +
+          `so a concurrent duplicate could not be ruled out: ${String(
+            (error as { message?: unknown })?.message ?? error,
+          )}\n`,
+      );
+    }
+  }
   const concurrentWaivers =
     wouldPost && !reconcileInconclusive
       ? collectValidWaiverComments({
           comments: postWriteComments,
-          evidence: buildWaiverEvidence(postWriteComments),
+          evidence: buildWaiverEvidence(postWriteComments, postWriteBinding),
           checkSelector: report.requested.selector,
           expectedHeadSha: wouldPost?.headSha ?? '',
-          allowedClaimIds,
+          allowedClaimIds: toAllowedClaimIds(postWriteBinding),
         })
       : [];
   if (concurrentWaivers.length > 1) {
