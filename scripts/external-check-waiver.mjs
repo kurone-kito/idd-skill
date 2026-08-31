@@ -25,8 +25,10 @@ import {
   resolveCollaboratorMarkerTrust,
 } from './policy-helpers.mjs';
 import {
+  parseExternalCheckWaiverComment,
   parsePaginatedGhNdjson,
   renderExternalCheckWaiverComment,
+  summarizeExternalCheckWaivers,
 } from './protocol-helpers.mjs';
 import { makeReadlinePrompt } from './readline-prompt.mjs';
 
@@ -473,6 +475,60 @@ export async function runExternalCheckWaiver(options = {}) {
       return { exitCode: 0, report: { ...report, applied: false } };
     }
   }
+  // #2328: appending is not idempotent, so look for an existing valid waiver
+  // for this selector first. A repeated `--apply` previously posted a second
+  // identical marker, leaving two live waivers on the pull request.
+  const prComments =
+    options.prComments ??
+    fetchPrComments({ owner, repo: name, prNumber: args.prNumber });
+  // The marker this invocation would post is the exact context a reusable
+  // waiver must match, so recover the HEAD and claim from it rather than
+  // threading them separately and risking a mismatch.
+  const wouldPost = parseExternalCheckWaiverComment(
+    report.body,
+    new Date().toISOString(),
+  );
+  const existingWaiver = wouldPost
+    ? findReusableWaiverComment({
+        comments: prComments,
+        evidence: summarizeExternalCheckWaivers(prComments, {
+          prHeadSha: wouldPost.headSha,
+          activeClaimId: wouldPost.claimId,
+          trustedMarkerLogins: [
+            ...buildTrustedMarkerLogins({
+              owner,
+              repo: name,
+              rawConfig,
+              viewerLogin: actor,
+              issueComments: prComments,
+            }),
+          ],
+          now: (options.now instanceof Date
+            ? options.now
+            : new Date()
+          ).toISOString(),
+          waivableSelectors: [
+            ...normalizePolicyConfig(rawConfig).ciGate.externalChecks.waivable,
+          ],
+          maxValidity:
+            normalizePolicyConfig(rawConfig).ciGate.externalCheckWaivers
+              .maxValidity,
+          mode: normalizePolicyConfig(rawConfig).ciGate.externalCheckWaivers
+            .mode,
+        }),
+        checkSelector: report.requested.selector,
+      })
+    : null;
+  if (existingWaiver) {
+    const reusedReport = {
+      ...report,
+      applied: false,
+      reusedWaiver: existingWaiver,
+      commentUrl: existingWaiver.commentUrl,
+    };
+    renderReport(reusedReport, args.format);
+    return { exitCode: 0, report: reusedReport };
+  }
   const result = options.postComment
     ? await options.postComment(args.prNumber, report.body)
     : ghJson([
@@ -490,6 +546,80 @@ export async function runExternalCheckWaiver(options = {}) {
   };
   renderReport(appliedReport, args.format);
   return { exitCode: 0, report: appliedReport };
+}
+/**
+ * #2328: the pull request's own issue comments, where waiver markers live.
+ * Paginated so a long conversation cannot hide an existing waiver and cause
+ * a duplicate to be appended.
+ */
+function fetchPrComments({ owner, repo, prNumber }) {
+  try {
+    const payload = ghJson(
+      [
+        'api',
+        '--paginate',
+        `repos/${owner}/${repo}/issues/${prNumber}/comments`,
+      ],
+      true,
+    );
+    return Array.isArray(payload) ? payload : [];
+  } catch {
+    return [];
+  }
+}
+/**
+ * #2328: find an existing valid waiver for this exact selector so a repeated
+ * `--apply` reuses it instead of appending a second marker. Re-running the
+ * same command posted a duplicate on pull request #2325, leaving two live
+ * waivers a later session had to disambiguate by hand.
+ *
+ * Validity is not re-derived here: `summarizeExternalCheckWaivers` already
+ * classifies every marker into valid / expired / wrong-HEAD / wrong-claim,
+ * and both `pre-merge-readiness` and `advisory-convergence` read it. This
+ * function only correlates a `valid` entry back to the comment that carried
+ * it, so an expired, wrong-HEAD, or wrong-claim waiver is never reused —
+ * it simply never appears in `evidence.valid`.
+ *
+ * The earliest matching comment wins, mirroring the release-marker path's
+ * reuse-the-earliest rule, so a retry converges on one marker rather than
+ * picking a different one each pass.
+ */
+export function findReusableWaiverComment({
+  comments,
+  evidence,
+  checkSelector,
+}) {
+  const selector = String(checkSelector ?? '').trim();
+  if (!selector) return null;
+  const validForSelector = (evidence?.valid ?? []).filter(
+    (entry) => entry.checkSelector === selector,
+  );
+  if (validForSelector.length === 0) return null;
+  const ordered = [...(comments ?? [])].sort((left, right) =>
+    String(left?.created_at ?? '').localeCompare(
+      String(right?.created_at ?? ''),
+    ),
+  );
+  for (const comment of ordered) {
+    const parsed = parseExternalCheckWaiverComment(
+      String(comment?.body ?? ''),
+      String(comment?.created_at ?? ''),
+    );
+    if (!parsed || parsed.checkSelector !== selector) continue;
+    const matchesValidEntry = validForSelector.some(
+      (entry) =>
+        entry.expiresAt === parsed.expiresAt &&
+        entry.createdAt === parsed.createdAt,
+    );
+    if (!matchesValidEntry) continue;
+    return {
+      commentId: String(comment?.id ?? ''),
+      commentUrl: String(comment?.html_url ?? comment?.url ?? ''),
+      checkSelector: selector,
+      expiresAt: parsed.expiresAt,
+    };
+  }
+  return null;
 }
 function selectorRequestsGlob(selector) {
   return /[*]/.test(String(selector ?? ''));

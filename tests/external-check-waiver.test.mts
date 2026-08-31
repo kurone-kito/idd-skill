@@ -4,6 +4,7 @@ import { test } from 'node:test';
 import {
   buildTrustedMarkerLogins,
   deriveGhApiStatusFromError,
+  findReusableWaiverComment,
   parseArgs,
   planExternalCheckWaiver,
   resolveActorLogin,
@@ -734,5 +735,163 @@ test('parseArgs: --allow-closed-precondition defaults off and parses (#2328)', (
   assert.equal(
     parseArgs([...base, '--allow-closed-precondition']).allowClosedPrecondition,
     true,
+  );
+});
+
+// --- #2328: --apply idempotency ---------------------------------------------
+// Re-running the same --apply appended a second identical marker on pull
+// request #2325, leaving two live waivers a later session had to
+// disambiguate by hand.
+
+const REUSE_HEAD_SHA = 'b'.repeat(40);
+
+function waiverComment({
+  id,
+  createdAt,
+  checkSelector = 'idd-advisory-convergence',
+  expiresAt = '2026-08-31T10:00:00Z',
+  claimId = 'claim-abc',
+  headSha = REUSE_HEAD_SHA,
+}: {
+  id: number;
+  createdAt: string;
+  checkSelector?: string;
+  expiresAt?: string;
+  claimId?: string;
+  headSha?: string;
+}) {
+  return {
+    id,
+    html_url: `https://github.com/kurone-kito/idd-skill/pull/2325#issuecomment-${id}`,
+    created_at: createdAt,
+    user: { login: 'kurone-kito' },
+    body: renderExternalCheckWaiverComment({
+      actor: 'kurone-kito',
+      agentId: 'claude-6043e89f',
+      claimId,
+      headSha,
+      checkSelector,
+      reason: 'rate limit',
+      expiresAt,
+    }),
+  };
+}
+
+/** Evidence in the shape summarizeExternalCheckWaivers returns. */
+function evidenceWithValid(
+  entries: { checkSelector: string; expiresAt: string; createdAt: string }[],
+) {
+  return {
+    valid: entries.map((entry) => ({
+      authorLogin: 'kurone-kito',
+      reason: 'rate limit',
+      ...entry,
+    })),
+    expired: [],
+    wrongHead: [],
+    wrongClaim: [],
+    unauthorized: [],
+    malformed: [],
+    notConfigured: [],
+    modeDisabled: [],
+  } as never;
+}
+
+test('findReusableWaiverComment reuses the earliest valid marker for the selector (#2328)', () => {
+  const comments = [
+    waiverComment({ id: 5471539677, createdAt: '2026-08-30T22:05:13Z' }),
+    waiverComment({ id: 5471538618, createdAt: '2026-08-30T22:05:01Z' }),
+  ];
+  const found = findReusableWaiverComment({
+    comments,
+    evidence: evidenceWithValid([
+      {
+        checkSelector: 'idd-advisory-convergence',
+        expiresAt: '2026-08-31T10:00:00Z',
+        createdAt: '2026-08-30T22:05:01Z',
+      },
+    ]),
+    checkSelector: 'idd-advisory-convergence',
+  });
+
+  // The earliest wins even though the later one is listed first, so a retry
+  // converges on one marker instead of picking a different one each pass.
+  assert.equal(found?.commentId, '5471538618');
+  assert.equal(found?.checkSelector, 'idd-advisory-convergence');
+});
+
+test('findReusableWaiverComment never reuses a marker the shared parser rejected (#2328)', () => {
+  const comments = [
+    waiverComment({ id: 1, createdAt: '2026-08-30T22:05:01Z' }),
+  ];
+  // An expired, wrong-HEAD, or wrong-claim waiver simply never reaches the
+  // `valid` bucket, so an empty bucket must produce no reuse.
+  assert.equal(
+    findReusableWaiverComment({
+      comments,
+      evidence: evidenceWithValid([]),
+      checkSelector: 'idd-advisory-convergence',
+    }),
+    null,
+  );
+});
+
+test('findReusableWaiverComment does not cross selectors (#2328)', () => {
+  const comments = [
+    waiverComment({
+      id: 1,
+      createdAt: '2026-08-30T22:05:01Z',
+      checkSelector: 'CodeRabbit',
+    }),
+  ];
+  assert.equal(
+    findReusableWaiverComment({
+      comments,
+      evidence: evidenceWithValid([
+        {
+          checkSelector: 'CodeRabbit',
+          expiresAt: '2026-08-31T10:00:00Z',
+          createdAt: '2026-08-30T22:05:01Z',
+        },
+      ]),
+      checkSelector: 'idd-advisory-convergence',
+    }),
+    null,
+  );
+});
+
+test('findReusableWaiverComment ignores non-waiver comments and empty input (#2328)', () => {
+  const evidence = evidenceWithValid([
+    {
+      checkSelector: 'idd-advisory-convergence',
+      expiresAt: '2026-08-31T10:00:00Z',
+      createdAt: '2026-08-30T22:05:01Z',
+    },
+  ]);
+  assert.equal(
+    findReusableWaiverComment({
+      comments: [
+        { id: 9, created_at: '2026-08-30T22:00:00Z', body: 'looks good to me' },
+      ],
+      evidence,
+      checkSelector: 'idd-advisory-convergence',
+    }),
+    null,
+  );
+  assert.equal(
+    findReusableWaiverComment({
+      comments: [],
+      evidence,
+      checkSelector: 'idd-advisory-convergence',
+    }),
+    null,
+  );
+  assert.equal(
+    findReusableWaiverComment({
+      comments: null,
+      evidence: null,
+      checkSelector: '',
+    }),
+    null,
   );
 });
