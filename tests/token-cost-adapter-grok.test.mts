@@ -216,6 +216,22 @@ test('harvest fails closed when no vendorSessionId is derivable', () => {
   );
 });
 
+test('harvest fails closed when redaction strips a path-shaped vendorSessionId, rather than returning a sample missing a required field -- #2289 (CodeRabbit)', () => {
+  assert.throws(
+    () =>
+      grokAdapter.harvest({
+        updateRecords: [
+          {
+            timestamp: '2026-08-26T00:00:00.000Z',
+            sessionId: '/tmp/leaked-path-session-id',
+            type: 'session_start',
+          },
+        ],
+      }),
+    /vendorSessionId/,
+  );
+});
+
 function writeSessionDir(
   sessionsDir: string,
   encodedCwd: string,

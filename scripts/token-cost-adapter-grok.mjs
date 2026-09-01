@@ -337,6 +337,18 @@ export const grokAdapter = {
       includesSubagents: subagentUpdateRecords.length > 0,
     };
     const redacted = redactTokenCostRecord(sample);
+    // assertTokenCostSample does not check vendorSessionId (it is outside
+    // that function's cross-field-constraint scope), and redaction can, in
+    // principle, strip a vendorSessionId value that happens to look like a
+    // path or a secret -- which would silently omit the key rather than
+    // producing a visibly invalid sample. Fail closed instead of returning
+    // a schema-invalid result with a missing required field (CodeRabbit
+    // review, #2289).
+    if (!redacted.vendorSessionId) {
+      throw new Error(
+        'token-cost-adapter-grok: redaction removed vendorSessionId',
+      );
+    }
     assertTokenCostSample(redacted);
     return issueNumber === undefined
       ? { sample: redacted }
