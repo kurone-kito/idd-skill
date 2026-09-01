@@ -1634,13 +1634,36 @@ test('missing --roadmap is rejected', async () => {
   );
 });
 
+/**
+ * Convert a "friendly" newline-delimited fixture (a field per line, a
+ * blank line between stanzas — the pre-#2225-P2-fix text porcelain shape)
+ * into the real `git worktree list --porcelain -z` wire format the parser
+ * now requires: each field NUL-terminated, each record terminated by an
+ * extra NUL. Keeps the many existing fixtures readable while still
+ * exercising the actual NUL-delimited parsing path.
+ */
+function toZ(text: string): string {
+  return text
+    .trim()
+    .split(/\n\n+/)
+    .map(
+      (stanza) =>
+        `${stanza
+          .trim()
+          .split('\n')
+          .filter((line) => line.length > 0)
+          .join('\0')}\0\0`,
+    )
+    .join('');
+}
+
 // ---------------------------------------------------------------------------
 // parseWorktreeListPorcelain (pure, #2225)
 // ---------------------------------------------------------------------------
 
 test('parseWorktreeListPorcelain parses a normal branch stanza', () => {
   const entries = parseWorktreeListPorcelain(
-    'worktree /repo/main\nHEAD abc123\nbranch refs/heads/main\n',
+    toZ('worktree /repo/main\nHEAD abc123\nbranch refs/heads/main\n'),
   );
   assert.equal(entries.length, 1);
   assert.equal(entries[0]?.path, '/repo/main');
@@ -1651,7 +1674,7 @@ test('parseWorktreeListPorcelain parses a normal branch stanza', () => {
 
 test('parseWorktreeListPorcelain flags a detached stanza with no branch', () => {
   const entries = parseWorktreeListPorcelain(
-    'worktree /repo/detached\nHEAD abc123\ndetached\n',
+    toZ('worktree /repo/detached\nHEAD abc123\ndetached\n'),
   );
   assert.equal(entries[0]?.detached, true);
   assert.equal(entries[0]?.branchRef, null);
@@ -1659,7 +1682,9 @@ test('parseWorktreeListPorcelain flags a detached stanza with no branch', () => 
 
 test('parseWorktreeListPorcelain captures a locked reason', () => {
   const entries = parseWorktreeListPorcelain(
-    'worktree /repo/wt\nHEAD abc123\nbranch refs/heads/feature\nlocked manual lock test\n',
+    toZ(
+      'worktree /repo/wt\nHEAD abc123\nbranch refs/heads/feature\nlocked manual lock test\n',
+    ),
   );
   assert.equal(entries[0]?.locked, true);
   assert.equal(entries[0]?.lockReason, 'manual lock test');
@@ -1667,7 +1692,7 @@ test('parseWorktreeListPorcelain captures a locked reason', () => {
 
 test('parseWorktreeListPorcelain treats a bare "locked" line as lock-with-no-reason', () => {
   const entries = parseWorktreeListPorcelain(
-    'worktree /repo/wt\nHEAD abc123\nbranch refs/heads/feature\nlocked\n',
+    toZ('worktree /repo/wt\nHEAD abc123\nbranch refs/heads/feature\nlocked\n'),
   );
   assert.equal(entries[0]?.locked, true);
   assert.equal(entries[0]?.lockReason, null);
@@ -1675,7 +1700,9 @@ test('parseWorktreeListPorcelain treats a bare "locked" line as lock-with-no-rea
 
 test('parseWorktreeListPorcelain captures a prunable reason', () => {
   const entries = parseWorktreeListPorcelain(
-    'worktree /repo/gone\nHEAD abc123\nbranch refs/heads/gone-branch\nprunable gitdir file points to non-existent location\n',
+    toZ(
+      'worktree /repo/gone\nHEAD abc123\nbranch refs/heads/gone-branch\nprunable gitdir file points to non-existent location\n',
+    ),
   );
   assert.equal(entries[0]?.prunable, true);
   assert.equal(
@@ -1684,17 +1711,19 @@ test('parseWorktreeListPorcelain captures a prunable reason', () => {
   );
 });
 
-test('parseWorktreeListPorcelain parses multiple blank-line-separated stanzas', () => {
-  const output = [
-    'worktree /repo/main',
-    'HEAD abc123',
-    'branch refs/heads/main',
-    '',
-    'worktree /repo/feature',
-    'HEAD def456',
-    'branch refs/heads/feature',
-    '',
-  ].join('\n');
+test('parseWorktreeListPorcelain parses multiple record-separated stanzas', () => {
+  const output = toZ(
+    [
+      'worktree /repo/main',
+      'HEAD abc123',
+      'branch refs/heads/main',
+      '',
+      'worktree /repo/feature',
+      'HEAD def456',
+      'branch refs/heads/feature',
+      '',
+    ].join('\n'),
+  );
   const entries = parseWorktreeListPorcelain(output);
   assert.deepEqual(
     entries.map((entry) => entry.path),
@@ -1702,11 +1731,15 @@ test('parseWorktreeListPorcelain parses multiple blank-line-separated stanzas', 
   );
 });
 
-test('parseWorktreeListPorcelain tolerates CRLF line endings', () => {
-  const entries = parseWorktreeListPorcelain(
-    'worktree /repo/main\r\nHEAD abc123\r\nbranch refs/heads/main\r\n',
-  );
-  assert.equal(entries[0]?.path, '/repo/main');
+test('parseWorktreeListPorcelain is immune to a path containing a literal blank line (review finding, #2225: the prior newline-delimited format was not)', () => {
+  // A path with an embedded "\n\n" used to be indistinguishable from a
+  // record separator under the old newline-delimited format, silently
+  // hiding this worktree/branch from every downstream check.
+  const trickyPath = '/repo/oh\n\nno';
+  const output = `worktree ${trickyPath}\0HEAD abc123\0branch refs/heads/main\0\0`;
+  const entries = parseWorktreeListPorcelain(output);
+  assert.equal(entries.length, 1);
+  assert.equal(entries[0]?.path, trickyPath);
   assert.equal(entries[0]?.branchRef, 'refs/heads/main');
 });
 
@@ -1721,7 +1754,9 @@ test('parseWorktreeListPorcelain returns an empty array for malformed/empty inpu
 
 test('findWorktreeEntryForBranch matches by content-exact branch name', () => {
   const entries = parseWorktreeListPorcelain(
-    'worktree /repo/wt\nHEAD abc123\nbranch refs/heads/roadmap-audit/995-slug\n',
+    toZ(
+      'worktree /repo/wt\nHEAD abc123\nbranch refs/heads/roadmap-audit/995-slug\n',
+    ),
   );
   const match = findWorktreeEntryForBranch(entries, 'roadmap-audit/995-slug');
   assert.equal(match?.path, '/repo/wt');
@@ -1729,7 +1764,7 @@ test('findWorktreeEntryForBranch matches by content-exact branch name', () => {
 
 test('findWorktreeEntryForBranch returns null when no entry matches', () => {
   const entries = parseWorktreeListPorcelain(
-    'worktree /repo/main\nHEAD abc123\nbranch refs/heads/main\n',
+    toZ('worktree /repo/main\nHEAD abc123\nbranch refs/heads/main\n'),
   );
   assert.equal(
     findWorktreeEntryForBranch(entries, 'roadmap-audit/995-slug'),
@@ -1739,7 +1774,7 @@ test('findWorktreeEntryForBranch returns null when no entry matches', () => {
 
 test('findWorktreeEntryForBranch never matches a detached entry', () => {
   const entries = parseWorktreeListPorcelain(
-    'worktree /repo/detached\nHEAD abc123\ndetached\n',
+    toZ('worktree /repo/detached\nHEAD abc123\ndetached\n'),
   );
   assert.equal(
     findWorktreeEntryForBranch(entries, 'roadmap-audit/995-slug'),
@@ -1749,16 +1784,18 @@ test('findWorktreeEntryForBranch never matches a detached entry', () => {
 
 test('findWorktreeEntriesForBranch returns EVERY match, not just the first (git checkout --ignore-other-worktrees can duplicate a checkout)', () => {
   const entries = parseWorktreeListPorcelain(
-    [
-      'worktree /repo/first',
-      'HEAD abc123',
-      'branch refs/heads/roadmap-audit/995-slug',
-      '',
-      'worktree /repo/second',
-      'HEAD abc123',
-      'branch refs/heads/roadmap-audit/995-slug',
-      '',
-    ].join('\n'),
+    toZ(
+      [
+        'worktree /repo/first',
+        'HEAD abc123',
+        'branch refs/heads/roadmap-audit/995-slug',
+        '',
+        'worktree /repo/second',
+        'HEAD abc123',
+        'branch refs/heads/roadmap-audit/995-slug',
+        '',
+      ].join('\n'),
+    ),
   );
   const matches = findWorktreeEntriesForBranch(
     entries,
@@ -1819,7 +1856,7 @@ test('evaluateLocalCoordinationState reports absent when no worktree matches (th
     'roadmap-audit/995-slug',
     localInputs({
       listWorktrees: () =>
-        OK('worktree /repo/main\nHEAD abc123\nbranch refs/heads/main\n'),
+        OK(toZ('worktree /repo/main\nHEAD abc123\nbranch refs/heads/main\n')),
     }),
   );
   assert.equal(verdict.presence, 'absent');
@@ -1843,7 +1880,9 @@ test('evaluateLocalCoordinationState reports present-clean for a matched, clean,
     localInputs({
       listWorktrees: () =>
         OK(
-          'worktree /repo/wt\nHEAD abc123\nbranch refs/heads/roadmap-audit/995-slug\n',
+          toZ(
+            'worktree /repo/wt\nHEAD abc123\nbranch refs/heads/roadmap-audit/995-slug\n',
+          ),
         ),
       statusPorcelain: () => OK(''),
       resolveGitPath: () => FAIL('no such path'),
@@ -1860,7 +1899,9 @@ test('evaluateLocalCoordinationState reports present-broken with uncommitted con
     localInputs({
       listWorktrees: () =>
         OK(
-          'worktree /repo/wt\nHEAD abc123\nbranch refs/heads/roadmap-audit/995-slug\n',
+          toZ(
+            'worktree /repo/wt\nHEAD abc123\nbranch refs/heads/roadmap-audit/995-slug\n',
+          ),
         ),
       statusPorcelain: () => OK(' M file.txt\n'),
       resolveGitPath: () => FAIL('no such path'),
@@ -1876,7 +1917,9 @@ test('evaluateLocalCoordinationState reports present-broken with rebase in progr
     localInputs({
       listWorktrees: () =>
         OK(
-          'worktree /repo/wt\nHEAD abc123\nbranch refs/heads/roadmap-audit/995-slug\n',
+          toZ(
+            'worktree /repo/wt\nHEAD abc123\nbranch refs/heads/roadmap-audit/995-slug\n',
+          ),
         ),
       statusPorcelain: () => OK(''),
       resolveGitPath: (_worktreePath, name) =>
@@ -1896,7 +1939,9 @@ test('evaluateLocalCoordinationState resolves a RELATIVE --git-path output again
     localInputs({
       listWorktrees: () =>
         OK(
-          'worktree /repo/wt\nHEAD abc123\nbranch refs/heads/roadmap-audit/995-slug\n',
+          toZ(
+            'worktree /repo/wt\nHEAD abc123\nbranch refs/heads/roadmap-audit/995-slug\n',
+          ),
         ),
       statusPorcelain: () => OK(''),
       resolveGitPath: (_worktreePath, name) =>
@@ -1915,7 +1960,9 @@ test('evaluateLocalCoordinationState reports locked directly from porcelain with
     localInputs({
       listWorktrees: () =>
         OK(
-          'worktree /repo/wt\nHEAD abc123\nbranch refs/heads/roadmap-audit/995-slug\nlocked manual lock test\n',
+          toZ(
+            'worktree /repo/wt\nHEAD abc123\nbranch refs/heads/roadmap-audit/995-slug\nlocked manual lock test\n',
+          ),
         ),
       calls,
     }),
@@ -1933,7 +1980,9 @@ test('evaluateLocalCoordinationState reports prunable directly from porcelain wi
     localInputs({
       listWorktrees: () =>
         OK(
-          'worktree /repo/gone\nHEAD abc123\nbranch refs/heads/roadmap-audit/995-slug\nprunable gitdir file points to non-existent location\n',
+          toZ(
+            'worktree /repo/gone\nHEAD abc123\nbranch refs/heads/roadmap-audit/995-slug\nprunable gitdir file points to non-existent location\n',
+          ),
         ),
       calls,
     }),
@@ -1952,7 +2001,9 @@ test('evaluateLocalCoordinationState treats a matched worktree with an unreadabl
     localInputs({
       listWorktrees: () =>
         OK(
-          'worktree /repo/wt\nHEAD abc123\nbranch refs/heads/roadmap-audit/995-slug\n',
+          toZ(
+            'worktree /repo/wt\nHEAD abc123\nbranch refs/heads/roadmap-audit/995-slug\n',
+          ),
         ),
       statusPorcelain: () => FAIL('no such directory'),
       resolveGitPath: () => FAIL('no such path'),
@@ -1971,16 +2022,18 @@ test('evaluateLocalCoordinationState surfaces repo-wide detached worktrees as in
     localInputs({
       listWorktrees: () =>
         OK(
-          [
-            'worktree /repo/main',
-            'HEAD abc123',
-            'branch refs/heads/main',
-            '',
-            'worktree /repo/detached',
-            'HEAD def456',
-            'detached',
-            '',
-          ].join('\n'),
+          toZ(
+            [
+              'worktree /repo/main',
+              'HEAD abc123',
+              'branch refs/heads/main',
+              '',
+              'worktree /repo/detached',
+              'HEAD def456',
+              'detached',
+              '',
+            ].join('\n'),
+          ),
         ),
     }),
   );
@@ -1992,7 +2045,8 @@ test('evaluateLocalCoordinationState matches a DETACHED mid-rebase worktree via 
   const verdict = evaluateLocalCoordinationState(
     'roadmap-audit/995-slug',
     localInputs({
-      listWorktrees: () => OK('worktree /repo/wt\nHEAD abc123\ndetached\n'),
+      listWorktrees: () =>
+        OK(toZ('worktree /repo/wt\nHEAD abc123\ndetached\n')),
       statusPorcelain: () => OK(''),
       resolveGitPath: (_worktreePath, name) =>
         name === 'rebase-merge'
@@ -2017,7 +2071,7 @@ test('evaluateLocalCoordinationState leaves an UNRELATED detached/rebasing workt
     'roadmap-audit/995-slug',
     localInputs({
       listWorktrees: () =>
-        OK('worktree /repo/other-wt\nHEAD abc123\ndetached\n'),
+        OK(toZ('worktree /repo/other-wt\nHEAD abc123\ndetached\n')),
       resolveGitPath: (_worktreePath, name) =>
         name === 'rebase-merge'
           ? OK('/repo/.git/worktrees/other-wt/rebase-merge\n')
@@ -2041,16 +2095,18 @@ test('evaluateLocalCoordinationState evaluates EVERY matched worktree, not just 
     localInputs({
       listWorktrees: () =>
         OK(
-          [
-            'worktree /repo/first',
-            'HEAD abc123',
-            'branch refs/heads/roadmap-audit/995-slug',
-            '',
-            'worktree /repo/second',
-            'HEAD abc123',
-            'branch refs/heads/roadmap-audit/995-slug',
-            '',
-          ].join('\n'),
+          toZ(
+            [
+              'worktree /repo/first',
+              'HEAD abc123',
+              'branch refs/heads/roadmap-audit/995-slug',
+              '',
+              'worktree /repo/second',
+              'HEAD abc123',
+              'branch refs/heads/roadmap-audit/995-slug',
+              '',
+            ].join('\n'),
+          ),
         ),
       statusPorcelain: (worktreePath) => {
         calls.status += 1;
@@ -2187,6 +2243,7 @@ test('AC3 real fixture: a detached worktree is correctly detected via porcelain 
       'worktree',
       'list',
       '--porcelain',
+      '-z',
     ]);
     const entries = parseWorktreeListPorcelain(porcelain);
     const detachedEntry = entries.find((entry) => entry.path === detached);

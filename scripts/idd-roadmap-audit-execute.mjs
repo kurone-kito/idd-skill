@@ -562,18 +562,24 @@ function runLocalGitCommand(argv, cwd) {
   }
 }
 /**
- * Parse `git worktree list --porcelain` output into structured entries
+ * Parse `git worktree list --porcelain -z` output into structured entries
  * (#2225, AC3). Porcelain is the only enumeration this repo can rely on to
  * surface a detached worktree at all: a branch-name grep (the previous
  * approach) has nothing to match against, since a detached worktree carries
- * no branch. Stanzas are separated by a blank line; each starts with a
- * `worktree <path>` line. Malformed or empty input yields an empty array
- * rather than throwing.
+ * no branch. `-z` (NUL-delimited fields, a record terminated by an extra
+ * NUL) is required, not merely accepted (review finding, #2225): the plain
+ * newline-delimited form has no way to distinguish a literal newline inside
+ * a worktree path from the blank line that separates records, so a path
+ * containing `\n\n` would silently corrupt the stanza split and hide
+ * exactly the branch this hardening exists to protect — empirically
+ * reproduced with a real dirty linked worktree at such a path. A NUL byte
+ * cannot appear in a path at all, so this ambiguity does not exist for `-z`.
+ * Malformed or empty input yields an empty array rather than throwing.
  */
 export function parseWorktreeListPorcelain(output) {
   const entries = [];
-  for (const stanza of output.split(/\r?\n\r?\n/)) {
-    const lines = stanza.split(/\r?\n/).filter((line) => line.length > 0);
+  for (const stanza of output.split('\0\0')) {
+    const lines = stanza.split('\0').filter((line) => line.length > 0);
     const worktreeLine = lines.find((line) => line.startsWith('worktree '));
     if (!worktreeLine) {
       continue;
@@ -830,7 +836,7 @@ export function evaluateLocalCoordinationState(branchName, inputs) {
 export function createLocalCoordinationInputs(cwd) {
   return {
     listWorktrees: () =>
-      runLocalGitCommand(['worktree', 'list', '--porcelain'], cwd),
+      runLocalGitCommand(['worktree', 'list', '--porcelain', '-z'], cwd),
     // --untracked-files=all overrides a repo/global status.showUntrackedFiles
     // config, and --ignore-submodules=none overrides diff.ignoreSubmodules
     // (both review findings, #2225): without them, `status.showUntrackedFiles
