@@ -266,6 +266,31 @@ branch-mismatch case specifically, so it stays genuinely waivable; the
 to bind to and are effectively not waivable in practice -- see
 `docs/idd-helper-scripts.md`.
 
+### `idd-advisory-convergence` Copilot-review poll (`advisoryConvergence`)
+
+`advisoryConvergence.copilotReviewPollInterval` and
+`advisoryConvergence.copilotReviewPollMaxWait` (#2333) configure the
+short, bounded poll `advisory-convergence.mjs` itself runs when the
+`idd-advisory-convergence` required check's only blocking reason is that
+the primary bot has not reviewed the pull request at all yet -- absorbing
+the common race between the `pull_request: synchronize` trigger (fires
+immediately on push) and the separate `pull_request_review` trigger
+(fires once the bot's review actually lands). This is a **distinct
+config subtree from `advisoryWait.pollInterval`** above: that key governs
+the whole-minute-only E-phase advisory-wait protocol's own longer-horizon
+wait loop, entered only after this check has already resolved; this
+poll runs entirely inside the check itself, before the E-phase protocol
+ever engages, and needs sub-minute precision the whole-minute duration
+pattern cannot express. Both keys accept positive ISO 8601 durations down
+to whole-second precision (matching `ciWait`'s duration pattern, not
+`advisoryWait`'s whole-minute-only one). Omitting either key keeps the
+pre-#2333 hardcoded default exactly.
+
+| Policy default                                                                 | Distributed value                                                            | Owning surface                          | Onboarding expectation                                                                                                                                                                                                                                |
+| ------------------------------------------------------------------------------ | ---------------------------------------------------------------------------- | --------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Copilot-review poll interval (`advisoryConvergence.copilotReviewPollInterval`) | 7500 ms (not expressible as a whole-second duration string; omit to keep it) | [Helper scripts](idd-helper-scripts.md) | Raise only if the repository's measured Copilot review latency shows the default cadence wastes re-checks against a known-longer landing time.                                                                                                        |
+| Copilot-review poll ceiling (`advisoryConvergence.copilotReviewPollMaxWait`)   | `PT60S` (60 s)                                                               | [Helper scripts](idd-helper-scripts.md) | Raise when the repository's measured Copilot review latency regularly exceeds 60 s (see `#2333`'s field evidence: 166-229 s observed on a `vendored-node` adopter); keep the hosting workflow's own `timeout-minutes` comfortably above this ceiling. |
+
 ## CI Wait Defaults
 
 | Policy default                                         | Distributed value                                                                                                                                                                                             | Owning surface                                                                                                                                                                                         | Onboarding expectation                                                                      |

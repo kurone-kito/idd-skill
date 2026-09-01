@@ -362,6 +362,23 @@
       },
       "description": "Container for Copilot/primary-bot advisory review timing, caps, and bot identity. Optional; omitting any nested key keeps that key's own distributed default."
     },
+    "advisoryConvergence": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "copilotReviewPollInterval": {
+          "type": "string",
+          "pattern": "^(?=.*[1-9])P(?=\\d|T\\d)(?:\\d+D)?(?:T(?=\\d)(?:\\d+H)?(?:\\d+M)?(?:\\d+S)?)?$",
+          "description": "ISO 8601 duration (whole seconds or larger) between re-checks in the idd-advisory-convergence required check's own short bounded poll for a primary-bot review that has not landed yet. Distinct from advisoryWait.pollInterval (a separate, whole-minute-only, longer-horizon E-phase wait). Optional; omitting it keeps the pre-#2333 hardcoded 7500ms interval, which is not itself expressible as a whole-second duration string."
+        },
+        "copilotReviewPollMaxWait": {
+          "type": "string",
+          "pattern": "^(?=.*[1-9])P(?=\\d|T\\d)(?:\\d+D)?(?:T(?=\\d)(?:\\d+H)?(?:\\d+M)?(?:\\d+S)?)?$",
+          "description": "ISO 8601 duration ceiling, across all re-checks, for the same bounded poll. Optional; defaults to `PT60S`, matching the pre-#2333 hardcoded 60000ms ceiling."
+        }
+      },
+      "description": "Container for the idd-advisory-convergence required check's own short, bounded Copilot-review poll (#2333). Optional; omitting any nested key keeps that key's own distributed default."
+    },
     "ciWait": {
       "type": "object",
       "additionalProperties": false,

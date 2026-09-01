@@ -91,6 +91,8 @@
 // concurrency group, not a plain immediate-assert failure) -- the poll's
 // actual win is narrower than "never needs a rerun again."
 
+import { readFileSync } from 'node:fs';
+
 import {
   DEFAULT_ADVISORY_CONVERGENCE_CHECK_SELECTOR,
   DEFAULT_ADVISORY_CONVERGENCE_DEADLINE_MINUTES,
@@ -154,6 +156,7 @@ import {
   isVerifiedCopilotAuthor,
   resolveLatestCopilotReviewClause,
 } from './review-clause.mts';
+import { loadJson, validateConfigSection } from './validate-schemas.mts';
 
 /** The external-check-waiver selector this gate recognizes (documented in
  * docs/idd-helper-scripts.md and docs/policy-constants.md; #1341's required
@@ -1799,6 +1802,61 @@ export const DEFAULT_COPILOT_REVIEW_POLL_INTERVAL_MS = 7_500;
  * ~60s ceiling. */
 export const DEFAULT_COPILOT_REVIEW_POLL_MAX_WAIT_MS = 60_000;
 
+const POLICY_SCHEMA = loadJson('schemas/policy.schema.json');
+
+/**
+ * Resolve the configured Copilot-review bounded-poll interval/ceiling
+ * (#2333) from `.github/idd/config.json`'s `advisoryConvergence` section,
+ * scoped-validated the same way every policy reader in this file's
+ * `advisory-wait-policy.mts` siblings validates its own subtree (#1359): an
+ * unrelated invalid field elsewhere in the document must not zero out an
+ * otherwise-valid `advisoryConvergence` section. Missing config, an
+ * unreadable/malformed file, or a schema-invalid `advisoryConvergence`
+ * section all fail closed to today's hardcoded defaults -- reproducing the
+ * pre-#2333 behavior exactly, per that issue's own acceptance criterion.
+ *
+ * Deliberately a separate config subtree from `advisoryWait.pollInterval`
+ * (`advisory-wait-policy.mts`, a whole-minute-only ISO 8601 duration): that
+ * key governs the E-phase advisory-wait protocol's own longer-horizon wait
+ * loop. This poll is shorter-lived and runs entirely inside the
+ * `idd-advisory-convergence` required check itself, before the E-phase
+ * protocol ever engages, so it needs sub-minute precision the whole-minute
+ * pattern cannot express -- reusing that key's name or pattern here would
+ * misrepresent this as the same setting.
+ */
+export function readCopilotReviewPollPolicy(
+  path: string = '.github/idd/config.json',
+): { pollIntervalMs: number; maxWaitMs: number } {
+  const fallback = {
+    pollIntervalMs: DEFAULT_COPILOT_REVIEW_POLL_INTERVAL_MS,
+    maxWaitMs: DEFAULT_COPILOT_REVIEW_POLL_MAX_WAIT_MS,
+  };
+  try {
+    const config = JSON.parse(readFileSync(path, 'utf8'));
+    if (
+      validateConfigSection(config, POLICY_SCHEMA, 'advisoryConvergence')
+        .length > 0
+    ) {
+      return fallback;
+    }
+    const section = ((config as { advisoryConvergence?: unknown } | null)
+      ?.advisoryConvergence ?? {}) as {
+      copilotReviewPollInterval?: unknown;
+      copilotReviewPollMaxWait?: unknown;
+    };
+    return {
+      pollIntervalMs:
+        parseIsoDurationToMs(section.copilotReviewPollInterval) ??
+        fallback.pollIntervalMs,
+      maxWaitMs:
+        parseIsoDurationToMs(section.copilotReviewPollMaxWait) ??
+        fallback.maxWaitMs,
+    };
+  } catch {
+    return fallback;
+  }
+}
+
 /** Options accepted by {@link runAdvisoryConvergenceWithPoll}. All optional
  * -- `sleep` and `now` exist solely so tests can inject a deterministic,
  * instant fake clock instead of a real bounded wait; production always uses
@@ -2980,8 +3038,11 @@ export function writeAdvisoryConvergenceCliOutput(
 // Guarded behind `import.meta.main` so importing this module (for unit
 // tests) never parses process.argv, prints usage, or makes a `gh` call.
 if (import.meta.main) {
+  const { pollIntervalMs, maxWaitMs } = readCopilotReviewPollPolicy();
   const { verdict, exitCode, help } = runAdvisoryConvergenceWithPoll(
     process.argv.slice(2),
+    defaultDeps,
+    { pollIntervalMs, maxWaitMs },
   );
   if (help) {
     printHelp();
