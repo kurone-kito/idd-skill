@@ -1,13 +1,13 @@
-// idd-generated-from: src/scripts/context-tax-adapter-claude.mts
+// idd-generated-from: src/scripts/token-cost-adapter-claude.mts
 //
-// The scripts/context-tax-adapter-claude.mjs copy is generated from the
+// The scripts/token-cost-adapter-claude.mjs copy is generated from the
 // .mts source named above by `pnpm run build`. Edit the .mts source,
 // never the generated .mjs. See docs/typescript-sources.md.
 //
-// Claude Code adapter (#2290) for the context-tax measurement contract
+// Claude Code adapter (#2290) for the token-cost measurement contract
 // (#2288). Source-repo only: not HELPER_COMMANDS, not idd-template/. A
 // pure library module -- no CLI, no shebang, mirroring
-// context-tax-core.mts's own shape -- so it needs no HELPER_COMMANDS
+// token-cost-core.mts's own shape -- so it needs no HELPER_COMMANDS
 // registration or SOURCE_REPO_INTERNAL_ENTRY_PATHS entry.
 //
 // Reads Claude Code project JSONL files
@@ -25,7 +25,7 @@
 // none matching emits `0` rather than guessing from message gaps.
 //
 // `gitBranch` appears on every record but is never read here:
-// `ContextTaxJoinHints` (context-tax-core.mts) has no branch field to
+// `TokenCostJoinHints` (token-cost-core.mts) has no branch field to
 // carry it through as a join hint, and the sample record itself must
 // never hold a branch string (privacy) -- so this adapter leaves it
 // alone entirely rather than inventing a new interface field for it.
@@ -33,10 +33,10 @@ import { globSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, join } from 'node:path';
 import {
-  assertContextTaxSample,
+  assertTokenCostSample,
   inferIssueNumberFromBasename,
-  redactContextTaxRecord,
-} from './context-tax-core.mjs';
+  redactTokenCostRecord,
+} from './token-cost-core.mjs';
 
 function isPlainObject(value) {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -70,7 +70,7 @@ function isCompactionRecord(record) {
   const subtype = getStringField(record, 'subtype');
   return subtype !== undefined && /compact/i.test(subtype);
 }
-/** Parse a Claude Code project JSONL file's text into raw, untyped records, tolerating a malformed or truncated trailing line from an interrupted process (unlike context-tax-report.mts's committed-artifact strict parse, this reads real local logs outside this repo's control). */
+/** Parse a Claude Code project JSONL file's text into raw, untyped records, tolerating a malformed or truncated trailing line from an interrupted process (unlike token-cost-report.mts's committed-artifact strict parse, this reads real local logs outside this repo's control). */
 export function parseClaudeProjectLines(text) {
   const out = [];
   for (const rawLine of text.split('\n')) {
@@ -100,7 +100,7 @@ function extractSessionId(records) {
  * Normalizes with `path.basename()` first (never trusts a caller's
  * `fileBasename` to already be path-free) so a full path passed in by
  * mistake can't survive into a path-like fallback `vendorSessionId` that
- * `redactContextTaxRecord()` would later strip to `undefined`, silently
+ * `redactTokenCostRecord()` would later strip to `undefined`, silently
  * producing a schema-invalid sample instead of failing closed.
  */
 function deriveFallbackSessionId(fileBasename) {
@@ -166,7 +166,7 @@ function toNonNegativeInt(value) {
 }
 /**
  * Map one assistant message's raw `message.usage` fields to
- * {@link ContextTaxUsage}. `input_tokens` is already uncached (never
+ * {@link TokenCostUsage}. `input_tokens` is already uncached (never
  * subtract cache fields from it). `cache_creation` may split ephemeral
  * 5m/1h buckets; when present, sum both into `cacheCreation` instead of
  * trusting the scalar `cache_creation_input_tokens` alone. Claude Code
@@ -233,7 +233,7 @@ function extractIncludesSubagents(records) {
 function asClaudeHarvestInput(input) {
   if (!isPlainObject(input) || !Array.isArray(input.records)) {
     throw new Error(
-      'context-tax-adapter-claude: harvest input must be { records: unknown[] }',
+      'token-cost-adapter-claude: harvest input must be { records: unknown[] }',
     );
   }
   const fileBasename =
@@ -248,13 +248,13 @@ export const claudeAdapter = {
       extractSessionId(records) ?? deriveFallbackSessionId(fileBasename);
     if (!vendorSessionId) {
       throw new Error(
-        'context-tax-adapter-claude: unable to determine a vendorSessionId',
+        'token-cost-adapter-claude: unable to determine a vendorSessionId',
       );
     }
     const timestamps = extractTimestamps(records);
     if (!timestamps) {
       throw new Error(
-        'context-tax-adapter-claude: no record has a valid timestamp',
+        'token-cost-adapter-claude: no record has a valid timestamp',
       );
     }
     const cwd = extractCwd(records);
@@ -275,8 +275,8 @@ export const claudeAdapter = {
       vendorSessionId,
       includesSubagents: extractIncludesSubagents(records),
     };
-    const redacted = redactContextTaxRecord(sample);
-    assertContextTaxSample(redacted);
+    const redacted = redactTokenCostRecord(sample);
+    assertTokenCostSample(redacted);
     return issueNumber === undefined
       ? { sample: redacted }
       : { sample: redacted, joinHints: { issueNumber } };
@@ -296,7 +296,7 @@ export function defaultClaudeProjectDir(cwd = process.cwd()) {
 }
 /**
  * Scan `projectDir` (default `~/.claude/projects/<encoded-cwd>`) for
- * `*.jsonl` files and harvest each into a {@link ContextTaxAdapterResult}.
+ * `*.jsonl` files and harvest each into a {@link TokenCostAdapterResult}.
  * Unlike the Codex rollout tree, Claude Code already scopes one directory
  * per project cwd, so no additional idd-skill-cwd filter is needed here.
  */

@@ -16,10 +16,10 @@ import {
   isIddSkillCwd,
   parseCodexRolloutLines,
   scanCodexSessions,
-} from '../src/scripts/context-tax-adapter-codex.mts';
+} from '../src/scripts/token-cost-adapter-codex.mts';
 import { loadJson, validate } from '../src/scripts/validate-schemas.mts';
 
-const FIXTURE_DIR = 'tests/fixtures/context-tax/codex';
+const FIXTURE_DIR = 'tests/fixtures/token-cost/codex';
 
 function readFixtureRecords(name: string): unknown[] {
   return parseCodexRolloutLines(readFileSync(join(FIXTURE_DIR, name), 'utf8'));
@@ -56,7 +56,7 @@ test('a total_token_usage snapshot maps to a schema-valid sample with reasoning'
   assert.equal(joinHints, undefined);
   assert.doesNotMatch(JSON.stringify(sample), /ghq|\/home\//);
   assert.deepEqual(
-    validate(sample, loadJson('schemas/context-tax-sample.schema.json')),
+    validate(sample, loadJson('schemas/token-cost-sample.schema.json')),
     [],
   );
 });
@@ -139,7 +139,7 @@ test('parseCodexRolloutLines tolerates a truncated trailing line', () => {
 
 test('scanCodexSessions keeps an idd-skill session and skips a non-idd-skill session', () => {
   const sandbox = mkdtempSync(
-    join(tmpdir(), 'idd-context-tax-adapter-codex-test-'),
+    join(tmpdir(), 'idd-token-cost-adapter-codex-test-'),
   );
   const dayDir = join(sandbox, '2026', '08', '26');
   mkdirSync(dayDir, { recursive: true });
@@ -160,7 +160,7 @@ test('scanCodexSessions keeps an idd-skill session and skips a non-idd-skill ses
 
 test('scanCodexSessions skips a malformed session that fails to harvest, keeping the rest', () => {
   const sandbox = mkdtempSync(
-    join(tmpdir(), 'idd-context-tax-adapter-codex-test-'),
+    join(tmpdir(), 'idd-token-cost-adapter-codex-test-'),
   );
   const dayDir = join(sandbox, '2026', '08', '26');
   mkdirSync(dayDir, { recursive: true });
@@ -183,7 +183,7 @@ test('scanCodexSessions skips a malformed session that fails to harvest, keeping
 
 test('scanCodexSessions skips an unreadable file, keeping the rest', () => {
   const sandbox = mkdtempSync(
-    join(tmpdir(), 'idd-context-tax-adapter-codex-test-'),
+    join(tmpdir(), 'idd-token-cost-adapter-codex-test-'),
   );
   const dayDir = join(sandbox, '2026', '08', '26');
   mkdirSync(dayDir, { recursive: true });
@@ -212,7 +212,7 @@ test('scanCodexSessions skips an unreadable file, keeping the rest', () => {
 
 test('scanCodexSessions on an empty directory returns no results', () => {
   const sandbox = mkdtempSync(
-    join(tmpdir(), 'idd-context-tax-adapter-codex-test-'),
+    join(tmpdir(), 'idd-token-cost-adapter-codex-test-'),
   );
   assert.deepEqual(scanCodexSessions({ sessionsDir: sandbox }), []);
 });

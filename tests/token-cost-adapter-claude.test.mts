@@ -11,10 +11,10 @@ import {
   encodeClaudeProjectDirName,
   parseClaudeProjectLines,
   scanClaudeSessions,
-} from '../src/scripts/context-tax-adapter-claude.mts';
+} from '../src/scripts/token-cost-adapter-claude.mts';
 import { loadJson, validate } from '../src/scripts/validate-schemas.mts';
 
-const FIXTURE_DIR = 'tests/fixtures/context-tax/claude';
+const FIXTURE_DIR = 'tests/fixtures/token-cost/claude';
 
 function readFixtureRecords(name: string): unknown[] {
   return parseClaudeProjectLines(readFileSync(join(FIXTURE_DIR, name), 'utf8'));
@@ -52,7 +52,7 @@ test('two assistant usages sum into a schema-valid sample', () => {
   assert.equal(Object.hasOwn(sample, 'gitBranch'), false);
   assert.doesNotMatch(JSON.stringify(sample), /ghq|\/home\//);
   assert.deepEqual(
-    validate(sample, loadJson('schemas/context-tax-sample.schema.json')),
+    validate(sample, loadJson('schemas/token-cost-sample.schema.json')),
     [],
   );
 });
@@ -145,7 +145,7 @@ test('parseClaudeProjectLines tolerates a truncated trailing line', () => {
 
 test('scanClaudeSessions harvests every jsonl file in the project directory', () => {
   const sandbox = mkdtempSync(
-    join(tmpdir(), 'idd-context-tax-adapter-claude-test-'),
+    join(tmpdir(), 'idd-token-cost-adapter-claude-test-'),
   );
   writeFileSync(
     join(sandbox, 'session-a.jsonl'),
@@ -168,7 +168,7 @@ test('scanClaudeSessions harvests every jsonl file in the project directory', ()
 
 test('scanClaudeSessions skips a malformed session that fails to harvest, keeping the rest', () => {
   const sandbox = mkdtempSync(
-    join(tmpdir(), 'idd-context-tax-adapter-claude-test-'),
+    join(tmpdir(), 'idd-token-cost-adapter-claude-test-'),
   );
   // No record has a valid timestamp, so harvest() throws for this file
   // specifically.
@@ -189,7 +189,7 @@ test('scanClaudeSessions skips a malformed session that fails to harvest, keepin
 
 test('scanClaudeSessions on an empty directory returns no results', () => {
   const sandbox = mkdtempSync(
-    join(tmpdir(), 'idd-context-tax-adapter-claude-test-'),
+    join(tmpdir(), 'idd-token-cost-adapter-claude-test-'),
   );
   mkdirSync(sandbox, { recursive: true });
   assert.deepEqual(scanClaudeSessions({ projectDir: sandbox }), []);

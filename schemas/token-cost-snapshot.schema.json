@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://kurone-kito.github.io/idd-skill/schemas/context-tax-snapshot.schema.json",
-  "title": "Context-tax snapshot",
-  "description": "Committed aggregates the context-tax-report reporter renders into docs/README. Fields beyond the publish gate are always present -- zero-valued and empty when sampleCount is 0.",
+  "$id": "https://kurone-kito.github.io/idd-skill/schemas/token-cost-snapshot.schema.json",
+  "title": "Token-cost snapshot",
+  "description": "Committed aggregates the token-cost-report reporter renders into docs/README. Fields beyond the publish gate are always present -- zero-valued and empty when sampleCount is 0.",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -221,7 +221,7 @@
     "cacheHitRatio": {
       "type": "number",
       "minimum": 0,
-      "description": "Median across samples of each sample's own cacheRead / max(1, cacheRead + cacheCreation + inputUncached), not the ratio of the independent totalUsage medians. In [0, 1]; the validator has no maximum keyword, enforced instead by assertContextTaxSnapshot."
+      "description": "Median across samples of each sample's own cacheRead / max(1, cacheRead + cacheCreation + inputUncached), not the ratio of the independent totalUsage medians. In [0, 1]; the validator has no maximum keyword, enforced instead by assertTokenCostSnapshot."
     },
     "successRateByModel": {
       "type": "object",

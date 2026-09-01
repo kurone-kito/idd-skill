@@ -1,11 +1,11 @@
 ---
 type: reference
-title: Context-Tax Methodology
+title: Token-Cost Methodology
 description: Documents how this repository measures its own agent context-window cost per completed IDD issue loop.
-tags: [context-tax, dogfood, measurement]
+tags: [token-cost, dogfood, measurement]
 ---
 
-# Context-Tax Methodology
+# Token-Cost Methodology
 
 This page is dogfood-only: it is not distributed to adopter repositories.
 It documents how `kurone-kito/idd-skill` measures the agent
@@ -45,11 +45,11 @@ context-window cost of running its own IDD loop on itself.
 Harvested samples are local JSONL files under each vendor's own session
 directory (`~/.grok`, `~/.claude`, `~/.codex`) — never committed. CI runs
 on GitHub and cannot see those directories, so the only committed
-artifact is [`docs/context-tax-snapshot.json`](context-tax-snapshot.json):
+artifact is [`docs/token-cost-snapshot.json`](token-cost-snapshot.json):
 aggregated percentiles, cache-hit ratio, and success rates, with no raw
 records.
 
-`node scripts/context-tax-report.mjs`:
+`node scripts/token-cost-report.mjs`:
 
 - `--in <samples.jsonl> [--in <samples.jsonl> ...] --apply` aggregates
   local samples into a fresh snapshot and refreshes this page's table
@@ -72,8 +72,8 @@ number is ever invented to fill the gap.
 
 ## Current snapshot
 
-<!-- context-tax-docs:start -->
+<!-- token-cost-docs:start -->
 
 Not yet publishable, n=0.
 
-<!-- context-tax-docs:end -->
+<!-- token-cost-docs:end -->

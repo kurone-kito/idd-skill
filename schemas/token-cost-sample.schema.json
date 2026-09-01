@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://kurone-kito.github.io/idd-skill/schemas/context-tax-sample.schema.json",
-  "title": "Context-tax sample",
+  "$id": "https://kurone-kito.github.io/idd-skill/schemas/token-cost-sample.schema.json",
+  "title": "Token-cost sample",
   "description": "One harvested IDD loop or unscoped session record. README aggregates consume only issue-loop samples.",
   "type": "object",
   "additionalProperties": false,

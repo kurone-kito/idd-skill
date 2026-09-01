@@ -64,12 +64,12 @@ IDD はデモではありません。このリポジトリ自体が IDD で作�
 
 _2026-07 時点。_
 
-<!-- context-tax-readme:start -->
+<!-- token-cost-readme:start -->
 
-コンテキスト税の計測は現在進行中です。
-詳しい方法論は [`docs/context-tax.md`](docs/context-tax.md) を参照してください。
+トークンコストの計測は現在進行中です。
+詳しい方法論は [`docs/token-cost.md`](docs/token-cost.md) を参照してください。
 
-<!-- context-tax-readme:end -->
+<!-- token-cost-readme:end -->
 
 ## クイックスタート
 

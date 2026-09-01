@@ -2,15 +2,15 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
 import {
-  assertContextTaxSample,
-  assertContextTaxSnapshot,
-  CONTEXT_TAX_STAGE_IDS,
-  type ContextTaxSample,
-  type ContextTaxSnapshot,
-  type ContextTaxVendorAdapter,
+  assertTokenCostSample,
+  assertTokenCostSnapshot,
   inferIssueNumberFromBasename,
-  redactContextTaxRecord,
-} from '../src/scripts/context-tax-core.mts';
+  redactTokenCostRecord,
+  TOKEN_COST_STAGE_IDS,
+  type TokenCostSample,
+  type TokenCostSnapshot,
+  type TokenCostVendorAdapter,
+} from '../src/scripts/token-cost-core.mts';
 import { loadJson, validate } from '../src/scripts/validate-schemas.mts';
 
 const ZERO_PERCENTILES = { p25: 0, p50: 0, p75: 0 };
@@ -33,7 +33,7 @@ const SNAPSHOT_BASE_FIELDS = {
 
 test('stage id list is the seven IDD stages', () => {
   assert.deepEqual(
-    [...CONTEXT_TAX_STAGE_IDS],
+    [...TOKEN_COST_STAGE_IDS],
     ['discover', 'claim', 'work', 'submit-pr', 'review', 'merge', 'cleanup'],
   );
 });
@@ -53,7 +53,7 @@ test('redaction drops a home path and a prompt string', () => {
       reasoning: 0,
     },
   };
-  const clean = redactContextTaxRecord(dirty) as Record<string, unknown>;
+  const clean = redactTokenCostRecord(dirty) as Record<string, unknown>;
   const serialized = JSON.stringify(clean);
   assert.equal(clean.cwd, undefined);
   assert.equal(clean.prompt, undefined);
@@ -70,7 +70,7 @@ test('redaction strips path-like and secret-shaped strings in nested values', ()
     token: 'ghp_abcdefghijklmnopqrstuvwx',
     nested: { filePath: '/tmp/worktree/issue-12-foo', keep: 2 },
   };
-  const clean = redactContextTaxRecord(dirty) as Record<string, unknown>;
+  const clean = redactTokenCostRecord(dirty) as Record<string, unknown>;
   const serialized = JSON.stringify(clean);
   assert.equal(clean.vendorSessionId, 'sess_ok');
   assert.equal(clean.notes, undefined);
@@ -84,19 +84,19 @@ test('redaction strips path-like and secret-shaped strings in nested values', ()
 test('inferIssueNumberFromBasename accepts only a basename, never a path', () => {
   assert.equal(
     inferIssueNumberFromBasename(
-      'issue-2288-feat-context-tax-define-sample-snapshot',
+      'issue-2288-feat-token-cost-define-sample-snapshot',
     ),
     2288,
   );
   assert.equal(
     inferIssueNumberFromBasename(
-      '.issue-2288-feat-context-tax-define-sample-snapshot',
+      '.issue-2288-feat-token-cost-define-sample-snapshot',
     ),
     2288,
   );
   assert.equal(
     inferIssueNumberFromBasename(
-      'idd-skill.issue-2288-feat-context-tax-define-sample-snapshot',
+      'idd-skill.issue-2288-feat-token-cost-define-sample-snapshot',
     ),
     2288,
   );
@@ -114,7 +114,7 @@ test('inferIssueNumberFromBasename accepts only a basename, never a path', () =>
 
 test('redaction drops unlisted POSIX absolute paths', () => {
   const dirty = { leaked: '/workspace/acme/private.ts', keep: 'ok' };
-  const clean = redactContextTaxRecord(dirty) as Record<string, unknown>;
+  const clean = redactTokenCostRecord(dirty) as Record<string, unknown>;
   assert.equal(clean.leaked, undefined);
   assert.equal(clean.keep, 'ok');
 });
@@ -127,7 +127,7 @@ test('redaction drops absolute paths preceded by a delimiter other than whitespa
     winNote: 'path:C:\\Users\\me',
     keep: 'ok',
   };
-  const clean = redactContextTaxRecord(dirty) as Record<string, unknown>;
+  const clean = redactTokenCostRecord(dirty) as Record<string, unknown>;
   assert.equal(clean.cwdNote, undefined);
   assert.equal(clean.fileUrl, undefined);
   assert.equal(clean.uncPath, undefined);
@@ -141,7 +141,7 @@ test('redaction drops absolute paths after any delimiter, not just a whitelisted
     semicolonNote: 'a;/etc/shadow',
     keep: 'ok',
   };
-  const clean = redactContextTaxRecord(dirty) as Record<string, unknown>;
+  const clean = redactTokenCostRecord(dirty) as Record<string, unknown>;
   assert.equal(clean.csvNote, undefined);
   assert.equal(clean.semicolonNote, undefined);
   assert.equal(clean.keep, 'ok');
@@ -154,7 +154,7 @@ test('redaction drops compound prompt/assistant/tool-input field names', () => {
     toolInput: '{"query": "secret"}',
     inputUncached: 5,
   };
-  const clean = redactContextTaxRecord(dirty) as Record<string, unknown>;
+  const clean = redactTokenCostRecord(dirty) as Record<string, unknown>;
   assert.equal(clean.systemPrompt, undefined);
   assert.equal(clean.assistantMessage, undefined);
   assert.equal(clean.toolInput, undefined);
@@ -167,7 +167,7 @@ test('redaction drops path-like and secret-shaped object keys', () => {
     'C:\\Users\\alice\\secret.ts': 1,
     keep: 'ok',
   };
-  const clean = redactContextTaxRecord(dirty) as Record<string, unknown>;
+  const clean = redactTokenCostRecord(dirty) as Record<string, unknown>;
   assert.equal(Object.keys(clean).length, 1);
   assert.equal(clean.keep, 'ok');
 });
@@ -178,14 +178,14 @@ test('redaction drops single-leading-backslash Windows-root-relative paths', () 
     system: String.raw`\Windows\System32\config\SAM`,
     keep: 'ok',
   };
-  const clean = redactContextTaxRecord(dirty) as Record<string, unknown>;
+  const clean = redactTokenCostRecord(dirty) as Record<string, unknown>;
   assert.equal(clean.rooted, undefined);
   assert.equal(clean.system, undefined);
   assert.equal(clean.keep, 'ok');
 });
 
-test('assertContextTaxSample couples attribution to kind', () => {
-  const issueLoop: ContextTaxSample = {
+test('assertTokenCostSample couples attribution to kind', () => {
+  const issueLoop: TokenCostSample = {
     schemaVersion: 1,
     kind: 'issue-loop',
     vendor: 'codex',
@@ -206,31 +206,31 @@ test('assertContextTaxSample couples attribution to kind', () => {
     issueNumber: 2288,
     stages: [],
   };
-  assert.doesNotThrow(() => assertContextTaxSample(issueLoop));
+  assert.doesNotThrow(() => assertTokenCostSample(issueLoop));
   assert.throws(
     () =>
-      assertContextTaxSample({
+      assertTokenCostSample({
         ...issueLoop,
         attribution: 'session-unscoped',
       }),
     /issue-loop sample cannot use session-unscoped attribution/,
   );
-  const session: ContextTaxSample = {
+  const session: TokenCostSample = {
     ...issueLoop,
     kind: 'session',
     issueNumber: undefined,
     stages: undefined,
     attribution: 'session-unscoped',
   };
-  assert.doesNotThrow(() => assertContextTaxSample(session));
+  assert.doesNotThrow(() => assertTokenCostSample(session));
   assert.throws(
-    () => assertContextTaxSample({ ...session, attribution: 'marker-join' }),
+    () => assertTokenCostSample({ ...session, attribution: 'marker-join' }),
     /session sample must use session-unscoped attribution/,
   );
 });
 
-test('assertContextTaxSample rejects endedAt preceding startedAt', () => {
-  const session: ContextTaxSample = {
+test('assertTokenCostSample rejects endedAt preceding startedAt', () => {
+  const session: TokenCostSample = {
     schemaVersion: 1,
     kind: 'session',
     vendor: 'codex',
@@ -250,28 +250,28 @@ test('assertContextTaxSample rejects endedAt preceding startedAt', () => {
     vendorSessionId: 'sess',
   };
   assert.throws(
-    () => assertContextTaxSample(session),
+    () => assertTokenCostSample(session),
     /sample endedAt must not precede startedAt/,
   );
   assert.doesNotThrow(() =>
-    assertContextTaxSample({
+    assertTokenCostSample({
       ...session,
       startedAt: '2026-08-25T00:00:00Z',
       endedAt: '2026-08-25T00:01:00Z',
     }),
   );
   assert.throws(
-    () => assertContextTaxSample({ ...session, startedAt: 'not-a-date' }),
+    () => assertTokenCostSample({ ...session, startedAt: 'not-a-date' }),
     /sample startedAt\/endedAt must be valid timestamps/,
   );
   assert.throws(
-    () => assertContextTaxSample({ ...session, endedAt: 'not-a-date' }),
+    () => assertTokenCostSample({ ...session, endedAt: 'not-a-date' }),
     /sample startedAt\/endedAt must be valid timestamps/,
   );
 });
 
-test('assertContextTaxSnapshot rejects duplicate vendors', () => {
-  const snapshot: ContextTaxSnapshot = {
+test('assertTokenCostSnapshot rejects duplicate vendors', () => {
+  const snapshot: TokenCostSnapshot = {
     schemaVersion: 1,
     generatedAt: '2026-08-25T00:00:00Z',
     minPublishableSamples: 10,
@@ -281,15 +281,15 @@ test('assertContextTaxSnapshot rejects duplicate vendors', () => {
     vendors: ['grok', 'claude'],
     ...SNAPSHOT_BASE_FIELDS,
   };
-  assert.doesNotThrow(() => assertContextTaxSnapshot(snapshot));
+  assert.doesNotThrow(() => assertTokenCostSnapshot(snapshot));
   assert.throws(
-    () => assertContextTaxSnapshot({ ...snapshot, vendors: ['grok', 'grok'] }),
+    () => assertTokenCostSnapshot({ ...snapshot, vendors: ['grok', 'grok'] }),
     /snapshot vendors must be distinct/,
   );
 });
 
-test('assertContextTaxSnapshot requires publishable to match the sample/vendor gate', () => {
-  const eligible: ContextTaxSnapshot = {
+test('assertTokenCostSnapshot requires publishable to match the sample/vendor gate', () => {
+  const eligible: TokenCostSnapshot = {
     schemaVersion: 1,
     generatedAt: '2026-08-25T00:00:00Z',
     minPublishableSamples: 10,
@@ -299,10 +299,10 @@ test('assertContextTaxSnapshot requires publishable to match the sample/vendor g
     vendors: ['grok', 'claude'],
     ...SNAPSHOT_BASE_FIELDS,
   };
-  assert.doesNotThrow(() => assertContextTaxSnapshot(eligible));
+  assert.doesNotThrow(() => assertTokenCostSnapshot(eligible));
   assert.throws(
     () =>
-      assertContextTaxSnapshot({
+      assertTokenCostSnapshot({
         ...eligible,
         publishable: true,
         sampleCount: 3,
@@ -310,13 +310,13 @@ test('assertContextTaxSnapshot requires publishable to match the sample/vendor g
     /snapshot publishable must match the sampleCount\/vendors gate/,
   );
   assert.throws(
-    () => assertContextTaxSnapshot({ ...eligible, publishable: false }),
+    () => assertTokenCostSnapshot({ ...eligible, publishable: false }),
     /snapshot publishable must match the sampleCount\/vendors gate/,
   );
 });
 
-test('assertContextTaxSample rejects a non-integer issueNumber', () => {
-  const base: ContextTaxSample = {
+test('assertTokenCostSample rejects a non-integer issueNumber', () => {
+  const base: TokenCostSample = {
     schemaVersion: 1,
     kind: 'issue-loop',
     vendor: 'codex',
@@ -337,17 +337,17 @@ test('assertContextTaxSample rejects a non-integer issueNumber', () => {
     issueNumber: 2288,
     stages: [],
   };
-  assert.doesNotThrow(() => assertContextTaxSample(base));
+  assert.doesNotThrow(() => assertTokenCostSample(base));
   for (const issueNumber of [0.5, Number.NaN, Number.POSITIVE_INFINITY]) {
     assert.throws(
-      () => assertContextTaxSample({ ...base, issueNumber }),
+      () => assertTokenCostSample({ ...base, issueNumber }),
       /issue-loop sample requires a positive issueNumber/,
     );
   }
 });
 
-test('assertContextTaxSample requires join fields on issue-loop samples', () => {
-  const session: ContextTaxSample = {
+test('assertTokenCostSample requires join fields on issue-loop samples', () => {
+  const session: TokenCostSample = {
     schemaVersion: 1,
     kind: 'session',
     vendor: 'codex',
@@ -366,19 +366,19 @@ test('assertContextTaxSample requires join fields on issue-loop samples', () => 
     endedAt: '2026-08-25T00:01:00Z',
     vendorSessionId: 'sess',
   };
-  assert.doesNotThrow(() => assertContextTaxSample(session));
+  assert.doesNotThrow(() => assertTokenCostSample(session));
   const incomplete = {
     ...session,
     kind: 'issue-loop',
-  } as ContextTaxSample;
+  } as TokenCostSample;
   assert.throws(
-    () => assertContextTaxSample(incomplete),
+    () => assertTokenCostSample(incomplete),
     /issue-loop sample requires a positive issueNumber/,
   );
 });
 
 test('adapter interface is implementable without a CLI', () => {
-  const adapter: ContextTaxVendorAdapter = {
+  const adapter: TokenCostVendorAdapter = {
     harvest() {
       return {
         sample: {
@@ -412,22 +412,22 @@ test('adapter interface is implementable without a CLI', () => {
 
 test('committed sample fixture validates against the sample schema', () => {
   const errors = validate(
-    loadJson('fixtures/schemas/context-tax-sample.valid.json'),
-    loadJson('schemas/context-tax-sample.schema.json'),
+    loadJson('fixtures/schemas/token-cost-sample.valid.json'),
+    loadJson('schemas/token-cost-sample.schema.json'),
   );
   assert.deepEqual(errors, []);
 });
 
 test('committed snapshot fixture validates against the snapshot schema', () => {
   const errors = validate(
-    loadJson('fixtures/schemas/context-tax-snapshot.valid.json'),
-    loadJson('schemas/context-tax-snapshot.schema.json'),
+    loadJson('fixtures/schemas/token-cost-snapshot.valid.json'),
+    loadJson('schemas/token-cost-snapshot.schema.json'),
   );
   assert.deepEqual(errors, []);
 });
 
-test('assertContextTaxSnapshot rejects an out-of-order percentile triple', () => {
-  const snapshot: ContextTaxSnapshot = {
+test('assertTokenCostSnapshot rejects an out-of-order percentile triple', () => {
+  const snapshot: TokenCostSnapshot = {
     schemaVersion: 1,
     generatedAt: '2026-08-25T00:00:00Z',
     minPublishableSamples: 10,
@@ -437,10 +437,10 @@ test('assertContextTaxSnapshot rejects an out-of-order percentile triple', () =>
     vendors: ['grok'],
     ...SNAPSHOT_BASE_FIELDS,
   };
-  assert.doesNotThrow(() => assertContextTaxSnapshot(snapshot));
+  assert.doesNotThrow(() => assertTokenCostSnapshot(snapshot));
   assert.throws(
     () =>
-      assertContextTaxSnapshot({
+      assertTokenCostSnapshot({
         ...snapshot,
         totalUsage: {
           ...ZERO_USAGE_PERCENTILES,
@@ -451,7 +451,7 @@ test('assertContextTaxSnapshot rejects an out-of-order percentile triple', () =>
   );
   assert.throws(
     () =>
-      assertContextTaxSnapshot({
+      assertTokenCostSnapshot({
         ...snapshot,
         compactionCount: { p25: 5, p50: 4, p75: 6 },
       }),
@@ -459,7 +459,7 @@ test('assertContextTaxSnapshot rejects an out-of-order percentile triple', () =>
   );
   assert.throws(
     () =>
-      assertContextTaxSnapshot({
+      assertTokenCostSnapshot({
         ...snapshot,
         stageUsage: [
           {
@@ -475,8 +475,8 @@ test('assertContextTaxSnapshot rejects an out-of-order percentile triple', () =>
   );
 });
 
-test('assertContextTaxSnapshot rejects cacheHitRatio outside [0, 1]', () => {
-  const snapshot: ContextTaxSnapshot = {
+test('assertTokenCostSnapshot rejects cacheHitRatio outside [0, 1]', () => {
+  const snapshot: TokenCostSnapshot = {
     schemaVersion: 1,
     generatedAt: '2026-08-25T00:00:00Z',
     minPublishableSamples: 10,
@@ -487,17 +487,17 @@ test('assertContextTaxSnapshot rejects cacheHitRatio outside [0, 1]', () => {
     ...SNAPSHOT_BASE_FIELDS,
   };
   assert.throws(
-    () => assertContextTaxSnapshot({ ...snapshot, cacheHitRatio: 1.1 }),
+    () => assertTokenCostSnapshot({ ...snapshot, cacheHitRatio: 1.1 }),
     /snapshot cacheHitRatio must be in \[0, 1\]/,
   );
   assert.throws(
-    () => assertContextTaxSnapshot({ ...snapshot, cacheHitRatio: -0.1 }),
+    () => assertTokenCostSnapshot({ ...snapshot, cacheHitRatio: -0.1 }),
     /snapshot cacheHitRatio must be in \[0, 1\]/,
   );
 });
 
-test('assertContextTaxSnapshot rejects a success rate that disagrees with its own counts', () => {
-  const snapshot: ContextTaxSnapshot = {
+test('assertTokenCostSnapshot rejects a success rate that disagrees with its own counts', () => {
+  const snapshot: TokenCostSnapshot = {
     schemaVersion: 1,
     generatedAt: '2026-08-25T00:00:00Z',
     minPublishableSamples: 10,
@@ -508,7 +508,7 @@ test('assertContextTaxSnapshot rejects a success rate that disagrees with its ow
     ...SNAPSHOT_BASE_FIELDS,
   };
   assert.doesNotThrow(() =>
-    assertContextTaxSnapshot({
+    assertTokenCostSnapshot({
       ...snapshot,
       successRateByModel: {
         'grok-4.6': {
@@ -523,7 +523,7 @@ test('assertContextTaxSnapshot rejects a success rate that disagrees with its ow
   );
   assert.throws(
     () =>
-      assertContextTaxSnapshot({
+      assertTokenCostSnapshot({
         ...snapshot,
         successRateByModel: {
           'grok-4.6': {
@@ -539,7 +539,7 @@ test('assertContextTaxSnapshot rejects a success rate that disagrees with its ow
   );
   assert.throws(
     () =>
-      assertContextTaxSnapshot({
+      assertTokenCostSnapshot({
         ...snapshot,
         successRateByVendor: {
           grok: {
@@ -555,8 +555,8 @@ test('assertContextTaxSnapshot rejects a success rate that disagrees with its ow
   );
 });
 
-test('assertContextTaxSnapshot rejects a schema-valid but nonexistent asOf date', () => {
-  const snapshot: ContextTaxSnapshot = {
+test('assertTokenCostSnapshot rejects a schema-valid but nonexistent asOf date', () => {
+  const snapshot: TokenCostSnapshot = {
     schemaVersion: 1,
     generatedAt: '2026-08-25T00:00:00Z',
     minPublishableSamples: 10,
@@ -566,19 +566,19 @@ test('assertContextTaxSnapshot rejects a schema-valid but nonexistent asOf date'
     vendors: ['grok'],
     ...SNAPSHOT_BASE_FIELDS,
   };
-  assert.doesNotThrow(() => assertContextTaxSnapshot(snapshot));
+  assert.doesNotThrow(() => assertTokenCostSnapshot(snapshot));
   assert.throws(
-    () => assertContextTaxSnapshot({ ...snapshot, asOf: '2026-02-30' }),
+    () => assertTokenCostSnapshot({ ...snapshot, asOf: '2026-02-30' }),
     /snapshot asOf must be a valid UTC calendar date/,
   );
   assert.throws(
-    () => assertContextTaxSnapshot({ ...snapshot, asOf: 'not-a-date' }),
+    () => assertTokenCostSnapshot({ ...snapshot, asOf: 'not-a-date' }),
     /snapshot asOf must be a valid UTC calendar date/,
   );
 });
 
-test('assertContextTaxSnapshot rejects a duplicate stageUsage entry', () => {
-  const snapshot: ContextTaxSnapshot = {
+test('assertTokenCostSnapshot rejects a duplicate stageUsage entry', () => {
+  const snapshot: TokenCostSnapshot = {
     schemaVersion: 1,
     generatedAt: '2026-08-25T00:00:00Z',
     minPublishableSamples: 10,
@@ -590,7 +590,7 @@ test('assertContextTaxSnapshot rejects a duplicate stageUsage entry', () => {
   };
   assert.throws(
     () =>
-      assertContextTaxSnapshot({
+      assertTokenCostSnapshot({
         ...snapshot,
         stageUsage: [
           { id: 'work', usage: ZERO_USAGE_PERCENTILES },
@@ -601,8 +601,8 @@ test('assertContextTaxSnapshot rejects a duplicate stageUsage entry', () => {
   );
 });
 
-test('assertContextTaxSnapshot rejects a successRateByVendor key absent from vendors', () => {
-  const snapshot: ContextTaxSnapshot = {
+test('assertTokenCostSnapshot rejects a successRateByVendor key absent from vendors', () => {
+  const snapshot: TokenCostSnapshot = {
     schemaVersion: 1,
     generatedAt: '2026-08-25T00:00:00Z',
     minPublishableSamples: 10,
@@ -614,7 +614,7 @@ test('assertContextTaxSnapshot rejects a successRateByVendor key absent from ven
   };
   assert.throws(
     () =>
-      assertContextTaxSnapshot({
+      assertTokenCostSnapshot({
         ...snapshot,
         successRateByVendor: {
           claude: {

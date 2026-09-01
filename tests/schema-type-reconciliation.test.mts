@@ -6,11 +6,6 @@ import { fileURLToPath } from 'node:url';
 import type { AdvisoryConvergenceVerdict } from '../src/scripts/advisory-convergence.mts';
 import type { AdvisoryWaitStateReport } from '../src/scripts/advisory-wait-state.mts';
 import type { BranchConflictResult } from '../src/scripts/branch-conflict-state.mts';
-import type {
-  ContextTaxEvent,
-  ContextTaxSample,
-  ContextTaxSnapshot,
-} from '../src/scripts/context-tax-core.mts';
 import type { RoadmapGraphUnionReport } from '../src/scripts/discover-roadmap-graph.mts';
 import type { DispositionReport } from '../src/scripts/disposition-non-review-notices.mts';
 import type { IddMergeExecuteVerdict } from '../src/scripts/idd-merge-execute.mts';
@@ -30,6 +25,11 @@ import type {
 } from '../src/scripts/protocol-helpers.mts';
 import type { ResolveReviewThreadReport } from '../src/scripts/resolve-review-thread.mts';
 import type { StalledSessionQuietCheckReport } from '../src/scripts/stalled-session-quiet-check.mts';
+import type {
+  TokenCostEvent,
+  TokenCostSample,
+  TokenCostSnapshot,
+} from '../src/scripts/token-cost-core.mts';
 import {
   checkSchemaKeywords,
   loadJson,
@@ -443,7 +443,7 @@ export const onboardingHearingTranscriptKeys = [
   'answers',
 ] as const satisfies readonly (keyof OnboardingHearingTranscript)[];
 
-export const contextTaxSampleKeys = [
+export const tokenCostSampleKeys = [
   'schemaVersion',
   'kind',
   'vendor',
@@ -464,9 +464,9 @@ export const contextTaxSampleKeys = [
   'turnCount',
   'includesSubagents',
   'ambiguous',
-] as const satisfies readonly (keyof ContextTaxSample)[];
+] as const satisfies readonly (keyof TokenCostSample)[];
 
-export const contextTaxEventKeys = [
+export const tokenCostEventKeys = [
   'schemaVersion',
   'event',
   'stageId',
@@ -475,9 +475,9 @@ export const contextTaxEventKeys = [
   'vendorSessionId',
   'issueNumber',
   'usage',
-] as const satisfies readonly (keyof ContextTaxEvent)[];
+] as const satisfies readonly (keyof TokenCostEvent)[];
 
-export const contextTaxSnapshotKeys = [
+export const tokenCostSnapshotKeys = [
   'schemaVersion',
   'generatedAt',
   'minPublishableSamples',
@@ -492,7 +492,7 @@ export const contextTaxSnapshotKeys = [
   'cacheHitRatio',
   'successRateByModel',
   'successRateByVendor',
-] as const satisfies readonly (keyof ContextTaxSnapshot)[];
+] as const satisfies readonly (keyof TokenCostSnapshot)[];
 
 export const policyConfigKeys = [
   '$schema',
@@ -654,17 +654,17 @@ const exhaustivenessWitnesses: {
     StalledSessionQuietCheckReport,
     (typeof stalledSessionQuietCheckKeys)[number]
   >;
-  contextTaxSample: CoversAllKeysOf<
-    ContextTaxSample,
-    (typeof contextTaxSampleKeys)[number]
+  tokenCostSample: CoversAllKeysOf<
+    TokenCostSample,
+    (typeof tokenCostSampleKeys)[number]
   >;
-  contextTaxEvent: CoversAllKeysOf<
-    ContextTaxEvent,
-    (typeof contextTaxEventKeys)[number]
+  tokenCostEvent: CoversAllKeysOf<
+    TokenCostEvent,
+    (typeof tokenCostEventKeys)[number]
   >;
-  contextTaxSnapshot: CoversAllKeysOf<
-    ContextTaxSnapshot,
-    (typeof contextTaxSnapshotKeys)[number]
+  tokenCostSnapshot: CoversAllKeysOf<
+    TokenCostSnapshot,
+    (typeof tokenCostSnapshotKeys)[number]
   >;
 } = {
   advisoryWaitState: true,
@@ -680,9 +680,9 @@ const exhaustivenessWitnesses: {
   onboardingHearingTranscript: true,
   policyConfig: true,
   stalledSessionQuietCheck: true,
-  contextTaxSample: true,
-  contextTaxEvent: true,
-  contextTaxSnapshot: true,
+  tokenCostSample: true,
+  tokenCostEvent: true,
+  tokenCostSnapshot: true,
 };
 
 // ---------------------------------------------------------------------------
@@ -1013,7 +1013,7 @@ const onboardingHearingTranscriptFixture = {
   answers: [{ id: 'merge-policy', value: 'fully_autonomous_merge' }],
 } satisfies OnboardingHearingTranscript;
 
-const contextTaxSampleFixture = {
+const tokenCostSampleFixture = {
   schemaVersion: 1,
   kind: 'issue-loop',
   vendor: 'grok',
@@ -1044,26 +1044,26 @@ const contextTaxSampleFixture = {
       },
     },
   ],
-} satisfies ContextTaxSample;
+} satisfies TokenCostSample;
 
-const contextTaxEventFixture = {
+const tokenCostEventFixture = {
   schemaVersion: 1,
   event: 'enter',
   stageId: 'work',
   at: '2026-08-25T15:10:00Z',
   vendor: 'claude',
-} satisfies ContextTaxEvent;
+} satisfies TokenCostEvent;
 
-const contextTaxZeroPercentiles = { p25: 0, p50: 0, p75: 0 };
-const contextTaxZeroUsagePercentiles = {
-  inputUncached: contextTaxZeroPercentiles,
-  cacheRead: contextTaxZeroPercentiles,
-  cacheCreation: contextTaxZeroPercentiles,
-  output: contextTaxZeroPercentiles,
-  reasoning: contextTaxZeroPercentiles,
+const tokenCostZeroPercentiles = { p25: 0, p50: 0, p75: 0 };
+const tokenCostZeroUsagePercentiles = {
+  inputUncached: tokenCostZeroPercentiles,
+  cacheRead: tokenCostZeroPercentiles,
+  cacheCreation: tokenCostZeroPercentiles,
+  output: tokenCostZeroPercentiles,
+  reasoning: tokenCostZeroPercentiles,
 };
 
-const contextTaxSnapshotFixture = {
+const tokenCostSnapshotFixture = {
   schemaVersion: 1,
   generatedAt: '2026-08-25T16:00:00Z',
   minPublishableSamples: 10,
@@ -1072,13 +1072,13 @@ const contextTaxSnapshotFixture = {
   sampleCount: 0,
   vendors: [],
   asOf: '2026-08-25',
-  totalUsage: contextTaxZeroUsagePercentiles,
+  totalUsage: tokenCostZeroUsagePercentiles,
   stageUsage: [],
-  compactionCount: contextTaxZeroPercentiles,
+  compactionCount: tokenCostZeroPercentiles,
   cacheHitRatio: 0,
   successRateByModel: {},
   successRateByVendor: {},
-} satisfies ContextTaxSnapshot;
+} satisfies TokenCostSnapshot;
 
 const policyConfigFixture = {
   iddVersion: '1.0.0',
@@ -1528,25 +1528,25 @@ const SCHEMA_TYPE_MAP: readonly SchemaTypeMapping[] = [
     fixture: localValidationEvidenceFixture,
   },
   {
-    schemaFile: 'context-tax-event.schema.json',
-    exportedType: 'ContextTaxEvent',
-    owningModule: 'src/scripts/context-tax-core.mts',
-    keys: contextTaxEventKeys,
-    fixture: contextTaxEventFixture,
+    schemaFile: 'token-cost-event.schema.json',
+    exportedType: 'TokenCostEvent',
+    owningModule: 'src/scripts/token-cost-core.mts',
+    keys: tokenCostEventKeys,
+    fixture: tokenCostEventFixture,
   },
   {
-    schemaFile: 'context-tax-sample.schema.json',
-    exportedType: 'ContextTaxSample',
-    owningModule: 'src/scripts/context-tax-core.mts',
-    keys: contextTaxSampleKeys,
-    fixture: contextTaxSampleFixture,
+    schemaFile: 'token-cost-sample.schema.json',
+    exportedType: 'TokenCostSample',
+    owningModule: 'src/scripts/token-cost-core.mts',
+    keys: tokenCostSampleKeys,
+    fixture: tokenCostSampleFixture,
   },
   {
-    schemaFile: 'context-tax-snapshot.schema.json',
-    exportedType: 'ContextTaxSnapshot',
-    owningModule: 'src/scripts/context-tax-core.mts',
-    keys: contextTaxSnapshotKeys,
-    fixture: contextTaxSnapshotFixture,
+    schemaFile: 'token-cost-snapshot.schema.json',
+    exportedType: 'TokenCostSnapshot',
+    owningModule: 'src/scripts/token-cost-core.mts',
+    keys: tokenCostSnapshotKeys,
+    fixture: tokenCostSnapshotFixture,
   },
   {
     schemaFile: 'discover-roadmap-union.schema.json',

@@ -1,13 +1,13 @@
-// idd-generated-from: src/scripts/context-tax-adapter-claude.mts
+// idd-generated-from: src/scripts/token-cost-adapter-claude.mts
 //
-// The scripts/context-tax-adapter-claude.mjs copy is generated from the
+// The scripts/token-cost-adapter-claude.mjs copy is generated from the
 // .mts source named above by `pnpm run build`. Edit the .mts source,
 // never the generated .mjs. See docs/typescript-sources.md.
 //
-// Claude Code adapter (#2290) for the context-tax measurement contract
+// Claude Code adapter (#2290) for the token-cost measurement contract
 // (#2288). Source-repo only: not HELPER_COMMANDS, not idd-template/. A
 // pure library module -- no CLI, no shebang, mirroring
-// context-tax-core.mts's own shape -- so it needs no HELPER_COMMANDS
+// token-cost-core.mts's own shape -- so it needs no HELPER_COMMANDS
 // registration or SOURCE_REPO_INTERNAL_ENTRY_PATHS entry.
 //
 // Reads Claude Code project JSONL files
@@ -25,7 +25,7 @@
 // none matching emits `0` rather than guessing from message gaps.
 //
 // `gitBranch` appears on every record but is never read here:
-// `ContextTaxJoinHints` (context-tax-core.mts) has no branch field to
+// `TokenCostJoinHints` (token-cost-core.mts) has no branch field to
 // carry it through as a join hint, and the sample record itself must
 // never hold a branch string (privacy) -- so this adapter leaves it
 // alone entirely rather than inventing a new interface field for it.
@@ -34,14 +34,14 @@ import { globSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, join } from 'node:path';
 import {
-  assertContextTaxSample,
-  type ContextTaxAdapterResult,
-  type ContextTaxSessionSample,
-  type ContextTaxUsage,
-  type ContextTaxVendorAdapter,
+  assertTokenCostSample,
   inferIssueNumberFromBasename,
-  redactContextTaxRecord,
-} from './context-tax-core.mts';
+  redactTokenCostRecord,
+  type TokenCostAdapterResult,
+  type TokenCostSessionSample,
+  type TokenCostUsage,
+  type TokenCostVendorAdapter,
+} from './token-cost-core.mts';
 
 /** Raw usage fields Claude Code reports on an assistant message. */
 interface ClaudeUsageFields {
@@ -105,7 +105,7 @@ function isCompactionRecord(record: unknown): boolean {
   return subtype !== undefined && /compact/i.test(subtype);
 }
 
-/** Parse a Claude Code project JSONL file's text into raw, untyped records, tolerating a malformed or truncated trailing line from an interrupted process (unlike context-tax-report.mts's committed-artifact strict parse, this reads real local logs outside this repo's control). */
+/** Parse a Claude Code project JSONL file's text into raw, untyped records, tolerating a malformed or truncated trailing line from an interrupted process (unlike token-cost-report.mts's committed-artifact strict parse, this reads real local logs outside this repo's control). */
 export function parseClaudeProjectLines(text: string): unknown[] {
   const out: unknown[] = [];
   for (const rawLine of text.split('\n')) {
@@ -137,7 +137,7 @@ function extractSessionId(records: readonly unknown[]): string | undefined {
  * Normalizes with `path.basename()` first (never trusts a caller's
  * `fileBasename` to already be path-free) so a full path passed in by
  * mistake can't survive into a path-like fallback `vendorSessionId` that
- * `redactContextTaxRecord()` would later strip to `undefined`, silently
+ * `redactTokenCostRecord()` would later strip to `undefined`, silently
  * producing a schema-invalid sample instead of failing closed.
  */
 function deriveFallbackSessionId(
@@ -213,14 +213,14 @@ function toNonNegativeInt(value: unknown): number {
 
 /**
  * Map one assistant message's raw `message.usage` fields to
- * {@link ContextTaxUsage}. `input_tokens` is already uncached (never
+ * {@link TokenCostUsage}. `input_tokens` is already uncached (never
  * subtract cache fields from it). `cache_creation` may split ephemeral
  * 5m/1h buckets; when present, sum both into `cacheCreation` instead of
  * trusting the scalar `cache_creation_input_tokens` alone. Claude Code
  * does not report a separate reasoning-token count, so `reasoning` is
  * always `0`.
  */
-function usageFromFields(raw: ClaudeUsageFields): ContextTaxUsage {
+function usageFromFields(raw: ClaudeUsageFields): TokenCostUsage {
   const split = raw.cache_creation;
   const cacheCreation = isPlainObject(split)
     ? toNonNegativeInt(split.ephemeral_5m_input_tokens) +
@@ -235,7 +235,7 @@ function usageFromFields(raw: ClaudeUsageFields): ContextTaxUsage {
   };
 }
 
-const ZERO_USAGE: ContextTaxUsage = {
+const ZERO_USAGE: TokenCostUsage = {
   inputUncached: 0,
   cacheRead: 0,
   cacheCreation: 0,
@@ -243,7 +243,7 @@ const ZERO_USAGE: ContextTaxUsage = {
   reasoning: 0,
 };
 
-function addUsage(a: ContextTaxUsage, b: ContextTaxUsage): ContextTaxUsage {
+function addUsage(a: TokenCostUsage, b: TokenCostUsage): TokenCostUsage {
   return {
     inputUncached: a.inputUncached + b.inputUncached,
     cacheRead: a.cacheRead + b.cacheRead,
@@ -254,7 +254,7 @@ function addUsage(a: ContextTaxUsage, b: ContextTaxUsage): ContextTaxUsage {
 }
 
 /** Sum every assistant message's usage into one session total, including `isSidechain: true` rows. */
-function extractUsage(records: readonly unknown[]): ContextTaxUsage {
+function extractUsage(records: readonly unknown[]): TokenCostUsage {
   let summed = ZERO_USAGE;
   for (const record of records) {
     if (!isAssistantRecord(record)) {
@@ -286,7 +286,7 @@ function extractIncludesSubagents(records: readonly unknown[]): boolean {
 function asClaudeHarvestInput(input: unknown): ClaudeHarvestInput {
   if (!isPlainObject(input) || !Array.isArray(input.records)) {
     throw new Error(
-      'context-tax-adapter-claude: harvest input must be { records: unknown[] }',
+      'token-cost-adapter-claude: harvest input must be { records: unknown[] }',
     );
   }
   const fileBasename =
@@ -295,22 +295,22 @@ function asClaudeHarvestInput(input: unknown): ClaudeHarvestInput {
 }
 
 /** Claude Code vendor adapter. `input` must satisfy {@link ClaudeHarvestInput}. */
-export const claudeAdapter: ContextTaxVendorAdapter = {
-  harvest(input: unknown): ContextTaxAdapterResult {
+export const claudeAdapter: TokenCostVendorAdapter = {
+  harvest(input: unknown): TokenCostAdapterResult {
     const { records, fileBasename } = asClaudeHarvestInput(input);
 
     const vendorSessionId =
       extractSessionId(records) ?? deriveFallbackSessionId(fileBasename);
     if (!vendorSessionId) {
       throw new Error(
-        'context-tax-adapter-claude: unable to determine a vendorSessionId',
+        'token-cost-adapter-claude: unable to determine a vendorSessionId',
       );
     }
 
     const timestamps = extractTimestamps(records);
     if (!timestamps) {
       throw new Error(
-        'context-tax-adapter-claude: no record has a valid timestamp',
+        'token-cost-adapter-claude: no record has a valid timestamp',
       );
     }
 
@@ -319,7 +319,7 @@ export const claudeAdapter: ContextTaxVendorAdapter = {
       ? inferIssueNumberFromBasename(basename(cwd))
       : undefined;
 
-    const sample: ContextTaxSessionSample = {
+    const sample: TokenCostSessionSample = {
       schemaVersion: 1,
       kind: 'session',
       vendor: 'claude',
@@ -334,8 +334,8 @@ export const claudeAdapter: ContextTaxVendorAdapter = {
       includesSubagents: extractIncludesSubagents(records),
     };
 
-    const redacted = redactContextTaxRecord(sample) as ContextTaxSessionSample;
-    assertContextTaxSample(redacted);
+    const redacted = redactTokenCostRecord(sample) as TokenCostSessionSample;
+    assertTokenCostSample(redacted);
 
     return issueNumber === undefined
       ? { sample: redacted }
@@ -365,13 +365,13 @@ export interface ScanClaudeSessionsOptions {
 
 /**
  * Scan `projectDir` (default `~/.claude/projects/<encoded-cwd>`) for
- * `*.jsonl` files and harvest each into a {@link ContextTaxAdapterResult}.
+ * `*.jsonl` files and harvest each into a {@link TokenCostAdapterResult}.
  * Unlike the Codex rollout tree, Claude Code already scopes one directory
  * per project cwd, so no additional idd-skill-cwd filter is needed here.
  */
 export function scanClaudeSessions(
   options?: ScanClaudeSessionsOptions,
-): ContextTaxAdapterResult[] {
+): TokenCostAdapterResult[] {
   const projectDir = options?.projectDir ?? defaultClaudeProjectDir();
   const files = globSync('*.jsonl', {
     cwd: projectDir,
@@ -381,7 +381,7 @@ export function scanClaudeSessions(
     .map((entry) => join(entry.parentPath, entry.name))
     .sort();
 
-  const results: ContextTaxAdapterResult[] = [];
+  const results: TokenCostAdapterResult[] = [];
   for (const file of files) {
     // Read, parse, and harvest all live inside one try: a live Claude Code
     // session can still be writing (or an unrelated process can delete) a
