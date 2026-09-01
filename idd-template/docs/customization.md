@@ -1732,7 +1732,13 @@ distribute); build an equivalent against the same
 and
 [`GET /repos/{owner}/{repo}/actions/runs/{run_id}/jobs`](https://docs.github.com/en/rest/actions/workflow-jobs)
 endpoints, filtered by the pull request's head branch, to attribute cost the
-same way for your own workflows.
+same way for your own workflows. A branch-name filter alone can include an
+unrelated run -- a reused branch name, or a same-repository `push` /
+`workflow_dispatch` run against that branch outside this pull request --
+so also restrict to `pull_request`/`pull_request_review`/
+`pull_request_review_comment`-triggered runs and check each run's own
+`pull_requests[].number` against the target pull request (empty for a
+fork-originated pull request, where GitHub never populates that field).
 
 **Only your configured required status checks cost every pull request
 unconditionally.** A `pull_request`-triggered workflow that is _not_ one of
