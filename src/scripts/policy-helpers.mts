@@ -103,13 +103,17 @@ export interface DevelopmentBranchInspection {
 }
 
 /**
- * A qualified branch name: non-empty, no whitespace anywhere (rejects
- * both a blank string and internal/leading/trailing whitespace in one
- * check), and -- checked separately below -- no `refs/heads/` prefix
- * (this policy stores the short branch name IDD's own claim `branch:`
- * field and `git worktree add <branch>` already expect, not a full ref).
+ * A qualified branch name: a conservative safe charset (letters, digits,
+ * `.`, `_`, `/`, `-` only) so every unquoted `{development-branch}`
+ * substitution in the IDD instruction files' shell command examples is
+ * safe by construction (#2273 review finding: a value like
+ * `release/$next` or `release;stable` would otherwise be a valid,
+ * non-whitespace string that breaks or hijacks an unquoted shell
+ * expansion). Checked separately below: no `refs/heads/` prefix (this
+ * policy stores the short branch name IDD's own claim `branch:` field
+ * and `git worktree add <branch>` already expect, not a full ref).
  */
-const DEVELOPMENT_BRANCH_PATTERN = /^\S+$/;
+const DEVELOPMENT_BRANCH_PATTERN = /^[A-Za-z0-9._/-]+$/;
 const DEVELOPMENT_BRANCH_REFS_HEADS_PREFIX = 'refs/heads/';
 
 /**
@@ -138,7 +142,7 @@ export function inspectDevelopmentBranch(
     return {
       status: 'invalid',
       reason:
-        'developmentBranch must be non-empty and must not contain whitespace',
+        'developmentBranch must be non-empty and contain only letters, digits, ".", "_", "/", or "-"',
     };
   }
   if (value.startsWith(DEVELOPMENT_BRANCH_REFS_HEADS_PREFIX)) {

@@ -879,6 +879,17 @@ test('inspectDevelopmentBranch distinguishes absent, configured, and invalid (#2
     inspectDevelopmentBranch({ developmentBranch: 'refs/heads/main' }).status,
     'invalid',
   );
+  // #2273: a value containing shell metacharacters is a valid,
+  // non-whitespace string that would otherwise pass -- reject it so every
+  // unquoted `{development-branch}` shell substitution stays safe.
+  assert.equal(
+    inspectDevelopmentBranch({ developmentBranch: 'release/$next' }).status,
+    'invalid',
+  );
+  assert.equal(
+    inspectDevelopmentBranch({ developmentBranch: 'release;stable' }).status,
+    'invalid',
+  );
   assert.equal(
     inspectDevelopmentBranch({ developmentBranch: 42 }).status,
     'invalid',

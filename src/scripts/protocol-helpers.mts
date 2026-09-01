@@ -5992,6 +5992,32 @@ export function computePreMergeReadinessBlockers(
     });
   }
 
+  // #2273: absent `report.branchTarget` never blocks (backward-compat with
+  // every pre-#2273 fixture/caller, mirroring `secondaryQuietWindow` below).
+  // When present, it is a real, always-computed safety gate -- not opt-in
+  // evidence -- so an unresolvable expected value (`invalid: true`, a
+  // malformed configured `developmentBranch`) fails closed rather than
+  // silently skipping the comparison.
+  const branchTarget = preMergeAsRecord(report.branchTarget);
+  if (Object.keys(branchTarget).length > 0) {
+    if (branchTarget.invalid === true) {
+      blockers.push({
+        gate: 'branch-target',
+        detail:
+          'developmentBranch is configured but invalid; cannot verify the PR base branch',
+      });
+    } else {
+      const actualBase = String(branchTarget.actual ?? '');
+      const expectedBase = String(branchTarget.expected ?? '');
+      if (!expectedBase || actualBase !== expectedBase) {
+        blockers.push({
+          gate: 'branch-target',
+          detail: `PR baseRefName "${actualBase}" does not match the configured development branch "${expectedBase}"`,
+        });
+      }
+    }
+  }
+
   const reviewCurrency = preMergeAsRecord(report.reviewCurrency);
   const comparisonRoute = String(reviewCurrency.comparisonRoute ?? '');
   const comparisonReason = String(reviewCurrency.comparisonReason ?? '');
@@ -6407,6 +6433,7 @@ export function buildPreMergeReadinessSummary(
     reviewDecision = '',
     mergeStateStatus = '',
     mergeable = '',
+    baseRefName = '',
   }: {
     prHeadSha: string;
     comments?: CommentLike[];
@@ -6464,6 +6491,10 @@ export function buildPreMergeReadinessSummary(
     // `''`, which never equals the literal `'BEHIND'` the gate checks for).
     mergeStateStatus?: string | null;
     mergeable?: string | null;
+    // #2273: live PR `baseRefName`, paired with `options.developmentBranchCheck`
+    // below to populate `summary.branchTarget`. Omitted by unit callers
+    // (defaults to `''`).
+    baseRefName?: string | null;
   },
   options: {
     now?: string;
@@ -6566,6 +6597,18 @@ export function buildPreMergeReadinessSummary(
     // (field is omitted entirely -- not even `null` -- unchanged
     // pre-#2323 behavior).
     localValidationEvidenceSummary?: Record<string, unknown> | null;
+    // #2273: caller-resolved `developmentBranch` expectation, paired with
+    // `input.baseRefName` above to populate `summary.branchTarget`, which
+    // `computePreMergeReadinessBlockers` reads as a real (not opt-in)
+    // safety gate -- unlike `localValidationEvidenceSummary` above, this
+    // CAN block. `expected` is the live default branch when
+    // `developmentBranch` is absent, or the configured value when present
+    // and structurally valid; `invalid: true` means a configured value
+    // failed `inspectDevelopmentBranch` (fails closed rather than
+    // comparing against an unresolvable expectation). Omitted entirely by
+    // a caller that predates this option -- `summary.branchTarget` is then
+    // never set and the gate never fires (unchanged pre-#2273 behavior).
+    developmentBranchCheck?: { expected: string; invalid?: boolean } | null;
     // Configured `advisoryWait.secondaryQuietWindow` in minutes (#2335),
     // resolved by the caller, mirroring `advisoryConvergenceDeadlineMinutes`
     // above's "policy value resolved by the CLI layer" pattern. Omitted or
@@ -6973,6 +7016,18 @@ export function buildPreMergeReadinessSummary(
   // this can never change `ready`/`blockers`.
   if (options.localValidationEvidenceSummary) {
     summary.localValidationEvidence = options.localValidationEvidenceSummary;
+  }
+
+  // #2273: unlike the informational field above, this one feeds
+  // `computePreMergeReadinessBlockers` directly (see that function's
+  // `branchTarget` gate) -- a real, always-on safety check when the caller
+  // supplies it, not opt-in evidence.
+  if (options.developmentBranchCheck) {
+    summary.branchTarget = {
+      actual: baseRefName,
+      expected: options.developmentBranchCheck.expected,
+      invalid: options.developmentBranchCheck.invalid === true,
+    };
   }
 
   // Top-level rollup so a consumer reads one `ready` boolean + `blockers[]`

@@ -3030,7 +3030,7 @@ test('bin/idd-onboard.mjs --record-policy exits 1 on a malformed developmentBran
     (verdict.unresolved as string[]).some(
       (message) =>
         message.includes('development-branch') &&
-        message.includes('whitespace') &&
+        message.includes('letters, digits') &&
         !message.includes('not found on the configured origin remote'),
     ),
     `expected a shape-validation message, got: ${JSON.stringify(verdict.unresolved)}`,

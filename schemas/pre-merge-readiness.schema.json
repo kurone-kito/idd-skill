@@ -1609,6 +1609,26 @@
       "description": "#2323: the caller-precomputed resolveLocalValidationEvidence result (local-validation-evidence.mts), reported verbatim. Omitted entirely when the caller does not pass it. Purely informational -- computePreMergeReadinessBlockers has no reference to this field, so it can never remove or downgrade a required-check blocker; an unavailable required check stays a blocker regardless of this field's contents.",
       "additionalProperties": true
     },
+    "branchTarget": {
+      "type": "object",
+      "description": "#2273: options.developmentBranchCheck paired with input.baseRefName. Omitted entirely when the caller does not pass developmentBranchCheck. Unlike localValidationEvidence above, computePreMergeReadinessBlockers DOES read this field -- a mismatch or invalid: true is a real branch-target blocker.",
+      "additionalProperties": false,
+      "required": ["actual", "expected"],
+      "properties": {
+        "actual": {
+          "type": "string",
+          "description": "The PR's live baseRefName."
+        },
+        "expected": {
+          "type": "string",
+          "description": "The resolved developmentBranch: the configured value when present and valid, else the repository's live default branch. Empty when invalid is true."
+        },
+        "invalid": {
+          "type": "boolean",
+          "description": "True when a configured developmentBranch failed inspectDevelopmentBranch (fails closed rather than comparing against an unresolvable expectation)."
+        }
+      }
+    },
     "ready": {
       "description": "Strict merge-gate rollup: true only when blockers is empty. Does NOT apply the dispositionEvidence.soleCauseAckOnlyPostDisposition override (a separate flag the F2 checklist layers on top).",
       "type": "boolean"

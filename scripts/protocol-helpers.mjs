@@ -4742,6 +4742,31 @@ export function computePreMergeReadinessBlockers(report) {
       detail: `prHeadSha "${prHeadSha}" is not a 40-hex commit SHA; cannot bind a safe merge`,
     });
   }
+  // #2273: absent `report.branchTarget` never blocks (backward-compat with
+  // every pre-#2273 fixture/caller, mirroring `secondaryQuietWindow` below).
+  // When present, it is a real, always-computed safety gate -- not opt-in
+  // evidence -- so an unresolvable expected value (`invalid: true`, a
+  // malformed configured `developmentBranch`) fails closed rather than
+  // silently skipping the comparison.
+  const branchTarget = preMergeAsRecord(report.branchTarget);
+  if (Object.keys(branchTarget).length > 0) {
+    if (branchTarget.invalid === true) {
+      blockers.push({
+        gate: 'branch-target',
+        detail:
+          'developmentBranch is configured but invalid; cannot verify the PR base branch',
+      });
+    } else {
+      const actualBase = String(branchTarget.actual ?? '');
+      const expectedBase = String(branchTarget.expected ?? '');
+      if (!expectedBase || actualBase !== expectedBase) {
+        blockers.push({
+          gate: 'branch-target',
+          detail: `PR baseRefName "${actualBase}" does not match the configured development branch "${expectedBase}"`,
+        });
+      }
+    }
+  }
   const reviewCurrency = preMergeAsRecord(report.reviewCurrency);
   const comparisonRoute = String(reviewCurrency.comparisonRoute ?? '');
   const comparisonReason = String(reviewCurrency.comparisonReason ?? '');
@@ -5110,6 +5135,7 @@ export function buildPreMergeReadinessSummary(
     reviewDecision = '',
     mergeStateStatus = '',
     mergeable = '',
+    baseRefName = '',
   },
   options = {},
 ) {
@@ -5498,6 +5524,17 @@ export function buildPreMergeReadinessSummary(
   // this can never change `ready`/`blockers`.
   if (options.localValidationEvidenceSummary) {
     summary.localValidationEvidence = options.localValidationEvidenceSummary;
+  }
+  // #2273: unlike the informational field above, this one feeds
+  // `computePreMergeReadinessBlockers` directly (see that function's
+  // `branchTarget` gate) -- a real, always-on safety check when the caller
+  // supplies it, not opt-in evidence.
+  if (options.developmentBranchCheck) {
+    summary.branchTarget = {
+      actual: baseRefName,
+      expected: options.developmentBranchCheck.expected,
+      invalid: options.developmentBranchCheck.invalid === true,
+    };
   }
   // Top-level rollup so a consumer reads one `ready` boolean + `blockers[]`
   // instead of hand-ANDing ~8 nested gates (a dropped clause would fail open).

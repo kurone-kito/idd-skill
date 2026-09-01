@@ -32,6 +32,7 @@ import {
 import { deriveGhHttpStatus } from './gh-http-status.mts';
 import { loadIddConfig } from './idd-config.mts';
 import {
+  inspectDevelopmentBranch,
   normalizePolicyConfig,
   parseIsoDurationToMs,
   resolveCollaboratorMarkerTrust,
@@ -466,6 +467,36 @@ export function collectPreMergeReadiness(
   }
   const encodedBaseRefName = encodeURIComponent(baseRefName);
 
+  // #2273: resolve the expected development branch the same way B1 does
+  // (idd-work.instructions.md) -- configured `developmentBranch` when
+  // present and structurally valid, else the repository's live GitHub
+  // default branch -- so F3's `branchTarget` gate is a real, always-on
+  // check rather than the prose-only Gate-checklist bullet a Copilot
+  // review found bypassable via this exact `--apply` path. Mirrors
+  // `readGithubDefaultBranch` (idd-onboard.mts) for the live-default path;
+  // an uncaught `ghJson` failure here throws (fails closed) rather than
+  // silently proceeding without the check.
+  const developmentBranchInspection = inspectDevelopmentBranch(iddConfig);
+  const developmentBranchCheck: { expected: string; invalid?: boolean } =
+    developmentBranchInspection.status === 'invalid'
+      ? { expected: '', invalid: true }
+      : developmentBranchInspection.status === 'configured'
+        ? { expected: developmentBranchInspection.branch ?? '' }
+        : {
+            expected: String(
+              (
+                ghJson([
+                  'repo',
+                  'view',
+                  '-R',
+                  repoRef,
+                  '--json',
+                  'defaultBranchRef',
+                ]) as { defaultBranchRef?: { name?: unknown } }
+              ).defaultBranchRef?.name ?? '',
+            ),
+          };
+
   // #1483: sourced from the same `gh pr view` call above (the
   // `statusCheckRollup` field), not a separate `gh pr checks` call --
   // `statusCheckRollup`'s GraphQL union already tags each entry with a
@@ -719,6 +750,7 @@ export function collectPreMergeReadiness(
       reviewDecision,
       mergeStateStatus,
       mergeable,
+      baseRefName,
     },
     {
       now,
@@ -726,6 +758,7 @@ export function collectPreMergeReadiness(
       iddAgentLogins,
       advisoryBotLogins,
       advisoryBotLoginsSource,
+      developmentBranchCheck,
       prAuthorLogin,
       expectedClaimId: args.expectedClaimId,
       expectedAgentId: args.expectedAgentId,
