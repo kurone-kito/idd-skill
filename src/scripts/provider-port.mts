@@ -27,8 +27,13 @@
 // `resolveTrustedCollaboratorMarkerLogins` calls the permission lookup
 // inside a synchronous `Array.filter()` callback, which structurally
 // cannot `await`. An async variant is added additively, not retrofitted
-// here, if a future step (`discover-roadmap-graph.mts`'s `runGhAsync`
-// traversal, step 12) genuinely needs one.
+// onto the sync methods, where a real consumer genuinely needs one --
+// `discover-roadmap-graph.mts`'s bounded-concurrency traversal (step 12,
+// `mapPool`-driven) does: its issue/sub-issue loaders run several `gh`
+// subprocesses in flight at once via the non-blocking `ghTextAsync`, which
+// the synchronous `execFileSync`-backed methods above cannot express
+// (they would serialize the fan-out). The `*Async` methods below are that
+// addition -- traversal-only, not a general async surface.
 
 import type {
   ProviderError,
@@ -79,6 +84,21 @@ export interface ProviderPostedComment {
 
 /** One raw issue-timeline event, GitHub-shaped (event type + fields vary). */
 export type ProviderTimelineEvent = Record<string, unknown>;
+
+/**
+ * Result of {@link ProviderPort.getWorkItemForTraversalAsync}. `item` is the
+ * raw REST issue payload, untyped -- `discover-roadmap-graph.mts`'s own
+ * `normalizeIssue` reads fields (`pull_request`, `sub_issues_summary`) no
+ * other port method's normalized shape carries, so remapping onto
+ * {@link ProviderWorkItem} the way every synchronous method's caller does is
+ * not possible here; this is a raw passthrough by necessity, matching
+ * {@link ProviderTimelineEvent} and `listReviews`'s existing raw-`unknown`
+ * precedent.
+ */
+export type ProviderTraversalIssueLookup =
+  | { outcome: 'found'; item: unknown }
+  | { outcome: 'not-found' }
+  | { outcome: 'inaccessible' };
 
 export type ProviderCollaboratorPermissionResult =
   | { outcome: 'found'; permission: string; roleName: string }
@@ -357,4 +377,85 @@ export interface ProviderPort {
   listChangeRequestReviewThreads(
     number: number,
   ): { isResolved: boolean | null }[];
+
+  /**
+   * work-items, async, traversal-only (see the header comment above). The
+   * distinct bounded-concurrency shape `discover-roadmap-graph.mts`'s
+   * `buildIssueLoader` uses: non-blocking `ghTextAsync` (several in flight
+   * at once, bounded by the traversal's own `mapPool`), bounded-retried
+   * (#1394) with a custom classifier that does NOT retry a genuine 404 or
+   * an inaccessible-issue failure (403/410/451, or their equivalent
+   * stderr-text signature) -- only a transient failure (a truncated
+   * captured stdout, a network hiccup) gets the extra bounded attempts.
+   * `not-found` and `inaccessible` are reached on the FIRST attempt,
+   * byte-identical to no retry wrapper at all. NOT unified with
+   * {@link getWorkItem}: that method's `null`-on-404/throw-on-other
+   * contract has no room for a THIRD outcome (inaccessible) without either
+   * losing the retry-skip distinction or forcing the traversal to
+   * re-derive it from a thrown {@link ProviderError}'s category, which
+   * cannot express 410/451 as the same bucket as 403 the way this file's
+   * own classification does.
+   */
+  getWorkItemForTraversalAsync(
+    number: number,
+  ): Promise<ProviderTraversalIssueLookup>;
+
+  /**
+   * work-items, async, traversal-only. Full-walk pagination of GitHub's
+   * native `subIssues` connection -- `discover-roadmap-graph.mts`'s
+   * `buildSubIssueLoader` shape, a query no other port method covers.
+   * Bounded-retried (#1394) PER PAGE with the default retry-everything
+   * classifier (no pre-existing REST-status classification to preserve,
+   * unlike {@link getWorkItemForTraversalAsync}). Both fail-fasts from the
+   * pre-migration loop stay inside: an absent `subIssues` connection, and
+   * `hasNextPage: true` with a missing `endCursor` (matches
+   * {@link listChangeRequestReviewThreads}'s established shape). Returns
+   * the raw, un-deduped `nodes` flattened across every page -- NOT
+   * numbers: `discover-roadmap-graph.mts`'s own `normalizeSubIssueNumbers`
+   * already does that coercion-plus-dedup and is reused elsewhere in the
+   * same file (`getReferences`'s native-sub-issue path), so duplicating
+   * it here would fork one small pure function into two copies.
+   */
+  listWorkItemSubIssueNodesAsync(number: number): Promise<unknown[]>;
+
+  /**
+   * comments-and-labels, async, traversal-adjacent (NOT part of the
+   * concurrent hot path -- `discover-roadmap-graph.mts`'s pre-migration
+   * `buildCommentLoader` runs its per-page `gh` call through the
+   * SYNCHRONOUS `ghText`, same as every other comment fetch in this
+   * migration; the method is only `async` because {@link withBoundedRetry}
+   * (#1394, one retry classifier shared with every other traversal loader)
+   * needs one). Raw passthrough by design, NOT {@link ProviderComment}:
+   * `ClaimStateResolution.loadComments`'s own contract deliberately keeps
+   * its element type `unknown` rather than promise a shape the loader
+   * never guaranteed pre-migration (its own doc comment says so), and
+   * `discover-orphan-filter.mts` already depends on that looseness through
+   * `buildClaimStateResolution`. NOT the same operation as
+   * {@link listWorkItemComments}: that method's single `--paginate` call
+   * retries (if at all) the WHOLE fetch, where this one retries one page
+   * at a time -- a real granularity difference, not interchangeable.
+   */
+  listWorkItemCommentsWithRetryAsync(number: number): Promise<unknown[]>;
+
+  /**
+   * work-items. `gh search issues`, the distinct server-side search
+   * technique `discover-roadmap-graph.mts`'s `buildOpenRoadmapRootsLoader`
+   * uses for `--all-roadmaps` root discovery (a label search and a
+   * body-marker search, unioned by the caller) -- not `listOpenWorkItems`/
+   * `searchWorkItems`'s REST list/search shape. `limit` is GitHub search's
+   * own hard per-query result cap (not a caller-tunable advisory bound like
+   * `listIssueNumbersClosedByOpenChangeRequests`'s), passed through rather
+   * than hardcoded in the adapter so the domain's own
+   * `warnOnSearchResultCap` truncation check and this call share one
+   * source of truth instead of two independent literals that could drift.
+   * Raw passthrough (`unknown[]`): the caller re-confirms each hit's
+   * marker with its own regex over the raw `body` field, and truncation
+   * detection needs the untouched result-array length.
+   */
+  searchOpenWorkItems(query: {
+    label?: string;
+    matchBody?: string;
+    fields: string[];
+    limit: number;
+  }): unknown[];
 }

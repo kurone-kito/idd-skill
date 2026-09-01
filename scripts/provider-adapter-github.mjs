@@ -15,6 +15,8 @@ import {
   ghApiJson,
   resolveViewerLogin as ghExecResolveViewerLogin,
   ghText,
+  ghTextAsync,
+  withBoundedRetry,
 } from './gh-exec.mjs';
 import { deriveGhHttpStatus } from './gh-http-status.mjs';
 
@@ -28,10 +30,75 @@ function statusToCategory(status) {
   if (status !== null && status >= 500) return 'unavailable';
   return 'unknown';
 }
+// The traversal-only helpers below (through wrapTraversalGhFailure) back
+// getWorkItemForTraversalAsync only -- a verbatim port of
+// discover-roadmap-graph.mts's pre-migration resolveGhExitStatus/
+// wrapGhFailure/isNotFoundIssueLookupError/isInaccessibleIssueLookupError,
+// which existed to preserve retry-skip classification (#1394) the
+// statusToCategory/ProviderError classification above cannot express: it
+// maps 410/451 to 'validation', not the same bucket as 403, where this
+// file's own INACCESSIBLE_HTTP_STATUSES treats all three as one signal.
+const TRAVERSAL_INACCESSIBLE_HTTP_STATUSES = new Set([403, 410, 451]);
+/** Mirrors resolveGhExitStatus: sync `.status` first, async `.code` second. */
+function resolveTraversalGhExitStatus(error) {
+  const candidate = error;
+  const rawStatus = candidate?.status ?? candidate?.code;
+  return typeof rawStatus === 'number' ? rawStatus : null;
+}
+/**
+ * Wraps a failed `gh` error into the canonical `{ status, stderr }` shape
+ * the two classifiers below read. Returns `''` when the exit status is in
+ * `allowStatuses` (the 404-tolerance `getWorkItemForTraversalAsync` relies
+ * on); otherwise throws.
+ */
+function wrapTraversalGhFailure(error, args, allowStatuses) {
+  const status = resolveTraversalGhExitStatus(error);
+  if (status !== null && allowStatuses.includes(status)) {
+    return '';
+  }
+  const stderr = String(error?.stderr ?? '').trim();
+  const prefix = `gh ${args.join(' ')}`;
+  const wrapped = new Error(
+    stderr ? `${prefix} failed: ${stderr}` : `${prefix} failed`,
+  );
+  wrapped.status = status;
+  wrapped.stderr = stderr;
+  throw wrapped;
+}
+function isTraversalInaccessibleError(error) {
+  if (!error) {
+    return false;
+  }
+  const rawStatus = error.status;
+  const status = typeof rawStatus === 'number' ? rawStatus : null;
+  if (status !== null && TRAVERSAL_INACCESSIBLE_HTTP_STATUSES.has(status)) {
+    return true;
+  }
+  const stderr = String(error.stderr ?? '');
+  return /Resource not accessible|access denied|Forbidden|Unavailable for legal reasons/i.test(
+    stderr,
+  );
+}
+function isTraversalNotFoundError(error) {
+  if (!error) {
+    return false;
+  }
+  const candidate = error;
+  const stderr = String(candidate.stderr ?? candidate.message ?? '');
+  return stderr.includes('HTTP 404');
+}
+// #1449: explicit above the promisified execFile's 1 MiB default, applied
+// PER STREAM. The two traversal hot-path callers (a single GitHub issue's
+// REST JSON -- body capped at 64 KiB by GitHub -- and a paginated 100-node
+// sub-issue GraphQL page) stay far below this; 10 MiB per stream is a
+// generous ceiling bounding worst-case memory rather than accepting
+// unbounded accumulation (Copilot review, #1463).
+const GH_ASYNC_MAX_BUFFER = 10 * 1024 * 1024;
 const DEFAULT_DEPS = {
   ghText,
   ghApiJson,
   resolveViewerLogin: ghExecResolveViewerLogin,
+  ghTextAsync,
 };
 /**
  * GitHub implementation of {@link ProviderPort}. `owner`/`repo` are resolved
@@ -540,7 +607,176 @@ export function createGithubProviderAdapter(owner, repo, deps = DEFAULT_DEPS) {
       }
       return threads;
     },
+    async getWorkItemForTraversalAsync(number) {
+      const args = [
+        'api',
+        `repos/${owner}/${repo}/issues/${number}`,
+        '--jq',
+        '.',
+      ];
+      try {
+        const result = await withBoundedRetry(
+          async () => {
+            try {
+              return await deps.ghTextAsync(args, {
+                maxBuffer: GH_ASYNC_MAX_BUFFER,
+              });
+            } catch (error) {
+              return wrapTraversalGhFailure(error, args, [404]);
+            }
+          },
+          {
+            isRetryable: (error) =>
+              !isTraversalNotFoundError(error) &&
+              !isTraversalInaccessibleError(error),
+          },
+        );
+        const trimmed = result.trim();
+        if (!trimmed || trimmed === 'null') {
+          return { outcome: 'not-found' };
+        }
+        return { outcome: 'found', item: JSON.parse(trimmed) };
+      } catch (error) {
+        if (isTraversalNotFoundError(error)) {
+          return { outcome: 'not-found' };
+        }
+        if (isTraversalInaccessibleError(error)) {
+          return { outcome: 'inaccessible' };
+        }
+        throw error;
+      }
+    },
+    async listWorkItemSubIssueNodesAsync(number) {
+      const query = `query($owner:String!, $repo:String!, $number:Int!, $after:String) {
+  repository(owner:$owner, name:$repo) {
+    issue(number:$number) {
+      subIssues(first:100, after:$after) {
+        nodes {
+          number
+        }
+        pageInfo {
+          hasNextPage
+          endCursor
+        }
+      }
+    }
+  }
+}`;
+      const nodes = [];
+      let after = '';
+      for (;;) {
+        const variables = {
+          owner,
+          repo,
+          number,
+        };
+        if (after) {
+          variables.after = after;
+        }
+        const result = await withBoundedRetry(async () => {
+          const apiArgs = ['api', 'graphql', '-f', `query=${query}`];
+          for (const [name, value] of Object.entries(variables)) {
+            if (value === '' || value === null || value === undefined) {
+              continue;
+            }
+            const flag = typeof value === 'number' ? '-F' : '-f';
+            apiArgs.push(flag, `${name}=${value}`);
+          }
+          try {
+            const stdout = await deps.ghTextAsync(apiArgs, {
+              maxBuffer: GH_ASYNC_MAX_BUFFER,
+            });
+            const parsed = JSON.parse(stdout.trim() || '{}');
+            if (Array.isArray(parsed.errors) && parsed.errors.length > 0) {
+              throw new Error(formatTraversalGraphqlErrors(parsed.errors));
+            }
+            return parsed;
+          } catch (error) {
+            const stderr = String(error?.stderr ?? '').trim();
+            const detail = stderr || error.message;
+            throw new Error(`gh api graphql failed: ${detail}`);
+          }
+        });
+        const connection = result?.data?.repository?.issue?.subIssues;
+        if (
+          !connection ||
+          !Array.isArray(connection.nodes) ||
+          !connection.pageInfo
+        ) {
+          throw new Error(`subIssues connection missing for issue #${number}`);
+        }
+        nodes.push(...connection.nodes);
+        if (!connection.pageInfo.hasNextPage) {
+          break;
+        }
+        if (!connection.pageInfo.endCursor) {
+          throw new Error(
+            `subIssues pagination cursor missing for issue #${number}`,
+          );
+        }
+        after = String(connection.pageInfo.endCursor);
+      }
+      return nodes;
+    },
+    async listWorkItemCommentsWithRetryAsync(number) {
+      const comments = [];
+      const pageSize = 100;
+      for (let page = 1; ; page += 1) {
+        const pageItems = await withBoundedRetry(async () => {
+          const raw = deps
+            .ghText(
+              [
+                'api',
+                `repos/${owner}/${repo}/issues/${number}/comments?per_page=${pageSize}&page=${page}`,
+                '--jq',
+                '.',
+              ],
+              GH_TEXT_LOOP_OPTIONS,
+            )
+            .trim();
+          return raw && raw !== 'null' ? JSON.parse(raw) : [];
+        });
+        if (!Array.isArray(pageItems) || pageItems.length === 0) {
+          break;
+        }
+        comments.push(...pageItems);
+        if (pageItems.length < pageSize) {
+          break;
+        }
+      }
+      return comments;
+    },
+    searchOpenWorkItems(query) {
+      const args = [
+        'search',
+        'issues',
+        '--repo',
+        `${owner}/${repo}`,
+        '--state',
+        'open',
+        '--limit',
+        String(query.limit),
+        '--json',
+        query.fields.join(','),
+      ];
+      if (query.label) {
+        args.push('--label', query.label);
+      }
+      if (query.matchBody) {
+        args.push('--match', 'body', query.matchBody);
+      }
+      const raw = deps.ghText(args, GH_TEXT_LOOP_OPTIONS).trim();
+      const parsed = raw && raw !== 'null' ? JSON.parse(raw) : [];
+      return Array.isArray(parsed) ? parsed : [];
+    },
   };
+}
+/** Coerce a GraphQL response's `errors[]` array into one readable string;
+ * backs {@link createGithubProviderAdapter}'s `listWorkItemSubIssueNodesAsync`. */
+function formatTraversalGraphqlErrors(errors) {
+  return errors
+    .map((error) => String(error?.message ?? 'unknown GraphQL error'))
+    .join('; ');
 }
 /** Resolve the current repository's owner/name via `gh repo view` (the
  * boilerplate every one of the 11 migrated files already performs). */

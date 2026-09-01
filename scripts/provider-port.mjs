@@ -27,6 +27,11 @@
 // `resolveTrustedCollaboratorMarkerLogins` calls the permission lookup
 // inside a synchronous `Array.filter()` callback, which structurally
 // cannot `await`. An async variant is added additively, not retrofitted
-// here, if a future step (`discover-roadmap-graph.mts`'s `runGhAsync`
-// traversal, step 12) genuinely needs one.
+// onto the sync methods, where a real consumer genuinely needs one --
+// `discover-roadmap-graph.mts`'s bounded-concurrency traversal (step 12,
+// `mapPool`-driven) does: its issue/sub-issue loaders run several `gh`
+// subprocesses in flight at once via the non-blocking `ghTextAsync`, which
+// the synchronous `execFileSync`-backed methods above cannot express
+// (they would serialize the fan-out). The `*Async` methods below are that
+// addition -- traversal-only, not a general async surface.
 export {};

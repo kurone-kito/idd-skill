@@ -139,5 +139,19 @@ export function createFakeProviderAdapter(fixture) {
     listChangeRequestReviewThreads(number) {
       return fixture.reviewThreads?.[number] ?? [];
     },
+    async getWorkItemForTraversalAsync(number) {
+      return (
+        fixture.traversalIssueLookups?.[number] ?? { outcome: 'not-found' }
+      );
+    },
+    async listWorkItemSubIssueNodesAsync(number) {
+      return fixture.subIssueNodes?.[number] ?? [];
+    },
+    async listWorkItemCommentsWithRetryAsync(number) {
+      return fixture.traversalComments?.[number] ?? [];
+    },
+    searchOpenWorkItems() {
+      return fixture.searchResults ?? [];
+    },
   };
 }

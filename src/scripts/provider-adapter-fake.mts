@@ -22,6 +22,7 @@ import type {
   ProviderPostedComment,
   ProviderRequiredCheck,
   ProviderTimelineEvent,
+  ProviderTraversalIssueLookup,
   ProviderWorkItem,
 } from './provider-port.mts';
 
@@ -66,6 +67,16 @@ export interface FakeProviderFixture {
   /** Every closed work item is appended here, in call order. */
   closedWorkItems?: { number: number; reason: string }[];
   nextCommentId?: number;
+  /** Backs {@link ProviderPort.getWorkItemForTraversalAsync}; absent key
+   * means `not-found` (matches the adapter's own not-found default). */
+  traversalIssueLookups?: Record<number, ProviderTraversalIssueLookup>;
+  /** Backs {@link ProviderPort.listWorkItemSubIssueNodesAsync}. */
+  subIssueNodes?: Record<number, unknown[]>;
+  /** Backs {@link ProviderPort.listWorkItemCommentsWithRetryAsync}; raw
+   * passthrough, distinct from {@link comments} (ProviderComment-typed). */
+  traversalComments?: Record<number, unknown[]>;
+  /** Backs {@link ProviderPort.searchOpenWorkItems}. */
+  searchResults?: unknown[];
 }
 
 export function createFakeProviderAdapter(
@@ -237,6 +248,28 @@ export function createFakeProviderAdapter(
       number: number,
     ): { isResolved: boolean | null }[] {
       return fixture.reviewThreads?.[number] ?? [];
+    },
+
+    async getWorkItemForTraversalAsync(
+      number: number,
+    ): Promise<ProviderTraversalIssueLookup> {
+      return (
+        fixture.traversalIssueLookups?.[number] ?? { outcome: 'not-found' }
+      );
+    },
+
+    async listWorkItemSubIssueNodesAsync(number: number): Promise<unknown[]> {
+      return fixture.subIssueNodes?.[number] ?? [];
+    },
+
+    async listWorkItemCommentsWithRetryAsync(
+      number: number,
+    ): Promise<unknown[]> {
+      return fixture.traversalComments?.[number] ?? [];
+    },
+
+    searchOpenWorkItems(): unknown[] {
+      return fixture.searchResults ?? [];
     },
   };
 }

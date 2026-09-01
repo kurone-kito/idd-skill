@@ -19,6 +19,9 @@ function fakeDeps(
     resolveViewerLogin: () => {
       throw new Error('resolveViewerLogin not stubbed for this test');
     },
+    ghTextAsync: () => {
+      throw new Error('ghTextAsync not stubbed for this test');
+    },
     ...overrides,
   } as GithubProviderAdapterDeps;
 }
@@ -339,4 +342,301 @@ test('getConnectedPullRequestEventsPage throws when the connection itself is nul
     () => port.getConnectedPullRequestEventsPage(1048, null),
     /connection is null\/absent/,
   );
+});
+
+// ---------------------------------------------------------------------------
+// getWorkItemForTraversalAsync (#2266): the bounded-retry (#1394) and
+// no-retry-on-404/inaccessible classification discover-roadmap-graph.mts's
+// pre-migration buildIssueLoader implemented locally, moved here since the
+// guard bans importing withBoundedRetry into a migrated domain file.
+// ---------------------------------------------------------------------------
+
+test('getWorkItemForTraversalAsync retries once past a transient failure, then succeeds', async () => {
+  let calls = 0;
+  const port = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({
+      ghTextAsync: async () => {
+        calls += 1;
+        if (calls === 1) {
+          const error = new Error('truncated') as Error & { stderr?: string };
+          error.stderr = 'unexpected end of JSON input';
+          throw error;
+        }
+        return JSON.stringify({ number: 900, title: 'issue 900' });
+      },
+    }),
+  );
+  const result = await port.getWorkItemForTraversalAsync(900);
+  assert.deepEqual(result, {
+    outcome: 'found',
+    item: { number: 900, title: 'issue 900' },
+  });
+  assert.equal(calls, 2);
+});
+
+test('getWorkItemForTraversalAsync rethrows after exhausting bounded attempts on a persistent failure', async () => {
+  let calls = 0;
+  const port = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({
+      ghTextAsync: async () => {
+        calls += 1;
+        const error = new Error('HTTP 500') as Error & { stderr?: string };
+        error.stderr = 'HTTP 500 (simulated persistent failure)';
+        throw error;
+      },
+    }),
+  );
+  await assert.rejects(
+    () => port.getWorkItemForTraversalAsync(900),
+    /HTTP 500/,
+  );
+  assert.equal(calls, 3);
+});
+
+test('getWorkItemForTraversalAsync resolves not-found on a 404 immediately, without retry', async () => {
+  let calls = 0;
+  const port = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({
+      ghTextAsync: async () => {
+        calls += 1;
+        const error = new Error('HTTP 404') as Error & { stderr?: string };
+        error.stderr =
+          'HTTP 404: Not Found (https://api.github.com/repos/o/r/issues/900)';
+        throw error;
+      },
+    }),
+  );
+  const result = await port.getWorkItemForTraversalAsync(900);
+  assert.deepEqual(result, { outcome: 'not-found' });
+  assert.equal(calls, 1);
+});
+
+test('getWorkItemForTraversalAsync resolves inaccessible on a 403 immediately, without retry', async () => {
+  let calls = 0;
+  const port = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({
+      ghTextAsync: async () => {
+        calls += 1;
+        const error = new Error('HTTP 403') as Error & { status?: number };
+        error.status = 403;
+        throw error;
+      },
+    }),
+  );
+  const result = await port.getWorkItemForTraversalAsync(900);
+  assert.deepEqual(result, { outcome: 'inaccessible' });
+  assert.equal(calls, 1);
+});
+
+// ---------------------------------------------------------------------------
+// listWorkItemSubIssueNodesAsync (#2266)
+// ---------------------------------------------------------------------------
+
+test('listWorkItemSubIssueNodesAsync retries once past a transient GraphQL failure, then succeeds', async () => {
+  let calls = 0;
+  const port = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({
+      ghTextAsync: async () => {
+        calls += 1;
+        if (calls === 1) {
+          return '{"data": {"repository": {"issue": {"sub';
+        }
+        return JSON.stringify({
+          data: {
+            repository: {
+              issue: {
+                subIssues: {
+                  nodes: [{ number: 701 }],
+                  pageInfo: { hasNextPage: false, endCursor: null },
+                },
+              },
+            },
+          },
+        });
+      },
+    }),
+  );
+  const result = await port.listWorkItemSubIssueNodesAsync(700);
+  assert.deepEqual(result, [{ number: 701 }]);
+  assert.equal(calls, 2);
+});
+
+test('listWorkItemSubIssueNodesAsync rethrows after exhausting bounded attempts on a persistent failure', async () => {
+  let calls = 0;
+  const port = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({
+      ghTextAsync: async () => {
+        calls += 1;
+        throw new Error('rate limited (simulated persistent failure)');
+      },
+    }),
+  );
+  await assert.rejects(
+    () => port.listWorkItemSubIssueNodesAsync(700),
+    /rate limited/,
+  );
+  assert.equal(calls, 3);
+});
+
+test('listWorkItemSubIssueNodesAsync throws when the subIssues connection is missing', async () => {
+  const port = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({
+      ghTextAsync: async () =>
+        JSON.stringify({ data: { repository: { issue: {} } } }),
+    }),
+  );
+  await assert.rejects(
+    () => port.listWorkItemSubIssueNodesAsync(700),
+    /subIssues connection missing/,
+  );
+});
+
+test('listWorkItemSubIssueNodesAsync throws on a truncated page (hasNextPage, no endCursor)', async () => {
+  const port = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({
+      ghTextAsync: async () =>
+        JSON.stringify({
+          data: {
+            repository: {
+              issue: {
+                subIssues: {
+                  nodes: [],
+                  pageInfo: { hasNextPage: true, endCursor: null },
+                },
+              },
+            },
+          },
+        }),
+    }),
+  );
+  await assert.rejects(
+    () => port.listWorkItemSubIssueNodesAsync(700),
+    /pagination cursor missing/,
+  );
+});
+
+// ---------------------------------------------------------------------------
+// listWorkItemCommentsWithRetryAsync (#2266)
+// ---------------------------------------------------------------------------
+
+test('listWorkItemCommentsWithRetryAsync retries once past a transient page-fetch failure, then succeeds', async () => {
+  let calls = 0;
+  const port = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({
+      ghText: () => {
+        calls += 1;
+        if (calls === 1) {
+          return '[{"body": "trunca';
+        }
+        return JSON.stringify([
+          {
+            body: 'hello',
+            created_at: '2026-01-01T00:00:00Z',
+            user: { login: 'kurone-kito' },
+          },
+        ]);
+      },
+    }),
+  );
+  const result = await port.listWorkItemCommentsWithRetryAsync(900);
+  assert.deepEqual(result, [
+    {
+      body: 'hello',
+      created_at: '2026-01-01T00:00:00Z',
+      user: { login: 'kurone-kito' },
+    },
+  ]);
+  assert.equal(calls, 2);
+});
+
+// ---------------------------------------------------------------------------
+// searchOpenWorkItems (#2266): discover-roadmap-graph.mts's
+// buildSearchIssuesRunner, previously never directly tested (only exercised
+// through live production wiring) -- net-new coverage.
+// ---------------------------------------------------------------------------
+
+test('searchOpenWorkItems builds the label-search args and returns the raw array', () => {
+  let capturedArgs: string[] | undefined;
+  const port = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({
+      ghText: (args) => {
+        capturedArgs = args;
+        return JSON.stringify([{ number: 5 }]);
+      },
+    }),
+  );
+  const result = port.searchOpenWorkItems({
+    label: 'roadmap',
+    fields: ['number'],
+    limit: 1000,
+  });
+  assert.deepEqual(result, [{ number: 5 }]);
+  assert.deepEqual(capturedArgs, [
+    'search',
+    'issues',
+    '--repo',
+    'o/r',
+    '--state',
+    'open',
+    '--limit',
+    '1000',
+    '--json',
+    'number',
+    '--label',
+    'roadmap',
+  ]);
+});
+
+test('searchOpenWorkItems builds the body-marker-search args', () => {
+  let capturedArgs: string[] | undefined;
+  const port = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({
+      ghText: (args) => {
+        capturedArgs = args;
+        return '[]';
+      },
+    }),
+  );
+  port.searchOpenWorkItems({
+    matchBody: 'idd-skill-roadmap-id',
+    fields: ['number', 'body'],
+    limit: 1000,
+  });
+  assert.deepEqual(capturedArgs, [
+    'search',
+    'issues',
+    '--repo',
+    'o/r',
+    '--state',
+    'open',
+    '--limit',
+    '1000',
+    '--json',
+    'number,body',
+    '--match',
+    'body',
+    'idd-skill-roadmap-id',
+  ]);
 });
