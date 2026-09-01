@@ -146,6 +146,9 @@ Before any mutating action in F3, apply the
 
    - current HEAD SHA **equals** the carried F2-snapshot head
      (`{f2-head-SHA}`);
+   - PR `baseRefName` (fresh `gh pr view {pr-number} --json baseRefName`)
+     **equals** `{development-branch}` — catches a retarget after D3's
+     one-time check; a mismatch is a wrong-base hold, not a merge;
    - review-currency route is `proceed`;
    - `F3_UNRESOLVED_ACTIONABLE_COUNT` is `0`;
    - advisory `f3Outcome` is `SATISFIED` (the authoritative advisory
@@ -411,8 +414,17 @@ Before any mutating action in F3, apply the
    is already checked out there:
 
    ```sh
-   git switch {development-branch} && git fetch origin {development-branch} && git merge --ff-only origin/{development-branch}
+   git fetch origin {development-branch}
+   git switch {development-branch} 2>/dev/null \
+     || git switch -c {development-branch} --track origin/{development-branch}
+   git merge --ff-only origin/{development-branch}
    ```
+
+   The switch falls back to creating a local tracking branch when the
+   primary worktree has no local `{development-branch}` yet (expected
+   whenever it differs from the repository default, since B1 branches
+   new worktrees straight from `origin/{development-branch}` without
+   ever checking it out in the primary worktree).
 
    Doing this before worktree/branch deletion (next step) ensures
    WorkTrunk's own merge-status check, which reads the local

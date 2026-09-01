@@ -75,9 +75,10 @@ D2, verify both:
 
 1. `git branch --show-current` is **non-empty** — HEAD is on the claimed
    branch, not detached.
-2. The expected local commit is present in `{development-branch}..HEAD`
-   (for example, `git log --oneline {development-branch}..HEAD` lists
-   it).
+2. The expected local commit is present in
+   `origin/{development-branch}..HEAD` (for example, `git log --oneline
+   origin/{development-branch}..HEAD` lists it) — `origin/`-prefixed
+   since a local `{development-branch}` branch may not exist.
 
 If HEAD is detached (current branch empty), **auto-recover once**: re-attach
 to the claimed branch with `git checkout {branch-name}` (the local commit is
