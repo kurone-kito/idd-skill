@@ -17,6 +17,14 @@
 // closed child with an open linked PR, a traversal cycle, or no explicit child
 // work is NEVER closed.
 
+import { execFileSync } from 'node:child_process';
+import { existsSync, readFileSync } from 'node:fs';
+import {
+  isAbsolute,
+  join as joinPath,
+  resolve as resolvePath,
+} from 'node:path';
+
 import { parseCliArgs } from './cli-args.mts';
 import {
   buildIssueLoader,
@@ -119,6 +127,17 @@ export interface IddRoadmapAuditExecuteVerdict {
    * this flag as inconclusive rather than a confirmed claim loss.
    */
   viewerLoginUnavailable?: true;
+  /**
+   * Set only when {@link evaluateLocalCoordinationState} found something
+   * worth a human's attention (#2225): a positively broken matched
+   * worktree (which also blocks the apply), or a non-blocking
+   * informational signal (a present-but-clean matched worktree, an
+   * unreadable local git state, or a repo-wide detached worktree). Absent
+   * in the common case — no local worktree exists for the branch at all —
+   * so the common healthy-path JSON stays byte-identical to before this
+   * field existed.
+   */
+  localCoordinationNote?: string;
 }
 
 /** Outcome of re-validating the roadmap-audit claim before any mutation. */
@@ -649,6 +668,409 @@ export function explainRoadmapClaimReason(reason: string): string {
   return CLAIM_REASON_EXPLANATIONS[reason] ?? UNKNOWN_CLAIM_REASON_EXPLANATION;
 }
 
+// ---------------------------------------------------------------------------
+// Local coordination-state hardening (#2225).
+//
+// `evaluateRoadmapClaim` above proves who owns the CLAIM RECORD; it says
+// nothing about what is actually sitting on disk under the claimed
+// `roadmap-audit/<n>-…` branch. Per idd-roadmap-audit.instructions.md, that
+// branch field "is a logical coordination name, not a work branch, and it
+// does not require creating a branch or worktree unless the audit also
+// needs git changes" — so the expected common case is that NO local
+// worktree exists for it at all. These checks exist for the exceptional
+// case where one does, and it was left behind broken (dirty, locked,
+// prunable, or mid-rebase) by a previous session: treating a
+// released/stale claim record as proof the branch is safely reusable
+// misses exactly that leftover local content.
+// ---------------------------------------------------------------------------
+
+/** Structured result of a local git shell-out (#2225): never throws. */
+interface LocalGitCommandResult {
+  ok: boolean;
+  stdout: string;
+  stderr: string;
+}
+
+/**
+ * Run `git <argv>` in `cwd`, capturing stdout/stderr without throwing
+ * (#2225). A local, file-scoped port of idd-doctor.mts's `runCommand` —
+ * not extracted to a shared module because idd-doctor.mts is outside this
+ * issue's candidate-files list.
+ */
+function runLocalGitCommand(
+  argv: string[],
+  cwd: string,
+): LocalGitCommandResult {
+  try {
+    const stdout = execFileSync('git', argv, {
+      cwd,
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    return { ok: true, stdout, stderr: '' };
+  } catch (err) {
+    const failure = err as { stdout?: unknown; stderr?: unknown };
+    return {
+      ok: false,
+      stdout: typeof failure.stdout === 'string' ? failure.stdout : '',
+      stderr: typeof failure.stderr === 'string' ? failure.stderr : '',
+    };
+  }
+}
+
+/** One `git worktree list --porcelain` stanza (#2225). */
+export interface WorktreeListEntry {
+  path: string;
+  headSha: string | null;
+  /** `refs/heads/<name>`; null for a detached or bare entry. */
+  branchRef: string | null;
+  bare: boolean;
+  detached: boolean;
+  locked: boolean;
+  lockReason: string | null;
+  prunable: boolean;
+  prunableReason: string | null;
+}
+
+/**
+ * Parse `git worktree list --porcelain` output into structured entries
+ * (#2225, AC3). Porcelain is the only enumeration this repo can rely on to
+ * surface a detached worktree at all: a branch-name grep (the previous
+ * approach) has nothing to match against, since a detached worktree carries
+ * no branch. Stanzas are separated by a blank line; each starts with a
+ * `worktree <path>` line. Malformed or empty input yields an empty array
+ * rather than throwing.
+ */
+export function parseWorktreeListPorcelain(
+  output: string,
+): WorktreeListEntry[] {
+  const entries: WorktreeListEntry[] = [];
+  for (const stanza of output.split(/\r?\n\r?\n/)) {
+    const lines = stanza.split(/\r?\n/).filter((line) => line.length > 0);
+    const worktreeLine = lines.find((line) => line.startsWith('worktree '));
+    if (!worktreeLine) {
+      continue;
+    }
+    const entry: WorktreeListEntry = {
+      path: worktreeLine.slice('worktree '.length).trim(),
+      headSha: null,
+      branchRef: null,
+      bare: false,
+      detached: false,
+      locked: false,
+      lockReason: null,
+      prunable: false,
+      prunableReason: null,
+    };
+    for (const line of lines) {
+      if (line.startsWith('HEAD ')) {
+        entry.headSha = line.slice('HEAD '.length).trim();
+      } else if (line.startsWith('branch ')) {
+        entry.branchRef = line.slice('branch '.length).trim();
+      } else if (line === 'bare') {
+        entry.bare = true;
+      } else if (line === 'detached') {
+        entry.detached = true;
+      } else if (line === 'locked' || line.startsWith('locked ')) {
+        entry.locked = true;
+        const reason = line.slice('locked'.length).trim();
+        entry.lockReason = reason.length > 0 ? reason : null;
+      } else if (line === 'prunable' || line.startsWith('prunable ')) {
+        entry.prunable = true;
+        const reason = line.slice('prunable'.length).trim();
+        entry.prunableReason = reason.length > 0 ? reason : null;
+      }
+    }
+    entries.push(entry);
+  }
+  return entries;
+}
+
+/** `refs/heads/main` -> `main`; a non-branch ref passes through unchanged. */
+function branchNameFromRef(ref: string): string {
+  return ref.startsWith('refs/heads/') ? ref.slice('refs/heads/'.length) : ref;
+}
+
+/**
+ * Find the worktree entry whose checked-out branch content-exactly matches
+ * `branchName` (#2225, AC1). Content-exact, not identity-only: this compares
+ * the porcelain `branch` ref itself — what is actually checked out — rather
+ * than trusting that a claim record's own `branch` field (which may be
+ * released or stale) says the branch is unowned. A detached entry has no
+ * `branchRef` and can never match here by construction.
+ */
+export function findWorktreeEntryForBranch(
+  entries: readonly WorktreeListEntry[],
+  branchName: string,
+): WorktreeListEntry | null {
+  return (
+    entries.find(
+      (entry) =>
+        entry.branchRef !== null &&
+        branchNameFromRef(entry.branchRef) === branchName,
+    ) ?? null
+  );
+}
+
+/**
+ * True when a rebase sequencer directory exists for `worktreePath` (#2225,
+ * AC4), resolved via `git -C <worktreePath> rev-parse --git-path <name>`
+ * rather than a hardcoded `.git/rebase-merge` / `.git/rebase-apply` path. A
+ * linked worktree's `.git` is a pointer FILE, not a directory: the real
+ * sequencer state lives under the primary repo's
+ * `.git/worktrees/<name>/` admin directory, and only `--git-path` resolves
+ * that correctly for a worktree other than the primary one.
+ */
+function hasInProgressRebase(
+  worktreePath: string,
+  resolveGitPath: (
+    worktreePath: string,
+    name: 'rebase-merge' | 'rebase-apply',
+  ) => LocalGitCommandResult,
+  pathExists: (path: string) => boolean,
+): boolean {
+  for (const name of ['rebase-merge', 'rebase-apply'] as const) {
+    const result = resolveGitPath(worktreePath, name);
+    if (!result.ok) {
+      continue;
+    }
+    const resolved = result.stdout.trim();
+    if (resolved.length === 0) {
+      continue;
+    }
+    const absolute = isAbsolute(resolved)
+      ? resolved
+      : resolvePath(worktreePath, resolved);
+    if (pathExists(absolute)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/** Distinct presence outcomes a local coordination-state check can report. */
+export type LocalCoordinationPresence =
+  | 'absent'
+  | 'present-clean'
+  | 'present-broken';
+
+/** Outcome of {@link evaluateLocalCoordinationState}. */
+export interface LocalCoordinationVerdict {
+  presence: LocalCoordinationPresence;
+  /** The matched worktree's path; null when `presence` is `absent`. */
+  path: string | null;
+  /** Populated only when `presence` is `present-broken`. */
+  brokenReasons: string[];
+  /**
+   * Detached worktree paths found while enumerating (#2225, AC3), OTHER
+   * than the matched worktree itself. A detached entry whose rebase
+   * sequencer records `branchName` (see
+   * {@link resolveDetachedRebaseBranch}) is reported as the matched
+   * worktree instead, and blocks like any other match; every remaining
+   * detached entry cannot be tied to any branch at all and is
+   * informational only.
+   */
+  detachedWorktreePaths: string[];
+  /** True when local git state could not be read at all (no git, not a repo). */
+  unreadable: boolean;
+  unreadableReason: string | null;
+}
+
+/** Injected git reads for {@link evaluateLocalCoordinationState}; keeps it pure and unit-testable without a real repository. */
+export interface LocalCoordinationInputs {
+  listWorktrees: () => LocalGitCommandResult;
+  statusPorcelain: (worktreePath: string) => LocalGitCommandResult;
+  resolveGitPath: (
+    worktreePath: string,
+    name: 'rebase-merge' | 'rebase-apply',
+  ) => LocalGitCommandResult;
+  pathExists: (path: string) => boolean;
+  /** Read a file's content, or null when it does not exist / cannot be read. */
+  readFile: (path: string) => string | null;
+}
+
+/**
+ * Resolve the ORIGINAL branch a detached, mid-rebase worktree was checked
+ * out on (#2225, AC4). `git rebase` detaches HEAD while it sequences — a
+ * mid-rebase worktree reports `detached` in `git worktree list --porcelain`,
+ * not its real branch (empirically confirmed) — so
+ * {@link findWorktreeEntryForBranch} alone can never match it. The rebase
+ * sequencer's own `head-name` file records the original ref for exactly
+ * this reason (`git rebase --abort` restores it from there), so this reads
+ * it directly via the same resolved `--git-path` used by
+ * {@link hasInProgressRebase}.
+ */
+function resolveDetachedRebaseBranch(
+  worktreePath: string,
+  inputs: Pick<
+    LocalCoordinationInputs,
+    'resolveGitPath' | 'pathExists' | 'readFile'
+  >,
+): string | null {
+  for (const name of ['rebase-merge', 'rebase-apply'] as const) {
+    const result = inputs.resolveGitPath(worktreePath, name);
+    if (!result.ok) {
+      continue;
+    }
+    const resolved = result.stdout.trim();
+    if (resolved.length === 0) {
+      continue;
+    }
+    const absolute = isAbsolute(resolved)
+      ? resolved
+      : resolvePath(worktreePath, resolved);
+    if (!inputs.pathExists(absolute)) {
+      continue;
+    }
+    const headName = inputs.readFile(joinPath(absolute, 'head-name'));
+    if (headName && headName.trim().length > 0) {
+      return branchNameFromRef(headName.trim());
+    }
+  }
+  return null;
+}
+
+/**
+ * Find a DETACHED worktree entry whose rebase sequencer records `branchName`
+ * as the branch being rebased (#2225, AC4). See
+ * {@link resolveDetachedRebaseBranch} for why a plain branch-ref match on a
+ * mid-rebase worktree always fails.
+ */
+function findDetachedRebaseEntryForBranch(
+  entries: readonly WorktreeListEntry[],
+  branchName: string,
+  inputs: Pick<
+    LocalCoordinationInputs,
+    'resolveGitPath' | 'pathExists' | 'readFile'
+  >,
+): WorktreeListEntry | null {
+  for (const entry of entries) {
+    if (!entry.detached) {
+      continue;
+    }
+    if (resolveDetachedRebaseBranch(entry.path, inputs) === branchName) {
+      return entry;
+    }
+  }
+  return null;
+}
+
+/**
+ * Evaluate whether `branchName`'s local worktree state is safe to treat as
+ * reusable/reclaimable (#2225). `presence: 'absent'` — no local worktree at
+ * all — is the expected common case per the instructions text quoted above,
+ * not an error, and is treated identically to `unreadable: true` (git
+ * missing, not a repository, or any other enumeration failure): both fail
+ * OPEN, because the hazard these checks exist to catch is leftover LOCAL
+ * content, which cannot exist if there is no local state to read. Only a
+ * POSITIVELY confirmed unsafe worktree — dirty, locked, prunable, or
+ * mid-rebase — reports `present-broken`. Once a worktree is matched by
+ * branch, a failure to read ITS status is treated as broken rather than
+ * unreadable: unlike the top-level enumeration failure, a positively
+ * identified worktree that suddenly cannot be probed is exactly the
+ * ambiguous case this hardening exists to catch, so it fails closed. Pure:
+ * every git read is injected.
+ */
+export function evaluateLocalCoordinationState(
+  branchName: string,
+  inputs: LocalCoordinationInputs,
+): LocalCoordinationVerdict {
+  const listing = inputs.listWorktrees();
+  if (!listing.ok) {
+    return {
+      presence: 'absent',
+      path: null,
+      brokenReasons: [],
+      detachedWorktreePaths: [],
+      unreadable: true,
+      unreadableReason:
+        listing.stderr || 'git worktree list --porcelain failed',
+    };
+  }
+  const entries = parseWorktreeListPorcelain(listing.stdout);
+  const matched =
+    findWorktreeEntryForBranch(entries, branchName) ??
+    findDetachedRebaseEntryForBranch(entries, branchName, inputs);
+  // A detached entry recovered via its rebase sequencer above (AC4) IS the
+  // matched worktree for this branch, not a mystery unrelated one — exclude
+  // it from the generic informational list so it is reported exactly once,
+  // as the matched (and, via the checks below, broken) worktree.
+  const detachedWorktreePaths = entries
+    .filter((entry) => entry.detached && entry.path !== matched?.path)
+    .map((entry) => entry.path);
+  if (!matched) {
+    return {
+      presence: 'absent',
+      path: null,
+      brokenReasons: [],
+      detachedWorktreePaths,
+      unreadable: false,
+      unreadableReason: null,
+    };
+  }
+  const brokenReasons: string[] = [];
+  if (matched.locked) {
+    brokenReasons.push(
+      `locked${matched.lockReason ? `: ${matched.lockReason}` : ''}`,
+    );
+  }
+  if (matched.prunable) {
+    brokenReasons.push(
+      `prunable${matched.prunableReason ? `: ${matched.prunableReason}` : ''}`,
+    );
+  }
+  // A locked/prunable worktree's directory may not even exist on disk
+  // (prunable in particular is exactly that case) — do not probe further.
+  if (brokenReasons.length === 0) {
+    const status = inputs.statusPorcelain(matched.path);
+    if (!status.ok) {
+      brokenReasons.push('working tree status could not be read');
+    } else if (status.stdout.trim().length > 0) {
+      brokenReasons.push('uncommitted content present');
+    }
+    if (
+      hasInProgressRebase(
+        matched.path,
+        inputs.resolveGitPath,
+        inputs.pathExists,
+      )
+    ) {
+      brokenReasons.push('rebase in progress');
+    }
+  }
+  return {
+    presence: brokenReasons.length > 0 ? 'present-broken' : 'present-clean',
+    path: matched.path,
+    brokenReasons,
+    detachedWorktreePaths,
+    unreadable: false,
+    unreadableReason: null,
+  };
+}
+
+/**
+ * Production {@link LocalCoordinationInputs}: local git shell-outs scoped to
+ * `cwd` (#2225).
+ */
+function createLocalCoordinationInputs(cwd: string): LocalCoordinationInputs {
+  return {
+    listWorktrees: () =>
+      runLocalGitCommand(['worktree', 'list', '--porcelain'], cwd),
+    statusPorcelain: (worktreePath) =>
+      runLocalGitCommand(['status', '--porcelain'], worktreePath),
+    resolveGitPath: (worktreePath, name) =>
+      runLocalGitCommand(['rev-parse', '--git-path', name], worktreePath),
+    pathExists: (path) => existsSync(path),
+    readFile: (path) => {
+      try {
+        return readFileSync(path, 'utf8');
+      } catch {
+        return null;
+      }
+    },
+  };
+}
+
 /**
  * Trailing caveat appended to a claim-not-owned `result` message when the
  * production viewer-login lookup failed (#1396). Empty string when the
@@ -768,6 +1190,16 @@ export interface RoadmapAuditExecuteDeps {
    * never silently indistinguishable from a genuine not-owned claim.
    */
   viewerLoginUnavailable?: boolean;
+  /**
+   * Evaluate local worktree/branch state for `branchName` (#2225). Optional:
+   * absent entirely, the check is simply skipped, matching production's own
+   * fail-open behavior when no local state is knowable — every existing
+   * test's deps object stays valid unmodified. Called once, immediately
+   * after the early claim re-validation and before any mutation.
+   */
+  inspectLocalCoordinationState?: (
+    branchName: string,
+  ) => LocalCoordinationVerdict;
 }
 
 /**
@@ -901,6 +1333,30 @@ export async function runRoadmapAuditExecute(
     }
     verdict.result = `claim not owned on re-validation (reason="${earlyClaim.reason}": ${explainRoadmapClaimReason(earlyClaim.reason)}); no mutation${viewerLoginUnavailableCaveat(resolvedDeps.viewerLoginUnavailable)}`;
     return { verdict, exitCode: 1 };
+  }
+
+  // Local worktree/branch safety (#2225): a released/stale claim record
+  // proves nothing about what is actually checked out locally. Evaluated
+  // once, right after ownership is confirmed and before ANY mutation
+  // (including the evidence comment) — local state does not change within a
+  // single run, so there is no need to repeat this at the later
+  // re-validations the way claim ownership itself is repeated.
+  if (resolvedDeps.inspectLocalCoordinationState) {
+    const localState = resolvedDeps.inspectLocalCoordinationState(
+      earlyClaim.activeClaim.branch,
+    );
+    if (localState.presence === 'present-broken') {
+      verdict.localCoordinationNote = `branch "${earlyClaim.activeClaim.branch}" has a local worktree at ${localState.path} that is not safe to treat as reusable (${localState.brokenReasons.join(', ')})`;
+      verdict.result = `local coordination state unsafe (${localState.brokenReasons.join(', ')}); no mutation`;
+      return { verdict, exitCode: 1 };
+    }
+    if (localState.unreadable) {
+      verdict.localCoordinationNote = `local coordination state unreadable (${localState.unreadableReason ?? 'unknown reason'}); proceeding`;
+    } else if (localState.presence === 'present-clean') {
+      verdict.localCoordinationNote = `branch "${earlyClaim.activeClaim.branch}" has a clean local worktree at ${localState.path}`;
+    } else if (localState.detachedWorktreePaths.length > 0) {
+      verdict.localCoordinationNote = `${localState.detachedWorktreePaths.length} detached local worktree(s) present (unrelated to this branch by definition): ${localState.detachedWorktreePaths.join(', ')}`;
+    }
   }
 
   // Re-fetch the roadmap + child state and confirm the audit input still
@@ -1157,6 +1613,11 @@ function createProductionDeps(
     // Honor a caller-supplied --now (deterministic staleness + release
     // timestamps for tests / replays); fall back to the wall clock.
     now: () => args.now || new Date().toISOString(),
+    inspectLocalCoordinationState: (branchName) =>
+      evaluateLocalCoordinationState(
+        branchName,
+        createLocalCoordinationInputs(process.cwd()),
+      ),
   };
 }
 

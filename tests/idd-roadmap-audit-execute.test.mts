@@ -1,4 +1,14 @@
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
+import {
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
+import { devNull, tmpdir } from 'node:os';
+import { basename, join } from 'node:path';
 import { test } from 'node:test';
 
 import {
@@ -8,10 +18,14 @@ import {
 import {
   buildRoadmapCompletionAuditBody,
   type ConnectedPrEvent,
+  evaluateLocalCoordinationState,
   evaluateRoadmapAuditGates,
   evaluateRoadmapClaim,
   explainRoadmapClaimReason,
+  findWorktreeEntryForBranch,
   hasTrustedCompletionEvidenceComment,
+  type LocalCoordinationInputs,
+  parseWorktreeListPorcelain,
   type RoadmapAuditExecuteDeps,
   reconcileConnectedOpenPrs,
   resolveOpenLinkedPrIssues,
@@ -1622,4 +1636,725 @@ test('missing --roadmap is rejected', async () => {
     () => runRoadmapAuditExecute(['--claim-id', CLAIM_ID], deps),
     /missing required --roadmap/,
   );
+});
+
+// ---------------------------------------------------------------------------
+// parseWorktreeListPorcelain (pure, #2225)
+// ---------------------------------------------------------------------------
+
+test('parseWorktreeListPorcelain parses a normal branch stanza', () => {
+  const entries = parseWorktreeListPorcelain(
+    'worktree /repo/main\nHEAD abc123\nbranch refs/heads/main\n',
+  );
+  assert.equal(entries.length, 1);
+  assert.equal(entries[0]?.path, '/repo/main');
+  assert.equal(entries[0]?.headSha, 'abc123');
+  assert.equal(entries[0]?.branchRef, 'refs/heads/main');
+  assert.equal(entries[0]?.detached, false);
+});
+
+test('parseWorktreeListPorcelain flags a detached stanza with no branch', () => {
+  const entries = parseWorktreeListPorcelain(
+    'worktree /repo/detached\nHEAD abc123\ndetached\n',
+  );
+  assert.equal(entries[0]?.detached, true);
+  assert.equal(entries[0]?.branchRef, null);
+});
+
+test('parseWorktreeListPorcelain captures a locked reason', () => {
+  const entries = parseWorktreeListPorcelain(
+    'worktree /repo/wt\nHEAD abc123\nbranch refs/heads/feature\nlocked manual lock test\n',
+  );
+  assert.equal(entries[0]?.locked, true);
+  assert.equal(entries[0]?.lockReason, 'manual lock test');
+});
+
+test('parseWorktreeListPorcelain treats a bare "locked" line as lock-with-no-reason', () => {
+  const entries = parseWorktreeListPorcelain(
+    'worktree /repo/wt\nHEAD abc123\nbranch refs/heads/feature\nlocked\n',
+  );
+  assert.equal(entries[0]?.locked, true);
+  assert.equal(entries[0]?.lockReason, null);
+});
+
+test('parseWorktreeListPorcelain captures a prunable reason', () => {
+  const entries = parseWorktreeListPorcelain(
+    'worktree /repo/gone\nHEAD abc123\nbranch refs/heads/gone-branch\nprunable gitdir file points to non-existent location\n',
+  );
+  assert.equal(entries[0]?.prunable, true);
+  assert.equal(
+    entries[0]?.prunableReason,
+    'gitdir file points to non-existent location',
+  );
+});
+
+test('parseWorktreeListPorcelain parses multiple blank-line-separated stanzas', () => {
+  const output = [
+    'worktree /repo/main',
+    'HEAD abc123',
+    'branch refs/heads/main',
+    '',
+    'worktree /repo/feature',
+    'HEAD def456',
+    'branch refs/heads/feature',
+    '',
+  ].join('\n');
+  const entries = parseWorktreeListPorcelain(output);
+  assert.deepEqual(
+    entries.map((entry) => entry.path),
+    ['/repo/main', '/repo/feature'],
+  );
+});
+
+test('parseWorktreeListPorcelain tolerates CRLF line endings', () => {
+  const entries = parseWorktreeListPorcelain(
+    'worktree /repo/main\r\nHEAD abc123\r\nbranch refs/heads/main\r\n',
+  );
+  assert.equal(entries[0]?.path, '/repo/main');
+  assert.equal(entries[0]?.branchRef, 'refs/heads/main');
+});
+
+test('parseWorktreeListPorcelain returns an empty array for malformed/empty input', () => {
+  assert.deepEqual(parseWorktreeListPorcelain(''), []);
+  assert.deepEqual(parseWorktreeListPorcelain('not a worktree listing\n'), []);
+});
+
+// ---------------------------------------------------------------------------
+// findWorktreeEntryForBranch (pure, #2225, AC1)
+// ---------------------------------------------------------------------------
+
+test('findWorktreeEntryForBranch matches by content-exact branch name', () => {
+  const entries = parseWorktreeListPorcelain(
+    'worktree /repo/wt\nHEAD abc123\nbranch refs/heads/roadmap-audit/995-slug\n',
+  );
+  const match = findWorktreeEntryForBranch(entries, 'roadmap-audit/995-slug');
+  assert.equal(match?.path, '/repo/wt');
+});
+
+test('findWorktreeEntryForBranch returns null when no entry matches', () => {
+  const entries = parseWorktreeListPorcelain(
+    'worktree /repo/main\nHEAD abc123\nbranch refs/heads/main\n',
+  );
+  assert.equal(
+    findWorktreeEntryForBranch(entries, 'roadmap-audit/995-slug'),
+    null,
+  );
+});
+
+test('findWorktreeEntryForBranch never matches a detached entry', () => {
+  const entries = parseWorktreeListPorcelain(
+    'worktree /repo/detached\nHEAD abc123\ndetached\n',
+  );
+  assert.equal(
+    findWorktreeEntryForBranch(entries, 'roadmap-audit/995-slug'),
+    null,
+  );
+});
+
+// ---------------------------------------------------------------------------
+// evaluateLocalCoordinationState (pure, injected inputs, #2225)
+// ---------------------------------------------------------------------------
+
+const OK = (stdout = ''): { ok: true; stdout: string; stderr: string } => ({
+  ok: true,
+  stdout,
+  stderr: '',
+});
+const FAIL = (
+  stderr = 'boom',
+): { ok: false; stdout: string; stderr: string } => ({
+  ok: false,
+  stdout: '',
+  stderr,
+});
+
+function localInputs(
+  overrides: Partial<LocalCoordinationInputs> & {
+    calls?: { status: number; gitPath: number };
+  } = {},
+): LocalCoordinationInputs {
+  const { calls, ...rest } = overrides;
+  return {
+    listWorktrees: () => OK(''),
+    statusPorcelain: () => {
+      if (calls) calls.status += 1;
+      return OK('');
+    },
+    resolveGitPath: () => {
+      if (calls) calls.gitPath += 1;
+      return FAIL('no such path');
+    },
+    pathExists: () => false,
+    readFile: () => null,
+    ...rest,
+  };
+}
+
+test('evaluateLocalCoordinationState reports absent when no worktree matches (the expected common case)', () => {
+  const verdict = evaluateLocalCoordinationState(
+    'roadmap-audit/995-slug',
+    localInputs({
+      listWorktrees: () =>
+        OK('worktree /repo/main\nHEAD abc123\nbranch refs/heads/main\n'),
+    }),
+  );
+  assert.equal(verdict.presence, 'absent');
+  assert.equal(verdict.path, null);
+  assert.equal(verdict.unreadable, false);
+});
+
+test('evaluateLocalCoordinationState fails open (absent + unreadable) when the listing itself cannot be read', () => {
+  const verdict = evaluateLocalCoordinationState(
+    'roadmap-audit/995-slug',
+    localInputs({ listWorktrees: () => FAIL('git: command not found') }),
+  );
+  assert.equal(verdict.presence, 'absent');
+  assert.equal(verdict.unreadable, true);
+  assert.match(verdict.unreadableReason ?? '', /command not found/);
+});
+
+test('evaluateLocalCoordinationState reports present-clean for a matched, clean, non-rebasing worktree', () => {
+  const verdict = evaluateLocalCoordinationState(
+    'roadmap-audit/995-slug',
+    localInputs({
+      listWorktrees: () =>
+        OK(
+          'worktree /repo/wt\nHEAD abc123\nbranch refs/heads/roadmap-audit/995-slug\n',
+        ),
+      statusPorcelain: () => OK(''),
+      resolveGitPath: () => FAIL('no such path'),
+    }),
+  );
+  assert.equal(verdict.presence, 'present-clean');
+  assert.equal(verdict.path, '/repo/wt');
+  assert.deepEqual(verdict.brokenReasons, []);
+});
+
+test('evaluateLocalCoordinationState reports present-broken with uncommitted content on a dirty status', () => {
+  const verdict = evaluateLocalCoordinationState(
+    'roadmap-audit/995-slug',
+    localInputs({
+      listWorktrees: () =>
+        OK(
+          'worktree /repo/wt\nHEAD abc123\nbranch refs/heads/roadmap-audit/995-slug\n',
+        ),
+      statusPorcelain: () => OK(' M file.txt\n'),
+      resolveGitPath: () => FAIL('no such path'),
+    }),
+  );
+  assert.equal(verdict.presence, 'present-broken');
+  assert.deepEqual(verdict.brokenReasons, ['uncommitted content present']);
+});
+
+test('evaluateLocalCoordinationState reports present-broken with rebase in progress when the resolved git-path exists', () => {
+  const verdict = evaluateLocalCoordinationState(
+    'roadmap-audit/995-slug',
+    localInputs({
+      listWorktrees: () =>
+        OK(
+          'worktree /repo/wt\nHEAD abc123\nbranch refs/heads/roadmap-audit/995-slug\n',
+        ),
+      statusPorcelain: () => OK(''),
+      resolveGitPath: (_worktreePath, name) =>
+        name === 'rebase-merge'
+          ? OK('/repo/.git/worktrees/wt/rebase-merge\n')
+          : FAIL('no such path'),
+      pathExists: (path) => path === '/repo/.git/worktrees/wt/rebase-merge',
+    }),
+  );
+  assert.equal(verdict.presence, 'present-broken');
+  assert.deepEqual(verdict.brokenReasons, ['rebase in progress']);
+});
+
+test('evaluateLocalCoordinationState resolves a RELATIVE --git-path output against the worktree path', () => {
+  const verdict = evaluateLocalCoordinationState(
+    'roadmap-audit/995-slug',
+    localInputs({
+      listWorktrees: () =>
+        OK(
+          'worktree /repo/wt\nHEAD abc123\nbranch refs/heads/roadmap-audit/995-slug\n',
+        ),
+      statusPorcelain: () => OK(''),
+      resolveGitPath: (_worktreePath, name) =>
+        name === 'rebase-merge' ? OK('.git/rebase-merge\n') : FAIL('none'),
+      pathExists: (path) => path === '/repo/wt/.git/rebase-merge',
+    }),
+  );
+  assert.equal(verdict.presence, 'present-broken');
+  assert.deepEqual(verdict.brokenReasons, ['rebase in progress']);
+});
+
+test('evaluateLocalCoordinationState reports locked directly from porcelain without probing status or rebase', () => {
+  const calls = { status: 0, gitPath: 0 };
+  const verdict = evaluateLocalCoordinationState(
+    'roadmap-audit/995-slug',
+    localInputs({
+      listWorktrees: () =>
+        OK(
+          'worktree /repo/wt\nHEAD abc123\nbranch refs/heads/roadmap-audit/995-slug\nlocked manual lock test\n',
+        ),
+      calls,
+    }),
+  );
+  assert.equal(verdict.presence, 'present-broken');
+  assert.deepEqual(verdict.brokenReasons, ['locked: manual lock test']);
+  assert.equal(calls.status, 0);
+  assert.equal(calls.gitPath, 0);
+});
+
+test('evaluateLocalCoordinationState reports prunable directly from porcelain without probing status or rebase', () => {
+  const calls = { status: 0, gitPath: 0 };
+  const verdict = evaluateLocalCoordinationState(
+    'roadmap-audit/995-slug',
+    localInputs({
+      listWorktrees: () =>
+        OK(
+          'worktree /repo/gone\nHEAD abc123\nbranch refs/heads/roadmap-audit/995-slug\nprunable gitdir file points to non-existent location\n',
+        ),
+      calls,
+    }),
+  );
+  assert.equal(verdict.presence, 'present-broken');
+  assert.deepEqual(verdict.brokenReasons, [
+    'prunable: gitdir file points to non-existent location',
+  ]);
+  assert.equal(calls.status, 0);
+  assert.equal(calls.gitPath, 0);
+});
+
+test('evaluateLocalCoordinationState treats a matched worktree with an unreadable status as broken, not unreadable', () => {
+  const verdict = evaluateLocalCoordinationState(
+    'roadmap-audit/995-slug',
+    localInputs({
+      listWorktrees: () =>
+        OK(
+          'worktree /repo/wt\nHEAD abc123\nbranch refs/heads/roadmap-audit/995-slug\n',
+        ),
+      statusPorcelain: () => FAIL('no such directory'),
+      resolveGitPath: () => FAIL('no such path'),
+    }),
+  );
+  assert.equal(verdict.presence, 'present-broken');
+  assert.equal(verdict.unreadable, false);
+  assert.deepEqual(verdict.brokenReasons, [
+    'working tree status could not be read',
+  ]);
+});
+
+test('evaluateLocalCoordinationState surfaces repo-wide detached worktrees as informational, non-blocking', () => {
+  const verdict = evaluateLocalCoordinationState(
+    'roadmap-audit/995-slug',
+    localInputs({
+      listWorktrees: () =>
+        OK(
+          [
+            'worktree /repo/main',
+            'HEAD abc123',
+            'branch refs/heads/main',
+            '',
+            'worktree /repo/detached',
+            'HEAD def456',
+            'detached',
+            '',
+          ].join('\n'),
+        ),
+    }),
+  );
+  assert.equal(verdict.presence, 'absent');
+  assert.deepEqual(verdict.detachedWorktreePaths, ['/repo/detached']);
+});
+
+test('evaluateLocalCoordinationState matches a DETACHED mid-rebase worktree via its head-name (git rebase detaches HEAD; branch-ref matching alone would miss it)', () => {
+  const verdict = evaluateLocalCoordinationState(
+    'roadmap-audit/995-slug',
+    localInputs({
+      listWorktrees: () => OK('worktree /repo/wt\nHEAD abc123\ndetached\n'),
+      statusPorcelain: () => OK(''),
+      resolveGitPath: (_worktreePath, name) =>
+        name === 'rebase-merge'
+          ? OK('/repo/.git/worktrees/wt/rebase-merge\n')
+          : FAIL('none'),
+      pathExists: (path) => path === '/repo/.git/worktrees/wt/rebase-merge',
+      readFile: (path) =>
+        path === '/repo/.git/worktrees/wt/rebase-merge/head-name'
+          ? 'refs/heads/roadmap-audit/995-slug\n'
+          : null,
+    }),
+  );
+  assert.equal(verdict.presence, 'present-broken');
+  assert.equal(verdict.path, '/repo/wt');
+  assert.ok(verdict.brokenReasons.includes('rebase in progress'));
+  // Reported once, as the matched worktree — not also as an unrelated detached one.
+  assert.deepEqual(verdict.detachedWorktreePaths, []);
+});
+
+test('evaluateLocalCoordinationState leaves an UNRELATED detached/rebasing worktree in detachedWorktreePaths (head-name does not match)', () => {
+  const verdict = evaluateLocalCoordinationState(
+    'roadmap-audit/995-slug',
+    localInputs({
+      listWorktrees: () =>
+        OK('worktree /repo/other-wt\nHEAD abc123\ndetached\n'),
+      resolveGitPath: (_worktreePath, name) =>
+        name === 'rebase-merge'
+          ? OK('/repo/.git/worktrees/other-wt/rebase-merge\n')
+          : FAIL('none'),
+      pathExists: (path) =>
+        path === '/repo/.git/worktrees/other-wt/rebase-merge',
+      readFile: (path) =>
+        path === '/repo/.git/worktrees/other-wt/rebase-merge/head-name'
+          ? 'refs/heads/some-unrelated-branch\n'
+          : null,
+    }),
+  );
+  assert.equal(verdict.presence, 'absent');
+  assert.deepEqual(verdict.detachedWorktreePaths, ['/repo/other-wt']);
+});
+
+// ---------------------------------------------------------------------------
+// evaluateLocalCoordinationState against REAL git fixtures (#2225, AC2-AC4)
+// ---------------------------------------------------------------------------
+
+// Fixture invariant mirrored from tests/worktree-guard-hook.test.mts and
+// tests/claim-lock.test.mts: fixture git processes must never read the
+// ambient git environment or the developer's config, so a signing-enabled
+// global config or an inherited GIT_DIR cannot leak into these throwaway
+// repos.
+function fixtureEnv(): NodeJS.ProcessEnv {
+  const env = { ...process.env };
+  for (const key of Object.keys(env)) {
+    if (key.startsWith('GIT_CONFIG')) {
+      delete env[key];
+    }
+  }
+  delete env.GIT_DIR;
+  delete env.GIT_INDEX_FILE;
+  delete env.GIT_WORK_TREE;
+  delete env.GIT_COMMON_DIR;
+  delete env.GIT_OBJECT_DIRECTORY;
+  env.GIT_CONFIG_GLOBAL = devNull;
+  env.GIT_CONFIG_SYSTEM = devNull;
+  return env;
+}
+
+function fixtureGit(cwd: string, args: string[]): void {
+  execFileSync('git', args, { cwd, env: fixtureEnv(), stdio: 'pipe' });
+}
+
+function fixtureGitOut(cwd: string, args: string[]): string {
+  return execFileSync('git', args, {
+    cwd,
+    env: fixtureEnv(),
+    encoding: 'utf8',
+    stdio: 'pipe',
+  }).trim();
+}
+
+/** Real git shell-outs, mirroring production's createLocalCoordinationInputs. */
+function realLocalInputs(primary: string): LocalCoordinationInputs {
+  const run = (cwd: string, args: string[]) => {
+    try {
+      return {
+        ok: true as const,
+        stdout: fixtureGitOut(cwd, args),
+        stderr: '',
+      };
+    } catch (err) {
+      const failure = err as { stderr?: unknown };
+      return {
+        ok: false as const,
+        stdout: '',
+        stderr: typeof failure.stderr === 'string' ? failure.stderr : '',
+      };
+    }
+  };
+  return {
+    listWorktrees: () => run(primary, ['worktree', 'list', '--porcelain']),
+    statusPorcelain: (worktreePath) =>
+      run(worktreePath, ['status', '--porcelain']),
+    resolveGitPath: (worktreePath, name) =>
+      run(worktreePath, ['rev-parse', '--git-path', name]),
+    pathExists: (path) => existsSync(path),
+    readFile: (path) => {
+      try {
+        return readFileSync(path, 'utf8');
+      } catch {
+        return null;
+      }
+    },
+  };
+}
+
+function setupPrimaryRepo(): string {
+  const primary = mkdtempSync(join(tmpdir(), 'idd-roadmap-local-'));
+  fixtureGit(primary, ['init', '-b', 'main']);
+  fixtureGit(primary, ['config', 'user.email', 'test@example.com']);
+  fixtureGit(primary, ['config', 'user.name', 'Test']);
+  writeFileSync(join(primary, 'seed.txt'), 'seed\n');
+  fixtureGit(primary, ['add', 'seed.txt']);
+  fixtureGit(primary, ['commit', '-m', 'seed']);
+  return primary;
+}
+
+test('AC2 real fixture: no worktree for the claim branch is cleanly absent', () => {
+  const primary = setupPrimaryRepo();
+  try {
+    const verdict = evaluateLocalCoordinationState(
+      'roadmap-audit/995-slug',
+      realLocalInputs(primary),
+    );
+    assert.equal(verdict.presence, 'absent');
+    assert.equal(verdict.unreadable, false);
+  } finally {
+    rmSync(primary, { recursive: true, force: true });
+  }
+});
+
+test('AC2 real fixture: a checked-out claim branch with uncommitted content is present-broken (not absent)', () => {
+  const primary = setupPrimaryRepo();
+  const worktree = join(primary, '..', `${basename(primary)}-wt`);
+  try {
+    fixtureGit(primary, [
+      'worktree',
+      'add',
+      worktree,
+      '-b',
+      'roadmap-audit/995-slug',
+      'main',
+    ]);
+    writeFileSync(join(worktree, 'leftover.txt'), 'uncommitted\n');
+
+    const verdict = evaluateLocalCoordinationState(
+      'roadmap-audit/995-slug',
+      realLocalInputs(primary),
+    );
+    assert.equal(verdict.presence, 'present-broken');
+    assert.deepEqual(verdict.brokenReasons, ['uncommitted content present']);
+  } finally {
+    try {
+      fixtureGit(primary, ['worktree', 'remove', '--force', worktree]);
+    } catch {
+      // best-effort cleanup
+    }
+    rmSync(worktree, { recursive: true, force: true });
+    rmSync(primary, { recursive: true, force: true });
+  }
+});
+
+test('AC3 real fixture: a detached worktree is correctly detected via porcelain enumeration (branch-name grep would miss it)', () => {
+  const primary = setupPrimaryRepo();
+  const detached = join(primary, '..', `${basename(primary)}-detached`);
+  try {
+    const head = fixtureGitOut(primary, ['rev-parse', 'HEAD']);
+    fixtureGit(primary, ['worktree', 'add', '--detach', detached, head]);
+
+    const porcelain = fixtureGitOut(primary, [
+      'worktree',
+      'list',
+      '--porcelain',
+    ]);
+    const entries = parseWorktreeListPorcelain(porcelain);
+    const detachedEntry = entries.find((entry) => entry.path === detached);
+    assert.equal(detachedEntry?.detached, true);
+    assert.equal(detachedEntry?.branchRef, null);
+
+    // A branch-name grep has nothing to match here (#2225's whole premise):
+    // no entry in the listing carries a `branch` line for this worktree.
+    const verdict = evaluateLocalCoordinationState(
+      'roadmap-audit/995-slug',
+      realLocalInputs(primary),
+    );
+    assert.deepEqual(verdict.detachedWorktreePaths, [detached]);
+  } finally {
+    try {
+      fixtureGit(primary, ['worktree', 'remove', '--force', detached]);
+    } catch {
+      // best-effort cleanup
+    }
+    rmSync(detached, { recursive: true, force: true });
+    rmSync(primary, { recursive: true, force: true });
+  }
+});
+
+test('AC4 real fixture: an in-progress rebase in a LINKED worktree is detected via the resolved git-path (hardcoded .git/rebase-merge would miss it)', () => {
+  const primary = setupPrimaryRepo();
+  const worktree = join(primary, '..', `${basename(primary)}-wt`);
+  try {
+    fixtureGit(primary, [
+      'worktree',
+      'add',
+      worktree,
+      '-b',
+      'roadmap-audit/995-slug',
+      'main',
+    ]);
+    // Diverge main and the claim branch so rebasing produces a real conflict.
+    fixtureGit(primary, ['checkout', '-b', 'conflict-base', 'main']);
+    writeFileSync(join(primary, 'seed.txt'), 'main change\n');
+    fixtureGit(primary, ['add', 'seed.txt']);
+    fixtureGit(primary, ['commit', '-m', 'main change']);
+
+    writeFileSync(join(worktree, 'seed.txt'), 'branch change\n');
+    fixtureGit(worktree, ['add', 'seed.txt']);
+    fixtureGit(worktree, ['commit', '-m', 'branch change']);
+    try {
+      fixtureGit(worktree, ['rebase', 'conflict-base']);
+      assert.fail('expected the rebase to conflict');
+    } catch {
+      // expected: the rebase stops mid-way with a conflict.
+    }
+
+    // The naive hardcoded path a branch-name-only implementation would use
+    // does not exist for a LINKED worktree — `.git` there is a pointer file,
+    // so the real sequencer state is NOT under `<worktree>/.git/rebase-merge`.
+    assert.equal(existsSync(join(worktree, '.git', 'rebase-merge')), false);
+    // The resolved --git-path DOES exist — this is what a caller must use.
+    const resolvedRebaseMerge = fixtureGitOut(worktree, [
+      'rev-parse',
+      '--git-path',
+      'rebase-merge',
+    ]);
+    assert.equal(
+      existsSync(join(worktree, resolvedRebaseMerge)) ||
+        existsSync(resolvedRebaseMerge),
+      true,
+    );
+
+    const verdict = evaluateLocalCoordinationState(
+      'roadmap-audit/995-slug',
+      realLocalInputs(primary),
+    );
+    assert.equal(verdict.presence, 'present-broken');
+    assert.ok(
+      verdict.brokenReasons.includes('rebase in progress'),
+      `expected rebase in progress among: ${verdict.brokenReasons.join(', ')}`,
+    );
+  } finally {
+    try {
+      fixtureGit(worktree, ['rebase', '--abort']);
+    } catch {
+      // best-effort: only present if the conflict was never resolved
+    }
+    try {
+      fixtureGit(primary, ['worktree', 'remove', '--force', worktree]);
+    } catch {
+      // best-effort cleanup
+    }
+    rmSync(worktree, { recursive: true, force: true });
+    rmSync(primary, { recursive: true, force: true });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// runRoadmapAuditExecute wiring: inspectLocalCoordinationState (#2225)
+// ---------------------------------------------------------------------------
+
+test('--apply skips the local coordination check entirely when the dep is absent (default deps stay valid)', async () => {
+  const { deps } = makeDeps(readyReport());
+  const { verdict, exitCode } = await runRoadmapAuditExecute(APPLY_ARGS, deps);
+  assert.equal(exitCode, 0);
+  assert.equal(verdict.closed, true);
+  assert.equal(verdict.localCoordinationNote, undefined);
+});
+
+test('--apply proceeds and omits the note when the local coordination state is absent (common case)', async () => {
+  let receivedBranch: string | null = null;
+  const { deps, calls } = makeDeps(readyReport(), {
+    inspectLocalCoordinationState: (branchName) => {
+      receivedBranch = branchName;
+      return {
+        presence: 'absent',
+        path: null,
+        brokenReasons: [],
+        detachedWorktreePaths: [],
+        unreadable: false,
+        unreadableReason: null,
+      };
+    },
+  });
+  const { verdict, exitCode } = await runRoadmapAuditExecute(APPLY_ARGS, deps);
+  assert.equal(exitCode, 0);
+  assert.equal(verdict.closed, true);
+  assert.equal(verdict.localCoordinationNote, undefined);
+  assert.equal(receivedBranch, CLAIM_BRANCH);
+  assert.deepEqual(calls.closed, [ROADMAP]);
+});
+
+test('--apply proceeds with an informational note when the local worktree is present-clean', async () => {
+  const { deps, calls } = makeDeps(readyReport(), {
+    inspectLocalCoordinationState: () => ({
+      presence: 'present-clean',
+      path: '/repo/wt',
+      brokenReasons: [],
+      detachedWorktreePaths: [],
+      unreadable: false,
+      unreadableReason: null,
+    }),
+  });
+  const { verdict, exitCode } = await runRoadmapAuditExecute(APPLY_ARGS, deps);
+  assert.equal(exitCode, 0);
+  assert.equal(verdict.closed, true);
+  assert.match(verdict.localCoordinationNote ?? '', /clean local worktree/);
+  assert.deepEqual(calls.closed, [ROADMAP]);
+});
+
+test('--apply proceeds with an informational note when local state is unreadable (fail-open)', async () => {
+  const { deps, calls } = makeDeps(readyReport(), {
+    inspectLocalCoordinationState: () => ({
+      presence: 'absent',
+      path: null,
+      brokenReasons: [],
+      detachedWorktreePaths: [],
+      unreadable: true,
+      unreadableReason: 'git: command not found',
+    }),
+  });
+  const { verdict, exitCode } = await runRoadmapAuditExecute(APPLY_ARGS, deps);
+  assert.equal(exitCode, 0);
+  assert.equal(verdict.closed, true);
+  assert.match(verdict.localCoordinationNote ?? '', /unreadable/);
+  assert.deepEqual(calls.closed, [ROADMAP]);
+});
+
+test('--apply fails closed (no mutation) when the local worktree is present-broken', async () => {
+  const { deps, calls } = makeDeps(readyReport(), {
+    inspectLocalCoordinationState: () => ({
+      presence: 'present-broken',
+      path: '/repo/wt',
+      brokenReasons: ['uncommitted content present'],
+      detachedWorktreePaths: [],
+      unreadable: false,
+      unreadableReason: null,
+    }),
+  });
+  const { verdict, exitCode } = await runRoadmapAuditExecute(APPLY_ARGS, deps);
+  assert.equal(exitCode, 1);
+  assert.equal(verdict.closed, false);
+  assert.match(verdict.result, /local coordination state unsafe/);
+  assert.match(
+    verdict.localCoordinationNote ?? '',
+    /not safe to treat as reusable/,
+  );
+  assert.deepEqual(calls.closed, []);
+  assert.deepEqual(calls.comments, []);
+  assert.deepEqual(calls.released, []);
+});
+
+test('--apply calls inspectLocalCoordinationState exactly once, before the graph re-fetch', async () => {
+  let calls = 0;
+  const { deps } = makeDeps(readyReport(), {
+    inspectLocalCoordinationState: () => {
+      calls += 1;
+      return {
+        presence: 'absent',
+        path: null,
+        brokenReasons: [],
+        detachedWorktreePaths: [],
+        unreadable: false,
+        unreadableReason: null,
+      };
+    },
+  });
+  const { exitCode } = await runRoadmapAuditExecute(APPLY_ARGS, deps);
+  assert.equal(exitCode, 0);
+  assert.equal(calls, 1);
 });
