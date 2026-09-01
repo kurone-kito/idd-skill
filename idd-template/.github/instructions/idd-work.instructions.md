@@ -212,7 +212,10 @@ mechanical file/close-based signal stronger than A4.5's title/
 declaration heuristic (a weak **title-only** match is **not** a hit
 here). Keep it cheap: one fetch plus a bounded merged-PR scan.
 
-1. `git fetch origin {development-branch}`.
+1. `git fetch origin {development-branch}` (concurrent workers sharing
+   one clone: behind the
+   [clone-scoped lock](../../docs/idd-helper-scripts.md#clone-scoped-lock),
+   same as B1).
 2. **Closed-by-a-merged-PR signal**: re-fetch the issue; if it is now closed
    with a linked closing PR, the deliverable already shipped:
 

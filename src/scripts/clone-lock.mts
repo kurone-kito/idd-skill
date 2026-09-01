@@ -134,11 +134,24 @@ type LockReadResult =
   | { status: 'malformed' }
   | { status: 'present'; lock: CloneLockBody };
 
+/**
+ * A `pid` must be a positive-integer-shaped number, not merely
+ * `typeof pid === 'number'` -- POSIX gives `0` and negative values
+ * special meaning to `kill()` (process group / all processes / signal
+ * -to-everyone), so a `0`, negative, `NaN`, or non-integer value must
+ * never reach {@link isPidAlive}'s `process.kill(pid, 0)` call, even
+ * though that call is diagnostic-only now (see this module's header
+ * comment) and not a takeover decision.
+ */
+function isValidPid(value: unknown): value is number {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value > 0;
+}
+
 function isCloneLockBody(value: unknown): value is CloneLockBody {
   return (
     typeof value === 'object' &&
     value !== null &&
-    typeof (value as Record<string, unknown>).pid === 'number' &&
+    isValidPid((value as Record<string, unknown>).pid) &&
     typeof (value as Record<string, unknown>).token === 'string' &&
     typeof (value as Record<string, unknown>).agentId === 'string' &&
     typeof (value as Record<string, unknown>).acquiredAt === 'string'

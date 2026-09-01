@@ -116,11 +116,23 @@ export function resolveCloneLockPath(repoPath) {
   ).trim();
   return join(gitCommonDir, CLONE_LOCK_FILE_NAME);
 }
+/**
+ * A `pid` must be a positive-integer-shaped number, not merely
+ * `typeof pid === 'number'` -- POSIX gives `0` and negative values
+ * special meaning to `kill()` (process group / all processes / signal
+ * -to-everyone), so a `0`, negative, `NaN`, or non-integer value must
+ * never reach {@link isPidAlive}'s `process.kill(pid, 0)` call, even
+ * though that call is diagnostic-only now (see this module's header
+ * comment) and not a takeover decision.
+ */
+function isValidPid(value) {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value > 0;
+}
 function isCloneLockBody(value) {
   return (
     typeof value === 'object' &&
     value !== null &&
-    typeof value.pid === 'number' &&
+    isValidPid(value.pid) &&
     typeof value.token === 'string' &&
     typeof value.agentId === 'string' &&
     typeof value.acquiredAt === 'string'

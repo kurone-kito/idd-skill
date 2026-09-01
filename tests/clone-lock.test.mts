@@ -237,6 +237,34 @@ function spawnDeadPid(): number {
   return pid;
 }
 
+test('check: a lock body with an unsafe pid (0, negative, or non-integer -- POSIX gives kill() special meaning for those) is treated as malformed, never passed to process.kill()', () => {
+  const primary = setupRepo();
+  try {
+    const path = resolveCloneLockPath(primary);
+    for (const badPid of [0, -1, 1.5, Number.NaN]) {
+      writeFileSync(
+        path,
+        JSON.stringify({
+          pid: badPid,
+          token: 'bad-pid-holder',
+          agentId: 'agent-bad',
+          acquiredAt: new Date().toISOString(),
+        }),
+      );
+      const check = checkCloneLock(primary);
+      assert.equal(check.present, true);
+      assert.equal(
+        check.malformed,
+        true,
+        `expected pid ${badPid} to be treated as malformed`,
+      );
+      assert.equal(check.holder, undefined);
+    }
+  } finally {
+    teardown(primary);
+  }
+});
+
 test('check: holderAlive reports false for a lock recording a confirmed-dead pid', () => {
   const primary = setupRepo();
   try {
