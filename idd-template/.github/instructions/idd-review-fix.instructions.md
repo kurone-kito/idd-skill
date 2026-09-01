@@ -83,7 +83,7 @@ loop is auditing every caller against the helper's contract once, not
 a sixth per-call-site patch. Once fixes materially address the
 finding's root cause and further comments are speculative or
 non-blocking hardening, treat them as PATH B (disposition-only,
-E4-E8) rather than opening another E9-E10 round.
+E4-E7) rather than opening another E9-E10 round.
 
 ## E11 — Resolve conflicts with main
 
