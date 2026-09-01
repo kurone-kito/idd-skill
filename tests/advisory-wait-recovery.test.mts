@@ -249,11 +249,13 @@ test('evaluateStaleRequestRecoveryAction: not-applicable (recheck-budget-unspent
   assert.equal(summary.outcome, 'WAIT');
   assert.equal(summary.copilotPending, false);
   assert.equal(summary.sameHeadMarkerPresent, true);
+  assert.equal(summary.sameHeadRequestMarkerPresent, true);
 
   const decision = evaluateStaleRequestRecoveryAction({
     copilotPending: summary.copilotPending,
     copilotPendingCoversHead: summary.copilotPendingCoversHead,
     sameHeadMarkerPresent: summary.sameHeadMarkerPresent,
+    sameHeadRequestMarkerPresent: summary.sameHeadRequestMarkerPresent,
     remainingBudget: 2,
     activeClaimProvided: true,
     elapsedMinutes: summary.elapsedMinutes,
@@ -291,11 +293,13 @@ test('evaluateStaleRequestRecoveryAction: attempt-eligible (non-pending-recovery
   assert.equal(summary.copilotPending, false);
   assert.equal(summary.copilotPendingCoversHead, false);
   assert.equal(summary.sameHeadMarkerPresent, true);
+  assert.equal(summary.sameHeadRequestMarkerPresent, true);
 
   const decision = evaluateStaleRequestRecoveryAction({
     copilotPending: summary.copilotPending,
     copilotPendingCoversHead: summary.copilotPendingCoversHead,
     sameHeadMarkerPresent: summary.sameHeadMarkerPresent,
+    sameHeadRequestMarkerPresent: summary.sameHeadRequestMarkerPresent,
     remainingBudget: 2,
     activeClaimProvided: true,
     elapsedMinutes: summary.elapsedMinutes,
@@ -307,11 +311,34 @@ test('evaluateStaleRequestRecoveryAction: attempt-eligible (non-pending-recovery
   });
 });
 
+test('evaluateStaleRequestRecoveryAction: non-pending path is not-applicable (recovery-marker-only-no-request-marker) when only a prior recovery cycle marker anchors this HEAD, even though every other condition looks attempt-eligible', () => {
+  // kurone-kito/idd-skill#2327 CodeRabbit review: sameHeadMarkerPresent alone
+  // cannot distinguish "a request was actually made for this HEAD" from
+  // "only a prior recovery cycle's own advisory-wait-recovery: marker
+  // exists" -- a recovery marker is not proof an ordinary request was
+  // requested, so it must never itself unlock a further cycle.
+  const decision = evaluateStaleRequestRecoveryAction({
+    copilotPending: false,
+    copilotPendingCoversHead: false,
+    sameHeadMarkerPresent: true,
+    sameHeadRequestMarkerPresent: false,
+    remainingBudget: 2,
+    activeClaimProvided: true,
+    elapsedMinutes: 30,
+    settledWindowMinutes: 10,
+  });
+  assert.deepEqual(decision, {
+    action: 'not-applicable',
+    reason: 'recovery-marker-only-no-request-marker',
+  });
+});
+
 test('evaluateStaleRequestRecoveryAction: non-pending path fails closed to recheck-budget-unspent when elapsedMinutes/settledWindowMinutes are omitted (ambiguous evidence never reads as failure)', () => {
   const decision = evaluateStaleRequestRecoveryAction({
     copilotPending: false,
     copilotPendingCoversHead: false,
     sameHeadMarkerPresent: true,
+    sameHeadRequestMarkerPresent: true,
     remainingBudget: 2,
     activeClaimProvided: true,
   });
@@ -326,6 +353,7 @@ test('evaluateStaleRequestRecoveryAction: non-pending path is not-applicable (pr
     copilotPending: false,
     copilotPendingCoversHead: true,
     sameHeadMarkerPresent: true,
+    sameHeadRequestMarkerPresent: true,
     remainingBudget: 2,
     activeClaimProvided: true,
     elapsedMinutes: 100,
@@ -342,6 +370,7 @@ test('evaluateStaleRequestRecoveryAction: non-pending path reports cap-exhausted
     copilotPending: false,
     copilotPendingCoversHead: false,
     sameHeadMarkerPresent: true,
+    sameHeadRequestMarkerPresent: true,
     remainingBudget: 0,
     activeClaimProvided: true,
     elapsedMinutes: 30,
@@ -389,6 +418,7 @@ test('integration: pending and non-pending cycles share one #1572 counter -- one
     copilotPending: false,
     copilotPendingCoversHead: false,
     sameHeadMarkerPresent: true,
+    sameHeadRequestMarkerPresent: true,
     remainingBudget: exhausted.remainingBudget,
     activeClaimProvided: exhausted.activeClaimProvided,
     elapsedMinutes: 30,

@@ -22,6 +22,7 @@
     "capExhaustedRoute",
     "elapsedMinutes",
     "sameHeadMarkerPresent",
+    "sameHeadRequestMarkerPresent",
     "earliestSameHeadAt",
     "sameHeadMarkerCount",
     "requestMarkerCount",
@@ -118,6 +119,10 @@
     "sameHeadMarkerPresent": {
       "type": "boolean",
       "description": "True when a trusted same-HEAD advisory-wait or advisory-wait-recovery marker already anchors the current HEAD."
+    },
+    "sameHeadRequestMarkerPresent": {
+      "type": "boolean",
+      "description": "#2327: true only when a trusted same-HEAD marker is specifically the plain request form (advisory-wait:), excluding advisory-wait-recovery: -- distinguishes 'a request was actually made for this HEAD' from 'only a prior recovery cycle's own marker exists'."
     },
     "earliestSameHeadAt": {
       "type": "string",

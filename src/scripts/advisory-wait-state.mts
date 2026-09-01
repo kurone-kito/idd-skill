@@ -370,6 +370,7 @@ const STALE_REQUEST_RECOVERY_REASONS = {
   attemptEligible: 'recovery-attempt-eligible',
   recheckBudgetUnspent: 'recheck-budget-unspent',
   nonPendingAttemptEligible: 'non-pending-recovery-attempt-eligible',
+  recoveryMarkerOnly: 'recovery-marker-only-no-request-marker',
 } as const;
 
 export function evaluateStaleRequestRecoveryAction(input: {
@@ -388,6 +389,18 @@ export function evaluateStaleRequestRecoveryAction(input: {
    * `"attempt"` without proof no cycle has already run.
    */
   activeClaimProvided: boolean;
+  /**
+   * `#2327`: true only when a trusted same-HEAD marker is specifically the
+   * plain request form (`advisory-wait:`), excluding
+   * `advisory-wait-recovery:` (mirrors
+   * `AdvisoryWaitMarkerSummary.sameHeadRequestMarkerPresent`). Only consulted
+   * on the non-pending path below -- `sameHeadMarkerPresent` alone cannot
+   * distinguish "a request was actually made for this HEAD" from "only a
+   * prior recovery cycle's own marker exists," and the non-pending entry must
+   * never treat recovery-marker-only evidence as proof a request was
+   * requested. Omitted/missing fails closed to `false` (no request marker).
+   */
+  sameHeadRequestMarkerPresent?: boolean;
   /**
    * `#2327`: minutes since the earliest same-head advisory-wait marker
    * (mirrors `buildAdvisoryWaitSummary`'s own `elapsedMinutes`). Only
@@ -448,6 +461,18 @@ export function evaluateStaleRequestRecoveryAction(input: {
     return {
       action: 'not-applicable',
       reason: STALE_REQUEST_RECOVERY_REASONS.notPending,
+    };
+  }
+  // A same-head marker exists, but not specifically a plain request marker --
+  // only a prior recovery cycle's own `advisory-wait-recovery:` marker
+  // anchors this HEAD. That marker is not proof an ordinary request was
+  // requested for this HEAD, so it must never itself unlock a further cycle;
+  // the recovery-cycle counter (not this predicate) is what already bounds
+  // repeated recovery attempts.
+  if (!input.sameHeadRequestMarkerPresent) {
+    return {
+      action: 'not-applicable',
+      reason: STALE_REQUEST_RECOVERY_REASONS.recoveryMarkerOnly,
     };
   }
   // A `review_requested` event for the bot DID eventually follow this HEAD's
@@ -766,6 +791,7 @@ function main(): void {
     copilotPending: summary.copilotPending,
     copilotPendingCoversHead: summary.copilotPendingCoversHead,
     sameHeadMarkerPresent: summary.sameHeadMarkerPresent,
+    sameHeadRequestMarkerPresent: summary.sameHeadRequestMarkerPresent,
     remainingBudget: copilotRecovery.remainingBudget,
     activeClaimProvided: copilotRecovery.activeClaimProvided,
     elapsedMinutes: summary.elapsedMinutes,

@@ -202,6 +202,7 @@ const STALE_REQUEST_RECOVERY_REASONS = {
   attemptEligible: 'recovery-attempt-eligible',
   recheckBudgetUnspent: 'recheck-budget-unspent',
   nonPendingAttemptEligible: 'non-pending-recovery-attempt-eligible',
+  recoveryMarkerOnly: 'recovery-marker-only-no-request-marker',
 };
 export function evaluateStaleRequestRecoveryAction(input) {
   if (!input.activeClaimProvided) {
@@ -247,6 +248,18 @@ export function evaluateStaleRequestRecoveryAction(input) {
     return {
       action: 'not-applicable',
       reason: STALE_REQUEST_RECOVERY_REASONS.notPending,
+    };
+  }
+  // A same-head marker exists, but not specifically a plain request marker --
+  // only a prior recovery cycle's own `advisory-wait-recovery:` marker
+  // anchors this HEAD. That marker is not proof an ordinary request was
+  // requested for this HEAD, so it must never itself unlock a further cycle;
+  // the recovery-cycle counter (not this predicate) is what already bounds
+  // repeated recovery attempts.
+  if (!input.sameHeadRequestMarkerPresent) {
+    return {
+      action: 'not-applicable',
+      reason: STALE_REQUEST_RECOVERY_REASONS.recoveryMarkerOnly,
     };
   }
   // A `review_requested` event for the bot DID eventually follow this HEAD's
@@ -520,6 +533,7 @@ function main() {
     copilotPending: summary.copilotPending,
     copilotPendingCoversHead: summary.copilotPendingCoversHead,
     sameHeadMarkerPresent: summary.sameHeadMarkerPresent,
+    sameHeadRequestMarkerPresent: summary.sameHeadRequestMarkerPresent,
     remainingBudget: copilotRecovery.remainingBudget,
     activeClaimProvided: copilotRecovery.activeClaimProvided,
     elapsedMinutes: summary.elapsedMinutes,
