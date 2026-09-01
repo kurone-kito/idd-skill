@@ -297,12 +297,20 @@ const CLAIM_STAGE_CAP_MS = 15 * 60 * 1000;
 const MERGE_STAGE_THIN_CAP_MS = 15 * 60 * 1000;
 
 /**
- * Builds the contiguous, gap-free stage-window tiling of
- * [sessionStartedAtMs, sessionEndedAtMs) per the issue's marker-join
- * table, then lets --events override individual stage boundaries.
- * Contiguous tiling (each window starts exactly where the previous one
- * ended) is what makes the per-stage usage allocation below sum back to
- * the session total exactly, in both delta and cumulative modes.
+ * Builds the stage-window tiling of [sessionStartedAtMs, sessionEndedAtMs)
+ * per the issue's marker-join table, then lets --events override individual
+ * stage boundaries. Contiguous tiling (each window starts exactly where the
+ * previous one ended) is what makes the per-stage usage allocation below sum
+ * back to the session total exactly, in both delta and cumulative modes --
+ * the marker-only pass always produces it. Once --events overrides are
+ * applied, an event window's timestamps are authoritative and never
+ * expanded, while a marker window always flows to fill the space around it
+ * (forward past its own original start, backward past its own original
+ * end) -- so the result stays gap-free everywhere a marker window can
+ * reach. A residual gap is possible only immediately before an event
+ * window whose immediately preceding window is itself event-sourced (or
+ * absent, at session start): there, no marker exists to flow into it, and
+ * that usage is genuinely unattributed to any stage rather than misattributed.
  */
 export function computeStageWindows(
   sessionStartedAtMs: number,
@@ -405,15 +413,25 @@ export function computeStageWindows(
   // timestamp, so it is only ever clamped forward past a conflicting
   // predecessor, never expanded. A marker window is a synthetic
   // reconstruction with no independent authority, so it always starts
-  // exactly at the running cursor -- flowing backward to fill any gap an
-  // event override left behind -- rather than leaving that usage
-  // unattributed to any stage.
+  // exactly at the running cursor (flowing backward to fill a gap an event
+  // override left behind it) and, symmetrically, is retroactively extended
+  // forward to meet the start of an event window that follows it with a
+  // gap -- rather than leaving that usage unattributed to any stage.
   const finalWindows: StageWindow[] = [];
   let normalizeCursor = sessionStartedAtMs;
   for (const stageId of TOKEN_COST_STAGE_IDS) {
     const window = byId.get(stageId);
     if (!window) {
       continue;
+    }
+    if (window.source === 'event' && window.startMs > normalizeCursor) {
+      const prevIndex = finalWindows.length - 1;
+      const prev = finalWindows[prevIndex];
+      if (prev && prev.source === 'marker') {
+        const extendedEndMs = Math.min(window.startMs, sessionEndedAtMs);
+        finalWindows[prevIndex] = { ...prev, endMs: extendedEndMs };
+        normalizeCursor = extendedEndMs;
+      }
     }
     const startMs =
       window.source === 'event'
@@ -851,6 +869,18 @@ export function resolveIssueLoopContext(
     ) {
       humanHandoff = true;
     }
+    // A later claimed-by marker naming this session's own claimId in its
+    // supersedes field, from a different agent, is a silent takeover --
+    // the outcome table's "a different actor takes the claim before
+    // merge" row, same as an explicit forced-handoff marker.
+    const takeover = parseClaimComment(comment.body, comment.createdAt);
+    if (
+      takeover &&
+      takeover.supersedes === claimId &&
+      takeover.agentId !== claimAgentId
+    ) {
+      humanHandoff = true;
+    }
   }
 
   return {
@@ -1071,12 +1101,23 @@ export function buildSample(
   trustedLogins: readonly string[],
 ): HarvestedSample {
   const base = session.adapterResult.sample;
-  const startedAtMs = toValidTimestampMs(base.startedAt) ?? 0;
-  const endedAtMs = toValidTimestampMs(base.endedAt) ?? startedAtMs;
+  const validStartedAtMs = toValidTimestampMs(base.startedAt);
+  const validEndedAtMs = toValidTimestampMs(base.endedAt);
+  const startedAtMs = validStartedAtMs ?? 0;
+  const endedAtMs = validEndedAtMs ?? startedAtMs;
   const issueNumber = session.adapterResult.joinHints?.issueNumber;
 
-  if (issueNumber === undefined) {
-    return { sample: base, startedAtMs, endedAtMs };
+  if (
+    issueNumber === undefined ||
+    validStartedAtMs === undefined ||
+    validEndedAtMs === undefined
+  ) {
+    // An adapter's own timestamp fields are malformed, or there is no
+    // issue to join against: skip the GitHub join rather than resolving
+    // a context against a nonsensical (e.g. epoch-anchored) session
+    // window. assertTokenCostSample would reject a malformed startedAt
+    // downstream anyway; this just avoids the wasted join work first.
+    return { sample: base, issueNumber, startedAtMs, endedAtMs };
   }
 
   const ctx = resolveIssueLoopContext(

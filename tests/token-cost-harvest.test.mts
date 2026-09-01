@@ -447,12 +447,14 @@ test('computeStageWindows: a following marker window flows backward to fill the 
       } [${windows[i - 1].startMs}, ${windows[i - 1].endMs})`,
     );
   }
-  // 'work' (event-sourced) is left with a small gap before it ([00:15,
-  // 00:16), from claim's marker-derived end to work's own explicit start)
-  // -- that gap is genuine and expected, since work's start is an
-  // authoritative timestamp, not a synthetic reconstruction to be expanded.
+  // 'claim' (marker-sourced) must flow FORWARD to close the gap before
+  // 'work' (event-sourced) too: claim's own marker-derived end (00:15) is
+  // retroactively extended to meet work's explicit start (00:16).
+  const claim = windows.find((w) => w.id === 'claim');
   const work = windows.find((w) => w.id === 'work');
   assert.equal(work?.startMs, ms('2026-01-01T00:16:00Z'));
+  assert.equal(claim?.endMs, work?.startMs);
+  assert.equal(claim?.endMs, ms('2026-01-01T00:16:00Z'));
   // 'submit-pr' (marker-sourced) must flow backward to close the gap work's
   // shrink left AFTER it, rather than leaving [00:19, 00:25) unattributed.
   const submitPr = windows.find((w) => w.id === 'submit-pr');
@@ -460,6 +462,45 @@ test('computeStageWindows: a following marker window flows backward to fill the 
   assert.equal(submitPr?.startMs, work?.endMs);
   assert.equal(submitPr?.startMs, ms('2026-01-01T00:19:00Z'));
   assert.equal(submitPr?.endMs, ms('2026-01-01T00:30:00Z'));
+});
+
+test('computeStageWindows: extending a marker window to meet a later event window clamps to sessionEndedAtMs, never past it', () => {
+  const ctx: IssueLoopGithubContext = {
+    claimedAtMs: ms('2026-01-01T00:00:00Z'),
+    prCreatedAtMs: ms('2026-01-01T00:25:00Z'),
+    prHeadRefName: 'issue/1-test',
+    prMergedAtMs: null,
+    firstReviewAtMs: null,
+    cleanupAtMs: null,
+    unclaimedMatched: false,
+    humanHandoff: false,
+  };
+  // A stale --events entry (e.g. from a later/different session) whose
+  // startMs is past this session's own end -- the gap-filling extension
+  // must not stretch 'claim' past sessionEndedAtMs to reach it.
+  const events = new Map<TokenCostStageId, StageEventWindow>([
+    [
+      'work',
+      {
+        startMs: ms('2026-01-01T00:35:00Z'),
+        endMs: ms('2026-01-01T00:40:00Z'),
+      },
+    ],
+  ]);
+  const { windows } = computeStageWindows(
+    ms('2026-01-01T00:00:00Z'),
+    ms('2026-01-01T00:30:00Z'),
+    ctx,
+    events,
+  );
+  // 'work' itself is dropped: after clamping to sessionEndedAtMs, its
+  // interval is empty.
+  assert.ok(!windows.some((w) => w.id === 'work'));
+  const claim = windows.find((w) => w.id === 'claim');
+  assert.equal(claim?.endMs, ms('2026-01-01T00:30:00Z'));
+  for (const window of windows) {
+    assert.ok(window.endMs <= ms('2026-01-01T00:30:00Z'));
+  }
 });
 
 test('computeStageWindows returns no windows when there is no claim in range', () => {
@@ -836,6 +877,87 @@ test('resolveIssueLoopContext: outcome is unclaimed when a matching unclaimed-by
   } finally {
     restore();
   }
+});
+
+test('resolveIssueLoopContext: a later claimed-by marker superseding this claimId from a different agent is a takeover (human-handoff), regardless of session window', () => {
+  const fixture = readJson(
+    'tests/fixtures/token-cost/github/issue-loop-takeover.json',
+  );
+  const restore = stubGhReturningJson(fixture);
+  try {
+    // claude-a's own session ends at 00:10; the superseding claim from
+    // claude-b lands at 00:15, after this session's own window ended --
+    // takeover detection is not session-windowed (docs/token-cost.md's
+    // Attribution: an issue loop can span multiple vendor sessions).
+    const ctx = resolveIssueLoopContext(
+      'acme',
+      'repo',
+      9003,
+      ms('2026-01-01T00:00:00Z'),
+      ms('2026-01-01T00:10:00Z'),
+      ['claude-a', 'claude-b'],
+    );
+    assert.ok(ctx);
+    assert.equal(ctx?.humanHandoff, true);
+    assert.equal(deriveOutcome(ctx as IssueLoopGithubContext), 'human-handoff');
+  } finally {
+    restore();
+  }
+});
+
+test('resolveIssueLoopContext: a superseding claim from the SAME agent is not a takeover', () => {
+  const fixture = readJson(
+    'tests/fixtures/token-cost/github/issue-loop-takeover.json',
+  );
+  const restore = stubGhReturningJson(fixture);
+  try {
+    const ctx = resolveIssueLoopContext(
+      'acme',
+      'repo',
+      9003,
+      ms('2026-01-01T00:00:00Z'),
+      ms('2026-01-01T00:10:00Z'),
+      // Only claude-a is trusted here: the second (claude-b) comment is
+      // filtered out entirely, simulating "no takeover marker visible" --
+      // isolates that humanHandoff is false absent a superseding marker.
+      ['claude-a'],
+    );
+    assert.ok(ctx);
+    assert.equal(ctx?.humanHandoff, false);
+  } finally {
+    restore();
+  }
+});
+
+test('buildSample: an adapter session with an unparseable startedAt skips the GitHub join and stays kind: session', () => {
+  const session: VendorSession = {
+    vendor: 'claude',
+    adapterResult: {
+      sample: {
+        schemaVersion: 1,
+        kind: 'session',
+        vendor: 'claude',
+        model: 'fake-model',
+        attribution: 'session-unscoped',
+        outcome: 'unknown',
+        usage: usage(1),
+        compactionCount: 0,
+        startedAt: 'not-a-timestamp',
+        endedAt: '2026-01-01T00:10:00Z',
+        vendorSessionId: 'fake-session-3',
+      },
+      joinHints: { issueNumber: 9001 },
+    },
+    timeline: { mode: 'delta', points: [] },
+  };
+  // No stubGh: if buildSample attempted the join anyway, the real `gh`
+  // binary (or its absence) would make this test fail or hang, proving no
+  // network call was attempted.
+  const built = buildSample(session, 'acme', 'repo', new Map(), [
+    'claude-test',
+  ]);
+  assert.equal(built.sample.kind, 'session');
+  assert.equal(built.startedAtMs, 0);
 });
 
 test('AC1: a fake adapter session joined against fixture GitHub markers produces one issue-loop sample whose stage usage sums to the session usage, outcome merged', () => {
