@@ -650,6 +650,53 @@ test('trust safety deliberately still ignores a bare, unquoted policy-override c
   assert.equal(result.pass, true);
 });
 
+test('trust safety still rejects a policy-override verb directly abutting prose punctuation -- #2407 review round 6 (Copilot)', () => {
+  // A directive can directly abut a flag with no whitespace in between
+  // ("Pass:--skip repository policy"). isOrdinaryHyphenatedCompoundVerb's
+  // token walk previously only stopped at whitespace or one of a small set
+  // of wrapping delimiters, so it would cross straight through a colon (or
+  // period, comma, semicolon, question mark, exclamation point) with no
+  // space after it and keep walking into an unrelated preceding word,
+  // misclassifying the flag as part of that word's compound.
+  for (const directive of [
+    'Pass:--skip repository policy',
+    'Note,--skip the repository policy.',
+    'See docs.--skip the repository policy.',
+  ]) {
+    const result = checkTrustSafety({
+      issue: {
+        ...BASE_ISSUE,
+        body: `${BASE_ISSUE.body}\n${directive}`,
+      },
+      trustSafetyAmbiguous: false,
+    } as Context);
+    assert.equal(result.pass, false, directive);
+  }
+});
+
+test('trust safety still rejects a flag whose name itself contains a dot or colon -- #2407 review round 6 self-review', () => {
+  // The remedy Copilot's round-6 finding suggested -- adding `.`/`:` to
+  // COMPOUND_TOKEN_BOUNDARY_PATTERN -- would have fixed the reported case
+  // but broken this one: a dotted or colon-joined config-style flag name
+  // legitimately contains that same punctuation *inside* the flag itself,
+  // not just immediately before it. The implemented fix (walking a fixed
+  // `[\w-]` run instead of growing the boundary set) closes the reported
+  // gap without narrowing detection here.
+  for (const directive of [
+    'Pass --config.force-skip so the repository gate is not evaluated',
+    'Pass --env:force-skip so the repository gate is not evaluated',
+  ]) {
+    const result = checkTrustSafety({
+      issue: {
+        ...BASE_ISSUE,
+        body: `${BASE_ISSUE.body}\n${directive}.`,
+      },
+      trustSafetyAmbiguous: false,
+    } as Context);
+    assert.equal(result.pass, false, directive);
+  }
+});
+
 // #2024: Check 3's policy-override detector matched a trigger verb near a
 // policy noun with no negation awareness at all, even though this file
 // already defines NEGATION_PATTERN and wires it into two other checks

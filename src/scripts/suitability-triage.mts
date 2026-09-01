@@ -607,16 +607,22 @@ function isNegatedPolicyOverrideMatch(
   );
 }
 
-// #2399/#2407: a token boundary in ordinary prose -- whitespace, or one of
-// the wrapping delimiters this file already treats as optional token
-// punctuation elsewhere (backtick, single/double quote, open paren; see
-// SUPPLIED_CONTENT_OBJECT_REFERENCE above). Deliberately minimal: any other
-// character (a hyphen, slash, plus, asterisk, bracket, ...) is treated as
-// part of the token being walked, not a boundary, so the classification
-// below fails closed (stays detectable) on markdown-formatted prose like
-// `*evidence-skip*` or `[duplicate-evidence-skip](...)` rather than risking
-// a new way to hide a genuine directive -- an acceptable false positive for
-// a trust/safety gate, unlike a false negative.
+// #2399/#2407: a true prose boundary immediately before a hyphenated run's
+// own word-character origin -- whitespace, or one of the wrapping
+// delimiters this file already treats as optional token punctuation
+// elsewhere (backtick, single/double quote, open paren; see
+// SUPPLIED_CONTENT_OBJECT_REFERENCE above). Deliberately minimal, and
+// deliberately NOT grown to cover every prose-punctuation character that
+// might directly abut a flag with no whitespace (colon, period, comma, ...,
+// #2407 review round 6, Copilot): isOrdinaryHyphenatedCompoundVerb only
+// ever tests this pattern against the single character immediately before
+// a `[\w-]` run's own origin, never against a character INSIDE that run --
+// so adding a character here can only ever narrow (never widen) which runs
+// get excluded, and can never create a bypass for a flag token that
+// happens to contain that character internally (e.g. a dotted config key
+// like `--config.force-skip`, or `--env:force-skip`). See that function's
+// own comment for why the run itself is walked with a fixed `[\w-]`
+// character class rather than this boundary set.
 const COMPOUND_TOKEN_BOUNDARY_PATTERN = /[\s\x60'"(]/;
 
 // #2399: `#2218` wrapped `POLICY_OVERRIDE_NOUN_SOURCE` in a hyphen-boundary
@@ -651,6 +657,27 @@ const COMPOUND_TOKEN_BOUNDARY_PATTERN = /[\s\x60'"(]/;
 // fix. Any rule general enough to also detect a bare "force-skip" detects
 // bare "evidence-skip" too, reintroducing #2213 (see the dedicated
 // regression test pinning this as a known, deliberate limit).
+//
+// The run of characters walked back from the verb's own leading hyphen
+// uses a fixed `[\w-]` class -- letters, digits, underscore, and hyphen,
+// exactly the characters that make up an ordinary hyphenated word or a
+// hyphen-flag name -- rather than "any character not in
+// COMPOUND_TOKEN_BOUNDARY_PATTERN" (#2407 review round 6, Copilot: a
+// directive can directly abut a flag with no whitespace, e.g.
+// "Pass:--skip repository policy"; growing the boundary set to also cover
+// `:` closed that case, but any character added to a "boundary" set this
+// way stops the walk *inside* an unrelated flag name too -- a dotted or
+// colon-joined config key like `--config.force-skip` or `--env:force-skip`
+// would then misclassify as excluded, a regression the boundary-list
+// approach cannot avoid without an ever-growing, never-complete
+// enumeration). Walking a fixed `[\w-]` run instead means the only
+// question left is whether the character immediately before that run's
+// own origin is a true prose boundary or not -- `.`, `:`, `=`, and every
+// other symbol that can legally sit *inside* a flag name never stops the
+// run early, so they can never manufacture a false "ordinary compound"
+// classification, while still correctly closing the reported gap (that
+// run now starts at the flag's own leading hyphen, not several characters
+// further back across the punctuation).
 function isOrdinaryHyphenatedCompoundVerb(
   rawSource: string,
   matchIndex: number,
@@ -659,13 +686,16 @@ function isOrdinaryHyphenatedCompoundVerb(
     return false;
   }
   let cursor = matchIndex - 1;
-  while (
-    cursor > 0 &&
-    !COMPOUND_TOKEN_BOUNDARY_PATTERN.test(rawSource[cursor - 1] ?? '')
-  ) {
+  while (cursor > 0 && /[\w-]/.test(rawSource[cursor - 1] ?? '')) {
     cursor -= 1;
   }
-  return /\w/.test(rawSource[cursor] ?? '');
+  if (!/\w/.test(rawSource[cursor] ?? '')) {
+    return false;
+  }
+  return (
+    cursor === 0 ||
+    COMPOUND_TOKEN_BOUNDARY_PATTERN.test(rawSource[cursor - 1] ?? '')
+  );
 }
 
 function findPolicyOverrideMatch(
