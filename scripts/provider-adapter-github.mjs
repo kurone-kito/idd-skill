@@ -83,6 +83,15 @@ export function createGithubProviderAdapter(owner, repo, deps = DEFAULT_DEPS) {
         htmlUrl:
           issue.html_url === undefined ? undefined : String(issue.html_url),
         milestone: issue.milestone,
+        user: issue.user,
+        authorAssociation:
+          issue.author_association === undefined
+            ? undefined
+            : String(issue.author_association),
+        createdAt:
+          issue.created_at === undefined ? undefined : String(issue.created_at),
+        updatedAt:
+          issue.updated_at === undefined ? undefined : String(issue.updated_at),
       };
     },
     listOpenWorkItems() {
@@ -363,6 +372,7 @@ export function createGithubProviderAdapter(owner, repo, deps = DEFAULT_DEPS) {
             message: `collaborator permission lookup failed: ${status ?? 'unknown'}`,
             cause: error,
           },
+          httpStatus: status,
         };
       }
     },

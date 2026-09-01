@@ -47,6 +47,10 @@ interface RawIssue {
   url?: unknown;
   html_url?: unknown;
   milestone?: unknown;
+  user?: unknown;
+  author_association?: unknown;
+  created_at?: unknown;
+  updated_at?: unknown;
 }
 
 function statusToCategory(status: number | null): ProviderErrorCategory {
@@ -140,6 +144,15 @@ export function createGithubProviderAdapter(
         htmlUrl:
           issue.html_url === undefined ? undefined : String(issue.html_url),
         milestone: issue.milestone,
+        user: issue.user,
+        authorAssociation:
+          issue.author_association === undefined
+            ? undefined
+            : String(issue.author_association),
+        createdAt:
+          issue.created_at === undefined ? undefined : String(issue.created_at),
+        updatedAt:
+          issue.updated_at === undefined ? undefined : String(issue.updated_at),
       };
     },
 
@@ -487,6 +500,7 @@ export function createGithubProviderAdapter(
             message: `collaborator permission lookup failed: ${status ?? 'unknown'}`,
             cause: error,
           },
+          httpStatus: status,
         };
       }
     },

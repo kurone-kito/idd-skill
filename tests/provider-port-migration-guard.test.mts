@@ -21,6 +21,7 @@ const MIGRATED_HELPERS: readonly string[] = [
   'discover-viability-gate.mts',
   'discover-orphan-filter.mts',
   'post-idd-marker.mts',
+  'claim-approval-gate.mts',
 ];
 
 const DIRECT_GH_PATTERNS: { pattern: RegExp; description: string }[] = [

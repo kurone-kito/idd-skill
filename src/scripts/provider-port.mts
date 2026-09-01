@@ -37,10 +37,15 @@ import type {
 
 /**
  * Provider-neutral work item (GitHub issue) shape, full object. `labels`,
- * `url`, `htmlUrl`, and `milestone` are raw/untransformed passthroughs of
- * the underlying REST fields (a domain helper does its own label-shape
- * normalization, e.g. `discover-orphan-filter.mts`'s `normalizeLabels`) --
- * optional because {@link ProviderPort.getWorkItem}'s existing single-issue
+ * `url`, `htmlUrl`, `milestone`, `user`, `authorAssociation`, `createdAt`,
+ * and `updatedAt` are raw/untransformed passthroughs of the underlying REST
+ * fields (a domain helper does its own shape normalization, e.g.
+ * `discover-orphan-filter.mts`'s `normalizeLabels` or
+ * `claim-approval-gate.mts`'s `normalizeIssue`) -- `user` stays the raw
+ * `{login}`-shaped object rather than a flattened login string, so a
+ * consumer that needs the pre-migration snake_case shape (e.g. to feed an
+ * existing `user.login` reader unchanged) can remap it back verbatim. All
+ * optional because {@link ProviderPort.getWorkItem}'s original single-issue
  * consumer (`discover-viability-gate.mts`) never reads them.
  */
 export interface ProviderWorkItem {
@@ -52,6 +57,10 @@ export interface ProviderWorkItem {
   url?: string;
   htmlUrl?: string;
   milestone?: unknown;
+  user?: unknown;
+  authorAssociation?: string;
+  createdAt?: string;
+  updatedAt?: string;
 }
 
 /** Minimal locator/summary shape for a work item found via list/search. */
@@ -80,7 +89,19 @@ export type ProviderTimelineEvent = Record<string, unknown>;
 export type ProviderCollaboratorPermissionResult =
   | { outcome: 'found'; permission: string; roleName: string }
   | { outcome: 'not-collaborator' }
-  | { outcome: 'error'; error: ProviderError };
+  | {
+      outcome: 'error';
+      error: ProviderError;
+      /**
+       * The raw HTTP status `deriveGhHttpStatus` derived (`null` when it
+       * could not be determined), alongside the classified `error` above --
+       * `claim-approval-gate.mts`'s `resolveCollaboratorPermission`
+       * reconstructs its own pre-migration `permission lookup failed: ${n}`
+       * message from this number (with its own `?? 0` sentinel), which
+       * `error.message`'s free-text wording cannot losslessly round-trip.
+       */
+      httpStatus: number | null;
+    };
 
 /** One `CONNECTED_EVENT`/`DISCONNECTED_EVENT` timeline node, GitHub-shaped. */
 export type ProviderConnectedPrEvent = Record<string, unknown>;

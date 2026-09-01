@@ -6,15 +6,13 @@
 // generated .mjs. See docs/typescript-sources.md.
 
 import { parseCliArgs } from './cli-args.mts';
-import {
-  DEFAULT_GH_PAGINATED_TIMEOUT_MS,
-  GH_TEXT_LOOP_TIMEOUT_OPTIONS,
-  ghText,
-} from './gh-exec.mts';
-import { deriveGhHttpStatus } from './gh-http-status.mts';
 import { loadPolicyConfig } from './idd-config.mts';
 import { normalizePolicyConfig } from './policy-helpers.mts';
-import { parsePaginatedGhNdjson } from './protocol-helpers.mts';
+import {
+  createGithubProviderAdapter,
+  resolveCurrentGithubRepository,
+} from './provider-adapter-github.mts';
+import type { ProviderPort } from './provider-port.mts';
 
 const APPROVAL_POLICIES = new Set([
   'owners-and-maintainers-only',
@@ -319,33 +317,37 @@ function runCli(): void {
     process.env.GITHUB_TOKEN = args.ghToken;
   }
 
-  const owner =
-    args.owner ||
-    ghText(
-      ['repo', 'view', '--json', 'owner', '--jq', '.owner.login'],
-      GH_TEXT_LOOP_TIMEOUT_OPTIONS,
-    );
-  const repo =
-    args.repo ||
-    ghText(
-      ['repo', 'view', '--json', 'name', '--jq', '.name'],
-      GH_TEXT_LOOP_TIMEOUT_OPTIONS,
-    );
-  const repoRef = `${owner}/${repo}`;
-  const issue = ghJson(['api', `repos/${repoRef}/issues/${args.issue}`]) as {
-    number?: unknown;
-    title?: unknown;
-    state?: unknown;
-    html_url?: unknown;
-    url?: unknown;
-    user?: { login?: unknown };
-    author_association?: unknown;
+  const currentRepo =
+    args.owner && args.repo ? null : resolveCurrentGithubRepository();
+  const owner = args.owner || currentRepo?.owner || '';
+  const repo = args.repo || currentRepo?.repo || '';
+  const port = createGithubProviderAdapter(owner, repo);
+  const rawIssue = port.getWorkItem(args.issue ?? 0);
+  if (!rawIssue) {
+    throw new Error(`issue #${args.issue} not found`);
+  }
+  // Remapped back to the raw REST (snake_case) shape normalizeIssue() and
+  // the output block below both already expect -- ProviderWorkItem's
+  // camelCase fields (and getWorkItem's uppercased state) are a port-level
+  // convention, not this file's pre-migration contract.
+  const issue = {
+    number: rawIssue.number,
+    title: rawIssue.title,
+    state: rawIssue.state.toLowerCase(),
+    html_url: rawIssue.htmlUrl,
+    url: rawIssue.url,
+    user: rawIssue.user as { login?: unknown } | undefined,
+    author_association: rawIssue.authorAssociation,
+    labels: rawIssue.labels,
+    created_at: rawIssue.createdAt,
+    updated_at: rawIssue.updatedAt,
   };
-  const comments = ghApiJson(
-    `repos/${repoRef}/issues/${args.issue}/comments`,
-    true,
-  );
-  const timelineState = fetchIssueTimeline(repoRef, args.issue ?? 0);
+  const comments = port.listWorkItemComments(args.issue ?? 0).map((c) => ({
+    user: { login: c.authorLogin },
+    body: c.body,
+    created_at: c.createdAt,
+  }));
+  const timelineState = fetchIssueTimeline(port, args.issue ?? 0);
   const policy = loadPolicy(args.policy);
   const permissionCache = new Map<string, PermissionResult>();
   const resolvePermission: ResolvePermission = (login) =>
@@ -934,15 +936,11 @@ function maxTimestamp(...values: (string | null | undefined)[]): string | null {
 }
 
 function fetchIssueTimeline(
-  repoRef: string,
+  port: ProviderPort,
   issueNumber: number,
 ): { known: boolean; events: unknown; parseError: string } {
   try {
-    const events = ghApiJson(
-      `repos/${repoRef}/issues/${issueNumber}/timeline`,
-      true,
-      ['-H', 'Accept: application/vnd.github+json'],
-    );
+    const events = port.getWorkItemTimeline(issueNumber);
     return { known: true, events, parseError: '' };
   } catch (error) {
     // #1692: a `SyntaxError` means the gh call itself succeeded but its
@@ -979,10 +977,11 @@ function resolveCollaboratorPermission({
   if (cached !== undefined) {
     return cached;
   }
-  const result = ghApiJsonWithStatus(
-    `repos/${owner}/${repo}/collaborators/${encodeURIComponent(normalized)}/permission`,
-  );
-  if (result.status === 404) {
+  const outcome = createGithubProviderAdapter(
+    owner,
+    repo,
+  ).getCollaboratorPermission(normalized);
+  if (outcome.outcome === 'not-collaborator') {
     const notCollaborator: PermissionResult = {
       known: true,
       permission: 'none',
@@ -991,24 +990,23 @@ function resolveCollaboratorPermission({
     cache.set(normalized, notCollaborator);
     return notCollaborator;
   }
-  if (result.status !== 200) {
+  if (outcome.outcome === 'error') {
+    // Reconstructed (not outcome.error.message) to keep this file's
+    // pre-migration wording byte-exact -- see ProviderCollaboratorPermissionResult's
+    // `httpStatus` doc comment. `?? 0` matches the pre-migration
+    // ghApiJsonWithStatus's own "status could not be determined" sentinel.
     const unknownResult: PermissionResult = {
       known: false,
       permission: '',
-      error: `permission lookup failed: ${result.status}`,
+      error: `permission lookup failed: ${outcome.httpStatus ?? 0}`,
     };
     cache.set(normalized, unknownResult);
     return unknownResult;
   }
-  const permission = String(
-    (result.body as { permission?: unknown } | null)?.permission ?? '',
-  )
-    .trim()
-    .toLowerCase();
-  const known = permission.length > 0;
+  const known = outcome.permission.length > 0;
   const resolved: PermissionResult = {
     known,
-    permission,
+    permission: outcome.permission,
     error: known ? '' : 'permission missing in response',
   };
   cache.set(normalized, resolved);
@@ -1031,94 +1029,4 @@ function loadPolicy(policyPath: string): { source: string; config: unknown } {
       source,
     },
   };
-}
-
-function ghApiJson(
-  path: string,
-  paginate = false,
-  extraArgs: string[] = [],
-): unknown {
-  const args = ['api', path, ...extraArgs];
-  // #1692: `--jq '.[]'` (not a bare `--paginate`) makes gh emit one JSON
-  // value per line, guaranteed newline-separated, for every element across
-  // every page. Without it, a whole-stdout `JSON.parse` (the prior
-  // behavior here) broke on any multi-page response -- `--paginate` alone
-  // concatenates each page's whole-array response, with no separator
-  // guaranteed on gh 2.45.0 (this repo's documented compatibility floor).
-  // Matches the NDJSON convention `gh-exec.mts`'s shared `ghApiJson` uses.
-  if (paginate) {
-    args.push('--paginate', '--jq', '.[]');
-  }
-  const raw = runGh(args, paginate).trim();
-  if (paginate) {
-    return parsePaginatedGhNdjson(raw);
-  }
-  return JSON.parse(raw || '[]');
-}
-
-function ghApiJsonWithStatus(path: string): {
-  status: number;
-  body: unknown;
-} {
-  try {
-    const body = JSON.parse(runGh(['api', path]).trim() || '{}');
-    return { status: 200, body };
-  } catch (error) {
-    // #1693: derive the real HTTP status via the shared gh-http-status.mts
-    // helper instead of grepping stderr only with a bespoke `/HTTP\s+(\d+)/`
-    // pattern -- that missed the JSON-error-body-in-stdout fallback
-    // deriveGhHttpStatus already applies (stdout now survives runGh's error
-    // wrapping too; see wrapGhError below). `0` preserves this function's
-    // existing "status could not be determined" sentinel (unchanged
-    // downstream contract: callers already treat any non-200/404 status,
-    // including 0, as "permission lookup failed").
-    const status = deriveGhHttpStatus(error);
-    return { status: status ?? 0, body: null };
-  }
-}
-
-function ghJson(args: string[]): unknown {
-  return JSON.parse(runGh(args).trim() || '{}');
-}
-
-/**
- * Pure wrap step for {@link runGh}'s catch branch, exported so tests can
- * inject a raw execFileSync-shaped error directly instead of shelling out
- * to a real `gh` invocation (matching the mock-free-subprocess convention
- * documented in `tests/collaborator-permission.test.mts`).
- *
- * When stderr is present, wraps it into a fresh Error carrying both
- * `.stderr` and `.stdout`. #1693: the previous wrap carried `.stderr` only,
- * which silently dropped `.stdout` and defeated `deriveGhHttpStatus`'s
- * JSON-error-body-in-stdout fallback for every caller downstream of
- * `runGh` (this file's `ghApiJsonWithStatus`) -- `gh api` can print a JSON
- * error body to stdout even as it writes its human-readable diagnostic to
- * stderr. When stderr is empty, returns the original error unchanged: the
- * raw execFileSync error already carries `.stdout`/`.stderr`/`.status`
- * natively, so wrapping would only lose information.
- */
-export function wrapGhError(error: unknown): unknown {
-  const stderr = String((error as { stderr?: unknown })?.stderr ?? '').trim();
-  if (!stderr) {
-    return error;
-  }
-  const stdout = String((error as { stdout?: unknown })?.stdout ?? '').trim();
-  const wrapped = new Error(`gh command failed: ${stderr}`) as Error & {
-    stderr?: string;
-    stdout?: string;
-  };
-  wrapped.stderr = stderr;
-  wrapped.stdout = stdout;
-  return wrapped;
-}
-
-function runGh(args: string[], paginate = false): string {
-  try {
-    return ghText(args, {
-      ...GH_TEXT_LOOP_TIMEOUT_OPTIONS,
-      ...(paginate ? { timeout: DEFAULT_GH_PAGINATED_TIMEOUT_MS } : {}),
-    });
-  } catch (error) {
-    throw wrapGhError(error);
-  }
 }
