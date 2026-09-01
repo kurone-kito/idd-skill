@@ -332,30 +332,45 @@ export function computeStageWindows(
     push('work', cursor, ctx.prCreatedAtMs);
     cursor = ctx.prCreatedAtMs;
 
+    // A review submitted after the merge (e.g. a bot reviewing an
+    // admin-merged PR post hoc) must not push submit-pr's end past
+    // prMergedAtMs — otherwise the merge window below would start before
+    // submit-pr's own end and double-count the overlap. Clamp to whichever
+    // is earlier.
+    const effectiveFirstReviewAtMs =
+      ctx.firstReviewAtMs !== null && ctx.prMergedAtMs !== null
+        ? Math.min(ctx.firstReviewAtMs, ctx.prMergedAtMs)
+        : ctx.firstReviewAtMs;
+
     const submitPrEnd =
-      ctx.firstReviewAtMs !== null ? ctx.firstReviewAtMs : sessionEndedAtMs;
+      effectiveFirstReviewAtMs !== null
+        ? effectiveFirstReviewAtMs
+        : ctx.prMergedAtMs !== null
+          ? ctx.prMergedAtMs
+          : sessionEndedAtMs;
     push('submit-pr', cursor, submitPrEnd);
     cursor = submitPrEnd;
 
-    if (ctx.firstReviewAtMs !== null) {
-      const reviewEnd =
-        ctx.prMergedAtMs !== null ? ctx.prMergedAtMs : sessionEndedAtMs;
-      push('review', cursor, reviewEnd);
-      cursor = reviewEnd;
+    if (ctx.prMergedAtMs !== null) {
+      // A merged PR always emits review/merge/cleanup, even when no
+      // pre-merge review was resolvable (review is then zero-width and
+      // omitted by push()) — merged usage must never fall entirely into
+      // submit-pr just because nobody reviewed before merging.
+      push('review', cursor, ctx.prMergedAtMs);
+      cursor = ctx.prMergedAtMs;
 
-      if (ctx.prMergedAtMs !== null) {
-        // cursor === ctx.prMergedAtMs here (reviewEnd above), matching the
-        // table's "merge: merged_at → cleanup marker or merged_at+thin cap".
-        const uncappedMergeEnd =
-          ctx.cleanupAtMs !== null
-            ? ctx.cleanupAtMs
-            : ctx.prMergedAtMs + MERGE_STAGE_THIN_CAP_MS;
-        const mergeEnd = Math.min(uncappedMergeEnd, sessionEndedAtMs);
-        push('merge', cursor, mergeEnd);
-        cursor = mergeEnd;
-        push('cleanup', cursor, sessionEndedAtMs);
-        cursor = sessionEndedAtMs;
-      }
+      const uncappedMergeEnd =
+        ctx.cleanupAtMs !== null
+          ? ctx.cleanupAtMs
+          : ctx.prMergedAtMs + MERGE_STAGE_THIN_CAP_MS;
+      const mergeEnd = Math.min(uncappedMergeEnd, sessionEndedAtMs);
+      push('merge', cursor, mergeEnd);
+      cursor = mergeEnd;
+      push('cleanup', cursor, sessionEndedAtMs);
+      cursor = sessionEndedAtMs;
+    } else if (effectiveFirstReviewAtMs !== null) {
+      push('review', cursor, sessionEndedAtMs);
+      cursor = sessionEndedAtMs;
     }
   } else {
     const claimEnd = Math.min(claimCap, sessionEndedAtMs);

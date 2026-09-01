@@ -260,6 +260,69 @@ test('computeStageWindows omits a window that would collapse to zero width', () 
   assert.ok(!windows.some((w) => w.id === 'work'));
 });
 
+test('computeStageWindows: a review submitted after merge clamps submit-pr to mergedAt instead of overlapping merge', () => {
+  const ctx: IssueLoopGithubContext = {
+    claimedAtMs: ms('2026-01-01T00:02:00Z'),
+    prCreatedAtMs: ms('2026-01-01T00:22:00Z'),
+    prHeadRefName: 'issue/1-test',
+    prMergedAtMs: ms('2026-01-01T00:32:00Z'),
+    // A bot reviewing an admin-merged PR post hoc: firstReviewAtMs > prMergedAtMs.
+    firstReviewAtMs: ms('2026-01-01T00:45:00Z'),
+    cleanupAtMs: null,
+    unclaimedMatched: false,
+    humanHandoff: false,
+  };
+  const { windows } = computeStageWindows(
+    ms('2026-01-01T00:00:00Z'),
+    ms('2026-01-01T01:10:00Z'),
+    ctx,
+    EMPTY_EVENTS,
+  );
+  // review collapses to zero width (nothing happened between merge and the
+  // clamped submit-pr end) and is correctly omitted, not stretched past mergedAt.
+  assert.deepEqual(
+    windows.map((w) => w.id),
+    ['discover', 'claim', 'work', 'submit-pr', 'merge', 'cleanup'],
+  );
+  for (let i = 1; i < windows.length; i++) {
+    assert.equal(windows[i].startMs, windows[i - 1].endMs);
+  }
+  const submitPr = windows.find((w) => w.id === 'submit-pr');
+  assert.equal(submitPr?.endMs, ms('2026-01-01T00:32:00Z'));
+  const merge = windows.find((w) => w.id === 'merge');
+  assert.equal(merge?.startMs, ms('2026-01-01T00:32:00Z'));
+});
+
+test('computeStageWindows: a merged PR with no resolvable review still emits merge and cleanup', () => {
+  const ctx: IssueLoopGithubContext = {
+    claimedAtMs: ms('2026-01-01T00:02:00Z'),
+    prCreatedAtMs: ms('2026-01-01T00:22:00Z'),
+    prHeadRefName: 'issue/1-test',
+    prMergedAtMs: ms('2026-01-01T00:32:00Z'),
+    firstReviewAtMs: null,
+    cleanupAtMs: null,
+    unclaimedMatched: false,
+    humanHandoff: false,
+  };
+  const { windows } = computeStageWindows(
+    ms('2026-01-01T00:00:00Z'),
+    ms('2026-01-01T01:10:00Z'),
+    ctx,
+    EMPTY_EVENTS,
+  );
+  assert.deepEqual(
+    windows.map((w) => w.id),
+    ['discover', 'claim', 'work', 'submit-pr', 'merge', 'cleanup'],
+  );
+  const submitPr = windows.find((w) => w.id === 'submit-pr');
+  assert.equal(submitPr?.endMs, ms('2026-01-01T00:32:00Z'));
+  const merge = windows.find((w) => w.id === 'merge');
+  assert.equal(merge?.startMs, ms('2026-01-01T00:32:00Z'));
+  assert.equal(merge?.endMs, ms('2026-01-01T00:47:00Z'));
+  const cleanup = windows.find((w) => w.id === 'cleanup');
+  assert.equal(cleanup?.endMs, ms('2026-01-01T01:10:00Z'));
+});
+
 test('computeStageWindows: an --events window overrides the marker-derived one and flips attribution', () => {
   const ctx: IssueLoopGithubContext = {
     claimedAtMs: ms('2026-01-01T00:00:00Z'),
