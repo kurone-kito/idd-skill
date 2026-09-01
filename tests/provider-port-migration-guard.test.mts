@@ -40,8 +40,14 @@ const DIRECT_GH_PATTERNS: { pattern: RegExp; description: string }[] = [
     description: 'import from the gh-exec.mts transport primitive',
   },
   {
-    pattern: /\bghText\s*\(|\bghApiJson\s*\(|\bghGraphql\s*\(/,
-    description: 'a bare ghText()/ghApiJson()/ghGraphql() call',
+    // ghTextAsync checked before ghText -- \bghText\s*\( alone does not
+    // match "ghTextAsync(" (the literal 'A' where \s*\( expects
+    // whitespace-then-paren breaks the match), so without its own
+    // alternative a migrated file could call ghTextAsync() directly and
+    // this guard would miss it (CodeRabbit review, #2400).
+    pattern:
+      /\bghTextAsync\s*\(|\bghText\s*\(|\bghApiJson\s*\(|\bghGraphql\s*\(/,
+    description: 'a bare ghTextAsync()/ghText()/ghApiJson()/ghGraphql() call',
   },
 ];
 
@@ -60,6 +66,14 @@ test('migrated helpers no longer construct gh/GitHub calls directly', () => {
       );
     }
   }
+});
+
+test('the direct-gh pattern set catches a bare ghTextAsync() call (CodeRabbit review, #2400)', () => {
+  const { pattern } = DIRECT_GH_PATTERNS.find((entry) =>
+    entry.description.includes('ghTextAsync'),
+  ) as { pattern: RegExp };
+  assert.match('await ghTextAsync(args)', pattern);
+  assert.match('ghTextAsync (args)', pattern);
 });
 
 test('the adapter modules themselves are exempt and still exist', () => {
