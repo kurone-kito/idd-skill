@@ -1747,5 +1747,48 @@ per-minute rates are billed per GitHub's own
 [Actions billing usage docs](https://docs.github.com/en/billing/managing-billing-for-your-products/managing-billing-for-github-actions/about-billing-for-github-actions);
 this guide does not hard-code a price since rates change.
 
+**The advisory review loop is a second, IDD-specific multiplier on top of
+re-sync cadence.** E14/F2/F3's advisory-wait protocol pushes repeatedly and
+collects a fresh bot review on each push, and every push plus every review
+event can each independently trigger the advisory-convergence required
+check -- so one pull request's total run count is a multiple of its push
+count, not a fixed cost. This repository measures its own instance of that
+multiplier with a maintainer-only reporting tool
+(`node scripts/actions-usage-report.mjs --pr <number>`, source-repo-internal
+-- an adopter's own workflow names differ, so there is nothing portable to
+distribute); build an equivalent against the same
+[`GET /repos/{owner}/{repo}/actions/runs`](https://docs.github.com/en/rest/actions/workflow-runs)
+and
+[`GET /repos/{owner}/{repo}/actions/runs/{run_id}/jobs`](https://docs.github.com/en/rest/actions/workflow-jobs)
+endpoints, filtered by the pull request's head branch, to attribute cost the
+same way for your own workflows. A branch-name filter alone can include an
+unrelated run -- a reused branch name, or a same-repository `push` /
+`workflow_dispatch` run against that branch outside this pull request --
+so also restrict to `pull_request`/`pull_request_review`/
+`pull_request_review_comment`-triggered runs and check each run's own
+`pull_requests[].number` against the target pull request (empty for a
+fork-originated pull request, where GitHub never populates that field).
+
+**Only your configured required status checks cost every pull request
+unconditionally.** A `pull_request`-triggered workflow that is _not_ one of
+your branch ruleset's required contexts -- a security scanner, a
+secondary compatibility-floor guard, anything advisory -- is safely
+droppable or path-filterable without weakening the IDD merge gate itself,
+since the gate only ever waits on the required contexts. Filtering or
+dropping a _required_ context's own trigger is the one cut this guide
+never recommends: a path-filtered required check simply never reports for
+a change outside its filter, which blocks the pull request forever rather
+than saving anything (preventive; no observed incident yet).
+
+**On a private repository, the account Actions spend limit is where this
+multiplier stops being merely a cost and becomes a hard block**: once the
+limit is hit, every workflow run -- including the required checks IDD's
+merge gate depends on -- stops dispatching, and the autonomous loop has no
+route past a metered-service outage on its own (see the degraded-mode
+roadmap this repository dogfoods, `idd-skill#2318`, for the fail-closed
+policy that applies once that happens). Sizing the spend limit with this
+multiplier in mind, before it is hit under real review-loop load, is
+cheaper than diagnosing the block afterward.
+
 These are repository-local optimizations; they do not change the IDD merge gate
 or the cross-agent workflow.
