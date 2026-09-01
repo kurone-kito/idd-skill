@@ -30,6 +30,7 @@ import { resolveEffectiveCritiqueLoopDelegateFromEnv } from './idd-config.mts';
 // trigger fires.
 const IDD_CRITIQUE_DELEGATE_FLAG_SPEC = {
   '--policy': { type: 'string' },
+  '--no-user-global': { type: 'boolean', default: false },
   '--help': { type: 'boolean', short: 'h' },
 } as const;
 
@@ -63,8 +64,10 @@ export interface CritiqueDelegateReport {
  * carry a stray `$HOME`/`$XDG_CONFIG_HOME` config would silently violate
  * that contract. `GITHUB_ACTIONS` is the one remote surface this
  * repository already has a concrete, tested signal for (see
- * `advisory-convergence.mts`); detecting every other remote surface is out
- * of scope here (#2329 review).
+ * `advisory-convergence.mts`) and is auto-detected; `noUserGlobal` is the
+ * caller-controlled escape hatch for every other remote surface a caller
+ * recognizes about its own deployment but this helper cannot infer from a
+ * single provider variable (#2329 review).
  */
 function isRemoteAgentSurface(env: NodeJS.ProcessEnv): boolean {
   return env.GITHUB_ACTIONS === 'true';
@@ -80,11 +83,13 @@ function isRemoteAgentSurface(env: NodeJS.ProcessEnv): boolean {
  */
 export function buildCritiqueDelegateReport(
   options?: Parameters<typeof resolveEffectiveCritiqueLoopDelegateFromEnv>[0],
+  noUserGlobal = false,
 ): CritiqueDelegateReport {
   const env = options?.env ?? process.env;
-  const resolvedOptions = isRemoteAgentSurface(env)
-    ? { ...options, env: {} }
-    : options;
+  const resolvedOptions =
+    noUserGlobal || isRemoteAgentSurface(env)
+      ? { ...options, env: {} }
+      : options;
   const effective =
     resolveEffectiveCritiqueLoopDelegateFromEnv(resolvedOptions);
   const usable = effective.status === 'local' || effective.status === 'global';
@@ -103,6 +108,7 @@ export function buildCritiqueDelegateReport(
 
 interface ParsedArgs {
   policy: string;
+  noUserGlobal: boolean;
   help: boolean;
 }
 
@@ -114,6 +120,7 @@ function runCli(): void {
   }
   const report = buildCritiqueDelegateReport(
     args.policy ? { localPolicyPath: args.policy } : undefined,
+    args.noUserGlobal,
   );
   process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
 }
@@ -122,13 +129,14 @@ function parseArgs(argv: string[]): ParsedArgs {
   const { values, help } = parseCliArgs(argv, IDD_CRITIQUE_DELEGATE_FLAG_SPEC);
   return {
     policy: (values.policy as string | undefined) ?? '',
+    noUserGlobal: values['no-user-global'] as boolean,
     help,
   };
 }
 
 function printHelp(): void {
   process.stdout.write(`Usage:
-  node scripts/idd-critique-delegate.mjs [--policy <path>]
+  node scripts/idd-critique-delegate.mjs [--policy <path>] [--no-user-global]
 
 Resolves the effective C1 critique-loop delegate the same way
 resolveEffectiveCritiqueLoopDelegate does: repository-local
@@ -138,9 +146,11 @@ stop there); only when it is entirely absent does an optional
 user-global $XDG_CONFIG_HOME/idd-skill/config.json (or
 $HOME/.config/idd-skill/config.json) fragment apply; absent both, no
 delegate is usable. Under GITHUB_ACTIONS=true the user-global layer is
-always skipped, matching the documented remote-agent-surface contract.
-Deterministic and network-free; reads only local files under --policy's
-path resolution and the user-global path resolution already defined in
+always skipped, matching the documented remote-agent-surface contract;
+pass --no-user-global to skip it explicitly on any other remote surface
+the caller recognizes but this helper cannot auto-detect. Deterministic
+and network-free; reads only local files under --policy's path
+resolution and the user-global path resolution already defined in
 idd-config.mts.
 
 Output schema:

@@ -2474,9 +2474,9 @@ same as `AW4`/`AW5`.
 ### Effective C1 critique delegate
 
 - Preferred command when helper runtime is enabled:
-  `idd-critique-delegate [--policy <path>]`
+  `idd-critique-delegate [--policy <path>] [--no-user-global]`
 - Source repository equivalent:
-  `node scripts/idd-critique-delegate.mjs [--policy <path>]`
+  `node scripts/idd-critique-delegate.mjs [--policy <path>] [--no-user-global]`
 - Output schema (stable fields):
 
   ```json
@@ -2508,7 +2508,9 @@ same as `AW4`/`AW5`.
 - Under `GITHUB_ACTIONS=true` the user-global layer is always skipped
   (repository-local resolution is unaffected), matching the documented
   invariant that a GitHub-hosted or other remote agent surface never
-  consults it; other remote surfaces are not auto-detected
+  consults it; `--no-user-global` skips it explicitly on any other
+  remote surface the caller recognizes but this helper cannot
+  auto-detect from a single provider variable
 - Deterministic and network-free; delegates entirely to the existing
   exported resolvers (`resolveEffectiveCritiqueLoopDelegateFromEnv` in
   `idd-config.mts`, `resolveEffectiveCritiqueLoopDelegate` /

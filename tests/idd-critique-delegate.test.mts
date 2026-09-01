@@ -166,6 +166,28 @@ test('skips the $HOME-resolved user-global delegate under GITHUB_ACTIONS=true (#
   });
 });
 
+test('skips the $HOME-resolved user-global delegate when noUserGlobal is passed explicitly, outside GITHUB_ACTIONS (#2329 review)', () => {
+  const home = mkdtempSync(
+    join(tmpdir(), 'idd-critique-delegate-remote-home-'),
+  );
+  mkdirSync(join(home, '.config', 'idd-skill'), { recursive: true });
+  writeFileSync(
+    join(home, '.config', 'idd-skill', 'config.json'),
+    JSON.stringify({ critiqueLoop: { delegate: { command: 'home-review' } } }),
+  );
+  const report = buildCritiqueDelegateReport(
+    { localConfig: {}, env: { HOME: home } },
+    true,
+  );
+  assert.deepEqual(report, {
+    usable: false,
+    source: 'none',
+    command: null,
+    mode: null,
+    reason: 'not-configured',
+  });
+});
+
 test('reports usable:false, reason not-configured when neither layer has a delegate', () => {
   const report = buildCritiqueDelegateReport({
     localConfig: {},
@@ -223,5 +245,40 @@ test('CLI --policy resolves a configured local delegate to usable:true', () => {
     command: 'cli-review',
     mode: 'fallback',
     reason: null,
+  });
+});
+
+test('CLI --no-user-global skips an otherwise-picked-up $HOME delegate (#2329 review)', () => {
+  const home = mkdtempSync(join(tmpdir(), 'idd-critique-delegate-cli-home-'));
+  mkdirSync(join(home, '.config', 'idd-skill'), { recursive: true });
+  writeFileSync(
+    join(home, '.config', 'idd-skill', 'config.json'),
+    JSON.stringify({ critiqueLoop: { delegate: { command: 'home-review' } } }),
+  );
+  const sandbox = mkdtempSync(
+    join(tmpdir(), 'idd-critique-delegate-cli-empty-'),
+  );
+  const policyPath = join(sandbox, 'config.json');
+  writeFileSync(policyPath, JSON.stringify({}));
+  const commonEnv = { ...process.env, HOME: home, XDG_CONFIG_HOME: '' };
+
+  const withGlobal = execFileSync(
+    process.execPath,
+    [CLI_PATH, '--policy', policyPath],
+    { encoding: 'utf8', timeout: 60_000, env: commonEnv },
+  );
+  assert.equal(JSON.parse(withGlobal).usable, true);
+
+  const withoutGlobal = execFileSync(
+    process.execPath,
+    [CLI_PATH, '--policy', policyPath, '--no-user-global'],
+    { encoding: 'utf8', timeout: 60_000, env: commonEnv },
+  );
+  assert.deepEqual(JSON.parse(withoutGlobal), {
+    usable: false,
+    source: 'none',
+    command: null,
+    mode: null,
+    reason: 'not-configured',
   });
 });
