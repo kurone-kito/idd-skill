@@ -390,6 +390,34 @@ test('classifyBranchConflictState: BEHIND without conflict recommends merge-base
   assert.equal(result.baseAdvancedSinceMergeBase, true);
 });
 
+// #2274: the previous test's `baseRefName: 'main'` alone cannot prove the
+// generic (branch-name-neutral) `'merge-base'` value isn't coincidentally
+// correct for the default branch specifically -- rerun the same BEHIND
+// scenario against a non-default configured `{development-branch}` and
+// assert the identical, still branch-name-free recommendation.
+test('classifyBranchConflictState: BEHIND against a non-default development branch still recommends merge-base, not a main-specific value', async () => {
+  const prData = {
+    number: 203,
+    headRefOid: 'eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee',
+    baseRefOid: 'ffffffffffffffffffffffffffffffffffffffff',
+    headRefName: 'feature/behind-develop',
+    baseRefName: 'develop',
+    mergeable: 'MERGEABLE',
+    mergeStateStatus: 'BEHIND',
+    headRepository: { id: 'R_test', name: 'test-repo' },
+  };
+  const result = await classifyBranchConflictState(203, {
+    owner: 'test-owner',
+    repo: 'test-repo',
+    _testPrData: prData,
+    _skipGitProbe: true,
+  });
+  assert.equal(result.branchState, 'behind-no-conflict');
+  assert.equal(result.syncRecommendation, 'merge-base');
+  assert.notEqual(result.syncRecommendation, 'merge-main');
+  assert.equal(result.baseAdvancedSinceMergeBase, true);
+});
+
 test('parseConflictFiles: parses content conflict lines', () => {
   const output = 'CONFLICT (content): Merge conflict in src/foo.ts\n';
   assert.deepEqual(parseConflictFiles(output), ['src/foo.ts']);

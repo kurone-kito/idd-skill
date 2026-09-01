@@ -2488,3 +2488,106 @@ test('collectOkfFrontmatterViolations: misconfigured roots/types fail closed, no
   assert.equal(noTypes.length, 1);
   assert.match(noTypes[0], /types must be a non-empty array of type strings/);
 });
+
+// #2274: regression guard for #2271-#2273's development-branch migration --
+// finds every line carrying a standalone `main` branch-token mention in the
+// affected D/E/F phase files and asserts each line's exact (trimmed) text
+// equals one already-known-legitimate entry (the B1 trusted-checkout
+// contract, which intentionally keeps the primary worktree pinned to
+// `main` regardless of `{development-branch}`, and one historical
+// ruleset-name reference). Exact-line equality, not a substring/count
+// check, so an *additional* `main` mention appended to an otherwise
+// allowed line still fails: the trimmed line no longer matches any
+// allowlist entry (review round 1 -- a per-line-count check alone could
+// not distinguish a legitimate line from the same line with a second,
+// newly reintroduced `main` mention appended to it).
+function findBareMainLines(text: string): string[] {
+  return text
+    .split('\n')
+    .filter((line) => /\bmain\b/.test(line))
+    .map((line) => line.trim());
+}
+
+/** Lines outside `allowedLines` that carry a bare `main` mention. */
+function findUnallowedMainLines(
+  text: string,
+  allowedLines: ReadonlySet<string>,
+): string[] {
+  return findBareMainLines(text).filter((line) => !allowedLines.has(line));
+}
+
+const NO_MAIN_MENTIONS_ALLOWED = new Set<string>();
+
+const REVIEW_TRIAGE_ALLOWED_MAIN_LINES = new Set([
+  // A design-rationale anchor whose slug text embeds "main"
+  // (`#merge-main-livelock-...`) -- not a branch-sync instruction.
+  '[design rationale](../../docs/idd-design-rationale.md#merge-main-livelock-under-fast-moving-main)).',
+]);
+
+const MERGE_ALLOWED_MAIN_LINES = new Set([
+  // A historical, repository-specific ruleset-name reference, not a
+  // synchronization/target instruction.
+  'current `main` ruleset (`require_code_owner_review: false`), the',
+]);
+
+const B1_TRUSTED_CHECKOUT_MAIN_LINES = new Set([
+  '1. Ensure the local `main` branch is up to date and has no local',
+  'commits. Run this from the primary worktree while on `main`:',
+  'git fetch origin main',
+  'git log origin/main..main --oneline',
+  'If the second command outputs any lines, local `main` has unpushed',
+  'commits — stop and report, do not force-reset `main`. Otherwise,',
+  'git merge --ff-only origin/main',
+  'After this `main` fast-forward, do **not** change the primary',
+  "worktree's HEAD off `main` for any reason during B1 — see",
+  "The primary worktree's HEAD MUST remain on `main` throughout B1; if it",
+  'ever leaves `main`, stop immediately and follow the B1 self-check',
+  '`main`.',
+  '`main` baseline — verify with a fresh-vs-stale `node_modules` comparison',
+]);
+
+test('idd-pr-submit.instructions.md and idd-review-fix.instructions.md carry zero bare `main` branch mentions (#2274)', () => {
+  for (const name of [
+    'idd-pr-submit.instructions.md',
+    'idd-review-fix.instructions.md',
+  ]) {
+    const text = readText(`idd-template/.github/instructions/${name}`);
+    assert.deepEqual(
+      findUnallowedMainLines(text, NO_MAIN_MENTIONS_ALLOWED),
+      [],
+      `${name} must reference {development-branch}, not a bare "main"`,
+    );
+  }
+});
+
+test('idd-review-triage.instructions.md confines its bare `main` mention to the known design-rationale anchor (#2274)', () => {
+  const text = readText(
+    'idd-template/.github/instructions/idd-review-triage.instructions.md',
+  );
+  assert.deepEqual(
+    findUnallowedMainLines(text, REVIEW_TRIAGE_ALLOWED_MAIN_LINES),
+    [],
+  );
+});
+
+test('idd-merge.instructions.md confines its bare `main` mention to the known historical ruleset-name reference (#2274)', () => {
+  const text = readText(
+    'idd-template/.github/instructions/idd-merge.instructions.md',
+  );
+  assert.deepEqual(findUnallowedMainLines(text, MERGE_ALLOWED_MAIN_LINES), []);
+});
+
+test('idd-work.instructions.md confines every bare `main` mention to the B1 trusted-checkout contract (#2274)', () => {
+  const text = readText(
+    'idd-template/.github/instructions/idd-work.instructions.md',
+  );
+  assert.ok(
+    findBareMainLines(text).length > 0,
+    'sanity check: B1 still documents `main`',
+  );
+  assert.deepEqual(
+    findUnallowedMainLines(text, B1_TRUSTED_CHECKOUT_MAIN_LINES),
+    [],
+    'a `main` mention outside the B1 trusted-checkout allowlist regressed the {development-branch} migration',
+  );
+});
