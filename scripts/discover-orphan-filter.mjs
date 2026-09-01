@@ -375,8 +375,7 @@ async function runCli() {
   // discover-roadmap-graph's own CLI wiring).
   const claimState = args.withClaimState
     ? buildClaimStateResolution(
-        owner,
-        repo,
+        port,
         {
           claimTiming: policy.claimTiming,
           trustedMarkerActors: policy.trustedMarkerActors,

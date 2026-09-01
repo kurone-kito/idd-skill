@@ -797,12 +797,8 @@ function createProductionDeps(args) {
     parseClaimStaleAgeMs(rawConfig?.claimTiming?.staleAge) ??
     DEFAULT_CLAIM_STALE_AGE_MS;
   const labelsPolicy = normalizePolicyConfig(rawConfig).labels;
-  // buildIssueLoader/buildSubIssueLoader come from discover-roadmap-graph.mts
-  // (#2266's 12th and final file, not yet migrated onto the port), so owner/
-  // repo stay as raw strings for this one dependency; everything else below
-  // routes through port.
-  const loadIssue = buildIssueLoader(owner, repo);
-  const loadSubIssues = buildSubIssueLoader(owner, repo);
+  const loadIssue = buildIssueLoader(port);
+  const loadSubIssues = buildSubIssueLoader(port);
   return {
     collect: (roadmapNumber) =>
       enumerateRoadmapGraph(roadmapNumber, {

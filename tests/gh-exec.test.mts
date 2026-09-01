@@ -600,6 +600,53 @@ test('ghTextAsync preserves an explicit maxBuffer: 0 instead of silently falling
   }
 });
 
+// #1449: ghTextAsync was swapped from a hand-rolled `spawn` (explicit
+// `stdio: ['ignore', 'pipe', 'pipe']`) to `promisify(execFile)`, which has
+// no `stdio` option and does not close the child's stdin by default. The
+// runner now calls `run.child.stdin?.end()` immediately to reproduce the
+// old ignore behavior. This `gh` stub actively reads stdin to EOF before
+// responding — exactly the shape that hung under plain `execFile` in local
+// verification — so a regression of the stdin-close fix would hang this
+// test. Race against a short timeout so a regression fails fast with a
+// clear message instead of hanging the whole suite. Moved here from
+// discover-roadmap-graph.test.mts (#2266): this is ghTextAsync's own
+// contract, not that file's, and it kept working through buildIssueLoader
+// only indirectly.
+test('ghTextAsync closes the child stdin so a stdin-reading gh stub cannot hang it (#1449)', async () => {
+  const restore = stubGh(`
+// Synchronous fd-0 read blocks this process until stdin sees EOF --
+// instantly if the runner closed it (the fix), indefinitely if not (the
+// regression this test guards against). A synchronous read is required
+// here: an async 'data'/'end' listener would return control to this
+// stub's own top-level script immediately, before EOF ever arrives.
+const stdinBytes = require('node:fs').readFileSync(0).length;
+process.stdout.write(JSON.stringify({ stdinBytesSeen: stdinBytes }));
+`);
+  // Captured so the finally block can clear it: an uncleared timer keeps
+  // the event loop alive for the rest of the 3s window even after the gh
+  // call already resolved (Copilot review, #1463).
+  let timeoutHandle: NodeJS.Timeout | undefined;
+  try {
+    const timeout = new Promise((_resolve, reject) => {
+      timeoutHandle = setTimeout(
+        () =>
+          reject(
+            new Error(
+              'timed out: gh stub never saw stdin EOF — stdin.end() regression',
+            ),
+          ),
+        3000,
+      );
+      timeoutHandle.unref();
+    });
+    const result = await Promise.race([ghTextAsync(['repo', 'view']), timeout]);
+    assert.deepEqual(JSON.parse(result as string), { stdinBytesSeen: 0 });
+  } finally {
+    clearTimeout(timeoutHandle);
+    restore();
+  }
+});
+
 test('withBoundedRetry succeeds after transient failures within the attempt budget', async () => {
   let calls = 0;
   const result = await withBoundedRetry(
