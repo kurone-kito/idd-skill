@@ -20,6 +20,7 @@ import {
   checkPolicySignals,
   checkProjectCommands,
   classifyBacklog,
+  classifyBootstrapEraPrNumbers,
   classifyClaimTimingConsistency,
   classifyLiveConfigSchemaFinding,
   classifyMergePolicyAcknowledgement,
@@ -44,6 +45,7 @@ import {
   findMissingWorkshopReferences,
   findMissingWorktreeHardening,
   findPlaceholders,
+  formatCleanupBacklogExamples,
   formatCleanupBacklogRemediation,
   formatCleanupBacklogScanPreamble,
   formatCleanupBacklogScanProgress,
@@ -57,6 +59,7 @@ import {
   parseLockfileImporterVersion,
   parsePrimaryWorktreePath,
   parseProjectCommandRows,
+  parseStrictCutoffToUtcMs,
   parseThresholdsProseHours,
   readCleanupEvidenceTrustedLogins,
   readTrustEmptyProtectionReads,
@@ -67,6 +70,7 @@ import {
   resolveConfiguredHelperRuntimeProfile,
   resolveTargetGhHostname,
   scanFileForPlaceholders,
+  selectBacklogExamples,
   stripMarkdownNonText,
   worktreeGuardWiredAt,
 } from '../src/scripts/idd-doctor.mts';
@@ -731,6 +735,25 @@ test('filterIddBranchMergedPrs honors a custom pattern list instead of the defau
 // idd-skill#1936: when every merged PR's head ref fails every configured
 // pattern (all non-IDD traffic in the window), the filter must return an
 // empty array rather than falling back to the unfiltered input.
+test('filterIddBranchMergedPrs carries a valid mergedAt through, omitted when absent or empty (idd-skill#2226)', () => {
+  const result = filterIddBranchMergedPrs([
+    {
+      number: 501,
+      headRefName: 'issue/501-fix',
+      mergedAt: '2025-01-01T00:00:00Z',
+    },
+    { number: 502, headRefName: 'issue/502-fix' },
+    { number: 503, headRefName: 'issue/503-fix', mergedAt: '' },
+    { number: 504, headRefName: 'issue/504-fix', mergedAt: 12345 },
+  ]);
+  assert.deepEqual(result, [
+    { number: 501, mergedAt: '2025-01-01T00:00:00Z' },
+    { number: 502 },
+    { number: 503 },
+    { number: 504 },
+  ]);
+});
+
 test('filterIddBranchMergedPrs returns an empty array when every entry is non-matching', () => {
   const prs = [
     { number: 401, headRefName: 'dependabot/npm_and_yarn/lodash-4.17.21' },
@@ -1884,6 +1907,160 @@ test('classifyBacklog coerces non-numeric / NaN / negative thresholds to 0', () 
   assert.equal(classifyBacklog([1], -5).warn, true);
   // Zero count must not warn even with a broken threshold.
   assert.equal(classifyBacklog([], NaN).warn, false);
+});
+
+test('parseStrictCutoffToUtcMs accepts a bare calendar date, anchored to UTC midnight (idd-skill#2226)', () => {
+  assert.equal(
+    parseStrictCutoffToUtcMs('2026-01-01'),
+    Date.parse('2026-01-01T00:00:00.000Z'),
+  );
+});
+
+test('parseStrictCutoffToUtcMs accepts a Z-suffixed ISO8601 timestamp, matching the equivalent bare date', () => {
+  assert.equal(
+    parseStrictCutoffToUtcMs('2026-01-01T00:00:00Z'),
+    parseStrictCutoffToUtcMs('2026-01-01'),
+  );
+});
+
+test('parseStrictCutoffToUtcMs rejects calendar overflow instead of silently rolling over (CodeRabbit review, PR #2386)', () => {
+  // Plain Date.parse('2026-02-30') resolves to March 2 -- confirmed
+  // empirically before this fix. The strict parser must reject it outright.
+  assert.equal(parseStrictCutoffToUtcMs('2026-02-30'), null);
+  assert.equal(parseStrictCutoffToUtcMs('2026-13-01'), null);
+});
+
+test('parseStrictCutoffToUtcMs rejects a timestamp with a time-of-day but no explicit UTC offset (host-timezone-dependent, CodeRabbit review)', () => {
+  // Plain Date.parse resolves this in the HOST's local time zone per the
+  // ECMA-262 Date Time String Format -- the same value would classify
+  // different PRs depending on which machine/CI runner evaluates it.
+  // Confirmed empirically: LA -> 2026-01-01T08:00:00.000Z, UTC ->
+  // 2026-01-01T00:00:00.000Z for the identical input string.
+  assert.equal(parseStrictCutoffToUtcMs('2026-01-01T00:00:00'), null);
+});
+
+test('parseStrictCutoffToUtcMs rejects garbage input and non-string values', () => {
+  assert.equal(parseStrictCutoffToUtcMs('not-a-date'), null);
+  assert.equal(parseStrictCutoffToUtcMs(undefined), null);
+  assert.equal(parseStrictCutoffToUtcMs(12345), null);
+});
+
+test('classifyBootstrapEraPrNumbers rejects a cutoff with calendar overflow (fail closed, CodeRabbit review)', () => {
+  const mergedAtByNumber = new Map([[100, '2025-01-01T00:00:00Z']]);
+  assert.deepEqual(
+    classifyBootstrapEraPrNumbers([100], mergedAtByNumber, '2026-02-30'),
+    new Set(),
+  );
+});
+
+test('classifyBootstrapEraPrNumbers rejects a mergedAt with a time-of-day but no UTC offset (fail closed, CodeRabbit review)', () => {
+  const mergedAtByNumber = new Map([[100, '2025-01-01T00:00:00']]);
+  assert.deepEqual(
+    classifyBootstrapEraPrNumbers([100], mergedAtByNumber, '2026-01-01'),
+    new Set(),
+  );
+});
+
+test('classifyBootstrapEraPrNumbers labels only PRs merged before the cutoff (idd-skill#2226)', () => {
+  const mergedAtByNumber = new Map([
+    [100, '2025-01-01T00:00:00Z'],
+    [101, '2026-06-01T00:00:00Z'],
+    [102, '2026-08-01T00:00:00Z'],
+  ]);
+  assert.deepEqual(
+    classifyBootstrapEraPrNumbers(
+      [100, 101, 102],
+      mergedAtByNumber,
+      '2026-01-01T00:00:00Z',
+    ),
+    new Set([100]),
+  );
+});
+
+test('classifyBootstrapEraPrNumbers is presentation-only: never adds a number missingPrNumbers did not already contain', () => {
+  const mergedAtByNumber = new Map([[100, '2025-01-01T00:00:00Z']]);
+  assert.deepEqual(
+    classifyBootstrapEraPrNumbers([], mergedAtByNumber, '2026-01-01T00:00:00Z'),
+    new Set(),
+  );
+});
+
+test('classifyBootstrapEraPrNumbers returns an empty set for an unparsable cutoff (fail closed)', () => {
+  const mergedAtByNumber = new Map([[100, '2025-01-01T00:00:00Z']]);
+  assert.deepEqual(
+    classifyBootstrapEraPrNumbers([100], mergedAtByNumber, 'not-a-date'),
+    new Set(),
+  );
+  assert.deepEqual(
+    classifyBootstrapEraPrNumbers([100], mergedAtByNumber, undefined),
+    new Set(),
+  );
+});
+
+test('classifyBootstrapEraPrNumbers skips a PR number absent from mergedAtByNumber', () => {
+  // #101 has no recorded mergedAt (fetch failed / omitted) -- never
+  // guessed as bootstrap-era.
+  const mergedAtByNumber = new Map([[100, '2025-01-01T00:00:00Z']]);
+  assert.deepEqual(
+    classifyBootstrapEraPrNumbers(
+      [100, 101],
+      mergedAtByNumber,
+      '2026-01-01T00:00:00Z',
+    ),
+    new Set([100]),
+  );
+});
+
+test('formatCleanupBacklogExamples tags only the bootstrap-era numbers (idd-skill#2226)', () => {
+  assert.equal(
+    formatCleanupBacklogExamples([100, 101, 102], new Set([100, 102])),
+    '#100 (bootstrap-era), #101, #102 (bootstrap-era)',
+  );
+});
+
+test('formatCleanupBacklogExamples matches the pre-#2226 plain format when no number is bootstrap-era', () => {
+  assert.equal(
+    formatCleanupBacklogExamples([100, 101], new Set()),
+    '#100, #101',
+  );
+});
+
+test('selectBacklogExamples preserves the plain slice when no bootstrap-era number exists', () => {
+  assert.deepEqual(
+    selectBacklogExamples([100, 101, 102, 103, 104, 105], new Set()),
+    [100, 101, 102, 103, 104],
+  );
+});
+
+test('selectBacklogExamples preserves the plain slice when a bootstrap-era number is already among it', () => {
+  assert.deepEqual(
+    selectBacklogExamples([100, 101, 102, 103, 104, 105], new Set([102])),
+    [100, 101, 102, 103, 104],
+  );
+});
+
+test('selectBacklogExamples swaps in a bootstrap-era number when the natural slice would show none (Copilot review, PR #2386)', () => {
+  // #110 is bootstrap-era but sits past the first-5 natural slice --
+  // without the fix, the warning's "(1 bootstrap-era)" count clause would
+  // pair with an Examples: list showing zero (bootstrap-era) tags.
+  const missing = [100, 101, 102, 103, 104, 110];
+  const bootstrapEra = new Set([110]);
+  const result = selectBacklogExamples(missing, bootstrapEra);
+  assert.equal(result.length, 5);
+  assert.ok(result.includes(110));
+  // Only the last natural entry is displaced -- the rest of the natural
+  // order is preserved.
+  assert.deepEqual(result.slice(0, 4), [100, 101, 102, 103]);
+});
+
+test('selectBacklogExamples respects a custom limit', () => {
+  const missing = [100, 101, 102, 110];
+  const bootstrapEra = new Set([110]);
+  assert.deepEqual(selectBacklogExamples(missing, bootstrapEra, 2), [100, 110]);
+});
+
+test('selectBacklogExamples returns an empty array for an empty missing list, even with a non-empty bootstrapEra', () => {
+  assert.deepEqual(selectBacklogExamples([], new Set([110])), []);
 });
 
 test('formatCleanupBacklogRemediation resolves the audit-pr-cleanup invocation per profile (idd-skill#1718)', () => {
