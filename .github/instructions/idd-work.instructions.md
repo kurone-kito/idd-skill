@@ -109,8 +109,10 @@ WorkTrunk) instead.
 but is not listed in `git worktree list`, stop and report for manual
 cleanup before continuing.
 
-**Step 2 — Create**: use **WorkTrunk** if available. The create verb is
-`wt switch --create` (the older `wt new` subcommand was removed):
+**Step 2 — Create**: first `git fetch origin {development-branch}` (may
+be missing or stale otherwise). Then use **WorkTrunk** if available.
+The create verb is `wt switch --create` (the older `wt new` subcommand
+was removed):
 
 - macOS/Linux: `wt switch --create -b <base-branch> <branch-name>`
 - Windows: `git-wt switch --create -b <base-branch> <branch-name>`, or the
@@ -208,7 +210,7 @@ mechanical file/close-based signal stronger than A4.5's title/
 declaration heuristic (a weak **title-only** match is **not** a hit
 here). Keep it cheap: one fetch plus a bounded merged-PR scan.
 
-1. `git fetch origin main`.
+1. `git fetch origin {development-branch}`.
 2. **Closed-by-a-merged-PR signal**: re-fetch the issue; if it is now closed
    with a linked closing PR, the deliverable already shipped:
 
@@ -230,8 +232,9 @@ here). Keep it cheap: one fetch plus a bounded merged-PR scan.
 
 **On a hit → verify-then-close** (never silent re-implementation, and never an
 auto-close on a weak signal): confirm the issue's acceptance criteria already
-hold on current `main`, then close the issue with a comment referencing the
-superseding PR. If the criteria only **partly** hold, keep the issue open,
+hold on current `{development-branch}`, then close the issue with a
+comment referencing the superseding PR. If the criteria only
+**partly** hold, keep the issue open,
 record the overlap, and plan only the genuinely-remaining work. On no hit,
 continue with the plan below.
 

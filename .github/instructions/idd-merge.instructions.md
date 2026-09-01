@@ -278,11 +278,16 @@ Before any mutating action in F3, apply the
 
 ## F4 — Cleanup
 
-1. Confirm the post-merge digest update above exists or repair it after
+1. **Non-default development branch**: if `{development-branch}` is not
+   the repository's default branch, GitHub did not auto-close the
+   claimed issue on merge (see `idd-pr-submit.instructions.md` D3.5) —
+   close it explicitly: `gh issue close {issue-number} --comment
+   "Merged via #{pr-number}."`.
+2. Confirm the post-merge digest update above exists or repair it after
    re-validating the claim. Do not minimize the digest as an
    operational marker unless a future cleanup policy explicitly
    supports digest retirement.
-2. Run merged-PR comment cleanup (must not run before F3 succeeds).
+3. Run merged-PR comment cleanup (must not run before F3 succeeds).
    Re-validate the active claim before each GitHub minimization
    mutation.
 
@@ -409,7 +414,7 @@ Before any mutating action in F3, apply the
    See `docs/idd-comment-minimization.md` for the evidence comment
    format, cleanup-failure comment format, permission-blocked comment
    format, and fallback GraphQL commands.
-3. From the **primary worktree** — the worktree being cleaned up is
+4. From the **primary worktree** — the worktree being cleaned up is
    still checked out to its issue branch at this point, so running
    this elsewhere would fast-forward the wrong branch — switch to
    `{development-branch}` (the PR's own validated target branch;
@@ -444,7 +449,7 @@ Before any mutating action in F3, apply the
    (`git switch <default-branch>`) once cleanup (steps 4-5 below)
    completes, so the next B1 pass finds the primary worktree on its
    expected trusted checkout.
-4. Run from the **primary worktree**, never from inside the worktree
+5. Run from the **primary worktree**, never from inside the worktree
    being removed. Any removal (plain or `--force`) silently discards
    ignored files too, including inside a submodule. Scope Git
    commands to `<path>`. Inspect leftover files under a `-`
@@ -481,11 +486,11 @@ Before any mutating action in F3, apply the
      investigate before retrying rather than assuming a stale local
      `{development-branch}` is the cause.
 
-5. If GitHub auto-delete is disabled: delete the remote branch too.
+6. If GitHub auto-delete is disabled: delete the remote branch too.
    (WorkTrunk may be used for steps 4–5, the deletion steps —
    step 3's local `{development-branch}` update is a plain git
    operation, not a WorkTrunk one.)
-6. Re-validate the active claim one final time. If it still uses your
+7. Re-validate the active claim one final time. If it still uses your
    `{claim-id}`, post `unclaimed-by` for your own `{agent-id}` /
    `{claim-id}` (see
    [Unclaim format](idd-overview-core.instructions.md#unclaim-format))

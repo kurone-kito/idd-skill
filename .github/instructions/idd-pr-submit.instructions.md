@@ -274,6 +274,18 @@ gh pr edit {pr-number} --add-reviewer {reviewer-login}
 
 ### D3.5 — Verify closing keyword detection
 
+**Non-default development branch**: GitHub only auto-closes a linked
+issue when the merging PR targets the repository's **default** branch
+— a closing keyword on a PR based on any other branch, including a
+configured `{development-branch}`, never populates
+`closingIssuesReferences` and never auto-closes on merge, regardless of
+body wording. When `{development-branch}` is not the repository's
+default branch, still include the closing keyword line in the PR body
+for reviewer clarity, but **skip this entire sub-step** (steps 1-7
+below verify a mechanism that cannot fire here) and close the claimed
+issue explicitly after F3 merges (`idd-merge.instructions.md` F4 notes
+this).
+
 After PR creation and before D4, confirm GitHub recognized the
 closing keyword for the claimed issue. Resume routing should re-enter
 this sub-step when a session restarts after PR creation but before CI
