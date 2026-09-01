@@ -2660,17 +2660,46 @@ export function resolveLatestReviewWatermark(comments, options = {}) {
  * gives the F2 caller a way to tell "malformed marker found" apart from
  * "no watermark-shaped comment at all" without changing
  * `resolveLatestReviewWatermark`'s own return shape or selection behavior.
+ *
+ * `options.expectedClaimId`, when set, restricts the scan to a malformed
+ * comment whose own claim-id token (the second token after the marker
+ * label -- both `review-watermark` and `review-baseline` share that
+ * position) matches, mirroring `resolveLatestReviewWatermark`'s own
+ * exact claim-id filtering (#2080). Without this, a different claim's
+ * malformed marker would flip `comparisonReason` to `'malformed-watermark'`
+ * for a claim whose watermark is simply, genuinely absent (#2251 review
+ * follow-up on PR #2387). The claim-id token is pulled directly from the
+ * raw body (not via the full canonical parser, since a malformed comment
+ * by definition fails that parse) -- both marker shapes' `malformedPrefixPattern`
+ * guarantee `\S+\s+\S+` (agent, then claim id) immediately after the label.
  */
+const MALFORMED_REVIEW_WATERMARK_CLAIM_ID_RE =
+  /^<!--\s*(?:review-watermark|review-baseline):\s+\S+\s+(\S+)/i;
 export function detectMalformedReviewWatermarkComments(comments, options = {}) {
   const isTrustedAuthor = options.isTrustedAuthor ?? (() => true);
+  const expectedClaimId = String(options.expectedClaimId ?? '').trim();
   return comments.some((comment) => {
     if (!isTrustedAuthor(comment.author?.login ?? comment.user?.login ?? '')) {
       return false;
     }
-    const label = detectMalformedOperationalMarker(comment.body ?? '');
-    return (
-      label === '<!-- review-watermark:' || label === '<!-- review-baseline:'
-    );
+    const body = comment.body ?? '';
+    const label = detectMalformedOperationalMarker(body);
+    if (
+      label !== '<!-- review-watermark:' &&
+      label !== '<!-- review-baseline:'
+    ) {
+      return false;
+    }
+    if (!expectedClaimId) {
+      return true;
+    }
+    // No trimStart: detectMalformedOperationalMarker already matched this
+    // body's raw (untrimmed) bytes against the label's `^`-anchored
+    // malformedPrefixPattern by this point (no leading-whitespace
+    // tolerance, by design -- see that pattern's anti-spoofing note), so
+    // matching raw `body` here stays consistent with that same anchor.
+    const claimId = body.match(MALFORMED_REVIEW_WATERMARK_CLAIM_ID_RE)?.[1];
+    return claimId === expectedClaimId;
   });
 }
 // Pre-merge gate invariant (unreplied regular comments -> `unrepliedComments`):
@@ -5392,6 +5421,7 @@ export function buildPreMergeReadinessSummary(
       )
     : detectMalformedReviewWatermarkComments(comments, {
           isTrustedAuthor: isTrustedWatermarkAuthor,
+          expectedClaimId: options.expectedClaimId,
         })
       ? { route: 'return-to-e1', reason: 'malformed-watermark' }
       : { route: 'return-to-e1', reason: 'missing-watermark' };

@@ -165,6 +165,44 @@ test('detects a review-watermark comment whose note is glued to the leading unde
   );
 });
 
+// #2251 (Copilot review follow-up on PR #2387): resolveLatestReviewWatermark
+// filters by options.expectedClaimId, but the malformed-marker fallback
+// initially had no equivalent filter -- a different claim's malformed
+// review-watermark/review-baseline comment would flip comparisonReason to
+// 'malformed-watermark' even though the *expected* claim's watermark is
+// simply, genuinely absent.
+test('a malformed review-watermark comment scoped to a different claim id does not count against the expected claim', () => {
+  const gluedNoteBody = [
+    `<!-- review-watermark: claude-x other-claim ${'a'.repeat(40)} none 0 none -->`,
+    '_IDD note glued directly to the leading underscore, no space before it_',
+  ].join('\n');
+  const comments = [
+    {
+      author: { login: 'claude-x' },
+      body: gluedNoteBody,
+      createdAt: '2026-05-10T00:00:00Z',
+    },
+  ];
+
+  assert.equal(
+    detectMalformedReviewWatermarkComments(comments, {
+      isTrustedAuthor: () => true,
+      expectedClaimId: 'claim-1',
+    }),
+    false,
+    "a different claim's malformed marker must not mask a genuinely missing watermark for the expected claim",
+  );
+  // Sanity check: the same malformed comment DOES count for its own claim.
+  assert.equal(
+    detectMalformedReviewWatermarkComments(comments, {
+      isTrustedAuthor: () => true,
+      expectedClaimId: 'other-claim',
+    }),
+    true,
+    'the expectedClaimId filter must still recognize a matching malformed comment',
+  );
+});
+
 test('does not flag a genuinely valid review-watermark comment as malformed', () => {
   const validBody = `<!-- review-watermark: claude-x claim-1 ${'a'.repeat(40)} none 0 none -->`;
   const comments = [
