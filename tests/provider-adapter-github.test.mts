@@ -351,7 +351,35 @@ test('getConnectedPullRequestEventsPage throws when the connection itself is nul
 // guard bans importing withBoundedRetry into a migrated domain file.
 // ---------------------------------------------------------------------------
 
-test('getWorkItemForTraversalAsync retries once past a transient failure, then succeeds', async () => {
+// The load-bearing #1394 regression guard: gh itself exits cleanly but the
+// captured stdout is cut short, so the failure surfaces as a JSON.parse
+// throw on a RESOLVED string, not a thrown transport error. Faithful port
+// of the pre-migration buildIssueLoader fixture -- parsing outside the
+// retry task would let this SyntaxError escape uncaught.
+test('getWorkItemForTraversalAsync retries once past a truncated-but-resolved response, then succeeds', async () => {
+  let calls = 0;
+  const port = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({
+      ghTextAsync: async () => {
+        calls += 1;
+        if (calls === 1) {
+          return '{"number": 900, "tit';
+        }
+        return JSON.stringify({ number: 900, title: 'issue 900' });
+      },
+    }),
+  );
+  const result = await port.getWorkItemForTraversalAsync(900);
+  assert.deepEqual(result, {
+    outcome: 'found',
+    item: { number: 900, title: 'issue 900' },
+  });
+  assert.equal(calls, 2);
+});
+
+test('getWorkItemForTraversalAsync retries once past a thrown transient transport failure, then succeeds', async () => {
   let calls = 0;
   const port = createGithubProviderAdapter(
     'o',

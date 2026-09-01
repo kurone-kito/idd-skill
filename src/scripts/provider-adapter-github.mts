@@ -800,15 +800,28 @@ export function createGithubProviderAdapter(
         '.',
       ];
       try {
-        const result = await withBoundedRetry(
+        // #1394: parse INSIDE the retry task, not after it resolves. A
+        // truncated-but-successful gh exit (the field evidence's "unexpected
+        // end of JSON input") surfaces as a JSON.parse failure on a resolved
+        // string, not a thrown transport error -- parsing outside the task
+        // would let that SyntaxError escape the retry loop and the
+        // classifiers below, aborting the whole traversal on exactly the
+        // transient hiccup the retry exists for.
+        const parsed = await withBoundedRetry(
           async () => {
+            let raw: string;
             try {
-              return await deps.ghTextAsync(args, {
+              raw = await deps.ghTextAsync(args, {
                 maxBuffer: GH_ASYNC_MAX_BUFFER,
               });
             } catch (error) {
-              return wrapTraversalGhFailure(error, args, [404]);
+              raw = wrapTraversalGhFailure(error, args, [404]);
             }
+            const trimmed = raw.trim();
+            if (!trimmed || trimmed === 'null') {
+              return null;
+            }
+            return JSON.parse(trimmed);
           },
           {
             isRetryable: (error) =>
@@ -816,11 +829,10 @@ export function createGithubProviderAdapter(
               !isTraversalInaccessibleError(error),
           },
         );
-        const trimmed = result.trim();
-        if (!trimmed || trimmed === 'null') {
+        if (parsed === null) {
           return { outcome: 'not-found' };
         }
-        return { outcome: 'found', item: JSON.parse(trimmed) };
+        return { outcome: 'found', item: parsed };
       } catch (error) {
         if (isTraversalNotFoundError(error)) {
           return { outcome: 'not-found' };
