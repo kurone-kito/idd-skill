@@ -245,11 +245,17 @@ export function deriveAdvisoryReviewObservation(
   }
   return { prNumber, outcome: 'failure' };
 }
-function resolveCutoffIso(nowIso, windowMs) {
+export function resolveCutoffIso(nowIso, windowMs) {
   if (windowMs === null) return null;
   const nowMs = Date.parse(nowIso);
   if (Number.isNaN(nowMs)) return null;
-  return new Date(nowMs - windowMs).toISOString();
+  const cutoff = new Date(nowMs - windowMs);
+  // An absurdly large but schema-valid samplingWindow (e.g. a duration with
+  // an excessive digit count) can push this outside the representable Date
+  // range; `toISOString()` throws on that rather than producing a value,
+  // which would otherwise crash the whole CLI. Treat it as no cutoff
+  // instead of a fatal error.
+  return Number.isNaN(cutoff.getTime()) ? null : cutoff.toISOString();
 }
 /**
  * Collect `advisory-review` evidence across recent pull requests. For each
@@ -426,6 +432,18 @@ export function collectCiActionsEvidence(owner, repo, options = {}) {
     // entirely rather than spending an avoidable API call on it, which
     // only adds rate-limit/timeout risk during an actual degradation.
     if (typeof run.pull_requests?.[0]?.number !== 'number') continue;
+    // Likewise, a run outside the sampling window contributes no
+    // observation either way (deriveCiActionsObservation applies this
+    // same cutoff) -- check it before the jobs fetch, not after, so a
+    // quiet-repository report with mostly-expired runs doesn't spend a
+    // jobs-endpoint call per run just to discard the result.
+    if (
+      cutoffIso !== null &&
+      typeof run.updated_at === 'string' &&
+      run.updated_at < cutoffIso
+    ) {
+      continue;
+    }
     let jobs = null;
     if (run.conclusion === 'failure') {
       try {

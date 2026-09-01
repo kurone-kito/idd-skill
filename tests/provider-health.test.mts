@@ -6,6 +6,7 @@ import {
   deriveAdvisoryReviewObservation,
   deriveCiActionsObservation,
   type ProviderHealthSnapshot,
+  resolveCutoffIso,
 } from '../src/scripts/provider-health.mts';
 import { loadJson, validate } from '../src/scripts/validate-schemas.mts';
 
@@ -385,6 +386,27 @@ test('deriveCiActionsObservation: a run older than the sampling window contribut
     { cutoffIso: '2026-08-31T00:00:00Z' },
   );
   assert.equal(result, null);
+});
+
+test('resolveCutoffIso: an ordinary window resolves to now minus the window', () => {
+  assert.equal(
+    resolveCutoffIso('2026-09-01T12:00:00.000Z', 10 * 60_000),
+    '2026-09-01T11:50:00.000Z',
+  );
+});
+
+test('resolveCutoffIso: null windowMs means no cutoff', () => {
+  assert.equal(resolveCutoffIso('2026-09-01T12:00:00.000Z', null), null);
+});
+
+test('resolveCutoffIso: a window so large the resulting date is unrepresentable does not throw', () => {
+  // A schema-valid but absurd samplingWindow (excessive digit count) can
+  // parse to a duration whose ms value pushes the cutoff outside the
+  // representable Date range -- must degrade to "no cutoff", not throw.
+  assert.equal(
+    resolveCutoffIso('2026-09-01T12:00:00.000Z', Number.MAX_VALUE),
+    null,
+  );
 });
 
 test('committed provider-health fixture validates against its schema', () => {
