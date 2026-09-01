@@ -29,6 +29,7 @@ export * from './marker-helpers.mjs';
 
 import { loadIddConfig } from './idd-config.mjs';
 import {
+  detectMalformedOperationalMarker,
   findActivationNonceWinner,
   IDD_AGENT_DERIVED_MARKERS,
   isIddOriginatedReply,
@@ -2648,6 +2649,29 @@ export function resolveLatestReviewWatermark(comments, options = {}) {
     }
   }
   return latest;
+}
+/**
+ * Scans the same trusted-author comment stream `resolveLatestReviewWatermark`
+ * consumes for a `review-watermark`/`review-baseline`-shaped comment whose
+ * body fails the strict canonical `pattern` (e.g. a hand-authored note glued
+ * directly to the leading underscore, `_IDD ...` with no space, missing
+ * `OPTIONAL_IDD_VISIBLE_NOTE_PATTERN`'s `\bIDD\b` boundary). Such a comment
+ * already reads as absent to `resolveLatestReviewWatermark` (#2251) -- this
+ * gives the F2 caller a way to tell "malformed marker found" apart from
+ * "no watermark-shaped comment at all" without changing
+ * `resolveLatestReviewWatermark`'s own return shape or selection behavior.
+ */
+export function detectMalformedReviewWatermarkComments(comments, options = {}) {
+  const isTrustedAuthor = options.isTrustedAuthor ?? (() => true);
+  return comments.some((comment) => {
+    if (!isTrustedAuthor(comment.author?.login ?? comment.user?.login ?? '')) {
+      return false;
+    }
+    const label = detectMalformedOperationalMarker(comment.body ?? '');
+    return (
+      label === '<!-- review-watermark:' || label === '<!-- review-baseline:'
+    );
+  });
 }
 // Pre-merge gate invariant (unreplied regular comments -> `unrepliedComments`):
 // does NOT feed `computePreMergeReadinessBlockers` (no code-rollup blocker), but
@@ -5343,14 +5367,15 @@ export function buildPreMergeReadinessSummary(
     effectiveMaxActivityUpdatedAt: liveSnapshot.effective?.maxActivityUpdatedAt,
     now,
   });
+  const isTrustedWatermarkAuthor = (login) =>
+    trustedMarkerLogins.includes(
+      String(login ?? '')
+        .trim()
+        .toLowerCase(),
+    );
   const watermark = resolveLatestReviewWatermark(comments, {
     expectedClaimId: options.expectedClaimId,
-    isTrustedAuthor: (login) =>
-      trustedMarkerLogins.includes(
-        String(login ?? '')
-          .trim()
-          .toLowerCase(),
-      ),
+    isTrustedAuthor: isTrustedWatermarkAuthor,
   });
   const reviewCurrency = watermark
     ? diffReviewSnapshot(
@@ -5365,7 +5390,11 @@ export function buildPreMergeReadinessSummary(
           ...liveSnapshot,
         },
       )
-    : { route: 'return-to-e1', reason: 'missing-watermark' };
+    : detectMalformedReviewWatermarkComments(comments, {
+          isTrustedAuthor: isTrustedWatermarkAuthor,
+        })
+      ? { route: 'return-to-e1', reason: 'malformed-watermark' }
+      : { route: 'return-to-e1', reason: 'missing-watermark' };
   const threadSummary = summarizeReviewThreadsForGate(threads, {
     iddAgentLogins,
     prAuthorLogin,
