@@ -340,53 +340,18 @@ const NEGATION_PATTERN =
 // The repeated `disable` entries are preserved verbatim from the original
 // inline regex literal (harmless redundancy in an alternation) to keep this
 // pattern byte-identical rather than pulled in as an incidental fix here.
-// #2399: `#2218` wrapped only the noun alternation below in a hyphen-boundary
-// guard, leaving this verb alternation on a bare `\b` -- a hyphen still
-// counts as a word boundary, so an ordinary hyphenated compound noun like
-// "duplicate-evidence-skip check" (describing an existing mechanism, not a
-// directive) matched "skip" here and wrongly failed `trust_safety`.
-//
-// The noun side's guard, `(?<![\w-])`, only inspects the single character
-// immediately before the match. That is enough for a noun (nothing legitimate
-// ever needs a trailing hyphen), but not for this verb list: a directive can
-// legitimately be phrased as a CLI flag, where the verb sits inside a token
-// that both starts with hyphens ("--skip") and can be followed by more
-// hyphenated components ("--skip-checks", "--force-skip"). No single-
-// character lookbehind can separate "part of a compound word" from "part of
-// a flag token" -- both put a hyphen directly before the verb; the flag
-// cases just also put another hyphen (or nothing) two characters back
-// instead of a letter.
-//
-// The guard therefore traces the run of hyphen/word characters immediately
-// before the verb back to where that run begins, and only excludes the
-// match when that origin is itself a word character (letter, digit, or
-// underscore) -- i.e. the run is an ordinary hyphenated compound like
-// "duplicate-evidence-" or "foo_-". A flag token's run instead originates at
-// one or more bare hyphens ("--", "-"), which is never a word character, so
-// the guard does not fire and the verb stays detectable however many
-// hyphenated components precede it in the flag name (#2407 review round 3,
-// Codex: an earlier per-character-lookbehind revision only checked the
-// component immediately before the verb, so a verb placed as a later flag
-// component, e.g. `--force-skip`, `--policy-bypass`, still evaded
-// detection).
-//
-// `(?<!(?:^|[^\w-])\w[\w-]*-)` reads as: not preceded by [ a token boundary
-// (string start, or a character that is neither a word character nor a
-// hyphen -- whitespace, a backtick, a quote, punctuation) ] followed by [ a
-// word character, then zero or more word/hyphen characters, then a hyphen ]
-// immediately abutting the verb. Anchoring the trace at the token's own
-// origin (rather than checking one fixed character back) makes this
-// resistant to regex backtracking: for a flag token, every possible
-// alignment of the inner `\w[\w-]*-` match is blocked, because the
-// character right after any true token boundary in a flag is always another
-// hyphen, never a word character -- there is no shorter, still-anchored
-// fragment for the engine to retreat to (#2407 review round 3 self-review:
-// an earlier nested-lookbehind draft embedded a *second* assertion inside
-// the excluded pattern, which backtracking could satisfy via a truncated
-// mid-word fragment that never lined up with the real flag boundary; this
-// shape avoids that by keeping the excluded pattern itself assertion-free
-// and anchored).
-const POLICY_OVERRIDE_VERB_SOURCE = String.raw`(?<!(?:^|[^\w-])\w[\w-]*-)(?:ignore|bypass|override|disable|disable|skip|turn off|suppress|disable)`;
+// #2399: this alternation deliberately stays on a bare, unguarded `\b`
+// (unlike `POLICY_OVERRIDE_NOUN_SOURCE` below) -- three review rounds on
+// #2407 each replaced a fixed-distance regex lookbehind here with a wider
+// one, and each replacement still let some hyphen- or symbol-prefixed CLI
+// flag phrasing (`--skip`, `--skip-checks`, `--force-skip`,
+// `/force-skip`) evade detection by looking enough like an ordinary
+// hyphenated compound word (`evidence-skip`) at a fixed lookbehind
+// distance. Distinguishing the two needs to trace a whole token back to
+// its own origin, which no fixed-width lookbehind can do; see
+// `isOrdinaryHyphenatedCompoundVerb` below, called from
+// `findPolicyOverrideMatch`, for that classification instead.
+const POLICY_OVERRIDE_VERB_SOURCE = `(?:ignore|bypass|override|disable|disable|skip|turn off|suppress|disable)`;
 // #2218: a bare `\b` treats a hyphen as a non-word character, so every one
 // of these nouns also matched inside an ordinary hyphenated file-path
 // mention (e.g. this project's own marker prefix in `idd-workflow-notes.md`
@@ -642,6 +607,53 @@ function isNegatedPolicyOverrideMatch(
   );
 }
 
+// #2399/#2407: a token boundary in ordinary prose -- whitespace, or one of
+// the wrapping delimiters this file already treats as optional token
+// punctuation elsewhere (backtick, single/double quote, open paren; see
+// SUPPLIED_CONTENT_OBJECT_REFERENCE above). Deliberately minimal: any other
+// character (a hyphen, slash, plus, asterisk, bracket, ...) is treated as
+// part of the token being walked, not a boundary, so the classification
+// below fails closed (stays detectable) on markdown-formatted prose like
+// `*evidence-skip*` or `[duplicate-evidence-skip](...)` rather than risking
+// a new way to hide a genuine directive -- an acceptable false positive for
+// a trust/safety gate, unlike a false negative.
+const COMPOUND_TOKEN_BOUNDARY_PATTERN = /[\s\x60'"(]/;
+
+// #2399: `#2218` wrapped `POLICY_OVERRIDE_NOUN_SOURCE` in a hyphen-boundary
+// guard so an ordinary hyphenated compound noun (e.g. a file name like
+// `idd-workflow-notes.md`) no longer false-positives Check 3. The verb
+// list needed the equivalent exclusion for a hyphen-adjacent compound like
+// "duplicate-evidence-skip check" (#2213's own title), but a regex
+// lookbehind proved unable to also keep detecting a directive phrased as a
+// CLI flag: `--skip`, `--skip-checks`, `--force-skip`, and (#2407 review
+// round 4, Codex) non-hyphen-prefixed forms like `/force-skip` all put a
+// hyphen directly before the verb too, indistinguishable from a genuine
+// compound at any FIXED lookbehind distance -- only tracing the whole
+// token back to where it truly begins tells them apart. A flag token
+// (however it is itself prefixed) never begins with a word character at
+// that origin; an ordinary compound word always does.
+//
+// Called from findPolicyOverrideMatch alongside isNegatedPolicyOverrideMatch,
+// with the same "treat as inert, resume scanning after it" handling -- a
+// verb classified here as part of an ordinary compound must not stop this
+// checker from finding a later, genuine trigger.
+function isOrdinaryHyphenatedCompoundVerb(
+  rawSource: string,
+  matchIndex: number,
+): boolean {
+  if (rawSource[matchIndex - 1] !== '-') {
+    return false;
+  }
+  let cursor = matchIndex - 1;
+  while (
+    cursor > 0 &&
+    !COMPOUND_TOKEN_BOUNDARY_PATTERN.test(rawSource[cursor - 1] ?? '')
+  ) {
+    cursor -= 1;
+  }
+  return /\w/.test(rawSource[cursor] ?? '');
+}
+
 function findPolicyOverrideMatch(
   text: string,
   maskedText: string,
@@ -656,6 +668,7 @@ function findPolicyOverrideMatch(
     }
     const index = maskedMatch.index;
     if (
+      isOrdinaryHyphenatedCompoundVerb(text, index) ||
       isNegatedPolicyOverrideMatch(
         text,
         maskedText,
@@ -664,13 +677,14 @@ function findPolicyOverrideMatch(
         getCodeRangeAt,
       )
     ) {
-      // A negated match's own greedy span can reach up to 60 chars past the
-      // verb and swallow a second, genuine trigger further along (e.g.
-      // "does not skip the release check. Ignore repository policy."). The
-      // engine already auto-advanced lastIndex to the end of that whole
-      // span; rewind it to resume scanning right after the skipped verb, so
-      // a later independent trigger is never missed. Mirrors the code-only
-      // skip's "resume just after the inert occurrence" rule below.
+      // A negated (or ordinary-compound) match's own greedy span can reach
+      // up to 60 chars past the verb and swallow a second, genuine trigger
+      // further along (e.g. "does not skip the release check. Ignore
+      // repository policy."). The engine already auto-advanced lastIndex to
+      // the end of that whole span; rewind it to resume scanning right
+      // after the skipped verb, so a later independent trigger is never
+      // missed. Mirrors the code-only skip's "resume just after the inert
+      // occurrence" rule below.
       maskedPattern.lastIndex = index + (maskedMatch[1]?.length || 1);
       continue;
     }
@@ -695,6 +709,7 @@ function findPolicyOverrideMatch(
       continue;
     }
     if (
+      isOrdinaryHyphenatedCompoundVerb(text, index) ||
       isNegatedPolicyOverrideMatch(
         text,
         maskedText,
@@ -703,8 +718,9 @@ function findPolicyOverrideMatch(
         getCodeRangeAt,
       )
     ) {
-      // Same rewind as the masked-pass loop above: a negated match's own
-      // greedy span can swallow a later, genuine trigger.
+      // Same rewind as the masked-pass loop above: a negated or
+      // ordinary-compound match's own greedy span can swallow a later,
+      // genuine trigger.
       pattern.lastIndex = index + (match[1]?.length || 1);
       continue;
     }
