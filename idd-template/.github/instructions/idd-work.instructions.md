@@ -84,34 +84,34 @@ repository root. Compute the path as
 `../<repo-name>.<normalized-branch>` where `<normalized-branch>` is the
 branch name with every `/` replaced by `-`.
 
-Example: repo `{{REPO_NAME}}`, branch `issue/123-add-foo` → worktree path
+Example: repo `{{REPO_NAME}}`, branch `issue/123-add-foo` → path
 `../{{REPO_NAME}}.issue-123-add-foo`.
 
 **Harness-native worktree tools**: an agent harness's own worktree
 primitive (e.g. Claude Code's `EnterWorktree`) is a third path outside
 the two enumerated below. Use one only when both its target directory
 can be pinned to the sibling path above and its branch to
-`issue/<number>-<slug>` — never a tool-chosen default of either.
-`EnterWorktree`'s create action always places the worktree under a
-harness-owned directory (`.claude/worktrees/agent-<hash>`), never the
-sibling path — never use it here. Grok Build's `grok --worktree`,
-subagent `isolation: worktree`, and `x.ai/git/worktree/*` likewise
-can't pin either — never use them (same failure class as #1930). When
-a harness-native tool can't pin both, use `git worktree add` below (or
-WorkTrunk) instead.
+`issue/<number>-<slug>` — never a tool-chosen default. `EnterWorktree`
+always places the worktree under a harness-owned directory
+(`.claude/worktrees/agent-<hash>`), never the sibling path — never use
+it here. Grok Build's `grok --worktree`, subagent `isolation:
+worktree`, and `x.ai/git/worktree/*` likewise can't pin either — never
+use them (same class as #1930). When a tool can't pin both, use
+`git worktree add` below (or WorkTrunk) instead.
 
 **Step 1 — Check for orphaned path**: if the target path already exists
 but is not listed in `git worktree list`, stop and report for manual
 cleanup before continuing.
 
 **Step 2 — Create**: `<base-branch>` below is `{development-branch}` —
-resolve `developmentBranch` first, per
-[defaults](../../docs/policy-constants.md#branch-synchronization-defaults)
-(absent → live default; invalid/stale fails closed, never falls back).
-Then `git fetch origin {development-branch}` (the remote-tracking ref
-may be missing/stale otherwise). Then use **WorkTrunk** if available.
-The create verb is `wt switch --create`
-(the older `wt new` subcommand was removed):
+resolve it first: read `developmentBranch` from
+`.github/idd/config.json`; absent → `gh repo view --json
+defaultBranchRef --jq .defaultBranchRef.name`; present → validate
+([defaults](../../docs/policy-constants.md#branch-synchronization-defaults)),
+fail closed if invalid/absent on `origin`, never fall back. Then
+`git fetch origin {development-branch}` (may be missing/stale
+otherwise). Use **WorkTrunk** if available (create verb:
+`wt switch --create`; `wt new` was removed):
 
 - macOS/Linux: `wt switch --create -b <base-branch> <branch-name>`
 - Windows: `git-wt switch --create -b <base-branch> <branch-name>`, or the
@@ -119,10 +119,10 @@ The create verb is `wt switch --create`
   unavailable
 
 Non-interactive/automation: append `-x <noop>` (e.g. `-x true`) so
-WorkTrunk creates, runs the pre-start hook, and exits without trying to
-change the caller's directory.
+WorkTrunk creates, runs the pre-start hook, and exits without
+changing the caller's directory.
 
-If WorkTrunk is not available, choose the correct case:
+If WorkTrunk is unavailable, choose the correct case:
 
 <!-- dprint-ignore-start -->
 | Case | Command |
