@@ -1,0 +1,119 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://kurone-kito.github.io/idd-skill/schemas/provider-health.schema.json",
+  "title": "IDD Provider Health Verdict",
+  "description": "Read-only, cross-pull-request health verdict for the advisory-review and ci-actions services, aggregated from already-observable per-PR evidence. Never a gate: no field here is, or is consumed as, a merge-readiness or CI-gate result.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["protocolVersion", "now", "services"],
+  "properties": {
+    "protocolVersion": {
+      "type": "string",
+      "pattern": "^1$",
+      "description": "Fixed contract-version tag for this output shape."
+    },
+    "now": {
+      "type": "string",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?Z$",
+      "description": "ISO-8601 capture instant of this run."
+    },
+    "services": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["advisory-review", "ci-actions"],
+      "properties": {
+        "advisory-review": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "Health verdict for the advisory-review service (e.g. Copilot review requests).",
+          "required": [
+            "service",
+            "verdict",
+            "reason",
+            "distinctFailingPrCount",
+            "distinctSuccessPrCount",
+            "minCorroboratingPrs"
+          ],
+          "properties": {
+            "service": {
+              "type": "string",
+              "enum": ["advisory-review", "ci-actions"],
+              "description": "The service this verdict covers."
+            },
+            "verdict": {
+              "type": "string",
+              "enum": ["healthy", "degraded", "unavailable", "unknown"],
+              "description": "healthy: zero failure evidence in the sampling window. degraded: some failure evidence, but either below the corroboration threshold or offset by success evidence in the same window. unavailable: failure evidence corroborated across at least minCorroboratingPrs distinct pull requests, with zero success evidence in the window. unknown: the evidence snapshot was unreadable, internally contradictory, or empty -- the floor for every insufficient or ambiguous case, never unavailable."
+            },
+            "reason": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Machine-readable reason: evidence-unreadable, contradictory-evidence, no-evidence, all-healthy, failure-below-corroboration-threshold, mixed-evidence-with-corroboration, or full-failure-with-corroboration."
+            },
+            "distinctFailingPrCount": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "Count of distinct pull-request identities contributing failure evidence to this service within the sampled window."
+            },
+            "distinctSuccessPrCount": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "Count of distinct pull-request identities contributing success evidence to this service within the sampled window."
+            },
+            "minCorroboratingPrs": {
+              "type": "integer",
+              "minimum": 1,
+              "description": "The resolved providerHealth.minCorroboratingPrs threshold this verdict was evaluated against."
+            }
+          }
+        },
+        "ci-actions": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "Health verdict for the ci-actions service (GitHub Actions workflow execution).",
+          "required": [
+            "service",
+            "verdict",
+            "reason",
+            "distinctFailingPrCount",
+            "distinctSuccessPrCount",
+            "minCorroboratingPrs"
+          ],
+          "properties": {
+            "service": {
+              "type": "string",
+              "enum": ["advisory-review", "ci-actions"],
+              "description": "The service this verdict covers."
+            },
+            "verdict": {
+              "type": "string",
+              "enum": ["healthy", "degraded", "unavailable", "unknown"],
+              "description": "healthy: zero failure evidence in the sampling window. degraded: some failure evidence, but either below the corroboration threshold or offset by success evidence in the same window. unavailable: failure evidence corroborated across at least minCorroboratingPrs distinct pull requests, with zero success evidence in the window. unknown: the evidence snapshot was unreadable, internally contradictory, or empty -- the floor for every insufficient or ambiguous case, never unavailable."
+            },
+            "reason": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Machine-readable reason: evidence-unreadable, contradictory-evidence, no-evidence, all-healthy, failure-below-corroboration-threshold, mixed-evidence-with-corroboration, or full-failure-with-corroboration."
+            },
+            "distinctFailingPrCount": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "Count of distinct pull-request identities contributing failure evidence to this service within the sampled window."
+            },
+            "distinctSuccessPrCount": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "Count of distinct pull-request identities contributing success evidence to this service within the sampled window."
+            },
+            "minCorroboratingPrs": {
+              "type": "integer",
+              "minimum": 1,
+              "description": "The resolved providerHealth.minCorroboratingPrs threshold this verdict was evaluated against."
+            }
+          }
+        }
+      },
+      "description": "One verdict per tracked service."
+    }
+  }
+}

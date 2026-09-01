@@ -1,0 +1,503 @@
+// Read-only, cross-pull-request provider-health classifier (#2319).
+//
+// IDD already observes advisory-review and Actions degradation, but only
+// one pull request at a time, in three unconnected places (advisory
+// non-review notices, the Actions billing-block CI shape, and
+// advisory-wait-state.mts's own per-PR terminal state). Nothing
+// aggregates those signals across pull requests, so a session cannot
+// distinguish "this pull request is stuck" from "the service is down for
+// everything". This module supplies the shared verdict other tracks may
+// read; it changes no gate by itself -- it emits no marker, mutates no
+// issue/PR/check, and exposes no field any merge-readiness output could
+// consume as a pass.
+//
+// Split into two layers per the design decision: `classifyProviderHealth`
+// is a pure function of an injected evidence snapshot (no network, no
+// credentials, offline-testable); the `collect*Evidence` functions are a
+// thin, separable read layer that turns live GitHub state into that
+// snapshot shape.
+//
+// #2327 (PR #2346, `evaluateStaleRequestRecoveryAction` in
+// advisory-wait-state.mts) already owns the "requested-but-never-
+// registered" predicate's timing/budget logic. This module's
+// `advisory-review` evidence collector cites that same observable
+// (absence of a `review_requested` timeline event after a request that
+// returned success) rather than re-deriving a separate timing rule.
+
+import {
+  DEFAULT_ADVISORY_PRIMARY_BOT_LOGIN,
+  resolveAdvisoryPrimaryBotLogin,
+} from './advisory-wait-policy.mts';
+import { parseCliArgs } from './cli-args.mts';
+import { ghApiJson, ghText } from './gh-exec.mts';
+import { loadIddConfig } from './idd-config.mts';
+import { normalizePolicyConfig } from './policy-helpers.mts';
+import { isCopilotReviewerLogin } from './protocol-helpers.mts';
+
+export const PROVIDER_HEALTH_SERVICES = [
+  'advisory-review',
+  'ci-actions',
+] as const;
+export type ProviderHealthService = (typeof PROVIDER_HEALTH_SERVICES)[number];
+
+export const PROVIDER_HEALTH_VERDICTS = [
+  'healthy',
+  'degraded',
+  'unavailable',
+  'unknown',
+] as const;
+export type ProviderHealthVerdict = (typeof PROVIDER_HEALTH_VERDICTS)[number];
+
+/** One per-pull-request evidence data point feeding a service's snapshot. */
+export interface ProviderHealthObservation {
+  /** The distinct pull-request identity this evidence is scoped to. */
+  prNumber: number;
+  /**
+   * 'failure': provider-level failure evidence for this PR (never an
+   * ordinary code-caused failure -- the read layer only emits 'failure'
+   * for the documented service-level signatures: absence of a
+   * `review_requested` event after a successful request, or a workflow
+   * run whose every job fails near-instantly with no steps executed).
+   * 'success': the provider worked normally for this PR within the
+   * sampled window.
+   */
+  outcome: 'failure' | 'success';
+}
+
+/** Already-collected evidence for one service, ready for classification. */
+export interface ProviderHealthSnapshot {
+  service: ProviderHealthService;
+  /** ISO-8601 capture instant. */
+  now: string;
+  /**
+   * True only when evidence collection itself could not resolve a
+   * coherent signal for a specific observation (e.g. a raw signal that
+   * reads as neither clearly success nor clearly failure). Distinct from
+   * an empty `observations` array, which means "no evidence yet" and
+   * resolves to `unknown` via the no-evidence path, not this one.
+   */
+  contradictory: boolean;
+  /** True when evidence could not be fetched or parsed at all. */
+  unreadable: boolean;
+  observations: ProviderHealthObservation[];
+}
+
+export interface ProviderHealthServiceVerdict {
+  service: ProviderHealthService;
+  verdict: ProviderHealthVerdict;
+  reason: string;
+  distinctFailingPrCount: number;
+  distinctSuccessPrCount: number;
+  minCorroboratingPrs: number;
+}
+
+export interface ProviderHealthReport {
+  protocolVersion: '1';
+  now: string;
+  services: Record<ProviderHealthService, ProviderHealthServiceVerdict>;
+}
+
+const PROVIDER_HEALTH_REASONS = {
+  evidenceUnreadable: 'evidence-unreadable',
+  contradictoryEvidence: 'contradictory-evidence',
+  noEvidence: 'no-evidence',
+  allHealthy: 'all-healthy',
+  belowCorroborationThreshold: 'failure-below-corroboration-threshold',
+  mixedWithCorroboration: 'mixed-evidence-with-corroboration',
+  fullFailureWithCorroboration: 'full-failure-with-corroboration',
+} as const;
+
+/**
+ * Pure classification: `unknown` is the floor for every insufficient,
+ * contradictory, or unreadable evidence path -- never `unavailable`.
+ * Corroboration is counted over DISTINCT pull-request identities, not
+ * observation count, so a single pull request's failure burst always
+ * caps at `degraded` regardless of how many failure observations it
+ * contributes. Contradiction is an explicit read-layer signal, never
+ * derived by majority-voting successes against failures -- a genuine mix
+ * of both across distinct PRs is the ordinary `degraded` case, not
+ * `unknown`.
+ */
+export function classifyProviderHealth(
+  snapshot: ProviderHealthSnapshot,
+  policy: { minCorroboratingPrs: number },
+): ProviderHealthServiceVerdict {
+  const minCorroboratingPrs = policy.minCorroboratingPrs;
+  const base = {
+    service: snapshot.service,
+    minCorroboratingPrs,
+  };
+
+  if (snapshot.unreadable) {
+    return {
+      ...base,
+      verdict: 'unknown',
+      reason: PROVIDER_HEALTH_REASONS.evidenceUnreadable,
+      distinctFailingPrCount: 0,
+      distinctSuccessPrCount: 0,
+    };
+  }
+
+  if (snapshot.contradictory) {
+    return {
+      ...base,
+      verdict: 'unknown',
+      reason: PROVIDER_HEALTH_REASONS.contradictoryEvidence,
+      distinctFailingPrCount: 0,
+      distinctSuccessPrCount: 0,
+    };
+  }
+
+  const failingPrs = new Set<number>();
+  const successPrs = new Set<number>();
+  for (const observation of snapshot.observations) {
+    if (observation.outcome === 'failure') {
+      failingPrs.add(observation.prNumber);
+    } else {
+      successPrs.add(observation.prNumber);
+    }
+  }
+  const distinctFailingPrCount = failingPrs.size;
+  const distinctSuccessPrCount = successPrs.size;
+
+  if (distinctFailingPrCount === 0 && distinctSuccessPrCount === 0) {
+    return {
+      ...base,
+      verdict: 'unknown',
+      reason: PROVIDER_HEALTH_REASONS.noEvidence,
+      distinctFailingPrCount,
+      distinctSuccessPrCount,
+    };
+  }
+
+  if (distinctFailingPrCount === 0) {
+    return {
+      ...base,
+      verdict: 'healthy',
+      reason: PROVIDER_HEALTH_REASONS.allHealthy,
+      distinctFailingPrCount,
+      distinctSuccessPrCount,
+    };
+  }
+
+  if (distinctFailingPrCount < minCorroboratingPrs) {
+    return {
+      ...base,
+      verdict: 'degraded',
+      reason: PROVIDER_HEALTH_REASONS.belowCorroborationThreshold,
+      distinctFailingPrCount,
+      distinctSuccessPrCount,
+    };
+  }
+
+  if (distinctSuccessPrCount > 0) {
+    return {
+      ...base,
+      verdict: 'degraded',
+      reason: PROVIDER_HEALTH_REASONS.mixedWithCorroboration,
+      distinctFailingPrCount,
+      distinctSuccessPrCount,
+    };
+  }
+
+  return {
+    ...base,
+    verdict: 'unavailable',
+    reason: PROVIDER_HEALTH_REASONS.fullFailureWithCorroboration,
+    distinctFailingPrCount,
+    distinctSuccessPrCount,
+  };
+}
+
+// ---------------------------------------------------------------------
+// Read layer (network). Kept separable from the pure classifier above:
+// every function below performs `gh` calls and is exercised by wiring
+// tests only, not the fixture-driven classifier test suite.
+// ---------------------------------------------------------------------
+
+interface GhTimelineReviewRequestedEvent {
+  event?: string;
+  created_at?: string;
+  requested_reviewer?: { login?: string | null } | null;
+}
+
+interface GhCommentPayload {
+  body?: string;
+  created_at?: string;
+  user?: { login?: string | null } | null;
+}
+
+interface GhPullRequestListItem {
+  number?: number;
+  updated_at?: string;
+}
+
+interface GhWorkflowJob {
+  conclusion?: string | null;
+  steps?: unknown[] | null;
+}
+
+interface GhWorkflowRun {
+  id?: number;
+  conclusion?: string | null;
+  updated_at?: string;
+  pull_requests?: { number?: number }[] | null;
+}
+
+const ADVISORY_WAIT_REQUEST_MARKER_RE =
+  /<!--\s*advisory-wait:\s*(\S+)\s+([0-9a-f]{40})\s+(\S+)\s*-->/;
+
+/**
+ * Collect `advisory-review` evidence across recent pull requests. For each
+ * of the most-recently-updated open or closed PRs (bounded by `sampleSize`),
+ * a trusted `advisory-wait:` request marker with no subsequent
+ * `review_requested` timeline event for the primary bot is 'failure'
+ * evidence (#2327's own observable); a marker followed by a
+ * `review_requested` event, or a submitted review from the primary bot, is
+ * 'success' evidence. A PR with no request marker at all contributes no
+ * observation (out of scope for this window, not evidence either way).
+ */
+export function collectAdvisoryReviewEvidence(
+  owner: string,
+  repo: string,
+  options: { primaryBotLogin?: string; sampleSize?: number; now?: string } = {},
+): ProviderHealthSnapshot {
+  const now = options.now ?? new Date().toISOString();
+  const primaryBotLogin =
+    options.primaryBotLogin ?? DEFAULT_ADVISORY_PRIMARY_BOT_LOGIN;
+  const sampleSize = options.sampleSize ?? 20;
+  const observations: ProviderHealthObservation[] = [];
+
+  let pulls: GhPullRequestListItem[];
+  try {
+    pulls = ghApiJson(
+      `repos/${owner}/${repo}/pulls?state=all&sort=updated&direction=desc&per_page=${sampleSize}`,
+    ) as GhPullRequestListItem[];
+  } catch {
+    return {
+      service: 'advisory-review',
+      now,
+      contradictory: false,
+      unreadable: true,
+      observations,
+    };
+  }
+
+  for (const pull of pulls) {
+    const prNumber = pull.number;
+    if (typeof prNumber !== 'number') continue;
+
+    let comments: GhCommentPayload[];
+    let timeline: GhTimelineReviewRequestedEvent[];
+    try {
+      comments = ghApiJson(
+        `repos/${owner}/${repo}/issues/${prNumber}/comments`,
+        { paginate: true },
+      ) as GhCommentPayload[];
+      timeline = ghApiJson(
+        `repos/${owner}/${repo}/issues/${prNumber}/timeline`,
+        {
+          paginate: true,
+          extraArgs: ['-H', 'Accept: application/vnd.github+json'],
+        },
+      ) as GhTimelineReviewRequestedEvent[];
+    } catch {
+      // A single PR's read failure is not the whole snapshot's failure --
+      // the fetchable PRs still yield real evidence. Skip this PR only.
+      continue;
+    }
+
+    const requestMarkerAt = earliestTrustedAdvisoryWaitRequestAt(comments);
+    if (!requestMarkerAt) continue;
+
+    const registered = timeline.some((event) => {
+      if (String(event?.event ?? '') !== 'review_requested') return false;
+      const reviewerLogin = String(event?.requested_reviewer?.login ?? '');
+      if (!isCopilotReviewerLogin(reviewerLogin, primaryBotLogin)) return false;
+      const eventAt = String(event?.created_at ?? '');
+      return eventAt !== '' && eventAt >= requestMarkerAt;
+    });
+
+    observations.push({
+      prNumber,
+      outcome: registered ? 'success' : 'failure',
+    });
+  }
+
+  return {
+    service: 'advisory-review',
+    now,
+    contradictory: false,
+    unreadable: false,
+    observations,
+  };
+}
+
+function earliestTrustedAdvisoryWaitRequestAt(
+  comments: GhCommentPayload[],
+): string | null {
+  let earliest: string | null = null;
+  for (const comment of comments) {
+    const body = String(comment?.body ?? '');
+    if (!ADVISORY_WAIT_REQUEST_MARKER_RE.test(body)) continue;
+    const createdAt = String(comment?.created_at ?? '');
+    if (createdAt === '') continue;
+    if (earliest === null || createdAt < earliest) {
+      earliest = createdAt;
+    }
+  }
+  return earliest;
+}
+
+/**
+ * Collect `ci-actions` evidence from recently completed workflow runs. A
+ * failing run whose jobs all executed zero steps matches the documented
+ * account-level Actions billing/spend-limit block shape (the run starts
+ * but no steps run, unlike an ordinary step failure) and is 'failure'
+ * evidence; any other failing run is an ordinary code-caused failure and
+ * contributes no observation. A successful run is 'success' evidence.
+ * Runs unassociated with any pull request are skipped -- corroboration is
+ * defined over distinct pull requests.
+ */
+export function collectCiActionsEvidence(
+  owner: string,
+  repo: string,
+  options: { sampleSize?: number; now?: string } = {},
+): ProviderHealthSnapshot {
+  const now = options.now ?? new Date().toISOString();
+  const sampleSize = options.sampleSize ?? 50;
+  const observations: ProviderHealthObservation[] = [];
+
+  let runs: GhWorkflowRun[];
+  try {
+    const payload = ghApiJson(
+      `repos/${owner}/${repo}/actions/runs?status=completed&per_page=${sampleSize}`,
+    ) as { workflow_runs?: GhWorkflowRun[] };
+    runs = payload.workflow_runs ?? [];
+  } catch {
+    return {
+      service: 'ci-actions',
+      now,
+      contradictory: false,
+      unreadable: true,
+      observations,
+    };
+  }
+
+  for (const run of runs) {
+    const prNumber = run.pull_requests?.[0]?.number;
+    if (typeof prNumber !== 'number') continue;
+
+    if (run.conclusion === 'success') {
+      observations.push({ prNumber, outcome: 'success' });
+      continue;
+    }
+    if (run.conclusion !== 'failure') continue;
+
+    let jobs: GhWorkflowJob[];
+    try {
+      const payload = ghApiJson(
+        `repos/${owner}/${repo}/actions/runs/${run.id}/jobs`,
+      ) as { jobs?: GhWorkflowJob[] };
+      jobs = payload.jobs ?? [];
+    } catch {
+      continue;
+    }
+    if (jobs.length === 0) continue;
+    const everyJobRanNoSteps = jobs.every(
+      (job) => Array.isArray(job.steps) && job.steps.length === 0,
+    );
+    if (everyJobRanNoSteps) {
+      observations.push({ prNumber, outcome: 'failure' });
+    }
+  }
+
+  return {
+    service: 'ci-actions',
+    now,
+    contradictory: false,
+    unreadable: false,
+    observations,
+  };
+}
+
+export function buildProviderHealthReport(
+  owner: string,
+  repo: string,
+  options: { config?: unknown; now?: string } = {},
+): ProviderHealthReport {
+  const config = options.config ?? loadIddConfig();
+  const policy = normalizePolicyConfig(config).providerHealth;
+  const primaryBotLogin = resolveAdvisoryPrimaryBotLogin(config ?? {});
+  const now = options.now ?? new Date().toISOString();
+
+  const advisoryReviewSnapshot = collectAdvisoryReviewEvidence(owner, repo, {
+    primaryBotLogin,
+    now,
+  });
+  const ciActionsSnapshot = collectCiActionsEvidence(owner, repo, { now });
+
+  return {
+    protocolVersion: '1',
+    now,
+    services: {
+      'advisory-review': classifyProviderHealth(advisoryReviewSnapshot, policy),
+      'ci-actions': classifyProviderHealth(ciActionsSnapshot, policy),
+    },
+  };
+}
+
+// ---------------------------------------------------------------------
+// CLI
+// ---------------------------------------------------------------------
+
+// Flag-spec keys stay the dashed literal on purpose (never bare keys like
+// `owner:`): tests/flag-name-matrix.test.mts scans this file's *compiled*
+// .mjs source text for quoted flag literals such as the --owner spec key
+// below. See cli-args.mts's module header for the full invariant.
+const PROVIDER_HEALTH_FLAG_SPEC = {
+  '--owner': { type: 'string', default: '' },
+  '--repo': { type: 'string', default: '' },
+  '--help': { type: 'boolean', short: 'h' },
+} as const;
+
+if (import.meta.main) {
+  main();
+}
+
+function main(): void {
+  const { values, help } = parseCliArgs(
+    process.argv.slice(2),
+    PROVIDER_HEALTH_FLAG_SPEC,
+  );
+  if (help) {
+    printHelp();
+    process.exit(0);
+  }
+
+  const owner =
+    (values.owner as string) ||
+    ghText(['repo', 'view', '--json', 'owner', '--jq', '.owner.login']);
+  const repo =
+    (values.repo as string) ||
+    ghText(['repo', 'view', '--json', 'name', '--jq', '.name']);
+
+  const report = buildProviderHealthReport(owner, repo);
+  process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
+}
+
+function printHelp(): void {
+  process.stdout.write(`Usage:
+  node scripts/provider-health.mjs [--owner <owner>] [--repo <repo>]
+
+Read-only, cross-pull-request health classifier for two services:
+advisory-review and ci-actions. Aggregates already-observable per-PR
+evidence (absence of a review_requested event after a successful
+request; a workflow run whose every job executes zero steps) into a
+healthy/degraded/unavailable/unknown verdict per service. Never a gate:
+emits no marker, mutates nothing, and exposes no field any
+merge-readiness or CI-gate output could consume as a pass.
+
+--owner/--repo default to the current repository (gh repo view).
+`);
+}

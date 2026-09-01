@@ -49,6 +49,7 @@
     "idd-phase-id-resolver": "./bin/idd-phase-id-resolver.mjs",
     "idd-post-idd-marker": "./bin/idd-post-idd-marker.mjs",
     "idd-pre-merge-readiness": "./bin/idd-pre-merge-readiness.mjs",
+    "idd-provider-health": "./bin/idd-provider-health.mjs",
     "idd-provider-outage-declaration": "./bin/idd-provider-outage-declaration.mjs",
     "idd-rerun-advisory-convergence": "./bin/idd-rerun-advisory-convergence.mjs",
     "idd-resolve-review-thread": "./bin/idd-resolve-review-thread.mjs",

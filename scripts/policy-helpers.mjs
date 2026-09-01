@@ -328,6 +328,12 @@ export const POLICY_DEFAULTS = Object.freeze({
   localValidationEvidence: Object.freeze({
     maxAge: 'PT4H',
   }),
+  // Added in #2319. `minCorroboratingPrs: 2` means a single pull request's
+  // failure burst always caps at `degraded`, never `unavailable`.
+  providerHealth: Object.freeze({
+    minCorroboratingPrs: 2,
+    samplingWindow: 'PT24H',
+  }),
 });
 export function parseProjectCommandRows(text) {
   const commands = new Map();
@@ -473,6 +479,17 @@ export function normalizePolicyConfig(config) {
     maxAge: parsePositiveDuration(
       c?.localValidationEvidence?.maxAge,
       POLICY_DEFAULTS.localValidationEvidence.maxAge,
+    ),
+  };
+  // #2319: read-only classifier tuning, never a gate.
+  const providerHealth = {
+    minCorroboratingPrs: parsePositiveInteger(
+      c?.providerHealth?.minCorroboratingPrs,
+      POLICY_DEFAULTS.providerHealth.minCorroboratingPrs,
+    ),
+    samplingWindow: parsePositiveDuration(
+      c?.providerHealth?.samplingWindow,
+      POLICY_DEFAULTS.providerHealth.samplingWindow,
     ),
   };
   // #2271: own-property-omitted on both 'absent' and 'invalid' -- mirrors
@@ -708,6 +725,7 @@ export function normalizePolicyConfig(config) {
     },
     providerOutage,
     localValidationEvidence,
+    providerHealth,
   };
 }
 export function resolveCollaboratorMarkerTrust(config, envValue = '') {

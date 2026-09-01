@@ -533,6 +533,23 @@
       },
       "description": "Container for the local-validation-evidence marker policy (`maxAge`). Optional; omitting it keeps the default `PT4H` window."
     },
+    "providerHealth": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "minCorroboratingPrs": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Minimum number of distinct pull-request identities that must contribute failure evidence to a service before its verdict may exceed `degraded`. Optional; defaults to `2` — a single pull request's failure burst always caps at `degraded`."
+        },
+        "samplingWindow": {
+          "type": "string",
+          "pattern": "^(?=.*[1-9])P(?=\\d|T\\d)(?:\\d+D)?(?:T(?=\\d)(?:\\d+H)?(?:\\d+M)?(?:\\d+S)?)?$",
+          "description": "ISO 8601 duration bounding how far back the evidence-collection read layer looks for provider-health observations. Optional; defaults to `PT24H`."
+        }
+      },
+      "description": "Container for the read-only provider-health classifier's corroboration threshold and sampling window (`minCorroboratingPrs`, `samplingWindow`). Optional; omitting any nested key keeps that key's own distributed default. Never a gate: no field this policy controls is, or is consumed as, a merge-readiness or CI-gate result."
+    },
     "discover": {
       "type": "object",
       "additionalProperties": false,

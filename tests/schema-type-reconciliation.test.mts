@@ -23,6 +23,7 @@ import type {
   ParsedLocalValidationEvidence,
   ParsedProviderOutageDeclaration,
 } from '../src/scripts/protocol-helpers.mts';
+import type { ProviderHealthReport } from '../src/scripts/provider-health.mts';
 import type { ResolveReviewThreadReport } from '../src/scripts/resolve-review-thread.mts';
 import type { StalledSessionQuietCheckReport } from '../src/scripts/stalled-session-quiet-check.mts';
 import type {
@@ -269,6 +270,10 @@ interface PolicyConfigFile {
   };
   localValidationEvidence?: {
     maxAge?: string;
+  };
+  providerHealth?: {
+    minCorroboratingPrs?: number;
+    samplingWindow?: string;
   };
 }
 
@@ -548,6 +553,7 @@ export const policyConfigKeys = [
   'mergeGate',
   'providerOutage',
   'localValidationEvidence',
+  'providerHealth',
 ] as const satisfies readonly (keyof PolicyConfigFile)[];
 
 // PreMergeReadinessReport is index-signature typed (its summary builder
@@ -596,6 +602,12 @@ export const stalledSessionQuietCheckKeys = [
   'evidence',
 ] as const satisfies readonly (keyof StalledSessionQuietCheckReport)[];
 
+export const providerHealthKeys = [
+  'protocolVersion',
+  'now',
+  'services',
+] as const satisfies readonly (keyof ProviderHealthReport)[];
+
 // ---------------------------------------------------------------------------
 // Compile-time exhaustiveness witnesses.
 //
@@ -615,6 +627,10 @@ const exhaustivenessWitnesses: {
   branchConflictState: CoversAllKeysOf<
     BranchConflictResult,
     (typeof branchConflictStateKeys)[number]
+  >;
+  providerHealth: CoversAllKeysOf<
+    ProviderHealthReport,
+    (typeof providerHealthKeys)[number]
   >;
   claimMarker: CoversAllKeysOf<
     ParsedClaimMarker,
@@ -675,6 +691,7 @@ const exhaustivenessWitnesses: {
 } = {
   advisoryWaitState: true,
   branchConflictState: true,
+  providerHealth: true,
   claimMarker: true,
   discoverRoadmapUnion: true,
   forcedHandoffMarker: true,
@@ -843,6 +860,29 @@ const branchConflictStateFixture = {
     notes: [],
   },
 } satisfies BranchConflictResult;
+
+const providerHealthFixture = {
+  protocolVersion: '1',
+  now: '2026-09-01T00:00:00Z',
+  services: {
+    'advisory-review': {
+      service: 'advisory-review',
+      verdict: 'degraded',
+      reason: 'failure-below-corroboration-threshold',
+      distinctFailingPrCount: 1,
+      distinctSuccessPrCount: 0,
+      minCorroboratingPrs: 2,
+    },
+    'ci-actions': {
+      service: 'ci-actions',
+      verdict: 'healthy',
+      reason: 'all-healthy',
+      distinctFailingPrCount: 0,
+      distinctSuccessPrCount: 3,
+      minCorroboratingPrs: 2,
+    },
+  },
+} satisfies ProviderHealthReport;
 
 const claimMarkerFixture = {
   agentId: 'github-copilot-cli',
@@ -1512,6 +1552,13 @@ const SCHEMA_TYPE_MAP: readonly SchemaTypeMapping[] = [
     owningModule: 'src/scripts/branch-conflict-state.mts',
     keys: branchConflictStateKeys,
     fixture: branchConflictStateFixture,
+  },
+  {
+    schemaFile: 'provider-health.schema.json',
+    exportedType: 'ProviderHealthReport',
+    owningModule: 'src/scripts/provider-health.mts',
+    keys: providerHealthKeys,
+    fixture: providerHealthFixture,
   },
   {
     schemaFile: 'claim-marker.schema.json',
