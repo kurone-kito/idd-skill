@@ -335,7 +335,7 @@ workflow/configuration checkout. Propose the repository's live GitHub
 default branch as the candidate, then require explicit confirmation or
 correction before recording anything else. Before recording an
 explicitly selected branch, verify it exists on the configured remote
--- report a missing or malformed branch instead of creating one or
+— report a missing or malformed branch instead of creating one or
 silently falling back to another candidate.
 
 An absent `developmentBranch` resolves the live repository default
@@ -343,7 +343,7 @@ branch, preserving backwards compatibility for a repository already
 onboarded without this setting. Release, hotfix, and
 development-to-default promotion flows are outside this decision's
 support boundary, as are arbitrary feature-branch namespaces and Git
-Flow CLI automation -- the only supported topology is an
+Flow CLI automation — the only supported topology is an
 `issue/<number>-<slug>` feature branch merging into the one configured
 development branch.
 
