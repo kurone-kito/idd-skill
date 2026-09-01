@@ -4924,6 +4924,87 @@ test('summarizeRequiredChecks: a check with no live run at all is never covered 
   assert.notEqual(result.status, 'success');
 });
 
+// #2353: `treatAsCoveredByWaiver` covers a check through a mechanism OTHER
+// than a matched `waivers.valid` entry (a provider-outage declaration) --
+// with no waiver entry at all, and deliberately bypassing
+// `excludeFromWaiverCoverage`'s own veto, since that callback's purpose
+// (withholding coverage a matched waiver entry would otherwise grant) does
+// not apply to this independent positive path.
+test('summarizeRequiredChecks: treatAsCoveredByWaiver covers a failing required check with zero waiver entries', () => {
+  const result = summarizeRequiredChecks(
+    [
+      {
+        name: 'idd-advisory-convergence',
+        state: 'FAILURE',
+        completedAt: '2026-05-17T00:00:00Z',
+      },
+    ],
+    [],
+    { required_status_checks: { contexts: ['idd-advisory-convergence'] } },
+    {
+      treatAsCoveredByWaiver: (name) => name === 'idd-advisory-convergence',
+    },
+  );
+  assert.equal(result.checks[0].coveredByWaiver, true);
+  assert.equal(result.status, 'success');
+});
+
+test('summarizeRequiredChecks: treatAsCoveredByWaiver bypasses excludeFromWaiverCoverage for the same check name', () => {
+  const result = summarizeRequiredChecks(
+    [
+      {
+        name: 'idd-advisory-convergence',
+        state: 'FAILURE',
+        completedAt: '2026-05-17T00:00:00Z',
+      },
+    ],
+    [],
+    { required_status_checks: { contexts: ['idd-advisory-convergence'] } },
+    {
+      excludeFromWaiverCoverage: () => true, // vetoes every check, as advisory-convergence.mts's own callback does when not genuinely covered
+      treatAsCoveredByWaiver: (name) => name === 'idd-advisory-convergence',
+    },
+  );
+  assert.equal(result.checks[0].coveredByWaiver, true);
+  assert.equal(result.status, 'success');
+});
+
+test('summarizeRequiredChecks: treatAsCoveredByWaiver has nothing to cover on an already-passing check', () => {
+  const result = summarizeRequiredChecks(
+    [
+      {
+        name: 'idd-advisory-convergence',
+        state: 'SUCCESS',
+        completedAt: '2026-05-17T00:00:00Z',
+      },
+    ],
+    [],
+    { required_status_checks: { contexts: ['idd-advisory-convergence'] } },
+    {
+      treatAsCoveredByWaiver: (name) => name === 'idd-advisory-convergence',
+    },
+  );
+  assert.equal(result.checks[0].coveredByWaiver, undefined);
+  assert.equal(result.status, 'success');
+});
+
+test('summarizeRequiredChecks: omitted treatAsCoveredByWaiver never covers anything (unchanged pre-#2353 behavior)', () => {
+  const result = summarizeRequiredChecks(
+    [
+      {
+        name: 'idd-advisory-convergence',
+        state: 'FAILURE',
+        completedAt: '2026-05-17T00:00:00Z',
+      },
+    ],
+    [],
+    { required_status_checks: { contexts: ['idd-advisory-convergence'] } },
+    {},
+  );
+  assert.equal(result.checks[0].coveredByWaiver, undefined);
+  assert.notEqual(result.status, 'success');
+});
+
 test('summarizeRequiredChecks: waiver does not affect already-passing check', () => {
   const waivers = {
     valid: [
@@ -7249,6 +7330,84 @@ test('#2021: idd-advisory-convergence waiver posted and terminal Copilot unavail
   // the same waiver (#1570's pre-existing behavior, unaffected by #2021).
   assert.ok(!waivedGates.includes('copilot-terminal-unavailable'));
   assert.deepEqual(waived.blockers, computePreMergeReadinessBlockers(waived));
+});
+
+// #2353: a repository-scoped provider-outage declaration relieves the
+// idd-advisory-convergence required check and the dedicated
+// copilot-terminal-unavailable blocker the SAME way a direct maintainer
+// waiver does (#2021/#1570 above), but via the caller-precomputed
+// `advisoryConvergenceOutageRelieved` boolean instead of a posted waiver
+// comment -- no `idd-external-check-waiver:` marker exists in either
+// fixture below. Mirrors AC2: F2's blocker/disposition evidence must
+// reflect the same declaration-based relief the CI check's own verdict
+// (advisory-convergence.mts) reports for the same HEAD.
+test('#2353: an active provider-outage declaration covers idd-advisory-convergence with no waiver marker posted (AC1/AC2)', () => {
+  const fixture = readJson('fixtures/pre-merge-readiness/clean.json');
+  const input = withAdvisoryConvergenceRequiredCheck(fixture);
+  const waivableCheckSelectors = [
+    { selector: 'idd-advisory-convergence', matchMode: 'exact' },
+  ];
+
+  const relieved = buildPreMergeReadinessSummary(input, {
+    ...fixture.options,
+    includeDispositionEvidence: true,
+    waivableCheckSelectors,
+    externalCheckWaiverMaxValidity: 'PT24H',
+    copilotUnavailable: true,
+    advisoryConvergenceOutageRelieved: true,
+  });
+
+  const precondition = (
+    relieved as {
+      advisoryConvergenceWaiverPrecondition: Record<string, unknown>;
+    }
+  ).advisoryConvergenceWaiverPrecondition;
+  assert.equal(precondition.terminalUnavailable, true);
+  assert.equal(precondition.open, true);
+
+  const check = ciCheckByName(relieved, 'idd-advisory-convergence');
+  assert.equal(check?.coveredByWaiver, true);
+  assert.equal((relieved.ci as Record<string, unknown>).status, 'success');
+  assert.equal(advisoryWaitOf(relieved).copilotUnavailableWaived, true);
+  const relievedGates = (relieved.blockers as { gate: string }[]).map(
+    (blocker) => blocker.gate,
+  );
+  assert.ok(!relievedGates.includes('ci'));
+  assert.ok(!relievedGates.includes('copilot-terminal-unavailable'));
+  assert.deepEqual(
+    relieved.blockers,
+    computePreMergeReadinessBlockers(relieved),
+  );
+});
+
+test('#2353: advisoryConvergenceOutageRelieved is re-gated on the precondition being open (AC4 -- cheap insurance against a caller passing relief without proof)', () => {
+  const fixture = readJson('fixtures/pre-merge-readiness/clean.json');
+  const input = withAdvisoryConvergenceRequiredCheck(fixture);
+  const waivableCheckSelectors = [
+    { selector: 'idd-advisory-convergence', matchMode: 'exact' },
+  ];
+
+  const blocked = buildPreMergeReadinessSummary(input, {
+    ...fixture.options,
+    includeDispositionEvidence: true,
+    waivableCheckSelectors,
+    externalCheckWaiverMaxValidity: 'PT24H',
+    // Neither opener is proven: copilotUnavailable is false and the
+    // fixture's own headCommittedAt keeps the ordinary deadline open.
+    copilotUnavailable: false,
+    advisoryConvergenceOutageRelieved: true,
+  });
+
+  const precondition = (
+    blocked as {
+      advisoryConvergenceWaiverPrecondition: Record<string, unknown>;
+    }
+  ).advisoryConvergenceWaiverPrecondition;
+  assert.equal(precondition.open, false);
+
+  const check = ciCheckByName(blocked, 'idd-advisory-convergence');
+  assert.equal(check?.coveredByWaiver, undefined);
+  assert.equal(advisoryWaitOf(blocked).copilotUnavailableWaived, false);
 });
 
 // #2046: a waiver that is otherwise valid, precondition-open, and

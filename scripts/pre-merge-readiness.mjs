@@ -6,6 +6,7 @@
 // generated .mjs. See docs/typescript-sources.md.
 import { readFileSync } from 'node:fs';
 import {
+  DEFAULT_ADVISORY_CONVERGENCE_CHECK_SELECTOR,
   readAdvisoryConvergenceDeadlineMinutes,
   readAdvisoryPrimaryBotLogin,
   readAdvisoryRecoveryCycleCap,
@@ -20,6 +21,10 @@ import {
   readForcedHandoffAuthorityPolicy,
   readForcedHandoffMode,
 } from './collaborator-permission.mjs';
+import {
+  normalizeAuthorityEvidence,
+  resolveCollaboratorAuthority,
+} from './external-check-waiver.mjs';
 import {
   DEFAULT_GH_PAGINATED_TIMEOUT_MS,
   GH_TEXT_LOOP_OPTIONS,
@@ -47,6 +52,10 @@ import {
   resolveTrustedMarkerActors,
   selectCodeownersText,
 } from './protocol-helpers.mjs';
+import {
+  evaluateProviderOutageRelief,
+  resolveProviderOutageDeclaration,
+} from './provider-outage-declaration.mjs';
 import {
   fetchReviewsAndHeadCommit,
   resolveLatestCopilotReviewClause,
@@ -463,6 +472,14 @@ export function collectPreMergeReadiness(argv) {
     },
   );
   const copilotUnavailable = copilotRecovery.state === 'COPILOT_UNAVAILABLE';
+  const advisoryConvergenceOutageRelieved =
+    resolveAdvisoryConvergenceOutageRelief({
+      owner,
+      repo,
+      copilotUnavailable,
+      waivableCheckSelectors,
+      now,
+    });
   const summary = buildPreMergeReadinessSummary(
     {
       prHeadSha,
@@ -514,6 +531,7 @@ export function collectPreMergeReadiness(argv) {
       capExhaustedRoute: advisoryWaitPolicy.capExhaustedRoute,
       primaryBotLogin,
       copilotUnavailable,
+      advisoryConvergenceOutageRelieved,
       advisoryConvergenceHeadCommittedAt,
       advisoryConvergenceDeadlineMinutes,
       secondaryQuietWindowMinutes,
@@ -1240,6 +1258,68 @@ function readExternalCheckWaiverMode() {
     ).ciGate.externalCheckWaivers.mode;
   } catch {
     return 'disabled';
+  }
+}
+// #2353: resolve whether a repository-scoped `providerOutage.
+// declarationTarget` declaration relieves the `idd-advisory-convergence`
+// selector for this pull request -- the SAME selector
+// `advisory-convergence.mts`'s own gate relieves via its own,
+// independently-fetched declaration (see that file's `collectFromGitHub`).
+// Fails closed to `false` on ANY error (unset target, unreadable/
+// unparseable declaration-target comments, authority-lookup failure) --
+// a transient fetch failure must never widen what this gate accepts,
+// matching `prFirstCommitAt`'s own fail-closed contract above.
+// `copilotUnavailable` is the caller-supplied `prTerminalUnavailable`
+// evidence `evaluateProviderOutageRelief` requires independently of the
+// declaration itself (never itself sufficient) -- the same terminal-
+// unavailability verdict this file's own `copilot-terminal-unavailable`
+// blocker already consumes.
+function resolveAdvisoryConvergenceOutageRelief({
+  owner,
+  repo,
+  copilotUnavailable,
+  waivableCheckSelectors,
+  now,
+}) {
+  try {
+    const policy = normalizePolicyConfig(
+      JSON.parse(readFileSync('.github/idd/config.json', 'utf8')),
+    );
+    const targetIssue = policy.providerOutage.declarationTarget;
+    if (!targetIssue) return false;
+    const declarationComments = ghApiJson(
+      `repos/${owner}/${repo}/issues/${targetIssue}/comments`,
+      true,
+    );
+    const authorityOf = (actorLogin) =>
+      normalizeAuthorityEvidence(
+        resolveCollaboratorAuthority({ owner, repo, actor: actorLogin }),
+        actorLogin,
+        owner,
+        policy.ciGate.externalCheckWaivers.authorityPolicy,
+      );
+    const declaration = resolveProviderOutageDeclaration({
+      declarationTargetConfigured: true,
+      comments: declarationComments,
+      service: DEFAULT_ADVISORY_CONVERGENCE_CHECK_SELECTOR,
+      policy,
+      authorityOf,
+      now: new Date(now),
+    });
+    return evaluateProviderOutageRelief({
+      declarationActive: declaration.active,
+      prTerminalUnavailable: copilotUnavailable,
+      requestedSelector: DEFAULT_ADVISORY_CONVERGENCE_CHECK_SELECTOR,
+      waivableSelectors: waivableCheckSelectors
+        .map((entry) => ({
+          selector: String(entry.selector ?? ''),
+          matchMode:
+            typeof entry.matchMode === 'string' ? entry.matchMode : undefined,
+        }))
+        .filter((entry) => entry.selector.length > 0),
+    }).relieved;
+  } catch {
+    return false;
   }
 }
 // Configured claim-staleness window (`claimTiming.staleAge`, #1310), parsed

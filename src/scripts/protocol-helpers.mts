@@ -4650,6 +4650,7 @@ export function summarizeRequiredChecks(
     trustSourcePinnedRequiredChecks = false,
     excludeFromWaiverCoverage = null,
     waiverActiveSinceOverride = null,
+    treatAsCoveredByWaiver = null,
   }: {
     waivers?: {
       valid?: { checkSelector?: unknown; createdAt?: unknown }[] | null;
@@ -4710,6 +4711,26 @@ export function summarizeRequiredChecks(
     // `noRequiredChecksConfigured`'s own `!sourcePinned` guard, since there
     // is no check name to correlate with a live run at all in that case.
     trustSourcePinnedRequiredChecks?: boolean;
+    // #2353: surgical per-CHECK-NAME positive override treating a check as
+    // covered-by-waiver through a mechanism OTHER than a matched
+    // `waivers.valid` entry -- a repository-scoped provider-outage
+    // declaration, which has no per-check waiver-marker `createdAt` to
+    // compare against a live run's `completedAt` and no `waivableSelectors`
+    // re-check to perform here (the caller, `evaluateProviderOutageRelief`,
+    // already independently required both the PR's own proven
+    // terminal-unavailable state and a `ciGate.externalChecks.waivable`
+    // match before ever returning `true`). Deliberately bypasses
+    // `excludeFromWaiverCoverage` too: that callback's own purpose is to
+    // withhold coverage a matched `waivers.valid` entry would otherwise
+    // grant when its OWN precondition/selector-exactness/freshness
+    // requirements are unmet -- a declaration-relief case never reaches
+    // `excludeFromWaiverCoverage`'s reasoning at all, so vetoing it there
+    // too would just reproduce this same relief gap one layer down. Still
+    // subject to the pass-equivalent-state check below like every other
+    // coverage path -- an already-passing check needs no coverage from
+    // either mechanism. `null`/omitted (the default) never covers anything,
+    // unchanged pre-#2353 behavior for every caller that doesn't pass it.
+    treatAsCoveredByWaiver?: ((checkName: string) => boolean) | null;
   } = {},
 ) {
   const branchReviewRequirements = summarizeBranchReviewRequirements(
@@ -4757,18 +4778,26 @@ export function summarizeRequiredChecks(
             : waiverCreatedAtMs;
         return completedAtMs >= activeSinceMs;
       });
+    // #2353: an independent positive path -- see `treatAsCoveredByWaiver`'s
+    // own doc comment for why it deliberately bypasses
+    // `excludeFromWaiverCoverage`/`hasFreshWaiverCoverage`/`waivableSelectors`
+    // below rather than feeding into the same conjunction.
+    const treatedAsCoveredByWaiver =
+      typeof treatAsCoveredByWaiver === 'function' &&
+      treatAsCoveredByWaiver(name);
     const coveredByWaiver =
       !CHECK_PASS_EQUIVALENT_STATES.has(state) &&
-      !(
-        typeof excludeFromWaiverCoverage === 'function' &&
-        excludeFromWaiverCoverage(name)
-      ) &&
-      hasFreshWaiverCoverage &&
-      // The check must also sit on the policy's waivable surface. A
-      // null/undefined list keeps the legacy behavior with no gate; an empty
-      // configured list covers nothing.
-      (!Array.isArray(waivableSelectors) ||
-        isCheckNameConfiguredWaivable(name, waivableSelectors));
+      (treatedAsCoveredByWaiver ||
+        (!(
+          typeof excludeFromWaiverCoverage === 'function' &&
+          excludeFromWaiverCoverage(name)
+        ) &&
+          hasFreshWaiverCoverage &&
+          // The check must also sit on the policy's waivable surface. A
+          // null/undefined list keeps the legacy behavior with no gate; an
+          // empty configured list covers nothing.
+          (!Array.isArray(waivableSelectors) ||
+            isCheckNameConfiguredWaivable(name, waivableSelectors))));
     return {
       name,
       state,
@@ -6075,7 +6104,7 @@ export function computePreMergeReadinessBlockers(
     blockers.push({
       gate: 'copilot-terminal-unavailable',
       detail:
-        'Copilot is terminally unavailable on current HEAD (recovery cap exhausted and terminal window elapsed with no current-HEAD review) with no valid maintainer external-check waiver for selector ' +
+        'Copilot is terminally unavailable on current HEAD (recovery cap exhausted and terminal window elapsed with no current-HEAD review) with no valid maintainer external-check waiver and no active provider-outage declaration relief for selector ' +
         `"${DEFAULT_ADVISORY_CONVERGENCE_CHECK_SELECTOR}"`,
     });
   }
@@ -6523,6 +6552,15 @@ export function buildPreMergeReadinessSummary(
     // unavailable` blocker below, so an unmigrated caller sees unchanged
     // behavior.
     copilotUnavailable?: boolean;
+    // #2353: the caller-precomputed provider-outage-declaration relief
+    // verdict for the `idd-advisory-convergence` selector (fetch,
+    // `resolveProviderOutageDeclaration`, `evaluateProviderOutageRelief`,
+    // ALL already gated on `copilotUnavailable` above as the PR's own
+    // proven terminal-unavailable state). Computed by the CALLER, not
+    // here: `provider-outage-declaration.mts` already imports FROM this
+    // file, so importing it back here would be a cycle. Omitted/false (the
+    // default) never relieves anything, unchanged pre-#2353 behavior.
+    advisoryConvergenceOutageRelieved?: boolean;
     // #2021: the current HEAD commit's own `committedDate` (GraphQL),
     // anchoring the SAME 24h deadline clock `advisory-convergence.mts`'s own
     // gate uses before treating a posted `idd-advisory-convergence` waiver as
@@ -6826,6 +6864,18 @@ export function buildPreMergeReadinessSummary(
   const advisoryConvergenceGenuinelyCovered =
     advisoryConvergencePreconditionOpen && advisoryConvergenceExactWaiverValid;
 
+  // #2353: the caller-precomputed provider-outage-declaration relief
+  // verdict, re-ANDed here with the SAME precondition-open evidence the
+  // direct-waiver path above requires -- cheap insurance against a future
+  // caller passing a relief verdict that was somehow computed without the
+  // precondition it logically implies (evaluateProviderOutageRelief's own
+  // `prTerminalUnavailable` requirement already implies `terminalUnavailable`,
+  // which already implies `advisoryConvergencePreconditionOpen` via the OR,
+  // so this is redundant today, not a new gate).
+  const advisoryConvergenceOutageRelieved =
+    advisoryConvergencePreconditionOpen &&
+    options.advisoryConvergenceOutageRelieved === true;
+
   const ci = summarizeRequiredChecks(checks, branchRules, branchProtection, {
     // Raw, UNFILTERED `waiverEvidence` -- deliberately not a caller-side
     // pre-filtered copy. A pre-filter that removed a whole `valid` entry
@@ -6852,6 +6902,13 @@ export function buildPreMergeReadinessSummary(
       advisoryConvergenceDeadlineOpensAt
         ? advisoryConvergenceDeadlineOpensAt
         : null,
+    // #2353: a repository-scoped provider-outage declaration relieves
+    // `idd-advisory-convergence` specifically, through a positive path
+    // that bypasses `excludeFromWaiverCoverage` above entirely -- see
+    // `treatAsCoveredByWaiver`'s own doc comment for why.
+    treatAsCoveredByWaiver: (name) =>
+      name === DEFAULT_ADVISORY_CONVERGENCE_CHECK_SELECTOR &&
+      advisoryConvergenceOutageRelieved,
   });
 
   // #1570: reuse the SAME raw waiver evidence above (already validated for
@@ -6868,10 +6925,13 @@ export function buildPreMergeReadinessSummary(
   // here.
   const copilotUnavailableWaived =
     copilotUnavailable &&
-    waiverEvidence.valid.some(
+    (waiverEvidence.valid.some(
       (entry) =>
         entry.checkSelector === DEFAULT_ADVISORY_CONVERGENCE_CHECK_SELECTOR,
-    );
+    ) ||
+      // #2353: a repository-scoped provider-outage declaration also clears
+      // this dedicated blocker, same as a direct maintainer waiver.
+      advisoryConvergenceOutageRelieved);
 
   const dispositionEvidence = options.includeDispositionEvidence
     ? summarizeDispositionEvidenceForGate(

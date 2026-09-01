@@ -2899,6 +2899,7 @@ test('terminal-unavailable-no-waiver: COPILOT_UNAVAILABLE alone never flips read
   assert.equal(verdict.terminal.windowElapsed, true);
   assert.equal(verdict.deadline.passed, false);
   assert.equal(verdict.converged, false);
+  assert.equal(verdict.waiver.outageRelieved, false);
   assert.equal(verdict.waived, false);
   assert.equal(verdict.ready, false);
   assert.ok(
@@ -3028,6 +3029,90 @@ test('terminal-unavailable: an otherwise-valid waiver does not satisfy the termi
   );
   assert.equal(verdict.terminal.state, 'COPILOT_UNAVAILABLE');
   assert.equal(verdict.waiver.validCount, 0);
+  assert.equal(verdict.ready, false);
+});
+
+// --- #2353: provider-outage declaration relief -----------------------
+
+test('outage-relief: an active provider-outage declaration satisfies the terminal path with no waiver marker posted (AC1)', () => {
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({
+      reviews: [], // Copilot never reviewed this HEAD -- CI check un-rerun
+      claimEvents: [claimComment()],
+      comments: terminalRecoveryComments(), // proves terminalUnavailable, no waiver comment
+    }),
+    baseOptions({
+      headCommittedAt: RECENT, // the ordinary 24h deadline has NOT passed
+      waiverMode: 'maintainer-authorized',
+      waivableSelectors: ADVISORY_CONVERGENCE_WAIVABLE,
+      outageDeclarationActive: true,
+    }),
+  );
+  assertValidVerdict(verdict);
+  assert.equal(verdict.terminal.state, 'COPILOT_UNAVAILABLE');
+  assert.equal(verdict.waiver.validCount, 0); // stays direct-waiver-only, per #2021
+  assert.equal(verdict.waiver.outageRelieved, true);
+  assert.equal(verdict.waived, true);
+  assert.equal(verdict.ready, true);
+});
+
+test('outage-relief: an active declaration does NOT relieve the deadline-only path (no proven terminal-unavailable state) (AC4)', () => {
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({
+      reviews: [],
+      claimEvents: [claimComment()],
+      comments: [], // no recovery markers at all -- terminal stays NOT_TERMINAL
+    }),
+    baseOptions({
+      headCommittedAt: OLD, // the ordinary 24h deadline HAS passed
+      waiverMode: 'maintainer-authorized',
+      waivableSelectors: ADVISORY_CONVERGENCE_WAIVABLE,
+      outageDeclarationActive: true,
+    }),
+  );
+  assertValidVerdict(verdict);
+  assert.equal(verdict.terminal.state, 'NOT_TERMINAL');
+  assert.equal(verdict.deadline.passed, true);
+  assert.equal(verdict.waiver.outageRelieved, false);
+  assert.equal(verdict.waived, false);
+  assert.equal(verdict.ready, false);
+});
+
+test('outage-relief: an active declaration does not relieve a selector outside the configured waivable scope', () => {
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({
+      reviews: [],
+      claimEvents: [claimComment()],
+      comments: terminalRecoveryComments(),
+    }),
+    baseOptions({
+      headCommittedAt: RECENT,
+      waiverMode: 'maintainer-authorized',
+      waivableSelectors: [], // idd-advisory-convergence never registered
+      outageDeclarationActive: true,
+    }),
+  );
+  assert.equal(verdict.terminal.state, 'COPILOT_UNAVAILABLE');
+  assert.equal(verdict.waiver.outageRelieved, false);
+  assert.equal(verdict.ready, false);
+});
+
+test('outage-relief: waiverMode not maintainer-authorized never relieves via a declaration either', () => {
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({
+      reviews: [],
+      claimEvents: [claimComment()],
+      comments: terminalRecoveryComments(),
+    }),
+    baseOptions({
+      headCommittedAt: RECENT,
+      waiverMode: 'disabled',
+      waivableSelectors: ADVISORY_CONVERGENCE_WAIVABLE,
+      outageDeclarationActive: true,
+    }),
+  );
+  assert.equal(verdict.terminal.state, 'COPILOT_UNAVAILABLE');
+  assert.equal(verdict.waiver.outageRelieved, false);
   assert.equal(verdict.ready, false);
 });
 
