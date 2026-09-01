@@ -495,7 +495,21 @@ const COMPOUND_TOKEN_BOUNDARY_PATTERN = /[\s\x60'"(]/;
 // Called from findPolicyOverrideMatch alongside isNegatedPolicyOverrideMatch,
 // with the same "treat as inert, resume scanning after it" handling -- a
 // verb classified here as part of an ordinary compound must not stop this
-// checker from finding a later, genuine trigger.
+// checker from finding a later, genuine trigger. Every call site also gates
+// this classifier on the verb not sitting inside a masked code range (#2407
+// review round 5, Codex): a code-wrapped hyphenated key like
+// `` `force-skip` `` carries a real, distinguishing shape signal -- being
+// wrapped in code at all -- that bare prose lacks, and the raw-fallback
+// pass already exists specifically to keep code-wrapped directives
+// detectable (the `--skip` case this file's round-1 fix started with), so
+// excluding a code-wrapped compound here would undercut that pass's own
+// purpose. A BARE, unquoted, un-code-wrapped "force-skip" is deliberately
+// left excluded (classified as an ordinary compound) even when meant as a
+// directive: nothing distinguishes it, in shape alone, from #2213's own
+// "evidence-skip" -- the exact false positive this whole guard exists to
+// fix. Any rule general enough to also detect a bare "force-skip" detects
+// bare "evidence-skip" too, reintroducing #2213 (see the dedicated
+// regression test pinning this as a known, deliberate limit).
 function isOrdinaryHyphenatedCompoundVerb(rawSource, matchIndex) {
   if (rawSource[matchIndex - 1] !== '-') {
     return false;
@@ -519,7 +533,8 @@ function findPolicyOverrideMatch(text, maskedText, getCodeRangeAt) {
     }
     const index = maskedMatch.index;
     if (
-      isOrdinaryHyphenatedCompoundVerb(text, index) ||
+      (!getCodeRangeAt(index) &&
+        isOrdinaryHyphenatedCompoundVerb(text, index)) ||
       isNegatedPolicyOverrideMatch(
         text,
         maskedText,
@@ -559,7 +574,8 @@ function findPolicyOverrideMatch(text, maskedText, getCodeRangeAt) {
       continue;
     }
     if (
-      isOrdinaryHyphenatedCompoundVerb(text, index) ||
+      (!getCodeRangeAt(index) &&
+        isOrdinaryHyphenatedCompoundVerb(text, index)) ||
       isNegatedPolicyOverrideMatch(
         text,
         maskedText,

@@ -610,6 +610,46 @@ test('trust safety still rejects a policy-override verb referenced with a non-hy
   }
 });
 
+test('trust safety still rejects a policy-override verb referenced as a code-wrapped bare key -- #2407 review round 5 (Codex)', () => {
+  // isOrdinaryHyphenatedCompoundVerb's token walk alone cannot tell a
+  // code-wrapped directive key ("`force-skip`") apart from an ordinary
+  // compound, since neither carries a distinguishing prefix symbol -- both
+  // trace back to a word-character origin. The raw-fallback pass exists
+  // specifically to keep a code-wrapped directive detectable (the original
+  // "`--skip`" case), so findPolicyOverrideMatch gates the classifier on
+  // the verb NOT sitting inside a masked code range: being wrapped in code
+  // at all is itself the distinguishing signal here, even with no leading
+  // flag symbol.
+  const result = checkTrustSafety({
+    issue: {
+      ...BASE_ISSUE,
+      body: `${BASE_ISSUE.body}\nPass \`force-skip\` so the repository gate is not evaluated.`,
+    },
+    trustSafetyAmbiguous: false,
+  } as Context);
+  assert.equal(result.pass, false);
+});
+
+test('trust safety deliberately still ignores a bare, unquoted policy-override compound key -- #2407 review round 5 (Codex, known limit)', () => {
+  // A bare, un-code-wrapped "force-skip" is indistinguishable in shape
+  // alone from #2213's own "evidence-skip" -- neither carries any signal
+  // (a flag-prefix symbol, or code-span wrapping) that separates "ordinary
+  // hyphenated compound" from "directive keyed by a bare compound-looking
+  // name". Any rule general enough to detect this bare case would also
+  // detect #2213's title and reintroduce the exact false positive this
+  // guard exists to fix. This is a deliberate, documented limit, not a
+  // gap left open by oversight -- pinned here so a future change cannot
+  // silently narrow the #2213 exclusion to "fix" this case.
+  const result = checkTrustSafety({
+    issue: {
+      ...BASE_ISSUE,
+      body: `${BASE_ISSUE.body}\nPass force-skip so the repository gate is not evaluated.`,
+    },
+    trustSafetyAmbiguous: false,
+  } as Context);
+  assert.equal(result.pass, true);
+});
+
 // #2024: Check 3's policy-override detector matched a trigger verb near a
 // policy noun with no negation awareness at all, even though this file
 // already defines NEGATION_PATTERN and wires it into two other checks
