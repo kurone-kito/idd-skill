@@ -5085,6 +5085,37 @@ export function computePreMergeReadinessBlockers(report) {
       detail: `mergeStateStatus is "BLOCKED" and ci.discardedNonPassingRequiredChecks has ${String(discardedSiblings.length)} discarded same-named required-check sibling(s); recover via rerun-advisory-convergence, do not merge or --admin`,
     });
   }
+  // #2272: fail-closed development-branch invariant. Absent entirely
+  // (unmigrated caller / unit fixture) means no gate at all -- distinct
+  // from a present-but-empty-`status` value, which this treats as
+  // `'unavailable'` (fail closed) rather than silently skipping.
+  if (report.developmentBranchTarget) {
+    const developmentBranchTarget = preMergeAsRecord(
+      report.developmentBranchTarget,
+    );
+    const status = String(developmentBranchTarget.status ?? 'unavailable');
+    const baseRefName = String(developmentBranchTarget.baseRefName ?? '');
+    if (status === 'invalid') {
+      blockers.push({
+        gate: 'development-branch-target',
+        detail: `configured developmentBranch is invalid: ${String(developmentBranchTarget.reason ?? 'unknown reason')}`,
+      });
+    } else if (status === 'unavailable') {
+      blockers.push({
+        gate: 'development-branch-target',
+        detail:
+          'effective development branch could not be resolved (no developmentBranch policy value and the live repository default branch could not be read)',
+      });
+    } else {
+      const effectiveBranch = String(developmentBranchTarget.branch ?? '');
+      if (effectiveBranch === '' || effectiveBranch !== baseRefName) {
+        blockers.push({
+          gate: 'development-branch-target',
+          detail: `PR base branch "${baseRefName}" does not match the effective development branch "${effectiveBranch}" (status="${status}")`,
+        });
+      }
+    }
+  }
   return blockers;
 }
 export function buildPreMergeReadinessSummary(
@@ -5498,6 +5529,12 @@ export function buildPreMergeReadinessSummary(
   // this can never change `ready`/`blockers`.
   if (options.localValidationEvidenceSummary) {
     summary.localValidationEvidence = options.localValidationEvidenceSummary;
+  }
+  // #2272: omitted entirely (not even `null`) when the caller does not
+  // pass it, so `computePreMergeReadinessBlockers` below can distinguish
+  // "no gate" from "gate present" -- see the option's doc comment above.
+  if (options.developmentBranchTarget) {
+    summary.developmentBranchTarget = options.developmentBranchTarget;
   }
   // Top-level rollup so a consumer reads one `ready` boolean + `blockers[]`
   // instead of hand-ANDing ~8 nested gates (a dropped clause would fail open).

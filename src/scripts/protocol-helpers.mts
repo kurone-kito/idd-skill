@@ -6381,6 +6381,40 @@ export function computePreMergeReadinessBlockers(
     });
   }
 
+  // #2272: fail-closed development-branch invariant. Absent entirely
+  // (unmigrated caller / unit fixture) means no gate at all -- distinct
+  // from a present-but-empty-`status` value, which this treats as
+  // `'unavailable'` (fail closed) rather than silently skipping.
+  if (report.developmentBranchTarget) {
+    const developmentBranchTarget = preMergeAsRecord(
+      report.developmentBranchTarget,
+    );
+    const status = String(developmentBranchTarget.status ?? 'unavailable');
+    const baseRefName = String(developmentBranchTarget.baseRefName ?? '');
+    if (status === 'invalid') {
+      blockers.push({
+        gate: 'development-branch-target',
+        detail: `configured developmentBranch is invalid: ${String(
+          developmentBranchTarget.reason ?? 'unknown reason',
+        )}`,
+      });
+    } else if (status === 'unavailable') {
+      blockers.push({
+        gate: 'development-branch-target',
+        detail:
+          'effective development branch could not be resolved (no developmentBranch policy value and the live repository default branch could not be read)',
+      });
+    } else {
+      const effectiveBranch = String(developmentBranchTarget.branch ?? '');
+      if (effectiveBranch === '' || effectiveBranch !== baseRefName) {
+        blockers.push({
+          gate: 'development-branch-target',
+          detail: `PR base branch "${baseRefName}" does not match the effective development branch "${effectiveBranch}" (status="${status}")`,
+        });
+      }
+    }
+  }
+
   return blockers;
 }
 
@@ -6566,6 +6600,23 @@ export function buildPreMergeReadinessSummary(
     // (field is omitted entirely -- not even `null` -- unchanged
     // pre-#2323 behavior).
     localValidationEvidenceSummary?: Record<string, unknown> | null;
+    // #2272: caller-precomputed effective development-branch resolution
+    // (`resolveEffectiveDevelopmentBranch` in policy-helpers.mts) paired
+    // with the live PR `baseRefName`. This file never resolves policy or
+    // shells out to `gh` itself, mirroring `copilotUnavailable`'s
+    // caller-precomputed pattern -- it only rolls the caller's evidence
+    // into the blocker list below. Unlike `localValidationEvidenceSummary`
+    // above, this DOES feed `computePreMergeReadinessBlockers`: an
+    // `'invalid'`/`'unavailable'` status, or a `branch` that differs from
+    // `baseRefName`, blocks. Omitted (the default) skips this gate
+    // entirely, so every pre-#2272 fixture/caller is unaffected;
+    // `collectPreMergeReadiness` always resolves and passes a value.
+    developmentBranchTarget?: {
+      status: string;
+      branch?: string;
+      reason?: string;
+      baseRefName: string;
+    } | null;
     // Configured `advisoryWait.secondaryQuietWindow` in minutes (#2335),
     // resolved by the caller, mirroring `advisoryConvergenceDeadlineMinutes`
     // above's "policy value resolved by the CLI layer" pattern. Omitted or
@@ -6973,6 +7024,13 @@ export function buildPreMergeReadinessSummary(
   // this can never change `ready`/`blockers`.
   if (options.localValidationEvidenceSummary) {
     summary.localValidationEvidence = options.localValidationEvidenceSummary;
+  }
+
+  // #2272: omitted entirely (not even `null`) when the caller does not
+  // pass it, so `computePreMergeReadinessBlockers` below can distinguish
+  // "no gate" from "gate present" -- see the option's doc comment above.
+  if (options.developmentBranchTarget) {
+    summary.developmentBranchTarget = options.developmentBranchTarget;
   }
 
   // Top-level rollup so a consumer reads one `ready` boolean + `blockers[]`

@@ -99,7 +99,7 @@ In the idd-skill source repository, the following optional helpers were adopted:
 
 - `scripts/branch-conflict-state.mjs` for read-only branch conflict and
   synchronization state classification; used by D/E/F routing to decide
-  whether `merge-main`, `hold-unknown`, or no action is needed without
+  whether `merge-base`, `hold-unknown`, or no action is needed without
   mutating the worktree or PR branch (added in 0.2.0)
 - `scripts/verify-install-deps.mjs` for B1 Step 3 `install-deps`: runs
   the underlying install command, verifies a key post-install binary
@@ -2540,7 +2540,7 @@ same as `AW4`/`AW5`.
   `dirty`, `force-push-exception`, `computing`, `unknown` (`computing` is the
   transient still-computing mergeability that callers re-poll; `unknown` stays
   terminal)
-- `syncRecommendation` values: `none`, `merge-main`, `policy-required-update`,
+- `syncRecommendation` values: `none`, `merge-base`, `policy-required-update`,
   `force-push-exception`, `recheck`, `hold-unknown` (`recheck` pairs with
   `computing`)
 - `baseAdvancedSinceMergeBase` (boolean): `true` when the base ref has moved

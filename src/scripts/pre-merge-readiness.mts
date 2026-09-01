@@ -27,14 +27,17 @@ import {
   DEFAULT_GH_PAGINATED_TIMEOUT_MS,
   GH_TEXT_LOOP_OPTIONS,
   ghText,
+  readGithubRepoDefaultBranch,
   safeGhText,
 } from './gh-exec.mts';
 import { deriveGhHttpStatus } from './gh-http-status.mts';
 import { loadIddConfig } from './idd-config.mts';
 import {
+  inspectDevelopmentBranch,
   normalizePolicyConfig,
   parseIsoDurationToMs,
   resolveCollaboratorMarkerTrust,
+  resolveEffectiveDevelopmentBranch,
 } from './policy-helpers.mts';
 import type {
   PrCommitPayload,
@@ -464,6 +467,19 @@ export function collectPreMergeReadiness(
       );
     }
   }
+  // #2272: fail-closed development-branch invariant. Only reads the live
+  // repository default branch when the policy is silent (`'absent'`) --
+  // a configured or malformed value never needs it, so a repo with an
+  // explicit `developmentBranch` never pays this extra `gh api` call.
+  const developmentBranchInspection = inspectDevelopmentBranch(iddConfig);
+  const liveDefaultBranch =
+    developmentBranchInspection.status === 'absent'
+      ? readGithubRepoDefaultBranch(owner, repo)
+      : null;
+  const developmentBranchTarget = {
+    ...resolveEffectiveDevelopmentBranch(iddConfig, liveDefaultBranch),
+    baseRefName,
+  };
   const encodedBaseRefName = encodeURIComponent(baseRefName);
 
   // #1483: sourced from the same `gh pr view` call above (the
@@ -738,6 +754,7 @@ export function collectPreMergeReadiness(
       pollIntervalMinutes: advisoryWaitPolicy.pollIntervalMinutes,
       capExhaustedRoute: advisoryWaitPolicy.capExhaustedRoute,
       primaryBotLogin,
+      developmentBranchTarget,
       copilotUnavailable,
       advisoryConvergenceHeadCommittedAt,
       advisoryConvergenceDeadlineMinutes,

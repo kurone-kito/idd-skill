@@ -8504,3 +8504,103 @@ test('#2335: a new unresolved finding arriving inside an already-elapsed window 
     ),
   );
 });
+
+// #2272: the development-branch-target gate is a fail-closed invariant
+// distinct from every other pre-merge gate above -- absent entirely
+// (unmigrated caller / every fixture above) adds no blocker at all,
+// matching this file's own "every pre-#2272 caller unaffected" contract.
+test('#2272: developmentBranchTarget omitted never adds a development-branch-target blocker (unmigrated caller, unchanged behavior)', () => {
+  const fixture = readJson('fixtures/pre-merge-readiness/clean.json');
+  const ready = buildPreMergeReadinessSummary(fixture.input, {
+    ...fixture.options,
+    includeDispositionEvidence: true,
+  });
+  assert.deepEqual(ready.blockers, computePreMergeReadinessBlockers(ready));
+  assert.ok(
+    !(ready.blockers as { gate: string }[]).some(
+      (blocker) => blocker.gate === 'development-branch-target',
+    ),
+  );
+  assert.equal('developmentBranchTarget' in ready, false);
+});
+
+test('#2272: a matching baseRefName never blocks (configured or default status)', () => {
+  const fixture = readJson('fixtures/pre-merge-readiness/clean.json');
+  for (const status of ['configured', 'default']) {
+    const summary = buildPreMergeReadinessSummary(fixture.input, {
+      ...fixture.options,
+      includeDispositionEvidence: true,
+      developmentBranchTarget: {
+        status,
+        branch: 'develop',
+        baseRefName: 'develop',
+      },
+    });
+    assert.deepEqual(
+      summary.blockers,
+      computePreMergeReadinessBlockers(summary),
+    );
+    assert.ok(
+      !(summary.blockers as { gate: string }[]).some(
+        (blocker) => blocker.gate === 'development-branch-target',
+      ),
+    );
+  }
+});
+
+test('#2272: a PR base branch that differs from the effective development branch blocks, even with every other gate green', () => {
+  const fixture = readJson('fixtures/pre-merge-readiness/clean.json');
+  const summary = buildPreMergeReadinessSummary(fixture.input, {
+    ...fixture.options,
+    includeDispositionEvidence: true,
+    developmentBranchTarget: {
+      status: 'configured',
+      branch: 'develop',
+      baseRefName: 'main',
+    },
+  });
+  assert.equal(summary.ready, false);
+  assert.deepEqual(summary.blockers, computePreMergeReadinessBlockers(summary));
+  const blocker = (summary.blockers as { gate: string; detail: string }[]).find(
+    (item) => item.gate === 'development-branch-target',
+  );
+  assert.ok(blocker);
+  assert.match(blocker.detail, /"main".*"develop"/);
+});
+
+test('#2272: an invalid developmentBranch policy value fails closed, ignoring any live default branch', () => {
+  const fixture = readJson('fixtures/pre-merge-readiness/clean.json');
+  const summary = buildPreMergeReadinessSummary(fixture.input, {
+    ...fixture.options,
+    includeDispositionEvidence: true,
+    developmentBranchTarget: {
+      status: 'invalid',
+      reason: 'developmentBranch must be a string',
+      baseRefName: 'main',
+    },
+  });
+  assert.equal(summary.ready, false);
+  const blocker = (summary.blockers as { gate: string; detail: string }[]).find(
+    (item) => item.gate === 'development-branch-target',
+  );
+  assert.ok(blocker);
+  assert.match(blocker.detail, /invalid/);
+});
+
+test('#2272: an unavailable effective development branch (no policy, unread live default) fails closed', () => {
+  const fixture = readJson('fixtures/pre-merge-readiness/clean.json');
+  const summary = buildPreMergeReadinessSummary(fixture.input, {
+    ...fixture.options,
+    includeDispositionEvidence: true,
+    developmentBranchTarget: {
+      status: 'unavailable',
+      baseRefName: 'main',
+    },
+  });
+  assert.equal(summary.ready, false);
+  const blocker = (summary.blockers as { gate: string; detail: string }[]).find(
+    (item) => item.gate === 'development-branch-target',
+  );
+  assert.ok(blocker);
+  assert.match(blocker.detail, /could not be resolved/);
+});
