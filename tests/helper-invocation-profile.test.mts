@@ -96,6 +96,14 @@ const SOURCE_REPO_INTERNAL_ENTRY_PATHS = new Set([
   // idd-template/; an adopter repository has no context-tax data to
   // report.
   'scripts/context-tax-report.mjs',
+  // actions-usage-report.mjs (#2322): this repository's own dogfood Actions
+  // API measurement reporter, named in docs/customization.md's adopter
+  // billing-exposure section as an example of the kind of evidence-gathering
+  // this repository itself uses. It reports on THIS repository's own
+  // `.github/workflows/*.yml` names -- never distributed to idd-template/;
+  // an adopter repository has an entirely different set of workflows to
+  // measure.
+  'scripts/actions-usage-report.mjs',
 ]);
 
 // A helper name that appears only as a *proposed*, not-yet-built script
