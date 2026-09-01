@@ -298,12 +298,19 @@ export function evaluateHighConfidenceDuplicate(input, candidateIssueNumber) {
     branchNameMergedPr &&
     typeof branchNameMergedPr === 'object' &&
     Number.isInteger(branchNameMergedPr.number) &&
-    branchNameMergedPr.number > 0
+    branchNameMergedPr.number > 0 &&
+    // CodeRabbit review finding on this PR: an empty `mergedAt` must not
+    // produce Signal 3 evidence -- every other merged-PR evidence shape in
+    // this module requires a merge timestamp (see `HighConfidenceMergedPr`
+    // above), and citing a merge with no date is a malformed/incomplete
+    // input, not a genuine hit. Falls through to the other signals instead
+    // of crashing or manufacturing a false positive.
+    typeof branchNameMergedPr.mergedAt === 'string' &&
+    branchNameMergedPr.mergedAt.length > 0
   ) {
-    const mergedAt = String(branchNameMergedPr.mergedAt ?? '');
     return {
       pass: false,
-      evidence: `High-confidence duplicate: merged PR #${branchNameMergedPr.number}${mergedAt ? ` (merged ${mergedAt})` : ''} already shipped this issue's own IDD-naming-convention-computed branch, independent of closing-keyword presence or Candidate-files overlap.`,
+      evidence: `High-confidence duplicate: merged PR #${branchNameMergedPr.number} (merged ${branchNameMergedPr.mergedAt}) already shipped this issue's own IDD-naming-convention-computed branch, independent of closing-keyword presence or Candidate-files overlap.`,
       tier: 'high-confidence',
     };
   }
