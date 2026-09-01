@@ -221,6 +221,208 @@ test("evaluateStaleRequestRecoveryAction: not-applicable once a same-head marker
   });
 });
 
+// --- 1b. Non-pending failed-to-register (`#2327`) ---------------------------
+//
+// PR #2325 shape: a request was made (a same-head `advisory-wait:` marker
+// exists), Copilot never showed pending, and the timeline never proved the
+// request reached it (`copilotPendingCoversHead: false`). Distinguishes
+// ordinary lag (re-check budget unspent) from a genuine failure (budget
+// spent) using the *existing* `SETTLED_WINDOW_MINUTES` re-check budget --
+// not a new config value -- and leaves `outcome`/`f3Outcome` (computed by
+// the untouched `evaluateAdvisoryWaitOutcome`) exactly as today.
+
+test('evaluateStaleRequestRecoveryAction: not-applicable (recheck-budget-unspent) while still lagging, even though a same-head marker exists and Copilot is not pending', () => {
+  const fixture = readJson('fixtures/advisory-wait/wait.json');
+  const summary = buildAdvisoryWaitSummary(
+    {
+      prHeadSha: fixture.input.prHeadSha,
+      reviews: fixture.input.reviews,
+      requestedReviewers: fixture.input.requestedReviewers,
+      timelineEvents: fixture.input.timelineEvents,
+      comments: fixture.input.comments,
+    },
+    {
+      now: fixture.input.now,
+      trustedMarkerLogins: fixture.input.trustedMarkerLogins,
+    },
+  );
+  assert.equal(summary.outcome, 'WAIT');
+  assert.equal(summary.copilotPending, false);
+  assert.equal(summary.sameHeadMarkerPresent, true);
+
+  const decision = evaluateStaleRequestRecoveryAction({
+    copilotPending: summary.copilotPending,
+    copilotPendingCoversHead: summary.copilotPendingCoversHead,
+    sameHeadMarkerPresent: summary.sameHeadMarkerPresent,
+    remainingBudget: 2,
+    activeClaimProvided: true,
+    elapsedMinutes: summary.elapsedMinutes,
+    settledWindowMinutes: summary.settledWindowMinutes,
+  });
+  assert.deepEqual(decision, {
+    action: 'not-applicable',
+    reason: 'recheck-budget-unspent',
+  });
+});
+
+test('evaluateStaleRequestRecoveryAction: attempt-eligible (non-pending-recovery-attempt-eligible) once the settled-window re-check budget elapses with no proof the request registered', () => {
+  const fixture = readJson(
+    'fixtures/advisory-wait/non-pending-recovery-eligible.json',
+  );
+  const summary = buildAdvisoryWaitSummary(
+    {
+      prHeadSha: fixture.input.prHeadSha,
+      reviews: fixture.input.reviews,
+      requestedReviewers: fixture.input.requestedReviewers,
+      timelineEvents: fixture.input.timelineEvents,
+      comments: fixture.input.comments,
+    },
+    {
+      now: fixture.input.now,
+      trustedMarkerLogins: fixture.input.trustedMarkerLogins,
+    },
+  );
+  // The distinguishing acceptance criterion: `outcome`/`f3Outcome` read
+  // SATISFIED (untouched, pre-existing settled-window behavior) at the exact
+  // same moment `staleRequestRecovery` newly reports "attempt" -- the two
+  // signals are independent; eligibility is not satisfaction.
+  assert.equal(summary.outcome, 'SATISFIED');
+  assert.equal(summary.f3Outcome, 'SATISFIED');
+  assert.equal(summary.copilotPending, false);
+  assert.equal(summary.copilotPendingCoversHead, false);
+  assert.equal(summary.sameHeadMarkerPresent, true);
+
+  const decision = evaluateStaleRequestRecoveryAction({
+    copilotPending: summary.copilotPending,
+    copilotPendingCoversHead: summary.copilotPendingCoversHead,
+    sameHeadMarkerPresent: summary.sameHeadMarkerPresent,
+    remainingBudget: 2,
+    activeClaimProvided: true,
+    elapsedMinutes: summary.elapsedMinutes,
+    settledWindowMinutes: summary.settledWindowMinutes,
+  });
+  assert.deepEqual(decision, {
+    action: 'attempt',
+    reason: 'non-pending-recovery-attempt-eligible',
+  });
+});
+
+test('evaluateStaleRequestRecoveryAction: non-pending path fails closed to recheck-budget-unspent when elapsedMinutes/settledWindowMinutes are omitted (ambiguous evidence never reads as failure)', () => {
+  const decision = evaluateStaleRequestRecoveryAction({
+    copilotPending: false,
+    copilotPendingCoversHead: false,
+    sameHeadMarkerPresent: true,
+    remainingBudget: 2,
+    activeClaimProvided: true,
+  });
+  assert.deepEqual(decision, {
+    action: 'not-applicable',
+    reason: 'recheck-budget-unspent',
+  });
+});
+
+test('evaluateStaleRequestRecoveryAction: non-pending path is not-applicable (proven-covers-head) when a review_requested event eventually proved the request reached Copilot', () => {
+  const decision = evaluateStaleRequestRecoveryAction({
+    copilotPending: false,
+    copilotPendingCoversHead: true,
+    sameHeadMarkerPresent: true,
+    remainingBudget: 2,
+    activeClaimProvided: true,
+    elapsedMinutes: 100,
+    settledWindowMinutes: 10,
+  });
+  assert.deepEqual(decision, {
+    action: 'not-applicable',
+    reason: 'proven-covers-head',
+  });
+});
+
+test('evaluateStaleRequestRecoveryAction: non-pending path reports cap-exhausted (not attempt) once the shared #1572 recovery-cycle budget is spent', () => {
+  const decision = evaluateStaleRequestRecoveryAction({
+    copilotPending: false,
+    copilotPendingCoversHead: false,
+    sameHeadMarkerPresent: true,
+    remainingBudget: 0,
+    activeClaimProvided: true,
+    elapsedMinutes: 30,
+    settledWindowMinutes: 10,
+  });
+  assert.deepEqual(decision, {
+    action: 'cap-exhausted',
+    reason: 'recovery-cap-exhausted',
+  });
+});
+
+test('integration: pending and non-pending cycles share one #1572 counter -- one non-pending cycle already spent leaves exactly one cycle of budget for a LATER pending-shaped stale request on the same HEAD', () => {
+  const comments = [
+    recoveryComment({ createdAt: '2026-07-22T09:00:00Z', attempt: 1 }),
+  ];
+  const copilotRecovery = buildCopilotRecoverySummary(
+    { comments, prHeadSha: SHA, lastCopilotCommit: '' },
+    BASE_RECOVERY_OPTIONS,
+  );
+  assert.equal(copilotRecovery.completedCycleCount, 1);
+  assert.equal(copilotRecovery.remainingBudget, 1);
+
+  const decision = evaluateStaleRequestRecoveryAction({
+    copilotPending: true,
+    copilotPendingCoversHead: false,
+    sameHeadMarkerPresent: false,
+    remainingBudget: copilotRecovery.remainingBudget,
+    activeClaimProvided: copilotRecovery.activeClaimProvided,
+  });
+  assert.equal(decision.action, 'attempt');
+
+  // A second completed cycle (regardless of which path produced it) must
+  // exhaust the shared cap -- the two entry conditions never together
+  // exceed `recoveryCycleCap`.
+  const secondComments = [
+    ...comments,
+    recoveryComment({ createdAt: '2026-07-22T10:00:00Z', attempt: 2 }),
+  ];
+  const exhausted = buildCopilotRecoverySummary(
+    { comments: secondComments, prHeadSha: SHA, lastCopilotCommit: '' },
+    BASE_RECOVERY_OPTIONS,
+  );
+  assert.equal(exhausted.remainingBudget, 0);
+  const exhaustedDecision = evaluateStaleRequestRecoveryAction({
+    copilotPending: false,
+    copilotPendingCoversHead: false,
+    sameHeadMarkerPresent: true,
+    remainingBudget: exhausted.remainingBudget,
+    activeClaimProvided: exhausted.activeClaimProvided,
+    elapsedMinutes: 30,
+    settledWindowMinutes: 10,
+  });
+  assert.deepEqual(exhaustedDecision, {
+    action: 'cap-exhausted',
+    reason: 'recovery-cap-exhausted',
+  });
+});
+
+test('integration: a non-pending recovery cycle completing (two bound markers) drives copilotRecovery.state to COPILOT_UNAVAILABLE end to end, exactly like the pending path', () => {
+  // Two completed non-pending cycles for this HEAD (the marker format is
+  // identical regardless of which AW3-S entry condition produced it -- #2327
+  // adds no new marker shape), the terminal window elapsed, and no
+  // current-HEAD Copilot review.
+  const comments = [
+    recoveryComment({ createdAt: '2026-07-22T00:00:00Z', attempt: 1 }),
+    recoveryComment({ createdAt: '2026-07-22T01:00:00Z', attempt: 2 }),
+  ];
+  const copilotRecovery = buildCopilotRecoverySummary(
+    { comments, prHeadSha: SHA, lastCopilotCommit: '' },
+    { ...BASE_RECOVERY_OPTIONS, now: '2026-07-22T13:00:00Z' },
+  );
+  assert.equal(copilotRecovery.completedCycleCount, 2);
+  assert.equal(copilotRecovery.capExhausted, true);
+  assert.equal(copilotRecovery.windowElapsed, true);
+  assert.equal(copilotRecovery.state, 'COPILOT_UNAVAILABLE');
+  assert.equal(
+    copilotRecovery.reason,
+    'recovery-cap-exhausted-and-terminal-window-elapsed-and-no-current-head-review',
+  );
+});
+
 // --- 2. Missing/ambiguous timeline evidence (fail-closed) -------------------
 
 test('verifyRecoveryRequestCoversHead: fails closed (false) when the timeline has no committed event for the current HEAD', () => {
