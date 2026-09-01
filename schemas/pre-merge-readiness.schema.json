@@ -1521,11 +1521,13 @@
         },
         "anchorAt": {
           "type": "string",
-          "description": "ISO timestamp of the last substantive (non-ack-only) activity this window anchors on, or the literal 'none' when minutes is 0 or no such activity exists."
+          "pattern": "^(none|\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?Z)$",
+          "description": "ISO timestamp of the last substantive (non-ack-only) activity this window anchors on, or the literal 'none' when no such activity exists. Still the real timestamp (not 'none') when minutes is 0 but a valid activity timestamp exists."
         },
         "elapsedMinutes": {
           "type": ["integer", "null"],
-          "description": "Whole minutes elapsed from anchorAt to now, or null when the window is off or anchorAt is invalid/absent."
+          "minimum": 0,
+          "description": "Whole minutes elapsed from anchorAt to now, or null when the window is off, anchorAt is invalid/absent, or now failed to parse."
         },
         "elapsed": {
           "type": "boolean",
@@ -1533,7 +1535,8 @@
         },
         "remainingMinutes": {
           "type": ["integer", "null"],
-          "description": "Whole minutes remaining until the window elapses, or null when elapsedMinutes is null."
+          "minimum": 0,
+          "description": "Whole minutes remaining until the window elapses. 0 when the window is off (minutes is 0) or anchorAt is invalid/absent; otherwise null only when elapsedMinutes itself is null (now failed to parse)."
         }
       }
     },

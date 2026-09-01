@@ -8342,6 +8342,27 @@ test('#2335: a disposition reply, a watermark, and an ack-only bot comment never
   );
 });
 
+test('#2335: a disposition reply with nothing after it but an ack legitimately anchors the window (it is the moment convergence was reached, per the same ackOnlyPostDisposition classification the issue names)', () => {
+  const fixture = readJson(
+    'fixtures/pre-merge-readiness/disposition-reply-latest.json',
+  );
+  const status = secondaryQuietWindowOf(
+    buildPreMergeReadinessSummary(fixture.input, {
+      ...fixture.options,
+      includeDispositionEvidence: true,
+      secondaryQuietWindowMinutes: 2,
+    }),
+  );
+  // The disposition reply (23:55:00) is the effective activity ceiling --
+  // the trailing bot comment is excluded as ack-only, same classification
+  // as the review-currency gate. now (23:59:00) is 4min past that anchor,
+  // so a 2min window has already elapsed from the disposition itself.
+  assert.equal(status.anchorAt, '2026-05-11T23:55:00Z');
+  assert.equal(status.elapsedMinutes, 4);
+  assert.equal(status.elapsed, true);
+  assert.equal(status.remainingMinutes, 0);
+});
+
 test('#2335: computePreMergeReadinessBlockers never blocks on an entirely absent secondaryQuietWindow evidence field (backward compatible with a hand-built or unmigrated report)', () => {
   const fixture = readJson('fixtures/pre-merge-readiness/clean.json');
   const ready = buildPreMergeReadinessSummary(fixture.input, {

@@ -1386,7 +1386,7 @@ test('readAdvisoryTerminalWindowMinutes applies a schema-valid override and is s
   );
 });
 
-// #2335: opt-in secondary-quiet-window (default PT0S/off).
+// #2335: opt-in secondary-quiet-window (off by default when omitted).
 
 test('resolveAdvisorySecondaryQuietWindowMinutes defaults to 0 (off) on absent/empty config', () => {
   assert.equal(resolveAdvisorySecondaryQuietWindowMinutes({}), 0);

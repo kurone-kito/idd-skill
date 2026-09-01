@@ -54,7 +54,7 @@ export const DEFAULT_ADVISORY_RECOVERY_CYCLE_CAP = 2;
 // uses the same familiar timescale as other terminal/escalation windows in
 // this repository.
 export const DEFAULT_ADVISORY_TERMINAL_WINDOW_MINUTES = 720;
-// #2335: off by default (`PT0S`), so an adopter that never sets
+// #2335: off by default (unset), so an adopter that never sets
 // `advisoryWait.secondaryQuietWindow` sees unchanged pre-merge-readiness
 // behavior. See `buildSecondaryQuietWindowStatus` below.
 export const DEFAULT_ADVISORY_SECONDARY_QUIET_WINDOW_MINUTES = 0;
@@ -402,7 +402,7 @@ export function resolveAdvisoryTerminalWindowMinutes(
 
 /**
  * Read the OPTIONAL `advisoryWait.secondaryQuietWindow` (#2335) from a policy
- * file, failing closed to the `PT0S`/off default when the file is missing,
+ * file, failing closed to the off (unset) default when the file is missing,
  * unreadable, or schema-invalid.
  */
 export function readAdvisorySecondaryQuietWindowMinutes(
@@ -481,7 +481,7 @@ export interface SecondaryQuietWindowStatus {
  * since that anchor" already equals "elapsed since convergence was reached"
  * without a second, independently-drifting timestamp to persist.
  *
- * A zero/absent `minutes` (the `PT0S` off default) or a missing/invalid
+ * A zero/absent `minutes` (the off/unset default) or a missing/invalid
  * anchor (nothing to anchor on yet) reports `elapsed: true` unconditionally
  * -- this gate must never itself block when unconfigured, and must never
  * block on the absence of any activity to measure.

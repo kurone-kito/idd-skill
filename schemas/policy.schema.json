@@ -362,7 +362,7 @@
         "secondaryQuietWindow": {
           "type": "string",
           "pattern": "^P(?=(?:\\d+D|T\\d+[HM]))(?=.*(?:[1-9]\\d*[DHM]))(?:\\d+D)?(?:T(?=\\d+[HM])(?:\\d+H)?(?:\\d+M)?)?$",
-          "description": "Whole-minute ISO 8601 duration to wait, after the E-phase convergence conditions (no unresolved item, every disposition recorded) are first observed, before the pre-merge readiness verdict treats the review as settled (#2335) -- covers a slower secondary advisory bot (`secondaryBotLogin`) landing a finding after the primary bot's review already converged. Optional; defaults to `PT0S` (off), unchanged behavior. Distinct from `settledWindow`, which bounds the PRIMARY bot's own pending state, not a late secondary-bot arrival."
+          "description": "Whole-minute ISO 8601 duration to wait, after the E-phase convergence conditions (no unresolved item, every disposition recorded) are first observed, before the pre-merge readiness verdict treats the review as settled (#2335) -- covers a slower secondary advisory bot (`secondaryBotLogin`) landing a finding after the primary bot's review already converged. Optional; off (unchanged behavior) when omitted -- like every other key in this section, there is no explicit off-literal value to set. Distinct from `settledWindow`, which bounds the PRIMARY bot's own pending state, not a late secondary-bot arrival."
         }
       },
       "description": "Container for Copilot/primary-bot advisory review timing, caps, and bot identity. Optional; omitting any nested key keeps that key's own distributed default."

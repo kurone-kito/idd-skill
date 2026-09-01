@@ -377,8 +377,9 @@ the secondary to a requestable
 reviewer whose request appears on the PR timeline so the once-per-HEAD guard
 can observe it.
 
-`advisoryWait.secondaryQuietWindow` (#2335, default `PT0S`/off) requires a
-configured quiet period to elapse since the last substantive review activity
+`advisoryWait.secondaryQuietWindow` (#2335, off by default when omitted)
+requires a configured quiet period to elapse since the last substantive
+review activity
 before `pre-merge-readiness` treats the review as settled -- covering a
 slower secondary bot that lands a finding after a snapshot already looked
 converged. It anchors on the same non-ack-only activity ceiling the review-

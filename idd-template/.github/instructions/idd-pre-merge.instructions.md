@@ -212,7 +212,7 @@ nonce was recorded for the active claim.
   is satisfied — a `secondary-quiet-window` entry in `blockers[]` means the
   window has not yet elapsed since the last substantive review activity;
   wait (poll per `advisoryWait.pollInterval`), then re-evaluate F2. Unset
-  (the `PT0S` default) never adds this blocker.
+  (the off default) never adds this blocker.
 - **CI**: Current PR head SHA has all required CI checks generated and
   all passing (→ run CI wait per `idd-ci.instructions.md` using the
   same resolved `ciWait.runningTimeout`, `ciWait.generationTimeout`, and
