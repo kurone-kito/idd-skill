@@ -1992,6 +1992,22 @@ test('autonomy fails on an either/or acceptance-criterion shape naming two unres
     },
   } as Context);
   assert.equal(result.pass, false);
+  // Proves the either/or-specific path actually fired (Copilot review
+  // finding: an unresolved-choice marker anywhere always also matches the
+  // broader coordination check below, which could otherwise mask this
+  // check and leave it permanently unreachable).
+  assert.match(result.evidence, /either\/or/);
+});
+
+test('autonomy fails when the unresolved-choice marker sits inside the either/or span itself -- #2219 (Copilot)', () => {
+  const result = checkAutonomy({
+    issue: {
+      ...BASE_ISSUE,
+      body: `${BASE_ISSUE.body}\n## Acceptance Criteria\n- Either TBD caching backend or a fixed one, implementation pending.`,
+    },
+  } as Context);
+  assert.equal(result.pass, false);
+  assert.match(result.evidence, /either\/or/);
 });
 
 test('autonomy still passes an either/or criterion resolved by a negated marker nearby -- #2219 (CodeRabbit, no new false positive)', () => {
