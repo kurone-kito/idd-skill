@@ -1279,6 +1279,7 @@ function runCli() {
       branchNameMergedPr = fetchMergedPrByBranchName(
         repoRef,
         computeBranchName(issue.number, issue.title),
+        owner,
       );
     } catch (error) {
       collectionWarnings.push(
@@ -1928,20 +1929,35 @@ function fetchIssueComments(repoRef, issueNumber) {
  */
 /**
  * #2313, Signal 3: exact-match branch-name lookup. `--head` filters
- * server-side to PRs with this exact head branch (branch names are unique
- * per issue by construction), so at most one entry is ever returned; this
- * still iterates defensively rather than indexing `[0]` directly, matching
- * the rest of this file's "never trust the shape of a `gh` JSON response"
- * convention.
+ * server-side by head branch NAME only -- `gh pr list --help` documents
+ * that `"<owner>:<branch>" syntax` is "not supported" -- so a merged PR
+ * from a FORK using the same branch name can also come back (Copilot
+ * review finding on this PR). `owner` (the repository owner, not the fork
+ * contributor) is required so every entry can be filtered to
+ * `headRepositoryOwner.login === owner` before being treated as a hit;
+ * `buildMergedPrByBranchArgs` requests that field and a `--limit` above 1
+ * for exactly this reason. Still iterates rather than indexing `[0]`
+ * directly, matching the rest of this file's "never trust the shape of a
+ * `gh` JSON response" convention.
  */
-function fetchMergedPrByBranchName(repoRef, branchName) {
+function fetchMergedPrByBranchName(repoRef, branchName, owner) {
   const list = ghJsonArray(buildMergedPrByBranchArgs(repoRef, branchName));
+  const normalizedOwner = owner.trim().toLowerCase();
   for (const entry of list) {
     const number = Number.parseInt(String(entry?.number ?? ''), 10);
     if (!Number.isInteger(number) || number <= 0) {
       continue;
     }
     if (String(entry?.headRefName ?? '') !== branchName) {
+      continue;
+    }
+    const headOwner = String(entry?.headRepositoryOwner?.login ?? '')
+      .trim()
+      .toLowerCase();
+    if (!headOwner || headOwner !== normalizedOwner) {
+      // A fork's PR (or a response missing headRepositoryOwner) never
+      // counts as a hit -- fail-safe, matching this file's "never fail
+      // toward a false high-confidence flag" contract.
       continue;
     }
     return { number, mergedAt: String(entry?.mergedAt ?? '') };
