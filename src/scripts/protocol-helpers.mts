@@ -6406,7 +6406,7 @@ export function computePreMergeReadinessBlockers(
         detail:
           'effective development branch could not be resolved (no developmentBranch policy value and the live repository default branch could not be read)',
       });
-    } else {
+    } else if (status === 'configured' || status === 'default') {
       const effectiveBranch = String(developmentBranchTarget.branch ?? '');
       if (effectiveBranch === '' || effectiveBranch !== baseRefName) {
         blockers.push({
@@ -6414,6 +6414,17 @@ export function computePreMergeReadinessBlockers(
           detail: `PR base branch "${baseRefName}" does not match the effective development branch "${effectiveBranch}" (status="${status}")`,
         });
       }
+    } else {
+      // Whitelist, not a denylist: an unrecognized status (a typo, a
+      // future enum value this file does not know about yet, or any
+      // other coerced-`String(...)` garbage) must fail closed rather
+      // than fall through to the branch comparison, where a coincidental
+      // `branch === baseRefName` (including both empty) would otherwise
+      // silently pass an invariant this file cannot actually vouch for.
+      blockers.push({
+        gate: 'development-branch-target',
+        detail: `unrecognized developmentBranchTarget.status "${status}" (expected "configured", "default", "invalid", or "unavailable")`,
+      });
     }
   }
 

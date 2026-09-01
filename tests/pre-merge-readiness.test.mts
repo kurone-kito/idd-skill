@@ -8622,3 +8622,22 @@ test('#2272: an empty-string developmentBranchTarget.status fails closed to unav
   assert.ok(blocker);
   assert.match(blocker.detail, /could not be resolved/);
 });
+
+test('#2272: an unrecognized developmentBranchTarget.status fails closed even when branch coincidentally matches baseRefName', () => {
+  const fixture = readJson('fixtures/pre-merge-readiness/clean.json');
+  const summary = buildPreMergeReadinessSummary(fixture.input, {
+    ...fixture.options,
+    includeDispositionEvidence: true,
+    developmentBranchTarget: {
+      status: 'bogus',
+      branch: 'main',
+      baseRefName: 'main',
+    },
+  });
+  assert.equal(summary.ready, false);
+  const blocker = (summary.blockers as { gate: string; detail: string }[]).find(
+    (item) => item.gate === 'development-branch-target',
+  );
+  assert.ok(blocker);
+  assert.match(blocker.detail, /unrecognized/);
+});
