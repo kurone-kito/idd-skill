@@ -66,6 +66,19 @@ function reusableWorkflowCallTarget(text: string): string | null {
   return match ? match[1] : null;
 }
 
+/** Extracts one job's indented body -- the lines from `^  {jobId}:$` up to
+ * (but not including) the next 2-space-indented sibling key, or end of
+ * file. */
+function extractJobBody(text: string, jobId: string): string {
+  const startMatch = text.match(new RegExp(`^ {2}${jobId}:$`, 'm'));
+  assert.ok(startMatch?.index !== undefined, `job ${jobId} not found`);
+  const afterStart = text.slice(startMatch.index + startMatch[0].length);
+  const nextSiblingMatch = afterStart.match(/^ {2}\S/m);
+  return nextSiblingMatch?.index === undefined
+    ? afterStart
+    : afterStart.slice(0, nextSiblingMatch.index);
+}
+
 /** Same on:-block slice convention as
  * tests/advisory-convergence-comment-workflow.test.mts: every workflow file
  * in this repository places `permissions:` immediately after its `on:`
@@ -105,6 +118,17 @@ test('required-check workflows keep an unfiltered pull_request trigger and their
       text,
       new RegExp(`^ {2}${jobId}:$`, 'm'),
       `${file}: must keep required job id ${jobId}`,
+    );
+    // GitHub reports a required status check under the job's effective
+    // *display name* -- its own `name:` key when present, the job id
+    // otherwise -- so a job-level `name:` addition would silently move
+    // the check the ruleset waits on, even though the job id above is
+    // unchanged and this test's own id assertion would keep passing.
+    const jobBody = extractJobBody(text, jobId);
+    assert.doesNotMatch(
+      jobBody,
+      /^ {4}name:/m,
+      `${file}: job ${jobId} must not declare its own display name -- that changes the literal required-status-check context`,
     );
   }
 });

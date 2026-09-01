@@ -1743,7 +1743,7 @@ since the gate only ever waits on the required contexts. Filtering or
 dropping a _required_ context's own trigger is the one cut this guide
 never recommends: a path-filtered required check simply never reports for
 a change outside its filter, which blocks the pull request forever rather
-than saving anything.
+than saving anything (preventive; no observed incident yet).
 
 **On a private repository, the account Actions spend limit is where this
 multiplier stops being merely a cost and becomes a hard block**: once the
