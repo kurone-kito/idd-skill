@@ -3,14 +3,17 @@ import { test } from 'node:test';
 
 import {
   clone,
+  DEFAULT_PROVIDER,
   getReviewEscalationChangesRequestedPolicy,
   inspectCritiqueLoopDelegateLayer,
   inspectDevelopmentBranch,
+  inspectProvider,
   normalizePolicyConfig,
   POLICY_DEFAULTS,
   parseIsoDurationToMs,
   resolveEffectiveCritiqueLoopDelegate,
   resolveEffectiveDevelopmentBranch,
+  resolveEffectiveProvider,
   selectDesyncedIndex,
 } from '../src/scripts/policy-helpers.mts';
 
@@ -981,4 +984,66 @@ test('resolveEffectiveDevelopmentBranch: an invalid policy fails closed regardle
     resolveEffectiveDevelopmentBranch({ developmentBranch: '' }, 'main').status,
     'invalid',
   );
+});
+
+test('inspectProvider distinguishes absent, configured, and invalid (#2265)', () => {
+  assert.deepEqual(inspectProvider({}), { status: 'absent' });
+  assert.deepEqual(inspectProvider(null), { status: 'absent' });
+  assert.deepEqual(inspectProvider('not-an-object'), { status: 'absent' });
+  assert.deepEqual(inspectProvider({ provider: 'github' }), {
+    status: 'configured',
+    provider: 'github',
+  });
+  assert.deepEqual(inspectProvider({ provider: 'gitlab' }), {
+    status: 'configured',
+    provider: 'gitlab',
+  });
+  assert.deepEqual(inspectProvider({ provider: 'bitbucket' }), {
+    status: 'configured',
+    provider: 'bitbucket',
+  });
+  assert.equal(inspectProvider({ provider: 'svn' }).status, 'invalid');
+  assert.equal(inspectProvider({ provider: '' }).status, 'invalid');
+  assert.equal(inspectProvider({ provider: 'GitHub' }).status, 'invalid');
+  assert.equal(inspectProvider({ provider: 42 }).status, 'invalid');
+  assert.equal(inspectProvider({ provider: null }).status, 'invalid');
+});
+
+test('resolveEffectiveProvider: absent resolves to the default GitHub provider, same as today (#2265 AC3)', () => {
+  assert.equal(DEFAULT_PROVIDER, 'github');
+  assert.deepEqual(resolveEffectiveProvider({}), {
+    status: 'default',
+    provider: 'github',
+  });
+  assert.deepEqual(resolveEffectiveProvider(null), {
+    status: 'default',
+    provider: 'github',
+  });
+});
+
+test('resolveEffectiveProvider: each supported provider identifier resolves configured (#2265 AC4)', () => {
+  assert.deepEqual(resolveEffectiveProvider({ provider: 'github' }), {
+    status: 'configured',
+    provider: 'github',
+  });
+  assert.deepEqual(resolveEffectiveProvider({ provider: 'gitlab' }), {
+    status: 'configured',
+    provider: 'gitlab',
+  });
+  assert.deepEqual(resolveEffectiveProvider({ provider: 'bitbucket' }), {
+    status: 'configured',
+    provider: 'bitbucket',
+  });
+});
+
+test('resolveEffectiveProvider: an unknown provider value fails closed, never silently falls back to the default (#2265 AC3)', () => {
+  assert.deepEqual(resolveEffectiveProvider({ provider: 'svn' }), {
+    status: 'invalid',
+    reason: 'provider must be one of github, gitlab, bitbucket',
+  });
+  assert.equal(
+    resolveEffectiveProvider({ provider: 'GitHub' }).status,
+    'invalid',
+  );
+  assert.equal(resolveEffectiveProvider({ provider: 42 }).status, 'invalid');
 });

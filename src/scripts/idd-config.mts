@@ -49,6 +49,7 @@ import {
 export interface IddConfig {
   trustedMarkerActors?: unknown;
   advisoryBotLogins?: unknown;
+  provider?: unknown;
   [key: string]: unknown;
 }
 

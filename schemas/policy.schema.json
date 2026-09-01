@@ -35,6 +35,11 @@
       "pattern": "^(?!refs/heads/)[A-Za-z0-9._/][A-Za-z0-9._/-]*$",
       "description": "Long-lived branch that receives IDD feature pull requests, distinct from the repository's trusted GitHub default branch used for workflow/configuration checkout (#2271). A short branch name only, never a `refs/heads/` ref, restricted to a conservative safe charset (letters, digits, `.`, `_`, `/`, `-`, never leading with `-`) so every unquoted shell-command substitution in the instruction files is safe by construction -- a leading `-` would otherwise be parsed as an option rather than a positional argument. Optional; absent resolves the repository's live GitHub default branch, and onboarding records this only after verifying the branch exists on the configured remote. Release, hotfix, and development-to-default promotion flows are outside this field's support boundary."
     },
+    "provider": {
+      "type": "string",
+      "enum": ["github", "gitlab", "bitbucket"],
+      "description": "Git-hosting provider selection for the future provider adapter boundary (#2265; see docs/provider-boundary.md). Not to be confused with `providerOutage`, which names an unrelated CI/Actions-service outage-relief declaration policy. Optional; absent resolves to `github`, the same effective policy as today. Setting `gitlab` or `bitbucket` only validates and records the selection -- no adapter for either provider exists yet, so every current helper still only speaks to GitHub through `gh`."
+    },
     "mergePolicy": {
       "type": "string",
       "enum": ["fully_autonomous_merge", "human_merge", "separate_merge_agent"],

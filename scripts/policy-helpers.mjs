@@ -3,6 +3,8 @@
 // The scripts/policy-helpers.mjs copy is generated from the .mts source
 // named above by `pnpm run build`. Edit the .mts source, never the
 // generated .mjs. See docs/typescript-sources.md.
+import { PROVIDER_IDS } from './provider-contract.mjs';
+
 /**
  * A qualified branch name: a conservative safe charset (letters, digits,
  * `.`, `_`, `/`, `-` only), with the first character excluding `-`, so
@@ -83,6 +85,55 @@ export function resolveEffectiveDevelopmentBranch(config, liveDefaultBranch) {
     return { status: 'unavailable' };
   }
   return { status: 'default', branch: liveDefaultBranch };
+}
+/** GitHub is the only functional provider until an adapter lands (#2265). */
+export const DEFAULT_PROVIDER = 'github';
+/**
+ * Inspect the top-level `provider` key on a raw policy document without
+ * applying any default (#2265). Mirrors {@link inspectDevelopmentBranch}'s
+ * absent/configured/invalid shape: absent means "no opinion, GitHub stays
+ * the effective provider"; invalid means "an unrecognized provider value
+ * was present and must fail closed rather than be treated as absent or
+ * silently coerced to the default".
+ */
+export function inspectProvider(config) {
+  if (typeof config !== 'object' || config === null || Array.isArray(config)) {
+    return { status: 'absent' };
+  }
+  if (!Object.hasOwn(config, 'provider')) {
+    return { status: 'absent' };
+  }
+  const value = config.provider;
+  if (typeof value !== 'string' || !PROVIDER_IDS.includes(value)) {
+    return {
+      status: 'invalid',
+      reason: `provider must be one of ${PROVIDER_IDS.join(', ')}`,
+    };
+  }
+  return { status: 'configured', provider: value };
+}
+/**
+ * Resolve the effective provider selection (#2265): a configured
+ * `provider` policy value wins outright; an absent policy resolves to
+ * `DEFAULT_PROVIDER` (`'github'`), producing the same effective policy as
+ * the current, provider-unaware configuration; an invalid value fails
+ * closed rather than silently falling back to the default, since a
+ * present-but-broken policy must never be treated the same as no opinion
+ * at all.
+ *
+ * Pure -- performs no I/O and needs no live evidence, unlike
+ * {@link resolveEffectiveDevelopmentBranch}, because there is no
+ * provider-agnostic "live default" to fall back to.
+ */
+export function resolveEffectiveProvider(config) {
+  const inspection = inspectProvider(config);
+  if (inspection.status === 'configured') {
+    return { status: 'configured', provider: inspection.provider };
+  }
+  if (inspection.status === 'invalid') {
+    return { status: 'invalid', reason: inspection.reason };
+  }
+  return { status: 'default', provider: DEFAULT_PROVIDER };
 }
 const HELPER_RUNTIME_PROFILES = new Set([
   'package-manager',
