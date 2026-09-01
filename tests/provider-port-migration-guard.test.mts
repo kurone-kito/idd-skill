@@ -19,6 +19,7 @@ const REPO_ROOT = fileURLToPath(new URL('..', import.meta.url));
 const MIGRATED_HELPERS: readonly string[] = [
   'collaborator-permission.mts',
   'discover-viability-gate.mts',
+  'discover-orphan-filter.mts',
 ];
 
 const DIRECT_GH_PATTERNS: { pattern: RegExp; description: string }[] = [

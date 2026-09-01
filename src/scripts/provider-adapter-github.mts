@@ -12,6 +12,7 @@
 
 import {
   GH_TEXT_LOOP_OPTIONS,
+  GH_TEXT_LOOP_TIMEOUT_OPTIONS,
   ghApiJson,
   resolveViewerLogin as ghExecResolveViewerLogin,
   ghText,
@@ -35,6 +36,18 @@ import type {
   ProviderWorkItem,
   ProviderWorkItemSummary,
 } from './provider-port.mts';
+
+/** Raw REST issue-payload fields this adapter reads, GitHub-shaped. */
+interface RawIssue {
+  number?: unknown;
+  title?: unknown;
+  body?: unknown;
+  state?: unknown;
+  labels?: unknown;
+  url?: unknown;
+  html_url?: unknown;
+  milestone?: unknown;
+}
 
 function statusToCategory(status: number | null): ProviderErrorCategory {
   if (status === 401) return 'authentication';
@@ -113,12 +126,7 @@ export function createGithubProviderAdapter(
         }
         throw error;
       }
-      const issue = data as {
-        number?: unknown;
-        title?: unknown;
-        body?: unknown;
-        state?: unknown;
-      } | null;
+      const issue = data as RawIssue | null;
       if (!issue) {
         return null;
       }
@@ -127,18 +135,33 @@ export function createGithubProviderAdapter(
         title: String(issue.title ?? ''),
         body: String(issue.body ?? ''),
         state: String(issue.state ?? '').toUpperCase(),
+        labels: issue.labels,
+        url: issue.url === undefined ? undefined : String(issue.url),
+        htmlUrl:
+          issue.html_url === undefined ? undefined : String(issue.html_url),
+        milestone: issue.milestone,
       };
     },
 
-    listOpenWorkItems(): ProviderWorkItemSummary[] {
+    listOpenWorkItems(): ProviderWorkItem[] {
       const rows = deps.ghApiJson(`${repoPath}/issues?state=open`, {
         paginate: true,
-      }) as { number?: unknown; title?: unknown; pull_request?: unknown }[];
+      }) as (RawIssue & { pull_request?: unknown })[];
       return rows
         .filter((row) => row.pull_request == null)
         .map((row) => ({
           number: Number(row.number),
           title: String(row.title ?? ''),
+          body: String(row.body ?? ''),
+          // Raw REST casing (lowercase "open"/"closed"), NOT uppercased
+          // like getWorkItem's state -- see provider-port.mts's doc
+          // comment on this method for why the two differ.
+          state: String(row.state ?? ''),
+          labels: row.labels,
+          url: row.url === undefined ? undefined : String(row.url),
+          htmlUrl:
+            row.html_url === undefined ? undefined : String(row.html_url),
+          milestone: row.milestone,
         }));
     },
 
@@ -157,6 +180,28 @@ export function createGithubProviderAdapter(
         paginate: true,
         extraArgs: ['-H', 'Accept: application/vnd.github+json'],
       }) as ProviderTimelineEvent[];
+    },
+
+    getWorkItemState(number: number): string | null {
+      try {
+        const state = deps.ghText(
+          [
+            'issue',
+            'view',
+            String(number),
+            '--repo',
+            `${owner}/${repo}`,
+            '--json',
+            'state',
+            '--jq',
+            '.state',
+          ],
+          GH_TEXT_LOOP_TIMEOUT_OPTIONS,
+        );
+        return state || null;
+      } catch {
+        return null;
+      }
     },
 
     closeWorkItem(number: number, reason: string): void {

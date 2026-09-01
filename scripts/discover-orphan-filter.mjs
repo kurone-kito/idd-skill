@@ -24,10 +24,13 @@ import {
   buildClaimStateResolution,
 } from './discover-roadmap-graph.mjs';
 import { effortOrdinal, parseEffort } from './effort.mjs';
-import { GH_TEXT_LOOP_TIMEOUT_OPTIONS, ghText } from './gh-exec.mjs';
 import { loadPolicyConfig } from './idd-config.mjs';
 import { createMarkerRegex } from './marker-regex.mjs';
 import { normalizePolicyConfig, POLICY_DEFAULTS } from './policy-helpers.mjs';
+import {
+  createGithubProviderAdapter,
+  resolveCurrentGithubRepository,
+} from './provider-adapter-github.mjs';
 
 const DEFAULT_MARKER_PREFIX = 'idd-skill';
 if (import.meta.main) {
@@ -354,21 +357,13 @@ async function runCli() {
     printHelp();
     process.exit(0);
   }
-  const owner =
-    args.owner ||
-    ghText(
-      ['repo', 'view', '--json', 'owner', '--jq', '.owner.login'],
-      GH_TEXT_LOOP_TIMEOUT_OPTIONS,
-    );
-  const repo =
-    args.repo ||
-    ghText(
-      ['repo', 'view', '--json', 'name', '--jq', '.name'],
-      GH_TEXT_LOOP_TIMEOUT_OPTIONS,
-    );
-  const repoRef = `${owner}/${repo}`;
+  const currentRepo =
+    args.owner && args.repo ? null : resolveCurrentGithubRepository();
+  const owner = args.owner || currentRepo?.owner || '';
+  const repo = args.repo || currentRepo?.repo || '';
+  const port = createGithubProviderAdapter(owner, repo);
   const policy = loadPolicy(args.policy);
-  const openIssues = fetchOpenIssues(repoRef);
+  const openIssues = fetchOpenIssues(port);
   const openStateByNumber = new Map(
     openIssues.map((issue) => [issue.number, String(issue.state)]),
   );
@@ -392,9 +387,9 @@ async function runCli() {
   const result = await filterOrphanIssues(openIssues, {
     issueStateByNumber: openStateByNumber,
     fetchIssueStateByNumber: (issueNumber) =>
-      fetchIssueState(repoRef, issueNumber),
+      fetchIssueState(port, issueNumber),
     fetchLabelEventsByIssueNumber: (issueNumber) =>
-      fetchIssueLabelEvents(repoRef, issueNumber),
+      fetchIssueLabelEvents(port, issueNumber),
     markerPrefix: policy.markerPrefix,
     authoringLabelName: policy.authoringLabelName,
     authoringStaleAgeMs: policy.authoringStaleAgeMs,
@@ -686,55 +681,13 @@ function resolveIssueState(
   issueStateByNumber.set(number, state);
   return state;
 }
-function fetchIssueState(repoRef, issueNumber) {
-  try {
-    const state = ghText(
-      [
-        'issue',
-        'view',
-        String(issueNumber),
-        '--repo',
-        repoRef,
-        '--json',
-        'state',
-        '--jq',
-        '.state',
-      ],
-      GH_TEXT_LOOP_TIMEOUT_OPTIONS,
-    );
-    return state || 'UNRESOLVABLE';
-  } catch {
-    return 'UNRESOLVABLE';
-  }
+function fetchIssueState(port, issueNumber) {
+  return port.getWorkItemState(issueNumber) || 'UNRESOLVABLE';
 }
-function fetchIssueLabelEvents(repoRef, issueNumber) {
-  const events = [];
-  const pageSize = 100;
-  for (let page = 1; ; page += 1) {
-    const rawPage = ghJson([
-      'api',
-      `repos/${repoRef}/issues/${issueNumber}/timeline?per_page=${pageSize}&page=${page}`,
-    ]);
-    events.push(...rawPage.filter((event) => event?.event === 'labeled'));
-    if (rawPage.length < pageSize) {
-      break;
-    }
-  }
-  return events;
-}
-function ghJson(args) {
-  return JSON.parse(runGh(args).trim() || '[]');
-}
-function runGh(args) {
-  try {
-    return ghText(args, GH_TEXT_LOOP_TIMEOUT_OPTIONS);
-  } catch (error) {
-    const stderr = String(error?.stderr ?? '').trim();
-    if (stderr) {
-      throw new Error(`gh command failed: ${stderr}`);
-    }
-    throw error;
-  }
+function fetchIssueLabelEvents(port, issueNumber) {
+  return port
+    .getWorkItemTimeline(issueNumber)
+    .filter((event) => event.event === 'labeled');
 }
 function normalizeMarkerPrefix(prefix) {
   if (typeof prefix !== 'string' || prefix.length === 0) {
@@ -769,21 +722,19 @@ function normalizeRoadmapLabelName(labelName) {
     ? labelName
     : POLICY_DEFAULTS.labels.roadmapLabelName;
 }
-function fetchOpenIssues(repoRef) {
-  const issues = [];
-  const pageSize = 100;
-  for (let page = 1; ; page += 1) {
-    const rawPage = ghJson([
-      'api',
-      `repos/${repoRef}/issues?state=open&per_page=${pageSize}&page=${page}`,
-    ]);
-    const pageItems = rawPage
-      .filter((item) => item?.pull_request === undefined)
-      .map((item) => normalizeIssue(item));
-    issues.push(...pageItems);
-    if (rawPage.length < pageSize) {
-      break;
-    }
-  }
-  return issues;
+function fetchOpenIssues(port) {
+  // listOpenWorkItems() already excludes pull requests -- no re-filtering
+  // needed here.
+  return port.listOpenWorkItems().map((item) =>
+    normalizeIssue({
+      number: item.number,
+      title: item.title,
+      state: item.state,
+      labels: item.labels,
+      body: item.body,
+      url: item.url,
+      html_url: item.htmlUrl,
+      milestone: item.milestone,
+    }),
+  );
 }

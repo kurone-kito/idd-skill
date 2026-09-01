@@ -11,6 +11,7 @@
 // domain helpers never see it.
 import {
   GH_TEXT_LOOP_OPTIONS,
+  GH_TEXT_LOOP_TIMEOUT_OPTIONS,
   ghApiJson,
   resolveViewerLogin as ghExecResolveViewerLogin,
   ghText,
@@ -77,6 +78,11 @@ export function createGithubProviderAdapter(owner, repo, deps = DEFAULT_DEPS) {
         title: String(issue.title ?? ''),
         body: String(issue.body ?? ''),
         state: String(issue.state ?? '').toUpperCase(),
+        labels: issue.labels,
+        url: issue.url === undefined ? undefined : String(issue.url),
+        htmlUrl:
+          issue.html_url === undefined ? undefined : String(issue.html_url),
+        milestone: issue.milestone,
       };
     },
     listOpenWorkItems() {
@@ -88,6 +94,16 @@ export function createGithubProviderAdapter(owner, repo, deps = DEFAULT_DEPS) {
         .map((row) => ({
           number: Number(row.number),
           title: String(row.title ?? ''),
+          body: String(row.body ?? ''),
+          // Raw REST casing (lowercase "open"/"closed"), NOT uppercased
+          // like getWorkItem's state -- see provider-port.mts's doc
+          // comment on this method for why the two differ.
+          state: String(row.state ?? ''),
+          labels: row.labels,
+          url: row.url === undefined ? undefined : String(row.url),
+          htmlUrl:
+            row.html_url === undefined ? undefined : String(row.html_url),
+          milestone: row.milestone,
         }));
     },
     searchWorkItems(query) {
@@ -104,6 +120,27 @@ export function createGithubProviderAdapter(owner, repo, deps = DEFAULT_DEPS) {
         paginate: true,
         extraArgs: ['-H', 'Accept: application/vnd.github+json'],
       });
+    },
+    getWorkItemState(number) {
+      try {
+        const state = deps.ghText(
+          [
+            'issue',
+            'view',
+            String(number),
+            '--repo',
+            `${owner}/${repo}`,
+            '--json',
+            'state',
+            '--jq',
+            '.state',
+          ],
+          GH_TEXT_LOOP_TIMEOUT_OPTIONS,
+        );
+        return state || null;
+      } catch {
+        return null;
+      }
     },
     closeWorkItem(number, reason) {
       deps.ghText(

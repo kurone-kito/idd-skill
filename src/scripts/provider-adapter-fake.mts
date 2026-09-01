@@ -53,6 +53,9 @@ export interface FakeProviderFixture {
   requiredChecks?: Record<number, ProviderRequiredCheck[]>;
   reviews?: Record<number, unknown[]>;
   openChangeRequests?: ProviderChangeRequestSummary[];
+  /** Backs {@link ProviderPort.getWorkItemState}; absent key or an
+   * explicit `null` value both mean "not found". */
+  issueStates?: Record<number, string | null>;
   /** Every posted comment is appended here, in call order. */
   postedComments?: { number: number; body: string }[];
   /** Every closed work item is appended here, in call order. */
@@ -107,10 +110,10 @@ export function createFakeProviderAdapter(
       return fixture.workItems?.[number] ?? null;
     },
 
-    listOpenWorkItems(): ProviderWorkItemSummary[] {
-      return Object.values(fixture.workItems ?? {})
-        .filter((item) => item.state === 'OPEN')
-        .map((item) => ({ number: item.number, title: item.title }));
+    listOpenWorkItems(): ProviderWorkItem[] {
+      return Object.values(fixture.workItems ?? {}).filter(
+        (item) => item.state === 'OPEN',
+      );
     },
 
     searchWorkItems(): ProviderWorkItemSummary[] {
@@ -122,6 +125,10 @@ export function createFakeProviderAdapter(
 
     getWorkItemTimeline(number: number): ProviderTimelineEvent[] {
       return fixture.timelines?.[number] ?? [];
+    },
+
+    getWorkItemState(number: number): string | null {
+      return fixture.issueStates?.[number] ?? null;
     },
 
     closeWorkItem(number: number, reason: string): void {

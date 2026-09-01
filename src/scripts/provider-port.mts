@@ -35,12 +35,23 @@ import type {
   ProviderRepositoryLocator,
 } from './provider-contract.mts';
 
-/** Provider-neutral work item (GitHub issue) shape, full object. */
+/**
+ * Provider-neutral work item (GitHub issue) shape, full object. `labels`,
+ * `url`, `htmlUrl`, and `milestone` are raw/untransformed passthroughs of
+ * the underlying REST fields (a domain helper does its own label-shape
+ * normalization, e.g. `discover-orphan-filter.mts`'s `normalizeLabels`) --
+ * optional because {@link ProviderPort.getWorkItem}'s existing single-issue
+ * consumer (`discover-viability-gate.mts`) never reads them.
+ */
 export interface ProviderWorkItem {
   number: number;
   title: string;
   body: string;
   state: string;
+  labels?: unknown;
+  url?: string;
+  htmlUrl?: string;
+  milestone?: unknown;
 }
 
 /** Minimal locator/summary shape for a work item found via list/search. */
@@ -139,8 +150,18 @@ export interface ProviderPort {
    */
   getWorkItem(number: number): ProviderWorkItem | null;
 
-  /** work-items. Paginated, pull-requests excluded from results. */
-  listOpenWorkItems(): ProviderWorkItemSummary[];
+  /**
+   * work-items. Paginated, pull-requests excluded from results. Full
+   * object per item (not the summary shape) -- REST returns the full
+   * issue payload regardless of field selection, and
+   * `discover-orphan-filter.mts`'s `fetchOpenIssues` needs `labels`,
+   * `body`, `url`, and `milestone` alongside `number`/`title`. `state` is
+   * passed through in REST's raw lowercase form (unlike
+   * {@link getWorkItem}'s uppercased `state`) to keep this method's output
+   * byte-stable with `fetchOpenIssues`'s pre-migration CLI output --
+   * downstream comparisons already re-uppercase defensively.
+   */
+  listOpenWorkItems(): ProviderWorkItem[];
 
   /** work-items. GitHub search-query syntax is an adapter-internal detail. */
   searchWorkItems(query: string): ProviderWorkItemSummary[];
@@ -151,6 +172,21 @@ export interface ProviderPort {
    * domain helper, matching today's split between callers.
    */
   getWorkItemTimeline(number: number): ProviderTimelineEvent[];
+
+  /**
+   * work-items. The distinct `gh issue view --json state --jq .state` call
+   * shape -- GraphQL-resolved, NOT the REST `issues/{number}` shape
+   * {@link getWorkItem} uses. Not interchangeable: empirically, `gh issue
+   * view` on a PR number returns `MERGED` (a value REST's issue state
+   * never produces), so a caller that needs to distinguish an issue from a
+   * PR reference cannot substitute `getWorkItem`'s `.state` here. Returns
+   * `null` both on ANY failure (unlike `getWorkItem`, this does not
+   * distinguish a 404 from another failure) and on a successful-but-empty
+   * response -- matches `discover-orphan-filter.mts`'s existing blanket
+   * try/catch plus its `state || 'UNRESOLVABLE'` fallback exactly; the
+   * caller maps `null` to its own sentinel.
+   */
+  getWorkItemState(number: number): string | null;
 
   /** work-items, write. */
   closeWorkItem(number: number, reason: string): void;

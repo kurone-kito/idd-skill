@@ -47,9 +47,9 @@ export function createFakeProviderAdapter(fixture) {
       return fixture.workItems?.[number] ?? null;
     },
     listOpenWorkItems() {
-      return Object.values(fixture.workItems ?? {})
-        .filter((item) => item.state === 'OPEN')
-        .map((item) => ({ number: item.number, title: item.title }));
+      return Object.values(fixture.workItems ?? {}).filter(
+        (item) => item.state === 'OPEN',
+      );
     },
     searchWorkItems() {
       return Object.values(fixture.workItems ?? {}).map((item) => ({
@@ -59,6 +59,9 @@ export function createFakeProviderAdapter(fixture) {
     },
     getWorkItemTimeline(number) {
       return fixture.timelines?.[number] ?? [];
+    },
+    getWorkItemState(number) {
+      return fixture.issueStates?.[number] ?? null;
     },
     closeWorkItem(number, reason) {
       fixture.closedWorkItems?.push({ number, reason });
