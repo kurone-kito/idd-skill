@@ -153,6 +153,11 @@ Apply the configured policy before passing A0-O candidates to A3.5:
 - `public-disabled`: for private or internal repositories, behave the
   same as `none`.
 
+**Autopilot floor.** In autopilot runs, pass `--autopilot` to
+`discover-orphan-filter`; skip `routed_to_human` candidates (never
+reach A3.5). No helper: apply A4 Step 2's floor rule verbatim,
+including `enabled: false`, to each footer.
+
 At least one orphan issue remains after the policy is applied: pass the
 remaining set directly to **A3.5**, skipping A1–A3.
 
@@ -171,13 +176,10 @@ reached only when every active discovery path returns zero: both paths
 for `orphan-first` and `roadmap-first` (orphan + roadmap fallback,
 either order); just the roadmap path for `roadmap`.
 
-**Claim-state annotation (optional).** When helper support is enabled,
-`discover-orphan-filter` accepts an opt-in `--with-claim-state` flag
-(plus `--current-claim-id`) that annotates each candidate with
-active-claim eligibility, mirroring `discover-roadmap-graph`'s flag of
-the same name — see `docs/idd-helper-scripts.md`. This lets an A0-O
-caller fold live claim state into its output the same way the roadmap
-path already can.
+**Claim-state annotation (optional).** `discover-orphan-filter`
+accepts `--with-claim-state` (plus `--current-claim-id`), mirroring
+`discover-roadmap-graph`'s flag of the same name — see
+`docs/idd-helper-scripts.md`.
 
 ## A1 — Find the roadmap
 
