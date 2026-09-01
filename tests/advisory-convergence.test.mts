@@ -1,5 +1,13 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
+import { tmpdir } from 'node:os';
+import { dirname, join } from 'node:path';
 import { test } from 'node:test';
 
 import {
@@ -11,11 +19,14 @@ import {
   classifyCopilotAuthoredThreadIds,
   collectAssertNextActions,
   computeAdvisoryConvergenceVerdict,
+  DEFAULT_COPILOT_REVIEW_POLL_INTERVAL_MS,
+  DEFAULT_COPILOT_REVIEW_POLL_MAX_WAIT_MS,
   formatAssertNextActions,
   hasTrustedClaimMarkerHistory,
   isSoleCopilotNotReviewedYetReason,
   parseArgs,
   pickResolvingClaimEvents,
+  readCopilotReviewPollPolicy,
   resolveClaimEvidence,
   reviewPolicyNotApplicableReason,
   runAdvisoryConvergence,
@@ -4003,6 +4014,109 @@ test('runAdvisoryConvergenceWithPoll: review lands on HEAD mid-poll with outstan
   // it must not keep polling out the rest of the window.
   assert.equal(calls(), 1);
   assert.equal(collectCalls(), 2);
+});
+
+function baseValidConfig(overrides: Record<string, unknown> = {}) {
+  return {
+    iddVersion: '0.1.0',
+    markerPrefix: 'idd-skill',
+    mergePolicy: 'fully_autonomous_merge',
+    reviewPolicy: 'copilot-advisory',
+    threadResolutionPolicy: 'fast-agent-resolve',
+    claimTiming: { staleAge: 'PT24H', heartbeatInterval: 'PT12H' },
+    trustedMarkerActors: ['kurone-kito'],
+    commands: {
+      'install-deps': 'true',
+      'fix-validate': 'true',
+      'pre-push-validate': 'true',
+      'post-fix-validate': 'true',
+    },
+    ...overrides,
+  };
+}
+
+function writeConfigFixture(
+  sandbox: string,
+  config: Record<string, unknown>,
+): string {
+  const configPath = join(sandbox, '.github', 'idd', 'config.json');
+  mkdirSync(dirname(configPath), { recursive: true });
+  writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`);
+  return configPath;
+}
+
+test('readCopilotReviewPollPolicy: absent config path reproduces the hardcoded defaults exactly (#2333)', () => {
+  const sandbox = mkdtempSync(join(tmpdir(), 'idd-advisory-convergence-poll-'));
+  try {
+    assert.deepEqual(
+      readCopilotReviewPollPolicy(join(sandbox, 'does-not-exist.json')),
+      {
+        pollIntervalMs: DEFAULT_COPILOT_REVIEW_POLL_INTERVAL_MS,
+        maxWaitMs: DEFAULT_COPILOT_REVIEW_POLL_MAX_WAIT_MS,
+      },
+    );
+  } finally {
+    rmSync(sandbox, { recursive: true, force: true });
+  }
+});
+
+test('readCopilotReviewPollPolicy: reads a configured advisoryConvergence section', () => {
+  const sandbox = mkdtempSync(join(tmpdir(), 'idd-advisory-convergence-poll-'));
+  try {
+    const configPath = writeConfigFixture(
+      sandbox,
+      baseValidConfig({
+        advisoryConvergence: {
+          copilotReviewPollInterval: 'PT10S',
+          copilotReviewPollMaxWait: 'PT2M',
+        },
+      }),
+    );
+    assert.deepEqual(readCopilotReviewPollPolicy(configPath), {
+      pollIntervalMs: 10_000,
+      maxWaitMs: 120_000,
+    });
+  } finally {
+    rmSync(sandbox, { recursive: true, force: true });
+  }
+});
+
+test('readCopilotReviewPollPolicy: still honors advisoryConvergence when an unrelated top-level field is schema-invalid (#1359)', () => {
+  const sandbox = mkdtempSync(join(tmpdir(), 'idd-advisory-convergence-poll-'));
+  try {
+    const configPath = writeConfigFixture(
+      sandbox,
+      baseValidConfig({
+        advisoryConvergence: { copilotReviewPollInterval: 'PT10S' },
+        unsupportedTopLevelKey: true,
+      }),
+    );
+    assert.deepEqual(readCopilotReviewPollPolicy(configPath), {
+      pollIntervalMs: 10_000,
+      maxWaitMs: DEFAULT_COPILOT_REVIEW_POLL_MAX_WAIT_MS,
+    });
+  } finally {
+    rmSync(sandbox, { recursive: true, force: true });
+  }
+});
+
+test('readCopilotReviewPollPolicy: falls back to defaults when its own advisoryConvergence section is schema-invalid', () => {
+  const sandbox = mkdtempSync(join(tmpdir(), 'idd-advisory-convergence-poll-'));
+  try {
+    const configPath = writeConfigFixture(
+      sandbox,
+      baseValidConfig({
+        // Fractional seconds are not a valid whole-second duration.
+        advisoryConvergence: { copilotReviewPollInterval: 'PT7.5S' },
+      }),
+    );
+    assert.deepEqual(readCopilotReviewPollPolicy(configPath), {
+      pollIntervalMs: DEFAULT_COPILOT_REVIEW_POLL_INTERVAL_MS,
+      maxWaitMs: DEFAULT_COPILOT_REVIEW_POLL_MAX_WAIT_MS,
+    });
+  } finally {
+    rmSync(sandbox, { recursive: true, force: true });
+  }
 });
 
 test('viewerProbeGhOptions captures gh stderr only under GitHub Actions', () => {

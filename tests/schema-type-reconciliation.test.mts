@@ -200,6 +200,10 @@ interface PolicyConfigFile {
     pollInterval?: string;
     capExhaustedRoute?: 'phase-specific' | 'hold';
   };
+  advisoryConvergence?: {
+    copilotReviewPollInterval?: string;
+    copilotReviewPollMaxWait?: string;
+  };
   ciWait?: {
     runningTimeout?: string;
     generationTimeout?: string;
@@ -497,6 +501,7 @@ export const policyConfigKeys = [
   'markerTrustAllowCollaboratorMarkers',
   'allowCollaboratorMarkers',
   'advisoryWait',
+  'advisoryConvergence',
   'ciWait',
   'ciGate',
   'discover',
