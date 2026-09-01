@@ -168,6 +168,20 @@ function isAdvisoryWaitRequestMarker(body) {
   );
 }
 /**
+ * Compares two ISO-8601 timestamps by parsed instant (epoch ms), not
+ * lexical string order. GitHub API timestamps are typically
+ * second-precision while this module's own `resolveCutoffIso()` output
+ * always carries fractional seconds (`toISOString()`); lexical comparison
+ * of those two shapes can disagree with true chronological order (e.g.
+ * `"...:00Z"` sorts lexically AFTER `"...:00.500Z"` despite being
+ * chronologically earlier). An unparsable side parses to `NaN`, and every
+ * comparison against `NaN` is `false` -- fails safe to "no ordering
+ * established" rather than throwing or misordering.
+ */
+function compareIsoTimestamps(a, b) {
+  return Date.parse(a) - Date.parse(b);
+}
+/**
  * The LATEST trusted `advisory-wait:` request marker's `created_at` among
  * `comments` -- "did the most recent request register" is the observable,
  * not "did the first request ever posted on this PR register". A marker
@@ -185,7 +199,7 @@ function latestTrustedAdvisoryWaitRequestAt(comments, trustedMarkerLogins) {
     if (!isAdvisoryWaitRequestMarker(String(comment?.body ?? ''))) continue;
     const createdAt = String(comment?.created_at ?? '');
     if (createdAt === '') continue;
-    if (latest === null || createdAt > latest) {
+    if (latest === null || compareIsoTimestamps(createdAt, latest) > 0) {
       latest = createdAt;
     }
   }
@@ -210,7 +224,10 @@ export function deriveAdvisoryReviewObservation(
     options.trustedMarkerLogins,
   );
   if (requestMarkerAt === null) return null;
-  if (options.cutoffIso !== null && requestMarkerAt < options.cutoffIso) {
+  if (
+    options.cutoffIso !== null &&
+    compareIsoTimestamps(requestMarkerAt, options.cutoffIso) < 0
+  ) {
     return null;
   }
   const registeredByTimeline = timeline.some((event) => {
@@ -220,7 +237,9 @@ export function deriveAdvisoryReviewObservation(
       return false;
     }
     const eventAt = String(event?.created_at ?? '');
-    return eventAt !== '' && eventAt >= requestMarkerAt;
+    return (
+      eventAt !== '' && compareIsoTimestamps(eventAt, requestMarkerAt) >= 0
+    );
   });
   const registeredByReview = reviews.some((review) => {
     const reviewerLogin = String(review?.user?.login ?? '');
@@ -228,7 +247,10 @@ export function deriveAdvisoryReviewObservation(
       return false;
     }
     const submittedAt = String(review?.submitted_at ?? '');
-    return submittedAt !== '' && submittedAt >= requestMarkerAt;
+    return (
+      submittedAt !== '' &&
+      compareIsoTimestamps(submittedAt, requestMarkerAt) >= 0
+    );
   });
   if (registeredByTimeline || registeredByReview) {
     return { prNumber, outcome: 'success' };
@@ -364,7 +386,7 @@ export function deriveCiActionsObservation(run, jobs, options) {
   if (
     options.cutoffIso !== null &&
     typeof run.updated_at === 'string' &&
-    run.updated_at < options.cutoffIso
+    compareIsoTimestamps(run.updated_at, options.cutoffIso) < 0
   ) {
     return null;
   }
@@ -440,7 +462,7 @@ export function collectCiActionsEvidence(owner, repo, options = {}) {
     if (
       cutoffIso !== null &&
       typeof run.updated_at === 'string' &&
-      run.updated_at < cutoffIso
+      compareIsoTimestamps(run.updated_at, cutoffIso) < 0
     ) {
       continue;
     }

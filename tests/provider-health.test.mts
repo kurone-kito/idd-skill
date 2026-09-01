@@ -307,6 +307,33 @@ test('deriveAdvisoryReviewObservation: a submitted review from the primary bot r
   assert.deepEqual(result, { prNumber: 1, outcome: 'success' });
 });
 
+test('deriveAdvisoryReviewObservation: registration is detected across mismatched fractional-second precision', () => {
+  // A second-precision marker timestamp and a fractional-second timeline
+  // timestamp for the SAME instant would misorder under lexical string
+  // comparison ("...:00.000Z" sorts lexically BEFORE "...:00Z" despite
+  // being the identical instant) -- this must resolve as registered.
+  const result = deriveAdvisoryReviewObservation(
+    1,
+    [
+      {
+        body: 'advisory-wait: agent-x 0123456789abcdef0123456789abcdef01234567 2026-09-01T00:00:00Z',
+        created_at: '2026-09-01T00:00:00Z',
+        user: { login: 'idd-bot' },
+      },
+    ],
+    [
+      {
+        event: 'review_requested',
+        created_at: '2026-09-01T00:00:00.000Z',
+        requested_reviewer: { login: 'copilot-pull-request-reviewer[bot]' },
+      },
+    ],
+    [],
+    BASE_DERIVE_OPTIONS,
+  );
+  assert.deepEqual(result, { prNumber: 1, outcome: 'success' });
+});
+
 test('deriveAdvisoryReviewObservation: an unregistered marker still within the settling window is not failure evidence', () => {
   const result = deriveAdvisoryReviewObservation(
     1,
