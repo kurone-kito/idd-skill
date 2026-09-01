@@ -97,8 +97,9 @@ profile entirely." A lite-opted-in session reads the full, standard
 standard-tier session.
 
 Confirmed against the live manifest (`audit/sync-manifest.json`);
-re-confirmed 2026-09-01 after #2181 moved the ceiling to the 200K
-baseline and ratcheted `bundle-review` to 138,000:
+re-confirmed 2026-09-01 after pull request #2342 (issue #2181) moved
+the ceiling to the 200K baseline and ratcheted `bundle-review` to
+138,000:
 
 | Bundle                        | Files                                                                                                                                     | `limitBytes` |
 | ----------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- | ------------ |

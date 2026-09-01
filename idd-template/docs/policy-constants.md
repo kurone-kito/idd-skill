@@ -392,7 +392,7 @@ copied template).
 - **Ceiling derivation**: no non-exempt bundle's `limitBytes` may exceed
   the **196,000-byte** `maxBundleLimitBytes` ceiling — a
   200K-context-derived cap of ≈ 49,000–60,300 tokens at this corpus's
-  observed 3.25–4.0 bytes/token, ≤ ~30% of a 200K context window,
+  observed 3.25–4.0 bytes/token, ≈ 24–30% of a 200K-token context window,
   leaving the remainder for the harness system prompt, tool schemas,
   adopter-repo instructions, and working context. The 200K baseline
   reflects the smallest context window among the model classes used to
