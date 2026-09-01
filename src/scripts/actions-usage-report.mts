@@ -107,6 +107,15 @@ export function billedMinutesFor(durationMs: number): number {
  * types either, not only for forks. {@link isPrFamilyEvent} closes that
  * gap: callers apply it first so a non-PR-triggered run is excluded on
  * its event type before this empty-list allowance can apply to it.
+ *
+ * Known limitation, not closed by either check above: two different
+ * fork-originated PRs sharing an identical head branch name would both
+ * report an empty `pull_requests` list and both pass this function,
+ * merging their runs together. Disambiguating that case needs each
+ * run's `head_repository` compared against the target PR's own head
+ * repository -- out of scope for this maintainer-only, single-repository
+ * dogfood tool, whose only real callers are this repository's own
+ * same-repository `issue/<number>-*` branches, never forks.
  */
 export function runBelongsToPr(
   pullRequests: readonly number[],
