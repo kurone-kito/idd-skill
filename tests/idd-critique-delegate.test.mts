@@ -13,11 +13,11 @@ const CLI_PATH = join(REPO_ROOT, 'scripts/idd-critique-delegate.mjs');
 
 /** Run the built CLI with a fully isolated HOME so the real operator's
  * user-global config (if any) never leaks into a test result, and return
- * the parsed JSON report. Also neutralizes GITHUB_ACTIONS -- the real test
- * runner's own environment carries it as "true" in CI, which would
- * otherwise leak into every spawned CLI process's inherited env and
- * silently trigger the GITHUB_ACTIONS auto-skip this suite tests
- * separately; pass `env: { GITHUB_ACTIONS: 'true' }` to opt back in. */
+ * the parsed JSON report. Also neutralizes GITHUB_ACTIONS: in CI, the test
+ * runner's own environment carries it as "true", which would otherwise
+ * leak into every spawned CLI process's inherited env and silently
+ * trigger the GITHUB_ACTIONS auto-skip this suite tests separately as its
+ * own behavior; pass `env: { GITHUB_ACTIONS: 'true' }` to opt back in. */
 function runCli(args: string[], env?: NodeJS.ProcessEnv): unknown {
   const isolatedHome = mkdtempSync(
     join(tmpdir(), 'idd-critique-delegate-home-'),
@@ -182,6 +182,79 @@ test('skips the $HOME-resolved user-global delegate when noUserGlobal is passed 
   );
   const report = buildCritiqueDelegateReport(
     { localConfig: {}, env: { HOME: home } },
+    true,
+  );
+  assert.deepEqual(report, {
+    usable: false,
+    source: 'none',
+    command: null,
+    mode: null,
+    reason: 'not-configured',
+  });
+});
+
+test('noUserGlobal also clears an explicitly supplied globalConfigPath, not just env (#2329 review)', () => {
+  const sandbox = mkdtempSync(
+    join(tmpdir(), 'idd-critique-delegate-explicit-global-'),
+  );
+  const globalPath = join(sandbox, 'config.json');
+  writeFileSync(
+    globalPath,
+    JSON.stringify({
+      critiqueLoop: { delegate: { command: 'global-review' } },
+    }),
+  );
+  const report = buildCritiqueDelegateReport(
+    { localConfig: {}, globalConfigPath: globalPath, env: {} },
+    true,
+  );
+  assert.deepEqual(report, {
+    usable: false,
+    source: 'none',
+    command: null,
+    mode: null,
+    reason: 'not-configured',
+  });
+});
+
+test('GITHUB_ACTIONS=true also clears an explicitly supplied globalConfigPath, not just env (#2329 review)', () => {
+  const sandbox = mkdtempSync(
+    join(tmpdir(), 'idd-critique-delegate-explicit-global-ci-'),
+  );
+  const globalPath = join(sandbox, 'config.json');
+  writeFileSync(
+    globalPath,
+    JSON.stringify({
+      critiqueLoop: { delegate: { command: 'global-review' } },
+    }),
+  );
+  const report = buildCritiqueDelegateReport({
+    localConfig: {},
+    globalConfigPath: globalPath,
+    env: { GITHUB_ACTIONS: 'true' },
+  });
+  assert.deepEqual(report, {
+    usable: false,
+    source: 'none',
+    command: null,
+    mode: null,
+    reason: 'not-configured',
+  });
+});
+
+test('noUserGlobal also clears an explicitly supplied homedir, not just env (#2329 review)', () => {
+  const home = mkdtempSync(
+    join(tmpdir(), 'idd-critique-delegate-explicit-homedir-'),
+  );
+  mkdirSync(join(home, '.config', 'idd-skill'), { recursive: true });
+  writeFileSync(
+    join(home, '.config', 'idd-skill', 'config.json'),
+    JSON.stringify({
+      critiqueLoop: { delegate: { command: 'homedir-review' } },
+    }),
+  );
+  const report = buildCritiqueDelegateReport(
+    { localConfig: {}, homedir: home, env: {} },
     true,
   );
   assert.deepEqual(report, {

@@ -70,9 +70,16 @@ function isRemoteAgentSurface(env) {
  */
 export function buildCritiqueDelegateReport(options, noUserGlobal = false) {
   const env = options?.env ?? process.env;
+  // Blanking `env` alone is not enough: `resolveEffectiveCritiqueLoopDelegateFromEnv`
+  // prefers an explicitly supplied `globalConfigPath`/`homedir` over env-based
+  // resolution, so a caller (or a future call site) that passes either
+  // alongside `noUserGlobal`/GITHUB_ACTIONS would still consult the
+  // user-global layer despite opting out. Clear both explicitly so opting
+  // out means the layer is never consulted, not just its default $HOME
+  // path (#2329 review).
   const resolvedOptions =
     noUserGlobal || isRemoteAgentSurface(env)
-      ? { ...options, env: {} }
+      ? { ...options, env: {}, globalConfigPath: undefined, homedir: undefined }
       : options;
   const effective =
     resolveEffectiveCritiqueLoopDelegateFromEnv(resolvedOptions);
