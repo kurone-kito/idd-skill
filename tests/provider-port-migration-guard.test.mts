@@ -26,6 +26,7 @@ const MIGRATED_HELPERS: readonly string[] = [
   'discover-readiness-check.mts',
   'discover-shared-file-overlap.mts',
   'resume-route-selection.mts',
+  'idd-roadmap-audit-execute.mts',
 ];
 
 const DIRECT_GH_PATTERNS: { pattern: RegExp; description: string }[] = [
