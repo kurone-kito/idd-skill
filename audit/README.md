@@ -180,16 +180,17 @@ and shrink it back to empty in the same PR or a tracked follow-up once
 that exception resolves.
 
 As of [#2181](https://github.com/kurone-kito/idd-skill/issues/2181)
-(resolved 2026-09-01), the ceiling's baseline moved from 128K to 200K
-contexts: `bundle-review` had re-entered `exemptBundles` pinned at the
-old 126,000-byte ceiling with no ratchet room, exactly while the
+(resolved 2026-09-01), the ceiling moved from a 128K-token to a
+200K-token context-window baseline: `bundle-review` had re-entered
+`exemptBundles` pinned at the old 126,000-byte ceiling with no ratchet
+room, exactly while the
 Copilot-outage roadmap
 ([#2318](https://github.com/kurone-kito/idd-skill/issues/2318)) needed
 advisory-wait instruction headroom in that bundle. The maintainer's
 priority call: outage resilience outranks the byte diet in both
 importance and urgency, and every session-model class the loop
 currently exercises holds a context of 200K tokens or more. So
-`maxBundleLimitBytes` rose to 196,000 (the same ≤ ~29%-of-window
+`maxBundleLimitBytes` rose to 196,000 (the same ~30%-of-window
 discipline applied at 200K), `bundle-review` ratcheted to 138,000 and
 `bundle-merge` to 122,000 (both back under the notice band), and
 `exemptBundles` returned to empty. The diet remains a best-effort

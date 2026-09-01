@@ -392,14 +392,16 @@ copied template).
 - **Ceiling derivation**: no non-exempt bundle's `limitBytes` may exceed
   the **196,000-byte** `maxBundleLimitBytes` ceiling — a
   200K-context-derived cap of ≈ 49,000–60,300 tokens at this corpus's
-  observed 3.25–4.0 bytes/token, ≤ ~29% of a 200K context window,
+  observed 3.25–4.0 bytes/token, ≤ ~30% of a 200K context window,
   leaving the remainder for the harness system prompt, tool schemas,
-  adopter-repo instructions, and working context. The 200K baseline is
-  the smallest context window among the session-model classes the loop
-  currently exercises; the stricter 128K-derived ceiling that
-  preceded it was relaxed on 2026-09-01 as a deliberate
-  priority call, recorded in kurone-kito/idd-skill#2181, while
-  outage-resilience work was blocked at that ceiling. The byte diet
+  adopter-repo instructions, and working context. The 200K baseline
+  reflects the smallest context window among the model classes used to
+  validate the workflow in the source repository — not a guarantee
+  about an adopter's chosen models. The stricter 128K-derived ceiling
+  that preceded it was relaxed on 2026-09-01 as a deliberate priority
+  call, recorded in
+  [kurone-kito/idd-skill#2181](https://github.com/kurone-kito/idd-skill/issues/2181),
+  while outage-resilience work was blocked at that ceiling. The byte diet
   stays a best-effort goal through the ratchet and notice checks below;
   weak-model support is unaffected because the lite bundles keep their
   own, far smaller budgets.

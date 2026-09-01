@@ -4,7 +4,7 @@ import { test } from 'node:test';
 import { collectContextCeilingViolations } from '../src/scripts/consistency-helpers.mts';
 
 const BASE_CONFIG = {
-  id: 'context-ceiling-128k',
+  id: 'context-ceiling-200k',
   maxBundleLimitBytes: 120000,
   maxUtilizationPct: 98,
   noticeUtilizationPct: 95,
@@ -191,7 +191,7 @@ test('an exemptBundles list only silences the named violators, not the rest', ()
   // to stay well within both, mirroring the day-one exemption shape
   // documented in audit/sync-manifest.json without depending on it.
   const config = {
-    id: 'context-ceiling-128k',
+    id: 'context-ceiling-200k',
     maxBundleLimitBytes: 120000,
     maxUtilizationPct: 98,
     noticeUtilizationPct: 95,

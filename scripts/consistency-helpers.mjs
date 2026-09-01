@@ -221,7 +221,7 @@ function normalizeNonNegativeNumber(value) {
   return value;
 }
 /**
- * Collect "context ceiling" violations: an absolute, 128K-context-derived
+ * Collect "context ceiling" violations: an absolute, context-window-derived
  * cap layered on top of the per-bundle `bundleBudgets` ratchet, so a future
  * exact-fit bump errors instead of drifting past the documented ~10%-margin
  * convention the way `bundleBudgets` alone allowed (#1213, #1259 both

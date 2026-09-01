@@ -96,13 +96,15 @@ profile entirely." A lite-opted-in session reads the full, standard
 `idd-review-triage.instructions.md` for E4-E8 exactly like a
 standard-tier session.
 
-Confirmed against the live manifest (`audit/sync-manifest.json`):
+Confirmed against the live manifest (`audit/sync-manifest.json`);
+re-confirmed 2026-09-01 after #2181 moved the ceiling to the 200K
+baseline and ratcheted `bundle-review` to 138,000:
 
 | Bundle                        | Files                                                                                                                                     | `limitBytes` |
 | ----------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- | ------------ |
 | `bundle-review-snapshot-lite` | `idd-advisory-wait-lite`, `idd-review-snapshot-lite`                                                                                      | 23,000       |
 | `bundle-review-fix-lite`      | `idd-advisory-wait-lite`, `idd-ci-lite`, `idd-review-fix-lite`                                                                            | 39,500       |
-| `bundle-review` (standard)    | `idd-advisory-wait`, `idd-ci`, `idd-overview-appendix`, `idd-overview-core`, `idd-review-fix`, `idd-review-snapshot`, `idd-review-triage` | 126,000      |
+| `bundle-review` (standard)    | `idd-advisory-wait`, `idd-ci`, `idd-overview-appendix`, `idd-overview-core`, `idd-review-fix`, `idd-review-snapshot`, `idd-review-triage` | 138,000      |
 
 The lite split is a **token-budget condensation** for a weak-model
 profile that deliberately excludes E4-E8 from condensation at all — it
