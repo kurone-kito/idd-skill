@@ -1515,8 +1515,8 @@
       "additionalProperties": false,
       "properties": {
         "minutes": {
-          "type": "number",
-          "description": "Configured secondary quiet window in minutes (advisoryWait.secondaryQuietWindow, default 0 = off).",
+          "type": "integer",
+          "description": "Configured secondary quiet window in whole minutes (advisoryWait.secondaryQuietWindow, default 0 = off).",
           "minimum": 0
         },
         "anchorAt": {

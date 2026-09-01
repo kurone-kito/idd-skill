@@ -345,3 +345,16 @@ test('buildSecondaryQuietWindowStatus reports null elapsed on an unusable now', 
   assert.equal(status.elapsed, false);
   assert.equal(status.remainingMinutes, null);
 });
+
+test('buildSecondaryQuietWindowStatus floors a non-integer minutes so remainingMinutes stays a whole number (#2352 review)', () => {
+  const status = buildSecondaryQuietWindowStatus({
+    minutes: 2.9,
+    effectiveMaxActivityUpdatedAt: '2026-08-30T22:00:00Z',
+    now: '2026-08-30T22:01:00Z',
+  });
+  assert.equal(status.minutes, 2);
+  assert.equal(status.elapsedMinutes, 1);
+  assert.equal(status.elapsed, false);
+  assert.equal(status.remainingMinutes, 1);
+  assert.ok(Number.isInteger(status.remainingMinutes));
+});

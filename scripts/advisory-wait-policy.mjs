@@ -418,7 +418,14 @@ export function resolveAdvisorySecondaryQuietWindowMinutes(config = {}) {
  * A zero/absent `minutes` (the off/unset default) or a missing/invalid
  * anchor (nothing to anchor on yet) reports `elapsed: true` unconditionally
  * -- this gate must never itself block when unconfigured, and must never
- * block on the absence of any activity to measure.
+ * block on the absence of any activity to measure. A positive but
+ * non-integer `minutes` is floored -- the config-sourced path
+ * (`resolveAdvisorySecondaryQuietWindowMinutes`) never produces one (every
+ * ISO-duration unit it accepts converts to a whole number of minutes), but
+ * this function's own `minutes` parameter is untyped, and a fractional
+ * value would otherwise leak into `elapsedMinutes`/`remainingMinutes` as
+ * non-integers, contradicting the whole-minute contract those fields keep
+ * elsewhere in this report.
  */
 export function buildSecondaryQuietWindowStatus({
   minutes,
@@ -426,7 +433,9 @@ export function buildSecondaryQuietWindowStatus({
   now,
 }) {
   const resolvedMinutes =
-    Number.isFinite(minutes) && Number(minutes) > 0 ? Number(minutes) : 0;
+    Number.isFinite(minutes) && Number(minutes) > 0
+      ? Math.floor(Number(minutes))
+      : 0;
   const anchorAtRaw = String(effectiveMaxActivityUpdatedAt ?? '');
   const anchorValid = isValidIsoTimestamp(anchorAtRaw);
   if (resolvedMinutes <= 0 || !anchorValid) {
