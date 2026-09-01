@@ -395,9 +395,11 @@ export function createGithubProviderAdapter(
       };
     },
 
-    getPullRequestsClosingIssue(number: number): number[] {
+    listIssueNumbersClosedByOpenChangeRequests(limit: number): number[] {
       // Uses `gh pr list`, not `gh api`, matching
-      // discover-shared-file-overlap.mts's existing call shape exactly.
+      // discover-shared-file-overlap.mts's existing call shape exactly: one
+      // best-effort scan of every open PR's closingIssuesReferences, bounded
+      // by the caller's own limit.
       const raw = deps.ghText(
         [
           'pr',
@@ -407,23 +409,25 @@ export function createGithubProviderAdapter(
           '--state',
           'open',
           '--limit',
-          '100',
+          String(limit),
           '--json',
-          'number,closingIssuesReferences',
+          'closingIssuesReferences',
         ],
         GH_TEXT_LOOP_OPTIONS,
       );
       const list = JSON.parse(raw || '[]') as {
-        number?: unknown;
         closingIssuesReferences?: { number?: unknown }[];
       }[];
-      return list
-        .filter((pr) =>
-          (pr.closingIssuesReferences ?? []).some(
-            (ref) => Number(ref.number) === number,
-          ),
-        )
-        .map((pr) => Number(pr.number));
+      const numbers = new Set<number>();
+      for (const pr of list) {
+        for (const ref of pr.closingIssuesReferences ?? []) {
+          const value = Number(ref.number);
+          if (Number.isInteger(value) && value > 0) {
+            numbers.add(value);
+          }
+        }
+      }
+      return [...numbers];
     },
 
     listIssueBranchRefs(): string[] {

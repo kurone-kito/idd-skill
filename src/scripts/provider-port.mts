@@ -263,10 +263,20 @@ export interface ProviderPort {
 
   /**
    * work-items/change-requests boundary. The distinct PR-side
-   * `closingIssuesReferences` technique `discover-shared-file-overlap.mts`
-   * uses today -- not unified with the issue-side methods above.
+   * `closingIssuesReferences` technique `discover-shared-file-overlap.mts`'s
+   * `fetchOpenPrLinkedIssues` uses today -- a single best-effort scan across
+   * every open PR, called ONCE per run, NOT a per-issue lookup (an earlier
+   * draft of this method took an issue number and re-scanned the full open-PR
+   * list per call, which would have replayed that scan once per candidate
+   * issue; corrected here before any consumer existed). `limit` is the
+   * caller's own advisory-signal page cap (matches the file's existing
+   * `OPEN_PR_SCAN_LIMIT`), not a fixed transport constant -- a repo with more
+   * open PRs than `limit` silently drops the overflow, the file's existing
+   * best-effort contract, unchanged. Returns the flattened, deduplicated set
+   * of every issue number referenced by any open PR's
+   * `closingIssuesReferences` within that cap.
    */
-  getPullRequestsClosingIssue(number: number): number[];
+  listIssueNumbersClosedByOpenChangeRequests(limit: number): number[];
 
   /** work-items. Issue-branch ref scan (`git/matching-refs/heads/issue/`). */
   listIssueBranchRefs(): string[];

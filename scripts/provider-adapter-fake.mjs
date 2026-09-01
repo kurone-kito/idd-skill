@@ -84,8 +84,8 @@ export function createFakeProviderAdapter(fixture) {
         pages[index] ?? { events: [], hasNextPage: false, endCursor: null }
       );
     },
-    getPullRequestsClosingIssue(number) {
-      return fixture.pullRequestsClosingIssue?.[number] ?? [];
+    listIssueNumbersClosedByOpenChangeRequests() {
+      return fixture.issueNumbersClosedByOpenChangeRequests ?? [];
     },
     listIssueBranchRefs() {
       return fixture.issueBranchRefs ?? [];

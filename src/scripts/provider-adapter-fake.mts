@@ -42,7 +42,8 @@ export interface FakeProviderFixture {
       endCursor: string | null;
     }[]
   >;
-  pullRequestsClosingIssue?: Record<number, number[]>;
+  /** Backs {@link ProviderPort.listIssueNumbersClosedByOpenChangeRequests}. */
+  issueNumbersClosedByOpenChangeRequests?: number[];
   issueBranchRefs?: string[];
   collaboratorPermissions?: Record<
     string,
@@ -166,8 +167,8 @@ export function createFakeProviderAdapter(
       );
     },
 
-    getPullRequestsClosingIssue(number: number): number[] {
-      return fixture.pullRequestsClosingIssue?.[number] ?? [];
+    listIssueNumbersClosedByOpenChangeRequests(): number[] {
+      return fixture.issueNumbersClosedByOpenChangeRequests ?? [];
     },
 
     listIssueBranchRefs(): string[] {
