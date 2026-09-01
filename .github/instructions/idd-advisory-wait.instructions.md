@@ -449,3 +449,19 @@ still needs a valid waiver), and F2/F3's `advisoryWait.copilotUnavailable`/
 **Waived**: rerun the existing `idd-advisory-convergence` run (never
 `workflow_dispatch` — see Rerun mechanics below); both fields recompute
 every call, so an expired/invalid marker reverts automatically.
+
+### Both clocks restart on every push (`#2338`)
+
+`advisoryWait.convergenceDeadline` (the maintainer-waiver escape hatch
+above) and `advisoryWait.terminalWindow` (the terminal contract's
+clock) measure differently — the deadline from the current HEAD
+commit's own timestamp, the window from the earliest trusted
+current-HEAD `advisory-wait-recovery:` marker — but both are scoped to
+the current HEAD, so a push restarts both: a new commit resets the
+deadline clock and orphans every prior HEAD's recovery-cycle evidence
+for the terminal window. Waiting out either clock is therefore only a
+viable strategy once review has converged (no further pushes expected)
+— roadmap `#2318`'s field-evidence comment on pull request `#2325`
+recorded this repository's `PT9H` deadline override restarting four
+times across seven advisory review rounds, observed at 229/540
+minutes.
