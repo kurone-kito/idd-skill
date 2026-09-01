@@ -346,32 +346,47 @@ const NEGATION_PATTERN =
 // "duplicate-evidence-skip check" (describing an existing mechanism, not a
 // directive) matched "skip" here and wrongly failed `trust_safety`.
 //
-// Only the leading side is guarded here, and with a different shape than
-// the noun side's plain `(?<![\w-])`. The original bug is entirely a
-// leading-hyphen problem ("evidence-**skip**"); the pre-existing trailing
-// `\b` (from this alternation's own use inside `\\b(...)​\\b` below) never
-// misfired on a trailing hyphen for this bug, so no trailing guard is
-// added -- doing so anyway (an earlier revision of this fix mirrored the
-// noun side's trailing `(?![\w-])` verbatim) broke detection of a
-// multi-word flag like `--skip-checks`, `--disable-policy`, or
-// `--bypass-gate`, where the verb is legitimately followed by another
-// hyphen as part of the same flag name (#2407 review round 2, Codex).
+// The noun side's guard, `(?<![\w-])`, only inspects the single character
+// immediately before the match. That is enough for a noun (nothing legitimate
+// ever needs a trailing hyphen), but not for this verb list: a directive can
+// legitimately be phrased as a CLI flag, where the verb sits inside a token
+// that both starts with hyphens ("--skip") and can be followed by more
+// hyphenated components ("--skip-checks", "--force-skip"). No single-
+// character lookbehind can separate "part of a compound word" from "part of
+// a flag token" -- both put a hyphen directly before the verb; the flag
+// cases just also put another hyphen (or nothing) two characters back
+// instead of a letter.
 //
-// A single-character leading lookbehind also cannot tell a genuine
-// compound word ("evidence-skip", letter then hyphen) apart from a
-// hyphen-prefixed CLI flag reference ("--skip" or "-skip", hyphen then
-// hyphen, or hyphen at the very start of a token) -- the noun side's exact
-// `(?<![\w-])` guard would let a directive phrased as a flag (e.g. "pass
-// `--skip` so the repository gate is not evaluated") evade detection
-// entirely (#2407 review round 1, Codex). `(?<![\w]-)` only excludes a
-// match when a word character (letter, digit, or underscore -- matching
-// the `\w` used everywhere else in this file, unlike an
-// alphanumeric-only `[A-Za-z0-9]` from an earlier revision) sits
-// immediately before the hyphen -- true compound-word hyphenation --
-// leaving any hyphen not itself preceded by a word character (start of
-// string, whitespace, or another hyphen) still detectable (#2407 review
-// round 2, Copilot).
-const POLICY_OVERRIDE_VERB_SOURCE = String.raw`(?<![\w]-)(?:ignore|bypass|override|disable|disable|skip|turn off|suppress|disable)`;
+// The guard therefore traces the run of hyphen/word characters immediately
+// before the verb back to where that run begins, and only excludes the
+// match when that origin is itself a word character (letter, digit, or
+// underscore) -- i.e. the run is an ordinary hyphenated compound like
+// "duplicate-evidence-" or "foo_-". A flag token's run instead originates at
+// one or more bare hyphens ("--", "-"), which is never a word character, so
+// the guard does not fire and the verb stays detectable however many
+// hyphenated components precede it in the flag name (#2407 review round 3,
+// Codex: an earlier per-character-lookbehind revision only checked the
+// component immediately before the verb, so a verb placed as a later flag
+// component, e.g. `--force-skip`, `--policy-bypass`, still evaded
+// detection).
+//
+// `(?<!(?:^|[^\w-])\w[\w-]*-)` reads as: not preceded by [ a token boundary
+// (string start, or a character that is neither a word character nor a
+// hyphen -- whitespace, a backtick, a quote, punctuation) ] followed by [ a
+// word character, then zero or more word/hyphen characters, then a hyphen ]
+// immediately abutting the verb. Anchoring the trace at the token's own
+// origin (rather than checking one fixed character back) makes this
+// resistant to regex backtracking: for a flag token, every possible
+// alignment of the inner `\w[\w-]*-` match is blocked, because the
+// character right after any true token boundary in a flag is always another
+// hyphen, never a word character -- there is no shorter, still-anchored
+// fragment for the engine to retreat to (#2407 review round 3 self-review:
+// an earlier nested-lookbehind draft embedded a *second* assertion inside
+// the excluded pattern, which backtracking could satisfy via a truncated
+// mid-word fragment that never lined up with the real flag boundary; this
+// shape avoids that by keeping the excluded pattern itself assertion-free
+// and anchored).
+const POLICY_OVERRIDE_VERB_SOURCE = String.raw`(?<!(?:^|[^\w-])\w[\w-]*-)(?:ignore|bypass|override|disable|disable|skip|turn off|suppress|disable)`;
 // #2218: a bare `\b` treats a hyphen as a non-word character, so every one
 // of these nouns also matched inside an ordinary hyphenated file-path
 // mention (e.g. this project's own marker prefix in `idd-workflow-notes.md`
