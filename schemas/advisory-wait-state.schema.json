@@ -289,7 +289,7 @@
         "reason": {
           "type": "string",
           "minLength": 1,
-          "description": "Machine-readable reason: active-claim-not-provided, not-pending, same-head-marker-present, proven-covers-head, recovery-cap-exhausted, recovery-attempt-eligible, recheck-budget-unspent (#2327), or non-pending-recovery-attempt-eligible (#2327)."
+          "description": "Machine-readable reason: active-claim-not-provided, not-pending, same-head-marker-present, recovery-marker-only-no-request-marker (#2327), proven-covers-head, recovery-cap-exhausted, recovery-attempt-eligible, recheck-budget-unspent (#2327), or non-pending-recovery-attempt-eligible (#2327)."
         }
       },
       "additionalProperties": false
