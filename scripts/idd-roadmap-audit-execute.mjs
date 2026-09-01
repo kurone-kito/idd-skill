@@ -554,10 +554,17 @@ function runLocalGitCommand(argv, cwd) {
     // on the thrown error — coerce via toString() (mirrors idd-doctor.mts's
     // runCommand) rather than discarding non-string output as empty.
     const failure = err;
+    // A failure BEFORE git could even emit stderr (e.g. ENOENT for a
+    // missing `git` binary) leaves stdout/stderr empty (review finding,
+    // #2225): fall back to the thrown error's own message so
+    // unreadableReason stays actionable instead of a generic "failed".
+    const stderr =
+      failure.stderr?.toString?.() ||
+      (typeof failure.message === 'string' ? failure.message : '');
     return {
       ok: false,
       stdout: failure.stdout?.toString?.() ?? '',
-      stderr: failure.stderr?.toString?.() ?? '',
+      stderr,
     };
   }
 }
@@ -585,7 +592,11 @@ export function parseWorktreeListPorcelain(output) {
       continue;
     }
     const entry = {
-      path: worktreeLine.slice('worktree '.length).trim(),
+      // No .trim() here (review finding, #2225): -z's NUL delimiter already
+      // gives the field's exact bytes, and a path can legitimately end in
+      // whitespace — trimming would silently point every downstream check
+      // at a directory that does not exist.
+      path: worktreeLine.slice('worktree '.length),
       headSha: null,
       branchRef: null,
       bare: false,
