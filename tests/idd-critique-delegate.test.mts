@@ -13,11 +13,11 @@ const CLI_PATH = join(REPO_ROOT, 'scripts/idd-critique-delegate.mjs');
 
 /** Run the built CLI with a fully isolated HOME so the real operator's
  * user-global config (if any) never leaks into a test result, and return
- * the parsed JSON report. Also neutralizes GITHUB_ACTIONS: in CI, the test
- * runner's own environment carries it as "true", which would otherwise
- * leak into every spawned CLI process's inherited env and silently
- * trigger the GITHUB_ACTIONS auto-skip this suite tests separately as its
- * own behavior; pass `env: { GITHUB_ACTIONS: 'true' }` to opt back in. */
+ * the parsed JSON report. Also neutralizes GITHUB_ACTIONS: the CI runner's
+ * own environment carries it as "true", which would otherwise leak into
+ * every spawned CLI process's inherited env and trigger the helper's own
+ * GITHUB_ACTIONS auto-skip -- a separate behavior this suite covers on its
+ * own. Pass `env: { GITHUB_ACTIONS: 'true' }` to opt back in. */
 function runCli(args: string[], env?: NodeJS.ProcessEnv): unknown {
   const isolatedHome = mkdtempSync(
     join(tmpdir(), 'idd-critique-delegate-home-'),
