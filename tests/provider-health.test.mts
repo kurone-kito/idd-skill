@@ -334,6 +334,37 @@ test('deriveAdvisoryReviewObservation: registration is detected across mismatche
   assert.deepEqual(result, { prNumber: 1, outcome: 'success' });
 });
 
+test('deriveAdvisoryReviewObservation: registration is detected when the timeline event precedes the marker COMMENT (the documented request-then-post ordering)', () => {
+  // idd-review-fix.instructions.md's REQUEST_NEEDED flow requests the
+  // review FIRST, then posts this marker -- so the review_requested event
+  // is ordinarily recorded seconds BEFORE the marker comment's created_at.
+  // Comparing against the comment's created_at (rather than the marker's
+  // own embedded {ISO8601-requested-at}) would misclassify this ordinary,
+  // healthy case as unregistered.
+  const result = deriveAdvisoryReviewObservation(
+    1,
+    [
+      {
+        // Embedded timestamp 00:00:00Z; posted 5s later at 00:00:05Z.
+        body: 'advisory-wait: agent-x 0123456789abcdef0123456789abcdef01234567 2026-09-01T00:00:00Z',
+        created_at: '2026-09-01T00:00:05Z',
+        user: { login: 'idd-bot' },
+      },
+    ],
+    [
+      {
+        // 2s after the request, but 3s BEFORE the marker comment posted.
+        event: 'review_requested',
+        created_at: '2026-09-01T00:00:02Z',
+        requested_reviewer: { login: 'copilot-pull-request-reviewer[bot]' },
+      },
+    ],
+    [],
+    BASE_DERIVE_OPTIONS,
+  );
+  assert.deepEqual(result, { prNumber: 1, outcome: 'success' });
+});
+
 test('deriveAdvisoryReviewObservation: an unregistered marker still within the settling window is not failure evidence', () => {
   const result = deriveAdvisoryReviewObservation(
     1,

@@ -155,17 +155,27 @@ export function classifyProviderHealth(snapshot, policy) {
 const ISO_TIMESTAMP_SOURCE =
   '\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?Z';
 const ADVISORY_WAIT_REQUEST_MARKER_RE = new RegExp(
-  `^advisory-wait:\\s+\\S+\\s+[0-9a-f]{40}\\s+${ISO_TIMESTAMP_SOURCE}\\s*$`,
+  `^advisory-wait:\\s+\\S+\\s+[0-9a-f]{40}\\s+(${ISO_TIMESTAMP_SOURCE})\\s*$`,
 );
 const ADVISORY_WAIT_REQUEST_MARKER_HTML_RE = new RegExp(
-  `^<!--\\s*advisory-wait:\\s*\\S+\\s+[0-9a-f]{40}\\s+${ISO_TIMESTAMP_SOURCE}\\s*-->\\s*$`,
+  `^<!--\\s*advisory-wait:\\s*\\S+\\s+[0-9a-f]{40}\\s+(${ISO_TIMESTAMP_SOURCE})\\s*-->\\s*$`,
 );
-function isAdvisoryWaitRequestMarker(body) {
+/**
+ * Extracts a marker body's own embedded `{ISO8601-requested-at}` field --
+ * distinct from the comment's `created_at`. `idd-review-fix.instructions.md`
+ * documents the REQUEST_NEEDED flow as requesting the bot's review FIRST,
+ * then posting this marker, so the comment is always posted at or after the
+ * embedded timestamp; using `created_at` as the registration-timing anchor
+ * would make the review_requested timeline event (recorded at request time)
+ * look like it arrived BEFORE the request, misclassifying the ordinary
+ * healthy case as failure.
+ */
+function parseAdvisoryWaitRequestMarker(body) {
   const trimmed = body.trim();
-  return (
-    ADVISORY_WAIT_REQUEST_MARKER_RE.test(trimmed) ||
-    ADVISORY_WAIT_REQUEST_MARKER_HTML_RE.test(trimmed)
-  );
+  const match =
+    ADVISORY_WAIT_REQUEST_MARKER_RE.exec(trimmed) ??
+    ADVISORY_WAIT_REQUEST_MARKER_HTML_RE.exec(trimmed);
+  return match ? match[1] : null;
 }
 /**
  * Compares two ISO-8601 timestamps by parsed instant (epoch ms), not
@@ -182,25 +192,31 @@ function compareIsoTimestamps(a, b) {
   return Date.parse(a) - Date.parse(b);
 }
 /**
- * The LATEST trusted `advisory-wait:` request marker's `created_at` among
- * `comments` -- "did the most recent request register" is the observable,
+ * The LATEST trusted `advisory-wait:` request marker among `comments` (by
+ * `postedAt`) -- "did the most recent request register" is the observable,
  * not "did the first request ever posted on this PR register". A marker
  * counts only when its author is a `trustedMarkerLogins` member
  * (case-insensitive); an untrusted actor could otherwise post a fabricated
  * marker to poison this service's verdict.
  */
-function latestTrustedAdvisoryWaitRequestAt(comments, trustedMarkerLogins) {
+function latestTrustedAdvisoryWaitRequest(comments, trustedMarkerLogins) {
   let latest = null;
   for (const comment of comments) {
     const authorLogin = String(comment?.user?.login ?? '')
       .trim()
       .toLowerCase();
     if (!trustedMarkerLogins.has(authorLogin)) continue;
-    if (!isAdvisoryWaitRequestMarker(String(comment?.body ?? ''))) continue;
-    const createdAt = String(comment?.created_at ?? '');
-    if (createdAt === '') continue;
-    if (latest === null || compareIsoTimestamps(createdAt, latest) > 0) {
-      latest = createdAt;
+    const requestedAt = parseAdvisoryWaitRequestMarker(
+      String(comment?.body ?? ''),
+    );
+    if (requestedAt === null) continue;
+    const postedAt = String(comment?.created_at ?? '');
+    if (postedAt === '') continue;
+    if (
+      latest === null ||
+      compareIsoTimestamps(postedAt, latest.postedAt) > 0
+    ) {
+      latest = { postedAt, requestedAt };
     }
   }
   return latest;
@@ -219,14 +235,14 @@ export function deriveAdvisoryReviewObservation(
   reviews,
   options,
 ) {
-  const requestMarkerAt = latestTrustedAdvisoryWaitRequestAt(
+  const request = latestTrustedAdvisoryWaitRequest(
     comments,
     options.trustedMarkerLogins,
   );
-  if (requestMarkerAt === null) return null;
+  if (request === null) return null;
   if (
     options.cutoffIso !== null &&
-    compareIsoTimestamps(requestMarkerAt, options.cutoffIso) < 0
+    compareIsoTimestamps(request.postedAt, options.cutoffIso) < 0
   ) {
     return null;
   }
@@ -238,7 +254,7 @@ export function deriveAdvisoryReviewObservation(
     }
     const eventAt = String(event?.created_at ?? '');
     return (
-      eventAt !== '' && compareIsoTimestamps(eventAt, requestMarkerAt) >= 0
+      eventAt !== '' && compareIsoTimestamps(eventAt, request.requestedAt) >= 0
     );
   });
   const registeredByReview = reviews.some((review) => {
@@ -249,7 +265,7 @@ export function deriveAdvisoryReviewObservation(
     const submittedAt = String(review?.submitted_at ?? '');
     return (
       submittedAt !== '' &&
-      compareIsoTimestamps(submittedAt, requestMarkerAt) >= 0
+      compareIsoTimestamps(submittedAt, request.requestedAt) >= 0
     );
   });
   if (registeredByTimeline || registeredByReview) {
@@ -260,8 +276,9 @@ export function deriveAdvisoryReviewObservation(
   // `advisoryWait.settledWindowMinutes` already draws exactly this
   // ordinary-lag-vs-genuine-failure line for a single pull request; reuse
   // it here rather than treating every fresh marker as immediate failure
-  // evidence.
-  const elapsedMs = Date.parse(options.now) - Date.parse(requestMarkerAt);
+  // evidence. Anchored to requestedAt (the request action), matching what
+  // "elapsed since the request" means for the registration check above.
+  const elapsedMs = Date.parse(options.now) - Date.parse(request.requestedAt);
   if (!Number.isFinite(elapsedMs) || elapsedMs < options.settledWindowMs) {
     return null;
   }
