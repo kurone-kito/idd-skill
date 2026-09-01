@@ -168,11 +168,18 @@ export function resolveLocalValidationEvidence(input) {
   } else if (outcomeFail.length > 0) {
     reason = 'latest local validation evidence recorded a failing outcome';
   } else if (partialCoverage.length > 0) {
-    const missing = requiredCheckNames.filter(
-      (name) =>
-        !new Set(partialCoverage[partialCoverage.length - 1].covers).has(name),
-    );
-    reason = `local validation evidence covers only a subset of the required checks (missing: ${missing.join(', ') || 'unknown'})`;
+    if (requiredCheckNames.length === 0) {
+      reason =
+        'no required check names were given to resolve coverage against (pass --required-checks)';
+    } else {
+      const missing = requiredCheckNames.filter(
+        (name) =>
+          !new Set(partialCoverage[partialCoverage.length - 1].covers).has(
+            name,
+          ),
+      );
+      reason = `local validation evidence covers only a subset of the required checks (missing: ${missing.join(', ')})`;
+    }
   } else if (expired.length > 0) {
     reason = `local validation evidence is older than the configured localValidationEvidence.maxAge`;
   } else if (untrusted.length > 0) {
@@ -482,7 +489,7 @@ function printUsage() {
   process.stdout.write(`usage: node scripts/local-validation-evidence.mjs --pr <number> --head-sha <40-hex> [options]
 
 Modes (default: resolve evidence validity for --pr/--head-sha):
-  --record                          post a new evidence marker (requires --apply)
+  --record                          render (or, with --apply, post) a new evidence marker
 
 Options:
   --pr <number>                     pull request number (required)

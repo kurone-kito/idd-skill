@@ -220,6 +220,7 @@ test('resolveLocalValidationEvidence: an empty requiredCheckNames list never vac
   });
   assert.equal(result.present, false);
   assert.equal(result.partialCoverage.length, 1);
+  assert.match(result.reason, /no required check names were given/);
 });
 
 test('renderLocalValidationEvidenceComment / parseLocalValidationEvidenceComment round-trip a comma-containing check name (#2355 review)', () => {
