@@ -226,11 +226,17 @@ export function resolveLocalValidationEvidence(input: {
       reason =
         'no required check names were given to resolve coverage against (pass --required-checks)';
     } else {
+      // #2355 review (Copilot, CodeRabbit): mirror coversAll()'s own
+      // trimming exactly, or a check name differing only by surrounding
+      // whitespace reports as missing here while coversAll (correctly)
+      // already treated it as covered.
+      const coveredSet = new Set(
+        partialCoverage[partialCoverage.length - 1].covers.map((entry) =>
+          entry.trim(),
+        ),
+      );
       const missing = requiredCheckNames.filter(
-        (name) =>
-          !new Set(partialCoverage[partialCoverage.length - 1].covers).has(
-            name,
-          ),
+        (name) => !coveredSet.has(name.trim()),
       );
       reason = `local validation evidence covers only a subset of the required checks (missing: ${missing.join(', ')})`;
     }

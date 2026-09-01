@@ -223,6 +223,23 @@ test('resolveLocalValidationEvidence: an empty requiredCheckNames list never vac
   assert.match(result.reason, /no required check names were given/);
 });
 
+test('resolveLocalValidationEvidence: the missing-check diagnostic trims whitespace like coversAll does (#2355 review)', () => {
+  const result = resolveLocalValidationEvidence({
+    comments: [evidenceComment({ covers: ['idd-doctor', 'lint'] })],
+    prHeadSha: HEAD,
+    requiredCheckNames: ['idd-doctor', ' lint ', 'pnpm-boundary'],
+    trustedMarkerLogins: TRUSTED,
+    outageDeclarationActive: true,
+    policy: basePolicy,
+    now: NOW,
+  });
+  assert.equal(result.present, false);
+  // "lint" (with surrounding whitespace in the required list) is actually
+  // covered; only "pnpm-boundary" should report as missing.
+  assert.match(result.reason, /missing: pnpm-boundary\)/);
+  assert.doesNotMatch(result.reason, /lint/);
+});
+
 test('renderLocalValidationEvidenceComment / parseLocalValidationEvidenceComment round-trip a comma-containing check name (#2355 review)', () => {
   const body = renderLocalValidationEvidenceComment({
     actor: 'kurone-kito',
