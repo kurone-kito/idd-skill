@@ -181,6 +181,12 @@ const OPERATIONAL_MARKER_ENTRIES = [
       /^<!--\s*idd-provider-outage-advanced:\s+\S+\s+pr:\d+\s+head:[0-9a-f]{40}\s+declared:\S+\s*-->[\s\S]*$/i,
     startPattern: /^<!--\s*idd-provider-outage-advanced:/i,
   },
+  {
+    label: '<!-- idd-local-validation-evidence:',
+    pattern:
+      /^<!--\s*idd-local-validation-evidence:\s+\S+\s+head:[0-9a-f]{40}\s+commands:\S+\s+covers:\S+\s+outcome:(?:pass|fail)\s*-->[\s\S]*$/i,
+    startPattern: /^<!--\s*idd-local-validation-evidence:/i,
+  },
 ];
 /**
  * Frozen, exported view of {@link OPERATIONAL_MARKER_ENTRIES}. This array is
@@ -708,6 +714,69 @@ export function parseProviderOutageAdvancedComment(body, createdAt) {
     prNumber,
     headSha: match[3].toLowerCase(),
     declaredAt,
+    createdAt: isValidIsoTimestamp(createdAt) ? createdAt : 'none',
+  };
+}
+/**
+ * Render a `<!-- idd-local-validation-evidence: ... -->` marker (#2323).
+ * `covers` is joined with `,` before percent-encoding (reusing the same
+ * comment-token-safe field grammar as the sibling outage markers), so a
+ * check name can never itself contain a literal comma.
+ */
+export function renderLocalValidationEvidenceComment(payload) {
+  const actor = normalizeNonWhitespaceToken(payload?.actor);
+  const headSha = normalizeNonWhitespaceToken(payload?.headSha).toLowerCase();
+  const commandSet = normalizeExternalCheckWaiverField(payload?.commandSet);
+  const coversList = (Array.isArray(payload?.covers) ? payload.covers : [])
+    .map((entry) => String(entry ?? '').trim())
+    .filter(Boolean);
+  const outcome = String(payload?.outcome ?? '').trim();
+  if (
+    !actor ||
+    !/^[0-9a-f]{40}$/.test(headSha) ||
+    !commandSet ||
+    coversList.length === 0 ||
+    (outcome !== 'pass' && outcome !== 'fail')
+  ) {
+    throw new Error('invalid local validation evidence payload');
+  }
+  const encodedCommandSet = encodeExternalCheckWaiverField(commandSet);
+  const encodedCovers = encodeExternalCheckWaiverField(coversList.join(','));
+  return [
+    `<!-- idd-local-validation-evidence: ${actor} head:${headSha} commands:${encodedCommandSet} covers:${encodedCovers} outcome:${outcome} -->`,
+    '',
+    `_${actor}: local validation evidence (\`${commandSet}\`, ${outcome}) for \`${headSha}\` — IDD automation marker. Do not edit._`,
+  ].join('\n');
+}
+export function parseLocalValidationEvidenceComment(body, createdAt) {
+  const match = body
+    .trimEnd()
+    .match(
+      new RegExp(
+        `^<!--\\s*idd-local-validation-evidence:\\s+(\\S+)\\s+head:([0-9a-f]{40})\\s+commands:(\\S+)\\s+covers:(\\S+)\\s+outcome:(pass|fail)\\s*-->${OPTIONAL_IDD_VISIBLE_NOTE_PATTERN}$`,
+        'i',
+      ),
+    );
+  if (!match) {
+    return null;
+  }
+  const actor = normalizeNonWhitespaceToken(match[1]);
+  const commandSet = normalizeExternalCheckWaiverField(
+    decodeExternalCheckWaiverField(match[3]),
+  );
+  const covers = decodeExternalCheckWaiverField(match[4])
+    .split(',')
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+  if (!actor || !commandSet || covers.length === 0) {
+    return null;
+  }
+  return {
+    actor,
+    headSha: match[2].toLowerCase(),
+    commandSet,
+    covers,
+    outcome: match[5].toLowerCase(),
     createdAt: isValidIsoTimestamp(createdAt) ? createdAt : 'none',
   };
 }

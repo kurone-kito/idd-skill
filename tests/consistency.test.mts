@@ -835,6 +835,9 @@ test('policy normalization provides default-safe values and supports aliases', (
     providerOutage: {
       maxValidity: 'PT24H',
     },
+    localValidationEvidence: {
+      maxAge: 'PT4H',
+    },
   });
 
   const defaultPolicy = normalizePolicyConfig(null);
@@ -1007,6 +1010,9 @@ test('policy normalization provides default-safe values and supports aliases', (
       },
       providerOutage: {
         maxValidity: 'PT24H',
+      },
+      localValidationEvidence: {
+        maxAge: 'PT4H',
       },
     },
   );

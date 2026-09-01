@@ -420,6 +420,16 @@ const HELPER_COMMANDS: HelperCommand[] = [
     description: 'Render or apply the optional live status digest.',
   },
   {
+    id: 'local-validation-evidence',
+    scriptName: 'idd:local-validation-evidence',
+    binName: 'idd-local-validation-evidence',
+    entryPath: 'scripts/local-validation-evidence.mjs',
+    vendoredCommand: 'node scripts/local-validation-evidence.mjs',
+    description:
+      'Resolve or record HEAD-pinned local validation evidence for the pre-merge-readiness report during an Actions outage.',
+    contractPaths: ['schemas/local-validation-evidence.schema.json'],
+  },
+  {
     id: 'merge-execute',
     scriptName: 'idd:merge-execute',
     binName: 'idd-merge-execute',

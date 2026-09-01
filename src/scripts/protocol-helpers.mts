@@ -6530,6 +6530,15 @@ export function buildPreMergeReadinessSummary(
     // unit callers (default 24h behavior preserved).
     // `collectPreMergeReadiness` always sources the policy value.
     staleAgeMs?: number;
+    // #2323: the caller-precomputed `resolveLocalValidationEvidence`
+    // result (local-validation-evidence.mts), reported verbatim as its own
+    // top-level field -- purely informational. `computePreMergeReadinessBlockers`
+    // never reads this field, so it can never derive a blocker (or remove
+    // one) from local evidence; the required checks it references stay
+    // exactly as unresolved/unavailable as `ci` independently computed them.
+    // Omitted by unit callers and every caller that predates this option
+    // (field stays `null`, unchanged pre-#2323 behavior).
+    localValidationEvidenceSummary?: Record<string, unknown> | null;
   } = {},
 ) {
   const now = String(options.now ?? '');
@@ -6910,6 +6919,15 @@ export function buildPreMergeReadinessSummary(
 
   if (dispositionEvidence) {
     summary.dispositionEvidence = dispositionEvidence;
+  }
+
+  // #2323: informational only -- never a blocker input, and omitted
+  // entirely (not even `null`) when the caller does not pass it, mirroring
+  // `dispositionEvidence` above so every pre-#2323 fixture/caller output is
+  // byte-for-byte unchanged. See the option's doc comment above for why
+  // this can never change `ready`/`blockers`.
+  if (options.localValidationEvidenceSummary) {
+    summary.localValidationEvidence = options.localValidationEvidenceSummary;
   }
 
   // Top-level rollup so a consumer reads one `ready` boolean + `blockers[]`

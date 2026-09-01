@@ -5461,6 +5461,14 @@ export function buildPreMergeReadinessSummary(
   if (dispositionEvidence) {
     summary.dispositionEvidence = dispositionEvidence;
   }
+  // #2323: informational only -- never a blocker input, and omitted
+  // entirely (not even `null`) when the caller does not pass it, mirroring
+  // `dispositionEvidence` above so every pre-#2323 fixture/caller output is
+  // byte-for-byte unchanged. See the option's doc comment above for why
+  // this can never change `ready`/`blockers`.
+  if (options.localValidationEvidenceSummary) {
+    summary.localValidationEvidence = options.localValidationEvidenceSummary;
+  }
   // Top-level rollup so a consumer reads one `ready` boolean + `blockers[]`
   // instead of hand-ANDing ~8 nested gates (a dropped clause would fail open).
   // Includes the F2 ack-only overrides (#2125) so a fully-autonomous F3
