@@ -6389,7 +6389,9 @@ export function computePreMergeReadinessBlockers(
     const developmentBranchTarget = preMergeAsRecord(
       report.developmentBranchTarget,
     );
-    const status = String(developmentBranchTarget.status ?? 'unavailable');
+    // `||`, not `??`: an empty-string status (garbled/absent field) must
+    // fail closed to 'unavailable' too, not pass '' through unmatched.
+    const status = String(developmentBranchTarget.status || 'unavailable');
     const baseRefName = String(developmentBranchTarget.baseRefName ?? '');
     if (status === 'invalid') {
       blockers.push({

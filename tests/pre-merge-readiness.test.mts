@@ -8604,3 +8604,21 @@ test('#2272: an unavailable effective development branch (no policy, unread live
   assert.ok(blocker);
   assert.match(blocker.detail, /could not be resolved/);
 });
+
+test('#2272: an empty-string developmentBranchTarget.status fails closed to unavailable, not a silent passthrough', () => {
+  const fixture = readJson('fixtures/pre-merge-readiness/clean.json');
+  const summary = buildPreMergeReadinessSummary(fixture.input, {
+    ...fixture.options,
+    includeDispositionEvidence: true,
+    developmentBranchTarget: {
+      status: '',
+      baseRefName: 'main',
+    },
+  });
+  assert.equal(summary.ready, false);
+  const blocker = (summary.blockers as { gate: string; detail: string }[]).find(
+    (item) => item.gate === 'development-branch-target',
+  );
+  assert.ok(blocker);
+  assert.match(blocker.detail, /could not be resolved/);
+});
