@@ -692,6 +692,42 @@ test('buildPreMergeReadinessSummary: primaryBotLogin is excluded from human appr
   assert.equal(reviewerStates.codeownerApprovalSatisfied, false);
 });
 
+// #2251 (Copilot review follow-up on PR #2387): detectMalformedReviewWatermarkComments
+// has its own unit coverage in review-gate.test.mts, but nothing previously
+// exercised buildPreMergeReadinessSummary's end-to-end wiring of it into
+// reviewCurrency.comparisonReason -- a future refactor could silently break
+// that wiring without a red test. This proves a review-watermark-shaped
+// comment whose note is glued directly to the leading underscore (`_IDD ...`,
+// no space, missing OPTIONAL_IDD_VISIBLE_NOTE_PATTERN's `\bIDD\b` boundary)
+// surfaces as 'malformed-watermark', not the generic 'missing-watermark'.
+test('buildPreMergeReadinessSummary: a malformed review-watermark comment surfaces a distinct comparisonReason', () => {
+  const prHeadSha = '7777777777777777777777777777777777777777';
+  const summary = buildPreMergeReadinessSummary(
+    {
+      prHeadSha,
+      comments: [
+        {
+          author: { login: 'kurone-kito' },
+          body: [
+            `<!-- review-watermark: claude-x claim-1 ${prHeadSha} none 0 none -->`,
+            '_IDD note glued directly to the leading underscore, no space before it_',
+          ].join('\n'),
+          createdAt: '2026-08-02T00:00:00Z',
+        },
+      ],
+    },
+    {
+      now: '2026-08-02T00:05:00Z',
+      trustedMarkerLogins: ['kurone-kito'],
+      expectedClaimId: 'claim-1',
+    },
+  );
+
+  const reviewCurrency = summary.reviewCurrency as Record<string, unknown>;
+  assert.equal(reviewCurrency.comparisonRoute, 'return-to-e1');
+  assert.equal(reviewCurrency.comparisonReason, 'malformed-watermark');
+});
+
 test('buildPreMergeReadinessSummary: primaryBotLogin CHANGES_REQUESTED does not block via reviewer-approval counting', () => {
   const prHeadSha = '5555555555555555555555555555555555555555';
   const customBotLogin = 'my-custom-review-bot[bot]';

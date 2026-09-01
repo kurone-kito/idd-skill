@@ -3,6 +3,7 @@ import { test } from 'node:test';
 
 import {
   classifyReviewThreadForGate,
+  detectMalformedReviewWatermarkComments,
   diffReviewSnapshot,
   resolveLatestReviewWatermark,
   routeRejectedChangesRequestedReview,
@@ -120,4 +121,131 @@ test('classifies unresolved threads for awaiting-reviewer and conversation-resol
       );
     }
   }
+});
+
+// #2251: a review-watermark/review-baseline-shaped comment that fails the
+// strict canonical `pattern` already reads as absent to
+// resolveLatestReviewWatermark (its own `parseReviewWatermarkComment` call
+// returns null and the loop `continue`s past it) -- these three cases prove
+// detectMalformedReviewWatermarkComments lets a caller tell "malformed
+// marker found" apart from "no watermark-shaped comment at all" without
+// resolveLatestReviewWatermark's own selection behavior changing.
+test('detects a review-watermark comment whose note is glued to the leading underscore as malformed, not absent', () => {
+  // OPTIONAL_IDD_VISIBLE_NOTE_PATTERN requires `\bIDD\b`; `_` is a \w
+  // character, so a note glued directly to the underscore with no space
+  // (`_IDD ...`) never satisfies the boundary and the whole body fails the
+  // canonical `pattern` even though its marker prefix is well-formed.
+  const gluedNoteBody = [
+    `<!-- review-watermark: claude-x claim-1 ${'a'.repeat(40)} none 0 none -->`,
+    '_IDD note glued directly to the leading underscore, no space before it_',
+  ].join('\n');
+  const comments = [
+    {
+      author: { login: 'claude-x' },
+      body: gluedNoteBody,
+      createdAt: '2026-05-10T00:00:00Z',
+    },
+  ];
+
+  const watermark = resolveLatestReviewWatermark(comments, {
+    expectedClaimId: 'claim-1',
+    isTrustedAuthor: () => true,
+  });
+  assert.equal(
+    watermark,
+    null,
+    'a malformed watermark comment must not parse as a valid watermark',
+  );
+  assert.equal(
+    detectMalformedReviewWatermarkComments(comments, {
+      isTrustedAuthor: () => true,
+    }),
+    true,
+    'the malformed marker must be distinguishable from a genuinely absent one',
+  );
+});
+
+// #2251 (Copilot review follow-up on PR #2387): resolveLatestReviewWatermark
+// filters by options.expectedClaimId, but the malformed-marker fallback
+// initially had no equivalent filter -- a different claim's malformed
+// review-watermark/review-baseline comment would flip comparisonReason to
+// 'malformed-watermark' even though the *expected* claim's watermark is
+// simply, genuinely absent.
+test('a malformed review-watermark comment scoped to a different claim id does not count against the expected claim', () => {
+  const gluedNoteBody = [
+    `<!-- review-watermark: claude-x other-claim ${'a'.repeat(40)} none 0 none -->`,
+    '_IDD note glued directly to the leading underscore, no space before it_',
+  ].join('\n');
+  const comments = [
+    {
+      author: { login: 'claude-x' },
+      body: gluedNoteBody,
+      createdAt: '2026-05-10T00:00:00Z',
+    },
+  ];
+
+  assert.equal(
+    detectMalformedReviewWatermarkComments(comments, {
+      isTrustedAuthor: () => true,
+      expectedClaimId: 'claim-1',
+    }),
+    false,
+    "a different claim's malformed marker must not mask a genuinely missing watermark for the expected claim",
+  );
+  // Sanity check: the same malformed comment DOES count for its own claim.
+  assert.equal(
+    detectMalformedReviewWatermarkComments(comments, {
+      isTrustedAuthor: () => true,
+      expectedClaimId: 'other-claim',
+    }),
+    true,
+    'the expectedClaimId filter must still recognize a matching malformed comment',
+  );
+});
+
+test('does not flag a genuinely valid review-watermark comment as malformed', () => {
+  const validBody = `<!-- review-watermark: claude-x claim-1 ${'a'.repeat(40)} none 0 none -->`;
+  const comments = [
+    {
+      author: { login: 'claude-x' },
+      body: validBody,
+      createdAt: '2026-05-10T00:00:00Z',
+    },
+  ];
+
+  const watermark = resolveLatestReviewWatermark(comments, {
+    expectedClaimId: 'claim-1',
+    isTrustedAuthor: () => true,
+  });
+  assert.ok(watermark, 'a well-formed watermark must still parse as before');
+  assert.equal(
+    detectMalformedReviewWatermarkComments(comments, {
+      isTrustedAuthor: () => true,
+    }),
+    false,
+    'a valid watermark comment must never be reported as malformed',
+  );
+});
+
+test('reports no malformed marker when no watermark-shaped comment exists at all', () => {
+  const comments = [
+    {
+      author: { login: 'claude-x' },
+      body: 'just an ordinary regular comment, not marker-shaped at all',
+      createdAt: '2026-05-10T00:00:00Z',
+    },
+  ];
+
+  const watermark = resolveLatestReviewWatermark(comments, {
+    expectedClaimId: 'claim-1',
+    isTrustedAuthor: () => true,
+  });
+  assert.equal(watermark, null);
+  assert.equal(
+    detectMalformedReviewWatermarkComments(comments, {
+      isTrustedAuthor: () => true,
+    }),
+    false,
+    'a genuinely absent watermark must stay distinct from a malformed one',
+  );
 });
