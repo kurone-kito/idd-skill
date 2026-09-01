@@ -286,6 +286,50 @@ Sub issue: #208
   ]);
 });
 
+test('extractKeywordReferences recognizes the non-blocking Refs form (#2236)', () => {
+  const body = `
+Refs #501 (non-blocking)
+Refs #502, #503 (non-blocking)
+Blocked by #504
+`;
+
+  assert.deepEqual(extractKeywordReferences(body), [
+    {
+      target: 501,
+      relationship: 'non-blocking-reference',
+      evidence: 'Refs #501 (non-blocking)',
+    },
+    {
+      target: 502,
+      relationship: 'non-blocking-reference',
+      evidence: 'Refs #502, #503 (non-blocking)',
+    },
+    {
+      target: 503,
+      relationship: 'non-blocking-reference',
+      evidence: 'Refs #502, #503 (non-blocking)',
+    },
+    { target: 504, relationship: 'dependency', evidence: 'Blocked by #504' },
+  ]);
+});
+
+test('extractKeywordReferences never applies the non-blocking annotation to a blocking keyword', () => {
+  // The "(non-blocking)" annotation is scoped to the Refs/Ref keyword's own
+  // 'reference' classification only -- it must never weaken a real
+  // Blocked-by/Depends-on/Closes/Sub-issue dependency, even when the
+  // annotation happens to sit in that keyword's own segment.
+  const body = 'Blocked by #601 (non-blocking)';
+  assert.deepEqual(extractKeywordReferences(body), [
+    { target: 601, relationship: 'dependency', evidence: body },
+  ]);
+});
+
+test('extractKeywordReferences leaves a plain Refs mention as relationship "reference" (no regression)', () => {
+  assert.deepEqual(extractKeywordReferences('Refs #602'), [
+    { target: 602, relationship: 'reference', evidence: 'Refs #602' },
+  ]);
+});
+
 test('extractTaskListReferences accepts uppercase checked items', () => {
   assert.deepEqual(extractTaskListReferences('- [X] #211'), [
     { target: 211, relationship: 'task-list', evidence: '- [X] #211' },
@@ -730,6 +774,87 @@ test('graph traversal excludes a negated closing-keyword mention as a phantom ne
     false,
   );
   assert.deepEqual(graph.roadmapNodes, []);
+});
+
+test('graph traversal never enters, fetches, or blocks on a non-blocking Refs target (#2236)', async () => {
+  // #2236: a roadmap can name a related, currently-blocked follow-up issue
+  // as purely informational without A1.5's closure audit treating it as a
+  // real child. #703 stays OPEN and unreachable via any other path -- if the
+  // fix regressed, it would appear in graph.nodes and
+  // graph.executionCandidates and the roadmap would never be closeable.
+  //
+  // #703's own loader throws instead of resolving (CodeRabbit, PR #2381):
+  // `expandForPrefetch`'s bounded-concurrency prefetch crawl expands every
+  // extracted reference target independently of `visitIssue`'s own skip
+  // logic, so a target reachable only via a non-blocking-reference edge must
+  // never be fetched by EITHER pass, not merely excluded from the DFS's own
+  // node bookkeeping.
+  const issues = new Map([
+    [
+      700,
+      roadmapIssue(
+        700,
+        '- [ ] #701\nRefs #703 (non-blocking), a known-blocked follow-up.',
+        'non-blocking-roadmap',
+      ),
+    ],
+    [701, executionIssue(701, 'the real child work')],
+  ]);
+
+  const graph = await enumerateRoadmapGraph(700, {
+    loadIssue: async (issueNumber) => {
+      if (issueNumber === 703) {
+        throw new Error(
+          'issue #703 must never be fetched: it is reachable only via a non-blocking-reference edge',
+        );
+      }
+      return issues.get(issueNumber) ?? null;
+    },
+  });
+
+  assert.deepEqual(graph.edges, [
+    {
+      source: 700,
+      target: 701,
+      relationship: 'task-list',
+      evidence: '- [ ] #701',
+    },
+    {
+      source: 700,
+      target: 703,
+      relationship: 'non-blocking-reference',
+      evidence: 'Refs #703 (non-blocking), a known-blocked follow-up.',
+    },
+  ]);
+  assert.equal(
+    graph.nodes.some((node) => node.number === 703),
+    false,
+  );
+  assert.deepEqual(graph.executionCandidates, [701]);
+});
+
+test('graph traversal never records a cycle for a non-blocking Refs back-edge (#2236)', async () => {
+  // A closed leaf's plain `Refs #<ancestor>` back-edge is already exempt
+  // from the cycle check (#1278); the non-blocking form must be exempt too,
+  // and regardless of the leaf's open/closed state -- it never even reaches
+  // the cycle-detection branch (see the `visitIssue` early continue).
+  const issues = new Map([
+    [800, roadmapIssue(800, '- [ ] #801', 'non-blocking-cycle-roadmap')],
+    [
+      801,
+      executionIssue(
+        801,
+        'Refs #800 (non-blocking) is the parent roadmap for provenance.',
+      ),
+    ],
+  ]);
+
+  const graph = await enumerateRoadmapGraph(800, {
+    loadIssue: async (issueNumber) => issues.get(issueNumber) ?? null,
+  });
+
+  assert.deepEqual(graph.diagnostics.cycles, []);
+  assert.deepEqual(graph.executionCandidates, [801]);
 });
 
 test('enumerates a flat roadmap graph and separates execution candidates', async () => {

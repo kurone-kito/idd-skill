@@ -722,6 +722,48 @@ test('prose-dependency does not warn when the reference already has a Depends on
   assert.equal(finding.severity, undefined);
 });
 
+test('prose-dependency does not warn when the reference already has the non-blocking Refs encoding (#2236)', () => {
+  const body = childBody({
+    extraMarkers:
+      'Refs #1391 (non-blocking)\n\nOnce #1391 merges, this can start.',
+  });
+  const report = auditAuthoredIssue(body, { shape: 'child' });
+  const finding = report.findings.find(
+    (entry) => entry.id === 'prose-dependency',
+  );
+  assert.ok(finding, 'prose-dependency finding should be present');
+  assert.equal(finding.severity, undefined);
+});
+
+test('prose-dependency recognizes the non-blocking Refs form for a multi-target list (#2236)', () => {
+  const body = childBody({
+    extraMarkers:
+      'Refs #1391, #1392 (non-blocking)\n\n' +
+      'Once #1391 and #1392 merge, this can start.',
+  });
+  const report = auditAuthoredIssue(body, { shape: 'child' });
+  const finding = report.findings.find(
+    (entry) => entry.id === 'prose-dependency',
+  );
+  assert.ok(finding, 'prose-dependency finding should be present');
+  assert.equal(finding.severity, undefined);
+});
+
+test('prose-dependency still warns on a plain Refs mention near coordination language (no regression, #2236)', () => {
+  // The bare `Refs #NNN` form (no `(non-blocking)` annotation) was never an
+  // encoded dependency before #2236 and must still be flagged -- only the
+  // explicit non-blocking form is exempt.
+  const body = childBody({
+    extraMarkers: 'Refs #1391\n\nOnce #1391 merges, this can start.',
+  });
+  const report = auditAuthoredIssue(body, { shape: 'child' });
+  const finding = report.findings.find(
+    (entry) => entry.id === 'prose-dependency',
+  );
+  assert.equal(finding?.severity, 'warning');
+  assert.match(finding?.detail ?? '', /#1391/);
+});
+
 test('prose-dependency does not warn on a roadmap-parent breadcrumb sharing a paragraph with unrelated coordination language', () => {
   // Regression test for a real false-positive risk found while designing
   // this check: "Part of ... roadmap (#N)" is a common breadcrumb phrasing
