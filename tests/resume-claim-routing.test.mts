@@ -27,6 +27,7 @@ test('returns unclaimed when no trusted markers exist', () => {
   assert.equal(result.action, 're_claim');
   assert.equal(result.reason, 'legacy-absent');
   assert.equal(result.active_claim, null);
+  assert.equal(result.evidence.legacy_claim_seen, false);
 });
 
 test('returns already_owned when active claim id matches --claim-id', () => {
@@ -48,6 +49,33 @@ test('returns already_owned when active claim id matches --claim-id', () => {
   assert.equal(result.state, 'already_owned');
   assert.equal(result.action, 'keep');
   assert.equal(result.reason, 'claim-id-match');
+  assert.equal(result.evidence.legacy_claim_seen, false);
+});
+
+test('legacy_claim_seen is true when history has both marker formats, even though new-format wins routing', () => {
+  const result = evaluateResumeClaimRouting(
+    {
+      claimId: 'claim-def',
+      now: '2026-05-12T11:00:00Z',
+      events: [
+        {
+          createdAt: '2026-05-12T08:00:00Z',
+          author: { login: 'maintainer' },
+          body: '<!-- claimed-by: old-agent 2026-05-12T08:00:00Z branch: issue/9-task -->',
+        },
+        {
+          createdAt: '2026-05-12T09:00:00Z',
+          author: { login: 'maintainer' },
+          body: '<!-- claimed-by: copilot claim-def supersedes: none 2026-05-12T09:00:00Z branch: issue/9-task -->',
+        },
+      ],
+    },
+    { isTrustedAuthor: trusted(['maintainer']) },
+  );
+
+  assert.equal(result.state, 'already_owned');
+  assert.equal(result.evidence.new_format_claim_seen, true);
+  assert.equal(result.evidence.legacy_claim_seen, true);
 });
 
 test('activation-nonce: matching local nonce keeps already_owned', () => {
@@ -449,6 +477,7 @@ test('legacy non-stale claim is non_inheritable', () => {
   assert.equal(result.state, 'non_inheritable');
   assert.equal(result.action, 'stop');
   assert.equal(result.reason, 'legacy-claim-non-stale');
+  assert.equal(result.evidence.legacy_claim_seen, true);
 });
 
 test('legacy stale claim routes to takeover', () => {

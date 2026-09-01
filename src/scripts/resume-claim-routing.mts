@@ -370,7 +370,7 @@ export function evaluateResumeClaimRouting(
     evidence: {
       trusted_event_count: events.length,
       new_format_claim_seen: state.mode === 'new-format',
-      legacy_claim_seen: state.mode === 'legacy-only',
+      legacy_claim_seen: state.hasLegacyClaimMarker,
       same_second_contenders: sameSecondContenders,
       later_competing_claim: laterCompetingClaim,
       activation_nonce_winner: activationNonceWinner,
@@ -613,6 +613,15 @@ function resolveClaimState(
     (event) =>
       parseClaimComment(event.body ?? '', event.createdAt ?? '') !== null,
   );
+  // hasLegacyClaimMarker records whether any legacy-format marker was ever
+  // posted, independent of whether the 'new-format' branch below ignores it
+  // in favor of a co-existing new-format claim (#2317's follow-up finding:
+  // `legacyClaim` alone conflates "no legacy marker existed" with "one
+  // existed but new-format priority skipped resolving it").
+  const hasLegacyClaimMarker = events.some(
+    (event) =>
+      parseLegacyClaimComment(event.body ?? '', event.createdAt ?? '') !== null,
+  );
 
   const warnings: string[] = [];
   const onAnomalousHeartbeat = ({
@@ -686,6 +695,7 @@ function resolveClaimState(
       warnings,
       legacyClaim: null,
       legacyReleased: false,
+      hasLegacyClaimMarker,
     };
   }
 
@@ -698,6 +708,7 @@ function resolveClaimState(
     warnings,
     legacyClaim: legacy.claim,
     legacyReleased: legacy.released,
+    hasLegacyClaimMarker,
   };
 }
 
