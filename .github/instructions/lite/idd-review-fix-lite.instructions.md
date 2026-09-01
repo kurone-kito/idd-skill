@@ -199,8 +199,13 @@ other GitHub side effect, confirm all of the following:
 11. If this round's fix changes a claim the PR body's self-review
     section makes (round count, a residual limitation, a scope
     statement), fetch the current full body, edit only that section
-    in the fetched copy, and post the full result back with `gh pr
-    edit {pr-number} --body-file <path>` in the same push —
+    in the fetched copy, and post the full result back in the same
+    push:
+
+    ```sh
+    gh pr edit {pr-number} --body-file <path>
+    ```
+
     `--body-file` replaces the whole body, so never pass a partial
     file (it would drop the closing-keyword line). After posting,
     repeat the lite pr-submit doc's step 5 closing-set check — edited
