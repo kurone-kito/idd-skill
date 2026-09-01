@@ -441,9 +441,9 @@ Before any mutating action in F3, apply the
    unrelated to the trusted-checkout-source concern in B1 Step 1 — if
    `{development-branch}` differs from the repository's default branch,
    switch the primary worktree back to the default branch
-   (`git switch <default-branch>`) once cleanup (steps 4-5 below)
-   completes, so the next B1 pass finds the primary worktree on its
-   expected trusted checkout.
+   (`git switch <default-branch>`) once the remaining F4 cleanup steps
+   below complete, so the next B1 pass finds the primary worktree on
+   its expected trusted checkout.
 5. Run from the **primary worktree**, never from inside the worktree
    being removed. Any removal (plain or `--force`) silently discards
    ignored files too, including inside a submodule. Scope Git
