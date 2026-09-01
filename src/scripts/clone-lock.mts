@@ -48,16 +48,29 @@
 // repository's own review history on #2223 caught and reproduced exactly
 // that double-winner failure from an earlier `renameSync`-only attempt at
 // this fix, roughly one run in ten under concurrent load). The real fix
-// is a second, PID-tagged arbiter lock (`tryAcquireArbiter`): removing
-// and recreating the main lock only ever happens while holding it, so at
-// most one contender is ever doing that at a time, regardless of how many
-// independently observed the same stale mtime. The arbiter's own
-// staleness is judged by process liveness (`isPidAlive`), not a time
-// threshold, because its critical section is always a handful of
-// synchronous, no-I/O-wait statements -- "the recorded PID no longer
-// exists" is both necessary and sufficient to know its holder crashed and
-// can never finish or release it, with none of a time threshold's
-// inherent "probably dead by now" ambiguity. This is a purely local
+// is a second, PID-tagged arbiter lock (`tryAcquireArbiter`): every
+// operation that mutates an EXISTING main lock -- takeover, release,
+// refresh -- runs only while holding it, so at most one contender is
+// ever doing that at a time, regardless of how many independently
+// observed the same stale mtime or the same token. Release and refresh
+// need this too, not only takeover: without it, a holder whose own
+// process stalled long enough for its lease to go stale and get taken
+// over by someone else could read a stale-but-still-matching token, then
+// delete or overwrite the NEW holder's fresh lock in the gap before its
+// own act (unlink or write) runs -- this repository's review history on
+// #2223 caught this as a separate gap from takeover's own, in the SAME
+// round that also caught takeover's residual double-winner race (an
+// earlier `renameSync`-only takeover attempt, with no arbiter at all,
+// reproduced roughly one run in ten under concurrent load). The
+// arbiter's own staleness is judged primarily by process liveness
+// (`isPidAlive`), not a time threshold, because its critical section is
+// always a handful of synchronous, no-I/O-wait statements -- "the
+// recorded PID no longer exists" is both necessary and sufficient to
+// know its holder crashed and can never finish or release it, with none
+// of a time threshold's inherent "probably dead by now" ambiguity; a
+// marker whose body can't be parsed (no PID to check) falls back to a
+// short, generous age threshold instead, so a crash mid-write there
+// isn't permanently unrecoverable either. This is a purely local
 // liveness heuristic scoped to operations that normally complete in
 // seconds -- it carries none of `claim-lock.mts`'s GitHub-reverification
 // requirement, because this lock has no cross-machine claim-ownership
@@ -98,6 +111,27 @@ const STALE_LOCK_MS = 5 * 60_000;
  * lease never lapses into apparent staleness between refreshes.
  */
 const DEFAULT_LEASE_REFRESH_MS = Math.floor(STALE_LOCK_MS / 2);
+/**
+ * An arbiter marker whose body can't be parsed (e.g. a crashed partial
+ * write) has no recorded PID to check liveness against. Its critical
+ * section is always a handful of synchronous, no-I/O-wait statements, so
+ * this age threshold only ever needs to be "generous relative to a
+ * syscall," not to any real operation's duration -- unlike
+ * `STALE_LOCK_MS`, which must outlast a genuine `git fetch`.
+ */
+const ARBITER_MALFORMED_STALE_MS = 5_000;
+/**
+ * Bounds how many times {@link releaseCloneLock} / {@link refreshCloneLock}
+ * retry a contended arbiter before giving up for this one call. Every
+ * arbiter hold in this module is a handful of synchronous statements, so
+ * contention clears in microseconds; this is a small, bounded backstop,
+ * not a real wait budget. Giving up is safe, not catastrophic: a release
+ * that couldn't get in leaves the lock for the module's own
+ * staleness+takeover machinery to eventually reclaim, and a refresh that
+ * couldn't get in is simply retried on the next heartbeat tick.
+ */
+const ARBITER_RETRY_ATTEMPTS = 50;
+const ARBITER_RETRY_DELAY_MS = 2;
 
 const CLONE_LOCK_FLAG_SPEC = {
   '--exec': { type: 'boolean' },
@@ -273,39 +307,82 @@ function isPidAlive(pid: number): boolean {
 }
 
 /**
+ * Best-effort remove `path`, falling back to a recursive `rmSync` only
+ * for the directory-shaped edge case (a malformed marker or lock that
+ * happens to be a directory, not the expected regular file) -- mirroring
+ * `claim-lock.mts`'s own takeover path. Every caller of this helper only
+ * ever targets a path nothing else can reference (a per-attempt
+ * graveyard copy this process alone renamed there), so recursion here is
+ * unconditionally safe regardless of what it finds.
+ */
+function discardBestEffort(path: string): void {
+  try {
+    unlinkSync(path);
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === 'EISDIR' || code === 'EPERM') {
+      try {
+        rmSync(path, { recursive: true, force: true });
+      } catch {
+        // Best-effort; nothing more can safely be done here.
+      }
+    }
+    // ENOENT and anything else: best-effort, nothing to clean up.
+  }
+}
+
+/**
  * Exclusively acquire the arbiter for one stale-lock-removal attempt
  * against `path`'s main lock, or return `false` when another contender
  * is already arbitrating (or just won a recovery race for a dead
- * arbiter). Removal itself is `unlinkSync`, safe to run unconditionally
- * ONLY while holding this arbiter -- exactly one contender can ever hold
- * it at a time, which is what actually closes the race a plain
- * check-then-`unlinkSync` pair on the MAIN lock cannot: two contenders
- * observing the same stale mtime from independent reads can no longer
- * both proceed to remove/recreate the main lock concurrently, because
- * only one of them ever wins this arbiter first.
+ * arbiter). Every operation this module performs against an EXISTING
+ * main lock -- takeover, release, refresh -- runs only while holding
+ * this arbiter, which is what actually closes the races a plain
+ * check-then-act pair on the main lock cannot: two contenders observing
+ * the same stale mtime (or the same token) from independent reads can no
+ * longer both proceed to mutate the main lock concurrently, because only
+ * one of them ever wins this arbiter first. A genuinely fresh acquire
+ * (the main lock path is truly absent) does not need the arbiter at all
+ * -- `wx`-create is already exclusive for that case on its own.
  *
  * The arbiter is itself just a `{ flag: 'wx' }` claim recording the
  * arbitrating PID -- exclusive by the same primitive a fresh main-lock
  * acquire uses. Its OWN staleness (an arbiter whose holder crashed
- * mid-arbitration) is judged by {@link isPidAlive}, not by a time
+ * mid-arbitration) is judged primarily by {@link isPidAlive}, not a time
  * threshold: the arbitration critical section is always a handful of
  * synchronous, no-I/O-wait statements, so "the recorded PID no longer
  * exists" is both necessary and sufficient to know the holder can never
- * finish or release it. Recovering a dead arbiter still races multiple
- * contenders (more than one can observe the same dead PID), so it goes
- * through the SAME inode-verified rename this function's removal step
- * cannot avoid at that one level: `renameSync` the arbiter file away,
- * then confirm (via the inode captured from an open file descriptor
- * held across the whole check) that what actually got moved is the
- * exact dead entry inspected, not a live contender's fresh arbiter claim
- * that happened to replace it in the interim. On a mismatch, the
- * wrongly-grabbed file is discarded (never restored): the rightful
- * holder's authority came from its own earlier successful `wx`-create,
- * not from this marker file continuing to exist on disk, so losing the
- * marker costs nothing but cosmetics -- see the design note in this
- * module's own review history (#2223) for why restoring it instead
- * would risk clobbering a third generation that may have since claimed
- * `path` legitimately.
+ * finish or release it. A marker whose body can't be parsed (e.g. a
+ * crashed partial write) has no PID to check, so it falls back to
+ * `ARBITER_MALFORMED_STALE_MS` age instead, rather than being permanently
+ * unrecoverable.
+ *
+ * The PID (or age) used for that liveness verdict and the inode later
+ * verified against are captured from a SINGLE open file descriptor, not
+ * two separate reads: reading them separately leaves a gap where the
+ * verdict and the inode describe two DIFFERENT files -- a dead PID read
+ * moments ago, then (after another contender's own concurrent recovery
+ * of that same dead marker completed) a live contender's brand-new
+ * marker by the time a second, later read re-opens the path. This
+ * repository's own review history on #2223 caught exactly that gap in
+ * an earlier revision that read the PID via one `readFileSync(path)`
+ * call and the inode via a later, separate `openSync`.
+ *
+ * Recovering a confirmed-dead marker still races multiple contenders
+ * (more than one can independently reach the same dead verdict), so it
+ * goes through an inode-verified rename: `renameSync` the marker away,
+ * then confirm (via the inode captured together with the liveness
+ * verdict above) that what actually got moved is the exact entry
+ * inspected, not a live contender's fresh arbiter claim that happened to
+ * replace it in the interim. On a mismatch, the wrongly-grabbed file is
+ * discarded (never restored): the rightful holder's authority came from
+ * its own earlier successful `wx`-create, not from this marker file
+ * continuing to exist on disk, so losing the marker costs nothing but
+ * cosmetics -- restoring it instead would risk clobbering a third
+ * generation that may have since claimed `path` legitimately (the same
+ * reasoning `releaseCloneLock`/`refreshCloneLock` rely on the arbiter
+ * itself to avoid needing, by never attempting a similar restore against
+ * the main lock).
  */
 function tryAcquireArbiter(path: string): boolean {
   const marker = arbiterPath(path);
@@ -320,21 +397,6 @@ function tryAcquireArbiter(path: string): boolean {
     }
   }
 
-  let holderPid: number | null = null;
-  try {
-    const parsed = JSON.parse(readFileSync(marker, 'utf8'));
-    if (typeof parsed?.pid === 'number') {
-      holderPid = parsed.pid;
-    }
-  } catch {
-    // Malformed or unreadable: cannot determine liveness, so do not
-    // attempt recovery this pass -- fail closed exactly like the main
-    // lock's own malformed-body handling elsewhere in this module.
-  }
-  if (holderPid === null || isPidAlive(holderPid)) {
-    return false;
-  }
-
   let fd: number;
   try {
     fd = openSync(marker, 'r');
@@ -344,11 +406,31 @@ function tryAcquireArbiter(path: string): boolean {
     }
     throw error;
   }
-  let observedIno: number | undefined;
+  let observedIno: number;
+  let observedAgeMs: number;
+  let holderPid: number | null = null;
   try {
-    observedIno = fstatSync(fd).ino;
+    const stat = fstatSync(fd);
+    observedIno = stat.ino;
+    observedAgeMs = Date.now() - stat.mtimeMs;
+    try {
+      const parsed = JSON.parse(readFileSync(fd, 'utf8'));
+      if (typeof parsed?.pid === 'number') {
+        holderPid = parsed.pid;
+      }
+    } catch {
+      // Malformed body -- judged by observedAgeMs below instead.
+    }
   } finally {
     closeSync(fd);
+  }
+
+  const holderConfirmedDead =
+    holderPid !== null
+      ? !isPidAlive(holderPid)
+      : observedAgeMs > ARBITER_MALFORMED_STALE_MS;
+  if (!holderConfirmedDead) {
+    return false;
   }
 
   const graveyard = `${marker}.graveyard-${process.pid}-${Math.random().toString(36).slice(2)}`;
@@ -367,18 +449,10 @@ function tryAcquireArbiter(path: string): boolean {
     movedIno = undefined;
   }
   if (movedIno === undefined || movedIno !== observedIno) {
-    try {
-      unlinkSync(graveyard);
-    } catch {
-      // Best-effort discard; see the doc comment above.
-    }
+    discardBestEffort(graveyard);
     return false;
   }
-  try {
-    unlinkSync(graveyard);
-  } catch {
-    // Best-effort; the dead entry is confirmed claimed regardless.
-  }
+  discardBestEffort(graveyard);
 
   try {
     writeFileSync(marker, JSON.stringify({ pid: process.pid }), {
@@ -402,6 +476,22 @@ function releaseArbiter(path: string): void {
       throw error;
     }
   }
+}
+
+/**
+ * Acquire the arbiter for `path`, retrying briefly if another contender
+ * currently holds it. See `ARBITER_RETRY_ATTEMPTS`'s own doc comment for
+ * why a small bounded retry (not indefinite blocking) is the right
+ * shape here.
+ */
+function acquireArbiterWithRetry(path: string): boolean {
+  for (let attempt = 0; attempt < ARBITER_RETRY_ATTEMPTS; attempt += 1) {
+    if (tryAcquireArbiter(path)) {
+      return true;
+    }
+    sleepSync(ARBITER_RETRY_DELAY_MS);
+  }
+  return false;
 }
 
 /**
@@ -523,17 +613,37 @@ export function acquireCloneLock(
  * different token is present, another session already took the lock over
  * (e.g. after this caller's own hold went stale) and this release must
  * not disturb it. Removing an already-absent lock is a silent no-op.
+ *
+ * The token check and the removal happen while holding the arbiter (see
+ * {@link tryAcquireArbiter}), not as two independent steps: without that,
+ * a holder whose own process stalled badly enough for its lease to have
+ * gone stale and already been taken over by someone else could read a
+ * stale-but-still-matching token, then delete the NEW holder's fresh
+ * lock in the gap before its own `unlinkSync` runs -- this repository's
+ * review history on #2223 caught exactly this gap in an earlier
+ * revision. If the arbiter cannot be acquired within a bounded number of
+ * retries (see `ARBITER_RETRY_ATTEMPTS`), this call simply gives up
+ * rather than releasing incorrectly: an unreleased lock still recovers
+ * later through the module's own staleness+takeover machinery, which is
+ * safe, whereas releasing without the arbiter's protection would not be.
  */
 export function releaseCloneLock(handle: CloneLockHandle): void {
-  const read = readLock(handle.path);
-  if (read.status === 'present' && read.lock.token === handle.token) {
-    try {
-      unlinkSync(handle.path);
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
-        throw error;
+  if (!acquireArbiterWithRetry(handle.path)) {
+    return;
+  }
+  try {
+    const read = readLock(handle.path);
+    if (read.status === 'present' && read.lock.token === handle.token) {
+      try {
+        unlinkSync(handle.path);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+          throw error;
+        }
       }
     }
+  } finally {
+    releaseArbiter(handle.path);
   }
 }
 
@@ -542,27 +652,39 @@ export function releaseCloneLock(handle: CloneLockHandle): void {
  * when the on-disk token still matches `handle.token` -- this never
  * refreshes (or resurrects) a lock a different session now holds. Used
  * by {@link withCloneLock} to keep a legitimately long-running holder's
- * lease from lapsing into apparent staleness. A read-then-write race
- * against a concurrent stale takeover is inherent to a plain lock file
- * (there is no atomic compare-and-swap primitive here); the default
- * refresh cadence is sized generously relative to the staleness window
- * specifically to make that race vanishingly unlikely to matter in
- * practice. A failed refresh (e.g. the path became briefly inaccessible)
- * is silently swallowed: the next timer tick simply retries, and
- * `releaseCloneLock`'s own token check means a truly lost lease never
- * gets misreported as released.
+ * lease from lapsing into apparent staleness.
+ *
+ * Like {@link releaseCloneLock}, the token check and the write happen
+ * while holding the arbiter, not as two independent steps: without that,
+ * a holder whose lease had already gone stale and been taken over by
+ * someone else could read a stale-but-still-matching token, then
+ * truncate and overwrite the NEW holder's fresh lock with its own token
+ * in the gap before its own `writeFileSync` runs -- silently resurrecting
+ * a lease that should have stayed lost. If the arbiter cannot be
+ * acquired within a bounded number of retries, or the write itself fails
+ * (e.g. the path became briefly inaccessible), this call silently gives
+ * up: the next heartbeat tick simply retries, and `releaseCloneLock`'s
+ * own arbiter-protected token check means a truly lost lease never gets
+ * misreported as released.
  */
 export function refreshCloneLock(handle: CloneLockHandle): void {
-  const read = readLock(handle.path);
-  if (read.status === 'present' && read.lock.token === handle.token) {
-    try {
-      writeFileSync(
-        handle.path,
-        renderLockBody(read.lock.agentId, handle.token),
-      );
-    } catch {
-      // Best-effort; see the doc comment above.
+  if (!acquireArbiterWithRetry(handle.path)) {
+    return;
+  }
+  try {
+    const read = readLock(handle.path);
+    if (read.status === 'present' && read.lock.token === handle.token) {
+      try {
+        writeFileSync(
+          handle.path,
+          renderLockBody(read.lock.agentId, handle.token),
+        );
+      } catch {
+        // Best-effort; see the doc comment above.
+      }
     }
+  } finally {
+    releaseArbiter(handle.path);
   }
 }
 
@@ -590,8 +712,12 @@ export function checkCloneLock(repoPath: string): CheckCloneLockOutcome {
 /**
  * Acquire the clone lock, run `command` with `args` (inheriting stdio,
  * `cwd` set to `repoPath` so the wrapped git operation always targets the
- * same repository the lock scopes), then release the lock -- even if the
- * command fails. While the command runs, the lease is refreshed every
+ * same repository the lock scopes, and the same
+ * {@link sanitizedGitEnvironment} used to resolve the lock path itself --
+ * an ambient `GIT_DIR`/`GIT_WORK_TREE` the caller happened to have set
+ * must not redirect the wrapped command at a different repository than
+ * the one just locked), then release the lock -- even if the command
+ * fails. While the command runs, the lease is refreshed every
  * `leaseRefreshMs` (default {@link DEFAULT_LEASE_REFRESH_MS}) so a
  * legitimately long-running operation is never mistaken for an abandoned
  * holder by another waiter. Returns the command's exit code (`null` when
@@ -612,7 +738,11 @@ export async function withCloneLock(
   const heartbeat = setInterval(() => refreshCloneLock(handle), leaseRefreshMs);
   try {
     return await new Promise<number | null>((resolve, reject) => {
-      const child = spawn(command, args, { stdio: 'inherit', cwd: repoPath });
+      const child = spawn(command, args, {
+        stdio: 'inherit',
+        cwd: repoPath,
+        env: sanitizedGitEnvironment(),
+      });
       child.once('error', reject);
       child.once('exit', (code) => resolve(code));
     });
@@ -749,5 +879,5 @@ lock file exists but could not be parsed as a well-formed lock body.
 // point would throw a `ReferenceError` on any `--exec` timeout instead of
 // the documented message and exit code 3.
 if (import.meta.main) {
-  runCli();
+  await runCli();
 }

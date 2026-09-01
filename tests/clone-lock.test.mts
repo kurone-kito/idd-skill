@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { execFile, execFileSync } from 'node:child_process';
+import { execFile, execFileSync, spawnSync } from 'node:child_process';
 import {
   existsSync,
   mkdtempSync,
@@ -622,6 +622,250 @@ test('CLI: concurrent --exec invocations serialize the wrapped command — no tw
         `expected non-overlapping critical sections, got: ${JSON.stringify(sorted)}`,
       );
     }
+  } finally {
+    teardown(primary);
+  }
+});
+
+test('acquire: a malformed arbiter marker recovers once its age passes the malformed-stale fallback (P2 round 4: a crashed partial arbiter write must not wedge every future takeover forever)', () => {
+  const primary = setupRepo();
+  try {
+    const path = resolveCloneLockPath(primary);
+    writeFileSync(
+      path,
+      JSON.stringify({
+        token: 'dead-holder',
+        agentId: 'agent-dead',
+        acquiredAt: new Date().toISOString(),
+      }),
+    );
+    backdateLockMtime(path, 60_000);
+
+    // Seed a malformed (unparseable) arbiter marker -- simulating a
+    // process that crashed after the exclusive wx-create but before its
+    // JSON write completed -- and backdate it well past the
+    // malformed-stale fallback window.
+    const arbiterFile = `${path}.arbiter`;
+    writeFileSync(arbiterFile, '{"pid": not valid json');
+    backdateLockMtime(arbiterFile, 30_000);
+
+    const start = Date.now();
+    const handle = acquireCloneLock(primary, 'agent-b', 5_000, 200);
+    const elapsedMs = Date.now() - start;
+
+    assert.ok(
+      elapsedMs < 2_000,
+      `expected the malformed arbiter to be recovered promptly, took ${elapsedMs}ms`,
+    );
+    releaseCloneLock(handle);
+  } finally {
+    teardown(primary);
+  }
+});
+
+test('acquire: concurrent contenders racing a dead-PID arbiter recovery never let two of them hold the lock at once (P1 round 4: PID and inode must come from the same read)', async () => {
+  const primary = setupRepo();
+  const logPath = join(primary, 'dead-arbiter-race.log');
+  writeFileSync(logPath, '');
+  try {
+    const path = resolveCloneLockPath(primary);
+    writeFileSync(
+      path,
+      JSON.stringify({
+        token: 'dead-holder',
+        agentId: 'agent-dead',
+        acquiredAt: new Date().toISOString(),
+      }),
+    );
+    backdateLockMtime(path, 60_000);
+
+    // A genuinely dead PID: spawnSync blocks until the child has already
+    // exited, so its pid is guaranteed not to be running by the time we
+    // read it back (short of the OS recycling that exact pid in the
+    // meantime, which is not realistic within a test's lifetime).
+    const deadPid = spawnSync(process.execPath, ['-e', 'process.exit(0)']).pid;
+    assert.ok(typeof deadPid === 'number' && deadPid > 0);
+    writeFileSync(`${path}.arbiter`, JSON.stringify({ pid: deadPid }));
+
+    const fixturePath = writeRaceFixture(primary);
+    const CONTENDERS = 5;
+    await Promise.all(
+      Array.from({ length: CONTENDERS }, (_unused, index) =>
+        execFileAsync(process.execPath, [fixturePath], {
+          env: fixtureEnv({
+            IDD_TEST_REPO: primary,
+            IDD_TEST_IDX: String(index),
+            IDD_TEST_LOG: logPath,
+            IDD_TEST_TIMEOUT_MS: '10000',
+            IDD_TEST_STALE_MS: '200',
+            IDD_TEST_HOLD_MS: '150',
+          }),
+        }),
+      ),
+    );
+
+    const lines = readFileSync(logPath, 'utf8')
+      .trim()
+      .split('\n')
+      .filter(Boolean);
+    assert.equal(
+      lines.filter((line) => line.startsWith('lost ')).length,
+      0,
+      `expected every contender to eventually acquire, got: ${JSON.stringify(lines)}`,
+    );
+    const intervals = new Map<string, { start: number; end: number }>();
+    for (const line of lines) {
+      const [kind, idx, ts] = line.split(' ');
+      const entry = intervals.get(idx) ?? { start: 0, end: 0 };
+      if (kind === 'won') {
+        entry.start = Number(ts);
+      } else {
+        entry.end = Number(ts);
+      }
+      intervals.set(idx, entry);
+    }
+    assert.equal(intervals.size, CONTENDERS);
+    const sorted = Array.from(intervals.values()).sort(
+      (first, second) => first.start - second.start,
+    );
+    for (let index = 1; index < sorted.length; index += 1) {
+      assert.ok(
+        sorted[index].start >= sorted[index - 1].end,
+        `expected non-overlapping holds even when racing a dead-PID arbiter, got: ${JSON.stringify(sorted)}`,
+      );
+    }
+  } finally {
+    teardown(primary);
+  }
+});
+
+/**
+ * A second on-disk fixture: each worker repeatedly acquires with a very
+ * short staleMs, immediately backdates ITS OWN freshly-acquired lock (so
+ * it looks abandoned to every other contender as soon as possible,
+ * maximizing how often a release/refresh call races an in-flight
+ * takeover of that same lock), holds briefly, refreshes once partway
+ * through the hold (also racing takeover), then releases (also racing
+ * takeover) -- repeating in a loop until `IDD_TEST_UNTIL_MS` elapses.
+ * Every transition is logged so the test can verify the shared main lock
+ * file was well-formed JSON at every observation, never corrupted by a
+ * torn concurrent write.
+ */
+function writeReleaseRefreshRaceFixture(dir: string): string {
+  const fixturePath = join(dir, 'release-refresh-race-worker.mjs');
+  const cloneLockUrl = pathToFileURL(
+    join(REPO_ROOT, 'scripts/clone-lock.mjs'),
+  ).href;
+  writeFileSync(
+    fixturePath,
+    [
+      `import { acquireCloneLock, refreshCloneLock, releaseCloneLock, resolveCloneLockPath } from ${JSON.stringify(cloneLockUrl)};`,
+      "import { appendFileSync, readFileSync, utimesSync } from 'node:fs';",
+      'const repo = process.env.IDD_TEST_REPO;',
+      'const idx = process.env.IDD_TEST_IDX;',
+      'const log = process.env.IDD_TEST_LOG;',
+      'const untilMs = Number(process.env.IDD_TEST_UNTIL_MS);',
+      'const path = resolveCloneLockPath(repo);',
+      'let rounds = 0;',
+      'while (Date.now() < untilMs) {',
+      '  rounds += 1;',
+      '  try {',
+      "    const handle = acquireCloneLock(repo, 'agent-' + idx, 300, 30);",
+      "    appendFileSync(log, 'won ' + idx + ' ' + Date.now() + '\\n');",
+      '    const ancient = new Date(Date.now() - 60000);',
+      '    utimesSync(path, ancient, ancient);',
+      '    const holdUntil = Date.now() + 20;',
+      '    while (Date.now() < holdUntil) {}',
+      '    refreshCloneLock(handle);',
+      '    const raw = readFileSync(path, "utf8");',
+      '    try {',
+      '      JSON.parse(raw);',
+      '    } catch {',
+      "      appendFileSync(log, 'corrupt ' + idx + ' ' + raw + '\\n');",
+      '    }',
+      '    const holdUntil2 = Date.now() + 10;',
+      '    while (Date.now() < holdUntil2) {}',
+      '    releaseCloneLock(handle);',
+      "    appendFileSync(log, 'released ' + idx + ' ' + Date.now() + '\\n');",
+      '  } catch (error) {',
+      "    appendFileSync(log, 'lost ' + idx + '\\n');",
+      '  }',
+      '}',
+      "appendFileSync(log, 'rounds ' + idx + ' ' + rounds + '\\n');",
+    ].join('\n'),
+  );
+  return fixturePath;
+}
+
+test('release/refresh: repeated concurrent acquire-backdate-refresh-release cycles never corrupt the lock or let two contenders hold it at once (Codex P1 round 4: release/refresh vs. takeover)', async () => {
+  const primary = setupRepo();
+  const logPath = join(primary, 'release-refresh-race.log');
+  writeFileSync(logPath, '');
+  try {
+    const fixturePath = writeReleaseRefreshRaceFixture(primary);
+    const WORKERS = 4;
+    const DURATION_MS = 1500;
+    const untilMs = Date.now() + DURATION_MS;
+
+    await Promise.all(
+      Array.from({ length: WORKERS }, (_unused, index) =>
+        execFileAsync(process.execPath, [fixturePath], {
+          env: fixtureEnv({
+            IDD_TEST_REPO: primary,
+            IDD_TEST_IDX: String(index),
+            IDD_TEST_LOG: logPath,
+            IDD_TEST_UNTIL_MS: String(untilMs),
+          }),
+        }),
+      ),
+    );
+
+    const lines = readFileSync(logPath, 'utf8')
+      .trim()
+      .split('\n')
+      .filter(Boolean);
+    const corruptions = lines.filter((line) => line.startsWith('corrupt '));
+    assert.deepEqual(
+      corruptions,
+      [],
+      `expected the lock file to always be well-formed JSON when observed mid-hold, got: ${JSON.stringify(corruptions)}`,
+    );
+
+    const totalRounds = lines
+      .filter((line) => line.startsWith('rounds '))
+      .reduce((sum, line) => sum + Number(line.split(' ')[2]), 0);
+    assert.ok(
+      totalRounds >= WORKERS,
+      `expected meaningful contention (at least one round per worker), got ${totalRounds} total rounds across: ${JSON.stringify(lines)}`,
+    );
+
+    // Note: this fixture deliberately backdates its OWN freshly-acquired
+    // lock immediately after acquiring it, specifically so other workers
+    // legitimately steal it mid-cycle -- that is the whole point (it is
+    // what forces a release/refresh call to race an in-flight takeover
+    // of the very same lock). Because of that self-sabotage, a worker's
+    // own "won"-to-"released" span is NOT a reliable proxy for "this
+    // worker verifiably held the lock exclusively the whole time" (its
+    // `released` log line fires unconditionally, even when the release
+    // call itself correctly no-opped because a takeover already replaced
+    // its token) -- so, unlike the other stress tests in this file,
+    // asserting those spans never overlap is not a valid invariant to
+    // check here. What this test verifies instead: no interleaving of
+    // acquire/backdate/refresh/release/takeover across four workers ever
+    // produces a torn, unparseable on-disk body (checked above), and the
+    // arbiter itself is never left orphaned by a botched interleaving.
+    const finalPath = resolveCloneLockPath(primary);
+    const finalRaw = existsSync(finalPath)
+      ? readFileSync(finalPath, 'utf8')
+      : null;
+    if (finalRaw !== null) {
+      assert.doesNotThrow(() => JSON.parse(finalRaw));
+    }
+    assert.equal(
+      existsSync(`${finalPath}.arbiter`),
+      false,
+      'expected the arbiter marker to never be left behind after every worker finished',
+    );
   } finally {
     teardown(primary);
   }

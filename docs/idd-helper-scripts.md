@@ -1337,9 +1337,14 @@ Interpretation rules:
 ### Clone-scoped lock
 
 - Source repo / vendored-node commands:
-  `node scripts/clone-lock.mjs --exec --agent-id <id> [--repo <path>]
-  [--timeout-ms <n>] -- <command> [args...]`
-  and `node scripts/clone-lock.mjs --check [--repo <path>]`
+
+  ```sh
+  node scripts/clone-lock.mjs --exec --agent-id <id> [--repo <path>] \
+    [--timeout-ms <n>] -- <command> [args...]
+
+  node scripts/clone-lock.mjs --check [--repo <path>]
+  ```
+
 - Package-manager / ephemeral-npx command: use the profile-selected
   `idd:clone-lock` command from the helper runtime manifest wiring
   above; the literal invocations are:
