@@ -463,8 +463,10 @@ anchors rather than resetting a clock that keeps running: the deadline
 re-anchors on the new commit's own timestamp, and the terminal window
 goes fully unanchored — no elapsed time at all — until a fresh
 current-HEAD recovery marker is posted. Waiting out either clock is
-therefore only a viable strategy once review has converged (no further
-pushes expected) — roadmap `#2318`'s field-evidence comment on pull
+therefore only a viable strategy once the diff has converged — no
+further pushes expected, independent of whether review itself has
+converged (the terminal-unavailable path exists precisely because it
+may never converge) — roadmap `#2318`'s field-evidence comment on pull
 request `#2325` recorded this repository's `PT9H` deadline override
 restarting four times across seven advisory review rounds, observed at
 229/540 minutes.
