@@ -292,9 +292,13 @@ export function computeStageWindows(
   // disagree with its marker-derived neighbors (or two overrides can
   // disagree with each other), and naively overlaying them can leave
   // windows that overlap -- which would double-count delta-mode usage in
-  // allocateStageUsage below. Clamp each window's start to a monotonic
-  // cursor and drop it if that clamp consumes the whole window; a gap is
-  // fine (its usage points simply attribute to no stage), an overlap is not.
+  // allocateStageUsage below. An event window is an authoritative explicit
+  // timestamp, so it is only ever clamped forward past a conflicting
+  // predecessor, never expanded. A marker window is a synthetic
+  // reconstruction with no independent authority, so it always starts
+  // exactly at the running cursor -- flowing backward to fill any gap an
+  // event override left behind -- rather than leaving that usage
+  // unattributed to any stage.
   const finalWindows = [];
   let normalizeCursor = sessionStartedAtMs;
   for (const stageId of TOKEN_COST_STAGE_IDS) {
@@ -302,7 +306,10 @@ export function computeStageWindows(
     if (!window) {
       continue;
     }
-    const startMs = Math.max(window.startMs, normalizeCursor);
+    const startMs =
+      window.source === 'event'
+        ? Math.max(window.startMs, normalizeCursor)
+        : normalizeCursor;
     const endMs = Math.min(window.endMs, sessionEndedAtMs);
     if (endMs > startMs) {
       finalWindows.push({ ...window, startMs, endMs });
@@ -599,10 +606,13 @@ export function resolveIssueLoopContext(
       continue;
     }
     const atMs = toValidTimestampMs(claim.createdAt);
+    // Half-open [sessionStartedAtMs, sessionEndedAtMs), matching this
+    // function's documented session window: a claim marker at exactly
+    // sessionEndedAtMs is out of range.
     if (
       atMs === undefined ||
       atMs < sessionStartedAtMs ||
-      atMs > sessionEndedAtMs
+      atMs >= sessionEndedAtMs
     ) {
       continue;
     }
@@ -906,7 +916,7 @@ function printHelp() {
   process.stdout.write(`Usage:
   node scripts/token-cost-harvest.mjs --repo <owner>/<repo> [--out <path>] [--events <path>] [--dry-run]
 
-  --repo <owner/repo>          Repository to join harvested sessions against. Required.
+  --repo <owner>/<repo>         Repository to join harvested sessions against. Required.
   --out <path>                 Output samples JSONL path (default:
                                 ${defaultStateDir()}/samples.jsonl).
   --events <path>               Phase-event JSONL path (default:
@@ -957,19 +967,28 @@ export function readExistingVendorSessionKeys(outPath) {
   }
   return keys;
 }
+/** Validates and splits a --repo <owner>/<repo> flag value; null for anything but exactly two non-empty segments. */
+export function parseRepoFlag(repoFlag) {
+  const parts = repoFlag.split('/');
+  if (parts.length !== 2 || parts.some((part) => part === '')) {
+    return null;
+  }
+  const [owner, repo] = parts;
+  return { owner, repo };
+}
 function runCli(argv) {
   const { values, help } = parseCliArgs(argv, TOKEN_COST_HARVEST_FLAG_SPEC);
   if (help) {
     printHelp();
     return;
   }
-  const repoFlag = values.repo;
-  if (!repoFlag.includes('/')) {
+  const parsedRepo = parseRepoFlag(values.repo);
+  if (!parsedRepo) {
     process.stderr.write('--repo <owner>/<repo> is required\n');
     process.exitCode = 2;
     return;
   }
-  const [owner, repo] = repoFlag.split('/');
+  const { owner, repo } = parsedRepo;
   const dryRun = values['dry-run'];
   const outPath = values.out || join(defaultStateDir(), 'samples.jsonl');
   const eventsPath = values.events || join(defaultStateDir(), 'events.jsonl');

@@ -19,6 +19,7 @@ import {
   type HarvestedSample,
   type IssueLoopGithubContext,
   markAmbiguousOverlaps,
+  parseRepoFlag,
   readEventWindows,
   readExistingVendorSessionKeys,
   resolveIssueLoopContext,
@@ -408,6 +409,59 @@ test('computeStageWindows: an --events override that runs past a later marker-de
   assert.equal(work?.endMs, ms('2026-01-01T00:25:00Z'));
 });
 
+test('computeStageWindows: a following marker window flows backward to fill the gap an event override leaves behind', () => {
+  const ctx: IssueLoopGithubContext = {
+    claimedAtMs: ms('2026-01-01T00:00:00Z'),
+    prCreatedAtMs: ms('2026-01-01T00:25:00Z'),
+    prHeadRefName: 'issue/1-test',
+    prMergedAtMs: null,
+    firstReviewAtMs: null,
+    cleanupAtMs: null,
+    unclaimedMatched: false,
+    humanHandoff: false,
+  };
+  // The marker-derived tiling would put 'work' at [00:15, 00:25). An
+  // --events override shrinks 'work' to [00:16, 00:19), well short of
+  // 00:25 -- the marker-derived 'submit-pr' that follows it must flow
+  // backward to 00:19 rather than leaving [00:19, 00:25) unattributed.
+  const events = new Map<TokenCostStageId, StageEventWindow>([
+    [
+      'work',
+      {
+        startMs: ms('2026-01-01T00:16:00Z'),
+        endMs: ms('2026-01-01T00:19:00Z'),
+      },
+    ],
+  ]);
+  const { windows } = computeStageWindows(
+    ms('2026-01-01T00:00:00Z'),
+    ms('2026-01-01T00:30:00Z'),
+    ctx,
+    events,
+  );
+  for (let i = 1; i < windows.length; i++) {
+    assert.ok(
+      windows[i].startMs >= windows[i - 1].endMs,
+      `${windows[i].id} [${windows[i].startMs}, ${windows[i].endMs}) overlaps ${
+        windows[i - 1].id
+      } [${windows[i - 1].startMs}, ${windows[i - 1].endMs})`,
+    );
+  }
+  // 'work' (event-sourced) is left with a small gap before it ([00:15,
+  // 00:16), from claim's marker-derived end to work's own explicit start)
+  // -- that gap is genuine and expected, since work's start is an
+  // authoritative timestamp, not a synthetic reconstruction to be expanded.
+  const work = windows.find((w) => w.id === 'work');
+  assert.equal(work?.startMs, ms('2026-01-01T00:16:00Z'));
+  // 'submit-pr' (marker-sourced) must flow backward to close the gap work's
+  // shrink left AFTER it, rather than leaving [00:19, 00:25) unattributed.
+  const submitPr = windows.find((w) => w.id === 'submit-pr');
+  assert.equal(submitPr?.source, 'marker');
+  assert.equal(submitPr?.startMs, work?.endMs);
+  assert.equal(submitPr?.startMs, ms('2026-01-01T00:19:00Z'));
+  assert.equal(submitPr?.endMs, ms('2026-01-01T00:30:00Z'));
+});
+
 test('computeStageWindows returns no windows when there is no claim in range', () => {
   const ctx: IssueLoopGithubContext = {
     claimedAtMs: null,
@@ -736,6 +790,30 @@ test('resolveIssueLoopContext: firstReviewAtMs is the earlier of the review-wate
   }
 });
 
+test('resolveIssueLoopContext: a claim marker at exactly sessionEndedAtMs is excluded (half-open interval)', () => {
+  const fixture = readJson(
+    'tests/fixtures/token-cost/github/issue-loop-merged.json',
+  );
+  const restore = stubGhReturningJson(fixture);
+  try {
+    // The fixture's only claimed-by marker is at 2026-01-01T00:00:00Z --
+    // set sessionEndedAtMs to exactly that instant. The documented window
+    // is [sessionStartedAtMs, sessionEndedAtMs), so the claim must not be
+    // treated as in-range, leaving no claim and thus no context.
+    const ctx = resolveIssueLoopContext(
+      'acme',
+      'repo',
+      9001,
+      ms('2025-12-31T23:55:00Z'),
+      ms('2026-01-01T00:00:00Z'),
+      ['claude-test'],
+    );
+    assert.equal(ctx, null);
+  } finally {
+    restore();
+  }
+});
+
 test('resolveIssueLoopContext: outcome is unclaimed when a matching unclaimed-by exists and nothing merged', () => {
   const fixture = readJson(
     'tests/fixtures/token-cost/github/issue-loop-unclaimed.json',
@@ -882,4 +960,20 @@ test('readExistingVendorSessionKeys: reads (vendor, vendorSessionId) pairs and s
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+// ---------------------------------------------------------------------------
+// --repo flag validation
+// ---------------------------------------------------------------------------
+
+test('parseRepoFlag accepts exactly two non-empty segments', () => {
+  assert.deepEqual(parseRepoFlag('acme/repo'), { owner: 'acme', repo: 'repo' });
+});
+
+test('parseRepoFlag rejects extra, missing, or empty segments', () => {
+  assert.equal(parseRepoFlag('owner/repo/extra'), null);
+  assert.equal(parseRepoFlag('/repo'), null);
+  assert.equal(parseRepoFlag('owner/'), null);
+  assert.equal(parseRepoFlag('owner'), null);
+  assert.equal(parseRepoFlag(''), null);
 });
