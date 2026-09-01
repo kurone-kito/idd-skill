@@ -558,6 +558,7 @@ export const preMergeReadinessKeys = [
   'prHeadSha',
   'now',
   'reviewCurrency',
+  'secondaryQuietWindow',
   'threads',
   'unrepliedComments',
   'reviewerStates',
@@ -1193,6 +1194,13 @@ const preMergeReadinessFixture = {
     },
     comparisonRoute: 'proceed',
     comparisonReason: 'snapshot-current',
+  },
+  secondaryQuietWindow: {
+    minutes: 0,
+    anchorAt: 'none',
+    elapsedMinutes: null,
+    elapsed: true,
+    remainingMinutes: 0,
   },
   threads: {
     unresolvedCount: 1,

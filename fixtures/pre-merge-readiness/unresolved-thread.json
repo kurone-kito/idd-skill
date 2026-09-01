@@ -162,6 +162,13 @@
       "comparisonRoute": "proceed",
       "comparisonReason": "snapshot-current"
     },
+    "secondaryQuietWindow": {
+      "minutes": 0,
+      "anchorAt": "2026-05-11T23:56:00Z",
+      "elapsedMinutes": null,
+      "elapsed": true,
+      "remainingMinutes": 0
+    },
     "threads": {
       "unresolvedCount": 1,
       "actionableCount": 1,

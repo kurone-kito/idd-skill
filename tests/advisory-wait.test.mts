@@ -7,16 +7,19 @@ import {
   DEFAULT_ADVISORY_CONVERGENCE_DEADLINE_MINUTES,
   DEFAULT_ADVISORY_PRIMARY_BOT_LOGIN,
   DEFAULT_ADVISORY_RECOVERY_CYCLE_CAP,
+  DEFAULT_ADVISORY_SECONDARY_QUIET_WINDOW_MINUTES,
   DEFAULT_ADVISORY_TERMINAL_WINDOW_MINUTES,
   readAdvisoryConvergenceDeadlineMinutes,
   readAdvisoryPrimaryBotLogin,
   readAdvisoryRecoveryCycleCap,
   readAdvisorySecondaryBotLogin,
+  readAdvisorySecondaryQuietWindowMinutes,
   readAdvisoryTerminalWindowMinutes,
   readAdvisoryWaitPolicy,
   resolveAdvisoryPrimaryBotLogin,
   resolveAdvisoryRecoveryCycleCap,
   resolveAdvisorySecondaryBotLogin,
+  resolveAdvisorySecondaryQuietWindowMinutes,
   resolveAdvisoryTerminalWindowMinutes,
   resolveAdvisoryWaitPolicy,
 } from '../src/scripts/advisory-wait-policy.mts';
@@ -1380,6 +1383,104 @@ test('readAdvisoryTerminalWindowMinutes applies a schema-valid override and is s
   assert.equal(
     readAdvisoryTerminalWindowMinutes(join(root, 'missing.json')),
     DEFAULT_ADVISORY_TERMINAL_WINDOW_MINUTES,
+  );
+});
+
+// #2335: opt-in secondary-quiet-window (off by default when omitted).
+
+test('resolveAdvisorySecondaryQuietWindowMinutes defaults to 0 (off) on absent/empty config', () => {
+  assert.equal(resolveAdvisorySecondaryQuietWindowMinutes({}), 0);
+  assert.equal(resolveAdvisorySecondaryQuietWindowMinutes(), 0);
+  assert.equal(resolveAdvisorySecondaryQuietWindowMinutes(null), 0);
+});
+
+test('resolveAdvisorySecondaryQuietWindowMinutes accepts an explicit ISO8601 duration', () => {
+  assert.equal(
+    resolveAdvisorySecondaryQuietWindowMinutes({
+      advisoryWait: { secondaryQuietWindow: 'PT5M' },
+    }),
+    5,
+  );
+  assert.equal(
+    resolveAdvisorySecondaryQuietWindowMinutes({
+      advisoryWait: { secondaryQuietWindow: 'PT1H' },
+    }),
+    60,
+  );
+});
+
+test('resolveAdvisorySecondaryQuietWindowMinutes falls back to 0 (off) on an unparseable or non-positive duration', () => {
+  assert.equal(
+    resolveAdvisorySecondaryQuietWindowMinutes({
+      advisoryWait: { secondaryQuietWindow: 'not-a-duration' },
+    }),
+    0,
+  );
+  assert.equal(
+    resolveAdvisorySecondaryQuietWindowMinutes({
+      advisoryWait: { secondaryQuietWindow: 'PT0H' },
+    }),
+    0,
+  );
+  // The shared duration parser has no negative-duration syntax to accept,
+  // so a negative value is unparseable and already falls back to 0.
+  assert.equal(
+    resolveAdvisorySecondaryQuietWindowMinutes({
+      advisoryWait: { secondaryQuietWindow: '-PT5M' },
+    }),
+    0,
+  );
+});
+
+test('readAdvisorySecondaryQuietWindowMinutes applies a schema-valid override and is scoped to advisoryWait', () => {
+  const root = mkdtempSync(
+    join(tmpdir(), 'idd-advisory-secondary-quiet-window-'),
+  );
+  const validPath = join(root, 'policy.valid.json');
+  const invalidPath = join(root, 'policy.invalid.json');
+  const validConfig = JSON.parse(
+    JSON.stringify(loadJson('fixtures/schemas/policy.valid.json')),
+  );
+  validConfig.advisoryWait = { secondaryQuietWindow: 'PT20M' };
+  writeFileSync(validPath, JSON.stringify(validConfig), 'utf8');
+  // A non-string secondaryQuietWindow violates the advisoryWait schema, so
+  // the reader fails closed to the default.
+  writeFileSync(
+    invalidPath,
+    JSON.stringify({ advisoryWait: { secondaryQuietWindow: 20 } }),
+    'utf8',
+  );
+
+  assert.equal(readAdvisorySecondaryQuietWindowMinutes(validPath), 20);
+  assert.equal(
+    readAdvisorySecondaryQuietWindowMinutes(invalidPath),
+    DEFAULT_ADVISORY_SECONDARY_QUIET_WINDOW_MINUTES,
+  );
+  assert.equal(
+    readAdvisorySecondaryQuietWindowMinutes(join(root, 'missing.json')),
+    DEFAULT_ADVISORY_SECONDARY_QUIET_WINDOW_MINUTES,
+  );
+});
+
+test('secondary quiet window is independent of requestCap, recoveryCycleCap, and terminalWindow', () => {
+  const config = {
+    advisoryWait: {
+      requestCap: 99,
+      recoveryCycleCap: 9,
+      terminalWindow: 'PT1H',
+    },
+  };
+  assert.equal(resolveAdvisorySecondaryQuietWindowMinutes(config), 0);
+
+  const quietWindowConfig = {
+    advisoryWait: { secondaryQuietWindow: 'PT20M' },
+  };
+  assert.equal(resolveAdvisoryWaitPolicy(quietWindowConfig).requestCap, 30);
+  assert.equal(resolveAdvisoryRecoveryCycleCap(quietWindowConfig), 2);
+  assert.equal(resolveAdvisoryTerminalWindowMinutes(quietWindowConfig), 720);
+  assert.equal(
+    resolveAdvisorySecondaryQuietWindowMinutes(quietWindowConfig),
+    20,
   );
 });
 
