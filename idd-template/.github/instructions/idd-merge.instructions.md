@@ -401,7 +401,17 @@ Before any mutating action in F3, apply the
    See `docs/idd-comment-minimization.md` for the evidence comment
    format, cleanup-failure comment format, permission-blocked comment
    format, and fallback GraphQL commands.
-3. Run from the **primary worktree**, never from inside the worktree
+3. From the **primary worktree** — the worktree being cleaned up is
+   still checked out to its issue branch at this point, so running
+   this elsewhere would fast-forward the wrong branch — update local
+   `main` first: `git fetch origin main && git merge --ff-only
+   origin/main`. Doing this before worktree/branch deletion (next
+   step) ensures WorkTrunk's own merge-status check, which reads the
+   local default branch rather than `origin/main`, sees the
+   just-merged branch as already merged on its first attempt instead
+   of reporting `branch_outcome: retained_unmerged` and declining to
+   delete it (`#2331`).
+4. Run from the **primary worktree**, never from inside the worktree
    being removed. Any removal (plain or `--force`) silently discards
    ignored files too, including inside a submodule. Scope Git
    commands to `<path>`. Inspect leftover files under a `-`
@@ -431,13 +441,12 @@ Before any mutating action in F3, apply the
      with `git worktree remove --force <path>`. Use `--force` only
      after that review finds nothing worth preserving.
    - `git branch -d <branch-name>` (the baseline permission profile
-     denies `-D`; see `docs/permissions.md`). If it fails with `error:
-     the branch '<branch-name>' is not fully merged` despite the PR
-     being merged — `fetch --prune` can drop the remote-tracking ref
-     before local `main` fast-forwards — run step 4 first, then retry.
+     denies `-D`; see `docs/permissions.md`). Local `main` was already
+     fast-forwarded to the merge commit by the previous step, so this
+     should not fail with `error: the branch '<branch-name>' is not
+     fully merged`; if it still does, investigate before retrying
+     rather than assuming a stale local `main` is the cause.
 
-4. Update the local `main` branch (`git fetch origin main && git merge
-   --ff-only origin/main`).
 5. If GitHub auto-delete is disabled: delete the remote branch too.
    (Worktrunk may be used for steps 3–5.)
 
