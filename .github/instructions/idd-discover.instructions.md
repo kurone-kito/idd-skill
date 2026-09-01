@@ -155,8 +155,8 @@ Apply the configured policy before passing A0-O candidates to A3.5:
 
 **Autopilot floor.** In autopilot runs, pass `--autopilot` to
 `discover-orphan-filter`; skip `routed_to_human` candidates (never
-reach A3.5). No helper: apply A4 Step 2's floor rule (same key, edge
-cases) to each footer by hand.
+reach A3.5). No helper: apply A4 Step 2's floor rule verbatim,
+including `enabled: false`, to each footer.
 
 At least one orphan issue remains after the policy is applied: pass the
 remaining set directly to **A3.5**, skipping A1–A3.
