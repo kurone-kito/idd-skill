@@ -85,6 +85,34 @@ finding's root cause and further comments are speculative or
 non-blocking hardening, treat them as PATH B (disposition-only,
 E4-E7) rather than opening another E9-E10 round.
 
+**Second escalation tier (heuristic, not a hard rule): when the
+structural fix itself doesn't converge.** The heuristic above names
+one escalation (patch-by-patch → one structural fix); it does not say
+what to do when that structural fix keeps drawing new same-area
+findings for a further few rounds. The natural default — a second,
+more elaborate structural redesign — tends to cost more rounds, not
+fewer, since the same race or defect class often regenerates at each
+added layer of recovery machinery. Prefer removing or substantially
+simplifying the fragile mechanism instead — replacing an
+automatic-recovery path with a simpler fail-closed behavior plus
+actionable manual-recovery guidance, rather than a second redesign —
+**but only once confirmed safe**: before removing or simplifying away
+any part of the mechanism's behavior, check the issue's acceptance
+criteria and any established external contract for whether that
+behavior was actually required; if so, stop for a maintainer decision
+instead of dropping it to converge review. Worked example:
+kurone-kito/idd-skill#2223's clone-scoped lock
+(kurone-kito/idd-skill#2389) kept drawing new P1 concurrency findings
+across several rounds even after replacing mtime-based staleness with
+PID-liveness-based staleness; convergence only happened once automatic
+stale-lock takeover was removed entirely, replaced with a timeout that
+reports the lock path and the recorded holder's PID for manual
+recovery — the same shape
+`git`'s own `index.lock` uses on collision. Removal was safe there
+specifically because the issue's acceptance criteria only ever
+required an acquire/release interface, never automatic stale-lock
+recovery.
+
 ## E11 — Resolve conflicts with {development-branch}
 
 Check for conflicts between the feature branch and `{development-branch}`
