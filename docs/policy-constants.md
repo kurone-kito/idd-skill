@@ -381,7 +381,7 @@ measure the combined byte length of all listed files.
 ### Context ceiling
 
 `audit/sync-manifest.json` `contextCeiling` layers an absolute,
-128K-context-derived cap on top of the per-bundle ratchet below, so a
+200K-context-derived cap on top of the per-bundle ratchet below, so a
 future exact-fit bump errors instead of drifting past the ~10%-margin
 convention the ratchet alone allows — see the regression history under
 "Context ceiling" in
@@ -390,11 +390,21 @@ convention the ratchet alone allows — see the regression history under
 copied template).
 
 - **Ceiling derivation**: no non-exempt bundle's `limitBytes` may exceed
-  the **126,000-byte** `maxBundleLimitBytes` ceiling — a
-  128K-context-derived cap of ≈ 31,500–38,800 tokens at this corpus's
-  observed 3.25–4.0 bytes/token, ≤ ~29% of a 128K context window,
+  the **196,000-byte** `maxBundleLimitBytes` ceiling — a
+  200K-context-derived cap of ≈ 49,000–60,300 tokens at this corpus's
+  observed 3.25–4.0 bytes/token, ≈ 24–30% of a 200K-token context window,
   leaving the remainder for the harness system prompt, tool schemas,
-  adopter-repo instructions, and working context.
+  adopter-repo instructions, and working context. The 200K baseline
+  reflects the smallest context window among the model classes used to
+  validate the workflow in the source repository — not a guarantee
+  about an adopter's chosen models. The stricter 128K-derived ceiling
+  that preceded it was relaxed on 2026-09-01 as a deliberate priority
+  call, recorded in
+  [kurone-kito/idd-skill#2181](https://github.com/kurone-kito/idd-skill/issues/2181),
+  while outage-resilience work was blocked at that ceiling. The byte diet
+  stays a best-effort goal through the ratchet and notice checks below;
+  weak-model support is unaffected because the lite bundles keep their
+  own, far smaller budgets.
 - **`maxUtilizationPct` = 98%**: no non-exempt bundle's measured
   (banner-stripped) byte total may exceed this percentage of its own
   `limitBytes`. This is what stops a future exact-fit landing even for

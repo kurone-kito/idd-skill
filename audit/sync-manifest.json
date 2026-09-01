@@ -374,7 +374,7 @@
         ".github/instructions/idd-review-snapshot.instructions.md",
         ".github/instructions/idd-review-triage.instructions.md"
       ],
-      "limitBytes": 126000
+      "limitBytes": 138000
     },
     {
       "id": "bundle-merge",
@@ -388,15 +388,15 @@
         ".github/instructions/idd-overview-core.instructions.md",
         ".github/instructions/idd-pre-merge.instructions.md"
       ],
-      "limitBytes": 114000
+      "limitBytes": 122000
     }
   ],
   "contextCeiling": {
-    "id": "context-ceiling-128k",
-    "maxBundleLimitBytes": 126000,
+    "id": "context-ceiling-200k",
+    "maxBundleLimitBytes": 196000,
     "maxUtilizationPct": 98,
     "noticeUtilizationPct": 95,
-    "exemptBundles": ["bundle-review"]
+    "exemptBundles": []
   },
   "docBudgetGuard": {
     "id": "doc-budget-drift",

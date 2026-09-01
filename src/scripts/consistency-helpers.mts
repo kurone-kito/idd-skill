@@ -279,7 +279,7 @@ function normalizePositiveIntegerBudget(
   return value;
 }
 
-/** Declarative config for the absolute 128K context-ceiling guard. */
+/** Declarative config for the absolute context-window-derived ceiling guard. */
 export interface ContextCeilingConfig {
   id?: unknown;
   maxBundleLimitBytes?: unknown;
@@ -303,7 +303,7 @@ function normalizeNonNegativeNumber(value: unknown): number | null {
 }
 
 /**
- * Collect "context ceiling" violations: an absolute, 128K-context-derived
+ * Collect "context ceiling" violations: an absolute, context-window-derived
  * cap layered on top of the per-bundle `bundleBudgets` ratchet, so a future
  * exact-fit bump errors instead of drifting past the documented ~10%-margin
  * convention the way `bundleBudgets` alone allowed (#1213, #1259 both
