@@ -54,6 +54,10 @@ export const DEFAULT_ADVISORY_RECOVERY_CYCLE_CAP = 2;
 // uses the same familiar timescale as other terminal/escalation windows in
 // this repository.
 export const DEFAULT_ADVISORY_TERMINAL_WINDOW_MINUTES = 720;
+// #2335: off by default (`PT0S`), so an adopter that never sets
+// `advisoryWait.secondaryQuietWindow` sees unchanged pre-merge-readiness
+// behavior. See `buildSecondaryQuietWindowStatus` below.
+export const DEFAULT_ADVISORY_SECONDARY_QUIET_WINDOW_MINUTES = 0;
 // #1570: the `idd-advisory-convergence` required-check selector name, shared
 // between advisory-convergence.mts (the CI-gate consumer, which re-exports
 // this under its own established `ADVISORY_CONVERGENCE_CHECK_SELECTOR` name
@@ -394,6 +398,136 @@ export function resolveAdvisoryTerminalWindowMinutes(
     advisoryWait.terminalWindow,
     DEFAULT_ADVISORY_TERMINAL_WINDOW_MINUTES,
   );
+}
+
+/**
+ * Read the OPTIONAL `advisoryWait.secondaryQuietWindow` (#2335) from a policy
+ * file, failing closed to the `PT0S`/off default when the file is missing,
+ * unreadable, or schema-invalid.
+ */
+export function readAdvisorySecondaryQuietWindowMinutes(
+  path: string = '.github/idd/config.json',
+): number {
+  try {
+    const config = JSON.parse(readFileSync(path, 'utf8'));
+    // Scoped to the advisoryWait subtree (#1359); see readAdvisoryWaitPolicy.
+    if (
+      validateConfigSection(config, POLICY_SCHEMA, 'advisoryWait').length > 0
+    ) {
+      return DEFAULT_ADVISORY_SECONDARY_QUIET_WINDOW_MINUTES;
+    }
+    return resolveAdvisorySecondaryQuietWindowMinutes(config);
+  } catch {
+    return DEFAULT_ADVISORY_SECONDARY_QUIET_WINDOW_MINUTES;
+  }
+}
+
+/**
+ * Resolve the OPTIONAL `advisoryWait.secondaryQuietWindow` (#2335, in
+ * minutes) from a parsed policy object. Kept separate from
+ * {@link resolveAdvisoryWaitPolicy} for the same reason the deadline/
+ * terminal-window resolvers are separate: it is not part of the five-key
+ * active-wait timing shape, and it defaults to `0` (off) when absent,
+ * unparseable, or negative -- `normalizeConfiguredDurationMinutes` already
+ * falls back to the default for every one of those cases, since the shared
+ * duration parser has no negative-duration syntax to accept in the first
+ * place.
+ */
+export function resolveAdvisorySecondaryQuietWindowMinutes(
+  config: unknown = {},
+): number {
+  const advisoryWait = ((config as { advisoryWait?: unknown } | null)
+    ?.advisoryWait ?? {}) as Record<string, unknown>;
+  return normalizeConfiguredDurationMinutes(
+    advisoryWait.secondaryQuietWindow,
+    DEFAULT_ADVISORY_SECONDARY_QUIET_WINDOW_MINUTES,
+  );
+}
+
+/**
+ * The `advisoryWait.secondaryQuietWindow` gate status (#2335), in the shape
+ * `pre-merge-readiness` publishes it as `secondaryQuietWindow`.
+ */
+export interface SecondaryQuietWindowStatus {
+  minutes: number;
+  anchorAt: string;
+  elapsedMinutes: number | null;
+  elapsed: boolean;
+  remainingMinutes: number | null;
+}
+
+/**
+ * Build the `advisoryWait.secondaryQuietWindow` gate status (#2335): once
+ * the E-phase convergence conditions are already met -- no unresolved
+ * review item, every disposition recorded -- a slower secondary advisory
+ * bot (`advisoryWait.secondaryBotLogin`) can still land a finding after a
+ * snapshot already looked converged (measured on PR #2330: findings landed
+ * 34s and 2m after a zero-unresolved judgement). This gate requires the
+ * configured window to have elapsed since the last SUBSTANTIVE activity
+ * before treating the review as settled.
+ *
+ * Stateless by design: rather than persisting "when convergence was first
+ * observed," this anchors on `effectiveMaxActivityUpdatedAt` --
+ * `buildActivitySnapshotSummary`'s already-computed
+ * `effective.maxActivityUpdatedAt` (protocol-helpers.mts), the same
+ * non-ack-only activity ceiling `ackOnlyPostDisposition` already uses. That
+ * value stays fresh while a genuinely unresolved item exists (an unresolved
+ * thread's raw activity always feeds it, protocol-helpers.mts's
+ * `threadEffective`) and stabilizes once every item is either
+ * resolved-with-disposition or was never opened -- a disposition reply, a
+ * watermark, and a courtesy advisory-bot ack all leave it unchanged too (the
+ * first legitimately anchors it, the watermark is filtered out before
+ * classification runs, and the ack is excluded as ack-only) -- so "elapsed
+ * since that anchor" already equals "elapsed since convergence was reached"
+ * without a second, independently-drifting timestamp to persist.
+ *
+ * A zero/absent `minutes` (the `PT0S` off default) or a missing/invalid
+ * anchor (nothing to anchor on yet) reports `elapsed: true` unconditionally
+ * -- this gate must never itself block when unconfigured, and must never
+ * block on the absence of any activity to measure.
+ */
+export function buildSecondaryQuietWindowStatus({
+  minutes,
+  effectiveMaxActivityUpdatedAt,
+  now,
+}: {
+  minutes?: unknown;
+  effectiveMaxActivityUpdatedAt?: unknown;
+  now: string;
+}): SecondaryQuietWindowStatus {
+  const resolvedMinutes =
+    Number.isFinite(minutes) && Number(minutes) > 0 ? Number(minutes) : 0;
+  const anchorAtRaw = String(effectiveMaxActivityUpdatedAt ?? '');
+  const anchorValid = isValidIsoTimestamp(anchorAtRaw);
+  if (resolvedMinutes <= 0 || !anchorValid) {
+    return {
+      minutes: resolvedMinutes,
+      anchorAt: anchorValid ? anchorAtRaw : 'none',
+      elapsedMinutes: null,
+      elapsed: true,
+      remainingMinutes: 0,
+    };
+  }
+  const nowMs = Date.parse(now);
+  const anchorMs = Date.parse(anchorAtRaw);
+  const elapsedMinutes =
+    Number.isFinite(nowMs) && Number.isFinite(anchorMs)
+      ? nowMs < anchorMs
+        ? 0
+        : Math.floor((nowMs - anchorMs) / 60000)
+      : null;
+  const elapsed = elapsedMinutes !== null && elapsedMinutes >= resolvedMinutes;
+  const remainingMinutes =
+    elapsedMinutes !== null
+      ? Math.max(0, resolvedMinutes - elapsedMinutes)
+      : null;
+  return {
+    minutes: resolvedMinutes,
+    anchorAt: anchorAtRaw,
+    elapsedMinutes,
+    elapsed,
+    remainingMinutes,
+  };
 }
 
 export function normalizeAdvisoryWaitRuntimeOptions(

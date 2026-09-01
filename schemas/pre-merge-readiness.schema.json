@@ -10,6 +10,7 @@
     "prHeadSha",
     "now",
     "reviewCurrency",
+    "secondaryQuietWindow",
     "threads",
     "unrepliedComments",
     "reviewerStates",
@@ -1498,6 +1499,41 @@
         "open": {
           "type": "boolean",
           "description": "True when deadlinePassed or terminalUnavailable -- the precondition that must hold before a posted idd-advisory-convergence waiver counts toward ci.coveredByWaiver."
+        }
+      }
+    },
+    "secondaryQuietWindow": {
+      "type": "object",
+      "description": "#2335: the advisoryWait.secondaryQuietWindow gate status -- once the E-phase convergence conditions are already met, requires the configured window to have elapsed since the last substantive (non-ack-only) activity before treating the review as settled. Anchored on reviewCurrency.live.effective.maxActivityUpdatedAt; stateless by design.",
+      "required": [
+        "minutes",
+        "anchorAt",
+        "elapsedMinutes",
+        "elapsed",
+        "remainingMinutes"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "minutes": {
+          "type": "number",
+          "description": "Configured secondary quiet window in minutes (advisoryWait.secondaryQuietWindow, default 0 = off).",
+          "minimum": 0
+        },
+        "anchorAt": {
+          "type": "string",
+          "description": "ISO timestamp of the last substantive (non-ack-only) activity this window anchors on, or the literal 'none' when minutes is 0 or no such activity exists."
+        },
+        "elapsedMinutes": {
+          "type": ["integer", "null"],
+          "description": "Whole minutes elapsed from anchorAt to now, or null when the window is off or anchorAt is invalid/absent."
+        },
+        "elapsed": {
+          "type": "boolean",
+          "description": "True when the configured window has elapsed since anchorAt -- always true when minutes is 0 (off) or anchorAt is unavailable."
+        },
+        "remainingMinutes": {
+          "type": ["integer", "null"],
+          "description": "Whole minutes remaining until the window elapses, or null when elapsedMinutes is null."
         }
       }
     },

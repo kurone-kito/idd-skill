@@ -206,6 +206,13 @@ nonce was recorded for the active claim.
   [Terminal routing](idd-advisory-wait.instructions.md#terminal-routing-1570);
   an unwaived `copilot-terminal-unavailable` in `blockers[]` stops here
   with that section's hold regardless.
+- **Secondary advisory bot quiet window** (opt-in, off by default): when
+  `advisoryWait.secondaryQuietWindow` (#2335) is configured, the readiness
+  report's `secondaryQuietWindow.elapsed` must be `true` before this check
+  is satisfied — a `secondary-quiet-window` entry in `blockers[]` means the
+  window has not yet elapsed since the last substantive review activity;
+  wait (poll per `advisoryWait.pollInterval`), then re-evaluate F2. Unset
+  (the `PT0S` default) never adds this blocker.
 - **CI**: Current PR head SHA has all required CI checks generated and
   all passing (→ run CI wait per `idd-ci.instructions.md` using the
   same resolved `ciWait.runningTimeout`, `ciWait.generationTimeout`, and

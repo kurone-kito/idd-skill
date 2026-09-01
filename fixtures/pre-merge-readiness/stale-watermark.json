@@ -162,6 +162,13 @@
       "comparisonRoute": "return-to-e1",
       "comparisonReason": "newer-activity"
     },
+    "secondaryQuietWindow": {
+      "minutes": 0,
+      "anchorAt": "2026-05-11T23:56:00Z",
+      "elapsedMinutes": null,
+      "elapsed": true,
+      "remainingMinutes": 0
+    },
     "threads": {
       "unresolvedCount": 1,
       "actionableCount": 0,

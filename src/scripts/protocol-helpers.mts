@@ -7,6 +7,7 @@
 import { Buffer } from 'node:buffer';
 import {
   buildAdvisoryConvergenceWaiverPrecondition,
+  buildSecondaryQuietWindowStatus,
   DEFAULT_ADVISORY_CONVERGENCE_CHECK_SELECTOR,
   DEFAULT_ADVISORY_CONVERGENCE_DEADLINE_MINUTES,
   DEFAULT_ADVISORY_PRIMARY_BOT_LOGIN,
@@ -6020,6 +6021,31 @@ export function computePreMergeReadinessBlockers(
     });
   }
 
+  // #2335: optional caller-computed evidence -- an entirely absent
+  // `report.secondaryQuietWindow` (a caller that predates this gate, or a
+  // hand-built fixture) never blocks, the same backward-compat precedent
+  // the `copilotUnavailable` gate below uses. A present evidence object
+  // with `elapsed !== true` blocks; `buildSecondaryQuietWindowStatus`
+  // itself already reports `elapsed: true` unconditionally when the
+  // window is off (`0`/absent) or has no activity to anchor on, so this
+  // never fires for an adopter that has not configured
+  // `advisoryWait.secondaryQuietWindow`.
+  if (report.secondaryQuietWindow !== undefined) {
+    const secondaryQuietWindow = preMergeAsRecord(report.secondaryQuietWindow);
+    if (secondaryQuietWindow.elapsed !== true) {
+      blockers.push({
+        gate: 'secondary-quiet-window',
+        detail: `advisoryWait.secondaryQuietWindow (${String(
+          secondaryQuietWindow.minutes ?? 0,
+        )} min) has not elapsed since the last substantive activity at "${String(
+          secondaryQuietWindow.anchorAt ?? 'none',
+        )}" -- ${String(
+          secondaryQuietWindow.remainingMinutes ?? 'unknown',
+        )} minute(s) remaining`,
+      });
+    }
+  }
+
   const advisoryWait = preMergeAsRecord(report.advisoryWait);
   const f3Outcome = String(advisoryWait.f3Outcome ?? '');
   if (f3Outcome !== 'SATISFIED') {
@@ -6530,6 +6556,13 @@ export function buildPreMergeReadinessSummary(
     // unit callers (default 24h behavior preserved).
     // `collectPreMergeReadiness` always sources the policy value.
     staleAgeMs?: number;
+    // Configured `advisoryWait.secondaryQuietWindow` in minutes (#2335),
+    // resolved by the caller, mirroring `advisoryConvergenceDeadlineMinutes`
+    // above's "policy value resolved by the CLI layer" pattern. Omitted or
+    // `0` (the default) makes `secondaryQuietWindow` below report
+    // `elapsed: true` unconditionally, so an unmigrated caller or an
+    // adopter that never sets this key sees unchanged behavior.
+    secondaryQuietWindowMinutes?: number;
   } = {},
 ) {
   const now = String(options.now ?? '');
@@ -6579,6 +6612,16 @@ export function buildPreMergeReadinessSummary(
       dispositionAuthorLogins: iddAgentLogins,
     },
   );
+  // #2335: stateless secondary-quiet-window gate, anchored on the same
+  // non-ack-only activity ceiling `liveSnapshot.effective` already computes
+  // for the review-currency ack-only carve-out below -- see
+  // `buildSecondaryQuietWindowStatus`'s own doc comment for why this anchor
+  // needs no separate persisted "convergence first observed" timestamp.
+  const secondaryQuietWindow = buildSecondaryQuietWindowStatus({
+    minutes: options.secondaryQuietWindowMinutes,
+    effectiveMaxActivityUpdatedAt: liveSnapshot.effective?.maxActivityUpdatedAt,
+    now,
+  });
   const watermark = resolveLatestReviewWatermark(comments, {
     expectedClaimId: options.expectedClaimId,
     isTrustedAuthor: (login: string) =>
@@ -6864,6 +6907,7 @@ export function buildPreMergeReadinessSummary(
       comparisonRoute: reviewCurrency.route,
       comparisonReason: reviewCurrency.reason,
     },
+    secondaryQuietWindow,
     threads: {
       unresolvedCount: threads.filter((thread) => !thread.isResolved).length,
       actionableCount: threadSummary.actionableCount,

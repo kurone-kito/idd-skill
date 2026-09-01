@@ -8209,3 +8209,151 @@ test('#1313: a CodeRabbit summary sticky stays unresolved when its own thread fi
 
   assert.equal(result, null);
 });
+
+// #2335: buildPreMergeReadinessSummary/computePreMergeReadinessBlockers --
+// advisoryWait.secondaryQuietWindow.
+function secondaryQuietWindowOf(summary: unknown): {
+  minutes: number;
+  anchorAt: string;
+  elapsedMinutes: number | null;
+  elapsed: boolean;
+  remainingMinutes: number | null;
+} {
+  return (summary as { secondaryQuietWindow: Record<string, unknown> })
+    .secondaryQuietWindow as {
+    minutes: number;
+    anchorAt: string;
+    elapsedMinutes: number | null;
+    elapsed: boolean;
+    remainingMinutes: number | null;
+  };
+}
+
+test('#2335: secondaryQuietWindowMinutes omitted/0 never adds a secondary-quiet-window blocker (default off, unchanged behavior)', () => {
+  const fixture = readJson('fixtures/pre-merge-readiness/clean.json');
+  const ready = buildPreMergeReadinessSummary(fixture.input, {
+    ...fixture.options,
+    includeDispositionEvidence: true,
+  });
+  assert.equal(secondaryQuietWindowOf(ready).elapsed, true);
+  assert.deepEqual(ready.blockers, computePreMergeReadinessBlockers(ready));
+  assert.ok(
+    !(ready.blockers as { gate: string }[]).some(
+      (blocker) => blocker.gate === 'secondary-quiet-window',
+    ),
+  );
+
+  const explicitZero = buildPreMergeReadinessSummary(fixture.input, {
+    ...fixture.options,
+    includeDispositionEvidence: true,
+    secondaryQuietWindowMinutes: 0,
+  });
+  assert.deepEqual(explicitZero, ready);
+});
+
+test('#2335: a positive secondaryQuietWindowMinutes blocks when the window has not yet elapsed since the last substantive activity', () => {
+  const fixture = readJson('fixtures/pre-merge-readiness/clean.json');
+  // The clean fixture's own effective activity ceiling is 2026-05-11T23:56:00Z
+  // and options.now is 2026-05-12T00:00:00Z -- 4 minutes elapsed.
+  const blocked = buildPreMergeReadinessSummary(fixture.input, {
+    ...fixture.options,
+    includeDispositionEvidence: true,
+    secondaryQuietWindowMinutes: 10,
+  });
+  const status = secondaryQuietWindowOf(blocked);
+  assert.equal(status.minutes, 10);
+  assert.equal(status.elapsedMinutes, 4);
+  assert.equal(status.remainingMinutes, 6);
+  assert.equal(status.elapsed, false);
+  assert.equal(blocked.ready, false);
+  const gates = (blocked.blockers as { gate: string }[]).map(
+    (blocker) => blocker.gate,
+  );
+  assert.deepEqual(gates, ['secondary-quiet-window']);
+  assert.deepEqual(blocked.blockers, computePreMergeReadinessBlockers(blocked));
+});
+
+test('#2335: the same window elapsing with nothing new clears the blocker', () => {
+  const fixture = readJson('fixtures/pre-merge-readiness/clean.json');
+  const cleared = buildPreMergeReadinessSummary(fixture.input, {
+    ...fixture.options,
+    includeDispositionEvidence: true,
+    secondaryQuietWindowMinutes: 2,
+  });
+  const status = secondaryQuietWindowOf(cleared);
+  assert.equal(status.elapsedMinutes, 4);
+  assert.equal(status.elapsed, true);
+  assert.equal(status.remainingMinutes, 0);
+  assert.ok(
+    !(cleared.blockers as { gate: string }[]).some(
+      (blocker) => blocker.gate === 'secondary-quiet-window',
+    ),
+  );
+  assert.deepEqual(cleared.blockers, computePreMergeReadinessBlockers(cleared));
+});
+
+test('#2335: a genuinely unresolved thread keeps the anchor fresh, so the window never elapses while real work is pending', () => {
+  const fixture = readJson(
+    'fixtures/pre-merge-readiness/unresolved-thread.json',
+  );
+  const blocked = buildPreMergeReadinessSummary(fixture.input, {
+    ...fixture.options,
+    includeDispositionEvidence: true,
+    secondaryQuietWindowMinutes: 1440,
+  });
+  const status = secondaryQuietWindowOf(blocked);
+  // The unresolved thread's own raw activity is the effective ceiling, same
+  // value already asserted in the fixture's own expected.reviewCurrency.
+  assert.equal(
+    status.anchorAt,
+    (
+      fixture.expected.reviewCurrency.live.effective as {
+        maxActivityUpdatedAt: string;
+      }
+    ).maxActivityUpdatedAt,
+  );
+  assert.equal(status.elapsed, false);
+  const gates = (blocked.blockers as { gate: string }[]).map(
+    (blocker) => blocker.gate,
+  );
+  assert.ok(gates.includes('secondary-quiet-window'));
+});
+
+test('#2335: a disposition reply, a watermark, and an ack-only bot comment never reopen the window (reuses the ack-only-current fixture)', () => {
+  const fixture = readJson(
+    'fixtures/pre-merge-readiness/ack-only-current.json',
+  );
+  const withWindow = buildPreMergeReadinessSummary(fixture.input, {
+    ...fixture.options,
+    includeDispositionEvidence: true,
+    secondaryQuietWindowMinutes: 2,
+  });
+  // ack-only-current's live.effective ceiling already excludes the
+  // post-disposition bot ack (protocol-helpers.mts's ackOnlyPostDisposition
+  // classification, exercised by the review-currency gate in the same
+  // fixture); the window anchors on that same ceiling and therefore already
+  // elapsed at options.now, exactly like the review-currency gate already
+  // proceeds on this fixture.
+  assert.equal(secondaryQuietWindowOf(withWindow).elapsed, true);
+  assert.ok(
+    !(withWindow.blockers as { gate: string }[]).some(
+      (blocker) => blocker.gate === 'secondary-quiet-window',
+    ),
+  );
+});
+
+test('#2335: computePreMergeReadinessBlockers never blocks on an entirely absent secondaryQuietWindow evidence field (backward compatible with a hand-built or unmigrated report)', () => {
+  const fixture = readJson('fixtures/pre-merge-readiness/clean.json');
+  const ready = buildPreMergeReadinessSummary(fixture.input, {
+    ...fixture.options,
+    includeDispositionEvidence: true,
+  });
+  const { secondaryQuietWindow: _omitted, ...withoutField } = ready as Record<
+    string,
+    unknown
+  >;
+  assert.deepEqual(
+    computePreMergeReadinessBlockers(withoutField),
+    computePreMergeReadinessBlockers(ready),
+  );
+});

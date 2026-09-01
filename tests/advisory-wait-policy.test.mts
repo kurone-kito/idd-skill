@@ -3,15 +3,17 @@ import { test } from 'node:test';
 
 import {
   buildAdvisoryConvergenceWaiverPrecondition,
+  buildSecondaryQuietWindowStatus,
   normalizeAdvisoryWaitRuntimeOptions,
 } from '../src/scripts/advisory-wait-policy.mts';
 
 // normalizeAdvisoryWaitRuntimeOptions is the only export of this module
 // without direct dedicated coverage: readAdvisoryWaitPolicy,
 // resolveAdvisoryWaitPolicy, resolveAdvisoryPrimaryBotLogin,
-// readAdvisoryPrimaryBotLogin, resolveAdvisorySecondaryBotLogin, and
-// readAdvisorySecondaryBotLogin already have direct, named test() blocks in
-// tests/advisory-wait.test.mts.
+// readAdvisoryPrimaryBotLogin, resolveAdvisorySecondaryBotLogin,
+// readAdvisorySecondaryBotLogin, resolveAdvisorySecondaryQuietWindowMinutes,
+// and readAdvisorySecondaryQuietWindowMinutes already have direct, named
+// test() blocks in tests/advisory-wait.test.mts.
 
 test('normalizeAdvisoryWaitRuntimeOptions applies every default on empty input', () => {
   assert.deepEqual(normalizeAdvisoryWaitRuntimeOptions({}), {
@@ -258,4 +260,88 @@ test('buildAdvisoryConvergenceWaiverPrecondition reports null elapsed on an unus
   });
   assert.equal(precondition.elapsedMinutes, null);
   assert.equal(precondition.deadlinePassed, false);
+});
+
+// #2335: buildSecondaryQuietWindowStatus.
+
+test('buildSecondaryQuietWindowStatus reports elapsed unconditionally when the window is off (0/absent)', () => {
+  for (const minutes of [0, undefined, null, -5, 'soon', Number.NaN]) {
+    const status = buildSecondaryQuietWindowStatus({
+      minutes,
+      effectiveMaxActivityUpdatedAt: '2026-08-30T22:00:00Z',
+      now: '2026-08-30T22:00:30Z',
+    });
+    assert.equal(status.elapsed, true);
+    assert.equal(status.elapsedMinutes, null);
+    assert.equal(status.remainingMinutes, 0);
+    assert.equal(status.anchorAt, '2026-08-30T22:00:00Z');
+  }
+});
+
+test('buildSecondaryQuietWindowStatus reports elapsed unconditionally when there is no substantive activity to anchor on', () => {
+  for (const anchor of [undefined, null, '', 'not-a-timestamp']) {
+    const status = buildSecondaryQuietWindowStatus({
+      minutes: 15,
+      effectiveMaxActivityUpdatedAt: anchor,
+      now: '2026-08-30T22:00:00Z',
+    });
+    assert.equal(status.elapsed, true);
+    assert.equal(status.elapsedMinutes, null);
+    assert.equal(status.remainingMinutes, 0);
+    assert.equal(status.anchorAt, 'none');
+  }
+});
+
+test('buildSecondaryQuietWindowStatus reports not-elapsed with the correct remaining minutes inside the window', () => {
+  const status = buildSecondaryQuietWindowStatus({
+    minutes: 15,
+    effectiveMaxActivityUpdatedAt: '2026-08-30T22:00:00Z',
+    now: '2026-08-30T22:10:00Z',
+  });
+  assert.equal(status.elapsed, false);
+  assert.equal(status.elapsedMinutes, 10);
+  assert.equal(status.remainingMinutes, 5);
+  assert.equal(status.anchorAt, '2026-08-30T22:00:00Z');
+});
+
+test('buildSecondaryQuietWindowStatus reports elapsed once the window has fully passed', () => {
+  const exact = buildSecondaryQuietWindowStatus({
+    minutes: 15,
+    effectiveMaxActivityUpdatedAt: '2026-08-30T22:00:00Z',
+    now: '2026-08-30T22:15:00Z',
+  });
+  assert.equal(exact.elapsed, true);
+  assert.equal(exact.elapsedMinutes, 15);
+  assert.equal(exact.remainingMinutes, 0);
+
+  const past = buildSecondaryQuietWindowStatus({
+    minutes: 15,
+    effectiveMaxActivityUpdatedAt: '2026-08-30T22:00:00Z',
+    now: '2026-08-30T23:00:00Z',
+  });
+  assert.equal(past.elapsed, true);
+  assert.equal(past.elapsedMinutes, 60);
+  assert.equal(past.remainingMinutes, 0);
+});
+
+test('buildSecondaryQuietWindowStatus clamps a future-dated anchor to zero elapsed (mirrors buildAdvisoryConvergenceWaiverPrecondition)', () => {
+  const status = buildSecondaryQuietWindowStatus({
+    minutes: 15,
+    effectiveMaxActivityUpdatedAt: '2026-08-31T06:00:00Z',
+    now: '2026-08-30T22:00:00Z',
+  });
+  assert.equal(status.elapsedMinutes, 0);
+  assert.equal(status.elapsed, false);
+  assert.equal(status.remainingMinutes, 15);
+});
+
+test('buildSecondaryQuietWindowStatus reports null elapsed on an unusable now', () => {
+  const status = buildSecondaryQuietWindowStatus({
+    minutes: 15,
+    effectiveMaxActivityUpdatedAt: '2026-08-30T22:00:00Z',
+    now: 'not-a-timestamp',
+  });
+  assert.equal(status.elapsedMinutes, null);
+  assert.equal(status.elapsed, false);
+  assert.equal(status.remainingMinutes, null);
 });
