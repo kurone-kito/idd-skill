@@ -664,12 +664,33 @@ export async function runProviderOutageDeclaration(options = {}) {
   render(result, args.format);
   return { exitCode: 0, result };
 }
+/**
+ * #2320 review (CodeRabbit): the `text` branch previously called
+ * `JSON.stringify(value)` too, so `--format text` never produced anything
+ * but compact JSON despite the documented `json|text` contract. Render one
+ * `key: value` line per top-level field instead, JSON-stringifying only a
+ * nested object/array value.
+ */
+export function renderText(value) {
+  if (value === null || typeof value !== 'object') {
+    return String(value);
+  }
+  return Object.entries(value)
+    .map(([key, entry]) => {
+      const rendered =
+        entry !== null && typeof entry === 'object'
+          ? JSON.stringify(entry)
+          : String(entry);
+      return `${key}: ${rendered}`;
+    })
+    .join('\n');
+}
 function render(value, format) {
   if (format === 'json') {
     process.stdout.write(`${JSON.stringify(value, null, 2)}\n`);
     return;
   }
-  process.stdout.write(`${JSON.stringify(value)}\n`);
+  process.stdout.write(`${renderText(value)}\n`);
 }
 function printUsage() {
   process.stdout.write(`usage: node scripts/provider-outage-declaration.mjs --service <name> [options]

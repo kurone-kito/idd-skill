@@ -13,6 +13,7 @@ import {
   evaluateProviderOutageRelief,
   listProviderOutageAdvancements,
   parseArgs,
+  renderText,
   resolveProviderOutageDeclaration,
 } from '../src/scripts/provider-outage-declaration.mts';
 
@@ -533,6 +534,19 @@ test('parseArgs: --declare, --record-advanced, and --list-advanced are mutually 
     () => parseArgs(['--declare', '--list-advanced', '--service', 'x']),
     /mutually exclusive/,
   );
+});
+
+test('renderText: renders a genuinely different, non-JSON one-line-per-field form (#2320 review, CodeRabbit)', () => {
+  const rendered = renderText({
+    active: true,
+    reason: '',
+    declaration: { actor: 'kurone-kito', service: 'idd-advisory-convergence' },
+  });
+  assert.equal(
+    rendered,
+    'active: true\nreason: \ndeclaration: {"actor":"kurone-kito","service":"idd-advisory-convergence"}',
+  );
+  assert.notEqual(rendered, JSON.stringify({ active: true }));
 });
 
 test('parseArgs: --help skips the required-flag checks', () => {
