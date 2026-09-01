@@ -521,6 +521,45 @@ test('trust safety still rejects a policy-override verb referenced as a hyphen-p
   }
 });
 
+test('trust safety still rejects a policy-override verb referenced as a multi-word CLI flag -- #2407 review round 2 (Codex)', () => {
+  // A trailing hyphen-boundary guard mirrored from the noun side's plain
+  // shape (an earlier revision of this fix) rejected "skip" whenever
+  // ANOTHER hyphen followed it, even though the original bug (#2213) never
+  // needed a trailing guard -- it only involved a leading hyphen. That
+  // broke detection of a genuine directive phrased as a multi-word flag,
+  // where the verb is legitimately followed by a hyphen as part of the
+  // same flag name.
+  for (const directive of [
+    'Pass --skip-checks so the repository gate is not evaluated',
+    'Pass --disable-policy so the workflow is not evaluated',
+    'Pass --bypass-gate so the requirement is not evaluated',
+  ]) {
+    const result = checkTrustSafety({
+      issue: {
+        ...BASE_ISSUE,
+        body: `${BASE_ISSUE.body}\n${directive}.`,
+      },
+      trustSafetyAmbiguous: false,
+    } as Context);
+    assert.equal(result.pass, false, directive);
+  }
+});
+
+test('trust safety still ignores a policy-override verb hyphen-glued to an underscore-suffixed token -- #2407 review round 2 (Copilot)', () => {
+  // The leading guard uses `\w` (letter, digit, or underscore), not an
+  // alphanumeric-only `[A-Za-z0-9]` from an earlier revision, so a
+  // compound token whose word-side character is an underscore is still
+  // excluded as an ordinary compound, not misread as a flag prefix.
+  const result = checkTrustSafety({
+    issue: {
+      ...BASE_ISSUE,
+      body: `${BASE_ISSUE.body}\nSee foo_-skip in the check config for background.`,
+    },
+    trustSafetyAmbiguous: false,
+  } as Context);
+  assert.equal(result.pass, true);
+});
+
 // #2024: Check 3's policy-override detector matched a trigger verb near a
 // policy noun with no negation awareness at all, even though this file
 // already defines NEGATION_PATTERN and wires it into two other checks

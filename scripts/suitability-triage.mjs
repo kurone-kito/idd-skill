@@ -224,21 +224,32 @@ const NEGATION_PATTERN =
 // "duplicate-evidence-skip check" (describing an existing mechanism, not a
 // directive) matched "skip" here and wrongly failed `trust_safety`.
 //
-// The leading guard deliberately differs from the noun side's plain
-// `(?<![\w-])`: a single-character lookbehind cannot tell a genuine
+// Only the leading side is guarded here, and with a different shape than
+// the noun side's plain `(?<![\w-])`. The original bug is entirely a
+// leading-hyphen problem ("evidence-**skip**"); the pre-existing trailing
+// `\b` (from this alternation's own use inside `\\b(...)​\\b` below) never
+// misfired on a trailing hyphen for this bug, so no trailing guard is
+// added -- doing so anyway (an earlier revision of this fix mirrored the
+// noun side's trailing `(?![\w-])` verbatim) broke detection of a
+// multi-word flag like `--skip-checks`, `--disable-policy`, or
+// `--bypass-gate`, where the verb is legitimately followed by another
+// hyphen as part of the same flag name (#2407 review round 2, Codex).
+//
+// A single-character leading lookbehind also cannot tell a genuine
 // compound word ("evidence-skip", letter then hyphen) apart from a
 // hyphen-prefixed CLI flag reference ("--skip" or "-skip", hyphen then
-// hyphen, or hyphen at the very start of a token). Using the noun side's
-// exact guard here would let a real directive phrased as a flag (e.g.
-// "pass `--skip` so the repository gate is not evaluated") evade
-// detection entirely (#2407 review, Codex). `(?<![A-Za-z0-9]-)` only
-// excludes a match when a letter or digit sits immediately before the
-// hyphen -- true compound-word hyphenation -- leaving any hyphen not
-// itself preceded by a word character (start of string, whitespace, or
-// another hyphen) still detectable. The trailing guard keeps the noun
-// side's plain `(?![\w-])`, unaffected by this distinction, and still
-// excludes a compound-noun suffix.
-const POLICY_OVERRIDE_VERB_SOURCE = String.raw`(?<![A-Za-z0-9]-)(?:ignore|bypass|override|disable|disable|skip|turn off|suppress|disable)(?![\w-])`;
+// hyphen, or hyphen at the very start of a token) -- the noun side's exact
+// `(?<![\w-])` guard would let a directive phrased as a flag (e.g. "pass
+// `--skip` so the repository gate is not evaluated") evade detection
+// entirely (#2407 review round 1, Codex). `(?<![\w]-)` only excludes a
+// match when a word character (letter, digit, or underscore -- matching
+// the `\w` used everywhere else in this file, unlike an
+// alphanumeric-only `[A-Za-z0-9]` from an earlier revision) sits
+// immediately before the hyphen -- true compound-word hyphenation --
+// leaving any hyphen not itself preceded by a word character (start of
+// string, whitespace, or another hyphen) still detectable (#2407 review
+// round 2, Copilot).
+const POLICY_OVERRIDE_VERB_SOURCE = String.raw`(?<![\w]-)(?:ignore|bypass|override|disable|disable|skip|turn off|suppress|disable)`;
 // #2218: a bare `\b` treats a hyphen as a non-word character, so every one
 // of these nouns also matched inside an ordinary hyphenated file-path
 // mention (e.g. this project's own marker prefix in `idd-workflow-notes.md`
