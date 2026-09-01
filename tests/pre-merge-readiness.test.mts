@@ -4938,7 +4938,8 @@ test('summarizeRequiredChecks: treatAsCoveredByWaiver covers a failing required 
       {
         name: 'idd-advisory-convergence',
         state: 'FAILURE',
-        completedAt: '2026-05-17T00:00:00Z',
+        startedAt: '2026-05-17T00:00:00Z',
+        completedAt: '2026-05-17T00:03:00Z',
       },
     ],
     [],
@@ -4957,7 +4958,8 @@ test('summarizeRequiredChecks: treatAsCoveredByWaiver bypasses excludeFromWaiver
       {
         name: 'idd-advisory-convergence',
         state: 'FAILURE',
-        completedAt: '2026-05-17T00:00:00Z',
+        startedAt: '2026-05-17T00:00:00Z',
+        completedAt: '2026-05-17T00:03:00Z',
       },
     ],
     [],
@@ -4977,7 +4979,8 @@ test('summarizeRequiredChecks: treatAsCoveredByWaiver has nothing to cover on an
       {
         name: 'idd-advisory-convergence',
         state: 'SUCCESS',
-        completedAt: '2026-05-17T00:00:00Z',
+        startedAt: '2026-05-17T00:00:00Z',
+        completedAt: '2026-05-17T00:03:00Z',
       },
     ],
     [],
@@ -4996,7 +4999,8 @@ test('summarizeRequiredChecks: omitted treatAsCoveredByWaiver never covers anyth
       {
         name: 'idd-advisory-convergence',
         state: 'FAILURE',
-        completedAt: '2026-05-17T00:00:00Z',
+        startedAt: '2026-05-17T00:00:00Z',
+        completedAt: '2026-05-17T00:03:00Z',
       },
     ],
     [],
@@ -5038,7 +5042,38 @@ test('resolveAdvisoryConvergenceOutageRelief requires ciGate.externalCheckWaiver
 // failure mode #2021 fixed.
 test('summarizeRequiredChecks: treatAsCoveredByWaiver never covers a check with no live run at all, even when it returns true', () => {
   const result = summarizeRequiredChecks(
-    [{ name: 'idd-advisory-convergence', state: 'PENDING', completedAt: '' }],
+    [
+      {
+        name: 'idd-advisory-convergence',
+        state: 'PENDING',
+        startedAt: '',
+        completedAt: '',
+      },
+    ],
+    [],
+    { required_status_checks: { contexts: ['idd-advisory-convergence'] } },
+    {
+      treatAsCoveredByWaiver: (name) => name === 'idd-advisory-convergence',
+    },
+  );
+  assert.equal(result.checks[0].coveredByWaiver, undefined);
+  assert.notEqual(result.status, 'success');
+});
+
+// Codex review (PR #2370): a run whose live `completedAt` is parseable but
+// whose `startedAt` is not (an inconsistent/malformed entry) must also be
+// withheld -- the same fail-closed posture `completedAtMs !== null` already
+// enforces, mirrored for `startedAtMs`.
+test('summarizeRequiredChecks: treatAsCoveredByWaiver never covers a check with a parseable completedAt but no parseable startedAt', () => {
+  const result = summarizeRequiredChecks(
+    [
+      {
+        name: 'idd-advisory-convergence',
+        state: 'FAILURE',
+        startedAt: '',
+        completedAt: '2026-05-17T00:03:00Z',
+      },
+    ],
     [],
     { required_status_checks: { contexts: ['idd-advisory-convergence'] } },
     {
@@ -5062,6 +5097,7 @@ test('summarizeRequiredChecks: treatAsCoveredByWaiverSince withholds coverage fr
       {
         name: 'idd-advisory-convergence',
         state: 'FAILURE',
+        startedAt: '2026-05-10T23:57:00Z', // before the declaration opened
         completedAt: '2026-05-11T00:00:00Z', // before the declaration opened
       },
     ],
@@ -5076,12 +5112,13 @@ test('summarizeRequiredChecks: treatAsCoveredByWaiverSince withholds coverage fr
   assert.notEqual(result.status, 'success');
 });
 
-test('summarizeRequiredChecks: treatAsCoveredByWaiverSince covers a run that completed at or after the cutoff', () => {
+test('summarizeRequiredChecks: treatAsCoveredByWaiverSince covers a run that started at or after the cutoff', () => {
   const result = summarizeRequiredChecks(
     [
       {
         name: 'idd-advisory-convergence',
         state: 'FAILURE',
+        startedAt: '2026-05-12T00:25:00Z', // after the declaration opened
         completedAt: '2026-05-12T00:30:00Z', // after the declaration opened
       },
     ],
@@ -5096,12 +5133,40 @@ test('summarizeRequiredChecks: treatAsCoveredByWaiverSince covers a run that com
   assert.equal(result.status, 'success');
 });
 
+// Codex review (PR #2370, second follow-up finding, round 4): the
+// freshness cutoff must anchor on `startedAt`, not `completedAt`. A run
+// that BEGAN evaluating state before the declaration's own window opened
+// never observed it, even though this particular run happens to finish
+// (and post `completedAt`) a few minutes after the cutoff passes -- its
+// verdict was already decided using stale, pre-declaration state by then.
+test('summarizeRequiredChecks: treatAsCoveredByWaiverSince withholds coverage from a run that started before the cutoff but completed after it', () => {
+  const result = summarizeRequiredChecks(
+    [
+      {
+        name: 'idd-advisory-convergence',
+        state: 'FAILURE',
+        startedAt: '2026-05-11T23:58:00Z', // started before the declaration opened
+        completedAt: '2026-05-12T00:05:00Z', // finished after the declaration opened
+      },
+    ],
+    [],
+    { required_status_checks: { contexts: ['idd-advisory-convergence'] } },
+    {
+      treatAsCoveredByWaiver: (name) => name === 'idd-advisory-convergence',
+      treatAsCoveredByWaiverSince: () => '2026-05-12T00:00:00Z',
+    },
+  );
+  assert.equal(result.checks[0].coveredByWaiver, undefined);
+  assert.notEqual(result.status, 'success');
+});
+
 test('summarizeRequiredChecks: omitted treatAsCoveredByWaiverSince applies no cutoff (unchanged pre-fix behavior)', () => {
   const result = summarizeRequiredChecks(
     [
       {
         name: 'idd-advisory-convergence',
         state: 'FAILURE',
+        startedAt: '2026-05-10T23:57:00Z',
         completedAt: '2026-05-11T00:00:00Z',
       },
     ],
@@ -6623,12 +6688,14 @@ test('normalizeStatusCheckRollupEntry: a completed CheckRun reports its conclusi
     status: 'COMPLETED',
     conclusion: 'SUCCESS',
     completedAt: '2026-07-18T03:47:01Z',
+    startedAt: '2026-07-18T03:44:12Z',
     workflowName: 'IDD advisory-convergence gate',
   });
   assert.deepEqual(result, {
     name: 'idd-advisory-convergence',
     state: 'SUCCESS',
     completedAt: '2026-07-18T03:47:01Z',
+    startedAt: '2026-07-18T03:44:12Z',
     type: 'check-run',
     workflowName: 'IDD advisory-convergence gate',
   });
@@ -6658,6 +6725,7 @@ test('normalizeStatusCheckRollupEntry: a StatusContext reports its own state and
     name: 'CodeRabbit',
     state: 'SUCCESS',
     completedAt: '0001-01-01T00:00:00Z',
+    startedAt: '0001-01-01T00:00:00Z',
     type: 'status-context',
     workflowName: '',
   });
@@ -7038,6 +7106,10 @@ function withAdvisoryConvergenceRequiredCheck(fixture: {
       // helper's callers post, so the rerun-freshness gate does not withhold
       // coverage in the "should be covered" cases below -- those tests cover
       // #2021's precondition and #2046's mode gating specifically, not #2034.
+      // `startedAt` is also after that same moment (Codex review round 4 on
+      // PR #2370: the #2353 `treatAsCoveredByWaiver` cutoff anchors on
+      // `startedAt`, not `completedAt`).
+      startedAt: '2026-05-12T00:15:00Z',
       completedAt: '2026-05-12T00:30:00Z',
     },
   ];
@@ -7620,6 +7692,63 @@ test('#2353: advisoryConvergenceOutageRelievedSince covers a run that completed 
   const check = ciCheckByName(relieved, 'idd-advisory-convergence');
   assert.equal(check?.coveredByWaiver, true);
   assert.equal((relieved.ci as Record<string, unknown>).status, 'success');
+});
+
+// Codex review (PR #2370, second follow-up, round 4): a run that STARTED
+// before the declaration's window opened but happened to COMPLETE after it
+// must still be withheld -- it never observed the declaration during its
+// own evaluation, even though `completedAt` alone would suggest freshness.
+test('#2353: advisoryConvergenceOutageRelievedSince withholds coverage from a run that started before the declaration but completed after it', () => {
+  const fixture = readJson('fixtures/pre-merge-readiness/clean.json');
+  const branchRules = (fixture.input.branchRules ?? []).map(
+    (rule: { type?: string }) =>
+      rule.type === 'required_status_checks'
+        ? {
+            type: 'required_status_checks',
+            parameters: {
+              required_status_checks: [
+                { context: 'lint' },
+                { context: 'idd-advisory-convergence' },
+              ],
+            },
+          }
+        : rule,
+  );
+  const input = {
+    ...fixture.input,
+    branchRules,
+    checks: [
+      ...(fixture.input.checks ?? []),
+      {
+        name: 'idd-advisory-convergence',
+        state: 'FAILURE',
+        // Started before the declaration's window opens below
+        // (2026-05-12T00:00:00Z) but finishes after it.
+        startedAt: '2026-05-11T23:58:00Z',
+        completedAt: '2026-05-12T00:05:00Z',
+      },
+    ],
+  };
+  const waivableCheckSelectors = [
+    { selector: 'idd-advisory-convergence', matchMode: 'exact' },
+  ];
+
+  const stillBlocked = buildPreMergeReadinessSummary(input, {
+    ...fixture.options,
+    includeDispositionEvidence: true,
+    waivableCheckSelectors,
+    externalCheckWaiverMaxValidity: 'PT24H',
+    copilotUnavailable: true,
+    advisoryConvergenceOutageRelieved: true,
+    advisoryConvergenceOutageRelievedSince: '2026-05-12T00:00:00Z',
+  });
+
+  const check = ciCheckByName(stillBlocked, 'idd-advisory-convergence');
+  assert.equal(check?.coveredByWaiver, undefined);
+  assert.notEqual(
+    (stillBlocked.ci as Record<string, unknown>).status,
+    'success',
+  );
 });
 
 // #2046: a waiver that is otherwise valid, precondition-open, and

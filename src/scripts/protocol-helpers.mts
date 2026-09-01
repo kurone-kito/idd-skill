@@ -126,6 +126,13 @@ interface CheckLike {
   name?: string | null;
   state?: string | null;
   completedAt?: string | null;
+  // #2353 (Codex review on PR #2370): when the live run itself began, as
+  // opposed to when it finished. `treatAsCoveredByWaiver`'s freshness
+  // cutoff anchors on this instead of `completedAt` -- a run that starts
+  // evaluating state before a provider-outage declaration is posted never
+  // observed it, even if the run doesn't finish (and post `completedAt`)
+  // until moments after the declaration lands.
+  startedAt?: string | null;
   type?: string | null;
   workflowName?: string | null;
 }
@@ -4737,15 +4744,18 @@ export function summarizeRequiredChecks(
     treatAsCoveredByWaiver?: ((checkName: string) => boolean) | null;
     // #2353 (Codex review on PR #2370): per-CHECK-NAME freshness cutoff
     // paired with `treatAsCoveredByWaiver` above -- a check only counts as
-    // covered through that positive path once its live run's `completedAt`
-    // is at or after this moment, mirroring `waiverActiveSinceOverride`'s
-    // freshness role for the direct-waiver path but evaluated as a
-    // standalone cutoff (no waiver-entry `createdAt` to `Math.max` against).
-    // A stale run that completed before a declaration's own window opened
-    // was never actually rerun during the declared outage; treating it
-    // covered would diverge from GitHub's own required-check state.
-    // `null`/omitted (the default, and every caller that doesn't pass it)
-    // applies no cutoff -- unchanged pre-fix behavior.
+    // covered through that positive path once its live run's `startedAt`
+    // (Codex review, second follow-up: NOT `completedAt` -- a run that
+    // started evaluating state before the cutoff never observed whatever
+    // made the check relieved, even if it finished afterward) is at or
+    // after this moment, mirroring `waiverActiveSinceOverride`'s freshness
+    // role for the direct-waiver path but evaluated as a standalone cutoff
+    // (no waiver-entry `createdAt` to `Math.max` against). A stale run that
+    // started before a declaration's own window opened was never actually
+    // rerun during the declared outage; treating it covered would diverge
+    // from GitHub's own required-check state. `null`/omitted (the default,
+    // and every caller that doesn't pass it) applies no cutoff -- unchanged
+    // pre-fix behavior.
     treatAsCoveredByWaiverSince?: ((checkName: string) => string | null) | null;
   } = {},
 ) {
@@ -4763,6 +4773,10 @@ export function summarizeRequiredChecks(
     const completedAt = String(check.completedAt ?? '');
     const completedAtMs = isValidIsoTimestamp(completedAt)
       ? new Date(completedAt).getTime()
+      : null;
+    const startedAt = String(check.startedAt ?? '');
+    const startedAtMs = isValidIsoTimestamp(startedAt)
+      ? new Date(startedAt).getTime()
       : null;
     const matchingWaivers = validWaivers.filter((w) =>
       matchCheckSelectorLocal(name, w.checkSelector),
@@ -4806,11 +4820,16 @@ export function summarizeRequiredChecks(
     // GitHub's own required-check state is still pending, reproducing the
     // exact "ready but merge blocked" failure mode #2021 fixed for the
     // direct-waiver path. Also requires the live run to be fresh relative
-    // to `treatAsCoveredByWaiverSince` when the caller supplies one
-    // (Codex review on PR #2370): a run that completed before that moment
-    // was never actually rerun under whatever condition made this check
-    // relieved, reproducing the same staleness gap #2034 already closed
-    // for the direct-waiver path.
+    // to `treatAsCoveredByWaiverSince` when the caller supplies one, and
+    // (Codex review on PR #2370, second follow-up) anchors that freshness
+    // check on `startedAt` rather than `completedAt`: a run that began
+    // evaluating state before the cutoff never observed whatever made this
+    // check relieved, even if it happens to finish (and post `completedAt`)
+    // moments after the cutoff passes -- the run's own verdict was already
+    // decided using stale state by then. Requires `startedAtMs !== null`
+    // for the same fail-closed reason as `completedAtMs !== null` above: a
+    // run with no parseable `startedAt` has no evidence it observed
+    // anything at all.
     const treatAsCoveredByWaiverSinceOverride =
       typeof treatAsCoveredByWaiverSince === 'function'
         ? treatAsCoveredByWaiverSince(name)
@@ -4822,10 +4841,11 @@ export function summarizeRequiredChecks(
       : null;
     const treatedAsCoveredByWaiver =
       completedAtMs !== null &&
+      startedAtMs !== null &&
       typeof treatAsCoveredByWaiver === 'function' &&
       treatAsCoveredByWaiver(name) &&
       (treatAsCoveredByWaiverSinceMs === null ||
-        completedAtMs >= treatAsCoveredByWaiverSinceMs);
+        startedAtMs >= treatAsCoveredByWaiverSinceMs);
     const coveredByWaiver =
       !CHECK_PASS_EQUIVALENT_STATES.has(state) &&
       (treatedAsCoveredByWaiver ||
@@ -6603,15 +6623,17 @@ export function buildPreMergeReadinessSummary(
     // default) never relieves anything, unchanged pre-#2353 behavior.
     advisoryConvergenceOutageRelieved?: boolean;
     // #2353 (Codex review on PR #2370): the caller-resolved outage
-    // declaration's own `startedAt` when `advisoryConvergenceOutageRelieved`
-    // is true, empty otherwise. A required check's live run must have
-    // completed AT OR AFTER this moment to count as covered -- a run that
-    // completed before the declaration's window opened was never actually
-    // rerun during the declared outage, and reporting it covered would
-    // diverge from what GitHub's own required-check state still shows,
-    // reproducing #2021's "ready but merge blocked" class one layer
-    // deeper. Omitted/empty applies no cutoff (unchanged pre-fix
-    // behavior for a caller that doesn't pass it).
+    // declaration's own active-since moment when
+    // `advisoryConvergenceOutageRelieved` is true, empty otherwise. A
+    // required check's live run must have STARTED (not merely completed --
+    // second follow-up review, round 4) AT OR AFTER this moment to count as
+    // covered -- a run that began evaluating state before the declaration's
+    // window opened never actually observed it, even if the run happens to
+    // finish afterward, and reporting it covered would diverge from what
+    // GitHub's own required-check state still shows, reproducing #2021's
+    // "ready but merge blocked" class one layer deeper. Omitted/empty
+    // applies no cutoff (unchanged pre-fix behavior for a caller that
+    // doesn't pass it).
     advisoryConvergenceOutageRelievedSince?: string;
     // #2021: the current HEAD commit's own `committedDate` (GraphQL),
     // anchoring the SAME 24h deadline clock `advisory-convergence.mts`'s own

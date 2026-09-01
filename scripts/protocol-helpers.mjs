@@ -3657,6 +3657,10 @@ export function summarizeRequiredChecks(
     const completedAtMs = isValidIsoTimestamp(completedAt)
       ? new Date(completedAt).getTime()
       : null;
+    const startedAt = String(check.startedAt ?? '');
+    const startedAtMs = isValidIsoTimestamp(startedAt)
+      ? new Date(startedAt).getTime()
+      : null;
     const matchingWaivers = validWaivers.filter((w) =>
       matchCheckSelectorLocal(name, w.checkSelector),
     );
@@ -3699,11 +3703,16 @@ export function summarizeRequiredChecks(
     // GitHub's own required-check state is still pending, reproducing the
     // exact "ready but merge blocked" failure mode #2021 fixed for the
     // direct-waiver path. Also requires the live run to be fresh relative
-    // to `treatAsCoveredByWaiverSince` when the caller supplies one
-    // (Codex review on PR #2370): a run that completed before that moment
-    // was never actually rerun under whatever condition made this check
-    // relieved, reproducing the same staleness gap #2034 already closed
-    // for the direct-waiver path.
+    // to `treatAsCoveredByWaiverSince` when the caller supplies one, and
+    // (Codex review on PR #2370, second follow-up) anchors that freshness
+    // check on `startedAt` rather than `completedAt`: a run that began
+    // evaluating state before the cutoff never observed whatever made this
+    // check relieved, even if it happens to finish (and post `completedAt`)
+    // moments after the cutoff passes -- the run's own verdict was already
+    // decided using stale state by then. Requires `startedAtMs !== null`
+    // for the same fail-closed reason as `completedAtMs !== null` above: a
+    // run with no parseable `startedAt` has no evidence it observed
+    // anything at all.
     const treatAsCoveredByWaiverSinceOverride =
       typeof treatAsCoveredByWaiverSince === 'function'
         ? treatAsCoveredByWaiverSince(name)
@@ -3715,10 +3724,11 @@ export function summarizeRequiredChecks(
       : null;
     const treatedAsCoveredByWaiver =
       completedAtMs !== null &&
+      startedAtMs !== null &&
       typeof treatAsCoveredByWaiver === 'function' &&
       treatAsCoveredByWaiver(name) &&
       (treatAsCoveredByWaiverSinceMs === null ||
-        completedAtMs >= treatAsCoveredByWaiverSinceMs);
+        startedAtMs >= treatAsCoveredByWaiverSinceMs);
     const coveredByWaiver =
       !CHECK_PASS_EQUIVALENT_STATES.has(state) &&
       (treatedAsCoveredByWaiver ||

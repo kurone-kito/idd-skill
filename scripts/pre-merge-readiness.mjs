@@ -122,6 +122,10 @@ export function normalizeStatusCheckRollupEntry(entry) {
       name: String(entry?.context ?? '').trim(),
       state: STATUS_CONTEXT_STATE_ALIASES[rawState] ?? rawState,
       completedAt: String(entry?.completedAt ?? ZERO_SENTINEL_TIMESTAMP),
+      // A legacy commit status has no separate start/complete lifecycle --
+      // it is reported as a single instant -- so `startedAt` reuses the
+      // same `completedAt` value rather than exposing a fabricated one.
+      startedAt: String(entry?.completedAt ?? ZERO_SENTINEL_TIMESTAMP),
       type: 'status-context',
       workflowName: '',
     };
@@ -137,6 +141,7 @@ export function normalizeStatusCheckRollupEntry(entry) {
     state:
       status === 'COMPLETED' ? conclusion || 'UNKNOWN' : status || 'UNKNOWN',
     completedAt: String(entry?.completedAt ?? ZERO_SENTINEL_TIMESTAMP),
+    startedAt: String(entry?.startedAt ?? ZERO_SENTINEL_TIMESTAMP),
     type: 'check-run',
     workflowName: String(entry?.workflowName ?? '').trim(),
   };

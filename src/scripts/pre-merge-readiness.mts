@@ -105,6 +105,10 @@ interface CheckPayload {
   name?: string | null;
   state?: string | null;
   completedAt?: string | null;
+  // #2353 (Codex review on PR #2370): see `CheckLike` in
+  // `protocol-helpers.mts` for why this is threaded through separately
+  // from `completedAt`.
+  startedAt?: string | null;
   type?: string | null;
   workflowName?: string | null;
 }
@@ -127,6 +131,7 @@ interface StatusCheckRollupPayload {
   status?: string | null;
   conclusion?: string | null;
   completedAt?: string | null;
+  startedAt?: string | null;
   workflowName?: string | null;
 }
 
@@ -195,6 +200,10 @@ export function normalizeStatusCheckRollupEntry(
       name: String(entry?.context ?? '').trim(),
       state: STATUS_CONTEXT_STATE_ALIASES[rawState] ?? rawState,
       completedAt: String(entry?.completedAt ?? ZERO_SENTINEL_TIMESTAMP),
+      // A legacy commit status has no separate start/complete lifecycle --
+      // it is reported as a single instant -- so `startedAt` reuses the
+      // same `completedAt` value rather than exposing a fabricated one.
+      startedAt: String(entry?.completedAt ?? ZERO_SENTINEL_TIMESTAMP),
       type: 'status-context',
       workflowName: '',
     };
@@ -210,6 +219,7 @@ export function normalizeStatusCheckRollupEntry(
     state:
       status === 'COMPLETED' ? conclusion || 'UNKNOWN' : status || 'UNKNOWN',
     completedAt: String(entry?.completedAt ?? ZERO_SENTINEL_TIMESTAMP),
+    startedAt: String(entry?.startedAt ?? ZERO_SENTINEL_TIMESTAMP),
     type: 'check-run',
     workflowName: String(entry?.workflowName ?? '').trim(),
   };
