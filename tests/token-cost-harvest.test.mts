@@ -20,10 +20,12 @@ import {
   type IssueLoopGithubContext,
   markAmbiguousOverlaps,
   readEventWindows,
+  readExistingVendorSessionKeys,
   resolveIssueLoopContext,
   resolveTrustedMarkerLogins,
   type StageEventWindow,
   type VendorSession,
+  vendorSessionKey,
 } from '../src/scripts/token-cost-harvest.mts';
 import { readJson } from './test-utils.mts';
 
@@ -357,6 +359,55 @@ test('computeStageWindows: an --events window overrides the marker-derived one a
   assert.equal(work?.endMs, ms('2026-01-01T00:19:00Z'));
 });
 
+test('computeStageWindows: an --events override that runs past a later marker-derived stage is clamped, never overlapping', () => {
+  const ctx: IssueLoopGithubContext = {
+    claimedAtMs: ms('2026-01-01T00:00:00Z'),
+    prCreatedAtMs: ms('2026-01-01T00:25:00Z'),
+    prHeadRefName: 'issue/1-test',
+    prMergedAtMs: null,
+    firstReviewAtMs: null,
+    cleanupAtMs: null,
+    unclaimedMatched: false,
+    humanHandoff: false,
+  };
+  // The marker-derived tiling would put 'work' at [00:15, 00:25). An
+  // --events override stretches 'claim' out to 00:20, past where 'work'
+  // would otherwise start.
+  const events = new Map<TokenCostStageId, StageEventWindow>([
+    [
+      'claim',
+      {
+        startMs: ms('2026-01-01T00:05:00Z'),
+        endMs: ms('2026-01-01T00:20:00Z'),
+      },
+    ],
+  ]);
+  const { windows } = computeStageWindows(
+    ms('2026-01-01T00:00:00Z'),
+    ms('2026-01-01T00:30:00Z'),
+    ctx,
+    events,
+  );
+  for (let i = 1; i < windows.length; i++) {
+    assert.ok(
+      windows[i].startMs >= windows[i - 1].endMs,
+      `${windows[i].id} [${windows[i].startMs}, ${windows[i].endMs}) overlaps ${
+        windows[i - 1].id
+      } [${windows[i - 1].startMs}, ${windows[i - 1].endMs})`,
+    );
+  }
+  const claim = windows.find((w) => w.id === 'claim');
+  assert.equal(claim?.source, 'event');
+  assert.equal(claim?.startMs, ms('2026-01-01T00:05:00Z'));
+  assert.equal(claim?.endMs, ms('2026-01-01T00:20:00Z'));
+  const work = windows.find((w) => w.id === 'work');
+  // work's marker-derived start (00:15) is clamped forward past claim's
+  // event-sourced end (00:20) instead of overlapping it.
+  assert.equal(work?.source, 'marker');
+  assert.equal(work?.startMs, ms('2026-01-01T00:20:00Z'));
+  assert.equal(work?.endMs, ms('2026-01-01T00:25:00Z'));
+});
+
 test('computeStageWindows returns no windows when there is no claim in range', () => {
   const ctx: IssueLoopGithubContext = {
     claimedAtMs: null,
@@ -580,10 +631,46 @@ test('readEventWindows: pairs a trusted enter/exit for the same (issueNumber, st
   try {
     const windows = readEventWindows(path);
     assert.equal(windows.size, 1);
-    const window = windows.get('7:work');
+    const window = windows.get('7:claude:work');
     assert.ok(window);
     assert.equal(window?.startMs, ms('2026-01-01T00:10:00Z'));
     assert.equal(window?.endMs, ms('2026-01-01T00:20:00Z'));
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('readEventWindows: does not pair an enter/exit across two different vendors for the same issue/stage', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'idd-token-cost-events-'));
+  const path = join(dir, 'events.jsonl');
+  writeFileSync(
+    path,
+    [
+      // claude enters 'work' but never exits (handed off).
+      JSON.stringify({
+        schemaVersion: 1,
+        event: 'enter',
+        stageId: 'work',
+        at: '2026-01-01T00:10:00Z',
+        vendor: 'claude',
+        issueNumber: 7,
+      }),
+      // codex resumes and exits 'work' -- must not pair with claude's enter.
+      JSON.stringify({
+        schemaVersion: 1,
+        event: 'exit',
+        stageId: 'work',
+        at: '2026-01-01T00:20:00Z',
+        vendor: 'codex',
+        issueNumber: 7,
+      }),
+    ].join('\n'),
+  );
+  try {
+    const windows = readEventWindows(path);
+    assert.equal(windows.size, 0);
+    assert.equal(windows.get('7:claude:work'), undefined);
+    assert.equal(windows.get('7:codex:work'), undefined);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -754,4 +841,45 @@ test('AC3: a session with no joinHints.issueNumber stays kind: session, never re
     (built.sample as { attribution: string }).attribution,
     'session-unscoped',
   );
+});
+
+// ---------------------------------------------------------------------------
+// Output-file append/dedup (every run rescans full vendor history, so the
+// documented "appends to samples.jsonl" behavior must skip sessions already
+// recorded rather than overwrite or duplicate them)
+// ---------------------------------------------------------------------------
+
+test('vendorSessionKey combines vendor and vendorSessionId', () => {
+  assert.equal(
+    vendorSessionKey({ vendor: 'claude', vendorSessionId: 'abc' }),
+    'claude:abc',
+  );
+});
+
+test('readExistingVendorSessionKeys: missing file returns an empty set', () => {
+  const keys = readExistingVendorSessionKeys(
+    join(tmpdir(), 'does-not-exist-token-cost-samples.jsonl'),
+  );
+  assert.equal(keys.size, 0);
+});
+
+test('readExistingVendorSessionKeys: reads (vendor, vendorSessionId) pairs and skips a malformed line', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'idd-token-cost-samples-'));
+  const path = join(dir, 'samples.jsonl');
+  writeFileSync(
+    path,
+    [
+      JSON.stringify({ vendor: 'claude', vendorSessionId: 'session-1' }),
+      'not valid json',
+      JSON.stringify({ vendor: 'codex', vendorSessionId: 'session-2' }),
+    ].join('\n'),
+  );
+  try {
+    const keys = readExistingVendorSessionKeys(path);
+    assert.equal(keys.size, 2);
+    assert.ok(keys.has('claude:session-1'));
+    assert.ok(keys.has('codex:session-2'));
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });

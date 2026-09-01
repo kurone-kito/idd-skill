@@ -15,11 +15,11 @@
 // per-issue IDD stage windows, and writes TokenCostSample JSONL. Does
 // not render the README -- that stays token-cost-report.mjs's job.
 import {
+  appendFileSync,
   existsSync,
   globSync,
   mkdirSync,
   readFileSync,
-  writeFileSync,
 } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
@@ -280,23 +280,36 @@ export function computeStageWindows(
     if (eventWindow.endMs <= eventWindow.startMs) {
       continue;
     }
-    const existingIndex = windows.findIndex((w) => w.id === stageId);
-    const overridden = {
+    byId.set(stageId, {
       id: stageId,
       startMs: eventWindow.startMs,
       endMs: eventWindow.endMs,
       source: 'event',
-    };
-    if (existingIndex >= 0) {
-      windows[existingIndex] = overridden;
-    } else {
-      windows.push(overridden);
-    }
-    byId.set(stageId, overridden);
+    });
     attribution = 'phase-event';
   }
-  windows.sort((a, b) => a.startMs - b.startMs);
-  return { windows, attribution };
+  // Re-tile in canonical stage order: an --events override's timestamps can
+  // disagree with its marker-derived neighbors (or two overrides can
+  // disagree with each other), and naively overlaying them can leave
+  // windows that overlap -- which would double-count delta-mode usage in
+  // allocateStageUsage below. Clamp each window's start to a monotonic
+  // cursor and drop it if that clamp consumes the whole window; a gap is
+  // fine (its usage points simply attribute to no stage), an overlap is not.
+  const finalWindows = [];
+  let normalizeCursor = sessionStartedAtMs;
+  for (const stageId of TOKEN_COST_STAGE_IDS) {
+    const window = byId.get(stageId);
+    if (!window) {
+      continue;
+    }
+    const startMs = Math.max(window.startMs, normalizeCursor);
+    const endMs = Math.min(window.endMs, sessionEndedAtMs);
+    if (endMs > startMs) {
+      finalWindows.push({ ...window, startMs, endMs });
+      normalizeCursor = endMs;
+    }
+  }
+  return { windows: finalWindows, attribution };
 }
 /** Sums every delta-mode point whose timestamp falls in [startMs, endMs). */
 function sumDeltaInRange(points, startMs, endMs) {
@@ -608,7 +621,14 @@ export function resolveIssueLoopContext(
       comment.body,
       comment.createdAt,
     );
-    if (!watermark) {
+    if (
+      !watermark ||
+      watermark.agentId !== claimAgentId ||
+      watermark.claimId !== claimId
+    ) {
+      // Skip watermarks bound to a different claim attempt (for example a
+      // stale one from before a takeover) -- same ownership check the
+      // release/handoff matching below already applies.
       continue;
     }
     const atMs = toValidTimestampMs(watermark.createdAt);
@@ -656,10 +676,18 @@ export function resolveIssueLoopContext(
 // ---------------------------------------------------------------------------
 // --events file
 // ---------------------------------------------------------------------------
-function eventKey(issueNumber, stageId) {
-  return `${issueNumber}:${stageId}`;
+const TOKEN_COST_VENDORS = ['grok', 'claude', 'codex'];
+function isTokenCostVendor(value) {
+  return typeof value === 'string' && TOKEN_COST_VENDORS.includes(value);
 }
-/** Reads a --events JSONL file into per-(issueNumber, stageId) enter/exit window overrides. A missing file is not an error -- returns an empty map. */
+// Keyed by vendor too, not just (issueNumber, stageId): two different vendor
+// sessions can both log phase events for the same issue and stage (a
+// claude->codex handoff mid-loop), and their enter/exit timestamps must not
+// be paired across vendors into one bogus window.
+function eventKey(issueNumber, vendor, stageId) {
+  return `${issueNumber}:${vendor}:${stageId}`;
+}
+/** Reads a --events JSONL file into per-(issueNumber, vendor, stageId) enter/exit window overrides. A missing file is not an error -- returns an empty map. */
 export function readEventWindows(path) {
   const result = new Map();
   if (!existsSync(path)) {
@@ -687,6 +715,7 @@ export function readEventWindows(path) {
       typeof event.issueNumber !== 'number' ||
       typeof event.stageId !== 'string' ||
       !TOKEN_COST_STAGE_IDS.includes(event.stageId) ||
+      !isTokenCostVendor(event.vendor) ||
       (event.event !== 'enter' && event.event !== 'exit')
     ) {
       continue;
@@ -695,7 +724,7 @@ export function readEventWindows(path) {
     if (atMs === undefined) {
       continue;
     }
-    const key = eventKey(event.issueNumber, event.stageId);
+    const key = eventKey(event.issueNumber, event.vendor, event.stageId);
     if (event.event === 'enter') {
       enterAt.set(key, atMs);
     } else {
@@ -710,10 +739,10 @@ export function readEventWindows(path) {
   }
   return result;
 }
-function eventWindowsForIssue(all, issueNumber) {
+function eventWindowsForIssue(all, issueNumber, vendor) {
   const out = new Map();
   for (const stageId of TOKEN_COST_STAGE_IDS) {
-    const window = all.get(eventKey(issueNumber, stageId));
+    const window = all.get(eventKey(issueNumber, vendor, stageId));
     if (window) {
       out.set(stageId, window);
     }
@@ -832,7 +861,11 @@ export function buildSample(
   if (ctx === null) {
     return { sample: base, issueNumber, startedAtMs, endedAtMs };
   }
-  const eventWindows = eventWindowsForIssue(eventWindowsAll, issueNumber);
+  const eventWindows = eventWindowsForIssue(
+    eventWindowsAll,
+    issueNumber,
+    session.vendor,
+  );
   const { windows, attribution } = computeStageWindows(
     startedAtMs,
     endedAtMs,
@@ -882,6 +915,47 @@ function printHelp() {
   --trusted-marker-logins a,b   Logins whose IDD markers are trusted (default: .github/idd/config.json's trustedMarkerActors).
   --help, -h                   Show this help.
 `);
+}
+export function vendorSessionKey(sample) {
+  return `${sample.vendor}:${sample.vendorSessionId}`;
+}
+/**
+ * Every run rescans every vendor's full session history (there is no
+ * incremental cursor), so appending unconditionally would duplicate a
+ * session's sample on every subsequent run. Reads the current output file's
+ * existing (vendor, vendorSessionId) keys so the caller can skip samples
+ * already recorded, keeping the documented append semantics idempotent. A
+ * malformed existing line is skipped rather than failing the whole read --
+ * this is a read-side safety net, not a place to validate the file.
+ */
+export function readExistingVendorSessionKeys(outPath) {
+  const keys = new Set();
+  if (!existsSync(outPath)) {
+    return keys;
+  }
+  const lines = readFileSync(outPath, 'utf8').split('\n');
+  for (const line of lines) {
+    if (!line.trim()) {
+      continue;
+    }
+    try {
+      const parsed = JSON.parse(line);
+      if (
+        typeof parsed.vendor === 'string' &&
+        typeof parsed.vendorSessionId === 'string'
+      ) {
+        keys.add(
+          vendorSessionKey({
+            vendor: parsed.vendor,
+            vendorSessionId: parsed.vendorSessionId,
+          }),
+        );
+      }
+    } catch {
+      // Malformed line in an existing file: skip it, don't fail the harvest.
+    }
+  }
+  return keys;
 }
 function runCli(argv) {
   const { values, help } = parseCliArgs(argv, TOKEN_COST_HARVEST_FLAG_SPEC);
@@ -937,10 +1011,16 @@ function runCli(argv) {
     return;
   }
   mkdirSync(dirname(outPath), { recursive: true });
-  const body = harvested.map((h) => JSON.stringify(h.sample)).join('\n');
-  writeFileSync(outPath, harvested.length > 0 ? `${body}\n` : '');
+  const existingIds = readExistingVendorSessionKeys(outPath);
+  const newSamples = harvested.filter(
+    (h) => !existingIds.has(vendorSessionKey(h.sample)),
+  );
+  if (newSamples.length > 0) {
+    const body = newSamples.map((h) => JSON.stringify(h.sample)).join('\n');
+    appendFileSync(outPath, `${body}\n`);
+  }
   process.stdout.write(
-    `token-cost-harvest: wrote ${outPath} (n=${harvested.length})\n`,
+    `token-cost-harvest: appended ${newSamples.length} new sample(s) to ${outPath} (skipped ${harvested.length - newSamples.length} already present)\n`,
   );
 }
 if (import.meta.main) {
