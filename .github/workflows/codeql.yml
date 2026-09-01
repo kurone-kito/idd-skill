@@ -2,6 +2,16 @@ concurrency:
   cancel-in-progress: true
   group: ${{ github.workflow }}-${{ github.ref }}
 name: CodeQL
+# CI topology (#2322): unlike lint.yml/idd-doctor.yml/pnpm-boundary.yml,
+# this pull_request trigger deliberately carries no path filter -- CodeQL
+# is a security scan, and a path filter that misses a security-relevant
+# file (a new dependency, a workflow permission change, a helper this
+# repository's own filter-author failed to anticipate) would silently
+# narrow coverage instead of only saving minutes. This workflow is also
+# not one of the branch ruleset's required status checks (see
+# docs/customization.md's CI cost discipline appendix), so an adopter
+# who does want to bound its cost can safely add a path filter here
+# without weakening the IDD merge gate itself.
 on:
   pull_request:
     branches:
