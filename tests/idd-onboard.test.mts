@@ -15,7 +15,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, join, relative, resolve } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import {
@@ -44,6 +44,7 @@ import {
   ONBOARDING_PLACEHOLDERS,
   parseRemoteRepoRef,
   readExistingCommandsTable,
+  resolveConfinedDirectory,
   resolveCoreTemplateFiles,
   resolveImportFiles,
   resolvePlaceholderValues,
@@ -1544,9 +1545,18 @@ function runCliBin(args: string[]): {
   verdict: Record<string, unknown>;
 } {
   try {
-    const stdout = execFileSync(process.execPath, [BIN_PATH, ...args], {
-      encoding: 'utf8',
-    });
+    // #2216: every makeFixtureDir() root lives under the OS tmpdir, outside
+    // this test process's own cwd (REPO_ROOT) -- widen the confined root so
+    // existing fixture-based invocations keep working unchanged. A test
+    // exercising the confinement rejection itself spawns the CLI directly,
+    // bypassing this helper.
+    const stdout = execFileSync(
+      process.execPath,
+      [BIN_PATH, ...args, '--allow-root', tmpdir()],
+      {
+        encoding: 'utf8',
+      },
+    );
     return {
       status: 0,
       verdict: JSON.parse(stdout) as Record<string, unknown>,
@@ -1833,6 +1843,8 @@ test('bin/idd-onboard.mjs --import --force preserves a customized commands table
     REPO_ROOT,
     '--target',
     targetRoot,
+    '--allow-root',
+    tmpdir(),
   ]);
   execFileSync(process.execPath, [
     BIN_PATH,
@@ -1853,6 +1865,8 @@ test('bin/idd-onboard.mjs --import --force preserves a customized commands table
     'npx biome check --write (customized)',
     '--install-deps-command',
     'npm install',
+    '--allow-root',
+    tmpdir(),
   ]);
 
   const { status, verdict } = runCliBin([
@@ -2411,6 +2425,8 @@ test('bin/idd-onboard.mjs --verify exits 2 on an unknown --profile value', () =>
         targetRoot,
         '--profile',
         'not-a-real-profile',
+        '--allow-root',
+        tmpdir(),
       ],
       { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] },
     );
@@ -2698,10 +2714,14 @@ test('bin/idd-onboard.mjs rejects --hear-only flags (--propose, --apply, --answe
 test('bin/idd-onboard.mjs --hear exits 2 in a non-TTY context, without --propose or --apply', () => {
   const root = makeFixtureDir();
   try {
-    execFileSync(process.execPath, [BIN_PATH, '--hear', '--target', root], {
-      encoding: 'utf8',
-      stdio: ['ignore', 'pipe', 'pipe'],
-    });
+    execFileSync(
+      process.execPath,
+      [BIN_PATH, '--hear', '--target', root, '--allow-root', tmpdir()],
+      {
+        encoding: 'utf8',
+        stdio: ['ignore', 'pipe', 'pipe'],
+      },
+    );
     assert.fail('expected a non-zero exit');
   } catch (error) {
     const failed = error as { status?: number; stderr?: string };
@@ -3773,4 +3793,154 @@ test('bin/idd-onboard.mjs --help documents --record-policy, --transcript, and --
   assert.match(help, /--transcript/);
   assert.match(help, /--write-policy-doc/);
   assert.match(help, /--from-transcript/);
+});
+
+// ---------------------------------------------------------------------------
+// #2216: resolveConfinedDirectory (--source / --target path confinement)
+// ---------------------------------------------------------------------------
+
+// Every scenario runs with cwd temporarily pointed at a freshly
+// mkdtempSync-created sandbox (never the real repo cwd), mirroring the
+// sandboxing idd-config.test.mts's withSandboxCwd already uses.
+function withSandboxCwd<T>(run: (sandbox: string) => T): T {
+  const originalCwd = process.cwd();
+  const sandbox = mkdtempSync(join(tmpdir(), 'idd-onboard-confine-'));
+  process.chdir(sandbox);
+  try {
+    return run(sandbox);
+  } finally {
+    process.chdir(originalCwd);
+  }
+}
+
+test('resolveConfinedDirectory accepts a relative path that resolves inside the working directory', () => {
+  withSandboxCwd((sandbox) => {
+    mkdirSync(join(sandbox, 'nested'));
+    const resolved = resolveConfinedDirectory('nested', '--target', []);
+    assert.equal(resolved, join(sandbox, 'nested'));
+  });
+});
+
+test('resolveConfinedDirectory accepts the working directory itself', () => {
+  withSandboxCwd((sandbox) => {
+    assert.equal(resolveConfinedDirectory('.', '--target', []), sandbox);
+  });
+});
+
+test('resolveConfinedDirectory accepts a real child directory whose name happens to start with ".." (#2357 review: relative() false positive)', () => {
+  withSandboxCwd((sandbox) => {
+    mkdirSync(join(sandbox, '..foo'));
+    const resolved = resolveConfinedDirectory('..foo', '--target', []);
+    assert.equal(resolved, join(sandbox, '..foo'));
+  });
+});
+
+test('resolveConfinedDirectory rejects a --target using ../ traversal that escapes the working directory', () => {
+  withSandboxCwd((sandbox) => {
+    const outside = mkdtempSync(join(tmpdir(), 'idd-onboard-outside-'));
+    const traversal = relative(sandbox, outside);
+    assert.throws(
+      () => resolveConfinedDirectory(traversal, '--target', []),
+      /--target resolves outside the confined root/,
+    );
+  });
+});
+
+test('resolveConfinedDirectory rejects an absolute path outside the confined root', () => {
+  withSandboxCwd(() => {
+    const outside = mkdtempSync(join(tmpdir(), 'idd-onboard-outside-'));
+    assert.throws(
+      () => resolveConfinedDirectory(outside, '--source', []),
+      /--source resolves outside the confined root/,
+    );
+  });
+});
+
+test('resolveConfinedDirectory rejects a symlink that resolves outside the confined root', () => {
+  withSandboxCwd((sandbox) => {
+    const outside = mkdtempSync(join(tmpdir(), 'idd-onboard-outside-'));
+    const link = join(sandbox, 'link-out');
+    symlinkSync(outside, link, 'dir');
+    assert.throws(
+      () => resolveConfinedDirectory('link-out', '--target', []),
+      /--target resolves outside the confined root/,
+    );
+  });
+});
+
+test('resolveConfinedDirectory accepts a path outside the working directory when covered by --allow-root', () => {
+  withSandboxCwd(() => {
+    const outside = mkdtempSync(join(tmpdir(), 'idd-onboard-outside-'));
+    const resolved = resolveConfinedDirectory(outside, '--target', [outside]);
+    assert.equal(resolved, resolve(outside));
+  });
+});
+
+test('resolveConfinedDirectory accepts a nested path under an --allow-root root', () => {
+  withSandboxCwd(() => {
+    const outside = mkdtempSync(join(tmpdir(), 'idd-onboard-outside-'));
+    const nested = join(outside, 'nested');
+    mkdirSync(nested);
+    const resolved = resolveConfinedDirectory(nested, '--target', [outside]);
+    assert.equal(resolved, nested);
+  });
+});
+
+test('resolveConfinedDirectory rejects a nonexistent --allow-root with a clear error', () => {
+  withSandboxCwd((sandbox) => {
+    const missing = join(sandbox, 'does-not-exist');
+    assert.throws(
+      () => resolveConfinedDirectory('.', '--target', [missing]),
+      /--allow-root does not exist/,
+    );
+  });
+});
+
+test('resolveConfinedDirectory still rejects a --target that is not a directory at all', () => {
+  withSandboxCwd((sandbox) => {
+    const file = join(sandbox, 'not-a-dir');
+    writeFileSync(file, 'x');
+    assert.throws(
+      () => resolveConfinedDirectory(file, '--target', []),
+      /--target is not a directory/,
+    );
+  });
+});
+
+test('bin/idd-onboard.mjs --import rejects a --target outside the confined root, with a clear error and exit 2', () => {
+  const outside = makeFixtureDir();
+  try {
+    execFileSync(
+      process.execPath,
+      [BIN_PATH, '--import', '--source', REPO_ROOT, '--target', outside],
+      { encoding: 'utf8', cwd: REPO_ROOT, stdio: ['ignore', 'pipe', 'pipe'] },
+    );
+    assert.fail('expected a non-zero exit');
+  } catch (error) {
+    const failed = error as { status?: number; stderr?: string };
+    assert.equal(failed.status, 2);
+    assert.match(
+      String(failed.stderr),
+      /--target resolves outside the confined root/,
+    );
+  }
+});
+
+test('bin/idd-onboard.mjs --import accepts a --target outside cwd once covered by --allow-root', () => {
+  const { status, verdict } = runCliBin([
+    '--import',
+    '--source',
+    REPO_ROOT,
+    '--target',
+    makeFixtureDir(),
+  ]);
+  assert.equal(status, 0);
+  assert.equal(typeof verdict.target, 'string');
+});
+
+test('bin/idd-onboard.mjs --help documents --allow-root', () => {
+  const help = execFileSync(process.execPath, [BIN_PATH, '--help'], {
+    encoding: 'utf8',
+  });
+  assert.match(help, /--allow-root <dir>/);
 });

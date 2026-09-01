@@ -46,10 +46,11 @@ import {
   mkdirSync,
   readdirSync,
   readFileSync,
+  realpathSync,
   statSync,
   writeFileSync,
 } from 'node:fs';
-import { dirname, join, relative, resolve } from 'node:path';
+import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import {
   collectHelperRuntimeEvidence,
   collectVendoredFiles,
@@ -881,6 +882,58 @@ function isSafeRelativePath(relativePath) {
     .split('/')
     .every((segment) => segment !== '' && segment !== '.' && segment !== '..');
 }
+/** Whether `candidate` is `boundary` itself or nested under it. */
+function isWithinBoundary(candidate, boundary) {
+  const rel = relative(boundary, candidate);
+  // Only an exact ".." segment or a "../"-prefixed path climbs out of
+  // `boundary` -- `rel.startsWith('..')` alone is too broad: a real child
+  // directory literally named e.g. "..foo" also produces a relative()
+  // string starting with "..", which is not a traversal at all (#2357
+  // review).
+  return (
+    rel === '' ||
+    (rel !== '..' && !rel.startsWith(`..${sep}`) && !isAbsolute(rel))
+  );
+}
+/**
+ * Resolve `raw` (a `--source` / `--target` / `--allow-root` value) to an
+ * existing directory, confined to the current working directory or one of
+ * `allowedRoots` (#2216). `idd-onboard` is designed for unattended
+ * dispatch, not only an interactive human operator typing the value
+ * first -- an unconfined root lets the process read from or write to any
+ * path it can reach. Confinement is in addition to, not a replacement
+ * for, `isSafeRelativePath`'s existing per-manifest-entry traversal
+ * protection below the resolved root.
+ *
+ * Confinement compares REALPATHs (symlinks resolved), not the raw
+ * `resolve()`d path, so a symlink that points outside every boundary is
+ * caught even when the symlink's own location is nested inside one.
+ * The returned path is the plain `resolve()`d value (unchanged from
+ * pre-#2216 behavior) -- only the confinement check itself resolves
+ * symlinks.
+ */
+export function resolveConfinedDirectory(raw, flagName, allowedRoots) {
+  const resolved = resolve(raw);
+  if (!statSync(resolved).isDirectory()) {
+    throw new Error(`${flagName} is not a directory: ${raw}`);
+  }
+  const realResolved = realpathSync(resolved);
+  const boundaries = [process.cwd(), ...allowedRoots].map((root) => {
+    try {
+      return realpathSync(resolve(root));
+    } catch {
+      throw new Error(`--allow-root does not exist: ${root}`);
+    }
+  });
+  if (
+    !boundaries.some((boundary) => isWithinBoundary(realResolved, boundary))
+  ) {
+    throw new Error(
+      `${flagName} resolves outside the confined root(s) (${boundaries.join(', ')}): ${raw} -> ${realResolved}. Pass --allow-root <path> to widen the confined root.`,
+    );
+  }
+  return resolved;
+}
 /**
  * Validate both sides of a manifest file entry with `isSafeRelativePath`
  * and return it unchanged, or throw a hard, fail-closed error naming
@@ -1470,10 +1523,11 @@ function runHearApplyCli(catalog, answersPath) {
   process.exit(0);
 }
 async function runHearCli(args) {
-  const targetDir = resolve(args.target);
-  if (!statSync(targetDir).isDirectory()) {
-    throw new Error(`--target is not a directory: ${args.target}`);
-  }
+  const targetDir = resolveConfinedDirectory(
+    args.target,
+    '--target',
+    args.allowRoots,
+  );
   if (args.propose && args.apply) {
     throw new Error(
       '--hear --propose and --hear --apply are mutually exclusive',
@@ -1788,10 +1842,11 @@ function runRecordPolicyCli(args) {
   if (!args.transcript) {
     throw new Error('--record-policy requires --transcript <file>');
   }
-  const targetDir = resolve(args.target);
-  if (!statSync(targetDir).isDirectory()) {
-    throw new Error(`--target is not a directory: ${args.target}`);
-  }
+  const targetDir = resolveConfinedDirectory(
+    args.target,
+    '--target',
+    args.allowRoots,
+  );
   const configPath = join(targetDir, '.github', 'idd', 'config.json');
   if (!existsSync(configPath)) {
     throw new Error(
@@ -1922,6 +1977,7 @@ function parseArgs(argv) {
     profile: undefined,
     overrides: {},
     help: false,
+    allowRoots: [],
   };
   const flagToName = new Map(
     ONBOARDING_PLACEHOLDERS.map((entry) => [entry.flag, entry.name]),
@@ -2003,6 +2059,11 @@ function parseArgs(argv) {
     }
     if (token === '--profile') {
       parsed.profile = requireValue();
+      index += 1;
+      continue;
+    }
+    if (token === '--allow-root') {
+      parsed.allowRoots.push(requireValue());
       index += 1;
       continue;
     }
@@ -2200,10 +2261,11 @@ async function runCli() {
       `--substitute does not accept import-only flag(s), --hear-only flag(s), or --record-policy-only flag(s): ${foreign.join(', ')}`,
     );
   }
-  const targetDir = resolve(args.target);
-  if (!statSync(targetDir).isDirectory()) {
-    throw new Error(`--target is not a directory: ${args.target}`);
-  }
+  const targetDir = resolveConfinedDirectory(
+    args.target,
+    '--target',
+    args.allowRoots,
+  );
   let transcriptOverrides = {};
   if (args.fromTranscript !== undefined) {
     const result = readAndValidateTranscript(args.fromTranscript);
@@ -2266,14 +2328,16 @@ function runImportCli(args) {
   if (!args.source) {
     throw new Error('--import requires --source <idd-skill-tree>');
   }
-  const sourceDir = resolve(args.source);
-  if (!statSync(sourceDir).isDirectory()) {
-    throw new Error(`--source is not a directory: ${args.source}`);
-  }
-  const targetDir = resolve(args.target);
-  if (!statSync(targetDir).isDirectory()) {
-    throw new Error(`--target is not a directory: ${args.target}`);
-  }
+  const sourceDir = resolveConfinedDirectory(
+    args.source,
+    '--source',
+    args.allowRoots,
+  );
+  const targetDir = resolveConfinedDirectory(
+    args.target,
+    '--target',
+    args.allowRoots,
+  );
   // Snapshot before the copy: --import always overwrites
   // .github/idd/config.json byte-for-byte from source (#2222), so a
   // re-import's already-customized commands table must be captured now,
@@ -2320,14 +2384,16 @@ function runVerifyCli(args) {
   if (!args.source) {
     throw new Error('--verify requires --source <idd-skill-tree>');
   }
-  const sourceDir = resolve(args.source);
-  if (!statSync(sourceDir).isDirectory()) {
-    throw new Error(`--source is not a directory: ${args.source}`);
-  }
-  const targetDir = resolve(args.target);
-  if (!statSync(targetDir).isDirectory()) {
-    throw new Error(`--target is not a directory: ${args.target}`);
-  }
+  const sourceDir = resolveConfinedDirectory(
+    args.source,
+    '--source',
+    args.allowRoots,
+  );
+  const targetDir = resolveConfinedDirectory(
+    args.target,
+    '--target',
+    args.allowRoots,
+  );
   const result = runVerify(sourceDir, targetDir, args.profile);
   const verdict = {
     protocolVersion: '1',
@@ -2381,6 +2447,10 @@ in that case); 2 usage or configuration error.
 
   --substitute         run the substitution stage
   --target <dir>       target tree to rewrite (default: current directory)
+  --allow-root <dir>   additionally confine --target to this root, on top
+                       of the current working directory (#2216); repeat
+                       for more than one. Required only when --target
+                       resolves outside both
   --from-transcript <file>
                        read placeholder answers from a confirmed --hear
                        transcript (mapsToPlaceholder items); an explicit
@@ -2412,6 +2482,10 @@ nothing in that case); 2 usage or configuration error.
   --import                          run the import stage
   --source <dir>                    local idd-skill source tree to copy from
   --target <dir>                    target repository (default: current directory)
+  --allow-root <dir>                additionally confine --source / --target
+                                     to this root, on top of the current
+                                     working directory (#2216); repeat for
+                                     more than one
   --profile <name>                  ${PROFILE_NAMES.join(' | ')}
   --force                           allow overwriting a differing target file
   --dry-run                         print the plan without writing anything
@@ -2434,6 +2508,10 @@ or placeholder residue); 2 usage or configuration error.
   --verify                           run the verify stage
   --source <dir>                     local idd-skill source tree the target was imported from
   --target <dir>                     target repository to verify (default: current directory)
+  --allow-root <dir>                 additionally confine --source / --target
+                                      to this root, on top of the current
+                                      working directory (#2216); repeat for
+                                      more than one
   --profile <name>                   ${PROFILE_NAMES.join(' | ')}
   --help, -h                         show this help
 
@@ -2468,6 +2546,9 @@ never writes .github/idd/config.json, never requires --source.
                                shape as --apply. Exit 2 when stdin/stdout
                                is not a TTY.
   --target <dir>               target repository (default: current directory)
+  --allow-root <dir>           additionally confine --target to this root,
+                               on top of the current working directory
+                               (#2216); repeat for more than one
   --answers <file>              path to the --apply answers JSON file
   --help, -h                    show this help
 
@@ -2497,6 +2578,9 @@ AGENTS.md, or GEMINI.md.
                                <path> (--apply only); without this flag the
                                template is stdout-only.
   --target <dir>               target repository (default: current directory)
+  --allow-root <dir>           additionally confine --target to this root,
+                               on top of the current working directory
+                               (#2216); repeat for more than one
   --transcript <file>          path to the confirmed --hear transcript
   --help, -h                    show this help
 `);
