@@ -454,7 +454,9 @@ Before any mutating action in F3, apply the
      rather than assuming a stale local `main` is the cause.
 
 5. If GitHub auto-delete is disabled: delete the remote branch too.
-   (WorkTrunk may be used for steps 3–5.)
+   (WorkTrunk may be used for steps 4–5, the deletion steps —
+   step 3's local `main` update is a plain git operation, not a
+   WorkTrunk one.)
 
 ## F5 — Loop
 
