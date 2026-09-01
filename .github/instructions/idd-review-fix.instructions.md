@@ -152,6 +152,19 @@ stays individual, and the
 [claim revalidation gate](idd-overview-core.instructions.md#claim-revalidation-gate)
 still runs immediately before push.
 
+**PR body sync.** If this round's fix changes a claim the PR body
+makes (round count, a documented residual limitation, a scope
+statement — wherever in the body it appears), re-run the claim
+revalidation gate immediately before this edit — it is a separate
+mutation after the already-gated push — then fetch the current full
+body, edit only that claim in the fetched copy, and post the full
+result back (`gh pr edit {pr-number} --body-file <path>` replaces the
+whole body, so never pass a partial file, which would drop the
+closing-keyword line and other sections). After posting, repeat
+D3.5's closing-set check (step 6) to confirm `closingIssuesReferences`
+still matches the deliberate set exactly — edited prose can introduce
+a stray keyword-adjacent reference.
+
 ## E13 — Reply to feedback
 
 For each Accepted PATH A item whose source is reviewer feedback (review
