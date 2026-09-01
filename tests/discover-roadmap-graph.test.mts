@@ -776,12 +776,19 @@ test('graph traversal excludes a negated closing-keyword mention as a phantom ne
   assert.deepEqual(graph.roadmapNodes, []);
 });
 
-test('graph traversal never enters or blocks on a non-blocking Refs target (#2236)', async () => {
+test('graph traversal never enters, fetches, or blocks on a non-blocking Refs target (#2236)', async () => {
   // #2236: a roadmap can name a related, currently-blocked follow-up issue
   // as purely informational without A1.5's closure audit treating it as a
   // real child. #703 stays OPEN and unreachable via any other path -- if the
   // fix regressed, it would appear in graph.nodes and
   // graph.executionCandidates and the roadmap would never be closeable.
+  //
+  // #703's own loader throws instead of resolving (CodeRabbit, PR #2381):
+  // `expandForPrefetch`'s bounded-concurrency prefetch crawl expands every
+  // extracted reference target independently of `visitIssue`'s own skip
+  // logic, so a target reachable only via a non-blocking-reference edge must
+  // never be fetched by EITHER pass, not merely excluded from the DFS's own
+  // node bookkeeping.
   const issues = new Map([
     [
       700,
@@ -792,11 +799,17 @@ test('graph traversal never enters or blocks on a non-blocking Refs target (#223
       ),
     ],
     [701, executionIssue(701, 'the real child work')],
-    [703, executionIssue(703, 'unrelated, still open, not a real child')],
   ]);
 
   const graph = await enumerateRoadmapGraph(700, {
-    loadIssue: async (issueNumber) => issues.get(issueNumber) ?? null,
+    loadIssue: async (issueNumber) => {
+      if (issueNumber === 703) {
+        throw new Error(
+          'issue #703 must never be fetched: it is reachable only via a non-blocking-reference edge',
+        );
+      }
+      return issues.get(issueNumber) ?? null;
+    },
   });
 
   assert.deepEqual(graph.edges, [

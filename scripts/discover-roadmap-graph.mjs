@@ -658,13 +658,23 @@ export async function enumerateRoadmapGraph(rootIssueNumber, options = {}) {
   // Fetch one node and return its reference targets for the next BFS frontier.
   // Mirrors the DFS expansion guard: only accessible, non-PR issues are
   // expanded (PRs / inaccessible / not-found contribute no children), so the
-  // crawl's reachable set equals the DFS's.
+  // crawl's reachable set equals the DFS's. #2236: a `non-blocking-reference`
+  // target is also excluded here, mirroring `visitIssue`'s own early
+  // `continue` for that relationship -- without this, the prefetch crawl
+  // would still fetch (and transitively expand) a target `visitIssue` itself
+  // never visits, needlessly spending GitHub requests and rate-limit budget
+  // on a subgraph the real traversal was designed to skip entirely
+  // (CodeRabbit, PR #2381).
   async function expandForPrefetch(issueNumber) {
     const issue = await getIssue(issueNumber, issueCache, loadIssue);
     if (!issue || isInaccessibleIssue(issue) || issue.isPullRequest) {
       return [];
     }
-    return (await getReferences(issue)).map((reference) => reference.target);
+    return (await getReferences(issue))
+      .filter(
+        (reference) => reference.relationship !== 'non-blocking-reference',
+      )
+      .map((reference) => reference.target);
   }
   function recordNode(issue, path) {
     const existing = nodeRecords.get(issue.number);
