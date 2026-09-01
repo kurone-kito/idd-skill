@@ -136,5 +136,8 @@ export function createFakeProviderAdapter(fixture) {
     listOpenChangeRequests() {
       return fixture.openChangeRequests ?? [];
     },
+    listChangeRequestReviewThreads(number) {
+      return fixture.reviewThreads?.[number] ?? [];
+    },
   };
 }

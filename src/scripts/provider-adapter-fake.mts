@@ -56,6 +56,8 @@ export interface FakeProviderFixture {
   requiredChecks?: Record<number, ProviderRequiredCheck[]>;
   reviews?: Record<number, unknown[]>;
   openChangeRequests?: ProviderChangeRequestSummary[];
+  /** Backs {@link ProviderPort.listChangeRequestReviewThreads}. */
+  reviewThreads?: Record<number, { isResolved: boolean | null }[]>;
   /** Backs {@link ProviderPort.getWorkItemState}; absent key or an
    * explicit `null` value both mean "not found". */
   issueStates?: Record<number, string | null>;
@@ -229,6 +231,12 @@ export function createFakeProviderAdapter(
 
     listOpenChangeRequests(): ProviderChangeRequestSummary[] {
       return fixture.openChangeRequests ?? [];
+    },
+
+    listChangeRequestReviewThreads(
+      number: number,
+    ): { isResolved: boolean | null }[] {
+      return fixture.reviewThreads?.[number] ?? [];
     },
   };
 }

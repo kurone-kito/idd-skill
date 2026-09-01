@@ -316,7 +316,20 @@ export interface ProviderPort {
    */
   getChangeRequestHeadSha(number: number): string;
 
-  /** change-requests (minimal surface for resume-route-selection.mts). */
+  /**
+   * change-requests (minimal surface for resume-route-selection.mts). Two
+   * failure recoveries preserved from the pre-migration `ghJson`/
+   * `recoverJsonFromGhFailure` wrapper this replaces, both load-bearing, not
+   * generic hygiene: `gh pr checks --required` exits non-zero on a repo/PR
+   * with no required checks configured -- a routine state this method must
+   * report as `[]` (letting the caller derive `requiredChecksGenerated:
+   * false`), not throw on -- and `gh pr checks` is documented to exit
+   * non-zero while checks are still failing/pending even with `--json`,
+   * the very state this method exists to classify, so the
+   * stdout-on-failure fallback is not speculative hardening. An earlier
+   * draft of this method (corrected here before any consumer existed) had
+   * neither recovery and would have thrown on both of those routine cases.
+   */
   listRequiredChecks(number: number): ProviderRequiredCheck[];
 
   /** change-requests (minimal surface for resume-route-selection.mts). */
@@ -324,4 +337,19 @@ export interface ProviderPort {
 
   /** change-requests (minimal surface for resume-route-selection.mts). */
   listOpenChangeRequests(): ProviderChangeRequestSummary[];
+
+  /**
+   * change-requests. Full-walk pagination of PR review-thread resolution
+   * status -- `resume-route-selection.mts`'s own `fetchReviewThreads`
+   * GraphQL loop, matched exactly. The adapter drives every page
+   * internally, unlike {@link getWorkItemClosingPullRequestsPage}'s
+   * caller-driven one-page-per-call shape: this file's only caller walks to
+   * completion in one call, never inspects a cursor itself. A page with
+   * `hasNextPage: true` but a missing `endCursor` throws -- preserved from
+   * the pre-migration loop (a malformed payload would otherwise silently
+   * undercount unresolved threads), not an artifact of migration.
+   */
+  listChangeRequestReviewThreads(
+    number: number,
+  ): { isResolved: boolean | null }[];
 }

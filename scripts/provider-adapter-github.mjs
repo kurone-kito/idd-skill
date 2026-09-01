@@ -428,19 +428,30 @@ export function createGithubProviderAdapter(owner, repo, deps = DEFAULT_DEPS) {
       ]);
     },
     listRequiredChecks(number) {
-      const raw = deps.ghText(
-        [
-          'pr',
-          'checks',
-          String(number),
-          '--repo',
-          `${owner}/${repo}`,
-          '--required',
-          '--json',
-          'name,state,completedAt',
-        ],
-        GH_TEXT_LOOP_OPTIONS,
-      );
+      const args = [
+        'pr',
+        'checks',
+        String(number),
+        '--repo',
+        `${owner}/${repo}`,
+        '--required',
+        '--json',
+        'name,state,completedAt',
+      ];
+      let raw;
+      try {
+        raw = deps.ghText(args, GH_TEXT_LOOP_OPTIONS);
+      } catch (error) {
+        const stderr = String(error?.stderr ?? '');
+        if (/no required checks reported/i.test(stderr)) {
+          return [];
+        }
+        const stdout = String(error?.stdout ?? '').trim();
+        if (!stdout) {
+          throw error;
+        }
+        raw = stdout;
+      }
       const rows = JSON.parse(raw || '[]');
       return rows.map((row) => ({
         name: String(row.name ?? ''),
@@ -476,6 +487,55 @@ export function createGithubProviderAdapter(owner, repo, deps = DEFAULT_DEPS) {
         body: String(row.body ?? ''),
         url: String(row.url ?? ''),
       }));
+    },
+    listChangeRequestReviewThreads(number) {
+      const query = `query($owner:String!,$repo:String!,$number:Int!,$cursor:String){
+  repository(owner:$owner,name:$repo){
+    pullRequest(number:$number){
+      reviewThreads(first:100,after:$cursor){
+        nodes { isResolved }
+        pageInfo { hasNextPage endCursor }
+      }
+    }
+  }
+}`;
+      const threads = [];
+      let cursor = null;
+      while (true) {
+        const apiArgs = [
+          'api',
+          'graphql',
+          '-f',
+          `query=${query}`,
+          '-f',
+          `owner=${owner}`,
+          '-f',
+          `repo=${repo}`,
+          '-F',
+          `number=${number}`,
+        ];
+        if (cursor) {
+          apiArgs.push('-f', `cursor=${cursor}`);
+        }
+        const parsed = JSON.parse(deps.ghText(apiArgs, GH_TEXT_LOOP_OPTIONS));
+        const connection = parsed.data?.repository?.pullRequest?.reviewThreads;
+        for (const node of connection?.nodes ?? []) {
+          threads.push({
+            isResolved: node.isResolved ?? null,
+          });
+        }
+        const pageInfo = connection?.pageInfo;
+        if (!pageInfo?.hasNextPage) {
+          break;
+        }
+        if (!pageInfo.endCursor) {
+          throw new Error(
+            'review thread pagination payload is missing endCursor',
+          );
+        }
+        cursor = pageInfo.endCursor;
+      }
+      return threads;
     },
   };
 }
