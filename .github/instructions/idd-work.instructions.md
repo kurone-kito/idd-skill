@@ -12,7 +12,13 @@ planning (B2), implementation (B3), and the self-review loop (C).
 
 ## B1 — Create worktree (with branch)
 
-Before creating, check for local conflicts in this order:
+Before creating, check for local conflicts in this order. Concurrent
+workers sharing one clone: serialize every `git fetch`/`merge --ff-only`/
+worktree add/remove call against the shared clone -- here, and at F4
+cleanup's own worktree removal -- behind the
+[clone-scoped lock](../../docs/idd-helper-scripts.md#clone-scoped-lock)
+(see the [fan-out variant](../../docs/idd-workflow.md#orchestrator-fan-out-variant)
+for when this applies).
 
 1. Ensure the local `main` branch is up to date and has no local
    commits. Run this from the primary worktree while on `main`:
@@ -211,7 +217,10 @@ mechanical file/close-based signal stronger than A4.5's title/
 declaration heuristic (a weak **title-only** match is **not** a hit
 here). Keep it cheap: one fetch plus a bounded merged-PR scan.
 
-1. `git fetch origin {development-branch}`.
+1. `git fetch origin {development-branch}` (concurrent workers sharing
+   one clone: behind the
+   [clone-scoped lock](../../docs/idd-helper-scripts.md#clone-scoped-lock),
+   same as B1).
 2. **Closed-by-a-merged-PR signal**: re-fetch the issue; if it is now closed
    with a linked closing PR, the deliverable already shipped:
 
@@ -276,15 +285,22 @@ plan comment and verified claim.
 
 ## B3 — Implement
 
-**Plan-comment checkpoint**: before implementation begins, the B2 plan
-comment must already exist on the issue; posting it before implementation
-is the only normal path. If it does not, stop and return to B2. The
-following is a repair path only for an ordering violation that has
+### B3 self-check
+
+Before implementing, verify B2 actually finished, not merely started:
+the B2 plan comment reflects the refined, post-critique plan (draft →
+critique pass → refined final plan posted as a follow-up or update to
+the same comment) -- a draft posted before its critique pass does not
+satisfy this. Claim ownership revalidation needs no separate check
+here: it already applies to every B3 mutation via the
+[claim revalidation gate](idd-overview-core.instructions.md#claim-revalidation-gate).
+If the plan is not actually finalized, stop and return to B2.
+
+The following is a repair path only for an ordering violation that has
 already occurred, not an alternative route: disclose the deviation on
-the issue, name the skipped checkpoint step (for example, the B3
-plan-comment checkpoint), post the plan retroactively with an explicit
-note about the reordering, and run the C1 critique pass against the
-completed diff.
+the issue, name the skipped checkpoint step (the B3 self-check above),
+post the plan retroactively with an explicit note about the
+reordering, and run the C1 critique pass against the completed diff.
 
 Implement the plan, running **fix-validate** before each atomic commit
 (one logical change per commit).

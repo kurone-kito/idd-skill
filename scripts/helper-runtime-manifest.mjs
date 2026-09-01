@@ -210,6 +210,15 @@ const HELPER_COMMANDS = [
       'Acquire, reacquire, or inspect a worktree-local same-machine claim lock.',
   },
   {
+    id: 'clone-lock',
+    scriptName: 'idd:clone-lock',
+    binName: 'idd-clone-lock',
+    entryPath: 'scripts/clone-lock.mjs',
+    vendoredCommand: 'node scripts/clone-lock.mjs',
+    description:
+      'Serialize a git worktree add/remove or fetch against the shared primary clone across concurrent sessions.',
+  },
+  {
     id: 'critique-delegate',
     scriptName: 'idd:critique-delegate',
     binName: 'idd-critique-delegate',

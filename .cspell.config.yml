@@ -36,6 +36,7 @@ words:
   - rollup
   - GHEC
   - GHES
+  - ghinstance
   - WHATWG
   - dedup
   - deprioritize

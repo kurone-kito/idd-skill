@@ -3,6 +3,7 @@ import {
   chmodSync,
   mkdirSync,
   mkdtempSync,
+  readFileSync,
   rmSync,
   writeFileSync,
 } from 'node:fs';
@@ -4254,15 +4255,95 @@ test('resolveTargetGhHostname resolves a GHES hostname, lowercased', () => {
   );
 });
 
-// idd-skill#2030 (PR #2051 review, Copilot): `gh api --hostname` rejects
-// any value containing a colon outright (confirmed against a real `gh`
-// binary), so this resolver must never emit a ported hostname -- keeping
-// the bare host, same as `gh-exec.mts`'s `resolveGhApiHostname()` sibling,
-// is deliberate here, not an oversight. Genuine port support needs an
-// absolute-URL request path instead of `--hostname`; deferred to #2052.
-test('resolveTargetGhHostname drops an explicit non-default port for a GHES hostname (gh api --hostname cannot carry one)', () => {
+// idd-skill#2052: the resolver now preserves an explicit non-default
+// port (`URL.host`, not `URL.hostname`) -- `gh api --hostname` still
+// rejects any value containing a colon (confirmed against a real `gh`
+// binary), but that constraint is `fetchGhApiJsonAt`'s to handle (it
+// routes a ported host through an absolute API URL instead), not the
+// resolver's. See that function's own test below.
+test('resolveTargetGhHostname preserves an explicit non-default port for a GHES hostname', () => {
   assert.equal(
     resolveTargetGhHostname('https://ghe.example.com:8443/owner/repo'),
+    'ghe.example.com:8443',
+  );
+});
+
+test('resolveTargetGhHostname drops an explicit but default port (Node URL.host elision)', () => {
+  assert.equal(
+    resolveTargetGhHostname('https://ghe.example.com:443/owner/repo'),
     'ghe.example.com',
   );
+});
+
+// idd-skill#2052 (issue AC): the #2030 review finding was specifically
+// that resolver-only coverage missed the failure mode where a ported
+// hostname reached `gh api --hostname` and hard-failed argv validation --
+// so this asserts the actual argv `fetchGhApiJsonAt` builds, not just
+// `resolveTargetGhHostname`'s return value.
+test('fetchGhApiJsonAt routes a ported hostname through an absolute API URL and omits --hostname', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'idd-doctor-fetch-gh-api-ported-'));
+  const binDir = join(dir, 'bin');
+  const argvLog = join(dir, 'argv.log');
+  const originalPath = process.env.PATH;
+  try {
+    mkdirSync(binDir, { recursive: true });
+    // Fake `gh` that records its own argv (one arg per line) instead of
+    // making a real request, then returns an empty successful response.
+    writeFileSync(
+      join(binDir, 'gh'),
+      `#!/bin/sh\nprintf '%s\\n' "$@" > ${JSON.stringify(argvLog)}\necho '{}'\n`,
+    );
+    chmodSync(join(binDir, 'gh'), 0o755);
+    process.env.PATH = `${binDir}:${originalPath ?? ''}`;
+
+    fetchGhApiJsonAt(
+      dir,
+      'ghe.example.com:8443',
+      'repos/owner/repo/branches/main/protection',
+      false,
+    );
+
+    const argv = readFileSync(argvLog, 'utf8').trim().split('\n');
+    assert.deepEqual(argv, [
+      'api',
+      'https://ghe.example.com:8443/api/v3/repos/owner/repo/branches/main/protection',
+    ]);
+  } finally {
+    process.env.PATH = originalPath;
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('fetchGhApiJsonAt keeps the prior --hostname argv shape for a non-ported hostname', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'idd-doctor-fetch-gh-api-unported-'));
+  const binDir = join(dir, 'bin');
+  const argvLog = join(dir, 'argv.log');
+  const originalPath = process.env.PATH;
+  try {
+    mkdirSync(binDir, { recursive: true });
+    writeFileSync(
+      join(binDir, 'gh'),
+      `#!/bin/sh\nprintf '%s\\n' "$@" > ${JSON.stringify(argvLog)}\necho '{}'\n`,
+    );
+    chmodSync(join(binDir, 'gh'), 0o755);
+    process.env.PATH = `${binDir}:${originalPath ?? ''}`;
+
+    fetchGhApiJsonAt(
+      dir,
+      'ghe.example.com',
+      'repos/owner/repo/branches/main/protection',
+      false,
+    );
+
+    const argv = readFileSync(argvLog, 'utf8').trim().split('\n');
+    assert.deepEqual(argv, [
+      'api',
+      'repos/owner/repo/branches/main/protection',
+      '--hostname',
+      'ghe.example.com',
+    ]);
+  } finally {
+    process.env.PATH = originalPath;
+    rmSync(dir, { recursive: true, force: true });
+  }
 });

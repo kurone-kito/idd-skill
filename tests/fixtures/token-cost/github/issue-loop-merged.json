@@ -1,0 +1,38 @@
+{
+  "data": {
+    "repository": {
+      "issue": {
+        "comments": {
+          "nodes": [
+            {
+              "body": "<!-- claimed-by: claude-test cid-merged supersedes: none 2026-01-01T00:00:00Z branch: issue/9001-test -->\n\n_claude-test: issue claim — IDD automation marker. Do not edit._",
+              "createdAt": "2026-01-01T00:00:00Z",
+              "author": { "login": "claude-test" }
+            },
+            {
+              "body": "<!-- review-watermark: claude-test cid-merged 0123456789abcdef0123456789abcdef01234567 none 3 none -->\n\n_claude-test: review snapshot watermark — IDD automation marker. Do not edit._",
+              "createdAt": "2026-01-01T00:20:00Z",
+              "author": { "login": "claude-test" }
+            }
+          ]
+        },
+        "timelineItems": {
+          "nodes": [
+            {
+              "__typename": "ConnectedEvent",
+              "subject": {
+                "__typename": "PullRequest",
+                "number": 9101,
+                "state": "MERGED",
+                "headRefName": "issue/9001-test",
+                "createdAt": "2026-01-01T00:10:00Z",
+                "mergedAt": "2026-01-01T00:30:00Z",
+                "reviews": { "nodes": [{ "submittedAt": "2026-01-01T00:22:00Z" }] }
+              }
+            }
+          ]
+        }
+      }
+    }
+  }
+}

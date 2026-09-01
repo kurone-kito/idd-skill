@@ -3844,44 +3844,56 @@ export function readTrustEmptyProtectionReads(root: string): boolean {
 }
 
 /**
- * Derive the `--hostname` value {@link fetchGhApiJsonAt} should pass to
- * `gh api` from the target repository's own `gh repo view --json url`
- * result (already fetched once by `checkGithubReadiness`, so this adds
- * no extra `gh` call). `gh api` resolves its target host from `GH_HOST`
- * / `--hostname` / the CLI's single authenticated host, defaulting to
- * `github.com` -- unlike a higher-level subcommand such as `gh repo
- * view`, it does **not** infer the host from the checked-out
- * repository's Git remote at all, so routing the request through `cwd:
- * root` (as every other `gh` call in this function already does) has no
- * effect on which host `gh api` targets (`gh-exec.mts`'s
- * `resolveGhApiHostname()` documents the identical `gh api` contract for
- * its own GHES fix, `#1962`; idd-skill#2010 review, Codex round 2).
- * `resolveGhApiHostname()` itself is env-based (`GH_HOST`/
- * `GITHUB_SERVER_URL`) and deliberately does not derive a host from a
- * git remote, by its own design -- the wrong signal here, since
- * `idd-doctor --repo-root <path>` may target a repository on a
- * different host than the calling environment's own default. Deriving
- * from the target repository's own resolved `url` instead is the
- * correct, `--repo-root`-specific signal. Returns the literal
- * `'github.com'` for the common `github.com` case, as an explicit
- * `--hostname` override -- unlike `resolveGhApiHostname()`'s own "no
- * override on github.com" convention, an explicit override is required
- * here: an explicit `--hostname` flag wins over `gh api`'s own
- * environment-based `GH_HOST` fallback, but `undefined` (no
- * `--hostname` at all) leaves `GH_HOST` in force, so a GHES-configured
- * `GH_HOST` in the calling environment would otherwise leak into a
- * governance read for a genuinely `github.com`-hosted target
- * repository (idd-skill#2030). Deliberately keeps the bare hostname
- * (`URL.hostname`, dropping any explicit port) for a GHES target, like
- * `resolveGhApiHostname()` (`gh-exec.mts`) already does: `gh api
- * --hostname` rejects any value containing a colon outright (confirmed
- * against a real `gh` binary: `--hostname host:port` fails argv
- * validation before a request is even attempted), so a ported GHES
- * host cannot be routed through `--hostname` at all -- correctly
- * routing one requires constructing an absolute API URL instead, which
- * neither this resolver nor its `gh-exec.mts` sibling do yet (deferred
- * to idd-skill#2052, PR #2051 review). Returns `undefined` only for an
- * unparseable or host-less `url`.
+ * Derive the host {@link fetchGhApiJsonAt} should target from the target
+ * repository's own `gh repo view --json url` result (already fetched once
+ * by `checkGithubReadiness`, so this adds no extra `gh` call). `gh api`
+ * resolves its target host from `GH_HOST` / `--hostname` / the CLI's
+ * single authenticated host, defaulting to `github.com` -- unlike a
+ * higher-level subcommand such as `gh repo view`, it does **not** infer
+ * the host from the checked-out repository's Git remote at all, so
+ * routing the request through `cwd: root` (as every other `gh` call in
+ * this function already does) has no effect on which host `gh api`
+ * targets (`gh-exec.mts`'s `resolveGhApiHostname()` documents the
+ * identical `gh api` contract for its own GHES fix, `#1962`; idd-skill#2010
+ * review, Codex round 2). `resolveGhApiHostname()` itself is env-based
+ * (`GH_HOST`/`GITHUB_SERVER_URL`) and deliberately does not derive a host
+ * from a git remote, by its own design -- the wrong signal here, since
+ * `idd-doctor --repo-root <path>` may target a repository on a different
+ * host than the calling environment's own default. Deriving from the
+ * target repository's own resolved `url` instead is the correct,
+ * `--repo-root`-specific signal. Returns the literal `'github.com'` for
+ * the common `github.com` case as an explicit override: an explicit
+ * `--hostname` flag wins over `gh api`'s own environment-based `GH_HOST`
+ * fallback, but `undefined` (no `--hostname` at all) leaves `GH_HOST` in
+ * force, so a GHES-configured `GH_HOST` in the calling environment would
+ * otherwise leak into a governance read for a genuinely
+ * `github.com`-hosted target repository (idd-skill#2030).
+ *
+ * Returns `URL.host` (hostname plus an explicit non-default port, when
+ * present -- Node's `URL` already elides an explicit-but-default `:443`
+ * on an `https:` URL, so no separate default-port branch is needed here),
+ * not `URL.hostname` -- unlike `resolveGhApiHostname()` (`gh-exec.mts`),
+ * which deliberately keeps the bare hostname for its own env-derived
+ * inputs. The distinction matters only to {@link fetchGhApiJsonAt}: `gh
+ * api --hostname` rejects any value containing a colon outright
+ * (confirmed against a real `gh` binary), so a ported value can never
+ * reach `--hostname`; {@link fetchGhApiJsonAt} instead detects the colon
+ * and routes a ported host through an absolute API URL, omitting
+ * `--hostname` entirely for that request (idd-skill#2052). Omitting it is
+ * not a regression: `gh` v2.98.0 / `cli/go-gh` v2.13.0 source
+ * (`pkg/cmd/api/http.go::httpRequest`, `api/http_client.go::
+ * AddAuthTokenHeader`, `pkg/auth/auth.go::NormalizeHostname`) confirms an
+ * absolute-URL request never consults the `--hostname`/`GH_HOST`-derived
+ * host at all -- routing and the per-request credential lookup both key
+ * off the request URL's own host (port included, `NormalizeHostname`
+ * never strips one), so a `--hostname` alongside an absolute URL would be
+ * inert, not protective. One residual, real gh limitation this fix does
+ * not and cannot change: `gh auth login --hostname` is gated by the same
+ * colon-rejecting validator, so a ported host can never have a
+ * keyring/config-stored credential either -- only `GH_ENTERPRISE_TOKEN`/
+ * `GITHUB_ENTERPRISE_TOKEN` (checked independently of the exact host
+ * string) authenticate a ported GHES host reliably today. Returns
+ * `undefined` only for an unparseable or host-less `url`.
  */
 export function resolveTargetGhHostname(
   url: string | undefined,
@@ -3889,13 +3901,13 @@ export function resolveTargetGhHostname(
   if (!url) {
     return undefined;
   }
-  let hostname: string;
+  let host: string;
   try {
-    hostname = new URL(url).hostname.toLowerCase();
+    host = new URL(url).host.toLowerCase();
   } catch {
     return undefined;
   }
-  return hostname ? hostname : undefined;
+  return host ? host : undefined;
 }
 
 /**
@@ -3920,6 +3932,21 @@ export function resolveTargetGhHostname(
  * `stdout`), so `fetchGovernanceJson()`'s `deriveGhHttpStatus()`-based
  * 404 detection still works, including its stdout-carried JSON-body
  * fallback. Exported for direct test coverage of that failure shape.
+ *
+ * A `hostname` carrying an explicit port (from {@link
+ * resolveTargetGhHostname}'s `URL.host`) can never be routed through
+ * `--hostname` -- `gh` rejects any value containing a colon outright --
+ * so this builds an absolute API URL instead
+ * (`https://{host}/api/v3/{path}`, mirroring `gh`'s own
+ * `ghinstance.RESTPrefix` enterprise-host convention: no `api.`
+ * subdomain, that trick is `github.com`-only) and omits `--hostname`
+ * from argv entirely for that request. This is not a functional
+ * regression: `gh`'s own request/auth pipeline never consults
+ * `--hostname` once the endpoint argument is already an absolute URL --
+ * both routing and per-request credential lookup key off the request
+ * URL's own host (idd-skill#2052; see {@link resolveTargetGhHostname}'s
+ * JSDoc for the source citations). Every non-ported `hostname` (including
+ * `undefined`) keeps the exact prior argv shape.
  */
 export function fetchGhApiJsonAt(
   root: string,
@@ -3927,10 +3954,14 @@ export function fetchGhApiJsonAt(
   path: string,
   paginate: boolean,
 ): unknown {
+  const isPorted = hostname?.includes(':') ?? false;
+  const endpoint = isPorted
+    ? `https://${hostname}/api/v3/${path.replace(/^\//, '')}`
+    : path;
   const argv = [
     'api',
-    path,
-    ...(hostname ? ['--hostname', hostname] : []),
+    endpoint,
+    ...(!isPorted && hostname ? ['--hostname', hostname] : []),
     ...(paginate ? ['--paginate', '--jq', '.[]'] : []),
   ];
   const result = runCommand('gh', argv, root);

@@ -103,6 +103,10 @@
       "type": "boolean",
       "enum": [true],
       "description": "Present (and true) only when the production viewer-login lookup (gh api user) failed for this run; absent when it succeeded."
+    },
+    "localCoordinationNote": {
+      "type": "string",
+      "description": "Present only when the local worktree/branch state check (#2225) found something worth a human's attention: a positively broken matched worktree (which also blocks the apply), or a non-blocking informational signal (a present-but-clean matched worktree, an unreadable local git state, or a repo-wide detached worktree). Absent when no local worktree exists for the branch at all."
     }
   },
   "additionalProperties": false

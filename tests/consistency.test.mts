@@ -753,6 +753,46 @@ test('helper runtime inspection rejects a shell-metacharacter packageSpec and ac
   }
 });
 
+test('the "Detect package manager" workflow step body is byte-identical across the three files that share it (idd-skill#2392)', () => {
+  const WORKFLOW_FILES = [
+    'idd-template/.github/workflows/post-merge-cleanup.yml',
+    'idd-template/.github/workflows/idd-advisory-convergence.yml',
+    'idd-template/.github/workflows/idd-advisory-convergence-comment.yml',
+  ];
+  const STEP_START = '      - name: Detect package manager\n';
+  const STEP_END_RE = /\n {6}- name: /;
+
+  function extractDetectPackageManagerStep(relativePath: string): string {
+    const content = readText(relativePath);
+    const startIndex = content.indexOf(STEP_START);
+    assert.notEqual(
+      startIndex,
+      -1,
+      `expected to find a "Detect package manager" step in ${relativePath}`,
+    );
+    const afterStart = content.slice(startIndex + STEP_START.length);
+    const endIndex = afterStart.search(STEP_END_RE);
+    assert.notEqual(
+      endIndex,
+      -1,
+      `expected a step boundary after "Detect package manager" in ${relativePath}`,
+    );
+    return afterStart.slice(0, endIndex);
+  }
+
+  const [reference, ...rest] = WORKFLOW_FILES.map((path) => ({
+    path,
+    body: extractDetectPackageManagerStep(path),
+  }));
+  for (const other of rest) {
+    assert.equal(
+      other.body,
+      reference.body,
+      `"Detect package manager" step body in ${other.path} drifted from ${reference.path}`,
+    );
+  }
+});
+
 test('policy normalization provides default-safe values and supports aliases', () => {
   assert.deepEqual(normalizePolicyConfig(null), {
     issueScope: 'roadmap-first',
