@@ -36,22 +36,37 @@
 // every other session; `withCloneLock`'s `--exec` path refreshes its own
 // lease (rewrites the file, which bumps its mtime) at roughly half that
 // interval while the wrapped command runs, so a legitimately
-// long-running operation is never mistaken for a dead holder. Recovering
-// a stale (or malformed-and-stale) lock is two exclusive races, not one:
-// first for the right to remove the abandoned entry (`renameSync` on a
-// specific source path -- POSIX serializes concurrent renames of the
-// same directory entry, so exactly one racer's removal ever succeeds,
-// see `tryClaimStaleLockForRemoval`'s own doc comment for why a plain
-// check-then-`unlinkSync` pair cannot make this same guarantee), then
-// for the right to recreate it (the same `{ flag: 'wx' }` primitive a
-// fresh acquire uses). Every loser at either step falls back to the
-// normal wait/retry loop rather than assuming it acquired. This is a
-// purely local liveness heuristic scoped to operations that normally
-// complete in seconds -- it carries none of
-// `claim-lock.mts`'s GitHub-reverification requirement, because this lock
-// has no cross-machine claim-ownership meaning to protect.
+// long-running operation is never mistaken for a dead holder.
+//
+// Recovering a stale lock is NOT simply "remove it, then race the usual
+// exclusive-create": two contenders can independently observe the same
+// stale mtime, and neither a plain `unlinkSync` nor a plain `renameSync`
+// on its own verifies the file it removes is still the exact entry that
+// was checked -- both happily remove whatever a faster contender already
+// replaced it with (including that contender's brand-new, non-stale
+// lock), letting more than one contender believe it took over (this
+// repository's own review history on #2223 caught and reproduced exactly
+// that double-winner failure from an earlier `renameSync`-only attempt at
+// this fix, roughly one run in ten under concurrent load). The real fix
+// is a second, PID-tagged arbiter lock (`tryAcquireArbiter`): removing
+// and recreating the main lock only ever happens while holding it, so at
+// most one contender is ever doing that at a time, regardless of how many
+// independently observed the same stale mtime. The arbiter's own
+// staleness is judged by process liveness (`isPidAlive`), not a time
+// threshold, because its critical section is always a handful of
+// synchronous, no-I/O-wait statements -- "the recorded PID no longer
+// exists" is both necessary and sufficient to know its holder crashed and
+// can never finish or release it, with none of a time threshold's
+// inherent "probably dead by now" ambiguity. This is a purely local
+// liveness heuristic scoped to operations that normally complete in
+// seconds -- it carries none of `claim-lock.mts`'s GitHub-reverification
+// requirement, because this lock has no cross-machine claim-ownership
+// meaning to protect.
 import { execFileSync, spawn } from 'node:child_process';
 import {
+  closeSync,
+  fstatSync,
+  openSync,
   readFileSync,
   renameSync,
   rmSync,
@@ -202,54 +217,196 @@ function tryExclusiveCreate(path, agentId, token) {
   }
 }
 /**
- * Exclusively claim the (believed-stale) lock at `path` for removal, so
- * that even when multiple contenders simultaneously observe the same
- * stale mtime, only one of them ever actually removes it. `renameSync`
- * on a specific SOURCE path is itself the race-free primitive this needs
- * -- POSIX serializes concurrent rename operations against the same
- * directory entry, so among any number of racing
- * `renameSync(path, <unique-destination>)` calls, exactly one succeeds
- * (moving `path` away) and every later call sees `ENOENT`, since by the
- * time it runs `path` no longer exists to rename from. This closes a
- * race a plain check-then-`unlinkSync` pair cannot: two contenders can
- * both observe the same stale mtime from independent reads, and a plain
- * `unlinkSync` never verifies the file it deletes is still the one that
- * was checked -- it happily deletes whatever a faster contender already
- * replaced it with (including that contender's brand new, non-stale
- * lock), letting both contenders believe they won.
- *
- * Returns `false` (a lost race, not an error) on `ENOENT` -- the normal
- * outcome for every contender except the one that actually wins. The
- * destination is a unique per-attempt "graveyard" path so concurrent
- * winners of DIFFERENT stale-lock generations never collide with each
- * other; it is then discarded immediately (`unlinkSync`, with a
- * `recursive: true` `rmSync` fallback for the
- * malformed-lock-is-a-directory edge case `claim-lock.mts`'s own
- * takeover path also handles) -- this cleanup is unconditionally safe
- * regardless of recursion, since nothing else can ever reference this
- * exact path.
+ * Companion path for the PID-tagged arbiter lock that guards a stale
+ * -takeover REMOVAL against `path` -- see {@link tryAcquireArbiter}.
  */
-function tryClaimStaleLockForRemoval(path) {
-  const graveyardPath = `${path}.graveyard-${process.pid}-${Math.random().toString(36).slice(2)}`;
+function arbiterPath(path) {
+  return `${path}.arbiter`;
+}
+/**
+ * `true` when `pid` identifies a currently-running process, `false` when
+ * it definitely does not. `process.kill(pid, 0)` sends no actual signal
+ * -- it only probes existence/permission. `ESRCH` (no such process) is
+ * the only outcome that means dead; `EPERM` (the process exists but this
+ * one lacks permission to signal it) and success both mean alive. This
+ * is a reliable, instantaneous, non-time-based liveness check -- unlike
+ * an mtime-based staleness threshold, there is no ambiguity window where
+ * a process might be "probably dead by now": it either currently exists
+ * or it does not.
+ */
+function isPidAlive(pid) {
   try {
-    renameSync(path, graveyardPath);
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return error.code === 'EPERM';
+  }
+}
+/**
+ * Exclusively acquire the arbiter for one stale-lock-removal attempt
+ * against `path`'s main lock, or return `false` when another contender
+ * is already arbitrating (or just won a recovery race for a dead
+ * arbiter). Removal itself is `unlinkSync`, safe to run unconditionally
+ * ONLY while holding this arbiter -- exactly one contender can ever hold
+ * it at a time, which is what actually closes the race a plain
+ * check-then-`unlinkSync` pair on the MAIN lock cannot: two contenders
+ * observing the same stale mtime from independent reads can no longer
+ * both proceed to remove/recreate the main lock concurrently, because
+ * only one of them ever wins this arbiter first.
+ *
+ * The arbiter is itself just a `{ flag: 'wx' }` claim recording the
+ * arbitrating PID -- exclusive by the same primitive a fresh main-lock
+ * acquire uses. Its OWN staleness (an arbiter whose holder crashed
+ * mid-arbitration) is judged by {@link isPidAlive}, not by a time
+ * threshold: the arbitration critical section is always a handful of
+ * synchronous, no-I/O-wait statements, so "the recorded PID no longer
+ * exists" is both necessary and sufficient to know the holder can never
+ * finish or release it. Recovering a dead arbiter still races multiple
+ * contenders (more than one can observe the same dead PID), so it goes
+ * through the SAME inode-verified rename this function's removal step
+ * cannot avoid at that one level: `renameSync` the arbiter file away,
+ * then confirm (via the inode captured from an open file descriptor
+ * held across the whole check) that what actually got moved is the
+ * exact dead entry inspected, not a live contender's fresh arbiter claim
+ * that happened to replace it in the interim. On a mismatch, the
+ * wrongly-grabbed file is discarded (never restored): the rightful
+ * holder's authority came from its own earlier successful `wx`-create,
+ * not from this marker file continuing to exist on disk, so losing the
+ * marker costs nothing but cosmetics -- see the design note in this
+ * module's own review history (#2223) for why restoring it instead
+ * would risk clobbering a third generation that may have since claimed
+ * `path` legitimately.
+ */
+function tryAcquireArbiter(path) {
+  const marker = arbiterPath(path);
+  try {
+    writeFileSync(marker, JSON.stringify({ pid: process.pid }), {
+      flag: 'wx',
+    });
+    return true;
+  } catch (error) {
+    if (error.code !== 'EEXIST') {
+      throw error;
+    }
+  }
+  let holderPid = null;
+  try {
+    const parsed = JSON.parse(readFileSync(marker, 'utf8'));
+    if (typeof parsed?.pid === 'number') {
+      holderPid = parsed.pid;
+    }
+  } catch {
+    // Malformed or unreadable: cannot determine liveness, so do not
+    // attempt recovery this pass -- fail closed exactly like the main
+    // lock's own malformed-body handling elsewhere in this module.
+  }
+  if (holderPid === null || isPidAlive(holderPid)) {
+    return false;
+  }
+  let fd;
+  try {
+    fd = openSync(marker, 'r');
   } catch (error) {
     if (error.code === 'ENOENT') {
       return false;
     }
     throw error;
   }
+  let observedIno;
   try {
-    unlinkSync(graveyardPath);
+    observedIno = fstatSync(fd).ino;
+  } finally {
+    closeSync(fd);
+  }
+  const graveyard = `${marker}.graveyard-${process.pid}-${Math.random().toString(36).slice(2)}`;
+  try {
+    renameSync(marker, graveyard);
   } catch (error) {
-    const code = error.code;
-    if (code === 'EISDIR' || code === 'EPERM') {
-      rmSync(graveyardPath, { recursive: true, force: true });
-    } else if (code !== 'ENOENT') {
+    if (error.code === 'ENOENT') {
+      return false;
+    }
+    throw error;
+  }
+  let movedIno;
+  try {
+    movedIno = statSync(graveyard).ino;
+  } catch {
+    movedIno = undefined;
+  }
+  if (movedIno === undefined || movedIno !== observedIno) {
+    try {
+      unlinkSync(graveyard);
+    } catch {
+      // Best-effort discard; see the doc comment above.
+    }
+    return false;
+  }
+  try {
+    unlinkSync(graveyard);
+  } catch {
+    // Best-effort; the dead entry is confirmed claimed regardless.
+  }
+  try {
+    writeFileSync(marker, JSON.stringify({ pid: process.pid }), {
+      flag: 'wx',
+    });
+    return true;
+  } catch (error) {
+    if (error.code === 'EEXIST') {
+      return false;
+    }
+    throw error;
+  }
+}
+/** Release the arbiter acquired via {@link tryAcquireArbiter}. */
+function releaseArbiter(path) {
+  try {
+    unlinkSync(arbiterPath(path));
+  } catch (error) {
+    if (error.code !== 'ENOENT') {
       throw error;
     }
   }
-  return true;
+}
+/**
+ * Remove the (believed-stale) main lock at `path` and immediately
+ * recreate it as `agentId`/`token`, but ONLY while holding the arbiter
+ * -- see {@link tryAcquireArbiter} for why that is what makes the plain
+ * `unlinkSync` here safe. Re-verifies staleness against `staleMs` once
+ * more immediately after winning the arbiter (arbitration itself can
+ * take a moment under contention, during which the lock's own live
+ * holder may have refreshed its lease, or an unrelated contender may
+ * have already recovered it) rather than trusting the caller's earlier,
+ * now-possibly-stale check. Returns `false` (never throws for this) when
+ * the arbiter itself could not be acquired, the re-check finds the lock
+ * no longer stale, or recreation lost to an unrelated fresh acquirer in
+ * the brief gap after this function's own removal (vanishingly unlikely,
+ * and still safe: that acquirer's `wx`-create is exclusive by
+ * construction).
+ */
+function tryTakeOverStaleLock(path, agentId, token, staleMs) {
+  if (!tryAcquireArbiter(path)) {
+    return false;
+  }
+  try {
+    const ageMs = lockAgeMs(path);
+    if (ageMs === null || ageMs <= staleMs) {
+      return false;
+    }
+    try {
+      unlinkSync(path);
+    } catch (error) {
+      const code = error.code;
+      if (code === 'EISDIR' || code === 'EPERM') {
+        rmSync(path, { recursive: true, force: true });
+      } else if (code !== 'ENOENT') {
+        throw error;
+      }
+    }
+    return tryExclusiveCreate(path, agentId, token);
+  } finally {
+    releaseArbiter(path);
+  }
 }
 /**
  * Thrown when a lock cannot be acquired within `timeoutMs`.
@@ -264,14 +421,15 @@ export class CloneLockTimeoutError extends Error {
  * Block (retrying with backoff) until the clone-scoped lock at `repoPath`
  * is acquired, or throw {@link CloneLockTimeoutError} after `timeoutMs`.
  * A lock whose mtime is older than `staleMs` is treated as abandoned;
- * every waiter that notices races for its removal via
- * {@link tryClaimStaleLockForRemoval} (exactly one ever wins, by
- * construction) and then for its recreation via the same
- * exclusive-create primitive a fresh acquire uses -- every loser at
- * either step simply continues waiting rather than assuming it
- * acquired. `staleMs` defaults to `STALE_LOCK_MS` and is exposed only
- * for tests that need a short-lived clock; production callers should
- * not override it.
+ * every waiter that notices attempts recovery via
+ * {@link tryTakeOverStaleLock}, which holds the PID-tagged arbiter (see
+ * {@link tryAcquireArbiter}) for the whole remove-then-recreate sequence
+ * so that even when multiple contenders observe the same stale mtime
+ * from independent reads, at most one of them ever actually removes and
+ * recreates it -- every loser simply continues waiting rather than
+ * assuming it acquired. `staleMs` defaults to `STALE_LOCK_MS` and is
+ * exposed only for tests that need a short-lived clock; production
+ * callers should not override it.
  */
 export function acquireCloneLock(
   repoPath,
@@ -290,16 +448,16 @@ export function acquireCloneLock(
     if (
       ageMs !== null &&
       ageMs > staleMs &&
-      tryClaimStaleLockForRemoval(path) &&
-      tryExclusiveCreate(path, agentId, token)
+      tryTakeOverStaleLock(path, agentId, token, staleMs)
     ) {
       return { path, token };
     }
-    // Either not (yet provably) stale, lost the removal race to another
-    // contender, or -- vanishingly unlikely -- won the removal race but
-    // then lost the immediate recreate to an unrelated fresh acquirer;
-    // every case falls through to the normal wait/retry path below
-    // rather than assuming acquisition.
+    // Either not (yet provably) stale, lost the arbiter race to another
+    // contender, the arbiter's own re-check found it no longer stale, or
+    // -- vanishingly unlikely -- won the takeover but then lost the
+    // immediate recreate to an unrelated fresh acquirer; every case
+    // falls through to the normal wait/retry path below rather than
+    // assuming acquisition.
     if (Date.now() >= deadline) {
       throw new CloneLockTimeoutError(path, timeoutMs);
     }
