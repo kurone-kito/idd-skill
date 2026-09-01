@@ -198,9 +198,11 @@ other GitHub side effect, confirm all of the following:
 10. Apply the pre-mutation guard immediately before this push.
 11. If this round's fix changes a claim the PR body's self-review
     section makes (round count, a residual limitation, a scope
-    statement), update the PR body in the same push (`gh pr edit
-    {pr-number} --body-file <path>` or equivalent) — not just the
-    code/docs.
+    statement), fetch the current full body, edit only that section
+    in the fetched copy, and post the full result back with `gh pr
+    edit {pr-number} --body-file <path>` in the same push —
+    `--body-file` replaces the whole body, so never pass a partial
+    file (it would drop the closing-keyword line).
 
 ## E13 — Reply to feedback
 
