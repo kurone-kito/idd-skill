@@ -4771,12 +4771,28 @@ export function summarizeRequiredChecks(
     const name = String(check.name ?? '');
     const state = String(check.state ?? '').toUpperCase();
     const completedAt = String(check.completedAt ?? '');
-    const completedAtMs = isValidIsoTimestamp(completedAt)
-      ? new Date(completedAt).getTime()
+    // #2353 (Copilot + Codex + CodeRabbit review on PR #2370, round 5):
+    // `isValidIsoTimestamp` alone accepts GitHub's `0001-01-01T00:00:00Z`
+    // zero-value sentinel -- `normalizeStatusCheckRollupEntry` substitutes
+    // it for BOTH an absent `completedAt` (still QUEUED/IN_PROGRESS) and an
+    // absent `startedAt` (not yet started), the same non-nullable-DateTime
+    // convention `isCompletedCiTimestamp` already exists to reject (see its
+    // doc comment / `parseCompletedAt` above). Reusing it here -- despite
+    // its "completed" name -- because the sentinel isn't completion-
+    // specific: it is GitHub's stand-in for "this lifecycle moment hasn't
+    // happened yet," which applies equally to `startedAt`. Without this, an
+    // IN_PROGRESS run (sentinel `completedAt`, but a genuine, fresh
+    // `startedAt`) would pass BOTH `completedAtMs !== null` (the sentinel
+    // parses as a valid, merely very-old, timestamp) and the `startedAt`
+    // freshness cutoff below, reporting a still-running required check
+    // `coveredByWaiver: true` while GitHub's own check is neither passed
+    // nor even finished.
+    const completedAtMs = isCompletedCiTimestamp(completedAt)
+      ? Date.parse(completedAt)
       : null;
     const startedAt = String(check.startedAt ?? '');
-    const startedAtMs = isValidIsoTimestamp(startedAt)
-      ? new Date(startedAt).getTime()
+    const startedAtMs = isCompletedCiTimestamp(startedAt)
+      ? Date.parse(startedAt)
       : null;
     const matchingWaivers = validWaivers.filter((w) =>
       matchCheckSelectorLocal(name, w.checkSelector),

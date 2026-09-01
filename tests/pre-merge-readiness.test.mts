@@ -5060,6 +5060,60 @@ test('summarizeRequiredChecks: treatAsCoveredByWaiver never covers a check with 
   assert.notEqual(result.status, 'success');
 });
 
+// Copilot + Codex + CodeRabbit review (PR #2370, round 5): GitHub's
+// non-nullable `DateTime` scalar reports the `0001-01-01T00:00:00Z`
+// zero-value sentinel for a `completedAt` that hasn't happened yet
+// (`normalizeStatusCheckRollupEntry` supplies it for a still-running
+// CheckRun) -- and `isValidIsoTimestamp` alone accepts that value as a
+// technically-well-formed, merely very-old timestamp. Before this fix,
+// that meant `completedAtMs !== null` did NOT actually reject an
+// in-progress run: an IN_PROGRESS check with a genuine, fresh `startedAt`
+// would pass every gate and report `coveredByWaiver: true` while GitHub's
+// own required check had not even finished running.
+test('summarizeRequiredChecks: treatAsCoveredByWaiver never covers a still-running check even with a fresh startedAt (zero-value completedAt sentinel)', () => {
+  const result = summarizeRequiredChecks(
+    [
+      {
+        name: 'idd-advisory-convergence',
+        state: 'IN_PROGRESS',
+        startedAt: '2026-05-12T00:25:00Z', // fresh, after the cutoff below
+        completedAt: '0001-01-01T00:00:00Z', // GitHub's not-yet-completed sentinel
+      },
+    ],
+    [],
+    { required_status_checks: { contexts: ['idd-advisory-convergence'] } },
+    {
+      treatAsCoveredByWaiver: (name) => name === 'idd-advisory-convergence',
+      treatAsCoveredByWaiverSince: () => '2026-05-12T00:00:00Z',
+    },
+  );
+  assert.equal(result.checks[0].coveredByWaiver, undefined);
+  assert.notEqual(result.status, 'success');
+});
+
+// Same sentinel gap, mirrored for `startedAt`: a not-yet-started (QUEUED)
+// run's `startedAt` also reports the zero-value sentinel, which must not
+// be accepted as a genuine "observed the declaration" moment either.
+test('summarizeRequiredChecks: treatAsCoveredByWaiver never covers a not-yet-started check (zero-value startedAt sentinel)', () => {
+  const result = summarizeRequiredChecks(
+    [
+      {
+        name: 'idd-advisory-convergence',
+        state: 'QUEUED',
+        startedAt: '0001-01-01T00:00:00Z', // GitHub's not-yet-started sentinel
+        completedAt: '0001-01-01T00:00:00Z',
+      },
+    ],
+    [],
+    { required_status_checks: { contexts: ['idd-advisory-convergence'] } },
+    {
+      treatAsCoveredByWaiver: (name) => name === 'idd-advisory-convergence',
+    },
+  );
+  assert.equal(result.checks[0].coveredByWaiver, undefined);
+  assert.notEqual(result.status, 'success');
+});
+
 // Codex review (PR #2370): a run whose live `completedAt` is parseable but
 // whose `startedAt` is not (an inconsistent/malformed entry) must also be
 // withheld -- the same fail-closed posture `completedAtMs !== null` already

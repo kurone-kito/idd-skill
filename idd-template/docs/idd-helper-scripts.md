@@ -1155,13 +1155,18 @@ Interpretation rules:
   invalidates an otherwise-valid declaration, and this helper accepts no
   verdict input at all.
 - Consumed by both gates the `idd-advisory-convergence` waiver already
-  relieves (#2353): `advisory-convergence.mjs`'s own CI-check verdict and
+  relieves
+  ([kurone-kito/idd-skill#2353](https://github.com/kurone-kito/idd-skill/issues/2353)):
+  `advisory-convergence.mjs`'s own CI-check verdict and
   `pre-merge-readiness.mjs`'s F2/F3 merge gate each independently resolve
   a declaration for service `idd-advisory-convergence` on the configured
   `providerOutage.declarationTarget` issue, gated exactly as the
-  non-bypassing bullet above describes. Declare with that exact service
-  name (`--service idd-advisory-convergence`) for either gate to honor
-  it; a declaration for any other service name relieves nothing here.
+  non-bypassing bullet above describes -- and both additionally require
+  `ciGate.externalCheckWaivers.mode` to be `maintainer-authorized`, the
+  same mode gate a direct per-pull-request waiver already requires.
+  Declare with that exact service name (`--service
+  idd-advisory-convergence`) for either gate to honor it; a declaration
+  for any other service name relieves nothing here.
 
 ### Local validation evidence helper
 

@@ -1309,11 +1309,13 @@ export function resolveDeclarationActiveSince(declaration) {
 // `waiverMode === 'maintainer-authorized'` check -- still rejects it,
 // exactly the two-gate disagreement #2021 already fixed for the direct
 // per-pull-request waiver path. `since` is the declaration's own
-// `startedAt` (Codex review on PR #2370): a required check's live run
-// must have completed AT OR AFTER this moment to count as covered --
-// otherwise the check was never actually rerun during the declared
-// outage window, and GitHub's own required-check state stays whatever a
-// stale pre-declaration run left it at while this gate reports covered,
+// active-since moment (Codex review on PR #2370): a required check's live
+// run must have STARTED (Copilot review, round 5: not "completed" --
+// `summarizeRequiredChecks`'s `treatAsCoveredByWaiver` cutoff anchors on
+// `startedAt`) AT OR AFTER this moment to count as covered -- otherwise
+// the check was never actually rerun during the declared outage window,
+// and GitHub's own required-check state stays whatever a stale
+// pre-declaration run left it at while this gate reports covered,
 // reproducing #2021's "ready but merge blocked" class one layer deeper.
 function resolveAdvisoryConvergenceOutageRelief({
   owner,

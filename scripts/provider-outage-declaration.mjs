@@ -81,6 +81,7 @@ export function resolveProviderOutageDeclaration(input) {
     expired: [],
     exceedsMaxValidity: [],
     notYetStarted: [],
+    notYetPosted: [],
     wrongService: [],
     unauthorized: [],
     malformed: [],
@@ -109,6 +110,7 @@ export function resolveProviderOutageDeclaration(input) {
   const expired = [];
   const exceedsMaxValidity = [];
   const notYetStarted = [];
+  const notYetPosted = [];
   const wrongService = [];
   const unauthorized = [];
   const malformed = [];
@@ -163,6 +165,23 @@ export function resolveProviderOutageDeclaration(input) {
       notYetStarted.push(parsed);
       continue;
     }
+    // #2353 (Codex review on PR #2370, round 5): `startedAt` is the
+    // declaration's own self-reported field, authored at `--declare` time
+    // -- BEFORE the `--apply` confirmation that actually posts the GitHub
+    // comment `parsed.createdAt` records. A caller replaying a past `now`
+    // (e.g. `--now`) could see `nowMs >= startedMs` even though, at that
+    // replayed moment, the comment recording the declaration did not yet
+    // exist on GitHub -- a live-time caller can never hit this, since
+    // `createdAt` is necessarily in the past by the time the comment is
+    // fetched at all. Skips the check when `createdAt` is the
+    // schema-documented `'none'` sentinel (unparseable), matching
+    // `resolveDeclarationActiveSince`'s (pre-merge-readiness.mts) same
+    // fallback-to-`startedAt`-alone convention.
+    const createdAtMs = Date.parse(parsed.createdAt);
+    if (Number.isFinite(createdAtMs) && nowMs < createdAtMs) {
+      notYetPosted.push(parsed);
+      continue;
+    }
     valid.push(parsed);
   }
   const declaration = latestByCreatedAt(valid);
@@ -175,6 +194,7 @@ export function resolveProviderOutageDeclaration(input) {
       expired,
       exceedsMaxValidity,
       notYetStarted,
+      notYetPosted,
       wrongService,
       unauthorized,
       malformed,
@@ -189,6 +209,9 @@ export function resolveProviderOutageDeclaration(input) {
   } else if (notYetStarted.length > 0) {
     const latest = latestByCreatedAt(notYetStarted);
     reason = `declaration has not started yet (starts at ${latest?.startedAt})`;
+  } else if (notYetPosted.length > 0) {
+    const latest = latestByCreatedAt(notYetPosted);
+    reason = `declaration comment was not yet posted as of the evaluated moment (posted at ${latest?.createdAt})`;
   } else if (exceedsMaxValidity.length > 0) {
     reason = `declaration expiry exceeds configured providerOutage.maxValidity`;
   } else if (unauthorized.length > 0) {
@@ -208,6 +231,7 @@ export function resolveProviderOutageDeclaration(input) {
     expired,
     exceedsMaxValidity,
     notYetStarted,
+    notYetPosted,
     wrongService,
     unauthorized,
     malformed,
