@@ -586,6 +586,11 @@ export function collectCiActionsEvidence(
 
   for (const run of runs) {
     if (typeof run.id !== 'number') continue;
+    // A run with no associated pull request contributes no observation
+    // either way (corroboration is PR-scoped) -- skip the jobs fetch
+    // entirely rather than spending an avoidable API call on it, which
+    // only adds rate-limit/timeout risk during an actual degradation.
+    if (typeof run.pull_requests?.[0]?.number !== 'number') continue;
 
     let jobs: GhWorkflowJob[] | null = null;
     if (run.conclusion === 'failure') {
@@ -593,9 +598,11 @@ export function collectCiActionsEvidence(
         const payload = ghApiJson(
           `repos/${owner}/${repo}/actions/runs/${run.id}/jobs?per_page=100`,
         ) as { jobs?: unknown };
-        jobs = Array.isArray(payload.jobs)
-          ? (payload.jobs as GhWorkflowJob[])
-          : [];
+        // A malformed jobs payload must skip this run, not silently read
+        // as "zero jobs" -- same crash-vs-degrade distinction as the
+        // workflow_runs-list guard above, applied per-run.
+        if (!Array.isArray(payload.jobs)) continue;
+        jobs = payload.jobs as GhWorkflowJob[];
       } catch {
         continue;
       }
