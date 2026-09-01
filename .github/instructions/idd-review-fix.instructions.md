@@ -111,7 +111,8 @@ kurone-kito/idd-skill#2223's clone-scoped lock
 across several rounds even after replacing mtime-based staleness with
 PID-liveness-based staleness; convergence only happened once automatic
 stale-lock takeover was removed entirely, replaced with a timeout that
-reports the lock path and holder for manual recovery — the same shape
+reports the lock path and the recorded holder's PID for manual
+recovery — the same shape
 `git`'s own `index.lock` uses on collision. Removal was safe there
 specifically because the issue's acceptance criteria only ever
 required an acquire/release interface, never automatic stale-lock
