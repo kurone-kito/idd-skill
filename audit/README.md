@@ -140,9 +140,9 @@ stopped the next exact-fit bump. Observed on
 [#1259](https://github.com/kurone-kito/idd-skill/issues/1259) (closed
 2026-07-04, the very next day): both recovered headroom and both fully
 regressed for lack of an upper bound. `contextCeiling` is an absolute,
-128K-context-derived cap layered on top: 126,000 bytes ≈ 31,500–38,800
+200K-context-derived cap layered on top: 196,000 bytes ≈ 49,000–60,300
 tokens at this corpus's observed 3.25–4.0 bytes/token, leaving the rest
-of a 128K context window for the harness system prompt, tool schemas,
+of a 200K context window for the harness system prompt, tool schemas,
 adopter-repo instructions, and working context.
 
 - `maxBundleLimitBytes`: no non-exempt bundle's `limitBytes` may exceed
@@ -178,6 +178,25 @@ only alongside a maintainer-authorized exception (the same
 PR-description callout the ratchet's own raise convention requires),
 and shrink it back to empty in the same PR or a tracked follow-up once
 that exception resolves.
+
+As of [#2181](https://github.com/kurone-kito/idd-skill/issues/2181)
+(resolved 2026-09-01), the ceiling's baseline moved from 128K to 200K
+contexts: `bundle-review` had re-entered `exemptBundles` pinned at the
+old 126,000-byte ceiling with no ratchet room, exactly while the
+Copilot-outage roadmap
+([#2318](https://github.com/kurone-kito/idd-skill/issues/2318)) needed
+advisory-wait instruction headroom in that bundle. The maintainer's
+priority call: outage resilience outranks the byte diet in both
+importance and urgency, and every session-model class the loop
+currently exercises holds a context of 200K tokens or more. So
+`maxBundleLimitBytes` rose to 196,000 (the same ≤ ~29%-of-window
+discipline applied at 200K), `bundle-review` ratcheted to 138,000 and
+`bundle-merge` to 122,000 (both back under the notice band), and
+`exemptBundles` returned to empty. The diet remains a best-effort
+goal: the raise-callout convention, the 98% utilization error, and the
+95% notice all stay in force, and the lite bundles' budgets are
+untouched — the 128K-class guidance in `docs/idd-workflow.md`
+continues to route weak models to the lite profile.
 
 ## Markdown Link/Anchor Audit
 
