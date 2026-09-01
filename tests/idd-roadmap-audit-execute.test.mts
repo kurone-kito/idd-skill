@@ -22,6 +22,7 @@ import {
   evaluateRoadmapAuditGates,
   evaluateRoadmapClaim,
   explainRoadmapClaimReason,
+  findWorktreeEntriesForBranch,
   findWorktreeEntryForBranch,
   hasTrustedCompletionEvidenceComment,
   type LocalCoordinationInputs,
@@ -1751,6 +1752,34 @@ test('findWorktreeEntryForBranch never matches a detached entry', () => {
   );
 });
 
+test('findWorktreeEntriesForBranch returns EVERY match, not just the first (git checkout --ignore-other-worktrees can duplicate a checkout)', () => {
+  const entries = parseWorktreeListPorcelain(
+    [
+      'worktree /repo/first',
+      'HEAD abc123',
+      'branch refs/heads/roadmap-audit/995-slug',
+      '',
+      'worktree /repo/second',
+      'HEAD abc123',
+      'branch refs/heads/roadmap-audit/995-slug',
+      '',
+    ].join('\n'),
+  );
+  const matches = findWorktreeEntriesForBranch(
+    entries,
+    'roadmap-audit/995-slug',
+  );
+  assert.deepEqual(
+    matches.map((entry) => entry.path),
+    ['/repo/first', '/repo/second'],
+  );
+  // findWorktreeEntryForBranch stays the first-match convenience wrapper.
+  assert.equal(
+    findWorktreeEntryForBranch(entries, 'roadmap-audit/995-slug')?.path,
+    '/repo/first',
+  );
+});
+
 // ---------------------------------------------------------------------------
 // evaluateLocalCoordinationState (pure, injected inputs, #2225)
 // ---------------------------------------------------------------------------
@@ -2008,6 +2037,45 @@ test('evaluateLocalCoordinationState leaves an UNRELATED detached/rebasing workt
   );
   assert.equal(verdict.presence, 'absent');
   assert.deepEqual(verdict.detachedWorktreePaths, ['/repo/other-wt']);
+});
+
+test('evaluateLocalCoordinationState evaluates EVERY matched worktree, not just the first: a clean first match does not hide a broken second one', () => {
+  const calls = { status: 0, gitPath: 0 };
+  const verdict = evaluateLocalCoordinationState(
+    'roadmap-audit/995-slug',
+    localInputs({
+      listWorktrees: () =>
+        OK(
+          [
+            'worktree /repo/first',
+            'HEAD abc123',
+            'branch refs/heads/roadmap-audit/995-slug',
+            '',
+            'worktree /repo/second',
+            'HEAD abc123',
+            'branch refs/heads/roadmap-audit/995-slug',
+            '',
+          ].join('\n'),
+        ),
+      statusPorcelain: (worktreePath) => {
+        calls.status += 1;
+        return worktreePath === '/repo/second' ? OK(' M file.txt\n') : OK('');
+      },
+      resolveGitPath: () => {
+        calls.gitPath += 1;
+        return FAIL('no such path');
+      },
+    }),
+  );
+  assert.equal(verdict.presence, 'present-broken');
+  // First match's path stays the reported `path`; its own reason (if any)
+  // is unprefixed, matching the pre-#2225-P2-fix single-match behavior.
+  assert.equal(verdict.path, '/repo/first');
+  assert.deepEqual(verdict.brokenReasons, [
+    'at /repo/second: uncommitted content present',
+  ]);
+  // Both matched worktrees were actually probed, not just the first.
+  assert.equal(calls.status, 2);
 });
 
 // ---------------------------------------------------------------------------
@@ -2339,7 +2407,7 @@ test('--apply fails closed (no mutation) when the local worktree is present-brok
   assert.deepEqual(calls.released, []);
 });
 
-test('--apply calls inspectLocalCoordinationState exactly once, before the graph re-fetch', async () => {
+test('--apply calls inspectLocalCoordinationState at all three claim re-validation points (TOCTOU coverage, #2225)', async () => {
   let calls = 0;
   const { deps } = makeDeps(readyReport(), {
     inspectLocalCoordinationState: () => {
@@ -2356,5 +2424,65 @@ test('--apply calls inspectLocalCoordinationState exactly once, before the graph
   });
   const { exitCode } = await runRoadmapAuditExecute(APPLY_ARGS, deps);
   assert.equal(exitCode, 0);
-  assert.equal(calls, 1);
+  // early + post-refetch + pre-close, mirroring the claim re-validation count.
+  assert.equal(calls, 3);
+});
+
+test('--apply fails closed when the local worktree turns broken DURING the graph re-fetch (TOCTOU, #2225)', async () => {
+  let calls = 0;
+  const { deps, calls: mutationCalls } = makeDeps(readyReport(), {
+    inspectLocalCoordinationState: () => {
+      calls += 1;
+      const broken = calls >= 2;
+      return {
+        presence: broken ? 'present-broken' : 'absent',
+        path: broken ? '/repo/wt' : null,
+        brokenReasons: broken ? ['uncommitted content present'] : [],
+        detachedWorktreePaths: [],
+        unreadable: false,
+        unreadableReason: null,
+      };
+    },
+  });
+  const { verdict, exitCode } = await runRoadmapAuditExecute(APPLY_ARGS, deps);
+  assert.equal(exitCode, 1);
+  assert.equal(verdict.closed, false);
+  assert.match(verdict.result, /local coordination state unsafe/);
+  assert.deepEqual(mutationCalls.closed, []);
+  assert.deepEqual(mutationCalls.comments, []);
+  // Caught at the post-refetch check, before the evidence comment ever posts.
+  assert.equal(calls, 2);
+});
+
+test('--apply fails closed when the local worktree turns broken in the comment→close gap (TOCTOU, #2225)', async () => {
+  let calls = 0;
+  const { deps, calls: mutationCalls } = makeDeps(readyReport(), {
+    inspectLocalCoordinationState: () => {
+      calls += 1;
+      const broken = calls >= 3;
+      return {
+        presence: broken ? 'present-broken' : 'absent',
+        path: broken ? '/repo/wt' : null,
+        brokenReasons: broken ? ['rebase in progress'] : [],
+        detachedWorktreePaths: [],
+        unreadable: false,
+        unreadableReason: null,
+      };
+    },
+  });
+  const { verdict, exitCode } = await runRoadmapAuditExecute(APPLY_ARGS, deps);
+  assert.equal(exitCode, 1);
+  assert.equal(verdict.closed, false);
+  assert.match(verdict.result, /local coordination state unsafe/);
+  // The evidence comment DID post (posted before this final check runs) but
+  // the close/release must not — mirrors the existing comment→close claim
+  // re-validation's own message shape.
+  assert.match(
+    verdict.result,
+    /evidence comment posted but roadmap NOT closed/,
+  );
+  assert.equal(mutationCalls.comments.length, 1);
+  assert.deepEqual(mutationCalls.closed, []);
+  assert.deepEqual(mutationCalls.released, []);
+  assert.equal(calls, 3);
 });

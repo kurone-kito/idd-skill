@@ -523,11 +523,15 @@ function runLocalGitCommand(argv, cwd) {
     });
     return { ok: true, stdout, stderr: '' };
   } catch (err) {
+    // `encoding: 'utf8'` above decodes the happy path, but a spawn-level
+    // failure (signal, maxBuffer) can still leave stdout/stderr as a Buffer
+    // on the thrown error — coerce via toString() (mirrors idd-doctor.mts's
+    // runCommand) rather than discarding non-string output as empty.
     const failure = err;
     return {
       ok: false,
-      stdout: typeof failure.stdout === 'string' ? failure.stdout : '',
-      stderr: typeof failure.stderr === 'string' ? failure.stderr : '',
+      stdout: failure.stdout?.toString?.() ?? '',
+      stderr: failure.stderr?.toString?.() ?? '',
     };
   }
 }
@@ -587,21 +591,28 @@ function branchNameFromRef(ref) {
   return ref.startsWith('refs/heads/') ? ref.slice('refs/heads/'.length) : ref;
 }
 /**
- * Find the worktree entry whose checked-out branch content-exactly matches
- * `branchName` (#2225, AC1). Content-exact, not identity-only: this compares
- * the porcelain `branch` ref itself — what is actually checked out — rather
- * than trusting that a claim record's own `branch` field (which may be
- * released or stale) says the branch is unowned. A detached entry has no
- * `branchRef` and can never match here by construction.
+ * Find every worktree entry whose checked-out branch content-exactly
+ * matches `branchName` (#2225, AC1). Content-exact, not identity-only: this
+ * compares the porcelain `branch` ref itself — what is actually checked
+ * out — rather than trusting that a claim record's own `branch` field
+ * (which may be released or stale) says the branch is unowned. Git
+ * normally refuses to check the same branch out in a second worktree, but
+ * `git checkout --ignore-other-worktrees` (documented in `git checkout -h`)
+ * can force it, so this returns every match rather than only the first —
+ * a caller that only checks the first could see a clean worktree while a
+ * second one silently sits broken. A detached entry has no `branchRef` and
+ * can never match here by construction.
  */
-export function findWorktreeEntryForBranch(entries, branchName) {
-  return (
-    entries.find(
-      (entry) =>
-        entry.branchRef !== null &&
-        branchNameFromRef(entry.branchRef) === branchName,
-    ) ?? null
+export function findWorktreeEntriesForBranch(entries, branchName) {
+  return entries.filter(
+    (entry) =>
+      entry.branchRef !== null &&
+      branchNameFromRef(entry.branchRef) === branchName,
   );
+}
+/** The first entry {@link findWorktreeEntriesForBranch} would return, or null. */
+export function findWorktreeEntryForBranch(entries, branchName) {
+  return findWorktreeEntriesForBranch(entries, branchName)[0] ?? null;
 }
 /**
  * True when a rebase sequencer directory exists for `worktreePath` (#2225,
@@ -666,21 +677,51 @@ function resolveDetachedRebaseBranch(worktreePath, inputs) {
   return null;
 }
 /**
- * Find a DETACHED worktree entry whose rebase sequencer records `branchName`
- * as the branch being rebased (#2225, AC4). See
+ * Find every DETACHED worktree entry whose rebase sequencer records
+ * `branchName` as the branch being rebased (#2225, AC4). See
  * {@link resolveDetachedRebaseBranch} for why a plain branch-ref match on a
- * mid-rebase worktree always fails.
+ * mid-rebase worktree always fails. Plural for the same reason as
+ * {@link findWorktreeEntriesForBranch}: more than one worktree can end up
+ * mid-rebase against the same original branch.
  */
-function findDetachedRebaseEntryForBranch(entries, branchName, inputs) {
-  for (const entry of entries) {
-    if (!entry.detached) {
-      continue;
+function findDetachedRebaseEntriesForBranch(entries, branchName, inputs) {
+  return entries.filter(
+    (entry) =>
+      entry.detached &&
+      resolveDetachedRebaseBranch(entry.path, inputs) === branchName,
+  );
+}
+/**
+ * Evaluate one matched worktree entry for the broken-reason signals
+ * {@link evaluateLocalCoordinationState} reports (#2225): porcelain
+ * `locked`/`prunable` flags first (a locked/prunable entry's directory may
+ * not even exist on disk — do not probe further), then uncommitted content
+ * and an in-progress rebase.
+ */
+function evaluateMatchedWorktreeEntry(entry, inputs) {
+  const reasons = [];
+  if (entry.locked) {
+    reasons.push(`locked${entry.lockReason ? `: ${entry.lockReason}` : ''}`);
+  }
+  if (entry.prunable) {
+    reasons.push(
+      `prunable${entry.prunableReason ? `: ${entry.prunableReason}` : ''}`,
+    );
+  }
+  if (reasons.length === 0) {
+    const status = inputs.statusPorcelain(entry.path);
+    if (!status.ok) {
+      reasons.push('working tree status could not be read');
+    } else if (status.stdout.trim().length > 0) {
+      reasons.push('uncommitted content present');
     }
-    if (resolveDetachedRebaseBranch(entry.path, inputs) === branchName) {
-      return entry;
+    if (
+      hasInProgressRebase(entry.path, inputs.resolveGitPath, inputs.pathExists)
+    ) {
+      reasons.push('rebase in progress');
     }
   }
-  return null;
+  return reasons;
 }
 /**
  * Evaluate whether `branchName`'s local worktree state is safe to treat as
@@ -695,8 +736,11 @@ function findDetachedRebaseEntryForBranch(entries, branchName, inputs) {
  * branch, a failure to read ITS status is treated as broken rather than
  * unreadable: unlike the top-level enumeration failure, a positively
  * identified worktree that suddenly cannot be probed is exactly the
- * ambiguous case this hardening exists to catch, so it fails closed. Pure:
- * every git read is injected.
+ * ambiguous case this hardening exists to catch, so it fails closed. Every
+ * worktree matching `branchName` is evaluated, not just the first (#2225,
+ * P2 review finding): `git checkout --ignore-other-worktrees` can check the
+ * same branch out in more than one worktree, and a clean first match must
+ * not hide a broken second one. Pure: every git read is injected.
  */
 export function evaluateLocalCoordinationState(branchName, inputs) {
   const listing = inputs.listWorktrees();
@@ -712,17 +756,20 @@ export function evaluateLocalCoordinationState(branchName, inputs) {
     };
   }
   const entries = parseWorktreeListPorcelain(listing.stdout);
-  const matched =
-    findWorktreeEntryForBranch(entries, branchName) ??
-    findDetachedRebaseEntryForBranch(entries, branchName, inputs);
-  // A detached entry recovered via its rebase sequencer above (AC4) IS the
-  // matched worktree for this branch, not a mystery unrelated one — exclude
-  // it from the generic informational list so it is reported exactly once,
-  // as the matched (and, via the checks below, broken) worktree.
+  const matchedEntries = [
+    ...findWorktreeEntriesForBranch(entries, branchName),
+    ...findDetachedRebaseEntriesForBranch(entries, branchName, inputs),
+  ];
+  const matchedPaths = new Set(matchedEntries.map((entry) => entry.path));
+  // Every detached entry recovered via its rebase sequencer above (AC4) IS
+  // a matched worktree for this branch, not a mystery unrelated one —
+  // exclude matched paths from the generic informational list so each is
+  // reported exactly once, as a matched (and, via the checks below,
+  // possibly broken) worktree.
   const detachedWorktreePaths = entries
-    .filter((entry) => entry.detached && entry.path !== matched?.path)
+    .filter((entry) => entry.detached && !matchedPaths.has(entry.path))
     .map((entry) => entry.path);
-  if (!matched) {
+  if (matchedEntries.length === 0) {
     return {
       presence: 'absent',
       path: null,
@@ -733,38 +780,15 @@ export function evaluateLocalCoordinationState(branchName, inputs) {
     };
   }
   const brokenReasons = [];
-  if (matched.locked) {
-    brokenReasons.push(
-      `locked${matched.lockReason ? `: ${matched.lockReason}` : ''}`,
-    );
-  }
-  if (matched.prunable) {
-    brokenReasons.push(
-      `prunable${matched.prunableReason ? `: ${matched.prunableReason}` : ''}`,
-    );
-  }
-  // A locked/prunable worktree's directory may not even exist on disk
-  // (prunable in particular is exactly that case) — do not probe further.
-  if (brokenReasons.length === 0) {
-    const status = inputs.statusPorcelain(matched.path);
-    if (!status.ok) {
-      brokenReasons.push('working tree status could not be read');
-    } else if (status.stdout.trim().length > 0) {
-      brokenReasons.push('uncommitted content present');
+  matchedEntries.forEach((entry, index) => {
+    const prefix = index > 0 ? `at ${entry.path}: ` : '';
+    for (const reason of evaluateMatchedWorktreeEntry(entry, inputs)) {
+      brokenReasons.push(`${prefix}${reason}`);
     }
-    if (
-      hasInProgressRebase(
-        matched.path,
-        inputs.resolveGitPath,
-        inputs.pathExists,
-      )
-    ) {
-      brokenReasons.push('rebase in progress');
-    }
-  }
+  });
   return {
     presence: brokenReasons.length > 0 ? 'present-broken' : 'present-clean',
-    path: matched.path,
+    path: matchedEntries[0].path,
     brokenReasons,
     detachedWorktreePaths,
     unreadable: false,
@@ -843,6 +867,36 @@ export function safeHasTrustedCompletionEvidence(check) {
   } catch {
     return false;
   }
+}
+/**
+ * Apply the local coordination-state gate (#2225) at one point in the apply
+ * sequence: populate `verdict.localCoordinationNote` (and, when unsafe,
+ * `verdict.result` too), and report whether the apply must stop here.
+ * Called at every point claim ownership is re-validated below — the early
+ * check, immediately after the potentially long graph re-fetch, and
+ * immediately before the close — because local state is not immutable
+ * within a single run any more than claim ownership is: another local
+ * process can dirty, lock, prune, or begin rebasing the matched worktree
+ * while this run is still in flight (#2225, P2 review finding).
+ */
+function applyLocalCoordinationGate(resolvedDeps, branchName, verdict) {
+  if (!resolvedDeps.inspectLocalCoordinationState) {
+    return false;
+  }
+  const localState = resolvedDeps.inspectLocalCoordinationState(branchName);
+  if (localState.presence === 'present-broken') {
+    verdict.localCoordinationNote = `branch "${branchName}" has a local worktree at ${localState.path} that is not safe to treat as reusable (${localState.brokenReasons.join(', ')})`;
+    verdict.result = `local coordination state unsafe (${localState.brokenReasons.join(', ')}); no mutation`;
+    return true;
+  }
+  if (localState.unreadable) {
+    verdict.localCoordinationNote = `local coordination state unreadable (${localState.unreadableReason ?? 'unknown reason'}); proceeding`;
+  } else if (localState.presence === 'present-clean') {
+    verdict.localCoordinationNote = `branch "${branchName}" has a clean local worktree at ${localState.path}`;
+  } else if (localState.detachedWorktreePaths.length > 0) {
+    verdict.localCoordinationNote = `${localState.detachedWorktreePaths.length} detached local worktree(s) present (unrelated to this branch by definition): ${localState.detachedWorktreePaths.join(', ')}`;
+  }
+  return false;
 }
 /**
  * Build the A1.5 verdict and, under `--apply`, execute the audit. The dry-run
@@ -966,27 +1020,18 @@ export async function runRoadmapAuditExecute(argv, deps) {
     return { verdict, exitCode: 1 };
   }
   // Local worktree/branch safety (#2225): a released/stale claim record
-  // proves nothing about what is actually checked out locally. Evaluated
-  // once, right after ownership is confirmed and before ANY mutation
-  // (including the evidence comment) — local state does not change within a
-  // single run, so there is no need to repeat this at the later
-  // re-validations the way claim ownership itself is repeated.
-  if (resolvedDeps.inspectLocalCoordinationState) {
-    const localState = resolvedDeps.inspectLocalCoordinationState(
+  // proves nothing about what is actually checked out locally. Re-checked
+  // again below, after the graph re-fetch and immediately before the close
+  // — see applyLocalCoordinationGate's doc comment for why a single early
+  // check alone would leave a TOCTOU gap.
+  if (
+    applyLocalCoordinationGate(
+      resolvedDeps,
       earlyClaim.activeClaim.branch,
-    );
-    if (localState.presence === 'present-broken') {
-      verdict.localCoordinationNote = `branch "${earlyClaim.activeClaim.branch}" has a local worktree at ${localState.path} that is not safe to treat as reusable (${localState.brokenReasons.join(', ')})`;
-      verdict.result = `local coordination state unsafe (${localState.brokenReasons.join(', ')}); no mutation`;
-      return { verdict, exitCode: 1 };
-    }
-    if (localState.unreadable) {
-      verdict.localCoordinationNote = `local coordination state unreadable (${localState.unreadableReason ?? 'unknown reason'}); proceeding`;
-    } else if (localState.presence === 'present-clean') {
-      verdict.localCoordinationNote = `branch "${earlyClaim.activeClaim.branch}" has a clean local worktree at ${localState.path}`;
-    } else if (localState.detachedWorktreePaths.length > 0) {
-      verdict.localCoordinationNote = `${localState.detachedWorktreePaths.length} detached local worktree(s) present (unrelated to this branch by definition): ${localState.detachedWorktreePaths.join(', ')}`;
-    }
+      verdict,
+    )
+  ) {
+    return { verdict, exitCode: 1 };
   }
   // Re-fetch the roadmap + child state and confirm the audit input still
   // holds; a roadmap that gained an open / unresolved / nested-roadmap /
@@ -1021,6 +1066,15 @@ export async function runRoadmapAuditExecute(argv, deps) {
     verdict.result = `claim not owned immediately before mutation (reason="${claim.reason}": ${explainRoadmapClaimReason(claim.reason)}); no mutation${viewerLoginUnavailableCaveat(resolvedDeps.viewerLoginUnavailable)}`;
     return { verdict, exitCode: 1 };
   }
+  // Re-check local state too: the graph re-fetch just above can span many
+  // API calls, during which another local process can dirty, lock, prune,
+  // or begin rebasing the matched worktree just as easily as another
+  // session can take over the claim.
+  if (
+    applyLocalCoordinationGate(resolvedDeps, claim.activeClaim.branch, verdict)
+  ) {
+    return { verdict, exitCode: 1 };
+  }
   // Post the evidence comment (non-destructive), THEN re-validate ownership one
   // final time immediately before the CLOSE: a takeover landing in the
   // comment→close gap must not let us close under a claim we no longer own. An
@@ -1038,6 +1092,18 @@ export async function runRoadmapAuditExecute(argv, deps) {
   });
   if (!preCloseClaim.owned) {
     verdict.result = `claim lost in the comment→close gap (reason="${preCloseClaim.reason}": ${explainRoadmapClaimReason(preCloseClaim.reason)}); evidence comment posted but roadmap NOT closed${viewerLoginUnavailableCaveat(resolvedDeps.viewerLoginUnavailable)}`;
+    return { verdict, exitCode: 1 };
+  }
+  // One last local-state check, immediately before the close itself, for
+  // the same comment→close gap the claim re-validation just above guards.
+  if (
+    applyLocalCoordinationGate(
+      resolvedDeps,
+      preCloseClaim.activeClaim.branch,
+      verdict,
+    )
+  ) {
+    verdict.result = `${verdict.result} (evidence comment posted but roadmap NOT closed)`;
     return { verdict, exitCode: 1 };
   }
   // Ownership held through the comment: close, then release using the last
