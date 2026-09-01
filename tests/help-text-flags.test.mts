@@ -181,6 +181,7 @@ const COVERED_HELPERS = [
   'external-check-waiver',
   'forced-handoff-marker',
   'helper-runtime-manifest',
+  'idd-critique-delegate',
   'idd-doctor',
   'idd-roadmap-audit-execute',
   'live-status-digest',
