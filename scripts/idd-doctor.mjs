@@ -719,7 +719,7 @@ function isConcreteCommandValue(value) {
  * check` under `fix-validate`, whose documented form is `dprint fmt`) is
  * not exempt.
  */
-const DOCUMENTED_TOOLCHAIN_SEGMENTS = {
+export const DOCUMENTED_TOOLCHAIN_SEGMENTS = {
   'fix-validate': [
     'npx dprint fmt "**/*.md"',
     'npx markdownlint-cli2 --fix "**/*.md"',

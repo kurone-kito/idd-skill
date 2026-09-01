@@ -862,7 +862,7 @@ function isConcreteCommandValue(value: string | null): boolean {
  * check` under `fix-validate`, whose documented form is `dprint fmt`) is
  * not exempt.
  */
-const DOCUMENTED_TOOLCHAIN_SEGMENTS: Readonly<
+export const DOCUMENTED_TOOLCHAIN_SEGMENTS: Readonly<
   Record<string, readonly string[]>
 > = {
   'fix-validate': [

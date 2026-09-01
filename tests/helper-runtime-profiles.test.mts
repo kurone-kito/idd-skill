@@ -13,7 +13,10 @@ import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
 import { buildHelperRuntimeManifest } from '../src/scripts/helper-runtime-manifest.mts';
-import { runDoctor } from '../src/scripts/idd-doctor.mts';
+import {
+  DOCUMENTED_TOOLCHAIN_SEGMENTS,
+  runDoctor,
+} from '../src/scripts/idd-doctor.mts';
 
 const REPO_ROOT = fileURLToPath(new URL('..', import.meta.url));
 const FIXTURE_ROOT = new URL(
@@ -360,25 +363,6 @@ test('idd-doctor documented toolchain segments stay in sync with customization.m
     ['pre-push-validate', '**pre-push-validate**'],
     ['post-fix-validate', '**post-fix-validate**'],
   ];
-  const documentedSegments: Record<string, string[]> = {
-    'fix-validate': [
-      'npx dprint fmt "**/*.md"',
-      'npx markdownlint-cli2 --fix "**/*.md"',
-      'npx markdownlint-cli2 "**/*.md"',
-      'npx cspell lint "**" --no-progress',
-    ],
-    'pre-push-validate': [
-      'npx dprint check "**/*.md"',
-      'npx markdownlint-cli2 "**/*.md"',
-      'npx cspell lint "**" --no-progress',
-    ],
-    'post-fix-validate': [
-      'npx dprint fmt "**/*.md"',
-      'npx markdownlint-cli2 --fix "**/*.md"',
-      'npx markdownlint-cli2 "**/*.md"',
-      'npx cspell lint "**" --no-progress',
-    ],
-  };
   for (const [key, label] of rows) {
     const rowMatch = customizationDoc
       .split('\n')
@@ -389,9 +373,10 @@ test('idd-doctor documented toolchain segments stay in sync with customization.m
     const docSegments = (cellMatch as RegExpMatchArray)[1]
       .split('&&')
       .map((segment) => segment.trim());
+    const productionSegments = DOCUMENTED_TOOLCHAIN_SEGMENTS[key] ?? [];
     for (const segment of docSegments) {
       assert.ok(
-        documentedSegments[key].includes(segment),
+        productionSegments.includes(segment),
         `customization.md segment "${segment}" for "${key}" is missing from idd-doctor's DOCUMENTED_TOOLCHAIN_SEGMENTS`,
       );
     }
