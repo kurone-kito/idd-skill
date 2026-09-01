@@ -279,10 +279,11 @@ Before any mutating action in F3, apply the
 ## F4 — Cleanup
 
 1. **Non-default development branch**: if `{development-branch}` is not
-   the repository's default branch, GitHub did not auto-close the
-   claimed issue on merge (see `idd-pr-submit.instructions.md` D3.5) —
-   close it explicitly: `gh issue close {issue-number} --comment
-   "Merged via #{pr-number}."`.
+   the repository's default branch, GitHub did not auto-close any issue
+   on merge (see `idd-pr-submit.instructions.md` D3.5) — close each
+   issue in D3's deliberate closing set explicitly, not only the
+   claimed issue: `gh issue close {issue-number} --comment "Merged via
+   #{pr-number}."`.
 2. Confirm the post-merge digest update above exists or repair it after
    re-validating the claim. Do not minimize the digest as an
    operational marker unless a future cleanup policy explicitly
