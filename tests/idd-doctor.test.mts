@@ -70,6 +70,7 @@ import {
   resolveConfiguredHelperRuntimeProfile,
   resolveTargetGhHostname,
   scanFileForPlaceholders,
+  selectBacklogExamples,
   stripMarkdownNonText,
   worktreeGuardWiredAt,
 } from '../src/scripts/idd-doctor.mts';
@@ -2022,6 +2023,44 @@ test('formatCleanupBacklogExamples matches the pre-#2226 plain format when no nu
     formatCleanupBacklogExamples([100, 101], new Set()),
     '#100, #101',
   );
+});
+
+test('selectBacklogExamples preserves the plain slice when no bootstrap-era number exists', () => {
+  assert.deepEqual(
+    selectBacklogExamples([100, 101, 102, 103, 104, 105], new Set()),
+    [100, 101, 102, 103, 104],
+  );
+});
+
+test('selectBacklogExamples preserves the plain slice when a bootstrap-era number is already among it', () => {
+  assert.deepEqual(
+    selectBacklogExamples([100, 101, 102, 103, 104, 105], new Set([102])),
+    [100, 101, 102, 103, 104],
+  );
+});
+
+test('selectBacklogExamples swaps in a bootstrap-era number when the natural slice would show none (Copilot review, PR #2386)', () => {
+  // #110 is bootstrap-era but sits past the first-5 natural slice --
+  // without the fix, the warning's "(1 bootstrap-era)" count clause would
+  // pair with an Examples: list showing zero (bootstrap-era) tags.
+  const missing = [100, 101, 102, 103, 104, 110];
+  const bootstrapEra = new Set([110]);
+  const result = selectBacklogExamples(missing, bootstrapEra);
+  assert.equal(result.length, 5);
+  assert.ok(result.includes(110));
+  // Only the last natural entry is displaced -- the rest of the natural
+  // order is preserved.
+  assert.deepEqual(result.slice(0, 4), [100, 101, 102, 103]);
+});
+
+test('selectBacklogExamples respects a custom limit', () => {
+  const missing = [100, 101, 102, 110];
+  const bootstrapEra = new Set([110]);
+  assert.deepEqual(selectBacklogExamples(missing, bootstrapEra, 2), [100, 110]);
+});
+
+test('selectBacklogExamples returns an empty array for an empty missing list, even with a non-empty bootstrapEra', () => {
+  assert.deepEqual(selectBacklogExamples([], new Set([110])), []);
 });
 
 test('formatCleanupBacklogRemediation resolves the audit-pr-cleanup invocation per profile (idd-skill#1718)', () => {

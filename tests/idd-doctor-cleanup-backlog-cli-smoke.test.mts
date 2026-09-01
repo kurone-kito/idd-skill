@@ -362,6 +362,43 @@ test('checkPostMergeCleanupBacklog CLI: --cleanup-backlog-bootstrap-cutoff label
   });
 });
 
+test('checkPostMergeCleanupBacklog CLI: a bootstrap-era PR past the natural 5-example slice still appears in Examples: (Copilot review, PR #2386)', () => {
+  withTempCwd((cwd) => {
+    const mergedPrNumbers = [1201, 1202, 1203, 1204, 1205, 1210];
+    const report = runIddDoctorReport(
+      cwd,
+      buildCleanupBacklogStubGh({
+        owner: 'o',
+        repo: 'r',
+        mergedPrNumbers,
+        evidenceByPr: new Map(),
+        mergedAtByPr: new Map([
+          [1201, '2026-08-01T00:00:00Z'],
+          [1202, '2026-08-01T00:00:00Z'],
+          [1203, '2026-08-01T00:00:00Z'],
+          [1204, '2026-08-01T00:00:00Z'],
+          [1205, '2026-08-01T00:00:00Z'],
+          // Only #1210 is bootstrap-era, and it sorts past the natural
+          // first-5 slice -- without the fix, the warning would still
+          // claim "1 bootstrap-era" but show zero (bootstrap-era) tags.
+          [1210, '2025-01-01T00:00:00Z'],
+        ]),
+      }),
+      ['--cleanup-backlog-bootstrap-cutoff', '2026-01-01T00:00:00Z'],
+    );
+    const backlogWarning = report.warnings.find((w) =>
+      w.includes(BACKLOG_WARNING_SUBSTRING),
+    );
+    assert.ok(backlogWarning);
+    assert.match(
+      backlogWarning ?? '',
+      /^post-merge cleanup backlog: 6 merged PRs/,
+    );
+    assert.match(backlogWarning ?? '', /1 bootstrap-era/);
+    assert.match(backlogWarning ?? '', /#1210 \(bootstrap-era\)/);
+  });
+});
+
 test('checkPostMergeCleanupBacklog CLI: without --cleanup-backlog-bootstrap-cutoff, every PR reports the same undifferentiated way (no regression)', () => {
   withTempCwd((cwd) => {
     const report = runIddDoctorReport(

@@ -2058,6 +2058,34 @@ export function classifyBootstrapEraPrNumbers(
   return bootstrapEra;
 }
 /**
+ * Selects up to `limit` example PR numbers for display, guaranteeing at
+ * least one bootstrap-era-tagged example is visible whenever `bootstrapEra`
+ * is non-empty (idd-skill#2226 review, Copilot): a plain `slice(0, limit)`
+ * could silently omit every bootstrap-era number when none of the first
+ * `limit` entries in `missingPrNumbers` happen to be tagged, which would
+ * make the warning message's own bootstrap-era count clause look
+ * inconsistent with its own `Examples: ...` list (a non-zero count, zero
+ * `(bootstrap-era)` tags shown). Preserves the plain, order-preserving
+ * slice when `bootstrapEra` is empty or already represented in it --
+ * byte-identical to pre-#2226 behavior in the common case where no cutoff
+ * is configured at all.
+ */
+export function selectBacklogExamples(
+  missingPrNumbers,
+  bootstrapEra,
+  limit = 5,
+) {
+  const natural = missingPrNumbers.slice(0, limit);
+  if (bootstrapEra.size === 0 || natural.some((n) => bootstrapEra.has(n))) {
+    return natural;
+  }
+  const firstBootstrapEra = missingPrNumbers.find((n) => bootstrapEra.has(n));
+  if (firstBootstrapEra === undefined || natural.length === 0) {
+    return natural;
+  }
+  return [...natural.slice(0, natural.length - 1), firstBootstrapEra];
+}
+/**
  * Preamble line announcing how many merged PRs the backlog scan will visit.
  * Pure so tests can assert the exact wording without running the network scan.
  */
@@ -2373,8 +2401,12 @@ function checkPostMergeCleanupBacklog(root, options, report) {
     mergedAtByNumber,
     bootstrapCutoff,
   );
+  // idd-skill#2226 review (Copilot): select from the full `missing` list,
+  // not `verdict.examples` alone, so a non-zero bootstrapEraCountClause
+  // below is never shown alongside an Examples: list with zero
+  // (bootstrap-era) tags.
   const examplesText = formatCleanupBacklogExamples(
-    verdict.examples,
+    selectBacklogExamples(missing, bootstrapEra),
     bootstrapEra,
   );
   const bootstrapEraCountClause =
