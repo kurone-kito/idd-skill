@@ -18,8 +18,42 @@ function readWorkflow(name: string): string {
   );
 }
 
-function hasOwnConcurrencyBlock(text: string): boolean {
-  return /^concurrency:$/m.test(text);
+/** Extracts a top-level `concurrency:` block's indented body (the lines
+ * immediately following a `^concurrency:$` line), or `null` when no
+ * top-level `concurrency:` block exists. */
+function extractConcurrencyBlock(text: string): string | null {
+  const match = text.match(/^concurrency:\n((?: {2}.*\n)+)/m);
+  return match ? match[1] : null;
+}
+
+// cancel-in-progress values this repository's own workflows are known to
+// use for a genuinely self-cancelling pull_request-scoped concurrency
+// group -- a literal `true`, or pnpm-boundary.yml's own conditional
+// (documented there as always true for this repository's own
+// pull_request-triggered runs). An expression outside this allowlist
+// cannot be verified to evaluate true without actually running it, so a
+// future workflow using a different conditional must extend this list
+// deliberately rather than silently pass a guard that never checked it.
+const KNOWN_SAFE_CANCEL_IN_PROGRESS_VALUES = new Set([
+  'true',
+  // biome-ignore lint/suspicious/noTemplateCurlyInString: a literal YAML/Actions expression matched against workflow text, not a JS template placeholder.
+  "${{ startsWith(github.ref, 'refs/pull/') }}",
+]);
+
+/** Whether `text`'s top-level `concurrency:` block sets
+ * `cancel-in-progress` to a value known to evaluate `true` for this
+ * repository's own pull_request-triggered runs -- not merely whether a
+ * `concurrency:` key is present, since `false` or an unset (default
+ * `false`) value declares a block but cancels nothing. */
+function hasEffectiveCancelInProgress(text: string): boolean {
+  const block = extractConcurrencyBlock(text);
+  if (!block) {
+    return false;
+  }
+  const match = block.match(/^ {2}cancel-in-progress: (.+)$/m);
+  return (
+    match !== null && KNOWN_SAFE_CANCEL_IN_PROGRESS_VALUES.has(match[1].trim())
+  );
 }
 
 /** The called workflow's own filename, when `text`'s job body calls a
@@ -99,7 +133,7 @@ test('every pull_request-triggering workflow has working concurrency cancellatio
   );
   for (const file of files) {
     const text = readWorkflow(file);
-    if (hasOwnConcurrencyBlock(text)) {
+    if (hasEffectiveCancelInProgress(text)) {
       continue;
     }
     // pnpm-boundary-node22-floor.yml calls pnpm-boundary.yml as a reusable
@@ -113,19 +147,19 @@ test('every pull_request-triggering workflow has working concurrency cancellatio
     // `cancelled` conclusions exist for this workflow, which could only
     // happen if a newer run's concurrency group evicted an older one.
     //
-    // Verify the *called* workflow actually declares concurrency too --
-    // otherwise a future workflow-call-only caller of a workflow lacking
-    // its own concurrency block would silently pass this guard.
+    // Verify the *called* workflow actually declares an effective
+    // cancel-in-progress too -- otherwise a future workflow-call-only
+    // caller of a workflow lacking one would silently pass this guard.
     const calledFile = reusableWorkflowCallTarget(text);
     if (!calledFile) {
       assert.fail(
-        `${file}: must declare its own concurrency: block, or be a pure reusable-workflow caller that inherits one`,
+        `${file}: must declare an effective cancel-in-progress concurrency setting, or be a pure reusable-workflow caller that inherits one`,
       );
     }
     const calledText = readWorkflow(calledFile);
     assert.ok(
-      hasOwnConcurrencyBlock(calledText),
-      `${file}: calls ${calledFile} as a reusable workflow, but ${calledFile} declares no concurrency: block for it to inherit`,
+      hasEffectiveCancelInProgress(calledText),
+      `${file}: calls ${calledFile} as a reusable workflow, but ${calledFile} declares no effective cancel-in-progress for it to inherit`,
     );
   }
 });

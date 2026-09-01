@@ -47,24 +47,29 @@ export interface UsageJob {
 }
 
 /** Per-workflow aggregate: run count (including runs with no completed
- * job yet), completed-job count, summed job duration, and a run-count
- * breakdown by triggering event (`pull_request`, `pull_request_review`,
- * `pull_request_review_comment`, ...). */
+ * job yet), completed-job count, summed job duration (raw wall-clock),
+ * summed billed minutes (each job rounded up to the whole minute before
+ * summing -- GitHub's actual billing unit, distinct from the wall-clock
+ * total), and a run-count breakdown by triggering event (`pull_request`,
+ * `pull_request_review`, `pull_request_review_comment`, ...). */
 export interface WorkflowUsageRow {
   workflowName: string;
   runCount: number;
   jobCount: number;
   totalDurationMs: number;
+  totalBilledMinutes: number;
   byEvent: Record<string, number>;
 }
 
 /** Full report: totals plus one {@link WorkflowUsageRow} per distinct
- * workflow name, sorted by `totalDurationMs` descending (the actual cost
- * driver), tie-broken by workflow name ascending for a stable order. */
+ * workflow name, sorted by `totalBilledMinutes` descending (the actual
+ * billed-cost driver -- see {@link WorkflowUsageRow}), tie-broken by
+ * workflow name ascending for a stable order. */
 export interface ActionsUsageReport {
   runCount: number;
   jobCount: number;
   totalDurationMs: number;
+  totalBilledMinutes: number;
   workflows: WorkflowUsageRow[];
 }
 
@@ -73,6 +78,34 @@ interface WorkflowBucket {
   byEvent: Map<string, Set<number>>;
   jobCount: number;
   totalDurationMs: number;
+  totalBilledMinutes: number;
+}
+
+/** Ceils a job's elapsed milliseconds to whole billed minutes, per GitHub's
+ * actual billing unit -- a job that ran for any positive duration still
+ * bills at least one minute (a batch of short jobs is not free just
+ * because none individually reached 60s). */
+export function billedMinutesFor(durationMs: number): number {
+  return Math.max(1, Math.ceil(durationMs / 60_000));
+}
+
+/**
+ * A branch-name filter alone can also match a run that is not actually
+ * `prNumber`'s own (a reused branch name, or a `workflow_dispatch` /
+ * `push` run against the same branch outside this PR). `pullRequests` is a
+ * run's own `pull_requests[].number` list from the Actions API --
+ * populated by GitHub for same-repository runs, but always empty for a
+ * fork-originated PR's runs (GitHub does not associate those, so the
+ * branch filter is already the best available signal there). A run
+ * belongs when its `pull_requests` list is empty (fork case, or
+ * genuinely untracked) or includes `prNumber`; a non-empty list that
+ * omits `prNumber` means the run belongs to a different pull request.
+ */
+export function runBelongsToPr(
+  pullRequests: readonly number[],
+  prNumber: number,
+): boolean {
+  return pullRequests.length === 0 || pullRequests.includes(prNumber);
 }
 
 /**
@@ -99,6 +132,7 @@ export function aggregateActionsUsage(
       byEvent: new Map(),
       jobCount: 0,
       totalDurationMs: 0,
+      totalBilledMinutes: 0,
     };
     bucket.runIds.add(run.id);
     const eventRunIds = bucket.byEvent.get(run.event) ?? new Set();
@@ -126,6 +160,7 @@ export function aggregateActionsUsage(
     }
     bucket.jobCount += 1;
     bucket.totalDurationMs += durationMs;
+    bucket.totalBilledMinutes += billedMinutesFor(durationMs);
   }
   const workflows: WorkflowUsageRow[] = [...buckets.entries()]
     .map(([workflowName, bucket]) => ({
@@ -133,13 +168,14 @@ export function aggregateActionsUsage(
       runCount: bucket.runIds.size,
       jobCount: bucket.jobCount,
       totalDurationMs: bucket.totalDurationMs,
+      totalBilledMinutes: bucket.totalBilledMinutes,
       byEvent: Object.fromEntries(
         [...bucket.byEvent.entries()].map(([event, ids]) => [event, ids.size]),
       ),
     }))
     .sort(
       (a, b) =>
-        b.totalDurationMs - a.totalDurationMs ||
+        b.totalBilledMinutes - a.totalBilledMinutes ||
         a.workflowName.localeCompare(b.workflowName),
     );
   return {
@@ -147,6 +183,10 @@ export function aggregateActionsUsage(
     jobCount: workflows.reduce((sum, row) => sum + row.jobCount, 0),
     totalDurationMs: workflows.reduce(
       (sum, row) => sum + row.totalDurationMs,
+      0,
+    ),
+    totalBilledMinutes: workflows.reduce(
+      (sum, row) => sum + row.totalBilledMinutes,
       0,
     ),
     workflows,
@@ -169,18 +209,18 @@ function formatDuration(ms: number): string {
 
 export function renderTable(report: ActionsUsageReport): string {
   const lines = [
-    '| Workflow | Runs | Jobs | Duration |',
-    '| --- | --- | --- | --- |',
+    '| Workflow | Runs | Jobs | Duration | Billed |',
+    '| --- | --- | --- | --- | --- |',
     ...report.workflows.map(
       (row) =>
         `| ${row.workflowName} | ${row.runCount} | ${row.jobCount} | ${formatDuration(
           row.totalDurationMs,
-        )} |`,
+        )} | ${row.totalBilledMinutes}m |`,
     ),
     '',
     `Total: ${report.runCount} runs, ${report.jobCount} jobs, ${formatDuration(
       report.totalDurationMs,
-    )}.`,
+    )} wall-clock, ${report.totalBilledMinutes} billed minute(s).`,
   ];
   return lines.join('\n');
 }
@@ -206,6 +246,7 @@ interface RawRun {
   id: number;
   name: string;
   event: string;
+  pull_requests: number[];
 }
 
 interface RawJob {
@@ -241,7 +282,9 @@ function resolveOwnerRepo(
  * run tied to a pull request -- `pull_request`, `pull_request_review`, and
  * `pull_request_review_comment` alike -- shares the PR's head branch name,
  * so listing runs by `branch` (rather than the repository-wide recent-runs
- * list) captures the full review-loop cost in one scoped query.
+ * list) captures the full review-loop cost in one scoped query; each
+ * fetched run is then narrowed to this PR specifically via
+ * {@link runBelongsToPr}.
  *
  * One extra `gh api` call per run fetches that run's own jobs (per-job
  * duration, not just the run's own wall-clock span, matters for a
@@ -260,6 +303,8 @@ export function fetchActionsUsageForPr(
       'pr',
       'view',
       String(prNumber),
+      '-R',
+      `${owner}/${repo}`,
       '--json',
       'headRefName',
       '--jq',
@@ -274,13 +319,15 @@ export function fetchActionsUsageForPr(
     )}&per_page=100`,
     '--paginate',
     '--jq',
-    '.workflow_runs[] | {id: .id, name: .name, event: .event}',
+    '.workflow_runs[] | {id: .id, name: .name, event: .event, pull_requests: [.pull_requests[].number]}',
   ]) as RawRun[];
-  const runs: UsageRun[] = rawRuns.map((raw) => ({
-    id: raw.id,
-    workflowName: raw.name,
-    event: raw.event,
-  }));
+  const runs: UsageRun[] = rawRuns
+    .filter((raw) => runBelongsToPr(raw.pull_requests, prNumber))
+    .map((raw) => ({
+      id: raw.id,
+      workflowName: raw.name,
+      event: raw.event,
+    }));
   const jobs: UsageJob[] = [];
   for (const run of runs) {
     const rawJobs = ghPaginatedJson([

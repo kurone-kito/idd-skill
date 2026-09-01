@@ -3,7 +3,9 @@ import { test } from 'node:test';
 
 import {
   aggregateActionsUsage,
+  billedMinutesFor,
   renderTable,
+  runBelongsToPr,
   type UsageJob,
   type UsageRun,
 } from '../src/scripts/actions-usage-report.mts';
@@ -59,14 +61,42 @@ test('aggregateActionsUsage: empty input reports zero totals and no workflow row
     runCount: 0,
     jobCount: 0,
     totalDurationMs: 0,
+    totalBilledMinutes: 0,
     workflows: [],
   });
+});
+
+test('runBelongsToPr: an empty pull_requests list is kept (fork PR, no association available)', () => {
+  assert.equal(runBelongsToPr([], 2344), true);
+});
+
+test('runBelongsToPr: a non-empty list including prNumber is kept', () => {
+  assert.equal(runBelongsToPr([1200, 2344], 2344), true);
+});
+
+test('runBelongsToPr: a non-empty list omitting prNumber is dropped (a different PR reused this branch)', () => {
+  assert.equal(runBelongsToPr([1200], 2344), false);
+});
+
+test('billedMinutesFor: rounds up to the whole minute, with a one-minute floor', () => {
+  // GitHub bills a job that ran for any positive duration at least one
+  // minute -- ten five-second jobs cost ten billed minutes, not zero.
+  assert.equal(billedMinutesFor(5_000), 1);
+  assert.equal(billedMinutesFor(60_000), 1);
+  assert.equal(billedMinutesFor(60_001), 2);
+  assert.equal(billedMinutesFor(90_000), 2);
 });
 
 test('renderTable: renders one row per workflow plus a totals line', () => {
   const { input } = loadFixture('basic');
   const table = renderTable(aggregateActionsUsage(input.runs, input.jobs));
-  assert.match(table, /\| Linting workflow \| 2 \| 2 \| 2m30s \|/);
-  assert.match(table, /\| IDD advisory-convergence gate \| 3 \| 2 \| 0m45s \|/);
-  assert.match(table, /Total: 5 runs, 4 jobs, 3m15s\./);
+  assert.match(table, /\| Linting workflow \| 2 \| 2 \| 2m30s \| 3m \|/);
+  assert.match(
+    table,
+    /\| IDD advisory-convergence gate \| 3 \| 2 \| 0m45s \| 2m \|/,
+  );
+  assert.match(
+    table,
+    /Total: 5 runs, 4 jobs, 3m15s wall-clock, 5 billed minute\(s\)\./,
+  );
 });
