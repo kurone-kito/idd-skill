@@ -9,9 +9,10 @@
 // module imports nothing (no `node:child_process`, no `gh` invocation, no
 // GitHub-specific response shape), so nothing here can accidentally depend
 // on how the GitHub adapter (`gh-exec.mts`, `gh-http-status.mts`) works.
-// `policy-helpers.mts` and `idd-config.mts` import from this module, never
-// the reverse. See docs/provider-boundary.md for the design record this
-// module implements. This foundation step keeps GitHub as the only
+// `policy-helpers.mts` imports from this module, never the reverse; other
+// modules (e.g. `idd-config.mts`) may import from it in the future without
+// creating a cycle. See docs/provider-boundary.md for the design record
+// this module implements. This foundation step keeps GitHub as the only
 // functional provider; nothing in this repository consumes a non-GitHub
 // provider yet.
 
