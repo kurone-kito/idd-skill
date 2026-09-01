@@ -52,6 +52,15 @@ test('a total usage snapshot maps to a schema-valid sample with reasoning, prefe
     output: 800,
     reasoning: 300,
   });
+  // The inclusive-total invariant itself, not just the hardcoded values
+  // above, so a later change to the inclusive/exclusive heuristic still
+  // fails this test even if it happens to preserve these exact numbers.
+  assert.equal(
+    sample.usage.inputUncached +
+      sample.usage.cacheRead +
+      sample.usage.cacheCreation,
+    15000,
+  );
   assert.equal(sample.compactionCount, 0);
   assert.equal(sample.toolCallCount, 6);
   assert.equal(sample.includesSubagents, false);
@@ -162,6 +171,35 @@ test('subagent updates.jsonl records are summed into the parent usage and includ
   });
 });
 
+test('includesSubagents is true even when a subagent directory has no harvestable updates.jsonl -- #2289 (Copilot)', () => {
+  // A subagent session directory existed (the caller pushed an entry),
+  // even though its updates.jsonl was missing/unreadable/empty. Presence
+  // of the directory, not usage data, drives includesSubagents.
+  const { sample } = grokAdapter.harvest({
+    updateRecords: readFixtureRecords('updates-basic.jsonl'),
+    signals: readFixtureJson('signals-basic.json'),
+    subagentUpdateRecords: [[]],
+  });
+  assert.equal(sample.includesSubagents, true);
+  assert.deepEqual(sample.usage, {
+    inputUncached: 2000,
+    cacheRead: 12000,
+    cacheCreation: 1000,
+    output: 800,
+    reasoning: 300,
+  });
+});
+
+test('harvest ignores a non-array inner subagentUpdateRecords element instead of throwing -- #2289 (CodeRabbit)', () => {
+  const { sample } = grokAdapter.harvest({
+    updateRecords: readFixtureRecords('updates-basic.jsonl'),
+    // The outer array passes Array.isArray; the inner element does not.
+    subagentUpdateRecords: [123, readFixtureRecords('updates-subagent.jsonl')],
+  });
+  assert.equal(sample.includesSubagents, true);
+  assert.equal(sample.usage.inputUncached, 2000 + 200);
+});
+
 test('parseGrokSessionLines tolerates a truncated trailing line', () => {
   const records = parseGrokSessionLines(
     '{"type":"session_start","cwd":"/x/idd-skill"}\n{"type":"agent_message_c',
@@ -216,14 +254,27 @@ test('harvest fails closed when no vendorSessionId is derivable', () => {
   );
 });
 
-test('harvest fails closed when redaction strips a path-shaped vendorSessionId, rather than returning a sample missing a required field -- #2289 (CodeRabbit)', () => {
+test('a path-shaped sessionId is normalized with basename() before redaction, so a session with an unusual but legitimate id still harvests -- #2289 (CodeRabbit)', () => {
+  const { sample } = grokAdapter.harvest({
+    updateRecords: [
+      {
+        timestamp: '2026-08-26T00:00:00.000Z',
+        sessionId: '/tmp/leaked-path-session-id',
+        type: 'session_start',
+      },
+    ],
+  });
+  assert.equal(sample.vendorSessionId, 'leaked-path-session-id');
+});
+
+test('harvest fails closed when redaction still strips a secret-shaped vendorSessionId (basename() does not change it), rather than returning a sample missing a required field -- #2289 (CodeRabbit)', () => {
   assert.throws(
     () =>
       grokAdapter.harvest({
         updateRecords: [
           {
             timestamp: '2026-08-26T00:00:00.000Z',
-            sessionId: '/tmp/leaked-path-session-id',
+            sessionId: 'ghp_abcdefghijklmnopqrstuvwx',
             type: 'session_start',
           },
         ],

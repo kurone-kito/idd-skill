@@ -67,14 +67,24 @@ export function parseGrokSessionLines(text) {
 export function isIddSkillCwd(cwd) {
   return typeof cwd === 'string' && cwd.includes('idd-skill');
 }
-/** The first non-empty top-level `sessionId` across `records`, in file order. */
+/**
+ * The first non-empty top-level `sessionId` across `records`, in file
+ * order, normalized with `path.basename()` -- the same guard
+ * {@link deriveFallbackSessionId} applies to its own fallback value, so a
+ * path-shaped `sessionId` (however unlikely for an opaque vendor ID) does
+ * not reach `redactTokenCostRecord()` and get silently stripped to
+ * `undefined` there instead (CodeRabbit review, #2289).
+ */
 function extractSessionId(records) {
   for (const record of records) {
     const id = isPlainObject(record)
       ? getStringField(record, 'sessionId')
       : undefined;
     if (id) {
-      return id;
+      const stripped = basename(id);
+      if (stripped.length > 0) {
+        return stripped;
+      }
     }
   }
   return undefined;
@@ -277,8 +287,13 @@ function asGrokHarvestInput(input) {
         ? input.sessionIdBasename
         : undefined,
     cwd: typeof input.cwd === 'string' ? input.cwd : undefined,
+    // Validate each inner element too, not just the outer array: a
+    // non-array inner element would otherwise reach extractLatestUsage's
+    // `for...of` and throw TypeError, breaking this module's documented
+    // graceful-degradation contract for malformed direct-caller input
+    // (CodeRabbit review, #2289).
     subagentUpdateRecords: Array.isArray(input.subagentUpdateRecords)
-      ? input.subagentUpdateRecords
+      ? input.subagentUpdateRecords.filter((records) => Array.isArray(records))
       : undefined,
   };
 }
@@ -397,17 +412,22 @@ function listSubdirNames(dir) {
     return [];
   }
 }
-/** Each subagent session directory's own `updates.jsonl`, parsed, when a `subagents/` subdirectory exists under `sessionDir`. */
+/**
+ * Each subagent session directory's own `updates.jsonl`, parsed, when a
+ * `subagents/` subdirectory exists under `sessionDir`. A subagent
+ * directory is kept even when its `updates.jsonl` is missing, unreadable,
+ * or empty (an empty array) -- `includesSubagents` reflects whether a
+ * subagent session *existed*, not whether it had harvestable usage data
+ * (Copilot review, #2289); `extractLatestUsage` already no-ops on an
+ * empty records array.
+ */
 function readSubagentUpdateRecords(sessionDir) {
   const subagentsDir = join(sessionDir, 'subagents');
   const out = [];
   for (const subagentId of listSubdirNames(subagentsDir)) {
-    const records = readJsonlIfPresent(
-      join(subagentsDir, subagentId, 'updates.jsonl'),
+    out.push(
+      readJsonlIfPresent(join(subagentsDir, subagentId, 'updates.jsonl')),
     );
-    if (records.length > 0) {
-      out.push(records);
-    }
   }
   return out;
 }
