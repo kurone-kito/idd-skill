@@ -8357,3 +8357,61 @@ test('#2335: computePreMergeReadinessBlockers never blocks on an entirely absent
     computePreMergeReadinessBlockers(ready),
   );
 });
+
+test('#2335: a new unresolved finding arriving inside an already-elapsed window reopens it (acceptance criterion: a new finding returns the loop to E1)', () => {
+  const fixture = readJson('fixtures/pre-merge-readiness/clean.json');
+  // Baseline: with the fixture's own anchor (23:56) and now (00:00), a 2min
+  // window has already elapsed (4min >= 2min) -- same as the "elapsing with
+  // nothing new" test above.
+  const alreadyElapsed = buildPreMergeReadinessSummary(fixture.input, {
+    ...fixture.options,
+    includeDispositionEvidence: true,
+    secondaryQuietWindowMinutes: 2,
+  });
+  assert.equal(secondaryQuietWindowOf(alreadyElapsed).elapsed, true);
+
+  // A late secondary-bot finding lands as a new unresolved thread, one
+  // minute before `now` -- the exact scenario #2335 measured on PR #2330.
+  // It pushes the effective activity ceiling forward, so the same 2min
+  // window has NOT elapsed against this new anchor: the window reopens.
+  const reopened = buildPreMergeReadinessSummary(
+    {
+      ...fixture.input,
+      threads: [
+        ...fixture.input.threads,
+        {
+          id: 'thread-late-secondary-finding',
+          isResolved: false,
+          updatedAt: '',
+          reviewerReopenedAt: '',
+          comments: {
+            pageInfo: { hasNextPage: false },
+            nodes: [
+              {
+                author: { login: 'coderabbitai[bot]' },
+                body: 'This still needs a null check.',
+                createdAt: '2026-05-11T23:59:00Z',
+                updatedAt: '2026-05-11T23:59:00Z',
+                pullRequestReview: { id: 'review-late' },
+              },
+            ],
+          },
+        },
+      ],
+    },
+    {
+      ...fixture.options,
+      includeDispositionEvidence: true,
+      secondaryQuietWindowMinutes: 2,
+    },
+  );
+  const status = secondaryQuietWindowOf(reopened);
+  assert.equal(status.anchorAt, '2026-05-11T23:59:00Z');
+  assert.equal(status.elapsedMinutes, 1);
+  assert.equal(status.elapsed, false);
+  assert.ok(
+    (reopened.blockers as { gate: string }[]).some(
+      (blocker) => blocker.gate === 'secondary-quiet-window',
+    ),
+  );
+});
