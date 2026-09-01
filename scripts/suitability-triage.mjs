@@ -222,12 +222,23 @@ const NEGATION_PATTERN =
 // guard, leaving this verb alternation on a bare `\b` -- a hyphen still
 // counts as a word boundary, so an ordinary hyphenated compound noun like
 // "duplicate-evidence-skip check" (describing an existing mechanism, not a
-// directive) matched "skip" here and wrongly failed `trust_safety`. Same
-// fix shape as the noun guard and `SUBJECTIVE_SUBJECT_PATTERN` (#2205): wrap
-// the whole alternation in a shared `(?<![\w-])`/`(?![\w-])` boundary so a
-// hyphen-adjacent occurrence no longer counts for any verb, while a
-// freestanding use ("skip the check", "bypass this policy") still does.
-const POLICY_OVERRIDE_VERB_SOURCE = String.raw`(?<![\w-])(?:ignore|bypass|override|disable|disable|skip|turn off|suppress|disable)(?![\w-])`;
+// directive) matched "skip" here and wrongly failed `trust_safety`.
+//
+// The leading guard deliberately differs from the noun side's plain
+// `(?<![\w-])`: a single-character lookbehind cannot tell a genuine
+// compound word ("evidence-skip", letter then hyphen) apart from a
+// hyphen-prefixed CLI flag reference ("--skip" or "-skip", hyphen then
+// hyphen, or hyphen at the very start of a token). Using the noun side's
+// exact guard here would let a real directive phrased as a flag (e.g.
+// "pass `--skip` so the repository gate is not evaluated") evade
+// detection entirely (#2407 review, Codex). `(?<![A-Za-z0-9]-)` only
+// excludes a match when a letter or digit sits immediately before the
+// hyphen -- true compound-word hyphenation -- leaving any hyphen not
+// itself preceded by a word character (start of string, whitespace, or
+// another hyphen) still detectable. The trailing guard keeps the noun
+// side's plain `(?![\w-])`, unaffected by this distinction, and still
+// excludes a compound-noun suffix.
+const POLICY_OVERRIDE_VERB_SOURCE = String.raw`(?<![A-Za-z0-9]-)(?:ignore|bypass|override|disable|disable|skip|turn off|suppress|disable)(?![\w-])`;
 // #2218: a bare `\b` treats a hyphen as a non-word character, so every one
 // of these nouns also matched inside an ordinary hyphenated file-path
 // mention (e.g. this project's own marker prefix in `idd-workflow-notes.md`
