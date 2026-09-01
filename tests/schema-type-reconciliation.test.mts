@@ -141,6 +141,7 @@ interface PolicyConfigFile {
   $schema?: string;
   iddVersion: string;
   markerPrefix: string;
+  developmentBranch?: string;
   mergePolicy:
     | 'fully_autonomous_merge'
     | 'human_merge'
@@ -498,6 +499,7 @@ export const policyConfigKeys = [
   '$schema',
   'iddVersion',
   'markerPrefix',
+  'developmentBranch',
   'mergePolicy',
   'mergePolicyAck',
   'reviewPolicy',

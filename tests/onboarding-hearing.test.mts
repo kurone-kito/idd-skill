@@ -46,6 +46,7 @@ const STEP1B_IDS = [
   'idd-label-names',
   'up-to-date-head-ruleset',
   'bootstrap-execution-mode',
+  'development-branch',
 ] as const;
 
 const DOCS_ONLY_IDS = new Set<string>([
@@ -72,6 +73,7 @@ const STEP1B_COMPANION = {
   'idd-label-names': '### IDD label names',
   'up-to-date-head-ruleset': 'up to date before merging',
   'bootstrap-execution-mode': '### Bootstrap execution mode',
+  'development-branch': '### Development branch',
 } as const;
 
 function extractH2Section(doc: string, heading: string): string {

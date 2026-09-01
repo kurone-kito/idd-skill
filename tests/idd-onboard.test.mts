@@ -31,9 +31,11 @@ import {
   applySubstitutionPlan,
   buildImportPlan,
   buildSubstitutionPlan,
+  checkGitRemoteBranchExists,
   checkManifestCompleteness,
   checkPlaceholderResidue,
   checkStaleImportSignal,
+  deriveDevelopmentBranchCandidate,
   deriveInstallDepsCommand,
   deriveMarkerPrefix,
   deriveValidateCommands,
@@ -50,6 +52,7 @@ import {
   resolvePlaceholderValues,
   restoreExistingCommandsTable,
   runHearWizard,
+  runRecordPolicyCli,
   runVerify,
   SCAN_EXCLUDED_PATHS,
   scanPlaceholderTokens,
@@ -2839,6 +2842,270 @@ test('runHearWizard shows each explanation, confirms the shown default on empty 
   assert.deepEqual(validate(transcript, schema), []);
 });
 
+// ---------------------------------------------------------------------------
+// #2271: developmentBranch onboarding hearing item
+// ---------------------------------------------------------------------------
+
+test('deriveDevelopmentBranchCandidate returns the injected default-branch reader value, or null when undetermined', () => {
+  assert.equal(
+    deriveDevelopmentBranchCandidate('/unused', {
+      readDefaultBranch: () => 'develop',
+    }),
+    'develop',
+  );
+  assert.equal(
+    deriveDevelopmentBranchCandidate('/unused', {
+      readDefaultBranch: () => null,
+    }),
+    null,
+  );
+  // No injected reader and no real `gh` evidence for this bogus path:
+  // falls back to the real readGithubDefaultBranch, which fails closed to
+  // null rather than throwing.
+  assert.equal(
+    deriveDevelopmentBranchCandidate(
+      join(tmpdir(), 'idd-onboard-nonexistent-path'),
+    ),
+    null,
+  );
+});
+
+/** A git repo with a local `origin` remote whose only branch is `main`. */
+function makeGitRemoteFixture(): { root: string; remoteRoot: string } {
+  const remoteRoot = mkdtempSync(join(tmpdir(), 'idd-onboard-remote-'));
+  execFileSync('git', ['init', '--initial-branch=main', remoteRoot], {
+    stdio: 'ignore',
+  });
+  execFileSync(
+    'git',
+    ['-C', remoteRoot, 'config', 'user.email', 'fixture@example.com'],
+    { stdio: 'ignore' },
+  );
+  execFileSync('git', ['-C', remoteRoot, 'config', 'user.name', 'Fixture'], {
+    stdio: 'ignore',
+  });
+  writeFileSync(join(remoteRoot, 'README.md'), '# fixture\n');
+  execFileSync('git', ['-C', remoteRoot, 'add', 'README.md'], {
+    stdio: 'ignore',
+  });
+  execFileSync(
+    'git',
+    ['-C', remoteRoot, 'commit', '--no-gpg-sign', '-m', 'fixture'],
+    { stdio: 'ignore' },
+  );
+  const root = makeFixtureDir();
+  execFileSync('git', ['init', '--initial-branch=main', root], {
+    stdio: 'ignore',
+  });
+  execFileSync('git', ['-C', root, 'remote', 'add', 'origin', remoteRoot], {
+    stdio: 'ignore',
+  });
+  return { root, remoteRoot };
+}
+
+test('checkGitRemoteBranchExists is true for a branch present on origin, false otherwise -- purely local, no credentials', () => {
+  const { root } = makeGitRemoteFixture();
+  assert.equal(checkGitRemoteBranchExists(root, 'main'), true);
+  assert.equal(checkGitRemoteBranchExists(root, 'no-such-branch'), false);
+});
+
+test("runHearWizard offers the injected default-branch candidate as development-branch's effective default", async () => {
+  const root = makeFixtureDir();
+  writeHearFixture(root);
+  const catalog = loadOnboardingHearingCatalog();
+  const prompt: PromptFn = async (question: string) => {
+    if (question.startsWith('development-branch')) {
+      // Confirm the shown default via empty input, same convention as the
+      // broader wizard test above.
+      assert.match(question, /\[develop\]/);
+      return '';
+    }
+    const hasShownDefault = / \[/.test(question);
+    if (hasShownDefault) {
+      return '';
+    }
+    const id = question.split(/ \[|: /)[0] ?? '';
+    return id === 'TRUSTED_MARKER_ACTOR'
+      ? 'trusted-user-a'
+      : id === 'credential-scope'
+        ? 'repository-scoped-pat'
+        : `fixture-${id}`;
+  };
+  const answers = await runHearWizard(catalog, root, {
+    isTTY: true,
+    prompt,
+    readers: { readDefaultBranch: () => 'develop' },
+  });
+  assert.equal(
+    answers.find((answer) => answer.id === 'development-branch')?.value,
+    'develop',
+  );
+});
+
+test('bin/idd-onboard.mjs --record-policy exits 1 and writes nothing when developmentBranch names a branch absent from origin (#2271)', () => {
+  const { root } = makeGitRemoteFixture();
+  mkdirSync(join(root, '.github', 'idd'), { recursive: true });
+  writeFileSync(
+    join(root, '.github', 'idd', 'config.json'),
+    [
+      '{',
+      '  "markerPrefix": "{{PROJECT_MARKER_PREFIX}}",',
+      '  "trustedMarkerActors": ["{{TRUSTED_MARKER_ACTOR}}"],',
+      '  "commands": {',
+      '    "install-deps": "{{INSTALL_DEPS_COMMAND}}",',
+      '    "fix-validate": "{{FIX_VALIDATE_COMMANDS}}",',
+      '    "pre-push-validate": "{{PRE_PUSH_VALIDATE_COMMANDS}}",',
+      '    "post-fix-validate": "{{POST_FIX_VALIDATE_COMMANDS}}"',
+      '  }',
+      '}',
+      '',
+    ].join('\n'),
+  );
+  const answers = buildValidHearAnswers();
+  answers['development-branch'] = 'no-such-branch';
+  const transcript = confirmTranscript(root, answers);
+  const transcriptPath = join(root, 'transcript.json');
+  writeFileSync(transcriptPath, JSON.stringify(transcript));
+
+  const { status, verdict } = runCliBin([
+    '--record-policy',
+    '--transcript',
+    transcriptPath,
+    '--target',
+    root,
+    '--apply',
+  ]);
+  assert.equal(status, 1);
+  assert.equal(verdict.valid, false);
+  assert.ok(
+    (verdict.unresolved as string[]).some((message) =>
+      message.includes('no-such-branch'),
+    ),
+  );
+  const config = JSON.parse(
+    readFileSync(join(root, '.github', 'idd', 'config.json'), 'utf8'),
+  ) as Record<string, unknown>;
+  assert.equal('developmentBranch' in config, false);
+});
+
+test('bin/idd-onboard.mjs --record-policy exits 1 on a malformed developmentBranch before ever checking the remote (#2271 review)', () => {
+  const { root } = makeGitRemoteFixture();
+  mkdirSync(join(root, '.github', 'idd'), { recursive: true });
+  writeFileSync(
+    join(root, '.github', 'idd', 'config.json'),
+    [
+      '{',
+      '  "markerPrefix": "{{PROJECT_MARKER_PREFIX}}",',
+      '  "trustedMarkerActors": ["{{TRUSTED_MARKER_ACTOR}}"],',
+      '  "commands": {',
+      '    "install-deps": "{{INSTALL_DEPS_COMMAND}}",',
+      '    "fix-validate": "{{FIX_VALIDATE_COMMANDS}}",',
+      '    "pre-push-validate": "{{PRE_PUSH_VALIDATE_COMMANDS}}",',
+      '    "post-fix-validate": "{{POST_FIX_VALIDATE_COMMANDS}}"',
+      '  }',
+      '}',
+      '',
+    ].join('\n'),
+  );
+  // Non-empty (passes --hear --apply's generic non-empty check) but
+  // contains whitespace, so only inspectDevelopmentBranch's stricter
+  // shape check rejects it -- a hand-edited-transcript scenario.
+  const answers = buildValidHearAnswers();
+  answers['development-branch'] = 'my branch';
+  const transcript = confirmTranscript(root, answers);
+  const transcriptPath = join(root, 'transcript.json');
+  writeFileSync(transcriptPath, JSON.stringify(transcript));
+
+  const { status, verdict } = runCliBin([
+    '--record-policy',
+    '--transcript',
+    transcriptPath,
+    '--target',
+    root,
+    '--apply',
+  ]);
+  assert.equal(status, 1);
+  assert.equal(verdict.valid, false);
+  assert.ok(
+    (verdict.unresolved as string[]).some(
+      (message) =>
+        message.includes('development-branch') &&
+        message.includes('whitespace') &&
+        !message.includes('not found on the configured origin remote'),
+    ),
+    `expected a shape-validation message, got: ${JSON.stringify(verdict.unresolved)}`,
+  );
+});
+
+test('runRecordPolicyCli uses the injected readRemoteBranchExists reader instead of a real git ls-remote (#2271 review)', () => {
+  const root = makeFixtureDir();
+  mkdirSync(join(root, '.github', 'idd'), { recursive: true });
+  writeFileSync(
+    join(root, '.github', 'idd', 'config.json'),
+    '{"markerPrefix":"m","trustedMarkerActors":[],"commands":{"install-deps":"x","fix-validate":"x","pre-push-validate":"x","post-fix-validate":"x"}}\n',
+  );
+  const answers = buildValidHearAnswers();
+  answers['development-branch'] = 'develop';
+  const transcript = confirmTranscript(root, answers);
+  const transcriptPath = join(root, 'transcript.json');
+  writeFileSync(transcriptPath, JSON.stringify(transcript));
+
+  let calledWith: [string, string] | null = null;
+  const originalExit = process.exit;
+  const originalWrite = process.stdout.write;
+  const chunks: string[] = [];
+  process.stdout.write = ((chunk: string) => {
+    chunks.push(String(chunk));
+    return true;
+  }) as typeof process.stdout.write;
+  process.exit = ((code?: number) => {
+    throw new Error(`process.exit(${code})`);
+  }) as typeof process.exit;
+  try {
+    runRecordPolicyCli(
+      {
+        substitute: false,
+        importMode: false,
+        verify: false,
+        hear: false,
+        recordPolicy: true,
+        propose: false,
+        apply: true,
+        answers: undefined,
+        fromTranscript: undefined,
+        transcript: transcriptPath,
+        writePolicyDoc: undefined,
+        source: undefined,
+        target: root,
+        dryRun: false,
+        force: false,
+        profile: undefined,
+        overrides: {},
+        help: false,
+        allowRoots: [tmpdir()],
+      },
+      {
+        readRemoteBranchExists: (targetDir, branch) => {
+          calledWith = [targetDir, branch];
+          return true;
+        },
+      },
+    );
+  } catch (error) {
+    assert.match(String(error), /process\.exit\(0\)/);
+  } finally {
+    process.exit = originalExit;
+    process.stdout.write = originalWrite;
+  }
+  assert.deepEqual(calledWith, [root, 'develop']);
+  const verdict = JSON.parse(chunks.join('')) as Record<string, unknown>;
+  assert.equal(verdict.written, true);
+  const config = JSON.parse(
+    readFileSync(join(root, '.github', 'idd', 'config.json'), 'utf8'),
+  ) as Record<string, unknown>;
+  assert.equal(config.developmentBranch, 'develop');
+});
+
 test('importing idd-onboard.mts has no import-time side effect', async () => {
   const originalPath = process.env.PATH;
   process.env.PATH = '';
@@ -3255,6 +3522,14 @@ test('bin/idd-onboard.mjs --substitute rejects --record-policy-only flags (--tra
 });
 
 /** A pristine, post-import config.json (unsubstituted placeholders, as --record-policy expects). */
+/**
+ * `buildValidHearAnswers()` synthesizes `fixture-development-branch` for
+ * the `development-branch` item (no documented default). Kept in sync
+ * with that helper by name, not by import, the same way the two already
+ * cooperate through the fixed `fixture-${item.id}` convention.
+ */
+const RECORD_POLICY_FIXTURE_DEVELOPMENT_BRANCH = 'fixture-development-branch';
+
 function writeRecordPolicyFixture(root: string): void {
   mkdirSync(join(root, '.github', 'idd'), { recursive: true });
   writeFileSync(
@@ -3273,6 +3548,47 @@ function writeRecordPolicyFixture(root: string): void {
       '',
     ].join('\n'),
   );
+  // #2271: --record-policy verifies developmentBranch against the
+  // configured remote via local `git ls-remote` (no GitHub CLI, no
+  // network) -- give the fixture a real local `origin` carrying the
+  // exact branch buildValidHearAnswers() answers with, so every existing
+  // record-policy scenario below satisfies that gate the same way a real
+  // onboarded repository would, without any credentials or egress.
+  const remoteRoot = mkdtempSync(join(tmpdir(), 'idd-onboard-remote-'));
+  execFileSync(
+    'git',
+    [
+      'init',
+      `--initial-branch=${RECORD_POLICY_FIXTURE_DEVELOPMENT_BRANCH}`,
+      remoteRoot,
+    ],
+    { stdio: 'ignore' },
+  );
+  execFileSync(
+    'git',
+    ['-C', remoteRoot, 'config', 'user.email', 'fixture@example.com'],
+    {
+      stdio: 'ignore',
+    },
+  );
+  execFileSync('git', ['-C', remoteRoot, 'config', 'user.name', 'Fixture'], {
+    stdio: 'ignore',
+  });
+  writeFileSync(join(remoteRoot, 'README.md'), '# fixture remote\n');
+  execFileSync('git', ['-C', remoteRoot, 'add', 'README.md'], {
+    stdio: 'ignore',
+  });
+  execFileSync(
+    'git',
+    ['-C', remoteRoot, 'commit', '--no-gpg-sign', '-m', 'fixture'],
+    { stdio: 'ignore' },
+  );
+  execFileSync('git', ['init', '--initial-branch=main', root], {
+    stdio: 'ignore',
+  });
+  execFileSync('git', ['-C', root, 'remote', 'add', 'origin', remoteRoot], {
+    stdio: 'ignore',
+  });
 }
 
 test('bin/idd-onboard.mjs --record-policy dry-run prints the config patch and filled template, writing nothing', () => {
