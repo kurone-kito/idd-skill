@@ -3,6 +3,49 @@
 // The scripts/policy-helpers.mjs copy is generated from the .mts source
 // named above by `pnpm run build`. Edit the .mts source, never the
 // generated .mjs. See docs/typescript-sources.md.
+/**
+ * A qualified branch name: non-empty, no whitespace anywhere (rejects
+ * both a blank string and internal/leading/trailing whitespace in one
+ * check), and -- checked separately below -- no `refs/heads/` prefix
+ * (this policy stores the short branch name IDD's own claim `branch:`
+ * field and `git worktree add <branch>` already expect, not a full ref).
+ */
+const DEVELOPMENT_BRANCH_PATTERN = /^\S+$/;
+const DEVELOPMENT_BRANCH_REFS_HEADS_PREFIX = 'refs/heads/';
+/**
+ * Inspect `developmentBranch` on a raw policy document without applying
+ * `normalizePolicyConfig`'s fail-safe-to-absent collapse -- mirrors
+ * {@link inspectCritiqueLoopDelegateLayer}'s absent/configured/malformed
+ * shape. Onboarding (and any future consumer) uses this to distinguish
+ * "no opinion, use the live default branch" from "operator configured an
+ * invalid value, fail closed" rather than treating both alike.
+ */
+export function inspectDevelopmentBranch(config) {
+  if (typeof config !== 'object' || config === null || Array.isArray(config)) {
+    return { status: 'absent' };
+  }
+  if (!Object.hasOwn(config, 'developmentBranch')) {
+    return { status: 'absent' };
+  }
+  const value = config.developmentBranch;
+  if (typeof value !== 'string') {
+    return { status: 'invalid', reason: 'developmentBranch must be a string' };
+  }
+  if (!DEVELOPMENT_BRANCH_PATTERN.test(value)) {
+    return {
+      status: 'invalid',
+      reason:
+        'developmentBranch must be non-empty and must not contain whitespace',
+    };
+  }
+  if (value.startsWith(DEVELOPMENT_BRANCH_REFS_HEADS_PREFIX)) {
+    return {
+      status: 'invalid',
+      reason: 'developmentBranch must be a branch name, not a refs/heads/ ref',
+    };
+  }
+  return { status: 'configured', branch: value };
+}
 const HELPER_RUNTIME_PROFILES = new Set([
   'package-manager',
   'vendored-node',
@@ -268,6 +311,12 @@ export function inspectHelperRuntimeConfig(config) {
 }
 export function normalizePolicyConfig(config) {
   if (typeof config !== 'object' || config === null || Array.isArray(config)) {
+    // Cast so this early-return branch structurally unifies with the main
+    // return below on the optional `developmentBranch` key -- otherwise
+    // the function's inferred return type is a union where one member
+    // lacks the key entirely, and every call site reading
+    // `.developmentBranch` fails to typecheck regardless of which branch
+    // its own arguments would actually take.
     return clone(POLICY_DEFAULTS);
   }
   const c = config;
@@ -337,7 +386,24 @@ export function normalizePolicyConfig(config) {
       POLICY_DEFAULTS.localValidationEvidence.maxAge,
     ),
   };
+  // #2271: own-property-omitted on both 'absent' and 'invalid' -- mirrors
+  // `providerOutage.declarationTarget` above. Normalization never throws;
+  // a caller that must distinguish "no opinion" from "operator configured
+  // an invalid value" (fail closed rather than silently inheriting the
+  // live default) uses inspectDevelopmentBranch() directly on the raw
+  // config instead of this collapsed result.
+  const developmentBranchInspection = inspectDevelopmentBranch(config);
+  // Explicitly typed for the same reason as the `critiqueLoop`/`delegate`
+  // comment above: a conditional spread's own literal-object branches
+  // don't narrow into one stable optional-key type, so a caller reading
+  // `.developmentBranch` off the inferred return type sees it as missing
+  // on the "absent" union member instead of merely optional.
+  const developmentBranchField =
+    developmentBranchInspection.status === 'configured'
+      ? { developmentBranch: developmentBranchInspection.branch }
+      : {};
   return {
+    ...developmentBranchField,
     issueScope: parseEnum(
       c?.issueScope,
       ISSUE_SCOPES,

@@ -5,6 +5,7 @@ import {
   clone,
   getReviewEscalationChangesRequestedPolicy,
   inspectCritiqueLoopDelegateLayer,
+  inspectDevelopmentBranch,
   normalizePolicyConfig,
   POLICY_DEFAULTS,
   parseIsoDurationToMs,
@@ -846,4 +847,61 @@ test('clone() deep-copies independently of the source, including through undefin
   // ever contains an undefined-valued key (see the clone() doc comment).
   assert.equal('b' in copy, true);
   assert.equal(copy.b, undefined);
+});
+
+test('inspectDevelopmentBranch distinguishes absent, configured, and invalid (#2271)', () => {
+  assert.deepEqual(inspectDevelopmentBranch({}), { status: 'absent' });
+  assert.deepEqual(inspectDevelopmentBranch(null), { status: 'absent' });
+  assert.deepEqual(inspectDevelopmentBranch('not-an-object'), {
+    status: 'absent',
+  });
+  assert.deepEqual(inspectDevelopmentBranch({ developmentBranch: 'develop' }), {
+    status: 'configured',
+    branch: 'develop',
+  });
+  assert.deepEqual(
+    inspectDevelopmentBranch({ developmentBranch: 'release/2.0' }),
+    { status: 'configured', branch: 'release/2.0' },
+  );
+  assert.equal(
+    inspectDevelopmentBranch({ developmentBranch: '' }).status,
+    'invalid',
+  );
+  assert.equal(
+    inspectDevelopmentBranch({ developmentBranch: '  ' }).status,
+    'invalid',
+  );
+  assert.equal(
+    inspectDevelopmentBranch({ developmentBranch: 'my branch' }).status,
+    'invalid',
+  );
+  assert.equal(
+    inspectDevelopmentBranch({ developmentBranch: 'refs/heads/main' }).status,
+    'invalid',
+  );
+  assert.equal(
+    inspectDevelopmentBranch({ developmentBranch: 42 }).status,
+    'invalid',
+  );
+  assert.equal(
+    inspectDevelopmentBranch({ developmentBranch: null }).status,
+    'invalid',
+  );
+});
+
+test('normalizePolicyConfig omits developmentBranch when absent or invalid, includes it verbatim when configured (#2271)', () => {
+  assert.equal('developmentBranch' in normalizePolicyConfig({}), false);
+  assert.equal(
+    'developmentBranch' in
+      normalizePolicyConfig({ developmentBranch: 'refs/heads/main' }),
+    false,
+  );
+  assert.equal(
+    'developmentBranch' in normalizePolicyConfig({ developmentBranch: '' }),
+    false,
+  );
+  assert.equal(
+    normalizePolicyConfig({ developmentBranch: 'develop' }).developmentBranch,
+    'develop',
+  );
 });

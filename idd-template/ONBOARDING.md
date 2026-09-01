@@ -499,6 +499,10 @@ require explicit operator confirmation:
     share fall from ~27% to ~3.7%, kurone-kito/idd-skill#1817)
 14. bootstrap execution mode (`direct-import` default, or
     `issue-mediated`)
+15. development branch (`developmentBranch`) that receives IDD feature
+    pull requests — proposed from the repository's live GitHub default
+    branch, verified against the configured remote before recording;
+    absent resolves the live default branch
 
 Use
 [Onboarding Reference — Policy Decisions](docs/onboarding/policy-decisions.md)

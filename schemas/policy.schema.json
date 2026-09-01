@@ -30,6 +30,11 @@
       "pattern": "^[a-z][a-z0-9-]{1,31}$",
       "description": "Prefix embedded in every marker token and generated label name (for example `idd-skill-roadmap-id`). Required when `config.json` exists; no schema default, though helper code falls back to `idd-skill` when the file itself is absent."
     },
+    "developmentBranch": {
+      "type": "string",
+      "pattern": "^(?!refs/heads/)\\S+$",
+      "description": "Long-lived branch that receives IDD feature pull requests, distinct from the repository's trusted GitHub default branch used for workflow/configuration checkout (#2271). A short branch name only, never a `refs/heads/` ref. Optional; absent resolves the repository's live GitHub default branch, and onboarding records this only after verifying the branch exists on the configured remote. Release, hotfix, and development-to-default promotion flows are outside this field's support boundary."
+    },
     "mergePolicy": {
       "type": "string",
       "enum": ["fully_autonomous_merge", "human_merge", "separate_merge_agent"],

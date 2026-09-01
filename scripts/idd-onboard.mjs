@@ -51,6 +51,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { safeGhText } from './gh-exec.mjs';
 import {
   collectHelperRuntimeEvidence,
   collectVendoredFiles,
@@ -557,6 +558,80 @@ export function readGitRemoteUrl(targetDir) {
   } catch {
     return null;
   }
+}
+/**
+ * Default GitHub default-branch reader: `gh repo view <owner>/<repo>
+ * --json defaultBranchRef` (#2271), via the shared `gh-exec.mts` layer
+ * (#1675 -- every `gh` spawn routes through it, never a direct spawn of
+ * the `gh` executable itself). The explicit `owner/repo` positional (derived
+ * from the target's own `remote.origin.url`, the same evidence
+ * `resolvePlaceholderValues`'s `REPO_NAME` already reads) means this
+ * never depends on this *process's* cwd matching `targetDir`, unlike a
+ * bare `gh repo view`. Returns `null` on any failure -- unparsable
+ * remote, missing `gh`, no auth, no network, or an incomplete response --
+ * so callers fall back to treating the candidate as undetermined.
+ */
+export function readGithubDefaultBranch(targetDir) {
+  const remoteRef = parseRemoteRepoRef(readGitRemoteUrl(targetDir));
+  if (!remoteRef || remoteRef.owner === null) {
+    return null;
+  }
+  const output = safeGhText([
+    'repo',
+    'view',
+    `${remoteRef.owner}/${remoteRef.repo}`,
+    '--json',
+    'defaultBranchRef',
+  ]);
+  if (output === '') {
+    return null;
+  }
+  try {
+    const parsed = JSON.parse(output);
+    const branch = parsed.defaultBranchRef?.name;
+    return typeof branch === 'string' && branch.length > 0 ? branch : null;
+  } catch {
+    return null;
+  }
+}
+/**
+ * Default remote-branch-existence reader: `git ls-remote --exit-code
+ * --heads origin <branch>` (#2271). Deliberately independent of `gh` --
+ * a plain `git`-only check so recording an explicitly-selected
+ * development branch never requires GitHub CLI auth, only the `origin`
+ * remote already required for `readGitRemoteUrl` above.
+ */
+export function checkGitRemoteBranchExists(targetDir, branch) {
+  try {
+    execFileSync(
+      'git',
+      [
+        '-C',
+        targetDir,
+        'ls-remote',
+        '--exit-code',
+        '--heads',
+        'origin',
+        branch,
+      ],
+      { stdio: 'ignore' },
+    );
+    return true;
+  } catch {
+    return false;
+  }
+}
+/**
+ * Derive the onboarding candidate for `developmentBranch` (#2271): the
+ * repository's live GitHub default branch, via the injectable
+ * {@link OnboardEvidenceReaders.readDefaultBranch} (default
+ * {@link readGithubDefaultBranch}). Returns `null` when undetermined --
+ * the hearing flow then falls back to prompting with no derived default.
+ */
+export function deriveDevelopmentBranchCandidate(targetDir, readers = {}) {
+  const readDefaultBranch =
+    readers.readDefaultBranch ?? readGithubDefaultBranch;
+  return readDefaultBranch(targetDir);
 }
 /**
  * Resolve the seven placeholder values: explicit flag overrides win;
@@ -1230,14 +1305,29 @@ export function runVerify(sourceRoot, targetRoot, profile) {
 function isAnswerableHearingItem(item) {
   return item.kind !== 'check';
 }
-function buildHearCatalogItemViews(items, targetDir) {
-  const resolution = resolvePlaceholderValues(targetDir);
+/**
+ * Runtime derivation hooks for `policy`-kind catalog items (#2271's
+ * `development-branch` is the first). Distinct from `resolvePlaceholderValues`
+ * above, which only ever derives the seven PLACEHOLDER substitution
+ * values -- a policy item's `derivationHook` looks itself up here instead.
+ */
+const POLICY_DERIVATION_HOOKS = {
+  deriveDevelopmentBranchCandidate,
+};
+function buildHearCatalogItemViews(items, targetDir, readers = {}) {
+  const resolution = resolvePlaceholderValues(targetDir, {}, readers);
   return items.map((item) => {
     const documentedDefault =
       item.options?.find((o) => o.isDefault)?.value ?? null;
     const resolved = resolution.values[item.id];
+    const policyHook =
+      item.kind === 'policy' && item.derivationHook !== undefined
+        ? POLICY_DERIVATION_HOOKS[item.derivationHook]
+        : undefined;
     const derived =
-      resolved != null && resolved.source === 'derived' ? resolved.value : null;
+      resolved != null && resolved.source === 'derived'
+        ? resolved.value
+        : (policyHook?.(targetDir, readers) ?? null);
     const view = {
       id: item.id,
       step: item.step,
@@ -1397,14 +1487,17 @@ export async function runHearWizard(catalog, targetDir, options = {}) {
   const {
     isTTY = Boolean(process.stdin.isTTY && process.stdout.isTTY),
     prompt: promptFn,
+    readers = {},
   } = options;
   if (!isTTY) {
     throw new Error(HEAR_NON_TTY_ERROR);
   }
   const ask = promptFn ?? makeReadlinePrompt();
-  const views = buildHearCatalogItemViews(catalog.items, targetDir).filter(
-    (view) => view.kind !== 'check',
-  );
+  const views = buildHearCatalogItemViews(
+    catalog.items,
+    targetDir,
+    readers,
+  ).filter((view) => view.kind !== 'check');
   const byId = new Map(catalog.items.map((item) => [item.id, item]));
   const answers = [];
   for (const view of views) {
@@ -1737,6 +1830,7 @@ const CI_WAIT_DEFAULTS = {
  * decision, and are not part of this template.
  */
 const RECORD_POLICY_DOC_ROWS = [
+  { id: 'development-branch', heading: 'Development Branch', label: 'Branch' },
   { id: 'merge-policy', heading: 'Merge Policy', label: 'Policy' },
   { id: 'review-policy', heading: 'PR Review Policy', label: 'Profile' },
   {
@@ -1884,6 +1978,31 @@ function runRecordPolicyCli(args) {
     const translated = translateRecordPolicyAnswer(item, answer.value);
     if (translated) {
       setNestedValue(patch, translated.path, translated.value);
+    }
+  }
+  // #2271: a schema-valid developmentBranch string can still name a
+  // branch that does not exist on the configured remote -- verify before
+  // recording rather than creating the branch or silently falling back
+  // to another one. Local-git-only (`git ls-remote`), so this needs no
+  // GitHub CLI auth, only the `origin` remote --import already requires.
+  if (typeof patch.developmentBranch === 'string') {
+    const developmentBranch = patch.developmentBranch;
+    if (!checkGitRemoteBranchExists(targetDir, developmentBranch)) {
+      process.stdout.write(
+        `${JSON.stringify(
+          {
+            protocolVersion: '1',
+            mode: args.apply && !args.dryRun ? 'apply' : 'dry-run',
+            valid: false,
+            unresolved: [
+              `development-branch: "${developmentBranch}" was not found on the configured origin remote`,
+            ],
+          },
+          null,
+          2,
+        )}\n`,
+      );
+      process.exit(1);
     }
   }
   // A syntactically valid config.json can still parse to a non-object root
