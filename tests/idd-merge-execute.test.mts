@@ -272,8 +272,11 @@ test('every F3 gate maps to its own blocker', () => {
 // live merge-state re-check (`fetchMergeState`) is otherwise clean --
 // proves the gate holds `runMergeExecute` fail-closed all the way through
 // the deps injection boundary, not just at `evaluateMergeGates` in
-// isolation.
-test('runMergeExecute never calls mergePr for a PR targeting the wrong base branch, even with an otherwise-clean live merge state', () => {
+// isolation. Uses `--apply` (like the sibling "--apply on a blocked gate
+// fails closed" test above) -- a plain dry-run never calls `mergePr`
+// regardless of any blocker, so it would prove nothing about this gate
+// specifically (review round 1).
+test('--apply on a wrong-base PR fails closed without merging, even with an otherwise-clean live merge state', () => {
   const report = readyReport();
   report.developmentBranchTarget = {
     status: 'configured',
@@ -281,7 +284,10 @@ test('runMergeExecute never calls mergePr for a PR targeting the wrong base bran
     baseRefName: 'main',
   };
   const { deps, calls } = depsFor(report);
-  const { verdict, exitCode } = runMergeExecute(BASE_ARGS, deps);
+  const { verdict, exitCode } = runMergeExecute(
+    [...BASE_ARGS, '--apply'],
+    deps,
+  );
 
   assert.equal(verdict.ready, false);
   assert.deepEqual(
@@ -292,6 +298,7 @@ test('runMergeExecute never calls mergePr for a PR targeting the wrong base bran
   assert.equal(verdict.merged, false);
   assert.deepEqual(calls.merged, []);
   assert.deepEqual(calls.adminMerged, []);
+  assert.match(verdict.mergeResult, /not-ready/);
   assert.equal(exitCode, 1);
 });
 
