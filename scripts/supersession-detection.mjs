@@ -288,6 +288,32 @@ export function evaluateHighConfidenceDuplicate(input, candidateIssueNumber) {
   if (!input) {
     return null;
   }
+  // #2313, Signal 3: an exact-match branch-name lookup, checked first since
+  // it needs no candidate-file set and is unconditionally sufficient on its
+  // own -- a merged PR on this issue's own convention-computed branch name
+  // can only exist because it shipped this issue's work, closing keyword or
+  // Candidate-files overlap notwithstanding.
+  const branchNameMergedPr = input.branchNameMergedPr;
+  if (
+    branchNameMergedPr &&
+    typeof branchNameMergedPr === 'object' &&
+    Number.isInteger(branchNameMergedPr.number) &&
+    branchNameMergedPr.number > 0 &&
+    // CodeRabbit review finding on this PR: an empty `mergedAt` must not
+    // produce Signal 3 evidence -- every other merged-PR evidence shape in
+    // this module requires a merge timestamp (see `HighConfidenceMergedPr`
+    // above), and citing a merge with no date is a malformed/incomplete
+    // input, not a genuine hit. Falls through to the other signals instead
+    // of crashing or manufacturing a false positive.
+    typeof branchNameMergedPr.mergedAt === 'string' &&
+    branchNameMergedPr.mergedAt.length > 0
+  ) {
+    return {
+      pass: false,
+      evidence: `High-confidence duplicate: merged PR #${branchNameMergedPr.number} (merged ${branchNameMergedPr.mergedAt}) already shipped this issue's own IDD-naming-convention-computed branch, independent of closing-keyword presence or Candidate-files overlap.`,
+      tier: 'high-confidence',
+    };
+  }
   const closedByMergedPrNumbers = (
     Array.isArray(input.closedByMergedPrNumbers)
       ? input.closedByMergedPrNumbers
@@ -396,6 +422,42 @@ export function buildMergedPrListArgs(repoRef, sinceIso) {
     'number,mergedAt',
     '--limit',
     String(MERGED_PR_SCAN_LIMIT),
+  ];
+}
+/**
+ * Argv for the exact-match merged-PR-by-branch-name lookup (#2313): finds
+ * any merged PR whose `headRefName` equals this issue's own
+ * IDD-naming-convention-computed branch name (`computeBranchName` in
+ * `branch-name.mts`). `--head` filters server-side to PRs with that exact
+ * head branch, so this is a single targeted lookup -- unlike
+ * {@link buildMergedPrListArgs}'s bounded recent-window scan above, no
+ * client-side iteration over unrelated merged PRs is needed.
+ *
+ * Requests `headRepositoryOwner` alongside the other fields (Copilot review
+ * finding on this PR) and raises `--limit` above 1: `gh pr list --head
+ * <branch>` (per `gh pr list --help`, the `"<owner>:<branch>" syntax` is
+ * "not supported") matches on head branch NAME alone, which can also return
+ * a merged PR from a FORK that happens to use the same branch name -- a
+ * `headRepositoryOwner` mismatch would otherwise misclassify an issue as a
+ * high-confidence duplicate even though the in-repo convention branch was
+ * never actually merged. The caller filters to entries whose
+ * `headRepositoryOwner.login` matches the repository owner before treating
+ * any result as a hit.
+ */
+export function buildMergedPrByBranchArgs(repoRef, branchName) {
+  return [
+    'pr',
+    'list',
+    '--repo',
+    repoRef,
+    '--head',
+    branchName,
+    '--state',
+    'merged',
+    '--json',
+    'number,headRefName,mergedAt,headRepositoryOwner',
+    '--limit',
+    '10',
   ];
 }
 /**

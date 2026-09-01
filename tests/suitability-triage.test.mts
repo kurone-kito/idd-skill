@@ -2578,6 +2578,28 @@ test('runCli: the same-candidate-files merged-PR scan is gated behind shouldColl
   );
 });
 
+test('runCli: the branch-name merged-PR lookup is gated behind shouldCollectEvidence (#2313)', () => {
+  const source = readFileSync(
+    new URL('../src/scripts/suitability-triage.mts', import.meta.url),
+    'utf8',
+  );
+  assert.match(
+    source,
+    /if \(shouldCollectEvidence\) \{[\s\S]*?fetchMergedPrByBranchName\(/,
+  );
+});
+
+test("runCli: the branch-name merged-PR lookup uses computeBranchName on the issue's own number and title, and passes owner (#2313)", () => {
+  const source = readFileSync(
+    new URL('../src/scripts/suitability-triage.mts', import.meta.url),
+    'utf8',
+  );
+  assert.match(
+    source,
+    /fetchMergedPrByBranchName\(\s*repoRef,\s*computeBranchName\(issue\.number,\s*issue\.title\),\s*owner,?\s*\)/,
+  );
+});
+
 test('runCli: shouldCollectEvidence is derived from repository_fit, coherence, and trust_safety, in that order (#1815)', () => {
   const source = readFileSync(
     new URL('../src/scripts/suitability-triage.mts', import.meta.url),
@@ -2723,6 +2745,7 @@ test('checkRepositoryFit / checkCoherence / checkTrustSafety: verdict is unaffec
       blockedByHumanLabelName: 'status:blocked-by-human',
       needsDecisionLabelName: 'status:needs-decision',
       highConfidenceDuplicate: {
+        branchNameMergedPr: null,
         closedByMergedPrNumbers: [42],
         candidateFiles: ['scripts/foo.mjs'],
         highContentionFiles: [],

@@ -6,6 +6,7 @@
 // the generated .mjs. See docs/typescript-sources.md.
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
+import { computeBranchName } from './branch-name.mjs';
 import { parseCliArgs } from './cli-args.mjs';
 import {
   DEFAULT_BUNDLE_IDS,
@@ -25,6 +26,7 @@ import { normalizePolicyConfig, POLICY_DEFAULTS } from './policy-helpers.mjs';
 import { resolveTrustedMarkerActors } from './protocol-helpers.mjs';
 import {
   buildClosedByMergedPrArgs,
+  buildMergedPrByBranchArgs,
   buildMergedPrListArgs,
   buildPrDetailArgs,
   evaluateHighConfidenceDuplicate,
@@ -1257,6 +1259,7 @@ function runCli() {
   let candidateFiles = [];
   let highContentionFiles = [];
   let mergedPrs = [];
+  let branchNameMergedPr = null;
   if (shouldCollectEvidence) {
     try {
       closedByMergedPrNumbers = fetchClosedByMergedPrNumbers(
@@ -1267,6 +1270,20 @@ function runCli() {
     } catch (error) {
       collectionWarnings.push(
         `closedByPullRequestsReferences: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+    // #2313, Signal 3: a separate try/catch (same pattern as the two blocks
+    // above/below) so a failure here degrades only this one signal, never
+    // discarding a sibling signal that already collected cleanly.
+    try {
+      branchNameMergedPr = fetchMergedPrByBranchName(
+        repoRef,
+        computeBranchName(issue.number, issue.title),
+        owner,
+      );
+    } catch (error) {
+      collectionWarnings.push(
+        `branch-name merged-PR lookup: ${error instanceof Error ? error.message : String(error)}`,
       );
     }
     try {
@@ -1332,6 +1349,7 @@ function runCli() {
     candidateFiles,
     highContentionFiles,
     mergedPrs,
+    branchNameMergedPr,
   };
   const result = evaluateSuitability(issue, {
     repository: { owner, repo },
@@ -1726,7 +1744,22 @@ function normalizeHighConfidenceDuplicateInput(raw) {
     candidateFiles: normalizeStringArray(r.candidateFiles),
     highContentionFiles: normalizeStringArray(r.highContentionFiles),
     mergedPrs: normalizeHighConfidenceMergedPrs(r.mergedPrs),
+    branchNameMergedPr: normalizeBranchNameMergedPr(r.branchNameMergedPr),
   };
+}
+/** #2313: normalize the Signal 3 options-boundary field the same fail-safe
+ * way as every other field here -- a malformed shape degrades to `null`
+ * (no evidence), never a crash or a manufactured match. */
+function normalizeBranchNameMergedPr(value) {
+  if (!value || typeof value !== 'object') {
+    return null;
+  }
+  const v = value;
+  const number = Number(v.number);
+  if (!Number.isInteger(number) || number <= 0) {
+    return null;
+  }
+  return { number, mergedAt: String(v.mergedAt ?? '') };
 }
 function normalizePositiveIntArray(value) {
   if (!Array.isArray(value)) {
@@ -1918,6 +1951,43 @@ function fetchClosedByMergedPrNumbers(owner, repo, issueNumber) {
     .filter((node) => String(node?.state ?? '') === 'MERGED')
     .map((node) => Number.parseInt(String(node?.number ?? ''), 10))
     .filter((n) => Number.isInteger(n) && n > 0);
+}
+/**
+ * #2313, Signal 3: exact-match branch-name lookup. `--head` filters
+ * server-side by head branch NAME only -- `gh pr list --help` documents
+ * that `"<owner>:<branch>" syntax` is "not supported" -- so a merged PR
+ * from a FORK using the same branch name can also come back (Copilot
+ * review finding on this PR). `owner` (the repository owner, not the fork
+ * contributor) is required so every entry can be filtered to
+ * `headRepositoryOwner.login === owner` before being treated as a hit;
+ * `buildMergedPrByBranchArgs` requests that field and a `--limit` above 1
+ * for exactly this reason. Still iterates rather than indexing `[0]`
+ * directly, matching the rest of this file's "never trust the shape of a
+ * `gh` JSON response" convention.
+ */
+function fetchMergedPrByBranchName(repoRef, branchName, owner) {
+  const list = ghJsonArray(buildMergedPrByBranchArgs(repoRef, branchName));
+  const normalizedOwner = owner.trim().toLowerCase();
+  for (const entry of list) {
+    const number = Number.parseInt(String(entry?.number ?? ''), 10);
+    if (!Number.isInteger(number) || number <= 0) {
+      continue;
+    }
+    if (String(entry?.headRefName ?? '') !== branchName) {
+      continue;
+    }
+    const headOwner = String(entry?.headRepositoryOwner?.login ?? '')
+      .trim()
+      .toLowerCase();
+    if (!headOwner || headOwner !== normalizedOwner) {
+      // A fork's PR (or a response missing headRepositoryOwner) never
+      // counts as a hit -- fail-safe, matching this file's "never fail
+      // toward a false high-confidence flag" contract.
+      continue;
+    }
+    return { number, mergedAt: String(entry?.mergedAt ?? '') };
+  }
+  return null;
 }
 /**
  * Bounded two-step merged-PR file-overlap scan (list, then per-PR file
