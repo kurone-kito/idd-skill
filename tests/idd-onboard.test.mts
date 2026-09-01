@@ -52,6 +52,7 @@ import {
   resolvePlaceholderValues,
   restoreExistingCommandsTable,
   runHearWizard,
+  runRecordPolicyCli,
   runVerify,
   SCAN_EXCLUDED_PATHS,
   scanPlaceholderTokens,
@@ -2985,6 +2986,124 @@ test('bin/idd-onboard.mjs --record-policy exits 1 and writes nothing when develo
     readFileSync(join(root, '.github', 'idd', 'config.json'), 'utf8'),
   ) as Record<string, unknown>;
   assert.equal('developmentBranch' in config, false);
+});
+
+test('bin/idd-onboard.mjs --record-policy exits 1 on a malformed developmentBranch before ever checking the remote (#2271 review)', () => {
+  const { root } = makeGitRemoteFixture();
+  mkdirSync(join(root, '.github', 'idd'), { recursive: true });
+  writeFileSync(
+    join(root, '.github', 'idd', 'config.json'),
+    [
+      '{',
+      '  "markerPrefix": "{{PROJECT_MARKER_PREFIX}}",',
+      '  "trustedMarkerActors": ["{{TRUSTED_MARKER_ACTOR}}"],',
+      '  "commands": {',
+      '    "install-deps": "{{INSTALL_DEPS_COMMAND}}",',
+      '    "fix-validate": "{{FIX_VALIDATE_COMMANDS}}",',
+      '    "pre-push-validate": "{{PRE_PUSH_VALIDATE_COMMANDS}}",',
+      '    "post-fix-validate": "{{POST_FIX_VALIDATE_COMMANDS}}"',
+      '  }',
+      '}',
+      '',
+    ].join('\n'),
+  );
+  // Non-empty (passes --hear --apply's generic non-empty check) but
+  // contains whitespace, so only inspectDevelopmentBranch's stricter
+  // shape check rejects it -- a hand-edited-transcript scenario.
+  const answers = buildValidHearAnswers();
+  answers['development-branch'] = 'my branch';
+  const transcript = confirmTranscript(root, answers);
+  const transcriptPath = join(root, 'transcript.json');
+  writeFileSync(transcriptPath, JSON.stringify(transcript));
+
+  const { status, verdict } = runCliBin([
+    '--record-policy',
+    '--transcript',
+    transcriptPath,
+    '--target',
+    root,
+    '--apply',
+  ]);
+  assert.equal(status, 1);
+  assert.equal(verdict.valid, false);
+  assert.ok(
+    (verdict.unresolved as string[]).some(
+      (message) =>
+        message.includes('development-branch') &&
+        message.includes('whitespace') &&
+        !message.includes('not found on the configured origin remote'),
+    ),
+    `expected a shape-validation message, got: ${JSON.stringify(verdict.unresolved)}`,
+  );
+});
+
+test('runRecordPolicyCli uses the injected readRemoteBranchExists reader instead of a real git ls-remote (#2271 review)', () => {
+  const root = makeFixtureDir();
+  mkdirSync(join(root, '.github', 'idd'), { recursive: true });
+  writeFileSync(
+    join(root, '.github', 'idd', 'config.json'),
+    '{"markerPrefix":"m","trustedMarkerActors":[],"commands":{"install-deps":"x","fix-validate":"x","pre-push-validate":"x","post-fix-validate":"x"}}\n',
+  );
+  const answers = buildValidHearAnswers();
+  answers['development-branch'] = 'develop';
+  const transcript = confirmTranscript(root, answers);
+  const transcriptPath = join(root, 'transcript.json');
+  writeFileSync(transcriptPath, JSON.stringify(transcript));
+
+  let calledWith: [string, string] | null = null;
+  const originalExit = process.exit;
+  const originalWrite = process.stdout.write;
+  const chunks: string[] = [];
+  process.stdout.write = ((chunk: string) => {
+    chunks.push(String(chunk));
+    return true;
+  }) as typeof process.stdout.write;
+  process.exit = ((code?: number) => {
+    throw new Error(`process.exit(${code})`);
+  }) as typeof process.exit;
+  try {
+    runRecordPolicyCli(
+      {
+        substitute: false,
+        importMode: false,
+        verify: false,
+        hear: false,
+        recordPolicy: true,
+        propose: false,
+        apply: true,
+        answers: undefined,
+        fromTranscript: undefined,
+        transcript: transcriptPath,
+        writePolicyDoc: undefined,
+        source: undefined,
+        target: root,
+        dryRun: false,
+        force: false,
+        profile: undefined,
+        overrides: {},
+        help: false,
+        allowRoots: [tmpdir()],
+      },
+      {
+        readRemoteBranchExists: (targetDir, branch) => {
+          calledWith = [targetDir, branch];
+          return true;
+        },
+      },
+    );
+  } catch (error) {
+    assert.match(String(error), /process\.exit\(0\)/);
+  } finally {
+    process.exit = originalExit;
+    process.stdout.write = originalWrite;
+  }
+  assert.deepEqual(calledWith, [root, 'develop']);
+  const verdict = JSON.parse(chunks.join('')) as Record<string, unknown>;
+  assert.equal(verdict.written, true);
+  const config = JSON.parse(
+    readFileSync(join(root, '.github', 'idd', 'config.json'), 'utf8'),
+  ) as Record<string, unknown>;
+  assert.equal(config.developmentBranch, 'develop');
 });
 
 test('importing idd-onboard.mts has no import-time side effect', async () => {

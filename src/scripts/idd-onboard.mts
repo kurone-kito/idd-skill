@@ -65,6 +65,7 @@ import type {
   OnboardingHearingCatalog,
 } from './onboarding-hearing.mts';
 import { loadOnboardingHearingCatalog } from './onboarding-hearing.mts';
+import { inspectDevelopmentBranch } from './policy-helpers.mts';
 import type { PromptFn } from './readline-prompt.mts';
 import { makeReadlinePrompt } from './readline-prompt.mts';
 import {
@@ -2434,7 +2435,16 @@ function buildFilledPolicyDocument(answers: readonly HearAnswer[]): string {
   ].join('\n');
 }
 
-function runRecordPolicyCli(args: ParsedArgs): void {
+/**
+ * Exported (not just called from the CLI dispatcher below) so the
+ * `readers` parameter is a genuine injection point unit tests can reach
+ * directly, matching {@link OnboardEvidenceReaders.readRemoteBranchExists}'s
+ * own doc comment (#2271 review).
+ */
+export function runRecordPolicyCli(
+  args: ParsedArgs,
+  readers: OnboardEvidenceReaders = {},
+): void {
   if (!args.transcript) {
     throw new Error('--record-policy requires --transcript <file>');
   }
@@ -2482,14 +2492,40 @@ function runRecordPolicyCli(args: ParsedArgs): void {
       setNestedValue(patch, translated.path, translated.value);
     }
   }
-  // #2271: a schema-valid developmentBranch string can still name a
-  // branch that does not exist on the configured remote -- verify before
-  // recording rather than creating the branch or silently falling back
-  // to another one. Local-git-only (`git ls-remote`), so this needs no
-  // GitHub CLI auth, only the `origin` remote --import already requires.
+  // #2271: verify developmentBranch before recording rather than creating
+  // the branch or silently falling back to another one.
   if (typeof patch.developmentBranch === 'string') {
     const developmentBranch = patch.developmentBranch;
-    if (!checkGitRemoteBranchExists(targetDir, developmentBranch)) {
+    // Shape first (inspectDevelopmentBranch -- the one real non-test call
+    // site its own doc comment describes, #2271 review): a malformed
+    // value (whitespace, a `refs/heads/` prefix) gets its own specific
+    // reason instead of a misleading "not found on remote" message, and
+    // never reaches the git ls-remote call below at all.
+    const inspection = inspectDevelopmentBranch({ developmentBranch });
+    // Only a non-string/whitespace/refs-heads-prefixed value reaches
+    // 'invalid' here -- translateRecordPolicyAnswer already produced a
+    // plain string from the transcript, so 'absent' cannot occur.
+    if (inspection.status === 'invalid') {
+      process.stdout.write(
+        `${JSON.stringify(
+          {
+            protocolVersion: '1',
+            mode: args.apply && !args.dryRun ? 'apply' : 'dry-run',
+            valid: false,
+            unresolved: [`development-branch: ${inspection.reason}`],
+          },
+          null,
+          2,
+        )}\n`,
+      );
+      process.exit(1);
+    }
+    // Local-git-only (`git ls-remote`, or the injected reader in tests),
+    // so this needs no GitHub CLI auth, only the `origin` remote --import
+    // already requires.
+    const remoteBranchExists =
+      readers.readRemoteBranchExists ?? checkGitRemoteBranchExists;
+    if (!remoteBranchExists(targetDir, developmentBranch)) {
       process.stdout.write(
         `${JSON.stringify(
           {
