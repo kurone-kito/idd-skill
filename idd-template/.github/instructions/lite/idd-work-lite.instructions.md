@@ -113,6 +113,10 @@ worktree removal) behind the
 31. Repair a contract violation by removing the misplaced branch from the
     primary worktree, after confirming no work is lost, then recreate the
     sibling worktree from step 12.
+32. If WorkTrunk reported `Cannot change directory — shell integration
+    installed but not active`, treat every later command's working
+    directory as unverified until confirmed (e.g. `pwd`), not only at
+    steps 27-29.
 
 ## B2 — Create and refine plan
 
