@@ -54,7 +54,7 @@ export interface UsageJob {
  * job rounded up to the whole minute before summing -- GitHub's actual
  * billing unit), and a run-count breakdown by triggering event
  * (`pull_request`, `pull_request_review`, `pull_request_review_comment`,
- * ...). */
+ * `pull_request_target`, ...). */
 export interface WorkflowUsageRow {
   workflowName: string;
   runCount: number;
@@ -129,11 +129,15 @@ export function runBelongsToPr(
 
 /** Triggering events that can only fire in the context of a pull request.
  * A `push` or `workflow_dispatch` run sharing the PR's branch name is
- * never one of these, regardless of its `pull_requests` association. */
+ * never one of these, regardless of its `pull_requests` association.
+ * Includes `pull_request_target`: this repository's own
+ * strip-untrusted-labels.yml and post-merge-cleanup.yml trigger on it
+ * for real PRs, so omitting it silently undercounted their job time. */
 export const PR_FAMILY_EVENTS: ReadonlySet<string> = new Set([
   'pull_request',
   'pull_request_review',
   'pull_request_review_comment',
+  'pull_request_target',
 ]);
 
 /** Whether `event` is one of {@link PR_FAMILY_EVENTS}. */

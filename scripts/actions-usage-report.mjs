@@ -61,11 +61,15 @@ export function runBelongsToPr(pullRequests, prNumber) {
 }
 /** Triggering events that can only fire in the context of a pull request.
  * A `push` or `workflow_dispatch` run sharing the PR's branch name is
- * never one of these, regardless of its `pull_requests` association. */
+ * never one of these, regardless of its `pull_requests` association.
+ * Includes `pull_request_target`: this repository's own
+ * strip-untrusted-labels.yml and post-merge-cleanup.yml trigger on it
+ * for real PRs, so omitting it silently undercounted their job time. */
 export const PR_FAMILY_EVENTS = new Set([
   'pull_request',
   'pull_request_review',
   'pull_request_review_comment',
+  'pull_request_target',
 ]);
 /** Whether `event` is one of {@link PR_FAMILY_EVENTS}. */
 export function isPrFamilyEvent(event) {

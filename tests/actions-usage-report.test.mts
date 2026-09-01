@@ -83,6 +83,10 @@ test('isPrFamilyEvent: accepts only pull_request-family triggers', () => {
   assert.equal(isPrFamilyEvent('pull_request'), true);
   assert.equal(isPrFamilyEvent('pull_request_review'), true);
   assert.equal(isPrFamilyEvent('pull_request_review_comment'), true);
+  // strip-untrusted-labels.yml and post-merge-cleanup.yml trigger on this
+  // event for real PRs in this repository -- excluding it would silently
+  // undercount their job time.
+  assert.equal(isPrFamilyEvent('pull_request_target'), true);
 });
 
 test('isPrFamilyEvent: rejects a push/workflow_dispatch run sharing the branch name', () => {
