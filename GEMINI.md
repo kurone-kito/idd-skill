@@ -119,6 +119,20 @@ entry path and phase routing. See
 [Model capability expectations](docs/idd-workflow.md#model-capability-expectations)
 before running this loop on a lightweight local or compact cloud model.
 
+## Dogfood: token-cost events
+
+This source repository records IDD phase-boundary timestamps as a local
+dogfooding measurement (`docs/token-cost.md`). Source-repo only — never
+add this call to `idd-template/` or `.github/instructions/` phase files,
+which distribute to adopters with no token-cost data to record.
+
+`schemas/token-cost-event.schema.json`'s `vendor` enum has no value for
+Antigravity yet (`grok`, `claude`, `codex` only), so skip calling
+`node scripts/token-cost-event.mjs` for now rather than passing a
+mismatched vendor — a wrong tag would corrupt the shared dataset.
+Stage ids, for when a vendor value exists: `discover`, `claim`, `work`,
+`submit-pr`, `review`, `merge`, `cleanup`.
+
 ## Issue-authoring skill (dogfooded)
 
 The canonical issue-authoring skill bundle lives at

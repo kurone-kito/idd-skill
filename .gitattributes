@@ -83,6 +83,7 @@ scripts/sync-docs.mjs linguist-generated=true
 scripts/token-cost-adapter-claude.mjs linguist-generated=true
 scripts/token-cost-adapter-codex.mjs linguist-generated=true
 scripts/token-cost-core.mjs linguist-generated=true
+scripts/token-cost-event.mjs linguist-generated=true
 scripts/token-cost-report.mjs linguist-generated=true
 scripts/update-fixtures.mjs linguist-generated=true
 scripts/validate-schemas.mjs linguist-generated=true

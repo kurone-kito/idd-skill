@@ -104,6 +104,22 @@ const SOURCE_REPO_INTERNAL_ENTRY_PATHS = new Set([
   // an adopter repository has an entirely different set of workflows to
   // measure.
   'scripts/actions-usage-report.mjs',
+  // token-cost-event.mjs (#2293): this repository's own dogfood
+  // phase-event helper, named only in the four root guideline files'
+  // (CLAUDE.md / AGENTS.md / GEMINI.md / .github/copilot-instructions.md)
+  // "Dogfood: token-cost events" note -- none of which
+  // `readRealScanFiles()` below scans (docs/**, idd-template/docs/**,
+  // .github/instructions/**, idd-template/.github/instructions/** only),
+  // so this entry is currently inert against that scan. Registered anyway
+  // per #2293's own design (kept in sync with
+  // DOGFOOD_ONLY_CONCRETE_TOOLS in tests/helper-runtime-manifest.test.mts,
+  // same rationale) so a future guideline-file edit that duplicates this
+  // invocation into a scanned path does not silently need this same
+  // exemption re-derived from scratch. It writes only to
+  // `${XDG_STATE_HOME:-$HOME/.local/state}/idd-skill/token-cost/` --
+  // never committed to git -- and is never distributed to idd-template/;
+  // an adopter repository has no token-cost data to record.
+  'scripts/token-cost-event.mjs',
 ]);
 
 // A helper name that appears only as a *proposed*, not-yet-built script
