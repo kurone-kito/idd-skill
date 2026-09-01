@@ -457,6 +457,13 @@ Before any mutating action in F3, apply the
    (WorkTrunk may be used for steps 4–5, the deletion steps —
    step 3's local `main` update is a plain git operation, not a
    WorkTrunk one.)
+6. Re-validate the active claim one final time. If it still uses your
+   `{claim-id}`, post `unclaimed-by` for your own `{agent-id}` /
+   `{claim-id}` (see
+   [Unclaim format](idd-overview-core.instructions.md#unclaim-format))
+   to release the claim now that cleanup is complete (`#2220`). If it
+   no longer uses your `{claim-id}`, do not post a release comment —
+   another session already took over.
 
 ## F5 — Loop
 
