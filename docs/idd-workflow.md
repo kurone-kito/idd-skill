@@ -1063,6 +1063,16 @@ critique findings; the C-phase objective diff validation floor above,
 the E-phase Copilot advisory-convergence policy, required checks, and
 merge gates are all unchanged.
 
+A configured delegate receives only the branch diff, never the two
+lenses below or the rest of the per-agent checklist — passing checklist
+content to an external command is a capability change with its own
+design questions (whether the reviewer accepts input at all, what
+happens if it ignores it) that this surface does not make today. Under
+`mode: fallback` with a successful delegate (the default) or `mode:
+never`, the per-agent pass does not run at all, so an operator relying
+solely on a delegate should expect the lenses below are not applied to
+that PR's diff.
+
 ### Mutation / write-side helper lens
 
 When the diff under critique implements a helper that **mutates GitHub
