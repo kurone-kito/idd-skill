@@ -55,15 +55,29 @@ function buildCleanupBacklogStubGh(config: {
   // `headRefName` scoping fix) keep exercising an IDD-branch PR without
   // being rewritten.
   headRefNameByPr?: Map<number, string>;
+  // idd-skill#2226: per-PR mergedAt, omitted from the stubbed `pr list`
+  // entry (not merely undefined) when absent for a given number -- the
+  // pre-#2226 tests above supply none, matching gh's own real output for
+  // a PR whose merge timestamp was not requested.
+  mergedAtByPr?: Map<number, string>;
 }): string {
   const owner = JSON.stringify(config.owner);
   const repo = JSON.stringify(config.repo);
   const headRefNameByPr = config.headRefNameByPr ?? new Map();
+  const mergedAtByPr = config.mergedAtByPr ?? new Map();
   const prListJson = JSON.stringify(
-    config.mergedPrNumbers.map((number) => ({
-      number,
-      headRefName: headRefNameByPr.get(number) ?? `issue/${number}-fixture`,
-    })),
+    config.mergedPrNumbers.map((number) => {
+      const entry: { number: number; headRefName: string; mergedAt?: string } =
+        {
+          number,
+          headRefName: headRefNameByPr.get(number) ?? `issue/${number}-fixture`,
+        };
+      const mergedAt = mergedAtByPr.get(number);
+      if (mergedAt !== undefined) {
+        entry.mergedAt = mergedAt;
+      }
+      return entry;
+    }),
   );
   const evidenceTable = JSON.stringify([...config.evidenceByPr.entries()]);
   const failingNumbers = JSON.stringify([...(config.failEvidenceFor ?? [])]);
@@ -94,7 +108,11 @@ process.exit(1);
 `;
 }
 
-function runIddDoctorReport(cwd: string, stubGhSource: string): DoctorReport {
+function runIddDoctorReport(
+  cwd: string,
+  stubGhSource: string,
+  extraArgs: string[] = [],
+): DoctorReport {
   const stubRoot = mkdtempSync(join(tmpdir(), 'idd-doctor-cleanup-gh-'));
   try {
     const ghPath = join(stubRoot, 'gh');
@@ -107,6 +125,7 @@ function runIddDoctorReport(cwd: string, stubGhSource: string): DoctorReport {
       cwd,
       '--cleanup-backlog-warn-threshold',
       '0',
+      ...extraArgs,
     ];
     const options = {
       encoding: 'utf8' as const,
@@ -301,5 +320,62 @@ test('checkPostMergeCleanupBacklog CLI: produces no backlog warning when every m
       !report.warnings.some((w) => w.includes(BACKLOG_WARNING_SUBSTRING)),
       `expected no cleanup-backlog warning when every PR is non-IDD, got: ${JSON.stringify(report.warnings)}`,
     );
+  });
+});
+
+// idd-skill#2226: end-to-end coverage for --cleanup-backlog-bootstrap-cutoff
+// through the real compiled CLI -- one PR merged before the configured
+// cutoff, one after, both missing evidence.
+test('checkPostMergeCleanupBacklog CLI: --cleanup-backlog-bootstrap-cutoff labels only the pre-cutoff PR, without changing the count', () => {
+  withTempCwd((cwd) => {
+    const report = runIddDoctorReport(
+      cwd,
+      buildCleanupBacklogStubGh({
+        owner: 'o',
+        repo: 'r',
+        mergedPrNumbers: [1001, 1002],
+        evidenceByPr: new Map(),
+        mergedAtByPr: new Map([
+          [1001, '2025-01-01T00:00:00Z'],
+          [1002, '2026-08-01T00:00:00Z'],
+        ]),
+      }),
+      ['--cleanup-backlog-bootstrap-cutoff', '2026-01-01T00:00:00Z'],
+    );
+    const backlogWarning = report.warnings.find((w) =>
+      w.includes(BACKLOG_WARNING_SUBSTRING),
+    );
+    assert.ok(
+      backlogWarning,
+      `expected a cleanup-backlog warning, got: ${JSON.stringify(report.warnings)}`,
+    );
+    // Count is unchanged -- still 2, the same as without the flag.
+    assert.match(
+      backlogWarning ?? '',
+      /^post-merge cleanup backlog: 2 merged PRs/,
+    );
+    assert.match(backlogWarning ?? '', /#1001 \(bootstrap-era\)/);
+    assert.match(backlogWarning ?? '', /#1002(?! \(bootstrap-era\))/);
+    assert.match(backlogWarning ?? '', /1 bootstrap-era/);
+  });
+});
+
+test('checkPostMergeCleanupBacklog CLI: without --cleanup-backlog-bootstrap-cutoff, every PR reports the same undifferentiated way (no regression)', () => {
+  withTempCwd((cwd) => {
+    const report = runIddDoctorReport(
+      cwd,
+      buildCleanupBacklogStubGh({
+        owner: 'o',
+        repo: 'r',
+        mergedPrNumbers: [1101],
+        evidenceByPr: new Map(),
+        mergedAtByPr: new Map([[1101, '2025-01-01T00:00:00Z']]),
+      }),
+    );
+    const backlogWarning = report.warnings.find((w) =>
+      w.includes(BACKLOG_WARNING_SUBSTRING),
+    );
+    assert.ok(backlogWarning);
+    assert.doesNotMatch(backlogWarning ?? '', /bootstrap-era/);
   });
 });

@@ -59,6 +59,7 @@ export interface DoctorOptions {
   requireGithub?: boolean;
   cleanupBacklogWindowDays?: number;
   cleanupBacklogWarnThreshold?: number;
+  cleanupBacklogBootstrapCutoff?: string;
   workshopCrossRefAllowMissing?: string[];
   strict?: boolean;
 }
@@ -112,6 +113,7 @@ interface DoctorCliArgs {
   strict: boolean;
   cleanupBacklogWindowDays?: number;
   cleanupBacklogWarnThreshold?: number;
+  cleanupBacklogBootstrapCutoff?: string;
   workshopCrossRefAllowMissing?: string[];
 }
 
@@ -120,6 +122,7 @@ export function runDoctor({
   requireGithub,
   cleanupBacklogWindowDays,
   cleanupBacklogWarnThreshold,
+  cleanupBacklogBootstrapCutoff,
   workshopCrossRefAllowMissing,
   strict,
 }: DoctorOptions): DoctorReport {
@@ -160,6 +163,7 @@ export function runDoctor({
     {
       windowDays: cleanupBacklogWindowDays ?? 14,
       warnThreshold: cleanupBacklogWarnThreshold ?? 2,
+      bootstrapCutoff: cleanupBacklogBootstrapCutoff,
       requireGithub,
     },
     report,
@@ -2323,6 +2327,40 @@ export function classifyBacklog(
 }
 
 /**
+ * Numbers among `missingPrNumbers` whose merge predates `cutoffIso`
+ * (idd-skill#2226) -- presentation-only: never changes which PRs count as
+ * missing evidence, only which of them the backlog warning labels
+ * "bootstrap-era" instead of a genuine claim-marker-missing gap. A PR
+ * absent from `mergedAtByNumber` (its `mergedAt` was missing or malformed
+ * at fetch time) or an unparsable `cutoffIso` never counts as
+ * bootstrap-era -- fails closed to "flag every PR the same as before this
+ * feature existed" rather than guessing. Pure so it can be unit-tested
+ * without mocking `gh`.
+ */
+export function classifyBootstrapEraPrNumbers(
+  missingPrNumbers: readonly number[],
+  mergedAtByNumber: ReadonlyMap<number, string>,
+  cutoffIso: string | undefined,
+): Set<number> {
+  const cutoffMs = typeof cutoffIso === 'string' ? Date.parse(cutoffIso) : NaN;
+  if (!Number.isFinite(cutoffMs)) {
+    return new Set();
+  }
+  const bootstrapEra = new Set<number>();
+  for (const number of missingPrNumbers) {
+    const mergedAt = mergedAtByNumber.get(number);
+    if (typeof mergedAt !== 'string') {
+      continue;
+    }
+    const mergedAtMs = Date.parse(mergedAt);
+    if (Number.isFinite(mergedAtMs) && mergedAtMs < cutoffMs) {
+      bootstrapEra.add(number);
+    }
+  }
+  return bootstrapEra;
+}
+
+/**
  * Preamble line announcing how many merged PRs the backlog scan will visit.
  * Pure so tests can assert the exact wording without running the network scan.
  */
@@ -2434,13 +2472,18 @@ export function readCleanupEvidenceTrustedLogins(root: string): Set<string> {
  * before the backlog count, evidence-fetch loop, or `Examples: ...` list
  * ever sees it (idd-skill#1829). Pure (no I/O) so it can be unit-tested
  * without mocking `gh`.
+ *
+ * The returned `mergedAt` field (#2226) is present only when the input
+ * entry carries a non-empty string value -- an entry with no `mergedAt`
+ * (or a malformed one) yields `{ number }` alone, so callers built before
+ * this field existed (and their fixtures) see an unchanged shape.
  */
 export function filterIddBranchMergedPrs(
   prs: unknown,
   patterns: string[] = DEFAULT_WORKTREE_GUARD_BRANCH_PATTERNS,
-): { number: number }[] {
+): { number: number; mergedAt?: string }[] {
   const matchers = patterns.map((pattern) => branchGlobToRegExp(pattern));
-  const filtered: { number: number }[] = [];
+  const filtered: { number: number; mergedAt?: string }[] = [];
   for (const pr of Array.isArray(prs) ? prs : []) {
     const number = (pr as { number?: unknown } | null)?.number;
     const headRefName = (pr as { headRefName?: unknown } | null)?.headRefName;
@@ -2451,9 +2494,32 @@ export function filterIddBranchMergedPrs(
     ) {
       continue;
     }
-    filtered.push({ number: number as number });
+    const mergedAt = (pr as { mergedAt?: unknown } | null)?.mergedAt;
+    const entry: { number: number; mergedAt?: string } = {
+      number: number as number,
+    };
+    if (typeof mergedAt === 'string' && mergedAt.length > 0) {
+      entry.mergedAt = mergedAt;
+    }
+    filtered.push(entry);
   }
   return filtered;
+}
+
+/**
+ * Renders the backlog warning's `Examples: ...` clause, appending a
+ * `(bootstrap-era)` tag to every listed PR number present in
+ * `bootstrapEra` (idd-skill#2226) -- a presentation-only distinction, never
+ * a change to which numbers are listed. Pure so it can be unit-tested
+ * independently of the network scan.
+ */
+export function formatCleanupBacklogExamples(
+  examples: readonly number[],
+  bootstrapEra: ReadonlySet<number>,
+): string {
+  return examples
+    .map((n) => (bootstrapEra.has(n) ? `#${n} (bootstrap-era)` : `#${n}`))
+    .join(', ');
 }
 
 function checkPostMergeCleanupBacklog(
@@ -2461,12 +2527,14 @@ function checkPostMergeCleanupBacklog(
   options: {
     windowDays: number;
     warnThreshold: number;
+    bootstrapCutoff?: string;
     requireGithub?: boolean;
   },
   report: DoctorReport,
 ) {
   const windowDays = options.windowDays;
   const warnThreshold = options.warnThreshold;
+  const bootstrapCutoff = options.bootstrapCutoff;
   const requireGithub = options.requireGithub === true;
 
   // Soft GitHub-API failures (gh missing, no token, repo view fails,
@@ -2524,7 +2592,7 @@ function checkPostMergeCleanupBacklog(
       '--search',
       `merged:>=${sinceIso}`,
       '--json',
-      'number,headRefName',
+      'number,headRefName,mergedAt',
       '--limit',
       '1000',
     ],
@@ -2567,6 +2635,12 @@ function checkPostMergeCleanupBacklog(
   );
 
   const trustedLogins = readCleanupEvidenceTrustedLogins(root);
+  const mergedAtByNumber = new Map<number, string>();
+  for (const pr of iddMergedPrs) {
+    if (pr.mergedAt) {
+      mergedAtByNumber.set(pr.number, pr.mergedAt);
+    }
+  }
   const missing: number[] = [];
   const evidenceFailures: number[] = [];
   let scanned = 0;
@@ -2635,7 +2709,23 @@ function checkPostMergeCleanupBacklog(
     return;
   }
 
-  const examplesText = verdict.examples.map((n) => `#${n}`).join(', ');
+  // idd-skill#2226: presentation-only -- `verdict.count`/`warn`/`examples`
+  // above are computed from the unmodified `missing` list, so a configured
+  // bootstrapCutoff never changes which PRs are flagged, only how the
+  // `Examples: ...` clause labels the ones merged before it.
+  const bootstrapEra = classifyBootstrapEraPrNumbers(
+    missing,
+    mergedAtByNumber,
+    bootstrapCutoff,
+  );
+  const examplesText = formatCleanupBacklogExamples(
+    verdict.examples,
+    bootstrapEra,
+  );
+  const bootstrapEraCountClause =
+    bootstrapEra.size > 0
+      ? ` (${bootstrapEra.size} bootstrap-era, merged before ${bootstrapCutoff})`
+      : '';
   const { profile, packageSpec } = resolveConfiguredHelperRuntime(root);
   const remediation = formatCleanupBacklogRemediation(profile, packageSpec);
   // State the scoping explicitly (idd-skill#1936) so an operator reading a
@@ -2644,7 +2734,7 @@ function checkPostMergeCleanupBacklog(
   // never reach this count.
   const patternsText = branchPatterns.join(', ');
   report.warnings.push(
-    `post-merge cleanup backlog: ${verdict.count} merged PRs in the last ${windowDays} days lack F4 cleanup evidence (warn threshold: ${warnThreshold}; scoped to IDD branch patterns: ${patternsText}). Examples: ${examplesText}. ${remediation}`,
+    `post-merge cleanup backlog: ${verdict.count} merged PRs in the last ${windowDays} days lack F4 cleanup evidence${bootstrapEraCountClause} (warn threshold: ${warnThreshold}; scoped to IDD branch patterns: ${patternsText}). Examples: ${examplesText}. ${remediation}`,
   );
 }
 
@@ -3827,6 +3917,7 @@ const IDD_DOCTOR_FLAG_SPEC = {
   '--repo-root': { type: 'string' },
   '--cleanup-backlog-window-days': { type: 'string' },
   '--cleanup-backlog-warn-threshold': { type: 'string' },
+  '--cleanup-backlog-bootstrap-cutoff': { type: 'string' },
   '--workshop-cross-ref-allow-missing': { type: 'string' },
 } as const;
 
@@ -3888,6 +3979,27 @@ function parseArgs(argv: string[]): DoctorCliArgs {
     args.cleanupBacklogWarnThreshold = numeric;
   }
 
+  // --cleanup-backlog-bootstrap-cutoff (idd-skill#2226): optional, no
+  // default -- absent means every PR is still reported the same,
+  // undifferentiated way this check has always used. Rejects an explicit
+  // empty string and anything Date.parse cannot resolve, matching
+  // --cleanup-backlog-window-days's own empty-string/malformed-value
+  // guards above.
+  const bootstrapCutoffToken = values['cleanup-backlog-bootstrap-cutoff'] as
+    | string
+    | undefined;
+  if (bootstrapCutoffToken !== undefined) {
+    if (!bootstrapCutoffToken) {
+      throw new Error('--cleanup-backlog-bootstrap-cutoff requires a value');
+    }
+    if (!Number.isFinite(Date.parse(bootstrapCutoffToken))) {
+      throw new Error(
+        `--cleanup-backlog-bootstrap-cutoff must be a valid date/timestamp (got "${bootstrapCutoffToken}")`,
+      );
+    }
+    args.cleanupBacklogBootstrapCutoff = bootstrapCutoffToken;
+  }
+
   // --workshop-cross-ref-allow-missing: pre-migration guard used
   // `=== undefined` (NOT `!value`), so an explicit empty string was
   // accepted and resolved to an empty list (''.split(',') -> [''] ->
@@ -3935,6 +4047,7 @@ options:
   --strict                                 treat a primary-worktree implementation-branch HEAD as an error (also enabled by worktreeGuard.enabled in config)
   --cleanup-backlog-window-days <N>        merged-PR window for the cleanup backlog check (default: 14)
   --cleanup-backlog-warn-threshold <N>     backlog count above which the check warns (default: 2)
+  --cleanup-backlog-bootstrap-cutoff <date> label a flagged merged PR "(bootstrap-era)" in the report when it merged before this date/timestamp, instead of a genuine claim-marker-missing gap (default: none -- every flagged PR reports the same way)
   --workshop-cross-ref-allow-missing <list> comma-separated entry-point paths to skip in the workshop cross-reference check (default: none)
   --help, -h                               show this help
 
@@ -4030,6 +4143,7 @@ if (import.meta.main) {
     requireGithub: args.requireGithub,
     cleanupBacklogWindowDays: args.cleanupBacklogWindowDays,
     cleanupBacklogWarnThreshold: args.cleanupBacklogWarnThreshold,
+    cleanupBacklogBootstrapCutoff: args.cleanupBacklogBootstrapCutoff,
     workshopCrossRefAllowMissing: args.workshopCrossRefAllowMissing,
     strict: args.strict,
   });

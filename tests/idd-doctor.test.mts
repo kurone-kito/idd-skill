@@ -20,6 +20,7 @@ import {
   checkPolicySignals,
   checkProjectCommands,
   classifyBacklog,
+  classifyBootstrapEraPrNumbers,
   classifyClaimTimingConsistency,
   classifyLiveConfigSchemaFinding,
   classifyMergePolicyAcknowledgement,
@@ -44,6 +45,7 @@ import {
   findMissingWorkshopReferences,
   findMissingWorktreeHardening,
   findPlaceholders,
+  formatCleanupBacklogExamples,
   formatCleanupBacklogRemediation,
   formatCleanupBacklogScanPreamble,
   formatCleanupBacklogScanProgress,
@@ -731,6 +733,25 @@ test('filterIddBranchMergedPrs honors a custom pattern list instead of the defau
 // idd-skill#1936: when every merged PR's head ref fails every configured
 // pattern (all non-IDD traffic in the window), the filter must return an
 // empty array rather than falling back to the unfiltered input.
+test('filterIddBranchMergedPrs carries a valid mergedAt through, omitted when absent or empty (idd-skill#2226)', () => {
+  const result = filterIddBranchMergedPrs([
+    {
+      number: 501,
+      headRefName: 'issue/501-fix',
+      mergedAt: '2025-01-01T00:00:00Z',
+    },
+    { number: 502, headRefName: 'issue/502-fix' },
+    { number: 503, headRefName: 'issue/503-fix', mergedAt: '' },
+    { number: 504, headRefName: 'issue/504-fix', mergedAt: 12345 },
+  ]);
+  assert.deepEqual(result, [
+    { number: 501, mergedAt: '2025-01-01T00:00:00Z' },
+    { number: 502 },
+    { number: 503 },
+    { number: 504 },
+  ]);
+});
+
 test('filterIddBranchMergedPrs returns an empty array when every entry is non-matching', () => {
   const prs = [
     { number: 401, headRefName: 'dependabot/npm_and_yarn/lodash-4.17.21' },
@@ -1884,6 +1905,70 @@ test('classifyBacklog coerces non-numeric / NaN / negative thresholds to 0', () 
   assert.equal(classifyBacklog([1], -5).warn, true);
   // Zero count must not warn even with a broken threshold.
   assert.equal(classifyBacklog([], NaN).warn, false);
+});
+
+test('classifyBootstrapEraPrNumbers labels only PRs merged before the cutoff (idd-skill#2226)', () => {
+  const mergedAtByNumber = new Map([
+    [100, '2025-01-01T00:00:00Z'],
+    [101, '2026-06-01T00:00:00Z'],
+    [102, '2026-08-01T00:00:00Z'],
+  ]);
+  assert.deepEqual(
+    classifyBootstrapEraPrNumbers(
+      [100, 101, 102],
+      mergedAtByNumber,
+      '2026-01-01T00:00:00Z',
+    ),
+    new Set([100]),
+  );
+});
+
+test('classifyBootstrapEraPrNumbers is presentation-only: never adds a number missingPrNumbers did not already contain', () => {
+  const mergedAtByNumber = new Map([[100, '2025-01-01T00:00:00Z']]);
+  assert.deepEqual(
+    classifyBootstrapEraPrNumbers([], mergedAtByNumber, '2026-01-01T00:00:00Z'),
+    new Set(),
+  );
+});
+
+test('classifyBootstrapEraPrNumbers returns an empty set for an unparsable cutoff (fail closed)', () => {
+  const mergedAtByNumber = new Map([[100, '2025-01-01T00:00:00Z']]);
+  assert.deepEqual(
+    classifyBootstrapEraPrNumbers([100], mergedAtByNumber, 'not-a-date'),
+    new Set(),
+  );
+  assert.deepEqual(
+    classifyBootstrapEraPrNumbers([100], mergedAtByNumber, undefined),
+    new Set(),
+  );
+});
+
+test('classifyBootstrapEraPrNumbers skips a PR number absent from mergedAtByNumber', () => {
+  // #101 has no recorded mergedAt (fetch failed / omitted) -- never
+  // guessed as bootstrap-era.
+  const mergedAtByNumber = new Map([[100, '2025-01-01T00:00:00Z']]);
+  assert.deepEqual(
+    classifyBootstrapEraPrNumbers(
+      [100, 101],
+      mergedAtByNumber,
+      '2026-01-01T00:00:00Z',
+    ),
+    new Set([100]),
+  );
+});
+
+test('formatCleanupBacklogExamples tags only the bootstrap-era numbers (idd-skill#2226)', () => {
+  assert.equal(
+    formatCleanupBacklogExamples([100, 101, 102], new Set([100, 102])),
+    '#100 (bootstrap-era), #101, #102 (bootstrap-era)',
+  );
+});
+
+test('formatCleanupBacklogExamples matches the pre-#2226 plain format when no number is bootstrap-era', () => {
+  assert.equal(
+    formatCleanupBacklogExamples([100, 101], new Set()),
+    '#100, #101',
+  );
 });
 
 test('formatCleanupBacklogRemediation resolves the audit-pr-cleanup invocation per profile (idd-skill#1718)', () => {
