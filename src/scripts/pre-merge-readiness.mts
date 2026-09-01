@@ -11,6 +11,7 @@ import {
   readAdvisoryConvergenceDeadlineMinutes,
   readAdvisoryPrimaryBotLogin,
   readAdvisoryRecoveryCycleCap,
+  readAdvisorySecondaryQuietWindowMinutes,
   readAdvisoryTerminalWindowMinutes,
   readAdvisoryWaitPolicy,
 } from './advisory-wait-policy.mts';
@@ -631,6 +632,7 @@ export function collectPreMergeReadiness(
   } = fetchReviewsAndHeadCommit(owner, repo, args.prNumber);
   const advisoryConvergenceDeadlineMinutes =
     readAdvisoryConvergenceDeadlineMinutes();
+  const secondaryQuietWindowMinutes = readAdvisorySecondaryQuietWindowMinutes();
 
   // #1570: precompute the `#1572` terminal Copilot-unavailability verdict
   // here (the CLI/orchestration layer) rather than inside
@@ -739,6 +741,7 @@ export function collectPreMergeReadiness(
       copilotUnavailable,
       advisoryConvergenceHeadCommittedAt,
       advisoryConvergenceDeadlineMinutes,
+      secondaryQuietWindowMinutes,
       waivableCheckSelectors,
       externalCheckWaiverMaxValidity,
       externalCheckWaiverMode,

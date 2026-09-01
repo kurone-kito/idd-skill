@@ -377,6 +377,18 @@ the secondary to a requestable
 reviewer whose request appears on the PR timeline so the once-per-HEAD guard
 can observe it.
 
+`advisoryWait.secondaryQuietWindow` (#2335, off by default when omitted)
+requires a configured quiet period to elapse since the last substantive
+review activity
+before `pre-merge-readiness` treats the review as settled -- covering a
+slower secondary bot that lands a finding after a snapshot already looked
+converged. It anchors on the same non-ack-only activity ceiling the review-
+currency gate already computes (`ackOnlyPostDisposition`), so it needs no
+extra persisted state: an unresolved item keeps the anchor fresh, and a
+disposition reply, a watermark, or a courtesy bot acknowledgement never
+reopens it. Distinct from `advisoryWait.settledWindow`, which bounds the
+PRIMARY bot's own pending state, not a late secondary-bot arrival.
+
 `advisoryWait.capExhaustedRoute` is intentionally fail-closed. The
 default `phase-specific` behavior keeps the current E14 skip / F2-F3
 hold split, while `hold` is a stricter override that also stops E14 on
