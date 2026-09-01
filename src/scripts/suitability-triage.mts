@@ -365,6 +365,35 @@ const POLICY_OVERRIDE_NOUN_PATTERN = new RegExp(
   `\\b(${POLICY_OVERRIDE_NOUN_SOURCE})\\b`,
   'i',
 );
+// #2219: broadens checkAutonomy's coordination-language matcher beyond its two
+// original fixed templates (requires .../stakeholder ... sign-off) to catch
+// equally natural phrasings for the same unresolved human-coordination
+// dependency -- reported by an adopter as passing checkAutonomy under
+// different wording. Deliberately excludes a bare "unresolved" alternative:
+// this repository's own instruction files use that word constantly for
+// unrelated concepts (unresolved review threads, unresolved roadmap
+// descendants), so only the multi-word "unresolved decision/question/choice"
+// phrasing is included.
+const UNRESOLVED_CHOICE_SOURCE =
+  '(?:TBD|to be determined|still undecided|undecided|not (?:yet )?decided|unresolved (?:decision|question|choice)|pending (?:a |the )?(?:decision|approval)|open question(?:s)? for (?:the )?(?:maintainer|team|stakeholders?)|awaiting (?:a |the )?(?:decision|approval|input)|maintainer (?:to |must |needs to )?(?:decide|choose))';
+const UNRESOLVED_CHOICE_PATTERN = new RegExp(
+  `\\b${UNRESOLVED_CHOICE_SOURCE}\\b`,
+  'gi',
+);
+// Non-global sibling for proximity `.test()` calls below -- a global regex's
+// `.test()` advances `lastIndex` across calls, which would silently skip
+// matches on a second or later either/or span in the same body.
+const UNRESOLVED_CHOICE_PROXIMITY_PATTERN = new RegExp(
+  `\\b${UNRESOLVED_CHOICE_SOURCE}\\b`,
+  'i',
+);
+// #2219: an either/or acceptance-criterion shape naming two mutually
+// exclusive implementation paths. Only flagged together with
+// UNRESOLVED_CHOICE_PROXIMITY_PATTERN nearby (see checkAutonomy) -- the
+// either/or structure alone also describes an ordinary AC offering two
+// already-resolved, equivalent options, which must keep passing.
+const EITHER_OR_PATTERN = /\beither\b[\s\S]{0,120}?\bor\b/gi;
+const EITHER_OR_PROXIMITY_WINDOW_CHARS = 120;
 const ACCEPTANCE_CRITERIA_PATTERN = /^#+\s*Acceptance\s+Criteria\s*$/im;
 // A heading line such as "## Decision (resolved 2026-06-27)" records that a
 // human has already ruled on the issue's open question (see Check 7). The
@@ -1221,6 +1250,7 @@ export function checkAutonomy(context: Context): CheckOutcome {
     ...body.matchAll(
       /\bstakeholder\b[\s\S]{0,80}\b(sign-?off|approval|decision)\b/gi,
     ),
+    ...body.matchAll(UNRESOLVED_CHOICE_PATTERN),
   ];
 
   for (const match of coordinationMatches) {
@@ -1245,6 +1275,39 @@ export function checkAutonomy(context: Context): CheckOutcome {
       pass: false,
       evidence:
         'Issue explicitly requires external human coordination or approval.',
+    };
+  }
+
+  // #2219: an either/or acceptance-criterion shape naming two mutually
+  // exclusive implementation paths without saying which one to take.
+  // Requires an unresolved-choice marker nearby, not the either/or
+  // structure alone -- an ordinary AC offering two already-resolved,
+  // equivalent options must keep passing.
+  for (const match of body.matchAll(EITHER_OR_PATTERN)) {
+    const matchedText = match[0] ?? '';
+    const matchIndex = match.index ?? 0;
+    const contextBefore = body.slice(
+      Math.max(0, matchIndex - EITHER_OR_PROXIMITY_WINDOW_CHARS),
+      matchIndex,
+    );
+    const contextAfter = body.slice(
+      matchIndex + matchedText.length,
+      Math.min(
+        body.length,
+        matchIndex + matchedText.length + EITHER_OR_PROXIMITY_WINDOW_CHARS,
+      ),
+    );
+
+    if (
+      !UNRESOLVED_CHOICE_PROXIMITY_PATTERN.test(contextBefore) &&
+      !UNRESOLVED_CHOICE_PROXIMITY_PATTERN.test(contextAfter)
+    ) {
+      continue;
+    }
+
+    return {
+      pass: false,
+      evidence: 'Issue presents an unresolved either/or implementation choice.',
     };
   }
 

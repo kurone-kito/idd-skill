@@ -1974,6 +1974,74 @@ test('autonomy fails when stakeholder sign-off is required', () => {
   assert.equal(result.pass, false);
 });
 
+test('autonomy fails on a nearby-word unresolved-choice phrasing beyond the two fixed templates -- #2219', () => {
+  const result = checkAutonomy({
+    issue: {
+      ...BASE_ISSUE,
+      body: `${BASE_ISSUE.body}\nThe caching backend is TBD pending maintainer review.`,
+    },
+  } as Context);
+  assert.equal(result.pass, false);
+});
+
+test('autonomy fails on an either/or acceptance-criterion shape naming two unresolved implementation paths -- #2219', () => {
+  const result = checkAutonomy({
+    issue: {
+      ...BASE_ISSUE,
+      body: `${BASE_ISSUE.body}\n## Acceptance Criteria\n- Either store sessions in Redis or in-memory (not yet decided which).`,
+    },
+  } as Context);
+  assert.equal(result.pass, false);
+});
+
+test('autonomy still passes an ordinary either/or acceptance criterion offering two already-resolved, equivalent options -- #2219 (no new false positive)', () => {
+  const result = checkAutonomy({
+    issue: {
+      ...BASE_ISSUE,
+      body: `${BASE_ISSUE.body}\n## Acceptance Criteria\n- Either approach satisfies this requirement; both are already implemented and equivalent.`,
+    },
+  } as Context);
+  assert.equal(result.pass, true);
+});
+
+test('autonomy still passes ordinary prose using "unresolved" for an unrelated concept -- #2219 (no new false positive)', () => {
+  const result = checkAutonomy({
+    issue: {
+      ...BASE_ISSUE,
+      body: `${BASE_ISSUE.body}\nThis change leaves no unresolved review threads once merged.`,
+    },
+  } as Context);
+  assert.equal(result.pass, true);
+});
+
+test('autonomy ignores a negated unresolved-choice phrasing -- #2219', () => {
+  const result = checkAutonomy({
+    issue: {
+      ...BASE_ISSUE,
+      body: `${BASE_ISSUE.body}\nThis is no longer TBD; the maintainer already decided on approach A.`,
+    },
+  } as Context);
+  assert.equal(result.pass, true);
+});
+
+test('autonomy still fails both original fixed templates unchanged -- #2219 (no regression)', () => {
+  const requiresResult = checkAutonomy({
+    issue: {
+      ...BASE_ISSUE,
+      body: `${BASE_ISSUE.body}\nThis requires human decision before proceeding.`,
+    },
+  } as Context);
+  assert.equal(requiresResult.pass, false);
+
+  const stakeholderResult = checkAutonomy({
+    issue: {
+      ...BASE_ISSUE,
+      body: `${BASE_ISSUE.body}\nStakeholder approval is needed here.`,
+    },
+  } as Context);
+  assert.equal(stakeholderResult.pass, false);
+});
+
 test('verifiability fails when acceptance criteria is subjective', () => {
   const result = checkVerifiability({
     issue: {
