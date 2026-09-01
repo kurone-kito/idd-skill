@@ -152,6 +152,74 @@ test('pre-merge readiness always carries waiverEvidence and the schema requires 
   assert.deepEqual(validate(withoutDisposition, readinessSchema), []);
 });
 
+test('#2323: localValidationEvidence is informational only and never clears a required-check blocker', () => {
+  const fixture = readJson('fixtures/pre-merge-readiness/ci-not-ready.json');
+
+  // A caller-supplied resolution reporting valid, present local evidence
+  // covering the exact required check the fixture's own CI gate is missing
+  // ("test") -- if this field could ever influence the merge gate, this is
+  // the shape that would prove it.
+  const localValidationEvidenceSummary = {
+    present: true,
+    reason: '',
+    evidence: {
+      actor: 'kurone-kito',
+      headSha: fixture.input.prHeadSha,
+      commandSet: 'pre-push-validate',
+      covers: ['lint', 'test'],
+      outcome: 'pass',
+      createdAt: '2026-05-11T23:59:00Z',
+    },
+  };
+
+  const baseline = buildPreMergeReadinessSummary(
+    fixture.input,
+    fixture.options,
+  );
+  const withEvidence = buildPreMergeReadinessSummary(fixture.input, {
+    ...fixture.options,
+    localValidationEvidenceSummary,
+  });
+
+  // Additive only: every other field is byte-for-byte identical.
+  const withEvidenceMinusField = { ...withEvidence };
+  delete (withEvidenceMinusField as { localValidationEvidence?: unknown })
+    .localValidationEvidence;
+  assert.deepEqual(withEvidenceMinusField, baseline);
+
+  // The field itself carries exactly what was passed in.
+  assert.deepEqual(
+    (withEvidence as { localValidationEvidence?: unknown })
+      .localValidationEvidence,
+    localValidationEvidenceSummary,
+  );
+
+  // The required-check blocker for the still-missing "test" check survives
+  // unchanged, and `ready` stays false: local evidence never derives a
+  // merge.
+  assert.equal(withEvidence.ready, false);
+  assert.deepEqual(withEvidence.blockers, baseline.blockers);
+  const withEvidenceBlockers = withEvidence.blockers as {
+    gate: string;
+    detail: string;
+  }[];
+  assert.ok(
+    withEvidenceBlockers.some((blocker) => blocker.gate === 'ci'),
+    'the ci blocker for the missing required check must survive',
+  );
+  const withEvidenceCi = withEvidence.ci as {
+    requiredChecksPassing: boolean;
+    missingRequiredCheckNames: string[];
+  };
+  assert.equal(withEvidenceCi.requiredChecksPassing, false);
+  assert.deepEqual(withEvidenceCi.missingRequiredCheckNames, ['test']);
+
+  // Baseline (no evidence supplied) never carries the field at all.
+  assert.equal(Object.hasOwn(baseline, 'localValidationEvidence'), false);
+
+  assert.deepEqual(validate(withEvidence, readinessSchema), []);
+});
+
 test('pre-merge readiness exposes effective advisory policy', () => {
   const fixture = readJson('fixtures/pre-merge-readiness/clean.json');
   const summary = buildPreMergeReadinessSummary(fixture.input, {

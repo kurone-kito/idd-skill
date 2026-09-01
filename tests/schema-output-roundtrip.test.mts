@@ -28,7 +28,9 @@ import {
   buildPreMergeReadinessSummary,
   parseClaimComment,
   parseForcedHandoffComment,
+  parseLocalValidationEvidenceComment,
   parseProviderOutageDeclarationComment,
+  renderLocalValidationEvidenceComment,
 } from '../src/scripts/protocol-helpers.mts';
 import { applyResolveReviewThread } from '../src/scripts/resolve-review-thread.mts';
 import { evaluateQuietWindow } from '../src/scripts/stalled-session-quiet-check.mts';
@@ -223,6 +225,12 @@ const SCHEMA_OUTPUT_COVERAGE: CoverageEntry[] = [
       'parseProviderOutageDeclarationComment (marker-helpers.mts, re-exported by protocol-helpers.mts)',
   },
   {
+    schema: 'local-validation-evidence.schema.json',
+    status: 'covered',
+    builder:
+      'parseLocalValidationEvidenceComment (marker-helpers.mts, re-exported by protocol-helpers.mts)',
+  },
+  {
     schema: 'resolve-review-thread.schema.json',
     status: 'covered',
     builder: 'applyResolveReviewThread (resolve-review-thread.mts)',
@@ -396,6 +404,28 @@ test('provider-outage-declaration: parseProviderOutageDeclarationComment output 
   assertRoundtrip(
     parsed,
     loadJson('schemas/provider-outage-declaration.schema.json'),
+  );
+});
+
+test('local-validation-evidence: parseLocalValidationEvidenceComment output validates against schema', () => {
+  const body = renderLocalValidationEvidenceComment({
+    actor: 'kurone-kito',
+    headSha: 'a'.repeat(40),
+    commandSet: 'pre-push-validate',
+    covers: ['idd-doctor', 'lint', 'pnpm-boundary'],
+    outcome: 'pass',
+  });
+  const parsed = parseLocalValidationEvidenceComment(
+    body,
+    '2026-09-01T05:00:01Z',
+  );
+  assert.ok(
+    parsed !== null,
+    'parseLocalValidationEvidenceComment returned null',
+  );
+  assertRoundtrip(
+    parsed,
+    loadJson('schemas/local-validation-evidence.schema.json'),
   );
 });
 

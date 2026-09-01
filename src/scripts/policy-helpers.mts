@@ -39,6 +39,16 @@ interface ProviderOutagePolicy {
   maxValidity: string;
 }
 
+/**
+ * #2323: how long a `idd-local-validation-evidence` marker stays readable
+ * as fresh evidence, measured from the marker comment's own GitHub
+ * `created_at` (never an embedded timestamp) -- mirrors `maxValidity`
+ * above.
+ */
+interface LocalValidationEvidencePolicy {
+  maxAge: string;
+}
+
 /** How one policy document presents `critiqueLoop.delegate`. */
 export type CritiqueLoopDelegateLayerStatus =
   | 'absent'
@@ -147,6 +157,7 @@ interface RawConfig {
   };
   mergeGate?: { soloCodeownerAdminFallback?: unknown };
   providerOutage?: { declarationTarget?: unknown; maxValidity?: unknown };
+  localValidationEvidence?: { maxAge?: unknown };
 }
 
 const HELPER_RUNTIME_PROFILES = new Set([
@@ -334,6 +345,12 @@ export const POLICY_DEFAULTS = Object.freeze({
   providerOutage: Object.freeze({
     maxValidity: 'PT24H',
   }) as Readonly<ProviderOutagePolicy>,
+  // Added in #2323. Deliberately shorter than providerOutage.maxValidity
+  // (PT24H): a local validation run only stays representative of the
+  // working tree for a bounded window, not the whole outage window.
+  localValidationEvidence: Object.freeze({
+    maxAge: 'PT4H',
+  }) as Readonly<LocalValidationEvidencePolicy>,
 });
 
 export function parseProjectCommandRows(text: string): Map<string, string> {
@@ -487,6 +504,12 @@ export function normalizePolicyConfig(config: unknown) {
   ) {
     providerOutage.declarationTarget = rawDeclarationTarget;
   }
+  const localValidationEvidence: LocalValidationEvidencePolicy = {
+    maxAge: parsePositiveDuration(
+      c?.localValidationEvidence?.maxAge,
+      POLICY_DEFAULTS.localValidationEvidence.maxAge,
+    ),
+  };
 
   return {
     issueScope: parseEnum(
@@ -695,6 +718,7 @@ export function normalizePolicyConfig(config: unknown) {
       ),
     },
     providerOutage,
+    localValidationEvidence,
   };
 }
 

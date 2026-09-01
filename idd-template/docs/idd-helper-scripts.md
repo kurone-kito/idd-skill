@@ -1145,6 +1145,42 @@ Interpretation rules:
   invalidates an otherwise-valid declaration, and this helper accepts no
   verdict input at all.
 
+### Local validation evidence helper
+
+- Command:
+  `node scripts/local-validation-evidence.mjs --pr <n> --head-sha <40-hex>
+  [--record] [options]`
+- Published bin: `idd-local-validation-evidence`
+- Stable contract:
+  [`local-validation-evidence.schema.json`][local-validation-evidence-schema]
+- Purpose (#2323): record that a local command set (typically
+  `pre-push-validate`) ran against a pull request's exact HEAD, as
+  HEAD-pinned, actor-trust-filtered, expiring evidence -- so a queue
+  caused by a required-check Actions outage recovers on a rerun rather
+  than a re-review.
+- Modes:
+  - default (resolve): reports whether unexpired, actor-trusted evidence
+    exists for `--head-sha` covering every `--required-checks` name,
+    **only while** an active provider-outage declaration
+    ([above](#provider-outage-declaration-helper)) exists for
+    `--service` (default `ci-actions`). Recency is measured from the
+    marker comment's own `created_at` against `localValidationEvidence.maxAge`
+    (default `PT4H`), never an embedded timestamp.
+  - `--record --covers <names> --outcome <pass|fail>`: renders and (with
+    `--apply`) posts the evidence marker to the pull request.
+- **Never a merge gate.** `pre-merge-readiness.mts` reports this
+  helper's resolution as its own additive `localValidationEvidence`
+  field; `computePreMergeReadinessBlockers` (protocol-helpers.mts) has
+  no reference to that field, so it can never remove or downgrade a
+  required-check blocker. Evidence changes what is _known_, never what
+  is _green_ -- an unavailable required platform check stays listed as
+  a blocker regardless of evidence. Restoring the platform check rollup
+  is an out-of-band privileged operation outside the autonomous loop.
+- On recovery, drive re-verification from the evidence marker's own
+  `headSha` (`evaluateLocalValidationEvidenceRecovery`): a pull request
+  whose HEAD advanced past the recorded evidence is re-validated, never
+  merged on the stale record.
+
 ### A4 viability gate
 
 - Command: `node scripts/discover-viability-gate.mjs --issue <number>`
@@ -2858,6 +2894,7 @@ replace the written decision tables.
 [disposition-non-review-notices-schema]: https://kurone-kito.github.io/idd-skill/schemas/disposition-non-review-notices.schema.json
 [forced-handoff-marker-schema]: https://kurone-kito.github.io/idd-skill/schemas/forced-handoff-marker.schema.json
 [idd-merge-execute-schema]: https://kurone-kito.github.io/idd-skill/schemas/idd-merge-execute.schema.json
+[local-validation-evidence-schema]: https://kurone-kito.github.io/idd-skill/schemas/local-validation-evidence.schema.json
 [post-idd-marker-schema]: https://kurone-kito.github.io/idd-skill/schemas/post-idd-marker.schema.json
 [pre-merge-readiness-schema]: https://kurone-kito.github.io/idd-skill/schemas/pre-merge-readiness.schema.json
 [provider-outage-declaration-schema]: https://kurone-kito.github.io/idd-skill/schemas/provider-outage-declaration.schema.json

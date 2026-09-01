@@ -187,6 +187,12 @@ export const POLICY_DEFAULTS = Object.freeze({
   providerOutage: Object.freeze({
     maxValidity: 'PT24H',
   }),
+  // Added in #2323. Deliberately shorter than providerOutage.maxValidity
+  // (PT24H): a local validation run only stays representative of the
+  // working tree for a bounded window, not the whole outage window.
+  localValidationEvidence: Object.freeze({
+    maxAge: 'PT4H',
+  }),
 });
 export function parseProjectCommandRows(text) {
   const commands = new Map();
@@ -322,6 +328,12 @@ export function normalizePolicyConfig(config) {
   ) {
     providerOutage.declarationTarget = rawDeclarationTarget;
   }
+  const localValidationEvidence = {
+    maxAge: parsePositiveDuration(
+      c?.localValidationEvidence?.maxAge,
+      POLICY_DEFAULTS.localValidationEvidence.maxAge,
+    ),
+  };
   return {
     issueScope: parseEnum(
       c?.issueScope,
@@ -529,6 +541,7 @@ export function normalizePolicyConfig(config) {
       ),
     },
     providerOutage,
+    localValidationEvidence,
   };
 }
 export function resolveCollaboratorMarkerTrust(config, envValue = '') {

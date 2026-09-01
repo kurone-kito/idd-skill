@@ -1,0 +1,43 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://kurone-kito.github.io/idd-skill/schemas/local-validation-evidence.schema.json",
+  "title": "IDD Local Validation Evidence Marker Payload",
+  "description": "Structured payload parsed from an idd-local-validation-evidence comment on a pull request.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["actor", "headSha", "commandSet", "covers", "outcome", "createdAt"],
+  "properties": {
+    "actor": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^\\S+$",
+      "description": "GitHub login of the recording actor, as embedded in the marker (display only; the comment's actual GitHub author is the trust evidence)."
+    },
+    "headSha": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$",
+      "description": "The pull request HEAD commit the local validation ran against. A resolution for any other live HEAD treats this record as wrongHead."
+    },
+    "commandSet": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Name of the configured local command set that ran (typically pre-push-validate)."
+    },
+    "covers": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 },
+      "minItems": 1,
+      "description": "Required GitHub check names this run is asserted to substitute evidence for. Never a claim that any platform check itself passed."
+    },
+    "outcome": {
+      "type": "string",
+      "enum": ["pass", "fail"],
+      "description": "Outcome of the local command set run."
+    },
+    "createdAt": {
+      "type": "string",
+      "pattern": "^(none|\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?Z)$",
+      "description": "The GitHub-assigned created_at of the comment carrying this marker, or \"none\" when unavailable. Used to compute recency against the configured localValidationEvidence.maxAge; never itself embedded in the marker body."
+    }
+  }
+}

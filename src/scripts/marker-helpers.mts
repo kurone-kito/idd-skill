@@ -170,6 +170,25 @@ export interface ParsedProviderOutageAdvancement {
   createdAt: string;
 }
 
+/**
+ * Parsed `<!-- idd-local-validation-evidence: ... -->` marker (#2323): a
+ * HEAD-pinned record that a configured local command set (typically
+ * `pre-push-validate`) ran against this exact commit and produced
+ * `outcome`. `covers` names the required GitHub check names this run is
+ * asserted to substitute evidence for -- never a claim that any platform
+ * check itself passed. Recency is read from the comment's own `createdAt`
+ * (never an embedded timestamp), mirroring
+ * {@link ParsedProviderOutageAdvancement}.
+ */
+export interface ParsedLocalValidationEvidence {
+  actor: string;
+  headSha: string;
+  commandSet: string;
+  covers: string[];
+  outcome: 'pass' | 'fail';
+  createdAt: string;
+}
+
 /** Parsed `<!-- review-watermark: ... -->` marker. */
 export interface ParsedReviewWatermark {
   agentId: string;
@@ -379,6 +398,12 @@ const OPERATIONAL_MARKER_ENTRIES: OperationalMarker[] = [
     pattern:
       /^<!--\s*idd-provider-outage-advanced:\s+\S+\s+pr:\d+\s+head:[0-9a-f]{40}\s+declared:\S+\s*-->[\s\S]*$/i,
     startPattern: /^<!--\s*idd-provider-outage-advanced:/i,
+  },
+  {
+    label: '<!-- idd-local-validation-evidence:',
+    pattern:
+      /^<!--\s*idd-local-validation-evidence:\s+\S+\s+head:[0-9a-f]{40}\s+commands:\S+\s+covers:\S+\s+outcome:(?:pass|fail)\s*-->[\s\S]*$/i,
+    startPattern: /^<!--\s*idd-local-validation-evidence:/i,
   },
 ];
 
@@ -1022,6 +1047,97 @@ export function parseProviderOutageAdvancedComment(
     prNumber,
     headSha: match[3].toLowerCase(),
     declaredAt,
+    createdAt: isValidIsoTimestamp(createdAt) ? createdAt : 'none',
+  };
+}
+
+/**
+ * Render a `<!-- idd-local-validation-evidence: ... -->` marker (#2323).
+ * Each `covers` entry is percent-encoded individually (reusing the same
+ * comment-token-safe field grammar as the sibling outage markers) before
+ * being joined with a raw `,`, so a check name containing a literal comma
+ * still round-trips correctly -- only the join separator itself is ever a
+ * raw `,` in the wire form.
+ */
+export function renderLocalValidationEvidenceComment(payload: {
+  actor?: unknown;
+  headSha?: unknown;
+  commandSet?: unknown;
+  covers?: unknown;
+  outcome?: unknown;
+}): string {
+  const actor = normalizeNonWhitespaceToken(payload?.actor);
+  const headSha = normalizeNonWhitespaceToken(payload?.headSha).toLowerCase();
+  const commandSet = normalizeExternalCheckWaiverField(payload?.commandSet);
+  const coversList = (Array.isArray(payload?.covers) ? payload.covers : [])
+    .map((entry) => String(entry ?? '').trim())
+    .filter(Boolean);
+  const outcome = String(payload?.outcome ?? '').trim();
+  if (
+    !actor ||
+    !/^[0-9a-f]{40}$/.test(headSha) ||
+    !commandSet ||
+    coversList.length === 0 ||
+    (outcome !== 'pass' && outcome !== 'fail')
+  ) {
+    throw new Error('invalid local validation evidence payload');
+  }
+  const encodedCommandSet = encodeExternalCheckWaiverField(commandSet);
+  // #2355 review (Copilot, CodeRabbit): encode each entry BEFORE joining --
+  // encoding the joined string instead would also turn a literal comma
+  // inside one entry's own name into the same `%2C` the join separator
+  // produces, making a comma-containing check name indistinguishable from
+  // the boundary between two entries on parse. Each encoded entry can
+  // never itself contain a raw `,` (percent-encoded away), so splitting on
+  // the raw `,` below is unambiguous.
+  const encodedCovers = coversList
+    .map((entry) => encodeExternalCheckWaiverField(entry))
+    .join(',');
+  return [
+    `<!-- idd-local-validation-evidence: ${actor} head:${headSha} commands:${encodedCommandSet} covers:${encodedCovers} outcome:${outcome} -->`,
+    '',
+    `_${actor}: local validation evidence (\`${commandSet}\`, ${outcome}) for \`${headSha}\` — IDD automation marker. Do not edit._`,
+  ].join('\n');
+}
+
+export function parseLocalValidationEvidenceComment(
+  body: string,
+  createdAt: string,
+): ParsedLocalValidationEvidence | null {
+  const match = body
+    .trimEnd()
+    .match(
+      new RegExp(
+        `^<!--\\s*idd-local-validation-evidence:\\s+(\\S+)\\s+head:([0-9a-f]{40})\\s+commands:(\\S+)\\s+covers:(\\S+)\\s+outcome:(pass|fail)\\s*-->${OPTIONAL_IDD_VISIBLE_NOTE_PATTERN}$`,
+        'i',
+      ),
+    );
+  if (!match) {
+    return null;
+  }
+  const actor = normalizeNonWhitespaceToken(match[1]);
+  const commandSet = normalizeExternalCheckWaiverField(
+    decodeExternalCheckWaiverField(match[3]),
+  );
+  // Split on the raw `,` separator BEFORE decoding each entry -- the
+  // matching render side percent-encodes every entry individually, so a
+  // literal comma can only ever appear here as a join separator, never
+  // inside an entry's own encoded form.
+  const covers = match[4]
+    .split(',')
+    .map((entry) =>
+      normalizeExternalCheckWaiverField(decodeExternalCheckWaiverField(entry)),
+    )
+    .filter(Boolean);
+  if (!actor || !commandSet || covers.length === 0) {
+    return null;
+  }
+  return {
+    actor,
+    headSha: match[2].toLowerCase(),
+    commandSet,
+    covers,
+    outcome: match[5].toLowerCase() as 'pass' | 'fail',
     createdAt: isValidIsoTimestamp(createdAt) ? createdAt : 'none',
   };
 }

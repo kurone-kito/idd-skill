@@ -511,6 +511,18 @@
       },
       "description": "Container for the repository-scoped outage-relief declaration policy (`declarationTarget`, `maxValidity`). Optional; omitting it keeps the declaration path disabled."
     },
+    "localValidationEvidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "maxAge": {
+          "type": "string",
+          "pattern": "^(?=.*[1-9])P(?=\\d|T\\d)(?:\\d+D)?(?:T(?=\\d)(?:\\d+H)?(?:\\d+M)?(?:\\d+S)?)?$",
+          "description": "Maximum ISO 8601 duration a `idd-local-validation-evidence` marker stays readable as fresh evidence, measured from the marker comment's own GitHub `created_at`. Optional; defaults to `PT4H` — never open-ended."
+        }
+      },
+      "description": "Container for the local-validation-evidence marker policy (`maxAge`). Optional; omitting it keeps the default `PT4H` window."
+    },
     "discover": {
       "type": "object",
       "additionalProperties": false,

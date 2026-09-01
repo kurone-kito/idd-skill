@@ -186,6 +186,7 @@ const COVERED_HELPERS = [
   'idd-doctor',
   'idd-roadmap-audit-execute',
   'live-status-digest',
+  'local-validation-evidence',
   'merged-pr-feedback-sweep',
   'phase-id-resolver',
   'pre-merge-readiness',

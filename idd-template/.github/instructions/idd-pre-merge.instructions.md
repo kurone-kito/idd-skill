@@ -242,6 +242,16 @@ nonce was recorded for the active claim.
   or claim ownership. Non-empty `waiverEvidence.wrongHead`, `wrongClaim`,
   `unauthorized`, `expired`, or `malformed` are suspicious context, never
   valid permissions.
+
+  **Local validation evidence** (#2323): `pre-merge-readiness`'s
+  `localValidationEvidence` field reports whether HEAD-pinned local
+  evidence exists for an active `ciGate` outage
+  ([`docs/idd-helper-scripts.md`](../../docs/idd-helper-scripts.md#local-validation-evidence-helper)).
+  It is informational only — never treat it as a passing check or a
+  waiver: an unavailable required check stays a CI-gate blocker exactly
+  as above regardless of this field. With required checks unavailable,
+  merges queue; restoring the platform check rollup is an out-of-band
+  privileged operation outside this loop.
 - **Required reviews**: required approvals count is satisfied and all
   CODEOWNER approvals are obtained. If helper evidence includes
   `reviewerStates.codeownerSelfApproval`, include that diagnostic

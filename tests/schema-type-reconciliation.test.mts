@@ -25,6 +25,7 @@ import type {
   LiveStatusDigestFields,
   ParsedClaimMarker,
   ParsedForcedHandoffMarker,
+  ParsedLocalValidationEvidence,
   ParsedProviderOutageDeclaration,
 } from '../src/scripts/protocol-helpers.mts';
 import type { ResolveReviewThreadReport } from '../src/scripts/resolve-review-thread.mts';
@@ -264,6 +265,9 @@ interface PolicyConfigFile {
     declarationTarget?: number;
     maxValidity?: string;
   };
+  localValidationEvidence?: {
+    maxAge?: string;
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -353,6 +357,15 @@ export const providerOutageDeclarationKeys = [
   'expiresAt',
   'createdAt',
 ] as const satisfies readonly (keyof ParsedProviderOutageDeclaration)[];
+
+export const localValidationEvidenceKeys = [
+  'actor',
+  'headSha',
+  'commandSet',
+  'covers',
+  'outcome',
+  'createdAt',
+] as const satisfies readonly (keyof ParsedLocalValidationEvidence)[];
 
 export const discoverRoadmapUnionKeys = [
   'mode',
@@ -529,6 +542,7 @@ export const policyConfigKeys = [
   'labels',
   'mergeGate',
   'providerOutage',
+  'localValidationEvidence',
 ] as const satisfies readonly (keyof PolicyConfigFile)[];
 
 // PreMergeReadinessReport is index-signature typed (its summary builder
@@ -557,6 +571,7 @@ export const preMergeReadinessKeys = [
   'branchCurrency',
   'trustedMarkerActors',
   'trustedMarkerActorsSource',
+  'localValidationEvidence',
   'ready',
   'blockers',
 ] as const satisfies readonly (keyof PreMergeReadinessReport)[];
@@ -837,6 +852,15 @@ const providerOutageDeclarationFixture = {
   expiresAt: '2026-09-02T05:00:00Z',
   createdAt: '2026-09-01T05:00:01Z',
 } satisfies ParsedProviderOutageDeclaration;
+
+const localValidationEvidenceFixture = {
+  actor: 'kurone-kito',
+  headSha: 'a'.repeat(40),
+  commandSet: 'pre-push-validate',
+  covers: ['idd-doctor', 'lint', 'pnpm-boundary'],
+  outcome: 'pass',
+  createdAt: '2026-09-01T05:00:01Z',
+} satisfies ParsedLocalValidationEvidence;
 
 const discoverRoadmapUnionFixture = {
   mode: 'all-roadmaps',
@@ -1493,6 +1517,13 @@ const SCHEMA_TYPE_MAP: readonly SchemaTypeMapping[] = [
     owningModule: 'src/scripts/protocol-helpers.mts',
     keys: providerOutageDeclarationKeys,
     fixture: providerOutageDeclarationFixture,
+  },
+  {
+    schemaFile: 'local-validation-evidence.schema.json',
+    exportedType: 'ParsedLocalValidationEvidence',
+    owningModule: 'src/scripts/protocol-helpers.mts',
+    keys: localValidationEvidenceKeys,
+    fixture: localValidationEvidenceFixture,
   },
   {
     schemaFile: 'context-tax-event.schema.json',

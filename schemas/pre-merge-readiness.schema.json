@@ -1604,6 +1604,11 @@
       "description": "Provenance of trustedMarkerActors: an explicit flag, an environment variable, repository config, or none configured.",
       "enum": ["flag", "env", "config", "none"]
     },
+    "localValidationEvidence": {
+      "type": "object",
+      "description": "#2323: the caller-precomputed resolveLocalValidationEvidence result (local-validation-evidence.mts), reported verbatim. Omitted entirely when the caller does not pass it. Purely informational -- computePreMergeReadinessBlockers has no reference to this field, so it can never remove or downgrade a required-check blocker; an unavailable required check stays a blocker regardless of this field's contents.",
+      "additionalProperties": true
+    },
     "ready": {
       "description": "Strict merge-gate rollup: true only when blockers is empty. Does NOT apply the dispositionEvidence.soleCauseAckOnlyPostDisposition override (a separate flag the F2 checklist layers on top).",
       "type": "boolean"
