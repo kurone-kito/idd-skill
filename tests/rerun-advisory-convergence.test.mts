@@ -13,8 +13,11 @@ import {
   describeRecoveryRefreshHeader,
   extractAdvisoryVerdictReasonsFromLog,
   formatApplySummary,
+  hasNeverReviewedVerdictReason,
   hasUncoveredHeadVerdictReason,
+  isNeverReviewedVerdictReason,
   isUncoveredHeadVerdictReason,
+  NEVER_REVIEWED_REASON_MARKER,
   parseArgs,
   parseRunIdFromUrl,
   RERUN_PLAN_CHECK_NAME,
@@ -532,6 +535,99 @@ test('#1775: applyRerunPlan never spends budget on an awaiting-fresh-review inst
   assert.equal(result.resolved, true);
 });
 
+// --- Classification: never-reviewed (#2326) -------------------------------
+
+const NEVER_REVIEWED_HISTORICAL_REASON =
+  'copilot has not reviewed this pull request yet';
+
+test('#2326: classifies a never-reviewed verdict reason as awaiting-fresh-review, not rerun-eligible', () => {
+  const plan = computeRerunPlan(
+    baseInput({
+      instances: [
+        baseInstance({
+          conclusion: 'failure',
+          verdictReasons: [NEVER_REVIEWED_HISTORICAL_REASON],
+        }),
+      ],
+    }),
+    baseOptions(),
+  );
+  assert.equal(plan.instances[0]?.classification, 'awaiting-fresh-review');
+  assert.equal(plan.counts.awaitingFreshReview, 1);
+  assert.equal(plan.counts.rerunEligible, 0);
+  assert.equal(plan.plan.length, 0);
+  assert.match(plan.instances[0]?.reason ?? '', /wait for a fresh review/);
+  assert.match(
+    plan.instances[0]?.reason ?? '',
+    /has not reviewed this pull request yet/,
+  );
+});
+
+test('#2326: applyRerunPlan never spends budget on a never-reviewed instance', () => {
+  const initialPlan = computeRerunPlan(
+    baseInput({
+      instances: [
+        baseInstance({
+          conclusion: 'failure',
+          verdictReasons: [NEVER_REVIEWED_HISTORICAL_REASON],
+        }),
+      ],
+    }),
+    baseOptions(),
+  );
+  assert.equal(initialPlan.plan.length, 0);
+
+  let rerunCalled = false;
+  const result = applyRerunPlan(initialPlan, {
+    rerunAndWait: () => {
+      rerunCalled = true;
+    },
+    recomputePlan: () => {
+      throw new Error('recomputePlan should not be called');
+    },
+  });
+
+  assert.equal(rerunCalled, false);
+  assert.equal(result.executed.length, 0);
+  assert.equal(result.resolved, true);
+});
+
+test('#2326: headCoverageSatisfied true also recovers a never-reviewed hold to rerun-eligible', () => {
+  const plan = computeRerunPlan(
+    baseInput({
+      instances: [
+        baseInstance({
+          conclusion: 'failure',
+          verdictReasons: [NEVER_REVIEWED_HISTORICAL_REASON],
+        }),
+      ],
+    }),
+    baseOptions({ headCoverageSatisfied: true }),
+  );
+  assert.equal(plan.instances[0]?.classification, 'rerun-eligible');
+  assert.equal(plan.counts.rerunEligible, 1);
+  assert.equal(plan.counts.awaitingFreshReview, 0);
+  assert.equal(plan.plan.length, 1);
+  assert.match(plan.instances[0]?.reason ?? '', /historically reported/);
+  assert.match(plan.instances[0]?.reason ?? '', /#1806/);
+});
+
+test('#2326: headCoverageSatisfied omitted (undefined) fails closed to the never-reviewed hold', () => {
+  const plan = computeRerunPlan(
+    baseInput({
+      instances: [
+        baseInstance({
+          conclusion: 'failure',
+          verdictReasons: [NEVER_REVIEWED_HISTORICAL_REASON],
+        }),
+      ],
+    }),
+    baseOptions(),
+  );
+  assert.equal(plan.instances[0]?.classification, 'awaiting-fresh-review');
+  assert.equal(plan.plan.length, 0);
+});
+
 // --- Classification: live-coverage recovery (#1806) ----------------------
 
 const UNCOVERED_HEAD_HISTORICAL_REASON =
@@ -690,6 +786,24 @@ test('#1775: extractAdvisoryVerdictReasonsFromLog parses gh-run-view-shaped logs
   );
   assert.equal(hasUncoveredHeadVerdictReason(null), false);
   assert.match(UNCOVERED_HEAD_REASON_MARKER, /does not cover current HEAD/);
+});
+
+test('#2326: never-reviewed helpers match their marker and reject the uncovered-HEAD reason', () => {
+  const neverReviewed = 'copilot has not reviewed this pull request yet';
+  assert.equal(isNeverReviewedVerdictReason(neverReviewed), true);
+  assert.equal(hasNeverReviewedVerdictReason([neverReviewed]), true);
+  assert.equal(
+    isNeverReviewedVerdictReason(
+      'latest copilot review (commit abc) does not cover current HEAD def',
+    ),
+    false,
+  );
+  assert.equal(hasNeverReviewedVerdictReason(null), false);
+  assert.equal(hasNeverReviewedVerdictReason(undefined), false);
+  assert.match(
+    NEVER_REVIEWED_REASON_MARKER,
+    /has not reviewed this pull request yet/,
+  );
 });
 
 test('#1775: extractAdvisoryVerdictReasonsFromLog returns null when no verdict JSON is present', () => {

@@ -53,11 +53,13 @@
 //     (fail-closed: an instance this helper cannot positively verify as
 //     safe is never recommended for rerun).
 //   - `awaiting-fresh-review`: the instance's own advisory-convergence
-//     JSON verdict (from the workflow job log) reports that the latest
-//     Copilot review does not cover the current HEAD. No number of
-//     `gh run rerun` invocations changes that outcome -- only a fresh
-//     review does -- so this is never placed in the plan and never
-//     spends the rerun-once budget (#1775, observed on PR #1772).
+//     JSON verdict (from the workflow job log) reports either that the
+//     latest Copilot review does not cover the current HEAD, or that the
+//     primary advisory bot has not reviewed the pull request AT ALL yet
+//     (#2326, observed on PR #2325). No number of `gh run rerun`
+//     invocations changes either outcome -- only a fresh review does --
+//     so this is never placed in the plan and never spends the
+//     rerun-once budget (#1775, observed on PR #1772).
 //     #1806: this historical verdict is a snapshot of the workflow job
 //     log at the time THAT run executed, and the log is immutable -- so
 //     an instance that failed BEFORE a fresh review landed keeps
@@ -69,11 +71,14 @@
 //     via `review-clause.mts`) confirms the current HEAD IS now covered,
 //     this classification recovers to `rerun-eligible` instead of
 //     staying stuck -- see `RerunPlanOptions.headCoverageSatisfied` and
-//     `classifyInstance`'s uncovered-HEAD step. Live coverage that is
+//     `classifyInstance`'s awaiting-fresh-review step. #2326 widened the
+//     same recovery to the never-reviewed reason too: once a review that
+//     covers current HEAD exists, the bot has necessarily also reviewed,
+//     so the same live signal recovers both holds. Live coverage that is
 //     unreadable, not yet established, or simply not checked (no
-//     historical uncovered-HEAD reason to recover) leaves this hold
-//     exactly as it was before #1806 -- fail-closed, never an invented
-//     rerun.
+//     historical uncovered-HEAD or never-reviewed reason to recover)
+//     leaves this hold exactly as it was before #1806 -- fail-closed,
+//     never an invented rerun.
 //   - `rerun-eligible`: non-pass, terminal, resolved -- goes into the
 //     ordered rerun plan (bot-triggered or not, unless gated per above).
 //
@@ -222,6 +227,17 @@ export type RerunPlanClassification =
 export const UNCOVERED_HEAD_REASON_MARKER = 'does not cover current HEAD';
 
 /**
+ * Stable phrase shared with `advisory-convergence.mts`'s own
+ * `isSoleCopilotNotReviewedYetReason` reason text (`${primaryBotLogin} has
+ * not reviewed this pull request yet`). Matching on this substring (not the
+ * whole templated string) keeps the classifier independent of the
+ * configured primary bot login, mirroring {@link UNCOVERED_HEAD_REASON_MARKER}
+ * (#2326).
+ */
+export const NEVER_REVIEWED_REASON_MARKER =
+  'has not reviewed this pull request yet';
+
+/**
  * One check-run instance, already normalized and (when resolvable) already
  * enriched with its underlying workflow run's identity fields. This is what
  * the pure {@link computeRerunPlan} consumes -- fetching and enrichment
@@ -263,9 +279,10 @@ export interface RerunPlanRawInstance {
    * verdict (parsed out of the workflow job log), or `null` when the log
    * was not consulted or could not be parsed. A `null` leaves
    * classification unchanged (no invented hold); a non-null list that
-   * contains an {@link UNCOVERED_HEAD_REASON_MARKER} reason classifies
-   * the instance as `awaiting-fresh-review` instead of `rerun-eligible`
-   * (#1775). Tests inject this directly; production
+   * contains an {@link UNCOVERED_HEAD_REASON_MARKER} or
+   * {@link NEVER_REVIEWED_REASON_MARKER} reason classifies the instance as
+   * `awaiting-fresh-review` instead of `rerun-eligible` (#1775, widened by
+   * #2326). Tests inject this directly; production
    * {@link collectFromGitHub} fills it for non-pass terminal instances.
    */
   verdictReasons?: string[] | null;
@@ -440,15 +457,18 @@ export interface RerunPlanOptions {
    * Live signal (#1806): whether the latest trusted primary-bot review's
    * commit now matches the PR's current HEAD -- independent of any
    * instance's own historical (job-log) verdict. `true` lets an instance
-   * whose historical `verdictReasons` report an uncovered-HEAD hold
-   * recover to `rerun-eligible` (see `classifyInstance`'s uncovered-HEAD
-   * step); `false`, `null`, or omitted all fail closed to the existing
+   * whose historical `verdictReasons` report an uncovered-HEAD OR a
+   * never-reviewed hold (#2326) recover to `rerun-eligible` (see
+   * `classifyInstance`'s awaiting-fresh-review step) -- a review whose
+   * commit matches current HEAD necessarily also means the bot has
+   * reviewed, so the same live signal recovers both holds; `false`,
+   * `null`, or omitted all fail closed to the existing
    * `awaiting-fresh-review` hold -- this never invents a rerun when live
    * coverage could not be established or was never checked. Pure/DI: tests
    * inject this directly with no network; production `collectFromGitHub`
    * fills it (via `resolveLiveHeadCoverage`) only when at least one
    * collected instance's own historical verdict already reports an
-   * uncovered-HEAD reason, reusing `review-clause.mts`'s
+   * uncovered-HEAD or never-reviewed reason, reusing `review-clause.mts`'s
    * `fetchReviewsAndHeadCommit` + `resolveLatestCopilotReviewClause`.
    */
   headCoverageSatisfied?: boolean | null;
@@ -568,7 +588,7 @@ export function computeRerunPlan(
   //
   // #1806 interaction (intentional): a live-coverage-recovered instance
   // (classified `rerun-eligible` instead of `awaiting-fresh-review` --
-  // see `classifyInstance`'s uncovered-HEAD step) enters `eligibleInstances`
+  // see `classifyInstance`'s awaiting-fresh-review step) enters `eligibleInstances`
   // like any other rerun-eligible instance. If ITS OWN `runAttempt` already
   // exhausted the rerun-once budget, rule 1 above applies to it exactly the
   // same way it already applies to any other budget-held eligible instance:
@@ -916,32 +936,43 @@ function classifyInstance(
     };
   }
 
-  // 7. Uncovered-HEAD hold (#1775): the instance's own
-  // advisory-convergence JSON verdict (from the workflow job log) says
-  // the latest Copilot review does not cover the current HEAD. Rerunning
-  // cannot change that -- only a fresh review can -- so never place this
-  // in the plan and never spend the rerun-once budget on it. Only fires
-  // when `verdictReasons` was actually consulted and matched; a missing
-  // / unparsed log leaves classification unchanged (no invented hold).
+  // 7. Awaiting-fresh-review hold: the instance's own advisory-convergence
+  // JSON verdict (from the workflow job log) says either that the latest
+  // Copilot review does not cover the current HEAD (#1775), or that the
+  // primary advisory bot has not reviewed the pull request AT ALL yet
+  // (#2326, observed on PR #2325 -- rerunning cannot change that either,
+  // since there is no review to re-read). Rerunning cannot change either
+  // outcome -- only a fresh review can -- so never place this in the plan
+  // and never spend the rerun-once budget on it. Only fires when
+  // `verdictReasons` was actually consulted and matched; a missing /
+  // unparsed log leaves classification unchanged (no invented hold).
   //
   // #1806 live-coverage recovery: the job log above is an IMMUTABLE
   // snapshot from when THAT run executed, so it can go stale once a
   // fresh review actually lands after the run failed (observed on PR
   // #1854). `options.headCoverageSatisfied` is a LIVE, per-PR signal
   // (see `RerunPlanOptions.headCoverageSatisfied`) that lets this hold
-  // recover instead of staying stuck forever. Only `=== true` recovers;
-  // `false`, `null`, and `undefined` all keep the historical hold exactly
-  // as before #1806 -- fail-closed, so an unreadable or not-yet-covered
-  // live signal never invents a rerun.
-  if (hasUncoveredHeadVerdictReason(instance.verdictReasons)) {
+  // recover instead of staying stuck forever -- for both reasons above,
+  // since a review whose commit matches current HEAD necessarily also
+  // means the bot has reviewed (#2326). Only `=== true` recovers; `false`,
+  // `null`, and `undefined` all keep the historical hold exactly as before
+  // #1806 -- fail-closed, so an unreadable or not-yet-covered live signal
+  // never invents a rerun.
+  if (
+    hasUncoveredHeadVerdictReason(instance.verdictReasons) ||
+    hasNeverReviewedVerdictReason(instance.verdictReasons)
+  ) {
     const matched =
-      instance.verdictReasons?.find(isUncoveredHeadVerdictReason) ??
-      UNCOVERED_HEAD_REASON_MARKER;
+      instance.verdictReasons?.find(
+        (reason) =>
+          isUncoveredHeadVerdictReason(reason) ||
+          isNeverReviewedVerdictReason(reason),
+      ) ?? UNCOVERED_HEAD_REASON_MARKER;
     if (options.headCoverageSatisfied !== true) {
       return {
         ...instance,
         classification: 'awaiting-fresh-review',
-        reason: `advisory-convergence verdict reports "${matched}"; rerunning cannot clear this -- wait for a fresh review covering the current HEAD rather than spending the rerun-once budget (#1775)`,
+        reason: `advisory-convergence verdict reports "${matched}"; rerunning cannot clear this -- wait for a fresh review covering the current HEAD rather than spending the rerun-once budget (#1775, #2326)`,
       };
     }
     return {
@@ -987,6 +1018,32 @@ export function hasUncoveredHeadVerdictReason(
 ): boolean {
   if (!reasons) return false;
   return reasons.some((reason) => isUncoveredHeadVerdictReason(reason));
+}
+
+/**
+ * `true` when `reason` is an advisory-convergence never-reviewed reason --
+ * the primary advisory bot has not reviewed the pull request at all yet
+ * (see {@link NEVER_REVIEWED_REASON_MARKER}). Mirrors
+ * {@link isUncoveredHeadVerdictReason}; the two are the same hold shape
+ * (#2326).
+ */
+export function isNeverReviewedVerdictReason(reason: string): boolean {
+  return String(reason ?? '')
+    .toLowerCase()
+    .includes(NEVER_REVIEWED_REASON_MARKER.toLowerCase());
+}
+
+/**
+ * `true` when a consulted `reasons` list contains a never-reviewed reason.
+ * A `null` / `undefined` list means "not consulted" and never matches --
+ * so a missing log cannot invent an `awaiting-fresh-review` hold, mirroring
+ * {@link hasUncoveredHeadVerdictReason} (#2326).
+ */
+export function hasNeverReviewedVerdictReason(
+  reasons: readonly string[] | null | undefined,
+): boolean {
+  if (!reasons) return false;
+  return reasons.some((reason) => isNeverReviewedVerdictReason(reason));
 }
 
 /**
@@ -2089,15 +2146,15 @@ export function sanitizeRemoteConfig(
  * SAME evidence `advisory-convergence.mts`'s real `converged` verdict is
  * built on) instead of a second ad-hoc GraphQL path. Only called from
  * `collectFromGitHub` when at least one collected instance's own
- * historical `verdictReasons` already reports an uncovered-HEAD reason --
- * see that call site -- so a PR with no such instance never pays for this
- * extra fetch.
+ * historical `verdictReasons` already reports an uncovered-HEAD or a
+ * never-reviewed reason (#2326) -- see that call site -- so a PR with no
+ * such instance never pays for this extra fetch.
  *
  * Fails closed to `null` ("evidence unreadable") on ANY error -- never
  * `false` -- so a transient GraphQL/network failure can never be
  * indistinguishable from "checked, not covered" if a future caller wants
- * to tell the two apart; `classifyInstance`'s uncovered-HEAD step treats
- * both `false` and `null` identically (hold), matching the existing
+ * to tell the two apart; `classifyInstance`'s awaiting-fresh-review step
+ * treats both `false` and `null` identically (hold), matching the existing
  * `verdictReasons`-null pattern elsewhere in this file (a missing/failed
  * fetch never invents a hold OR a rerun).
  */
@@ -2229,10 +2286,11 @@ function collectFromGitHub(args: RerunPlanArgs): {
     }
   }
 
-  // Per-run advisory-convergence verdict reasons (#1775). Only non-pass
-  // terminal check-runs need them -- pass / pending never reach the
-  // uncovered-HEAD classifier, so skipping those saves a log download
-  // per green instance. Failures to fetch or parse leave the map entry
+  // Per-run advisory-convergence verdict reasons (#1775, widened by
+  // #2326). Only non-pass terminal check-runs need them -- pass / pending
+  // never reach the awaiting-fresh-review classifier, so skipping those
+  // saves a log download per green instance. Failures to fetch or parse
+  // leave the map entry
   // absent (`null` on the instance) rather than inventing an empty list,
   // so a flaky log API cannot invent an awaiting-fresh-review hold.
   const runIdsNeedingVerdict = new Set(
@@ -2327,13 +2385,18 @@ function collectFromGitHub(args: RerunPlanArgs): {
 
   // #1806: only pay for the live-coverage fetch when at least one
   // collected instance's own historical verdict already reports an
-  // uncovered-HEAD reason -- the ONLY situation `classifyInstance`'s
-  // uncovered-HEAD step consults `headCoverageSatisfied` at all. A PR
-  // with no such instance never triggers the extra GraphQL round trip.
-  const anyHistoricalUncoveredHead = [...verdictReasonsByRunId.values()].some(
-    (reasons) => hasUncoveredHeadVerdictReason(reasons),
+  // uncovered-HEAD or a never-reviewed reason (#2326) -- the ONLY
+  // situations `classifyInstance`'s awaiting-fresh-review step consults
+  // `headCoverageSatisfied` at all. A PR with no such instance never
+  // triggers the extra GraphQL round trip.
+  const anyHistoricalAwaitingFreshReviewReason = [
+    ...verdictReasonsByRunId.values(),
+  ].some(
+    (reasons) =>
+      hasUncoveredHeadVerdictReason(reasons) ||
+      hasNeverReviewedVerdictReason(reasons),
   );
-  const headCoverageSatisfied = anyHistoricalUncoveredHead
+  const headCoverageSatisfied = anyHistoricalAwaitingFreshReviewReason
     ? resolveLiveHeadCoverage(
         owner,
         repo,
