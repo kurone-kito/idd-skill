@@ -13,7 +13,11 @@ const CLI_PATH = join(REPO_ROOT, 'scripts/idd-critique-delegate.mjs');
 
 /** Run the built CLI with a fully isolated HOME so the real operator's
  * user-global config (if any) never leaks into a test result, and return
- * the parsed JSON report. */
+ * the parsed JSON report. Also neutralizes GITHUB_ACTIONS -- the real test
+ * runner's own environment carries it as "true" in CI, which would
+ * otherwise leak into every spawned CLI process's inherited env and
+ * silently trigger the GITHUB_ACTIONS auto-skip this suite tests
+ * separately; pass `env: { GITHUB_ACTIONS: 'true' }` to opt back in. */
 function runCli(args: string[], env?: NodeJS.ProcessEnv): unknown {
   const isolatedHome = mkdtempSync(
     join(tmpdir(), 'idd-critique-delegate-home-'),
@@ -23,6 +27,7 @@ function runCli(args: string[], env?: NodeJS.ProcessEnv): unknown {
     timeout: 60_000,
     env: {
       ...process.env,
+      GITHUB_ACTIONS: '',
       ...env,
       HOME: isolatedHome,
       XDG_CONFIG_HOME: '',
@@ -260,7 +265,12 @@ test('CLI --no-user-global skips an otherwise-picked-up $HOME delegate (#2329 re
   );
   const policyPath = join(sandbox, 'config.json');
   writeFileSync(policyPath, JSON.stringify({}));
-  const commonEnv = { ...process.env, HOME: home, XDG_CONFIG_HOME: '' };
+  const commonEnv = {
+    ...process.env,
+    GITHUB_ACTIONS: '',
+    HOME: home,
+    XDG_CONFIG_HOME: '',
+  };
 
   const withGlobal = execFileSync(
     process.execPath,
