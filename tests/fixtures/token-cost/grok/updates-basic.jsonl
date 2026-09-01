@@ -1,0 +1,3 @@
+{"timestamp":"2026-08-20T10:00:00.000Z","type":"session_start","sessionId":"grok-basic-0001","cwd":"/home/testuser/ghq/github.com/kurone-kito/idd-skill","model":"grok-4-fast"}
+{"timestamp":"2026-08-20T10:05:00.000Z","type":"agent_message_chunk","usage":{"inputTokens":8000,"cachedReadTokens":6000,"cacheCreationTokens":500,"outputTokens":400,"reasoningTokens":150}}
+{"timestamp":"2026-08-20T10:10:00.000Z","type":"agent_message_chunk","usage":{"inputTokens":15000,"cachedReadTokens":12000,"cacheCreationTokens":1000,"outputTokens":800,"reasoningTokens":300}}

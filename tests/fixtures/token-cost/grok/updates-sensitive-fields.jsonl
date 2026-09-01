@@ -1,0 +1,3 @@
+{"timestamp":"2026-08-26T04:00:00.000Z","type":"session_start","sessionId":"grok-sensitive-0006","cwd":"/home/testuser/ghq/github.com/kurone-kito/idd-skill"}
+{"timestamp":"2026-08-26T04:00:05.000Z","type":"user_message_chunk","content":"here is my secret token ghp_abcdefghijklmnopqrstuvwx and the file at /home/kurone-kito/.ssh/id_rsa"}
+{"timestamp":"2026-08-26T04:10:00.000Z","type":"agent_message_chunk","usage":{"inputTokens":700,"cachedReadTokens":100,"cacheCreationTokens":0,"outputTokens":90,"reasoningTokens":10}}

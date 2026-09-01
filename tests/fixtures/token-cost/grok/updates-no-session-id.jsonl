@@ -1,0 +1,2 @@
+{"timestamp":"2026-08-23T08:00:00.000Z","type":"session_start","cwd":"/home/testuser/ghq/github.com/kurone-kito/idd-skill"}
+{"timestamp":"2026-08-23T08:05:00.000Z","type":"agent_message_chunk","usage":{"inputTokens":300,"cachedReadTokens":0,"cacheCreationTokens":0,"outputTokens":50,"reasoningTokens":0}}
