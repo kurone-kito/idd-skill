@@ -58,7 +58,6 @@ distinct from the phase rules in `.github/instructions/`:
 | guide | [IDD Review Policy Profiles](idd-review-policy-profiles.md) | Names the supported PR review policy profiles and the instruction files an adopter must edit to select one other than the Copilot-advisory default. |
 | guide | [Permissions and Threat Model](permissions.md) | Defines the credential profiles, merge-policy boundaries, and threat model an operator must choose before granting IDD agents GitHub access. |
 | concept | [Core IDD Concepts](concepts.md) | Introduces the loop-engineering vocabulary and mental model behind the IDD phase instructions before diving into phase-by-phase rules. |
-| reference | [Context-Tax Methodology](context-tax.md) | Documents how this repository measures its own agent context-window cost per completed IDD issue loop. |
 | reference | [IDD — Advisory-Wait Shell Fallback (AW1 / AW2 / AW3-R / AW3-S / AW3-H / F2 detail)](idd-advisory-wait-shell-fallback.md) | Provides the verbatim gh, gh api, jq, and curl commands the advisory-wait and F2 advisory-convergence shell fallbacks use when helper support cannot be trusted. |
 | reference | [IDD Autonomy Contract](idd-autonomy-contract.md) | Classifies every externally visible IDD mutation as reversible or irreversible and names the gate or undo path for each. |
 | reference | [IDD Comment Minimization](idd-comment-minimization.md) | Defines the live status digest contract and the safe procedure for minimizing completed review feedback and stale operational markers after merge. |
@@ -70,6 +69,7 @@ distinct from the phase rules in `.github/instructions/`:
 | reference | [PR Cleanup Backlog — Batch Run 001](pr-cleanup-backlog-batch-001.md) | Records the first batch execution of the historical merged-PR cleanup backlog campaign and how to continue subsequent batches. |
 | reference | [IDD Detailed Reference](reference.md) | Maps each operational question to the authoritative phase file or policy page that answers it. |
 | reference | [Stalled Session Quiet-Check Helper](stalled-session-quiet-check.md) | Documents the CLI usage, output schema, and required live rechecks for the Resume/S2 stalled-session quiet-check helper. |
+| reference | [Token-Cost Methodology](token-cost.md) | Documents how this repository measures its own agent context-window cost per completed IDD issue loop. |
 | reference | [TypeScript helper sources](typescript-sources.md) | Explains the generated .mjs-from-.mts helper source layout, build commands, and drift guards this repository enforces. |
 | reference | [Workshop Recording Toolchain](workshop/assets/recordings/README.md) | Explains how to store and reproduce source tapes for workshop terminal recordings. |
 | reference | [Workshop Log Format](workshop/LOG-FORMAT.md) | Defines the conventions workshop log segments follow so they can be assembled and reviewed without reformatting. |

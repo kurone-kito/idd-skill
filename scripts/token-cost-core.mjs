@@ -1,14 +1,14 @@
-// idd-generated-from: src/scripts/context-tax-core.mts
+// idd-generated-from: src/scripts/token-cost-core.mts
 //
-// The scripts/context-tax-core.mjs copy is generated from the .mts source
+// The scripts/token-cost-core.mjs copy is generated from the .mts source
 // named above by `pnpm run build`. Edit the .mts source, never the
 // generated .mjs. See docs/typescript-sources.md.
 //
-// Shared context-tax measurement contracts (#2288). Source-repo only:
+// Shared token-cost measurement contracts (#2288). Source-repo only:
 // not HELPER_COMMANDS, not idd-template/. Later adapter/harvest issues
 // import this module. No CLI.
 /** IDD stages a harvested sample may break usage into. */
-export const CONTEXT_TAX_STAGE_IDS = [
+export const TOKEN_COST_STAGE_IDS = [
   'discover',
   'claim',
   'work',
@@ -78,11 +78,11 @@ function redactString(value) {
  * compound variants) do not survive -- as values or as object keys. This
  * is a defense-in-depth net for stray fields, not a substitute for an
  * adapter choosing what to extract:
- * `ContextTaxSample`/`ContextTaxEvent` have no field for raw conversational
+ * `TokenCostSample`/`TokenCostEvent` have no field for raw conversational
  * text, so a correctly built adapter never passes a role/message/tool-call
  * container through here in the first place.
  */
-export function redactContextTaxRecord(input) {
+export function redactTokenCostRecord(input) {
   if (typeof input === 'string') {
     return redactString(input);
   }
@@ -91,7 +91,7 @@ export function redactContextTaxRecord(input) {
   }
   if (Array.isArray(input)) {
     return input
-      .map((item) => redactContextTaxRecord(item))
+      .map((item) => redactTokenCostRecord(item))
       .filter((item) => item !== undefined);
   }
   const out = {};
@@ -99,7 +99,7 @@ export function redactContextTaxRecord(input) {
     if (isDroppedKey(key) || redactString(key) === undefined) {
       continue;
     }
-    const redacted = redactContextTaxRecord(value);
+    const redacted = redactTokenCostRecord(value);
     if (redacted !== undefined) {
       out[key] = redacted;
     }
@@ -138,7 +138,7 @@ export function isIssueLoopSample(sample) {
  * `attribution` agrees with `kind` (a `session-unscoped` sample was never
  * joined to an issue, so it cannot claim `issue-loop`, and vice versa).
  */
-export function assertContextTaxSample(sample) {
+export function assertTokenCostSample(sample) {
   const startedAtMs = new Date(sample.startedAt).getTime();
   const endedAtMs = new Date(sample.endedAt).getTime();
   if (!Number.isFinite(startedAtMs) || !Number.isFinite(endedAtMs)) {
@@ -218,7 +218,7 @@ function assertUtcCalendarDate(value) {
  * each success rate's `rate` field agrees with its own raw counts, and
  * that `successRateByVendor` names only vendors present in `vendors`.
  */
-export function assertContextTaxSnapshot(snapshot) {
+export function assertTokenCostSnapshot(snapshot) {
   if (new Set(snapshot.vendors).size !== snapshot.vendors.length) {
     throw new Error('snapshot vendors must be distinct');
   }

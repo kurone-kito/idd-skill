@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
-import type { ContextTaxSample } from '../src/scripts/context-tax-core.mts';
+import type { TokenCostSample } from '../src/scripts/token-cost-core.mts';
 import {
   aggregateSnapshot,
   checkRenderedFiles,
@@ -16,21 +16,21 @@ import {
   renderReadmeRegionEn,
   renderReadmeRegionJa,
   replaceMarkedRegion,
-} from '../src/scripts/context-tax-report.mts';
+} from '../src/scripts/token-cost-report.mts';
 
 const REPO_ROOT = fileURLToPath(new URL('..', import.meta.url));
 
 const NOW = new Date('2026-08-26T00:00:00Z');
 
-const README_START = '<!-- context-tax-readme:start -->';
-const README_END = '<!-- context-tax-readme:end -->';
-const DOCS_START = '<!-- context-tax-docs:start -->';
-const DOCS_END = '<!-- context-tax-docs:end -->';
+const README_START = '<!-- token-cost-readme:start -->';
+const README_END = '<!-- token-cost-readme:end -->';
+const DOCS_START = '<!-- token-cost-docs:start -->';
+const DOCS_END = '<!-- token-cost-docs:end -->';
 
 const UNPUBLISHABLE_EN =
-  'Context-tax measurement is in progress; see\n[`docs/context-tax.md`](docs/context-tax.md) for the methodology.';
+  'Token-cost measurement is in progress; see\n[`docs/token-cost.md`](docs/token-cost.md) for the methodology.';
 const UNPUBLISHABLE_JA =
-  'コンテキスト税の計測は現在進行中です。\n詳しい方法論は [`docs/context-tax.md`](docs/context-tax.md) を参照してください。';
+  'トークンコストの計測は現在進行中です。\n詳しい方法論は [`docs/token-cost.md`](docs/token-cost.md) を参照してください。';
 const UNPUBLISHABLE_DOCS = 'Not yet publishable, n=0.';
 
 function stubReadmeText(): string {
@@ -38,12 +38,12 @@ function stubReadmeText(): string {
 }
 
 function stubDocsText(): string {
-  return `# Context-Tax Methodology\n\n## Current snapshot\n\n${DOCS_START}\n\nstub\n\n${DOCS_END}\n`;
+  return `# Token-Cost Methodology\n\n## Current snapshot\n\n${DOCS_START}\n\nstub\n\n${DOCS_END}\n`;
 }
 
 function issueLoopSample(
-  overrides: Partial<ContextTaxSample> & { issueNumber: number },
-): ContextTaxSample {
+  overrides: Partial<TokenCostSample> & { issueNumber: number },
+): TokenCostSample {
   return {
     schemaVersion: 1,
     kind: 'issue-loop',
@@ -75,13 +75,13 @@ function issueLoopSample(
       },
     ],
     ...overrides,
-  } as ContextTaxSample;
+  } as TokenCostSample;
 }
 
-/** Run `fn` inside a fresh sandbox cwd with README.md/README.ja.md/docs/context-tax.md seeded to the unpublishable stub. */
+/** Run `fn` inside a fresh sandbox cwd with README.md/README.ja.md/docs/token-cost.md seeded to the unpublishable stub. */
 function withSandboxCwd(fn: () => void): void {
   const originalCwd = process.cwd();
-  const sandbox = mkdtempSync(join(tmpdir(), 'idd-context-tax-report-test-'));
+  const sandbox = mkdtempSync(join(tmpdir(), 'idd-token-cost-report-test-'));
   process.chdir(sandbox);
   try {
     mkdirSync('docs', { recursive: true });
@@ -104,7 +104,7 @@ function withSandboxCwd(fn: () => void): void {
       ),
     );
     writeFileSync(
-      'docs/context-tax.md',
+      'docs/token-cost.md',
       replaceMarkedRegion(
         stubDocsText(),
         DOCS_START,
@@ -152,7 +152,7 @@ test('aggregateSnapshot at the gate (10 samples, 2 vendors) is publishable', () 
 });
 
 test('aggregateSnapshot excludes outcome: unknown and non-issue-loop samples from every figure', () => {
-  const samples: ContextTaxSample[] = [
+  const samples: TokenCostSample[] = [
     ...Array.from({ length: 9 }, (_, i) =>
       issueLoopSample({ issueNumber: 300 + i, vendor: 'grok' }),
     ),
@@ -316,7 +316,7 @@ test('checkRenderedFiles reports drift when the docs table region is mutated wit
   withSandboxCwd(() => {
     const snapshot = aggregateSnapshot([], NOW);
     writeFileSync(
-      'docs/context-tax.md',
+      'docs/token-cost.md',
       replaceMarkedRegion(
         stubDocsText(),
         DOCS_START,
@@ -326,7 +326,7 @@ test('checkRenderedFiles reports drift when the docs table region is mutated wit
     );
     const drifted = checkRenderedFiles(snapshot);
     assert.equal(drifted.length, 1);
-    assert.match(drifted[0], /context-tax\.md/);
+    assert.match(drifted[0], /token-cost\.md/);
   });
 });
 
@@ -427,7 +427,7 @@ test('CLI: --now rejects an invalid timestamp with a clean usage error, not a ra
       execFileSync(
         process.execPath,
         [
-          join(REPO_ROOT, 'scripts/context-tax-report.mjs'),
+          join(REPO_ROOT, 'scripts/token-cost-report.mjs'),
           '--check',
           '--now',
           'not-a-date',

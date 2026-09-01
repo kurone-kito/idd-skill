@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://kurone-kito.github.io/idd-skill/schemas/context-tax-event.schema.json",
-  "title": "Context-tax phase event",
+  "$id": "https://kurone-kito.github.io/idd-skill/schemas/token-cost-event.schema.json",
+  "title": "Token-cost phase event",
   "description": "One explicit phase enter/exit line a later helper writes. Not a harvested vendor log.",
   "type": "object",
   "additionalProperties": false,

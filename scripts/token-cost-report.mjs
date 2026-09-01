@@ -1,12 +1,12 @@
 #!/usr/bin/env node
-// idd-generated-from: src/scripts/context-tax-report.mts
+// idd-generated-from: src/scripts/token-cost-report.mts
 //
-// The scripts/context-tax-report.mjs copy is generated from the .mts
+// The scripts/token-cost-report.mjs copy is generated from the .mts
 // source named above by `pnpm run build`. Edit the .mts source, never the
 // generated .mjs. See docs/typescript-sources.md.
 //
 // Source-repo-only dogfood reporter (#2294): aggregates locally-harvested
-// context-tax samples (#2288's contract) into a committed snapshot, then
+// token-cost samples (#2288's contract) into a committed snapshot, then
 // renders that snapshot into fixed-template README/docs regions. CI never
 // sees the raw JSONL (it lives outside git, under `~/.grok` / `~/.claude` /
 // `~/.codex`) -- `--check` only compares the committed snapshot against the
@@ -17,16 +17,16 @@
 import { readFileSync, writeFileSync } from 'node:fs';
 import { parseCliArgs } from './cli-args.mjs';
 import {
-  assertContextTaxSample,
-  assertContextTaxSnapshot,
-  CONTEXT_TAX_STAGE_IDS,
+  assertTokenCostSample,
+  assertTokenCostSnapshot,
   isIssueLoopSample,
-} from './context-tax-core.mjs';
+  TOKEN_COST_STAGE_IDS,
+} from './token-cost-core.mjs';
 
-const DEFAULT_SNAPSHOT_PATH = 'docs/context-tax-snapshot.json';
+const DEFAULT_SNAPSHOT_PATH = 'docs/token-cost-snapshot.json';
 const README_PATH = 'README.md';
 const README_JA_PATH = 'README.ja.md';
-const CONTEXT_TAX_DOCS_PATH = 'docs/context-tax.md';
+const TOKEN_COST_DOCS_PATH = 'docs/token-cost.md';
 const MIN_PUBLISHABLE_SAMPLES = 10;
 const MIN_PUBLISHABLE_VENDORS = 2;
 const USAGE_FIELDS = [
@@ -36,10 +36,10 @@ const USAGE_FIELDS = [
   'output',
   'reasoning',
 ];
-const README_START = '<!-- context-tax-readme:start -->';
-const README_END = '<!-- context-tax-readme:end -->';
-const DOCS_START = '<!-- context-tax-docs:start -->';
-const DOCS_END = '<!-- context-tax-docs:end -->';
+const README_START = '<!-- token-cost-readme:start -->';
+const README_END = '<!-- token-cost-readme:end -->';
+const DOCS_START = '<!-- token-cost-docs:start -->';
+const DOCS_END = '<!-- token-cost-docs:end -->';
 /** Parse one JSONL file into non-blank, trimmed lines, each tagged with its line number. */
 function readJsonlLines(path) {
   const raw = readFileSync(path, 'utf8');
@@ -50,7 +50,7 @@ function readJsonlLines(path) {
 }
 /**
  * Read and validate every `--in` file's samples. A line that fails to
- * parse as JSON or fails {@link assertContextTaxSample} throws immediately,
+ * parse as JSON or fails {@link assertTokenCostSample} throws immediately,
  * quoting the source file and line number (fail closed -- a malformed
  * harvested record must not silently vanish from the aggregate).
  */
@@ -66,7 +66,7 @@ export function readSamples(paths) {
           `${path}:${lineNumber}: invalid JSON (${error.message})`,
         );
       }
-      assertContextTaxSample(sample);
+      assertTokenCostSample(sample);
       samples.push(sample);
     }
   }
@@ -145,7 +145,7 @@ function computeStageUsage(samples) {
     }
   }
   const out = [];
-  for (const id of CONTEXT_TAX_STAGE_IDS) {
+  for (const id of TOKEN_COST_STAGE_IDS) {
     const usages = byStage.get(id);
     if (usages && usages.length > 0) {
       out.push({ id, usage: computeUsagePercentiles(usages) });
@@ -196,7 +196,7 @@ function computeSuccessRate(samples, keyOf) {
   return out;
 }
 /**
- * Aggregate raw samples into a committed {@link ContextTaxSnapshot}. Only
+ * Aggregate raw samples into a committed {@link TokenCostSnapshot}. Only
  * `kind: 'issue-loop'` samples with a non-`'unknown'` outcome count -- per
  * #2294's spec, `outcome: 'unknown'` and session-unscoped records are
  * excluded from every figure in the snapshot, not only the success-rate
@@ -240,7 +240,7 @@ export function aggregateSnapshot(samples, now) {
       (sample) => sample.vendor,
     ),
   };
-  assertContextTaxSnapshot(snapshot);
+  assertTokenCostSnapshot(snapshot);
   return snapshot;
 }
 // ---------------------------------------------------------------------------
@@ -306,29 +306,29 @@ function wrapCjkProse(text, width = 38) {
 export function renderReadmeRegionEn(snapshot) {
   if (!snapshot.publishable) {
     return wrapProse(
-      'Context-tax measurement is in progress; see [`docs/context-tax.md`](docs/context-tax.md) for the methodology.',
+      'Token-cost measurement is in progress; see [`docs/token-cost.md`](docs/token-cost.md) for the methodology.',
     );
   }
   const cacheHitPct = Math.round(snapshot.cacheHitRatio * 100);
   return wrapProse(
-    `Context tax: median ${Math.round(snapshot.totalUsage.inputUncached.p50)} input tokens, ` +
+    `Token cost: median ${Math.round(snapshot.totalUsage.inputUncached.p50)} input tokens, ` +
       `${cacheHitPct}% cache-hit rate, ${Math.round(snapshot.compactionCount.p50)} compactions ` +
       `per issue loop (n=${snapshot.sampleCount}, ${formatVendorList(snapshot.vendors)}, as of ${snapshot.asOf}). ` +
-      'See [`docs/context-tax.md`](docs/context-tax.md) for the full methodology.',
+      'See [`docs/token-cost.md`](docs/token-cost.md) for the full methodology.',
   );
 }
 export function renderReadmeRegionJa(snapshot) {
   if (!snapshot.publishable) {
     return wrapCjkProse(
-      'コンテキスト税の計測は現在進行中です。詳しい方法論は [`docs/context-tax.md`](docs/context-tax.md) を参照してください。',
+      'トークンコストの計測は現在進行中です。詳しい方法論は [`docs/token-cost.md`](docs/token-cost.md) を参照してください。',
     );
   }
   const cacheHitPct = Math.round(snapshot.cacheHitRatio * 100);
   return wrapCjkProse(
-    `コンテキスト税: issue ループ1件あたり中央値 ${Math.round(snapshot.totalUsage.inputUncached.p50)} 入力トークン、` +
+    `トークンコスト: issue ループ1件あたり中央値 ${Math.round(snapshot.totalUsage.inputUncached.p50)} 入力トークン、` +
       `キャッシュヒット率 ${cacheHitPct}%、コンパクション ${Math.round(snapshot.compactionCount.p50)} 回` +
       `(n=${snapshot.sampleCount}、${formatVendorList(snapshot.vendors)}、${snapshot.asOf} 時点)。` +
-      '詳しい方法論は [`docs/context-tax.md`](docs/context-tax.md) を参照してください。',
+      '詳しい方法論は [`docs/token-cost.md`](docs/token-cost.md) を参照してください。',
   );
 }
 function renderSuccessRateTable(title, rates) {
@@ -443,9 +443,9 @@ function writeRenderedFiles(snapshot) {
       renderReadmeRegionJa(snapshot),
     ),
   );
-  const docsPage = readFileSync(CONTEXT_TAX_DOCS_PATH, 'utf8');
+  const docsPage = readFileSync(TOKEN_COST_DOCS_PATH, 'utf8');
   writeFileSync(
-    CONTEXT_TAX_DOCS_PATH,
+    TOKEN_COST_DOCS_PATH,
     replaceMarkedRegion(
       docsPage,
       DOCS_START,
@@ -463,12 +463,12 @@ export function checkRenderedFiles(snapshot) {
   const checks = [
     [README_PATH, renderReadmeRegionEn(snapshot)],
     [README_JA_PATH, renderReadmeRegionJa(snapshot)],
-    [CONTEXT_TAX_DOCS_PATH, renderDocsTableRegion(snapshot)],
+    [TOKEN_COST_DOCS_PATH, renderDocsTableRegion(snapshot)],
   ];
   for (const [path, expectedInner] of checks) {
     const content = readFileSync(path, 'utf8');
     const marker =
-      path === CONTEXT_TAX_DOCS_PATH
+      path === TOKEN_COST_DOCS_PATH
         ? [DOCS_START, DOCS_END]
         : [README_START, README_END];
     let expected;
@@ -497,7 +497,7 @@ export function checkRenderedFiles(snapshot) {
 // Flag-spec keys stay the dashed literal on purpose -- see cli-args.mts's
 // module header (tests/flag-name-matrix.test.mts scans each helper's own
 // compiled .mjs source text for its canonical flags as quoted literals).
-const CONTEXT_TAX_REPORT_FLAG_SPEC = {
+const TOKEN_COST_REPORT_FLAG_SPEC = {
   '--in': { type: 'string', multiple: true },
   '--events': { type: 'string', multiple: true },
   '--snapshot': { type: 'string', default: DEFAULT_SNAPSHOT_PATH },
@@ -508,18 +508,18 @@ const CONTEXT_TAX_REPORT_FLAG_SPEC = {
 };
 function printHelp() {
   process.stdout.write(`Usage:
-  node scripts/context-tax-report.mjs --in <samples.jsonl> [--in <samples.jsonl> ...] [--events <events.jsonl> ...] [--snapshot <path>] --apply
-  node scripts/context-tax-report.mjs [--snapshot <path>] --check
+  node scripts/token-cost-report.mjs --in <samples.jsonl> [--in <samples.jsonl> ...] [--events <events.jsonl> ...] [--snapshot <path>] --apply
+  node scripts/token-cost-report.mjs [--snapshot <path>] --check
 
   --in <path>        Sample JSONL file (repeatable). Required with --apply.
   --events <path>     Event JSONL file (repeatable, optional). Accepted for
                       CLI-surface parity; not joined into the aggregate.
   --snapshot <path>   Snapshot artifact path (default: ${DEFAULT_SNAPSHOT_PATH}).
   --apply             Aggregate --in samples, write the snapshot, and
-                      refresh the README.md / README.ja.md / docs/context-tax.md
+                      refresh the README.md / README.ja.md / docs/token-cost.md
                       marked regions.
   --check             Verify the committed snapshot's regions have not
-                      drifted from README.md / README.ja.md / docs/context-tax.md.
+                      drifted from README.md / README.ja.md / docs/token-cost.md.
                       Exits non-zero on drift. Does not read --in.
   --now <ISO8601>     Override the current time (tests only).
   --help, -h          Show this help.
@@ -528,7 +528,7 @@ function printHelp() {
 if (import.meta.main) {
   const { values, help } = parseCliArgs(
     process.argv.slice(2),
-    CONTEXT_TAX_REPORT_FLAG_SPEC,
+    TOKEN_COST_REPORT_FLAG_SPEC,
   );
   if (help) {
     printHelp();
@@ -565,18 +565,18 @@ if (import.meta.main) {
     writeFileSync(snapshotPath, `${JSON.stringify(snapshot, null, 2)}\n`);
     writeRenderedFiles(snapshot);
     process.stdout.write(
-      `context-tax-report: wrote ${snapshotPath} (n=${snapshot.sampleCount}, publishable=${snapshot.publishable})\n`,
+      `token-cost-report: wrote ${snapshotPath} (n=${snapshot.sampleCount}, publishable=${snapshot.publishable})\n`,
     );
   } else {
     const snapshot = JSON.parse(readFileSync(snapshotPath, 'utf8'));
-    assertContextTaxSnapshot(snapshot);
+    assertTokenCostSnapshot(snapshot);
     const drifted = checkRenderedFiles(snapshot);
     if (drifted.length > 0) {
       process.stderr.write(
-        `context-tax-report --check: drift found:\n${drifted.map((d) => `  - ${d}`).join('\n')}\n`,
+        `token-cost-report --check: drift found:\n${drifted.map((d) => `  - ${d}`).join('\n')}\n`,
       );
       process.exit(1);
     }
-    process.stdout.write('context-tax-report: no drift.\n');
+    process.stdout.write('token-cost-report: no drift.\n');
   }
 }

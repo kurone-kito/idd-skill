@@ -4,5 +4,5 @@
   "stageId": "work",
   "at": "2026-08-25T15:10:00Z",
   "vendor": "claude",
-  "branch": "issue/2288-feat-context-tax-define-sample-snapshot"
+  "branch": "issue/2288-feat-token-cost-define-sample-snapshot"
 }

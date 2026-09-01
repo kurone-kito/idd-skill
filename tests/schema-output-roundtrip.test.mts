@@ -106,26 +106,26 @@ const SCHEMA_OUTPUT_COVERAGE: CoverageEntry[] = [
       'parseClaimComment (marker-helpers.mts, re-exported by protocol-helpers.mts)',
   },
   {
-    schema: 'context-tax-event.schema.json',
+    schema: 'token-cost-event.schema.json',
     status: 'uncovered',
     reason:
-      'context-tax-event.schema.json is a source-repo measurement contract, ' +
+      'token-cost-event.schema.json is a source-repo measurement contract, ' +
       'not a helper stdout envelope -- fixture coverage lives in ' +
       'discoverSchemaCases / scripts/validate-schemas.mjs.',
   },
   {
-    schema: 'context-tax-sample.schema.json',
+    schema: 'token-cost-sample.schema.json',
     status: 'uncovered',
     reason:
-      'context-tax-sample.schema.json is a source-repo measurement contract, ' +
+      'token-cost-sample.schema.json is a source-repo measurement contract, ' +
       'not a helper stdout envelope -- fixture coverage lives in ' +
       'discoverSchemaCases / scripts/validate-schemas.mjs.',
   },
   {
-    schema: 'context-tax-snapshot.schema.json',
+    schema: 'token-cost-snapshot.schema.json',
     status: 'uncovered',
     reason:
-      'context-tax-snapshot.schema.json is a source-repo measurement ' +
+      'token-cost-snapshot.schema.json is a source-repo measurement ' +
       'contract, not a helper stdout envelope -- fixture coverage lives in ' +
       'discoverSchemaCases / scripts/validate-schemas.mjs.',
   },

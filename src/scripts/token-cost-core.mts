@@ -1,15 +1,15 @@
-// idd-generated-from: src/scripts/context-tax-core.mts
+// idd-generated-from: src/scripts/token-cost-core.mts
 //
-// The scripts/context-tax-core.mjs copy is generated from the .mts source
+// The scripts/token-cost-core.mjs copy is generated from the .mts source
 // named above by `pnpm run build`. Edit the .mts source, never the
 // generated .mjs. See docs/typescript-sources.md.
 //
-// Shared context-tax measurement contracts (#2288). Source-repo only:
+// Shared token-cost measurement contracts (#2288). Source-repo only:
 // not HELPER_COMMANDS, not idd-template/. Later adapter/harvest issues
 // import this module. No CLI.
 
 /** IDD stages a harvested sample may break usage into. */
-export const CONTEXT_TAX_STAGE_IDS = [
+export const TOKEN_COST_STAGE_IDS = [
   'discover',
   'claim',
   'work',
@@ -19,28 +19,28 @@ export const CONTEXT_TAX_STAGE_IDS = [
   'cleanup',
 ] as const;
 
-export type ContextTaxStageId = (typeof CONTEXT_TAX_STAGE_IDS)[number];
+export type TokenCostStageId = (typeof TOKEN_COST_STAGE_IDS)[number];
 
-export type ContextTaxVendor = 'grok' | 'claude' | 'codex';
+export type TokenCostVendor = 'grok' | 'claude' | 'codex';
 
-export type ContextTaxKind = 'issue-loop' | 'session';
+export type TokenCostKind = 'issue-loop' | 'session';
 
-export type ContextTaxAttribution =
+export type TokenCostAttribution =
   | 'marker-join'
   | 'phase-event'
   | 'session-unscoped';
 
-export type ContextTaxOutcome =
+export type TokenCostOutcome =
   | 'merged'
   | 'aborted'
   | 'unclaimed'
   | 'human-handoff'
   | 'unknown';
 
-export type ContextTaxEffort = 'S' | 'M' | 'L';
+export type TokenCostEffort = 'S' | 'M' | 'L';
 
 /** Token usage. Every field is >= 0. */
-export interface ContextTaxUsage {
+export interface TokenCostUsage {
   inputUncached: number;
   cacheRead: number;
   cacheCreation: number;
@@ -48,25 +48,25 @@ export interface ContextTaxUsage {
   reasoning: number;
 }
 
-export interface ContextTaxStageUsage {
-  id: ContextTaxStageId;
-  usage: ContextTaxUsage;
+export interface TokenCostStageUsage {
+  id: TokenCostStageId;
+  usage: TokenCostUsage;
 }
 
-interface ContextTaxSampleBase {
+interface TokenCostSampleBase {
   schemaVersion: 1;
-  vendor: ContextTaxVendor;
+  vendor: TokenCostVendor;
   model: string;
-  attribution: ContextTaxAttribution;
-  outcome: ContextTaxOutcome;
-  usage: ContextTaxUsage;
+  attribution: TokenCostAttribution;
+  outcome: TokenCostOutcome;
+  usage: TokenCostUsage;
   compactionCount: number;
   startedAt: string;
   endedAt: string;
   vendorSessionId: string;
   claimId?: string | null;
   prNumber?: number | null;
-  effort?: ContextTaxEffort | null;
+  effort?: TokenCostEffort | null;
   toolCallCount?: number | null;
   turnCount?: number | null;
   includesSubagents?: boolean;
@@ -74,63 +74,61 @@ interface ContextTaxSampleBase {
 }
 
 /** Per-issue harvested sample. issueNumber and stages are required. */
-export interface ContextTaxIssueLoopSample extends ContextTaxSampleBase {
+export interface TokenCostIssueLoopSample extends TokenCostSampleBase {
   kind: 'issue-loop';
   issueNumber: number;
-  stages: readonly ContextTaxStageUsage[];
+  stages: readonly TokenCostStageUsage[];
 }
 
 /** Unscoped session sample. Join fields stay optional. */
-export interface ContextTaxSessionSample extends ContextTaxSampleBase {
+export interface TokenCostSessionSample extends TokenCostSampleBase {
   kind: 'session';
   issueNumber?: number;
-  stages?: readonly ContextTaxStageUsage[];
+  stages?: readonly TokenCostStageUsage[];
 }
 
 /**
- * One harvested sample. Matches schemas/context-tax-sample.schema.json.
+ * One harvested sample. Matches schemas/token-cost-sample.schema.json.
  * JSON Schema cannot express the issue-loop conditional without oneOf;
- * the TypeScript union and assertContextTaxSample enforce it.
+ * the TypeScript union and assertTokenCostSample enforce it.
  */
-export type ContextTaxSample =
-  | ContextTaxIssueLoopSample
-  | ContextTaxSessionSample;
+export type TokenCostSample = TokenCostIssueLoopSample | TokenCostSessionSample;
 
 /** One explicit phase enter/exit line. */
-export interface ContextTaxEvent {
+export interface TokenCostEvent {
   schemaVersion: 1;
   event: 'enter' | 'exit';
-  stageId: ContextTaxStageId;
+  stageId: TokenCostStageId;
   at: string;
-  vendor: ContextTaxVendor;
+  vendor: TokenCostVendor;
   vendorSessionId?: string | null;
   issueNumber?: number | null;
-  usage?: ContextTaxUsage | null;
+  usage?: TokenCostUsage | null;
 }
 
 /** p25/p50/p75 for one measured quantity. */
-export interface ContextTaxPercentiles {
+export interface TokenCostPercentiles {
   p25: number;
   p50: number;
   p75: number;
 }
 
-/** p25/p50/p75 for every {@link ContextTaxUsage} field. */
-export interface ContextTaxUsagePercentiles {
-  inputUncached: ContextTaxPercentiles;
-  cacheRead: ContextTaxPercentiles;
-  cacheCreation: ContextTaxPercentiles;
-  output: ContextTaxPercentiles;
-  reasoning: ContextTaxPercentiles;
+/** p25/p50/p75 for every {@link TokenCostUsage} field. */
+export interface TokenCostUsagePercentiles {
+  inputUncached: TokenCostPercentiles;
+  cacheRead: TokenCostPercentiles;
+  cacheCreation: TokenCostPercentiles;
+  output: TokenCostPercentiles;
+  reasoning: TokenCostPercentiles;
 }
 
-export interface ContextTaxStageUsagePercentiles {
-  id: ContextTaxStageId;
-  usage: ContextTaxUsagePercentiles;
+export interface TokenCostStageUsagePercentiles {
+  id: TokenCostStageId;
+  usage: TokenCostUsagePercentiles;
 }
 
 /** merged/(merged+aborted+unclaimed+humanHandoff), plus the raw counts. */
-export interface ContextTaxSuccessRate {
+export interface TokenCostSuccessRate {
   merged: number;
   aborted: number;
   unclaimed: number;
@@ -139,24 +137,24 @@ export interface ContextTaxSuccessRate {
 }
 
 /** Committed aggregates a later reporter renders. */
-export interface ContextTaxSnapshot {
+export interface TokenCostSnapshot {
   schemaVersion: 1;
   generatedAt: string;
   minPublishableSamples: 10;
   minPublishableVendors: 2;
   publishable: boolean;
   sampleCount: number;
-  vendors: readonly ContextTaxVendor[];
+  vendors: readonly TokenCostVendor[];
   /** UTC calendar date (`YYYY-MM-DD`) the rendered blurb should cite. */
   asOf: string;
-  totalUsage: ContextTaxUsagePercentiles;
-  stageUsage: readonly ContextTaxStageUsagePercentiles[];
-  compactionCount: ContextTaxPercentiles;
+  totalUsage: TokenCostUsagePercentiles;
+  stageUsage: readonly TokenCostStageUsagePercentiles[];
+  compactionCount: TokenCostPercentiles;
   /** cacheRead / max(1, cacheRead + cacheCreation + inputUncached), in [0, 1]. */
   cacheHitRatio: number;
-  successRateByModel: Readonly<Record<string, ContextTaxSuccessRate>>;
+  successRateByModel: Readonly<Record<string, TokenCostSuccessRate>>;
   successRateByVendor: Readonly<
-    Partial<Record<ContextTaxVendor, ContextTaxSuccessRate>>
+    Partial<Record<TokenCostVendor, TokenCostSuccessRate>>
   >;
 }
 
@@ -164,18 +162,18 @@ export interface ContextTaxSnapshot {
  * Join hints an adapter may return. Only a numeric issue number is
  * allowed -- never a path or branch string.
  */
-export interface ContextTaxJoinHints {
+export interface TokenCostJoinHints {
   issueNumber?: number;
 }
 
-export interface ContextTaxAdapterResult {
-  sample: ContextTaxSample;
-  joinHints?: ContextTaxJoinHints;
+export interface TokenCostAdapterResult {
+  sample: TokenCostSample;
+  joinHints?: TokenCostJoinHints;
 }
 
 /** Vendor adapter. Later harvest issues implement this. */
-export interface ContextTaxVendorAdapter {
-  harvest(input: unknown): ContextTaxAdapterResult;
+export interface TokenCostVendorAdapter {
+  harvest(input: unknown): TokenCostAdapterResult;
 }
 
 const DROPPED_KEYS = new Set([
@@ -244,11 +242,11 @@ function redactString(value: string): string | undefined {
  * compound variants) do not survive -- as values or as object keys. This
  * is a defense-in-depth net for stray fields, not a substitute for an
  * adapter choosing what to extract:
- * `ContextTaxSample`/`ContextTaxEvent` have no field for raw conversational
+ * `TokenCostSample`/`TokenCostEvent` have no field for raw conversational
  * text, so a correctly built adapter never passes a role/message/tool-call
  * container through here in the first place.
  */
-export function redactContextTaxRecord(input: unknown): unknown {
+export function redactTokenCostRecord(input: unknown): unknown {
   if (typeof input === 'string') {
     return redactString(input);
   }
@@ -257,7 +255,7 @@ export function redactContextTaxRecord(input: unknown): unknown {
   }
   if (Array.isArray(input)) {
     return input
-      .map((item) => redactContextTaxRecord(item))
+      .map((item) => redactTokenCostRecord(item))
       .filter((item) => item !== undefined);
   }
   const out: Record<string, unknown> = {};
@@ -265,7 +263,7 @@ export function redactContextTaxRecord(input: unknown): unknown {
     if (isDroppedKey(key) || redactString(key) === undefined) {
       continue;
     }
-    const redacted = redactContextTaxRecord(value);
+    const redacted = redactTokenCostRecord(value);
     if (redacted !== undefined) {
       out[key] = redacted;
     }
@@ -294,8 +292,8 @@ export function inferIssueNumberFromBasename(
 }
 
 export function isIssueLoopSample(
-  sample: ContextTaxSample,
-): sample is ContextTaxIssueLoopSample {
+  sample: TokenCostSample,
+): sample is TokenCostIssueLoopSample {
   return (
     sample.kind === 'issue-loop' &&
     typeof sample.issueNumber === 'number' &&
@@ -311,7 +309,7 @@ export function isIssueLoopSample(
  * `attribution` agrees with `kind` (a `session-unscoped` sample was never
  * joined to an issue, so it cannot claim `issue-loop`, and vice versa).
  */
-export function assertContextTaxSample(sample: ContextTaxSample): void {
+export function assertTokenCostSample(sample: TokenCostSample): void {
   const startedAtMs = new Date(sample.startedAt).getTime();
   const endedAtMs = new Date(sample.endedAt).getTime();
   if (!Number.isFinite(startedAtMs) || !Number.isFinite(endedAtMs)) {
@@ -339,7 +337,7 @@ export function assertContextTaxSample(sample: ContextTaxSample): void {
   }
 }
 
-function assertPercentileOrder(label: string, p: ContextTaxPercentiles): void {
+function assertPercentileOrder(label: string, p: TokenCostPercentiles): void {
   if (!(p.p25 <= p.p50 && p.p50 <= p.p75)) {
     throw new Error(
       `snapshot ${label} percentiles must satisfy p25 <= p50 <= p75`,
@@ -349,7 +347,7 @@ function assertPercentileOrder(label: string, p: ContextTaxPercentiles): void {
 
 function assertUsagePercentileOrder(
   label: string,
-  usage: ContextTaxUsagePercentiles,
+  usage: TokenCostUsagePercentiles,
 ): void {
   for (const field of [
     'inputUncached',
@@ -364,7 +362,7 @@ function assertUsagePercentileOrder(
 
 function assertRateInUnitInterval(
   label: string,
-  rate: ContextTaxSuccessRate,
+  rate: TokenCostSuccessRate,
 ): void {
   if (!(rate.rate >= 0 && rate.rate <= 1)) {
     throw new Error(`snapshot ${label} rate must be in [0, 1]`);
@@ -402,7 +400,7 @@ function assertUtcCalendarDate(value: string): void {
  * each success rate's `rate` field agrees with its own raw counts, and
  * that `successRateByVendor` names only vendors present in `vendors`.
  */
-export function assertContextTaxSnapshot(snapshot: ContextTaxSnapshot): void {
+export function assertTokenCostSnapshot(snapshot: TokenCostSnapshot): void {
   if (new Set(snapshot.vendors).size !== snapshot.vendors.length) {
     throw new Error('snapshot vendors must be distinct');
   }
@@ -438,7 +436,7 @@ export function assertContextTaxSnapshot(snapshot: ContextTaxSnapshot): void {
     if (rate === undefined) {
       continue;
     }
-    if (!vendorSet.has(vendor as ContextTaxVendor)) {
+    if (!vendorSet.has(vendor as TokenCostVendor)) {
       throw new Error(
         `snapshot successRateByVendor names "${vendor}", which is not present in vendors`,
       );

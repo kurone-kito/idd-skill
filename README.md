@@ -63,12 +63,12 @@ IDD is not a demo. It is the workflow this repository is built with:
 
 _As of 2026-07._
 
-<!-- context-tax-readme:start -->
+<!-- token-cost-readme:start -->
 
-Context-tax measurement is in progress; see
-[`docs/context-tax.md`](docs/context-tax.md) for the methodology.
+Token-cost measurement is in progress; see
+[`docs/token-cost.md`](docs/token-cost.md) for the methodology.
 
-<!-- context-tax-readme:end -->
+<!-- token-cost-readme:end -->
 
 ## Quick Start
 

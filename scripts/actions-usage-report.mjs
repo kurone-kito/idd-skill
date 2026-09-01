@@ -10,7 +10,7 @@
 // the Actions API. Maintainer/CI-only -- never distributed to
 // idd-template/ and never registered in HELPER_COMMANDS (see
 // SOURCE_REPO_INTERNAL_ENTRY_PATHS in
-// tests/helper-invocation-profile.test.mts), matching context-tax-report.mts's
+// tests/helper-invocation-profile.test.mts), matching token-cost-report.mts's
 // precedent: an adopter repository has its own, entirely different set of
 // CI workflows, so a report scoped to this repository's own workflow names
 // has nothing to measure there.
