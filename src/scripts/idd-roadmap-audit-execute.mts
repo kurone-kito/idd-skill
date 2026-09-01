@@ -1129,12 +1129,20 @@ export function createLocalCoordinationInputs(
     listWorktrees: () =>
       runLocalGitCommand(['worktree', 'list', '--porcelain'], cwd),
     // --untracked-files=all overrides a repo/global status.showUntrackedFiles
-    // config (review finding, #2225): without it, `no` would make an
-    // untracked-only leftover file report as clean, silently weakening this
-    // exact safety gate through user configuration this tool never chose.
+    // config, and --ignore-submodules=none overrides diff.ignoreSubmodules
+    // (both review findings, #2225): without them, `status.showUntrackedFiles
+    // = no` would hide an untracked-only leftover, and
+    // `diff.ignoreSubmodules = all` would hide a dirty submodule — either
+    // way silently weakening this exact safety gate through user
+    // configuration this tool never chose.
     statusPorcelain: (worktreePath) =>
       runLocalGitCommand(
-        ['status', '--porcelain', '--untracked-files=all'],
+        [
+          'status',
+          '--porcelain',
+          '--untracked-files=all',
+          '--ignore-submodules=none',
+        ],
         worktreePath,
       ),
     resolveGitPath: (worktreePath, name) =>

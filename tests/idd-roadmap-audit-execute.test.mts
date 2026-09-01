@@ -2316,6 +2316,69 @@ test('real fixture: an untracked-only leftover reports present-broken even under
   }
 });
 
+test('real fixture: a dirty submodule reports present-broken even under diff.ignoreSubmodules=all (review finding, #2225)', () => {
+  const submoduleUpstream = mkdtempSync(join(tmpdir(), 'idd-roadmap-submod-'));
+  const primary = setupPrimaryRepo();
+  const worktree = join(primary, '..', `${basename(primary)}-wt`);
+  try {
+    fixtureGit(submoduleUpstream, ['init', '-b', 'main']);
+    fixtureGit(submoduleUpstream, ['config', 'user.email', 'test@example.com']);
+    fixtureGit(submoduleUpstream, ['config', 'user.name', 'Test']);
+    writeFileSync(join(submoduleUpstream, 'f.txt'), 'one\n');
+    fixtureGit(submoduleUpstream, ['add', 'f.txt']);
+    fixtureGit(submoduleUpstream, ['commit', '-m', 'init']);
+
+    fixtureGit(primary, [
+      '-c',
+      'protocol.file.allow=always',
+      'submodule',
+      'add',
+      submoduleUpstream,
+      'sub',
+    ]);
+    fixtureGit(primary, ['commit', '-m', 'add submodule']);
+    fixtureGit(primary, [
+      'worktree',
+      'add',
+      worktree,
+      '-b',
+      'roadmap-audit/995-slug',
+      'main',
+    ]);
+    // `worktree add` does not check the submodule out on its own; the new
+    // worktree's `sub/` starts empty until explicitly initialized.
+    fixtureGit(worktree, [
+      '-c',
+      'protocol.file.allow=always',
+      'submodule',
+      'update',
+      '--init',
+    ]);
+    fixtureGit(worktree, ['config', 'diff.ignoreSubmodules', 'all']);
+    writeFileSync(join(worktree, 'sub', 'f.txt'), 'two\n');
+
+    // Sanity: an UNQUALIFIED status --porcelain really does go empty under
+    // this config, which is exactly the bypass the fix guards against.
+    assert.equal(fixtureGitOut(worktree, ['status', '--porcelain']), '');
+
+    const verdict = evaluateLocalCoordinationState(
+      'roadmap-audit/995-slug',
+      realLocalInputs(primary),
+    );
+    assert.equal(verdict.presence, 'present-broken');
+    assert.deepEqual(verdict.brokenReasons, ['uncommitted content present']);
+  } finally {
+    try {
+      fixtureGit(primary, ['worktree', 'remove', '--force', worktree]);
+    } catch {
+      // best-effort cleanup
+    }
+    rmSync(worktree, { recursive: true, force: true });
+    rmSync(primary, { recursive: true, force: true });
+    rmSync(submoduleUpstream, { recursive: true, force: true });
+  }
+});
+
 test('real fixture: local git shell-outs ignore ambient GIT_* overrides and never reach a sentinel repo (review finding, #2225)', () => {
   // Differential test: `sentinel` has NO roadmap-audit branch at all, while
   // `primary` has a real, clean worktree checked out on one. An unsanitized
