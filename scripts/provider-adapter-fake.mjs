@@ -44,7 +44,16 @@ export function createFakeProviderAdapter(fixture) {
       };
     },
     getWorkItem(number) {
-      return fixture.workItems?.[number] ?? null;
+      const item = fixture.workItems?.[number];
+      if (!item) {
+        return null;
+      }
+      // `fixture.workItems` stores REST's raw casing as its one canonical
+      // form -- listOpenWorkItems/searchWorkItems pass it through
+      // unchanged, and this method uppercases on read to match
+      // getWorkItem's own documented uppercase contract, mirroring the
+      // real adapter (Copilot review, #2400).
+      return { ...item, state: item.state.toUpperCase() };
     },
     listOpenWorkItems() {
       // Port contract: raw REST lowercase state ('open'/'closed'), unlike
@@ -67,7 +76,12 @@ export function createFakeProviderAdapter(fixture) {
       fixture.closedWorkItems?.push({ number, reason });
       const item = fixture.workItems?.[number];
       if (item) {
-        item.state = 'CLOSED';
+        // Lowercase, matching fixture.workItems's one canonical raw-REST
+        // casing -- getWorkItem uppercases on read regardless, but
+        // listOpenWorkItems/searchWorkItems pass this through unchanged,
+        // so a stored uppercase value would drift from their contract on
+        // a later read of the same fixture (Copilot review, #2400).
+        item.state = 'closed';
       }
     },
     getWorkItemClosingPullRequestsPage(number) {

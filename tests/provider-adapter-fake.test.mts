@@ -31,3 +31,36 @@ test('listOpenWorkItems does not match an uppercase OPEN fixture (regression gua
   });
   assert.deepEqual(port.listOpenWorkItems(), []);
 });
+
+// getWorkItem (Copilot review, #2400): fixture.workItems stores REST's raw
+// lowercase casing as its one canonical form (per the two tests above), but
+// getWorkItem's own documented contract uppercases -- the fake adapter
+// previously returned the fixture unchanged, so a correctly lowercase-
+// written fixture read through getWorkItem would return the wrong casing
+// relative to the real adapter's behavior.
+test("getWorkItem uppercases the port's documented lowercase fixture state on read", () => {
+  const port = createFakeProviderAdapter({
+    workItems: {
+      1: { number: 1, title: 'open issue', body: '', state: 'open' },
+    },
+  });
+  assert.equal(port.getWorkItem(1)?.state, 'OPEN');
+});
+
+test('getWorkItem returns null for a number absent from the fixture', () => {
+  const port = createFakeProviderAdapter({ workItems: {} });
+  assert.equal(port.getWorkItem(1), null);
+});
+
+// closeWorkItem (Copilot review, #2400): mutated the shared fixture's state
+// to uppercase 'CLOSED', drifting from fixture.workItems's one canonical
+// raw-lowercase form and from listOpenWorkItems/searchWorkItems's contract
+// for reading it back.
+test('closeWorkItem stores lowercase state, matching the fixture convention', () => {
+  const workItems = {
+    1: { number: 1, title: 'open issue', body: '', state: 'open' },
+  };
+  const port = createFakeProviderAdapter({ workItems });
+  port.closeWorkItem(1, 'done');
+  assert.equal(workItems[1].state, 'closed');
+});

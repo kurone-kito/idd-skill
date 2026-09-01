@@ -80,6 +80,28 @@ test('getWorkItem throws a typed ProviderError on a non-404 failure', () => {
 });
 
 // ---------------------------------------------------------------------------
+// searchWorkItems (#2266): its own doc comment says "like listOpenWorkItems"
+// -- raw REST lowercase state, deliberately not uppercased -- but the
+// implementation uppercased it, diverging from that documented contract and
+// from listOpenWorkItems's own behavior for the same field. Found by
+// Copilot review, #2400.
+// ---------------------------------------------------------------------------
+
+test('searchWorkItems preserves REST raw lowercase state, like listOpenWorkItems', () => {
+  const port = createGithubProviderAdapter(
+    'kurone-kito',
+    'idd-skill',
+    fakeDeps({
+      ghApiJson: () => ({
+        items: [{ number: 900, title: 'issue 900', state: 'open' }],
+      }),
+    }),
+  );
+  const [item] = port.searchWorkItems('some query');
+  assert.equal(item.state, 'open');
+});
+
+// ---------------------------------------------------------------------------
 // listRequiredChecks (#2266): the pre-migration ghJson/
 // recoverJsonFromGhFailure recovery this method replaces, verified through
 // the injectable deps seam (both recoveries have zero coverage otherwise --

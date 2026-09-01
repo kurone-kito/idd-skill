@@ -214,7 +214,11 @@ export function createGithubProviderAdapter(owner, repo, deps = DEFAULT_DEPS) {
         number: Number(item.number),
         title: String(item.title ?? ''),
         body: String(item.body ?? ''),
-        state: String(item.state ?? '').toUpperCase(),
+        // Raw REST casing (lowercase "open"/"closed"), NOT uppercased --
+        // this method's own doc comment says "like listOpenWorkItems",
+        // which deliberately preserves REST's raw casing (Copilot review,
+        // #2400).
+        state: String(item.state ?? ''),
         labels: item.labels,
         url: item.url === undefined ? undefined : String(item.url),
         htmlUrl:
