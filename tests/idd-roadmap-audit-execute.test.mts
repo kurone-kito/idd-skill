@@ -1,12 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import {
-  existsSync,
-  mkdtempSync,
-  readFileSync,
-  rmSync,
-  writeFileSync,
-} from 'node:fs';
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { devNull, tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
 import { test } from 'node:test';
@@ -18,6 +12,7 @@ import {
 import {
   buildRoadmapCompletionAuditBody,
   type ConnectedPrEvent,
+  createLocalCoordinationInputs,
   evaluateLocalCoordinationState,
   evaluateRoadmapAuditGates,
   evaluateRoadmapClaim,
@@ -2117,40 +2112,13 @@ function fixtureGitOut(cwd: string, args: string[]): string {
   }).trim();
 }
 
-/** Real git shell-outs, mirroring production's createLocalCoordinationInputs. */
-function realLocalInputs(primary: string): LocalCoordinationInputs {
-  const run = (cwd: string, args: string[]) => {
-    try {
-      return {
-        ok: true as const,
-        stdout: fixtureGitOut(cwd, args),
-        stderr: '',
-      };
-    } catch (err) {
-      const failure = err as { stderr?: unknown };
-      return {
-        ok: false as const,
-        stdout: '',
-        stderr: typeof failure.stderr === 'string' ? failure.stderr : '',
-      };
-    }
-  };
-  return {
-    listWorktrees: () => run(primary, ['worktree', 'list', '--porcelain']),
-    statusPorcelain: (worktreePath) =>
-      run(worktreePath, ['status', '--porcelain']),
-    resolveGitPath: (worktreePath, name) =>
-      run(worktreePath, ['rev-parse', '--git-path', name]),
-    pathExists: (path) => existsSync(path),
-    readFile: (path) => {
-      try {
-        return readFileSync(path, 'utf8');
-      } catch {
-        return null;
-      }
-    },
-  };
-}
+/**
+ * Real git shell-outs for the AC2-AC4 fixture tests: the REAL production
+ * `createLocalCoordinationInputs` wiring (not a hand-rolled duplicate), so
+ * these tests exercise the actual env-sanitization and
+ * `--untracked-files=all` behavior, not just the pure logic on top of it.
+ */
+const realLocalInputs = createLocalCoordinationInputs;
 
 function setupPrimaryRepo(): string {
   const primary = mkdtempSync(join(tmpdir(), 'idd-roadmap-local-'));
@@ -2309,6 +2277,126 @@ test('AC4 real fixture: an in-progress rebase in a LINKED worktree is detected v
     }
     rmSync(worktree, { recursive: true, force: true });
     rmSync(primary, { recursive: true, force: true });
+  }
+});
+
+test('real fixture: an untracked-only leftover reports present-broken even under status.showUntrackedFiles=no (review finding, #2225)', () => {
+  const primary = setupPrimaryRepo();
+  const worktree = join(primary, '..', `${basename(primary)}-wt`);
+  try {
+    fixtureGit(primary, [
+      'worktree',
+      'add',
+      worktree,
+      '-b',
+      'roadmap-audit/995-slug',
+      'main',
+    ]);
+    fixtureGit(worktree, ['config', 'status.showUntrackedFiles', 'no']);
+    writeFileSync(join(worktree, 'untracked-leftover.txt'), 'oops\n');
+
+    // Sanity: an UNQUALIFIED status --porcelain really does go empty under
+    // this config, which is exactly the bypass the fix guards against.
+    assert.equal(fixtureGitOut(worktree, ['status', '--porcelain']), '');
+
+    const verdict = evaluateLocalCoordinationState(
+      'roadmap-audit/995-slug',
+      realLocalInputs(primary),
+    );
+    assert.equal(verdict.presence, 'present-broken');
+    assert.deepEqual(verdict.brokenReasons, ['uncommitted content present']);
+  } finally {
+    try {
+      fixtureGit(primary, ['worktree', 'remove', '--force', worktree]);
+    } catch {
+      // best-effort cleanup
+    }
+    rmSync(worktree, { recursive: true, force: true });
+    rmSync(primary, { recursive: true, force: true });
+  }
+});
+
+test('real fixture: local git shell-outs ignore ambient GIT_* overrides and never reach a sentinel repo (review finding, #2225)', () => {
+  // Differential test: `sentinel` has NO roadmap-audit branch at all, while
+  // `primary` has a real, clean worktree checked out on one. An unsanitized
+  // `runLocalGitCommand` that let the poisoned GIT_DIR/GIT_WORK_TREE
+  // redirect it onto `sentinel` would silently see neither the worktree nor
+  // the branch and misreport `absent` — a strictly stronger assertion than
+  // just checking `sentinel` was left untouched (read-only code would pass
+  // that trivially either way).
+  const sentinel = mkdtempSync(join(tmpdir(), 'idd-roadmap-sentinel-'));
+  let primary: string | undefined;
+  let worktree: string | undefined;
+  try {
+    fixtureGit(sentinel, ['init', '-b', 'main']);
+    fixtureGit(sentinel, ['config', 'user.email', 'sentinel@example.com']);
+    fixtureGit(sentinel, ['config', 'user.name', 'Sentinel']);
+    writeFileSync(join(sentinel, 'README.md'), 'sentinel\n');
+    fixtureGit(sentinel, ['add', 'README.md']);
+    fixtureGit(sentinel, ['commit', '-m', 'sentinel']);
+    const headBefore = fixtureGitOut(sentinel, ['rev-parse', 'HEAD']);
+    const branchesBefore = fixtureGitOut(sentinel, ['branch', '--list']);
+
+    primary = setupPrimaryRepo();
+    worktree = join(primary, '..', `${basename(primary)}-wt`);
+    fixtureGit(primary, [
+      'worktree',
+      'add',
+      worktree,
+      '-b',
+      'roadmap-audit/995-slug',
+      'main',
+    ]);
+
+    const saved = new Map(
+      [
+        'GIT_DIR',
+        'GIT_INDEX_FILE',
+        'GIT_WORK_TREE',
+        'GIT_COMMON_DIR',
+        'GIT_OBJECT_DIRECTORY',
+      ].map((key) => [key, process.env[key]]),
+    );
+    try {
+      process.env.GIT_DIR = join(sentinel, '.git');
+      process.env.GIT_INDEX_FILE = join(sentinel, '.git', 'index');
+      process.env.GIT_WORK_TREE = sentinel;
+      process.env.GIT_COMMON_DIR = join(sentinel, '.git');
+      process.env.GIT_OBJECT_DIRECTORY = join(sentinel, '.git', 'objects');
+
+      const verdict = evaluateLocalCoordinationState(
+        'roadmap-audit/995-slug',
+        createLocalCoordinationInputs(primary),
+      );
+      assert.equal(verdict.presence, 'present-clean');
+      assert.equal(verdict.path, worktree);
+      assert.equal(verdict.unreadable, false);
+    } finally {
+      for (const [key, value] of saved) {
+        if (value === undefined) {
+          delete process.env[key];
+        } else {
+          process.env[key] = value;
+        }
+      }
+    }
+
+    assert.equal(fixtureGitOut(sentinel, ['rev-parse', 'HEAD']), headBefore);
+    assert.equal(fixtureGitOut(sentinel, ['branch', '--list']), branchesBefore);
+    assert.equal(fixtureGitOut(sentinel, ['status', '--porcelain']), '');
+  } finally {
+    if (primary && worktree) {
+      try {
+        fixtureGit(primary, ['worktree', 'remove', '--force', worktree]);
+      } catch {
+        // best-effort cleanup
+      }
+      rmSync(worktree, { recursive: true, force: true });
+    }
+    if (primary) {
+      rmSync(primary, { recursive: true, force: true });
+    }
+    rmSync(sentinel, { recursive: true, force: true });
   }
 });
 

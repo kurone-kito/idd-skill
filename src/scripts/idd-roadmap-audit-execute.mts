@@ -692,6 +692,32 @@ interface LocalGitCommandResult {
 }
 
 /**
+ * Keep repository discovery tied to the requested `cwd` rather than to
+ * ambient Git overrides inherited from a hook, wrapper, or parent process
+ * (#2225, review finding). Without this, an inherited `GIT_DIR`/
+ * `GIT_WORK_TREE`/`GIT_INDEX_FILE`/`GIT_COMMON_DIR` could silently redirect
+ * every check onto the wrong repository, defeating the safety gate
+ * entirely. A local, file-scoped port of claim-lock.mts's
+ * `sanitizedGitEnvironment` — not imported because that function is not
+ * exported there, and claim-lock.mts is outside this issue's
+ * candidate-files list.
+ */
+function sanitizedGitEnvironment(): NodeJS.ProcessEnv {
+  const env = { ...process.env };
+  for (const key of Object.keys(env)) {
+    if (key.startsWith('GIT_CONFIG')) {
+      delete env[key];
+    }
+  }
+  delete env.GIT_DIR;
+  delete env.GIT_INDEX_FILE;
+  delete env.GIT_WORK_TREE;
+  delete env.GIT_COMMON_DIR;
+  delete env.GIT_OBJECT_DIRECTORY;
+  return env;
+}
+
+/**
  * Run `git <argv>` in `cwd`, capturing stdout/stderr without throwing
  * (#2225). A local, file-scoped port of idd-doctor.mts's `runCommand` —
  * not extracted to a shared module because idd-doctor.mts is outside this
@@ -704,6 +730,7 @@ function runLocalGitCommand(
   try {
     const stdout = execFileSync('git', argv, {
       cwd,
+      env: sanitizedGitEnvironment(),
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'pipe'],
     });
@@ -1091,14 +1118,25 @@ export function evaluateLocalCoordinationState(
 
 /**
  * Production {@link LocalCoordinationInputs}: local git shell-outs scoped to
- * `cwd` (#2225).
+ * `cwd` (#2225). Exported so tests can exercise the real git-backed wiring
+ * (env sanitization, untracked-file handling) against a throwaway
+ * repository, not just a hand-rolled duplicate of it.
  */
-function createLocalCoordinationInputs(cwd: string): LocalCoordinationInputs {
+export function createLocalCoordinationInputs(
+  cwd: string,
+): LocalCoordinationInputs {
   return {
     listWorktrees: () =>
       runLocalGitCommand(['worktree', 'list', '--porcelain'], cwd),
+    // --untracked-files=all overrides a repo/global status.showUntrackedFiles
+    // config (review finding, #2225): without it, `no` would make an
+    // untracked-only leftover file report as clean, silently weakening this
+    // exact safety gate through user configuration this tool never chose.
     statusPorcelain: (worktreePath) =>
-      runLocalGitCommand(['status', '--porcelain'], worktreePath),
+      runLocalGitCommand(
+        ['status', '--porcelain', '--untracked-files=all'],
+        worktreePath,
+      ),
     resolveGitPath: (worktreePath, name) =>
       runLocalGitCommand(['rev-parse', '--git-path', name], worktreePath),
     pathExists: (path) => existsSync(path),
@@ -1235,8 +1273,12 @@ export interface RoadmapAuditExecuteDeps {
    * Evaluate local worktree/branch state for `branchName` (#2225). Optional:
    * absent entirely, the check is simply skipped, matching production's own
    * fail-open behavior when no local state is knowable — every existing
-   * test's deps object stays valid unmodified. Called once, immediately
-   * after the early claim re-validation and before any mutation.
+   * test's deps object stays valid unmodified. Called at all three points
+   * claim ownership itself is re-validated below — the early check,
+   * immediately after the graph re-fetch, and immediately before the
+   * close — via {@link applyLocalCoordinationGate}, since local state can
+   * change mid-run just as easily as claim ownership can (review finding,
+   * #2225).
    */
   inspectLocalCoordinationState?: (
     branchName: string,
