@@ -244,7 +244,7 @@ export function evaluateResumeClaimRouting(input, options = {}) {
     evidence: {
       trusted_event_count: events.length,
       new_format_claim_seen: state.mode === 'new-format',
-      legacy_claim_seen: state.mode === 'legacy-only',
+      legacy_claim_seen: state.hasLegacyClaimMarker,
       same_second_contenders: sameSecondContenders,
       later_competing_claim: laterCompetingClaim,
       activation_nonce_winner: activationNonceWinner,
@@ -439,6 +439,15 @@ function resolveClaimState(events, nowIso, staleAgeMs, options = {}) {
     (event) =>
       parseClaimComment(event.body ?? '', event.createdAt ?? '') !== null,
   );
+  // hasLegacyClaimMarker records whether any legacy-format marker was ever
+  // posted, independent of whether the 'new-format' branch below ignores it
+  // in favor of a co-existing new-format claim (#2317's follow-up finding:
+  // `legacyClaim` alone conflates "no legacy marker existed" with "one
+  // existed but new-format priority skipped resolving it").
+  const hasLegacyClaimMarker = events.some(
+    (event) =>
+      parseLegacyClaimComment(event.body ?? '', event.createdAt ?? '') !== null,
+  );
   const warnings = [];
   const onAnomalousHeartbeat = ({ claimId, activeBranch, heartbeatBranch }) => {
     warnings.push(
@@ -493,6 +502,7 @@ function resolveClaimState(events, nowIso, staleAgeMs, options = {}) {
       warnings,
       legacyClaim: null,
       legacyReleased: false,
+      hasLegacyClaimMarker,
     };
   }
   const orderedEvents = [...events].sort(compareEvents);
@@ -504,6 +514,7 @@ function resolveClaimState(events, nowIso, staleAgeMs, options = {}) {
     warnings,
     legacyClaim: legacy.claim,
     legacyReleased: legacy.released,
+    hasLegacyClaimMarker,
   };
 }
 function resolveLegacyClaimState(orderedEvents, _nowIso, _staleAgeMs) {
