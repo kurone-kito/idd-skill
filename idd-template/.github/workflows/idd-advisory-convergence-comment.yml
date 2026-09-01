@@ -89,7 +89,7 @@ jobs:
                       | ($profile != null and ($profile|type) == "string" and ($profile|length) > 0 and (["vendored-node","package-manager","ephemeral-npx","instructions-only"] | index($profile)) != null) as $profile_ok
                       | (if ($hr | has("packageSpec")) then
                            ($hr.packageSpec) as $spec
-                           | ($spec != null and ($spec|type) == "string" and ($spec | test("^[A-Za-z0-9@:/_.+^#%-]+$")))
+                           | ($spec != null and ($spec|type) == "string" and ($spec | test("\\A[A-Za-z0-9@:/_.+^#%-]+\\z")))
                          else true end) as $spec_ok
                       | if ($keys_ok and $profile_ok and $spec_ok) then
                           "\($hr.profile)\t\($hr.packageSpec // "")"
@@ -116,15 +116,24 @@ jobs:
         if: steps.profile.outputs.profile == 'package-manager'
         run: |
           # Same precedence as helper-runtime-manifest.mts's own
-          # detector: an explicit package.json "packageManager" field
-          # wins, then lockfile presence when exactly one supported
-          # lockfile exists, defaulting to npm when none exist. When
-          # more than one supported lockfile coexists with no declared
-          # field, this mirrors collectHelperRuntimeEvidence's own
-          # "do not guess an install path" stance (ambiguousPackageManager)
-          # instead of silently picking by a fixed pnpm/npm/yarn priority
-          # order, which could select a manager whose lockfile lacks the
-          # IDD helper dependency and fail with a confusing error.
+          # collectHelperRuntimeEvidence for the "declared field" and
+          # "exactly one lockfile" cases: an explicit package.json
+          # "packageManager" field wins, then lockfile presence when
+          # exactly one supported lockfile exists. When more than one
+          # supported lockfile coexists with no declared field, this
+          # mirrors collectHelperRuntimeEvidence's own "do not guess an
+          # install path" stance (ambiguousPackageManager) instead of
+          # silently picking by a fixed pnpm/npm/yarn priority order,
+          # which could select a manager whose lockfile lacks the IDD
+          # helper dependency and fail with a confusing error. When
+          # there is no evidence at all (no declared field, no
+          # lockfile), this is a workflow-specific fallback to npm, NOT
+          # a mirror of collectHelperRuntimeEvidence (which leaves the
+          # manager unset in that case, cascading to instructions-only
+          # via recommendHelperRuntimeProfile) -- npm ships with every
+          # setup-node Node.js install, so defaulting to it here is
+          # safe even though the canonical onboarding recommender is
+          # more conservative about "no evidence" (idd-skill#2392).
           MANAGER=$(node -e "
             const fs = require('node:fs');
             let declared = '';
