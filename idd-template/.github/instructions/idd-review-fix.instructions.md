@@ -67,6 +67,24 @@ Convergence guardrails:
   redirected by a maintainer.
 - If the critique pass reports zero issues, proceed to E11.
 
+**Round-count heuristic for genuinely-new findings.** The guard above
+covers a _repeating_ finding; a different pattern is each round
+surfacing a genuinely new, real finding — that is convergence, not
+stagnation, so the no-progress guard never fires. This is a heuristic,
+not a hard cap: after several consecutive rounds (roughly 3-4) each
+finding something new in the _same area_, treat it as a signal that a
+shared root cause may be producing each new instance, and check
+whether one structural fix (e.g., auditing every caller of a helper
+against its contract, instead of patching one caller per round) would
+converge the loop faster than another incremental patch. Worked
+example: five review rounds each flag a different call site missing a
+validation check that a shared helper added — the fix that ends the
+loop is auditing every caller against the helper's contract once, not
+a sixth per-call-site patch. Once fixes materially address the
+finding's root cause and further comments are speculative or
+non-blocking hardening, treat them as PATH B (disposition-only,
+E4-E7) rather than opening another E9-E10 round.
+
 ## E11 — Resolve conflicts with main
 
 Check for conflicts between the feature branch and `main`. If conflicts
