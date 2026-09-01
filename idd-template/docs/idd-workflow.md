@@ -372,7 +372,7 @@ session would.
 | `.github/instructions/idd-advisory-wait.instructions.md`     | AW1-AW5 helper: shared Copilot advisory-wait protocol (E14, F2, F3)                                                                                                                             |
 | `.github/instructions/idd-review-snapshot.instructions.md`   | E1–E3: fetch activity snapshot, run critique, check if ReviewItems_snapshot is empty                                                                                                            |
 | `.github/instructions/idd-review-triage.instructions.md`     | E4–E8: classify items, score, record dispositions, and run E-phase branch-sync check before F-phase                                                                                             |
-| `.github/instructions/idd-review-fix.instructions.md`        | E9-E15: fix accepted review items and push follow-up commits (merge-from-main, not rebase)                                                                                                      |
+| `.github/instructions/idd-review-fix.instructions.md`        | E9-E15: fix accepted review items and push follow-up commits (merge-from-`{development-branch}`, not rebase)                                                                                    |
 | `.github/instructions/idd-pre-merge.instructions.md`         | F1: final read-only branch-state check; F2: verify all pre-merge conditions                                                                                                                     |
 | `.github/instructions/idd-merge-handoff.instructions.md`     | F2.5: resolve merge-policy handoff vs autonomous merge routing                                                                                                                                  |
 | `.github/instructions/idd-merge.instructions.md`             | F3–F5: execute the merge, clean up, and loop back to discover                                                                                                                                   |
@@ -602,10 +602,11 @@ Running this variant safely requires:
   [Orchestrator delegation](../.github/instructions/idd-claim.instructions.md#orchestrator-delegation).
 - **Serialized worktree/clone lifecycle operations when workers share
   one clone.** Concurrent `git fetch` / `git worktree add` / `git
-  worktree remove` / local-`main` updates from the same primary clone
-  can collide; serialize these specific operations behind a per-clone
-  lock, or give concurrent workers separate clones, once the
-  concurrency cap allows more than one worker at a time.
+  worktree remove` / local `{development-branch}` updates from the
+  same primary clone can collide; serialize these specific operations
+  behind a per-clone lock, or give concurrent workers separate
+  clones, once the concurrency cap allows more than one worker at a
+  time.
 - **Resume-specific recovery when a worker dies mid-turn.** Re-verify
   claim ownership and worktree state before continuing; treat any
   uncommitted work found in the worktree as unverified input to check,

@@ -342,7 +342,17 @@ An absent `developmentBranch` resolves the live repository default
 branch, preserving backwards compatibility for a repository already
 onboarded without this setting. Release, hotfix, and
 development-to-default promotion flows are outside this decision's
-support boundary.
+support boundary, as are arbitrary feature-branch namespaces and Git
+Flow CLI automation -- the only supported topology is an
+`issue/<number>-<slug>` feature branch merging into the one configured
+development branch.
+
+Recommend the operator apply the same branch-protection rules to an
+explicitly selected development branch that they would apply to a
+default branch: IDD's own gates check CI, review, freshness, and claim
+state, but repository-level safeguards such as force-push prevention
+and required reviews still come from GitHub branch protection, not
+from IDD.
 
 ## Related default policies to confirm
 
