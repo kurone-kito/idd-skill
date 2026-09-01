@@ -37,6 +37,7 @@ import {
   parseIsoDurationToMs,
 } from './policy-helpers.mjs';
 import {
+  parsePaginatedGhNdjson,
   parseProviderOutageAdvancedComment,
   parseProviderOutageDeclarationComment,
   renderProviderOutageAdvancedComment,
@@ -79,6 +80,7 @@ export function resolveProviderOutageDeclaration(input) {
     valid: [],
     expired: [],
     exceedsMaxValidity: [],
+    notYetStarted: [],
     wrongService: [],
     unauthorized: [],
     malformed: [],
@@ -106,6 +108,7 @@ export function resolveProviderOutageDeclaration(input) {
   const valid = [];
   const expired = [];
   const exceedsMaxValidity = [];
+  const notYetStarted = [];
   const wrongService = [];
   const unauthorized = [];
   const malformed = [];
@@ -152,6 +155,14 @@ export function resolveProviderOutageDeclaration(input) {
       expired.push(parsed);
       continue;
     }
+    // #2320 review (Codex): ordering and window-length alone do not prove
+    // the window has actually opened -- a declaration authored with a
+    // future `startedAt` must stay inactive until that moment, not read as
+    // valid the instant it is posted.
+    if (nowMs < startedMs) {
+      notYetStarted.push(parsed);
+      continue;
+    }
     valid.push(parsed);
   }
   const declaration = latestByCreatedAt(valid);
@@ -163,6 +174,7 @@ export function resolveProviderOutageDeclaration(input) {
       valid,
       expired,
       exceedsMaxValidity,
+      notYetStarted,
       wrongService,
       unauthorized,
       malformed,
@@ -174,6 +186,9 @@ export function resolveProviderOutageDeclaration(input) {
   } else if (expired.length > 0) {
     const latest = latestByCreatedAt(expired);
     reason = `declaration expired at ${latest?.expiresAt}`;
+  } else if (notYetStarted.length > 0) {
+    const latest = latestByCreatedAt(notYetStarted);
+    reason = `declaration has not started yet (starts at ${latest?.startedAt})`;
   } else if (exceedsMaxValidity.length > 0) {
     reason = `declaration expiry exceeds configured providerOutage.maxValidity`;
   } else if (unauthorized.length > 0) {
@@ -192,6 +207,7 @@ export function resolveProviderOutageDeclaration(input) {
     valid,
     expired,
     exceedsMaxValidity,
+    notYetStarted,
     wrongService,
     unauthorized,
     malformed,
@@ -382,7 +398,18 @@ function resolveExpiryAt({ expiresAt, expiresIn, now }) {
   if (!Number.isFinite(durationMs) || (durationMs ?? 0) <= 0) {
     throw new Error(`invalid --expires-in value: ${expiresIn}`);
   }
-  return new Date(now.getTime() + (durationMs ?? 0)).toISOString();
+  return new Date(now.getTime() + (durationMs ?? 0))
+    .toISOString()
+    .replace(/\.\d{3}Z$/, 'Z');
+}
+/**
+ * Strip the fractional-second component `Date.toISOString()` always emits,
+ * so a rendered marker's timestamp fields match the repository's
+ * second-precision operational-marker convention (review finding, PR
+ * #2350).
+ */
+function toSecondPrecisionIso(date) {
+  return date.toISOString().replace(/\.\d{3}Z$/, 'Z');
 }
 function readJsonFile(path) {
   try {
@@ -400,17 +427,23 @@ function parseOwnerRepo(value) {
   return { owner: match[1], name: match[2] };
 }
 function fetchIssueComments({ owner, repo, issueNumber }) {
-  const payload = ghText(
-    [
-      'api',
-      '--paginate',
-      `repos/${owner}/${repo}/issues/${issueNumber}/comments`,
-    ],
-    { timeout: DEFAULT_GH_PAGINATED_TIMEOUT_MS },
-  );
+  // #2320 review (Codex): plain `gh api --paginate` without `--jq` emits one
+  // JSON array per page, concatenated -- `JSON.parse` on that text throws
+  // once the declaration-target issue's comments span more than one page.
+  // `--jq '.[]'` flattens every page's array into one NDJSON stream first,
+  // matching external-check-waiver.mts's own paginated reads.
   try {
-    const parsed = JSON.parse(payload || '[]');
-    return Array.isArray(parsed) ? parsed : [];
+    const payload = ghText(
+      [
+        'api',
+        '--paginate',
+        '--jq',
+        '.[]',
+        `repos/${owner}/${repo}/issues/${issueNumber}/comments`,
+      ],
+      { timeout: DEFAULT_GH_PAGINATED_TIMEOUT_MS },
+    );
+    return parsePaginatedGhNdjson(payload);
   } catch {
     throw new Error(
       `could not read issue #${issueNumber} comments to resolve the provider outage declaration`,
@@ -517,24 +550,17 @@ export async function runProviderOutageDeclaration(options = {}) {
       'could not determine current GitHub user; ensure gh is authenticated',
     );
   }
-  const body =
-    args.mode === 'declare'
-      ? renderProviderOutageDeclarationComment({
-          actor,
-          service: args.service,
-          startedAt: now.toISOString(),
-          expiresAt: resolveExpiryAt({
-            expiresAt: args.expiresAt,
-            expiresIn: args.expiresIn,
-            now,
-          }),
-        })
-      : renderProviderOutageAdvancedComment({
-          actor,
-          prNumber: args.prNumber,
-          headSha: args.headSha,
-          declaredAt: now.toISOString(),
-        });
+  // #2320 review (Copilot): without this check, `--actor` can name an
+  // identity other than the authenticated `gh` user while `--apply` still
+  // posts under that claimed identity, bypassing the authority check this
+  // helper exists to enforce -- external-check-waiver.mts rejects the same
+  // mismatch for the same reason.
+  if (args.apply && args.actor && actor !== viewerLogin && viewerLogin) {
+    throw new Error(
+      `--actor ${args.actor} does not match the authenticated user ${viewerLogin}; omit --actor to use the authenticated identity`,
+    );
+  }
+  let body;
   if (args.mode === 'declare') {
     const authority = authorityOf(actor);
     if (!authority.known || !authority.authorized) {
@@ -542,10 +568,43 @@ export async function runProviderOutageDeclaration(options = {}) {
         `provider outage declaration blocked: ${actor} is not authorized under ${policy.ciGate.externalCheckWaivers.authorityPolicy}`,
       );
     }
+    const expiresAt = resolveExpiryAt({
+      expiresAt: args.expiresAt,
+      expiresIn: args.expiresIn,
+      now,
+    });
+    // #2320 review (Codex): the read-side maxValidity check in
+    // resolveProviderOutageDeclaration only rejects an already-posted
+    // overlong declaration; without this, `--declare --apply` can still
+    // post one that resolveProviderOutageDeclaration will always reject
+    // as `exceedsMaxValidity` and can therefore never legitimately relieve
+    // anything.
+    const startedAtIso = toSecondPrecisionIso(now);
+    const maxValidityMs =
+      parseIsoDurationToMs(policy.providerOutage.maxValidity) ??
+      parseIsoDurationToMs('PT24H') ??
+      0;
+    if (
+      new Date(expiresAt).getTime() - new Date(startedAtIso).getTime() >
+      maxValidityMs
+    ) {
+      throw new Error(
+        `provider outage declaration blocked: requested window exceeds configured providerOutage.maxValidity (${policy.providerOutage.maxValidity})`,
+      );
+    }
+    body = renderProviderOutageDeclarationComment({
+      actor,
+      service: args.service,
+      startedAt: startedAtIso,
+      expiresAt,
+    });
   } else {
     // --record-advanced: require an active declaration for the named
     // service to exist first -- this marker is evidence of an advancement
-    // already granted elsewhere, not a second authority gate.
+    // already granted elsewhere, not a second authority gate. `declaredAt`
+    // pins the record to the active declaration's own `startedAt` (#2320
+    // review, Codex), not the advancement moment, so a later declaration
+    // supersedes without invalidating an earlier advancement's record.
     const comments =
       options.comments ??
       fetchIssueComments({ owner, repo: name, issueNumber: targetIssue });
@@ -557,11 +616,17 @@ export async function runProviderOutageDeclaration(options = {}) {
       authorityOf,
       now,
     });
-    if (!resolution.active) {
+    if (!resolution.active || !resolution.declaration) {
       throw new Error(
         `record-advanced blocked: no active provider outage declaration (${resolution.reason})`,
       );
     }
+    body = renderProviderOutageAdvancedComment({
+      actor,
+      prNumber: args.prNumber,
+      headSha: args.headSha,
+      declaredAt: resolution.declaration.startedAt,
+    });
   }
   if (!args.apply) {
     process.stdout.write(`${body}\n`);

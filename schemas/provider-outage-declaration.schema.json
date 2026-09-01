@@ -32,6 +32,7 @@
     },
     "createdAt": {
       "type": "string",
+      "pattern": "^(none|\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?Z)$",
       "description": "The GitHub-assigned created_at of the comment carrying this marker, or \"none\" when unavailable. Used only to pick the most recently authored declaration among several; never itself a validity input."
     }
   }

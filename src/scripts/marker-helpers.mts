@@ -917,8 +917,8 @@ export function renderProviderOutageDeclarationComment(payload: {
 }): string {
   const actor = normalizeNonWhitespaceToken(payload?.actor);
   const service = normalizeExternalCheckWaiverField(payload?.service);
-  const startedAt = normalizeIsoTimestamp(payload?.startedAt);
-  const expiresAt = normalizeIsoTimestamp(payload?.expiresAt);
+  const startedAt = normalizeSecondPrecisionIsoTimestamp(payload?.startedAt);
+  const expiresAt = normalizeSecondPrecisionIsoTimestamp(payload?.expiresAt);
   if (!actor || !service || !startedAt || !expiresAt) {
     throw new Error('invalid provider outage declaration payload');
   }
@@ -949,8 +949,8 @@ export function parseProviderOutageDeclarationComment(
   const service = normalizeExternalCheckWaiverField(
     decodeExternalCheckWaiverField(match[2]),
   );
-  const startedAt = normalizeIsoTimestamp(match[3]);
-  const expiresAt = normalizeIsoTimestamp(match[4]);
+  const startedAt = normalizeSecondPrecisionIsoTimestamp(match[3]);
+  const expiresAt = normalizeSecondPrecisionIsoTimestamp(match[4]);
   if (!actor || !service || !startedAt || !expiresAt) {
     return null;
   }
@@ -980,7 +980,7 @@ export function renderProviderOutageAdvancedComment(payload: {
   const actor = normalizeNonWhitespaceToken(payload?.actor);
   const prNumber = normalizePositiveIntegerToken(payload?.prNumber);
   const headSha = normalizeNonWhitespaceToken(payload?.headSha).toLowerCase();
-  const declaredAt = normalizeIsoTimestamp(payload?.declaredAt);
+  const declaredAt = normalizeSecondPrecisionIsoTimestamp(payload?.declaredAt);
   if (
     !actor ||
     prNumber === null ||
@@ -1013,7 +1013,7 @@ export function parseProviderOutageAdvancedComment(
   }
   const actor = normalizeNonWhitespaceToken(match[1]);
   const prNumber = normalizePositiveIntegerToken(match[2]);
-  const declaredAt = normalizeIsoTimestamp(match[4]);
+  const declaredAt = normalizeSecondPrecisionIsoTimestamp(match[4]);
   if (!actor || prNumber === null || !declaredAt) {
     return null;
   }

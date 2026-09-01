@@ -91,6 +91,32 @@ test('renderProviderOutageDeclarationComment / parseProviderOutageDeclarationCom
   assert.equal(parsed?.createdAt, '2026-09-01T05:00:01Z');
 });
 
+test('renderProviderOutageDeclarationComment rejects a millisecond-precision timestamp (#2320 review)', () => {
+  assert.throws(
+    () =>
+      renderProviderOutageDeclarationComment({
+        actor: 'kurone-kito',
+        service: 'idd-advisory-convergence',
+        startedAt: '2026-09-01T05:00:00.123Z',
+        expiresAt: '2026-09-02T05:00:00Z',
+      }),
+    /invalid provider outage declaration payload/,
+  );
+});
+
+test('renderProviderOutageAdvancedComment rejects a millisecond-precision timestamp (#2320 review)', () => {
+  assert.throws(
+    () =>
+      renderProviderOutageAdvancedComment({
+        actor: 'kurone-kito',
+        prNumber: 2345,
+        headSha: 'a'.repeat(40),
+        declaredAt: '2026-09-01T05:00:00.000Z',
+      }),
+    /invalid provider outage advancement payload/,
+  );
+});
+
 test('renderProviderOutageAdvancedComment / parseProviderOutageAdvancedComment round-trip', () => {
   const body = renderProviderOutageAdvancedComment({
     actor: 'kurone-kito',
@@ -173,6 +199,55 @@ test('resolveProviderOutageDeclaration: expired case', () => {
   assert.equal(result.active, false);
   assert.match(result.reason, /expired/);
   assert.equal(result.expired.length, 1);
+});
+
+test('resolveProviderOutageDeclaration: a future-dated declaration is not active yet (#2320 review, Codex)', () => {
+  const result = resolveProviderOutageDeclaration({
+    declarationTargetConfigured: true,
+    comments: [
+      declarationComment({
+        startedAt: '2026-09-01T07:00:00Z', // after NOW (06:00:00Z)
+        expiresAt: '2026-09-02T05:00:00Z',
+        createdAt: '2026-09-01T05:59:00Z',
+      }),
+    ],
+    service: 'idd-advisory-convergence',
+    policy: basePolicy,
+    authorityOf: authorizedActor,
+    now: NOW,
+  });
+  assert.equal(result.active, false);
+  assert.match(result.reason, /has not started yet/);
+  assert.equal(result.notYetStarted.length, 1);
+  assert.equal(result.valid.length, 0);
+});
+
+test('resolveProviderOutageDeclaration: becomes active once its own startedAt is reached (#2320 review, Codex)', () => {
+  const comments = [
+    declarationComment({
+      startedAt: '2026-09-01T07:00:00Z',
+      expiresAt: '2026-09-02T05:00:00Z',
+      createdAt: '2026-09-01T05:59:00Z',
+    }),
+  ];
+  const beforeStart = resolveProviderOutageDeclaration({
+    declarationTargetConfigured: true,
+    comments,
+    service: 'idd-advisory-convergence',
+    policy: basePolicy,
+    authorityOf: authorizedActor,
+    now: new Date('2026-09-01T06:59:59Z'),
+  });
+  const atStart = resolveProviderOutageDeclaration({
+    declarationTargetConfigured: true,
+    comments,
+    service: 'idd-advisory-convergence',
+    policy: basePolicy,
+    authorityOf: authorizedActor,
+    now: new Date('2026-09-01T07:00:00Z'),
+  });
+  assert.equal(beforeStart.active, false);
+  assert.equal(atStart.active, true);
 });
 
 test('resolveProviderOutageDeclaration: malformed case', () => {
