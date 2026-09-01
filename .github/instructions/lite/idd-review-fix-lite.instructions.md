@@ -196,6 +196,11 @@ other GitHub side effect, confirm all of the following:
    fresh primary-bot re-review after every push. The per-HEAD
    `review-watermark` still invalidates on this push.
 10. Apply the pre-mutation guard immediately before this push.
+11. If this round's fix changes a claim the PR body's self-review
+    section makes (round count, a residual limitation, a scope
+    statement), update the PR body in the same push (`gh pr edit
+    {pr-number} --body-file <path>` or equivalent) — not just the
+    code/docs.
 
 ## E13 — Reply to feedback
 

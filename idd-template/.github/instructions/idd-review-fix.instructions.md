@@ -147,6 +147,12 @@ stays individual, and the
 [claim revalidation gate](idd-overview-core.instructions.md#claim-revalidation-gate)
 still runs immediately before push.
 
+**PR body sync.** If this round's fix changes a claim the PR body's
+self-review section makes (round count, a documented residual
+limitation, a scope statement), update the PR body in the same push
+(`gh pr edit {pr-number} --body-file <path>` or equivalent) — not
+just the code/docs.
+
 ## E13 — Reply to feedback
 
 For each Accepted PATH A item whose source is reviewer feedback (review
