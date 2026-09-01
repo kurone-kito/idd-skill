@@ -102,7 +102,15 @@ other GitHub side effect, confirm all of the following:
 ## E10 — Validate fixes with critique pass
 
 1. Run a critique pass to verify the E9 fixes address the root causes
-   and are correct.
+   and are correct. Also apply these lenses when they fit, composing
+   when both do: **Mutation / write-side** (the diff implements a
+   helper that mutates GitHub state, mutates git state, or performs a
+   merge) — Fail-closed inputs; Validate/execute scope parity;
+   Unsafe-output suppression; Schema strictness parity.
+   **Gate-mirroring** (the diff implements a helper that predicts,
+   mirrors, or pre-checks another gate's decision) — Validation-path
+   parity; Input completeness; Whole-identity comparison; Snapshot
+   identity; Point-in-time parity.
 2. If the critique pass reports zero issues, continue to E11.
 3. If it reports additional issues, fix them, commit atomically, and
    run E10 again.
