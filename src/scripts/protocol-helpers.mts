@@ -1714,13 +1714,17 @@ const DISPOSITION_REJECTED_PREFIX_RE = /^\*\*Rejected[.!:]?\*\*/;
 
 // #2249: loose "close but not exact" detector for `missingRegularComments[].hint`
 // (`MALFORMED_DISPOSITION_PREFIX_HINT`) -- deliberately laxer than the two
-// exact-match regexes above, matching the four literal prefixes a
+// exact-match regexes above, matching only the four literal prefixes a
 // near-miss reply typically starts with: bare `Accepted`/`Rejected`
 // (no bold markdown) or `**Accepted`/`**Rejected` (bold markdown present
 // but the marker still fails `isDispositionComment`, e.g. interior text
-// before the closing `**`). Always paired with `!isDispositionComment`
-// at each call site so an already-valid disposition never matches.
-const MALFORMED_DISPOSITION_PREFIX_RE = /^\*{0,2}(?:Accepted|Rejected)/;
+// before the closing `**`). The leading `**` is optional but must be
+// exactly zero or two chars (not one, e.g. `*Accepted`), and the
+// trailing `\b` stops a longer word like `Acceptedness` from matching --
+// Copilot review on PR #2383 caught both gaps in an earlier draft.
+// Always paired with `!isDispositionComment` at each call site so an
+// already-valid disposition never matches.
+const MALFORMED_DISPOSITION_PREFIX_RE = /^(?:\*\*)?(?:Accepted|Rejected)\b/;
 
 export function isDispositionComment(comment: {
   body?: string | null;

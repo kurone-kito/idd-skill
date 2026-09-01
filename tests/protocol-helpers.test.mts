@@ -606,3 +606,54 @@ test('disposition evidence does not hint an unrelated regular comment with no re
   assert.equal(summary.missingRegularCommentCount, 1);
   assert.equal(summary.missingRegularComments[0].hint, undefined);
 });
+
+// #2249, Copilot review on PR #2383: `MALFORMED_DISPOSITION_PREFIX_RE` must
+// not match a single-`*` near-miss (`*Accepted`, not a real bold-markdown
+// attempt) or a longer word starting with the same prefix (`Acceptedly`),
+// so the hint stays scoped to genuine near-miss disposition attempts.
+test('disposition evidence does not hint from a single-asterisk or longer-word near-miss', () => {
+  const summary = summarizeDispositionEvidenceForGate(
+    {
+      comments: [
+        {
+          id: 1,
+          createdAt: '2026-05-12T00:00:00Z',
+          body: 'I found a potential off-by-one in `foo.mts` at line 42 — the loop bound should be `<=` to include the final element.',
+          author: { login: 'chatgpt-codex-connector[bot]' },
+        },
+        {
+          id: 2,
+          createdAt: '2026-05-12T01:00:00Z',
+          // Single leading `*`, not the required zero or two -- not a
+          // real bold-markdown disposition attempt.
+          body: '*Accepted — looks correct.',
+          author: { login: 'idd-bot' },
+        },
+        {
+          id: 3,
+          createdAt: '2026-05-12T00:00:00Z',
+          body: 'A second, unrelated finding awaiting its own disposition.',
+          author: { login: 'chatgpt-codex-connector[bot]' },
+        },
+        {
+          id: 4,
+          createdAt: '2026-05-12T01:00:00Z',
+          // Starts with the literal word "Accepted" but continues into a
+          // longer word -- not a disposition attempt at all.
+          body: 'Acceptedly this needs more review before merging.',
+          author: { login: 'idd-bot' },
+        },
+      ],
+      threads: [],
+    },
+    {
+      iddAgentLogins: ['idd-bot'],
+      advisoryBotLogins: ['chatgpt-codex-connector[bot]'],
+    },
+  );
+
+  assert.equal(summary.missingRegularCommentCount, 2);
+  for (const comment of summary.missingRegularComments) {
+    assert.equal(comment.hint, undefined);
+  }
+});
