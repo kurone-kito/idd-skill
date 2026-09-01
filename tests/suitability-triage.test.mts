@@ -2589,14 +2589,14 @@ test('runCli: the branch-name merged-PR lookup is gated behind shouldCollectEvid
   );
 });
 
-test("runCli: the branch-name merged-PR lookup uses computeBranchName on the issue's own number and title (#2313)", () => {
+test("runCli: the branch-name merged-PR lookup uses computeBranchName on the issue's own number and title, and passes owner (#2313)", () => {
   const source = readFileSync(
     new URL('../src/scripts/suitability-triage.mts', import.meta.url),
     'utf8',
   );
   assert.match(
     source,
-    /fetchMergedPrByBranchName\(\s*repoRef,\s*computeBranchName\(issue\.number,\s*issue\.title\),?\s*\)/,
+    /fetchMergedPrByBranchName\(\s*repoRef,\s*computeBranchName\(issue\.number,\s*issue\.title\),\s*owner,?\s*\)/,
   );
 });
 

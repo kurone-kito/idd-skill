@@ -835,6 +835,24 @@ test('buildMergedPrByBranchArgs filters server-side to the exact head branch and
   assert.equal(fields.includes('mergedAt'), true);
 });
 
+test('buildMergedPrByBranchArgs requests headRepositoryOwner and a limit above 1, so a fork PR sharing the branch name can be filtered out (Copilot review finding, #2313)', () => {
+  // gh pr list --help documents that the "<owner>:<branch>" syntax is "not
+  // supported" for --head, so a bare branch name can also match a merged PR
+  // from a fork -- the caller needs headRepositoryOwner on every candidate
+  // (not just the first) to filter those out before treating a hit as
+  // high-confidence evidence.
+  const args = buildMergedPrByBranchArgs(
+    'kurone-kito/idd-skill',
+    'issue/2222-fix-onboard-prefer-existing-config-json',
+  );
+  const jsonIndex = args.indexOf('--json');
+  const fields = (args[jsonIndex + 1] ?? '').split(',');
+  assert.equal(fields.includes('headRepositoryOwner'), true);
+  const limitIndex = args.indexOf('--limit');
+  assert.notEqual(limitIndex, -1);
+  assert.equal(Number(args[limitIndex + 1]) > 1, true);
+});
+
 test('buildPrDetailArgs is read-only', () => {
   assertReadOnlyArgv(buildPrDetailArgs('kurone-kito/idd-skill', 1492));
 });

@@ -601,6 +601,17 @@ export function buildMergedPrListArgs(
  * head branch, so this is a single targeted lookup -- unlike
  * {@link buildMergedPrListArgs}'s bounded recent-window scan above, no
  * client-side iteration over unrelated merged PRs is needed.
+ *
+ * Requests `headRepositoryOwner` alongside the other fields (Copilot review
+ * finding on this PR) and raises `--limit` above 1: `gh pr list --head
+ * <branch>` (per `gh pr list --help`, the `"<owner>:<branch>" syntax` is
+ * "not supported") matches on head branch NAME alone, which can also return
+ * a merged PR from a FORK that happens to use the same branch name -- a
+ * `headRepositoryOwner` mismatch would otherwise misclassify an issue as a
+ * high-confidence duplicate even though the in-repo convention branch was
+ * never actually merged. The caller filters to entries whose
+ * `headRepositoryOwner.login` matches the repository owner before treating
+ * any result as a hit.
  */
 export function buildMergedPrByBranchArgs(
   repoRef: string,
@@ -616,9 +627,9 @@ export function buildMergedPrByBranchArgs(
     '--state',
     'merged',
     '--json',
-    'number,headRefName,mergedAt',
+    'number,headRefName,mergedAt,headRepositoryOwner',
     '--limit',
-    '1',
+    '10',
   ];
 }
 
