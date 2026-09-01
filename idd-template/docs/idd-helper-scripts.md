@@ -109,6 +109,11 @@ In the idd-skill source repository, the following optional helpers were adopted:
   [kurone-kito/idd-skill#1237](https://github.com/kurone-kito/idd-skill/issues/1237)).
   Source-repo internal helper; not distributed via the package-manager
   / ephemeral-npx profiles.
+- `scripts/idd-critique-delegate.mjs` for the C1 effective
+  `critiqueLoop.delegate` verdict: `usable`, `source`, `command`,
+  `mode`, and a machine-readable `reason` when unusable, delegating
+  entirely to the existing exported resolvers (referenced in
+  [kurone-kito/idd-skill#2329](https://github.com/kurone-kito/idd-skill/issues/2329))
 
 **Review & Merge Phase Helpers:**
 
@@ -2465,6 +2470,47 @@ same as `AW4`/`AW5`.
 - Fail closed: if execution fails, output is invalid JSON, or required
   fields are missing, discard helper output and apply written D4/E-phase
   branch-sync checks directly.
+
+### Effective C1 critique delegate
+
+- Preferred command when helper runtime is enabled:
+  `idd-critique-delegate [--policy <path>]`
+- Source repository equivalent:
+  `node scripts/idd-critique-delegate.mjs [--policy <path>]`
+- Output schema (stable fields):
+
+  ```json
+  {
+    "usable": true,
+    "source": "repository-local",
+    "command": "my-local-reviewer --diff",
+    "mode": "fallback",
+    "reason": null
+  }
+  ```
+
+- `source` values: `repository-local`, `user-global`, `none`
+- `reason` values (only when `usable` is `false`):
+  `repository-local-explicit-disable` (repo-local `critiqueLoop.delegate`
+  is the JSON `null` sentinel), `invalid-repository-local-delegate` (a
+  malformed repo-local value, which fails closed and never inherits a
+  user-global delegate), `not-configured` (absent at every layer)
+- `usable: true` always carries a non-null `command`/`mode` and a null
+  `reason`; `usable: false` always carries null `command`/`mode` and a
+  non-null `reason`
+- Resolution order matches
+  [User-global critique delegate default](idd-workflow.md#user-global-critique-delegate-default)
+  exactly: a configured, disabled (`null`), or malformed repository-local
+  `critiqueLoop.delegate` always wins outright and never inherits the
+  user-global layer; only when repository-local is entirely absent does
+  an optional `$XDG_CONFIG_HOME/idd-skill/config.json` (or
+  `$HOME/.config/idd-skill/config.json`) fragment apply
+- Deterministic and network-free; delegates entirely to the existing
+  exported resolvers (`resolveEffectiveCritiqueLoopDelegateFromEnv` in
+  `idd-config.mts`, `resolveEffectiveCritiqueLoopDelegate` /
+  `parseCritiqueLoopDelegate` in `policy-helpers.mts`) with no
+  reimplemented validation rule (referenced in
+  [kurone-kito/idd-skill#2329](https://github.com/kurone-kito/idd-skill/issues/2329))
 
 ### S2 quiet-window evidence
 
