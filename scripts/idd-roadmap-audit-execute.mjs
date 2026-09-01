@@ -16,6 +16,13 @@
 // with an open / unresolved / inaccessible / nested-roadmap descendant, a
 // closed child with an open linked PR, a traversal cycle, or no explicit child
 // work is NEVER closed.
+import { execFileSync } from 'node:child_process';
+import { existsSync, readFileSync } from 'node:fs';
+import {
+  isAbsolute,
+  join as joinPath,
+  resolve as resolvePath,
+} from 'node:path';
 import { parseCliArgs } from './cli-args.mjs';
 import {
   buildIssueLoader,
@@ -502,6 +509,375 @@ export function explainRoadmapClaimReason(reason) {
   return CLAIM_REASON_EXPLANATIONS[reason] ?? UNKNOWN_CLAIM_REASON_EXPLANATION;
 }
 /**
+ * Keep repository discovery tied to the requested `cwd` rather than to
+ * ambient Git overrides inherited from a hook, wrapper, or parent process
+ * (#2225, review finding). Without this, an inherited `GIT_DIR`/
+ * `GIT_WORK_TREE`/`GIT_INDEX_FILE`/`GIT_COMMON_DIR` could silently redirect
+ * every check onto the wrong repository, defeating the safety gate
+ * entirely. A local, file-scoped port of claim-lock.mts's
+ * `sanitizedGitEnvironment` — not imported because that function is not
+ * exported there, and claim-lock.mts is outside this issue's
+ * candidate-files list.
+ */
+function sanitizedGitEnvironment() {
+  const env = { ...process.env };
+  for (const key of Object.keys(env)) {
+    if (key.startsWith('GIT_CONFIG')) {
+      delete env[key];
+    }
+  }
+  delete env.GIT_DIR;
+  delete env.GIT_INDEX_FILE;
+  delete env.GIT_WORK_TREE;
+  delete env.GIT_COMMON_DIR;
+  delete env.GIT_OBJECT_DIRECTORY;
+  return env;
+}
+/**
+ * Run `git <argv>` in `cwd`, capturing stdout/stderr without throwing
+ * (#2225). A local, file-scoped port of idd-doctor.mts's `runCommand` —
+ * not extracted to a shared module because idd-doctor.mts is outside this
+ * issue's candidate-files list.
+ */
+function runLocalGitCommand(argv, cwd) {
+  try {
+    const stdout = execFileSync('git', argv, {
+      cwd,
+      env: sanitizedGitEnvironment(),
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    return { ok: true, stdout, stderr: '' };
+  } catch (err) {
+    // `encoding: 'utf8'` above decodes the happy path, but a spawn-level
+    // failure (signal, maxBuffer) can still leave stdout/stderr as a Buffer
+    // on the thrown error — coerce via toString() (mirrors idd-doctor.mts's
+    // runCommand) rather than discarding non-string output as empty.
+    const failure = err;
+    // A failure BEFORE git could even emit stderr (e.g. ENOENT for a
+    // missing `git` binary) leaves stdout/stderr empty (review finding,
+    // #2225): fall back to the thrown error's own message so
+    // unreadableReason stays actionable instead of a generic "failed".
+    const stderr =
+      failure.stderr?.toString?.() ||
+      (typeof failure.message === 'string' ? failure.message : '');
+    return {
+      ok: false,
+      stdout: failure.stdout?.toString?.() ?? '',
+      stderr,
+    };
+  }
+}
+/**
+ * Parse `git worktree list --porcelain -z` output into structured entries
+ * (#2225, AC3). Porcelain is the only enumeration this repo can rely on to
+ * surface a detached worktree at all: a branch-name grep (the previous
+ * approach) has nothing to match against, since a detached worktree carries
+ * no branch. `-z` (NUL-delimited fields, a record terminated by an extra
+ * NUL) is required, not merely accepted (review finding, #2225): the plain
+ * newline-delimited form has no way to distinguish a literal newline inside
+ * a worktree path from the blank line that separates records, so a path
+ * containing `\n\n` would silently corrupt the stanza split and hide
+ * exactly the branch this hardening exists to protect — empirically
+ * reproduced with a real dirty linked worktree at such a path. A NUL byte
+ * cannot appear in a path at all, so this ambiguity does not exist for `-z`.
+ * Malformed or empty input yields an empty array rather than throwing.
+ */
+export function parseWorktreeListPorcelain(output) {
+  const entries = [];
+  for (const stanza of output.split('\0\0')) {
+    const lines = stanza.split('\0').filter((line) => line.length > 0);
+    const worktreeLine = lines.find((line) => line.startsWith('worktree '));
+    if (!worktreeLine) {
+      continue;
+    }
+    const entry = {
+      // No .trim() here (review finding, #2225): -z's NUL delimiter already
+      // gives the field's exact bytes, and a path can legitimately end in
+      // whitespace — trimming would silently point every downstream check
+      // at a directory that does not exist.
+      path: worktreeLine.slice('worktree '.length),
+      headSha: null,
+      branchRef: null,
+      bare: false,
+      detached: false,
+      locked: false,
+      lockReason: null,
+      prunable: false,
+      prunableReason: null,
+    };
+    for (const line of lines) {
+      if (line.startsWith('HEAD ')) {
+        entry.headSha = line.slice('HEAD '.length).trim();
+      } else if (line.startsWith('branch ')) {
+        entry.branchRef = line.slice('branch '.length).trim();
+      } else if (line === 'bare') {
+        entry.bare = true;
+      } else if (line === 'detached') {
+        entry.detached = true;
+      } else if (line === 'locked' || line.startsWith('locked ')) {
+        entry.locked = true;
+        const reason = line.slice('locked'.length).trim();
+        entry.lockReason = reason.length > 0 ? reason : null;
+      } else if (line === 'prunable' || line.startsWith('prunable ')) {
+        entry.prunable = true;
+        const reason = line.slice('prunable'.length).trim();
+        entry.prunableReason = reason.length > 0 ? reason : null;
+      }
+    }
+    entries.push(entry);
+  }
+  return entries;
+}
+/** `refs/heads/main` -> `main`; a non-branch ref passes through unchanged. */
+function branchNameFromRef(ref) {
+  return ref.startsWith('refs/heads/') ? ref.slice('refs/heads/'.length) : ref;
+}
+/**
+ * Find every worktree entry whose checked-out branch content-exactly
+ * matches `branchName` (#2225, AC1). Content-exact, not identity-only: this
+ * compares the porcelain `branch` ref itself — what is actually checked
+ * out — rather than trusting that a claim record's own `branch` field
+ * (which may be released or stale) says the branch is unowned. Git
+ * normally refuses to check the same branch out in a second worktree, but
+ * `git checkout --ignore-other-worktrees` (documented in `git checkout -h`)
+ * can force it, so this returns every match rather than only the first —
+ * a caller that only checks the first could see a clean worktree while a
+ * second one silently sits broken. A detached entry has no `branchRef` and
+ * can never match here by construction.
+ */
+export function findWorktreeEntriesForBranch(entries, branchName) {
+  return entries.filter(
+    (entry) =>
+      entry.branchRef !== null &&
+      branchNameFromRef(entry.branchRef) === branchName,
+  );
+}
+/** The first entry {@link findWorktreeEntriesForBranch} would return, or null. */
+export function findWorktreeEntryForBranch(entries, branchName) {
+  return findWorktreeEntriesForBranch(entries, branchName)[0] ?? null;
+}
+/**
+ * True when a rebase sequencer directory exists for `worktreePath` (#2225,
+ * AC4), resolved via `git -C <worktreePath> rev-parse --git-path <name>`
+ * rather than a hardcoded `.git/rebase-merge` / `.git/rebase-apply` path. A
+ * linked worktree's `.git` is a pointer FILE, not a directory: the real
+ * sequencer state lives under the primary repo's
+ * `.git/worktrees/<name>/` admin directory, and only `--git-path` resolves
+ * that correctly for a worktree other than the primary one.
+ */
+function hasInProgressRebase(worktreePath, resolveGitPath, pathExists) {
+  for (const name of ['rebase-merge', 'rebase-apply']) {
+    const result = resolveGitPath(worktreePath, name);
+    if (!result.ok) {
+      continue;
+    }
+    const resolved = result.stdout.trim();
+    if (resolved.length === 0) {
+      continue;
+    }
+    const absolute = isAbsolute(resolved)
+      ? resolved
+      : resolvePath(worktreePath, resolved);
+    if (pathExists(absolute)) {
+      return true;
+    }
+  }
+  return false;
+}
+/**
+ * Resolve the ORIGINAL branch a detached, mid-rebase worktree was checked
+ * out on (#2225, AC4). `git rebase` detaches HEAD while it sequences — a
+ * mid-rebase worktree reports `detached` in `git worktree list --porcelain`,
+ * not its real branch (empirically confirmed) — so
+ * {@link findWorktreeEntryForBranch} alone can never match it. The rebase
+ * sequencer's own `head-name` file records the original ref for exactly
+ * this reason (`git rebase --abort` restores it from there), so this reads
+ * it directly via the same resolved `--git-path` used by
+ * {@link hasInProgressRebase}.
+ */
+function resolveDetachedRebaseBranch(worktreePath, inputs) {
+  for (const name of ['rebase-merge', 'rebase-apply']) {
+    const result = inputs.resolveGitPath(worktreePath, name);
+    if (!result.ok) {
+      continue;
+    }
+    const resolved = result.stdout.trim();
+    if (resolved.length === 0) {
+      continue;
+    }
+    const absolute = isAbsolute(resolved)
+      ? resolved
+      : resolvePath(worktreePath, resolved);
+    if (!inputs.pathExists(absolute)) {
+      continue;
+    }
+    const headName = inputs.readFile(joinPath(absolute, 'head-name'));
+    if (headName && headName.trim().length > 0) {
+      return branchNameFromRef(headName.trim());
+    }
+  }
+  return null;
+}
+/**
+ * Find every DETACHED worktree entry whose rebase sequencer records
+ * `branchName` as the branch being rebased (#2225, AC4). See
+ * {@link resolveDetachedRebaseBranch} for why a plain branch-ref match on a
+ * mid-rebase worktree always fails. Plural for the same reason as
+ * {@link findWorktreeEntriesForBranch}: more than one worktree can end up
+ * mid-rebase against the same original branch.
+ */
+function findDetachedRebaseEntriesForBranch(entries, branchName, inputs) {
+  return entries.filter(
+    (entry) =>
+      entry.detached &&
+      resolveDetachedRebaseBranch(entry.path, inputs) === branchName,
+  );
+}
+/**
+ * Evaluate one matched worktree entry for the broken-reason signals
+ * {@link evaluateLocalCoordinationState} reports (#2225): porcelain
+ * `locked`/`prunable` flags first (a locked/prunable entry's directory may
+ * not even exist on disk — do not probe further), then uncommitted content
+ * and an in-progress rebase.
+ */
+function evaluateMatchedWorktreeEntry(entry, inputs) {
+  const reasons = [];
+  if (entry.locked) {
+    reasons.push(`locked${entry.lockReason ? `: ${entry.lockReason}` : ''}`);
+  }
+  if (entry.prunable) {
+    reasons.push(
+      `prunable${entry.prunableReason ? `: ${entry.prunableReason}` : ''}`,
+    );
+  }
+  if (reasons.length === 0) {
+    const status = inputs.statusPorcelain(entry.path);
+    if (!status.ok) {
+      reasons.push('working tree status could not be read');
+    } else if (status.stdout.trim().length > 0) {
+      reasons.push('uncommitted content present');
+    }
+    if (
+      hasInProgressRebase(entry.path, inputs.resolveGitPath, inputs.pathExists)
+    ) {
+      reasons.push('rebase in progress');
+    }
+  }
+  return reasons;
+}
+/**
+ * Evaluate whether `branchName`'s local worktree state is safe to treat as
+ * reusable/reclaimable (#2225). `presence: 'absent'` — no local worktree at
+ * all — is the expected common case per the instructions text quoted above,
+ * not an error, and is treated identically to `unreadable: true` (git
+ * missing, not a repository, or any other enumeration failure): both fail
+ * OPEN, because the hazard these checks exist to catch is leftover LOCAL
+ * content, which cannot exist if there is no local state to read. Only a
+ * POSITIVELY confirmed unsafe worktree — dirty, locked, prunable, or
+ * mid-rebase — reports `present-broken`. Once a worktree is matched by
+ * branch, a failure to read ITS status is treated as broken rather than
+ * unreadable: unlike the top-level enumeration failure, a positively
+ * identified worktree that suddenly cannot be probed is exactly the
+ * ambiguous case this hardening exists to catch, so it fails closed. Every
+ * worktree matching `branchName` is evaluated, not just the first (#2225,
+ * P2 review finding): `git checkout --ignore-other-worktrees` can check the
+ * same branch out in more than one worktree, and a clean first match must
+ * not hide a broken second one. Pure: every git read is injected.
+ */
+export function evaluateLocalCoordinationState(branchName, inputs) {
+  const listing = inputs.listWorktrees();
+  if (!listing.ok) {
+    return {
+      presence: 'absent',
+      path: null,
+      brokenReasons: [],
+      detachedWorktreePaths: [],
+      unreadable: true,
+      unreadableReason:
+        listing.stderr || 'git worktree list --porcelain failed',
+    };
+  }
+  const entries = parseWorktreeListPorcelain(listing.stdout);
+  const matchedEntries = [
+    ...findWorktreeEntriesForBranch(entries, branchName),
+    ...findDetachedRebaseEntriesForBranch(entries, branchName, inputs),
+  ];
+  const matchedPaths = new Set(matchedEntries.map((entry) => entry.path));
+  // Every detached entry recovered via its rebase sequencer above (AC4) IS
+  // a matched worktree for this branch, not a mystery unrelated one —
+  // exclude matched paths from the generic informational list so each is
+  // reported exactly once, as a matched (and, via the checks below,
+  // possibly broken) worktree.
+  const detachedWorktreePaths = entries
+    .filter((entry) => entry.detached && !matchedPaths.has(entry.path))
+    .map((entry) => entry.path);
+  if (matchedEntries.length === 0) {
+    return {
+      presence: 'absent',
+      path: null,
+      brokenReasons: [],
+      detachedWorktreePaths,
+      unreadable: false,
+      unreadableReason: null,
+    };
+  }
+  const brokenReasons = [];
+  matchedEntries.forEach((entry, index) => {
+    const prefix = index > 0 ? `at ${entry.path}: ` : '';
+    for (const reason of evaluateMatchedWorktreeEntry(entry, inputs)) {
+      brokenReasons.push(`${prefix}${reason}`);
+    }
+  });
+  return {
+    presence: brokenReasons.length > 0 ? 'present-broken' : 'present-clean',
+    path: matchedEntries[0].path,
+    brokenReasons,
+    detachedWorktreePaths,
+    unreadable: false,
+    unreadableReason: null,
+  };
+}
+/**
+ * Production {@link LocalCoordinationInputs}: local git shell-outs scoped to
+ * `cwd` (#2225). Exported so tests can exercise the real git-backed wiring
+ * (env sanitization, untracked-file handling) against a throwaway
+ * repository, not just a hand-rolled duplicate of it.
+ */
+export function createLocalCoordinationInputs(cwd) {
+  return {
+    listWorktrees: () =>
+      runLocalGitCommand(['worktree', 'list', '--porcelain', '-z'], cwd),
+    // --untracked-files=all overrides a repo/global status.showUntrackedFiles
+    // config, and --ignore-submodules=none overrides diff.ignoreSubmodules
+    // (both review findings, #2225): without them, `status.showUntrackedFiles
+    // = no` would hide an untracked-only leftover, and
+    // `diff.ignoreSubmodules = all` would hide a dirty submodule — either
+    // way silently weakening this exact safety gate through user
+    // configuration this tool never chose.
+    statusPorcelain: (worktreePath) =>
+      runLocalGitCommand(
+        [
+          'status',
+          '--porcelain',
+          '--untracked-files=all',
+          '--ignore-submodules=none',
+        ],
+        worktreePath,
+      ),
+    resolveGitPath: (worktreePath, name) =>
+      runLocalGitCommand(['rev-parse', '--git-path', name], worktreePath),
+    pathExists: (path) => existsSync(path),
+    readFile: (path) => {
+      try {
+        return readFileSync(path, 'utf8');
+      } catch {
+        return null;
+      }
+    },
+  };
+}
+/**
  * Trailing caveat appended to a claim-not-owned `result` message when the
  * production viewer-login lookup failed (#1396). Empty string when the
  * lookup succeeded (or was never attempted, e.g. injected test deps), so the
@@ -551,6 +927,36 @@ export function safeHasTrustedCompletionEvidence(check) {
   } catch {
     return false;
   }
+}
+/**
+ * Apply the local coordination-state gate (#2225) at one point in the apply
+ * sequence: populate `verdict.localCoordinationNote` (and, when unsafe,
+ * `verdict.result` too), and report whether the apply must stop here.
+ * Called at every point claim ownership is re-validated below — the early
+ * check, immediately after the potentially long graph re-fetch, and
+ * immediately before the close — because local state is not immutable
+ * within a single run any more than claim ownership is: another local
+ * process can dirty, lock, prune, or begin rebasing the matched worktree
+ * while this run is still in flight (#2225, P2 review finding).
+ */
+function applyLocalCoordinationGate(resolvedDeps, branchName, verdict) {
+  if (!resolvedDeps.inspectLocalCoordinationState) {
+    return false;
+  }
+  const localState = resolvedDeps.inspectLocalCoordinationState(branchName);
+  if (localState.presence === 'present-broken') {
+    verdict.localCoordinationNote = `branch "${branchName}" has a local worktree at ${localState.path} that is not safe to treat as reusable (${localState.brokenReasons.join(', ')})`;
+    verdict.result = `local coordination state unsafe (${localState.brokenReasons.join(', ')}); no mutation`;
+    return true;
+  }
+  if (localState.unreadable) {
+    verdict.localCoordinationNote = `local coordination state unreadable (${localState.unreadableReason ?? 'unknown reason'}); proceeding`;
+  } else if (localState.presence === 'present-clean') {
+    verdict.localCoordinationNote = `branch "${branchName}" has a clean local worktree at ${localState.path}`;
+  } else if (localState.detachedWorktreePaths.length > 0) {
+    verdict.localCoordinationNote = `${localState.detachedWorktreePaths.length} detached local worktree(s) present (unrelated to this branch by definition): ${localState.detachedWorktreePaths.join(', ')}`;
+  }
+  return false;
 }
 /**
  * Build the A1.5 verdict and, under `--apply`, execute the audit. The dry-run
@@ -673,6 +1079,20 @@ export async function runRoadmapAuditExecute(argv, deps) {
     verdict.result = `claim not owned on re-validation (reason="${earlyClaim.reason}": ${explainRoadmapClaimReason(earlyClaim.reason)}); no mutation${viewerLoginUnavailableCaveat(resolvedDeps.viewerLoginUnavailable)}`;
     return { verdict, exitCode: 1 };
   }
+  // Local worktree/branch safety (#2225): a released/stale claim record
+  // proves nothing about what is actually checked out locally. Re-checked
+  // again below, after the graph re-fetch and immediately before the close
+  // — see applyLocalCoordinationGate's doc comment for why a single early
+  // check alone would leave a TOCTOU gap.
+  if (
+    applyLocalCoordinationGate(
+      resolvedDeps,
+      earlyClaim.activeClaim.branch,
+      verdict,
+    )
+  ) {
+    return { verdict, exitCode: 1 };
+  }
   // Re-fetch the roadmap + child state and confirm the audit input still
   // holds; a roadmap that gained an open / unresolved / nested-roadmap /
   // open-linked-PR descendant between the first read and now must NEVER be
@@ -706,6 +1126,15 @@ export async function runRoadmapAuditExecute(argv, deps) {
     verdict.result = `claim not owned immediately before mutation (reason="${claim.reason}": ${explainRoadmapClaimReason(claim.reason)}); no mutation${viewerLoginUnavailableCaveat(resolvedDeps.viewerLoginUnavailable)}`;
     return { verdict, exitCode: 1 };
   }
+  // Re-check local state too: the graph re-fetch just above can span many
+  // API calls, during which another local process can dirty, lock, prune,
+  // or begin rebasing the matched worktree just as easily as another
+  // session can take over the claim.
+  if (
+    applyLocalCoordinationGate(resolvedDeps, claim.activeClaim.branch, verdict)
+  ) {
+    return { verdict, exitCode: 1 };
+  }
   // Post the evidence comment (non-destructive), THEN re-validate ownership one
   // final time immediately before the CLOSE: a takeover landing in the
   // comment→close gap must not let us close under a claim we no longer own. An
@@ -723,6 +1152,18 @@ export async function runRoadmapAuditExecute(argv, deps) {
   });
   if (!preCloseClaim.owned) {
     verdict.result = `claim lost in the comment→close gap (reason="${preCloseClaim.reason}": ${explainRoadmapClaimReason(preCloseClaim.reason)}); evidence comment posted but roadmap NOT closed${viewerLoginUnavailableCaveat(resolvedDeps.viewerLoginUnavailable)}`;
+    return { verdict, exitCode: 1 };
+  }
+  // One last local-state check, immediately before the close itself, for
+  // the same comment→close gap the claim re-validation just above guards.
+  if (
+    applyLocalCoordinationGate(
+      resolvedDeps,
+      preCloseClaim.activeClaim.branch,
+      verdict,
+    )
+  ) {
+    verdict.result = `${verdict.result} (evidence comment posted but roadmap NOT closed)`;
     return { verdict, exitCode: 1 };
   }
   // Ownership held through the comment: close, then release using the last
@@ -906,6 +1347,11 @@ function createProductionDeps(args) {
     // Honor a caller-supplied --now (deterministic staleness + release
     // timestamps for tests / replays); fall back to the wall clock.
     now: () => args.now || new Date().toISOString(),
+    inspectLocalCoordinationState: (branchName) =>
+      evaluateLocalCoordinationState(
+        branchName,
+        createLocalCoordinationInputs(process.cwd()),
+      ),
   };
 }
 /**
