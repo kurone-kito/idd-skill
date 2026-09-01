@@ -47,11 +47,14 @@ export interface UsageJob {
 }
 
 /** Per-workflow aggregate: run count (including runs with no completed
- * job yet), completed-job count, summed job duration (raw wall-clock),
- * summed billed minutes (each job rounded up to the whole minute before
- * summing -- GitHub's actual billing unit, distinct from the wall-clock
- * total), and a run-count breakdown by triggering event (`pull_request`,
- * `pull_request_review`, `pull_request_review_comment`, ...). */
+ * job yet), completed-job count, summed job duration (aggregate runner
+ * time -- each job's own elapsed span summed together, **not** wall-clock:
+ * parallel or overlapping jobs, such as a matrix strategy, each count in
+ * full even though they ran concurrently), summed billed minutes (each
+ * job rounded up to the whole minute before summing -- GitHub's actual
+ * billing unit), and a run-count breakdown by triggering event
+ * (`pull_request`, `pull_request_review`, `pull_request_review_comment`,
+ * ...). */
 export interface WorkflowUsageRow {
   workflowName: string;
   runCount: number;
@@ -239,7 +242,7 @@ function formatDuration(ms: number): string {
 
 export function renderTable(report: ActionsUsageReport): string {
   const lines = [
-    '| Workflow | Runs | Jobs | Duration | Billed |',
+    '| Workflow | Runs | Jobs | Runner time | Billed |',
     '| --- | --- | --- | --- | --- |',
     ...report.workflows.map(
       (row) =>
@@ -250,7 +253,7 @@ export function renderTable(report: ActionsUsageReport): string {
     '',
     `Total: ${report.runCount} runs, ${report.jobCount} jobs, ${formatDuration(
       report.totalDurationMs,
-    )} wall-clock, ${report.totalBilledMinutes} billed minute(s).`,
+    )} runner time, ${report.totalBilledMinutes} billed minute(s).`,
   ];
   return lines.join('\n');
 }

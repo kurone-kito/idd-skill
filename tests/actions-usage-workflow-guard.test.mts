@@ -66,6 +66,18 @@ function reusableWorkflowCallTarget(text: string): string | null {
   return match ? match[1] : null;
 }
 
+/** Every top-level job id declared under `text`'s `jobs:` key (2-space
+ * indented `<id>:` lines). Used to verify a "pure reusable-workflow
+ * caller" claim structurally: calling a reusable workflow inherits its
+ * concurrency only for *that* job, so a sibling job in the same
+ * workflow file would keep running uncancelled. */
+function jobIds(text: string): string[] {
+  const start = text.indexOf('\njobs:');
+  assert.ok(start !== -1, 'jobs: block not found');
+  const body = text.slice(start + '\njobs:'.length);
+  return [...body.matchAll(/^ {2}([\w-]+):$/gm)].map((m) => m[1]);
+}
+
 /** Extracts one job's indented body -- the lines from `^  {jobId}:$` up to
  * (but not including) the next 2-space-indented sibling key, or end of
  * file. */
@@ -180,6 +192,18 @@ test('every pull_request-triggering workflow has working concurrency cancellatio
         `${file}: must declare an effective cancel-in-progress concurrency setting, or be a pure reusable-workflow caller that inherits one`,
       );
     }
+    // The inherited concurrency only cancels *that* job -- a sibling job
+    // in the same workflow file would keep running uncancelled, so the
+    // exception applies only when the reusable-workflow call is this
+    // file's sole job.
+    const ids = jobIds(text);
+    assert.equal(
+      ids.length,
+      1,
+      `${file}: calls ${calledFile} as a reusable workflow, but declares ${ids.length} jobs (${ids.join(
+        ', ',
+      )}) -- inherited concurrency only covers the reusable-workflow job itself, so every sibling job needs its own effective cancel-in-progress`,
+    );
     const calledText = readWorkflow(calledFile);
     assert.ok(
       hasEffectiveCancelInProgress(calledText),

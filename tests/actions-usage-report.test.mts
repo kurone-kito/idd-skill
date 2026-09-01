@@ -113,6 +113,6 @@ test('renderTable: renders one row per workflow plus a totals line', () => {
   );
   assert.match(
     table,
-    /Total: 5 runs, 4 jobs, 3m15s wall-clock, 5 billed minute\(s\)\./,
+    /Total: 5 runs, 4 jobs, 3m15s runner time, 5 billed minute\(s\)\./,
   );
 });

@@ -166,14 +166,14 @@ function formatDuration(ms) {
 }
 export function renderTable(report) {
   const lines = [
-    '| Workflow | Runs | Jobs | Duration | Billed |',
+    '| Workflow | Runs | Jobs | Runner time | Billed |',
     '| --- | --- | --- | --- | --- |',
     ...report.workflows.map(
       (row) =>
         `| ${row.workflowName} | ${row.runCount} | ${row.jobCount} | ${formatDuration(row.totalDurationMs)} | ${row.totalBilledMinutes}m |`,
     ),
     '',
-    `Total: ${report.runCount} runs, ${report.jobCount} jobs, ${formatDuration(report.totalDurationMs)} wall-clock, ${report.totalBilledMinutes} billed minute(s).`,
+    `Total: ${report.runCount} runs, ${report.jobCount} jobs, ${formatDuration(report.totalDurationMs)} runner time, ${report.totalBilledMinutes} billed minute(s).`,
   ];
   return lines.join('\n');
 }
