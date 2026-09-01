@@ -170,6 +170,13 @@ AW3 inputs:
   `<!-- advisory-wait: … -->` for current `PR_HEAD_SHA` (empty if none).
 - `REQUEST_MARKER_COUNT` — count of trusted `advisory-wait` markers
   (excludes recovery markers).
+- `SAME_HEAD_REQUEST_MARKER_PRESENT` (`#2327`) — `true` only when a
+  trusted marker for current `PR_HEAD_SHA` is specifically the plain
+  request form (`advisory-wait:`), excluding `advisory-wait-recovery:`.
+  Distinct from `EARLIEST_SAME_HEAD_AT`'s presence (which a
+  recovery-only marker also satisfies) and from `REQUEST_MARKER_COUNT`
+  (which is not head-scoped) — `AW3-S`'s non-pending entry needs this
+  narrower, head-scoped, request-only signal specifically.
 
 See [shell fallback AW2](../../docs/idd-advisory-wait-shell-fallback.md#aw2)
 for commands.
@@ -247,11 +254,14 @@ unchanged; `"cap-exhausted"` → do **not** remove or re-request, handle
 like `CAP_EXHAUSTED` (`CAP_EXHAUSTED_ROUTE`); `"attempt"` → run the
 cycle below. Without helper runtime, derive the same decision from
 AW1-AW2 plus the terminal contract's remaining budget (trusted bound
-`advisory-wait-recovery:` markers only). The non-pending entry reuses
-`SETTLED_WINDOW_MINUTES` as its re-check budget (no new config value);
-before it elapses the classifier stays
-`"not-applicable"`/`recheck-budget-unspent` — ordinary lag, not
-failure.
+`advisory-wait-recovery:` markers only). For the non-pending entry,
+`AW2`'s `SAME_HEAD_REQUEST_MARKER_PRESENT` is required — a same-head
+marker that is only the recovery form must never itself satisfy this
+check (a prior cycle's own marker is not proof a request was
+requested). The non-pending entry reuses `SETTLED_WINDOW_MINUTES` as
+its re-check budget (no new config value); before it elapses the
+classifier stays `"not-applicable"`/`recheck-budget-unspent` —
+ordinary lag, not failure.
 
 **Bounded cycle** (only when `"attempt"`). Before each mutating step,
 re-verify the active claim
