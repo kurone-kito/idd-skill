@@ -127,7 +127,7 @@ This section's rebase only applies **before the branch's first push**.
        re-run the helper after a short wait, up to 3 attempts; only a
        result still `"recheck"` after that budget falls through to stop
        per the condition above.
-     - Any other value (`"merge-main"`, `"policy-required-update"`,
+     - Any other value (`"merge-base"`, `"policy-required-update"`,
        `"force-push-exception"`, `"hold-unknown"`, or the helper is
        unavailable, fails, or disagrees with live GitHub state): stop
        per the condition above — this needs either the merge-based

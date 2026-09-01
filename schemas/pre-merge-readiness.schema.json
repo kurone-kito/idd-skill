@@ -1609,6 +1609,31 @@
       "description": "#2323: the caller-precomputed resolveLocalValidationEvidence result (local-validation-evidence.mts), reported verbatim. Omitted entirely when the caller does not pass it. Purely informational -- computePreMergeReadinessBlockers has no reference to this field, so it can never remove or downgrade a required-check blocker; an unavailable required check stays a blocker regardless of this field's contents.",
       "additionalProperties": true
     },
+    "developmentBranchTarget": {
+      "type": "object",
+      "description": "#2272: the caller-precomputed resolveEffectiveDevelopmentBranch result (policy-helpers.mts) paired with the live PR baseRefName, reported verbatim. Omitted entirely when the caller does not pass it. Unlike localValidationEvidence above, this DOES feed computePreMergeReadinessBlockers: an invalid/unavailable status, or a branch that differs from baseRefName, adds a development-branch-target blocker.",
+      "required": ["status", "baseRefName"],
+      "additionalProperties": false,
+      "properties": {
+        "status": {
+          "type": "string",
+          "description": "'configured' (an explicit developmentBranch policy value) or 'default' (policy absent, live repository default branch used) never block; 'invalid' (malformed policy value) or 'unavailable' (policy absent and the live default branch could not be read) always block.",
+          "enum": ["configured", "default", "invalid", "unavailable"]
+        },
+        "branch": {
+          "type": "string",
+          "description": "Present when status is 'configured' or 'default'."
+        },
+        "reason": {
+          "type": "string",
+          "description": "Present when status is 'invalid'."
+        },
+        "baseRefName": {
+          "type": "string",
+          "description": "The PR's live base branch, read alongside the same headRefOid/baseRefName pr view fetch this report already performs."
+        }
+      }
+    },
     "ready": {
       "description": "Strict merge-gate rollup: true only when blockers is empty. Does NOT apply the dispositionEvidence.soleCauseAckOnlyPostDisposition override (a separate flag the F2 checklist layers on top).",
       "type": "boolean"

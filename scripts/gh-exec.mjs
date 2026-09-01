@@ -91,6 +91,25 @@ export function safeGhText(args, options = {}) {
   }
 }
 /**
+ * Live GitHub default branch for `{owner}/{repo}` (#2272), via `gh api
+ * repos/{owner}/{repo}` and the `default_branch` field. Extracted here so
+ * `pre-merge-readiness.mts`, `ci-wait-state.mts`, `branch-conflict-state.mts`,
+ * and `idd-merge-execute.mts` share one reader instead of four near-identical
+ * `gh api` calls, matching this module's existing role as the shared `gh`
+ * CLI layer. Returns `null` on any failure (unreadable, unauthenticated,
+ * missing repo) so callers treat the branch as undetermined rather than
+ * throwing -- distinct from `idd-onboard.mts`'s own `readGithubDefaultBranch`,
+ * which derives `owner`/`repo` from a local checkout's `remote.origin.url`
+ * instead of accepting them directly.
+ */
+export function readGithubRepoDefaultBranch(owner, repo) {
+  const output = safeGhText(
+    ['api', `repos/${owner}/${repo}`, '--jq', '.default_branch // empty'],
+    GH_TEXT_LOOP_OPTIONS,
+  );
+  return output === '' ? null : output;
+}
+/**
  * Async sibling of {@link ghText}, for callers that need several `gh`
  * subprocesses running concurrently (`execFileSync` serializes even
  * concurrent `await`s because it holds the event loop). Extracted from

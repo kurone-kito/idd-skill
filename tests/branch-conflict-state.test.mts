@@ -366,7 +366,7 @@ test('classifyBranchConflictState: result always reports readOnly and worktreeUn
   assert.equal(result.worktreeUnchanged, true);
 });
 
-test('classifyBranchConflictState: BEHIND without conflict recommends merge-main', async () => {
+test('classifyBranchConflictState: BEHIND without conflict recommends merge-base', async () => {
   const prData = {
     number: 201,
     headRefOid: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
@@ -384,7 +384,7 @@ test('classifyBranchConflictState: BEHIND without conflict recommends merge-main
     _skipGitProbe: true,
   });
   assert.equal(result.branchState, 'behind-no-conflict');
-  assert.equal(result.syncRecommendation, 'merge-main');
+  assert.equal(result.syncRecommendation, 'merge-base');
   // BEHIND is definitional: base has already advanced past the merge-base,
   // so this is `true` even though the git probe itself was skipped.
   assert.equal(result.baseAdvancedSinceMergeBase, true);
@@ -424,7 +424,7 @@ test('parseConflictFiles: returns empty array for clean merge output', () => {
   assert.deepEqual(parseConflictFiles(output), []);
 });
 
-test('classifyBranchConflictState: post-push merge recommendation for BEHIND is merge-main', async () => {
+test('classifyBranchConflictState: post-push merge recommendation for BEHIND is merge-base', async () => {
   const prData = {
     number: 202,
     headRefOid: 'cccccccccccccccccccccccccccccccccccccccc',
@@ -441,7 +441,7 @@ test('classifyBranchConflictState: post-push merge recommendation for BEHIND is 
     _testPrData: prData,
     _skipGitProbe: true,
   });
-  assert.equal(result.syncRecommendation, 'merge-main');
+  assert.equal(result.syncRecommendation, 'merge-base');
   assert.equal(result.baseAdvancedSinceMergeBase, true);
 });
 
