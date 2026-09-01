@@ -37,8 +37,8 @@
           "properties": {
             "service": {
               "type": "string",
-              "enum": ["advisory-review", "ci-actions"],
-              "description": "The service this verdict covers."
+              "enum": ["advisory-review"],
+              "description": "The service this verdict covers. Fixed to the enclosing key so a verdict object can never cross-report as the other service's shape."
             },
             "verdict": {
               "type": "string",
@@ -47,7 +47,15 @@
             },
             "reason": {
               "type": "string",
-              "minLength": 1,
+              "enum": [
+                "evidence-unreadable",
+                "contradictory-evidence",
+                "no-evidence",
+                "all-healthy",
+                "failure-below-corroboration-threshold",
+                "mixed-evidence-with-corroboration",
+                "full-failure-with-corroboration"
+              ],
               "description": "Machine-readable reason: evidence-unreadable, contradictory-evidence, no-evidence, all-healthy, failure-below-corroboration-threshold, mixed-evidence-with-corroboration, or full-failure-with-corroboration."
             },
             "distinctFailingPrCount": {
@@ -62,8 +70,8 @@
             },
             "minCorroboratingPrs": {
               "type": "integer",
-              "minimum": 1,
-              "description": "The resolved providerHealth.minCorroboratingPrs threshold this verdict was evaluated against."
+              "minimum": 2,
+              "description": "The resolved providerHealth.minCorroboratingPrs threshold this verdict was evaluated against. Floored at 2: a single pull request's failure burst must never resolve stronger than degraded."
             }
           }
         },
@@ -82,8 +90,8 @@
           "properties": {
             "service": {
               "type": "string",
-              "enum": ["advisory-review", "ci-actions"],
-              "description": "The service this verdict covers."
+              "enum": ["ci-actions"],
+              "description": "The service this verdict covers. Fixed to the enclosing key so a verdict object can never cross-report as the other service's shape."
             },
             "verdict": {
               "type": "string",
@@ -92,7 +100,15 @@
             },
             "reason": {
               "type": "string",
-              "minLength": 1,
+              "enum": [
+                "evidence-unreadable",
+                "contradictory-evidence",
+                "no-evidence",
+                "all-healthy",
+                "failure-below-corroboration-threshold",
+                "mixed-evidence-with-corroboration",
+                "full-failure-with-corroboration"
+              ],
               "description": "Machine-readable reason: evidence-unreadable, contradictory-evidence, no-evidence, all-healthy, failure-below-corroboration-threshold, mixed-evidence-with-corroboration, or full-failure-with-corroboration."
             },
             "distinctFailingPrCount": {
@@ -107,8 +123,8 @@
             },
             "minCorroboratingPrs": {
               "type": "integer",
-              "minimum": 1,
-              "description": "The resolved providerHealth.minCorroboratingPrs threshold this verdict was evaluated against."
+              "minimum": 2,
+              "description": "The resolved providerHealth.minCorroboratingPrs threshold this verdict was evaluated against. Floored at 2: a single pull request's failure burst must never resolve stronger than degraded."
             }
           }
         }

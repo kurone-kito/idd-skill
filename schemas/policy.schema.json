@@ -539,8 +539,8 @@
       "properties": {
         "minCorroboratingPrs": {
           "type": "integer",
-          "minimum": 1,
-          "description": "Minimum number of distinct pull-request identities that must contribute failure evidence to a service before its verdict may exceed `degraded`. Optional; defaults to `2` — a single pull request's failure burst always caps at `degraded`."
+          "minimum": 2,
+          "description": "Minimum number of distinct pull-request identities that must contribute failure evidence to a service before its verdict may exceed `degraded`. Optional; defaults to `2` — a single pull request's failure burst always caps at `degraded`. Floored at 2 unconditionally: a configured value below 2 falls back to the default rather than disabling the corroboration requirement."
         },
         "samplingWindow": {
           "type": "string",

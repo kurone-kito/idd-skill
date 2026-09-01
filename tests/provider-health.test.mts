@@ -3,6 +3,8 @@ import { test } from 'node:test';
 
 import {
   classifyProviderHealth,
+  deriveAdvisoryReviewObservation,
+  deriveCiActionsObservation,
   type ProviderHealthSnapshot,
 } from '../src/scripts/provider-health.mts';
 import { loadJson, validate } from '../src/scripts/validate-schemas.mts';
@@ -169,6 +171,154 @@ test('a repeated observation for the same PR counts once toward corroboration', 
   );
   assert.equal(result.distinctFailingPrCount, 2);
   assert.equal(result.verdict, 'unavailable');
+});
+
+const TRUSTED = new Set(['idd-bot']);
+const BASE_DERIVE_OPTIONS = {
+  trustedMarkerLogins: TRUSTED,
+  primaryBotLogin: 'copilot-pull-request-reviewer[bot]',
+  cutoffIso: null,
+};
+
+test('deriveAdvisoryReviewObservation: an untrusted actor cannot post evidence-bearing markers', () => {
+  const result = deriveAdvisoryReviewObservation(
+    1,
+    [
+      {
+        body: 'advisory-wait: agent-x 0123456789abcdef0123456789abcdef01234567 2026-09-01T00:00:00Z',
+        created_at: '2026-09-01T00:00:00Z',
+        user: { login: 'an-untrusted-actor' },
+      },
+    ],
+    [],
+    [],
+    BASE_DERIVE_OPTIONS,
+  );
+  assert.equal(result, null);
+});
+
+test('deriveAdvisoryReviewObservation: the LATEST trusted marker decides the outcome, not the earliest', () => {
+  const comments = [
+    {
+      // Earliest marker: registered via timeline -- would read as 'success'
+      // if this one were selected.
+      body: 'advisory-wait: agent-x 0123456789abcdef0123456789abcdef01234567 2026-09-01T00:00:00Z',
+      created_at: '2026-09-01T00:00:00Z',
+      user: { login: 'idd-bot' },
+    },
+    {
+      // Latest marker: never registered -- the observable is whether THIS
+      // request registered.
+      body: 'advisory-wait: agent-x 0123456789abcdef0123456789abcdef01234567 2026-09-01T12:00:00Z',
+      created_at: '2026-09-01T12:00:00Z',
+      user: { login: 'idd-bot' },
+    },
+  ];
+  const timeline = [
+    {
+      event: 'review_requested',
+      created_at: '2026-09-01T00:05:00Z',
+      requested_reviewer: { login: 'copilot-pull-request-reviewer[bot]' },
+    },
+  ];
+  const result = deriveAdvisoryReviewObservation(
+    1,
+    comments,
+    timeline,
+    [],
+    BASE_DERIVE_OPTIONS,
+  );
+  assert.deepEqual(result, { prNumber: 1, outcome: 'failure' });
+});
+
+test('deriveAdvisoryReviewObservation: recognizes both the plain-text and HTML-comment marker forms', () => {
+  const timeline = [
+    {
+      event: 'review_requested',
+      created_at: '2026-09-01T00:05:00Z',
+      requested_reviewer: { login: 'copilot-pull-request-reviewer[bot]' },
+    },
+  ];
+  for (const body of [
+    'advisory-wait: agent-x 0123456789abcdef0123456789abcdef01234567 2026-09-01T00:00:00Z',
+    '<!-- advisory-wait: agent-x 0123456789abcdef0123456789abcdef01234567 2026-09-01T00:00:00Z -->',
+  ]) {
+    const result = deriveAdvisoryReviewObservation(
+      1,
+      [
+        {
+          body,
+          created_at: '2026-09-01T00:00:00Z',
+          user: { login: 'idd-bot' },
+        },
+      ],
+      timeline,
+      [],
+      BASE_DERIVE_OPTIONS,
+    );
+    assert.deepEqual(result, { prNumber: 1, outcome: 'success' });
+  }
+});
+
+test('deriveAdvisoryReviewObservation: a submitted review from the primary bot registers success without a timeline event', () => {
+  const result = deriveAdvisoryReviewObservation(
+    1,
+    [
+      {
+        body: 'advisory-wait: agent-x 0123456789abcdef0123456789abcdef01234567 2026-09-01T00:00:00Z',
+        created_at: '2026-09-01T00:00:00Z',
+        user: { login: 'idd-bot' },
+      },
+    ],
+    [],
+    [
+      {
+        user: { login: 'copilot-pull-request-reviewer[bot]' },
+        submitted_at: '2026-09-01T00:10:00Z',
+      },
+    ],
+    BASE_DERIVE_OPTIONS,
+  );
+  assert.deepEqual(result, { prNumber: 1, outcome: 'success' });
+});
+
+test('deriveAdvisoryReviewObservation: a marker older than the sampling window contributes no observation', () => {
+  const result = deriveAdvisoryReviewObservation(
+    1,
+    [
+      {
+        body: 'advisory-wait: agent-x 0123456789abcdef0123456789abcdef01234567 2026-08-01T00:00:00Z',
+        created_at: '2026-08-01T00:00:00Z',
+        user: { login: 'idd-bot' },
+      },
+    ],
+    [],
+    [],
+    { ...BASE_DERIVE_OPTIONS, cutoffIso: '2026-08-31T00:00:00Z' },
+  );
+  assert.equal(result, null);
+});
+
+test('deriveCiActionsObservation: every job zero-steps is failure evidence', () => {
+  const result = deriveCiActionsObservation(
+    { conclusion: 'failure', pull_requests: [{ number: 7 }] },
+    [{ steps: [] }, { steps: [] }],
+    { cutoffIso: null },
+  );
+  assert.deepEqual(result, { prNumber: 7, outcome: 'failure' });
+});
+
+test('deriveCiActionsObservation: a run older than the sampling window contributes no observation', () => {
+  const result = deriveCiActionsObservation(
+    {
+      conclusion: 'success',
+      updated_at: '2026-08-01T00:00:00Z',
+      pull_requests: [{ number: 7 }],
+    },
+    null,
+    { cutoffIso: '2026-08-31T00:00:00Z' },
+  );
+  assert.equal(result, null);
 });
 
 test('committed provider-health fixture validates against its schema', () => {

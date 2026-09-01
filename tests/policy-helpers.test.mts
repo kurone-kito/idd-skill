@@ -1067,7 +1067,7 @@ test('providerHealth accepts a configured minCorroboratingPrs and samplingWindow
 });
 
 test('providerHealth.minCorroboratingPrs rejects an invalid value deterministically, falling back to the default (#2319)', () => {
-  for (const invalid of [0, -1, 1.5, '2', null, [2]]) {
+  for (const invalid of [0, 1, -1, 1.5, '2', null, [2]]) {
     assert.equal(
       normalizePolicyConfig({
         providerHealth: { minCorroboratingPrs: invalid },

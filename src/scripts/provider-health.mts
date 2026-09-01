@@ -31,8 +31,14 @@ import {
 import { parseCliArgs } from './cli-args.mts';
 import { ghApiJson, ghText } from './gh-exec.mts';
 import { loadIddConfig } from './idd-config.mts';
-import { normalizePolicyConfig } from './policy-helpers.mts';
-import { isCopilotReviewerLogin } from './protocol-helpers.mts';
+import {
+  normalizePolicyConfig,
+  parseIsoDurationToMs,
+} from './policy-helpers.mts';
+import {
+  isCopilotReviewerLogin,
+  resolveTrustedMarkerActors,
+} from './protocol-helpers.mts';
 
 export const PROVIDER_HEALTH_SERVICES = [
   'advisory-review',
@@ -227,6 +233,11 @@ interface GhCommentPayload {
   user?: { login?: string | null } | null;
 }
 
+interface GhReviewPayload {
+  user?: { login?: string | null } | null;
+  submitted_at?: string;
+}
+
 interface GhPullRequestListItem {
   number?: number;
   updated_at?: string;
@@ -244,35 +255,153 @@ interface GhWorkflowRun {
   pull_requests?: { number?: number }[] | null;
 }
 
+// Matches both canonical `advisory-wait:` request-marker forms a trusted
+// actor may post (marker-helpers.mts OPERATIONAL_MARKER_ENTRIES): the
+// plain-text `advisory-wait: {agentId} {headSha} {timestamp}` line and the
+// `<!-- advisory-wait: {agentId} {headSha} {timestamp} -->` HTML-comment
+// form. Anchored to the whole trimmed comment body -- both forms are always
+// posted as their own dedicated comment, never embedded in a larger one.
 const ADVISORY_WAIT_REQUEST_MARKER_RE =
-  /<!--\s*advisory-wait:\s*(\S+)\s+([0-9a-f]{40})\s+(\S+)\s*-->/;
+  /^advisory-wait:\s+\S+\s+[0-9a-f]{40}\s+\S+\s*$/;
+const ADVISORY_WAIT_REQUEST_MARKER_HTML_RE =
+  /^<!--\s*advisory-wait:\s*\S+\s+[0-9a-f]{40}\s+\S+\s*-->\s*$/;
+
+function isAdvisoryWaitRequestMarker(body: string): boolean {
+  const trimmed = body.trim();
+  return (
+    ADVISORY_WAIT_REQUEST_MARKER_RE.test(trimmed) ||
+    ADVISORY_WAIT_REQUEST_MARKER_HTML_RE.test(trimmed)
+  );
+}
+
+/**
+ * The LATEST trusted `advisory-wait:` request marker's `created_at` among
+ * `comments` -- "did the most recent request register" is the observable,
+ * not "did the first request ever posted on this PR register". A marker
+ * counts only when its author is a `trustedMarkerLogins` member
+ * (case-insensitive); an untrusted actor could otherwise post a fabricated
+ * marker to poison this service's verdict.
+ */
+function latestTrustedAdvisoryWaitRequestAt(
+  comments: GhCommentPayload[],
+  trustedMarkerLogins: ReadonlySet<string>,
+): string | null {
+  let latest: string | null = null;
+  for (const comment of comments) {
+    const authorLogin = String(comment?.user?.login ?? '')
+      .trim()
+      .toLowerCase();
+    if (!trustedMarkerLogins.has(authorLogin)) continue;
+    if (!isAdvisoryWaitRequestMarker(String(comment?.body ?? ''))) continue;
+    const createdAt = String(comment?.created_at ?? '');
+    if (createdAt === '') continue;
+    if (latest === null || createdAt > latest) {
+      latest = createdAt;
+    }
+  }
+  return latest;
+}
+
+/**
+ * Pure decision for one pull request's `advisory-review` evidence, given
+ * already-fetched comments/timeline/reviews. Kept separate from the network
+ * layer below so the trust filter, sampling-window cutoff, latest-marker
+ * selection, and both registration paths (timeline event or submitted
+ * review) are fixture-testable without a live `gh` call.
+ */
+export function deriveAdvisoryReviewObservation(
+  prNumber: number,
+  comments: GhCommentPayload[],
+  timeline: GhTimelineReviewRequestedEvent[],
+  reviews: GhReviewPayload[],
+  options: {
+    trustedMarkerLogins: ReadonlySet<string>;
+    primaryBotLogin: string;
+    cutoffIso: string | null;
+  },
+): ProviderHealthObservation | null {
+  const requestMarkerAt = latestTrustedAdvisoryWaitRequestAt(
+    comments,
+    options.trustedMarkerLogins,
+  );
+  if (requestMarkerAt === null) return null;
+  if (options.cutoffIso !== null && requestMarkerAt < options.cutoffIso) {
+    return null;
+  }
+
+  const registeredByTimeline = timeline.some((event) => {
+    if (String(event?.event ?? '') !== 'review_requested') return false;
+    const reviewerLogin = String(event?.requested_reviewer?.login ?? '');
+    if (!isCopilotReviewerLogin(reviewerLogin, options.primaryBotLogin)) {
+      return false;
+    }
+    const eventAt = String(event?.created_at ?? '');
+    return eventAt !== '' && eventAt >= requestMarkerAt;
+  });
+  const registeredByReview = reviews.some((review) => {
+    const reviewerLogin = String(review?.user?.login ?? '');
+    if (!isCopilotReviewerLogin(reviewerLogin, options.primaryBotLogin)) {
+      return false;
+    }
+    const submittedAt = String(review?.submitted_at ?? '');
+    return submittedAt !== '' && submittedAt >= requestMarkerAt;
+  });
+
+  return {
+    prNumber,
+    outcome: registeredByTimeline || registeredByReview ? 'success' : 'failure',
+  };
+}
+
+function resolveCutoffIso(
+  nowIso: string,
+  windowMs: number | null,
+): string | null {
+  if (windowMs === null) return null;
+  const nowMs = Date.parse(nowIso);
+  if (Number.isNaN(nowMs)) return null;
+  return new Date(nowMs - windowMs).toISOString();
+}
 
 /**
  * Collect `advisory-review` evidence across recent pull requests. For each
  * of the most-recently-updated open or closed PRs (bounded by `sampleSize`),
  * a trusted `advisory-wait:` request marker with no subsequent
- * `review_requested` timeline event for the primary bot is 'failure'
- * evidence (#2327's own observable); a marker followed by a
- * `review_requested` event, or a submitted review from the primary bot, is
- * 'success' evidence. A PR with no request marker at all contributes no
- * observation (out of scope for this window, not evidence either way).
+ * `review_requested` timeline event for the primary bot, and no submitted
+ * review from the primary bot, is 'failure' evidence (#2327's own
+ * observable, extended with the submitted-review path); either path
+ * registering is 'success' evidence. A PR with no request marker at all
+ * within the sampling window contributes no observation (out of scope for
+ * this window, not evidence either way).
  */
 export function collectAdvisoryReviewEvidence(
   owner: string,
   repo: string,
-  options: { primaryBotLogin?: string; sampleSize?: number; now?: string } = {},
+  options: {
+    primaryBotLogin?: string;
+    sampleSize?: number;
+    now?: string;
+    trustedMarkerLogins?: readonly string[];
+    samplingWindowMs?: number | null;
+  } = {},
 ): ProviderHealthSnapshot {
   const now = options.now ?? new Date().toISOString();
   const primaryBotLogin =
     options.primaryBotLogin ?? DEFAULT_ADVISORY_PRIMARY_BOT_LOGIN;
   const sampleSize = options.sampleSize ?? 20;
+  const trustedMarkerLogins = new Set(
+    (options.trustedMarkerLogins ?? []).map((login) =>
+      login.trim().toLowerCase(),
+    ),
+  );
+  const cutoffIso = resolveCutoffIso(now, options.samplingWindowMs ?? null);
   const observations: ProviderHealthObservation[] = [];
 
-  let pulls: GhPullRequestListItem[];
+  let payload: unknown;
   try {
-    pulls = ghApiJson(
+    payload = ghApiJson(
       `repos/${owner}/${repo}/pulls?state=all&sort=updated&direction=desc&per_page=${sampleSize}`,
-    ) as GhPullRequestListItem[];
+    );
   } catch {
     return {
       service: 'advisory-review',
@@ -282,6 +411,19 @@ export function collectAdvisoryReviewEvidence(
       observations,
     };
   }
+  // A malformed or empty `gh` response can resolve to `{}` rather than an
+  // array; iterating that unguarded would throw outside this try block and
+  // crash the whole CLI instead of degrading to `unreadable: true`.
+  if (!Array.isArray(payload)) {
+    return {
+      service: 'advisory-review',
+      now,
+      contradictory: false,
+      unreadable: true,
+      observations,
+    };
+  }
+  const pulls = payload as GhPullRequestListItem[];
 
   for (const pull of pulls) {
     const prNumber = pull.number;
@@ -289,6 +431,7 @@ export function collectAdvisoryReviewEvidence(
 
     let comments: GhCommentPayload[];
     let timeline: GhTimelineReviewRequestedEvent[];
+    let reviews: GhReviewPayload[];
     try {
       comments = ghApiJson(
         `repos/${owner}/${repo}/issues/${prNumber}/comments`,
@@ -301,27 +444,23 @@ export function collectAdvisoryReviewEvidence(
           extraArgs: ['-H', 'Accept: application/vnd.github+json'],
         },
       ) as GhTimelineReviewRequestedEvent[];
+      reviews = ghApiJson(`repos/${owner}/${repo}/pulls/${prNumber}/reviews`, {
+        paginate: true,
+      }) as GhReviewPayload[];
     } catch {
       // A single PR's read failure is not the whole snapshot's failure --
       // the fetchable PRs still yield real evidence. Skip this PR only.
       continue;
     }
 
-    const requestMarkerAt = earliestTrustedAdvisoryWaitRequestAt(comments);
-    if (!requestMarkerAt) continue;
-
-    const registered = timeline.some((event) => {
-      if (String(event?.event ?? '') !== 'review_requested') return false;
-      const reviewerLogin = String(event?.requested_reviewer?.login ?? '');
-      if (!isCopilotReviewerLogin(reviewerLogin, primaryBotLogin)) return false;
-      const eventAt = String(event?.created_at ?? '');
-      return eventAt !== '' && eventAt >= requestMarkerAt;
-    });
-
-    observations.push({
+    const observation = deriveAdvisoryReviewObservation(
       prNumber,
-      outcome: registered ? 'success' : 'failure',
-    });
+      comments,
+      timeline,
+      reviews,
+      { trustedMarkerLogins, primaryBotLogin, cutoffIso },
+    );
+    if (observation !== null) observations.push(observation);
   }
 
   return {
@@ -333,20 +472,36 @@ export function collectAdvisoryReviewEvidence(
   };
 }
 
-function earliestTrustedAdvisoryWaitRequestAt(
-  comments: GhCommentPayload[],
-): string | null {
-  let earliest: string | null = null;
-  for (const comment of comments) {
-    const body = String(comment?.body ?? '');
-    if (!ADVISORY_WAIT_REQUEST_MARKER_RE.test(body)) continue;
-    const createdAt = String(comment?.created_at ?? '');
-    if (createdAt === '') continue;
-    if (earliest === null || createdAt < earliest) {
-      earliest = createdAt;
-    }
+/**
+ * Pure decision for one workflow run's `ci-actions` evidence. `jobs` is
+ * `null` when the caller never fetched the jobs endpoint (only failing runs
+ * need it); kept separate from the network layer for the same fixture-
+ * testability reason as `deriveAdvisoryReviewObservation` above.
+ */
+export function deriveCiActionsObservation(
+  run: GhWorkflowRun,
+  jobs: GhWorkflowJob[] | null,
+  options: { cutoffIso: string | null },
+): ProviderHealthObservation | null {
+  const prNumber = run.pull_requests?.[0]?.number;
+  if (typeof prNumber !== 'number') return null;
+  if (
+    options.cutoffIso !== null &&
+    typeof run.updated_at === 'string' &&
+    run.updated_at < options.cutoffIso
+  ) {
+    return null;
   }
-  return earliest;
+
+  if (run.conclusion === 'success') {
+    return { prNumber, outcome: 'success' };
+  }
+  if (run.conclusion !== 'failure') return null;
+  if (jobs === null || jobs.length === 0) return null;
+  const everyJobRanNoSteps = jobs.every(
+    (job) => Array.isArray(job.steps) && job.steps.length === 0,
+  );
+  return everyJobRanNoSteps ? { prNumber, outcome: 'failure' } : null;
 }
 
 /**
@@ -357,23 +512,34 @@ function earliestTrustedAdvisoryWaitRequestAt(
  * evidence; any other failing run is an ordinary code-caused failure and
  * contributes no observation. A successful run is 'success' evidence.
  * Runs unassociated with any pull request are skipped -- corroboration is
- * defined over distinct pull requests.
+ * defined over distinct pull requests. The jobs read is bounded to a single
+ * `per_page=100` page rather than fully paginated: this repository's own
+ * workflow runs stay far under that per-run job count, and the billing-block
+ * signature (every job zero-steps) is unaffected by jobs on a page this
+ * helper never fetches.
  */
 export function collectCiActionsEvidence(
   owner: string,
   repo: string,
-  options: { sampleSize?: number; now?: string } = {},
+  options: {
+    sampleSize?: number;
+    now?: string;
+    samplingWindowMs?: number | null;
+  } = {},
 ): ProviderHealthSnapshot {
   const now = options.now ?? new Date().toISOString();
   const sampleSize = options.sampleSize ?? 50;
+  const cutoffIso = resolveCutoffIso(now, options.samplingWindowMs ?? null);
   const observations: ProviderHealthObservation[] = [];
 
   let runs: GhWorkflowRun[];
   try {
     const payload = ghApiJson(
       `repos/${owner}/${repo}/actions/runs?status=completed&per_page=${sampleSize}`,
-    ) as { workflow_runs?: GhWorkflowRun[] };
-    runs = payload.workflow_runs ?? [];
+    ) as { workflow_runs?: unknown };
+    runs = Array.isArray(payload.workflow_runs)
+      ? (payload.workflow_runs as GhWorkflowRun[])
+      : [];
   } catch {
     return {
       service: 'ci-actions',
@@ -385,31 +551,24 @@ export function collectCiActionsEvidence(
   }
 
   for (const run of runs) {
-    const prNumber = run.pull_requests?.[0]?.number;
-    if (typeof prNumber !== 'number') continue;
+    if (typeof run.id !== 'number') continue;
 
-    if (run.conclusion === 'success') {
-      observations.push({ prNumber, outcome: 'success' });
-      continue;
+    let jobs: GhWorkflowJob[] | null = null;
+    if (run.conclusion === 'failure') {
+      try {
+        const payload = ghApiJson(
+          `repos/${owner}/${repo}/actions/runs/${run.id}/jobs?per_page=100`,
+        ) as { jobs?: unknown };
+        jobs = Array.isArray(payload.jobs)
+          ? (payload.jobs as GhWorkflowJob[])
+          : [];
+      } catch {
+        continue;
+      }
     }
-    if (run.conclusion !== 'failure') continue;
 
-    let jobs: GhWorkflowJob[];
-    try {
-      const payload = ghApiJson(
-        `repos/${owner}/${repo}/actions/runs/${run.id}/jobs`,
-      ) as { jobs?: GhWorkflowJob[] };
-      jobs = payload.jobs ?? [];
-    } catch {
-      continue;
-    }
-    if (jobs.length === 0) continue;
-    const everyJobRanNoSteps = jobs.every(
-      (job) => Array.isArray(job.steps) && job.steps.length === 0,
-    );
-    if (everyJobRanNoSteps) {
-      observations.push({ prNumber, outcome: 'failure' });
-    }
+    const observation = deriveCiActionsObservation(run, jobs, { cutoffIso });
+    if (observation !== null) observations.push(observation);
   }
 
   return {
@@ -430,12 +589,22 @@ export function buildProviderHealthReport(
   const policy = normalizePolicyConfig(config).providerHealth;
   const primaryBotLogin = resolveAdvisoryPrimaryBotLogin(config ?? {});
   const now = options.now ?? new Date().toISOString();
+  const { actors: trustedMarkerLogins } = resolveTrustedMarkerActors({
+    envValue: process.env.IDD_TRUSTED_MARKER_ACTORS,
+    config: config as { trustedMarkerActors?: unknown } | null,
+  });
+  const samplingWindowMs = parseIsoDurationToMs(policy.samplingWindow);
 
   const advisoryReviewSnapshot = collectAdvisoryReviewEvidence(owner, repo, {
     primaryBotLogin,
     now,
+    trustedMarkerLogins,
+    samplingWindowMs,
   });
-  const ciActionsSnapshot = collectCiActionsEvidence(owner, repo, { now });
+  const ciActionsSnapshot = collectCiActionsEvidence(owner, repo, {
+    now,
+    samplingWindowMs,
+  });
 
   return {
     protocolVersion: '1',
@@ -492,11 +661,14 @@ function printHelp(): void {
 
 Read-only, cross-pull-request health classifier for two services:
 advisory-review and ci-actions. Aggregates already-observable per-PR
-evidence (absence of a review_requested event after a successful
-request; a workflow run whose every job executes zero steps) into a
-healthy/degraded/unavailable/unknown verdict per service. Never a gate:
-emits no marker, mutates nothing, and exposes no field any
-merge-readiness or CI-gate output could consume as a pass.
+evidence -- for advisory-review, a trusted advisory-wait: request marker
+(config trustedMarkerActors / IDD_TRUSTED_MARKER_ACTORS) with neither a
+subsequent review_requested timeline event nor a submitted review from
+the primary bot; for ci-actions, a workflow run whose every job executes
+zero steps -- into a healthy/degraded/unavailable/unknown verdict per
+service. Evidence outside providerHealth.samplingWindow (default PT24H)
+is excluded. Never a gate: emits no marker, mutates nothing, and exposes
+no field any merge-readiness or CI-gate output could consume as a pass.
 
 --owner/--repo default to the current repository (gh repo view).
 `);

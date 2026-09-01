@@ -747,12 +747,21 @@ export function normalizePolicyConfig(config: unknown) {
       POLICY_DEFAULTS.localValidationEvidence.maxAge,
     ),
   };
-  // #2319: read-only classifier tuning, never a gate.
+  // #2319: read-only classifier tuning, never a gate. `minCorroboratingPrs`
+  // floors at 2 unconditionally -- the issue's own invariant ("a single
+  // pull request's failure burst can never resolve stronger than degraded")
+  // must hold regardless of configuration, so a configured `1` (or any
+  // value `parsePositiveInteger` would otherwise accept) falls back to the
+  // default rather than silently disabling the corroboration requirement.
+  const rawMinCorroboratingPrs = parsePositiveInteger(
+    c?.providerHealth?.minCorroboratingPrs,
+    POLICY_DEFAULTS.providerHealth.minCorroboratingPrs,
+  );
   const providerHealth: ProviderHealthPolicy = {
-    minCorroboratingPrs: parsePositiveInteger(
-      c?.providerHealth?.minCorroboratingPrs,
-      POLICY_DEFAULTS.providerHealth.minCorroboratingPrs,
-    ),
+    minCorroboratingPrs:
+      rawMinCorroboratingPrs >= 2
+        ? rawMinCorroboratingPrs
+        : POLICY_DEFAULTS.providerHealth.minCorroboratingPrs,
     samplingWindow: parsePositiveDuration(
       c?.providerHealth?.samplingWindow,
       POLICY_DEFAULTS.providerHealth.samplingWindow,
