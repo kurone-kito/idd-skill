@@ -218,8 +218,16 @@ const NEGATION_PATTERN =
 // The repeated `disable` entries are preserved verbatim from the original
 // inline regex literal (harmless redundancy in an alternation) to keep this
 // pattern byte-identical rather than pulled in as an incidental fix here.
-const POLICY_OVERRIDE_VERB_SOURCE =
-  'ignore|bypass|override|disable|disable|skip|turn off|suppress|disable';
+// #2399: `#2218` wrapped only the noun alternation below in a hyphen-boundary
+// guard, leaving this verb alternation on a bare `\b` -- a hyphen still
+// counts as a word boundary, so an ordinary hyphenated compound noun like
+// "duplicate-evidence-skip check" (describing an existing mechanism, not a
+// directive) matched "skip" here and false-positived `trust_safety`. Same
+// fix shape as the noun guard and `SUBJECTIVE_SUBJECT_PATTERN` (#2205): wrap
+// the whole alternation in a shared `(?<![\w-])`/`(?![\w-])` boundary so a
+// hyphen-adjacent occurrence no longer counts for any verb, while a
+// freestanding use ("skip the check", "bypass this policy") still does.
+const POLICY_OVERRIDE_VERB_SOURCE = String.raw`(?<![\w-])(?:ignore|bypass|override|disable|disable|skip|turn off|suppress|disable)(?![\w-])`;
 // #2218: a bare `\b` treats a hyphen as a non-word character, so every one
 // of these nouns also matched inside an ordinary hyphenated file-path
 // mention (e.g. this project's own marker prefix in `idd-workflow-notes.md`
