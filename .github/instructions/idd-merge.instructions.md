@@ -409,19 +409,29 @@ Before any mutating action in F3, apply the
 3. From the **primary worktree** — the worktree being cleaned up is
    still checked out to its issue branch at this point, so running
    this elsewhere would fast-forward the wrong branch — switch to
-   `main` explicitly before fast-forwarding it, rather than assuming
-   it is already checked out there:
+   `{development-branch}` (the PR's own validated target branch;
+   resolved in `idd-work.instructions.md`'s B1
+   [Resolve the development branch](idd-work.instructions.md#b1--create-worktree-with-branch)
+   step) explicitly before fast-forwarding it, rather than assuming it
+   is already checked out there:
 
    ```sh
-   git switch main && git fetch origin main && git merge --ff-only origin/main
+   git switch {development-branch} && git fetch origin {development-branch} && git merge --ff-only origin/{development-branch}
    ```
 
    Doing this before worktree/branch deletion (next step) ensures
-   WorkTrunk's own merge-status check, which reads the local default
-   branch rather than `origin/main`, sees the just-merged branch as
-   already merged on its first attempt instead of reporting
-   `branch_outcome: retained_unmerged` and declining to delete it
-   (`#2331`).
+   WorkTrunk's own merge-status check, which reads the local
+   `{development-branch}` rather than `origin/{development-branch}`,
+   sees the just-merged branch as already merged on its first attempt
+   instead of reporting `branch_outcome: retained_unmerged` and
+   declining to delete it (`#2331`). This local checkout is a plain git
+   operation over the merged feature branch's own target and is
+   unrelated to the trusted-checkout-source concern in B1 Step 1 — if
+   `{development-branch}` differs from the repository's default branch,
+   switch the primary worktree back to the default branch
+   (`git switch <default-branch>`) once cleanup (steps 4-5 below)
+   completes, so the next B1 pass finds the primary worktree on its
+   expected trusted checkout.
 4. Run from the **primary worktree**, never from inside the worktree
    being removed. Any removal (plain or `--force`) silently discards
    ignored files too, including inside a submodule. Scope Git
@@ -452,16 +462,17 @@ Before any mutating action in F3, apply the
      with `git worktree remove --force <path>`. Use `--force` only
      after that review finds nothing worth preserving.
    - `git branch -d <branch-name>` (the baseline permission profile
-     denies `-D`; see `docs/permissions.md`). Local `main` was already
-     fast-forwarded to the merge commit by the previous step, so this
-     should not fail with `error: the branch '<branch-name>' is not
-     fully merged`; if it still does, investigate before retrying
-     rather than assuming a stale local `main` is the cause.
+     denies `-D`; see `docs/permissions.md`). Local `{development-branch}`
+     was already fast-forwarded to the merge commit by the previous
+     step, so this should not fail with `error: the branch
+     '<branch-name>' is not fully merged`; if it still does,
+     investigate before retrying rather than assuming a stale local
+     `{development-branch}` is the cause.
 
 5. If GitHub auto-delete is disabled: delete the remote branch too.
    (WorkTrunk may be used for steps 4–5, the deletion steps —
-   step 3's local `main` update is a plain git operation, not a
-   WorkTrunk one.)
+   step 3's local `{development-branch}` update is a plain git
+   operation, not a WorkTrunk one.)
 6. Re-validate the active claim one final time. If it still uses your
    `{claim-id}`, post `unclaimed-by` for your own `{agent-id}` /
    `{claim-id}` (see

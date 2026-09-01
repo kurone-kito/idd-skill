@@ -121,17 +121,17 @@ cleanup before continuing.
   same `wt switch --create -b <base-branch> <branch-name>` if `git-wt` is
   unavailable
 
-`<base-branch>` is normally `main`. In a **non-interactive / automation**
-context, append `-x <noop>` (e.g. `-x true`) — otherwise WorkTrunk tries
-to change the caller's directory and can hang; `-x` makes it create, run
-the pre-start hook, and exit cleanly.
+`<base-branch>` is `{development-branch}`. In a **non-interactive /
+automation** context, append `-x <noop>` (e.g. `-x true`) — otherwise
+WorkTrunk tries to change the caller's directory and can hang; `-x`
+makes it create, run the pre-start hook, and exit cleanly.
 
 If WorkTrunk is not available, choose the correct case:
 
 <!-- dprint-ignore-start -->
 | Case | Command |
 | --- | --- |
-| Fresh claim | `git worktree add <path> -b <branch-name> origin/main` |
+| Fresh claim | `git worktree add <path> -b <branch-name> origin/{development-branch}` |
 | Takeover — local branch exists | `git worktree add <path> <branch-name>` |
 | Takeover — remote branch only | `git fetch origin && git worktree add <path> -b <branch-name> origin/<branch-name>` |
 | Takeover — neither local nor remote (rare) | treat as fresh claim; preserve the inherited branch name |
