@@ -220,11 +220,17 @@ login).
    - **SATISFIED**, `COPILOT_PENDING` `"false"`, `COPILOT_PENDING_COVERS_HEAD`
      `"false"` (settled by elapsed time alone, never proven the request
      reached Copilot — `#2327`): consult **`AW3-S`**'s `staleRequestRecovery`
-     first — `"attempt"` runs its bounded cycle (non-pending entry: skip
-     **Remove**, start at **Request**), then proceed to E15 either way
-     (accumulates recovery-cycle evidence toward `COPILOT_UNAVAILABLE`;
-     `outcome` itself is unaffected); `"cap-exhausted"`/`"not-applicable"` →
-     proceed to E15 unchanged.
+     first. `"attempt"` runs its bounded cycle (non-pending entry: skip
+     **Remove**, start at **Request**; a proven failure-to-register
+     completes the cycle per the entry's inverted step 4/5 disposition),
+     then proceed to E15 either way (accumulates recovery-cycle evidence
+     toward `COPILOT_UNAVAILABLE`; `outcome` itself is unaffected).
+     `"cap-exhausted"` honors `advisoryWait.capExhaustedRoute` exactly
+     like the ordinary `CAP_EXHAUSTED` row below — `hold` posts AW4's
+     **Cap exhausted** hold and stops; `phase-specific` (default)
+     proceeds to E15 unchanged (`#2327` follow-up: cycle exhaustion from
+     this entry must not silently bypass a configured hold policy).
+     `"not-applicable"` → proceed to E15 unchanged.
    - **SATISFIED** (otherwise) → proceed to E15.
    - **HOLD** → post the hold comment from **AW4** and stop.
    - **RECOVERY_NEEDED** (`COPILOT_PENDING` `"true"`, no same-head
