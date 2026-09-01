@@ -1168,7 +1168,7 @@
               },
               "hint": {
                 "type": "string",
-                "description": "Diagnostic-only note, present only when applicable: this comment is a recognized advisory non-review notice with an IDD-agent reply that used the wrong disposition phrase, naming the exact phrase the notice-specific carry-forward requires."
+                "description": "Diagnostic-only note, present only when applicable: names the exact required disposition phrase or literal prefix an IDD-agent reply attempt was close to but missed -- either a recognized advisory non-review notice with a wrong-phrase reply (#1833), or any missing comment with a plain-text reply attempt that never satisfies the required bold **Accepted**/**Rejected** prefix (#2249)."
               }
             }
           }

@@ -988,6 +988,15 @@ export function hasFreshDisposition(thread, options = {}) {
 // `trimStart()` first.
 const DISPOSITION_ACCEPTED_PREFIX_RE = /^\*\*Accepted[.!:]?\*\*/;
 const DISPOSITION_REJECTED_PREFIX_RE = /^\*\*Rejected[.!:]?\*\*/;
+// #2249: loose "close but not exact" detector for `missingRegularComments[].hint`
+// (`MALFORMED_DISPOSITION_PREFIX_HINT`) -- deliberately laxer than the two
+// exact-match regexes above, matching the four literal prefixes a
+// near-miss reply typically starts with: bare `Accepted`/`Rejected`
+// (no bold markdown) or `**Accepted`/`**Rejected` (bold markdown present
+// but the marker still fails `isDispositionComment`, e.g. interior text
+// before the closing `**`). Always paired with `!isDispositionComment`
+// at each call site so an already-valid disposition never matches.
+const MALFORMED_DISPOSITION_PREFIX_RE = /^\*{0,2}(?:Accepted|Rejected)/;
 export function isDispositionComment(comment) {
   const body = (comment.body ?? '').trimEnd();
   return (
@@ -1201,6 +1210,19 @@ export const NON_REVIEW_NOTICE_DISPOSITION_HINT =
   'must start with "**Rejected**" and match /\\bdid not review HEAD\\b/i -- ' +
   'canonical form: "**Rejected** — {bot} did not review HEAD {sha} ' +
   '({reason}); this is not a completed review"';
+// #2249 diagnostic-only hint text, single-sourced like
+// `NON_REVIEW_NOTICE_DISPOSITION_HINT` above: names the exact literal
+// prefix `isDispositionComment` requires, for the far more common
+// plain-text mistake -- a reply written as `Accepted — ...` or
+// `Rejected — ...` with no bold markdown at all, so it never satisfies
+// `isDispositionComment` even though it is clearly an attempted
+// disposition. Never consumed by any routing decision -- see the `hint`
+// field's own doc comment on `DispositionEvidenceSummary`.
+export const MALFORMED_DISPOSITION_PREFIX_HINT =
+  'disposition reply is missing the required literal prefix: it must ' +
+  'start with exactly "**Accepted**" or "**Rejected**" (bold markdown, ' +
+  'optionally followed by one of . ! : before the closing **) -- a plain ' +
+  '"Accepted" / "Rejected" without the bold markdown is not recognized';
 // #1122 CodeRabbit summary-walkthrough auto-disposition classifiers.
 //
 // The CodeRabbit summary walkthrough is a regular comment whose body starts with
@@ -3037,6 +3059,23 @@ export function summarizeDispositionEvidenceForGate(
       DISPOSITION_REJECTED_PREFIX_RE.test(comment.body.trimStart()) &&
       !isNonReviewNoticeDisposition({ body: comment.body }),
   );
+  // #2249: a broader "close but not exact" pool, independent of the
+  // #1833 non-review-notice pairing above. Sourced from ALL IDD-agent
+  // comments (not just `dispositionComments`, which already requires
+  // `isDispositionComment` to be true) because the motivating mistake --
+  // a plain `Accepted — ...` / `Rejected — ...` reply with no bold
+  // markdown at all -- never satisfies `isDispositionComment` in the
+  // first place, so it would never appear in `dispositionComments`.
+  // `!isDispositionComment` excludes any comment that is ALREADY a valid
+  // disposition (e.g. `**Accepted**` is well-formed and needs no hint),
+  // so this pool and `wrongPhraseRejectedDispositions` are disjoint by
+  // construction: the latter's members all satisfy `isDispositionComment`.
+  const malformedPrefixDispositions = normalizedComments.filter(
+    (comment) =>
+      iddAgentLogins.has(comment.authorLogin) &&
+      MALFORMED_DISPOSITION_PREFIX_RE.test(comment.body.trimStart()) &&
+      !isDispositionComment({ body: comment.body }),
+  );
   const outstandingNotices = outstandingComments.filter(
     (comment) =>
       isGateAdvisoryBotLogin(comment.authorLogin, advisoryBotLogins) &&
@@ -3154,6 +3193,18 @@ export function summarizeDispositionEvidenceForGate(
         (disposition) =>
           compareIsoTimestamps(disposition.activityAt, comment.createdAt) > 0,
       );
+    // #2249: generalizes the diagnostic above beyond the notice-specific
+    // wrong-phrase case. Checked only when `hasWrongPhraseAttempt` is
+    // false so the more specific #1833 hint always wins when both could
+    // apply (they cannot in practice -- see `malformedPrefixDispositions`'
+    // disjointness note -- but the precedence keeps the more actionable
+    // hint on top if that ever changes).
+    const hasMalformedPrefixAttempt =
+      !hasWrongPhraseAttempt &&
+      malformedPrefixDispositions.some(
+        (disposition) =>
+          compareIsoTimestamps(disposition.activityAt, comment.createdAt) > 0,
+      );
     return {
       id: comment.id || `comment-${comment.sortedIndex + 1}`,
       authorLogin: comment.authorLogin || 'unknown',
@@ -3161,7 +3212,9 @@ export function summarizeDispositionEvidenceForGate(
       bodyPreview: buildBodyPreview(comment.body),
       ...(hasWrongPhraseAttempt
         ? { hint: NON_REVIEW_NOTICE_DISPOSITION_HINT }
-        : {}),
+        : hasMalformedPrefixAttempt
+          ? { hint: MALFORMED_DISPOSITION_PREFIX_HINT }
+          : {}),
     };
   });
   // #978 advisory-only diagnostic: a blocking resolved thread is
