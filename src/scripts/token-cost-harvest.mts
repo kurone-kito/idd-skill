@@ -1256,7 +1256,10 @@ export function readExistingVendorSessionKeys(outPath: string): Set<string> {
 export function parseRepoFlag(
   repoFlag: string,
 ): { owner: string; repo: string } | null {
-  const parts = repoFlag.split('/');
+  const parts = repoFlag
+    .trim()
+    .split('/')
+    .map((part) => part.trim());
   if (parts.length !== 2 || parts.some((part) => part === '')) {
     return null;
   }
@@ -1270,9 +1273,14 @@ function runCli(argv: string[]): void {
     printHelp();
     return;
   }
-  const parsedRepo = parseRepoFlag(values.repo as string);
+  const repoFlag = values.repo as string;
+  const parsedRepo = parseRepoFlag(repoFlag);
   if (!parsedRepo) {
-    process.stderr.write('--repo <owner>/<repo> is required\n');
+    process.stderr.write(
+      repoFlag === ''
+        ? '--repo <owner>/<repo> is required\n'
+        : `--repo must be in <owner>/<repo> form, got: ${repoFlag}\n`,
+    );
     process.exitCode = 2;
     return;
   }

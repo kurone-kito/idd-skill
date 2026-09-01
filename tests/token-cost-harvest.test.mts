@@ -1155,3 +1155,15 @@ test('parseRepoFlag rejects extra, missing, or empty segments', () => {
   assert.equal(parseRepoFlag('owner'), null);
   assert.equal(parseRepoFlag(''), null);
 });
+
+test('parseRepoFlag trims surrounding and per-segment whitespace', () => {
+  assert.deepEqual(parseRepoFlag(' acme/repo '), {
+    owner: 'acme',
+    repo: 'repo',
+  });
+  assert.deepEqual(parseRepoFlag('acme / repo'), {
+    owner: 'acme',
+    repo: 'repo',
+  });
+  assert.equal(parseRepoFlag('  '), null);
+});

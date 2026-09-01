@@ -1020,7 +1020,10 @@ export function readExistingVendorSessionKeys(outPath) {
 }
 /** Validates and splits a --repo <owner>/<repo> flag value; null for anything but exactly two non-empty segments. */
 export function parseRepoFlag(repoFlag) {
-  const parts = repoFlag.split('/');
+  const parts = repoFlag
+    .trim()
+    .split('/')
+    .map((part) => part.trim());
   if (parts.length !== 2 || parts.some((part) => part === '')) {
     return null;
   }
@@ -1033,9 +1036,14 @@ function runCli(argv) {
     printHelp();
     return;
   }
-  const parsedRepo = parseRepoFlag(values.repo);
+  const repoFlag = values.repo;
+  const parsedRepo = parseRepoFlag(repoFlag);
   if (!parsedRepo) {
-    process.stderr.write('--repo <owner>/<repo> is required\n');
+    process.stderr.write(
+      repoFlag === ''
+        ? '--repo <owner>/<repo> is required\n'
+        : `--repo must be in <owner>/<repo> form, got: ${repoFlag}\n`,
+    );
     process.exitCode = 2;
     return;
   }
