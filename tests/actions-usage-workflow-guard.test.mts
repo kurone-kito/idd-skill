@@ -18,6 +18,20 @@ function readWorkflow(name: string): string {
   );
 }
 
+function hasOwnConcurrencyBlock(text: string): boolean {
+  return /^concurrency:$/m.test(text);
+}
+
+/** The called workflow's own filename, when `text`'s job body calls a
+ * local reusable workflow (`uses: ./.github/workflows/<file>`); `null`
+ * otherwise. */
+function reusableWorkflowCallTarget(text: string): string | null {
+  const match = text.match(
+    /\n {4}uses: \.\/\.github\/workflows\/([\w.-]+\.ya?ml)/,
+  );
+  return match ? match[1] : null;
+}
+
 /** Same on:-block slice convention as
  * tests/advisory-convergence-comment-workflow.test.mts: every workflow file
  * in this repository places `permissions:` immediately after its `on:`
@@ -85,7 +99,9 @@ test('every pull_request-triggering workflow has working concurrency cancellatio
   );
   for (const file of files) {
     const text = readWorkflow(file);
-    const hasOwnConcurrency = /^concurrency:$/m.test(text);
+    if (hasOwnConcurrencyBlock(text)) {
+      continue;
+    }
     // pnpm-boundary-node22-floor.yml calls pnpm-boundary.yml as a reusable
     // workflow (`uses: ./.github/workflows/pnpm-boundary.yml`) and declares
     // no concurrency of its own -- it inherits the called workflow's own
@@ -96,11 +112,20 @@ test('every pull_request-triggering workflow has working concurrency cancellatio
     // repository's own run history (workflow id 324862465): historical
     // `cancelled` conclusions exist for this workflow, which could only
     // happen if a newer run's concurrency group evicted an older one.
-    const isReusableWorkflowCaller =
-      /\n {4}uses: \.\/\.github\/workflows\//.test(text);
+    //
+    // Verify the *called* workflow actually declares concurrency too --
+    // otherwise a future workflow-call-only caller of a workflow lacking
+    // its own concurrency block would silently pass this guard.
+    const calledFile = reusableWorkflowCallTarget(text);
+    if (!calledFile) {
+      assert.fail(
+        `${file}: must declare its own concurrency: block, or be a pure reusable-workflow caller that inherits one`,
+      );
+    }
+    const calledText = readWorkflow(calledFile);
     assert.ok(
-      hasOwnConcurrency || isReusableWorkflowCaller,
-      `${file}: must declare its own concurrency: block, or be a pure reusable-workflow caller that inherits one`,
+      hasOwnConcurrencyBlock(calledText),
+      `${file}: calls ${calledFile} as a reusable workflow, but ${calledFile} declares no concurrency: block for it to inherit`,
     );
   }
 });
