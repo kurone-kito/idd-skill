@@ -13,7 +13,10 @@ import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
 import { buildHelperRuntimeManifest } from '../src/scripts/helper-runtime-manifest.mts';
-import { runDoctor } from '../src/scripts/idd-doctor.mts';
+import {
+  DOCUMENTED_TOOLCHAIN_SEGMENTS,
+  runDoctor,
+} from '../src/scripts/idd-doctor.mts';
 
 const REPO_ROOT = fileURLToPath(new URL('..', import.meta.url));
 const FIXTURE_ROOT = new URL(
@@ -238,6 +241,146 @@ test('idd-doctor skips residue warnings for idd-skill marker prefix', (t) => {
       (warning) => !warning.startsWith('toolchain residue detected'),
     ),
   );
+});
+
+test('idd-doctor does not warn when commands match the documented worked-example chain', (t) => {
+  const root = createDoctorFixtureRepoFromConfig(
+    {
+      ...REQUIRED_CONFIG_BASE,
+      commands: {
+        'fix-validate':
+          'npx dprint fmt "**/*.md" && npx markdownlint-cli2 --fix "**/*.md" && npx markdownlint-cli2 "**/*.md"',
+        'pre-push-validate':
+          'npx dprint check "**/*.md" && npx markdownlint-cli2 "**/*.md" && npx cspell lint "**" --no-progress',
+        'post-fix-validate':
+          'npx dprint fmt "**/*.md" && npx markdownlint-cli2 --fix "**/*.md" && npx markdownlint-cli2 "**/*.md" && npx cspell lint "**" --no-progress',
+        'install-deps': 'true',
+      },
+    },
+    {
+      markerPrefix: 'example-team',
+    },
+  );
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const report = runDoctor({ root, requireGithub: false });
+
+  assert.equal(report.errors.length, 0);
+  assert.ok(
+    report.warnings.every(
+      (warning) => !warning.startsWith('toolchain residue detected'),
+    ),
+  );
+});
+
+test('idd-doctor does not warn on a fix-validate that documents the markdownlint-only subset', (t) => {
+  const root = createDoctorFixtureRepoFromConfig(
+    {
+      ...REQUIRED_CONFIG_BASE,
+      commands: {
+        'fix-validate':
+          'npx markdownlint-cli2 --fix "**/*.md" && npx markdownlint-cli2 "**/*.md"',
+        'pre-push-validate': 'npm run lint',
+        'post-fix-validate': 'npm run test',
+        'install-deps': 'true',
+      },
+    },
+    {
+      markerPrefix: 'example-team',
+    },
+  );
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const report = runDoctor({ root, requireGithub: false });
+
+  assert.equal(report.errors.length, 0);
+  assert.ok(
+    report.warnings.every(
+      (warning) => !warning.startsWith('toolchain residue detected'),
+    ),
+  );
+});
+
+test('idd-doctor does not warn on a fix-validate that documents the cspell-only subset', (t) => {
+  const root = createDoctorFixtureRepoFromConfig(
+    {
+      ...REQUIRED_CONFIG_BASE,
+      commands: {
+        'fix-validate': 'npx cspell lint "**" --no-progress',
+        'pre-push-validate': 'npm run lint',
+        'post-fix-validate': 'npm run test',
+        'install-deps': 'true',
+      },
+    },
+    {
+      markerPrefix: 'example-team',
+    },
+  );
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const report = runDoctor({ root, requireGithub: false });
+
+  assert.equal(report.errors.length, 0);
+  assert.ok(
+    report.warnings.every(
+      (warning) => !warning.startsWith('toolchain residue detected'),
+    ),
+  );
+});
+
+test('idd-doctor still warns when a documented segment appears under the wrong command key', (t) => {
+  const root = createDoctorFixtureRepoFromConfig(
+    {
+      ...REQUIRED_CONFIG_BASE,
+      commands: {
+        'fix-validate': 'npm run lint',
+        'pre-push-validate': 'npx dprint fmt "**/*.md"',
+        'post-fix-validate': 'npm run test',
+        'install-deps': 'true',
+      },
+    },
+    {
+      markerPrefix: 'example-team',
+    },
+  );
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const report = runDoctor({ root, requireGithub: false });
+
+  assert.equal(report.errors.length, 0);
+  assert.ok(
+    report.warnings.some((warning) =>
+      warning.includes(
+        'toolchain residue detected for marker prefix "example-team"',
+      ),
+    ),
+  );
+});
+
+test('idd-doctor documented toolchain segments stay in sync with customization.md', () => {
+  const customizationDoc = readFileSync(
+    join(REPO_ROOT, 'idd-template/docs/customization.md'),
+    'utf8',
+  );
+  const rows: [string, string][] = [
+    ['fix-validate', '**fix-validate**'],
+    ['pre-push-validate', '**pre-push-validate**'],
+    ['post-fix-validate', '**post-fix-validate**'],
+  ];
+  for (const [key, label] of rows) {
+    const rowMatch = customizationDoc
+      .split('\n')
+      .find((line) => line.includes(`| ${label}`));
+    assert.ok(rowMatch, `expected a customization.md table row for ${key}`);
+    const cellMatch = rowMatch?.match(/\| `([^`]+)`\s*\|\s*$/);
+    assert.ok(cellMatch, `expected a command cell for ${key} in: ${rowMatch}`);
+    const docSegments = (cellMatch as RegExpMatchArray)[1]
+      .split('&&')
+      .map((segment) => segment.trim());
+    const productionSegments = DOCUMENTED_TOOLCHAIN_SEGMENTS[key] ?? [];
+    for (const segment of docSegments) {
+      assert.ok(
+        productionSegments.includes(segment),
+        `customization.md segment "${segment}" for "${key}" is missing from idd-doctor's DOCUMENTED_TOOLCHAIN_SEGMENTS`,
+      );
+    }
+  }
 });
 
 test('idd-doctor does not warn when config and overview concrete commands agree', (t) => {
