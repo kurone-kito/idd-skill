@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import {
   buildActivitySnapshotSummary,
+  MALFORMED_DISPOSITION_PREFIX_HINT,
   summarizeDispositionEvidenceForGate,
 } from '../src/scripts/protocol-helpers.mts';
 
@@ -533,4 +534,173 @@ test('reviewCurrency still anchors an edited ordinary Accepted marker by created
     activitySummary.ackOnly.items.map((item) => item.id),
     ['AC-3'],
   );
+});
+
+// #2249: `summarizeDispositionEvidenceForGate`'s `missingRegularComments[].hint`
+// only named the exact required literal prefix for the narrow #1833
+// non-review-notice pairing. The far more common mistake -- an IDD-agent
+// reply written as plain `Accepted — ...` with no bold markdown at all --
+// fell into the same `missingRegularComments` list with no hint at all,
+// even though `isDispositionComment` requires exactly `**Accepted**` /
+// `**Rejected**`. This generalizes the hint to that plain-text case.
+test('disposition evidence hints at the required literal prefix when a plain-text (no bold) reply exists', () => {
+  const summary = summarizeDispositionEvidenceForGate(
+    {
+      comments: [
+        {
+          id: 1,
+          createdAt: '2026-05-12T00:00:00Z',
+          body: 'I found a potential off-by-one in `foo.mts` at line 42 — the loop bound should be `<=` to include the final element.',
+          author: { login: 'chatgpt-codex-connector[bot]' },
+        },
+        {
+          id: 2,
+          createdAt: '2026-05-12T01:00:00Z',
+          // A real disposition attempt in substance, but no bold markdown
+          // at all -- fails `isDispositionComment`.
+          body: 'Accepted — looks correct.',
+          author: { login: 'idd-bot' },
+        },
+      ],
+      threads: [],
+    },
+    {
+      iddAgentLogins: ['idd-bot'],
+      advisoryBotLogins: ['chatgpt-codex-connector[bot]'],
+    },
+  );
+
+  // Existing pass/fail routing is unchanged -- only the diagnostic is added.
+  assert.equal(summary.route, 'return-to-e1');
+  assert.equal(summary.reason, 'missing-disposition-evidence');
+  assert.equal(summary.missingRegularCommentCount, 1);
+  assert.equal(
+    summary.missingRegularComments[0].hint,
+    MALFORMED_DISPOSITION_PREFIX_HINT,
+  );
+});
+
+// #2249: a regular comment with no resemblance whatsoever to a disposition
+// attempt (no later IDD-agent reply at all) must still carry no hint --
+// the new generalized check must not become a blanket default.
+test('disposition evidence does not hint an unrelated regular comment with no reply attempt', () => {
+  const summary = summarizeDispositionEvidenceForGate(
+    {
+      comments: [
+        {
+          id: 1,
+          createdAt: '2026-05-12T00:00:00Z',
+          body: 'This looks like a genuine review finding with no reply yet.',
+          author: { login: 'chatgpt-codex-connector[bot]' },
+        },
+      ],
+      threads: [],
+    },
+    {
+      iddAgentLogins: ['idd-bot'],
+      advisoryBotLogins: ['chatgpt-codex-connector[bot]'],
+    },
+  );
+
+  assert.equal(summary.route, 'return-to-e1');
+  assert.equal(summary.missingRegularCommentCount, 1);
+  assert.equal(summary.missingRegularComments[0].hint, undefined);
+});
+
+// #2249, Copilot review on PR #2383: `MALFORMED_DISPOSITION_PREFIX_RE` must
+// not match a single-`*` near-miss (`*Accepted`, not a real bold-markdown
+// attempt) or a longer word starting with the same prefix (`Acceptedly`),
+// so the hint stays scoped to genuine near-miss disposition attempts.
+test('disposition evidence does not hint from a single-asterisk or longer-word near-miss', () => {
+  const summary = summarizeDispositionEvidenceForGate(
+    {
+      comments: [
+        {
+          id: 1,
+          createdAt: '2026-05-12T00:00:00Z',
+          body: 'I found a potential off-by-one in `foo.mts` at line 42 — the loop bound should be `<=` to include the final element.',
+          author: { login: 'chatgpt-codex-connector[bot]' },
+        },
+        {
+          id: 2,
+          createdAt: '2026-05-12T01:00:00Z',
+          // Single leading `*`, not the required zero or two -- not a
+          // real bold-markdown disposition attempt.
+          body: '*Accepted — looks correct.',
+          author: { login: 'idd-bot' },
+        },
+        {
+          id: 3,
+          createdAt: '2026-05-12T00:00:00Z',
+          body: 'A second, unrelated finding awaiting its own disposition.',
+          author: { login: 'chatgpt-codex-connector[bot]' },
+        },
+        {
+          id: 4,
+          createdAt: '2026-05-12T01:00:00Z',
+          // Starts with the literal word "Accepted" but continues into a
+          // longer word -- not a disposition attempt at all.
+          body: 'Acceptedly this needs more review before merging.',
+          author: { login: 'idd-bot' },
+        },
+      ],
+      threads: [],
+    },
+    {
+      iddAgentLogins: ['idd-bot'],
+      advisoryBotLogins: ['chatgpt-codex-connector[bot]'],
+    },
+  );
+
+  assert.equal(summary.missingRegularCommentCount, 2);
+  for (const comment of summary.missingRegularComments) {
+    assert.equal(comment.hint, undefined);
+  }
+});
+
+// #2249, Copilot review on PR #2383: a human's outstanding comment never
+// requires the bold `**Accepted**`/`**Rejected**` prefix (presence-only,
+// #2139), so `MALFORMED_DISPOSITION_PREFIX_HINT` must never attach to a
+// human missing comment even when a malformed reply exists somewhere in
+// the thread. Two human comments, one malformed reply: the 1:1 pairing
+// consumes the reply for the EARLIER comment (clearing it), leaving the
+// LATER comment still missing -- it must get no hint, not a misleading
+// one claiming it needs bold markdown it never required.
+test('disposition evidence does not hint a still-missing human comment from a reply consumed by an earlier human comment', () => {
+  const summary = summarizeDispositionEvidenceForGate(
+    {
+      comments: [
+        {
+          id: 1,
+          createdAt: '2026-05-12T00:00:00Z',
+          body: 'First human review comment awaiting a reply.',
+          author: { login: 'reviewer-a' },
+        },
+        {
+          id: 2,
+          createdAt: '2026-05-12T00:30:00Z',
+          body: 'Second human review comment awaiting a reply.',
+          author: { login: 'reviewer-b' },
+        },
+        {
+          id: 3,
+          createdAt: '2026-05-12T01:00:00Z',
+          // Malformed (no bold), but presence-only suffices for a human
+          // comment -- the 1:1 pairing consumes this for comment 1 (the
+          // earlier of the two), leaving comment 2 still missing.
+          body: 'Accepted — will follow up.',
+          author: { login: 'idd-bot' },
+        },
+      ],
+      threads: [],
+    },
+    {
+      iddAgentLogins: ['idd-bot'],
+      advisoryBotLogins: ['chatgpt-codex-connector[bot]'],
+    },
+  );
+
+  assert.equal(summary.missingRegularCommentCount, 1);
+  assert.equal(summary.missingRegularComments[0].authorLogin, 'reviewer-b');
+  assert.equal(summary.missingRegularComments[0].hint, undefined);
 });
