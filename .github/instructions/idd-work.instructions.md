@@ -285,15 +285,22 @@ plan comment and verified claim.
 
 ## B3 — Implement
 
-**Plan-comment checkpoint**: before implementation begins, the B2 plan
-comment must already exist on the issue; posting it before implementation
-is the only normal path. If it does not, stop and return to B2. The
-following is a repair path only for an ordering violation that has
+### B3 self-check
+
+Before implementing, verify B2 actually finished, not merely started:
+the B2 plan comment reflects the refined, post-critique plan (draft →
+critique pass → refined final plan posted as a follow-up or update to
+the same comment) -- a draft posted before its critique pass does not
+satisfy this. Claim ownership revalidation needs no separate check
+here: it already applies to every B3 mutation via the
+[claim revalidation gate](idd-overview-core.instructions.md#claim-revalidation-gate).
+If the plan is not actually finalized, stop and return to B2.
+
+The following is a repair path only for an ordering violation that has
 already occurred, not an alternative route: disclose the deviation on
-the issue, name the skipped checkpoint step (for example, the B3
-plan-comment checkpoint), post the plan retroactively with an explicit
-note about the reordering, and run the C1 critique pass against the
-completed diff.
+the issue, name the skipped checkpoint step (the B3 self-check above),
+post the plan retroactively with an explicit note about the
+reordering, and run the C1 critique pass against the completed diff.
 
 Implement the plan, running **fix-validate** before each atomic commit
 (one logical change per commit).
