@@ -96,21 +96,21 @@ added layer of recovery machinery. Prefer removing or substantially
 simplifying the fragile mechanism instead — replacing an
 automatic-recovery path with a simpler fail-closed behavior plus
 actionable manual-recovery guidance, rather than a second redesign —
-**but only once removal is confirmed safe**: check the issue's
-acceptance criteria and any established external contract for whether
-the mechanism being removed was actually required behavior; if so,
-stop for a maintainer decision instead of deleting it to converge
-review. Worked example: issue #2223's clone-scoped lock (PR #2389)
-kept drawing new P1 concurrency findings across several rounds even
-after replacing mtime-based staleness with PID-liveness-based
-staleness; convergence only happened once automatic stale-lock
-takeover was removed entirely, replaced with a timeout that reports
-the lock path and holder for manual recovery — the same shape
+**but only once confirmed safe**: before removing or simplifying away
+any part of the mechanism's behavior, check the issue's acceptance
+criteria and any established external contract for whether that
+behavior was actually required; if so, stop for a maintainer decision
+instead of dropping it to converge review. Worked example:
+kurone-kito/idd-skill#2223's clone-scoped lock
+(kurone-kito/idd-skill#2389) kept drawing new P1 concurrency findings
+across several rounds even after replacing mtime-based staleness with
+PID-liveness-based staleness; convergence only happened once automatic
+stale-lock takeover was removed entirely, replaced with a timeout that
+reports the lock path and holder for manual recovery — the same shape
 `git`'s own `index.lock` uses on collision. Removal was safe there
-specifically because issue #2223's acceptance criteria only ever
+specifically because the issue's acceptance criteria only ever
 required an acquire/release interface, never automatic stale-lock
-recovery (`src/scripts/clone-lock.mts`'s own header comment records
-this).
+recovery.
 
 ## E11 — Resolve conflicts with {development-branch}
 
