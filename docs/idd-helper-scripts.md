@@ -1373,14 +1373,13 @@ Interpretation rules:
 - `--check` reports `{ path, present, holder?, malformed? }`
   read-only, the same shape as the worktree-local claim lock's
   `--check` above.
-- A lock whose lease has not been refreshed for 5 minutes is treated
-  as abandoned by a dead holder and taken over; `--exec` refreshes its
-  own lease periodically while the wrapped command runs, so a
-  legitimately long-running `git fetch` is never mistaken for a dead
-  holder. Recovering an abandoned lock is itself race-free across
-  concurrent contenders: removal and recreation happen only while
-  holding a companion PID-tagged arbiter lock, so at most one
-  contender is ever doing that at a time.
+- A lock is eligible for takeover only once its recorded holder
+  process is confirmed dead (`process.kill(pid, 0)`), not after any
+  fixed time period; a live holder's lock is never taken over,
+  however long it is held, so a legitimately long-running `git fetch`
+  is never mistaken for a dead holder. A malformed lock body (no
+  readable `pid`) is never auto-recovered — see `--check`'s
+  `malformed: true` output for manual diagnosis.
 - **`instructions-only` helper-free fallback (no helper runtime
   available)**: this lock is a same-machine convenience for
   parallel autonomous fan-out, not a correctness requirement — an
