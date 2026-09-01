@@ -23,12 +23,15 @@ name: IDD advisory-convergence gate
 # shell syntax.
 #
 # Adjust the pinned `actions/checkout` SHA (or use the floating `@v4`
-# tag as shipped here), the checkout `ref:` (see below), and the
-# `node scripts/...` command to your own helper-runtime profile. This
-# file intentionally uses the portable `ubuntu-slim` fallback +
-# `@v4` forms rather than a repository-specific pinned SHA or a
-# hardcoded custom runner label, unlike this source repository's own
-# dogfooded copy at .github/workflows/idd-advisory-convergence.yml.
+# tag as shipped here) and the checkout `ref:` (see below) to your own
+# conventions. The invocation itself needs no hand-editing: it resolves
+# and branches on `helperRuntime.profile` automatically (see "Profile
+# resolution" below) -- configure that field in `.github/idd/config.json`
+# instead of editing the `run:` steps. This file intentionally uses the
+# portable `ubuntu-slim` fallback + `@v4` forms rather than a
+# repository-specific pinned SHA or a hardcoded custom runner label,
+# unlike this source repository's own dogfooded copy at
+# .github/workflows/idd-advisory-convergence.yml.
 #
 # Profile resolution: mirrors post-merge-cleanup.yml's
 # helperRuntime.profile resolution and per-step `if:` gating (see its
@@ -129,22 +132,31 @@ jobs:
           # guess at a runnable profile.
           PROFILE="instructions-only"
           PACKAGE_SPEC=""
-          for CANDIDATE in .github/idd/config.json idd-policy.json; do
-            if [ -f "$CANDIDATE" ]; then
-              if RESOLVED=$(jq -r '.helperRuntime.profile // empty' "$CANDIDATE" 2>/dev/null); then
-                case "$RESOLVED" in
-                  vendored-node | package-manager | ephemeral-npx | instructions-only)
-                    PROFILE="$RESOLVED"
-                    PACKAGE_SPEC=$(jq -r '.helperRuntime.packageSpec // empty' "$CANDIDATE" 2>/dev/null || echo "")
-                    ;;
-                esac
+          if ! command -v jq >/dev/null 2>&1; then
+            # Distinguish "jq is missing" from a genuine instructions-only
+            # config: without jq, no config file can be parsed at all, so
+            # this would otherwise silently masquerade as an intentional
+            # instructions-only choice. GitHub-hosted runner images ship
+            # jq by default; this only bites a jq-less self-hosted runner.
+            echo "::warning::jq is not available on this runner, so helperRuntime.profile cannot be resolved; treating as instructions-only. Install jq on this runner, or use a runner image that provides it."
+          else
+            for CANDIDATE in .github/idd/config.json idd-policy.json; do
+              if [ -f "$CANDIDATE" ]; then
+                if RESOLVED=$(jq -r '.helperRuntime.profile // empty' "$CANDIDATE" 2>/dev/null); then
+                  case "$RESOLVED" in
+                    vendored-node | package-manager | ephemeral-npx | instructions-only)
+                      PROFILE="$RESOLVED"
+                      PACKAGE_SPEC=$(jq -r '.helperRuntime.packageSpec // empty' "$CANDIDATE" 2>/dev/null || echo "")
+                      ;;
+                  esac
+                fi
+                # First present candidate file wins outright, valid or not
+                # -- never fall through to the legacy idd-policy.json name
+                # once the canonical file has been evaluated.
+                break
               fi
-              # First present candidate file wins outright, valid or not
-              # -- never fall through to the legacy idd-policy.json name
-              # once the canonical file has been evaluated.
-              break
-            fi
-          done
+            done
+          fi
           echo "profile=$PROFILE" >> "$GITHUB_OUTPUT"
           echo "package-spec=$PACKAGE_SPEC" >> "$GITHUB_OUTPUT"
       - name: Fail closed when no helper runtime is configured
@@ -223,6 +235,10 @@ jobs:
           PACKAGE_SPEC: ${{ steps.profile.outputs.package-spec }}
           MANAGER: ${{ steps.manager.outputs.manager }}
         run: |
+          if [ -z "$PR_NUMBER" ]; then
+            echo "::error::PR_NUMBER is empty"
+            exit 1
+          fi
           case "$PROFILE" in
             vendored-node)
               node scripts/advisory-convergence.mjs --pr "$PR_NUMBER" --assert
@@ -245,5 +261,14 @@ jobs:
             ephemeral-npx)
               SPEC="${PACKAGE_SPEC:-https://codeload.github.com/kurone-kito/idd-skill/tar.gz/refs/heads/main}"
               npx --yes --package "$SPEC" idd-advisory-convergence --pr "$PR_NUMBER" --assert
+              ;;
+            *)
+              # Unreachable by construction (the profile-resolution step
+              # only ever emits one of the four known profile values, and
+              # instructions-only already failed the job above), but a
+              # required check must never silently no-op and report
+              # success on an unexpected profile value.
+              echo "::error::unrecognized helper-runtime profile \"$PROFILE\""
+              exit 1
               ;;
           esac

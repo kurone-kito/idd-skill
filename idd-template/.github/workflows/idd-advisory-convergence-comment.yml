@@ -60,22 +60,31 @@ jobs:
           # guess at a runnable profile.
           PROFILE="instructions-only"
           PACKAGE_SPEC=""
-          for CANDIDATE in .github/idd/config.json idd-policy.json; do
-            if [ -f "$CANDIDATE" ]; then
-              if RESOLVED=$(jq -r '.helperRuntime.profile // empty' "$CANDIDATE" 2>/dev/null); then
-                case "$RESOLVED" in
-                  vendored-node | package-manager | ephemeral-npx | instructions-only)
-                    PROFILE="$RESOLVED"
-                    PACKAGE_SPEC=$(jq -r '.helperRuntime.packageSpec // empty' "$CANDIDATE" 2>/dev/null || echo "")
-                    ;;
-                esac
+          if ! command -v jq >/dev/null 2>&1; then
+            # Distinguish "jq is missing" from a genuine instructions-only
+            # config: without jq, no config file can be parsed at all, so
+            # this would otherwise silently masquerade as an intentional
+            # instructions-only choice. GitHub-hosted runner images ship
+            # jq by default; this only bites a jq-less self-hosted runner.
+            echo "::warning::jq is not available on this runner, so helperRuntime.profile cannot be resolved; treating as instructions-only. Install jq on this runner, or use a runner image that provides it."
+          else
+            for CANDIDATE in .github/idd/config.json idd-policy.json; do
+              if [ -f "$CANDIDATE" ]; then
+                if RESOLVED=$(jq -r '.helperRuntime.profile // empty' "$CANDIDATE" 2>/dev/null); then
+                  case "$RESOLVED" in
+                    vendored-node | package-manager | ephemeral-npx | instructions-only)
+                      PROFILE="$RESOLVED"
+                      PACKAGE_SPEC=$(jq -r '.helperRuntime.packageSpec // empty' "$CANDIDATE" 2>/dev/null || echo "")
+                      ;;
+                  esac
+                fi
+                # First present candidate file wins outright, valid or not
+                # -- never fall through to the legacy idd-policy.json name
+                # once the canonical file has been evaluated.
+                break
               fi
-              # First present candidate file wins outright, valid or not
-              # -- never fall through to the legacy idd-policy.json name
-              # once the canonical file has been evaluated.
-              break
-            fi
-          done
+            done
+          fi
           echo "profile=$PROFILE" >> "$GITHUB_OUTPUT"
           echo "package-spec=$PACKAGE_SPEC" >> "$GITHUB_OUTPUT"
       - uses: actions/setup-node@v4
@@ -172,6 +181,10 @@ jobs:
           PACKAGE_SPEC: ${{ steps.profile.outputs.package-spec }}
           MANAGER: ${{ steps.manager.outputs.manager }}
         run: |
+          if [ -z "$PR_NUMBER" ]; then
+            echo "::error::PR_NUMBER is empty"
+            exit 1
+          fi
           case "$PROFILE" in
             vendored-node)
               node scripts/rerun-advisory-convergence.mjs --pr "$PR_NUMBER" --apply
@@ -192,5 +205,9 @@ jobs:
             ephemeral-npx)
               SPEC="${PACKAGE_SPEC:-https://codeload.github.com/kurone-kito/idd-skill/tar.gz/refs/heads/main}"
               npx --yes --package "$SPEC" idd-rerun-advisory-convergence --pr "$PR_NUMBER" --apply
+              ;;
+            *)
+              echo "::error::unrecognized helper-runtime profile \"$PROFILE\""
+              exit 1
               ;;
           esac
