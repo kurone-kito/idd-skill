@@ -27,6 +27,59 @@ function fakeDeps(
 }
 
 // ---------------------------------------------------------------------------
+// getWorkItem (#2266): its own doc comment in provider-port.mts promises a
+// typed ProviderError on any non-404 failure -- the pre-fix implementation
+// rethrew the raw gh-exec error unwrapped instead, contradicting its own
+// contract and the issue's own AC4 ("provider errors normalize into the
+// contract's categories"). No existing caller catches this throw at all
+// (every consumer just lets it propagate, fail-closed), so nothing depended
+// on the old raw shape. Found by Copilot review, #2400.
+// ---------------------------------------------------------------------------
+
+test('getWorkItem returns null on a genuine 404, unaffected by the ProviderError wrap', () => {
+  const port = createGithubProviderAdapter(
+    'kurone-kito',
+    'idd-skill',
+    fakeDeps({
+      ghApiJson: () => {
+        const error = new Error('HTTP 404') as Error & { stderr?: string };
+        error.stderr = 'gh: Not Found (HTTP 404)';
+        throw error;
+      },
+    }),
+  );
+  assert.equal(port.getWorkItem(900), null);
+});
+
+test('getWorkItem throws a typed ProviderError on a non-404 failure', () => {
+  const port = createGithubProviderAdapter(
+    'kurone-kito',
+    'idd-skill',
+    fakeDeps({
+      ghApiJson: () => {
+        const error = new Error('boom') as Error & { stderr?: string };
+        error.stderr = 'gh: Internal Server Error (HTTP 500)';
+        throw error;
+      },
+    }),
+  );
+  assert.throws(
+    () => port.getWorkItem(900),
+    (error: unknown) => {
+      assert.ok(error instanceof Error);
+      const providerError = error as Error & {
+        category?: string;
+        cause?: unknown;
+      };
+      assert.equal(providerError.category, 'unavailable');
+      assert.match(providerError.message, /HTTP 500/);
+      assert.ok(providerError.cause instanceof Error);
+      return true;
+    },
+  );
+});
+
+// ---------------------------------------------------------------------------
 // listRequiredChecks (#2266): the pre-migration ghJson/
 // recoverJsonFromGhFailure recovery this method replaces, verified through
 // the injectable deps seam (both recoveries have zero coverage otherwise --

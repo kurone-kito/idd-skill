@@ -30,6 +30,27 @@ function statusToCategory(status) {
   if (status !== null && status >= 500) return 'unavailable';
   return 'unknown';
 }
+/**
+ * Wraps a raw gh-exec failure into an `Error` that also carries
+ * {@link ProviderError}'s fields as own properties, for a port method
+ * documented to throw a typed `ProviderError` on non-404 failure (only
+ * {@link getWorkItem} today -- see its doc comment in provider-port.mts).
+ * `ProviderError` itself is a plain data interface, not an `Error`
+ * subclass, so the thrown value must still be a real `Error` (preserving
+ * a stack trace and `instanceof Error` checks elsewhere) that also
+ * satisfies the interface, rather than throwing a bare object (Copilot
+ * review, #2400).
+ */
+function toProviderError(error) {
+  const status = deriveGhHttpStatus(error);
+  const stderr = String(error?.stderr ?? '').trim();
+  const message =
+    stderr || (error instanceof Error ? error.message : String(error));
+  const wrapped = new Error(message);
+  wrapped.category = statusToCategory(status);
+  wrapped.cause = error;
+  return wrapped;
+}
 // The traversal-only helpers below (through wrapTraversalGhFailure) back
 // getWorkItemForTraversalAsync only -- a verbatim port of
 // discover-roadmap-graph.mts's pre-migration resolveGhExitStatus/
@@ -137,7 +158,7 @@ export function createGithubProviderAdapter(owner, repo, deps = DEFAULT_DEPS) {
         if (deriveGhHttpStatus(error) === 404) {
           return null;
         }
-        throw error;
+        throw toProviderError(error);
       }
       const issue = data;
       if (!issue) {
