@@ -1273,7 +1273,14 @@ function readExternalCheckWaiverMode() {
 // evidence `evaluateProviderOutageRelief` requires independently of the
 // declaration itself (never itself sufficient) -- the same terminal-
 // unavailability verdict this file's own `copilot-terminal-unavailable`
-// blocker already consumes.
+// blocker already consumes. Requires `ciGate.externalCheckWaivers.mode`
+// to be `maintainer-authorized` (Codex review on PR #2370): without this,
+// an adopter that leaves `mode` at its `disabled` default but configures
+// the waivable selector and posts a declaration would relieve here while
+// `computeAdvisoryConvergenceVerdict`'s own gate -- gated on the SAME
+// `waiverMode === 'maintainer-authorized'` check -- still rejects it,
+// exactly the two-gate disagreement #2021 already fixed for the direct
+// per-pull-request waiver path.
 function resolveAdvisoryConvergenceOutageRelief({
   owner,
   repo,
@@ -1285,6 +1292,9 @@ function resolveAdvisoryConvergenceOutageRelief({
     const policy = normalizePolicyConfig(
       JSON.parse(readFileSync('.github/idd/config.json', 'utf8')),
     );
+    if (policy.ciGate.externalCheckWaivers.mode !== 'maintainer-authorized') {
+      return false;
+    }
     const targetIssue = policy.providerOutage.declarationTarget;
     if (!targetIssue) return false;
     const declarationComments = ghApiJson(

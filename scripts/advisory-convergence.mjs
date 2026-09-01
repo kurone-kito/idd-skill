@@ -1670,6 +1670,15 @@ function collectFromGitHub(args) {
   // pattern) -- re-declaring the shape here would silently stop tracking
   // that source of truth on drift.
   const policy = normalizePolicyConfig(rawConfig);
+  // Resolved once and reused below AND in the returned `options.now` --
+  // #2353 (Codex review on PR #2370): the declaration-validity read must
+  // evaluate at the SAME instant the rest of this verdict does (deadline,
+  // waiver expiry, terminal evidence), or a `--now`-overridden invocation
+  // (deterministic replay, tests) would resolve `outageDeclarationActive`
+  // against the real wall clock instead, an inconsistency within the same
+  // verdict.
+  const resolvedNow =
+    args.now || new Date().toISOString().replace('.000Z', 'Z');
   // #2353: resolve whether a repository-scoped `providerOutage.
   // declarationTarget` declaration is active for THIS gate's own selector
   // (`idd-advisory-convergence` -- see idd-advisory-wait.instructions.md's
@@ -1699,6 +1708,7 @@ function collectFromGitHub(args) {
         service: ADVISORY_CONVERGENCE_CHECK_SELECTOR,
         policy,
         authorityOf,
+        now: new Date(resolvedNow),
       }).active;
     } catch {
       outageDeclarationActive = false;
@@ -1782,7 +1792,7 @@ function collectFromGitHub(args) {
       prAuthorIsBot,
     },
     options: {
-      now: args.now || new Date().toISOString().replace('.000Z', 'Z'),
+      now: resolvedNow,
       primaryBotLogin,
       trustedMarkerLogins,
       advisoryBotLogins,

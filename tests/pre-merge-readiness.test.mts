@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 
 import {
@@ -5000,6 +5001,48 @@ test('summarizeRequiredChecks: omitted treatAsCoveredByWaiver never covers anyth
     [],
     { required_status_checks: { contexts: ['idd-advisory-convergence'] } },
     {},
+  );
+  assert.equal(result.checks[0].coveredByWaiver, undefined);
+  assert.notEqual(result.status, 'success');
+});
+
+// Codex review (PR #2370): `resolveAdvisoryConvergenceOutageRelief` (the
+// CLI-layer function that fetches/resolves the declaration for
+// pre-merge-readiness.mts) is not exported and does live `gh api` calls,
+// so it is pinned by source text -- same "pin the call site" spirit as
+// advisory-convergence.test.mts's #1810/#1906/#2137/#2353 tests. Without
+// this gate, an adopter that leaves `ciGate.externalCheckWaivers.mode` at
+// its `disabled` default but configures the waivable selector and posts a
+// declaration would relieve here while `computeAdvisoryConvergenceVerdict`
+// -- gated on the SAME check -- still rejects it, disagreeing with the CI
+// check's own verdict for the same pull request and HEAD.
+test('resolveAdvisoryConvergenceOutageRelief requires ciGate.externalCheckWaivers.mode to be maintainer-authorized (#2353, Codex review on PR #2370)', () => {
+  const source = readFileSync(
+    new URL('../src/scripts/pre-merge-readiness.mts', import.meta.url),
+    'utf8',
+  );
+  assert.match(
+    source,
+    /function resolveAdvisoryConvergenceOutageRelief\([\s\S]*?if \(policy\.ciGate\.externalCheckWaivers\.mode !== 'maintainer-authorized'\) \{\s*\n\s*return false;\s*\n\s*\}/,
+  );
+});
+
+// Copilot + Codex review (PR #2370): `treatAsCoveredByWaiver` returning
+// `true` must never cover a check whose live run has not actually
+// completed (QUEUED/IN_PROGRESS/PENDING with an empty/unparseable
+// `completedAt`) -- the same #2034 fail-closed live-run requirement the
+// direct-waiver path already enforces via `hasFreshWaiverCoverage`.
+// Reporting `success` here while GitHub's own required-check state is
+// still pending would recreate the exact "ready but merge blocked"
+// failure mode #2021 fixed.
+test('summarizeRequiredChecks: treatAsCoveredByWaiver never covers a check with no live run at all, even when it returns true', () => {
+  const result = summarizeRequiredChecks(
+    [{ name: 'idd-advisory-convergence', state: 'PENDING', completedAt: '' }],
+    [],
+    { required_status_checks: { contexts: ['idd-advisory-convergence'] } },
+    {
+      treatAsCoveredByWaiver: (name) => name === 'idd-advisory-convergence',
+    },
   );
   assert.equal(result.checks[0].coveredByWaiver, undefined);
   assert.notEqual(result.status, 'success');

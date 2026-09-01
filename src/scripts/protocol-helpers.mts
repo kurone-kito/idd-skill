@@ -4726,10 +4726,14 @@ export function summarizeRequiredChecks(
     // requirements are unmet -- a declaration-relief case never reaches
     // `excludeFromWaiverCoverage`'s reasoning at all, so vetoing it there
     // too would just reproduce this same relief gap one layer down. Still
-    // subject to the pass-equivalent-state check below like every other
-    // coverage path -- an already-passing check needs no coverage from
-    // either mechanism. `null`/omitted (the default) never covers anything,
-    // unchanged pre-#2353 behavior for every caller that doesn't pass it.
+    // subject to the pass-equivalent-state check AND the #2034 live-run
+    // requirement below (Copilot + Codex review on PR #2370): a check with
+    // no parseable `completedAt` -- still QUEUED/IN_PROGRESS/PENDING, never
+    // actually produced a verdict -- must never be reported covered by
+    // EITHER mechanism, or this gate would report `success` while GitHub's
+    // own required-check state is still pending. `null`/omitted (the
+    // default) never covers anything, unchanged pre-#2353 behavior for
+    // every caller that doesn't pass it.
     treatAsCoveredByWaiver?: ((checkName: string) => boolean) | null;
   } = {},
 ) {
@@ -4781,8 +4785,17 @@ export function summarizeRequiredChecks(
     // #2353: an independent positive path -- see `treatAsCoveredByWaiver`'s
     // own doc comment for why it deliberately bypasses
     // `excludeFromWaiverCoverage`/`hasFreshWaiverCoverage`/`waivableSelectors`
-    // below rather than feeding into the same conjunction.
+    // below rather than feeding into the same conjunction. Still requires
+    // `completedAtMs !== null` (Copilot + Codex review on PR #2370): the
+    // SAME #2034 fail-closed live-run requirement `hasFreshWaiverCoverage`
+    // already enforces -- a check that is still QUEUED/IN_PROGRESS/PENDING
+    // with no parseable `completedAt` has never actually produced a verdict
+    // at all, and treating it as covered would report `success` while
+    // GitHub's own required-check state is still pending, reproducing the
+    // exact "ready but merge blocked" failure mode #2021 fixed for the
+    // direct-waiver path.
     const treatedAsCoveredByWaiver =
+      completedAtMs !== null &&
       typeof treatAsCoveredByWaiver === 'function' &&
       treatAsCoveredByWaiver(name);
     const coveredByWaiver =

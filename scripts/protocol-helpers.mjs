@@ -3689,8 +3689,17 @@ export function summarizeRequiredChecks(
     // #2353: an independent positive path -- see `treatAsCoveredByWaiver`'s
     // own doc comment for why it deliberately bypasses
     // `excludeFromWaiverCoverage`/`hasFreshWaiverCoverage`/`waivableSelectors`
-    // below rather than feeding into the same conjunction.
+    // below rather than feeding into the same conjunction. Still requires
+    // `completedAtMs !== null` (Copilot + Codex review on PR #2370): the
+    // SAME #2034 fail-closed live-run requirement `hasFreshWaiverCoverage`
+    // already enforces -- a check that is still QUEUED/IN_PROGRESS/PENDING
+    // with no parseable `completedAt` has never actually produced a verdict
+    // at all, and treating it as covered would report `success` while
+    // GitHub's own required-check state is still pending, reproducing the
+    // exact "ready but merge blocked" failure mode #2021 fixed for the
+    // direct-waiver path.
     const treatedAsCoveredByWaiver =
+      completedAtMs !== null &&
       typeof treatAsCoveredByWaiver === 'function' &&
       treatAsCoveredByWaiver(name);
     const coveredByWaiver =

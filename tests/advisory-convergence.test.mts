@@ -3651,6 +3651,25 @@ test('collectFromGitHub sources reviewPolicy into the returned options (#2137: p
   assert.match(source, /options:\s*\{[^}]*\breviewPolicy,[^}]*\}/s);
 });
 
+test('collectFromGitHub resolves the provider-outage declaration at the SAME injected now the returned verdict uses (#2353, Codex review on PR #2370)', () => {
+  // Same "pin the call site" spirit as the #1810/#1906/#2137 tests above:
+  // `resolveProviderOutageDeclaration` must read the resolved `resolvedNow`
+  // variable (which also becomes `options.now`), never a second,
+  // independently-computed wall-clock `new Date()` -- a `--now`-overridden
+  // invocation must evaluate declaration validity at that SAME instant,
+  // not the real clock, matching every other deadline/waiver/terminal
+  // computation in this same verdict.
+  const source = readFileSync(
+    new URL('../src/scripts/advisory-convergence.mts', import.meta.url),
+    'utf8',
+  );
+  assert.match(
+    source,
+    /resolveProviderOutageDeclaration\(\{[^}]*now:\s*new Date\(resolvedNow\),?[^}]*\}\)/s,
+  );
+  assert.match(source, /options:\s*\{\s*now:\s*resolvedNow,/);
+});
+
 // --- parseArgs ---------------------------------------------------------------
 
 test('parseArgs: parses --pr, --assert, and --claim-issue', () => {
