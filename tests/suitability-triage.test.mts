@@ -1993,9 +1993,9 @@ test('autonomy fails on an either/or acceptance-criterion shape naming two unres
   } as Context);
   assert.equal(result.pass, false);
   // Proves the either/or-specific path actually fired (Copilot review
-  // finding: an unresolved-choice marker anywhere always also matches the
-  // broader coordination check below, which could otherwise mask this
-  // check and leave it permanently unreachable).
+  // finding: the standalone unresolved-choice scan later in checkAutonomy
+  // matches the same marker, which could otherwise mask this check and
+  // leave it permanently unreachable if it ran first).
   assert.match(result.evidence, /either\/or/);
 });
 

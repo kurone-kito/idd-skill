@@ -1269,16 +1269,16 @@ export function checkAutonomy(context: Context): CheckOutcome {
 
   // #2219: an either/or acceptance-criterion shape naming two mutually
   // exclusive implementation paths without saying which one to take.
-  // Checked before the general coordination-language matches below: an
-  // unresolved-choice marker (see UNRESOLVED_CHOICE_PATTERN) always also
-  // matches that broader check, so checking either/or first is what makes
-  // this variant's own evidence message reachable rather than always
-  // pre-empted by the broader match on the same marker. Requires an
-  // un-negated marker touching or within EITHER_OR_PROXIMITY_WINDOW_CHARS
-  // of the either/or span -- an ordinary AC offering two already-resolved,
-  // equivalent options must keep passing, including when a resolved
-  // statement nearby happens to mention a marker word in its own negated
-  // form (e.g. "this is no longer TBD").
+  // Checked before the standalone unresolved-choice scan further below:
+  // both checks match against the same UNRESOLVED_CHOICE_PATTERN markers,
+  // so checking either/or first is what makes this variant's own evidence
+  // message reachable rather than always pre-empted by that later, more
+  // generic match on the same marker. Requires an un-negated marker
+  // touching or within EITHER_OR_PROXIMITY_WINDOW_CHARS of the either/or
+  // span -- an ordinary AC offering two already-resolved, equivalent
+  // options must keep passing, including when a resolved statement nearby
+  // happens to mention a marker word in its own negated form (e.g. "this
+  // is no longer TBD").
   const eitherOrMatches = [...body.matchAll(EITHER_OR_PATTERN)];
   if (eitherOrMatches.length > 0) {
     for (const marker of body.matchAll(UNRESOLVED_CHOICE_PATTERN)) {
