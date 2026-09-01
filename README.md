@@ -153,14 +153,14 @@ companion repository at
 
 ## Where next
 
-| Goal                                              | Start here                                                                                                                                                                                   |
-| ------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Understand the concept first                      | [`docs/concepts.md`](docs/concepts.md)                                                                                                                                                       |
-| Adopt IDD in my repository                        | [`idd-template/ONBOARDING.md`](idd-template/ONBOARDING.md)                                                                                                                                   |
-| Run an agent on this repository                   | [`AGENTS.md`](AGENTS.md) (Codex CLI, OpenCode, and Grok Build), [`CLAUDE.md`](CLAUDE.md), [`GEMINI.md`](GEMINI.md), and [`.github/copilot-instructions.md`](.github/copilot-instructions.md) |
-| Author AI-ready issues before the loop            | [`skills/issue-authoring/SKILL.md`](skills/issue-authoring/SKILL.md)                                                                                                                         |
-| Customize review, merge, CI, and discovery policy | [`docs/customization.md`](docs/customization.md)                                                                                                                                             |
-| Everything else — the full reference manual       | [`docs/index.md`](docs/index.md)                                                                                                                                                             |
+| Goal                                                               | Start here                                                                                                                                                                                   |
+| ------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Understand the concept first                                       | [`docs/concepts.md`](docs/concepts.md)                                                                                                                                                       |
+| Adopt IDD in my repository                                         | [`idd-template/ONBOARDING.md`](idd-template/ONBOARDING.md)                                                                                                                                   |
+| Run an agent on this repository                                    | [`AGENTS.md`](AGENTS.md) (Codex CLI, OpenCode, and Grok Build), [`CLAUDE.md`](CLAUDE.md), [`GEMINI.md`](GEMINI.md), and [`.github/copilot-instructions.md`](.github/copilot-instructions.md) |
+| Author AI-ready issues before the loop                             | [`skills/issue-authoring/SKILL.md`](skills/issue-authoring/SKILL.md)                                                                                                                         |
+| Customize review, merge, CI, branch topology, and discovery policy | [`docs/customization.md`](docs/customization.md)                                                                                                                                             |
+| Everything else — the full reference manual                        | [`docs/index.md`](docs/index.md)                                                                                                                                                             |
 
 The primary package is [`idd-template/`](idd-template/): the portable
 `.github/instructions/` files, onboarding and workflow docs, and a
