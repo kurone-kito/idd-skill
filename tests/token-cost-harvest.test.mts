@@ -618,6 +618,26 @@ test('allocateStageUsage (cumulative mode): a gap between windows excludes that 
   assert.equal(sum, 9); // 12 (final snapshot) - 3 (unattributed gap growth)
 });
 
+test("allocateStageUsage (cumulative mode): a point exactly at the first window's startMs counts as usage, not as the baseline", () => {
+  const windows = [
+    {
+      id: 'claim' as const,
+      startMs: ms('2026-01-01T00:00:00Z'),
+      endMs: ms('2026-01-01T00:10:00Z'),
+      source: 'marker' as const,
+    },
+  ];
+  const points = [
+    // Coincides exactly with the window's own start -- must not be
+    // consumed as the subtraction baseline (which would silently drop
+    // this point's own usage instead of allocating it).
+    { atMs: ms('2026-01-01T00:00:00Z'), usage: usage(5) },
+    { atMs: ms('2026-01-01T00:10:00Z'), usage: usage(8) },
+  ];
+  const stages = allocateStageUsage(windows, { mode: 'cumulative', points });
+  assert.equal(stages.find((s) => s.id === 'claim')?.usage.output, 8);
+});
+
 test('allocateStageUsage omits an all-zero-usage window', () => {
   const windows = [
     {
@@ -961,7 +981,7 @@ test('resolveIssueLoopContext: a later claimed-by marker superseding this claimI
   }
 });
 
-test('resolveIssueLoopContext: a superseding claim from the SAME agent is not a takeover', () => {
+test('resolveIssueLoopContext: a superseding claim from an untrusted (filtered-out) login is invisible, not a takeover', () => {
   const fixture = readJson(
     'tests/fixtures/token-cost/github/issue-loop-takeover.json',
   );
@@ -974,8 +994,35 @@ test('resolveIssueLoopContext: a superseding claim from the SAME agent is not a 
       ms('2026-01-01T00:00:00Z'),
       ms('2026-01-01T00:10:00Z'),
       // Only claude-a is trusted here: the second (claude-b) comment is
-      // filtered out entirely, simulating "no takeover marker visible" --
-      // isolates that humanHandoff is false absent a superseding marker.
+      // filtered out entirely before parseClaimComment ever sees it --
+      // isolates that humanHandoff is false absent a visible superseding
+      // marker at all (distinct from the same-agent guard test below).
+      ['claude-a'],
+    );
+    assert.ok(ctx);
+    assert.equal(ctx?.humanHandoff, false);
+  } finally {
+    restore();
+  }
+});
+
+test('resolveIssueLoopContext: a superseding claim from the SAME agent is not a takeover', () => {
+  const fixture = readJson(
+    'tests/fixtures/token-cost/github/issue-loop-resume-same-agent.json',
+  );
+  const restore = stubGhReturningJson(fixture);
+  try {
+    // Both claimed-by comments are trusted and visible here (unlike the
+    // filtered-out case above), so this exercises the actual
+    // takeover.agentId !== claimAgentId guard: a self re-claim (same
+    // agent, superseding its own earlier claimId) must not count as
+    // human-handoff.
+    const ctx = resolveIssueLoopContext(
+      'acme',
+      'repo',
+      9004,
+      ms('2026-01-01T00:00:00Z'),
+      ms('2026-01-01T00:10:00Z'),
       ['claude-a'],
     );
     assert.ok(ctx);

@@ -305,7 +305,7 @@ const MERGE_STAGE_THIN_CAP_MS = 15 * 60 * 1000;
  * the marker-only pass always produces it. Once --events overrides are
  * applied, an event window's timestamps are authoritative and never
  * expanded, while a marker window always flows to fill the space around it
- * (forward past its own original start, backward past its own original
+ * (backward past its own original start, forward past its own original
  * end) -- so the result stays gap-free everywhere a marker window can
  * reach. A residual gap is possible only immediately before an event
  * window whose immediately preceding window is itself event-sourced (or
@@ -461,14 +461,24 @@ function sumDeltaInRange(
   return sum;
 }
 
-/** Last cumulative snapshot at or before atMs, or null when none exists yet. */
+/**
+ * Last cumulative snapshot at or before atMs (or strictly before, when
+ * exclusive), or null when none exists yet. exclusive matters for a
+ * window's own START boundary: a point exactly at window.startMs
+ * represents usage that happened AT the start of this window, not before
+ * it, so it must not be picked up as the subtraction baseline (which
+ * would silently drop that point's own contribution) -- unlike the END
+ * boundary, which correctly wants an inclusive lookup so a point exactly
+ * at window.endMs still counts toward this window.
+ */
 function cumulativeSnapshotAt(
   points: readonly UsagePoint[],
   atMs: number,
+  exclusive = false,
 ): TokenCostUsage | null {
   let result: TokenCostUsage | null = null;
   for (const point of points) {
-    if (point.atMs <= atMs) {
+    if (exclusive ? point.atMs < atMs : point.atMs <= atMs) {
       result = point.usage;
     } else {
       break;
@@ -500,7 +510,8 @@ export function allocateStageUsage(
     let usage: TokenCostUsage;
     if (timeline.mode === 'cumulative') {
       const startSnapshot =
-        cumulativeSnapshotAt(timeline.points, window.startMs) ?? ZERO_USAGE;
+        cumulativeSnapshotAt(timeline.points, window.startMs, true) ??
+        ZERO_USAGE;
       const endSnapshot =
         cumulativeSnapshotAt(timeline.points, window.endMs) ?? startSnapshot;
       usage = subtractUsageClamped(endSnapshot, startSnapshot);
