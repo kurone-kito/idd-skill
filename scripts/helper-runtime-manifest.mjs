@@ -210,6 +210,15 @@ const HELPER_COMMANDS = [
       'Acquire, reacquire, or inspect a worktree-local same-machine claim lock.',
   },
   {
+    id: 'critique-delegate',
+    scriptName: 'idd:critique-delegate',
+    binName: 'idd-critique-delegate',
+    entryPath: 'scripts/idd-critique-delegate.mjs',
+    vendoredCommand: 'node scripts/idd-critique-delegate.mjs',
+    description:
+      'Resolve the effective C1 critiqueLoop.delegate (repository-local, then user-global).',
+  },
+  {
     id: 'discover-orphan-filter',
     scriptName: 'idd:discover-orphan-filter',
     binName: 'idd-discover-orphan-filter',
