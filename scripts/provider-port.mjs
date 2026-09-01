@@ -19,4 +19,14 @@
 // question with different queries, pagination, or failure semantics get
 // two separate methods, never one shared method with a flag. Unifying
 // call shapes is a follow-up concern; this migration only moves transport.
+//
+// Sync by design, no blanket Promise-ification: every existing `gh`
+// invocation this port replaces is `execFileSync`-backed and synchronous,
+// and several consumers call into sync-only call chains a Promise-returning
+// method cannot satisfy -- e.g. `collaborator-permission.mts`'s
+// `resolveTrustedCollaboratorMarkerLogins` calls the permission lookup
+// inside a synchronous `Array.filter()` callback, which structurally
+// cannot `await`. An async variant is added additively, not retrofitted
+// here, if a future step (`discover-roadmap-graph.mts`'s `runGhAsync`
+// traversal, step 12) genuinely needs one.
 export {};

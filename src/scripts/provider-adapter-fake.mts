@@ -103,30 +103,28 @@ export function createFakeProviderAdapter(
       };
     },
 
-    async getWorkItem(number: number): Promise<ProviderWorkItem | null> {
+    getWorkItem(number: number): ProviderWorkItem | null {
       return fixture.workItems?.[number] ?? null;
     },
 
-    async listOpenWorkItems(): Promise<ProviderWorkItemSummary[]> {
+    listOpenWorkItems(): ProviderWorkItemSummary[] {
       return Object.values(fixture.workItems ?? {})
         .filter((item) => item.state === 'OPEN')
         .map((item) => ({ number: item.number, title: item.title }));
     },
 
-    async searchWorkItems(): Promise<ProviderWorkItemSummary[]> {
+    searchWorkItems(): ProviderWorkItemSummary[] {
       return Object.values(fixture.workItems ?? {}).map((item) => ({
         number: item.number,
         title: item.title,
       }));
     },
 
-    async getWorkItemTimeline(
-      number: number,
-    ): Promise<ProviderTimelineEvent[]> {
+    getWorkItemTimeline(number: number): ProviderTimelineEvent[] {
       return fixture.timelines?.[number] ?? [];
     },
 
-    async closeWorkItem(number: number, reason: string): Promise<void> {
+    closeWorkItem(number: number, reason: string): void {
       fixture.closedWorkItems?.push({ number, reason });
       const item = fixture.workItems?.[number];
       if (item) {
@@ -143,9 +141,9 @@ export function createFakeProviderAdapter(
       return pages[index] ?? { nodes: [], hasNextPage: false, endCursor: null };
     },
 
-    async getConnectedPullRequestEventsSingle(
+    getConnectedPullRequestEventsSingle(
       number: number,
-    ): Promise<ProviderConnectedPrEvent[]> {
+    ): ProviderConnectedPrEvent[] {
       return fixture.connectedPrEventsSingle?.[number] ?? [];
     },
 
@@ -162,22 +160,19 @@ export function createFakeProviderAdapter(
       );
     },
 
-    async getPullRequestsClosingIssue(number: number): Promise<number[]> {
+    getPullRequestsClosingIssue(number: number): number[] {
       return fixture.pullRequestsClosingIssue?.[number] ?? [];
     },
 
-    async listIssueBranchRefs(): Promise<string[]> {
+    listIssueBranchRefs(): string[] {
       return fixture.issueBranchRefs ?? [];
     },
 
-    async listWorkItemComments(number: number): Promise<ProviderComment[]> {
+    listWorkItemComments(number: number): ProviderComment[] {
       return fixture.comments?.[number] ?? [];
     },
 
-    async postWorkItemComment(
-      number: number,
-      body: string,
-    ): Promise<ProviderPostedComment> {
+    postWorkItemComment(number: number, body: string): ProviderPostedComment {
       fixture.postedComments?.push({ number, body });
       const id = fixture.nextCommentId ?? 1;
       fixture.nextCommentId = id + 1;
@@ -195,9 +190,9 @@ export function createFakeProviderAdapter(
       };
     },
 
-    async getCollaboratorPermission(
+    getCollaboratorPermission(
       login: string,
-    ): Promise<ProviderCollaboratorPermissionResult> {
+    ): ProviderCollaboratorPermissionResult {
       return (
         fixture.collaboratorPermissions?.[login.trim().toLowerCase()] ?? {
           outcome: 'not-collaborator',
@@ -205,21 +200,19 @@ export function createFakeProviderAdapter(
       );
     },
 
-    async getChangeRequest(
-      number: number,
-    ): Promise<ProviderChangeRequestState | null> {
+    getChangeRequest(number: number): ProviderChangeRequestState | null {
       return fixture.changeRequests?.[number] ?? null;
     },
 
-    async listRequiredChecks(number: number): Promise<ProviderRequiredCheck[]> {
+    listRequiredChecks(number: number): ProviderRequiredCheck[] {
       return fixture.requiredChecks?.[number] ?? [];
     },
 
-    async listReviews(number: number): Promise<unknown[]> {
+    listReviews(number: number): unknown[] {
       return fixture.reviews?.[number] ?? [];
     },
 
-    async listOpenChangeRequests(): Promise<ProviderChangeRequestSummary[]> {
+    listOpenChangeRequests(): ProviderChangeRequestSummary[] {
       return fixture.openChangeRequests ?? [];
     },
   };

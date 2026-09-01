@@ -43,24 +43,24 @@ export function createFakeProviderAdapter(fixture) {
         viewerLoginUnavailable: false,
       };
     },
-    async getWorkItem(number) {
+    getWorkItem(number) {
       return fixture.workItems?.[number] ?? null;
     },
-    async listOpenWorkItems() {
+    listOpenWorkItems() {
       return Object.values(fixture.workItems ?? {})
         .filter((item) => item.state === 'OPEN')
         .map((item) => ({ number: item.number, title: item.title }));
     },
-    async searchWorkItems() {
+    searchWorkItems() {
       return Object.values(fixture.workItems ?? {}).map((item) => ({
         number: item.number,
         title: item.title,
       }));
     },
-    async getWorkItemTimeline(number) {
+    getWorkItemTimeline(number) {
       return fixture.timelines?.[number] ?? [];
     },
-    async closeWorkItem(number, reason) {
+    closeWorkItem(number, reason) {
       fixture.closedWorkItems?.push({ number, reason });
       const item = fixture.workItems?.[number];
       if (item) {
@@ -73,7 +73,7 @@ export function createFakeProviderAdapter(fixture) {
       closingPageCallIndex[number] = index + 1;
       return pages[index] ?? { nodes: [], hasNextPage: false, endCursor: null };
     },
-    async getConnectedPullRequestEventsSingle(number) {
+    getConnectedPullRequestEventsSingle(number) {
       return fixture.connectedPrEventsSingle?.[number] ?? [];
     },
     getConnectedPullRequestEventsPage(number) {
@@ -84,16 +84,16 @@ export function createFakeProviderAdapter(fixture) {
         pages[index] ?? { events: [], hasNextPage: false, endCursor: null }
       );
     },
-    async getPullRequestsClosingIssue(number) {
+    getPullRequestsClosingIssue(number) {
       return fixture.pullRequestsClosingIssue?.[number] ?? [];
     },
-    async listIssueBranchRefs() {
+    listIssueBranchRefs() {
       return fixture.issueBranchRefs ?? [];
     },
-    async listWorkItemComments(number) {
+    listWorkItemComments(number) {
       return fixture.comments?.[number] ?? [];
     },
-    async postWorkItemComment(number, body) {
+    postWorkItemComment(number, body) {
       fixture.postedComments?.push({ number, body });
       const id = fixture.nextCommentId ?? 1;
       fixture.nextCommentId = id + 1;
@@ -110,23 +110,23 @@ export function createFakeProviderAdapter(fixture) {
         htmlUrl: `https://example.invalid/issues/${number}#issuecomment-${id}`,
       };
     },
-    async getCollaboratorPermission(login) {
+    getCollaboratorPermission(login) {
       return (
         fixture.collaboratorPermissions?.[login.trim().toLowerCase()] ?? {
           outcome: 'not-collaborator',
         }
       );
     },
-    async getChangeRequest(number) {
+    getChangeRequest(number) {
       return fixture.changeRequests?.[number] ?? null;
     },
-    async listRequiredChecks(number) {
+    listRequiredChecks(number) {
       return fixture.requiredChecks?.[number] ?? [];
     },
-    async listReviews(number) {
+    listReviews(number) {
       return fixture.reviews?.[number] ?? [];
     },
-    async listOpenChangeRequests() {
+    listOpenChangeRequests() {
       return fixture.openChangeRequests ?? [];
     },
   };

@@ -13,7 +13,6 @@ import {
   GH_TEXT_LOOP_OPTIONS,
   ghApiJson,
   resolveViewerLogin as ghExecResolveViewerLogin,
-  ghGraphql,
   ghText,
 } from './gh-exec.mjs';
 import { deriveGhHttpStatus } from './gh-http-status.mjs';
@@ -28,23 +27,28 @@ function statusToCategory(status) {
   if (status !== null && status >= 500) return 'unavailable';
   return 'unknown';
 }
+const DEFAULT_DEPS = {
+  ghText,
+  ghApiJson,
+  resolveViewerLogin: ghExecResolveViewerLogin,
+};
 /**
  * GitHub implementation of {@link ProviderPort}. `owner`/`repo` are resolved
  * once at construction (matching every migrated file's existing
  * `gh repo view` boilerplate) rather than re-resolved per call.
  */
-export function createGithubProviderAdapter(owner, repo) {
+export function createGithubProviderAdapter(owner, repo, deps = DEFAULT_DEPS) {
   const repoPath = `repos/${owner}/${repo}`;
   return {
     resolveRepositoryLocator() {
       return { provider: 'github', owner, name: repo };
     },
     resolveViewerLogin() {
-      return ghExecResolveViewerLogin();
+      return deps.resolveViewerLogin();
     },
     resolveViewerLoginSafe() {
       try {
-        const raw = ghText(['api', 'user', '--jq', '.login']);
+        const raw = deps.ghText(['api', 'user', '--jq', '.login']);
         const normalized = raw.trim().toLowerCase();
         if (!normalized) {
           return { viewerLogin: '', viewerLoginUnavailable: true };
@@ -54,10 +58,10 @@ export function createGithubProviderAdapter(owner, repo) {
         return { viewerLogin: '', viewerLoginUnavailable: true };
       }
     },
-    async getWorkItem(number) {
+    getWorkItem(number) {
       let data;
       try {
-        data = ghApiJson(`${repoPath}/issues/${number}`);
+        data = deps.ghApiJson(`${repoPath}/issues/${number}`);
       } catch (error) {
         if (deriveGhHttpStatus(error) === 404) {
           return null;
@@ -75,8 +79,8 @@ export function createGithubProviderAdapter(owner, repo) {
         state: String(issue.state ?? '').toUpperCase(),
       };
     },
-    async listOpenWorkItems() {
-      const rows = ghApiJson(`${repoPath}/issues?state=open`, {
+    listOpenWorkItems() {
+      const rows = deps.ghApiJson(`${repoPath}/issues?state=open`, {
         paginate: true,
       });
       return rows
@@ -86,8 +90,8 @@ export function createGithubProviderAdapter(owner, repo) {
           title: String(row.title ?? ''),
         }));
     },
-    async searchWorkItems(query) {
-      const result = ghApiJson(
+    searchWorkItems(query) {
+      const result = deps.ghApiJson(
         `search/issues?q=${encodeURIComponent(query)}&per_page=100`,
       );
       return (result.items ?? []).map((item) => ({
@@ -95,14 +99,14 @@ export function createGithubProviderAdapter(owner, repo) {
         title: String(item.title ?? ''),
       }));
     },
-    async getWorkItemTimeline(number) {
-      return ghApiJson(`${repoPath}/issues/${number}/timeline`, {
+    getWorkItemTimeline(number) {
+      return deps.ghApiJson(`${repoPath}/issues/${number}/timeline`, {
         paginate: true,
         extraArgs: ['-H', 'Accept: application/vnd.github+json'],
       });
     },
-    async closeWorkItem(number, reason) {
-      ghText(
+    closeWorkItem(number, reason) {
+      deps.ghText(
         [
           'issue',
           'close',
@@ -115,6 +119,14 @@ export function createGithubProviderAdapter(owner, repo) {
         GH_TEXT_LOOP_OPTIONS,
       );
     },
+    // The two paginated GraphQL methods below build `gh api graphql` args
+    // by hand and call `ghText(args, GH_TEXT_LOOP_OPTIONS)` directly rather
+    // than routing through gh-exec.mts's shared `ghGraphql` helper, which
+    // has no loop-options parameter. Both are called from a per-issue
+    // pagination loop -- the exact tight-loop stdin hazard
+    // `GH_TEXT_LOOP_OPTIONS` exists for (#1396) -- mirroring
+    // `idd-roadmap-audit-execute.mts`'s pre-existing local `ghGraphql`
+    // verbatim so this migration does not silently re-lose that bugfix.
     getWorkItemClosingPullRequestsPage(number, after) {
       const query = `query($owner:String!,$repo:String!,$number:Int!,$after:String){
   repository(owner:$owner,name:$repo){
@@ -126,12 +138,22 @@ export function createGithubProviderAdapter(owner, repo) {
     }
   }
 }`;
-      const parsed = ghGraphql(query, {
-        owner,
-        repo,
-        number,
-        after: after ?? undefined,
-      });
+      const apiArgs = [
+        'api',
+        'graphql',
+        '-f',
+        `query=${query}`,
+        '-f',
+        `owner=${owner}`,
+        '-f',
+        `repo=${repo}`,
+        '-F',
+        `number=${number}`,
+      ];
+      if (after) {
+        apiArgs.push('-f', `after=${after}`);
+      }
+      const parsed = JSON.parse(deps.ghText(apiArgs, GH_TEXT_LOOP_OPTIONS));
       const connection =
         parsed.data?.repository?.issue?.closedByPullRequestsReferences;
       if (!connection) {
@@ -147,10 +169,10 @@ export function createGithubProviderAdapter(owner, repo) {
         endCursor: connection.pageInfo?.endCursor ?? null,
       };
     },
-    async getConnectedPullRequestEventsSingle(number) {
+    getConnectedPullRequestEventsSingle(number) {
       try {
         const parsed = JSON.parse(
-          ghText([
+          deps.ghText([
             'api',
             'graphql',
             '-f',
@@ -184,12 +206,22 @@ export function createGithubProviderAdapter(owner, repo) {
     }
   }
 }`;
-      const parsed = ghGraphql(query, {
-        owner,
-        repo,
-        number,
-        after: after ?? undefined,
-      });
+      const apiArgs = [
+        'api',
+        'graphql',
+        '-f',
+        `query=${query}`,
+        '-f',
+        `owner=${owner}`,
+        '-f',
+        `repo=${repo}`,
+        '-F',
+        `number=${number}`,
+      ];
+      if (after) {
+        apiArgs.push('-f', `after=${after}`);
+      }
+      const parsed = JSON.parse(deps.ghText(apiArgs, GH_TEXT_LOOP_OPTIONS));
       const connection = parsed.data?.repository?.issue?.timelineItems;
       if (!connection) {
         throw new Error('timelineItems: connection is null/absent');
@@ -200,10 +232,10 @@ export function createGithubProviderAdapter(owner, repo) {
         endCursor: connection.pageInfo?.endCursor ?? null,
       };
     },
-    async getPullRequestsClosingIssue(number) {
+    getPullRequestsClosingIssue(number) {
       // Uses `gh pr list`, not `gh api`, matching
       // discover-shared-file-overlap.mts's existing call shape exactly.
-      const raw = ghText(
+      const raw = deps.ghText(
         [
           'pr',
           'list',
@@ -227,14 +259,17 @@ export function createGithubProviderAdapter(owner, repo) {
         )
         .map((pr) => Number(pr.number));
     },
-    async listIssueBranchRefs() {
-      const refs = ghApiJson(`${repoPath}/git/matching-refs/heads/issue/`, {
-        paginate: true,
-      });
+    listIssueBranchRefs() {
+      const refs = deps.ghApiJson(
+        `${repoPath}/git/matching-refs/heads/issue/`,
+        {
+          paginate: true,
+        },
+      );
       return refs.map((entry) => String(entry.ref ?? ''));
     },
-    async listWorkItemComments(number) {
-      const rows = ghApiJson(`${repoPath}/issues/${number}/comments`, {
+    listWorkItemComments(number) {
+      const rows = deps.ghApiJson(`${repoPath}/issues/${number}/comments`, {
         paginate: true,
       });
       return rows.map((row) => ({
@@ -244,8 +279,8 @@ export function createGithubProviderAdapter(owner, repo) {
         authorLogin: String(row.user?.login ?? ''),
       }));
     },
-    async postWorkItemComment(number, body) {
-      const out = ghText(
+    postWorkItemComment(number, body) {
+      const out = deps.ghText(
         [
           'api',
           '--method',
@@ -259,10 +294,10 @@ export function createGithubProviderAdapter(owner, repo) {
       const parsed = JSON.parse(out);
       return { id: parsed.id, htmlUrl: parsed.html_url };
     },
-    async getCollaboratorPermission(login) {
+    getCollaboratorPermission(login) {
       const normalized = login.trim().toLowerCase();
       try {
-        const raw = ghText(
+        const raw = deps.ghText(
           [
             'api',
             `${repoPath}/collaborators/${encodeURIComponent(normalized)}/permission`,
@@ -294,9 +329,9 @@ export function createGithubProviderAdapter(owner, repo) {
         };
       }
     },
-    async getChangeRequest(number) {
+    getChangeRequest(number) {
       try {
-        const raw = ghText(
+        const raw = deps.ghText(
           [
             'pr',
             'view',
@@ -320,8 +355,8 @@ export function createGithubProviderAdapter(owner, repo) {
         throw error;
       }
     },
-    async listRequiredChecks(number) {
-      const raw = ghText(
+    listRequiredChecks(number) {
+      const raw = deps.ghText(
         [
           'pr',
           'checks',
@@ -341,13 +376,13 @@ export function createGithubProviderAdapter(owner, repo) {
         completedAt: row.completedAt ? String(row.completedAt) : null,
       }));
     },
-    async listReviews(number) {
-      return ghApiJson(`${repoPath}/pulls/${number}/reviews`, {
+    listReviews(number) {
+      return deps.ghApiJson(`${repoPath}/pulls/${number}/reviews`, {
         paginate: true,
       });
     },
-    async listOpenChangeRequests() {
-      const raw = ghText(
+    listOpenChangeRequests() {
+      const raw = deps.ghText(
         [
           'pr',
           'list',

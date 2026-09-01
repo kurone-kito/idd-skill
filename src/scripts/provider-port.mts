@@ -19,6 +19,16 @@
 // question with different queries, pagination, or failure semantics get
 // two separate methods, never one shared method with a flag. Unifying
 // call shapes is a follow-up concern; this migration only moves transport.
+//
+// Sync by design, no blanket Promise-ification: every existing `gh`
+// invocation this port replaces is `execFileSync`-backed and synchronous,
+// and several consumers call into sync-only call chains a Promise-returning
+// method cannot satisfy -- e.g. `collaborator-permission.mts`'s
+// `resolveTrustedCollaboratorMarkerLogins` calls the permission lookup
+// inside a synchronous `Array.filter()` callback, which structurally
+// cannot `await`. An async variant is added additively, not retrofitted
+// here, if a future step (`discover-roadmap-graph.mts`'s `runGhAsync`
+// traversal, step 12) genuinely needs one.
 
 import type {
   ProviderError,
@@ -127,23 +137,23 @@ export interface ProviderPort {
    * failure -- pins `discover-viability-gate.mts`'s existing fail-closed
    * routing as the method's contract.
    */
-  getWorkItem(number: number): Promise<ProviderWorkItem | null>;
+  getWorkItem(number: number): ProviderWorkItem | null;
 
   /** work-items. Paginated, pull-requests excluded from results. */
-  listOpenWorkItems(): Promise<ProviderWorkItemSummary[]>;
+  listOpenWorkItems(): ProviderWorkItemSummary[];
 
   /** work-items. GitHub search-query syntax is an adapter-internal detail. */
-  searchWorkItems(query: string): Promise<ProviderWorkItemSummary[]>;
+  searchWorkItems(query: string): ProviderWorkItemSummary[];
 
   /**
    * work-items. Fetches the full paginated timeline; per-caller filtering
    * (labeled-only vs. every event type, any special header) stays in the
    * domain helper, matching today's split between callers.
    */
-  getWorkItemTimeline(number: number): Promise<ProviderTimelineEvent[]>;
+  getWorkItemTimeline(number: number): ProviderTimelineEvent[];
 
   /** work-items, write. */
-  closeWorkItem(number: number, reason: string): Promise<void>;
+  closeWorkItem(number: number, reason: string): void;
 
   /**
    * work-items. Issue-side `closedByPullRequestsReferences`, one page per
@@ -166,7 +176,7 @@ export interface ProviderPort {
    */
   getConnectedPullRequestEventsSingle(
     number: number,
-  ): Promise<ProviderConnectedPrEvent[]>;
+  ): ProviderConnectedPrEvent[];
 
   /**
    * work-items. Full forward-paginated CONNECTED/DISCONNECTED timeline,
@@ -188,13 +198,13 @@ export interface ProviderPort {
    * `closingIssuesReferences` technique `discover-shared-file-overlap.mts`
    * uses today -- not unified with the issue-side methods above.
    */
-  getPullRequestsClosingIssue(number: number): Promise<number[]>;
+  getPullRequestsClosingIssue(number: number): number[];
 
   /** work-items. Issue-branch ref scan (`git/matching-refs/heads/issue/`). */
-  listIssueBranchRefs(): Promise<string[]>;
+  listIssueBranchRefs(): string[];
 
   /** comments-and-labels. Paginated; the most repeated existing operation. */
-  listWorkItemComments(number: number): Promise<ProviderComment[]>;
+  listWorkItemComments(number: number): ProviderComment[];
 
   /**
    * comments-and-labels, write. Adapter posts via stdin-JSON (`--input -`),
@@ -203,27 +213,24 @@ export interface ProviderPort {
    * `post-idd-marker.mts`'s and `idd-roadmap-audit-execute.mts`'s two
    * independent existing implementations of this same shape.
    */
-  postWorkItemComment(
-    number: number,
-    body: string,
-  ): Promise<ProviderPostedComment>;
+  postWorkItemComment(number: number, body: string): ProviderPostedComment;
 
   /** permissions. Raw classified result; each caller maps outcomes onto
    * its own existing shape (see #2266 B2 plan for the two divergent
    * existing callers this preserves). */
   getCollaboratorPermission(
     login: string,
-  ): Promise<ProviderCollaboratorPermissionResult>;
+  ): ProviderCollaboratorPermissionResult;
 
   /** change-requests (minimal surface for resume-route-selection.mts). */
-  getChangeRequest(number: number): Promise<ProviderChangeRequestState | null>;
+  getChangeRequest(number: number): ProviderChangeRequestState | null;
 
   /** change-requests (minimal surface for resume-route-selection.mts). */
-  listRequiredChecks(number: number): Promise<ProviderRequiredCheck[]>;
+  listRequiredChecks(number: number): ProviderRequiredCheck[];
 
   /** change-requests (minimal surface for resume-route-selection.mts). */
-  listReviews(number: number): Promise<unknown[]>;
+  listReviews(number: number): unknown[];
 
   /** change-requests (minimal surface for resume-route-selection.mts). */
-  listOpenChangeRequests(): Promise<ProviderChangeRequestSummary[]>;
+  listOpenChangeRequests(): ProviderChangeRequestSummary[];
 }

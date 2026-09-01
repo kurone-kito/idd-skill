@@ -14,7 +14,6 @@ import {
   GH_TEXT_LOOP_OPTIONS,
   ghApiJson,
   resolveViewerLogin as ghExecResolveViewerLogin,
-  ghGraphql,
   ghText,
 } from './gh-exec.mts';
 import { deriveGhHttpStatus } from './gh-http-status.mts';
@@ -49,6 +48,25 @@ function statusToCategory(status: number | null): ProviderErrorCategory {
 }
 
 /**
+ * Transport primitives {@link createGithubProviderAdapter} calls, injectable
+ * so a unit test can assert the exact `gh` command/API argument shape each
+ * port method builds without spawning a real `gh` process (AC: "GitHub
+ * adapter tests cover the existing command/API argument and response
+ * shapes"). Defaults to the real `gh-exec.mts` functions.
+ */
+export interface GithubProviderAdapterDeps {
+  ghText: typeof ghText;
+  ghApiJson: typeof ghApiJson;
+  resolveViewerLogin: typeof ghExecResolveViewerLogin;
+}
+
+const DEFAULT_DEPS: GithubProviderAdapterDeps = {
+  ghText,
+  ghApiJson,
+  resolveViewerLogin: ghExecResolveViewerLogin,
+};
+
+/**
  * GitHub implementation of {@link ProviderPort}. `owner`/`repo` are resolved
  * once at construction (matching every migrated file's existing
  * `gh repo view` boilerplate) rather than re-resolved per call.
@@ -56,6 +74,7 @@ function statusToCategory(status: number | null): ProviderErrorCategory {
 export function createGithubProviderAdapter(
   owner: string,
   repo: string,
+  deps: GithubProviderAdapterDeps = DEFAULT_DEPS,
 ): ProviderPort {
   const repoPath = `repos/${owner}/${repo}`;
 
@@ -65,7 +84,7 @@ export function createGithubProviderAdapter(
     },
 
     resolveViewerLogin(): string {
-      return ghExecResolveViewerLogin();
+      return deps.resolveViewerLogin();
     },
 
     resolveViewerLoginSafe(): {
@@ -73,7 +92,7 @@ export function createGithubProviderAdapter(
       viewerLoginUnavailable: boolean;
     } {
       try {
-        const raw = ghText(['api', 'user', '--jq', '.login']);
+        const raw = deps.ghText(['api', 'user', '--jq', '.login']);
         const normalized = raw.trim().toLowerCase();
         if (!normalized) {
           return { viewerLogin: '', viewerLoginUnavailable: true };
@@ -84,10 +103,10 @@ export function createGithubProviderAdapter(
       }
     },
 
-    async getWorkItem(number: number): Promise<ProviderWorkItem | null> {
+    getWorkItem(number: number): ProviderWorkItem | null {
       let data: unknown;
       try {
-        data = ghApiJson(`${repoPath}/issues/${number}`);
+        data = deps.ghApiJson(`${repoPath}/issues/${number}`);
       } catch (error) {
         if (deriveGhHttpStatus(error) === 404) {
           return null;
@@ -111,8 +130,8 @@ export function createGithubProviderAdapter(
       };
     },
 
-    async listOpenWorkItems(): Promise<ProviderWorkItemSummary[]> {
-      const rows = ghApiJson(`${repoPath}/issues?state=open`, {
+    listOpenWorkItems(): ProviderWorkItemSummary[] {
+      const rows = deps.ghApiJson(`${repoPath}/issues?state=open`, {
         paginate: true,
       }) as { number?: unknown; title?: unknown; pull_request?: unknown }[];
       return rows
@@ -123,8 +142,8 @@ export function createGithubProviderAdapter(
         }));
     },
 
-    async searchWorkItems(query: string): Promise<ProviderWorkItemSummary[]> {
-      const result = ghApiJson(
+    searchWorkItems(query: string): ProviderWorkItemSummary[] {
+      const result = deps.ghApiJson(
         `search/issues?q=${encodeURIComponent(query)}&per_page=100`,
       ) as { items?: { number?: unknown; title?: unknown }[] };
       return (result.items ?? []).map((item) => ({
@@ -133,17 +152,15 @@ export function createGithubProviderAdapter(
       }));
     },
 
-    async getWorkItemTimeline(
-      number: number,
-    ): Promise<ProviderTimelineEvent[]> {
-      return ghApiJson(`${repoPath}/issues/${number}/timeline`, {
+    getWorkItemTimeline(number: number): ProviderTimelineEvent[] {
+      return deps.ghApiJson(`${repoPath}/issues/${number}/timeline`, {
         paginate: true,
         extraArgs: ['-H', 'Accept: application/vnd.github+json'],
       }) as ProviderTimelineEvent[];
     },
 
-    async closeWorkItem(number: number, reason: string): Promise<void> {
-      ghText(
+    closeWorkItem(number: number, reason: string): void {
+      deps.ghText(
         [
           'issue',
           'close',
@@ -156,6 +173,15 @@ export function createGithubProviderAdapter(
         GH_TEXT_LOOP_OPTIONS,
       );
     },
+
+    // The two paginated GraphQL methods below build `gh api graphql` args
+    // by hand and call `ghText(args, GH_TEXT_LOOP_OPTIONS)` directly rather
+    // than routing through gh-exec.mts's shared `ghGraphql` helper, which
+    // has no loop-options parameter. Both are called from a per-issue
+    // pagination loop -- the exact tight-loop stdin hazard
+    // `GH_TEXT_LOOP_OPTIONS` exists for (#1396) -- mirroring
+    // `idd-roadmap-audit-execute.mts`'s pre-existing local `ghGraphql`
+    // verbatim so this migration does not silently re-lose that bugfix.
 
     getWorkItemClosingPullRequestsPage(
       number: number,
@@ -171,12 +197,22 @@ export function createGithubProviderAdapter(
     }
   }
 }`;
-      const parsed = ghGraphql(query, {
-        owner,
-        repo,
-        number,
-        after: after ?? undefined,
-      }) as {
+      const apiArgs = [
+        'api',
+        'graphql',
+        '-f',
+        `query=${query}`,
+        '-f',
+        `owner=${owner}`,
+        '-f',
+        `repo=${repo}`,
+        '-F',
+        `number=${number}`,
+      ];
+      if (after) {
+        apiArgs.push('-f', `after=${after}`);
+      }
+      const parsed = JSON.parse(deps.ghText(apiArgs, GH_TEXT_LOOP_OPTIONS)) as {
         data?: {
           repository?: {
             issue?: {
@@ -204,12 +240,12 @@ export function createGithubProviderAdapter(
       };
     },
 
-    async getConnectedPullRequestEventsSingle(
+    getConnectedPullRequestEventsSingle(
       number: number,
-    ): Promise<ProviderConnectedPrEvent[]> {
+    ): ProviderConnectedPrEvent[] {
       try {
         const parsed = JSON.parse(
-          ghText([
+          deps.ghText([
             'api',
             'graphql',
             '-f',
@@ -257,12 +293,22 @@ export function createGithubProviderAdapter(
     }
   }
 }`;
-      const parsed = ghGraphql(query, {
-        owner,
-        repo,
-        number,
-        after: after ?? undefined,
-      }) as {
+      const apiArgs = [
+        'api',
+        'graphql',
+        '-f',
+        `query=${query}`,
+        '-f',
+        `owner=${owner}`,
+        '-f',
+        `repo=${repo}`,
+        '-F',
+        `number=${number}`,
+      ];
+      if (after) {
+        apiArgs.push('-f', `after=${after}`);
+      }
+      const parsed = JSON.parse(deps.ghText(apiArgs, GH_TEXT_LOOP_OPTIONS)) as {
         data?: {
           repository?: {
             issue?: {
@@ -285,10 +331,10 @@ export function createGithubProviderAdapter(
       };
     },
 
-    async getPullRequestsClosingIssue(number: number): Promise<number[]> {
+    getPullRequestsClosingIssue(number: number): number[] {
       // Uses `gh pr list`, not `gh api`, matching
       // discover-shared-file-overlap.mts's existing call shape exactly.
-      const raw = ghText(
+      const raw = deps.ghText(
         [
           'pr',
           'list',
@@ -316,15 +362,18 @@ export function createGithubProviderAdapter(
         .map((pr) => Number(pr.number));
     },
 
-    async listIssueBranchRefs(): Promise<string[]> {
-      const refs = ghApiJson(`${repoPath}/git/matching-refs/heads/issue/`, {
-        paginate: true,
-      }) as { ref?: unknown }[];
+    listIssueBranchRefs(): string[] {
+      const refs = deps.ghApiJson(
+        `${repoPath}/git/matching-refs/heads/issue/`,
+        {
+          paginate: true,
+        },
+      ) as { ref?: unknown }[];
       return refs.map((entry) => String(entry.ref ?? ''));
     },
 
-    async listWorkItemComments(number: number): Promise<ProviderComment[]> {
-      const rows = ghApiJson(`${repoPath}/issues/${number}/comments`, {
+    listWorkItemComments(number: number): ProviderComment[] {
+      const rows = deps.ghApiJson(`${repoPath}/issues/${number}/comments`, {
         paginate: true,
       }) as {
         id?: unknown;
@@ -340,11 +389,8 @@ export function createGithubProviderAdapter(
       }));
     },
 
-    async postWorkItemComment(
-      number: number,
-      body: string,
-    ): Promise<ProviderPostedComment> {
-      const out = ghText(
+    postWorkItemComment(number: number, body: string): ProviderPostedComment {
+      const out = deps.ghText(
         [
           'api',
           '--method',
@@ -359,12 +405,12 @@ export function createGithubProviderAdapter(
       return { id: parsed.id, htmlUrl: parsed.html_url };
     },
 
-    async getCollaboratorPermission(
+    getCollaboratorPermission(
       login: string,
-    ): Promise<ProviderCollaboratorPermissionResult> {
+    ): ProviderCollaboratorPermissionResult {
       const normalized = login.trim().toLowerCase();
       try {
-        const raw = ghText(
+        const raw = deps.ghText(
           [
             'api',
             `${repoPath}/collaborators/${encodeURIComponent(normalized)}/permission`,
@@ -400,11 +446,9 @@ export function createGithubProviderAdapter(
       }
     },
 
-    async getChangeRequest(
-      number: number,
-    ): Promise<ProviderChangeRequestState | null> {
+    getChangeRequest(number: number): ProviderChangeRequestState | null {
       try {
-        const raw = ghText(
+        const raw = deps.ghText(
           [
             'pr',
             'view',
@@ -432,8 +476,8 @@ export function createGithubProviderAdapter(
       }
     },
 
-    async listRequiredChecks(number: number): Promise<ProviderRequiredCheck[]> {
-      const raw = ghText(
+    listRequiredChecks(number: number): ProviderRequiredCheck[] {
+      const raw = deps.ghText(
         [
           'pr',
           'checks',
@@ -458,14 +502,14 @@ export function createGithubProviderAdapter(
       }));
     },
 
-    async listReviews(number: number): Promise<unknown[]> {
-      return ghApiJson(`${repoPath}/pulls/${number}/reviews`, {
+    listReviews(number: number): unknown[] {
+      return deps.ghApiJson(`${repoPath}/pulls/${number}/reviews`, {
         paginate: true,
       }) as unknown[];
     },
 
-    async listOpenChangeRequests(): Promise<ProviderChangeRequestSummary[]> {
-      const raw = ghText(
+    listOpenChangeRequests(): ProviderChangeRequestSummary[] {
+      const raw = deps.ghText(
         [
           'pr',
           'list',
