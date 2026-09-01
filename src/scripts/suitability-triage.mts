@@ -8,6 +8,7 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
+import { computeBranchName } from './branch-name.mts';
 import { parseCliArgs } from './cli-args.mts';
 import {
   DEFAULT_BUNDLE_IDS,
@@ -28,6 +29,7 @@ import { normalizePolicyConfig, POLICY_DEFAULTS } from './policy-helpers.mts';
 import { resolveTrustedMarkerActors } from './protocol-helpers.mts';
 import {
   buildClosedByMergedPrArgs,
+  buildMergedPrByBranchArgs,
   buildMergedPrListArgs,
   buildPrDetailArgs,
   type CheckOutcome,
@@ -1459,6 +1461,7 @@ function runCli(): void {
   let candidateFiles: string[] = [];
   let highContentionFiles: string[] = [];
   let mergedPrs: HighConfidenceMergedPr[] = [];
+  let branchNameMergedPr: { number: number; mergedAt: string } | null = null;
 
   if (shouldCollectEvidence) {
     try {
@@ -1470,6 +1473,20 @@ function runCli(): void {
     } catch (error) {
       collectionWarnings.push(
         `closedByPullRequestsReferences: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+
+    // #2313, Signal 3: a separate try/catch (same pattern as the two blocks
+    // above/below) so a failure here degrades only this one signal, never
+    // discarding a sibling signal that already collected cleanly.
+    try {
+      branchNameMergedPr = fetchMergedPrByBranchName(
+        repoRef,
+        computeBranchName(issue.number, issue.title),
+      );
+    } catch (error) {
+      collectionWarnings.push(
+        `branch-name merged-PR lookup: ${error instanceof Error ? error.message : String(error)}`,
       );
     }
 
@@ -1538,6 +1555,7 @@ function runCli(): void {
       candidateFiles,
       highContentionFiles,
       mergedPrs,
+      branchNameMergedPr,
     };
 
   const result = evaluateSuitability(issue, {
@@ -1982,6 +2000,7 @@ function normalizeHighConfidenceDuplicateInput(
     candidateFiles?: unknown;
     highContentionFiles?: unknown;
     mergedPrs?: unknown;
+    branchNameMergedPr?: unknown;
   };
   return {
     closedByMergedPrNumbers: normalizePositiveIntArray(
@@ -1990,7 +2009,25 @@ function normalizeHighConfidenceDuplicateInput(
     candidateFiles: normalizeStringArray(r.candidateFiles),
     highContentionFiles: normalizeStringArray(r.highContentionFiles),
     mergedPrs: normalizeHighConfidenceMergedPrs(r.mergedPrs),
+    branchNameMergedPr: normalizeBranchNameMergedPr(r.branchNameMergedPr),
   };
+}
+
+/** #2313: normalize the Signal 3 options-boundary field the same fail-safe
+ * way as every other field here -- a malformed shape degrades to `null`
+ * (no evidence), never a crash or a manufactured match. */
+function normalizeBranchNameMergedPr(
+  value: unknown,
+): { number: number; mergedAt: string } | null {
+  if (!value || typeof value !== 'object') {
+    return null;
+  }
+  const v = value as { number?: unknown; mergedAt?: unknown };
+  const number = Number(v.number);
+  if (!Number.isInteger(number) || number <= 0) {
+    return null;
+  }
+  return { number, mergedAt: String(v.mergedAt ?? '') };
 }
 
 function normalizePositiveIntArray(value: unknown): number[] {
@@ -2201,6 +2238,36 @@ function fetchIssueComments(
  * remaining work would still show its old merged closing PR and get
  * misclassified as a completed duplicate (Codex review finding on this PR).
  */
+/**
+ * #2313, Signal 3: exact-match branch-name lookup. `--head` filters
+ * server-side to PRs with this exact head branch (branch names are unique
+ * per issue by construction), so at most one entry is ever returned; this
+ * still iterates defensively rather than indexing `[0]` directly, matching
+ * the rest of this file's "never trust the shape of a `gh` JSON response"
+ * convention.
+ */
+function fetchMergedPrByBranchName(
+  repoRef: string,
+  branchName: string,
+): { number: number; mergedAt: string } | null {
+  const list = ghJsonArray(buildMergedPrByBranchArgs(repoRef, branchName)) as {
+    number?: unknown;
+    headRefName?: unknown;
+    mergedAt?: unknown;
+  }[];
+  for (const entry of list) {
+    const number = Number.parseInt(String(entry?.number ?? ''), 10);
+    if (!Number.isInteger(number) || number <= 0) {
+      continue;
+    }
+    if (String(entry?.headRefName ?? '') !== branchName) {
+      continue;
+    }
+    return { number, mergedAt: String(entry?.mergedAt ?? '') };
+  }
+  return null;
+}
+
 function fetchClosedByMergedPrNumbers(
   owner: string,
   repo: string,

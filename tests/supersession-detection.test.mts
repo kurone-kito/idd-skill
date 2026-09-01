@@ -3,6 +3,7 @@ import { test } from 'node:test';
 
 import {
   buildClosedByMergedPrArgs,
+  buildMergedPrByBranchArgs,
   buildMergedPrListArgs,
   buildPrDetailArgs,
   evaluateHighConfidenceDuplicate,
@@ -32,6 +33,7 @@ test('evaluateHighConfidenceDuplicate: undefined input is absent, not a hit', ()
 test('evaluateHighConfidenceDuplicate: empty arrays fall through (fail-safe)', () => {
   const result = evaluateHighConfidenceDuplicate(
     {
+      branchNameMergedPr: null,
       closedByMergedPrNumbers: [],
       candidateFiles: [],
       highContentionFiles: [],
@@ -58,6 +60,7 @@ test('evaluateHighConfidenceDuplicate: malformed (non-array) fields never crash 
 test('evaluateHighConfidenceDuplicate: closing-PR-reference hit cites the PR number', () => {
   const result = evaluateHighConfidenceDuplicate(
     {
+      branchNameMergedPr: null,
       closedByMergedPrNumbers: [123],
       candidateFiles: [],
       highContentionFiles: [],
@@ -70,9 +73,81 @@ test('evaluateHighConfidenceDuplicate: closing-PR-reference hit cites the PR num
   assert.match(result?.evidence ?? '', /closedByPullRequestsReferences/);
 });
 
+test('evaluateHighConfidenceDuplicate: branch-name-match hit cites the PR number (#2313, Signal 3)', () => {
+  const result = evaluateHighConfidenceDuplicate(
+    {
+      branchNameMergedPr: { number: 2254, mergedAt: '2026-08-23T21:47:05Z' },
+      closedByMergedPrNumbers: [],
+      candidateFiles: [],
+      highContentionFiles: [],
+      mergedPrs: [],
+    },
+    2222,
+  );
+  assert.equal(result?.pass, false);
+  assert.equal(result?.tier, 'high-confidence');
+  assert.match(result?.evidence ?? '', /#2254/);
+  assert.match(result?.evidence ?? '', /2026-08-23T21:47:05Z/);
+});
+
+test("evaluateHighConfidenceDuplicate: reproduces the exact #2222 miss -- a merged PR on the issue's own convention-computed branch, no closing keyword, no Candidate-files overlap (#2313)", () => {
+  // The real #2222 shape: PR #2254 merged on branch
+  // issue/2222-fix-onboard-prefer-existing-config-json with no closing
+  // keyword and no textual '## Candidate files' overlap -- Signals 1 and 2
+  // both miss it (closedByMergedPrNumbers empty, candidateFiles empty so
+  // the file-overlap scan never runs at all). Only Signal 3 (an exact
+  // branch-name match, collected by the CLI glue's own
+  // fetchMergedPrByBranchName lookup and passed in here as
+  // branchNameMergedPr) catches it.
+  const result = evaluateHighConfidenceDuplicate(
+    {
+      branchNameMergedPr: { number: 2254, mergedAt: '2026-08-23T21:47:05Z' },
+      closedByMergedPrNumbers: [],
+      candidateFiles: [],
+      highContentionFiles: [],
+      mergedPrs: [],
+    },
+    2222,
+  );
+  assert.equal(result?.pass, false);
+  assert.equal(result?.tier, 'high-confidence');
+});
+
+test('evaluateHighConfidenceDuplicate: branch-name-match is checked before the other two signals (order does not change the outcome, but evidence cites signal 3)', () => {
+  const result = evaluateHighConfidenceDuplicate(
+    {
+      branchNameMergedPr: { number: 2254, mergedAt: '2026-08-23T21:47:05Z' },
+      closedByMergedPrNumbers: [999],
+      candidateFiles: [],
+      highContentionFiles: [],
+      mergedPrs: [],
+    },
+    2222,
+  );
+  assert.equal(result?.pass, false);
+  assert.match(result?.evidence ?? '', /#2254/);
+  assert.doesNotMatch(result?.evidence ?? '', /#999/);
+});
+
+test('evaluateHighConfidenceDuplicate: a malformed branchNameMergedPr (non-positive number) falls through, never crashes', () => {
+  const result = evaluateHighConfidenceDuplicate(
+    {
+      // deliberately malformed to exercise the defensive guard
+      branchNameMergedPr: { number: 0, mergedAt: '2026-08-23T21:47:05Z' },
+      closedByMergedPrNumbers: [],
+      candidateFiles: [],
+      highContentionFiles: [],
+      mergedPrs: [],
+    },
+    2222,
+  );
+  assert.equal(result, null);
+});
+
 test('evaluateHighConfidenceDuplicate: same-candidate-files hit cites the PR number and file', () => {
   const result = evaluateHighConfidenceDuplicate(
     {
+      branchNameMergedPr: null,
       closedByMergedPrNumbers: [],
       candidateFiles: ['scripts/foo.mjs'],
       highContentionFiles: [],
@@ -105,6 +180,7 @@ test('evaluateHighConfidenceDuplicate: reuses normalizeContentionPath so mirrore
   // that only matches identical strings.
   const result = evaluateHighConfidenceDuplicate(
     {
+      branchNameMergedPr: null,
       closedByMergedPrNumbers: [],
       candidateFiles: [
         'idd-template/.github/instructions/idd-work.instructions.md',
@@ -133,6 +209,7 @@ test('evaluateHighConfidenceDuplicate: a high-contention-only overlap is not hig
   // broadly-shared file is not evidence THIS issue was superseded.
   const result = evaluateHighConfidenceDuplicate(
     {
+      branchNameMergedPr: null,
       closedByMergedPrNumbers: [],
       candidateFiles: ['audit/sync-manifest.json'],
       highContentionFiles: ['audit/sync-manifest.json'],
@@ -158,6 +235,7 @@ test('evaluateHighConfidenceDuplicate: a genuine file still hits when a co-liste
   // still fire on the genuine file's overlap.
   const result = evaluateHighConfidenceDuplicate(
     {
+      branchNameMergedPr: null,
       closedByMergedPrNumbers: [],
       candidateFiles: ['audit/sync-manifest.json', 'scripts/genuine.mjs'],
       highContentionFiles: ['audit/sync-manifest.json'],
@@ -182,6 +260,7 @@ test('evaluateHighConfidenceDuplicate: a genuine file still hits when a co-liste
 test('evaluateHighConfidenceDuplicate: closing-PR-reference is checked before the file-overlap scan', () => {
   const result = evaluateHighConfidenceDuplicate(
     {
+      branchNameMergedPr: null,
       closedByMergedPrNumbers: [111],
       candidateFiles: ['scripts/foo.mjs'],
       highContentionFiles: [],
@@ -207,6 +286,7 @@ test('evaluateHighConfidenceDuplicate: closing-PR-reference is checked before th
 test('evaluateHighConfidenceDuplicate: a closing-PR-reference hit carries tier "high-confidence"', () => {
   const result = evaluateHighConfidenceDuplicate(
     {
+      branchNameMergedPr: null,
       closedByMergedPrNumbers: [42],
       candidateFiles: [],
       highContentionFiles: [],
@@ -220,6 +300,7 @@ test('evaluateHighConfidenceDuplicate: a closing-PR-reference hit carries tier "
 test('evaluateHighConfidenceDuplicate: a same-candidate-files hit carries tier "high-confidence"', () => {
   const result = evaluateHighConfidenceDuplicate(
     {
+      branchNameMergedPr: null,
       closedByMergedPrNumbers: [],
       candidateFiles: ['scripts/foo.mjs'],
       highContentionFiles: [],
@@ -253,6 +334,7 @@ test('evaluateHighConfidenceDuplicate: file overlap with no reference to the can
   // #1863, not #1862.
   const result = evaluateHighConfidenceDuplicate(
     {
+      branchNameMergedPr: null,
       closedByMergedPrNumbers: [],
       candidateFiles: [
         'src/scripts/markdown-code.mts',
@@ -281,6 +363,7 @@ test('evaluateHighConfidenceDuplicate: file overlap with no reference to the can
 test('evaluateHighConfidenceDuplicate: true positive preserved via closingIssuesReferences', () => {
   const result = evaluateHighConfidenceDuplicate(
     {
+      branchNameMergedPr: null,
       closedByMergedPrNumbers: [],
       candidateFiles: ['scripts/target.mjs'],
       highContentionFiles: [],
@@ -312,6 +395,7 @@ test('evaluateHighConfidenceDuplicate: true positive preserved via a title/body 
   // flipping the old assertion, so it still exercises a true positive.
   const result = evaluateHighConfidenceDuplicate(
     {
+      branchNameMergedPr: null,
       closedByMergedPrNumbers: [],
       candidateFiles: ['scripts/target.mjs'],
       highContentionFiles: [],
@@ -344,6 +428,7 @@ test('evaluateHighConfidenceDuplicate: a bare "#<n>" citation with no closing ke
   // `null` (falls through to the caller's weak heuristic), not a hit.
   const result = evaluateHighConfidenceDuplicate(
     {
+      branchNameMergedPr: null,
       closedByMergedPrNumbers: [],
       candidateFiles: ['tests/suitability-triage.test.mts'],
       highContentionFiles: [],
@@ -366,6 +451,7 @@ test('evaluateHighConfidenceDuplicate: a bare "#<n>" citation with no closing ke
 test('evaluateHighConfidenceDuplicate: scan continues past a non-qualifying overlap to a later qualifying PR', () => {
   const result = evaluateHighConfidenceDuplicate(
     {
+      branchNameMergedPr: null,
       closedByMergedPrNumbers: [],
       candidateFiles: ['scripts/shared.mjs'],
       highContentionFiles: [],
@@ -716,6 +802,37 @@ test('buildMergedPrListArgs is read-only', () => {
   assertReadOnlyArgv(
     buildMergedPrListArgs('kurone-kito/idd-skill', '2026-07-01T00:00:00Z'),
   );
+});
+
+test('buildMergedPrByBranchArgs is read-only (#2313)', () => {
+  assertReadOnlyArgv(
+    buildMergedPrByBranchArgs(
+      'kurone-kito/idd-skill',
+      'issue/2222-fix-onboard-prefer-existing-config-json',
+    ),
+  );
+});
+
+test('buildMergedPrByBranchArgs filters server-side to the exact head branch and MERGED state (#2313)', () => {
+  const args = buildMergedPrByBranchArgs(
+    'kurone-kito/idd-skill',
+    'issue/2222-fix-onboard-prefer-existing-config-json',
+  );
+  const headIndex = args.indexOf('--head');
+  assert.notEqual(headIndex, -1);
+  assert.equal(
+    args[headIndex + 1],
+    'issue/2222-fix-onboard-prefer-existing-config-json',
+  );
+  const stateIndex = args.indexOf('--state');
+  assert.notEqual(stateIndex, -1);
+  assert.equal(args[stateIndex + 1], 'merged');
+  const jsonIndex = args.indexOf('--json');
+  assert.notEqual(jsonIndex, -1);
+  const fields = (args[jsonIndex + 1] ?? '').split(',');
+  assert.equal(fields.includes('number'), true);
+  assert.equal(fields.includes('headRefName'), true);
+  assert.equal(fields.includes('mergedAt'), true);
 });
 
 test('buildPrDetailArgs is read-only', () => {

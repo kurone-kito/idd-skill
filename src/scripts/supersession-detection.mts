@@ -102,6 +102,20 @@ export interface HighConfidenceDuplicateInput {
    * high-confidence evidence that THIS issue was superseded. */
   highContentionFiles: string[];
   mergedPrs: HighConfidenceMergedPr[];
+  /**
+   * #2313: a merged PR whose `headRefName` exactly matches this issue's own
+   * IDD-naming-convention-computed branch name (`computeBranchName` in
+   * `branch-name.mts`), or `null` when no such PR exists (or the caller did
+   * not collect this evidence). This is an exact-match GitHub lookup by
+   * construction -- branch names are unique per issue -- so it is
+   * independent of, and safe at the same high-confidence tier as, the two
+   * signals above: it needs neither a closing keyword nor a
+   * `## Candidate files` overlap. Fixes the gap that let issue #2222 survive
+   * as `OPEN`/`ready` for three days after PR #2254 had already merged the
+   * same work on the issue's own convention-computed branch name with no
+   * closing keyword.
+   */
+  branchNameMergedPr: { number: number; mergedAt: string } | null;
 }
 
 /**
@@ -426,6 +440,26 @@ export function evaluateHighConfidenceDuplicate(
     return null;
   }
 
+  // #2313, Signal 3: an exact-match branch-name lookup, checked first since
+  // it needs no candidate-file set and is unconditionally sufficient on its
+  // own -- a merged PR on this issue's own convention-computed branch name
+  // can only exist because it shipped this issue's work, closing keyword or
+  // Candidate-files overlap notwithstanding.
+  const branchNameMergedPr = input.branchNameMergedPr;
+  if (
+    branchNameMergedPr &&
+    typeof branchNameMergedPr === 'object' &&
+    Number.isInteger(branchNameMergedPr.number) &&
+    branchNameMergedPr.number > 0
+  ) {
+    const mergedAt = String(branchNameMergedPr.mergedAt ?? '');
+    return {
+      pass: false,
+      evidence: `High-confidence duplicate: merged PR #${branchNameMergedPr.number}${mergedAt ? ` (merged ${mergedAt})` : ''} already shipped this issue's own IDD-naming-convention-computed branch, independent of closing-keyword presence or Candidate-files overlap.`,
+      tier: 'high-confidence',
+    };
+  }
+
   const closedByMergedPrNumbers = (
     Array.isArray(input.closedByMergedPrNumbers)
       ? input.closedByMergedPrNumbers
@@ -556,6 +590,35 @@ export function buildMergedPrListArgs(
     'number,mergedAt',
     '--limit',
     String(MERGED_PR_SCAN_LIMIT),
+  ];
+}
+
+/**
+ * Argv for the exact-match merged-PR-by-branch-name lookup (#2313): finds
+ * any merged PR whose `headRefName` equals this issue's own
+ * IDD-naming-convention-computed branch name (`computeBranchName` in
+ * `branch-name.mts`). `--head` filters server-side to PRs with that exact
+ * head branch, so this is a single targeted lookup -- unlike
+ * {@link buildMergedPrListArgs}'s bounded recent-window scan above, no
+ * client-side iteration over unrelated merged PRs is needed.
+ */
+export function buildMergedPrByBranchArgs(
+  repoRef: string,
+  branchName: string,
+): string[] {
+  return [
+    'pr',
+    'list',
+    '--repo',
+    repoRef,
+    '--head',
+    branchName,
+    '--state',
+    'merged',
+    '--json',
+    'number,headRefName,mergedAt',
+    '--limit',
+    '1',
   ];
 }
 
