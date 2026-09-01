@@ -1063,15 +1063,18 @@ critique findings; the C-phase objective diff validation floor above,
 the E-phase Copilot advisory-convergence policy, required checks, and
 merge gates are all unchanged.
 
-A configured delegate receives only the branch diff, never the two
-lenses below or the rest of the per-agent checklist — passing checklist
-content to an external command is a capability change with its own
-design questions (whether the reviewer accepts input at all, what
-happens if it ignores it) that this surface does not make today. Under
-a successful delegate with `mode: fallback` (the default), or under
-`mode: never`, the per-agent pass does not run at all, so an operator
-relying solely on a delegate should expect the lenses below are not
-applied to that PR's diff.
+The critique content passed to a configured delegate is the branch diff
+only — never the two lenses below or the rest of the per-agent
+checklist. (This is about what the delegate invocation sends as
+critique input, not a sandboxing guarantee on what the command can
+otherwise access — see the executable-configuration warning above.)
+Passing checklist content to an external command is a capability change
+with its own design questions (whether the reviewer accepts input at
+all, what happens if it ignores it) that this surface does not make
+today. Under a successful delegate with `mode: fallback` (the default),
+or under `mode: never`, the per-agent pass does not run at all, so an
+operator relying solely on a delegate should expect the lenses below
+are not applied to that PR's diff.
 
 ### Mutation / write-side helper lens
 
