@@ -240,6 +240,20 @@ test('every F3 gate maps to its own blocker', () => {
           requiresUpToDateHeadSource: 'ruleset',
         }),
     ],
+    // #2274: `evaluateMergeGates` is `computePreMergeReadinessBlockers`
+    // verbatim (see its one-line definition above), so the #2272
+    // development-branch-target invariant already reaches F3 merge
+    // execution without any dedicated wiring here -- this case is the
+    // parity proof for that fact at this file's own entry point.
+    [
+      'development-branch-target',
+      (r) =>
+        (r.developmentBranchTarget = {
+          status: 'configured',
+          branch: 'develop',
+          baseRefName: 'main',
+        }),
+    ],
   ];
 
   for (const [gate, mutate] of cases) {
@@ -252,6 +266,33 @@ test('every F3 gate maps to its own blocker', () => {
       `expected sole blocker ${gate}`,
     );
   }
+});
+
+// #2274: a wrong-base PR must not merge even when the full CLI path's own
+// live merge-state re-check (`fetchMergeState`) is otherwise clean --
+// proves the gate holds `runMergeExecute` fail-closed all the way through
+// the deps injection boundary, not just at `evaluateMergeGates` in
+// isolation.
+test('runMergeExecute never calls mergePr for a PR targeting the wrong base branch, even with an otherwise-clean live merge state', () => {
+  const report = readyReport();
+  report.developmentBranchTarget = {
+    status: 'configured',
+    branch: 'develop',
+    baseRefName: 'main',
+  };
+  const { deps, calls } = depsFor(report);
+  const { verdict, exitCode } = runMergeExecute(BASE_ARGS, deps);
+
+  assert.equal(verdict.ready, false);
+  assert.deepEqual(
+    verdict.blockers.map((b) => b.gate),
+    ['development-branch-target'],
+  );
+  assert.match(verdict.blockers[0]?.detail ?? '', /"main".*"develop"/);
+  assert.equal(verdict.merged, false);
+  assert.deepEqual(calls.merged, []);
+  assert.deepEqual(calls.adminMerged, []);
+  assert.equal(exitCode, 1);
 });
 
 test('disposition-evidence blocks when route is proceed but blockingCount is non-zero', () => {
