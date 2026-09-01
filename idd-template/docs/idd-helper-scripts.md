@@ -1334,6 +1334,64 @@ Interpretation rules:
   namespace, so a helper-runtime session and an instructions-only
   session see the same lock.
 
+### Clone-scoped lock
+
+- Source repo / vendored-node commands:
+
+  ```sh
+  node scripts/clone-lock.mjs --exec --agent-id <id> [--repo <path>] \
+    [--timeout-ms <n>] -- <command> [args...]
+
+  node scripts/clone-lock.mjs --check [--repo <path>]
+  ```
+
+- Package-manager / ephemeral-npx command: use the profile-selected
+  `idd:clone-lock` command from the helper runtime manifest wiring
+  above; the literal invocations are:
+
+  ```sh
+  npx --yes --package <helper-package-spec> \
+    idd-clone-lock --exec --agent-id <id> [--repo <path>] \
+    [--timeout-ms <n>] -- <command> [args...]
+
+  npx --yes --package <helper-package-spec> \
+    idd-clone-lock --check [--repo <path>]
+  ```
+
+- A mutual-exclusion mutex around `git worktree add`/`remove` and
+  `git fetch` against the _shared_ primary clone — unlike the
+  worktree-local claim lock above, this blocks (retrying with backoff)
+  rather than reporting an immediate collision, and serializes
+  concurrent workers sharing one clone rather than guarding one
+  worktree's own claim identity. See the
+  [Orchestrator fan-out variant](idd-workflow.md#orchestrator-fan-out-variant)
+  for when to reach for it.
+- `--exec` acquires, runs `<command>` with stdio inherited and `cwd`
+  set to `--repo`, then releases the lock even if the command fails,
+  exiting with the command's own exit code; exits `3` if the lock
+  could not be acquired within `--timeout-ms` (default 120000).
+- `--check` reports `{ path, present, holder?, malformed?,
+  holderAlive? }` read-only; `holderAlive` (diagnostic only, from
+  `process.kill(pid, 0)`) reports whether the recorded holder still
+  appears to be running.
+- **No automatic stale-lock recovery**: a held lock is never taken
+  over, regardless of how long it has been held or whether its
+  recorded holder is still alive. `--exec` exits `3` on a
+  `--timeout-ms` timeout, naming the lock path and the recorded
+  holder's pid in the error message; once you have independently
+  confirmed that holder is gone, remove the lock file by hand and
+  retry — the same recovery git's own `index.lock` expects on a
+  stale-lock collision.
+- **`instructions-only` helper-free fallback (no helper runtime
+  available)**: this lock is a same-machine convenience for
+  parallel autonomous fan-out, not a correctness requirement — an
+  `instructions-only` session running one worker at a time never
+  contends for it. Where an `instructions-only` profile does run
+  concurrent workers sharing one clone, serialize `git worktree
+  add`/`remove`/`fetch` by giving each worker its own clone instead
+  (see the Orchestrator fan-out variant linked above), rather than
+  hand-rolling this lock's protocol.
+
 ### Canonical branch name
 
 - Source repo / vendored-node command:

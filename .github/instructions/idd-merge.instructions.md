@@ -415,7 +415,10 @@ Before any mutating action in F3, apply the
    See `docs/idd-comment-minimization.md` for the evidence comment
    format, cleanup-failure comment format, permission-blocked comment
    format, and fallback GraphQL commands.
-4. From the **primary worktree** — the worktree being cleaned up is
+4. Concurrent workers sharing one clone: serialize this step's fetch
+   and step 5's `worktree remove` behind the
+   [clone-scoped lock](../../docs/idd-helper-scripts.md#clone-scoped-lock).
+   From the **primary worktree** — the worktree being cleaned up is
    still checked out to its issue branch at this point, so running
    this elsewhere would fast-forward the wrong branch — switch to
    `{development-branch}` (the PR's own validated target branch;

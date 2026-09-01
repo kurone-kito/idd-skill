@@ -7,7 +7,13 @@ planning (B2), implementation (B3), and the self-review loop (C).
 
 ## B1 — Create worktree (with branch)
 
-Before creating, check for local conflicts in this order:
+Before creating, check for local conflicts in this order. Concurrent
+workers sharing one clone: serialize every `git fetch`/`merge --ff-only`/
+worktree add/remove call against the shared clone -- here, and at F4
+cleanup's own worktree removal -- behind the
+[clone-scoped lock](../../docs/idd-helper-scripts.md#clone-scoped-lock)
+(see the [fan-out variant](../../docs/idd-workflow.md#orchestrator-fan-out-variant)
+for when this applies).
 
 1. Ensure the local `main` branch is up to date and has no local
    commits. Run this from the primary worktree while on `main`:
@@ -206,7 +212,10 @@ mechanical file/close-based signal stronger than A4.5's title/
 declaration heuristic (a weak **title-only** match is **not** a hit
 here). Keep it cheap: one fetch plus a bounded merged-PR scan.
 
-1. `git fetch origin {development-branch}`.
+1. `git fetch origin {development-branch}` (concurrent workers sharing
+   one clone: behind the
+   [clone-scoped lock](../../docs/idd-helper-scripts.md#clone-scoped-lock),
+   same as B1).
 2. **Closed-by-a-merged-PR signal**: re-fetch the issue; if it is now closed
    with a linked closing PR, the deliverable already shipped:
 

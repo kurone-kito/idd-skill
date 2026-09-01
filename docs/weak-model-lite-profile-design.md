@@ -89,7 +89,7 @@ profile.
 **Why shape, not fit, is the problem.** `audit/sync-manifest.json`'s
 `bundleBudgets` already cap every phase-file bundle well inside a
 128K-token window — for example `bundle-work` (B1-C6, the primary
-single-issue execution path) is capped at 45,000 bytes, and even the
+single-issue execution path) is capped at 49,500 bytes, and even the
 largest, `bundle-review`, is capped at 129,400 bytes (roughly a quarter
 of a 128K-token window at a typical ~4-bytes-per-token ratio; read live
 values with `jq '.bundleBudgets' audit/sync-manifest.json` rather than
@@ -369,7 +369,7 @@ this design issue.
   narrowest pilot** — condense `idd-work.instructions.md` into a
   self-contained lite file following all five content principles; the
   canonical single-issue execution phase and the smallest, most
-  self-contained standard file (`bundle-work`, 45,000-byte budget),
+  self-contained standard file (`bundle-work`, 49,500-byte budget),
   making it the lowest-risk pilot.
 - **Author the lite instruction set for the claim phase (A5)** —
   condense `idd-claim.instructions.md`'s mechanical pre-checks (a)-(e)
