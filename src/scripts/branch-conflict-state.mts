@@ -308,7 +308,7 @@ function deriveBranchState({
     if (skipGitProbe) {
       return {
         branchState: 'behind-no-conflict',
-        syncRecommendation: 'merge-main',
+        syncRecommendation: 'merge-base',
         conflictFiles: [],
         mergeableSource: 'github-merge-state',
         baseAdvancedSinceMergeBase,
@@ -343,7 +343,7 @@ function deriveBranchState({
     }
     return {
       branchState: 'behind-no-conflict',
-      syncRecommendation: 'merge-main',
+      syncRecommendation: 'merge-base',
       conflictFiles: [],
       mergeableSource: 'git-merge-tree',
       baseAdvancedSinceMergeBase,

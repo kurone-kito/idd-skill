@@ -4742,31 +4742,6 @@ export function computePreMergeReadinessBlockers(report) {
       detail: `prHeadSha "${prHeadSha}" is not a 40-hex commit SHA; cannot bind a safe merge`,
     });
   }
-  // #2273: absent `report.branchTarget` never blocks (backward-compat with
-  // every pre-#2273 fixture/caller, mirroring `secondaryQuietWindow` below).
-  // When present, it is a real, always-computed safety gate -- not opt-in
-  // evidence -- so an unresolvable expected value (`invalid: true`, a
-  // malformed configured `developmentBranch`) fails closed rather than
-  // silently skipping the comparison.
-  const branchTarget = preMergeAsRecord(report.branchTarget);
-  if (Object.keys(branchTarget).length > 0) {
-    if (branchTarget.invalid === true) {
-      blockers.push({
-        gate: 'branch-target',
-        detail:
-          'developmentBranch is configured but invalid; cannot verify the PR base branch',
-      });
-    } else {
-      const actualBase = String(branchTarget.actual ?? '');
-      const expectedBase = String(branchTarget.expected ?? '');
-      if (!expectedBase || actualBase !== expectedBase) {
-        blockers.push({
-          gate: 'branch-target',
-          detail: `PR baseRefName "${actualBase}" does not match the configured development branch "${expectedBase}"`,
-        });
-      }
-    }
-  }
   const reviewCurrency = preMergeAsRecord(report.reviewCurrency);
   const comparisonRoute = String(reviewCurrency.comparisonRoute ?? '');
   const comparisonReason = String(reviewCurrency.comparisonReason ?? '');
@@ -5110,6 +5085,50 @@ export function computePreMergeReadinessBlockers(report) {
       detail: `mergeStateStatus is "BLOCKED" and ci.discardedNonPassingRequiredChecks has ${String(discardedSiblings.length)} discarded same-named required-check sibling(s); recover via rerun-advisory-convergence, do not merge or --admin`,
     });
   }
+  // #2272: fail-closed development-branch invariant. Absent entirely
+  // (unmigrated caller / unit fixture) means no gate at all -- distinct
+  // from a present-but-empty-`status` value, which this treats as
+  // `'unavailable'` (fail closed) rather than silently skipping.
+  if (report.developmentBranchTarget) {
+    const developmentBranchTarget = preMergeAsRecord(
+      report.developmentBranchTarget,
+    );
+    // `||`, not `??`: an empty-string status (garbled/absent field) must
+    // fail closed to 'unavailable' too, not pass '' through unmatched.
+    const status = String(developmentBranchTarget.status || 'unavailable');
+    const baseRefName = String(developmentBranchTarget.baseRefName ?? '');
+    if (status === 'invalid') {
+      blockers.push({
+        gate: 'development-branch-target',
+        detail: `configured developmentBranch is invalid: ${String(developmentBranchTarget.reason ?? 'unknown reason')}`,
+      });
+    } else if (status === 'unavailable') {
+      blockers.push({
+        gate: 'development-branch-target',
+        detail:
+          'effective development branch could not be resolved (no developmentBranch policy value and the live repository default branch could not be read)',
+      });
+    } else if (status === 'configured' || status === 'default') {
+      const effectiveBranch = String(developmentBranchTarget.branch ?? '');
+      if (effectiveBranch === '' || effectiveBranch !== baseRefName) {
+        blockers.push({
+          gate: 'development-branch-target',
+          detail: `PR base branch "${baseRefName}" does not match the effective development branch "${effectiveBranch}" (status="${status}")`,
+        });
+      }
+    } else {
+      // Whitelist, not a denylist: an unrecognized status (a typo, a
+      // future enum value this file does not know about yet, or any
+      // other coerced-`String(...)` garbage) must fail closed rather
+      // than fall through to the branch comparison, where a coincidental
+      // `branch === baseRefName` (including both empty) would otherwise
+      // silently pass an invariant this file cannot actually vouch for.
+      blockers.push({
+        gate: 'development-branch-target',
+        detail: `unrecognized developmentBranchTarget.status "${status}" (expected "configured", "default", "invalid", or "unavailable")`,
+      });
+    }
+  }
   return blockers;
 }
 export function buildPreMergeReadinessSummary(
@@ -5135,7 +5154,6 @@ export function buildPreMergeReadinessSummary(
     reviewDecision = '',
     mergeStateStatus = '',
     mergeable = '',
-    baseRefName = '',
   },
   options = {},
 ) {
@@ -5525,16 +5543,11 @@ export function buildPreMergeReadinessSummary(
   if (options.localValidationEvidenceSummary) {
     summary.localValidationEvidence = options.localValidationEvidenceSummary;
   }
-  // #2273: unlike the informational field above, this one feeds
-  // `computePreMergeReadinessBlockers` directly (see that function's
-  // `branchTarget` gate) -- a real, always-on safety check when the caller
-  // supplies it, not opt-in evidence.
-  if (options.developmentBranchCheck) {
-    summary.branchTarget = {
-      actual: baseRefName,
-      expected: options.developmentBranchCheck.expected,
-      invalid: options.developmentBranchCheck.invalid === true,
-    };
+  // #2272: omitted entirely (not even `null`) when the caller does not
+  // pass it, so `computePreMergeReadinessBlockers` below can distinguish
+  // "no gate" from "gate present" -- see the option's doc comment above.
+  if (options.developmentBranchTarget) {
+    summary.developmentBranchTarget = options.developmentBranchTarget;
   }
   // Top-level rollup so a consumer reads one `ready` boolean + `blockers[]`
   // instead of hand-ANDing ~8 nested gates (a dropped clause would fail open).

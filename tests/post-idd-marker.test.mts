@@ -385,13 +385,24 @@ test('buildMarkerBody throws on copilot-unavailable with any field missing', () 
     attempt: '1',
     timestamp: TS,
   };
+  const fieldNames: Record<string, string> = {
+    'agent-id': 'agentId',
+    'claim-id': 'claimId',
+    'head-sha': 'headSha',
+    attempt: 'attempt',
+    timestamp: 'timestamp',
+  };
   for (const omit of Object.keys(fullFields)) {
     const fields = { ...fullFields };
     delete (fields as Record<string, string>)[omit];
+    // #2247: the aggregate guard names the specific failing field, not just
+    // the marker kind.
     assert.throws(
       () => buildMarkerBody('copilot-unavailable', fields),
-      /invalid copilot-unavailable marker payload/,
-      `omitting ${omit} should throw`,
+      new RegExp(
+        `invalid copilot-unavailable marker payload:.*"${fieldNames[omit]}"`,
+      ),
+      `omitting ${omit} should throw and name "${fieldNames[omit]}"`,
     );
   }
 });
@@ -524,6 +535,8 @@ test('buildMarkerBody throws on an unknown type', () => {
 });
 
 test('buildMarkerBody throws on an invalid field set (renderer validation)', () => {
+  // #2247: the aggregate guard names the specific failing field, not just
+  // the marker kind.
   // Missing branch for a claim.
   assert.throws(
     () =>
@@ -532,9 +545,10 @@ test('buildMarkerBody throws on an invalid field set (renderer validation)', () 
         'claim-id': 'c',
         timestamp: TS,
       }),
-    /invalid claimed-by marker payload/,
+    /invalid claimed-by marker payload:.*missing "branch"/,
   );
-  // Non-hex head SHA for an advisory marker.
+  // Non-hex head SHA for an advisory marker -- present but malformed, so
+  // "invalid", not "missing".
   assert.throws(
     () =>
       buildMarkerBody('advisory', {
@@ -542,12 +556,12 @@ test('buildMarkerBody throws on an invalid field set (renderer validation)', () 
         'head-sha': 'not-a-sha',
         timestamp: TS,
       }),
-    /invalid advisory-wait marker payload/,
+    /invalid advisory-wait marker payload:.*invalid "headSha"/,
   );
   // Missing timestamp for an unclaim.
   assert.throws(
     () => buildMarkerBody('unclaim', { 'agent-id': 'a', 'claim-id': 'c' }),
-    /invalid unclaimed-by marker payload/,
+    /invalid unclaimed-by marker payload:.*missing "timestamp"/,
   );
   // Missing nonce for an activation-nonce marker.
   assert.throws(
@@ -557,7 +571,22 @@ test('buildMarkerBody throws on an invalid field set (renderer validation)', () 
         'claim-id': 'c',
         timestamp: TS,
       }),
-    /invalid activation-nonce marker payload/,
+    /invalid activation-nonce marker payload:.*missing "nonce"/,
+  );
+  // Two failing fields at once, one missing and one malformed, both named
+  // together. max-activity-at / ci-completed-at both default to the "none"
+  // sentinel when absent (renderer-defaulted, like --supersedes above), so
+  // total-item-count is the field genuinely absent here.
+  assert.throws(
+    () =>
+      buildMarkerBody('watermark', {
+        'agent-id': 'a',
+        'claim-id': 'c',
+        'head-sha': 'not-a-sha',
+        'max-activity-at': 'none',
+        'ci-completed-at': 'none',
+      }),
+    /invalid review-watermark marker payload:.*missing "totalItemCount".*invalid "headSha"/,
   );
 });
 

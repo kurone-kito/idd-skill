@@ -57,6 +57,33 @@ export function inspectDevelopmentBranch(config) {
   }
   return { status: 'configured', branch: value };
 }
+/**
+ * Resolve the effective development-branch target for enforcement
+ * (#2272): a configured `developmentBranch` policy value wins outright;
+ * an absent policy falls back to the caller-supplied live default branch
+ * (`null` when that read failed or was never attempted, yielding
+ * `'unavailable'`); an invalid policy value fails closed regardless of
+ * whether a live default branch is available, since a present-but-broken
+ * policy must never be silently ignored in favor of the fallback.
+ *
+ * Pure and injectable by design -- `policy-helpers.mts` performs no `gh`
+ * I/O itself; every caller resolves `liveDefaultBranch` (or passes `null`
+ * when unread) via its own evidence reader, mirroring the onboarding
+ * `OnboardEvidenceReaders` injection pattern.
+ */
+export function resolveEffectiveDevelopmentBranch(config, liveDefaultBranch) {
+  const inspection = inspectDevelopmentBranch(config);
+  if (inspection.status === 'configured') {
+    return { status: 'configured', branch: inspection.branch };
+  }
+  if (inspection.status === 'invalid') {
+    return { status: 'invalid', reason: inspection.reason };
+  }
+  if (liveDefaultBranch === null || liveDefaultBranch === '') {
+    return { status: 'unavailable' };
+  }
+  return { status: 'default', branch: liveDefaultBranch };
+}
 const HELPER_RUNTIME_PROFILES = new Set([
   'package-manager',
   'vendored-node',

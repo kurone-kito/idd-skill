@@ -68,7 +68,7 @@
       "type": "string",
       "enum": [
         "none",
-        "merge-main",
+        "merge-base",
         "policy-required-update",
         "force-push-exception",
         "recheck",

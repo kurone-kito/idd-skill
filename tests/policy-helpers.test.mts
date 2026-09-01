@@ -10,6 +10,7 @@ import {
   POLICY_DEFAULTS,
   parseIsoDurationToMs,
   resolveEffectiveCritiqueLoopDelegate,
+  resolveEffectiveDevelopmentBranch,
   selectDesyncedIndex,
 } from '../src/scripts/policy-helpers.mts';
 
@@ -927,5 +928,57 @@ test('normalizePolicyConfig omits developmentBranch when absent or invalid, incl
   assert.equal(
     normalizePolicyConfig({ developmentBranch: 'develop' }).developmentBranch,
     'develop',
+  );
+});
+
+test('resolveEffectiveDevelopmentBranch: a configured value wins outright, live default branch ignored (#2272)', () => {
+  assert.deepEqual(
+    resolveEffectiveDevelopmentBranch({ developmentBranch: 'develop' }, 'main'),
+    { status: 'configured', branch: 'develop' },
+  );
+  // Even a null/unread live default branch never affects a configured value.
+  assert.deepEqual(
+    resolveEffectiveDevelopmentBranch({ developmentBranch: 'develop' }, null),
+    { status: 'configured', branch: 'develop' },
+  );
+});
+
+test('resolveEffectiveDevelopmentBranch: an absent policy falls back to the live default branch (#2272)', () => {
+  assert.deepEqual(resolveEffectiveDevelopmentBranch({}, 'main'), {
+    status: 'default',
+    branch: 'main',
+  });
+  assert.deepEqual(resolveEffectiveDevelopmentBranch(null, 'trunk'), {
+    status: 'default',
+    branch: 'trunk',
+  });
+});
+
+test('resolveEffectiveDevelopmentBranch: an absent policy with an unread live default branch is unavailable, not silently absent (#2272)', () => {
+  assert.deepEqual(resolveEffectiveDevelopmentBranch({}, null), {
+    status: 'unavailable',
+  });
+  assert.deepEqual(resolveEffectiveDevelopmentBranch({}, ''), {
+    status: 'unavailable',
+  });
+});
+
+test('resolveEffectiveDevelopmentBranch: an invalid policy fails closed regardless of a live default branch (#2272)', () => {
+  assert.deepEqual(
+    resolveEffectiveDevelopmentBranch(
+      { developmentBranch: 'refs/heads/main' },
+      'main',
+    ),
+    {
+      status: 'invalid',
+      reason: 'developmentBranch must be a branch name, not a refs/heads/ ref',
+    },
+  );
+  // Even a fully-readable live default branch must not paper over a
+  // present-but-broken policy value -- that would silently ignore an
+  // operator's malformed configuration instead of surfacing it.
+  assert.equal(
+    resolveEffectiveDevelopmentBranch({ developmentBranch: '' }, 'main').status,
+    'invalid',
   );
 });

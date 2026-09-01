@@ -1177,6 +1177,46 @@ function normalizeMarkerIsoOrNone(value: unknown): string | null {
   return normalizeIsoTimestamp(token) || null;
 }
 
+/**
+ * Build the field-attribution suffix for a marker-payload aggregate
+ * validation error (`#2247`): names every field whose check failed instead
+ * of leaving the generic "invalid ... marker payload" message unattributed.
+ * A field is "missing" when its raw payload value is absent, `null`, or (for
+ * a string) empty after trimming; anything else that still failed its own
+ * normalize/format check is "invalid" -- a non-empty but malformed value
+ * (a non-ISO timestamp, a non-hex-40 SHA). Every CLI-reachable renderer
+ * caller (`emit-marker.mts`, `post-idd-marker.mts`) already rejects a
+ * genuinely omitted flag before this guard runs (`#1722`, `requireFlag`), so
+ * this most commonly fires on the "invalid" branch in practice -- but a
+ * direct (non-CLI) caller can still hit "missing", so both stay covered.
+ * Returns `''` when every listed field passed (never expected to be called
+ * that way, but keeps the helper a total function).
+ */
+function describeInvalidMarkerFields(
+  fields: Array<{ name: string; raw: unknown; failed: boolean }>,
+): string {
+  const missing: string[] = [];
+  const invalid: string[] = [];
+  for (const { name, raw, failed } of fields) {
+    if (!failed) {
+      continue;
+    }
+    const rawMissing =
+      raw === undefined ||
+      raw === null ||
+      (typeof raw === 'string' && raw.trim() === '');
+    (rawMissing ? missing : invalid).push(`"${name}"`);
+  }
+  const parts: string[] = [];
+  if (missing.length > 0) {
+    parts.push(`missing ${missing.join(', ')}`);
+  }
+  if (invalid.length > 0) {
+    parts.push(`invalid ${invalid.join(', ')}`);
+  }
+  return parts.length > 0 ? `: ${parts.join('; ')}` : '';
+}
+
 export function renderClaimedByMarker(payload: {
   agentId?: unknown;
   claimId?: unknown;
@@ -1200,7 +1240,15 @@ export function renderClaimedByMarker(payload: {
   const timestamp = normalizeSecondPrecisionIsoTimestamp(payload?.timestamp);
   const branch = normalizeBranchToken(payload?.branch);
   if (!agentId || !claimId || !timestamp || !branch) {
-    throw new Error('invalid claimed-by marker payload');
+    throw new Error(
+      'invalid claimed-by marker payload' +
+        describeInvalidMarkerFields([
+          { name: 'agentId', raw: payload?.agentId, failed: !agentId },
+          { name: 'claimId', raw: payload?.claimId, failed: !claimId },
+          { name: 'timestamp', raw: payload?.timestamp, failed: !timestamp },
+          { name: 'branch', raw: payload?.branch, failed: !branch },
+        ]),
+    );
   }
   return [
     `<!-- claimed-by: ${agentId} ${claimId} supersedes: ${supersedes} ${timestamp} branch: ${branch} -->`,
@@ -1220,7 +1268,15 @@ export function renderActivationNonceMarker(payload: {
   const nonce = normalizeNonWhitespaceToken(payload?.nonce);
   const timestamp = normalizeSecondPrecisionIsoTimestamp(payload?.timestamp);
   if (!agentId || !claimId || !nonce || !timestamp) {
-    throw new Error('invalid activation-nonce marker payload');
+    throw new Error(
+      'invalid activation-nonce marker payload' +
+        describeInvalidMarkerFields([
+          { name: 'agentId', raw: payload?.agentId, failed: !agentId },
+          { name: 'claimId', raw: payload?.claimId, failed: !claimId },
+          { name: 'nonce', raw: payload?.nonce, failed: !nonce },
+          { name: 'timestamp', raw: payload?.timestamp, failed: !timestamp },
+        ]),
+    );
   }
   return [
     `<!-- activation-nonce: ${agentId} ${claimId} ${nonce} ${timestamp} -->`,
@@ -1243,15 +1299,38 @@ export function renderReviewWatermarkMarker(payload: {
   const maxActivityAt = normalizeMarkerIsoOrNone(payload?.maxActivityAt);
   const totalItemCount = normalizeMarkerCount(payload?.totalItemCount);
   const ciCompletedAt = normalizeMarkerIsoOrNone(payload?.ciCompletedAt);
+  const headShaValid = /^[0-9a-f]{40}$/.test(headSha);
   if (
     !agentId ||
     !claimId ||
-    !/^[0-9a-f]{40}$/.test(headSha) ||
+    !headShaValid ||
     maxActivityAt === null ||
     totalItemCount === null ||
     ciCompletedAt === null
   ) {
-    throw new Error('invalid review-watermark marker payload');
+    throw new Error(
+      'invalid review-watermark marker payload' +
+        describeInvalidMarkerFields([
+          { name: 'agentId', raw: payload?.agentId, failed: !agentId },
+          { name: 'claimId', raw: payload?.claimId, failed: !claimId },
+          { name: 'headSha', raw: payload?.headSha, failed: !headShaValid },
+          {
+            name: 'maxActivityAt',
+            raw: payload?.maxActivityAt,
+            failed: maxActivityAt === null,
+          },
+          {
+            name: 'totalItemCount',
+            raw: payload?.totalItemCount,
+            failed: totalItemCount === null,
+          },
+          {
+            name: 'ciCompletedAt',
+            raw: payload?.ciCompletedAt,
+            failed: ciCompletedAt === null,
+          },
+        ]),
+    );
   }
   return [
     `<!-- review-watermark: ${agentId} ${claimId} ${headSha} ${maxActivityAt} ${totalItemCount} ${ciCompletedAt} -->`,
@@ -1268,8 +1347,16 @@ export function renderReviewBaselineMarker(payload: {
   const agentId = normalizeNonWhitespaceToken(payload?.agentId);
   const claimId = normalizeNonWhitespaceToken(payload?.claimId);
   const sha = normalizeNonWhitespaceToken(payload?.sha).toLowerCase();
-  if (!agentId || !claimId || !/^[0-9a-f]{40}$/.test(sha)) {
-    throw new Error('invalid review-baseline marker payload');
+  const shaValid = /^[0-9a-f]{40}$/.test(sha);
+  if (!agentId || !claimId || !shaValid) {
+    throw new Error(
+      'invalid review-baseline marker payload' +
+        describeInvalidMarkerFields([
+          { name: 'agentId', raw: payload?.agentId, failed: !agentId },
+          { name: 'claimId', raw: payload?.claimId, failed: !claimId },
+          { name: 'sha', raw: payload?.sha, failed: !shaValid },
+        ]),
+    );
   }
   return [
     `<!-- review-baseline: ${agentId} ${claimId} ${sha} -->`,
@@ -1294,7 +1381,14 @@ export function renderUnclaimedByMarker(payload: {
   const claimId = normalizeNonWhitespaceToken(payload?.claimId);
   const timestamp = normalizeSecondPrecisionIsoTimestamp(payload?.timestamp);
   if (!agentId || !claimId || !timestamp) {
-    throw new Error('invalid unclaimed-by marker payload');
+    throw new Error(
+      'invalid unclaimed-by marker payload' +
+        describeInvalidMarkerFields([
+          { name: 'agentId', raw: payload?.agentId, failed: !agentId },
+          { name: 'claimId', raw: payload?.claimId, failed: !claimId },
+          { name: 'timestamp', raw: payload?.timestamp, failed: !timestamp },
+        ]),
+    );
   }
   return [
     `<!-- unclaimed-by: ${agentId} ${claimId} ${timestamp} -->`,
@@ -1315,8 +1409,16 @@ export function renderAdvisoryWaitMarker(payload: {
   const agentId = normalizeNonWhitespaceToken(payload?.agentId);
   const headSha = normalizeNonWhitespaceToken(payload?.headSha).toLowerCase();
   const timestamp = normalizeSecondPrecisionIsoTimestamp(payload?.timestamp);
-  if (!agentId || !/^[0-9a-f]{40}$/.test(headSha) || !timestamp) {
-    throw new Error('invalid advisory-wait marker payload');
+  const headShaValid = /^[0-9a-f]{40}$/.test(headSha);
+  if (!agentId || !headShaValid || !timestamp) {
+    throw new Error(
+      'invalid advisory-wait marker payload' +
+        describeInvalidMarkerFields([
+          { name: 'agentId', raw: payload?.agentId, failed: !agentId },
+          { name: 'headSha', raw: payload?.headSha, failed: !headShaValid },
+          { name: 'timestamp', raw: payload?.timestamp, failed: !timestamp },
+        ]),
+    );
   }
   return `advisory-wait: ${agentId} ${headSha} ${timestamp}`;
 }
@@ -1359,8 +1461,16 @@ export function renderAdvisoryWaitRecoveryMarker(payload: {
   const agentId = normalizeNonWhitespaceToken(payload?.agentId);
   const headSha = normalizeNonWhitespaceToken(payload?.headSha).toLowerCase();
   const timestamp = normalizeSecondPrecisionIsoTimestamp(payload?.timestamp);
-  if (!agentId || !/^[0-9a-f]{40}$/.test(headSha) || !timestamp) {
-    throw new Error('invalid advisory-wait-recovery marker payload');
+  const headShaValid = /^[0-9a-f]{40}$/.test(headSha);
+  if (!agentId || !headShaValid || !timestamp) {
+    throw new Error(
+      'invalid advisory-wait-recovery marker payload' +
+        describeInvalidMarkerFields([
+          { name: 'agentId', raw: payload?.agentId, failed: !agentId },
+          { name: 'headSha', raw: payload?.headSha, failed: !headShaValid },
+          { name: 'timestamp', raw: payload?.timestamp, failed: !timestamp },
+        ]),
+    );
   }
   const claimIdProvided =
     payload?.claimId !== undefined &&
@@ -1402,14 +1512,22 @@ export function renderCopilotUnavailableMarker(payload: {
   const headSha = normalizeNonWhitespaceToken(payload?.headSha).toLowerCase();
   const attempt = normalizePositiveIntegerToken(payload?.attempt);
   const timestamp = normalizeSecondPrecisionIsoTimestamp(payload?.timestamp);
-  if (
-    !agentId ||
-    !claimId ||
-    !/^[0-9a-f]{40}$/.test(headSha) ||
-    attempt === null ||
-    !timestamp
-  ) {
-    throw new Error('invalid copilot-unavailable marker payload');
+  const headShaValid = /^[0-9a-f]{40}$/.test(headSha);
+  if (!agentId || !claimId || !headShaValid || attempt === null || !timestamp) {
+    throw new Error(
+      'invalid copilot-unavailable marker payload' +
+        describeInvalidMarkerFields([
+          { name: 'agentId', raw: payload?.agentId, failed: !agentId },
+          { name: 'claimId', raw: payload?.claimId, failed: !claimId },
+          { name: 'headSha', raw: payload?.headSha, failed: !headShaValid },
+          {
+            name: 'attempt',
+            raw: payload?.attempt,
+            failed: attempt === null,
+          },
+          { name: 'timestamp', raw: payload?.timestamp, failed: !timestamp },
+        ]),
+    );
   }
   return `copilot-unavailable: ${agentId} ${headSha} ${timestamp} claim:${claimId} attempt:${attempt}`;
 }
@@ -1428,8 +1546,16 @@ export function renderAdvisoryRerollMarker(payload: {
   const agentId = normalizeNonWhitespaceToken(payload?.agentId);
   const headSha = normalizeNonWhitespaceToken(payload?.headSha).toLowerCase();
   const timestamp = normalizeSecondPrecisionIsoTimestamp(payload?.timestamp);
-  if (!agentId || !/^[0-9a-f]{40}$/.test(headSha) || !timestamp) {
-    throw new Error('invalid advisory-reroll marker payload');
+  const headShaValid = /^[0-9a-f]{40}$/.test(headSha);
+  if (!agentId || !headShaValid || !timestamp) {
+    throw new Error(
+      'invalid advisory-reroll marker payload' +
+        describeInvalidMarkerFields([
+          { name: 'agentId', raw: payload?.agentId, failed: !agentId },
+          { name: 'headSha', raw: payload?.headSha, failed: !headShaValid },
+          { name: 'timestamp', raw: payload?.timestamp, failed: !timestamp },
+        ]),
+    );
   }
   return `advisory-reroll: ${agentId} ${headSha} ${timestamp}`;
 }
@@ -1454,8 +1580,16 @@ export function renderReviewAckMarker(payload: {
   const agentId = normalizeNonWhitespaceToken(payload?.agentId);
   const headSha = normalizeNonWhitespaceToken(payload?.headSha).toLowerCase();
   const timestamp = normalizeSecondPrecisionIsoTimestamp(payload?.timestamp);
-  if (!agentId || !/^[0-9a-f]{40}$/.test(headSha) || !timestamp) {
-    throw new Error('invalid review-ack marker payload');
+  const headShaValid = /^[0-9a-f]{40}$/.test(headSha);
+  if (!agentId || !headShaValid || !timestamp) {
+    throw new Error(
+      'invalid review-ack marker payload' +
+        describeInvalidMarkerFields([
+          { name: 'agentId', raw: payload?.agentId, failed: !agentId },
+          { name: 'headSha', raw: payload?.headSha, failed: !headShaValid },
+          { name: 'timestamp', raw: payload?.timestamp, failed: !timestamp },
+        ]),
+    );
   }
   return `review-ack: ${agentId} ${headSha} ${timestamp}`;
 }

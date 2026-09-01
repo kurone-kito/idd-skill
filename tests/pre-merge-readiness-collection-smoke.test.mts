@@ -318,8 +318,8 @@ function notFound() { process.stderr.write('gh: Not Found (HTTP 404)\\n'); proce
 if (a(0) === 'api' && a(1) === 'user') out(${JSON.stringify('viewer-user')});
 if (a(0) === 'api' && a(1) === 'app') out('');
 if (a(0) === 'pr' && a(1) === 'view' && a(2) === '${String(PR_NUMBER)}') out(${JSON.stringify(JSON.stringify(prView))});
-if (a(0) === 'repo' && a(1) === 'view' && a(3) === '${REPO_REF}') out(${JSON.stringify(
-    JSON.stringify({ defaultBranchRef: { name: BASE_REF } }),
+if (a(0) === 'api' && a(1) === '${`repos/${REPO_REF}`}') out(${JSON.stringify(
+    JSON.stringify({ default_branch: BASE_REF }),
   )});
 if (a(0) === 'api' && a(1) === '${`repos/${REPO_REF}/rules/branches/${BASE_REF}`}') out('');
 if (a(0) === 'api' && a(1) === '${`repos/${REPO_REF}/branches/${BASE_REF}/protection`}') out('{}');

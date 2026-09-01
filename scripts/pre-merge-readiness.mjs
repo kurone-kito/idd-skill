@@ -24,6 +24,7 @@ import {
   DEFAULT_GH_PAGINATED_TIMEOUT_MS,
   GH_TEXT_LOOP_OPTIONS,
   ghText,
+  readGithubRepoDefaultBranch,
   safeGhText,
 } from './gh-exec.mjs';
 import { deriveGhHttpStatus } from './gh-http-status.mjs';
@@ -33,6 +34,7 @@ import {
   normalizePolicyConfig,
   parseIsoDurationToMs,
   resolveCollaboratorMarkerTrust,
+  resolveEffectiveDevelopmentBranch,
 } from './policy-helpers.mjs';
 import {
   buildPreMergeReadinessSummary,
@@ -246,34 +248,20 @@ export function collectPreMergeReadiness(argv) {
       );
     }
   }
-  const encodedBaseRefName = encodeURIComponent(baseRefName);
-  // #2273: resolve the expected development branch the same way B1 does
-  // (idd-work.instructions.md) -- configured `developmentBranch` when
-  // present and structurally valid, else the repository's live GitHub
-  // default branch -- so F3's `branchTarget` gate is a real, always-on
-  // check rather than the prose-only Gate-checklist bullet a Copilot
-  // review found bypassable via this exact `--apply` path. Mirrors
-  // `readGithubDefaultBranch` (idd-onboard.mts) for the live-default path;
-  // an uncaught `ghJson` failure here throws (fails closed) rather than
-  // silently proceeding without the check.
+  // #2272: fail-closed development-branch invariant. Only reads the live
+  // repository default branch when the policy is silent (`'absent'`) --
+  // a configured or malformed value never needs it, so a repo with an
+  // explicit `developmentBranch` never pays this extra `gh api` call.
   const developmentBranchInspection = inspectDevelopmentBranch(iddConfig);
-  const developmentBranchCheck =
-    developmentBranchInspection.status === 'invalid'
-      ? { expected: '', invalid: true }
-      : developmentBranchInspection.status === 'configured'
-        ? { expected: developmentBranchInspection.branch ?? '' }
-        : {
-            expected: String(
-              ghJson([
-                'repo',
-                'view',
-                '-R',
-                repoRef,
-                '--json',
-                'defaultBranchRef',
-              ]).defaultBranchRef?.name ?? '',
-            ),
-          };
+  const liveDefaultBranch =
+    developmentBranchInspection.status === 'absent'
+      ? readGithubRepoDefaultBranch(owner, repo)
+      : null;
+  const developmentBranchTarget = {
+    ...resolveEffectiveDevelopmentBranch(iddConfig, liveDefaultBranch),
+    baseRefName,
+  };
+  const encodedBaseRefName = encodeURIComponent(baseRefName);
   // #1483: sourced from the same `gh pr view` call above (the
   // `statusCheckRollup` field), not a separate `gh pr checks` call --
   // `statusCheckRollup`'s GraphQL union already tags each entry with a
@@ -522,7 +510,6 @@ export function collectPreMergeReadiness(argv) {
       reviewDecision,
       mergeStateStatus,
       mergeable,
-      baseRefName,
     },
     {
       now,
@@ -530,7 +517,6 @@ export function collectPreMergeReadiness(argv) {
       iddAgentLogins,
       advisoryBotLogins,
       advisoryBotLoginsSource,
-      developmentBranchCheck,
       prAuthorLogin,
       expectedClaimId: args.expectedClaimId,
       expectedAgentId: args.expectedAgentId,
@@ -543,6 +529,7 @@ export function collectPreMergeReadiness(argv) {
       pollIntervalMinutes: advisoryWaitPolicy.pollIntervalMinutes,
       capExhaustedRoute: advisoryWaitPolicy.capExhaustedRoute,
       primaryBotLogin,
+      developmentBranchTarget,
       copilotUnavailable,
       advisoryConvergenceHeadCommittedAt,
       advisoryConvergenceDeadlineMinutes,

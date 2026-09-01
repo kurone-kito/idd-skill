@@ -574,7 +574,7 @@ export const preMergeReadinessKeys = [
   'trustedMarkerActors',
   'trustedMarkerActorsSource',
   'localValidationEvidence',
-  'branchTarget',
+  'developmentBranchTarget',
   'ready',
   'blockers',
 ] as const satisfies readonly (keyof PreMergeReadinessReport)[];
