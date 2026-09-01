@@ -51,17 +51,21 @@ cleanup markers — so any agent can resume any work without guessing.
 
 ## Proven in production
 
-IDD is not a demo. It is the workflow this repository is built with:
+IDD is not a demo. It is the workflow this repository has been built
+with since May 2026:
 
-- **2,000+ issues** turned into merged pull requests across private
+- **2,700+ issues** turned into merged pull requests across private
   work repositories running IDD.
-- **700+ pull requests** merged in this public repository alone,
+- **1,000+ pull requests** merged in this public repository alone,
   through multi-agent bursts of x4-6 parallel sessions (x8-10 in the
   originating private deployment).
+- Early August 2026 peaked at **600+ commits** and **150+ pull
+  requests** in a single day across the private work repositories
+  and this public repository.
 - **Not zero-failure by design** — edge cases found in production
   come back as issues, and the loop fixes itself.
 
-_As of 2026-07._
+_As of 2026-08._
 
 <!-- token-cost-readme:start -->
 
