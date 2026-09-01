@@ -2505,6 +2505,10 @@ same as `AW4`/`AW5`.
   user-global layer; only when repository-local is entirely absent does
   an optional `$XDG_CONFIG_HOME/idd-skill/config.json` (or
   `$HOME/.config/idd-skill/config.json`) fragment apply
+- Under `GITHUB_ACTIONS=true` the user-global layer is always skipped
+  (repository-local resolution is unaffected), matching the documented
+  invariant that a GitHub-hosted or other remote agent surface never
+  consults it; other remote surfaces are not auto-detected
 - Deterministic and network-free; delegates entirely to the existing
   exported resolvers (`resolveEffectiveCritiqueLoopDelegateFromEnv` in
   `idd-config.mts`, `resolveEffectiveCritiqueLoopDelegate` /

@@ -42,6 +42,22 @@ if (import.meta.main) {
   runCli();
 }
 /**
+ * `docs/idd-workflow.md`'s "User-global critique delegate default" contract
+ * is that "a GitHub-hosted or other remote agent surface has no such
+ * operator home directory and never consults this layer" -- true only by
+ * environmental happenstance for the written prose contract (a remote
+ * runner simply has no such file to find), but this helper calls the
+ * global-file lookup unconditionally, so an environment that happens to
+ * carry a stray `$HOME`/`$XDG_CONFIG_HOME` config would silently violate
+ * that contract. `GITHUB_ACTIONS` is the one remote surface this
+ * repository already has a concrete, tested signal for (see
+ * `advisory-convergence.mts`); detecting every other remote surface is out
+ * of scope here (#2329 review).
+ */
+function isRemoteAgentSurface(env) {
+  return env.GITHUB_ACTIONS === 'true';
+}
+/**
  * Build the C1 verdict from the layered resolver's result. Pure mapping:
  * `status`/`source`/`delegate`/`reason` come from
  * {@link resolveEffectiveCritiqueLoopDelegateFromEnv} unchanged; this
@@ -50,7 +66,12 @@ if (import.meta.main) {
  * (`disabled`, `none`) so a caller never sees a bare `null`.
  */
 export function buildCritiqueDelegateReport(options) {
-  const effective = resolveEffectiveCritiqueLoopDelegateFromEnv(options);
+  const env = options?.env ?? process.env;
+  const resolvedOptions = isRemoteAgentSurface(env)
+    ? { ...options, env: {} }
+    : options;
+  const effective =
+    resolveEffectiveCritiqueLoopDelegateFromEnv(resolvedOptions);
   const usable = effective.status === 'local' || effective.status === 'global';
   return {
     usable,
@@ -93,9 +114,11 @@ configured object, an explicit null disable, or a malformed value all
 stop there); only when it is entirely absent does an optional
 user-global $XDG_CONFIG_HOME/idd-skill/config.json (or
 $HOME/.config/idd-skill/config.json) fragment apply; absent both, no
-delegate is usable. Deterministic and network-free; reads only local
-files under --policy's path resolution and the user-global path
-resolution already defined in idd-config.mts.
+delegate is usable. Under GITHUB_ACTIONS=true the user-global layer is
+always skipped, matching the documented remote-agent-surface contract.
+Deterministic and network-free; reads only local files under --policy's
+path resolution and the user-global path resolution already defined in
+idd-config.mts.
 
 Output schema:
 {

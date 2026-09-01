@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
@@ -119,6 +119,50 @@ test('falls back to a configured user-global delegate only when local is entirel
     command: 'global-review',
     mode: 'fallback',
     reason: null,
+  });
+});
+
+test('consults an $HOME-resolved user-global delegate outside GITHUB_ACTIONS', () => {
+  const home = mkdtempSync(
+    join(tmpdir(), 'idd-critique-delegate-remote-home-'),
+  );
+  mkdirSync(join(home, '.config', 'idd-skill'), { recursive: true });
+  writeFileSync(
+    join(home, '.config', 'idd-skill', 'config.json'),
+    JSON.stringify({ critiqueLoop: { delegate: { command: 'home-review' } } }),
+  );
+  const report = buildCritiqueDelegateReport({
+    localConfig: {},
+    env: { HOME: home },
+  });
+  assert.deepEqual(report, {
+    usable: true,
+    source: 'user-global',
+    command: 'home-review',
+    mode: 'fallback',
+    reason: null,
+  });
+});
+
+test('skips the $HOME-resolved user-global delegate under GITHUB_ACTIONS=true (#2329 review)', () => {
+  const home = mkdtempSync(
+    join(tmpdir(), 'idd-critique-delegate-remote-home-'),
+  );
+  mkdirSync(join(home, '.config', 'idd-skill'), { recursive: true });
+  writeFileSync(
+    join(home, '.config', 'idd-skill', 'config.json'),
+    JSON.stringify({ critiqueLoop: { delegate: { command: 'home-review' } } }),
+  );
+  const report = buildCritiqueDelegateReport({
+    localConfig: {},
+    env: { HOME: home, GITHUB_ACTIONS: 'true' },
+  });
+  assert.deepEqual(report, {
+    usable: false,
+    source: 'none',
+    command: null,
+    mode: null,
+    reason: 'not-configured',
   });
 });
 
