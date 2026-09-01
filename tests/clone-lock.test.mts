@@ -847,8 +847,8 @@ test('release/refresh: repeated concurrent acquire-backdate-refresh-release cycl
     // own "won"-to-"released" span is NOT a reliable proxy for "this
     // worker verifiably held the lock exclusively the whole time" (its
     // `released` log line fires unconditionally, even when the release
-    // call itself correctly no-opped because a takeover already replaced
-    // its token) -- so, unlike the other stress tests in this file,
+    // call itself was a correct no-op because a takeover already
+    // replaced its token) -- so, unlike the other stress tests in this file,
     // asserting those spans never overlap is not a valid invariant to
     // check here. What this test verifies instead: no interleaving of
     // acquire/backdate/refresh/release/takeover across four workers ever

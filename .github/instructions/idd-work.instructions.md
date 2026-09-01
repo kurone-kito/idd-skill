@@ -13,8 +13,9 @@ planning (B2), implementation (B3), and the self-review loop (C).
 ## B1 — Create worktree (with branch)
 
 Before creating, check for local conflicts in this order. Concurrent
-workers sharing one clone: serialize the `git fetch`/`merge --ff-only`/
-worktree add/remove calls below behind the
+workers sharing one clone: serialize every `git fetch`/`merge --ff-only`/
+worktree add/remove call against the shared clone -- here, and at F4
+cleanup's own worktree removal -- behind the
 [clone-scoped lock](../../docs/idd-helper-scripts.md#clone-scoped-lock)
 (see the [fan-out variant](../../docs/idd-workflow.md#orchestrator-fan-out-variant)
 for when this applies).

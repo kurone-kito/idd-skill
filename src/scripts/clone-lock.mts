@@ -332,6 +332,56 @@ function discardBestEffort(path: string): void {
 }
 
 /**
+ * Called after {@link tryAcquireArbiter}'s inode check finds it grabbed
+ * the WRONG file at `graveyardPath` -- not the confirmed-dead marker it
+ * verified, but a live contender's fresh claim that happened to replace
+ * it in the interim. Restores the live contender's marker to `destPath`
+ * whenever possible, rather than discarding it: a discarded marker
+ * leaves `destPath` briefly absent for as long as that live contender's
+ * ENTIRE arbiter-protected critical section takes to finish, during
+ * which a third contender's ordinary fresh `wx`-create can ALSO succeed
+ * there, producing two simultaneous believed-arbiters -- exactly the
+ * double-winner class of bug this whole mechanism exists to prevent.
+ * Restoring narrows that exposure window to roughly the time this one
+ * rename-back takes, instead of the live contender's full critical
+ * section.
+ *
+ * The restore itself uses exclusive create (`{ flag: 'wx' }`), not an
+ * unconditional `renameSync`, so it can never clobber a THIRD
+ * contender's own legitimate claim that already filled the gap `path`
+ * exposed the moment this function's caller renamed it away in the
+ * first place: if the restore loses that race (`EEXIST`), the live
+ * contender's original marker is discarded instead -- its holder does
+ * not depend on the marker file continuing to exist to keep running its
+ * own already-in-progress critical section (see `tryAcquireArbiter`'s
+ * own doc comment), and the slot at `destPath` is by then some OTHER
+ * contender's own equally legitimate exclusive claim, which must not be
+ * overwritten either.
+ */
+function restoreOrDiscard(graveyardPath: string, destPath: string): void {
+  let content: Buffer | null = null;
+  try {
+    content = readFileSync(graveyardPath);
+  } catch {
+    content = null;
+  }
+  if (content !== null) {
+    try {
+      writeFileSync(destPath, content, { flag: 'wx' });
+      discardBestEffort(graveyardPath);
+      return;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') {
+        throw error;
+      }
+      // Lost the restore race to a third contender's own fresh claim;
+      // fall through to discarding our accidental grab.
+    }
+  }
+  discardBestEffort(graveyardPath);
+}
+
+/**
  * Exclusively acquire the arbiter for one stale-lock-removal attempt
  * against `path`'s main lock, or return `false` when another contender
  * is already arbitrating (or just won a recovery race for a dead
@@ -374,15 +424,16 @@ function discardBestEffort(path: string): void {
  * then confirm (via the inode captured together with the liveness
  * verdict above) that what actually got moved is the exact entry
  * inspected, not a live contender's fresh arbiter claim that happened to
- * replace it in the interim. On a mismatch, the wrongly-grabbed file is
- * discarded (never restored): the rightful holder's authority came from
- * its own earlier successful `wx`-create, not from this marker file
- * continuing to exist on disk, so losing the marker costs nothing but
- * cosmetics -- restoring it instead would risk clobbering a third
- * generation that may have since claimed `path` legitimately (the same
- * reasoning `releaseCloneLock`/`refreshCloneLock` rely on the arbiter
- * itself to avoid needing, by never attempting a similar restore against
- * the main lock).
+ * replace it in the interim. On a mismatch, {@link restoreOrDiscard}
+ * puts the wrongly-grabbed file back (via its own exclusive-create race,
+ * never an unconditional overwrite) rather than deleting it: this
+ * repository's review history on #2223 caught that an earlier revision
+ * which discarded a mismatched grab instead left the live contender's
+ * marker path briefly absent for as long as that contender's ENTIRE
+ * arbiter-protected critical section took to finish, during which a
+ * third contender's ordinary fresh `wx`-create could ALSO succeed there
+ * -- reproducing the very double-arbiter failure this whole mechanism
+ * exists to close, just relocated one level down.
  */
 function tryAcquireArbiter(path: string): boolean {
   const marker = arbiterPath(path);
@@ -449,7 +500,7 @@ function tryAcquireArbiter(path: string): boolean {
     movedIno = undefined;
   }
   if (movedIno === undefined || movedIno !== observedIno) {
-    discardBestEffort(graveyard);
+    restoreOrDiscard(graveyard, marker);
     return false;
   }
   discardBestEffort(graveyard);
@@ -873,11 +924,12 @@ lock file exists but could not be parsed as a well-formed lock body.
 
 // This bootstrap call is placed after every declaration in this module,
 // not near the top -- `runCli()`'s error path references the
-// `CloneLockTimeoutError` class below, and a class binding (unlike a
-// hoisted function declaration) stays in its temporal dead zone until its
-// own declaration statement executes. Invoking `runCli()` before that
-// point would throw a `ReferenceError` on any `--exec` timeout instead of
-// the documented message and exit code 3.
+// `CloneLockTimeoutError` class declared earlier in this file, and a
+// class binding (unlike a hoisted function declaration) stays in its
+// temporal dead zone until its own declaration statement executes.
+// Invoking `runCli()` before that point (e.g. from the top of the file)
+// would throw a `ReferenceError` on any `--exec` timeout instead of the
+// documented message and exit code 3.
 if (import.meta.main) {
   await runCli();
 }
