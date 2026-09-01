@@ -17,9 +17,9 @@
 // roadmap #745 / #748 / #754. Single source of truth so the next
 // behavioural change lands in one place rather than five.
 import { readFileSync } from 'node:fs';
-import { ghText } from './gh-exec.mjs';
 import { operationalMarkerPrefix } from './marker-helpers.mjs';
 import { normalizePolicyConfig } from './policy-helpers.mjs';
+import { createGithubProviderAdapter } from './provider-adapter-github.mjs';
 
 const DEFAULT_POLICY_PATH = '.github/idd/config.json';
 /**
@@ -51,23 +51,17 @@ export function collaboratorPermission(owner, repo, login, cache) {
   }
   let permission = '';
   let roleName = '';
-  try {
-    const raw = ghText(
-      [
-        'api',
-        `repos/${owner}/${repo}/collaborators/${encodeURIComponent(normalizedLogin)}/permission`,
-      ],
-      { stdio: ['ignore', 'pipe', 'ignore'] },
-    );
-    const parsed = JSON.parse(raw);
-    permission = String(parsed?.permission ?? '')
-      .trim()
-      .toLowerCase();
-    roleName = String(parsed?.role_name ?? '')
-      .trim()
-      .toLowerCase();
-  } catch {
-    // both stay empty
+  // "not-collaborator" and "error" both collapse to empty strings here,
+  // matching this function's pre-port fail-closed contract exactly: the
+  // original try/catch never distinguished a genuine 404 from any other
+  // transport failure, so callers already treat both the same way.
+  const outcome = createGithubProviderAdapter(
+    owner,
+    repo,
+  ).getCollaboratorPermission(normalizedLogin);
+  if (outcome.outcome === 'found') {
+    permission = outcome.permission;
+    roleName = outcome.roleName;
   }
   const result = { permission, roleName };
   if (cache) {
