@@ -344,7 +344,7 @@ const NEGATION_PATTERN =
 // guard, leaving this verb alternation on a bare `\b` -- a hyphen still
 // counts as a word boundary, so an ordinary hyphenated compound noun like
 // "duplicate-evidence-skip check" (describing an existing mechanism, not a
-// directive) matched "skip" here and false-positived `trust_safety`. Same
+// directive) matched "skip" here and wrongly failed `trust_safety`. Same
 // fix shape as the noun guard and `SUBJECTIVE_SUBJECT_PATTERN` (#2205): wrap
 // the whole alternation in a shared `(?<![\w-])`/`(?![\w-])` boundary so a
 // hyphen-adjacent occurrence no longer counts for any verb, while a

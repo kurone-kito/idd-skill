@@ -470,7 +470,7 @@ test('trust safety ignores a hyphenated compound noun ending in a policy-overrid
   // still counts as a word boundary, so an ordinary compound noun like
   // "duplicate-evidence-skip check" -- describing an existing mechanism,
   // not a directive aimed at this checker -- matched "skip" here. This is
-  // the exact title text of idd-skill#2213, which false-positived
+  // the exact title text of idd-skill#2213, which wrongly failed
   // trust_safety on nothing more than its own hyphenated title.
   const result = checkTrustSafety({
     issue: {
