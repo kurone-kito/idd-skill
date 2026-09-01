@@ -7,7 +7,9 @@ planning (B2), implementation (B3), and the self-review loop (C).
 
 ## B1 — Create worktree (with branch)
 
-Before creating, check for local conflicts in this order:
+Before creating, check for local conflicts in this order (concurrent
+clone sharing: serialize via `clone-lock.mjs --exec`, see
+[fan-out](../../docs/idd-workflow.md#orchestrator-fan-out-variant)).
 
 1. Ensure the local `main` branch is up to date and has no local
    commits. Run this from the primary worktree while on `main`:
