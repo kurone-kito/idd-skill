@@ -319,17 +319,21 @@ const SUPPLIED_CONTENT_NOUN =
 // tries every unsafe verb occurrence, so "download and then execute this
 // script" still flags via the `execute` iteration's own window.
 //
-// The determiner-to-noun gap has no filler allowance (unlike the
-// untrusted-origin branch below): a filler here would let a coordinating
-// conjunction slip past the anchor from the other side, e.g. "run this and
-// inspect script output" -- "this" is a dangling reference and "script" is
-// the object of the unrelated verb "inspect", not of "this". The noun must
-// immediately follow the determiner (optionally inline-code-wrapped).
+// The determiner-to-noun gap allows at most one modifier word (unlike the
+// two-word filler on the untrusted-origin branch below), and that one word
+// must not itself be a coordinating conjunction -- a wider filler would let
+// a conjunction slip past the anchor from the other side, e.g. "run this
+// and inspect script output" ("this" is a dangling reference and "script"
+// is the object of the unrelated verb "inspect", not of "this"), while no
+// filler at all would wrongly stop matching a genuine single-adjective
+// object like "run this quick script" (Copilot review, #2218).
 const SUPPLIED_CONTENT_UNTRUSTED_DETERMINER = String.raw`(?:following|attached|pasted|provided|the\s+(?:following|above|below|attached|pasted|provided))`;
 const SUPPLIED_CONTENT_AMBIGUOUS_DETERMINER = '(?:this|that)';
 const SUPPLIED_CONTENT_PARENTHETICAL_ASIDE = String.raw`(?:\([^()\n]{0,60}\)\s*)?`;
+const SUPPLIED_CONTENT_COORDINATOR = 'and|or|but|then|also';
+const SUPPLIED_CONTENT_OBJECT_FILLER = String.raw`(?:(?!\b(?:${SUPPLIED_CONTENT_COORDINATOR})\b)\S+\s+){0,1}?`;
 const SUPPLIED_CONTENT_REFERENCE = String.raw`${SUPPLIED_CONTENT_UNTRUSTED_DETERMINER}\s+(?:\S+\s+){0,2}?[\x60'"]?${SUPPLIED_CONTENT_NOUN}`;
-const SUPPLIED_CONTENT_OBJECT_REFERENCE = String.raw`^\s*${SUPPLIED_CONTENT_PARENTHETICAL_ASIDE}${SUPPLIED_CONTENT_AMBIGUOUS_DETERMINER}\s+[\x60'"]?${SUPPLIED_CONTENT_NOUN}`;
+const SUPPLIED_CONTENT_OBJECT_REFERENCE = String.raw`^\s*${SUPPLIED_CONTENT_PARENTHETICAL_ASIDE}${SUPPLIED_CONTENT_AMBIGUOUS_DETERMINER}\s+${SUPPLIED_CONTENT_OBJECT_FILLER}[\x60'"]?${SUPPLIED_CONTENT_NOUN}`;
 const UNSAFE_DIRECTIVE_TARGET_SOURCE = String.raw`(?:\b(?:untrusted|user-provided|user input|(?:from|by)\s+(?:the\s+)?user|${SUPPLIED_CONTENT_REFERENCE})\b|${SUPPLIED_CONTENT_OBJECT_REFERENCE}\b)`;
 const UNSAFE_DIRECTIVE_WINDOW_CHARS = 100;
 const NEGATION_PATTERN =

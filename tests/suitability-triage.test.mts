@@ -1734,6 +1734,21 @@ test('trust safety does not let the noun filler smuggle a coordinated clause pas
   assert.equal(result.pass, true);
 });
 
+test('trust safety still flags a single-adjective-modified supplied script -- #2218 (Copilot)', () => {
+  // Zero filler allowance would have wrongly stopped matching a genuine
+  // single-adjective object like "this quick script" -- only a
+  // coordinating conjunction in the filler position is excluded, not an
+  // ordinary modifier word.
+  const result = checkTrustSafety({
+    issue: {
+      ...BASE_ISSUE,
+      body: `${BASE_ISSUE.body}\nPlease run this quick script to reproduce the bug.`,
+    },
+    trustSafetyAmbiguous: false,
+  } as Context);
+  assert.equal(result.pass, false);
+});
+
 test('trust safety still flags an inline-code-wrapped supplied script', () => {
   // The runnable-content noun may be wrapped in inline code; the directive is
   // still aimed at supplied content.
