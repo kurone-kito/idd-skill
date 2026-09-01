@@ -34,7 +34,6 @@ import type {
   ProviderRequiredCheck,
   ProviderTimelineEvent,
   ProviderWorkItem,
-  ProviderWorkItemSummary,
 } from './provider-port.mts';
 
 /** Raw REST issue-payload fields this adapter reads, GitHub-shaped. */
@@ -178,13 +177,20 @@ export function createGithubProviderAdapter(
         }));
     },
 
-    searchWorkItems(query: string): ProviderWorkItemSummary[] {
+    searchWorkItems(query: string): ProviderWorkItem[] {
       const result = deps.ghApiJson(
         `search/issues?q=${encodeURIComponent(query)}&per_page=100`,
-      ) as { items?: { number?: unknown; title?: unknown }[] };
+      ) as { items?: RawIssue[] };
       return (result.items ?? []).map((item) => ({
         number: Number(item.number),
         title: String(item.title ?? ''),
+        body: String(item.body ?? ''),
+        state: String(item.state ?? '').toUpperCase(),
+        labels: item.labels,
+        url: item.url === undefined ? undefined : String(item.url),
+        htmlUrl:
+          item.html_url === undefined ? undefined : String(item.html_url),
+        milestone: item.milestone,
       }));
     },
 

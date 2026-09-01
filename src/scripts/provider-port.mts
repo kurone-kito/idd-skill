@@ -63,12 +63,6 @@ export interface ProviderWorkItem {
   updatedAt?: string;
 }
 
-/** Minimal locator/summary shape for a work item found via list/search. */
-export interface ProviderWorkItemSummary {
-  number: number;
-  title: string;
-}
-
 /** One issue-comments-API comment (issue or PR -- same endpoint on GitHub). */
 export interface ProviderComment {
   id: number;
@@ -194,8 +188,15 @@ export interface ProviderPort {
    */
   listOpenWorkItems(): ProviderWorkItem[];
 
-  /** work-items. GitHub search-query syntax is an adapter-internal detail. */
-  searchWorkItems(query: string): ProviderWorkItemSummary[];
+  /**
+   * work-items. GitHub search-query syntax is an adapter-internal detail.
+   * Full object per item, like {@link listOpenWorkItems} -- GitHub's REST
+   * search/issues endpoint returns full issue resources regardless of
+   * field selection, and `discover-readiness-check.mts`'s
+   * `buildRoadmapMarkerResolver` needs `state`/`body`/`labels`/`url`
+   * alongside `number`/`title`.
+   */
+  searchWorkItems(query: string): ProviderWorkItem[];
 
   /**
    * work-items. Fetches the full paginated timeline; per-caller filtering

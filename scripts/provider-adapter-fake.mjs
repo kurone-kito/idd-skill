@@ -52,10 +52,7 @@ export function createFakeProviderAdapter(fixture) {
       );
     },
     searchWorkItems() {
-      return Object.values(fixture.workItems ?? {}).map((item) => ({
-        number: item.number,
-        title: item.title,
-      }));
+      return Object.values(fixture.workItems ?? {});
     },
     getWorkItemTimeline(number) {
       return fixture.timelines?.[number] ?? [];

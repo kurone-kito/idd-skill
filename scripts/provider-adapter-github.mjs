@@ -122,6 +122,13 @@ export function createGithubProviderAdapter(owner, repo, deps = DEFAULT_DEPS) {
       return (result.items ?? []).map((item) => ({
         number: Number(item.number),
         title: String(item.title ?? ''),
+        body: String(item.body ?? ''),
+        state: String(item.state ?? '').toUpperCase(),
+        labels: item.labels,
+        url: item.url === undefined ? undefined : String(item.url),
+        htmlUrl:
+          item.html_url === undefined ? undefined : String(item.html_url),
+        milestone: item.milestone,
       }));
     },
     getWorkItemTimeline(number) {

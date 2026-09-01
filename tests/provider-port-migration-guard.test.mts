@@ -23,6 +23,7 @@ const MIGRATED_HELPERS: readonly string[] = [
   'post-idd-marker.mts',
   'claim-approval-gate.mts',
   'resume-claim-routing.mts',
+  'discover-readiness-check.mts',
 ];
 
 const DIRECT_GH_PATTERNS: { pattern: RegExp; description: string }[] = [

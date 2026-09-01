@@ -23,7 +23,6 @@ import type {
   ProviderRequiredCheck,
   ProviderTimelineEvent,
   ProviderWorkItem,
-  ProviderWorkItemSummary,
 } from './provider-port.mts';
 
 export interface FakeProviderFixture {
@@ -119,11 +118,8 @@ export function createFakeProviderAdapter(
       );
     },
 
-    searchWorkItems(): ProviderWorkItemSummary[] {
-      return Object.values(fixture.workItems ?? {}).map((item) => ({
-        number: item.number,
-        title: item.title,
-      }));
+    searchWorkItems(): ProviderWorkItem[] {
+      return Object.values(fixture.workItems ?? {});
     },
 
     getWorkItemTimeline(number: number): ProviderTimelineEvent[] {
