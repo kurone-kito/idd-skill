@@ -173,6 +173,20 @@ const KEYWORD_NEGATION_PATTERN =
 // can never change whether `KEYWORD_NEGATION_PATTERN` matches — see
 // `isNegatedKeywordMatch`'s doc comment for the full argument.
 const NEGATION_LOOKBACK_TOKENS = 6;
+// #2236: a `Refs #NNN (non-blocking)` segment is a deliberately
+// informational reference -- distinct from a plain `Refs #NNN`, whose
+// target still enters the graph as a traversed node today (A2's own
+// documented traversal sources list "Closes #NNN, Refs #NNN, explicit
+// sub-issue lines" as equally allowed, with no relationship-based
+// exemption). Scoped to the keyword-matched *segment* (the text between
+// this keyword match and the next), not the whole line, so a line mixing
+// a blocking keyword and a non-blocking `Refs` mention (e.g. "Blocked by
+// #100. Also refs #101 (non-blocking).") only marks the `Refs` segment's
+// own targets non-blocking -- see the `classifyKeywordRelationship` call
+// site below, which applies this only when the keyword itself already
+// classified as 'reference' (Refs/Ref), never to Blocked-by/Depends-on/
+// Closes/Sub-issue.
+const NON_BLOCKING_ANNOTATION_PATTERN = /\(non-blocking\)/i;
 const SUB_ISSUES_QUERY = `
 query($owner:String!, $repo:String!, $number:Int!, $after:String) {
   repository(owner:$owner, name:$repo) {
@@ -1018,6 +1032,20 @@ export async function enumerateRoadmapGraph(
         } else {
           firstReferenceBySourceTarget.set(sourceTargetKey, edge);
         }
+      }
+
+      // #2236: a `non-blocking-reference` edge is deliberately informational
+      // -- it is recorded above (so it is visible in the graph output and
+      // participates in duplicate-reference bookkeeping like any other
+      // edge), but its target is never visited, never recorded as a node,
+      // and never checked for a cycle. Because `executionCandidates` below
+      // is built purely from recorded nodes, a target reachable only via
+      // this relationship can never become an A1.5 `open-child` blocker --
+      // unless some OTHER, still-blocking edge elsewhere in the graph also
+      // reaches it, in which case it correctly still blocks through that
+      // other path.
+      if (edge.relationship === 'non-blocking-reference') {
+        continue;
       }
 
       if (path.includes(edge.target)) {
@@ -2146,6 +2174,12 @@ export function extractKeywordReferences(
       const segmentStart = matchIndex + match[0].length;
       const segmentEnd = keywordMatches[index + 1]?.index ?? maskedLine.length;
       const segment = maskedLine.slice(segmentStart, segmentEnd);
+      const baseRelationship = classifyKeywordRelationship(match[1]);
+      const relationship =
+        baseRelationship === 'reference' &&
+        NON_BLOCKING_ANNOTATION_PATTERN.test(segment)
+          ? 'non-blocking-reference'
+          : baseRelationship;
       for (const target of extractKeywordReferenceTargets(
         segment,
         currentRepoRef,
@@ -2155,7 +2189,7 @@ export function extractKeywordReferences(
         }
         references.push({
           target,
-          relationship: classifyKeywordRelationship(match[1]),
+          relationship,
           evidence: rawLine.trim(),
         });
       }

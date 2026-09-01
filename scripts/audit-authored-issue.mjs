@@ -84,6 +84,53 @@ const PROSE_DEPENDENCY_KEYWORDS = [
   'requires',
   'lands first',
 ];
+// Matches a `Refs #NNN (non-blocking)` reference (and multi-target variants
+// like `Refs #201, #202 (non-blocking)`) anywhere on a line — the visible
+// encoding discover-roadmap-graph.mts's `extractKeywordReferences`
+// recognizes as `relationship: 'non-blocking-reference'` (#2236): a
+// deliberately informational reference that must never become an A1.5
+// closure-audit blocker. Recognized here too so this check's `encoded` set
+// treats it as already-documented, the same as the three
+// Blocked-by/Depends-on/task-list forms, instead of flagging it as an
+// undocumented prose-only dependency. The captured group (everything
+// between the Refs/Ref keyword and the `(non-blocking)` annotation) is
+// parsed for its `#N` reference list by `consumeNonBlockingRefList` below,
+// mirroring the separator-tolerant list parsing
+// discover-readiness-check.mts's own `consumeDependencyRefList` already
+// uses for the same comma/`and`/whitespace-separated shape (duplicated
+// rather than imported: this repository's existing precedent for the same
+// textual encoding recognized by two independent modules for two different
+// purposes, see that function's own doc comment).
+const NON_BLOCKING_REFERENCE_LINE_PATTERN =
+  /\bRefs?\b\s*:?\s*([^.\n(]*?)\s*\(non-blocking\)/gi;
+function consumeNonBlockingRefList(segment) {
+  const numbers = [];
+  let remaining = segment;
+  while (remaining) {
+    const refMatch = remaining.match(/^#(\d+)\b/);
+    if (!refMatch) {
+      break;
+    }
+    numbers.push(Number.parseInt(refMatch[1], 10));
+    remaining = remaining.slice(refMatch[0].length);
+    const separatorMatch = remaining.match(
+      /^(?:\s*,\s*(?:and\s+)?|\s+and\s+|\s+)/i,
+    );
+    if (!separatorMatch) {
+      break;
+    }
+    remaining = remaining.slice(separatorMatch[0].length);
+  }
+  return numbers;
+}
+function extractNonBlockingReferenceIssueNumbers(text) {
+  const stripped = stripMarkdownCodeRegions(text);
+  const numbers = [];
+  for (const match of stripped.matchAll(NON_BLOCKING_REFERENCE_LINE_PATTERN)) {
+    numbers.push(...consumeNonBlockingRefList(match[1]));
+  }
+  return [...new Set(numbers)];
+}
 // Matches a Markdown link whose target is a full GitHub issue/PR URL (e.g.
 // `[PR #1391](https://github.com/owner/repo/pull/1391)`), a bare `#123`
 // issue/PR reference, a bare full GitHub issue/PR URL, or a local
@@ -580,12 +627,13 @@ function checkProseOnlyDependency(text, currentRepo) {
   const name =
     'Advisory: issue/PR references near coordination language should use a dependency marker';
   // Numbers already covered by a real machine-readable dependency encoding
-  // (Blocked by / Depends on / task-list) are never flagged, regardless of
-  // nearby prose — the whole point of this check is to catch references
-  // that carry *no* such encoding.
+  // (Blocked by / Depends on / task-list / the non-blocking Refs form,
+  // #2236) are never flagged, regardless of nearby prose — the whole point
+  // of this check is to catch references that carry *no* such encoding.
   const encoded = new Set([
     ...extractBlockedByIssueNumbers(text),
     ...extractDependencyIssueNumbers(text),
+    ...extractNonBlockingReferenceIssueNumbers(text),
   ]);
   const keywordPattern = new RegExp(
     `\\b(?:${PROSE_DEPENDENCY_KEYWORDS.map(escapeRegex).join('|')})\\b`,

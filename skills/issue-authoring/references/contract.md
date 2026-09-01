@@ -790,14 +790,23 @@ The linter also emits one **advisory, warning-severity-only** finding
 full GitHub issue/PR URL) that appears near coordination language (for
 example "before", "after", "once", "until", "predates", "gate"/"gated",
 "requires", "lands first") with no corresponding encoding for that
-reference as one of the three recognized forms: a `Blocked by #NNN`
-line, a `Depends on #NNN` line, or a task-list checkbox item
-(`- [ ] #NNN`) — the same three forms `extractBlockedByIssueNumbers` /
-`extractDependencyIssueNumbers` already recognize elsewhere in this
-contract. A task-list checkbox counts regardless of which heading it
-sits under, so a roadmap's own `## Tracks` membership list already
-satisfies this — it is not a separate "dependency-only" list. This
-catches the pattern this contract's own
+reference as one of four recognized forms: a `Blocked by #NNN` line, a
+`Depends on #NNN` line, a task-list checkbox item (`- [ ] #NNN`), or a
+`Refs #NNN (non-blocking)` line — the same forms
+`extractBlockedByIssueNumbers` / `extractDependencyIssueNumbers` /
+`extractNonBlockingReferenceIssueNumbers` already recognize elsewhere
+in this contract. A task-list checkbox counts regardless of which
+heading it sits under, so a roadmap's own `## Tracks` membership list
+already satisfies this — it is not a separate "dependency-only" list.
+Use `Refs #NNN (non-blocking)` (multi-target: `Refs #NNN, #NNN
+(non-blocking)`) for a reference that is deliberately informational —
+a roadmap narrative naming a related, currently-blocked follow-up
+issue with no ETA, for example — never for a real dependency: unlike
+the other three forms,
+`discover-roadmap-graph.mts`'s traversal never enters this reference's
+target at all, so it cannot become an A1.5 closure-audit blocker, and
+this check treats it as already-encoded the same as the other three
+forms (#2236). This catches the pattern this contract's own
 [Hidden human-dependency validation](#hidden-human-dependency-validation)
 check 4 warns about in prose — a hard precondition stated only in
 narrative text, not encoded as a real dependency marker. A full-URL
