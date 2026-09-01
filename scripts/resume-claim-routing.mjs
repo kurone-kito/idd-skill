@@ -321,7 +321,6 @@ function runCli() {
     args.owner && args.repo ? null : resolveCurrentGithubRepository();
   const owner = args.owner || currentRepo?.owner || '';
   const repo = args.repo || currentRepo?.repo || '';
-  const repository = `${owner}/${repo}`;
   const port = createGithubProviderAdapter(owner, repo);
   const policy = loadPolicy(args.policy);
   const staleAgeMs = args.staleAgeMs > 0 ? args.staleAgeMs : policy.staleAgeMs;
@@ -356,7 +355,7 @@ function runCli() {
   // the lookup entirely when forced-handoff mode is off — the gate never
   // honors a handoff then, so the PR context would go unused.
   const expectedLinkedPrReferences = forcedHandoffEnabled
-    ? fetchOpenLinkedPrReferences(repository, args.issue)
+    ? fetchOpenLinkedPrReferences(port, args.issue)
     : new Set();
   const routingEvents = comments.map((comment) => ({
     body: comment.body ?? '',
@@ -944,18 +943,14 @@ function normalizeToken(value) {
  * issue does not falsely block a legitimate `issue-only` forced handoff.
  * Fails safe to an empty set (no enforcement) on any lookup error.
  */
-function fetchOpenLinkedPrReferences(repository, issueNumber) {
+function fetchOpenLinkedPrReferences(port, issueNumber) {
   const references = new Set();
-  const [owner, repo] = repository.split('/');
-  if (!owner || !repo || !Number.isInteger(issueNumber)) {
+  if (!Number.isInteger(issueNumber)) {
     return references;
   }
   // Number.isInteger(issueNumber) above already excludes null; TS can't
   // narrow a plain boolean-returning call the way a type predicate would.
-  const nodes = createGithubProviderAdapter(
-    owner,
-    repo,
-  ).getConnectedPullRequestEventsSingle(issueNumber);
+  const nodes = port.getConnectedPullRequestEventsSingle(issueNumber);
   // The last connect/disconnect event per PR wins (timeline is chronological).
   const connected = new Map();
   const states = new Map();
