@@ -200,6 +200,9 @@ const STALE_REQUEST_RECOVERY_REASONS = {
   provenCoversHead: 'proven-covers-head',
   capExhausted: 'recovery-cap-exhausted',
   attemptEligible: 'recovery-attempt-eligible',
+  recheckBudgetUnspent: 'recheck-budget-unspent',
+  nonPendingAttemptEligible: 'non-pending-recovery-attempt-eligible',
+  recoveryMarkerOnly: 'recovery-marker-only-no-request-marker',
 };
 export function evaluateStaleRequestRecoveryAction(input) {
   if (!input.activeClaimProvided) {
@@ -208,27 +211,76 @@ export function evaluateStaleRequestRecoveryAction(input) {
       reason: STALE_REQUEST_RECOVERY_REASONS.activeClaimNotProvided,
     };
   }
-  if (!input.copilotPending) {
+  if (input.copilotPending) {
+    // A same-head marker (ordinary `advisory-wait:` OR a prior recovery
+    // cycle's `advisory-wait-recovery:`) already anchors this HEAD's clock --
+    // mirrors evaluateAdvisoryWaitOutcome's own `!sameHeadMarkerPresent` gate
+    // for both its RECOVERY_NEEDED and REQUEST_NEEDED/CAP_EXHAUSTED branches,
+    // so this classifier never contradicts the shared outcome machine's
+    // routing.
+    if (input.sameHeadMarkerPresent) {
+      return {
+        action: 'not-applicable',
+        reason: STALE_REQUEST_RECOVERY_REASONS.sameHeadMarkerPresent,
+      };
+    }
+    if (input.copilotPendingCoversHead) {
+      return {
+        action: 'not-applicable',
+        reason: STALE_REQUEST_RECOVERY_REASONS.provenCoversHead,
+      };
+    }
+    if (input.remainingBudget <= 0) {
+      return {
+        action: 'cap-exhausted',
+        reason: STALE_REQUEST_RECOVERY_REASONS.capExhausted,
+      };
+    }
+    return {
+      action: 'attempt',
+      reason: STALE_REQUEST_RECOVERY_REASONS.attemptEligible,
+    };
+  }
+  // Non-pending (`#2327`): nothing was ever requested for this HEAD yet --
+  // preserves the pre-#2327 behavior exactly, routing to E14's ordinary
+  // REQUEST_NEEDED path rather than a recovery cycle.
+  if (!input.sameHeadMarkerPresent) {
     return {
       action: 'not-applicable',
       reason: STALE_REQUEST_RECOVERY_REASONS.notPending,
     };
   }
-  // A same-head marker (ordinary `advisory-wait:` OR a prior recovery cycle's
-  // `advisory-wait-recovery:`) already anchors this HEAD's clock -- mirrors
-  // evaluateAdvisoryWaitOutcome's own `!sameHeadMarkerPresent` gate for both
-  // its RECOVERY_NEEDED and REQUEST_NEEDED/CAP_EXHAUSTED branches, so this
-  // classifier never contradicts the shared outcome machine's routing.
-  if (input.sameHeadMarkerPresent) {
+  // A same-head marker exists, but not specifically a plain request marker --
+  // only a prior recovery cycle's own `advisory-wait-recovery:` marker
+  // anchors this HEAD. That marker is not proof an ordinary request was
+  // requested for this HEAD, so it must never itself unlock a further cycle;
+  // the recovery-cycle counter (not this predicate) is what already bounds
+  // repeated recovery attempts.
+  if (!input.sameHeadRequestMarkerPresent) {
     return {
       action: 'not-applicable',
-      reason: STALE_REQUEST_RECOVERY_REASONS.sameHeadMarkerPresent,
+      reason: STALE_REQUEST_RECOVERY_REASONS.recoveryMarkerOnly,
     };
   }
+  // A `review_requested` event for the bot DID eventually follow this HEAD's
+  // commit -- Copilot genuinely received the request and is simply no longer
+  // pending (completed or silently declined), not a failed-to-register case.
   if (input.copilotPendingCoversHead) {
     return {
       action: 'not-applicable',
       reason: STALE_REQUEST_RECOVERY_REASONS.provenCoversHead,
+    };
+  }
+  const elapsedMinutes = Number(input.elapsedMinutes);
+  const settledWindowMinutes = Number(input.settledWindowMinutes);
+  if (
+    !Number.isFinite(elapsedMinutes) ||
+    !Number.isFinite(settledWindowMinutes) ||
+    elapsedMinutes < settledWindowMinutes
+  ) {
+    return {
+      action: 'not-applicable',
+      reason: STALE_REQUEST_RECOVERY_REASONS.recheckBudgetUnspent,
     };
   }
   if (input.remainingBudget <= 0) {
@@ -239,7 +291,7 @@ export function evaluateStaleRequestRecoveryAction(input) {
   }
   return {
     action: 'attempt',
-    reason: STALE_REQUEST_RECOVERY_REASONS.attemptEligible,
+    reason: STALE_REQUEST_RECOVERY_REASONS.nonPendingAttemptEligible,
   };
 }
 /**
@@ -481,8 +533,11 @@ function main() {
     copilotPending: summary.copilotPending,
     copilotPendingCoversHead: summary.copilotPendingCoversHead,
     sameHeadMarkerPresent: summary.sameHeadMarkerPresent,
+    sameHeadRequestMarkerPresent: summary.sameHeadRequestMarkerPresent,
     remainingBudget: copilotRecovery.remainingBudget,
     activeClaimProvided: copilotRecovery.activeClaimProvided,
+    elapsedMinutes: summary.elapsedMinutes,
+    settledWindowMinutes: summary.settledWindowMinutes,
   });
   process.stdout.write(
     `${JSON.stringify(

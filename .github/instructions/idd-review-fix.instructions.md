@@ -222,7 +222,21 @@ login).
    E14 advisory-bot processing is done; proceed to E15.
 3. Run **AW2** to fetch markers.
 4. Apply the **AW3** decision table:
-   - **SATISFIED** → proceed to E15.
+   - **SATISFIED**, `COPILOT_PENDING` `"false"`, `COPILOT_PENDING_COVERS_HEAD`
+     `"false"` (settled by elapsed time alone, never proven the request
+     reached Copilot — `#2327`): consult **`AW3-S`**'s `staleRequestRecovery`
+     first. `"attempt"` runs its bounded cycle (non-pending entry: skip
+     **Remove**, start at **Request**; a proven failure-to-register
+     completes the cycle per the entry's inverted step 4/5 disposition),
+     then proceed to E15 either way (accumulates recovery-cycle evidence
+     toward `COPILOT_UNAVAILABLE`; `outcome` itself is unaffected).
+     `"cap-exhausted"` honors `advisoryWait.capExhaustedRoute` exactly
+     like the ordinary `CAP_EXHAUSTED` row below — `hold` posts AW4's
+     **Cap exhausted** hold and stops; `phase-specific` (default)
+     proceeds to E15 unchanged (`#2327` follow-up: cycle exhaustion from
+     this entry must not silently bypass a configured hold policy).
+     `"not-applicable"` → proceed to E15 unchanged.
+   - **SATISFIED** (otherwise) → proceed to E15.
    - **HOLD** → post the hold comment from **AW4** and stop.
    - **RECOVERY_NEEDED** (`COPILOT_PENDING` `"true"`, no same-head
      marker): post the recovery marker from **AW3-R**; do not
@@ -301,8 +315,9 @@ Poll every `POLL_INTERVAL_MINUTES` minutes:
    immediately.
 3. Run **AW1**/**AW2** (refresh `COPILOT_PENDING`, `LAST_COPILOT_COMMIT`,
    `EARLIEST_SAME_HEAD_AT`; apply **AW5** if the latter is empty), then
-   **AW3**: **SATISFIED** → exit, proceed to E15; **HOLD** → post
-   **AW4**/**AW5** hold and stop; **WAIT** → keep polling.
+   **AW3**: **SATISFIED** → apply step 4's same non-pending
+   `staleRequestRecovery` consultation before exiting, then proceed to E15;
+   **HOLD** → post **AW4**/**AW5** hold and stop; **WAIT** → keep polling.
 
 Note: "advisory" means the agent need not accept every suggestion — not
 that it may skip a review it explicitly requested. Human

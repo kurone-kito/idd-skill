@@ -170,6 +170,13 @@ AW3 inputs:
   `<!-- advisory-wait: … -->` for current `PR_HEAD_SHA` (empty if none).
 - `REQUEST_MARKER_COUNT` — count of trusted `advisory-wait` markers
   (excludes recovery markers).
+- `SAME_HEAD_REQUEST_MARKER_PRESENT` (`#2327`) — `true` only when a
+  trusted marker for current `PR_HEAD_SHA` is specifically the plain
+  request form (`advisory-wait:`), excluding `advisory-wait-recovery:`.
+  Distinct from `EARLIEST_SAME_HEAD_AT`'s presence (which a
+  recovery-only marker also satisfies) and from `REQUEST_MARKER_COUNT`
+  (which is not head-scoped) — `AW3-S`'s non-pending entry needs this
+  narrower, head-scoped, request-only signal specifically.
 
 See [shell fallback AW2](../../docs/idd-advisory-wait-shell-fallback.md#aw2)
 for commands.
@@ -225,10 +232,15 @@ Rules:
 
 ### AW3-S — Bounded stale-request recovery (`#1571`)
 
-Fires for the unproven-coverage case (`COPILOT_PENDING_COVERS_HEAD =
-false`, no same-head marker) — E14's `REQUEST_NEEDED`-pending sub-case;
-distinct from `AW3-R` (proven coverage). Bounds remove/re-request with
-the independent, per-HEAD recovery-cycle cap from the
+Fires for two unproven-coverage cases (`COPILOT_PENDING_COVERS_HEAD =
+false` in both): the pending sub-case (`COPILOT_PENDING = true`, no
+same-head marker) — E14's `REQUEST_NEEDED`-pending sub-case; and,
+since `#2327`, the non-pending failed-to-register case (`COPILOT_PENDING
+= false`, a same-head `advisory-wait:` request marker already exists,
+and `SETTLED_WINDOW_MINUTES` has elapsed with no proof the request ever
+reached Copilot). Both are distinct from `AW3-R` (proven coverage).
+Bounds the cycle with the independent, per-HEAD recovery-cycle cap from
+the
 [terminal contract](#terminal-copilot-stall-recovery-contract-state-policy-markers-clock)
 (default 2), not `REQUEST_CAP` (30) —
 [why two paths](../../docs/idd-design-rationale.md#aw3-s-vs-aw3-r-why-two-recovery-paths).
@@ -242,7 +254,14 @@ unchanged; `"cap-exhausted"` → do **not** remove or re-request, handle
 like `CAP_EXHAUSTED` (`CAP_EXHAUSTED_ROUTE`); `"attempt"` → run the
 cycle below. Without helper runtime, derive the same decision from
 AW1-AW2 plus the terminal contract's remaining budget (trusted bound
-`advisory-wait-recovery:` markers only).
+`advisory-wait-recovery:` markers only). For the non-pending entry,
+`AW2`'s `SAME_HEAD_REQUEST_MARKER_PRESENT` is required — a same-head
+marker that is only the recovery form must never itself satisfy this
+check (a prior cycle's own marker is not proof a request was
+requested). The non-pending entry reuses `SETTLED_WINDOW_MINUTES` as
+its re-check budget (no new config value); before it elapses the
+classifier stays `"not-applicable"`/`recheck-budget-unspent` —
+ordinary lag, not failure.
 
 **Bounded cycle** (only when `"attempt"`). Before each mutating step,
 re-verify the active claim
@@ -253,22 +272,36 @@ E1 against the new HEAD. Commands for every step (same gh-then-REST
 pattern as E14's **Primary advisory bot**):
 [shell fallback AW3-S](../../docs/idd-advisory-wait-shell-fallback.md#aw3-s).
 
-1. **Remove** the stale request. If it fails because the bot is no
-   longer pending, re-run AW1-AW3 and re-evaluate `staleRequestRecovery`;
-   any other failure posts the `AW4` pending-refresh-failed hold and
-   stops — no cycle counted.
+1. **Remove** the stale request. Skip this step for a non-pending entry
+   (`#2327` — `COPILOT_PENDING` was already `false`, so nothing is
+   pending to remove) and start at step 3 instead. Otherwise, if removal
+   fails because the bot is no longer pending, re-run AW1-AW3 and
+   re-evaluate `staleRequestRecovery`; any other failure posts the `AW4`
+   pending-refresh-failed hold and stops — no cycle counted.
 2. **Verify** removal and current HEAD before proceeding.
 3. **Request** Copilot again, same fallback pattern.
 4. **Verify association**: confirm `review_requested` follows HEAD's
    `committed` event (same proof as `COPILOT_PENDING_COVERS_HEAD`). Not
    yet true is ordinary lag, not failure — do **not** redo steps 1-3;
    re-check alone after a brief pause (default: 3 attempts, a few
-   seconds apart). Still unproven after that budget: abort without
-   posting a marker or counting a cycle, return to the polling loop
-   (or E1) next interval — never tight-loop on unresolved lag.
-5. **Post exactly one** bound marker, only once every prior step is
-   verified. `<n>` is `completedCycleCount + 1`; posting last avoids
-   double-counting, since only marker **presence** counts toward budget.
+   seconds apart). Disposition after that budget depends on entry type:
+   - **Pending entry**: still unproven → abort without posting a
+     marker or counting a cycle, return to the polling loop (or E1)
+     next interval — never tight-loop on unresolved lag.
+   - **Non-pending entry** (`#2327`): the event appearing proves this
+     re-request actually registered — abort without counting (ordinary
+     success, no cycle needed; the next pass's `COPILOT_PENDING_COVERS_HEAD`
+     check picks it up normally). No event within the same short budget
+     is itself the proof this re-request _also_ failed to register —
+     the entry condition already spent a full `SETTLED_WINDOW_MINUTES`
+     confirming the original request's silence before this cycle
+     started, so the short budget is sufficient here, not a redundant
+     wait — proceed to step 5 and count the cycle.
+5. **Post exactly one** bound marker, once step 4 concludes in a
+   counted disposition — proven re-registration for a pending entry, or
+   proven failure-to-register for a non-pending entry (`#2327`). `<n>`
+   is `completedCycleCount + 1`; posting last avoids double-counting,
+   since only marker **presence** counts toward budget.
 
 **Ordinary counters are untouched**: excluded from `requestMarkerCount`
 and `#1511`'s reroll accounting, but **does** count as a same-head
@@ -354,7 +387,10 @@ unnecessary — post a trusted `review-ack:` marker instead; see
 
 `#1572` defines the state/policy/marker contract for a terminal
 `COPILOT_UNAVAILABLE` signal that `AW3-S` above gates via its bounded
-recovery cycle
+recovery cycle — either of `AW3-S`'s two entry conditions (pending, or
+`#2327`'s non-pending failed-to-register case) posts the same bound
+`advisory-wait-recovery:` marker, so this contract's counting and clock
+below are unaffected by which one produced a given completed cycle
 ([why a separate signal](../../docs/idd-design-rationale.md#terminal-copilot-stall-recovery-contract-why-a-separate-signal)).
 `AW3-S`'s `"cap-exhausted"` still falls back to `CAP_EXHAUSTED_ROUTE`,
 not [Terminal routing](#terminal-routing-1570) below — cycle exhaustion

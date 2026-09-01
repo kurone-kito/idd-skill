@@ -16,6 +16,7 @@
   "capExhaustedRoute": "phase-specific",
   "elapsedMinutes": 0,
   "sameHeadMarkerPresent": false,
+  "sameHeadRequestMarkerPresent": false,
   "earliestSameHeadAt": "",
   "sameHeadMarkerCount": 0,
   "requestMarkerCount": 0,

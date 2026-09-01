@@ -2062,6 +2062,7 @@ export function summarizeAdvisoryWaitMarkers(
   );
   let earliestSameHeadAt = '';
   let trustedSameHeadMarkerCount = 0;
+  let trustedSameHeadRequestMarkerCount = 0;
   let trustedRequestMarkerCount = 0;
   let untrustedSameHeadMarkerCount = 0;
   let untrustedRequestMarkerCount = 0;
@@ -2076,6 +2077,9 @@ export function summarizeAdvisoryWaitMarkers(
     if (isSameHeadMarker) {
       if (trusted) {
         trustedSameHeadMarkerCount += 1;
+        if (isRequestMarker) {
+          trustedSameHeadRequestMarkerCount += 1;
+        }
         const createdAt = String(
           comment?.createdAt ?? comment?.created_at ?? '',
         );
@@ -2100,6 +2104,7 @@ export function summarizeAdvisoryWaitMarkers(
   }
   return {
     sameHeadMarkerPresent: trustedSameHeadMarkerCount > 0,
+    sameHeadRequestMarkerPresent: trustedSameHeadRequestMarkerCount > 0,
     earliestSameHeadAt,
     sameHeadMarkerCount: trustedSameHeadMarkerCount,
     requestMarkerCount: trustedRequestMarkerCount,
@@ -2268,6 +2273,7 @@ export function buildAdvisoryWaitSummary(
     capExhaustedRoute,
     elapsedMinutes,
     sameHeadMarkerPresent: markerSummary.sameHeadMarkerPresent,
+    sameHeadRequestMarkerPresent: markerSummary.sameHeadRequestMarkerPresent,
     earliestSameHeadAt: markerSummary.earliestSameHeadAt,
     sameHeadMarkerCount: markerSummary.sameHeadMarkerCount,
     requestMarkerCount: markerSummary.requestMarkerCount,

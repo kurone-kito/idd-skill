@@ -22,6 +22,7 @@
     "capExhaustedRoute",
     "elapsedMinutes",
     "sameHeadMarkerPresent",
+    "sameHeadRequestMarkerPresent",
     "earliestSameHeadAt",
     "sameHeadMarkerCount",
     "requestMarkerCount",
@@ -118,6 +119,10 @@
     "sameHeadMarkerPresent": {
       "type": "boolean",
       "description": "True when a trusted same-HEAD advisory-wait or advisory-wait-recovery marker already anchors the current HEAD."
+    },
+    "sameHeadRequestMarkerPresent": {
+      "type": "boolean",
+      "description": "#2327: true only when a trusted same-HEAD marker is specifically the plain request form (advisory-wait:), excluding advisory-wait-recovery: -- distinguishes 'a request was actually made for this HEAD' from 'only a prior recovery cycle's own marker exists'."
     },
     "earliestSameHeadAt": {
       "type": "string",
@@ -273,18 +278,18 @@
     },
     "staleRequestRecovery": {
       "type": "object",
-      "description": "#1571 bounded stale-request recovery eligibility. Independent of outcome/f3Outcome and of copilotRecovery above: distinguishes the unproven-coverage (copilotPendingCoversHead=false) case PR #1562 identified from the pre-existing RECOVERY_NEEDED/AW3-R marker-anchor-only path (copilotPendingCoversHead=true). Consumed only by E14's REQUEST_NEEDED-with-pending sub-path (AW3-S) to decide whether the bounded remove/re-request/verify/mark cycle may run.",
+      "description": "#1571 bounded stale-request recovery eligibility. Independent of outcome/f3Outcome and of copilotRecovery above: distinguishes the unproven-coverage (copilotPendingCoversHead=false) case PR #1562 identified from the pre-existing RECOVERY_NEEDED/AW3-R marker-anchor-only path (copilotPendingCoversHead=true). Consumed by AW3-S to decide whether the bounded cycle may run -- either E14's REQUEST_NEEDED-with-pending sub-path, or (#2327) the non-pending failed-to-register case: a same-head request marker exists, Copilot is not pending, and the settled-window re-check budget elapsed with no proof the request ever reached it.",
       "required": ["action", "reason"],
       "properties": {
         "action": {
           "type": "string",
           "enum": ["attempt", "cap-exhausted", "not-applicable"],
-          "description": "'attempt': unproven pending request, no same-head marker, recovery-cycle budget remains -- run AW3-S. 'cap-exhausted': same unproven condition, but the independent #1572 recovery-cycle cap is exhausted for this HEAD -- do not mutate; fall back to CAP_EXHAUSTED_ROUTE. 'not-applicable': no stale-request recovery decision applies."
+          "description": "'attempt': an unproven request for this HEAD (pending, or non-pending with the re-check budget spent) and recovery-cycle budget remains -- run AW3-S. 'cap-exhausted': same unproven condition, but the independent #1572 recovery-cycle cap is exhausted for this HEAD -- do not mutate; fall back to CAP_EXHAUSTED_ROUTE. 'not-applicable': no stale-request recovery decision applies."
         },
         "reason": {
           "type": "string",
           "minLength": 1,
-          "description": "Machine-readable reason: active-claim-not-provided, not-pending, same-head-marker-present, proven-covers-head, recovery-cap-exhausted, or recovery-attempt-eligible."
+          "description": "Machine-readable reason: active-claim-not-provided, not-pending, same-head-marker-present, recovery-marker-only-no-request-marker (#2327), proven-covers-head, recovery-cap-exhausted, recovery-attempt-eligible, recheck-budget-unspent (#2327), or non-pending-recovery-attempt-eligible (#2327)."
         }
       },
       "additionalProperties": false

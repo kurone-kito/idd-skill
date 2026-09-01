@@ -144,6 +144,29 @@ REQUEST_MARKER_COUNT=$(
         | length
       '
 )
+
+# #2327: head-scoped, request-only (excludes advisory-wait-recovery:) --
+# distinct from EARLIEST_SAME_HEAD_AT above (a recovery-only marker also
+# satisfies that) and from REQUEST_MARKER_COUNT above (not head-scoped).
+SAME_HEAD_REQUEST_MARKER_PRESENT=$(
+  printf '%s\n' "$ADVISORY_COMMENTS_JSON" \
+    | jq -r \
+      --arg sha "$PR_HEAD_SHA" \
+      --argjson trusted_marker_logins "$TRUSTED_MARKER_LOGIN_JSON" '
+        def marker_login: (.user.login // "" | ascii_downcase);
+        def trusted_marker_actor:
+          marker_login as $login
+          | ($login | length > 0)
+          and (($trusted_marker_logins | index($login)) != null);
+        [.[] | select(
+          trusted_marker_actor
+          and (
+            ((.body // "") | test("^advisory-wait: [^ ]+ " + $sha + "(?: |$)")) or
+            ((.body // "") | test("^<!-- advisory-wait: [^ ]+ " + $sha + " [^ ]+ -->$"))
+          )
+        )] | length > 0
+      '
+)
 ```
 
 ## AW3-R
@@ -170,19 +193,26 @@ association) are read-only checks the instruction file specifies
 directly — no command block needed here.
 
 ```sh
-# Step 1 — remove the stale request
+# Step 1 — remove the stale request. PENDING entry only (COPILOT_PENDING
+# was "true"). Skip this step entirely for the non-pending entry (#2327 --
+# COPILOT_PENDING was already "false", nothing is pending to remove) and
+# start at Step 3 instead.
 gh pr edit {pr-number} --remove-reviewer "@{primary-advisory-bot}"
 # on a GraphQL login-resolution failure:
 gh api repos/{owner}/{repo}/pulls/{pr-number}/requested_reviewers \
   -X DELETE -f "reviewers[]={primary-advisory-bot-rest-login}"
 
-# Step 3 — request again, after step 2 verifies the removal
+# Step 3 — request again (non-pending entry: the first mutating step;
+# pending entry: after step 2 verifies the removal)
 gh pr edit {pr-number} --add-reviewer "@{primary-advisory-bot}"
 # on a GraphQL login-resolution failure:
 gh api repos/{owner}/{repo}/pulls/{pr-number}/requested_reviewers \
   -X POST -f "reviewers[]={primary-advisory-bot-rest-login}"
 
-# Step 5 — post exactly one bound marker, only after step 4 verifies
+# Step 5 -- post exactly one bound marker, only once step 4 reaches a
+# counted disposition: proven re-registration for a pending entry, or
+# proven failure-to-register within the same short budget for a
+# non-pending entry (#2327 -- see the instruction file's step 4).
 # source repo / vendored-node profile:
 node scripts/post-idd-marker.mjs --type advisory-recovery --target pr <pr-number> \
   --agent-id <id> --claim-id <id> --head-sha <PR_HEAD_SHA> \

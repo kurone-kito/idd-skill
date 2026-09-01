@@ -321,30 +321,40 @@ export function buildCopilotRecoverySummary(
 
 /**
  * `#1571` bounded stale-request recovery classification: whether the current
- * pending Copilot request should be recovered (removed and re-requested) by
- * an E14/F2 caller right now. Pure and network-free -- takes already-computed
- * evidence (the shared AW1-AW3 fields plus the `#1572` recovery-cycle budget)
- * and returns a decision only; it performs no `gh` mutation itself. Deliberately
- * distinct from the pre-existing `RECOVERY_NEEDED` outcome (`AW3-R` in
+ * Copilot request should be recovered by an E14/F2 caller right now. Pure and
+ * network-free -- takes already-computed evidence (the shared AW1-AW3 fields
+ * plus the `#1572` recovery-cycle budget) and returns a decision only; it
+ * performs no `gh` mutation itself. Deliberately distinct from the
+ * pre-existing `RECOVERY_NEEDED` outcome (`AW3-R` in
  * idd-advisory-wait.instructions.md), which anchors a missing same-head marker
- * for a request the timeline already PROVES covers the current HEAD -- this
- * function targets the opposite, unproven-coverage case PR #1562 identified
- * (`copilotPendingCoversHead: false`), where the pending request itself may be
- * stale and mutating it (remove + re-request) is the correct recovery.
+ * for a request the timeline already PROVES covers the current HEAD.
+ *
+ * Two independent unproven-coverage entry conditions feed the same bounded
+ * cycle (`copilotPendingCoversHead: false` in both):
+ *  - the original pending case (PR #1562) -- a request is currently pending
+ *    but the timeline never proved it covers this HEAD, so the pending
+ *    request itself may be stale and mutating it (remove + re-request) is the
+ *    correct recovery;
+ *  - the non-pending "failed to register" case (`#2327`) -- a same-head
+ *    `advisory-wait:` request marker already exists, Copilot never shows
+ *    pending at all, and the existing `SETTLED_WINDOW_MINUTES` re-check
+ *    budget has elapsed with no `review_requested` event ever proving the
+ *    request reached Copilot. Below that budget the gap reads as ordinary
+ *    lag, not failure.
  */
 export interface StaleRequestRecoveryAction {
   /**
-   * `'attempt'` -- the pending request is unproven for the current HEAD, no
-   * same-head marker anchors it yet, and recovery-cycle budget remains: an
-   * E14/F2 caller may run the bounded remove/re-request/verify/mark cycle
-   * (`AW3-S`).
+   * `'attempt'` -- an unproven request for the current HEAD (pending, or
+   * non-pending with the re-check budget spent) and recovery-cycle budget
+   * remains: an E14/F2 caller may run the bounded cycle (`AW3-S`).
    * `'cap-exhausted'` -- the same unproven condition holds, but the
    * independent recovery-cycle cap (`#1572`) is already exhausted for this
-   * HEAD: do not remove or re-request; fall back to the ordinary
-   * `CAP_EXHAUSTED_ROUTE` handling instead.
+   * HEAD: do not mutate; fall back to the ordinary `CAP_EXHAUSTED_ROUTE`
+   * handling instead.
    * `'not-applicable'` -- no stale-request recovery decision applies (no
-   * claim-bound evidence, not pending, request is already proven to cover
-   * HEAD, or a same-head marker already anchors the clock).
+   * claim-bound evidence, nothing was ever requested, the request is already
+   * proven to cover HEAD, a pending same-head marker already anchors the
+   * clock, or a non-pending re-check budget has not yet elapsed).
    */
   action: 'attempt' | 'cap-exhausted' | 'not-applicable';
   /** Machine-readable reason for `action`. */
@@ -358,6 +368,9 @@ const STALE_REQUEST_RECOVERY_REASONS = {
   provenCoversHead: 'proven-covers-head',
   capExhausted: 'recovery-cap-exhausted',
   attemptEligible: 'recovery-attempt-eligible',
+  recheckBudgetUnspent: 'recheck-budget-unspent',
+  nonPendingAttemptEligible: 'non-pending-recovery-attempt-eligible',
+  recoveryMarkerOnly: 'recovery-marker-only-no-request-marker',
 } as const;
 
 export function evaluateStaleRequestRecoveryAction(input: {
@@ -376,6 +389,32 @@ export function evaluateStaleRequestRecoveryAction(input: {
    * `"attempt"` without proof no cycle has already run.
    */
   activeClaimProvided: boolean;
+  /**
+   * `#2327`: true only when a trusted same-HEAD marker is specifically the
+   * plain request form (`advisory-wait:`), excluding
+   * `advisory-wait-recovery:` (mirrors
+   * `AdvisoryWaitMarkerSummary.sameHeadRequestMarkerPresent`). Only consulted
+   * on the non-pending path below -- `sameHeadMarkerPresent` alone cannot
+   * distinguish "a request was actually made for this HEAD" from "only a
+   * prior recovery cycle's own marker exists," and the non-pending entry must
+   * never treat recovery-marker-only evidence as proof a request was
+   * requested. Omitted/missing fails closed to `false` (no request marker).
+   */
+  sameHeadRequestMarkerPresent?: boolean;
+  /**
+   * `#2327`: minutes since the earliest same-head advisory-wait marker
+   * (mirrors `buildAdvisoryWaitSummary`'s own `elapsedMinutes`). Only
+   * consulted on the non-pending path below; omitted or non-finite fails
+   * closed to "budget not yet spent" -- ambiguous elapsed evidence must never
+   * read as failure.
+   */
+  elapsedMinutes?: number;
+  /**
+   * `#2327`: the configured `SETTLED_WINDOW_MINUTES` re-check budget reused
+   * (not a new config value) as the non-pending entry's failed-to-register
+   * threshold. Same fail-closed-on-ambiguous treatment as `elapsedMinutes`.
+   */
+  settledWindowMinutes?: number;
 }): StaleRequestRecoveryAction {
   if (!input.activeClaimProvided) {
     return {
@@ -383,27 +422,78 @@ export function evaluateStaleRequestRecoveryAction(input: {
       reason: STALE_REQUEST_RECOVERY_REASONS.activeClaimNotProvided,
     };
   }
-  if (!input.copilotPending) {
+
+  if (input.copilotPending) {
+    // A same-head marker (ordinary `advisory-wait:` OR a prior recovery
+    // cycle's `advisory-wait-recovery:`) already anchors this HEAD's clock --
+    // mirrors evaluateAdvisoryWaitOutcome's own `!sameHeadMarkerPresent` gate
+    // for both its RECOVERY_NEEDED and REQUEST_NEEDED/CAP_EXHAUSTED branches,
+    // so this classifier never contradicts the shared outcome machine's
+    // routing.
+    if (input.sameHeadMarkerPresent) {
+      return {
+        action: 'not-applicable',
+        reason: STALE_REQUEST_RECOVERY_REASONS.sameHeadMarkerPresent,
+      };
+    }
+    if (input.copilotPendingCoversHead) {
+      return {
+        action: 'not-applicable',
+        reason: STALE_REQUEST_RECOVERY_REASONS.provenCoversHead,
+      };
+    }
+    if (input.remainingBudget <= 0) {
+      return {
+        action: 'cap-exhausted',
+        reason: STALE_REQUEST_RECOVERY_REASONS.capExhausted,
+      };
+    }
+    return {
+      action: 'attempt',
+      reason: STALE_REQUEST_RECOVERY_REASONS.attemptEligible,
+    };
+  }
+
+  // Non-pending (`#2327`): nothing was ever requested for this HEAD yet --
+  // preserves the pre-#2327 behavior exactly, routing to E14's ordinary
+  // REQUEST_NEEDED path rather than a recovery cycle.
+  if (!input.sameHeadMarkerPresent) {
     return {
       action: 'not-applicable',
       reason: STALE_REQUEST_RECOVERY_REASONS.notPending,
     };
   }
-  // A same-head marker (ordinary `advisory-wait:` OR a prior recovery cycle's
-  // `advisory-wait-recovery:`) already anchors this HEAD's clock -- mirrors
-  // evaluateAdvisoryWaitOutcome's own `!sameHeadMarkerPresent` gate for both
-  // its RECOVERY_NEEDED and REQUEST_NEEDED/CAP_EXHAUSTED branches, so this
-  // classifier never contradicts the shared outcome machine's routing.
-  if (input.sameHeadMarkerPresent) {
+  // A same-head marker exists, but not specifically a plain request marker --
+  // only a prior recovery cycle's own `advisory-wait-recovery:` marker
+  // anchors this HEAD. That marker is not proof an ordinary request was
+  // requested for this HEAD, so it must never itself unlock a further cycle;
+  // the recovery-cycle counter (not this predicate) is what already bounds
+  // repeated recovery attempts.
+  if (!input.sameHeadRequestMarkerPresent) {
     return {
       action: 'not-applicable',
-      reason: STALE_REQUEST_RECOVERY_REASONS.sameHeadMarkerPresent,
+      reason: STALE_REQUEST_RECOVERY_REASONS.recoveryMarkerOnly,
     };
   }
+  // A `review_requested` event for the bot DID eventually follow this HEAD's
+  // commit -- Copilot genuinely received the request and is simply no longer
+  // pending (completed or silently declined), not a failed-to-register case.
   if (input.copilotPendingCoversHead) {
     return {
       action: 'not-applicable',
       reason: STALE_REQUEST_RECOVERY_REASONS.provenCoversHead,
+    };
+  }
+  const elapsedMinutes = Number(input.elapsedMinutes);
+  const settledWindowMinutes = Number(input.settledWindowMinutes);
+  if (
+    !Number.isFinite(elapsedMinutes) ||
+    !Number.isFinite(settledWindowMinutes) ||
+    elapsedMinutes < settledWindowMinutes
+  ) {
+    return {
+      action: 'not-applicable',
+      reason: STALE_REQUEST_RECOVERY_REASONS.recheckBudgetUnspent,
     };
   }
   if (input.remainingBudget <= 0) {
@@ -414,7 +504,7 @@ export function evaluateStaleRequestRecoveryAction(input: {
   }
   return {
     action: 'attempt',
-    reason: STALE_REQUEST_RECOVERY_REASONS.attemptEligible,
+    reason: STALE_REQUEST_RECOVERY_REASONS.nonPendingAttemptEligible,
   };
 }
 
@@ -701,8 +791,11 @@ function main(): void {
     copilotPending: summary.copilotPending,
     copilotPendingCoversHead: summary.copilotPendingCoversHead,
     sameHeadMarkerPresent: summary.sameHeadMarkerPresent,
+    sameHeadRequestMarkerPresent: summary.sameHeadRequestMarkerPresent,
     remainingBudget: copilotRecovery.remainingBudget,
     activeClaimProvided: copilotRecovery.activeClaimProvided,
+    elapsedMinutes: summary.elapsedMinutes,
+    settledWindowMinutes: summary.settledWindowMinutes,
   });
 
   process.stdout.write(
