@@ -288,10 +288,9 @@ does not exist, stop and return to B2.
 
 The following is a repair path only for an ordering violation that has
 already occurred, not an alternative route: disclose the deviation on
-the issue, name the skipped checkpoint step (for example, the B3
-plan-comment checkpoint), post the plan retroactively with an explicit
-note about the reordering, and run the C1 critique pass against the
-completed diff.
+the issue, name the skipped checkpoint step (the B3 self-check above),
+post the plan retroactively with an explicit note about the
+reordering, and run the C1 critique pass against the completed diff.
 
 Implement the plan, running **fix-validate** before each atomic commit
 (one logical change per commit).
