@@ -81,13 +81,22 @@ const createdFixtureDirs: string[] = [];
  * call site passes a qualified or traversal-shaped prefix.
  */
 function trackedMkdtemp(prefix: string): string {
-  if (prefix.includes('/') || prefix.includes('\\')) {
+  if (
+    prefix.includes('/') ||
+    prefix.includes('\\') ||
+    prefix === '' ||
+    prefix === '.' ||
+    prefix === '..'
+  ) {
     throw new Error(
-      `trackedMkdtemp: prefix must not contain a path separator: ${prefix}`,
+      `trackedMkdtemp: prefix must be a plain, non-empty, non-dot-segment string: ${prefix}`,
     );
   }
   const dir = mkdtempSync(join(tmpdir(), prefix));
   if (dirname(dir) !== resolve(tmpdir())) {
+    // Unreachable given the prefix guard above; kept as defense-in-depth
+    // for a future change to the guard or to Node's join() behavior.
+    rmSync(dir, { recursive: true, force: true });
     throw new Error(
       `trackedMkdtemp: refusing to track a directory outside tmpdir(): ${dir}`,
     );
