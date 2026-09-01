@@ -16,7 +16,7 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, relative, resolve } from 'node:path';
-import { test } from 'node:test';
+import { after, test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import {
   collectVendoredFiles,
@@ -71,9 +71,49 @@ const PLACEHOLDERS_DOC = join(
 );
 const ONBOARDING_DOC = join(REPO_ROOT, 'idd-template', 'ONBOARDING.md');
 
-function makeFixtureDir(): string {
-  return mkdtempSync(join(tmpdir(), 'idd-onboard-'));
+const createdFixtureDirs: string[] = [];
+
+/**
+ * `mkdtempSync` under `tmpdir()`, tracked for teardown in the `after()` hook
+ * below. Rejects a `prefix` containing a path separator and verifies the
+ * created directory is a direct child of `tmpdir()`, so the recursive,
+ * forced teardown below can never reach outside `tmpdir()` even if a future
+ * call site passes a qualified or traversal-shaped prefix.
+ */
+function trackedMkdtemp(prefix: string): string {
+  if (
+    prefix.includes('/') ||
+    prefix.includes('\\') ||
+    prefix === '' ||
+    prefix === '.' ||
+    prefix === '..'
+  ) {
+    throw new Error(
+      `trackedMkdtemp: prefix must be a plain, non-empty, non-dot-segment string: ${prefix}`,
+    );
+  }
+  const dir = mkdtempSync(join(tmpdir(), prefix));
+  if (dirname(dir) !== resolve(tmpdir())) {
+    // Unreachable given the prefix guard above; kept as defense-in-depth
+    // for a future change to the guard or to Node's join() behavior.
+    rmSync(dir, { recursive: true, force: true });
+    throw new Error(
+      `trackedMkdtemp: refusing to track a directory outside tmpdir(): ${dir}`,
+    );
+  }
+  createdFixtureDirs.push(dir);
+  return dir;
 }
+
+function makeFixtureDir(): string {
+  return trackedMkdtemp('idd-onboard-');
+}
+
+after(() => {
+  for (const dir of createdFixtureDirs) {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
 
 const ALL_OVERRIDES = {
   REPO_NAME: 'my-app',
@@ -2872,7 +2912,7 @@ test('deriveDevelopmentBranchCandidate returns the injected default-branch reade
 
 /** A git repo with a local `origin` remote whose only branch is `main`. */
 function makeGitRemoteFixture(): { root: string; remoteRoot: string } {
-  const remoteRoot = mkdtempSync(join(tmpdir(), 'idd-onboard-remote-'));
+  const remoteRoot = trackedMkdtemp('idd-onboard-remote-');
   execFileSync('git', ['init', '--initial-branch=main', remoteRoot], {
     stdio: 'ignore',
   });
@@ -3554,7 +3594,7 @@ function writeRecordPolicyFixture(root: string): void {
   // exact branch buildValidHearAnswers() answers with, so every existing
   // record-policy scenario below satisfies that gate the same way a real
   // onboarded repository would, without any credentials or egress.
-  const remoteRoot = mkdtempSync(join(tmpdir(), 'idd-onboard-remote-'));
+  const remoteRoot = trackedMkdtemp('idd-onboard-remote-');
   execFileSync(
     'git',
     [
@@ -4120,7 +4160,7 @@ test('bin/idd-onboard.mjs --help documents --record-policy, --transcript, and --
 // sandboxing idd-config.test.mts's withSandboxCwd already uses.
 function withSandboxCwd<T>(run: (sandbox: string) => T): T {
   const originalCwd = process.cwd();
-  const sandbox = mkdtempSync(join(tmpdir(), 'idd-onboard-confine-'));
+  const sandbox = trackedMkdtemp('idd-onboard-confine-');
   process.chdir(sandbox);
   try {
     return run(sandbox);
@@ -4153,7 +4193,7 @@ test('resolveConfinedDirectory accepts a real child directory whose name happens
 
 test('resolveConfinedDirectory rejects a --target using ../ traversal that escapes the working directory', () => {
   withSandboxCwd((sandbox) => {
-    const outside = mkdtempSync(join(tmpdir(), 'idd-onboard-outside-'));
+    const outside = trackedMkdtemp('idd-onboard-outside-');
     const traversal = relative(sandbox, outside);
     assert.throws(
       () => resolveConfinedDirectory(traversal, '--target', []),
@@ -4164,7 +4204,7 @@ test('resolveConfinedDirectory rejects a --target using ../ traversal that escap
 
 test('resolveConfinedDirectory rejects an absolute path outside the confined root', () => {
   withSandboxCwd(() => {
-    const outside = mkdtempSync(join(tmpdir(), 'idd-onboard-outside-'));
+    const outside = trackedMkdtemp('idd-onboard-outside-');
     assert.throws(
       () => resolveConfinedDirectory(outside, '--source', []),
       /--source resolves outside the confined root/,
@@ -4174,7 +4214,7 @@ test('resolveConfinedDirectory rejects an absolute path outside the confined roo
 
 test('resolveConfinedDirectory rejects a symlink that resolves outside the confined root', () => {
   withSandboxCwd((sandbox) => {
-    const outside = mkdtempSync(join(tmpdir(), 'idd-onboard-outside-'));
+    const outside = trackedMkdtemp('idd-onboard-outside-');
     const link = join(sandbox, 'link-out');
     symlinkSync(outside, link, 'dir');
     assert.throws(
@@ -4186,7 +4226,7 @@ test('resolveConfinedDirectory rejects a symlink that resolves outside the confi
 
 test('resolveConfinedDirectory accepts a path outside the working directory when covered by --allow-root', () => {
   withSandboxCwd(() => {
-    const outside = mkdtempSync(join(tmpdir(), 'idd-onboard-outside-'));
+    const outside = trackedMkdtemp('idd-onboard-outside-');
     const resolved = resolveConfinedDirectory(outside, '--target', [outside]);
     assert.equal(resolved, resolve(outside));
   });
@@ -4194,7 +4234,7 @@ test('resolveConfinedDirectory accepts a path outside the working directory when
 
 test('resolveConfinedDirectory accepts a nested path under an --allow-root root', () => {
   withSandboxCwd(() => {
-    const outside = mkdtempSync(join(tmpdir(), 'idd-onboard-outside-'));
+    const outside = trackedMkdtemp('idd-onboard-outside-');
     const nested = join(outside, 'nested');
     mkdirSync(nested);
     const resolved = resolveConfinedDirectory(nested, '--target', [outside]);
