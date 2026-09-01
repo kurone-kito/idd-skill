@@ -19,9 +19,9 @@
 
 import { readFileSync } from 'node:fs';
 
-import { ghText } from './gh-exec.mts';
 import { operationalMarkerPrefix } from './marker-helpers.mts';
 import { normalizePolicyConfig } from './policy-helpers.mts';
+import { createGithubProviderAdapter } from './provider-adapter-github.mts';
 
 const DEFAULT_POLICY_PATH = '.github/idd/config.json';
 
@@ -71,26 +71,17 @@ export function collaboratorPermission(
   }
   let permission = '';
   let roleName = '';
-  try {
-    const raw = ghText(
-      [
-        'api',
-        `repos/${owner}/${repo}/collaborators/${encodeURIComponent(normalizedLogin)}/permission`,
-      ],
-      { stdio: ['ignore', 'pipe', 'ignore'] },
-    );
-    const parsed = JSON.parse(raw) as {
-      permission?: unknown;
-      role_name?: unknown;
-    };
-    permission = String(parsed?.permission ?? '')
-      .trim()
-      .toLowerCase();
-    roleName = String(parsed?.role_name ?? '')
-      .trim()
-      .toLowerCase();
-  } catch {
-    // both stay empty
+  // "not-collaborator" and "error" both collapse to empty strings here,
+  // matching this function's pre-port fail-closed contract exactly: the
+  // original try/catch never distinguished a genuine 404 from any other
+  // transport failure, so callers already treat both the same way.
+  const outcome = createGithubProviderAdapter(
+    owner,
+    repo,
+  ).getCollaboratorPermission(normalizedLogin);
+  if (outcome.outcome === 'found') {
+    permission = outcome.permission;
+    roleName = outcome.roleName;
   }
   const result: CollaboratorPermission = { permission, roleName };
   if (cache) {

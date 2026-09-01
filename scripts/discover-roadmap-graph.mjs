@@ -15,12 +15,6 @@ import {
   evaluateDiscoverReadiness,
 } from './discover-readiness-check.mjs';
 import { effortOrdinal, parseEffort } from './effort.mjs';
-import {
-  GH_TEXT_LOOP_OPTIONS,
-  ghText,
-  ghTextAsync,
-  withBoundedRetry,
-} from './gh-exec.mjs';
 import { loadPolicyConfig } from './idd-config.mjs';
 import { stripMarkdownCodeRegions } from './markdown-code.mjs';
 import {
@@ -33,6 +27,10 @@ import {
   resolveActiveClaim,
   resolveTrustedMarkerActors,
 } from './protocol-helpers.mjs';
+import {
+  createGithubProviderAdapter,
+  resolveCurrentGithubRepository,
+} from './provider-adapter-github.mjs';
 
 const DEFAULT_MARKER_PREFIX = 'idd-skill';
 // GitHub's search API returns at most 1000 results for a single query. The
@@ -46,38 +44,6 @@ const GH_SEARCH_RESULT_CAP = 1000;
 // (or the `concurrency` option) tunes it, and `1` runs the fetches serially
 // (one in flight at a time).
 const DEFAULT_TRAVERSAL_CONCURRENCY = 8;
-// #1449: explicit above the promisified execFile's 1 MiB default. Applied
-// PER STREAM (confirmed empirically: a 6 MiB stdout plus a 6 MiB stderr,
-// 12 MiB combined, succeeds under this 10 MiB value) — worst-case buffered
-// memory is up to ~2x this bound (stdout and stderr each maxed
-// independently), not this value as a combined total. The two hot-path
-// callers (a single GitHub issue's REST JSON — body capped at 64 KiB by
-// GitHub — and a paginated 100-node sub-issue GraphQL page) stay far below
-// this on either stream; 10 MiB per stream is a generous ceiling that
-// still bounds worst-case memory instead of accepting the old
-// accumulation's unbounded growth (Copilot review, #1463).
-const GH_ASYNC_MAX_BUFFER = 10 * 1024 * 1024;
-/**
- * Async `gh` invocation used ONLY by the traversal hot-path loaders
- * (`buildIssueLoader` / `buildSubIssueLoader`). Unlike the blocking sync
- * runner — which serializes even concurrent `await`s because it holds the
- * event loop — {@link ghTextAsync} lets multiple `gh` subprocesses run in
- * parallel; the actual in-flight bound is enforced by the prefetch crawl's
- * `mapPool` using the resolved `concurrency` (default
- * {@link DEFAULT_TRAVERSAL_CONCURRENCY}). The non-hot-path callers (owner/repo
- * resolution, claim-state comments, `--all-roadmaps` search) keep the sync
- * runner, so their behavior is byte-unchanged.
- *
- * #1675: delegates to gh-exec.mts's shared `ghTextAsync` (extracted from
- * this function's own #1449 `promisify(execFile)` implementation) instead
- * of spawning `gh` directly, so this hot path also gets the shared default
- * timeout. `.trim()`ed stdout is a behavior-preserving change here: every
- * caller of `runGhCapture` already trims (or `JSON.parse`s, which ignores
- * surrounding whitespace) its result.
- */
-function runGhCapture(args) {
-  return ghTextAsync(args, { maxBuffer: GH_ASYNC_MAX_BUFFER });
-}
 // Policy default claim stale age (`claimTiming.staleAge`, `PT24H`). Mirrors
 // the default baked into protocol-helpers' `isStaleAt`, so when the configured
 // stale age equals this default the shared `isStaleAt` path is
@@ -90,7 +56,6 @@ const DEFAULT_CLAIM_HEARTBEAT_INTERVAL_MS = 12 * 60 * 60 * 1000;
 const INACCESSIBLE_ISSUE_SENTINEL = Object.freeze({
   __iddLookupStatus: 'inaccessible',
 });
-const INACCESSIBLE_HTTP_STATUSES = new Set([403, 410, 451]);
 // #1964/#1968: `(?<!-)` rejects a keyword immediately after a hyphen (e.g.
 // "auto-close", "re-close") rather than trying to make negation detection
 // cross the hyphen boundary — GitHub itself does not recognize a compound
@@ -186,23 +151,6 @@ const NEGATION_LOOKBACK_TOKENS = 6;
 // classified as 'reference' (Refs/Ref), never to Blocked-by/Depends-on/
 // Closes/Sub-issue.
 const NON_BLOCKING_ANNOTATION_PATTERN = /\(non-blocking\)/i;
-const SUB_ISSUES_QUERY = `
-query($owner:String!, $repo:String!, $number:Int!, $after:String) {
-  repository(owner:$owner, name:$repo) {
-    issue(number:$number) {
-      subIssues(first:100, after:$after) {
-        nodes {
-          number
-        }
-        pageInfo {
-          hasNextPage
-          endCursor
-        }
-      }
-    }
-  }
-}
-`;
 if (import.meta.main) {
   const args = parseArgs(process.argv.slice(2));
   const hasIssue = Number.isInteger(args.issue) && args.issue > 0;
@@ -217,18 +165,11 @@ if (import.meta.main) {
       'missing required --issue <number> (or pass --all-roadmaps)',
     );
   }
-  const owner =
-    args.owner ||
-    ghText(
-      ['repo', 'view', '--json', 'owner', '--jq', '.owner.login'],
-      GH_TEXT_LOOP_OPTIONS,
-    );
-  const repo =
-    args.repo ||
-    ghText(
-      ['repo', 'view', '--json', 'name', '--jq', '.name'],
-      GH_TEXT_LOOP_OPTIONS,
-    );
+  const currentRepo =
+    args.owner && args.repo ? null : resolveCurrentGithubRepository();
+  const owner = args.owner || currentRepo?.owner || '';
+  const repo = args.repo || currentRepo?.repo || '';
+  const port = createGithubProviderAdapter(owner, repo);
   const policy = loadPolicy(args.policy);
   // The claim-state annotation is strictly opt-in: only when --with-claim-state
   // is passed do we build the comment loader (the sole new GitHub API surface)
@@ -236,7 +177,7 @@ if (import.meta.main) {
   // `claimState` undefined, so no extra fetch is made and the output is
   // byte-stable.
   const claimState = args.withClaimState
-    ? buildClaimStateResolution(owner, repo, policy, args.currentClaimId)
+    ? buildClaimStateResolution(port, policy, args.currentClaimId)
     : undefined;
   // The readiness annotation is strictly opt-in: only when --with-readiness is
   // passed do we build the marker / label-event loaders and resolve the
@@ -253,8 +194,8 @@ if (import.meta.main) {
         milestoneScope: policy.discover?.milestoneScope,
         owner,
         repo,
-        loadIssue: buildIssueLoader(owner, repo),
-        loadSubIssues: buildSubIssueLoader(owner, repo),
+        loadIssue: buildIssueLoader(port),
+        loadSubIssues: buildSubIssueLoader(port),
         loadOpenRoadmapRoots: buildOpenRoadmapRootsLoader(
           owner,
           repo,
@@ -272,8 +213,8 @@ if (import.meta.main) {
         roadmapLabelName: policy.labels?.roadmapLabelName,
         owner,
         repo,
-        loadIssue: buildIssueLoader(owner, repo),
-        loadSubIssues: buildSubIssueLoader(owner, repo),
+        loadIssue: buildIssueLoader(port),
+        loadSubIssues: buildSubIssueLoader(port),
         claimState,
         readiness,
         concurrency: args.concurrency,
@@ -1287,7 +1228,7 @@ export function isClaimHeartbeatOverdue(
  * wiring. `policy` intentionally takes the *raw* parsed config shape (as
  * returned by this file's own `loadPolicy`), not a normalized/flattened view.
  */
-export function buildClaimStateResolution(owner, repo, policy, currentClaimId) {
+export function buildClaimStateResolution(port, policy, currentClaimId) {
   const staleAgeMs =
     parseClaimStaleAgeMs(policy.claimTiming?.staleAge) ??
     DEFAULT_CLAIM_STALE_AGE_MS;
@@ -1295,7 +1236,7 @@ export function buildClaimStateResolution(owner, repo, policy, currentClaimId) {
     parseClaimHeartbeatIntervalMs(policy.claimTiming?.heartbeatInterval) ??
     DEFAULT_CLAIM_HEARTBEAT_INTERVAL_MS;
   return {
-    loadComments: buildCommentLoader(owner, repo),
+    loadComments: buildCommentLoader(port),
     isTrustedAuthor: buildTrustedAuthorPredicate(policy),
     staleAgeMs,
     heartbeatIntervalMs,
@@ -1360,37 +1301,16 @@ export function buildTrustedAuthorPredicate(policy) {
  * Exported (#1395) so `discover-orphan-filter.mts` can reuse the identical
  * loader instead of duplicating this pagination/`gh` wiring.
  *
- * Async (#1394) so each page's `runGh(...) + JSON.parse(...)` fetch can be
- * bounded-retried on a transient failure (e.g. truncated captured stdout
- * under heavy concurrent load). Behavior-preserving: the sole caller
+ * The per-page bounded retry (#1394) now lives inside
+ * `listWorkItemCommentsWithRetryAsync` (#2266): the guard bans importing
+ * `withBoundedRetry` into a migrated domain file, so the retry loop moved
+ * to the adapter, which is exempt. Behavior-preserving: the sole caller
  * (`annotateLeafClaimState`) already `await`s the returned value, and
  * `ClaimStateResolution.loadComments` is typed as `Awaitable<...>` (#1395)
  * to accommodate exactly this.
  */
-export function buildCommentLoader(owner, repo) {
-  return async (issueNumber) => {
-    const comments = [];
-    const pageSize = 100;
-    for (let page = 1; ; page += 1) {
-      const pageItems = await withBoundedRetry(async () => {
-        const raw = runGh([
-          'api',
-          `repos/${owner}/${repo}/issues/${issueNumber}/comments?per_page=${pageSize}&page=${page}`,
-          '--jq',
-          '.',
-        ]).trim();
-        return raw && raw !== 'null' ? JSON.parse(raw) : [];
-      });
-      if (!Array.isArray(pageItems) || pageItems.length === 0) {
-        break;
-      }
-      comments.push(...pageItems);
-      if (pageItems.length < pageSize) {
-        break;
-      }
-    }
-    return comments;
-  };
+export function buildCommentLoader(port) {
+  return (issueNumber) => port.listWorkItemCommentsWithRetryAsync(issueNumber);
 }
 /**
  * Parse an ISO8601 duration (`P[nD]T[nH][nM][nS]`) to ms; `null` on garbage OR
@@ -1994,107 +1914,43 @@ async function getIssue(issueNumber, cache, loadIssue) {
 /**
  * Live per-issue loader for the traversal hot path.
  *
- * Bounded-retried (#1394): the `runGhAsync(...) + JSON.parse(...)` body runs
- * inside {@link withBoundedRetry} so a transient hiccup — including a
- * truncated-stdout JSON parse failure — gets up to 2 additional fresh `gh`
- * round-trips before this loader gives up. `isRetryable` reuses the same
- * `isNotFoundIssueLookupError` / `isInaccessibleIssueLookupError` pair the
- * outer `catch` already classifies with, so a genuine 404 or access-style
- * failure is still recognized on the FIRST attempt (retried zero times,
- * exactly like before this change) and still reaches the outer `catch`
- * below unchanged.
+ * The bounded retry (#1394) and its no-retry-on-404/inaccessible
+ * classifier now live inside `getWorkItemForTraversalAsync` (#2266): the
+ * guard bans importing `withBoundedRetry` into a migrated domain file, so
+ * both moved to the adapter, which is exempt. This loader is now a thin
+ * mapping from the port's found/not-found/inaccessible union back onto the
+ * null/sentinel/raw-item contract `getIssue` (this file's own cache-and-
+ * normalize wrapper) already expects.
  */
-export function buildIssueLoader(owner, repo) {
+export function buildIssueLoader(port) {
   return async (issueNumber) => {
-    const args = [
-      'api',
-      `repos/${owner}/${repo}/issues/${issueNumber}`,
-      '--jq',
-      '.',
-    ];
-    try {
-      return await withBoundedRetry(
-        async () => {
-          const result = (
-            await runGhAsync(args, { allowStatuses: [404] })
-          ).trim();
-          if (!result || result === 'null') {
-            return null;
-          }
-          return JSON.parse(result);
-        },
-        {
-          isRetryable: (error) =>
-            !isNotFoundIssueLookupError(error) &&
-            !isInaccessibleIssueLookupError(error),
-        },
-      );
-    } catch (error) {
-      if (isNotFoundIssueLookupError(error)) {
-        return null;
-      }
-      if (isInaccessibleIssueLookupError(error)) {
-        return INACCESSIBLE_ISSUE_SENTINEL;
-      }
-      throw error;
+    const result = await port.getWorkItemForTraversalAsync(issueNumber);
+    if (result.outcome === 'not-found') {
+      return null;
     }
+    if (result.outcome === 'inaccessible') {
+      return INACCESSIBLE_ISSUE_SENTINEL;
+    }
+    return result.item;
   };
 }
 /**
  * Live sub-issue loader for the traversal hot path.
  *
- * Bounded-retried (#1394): each page's `runGraphqlQuery(...)` call runs
- * inside {@link withBoundedRetry} with the default retry-everything
- * classifier — unlike {@link buildIssueLoader}, this loader has no
- * pre-existing REST-status-based classification to preserve, and every
- * failure `runGraphqlQuery` can produce today (a transient truncated-stdout
- * parse failure, a reported GraphQL `errors[]` entry, or a process-exec
- * failure) already rethrows unclassified. A genuinely persistent failure
- * (e.g. an inaccessible parent issue) still rethrows, just after up to 2
- * extra bounded round-trips instead of 0 — a small, deliberate latency cost,
- * not a fail-closed regression. The connection/cursor-shape checks below
- * stay un-retried on purpose: they only fire once `runGraphqlQuery` already
- * resolved without a transport/parse error, so retrying them would not
- * change the outcome.
+ * The per-page bounded retry (#1394) and both fail-fasts (an absent
+ * `subIssues` connection; `hasNextPage` with a missing `endCursor`) now
+ * live inside `listWorkItemSubIssueNodesAsync` (#2266), for the same
+ * guard-import reason as `buildIssueLoader`/`buildCommentLoader` above.
+ * `normalizeSubIssueNumbers` (the coercion-plus-dedup this loader always
+ * deferred to) stays here and is applied once to the full, already-
+ * flattened node list the port method returns across every page, rather
+ * than once per page then again at the end -- the same final Set, reached
+ * in one call instead of two.
  */
-export function buildSubIssueLoader(owner, repo) {
+export function buildSubIssueLoader(port) {
   return async (issueNumber) => {
-    const numbers = [];
-    let after = '';
-    while (true) {
-      const variables = {
-        owner,
-        repo,
-        number: issueNumber,
-      };
-      if (after) {
-        variables.after = after;
-      }
-      const result = await withBoundedRetry(() =>
-        runGraphqlQuery(SUB_ISSUES_QUERY, variables),
-      );
-      const connection = result?.data?.repository?.issue?.subIssues;
-      if (
-        !connection ||
-        !Array.isArray(connection.nodes) ||
-        !connection.pageInfo
-      ) {
-        throw new Error(
-          `subIssues connection missing for issue #${issueNumber}`,
-        );
-      }
-      numbers.push(...normalizeSubIssueNumbers(connection.nodes));
-      if (!connection.pageInfo.hasNextPage) {
-        break;
-      }
-      if (!connection.pageInfo.endCursor) {
-        throw new Error(
-          `subIssues pagination cursor missing for issue #${issueNumber}`,
-        );
-      }
-      after = String(connection.pageInfo.endCursor);
-    }
-    return [...new Set(numbers)];
+    const nodes = await port.listWorkItemSubIssueNodesAsync(issueNumber);
+    return normalizeSubIssueNumbers(nodes);
   };
 }
 /**
@@ -2239,62 +2095,24 @@ function normalizeSearchIssueNumber(issue) {
  * Pull requests are excluded by default (`--include-prs` is never passed),
  * matching the old scan which only ever saw issues from the issues
  * connection.
+ *
+ * Constructs its own port per call from the query's own `owner`/`repo`
+ * (#2266), matching `buildRoadmapMarkerResolver`'s established pattern:
+ * `SearchIssuesFn`'s existing per-call `owner`/`repo` shape is
+ * `buildOpenRoadmapRootsLoader`'s own test seam, unrelated to and
+ * predating the port migration, so it stays untouched here rather than
+ * threading a `ProviderPort` through that loader's signature and its
+ * five existing tests for a call site those tests never exercise anyway
+ * (they inject `searchIssues` directly).
  */
 function buildSearchIssuesRunner() {
-  return ({ owner, repo, label, matchBody, fields }) => {
-    const args = [
-      'search',
-      'issues',
-      '--repo',
-      `${owner}/${repo}`,
-      '--state',
-      'open',
-      '--limit',
-      String(GH_SEARCH_RESULT_CAP),
-      '--json',
-      fields.join(','),
-    ];
-    if (label) {
-      args.push('--label', label);
-    }
-    if (matchBody) {
-      // Restrict the free-text query to the body field, then pass the token
-      // as the positional search query.
-      args.push('--match', 'body', matchBody);
-    }
-    const raw = runGh(args).trim();
-    const parsed = raw && raw !== 'null' ? JSON.parse(raw) : [];
-    return Array.isArray(parsed) ? parsed : [];
-  };
-}
-/**
- * Async GraphQL runner for the traversal sub-issue loader. Its sole caller
- * (`buildSubIssueLoader`) is already async, so the runner uses the non-blocking
- * `execFile` path — letting several sub-issue queries run in parallel under the
- * prefetch crawl — while keeping the exact arg construction, error-array
- * detection, and `gh api graphql failed: …` wrapping of the previous sync form.
- */
-async function runGraphqlQuery(query, variables) {
-  const args = ['api', 'graphql', '-f', `query=${query}`];
-  for (const [name, value] of Object.entries(variables)) {
-    if (value === '' || value === null || value === undefined) {
-      continue;
-    }
-    const flag = typeof value === 'number' ? '-F' : '-f';
-    args.push(flag, `${name}=${value}`);
-  }
-  try {
-    const stdout = await runGhCapture(args);
-    const parsed = JSON.parse(stdout.trim() || '{}');
-    if (Array.isArray(parsed.errors) && parsed.errors.length > 0) {
-      throw new Error(formatGraphqlErrors(parsed.errors));
-    }
-    return parsed;
-  } catch (error) {
-    const stderr = String(error?.stderr ?? '').trim();
-    const detail = stderr || error.message;
-    throw new Error(`gh api graphql failed: ${detail}`);
-  }
+  return ({ owner, repo, label, matchBody, fields }) =>
+    createGithubProviderAdapter(owner, repo).searchOpenWorkItems({
+      label,
+      matchBody,
+      fields,
+      limit: GH_SEARCH_RESULT_CAP,
+    });
 }
 // Read-and-parse failure semantics (explicit path throws; default path
 // silently falls back only on ENOENT) are converged in idd-config.mts's
@@ -2306,89 +2124,8 @@ async function runGraphqlQuery(query, variables) {
 function loadPolicy(policyPath) {
   return loadPolicyConfig(policyPath).config ?? {};
 }
-/**
- * Normalize a failed-`gh` error's exit status to a number.
- *
- * The synchronous `execFileSync` runner exposes the process exit code on
- * `.status`; the promisified `execFile` runner exposes it on `.code`. Read
- * `.status` first (sync), then fall back to `.code` (async), keeping only a
- * numeric value so a spawn-error string code (e.g. `ENOENT`) resolves to
- * `null` exactly as the previous sync-only path did.
- */
-function resolveGhExitStatus(error) {
-  const candidate = error;
-  const rawStatus = candidate?.status ?? candidate?.code;
-  return typeof rawStatus === 'number' ? rawStatus : null;
-}
-/**
- * Wrap a failed-`gh` error into the canonical `{ status, stderr }` shape that
- * the issue-lookup classifiers (`isNotFoundIssueLookupError` /
- * `isInaccessibleIssueLookupError`) read, so the sync and async runners produce
- * byte-identical errors. Returns `''` when the exit status is tolerated
- * (`allowStatuses`); otherwise throws the wrapped error.
- */
-function wrapGhFailure(error, args, allowStatuses) {
-  const status = resolveGhExitStatus(error);
-  if (status !== null && allowStatuses.includes(status)) {
-    return '';
-  }
-  const stderr = String(error?.stderr ?? '').trim();
-  const prefix = `gh ${args.join(' ')}`;
-  const wrapped = new Error(
-    stderr ? `${prefix} failed: ${stderr}` : `${prefix} failed`,
-  );
-  wrapped.status = status;
-  wrapped.stderr = stderr;
-  throw wrapped;
-}
-function runGh(args, options = {}) {
-  const { allowStatuses = [] } = options;
-  try {
-    return ghText(args, GH_TEXT_LOOP_OPTIONS);
-  } catch (error) {
-    return wrapGhFailure(error, args, allowStatuses);
-  }
-}
-/**
- * Async sibling of {@link runGh} used only by the traversal hot-path loaders
- * (`buildIssueLoader` / `buildSubIssueLoader`), so the bounded prefetch crawl
- * can keep several `gh` subprocesses in flight. Behaviorally identical to
- * {@link runGh}: same tolerated-status handling and the same wrapped-error
- * shape (via {@link wrapGhFailure}).
- */
-async function runGhAsync(args, options = {}) {
-  const { allowStatuses = [] } = options;
-  try {
-    const stdout = await runGhCapture(args);
-    return stdout;
-  } catch (error) {
-    return wrapGhFailure(error, args, allowStatuses);
-  }
-}
 function isInaccessibleIssue(value) {
   return value?.__iddLookupStatus === 'inaccessible';
-}
-function isInaccessibleIssueLookupError(error) {
-  if (!error) {
-    return false;
-  }
-  const rawStatus = error.status;
-  const status = typeof rawStatus === 'number' ? rawStatus : null;
-  if (status !== null && INACCESSIBLE_HTTP_STATUSES.has(status)) {
-    return true;
-  }
-  const stderr = String(error.stderr ?? '');
-  return /Resource not accessible|access denied|Forbidden|Unavailable for legal reasons/i.test(
-    stderr,
-  );
-}
-function isNotFoundIssueLookupError(error) {
-  if (!error) {
-    return false;
-  }
-  const candidate = error;
-  const stderr = String(candidate.stderr ?? candidate.message ?? '');
-  return stderr.includes('HTTP 404');
 }
 function buildEdgeKey(edge) {
   return `${edge.source}:${edge.target}:${edge.relationship}:${edge.evidence}`;
@@ -2442,11 +2179,6 @@ function compareCycles(left, right) {
     left.path.length - right.path.length ||
     left.path.join('>').localeCompare(right.path.join('>'))
   );
-}
-function formatGraphqlErrors(errors) {
-  return errors
-    .map((error) => String(error?.message ?? 'unknown GraphQL error'))
-    .join('; ');
 }
 function escapeRegex(value) {
   return String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');

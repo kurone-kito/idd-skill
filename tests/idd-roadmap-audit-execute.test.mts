@@ -25,11 +25,11 @@ import {
   type RoadmapAuditExecuteDeps,
   reconcileConnectedOpenPrs,
   resolveOpenLinkedPrIssues,
-  resolveViewerLogin,
   runRoadmapAuditExecute,
   safeHasTrustedCompletionEvidence,
 } from '../src/scripts/idd-roadmap-audit-execute.mts';
 import { renderClaimedByMarker } from '../src/scripts/protocol-helpers.mts';
+import { createFakeProviderAdapter } from '../src/scripts/provider-adapter-fake.mts';
 
 const ROADMAP = 995;
 const CLAIM_ID = 'claim-20260626T000000Z-995';
@@ -399,137 +399,66 @@ test('a closed child with an OPEN CONNECTED-only PR yields an open-linked-pr blo
 });
 
 // ---------------------------------------------------------------------------
-// resolveOpenLinkedPrIssues (injected GraphQL runner) — absent-connection
-// fail-closed distinction
+// resolveOpenLinkedPrIssues (#2266: routed through ProviderPort). The
+// absent-issue/absent-connection fail-closed distinction previously covered
+// here moved to provider-adapter-github.test.mts's dedicated
+// getWorkItemClosingPullRequestsPage/getConnectedPullRequestEventsPage
+// tests, since that throw is now the adapter's own contract, not logic this
+// file owns; a generic "any lookup failure blocks" test replaces them below.
 // ---------------------------------------------------------------------------
 
-// Build a fake page runner that answers the closing-refs vs timeline queries.
-function fakeGraphqlRunner(responses: {
-  closing?: unknown;
-  timeline?: unknown;
-}) {
-  return (query: string) =>
-    query.includes('timelineItems') ? responses.timeline : responses.closing;
-}
-
-test('resolveOpenLinkedPrIssues fails closed when the issue node is null/absent', () => {
-  const runner = fakeGraphqlRunner({
-    closing: { data: { repository: { issue: null } } },
-    timeline: { data: { repository: { issue: null } } },
-  });
-  assert.deepEqual(resolveOpenLinkedPrIssues('o', 'r', [1048], runner), [1048]);
-});
-
-test('resolveOpenLinkedPrIssues fails closed when a lookup connection is null/absent', () => {
-  // Present (empty) timeline, but a null closing-refs connection → blocked.
-  const runner = fakeGraphqlRunner({
-    closing: {
-      data: { repository: { issue: { closedByPullRequestsReferences: null } } },
-    },
-    timeline: {
-      data: {
-        repository: {
-          issue: {
-            timelineItems: { nodes: [], pageInfo: { hasNextPage: false } },
-          },
-        },
-      },
-    },
-  });
-  assert.deepEqual(resolveOpenLinkedPrIssues('o', 'r', [1048], runner), [1048]);
+test('resolveOpenLinkedPrIssues fails closed when a page lookup throws', () => {
+  const port = createFakeProviderAdapter({});
+  port.getWorkItemClosingPullRequestsPage = () => {
+    throw new Error('lookup failed');
+  };
+  assert.deepEqual(resolveOpenLinkedPrIssues(port, [1048]), [1048]);
 });
 
 test('resolveOpenLinkedPrIssues does NOT block a present-but-empty connection', () => {
-  const runner = fakeGraphqlRunner({
-    closing: {
-      data: {
-        repository: {
-          issue: {
-            closedByPullRequestsReferences: {
-              nodes: [],
-              pageInfo: { hasNextPage: false },
-            },
-          },
-        },
-      },
+  const port = createFakeProviderAdapter({
+    closingPullRequestPages: {
+      1048: [{ nodes: [], hasNextPage: false, endCursor: null }],
     },
-    timeline: {
-      data: {
-        repository: {
-          issue: {
-            timelineItems: { nodes: [], pageInfo: { hasNextPage: false } },
-          },
-        },
-      },
+    connectedPrEventPages: {
+      1048: [{ events: [], hasNextPage: false, endCursor: null }],
     },
   });
-  assert.deepEqual(resolveOpenLinkedPrIssues('o', 'r', [1048], runner), []);
+  assert.deepEqual(resolveOpenLinkedPrIssues(port, [1048]), []);
 });
 
 test('resolveOpenLinkedPrIssues blocks a present connection with an OPEN closing PR', () => {
-  const runner = fakeGraphqlRunner({
-    closing: {
-      data: {
-        repository: {
-          issue: {
-            closedByPullRequestsReferences: {
-              nodes: [{ state: 'OPEN' }],
-              pageInfo: { hasNextPage: false },
-            },
-          },
-        },
-      },
+  const port = createFakeProviderAdapter({
+    closingPullRequestPages: {
+      1048: [
+        { nodes: [{ state: 'OPEN' }], hasNextPage: false, endCursor: null },
+      ],
     },
   });
-  assert.deepEqual(resolveOpenLinkedPrIssues('o', 'r', [1048], runner), [1048]);
+  assert.deepEqual(resolveOpenLinkedPrIssues(port, [1048]), [1048]);
 });
 
 test('resolveOpenLinkedPrIssues fails closed on a truncated closing-PR page (hasNextPage, no endCursor)', () => {
-  const runner = fakeGraphqlRunner({
-    closing: {
-      data: {
-        repository: {
-          issue: {
-            closedByPullRequestsReferences: {
-              nodes: [{ state: 'MERGED' }],
-              pageInfo: { hasNextPage: true, endCursor: null },
-            },
-          },
-        },
-      },
+  const port = createFakeProviderAdapter({
+    closingPullRequestPages: {
+      1048: [
+        { nodes: [{ state: 'MERGED' }], hasNextPage: true, endCursor: null },
+      ],
     },
   });
-  assert.deepEqual(resolveOpenLinkedPrIssues('o', 'r', [1048], runner), [1048]);
+  assert.deepEqual(resolveOpenLinkedPrIssues(port, [1048]), [1048]);
 });
 
 test('resolveOpenLinkedPrIssues fails closed on a truncated connected-PR timeline (hasNextPage, no endCursor)', () => {
-  const runner = fakeGraphqlRunner({
-    closing: {
-      data: {
-        repository: {
-          issue: {
-            closedByPullRequestsReferences: {
-              nodes: [],
-              pageInfo: { hasNextPage: false },
-            },
-          },
-        },
-      },
+  const port = createFakeProviderAdapter({
+    closingPullRequestPages: {
+      1048: [{ nodes: [], hasNextPage: false, endCursor: null }],
     },
-    timeline: {
-      data: {
-        repository: {
-          issue: {
-            timelineItems: {
-              nodes: [],
-              pageInfo: { hasNextPage: true, endCursor: null },
-            },
-          },
-        },
-      },
+    connectedPrEventPages: {
+      1048: [{ events: [], hasNextPage: true, endCursor: null }],
     },
   });
-  assert.deepEqual(resolveOpenLinkedPrIssues('o', 'r', [1048], runner), [1048]);
+  assert.deepEqual(resolveOpenLinkedPrIssues(port, [1048]), [1048]);
 });
 
 test('unresolved, inaccessible, and cycle diagnostics each surface a blocker', () => {
@@ -1200,28 +1129,6 @@ test('viewerLoginUnavailable: true does not appear when the lookup succeeded', a
   );
 
   assert.equal(Object.hasOwn(verdict, 'viewerLoginUnavailable'), false);
-});
-
-// ---------------------------------------------------------------------------
-// resolveViewerLogin (injectable viewer-login lookup, #1396)
-// ---------------------------------------------------------------------------
-
-test('resolveViewerLogin normalizes a successful login to lowercase', () => {
-  const result = resolveViewerLogin(() => 'Some-User');
-  assert.deepEqual(result, {
-    viewerLogin: 'some-user',
-    viewerLoginUnavailable: false,
-  });
-});
-
-test('resolveViewerLogin reports unavailable when fetchLogin returns null (production already caught a throw)', () => {
-  const result = resolveViewerLogin(() => null);
-  assert.deepEqual(result, { viewerLogin: '', viewerLoginUnavailable: true });
-});
-
-test('resolveViewerLogin reports unavailable on a blank-but-successful response', () => {
-  const result = resolveViewerLogin(() => '   ');
-  assert.deepEqual(result, { viewerLogin: '', viewerLoginUnavailable: true });
 });
 
 // ---------------------------------------------------------------------------

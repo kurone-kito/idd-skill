@@ -35,7 +35,6 @@ import {
   type RoadmapCycleDiagnostic,
   type RoadmapGraphReport,
 } from './discover-roadmap-graph.mts';
-import { GH_TEXT_LOOP_OPTIONS, ghText } from './gh-exec.mts';
 import { loadPolicyConfig } from './idd-config.mts';
 import { normalizePolicyConfig, POLICY_DEFAULTS } from './policy-helpers.mts';
 import type { ClaimValidationSummary } from './protocol-helpers.mts';
@@ -44,6 +43,11 @@ import {
   resolveTrustedMarkerActors,
   summarizeClaimValidation,
 } from './protocol-helpers.mts';
+import {
+  createGithubProviderAdapter,
+  resolveCurrentGithubRepository,
+} from './provider-adapter-github.mts';
+import type { ProviderPort } from './provider-port.mts';
 
 const DEFAULT_MARKER_PREFIX = 'idd-skill';
 // Distributed `claim-stale-age` default (docs/policy-constants.md: 24 h). Used
@@ -1219,9 +1223,10 @@ export function hasTrustedCompletionEvidenceComment(
  * ever meant to convert one already-provable claim-loss shape into a nicer
  * idempotent success — it must never leave the helper worse off than the
  * pre-existing fail-closed `claim not owned …; no mutation` exit it sits in
- * front of. Production wires this around the live `gh` comment fetch, whose
- * `ghText` throws on any non-zero exit (transient network blip, rate limit,
- * auth hiccup): without this wrapper such a failure would crash the whole
+ * front of. Production wires this around the live comment fetch
+ * (`port.listWorkItemComments`), which throws on any non-zero `gh` exit
+ * (transient network blip, rate limit, auth hiccup): without this wrapper
+ * such a failure would crash the whole
  * helper instead of falling through to that already-correct fail-closed
  * message (flagged by Copilot review on PR #1303). Pure given a
  * non-throwing `check`, so the catch behavior itself is unit-testable
@@ -1626,72 +1631,19 @@ function normalizeApplyNow(raw: string): string | null {
 // Production dependency wiring (live gh + roadmap-graph traversal).
 // ---------------------------------------------------------------------------
 
-/**
- * Fetch the authenticated actor's own GitHub login via `gh api user`, or
- * `null` on any failure (e.g. an under-scoped or expired token). Uses the
- * throwing {@link ghText} (not `safeGhText`) wrapped in a local try/catch so
- * a genuine failure is distinguishable from a merely-empty response — the
- * distinction {@link resolveViewerLogin} needs to report
- * `viewerLoginUnavailable` instead of silently treating a failed lookup the
- * same as an anonymous one (#1396).
- */
-function fetchViewerLogin(): string | null {
-  try {
-    return ghText(['api', 'user', '--jq', '.login'], GH_TEXT_LOOP_OPTIONS);
-  } catch {
-    return null;
-  }
-}
-
-/**
- * Resolve the viewer login used to always-trust the current claimant (see
- * {@link buildTrustedAuthorPredicate}), distinguishing a genuinely failed
- * lookup from an empty one instead of collapsing both to `''` (#1396). A
- * previously silent failure here excluded the real claimant from the
- * trusted-author set with no signal that the LOOKUP, not the claim itself,
- * was the problem, so a `not owned` verdict could be misread as a genuine
- * claim conflict.
- *
- * `fetchLogin` defaults to the real {@link fetchViewerLogin} network call but
- * is injectable so both outcomes (success and failure) are unit-testable
- * without shelling out to `gh`. A successful-but-blank response (`''` or
- * whitespace-only) is also reported as unavailable: an authenticated `gh api
- * user` call should never legitimately return an empty login, so a blank
- * result signals a degraded response rather than a real anonymous viewer.
- */
-export function resolveViewerLogin(
-  fetchLogin: () => string | null = fetchViewerLogin,
-): { viewerLogin: string; viewerLoginUnavailable: boolean } {
-  const raw = fetchLogin();
-  const normalized = String(raw ?? '')
-    .trim()
-    .toLowerCase();
-  if (raw === null || normalized === '') {
-    return { viewerLogin: '', viewerLoginUnavailable: true };
-  }
-  return { viewerLogin: normalized, viewerLoginUnavailable: false };
-}
-
 function createProductionDeps(
   args: RoadmapAuditExecuteArgs,
 ): RoadmapAuditExecuteDeps {
-  const owner =
-    args.owner ||
-    ghText(
-      ['repo', 'view', '--json', 'owner', '--jq', '.owner.login'],
-      GH_TEXT_LOOP_OPTIONS,
-    );
-  const repo =
-    args.repo ||
-    ghText(
-      ['repo', 'view', '--json', 'name', '--jq', '.name'],
-      GH_TEXT_LOOP_OPTIONS,
-    );
+  const currentRepo =
+    args.owner && args.repo ? null : resolveCurrentGithubRepository();
+  const owner = args.owner || currentRepo?.owner || '';
+  const repo = args.repo || currentRepo?.repo || '';
+  const port = createGithubProviderAdapter(owner, repo);
   const rawConfig = loadPolicy(args.policy);
   const markerPrefix = normalizeMarkerPrefix(
     (rawConfig as { markerPrefix?: unknown }).markerPrefix,
   );
-  const { viewerLogin, viewerLoginUnavailable } = resolveViewerLogin();
+  const { viewerLogin, viewerLoginUnavailable } = port.resolveViewerLoginSafe();
   const isTrustedAuthor = buildTrustedAuthorPredicate({
     owner,
     viewerLogin,
@@ -1706,8 +1658,8 @@ function createProductionDeps(
         ?.claimTiming?.staleAge,
     ) ?? DEFAULT_CLAIM_STALE_AGE_MS;
   const labelsPolicy = normalizePolicyConfig(rawConfig).labels;
-  const loadIssue = buildIssueLoader(owner, repo);
-  const loadSubIssues = buildSubIssueLoader(owner, repo);
+  const loadIssue = buildIssueLoader(port);
+  const loadSubIssues = buildSubIssueLoader(port);
 
   return {
     collect: (roadmapNumber) =>
@@ -1720,7 +1672,7 @@ function createProductionDeps(
         loadSubIssues,
       }),
     resolveOpenLinkedPrIssues: (issueNumbers) =>
-      resolveOpenLinkedPrIssues(owner, repo, issueNumbers),
+      resolveOpenLinkedPrIssues(port, issueNumbers),
     blockedByHumanLabelName: labelsPolicy.blockedByHumanLabelName,
     needsDecisionLabelName: labelsPolicy.needsDecisionLabelName,
     viewerLoginUnavailable,
@@ -1731,7 +1683,7 @@ function createProductionDeps(
       expectedAgentId,
       nowIso,
     }) =>
-      evaluateRoadmapClaim(loadIssueComments(owner, repo, issueNumber), {
+      evaluateRoadmapClaim(loadIssueComments(port, issueNumber), {
         roadmapNumber,
         expectedClaimId,
         expectedAgentId,
@@ -1742,32 +1694,19 @@ function createProductionDeps(
     hasTrustedCompletionEvidence: (roadmapNumber) =>
       safeHasTrustedCompletionEvidence(() =>
         hasTrustedCompletionEvidenceComment(
-          loadIssueComments(owner, repo, roadmapNumber),
+          loadIssueComments(port, roadmapNumber),
           isTrustedAuthor,
         ),
       ),
-    postEvidenceComment: (issueNumber, body) =>
-      postIssueComment(owner, repo, issueNumber, body),
-    closeRoadmap: (issueNumber) =>
-      ghText(
-        [
-          'issue',
-          'close',
-          String(issueNumber),
-          '--repo',
-          `${owner}/${repo}`,
-          '--reason',
-          'completed',
-        ],
-        GH_TEXT_LOOP_OPTIONS,
-      ),
-    releaseClaim: (issueNumber, fields) =>
-      postIssueComment(
-        owner,
-        repo,
-        issueNumber,
-        renderUnclaimedByMarker(fields),
-      ),
+    postEvidenceComment: (issueNumber, body) => {
+      port.postWorkItemComment(issueNumber, body);
+    },
+    closeRoadmap: (issueNumber) => {
+      port.closeWorkItem(issueNumber, 'completed');
+    },
+    releaseClaim: (issueNumber, fields) => {
+      port.postWorkItemComment(issueNumber, renderUnclaimedByMarker(fields));
+    },
     // Honor a caller-supplied --now (deterministic staleness + release
     // timestamps for tests / replays); fall back to the wall clock.
     now: () => args.now || new Date().toISOString(),
@@ -1814,47 +1753,14 @@ function buildTrustedAuthorPredicate({
 
 /** Load every issue comment (paginated) as the claim-marker event stream. */
 function loadIssueComments(
-  owner: string,
-  repo: string,
+  port: ProviderPort,
   issueNumber: number,
 ): { body: string; createdAt: string; author: { login: string } }[] {
-  const comments: unknown[] = [];
-  const pageSize = 100;
-  for (let page = 1; ; page += 1) {
-    const raw = ghText(
-      [
-        'api',
-        `repos/${owner}/${repo}/issues/${issueNumber}/comments?per_page=${pageSize}&page=${page}`,
-        '--jq',
-        '.',
-      ],
-      GH_TEXT_LOOP_OPTIONS,
-    );
-    const pageItems = raw && raw !== 'null' ? JSON.parse(raw) : [];
-    if (!Array.isArray(pageItems) || pageItems.length === 0) {
-      break;
-    }
-    comments.push(...pageItems);
-    if (pageItems.length < pageSize) {
-      break;
-    }
-  }
-  return comments.map((entry) => {
-    const comment = (entry ?? {}) as {
-      body?: unknown;
-      created_at?: unknown;
-      createdAt?: unknown;
-      user?: { login?: unknown } | null;
-      author?: { login?: unknown } | null;
-    };
-    return {
-      body: String(comment.body ?? ''),
-      createdAt: String(comment.createdAt ?? comment.created_at ?? ''),
-      author: {
-        login: String(comment.author?.login ?? comment.user?.login ?? ''),
-      },
-    };
-  });
+  return port.listWorkItemComments(issueNumber).map((comment) => ({
+    body: comment.body,
+    createdAt: comment.createdAt,
+    author: { login: comment.authorLogin },
+  }));
 }
 
 /**
@@ -1878,21 +1784,21 @@ function loadIssueComments(
  * — a deleted / transferred / inaccessible issue, or partial GraphQL data),
  * treats the issue as blocked. An absent connection is distinct from a
  * genuinely present-but-empty `nodes: []` (legitimately no PR on that signal),
- * which does NOT block on that signal. The GraphQL runner is injectable so the
- * absence distinction is unit-testable without `gh`.
+ * which does NOT block on that signal -- getWorkItemClosingPullRequestsPage/
+ * getConnectedPullRequestEventsPage throw on the absent case (verified via
+ * their own dedicated adapter tests), so a per-issue lookup error and an
+ * absent connection both simply reach the same catch below.
  */
 export function resolveOpenLinkedPrIssues(
-  owner: string,
-  repo: string,
+  port: ProviderPort,
   issueNumbers: number[],
-  runGraphql: LinkedPrGraphqlRunner = ghGraphql,
 ): number[] {
   const blocked: number[] = [];
   for (const issueNumber of issueNumbers) {
     try {
       if (
-        hasOpenClosingPr(owner, repo, issueNumber, runGraphql) ||
-        hasOpenConnectedPr(owner, repo, issueNumber, runGraphql)
+        hasOpenClosingPr(port, issueNumber) ||
+        hasOpenConnectedPr(port, issueNumber)
       ) {
         blocked.push(issueNumber);
       }
@@ -1904,87 +1810,24 @@ export function resolveOpenLinkedPrIssues(
   return blocked;
 }
 
-/** One paginated `gh api graphql` page runner (injectable for tests). */
-type LinkedPrGraphqlRunner = (
-  query: string,
-  owner: string,
-  repo: string,
-  issueNumber: number,
-  after: string | null,
-) => unknown;
-
-/**
- * Narrow a parsed GraphQL response to the named connection on its issue node,
- * THROWING (→ fail closed) when the issue is `null`/absent or the connection
- * itself is `null`/`undefined`. A present connection (even with empty `nodes`)
- * is returned as-is so a legitimately PR-free issue is not treated as blocked.
- */
-function requireIssueConnection<T>(
-  parsed: unknown,
-  pick: (issue: Record<string, unknown>) => T | null | undefined,
-  label: string,
-): T {
-  const issue = (
-    parsed as {
-      data?: { repository?: { issue?: Record<string, unknown> | null } | null };
-    } | null
-  )?.data?.repository?.issue;
-  if (issue === null || issue === undefined) {
-    throw new Error(`${label}: issue is null/absent (fail closed)`);
-  }
-  const connection = pick(issue);
-  if (connection === null || connection === undefined) {
-    throw new Error(`${label}: connection is null/absent (fail closed)`);
-  }
-  return connection;
-}
-
 /**
  * True when the issue has an OPEN PR that reference-closes it. Pages through
  * `closedByPullRequestsReferences` and short-circuits on the first OPEN PR
  * (one is enough to block); truncating the list could miss an OPEN blocker on
  * a later page, wrongly green-lighting a close. Throws (→ blocked) on an absent
- * connection.
+ * connection (getWorkItemClosingPullRequestsPage's own contract).
  */
-function hasOpenClosingPr(
-  owner: string,
-  repo: string,
-  issueNumber: number,
-  runGraphql: LinkedPrGraphqlRunner,
-): boolean {
-  const query = `query($owner:String!,$repo:String!,$number:Int!,$after:String){
-  repository(owner:$owner,name:$repo){
-    issue(number:$number){
-      closedByPullRequestsReferences(first:50,after:$after,includeClosedPrs:false){
-        nodes { state }
-        pageInfo { hasNextPage endCursor }
-      }
-    }
-  }
-}`;
+function hasOpenClosingPr(port: ProviderPort, issueNumber: number): boolean {
   let after: string | null = null;
   for (;;) {
-    const parsed = runGraphql(query, owner, repo, issueNumber, after);
-    const connection = requireIssueConnection(
-      parsed,
-      (issue) =>
-        issue.closedByPullRequestsReferences as
-          | {
-              nodes?: { state?: unknown }[] | null;
-              pageInfo?: { hasNextPage?: boolean; endCursor?: string | null };
-            }
-          | null
-          | undefined,
-      'closedByPullRequestsReferences',
-    );
-    const nodes = connection.nodes ?? [];
-    if (nodes.some((node) => String(node?.state ?? '') === 'OPEN')) {
+    const page = port.getWorkItemClosingPullRequestsPage(issueNumber, after);
+    if (page.nodes.some((node) => String(node?.state ?? '') === 'OPEN')) {
       return true;
     }
-    if (!connection.pageInfo?.hasNextPage) {
+    if (!page.hasNextPage) {
       return false;
     }
-    after = connection.pageInfo.endCursor ?? null;
+    after = page.endCursor ?? null;
     if (!after) {
       // hasNextPage with no endCursor: an incomplete / unexpected connection
       // read. Throw so the per-issue catch fails closed (blocks the child)
@@ -2001,49 +1844,19 @@ function hasOpenClosingPr(
  * relationship without a closing keyword). Pages the CONNECTED/DISCONNECTED
  * timeline in full — the whole stream is needed so a later DISCONNECTED is not
  * missed — then reconciles it via the pure {@link reconcileConnectedOpenPrs}.
- * Throws (→ blocked) on an absent connection.
+ * Throws (→ blocked) on an absent connection
+ * (getConnectedPullRequestEventsPage's own contract).
  */
-function hasOpenConnectedPr(
-  owner: string,
-  repo: string,
-  issueNumber: number,
-  runGraphql: LinkedPrGraphqlRunner,
-): boolean {
-  const query = `query($owner:String!,$repo:String!,$number:Int!,$after:String){
-  repository(owner:$owner,name:$repo){
-    issue(number:$number){
-      timelineItems(first:50,after:$after,itemTypes:[CONNECTED_EVENT,DISCONNECTED_EVENT]){
-        nodes {
-          __typename
-          ... on ConnectedEvent { subject { __typename ... on PullRequest { number state } } }
-          ... on DisconnectedEvent { subject { __typename ... on PullRequest { number } } }
-        }
-        pageInfo { hasNextPage endCursor }
-      }
-    }
-  }
-}`;
+function hasOpenConnectedPr(port: ProviderPort, issueNumber: number): boolean {
   const events: ConnectedPrEvent[] = [];
   let after: string | null = null;
   for (;;) {
-    const parsed = runGraphql(query, owner, repo, issueNumber, after);
-    const connection = requireIssueConnection(
-      parsed,
-      (issue) =>
-        issue.timelineItems as
-          | {
-              nodes?: unknown[] | null;
-              pageInfo?: { hasNextPage?: boolean; endCursor?: string | null };
-            }
-          | null
-          | undefined,
-      'timelineItems',
-    );
-    events.push(...parseConnectedPrEvents(connection.nodes ?? []));
-    if (!connection.pageInfo?.hasNextPage) {
+    const page = port.getConnectedPullRequestEventsPage(issueNumber, after);
+    events.push(...parseConnectedPrEvents(page.events));
+    if (!page.hasNextPage) {
       break;
     }
-    after = connection.pageInfo.endCursor ?? null;
+    after = page.endCursor ?? null;
     if (!after) {
       // hasNextPage with no endCursor: reconciling a truncated timeline could
       // miss a later CONNECTED open PR. Throw so the per-issue catch fails
@@ -2054,39 +1867,6 @@ function hasOpenConnectedPr(
     }
   }
   return reconcileConnectedOpenPrs(events).length > 0;
-}
-
-/**
- * Run one `gh api graphql` page, passing `after` only when set.
- *
- * Stdin-safe (#1396): called from a per-issue pagination loop
- * (`resolveOpenLinkedPrIssues` → `hasOpenClosingPr` / `hasOpenConnectedPr`),
- * the exact tight-loop hazard `GH_TEXT_LOOP_OPTIONS` exists for — this call
- * site was missed by the initial pass over the file's other `ghText` calls.
- */
-function ghGraphql(
-  query: string,
-  owner: string,
-  repo: string,
-  issueNumber: number,
-  after: string | null,
-): unknown {
-  const apiArgs = [
-    'api',
-    'graphql',
-    '-f',
-    `query=${query}`,
-    '-f',
-    `owner=${owner}`,
-    '-f',
-    `repo=${repo}`,
-    '-F',
-    `number=${issueNumber}`,
-  ];
-  if (after) {
-    apiArgs.push('-f', `after=${after}`);
-  }
-  return JSON.parse(ghText(apiArgs, GH_TEXT_LOOP_OPTIONS));
 }
 
 /** Coerce raw CONNECTED/DISCONNECTED timeline nodes into reconcile events. */
@@ -2125,25 +1905,6 @@ function parseConnectedPrEvents(nodes: unknown[]): ConnectedPrEvent[] {
  * unclaim marker) are silently dropped by `gh issue comment` / `gh api -f
  * body=`; the same path is reused for the evidence comment for consistency.
  */
-function postIssueComment(
-  owner: string,
-  repo: string,
-  issueNumber: number,
-  body: string,
-): void {
-  ghText(
-    [
-      'api',
-      '--method',
-      'POST',
-      `repos/${owner}/${repo}/issues/${issueNumber}/comments`,
-      '--input',
-      '-',
-    ],
-    { input: JSON.stringify({ body }) },
-  );
-}
-
 // Read-and-parse failure semantics (explicit path throws; default path
 // silently falls back only on ENOENT) are converged in idd-config.mts's
 // loadPolicyConfig (#1721). The `?? {}` preserves this helper's existing

@@ -9,30 +9,18 @@ import { execFileSync } from 'node:child_process';
 
 import { parseCliArgs } from './cli-args.mts';
 import {
-  DEFAULT_GH_PAGINATED_TIMEOUT_MS,
-  GH_TEXT_LOOP_TIMEOUT_OPTIONS,
-  ghText,
-} from './gh-exec.mts';
-import { parsePaginatedGhNdjson } from './protocol-helpers.mts';
+  createGithubProviderAdapter,
+  resolveCurrentGithubRepository,
+} from './provider-adapter-github.mts';
+import type {
+  ProviderChangeRequestSummary,
+  ProviderComment,
+  ProviderPort,
+} from './provider-port.mts';
 
 /** Author reference embedded in GitHub REST payloads. */
 interface GhAuthorPayload {
   login?: string | null;
-}
-
-/** Open-PR candidate row returned by `gh pr list`. */
-interface PrCandidatePayload {
-  number?: number;
-  title?: string | null;
-  body?: string | null;
-  url?: string | null;
-}
-
-/** CI status-check entry returned by `gh pr checks`. */
-interface CheckPayload {
-  name?: string | null;
-  state?: string | null;
-  completedAt?: string | null;
 }
 
 /** PR review payload fields consumed by this helper. */
@@ -42,25 +30,10 @@ interface ReviewPayload {
   submitted_at?: string | null;
 }
 
-/** Issue comment payload fields consumed by this helper. */
-interface IssueCommentPayload {
-  created_at?: string | null;
-  user?: GhAuthorPayload | null;
-}
-
 /** Merge-state fields returned by `gh pr view`. */
 interface MergeStatePayload {
   mergeable?: unknown;
   mergeStateStatus?: unknown;
-}
-
-/** GraphQL `reviewThreads` connection slice consumed by this helper. */
-interface ReviewThreadsConnectionPayload {
-  nodes?: { isResolved?: boolean | null }[] | null;
-  pageInfo?: {
-    hasNextPage?: boolean | null;
-    endCursor?: string | null;
-  } | null;
 }
 
 /** Routing input accepted by {@link selectResumeRoute}. */
@@ -261,22 +234,14 @@ function runCli(): void {
     process.env.GITHUB_TOKEN = args.ghToken;
   }
 
-  const owner =
-    args.owner ||
-    ghText(
-      ['repo', 'view', '--json', 'owner', '--jq', '.owner.login'],
-      GH_TEXT_LOOP_TIMEOUT_OPTIONS,
-    );
-  const repo =
-    args.repo ||
-    ghText(
-      ['repo', 'view', '--json', 'name', '--jq', '.name'],
-      GH_TEXT_LOOP_TIMEOUT_OPTIONS,
-    );
-  const repository = `${owner}/${repo}`;
+  const currentRepo =
+    args.owner && args.repo ? null : resolveCurrentGithubRepository();
+  const owner = args.owner || currentRepo?.owner || '';
+  const repo = args.repo || currentRepo?.repo || '';
+  const port = createGithubProviderAdapter(owner, repo);
 
   const routingInput = collectRoutingInput({
-    repository,
+    port,
     issueNumber: args.issue,
   });
   const selected = selectResumeRoute(routingInput);
@@ -306,18 +271,20 @@ function runCli(): void {
 }
 
 function collectRoutingInput({
-  repository,
+  port,
   issueNumber,
 }: {
-  repository: string;
+  port: ProviderPort;
   issueNumber: number | null;
 }) {
-  const prs = findIssueRelatedOpenPrs({ repository, issueNumber });
+  const prs = findIssueRelatedOpenPrs({ port, issueNumber });
   const issuePr = prs.length === 1 ? prs[0] : null;
-  const viewerLogin = ghText(
-    ['api', 'user', '--jq', '.login'],
-    GH_TEXT_LOOP_TIMEOUT_OPTIONS,
-  ).toLowerCase();
+  // resolveViewerLogin's REST leg is the exact gh api user --jq .login call
+  // this file made directly pre-migration (same args, same options
+  // profile); the only behavior delta is a GraphQL fallback attempt on a
+  // 5xx/timeout REST failure before the identical error is re-thrown --
+  // transport hygiene (widened resilience), not a distinct call shape.
+  const viewerLogin = port.resolveViewerLogin().toLowerCase();
   const gitState = collectLocalGitState();
 
   if (!issuePr) {
@@ -343,19 +310,7 @@ function collectRoutingInput({
     };
   }
 
-  const checks = ghJson(
-    [
-      'pr',
-      'checks',
-      String(issuePr.number),
-      '--repo',
-      repository,
-      '--required',
-      '--json',
-      'name,state,completedAt',
-    ],
-    { allowNoRequiredChecks: true },
-  ) as CheckPayload[];
+  const checks = port.listRequiredChecks(issuePr.number);
   const normalizedStates = checks.map((check) =>
     String(check.state ?? '').toLowerCase(),
   );
@@ -368,26 +323,16 @@ function collectRoutingInput({
     !ciFailed &&
     normalizedStates.every((state) => PASS_EQUIVALENT_STATES.has(state));
 
-  const reviewThreads = fetchReviewThreads({
-    owner: repository.split('/')[0],
-    repo: repository.split('/')[1],
-    number: issuePr.number,
-  });
+  const reviewThreads = port.listChangeRequestReviewThreads(issuePr.number);
   const unresolvedThreadCount = reviewThreads.filter(
     (thread) => thread.isResolved === false,
   ).length;
 
-  const reviews = ghApiJson(
-    `repos/${repository}/pulls/${issuePr.number}/reviews`,
-    true,
-  ) as ReviewPayload[];
+  const reviews = port.listReviews(issuePr.number) as ReviewPayload[];
   const changesRequestedCount = countLatestChangesRequestedByReviewer(reviews);
   const reviewExists = unresolvedThreadCount > 0 || reviews.length > 0;
 
-  const comments = ghApiJson(
-    `repos/${repository}/issues/${issuePr.number}/comments`,
-    true,
-  ) as IssueCommentPayload[];
+  const comments = port.listWorkItemComments(issuePr.number);
   const unrepliedCommentCount = countUnrepliedRegularComments(
     comments,
     viewerLogin,
@@ -397,15 +342,19 @@ function collectRoutingInput({
     unrepliedCommentCount > 0 ||
     changesRequestedCount > 0;
 
-  const mergeState = ghJson([
-    'pr',
-    'view',
-    String(issuePr.number),
-    '--repo',
-    repository,
-    '--json',
-    'mergeable,mergeStateStatus',
-  ]) as MergeStatePayload;
+  // Fail closed: getChangeRequest returns null on a 404 rather than
+  // throwing (unlike this file's pre-migration gh pr view, which threw on
+  // any failure). issuePr was resolved moments earlier from the live open-PR
+  // list, so a null here means the PR closed/vanished between the two
+  // calls -- a genuine TOCTOU race, not a routine state; the generic
+  // stdout-on-failure recovery the pre-migration ghJson wrapper also
+  // applied here is dropped as untriggerable (gh pr view --json is not
+  // documented to exit non-zero while still emitting valid JSON, unlike
+  // gh pr checks).
+  const mergeState = port.getChangeRequest(issuePr.number);
+  if (!mergeState) {
+    throw new Error(`PR #${issuePr.number} not found`);
+  }
   const branchState = classifyBranchState(mergeState);
 
   return {
@@ -453,36 +402,25 @@ function detectUnpushedCommits(): boolean {
 }
 
 function findIssueRelatedOpenPrs({
-  repository,
+  port,
   issueNumber,
 }: {
-  repository: string;
+  port: ProviderPort;
   issueNumber: number | null;
-}): PrCandidatePayload[] {
-  const candidates = ghJson([
-    'pr',
-    'list',
-    '--repo',
-    repository,
-    '--state',
-    'open',
-    '--limit',
-    '100',
-    '--json',
-    'number,title,body,url',
-  ]) as PrCandidatePayload[];
+}): ProviderChangeRequestSummary[] {
+  const candidates = port.listOpenChangeRequests();
   const issueRefPattern = new RegExp(`(^|[^0-9])#${issueNumber}([^0-9]|$)`);
-  return candidates.filter((pr) => issueRefPattern.test(String(pr.body ?? '')));
+  return candidates.filter((pr) => issueRefPattern.test(pr.body));
 }
 
 function countUnrepliedRegularComments(
-  comments: IssueCommentPayload[],
+  comments: ProviderComment[],
   viewerLogin: string,
 ): number {
   const sorted = [...comments]
     .map((comment) => ({
-      createdAt: Date.parse(String(comment.created_at ?? '')),
-      author: String(comment.user?.login ?? '').toLowerCase(),
+      createdAt: Date.parse(comment.createdAt),
+      author: comment.authorLogin.toLowerCase(),
     }))
     .filter((comment) => Number.isFinite(comment.createdAt))
     .sort((left, right) => left.createdAt - right.createdAt);
@@ -622,56 +560,6 @@ function decisionTable(): { condition: string; route: string }[] {
   ];
 }
 
-function fetchReviewThreads({
-  owner,
-  repo,
-  number,
-}: {
-  owner: string;
-  repo: string;
-  number: number | undefined;
-}): { isResolved?: boolean | null }[] {
-  const threads: { isResolved?: boolean | null }[] = [];
-  let cursor: string | null | undefined = null;
-  while (true) {
-    const response: ReviewThreadsConnectionPayload | null | undefined = (
-      ghApiGraphqlJson({
-        query:
-          'query($owner:String!, $repo:String!, $number:Int!, $cursor:String) { repository(owner:$owner,name:$repo){ pullRequest(number:$number){ reviewThreads(first:100, after:$cursor){ nodes{ isResolved } pageInfo{ hasNextPage endCursor } } } } }',
-        variables: {
-          owner,
-          repo,
-          number,
-          cursor,
-        },
-      }) as {
-        data?: {
-          repository?: {
-            pullRequest?: {
-              reviewThreads?: ReviewThreadsConnectionPayload | null;
-            } | null;
-          } | null;
-        } | null;
-      }
-    ).data?.repository?.pullRequest?.reviewThreads;
-    const nodes = response?.nodes ?? [];
-    threads.push(...nodes);
-    const pageInfo: ReviewThreadsConnectionPayload['pageInfo'] =
-      response?.pageInfo;
-    if (!pageInfo?.hasNextPage) {
-      break;
-    }
-    // hasNextPage with a missing cursor would silently undercount
-    // unresolved threads; fail fast on the malformed payload instead,
-    // matching the other pagination loops in this cluster.
-    if (!pageInfo.endCursor) {
-      throw new Error('review thread pagination payload is missing endCursor');
-    }
-    cursor = pageInfo.endCursor;
-  }
-  return threads;
-}
-
 function warnDeprecatedFlag(deprecated: string, canonical: string): void {
   process.stderr.write(
     `warning: ${deprecated} is deprecated; use ${canonical} instead.\n`,
@@ -764,111 +652,6 @@ Output schema:
   "evidence": {"rule_trace": ["..."]}
 }
 `);
-}
-
-function ghApiGraphqlJson({
-  query,
-  variables,
-}: {
-  query: string;
-  variables: Record<string, string | number | null | undefined>;
-}): unknown {
-  const args = ['api', 'graphql', '-f', `query=${query}`];
-  for (const [key, value] of Object.entries(variables)) {
-    if (value === null || value === undefined) {
-      continue;
-    }
-    if (Number.isInteger(value)) {
-      args.push('-F', `${key}=${value}`);
-    } else {
-      args.push('-f', `${key}=${value}`);
-    }
-  }
-  return JSON.parse(runGh(args).trim() || '{}');
-}
-
-function ghApiJson(path: string, paginate = false): unknown {
-  const args = ['api', path];
-  if (paginate) {
-    // gh api with --paginate and --jq '.[]' emits one JSON object per line.
-    // --slurp landed in gh v2.48.0, but Ubuntu 24.04 LTS ships gh v2.45.0
-    // via apt, so keep the NDJSON-compatible form here.
-    args.push('--paginate', '--jq', '.[]');
-  }
-  const raw = runGh(args).trim();
-  if (!paginate) {
-    return JSON.parse(raw || '[]');
-  }
-  if (!raw) {
-    return [];
-  }
-  return parsePaginatedGhNdjson(raw);
-}
-
-function ghJson(
-  args: string[],
-  options: { allowNoRequiredChecks?: boolean } = {},
-): unknown {
-  try {
-    return JSON.parse(runGh(args).trim() || '{}');
-  } catch (error) {
-    const recovered = recoverJsonFromGhFailure(error, options);
-    if (recovered.recovered) {
-      return recovered.value;
-    }
-    throw error;
-  }
-}
-
-export function recoverJsonFromGhFailure(
-  error: unknown,
-  options: { allowNoRequiredChecks?: boolean } = {},
-): { recovered: boolean; value: unknown } {
-  const stderr = String((error as { stderr?: unknown } | null)?.stderr ?? '');
-  if (
-    options.allowNoRequiredChecks &&
-    /no required checks reported/i.test(stderr)
-  ) {
-    return { recovered: true, value: [] };
-  }
-
-  const stdout = String(
-    (error as { stdout?: unknown } | null)?.stdout ?? '',
-  ).trim();
-  if (stdout) {
-    return { recovered: true, value: JSON.parse(stdout) };
-  }
-
-  return { recovered: false, value: null };
-}
-
-function runGh(args: string[]): string {
-  try {
-    return ghText(args, {
-      ...GH_TEXT_LOOP_TIMEOUT_OPTIONS,
-      ...(args.includes('--paginate')
-        ? { timeout: DEFAULT_GH_PAGINATED_TIMEOUT_MS }
-        : {}),
-    });
-  } catch (error) {
-    const stderr = String(
-      (error as { stderr?: unknown } | null)?.stderr ?? '',
-    ).trim();
-    if (stderr) {
-      const wrapped = new Error(`gh command failed: ${stderr}`) as Error & {
-        stderr?: string;
-        stdout?: string;
-      };
-      wrapped.stderr = String(
-        (error as { stderr?: unknown } | null)?.stderr ?? '',
-      );
-      wrapped.stdout = String(
-        (error as { stdout?: unknown } | null)?.stdout ?? '',
-      );
-      throw wrapped;
-    }
-    throw error;
-  }
 }
 
 function runGit(args: string[]): string {

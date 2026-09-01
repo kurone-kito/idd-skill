@@ -15,16 +15,16 @@ import {
   parseAutopilotSuitability,
 } from './autopilot-suitability.mts';
 import { parseCliArgs } from './cli-args.mts';
-import {
-  DEFAULT_GH_PAGINATED_TIMEOUT_MS,
-  GH_TEXT_LOOP_OPTIONS,
-  ghText,
-} from './gh-exec.mts';
 import { deriveGhHttpStatus } from './gh-http-status.mts';
 import { loadPolicyConfig } from './idd-config.mts';
 import { stripMarkdownCodeRegions } from './markdown-code.mts';
 import { escapeRegex } from './marker-regex.mts';
 import { normalizePolicyConfig, POLICY_DEFAULTS } from './policy-helpers.mts';
+import {
+  createGithubProviderAdapter,
+  resolveCurrentGithubRepository,
+} from './provider-adapter-github.mts';
+import type { ProviderPort } from './provider-port.mts';
 
 const DEFAULT_MARKER_PREFIX = 'idd-skill';
 
@@ -187,18 +187,10 @@ if (import.meta.main) {
     );
   }
 
-  const owner =
-    args.owner ||
-    ghText(
-      ['repo', 'view', '--json', 'owner', '--jq', '.owner.login'],
-      GH_TEXT_LOOP_OPTIONS,
-    );
-  const repo =
-    args.repo ||
-    ghText(
-      ['repo', 'view', '--json', 'name', '--jq', '.name'],
-      GH_TEXT_LOOP_OPTIONS,
-    );
+  const currentRepo =
+    args.owner && args.repo ? null : resolveCurrentGithubRepository();
+  const owner = args.owner || currentRepo?.owner || '';
+  const repo = args.repo || currentRepo?.repo || '';
   const policyConfig = loadPolicy(args.policy);
   const authoringPolicy = resolveAuthoringGuardPolicy(policyConfig);
   const markerPrefix = resolveMarkerPrefix(policyConfig);
@@ -900,27 +892,18 @@ function escapeCsv(value: unknown): string {
 }
 
 function buildIssueLoader(owner: string, repo: string) {
+  const port = createGithubProviderAdapter(owner, repo);
   return async (issueNumber: number) => {
-    const args = [
-      'api',
-      `repos/${owner}/${repo}/issues/${issueNumber}`,
-      '--jq',
-      '.',
-    ];
     try {
-      const result = runGh(args).trim();
-      if (!result || result === 'null') {
-        return null;
-      }
-      return JSON.parse(result);
+      // getWorkItem's shape (number/title/state[uppercase]/body/labels/url)
+      // already matches everything normalizeIssue() reads -- no remap
+      // needed, unlike the richer files this migration also touched.
+      return port.getWorkItem(issueNumber);
     } catch (error) {
-      // `gh` exits 1 for every HTTP error, so derive the real status from
-      // its output. Fail closed: a genuine 404 maps to issue_not_found,
-      // a visibility 403/410/451 maps to issue_inaccessible, and auth /
-      // rate-limit / network / unknown failures propagate to abort.
-      if (deriveGhHttpStatus(error) === 404) {
-        return null;
-      }
+      // Fail closed: a visibility 403/410/451 maps to issue_inaccessible,
+      // auth / rate-limit / network / unknown failures propagate to abort.
+      // A genuine 404 already returns null from getWorkItem above, never
+      // reaching this catch.
       if (isInaccessibleIssueLookupError(error)) {
         return INACCESSIBLE_ISSUE_SENTINEL;
       }
@@ -930,31 +913,16 @@ function buildIssueLoader(owner: string, repo: string) {
 }
 
 function buildIssueLabelEventsLoader(owner: string, repo: string) {
+  const port = createGithubProviderAdapter(owner, repo);
   return async (issueNumber: number) => {
-    const repoRef = `${owner}/${repo}`;
-    return fetchIssueLabelEvents(repoRef, issueNumber);
+    return fetchIssueLabelEvents(port, issueNumber);
   };
 }
 
-function fetchIssueLabelEvents(repoRef: string, issueNumber: number) {
-  const events: unknown[] = [];
-  const pageSize = 100;
-  for (let page = 1; ; page += 1) {
-    const rawPage = JSON.parse(
-      runGh([
-        'api',
-        `repos/${repoRef}/issues/${issueNumber}/timeline?per_page=${pageSize}&page=${page}`,
-      ]).trim() || '[]',
-    ) as unknown[];
-    const labeled = rawPage.filter(
-      (event) => (event as { event?: unknown } | null)?.event === 'labeled',
-    );
-    events.push(...labeled);
-    if (rawPage.length < pageSize) {
-      break;
-    }
-  }
-  return events;
+function fetchIssueLabelEvents(port: ProviderPort, issueNumber: number) {
+  return port
+    .getWorkItemTimeline(issueNumber)
+    .filter((event) => (event as { event?: unknown }).event === 'labeled');
 }
 
 export function buildRoadmapMarkerSearchQuery(
@@ -974,6 +942,7 @@ export function buildRoadmapMarkerResolver(
   repo: string,
   markerPrefix: string,
 ) {
+  const port = createGithubProviderAdapter(owner, repo);
   return async (marker: string) => {
     const query = buildRoadmapMarkerSearchQuery(
       owner,
@@ -981,54 +950,21 @@ export function buildRoadmapMarkerResolver(
       markerPrefix,
       marker,
     );
-    const encodedQuery = encodeURIComponent(query);
-    const result = runGh([
-      'api',
-      `search/issues?q=${encodedQuery}&per_page=100`,
-      '--jq',
-      '.items',
-    ]).trim();
-    return JSON.parse(result || '[]');
+    return port.searchWorkItems(query);
   };
 }
 
 /**
- * Every open issue number in the repository, orphans included. `--paginate`
- * walks all pages; `select(.pull_request == null)` drops pull requests, which
- * the REST issues endpoint otherwise returns alongside issues. Used by the
+ * Every open issue number in the repository, orphans included. Used by the
  * `--swarm-floor` sweep to answer "is there any eligible work left?".
+ * listOpenWorkItems() already excludes pull requests -- no re-filtering
+ * needed here.
  */
 function listOpenIssueNumbers(owner: string, repo: string): number[] {
-  return parseIssueNumberLines(
-    ghText(
-      [
-        'api',
-        '--paginate',
-        `repos/${owner}/${repo}/issues?state=open&per_page=100`,
-        '--jq',
-        '.[] | select(.pull_request == null) | .number',
-      ],
-      { ...GH_TEXT_LOOP_OPTIONS, timeout: DEFAULT_GH_PAGINATED_TIMEOUT_MS },
-    ),
-  );
-}
-
-/**
- * Parse the newline-delimited issue numbers emitted by the
- * `listOpenIssueNumbers` `gh api --jq` sweep into a deduped list of positive
- * integers. Only **full-integer** lines are kept: blank, partially-numeric
- * (`5abc`), or non-positive lines are dropped rather than truncated by
- * `Number.parseInt`, so an empty sweep yields `[]`. Exported so the parse
- * contract is unit-testable without a live `gh` call — pull requests are
- * already excluded upstream by the `select(.pull_request == null)` jq filter.
- */
-export function parseIssueNumberLines(raw: string): number[] {
   return dedupeNumbers(
-    raw
-      .split('\n')
-      .map((line) => line.trim())
-      .filter((line) => /^\d+$/.test(line))
-      .map((line) => Number.parseInt(line, 10)),
+    createGithubProviderAdapter(owner, repo)
+      .listOpenWorkItems()
+      .map((item) => item.number),
   );
 }
 
@@ -1063,32 +999,6 @@ function resolveSuitabilityEnabled(config: unknown): boolean {
     (config as { autopilotSuitability?: { enabled?: unknown } } | null)
       ?.autopilotSuitability?.enabled !== false
   );
-}
-
-function runGh(args: string[]): string {
-  try {
-    return ghText(args, GH_TEXT_LOOP_OPTIONS);
-  } catch (error) {
-    const rawStatus = (error as { status?: unknown } | null)?.status;
-    const status = typeof rawStatus === 'number' ? rawStatus : null;
-    const stderr = String(
-      (error as { stderr?: unknown } | null)?.stderr ?? '',
-    ).trim();
-    const stdout = String(
-      (error as { stdout?: unknown } | null)?.stdout ?? '',
-    ).trim();
-    const prefix = `gh ${args.join(' ')}`;
-    // Preserve stderr and stdout on the wrapped error so deriveGhHttpStatus
-    // can recover the real HTTP status; the process exit status is always
-    // 1 and is kept only for diagnostics.
-    const wrapped = new Error(
-      stderr ? `${prefix} failed: ${stderr}` : `${prefix} failed`,
-    ) as Error & { status?: number | null; stderr?: string; stdout?: string };
-    wrapped.status = status;
-    wrapped.stderr = stderr;
-    wrapped.stdout = stdout;
-    throw wrapped;
-  }
 }
 
 function isInaccessibleIssue(

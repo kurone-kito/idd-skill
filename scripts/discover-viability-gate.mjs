@@ -5,8 +5,10 @@
 // source named above by `pnpm run build`. Edit the .mts source, never the
 // generated .mjs. See docs/typescript-sources.md.
 import { parseCliArgs } from './cli-args.mjs';
-import { GH_TEXT_LOOP_OPTIONS, ghText } from './gh-exec.mjs';
-import { deriveGhHttpStatus } from './gh-http-status.mjs';
+import {
+  createGithubProviderAdapter,
+  resolveCurrentGithubRepository,
+} from './provider-adapter-github.mjs';
 
 const CRITERIA = [
   {
@@ -67,18 +69,10 @@ if (import.meta.main) {
       'missing required --issue <number> (repeatable) or --issues <n1,n2,...>',
     );
   }
-  const owner =
-    args.owner ||
-    ghText(
-      ['repo', 'view', '--json', 'owner', '--jq', '.owner.login'],
-      GH_TEXT_LOOP_OPTIONS,
-    );
-  const repo =
-    args.repo ||
-    ghText(
-      ['repo', 'view', '--json', 'name', '--jq', '.name'],
-      GH_TEXT_LOOP_OPTIONS,
-    );
+  const currentRepo =
+    args.owner && args.repo ? null : resolveCurrentGithubRepository();
+  const owner = args.owner || currentRepo?.owner || '';
+  const repo = args.repo || currentRepo?.repo || '';
   const summary = await evaluateDiscoverViability(args.issueNumbers, {
     loadIssue: buildIssueLoader(owner, repo),
   });
@@ -334,41 +328,11 @@ function escapeCsv(value) {
   return `"${text.replaceAll('"', '""')}"`;
 }
 function buildIssueLoader(owner, repo) {
-  return async function loadIssue(issueNumber) {
-    let data;
-    try {
-      data = ghJson([
-        'api',
-        `repos/${owner}/${repo}/issues/${issueNumber}`,
-        '--jq',
-        '.',
-      ]);
-    } catch (error) {
-      // Fail closed: only a genuine 404 means the issue is absent. Auth,
-      // rate-limit, network, and unknown failures (status null) must
-      // propagate so discovery aborts instead of marking the issue
-      // not-found. `gh` exits 1 for every HTTP error, so derive the real
-      // status from its output rather than the process exit code.
-      if (deriveGhHttpStatus(error) === 404) {
-        return null;
-      }
-      throw error;
-    }
-    if (!data) {
-      return null;
-    }
-    return {
-      number: Number(data.number),
-      title: String(data.title ?? ''),
-      body: String(data.body ?? ''),
-      state: String(data.state ?? '').toUpperCase(),
-    };
+  // getWorkItem's contract (null on a genuine 404, throws on any other
+  // failure) is pinned to this exact fail-closed routing -- see
+  // provider-port.mts's doc comment on that method.
+  const port = createGithubProviderAdapter(owner, repo);
+  return function loadIssue(issueNumber) {
+    return port.getWorkItem(issueNumber);
   };
-}
-function ghJson(args) {
-  const text = ghText(args, GH_TEXT_LOOP_OPTIONS);
-  if (!text) {
-    return null;
-  }
-  return JSON.parse(text);
 }

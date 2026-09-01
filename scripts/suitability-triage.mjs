@@ -11,7 +11,6 @@ import { parseCliArgs } from './cli-args.mjs';
 import {
   DEFAULT_BUNDLE_IDS,
   DEFAULT_MANIFEST_PATH,
-  ghJson as ghJsonArray,
   parseCandidateFiles,
   resolveHighContentionFiles,
 } from './discover-shared-file-overlap.mjs';
@@ -2337,6 +2336,15 @@ export function loadHighContentionFiles(manifestPath, bundleIds) {
 }
 function ghJson(args) {
   return JSON.parse(runGh(args).trim() || '{}');
+}
+// Relocated from discover-shared-file-overlap.mts (#2266): that file's own
+// `gh` usage moved onto provider-port.mts, but this array-safe parser had no
+// port-shaped equivalent this file's two `gh api`/`gh pr list` array call
+// sites (buildMergedPrByBranchArgs, buildMergedPrListArgs) could move onto,
+// so it moves here instead of being deleted -- its only remaining consumer.
+function ghJsonArray(args) {
+  const parsed = JSON.parse(runGh(args).trim() || '[]');
+  return Array.isArray(parsed) ? parsed : [];
 }
 function runGh(args) {
   try {

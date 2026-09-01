@@ -9,7 +9,6 @@ import { fileURLToPath } from 'node:url';
 import {
   classifyBranchState,
   countLatestChangesRequestedByReviewer,
-  recoverJsonFromGhFailure,
   selectResumeRoute,
 } from '../src/scripts/resume-route-selection.mts';
 
@@ -314,15 +313,6 @@ test("counts CHANGES_REQUESTED using each reviewer's latest gating state", () =>
     },
   ]);
   assert.equal(count, 1);
-});
-
-test('recovers empty required-check set from gh pr checks failure', () => {
-  const recovered = recoverJsonFromGhFailure(
-    { stderr: "no required checks reported on the 'main' branch" },
-    { allowNoRequiredChecks: true },
-  );
-  assert.equal(recovered.recovered, true);
-  assert.deepEqual(recovered.value, []);
 });
 
 // #2195: --token substituted GH_TOKEN/GITHUB_TOKEN for gh auth, ambiguous

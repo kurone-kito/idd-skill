@@ -1245,11 +1245,18 @@ test('evaluateFreshClaimGate: released competing claim is claimable, not already
 });
 
 test('runCli sources currentLogin from resolveViewerLogin (#2148)', () => {
+  // #2266: currentLogin now sources from the provider port's
+  // resolveViewerLogin() instead of the bare gh-exec.mts call this regex
+  // originally locked in -- the port's adapter hardcodes the same
+  // GH_TEXT_LOOP_TIMEOUT_OPTIONS profile internally (see
+  // provider-port.mts's doc comment on resolveViewerLogin), so this test's
+  // actual intent (runCli must not hand-roll its own lesser viewer-login
+  // resolution) is unchanged.
   const source = readFileSync(
     new URL('../src/scripts/resume-claim-routing.mts', import.meta.url),
     'utf8',
   );
-  assert.match(source, /resolveViewerLogin\(GH_TEXT_LOOP_TIMEOUT_OPTIONS\)/);
+  assert.match(source, /port\.resolveViewerLogin\(\)/);
 });
 
 // #2195: --token substituted GH_TOKEN/GITHUB_TOKEN for gh auth, ambiguous

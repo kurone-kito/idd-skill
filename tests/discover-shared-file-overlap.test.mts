@@ -316,17 +316,19 @@ test('analyzeSharedFileOverlap parses fixtures: merge and review collide on advi
 });
 
 // ---------------------------------------------------------------------------
-// toClaimComment — REST `user.login` must reach the `author.login` field that
-// resolveActiveClaim reads (regression guard for the active-by-claim path)
+// toClaimComment — ProviderComment.authorLogin must reach the `author.login`
+// field that resolveActiveClaim reads (regression guard for the
+// active-by-claim path)
 // ---------------------------------------------------------------------------
 
-test('toClaimComment maps REST user.login into the author field resolveActiveClaim reads', () => {
-  const rest = {
+test('toClaimComment maps ProviderComment.authorLogin into the author field resolveActiveClaim reads', () => {
+  const comment = {
+    id: 1,
     body: '<!-- claimed-by: agent-x claim-abc supersedes: none 2026-06-25T00:00:00Z branch: issue/1-x -->',
-    created_at: '2026-06-25T00:00:00Z',
-    user: { login: 'kurone-kito' },
+    createdAt: '2026-06-25T00:00:00Z',
+    authorLogin: 'kurone-kito',
   };
-  const mapped = toClaimComment(rest);
+  const mapped = toClaimComment(comment);
   assert.equal(mapped.author.login, 'kurone-kito');
 
   // A trusted author yields the claim; an empty/untrusted author yields none —
