@@ -1370,16 +1370,18 @@ Interpretation rules:
   set to `--repo`, then releases the lock even if the command fails,
   exiting with the command's own exit code; exits `3` if the lock
   could not be acquired within `--timeout-ms` (default 120000).
-- `--check` reports `{ path, present, holder?, malformed? }`
-  read-only, the same shape as the worktree-local claim lock's
-  `--check` above.
-- A lock is eligible for takeover only once its recorded holder
-  process is confirmed dead (`process.kill(pid, 0)`), not after any
-  fixed time period; a live holder's lock is never taken over,
-  however long it is held, so a legitimately long-running `git fetch`
-  is never mistaken for a dead holder. A malformed lock body (no
-  readable `pid`) is never auto-recovered — see `--check`'s
-  `malformed: true` output for manual diagnosis.
+- `--check` reports `{ path, present, holder?, malformed?,
+  holderAlive? }` read-only; `holderAlive` (diagnostic only, from
+  `process.kill(pid, 0)`) reports whether the recorded holder still
+  appears to be running.
+- **No automatic stale-lock recovery**: a held lock is never taken
+  over, regardless of how long it has been held or whether its
+  recorded holder is still alive. `--exec` exits `3` on a
+  `--timeout-ms` timeout, naming the lock path and the recorded
+  holder's pid in the error message; once you have independently
+  confirmed that holder is gone, remove the lock file by hand and
+  retry — the same recovery git's own `index.lock` expects on a
+  stale-lock collision.
 - **`instructions-only` helper-free fallback (no helper runtime
   available)**: this lock is a same-machine convenience for
   parallel autonomous fan-out, not a correctness requirement — an

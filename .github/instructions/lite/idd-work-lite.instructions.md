@@ -53,6 +53,11 @@ request, or other GitHub side effect, confirm all of the following:
 
 ## B1 — Create worktree
 
+Concurrent workers sharing one clone: serialize every `fetch`/`merge
+--ff-only`/worktree add/remove call below (and F4 cleanup's own
+worktree removal) behind the
+[clone-scoped lock](../../../docs/idd-helper-scripts.md#clone-scoped-lock).
+
 1. On the primary worktree, run `git fetch origin main`.
 2. On the primary worktree, run `git log origin/main..main --oneline`.
 3. If step 2 outputs any lines, stop and report: local `main` has unpushed

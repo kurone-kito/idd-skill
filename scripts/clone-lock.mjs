@@ -25,61 +25,47 @@
 // which `claim-lock.mts` uses for its narrower per-worktree scope) is
 // required here.
 //
-// A holder that crashes leaves an orphaned lock file behind -- unlike a
+// This module deliberately has NO automatic stale-lock recovery. A
+// holder that crashes leaves an orphaned lock file behind -- unlike a
 // real `flock(2)`, a plain lock file is not released automatically when
-// its owning process dies. Staleness is judged by process liveness
-// (`isPidAlive`, `process.kill(pid, 0)`), not elapsed time: the lock body
-// records the holder's own `pid`, alongside `claim-lock.mts`'s existing
-// `token`/`agentId`/`acquiredAt` shape, and a lock is only ever eligible
-// for takeover once that exact PID is confirmed dead. This replaced an
-// earlier mtime-based design (recover anything older than a fixed
-// threshold, with the holder periodically refreshing its own lease to
-// prove it was still alive) after that design's CI run exposed the
-// failure mode it was always structurally prone to: a live,
-// actively-refreshing holder got taken over anyway, because "has this
-// timestamp aged past a threshold" is inherently a race against ordinary
-// process-scheduling jitter (a refresh landing late, a waiter's own
-// staleness check landing early) in a way "is this specific PID still
-// running" simply is not -- a process is never "probably dead by now,"
-// it is either scheduled on the OS right now or it does not exist.
-// Because the holder process for this lock (the one running `withExec`'s
-// wrapped command) stays alive for its own entire hold, no periodic
-// lease refresh is needed at all: liveness is continuously, automatically
-// true for as long as the holder is doing anything, and instantly,
-// unambiguously false the moment it exits or crashes. This also makes
-// release and takeover logically disjoint rather than a race to close:
-// release only ever runs from the live holder's own still-running
-// process (whose PID is, by definition, alive), so a takeover's PID
-// -liveness check can never mistake an active release-in-progress for a
-// dead holder -- no arbiter, inode verification, or other coordination
-// primitive beyond the plain `wx`-exclusive-create every acquire already
-// uses is needed to keep the two from conflicting. A takeover
-// re-confirms the lock is still the exact dead entry it inspected
-// (re-reading immediately before removing) rather than trusting a
-// possibly-stale earlier check, then goes through the SAME
-// `{ flag: 'wx' }` primitive a fresh acquire uses to recreate it -- the
-// only decision authority for who wins a contested recreate is the OS
-// kernel's own `O_EXCL` guarantee, not any bookkeeping this module
-// performs itself. One race is knowingly NOT closed: the single-syscall
-// gap between that re-confirmation read and the `unlinkSync` that acts
-// on it. Closing it fully would need a kernel-level compare-and-swap
-// this module does not have access to from plain POSIX file primitives;
-// every design this module has tried carries an equivalent residual gap
-// somewhere, and the ones that attempted to close this exact one (a
-// PID-tagged arbiter lock plus inode-verified recovery) each introduced
-// a NEW, worse gap of their own across three consecutive review rounds
-// (#2223) rather than actually eliminating it. This narrow, explicitly
-// accepted gap is deliberately simpler to reason about than that
-// alternative. A malformed lock body (e.g. a crashed partial write) has
-// no readable `pid` to check liveness against and is therefore never
-// auto-recovered -- `writeFileSync`'s single, small write is atomic in
-// practice on every realistic filesystem, so genuinely torn content is
-// vanishingly rare, and this module intentionally does not add recovery
-// machinery for it; see `--check`'s `malformed: true` output for manual
-// diagnosis. This is a purely local liveness heuristic scoped to
-// operations that normally complete in seconds -- it carries none of
-// `claim-lock.mts`'s GitHub-reverification requirement, because this
-// lock has no cross-machine claim-ownership meaning to protect.
+// its owning process dies -- and a timed-out waiter is simply told so,
+// with the lock path and the recorded holder's `pid` in the error
+// message, and pointed at a manual `rm <lock-path>` once a human has
+// confirmed the holder is actually gone (the same approach git's own
+// `index.lock` takes on a stale-lock collision). This module went
+// through three different automatic-recovery designs across successive
+// review rounds on #2223 -- an mtime-elapsed-time threshold with a
+// periodic lease refresh, then a PID-tagged arbiter lock with
+// inode-verified recovery, then a simplified PID-liveness check with no
+// arbiter -- and every one of them was found to have a genuine
+// concurrency defect by the next review round: a live, actively
+// -refreshing holder taken over anyway under scheduling jitter; a
+// wrapper process's own pid going "dead" while the git child it spawned
+// was still running and still needed the lock; more than one waiter
+// racing to reclaim the exact same confirmed-dead entry. Every
+// mitigation attempted for one of these introduced a new gap of its own
+// rather than eliminating the underlying problem, because implementing
+// a genuinely race-free "is this specific holder now provably gone, and
+// can exactly one waiter reclaim it" protocol needs a coordination
+// primitive (a kernel-level compare-and-swap, or a real `flock(2)`)
+// plain POSIX file read/write/rename operations do not provide. Rather
+// than continue layering fixes onto that fundamentally unsound
+// foundation, automatic recovery was removed entirely: the only
+// remaining decision authority for who acquires this lock is the OS
+// kernel's own `O_EXCL` guarantee on a single `{ flag: 'wx' }` create,
+// which is unconditionally race-free by construction -- there is no
+// removal, no recreation, and no second coordination primitive left for
+// a defect to hide in. `idd-skill#2223`'s Acceptance Criteria only ever
+// required an acquire/release interface and serializing two concurrent
+// invocations against each other, never automatic stale-lock recovery.
+// The lock body still records the holder's own `pid` (`isPidAlive`,
+// `process.kill(pid, 0)`), but purely as diagnostic information for a
+// human deciding whether it is safe to remove the lock by hand -- never
+// as input to an automated takeover decision. This is a purely local
+// mutex scoped to operations that normally complete in seconds -- it
+// carries none of `claim-lock.mts`'s GitHub-reverification requirement,
+// because this lock has no cross-machine claim-ownership meaning to
+// protect.
 import { execFileSync, spawn } from 'node:child_process';
 import { readFileSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -185,11 +171,11 @@ function sleepSync(ms) {
  * it definitely does not. `process.kill(pid, 0)` sends no actual signal
  * -- it only probes existence/permission. `ESRCH` (no such process) is
  * the only outcome that means dead; `EPERM` (the process exists but this
- * one lacks permission to signal it) and success both mean alive. This
- * is a reliable, instantaneous, non-time-based liveness check: unlike an
- * elapsed-time threshold, there is no ambiguity window where a process
- * might be "probably dead by now" -- it either currently exists or it
- * does not.
+ * one lacks permission to signal it) and success both mean alive.
+ * Diagnostic only (see this module's header comment): this is never
+ * consulted to decide whether a lock may be taken over, only to help a
+ * human reading {@link checkCloneLock}'s or a timeout error's output
+ * judge whether the recorded holder is actually still running.
  */
 function isPidAlive(pid) {
   try {
@@ -200,20 +186,11 @@ function isPidAlive(pid) {
   }
 }
 /**
- * `true` when `path` currently holds a well-formed lock whose recorded
- * `pid` is confirmed dead. `false` for an absent, malformed (no `pid` to
- * check -- see this module's header comment for why that edge case is
- * not auto-recovered), or live lock.
- */
-function isDeadLock(read) {
-  return read.status === 'present' && !isPidAlive(read.lock.pid);
-}
-/**
  * Exclusively create the lock file, succeeding only when nothing else won
- * the race first. Both a fresh acquire and a dead-lock takeover funnel
- * through this same primitive, so at most one contender ever wins either
- * path -- the OS kernel's own `O_EXCL` guarantee is the sole decision
- * authority for who wins a contested create.
+ * the race first. This is the ONLY decision authority for who acquires
+ * this lock -- there is no removal or recreation path a defect could
+ * hide in (see this module's header comment for the three prior designs
+ * that tried to add one, and why each was abandoned).
  */
 function tryExclusiveCreate(path, agentId, token) {
   try {
@@ -227,50 +204,43 @@ function tryExclusiveCreate(path, agentId, token) {
   }
 }
 /**
- * Attempt to recover a lock at `path` whose recorded holder is confirmed
- * dead, then immediately recreate it as `agentId`/`token`. Re-reads the
- * lock immediately before removing it, rather than trusting the
- * caller's own (possibly now-stale) check, to narrow -- though, per this
- * module's header comment, not fully close -- the gap between
- * confirming death and acting on it. Returns `false` (never throws for
- * this) when the lock is no longer confirmed dead by the time of the
- * re-check, or recreation lost to an unrelated fresh acquirer in the
- * brief gap after this function's own removal (that acquirer's
- * `wx`-create is exclusive by construction either way, so this is safe
- * regardless of how it resolves).
- */
-function tryTakeOverDeadLock(path, agentId, token) {
-  if (!isDeadLock(readLock(path))) {
-    return false;
-  }
-  if (!isDeadLock(readLock(path))) {
-    return false;
-  }
-  try {
-    unlinkSync(path);
-  } catch (error) {
-    if (error.code !== 'ENOENT') {
-      throw error;
-    }
-  }
-  return tryExclusiveCreate(path, agentId, token);
-}
-/**
- * Thrown when a lock cannot be acquired within `timeoutMs`.
+ * Thrown when a lock cannot be acquired within `timeoutMs`. The message
+ * names the lock path and, when readable, the recorded holder's `pid`
+ * (and whether that process still appears to be alive) so a human can
+ * decide whether to remove the lock by hand -- see this module's header
+ * comment for why that manual step, not an automatic takeover, is this
+ * module's only stale-lock recovery path.
  */
 export class CloneLockTimeoutError extends Error {
   constructor(path, timeoutMs) {
-    super(`timed out after ${timeoutMs}ms waiting for clone lock: ${path}`);
+    super(`${describeTimeout(path)} after ${timeoutMs}ms`);
     this.name = 'CloneLockTimeoutError';
   }
+}
+function describeTimeout(path) {
+  const read = readLock(path);
+  const base = `timed out waiting for clone lock: ${path}`;
+  if (read.status === 'absent') {
+    return base;
+  }
+  if (read.status === 'malformed') {
+    return `${base} (lock file exists but could not be parsed; if no process needs it, remove it manually: rm ${path})`;
+  }
+  const aliveNote = isPidAlive(read.lock.pid)
+    ? 'still appears to be running'
+    : 'no longer appears to be running';
+  return (
+    `${base} (held by pid ${read.lock.pid}, agent "${read.lock.agentId}", ` +
+    `acquired ${read.lock.acquiredAt}; that process ${aliveNote}. If you have ` +
+    `independently confirmed it is safe, remove the lock manually: rm ${path})`
+  );
 }
 /**
  * Block (retrying with backoff) until the clone-scoped lock at `repoPath`
  * is acquired, or throw {@link CloneLockTimeoutError} after `timeoutMs`.
- * A lock whose recorded holder PID is confirmed dead (see
- * {@link isPidAlive}) is eligible for takeover via
- * {@link tryTakeOverDeadLock}; a live holder's lock is never taken over,
- * regardless of how long it has been held.
+ * A held lock is never taken over automatically, regardless of how long
+ * it has been held or whether its recorded holder process is still
+ * running -- see this module's header comment.
  */
 export function acquireCloneLock(
   repoPath,
@@ -284,9 +254,6 @@ export function acquireCloneLock(
     if (tryExclusiveCreate(path, agentId, token)) {
       return { path, token };
     }
-    if (tryTakeOverDeadLock(path, agentId, token)) {
-      return { path, token };
-    }
     if (Date.now() >= deadline) {
       throw new CloneLockTimeoutError(path, timeoutMs);
     }
@@ -295,18 +262,12 @@ export function acquireCloneLock(
 }
 /**
  * Release a lock previously returned by {@link acquireCloneLock}. Only
- * removes the file when it still holds the caller's own `token` -- if a
- * different token is present, another session already took the lock over
- * (necessarily after this caller's own process had already died, since a
- * live holder's lock is never taken over) and this release must not
- * disturb it. Removing an already-absent lock is a silent no-op.
- *
- * This is a plain token-check-then-unlink, unlike a design that must
- * also guard against an in-flight takeover of the SAME still-live lock:
- * that scenario cannot occur here, because release only ever runs from
- * the live holder's own still-running process, and a takeover's PID
- * -liveness check can never mistake a live, currently-executing process
- * for a dead one.
+ * removes the file when it still holds the caller's own `token` -- a
+ * defensive check against releasing a lock this handle no longer
+ * actually owns; in practice, since this module never takes over a held
+ * lock automatically, the token can only ever mismatch after a human
+ * has manually removed and something else has since recreated it.
+ * Removing an already-absent lock is a silent no-op.
  */
 export function releaseCloneLock(handle) {
   const read = readLock(handle.path);
@@ -330,7 +291,12 @@ export function checkCloneLock(repoPath) {
   if (read.status === 'malformed') {
     return { path, present: true, malformed: true };
   }
-  return { path, present: true, holder: read.lock };
+  return {
+    path,
+    present: true,
+    holder: read.lock,
+    holderAlive: isPidAlive(read.lock.pid),
+  };
 }
 /**
  * Acquire the clone lock, run `command` with `args` (inheriting stdio,
@@ -340,11 +306,8 @@ export function checkCloneLock(repoPath) {
  * an ambient `GIT_DIR`/`GIT_WORK_TREE` the caller happened to have set
  * must not redirect the wrapped command at a different repository than
  * the one just locked), then release the lock -- even if the command
- * fails. No periodic lease refresh is needed: this process itself stays
- * alive for the wrapped command's entire run, so the lock's recorded
- * `pid` (this process's own) is continuously, automatically live for as
- * long as the command is running. Returns the command's exit code
- * (`null` when it was killed by a signal).
+ * fails. Returns the command's exit code (`null` when it was killed by a
+ * signal).
  */
 export async function withCloneLock(
   repoPath,
@@ -451,17 +414,19 @@ Clone-scoped mutual-exclusion lock: serializes \`git worktree add\`,
 clone across concurrent sessions. \`--exec\` blocks (retrying) until the
 lock is acquired, runs <command> [args...] with stdio inherited and cwd
 set to --repo, then releases the lock -- even if the command fails --
-and exits with the command's own exit code. A lock is eligible for
-takeover only once its recorded holder process is confirmed dead (not
-after any fixed time period); a live holder's lock is never taken over,
-however long it is held. Exits 3 if the lock could not be acquired
-within --timeout-ms (default 120000).
+and exits with the command's own exit code. A held lock is NEVER taken
+over automatically, regardless of how long it has been held: exits 3 if
+the lock could not be acquired within --timeout-ms (default 120000),
+naming the lock path and its recorded holder's pid in the error message.
+If you have independently confirmed that holder is actually gone,
+remove the lock file by hand and retry -- the same recovery git's own
+\`index.lock\` expects on a stale-lock collision.
 
 --check is read-only: it reports the current lock state without
 creating, mutating, or deleting anything. \`malformed: true\` means a
-lock file exists but could not be parsed as a well-formed lock body --
-this is never auto-recovered; delete it manually after confirming no
-live process still needs it.
+lock file exists but could not be parsed as a well-formed lock body;
+\`holderAlive\` reports whether the recorded pid still appears to be
+running (diagnostic only). Neither case is ever auto-recovered.
 
 --repo defaults to the current working directory.
 `);

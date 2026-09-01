@@ -11,7 +11,7 @@ import {
 import { devNull, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 
 import {
@@ -66,28 +66,6 @@ function teardown(primary: string): void {
   rmSync(primary, { recursive: true, force: true });
 }
 
-/**
- * A genuinely dead PID: `spawnSync` blocks until the child has already
- * exited, so its `pid` is guaranteed not to be running by the time it is
- * read back (short of the OS recycling that exact pid in the meantime,
- * which is not realistic within a test's lifetime).
- */
-function deadPid(): number {
-  const pid = spawnSync(process.execPath, ['-e', 'process.exit(0)']).pid;
-  assert.ok(typeof pid === 'number' && pid > 0);
-  return pid;
-}
-
-function writeLockBody(
-  path: string,
-  body: { pid: number; token: string; agentId: string },
-): void {
-  writeFileSync(
-    path,
-    JSON.stringify({ ...body, acquiredAt: new Date().toISOString() }),
-  );
-}
-
 test('resolveCloneLockPath resolves to the shared git-common-dir, identically from the primary and a linked worktree', () => {
   const primary = setupRepo();
   try {
@@ -124,6 +102,7 @@ test('acquire/release: a fresh acquire succeeds and release removes the lock', (
     const check = checkCloneLock(primary);
     assert.equal(check.present, true);
     assert.equal(check.holder?.pid, process.pid);
+    assert.equal(check.holderAlive, true);
     releaseCloneLock(handle);
     assert.equal(checkCloneLock(primary).present, false);
   } finally {
@@ -185,14 +164,22 @@ test('acquire: a held lock blocks a separate-process acquirer until the first re
   }
 });
 
-test('acquire: times out with CloneLockTimeoutError when the lock is never released', () => {
+test('acquire: times out with CloneLockTimeoutError, naming the lock path and the recorded holder, when the lock is never released', () => {
   const primary = setupRepo();
   try {
     const first = acquireCloneLock(primary, 'agent-a', 60_000);
     try {
       assert.throws(
         () => acquireCloneLock(primary, 'agent-b', 300),
-        CloneLockTimeoutError,
+        (error: unknown) => {
+          assert.ok(error instanceof CloneLockTimeoutError);
+          assert.match(error.message, /timed out waiting for clone lock:/);
+          assert.match(error.message, new RegExp(`held by pid ${process.pid}`));
+          assert.match(error.message, /agent "agent-a"/);
+          assert.match(error.message, /still appears to be running/);
+          assert.match(error.message, /remove the lock manually: rm /);
+          return true;
+        },
       );
     } finally {
       releaseCloneLock(first);
@@ -202,63 +189,30 @@ test('acquire: times out with CloneLockTimeoutError when the lock is never relea
   }
 });
 
-test("acquire: a lock recording a live PID is never taken over, however long acquire keeps waiting (this repository's own CI caught a time-based-staleness design regress exactly this invariant)", () => {
+test('acquire: NEVER automatically takes over a lock, even one recording a confirmed-dead pid or a malformed body -- this module deliberately has no automatic stale-lock recovery (see the module header comment: three prior auto-recovery designs each had a genuine concurrency defect found in review)', async () => {
   const primary = setupRepo();
   try {
     const path = resolveCloneLockPath(primary);
-    // This test process's own pid is, by construction, alive for the
-    // entire test -- there is no timing window to race here, unlike an
-    // elapsed-time threshold: liveness is either true right now or it
-    // is not.
-    writeLockBody(path, {
-      pid: process.pid,
-      token: 'live-holder',
-      agentId: 'agent-live',
-    });
 
-    assert.throws(
-      () => acquireCloneLock(primary, 'agent-b', 300),
+    // A lock recording a pid that is, by construction, not running.
+    const deadPid = spawnDeadPid();
+    writeFileSync(
+      path,
+      JSON.stringify({
+        pid: deadPid,
+        token: 'dead-holder',
+        agentId: 'agent-dead',
+        acquiredAt: new Date().toISOString(),
+      }),
+    );
+    await assert.rejects(
+      (async () => acquireCloneLock(primary, 'agent-b', 300))(),
       CloneLockTimeoutError,
     );
-    const check = checkCloneLock(primary);
-    assert.equal(check.present, true);
-    assert.equal(check.holder?.token, 'live-holder');
-  } finally {
-    teardown(primary);
-  }
-});
+    assert.equal(checkCloneLock(primary).holder?.token, 'dead-holder');
 
-test('acquire: a lock whose recorded pid is confirmed dead is taken over rather than waited out', () => {
-  const primary = setupRepo();
-  try {
-    const path = resolveCloneLockPath(primary);
-    writeLockBody(path, {
-      pid: deadPid(),
-      token: 'dead-holder',
-      agentId: 'agent-dead',
-    });
-
-    const start = Date.now();
-    const handle = acquireCloneLock(primary, 'agent-b', 5_000);
-    const elapsedMs = Date.now() - start;
-
-    assert.ok(
-      elapsedMs < 2_000,
-      `expected an immediate takeover of a dead-pid lock, took ${elapsedMs}ms`,
-    );
-    assert.notEqual(handle.token, 'dead-holder');
-    releaseCloneLock(handle);
-  } finally {
-    teardown(primary);
-  }
-});
-
-test('acquire: a malformed lock body is never auto-recovered (no readable pid to confirm dead; this repository deliberately does not add recovery machinery for it -- see the module header comment)', async () => {
-  const primary = setupRepo();
-  try {
-    const path = resolveCloneLockPath(primary);
+    // A malformed body is likewise left untouched.
     writeFileSync(path, '{"unexpected": "shape"}');
-
     await assert.rejects(
       (async () => acquireCloneLock(primary, 'agent-b', 300))(),
       CloneLockTimeoutError,
@@ -272,106 +226,33 @@ test('acquire: a malformed lock body is never auto-recovered (no readable pid to
 });
 
 /**
- * A small on-disk fixture script (not an inline `-e` string) so a child
- * process can import the built `clone-lock.mjs` directly and call
- * acquireCloneLock() with a short, test-friendly timeoutMs the CLI
- * itself intentionally does not expose for this purpose. Every
- * contender appends `won <idx> <startMs>` and `released <idx> <endMs>`
- * on success, or `lost <idx>` if it never acquired within its budget.
+ * A genuinely dead PID: `spawnSync` blocks until the child has already
+ * exited, so its `pid` is guaranteed not to be running by the time it is
+ * read back (short of the OS recycling that exact pid in the meantime,
+ * which is not realistic within a test's lifetime).
  */
-function writeRaceFixture(dir: string): string {
-  const fixturePath = join(dir, 'race-worker.mjs');
-  const cloneLockUrl = pathToFileURL(
-    join(REPO_ROOT, 'scripts/clone-lock.mjs'),
-  ).href;
-  writeFileSync(
-    fixturePath,
-    [
-      `import { acquireCloneLock, releaseCloneLock } from ${JSON.stringify(cloneLockUrl)};`,
-      "import { appendFileSync } from 'node:fs';",
-      'const repo = process.env.IDD_TEST_REPO;',
-      'const idx = process.env.IDD_TEST_IDX;',
-      'const log = process.env.IDD_TEST_LOG;',
-      'const timeoutMs = Number(process.env.IDD_TEST_TIMEOUT_MS);',
-      'const holdMs = Number(process.env.IDD_TEST_HOLD_MS);',
-      'try {',
-      "  const handle = acquireCloneLock(repo, 'agent-' + idx, timeoutMs);",
-      "  appendFileSync(log, 'won ' + idx + ' ' + Date.now() + '\\n');",
-      '  const until = Date.now() + holdMs;',
-      '  while (Date.now() < until) {}',
-      "  appendFileSync(log, 'released ' + idx + ' ' + Date.now() + '\\n');",
-      '  releaseCloneLock(handle);',
-      '} catch (error) {',
-      "  appendFileSync(log, 'lost ' + idx + '\\n');",
-      '}',
-    ].join('\n'),
-  );
-  return fixturePath;
+function spawnDeadPid(): number {
+  const pid = spawnSync(process.execPath, ['-e', 'process.exit(0)']).pid;
+  assert.ok(typeof pid === 'number' && pid > 0);
+  return pid;
 }
 
-test('acquire: a dead-pid lock takeover across concurrent contenders never lets two of them hold the lock at once', async () => {
+test('check: holderAlive reports false for a lock recording a confirmed-dead pid', () => {
   const primary = setupRepo();
-  const logPath = join(primary, 'dead-pid-race.log');
-  writeFileSync(logPath, '');
   try {
     const path = resolveCloneLockPath(primary);
-    writeLockBody(path, {
-      pid: deadPid(),
-      token: 'dead-holder',
-      agentId: 'agent-dead',
-    });
-
-    const fixturePath = writeRaceFixture(primary);
-    const CONTENDERS = 5;
-    await Promise.all(
-      Array.from({ length: CONTENDERS }, (_unused, index) =>
-        execFileAsync(process.execPath, [fixturePath], {
-          env: fixtureEnv({
-            IDD_TEST_REPO: primary,
-            IDD_TEST_IDX: String(index),
-            IDD_TEST_LOG: logPath,
-            // Every contender starts by racing the SAME pre-seeded
-            // dead-pid lock. A generous shared timeout means nobody
-            // spuriously times out from ordinary process-spawn jitter;
-            // every contender is expected to eventually acquire, one at
-            // a time.
-            IDD_TEST_TIMEOUT_MS: '10000',
-            IDD_TEST_HOLD_MS: '150',
-          }),
-        }),
-      ),
+    writeFileSync(
+      path,
+      JSON.stringify({
+        pid: spawnDeadPid(),
+        token: 'dead-holder',
+        agentId: 'agent-dead',
+        acquiredAt: new Date().toISOString(),
+      }),
     );
-
-    const lines = readFileSync(logPath, 'utf8')
-      .trim()
-      .split('\n')
-      .filter(Boolean);
-    assert.equal(
-      lines.filter((line) => line.startsWith('lost ')).length,
-      0,
-      `expected every contender to eventually acquire, got: ${JSON.stringify(lines)}`,
-    );
-    const intervals = new Map<string, { start: number; end: number }>();
-    for (const line of lines) {
-      const [kind, idx, ts] = line.split(' ');
-      const entry = intervals.get(idx) ?? { start: 0, end: 0 };
-      if (kind === 'won') {
-        entry.start = Number(ts);
-      } else {
-        entry.end = Number(ts);
-      }
-      intervals.set(idx, entry);
-    }
-    assert.equal(intervals.size, CONTENDERS);
-    const sorted = Array.from(intervals.values()).sort(
-      (first, second) => first.start - second.start,
-    );
-    for (let index = 1; index < sorted.length; index += 1) {
-      assert.ok(
-        sorted[index].start >= sorted[index - 1].end,
-        `expected non-overlapping holds even when racing a shared dead-pid lock, got: ${JSON.stringify(sorted)}`,
-      );
-    }
+    const check = checkCloneLock(primary);
+    assert.equal(check.present, true);
+    assert.equal(check.holderAlive, false);
   } finally {
     teardown(primary);
   }
@@ -409,51 +290,6 @@ test('withCloneLock: runs the wrapped command with cwd set to repoPath', async (
   }
 });
 
-test("withCloneLock: a live wrapped-command holder is never taken over by a waiter, no matter how long the command runs (Codex P1 / this repository's own CI regression: an earlier mtime-staleness-plus-lease-refresh design let a live holder be taken over under scheduling jitter -- PID liveness has no equivalent timing window)", async () => {
-  const primary = setupRepo();
-  try {
-    // The held command runs for 500ms; the waiter's own acquire budget
-    // is only 200ms -- deliberately shorter than the hold, so a
-    // waiter that (incorrectly) treats the live holder as stale would
-    // succeed well before the holder exits, and a correctly-behaving
-    // waiter must time out instead.
-    const holderPromise = withCloneLock(
-      primary,
-      'agent-holder',
-      process.execPath,
-      ['-e', 'const u=Date.now()+500;while(Date.now()<u){}'],
-    );
-
-    // Let the holder actually acquire before the waiter starts contending.
-    await new Promise((resolve) => setTimeout(resolve, 100));
-
-    await assert.rejects(
-      execFileAsync(process.execPath, [
-        CLI_PATH,
-        '--exec',
-        '--agent-id',
-        'agent-waiter',
-        '--repo',
-        primary,
-        '--timeout-ms',
-        '200',
-        '--',
-        process.execPath,
-        '-e',
-        'process.exit(0)',
-      ]),
-      (error: NodeJS.ErrnoException) => {
-        assert.equal(error.code, 3);
-        return true;
-      },
-    );
-
-    await holderPromise;
-  } finally {
-    teardown(primary);
-  }
-});
-
 test('CLI: --check reports a malformed lock body as present+malformed, without throwing', () => {
   const primary = setupRepo();
   try {
@@ -466,6 +302,41 @@ test('CLI: --check reports a malformed lock body as present+malformed, without t
     const parsed = JSON.parse(stdout);
     assert.equal(parsed.present, true);
     assert.equal(parsed.malformed, true);
+  } finally {
+    teardown(primary);
+  }
+});
+
+test('CLI: --exec exits 3 with a diagnostic message on timeout', async () => {
+  const primary = setupRepo();
+  try {
+    const holder = acquireCloneLock(primary, 'agent-a', 60_000);
+    try {
+      await assert.rejects(
+        execFileAsync(process.execPath, [
+          CLI_PATH,
+          '--exec',
+          '--agent-id',
+          'agent-b',
+          '--repo',
+          primary,
+          '--timeout-ms',
+          '200',
+          '--',
+          process.execPath,
+          '-e',
+          'process.exit(0)',
+        ]),
+        (error: NodeJS.ErrnoException & { stderr?: string }) => {
+          assert.equal(error.code, 3);
+          assert.match(error.stderr ?? '', /timed out waiting for clone lock:/);
+          assert.match(error.stderr ?? '', /remove the lock manually: rm /);
+          return true;
+        },
+      );
+    } finally {
+      releaseCloneLock(holder);
+    }
   } finally {
     teardown(primary);
   }
