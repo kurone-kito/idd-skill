@@ -123,6 +123,7 @@ interface RawConfig {
     activeClaimPreScanBatchSize?: unknown;
     selectionDesync?: unknown;
     legacyRoots?: unknown;
+    milestoneScope?: unknown;
   };
   claim?: { verifySettleDelay?: unknown };
   critiqueLoop?: {
@@ -288,6 +289,9 @@ export const POLICY_DEFAULTS = Object.freeze({
     activeClaimPreScanBatchSize: 10,
     selectionDesync: 'off',
     legacyRoots: Object.freeze([]),
+    // Empty string is the off state: A4 Step 2's milestone preference is
+    // disabled and ranking is unchanged, matching an absent key.
+    milestoneScope: '',
   }),
   claim: Object.freeze({
     verifySettleDelay: 'PT5S',
@@ -625,6 +629,14 @@ export function normalizePolicyConfig(config: unknown) {
       legacyRoots: parsePositiveIntegerArray(
         c?.discover?.legacyRoots,
         POLICY_DEFAULTS.discover.legacyRoots,
+      ),
+      // parseNonEmptyString collapses absent, wrong-type, and empty-string
+      // input to the same '' (off) fallback -- schema validation (`type:
+      // "string"`) is what rejects a non-string config value with a named
+      // reason; this resolver only needs to fail safe to neutral.
+      milestoneScope: parseNonEmptyString(
+        c?.discover?.milestoneScope,
+        POLICY_DEFAULTS.discover.milestoneScope,
       ),
     },
     claim: {

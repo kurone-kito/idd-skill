@@ -528,9 +528,13 @@
             "minimum": 1
           },
           "description": "Issue numbers of legacy roadmap roots that predate the `roadmap` label and `<prefix>-roadmap-id` marker (e.g. an ad-hoc umbrella convention adopted before IDD). Unioned into `--all-roadmaps` root discovery and deduped against label/marker roots; a missing or invalid value fails safe to no extra roots."
+        },
+        "milestoneScope": {
+          "type": "string",
+          "description": "A4 Step 2 advisory milestone preference within a same-score tie band, applied after selection-desync and before the effort tie-breaker. When set, a candidate whose OPEN milestone title equals this value sorts ahead of other candidates in the same score band. Optional; absence (or an empty string) disables the preference entirely and ranking is unchanged. A closed milestone, a missing milestone, or an API omission is neutral, matching the absent case."
         }
       },
-      "description": "Container for Discover-phase concurrency tuning: active-claim pre-scan batch size, selection desync, and legacy roadmap roots. Optional; omitting any nested key keeps that key's own distributed default."
+      "description": "Container for Discover-phase concurrency tuning: active-claim pre-scan batch size, selection desync, legacy roadmap roots, and the milestone-scope ranking preference."
     },
     "claim": {
       "type": "object",

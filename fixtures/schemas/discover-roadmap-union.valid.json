@@ -24,6 +24,7 @@
       "roadmapMarkerId": "",
       "autopilotSuitability": 5,
       "effort": "S",
+      "milestone": "v0.9.0",
       "sourceRoots": [100],
       "activeClaim": {
         "present": true,
@@ -44,6 +45,7 @@
       "roadmapMarkerId": "",
       "autopilotSuitability": null,
       "effort": null,
+      "milestone": null,
       "sourceRoots": [100, 200],
       "activeClaim": {
         "present": false,

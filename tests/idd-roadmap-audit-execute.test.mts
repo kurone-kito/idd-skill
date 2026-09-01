@@ -44,6 +44,7 @@ function node(override: NodeOverride) {
     roadmapMarkerId: override.classification === 'roadmap' ? 'epic' : '',
     autopilotSuitability: null,
     effort: null,
+    milestone: null,
     depth: override.number === ROADMAP ? 0 : 1,
   };
 }

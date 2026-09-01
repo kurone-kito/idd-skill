@@ -1745,6 +1745,141 @@ test('all-roadmaps tie-breaks equal scores by ascending issue number', async () 
   );
 });
 
+function executionIssueWithMilestone(
+  number: number,
+  score: number,
+  milestone: { title: string; state: string } | null,
+) {
+  return {
+    ...scoredExecutionIssue(number, score),
+    milestone,
+  };
+}
+
+// One epic, four leaves across two score bands, mixed milestone state.
+//   1100 (epic-milestone) → 1101 (5, open v0.8.0), 1102 (5, no milestone),
+//                            1103 (3, open v0.8.0), 1104 (3, closed v0.8.0)
+const MILESTONE_ISSUES = new Map<number, unknown>([
+  [
+    1100,
+    roadmapIssue(
+      1100,
+      '- [ ] #1101\n- [ ] #1102\n- [ ] #1103\n- [ ] #1104',
+      'epic-milestone',
+    ),
+  ],
+  [
+    1101,
+    executionIssueWithMilestone(1101, 5, {
+      title: 'v0.8.0',
+      state: 'open',
+    }),
+  ],
+  [1102, executionIssueWithMilestone(1102, 5, null)],
+  [
+    1103,
+    executionIssueWithMilestone(1103, 3, {
+      title: 'v0.8.0',
+      state: 'open',
+    }),
+  ],
+  [
+    1104,
+    executionIssueWithMilestone(1104, 3, {
+      title: 'v0.8.0',
+      state: 'closed',
+    }),
+  ],
+]);
+
+test('all-roadmaps surfaces the candidate milestone title, or null when absent', async () => {
+  const report = await enumerateAllRoadmapsGraph({
+    loadOpenRoadmapRoots: async () => [1100],
+    loadIssue: async (issueNumber) => MILESTONE_ISSUES.get(issueNumber) ?? null,
+  });
+
+  const byNumber = new Map(report.leaves.map((leaf) => [leaf.number, leaf]));
+  assert.equal(byNumber.get(1101)?.milestone, 'v0.8.0');
+  assert.equal(byNumber.get(1102)?.milestone, null);
+  // A closed milestone never surfaces its title -- the null case is
+  // indistinguishable from "no milestone at all", by design (#2340).
+  assert.equal(byNumber.get(1104)?.milestone, null);
+});
+
+test('all-roadmaps prefers a milestoneScope match only within its own score band', async () => {
+  const report = await enumerateAllRoadmapsGraph({
+    milestoneScope: 'v0.8.0',
+    loadOpenRoadmapRoots: async () => [1100],
+    loadIssue: async (issueNumber) => MILESTONE_ISSUES.get(issueNumber) ?? null,
+  });
+
+  // Score band 5: 1101 (matches v0.8.0) sorts ahead of 1102 (no milestone).
+  // Score band 3: 1103 (matches v0.8.0) sorts ahead of 1104 (closed
+  // milestone, so it does not match even though the title is the same
+  // string). The match preference never promotes a band-3 leaf above a
+  // band-5 leaf -- band 5 always leads.
+  assert.deepEqual(
+    report.leaves.map((leaf) => leaf.number),
+    [1101, 1102, 1103, 1104],
+  );
+});
+
+test('a higher-score out-of-scope candidate still outranks a lower-score in-scope one', async () => {
+  const report = await enumerateAllRoadmapsGraph({
+    milestoneScope: 'v0.8.0',
+    loadOpenRoadmapRoots: async () => [1100],
+    loadIssue: async (issueNumber) => MILESTONE_ISSUES.get(issueNumber) ?? null,
+  });
+
+  // 1102 (score 5, out of scope) still outranks 1103 (score 3, in scope):
+  // the milestoneScope preference never crosses a suitability-score band.
+  const positionOf = (number: number) =>
+    report.leaves.findIndex((leaf) => leaf.number === number);
+  assert.ok(positionOf(1102) < positionOf(1103));
+});
+
+test('an unset milestoneScope leaves ordering byte-identical to today', async () => {
+  // Reuses MILESTONE_ISSUES (which has a real milestoneScope match available
+  // at 1101/1103) with milestoneScope omitted entirely, proving the new
+  // sort key is a true no-op absent configuration -- order falls straight
+  // through to the pre-existing score/effort/issue-number chain.
+  const report = await enumerateAllRoadmapsGraph({
+    loadOpenRoadmapRoots: async () => [1100],
+    loadIssue: async (issueNumber) => MILESTONE_ISSUES.get(issueNumber) ?? null,
+  });
+
+  assert.deepEqual(
+    report.leaves.map((leaf) => leaf.number),
+    [1101, 1102, 1103, 1104],
+  );
+});
+
+test('an empty configured milestoneScope yields neutral ordering', async () => {
+  const report = await enumerateAllRoadmapsGraph({
+    milestoneScope: '',
+    loadOpenRoadmapRoots: async () => [1100],
+    loadIssue: async (issueNumber) => MILESTONE_ISSUES.get(issueNumber) ?? null,
+  });
+
+  assert.deepEqual(
+    report.leaves.map((leaf) => leaf.number),
+    [1101, 1102, 1103, 1104],
+  );
+});
+
+test('a milestoneScope that matches no candidate leaves ordering neutral', async () => {
+  const report = await enumerateAllRoadmapsGraph({
+    milestoneScope: 'v9.9.9-does-not-exist',
+    loadOpenRoadmapRoots: async () => [1100],
+    loadIssue: async (issueNumber) => MILESTONE_ISSUES.get(issueNumber) ?? null,
+  });
+
+  assert.deepEqual(
+    report.leaves.map((leaf) => leaf.number),
+    [1101, 1102, 1103, 1104],
+  );
+});
+
 test('all-roadmaps returns an empty union when no open roadmap roots exist', async () => {
   const report = await enumerateAllRoadmapsGraph({
     loadOpenRoadmapRoots: async () => [],

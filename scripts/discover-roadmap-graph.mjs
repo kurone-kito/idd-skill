@@ -236,6 +236,7 @@ if (import.meta.main) {
         markerPrefix: policy.markerPrefix,
         roadmapLabelName: policy.labels?.roadmapLabelName,
         floor: policy.autopilotSuitability?.floor,
+        milestoneScope: policy.discover?.milestoneScope,
         owner,
         repo,
         loadIssue: buildIssueLoader(owner, repo),
@@ -370,6 +371,7 @@ export async function enumerateRoadmapGraph(rootIssueNumber, options = {}) {
       roadmapMarkerId: node.roadmapMarkerId,
       autopilotSuitability: node.autopilotSuitability ?? null,
       effort: node.effort ?? null,
+      milestone: node.milestone ?? null,
       depth: node.depth,
     }))
     .sort(compareByNumber);
@@ -657,6 +659,7 @@ export async function enumerateRoadmapGraph(rootIssueNumber, options = {}) {
       roadmapMarkerId: classification.roadmapMarkerId,
       autopilotSuitability: parseAutopilotSuitability(issue.body, markerPrefix),
       effort: parseEffort(issue.body, markerPrefix),
+      milestone: issue.openMilestoneTitle,
       depth,
     });
     recordProvenancePath(issue.number, path);
@@ -721,7 +724,8 @@ function isExpectedRootEnumerationFailure(error, rootNumber) {
  * double-counted.
  *
  * Ranking (global-by-score): the union is sorted by `autopilotSuitability`
- * DESCENDING, tie-broken by issue number ASCENDING (stable). Missing or
+ * DESCENDING, tie-broken by an optional `discover.milestoneScope` match
+ * (#2340), then effort, then issue number ASCENDING (stable). Missing or
  * out-of-range suitability is treated as the configured floor for
  * ordering, but a leaf with no coherent score never ranks above a scored
  * leaf at the same effective value — scored work always sorts first at a
@@ -738,6 +742,10 @@ export async function enumerateAllRoadmapsGraph(options = {}) {
   // 1-5, falling back to the default when unset) once, then rank unscored
   // leaves at that configured floor.
   const floor = normalizeAutopilotSuitabilityFloor(options.floor);
+  // Empty string disables the preference entirely -- same "no scope input"
+  // fallback `parseNonEmptyString` gives policy-helpers.mts callers (#2340).
+  const milestoneScope =
+    typeof options.milestoneScope === 'string' ? options.milestoneScope : '';
   const loadOpenRoadmapRoots = options.loadOpenRoadmapRoots;
   if (typeof loadOpenRoadmapRoots !== 'function') {
     throw new Error(
@@ -825,6 +833,7 @@ export async function enumerateAllRoadmapsGraph(options = {}) {
         roadmapMarkerId: node.roadmapMarkerId,
         autopilotSuitability: node.autopilotSuitability,
         effort: node.effort,
+        milestone: node.milestone,
         sourceRoots: [graph.root.number],
       });
     }
@@ -857,7 +866,9 @@ export async function enumerateAllRoadmapsGraph(options = {}) {
       ...leaf,
       sourceRoots: [...leaf.sourceRoots].sort((left, right) => left - right),
     }))
-    .sort((left, right) => compareUnionLeaves(left, right, floor));
+    .sort((left, right) =>
+      compareUnionLeaves(left, right, floor, milestoneScope),
+    );
   // Opt-in (#1008): annotate the deduped union leaves once each. The per-root
   // enumerations above intentionally run without `claimState`, so each issue's
   // comments are fetched at most once here regardless of how many roots reach
@@ -949,28 +960,48 @@ export async function enumerateAllRoadmapsGraph(options = {}) {
  *      never ranks below an unscored leaf at the same effective value, so
  *      "missing is treated as the configured floor" never lets unscored
  *      work jump ahead of genuinely scored work;
- *   3. issue number ASCENDING — a stable, repository-deterministic
+ *   3. milestone-scope match first (#2340) — when `milestoneScope` is a
+ *      non-empty string, a leaf whose OPEN milestone title equals it sorts
+ *      ahead of a leaf that does not match (or has no open milestone at
+ *      all) within the same effective-score band. An empty `milestoneScope`
+ *      makes every leaf compare equal here, so this step is a no-op and the
+ *      order falls straight through to the next key — byte-identical to
+ *      before this option existed;
+ *   4. effort ordinal ASCENDING (soft tie-breaker) — within a still-tied
+ *      band prefer the lower-effort leaf (S < M < L); a missing/invalid
+ *      hint resolves to the neutral middle ordinal via `effortOrdinal`, so
+ *      a band with no effort hints stays ordered by issue number exactly
+ *      as before;
+ *   5. issue number ASCENDING — a stable, repository-deterministic
  *      tie-break that keeps the order from thrashing between epics.
  *
+ * None of steps 3-4 ever cross a score band or drop a leaf — a large,
+ * out-of-scope issue is still selectable when it is the only ready work.
+ *
  * `floor` is the configured `autopilotSuitability.floor` (already
- * normalized to an integer 1-5). The comparator stays a total order.
+ * normalized to an integer 1-5). `milestoneScope` is the configured
+ * `discover.milestoneScope`, already normalized to `''` (off) for any
+ * non-string input. The comparator stays a total order.
  */
-function compareUnionLeaves(left, right, floor) {
+function compareUnionLeaves(left, right, floor, milestoneScope) {
   const leftScored = isAutopilotSuitabilityScore(left.autopilotSuitability);
   const rightScored = isAutopilotSuitabilityScore(right.autopilotSuitability);
   // Unscored or out-of-range leaves rank at the configured floor.
   const leftEffective = leftScored ? left.autopilotSuitability : floor;
   const rightEffective = rightScored ? right.autopilotSuitability : floor;
-  // Soft effort tie-breaker (after the suitability score, before the
-  // lowest-issue-number fallback): within one effective-score band prefer
-  // the lower-effort leaf (S < M < L). A missing/invalid hint resolves to
-  // the neutral middle ordinal via effortOrdinal, so a band with no effort
-  // hints stays ordered by issue number exactly as before. This never
-  // crosses a score band and never drops a leaf — a large issue is still
-  // selectable when it is the only ready work.
+  // A leaf "matches" only with a non-empty configured scope AND an equal
+  // OPEN milestone title -- an empty milestoneScope, a null leaf.milestone
+  // (no milestone, closed, or API-omitted), and a non-matching title all
+  // compare as `false`, so leftMatch === rightMatch (both false) whenever
+  // the preference is off or neither side is in scope, making this term
+  // `0` and falling through to the effort tie-breaker unchanged.
+  const leftMatch = milestoneScope !== '' && left.milestone === milestoneScope;
+  const rightMatch =
+    milestoneScope !== '' && right.milestone === milestoneScope;
   return (
     rightEffective - leftEffective ||
     Number(rightScored) - Number(leftScored) ||
+    Number(rightMatch) - Number(leftMatch) ||
     effortOrdinal(left.effort) - effortOrdinal(right.effort) ||
     left.number - right.number
   );
@@ -1818,7 +1849,26 @@ function normalizeIssue(issue) {
     labels: normalizeLabels(issue.labels),
     isPullRequest: Boolean(issue.pull_request),
     subIssueSummaryTotal: extractSubIssueSummaryTotal(issue.sub_issues_summary),
+    openMilestoneTitle: extractOpenMilestoneTitle(issue.milestone),
   };
+}
+/**
+ * Read the OPEN milestone's title from a REST `milestone` object. Returns
+ * null for a missing/non-object field, a closed milestone, or a
+ * non-string/empty title -- every one of these is the same "no scope input"
+ * neutral case for A4 Step 2's milestone preference (#2340).
+ */
+function extractOpenMilestoneTitle(milestone) {
+  if (typeof milestone !== 'object' || milestone === null) {
+    return null;
+  }
+  const record = milestone;
+  if (String(record.state ?? '').toLowerCase() !== 'open') {
+    return null;
+  }
+  return typeof record.title === 'string' && record.title.length > 0
+    ? record.title
+    : null;
 }
 /**
  * Read the native sub-issue count from a REST `sub_issues_summary` object.
