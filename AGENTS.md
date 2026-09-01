@@ -119,6 +119,23 @@ entry path and phase routing. See
 [Model capability expectations](docs/idd-workflow.md#model-capability-expectations)
 before running this loop on a lightweight local or compact cloud model.
 
+## Dogfood: token-cost events
+
+This source repository records IDD phase-boundary timestamps as a local
+dogfooding measurement (`docs/token-cost.md`). Source-repo only — never
+add this call to `idd-template/` or `.github/instructions/` phase files,
+which distribute to adopters with no token-cost data to record.
+
+When running the IDD loop in this repository, call
+`node scripts/token-cost-event.mjs --stage <id> --enter --vendor <v>`
+when a listed stage starts, and the same with `--exit` when it ends,
+using `--vendor codex` for Codex CLI or `--vendor grok` for Grok Build.
+OpenCode has no matching `vendor` value in
+`schemas/token-cost-event.schema.json` yet — skip this call rather than
+pass a mismatched vendor. Stage ids: `discover`, `claim`, `work`,
+`submit-pr`, `review`, `merge`, `cleanup`. Ignore any failure from this
+command — it must never block or slow the IDD loop.
+
 ## Issue-authoring skill (dogfooded)
 
 The canonical issue-authoring skill bundle lives at

@@ -718,6 +718,17 @@ function readInstructionFiles(): { name: string; source: string }[] {
 // mention slip past the guard silently. Only add a tool to this set when it is
 // genuinely `node`-invoked in the dogfood instructions AND provably invisible
 // to idd-template adopters, as justified above.
+// token-cost-event.mjs (#2293) is also dogfood-only, but it is named only
+// in the four root guideline files (CLAUDE.md / AGENTS.md / GEMINI.md /
+// .github/copilot-instructions.md), never inside `.github/instructions/`
+// -- so `readInstructionFiles()` below never scans it in and this set
+// needs no entry for it. Kept out on purpose, mirroring the
+// SOURCE_REPO_INTERNAL_ENTRY_PATHS comment in
+// tests/helper-invocation-profile.test.mts, whose broader scan does
+// register it (currently inert there for the identical reason) so a
+// future guideline-file edit that duplicates the invocation into a
+// scanned path finds the exemption already recorded in the set that
+// would actually need it.
 const DOGFOOD_ONLY_CONCRETE_TOOLS = new Set([
   'scripts/sync-docs.mjs',
   'scripts/verify-install-deps.mjs',

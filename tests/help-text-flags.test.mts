@@ -174,6 +174,7 @@ const COVERED_HELPERS = [
   'ci-wait-state',
   'claim-approval-gate',
   'claim-lock',
+  'token-cost-event',
   'token-cost-report',
   'discover-readiness-check',
   'discover-shared-file-overlap',
