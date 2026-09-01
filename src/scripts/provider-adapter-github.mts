@@ -521,6 +521,20 @@ export function createGithubProviderAdapter(
       }
     },
 
+    getChangeRequestHeadSha(number: number): string {
+      return deps.ghText([
+        'pr',
+        'view',
+        String(number),
+        '-R',
+        `${owner}/${repo}`,
+        '--json',
+        'headRefOid',
+        '--jq',
+        '.headRefOid',
+      ]);
+    },
+
     listRequiredChecks(number: number): ProviderRequiredCheck[] {
       const raw = deps.ghText(
         [

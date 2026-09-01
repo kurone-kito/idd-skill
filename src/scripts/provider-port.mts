@@ -261,6 +261,19 @@ export interface ProviderPort {
   /** change-requests (minimal surface for resume-route-selection.mts). */
   getChangeRequest(number: number): ProviderChangeRequestState | null;
 
+  /**
+   * change-requests. The distinct `gh pr view --json headRefOid --jq
+   * .headRefOid` call shape `post-idd-marker.mts`'s `headShaFromPr` uses --
+   * NOT unified with {@link getChangeRequest} despite both being `gh pr
+   * view` calls: different `--json` field selection is a genuinely
+   * different GraphQL-backed query (unlike REST's always-full-object
+   * behavior), and the two callers have different failure philosophies
+   * (this one throws on ANY failure, no 404-to-null mapping) -- pins
+   * `headShaFromPr`'s existing no-try/catch-here contract. SHA-format
+   * validation stays in the domain.
+   */
+  getChangeRequestHeadSha(number: number): string;
+
   /** change-requests (minimal surface for resume-route-selection.mts). */
   listRequiredChecks(number: number): ProviderRequiredCheck[];
 

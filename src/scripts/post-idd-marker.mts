@@ -21,7 +21,6 @@ import { execFileSync } from 'node:child_process';
 import { resolve } from 'node:path';
 
 import { requireFlag } from './cli-args.mts';
-import { ghText } from './gh-exec.mts';
 import {
   renderActivationNonceMarker,
   renderAdvisoryRerollMarker,
@@ -34,6 +33,10 @@ import {
   renderReviewWatermarkMarker,
   renderUnclaimedByMarker,
 } from './protocol-helpers.mts';
+import {
+  createGithubProviderAdapter,
+  resolveCurrentGithubRepository,
+} from './provider-adapter-github.mts';
 
 export const MARKER_TYPES = [
   'claim',
@@ -541,18 +544,11 @@ function postMarker(
   number: number,
   body: string,
 ): { id: number; html_url: string } {
-  const out = ghText(
-    [
-      'api',
-      '--method',
-      'POST',
-      `repos/${owner}/${repo}/issues/${number}/comments`,
-      '--input',
-      '-',
-    ],
-    { input: JSON.stringify({ body }) },
+  const posted = createGithubProviderAdapter(owner, repo).postWorkItemComment(
+    number,
+    body,
   );
-  return JSON.parse(out) as { id: number; html_url: string };
+  return { id: posted.id, html_url: posted.htmlUrl };
 }
 
 /**
@@ -571,17 +567,10 @@ function postMarker(
  * watermark path.
  */
 function headShaFromPr(prNumber: number, owner: string, repo: string): string {
-  const headSha = ghText([
-    'pr',
-    'view',
-    String(prNumber),
-    '-R',
-    `${owner}/${repo}`,
-    '--json',
-    'headRefOid',
-    '--jq',
-    '.headRefOid',
-  ]);
+  const headSha = createGithubProviderAdapter(
+    owner,
+    repo,
+  ).getChangeRequestHeadSha(prNumber);
   // Validate the shape here (not just non-empty): a non-SHA value (e.g. the
   // literal text "null" if `gh` ever printed that instead of a real SHA)
   // would otherwise pass this check and only fail later inside
@@ -741,12 +730,10 @@ if (import.meta.main) {
     // before the apply-path resolution), so a `gh` failure here is part of
     // "derive from PR" and should report cleanly, not throw a raw stack.
     try {
-      args.owner =
-        args.owner ||
-        ghText(['repo', 'view', '--json', 'owner', '--jq', '.owner.login']);
-      args.repo =
-        args.repo ||
-        ghText(['repo', 'view', '--json', 'name', '--jq', '.name']);
+      const currentRepo =
+        args.owner && args.repo ? null : resolveCurrentGithubRepository();
+      args.owner = args.owner || currentRepo?.owner || '';
+      args.repo = args.repo || currentRepo?.repo || '';
       if (isWatermark) {
         const snapshot = runReviewActivitySnapshot(
           args.fromPr,
@@ -835,11 +822,10 @@ if (import.meta.main) {
     process.exit(0);
   }
 
-  const owner =
-    args.owner ||
-    ghText(['repo', 'view', '--json', 'owner', '--jq', '.owner.login']);
-  const repo =
-    args.repo || ghText(['repo', 'view', '--json', 'name', '--jq', '.name']);
+  const applyCurrentRepo =
+    args.owner && args.repo ? null : resolveCurrentGithubRepository();
+  const owner = args.owner || applyCurrentRepo?.owner || '';
+  const repo = args.repo || applyCurrentRepo?.repo || '';
 
   const posted = postMarker(owner, repo, number, body);
   const result: PostIddMarkerResult = {

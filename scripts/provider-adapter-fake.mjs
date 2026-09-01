@@ -123,6 +123,13 @@ export function createFakeProviderAdapter(fixture) {
     getChangeRequest(number) {
       return fixture.changeRequests?.[number] ?? null;
     },
+    getChangeRequestHeadSha(number) {
+      const sha = fixture.changeRequestHeadShas?.[number];
+      if (sha === undefined) {
+        throw new Error(`fake provider: no head SHA fixture for PR ${number}`);
+      }
+      return sha;
+    },
     listRequiredChecks(number) {
       return fixture.requiredChecks?.[number] ?? [];
     },

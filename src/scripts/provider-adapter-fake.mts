@@ -50,6 +50,9 @@ export interface FakeProviderFixture {
     ProviderCollaboratorPermissionResult
   >;
   changeRequests?: Record<number, ProviderChangeRequestState>;
+  /** Backs {@link ProviderPort.getChangeRequestHeadSha}; an absent key
+   * throws (matches the adapter's own no-catch, throw-on-failure contract). */
+  changeRequestHeadShas?: Record<number, string>;
   requiredChecks?: Record<number, ProviderRequiredCheck[]>;
   reviews?: Record<number, unknown[]>;
   openChangeRequests?: ProviderChangeRequestSummary[];
@@ -209,6 +212,14 @@ export function createFakeProviderAdapter(
 
     getChangeRequest(number: number): ProviderChangeRequestState | null {
       return fixture.changeRequests?.[number] ?? null;
+    },
+
+    getChangeRequestHeadSha(number: number): string {
+      const sha = fixture.changeRequestHeadShas?.[number];
+      if (sha === undefined) {
+        throw new Error(`fake provider: no head SHA fixture for PR ${number}`);
+      }
+      return sha;
     },
 
     listRequiredChecks(number: number): ProviderRequiredCheck[] {

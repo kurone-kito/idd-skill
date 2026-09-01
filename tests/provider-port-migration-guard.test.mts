@@ -20,6 +20,7 @@ const MIGRATED_HELPERS: readonly string[] = [
   'collaborator-permission.mts',
   'discover-viability-gate.mts',
   'discover-orphan-filter.mts',
+  'post-idd-marker.mts',
 ];
 
 const DIRECT_GH_PATTERNS: { pattern: RegExp; description: string }[] = [
