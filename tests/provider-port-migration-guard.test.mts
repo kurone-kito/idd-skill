@@ -24,6 +24,7 @@ const MIGRATED_HELPERS: readonly string[] = [
   'claim-approval-gate.mts',
   'resume-claim-routing.mts',
   'discover-readiness-check.mts',
+  'discover-shared-file-overlap.mts',
 ];
 
 const DIRECT_GH_PATTERNS: { pattern: RegExp; description: string }[] = [

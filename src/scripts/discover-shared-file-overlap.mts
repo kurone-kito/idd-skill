@@ -18,17 +18,17 @@ import { resolve } from 'node:path';
 
 import { parseAutopilotSuitability } from './autopilot-suitability.mts';
 import { parseCliArgs } from './cli-args.mts';
-import {
-  DEFAULT_GH_PAGINATED_TIMEOUT_MS,
-  GH_TEXT_LOOP_TIMEOUT_OPTIONS,
-  ghText,
-} from './gh-exec.mts';
 import { loadPolicyConfig } from './idd-config.mts';
 import { parseIsoDurationToMs } from './policy-helpers.mts';
 import {
   resolveActiveClaim,
   resolveTrustedMarkerActors,
 } from './protocol-helpers.mts';
+import {
+  createGithubProviderAdapter,
+  resolveCurrentGithubRepository,
+} from './provider-adapter-github.mts';
+import type { ProviderComment, ProviderPort } from './provider-port.mts';
 
 const DEFAULT_MARKER_PREFIX = 'idd-skill';
 // Exported (#1484) so suitability-triage.mts's high-confidence Check 4 tier
@@ -426,19 +426,11 @@ function runCli(): void {
     throw new Error('at least one --candidate <number> is required');
   }
 
-  const owner =
-    args.owner ||
-    ghText(
-      ['repo', 'view', '--json', 'owner', '--jq', '.owner.login'],
-      GH_TEXT_LOOP_TIMEOUT_OPTIONS,
-    );
-  const repo =
-    args.repo ||
-    ghText(
-      ['repo', 'view', '--json', 'name', '--jq', '.name'],
-      GH_TEXT_LOOP_TIMEOUT_OPTIONS,
-    );
-  const repoRef = `${owner}/${repo}`;
+  const currentRepo =
+    args.owner && args.repo ? null : resolveCurrentGithubRepository();
+  const owner = args.owner || currentRepo?.owner || '';
+  const repo = args.repo || currentRepo?.repo || '';
+  const port = createGithubProviderAdapter(owner, repo);
   const policy = loadPolicy(args.policy);
   const now = args.now || new Date().toISOString();
 
@@ -452,7 +444,7 @@ function runCli(): void {
   });
 
   const candidates: OverlapCandidateInput[] = args.candidates.map((number) => {
-    const issue = fetchIssue(repoRef, number);
+    const issue = fetchIssue(port, number);
     return {
       number,
       score: parseAutopilotSuitability(issue.body, policy.markerPrefix),
@@ -463,7 +455,7 @@ function runCli(): void {
   let activeIssues: ActiveIssueInput[] = [];
   if (args.checkOverlap) {
     activeIssues = discoverActiveIssues({
-      repoRef,
+      port,
       trustedActors: policy.trustedMarkerActors,
       staleAgeMs: policy.claimStaleAgeMs,
       now,
@@ -503,19 +495,19 @@ function runCli(): void {
  * forced-handoff-successor adoption (the default `resolveActiveClaim` path).
  */
 function discoverActiveIssues(options: {
-  repoRef: string;
+  port: ProviderPort;
   trustedActors: string[];
   staleAgeMs: number;
   now: string;
 }): ActiveIssueInput[] {
-  const { repoRef, trustedActors, staleAgeMs, now } = options;
+  const { port, trustedActors, staleAgeMs, now } = options;
   const active = new Map<number, ActiveIssueInput>();
 
   // Active-by-PR: issues closed by an open PR (best-effort across open PRs,
   // bounded by the PR-list page cap).
-  for (const number of fetchOpenPrLinkedIssues(repoRef)) {
+  for (const number of fetchOpenPrLinkedIssues(port)) {
     if (!active.has(number)) {
-      const body = fetchIssue(repoRef, number).body;
+      const body = fetchIssue(port, number).body;
       active.set(number, {
         number,
         reason: 'pr',
@@ -537,17 +529,17 @@ function discoverActiveIssues(options: {
   const isStale = (activeCreatedAt: string, nextCreatedAt: string): boolean =>
     new Date(nextCreatedAt).getTime() - new Date(activeCreatedAt).getTime() >=
     staleAgeMs;
-  for (const number of fetchActiveClaimBranchNumbers(repoRef)) {
+  for (const number of fetchActiveClaimBranchNumbers(port)) {
     if (active.has(number)) {
       continue;
     }
-    const comments = fetchIssueComments(repoRef, number);
+    const comments = fetchIssueComments(port, number);
     const claim = resolveActiveClaim(comments, {
       isTrustedAuthor: isTrusted,
       isStale,
     });
     if (claim && !isStale(claim.createdAt, now)) {
-      const body = fetchIssue(repoRef, number).body;
+      const body = fetchIssue(port, number).body;
       active.set(number, {
         number,
         reason: 'claim',
@@ -560,25 +552,10 @@ function discoverActiveIssues(options: {
 }
 
 /** Issue numbers that currently have an `issue/<n>-*` branch on the remote. */
-function fetchActiveClaimBranchNumbers(repoRef: string): number[] {
+function fetchActiveClaimBranchNumbers(port: ProviderPort): number[] {
   const numbers = new Set<number>();
-  // `--paginate` follows the Link headers to the end, so a repo with many
-  // issue branches does not silently drop branches past the first page.
-  const output = ghText(
-    [
-      'api',
-      '--paginate',
-      `repos/${repoRef}/git/matching-refs/heads/issue/`,
-      '--jq',
-      '.[].ref',
-    ],
-    {
-      ...GH_TEXT_LOOP_TIMEOUT_OPTIONS,
-      timeout: DEFAULT_GH_PAGINATED_TIMEOUT_MS,
-    },
-  );
-  for (const line of output.split('\n')) {
-    const match = line.match(/^refs\/heads\/issue\/(\d+)-/);
+  for (const ref of port.listIssueBranchRefs()) {
+    const match = ref.match(/^refs\/heads\/issue\/(\d+)-/);
     if (match) {
       numbers.add(Number.parseInt(match[1], 10));
     }
@@ -590,105 +567,53 @@ interface FetchedIssue {
   body: string;
 }
 
-function fetchIssue(repoRef: string, number: number): FetchedIssue {
+function fetchIssue(port: ProviderPort, number: number): FetchedIssue {
   // Fail closed: let a fetch failure surface rather than returning an empty
   // body, which would silently suppress this issue's candidate files and emit
-  // a false "no overlap" result.
-  const body = ghText(
-    [
-      'issue',
-      'view',
-      String(number),
-      '--repo',
-      repoRef,
-      '--json',
-      'body',
-      '--jq',
-      '.body',
-    ],
-    GH_TEXT_LOOP_TIMEOUT_OPTIONS,
-  );
-  return { body };
+  // a false "no overlap" result. `getWorkItem` returns null on a 404 instead
+  // of throwing (unlike this file's pre-migration `gh issue view`, which
+  // threw on any failure, missing issues included), so a missing issue is
+  // turned back into a thrown error here to preserve that fail-closed
+  // contract.
+  const issue = port.getWorkItem(number);
+  if (!issue) {
+    throw new Error(`issue #${number} not found`);
+  }
+  return { body: issue.body };
 }
 
 /**
- * Map a REST issue-comment payload to the `CommentLike` shape
- * `resolveActiveClaim` consumes. `resolveActiveClaim` reads the author from
- * `author.login`, but the REST comments API returns it under `user.login`, so
- * the login must be mapped across here (matching `discover-roadmap-graph`'s
- * comment loader). Emitting `user` would leave the author empty and silently
+ * Map a `ProviderComment` to the `CommentLike` shape `resolveActiveClaim`
+ * consumes. `resolveActiveClaim` reads the author from `author.login`, but
+ * `ProviderComment` carries it as a flat `authorLogin` (matching
+ * `discover-roadmap-graph`'s own comment loader, which maps the equivalent
+ * REST `user.login` the same way), so the login must be mapped across here.
+ * Emitting `authorLogin` unmapped would leave `author` empty and silently
  * disable claim detection.
  */
-export function toClaimComment(raw: unknown): {
+export function toClaimComment(raw: ProviderComment): {
   body: string;
   createdAt: string;
   author: { login: string };
 } {
-  const entry = raw as {
-    body?: unknown;
-    created_at?: unknown;
-    user?: { login?: unknown } | null;
-  };
   return {
-    body: String(entry.body ?? ''),
-    createdAt: String(entry.created_at ?? ''),
-    author: { login: String(entry.user?.login ?? '') },
+    body: raw.body,
+    createdAt: raw.createdAt,
+    author: { login: raw.authorLogin },
   };
 }
 
 function fetchIssueComments(
-  repoRef: string,
+  port: ProviderPort,
   number: number,
 ): { body: string; createdAt: string; author: { login: string } }[] {
-  const comments: ReturnType<typeof toClaimComment>[] = [];
-  const pageSize = 100;
-  for (let page = 1; ; page += 1) {
-    const rawPage = ghJson([
-      'api',
-      `repos/${repoRef}/issues/${number}/comments?per_page=${pageSize}&page=${page}`,
-    ]);
-    for (const raw of rawPage) {
-      comments.push(toClaimComment(raw));
-    }
-    if (rawPage.length < pageSize) {
-      break;
-    }
-  }
-  return comments;
+  return port.listWorkItemComments(number).map(toClaimComment);
 }
 
-function fetchOpenPrLinkedIssues(repoRef: string): number[] {
-  const numbers = new Set<number>();
+function fetchOpenPrLinkedIssues(port: ProviderPort): number[] {
   // Best-effort: `gh pr list` caps at --limit, so a repo with more open PRs
   // than the cap drops the overflow. Acceptable for an advisory signal.
-  const prs = ghJson([
-    'pr',
-    'list',
-    '--repo',
-    repoRef,
-    '--state',
-    'open',
-    '--limit',
-    String(OPEN_PR_SCAN_LIMIT),
-    '--json',
-    'closingIssuesReferences',
-  ]);
-  for (const pr of prs) {
-    const refs = (pr as { closingIssuesReferences?: unknown })
-      .closingIssuesReferences;
-    if (Array.isArray(refs)) {
-      for (const ref of refs) {
-        const value = Number.parseInt(
-          String((ref as { number?: unknown }).number ?? ''),
-          10,
-        );
-        if (Number.isInteger(value) && value > 0) {
-          numbers.add(value);
-        }
-      }
-    }
-  }
-  return [...numbers];
+  return port.listIssueNumbersClosedByOpenChangeRequests(OPEN_PR_SCAN_LIMIT);
 }
 
 function loadManifest(manifestPath: string): unknown {
@@ -858,26 +783,4 @@ claim stale age, so a non-stale claim held by another session is detected even
 when it is outside the unclaimed candidate set being ranked. A claim whose
 branch is not yet pushed is picked up once it appears remotely.
 `);
-}
-
-// Exported (#1484) as the array-safe `gh` JSON parser: suitability-triage.mts
-// reuses it (aliased at the import site to avoid colliding with that file's
-// own object-shaped `ghJson`) instead of re-declaring an equivalent helper.
-export function ghJson(args: string[]): unknown[] {
-  const parsed = JSON.parse(runGh(args).trim() || '[]');
-  return Array.isArray(parsed) ? parsed : [];
-}
-
-function runGh(args: string[]): string {
-  try {
-    return ghText(args, GH_TEXT_LOOP_TIMEOUT_OPTIONS);
-  } catch (error) {
-    const stderr = String(
-      (error as { stderr?: unknown } | null)?.stderr ?? '',
-    ).trim();
-    if (stderr) {
-      throw new Error(`gh command failed: ${stderr}`);
-    }
-    throw error;
-  }
 }
