@@ -798,7 +798,7 @@ function checkCommandResidueAndConsistency(
       if (normalized === null) {
         continue;
       }
-      const token = findToolchainResidueToken(normalized);
+      const token = findToolchainResidueToken(normalized, key);
       if (!token) {
         continue;
       }
@@ -853,9 +853,52 @@ function isConcreteCommandValue(value: string | null): boolean {
   return !/\{\{\s*[A-Za-z0-9_-]+\s*\}\}/.test(value);
 }
 
-function findToolchainResidueToken(value: string): string | null {
+/**
+ * Per-key documented invocation segments from
+ * `idd-template/docs/customization.md`'s worked-example commands table,
+ * split on `&&` and trimmed. A command value's residue-token segment is
+ * exempt from the warning only when it matches one of these verbatim for
+ * the same key -- the same token under a different key (e.g. `dprint
+ * check` under `fix-validate`, whose documented form is `dprint fmt`) is
+ * not exempt.
+ */
+const DOCUMENTED_TOOLCHAIN_SEGMENTS: Readonly<
+  Record<string, readonly string[]>
+> = {
+  'fix-validate': [
+    'npx dprint fmt "**/*.md"',
+    'npx markdownlint-cli2 --fix "**/*.md"',
+    'npx markdownlint-cli2 "**/*.md"',
+    'npx cspell lint "**" --no-progress',
+  ],
+  'pre-push-validate': [
+    'npx dprint check "**/*.md"',
+    'npx markdownlint-cli2 "**/*.md"',
+    'npx cspell lint "**" --no-progress',
+  ],
+  'post-fix-validate': [
+    'npx dprint fmt "**/*.md"',
+    'npx markdownlint-cli2 --fix "**/*.md"',
+    'npx markdownlint-cli2 "**/*.md"',
+    'npx cspell lint "**" --no-progress',
+  ],
+};
+
+function findToolchainResidueToken(value: string, key: string): string | null {
+  const documented = DOCUMENTED_TOOLCHAIN_SEGMENTS[key];
+  const segments = value.split('&&').map((segment) => segment.trim());
   for (const token of ['dprint', 'markdownlint-cli2', 'cspell']) {
-    if (new RegExp(`\\b${escapeRegex(token)}\\b`, 'i').test(value)) {
+    const pattern = new RegExp(`\\b${escapeRegex(token)}\\b`, 'i');
+    const matchingSegments = segments.filter((segment) =>
+      pattern.test(segment),
+    );
+    if (matchingSegments.length === 0) {
+      continue;
+    }
+    const allDocumented =
+      documented !== undefined &&
+      matchingSegments.every((segment) => documented.includes(segment));
+    if (!allDocumented) {
       return token;
     }
   }
