@@ -478,27 +478,32 @@ function cumulativeSnapshotAt(
 }
 
 /**
- * Allocates each stage window's usage from a timeline. Windows must be
- * passed in ascending start-time order for the cumulative running
- * baseline to telescope correctly (sum of every window's delta equals
- * the timeline's final cumulative snapshot minus zero -- matching the
- * adapter's own `usage` total, which is the raw latest snapshot, not a
- * value relative to session start).
+ * Allocates each stage window's usage from a timeline. Cumulative mode
+ * looks up the snapshot at each window's own [startMs, endMs) independently
+ * (never a running baseline carried from the previous window): a gap
+ * between windows -- computeStageWindows can leave one before an event
+ * window whose predecessor is also event-sourced -- must not fold that
+ * gap's cumulative growth into the next window's delta, matching delta
+ * mode's natural gap exclusion via sumDeltaInRange. For contiguous windows
+ * (the common case) this is exactly equivalent to the running-baseline
+ * form, since each window's startMs then equals the previous window's
+ * endMs, so the exact-sum invariant (every window's delta sums to the
+ * timeline's final cumulative snapshot minus zero, matching the adapter's
+ * own `usage` total) still holds.
  */
 export function allocateStageUsage(
   windows: readonly StageWindow[],
   timeline: UsageTimeline,
 ): TokenCostStageUsage[] {
   const out: TokenCostStageUsage[] = [];
-  let cumulativeBaseline = ZERO_USAGE;
   for (const window of windows) {
     let usage: TokenCostUsage;
     if (timeline.mode === 'cumulative') {
-      const snapshot =
-        cumulativeSnapshotAt(timeline.points, window.endMs) ??
-        cumulativeBaseline;
-      usage = subtractUsageClamped(snapshot, cumulativeBaseline);
-      cumulativeBaseline = snapshot;
+      const startSnapshot =
+        cumulativeSnapshotAt(timeline.points, window.startMs) ?? ZERO_USAGE;
+      const endSnapshot =
+        cumulativeSnapshotAt(timeline.points, window.endMs) ?? startSnapshot;
+      usage = subtractUsageClamped(endSnapshot, startSnapshot);
     } else {
       usage = sumDeltaInRange(timeline.points, window.startMs, window.endMs);
     }
@@ -579,8 +584,13 @@ interface TrustedComment {
   login: string;
 }
 
+// GitHub logins are case-insensitive for account identity; compare
+// case-insensitively so a --trusted-marker-logins/config entry typed with
+// different casing than the GraphQL-reported author.login still matches,
+// rather than silently treating every marker as untrusted.
 function isTrusted(login: string, trustedLogins: readonly string[]): boolean {
-  return trustedLogins.includes(login);
+  const normalized = login.toLowerCase();
+  return trustedLogins.some((trusted) => trusted.toLowerCase() === normalized);
 }
 
 /** flag > config.json trustedMarkerActors > empty (fail closed: nothing is trusted). */

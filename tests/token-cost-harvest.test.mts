@@ -587,6 +587,37 @@ test('allocateStageUsage (cumulative mode): windows telescope to the final snaps
   assert.equal(sum, 100); // matches the final (latest) cumulative snapshot
 });
 
+test('allocateStageUsage (cumulative mode): a gap between windows excludes that growth, never folds it into the next window', () => {
+  const windows = [
+    {
+      id: 'claim' as const,
+      startMs: ms('2026-01-01T00:00:00Z'),
+      endMs: ms('2026-01-01T00:10:00Z'),
+      source: 'marker' as const,
+    },
+    // A genuine gap: [00:10, 00:15) is not covered by any window.
+    {
+      id: 'work' as const,
+      startMs: ms('2026-01-01T00:15:00Z'),
+      endMs: ms('2026-01-01T00:25:00Z'),
+      source: 'event' as const,
+    },
+  ];
+  const points = [
+    { atMs: ms('2026-01-01T00:05:00Z'), usage: usage(5) },
+    // Grows during the gap -- this +3 must not attribute to either window.
+    { atMs: ms('2026-01-01T00:12:00Z'), usage: usage(8) },
+    { atMs: ms('2026-01-01T00:20:00Z'), usage: usage(12) },
+  ];
+  const stages = allocateStageUsage(windows, { mode: 'cumulative', points });
+  assert.equal(stages.find((s) => s.id === 'claim')?.usage.output, 5);
+  // Not 7 (12 - the running baseline of 5): the +3 that grew during the gap
+  // (5 -> 8) is excluded, matching delta mode's gap exclusion.
+  assert.equal(stages.find((s) => s.id === 'work')?.usage.output, 4);
+  const sum = stages.reduce((total, s) => total + usageSum(s.usage), 0);
+  assert.equal(sum, 9); // 12 (final snapshot) - 3 (unattributed gap growth)
+});
+
 test('allocateStageUsage omits an all-zero-usage window', () => {
   const windows = [
     {
@@ -802,6 +833,31 @@ test('fetchIssueLoopGithubContext resolves the earliest live-connected same-bran
     // This is the PR's own first submitted review only -- resolveIssueLoopContext
     // (tested below) additionally folds in the earlier review-watermark comment.
     assert.equal(result.firstReviewAtMs, ms('2026-01-01T00:22:00Z'));
+  } finally {
+    restore();
+  }
+});
+
+test('resolveIssueLoopContext: trusted-login matching is case-insensitive', () => {
+  const fixture = readJson(
+    'tests/fixtures/token-cost/github/issue-loop-merged.json',
+  );
+  const restore = stubGhReturningJson(fixture);
+  try {
+    // The fixture's claimed-by comment author is "claude-test"; passing a
+    // differently cased trusted login must still resolve the claim (GitHub
+    // logins are case-insensitive for account identity) instead of
+    // silently treating the marker as untrusted and returning null.
+    const ctx = resolveIssueLoopContext(
+      'acme',
+      'repo',
+      9001,
+      ms('2025-12-31T23:55:00Z'),
+      ms('2026-01-01T00:35:00Z'),
+      ['Claude-Test'],
+    );
+    assert.ok(ctx);
+    assert.equal(ctx?.claimedAtMs, ms('2026-01-01T00:00:00Z'));
   } finally {
     restore();
   }
