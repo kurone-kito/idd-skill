@@ -178,6 +178,11 @@ const BASE_DERIVE_OPTIONS = {
   trustedMarkerLogins: TRUSTED,
   primaryBotLogin: 'copilot-pull-request-reviewer[bot]',
   cutoffIso: null,
+  // A zero settling window preserves this suite's existing
+  // immediate-failure-classification semantics; the settling-window
+  // behavior itself is covered by its own dedicated test below.
+  now: NOW,
+  settledWindowMs: 0,
 };
 
 test('deriveAdvisoryReviewObservation: an untrusted actor cannot post evidence-bearing markers', () => {
@@ -221,13 +226,10 @@ test('deriveAdvisoryReviewObservation: the LATEST trusted marker decides the out
       requested_reviewer: { login: 'copilot-pull-request-reviewer[bot]' },
     },
   ];
-  const result = deriveAdvisoryReviewObservation(
-    1,
-    comments,
-    timeline,
-    [],
-    BASE_DERIVE_OPTIONS,
-  );
+  const result = deriveAdvisoryReviewObservation(1, comments, timeline, [], {
+    ...BASE_DERIVE_OPTIONS,
+    now: '2026-09-01T12:30:00Z',
+  });
   assert.deepEqual(result, { prNumber: 1, outcome: 'failure' });
 });
 
@@ -260,6 +262,28 @@ test('deriveAdvisoryReviewObservation: recognizes both the plain-text and HTML-c
   }
 });
 
+test('deriveAdvisoryReviewObservation: a malformed timestamp is not evidence-bearing', () => {
+  for (const body of [
+    'advisory-wait: agent-x 0123456789abcdef0123456789abcdef01234567 not-a-timestamp',
+    '<!-- advisory-wait: agent-x 0123456789abcdef0123456789abcdef01234567 not-a-timestamp -->',
+  ]) {
+    const result = deriveAdvisoryReviewObservation(
+      1,
+      [
+        {
+          body,
+          created_at: '2026-09-01T00:00:00Z',
+          user: { login: 'idd-bot' },
+        },
+      ],
+      [],
+      [],
+      BASE_DERIVE_OPTIONS,
+    );
+    assert.equal(result, null);
+  }
+});
+
 test('deriveAdvisoryReviewObservation: a submitted review from the primary bot registers success without a timeline event', () => {
   const result = deriveAdvisoryReviewObservation(
     1,
@@ -280,6 +304,48 @@ test('deriveAdvisoryReviewObservation: a submitted review from the primary bot r
     BASE_DERIVE_OPTIONS,
   );
   assert.deepEqual(result, { prNumber: 1, outcome: 'success' });
+});
+
+test('deriveAdvisoryReviewObservation: an unregistered marker still within the settling window is not failure evidence', () => {
+  const result = deriveAdvisoryReviewObservation(
+    1,
+    [
+      {
+        body: 'advisory-wait: agent-x 0123456789abcdef0123456789abcdef01234567 2026-09-01T00:00:00Z',
+        created_at: '2026-09-01T00:00:00Z',
+        user: { login: 'idd-bot' },
+      },
+    ],
+    [],
+    [],
+    {
+      ...BASE_DERIVE_OPTIONS,
+      now: '2026-09-01T00:05:00Z',
+      settledWindowMs: 10 * 60_000,
+    },
+  );
+  assert.equal(result, null);
+});
+
+test('deriveAdvisoryReviewObservation: an unregistered marker past the settling window is failure evidence', () => {
+  const result = deriveAdvisoryReviewObservation(
+    1,
+    [
+      {
+        body: 'advisory-wait: agent-x 0123456789abcdef0123456789abcdef01234567 2026-09-01T00:00:00Z',
+        created_at: '2026-09-01T00:00:00Z',
+        user: { login: 'idd-bot' },
+      },
+    ],
+    [],
+    [],
+    {
+      ...BASE_DERIVE_OPTIONS,
+      now: '2026-09-01T00:15:00Z',
+      settledWindowMs: 10 * 60_000,
+    },
+  );
+  assert.deepEqual(result, { prNumber: 1, outcome: 'failure' });
 });
 
 test('deriveAdvisoryReviewObservation: a marker older than the sampling window contributes no observation', () => {

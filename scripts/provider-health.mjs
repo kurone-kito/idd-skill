@@ -25,7 +25,9 @@
 // returned success) rather than re-deriving a separate timing rule.
 import {
   DEFAULT_ADVISORY_PRIMARY_BOT_LOGIN,
+  DEFAULT_ADVISORY_SETTLED_WINDOW_MINUTES,
   resolveAdvisoryPrimaryBotLogin,
+  resolveAdvisoryWaitPolicy,
 } from './advisory-wait-policy.mjs';
 import { parseCliArgs } from './cli-args.mjs';
 import { ghApiJson, ghText } from './gh-exec.mjs';
@@ -150,10 +152,14 @@ export function classifyProviderHealth(snapshot, policy) {
 // `<!-- advisory-wait: {agentId} {headSha} {timestamp} -->` HTML-comment
 // form. Anchored to the whole trimmed comment body -- both forms are always
 // posted as their own dedicated comment, never embedded in a larger one.
-const ADVISORY_WAIT_REQUEST_MARKER_RE =
-  /^advisory-wait:\s+\S+\s+[0-9a-f]{40}\s+\S+\s*$/;
-const ADVISORY_WAIT_REQUEST_MARKER_HTML_RE =
-  /^<!--\s*advisory-wait:\s*\S+\s+[0-9a-f]{40}\s+\S+\s*-->\s*$/;
+const ISO_TIMESTAMP_SOURCE =
+  '\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?Z';
+const ADVISORY_WAIT_REQUEST_MARKER_RE = new RegExp(
+  `^advisory-wait:\\s+\\S+\\s+[0-9a-f]{40}\\s+${ISO_TIMESTAMP_SOURCE}\\s*$`,
+);
+const ADVISORY_WAIT_REQUEST_MARKER_HTML_RE = new RegExp(
+  `^<!--\\s*advisory-wait:\\s*\\S+\\s+[0-9a-f]{40}\\s+${ISO_TIMESTAMP_SOURCE}\\s*-->\\s*$`,
+);
 function isAdvisoryWaitRequestMarker(body) {
   const trimmed = body.trim();
   return (
@@ -224,10 +230,20 @@ export function deriveAdvisoryReviewObservation(
     const submittedAt = String(review?.submitted_at ?? '');
     return submittedAt !== '' && submittedAt >= requestMarkerAt;
   });
-  return {
-    prNumber,
-    outcome: registeredByTimeline || registeredByReview ? 'success' : 'failure',
-  };
+  if (registeredByTimeline || registeredByReview) {
+    return { prNumber, outcome: 'success' };
+  }
+  // Not yet registered -- but a request posted moments ago hasn't had time
+  // for ordinary GitHub propagation lag to resolve. #2327's own
+  // `advisoryWait.settledWindowMinutes` already draws exactly this
+  // ordinary-lag-vs-genuine-failure line for a single pull request; reuse
+  // it here rather than treating every fresh marker as immediate failure
+  // evidence.
+  const elapsedMs = Date.parse(options.now) - Date.parse(requestMarkerAt);
+  if (!Number.isFinite(elapsedMs) || elapsedMs < options.settledWindowMs) {
+    return null;
+  }
+  return { prNumber, outcome: 'failure' };
 }
 function resolveCutoffIso(nowIso, windowMs) {
   if (windowMs === null) return null;
@@ -257,6 +273,8 @@ export function collectAdvisoryReviewEvidence(owner, repo, options = {}) {
     ),
   );
   const cutoffIso = resolveCutoffIso(now, options.samplingWindowMs ?? null);
+  const settledWindowMs =
+    options.settledWindowMs ?? DEFAULT_ADVISORY_SETTLED_WINDOW_MINUTES * 60_000;
   const observations = [];
   let payload;
   try {
@@ -316,7 +334,7 @@ export function collectAdvisoryReviewEvidence(owner, repo, options = {}) {
       comments,
       timeline,
       reviews,
-      { trustedMarkerLogins, primaryBotLogin, cutoffIso },
+      { trustedMarkerLogins, primaryBotLogin, cutoffIso, now, settledWindowMs },
     );
     if (observation !== null) observations.push(observation);
   }
@@ -378,7 +396,20 @@ export function collectCiActionsEvidence(owner, repo, options = {}) {
     const payload = ghApiJson(
       `repos/${owner}/${repo}/actions/runs?status=completed&per_page=${sampleSize}`,
     );
-    runs = Array.isArray(payload.workflow_runs) ? payload.workflow_runs : [];
+    // A malformed response (e.g. `{}`) must not silently read as "zero
+    // runs" -- that would resolve to unknown/no-evidence instead of
+    // unknown/evidence-unreadable, the same crash-vs-degrade distinction
+    // already guarded on the advisory-review pulls-list read above.
+    if (!Array.isArray(payload.workflow_runs)) {
+      return {
+        service: 'ci-actions',
+        now,
+        contradictory: false,
+        unreadable: true,
+        observations,
+      };
+    }
+    runs = payload.workflow_runs;
   } catch {
     return {
       service: 'ci-actions',
@@ -422,11 +453,14 @@ export function buildProviderHealthReport(owner, repo, options = {}) {
     config: config,
   });
   const samplingWindowMs = parseIsoDurationToMs(policy.samplingWindow);
+  const settledWindowMs =
+    resolveAdvisoryWaitPolicy(config).settledWindowMinutes * 60_000;
   const advisoryReviewSnapshot = collectAdvisoryReviewEvidence(owner, repo, {
     primaryBotLogin,
     now,
     trustedMarkerLogins,
     samplingWindowMs,
+    settledWindowMs,
   });
   const ciActionsSnapshot = collectCiActionsEvidence(owner, repo, {
     now,
