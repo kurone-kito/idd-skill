@@ -1,0 +1,2 @@
+{"timestamp":"2026-08-22T11:00:00.000Z","type":"session_start","sessionId":"grok-events-0003","cwd":"/home/testuser/ghq/github.com/kurone-kito/idd-skill"}
+{"timestamp":"2026-08-22T11:20:00.000Z","type":"agent_message_chunk","usage":{"inputTokens":500,"cachedReadTokens":0,"cacheCreationTokens":0,"outputTokens":90,"reasoningTokens":10}}

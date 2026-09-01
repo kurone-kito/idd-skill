@@ -1,0 +1,2 @@
+{"timestamp":"2026-08-24T07:00:00.000Z","type":"session_start","sessionId":"grok-worktree-0007","cwd":"/home/testuser/ghq/github.com/kurone-kito/idd-skill.issue-4242-fix-something","model":"grok-4-fast"}
+{"timestamp":"2026-08-24T07:05:00.000Z","type":"agent_message_chunk","usage":{"inputTokens":400,"cachedReadTokens":50,"cacheCreationTokens":0,"outputTokens":65,"reasoningTokens":15}}
