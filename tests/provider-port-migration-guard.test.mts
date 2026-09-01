@@ -1,0 +1,63 @@
+// Static guard for #2266: once a domain helper migrates onto
+// `provider-port.mts`, it must never regain a direct `gh` invocation or
+// GitHub-endpoint construction. `MIGRATED_HELPERS` starts empty and gains
+// one entry per migration commit, so this guard protects every subsequent
+// commit in the migration rather than only catching regressions after the
+// whole issue lands. `provider-port.mts`, `provider-adapter-github.mts`,
+// and `provider-adapter-fake.mts` are the sanctioned exception -- the
+// adapter's whole job is to be the one place `gh` invocation lives.
+import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { test } from 'node:test';
+import { fileURLToPath } from 'node:url';
+
+const REPO_ROOT = fileURLToPath(new URL('..', import.meta.url));
+
+/** Files migrated so far. Append the next filename here as each of #2266's
+ * 11 target files moves onto the provider port -- do not add a name until
+ * its migration commit lands, and never remove one once migrated. */
+const MIGRATED_HELPERS: readonly string[] = [];
+
+const DIRECT_GH_PATTERNS: { pattern: RegExp; description: string }[] = [
+  {
+    pattern: /execFileSync\(\s*['"]gh['"]/,
+    description: 'direct execFileSync("gh", ...) invocation',
+  },
+  {
+    pattern: /from ['"]\.\/gh-exec\.mts['"]/,
+    description: 'import from the gh-exec.mts transport primitive',
+  },
+  {
+    pattern: /\bghText\s*\(|\bghApiJson\s*\(|\bghGraphql\s*\(/,
+    description: 'a bare ghText()/ghApiJson()/ghGraphql() call',
+  },
+];
+
+function readSource(relativePath: string): string {
+  return readFileSync(`${REPO_ROOT}/src/scripts/${relativePath}`, 'utf8');
+}
+
+test('migrated helpers no longer construct gh/GitHub calls directly', () => {
+  for (const filename of MIGRATED_HELPERS) {
+    const source = readSource(filename);
+    for (const { pattern, description } of DIRECT_GH_PATTERNS) {
+      assert.doesNotMatch(
+        source,
+        pattern,
+        `${filename} regained ${description} after migrating onto provider-port.mts`,
+      );
+    }
+  }
+});
+
+test('the adapter modules themselves are exempt and still exist', () => {
+  // Sanity check that the exemption target is real, not a typo that would
+  // silently make the guard above vacuous once files are enrolled.
+  for (const filename of [
+    'provider-port.mts',
+    'provider-adapter-github.mts',
+    'provider-adapter-fake.mts',
+  ]) {
+    assert.doesNotThrow(() => readSource(filename));
+  }
+});
