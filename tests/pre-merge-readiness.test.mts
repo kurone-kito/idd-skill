@@ -11,6 +11,7 @@ import {
   fetchGovernanceJson,
   normalizeStatusCheckRollupEntry,
   parseArgs,
+  resolveDeclarationActiveSince,
   resolveEligibleCodeownerUserLogins,
   resolveToleratedGhFailure,
 } from '../src/scripts/pre-merge-readiness.mts';
@@ -6561,6 +6562,52 @@ test('resolveToleratedGhFailure ignores non-JSON allowStatuses stdout and falls 
     resolveToleratedGhFailure(error, { allowStatuses: [1] }),
     undefined,
   );
+});
+
+// #2353 (Codex review on PR #2370, second follow-up): a declaration's own
+// `startedAt` is generated before the `--declare --apply` interactive
+// confirmation prompt, while the GitHub comment's `createdAt` is stamped
+// only once the maintainer confirms posting. Use the LATER of the two as
+// the "declaration became a real, postable fact" cutoff.
+test('resolveDeclarationActiveSince uses createdAt when it is later than startedAt (the pause-at-prompt case)', () => {
+  assert.equal(
+    resolveDeclarationActiveSince({
+      startedAt: '2026-05-12T00:00:00Z',
+      createdAt: '2026-05-12T00:05:00Z', // maintainer paused 5 minutes at the prompt
+    }),
+    '2026-05-12T00:05:00.000Z',
+  );
+});
+
+test('resolveDeclarationActiveSince uses startedAt when it is later than createdAt (the ordinary case)', () => {
+  assert.equal(
+    resolveDeclarationActiveSince({
+      startedAt: '2026-05-12T00:05:00Z',
+      createdAt: '2026-05-12T00:00:00Z',
+    }),
+    '2026-05-12T00:05:00.000Z',
+  );
+});
+
+test('resolveDeclarationActiveSince falls back to startedAt alone when createdAt is the schema-documented "none" sentinel', () => {
+  assert.equal(
+    resolveDeclarationActiveSince({
+      startedAt: '2026-05-12T00:00:00Z',
+      createdAt: 'none',
+    }),
+    '2026-05-12T00:00:00.000Z',
+  );
+});
+
+test('resolveDeclarationActiveSince returns empty when both timestamps are unparseable', () => {
+  assert.equal(
+    resolveDeclarationActiveSince({ startedAt: '', createdAt: 'none' }),
+    '',
+  );
+});
+
+test('resolveDeclarationActiveSince returns empty for a null declaration', () => {
+  assert.equal(resolveDeclarationActiveSince(null), '');
 });
 
 // #1483: normalizeStatusCheckRollupEntry replaced the old `gh pr checks`

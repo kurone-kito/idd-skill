@@ -1614,6 +1614,29 @@ function readExternalCheckWaiverMode(): string {
   }
 }
 
+// #2353 (Codex review on PR #2370, second follow-up): a declaration's own
+// `startedAt` is generated before the `--declare --apply` interactive
+// confirmation prompt, while the GitHub comment's `createdAt` is stamped
+// only once the maintainer actually confirms posting it. A failed check
+// that completes during that pause satisfies a `startedAt`-only cutoff
+// even though the declaration did not verifiably exist on GitHub yet and
+// the check never reran under it. Use the LATER of the two timestamps as
+// the true "this declaration became a real, postable fact" moment.
+// `createdAt` may be the literal string `"none"` (schema-documented) or
+// otherwise unparseable; in that case this falls back to `startedAt`
+// alone, unchanged from before this fix -- never widening the cutoff.
+export function resolveDeclarationActiveSince(
+  declaration: { startedAt?: unknown; createdAt?: unknown } | null,
+): string {
+  const startedAtMs = Date.parse(String(declaration?.startedAt ?? ''));
+  const createdAtMs = Date.parse(String(declaration?.createdAt ?? ''));
+  const candidates = [startedAtMs, createdAtMs].filter((ms) =>
+    Number.isFinite(ms),
+  );
+  if (candidates.length === 0) return '';
+  return new Date(Math.max(...candidates)).toISOString();
+}
+
 // #2353: resolve whether a repository-scoped `providerOutage.
 // declarationTarget` declaration relieves the `idd-advisory-convergence`
 // selector for this pull request -- the SAME selector
@@ -1697,7 +1720,9 @@ function resolveAdvisoryConvergenceOutageRelief({
     }).relieved;
     return {
       relieved,
-      since: relieved ? String(declaration.declaration?.startedAt ?? '') : '',
+      since: relieved
+        ? resolveDeclarationActiveSince(declaration.declaration)
+        : '',
     };
   } catch {
     return notRelieved;
