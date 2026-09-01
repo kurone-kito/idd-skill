@@ -269,6 +269,33 @@ test('idd-doctor does not warn when commands match the documented worked-example
   );
 });
 
+test('idd-doctor does not warn on a fix-validate that documents the markdownlint-only subset', (t) => {
+  const root = createDoctorFixtureRepoFromConfig(
+    {
+      ...REQUIRED_CONFIG_BASE,
+      commands: {
+        'fix-validate':
+          'npx markdownlint-cli2 --fix "**/*.md" && npx markdownlint-cli2 "**/*.md"',
+        'pre-push-validate': 'npm run lint',
+        'post-fix-validate': 'npm run test',
+        'install-deps': 'true',
+      },
+    },
+    {
+      markerPrefix: 'example-team',
+    },
+  );
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const report = runDoctor({ root, requireGithub: false });
+
+  assert.equal(report.errors.length, 0);
+  assert.ok(
+    report.warnings.every(
+      (warning) => !warning.startsWith('toolchain residue detected'),
+    ),
+  );
+});
+
 test('idd-doctor does not warn on a fix-validate that documents the cspell-only subset', (t) => {
   const root = createDoctorFixtureRepoFromConfig(
     {
