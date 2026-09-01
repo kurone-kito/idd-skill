@@ -4,19 +4,23 @@ import {
   existsSync,
   mkdtempSync,
   readFileSync,
+  realpathSync,
   rmSync,
+  statSync,
+  utimesSync,
   writeFileSync,
 } from 'node:fs';
 import { devNull, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { promisify } from 'node:util';
 
 import {
   acquireCloneLock,
   CloneLockTimeoutError,
   checkCloneLock,
+  refreshCloneLock,
   releaseCloneLock,
   resolveCloneLockPath,
   withCloneLock,
@@ -177,22 +181,27 @@ test('acquire: times out with CloneLockTimeoutError when the lock is never relea
   }
 });
 
-test('acquire: a lock older than the stale threshold is taken over rather than waited out', () => {
+function backdateLockMtime(path: string, ageMs: number): void {
+  const ancient = new Date(Date.now() - ageMs);
+  utimesSync(path, ancient, ancient);
+}
+
+test('acquire: a lock whose mtime is older than staleMs is taken over rather than waited out', () => {
   const primary = setupRepo();
   try {
     const path = resolveCloneLockPath(primary);
-    const ancientAcquiredAt = new Date(Date.now() - 10 * 60_000).toISOString();
     writeFileSync(
       path,
       JSON.stringify({
         token: 'dead-holder',
         agentId: 'agent-dead',
-        acquiredAt: ancientAcquiredAt,
+        acquiredAt: new Date().toISOString(),
       }),
     );
+    backdateLockMtime(path, 60_000);
 
     const start = Date.now();
-    const handle = acquireCloneLock(primary, 'agent-b', 5_000);
+    const handle = acquireCloneLock(primary, 'agent-b', 5_000, 200);
     const elapsedMs = Date.now() - start;
 
     assert.ok(
@@ -206,14 +215,16 @@ test('acquire: a lock older than the stale threshold is taken over rather than w
   }
 });
 
-test('acquire: a malformed lock body is waited out, not treated as immediately stale', async () => {
+test('acquire: a fresh malformed lock body is waited out, not treated as immediately stale', async () => {
   const primary = setupRepo();
   try {
     const path = resolveCloneLockPath(primary);
     writeFileSync(path, '{"unexpected": "shape"}');
+    // mtime is "now" (just written) -- well inside a generous staleMs, so
+    // this must not be taken over yet.
 
     await assert.rejects(
-      (async () => acquireCloneLock(primary, 'agent-b', 300))(),
+      (async () => acquireCloneLock(primary, 'agent-b', 300, 60_000))(),
       CloneLockTimeoutError,
     );
   } finally {
@@ -221,15 +232,256 @@ test('acquire: a malformed lock body is waited out, not treated as immediately s
   }
 });
 
-test('withCloneLock: releases even when the wrapped command fails', () => {
+test('acquire: a malformed lock body recovers once its mtime ages past staleMs (Codex P2: a crashed partial write must not wedge every waiter forever)', () => {
   const primary = setupRepo();
   try {
-    const status = withCloneLock(primary, 'agent-a', process.execPath, [
+    const path = resolveCloneLockPath(primary);
+    writeFileSync(path, '{"unexpected": "shape"}');
+    backdateLockMtime(path, 60_000);
+
+    const start = Date.now();
+    const handle = acquireCloneLock(primary, 'agent-b', 5_000, 200);
+    const elapsedMs = Date.now() - start;
+
+    assert.ok(
+      elapsedMs < 2_000,
+      `expected recovery of a stale malformed lock, took ${elapsedMs}ms`,
+    );
+    releaseCloneLock(handle);
+  } finally {
+    teardown(primary);
+  }
+});
+
+test('refreshCloneLock: bumps mtime only when the on-disk token still matches, is a silent no-op otherwise', () => {
+  const primary = setupRepo();
+  try {
+    const handle = acquireCloneLock(primary, 'agent-a', 5_000);
+    backdateLockMtime(handle.path, 10_000);
+    const beforeMs = statSync(handle.path).mtimeMs;
+
+    refreshCloneLock(handle);
+    const afterMs = statSync(handle.path).mtimeMs;
+    assert.ok(
+      afterMs > beforeMs,
+      `expected refresh to bump mtime forward (before=${beforeMs}, after=${afterMs})`,
+    );
+
+    releaseCloneLock(handle);
+    writeFileSync(
+      handle.path,
+      JSON.stringify({
+        token: 'someone-else',
+        agentId: 'agent-b',
+        acquiredAt: new Date().toISOString(),
+      }),
+    );
+    backdateLockMtime(handle.path, 10_000);
+    const beforeOtherMs = statSync(handle.path).mtimeMs;
+    refreshCloneLock(handle);
+    const afterOtherMs = statSync(handle.path).mtimeMs;
+    assert.equal(
+      afterOtherMs,
+      beforeOtherMs,
+      "refreshing a handle whose token no longer matches must not touch another holder's lock",
+    );
+  } finally {
+    teardown(primary);
+  }
+});
+
+/**
+ * A small on-disk fixture script (not an inline `-e` string) so a child
+ * process can import the built `clone-lock.mjs` directly and call
+ * acquireCloneLock() with short, test-friendly staleMs/timeoutMs values
+ * the CLI itself intentionally does not expose (see withCloneLock's own
+ * doc comment: those overrides exist only for tests). Every contender
+ * appends `won <idx> <startMs>` and `released <idx> <endMs>` on success,
+ * or `lost <idx>` if it never acquired within its budget.
+ */
+function writeRaceFixture(dir: string): string {
+  const fixturePath = join(dir, 'stale-race-worker.mjs');
+  const cloneLockUrl = pathToFileURL(
+    join(REPO_ROOT, 'scripts/clone-lock.mjs'),
+  ).href;
+  writeFileSync(
+    fixturePath,
+    [
+      `import { acquireCloneLock, releaseCloneLock } from ${JSON.stringify(cloneLockUrl)};`,
+      "import { appendFileSync } from 'node:fs';",
+      'const repo = process.env.IDD_TEST_REPO;',
+      'const idx = process.env.IDD_TEST_IDX;',
+      'const log = process.env.IDD_TEST_LOG;',
+      'const timeoutMs = Number(process.env.IDD_TEST_TIMEOUT_MS);',
+      'const staleMs = Number(process.env.IDD_TEST_STALE_MS);',
+      'const holdMs = Number(process.env.IDD_TEST_HOLD_MS);',
+      'try {',
+      "  const handle = acquireCloneLock(repo, 'agent-' + idx, timeoutMs, staleMs);",
+      "  appendFileSync(log, 'won ' + idx + ' ' + Date.now() + '\\n');",
+      '  const until = Date.now() + holdMs;',
+      '  while (Date.now() < until) {}',
+      "  appendFileSync(log, 'released ' + idx + ' ' + Date.now() + '\\n');",
+      '  releaseCloneLock(handle);',
+      '} catch (error) {',
+      "  appendFileSync(log, 'lost ' + idx + '\\n');",
+      '}',
+    ].join('\n'),
+  );
+  return fixturePath;
+}
+
+test('acquire: a stale-lock takeover across concurrent contenders never lets two of them hold the lock at once (P1-1: unconditional rename let every racer believe it won)', async () => {
+  const primary = setupRepo();
+  const logPath = join(primary, 'stale-race.log');
+  writeFileSync(logPath, '');
+  try {
+    const path = resolveCloneLockPath(primary);
+    writeFileSync(
+      path,
+      JSON.stringify({
+        token: 'dead-holder',
+        agentId: 'agent-dead',
+        acquiredAt: new Date().toISOString(),
+      }),
+    );
+    backdateLockMtime(path, 60_000);
+
+    const fixturePath = writeRaceFixture(primary);
+    const CONTENDERS = 5;
+    await Promise.all(
+      Array.from({ length: CONTENDERS }, (_unused, index) =>
+        execFileAsync(process.execPath, [fixturePath], {
+          env: fixtureEnv({
+            IDD_TEST_REPO: primary,
+            IDD_TEST_IDX: String(index),
+            IDD_TEST_LOG: logPath,
+            // Every contender starts by racing the SAME pre-seeded stale
+            // lock -- the exact shape that let a plain check-then-unlink
+            // takeover produce more than one winner. A generous shared
+            // timeout means nobody spuriously times out from ordinary
+            // process-spawn jitter; every contender is expected to
+            // eventually acquire, one at a time.
+            IDD_TEST_TIMEOUT_MS: '10000',
+            IDD_TEST_STALE_MS: '200',
+            IDD_TEST_HOLD_MS: '150',
+          }),
+        }),
+      ),
+    );
+
+    const lines = readFileSync(logPath, 'utf8')
+      .trim()
+      .split('\n')
+      .filter(Boolean);
+    assert.equal(
+      lines.filter((line) => line.startsWith('lost ')).length,
+      0,
+      `expected every contender to eventually acquire, got: ${JSON.stringify(lines)}`,
+    );
+    const intervals = new Map<string, { start: number; end: number }>();
+    for (const line of lines) {
+      const [kind, idx, ts] = line.split(' ');
+      const entry = intervals.get(idx) ?? { start: 0, end: 0 };
+      if (kind === 'won') {
+        entry.start = Number(ts);
+      } else {
+        entry.end = Number(ts);
+      }
+      intervals.set(idx, entry);
+    }
+    assert.equal(intervals.size, CONTENDERS);
+    const sorted = Array.from(intervals.values()).sort(
+      (first, second) => first.start - second.start,
+    );
+    for (let index = 1; index < sorted.length; index += 1) {
+      assert.ok(
+        sorted[index].start >= sorted[index - 1].end,
+        `expected non-overlapping holds even when racing a shared stale lock, got: ${JSON.stringify(sorted)}`,
+      );
+    }
+  } finally {
+    teardown(primary);
+  }
+});
+
+test('withCloneLock: releases even when the wrapped command fails', async () => {
+  const primary = setupRepo();
+  try {
+    const status = await withCloneLock(primary, 'agent-a', process.execPath, [
       '-e',
       'process.exit(7)',
     ]);
     assert.equal(status, 7);
     assert.equal(checkCloneLock(primary).present, false);
+  } finally {
+    teardown(primary);
+  }
+});
+
+test('withCloneLock: runs the wrapped command with cwd set to repoPath', async () => {
+  const primary = setupRepo();
+  try {
+    const outPath = join(primary, 'cwd-observed.txt');
+    const status = await withCloneLock(primary, 'agent-a', process.execPath, [
+      '-e',
+      `require('fs').writeFileSync(${JSON.stringify(outPath)}, process.cwd())`,
+    ]);
+    assert.equal(status, 0);
+    assert.equal(
+      realpathSync(readFileSync(outPath, 'utf8')),
+      realpathSync(primary),
+    );
+  } finally {
+    teardown(primary);
+  }
+});
+
+test('withCloneLock: refreshes its lease so a long-running command is never mistaken for an abandoned holder (Codex P1: live holders must not age out)', async () => {
+  const primary = setupRepo();
+  const logPath = join(primary, 'waiter.log');
+  writeFileSync(logPath, '');
+  try {
+    // The held command "runs" for 600ms under a staleMs of only 150ms --
+    // without lease refresh, that alone would make it look abandoned.
+    // leaseRefreshMs=40 keeps refreshing well inside that window.
+    const holderPromise = withCloneLock(
+      primary,
+      'agent-holder',
+      process.execPath,
+      ['-e', 'const u=Date.now()+600;while(Date.now()<u){}'],
+      5_000,
+      150,
+      40,
+    );
+
+    // Let the holder actually acquire before the waiter starts contending.
+    await new Promise((resolve) => setTimeout(resolve, 100));
+
+    const fixturePath = writeRaceFixture(primary);
+    await execFileAsync(process.execPath, [fixturePath], {
+      env: fixtureEnv({
+        IDD_TEST_REPO: primary,
+        IDD_TEST_IDX: 'waiter',
+        IDD_TEST_LOG: logPath,
+        // 400ms budget: longer than the remaining hold time, so if the
+        // waiter incorrectly "wins" a stale takeover mid-hold, it reports
+        // that; if it correctly keeps waiting/times out, it reports loss.
+        IDD_TEST_TIMEOUT_MS: '400',
+        IDD_TEST_STALE_MS: '150',
+        IDD_TEST_HOLD_MS: '0',
+      }),
+    });
+
+    await holderPromise;
+    const lines = readFileSync(logPath, 'utf8')
+      .trim()
+      .split('\n')
+      .filter(Boolean);
+    assert.deepEqual(
+      lines,
+      ['lost waiter'],
+      'a live, actively-refreshing holder must never be treated as stale and taken over',
+    );
   } finally {
     teardown(primary);
   }

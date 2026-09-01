@@ -622,10 +622,9 @@ Running this variant safely requires:
   one clone.** Concurrent `git fetch` / `git worktree add` / `git
   worktree remove` / local `{development-branch}` updates from the
   same primary clone can collide; serialize these specific operations
-  behind a per-clone lock (`node scripts/clone-lock.mjs --exec
-  --agent-id <id> -- <command...>`, #2223), or give concurrent workers
-  separate clones, once the concurrency cap allows more than one
-  worker at a time.
+  behind the [clone-scoped lock](idd-helper-scripts.md#clone-scoped-lock),
+  or give concurrent workers separate clones, once the concurrency cap
+  allows more than one worker at a time.
 - **Resume-specific recovery when a worker dies mid-turn.** Re-verify
   claim ownership and worktree state before continuing; treat any
   uncommitted work found in the worktree as unverified input to check,

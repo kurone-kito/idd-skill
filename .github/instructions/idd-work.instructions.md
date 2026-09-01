@@ -12,9 +12,12 @@ planning (B2), implementation (B3), and the self-review loop (C).
 
 ## B1 — Create worktree (with branch)
 
-Before creating, check for local conflicts in this order (concurrent
-clone sharing: serialize via `clone-lock.mjs --exec`, see
-[fan-out](../../docs/idd-workflow.md#orchestrator-fan-out-variant)).
+Before creating, check for local conflicts in this order. Concurrent
+workers sharing one clone: serialize the `git fetch`/worktree
+add/remove calls below behind the
+[clone-scoped lock](../../docs/idd-helper-scripts.md#clone-scoped-lock)
+(see the [fan-out variant](../../docs/idd-workflow.md#orchestrator-fan-out-variant)
+for when this applies).
 
 1. Ensure the local `main` branch is up to date and has no local
    commits. Run this from the primary worktree while on `main`:

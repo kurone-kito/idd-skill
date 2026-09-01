@@ -10,11 +10,11 @@
 // clone when multiple concurrent sessions operate against it. This is a
 // different kind of lock than `claim-lock.mts`: that one records
 // worktree-local *ownership* for a whole worker's lifetime and reports a
-// same-machine collision immediately (never blocks). This one is a short
-// -duration *mutex* around a single git operation -- it blocks (retrying
-// with backoff) until it can acquire, up to a bounded timeout, because the
-// operations it guards are expected to finish in seconds, not the hours a
-// claim can be held for.
+// same-machine collision immediately (never blocks). This one is a
+// short-duration *mutex* around a single git operation -- it blocks
+// (retrying with backoff) until it can acquire, up to a bounded timeout,
+// because the operations it guards are expected to finish in seconds, not
+// the hours a claim can be held for.
 //
 // The lock file lives in the primary clone's *shared* git-admin directory
 // (`git rev-parse --path-format=absolute --git-common-dir`), not any one
@@ -27,19 +27,36 @@
 //
 // A holder that crashes mid-operation leaves an orphaned lock file behind
 // -- unlike a real `flock(2)`, a plain lock file is not released
-// automatically when its owning process dies. `STALE_LOCK_MS` bounds how
-// long a stuck lock can block every other session: once a lock's recorded
-// `acquiredAt` is older than that, a waiter treats it as abandoned and
-// force-takes it over. This is a purely local liveness heuristic scoped to
-// operations that normally complete in seconds -- it carries none of
+// automatically when its owning process dies. Staleness is judged by the
+// lock file's own mtime, not the `acquiredAt` field inside its JSON body
+// -- so a malformed lock (e.g. a crashed partial write, which can never
+// be parsed back into a valid `acquiredAt`) ages out and recovers exactly
+// like a well-formed one, instead of blocking every future waiter
+// forever. `STALE_LOCK_MS` bounds how long an abandoned lock can block
+// every other session; `withCloneLock`'s `--exec` path refreshes its own
+// lease (rewrites the file, which bumps its mtime) at roughly half that
+// interval while the wrapped command runs, so a legitimately
+// long-running operation is never mistaken for a dead holder. Recovering
+// a stale (or malformed-and-stale) lock is two exclusive races, not one:
+// first for the right to remove the abandoned entry (`renameSync` on a
+// specific source path -- POSIX serializes concurrent renames of the
+// same directory entry, so exactly one racer's removal ever succeeds,
+// see `tryClaimStaleLockForRemoval`'s own doc comment for why a plain
+// check-then-`unlinkSync` pair cannot make this same guarantee), then
+// for the right to recreate it (the same `{ flag: 'wx' }` primitive a
+// fresh acquire uses). Every loser at either step falls back to the
+// normal wait/retry loop rather than assuming it acquired. This is a
+// purely local liveness heuristic scoped to operations that normally
+// complete in seconds -- it carries none of
 // `claim-lock.mts`'s GitHub-reverification requirement, because this lock
 // has no cross-machine claim-ownership meaning to protect.
 
-import { execFileSync, spawnSync } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
 import {
   readFileSync,
   renameSync,
   rmSync,
+  statSync,
   unlinkSync,
   writeFileSync,
 } from 'node:fs';
@@ -58,8 +75,14 @@ const CLONE_LOCK_FILE_NAME = 'idd-clone.lock';
 const DEFAULT_TIMEOUT_MS = 120_000;
 /** Delay between retry attempts while waiting for a held lock. */
 const POLL_INTERVAL_MS = 200;
-/** A lock older than this is treated as abandoned by a dead holder. */
+/** A lock whose mtime is older than this is treated as abandoned. */
 const STALE_LOCK_MS = 5 * 60_000;
+/**
+ * How often `withCloneLock` refreshes its own lease while the wrapped
+ * command runs. Comfortably inside `STALE_LOCK_MS` so a live holder's
+ * lease never lapses into apparent staleness between refreshes.
+ */
+const DEFAULT_LEASE_REFRESH_MS = Math.floor(STALE_LOCK_MS / 2);
 
 const CLONE_LOCK_FLAG_SPEC = {
   '--exec': { type: 'boolean' },
@@ -69,10 +92,6 @@ const CLONE_LOCK_FLAG_SPEC = {
   '--timeout-ms': { type: 'string' },
   '--help': { type: 'boolean', short: 'h' },
 } as const;
-
-if (import.meta.main) {
-  runCli();
-}
 
 /**
  * Mirrors `claim-lock.mts`'s environment sanitization: repository
@@ -167,29 +186,98 @@ function sleepSync(ms: number): void {
 }
 
 /**
- * Force-remove an abandoned (stale or malformed) lock at `path` and
- * install a fresh one, mirroring `claim-lock.mts`'s
- * `overwriteLockAtomically`: write a same-directory temp file, then
- * `renameSync` into place (atomic on POSIX; the existing-file fallback
- * below covers Windows, which requires the destination removed first).
+ * The lock file's own mtime age in ms, or `null` when the path doesn't
+ * exist (raced away between the caller's failed create and this stat --
+ * treated as "not (yet provably) stale"; the caller's next loop
+ * iteration re-reads and, finding it absent, wins a fresh acquire).
+ * Deliberately reads filesystem mtime rather than the JSON body's
+ * `acquiredAt` field: mtime is set by every write (including a crashed,
+ * unparseable partial one) and by every lease refresh, so one staleness
+ * check works uniformly for a malformed lock, a well-formed one, and a
+ * refreshed live one.
  */
-function takeOverLock(path: string, agentId: string, token: string): void {
-  const tmpPath = `${path}.tmp-${process.pid}-${Math.random().toString(36).slice(2)}`;
-  writeFileSync(tmpPath, renderLockBody(agentId, token), { flag: 'wx' });
+function lockAgeMs(path: string): number | null {
   try {
-    try {
-      renameSync(tmpPath, path);
-    } catch {
-      rmSync(path, { recursive: true, force: true });
-      renameSync(tmpPath, path);
+    return Date.now() - statSync(path).mtimeMs;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+      return null;
     }
-  } finally {
-    try {
-      unlinkSync(tmpPath);
-    } catch {
-      // Best-effort: a successful rename already moved tmpPath away.
+    throw error;
+  }
+}
+
+/**
+ * Exclusively create the lock file, succeeding only when nothing else won
+ * the race first. Both a fresh acquire and a stale-lock takeover funnel
+ * through this same primitive, so at most one contender ever wins either
+ * path.
+ */
+function tryExclusiveCreate(
+  path: string,
+  agentId: string,
+  token: string,
+): boolean {
+  try {
+    writeFileSync(path, renderLockBody(agentId, token), { flag: 'wx' });
+    return true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'EEXIST') {
+      return false;
+    }
+    throw error;
+  }
+}
+
+/**
+ * Exclusively claim the (believed-stale) lock at `path` for removal, so
+ * that even when multiple contenders simultaneously observe the same
+ * stale mtime, only one of them ever actually removes it. `renameSync`
+ * on a specific SOURCE path is itself the race-free primitive this needs
+ * -- POSIX serializes concurrent rename operations against the same
+ * directory entry, so among any number of racing
+ * `renameSync(path, <unique-destination>)` calls, exactly one succeeds
+ * (moving `path` away) and every later call sees `ENOENT`, since by the
+ * time it runs `path` no longer exists to rename from. This closes a
+ * race a plain check-then-`unlinkSync` pair cannot: two contenders can
+ * both observe the same stale mtime from independent reads, and a plain
+ * `unlinkSync` never verifies the file it deletes is still the one that
+ * was checked -- it happily deletes whatever a faster contender already
+ * replaced it with (including that contender's brand new, non-stale
+ * lock), letting both contenders believe they won.
+ *
+ * Returns `false` (a lost race, not an error) on `ENOENT` -- the normal
+ * outcome for every contender except the one that actually wins. The
+ * destination is a unique per-attempt "graveyard" path so concurrent
+ * winners of DIFFERENT stale-lock generations never collide with each
+ * other; it is then discarded immediately (`unlinkSync`, with a
+ * `recursive: true` `rmSync` fallback for the
+ * malformed-lock-is-a-directory edge case `claim-lock.mts`'s own
+ * takeover path also handles) -- this cleanup is unconditionally safe
+ * regardless of recursion, since nothing else can ever reference this
+ * exact path.
+ */
+function tryClaimStaleLockForRemoval(path: string): boolean {
+  const graveyardPath = `${path}.graveyard-${process.pid}-${Math.random().toString(36).slice(2)}`;
+  try {
+    renameSync(path, graveyardPath);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+      return false;
+    }
+    throw error;
+  }
+  try {
+    unlinkSync(graveyardPath);
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === 'EISDIR' || code === 'EPERM') {
+      rmSync(graveyardPath, { recursive: true, force: true });
+    } else if (code !== 'ENOENT') {
+      throw error;
     }
   }
+  return true;
 }
 
 /** A held lock: pass to {@link releaseCloneLock} to release it. */
@@ -211,44 +299,45 @@ export class CloneLockTimeoutError extends Error {
 /**
  * Block (retrying with backoff) until the clone-scoped lock at `repoPath`
  * is acquired, or throw {@link CloneLockTimeoutError} after `timeoutMs`.
- * A lock older than `STALE_LOCK_MS` is treated as abandoned and taken
- * over rather than waited out.
+ * A lock whose mtime is older than `staleMs` is treated as abandoned;
+ * every waiter that notices races for its removal via
+ * {@link tryClaimStaleLockForRemoval} (exactly one ever wins, by
+ * construction) and then for its recreation via the same
+ * exclusive-create primitive a fresh acquire uses -- every loser at
+ * either step simply continues waiting rather than assuming it
+ * acquired. `staleMs` defaults to `STALE_LOCK_MS` and is exposed only
+ * for tests that need a short-lived clock; production callers should
+ * not override it.
  */
 export function acquireCloneLock(
   repoPath: string,
   agentId: string,
   timeoutMs: number = DEFAULT_TIMEOUT_MS,
+  staleMs: number = STALE_LOCK_MS,
 ): CloneLockHandle {
   const path = resolveCloneLockPath(repoPath);
   const token = randomToken();
   const deadline = Date.now() + timeoutMs;
 
   for (;;) {
-    const read = readLock(path);
-
-    if (read.status === 'absent') {
-      try {
-        writeFileSync(path, renderLockBody(agentId, token), { flag: 'wx' });
-        return { path, token };
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== 'EEXIST') {
-          throw error;
-        }
-        // Raced with a concurrent acquire between the read and this
-        // create; fall through to the wait/retry path below.
-      }
-    } else if (read.status === 'malformed') {
-      // A malformed body's age can't be determined; treat it the same as
-      // a fresh, definitely-not-stale lock and wait for it rather than
-      // taking it over immediately -- an in-progress writer's partial
-      // write should not be mistaken for an abandoned lock.
-    } else {
-      const ageMs = Date.now() - Date.parse(read.lock.acquiredAt);
-      if (Number.isFinite(ageMs) && ageMs > STALE_LOCK_MS) {
-        takeOverLock(path, agentId, token);
-        return { path, token };
-      }
+    if (tryExclusiveCreate(path, agentId, token)) {
+      return { path, token };
     }
+
+    const ageMs = lockAgeMs(path);
+    if (
+      ageMs !== null &&
+      ageMs > staleMs &&
+      tryClaimStaleLockForRemoval(path) &&
+      tryExclusiveCreate(path, agentId, token)
+    ) {
+      return { path, token };
+    }
+    // Either not (yet provably) stale, lost the removal race to another
+    // contender, or -- vanishingly unlikely -- won the removal race but
+    // then lost the immediate recreate to an unrelated fresh acquirer;
+    // every case falls through to the normal wait/retry path below
+    // rather than assuming acquisition.
 
     if (Date.now() >= deadline) {
       throw new CloneLockTimeoutError(path, timeoutMs);
@@ -277,6 +366,35 @@ export function releaseCloneLock(handle: CloneLockHandle): void {
   }
 }
 
+/**
+ * Rewrite the lock body at `handle.path`, bumping its mtime, but only
+ * when the on-disk token still matches `handle.token` -- this never
+ * refreshes (or resurrects) a lock a different session now holds. Used
+ * by {@link withCloneLock} to keep a legitimately long-running holder's
+ * lease from lapsing into apparent staleness. A read-then-write race
+ * against a concurrent stale takeover is inherent to a plain lock file
+ * (there is no atomic compare-and-swap primitive here); the default
+ * refresh cadence is sized generously relative to the staleness window
+ * specifically to make that race vanishingly unlikely to matter in
+ * practice. A failed refresh (e.g. the path became briefly inaccessible)
+ * is silently swallowed: the next timer tick simply retries, and
+ * `releaseCloneLock`'s own token check means a truly lost lease never
+ * gets misreported as released.
+ */
+export function refreshCloneLock(handle: CloneLockHandle): void {
+  const read = readLock(handle.path);
+  if (read.status === 'present' && read.lock.token === handle.token) {
+    try {
+      writeFileSync(
+        handle.path,
+        renderLockBody(read.lock.agentId, handle.token),
+      );
+    } catch {
+      // Best-effort; see the doc comment above.
+    }
+  }
+}
+
 /** Outcome shape returned by {@link checkCloneLock}. */
 export interface CheckCloneLockOutcome {
   path: string;
@@ -299,25 +417,36 @@ export function checkCloneLock(repoPath: string): CheckCloneLockOutcome {
 }
 
 /**
- * Acquire the clone lock, run `command` with `args` (inheriting stdio),
- * then release the lock -- even if the command fails. Returns the
- * command's exit code (`null` when it was killed by a signal).
+ * Acquire the clone lock, run `command` with `args` (inheriting stdio,
+ * `cwd` set to `repoPath` so the wrapped git operation always targets the
+ * same repository the lock scopes), then release the lock -- even if the
+ * command fails. While the command runs, the lease is refreshed every
+ * `leaseRefreshMs` (default {@link DEFAULT_LEASE_REFRESH_MS}) so a
+ * legitimately long-running operation is never mistaken for an abandoned
+ * holder by another waiter. Returns the command's exit code (`null` when
+ * it was killed by a signal). `staleMs`/`leaseRefreshMs` are exposed only
+ * for tests that need a short-lived clock; production callers should not
+ * override them.
  */
-export function withCloneLock(
+export async function withCloneLock(
   repoPath: string,
   agentId: string,
   command: string,
   args: string[],
   timeoutMs: number = DEFAULT_TIMEOUT_MS,
-): number | null {
-  const handle = acquireCloneLock(repoPath, agentId, timeoutMs);
+  staleMs: number = STALE_LOCK_MS,
+  leaseRefreshMs: number = DEFAULT_LEASE_REFRESH_MS,
+): Promise<number | null> {
+  const handle = acquireCloneLock(repoPath, agentId, timeoutMs, staleMs);
+  const heartbeat = setInterval(() => refreshCloneLock(handle), leaseRefreshMs);
   try {
-    const result = spawnSync(command, args, { stdio: 'inherit' });
-    if (result.error) {
-      throw result.error;
-    }
-    return result.status;
+    return await new Promise<number | null>((resolve, reject) => {
+      const child = spawn(command, args, { stdio: 'inherit', cwd: repoPath });
+      child.once('error', reject);
+      child.once('exit', (code) => resolve(code));
+    });
   } finally {
+    clearInterval(heartbeat);
     releaseCloneLock(handle);
   }
 }
@@ -374,7 +503,7 @@ function parseArgs(argv: string[]): ParsedArgs {
   };
 }
 
-function runCli(): void {
+async function runCli(): Promise<void> {
   const args = parseArgs(process.argv.slice(2));
   if (args.help) {
     printHelp();
@@ -398,7 +527,7 @@ function runCli(): void {
   }
   const [command, ...commandArgs] = args.command;
   try {
-    const status = withCloneLock(
+    const status = await withCloneLock(
       repo,
       args.agentId,
       command,
@@ -424,12 +553,14 @@ function printHelp(): void {
 Clone-scoped mutual-exclusion lock: serializes \`git worktree add\`,
 \`git worktree remove\`, and \`git fetch\` against the shared primary
 clone across concurrent sessions. \`--exec\` blocks (retrying) until the
-lock is acquired, runs <command> [args...] with stdio inherited, then
-releases the lock -- even if the command fails -- and exits with the
-command's own exit code. A lock held longer than 5 minutes is treated
-as abandoned by a dead holder and taken over rather than waited out.
-Exits 3 if the lock could not be acquired within --timeout-ms
-(default 120000).
+lock is acquired, runs <command> [args...] with stdio inherited and cwd
+set to --repo, then releases the lock -- even if the command fails --
+and exits with the command's own exit code. A lock whose lease has not
+been refreshed for 5 minutes is treated as abandoned by a dead holder
+and taken over; \`--exec\` refreshes its own lease periodically while
+the wrapped command runs, so a legitimately long-running operation is
+never mistaken for a dead holder. Exits 3 if the lock could not be
+acquired within --timeout-ms (default 120000).
 
 --check is read-only: it reports the current lock state without
 creating, mutating, or deleting anything. \`malformed: true\` means a
@@ -437,4 +568,15 @@ lock file exists but could not be parsed as a well-formed lock body.
 
 --repo defaults to the current working directory.
 `);
+}
+
+// This bootstrap call is placed after every declaration in this module,
+// not near the top -- `runCli()`'s error path references the
+// `CloneLockTimeoutError` class below, and a class binding (unlike a
+// hoisted function declaration) stays in its temporal dead zone until its
+// own declaration statement executes. Invoking `runCli()` before that
+// point would throw a `ReferenceError` on any `--exec` timeout instead of
+// the documented message and exit code 3.
+if (import.meta.main) {
+  runCli();
 }
