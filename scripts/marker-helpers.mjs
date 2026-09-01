@@ -719,9 +719,11 @@ export function parseProviderOutageAdvancedComment(body, createdAt) {
 }
 /**
  * Render a `<!-- idd-local-validation-evidence: ... -->` marker (#2323).
- * `covers` is joined with `,` before percent-encoding (reusing the same
- * comment-token-safe field grammar as the sibling outage markers), so a
- * check name can never itself contain a literal comma.
+ * Each `covers` entry is percent-encoded individually (reusing the same
+ * comment-token-safe field grammar as the sibling outage markers) before
+ * being joined with a raw `,`, so a check name containing a literal comma
+ * still round-trips correctly -- only the join separator itself is ever a
+ * raw `,` in the wire form.
  */
 export function renderLocalValidationEvidenceComment(payload) {
   const actor = normalizeNonWhitespaceToken(payload?.actor);
@@ -741,7 +743,16 @@ export function renderLocalValidationEvidenceComment(payload) {
     throw new Error('invalid local validation evidence payload');
   }
   const encodedCommandSet = encodeExternalCheckWaiverField(commandSet);
-  const encodedCovers = encodeExternalCheckWaiverField(coversList.join(','));
+  // #2355 review (Copilot, CodeRabbit): encode each entry BEFORE joining --
+  // encoding the joined string instead would also turn a literal comma
+  // inside one entry's own name into the same `%2C` the join separator
+  // produces, making a comma-containing check name indistinguishable from
+  // the boundary between two entries on parse. Each encoded entry can
+  // never itself contain a raw `,` (percent-encoded away), so splitting on
+  // the raw `,` below is unambiguous.
+  const encodedCovers = coversList
+    .map((entry) => encodeExternalCheckWaiverField(entry))
+    .join(',');
   return [
     `<!-- idd-local-validation-evidence: ${actor} head:${headSha} commands:${encodedCommandSet} covers:${encodedCovers} outcome:${outcome} -->`,
     '',
@@ -764,9 +775,15 @@ export function parseLocalValidationEvidenceComment(body, createdAt) {
   const commandSet = normalizeExternalCheckWaiverField(
     decodeExternalCheckWaiverField(match[3]),
   );
-  const covers = decodeExternalCheckWaiverField(match[4])
+  // Split on the raw `,` separator BEFORE decoding each entry -- the
+  // matching render side percent-encodes every entry individually, so a
+  // literal comma can only ever appear here as a join separator, never
+  // inside an entry's own encoded form.
+  const covers = match[4]
     .split(',')
-    .map((entry) => entry.trim())
+    .map((entry) =>
+      normalizeExternalCheckWaiverField(decodeExternalCheckWaiverField(entry)),
+    )
     .filter(Boolean);
   if (!actor || !commandSet || covers.length === 0) {
     return null;

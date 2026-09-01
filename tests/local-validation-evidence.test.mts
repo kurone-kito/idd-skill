@@ -208,6 +208,35 @@ test('resolveLocalValidationEvidence: no relief when evidence covers only a subs
   assert.match(result.reason, /pnpm-boundary/);
 });
 
+test('resolveLocalValidationEvidence: an empty requiredCheckNames list never vacuously reports present (#2355 review)', () => {
+  const result = resolveLocalValidationEvidence({
+    comments: [evidenceComment({})],
+    prHeadSha: HEAD,
+    requiredCheckNames: [],
+    trustedMarkerLogins: TRUSTED,
+    outageDeclarationActive: true,
+    policy: basePolicy,
+    now: NOW,
+  });
+  assert.equal(result.present, false);
+  assert.equal(result.partialCoverage.length, 1);
+});
+
+test('renderLocalValidationEvidenceComment / parseLocalValidationEvidenceComment round-trip a comma-containing check name (#2355 review)', () => {
+  const body = renderLocalValidationEvidenceComment({
+    actor: 'kurone-kito',
+    headSha: HEAD,
+    commandSet: 'pre-push-validate',
+    covers: ['lint, security', 'idd-doctor'],
+    outcome: 'pass',
+  });
+  const parsed = parseLocalValidationEvidenceComment(
+    body,
+    '2026-09-01T05:00:00Z',
+  );
+  assert.deepEqual(parsed?.covers, ['lint, security', 'idd-doctor']);
+});
+
 test('resolveLocalValidationEvidence: no relief for a failing outcome', () => {
   const result = resolveLocalValidationEvidence({
     comments: [evidenceComment({ outcome: 'fail' })],

@@ -55,6 +55,13 @@ function latestByCreatedAt(entries) {
   ];
 }
 function coversAll(covers, requiredCheckNames) {
+  // #2355 review (Copilot): an empty requiredCheckNames list (e.g. the CLI
+  // default when --required-checks is omitted) must never satisfy every()'s
+  // vacuous truth -- that would report `present: true` for evidence that
+  // was never actually checked against anything.
+  if (requiredCheckNames.length === 0) {
+    return false;
+  }
   const coveredSet = new Set(covers.map((entry) => entry.trim()));
   return requiredCheckNames.every((name) => coveredSet.has(name.trim()));
 }
@@ -412,7 +419,8 @@ export async function runLocalValidationEvidence(options = {}) {
     render(result, args.format);
     return { exitCode: 0, result };
   }
-  // --record mutates; requires --apply.
+  // --record: without --apply this is a dry-run that only prints the
+  // rendered marker body; --apply is required only to post it to GitHub.
   const viewerLogin = String(safeGhText(['api', 'user', '--jq', '.login']))
     .trim()
     .toLowerCase();

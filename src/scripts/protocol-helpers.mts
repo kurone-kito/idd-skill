@@ -6563,7 +6563,8 @@ export function buildPreMergeReadinessSummary(
     // one) from local evidence; the required checks it references stay
     // exactly as unresolved/unavailable as `ci` independently computed them.
     // Omitted by unit callers and every caller that predates this option
-    // (field stays `null`, unchanged pre-#2323 behavior).
+    // (field is omitted entirely -- not even `null` -- unchanged
+    // pre-#2323 behavior).
     localValidationEvidenceSummary?: Record<string, unknown> | null;
     // Configured `advisoryWait.secondaryQuietWindow` in minutes (#2335),
     // resolved by the caller, mirroring `advisoryConvergenceDeadlineMinutes`
