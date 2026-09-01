@@ -832,6 +832,9 @@ test('policy normalization provides default-safe values and supports aliases', (
     mergeGate: {
       soloCodeownerAdminFallback: 'auto-admin-retry',
     },
+    providerOutage: {
+      maxValidity: 'PT24H',
+    },
   });
 
   const defaultPolicy = normalizePolicyConfig(null);
@@ -1001,6 +1004,9 @@ test('policy normalization provides default-safe values and supports aliases', (
       },
       mergeGate: {
         soloCodeownerAdminFallback: 'hold-and-report',
+      },
+      providerOutage: {
+        maxValidity: 'PT24H',
       },
     },
   );

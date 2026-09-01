@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://kurone-kito.github.io/idd-skill/schemas/provider-outage-declaration.schema.json",
+  "title": "IDD Provider Outage Declaration Marker Payload",
+  "description": "Structured payload parsed from an idd-provider-outage-declaration comment on the configured providerOutage.declarationTarget issue.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["actor", "service", "startedAt", "expiresAt", "createdAt"],
+  "properties": {
+    "actor": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^\\S+$",
+      "description": "GitHub login of the declaring actor, as embedded in the marker (display only; the comment's actual GitHub author is the authority evidence)."
+    },
+    "service": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Affected service the declaration covers, matched exactly (case-insensitive) against a caller's requested service."
+    },
+    "startedAt": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}Z$",
+      "description": "UTC timestamp the declaration window opens. Together with expiresAt, bounded by the configured providerOutage.maxValidity."
+    },
+    "expiresAt": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}Z$",
+      "description": "UTC timestamp the declaration window closes. Validity is recomputed live against this value on every read; no cleanup step is required on expiry."
+    },
+    "createdAt": {
+      "type": "string",
+      "pattern": "^(none|\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?Z)$",
+      "description": "The GitHub-assigned created_at of the comment carrying this marker, or \"none\" when unavailable. Used only to pick the most recently authored declaration among several; never itself a validity input."
+    }
+  }
+}

@@ -181,6 +181,12 @@ export const POLICY_DEFAULTS = Object.freeze({
   mergeGate: Object.freeze({
     soloCodeownerAdminFallback: 'auto-admin-retry',
   }),
+  // Added in #2320. `declarationTarget` cast the same way as
+  // `critiqueLoop.delegate` above -- see that field's comment; the runtime
+  // object carries no `declarationTarget` key at all until configured.
+  providerOutage: Object.freeze({
+    maxValidity: 'PT24H',
+  }),
 });
 export function parseProjectCommandRows(text) {
   const commands = new Map();
@@ -297,6 +303,24 @@ export function normalizePolicyConfig(config) {
   // why POLICY_DEFAULTS itself never carries an undefined-valued key.
   if (critiqueLoopDelegate) {
     critiqueLoop.delegate = critiqueLoopDelegate;
+  }
+  // #2320: `declarationTarget` is a positive integer issue number, or
+  // absent -- absence disables the outage-relief declaration path
+  // entirely rather than falling back to some issue number. Same
+  // own-property-omitted shape as `critiqueLoop.delegate` above.
+  const rawDeclarationTarget = c?.providerOutage?.declarationTarget;
+  const providerOutage = {
+    maxValidity: parsePositiveDuration(
+      c?.providerOutage?.maxValidity,
+      POLICY_DEFAULTS.providerOutage.maxValidity,
+    ),
+  };
+  if (
+    typeof rawDeclarationTarget === 'number' &&
+    Number.isInteger(rawDeclarationTarget) &&
+    rawDeclarationTarget >= 1
+  ) {
+    providerOutage.declarationTarget = rawDeclarationTarget;
   }
   return {
     issueScope: parseEnum(
@@ -504,6 +528,7 @@ export function normalizePolicyConfig(config) {
         POLICY_DEFAULTS.mergeGate.soloCodeownerAdminFallback,
       ),
     },
+    providerOutage,
   };
 }
 export function resolveCollaboratorMarkerTrust(config, envValue = '') {

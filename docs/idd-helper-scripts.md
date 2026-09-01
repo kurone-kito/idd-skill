@@ -1096,6 +1096,55 @@ Interpretation rules:
   - in solo-maintainer repositories, this helper-generated comment is
     the authorization path; a normal PR approval is not equivalent
 
+### Provider outage declaration helper
+
+- Command:
+  `node scripts/provider-outage-declaration.mjs --service <name>
+  [--declare | --record-advanced | --list-advanced] [options]`
+- Published bin: `idd-provider-outage-declaration`
+- Stable contract:
+  [`provider-outage-declaration.schema.json`][provider-outage-declaration-schema]
+- Purpose (#2320): substitute one repository-scoped, time-boxed
+  declaration for repeatedly posting a per-pull-request
+  external-check-waiver during a sustained provider outage, read from
+  the configured `providerOutage.declarationTarget` issue so no
+  repository file has to change while the outage is in progress.
+- Modes:
+  - default (resolve): reports whether an active, valid declaration
+    exists for `--service`, recomputed live on every call -- nothing is
+    cached, and an expired declaration reverts with no cleanup step.
+  - `--declare`: renders a new declaration marker; `--apply` posts it to
+    the declaration-target issue only after the acting GitHub user
+    passes the same `ciGate.externalCheckWaivers.authorityPolicy`
+    authority check the external-check-waiver helper's create path uses
+    (owner, Maintain, or Admin by default) -- reusing that resolver
+    rather than adding a second trust path. Requires exactly one of
+    `--expires` or `--expires-in`; the requested window is rejected when
+    it exceeds `providerOutage.maxValidity` (default `PT24H`).
+  - `--record-advanced --pr <n> --head-sha <40-hex>`: records that a
+    pull request was advanced under the currently active declaration,
+    so a post-recovery sweep can re-request its advisory review.
+    `--apply` refuses when no declaration is active for `--service`.
+  - `--list-advanced`: lists every recorded advancement from trusted
+    markers on the declaration-target issue. Entries are **HEAD-pinned**
+    -- a later push to the same pull request produces a distinct entry
+    rather than overwriting the earlier one, so the sweep re-requests
+    review per recorded HEAD.
+- Non-bypassing by construction: an active declaration alone never
+  relieves anything. The consuming caller must independently prove the
+  pull request's own terminal advisory-unavailable state (the same
+  per-pull-request proof the `idd-advisory-convergence` waiver
+  precondition already requires) before a declaration-relieved selector
+  applies, and relief is scoped to exactly the selectors listed in
+  `ciGate.externalChecks.waivable` -- it never relieves a CI conclusion,
+  branch freshness, claim state, or unresolved threads, which stay
+  evaluated exactly as they already are.
+- Decoupled from the provider-health classifier (#2319/#2327):
+  declaration validity is actor authority, service, timestamps, and
+  expiry only. An absent or `unknown` provider-health verdict never
+  invalidates an otherwise-valid declaration, and this helper accepts no
+  verdict input at all.
+
 ### A4 viability gate
 
 - Command: `node scripts/discover-viability-gate.mjs --issue <number>`
@@ -2811,4 +2860,5 @@ replace the written decision tables.
 [idd-merge-execute-schema]: https://kurone-kito.github.io/idd-skill/schemas/idd-merge-execute.schema.json
 [post-idd-marker-schema]: https://kurone-kito.github.io/idd-skill/schemas/post-idd-marker.schema.json
 [pre-merge-readiness-schema]: https://kurone-kito.github.io/idd-skill/schemas/pre-merge-readiness.schema.json
+[provider-outage-declaration-schema]: https://kurone-kito.github.io/idd-skill/schemas/provider-outage-declaration.schema.json
 [resolve-review-thread-schema]: https://kurone-kito.github.io/idd-skill/schemas/resolve-review-thread.schema.json

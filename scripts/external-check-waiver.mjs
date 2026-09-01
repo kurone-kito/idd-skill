@@ -890,7 +890,14 @@ function normalizeChecks(statusCheckRollup = []) {
     })
     .filter((entry) => entry.name);
 }
-function normalizeAuthorityEvidence(evidence, actor, repoOwner, policy) {
+/**
+ * Exported for reuse by `provider-outage-declaration.mts` (#2320), which
+ * evaluates actor authority under the exact same
+ * `ciGate.externalCheckWaivers.authorityPolicy` -- reusing this function
+ * keeps a single trust path rather than growing a second, subtly divergent
+ * one.
+ */
+export function normalizeAuthorityEvidence(evidence, actor, repoOwner, policy) {
   const normalizedPolicy = APPROVAL_ACTOR_POLICIES.has(policy)
     ? policy
     : APPROVAL_ACTOR_POLICY_DEFAULT;
@@ -1083,7 +1090,8 @@ function fetchHeadCommittedAt({ owner, repo, headRefOid }) {
     return '';
   }
 }
-function resolveCollaboratorAuthority({ owner, repo, actor }) {
+/** Exported for reuse by `provider-outage-declaration.mts` (#2320); see the doc comment on {@link normalizeAuthorityEvidence}. */
+export function resolveCollaboratorAuthority({ owner, repo, actor }) {
   const normalized = String(actor ?? '')
     .trim()
     .toLowerCase();

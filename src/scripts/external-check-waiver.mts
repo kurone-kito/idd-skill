@@ -111,7 +111,7 @@ type LinkedIssueSelection =
   | { ok: false; issue: null; reason: string };
 
 /** Raw authority evidence accepted by {@link normalizeAuthorityEvidence}. */
-interface AuthorityEvidenceInput {
+export interface AuthorityEvidenceInput {
   known?: boolean;
   roleName?: unknown;
   role_name?: unknown;
@@ -122,7 +122,7 @@ interface AuthorityEvidenceInput {
 }
 
 /** Normalized authority evidence emitted in the plan report. */
-interface AuthorityEvidence {
+export interface AuthorityEvidence {
   actor: string;
   policy: string;
   known: boolean;
@@ -134,7 +134,7 @@ interface AuthorityEvidence {
 }
 
 /** Collaborator authority lookup result. */
-interface CollaboratorAuthority {
+export interface CollaboratorAuthority {
   known: boolean;
   authorized: boolean;
   permission: string;
@@ -1321,7 +1321,14 @@ function normalizeChecks(
     .filter((entry) => entry.name);
 }
 
-function normalizeAuthorityEvidence(
+/**
+ * Exported for reuse by `provider-outage-declaration.mts` (#2320), which
+ * evaluates actor authority under the exact same
+ * `ciGate.externalCheckWaivers.authorityPolicy` -- reusing this function
+ * keeps a single trust path rather than growing a second, subtly divergent
+ * one.
+ */
+export function normalizeAuthorityEvidence(
   evidence: AuthorityEvidenceInput | null | undefined,
   actor: string,
   repoOwner: string,
@@ -1563,7 +1570,8 @@ function fetchHeadCommittedAt({
   }
 }
 
-function resolveCollaboratorAuthority({
+/** Exported for reuse by `provider-outage-declaration.mts` (#2320); see the doc comment on {@link normalizeAuthorityEvidence}. */
+export function resolveCollaboratorAuthority({
   owner,
   repo,
   actor,
