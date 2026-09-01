@@ -85,6 +85,24 @@ finding's root cause and further comments are speculative or
 non-blocking hardening, treat them as PATH B (disposition-only,
 E4-E7) rather than opening another E9-E10 round.
 
+**Second escalation tier: when the structural fix itself doesn't
+converge.** The heuristic above names one escalation (patch-by-patch
+→ one structural fix); it does not say what to do when that
+structural fix keeps drawing new same-area findings for a further few
+rounds. The natural default — a second, more elaborate structural
+redesign — tends to cost more rounds, not fewer, since the same race
+or defect class often regenerates at each added layer of recovery
+machinery. Prefer removing or substantially simplifying the fragile
+mechanism instead: replace an automatic-recovery path with a simpler
+fail-closed behavior plus actionable manual-recovery guidance, rather
+than a second redesign. Worked example: #2223's clone-scoped lock
+(PR #2389) kept drawing new P1 concurrency findings across several
+rounds even after replacing mtime-based staleness with
+PID-liveness-based staleness; convergence only happened once automatic
+stale-lock takeover was removed entirely, replaced with a timeout that
+reports the lock path and holder for manual recovery — the same shape
+`git`'s own `index.lock` uses on collision.
+
 ## E11 — Resolve conflicts with {development-branch}
 
 Check for conflicts between the feature branch and `{development-branch}`
