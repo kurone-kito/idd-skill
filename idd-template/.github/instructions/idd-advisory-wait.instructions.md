@@ -284,12 +284,24 @@ pattern as E14's **Primary advisory bot**):
    `committed` event (same proof as `COPILOT_PENDING_COVERS_HEAD`). Not
    yet true is ordinary lag, not failure — do **not** redo steps 1-3;
    re-check alone after a brief pause (default: 3 attempts, a few
-   seconds apart). Still unproven after that budget: abort without
-   posting a marker or counting a cycle, return to the polling loop
-   (or E1) next interval — never tight-loop on unresolved lag.
-5. **Post exactly one** bound marker, only once every prior step is
-   verified. `<n>` is `completedCycleCount + 1`; posting last avoids
-   double-counting, since only marker **presence** counts toward budget.
+   seconds apart). Disposition after that budget depends on entry type:
+   - **Pending entry**: still unproven → abort without posting a
+     marker or counting a cycle, return to the polling loop (or E1)
+     next interval — never tight-loop on unresolved lag.
+   - **Non-pending entry** (`#2327`): the event appearing proves this
+     re-request actually registered — abort without counting (ordinary
+     success, no cycle needed; the next pass's `COPILOT_PENDING_COVERS_HEAD`
+     check picks it up normally). No event within the same short budget
+     is itself the proof this re-request _also_ failed to register —
+     the entry condition already spent a full `SETTLED_WINDOW_MINUTES`
+     confirming the original request's silence before this cycle
+     started, so the short budget is sufficient here, not a redundant
+     wait — proceed to step 5 and count the cycle.
+5. **Post exactly one** bound marker, once step 4 concludes in a
+   counted disposition — proven re-registration for a pending entry, or
+   proven failure-to-register for a non-pending entry (`#2327`). `<n>`
+   is `completedCycleCount + 1`; posting last avoids double-counting,
+   since only marker **presence** counts toward budget.
 
 **Ordinary counters are untouched**: excluded from `requestMarkerCount`
 and `#1511`'s reroll accounting, but **does** count as a same-head

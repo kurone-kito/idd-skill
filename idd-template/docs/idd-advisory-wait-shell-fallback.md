@@ -209,7 +209,10 @@ gh pr edit {pr-number} --add-reviewer "@{primary-advisory-bot}"
 gh api repos/{owner}/{repo}/pulls/{pr-number}/requested_reviewers \
   -X POST -f "reviewers[]={primary-advisory-bot-rest-login}"
 
-# Step 5 — post exactly one bound marker, only after step 4 verifies
+# Step 5 -- post exactly one bound marker, only once step 4 reaches a
+# counted disposition: proven re-registration for a pending entry, or
+# proven failure-to-register within the same short budget for a
+# non-pending entry (#2327 -- see the instruction file's step 4).
 # source repo / vendored-node profile:
 node scripts/post-idd-marker.mjs --type advisory-recovery --target pr <pr-number> \
   --agent-id <id> --claim-id <id> --head-sha <PR_HEAD_SHA> \
