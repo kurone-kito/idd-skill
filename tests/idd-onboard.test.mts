@@ -73,9 +73,25 @@ const ONBOARDING_DOC = join(REPO_ROOT, 'idd-template', 'ONBOARDING.md');
 
 const createdFixtureDirs: string[] = [];
 
-/** `mkdtempSync` under `tmpdir()`, tracked for teardown in the `after()` hook below. */
+/**
+ * `mkdtempSync` under `tmpdir()`, tracked for teardown in the `after()` hook
+ * below. Rejects a `prefix` containing a path separator and verifies the
+ * created directory is a direct child of `tmpdir()`, so the recursive,
+ * forced teardown below can never reach outside `tmpdir()` even if a future
+ * call site passes a qualified or traversal-shaped prefix.
+ */
 function trackedMkdtemp(prefix: string): string {
+  if (prefix.includes('/') || prefix.includes('\\')) {
+    throw new Error(
+      `trackedMkdtemp: prefix must not contain a path separator: ${prefix}`,
+    );
+  }
   const dir = mkdtempSync(join(tmpdir(), prefix));
+  if (dirname(dir) !== resolve(tmpdir())) {
+    throw new Error(
+      `trackedMkdtemp: refusing to track a directory outside tmpdir(): ${dir}`,
+    );
+  }
   createdFixtureDirs.push(dir);
   return dir;
 }
