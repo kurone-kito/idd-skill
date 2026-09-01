@@ -209,13 +209,13 @@ a deterministic "always run one" step, not a judgment call whether to
 run it. Add any newly found issues to ReviewItems_snapshot.
 
 Also apply these lenses when they fit, composing when both do:
-**Mutation/write-side** (the diff implements a helper that mutates
-GitHub state, mutates git state, or performs a merge) — fail-closed
-inputs; validate/execute scope parity; unsafe-output suppression;
-schema strictness parity. **Gate-mirroring** (the diff implements a
+**Mutation / write-side** (the diff implements a helper that mutates
+GitHub state, mutates git state, or performs a merge) — Fail-closed
+inputs; Validate/execute scope parity; Unsafe-output suppression;
+Schema strictness parity. **Gate-mirroring** (the diff implements a
 helper that predicts, mirrors, or pre-checks another gate's decision) —
-validation-path parity; input completeness; whole-identity comparison;
-snapshot identity; point-in-time parity.
+Validation-path parity; Input completeness; Whole-identity comparison;
+Snapshot identity; Point-in-time parity.
 
 **Incremental scope**: on the second and later passes within the same
 claim, scope the review to the diff since the previous E2's head SHA,

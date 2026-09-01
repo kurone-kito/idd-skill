@@ -246,14 +246,18 @@ pass asks, never a separate pass to run on top of the one that ran.
    this pass's whole output, which is the duplicate cost `never` exists to
    avoid.
 6. If both ran, union their reported issues.
-7. Also apply these lenses to the diff when they fit, composing when both
-   do: **Mutation/write-side** (the diff implements a helper that mutates
-   GitHub state, mutates git state, or performs a merge) — fail-closed
-   inputs; validate/execute scope parity; unsafe-output suppression;
-   schema strictness parity. **Gate-mirroring** (the diff implements a
-   helper that predicts, mirrors, or pre-checks another gate's decision)
-   — validation-path parity; input completeness; whole-identity
-   comparison; snapshot identity; point-in-time parity.
+7. When the per-agent pass ran (step 3 or step 5), also apply these
+   lenses to the diff, composing when both fit: **Mutation / write-side**
+   (the diff implements a helper that mutates GitHub state, mutates git
+   state, or performs a merge) — Fail-closed inputs; Validate/execute
+   scope parity; Unsafe-output suppression; Schema strictness parity.
+   **Gate-mirroring** (the diff implements a helper that predicts,
+   mirrors, or pre-checks another gate's decision) — Validation-path
+   parity; Input completeness; Whole-identity comparison; Snapshot
+   identity; Point-in-time parity. When only the delegate ran (a
+   successful delegate under `fallback`, or any delegate under
+   `never`), it never sees these lenses either — do not apply them
+   yourself in its place.
 8. The floor (referenced in C2, C4, and C5) is `fix-validate` passing against
    the branch's current HEAD. Re-run it after every new commit; it does not
    substitute for D2's `pre-push-validate` gate.

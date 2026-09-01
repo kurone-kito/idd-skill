@@ -1068,10 +1068,10 @@ lenses below or the rest of the per-agent checklist — passing checklist
 content to an external command is a capability change with its own
 design questions (whether the reviewer accepts input at all, what
 happens if it ignores it) that this surface does not make today. Under
-`mode: fallback` with a successful delegate (the default) or `mode:
-never`, the per-agent pass does not run at all, so an operator relying
-solely on a delegate should expect the lenses below are not applied to
-that PR's diff.
+a successful delegate with `mode: fallback` (the default), or under
+`mode: never`, the per-agent pass does not run at all, so an operator
+relying solely on a delegate should expect the lenses below are not
+applied to that PR's diff.
 
 ### Mutation / write-side helper lens
 
