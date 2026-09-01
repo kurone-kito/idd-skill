@@ -175,6 +175,7 @@ const COVERED_HELPERS = [
   'claim-approval-gate',
   'claim-lock',
   'token-cost-event',
+  'token-cost-harvest',
   'token-cost-report',
   'discover-readiness-check',
   'discover-shared-file-overlap',

@@ -49,6 +49,20 @@ artifact is [`docs/token-cost-snapshot.json`](token-cost-snapshot.json):
 aggregated percentiles, cache-hit ratio, and success rates, with no raw
 records.
 
+`node scripts/token-cost-harvest.mjs --repo kurone-kito/idd-skill`
+produces those local samples: it scans each installed vendor adapter's
+own session logs, joins any session whose cwd names an issue worktree
+against this repository's own GitHub IDD markers (claim,
+review-watermark) and the connected pull request's own metadata
+(creation and merge timestamps) to reconstruct that issue loop's
+seven stage windows,
+and appends `kind: "issue-loop"` / `kind: "session"` records to
+`${XDG_STATE_HOME:-$HOME/.local/state}/idd-skill/token-cost/samples.jsonl`
+(`--out` to override, `--dry-run` to only print counts). When
+`token-cost-event.mjs`'s own explicit phase-event log exists at the
+sibling `events.jsonl` path (`--events` to override), those timestamps
+win over the marker-join reconstruction for the stages they cover.
+
 `node scripts/token-cost-report.mjs`:
 
 - `--in <samples.jsonl> [--in <samples.jsonl> ...] --apply` aggregates
