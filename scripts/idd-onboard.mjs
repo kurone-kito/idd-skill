@@ -50,7 +50,7 @@ import {
   statSync,
   writeFileSync,
 } from 'node:fs';
-import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
+import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import {
   collectHelperRuntimeEvidence,
   collectVendoredFiles,
@@ -885,7 +885,15 @@ function isSafeRelativePath(relativePath) {
 /** Whether `candidate` is `boundary` itself or nested under it. */
 function isWithinBoundary(candidate, boundary) {
   const rel = relative(boundary, candidate);
-  return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel));
+  // Only an exact ".." segment or a "../"-prefixed path climbs out of
+  // `boundary` -- `rel.startsWith('..')` alone is too broad: a real child
+  // directory literally named e.g. "..foo" also produces a relative()
+  // string starting with "..", which is not a traversal at all (#2357
+  // review).
+  return (
+    rel === '' ||
+    (rel !== '..' && !rel.startsWith(`..${sep}`) && !isAbsolute(rel))
+  );
 }
 /**
  * Resolve `raw` (a `--source` / `--target` / `--allow-root` value) to an

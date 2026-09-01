@@ -3827,6 +3827,14 @@ test('resolveConfinedDirectory accepts the working directory itself', () => {
   });
 });
 
+test('resolveConfinedDirectory accepts a real child directory whose name happens to start with ".." (#2357 review: relative() false positive)', () => {
+  withSandboxCwd((sandbox) => {
+    mkdirSync(join(sandbox, '..foo'));
+    const resolved = resolveConfinedDirectory('..foo', '--target', []);
+    assert.equal(resolved, join(sandbox, '..foo'));
+  });
+});
+
 test('resolveConfinedDirectory rejects a --target using ../ traversal that escapes the working directory', () => {
   withSandboxCwd((sandbox) => {
     const outside = mkdtempSync(join(tmpdir(), 'idd-onboard-outside-'));
