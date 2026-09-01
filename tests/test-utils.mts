@@ -17,9 +17,14 @@ import type { ReviewThreadNode } from '../src/scripts/resolve-review-thread.mts'
 const REPO_ROOT = fileURLToPath(new URL('..', import.meta.url));
 const SYNC_DOCS_SCRIPT = join(REPO_ROOT, 'scripts/sync-docs.mjs');
 // sync-docs.mjs imports the shared banner/helper module, which in turn imports
-// policy-helpers; the hermetic fixture must carry that whole import closure so
-// the copied script resolves its siblings under the temp scripts/ dir.
-const SYNC_DOCS_DEPS = ['consistency-helpers.mjs', 'policy-helpers.mjs'];
+// policy-helpers, which in turn imports provider-contract; the hermetic
+// fixture must carry that whole import closure so the copied script resolves
+// its siblings under the temp scripts/ dir.
+const SYNC_DOCS_DEPS = [
+  'consistency-helpers.mjs',
+  'policy-helpers.mjs',
+  'provider-contract.mjs',
+];
 
 /**
  * Reads and JSON-parses a repo-root-relative fixture or schema file. Left

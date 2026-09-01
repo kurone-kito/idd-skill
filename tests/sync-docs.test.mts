@@ -17,7 +17,11 @@ import { fixtureEnv, makeScaffoldedSyncRepo } from './test-utils.mts';
 
 const REPO_ROOT = fileURLToPath(new URL('../', import.meta.url));
 const SYNC_DOCS_SCRIPT = join(REPO_ROOT, 'scripts/sync-docs.mjs');
-const SYNC_DOCS_DEPS = ['consistency-helpers.mjs', 'policy-helpers.mjs'];
+const SYNC_DOCS_DEPS = [
+  'consistency-helpers.mjs',
+  'policy-helpers.mjs',
+  'provider-contract.mjs',
+];
 
 interface RunResult {
   status: number;

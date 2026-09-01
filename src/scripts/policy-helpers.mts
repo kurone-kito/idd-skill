@@ -4,6 +4,8 @@
 // named above by `pnpm run build`. Edit the .mts source, never the
 // generated .mjs. See docs/typescript-sources.md.
 
+import { PROVIDER_IDS, type ProviderId } from './provider-contract.mts';
+
 type EnumSet = ReadonlySet<string>;
 
 interface CheckSelector {
@@ -213,6 +215,83 @@ export function resolveEffectiveDevelopmentBranch(
   return { status: 'default', branch: liveDefaultBranch };
 }
 
+/** GitHub is the only functional provider until an adapter lands (#2265). */
+export const DEFAULT_PROVIDER: ProviderId = 'github';
+
+/** How one policy document presents the top-level `provider` key (#2265). */
+export type ProviderInspectionStatus = 'absent' | 'configured' | 'invalid';
+
+export interface ProviderInspection {
+  status: ProviderInspectionStatus;
+  /** Present when `status` is `'configured'`. */
+  provider?: ProviderId;
+  /** Present when `status` is `'invalid'`. */
+  reason?: string;
+}
+
+/**
+ * Inspect the top-level `provider` key on a raw policy document without
+ * applying any default (#2265). Mirrors {@link inspectDevelopmentBranch}'s
+ * absent/configured/invalid shape: absent means "no opinion, GitHub stays
+ * the effective provider"; invalid means "an unrecognized provider value
+ * was present and must fail closed rather than be treated as absent or
+ * silently coerced to the default".
+ */
+export function inspectProvider(config: unknown): ProviderInspection {
+  if (typeof config !== 'object' || config === null || Array.isArray(config)) {
+    return { status: 'absent' };
+  }
+  if (!Object.hasOwn(config, 'provider')) {
+    return { status: 'absent' };
+  }
+  const value = (config as RawConfig).provider;
+  if (
+    typeof value !== 'string' ||
+    !(PROVIDER_IDS as readonly string[]).includes(value)
+  ) {
+    return {
+      status: 'invalid',
+      reason: `provider must be one of ${PROVIDER_IDS.join(', ')}`,
+    };
+  }
+  return { status: 'configured', provider: value as ProviderId };
+}
+
+/** Resolved outcome of {@link inspectProvider} with the distributed default applied. */
+export type ProviderTargetStatus = 'configured' | 'default' | 'invalid';
+
+export interface ProviderTarget {
+  status: ProviderTargetStatus;
+  /** Present when `status` is `'configured'` or `'default'`. */
+  provider?: ProviderId;
+  /** Present when `status` is `'invalid'`. */
+  reason?: string;
+}
+
+/**
+ * Resolve the effective provider selection (#2265): a configured
+ * `provider` policy value wins outright; an absent policy resolves to
+ * `DEFAULT_PROVIDER` (`'github'`), producing the same effective policy as
+ * the current, provider-unaware configuration; an invalid value fails
+ * closed rather than silently falling back to the default, since a
+ * present-but-broken policy must never be treated the same as no opinion
+ * at all.
+ *
+ * Pure -- performs no I/O and needs no live evidence, unlike
+ * {@link resolveEffectiveDevelopmentBranch}, because there is no
+ * provider-agnostic "live default" to fall back to.
+ */
+export function resolveEffectiveProvider(config: unknown): ProviderTarget {
+  const inspection = inspectProvider(config);
+  if (inspection.status === 'configured') {
+    return { status: 'configured', provider: inspection.provider };
+  }
+  if (inspection.status === 'invalid') {
+    return { status: 'invalid', reason: inspection.reason };
+  }
+  return { status: 'default', provider: DEFAULT_PROVIDER };
+}
+
 // Structural view of the untrusted config object parsed from an
 // adopter-controlled JSON file. Every field is optional and weakly
 // typed; the runtime guards below perform the real validation.
@@ -287,6 +366,7 @@ interface RawConfig {
   providerOutage?: { declarationTarget?: unknown; maxValidity?: unknown };
   localValidationEvidence?: { maxAge?: unknown };
   developmentBranch?: unknown;
+  provider?: unknown;
 }
 
 const HELPER_RUNTIME_PROFILES = new Set([

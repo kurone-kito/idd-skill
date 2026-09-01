@@ -142,6 +142,7 @@ interface PolicyConfigFile {
   iddVersion: string;
   markerPrefix: string;
   developmentBranch?: string;
+  provider?: 'github' | 'gitlab' | 'bitbucket';
   mergePolicy:
     | 'fully_autonomous_merge'
     | 'human_merge'
@@ -500,6 +501,7 @@ export const policyConfigKeys = [
   'iddVersion',
   'markerPrefix',
   'developmentBranch',
+  'provider',
   'mergePolicy',
   'mergePolicyAck',
   'reviewPolicy',
