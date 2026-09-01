@@ -49,6 +49,7 @@ scripts/gh-exec.mjs linguist-generated=true
 scripts/gh-http-status.mjs linguist-generated=true
 scripts/helper-runtime-manifest.mjs linguist-generated=true
 scripts/idd-config.mjs linguist-generated=true
+scripts/idd-critique-delegate.mjs linguist-generated=true
 scripts/idd-doctor.mjs linguist-generated=true
 scripts/idd-merge-execute.mjs linguist-generated=true
 scripts/idd-onboard.mjs linguist-generated=true
