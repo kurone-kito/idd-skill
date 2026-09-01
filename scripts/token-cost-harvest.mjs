@@ -1,0 +1,934 @@
+// idd-generated-from: src/scripts/token-cost-harvest.mts
+//
+// The scripts/token-cost-harvest.mjs copy is generated from the .mts
+// source named above by `pnpm run build`. Edit the .mts source, never
+// the generated .mjs. See docs/typescript-sources.md.
+//
+// Token-cost harvest CLI (#2292). Source-repo only: not HELPER_COMMANDS,
+// registered in tests/helper-invocation-profile.test.mts's
+// SOURCE_REPO_INTERNAL_ENTRY_PATHS instead (see docs/token-cost.md).
+//
+// Scans the already-shipped vendor adapters (token-cost-adapter-claude.mts
+// #2290, token-cost-adapter-codex.mts #2291, token-cost-adapter-grok.mts
+// #2289), joins each harvested session against this repository's own
+// GitHub IDD markers (claim, review-watermark, merge) to reconstruct
+// per-issue IDD stage windows, and writes TokenCostSample JSONL. Does
+// not render the README -- that stays token-cost-report.mjs's job.
+import {
+  existsSync,
+  globSync,
+  mkdirSync,
+  readFileSync,
+  writeFileSync,
+} from 'node:fs';
+import { homedir } from 'node:os';
+import { basename, dirname, join } from 'node:path';
+import { parseCliArgs } from './cli-args.mjs';
+import { ghGraphql } from './gh-exec.mjs';
+import {
+  parseClaimComment,
+  parseForcedHandoffComment,
+  parseReleaseComment,
+  parseReviewWatermarkComment,
+} from './marker-helpers.mjs';
+import {
+  claudeAdapter,
+  defaultClaudeProjectDir,
+  parseClaudeProjectLines,
+} from './token-cost-adapter-claude.mjs';
+import {
+  codexAdapter,
+  defaultCodexSessionsDir,
+  extractSessionCwd,
+  isIddSkillCwd,
+  parseCodexRolloutLines,
+} from './token-cost-adapter-codex.mjs';
+import {
+  defaultGrokSessionsDir,
+  scanGrokSessions,
+} from './token-cost-adapter-grok.mjs';
+import {
+  assertTokenCostSample,
+  redactTokenCostRecord,
+  TOKEN_COST_STAGE_IDS,
+} from './token-cost-core.mjs';
+
+// ---------------------------------------------------------------------------
+// Shared usage arithmetic
+// ---------------------------------------------------------------------------
+const ZERO_USAGE = {
+  inputUncached: 0,
+  cacheRead: 0,
+  cacheCreation: 0,
+  output: 0,
+  reasoning: 0,
+};
+function addUsage(a, b) {
+  return {
+    inputUncached: a.inputUncached + b.inputUncached,
+    cacheRead: a.cacheRead + b.cacheRead,
+    cacheCreation: a.cacheCreation + b.cacheCreation,
+    output: a.output + b.output,
+    reasoning: a.reasoning + b.reasoning,
+  };
+}
+function subtractUsageClamped(a, b) {
+  const clamp = (x, y) => Math.max(0, x - y);
+  return {
+    inputUncached: clamp(a.inputUncached, b.inputUncached),
+    cacheRead: clamp(a.cacheRead, b.cacheRead),
+    cacheCreation: clamp(a.cacheCreation, b.cacheCreation),
+    output: clamp(a.output, b.output),
+    reasoning: clamp(a.reasoning, b.reasoning),
+  };
+}
+function usageTotal(u) {
+  return (
+    u.inputUncached + u.cacheRead + u.cacheCreation + u.output + u.reasoning
+  );
+}
+function toNonNegativeInt(value) {
+  const n = typeof value === 'number' ? value : Number(value);
+  return Number.isFinite(n) && n > 0 ? Math.trunc(n) : 0;
+}
+function isPlainObject(value) {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+function toValidTimestampMs(value) {
+  if (typeof value !== 'string') {
+    return undefined;
+  }
+  const ms = Date.parse(value);
+  return Number.isFinite(ms) ? ms : undefined;
+}
+/** Mirrors token-cost-adapter-claude.mts's usageFromFields (per-message delta). */
+function claudeUsageFromFields(raw) {
+  const split = raw.cache_creation;
+  const cacheCreation = isPlainObject(split)
+    ? toNonNegativeInt(split.ephemeral_5m_input_tokens) +
+      toNonNegativeInt(split.ephemeral_1h_input_tokens)
+    : toNonNegativeInt(raw.cache_creation_input_tokens);
+  return {
+    inputUncached: toNonNegativeInt(raw.input_tokens),
+    cacheRead: toNonNegativeInt(raw.cache_read_input_tokens),
+    cacheCreation,
+    output: toNonNegativeInt(raw.output_tokens),
+    reasoning: 0,
+  };
+}
+/** Mirrors token-cost-adapter-claude.mts's extractUsage's per-record source: assistant records' message.usage. */
+export function extractClaudeUsageTimeline(records) {
+  const points = [];
+  for (const record of records) {
+    if (!isPlainObject(record) || record.type !== 'assistant') {
+      continue;
+    }
+    const atMs = toValidTimestampMs(record.timestamp);
+    const message = isPlainObject(record.message) ? record.message : undefined;
+    const usageRaw =
+      message && isPlainObject(message.usage) ? message.usage : undefined;
+    if (atMs === undefined || !usageRaw) {
+      continue;
+    }
+    points.push({ atMs, usage: claudeUsageFromFields(usageRaw) });
+  }
+  points.sort((a, b) => a.atMs - b.atMs);
+  return { mode: 'delta', points };
+}
+/** Mirrors token-cost-adapter-codex.mts's usageFromTokenCounts (shared field shape for both cumulative and delta payloads). */
+function codexUsageFromTokenCounts(raw) {
+  const inputTokens = toNonNegativeInt(raw.input_tokens);
+  const cacheRead = toNonNegativeInt(raw.cached_input_tokens);
+  const cacheCreation = toNonNegativeInt(raw.cache_write_input_tokens);
+  const inputUncached =
+    inputTokens >= cacheRead + cacheCreation
+      ? inputTokens - cacheRead - cacheCreation
+      : inputTokens;
+  return {
+    inputUncached,
+    cacheRead,
+    cacheCreation,
+    output: toNonNegativeInt(raw.output_tokens),
+    reasoning: toNonNegativeInt(raw.reasoning_output_tokens),
+  };
+}
+/**
+ * Mirrors token-cost-adapter-codex.mts's extractUsage's own per-session
+ * preference (total_token_usage when any record carries one, else
+ * last_token_usage deltas) -- applied per record here instead of
+ * collapsed to one session total, since stage-window splitting needs
+ * the whole timeline, not just the final value.
+ */
+export function extractCodexUsageTimeline(records) {
+  const tokenCountRecords = [];
+  for (const record of records) {
+    if (!isPlainObject(record) || record.type !== 'token_count') {
+      continue;
+    }
+    const atMs = toValidTimestampMs(record.timestamp);
+    const payload = isPlainObject(record.payload) ? record.payload : undefined;
+    if (atMs === undefined || !payload) {
+      continue;
+    }
+    tokenCountRecords.push({ atMs, payload });
+  }
+  tokenCountRecords.sort((a, b) => a.atMs - b.atMs);
+  const hasCumulative = tokenCountRecords.some((r) =>
+    isPlainObject(r.payload.total_token_usage),
+  );
+  if (hasCumulative) {
+    const points = [];
+    for (const { atMs, payload } of tokenCountRecords) {
+      const total = payload.total_token_usage;
+      if (isPlainObject(total)) {
+        points.push({ atMs, usage: codexUsageFromTokenCounts(total) });
+      }
+    }
+    return { mode: 'cumulative', points };
+  }
+  const points = [];
+  for (const { atMs, payload } of tokenCountRecords) {
+    const last = payload.last_token_usage;
+    if (isPlainObject(last)) {
+      points.push({ atMs, usage: codexUsageFromTokenCounts(last) });
+    }
+  }
+  return { mode: 'delta', points };
+}
+const CLAIM_STAGE_CAP_MS = 15 * 60 * 1000;
+/** Thin cap for the merge stage when no cleanup marker activity is resolvable. */
+const MERGE_STAGE_THIN_CAP_MS = 15 * 60 * 1000;
+/**
+ * Builds the contiguous, gap-free stage-window tiling of
+ * [sessionStartedAtMs, sessionEndedAtMs) per the issue's marker-join
+ * table, then lets --events override individual stage boundaries.
+ * Contiguous tiling (each window starts exactly where the previous one
+ * ended) is what makes the per-stage usage allocation below sum back to
+ * the session total exactly, in both delta and cumulative modes.
+ */
+export function computeStageWindows(
+  sessionStartedAtMs,
+  sessionEndedAtMs,
+  ctx,
+  eventWindows,
+) {
+  const windows = [];
+  const push = (id, startMs, endMs) => {
+    if (endMs > startMs) {
+      windows.push({ id, startMs, endMs, source: 'marker' });
+    }
+  };
+  if (ctx.claimedAtMs === null) {
+    return { windows: [], attribution: 'marker-join' };
+  }
+  let cursor = ctx.claimedAtMs;
+  push('discover', sessionStartedAtMs, cursor);
+  const claimCap = cursor + CLAIM_STAGE_CAP_MS;
+  if (ctx.prCreatedAtMs !== null) {
+    const claimEnd = Math.min(claimCap, ctx.prCreatedAtMs);
+    push('claim', cursor, claimEnd);
+    cursor = claimEnd;
+    push('work', cursor, ctx.prCreatedAtMs);
+    cursor = ctx.prCreatedAtMs;
+    const submitPrEnd =
+      ctx.firstReviewAtMs !== null ? ctx.firstReviewAtMs : sessionEndedAtMs;
+    push('submit-pr', cursor, submitPrEnd);
+    cursor = submitPrEnd;
+    if (ctx.firstReviewAtMs !== null) {
+      const reviewEnd =
+        ctx.prMergedAtMs !== null ? ctx.prMergedAtMs : sessionEndedAtMs;
+      push('review', cursor, reviewEnd);
+      cursor = reviewEnd;
+      if (ctx.prMergedAtMs !== null) {
+        // cursor === ctx.prMergedAtMs here (reviewEnd above), matching the
+        // table's "merge: merged_at → cleanup marker or merged_at+thin cap".
+        const uncappedMergeEnd =
+          ctx.cleanupAtMs !== null
+            ? ctx.cleanupAtMs
+            : ctx.prMergedAtMs + MERGE_STAGE_THIN_CAP_MS;
+        const mergeEnd = Math.min(uncappedMergeEnd, sessionEndedAtMs);
+        push('merge', cursor, mergeEnd);
+        cursor = mergeEnd;
+        push('cleanup', cursor, sessionEndedAtMs);
+        cursor = sessionEndedAtMs;
+      }
+    }
+  } else {
+    const claimEnd = Math.min(claimCap, sessionEndedAtMs);
+    push('claim', cursor, claimEnd);
+    cursor = claimEnd;
+    push('work', cursor, sessionEndedAtMs);
+    cursor = sessionEndedAtMs;
+  }
+  let attribution = 'marker-join';
+  const byId = new Map(windows.map((w) => [w.id, w]));
+  for (const [stageId, eventWindow] of eventWindows) {
+    if (eventWindow.endMs <= eventWindow.startMs) {
+      continue;
+    }
+    const existingIndex = windows.findIndex((w) => w.id === stageId);
+    const overridden = {
+      id: stageId,
+      startMs: eventWindow.startMs,
+      endMs: eventWindow.endMs,
+      source: 'event',
+    };
+    if (existingIndex >= 0) {
+      windows[existingIndex] = overridden;
+    } else {
+      windows.push(overridden);
+    }
+    byId.set(stageId, overridden);
+    attribution = 'phase-event';
+  }
+  windows.sort((a, b) => a.startMs - b.startMs);
+  return { windows, attribution };
+}
+/** Sums every delta-mode point whose timestamp falls in [startMs, endMs). */
+function sumDeltaInRange(points, startMs, endMs) {
+  let sum = ZERO_USAGE;
+  for (const point of points) {
+    if (point.atMs >= startMs && point.atMs < endMs) {
+      sum = addUsage(sum, point.usage);
+    }
+  }
+  return sum;
+}
+/** Last cumulative snapshot at or before atMs, or null when none exists yet. */
+function cumulativeSnapshotAt(points, atMs) {
+  let result = null;
+  for (const point of points) {
+    if (point.atMs <= atMs) {
+      result = point.usage;
+    } else {
+      break;
+    }
+  }
+  return result;
+}
+/**
+ * Allocates each stage window's usage from a timeline. Windows must be
+ * passed in ascending start-time order for the cumulative running
+ * baseline to telescope correctly (sum of every window's delta equals
+ * the timeline's final cumulative snapshot minus zero -- matching the
+ * adapter's own `usage` total, which is the raw latest snapshot, not a
+ * value relative to session start).
+ */
+export function allocateStageUsage(windows, timeline) {
+  const out = [];
+  let cumulativeBaseline = ZERO_USAGE;
+  for (const window of windows) {
+    let usage;
+    if (timeline.mode === 'cumulative') {
+      const snapshot =
+        cumulativeSnapshotAt(timeline.points, window.endMs) ??
+        cumulativeBaseline;
+      usage = subtractUsageClamped(snapshot, cumulativeBaseline);
+      cumulativeBaseline = snapshot;
+    } else {
+      usage = sumDeltaInRange(timeline.points, window.startMs, window.endMs);
+    }
+    if (usageTotal(usage) > 0) {
+      out.push({ id: window.id, usage });
+    }
+  }
+  return out;
+}
+// ---------------------------------------------------------------------------
+// Outcome + ambiguity
+// ---------------------------------------------------------------------------
+export function deriveOutcome(ctx) {
+  if (ctx.prMergedAtMs !== null) {
+    return 'merged';
+  }
+  if (ctx.humanHandoff) {
+    return 'human-handoff';
+  }
+  if (ctx.unclaimedMatched) {
+    return 'unclaimed';
+  }
+  return 'aborted';
+}
+/**
+ * Two harvested issue-loop samples on the same issue with overlapping
+ * [startedAt, endedAt) ranges mean two concurrent sessions genuinely
+ * worked the same issue -- neither's usage can be cleanly attributed, so
+ * both are marked ambiguous/unknown rather than either being trusted.
+ */
+export function markAmbiguousOverlaps(samples) {
+  const byIssue = new Map();
+  for (const entry of samples) {
+    if (entry.issueNumber === undefined || entry.sample.kind !== 'issue-loop') {
+      continue;
+    }
+    const group = byIssue.get(entry.issueNumber) ?? [];
+    group.push(entry);
+    byIssue.set(entry.issueNumber, group);
+  }
+  for (const group of byIssue.values()) {
+    for (let i = 0; i < group.length; i++) {
+      for (let j = i + 1; j < group.length; j++) {
+        const a = group[i];
+        const b = group[j];
+        const overlap =
+          a.startedAtMs < b.endedAtMs && b.startedAtMs < a.endedAtMs;
+        if (overlap) {
+          const sampleA = a.sample;
+          const sampleB = b.sample;
+          sampleA.ambiguous = true;
+          sampleB.ambiguous = true;
+          sampleA.outcome = 'unknown';
+          sampleB.outcome = 'unknown';
+        }
+      }
+    }
+  }
+}
+function isTrusted(login, trustedLogins) {
+  return trustedLogins.includes(login);
+}
+/** flag > config.json trustedMarkerActors > empty (fail closed: nothing is trusted). */
+export function resolveTrustedMarkerLogins(flagValue) {
+  const fromFlag = flagValue
+    .split(',')
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+  if (fromFlag.length > 0) {
+    return fromFlag;
+  }
+  try {
+    const raw = readFileSync(
+      join(process.cwd(), '.github/idd/config.json'),
+      'utf8',
+    );
+    const parsed = JSON.parse(raw);
+    if (Array.isArray(parsed.trustedMarkerActors)) {
+      return parsed.trustedMarkerActors.filter((v) => typeof v === 'string');
+    }
+  } catch {}
+  return [];
+}
+const ISSUE_LOOP_CONTEXT_QUERY = `
+query($owner:String!,$repo:String!,$number:Int!){
+  repository(owner:$owner,name:$repo){
+    issue(number:$number){
+      comments(first:100){nodes{body createdAt author{login}}}
+      timelineItems(last:100,itemTypes:[CONNECTED_EVENT,DISCONNECTED_EVENT]){
+        nodes{
+          __typename
+          ... on ConnectedEvent{subject{__typename ... on PullRequest{
+            number state headRefName createdAt mergedAt
+            reviews(first:1){nodes{submittedAt}}
+          }}}
+          ... on DisconnectedEvent{subject{__typename ... on PullRequest{number}}}
+        }
+      }
+    }
+  }
+}`;
+/** Fetches issue comments plus the earliest live-connected same-branch PR (with its first review + merge timestamp) via one batched GraphQL query. */
+export function fetchIssueLoopGithubContext(
+  owner,
+  repo,
+  issueNumber,
+  trustedLogins,
+) {
+  const response = ghGraphql(ISSUE_LOOP_CONTEXT_QUERY, {
+    owner,
+    repo,
+    number: issueNumber,
+  });
+  const issue = response.data?.repository?.issue;
+  const commentNodes = Array.isArray(issue?.comments?.nodes)
+    ? issue.comments.nodes
+    : [];
+  const comments = [];
+  for (const node of commentNodes) {
+    if (!isPlainObject(node)) {
+      continue;
+    }
+    const login =
+      isPlainObject(node.author) && typeof node.author.login === 'string'
+        ? node.author.login
+        : '';
+    const body = typeof node.body === 'string' ? node.body : '';
+    const createdAt = typeof node.createdAt === 'string' ? node.createdAt : '';
+    if (login && body && createdAt && isTrusted(login, trustedLogins)) {
+      comments.push({ body, createdAt, login });
+    }
+  }
+  const timelineNodes = Array.isArray(issue?.timelineItems?.nodes)
+    ? issue.timelineItems.nodes
+    : [];
+  const connected = new Map();
+  const disconnected = new Set();
+  for (const node of timelineNodes) {
+    if (!isPlainObject(node)) {
+      continue;
+    }
+    const subject = isPlainObject(node.subject) ? node.subject : undefined;
+    const prNumber =
+      subject && typeof subject.number === 'number'
+        ? subject.number
+        : undefined;
+    if (prNumber === undefined) {
+      continue;
+    }
+    if (node.__typename === 'ConnectedEvent') {
+      connected.set(prNumber, subject);
+      disconnected.delete(prNumber);
+    } else if (node.__typename === 'DisconnectedEvent') {
+      disconnected.add(prNumber);
+    }
+  }
+  let chosen = null;
+  let chosenNumber = null;
+  for (const [prNumber, subject] of connected) {
+    if (disconnected.has(prNumber)) {
+      continue;
+    }
+    const headRefName =
+      typeof subject.headRefName === 'string' ? subject.headRefName : '';
+    if (!headRefName.startsWith(`issue/${issueNumber}-`)) {
+      continue;
+    }
+    const createdAtMs = toValidTimestampMs(subject.createdAt);
+    if (createdAtMs === undefined) {
+      continue;
+    }
+    const chosenCreatedAtMs = chosen
+      ? (toValidTimestampMs(chosen.createdAt) ?? Infinity)
+      : Infinity;
+    if (createdAtMs < chosenCreatedAtMs) {
+      chosen = subject;
+      chosenNumber = prNumber;
+    }
+  }
+  if (!chosen) {
+    return {
+      comments,
+      prNumber: null,
+      prHeadRefName: null,
+      prCreatedAtMs: null,
+      prMergedAtMs: null,
+      firstReviewAtMs: null,
+    };
+  }
+  const reviews =
+    isPlainObject(chosen.reviews) && Array.isArray(chosen.reviews.nodes)
+      ? chosen.reviews.nodes
+      : [];
+  let firstReviewAtMs = null;
+  for (const review of reviews) {
+    if (!isPlainObject(review)) {
+      continue;
+    }
+    const submittedAtMs = toValidTimestampMs(review.submittedAt);
+    if (
+      submittedAtMs !== undefined &&
+      (firstReviewAtMs === null || submittedAtMs < firstReviewAtMs)
+    ) {
+      firstReviewAtMs = submittedAtMs;
+    }
+  }
+  return {
+    comments,
+    prNumber: chosenNumber,
+    prHeadRefName:
+      typeof chosen.headRefName === 'string' ? chosen.headRefName : null,
+    prCreatedAtMs: toValidTimestampMs(chosen.createdAt) ?? null,
+    prMergedAtMs: toValidTimestampMs(chosen.mergedAt) ?? null,
+    firstReviewAtMs,
+  };
+}
+/**
+ * Resolves the full {@link IssueLoopGithubContext} for one session's
+ * [sessionStartedAtMs, sessionEndedAtMs) window: the first trusted
+ * claimed-by comment posted in that range, the earliest first trusted
+ * review-watermark (compared against the linked PR's first submitted
+ * review), and whether that claim was later released or handed off
+ * before merge.
+ */
+export function resolveIssueLoopContext(
+  owner,
+  repo,
+  issueNumber,
+  sessionStartedAtMs,
+  sessionEndedAtMs,
+  trustedLogins,
+) {
+  const github = fetchIssueLoopGithubContext(
+    owner,
+    repo,
+    issueNumber,
+    trustedLogins,
+  );
+  let claimedAtMs = null;
+  let claimAgentId = null;
+  let claimId = null;
+  for (const comment of github.comments) {
+    const claim = parseClaimComment(comment.body, comment.createdAt);
+    if (!claim) {
+      continue;
+    }
+    const atMs = toValidTimestampMs(claim.createdAt);
+    if (
+      atMs === undefined ||
+      atMs < sessionStartedAtMs ||
+      atMs > sessionEndedAtMs
+    ) {
+      continue;
+    }
+    if (claimedAtMs === null || atMs < claimedAtMs) {
+      claimedAtMs = atMs;
+      claimAgentId = claim.agentId;
+      claimId = claim.claimId;
+    }
+  }
+  if (claimedAtMs === null) {
+    return null;
+  }
+  let firstWatermarkAtMs = null;
+  for (const comment of github.comments) {
+    const watermark = parseReviewWatermarkComment(
+      comment.body,
+      comment.createdAt,
+    );
+    if (!watermark) {
+      continue;
+    }
+    const atMs = toValidTimestampMs(watermark.createdAt);
+    if (
+      atMs !== undefined &&
+      (firstWatermarkAtMs === null || atMs < firstWatermarkAtMs)
+    ) {
+      firstWatermarkAtMs = atMs;
+    }
+  }
+  const firstReviewAtMs = [firstWatermarkAtMs, github.firstReviewAtMs]
+    .filter((v) => v !== null)
+    .reduce((min, v) => (min === null || v < min ? v : min), null);
+  let unclaimedMatched = false;
+  let humanHandoff = false;
+  for (const comment of github.comments) {
+    const release = parseReleaseComment(comment.body);
+    if (
+      release &&
+      release.agentId === claimAgentId &&
+      release.claimId === claimId
+    ) {
+      unclaimedMatched = true;
+    }
+    const handoff = parseForcedHandoffComment(comment.body, comment.createdAt);
+    if (
+      handoff &&
+      handoff.oldAgentId === claimAgentId &&
+      handoff.oldClaimId === claimId
+    ) {
+      humanHandoff = true;
+    }
+  }
+  return {
+    claimedAtMs,
+    prCreatedAtMs: github.prCreatedAtMs,
+    prHeadRefName: github.prHeadRefName,
+    prMergedAtMs: github.prMergedAtMs,
+    firstReviewAtMs,
+    cleanupAtMs: null,
+    unclaimedMatched,
+    humanHandoff,
+  };
+}
+// ---------------------------------------------------------------------------
+// --events file
+// ---------------------------------------------------------------------------
+function eventKey(issueNumber, stageId) {
+  return `${issueNumber}:${stageId}`;
+}
+/** Reads a --events JSONL file into per-(issueNumber, stageId) enter/exit window overrides. A missing file is not an error -- returns an empty map. */
+export function readEventWindows(path) {
+  const result = new Map();
+  if (!existsSync(path)) {
+    return result;
+  }
+  const enterAt = new Map();
+  const exitAt = new Map();
+  const text = readFileSync(path, 'utf8');
+  for (const rawLine of text.split('\n')) {
+    const line = rawLine.trim();
+    if (!line) {
+      continue;
+    }
+    let parsed;
+    try {
+      parsed = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    if (!isPlainObject(parsed)) {
+      continue;
+    }
+    const event = parsed;
+    if (
+      typeof event.issueNumber !== 'number' ||
+      typeof event.stageId !== 'string' ||
+      !TOKEN_COST_STAGE_IDS.includes(event.stageId) ||
+      (event.event !== 'enter' && event.event !== 'exit')
+    ) {
+      continue;
+    }
+    const atMs = toValidTimestampMs(event.at);
+    if (atMs === undefined) {
+      continue;
+    }
+    const key = eventKey(event.issueNumber, event.stageId);
+    if (event.event === 'enter') {
+      enterAt.set(key, atMs);
+    } else {
+      exitAt.set(key, atMs);
+    }
+  }
+  for (const [key, start] of enterAt) {
+    const end = exitAt.get(key);
+    if (end !== undefined) {
+      result.set(key, { startMs: start, endMs: end });
+    }
+  }
+  return result;
+}
+function eventWindowsForIssue(all, issueNumber) {
+  const out = new Map();
+  for (const stageId of TOKEN_COST_STAGE_IDS) {
+    const window = all.get(eventKey(issueNumber, stageId));
+    if (window) {
+      out.set(stageId, window);
+    }
+  }
+  return out;
+}
+function scanClaudeVendorSessions(projectDir) {
+  const out = [];
+  if (!existsSync(projectDir)) {
+    return out;
+  }
+  const files = globSync('*.jsonl', { cwd: projectDir, withFileTypes: true })
+    .filter((entry) => entry.isFile())
+    .map((entry) => join(entry.parentPath, entry.name))
+    .sort();
+  for (const file of files) {
+    try {
+      const records = parseClaudeProjectLines(readFileSync(file, 'utf8'));
+      const adapterResult = claudeAdapter.harvest({
+        records,
+        fileBasename: basename(file),
+      });
+      out.push({
+        vendor: 'claude',
+        adapterResult,
+        timeline: extractClaudeUsageTimeline(records),
+      });
+    } catch (error) {
+      process.stderr.write(
+        `token-cost-harvest: skipping ${file}: ${error.message}\n`,
+      );
+    }
+  }
+  return out;
+}
+function scanCodexVendorSessions(sessionsDir) {
+  const out = [];
+  if (!existsSync(sessionsDir)) {
+    return out;
+  }
+  const files = globSync('**/rollout-*.jsonl', {
+    cwd: sessionsDir,
+    withFileTypes: true,
+  })
+    .filter((entry) => entry.isFile())
+    .map((entry) => join(entry.parentPath, entry.name))
+    .sort();
+  for (const file of files) {
+    try {
+      const records = parseCodexRolloutLines(readFileSync(file, 'utf8'));
+      if (!isIddSkillCwd(extractSessionCwd(records))) {
+        continue;
+      }
+      const adapterResult = codexAdapter.harvest({
+        records,
+        fileBasename: basename(file),
+      });
+      out.push({
+        vendor: 'codex',
+        adapterResult,
+        timeline: extractCodexUsageTimeline(records),
+      });
+    } catch (error) {
+      process.stderr.write(
+        `token-cost-harvest: skipping ${file}: ${error.message}\n`,
+      );
+    }
+  }
+  return out;
+}
+/**
+ * Grok sessions are joined and classified the same as claude/codex, but
+ * without per-stage usage splitting yet: `scanGrokSessions` already owns
+ * a materially more complex read (subagent updates.jsonl rollups,
+ * signals.json, events.jsonl fallback -- see token-cost-adapter-grok.mts's
+ * module doc), so replicating "read once, feed the same records to a
+ * local timeline extractor" here would mean re-deriving that whole read,
+ * not just one small per-record usage-field mapping the way the
+ * claude/codex extractors do. An empty timeline means allocateStageUsage
+ * omits every stage for a grok issue-loop sample (the session's own
+ * aggregate `usage` total is still present and correct); a follow-up
+ * issue can add extractGrokUsageTimeline once that read is worth sharing.
+ */
+function scanGrokVendorSessions(sessionsDir) {
+  return scanGrokSessions({ sessionsDir }).map((adapterResult) => ({
+    vendor: 'grok',
+    adapterResult,
+    timeline: { mode: 'delta', points: [] },
+  }));
+}
+// ---------------------------------------------------------------------------
+// Sample assembly
+// ---------------------------------------------------------------------------
+export function buildSample(
+  session,
+  owner,
+  repo,
+  eventWindowsAll,
+  trustedLogins,
+) {
+  const base = session.adapterResult.sample;
+  const startedAtMs = toValidTimestampMs(base.startedAt) ?? 0;
+  const endedAtMs = toValidTimestampMs(base.endedAt) ?? startedAtMs;
+  const issueNumber = session.adapterResult.joinHints?.issueNumber;
+  if (issueNumber === undefined) {
+    return { sample: base, startedAtMs, endedAtMs };
+  }
+  const ctx = resolveIssueLoopContext(
+    owner,
+    repo,
+    issueNumber,
+    startedAtMs,
+    endedAtMs,
+    trustedLogins,
+  );
+  if (ctx === null) {
+    return { sample: base, issueNumber, startedAtMs, endedAtMs };
+  }
+  const eventWindows = eventWindowsForIssue(eventWindowsAll, issueNumber);
+  const { windows, attribution } = computeStageWindows(
+    startedAtMs,
+    endedAtMs,
+    ctx,
+    eventWindows,
+  );
+  const stages = allocateStageUsage(windows, session.timeline);
+  const sample = {
+    ...base,
+    kind: 'issue-loop',
+    issueNumber,
+    stages,
+    attribution: attribution,
+    outcome: deriveOutcome(ctx),
+  };
+  const redacted = redactTokenCostRecord(sample);
+  return { sample: redacted, issueNumber, startedAtMs, endedAtMs };
+}
+// ---------------------------------------------------------------------------
+// CLI
+// ---------------------------------------------------------------------------
+function defaultStateDir() {
+  const base =
+    process.env.XDG_STATE_HOME?.trim() || join(homedir(), '.local', 'state');
+  return join(base, 'idd-skill', 'token-cost');
+}
+// Flag-spec keys stay the dashed literal on purpose -- see cli-args.mts's
+// module header for the full invariant.
+const TOKEN_COST_HARVEST_FLAG_SPEC = {
+  '--repo': { type: 'string', default: '' },
+  '--out': { type: 'string', default: '' },
+  '--events': { type: 'string', default: '' },
+  '--dry-run': { type: 'boolean', default: false },
+  '--trusted-marker-logins': { type: 'string', default: '' },
+  '--help': { type: 'boolean', short: 'h' },
+};
+function printHelp() {
+  process.stdout.write(`Usage:
+  node scripts/token-cost-harvest.mjs --repo <owner>/<repo> [--out <path>] [--events <path>] [--dry-run]
+
+  --repo <owner/repo>          Repository to join harvested sessions against. Required.
+  --out <path>                 Output samples JSONL path (default:
+                                ${defaultStateDir()}/samples.jsonl).
+  --events <path>               Phase-event JSONL path (default:
+                                ${defaultStateDir()}/events.jsonl). Missing file is not an error.
+  --dry-run                    Print counts to stderr; write nothing.
+  --trusted-marker-logins a,b   Logins whose IDD markers are trusted (default: .github/idd/config.json's trustedMarkerActors).
+  --help, -h                   Show this help.
+`);
+}
+function runCli(argv) {
+  const { values, help } = parseCliArgs(argv, TOKEN_COST_HARVEST_FLAG_SPEC);
+  if (help) {
+    printHelp();
+    return;
+  }
+  const repoFlag = values.repo;
+  if (!repoFlag.includes('/')) {
+    process.stderr.write('--repo <owner>/<repo> is required\n');
+    process.exitCode = 2;
+    return;
+  }
+  const [owner, repo] = repoFlag.split('/');
+  const dryRun = values['dry-run'];
+  const outPath = values.out || join(defaultStateDir(), 'samples.jsonl');
+  const eventsPath = values.events || join(defaultStateDir(), 'events.jsonl');
+  const trustedLogins = resolveTrustedMarkerLogins(
+    values['trusted-marker-logins'],
+  );
+  const eventWindows = readEventWindows(eventsPath);
+  const sessions = [
+    ...scanClaudeVendorSessions(defaultClaudeProjectDir()),
+    ...scanCodexVendorSessions(defaultCodexSessionsDir()),
+    ...scanGrokVendorSessions(defaultGrokSessionsDir()),
+  ];
+  const harvested = [];
+  for (const session of sessions) {
+    try {
+      const built = buildSample(
+        session,
+        owner,
+        repo,
+        eventWindows,
+        trustedLogins,
+      );
+      assertTokenCostSample(built.sample);
+      harvested.push(built);
+    } catch (error) {
+      process.stderr.write(
+        `token-cost-harvest: skipping ${session.vendor} session: ${error.message}\n`,
+      );
+    }
+  }
+  markAmbiguousOverlaps(harvested);
+  const issueLoopCount = harvested.filter(
+    (h) => h.sample.kind === 'issue-loop',
+  ).length;
+  process.stderr.write(
+    `token-cost-harvest: ${harvested.length} sample(s) (${issueLoopCount} issue-loop, ${harvested.length - issueLoopCount} session)\n`,
+  );
+  if (dryRun) {
+    return;
+  }
+  mkdirSync(dirname(outPath), { recursive: true });
+  const body = harvested.map((h) => JSON.stringify(h.sample)).join('\n');
+  writeFileSync(outPath, harvested.length > 0 ? `${body}\n` : '');
+  process.stdout.write(
+    `token-cost-harvest: wrote ${outPath} (n=${harvested.length})\n`,
+  );
+}
+if (import.meta.main) {
+  runCli(process.argv.slice(2));
+}

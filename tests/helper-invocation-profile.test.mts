@@ -120,6 +120,15 @@ const SOURCE_REPO_INTERNAL_ENTRY_PATHS = new Set([
   // never committed to git -- and is never distributed to idd-template/;
   // an adopter repository has no token-cost data to record.
   'scripts/token-cost-event.mjs',
+  // token-cost-harvest.mjs (#2292): this repository's own dogfood
+  // harvest CLI, named in docs/token-cost.md's own usage examples. It
+  // scans local vendor session logs (`~/.grok`/`~/.claude`/`~/.codex`)
+  // and this repository's own GitHub IDD markers, writing local JSONL
+  // under `${XDG_STATE_HOME:-$HOME/.local/state}/idd-skill/token-cost/`
+  // -- never committed to git -- and is never distributed to
+  // idd-template/; an adopter repository has no token-cost data to
+  // harvest.
+  'scripts/token-cost-harvest.mjs',
 ]);
 
 // A helper name that appears only as a *proposed*, not-yet-built script
