@@ -144,6 +144,20 @@ test('evaluateHighConfidenceDuplicate: a malformed branchNameMergedPr (non-posit
   assert.equal(result, null);
 });
 
+test('evaluateHighConfidenceDuplicate: a positive branchNameMergedPr.number with an empty mergedAt never produces Signal 3 evidence (CodeRabbit review finding, #2313)', () => {
+  const result = evaluateHighConfidenceDuplicate(
+    {
+      branchNameMergedPr: { number: 2254, mergedAt: '' },
+      closedByMergedPrNumbers: [],
+      candidateFiles: [],
+      highContentionFiles: [],
+      mergedPrs: [],
+    },
+    2222,
+  );
+  assert.equal(result, null);
+});
+
 test('evaluateHighConfidenceDuplicate: same-candidate-files hit cites the PR number and file', () => {
   const result = evaluateHighConfidenceDuplicate(
     {
