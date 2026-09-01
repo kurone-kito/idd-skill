@@ -7,7 +7,7 @@ tags: [provider, adapter, portability]
 
 # IDD Provider Boundary — Design Record
 
-<!-- cspell:words Bitbucket -->
+<!-- cspell:words Bitbucket glab -->
 
 ## Background
 
