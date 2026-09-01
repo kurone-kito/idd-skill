@@ -162,3 +162,181 @@ test('listChangeRequestReviewThreads throws when hasNextPage is true but endCurs
     /missing endCursor/,
   );
 });
+
+// ---------------------------------------------------------------------------
+// resolveViewerLoginSafe (#2266): idd-roadmap-audit-execute.mts's own
+// resolveViewerLogin/fetchViewerLogin (#1396) is deleted in favor of this
+// method, now its sole consumer -- these three cases are moved, not new.
+// ---------------------------------------------------------------------------
+
+test('resolveViewerLoginSafe normalizes a successful login to lowercase', () => {
+  const port = createGithubProviderAdapter(
+    'kurone-kito',
+    'idd-skill',
+    fakeDeps({ ghText: () => 'Some-User' }),
+  );
+  assert.deepEqual(port.resolveViewerLoginSafe(), {
+    viewerLogin: 'some-user',
+    viewerLoginUnavailable: false,
+  });
+});
+
+test('resolveViewerLoginSafe reports unavailable when ghText throws', () => {
+  const port = createGithubProviderAdapter(
+    'kurone-kito',
+    'idd-skill',
+    fakeDeps({
+      ghText: () => {
+        throw new Error('gh failed');
+      },
+    }),
+  );
+  assert.deepEqual(port.resolveViewerLoginSafe(), {
+    viewerLogin: '',
+    viewerLoginUnavailable: true,
+  });
+});
+
+test('resolveViewerLoginSafe reports unavailable on a blank-but-successful response', () => {
+  const port = createGithubProviderAdapter(
+    'kurone-kito',
+    'idd-skill',
+    fakeDeps({ ghText: () => '   ' }),
+  );
+  assert.deepEqual(port.resolveViewerLoginSafe(), {
+    viewerLogin: '',
+    viewerLoginUnavailable: true,
+  });
+});
+
+// ---------------------------------------------------------------------------
+// getWorkItemClosingPullRequestsPage / getConnectedPullRequestEventsPage
+// (#2266): idd-roadmap-audit-execute.mts's hasOpenClosingPr/
+// hasOpenConnectedPr distinguished an absent issue node from an absent
+// connection on an otherwise-present issue -- both funnel through the same
+// optional chain here, so both are covered.
+// ---------------------------------------------------------------------------
+
+test('getWorkItemClosingPullRequestsPage returns a normal page', () => {
+  const port = createGithubProviderAdapter(
+    'kurone-kito',
+    'idd-skill',
+    fakeDeps({
+      ghText: () =>
+        JSON.stringify({
+          data: {
+            repository: {
+              issue: {
+                closedByPullRequestsReferences: {
+                  nodes: [{ state: 'OPEN' }],
+                  pageInfo: { hasNextPage: false, endCursor: null },
+                },
+              },
+            },
+          },
+        }),
+    }),
+  );
+  assert.deepEqual(port.getWorkItemClosingPullRequestsPage(1048, null), {
+    nodes: [{ state: 'OPEN' }],
+    hasNextPage: false,
+    endCursor: null,
+  });
+});
+
+test('getWorkItemClosingPullRequestsPage throws when the issue node is null/absent', () => {
+  const port = createGithubProviderAdapter(
+    'kurone-kito',
+    'idd-skill',
+    fakeDeps({
+      ghText: () => JSON.stringify({ data: { repository: { issue: null } } }),
+    }),
+  );
+  assert.throws(
+    () => port.getWorkItemClosingPullRequestsPage(1048, null),
+    /connection is null\/absent/,
+  );
+});
+
+test('getWorkItemClosingPullRequestsPage throws when the connection itself is null/absent', () => {
+  const port = createGithubProviderAdapter(
+    'kurone-kito',
+    'idd-skill',
+    fakeDeps({
+      ghText: () =>
+        JSON.stringify({
+          data: {
+            repository: {
+              issue: { closedByPullRequestsReferences: null },
+            },
+          },
+        }),
+    }),
+  );
+  assert.throws(
+    () => port.getWorkItemClosingPullRequestsPage(1048, null),
+    /connection is null\/absent/,
+  );
+});
+
+test('getConnectedPullRequestEventsPage returns a normal page', () => {
+  const port = createGithubProviderAdapter(
+    'kurone-kito',
+    'idd-skill',
+    fakeDeps({
+      ghText: () =>
+        JSON.stringify({
+          data: {
+            repository: {
+              issue: {
+                timelineItems: {
+                  nodes: [{ __typename: 'ConnectedEvent' }],
+                  pageInfo: { hasNextPage: false, endCursor: null },
+                },
+              },
+            },
+          },
+        }),
+    }),
+  );
+  assert.deepEqual(port.getConnectedPullRequestEventsPage(1048, null), {
+    events: [{ __typename: 'ConnectedEvent' }],
+    hasNextPage: false,
+    endCursor: null,
+  });
+});
+
+test('getConnectedPullRequestEventsPage throws when the issue node is null/absent', () => {
+  const port = createGithubProviderAdapter(
+    'kurone-kito',
+    'idd-skill',
+    fakeDeps({
+      ghText: () => JSON.stringify({ data: { repository: { issue: null } } }),
+    }),
+  );
+  assert.throws(
+    () => port.getConnectedPullRequestEventsPage(1048, null),
+    /connection is null\/absent/,
+  );
+});
+
+test('getConnectedPullRequestEventsPage throws when the connection itself is null/absent', () => {
+  const port = createGithubProviderAdapter(
+    'kurone-kito',
+    'idd-skill',
+    fakeDeps({
+      ghText: () =>
+        JSON.stringify({
+          data: {
+            repository: {
+              issue: { timelineItems: null },
+            },
+          },
+        }),
+    }),
+  );
+  assert.throws(
+    () => port.getConnectedPullRequestEventsPage(1048, null),
+    /connection is null\/absent/,
+  );
+});

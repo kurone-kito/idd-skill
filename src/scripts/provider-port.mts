@@ -157,10 +157,15 @@ export interface ProviderPort {
 
   /**
    * repository-identity. Never throws; returns a sentinel on failure
-   * instead (matches `idd-roadmap-audit-execute.mts`'s own
+   * instead (matched `idd-roadmap-audit-execute.mts`'s own
    * `resolveViewerLogin`, purpose-built to fix #1396's silent-failure
-   * regression). REST-only, no GraphQL fallback -- distinct contract from
-   * {@link resolveViewerLogin} above, not a variant of it.
+   * regression -- that local function is now deleted, this method having
+   * fully absorbed its job as its sole consumer). REST-only, no GraphQL
+   * fallback -- distinct contract from {@link resolveViewerLogin} above,
+   * not a variant of it. Applies `GH_TEXT_LOOP_OPTIONS` to match the
+   * original call exactly (an earlier draft omitted it, silently dropping
+   * the stdin-ignore profile #1396 exists for; corrected before any
+   * consumer existed).
    */
   resolveViewerLoginSafe(): {
     viewerLogin: string;

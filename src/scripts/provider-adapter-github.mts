@@ -108,7 +108,10 @@ export function createGithubProviderAdapter(
       viewerLoginUnavailable: boolean;
     } {
       try {
-        const raw = deps.ghText(['api', 'user', '--jq', '.login']);
+        const raw = deps.ghText(
+          ['api', 'user', '--jq', '.login'],
+          GH_TEXT_LOOP_OPTIONS,
+        );
         const normalized = raw.trim().toLowerCase();
         if (!normalized) {
           return { viewerLogin: '', viewerLoginUnavailable: true };
