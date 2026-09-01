@@ -158,7 +158,10 @@ limitation, a scope statement), fetch the current full body, edit
 only that section in the fetched copy, and post the full result back
 (`gh pr edit {pr-number} --body-file <path>` replaces the whole
 body) in the same push — never a partial file, which would drop the
-closing-keyword line and other sections.
+closing-keyword line and other sections. After posting, repeat D3.5's
+closing-set check (step 6) to confirm `closingIssuesReferences` still
+matches the deliberate set exactly — edited prose can introduce a
+stray keyword-adjacent reference.
 
 ## E13 — Reply to feedback
 

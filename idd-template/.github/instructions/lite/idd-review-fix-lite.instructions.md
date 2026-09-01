@@ -197,7 +197,9 @@ other GitHub side effect, confirm all of the following:
     in the fetched copy, and post the full result back with `gh pr
     edit {pr-number} --body-file <path>` in the same push —
     `--body-file` replaces the whole body, so never pass a partial
-    file (it would drop the closing-keyword line).
+    file (it would drop the closing-keyword line). After posting,
+    repeat the lite pr-submit doc's step 5 closing-set check — edited
+    prose can introduce a stray keyword-adjacent reference.
 
 ## E13 — Reply to feedback
 
