@@ -32,8 +32,8 @@
     },
     "developmentBranch": {
       "type": "string",
-      "pattern": "^(?!refs/heads/)\\S+$",
-      "description": "Long-lived branch that receives IDD feature pull requests, distinct from the repository's trusted GitHub default branch used for workflow/configuration checkout (#2271). A short branch name only, never a `refs/heads/` ref. Optional; absent resolves the repository's live GitHub default branch, and onboarding records this only after verifying the branch exists on the configured remote. Release, hotfix, and development-to-default promotion flows are outside this field's support boundary."
+      "pattern": "^(?!refs/heads/)[A-Za-z0-9._/][A-Za-z0-9._/-]*$",
+      "description": "Long-lived branch that receives IDD feature pull requests, distinct from the repository's trusted GitHub default branch used for workflow/configuration checkout (#2271). A short branch name only, never a `refs/heads/` ref, restricted to a conservative safe charset (letters, digits, `.`, `_`, `/`, `-`, never leading with `-`) so every unquoted shell-command substitution in the instruction files is safe by construction -- a leading `-` would otherwise be parsed as an option rather than a positional argument. Optional; absent resolves the repository's live GitHub default branch, and onboarding records this only after verifying the branch exists on the configured remote. Release, hotfix, and development-to-default promotion flows are outside this field's support boundary."
     },
     "mergePolicy": {
       "type": "string",

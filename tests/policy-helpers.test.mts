@@ -880,6 +880,30 @@ test('inspectDevelopmentBranch distinguishes absent, configured, and invalid (#2
     inspectDevelopmentBranch({ developmentBranch: 'refs/heads/main' }).status,
     'invalid',
   );
+  // #2273: a value containing shell metacharacters is a valid,
+  // non-whitespace string that would otherwise pass -- reject it so every
+  // unquoted `{development-branch}` shell substitution stays safe.
+  assert.equal(
+    inspectDevelopmentBranch({ developmentBranch: 'release/$next' }).status,
+    'invalid',
+  );
+  assert.equal(
+    inspectDevelopmentBranch({ developmentBranch: 'release;stable' }).status,
+    'invalid',
+  );
+  // #2273 review: a leading "-" would be parsed as an option rather than a
+  // positional argument in an unquoted `git fetch origin
+  // {development-branch}`/`git switch {development-branch}` substitution.
+  // Mid-string and trailing hyphens (ordinary hyphenated branch names)
+  // remain valid.
+  assert.equal(
+    inspectDevelopmentBranch({ developmentBranch: '-q' }).status,
+    'invalid',
+  );
+  assert.deepEqual(
+    inspectDevelopmentBranch({ developmentBranch: 'release-2.0' }),
+    { status: 'configured', branch: 'release-2.0' },
+  );
   assert.equal(
     inspectDevelopmentBranch({ developmentBranch: 42 }).status,
     'invalid',

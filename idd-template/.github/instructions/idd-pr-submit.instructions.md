@@ -1,35 +1,42 @@
 # IDD — PR Submit Phase (D)
 
 Read this file after the self-review loop passes. It covers
-pre-publication main sync, claim verification, tests, pushing, PR
-creation, and waiting for CI.
+pre-publication development-branch sync, claim verification, tests,
+pushing, PR creation, and waiting for CI.
 
 Before the D1 sync and D2 push, apply the
 [shared claim revalidation gate](idd-overview-core.instructions.md#claim-revalidation-gate).
+`{development-branch}` below is the value resolved in
+`idd-work.instructions.md`'s B1
+[Resolve the development branch](idd-work.instructions.md#b1--create-worktree-with-branch)
+step — re-resolve it here if this file is entered directly (for
+example, on resume) without a fresh B1 pass.
 
-## D1 — Sync main before first push
+## D1 — Sync {development-branch} before first push
 
-If the branch has not been pushed yet, sync it onto `main` before the
-first push — the routine pre-publication history cleanup step. First run
-`git fetch origin main`, then check whether the branch is **already
-current** with `origin/main`: if `git merge-base HEAD origin/main` equals
-`origin/main` (behind-count 0), the branch already contains every commit
-on `main`, so the rebase would be a pure no-op. **Skip the rebase entirely
-and proceed to D2** — D1's pre-publication synchronization goal is already
-met. In a sibling-worktree setup a no-op `git rebase origin/main` can still
-detach HEAD at the upstream tip without replaying the local commit, and
-re-running that no-op rebase re-detaches every time, so the bounded
-recovery below cannot converge for the no-op case; skipping it is the clean
-exit.
+If the branch has not been pushed yet, sync it onto `{development-branch}`
+before the first push — the routine pre-publication history cleanup step.
+First run `git fetch origin {development-branch}`, then check whether the
+branch is **already current** with `origin/{development-branch}`: if
+`git merge-base HEAD origin/{development-branch}` equals
+`origin/{development-branch}` (behind-count 0), the branch already
+contains every commit on `{development-branch}`, so the rebase would be a
+pure no-op. **Skip the rebase entirely and proceed to D2** — D1's
+pre-publication synchronization goal is already met. In a
+sibling-worktree setup a no-op `git rebase origin/{development-branch}`
+can still detach HEAD at the upstream tip without replaying the local
+commit, and re-running that no-op rebase re-detaches every time, so the
+bounded recovery below cannot converge for the no-op case; skipping it is
+the clean exit.
 
-Otherwise the branch **is** behind `origin/main`: rebase it onto `main`
-(`git rebase origin/main`), then apply the post-rebase verification and
-bounded recovery below.
+Otherwise the branch **is** behind `origin/{development-branch}`: rebase
+it onto `{development-branch}` (`git rebase origin/{development-branch}`),
+then apply the post-rebase verification and bounded recovery below.
 
 After the first D-phase push, do not reuse D1 as the normal
 synchronization path. Later branch updates should return through the
-E-phase review loop and, by default, merge `main` into the published PR
-branch so the synchronization diff is reviewable.
+E-phase review loop and, by default, merge `{development-branch}` into
+the published PR branch so the synchronization diff is reviewable.
 
 This D-phase file records the publication boundary only: post-push
 synchronization itself runs through `idd-review-triage.instructions.md`'s
@@ -50,8 +57,9 @@ signing wrapper for arbitrary git subcommands (pass
 to `git` before the subcommand — `git -c … rebase`, not `git rebase -c …`
 — or use a repo alias that wraps any subcommand; a commit-only alias like
 `git commit-ssh` will not run `rebase`),
-**run the initial `git rebase origin/main` above through that wrapper —
-not the plain command — and continue it with the wrapper's own
+**run the initial `git rebase origin/{development-branch}` above
+through that wrapper — not the plain command — and continue it with
+the wrapper's own
 `--continue` form**; the wrapper must own the whole operation. Plain
 `git rebase --continue` re-signs the replayed commit through the
 configured primary signing, which stalls non-interactively right after
@@ -67,8 +75,10 @@ D2, verify both:
 
 1. `git branch --show-current` is **non-empty** — HEAD is on the claimed
    branch, not detached.
-2. The expected local commit is present in `main..HEAD` (for example,
-   `git log --oneline main..HEAD` lists it).
+2. The expected local commit is present in
+   `origin/{development-branch}..HEAD` (for example, `git log --oneline
+   origin/{development-branch}..HEAD` lists it) — `origin/`-prefixed
+   since a local `{development-branch}` branch may not exist.
 
 If HEAD is detached (current branch empty), **auto-recover once**: re-attach
 to the claimed branch with `git checkout {branch-name}` (the local commit is
@@ -120,9 +130,23 @@ that template when present, and a mismatched body can trigger an
 avoidable advisory finding. If no template file exists, use the
 structure below directly.
 
-Use GH CLI or GH MCP to create the pull request. The PR body must
-include the following content, mapped onto the template's sections
-when one exists:
+Use GH CLI or GH MCP to create the pull request, targeting
+`{development-branch}` explicitly (`gh pr create --base
+{development-branch} …` or the MCP equivalent) — do not rely on the
+tool's own default-branch fallback, which resolves to the repository's
+default branch and silently mistargets the PR whenever
+`{development-branch}` differs from it.
+
+**Inherited claim or resume**: if an existing PR already exists for this
+branch (takeover, resume) or an inherited claim otherwise names an open
+PR, verify its base branch (`gh pr view <pr-number> --json baseRefName`)
+equals `{development-branch}` before continuing. A mismatch is a
+**wrong-base PR**: stop and post a hold comment rather than editing the
+base or proceeding — a base-branch change can silently rewrite the
+PR's diff and history against the wrong target.
+
+The PR body must include the following content, mapped onto the
+template's sections when one exists:
 
 - A concise summary of the branch's changes
 - A closing keyword on its own line linking the claimed issue (see
@@ -245,6 +269,18 @@ gh pr edit {pr-number} --add-reviewer {reviewer-login}
 
 ### D3.5 — Verify closing keyword detection
 
+**Non-default development branch**: GitHub only auto-closes a linked
+issue when the merging PR targets the repository's **default** branch
+— a closing keyword on a PR based on any other branch, including a
+configured `{development-branch}`, never populates
+`closingIssuesReferences` and never auto-closes on merge, regardless of
+body wording. When `{development-branch}` is not the repository's
+default branch, still include the closing keyword line in the PR body
+for reviewer clarity, but **skip this entire sub-step** (steps 1-7
+below verify a mechanism that cannot fire here) and close the claimed
+issue explicitly after F3 merges (`idd-merge.instructions.md` F4 notes
+this).
+
 After PR creation and before D4, confirm GitHub recognized the
 closing keyword for the claimed issue. Resume routing should re-enter
 this sub-step when a session restarts after PR creation but before CI
@@ -321,7 +357,7 @@ completion.
    the output as binary:
 
    ```sh
-   git log origin/main..HEAD --pretty=format:'%H%n%B%n===commit-boundary==='
+   git log origin/{development-branch}..HEAD --pretty=format:'%H%n%B%n===commit-boundary==='
    ```
 
    For each commit's full message, search using step 3's same keyword
@@ -341,7 +377,7 @@ completion.
    --amend` for the tip commit, or an interactive rebase for an
    earlier one) using the same safe reordering as the Mirror
    false-positive example above. If the branch already carries a merge
-   commit (for example, from an E-phase `main` sync), rebase with
+   commit (for example, from an E-phase `{development-branch}` sync), rebase with
    `--rebase-merges` instead of a plain interactive rebase, so the
    merge and its recorded conflict resolution aren't silently
    linearized or dropped. On a signed-commit repo whose primary
@@ -362,8 +398,8 @@ completion.
 
    **Re-run before merge**: this scan only covers commits present at
    D3.5 time. Later branch commits — accepted review fixes
-   (`idd-review-fix.instructions.md` E9-E12) or a `main` merge — are
-   not automatically covered; re-run this step against the final HEAD
+   (`idd-review-fix.instructions.md` E9-E12) or a `{development-branch}`
+   merge — are not automatically covered; re-run this step against the final HEAD
    before F3 merges.
 
 ## D4 — Wait for CI

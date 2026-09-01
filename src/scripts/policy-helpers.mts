@@ -103,13 +103,24 @@ export interface DevelopmentBranchInspection {
 }
 
 /**
- * A qualified branch name: non-empty, no whitespace anywhere (rejects
- * both a blank string and internal/leading/trailing whitespace in one
- * check), and -- checked separately below -- no `refs/heads/` prefix
- * (this policy stores the short branch name IDD's own claim `branch:`
- * field and `git worktree add <branch>` already expect, not a full ref).
+ * A qualified branch name: a conservative safe charset (letters, digits,
+ * `.`, `_`, `/`, `-` only), with the first character excluding `-`, so
+ * every unquoted `{development-branch}` substitution in the IDD
+ * instruction files' shell command examples is safe by construction.
+ * #2273 review findings this closes: a value like `release/$next` or
+ * `release;stable` would otherwise be a valid, non-whitespace string
+ * that breaks or hijacks an unquoted shell expansion, and a
+ * leading-hyphen value like `-q` would be parsed as an option rather
+ * than a positional argument in a command such as
+ * `git fetch origin {development-branch}` -- disallowing only the
+ * *leading* `-` (mid-string and trailing hyphens remain valid, e.g.
+ * `release-2.0`) keeps that specific ambiguity closed without
+ * rejecting ordinary hyphenated branch names. Checked separately
+ * below: no `refs/heads/` prefix (this policy stores the short branch
+ * name IDD's own claim `branch:` field and `git worktree add <branch>`
+ * already expect, not a full ref).
  */
-const DEVELOPMENT_BRANCH_PATTERN = /^\S+$/;
+const DEVELOPMENT_BRANCH_PATTERN = /^[A-Za-z0-9._/][A-Za-z0-9._/-]*$/;
 const DEVELOPMENT_BRANCH_REFS_HEADS_PREFIX = 'refs/heads/';
 
 /**
@@ -138,7 +149,7 @@ export function inspectDevelopmentBranch(
     return {
       status: 'invalid',
       reason:
-        'developmentBranch must be non-empty and must not contain whitespace',
+        'developmentBranch must be non-empty, contain only letters, digits, ".", "_", "/", or "-", and not start with "-"',
     };
   }
   if (value.startsWith(DEVELOPMENT_BRANCH_REFS_HEADS_PREFIX)) {

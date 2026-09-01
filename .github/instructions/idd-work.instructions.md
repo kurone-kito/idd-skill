@@ -89,49 +89,50 @@ repository root. Compute the path as
 `../<repo-name>.<normalized-branch>` where `<normalized-branch>` is the
 branch name with every `/` replaced by `-`.
 
-Example: repo `idd-skill`, branch `issue/123-add-foo` → worktree path
+Example: repo `idd-skill`, branch `issue/123-add-foo` → path
 `../idd-skill.issue-123-add-foo`.
 
 **Harness-native worktree tools**: an agent harness's own worktree
-primitive — for example, Claude Code's `EnterWorktree` — is a third
-path outside the two enumerated below. Use one only when both its
-target directory can be pinned to the sibling path above and its
-branch can be pinned to the `issue/<number>-<slug>` branch — never a
-tool-chosen default of either. `EnterWorktree`'s create action always
-places the worktree under a harness-owned directory (observed as
-`.claude/worktrees/agent-<hash>`), never the sibling path above, so it
-can never satisfy the directory half of this rule — never use it to
-create the B1 worktree. Grok Build's `grok --worktree`, subagent
-`isolation: worktree`, and `x.ai/git/worktree/*` likewise place
-worktrees in a harness-owned location and cannot pin the sibling path
-or the `issue/<number>-<slug>` branch — never use them to create the
-B1 worktree (same failure class as #1930). When a harness-native tool
-cannot pin both, use the documented `git worktree add` path below (or
-WorkTrunk) instead.
+primitive (e.g. Claude Code's `EnterWorktree`) is a third path outside
+the two enumerated below. Use one only when both its target directory
+can be pinned to the sibling path above and its branch to
+`issue/<number>-<slug>` — never a tool-chosen default. `EnterWorktree`
+always places the worktree under a harness-owned directory
+(`.claude/worktrees/agent-<hash>`), never the sibling path — never use
+it here. Grok Build's `grok --worktree`, subagent `isolation:
+worktree`, and `x.ai/git/worktree/*` likewise can't pin either — never
+use them (same class as #1930). When a tool can't pin both, use
+`git worktree add` below (or WorkTrunk) instead.
 
 **Step 1 — Check for orphaned path**: if the target path already exists
 but is not listed in `git worktree list`, stop and report for manual
 cleanup before continuing.
 
-**Step 2 — Create**: use **WorkTrunk** if available. The create verb is
-`wt switch --create` (the older `wt new` subcommand was removed):
+**Step 2 — Create**: `<base-branch>` below is `{development-branch}` —
+resolve it first: read `developmentBranch` from
+`.github/idd/config.json`, else `gh repo view --json
+defaultBranchRef --jq .defaultBranchRef.name`; validate the result
+([defaults](../../docs/policy-constants.md#branch-synchronization-defaults)),
+fail closed if invalid/absent on `origin`, never fall back. Then
+`git fetch origin {development-branch}` (may be missing/stale
+otherwise). Use **WorkTrunk** if available (create verb:
+`wt switch --create`; `wt new` was removed):
 
 - macOS/Linux: `wt switch --create -b <base-branch> <branch-name>`
 - Windows: `git-wt switch --create -b <base-branch> <branch-name>`, or the
   same `wt switch --create -b <base-branch> <branch-name>` if `git-wt` is
   unavailable
 
-`<base-branch>` is normally `main`. In a **non-interactive / automation**
-context, append `-x <noop>` (e.g. `-x true`) — otherwise WorkTrunk tries
-to change the caller's directory and can hang; `-x` makes it create, run
-the pre-start hook, and exit cleanly.
+Non-interactive/automation: append `-x <noop>` (e.g. `-x true`) so
+WorkTrunk creates, runs the pre-start hook, and exits without
+changing the caller's directory.
 
-If WorkTrunk is not available, choose the correct case:
+If WorkTrunk is unavailable, choose the correct case:
 
 <!-- dprint-ignore-start -->
 | Case | Command |
 | --- | --- |
-| Fresh claim | `git worktree add <path> -b <branch-name> origin/main` |
+| Fresh claim | `git worktree add <path> -b <branch-name> origin/{development-branch}` |
 | Takeover — local branch exists | `git worktree add <path> <branch-name>` |
 | Takeover — remote branch only | `git fetch origin && git worktree add <path> -b <branch-name> origin/<branch-name>` |
 | Takeover — neither local nor remote (rare) | treat as fresh claim; preserve the inherited branch name |
@@ -210,7 +211,7 @@ mechanical file/close-based signal stronger than A4.5's title/
 declaration heuristic (a weak **title-only** match is **not** a hit
 here). Keep it cheap: one fetch plus a bounded merged-PR scan.
 
-1. `git fetch origin main`.
+1. `git fetch origin {development-branch}`.
 2. **Closed-by-a-merged-PR signal**: re-fetch the issue; if it is now closed
    with a linked closing PR, the deliverable already shipped:
 
@@ -232,8 +233,9 @@ here). Keep it cheap: one fetch plus a bounded merged-PR scan.
 
 **On a hit → verify-then-close** (never silent re-implementation, and never an
 auto-close on a weak signal): confirm the issue's acceptance criteria already
-hold on current `main`, then close the issue with a comment referencing the
-superseding PR. If the criteria only **partly** hold, keep the issue open,
+hold on current `{development-branch}`, then close the issue with a
+comment referencing the superseding PR. If the criteria only
+**partly** hold, keep the issue open,
 record the overlap, and plan only the genuinely-remaining work. On no hit,
 continue with the plan below.
 

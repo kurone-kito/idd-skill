@@ -85,11 +85,14 @@ finding's root cause and further comments are speculative or
 non-blocking hardening, treat them as PATH B (disposition-only,
 E4-E7) rather than opening another E9-E10 round.
 
-## E11 — Resolve conflicts with main
+## E11 — Resolve conflicts with {development-branch}
 
-Check for conflicts between the feature branch and `main`. If conflicts
-exist, merge `main` into the feature branch (`git fetch origin main &&
-git merge origin/main`), resolve them, and complete the merge. On a
+Check for conflicts between the feature branch and `{development-branch}`
+(the value resolved in `idd-work.instructions.md`'s B1
+[Resolve the development branch](idd-work.instructions.md#b1--create-worktree-with-branch)
+step). If conflicts exist, merge `{development-branch}` into the feature
+branch (`git fetch origin {development-branch} && git merge
+origin/{development-branch}`), resolve them, and complete the merge. On a
 signed-commit repo with non-interactive-hostile primary signing (GPG
 pinentry / hardware-touch), use the
 [signed-commit merge wrapper](../../docs/idd-helper-scripts.md#signed-commit-merge-wrapper-shared-git-procedure)
@@ -373,15 +376,16 @@ proceeding to F — do not skip triage.
 - **On success** → return to `idd-review-snapshot.instructions.md` (E1)
 - **On failure / code-caused**: fix, run **fix-validate**, commit
   atomically, then return to E11
-- **On failure / infra-flaky or pre-existing** (failure also present on
-  `main`, unrelated to this branch): apply `ciWait.rerunPolicy` (default
-  `rerun-once`) — rerun once and resume polling if it authorizes the
-  current rerun; otherwise, or if the failure persists after that
+- **On failure / infra-flaky or pre-existing** (also failing on
+  `{development-branch}`, unrelated to this branch): apply
+  `ciWait.rerunPolicy` (default `rerun-once`) — rerun once and resume
+  polling if it authorizes the current rerun; otherwise, or if the
+  failure persists after that
   rerun, post a hold comment documenting it and stop. A maintainer must
   resolve or bypass the failing check; never auto-continue or treat as
   passed without human confirmation. Phrase the resume condition per
-  the invariant-first guidance in `idd-overview-appendix.instructions.md`
-  (Hold / suspend).
+  the invariant-first guidance in
+  `idd-overview-appendix.instructions.md` (Hold / suspend).
 - **On cancelled / timed_out / code-caused**: fix, run **fix-validate**,
   commit, return to E11
 - **On cancelled / timed_out / infra**: apply `ciWait.rerunPolicy` —
