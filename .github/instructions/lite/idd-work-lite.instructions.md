@@ -221,10 +221,12 @@ pass asks, never a separate pass to run on top of the one that ran.
    the exact command from `docs/idd-helper-scripts.md` if unsure). Read its
    `usable` field as the step 2 verdict directly — never re-derive it — and,
    when `usable` is `true`, its `source`/`command`/`mode` fields as the
-   delegate to run in step 4. This file is helper-enabled only (see Helper
-   runtime contract above): if the helper is missing, fails, or disagrees
-   with live state, stop and ask per that contract instead of falling back
-   to prose.
+   delegate to run in step 4. This file is helper-enabled only — an
+   `instructions-only` repository never reaches this step, since it uses
+   `idd-work.instructions.md` instead (see Helper runtime contract above,
+   which is where that repository's own prose delegate contract lives): if
+   the helper is missing, fails, or disagrees with live state, stop and ask
+   per that contract instead of falling back to prose.
 2. `usable: false` means no delegate at this layer — go straight to step 3.
    `usable: true` means the helper already applied every configuration
    fail-safe (an unusable repository-local value never runs and blocks
