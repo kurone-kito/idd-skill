@@ -280,10 +280,13 @@ plan comment and verified claim.
 
 ## B3 — Implement
 
-**Plan-comment checkpoint**: before implementation begins, the B2 plan
-comment must already exist on the issue; posting it before implementation
-is the only normal path. If it does not, stop and return to B2. The
-following is a repair path only for an ordering violation that has
+### B3 self-check
+
+Before implementing, verify: the B2 plan comment already exists on the
+issue. Posting it before implementation is the only normal path; if it
+does not exist, stop and return to B2.
+
+The following is a repair path only for an ordering violation that has
 already occurred, not an alternative route: disclose the deviation on
 the issue, name the skipped checkpoint step (for example, the B3
 plan-comment checkpoint), post the plan retroactively with an explicit

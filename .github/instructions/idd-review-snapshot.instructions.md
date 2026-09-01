@@ -11,7 +11,9 @@ critique pass (E2), and checking whether ReviewItems_snapshot is empty (E3).
 
 Before posting any E-phase operational comment or GitHub reply, apply
 the shared claim revalidation gate. The active claim must still use your
-current `{claim-id}`.
+current `{claim-id}` — this doubles as E1's phase-entry self-check: E1
+re-derives all state fresh from GitHub each entry, so unlike B1/B3
+there is no local plan/worktree artifact that can go stale to verify.
 
 **If ReviewItems_snapshot is empty after E3**: proceed to the
 E-phase branch-sync check in `idd-review-triage.instructions.md`.
