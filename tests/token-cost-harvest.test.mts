@@ -638,6 +638,34 @@ test("allocateStageUsage (cumulative mode): a point exactly at the first window'
   assert.equal(stages.find((s) => s.id === 'claim')?.usage.output, 8);
 });
 
+test('allocateStageUsage (cumulative mode): a point exactly at a shared boundary between two contiguous windows is not double-counted', () => {
+  const windows = [
+    {
+      id: 'claim' as const,
+      startMs: ms('2026-01-01T00:00:00Z'),
+      endMs: ms('2026-01-01T00:10:00Z'),
+      source: 'marker' as const,
+    },
+    {
+      id: 'work' as const,
+      startMs: ms('2026-01-01T00:10:00Z'),
+      endMs: ms('2026-01-01T00:20:00Z'),
+      source: 'marker' as const,
+    },
+  ];
+  const points = [
+    { atMs: ms('2026-01-01T00:00:00Z'), usage: usage(5) },
+    // Exactly at the shared boundary between claim and work.
+    { atMs: ms('2026-01-01T00:10:00Z'), usage: usage(8) },
+    { atMs: ms('2026-01-01T00:20:00Z'), usage: usage(12) },
+  ];
+  const stages = allocateStageUsage(windows, { mode: 'cumulative', points });
+  assert.equal(stages.find((s) => s.id === 'claim')?.usage.output, 8);
+  assert.equal(stages.find((s) => s.id === 'work')?.usage.output, 4);
+  const sum = stages.reduce((total, s) => total + usageSum(s.usage), 0);
+  assert.equal(sum, 12); // must equal the final snapshot, not 15
+});
+
 test('allocateStageUsage omits an all-zero-usage window', () => {
   const windows = [
     {

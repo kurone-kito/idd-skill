@@ -488,33 +488,47 @@ function cumulativeSnapshotAt(
 }
 
 /**
- * Allocates each stage window's usage from a timeline. Cumulative mode
- * looks up the snapshot at each window's own [startMs, endMs) independently
- * (never a running baseline carried from the previous window): a gap
- * between windows -- computeStageWindows can leave one before an event
- * window whose predecessor is also event-sourced -- must not fold that
- * gap's cumulative growth into the next window's delta, matching delta
- * mode's natural gap exclusion via sumDeltaInRange. For contiguous windows
- * (the common case) this is exactly equivalent to the running-baseline
- * form, since each window's startMs then equals the previous window's
- * endMs, so the exact-sum invariant (every window's delta sums to the
- * timeline's final cumulative snapshot minus zero, matching the adapter's
- * own `usage` total) still holds.
+ * Allocates each stage window's usage from a timeline. Cumulative mode uses
+ * a running baseline carried from the previous window (the previous
+ * window's own end snapshot) whenever this window starts exactly where the
+ * previous one ended -- a point exactly at that shared boundary must be
+ * counted in exactly one of the two windows, and re-deriving the baseline
+ * from a fresh lookup instead of reusing the running value can skip past
+ * that point onto an earlier one, double-counting its growth (a point at a
+ * shared boundary would then be included via the earlier window's inclusive
+ * end AND again via the later window's own growth). When this window does
+ * NOT start where the previous one ended -- computeStageWindows can leave
+ * a gap before an event window whose predecessor is also event-sourced --
+ * the baseline is looked up fresh, exclusive of a point exactly at the gap
+ * window's own start (so that point's growth, which happened AT this
+ * window's start, is counted as this window's usage rather than treated as
+ * a prior baseline); this also covers the very first window, and is what
+ * excludes a gap's cumulative growth from folding into the next window's
+ * delta, matching delta mode's natural gap exclusion via sumDeltaInRange.
+ * For fully contiguous windows (the common case) this telescopes exactly:
+ * every window's delta sums to the timeline's final cumulative snapshot
+ * minus zero, matching the adapter's own `usage` total.
  */
 export function allocateStageUsage(
   windows: readonly StageWindow[],
   timeline: UsageTimeline,
 ): TokenCostStageUsage[] {
   const out: TokenCostStageUsage[] = [];
+  let previousEndMs: number | null = null;
+  let previousEndSnapshot: TokenCostUsage = ZERO_USAGE;
   for (const window of windows) {
     let usage: TokenCostUsage;
     if (timeline.mode === 'cumulative') {
-      const startSnapshot =
-        cumulativeSnapshotAt(timeline.points, window.startMs, true) ??
-        ZERO_USAGE;
+      const contiguous = previousEndMs === window.startMs;
+      const startSnapshot = contiguous
+        ? previousEndSnapshot
+        : (cumulativeSnapshotAt(timeline.points, window.startMs, true) ??
+          ZERO_USAGE);
       const endSnapshot =
         cumulativeSnapshotAt(timeline.points, window.endMs) ?? startSnapshot;
       usage = subtractUsageClamped(endSnapshot, startSnapshot);
+      previousEndMs = window.endMs;
+      previousEndSnapshot = endSnapshot;
     } else {
       usage = sumDeltaInRange(timeline.points, window.startMs, window.endMs);
     }
@@ -1288,7 +1302,7 @@ function runCli(argv: string[]): void {
   const parsedRepo = parseRepoFlag(repoFlag);
   if (!parsedRepo) {
     process.stderr.write(
-      repoFlag === ''
+      repoFlag.trim() === ''
         ? '--repo <owner>/<repo> is required\n'
         : `--repo must be in <owner>/<repo> form, got: ${repoFlag}\n`,
     );
