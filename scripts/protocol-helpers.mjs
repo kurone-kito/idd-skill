@@ -3640,6 +3640,7 @@ export function summarizeRequiredChecks(
     excludeFromWaiverCoverage = null,
     waiverActiveSinceOverride = null,
     treatAsCoveredByWaiver = null,
+    treatAsCoveredByWaiverSince = null,
   } = {},
 ) {
   const branchReviewRequirements = summarizeBranchReviewRequirements(
@@ -3697,11 +3698,27 @@ export function summarizeRequiredChecks(
     // at all, and treating it as covered would report `success` while
     // GitHub's own required-check state is still pending, reproducing the
     // exact "ready but merge blocked" failure mode #2021 fixed for the
-    // direct-waiver path.
+    // direct-waiver path. Also requires the live run to be fresh relative
+    // to `treatAsCoveredByWaiverSince` when the caller supplies one
+    // (Codex review on PR #2370): a run that completed before that moment
+    // was never actually rerun under whatever condition made this check
+    // relieved, reproducing the same staleness gap #2034 already closed
+    // for the direct-waiver path.
+    const treatAsCoveredByWaiverSinceOverride =
+      typeof treatAsCoveredByWaiverSince === 'function'
+        ? treatAsCoveredByWaiverSince(name)
+        : null;
+    const treatAsCoveredByWaiverSinceMs = isValidIsoTimestamp(
+      treatAsCoveredByWaiverSinceOverride,
+    )
+      ? new Date(treatAsCoveredByWaiverSinceOverride).getTime()
+      : null;
     const treatedAsCoveredByWaiver =
       completedAtMs !== null &&
       typeof treatAsCoveredByWaiver === 'function' &&
-      treatAsCoveredByWaiver(name);
+      treatAsCoveredByWaiver(name) &&
+      (treatAsCoveredByWaiverSinceMs === null ||
+        completedAtMs >= treatAsCoveredByWaiverSinceMs);
     const coveredByWaiver =
       !CHECK_PASS_EQUIVALENT_STATES.has(state) &&
       (treatedAsCoveredByWaiver ||
@@ -5421,6 +5438,15 @@ export function buildPreMergeReadinessSummary(
     treatAsCoveredByWaiver: (name) =>
       name === DEFAULT_ADVISORY_CONVERGENCE_CHECK_SELECTOR &&
       advisoryConvergenceOutageRelieved,
+    // #2353 (Codex review on PR #2370): the declaration's own `startedAt`
+    // -- a required check's live run must have completed at or after this
+    // moment, or a stale pre-declaration failed run would be reported
+    // covered without ever having actually rerun under the outage window.
+    treatAsCoveredByWaiverSince: (name) =>
+      name === DEFAULT_ADVISORY_CONVERGENCE_CHECK_SELECTOR &&
+      options.advisoryConvergenceOutageRelievedSince
+        ? options.advisoryConvergenceOutageRelievedSince
+        : null,
   });
   // #1570: reuse the SAME raw waiver evidence above (already validated for
   // selector/HEAD/claim/authority/expiry) to decide whether the caller-

@@ -4651,6 +4651,7 @@ export function summarizeRequiredChecks(
     excludeFromWaiverCoverage = null,
     waiverActiveSinceOverride = null,
     treatAsCoveredByWaiver = null,
+    treatAsCoveredByWaiverSince = null,
   }: {
     waivers?: {
       valid?: { checkSelector?: unknown; createdAt?: unknown }[] | null;
@@ -4714,27 +4715,38 @@ export function summarizeRequiredChecks(
     // #2353: surgical per-CHECK-NAME positive override treating a check as
     // covered-by-waiver through a mechanism OTHER than a matched
     // `waivers.valid` entry -- a repository-scoped provider-outage
-    // declaration, which has no per-check waiver-marker `createdAt` to
-    // compare against a live run's `completedAt` and no `waivableSelectors`
-    // re-check to perform here (the caller, `evaluateProviderOutageRelief`,
-    // already independently required both the PR's own proven
-    // terminal-unavailable state and a `ciGate.externalChecks.waivable`
-    // match before ever returning `true`). Deliberately bypasses
-    // `excludeFromWaiverCoverage` too: that callback's own purpose is to
-    // withhold coverage a matched `waivers.valid` entry would otherwise
-    // grant when its OWN precondition/selector-exactness/freshness
-    // requirements are unmet -- a declaration-relief case never reaches
-    // `excludeFromWaiverCoverage`'s reasoning at all, so vetoing it there
-    // too would just reproduce this same relief gap one layer down. Still
-    // subject to the pass-equivalent-state check AND the #2034 live-run
-    // requirement below (Copilot + Codex review on PR #2370): a check with
-    // no parseable `completedAt` -- still QUEUED/IN_PROGRESS/PENDING, never
-    // actually produced a verdict -- must never be reported covered by
-    // EITHER mechanism, or this gate would report `success` while GitHub's
-    // own required-check state is still pending. `null`/omitted (the
-    // default) never covers anything, unchanged pre-#2353 behavior for
-    // every caller that doesn't pass it.
+    // declaration. No `waivableSelectors` re-check is performed here: the
+    // caller, `evaluateProviderOutageRelief`, already independently
+    // required both the PR's own proven terminal-unavailable state and a
+    // `ciGate.externalChecks.waivable` match before ever returning `true`.
+    // Deliberately bypasses `excludeFromWaiverCoverage` too: that
+    // callback's own purpose is to withhold coverage a matched
+    // `waivers.valid` entry would otherwise grant when its OWN
+    // precondition/selector-exactness/freshness requirements are unmet --
+    // a declaration-relief case never reaches `excludeFromWaiverCoverage`'s
+    // reasoning at all, so vetoing it there too would just reproduce this
+    // same relief gap one layer down. Still subject to the
+    // pass-equivalent-state check, the #2034 live-run requirement, AND
+    // `treatAsCoveredByWaiverSince` below (Copilot + Codex review on PR
+    // #2370): a check with no parseable `completedAt` -- still QUEUED/
+    // IN_PROGRESS/PENDING, never actually produced a verdict -- must never
+    // be reported covered by EITHER mechanism, or this gate would report
+    // `success` while GitHub's own required-check state is still pending.
+    // `null`/omitted (the default) never covers anything, unchanged
+    // pre-#2353 behavior for every caller that doesn't pass it.
     treatAsCoveredByWaiver?: ((checkName: string) => boolean) | null;
+    // #2353 (Codex review on PR #2370): per-CHECK-NAME freshness cutoff
+    // paired with `treatAsCoveredByWaiver` above -- a check only counts as
+    // covered through that positive path once its live run's `completedAt`
+    // is at or after this moment, mirroring `waiverActiveSinceOverride`'s
+    // freshness role for the direct-waiver path but evaluated as a
+    // standalone cutoff (no waiver-entry `createdAt` to `Math.max` against).
+    // A stale run that completed before a declaration's own window opened
+    // was never actually rerun during the declared outage; treating it
+    // covered would diverge from GitHub's own required-check state.
+    // `null`/omitted (the default, and every caller that doesn't pass it)
+    // applies no cutoff -- unchanged pre-fix behavior.
+    treatAsCoveredByWaiverSince?: ((checkName: string) => string | null) | null;
   } = {},
 ) {
   const branchReviewRequirements = summarizeBranchReviewRequirements(
@@ -4793,11 +4805,27 @@ export function summarizeRequiredChecks(
     // at all, and treating it as covered would report `success` while
     // GitHub's own required-check state is still pending, reproducing the
     // exact "ready but merge blocked" failure mode #2021 fixed for the
-    // direct-waiver path.
+    // direct-waiver path. Also requires the live run to be fresh relative
+    // to `treatAsCoveredByWaiverSince` when the caller supplies one
+    // (Codex review on PR #2370): a run that completed before that moment
+    // was never actually rerun under whatever condition made this check
+    // relieved, reproducing the same staleness gap #2034 already closed
+    // for the direct-waiver path.
+    const treatAsCoveredByWaiverSinceOverride =
+      typeof treatAsCoveredByWaiverSince === 'function'
+        ? treatAsCoveredByWaiverSince(name)
+        : null;
+    const treatAsCoveredByWaiverSinceMs = isValidIsoTimestamp(
+      treatAsCoveredByWaiverSinceOverride,
+    )
+      ? new Date(treatAsCoveredByWaiverSinceOverride).getTime()
+      : null;
     const treatedAsCoveredByWaiver =
       completedAtMs !== null &&
       typeof treatAsCoveredByWaiver === 'function' &&
-      treatAsCoveredByWaiver(name);
+      treatAsCoveredByWaiver(name) &&
+      (treatAsCoveredByWaiverSinceMs === null ||
+        completedAtMs >= treatAsCoveredByWaiverSinceMs);
     const coveredByWaiver =
       !CHECK_PASS_EQUIVALENT_STATES.has(state) &&
       (treatedAsCoveredByWaiver ||
@@ -6574,6 +6602,17 @@ export function buildPreMergeReadinessSummary(
     // file, so importing it back here would be a cycle. Omitted/false (the
     // default) never relieves anything, unchanged pre-#2353 behavior.
     advisoryConvergenceOutageRelieved?: boolean;
+    // #2353 (Codex review on PR #2370): the caller-resolved outage
+    // declaration's own `startedAt` when `advisoryConvergenceOutageRelieved`
+    // is true, empty otherwise. A required check's live run must have
+    // completed AT OR AFTER this moment to count as covered -- a run that
+    // completed before the declaration's window opened was never actually
+    // rerun during the declared outage, and reporting it covered would
+    // diverge from what GitHub's own required-check state still shows,
+    // reproducing #2021's "ready but merge blocked" class one layer
+    // deeper. Omitted/empty applies no cutoff (unchanged pre-fix
+    // behavior for a caller that doesn't pass it).
+    advisoryConvergenceOutageRelievedSince?: string;
     // #2021: the current HEAD commit's own `committedDate` (GraphQL),
     // anchoring the SAME 24h deadline clock `advisory-convergence.mts`'s own
     // gate uses before treating a posted `idd-advisory-convergence` waiver as
@@ -6922,6 +6961,15 @@ export function buildPreMergeReadinessSummary(
     treatAsCoveredByWaiver: (name) =>
       name === DEFAULT_ADVISORY_CONVERGENCE_CHECK_SELECTOR &&
       advisoryConvergenceOutageRelieved,
+    // #2353 (Codex review on PR #2370): the declaration's own `startedAt`
+    // -- a required check's live run must have completed at or after this
+    // moment, or a stale pre-declaration failed run would be reported
+    // covered without ever having actually rerun under the outage window.
+    treatAsCoveredByWaiverSince: (name) =>
+      name === DEFAULT_ADVISORY_CONVERGENCE_CHECK_SELECTOR &&
+      options.advisoryConvergenceOutageRelievedSince
+        ? options.advisoryConvergenceOutageRelievedSince
+        : null,
   });
 
   // #1570: reuse the SAME raw waiver evidence above (already validated for

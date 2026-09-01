@@ -5023,7 +5023,7 @@ test('resolveAdvisoryConvergenceOutageRelief requires ciGate.externalCheckWaiver
   );
   assert.match(
     source,
-    /function resolveAdvisoryConvergenceOutageRelief\([\s\S]*?if \(policy\.ciGate\.externalCheckWaivers\.mode !== 'maintainer-authorized'\) \{\s*\n\s*return false;\s*\n\s*\}/,
+    /function resolveAdvisoryConvergenceOutageRelief\([\s\S]*?if \(policy\.ciGate\.externalCheckWaivers\.mode !== 'maintainer-authorized'\) \{\s*\n\s*return notRelieved;\s*\n\s*\}/,
   );
 });
 
@@ -5046,6 +5046,72 @@ test('summarizeRequiredChecks: treatAsCoveredByWaiver never covers a check with 
   );
   assert.equal(result.checks[0].coveredByWaiver, undefined);
   assert.notEqual(result.status, 'success');
+});
+
+// Codex review (PR #2370, follow-up finding after the first fix round): a
+// live run existing (completedAt parseable) is not enough -- it must ALSO
+// have completed AT OR AFTER the moment `treatAsCoveredByWaiverSince`
+// names. A failed run that completed BEFORE an outage declaration's own
+// window opened was never actually rerun during the declared outage;
+// treating it covered would report `success` while GitHub's own
+// required-check state still shows the stale failure.
+test('summarizeRequiredChecks: treatAsCoveredByWaiverSince withholds coverage from a run that completed before the cutoff', () => {
+  const result = summarizeRequiredChecks(
+    [
+      {
+        name: 'idd-advisory-convergence',
+        state: 'FAILURE',
+        completedAt: '2026-05-11T00:00:00Z', // before the declaration opened
+      },
+    ],
+    [],
+    { required_status_checks: { contexts: ['idd-advisory-convergence'] } },
+    {
+      treatAsCoveredByWaiver: (name) => name === 'idd-advisory-convergence',
+      treatAsCoveredByWaiverSince: () => '2026-05-12T00:00:00Z',
+    },
+  );
+  assert.equal(result.checks[0].coveredByWaiver, undefined);
+  assert.notEqual(result.status, 'success');
+});
+
+test('summarizeRequiredChecks: treatAsCoveredByWaiverSince covers a run that completed at or after the cutoff', () => {
+  const result = summarizeRequiredChecks(
+    [
+      {
+        name: 'idd-advisory-convergence',
+        state: 'FAILURE',
+        completedAt: '2026-05-12T00:30:00Z', // after the declaration opened
+      },
+    ],
+    [],
+    { required_status_checks: { contexts: ['idd-advisory-convergence'] } },
+    {
+      treatAsCoveredByWaiver: (name) => name === 'idd-advisory-convergence',
+      treatAsCoveredByWaiverSince: () => '2026-05-12T00:00:00Z',
+    },
+  );
+  assert.equal(result.checks[0].coveredByWaiver, true);
+  assert.equal(result.status, 'success');
+});
+
+test('summarizeRequiredChecks: omitted treatAsCoveredByWaiverSince applies no cutoff (unchanged pre-fix behavior)', () => {
+  const result = summarizeRequiredChecks(
+    [
+      {
+        name: 'idd-advisory-convergence',
+        state: 'FAILURE',
+        completedAt: '2026-05-11T00:00:00Z',
+      },
+    ],
+    [],
+    { required_status_checks: { contexts: ['idd-advisory-convergence'] } },
+    {
+      treatAsCoveredByWaiver: (name) => name === 'idd-advisory-convergence',
+    },
+  );
+  assert.equal(result.checks[0].coveredByWaiver, true);
+  assert.equal(result.status, 'success');
 });
 
 test('summarizeRequiredChecks: waiver does not affect already-passing check', () => {
@@ -7451,6 +7517,62 @@ test('#2353: advisoryConvergenceOutageRelieved is re-gated on the precondition b
   const check = ciCheckByName(blocked, 'idd-advisory-convergence');
   assert.equal(check?.coveredByWaiver, undefined);
   assert.equal(advisoryWaitOf(blocked).copilotUnavailableWaived, false);
+});
+
+// Codex review (PR #2370, follow-up finding): the required check's live
+// run must have completed AT OR AFTER the declaration's own `startedAt`
+// -- a stale run that failed BEFORE the declaration's window opened was
+// never actually rerun under the outage, and reporting it covered would
+// diverge from GitHub's own required-check state (the same #2021 "ready
+// but merge blocked" class one layer deeper).
+test('#2353: advisoryConvergenceOutageRelievedSince withholds coverage from a stale pre-declaration run', () => {
+  const fixture = readJson('fixtures/pre-merge-readiness/clean.json');
+  // withAdvisoryConvergenceRequiredCheck's injected check completes at
+  // 2026-05-12T00:30:00Z -- anchor the declaration's own window AFTER
+  // that moment, so the run predates it.
+  const input = withAdvisoryConvergenceRequiredCheck(fixture);
+  const waivableCheckSelectors = [
+    { selector: 'idd-advisory-convergence', matchMode: 'exact' },
+  ];
+
+  const stillBlocked = buildPreMergeReadinessSummary(input, {
+    ...fixture.options,
+    includeDispositionEvidence: true,
+    waivableCheckSelectors,
+    externalCheckWaiverMaxValidity: 'PT24H',
+    copilotUnavailable: true,
+    advisoryConvergenceOutageRelieved: true,
+    advisoryConvergenceOutageRelievedSince: '2026-05-13T00:00:00Z',
+  });
+
+  const check = ciCheckByName(stillBlocked, 'idd-advisory-convergence');
+  assert.equal(check?.coveredByWaiver, undefined);
+  assert.notEqual(
+    (stillBlocked.ci as Record<string, unknown>).status,
+    'success',
+  );
+});
+
+test('#2353: advisoryConvergenceOutageRelievedSince covers a run that completed after the declaration opened', () => {
+  const fixture = readJson('fixtures/pre-merge-readiness/clean.json');
+  const input = withAdvisoryConvergenceRequiredCheck(fixture);
+  const waivableCheckSelectors = [
+    { selector: 'idd-advisory-convergence', matchMode: 'exact' },
+  ];
+
+  const relieved = buildPreMergeReadinessSummary(input, {
+    ...fixture.options,
+    includeDispositionEvidence: true,
+    waivableCheckSelectors,
+    externalCheckWaiverMaxValidity: 'PT24H',
+    copilotUnavailable: true,
+    advisoryConvergenceOutageRelieved: true,
+    advisoryConvergenceOutageRelievedSince: '2026-05-12T00:00:00Z',
+  });
+
+  const check = ciCheckByName(relieved, 'idd-advisory-convergence');
+  assert.equal(check?.coveredByWaiver, true);
+  assert.equal((relieved.ci as Record<string, unknown>).status, 'success');
 });
 
 // #2046: a waiver that is otherwise valid, precondition-open, and

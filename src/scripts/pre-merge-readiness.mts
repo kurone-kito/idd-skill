@@ -697,7 +697,7 @@ export function collectPreMergeReadiness(
     },
   );
   const copilotUnavailable = copilotRecovery.state === 'COPILOT_UNAVAILABLE';
-  const advisoryConvergenceOutageRelieved =
+  const advisoryConvergenceOutageRelief =
     resolveAdvisoryConvergenceOutageRelief({
       owner,
       repo,
@@ -757,7 +757,10 @@ export function collectPreMergeReadiness(
       capExhaustedRoute: advisoryWaitPolicy.capExhaustedRoute,
       primaryBotLogin,
       copilotUnavailable,
-      advisoryConvergenceOutageRelieved,
+      advisoryConvergenceOutageRelieved:
+        advisoryConvergenceOutageRelief.relieved,
+      advisoryConvergenceOutageRelievedSince:
+        advisoryConvergenceOutageRelief.since,
       advisoryConvergenceHeadCommittedAt,
       advisoryConvergenceDeadlineMinutes,
       secondaryQuietWindowMinutes,
@@ -1616,11 +1619,11 @@ function readExternalCheckWaiverMode(): string {
 // selector for this pull request -- the SAME selector
 // `advisory-convergence.mts`'s own gate relieves via its own,
 // independently-fetched declaration (see that file's `collectFromGitHub`).
-// Fails closed to `false` on ANY error (unset target, unreadable/
-// unparseable declaration-target comments, authority-lookup failure) --
-// a transient fetch failure must never widen what this gate accepts,
-// matching `prFirstCommitAt`'s own fail-closed contract above.
-// `copilotUnavailable` is the caller-supplied `prTerminalUnavailable`
+// Fails closed to `{ relieved: false, since: '' }` on ANY error (unset
+// target, unreadable/unparseable declaration-target comments, authority-
+// lookup failure) -- a transient fetch failure must never widen what this
+// gate accepts, matching `prFirstCommitAt`'s own fail-closed contract
+// above. `copilotUnavailable` is the caller-supplied `prTerminalUnavailable`
 // evidence `evaluateProviderOutageRelief` requires independently of the
 // declaration itself (never itself sufficient) -- the same terminal-
 // unavailability verdict this file's own `copilot-terminal-unavailable`
@@ -1631,7 +1634,13 @@ function readExternalCheckWaiverMode(): string {
 // `computeAdvisoryConvergenceVerdict`'s own gate -- gated on the SAME
 // `waiverMode === 'maintainer-authorized'` check -- still rejects it,
 // exactly the two-gate disagreement #2021 already fixed for the direct
-// per-pull-request waiver path.
+// per-pull-request waiver path. `since` is the declaration's own
+// `startedAt` (Codex review on PR #2370): a required check's live run
+// must have completed AT OR AFTER this moment to count as covered --
+// otherwise the check was never actually rerun during the declared
+// outage window, and GitHub's own required-check state stays whatever a
+// stale pre-declaration run left it at while this gate reports covered,
+// reproducing #2021's "ready but merge blocked" class one layer deeper.
 function resolveAdvisoryConvergenceOutageRelief({
   owner,
   repo,
@@ -1644,16 +1653,17 @@ function resolveAdvisoryConvergenceOutageRelief({
   copilotUnavailable: boolean;
   waivableCheckSelectors: { selector?: unknown; matchMode?: unknown }[];
   now: string;
-}): boolean {
+}): { relieved: boolean; since: string } {
+  const notRelieved = { relieved: false, since: '' };
   try {
     const policy = normalizePolicyConfig(
       JSON.parse(readFileSync('.github/idd/config.json', 'utf8')),
     );
     if (policy.ciGate.externalCheckWaivers.mode !== 'maintainer-authorized') {
-      return false;
+      return notRelieved;
     }
     const targetIssue = policy.providerOutage.declarationTarget;
-    if (!targetIssue) return false;
+    if (!targetIssue) return notRelieved;
     const declarationComments = ghApiJson(
       `repos/${owner}/${repo}/issues/${targetIssue}/comments`,
       true,
@@ -1673,7 +1683,7 @@ function resolveAdvisoryConvergenceOutageRelief({
       authorityOf,
       now: new Date(now),
     });
-    return evaluateProviderOutageRelief({
+    const relieved = evaluateProviderOutageRelief({
       declarationActive: declaration.active,
       prTerminalUnavailable: copilotUnavailable,
       requestedSelector: DEFAULT_ADVISORY_CONVERGENCE_CHECK_SELECTOR,
@@ -1685,8 +1695,12 @@ function resolveAdvisoryConvergenceOutageRelief({
         }))
         .filter((entry) => entry.selector.length > 0),
     }).relieved;
+    return {
+      relieved,
+      since: relieved ? String(declaration.declaration?.startedAt ?? '') : '',
+    };
   } catch {
-    return false;
+    return notRelieved;
   }
 }
 
