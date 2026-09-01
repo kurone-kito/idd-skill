@@ -27,6 +27,18 @@ interface CritiqueLoopPolicy {
   delegate?: CritiqueLoopDelegate;
 }
 
+/**
+ * `declarationTarget` is intentionally optional and undefined by default
+ * (#2320): its absence disables the outage-relief declaration path
+ * entirely, mirroring how `critiqueLoop.delegate` above stays an own-
+ * property-omitted key rather than a always-present field with a
+ * meaningless default.
+ */
+interface ProviderOutagePolicy {
+  declarationTarget?: number;
+  maxValidity: string;
+}
+
 /** How one policy document presents `critiqueLoop.delegate`. */
 export type CritiqueLoopDelegateLayerStatus =
   | 'absent'
@@ -134,6 +146,7 @@ interface RawConfig {
     needsDecisionLabelName?: unknown;
   };
   mergeGate?: { soloCodeownerAdminFallback?: unknown };
+  providerOutage?: { declarationTarget?: unknown; maxValidity?: unknown };
 }
 
 const HELPER_RUNTIME_PROFILES = new Set([
@@ -315,6 +328,12 @@ export const POLICY_DEFAULTS = Object.freeze({
   mergeGate: Object.freeze({
     soloCodeownerAdminFallback: 'auto-admin-retry',
   }),
+  // Added in #2320. `declarationTarget` cast the same way as
+  // `critiqueLoop.delegate` above -- see that field's comment; the runtime
+  // object carries no `declarationTarget` key at all until configured.
+  providerOutage: Object.freeze({
+    maxValidity: 'PT24H',
+  }) as Readonly<ProviderOutagePolicy>,
 });
 
 export function parseProjectCommandRows(text: string): Map<string, string> {
@@ -449,6 +468,24 @@ export function normalizePolicyConfig(config: unknown) {
   // why POLICY_DEFAULTS itself never carries an undefined-valued key.
   if (critiqueLoopDelegate) {
     critiqueLoop.delegate = critiqueLoopDelegate;
+  }
+  // #2320: `declarationTarget` is a positive integer issue number, or
+  // absent -- absence disables the outage-relief declaration path
+  // entirely rather than falling back to some issue number. Same
+  // own-property-omitted shape as `critiqueLoop.delegate` above.
+  const rawDeclarationTarget = c?.providerOutage?.declarationTarget;
+  const providerOutage: ProviderOutagePolicy = {
+    maxValidity: parsePositiveDuration(
+      c?.providerOutage?.maxValidity,
+      POLICY_DEFAULTS.providerOutage.maxValidity,
+    ),
+  };
+  if (
+    typeof rawDeclarationTarget === 'number' &&
+    Number.isInteger(rawDeclarationTarget) &&
+    rawDeclarationTarget >= 1
+  ) {
+    providerOutage.declarationTarget = rawDeclarationTarget;
   }
 
   return {
@@ -657,6 +694,7 @@ export function normalizePolicyConfig(config: unknown) {
         POLICY_DEFAULTS.mergeGate.soloCodeownerAdminFallback,
       ),
     },
+    providerOutage,
   };
 }
 

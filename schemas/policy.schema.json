@@ -489,6 +489,23 @@
       },
       "description": "Container for repo-external CI-check classification and the maintainer-authorized external-check waiver policy. Optional; omitting it keeps no external overrides and disabled waivers."
     },
+    "providerOutage": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "declarationTarget": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Issue number read for an active repository-scoped outage-relief declaration. Optional; absence disables the declaration path entirely, so no repository file has to change while an outage is in progress."
+        },
+        "maxValidity": {
+          "type": "string",
+          "pattern": "^(?=.*[1-9])P(?=\\d|T\\d)(?:\\d+D)?(?:T(?=\\d)(?:\\d+H)?(?:\\d+M)?(?:\\d+S)?)?$",
+          "description": "Maximum ISO 8601 duration a single outage-relief declaration stays valid before it must be renewed. Optional; defaults to `PT24H` — never open-ended."
+        }
+      },
+      "description": "Container for the repository-scoped outage-relief declaration policy (`declarationTarget`, `maxValidity`). Optional; omitting it keeps the declaration path disabled."
+    },
     "discover": {
       "type": "object",
       "additionalProperties": false,

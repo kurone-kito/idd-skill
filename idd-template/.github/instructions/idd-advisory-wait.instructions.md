@@ -444,3 +444,10 @@ still needs a valid waiver), and F2/F3's `advisoryWait.copilotUnavailable`/
 **Waived**: rerun the existing `idd-advisory-convergence` run (never
 `workflow_dispatch` — see Rerun mechanics below); both fields recompute
 every call, so an expired/invalid marker reverts automatically.
+
+**Sustained outage (`#2320`)**: when `providerOutage.declarationTarget`
+is configured and holds an active declaration for `idd-advisory-convergence`,
+it substitutes for posting a per-pull-request waiver marker on this
+one — this pull request's own terminal-unavailable state above must
+still hold independently. See
+[`docs/idd-helper-scripts.md`](../../docs/idd-helper-scripts.md#provider-outage-declaration-helper).

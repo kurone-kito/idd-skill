@@ -466,6 +466,16 @@ const HELPER_COMMANDS: HelperCommand[] = [
     contractPaths: ['schemas/pre-merge-readiness.schema.json'],
   },
   {
+    id: 'provider-outage-declaration',
+    scriptName: 'idd:provider-outage-declaration',
+    binName: 'idd-provider-outage-declaration',
+    entryPath: 'scripts/provider-outage-declaration.mjs',
+    vendoredCommand: 'node scripts/provider-outage-declaration.mjs',
+    description:
+      'Resolve a repository-scoped outage-relief declaration and evaluate or record its per-pull-request relief.',
+    contractPaths: ['schemas/provider-outage-declaration.schema.json'],
+  },
+  {
     id: 'rerun-advisory-convergence',
     scriptName: 'idd:rerun-advisory-convergence',
     binName: 'idd-rerun-advisory-convergence',

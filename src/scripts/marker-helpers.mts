@@ -139,6 +139,37 @@ export interface ParsedExternalCheckWaiver {
   createdAt: string;
 }
 
+/**
+ * Parsed `<!-- idd-provider-outage-declaration: ... -->` marker (#2320): a
+ * repository-scoped, time-boxed outage relief declaration posted to the
+ * configured `providerOutage.declarationTarget` issue. Validity (actor
+ * authority, expiry) is evaluated by the caller from these raw fields --
+ * this parser only recovers the wire shape, mirroring
+ * {@link ParsedExternalCheckWaiver}.
+ */
+export interface ParsedProviderOutageDeclaration {
+  actor: string;
+  service: string;
+  startedAt: string;
+  expiresAt: string;
+  createdAt: string;
+}
+
+/**
+ * Parsed `<!-- idd-provider-outage-advanced: ... -->` marker (#2320): one
+ * record of a pull request advanced under an active outage declaration,
+ * posted to the same declaration-target issue so a post-recovery sweep can
+ * list every pull request that needs its advisory review re-requested.
+ * HEAD-pinned by `headSha`.
+ */
+export interface ParsedProviderOutageAdvancement {
+  actor: string;
+  prNumber: number;
+  headSha: string;
+  declaredAt: string;
+  createdAt: string;
+}
+
 /** Parsed `<!-- review-watermark: ... -->` marker. */
 export interface ParsedReviewWatermark {
   agentId: string;
@@ -336,6 +367,18 @@ const OPERATIONAL_MARKER_ENTRIES: OperationalMarker[] = [
     pattern:
       /^<!--\s*idd-external-check-waiver:\s+\S+\s+\S+\s+[0-9a-f]{40}\s+check:\S+\s+reason:\S+\s+expires:\S+\s*-->[\s\S]*$/i,
     startPattern: /^<!--\s*idd-external-check-waiver:/i,
+  },
+  {
+    label: '<!-- idd-provider-outage-declaration:',
+    pattern:
+      /^<!--\s*idd-provider-outage-declaration:\s+\S+\s+service:\S+\s+started:\S+\s+expires:\S+\s*-->[\s\S]*$/i,
+    startPattern: /^<!--\s*idd-provider-outage-declaration:/i,
+  },
+  {
+    label: '<!-- idd-provider-outage-advanced:',
+    pattern:
+      /^<!--\s*idd-provider-outage-advanced:\s+\S+\s+pr:\d+\s+head:[0-9a-f]{40}\s+declared:\S+\s*-->[\s\S]*$/i,
+    startPattern: /^<!--\s*idd-provider-outage-advanced:/i,
   },
 ];
 
@@ -848,6 +891,139 @@ export function renderExternalCheckWaiverComment(
       expiresAt,
     }),
   ].join('\n');
+}
+
+function renderProviderOutageDeclarationNote(normalized: {
+  actor: string;
+  service: string;
+  expiresAt: string;
+}): string {
+  return `_${normalized.actor}: provider outage declaration for \`${normalized.service}\` until \`${normalized.expiresAt}\` — IDD automation marker. Do not edit._`;
+}
+
+/**
+ * Render a `<!-- idd-provider-outage-declaration: ... -->` marker (#2320).
+ * Posted to the configured `providerOutage.declarationTarget` issue by an
+ * authorized actor to open a repository-scoped, time-boxed outage relief
+ * window. `service` and the free-text fields reuse the same percent-encoded,
+ * newline/comment-token-safe field grammar as
+ * {@link renderExternalCheckWaiverComment}.
+ */
+export function renderProviderOutageDeclarationComment(payload: {
+  actor?: unknown;
+  service?: unknown;
+  startedAt?: unknown;
+  expiresAt?: unknown;
+}): string {
+  const actor = normalizeNonWhitespaceToken(payload?.actor);
+  const service = normalizeExternalCheckWaiverField(payload?.service);
+  const startedAt = normalizeIsoTimestamp(payload?.startedAt);
+  const expiresAt = normalizeIsoTimestamp(payload?.expiresAt);
+  if (!actor || !service || !startedAt || !expiresAt) {
+    throw new Error('invalid provider outage declaration payload');
+  }
+  const encodedService = encodeExternalCheckWaiverField(service);
+  return [
+    `<!-- idd-provider-outage-declaration: ${actor} service:${encodedService} started:${startedAt} expires:${expiresAt} -->`,
+    '',
+    renderProviderOutageDeclarationNote({ actor, service, expiresAt }),
+  ].join('\n');
+}
+
+export function parseProviderOutageDeclarationComment(
+  body: string,
+  createdAt: string,
+): ParsedProviderOutageDeclaration | null {
+  const match = body
+    .trimEnd()
+    .match(
+      new RegExp(
+        `^<!--\\s*idd-provider-outage-declaration:\\s+(\\S+)\\s+service:(\\S+)\\s+started:(\\S+)\\s+expires:(\\S+)\\s*-->${OPTIONAL_IDD_VISIBLE_NOTE_PATTERN}$`,
+        'i',
+      ),
+    );
+  if (!match) {
+    return null;
+  }
+  const actor = normalizeNonWhitespaceToken(match[1]);
+  const service = normalizeExternalCheckWaiverField(
+    decodeExternalCheckWaiverField(match[2]),
+  );
+  const startedAt = normalizeIsoTimestamp(match[3]);
+  const expiresAt = normalizeIsoTimestamp(match[4]);
+  if (!actor || !service || !startedAt || !expiresAt) {
+    return null;
+  }
+  return {
+    actor,
+    service,
+    startedAt,
+    expiresAt,
+    createdAt: isValidIsoTimestamp(createdAt) ? createdAt : 'none',
+  };
+}
+
+/**
+ * Render a `<!-- idd-provider-outage-advanced: ... -->` marker (#2320): one
+ * record of a pull request advanced under an active outage declaration,
+ * posted to the same declaration-target issue. `declaredAt` pins the record
+ * to the specific declaration window that authorized the advancement, so a
+ * post-recovery sweep can tell records from a superseded declaration apart
+ * from records made under the current one.
+ */
+export function renderProviderOutageAdvancedComment(payload: {
+  actor?: unknown;
+  prNumber?: unknown;
+  headSha?: unknown;
+  declaredAt?: unknown;
+}): string {
+  const actor = normalizeNonWhitespaceToken(payload?.actor);
+  const prNumber = normalizePositiveIntegerToken(payload?.prNumber);
+  const headSha = normalizeNonWhitespaceToken(payload?.headSha).toLowerCase();
+  const declaredAt = normalizeIsoTimestamp(payload?.declaredAt);
+  if (
+    !actor ||
+    prNumber === null ||
+    !/^[0-9a-f]{40}$/.test(headSha) ||
+    !declaredAt
+  ) {
+    throw new Error('invalid provider outage advancement payload');
+  }
+  return [
+    `<!-- idd-provider-outage-advanced: ${actor} pr:${prNumber} head:${headSha} declared:${declaredAt} -->`,
+    '',
+    `_${actor}: pull request #${prNumber} advanced under an active outage declaration — IDD automation marker. Do not edit._`,
+  ].join('\n');
+}
+
+export function parseProviderOutageAdvancedComment(
+  body: string,
+  createdAt: string,
+): ParsedProviderOutageAdvancement | null {
+  const match = body
+    .trimEnd()
+    .match(
+      new RegExp(
+        `^<!--\\s*idd-provider-outage-advanced:\\s+(\\S+)\\s+pr:(\\d+)\\s+head:([0-9a-f]{40})\\s+declared:(\\S+)\\s*-->${OPTIONAL_IDD_VISIBLE_NOTE_PATTERN}$`,
+        'i',
+      ),
+    );
+  if (!match) {
+    return null;
+  }
+  const actor = normalizeNonWhitespaceToken(match[1]);
+  const prNumber = normalizePositiveIntegerToken(match[2]);
+  const declaredAt = normalizeIsoTimestamp(match[4]);
+  if (!actor || prNumber === null || !declaredAt) {
+    return null;
+  }
+  return {
+    actor,
+    prNumber,
+    headSha: match[3].toLowerCase(),
+    declaredAt,
+    createdAt: isValidIsoTimestamp(createdAt) ? createdAt : 'none',
+  };
 }
 
 // --- Per-cycle marker body renderers (#900) ---

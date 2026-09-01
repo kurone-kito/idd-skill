@@ -490,6 +490,35 @@ only in that dogfooded original; the portable stub this template ships
 as your `.github/workflows/idd-advisory-convergence.yml` is
 intentionally shorter and does not carry it.
 
+Repositories that expect a sustained provider outage (advisory review or
+Actions unavailable for hours, not minutes) may additionally record
+`providerOutage.declarationTarget` and `providerOutage.maxValidity` in
+`.github/idd/config.json`. This substitutes one repository-scoped,
+time-boxed declaration for repeatedly posting a per-pull-request
+external-check-waiver: a maintainer authorized under
+`ciGate.externalCheckWaivers.authorityPolicy` opens a declaration on the
+configured issue, and it applies to every pull request whose own
+terminal advisory-unavailable state independently holds, without
+touching a committed policy file. Omit `declarationTarget` to keep the
+declaration path disabled entirely.
+
+```json
+{
+  "providerOutage": {
+    "declarationTarget": 2318,
+    "maxValidity": "PT24H"
+  }
+}
+```
+
+An active declaration is relief eligibility only, scoped to exactly
+`ciGate.externalChecks.waivable` — it never relieves a CI conclusion,
+branch freshness, claim state, or unresolved threads, and it is
+decoupled from any provider-health classifier verdict: an absent or
+`unknown` verdict never invalidates an otherwise-valid declaration. See
+[`docs/idd-helper-scripts.md`](idd-helper-scripts.md#provider-outage-declaration-helper)
+for the helper contract.
+
 ## Phase ID Compatibility Contract
 
 Treat phase IDs as a compatibility surface, not as presentation text.

@@ -1,0 +1,800 @@
+#!/usr/bin/env node
+// idd-generated-from: src/scripts/provider-outage-declaration.mts
+//
+// The scripts/provider-outage-declaration.mjs copy is generated from the .mts
+// source named above by `pnpm run build`. Edit the .mts source, never the
+// generated .mjs. See docs/typescript-sources.md.
+//
+// #2320: a repository-scoped, time-boxed outage-relief declaration that
+// substitutes for repeatedly posting one external-check-waiver per pull
+// request per HEAD during a proven, sustained provider outage. Read from a
+// configured issue (`providerOutage.declarationTarget`) so no repository
+// file has to change while the outage is in progress.
+//
+// Scope boundary: this helper only resolves declaration validity and
+// evaluates whether a specific waivable selector is relieved for a pull
+// request whose OWN terminal advisory-unavailable state the caller has
+// already independently proven (`prTerminalUnavailable`). It never
+// evaluates CI conclusions, branch freshness, claim state, or unresolved
+// threads -- those stay exactly where they already live
+// (pre-merge-readiness.mts / advisory-wait-state.mts).
+
+import { readFileSync } from 'node:fs';
+import { parseCliArgs } from './cli-args.mts';
+import {
+  type AuthorityEvidence,
+  buildTrustedMarkerLogins,
+  matchCheckSelector,
+  normalizeAuthorityEvidence,
+  resolveActorLogin,
+  resolveCollaboratorAuthority,
+} from './external-check-waiver.mts';
+import {
+  DEFAULT_GH_PAGINATED_TIMEOUT_MS,
+  ghText,
+  safeGhText,
+} from './gh-exec.mts';
+import {
+  normalizePolicyConfig,
+  parseIsoDurationToMs,
+} from './policy-helpers.mts';
+import {
+  type ParsedProviderOutageAdvancement,
+  type ParsedProviderOutageDeclaration,
+  parseProviderOutageAdvancedComment,
+  parseProviderOutageDeclarationComment,
+  renderProviderOutageAdvancedComment,
+  renderProviderOutageDeclarationComment,
+} from './protocol-helpers.mts';
+import type { PromptFn } from './readline-prompt.mts';
+import { makeReadlinePrompt } from './readline-prompt.mts';
+
+/** Normalized policy object returned by {@link normalizePolicyConfig}. */
+type NormalizedPolicy = ReturnType<typeof normalizePolicyConfig>;
+
+/** One issue comment, in the shape the GitHub REST list endpoint returns. */
+export interface CommentLike {
+  id?: string | number | null;
+  html_url?: string | null;
+  url?: string | null;
+  body?: string | null;
+  created_at?: string | null;
+  user?: { login?: string | null } | null;
+  author?: { login?: string | null } | null;
+}
+
+/** Result of {@link resolveProviderOutageDeclaration}. */
+export interface ProviderOutageDeclarationResolution {
+  active: boolean;
+  reason: string;
+  declaration: ParsedProviderOutageDeclaration | null;
+  valid: ParsedProviderOutageDeclaration[];
+  expired: ParsedProviderOutageDeclaration[];
+  exceedsMaxValidity: ParsedProviderOutageDeclaration[];
+  wrongService: ParsedProviderOutageDeclaration[];
+  unauthorized: { authorLogin: string; service: string; expiresAt: string }[];
+  malformed: { authorLogin: string; bodyPreview: string }[];
+}
+
+const DECLARATION_MARKER_START = /^<!--\s*idd-provider-outage-declaration:/i;
+const ADVANCED_MARKER_START = /^<!--\s*idd-provider-outage-advanced:/i;
+
+function commentAuthorLogin(comment: CommentLike | null | undefined): string {
+  return String(comment?.author?.login ?? comment?.user?.login ?? '')
+    .trim()
+    .toLowerCase();
+}
+
+function latestByCreatedAt<T extends { createdAt: string }>(
+  entries: T[],
+): T | null {
+  if (entries.length === 0) return null;
+  return [...entries].sort((a, b) => a.createdAt.localeCompare(b.createdAt))[
+    entries.length - 1
+  ];
+}
+
+/**
+ * Resolve whether an active, valid outage declaration exists for `service`.
+ *
+ * Deliberately decoupled from any provider-health classifier: this function
+ * accepts no verdict input at all -- only the declaration marker's own
+ * fields (actor, service, timestamps), the actor's live GitHub authority
+ * (`authorityOf`), and `now`. An absent or `unknown` provider-health verdict
+ * therefore can never invalidate an otherwise-valid declaration, because
+ * there is no parameter here for one to invalidate through.
+ *
+ * Validity is recomputed from scratch on every call ("live on every read"):
+ * nothing is cached, and an expired declaration silently reverts `active`
+ * to `false` with no cleanup step required.
+ */
+export function resolveProviderOutageDeclaration(input: {
+  declarationTargetConfigured: boolean;
+  comments: CommentLike[] | null | undefined;
+  service: string;
+  policy: NormalizedPolicy;
+  authorityOf: (actorLogin: string) => AuthorityEvidence;
+  now?: Date;
+}): ProviderOutageDeclarationResolution {
+  const empty = (reason: string): ProviderOutageDeclarationResolution => ({
+    active: false,
+    reason,
+    declaration: null,
+    valid: [],
+    expired: [],
+    exceedsMaxValidity: [],
+    wrongService: [],
+    unauthorized: [],
+    malformed: [],
+  });
+
+  if (!input.declarationTargetConfigured) {
+    return empty(
+      'declaration path disabled: providerOutage.declarationTarget is not configured',
+    );
+  }
+  const service = String(input.service ?? '').trim();
+  if (!service) {
+    return empty('requested service is empty');
+  }
+
+  const now = input.now instanceof Date ? input.now : new Date();
+  const nowMs = now.getTime();
+  const maxValidityMs =
+    parseIsoDurationToMs(
+      input.policy?.providerOutage?.maxValidity ?? 'PT24H',
+    ) ??
+    parseIsoDurationToMs('PT24H') ??
+    0;
+  const authorityPolicy =
+    input.policy?.ciGate?.externalCheckWaivers?.authorityPolicy ??
+    'owners-and-maintainers-only';
+
+  const valid: ParsedProviderOutageDeclaration[] = [];
+  const expired: ParsedProviderOutageDeclaration[] = [];
+  const exceedsMaxValidity: ParsedProviderOutageDeclaration[] = [];
+  const wrongService: ParsedProviderOutageDeclaration[] = [];
+  const unauthorized: ProviderOutageDeclarationResolution['unauthorized'] = [];
+  const malformed: ProviderOutageDeclarationResolution['malformed'] = [];
+  let shapedCount = 0;
+
+  for (const comment of input.comments ?? []) {
+    const body = String(comment?.body ?? '');
+    if (!DECLARATION_MARKER_START.test(body)) continue;
+    shapedCount += 1;
+
+    const authorLogin = commentAuthorLogin(comment);
+    const createdAt = String(comment?.created_at ?? '');
+    const parsed = parseProviderOutageDeclarationComment(body, createdAt);
+    if (!parsed) {
+      malformed.push({ authorLogin, bodyPreview: body.slice(0, 120) });
+      continue;
+    }
+
+    if (parsed.service.toLowerCase() !== service.toLowerCase()) {
+      wrongService.push(parsed);
+      continue;
+    }
+
+    const authority = input.authorityOf(authorLogin);
+    if (!authority.known || !authority.authorized) {
+      unauthorized.push({
+        authorLogin,
+        service: parsed.service,
+        expiresAt: parsed.expiresAt,
+      });
+      continue;
+    }
+
+    const startedMs = Date.parse(parsed.startedAt);
+    const expiresMs = Date.parse(parsed.expiresAt);
+    if (
+      !Number.isFinite(startedMs) ||
+      !Number.isFinite(expiresMs) ||
+      expiresMs <= startedMs
+    ) {
+      malformed.push({ authorLogin, bodyPreview: body.slice(0, 120) });
+      continue;
+    }
+    if (expiresMs - startedMs > maxValidityMs) {
+      exceedsMaxValidity.push(parsed);
+      continue;
+    }
+    if (nowMs >= expiresMs) {
+      expired.push(parsed);
+      continue;
+    }
+
+    valid.push(parsed);
+  }
+
+  const declaration = latestByCreatedAt(valid);
+  if (declaration) {
+    return {
+      active: true,
+      reason: '',
+      declaration,
+      valid,
+      expired,
+      exceedsMaxValidity,
+      wrongService,
+      unauthorized,
+      malformed,
+    };
+  }
+
+  let reason = `no provider outage declaration found for service "${service}"`;
+  if (shapedCount === 0) {
+    reason = `no provider outage declaration found for service "${service}"`;
+  } else if (expired.length > 0) {
+    const latest = latestByCreatedAt(expired);
+    reason = `declaration expired at ${latest?.expiresAt}`;
+  } else if (exceedsMaxValidity.length > 0) {
+    reason = `declaration expiry exceeds configured providerOutage.maxValidity`;
+  } else if (unauthorized.length > 0) {
+    const latest = unauthorized[unauthorized.length - 1];
+    reason = `${latest.authorLogin} is not authorized to author a provider outage declaration under ${authorityPolicy}`;
+  } else if (wrongService.length > 0) {
+    const latest = latestByCreatedAt(wrongService);
+    reason = `declaration is for service "${latest?.service}", not "${service}"`;
+  } else if (malformed.length > 0) {
+    reason = 'provider outage declaration marker is malformed';
+  }
+
+  return {
+    active: false,
+    reason,
+    declaration: null,
+    valid,
+    expired,
+    exceedsMaxValidity,
+    wrongService,
+    unauthorized,
+    malformed,
+  };
+}
+
+/** Result of {@link evaluateProviderOutageRelief}. */
+export interface ProviderOutageReliefEvaluation {
+  relieved: boolean;
+  reason: string;
+}
+
+/**
+ * Evaluate whether a single waivable selector is relieved for one pull
+ * request under an active outage declaration.
+ *
+ * Non-bypassing by construction: an active declaration alone is never
+ * sufficient. `prTerminalUnavailable` -- proof of THIS pull request's own
+ * terminal advisory-unavailable state, established independently (the same
+ * per-pull-request proof an external-check-waiver's precondition already
+ * requires) -- must also hold, and `requestedSelector` must match a
+ * configured `ciGate.externalChecks.waivable` entry. Nothing here relieves
+ * a CI conclusion, branch freshness, claim state, or unresolved threads --
+ * those gates are untouched and evaluated elsewhere.
+ */
+export function evaluateProviderOutageRelief(input: {
+  declarationActive: boolean;
+  prTerminalUnavailable: boolean;
+  requestedSelector: string;
+  waivableSelectors: { selector: string; matchMode?: string }[];
+}): ProviderOutageReliefEvaluation {
+  if (!input.declarationActive) {
+    return { relieved: false, reason: 'no active provider outage declaration' };
+  }
+  if (!input.prTerminalUnavailable) {
+    return {
+      relieved: false,
+      reason:
+        "pull request's own terminal advisory-unavailable state is not independently proven",
+    };
+  }
+  const selector = String(input.requestedSelector ?? '').trim();
+  if (!selector) {
+    return { relieved: false, reason: 'requested check selector is empty' };
+  }
+  const matches = (input.waivableSelectors ?? []).some((entry) =>
+    matchCheckSelector(
+      selector,
+      entry.selector,
+      entry.matchMode === 'glob' ? 'glob' : 'exact',
+    ),
+  );
+  if (!matches) {
+    return {
+      relieved: false,
+      reason: `${selector} is not configured as a waivable external check (ciGate.externalChecks.waivable)`,
+    };
+  }
+  return { relieved: true, reason: '' };
+}
+
+/**
+ * List every pull request advanced under an active outage declaration, from
+ * `idd-provider-outage-advanced` markers on the declaration-target issue.
+ * HEAD-pinned: each entry carries the exact `headSha` recorded at the time
+ * it was advanced, so a later push to the same pull request produces a
+ * distinct entry rather than overwriting the earlier one -- a post-recovery
+ * sweep re-requests review per recorded HEAD, not merely per pull request
+ * number.
+ */
+export function listProviderOutageAdvancements(
+  comments: CommentLike[] | null | undefined,
+  options: { trustedMarkerLogins?: unknown[] } = {},
+): ParsedProviderOutageAdvancement[] {
+  const trustedSet = new Set(
+    (options.trustedMarkerLogins ?? []).map((login) =>
+      String(login ?? '')
+        .trim()
+        .toLowerCase(),
+    ),
+  );
+  const results: ParsedProviderOutageAdvancement[] = [];
+  for (const comment of comments ?? []) {
+    const body = String(comment?.body ?? '');
+    if (!ADVANCED_MARKER_START.test(body)) continue;
+    const authorLogin = commentAuthorLogin(comment);
+    if (trustedSet.size > 0 && !trustedSet.has(authorLogin)) continue;
+    const parsed = parseProviderOutageAdvancedComment(
+      body,
+      String(comment?.created_at ?? ''),
+    );
+    if (parsed) {
+      results.push(parsed);
+    }
+  }
+  return results.sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+}
+
+// ---------------------------------------------------------------------------
+// CLI
+// ---------------------------------------------------------------------------
+
+interface ProviderOutageDeclarationArgs {
+  mode: 'resolve' | 'declare' | 'record-advanced' | 'list-advanced';
+  service: string;
+  expiresAt: string;
+  expiresIn: string;
+  prNumber: number;
+  headSha: string;
+  targetIssue: number;
+  actor: string;
+  repo: string;
+  apply: boolean;
+  yes: boolean;
+  format: string;
+  help: boolean;
+}
+
+const PROVIDER_OUTAGE_DECLARATION_FLAG_SPEC = {
+  '--declare': { type: 'boolean', default: false },
+  '--record-advanced': { type: 'boolean', default: false },
+  '--list-advanced': { type: 'boolean', default: false },
+  '--service': { type: 'string', default: '' },
+  '--expires': { type: 'string', default: '' },
+  '--expires-in': { type: 'string', default: '' },
+  '--pr': { type: 'string', default: '' },
+  '--head-sha': { type: 'string', default: '' },
+  '--target-issue': { type: 'string', default: '' },
+  '--actor': { type: 'string', default: '' },
+  '--repo': { type: 'string', default: '' },
+  '--apply': { type: 'boolean', default: false },
+  '--yes': { type: 'boolean', default: false },
+  '--format': { type: 'string', default: 'json' },
+  '--help': { type: 'boolean', short: 'h' },
+} as const;
+
+function parsePositiveIntegerFlag(value: unknown, flag: string): number {
+  const raw = String(value ?? '').trim();
+  if (!/^[1-9]\d*$/.test(raw)) {
+    throw new Error(`invalid ${flag} value: ${value}`);
+  }
+  return Number(raw);
+}
+
+export function parseArgs(argv: string[]): ProviderOutageDeclarationArgs {
+  const { values, help } = parseCliArgs(
+    argv,
+    PROVIDER_OUTAGE_DECLARATION_FLAG_SPEC,
+  );
+  const format = (values.format as string).trim();
+  if (format !== 'json' && format !== 'text') {
+    throw new Error(`unsupported --format value: ${format}`);
+  }
+  const modeFlags = [
+    values.declare as boolean,
+    values['record-advanced'] as boolean,
+    values['list-advanced'] as boolean,
+  ].filter(Boolean);
+  if (modeFlags.length > 1) {
+    throw new Error(
+      '--declare, --record-advanced, and --list-advanced are mutually exclusive',
+    );
+  }
+  const mode: ProviderOutageDeclarationArgs['mode'] = values.declare
+    ? 'declare'
+    : values['record-advanced']
+      ? 'record-advanced'
+      : values['list-advanced']
+        ? 'list-advanced'
+        : 'resolve';
+
+  const parsed: ProviderOutageDeclarationArgs = {
+    mode,
+    service: (values.service as string).trim(),
+    expiresAt: (values.expires as string).trim(),
+    expiresIn: (values['expires-in'] as string).trim(),
+    prNumber:
+      values.pr === undefined || values.pr === ''
+        ? 0
+        : parsePositiveIntegerFlag(values.pr as string, '--pr'),
+    headSha: (values['head-sha'] as string).trim().toLowerCase(),
+    targetIssue:
+      values['target-issue'] === undefined || values['target-issue'] === ''
+        ? 0
+        : parsePositiveIntegerFlag(
+            values['target-issue'] as string,
+            '--target-issue',
+          ),
+    actor: (values.actor as string).trim(),
+    repo: (values.repo as string).trim(),
+    apply: values.apply as boolean,
+    yes: values.yes as boolean,
+    format,
+    help,
+  };
+
+  if (!parsed.help) {
+    if (mode === 'resolve' || mode === 'declare') {
+      if (!parsed.service) {
+        throw new Error('missing required --service <name> argument');
+      }
+    }
+    if (mode === 'declare') {
+      const hasExpiresAt = Boolean(parsed.expiresAt);
+      const hasExpiresIn = Boolean(parsed.expiresIn);
+      if (hasExpiresAt === hasExpiresIn) {
+        throw new Error('specify exactly one of --expires or --expires-in');
+      }
+    }
+    if (mode === 'record-advanced') {
+      if (!parsed.prNumber) {
+        throw new Error('missing required --pr <number> argument');
+      }
+      if (!/^[0-9a-f]{40}$/.test(parsed.headSha)) {
+        throw new Error(
+          'missing or invalid required --head-sha <40-hex> argument',
+        );
+      }
+    }
+  }
+
+  return parsed;
+}
+
+function resolveExpiryAt({
+  expiresAt,
+  expiresIn,
+  now,
+}: {
+  expiresAt: string;
+  expiresIn: string;
+  now: Date;
+}): string {
+  if (expiresAt) {
+    const parsed = new Date(expiresAt);
+    if (!Number.isFinite(parsed.getTime())) {
+      throw new Error(`invalid --expires value: ${expiresAt}`);
+    }
+    return parsed.toISOString().replace(/\.\d{3}Z$/, 'Z');
+  }
+  const durationMs = parseIsoDurationToMs(expiresIn);
+  if (!Number.isFinite(durationMs) || (durationMs ?? 0) <= 0) {
+    throw new Error(`invalid --expires-in value: ${expiresIn}`);
+  }
+  return new Date(now.getTime() + (durationMs ?? 0)).toISOString();
+}
+
+function readJsonFile(path: string): unknown {
+  try {
+    return JSON.parse(readFileSync(path, 'utf8'));
+  } catch {
+    return {};
+  }
+}
+
+function parseOwnerRepo(value: unknown): { owner: string; name: string } {
+  const repo = String(value ?? '').trim();
+  const match = repo.match(/^([^/\s]+)\/([^/\s]+)$/);
+  if (!match) {
+    throw new Error(`invalid --repo value: ${value} (expected owner/name)`);
+  }
+  return { owner: match[1], name: match[2] };
+}
+
+function fetchIssueComments({
+  owner,
+  repo,
+  issueNumber,
+}: {
+  owner: string;
+  repo: string;
+  issueNumber: number;
+}): CommentLike[] {
+  const payload = ghText(
+    [
+      'api',
+      '--paginate',
+      `repos/${owner}/${repo}/issues/${issueNumber}/comments`,
+    ],
+    { timeout: DEFAULT_GH_PAGINATED_TIMEOUT_MS },
+  );
+  try {
+    const parsed = JSON.parse(payload || '[]');
+    return Array.isArray(parsed) ? (parsed as CommentLike[]) : [];
+  } catch {
+    throw new Error(
+      `could not read issue #${issueNumber} comments to resolve the provider outage declaration`,
+    );
+  }
+}
+
+function postComment({
+  owner,
+  repo,
+  issueNumber,
+  body,
+}: {
+  owner: string;
+  repo: string;
+  issueNumber: number;
+  body: string;
+}): { html_url?: string; url?: string } {
+  const payload = ghText([
+    'api',
+    `repos/${owner}/${repo}/issues/${issueNumber}/comments`,
+    '--method',
+    'POST',
+    '-f',
+    `body=${body}`,
+  ]);
+  try {
+    return JSON.parse(payload || '{}');
+  } catch {
+    return {};
+  }
+}
+
+export async function runProviderOutageDeclaration(
+  options: {
+    args?: ProviderOutageDeclarationArgs;
+    now?: Date;
+    isTTY?: boolean;
+    prompt?: PromptFn;
+    comments?: CommentLike[];
+    authorityOf?: (actorLogin: string) => AuthorityEvidence;
+    postComment?: typeof postComment;
+  } = {},
+): Promise<{ exitCode: number; result?: unknown }> {
+  const args = options.args ?? parseArgs(process.argv.slice(2));
+  if (args.help) {
+    printUsage();
+    return { exitCode: 0 };
+  }
+
+  const repository =
+    args.repo ||
+    ghText([
+      'repo',
+      'view',
+      '--json',
+      'nameWithOwner',
+      '--jq',
+      '.nameWithOwner',
+    ]);
+  const { owner, name } = parseOwnerRepo(repository);
+  const rawConfig = readJsonFile('.github/idd/config.json');
+  const policy = normalizePolicyConfig(rawConfig);
+  const targetIssue =
+    args.targetIssue || policy.providerOutage.declarationTarget;
+  const now = options.now instanceof Date ? options.now : new Date();
+
+  const authorityOf =
+    options.authorityOf ??
+    ((actorLogin: string): AuthorityEvidence =>
+      normalizeAuthorityEvidence(
+        resolveCollaboratorAuthority({ owner, repo: name, actor: actorLogin }),
+        actorLogin,
+        owner,
+        policy.ciGate.externalCheckWaivers.authorityPolicy,
+      ));
+
+  if (args.mode === 'resolve') {
+    const comments =
+      options.comments ??
+      (targetIssue
+        ? fetchIssueComments({ owner, repo: name, issueNumber: targetIssue })
+        : []);
+    const result = resolveProviderOutageDeclaration({
+      declarationTargetConfigured: Boolean(targetIssue),
+      comments,
+      service: args.service,
+      policy,
+      authorityOf,
+      now,
+    });
+    render(result, args.format);
+    return { exitCode: 0, result };
+  }
+
+  if (args.mode === 'list-advanced') {
+    if (!targetIssue) {
+      throw new Error(
+        'providerOutage.declarationTarget is not configured and --target-issue was not given',
+      );
+    }
+    const comments =
+      options.comments ??
+      fetchIssueComments({ owner, repo: name, issueNumber: targetIssue });
+    const trustedMarkerLogins = buildTrustedMarkerLogins({
+      owner,
+      repo: name,
+      rawConfig,
+      viewerLogin: '',
+      issueComments: comments,
+    });
+    const result = listProviderOutageAdvancements(comments, {
+      trustedMarkerLogins: [...trustedMarkerLogins],
+    });
+    render(result, args.format);
+    return { exitCode: 0, result };
+  }
+
+  // --declare and --record-advanced both mutate; both require --apply.
+  if (!targetIssue) {
+    throw new Error(
+      'providerOutage.declarationTarget is not configured and --target-issue was not given',
+    );
+  }
+  const viewerLogin = String(safeGhText(['api', 'user', '--jq', '.login']))
+    .trim()
+    .toLowerCase();
+  const actor = resolveActorLogin(undefined, args.actor, viewerLogin);
+  if (!actor) {
+    throw new Error(
+      'could not determine current GitHub user; ensure gh is authenticated',
+    );
+  }
+
+  const body =
+    args.mode === 'declare'
+      ? renderProviderOutageDeclarationComment({
+          actor,
+          service: args.service,
+          startedAt: now.toISOString(),
+          expiresAt: resolveExpiryAt({
+            expiresAt: args.expiresAt,
+            expiresIn: args.expiresIn,
+            now,
+          }),
+        })
+      : renderProviderOutageAdvancedComment({
+          actor,
+          prNumber: args.prNumber,
+          headSha: args.headSha,
+          declaredAt: now.toISOString(),
+        });
+
+  if (args.mode === 'declare') {
+    const authority = authorityOf(actor);
+    if (!authority.known || !authority.authorized) {
+      throw new Error(
+        `provider outage declaration blocked: ${actor} is not authorized under ${policy.ciGate.externalCheckWaivers.authorityPolicy}`,
+      );
+    }
+  } else {
+    // --record-advanced: require an active declaration for the named
+    // service to exist first -- this marker is evidence of an advancement
+    // already granted elsewhere, not a second authority gate.
+    const comments =
+      options.comments ??
+      fetchIssueComments({ owner, repo: name, issueNumber: targetIssue });
+    const resolution = resolveProviderOutageDeclaration({
+      declarationTargetConfigured: true,
+      comments,
+      service: args.service,
+      policy,
+      authorityOf,
+      now,
+    });
+    if (!resolution.active) {
+      throw new Error(
+        `record-advanced blocked: no active provider outage declaration (${resolution.reason})`,
+      );
+    }
+  }
+
+  if (!args.apply) {
+    process.stdout.write(`${body}\n`);
+    return { exitCode: 0, result: { mode: args.mode, apply: false, body } };
+  }
+
+  const isTTY =
+    options.isTTY ?? Boolean(process.stdin.isTTY && process.stdout.isTTY);
+  if (!args.yes && !isTTY) {
+    throw new Error(
+      'operator interaction is required; rerun in a TTY or pass --yes after reviewing the marker body',
+    );
+  }
+  if (!args.yes) {
+    process.stdout.write(`${body}\n`);
+    const ask = options.prompt ?? makeReadlinePrompt();
+    const answer = await ask(`Post this to issue #${targetIssue}? [y/N] `);
+    ask.close?.();
+    if (
+      String(answer ?? '')
+        .trim()
+        .toLowerCase() !== 'y'
+    ) {
+      process.stdout.write('Aborted. No changes made.\n');
+      return { exitCode: 0, result: { mode: args.mode, apply: false, body } };
+    }
+  }
+
+  const poster = options.postComment ?? postComment;
+  const posted = poster({ owner, repo: name, issueNumber: targetIssue, body });
+  const result = {
+    mode: args.mode,
+    apply: true,
+    body,
+    commentUrl: String(posted.html_url ?? posted.url ?? ''),
+  };
+  render(result, args.format);
+  return { exitCode: 0, result };
+}
+
+function render(value: unknown, format: string): void {
+  if (format === 'json') {
+    process.stdout.write(`${JSON.stringify(value, null, 2)}\n`);
+    return;
+  }
+  process.stdout.write(`${JSON.stringify(value)}\n`);
+}
+
+function printUsage(): void {
+  process.stdout.write(`usage: node scripts/provider-outage-declaration.mjs --service <name> [options]
+
+Modes (default: resolve declaration validity for --service):
+  --declare                         author a new declaration (requires authority + --apply)
+  --record-advanced                 record a pull request advanced under the active declaration
+  --list-advanced                   list pull requests recorded as advanced
+
+Options:
+  --service <name>                  affected service name (required for resolve/declare)
+  --expires <iso8601>                declaration expiry (--declare, exactly one of --expires/--expires-in)
+  --expires-in <duration>            declaration expiry as an ISO-8601 duration from now
+  --pr <number>                     pull request number (--record-advanced)
+  --head-sha <40-hex>                pull request HEAD SHA (--record-advanced)
+  --target-issue <number>           override providerOutage.declarationTarget
+  --actor <login>                   override the GitHub actor used for authority evaluation
+  --repo <owner/name>               repository override
+  --apply                           post the canonical marker comment after validation
+  --yes                             skip the interactive apply confirmation
+  --format <json|text>              output format (default: json)
+  --help                            show this message
+`);
+}
+
+export async function main(
+  argv: string[] = process.argv.slice(2),
+): Promise<void> {
+  const result = await runProviderOutageDeclaration({ args: parseArgs(argv) });
+  process.exit(result.exitCode);
+}
+
+if (import.meta.main) {
+  main().catch((error: unknown) => {
+    process.stderr.write(`Error: ${(error as Error).message}\n`);
+    process.exit(1);
+  });
+}

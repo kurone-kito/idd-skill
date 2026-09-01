@@ -25,6 +25,7 @@ import type {
   LiveStatusDigestFields,
   ParsedClaimMarker,
   ParsedForcedHandoffMarker,
+  ParsedProviderOutageDeclaration,
 } from '../src/scripts/protocol-helpers.mts';
 import type { ResolveReviewThreadReport } from '../src/scripts/resolve-review-thread.mts';
 import type { StalledSessionQuietCheckReport } from '../src/scripts/stalled-session-quiet-check.mts';
@@ -259,6 +260,10 @@ interface PolicyConfigFile {
   mergeGate?: {
     soloCodeownerAdminFallback?: 'auto-admin-retry' | 'hold-and-report';
   };
+  providerOutage?: {
+    declarationTarget?: number;
+    maxValidity?: string;
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -340,6 +345,14 @@ export const claimMarkerKeys = [
   'branch',
   'createdAt',
 ] as const satisfies readonly (keyof ParsedClaimMarker)[];
+
+export const providerOutageDeclarationKeys = [
+  'actor',
+  'service',
+  'startedAt',
+  'expiresAt',
+  'createdAt',
+] as const satisfies readonly (keyof ParsedProviderOutageDeclaration)[];
 
 export const discoverRoadmapUnionKeys = [
   'mode',
@@ -515,6 +528,7 @@ export const policyConfigKeys = [
   'worktreeGuard',
   'labels',
   'mergeGate',
+  'providerOutage',
 ] as const satisfies readonly (keyof PolicyConfigFile)[];
 
 // PreMergeReadinessReport is index-signature typed (its summary builder
@@ -815,6 +829,14 @@ const claimMarkerFixture = {
   createdAt: '2026-06-11T00:00:00Z',
 } satisfies ParsedClaimMarker;
 
+const providerOutageDeclarationFixture = {
+  actor: 'kurone-kito',
+  service: 'idd-advisory-convergence',
+  startedAt: '2026-09-01T05:00:00Z',
+  expiresAt: '2026-09-02T05:00:00Z',
+  createdAt: '2026-09-01T05:00:01Z',
+} satisfies ParsedProviderOutageDeclaration;
+
 const discoverRoadmapUnionFixture = {
   mode: 'all-roadmaps',
   roots: [
@@ -1108,6 +1130,7 @@ const policyConfigFixture = {
     needsDecisionLabelName: 'status:needs-decision',
   },
   mergeGate: { soloCodeownerAdminFallback: 'auto-admin-retry' },
+  providerOutage: { declarationTarget: 1234, maxValidity: 'PT24H' },
 } satisfies PolicyConfigFile;
 
 const preMergeReadinessFixture = {
@@ -1455,6 +1478,13 @@ const SCHEMA_TYPE_MAP: readonly SchemaTypeMapping[] = [
     owningModule: 'src/scripts/protocol-helpers.mts',
     keys: claimMarkerKeys,
     fixture: claimMarkerFixture,
+  },
+  {
+    schemaFile: 'provider-outage-declaration.schema.json',
+    exportedType: 'ParsedProviderOutageDeclaration',
+    owningModule: 'src/scripts/protocol-helpers.mts',
+    keys: providerOutageDeclarationKeys,
+    fixture: providerOutageDeclarationFixture,
   },
   {
     schemaFile: 'context-tax-event.schema.json',

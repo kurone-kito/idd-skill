@@ -28,6 +28,7 @@ import {
   buildPreMergeReadinessSummary,
   parseClaimComment,
   parseForcedHandoffComment,
+  parseProviderOutageDeclarationComment,
 } from '../src/scripts/protocol-helpers.mts';
 import { applyResolveReviewThread } from '../src/scripts/resolve-review-thread.mts';
 import { evaluateQuietWindow } from '../src/scripts/stalled-session-quiet-check.mts';
@@ -216,6 +217,12 @@ const SCHEMA_OUTPUT_COVERAGE: CoverageEntry[] = [
     builder: 'buildPreMergeReadinessSummary (protocol-helpers.mts)',
   },
   {
+    schema: 'provider-outage-declaration.schema.json',
+    status: 'covered',
+    builder:
+      'parseProviderOutageDeclarationComment (marker-helpers.mts, re-exported by protocol-helpers.mts)',
+  },
+  {
     schema: 'resolve-review-thread.schema.json',
     status: 'covered',
     builder: 'applyResolveReviewThread (resolve-review-thread.mts)',
@@ -369,6 +376,26 @@ test('forced-handoff-marker: parseForcedHandoffComment output validates against 
   assertRoundtrip(
     parsed,
     loadJson('schemas/forced-handoff-marker.schema.json'),
+  );
+});
+
+test('provider-outage-declaration: parseProviderOutageDeclarationComment output validates against schema', () => {
+  const body = [
+    '<!-- idd-provider-outage-declaration: kurone-kito service:idd-advisory-convergence started:2026-09-01T05:00:00Z expires:2026-09-02T05:00:00Z -->',
+    '',
+    '_kurone-kito: provider outage declaration for `idd-advisory-convergence` until `2026-09-02T05:00:00Z` — IDD automation marker. Do not edit._',
+  ].join('\n');
+  const parsed = parseProviderOutageDeclarationComment(
+    body,
+    '2026-09-01T05:00:01Z',
+  );
+  assert.ok(
+    parsed !== null,
+    'parseProviderOutageDeclarationComment returned null',
+  );
+  assertRoundtrip(
+    parsed,
+    loadJson('schemas/provider-outage-declaration.schema.json'),
   );
 });
 

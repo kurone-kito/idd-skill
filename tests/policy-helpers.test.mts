@@ -275,6 +275,58 @@ test('discover.legacyRoots fails safe to [] on invalid input', () => {
   );
 });
 
+test('providerOutage.declarationTarget is absent (own-property-omitted) when unconfigured, disabling the declaration path (#2320)', () => {
+  assert.equal(
+    Object.hasOwn(POLICY_DEFAULTS.providerOutage, 'declarationTarget'),
+    false,
+  );
+  assert.equal(
+    normalizePolicyConfig({}).providerOutage.declarationTarget,
+    undefined,
+  );
+  assert.equal(
+    Object.hasOwn(
+      normalizePolicyConfig({}).providerOutage,
+      'declarationTarget',
+    ),
+    false,
+  );
+});
+
+test('providerOutage.declarationTarget accepts a positive integer issue number (#2320)', () => {
+  assert.equal(
+    normalizePolicyConfig({ providerOutage: { declarationTarget: 2318 } })
+      .providerOutage.declarationTarget,
+    2318,
+  );
+});
+
+test('providerOutage.declarationTarget fails safe to absent on an invalid value (#2320)', () => {
+  for (const invalid of [0, -1, 1.5, '2318', null, [2318]]) {
+    assert.equal(
+      normalizePolicyConfig({ providerOutage: { declarationTarget: invalid } })
+        .providerOutage.declarationTarget,
+      undefined,
+      `expected declarationTarget ${JSON.stringify(invalid)} to fail safe to absent`,
+    );
+  }
+});
+
+test('providerOutage.maxValidity defaults to PT24H and accepts a configured override (#2320)', () => {
+  assert.equal(POLICY_DEFAULTS.providerOutage.maxValidity, 'PT24H');
+  assert.equal(normalizePolicyConfig({}).providerOutage.maxValidity, 'PT24H');
+  assert.equal(
+    normalizePolicyConfig({ providerOutage: { maxValidity: 'PT12H' } })
+      .providerOutage.maxValidity,
+    'PT12H',
+  );
+  assert.equal(
+    normalizePolicyConfig({ providerOutage: { maxValidity: 'not-a-duration' } })
+      .providerOutage.maxValidity,
+    'PT24H',
+  );
+});
+
 test('critiqueLoop.delegate resolves to undefined when absent (#2199)', () => {
   assert.equal(normalizePolicyConfig({}).critiqueLoop.delegate, undefined);
 });
