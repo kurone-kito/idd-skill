@@ -282,9 +282,14 @@ plan comment and verified claim.
 
 ### B3 self-check
 
-Before implementing, verify: the B2 plan comment already exists on the
-issue. Posting it before implementation is the only normal path; if it
-does not exist, stop and return to B2.
+Before implementing, verify B2 actually finished, not merely started:
+the B2 plan comment reflects the refined, post-critique plan (draft →
+critique pass → refined final plan posted as a follow-up or update to
+the same comment) -- a draft posted before its critique pass does not
+satisfy this. Claim-ownership revalidation needs no separate check
+here: it already applies to every B3 mutation via the
+[claim revalidation gate](idd-overview-core.instructions.md#claim-revalidation-gate).
+If the plan is not actually finalized, stop and return to B2.
 
 The following is a repair path only for an ordering violation that has
 already occurred, not an alternative route: disclose the deviation on
