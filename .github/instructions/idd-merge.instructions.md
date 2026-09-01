@@ -408,14 +408,20 @@ Before any mutating action in F3, apply the
    format, and fallback GraphQL commands.
 3. From the **primary worktree** — the worktree being cleaned up is
    still checked out to its issue branch at this point, so running
-   this elsewhere would fast-forward the wrong branch — update local
-   `main` first: `git fetch origin main && git merge --ff-only
-   origin/main`. Doing this before worktree/branch deletion (next
-   step) ensures WorkTrunk's own merge-status check, which reads the
-   local default branch rather than `origin/main`, sees the
-   just-merged branch as already merged on its first attempt instead
-   of reporting `branch_outcome: retained_unmerged` and declining to
-   delete it (`#2331`).
+   this elsewhere would fast-forward the wrong branch — switch to
+   `main` explicitly before fast-forwarding it, rather than assuming
+   it is already checked out there:
+
+   ```sh
+   git switch main && git fetch origin main && git merge --ff-only origin/main
+   ```
+
+   Doing this before worktree/branch deletion (next step) ensures
+   WorkTrunk's own merge-status check, which reads the local default
+   branch rather than `origin/main`, sees the just-merged branch as
+   already merged on its first attempt instead of reporting
+   `branch_outcome: retained_unmerged` and declining to delete it
+   (`#2331`).
 4. Run from the **primary worktree**, never from inside the worktree
    being removed. Any removal (plain or `--force`) silently discards
    ignored files too, including inside a submodule. Scope Git
