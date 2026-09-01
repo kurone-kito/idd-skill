@@ -380,17 +380,10 @@ const UNRESOLVED_CHOICE_PATTERN = new RegExp(
   `\\b${UNRESOLVED_CHOICE_SOURCE}\\b`,
   'gi',
 );
-// Non-global sibling for proximity `.test()` calls below -- a global regex's
-// `.test()` advances `lastIndex` across calls, which would silently skip
-// matches on a second or later either/or span in the same body.
-const UNRESOLVED_CHOICE_PROXIMITY_PATTERN = new RegExp(
-  `\\b${UNRESOLVED_CHOICE_SOURCE}\\b`,
-  'i',
-);
 // #2219: an either/or acceptance-criterion shape naming two mutually
-// exclusive implementation paths. Only flagged together with
-// UNRESOLVED_CHOICE_PROXIMITY_PATTERN nearby (see checkAutonomy) -- the
-// either/or structure alone also describes an ordinary AC offering two
+// exclusive implementation paths. Only flagged together with an
+// un-negated UNRESOLVED_CHOICE_PATTERN match nearby (see checkAutonomy) --
+// the either/or structure alone also describes an ordinary AC offering two
 // already-resolved, equivalent options, which must keep passing.
 const EITHER_OR_PATTERN = /\beither\b[\s\S]{0,120}?\bor\b/gi;
 const EITHER_OR_PROXIMITY_WINDOW_CHARS = 120;
@@ -1280,35 +1273,58 @@ export function checkAutonomy(context: Context): CheckOutcome {
 
   // #2219: an either/or acceptance-criterion shape naming two mutually
   // exclusive implementation paths without saying which one to take.
-  // Requires an unresolved-choice marker nearby, not the either/or
-  // structure alone -- an ordinary AC offering two already-resolved,
-  // equivalent options must keep passing.
-  for (const match of body.matchAll(EITHER_OR_PATTERN)) {
-    const matchedText = match[0] ?? '';
-    const matchIndex = match.index ?? 0;
-    const contextBefore = body.slice(
-      Math.max(0, matchIndex - EITHER_OR_PROXIMITY_WINDOW_CHARS),
-      matchIndex,
-    );
-    const contextAfter = body.slice(
-      matchIndex + matchedText.length,
-      Math.min(
-        body.length,
-        matchIndex + matchedText.length + EITHER_OR_PROXIMITY_WINDOW_CHARS,
-      ),
-    );
+  // Requires an un-negated unresolved-choice marker nearby, not the
+  // either/or structure alone -- an ordinary AC offering two
+  // already-resolved, equivalent options must keep passing, including
+  // when a resolved statement nearby happens to mention a marker word in
+  // its own negated form (e.g. "this is no longer TBD").
+  const eitherOrMatches = [...body.matchAll(EITHER_OR_PATTERN)];
+  if (eitherOrMatches.length > 0) {
+    for (const marker of body.matchAll(UNRESOLVED_CHOICE_PATTERN)) {
+      const markerText = marker[0] ?? '';
+      const markerIndex = marker.index ?? 0;
+      const markerContextBefore = body.slice(
+        Math.max(0, markerIndex - 60),
+        markerIndex,
+      );
+      const markerContextAfter = body.slice(
+        markerIndex + markerText.length,
+        Math.min(body.length, markerIndex + markerText.length + 60),
+      );
 
-    if (
-      !UNRESOLVED_CHOICE_PROXIMITY_PATTERN.test(contextBefore) &&
-      !UNRESOLVED_CHOICE_PROXIMITY_PATTERN.test(contextAfter)
-    ) {
-      continue;
+      if (
+        NEGATION_PATTERN.test(markerContextBefore) ||
+        NEGATION_PATTERN.test(markerContextAfter)
+      ) {
+        // This marker is itself negated (resolved), e.g. "no longer TBD".
+        continue;
+      }
+
+      const isNearEitherOr = eitherOrMatches.some((eitherOr) => {
+        const eitherOrText = eitherOr[0] ?? '';
+        const eitherOrIndex = eitherOr.index ?? 0;
+        const gapAfterEitherOr =
+          markerIndex - (eitherOrIndex + eitherOrText.length);
+        const gapBeforeEitherOr =
+          eitherOrIndex - (markerIndex + markerText.length);
+        return (
+          (gapAfterEitherOr >= 0 &&
+            gapAfterEitherOr <= EITHER_OR_PROXIMITY_WINDOW_CHARS) ||
+          (gapBeforeEitherOr >= 0 &&
+            gapBeforeEitherOr <= EITHER_OR_PROXIMITY_WINDOW_CHARS)
+        );
+      });
+
+      if (!isNearEitherOr) {
+        continue;
+      }
+
+      return {
+        pass: false,
+        evidence:
+          'Issue presents an unresolved either/or implementation choice.',
+      };
     }
-
-    return {
-      pass: false,
-      evidence: 'Issue presents an unresolved either/or implementation choice.',
-    };
   }
 
   return {

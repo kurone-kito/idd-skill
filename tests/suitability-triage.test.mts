@@ -1994,6 +1994,16 @@ test('autonomy fails on an either/or acceptance-criterion shape naming two unres
   assert.equal(result.pass, false);
 });
 
+test('autonomy still passes an either/or criterion resolved by a negated marker nearby -- #2219 (CodeRabbit, no new false positive)', () => {
+  const result = checkAutonomy({
+    issue: {
+      ...BASE_ISSUE,
+      body: `${BASE_ISSUE.body}\n## Acceptance Criteria\n- Either store sessions in Redis or in-memory. This is no longer TBD -- Redis was already selected and implemented.`,
+    },
+  } as Context);
+  assert.equal(result.pass, true);
+});
+
 test('autonomy still passes an ordinary either/or acceptance criterion offering two already-resolved, equivalent options -- #2219 (no new false positive)', () => {
   const result = checkAutonomy({
     issue: {
