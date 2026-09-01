@@ -4192,8 +4192,20 @@ export function summarizeDispositionEvidenceForGate(
     // apply (they cannot in practice -- see `malformedPrefixDispositions`'
     // disjointness note -- but the precedence keeps the more actionable
     // hint on top if that ever changes).
+    //
+    // Gated on `isGateAdvisoryBotLogin`, mirroring `isNoticeComment` above
+    // (Copilot review on PR #2383): `requiresDispositionPrefix` in the 1:1
+    // pairing loop above is the ONLY thing that ever requires the exact
+    // `**Accepted**`/`**Rejected**` bold prefix -- a human's outstanding
+    // comment accepts any later IDD-agent reply, presence-only (#2139).
+    // Without this gate, a single malformed reply that legitimately
+    // cleared an earlier human comment (consumed via `usedReplyIndexes`
+    // in that loop, invisible to this global `malformedPrefixDispositions`
+    // pool) could still misleadingly hint a LATER, still-missing human
+    // comment that it needs bold markdown it never required.
     const hasMalformedPrefixAttempt =
       !hasWrongPhraseAttempt &&
+      isGateAdvisoryBotLogin(comment.authorLogin, advisoryBotLogins) &&
       malformedPrefixDispositions.some(
         (disposition) =>
           compareIsoTimestamps(disposition.activityAt, comment.createdAt) > 0,

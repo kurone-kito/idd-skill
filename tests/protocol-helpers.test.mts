@@ -657,3 +657,50 @@ test('disposition evidence does not hint from a single-asterisk or longer-word n
     assert.equal(comment.hint, undefined);
   }
 });
+
+// #2249, Copilot review on PR #2383: a human's outstanding comment never
+// requires the bold `**Accepted**`/`**Rejected**` prefix (presence-only,
+// #2139), so `MALFORMED_DISPOSITION_PREFIX_HINT` must never attach to a
+// human missing comment even when a malformed reply exists somewhere in
+// the thread. Two human comments, one malformed reply: the 1:1 pairing
+// consumes the reply for the EARLIER comment (clearing it), leaving the
+// LATER comment still missing -- it must get no hint, not a misleading
+// one claiming it needs bold markdown it never required.
+test('disposition evidence does not hint a still-missing human comment from a reply consumed by an earlier human comment', () => {
+  const summary = summarizeDispositionEvidenceForGate(
+    {
+      comments: [
+        {
+          id: 1,
+          createdAt: '2026-05-12T00:00:00Z',
+          body: 'First human review comment awaiting a reply.',
+          author: { login: 'reviewer-a' },
+        },
+        {
+          id: 2,
+          createdAt: '2026-05-12T00:30:00Z',
+          body: 'Second human review comment awaiting a reply.',
+          author: { login: 'reviewer-b' },
+        },
+        {
+          id: 3,
+          createdAt: '2026-05-12T01:00:00Z',
+          // Malformed (no bold), but presence-only suffices for a human
+          // comment -- the 1:1 pairing consumes this for comment 1 (the
+          // earlier of the two), leaving comment 2 still missing.
+          body: 'Accepted — will follow up.',
+          author: { login: 'idd-bot' },
+        },
+      ],
+      threads: [],
+    },
+    {
+      iddAgentLogins: ['idd-bot'],
+      advisoryBotLogins: ['chatgpt-codex-connector[bot]'],
+    },
+  );
+
+  assert.equal(summary.missingRegularCommentCount, 1);
+  assert.equal(summary.missingRegularComments[0].authorLogin, 'reviewer-b');
+  assert.equal(summary.missingRegularComments[0].hint, undefined);
+});
