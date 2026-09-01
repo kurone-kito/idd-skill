@@ -127,8 +127,11 @@ export function createFakeProviderAdapter(
     },
 
     listOpenWorkItems(): ProviderWorkItem[] {
+      // Port contract: raw REST lowercase state ('open'/'closed'), unlike
+      // getWorkItem's uppercased 'OPEN' -- see provider-port.mts's doc
+      // comment on this method (Copilot review, #2400).
       return Object.values(fixture.workItems ?? {}).filter(
-        (item) => item.state === 'OPEN',
+        (item) => item.state === 'open',
       );
     },
 
