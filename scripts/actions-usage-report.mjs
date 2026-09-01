@@ -39,9 +39,28 @@ export function billedMinutesFor(durationMs) {
  * belongs when its `pull_requests` list is empty (fork case, or
  * genuinely untracked) or includes `prNumber`; a non-empty list that
  * omits `prNumber` means the run belongs to a different pull request.
+ *
+ * Empty `pull_requests` also covers a same-repository `push` /
+ * `workflow_dispatch` run against the same branch that is not part of
+ * any pull request -- GitHub never populates that field for those event
+ * types either, not only for forks. {@link isPrFamilyEvent} closes that
+ * gap: callers apply it first so a non-PR-triggered run is excluded on
+ * its event type before this empty-list allowance can apply to it.
  */
 export function runBelongsToPr(pullRequests, prNumber) {
   return pullRequests.length === 0 || pullRequests.includes(prNumber);
+}
+/** Triggering events that can only fire in the context of a pull request.
+ * A `push` or `workflow_dispatch` run sharing the PR's branch name is
+ * never one of these, regardless of its `pull_requests` association. */
+export const PR_FAMILY_EVENTS = new Set([
+  'pull_request',
+  'pull_request_review',
+  'pull_request_review_comment',
+]);
+/** Whether `event` is one of {@link PR_FAMILY_EVENTS}. */
+export function isPrFamilyEvent(event) {
+  return PR_FAMILY_EVENTS.has(event);
 }
 /**
  * Aggregate already-fetched runs and jobs into an {@link ActionsUsageReport}.
@@ -189,12 +208,17 @@ function resolveOwnerRepo(owner, repo) {
  * so listing runs by `branch` (rather than the repository-wide recent-runs
  * list) captures the full review-loop cost in one scoped query; each
  * fetched run is then narrowed to this PR specifically via
- * {@link runBelongsToPr}.
+ * {@link isPrFamilyEvent} and {@link runBelongsToPr}.
  *
  * One extra `gh api` call per run fetches that run's own jobs (per-job
  * duration, not just the run's own wall-clock span, matters for a
- * matrix-strategy workflow like CodeQL). This is O(runs) API calls -- fine
- * for a manual, on-demand diagnostic tool investigating one merged PR, not
+ * matrix-strategy workflow like CodeQL), with `filter=all` so a rerun
+ * run's earlier attempts are also counted -- the jobs endpoint's own
+ * default (`filter=latest`) would otherwise silently drop every
+ * attempt but the most recent one, undercounting exactly the repeated-
+ * push/rerun cost this tool exists to measure. This is O(runs) API
+ * calls -- fine for a manual, on-demand diagnostic tool investigating
+ * one merged PR, not
  * something run in a hot path.
  */
 export function fetchActionsUsageForPr(
@@ -225,7 +249,11 @@ export function fetchActionsUsageForPr(
     '.workflow_runs[] | {id: .id, name: .name, event: .event, pull_requests: [.pull_requests[].number]}',
   ]);
   const runs = rawRuns
-    .filter((raw) => runBelongsToPr(raw.pull_requests, prNumber))
+    .filter(
+      (raw) =>
+        isPrFamilyEvent(raw.event) &&
+        runBelongsToPr(raw.pull_requests, prNumber),
+    )
     .map((raw) => ({
       id: raw.id,
       workflowName: raw.name,
@@ -235,7 +263,7 @@ export function fetchActionsUsageForPr(
   for (const run of runs) {
     const rawJobs = ghPaginatedJson([
       'api',
-      `repos/${owner}/${repo}/actions/runs/${run.id}/jobs?per_page=100`,
+      `repos/${owner}/${repo}/actions/runs/${run.id}/jobs?filter=all&per_page=100`,
       '--paginate',
       '--jq',
       '.jobs[] | {name: .name, started_at: .started_at, completed_at: .completed_at}',

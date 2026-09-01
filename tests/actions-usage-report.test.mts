@@ -4,6 +4,7 @@ import { test } from 'node:test';
 import {
   aggregateActionsUsage,
   billedMinutesFor,
+  isPrFamilyEvent,
   renderTable,
   runBelongsToPr,
   type UsageJob,
@@ -76,6 +77,21 @@ test('runBelongsToPr: a non-empty list including prNumber is kept', () => {
 
 test('runBelongsToPr: a non-empty list omitting prNumber is dropped (a different PR reused this branch)', () => {
   assert.equal(runBelongsToPr([1200], 2344), false);
+});
+
+test('isPrFamilyEvent: accepts only pull_request-family triggers', () => {
+  assert.equal(isPrFamilyEvent('pull_request'), true);
+  assert.equal(isPrFamilyEvent('pull_request_review'), true);
+  assert.equal(isPrFamilyEvent('pull_request_review_comment'), true);
+});
+
+test('isPrFamilyEvent: rejects a push/workflow_dispatch run sharing the branch name', () => {
+  // GitHub never populates pull_requests for these event types either, so
+  // the event check must run independently of runBelongsToPr's empty-list
+  // allowance -- not merely defer to it.
+  assert.equal(isPrFamilyEvent('push'), false);
+  assert.equal(isPrFamilyEvent('workflow_dispatch'), false);
+  assert.equal(isPrFamilyEvent('schedule'), false);
 });
 
 test('billedMinutesFor: rounds up to the whole minute, with a one-minute floor', () => {
