@@ -420,8 +420,7 @@ Before any mutating action in F3, apply the
 
    ```sh
    git fetch origin {development-branch}
-   git switch {development-branch} 2>/dev/null \
-     || git switch -c {development-branch} --track origin/{development-branch}
+   git switch {development-branch} || git switch -c {development-branch} --track origin/{development-branch}
    git merge --ff-only origin/{development-branch}
    ```
 

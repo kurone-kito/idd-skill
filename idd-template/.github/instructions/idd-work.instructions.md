@@ -104,22 +104,23 @@ WorkTrunk) instead.
 but is not listed in `git worktree list`, stop and report for manual
 cleanup before continuing.
 
-**Step 2 — Create**: first `git fetch origin {development-branch}` (may
-be missing or stale otherwise). Then use **WorkTrunk** if available.
-The create verb is `wt switch --create` (the older `wt new` subcommand
-was removed):
+**Step 2 — Create**: `<base-branch>` below is `{development-branch}` —
+resolve `developmentBranch` first, per
+[defaults](../../docs/policy-constants.md#branch-synchronization-defaults)
+(absent → live default; invalid/stale fails closed, never falls back).
+Then `git fetch origin {development-branch}` (the remote-tracking ref
+may be missing/stale otherwise). Then use **WorkTrunk** if available.
+The create verb is `wt switch --create`
+(the older `wt new` subcommand was removed):
 
 - macOS/Linux: `wt switch --create -b <base-branch> <branch-name>`
 - Windows: `git-wt switch --create -b <base-branch> <branch-name>`, or the
   same `wt switch --create -b <base-branch> <branch-name>` if `git-wt` is
   unavailable
 
-`<base-branch>` is `{development-branch}` — resolve `developmentBranch`
-per [defaults](../../docs/policy-constants.md#branch-synchronization-defaults)
-(absent → live default branch; invalid/stale fails closed, never falls
-back) before this step. Non-interactive/automation: append `-x <noop>`
-(e.g. `-x true`) so WorkTrunk creates, runs the pre-start hook, and
-exits without trying to change the caller's directory.
+Non-interactive/automation: append `-x <noop>` (e.g. `-x true`) so
+WorkTrunk creates, runs the pre-start hook, and exits without trying to
+change the caller's directory.
 
 If WorkTrunk is not available, choose the correct case:
 
