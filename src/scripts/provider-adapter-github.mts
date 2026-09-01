@@ -101,7 +101,7 @@ export function createGithubProviderAdapter(
     },
 
     resolveViewerLogin(): string {
-      return deps.resolveViewerLogin();
+      return deps.resolveViewerLogin(GH_TEXT_LOOP_TIMEOUT_OPTIONS);
     },
 
     resolveViewerLoginSafe(): {

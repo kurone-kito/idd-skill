@@ -147,7 +147,17 @@ export interface ProviderPort {
 
   /**
    * repository-identity. Throws on total failure (REST-then-GraphQL
-   * fallback, matches `gh-exec.mts`'s existing `resolveViewerLogin`).
+   * fallback, matches `gh-exec.mts`'s existing `resolveViewerLogin`). The
+   * adapter applies `GH_TEXT_LOOP_TIMEOUT_OPTIONS` to the REST leg --
+   * `resume-claim-routing.mts`'s pre-migration call already used that
+   * profile (the strictest of this method's callers), and since
+   * `DEFAULT_GH_TIMEOUT_MS` already equals its 30s timeout, the only
+   * actual delta is stdin-hang immunity (`stdio: ['ignore', ...]`), which
+   * is strictly hang-preventing and never output-changing for every other
+   * caller -- transport hygiene the port encapsulates, not a distinct
+   * call shape. The GraphQL fallback leg keeps its own defaults, matching
+   * `gh-exec.mts`'s original behavior (options thread to the REST leg
+   * only).
    */
   resolveViewerLogin(): string;
 

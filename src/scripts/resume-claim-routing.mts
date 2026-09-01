@@ -8,11 +8,6 @@
 import { parseCliArgs } from './cli-args.mts';
 import type { CollaboratorPermissionCache } from './collaborator-permission.mts';
 import { isAuthorizedForcedHandoffActor } from './collaborator-permission.mts';
-import {
-  GH_TEXT_LOOP_TIMEOUT_OPTIONS,
-  ghText,
-  resolveViewerLogin,
-} from './gh-exec.mts';
 import { loadPolicyConfig } from './idd-config.mts';
 import { listActivationNonces } from './marker-helpers.mts';
 import { normalizePolicyConfig } from './policy-helpers.mts';
@@ -29,6 +24,11 @@ import {
   parseReleaseComment,
   resolveActiveClaimWithForcedHandoffTrace,
 } from './protocol-helpers.mts';
+import {
+  createGithubProviderAdapter,
+  resolveCurrentGithubRepository,
+} from './provider-adapter-github.mts';
+import type { ProviderPort } from './provider-port.mts';
 
 /** Author reference embedded in GitHub REST payloads. */
 interface GhAuthorPayload {
@@ -466,34 +466,35 @@ function runCli(): void {
     process.env.GITHUB_TOKEN = args.ghToken;
   }
 
-  const owner =
-    args.owner ||
-    ghText(
-      ['repo', 'view', '--json', 'owner', '--jq', '.owner.login'],
-      GH_TEXT_LOOP_TIMEOUT_OPTIONS,
-    );
-  const repo =
-    args.repo ||
-    ghText(
-      ['repo', 'view', '--json', 'name', '--jq', '.name'],
-      GH_TEXT_LOOP_TIMEOUT_OPTIONS,
-    );
+  const currentRepo =
+    args.owner && args.repo ? null : resolveCurrentGithubRepository();
+  const owner = args.owner || currentRepo?.owner || '';
+  const repo = args.repo || currentRepo?.repo || '';
   const repository = `${owner}/${repo}`;
+  const port = createGithubProviderAdapter(owner, repo);
   const policy = loadPolicy(args.policy);
   const staleAgeMs = args.staleAgeMs > 0 ? args.staleAgeMs : policy.staleAgeMs;
   const trustedLogins = resolveTrustedLogins({
     fromArgs: args.trustedMarkerLogins,
     fromPolicy: policy.trustedMarkerActors,
-    currentLogin: resolveViewerLogin(GH_TEXT_LOOP_TIMEOUT_OPTIONS),
+    currentLogin: port.resolveViewerLogin(),
   });
   const trustedSet = new Set(trustedLogins.map((login) => login.toLowerCase()));
-  const comments = fetchIssueComments(repository, args.issue);
-  const issue = ghJson(['api', `repos/${repository}/issues/${args.issue}`]) as {
-    number?: unknown;
-    title?: unknown;
-    state?: unknown;
-    html_url?: unknown;
-    url?: unknown;
+  const comments = fetchIssueComments(port, args.issue);
+  const rawIssue = port.getWorkItem(args.issue ?? 0);
+  if (!rawIssue) {
+    throw new Error(`issue #${args.issue} not found`);
+  }
+  // Remapped back to the raw REST (snake_case) shape the output block
+  // below expects -- ProviderWorkItem's camelCase fields (and getWorkItem's
+  // uppercased state) are a port-level convention, not this file's
+  // pre-migration contract.
+  const issue = {
+    number: rawIssue.number,
+    title: rawIssue.title,
+    state: rawIssue.state.toLowerCase(),
+    html_url: rawIssue.htmlUrl,
+    url: rawIssue.url,
   };
   const forcedHandoffEnabled = policy.forcedHandoff.mode === 'human-gated';
   const forcedHandoffAuthorityPolicy = policy.forcedHandoff.authorityPolicy;
@@ -1065,22 +1066,18 @@ warnings / evidence):
 }
 
 function fetchIssueComments(
-  repository: string,
+  port: ProviderPort,
   issueNumber: number | null,
 ): IssueCommentPayload[] {
-  const comments: IssueCommentPayload[] = [];
-  const pageSize = 100;
-  for (let page = 1; ; page += 1) {
-    const pageItems = ghJson([
-      'api',
-      `repos/${repository}/issues/${issueNumber}/comments?per_page=${pageSize}&page=${page}`,
-    ]) as IssueCommentPayload[];
-    comments.push(...pageItems);
-    if (pageItems.length < pageSize) {
-      break;
-    }
-  }
-  return comments;
+  // Remapped back to the raw snake_case shape this file's own consumers
+  // expect (body / created_at / user.login) -- listWorkItemComments's
+  // camelCase ProviderComment shape is a port-level convention, not this
+  // file's pre-migration contract.
+  return port.listWorkItemComments(issueNumber ?? 0).map((comment) => ({
+    body: comment.body,
+    created_at: comment.createdAt,
+    user: { login: comment.authorLogin },
+  }));
 }
 
 // Read-and-parse failure semantics (explicit path throws; default path
@@ -1214,43 +1211,12 @@ function fetchOpenLinkedPrReferences(
   if (!owner || !repo || !Number.isInteger(issueNumber)) {
     return references;
   }
-  const query =
-    'query($owner:String!,$repo:String!,$number:Int!){' +
-    'repository(owner:$owner,name:$repo){issue(number:$number){' +
-    // `last` so the most recent connect/disconnect events win: an issue
-    // with many such events must not have newer DISCONNECTED_EVENTs missed.
-    'timelineItems(last:100,itemTypes:[CONNECTED_EVENT,DISCONNECTED_EVENT])' +
-    '{nodes{__typename ' +
-    '... on ConnectedEvent{subject{__typename ... on PullRequest{number state}}} ' +
-    '... on DisconnectedEvent{subject{__typename ... on PullRequest{number}}}' +
-    '}}}}}';
-  let data: unknown;
-  try {
-    data = ghJson([
-      'api',
-      'graphql',
-      '-f',
-      `query=${query}`,
-      '-f',
-      `owner=${owner}`,
-      '-f',
-      `repo=${repo}`,
-      '-F',
-      `number=${issueNumber}`,
-    ]);
-  } catch {
-    return references;
-  }
-  const nodes = (
-    data as {
-      data?: {
-        repository?: { issue?: { timelineItems?: { nodes?: unknown } } };
-      };
-    } | null
-  )?.data?.repository?.issue?.timelineItems?.nodes;
-  if (!Array.isArray(nodes)) {
-    return references;
-  }
+  // Number.isInteger(issueNumber) above already excludes null; TS can't
+  // narrow a plain boolean-returning call the way a type predicate would.
+  const nodes = createGithubProviderAdapter(
+    owner,
+    repo,
+  ).getConnectedPullRequestEventsSingle(issueNumber as number);
   // The last connect/disconnect event per PR wins (timeline is chronological).
   const connected = new Map<number, boolean>();
   const states = new Map<number, string>();
@@ -1281,22 +1247,4 @@ function fetchOpenLinkedPrReferences(
     }
   }
   return references;
-}
-
-function ghJson(args: string[]): unknown {
-  return JSON.parse(runGh(args).trim() || '[]');
-}
-
-function runGh(args: string[]): string {
-  try {
-    return ghText(args, GH_TEXT_LOOP_TIMEOUT_OPTIONS);
-  } catch (error) {
-    const stderr = String(
-      (error as { stderr?: unknown } | null)?.stderr ?? '',
-    ).trim();
-    if (stderr) {
-      throw new Error(`gh command failed: ${stderr}`);
-    }
-    throw error;
-  }
 }

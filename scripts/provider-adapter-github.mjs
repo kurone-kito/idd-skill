@@ -45,7 +45,7 @@ export function createGithubProviderAdapter(owner, repo, deps = DEFAULT_DEPS) {
       return { provider: 'github', owner, name: repo };
     },
     resolveViewerLogin() {
-      return deps.resolveViewerLogin();
+      return deps.resolveViewerLogin(GH_TEXT_LOOP_TIMEOUT_OPTIONS);
     },
     resolveViewerLoginSafe() {
       try {
