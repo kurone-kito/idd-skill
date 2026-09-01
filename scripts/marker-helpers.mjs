@@ -1281,6 +1281,7 @@ function isValidForcedHandoffOperationalMarker(body) {
   return parseForcedHandoffComment(body, '') !== null;
 }
 export function isValidIsoTimestamp(value) {
+  if (typeof value !== 'string') return false;
   const time = Date.parse(value);
   if (!Number.isFinite(time)) return false;
   const normalize = (ts) => ts.replace('.000Z', 'Z');

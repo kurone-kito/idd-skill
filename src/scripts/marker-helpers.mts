@@ -1713,8 +1713,9 @@ function isValidForcedHandoffOperationalMarker(body: string): boolean {
 }
 
 export function isValidIsoTimestamp(value: unknown): value is string {
-  const time = Date.parse(value as string);
+  if (typeof value !== 'string') return false;
+  const time = Date.parse(value);
   if (!Number.isFinite(time)) return false;
   const normalize = (ts: string) => ts.replace('.000Z', 'Z');
-  return normalize(new Date(time).toISOString()) === normalize(value as string);
+  return normalize(new Date(time).toISOString()) === normalize(value);
 }
