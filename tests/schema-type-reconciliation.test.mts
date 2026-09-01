@@ -888,6 +888,7 @@ const discoverRoadmapUnionFixture = {
       roadmapMarkerId: '',
       autopilotSuitability: 5,
       effort: 'S',
+      milestone: null,
       sourceRoots: [100],
     },
     {
@@ -899,6 +900,7 @@ const discoverRoadmapUnionFixture = {
       roadmapMarkerId: '',
       autopilotSuitability: null,
       effort: null,
+      milestone: null,
       sourceRoots: [100, 200],
     },
   ],

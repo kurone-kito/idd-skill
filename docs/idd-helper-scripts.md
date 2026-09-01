@@ -316,10 +316,18 @@ default below is unchanged.
   - `leaves`: `[{ number: number, title: string, state: string,`
     `labels: string[], classification: "execution",`
     `roadmapMarkerId: string, autopilotSuitability: number | null,`
-    `effort: "S" | "M" | "L" | null, sourceRoots: number[] }]` — the union of
-    open execution leaves. Each leaf records every roadmap root it is reachable
-    from in `sourceRoots` (provenance); a leaf shared by sibling epics appears
-    **once** and is never double-counted.
+    `effort: "S" | "M" | "L" | null, milestone: string | null,`
+    `sourceRoots: number[] }]` — the union of open execution leaves. Each
+    leaf records every roadmap root it is reachable from in `sourceRoots`
+    (provenance); a leaf shared by sibling epics appears **once** and is
+    never double-counted. `milestone` (`#2340`) is the leaf's **open**
+    milestone title, or `null` when it has no milestone, the milestone is closed,
+    or the field is absent from the API response — the input to
+    `discover.milestoneScope`'s A4 Step 2 tie-breaker (see
+    [Discover](../.github/instructions/idd-discover.instructions.md)); this
+    same field is emitted by `discover-orphan-filter.mjs`'s `orphans` /
+    `routed_to_human` candidates too, though that helper does not itself
+    read `discover.milestoneScope`.
   - **Opt-in leaf annotations** (additive; absent flags leave the leaf shape
     byte-stable and make no extra API call). `--with-claim-state` adds
     `activeClaim` (always an object: `{ present, stale, claimId, agentId,`
@@ -366,9 +374,11 @@ default below is unchanged.
     "is there more startable work?" without iterating every leaf; both are
     absent otherwise so the flag-absent shape stays byte-stable.
   - **Ranking** (global-by-score): `leaves` is sorted by
-    `autopilotSuitability` **descending**, tie-broken by issue number
-    **ascending** (stable). A missing or out-of-range score is treated as
-    the configured suitability floor for ordering so unscored work is not
+    `autopilotSuitability` **descending**, then an optional
+    `discover.milestoneScope` match (`#2340`), then `effort`
+    **ascending** (`S` < `M` < `L`), then issue number **ascending**
+    (stable). A missing or out-of-range score is treated as the
+    configured suitability floor for ordering so unscored work is not
     buried, but a coherently scored leaf never ranks below an unscored leaf
     at the same effective value — scored work always sorts first at a tie.
     The score is an advisory ranking hint only; it never replaces the

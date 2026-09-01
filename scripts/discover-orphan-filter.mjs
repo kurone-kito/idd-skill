@@ -273,6 +273,7 @@ export async function filterOrphanIssues(issues, options = {}) {
             ? options.markerPrefix
             : undefined,
         ),
+        milestone: extractOpenMilestoneTitle(issue.milestone),
       });
       continue;
     }
@@ -512,8 +513,8 @@ Output schema:
   "repository": {"owner": "...", "repo": "..."},
   "diagnostics": {"pr": 404},
   "policy": {"source": "...", "orphanFirstPolicy": "none|maintainer-approved|public-disabled", "markerPrefix": "...", "authoringLabelName": "...", "authoringStaleAge": "...", "autopilotSuitabilityFloor": 3, "autopilotSuitabilityEnabled": true},
-  "orphans": [{"number": 1, "title": "...", "state": "OPEN", "reason": "orphan|blocked_references_closed", "url": "...", "autopilotSuitability": 4, "effort": "S|M|L|null"}],
-  "routed_to_human": [{"number": 2, "title": "...", "state": "OPEN", "reason": "orphan", "url": "...", "autopilotSuitability": 1, "effort": "S|M|L|null"}],
+  "orphans": [{"number": 1, "title": "...", "state": "OPEN", "reason": "orphan|blocked_references_closed", "url": "...", "autopilotSuitability": 4, "effort": "S|M|L|null", "milestone": "v0.8.0|null"}],
+  "routed_to_human": [{"number": 2, "title": "...", "state": "OPEN", "reason": "orphan", "url": "...", "autopilotSuitability": 1, "effort": "S|M|L|null", "milestone": "v0.8.0|null"}],
   "filtered": {
     "roadmap_marker": [...],
     "blocked_by_marker": [...],
@@ -623,7 +624,29 @@ function normalizeIssue(issue) {
     labelEvents: Array.isArray(issue.labelEvents) ? issue.labelEvents : [],
     body: issue.body ?? '',
     url: issue.url ?? issue.html_url ?? '',
+    milestone: issue.milestone,
   };
+}
+/**
+ * Read the OPEN milestone's title from a REST `milestone` object. Returns
+ * null for a missing/non-object field, a closed milestone, or a
+ * non-string/empty title -- every one of these is the same "no scope
+ * input" neutral case for the surfaced `milestone` output field (#2340).
+ * Duplicated from `discover-roadmap-graph.mts`'s identical helper rather
+ * than shared, matching this file's own already-duplicated
+ * `normalizeIssue` pattern.
+ */
+function extractOpenMilestoneTitle(milestone) {
+  if (typeof milestone !== 'object' || milestone === null) {
+    return null;
+  }
+  const record = milestone;
+  if (String(record.state ?? '').toLowerCase() !== 'open') {
+    return null;
+  }
+  return typeof record.title === 'string' && record.title.length > 0
+    ? record.title
+    : null;
 }
 function resolveIssueLabelEvents(issue, fetchLabelEventsByIssueNumber) {
   if (Array.isArray(issue.labelEvents) && issue.labelEvents.length > 0) {

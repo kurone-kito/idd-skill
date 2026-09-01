@@ -160,6 +160,39 @@ on. The desync never crosses score bands and never bypasses the A4.5/A5
 gates; the in-band offset function is replaceable without affecting these
 invariants.
 
+### A4 Step 2 — Rationale: milestone-scope preference
+
+A GitHub milestone groups scope for a release (e.g. `v0.8.0`) purely as
+human-facing material; Discover never read it before
+kurone-kito/idd-skill#2340. A4 Step 2
+already ranks by suitability score, then the optional concurrent-selection
+desync, then the effort hint — none of which prefer the work a release is
+actually waiting on, so concurrent autopilot sessions drain the backlog
+issue-by-issue with no way to converge on a milestone's scope first. An
+operator's only lever was re-explaining the priority to every session by
+hand.
+
+`discover.milestoneScope` (optional string; unset means off) closes that
+gap the same way `selectionDesync` and the effort hint do: a **soft**,
+same-score-band-only preference, never a gate. When set, a candidate whose
+**OPEN** milestone title equals the configured value sorts ahead of other
+candidates in the same suitability-score tie band, positioned after
+selection-desync (session spread stays available even within a
+milestone-preferred set) and before the effort hint (release intent
+outranks size preference, but both still apply only inside one band).
+
+The preference is symmetric-neutral by construction: an unset or empty
+`discover.milestoneScope`, a candidate with no milestone, a **closed**
+milestone, or a missing `milestone` field from the API all collapse to
+the same "no preference" case, so a partial or stale read never
+silently misroutes a candidate — it just falls through to the
+pre-existing effort/issue-number order. Closed milestones are
+deliberately excluded (not merely ranked lower) so a candidate never
+keeps sorting ahead of its band after its release has already shipped.
+`discover-roadmap-graph` and `discover-orphan-filter` surface the
+resolved `milestone` title in their own outputs so the ranking input is
+visible evidence, not a value an agent has to re-fetch to audit a pick.
+
 ### A4 — Scored-vs-unscored floor tie-breaker: what still ties afterward
 
 Moved from the Discover phase file to keep the capped instruction

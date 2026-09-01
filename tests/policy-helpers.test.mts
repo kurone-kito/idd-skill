@@ -233,6 +233,35 @@ test('discover.selectionDesync defaults to off and accepts session-offset', () =
   );
 });
 
+test('discover.milestoneScope defaults to off (empty string) and accepts a configured value', () => {
+  assert.equal(POLICY_DEFAULTS.discover.milestoneScope, '');
+  // Absence disables the preference entirely.
+  assert.equal(normalizePolicyConfig({}).discover.milestoneScope, '');
+  assert.equal(
+    normalizePolicyConfig({ discover: { milestoneScope: 'v0.8.0' } }).discover
+      .milestoneScope,
+    'v0.8.0',
+  );
+  // An explicit empty string yields the same off state as absence.
+  assert.equal(
+    normalizePolicyConfig({ discover: { milestoneScope: '' } }).discover
+      .milestoneScope,
+    '',
+  );
+  // A non-string value is rejected deterministically -- falls back to the
+  // off default rather than throwing or coercing to a truthy string.
+  assert.equal(
+    normalizePolicyConfig({ discover: { milestoneScope: 42 } }).discover
+      .milestoneScope,
+    '',
+  );
+  assert.equal(
+    normalizePolicyConfig({ discover: { milestoneScope: ['v0.8.0'] } }).discover
+      .milestoneScope,
+    '',
+  );
+});
+
 test('discover.legacyRoots defaults to [] and accepts a valid issue-number array', () => {
   assert.deepEqual(POLICY_DEFAULTS.discover.legacyRoots, []);
   assert.deepEqual(normalizePolicyConfig({}).discover.legacyRoots, []);

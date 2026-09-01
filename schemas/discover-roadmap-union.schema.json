@@ -55,7 +55,7 @@
     },
     "leaves": {
       "type": "array",
-      "description": "De-duplicated union of open execution leaves across every enumerated root, ordered by compareUnionLeaves: autopilot suitability descending (scored before unscored at the same effective score), then effort ascending (S before M before L), then issue number ascending.",
+      "description": "De-duplicated union of open execution leaves across every enumerated root, ordered by compareUnionLeaves: autopilot suitability descending (scored before unscored at the same effective score), then an optional discover.milestoneScope match, then effort ascending (S before M before L), then issue number ascending.",
       "items": {
         "type": "object",
         "required": [
@@ -67,6 +67,7 @@
           "roadmapMarkerId",
           "autopilotSuitability",
           "effort",
+          "milestone",
           "sourceRoots"
         ],
         "additionalProperties": false,
@@ -121,6 +122,13 @@
               "M",
               "L"
             ]
+          },
+          "milestone": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Title of this leaf's OPEN milestone (string) when it has one and it is open, or null when it has none, the milestone is closed, or the field was absent from the API response -- every null case is the same neutral input for the discover.milestoneScope A4 Step 2 preference (#2340)."
           },
           "sourceRoots": {
             "type": "array",

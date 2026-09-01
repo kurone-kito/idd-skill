@@ -292,6 +292,13 @@ export interface RoadmapGraphNode {
   roadmapMarkerId: string;
   autopilotSuitability: number | null;
   effort: EffortHint | null;
+  /**
+   * Title of this node's OPEN milestone, or null when it has none, the
+   * milestone is closed, or the field was absent from the API response —
+   * every one of those is the same "no scope input" case for A4 Step 2's
+   * `discover.milestoneScope` preference (#2340).
+   */
+  milestone: string | null;
   depth: number;
   /**
    * Active-claim annotation, present only under `--with-claim-state` and only
@@ -394,6 +401,14 @@ export interface RoadmapUnionLeaf {
   autopilotSuitability: number | null;
   effort: EffortHint | null;
   /**
+   * Title of this leaf's OPEN milestone, or null when it has none, the
+   * milestone is closed, or the field was absent from the API response —
+   * every one of those is the same "no scope input" case for A4 Step 2's
+   * `discover.milestoneScope` preference (#2340). Compared against
+   * `discover.milestoneScope` by {@link compareUnionLeaves}.
+   */
+  milestone: string | null;
+  /**
    * The set of open roadmap roots this leaf is reachable from, sorted
    * ascending. A leaf reachable from several sibling epics carries every
    * source root here and is never double-counted in the union.
@@ -476,6 +491,13 @@ interface NormalizedIssue {
   // traversal skip the per-node sub-issue GraphQL round-trip (#1072); null is
   // "unknown" and falls back to querying so behavior is unchanged.
   subIssueSummaryTotal: number | null;
+  // Title of this issue's OPEN milestone, or null when it has none, the
+  // milestone is closed, or the `milestone` field is absent from the REST
+  // payload (an API omission is neutral, matching "no milestone" -- #2340).
+  // A closed milestone's title is deliberately not carried through: ranking
+  // treats it as absent, so a candidate never keeps sorting ahead of its
+  // score band after its release ships.
+  openMilestoneTitle: string | null;
 }
 
 interface RoadmapNodeRecord {
@@ -487,6 +509,7 @@ interface RoadmapNodeRecord {
   roadmapMarkerId: string;
   autopilotSuitability: number | null;
   effort: EffortHint | null;
+  milestone: string | null;
   depth: number;
 }
 
@@ -606,6 +629,15 @@ interface EnumerateAllRoadmapsGraphOptions
    * default autopilot-suitability floor when unset or invalid.
    */
   floor?: unknown;
+  /**
+   * Configured `discover.milestoneScope` from policy (#2340). When a
+   * non-empty string, a leaf whose OPEN milestone title equals this value
+   * sorts ahead of other leaves within the same suitability-score band, in
+   * {@link compareUnionLeaves}. A non-string or empty value normalizes to
+   * `''`, disabling the preference entirely — ranking is then unchanged
+   * from before this option existed.
+   */
+  milestoneScope?: unknown;
 }
 
 interface ParsedArgs {
@@ -657,7 +689,7 @@ if (import.meta.main) {
     claimTiming?: { staleAge?: unknown };
     trustedMarkerActors?: unknown;
     labels?: { roadmapLabelName?: unknown };
-    discover?: { legacyRoots?: unknown };
+    discover?: { legacyRoots?: unknown; milestoneScope?: unknown };
   };
 
   // The claim-state annotation is strictly opt-in: only when --with-claim-state
@@ -682,6 +714,7 @@ if (import.meta.main) {
         markerPrefix: policy.markerPrefix,
         roadmapLabelName: policy.labels?.roadmapLabelName,
         floor: policy.autopilotSuitability?.floor,
+        milestoneScope: policy.discover?.milestoneScope,
         owner,
         repo,
         loadIssue: buildIssueLoader(owner, repo),
@@ -832,6 +865,7 @@ export async function enumerateRoadmapGraph(
       roadmapMarkerId: node.roadmapMarkerId,
       autopilotSuitability: node.autopilotSuitability ?? null,
       effort: node.effort ?? null,
+      milestone: node.milestone ?? null,
       depth: node.depth,
     }))
     .sort(compareByNumber);
@@ -1142,6 +1176,7 @@ export async function enumerateRoadmapGraph(
       roadmapMarkerId: classification.roadmapMarkerId,
       autopilotSuitability: parseAutopilotSuitability(issue.body, markerPrefix),
       effort: parseEffort(issue.body, markerPrefix),
+      milestone: issue.openMilestoneTitle,
       depth,
     });
     recordProvenancePath(issue.number, path);
@@ -1216,7 +1251,8 @@ function isExpectedRootEnumerationFailure(
  * double-counted.
  *
  * Ranking (global-by-score): the union is sorted by `autopilotSuitability`
- * DESCENDING, tie-broken by issue number ASCENDING (stable). Missing or
+ * DESCENDING, tie-broken by an optional `discover.milestoneScope` match
+ * (#2340), then effort, then issue number ASCENDING (stable). Missing or
  * out-of-range suitability is treated as the configured floor for
  * ordering, but a leaf with no coherent score never ranks above a scored
  * leaf at the same effective value — scored work always sorts first at a
@@ -1235,6 +1271,10 @@ export async function enumerateAllRoadmapsGraph(
   // 1-5, falling back to the default when unset) once, then rank unscored
   // leaves at that configured floor.
   const floor = normalizeAutopilotSuitabilityFloor(options.floor);
+  // Empty string disables the preference entirely -- same "no scope input"
+  // fallback `parseNonEmptyString` gives policy-helpers.mts callers (#2340).
+  const milestoneScope =
+    typeof options.milestoneScope === 'string' ? options.milestoneScope : '';
   const loadOpenRoadmapRoots = options.loadOpenRoadmapRoots;
   if (typeof loadOpenRoadmapRoots !== 'function') {
     throw new Error(
@@ -1330,6 +1370,7 @@ export async function enumerateAllRoadmapsGraph(
         roadmapMarkerId: node.roadmapMarkerId,
         autopilotSuitability: node.autopilotSuitability,
         effort: node.effort,
+        milestone: node.milestone,
         sourceRoots: [graph.root.number],
       });
     }
@@ -1364,7 +1405,9 @@ export async function enumerateAllRoadmapsGraph(
       ...leaf,
       sourceRoots: [...leaf.sourceRoots].sort((left, right) => left - right),
     }))
-    .sort((left, right) => compareUnionLeaves(left, right, floor));
+    .sort((left, right) =>
+      compareUnionLeaves(left, right, floor, milestoneScope),
+    );
 
   // Opt-in (#1008): annotate the deduped union leaves once each. The per-root
   // enumerations above intentionally run without `claimState`, so each issue's
@@ -1461,16 +1504,34 @@ export async function enumerateAllRoadmapsGraph(
  *      never ranks below an unscored leaf at the same effective value, so
  *      "missing is treated as the configured floor" never lets unscored
  *      work jump ahead of genuinely scored work;
- *   3. issue number ASCENDING — a stable, repository-deterministic
+ *   3. milestone-scope match first (#2340) — when `milestoneScope` is a
+ *      non-empty string, a leaf whose OPEN milestone title equals it sorts
+ *      ahead of a leaf that does not match (or has no open milestone at
+ *      all) within the same effective-score band. An empty `milestoneScope`
+ *      makes every leaf compare equal here, so this step is a no-op and the
+ *      order falls straight through to the next key — byte-identical to
+ *      before this option existed;
+ *   4. effort ordinal ASCENDING (soft tie-breaker) — within a still-tied
+ *      band prefer the lower-effort leaf (S < M < L); a missing/invalid
+ *      hint resolves to the neutral middle ordinal via `effortOrdinal`, so
+ *      a band with no effort hints stays ordered by issue number exactly
+ *      as before;
+ *   5. issue number ASCENDING — a stable, repository-deterministic
  *      tie-break that keeps the order from thrashing between epics.
  *
+ * None of steps 3-4 ever cross a score band or drop a leaf — a large,
+ * out-of-scope issue is still selectable when it is the only ready work.
+ *
  * `floor` is the configured `autopilotSuitability.floor` (already
- * normalized to an integer 1-5). The comparator stays a total order.
+ * normalized to an integer 1-5). `milestoneScope` is the configured
+ * `discover.milestoneScope`, already normalized to `''` (off) for any
+ * non-string input. The comparator stays a total order.
  */
 function compareUnionLeaves(
   left: RoadmapUnionLeaf,
   right: RoadmapUnionLeaf,
   floor: number,
+  milestoneScope: string,
 ): number {
   const leftScored = isAutopilotSuitabilityScore(left.autopilotSuitability);
   const rightScored = isAutopilotSuitabilityScore(right.autopilotSuitability);
@@ -1481,16 +1542,19 @@ function compareUnionLeaves(
   const rightEffective = rightScored
     ? (right.autopilotSuitability as number)
     : floor;
-  // Soft effort tie-breaker (after the suitability score, before the
-  // lowest-issue-number fallback): within one effective-score band prefer
-  // the lower-effort leaf (S < M < L). A missing/invalid hint resolves to
-  // the neutral middle ordinal via effortOrdinal, so a band with no effort
-  // hints stays ordered by issue number exactly as before. This never
-  // crosses a score band and never drops a leaf — a large issue is still
-  // selectable when it is the only ready work.
+  // A leaf "matches" only with a non-empty configured scope AND an equal
+  // OPEN milestone title -- an empty milestoneScope, a null leaf.milestone
+  // (no milestone, closed, or API-omitted), and a non-matching title all
+  // compare as `false`, so leftMatch === rightMatch (both false) whenever
+  // the preference is off or neither side is in scope, making this term
+  // `0` and falling through to the effort tie-breaker unchanged.
+  const leftMatch = milestoneScope !== '' && left.milestone === milestoneScope;
+  const rightMatch =
+    milestoneScope !== '' && right.milestone === milestoneScope;
   return (
     rightEffective - leftEffective ||
     Number(rightScored) - Number(leftScored) ||
+    Number(rightMatch) - Number(leftMatch) ||
     effortOrdinal(left.effort) - effortOrdinal(right.effort) ||
     left.number - right.number
   );
@@ -2447,6 +2511,7 @@ function normalizeIssue(issue: {
   labels?: unknown;
   pull_request?: unknown;
   sub_issues_summary?: unknown;
+  milestone?: unknown;
 }): NormalizedIssue {
   return {
     number: Number.parseInt(String(issue.number ?? issue.id ?? 0), 10),
@@ -2456,7 +2521,27 @@ function normalizeIssue(issue: {
     labels: normalizeLabels(issue.labels),
     isPullRequest: Boolean(issue.pull_request),
     subIssueSummaryTotal: extractSubIssueSummaryTotal(issue.sub_issues_summary),
+    openMilestoneTitle: extractOpenMilestoneTitle(issue.milestone),
   };
+}
+
+/**
+ * Read the OPEN milestone's title from a REST `milestone` object. Returns
+ * null for a missing/non-object field, a closed milestone, or a
+ * non-string/empty title -- every one of these is the same "no scope input"
+ * neutral case for A4 Step 2's milestone preference (#2340).
+ */
+function extractOpenMilestoneTitle(milestone: unknown): string | null {
+  if (typeof milestone !== 'object' || milestone === null) {
+    return null;
+  }
+  const record = milestone as { state?: unknown; title?: unknown };
+  if (String(record.state ?? '').toLowerCase() !== 'open') {
+    return null;
+  }
+  return typeof record.title === 'string' && record.title.length > 0
+    ? record.title
+    : null;
 }
 
 /**
