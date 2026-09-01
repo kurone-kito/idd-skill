@@ -188,7 +188,7 @@
     "waiver": {
       "type": "object",
       "description": "Escape-hatch evidence for a maintainer-authorized external-check waiver, evaluated only once deadline.passed or terminal.state is COPILOT_UNAVAILABLE.",
-      "required": ["mode", "checkSelector", "activeClaimId", "validCount"],
+      "required": ["mode", "checkSelector", "activeClaimId", "validCount", "outageRelieved"],
       "additionalProperties": false,
       "properties": {
         "mode": {
@@ -207,6 +207,10 @@
           "type": "integer",
           "description": "Count of valid external-check-waiver markers matching checkSelector.",
           "minimum": 0
+        },
+        "outageRelieved": {
+          "type": "boolean",
+          "description": "kurone-kito/idd-skill#2353: true when a repository-scoped providerOutage.declarationTarget declaration relieves this gate's own selector, independent of validCount (which stays direct-per-pull-request-waiver-marker-only). Still requires this pull request's own proven terminal-unavailable state and a waivableSelectors match, never the deadline-only opener."
         }
       }
     },
@@ -369,7 +373,7 @@
     },
     "waived": {
       "type": "boolean",
-      "description": "True when applicability.status is applicable or indeterminate (never not_applicable) and at least one valid external-check waiver covers this gate; deliberately still reachable when indeterminate."
+      "description": "True when applicability.status is applicable or indeterminate (never not_applicable) and either at least one valid external-check waiver covers this gate, or an active provider-outage declaration relieves it (kurone-kito/idd-skill#2353); deliberately still reachable when indeterminate."
     },
     "ready": {
       "type": "boolean",

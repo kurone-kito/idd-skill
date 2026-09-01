@@ -732,6 +732,7 @@ const advisoryConvergenceFixture = {
     checkSelector: 'idd-advisory-convergence',
     activeClaimId: '',
     validCount: 0,
+    outageRelieved: false,
   },
   dispositionEvidence: {
     missingRegularCommentCount: 0,

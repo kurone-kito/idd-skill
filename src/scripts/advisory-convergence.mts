@@ -114,6 +114,11 @@ import { parseCanonicalIntegerOrNull, parseCliArgs } from './cli-args.mts';
 import type { CollaboratorPermissionCache } from './collaborator-permission.mts';
 import { isAuthorizedForcedHandoffActor } from './collaborator-permission.mts';
 import {
+  type AuthorityEvidence,
+  normalizeAuthorityEvidence,
+  resolveCollaboratorAuthority,
+} from './external-check-waiver.mts';
+import {
   GH_TEXT_LOOP_OPTIONS,
   type GhTextOptions,
   ghApiJson,
@@ -141,6 +146,10 @@ import {
   summarizeDispositionEvidenceForGate,
   summarizeExternalCheckWaivers,
 } from './protocol-helpers.mts';
+import {
+  evaluateProviderOutageRelief,
+  resolveProviderOutageDeclaration,
+} from './provider-outage-declaration.mts';
 // #1806: the latest-review Clause 1 evidence (types + pure evaluator + the
 // GraphQL fetch behind it) moved to `review-clause.mts` so
 // `rerun-advisory-convergence.mts` can reuse the SAME evidence this gate
@@ -326,6 +335,12 @@ export interface AdvisoryConvergenceWaiver {
   checkSelector: string;
   activeClaimId: string;
   validCount: number;
+  /** #2353: whether a repository-scoped `providerOutage.declarationTarget`
+   * declaration relieves this gate's own selector -- independent of
+   * `validCount`, which stays direct-per-pull-request-waiver-marker-only
+   * (the schema-locked, truthfully-reported count #2021 already
+   * established). See {@link evaluateProviderOutageRelief}. */
+  outageRelieved: boolean;
 }
 
 /** Scope gate evidence for the advisory-convergence verdict.
@@ -564,6 +579,16 @@ export interface AdvisoryConvergenceOptions {
   waiverMode?: string;
   waiverMaxValidity?: string;
   waiverCheckSelector?: string;
+  /** #2353: whether an active `providerOutage.declarationTarget`
+   * declaration exists for THIS gate's own selector, already resolved by
+   * the caller (fetch, validity, actor authority -- see
+   * `resolveProviderOutageDeclaration`). Purely additive and never itself
+   * sufficient: the waiver escape-hatch computation below still requires
+   * this PR's own `terminalUnavailable` state (never the deadline-only
+   * opener) and a `waivableSelectors` match, mirroring the direct
+   * per-pull-request waiver's own requirements exactly. Omitted/false (the
+   * default) never relieves anything, unchanged pre-#2353 behavior. */
+  outageDeclarationActive?: boolean;
   /** Bounded same-HEAD advisory reroll cap (#1511), `advisoryWait.same-
    * HeadRerollCap`. Defaults to {@link DEFAULT_ADVISORY_SAME_HEAD_REROLL_CAP}
    * when omitted or non-finite. */
@@ -1312,6 +1337,13 @@ export function computeAdvisoryConvergenceVerdict(
     String(options.waiverCheckSelector ?? '').trim() ||
     ADVISORY_CONVERGENCE_CHECK_SELECTOR;
   let validWaiverCount = 0;
+  // #2353: default when the enclosing precondition never opens -- no
+  // declaration relief can apply before the SAME precondition the direct
+  // waiver above requires has opened.
+  let outageRelief = {
+    relieved: false,
+    reason: 'waiver precondition not open',
+  };
   if (
     !converged &&
     (deadlinePassed || terminalUnavailable) &&
@@ -1346,24 +1378,42 @@ export function computeAdvisoryConvergenceVerdict(
     validWaiverCount = waiverEvidence.valid.filter(
       (entry) => entry.checkSelector === waiverCheckSelector,
     ).length;
+
+    // #2353: a repository-scoped `providerOutage.declarationTarget`
+    // declaration substitutes for a per-pull-request waiver marker on THIS
+    // selector, gated by the SAME enclosing precondition as the direct
+    // waiver above, plus `evaluateProviderOutageRelief`'s own additional
+    // requirement that THIS pull request's own terminal-unavailable state
+    // independently holds -- never the deadline-only opener, even though
+    // the deadline path can also reach this branch. A declaration active
+    // only under a passed deadline (no proven terminal state) therefore
+    // still yields `relieved: false` here, by that function's own contract.
+    outageRelief = evaluateProviderOutageRelief({
+      declarationActive: options.outageDeclarationActive === true,
+      prTerminalUnavailable: terminalUnavailable,
+      requestedSelector: waiverCheckSelector,
+      waivableSelectors: [...(options.waivableSelectors ?? [])],
+    });
   }
   const waiver: AdvisoryConvergenceWaiver = {
     mode: waiverMode,
     checkSelector: waiverCheckSelector,
     activeClaimId,
     validCount: validWaiverCount,
+    outageRelieved: outageRelief.relieved,
   };
-  const waived = !scopeNotApplicable && validWaiverCount > 0;
+  const waived =
+    !scopeNotApplicable && (validWaiverCount > 0 || outageRelief.relieved);
   if (!scopeNotApplicable && !converged && terminalUnavailable && !waived) {
     reasons.push(
       waiverMode === 'maintainer-authorized'
-        ? `Copilot is terminally unavailable (recovery cap exhausted and terminal window elapsed with no current-HEAD review) with no valid maintainer external-check waiver for selector "${waiverCheckSelector}" on current HEAD`
+        ? `Copilot is terminally unavailable (recovery cap exhausted and terminal window elapsed with no current-HEAD review) with no valid maintainer external-check waiver and no active provider-outage declaration relief for selector "${waiverCheckSelector}" on current HEAD`
         : `Copilot is terminally unavailable (recovery cap exhausted and terminal window elapsed with no current-HEAD review) and no waiver is available (ciGate.externalCheckWaivers.mode is "${waiverMode}", not "maintainer-authorized")`,
     );
   } else if (!scopeNotApplicable && !converged && deadlinePassed && !waived) {
     reasons.push(
       waiverMode === 'maintainer-authorized'
-        ? `deadline (${deadlineMinutes}m) passed with no valid maintainer external-check waiver for selector "${waiverCheckSelector}" on current HEAD`
+        ? `deadline (${deadlineMinutes}m) passed with no valid maintainer external-check waiver for selector "${waiverCheckSelector}" on current HEAD (a provider-outage declaration cannot relieve the deadline-only path -- it requires this pull request's own proven terminal-unavailable state)`
         : `deadline (${deadlineMinutes}m) passed and no waiver is available (ciGate.externalCheckWaivers.mode is "${waiverMode}", not "maintainer-authorized")`,
     );
   }
@@ -2219,6 +2269,52 @@ function collectFromGitHub(args: AdvisoryConvergenceArgs): {
   // that source of truth on drift.
   const policy = normalizePolicyConfig(rawConfig);
 
+  // Resolved once and reused below AND in the returned `options.now` --
+  // #2353 (Codex review on PR #2370): the declaration-validity read must
+  // evaluate at the SAME instant the rest of this verdict does (deadline,
+  // waiver expiry, terminal evidence), or a `--now`-overridden invocation
+  // (deterministic replay, tests) would resolve `outageDeclarationActive`
+  // against the real wall clock instead, an inconsistency within the same
+  // verdict.
+  const resolvedNow =
+    args.now || new Date().toISOString().replace('.000Z', 'Z');
+
+  // #2353: resolve whether a repository-scoped `providerOutage.
+  // declarationTarget` declaration is active for THIS gate's own selector
+  // (`idd-advisory-convergence` -- see idd-advisory-wait.instructions.md's
+  // "Sustained outage" note). Fails closed to inactive on ANY error (unset
+  // target, unreadable/unparseable comments, authority-lookup failure),
+  // matching `prFirstCommitAt` below: a transient fetch failure must never
+  // widen what this gate accepts.
+  let outageDeclarationActive = false;
+  const outageDeclarationTargetIssue =
+    policy?.providerOutage?.declarationTarget;
+  if (outageDeclarationTargetIssue) {
+    try {
+      const declarationComments = ghApiJson(
+        `repos/${owner}/${repo}/issues/${outageDeclarationTargetIssue}/comments`,
+        { paginate: true },
+      ) as IssueCommentPayload[];
+      const authorityOf = (actorLogin: string): AuthorityEvidence =>
+        normalizeAuthorityEvidence(
+          resolveCollaboratorAuthority({ owner, repo, actor: actorLogin }),
+          actorLogin,
+          owner,
+          policy.ciGate.externalCheckWaivers.authorityPolicy,
+        );
+      outageDeclarationActive = resolveProviderOutageDeclaration({
+        declarationTargetConfigured: true,
+        comments: declarationComments,
+        service: ADVISORY_CONVERGENCE_CHECK_SELECTOR,
+        policy,
+        authorityOf,
+        now: new Date(resolvedNow),
+      }).active;
+    } catch {
+      outageDeclarationActive = false;
+    }
+  }
+
   // #1344: forced-handoff-aware claim resolution, matching
   // `pre-merge-readiness.mts` exactly, except reading `forcedHandoff.mode`/
   // `authorityPolicy` off the already-loaded/normalized `policy` above
@@ -2300,7 +2396,7 @@ function collectFromGitHub(args: AdvisoryConvergenceArgs): {
       prAuthorIsBot,
     },
     options: {
-      now: args.now || new Date().toISOString().replace('.000Z', 'Z'),
+      now: resolvedNow,
       primaryBotLogin,
       trustedMarkerLogins,
       advisoryBotLogins,
@@ -2319,6 +2415,7 @@ function collectFromGitHub(args: AdvisoryConvergenceArgs): {
       ),
       waiverCheckSelector: ADVISORY_CONVERGENCE_CHECK_SELECTOR,
       waivableSelectors: policy?.ciGate?.externalChecks?.waivable ?? [],
+      outageDeclarationActive,
       sameHeadRerollCap,
       pendingWindowMinutes,
       recoveryCycleCap,

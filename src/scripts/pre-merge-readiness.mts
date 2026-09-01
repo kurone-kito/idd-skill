@@ -8,6 +8,7 @@
 import { readFileSync } from 'node:fs';
 
 import {
+  DEFAULT_ADVISORY_CONVERGENCE_CHECK_SELECTOR,
   readAdvisoryConvergenceDeadlineMinutes,
   readAdvisoryPrimaryBotLogin,
   readAdvisoryRecoveryCycleCap,
@@ -23,6 +24,11 @@ import {
   readForcedHandoffAuthorityPolicy,
   readForcedHandoffMode,
 } from './collaborator-permission.mts';
+import {
+  type AuthorityEvidence,
+  normalizeAuthorityEvidence,
+  resolveCollaboratorAuthority,
+} from './external-check-waiver.mts';
 import {
   DEFAULT_GH_PAGINATED_TIMEOUT_MS,
   GH_TEXT_LOOP_OPTIONS,
@@ -57,6 +63,10 @@ import {
   resolveTrustedMarkerActors,
   selectCodeownersText,
 } from './protocol-helpers.mts';
+import {
+  evaluateProviderOutageRelief,
+  resolveProviderOutageDeclaration,
+} from './provider-outage-declaration.mts';
 import {
   fetchReviewsAndHeadCommit,
   resolveLatestCopilotReviewClause,
@@ -98,6 +108,10 @@ interface CheckPayload {
   name?: string | null;
   state?: string | null;
   completedAt?: string | null;
+  // #2353 (Codex review on PR #2370): see `CheckLike` in
+  // `protocol-helpers.mts` for why this is threaded through separately
+  // from `completedAt`.
+  startedAt?: string | null;
   type?: string | null;
   workflowName?: string | null;
 }
@@ -120,6 +134,7 @@ interface StatusCheckRollupPayload {
   status?: string | null;
   conclusion?: string | null;
   completedAt?: string | null;
+  startedAt?: string | null;
   workflowName?: string | null;
 }
 
@@ -188,6 +203,10 @@ export function normalizeStatusCheckRollupEntry(
       name: String(entry?.context ?? '').trim(),
       state: STATUS_CONTEXT_STATE_ALIASES[rawState] ?? rawState,
       completedAt: String(entry?.completedAt ?? ZERO_SENTINEL_TIMESTAMP),
+      // A legacy commit status has no separate start/complete lifecycle --
+      // it is reported as a single instant -- so `startedAt` reuses the
+      // same `completedAt` value rather than exposing a fabricated one.
+      startedAt: String(entry?.completedAt ?? ZERO_SENTINEL_TIMESTAMP),
       type: 'status-context',
       workflowName: '',
     };
@@ -203,6 +222,7 @@ export function normalizeStatusCheckRollupEntry(
     state:
       status === 'COMPLETED' ? conclusion || 'UNKNOWN' : status || 'UNKNOWN',
     completedAt: String(entry?.completedAt ?? ZERO_SENTINEL_TIMESTAMP),
+    startedAt: String(entry?.startedAt ?? ZERO_SENTINEL_TIMESTAMP),
     type: 'check-run',
     workflowName: String(entry?.workflowName ?? '').trim(),
   };
@@ -703,6 +723,14 @@ export function collectPreMergeReadiness(
     },
   );
   const copilotUnavailable = copilotRecovery.state === 'COPILOT_UNAVAILABLE';
+  const advisoryConvergenceOutageRelief =
+    resolveAdvisoryConvergenceOutageRelief({
+      owner,
+      repo,
+      copilotUnavailable,
+      waivableCheckSelectors,
+      now,
+    });
 
   const summary = buildPreMergeReadinessSummary(
     {
@@ -756,6 +784,10 @@ export function collectPreMergeReadiness(
       primaryBotLogin,
       developmentBranchTarget,
       copilotUnavailable,
+      advisoryConvergenceOutageRelieved:
+        advisoryConvergenceOutageRelief.relieved,
+      advisoryConvergenceOutageRelievedSince:
+        advisoryConvergenceOutageRelief.since,
       advisoryConvergenceHeadCommittedAt,
       advisoryConvergenceDeadlineMinutes,
       secondaryQuietWindowMinutes,
@@ -1606,6 +1638,123 @@ function readExternalCheckWaiverMode(): string {
     ).ciGate.externalCheckWaivers.mode;
   } catch {
     return 'disabled';
+  }
+}
+
+// #2353 (Codex review on PR #2370, second follow-up): a declaration's own
+// `startedAt` is generated before the `--declare --apply` interactive
+// confirmation prompt, while the GitHub comment's `createdAt` is stamped
+// only once the maintainer actually confirms posting it. A failed check
+// that completes during that pause satisfies a `startedAt`-only cutoff
+// even though the declaration did not verifiably exist on GitHub yet and
+// the check never reran under it. Use the LATER of the two timestamps as
+// the true "this declaration became a real, postable fact" moment.
+// `createdAt` may be the literal string `"none"` (schema-documented) or
+// otherwise unparseable; in that case this falls back to `startedAt`
+// alone, unchanged from before this fix -- never widening the cutoff.
+export function resolveDeclarationActiveSince(
+  declaration: { startedAt?: unknown; createdAt?: unknown } | null,
+): string {
+  const startedAtMs = Date.parse(String(declaration?.startedAt ?? ''));
+  const createdAtMs = Date.parse(String(declaration?.createdAt ?? ''));
+  const candidates = [startedAtMs, createdAtMs].filter((ms) =>
+    Number.isFinite(ms),
+  );
+  if (candidates.length === 0) return '';
+  return new Date(Math.max(...candidates)).toISOString();
+}
+
+// #2353: resolve whether a repository-scoped `providerOutage.
+// declarationTarget` declaration relieves the `idd-advisory-convergence`
+// selector for this pull request -- the SAME selector
+// `advisory-convergence.mts`'s own gate relieves via its own,
+// independently-fetched declaration (see that file's `collectFromGitHub`).
+// Fails closed to `{ relieved: false, since: '' }` on ANY error (unset
+// target, unreadable/unparseable declaration-target comments, authority-
+// lookup failure) -- a transient fetch failure must never widen what this
+// gate accepts, matching `prFirstCommitAt`'s own fail-closed contract
+// above. `copilotUnavailable` is the caller-supplied `prTerminalUnavailable`
+// evidence `evaluateProviderOutageRelief` requires independently of the
+// declaration itself (never itself sufficient) -- the same terminal-
+// unavailability verdict this file's own `copilot-terminal-unavailable`
+// blocker already consumes. Requires `ciGate.externalCheckWaivers.mode`
+// to be `maintainer-authorized` (Codex review on PR #2370): without this,
+// an adopter that leaves `mode` at its `disabled` default but configures
+// the waivable selector and posts a declaration would relieve here while
+// `computeAdvisoryConvergenceVerdict`'s own gate -- gated on the SAME
+// `waiverMode === 'maintainer-authorized'` check -- still rejects it,
+// exactly the two-gate disagreement #2021 already fixed for the direct
+// per-pull-request waiver path. `since` is the declaration's own
+// active-since moment (Codex review on PR #2370): a required check's live
+// run must have STARTED (Copilot review, round 5: not "completed" --
+// `summarizeRequiredChecks`'s `treatAsCoveredByWaiver` cutoff anchors on
+// `startedAt`) AT OR AFTER this moment to count as covered -- otherwise
+// the check was never actually rerun during the declared outage window,
+// and GitHub's own required-check state stays whatever a stale
+// pre-declaration run left it at while this gate reports covered,
+// reproducing #2021's "ready but merge blocked" class one layer deeper.
+function resolveAdvisoryConvergenceOutageRelief({
+  owner,
+  repo,
+  copilotUnavailable,
+  waivableCheckSelectors,
+  now,
+}: {
+  owner: string;
+  repo: string;
+  copilotUnavailable: boolean;
+  waivableCheckSelectors: { selector?: unknown; matchMode?: unknown }[];
+  now: string;
+}): { relieved: boolean; since: string } {
+  const notRelieved = { relieved: false, since: '' };
+  try {
+    const policy = normalizePolicyConfig(
+      JSON.parse(readFileSync('.github/idd/config.json', 'utf8')),
+    );
+    if (policy.ciGate.externalCheckWaivers.mode !== 'maintainer-authorized') {
+      return notRelieved;
+    }
+    const targetIssue = policy.providerOutage.declarationTarget;
+    if (!targetIssue) return notRelieved;
+    const declarationComments = ghApiJson(
+      `repos/${owner}/${repo}/issues/${targetIssue}/comments`,
+      true,
+    ) as IssueCommentPayload[];
+    const authorityOf = (actorLogin: string): AuthorityEvidence =>
+      normalizeAuthorityEvidence(
+        resolveCollaboratorAuthority({ owner, repo, actor: actorLogin }),
+        actorLogin,
+        owner,
+        policy.ciGate.externalCheckWaivers.authorityPolicy,
+      );
+    const declaration = resolveProviderOutageDeclaration({
+      declarationTargetConfigured: true,
+      comments: declarationComments,
+      service: DEFAULT_ADVISORY_CONVERGENCE_CHECK_SELECTOR,
+      policy,
+      authorityOf,
+      now: new Date(now),
+    });
+    const relieved = evaluateProviderOutageRelief({
+      declarationActive: declaration.active,
+      prTerminalUnavailable: copilotUnavailable,
+      requestedSelector: DEFAULT_ADVISORY_CONVERGENCE_CHECK_SELECTOR,
+      waivableSelectors: waivableCheckSelectors
+        .map((entry) => ({
+          selector: String(entry.selector ?? ''),
+          matchMode:
+            typeof entry.matchMode === 'string' ? entry.matchMode : undefined,
+        }))
+        .filter((entry) => entry.selector.length > 0),
+    }).relieved;
+    return {
+      relieved,
+      since: relieved
+        ? resolveDeclarationActiveSince(declaration.declaration)
+        : '',
+    };
+  } catch {
+    return notRelieved;
   }
 }
 

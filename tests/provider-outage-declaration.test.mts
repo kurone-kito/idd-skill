@@ -251,6 +251,91 @@ test('resolveProviderOutageDeclaration: becomes active once its own startedAt is
   assert.equal(atStart.active, true);
 });
 
+// #2353 (Codex review on PR #2370, round 5): `startedAt` is authored at
+// `--declare` time, before the `--apply` confirmation that actually posts
+// the GitHub comment `createdAt` records. A caller replaying a past `now`
+// (e.g. `--now`) between those two moments must not see the declaration as
+// active -- at that replayed moment, the comment recording it did not yet
+// exist on GitHub, even though the declaration's own self-reported window
+// had already opened.
+test('resolveProviderOutageDeclaration: a declaration whose startedAt has passed but whose comment was not yet posted is not active (#2353 review, Codex, round 5)', () => {
+  const result = resolveProviderOutageDeclaration({
+    declarationTargetConfigured: true,
+    comments: [
+      declarationComment({
+        startedAt: '2026-09-01T05:00:00Z', // before NOW (06:00:00Z)
+        expiresAt: '2026-09-02T05:00:00Z',
+        createdAt: '2026-09-01T06:30:00Z', // posted after NOW
+      }),
+    ],
+    service: 'idd-advisory-convergence',
+    policy: basePolicy,
+    authorityOf: authorizedActor,
+    now: NOW,
+  });
+  assert.equal(result.active, false);
+  assert.match(result.reason, /not yet posted/);
+  assert.equal(result.notYetPosted.length, 1);
+  assert.equal(result.valid.length, 0);
+});
+
+test('resolveProviderOutageDeclaration: becomes active once its own comment is posted, even with an earlier startedAt (#2353 review, Codex, round 5)', () => {
+  const comments = [
+    declarationComment({
+      startedAt: '2026-09-01T05:00:00Z',
+      expiresAt: '2026-09-02T05:00:00Z',
+      createdAt: '2026-09-01T06:30:00Z',
+    }),
+  ];
+  const beforePosted = resolveProviderOutageDeclaration({
+    declarationTargetConfigured: true,
+    comments,
+    service: 'idd-advisory-convergence',
+    policy: basePolicy,
+    authorityOf: authorizedActor,
+    now: new Date('2026-09-01T06:29:59Z'),
+  });
+  const atPosted = resolveProviderOutageDeclaration({
+    declarationTargetConfigured: true,
+    comments,
+    service: 'idd-advisory-convergence',
+    policy: basePolicy,
+    authorityOf: authorizedActor,
+    now: new Date('2026-09-01T06:30:00Z'),
+  });
+  assert.equal(beforePosted.active, false);
+  assert.equal(atPosted.active, true);
+});
+
+// A `createdAt` that fails to parse (the schema-documented `'none'`
+// sentinel `parseProviderOutageDeclarationComment` falls back to) must
+// never withhold an otherwise-valid declaration -- mirrors
+// `resolveDeclarationActiveSince`'s (pre-merge-readiness.mts) identical
+// fallback-to-`startedAt`-alone convention for the same sentinel.
+test('resolveProviderOutageDeclaration: an unparseable createdAt never withholds an otherwise-valid declaration', () => {
+  const result = resolveProviderOutageDeclaration({
+    declarationTargetConfigured: true,
+    comments: [
+      {
+        body: renderProviderOutageDeclarationComment({
+          actor: 'kurone-kito',
+          service: 'idd-advisory-convergence',
+          startedAt: '2026-09-01T05:00:00Z',
+          expiresAt: '2026-09-02T05:00:00Z',
+        }),
+        created_at: undefined,
+        author: { login: 'kurone-kito' },
+      },
+    ],
+    service: 'idd-advisory-convergence',
+    policy: basePolicy,
+    authorityOf: authorizedActor,
+    now: NOW,
+  });
+  assert.equal(result.active, true);
+  assert.equal(result.declaration?.createdAt, 'none');
+});
+
 test('resolveProviderOutageDeclaration: malformed case', () => {
   const result = resolveProviderOutageDeclaration({
     declarationTargetConfigured: true,

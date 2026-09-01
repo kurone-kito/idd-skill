@@ -3639,6 +3639,8 @@ export function summarizeRequiredChecks(
     trustSourcePinnedRequiredChecks = false,
     excludeFromWaiverCoverage = null,
     waiverActiveSinceOverride = null,
+    treatAsCoveredByWaiver = null,
+    treatAsCoveredByWaiverSince = null,
   } = {},
 ) {
   const branchReviewRequirements = summarizeBranchReviewRequirements(
@@ -3652,8 +3654,28 @@ export function summarizeRequiredChecks(
     const name = String(check.name ?? '');
     const state = String(check.state ?? '').toUpperCase();
     const completedAt = String(check.completedAt ?? '');
-    const completedAtMs = isValidIsoTimestamp(completedAt)
-      ? new Date(completedAt).getTime()
+    // #2353 (Copilot + Codex + CodeRabbit review on PR #2370, round 5):
+    // `isValidIsoTimestamp` alone accepts GitHub's `0001-01-01T00:00:00Z`
+    // zero-value sentinel -- `normalizeStatusCheckRollupEntry` substitutes
+    // it for BOTH an absent `completedAt` (still QUEUED/IN_PROGRESS) and an
+    // absent `startedAt` (not yet started), the same non-nullable-DateTime
+    // convention `isCompletedCiTimestamp` already exists to reject (see its
+    // doc comment / `parseCompletedAt` above). Reusing it here -- despite
+    // its "completed" name -- because the sentinel isn't completion-
+    // specific: it is GitHub's stand-in for "this lifecycle moment hasn't
+    // happened yet," which applies equally to `startedAt`. Without this, an
+    // IN_PROGRESS run (sentinel `completedAt`, but a genuine, fresh
+    // `startedAt`) would pass BOTH `completedAtMs !== null` (the sentinel
+    // parses as a valid, merely very-old, timestamp) and the `startedAt`
+    // freshness cutoff below, reporting a still-running required check
+    // `coveredByWaiver: true` while GitHub's own check is neither passed
+    // nor even finished.
+    const completedAtMs = isCompletedCiTimestamp(completedAt)
+      ? Date.parse(completedAt)
+      : null;
+    const startedAt = String(check.startedAt ?? '');
+    const startedAtMs = isCompletedCiTimestamp(startedAt)
+      ? Date.parse(startedAt)
       : null;
     const matchingWaivers = validWaivers.filter((w) =>
       matchCheckSelectorLocal(name, w.checkSelector),
@@ -3685,18 +3707,57 @@ export function summarizeRequiredChecks(
             : waiverCreatedAtMs;
         return completedAtMs >= activeSinceMs;
       });
+    // #2353: an independent positive path -- see `treatAsCoveredByWaiver`'s
+    // own doc comment for why it deliberately bypasses
+    // `excludeFromWaiverCoverage`/`hasFreshWaiverCoverage`/`waivableSelectors`
+    // below rather than feeding into the same conjunction. Still requires
+    // `completedAtMs !== null` (Copilot + Codex review on PR #2370): the
+    // SAME #2034 fail-closed live-run requirement `hasFreshWaiverCoverage`
+    // already enforces -- a check that is still QUEUED/IN_PROGRESS/PENDING
+    // with no parseable `completedAt` has never actually produced a verdict
+    // at all, and treating it as covered would report `success` while
+    // GitHub's own required-check state is still pending, reproducing the
+    // exact "ready but merge blocked" failure mode #2021 fixed for the
+    // direct-waiver path. Also requires the live run to be fresh relative
+    // to `treatAsCoveredByWaiverSince` when the caller supplies one, and
+    // (Codex review on PR #2370, second follow-up) anchors that freshness
+    // check on `startedAt` rather than `completedAt`: a run that began
+    // evaluating state before the cutoff never observed whatever made this
+    // check relieved, even if it happens to finish (and post `completedAt`)
+    // moments after the cutoff passes -- the run's own verdict was already
+    // decided using stale state by then. Requires `startedAtMs !== null`
+    // for the same fail-closed reason as `completedAtMs !== null` above: a
+    // run with no parseable `startedAt` has no evidence it observed
+    // anything at all.
+    const treatAsCoveredByWaiverSinceOverride =
+      typeof treatAsCoveredByWaiverSince === 'function'
+        ? treatAsCoveredByWaiverSince(name)
+        : null;
+    const treatAsCoveredByWaiverSinceMs = isValidIsoTimestamp(
+      treatAsCoveredByWaiverSinceOverride,
+    )
+      ? new Date(treatAsCoveredByWaiverSinceOverride).getTime()
+      : null;
+    const treatedAsCoveredByWaiver =
+      completedAtMs !== null &&
+      startedAtMs !== null &&
+      typeof treatAsCoveredByWaiver === 'function' &&
+      treatAsCoveredByWaiver(name) &&
+      (treatAsCoveredByWaiverSinceMs === null ||
+        startedAtMs >= treatAsCoveredByWaiverSinceMs);
     const coveredByWaiver =
       !CHECK_PASS_EQUIVALENT_STATES.has(state) &&
-      !(
-        typeof excludeFromWaiverCoverage === 'function' &&
-        excludeFromWaiverCoverage(name)
-      ) &&
-      hasFreshWaiverCoverage &&
-      // The check must also sit on the policy's waivable surface. A
-      // null/undefined list keeps the legacy behavior with no gate; an empty
-      // configured list covers nothing.
-      (!Array.isArray(waivableSelectors) ||
-        isCheckNameConfiguredWaivable(name, waivableSelectors));
+      (treatedAsCoveredByWaiver ||
+        (!(
+          typeof excludeFromWaiverCoverage === 'function' &&
+          excludeFromWaiverCoverage(name)
+        ) &&
+          hasFreshWaiverCoverage &&
+          // The check must also sit on the policy's waivable surface. A
+          // null/undefined list keeps the legacy behavior with no gate; an
+          // empty configured list covers nothing.
+          (!Array.isArray(waivableSelectors) ||
+            isCheckNameConfiguredWaivable(name, waivableSelectors))));
     return {
       name,
       state,
@@ -4813,7 +4874,7 @@ export function computePreMergeReadinessBlockers(report) {
     blockers.push({
       gate: 'copilot-terminal-unavailable',
       detail:
-        'Copilot is terminally unavailable on current HEAD (recovery cap exhausted and terminal window elapsed with no current-HEAD review) with no valid maintainer external-check waiver for selector ' +
+        'Copilot is terminally unavailable on current HEAD (recovery cap exhausted and terminal window elapsed with no current-HEAD review) with no valid maintainer external-check waiver and no active provider-outage declaration relief for selector ' +
         `"${DEFAULT_ADVISORY_CONVERGENCE_CHECK_SELECTOR}"`,
     });
   }
@@ -5403,6 +5464,17 @@ export function buildPreMergeReadinessSummary(
   );
   const advisoryConvergenceGenuinelyCovered =
     advisoryConvergencePreconditionOpen && advisoryConvergenceExactWaiverValid;
+  // #2353: the caller-precomputed provider-outage-declaration relief
+  // verdict, re-ANDed here with the SAME precondition-open evidence the
+  // direct-waiver path above requires -- cheap insurance against a future
+  // caller passing a relief verdict that was somehow computed without the
+  // precondition it logically implies (evaluateProviderOutageRelief's own
+  // `prTerminalUnavailable` requirement already implies `terminalUnavailable`,
+  // which already implies `advisoryConvergencePreconditionOpen` via the OR,
+  // so this is redundant today, not a new gate).
+  const advisoryConvergenceOutageRelieved =
+    advisoryConvergencePreconditionOpen &&
+    options.advisoryConvergenceOutageRelieved === true;
   const ci = summarizeRequiredChecks(checks, branchRules, branchProtection, {
     // Raw, UNFILTERED `waiverEvidence` -- deliberately not a caller-side
     // pre-filtered copy. A pre-filter that removed a whole `valid` entry
@@ -5429,6 +5501,22 @@ export function buildPreMergeReadinessSummary(
       advisoryConvergenceDeadlineOpensAt
         ? advisoryConvergenceDeadlineOpensAt
         : null,
+    // #2353: a repository-scoped provider-outage declaration relieves
+    // `idd-advisory-convergence` specifically, through a positive path
+    // that bypasses `excludeFromWaiverCoverage` above entirely -- see
+    // `treatAsCoveredByWaiver`'s own doc comment for why.
+    treatAsCoveredByWaiver: (name) =>
+      name === DEFAULT_ADVISORY_CONVERGENCE_CHECK_SELECTOR &&
+      advisoryConvergenceOutageRelieved,
+    // #2353 (Codex review on PR #2370): the declaration's own `startedAt`
+    // -- a required check's live run must have completed at or after this
+    // moment, or a stale pre-declaration failed run would be reported
+    // covered without ever having actually rerun under the outage window.
+    treatAsCoveredByWaiverSince: (name) =>
+      name === DEFAULT_ADVISORY_CONVERGENCE_CHECK_SELECTOR &&
+      options.advisoryConvergenceOutageRelievedSince
+        ? options.advisoryConvergenceOutageRelievedSince
+        : null,
   });
   // #1570: reuse the SAME raw waiver evidence above (already validated for
   // selector/HEAD/claim/authority/expiry) to decide whether the caller-
@@ -5444,10 +5532,13 @@ export function buildPreMergeReadinessSummary(
   // here.
   const copilotUnavailableWaived =
     copilotUnavailable &&
-    waiverEvidence.valid.some(
+    (waiverEvidence.valid.some(
       (entry) =>
         entry.checkSelector === DEFAULT_ADVISORY_CONVERGENCE_CHECK_SELECTOR,
-    );
+    ) ||
+      // #2353: a repository-scoped provider-outage declaration also clears
+      // this dedicated blocker, same as a direct maintainer waiver.
+      advisoryConvergenceOutageRelieved);
   const dispositionEvidence = options.includeDispositionEvidence
     ? summarizeDispositionEvidenceForGate(
         { comments, threads },
