@@ -56,9 +56,11 @@ function buildCleanupBacklogStubGh(config: {
   // being rewritten.
   headRefNameByPr?: Map<number, string>;
   // idd-skill#2226: per-PR mergedAt, omitted from the stubbed `pr list`
-  // entry (not merely undefined) when absent for a given number -- the
-  // pre-#2226 tests above supply none, matching gh's own real output for
-  // a PR whose merge timestamp was not requested.
+  // entry (not merely undefined) when absent for a given number. The
+  // compiled idd-doctor always requests mergedAt now, so this omission
+  // simulates a missing/malformed field in gh's response, not an
+  // unrequested one -- the pre-#2226 tests above supply none, exercising
+  // that fail-closed path.
   mergedAtByPr?: Map<number, string>;
 }): string {
   const owner = JSON.stringify(config.owner);

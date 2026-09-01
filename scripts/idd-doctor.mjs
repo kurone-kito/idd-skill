@@ -20,6 +20,7 @@ import {
 } from './autopilot-suitability.mjs';
 import { parseCliArgs } from './cli-args.mjs';
 import { resolveHelperCommandForProfile } from './helper-runtime-manifest.mjs';
+import { isValidIsoTimestamp } from './marker-helpers.mjs';
 import {
   inspectHelperRuntimeConfig,
   POLICY_DEFAULTS,
@@ -1989,34 +1990,68 @@ export function classifyBacklog(missingPrNumbers, warnThreshold) {
       : [],
   };
 }
+const CUTOFF_DATE_ONLY_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
+/**
+ * Parses a `--cleanup-backlog-bootstrap-cutoff` value (or a `gh`-supplied
+ * `mergedAt`) to a UTC millisecond timestamp, or `null` when unparsable
+ * (idd-skill#2226, CodeRabbit review on PR #2386). Deliberately stricter
+ * than plain `Date.parse`, which both silently normalizes calendar
+ * overflow (`Date.parse('2026-02-30')` resolves to March 2 instead of
+ * rejecting the date) and resolves a timestamp with a time-of-day but no
+ * explicit UTC offset in the HOST's local time zone -- so the identically
+ * configured cutoff would classify different PRs depending on which
+ * machine or CI runner evaluates it (confirmed empirically across `TZ`
+ * values before this fix).
+ *
+ * Two forms are accepted, both unambiguous everywhere:
+ * - a bare calendar date (`YYYY-MM-DD`), anchored to UTC midnight;
+ * - a full ISO8601 UTC timestamp recognized by `isValidIsoTimestamp`
+ *   (marker-helpers.mts) -- this repository's own existing canonical
+ *   timestamp contract, Z-suffixed only, no other offset forms.
+ *
+ * The date-only branch round-trips through `Date` -> `toISOString()` and
+ * compares the calendar-date portion against the input, which rejects
+ * overflow the same way `isValidIsoTimestamp` already does for its own
+ * shape.
+ */
+export function parseStrictCutoffToUtcMs(value) {
+  if (typeof value !== 'string') {
+    return null;
+  }
+  if (CUTOFF_DATE_ONLY_PATTERN.test(value)) {
+    const ms = Date.parse(`${value}T00:00:00.000Z`);
+    return Number.isFinite(ms) &&
+      new Date(ms).toISOString().slice(0, 10) === value
+      ? ms
+      : null;
+  }
+  return isValidIsoTimestamp(value) ? Date.parse(value) : null;
+}
 /**
  * Numbers among `missingPrNumbers` whose merge predates `cutoffIso`
  * (idd-skill#2226) -- presentation-only: never changes which PRs count as
  * missing evidence, only which of them the backlog warning labels
  * "bootstrap-era" instead of a genuine claim-marker-missing gap. A PR
  * absent from `mergedAtByNumber` (its `mergedAt` was missing or malformed
- * at fetch time) or an unparsable `cutoffIso` never counts as
- * bootstrap-era -- fails closed to "flag every PR the same as before this
- * feature existed" rather than guessing. Pure so it can be unit-tested
- * without mocking `gh`.
+ * at fetch time), whose `mergedAt` fails {@link parseStrictCutoffToUtcMs},
+ * or an unparsable `cutoffIso` never counts as bootstrap-era -- fails
+ * closed to "flag every PR the same as before this feature existed"
+ * rather than guessing. Pure so it can be unit-tested without mocking
+ * `gh`.
  */
 export function classifyBootstrapEraPrNumbers(
   missingPrNumbers,
   mergedAtByNumber,
   cutoffIso,
 ) {
-  const cutoffMs = typeof cutoffIso === 'string' ? Date.parse(cutoffIso) : NaN;
-  if (!Number.isFinite(cutoffMs)) {
+  const cutoffMs = parseStrictCutoffToUtcMs(cutoffIso);
+  if (cutoffMs === null) {
     return new Set();
   }
   const bootstrapEra = new Set();
   for (const number of missingPrNumbers) {
-    const mergedAt = mergedAtByNumber.get(number);
-    if (typeof mergedAt !== 'string') {
-      continue;
-    }
-    const mergedAtMs = Date.parse(mergedAt);
-    if (Number.isFinite(mergedAtMs) && mergedAtMs < cutoffMs) {
+    const mergedAtMs = parseStrictCutoffToUtcMs(mergedAtByNumber.get(number));
+    if (mergedAtMs !== null && mergedAtMs < cutoffMs) {
       bootstrapEra.add(number);
     }
   }
@@ -2106,8 +2141,8 @@ export function readCleanupEvidenceTrustedLogins(root) {
   return new Set([...actors, 'github-actions[bot]']);
 }
 /**
- * Filter a `gh pr list --json number,headRefName` result down to entries
- * whose head ref matches the IDD branch-naming convention -- the same
+ * Filter a `gh pr list --json number,headRefName,mergedAt` result down to
+ * entries whose head ref matches the IDD branch-naming convention -- the same
  * `worktreeGuard.branchPatterns` globs (`issue/*`, `roadmap-audit/*` by
  * default; see `readWorktreeGuardBranchPatterns`) that `classifyPrimaryHead`
  * already matches elsewhere in this file. A routine non-IDD merge (a
@@ -3448,17 +3483,20 @@ function parseArgs(argv) {
   // --cleanup-backlog-bootstrap-cutoff (idd-skill#2226): optional, no
   // default -- absent means every PR is still reported the same,
   // undifferentiated way this check has always used. Rejects an explicit
-  // empty string and anything Date.parse cannot resolve, matching
-  // --cleanup-backlog-window-days's own empty-string/malformed-value
-  // guards above.
+  // empty string (matching --cleanup-backlog-window-days's own
+  // empty-string guard above) and anything parseStrictCutoffToUtcMs
+  // cannot resolve -- a bare `Date.parse` check here would accept
+  // calendar overflow and a host-timezone-dependent offset-less
+  // timestamp, both fixed by that stricter parser (CodeRabbit review on
+  // PR #2386).
   const bootstrapCutoffToken = values['cleanup-backlog-bootstrap-cutoff'];
   if (bootstrapCutoffToken !== undefined) {
     if (!bootstrapCutoffToken) {
       throw new Error('--cleanup-backlog-bootstrap-cutoff requires a value');
     }
-    if (!Number.isFinite(Date.parse(bootstrapCutoffToken))) {
+    if (parseStrictCutoffToUtcMs(bootstrapCutoffToken) === null) {
       throw new Error(
-        `--cleanup-backlog-bootstrap-cutoff must be a valid date/timestamp (got "${bootstrapCutoffToken}")`,
+        `--cleanup-backlog-bootstrap-cutoff must be a strict YYYY-MM-DD date or a Z-suffixed ISO8601 timestamp (got "${bootstrapCutoffToken}")`,
       );
     }
     args.cleanupBacklogBootstrapCutoff = bootstrapCutoffToken;
@@ -3505,7 +3543,7 @@ options:
   --strict                                 treat a primary-worktree implementation-branch HEAD as an error (also enabled by worktreeGuard.enabled in config)
   --cleanup-backlog-window-days <N>        merged-PR window for the cleanup backlog check (default: 14)
   --cleanup-backlog-warn-threshold <N>     backlog count above which the check warns (default: 2)
-  --cleanup-backlog-bootstrap-cutoff <date> label a flagged merged PR "(bootstrap-era)" in the report when it merged before this date/timestamp, instead of a genuine claim-marker-missing gap (default: none -- every flagged PR reports the same way)
+  --cleanup-backlog-bootstrap-cutoff <YYYY-MM-DD|ISO8601Z> label a flagged merged PR "(bootstrap-era)" in the report when it merged before this UTC date/timestamp, instead of a genuine claim-marker-missing gap (default: none -- every flagged PR reports the same way)
   --workshop-cross-ref-allow-missing <list> comma-separated entry-point paths to skip in the workshop cross-reference check (default: none)
   --help, -h                               show this help
 

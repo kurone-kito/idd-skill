@@ -59,6 +59,7 @@ import {
   parseLockfileImporterVersion,
   parsePrimaryWorktreePath,
   parseProjectCommandRows,
+  parseStrictCutoffToUtcMs,
   parseThresholdsProseHours,
   readCleanupEvidenceTrustedLogins,
   readTrustEmptyProtectionReads,
@@ -1905,6 +1906,58 @@ test('classifyBacklog coerces non-numeric / NaN / negative thresholds to 0', () 
   assert.equal(classifyBacklog([1], -5).warn, true);
   // Zero count must not warn even with a broken threshold.
   assert.equal(classifyBacklog([], NaN).warn, false);
+});
+
+test('parseStrictCutoffToUtcMs accepts a bare calendar date, anchored to UTC midnight (idd-skill#2226)', () => {
+  assert.equal(
+    parseStrictCutoffToUtcMs('2026-01-01'),
+    Date.parse('2026-01-01T00:00:00.000Z'),
+  );
+});
+
+test('parseStrictCutoffToUtcMs accepts a Z-suffixed ISO8601 timestamp, matching the equivalent bare date', () => {
+  assert.equal(
+    parseStrictCutoffToUtcMs('2026-01-01T00:00:00Z'),
+    parseStrictCutoffToUtcMs('2026-01-01'),
+  );
+});
+
+test('parseStrictCutoffToUtcMs rejects calendar overflow instead of silently rolling over (CodeRabbit review, PR #2386)', () => {
+  // Plain Date.parse('2026-02-30') resolves to March 2 -- confirmed
+  // empirically before this fix. The strict parser must reject it outright.
+  assert.equal(parseStrictCutoffToUtcMs('2026-02-30'), null);
+  assert.equal(parseStrictCutoffToUtcMs('2026-13-01'), null);
+});
+
+test('parseStrictCutoffToUtcMs rejects a timestamp with a time-of-day but no explicit UTC offset (host-timezone-dependent, CodeRabbit review)', () => {
+  // Plain Date.parse resolves this in the HOST's local time zone per the
+  // ECMA-262 Date Time String Format -- the same value would classify
+  // different PRs depending on which machine/CI runner evaluates it.
+  // Confirmed empirically: LA -> 2026-01-01T08:00:00.000Z, UTC ->
+  // 2026-01-01T00:00:00.000Z for the identical input string.
+  assert.equal(parseStrictCutoffToUtcMs('2026-01-01T00:00:00'), null);
+});
+
+test('parseStrictCutoffToUtcMs rejects garbage input and non-string values', () => {
+  assert.equal(parseStrictCutoffToUtcMs('not-a-date'), null);
+  assert.equal(parseStrictCutoffToUtcMs(undefined), null);
+  assert.equal(parseStrictCutoffToUtcMs(12345), null);
+});
+
+test('classifyBootstrapEraPrNumbers rejects a cutoff with calendar overflow (fail closed, CodeRabbit review)', () => {
+  const mergedAtByNumber = new Map([[100, '2025-01-01T00:00:00Z']]);
+  assert.deepEqual(
+    classifyBootstrapEraPrNumbers([100], mergedAtByNumber, '2026-02-30'),
+    new Set(),
+  );
+});
+
+test('classifyBootstrapEraPrNumbers rejects a mergedAt with a time-of-day but no UTC offset (fail closed, CodeRabbit review)', () => {
+  const mergedAtByNumber = new Map([[100, '2025-01-01T00:00:00']]);
+  assert.deepEqual(
+    classifyBootstrapEraPrNumbers([100], mergedAtByNumber, '2026-01-01'),
+    new Set(),
+  );
 });
 
 test('classifyBootstrapEraPrNumbers labels only PRs merged before the cutoff (idd-skill#2226)', () => {
