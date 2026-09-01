@@ -196,11 +196,18 @@ const SUPPLIED_CONTENT_NOUN =
 // belongs to a different, unrelated clause. The verb-match loop below still
 // tries every unsafe verb occurrence, so "download and then execute this
 // script" still flags via the `execute` iteration's own window.
+//
+// The determiner-to-noun gap has no filler allowance (unlike the
+// untrusted-origin branch below): a filler here would let a coordinating
+// conjunction slip past the anchor from the other side, e.g. "run this and
+// inspect script output" -- "this" is a dangling reference and "script" is
+// the object of the unrelated verb "inspect", not of "this". The noun must
+// immediately follow the determiner (optionally inline-code-wrapped).
 const SUPPLIED_CONTENT_UNTRUSTED_DETERMINER = String.raw`(?:following|attached|pasted|provided|the\s+(?:following|above|below|attached|pasted|provided))`;
 const SUPPLIED_CONTENT_AMBIGUOUS_DETERMINER = '(?:this|that)';
 const SUPPLIED_CONTENT_PARENTHETICAL_ASIDE = String.raw`(?:\([^()\n]{0,60}\)\s*)?`;
 const SUPPLIED_CONTENT_REFERENCE = String.raw`${SUPPLIED_CONTENT_UNTRUSTED_DETERMINER}\s+(?:\S+\s+){0,2}?[\x60'"]?${SUPPLIED_CONTENT_NOUN}`;
-const SUPPLIED_CONTENT_OBJECT_REFERENCE = String.raw`^\s*${SUPPLIED_CONTENT_PARENTHETICAL_ASIDE}${SUPPLIED_CONTENT_AMBIGUOUS_DETERMINER}\s+(?:\S+\s+){0,2}?[\x60'"]?${SUPPLIED_CONTENT_NOUN}`;
+const SUPPLIED_CONTENT_OBJECT_REFERENCE = String.raw`^\s*${SUPPLIED_CONTENT_PARENTHETICAL_ASIDE}${SUPPLIED_CONTENT_AMBIGUOUS_DETERMINER}\s+[\x60'"]?${SUPPLIED_CONTENT_NOUN}`;
 const UNSAFE_DIRECTIVE_TARGET_SOURCE = String.raw`(?:\b(?:untrusted|user-provided|user input|(?:from|by)\s+(?:the\s+)?user|${SUPPLIED_CONTENT_REFERENCE})\b|${SUPPLIED_CONTENT_OBJECT_REFERENCE}\b)`;
 const UNSAFE_DIRECTIVE_WINDOW_CHARS = 100;
 const NEGATION_PATTERN =
@@ -210,16 +217,17 @@ const NEGATION_PATTERN =
 // pattern byte-identical rather than pulled in as an incidental fix here.
 const POLICY_OVERRIDE_VERB_SOURCE =
   'ignore|bypass|override|disable|disable|skip|turn off|suppress|disable';
-// #2218: a bare `\b` treats a hyphen as a non-word character, so the plain
-// `idd` alternative also matched inside an ordinary hyphenated file-path
-// mention of this project's own marker prefix (e.g. `idd-workflow-notes.md`)
-// with nothing nearby actually attempting to change this checker's own
-// behavior. Same fix shape as `SUBJECTIVE_SUBJECT_PATTERN` (#2205): give
-// only the `idd` token its own `(?<![\w-])`/`(?![\w-])` boundary so a
-// hyphen-adjacent occurrence no longer counts, while a freestanding use
-// ("bypass idd", "disable IDD gate") still does. The other nouns keep the
-// plain `\b` boundary from the outer wrapper below.
-const POLICY_OVERRIDE_NOUN_SOURCE = String.raw`repo|repository|policy|workflow|(?<![\w-])idd(?![\w-])|process|check|gate|requirement`;
+// #2218: a bare `\b` treats a hyphen as a non-word character, so every one
+// of these nouns also matched inside an ordinary hyphenated file-path
+// mention (e.g. this project's own marker prefix in `idd-workflow-notes.md`
+// -- both `idd` and `workflow` matched there, each independently), with
+// nothing nearby actually attempting to change this checker's own
+// behavior. Same fix shape as `SUBJECTIVE_SUBJECT_PATTERN` (#2205): wrap
+// the whole alternation in a shared `(?<![\w-])`/`(?![\w-])` boundary so a
+// hyphen-adjacent occurrence no longer counts for any noun, while a
+// freestanding use ("bypass idd", "disable IDD gate", "bypass workflow
+// checks") still does.
+const POLICY_OVERRIDE_NOUN_SOURCE = String.raw`(?<![\w-])(?:repo|repository|policy|workflow|idd|process|check|gate|requirement)(?![\w-])`;
 const POLICY_OVERRIDE_PATTERN = new RegExp(
   `\\b(${POLICY_OVERRIDE_VERB_SOURCE})\\b[\\s\\S]{0,60}\\b(${POLICY_OVERRIDE_NOUN_SOURCE})\\b`,
   'i',

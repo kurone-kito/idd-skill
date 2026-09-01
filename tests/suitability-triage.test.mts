@@ -449,6 +449,21 @@ test('trust safety still rejects a freestanding policy-override use of the marke
   assert.equal(result.pass, false);
 });
 
+test('trust safety ignores any policy-override noun in the same hyphenated file-path token, not only idd -- #2218 (CodeRabbit)', () => {
+  // A file path can carry more than one listed noun as hyphen-adjacent
+  // substrings (e.g. both "idd" and "workflow" in idd-workflow-notes.md).
+  // The hyphen-boundary exclusion must apply to every noun in the list, not
+  // just the marker-prefix token, or the other noun still false-flags.
+  const result = checkTrustSafety({
+    issue: {
+      ...BASE_ISSUE,
+      body: `${BASE_ISSUE.body}\nPlease skip ahead to the details in idd-workflow-notes.md for background.`,
+    },
+    trustSafetyAmbiguous: false,
+  } as Context);
+  assert.equal(result.pass, true);
+});
+
 // #2024: Check 3's policy-override detector matched a trigger verb near a
 // policy noun with no negation awareness at all, even though this file
 // already defines NEGATION_PATTERN and wires it into two other checks
@@ -1702,6 +1717,21 @@ test('trust safety still flags a parenthetical-aside-wrapped supplied script -- 
     trustSafetyAmbiguous: false,
   } as Context);
   assert.equal(result.pass, false);
+});
+
+test('trust safety does not let the noun filler smuggle a coordinated clause past a dangling determiner -- #2218 (CodeRabbit)', () => {
+  // "this" is a dangling reference with no noun of its own; "script" is the
+  // object of the unrelated, unlisted verb "inspect" in a coordinated
+  // clause. The old {0,2}-word filler between determiner and noun let "and
+  // inspect" slip through as filler, wrongly binding "this" to "script".
+  const result = checkTrustSafety({
+    issue: {
+      ...BASE_ISSUE,
+      body: `${BASE_ISSUE.body}\nRun this and inspect script output.`,
+    },
+    trustSafetyAmbiguous: false,
+  } as Context);
+  assert.equal(result.pass, true);
 });
 
 test('trust safety still flags an inline-code-wrapped supplied script', () => {
