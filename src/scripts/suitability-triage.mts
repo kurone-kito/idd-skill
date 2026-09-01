@@ -365,6 +365,60 @@ const POLICY_OVERRIDE_NOUN_PATTERN = new RegExp(
   `\\b(${POLICY_OVERRIDE_NOUN_SOURCE})\\b`,
   'i',
 );
+// #2219: broadens checkAutonomy's coordination-language matcher beyond its two
+// original fixed templates (requires .../stakeholder ... sign-off) to catch
+// equally natural phrasings for the same unresolved human-coordination
+// dependency -- reported by an adopter as passing checkAutonomy under
+// different wording. Deliberately excludes a bare "unresolved" alternative:
+// this repository's own instruction files use that word constantly for
+// unrelated concepts (unresolved review threads, unresolved roadmap
+// descendants), so only the multi-word "unresolved decision/question/choice"
+// phrasing is included.
+const UNRESOLVED_CHOICE_SOURCE =
+  '(?:TBD|to be determined|still undecided|undecided|not (?:yet )?decided|unresolved (?:decision|question|choice)|pending (?:a |the )?(?:decision|approval)|open question(?:s)? for (?:the )?(?:maintainer|team|stakeholders?)|awaiting (?:a |the )?(?:decision|approval|input)|maintainer (?:to |must |needs to )?(?:decide|choose))';
+const UNRESOLVED_CHOICE_PATTERN = new RegExp(
+  `\\b${UNRESOLVED_CHOICE_SOURCE}\\b`,
+  'gi',
+);
+// #2219: an either/or acceptance-criterion shape naming two mutually
+// exclusive implementation paths. Only flagged together with an
+// un-negated UNRESOLVED_CHOICE_PATTERN match nearby (see checkAutonomy) --
+// the either/or structure alone also describes an ordinary AC offering two
+// already-resolved, equivalent options, which must keep passing.
+const EITHER_OR_PROXIMITY_WINDOW_CHARS = 120;
+const EITHER_OR_PATTERN = new RegExp(
+  `\\beither\\b[\\s\\S]{0,${EITHER_OR_PROXIMITY_WINDOW_CHARS}}?\\bor\\b`,
+  'gi',
+);
+// Window checkAutonomy's negation checks scan on either side of a match --
+// shared by the coordination-language, unresolved-choice, and either/or
+// marker checks via isNegatedNearby below.
+const NEGATION_WINDOW_CHARS = 60;
+/**
+ * True when a negation word (NEGATION_PATTERN) appears within
+ * `windowChars` immediately before or after `matchText` at `matchIndex`
+ * in `body` -- e.g. "no longer TBD" negates a "TBD" match rather than
+ * confirming it. Used by checkAutonomy's coordination-language,
+ * unresolved-choice, and either/or marker checks (#2219).
+ */
+function isNegatedNearby(
+  body: string,
+  matchText: string,
+  matchIndex: number,
+  windowChars: number,
+): boolean {
+  const contextBefore = body.slice(
+    Math.max(0, matchIndex - windowChars),
+    matchIndex,
+  );
+  const contextAfter = body.slice(
+    matchIndex + matchText.length,
+    Math.min(body.length, matchIndex + matchText.length + windowChars),
+  );
+  return (
+    NEGATION_PATTERN.test(contextBefore) || NEGATION_PATTERN.test(contextAfter)
+  );
+}
 const ACCEPTANCE_CRITERIA_PATTERN = /^#+\s*Acceptance\s+Criteria\s*$/im;
 // A heading line such as "## Decision (resolved 2026-06-27)" records that a
 // human has already ruled on the issue's open question (see Check 7). The
@@ -1213,6 +1267,61 @@ export function checkAutonomy(context: Context): CheckOutcome {
     }
   }
 
+  // #2219: an either/or acceptance-criterion shape naming two mutually
+  // exclusive implementation paths without saying which one to take.
+  // Checked before the standalone unresolved-choice scan further below:
+  // both checks match against the same UNRESOLVED_CHOICE_PATTERN markers,
+  // so checking either/or first is what makes this variant's own evidence
+  // message reachable rather than always pre-empted by that later, more
+  // generic match on the same marker. Requires an un-negated marker
+  // touching or within EITHER_OR_PROXIMITY_WINDOW_CHARS of the either/or
+  // span -- an ordinary AC offering two already-resolved, equivalent
+  // options must keep passing, including when a resolved statement nearby
+  // happens to mention a marker word in its own negated form (e.g. "this
+  // is no longer TBD").
+  const eitherOrMatches = [...body.matchAll(EITHER_OR_PATTERN)];
+  if (eitherOrMatches.length > 0) {
+    for (const marker of body.matchAll(UNRESOLVED_CHOICE_PATTERN)) {
+      const markerText = marker[0] ?? '';
+      const markerIndex = marker.index ?? 0;
+      if (
+        isNegatedNearby(body, markerText, markerIndex, NEGATION_WINDOW_CHARS)
+      ) {
+        continue;
+      }
+
+      const markerEnd = markerIndex + markerText.length;
+      const isNearOrInsideEitherOr = eitherOrMatches.some((eitherOr) => {
+        const eitherOrText = eitherOr[0] ?? '';
+        const eitherOrIndex = eitherOr.index ?? 0;
+        const eitherOrEnd = eitherOrIndex + eitherOrText.length;
+        if (markerIndex < eitherOrEnd && markerEnd > eitherOrIndex) {
+          // The marker overlaps the either/or span itself (e.g. "either
+          // TBD ... or ...").
+          return true;
+        }
+        const gapAfterEitherOr = markerIndex - eitherOrEnd;
+        const gapBeforeEitherOr = eitherOrIndex - markerEnd;
+        return (
+          (gapAfterEitherOr >= 0 &&
+            gapAfterEitherOr <= EITHER_OR_PROXIMITY_WINDOW_CHARS) ||
+          (gapBeforeEitherOr >= 0 &&
+            gapBeforeEitherOr <= EITHER_OR_PROXIMITY_WINDOW_CHARS)
+        );
+      });
+
+      if (!isNearOrInsideEitherOr) {
+        continue;
+      }
+
+      return {
+        pass: false,
+        evidence:
+          'Issue presents an unresolved either/or implementation choice.',
+      };
+    }
+  }
+
   // Negation-aware parsing for external coordination and human decision requirements
   const coordinationMatches = [
     ...body.matchAll(
@@ -1226,17 +1335,7 @@ export function checkAutonomy(context: Context): CheckOutcome {
   for (const match of coordinationMatches) {
     const matchedText = match[0] ?? '';
     const matchIndex = match.index ?? 0;
-    const contextBefore = body.slice(Math.max(0, matchIndex - 60), matchIndex);
-    const contextAfter = body.slice(
-      matchIndex + matchedText.length,
-      Math.min(body.length, matchIndex + matchedText.length + 60),
-    );
-
-    // Check if negated (either before or immediately after)
-    if (
-      NEGATION_PATTERN.test(contextBefore) ||
-      NEGATION_PATTERN.test(contextAfter)
-    ) {
+    if (isNegatedNearby(body, matchedText, matchIndex, NEGATION_WINDOW_CHARS)) {
       // This is a negated non-requirement; skip this match
       continue;
     }
@@ -1245,6 +1344,22 @@ export function checkAutonomy(context: Context): CheckOutcome {
       pass: false,
       evidence:
         'Issue explicitly requires external human coordination or approval.',
+    };
+  }
+
+  // #2219: a nearby-word unresolved-choice phrasing beyond the two fixed
+  // templates above -- TBD, to be determined, pending a decision, an open
+  // question for the maintainer, and similar (see UNRESOLVED_CHOICE_SOURCE).
+  for (const marker of body.matchAll(UNRESOLVED_CHOICE_PATTERN)) {
+    const markerText = marker[0] ?? '';
+    const markerIndex = marker.index ?? 0;
+    if (isNegatedNearby(body, markerText, markerIndex, NEGATION_WINDOW_CHARS)) {
+      continue;
+    }
+
+    return {
+      pass: false,
+      evidence: 'Issue names an unresolved product or design choice.',
     };
   }
 

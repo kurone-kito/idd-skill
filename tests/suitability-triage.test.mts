@@ -1974,6 +1974,100 @@ test('autonomy fails when stakeholder sign-off is required', () => {
   assert.equal(result.pass, false);
 });
 
+test('autonomy fails on a nearby-word unresolved-choice phrasing beyond the two fixed templates -- #2219', () => {
+  const result = checkAutonomy({
+    issue: {
+      ...BASE_ISSUE,
+      body: `${BASE_ISSUE.body}\nThe caching backend is TBD pending maintainer review.`,
+    },
+  } as Context);
+  assert.equal(result.pass, false);
+});
+
+test('autonomy fails on an either/or acceptance-criterion shape naming two unresolved implementation paths -- #2219', () => {
+  const result = checkAutonomy({
+    issue: {
+      ...BASE_ISSUE,
+      body: `${BASE_ISSUE.body}\n## Acceptance Criteria\n- Either store sessions in Redis or in-memory (not yet decided which).`,
+    },
+  } as Context);
+  assert.equal(result.pass, false);
+  // Proves the either/or-specific path actually fired (Copilot review
+  // finding: the standalone unresolved-choice scan later in checkAutonomy
+  // matches the same marker, which could otherwise mask this check and
+  // leave it permanently unreachable if it ran first).
+  assert.match(result.evidence, /either\/or/);
+});
+
+test('autonomy fails when the unresolved-choice marker sits inside the either/or span itself -- #2219 (Copilot)', () => {
+  const result = checkAutonomy({
+    issue: {
+      ...BASE_ISSUE,
+      body: `${BASE_ISSUE.body}\n## Acceptance Criteria\n- Either TBD caching backend or a fixed one, implementation pending.`,
+    },
+  } as Context);
+  assert.equal(result.pass, false);
+  assert.match(result.evidence, /either\/or/);
+});
+
+test('autonomy still passes an either/or criterion resolved by a negated marker nearby -- #2219 (CodeRabbit, no new false positive)', () => {
+  const result = checkAutonomy({
+    issue: {
+      ...BASE_ISSUE,
+      body: `${BASE_ISSUE.body}\n## Acceptance Criteria\n- Either store sessions in Redis or in-memory. This is no longer TBD -- Redis was already selected and implemented.`,
+    },
+  } as Context);
+  assert.equal(result.pass, true);
+});
+
+test('autonomy still passes an ordinary either/or acceptance criterion offering two already-resolved, equivalent options -- #2219 (no new false positive)', () => {
+  const result = checkAutonomy({
+    issue: {
+      ...BASE_ISSUE,
+      body: `${BASE_ISSUE.body}\n## Acceptance Criteria\n- Either approach satisfies this requirement; both are already implemented and equivalent.`,
+    },
+  } as Context);
+  assert.equal(result.pass, true);
+});
+
+test('autonomy still passes ordinary prose using "unresolved" for an unrelated concept -- #2219 (no new false positive)', () => {
+  const result = checkAutonomy({
+    issue: {
+      ...BASE_ISSUE,
+      body: `${BASE_ISSUE.body}\nThis change leaves no unresolved review threads once merged.`,
+    },
+  } as Context);
+  assert.equal(result.pass, true);
+});
+
+test('autonomy ignores a negated unresolved-choice phrasing -- #2219', () => {
+  const result = checkAutonomy({
+    issue: {
+      ...BASE_ISSUE,
+      body: `${BASE_ISSUE.body}\nThis is no longer TBD; the maintainer already decided on approach A.`,
+    },
+  } as Context);
+  assert.equal(result.pass, true);
+});
+
+test('autonomy still fails both original fixed templates unchanged -- #2219 (no regression)', () => {
+  const requiresResult = checkAutonomy({
+    issue: {
+      ...BASE_ISSUE,
+      body: `${BASE_ISSUE.body}\nThis requires human decision before proceeding.`,
+    },
+  } as Context);
+  assert.equal(requiresResult.pass, false);
+
+  const stakeholderResult = checkAutonomy({
+    issue: {
+      ...BASE_ISSUE,
+      body: `${BASE_ISSUE.body}\nStakeholder approval is needed here.`,
+    },
+  } as Context);
+  assert.equal(stakeholderResult.pass, false);
+});
+
 test('verifiability fails when acceptance criteria is subjective', () => {
   const result = checkVerifiability({
     issue: {
