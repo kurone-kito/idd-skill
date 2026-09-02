@@ -109,6 +109,16 @@ samples across at least 2 distinct vendors. Below that gate, the
 README blurb and the table below stay on an unpublished stub — no
 number is ever invented to fill the gap.
 
+**Known caveat**: an event-window sample's `outcome` currently
+misclassifies a genuinely merged loop as `unclaimed` whenever the
+closing PR used the standard `Closes #N` keyword link instead of
+GitHub's manual Development-panel link (every PR this repository's own
+IDD workflow opens) — `fetchIssueLoopGithubContext` resolves the
+connected PR via `ConnectedEvent`, which only the manual link
+produces. Tracked separately (Refs #2444); until fixed, treat any
+`unclaimed` outcome on an event-window (`#ew<issueNumber>`) sample as
+unverified rather than a genuine abandoned-claim signal.
+
 ## Current snapshot
 
 <!-- token-cost-docs:start -->
