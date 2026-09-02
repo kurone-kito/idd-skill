@@ -266,6 +266,20 @@ test('getWorkItem throws a categorized ProviderError for a fixture-injected auth
   );
 });
 
+test('getWorkItem throws a categorized ProviderError for a fixture-injected authorization (permission) failure', () => {
+  const port = createFakeProviderAdapter({
+    workItemErrors: {
+      4: { category: 'authorization', message: 'gh: 403 forbidden' },
+    },
+  });
+  assert.throws(
+    () => port.getWorkItem(4),
+    (error: unknown) =>
+      error instanceof Error &&
+      (error as Error & { category?: string }).category === 'authorization',
+  );
+});
+
 test('getWorkItem throws a categorized ProviderError for a fixture-injected conflict', () => {
   const port = createFakeProviderAdapter({
     workItemErrors: {
