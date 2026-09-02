@@ -227,7 +227,7 @@ const NEGATION_PATTERN =
 // hyphenated compound word (`evidence-skip`) at a fixed lookbehind
 // distance. Distinguishing the two needs to trace a whole token back to
 // its own origin, which no fixed-width lookbehind can do; see
-// `isOrdinaryHyphenatedCompoundVerb` below, called from
+// `isOrdinaryHyphenatedCompoundToken` below, called from
 // `findPolicyOverrideMatch`, for that classification instead.
 const POLICY_OVERRIDE_VERB_SOURCE = `(?:ignore|bypass|override|disable|disable|skip|turn off|suppress|disable)`;
 // #2218: a bare `\b` treats a hyphen as a non-word character, so every one
@@ -235,14 +235,45 @@ const POLICY_OVERRIDE_VERB_SOURCE = `(?:ignore|bypass|override|disable|disable|s
 // mention (e.g. this project's own marker prefix in `idd-workflow-notes.md`
 // -- both `idd` and `workflow` matched there, each independently), with
 // nothing nearby actually attempting to change this checker's own
-// behavior. Same fix shape as `SUBJECTIVE_SUBJECT_PATTERN` (#2205): wrap
-// the whole alternation in a shared `(?<![\w-])`/`(?![\w-])` boundary so a
-// hyphen-adjacent occurrence no longer counts for any noun, while a
-// freestanding use ("bypass idd", "disable IDD gate", "bypass workflow
-// checks") still does.
-const POLICY_OVERRIDE_NOUN_SOURCE = String.raw`(?<![\w-])(?:repo|repository|policy|workflow|idd|process|check|gate|requirement)(?![\w-])`;
+// behavior. The trailing `(?![\w-])` guard below excludes a noun
+// immediately followed by a hyphen (e.g. `idd` in `idd-workflow-notes.md`)
+// -- unlike the leading side (#2408 below), this direction has no
+// classifier-based counterpart: the leading-side classifier can trace a
+// hyphen run back to its own origin because a flag's OWN name always
+// starts there, but a hyphen AFTER the noun could just as easily continue
+// a real flag name the noun is only the first component of (`--policy-file`,
+// `--gate-config`) as it could an ordinary compound (`idd-workflow`) --
+// nothing at the noun's own trailing edge distinguishes the two shapes.
+// A listed noun referenced as a non-final flag component is therefore a
+// deliberate, documented limit of this guard, the same class of limit as
+// the verb side's bare, un-code-wrapped "force-skip" (see
+// isOrdinaryHyphenatedCompoundToken's own comment below): nothing in shape
+// alone separates `--policy-file` from `idd-workflow`, and any guard broad
+// enough to catch the former would reintroduce the #2218 false positive on
+// the latter.
+//
+// #2408: an earlier revision also wrapped the LEADING side in the same
+// `(?<![\w-])` shape (mirroring `SUBJECTIVE_SUBJECT_PATTERN`, #2205),
+// which excluded every hyphen-adjacent noun outright -- including a
+// genuine directive phrased as a hyphen-prefixed CLI flag reference
+// (`--policy`), the same class of gap `#2407` already fixed on the verb
+// side. A bare leading lookbehind cannot distinguish that from an
+// ordinary compound (`idd-workflow`); only tracing the whole hyphen run
+// back to its own origin can, which is exactly what
+// `isOrdinaryHyphenatedCompoundToken` (shared with the verb side, renamed
+// from `isOrdinaryHyphenatedCompoundVerb`) does. The leading guard is
+// removed here, and that classifier is called from
+// `findPolicyOverrideMatch` at the noun's own match position instead, so
+// a freestanding use ("bypass idd", "disable IDD gate", "bypass workflow
+// checks") and a flag-style reference ("--policy", "/policy") both still
+// match, while an ordinary hyphenated compound noun stays excluded.
+const POLICY_OVERRIDE_NOUN_SOURCE = String.raw`(?:repo|repository|policy|workflow|idd|process|check|gate|requirement)(?![\w-])`;
+// #2408: shared with findGenuineNounMatch below, which re-searches this
+// same verb-to-noun span when the pattern's own greedy noun pick turns out
+// to be an excluded ordinary compound.
+const POLICY_OVERRIDE_WINDOW_CHARS = 60;
 const POLICY_OVERRIDE_PATTERN = new RegExp(
-  `\\b(${POLICY_OVERRIDE_VERB_SOURCE})\\b[\\s\\S]{0,60}\\b(${POLICY_OVERRIDE_NOUN_SOURCE})\\b`,
+  `\\b(${POLICY_OVERRIDE_VERB_SOURCE})\\b[\\s\\S]{0,${POLICY_OVERRIDE_WINDOW_CHARS}}\\b(${POLICY_OVERRIDE_NOUN_SOURCE})\\b`,
   'i',
 );
 // Reused by findNegationWithinTwoWordsAfter to stop the post-verb scan once
@@ -358,13 +389,30 @@ const CLAUSE_TERMINATOR_PATTERN = /[.!?;,:]/;
 // A negation past the noun or a terminator belongs to the next clause
 // ("Disable workflow no questions asked." / "Disable workflow; no
 // notifications."), same as #2024 / #2040.
-function findNegationWithinTwoWordsAfter(rawSource, maskedSource, afterStart) {
+function findNegationWithinTwoWordsAfter(
+  rawSource,
+  maskedSource,
+  afterStart,
+  getCodeRangeAt,
+) {
   const substring = rawSource.slice(afterStart);
   const termMatch = CLAUSE_TERMINATOR_PATTERN.exec(substring);
   const firstTerminator = termMatch ? termMatch.index : Infinity;
-  const nounRegex = new RegExp(POLICY_OVERRIDE_NOUN_PATTERN.source, 'gi');
-  const nounMatch = nounRegex.exec(substring);
-  const firstNoun = nounMatch ? nounMatch.index : Infinity;
+  // #2408: skip a noun match `isOrdinaryHyphenatedCompoundToken` would
+  // itself exclude from POLICY_OVERRIDE_PATTERN (e.g. the hyphen-adjacent
+  // "check" in "per-check") when locating the phrase's own noun boundary --
+  // otherwise a negation that comes after an excluded compound but before
+  // the directive's real, genuine noun is wrongly read as belonging to a
+  // later clause and the directive stays (wrongly) un-negated.
+  const genuineNoun = findGenuineNounMatch(
+    rawSource,
+    afterStart,
+    rawSource,
+    getCodeRangeAt,
+    Infinity,
+    false,
+  );
+  const firstNoun = genuineNoun ? genuineNoun.relativeIndex : Infinity;
   const boundary = Math.min(firstTerminator, firstNoun);
   const negRegex = new RegExp(POST_VERB_NEGATION_PATTERN.source, 'gi');
   while (true) {
@@ -465,7 +513,77 @@ function isNegatedPolicyOverrideMatch(
     rawSource,
     maskedSource,
     afterVerbStart,
+    getCodeRangeAt,
   );
+}
+// #2408: shared by findNegationWithinTwoWordsAfter's boundary computation
+// and findPolicyOverrideMatch's noun re-pick -- both need "a noun match
+// starting at or after `afterStart`, in `searchText`, that
+// isOrdinaryHyphenatedCompoundToken would NOT exclude," skipping any
+// candidate that fails the same code-range + compound-classifier gate
+// `findPolicyOverrideMatch` already applies to a verb match. `maxChars`
+// bounds only the GAP before a candidate noun's own start position
+// (mirroring POLICY_OVERRIDE_PATTERN's `[\s\S]{0,N}`, which limits what
+// comes BEFORE the noun, not the noun's own length -- the search text
+// itself stays unbounded on the right, or a noun whose start falls within
+// the gap but whose own characters extend past it would be truncated
+// mid-word and silently fail to match); pass `Infinity` for an unbounded
+// scan (the negation-boundary use, which must reach the phrase's own noun
+// regardless of distance).
+//
+// `preferFarthest` selects which surviving candidate to return:
+// - `false` (negation boundary): the NEAREST one, matching the original
+//   single, non-looping `nounRegex.exec` call this replaces.
+// - `true` (findPolicyOverrideMatch's noun re-pick): the FARTHEST one,
+//   matching POLICY_OVERRIDE_PATTERN's own greedy `[\s\S]{0,N}` -- greedy
+//   backtracking tries the longest gap first and returns on the first
+//   syntactic match found working backward, so it naturally lands on the
+//   farthest candidate. Re-picking the nearest one instead would silently
+//   shrink the reported evidence span whenever an earlier valid noun sits
+//   before the one the pattern itself would have chosen.
+function findGenuineNounMatch(
+  searchText,
+  afterStart,
+  rawSource,
+  getCodeRangeAt,
+  maxChars,
+  preferFarthest,
+) {
+  const substring = searchText.slice(afterStart);
+  const nounRegex = new RegExp(POLICY_OVERRIDE_NOUN_PATTERN.source, 'gi');
+  let nounMatch;
+  let farthest = null;
+  while (true) {
+    nounMatch = nounRegex.exec(substring);
+    if (nounMatch === null || nounMatch.index > maxChars) {
+      return farthest;
+    }
+    const absoluteIndex = afterStart + nounMatch.index;
+    // #2408: a candidate noun sitting inside a masked code range always
+    // counts as a genuine (non-excluded) match, the same way the verb side
+    // already treats a code-wrapped bare key (#2407 review round 5): being
+    // wrapped in code at all is itself the distinguishing signal a bare
+    // hyphenated compound in prose lacks, so a directive referencing a
+    // listed noun via a code-wrapped identifier (e.g. `` `per-check` ``)
+    // stays detectable even though the same bare, un-code-wrapped text in
+    // prose is a deliberately accepted ordinary-compound exclusion.
+    if (
+      getCodeRangeAt(absoluteIndex) ||
+      !isOrdinaryHyphenatedCompoundToken(rawSource, absoluteIndex)
+    ) {
+      const candidate = {
+        relativeIndex: nounMatch.index,
+        length: nounMatch[0].length,
+      };
+      if (!preferFarthest) {
+        return candidate;
+      }
+      farthest = candidate;
+    }
+    if (nounRegex.lastIndex === nounMatch.index) {
+      nounRegex.lastIndex += 1;
+    }
+  }
 }
 // #2399/#2407: a true prose boundary immediately before a hyphenated run's
 // own word-character origin -- whitespace, or one of the wrapping
@@ -474,7 +592,7 @@ function isNegatedPolicyOverrideMatch(
 // SUPPLIED_CONTENT_OBJECT_REFERENCE above). Deliberately minimal, and
 // deliberately NOT grown to cover every prose-punctuation character that
 // might directly abut a flag with no whitespace (colon, period, comma, ...,
-// #2407 review round 6, Copilot): isOrdinaryHyphenatedCompoundVerb only
+// #2407 review round 6, Copilot): isOrdinaryHyphenatedCompoundToken only
 // ever tests this pattern against the single character immediately before
 // a `[\w-]` run's own origin, never against a character INSIDE that run --
 // so adding a character here can only ever narrow (never widen) which runs
@@ -537,7 +655,14 @@ const COMPOUND_TOKEN_BOUNDARY_PATTERN = /[\s\x60'"(]/;
 // classification, while still correctly closing the reported gap (that
 // run now starts at the flag's own leading hyphen, not several characters
 // further back across the punctuation).
-function isOrdinaryHyphenatedCompoundVerb(rawSource, matchIndex) {
+//
+// #2408: renamed from `isOrdinaryHyphenatedCompoundVerb` and reused
+// unchanged for `POLICY_OVERRIDE_NOUN_SOURCE`'s leading side too -- every
+// comment above describes the general "walk a hyphen run back to its own
+// origin" mechanism, not anything specific to the verb word list, so the
+// noun side needed no logic changes here, only a second call site in
+// `findPolicyOverrideMatch` at the noun's own match position.
+function isOrdinaryHyphenatedCompoundToken(rawSource, matchIndex) {
   if (rawSource[matchIndex - 1] !== '-') {
     return false;
   }
@@ -574,6 +699,19 @@ function isOrdinaryHyphenatedCompoundVerb(rawSource, matchIndex) {
   );
 }
 function findPolicyOverrideMatch(text, maskedText, getCodeRangeAt) {
+  // #2408: POLICY_OVERRIDE_PATTERN's own greedy `[\s\S]{0,N}` backtracks
+  // from the far end of the window inward, so its own noun capture (group
+  // 2) is whichever syntactically valid noun sits FARTHEST from the verb,
+  // not nearest -- and if that farthest candidate turns out to be an
+  // excluded ordinary compound (e.g. "check" in "anti-check"), a nearer
+  // genuine noun in the same window (e.g. "repository" right after the
+  // verb) would otherwise never be tried, silently letting a real
+  // directive through. Both passes below use the combined pattern only as
+  // a cheap "is there any noun candidate in range at all" filter, then
+  // independently re-pick the actual accepted noun via
+  // findGenuineNounMatch (farthest-first, skipping excluded candidates --
+  // same selection direction the pattern's own backtracking already used)
+  // rather than trusting the pattern's own capture.
   const maskedPattern = new RegExp(POLICY_OVERRIDE_PATTERN.source, 'gi');
   let maskedMatch;
   while (true) {
@@ -582,31 +720,48 @@ function findPolicyOverrideMatch(text, maskedText, getCodeRangeAt) {
       break;
     }
     const index = maskedMatch.index;
+    const verb = maskedMatch[1] ?? '';
     if (
       (!getCodeRangeAt(index) &&
-        isOrdinaryHyphenatedCompoundVerb(text, index)) ||
+        isOrdinaryHyphenatedCompoundToken(text, index)) ||
       isNegatedPolicyOverrideMatch(
         text,
         maskedText,
         index,
-        maskedMatch[1] ?? '',
+        verb,
         getCodeRangeAt,
       )
     ) {
       // A negated (or ordinary-compound) match's own greedy span can reach
-      // up to 60 chars past the verb and swallow a second, genuine trigger
-      // further along (e.g. "does not skip the release check. Ignore
-      // repository policy."). The engine already auto-advanced lastIndex to
-      // the end of that whole span; rewind it to resume scanning right
-      // after the skipped verb, so a later independent trigger is never
-      // missed. Mirrors the code-only skip's "resume just after the inert
-      // occurrence" rule below.
-      maskedPattern.lastIndex = index + (maskedMatch[1]?.length || 1);
+      // up to POLICY_OVERRIDE_WINDOW_CHARS past the verb and swallow a
+      // second, genuine trigger further along (e.g. "does not skip the
+      // release check. Ignore repository policy."). The engine already
+      // auto-advanced lastIndex to the end of that whole span; rewind it to
+      // resume scanning right after the skipped verb, so a later
+      // independent trigger is never missed. Mirrors the code-only skip's
+      // "resume just after the inert occurrence" rule below.
+      maskedPattern.lastIndex = index + (verb.length || 1);
       continue;
     }
+    const genuineNoun = findGenuineNounMatch(
+      maskedText,
+      index + verb.length,
+      text,
+      getCodeRangeAt,
+      POLICY_OVERRIDE_WINDOW_CHARS,
+      true,
+    );
+    if (genuineNoun === null) {
+      // Every noun candidate in this verb's window is an excluded ordinary
+      // compound -- not a genuine trigger. Resume scanning after the verb.
+      maskedPattern.lastIndex = index + (verb.length || 1);
+      continue;
+    }
+    const nounEnd =
+      index + verb.length + genuineNoun.relativeIndex + genuineNoun.length;
     return {
       index,
-      text: text.slice(index, index + maskedMatch[0].length),
+      text: text.slice(index, nounEnd),
     };
   }
   // A real directive may wrap one of its tokens in inline code. The masked
@@ -623,24 +778,38 @@ function findPolicyOverrideMatch(text, maskedText, getCodeRangeAt) {
     if (index < 0) {
       continue;
     }
+    const verb = match[1] ?? '';
     if (
       (!getCodeRangeAt(index) &&
-        isOrdinaryHyphenatedCompoundVerb(text, index)) ||
+        isOrdinaryHyphenatedCompoundToken(text, index)) ||
       isNegatedPolicyOverrideMatch(
         text,
         maskedText,
         index,
-        match[1] ?? '',
+        verb,
         getCodeRangeAt,
       )
     ) {
       // Same rewind as the masked-pass loop above: a negated or
       // ordinary-compound match's own greedy span can swallow a later,
       // genuine trigger.
-      pattern.lastIndex = index + (match[1]?.length || 1);
+      pattern.lastIndex = index + (verb.length || 1);
       continue;
     }
-    const end = index + match[0].length;
+    const genuineNoun = findGenuineNounMatch(
+      text,
+      index + verb.length,
+      text,
+      getCodeRangeAt,
+      POLICY_OVERRIDE_WINDOW_CHARS,
+      true,
+    );
+    if (genuineNoun === null) {
+      pattern.lastIndex = index + (verb.length || 1);
+      continue;
+    }
+    const end =
+      index + verb.length + genuineNoun.relativeIndex + genuineNoun.length;
     const codeRange = getCodeRangeAt(index);
     if (codeRange) {
       const codeOnlyMatch = POLICY_OVERRIDE_PATTERN.exec(
@@ -678,7 +847,7 @@ function findPolicyOverrideMatch(text, maskedText, getCodeRangeAt) {
       codeRange.start > index ||
       end > codeRange.end
     ) {
-      return { index, text: match[0] };
+      return { index, text: text.slice(index, end) };
     }
   }
   return null;
