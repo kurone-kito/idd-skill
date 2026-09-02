@@ -1797,6 +1797,29 @@ test('postWorkItemComment throws on a malformed successful response instead of r
   );
 });
 
+test('postWorkItemComment does not retry a malformed successful response (Copilot review, #2504)', () => {
+  // Unlike a transport failure, a malformed-but-200 response is a shape
+  // bug -- retrying it is unlikely to help and would risk a double-post
+  // if the best-effort dedupe read itself fails. It must fail fast
+  // instead of consuming the remaining bounded attempts.
+  let ghTextCalls = 0;
+  const port = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({
+      ghText: () => {
+        ghTextCalls += 1;
+        return JSON.stringify({ html_url: 'https://example/1' }); // missing id, every call
+      },
+    }),
+  );
+  assert.throws(
+    () => port.postWorkItemComment(9, 'marker body'),
+    /malformed POST response/,
+  );
+  assert.equal(ghTextCalls, 1);
+});
+
 test('postWorkItemComment throws the last error once retries are exhausted with no matching comment ever found', () => {
   const port = createGithubProviderAdapter(
     'o',

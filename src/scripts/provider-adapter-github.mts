@@ -227,11 +227,23 @@ function findRecentExactBodyMatch(
 }
 
 /**
+ * #2460 (Copilot review, #2504): a malformed-but-200 POST response is a
+ * shape bug, not a transport blip -- retrying it is unlikely to help, and
+ * doing so anyway risks a double-post if the best-effort dedupe read
+ * ({@link findRecentExactBodyMatch}) itself fails. A dedicated error class
+ * lets {@link postWorkItemCommentWithRetry}'s catch block recognize this
+ * case and fail fast instead of consuming the remaining bounded attempts.
+ */
+class MalformedPostWorkItemCommentResponseError extends Error {}
+
+/**
  * #2460: POST a work-item (issue/PR) comment with a bounded retry against
  * transient `gh` failures, guarding against the resulting duplicate-post
  * risk via {@link findRecentExactBodyMatch}, and validating the response
  * shape before treating the marker as posted (catches a 200-with-
- * malformed-body edge case a bare retry would not).
+ * malformed-body edge case a bare retry would not -- see
+ * {@link MalformedPostWorkItemCommentResponseError} for why that specific
+ * case fails fast rather than retrying).
  */
 function postWorkItemCommentWithRetry(
   deps: GithubProviderAdapterDeps,
@@ -272,12 +284,15 @@ function postWorkItemCommentWithRetry(
       const id = Number(parsed.id);
       const htmlUrl = String(parsed.html_url ?? '');
       if (!Number.isInteger(id) || id <= 0 || htmlUrl === '') {
-        throw new Error(
+        throw new MalformedPostWorkItemCommentResponseError(
           `postWorkItemComment: malformed POST response for ${repoPath}/issues/${number} (missing id/html_url)`,
         );
       }
       return { id, htmlUrl };
     } catch (error) {
+      if (error instanceof MalformedPostWorkItemCommentResponseError) {
+        throw error;
+      }
       lastError = error;
     }
   }
