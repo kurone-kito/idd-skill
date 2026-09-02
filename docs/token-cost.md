@@ -63,6 +63,31 @@ and appends `kind: "issue-loop"` / `kind: "session"` records to
 sibling `events.jsonl` path (`--events` to override), those timestamps
 win over the marker-join reconstruction for the stages they cover.
 
+`token-cost-event.mjs` also auto-derives each event's `vendorSessionId`
+from a vendor-specific env var -- `$CLAUDE_CODE_SESSION_ID` for
+`--vendor claude`, no equivalent known yet for `grok`/`codex` -- with no
+flag needed. When two attempts for the same issue leave events in
+`events.jsonl` (a retry, a fail-open dropped call), an identified
+attempt's own `enter`/`exit` pair is never mixed with a different
+attempt's, and a same-issue match across more than one project log file
+resolves to whichever file's own session id matches, instead of being
+skipped. Legacy (identity-agnostic) joining still applies exactly as
+before this field existed, but only when the relevant events are
+themselves unidentified (all historical data, and any vendor with no
+known session-id source) -- once identified events are present, an
+identified stage is never treated as compatible with a differently- or
+un-identified completion, so a stale or unrelated attempt can't be
+silently absorbed. One accepted tradeoff from this: when a single issue
+loop legitimately spans multiple Claude sessions (a handoff or resume,
+Refs Scope above), the event-window fallback currently only harvests
+that loop's usage from the session that posted `cleanup` -- an earlier
+session's own identified stage windows are excluded rather than folded
+in, since a session-id mismatch cannot be told apart from a genuinely
+unrelated, abandoned attempt at the event level. Full multi-session
+aggregation for this path is tracked separately (Refs #2432); the
+harvested sample stays an undercount rather than risking a
+mismatched/contaminated one in the meantime.
+
 `node scripts/token-cost-report.mjs`:
 
 - `--in <samples.jsonl> [--in <samples.jsonl> ...] --apply` aggregates

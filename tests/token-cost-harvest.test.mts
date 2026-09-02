@@ -187,8 +187,47 @@ test("scanClaudeVendorSessions scopes each cwd segment's timeline to just that s
 
 // --- #2418: event-window issue-number fallback -----------------------------
 
-function stageWindow(startIso: string, endIso: string): StageEventWindow {
-  return { startMs: ms(startIso), endMs: ms(endIso) };
+function stageWindow(
+  startIso: string,
+  endIso: string,
+  vendorSessionId?: string,
+): StageEventWindow {
+  return {
+    startMs: ms(startIso),
+    endMs: ms(endIso),
+    ...(vendorSessionId !== undefined ? { vendorSessionId } : {}),
+  };
+}
+
+// #2424: builds one raw --events JSONL line, matching TokenCostEvent's
+// own shape.
+function tokenCostEvent(
+  event: 'enter' | 'exit',
+  stageId: string,
+  atIso: string,
+  issueNumber: number,
+  vendorSessionId?: string,
+  vendor = 'claude',
+): string {
+  return JSON.stringify({
+    schemaVersion: 1,
+    event,
+    stageId,
+    at: atIso,
+    vendor,
+    issueNumber,
+    ...(vendorSessionId !== undefined ? { vendorSessionId } : {}),
+  });
+}
+
+function writeEventsFile(lines: readonly string[]): {
+  dir: string;
+  path: string;
+} {
+  const dir = mkdtempSync(join(tmpdir(), 'idd-token-cost-events-'));
+  const path = join(dir, 'events.jsonl');
+  writeFileSync(path, `${lines.join('\n')}\n`);
+  return { dir, path };
 }
 
 test('buildCompletedIssueWindows: builds an overall window only for an issue with a CLOSED cleanup stage', () => {
@@ -616,6 +655,144 @@ test('buildCompletedIssueWindows: a reversed non-cleanup stage window entirely P
   assert.equal(windows[0].endMs, ms('2026-01-01T01:00:00Z'));
 });
 
+test('buildCompletedIssueWindows: excludes a non-cleanup stage window whose vendorSessionId differs from the winning cleanup attempt, even though it is internally valid (#2424)', () => {
+  // Attempt A's own 'work' pair is internally valid (non-reversed) but
+  // belongs to an EARLIER attempt than the one that reached cleanup
+  // (attempt B). Pre-#2424, this shape was mechanically indistinguishable
+  // from a genuine early start and silently widened startMs back to A's
+  // own enter. With vendorSessionId available, the mismatch excludes it
+  // outright: startMs stays at cleanup's own startMs.
+  const all = new Map<string, StageEventWindow>([
+    [
+      '501:claude:work',
+      stageWindow('2026-01-01T00:00:00Z', '2026-01-01T00:05:00Z', 'attempt-A'),
+    ],
+    [
+      '501:claude:cleanup',
+      stageWindow('2026-01-01T00:20:00Z', '2026-01-01T00:25:00Z', 'attempt-B'),
+    ],
+  ]);
+  const windows = buildCompletedIssueWindows(all, 'claude');
+  assert.equal(windows.length, 1);
+  assert.equal(windows[0].startMs, ms('2026-01-01T00:20:00Z'));
+  assert.equal(windows[0].endMs, ms('2026-01-01T00:25:00Z'));
+  assert.equal(windows[0].vendorSessionId, 'attempt-B');
+});
+
+test('buildCompletedIssueWindows: recovers a same-attempt stage window instead of a later, unrelated attempt shadowing it (#2424)', () => {
+  // Attempt A completes fully (work + cleanup). Attempt B later retries
+  // 'work' with its own valid pair but never reaches cleanup. Without
+  // identity, readEventWindows' latest-wins pairing would expose B's
+  // 'work' window (shadowing A's own), which buildCompletedIssueWindows
+  // would then have excluded from widening as "extends past cleanup.endMs"
+  // -- collapsing to a cleanup-only window even though A's own matching
+  // 'work' window exists. With identity, buildCompletedIssueWindows sees
+  // A's own tagged 'work' window here (this is what readEventWindows is
+  // responsible for selecting -- see its own dedicated test below) and
+  // widens startMs to it.
+  const all = new Map<string, StageEventWindow>([
+    [
+      '502:claude:work',
+      stageWindow('2026-01-01T00:00:00Z', '2026-01-01T00:01:00Z', 'attempt-A'),
+    ],
+    [
+      '502:claude:cleanup',
+      stageWindow('2026-01-01T00:02:00Z', '2026-01-01T00:03:00Z', 'attempt-A'),
+    ],
+  ]);
+  const windows = buildCompletedIssueWindows(all, 'claude');
+  assert.equal(windows.length, 1);
+  assert.equal(windows[0].startMs, ms('2026-01-01T00:00:00Z'));
+  assert.equal(windows[0].endMs, ms('2026-01-01T00:03:00Z'));
+});
+
+test('buildCompletedIssueWindows: an identity-matched reversed non-cleanup window is still treated as contamination (#2424)', () => {
+  // Same attempt re-enters 'work' without a matching new exit -- reversed,
+  // but the vendorSessionId matches cleanup's own, so the mismatch guard
+  // does not exclude it; the pre-#2424 reversed-window contamination check
+  // still fires and the whole issue is skipped.
+  const all = new Map<string, StageEventWindow>([
+    [
+      '503:claude:work',
+      stageWindow('2026-01-01T00:04:00Z', '2026-01-01T00:02:00Z', 'attempt-A'),
+    ],
+    [
+      '503:claude:cleanup',
+      stageWindow('2026-01-01T00:05:00Z', '2026-01-01T00:06:00Z', 'attempt-A'),
+    ],
+  ]);
+  const windows = buildCompletedIssueWindows(all, 'claude');
+  assert.equal(windows.length, 0);
+});
+
+test('buildCompletedIssueWindows: a valid non-cleanup window straddling cleanup.endMs is excluded by the existing boundary check regardless of a MATCHING identity (PR #2423 review, re-verified under #2424)', () => {
+  // Raised and rejected on PR #2423 review: a valid (non-reversed) window
+  // whose endMs lands after cleanup.endMs was already excluded from
+  // widening by the pre-#2424 boundary check. Confirms that stays true
+  // even when its vendorSessionId matches cleanup's own -- same-attempt
+  // jitter, not a different-attempt mismatch, but the outcome is identical.
+  const all = new Map<string, StageEventWindow>([
+    [
+      '504:claude:work',
+      stageWindow('2026-01-01T00:00:00Z', '2026-01-01T00:07:00Z', 'attempt-A'),
+    ],
+    [
+      '504:claude:cleanup',
+      stageWindow('2026-01-01T00:05:00Z', '2026-01-01T00:06:00Z', 'attempt-A'),
+    ],
+  ]);
+  const windows = buildCompletedIssueWindows(all, 'claude');
+  assert.equal(windows.length, 1);
+  assert.equal(windows[0].startMs, ms('2026-01-01T00:05:00Z'));
+  assert.equal(windows[0].endMs, ms('2026-01-01T00:06:00Z'));
+});
+
+test('buildCompletedIssueWindows: an unidentified non-cleanup window is unaffected when cleanup itself has an identity (mixed old/new data, #2424)', () => {
+  // cleanup carries an identity (post-#2424 event) but 'work' predates
+  // this field entirely. Absence on one side is not a mismatch -- 'work'
+  // still flows through the pre-#2424 checks exactly as before.
+  const all = new Map<string, StageEventWindow>([
+    [
+      '505:claude:work',
+      stageWindow('2026-01-01T00:00:00Z', '2026-01-01T00:01:00Z'),
+    ],
+    [
+      '505:claude:cleanup',
+      stageWindow('2026-01-01T00:02:00Z', '2026-01-01T00:03:00Z', 'attempt-A'),
+    ],
+  ]);
+  const windows = buildCompletedIssueWindows(all, 'claude');
+  assert.equal(windows.length, 1);
+  assert.equal(windows[0].startMs, ms('2026-01-01T00:00:00Z'));
+  assert.equal(windows[0].vendorSessionId, 'attempt-A');
+});
+
+test('buildCompletedIssueWindows: an IDENTIFIED non-cleanup window from a stale attempt is excluded when cleanup itself is UNIDENTIFIED (Codex review finding round 3, PR #2430, #2424)', () => {
+  // The reverse of the case above, and NOT symmetric: cleanup belongs to
+  // a fresh, unidentified retry (it legitimately won readEventWindows'
+  // own recency comparison over a stale identified completion). 'work'
+  // is a STALE, identified window from an EARLIER, different attempt.
+  // vendorSessionId is derived once per Claude Code process lifetime, so
+  // an identified stage and an unidentified cleanup can never
+  // legitimately be the same attempt -- 'work' must be excluded, not
+  // treated as compatible just because cleanup itself lacks an identity.
+  const all = new Map<string, StageEventWindow>([
+    [
+      '511:claude:work',
+      stageWindow('2026-01-01T00:00:01Z', '2026-01-01T00:00:02Z', 'attempt-A'),
+    ],
+    [
+      '511:claude:cleanup',
+      stageWindow('2026-01-01T00:10:00Z', '2026-01-01T00:10:05Z'),
+    ],
+  ]);
+  const windows = buildCompletedIssueWindows(all, 'claude');
+  assert.equal(windows.length, 1);
+  assert.equal(windows[0].startMs, ms('2026-01-01T00:10:00Z'));
+  assert.equal(windows[0].endMs, ms('2026-01-01T00:10:05Z'));
+  assert.equal('vendorSessionId' in windows[0], false);
+});
+
 test("scanClaudeVendorSessions: a completed cleanup window does not absorb a later retry's activity", () => {
   const sandbox = mkdtempSync(join(tmpdir(), 'idd-token-cost-harvest-ew-'));
   writeFileSync(
@@ -784,6 +961,205 @@ test('scanClaudeVendorSessions: two DIFFERENT project log files matching the sam
   assert.equal(skipMessages.length, 1);
   assert.match(skipMessages[0], /disjoint activity ranges/);
   assert.match(skipMessages[0], /#2424/);
+});
+
+test("scanClaudeVendorSessions: a cross-file match is resolved (not skipped) when exactly one candidate file's own sessionId matches the window's vendorSessionId (#2424)", () => {
+  const sandbox = mkdtempSync(join(tmpdir(), 'idd-token-cost-harvest-ew-'));
+  // The file that actually posted the winning cleanup attempt's events.
+  writeFileSync(
+    join(sandbox, 'session-ew-idA.jsonl'),
+    '{"type":"assistant","timestamp":"2026-01-01T00:20:00.000Z","sessionId":"sess-ew-idA-0001","cwd":"/repo","message":{"model":"m","usage":{"input_tokens":1,"cache_read_input_tokens":0,"cache_creation_input_tokens":0,"output_tokens":1}}}\n',
+  );
+  // A genuinely unrelated concurrent session whose own activity happens
+  // to fall in the same wall-clock window.
+  writeFileSync(
+    join(sandbox, 'session-ew-idB.jsonl'),
+    '{"type":"assistant","timestamp":"2026-01-01T00:21:00.000Z","sessionId":"sess-ew-idB-0001","cwd":"/repo","message":{"model":"m","usage":{"input_tokens":5,"cache_read_input_tokens":0,"cache_creation_input_tokens":0,"output_tokens":5}}}\n',
+  );
+  const eventWindowsAll = new Map<string, StageEventWindow>([
+    [
+      '501:claude:work',
+      stageWindow(
+        '2026-01-01T00:10:00Z',
+        '2026-01-01T00:25:00Z',
+        'sess-ew-idA-0001',
+      ),
+    ],
+    [
+      '501:claude:cleanup',
+      stageWindow(
+        '2026-01-01T00:26:00Z',
+        '2026-01-01T00:30:00Z',
+        'sess-ew-idA-0001',
+      ),
+    ],
+  ]);
+
+  const sessions = scanClaudeVendorSessions(sandbox, eventWindowsAll);
+  const ewSamples = sessions.filter((s) =>
+    s.adapterResult.sample.vendorSessionId.includes('#ew'),
+  );
+
+  // Resolved to fileA only -- fileB's unrelated activity is never folded
+  // in, and this issue is no longer skipped the way an unidentified
+  // cross-file match still is (see the two tests above).
+  assert.equal(ewSamples.length, 1);
+  assert.equal(
+    ewSamples[0].adapterResult.sample.vendorSessionId,
+    'sess-ew-idA-0001#ew501',
+  );
+  assert.equal(sessions.length, 3);
+});
+
+test("scanClaudeVendorSessions: a cross-file match resolves via the SAME basename fallback claudeAdapter.harvest() uses, when the winning file's own records carry no top-level sessionId (Copilot review finding, PR #2430, #2424)", () => {
+  const sandbox = mkdtempSync(join(tmpdir(), 'idd-token-cost-harvest-ew-'));
+  // No top-level "sessionId" field on this file's records -- extractSessionId()
+  // alone returns undefined here; only the basename fallback recovers the
+  // real id ($CLAUDE_CODE_SESSION_ID matches a session log's own basename).
+  writeFileSync(
+    join(sandbox, 'session-ew-idH.jsonl'),
+    '{"type":"assistant","timestamp":"2026-01-01T00:20:00.000Z","cwd":"/repo","message":{"model":"m","usage":{"input_tokens":1,"cache_read_input_tokens":0,"cache_creation_input_tokens":0,"output_tokens":1}}}\n',
+  );
+  writeFileSync(
+    join(sandbox, 'session-ew-idI.jsonl'),
+    '{"type":"assistant","timestamp":"2026-01-01T00:21:00.000Z","sessionId":"sess-ew-idI-0001","cwd":"/repo","message":{"model":"m","usage":{"input_tokens":5,"cache_read_input_tokens":0,"cache_creation_input_tokens":0,"output_tokens":5}}}\n',
+  );
+  const eventWindowsAll = new Map<string, StageEventWindow>([
+    [
+      '501:claude:work',
+      stageWindow(
+        '2026-01-01T00:10:00Z',
+        '2026-01-01T00:25:00Z',
+        'session-ew-idH',
+      ),
+    ],
+    [
+      '501:claude:cleanup',
+      stageWindow(
+        '2026-01-01T00:26:00Z',
+        '2026-01-01T00:30:00Z',
+        'session-ew-idH',
+      ),
+    ],
+  ]);
+
+  const sessions = scanClaudeVendorSessions(sandbox, eventWindowsAll);
+  const ewSamples = sessions.filter((s) =>
+    s.adapterResult.sample.vendorSessionId.includes('#ew'),
+  );
+
+  assert.equal(ewSamples.length, 1);
+  assert.equal(
+    ewSamples[0].adapterResult.sample.vendorSessionId,
+    'session-ew-idH#ew501',
+  );
+  assert.equal(sessions.length, 3);
+});
+
+test("scanClaudeVendorSessions: falls back to classify-and-skip when no candidate file's sessionId matches the window's vendorSessionId (#2424)", () => {
+  const sandbox = mkdtempSync(join(tmpdir(), 'idd-token-cost-harvest-ew-'));
+  writeFileSync(
+    join(sandbox, 'session-ew-idC.jsonl'),
+    '{"type":"assistant","timestamp":"2026-01-01T00:20:00.000Z","sessionId":"sess-ew-idC-0001","cwd":"/repo","message":{"model":"m","usage":{"input_tokens":1,"cache_read_input_tokens":0,"cache_creation_input_tokens":0,"output_tokens":1}}}\n',
+  );
+  writeFileSync(
+    join(sandbox, 'session-ew-idD.jsonl'),
+    '{"type":"assistant","timestamp":"2026-01-01T00:21:00.000Z","sessionId":"sess-ew-idD-0001","cwd":"/repo","message":{"model":"m","usage":{"input_tokens":5,"cache_read_input_tokens":0,"cache_creation_input_tokens":0,"output_tokens":5}}}\n',
+  );
+  // Neither file's own sessionId equals the window's vendorSessionId --
+  // e.g. the events were posted from a THIRD, un-scanned file/session.
+  const eventWindowsAll = new Map<string, StageEventWindow>([
+    [
+      '501:claude:work',
+      stageWindow(
+        '2026-01-01T00:10:00Z',
+        '2026-01-01T00:25:00Z',
+        'sess-ew-idE-elsewhere',
+      ),
+    ],
+    [
+      '501:claude:cleanup',
+      stageWindow(
+        '2026-01-01T00:26:00Z',
+        '2026-01-01T00:30:00Z',
+        'sess-ew-idE-elsewhere',
+      ),
+    ],
+  ]);
+
+  const sessions = scanClaudeVendorSessions(sandbox, eventWindowsAll);
+  const ewSamples = sessions.filter((s) =>
+    s.adapterResult.sample.vendorSessionId.includes('#ew'),
+  );
+
+  assert.equal(ewSamples.length, 0);
+  assert.equal(sessions.length, 2);
+});
+
+test("scanClaudeVendorSessions: a SOLE candidate file is still skipped when the window has an identity and the file's own sessionId does not match it (#2424)", () => {
+  // A single-candidate window is NOT automatically the right file: this
+  // locks in that the identity check also gates the length-1 fast path,
+  // not just the multi-file classify-and-skip branch above. Realistic
+  // shape: this loop's own event-window session file got excluded
+  // upstream (one of its segments already resolved a cwd-inferred issue
+  // number), leaving only an unrelated concurrent session as the sole
+  // candidate.
+  const sandbox = mkdtempSync(join(tmpdir(), 'idd-token-cost-harvest-ew-'));
+  writeFileSync(
+    join(sandbox, 'session-ew-idF.jsonl'),
+    '{"type":"assistant","timestamp":"2026-01-01T00:20:00.000Z","sessionId":"sess-ew-idF-0001","cwd":"/repo","message":{"model":"m","usage":{"input_tokens":1,"cache_read_input_tokens":0,"cache_creation_input_tokens":0,"output_tokens":1}}}\n',
+  );
+  const eventWindowsAll = new Map<string, StageEventWindow>([
+    [
+      '501:claude:work',
+      stageWindow(
+        '2026-01-01T00:10:00Z',
+        '2026-01-01T00:25:00Z',
+        'sess-ew-idG-elsewhere',
+      ),
+    ],
+    [
+      '501:claude:cleanup',
+      stageWindow(
+        '2026-01-01T00:26:00Z',
+        '2026-01-01T00:30:00Z',
+        'sess-ew-idG-elsewhere',
+      ),
+    ],
+  ]);
+
+  const sessions = scanClaudeVendorSessions(sandbox, eventWindowsAll);
+  const ewSamples = sessions.filter((s) =>
+    s.adapterResult.sample.vendorSessionId.includes('#ew'),
+  );
+
+  assert.equal(ewSamples.length, 0);
+  assert.equal(sessions.length, 1);
+});
+
+test('scanClaudeVendorSessions: a SOLE candidate file is still harvested unconditionally when the window carries no identity (backward compat, #2424)', () => {
+  const sandbox = mkdtempSync(join(tmpdir(), 'idd-token-cost-harvest-ew-'));
+  writeFileSync(
+    join(sandbox, 'session-ew-idH.jsonl'),
+    '{"type":"assistant","timestamp":"2026-01-01T00:20:00.000Z","sessionId":"sess-ew-idH-0001","cwd":"/repo","message":{"model":"m","usage":{"input_tokens":1,"cache_read_input_tokens":0,"cache_creation_input_tokens":0,"output_tokens":1}}}\n',
+  );
+  const eventWindowsAll = new Map<string, StageEventWindow>([
+    [
+      '501:claude:work',
+      stageWindow('2026-01-01T00:10:00Z', '2026-01-01T00:25:00Z'),
+    ],
+    [
+      '501:claude:cleanup',
+      stageWindow('2026-01-01T00:26:00Z', '2026-01-01T00:30:00Z'),
+    ],
+  ]);
+
+  const sessions = scanClaudeVendorSessions(sandbox, eventWindowsAll);
+  const ewSamples = sessions.filter((s) =>
+    s.adapterResult.sample.vendorSessionId.includes('#ew'),
+  );
+
+  assert.equal(ewSamples.length, 1);
 });
 
 test('scanClaudeVendorSessions: an event window is ignored when the segment already has a cwd-inferred issueNumber', () => {
@@ -1523,6 +1899,171 @@ test('readEventWindows: does not pair an enter/exit across two different vendors
     assert.equal(windows.size, 0);
     assert.equal(windows.get('7:claude:work'), undefined);
     assert.equal(windows.get('7:codex:work'), undefined);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('readEventWindows: tags a window with vendorSessionId when both enter and exit share one (#2424)', () => {
+  const { dir, path } = writeEventsFile([
+    tokenCostEvent('enter', 'work', '2026-01-01T00:10:00Z', 7, 'sess-A'),
+    tokenCostEvent('exit', 'work', '2026-01-01T00:20:00Z', 7, 'sess-A'),
+  ]);
+  try {
+    const windows = readEventWindows(path);
+    assert.equal(windows.get('7:claude:work')?.vendorSessionId, 'sess-A');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('readEventWindows: leaves a window untagged when an event carries no vendorSessionId (historical-data fallback, #2424)', () => {
+  const { dir, path } = writeEventsFile([
+    tokenCostEvent('enter', 'work', '2026-01-01T00:10:00Z', 7),
+    tokenCostEvent('exit', 'work', '2026-01-01T00:20:00Z', 7),
+  ]);
+  try {
+    const windows = readEventWindows(path);
+    const window = windows.get('7:claude:work');
+    assert.ok(window);
+    assert.equal(window?.startMs, ms('2026-01-01T00:10:00Z'));
+    assert.equal(window?.endMs, ms('2026-01-01T00:20:00Z'));
+    assert.equal('vendorSessionId' in (window ?? {}), false);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("readEventWindows: prefers the winning cleanup attempt's own stage candidate over a later, unrelated attempt shadowing it (#2424)", () => {
+  // Attempt A completes fully: work + cleanup, both id=sess-A. Attempt B
+  // later retries 'work' with its own valid pair (id=sess-B) but never
+  // reaches cleanup. Pure latest-wins (pre-#2424) would expose B's 'work'
+  // window here, shadowing A's own -- this locks in that the resolved
+  // 'work' window instead belongs to the SAME attempt as the winning
+  // 'cleanup' window.
+  const { dir, path } = writeEventsFile([
+    tokenCostEvent('enter', 'work', '2026-01-01T00:00:00Z', 502, 'sess-A'),
+    tokenCostEvent('exit', 'work', '2026-01-01T00:01:00Z', 502, 'sess-A'),
+    tokenCostEvent('enter', 'cleanup', '2026-01-01T00:02:00Z', 502, 'sess-A'),
+    tokenCostEvent('exit', 'cleanup', '2026-01-01T00:03:00Z', 502, 'sess-A'),
+    tokenCostEvent('enter', 'work', '2026-01-01T00:05:00Z', 502, 'sess-B'),
+    tokenCostEvent('exit', 'work', '2026-01-01T00:06:00Z', 502, 'sess-B'),
+  ]);
+  try {
+    const windows = readEventWindows(path);
+    const work = windows.get('502:claude:work');
+    assert.equal(work?.vendorSessionId, 'sess-A');
+    assert.equal(work?.startMs, ms('2026-01-01T00:00:00Z'));
+    assert.equal(work?.endMs, ms('2026-01-01T00:01:00Z'));
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('readEventWindows: falls back to the identity-agnostic pairing when a stage has no identified events at all, even though cleanup does (#2424)', () => {
+  // 'work' predates vendorSessionId entirely (token-cost-event.mjs's own
+  // rollout, or a vendor with no session-id source); 'cleanup' is a
+  // post-#2424 identified event. 'work' has zero identified candidates,
+  // so it resolves via the same identity-agnostic pairing this function
+  // used before #2424, untouched by cleanup's own identity.
+  const { dir, path } = writeEventsFile([
+    tokenCostEvent('enter', 'work', '2026-01-01T00:00:00Z', 503),
+    tokenCostEvent('exit', 'work', '2026-01-01T00:01:00Z', 503),
+    tokenCostEvent('enter', 'cleanup', '2026-01-01T00:07:00Z', 503, 'sess-B'),
+    tokenCostEvent('exit', 'cleanup', '2026-01-01T00:08:00Z', 503, 'sess-B'),
+  ]);
+  try {
+    const windows = readEventWindows(path);
+    const work = windows.get('503:claude:work');
+    assert.equal('vendorSessionId' in (work ?? {}), false);
+    assert.equal(work?.startMs, ms('2026-01-01T00:00:00Z'));
+    assert.equal(work?.endMs, ms('2026-01-01T00:01:00Z'));
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('readEventWindows: a fresher UNIDENTIFIED completion beats a stale identified one for the same stage (Codex review finding, PR #2430, #2424)', () => {
+  // Attempt A completes cleanup with an identity (older). Attempt B later
+  // ALSO completes cleanup, but without an identity (e.g. a straddling
+  // deploy transient, or CLAUDE_CODE_SESSION_ID unset for that run). An
+  // unconditional "prefer any identified candidate" rule would freeze on
+  // A's stale completion forever -- the resolved window's own stable
+  // #ew<issueNumber> id makes a later harvest treat it as already-present.
+  // The fix compares recency and lets B's more-recent, internally clean
+  // legacy pairing win.
+  const { dir, path } = writeEventsFile([
+    tokenCostEvent('enter', 'cleanup', '2026-01-01T00:00:01Z', 507, 'sess-A'),
+    tokenCostEvent('exit', 'cleanup', '2026-01-01T00:00:02Z', 507, 'sess-A'),
+    tokenCostEvent('enter', 'cleanup', '2026-01-01T00:00:05Z', 507),
+    tokenCostEvent('exit', 'cleanup', '2026-01-01T00:00:06Z', 507),
+  ]);
+  try {
+    const windows = readEventWindows(path);
+    const cleanup = windows.get('507:claude:cleanup');
+    assert.equal('vendorSessionId' in (cleanup ?? {}), false);
+    assert.equal(cleanup?.startMs, ms('2026-01-01T00:00:05Z'));
+    assert.equal(cleanup?.endMs, ms('2026-01-01T00:00:06Z'));
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('readEventWindows: an identified completion still wins on a tie against the identity-agnostic pairing describing the exact same pair (#2424)', () => {
+  // The common case: a single, fully identified attempt. legacyWindow
+  // (identity-agnostic) trivially describes the SAME pair here, since
+  // enterAt/exitAt are populated unconditionally regardless of identity
+  // -- ties must resolve to the identified (tagged) result, not silently
+  // drop the identity.
+  const { dir, path } = writeEventsFile([
+    tokenCostEvent('enter', 'cleanup', '2026-01-01T00:00:01Z', 508, 'sess-A'),
+    tokenCostEvent('exit', 'cleanup', '2026-01-01T00:00:02Z', 508, 'sess-A'),
+  ]);
+  try {
+    const windows = readEventWindows(path);
+    const cleanup = windows.get('508:claude:cleanup');
+    assert.equal(cleanup?.vendorSessionId, 'sess-A');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("readEventWindows: rejects a legacy pairing that mixes one attempt's enter with a DIFFERENT attempt's exit (Codex review finding round 2, PR #2430, #2424)", () => {
+  // Attempt A posts both cleanup boundaries (identified, valid). A later
+  // attempt B's own --enter call fails to post (token-cost-event.mjs is
+  // fail-open) but its --exit succeeds, landing after A's. The legacy
+  // (identity-agnostic) latest-enter/latest-exit pairing would combine
+  // A's enter with B's exit -- internally valid-LOOKING, but spanning two
+  // attempts. That must never win the recency comparison against A's own
+  // clean pair: A's own window is the only trustworthy result here.
+  const { dir, path } = writeEventsFile([
+    tokenCostEvent('enter', 'cleanup', '2026-01-01T00:00:01Z', 509, 'sess-A'),
+    tokenCostEvent('exit', 'cleanup', '2026-01-01T00:00:02Z', 509, 'sess-A'),
+    tokenCostEvent('exit', 'cleanup', '2026-01-01T00:00:09Z', 509, 'sess-B'),
+  ]);
+  try {
+    const windows = readEventWindows(path);
+    const cleanup = windows.get('509:claude:cleanup');
+    assert.equal(cleanup?.vendorSessionId, 'sess-A');
+    assert.equal(cleanup?.startMs, ms('2026-01-01T00:00:01Z'));
+    assert.equal(cleanup?.endMs, ms('2026-01-01T00:00:02Z'));
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('readEventWindows: rejects a legacy pairing whose latest enter and exit belong to two DIFFERENT identified attempts, with no identified candidate to fall back to either (#2424)', () => {
+  // Neither attempt ever completes its own pair (A's exit missing, B's
+  // enter missing), so there is no bestIdentified candidate at all. The
+  // legacy pairing would still mix A's enter with B's exit if not gated
+  // -- must resolve to no window at all rather than a cross-attempt mix.
+  const { dir, path } = writeEventsFile([
+    tokenCostEvent('enter', 'cleanup', '2026-01-01T00:00:01Z', 510, 'sess-A'),
+    tokenCostEvent('exit', 'cleanup', '2026-01-01T00:00:09Z', 510, 'sess-B'),
+  ]);
+  try {
+    const windows = readEventWindows(path);
+    assert.equal(windows.get('510:claude:cleanup'), undefined);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

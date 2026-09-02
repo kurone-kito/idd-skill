@@ -112,7 +112,7 @@ export function parseClaudeProjectLines(text) {
   return out;
 }
 /** The first non-empty top-level `sessionId` across `records`, in file order -- stable per project JSONL file (it matches the file's own basename). */
-function extractSessionId(records) {
+export function extractSessionId(records) {
   for (const record of records) {
     const sessionId = isPlainObject(record)
       ? getStringField(record, 'sessionId')
@@ -130,7 +130,7 @@ function extractSessionId(records) {
  * `redactTokenCostRecord()` would later strip to `undefined`, silently
  * producing a schema-invalid sample instead of failing closed.
  */
-function deriveFallbackSessionId(fileBasename) {
+export function deriveFallbackSessionId(fileBasename) {
   if (!fileBasename) {
     return undefined;
   }
