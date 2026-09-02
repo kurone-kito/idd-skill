@@ -156,9 +156,12 @@ jobs:
           # prior success alone must never suppress this run's own
           # non-success evidence (masking a later failure), and a prior
           # non-success alone must never suppress this run's own success
-          # evidence (masking a later recovery). Only a truly redundant
-          # "still converged" repeat is skipped; any status transition in
-          # either direction always posts fresh evidence.
+          # evidence (masking a later recovery). Only a run that is
+          # ALSO converged when the prior record was already converged
+          # gets skipped -- `applied` <-> `clean` between two already-
+          # converged runs stays silent, but any transition between a
+          # converged and a non-converged state always posts fresh
+          # evidence.
           # "Trusted" scoping: this workflow's own posts are authored by
           # `github-actions[bot]` (the GITHUB_TOKEN actor), and an agent's
           # local F4 post is authored by a configured `trustedMarkerActors`

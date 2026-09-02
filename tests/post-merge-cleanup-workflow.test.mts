@@ -15,12 +15,17 @@ test("duplicate-evidence-skip guard also requires the current run's own STATUS t
   for (const path of WORKFLOW_PATHS) {
     const text = readWorkflow(path);
     const guardStart = text.indexOf('if [ -n "$EXISTING" ]');
-    assert.notEqual(
+    assert.notStrictEqual(
       guardStart,
       -1,
       `${path} must keep the duplicate-evidence-skip guard`,
     );
     const guardEnd = text.indexOf('; then', guardStart);
+    assert.notStrictEqual(
+      guardEnd,
+      -1,
+      `${path} guard must be closed with "; then"`,
+    );
     const guard = text.slice(guardStart, guardEnd);
 
     assert.match(
@@ -48,7 +53,17 @@ test('duplicate-evidence-skip guard is a strict superset of the prior EXISTING_S
     // "STATUS = applied" check anywhere nearby would mean the fix
     // regressed back to comparing only the prior comment's status.
     const skipBlockStart = text.indexOf('# Avoid duplicate evidence comments');
+    assert.notStrictEqual(
+      skipBlockStart,
+      -1,
+      `${path} must keep the duplicate-evidence-skip comment block`,
+    );
     const skipBlockEnd = text.indexOf('BODY=$(printf', skipBlockStart);
+    assert.notStrictEqual(
+      skipBlockEnd,
+      -1,
+      `${path} must keep the BODY=$(printf anchor after the skip block`,
+    );
     const skipBlock = text.slice(skipBlockStart, skipBlockEnd);
     const statusMentions = (skipBlock.match(/"\$STATUS"/g) ?? []).length;
     assert.ok(
