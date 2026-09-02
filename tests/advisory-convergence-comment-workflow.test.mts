@@ -91,10 +91,28 @@ test('comment-refresh workflows also trigger on issue_comment and guard non-PR i
       /github\.event_name\s*!=\s*'issue_comment'\s*\|\|\s*github\.event\.issue\.pull_request\s*!=\s*null/,
       `${path} must skip a plain-issue issue_comment event`,
     );
+    // Scope this assertion to the "Rerun required HEAD check" step's own
+    // env block -- the concurrency.group expression coincidentally shares
+    // the same `pull_request.number || issue.number` substring, so a
+    // whole-file match would still pass even if the step's own PR_NUMBER
+    // assignment regressed back to the pull_request-only form.
+    const rerunStepIndex = text.indexOf('- name: Rerun required HEAD check');
+    assert.notEqual(
+      rerunStepIndex,
+      -1,
+      `${path} must have a "Rerun required HEAD check" step`,
+    );
+    const prNumberAssignment = text
+      .slice(rerunStepIndex)
+      .match(/PR_NUMBER:\s*\$\{\{\s*([^}]+)\}\}/);
+    assert.ok(
+      prNumberAssignment,
+      `${path} Rerun required HEAD check step must assign PR_NUMBER`,
+    );
     assert.match(
-      text,
+      prNumberAssignment[1],
       /github\.event\.pull_request\.number\s*\|\|\s*github\.event\.issue\.number/,
-      `${path} must resolve PR_NUMBER from either event shape`,
+      `${path} PR_NUMBER must resolve from either event shape`,
     );
   }
 });
