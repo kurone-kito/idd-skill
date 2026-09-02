@@ -1,32 +1,34 @@
 {
   "schemaVersion": 1,
-  "generatedAt": "2026-09-02T06:48:41.425Z",
+  "generatedAt": "2026-09-02T07:18:10.954Z",
   "minPublishableSamples": 10,
   "minPublishableVendors": 2,
   "publishable": false,
-  "sampleCount": 0,
-  "vendors": [],
+  "sampleCount": 1,
+  "vendors": [
+    "claude"
+  ],
   "asOf": "2026-09-02",
   "totalUsage": {
     "inputUncached": {
-      "p25": 0,
-      "p50": 0,
-      "p75": 0
+      "p25": 1638,
+      "p50": 1638,
+      "p75": 1638
     },
     "cacheRead": {
-      "p25": 0,
-      "p50": 0,
-      "p75": 0
+      "p25": 238475137,
+      "p50": 238475137,
+      "p75": 238475137
     },
     "cacheCreation": {
-      "p25": 0,
-      "p50": 0,
-      "p75": 0
+      "p25": 1996956,
+      "p50": 1996956,
+      "p75": 1996956
     },
     "output": {
-      "p25": 0,
-      "p50": 0,
-      "p75": 0
+      "p25": 686521,
+      "p50": 686521,
+      "p75": 686521
     },
     "reasoning": {
       "p25": 0,
@@ -34,13 +36,90 @@
       "p75": 0
     }
   },
-  "stageUsage": [],
+  "stageUsage": [
+    {
+      "id": "claim",
+      "usage": {
+        "inputUncached": {
+          "p25": 16,
+          "p50": 16,
+          "p75": 16
+        },
+        "cacheRead": {
+          "p25": 3559188,
+          "p50": 3559188,
+          "p75": 3559188
+        },
+        "cacheCreation": {
+          "p25": 2813,
+          "p50": 2813,
+          "p75": 2813
+        },
+        "output": {
+          "p25": 1360,
+          "p50": 1360,
+          "p75": 1360
+        },
+        "reasoning": {
+          "p25": 0,
+          "p50": 0,
+          "p75": 0
+        }
+      }
+    },
+    {
+      "id": "work",
+      "usage": {
+        "inputUncached": {
+          "p25": 1620,
+          "p50": 1620,
+          "p75": 1620
+        },
+        "cacheRead": {
+          "p25": 234682427,
+          "p50": 234682427,
+          "p75": 234682427
+        },
+        "cacheCreation": {
+          "p25": 1993701,
+          "p50": 1993701,
+          "p75": 1993701
+        },
+        "output": {
+          "p25": 684956,
+          "p50": 684956,
+          "p75": 684956
+        },
+        "reasoning": {
+          "p25": 0,
+          "p50": 0,
+          "p75": 0
+        }
+      }
+    }
+  ],
   "compactionCount": {
-    "p25": 0,
-    "p50": 0,
-    "p75": 0
+    "p25": 2,
+    "p50": 2,
+    "p75": 2
   },
-  "cacheHitRatio": 0,
-  "successRateByModel": {},
-  "successRateByVendor": {}
+  "cacheHitRatio": 0.9916889300478313,
+  "successRateByModel": {
+    "claude-sonnet-5": {
+      "merged": 0,
+      "aborted": 0,
+      "unclaimed": 1,
+      "humanHandoff": 0,
+      "rate": 0
+    }
+  },
+  "successRateByVendor": {
+    "claude": {
+      "merged": 0,
+      "aborted": 0,
+      "unclaimed": 1,
+      "humanHandoff": 0,
+      "rate": 0
+    }
+  }
 }

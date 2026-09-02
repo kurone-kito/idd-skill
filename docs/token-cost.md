@@ -113,6 +113,6 @@ number is ever invented to fill the gap.
 
 <!-- token-cost-docs:start -->
 
-Not yet publishable, n=0.
+Not yet publishable, n=1.
 
 <!-- token-cost-docs:end -->
