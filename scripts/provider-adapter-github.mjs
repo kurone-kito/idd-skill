@@ -585,6 +585,7 @@ export function createGithubProviderAdapter(owner, repo, deps = DEFAULT_DEPS) {
         id: Number(row.id),
         body: String(row.body ?? ''),
         createdAt: String(row.created_at ?? ''),
+        updatedAt: String(row.updated_at ?? row.created_at ?? ''),
         authorLogin: String(row.user?.login ?? ''),
       }));
     },
@@ -1179,6 +1180,16 @@ export function createGithubProviderAdapter(owner, repo, deps = DEFAULT_DEPS) {
       };
     },
     listChangeRequestChecks(number) {
+      // #2267: matches review-activity-snapshot.mts's pre-migration
+      // `ghJson(..., { allowStatuses: [1, 8] })` exactly -- an exit-code
+      // allowlist requiring stdout to actually look like JSON, not a
+      // stderr-content match. `gh pr checks` (no `--required`) exits 1 or 8
+      // while checks are pending/failing or reporting a mixed state, a
+      // routine outcome for this ALL-checks call -- but an allowed exit
+      // status with genuinely empty/non-JSON stdout (a different failure
+      // wearing the same exit code) still rethrows, unlike
+      // {@link listRequiredChecks}'s stricter `--required` recovery, which
+      // matches on stderr content instead.
       const args = [
         'pr',
         'checks',
@@ -1192,12 +1203,9 @@ export function createGithubProviderAdapter(owner, repo, deps = DEFAULT_DEPS) {
       try {
         raw = deps.ghText(args, GH_TEXT_LOOP_OPTIONS);
       } catch (error) {
-        const stderr = String(error?.stderr ?? '');
-        if (/no checks reported/i.test(stderr)) {
-          return [];
-        }
-        const stdout = String(error?.stdout ?? '').trim();
-        if (!stdout) {
+        const status = Number(error?.status ?? -1);
+        const stdout = String(error?.stdout ?? '');
+        if (![1, 8].includes(status) || !/^\s*[[{]/.test(stdout)) {
           throw error;
         }
         raw = stdout;

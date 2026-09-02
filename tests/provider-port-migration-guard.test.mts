@@ -31,6 +31,7 @@ const MIGRATED_HELPERS: readonly string[] = [
   'discover-roadmap-graph.mts',
   // #2267 additions below.
   'review-clause.mts',
+  'review-activity-snapshot.mts',
 ];
 
 const DIRECT_GH_PATTERNS: { pattern: RegExp; description: string }[] = [

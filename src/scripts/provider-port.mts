@@ -68,11 +68,18 @@ export interface ProviderWorkItem {
   updatedAt?: string;
 }
 
-/** One issue-comments-API comment (issue or PR -- same endpoint on GitHub). */
+/** One issue-comments-API comment (issue or PR -- same endpoint on GitHub).
+ * `updatedAt` (#2267) is additive: REST returns it on every response
+ * regardless of field selection, so surfacing it widens this existing
+ * shared shape rather than adding a competing method -- every #2266
+ * consumer that ignores it is unaffected. `review-activity-snapshot.mts`
+ * and `pre-merge-readiness.mts`'s disposition-evidence comment
+ * normalization need it for their most-recent-activity computation. */
 export interface ProviderComment {
   id: number;
   body: string;
   createdAt: string;
+  updatedAt: string;
   authorLogin: string;
 }
 

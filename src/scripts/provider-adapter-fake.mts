@@ -356,6 +356,7 @@ export function createFakeProviderAdapter(
         id,
         body,
         createdAt: new Date(0).toISOString(),
+        updatedAt: new Date(0).toISOString(),
         authorLogin: fixture.viewerLogin ?? 'fake-actor',
       };
       fixture.comments ??= {};
