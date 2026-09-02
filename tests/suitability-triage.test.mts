@@ -2666,6 +2666,26 @@ test('autonomy still fails a genuine comma-bearing unresolved-choice aside whose
   assert.equal(result.pass, false);
 });
 
+test('autonomy still fails when the other entry is prose merely containing a lone hyphen -- #2508 (CodeRabbit round 3)', () => {
+  const result = checkAutonomy({
+    issue: {
+      ...BASE_ISSUE,
+      body: `${BASE_ISSUE.body}\nThe rollout plan (still undecided, blocking this work - resolve later) needs a decision.`,
+    },
+  } as Context);
+  assert.equal(result.pass, false);
+});
+
+test('autonomy still fails when the other entry is a plain undecorated word -- #2508 (Copilot round 3)', () => {
+  const result = checkAutonomy({
+    issue: {
+      ...BASE_ISSUE,
+      body: `${BASE_ISSUE.body}\nThe rollout plan (still undecided, unfortunately) needs a decision.`,
+    },
+  } as Context);
+  assert.equal(result.pass, false);
+});
+
 test('autonomy still fails both original fixed templates unchanged -- #2219 (no regression)', () => {
   const requiresResult = checkAutonomy({
     issue: {

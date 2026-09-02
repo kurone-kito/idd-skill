@@ -528,27 +528,47 @@ function isNegatedNearby(
 // as a break even when it carries trailing whitespace (Copilot review,
 // #2508).
 const PARAGRAPH_BREAK_PATTERN = /\n[ \t]*\n/;
-// A decoration typical of a compact label/mapping entry (a hyphenated
-// or slash-joined slug, an "->" mapping arrow, or a code span) rather
-// than ordinary prose (#2508, Copilot review round 2).
+// A decoration typical of a compact label/mapping entry -- a
+// hyphenated or slash-joined slug, an "->" mapping arrow, or a code
+// span -- rather than ordinary prose (#2508). Matched only after
+// collapsing "a -> b" whitespace in looksLikeLabelEntry, so this must
+// find decoration in what is otherwise a single whitespace-free token,
+// not merely somewhere inside a multi-word phrase (Copilot/CodeRabbit
+// review round 3: a lone hyphen used as prose punctuation, e.g.
+// "blocking this work - resolve later", or a plain dictionary word
+// with no decoration at all, e.g. "unfortunately", must not qualify).
 const LABEL_ENTRY_DECORATION_PATTERN = /[-/`]/;
+// An "a -> b" mapping arrow with any surrounding whitespace (including
+// a hand-wrapped newline), collapsed to a bare "->" before the
+// whitespace check below so a wrapped mapping still counts as one
+// compact token.
+const LABEL_ENTRY_ARROW_PATTERN = /\s*->\s*/g;
 /**
  * True when `segment` (one comma-delimited entry from a parenthetical,
- * excluding the marker's own entry) reads as a compact label name --
- * either a single whitespace-free token, or decorated with a hyphen,
- * slash, arrow, or backtick -- rather than an ordinary multi-word
- * phrase. Used by isEnumeratedParentheticalEntry to require every
- * *other* entry in the list to look like fixed vocabulary before
- * excluding the marker: a genuine aside such as "(still undecided,
- * blocking this work)" has an ordinary-prose other entry ("blocking
- * this work") and must not be excluded.
+ * excluding the marker's own entry) reads as a compact label name or
+ * label-to-label mapping -- e.g. "not-yet-ready" or
+ * "undecided -> `needs-decision`" -- rather than an ordinary multi-word
+ * phrase. After collapsing "->" mapping whitespace, the *entire* entry
+ * must contain no remaining whitespace and must carry a hyphen, slash,
+ * or backtick; a plain word with none of those (e.g. "unfortunately")
+ * or a multi-word phrase that merely contains a hyphen somewhere (e.g.
+ * "blocking this work - resolve later") does not qualify. Used by
+ * isEnumeratedParentheticalEntry to require every *other* entry in the
+ * list to look like fixed vocabulary before excluding the marker: a
+ * genuine aside such as "(still undecided, blocking this work)" has an
+ * ordinary-prose other entry ("blocking this work") and must not be
+ * excluded.
  */
 function looksLikeLabelEntry(segment: string): boolean {
   const trimmed = segment.trim();
   if (trimmed.length === 0) {
     return false;
   }
-  return LABEL_ENTRY_DECORATION_PATTERN.test(trimmed) || !/\s/.test(trimmed);
+  const collapsed = trimmed.replace(LABEL_ENTRY_ARROW_PATTERN, '->');
+  if (/\s/.test(collapsed)) {
+    return false;
+  }
+  return LABEL_ENTRY_DECORATION_PATTERN.test(collapsed);
 }
 /**
  * True when the UNRESOLVED_CHOICE_PATTERN match at `matchIndex` sits
