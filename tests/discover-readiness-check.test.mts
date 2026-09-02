@@ -17,6 +17,7 @@ import {
   parseSwarmFloorArg,
   summarizeSwarmFloorEligibility,
 } from '../src/scripts/discover-readiness-check.mts';
+import { createFakeProviderAdapter } from '../src/scripts/provider-adapter-fake.mts';
 
 const REPO_ROOT = fileURLToPath(new URL('..', import.meta.url));
 
@@ -1077,4 +1078,77 @@ process.exit(1);
       ),
     /failed to load policy from .*bad-policy\.json/,
   );
+});
+
+// #2268 AC2: at least one migrated issue/claim flow must run entirely
+// against a fake provider, proving evaluateDiscoverReadiness's workflow
+// logic does not require an authenticated gh process. The change/review/
+// CI/merge half is already covered (pre-merge-readiness-collection-smoke.
+// test.mts, advisory-convergence-fake-provider.test.mts); this is the
+// issue/claim half, backed by createGithubProviderAdapter's own #2266
+// migration target (discover-readiness-check.mts's buildIssueLoader /
+// buildRoadmapMarkerResolver, which this test's loaders mirror by hand
+// against a fake port instead of a live adapter).
+test('evaluateDiscoverReadiness runs end to end against a fake provider, no gh process spawned (#2268)', async () => {
+  const originalPath = process.env.PATH;
+  try {
+    // PATH stripped: nothing in this test's call graph may fall back to a
+    // live gh process even transiently, since evaluateDiscoverReadiness's
+    // loadIssue/findRoadmapsByMarker are driven entirely by the fake port
+    // below.
+    delete process.env.PATH;
+
+    const port = createFakeProviderAdapter({
+      workItems: {
+        2001: {
+          number: 2001,
+          title: 'ready candidate',
+          state: 'open',
+          body: '',
+          labels: [],
+        },
+        2002: {
+          number: 2002,
+          title: 'blocked candidate',
+          state: 'open',
+          body: '<!-- idd-skill-blocked-by: roadmap-fake -->',
+          labels: [],
+        },
+        2003: {
+          number: 2003,
+          title: 'fake roadmap',
+          state: 'open',
+          body: '',
+          labels: [{ name: 'roadmap' }],
+        },
+      },
+    });
+
+    const summary = await evaluateDiscoverReadiness([2001, 2002], {
+      loadIssue: async (number) => port.getWorkItem(number),
+      findRoadmapsByMarker: async (marker) =>
+        port
+          .searchWorkItems(`in:body "<!-- idd-skill-roadmap-id: ${marker} -->"`)
+          .filter((item) => item.number === 2003),
+    });
+
+    assert.deepEqual(
+      summary.ready.map((item) => item.number),
+      [2001],
+      'the unlabeled, unblocked issue is ready',
+    );
+    assert.equal(summary.filteredOut.length, 1);
+    assert.equal(summary.filteredOut[0].number, 2002);
+    assert.match(
+      summary.filteredOut[0].reasons.join(','),
+      /blocked_by_open_roadmap_marker:roadmap-fake/,
+      "the blocked-by marker resolved through the fake port's searchWorkItems, not a live gh search",
+    );
+  } finally {
+    if (originalPath === undefined) {
+      delete process.env.PATH;
+    } else {
+      process.env.PATH = originalPath;
+    }
+  }
 });
