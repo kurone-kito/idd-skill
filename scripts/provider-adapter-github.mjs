@@ -88,6 +88,116 @@ function assertNoGraphqlErrors(payload, context) {
     );
   }
 }
+/**
+ * #2460: synchronous bounded sleep via `Atomics.wait` on a throwaway
+ * `SharedArrayBuffer` -- the same technique `advisory-convergence.mts`,
+ * `clone-lock.mts`, and `rerun-advisory-convergence.mts` each already
+ * duplicate locally rather than switching to `async`/`await` (the existing
+ * `withBoundedRetry` in `gh-exec.mts` is `Promise`-returning and would force
+ * every synchronous caller of {@link ProviderPort.postWorkItemComment} --
+ * and the whole `ProviderPort` interface -- to become async for one retry
+ * loop). Duplicated here as this one-line function, mirroring that same
+ * established precedent, rather than adding new cross-file coupling.
+ */
+function sleepSync(ms) {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+const POST_WORK_ITEM_COMMENT_TOTAL_ATTEMPTS = 3;
+const POST_WORK_ITEM_COMMENT_BASE_DELAY_MS = 200;
+/**
+ * #2460: the issues-comments POST endpoint is not idempotent -- each
+ * successful call creates a new comment -- so a bare retry-on-any-failure
+ * risks posting the same marker twice when a failure is ambiguous (the
+ * write landed server-side, but the client never saw a successful
+ * response; observed live as a one-off transient failure whose very next
+ * unrelated API call succeeded). Before every retry, re-read recent
+ * comments for an exact-body match: found means the prior attempt actually
+ * landed, so return that comment instead of posting again; not found means
+ * the prior attempt genuinely failed, so back off and retry the POST. This
+ * scan is best-effort only (a transient read failure here must never block
+ * the retry it is meant to protect) and only ever runs on the error path,
+ * never the common single-attempt success path.
+ */
+function findRecentExactBodyMatch(deps, repoPath, number, body) {
+  let rows;
+  try {
+    rows = deps.ghApiJson(`${repoPath}/issues/${number}/comments`, {
+      paginate: true,
+    });
+  } catch {
+    return null;
+  }
+  let newest = null;
+  for (const row of rows) {
+    if (String(row.body ?? '') !== body) {
+      continue;
+    }
+    const id = Number(row.id);
+    const htmlUrl = String(row.html_url ?? '');
+    // Same shape requirement as the fresh-POST path below -- a match with
+    // no usable id/html_url is not a usable result, so keep scanning
+    // instead of returning a comment the caller couldn't act on.
+    if (!Number.isInteger(id) || id <= 0 || htmlUrl === '') {
+      continue;
+    }
+    // Comments come back in ascending creation order; keep the last (most
+    // recent) exact-body match in the unlikely event more than one exists.
+    newest = { id, htmlUrl };
+  }
+  return newest;
+}
+/**
+ * #2460: POST a work-item (issue/PR) comment with a bounded retry against
+ * transient `gh` failures, guarding against the resulting duplicate-post
+ * risk via {@link findRecentExactBodyMatch}, and validating the response
+ * shape before treating the marker as posted (catches a 200-with-
+ * malformed-body edge case a bare retry would not).
+ */
+function postWorkItemCommentWithRetry(deps, repoPath, number, body) {
+  const sleep = deps.sleepSync ?? sleepSync;
+  let lastError;
+  for (
+    let attempt = 1;
+    attempt <= POST_WORK_ITEM_COMMENT_TOTAL_ATTEMPTS;
+    attempt += 1
+  ) {
+    if (attempt > 1) {
+      const existing = findRecentExactBodyMatch(deps, repoPath, number, body);
+      if (existing) {
+        return existing;
+      }
+      sleep(
+        POST_WORK_ITEM_COMMENT_BASE_DELAY_MS * (attempt - 1) +
+          Math.random() * POST_WORK_ITEM_COMMENT_BASE_DELAY_MS,
+      );
+    }
+    try {
+      const out = deps.ghText(
+        [
+          'api',
+          '--method',
+          'POST',
+          `${repoPath}/issues/${number}/comments`,
+          '--input',
+          '-',
+        ],
+        { input: JSON.stringify({ body }) },
+      );
+      const parsed = JSON.parse(out);
+      const id = Number(parsed.id);
+      const htmlUrl = String(parsed.html_url ?? '');
+      if (!Number.isInteger(id) || id <= 0 || htmlUrl === '') {
+        throw new Error(
+          `postWorkItemComment: malformed POST response for ${repoPath}/issues/${number} (missing id/html_url)`,
+        );
+      }
+      return { id, htmlUrl };
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  throw lastError;
+}
 /** #2267: {@link GithubProviderAdapterDeps.ghText}, swallowing any failure
  * and returning `''` instead -- the injectable-`deps` equivalent of
  * `gh-exec.mts`'s own module-level `safeGhText`, needed here so a unit test
@@ -316,6 +426,7 @@ const DEFAULT_DEPS = {
   ghApiJson,
   resolveViewerLogin: ghExecResolveViewerLogin,
   ghTextAsync,
+  sleepSync,
 };
 /**
  * GitHub implementation of {@link ProviderPort}. `owner`/`repo` are resolved
@@ -630,19 +741,7 @@ export function createGithubProviderAdapter(owner, repo, deps = DEFAULT_DEPS) {
       }));
     },
     postWorkItemComment(number, body) {
-      const out = deps.ghText(
-        [
-          'api',
-          '--method',
-          'POST',
-          `${repoPath}/issues/${number}/comments`,
-          '--input',
-          '-',
-        ],
-        { input: JSON.stringify({ body }) },
-      );
-      const parsed = JSON.parse(out);
-      return { id: parsed.id, htmlUrl: parsed.html_url };
+      return postWorkItemCommentWithRetry(deps, repoPath, number, body);
     },
     getCollaboratorPermission(login) {
       const normalized = login.trim().toLowerCase();

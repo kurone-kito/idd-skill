@@ -38,6 +38,9 @@ function fakeDeps(
     ghTextAsync: () => {
       throw new Error('ghTextAsync not stubbed for this test');
     },
+    // No-op by default so a test exercising postWorkItemComment's retry
+    // path (#2460) never actually sleeps.
+    sleepSync: () => {},
     ...overrides,
   } as GithubProviderAdapterDeps;
 }
