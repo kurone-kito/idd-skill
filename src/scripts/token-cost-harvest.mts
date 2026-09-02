@@ -1601,18 +1601,16 @@ export function scanClaudeVendorSessions(
     candidatesByIssue.set(candidate.issueNumber, list);
   }
   for (const [issueNumber, fileCandidates] of candidatesByIssue) {
-    if (fileCandidates.length === 1) {
-      harvestEventWindowCandidate(
-        issueNumber,
-        fileCandidates[0].fileBasename,
-        fileCandidates[0].records,
-      );
-      continue;
-    }
     // #2424: resolve by attempt identity before falling back to
-    // classify-and-skip. `extractSessionId` reads each candidate's own
-    // records (a subset of one file), which carry the same sessionId as
-    // the rest of that file.
+    // classify-and-skip (or, for a single candidate, unconditional
+    // harvest). `extractSessionId` reads each candidate's own records (a
+    // subset of one file), which carry the same sessionId as the rest of
+    // that file. This also gates the length-1 case: a sole candidate is
+    // NOT automatically the right one when the window has an identity a
+    // file provably fails to match -- e.g. this loop's own event window
+    // whose own session file got excluded upstream (a cwd-inferred
+    // segment already claimed it), leaving only an unrelated concurrent
+    // session's file as candidate.
     const windowVendorSessionId = completedIssueWindows.find(
       (window) => window.issueNumber === issueNumber,
     )?.vendorSessionId;
@@ -1629,6 +1627,19 @@ export function scanClaudeVendorSessions(
         );
         continue;
       }
+      if (fileCandidates.length === 1) {
+        process.stderr.write(
+          `token-cost-harvest: skipping event-window issue #${issueNumber}: the sole candidate file's sessionId does not match the window's vendorSessionId (${fileCandidates[0].fileBasename})\n`,
+        );
+        continue;
+      }
+    } else if (fileCandidates.length === 1) {
+      harvestEventWindowCandidate(
+        issueNumber,
+        fileCandidates[0].fileBasename,
+        fileCandidates[0].records,
+      );
+      continue;
     }
     const ranges = fileCandidates.map((candidate) =>
       computeRecordTimeRange(candidate.records, extractRecordTimestampMs),

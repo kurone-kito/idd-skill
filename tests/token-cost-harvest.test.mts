@@ -1025,6 +1025,72 @@ test("scanClaudeVendorSessions: falls back to classify-and-skip when no candidat
   assert.equal(sessions.length, 2);
 });
 
+test("scanClaudeVendorSessions: a SOLE candidate file is still skipped when the window has an identity and the file's own sessionId does not match it (#2424)", () => {
+  // A single-candidate window is NOT automatically the right file: this
+  // locks in that the identity check also gates the length-1 fast path,
+  // not just the multi-file classify-and-skip branch above. Realistic
+  // shape: this loop's own event-window session file got excluded
+  // upstream (one of its segments already resolved a cwd-inferred issue
+  // number), leaving only an unrelated concurrent session as the sole
+  // candidate.
+  const sandbox = mkdtempSync(join(tmpdir(), 'idd-token-cost-harvest-ew-'));
+  writeFileSync(
+    join(sandbox, 'session-ew-idF.jsonl'),
+    '{"type":"assistant","timestamp":"2026-01-01T00:20:00.000Z","sessionId":"sess-ew-idF-0001","cwd":"/repo","message":{"model":"m","usage":{"input_tokens":1,"cache_read_input_tokens":0,"cache_creation_input_tokens":0,"output_tokens":1}}}\n',
+  );
+  const eventWindowsAll = new Map<string, StageEventWindow>([
+    [
+      '501:claude:work',
+      stageWindow(
+        '2026-01-01T00:10:00Z',
+        '2026-01-01T00:25:00Z',
+        'sess-ew-idG-elsewhere',
+      ),
+    ],
+    [
+      '501:claude:cleanup',
+      stageWindow(
+        '2026-01-01T00:26:00Z',
+        '2026-01-01T00:30:00Z',
+        'sess-ew-idG-elsewhere',
+      ),
+    ],
+  ]);
+
+  const sessions = scanClaudeVendorSessions(sandbox, eventWindowsAll);
+  const ewSamples = sessions.filter((s) =>
+    s.adapterResult.sample.vendorSessionId.includes('#ew'),
+  );
+
+  assert.equal(ewSamples.length, 0);
+  assert.equal(sessions.length, 1);
+});
+
+test('scanClaudeVendorSessions: a SOLE candidate file is still harvested unconditionally when the window carries no identity (backward compat, #2424)', () => {
+  const sandbox = mkdtempSync(join(tmpdir(), 'idd-token-cost-harvest-ew-'));
+  writeFileSync(
+    join(sandbox, 'session-ew-idH.jsonl'),
+    '{"type":"assistant","timestamp":"2026-01-01T00:20:00.000Z","sessionId":"sess-ew-idH-0001","cwd":"/repo","message":{"model":"m","usage":{"input_tokens":1,"cache_read_input_tokens":0,"cache_creation_input_tokens":0,"output_tokens":1}}}\n',
+  );
+  const eventWindowsAll = new Map<string, StageEventWindow>([
+    [
+      '501:claude:work',
+      stageWindow('2026-01-01T00:10:00Z', '2026-01-01T00:25:00Z'),
+    ],
+    [
+      '501:claude:cleanup',
+      stageWindow('2026-01-01T00:26:00Z', '2026-01-01T00:30:00Z'),
+    ],
+  ]);
+
+  const sessions = scanClaudeVendorSessions(sandbox, eventWindowsAll);
+  const ewSamples = sessions.filter((s) =>
+    s.adapterResult.sample.vendorSessionId.includes('#ew'),
+  );
+
+  assert.equal(ewSamples.length, 1);
+});
+
 test('scanClaudeVendorSessions: an event window is ignored when the segment already has a cwd-inferred issueNumber', () => {
   const sandbox = mkdtempSync(join(tmpdir(), 'idd-token-cost-harvest-ew-'));
   writeFileSync(
