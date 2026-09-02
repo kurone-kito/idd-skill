@@ -735,6 +735,45 @@ test('scanClaudeVendorSessions: two DIFFERENT project log files both matching th
   assert.ok(sessions.every((s) => s.adapterResult.joinHints === undefined));
 });
 
+test('scanClaudeVendorSessions: two DIFFERENT project log files matching the same issue window with DISJOINT (non-overlapping) activity ranges are STILL both dropped, not merged (#2425 -- merge investigated and rejected, see docstring)', () => {
+  const sandbox = mkdtempSync(join(tmpdir(), 'idd-token-cost-harvest-ew-'));
+  writeFileSync(
+    join(sandbox, 'session-ew-disjointA.jsonl'),
+    // Clearly-disjoint, wide-ish range: 00:10 to 00:14.
+    '{"type":"assistant","timestamp":"2026-01-01T00:10:00.000Z","sessionId":"sess-ew-disjointA-0001","cwd":"/repo","message":{"model":"m","usage":{"input_tokens":1,"cache_read_input_tokens":0,"cache_creation_input_tokens":0,"output_tokens":1}}}\n' +
+      '{"type":"assistant","timestamp":"2026-01-01T00:14:00.000Z","sessionId":"sess-ew-disjointA-0001","cwd":"/repo","message":{"model":"m","usage":{"input_tokens":1,"cache_read_input_tokens":0,"cache_creation_input_tokens":0,"output_tokens":1}}}\n',
+  );
+  writeFileSync(
+    join(sandbox, 'session-ew-disjointB.jsonl'),
+    // A DIFFERENT file, entirely after fileA's range ends: 00:18 to 00:20.
+    // A naive range-disjointness check would call these two files
+    // "sequential continuations" and merge them; #2425 rejected that --
+    // sparse candidates like these are indistinguishable from an
+    // unrelated concurrent session that just happens not to overlap.
+    '{"type":"assistant","timestamp":"2026-01-01T00:18:00.000Z","sessionId":"sess-ew-disjointB-0001","cwd":"/repo","message":{"model":"m","usage":{"input_tokens":5,"cache_read_input_tokens":0,"cache_creation_input_tokens":0,"output_tokens":5}}}\n' +
+      '{"type":"assistant","timestamp":"2026-01-01T00:20:00.000Z","sessionId":"sess-ew-disjointB-0001","cwd":"/repo","message":{"model":"m","usage":{"input_tokens":5,"cache_read_input_tokens":0,"cache_creation_input_tokens":0,"output_tokens":5}}}\n',
+  );
+  const eventWindowsAll = new Map<string, StageEventWindow>([
+    [
+      '502:claude:work',
+      stageWindow('2026-01-01T00:05:00Z', '2026-01-01T00:25:00Z'),
+    ],
+    [
+      '502:claude:cleanup',
+      stageWindow('2026-01-01T00:26:00Z', '2026-01-01T00:30:00Z'),
+    ],
+  ]);
+
+  const sessions = scanClaudeVendorSessions(sandbox, eventWindowsAll);
+  const ewSamples = sessions.filter((s) =>
+    s.adapterResult.sample.vendorSessionId.includes('#ew'),
+  );
+
+  assert.equal(ewSamples.length, 0);
+  assert.equal(sessions.length, 2);
+  assert.ok(sessions.every((s) => s.adapterResult.joinHints === undefined));
+});
+
 test('scanClaudeVendorSessions: an event window is ignored when the segment already has a cwd-inferred issueNumber', () => {
   const sandbox = mkdtempSync(join(tmpdir(), 'idd-token-cost-harvest-ew-'));
   writeFileSync(
