@@ -1008,6 +1008,13 @@ export function readEventWindows(path: string): Map<string, StageEventWindow> {
   }
   const enterAt = new Map<string, number>();
   const exitAt = new Map<string, number>();
+  // bareKey -> vendorSessionId of whichever event set enterAt/exitAt's
+  // CURRENT value for that key (undefined when that latest event carried
+  // no identity). Lets the legacy pairing's own trustworthiness be
+  // checked before it competes with an identified candidate -- see
+  // resolveWindow below.
+  const enterAtOwner = new Map<string, string | undefined>();
+  const exitAtOwner = new Map<string, string | undefined>();
   // bareKey -> vendorSessionId -> latest timestamp. Only populated for
   // events that carry a non-empty vendorSessionId.
   const enterAtByAttempt = new Map<string, Map<string, number>>();
@@ -1051,6 +1058,7 @@ export function readEventWindows(path: string): Map<string, StageEventWindow> {
       : undefined;
     if (event.event === 'enter') {
       enterAt.set(key, atMs);
+      enterAtOwner.set(key, vendorSessionId);
       if (vendorSessionId !== undefined) {
         const byAttempt =
           enterAtByAttempt.get(key) ?? new Map<string, number>();
@@ -1059,6 +1067,7 @@ export function readEventWindows(path: string): Map<string, StageEventWindow> {
       }
     } else {
       exitAt.set(key, atMs);
+      exitAtOwner.set(key, vendorSessionId);
       if (vendorSessionId !== undefined) {
         const byAttempt = exitAtByAttempt.get(key) ?? new Map<string, number>();
         byAttempt.set(vendorSessionId, atMs);
@@ -1109,23 +1118,38 @@ export function readEventWindows(path: string): Map<string, StageEventWindow> {
         : undefined;
     const legacyStartMs = enterAt.get(key);
     const legacyEndMs = exitAt.get(key);
+    // Codex review finding round 2, PR #2430: the latest enter and the
+    // latest exit for this bareKey can belong to two DIFFERENT attempts
+    // -- e.g. attempt A posts both cleanup boundaries, and a later
+    // attempt B's own `--enter` call fails to post (fail-open) while its
+    // `--exit` succeeds and lands after A's. enterAt/exitAt would then
+    // mix A's enter with B's exit into a window that looks internally
+    // valid but spans two attempts, permanently corrupting attribution
+    // if it wins the recency comparison below. legacyWindow is only
+    // trustworthy when its own latest enter and latest exit share the
+    // SAME owner (both unidentified, or the same identified attempt --
+    // the latter is always redundant with a `bestIdentified` candidate,
+    // since an identified event updates both the bucketed AND the
+    // unconditional maps together).
+    const legacyOwnersMatch = enterAtOwner.get(key) === exitAtOwner.get(key);
     const legacyWindow =
+      legacyOwnersMatch &&
       legacyStartMs !== undefined &&
       legacyEndMs !== undefined &&
       legacyStartMs < legacyEndMs
         ? { startMs: legacyStartMs, endMs: legacyEndMs }
         : undefined;
-    // Codex review finding, PR #2430: an identified valid candidate is not
-    // automatically more current than the legacy (identity-agnostic)
-    // latest-wins pairing -- e.g. a completed, identified attempt A
-    // followed by a later retry B that completes WITHOUT an identity
-    // (env var unset, a straddling deploy transient). enterAt/exitAt are
-    // populated unconditionally for every event regardless of identity,
-    // so legacyWindow already reflects B's own clean pair whenever B's
-    // own enter and exit are each individually the latest seen -- prefer
-    // whichever candidate is more recent (its own endMs), identified
-    // breaking a tie (the common single-attempt or already-identified
-    // case, where both sides describe the exact same pair).
+    // Codex review finding round 1, PR #2430: an identified valid
+    // candidate is not automatically more current than a TRUSTED legacy
+    // pairing -- e.g. a completed, identified attempt A followed by a
+    // later retry B that completes WITHOUT an identity (env var unset, a
+    // straddling deploy transient). legacyWindow already reflects B's
+    // own clean pair whenever B's own enter and exit are each
+    // individually the latest seen (and thus share the same
+    // -- undefined -- owner) -- prefer whichever candidate is more
+    // recent (its own endMs), identified breaking a tie (the common
+    // single-attempt or already-identified case, where both sides
+    // describe the exact same pair).
     if (bestIdentified && legacyWindow) {
       return bestIdentified.endMs >= legacyWindow.endMs
         ? {

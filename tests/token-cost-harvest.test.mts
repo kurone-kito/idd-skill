@@ -1957,6 +1957,47 @@ test('readEventWindows: an identified completion still wins on a tie against the
   }
 });
 
+test("readEventWindows: rejects a legacy pairing that mixes one attempt's enter with a DIFFERENT attempt's exit (Codex review finding round 2, PR #2430, #2424)", () => {
+  // Attempt A posts both cleanup boundaries (identified, valid). A later
+  // attempt B's own --enter call fails to post (token-cost-event.mjs is
+  // fail-open) but its --exit succeeds, landing after A's. The legacy
+  // (identity-agnostic) latest-enter/latest-exit pairing would combine
+  // A's enter with B's exit -- internally valid-LOOKING, but spanning two
+  // attempts. That must never win the recency comparison against A's own
+  // clean pair: A's own window is the only trustworthy result here.
+  const { dir, path } = writeEventsFile([
+    tokenCostEvent('enter', 'cleanup', '2026-01-01T00:00:01Z', 509, 'sess-A'),
+    tokenCostEvent('exit', 'cleanup', '2026-01-01T00:00:02Z', 509, 'sess-A'),
+    tokenCostEvent('exit', 'cleanup', '2026-01-01T00:00:09Z', 509, 'sess-B'),
+  ]);
+  try {
+    const windows = readEventWindows(path);
+    const cleanup = windows.get('509:claude:cleanup');
+    assert.equal(cleanup?.vendorSessionId, 'sess-A');
+    assert.equal(cleanup?.startMs, ms('2026-01-01T00:00:01Z'));
+    assert.equal(cleanup?.endMs, ms('2026-01-01T00:00:02Z'));
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('readEventWindows: rejects a legacy pairing whose latest enter and exit belong to two DIFFERENT identified attempts, with no identified candidate to fall back to either (#2424)', () => {
+  // Neither attempt ever completes its own pair (A's exit missing, B's
+  // enter missing), so there is no bestIdentified candidate at all. The
+  // legacy pairing would still mix A's enter with B's exit if not gated
+  // -- must resolve to no window at all rather than a cross-attempt mix.
+  const { dir, path } = writeEventsFile([
+    tokenCostEvent('enter', 'cleanup', '2026-01-01T00:00:01Z', 510, 'sess-A'),
+    tokenCostEvent('exit', 'cleanup', '2026-01-01T00:00:09Z', 510, 'sess-B'),
+  ]);
+  try {
+    const windows = readEventWindows(path);
+    assert.equal(windows.get('510:claude:cleanup'), undefined);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 // ---------------------------------------------------------------------------
 // Trusted marker logins
 // ---------------------------------------------------------------------------
