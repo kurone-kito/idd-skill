@@ -1912,6 +1912,51 @@ test('readEventWindows: falls back to the identity-agnostic pairing when a stage
   }
 });
 
+test('readEventWindows: a fresher UNIDENTIFIED completion beats a stale identified one for the same stage (Codex review finding, PR #2430, #2424)', () => {
+  // Attempt A completes cleanup with an identity (older). Attempt B later
+  // ALSO completes cleanup, but without an identity (e.g. a straddling
+  // deploy transient, or CLAUDE_CODE_SESSION_ID unset for that run). An
+  // unconditional "prefer any identified candidate" rule would freeze on
+  // A's stale completion forever -- the resolved window's own stable
+  // #ew<issueNumber> id makes a later harvest treat it as already-present.
+  // The fix compares recency and lets B's more-recent, internally clean
+  // legacy pairing win.
+  const { dir, path } = writeEventsFile([
+    tokenCostEvent('enter', 'cleanup', '2026-01-01T00:00:01Z', 507, 'sess-A'),
+    tokenCostEvent('exit', 'cleanup', '2026-01-01T00:00:02Z', 507, 'sess-A'),
+    tokenCostEvent('enter', 'cleanup', '2026-01-01T00:00:05Z', 507),
+    tokenCostEvent('exit', 'cleanup', '2026-01-01T00:00:06Z', 507),
+  ]);
+  try {
+    const windows = readEventWindows(path);
+    const cleanup = windows.get('507:claude:cleanup');
+    assert.equal('vendorSessionId' in (cleanup ?? {}), false);
+    assert.equal(cleanup?.startMs, ms('2026-01-01T00:00:05Z'));
+    assert.equal(cleanup?.endMs, ms('2026-01-01T00:00:06Z'));
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('readEventWindows: an identified completion still wins on a tie against the identity-agnostic pairing describing the exact same pair (#2424)', () => {
+  // The common case: a single, fully identified attempt. legacyWindow
+  // (identity-agnostic) trivially describes the SAME pair here, since
+  // enterAt/exitAt are populated unconditionally regardless of identity
+  // -- ties must resolve to the identified (tagged) result, not silently
+  // drop the identity.
+  const { dir, path } = writeEventsFile([
+    tokenCostEvent('enter', 'cleanup', '2026-01-01T00:00:01Z', 508, 'sess-A'),
+    tokenCostEvent('exit', 'cleanup', '2026-01-01T00:00:02Z', 508, 'sess-A'),
+  ]);
+  try {
+    const windows = readEventWindows(path);
+    const cleanup = windows.get('508:claude:cleanup');
+    assert.equal(cleanup?.vendorSessionId, 'sess-A');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 // ---------------------------------------------------------------------------
 // Trusted marker logins
 // ---------------------------------------------------------------------------

@@ -776,19 +776,27 @@ function isNonEmptyString(value) {
  * and the exit an event carries, scopes pairing to that one attempt --
  * two attempts for the same (issueNumber, vendor, stageId) key no longer
  * silently pair one's `--enter` with the other's stale `--exit`. Per
- * (issueNumber, vendor) group, `cleanup`'s own window is resolved first
- * (latest VALID -- `startMs < endMs` -- pairing among identified
- * attempts, falling back to the identity-agnostic latest-wins pairing
- * this function used before #2424 when no identified attempt has a valid
- * pair). Every other stage then prefers the candidate sharing `cleanup`'s
- * own winning `vendorSessionId`; only when no such candidate exists does
- * it fall back to the same latest-valid-among-identified-attempts rule,
- * and finally to the identity-agnostic pairing. An event with no
- * `vendorSessionId` (all historical data, and any vendor with no known
- * session-id source) never populates an attempt bucket, so a bareKey
- * whose events are entirely unidentified resolves via the untouched
- * identity-agnostic path -- byte-identical to this function's pre-#2424
- * behavior.
+ * (issueNumber, vendor) group, `cleanup`'s own window is resolved first;
+ * every other stage then prefers the candidate sharing `cleanup`'s own
+ * winning `vendorSessionId` when one exists (regardless of recency -- a
+ * same-attempt candidate is always correct once matched). Absent a
+ * preferred-identity match (including `cleanup`'s own resolution, which
+ * has no preference to match against), this compares the latest VALID
+ * (`startMs < endMs`) pairing among identified attempts against the
+ * identity-agnostic latest-wins pairing this function used before #2424,
+ * and returns whichever has the more recent `endMs` -- identified breaks
+ * a tie. An event with no `vendorSessionId` at all (all historical data,
+ * and any vendor with no known session-id source) never populates an
+ * attempt bucket, so a bareKey whose events are entirely unidentified
+ * resolves via the untouched identity-agnostic path, byte-identical to
+ * this function's pre-#2424 behavior. The recency comparison (rather
+ * than always preferring identified) matters for a completed, identified
+ * attempt followed by a later retry that completes WITHOUT an identity
+ * (env var unset, a deploy-straddling transient) -- an unconditional
+ * identified preference would freeze on the STALE identified completion
+ * forever, since the resulting window's own stable `#ew<issueNumber>` id
+ * makes a later harvest treat it as already-present (Codex review
+ * finding, PR #2430).
  */
 export function readEventWindows(path) {
   const result = new Map();
@@ -882,19 +890,46 @@ export function readEventWindows(path) {
     const valid = candidates.filter(
       (candidate) => candidate.startMs < candidate.endMs,
     );
-    if (valid.length > 0) {
-      const best = valid.reduce((a, b) => (b.endMs > a.endMs ? b : a));
+    const bestIdentified =
+      valid.length > 0
+        ? valid.reduce((a, b) => (b.endMs > a.endMs ? b : a))
+        : undefined;
+    const legacyStartMs = enterAt.get(key);
+    const legacyEndMs = exitAt.get(key);
+    const legacyWindow =
+      legacyStartMs !== undefined &&
+      legacyEndMs !== undefined &&
+      legacyStartMs < legacyEndMs
+        ? { startMs: legacyStartMs, endMs: legacyEndMs }
+        : undefined;
+    // Codex review finding, PR #2430: an identified valid candidate is not
+    // automatically more current than the legacy (identity-agnostic)
+    // latest-wins pairing -- e.g. a completed, identified attempt A
+    // followed by a later retry B that completes WITHOUT an identity
+    // (env var unset, a straddling deploy transient). enterAt/exitAt are
+    // populated unconditionally for every event regardless of identity,
+    // so legacyWindow already reflects B's own clean pair whenever B's
+    // own enter and exit are each individually the latest seen -- prefer
+    // whichever candidate is more recent (its own endMs), identified
+    // breaking a tie (the common single-attempt or already-identified
+    // case, where both sides describe the exact same pair).
+    if (bestIdentified && legacyWindow) {
+      return bestIdentified.endMs >= legacyWindow.endMs
+        ? {
+            startMs: bestIdentified.startMs,
+            endMs: bestIdentified.endMs,
+            vendorSessionId: bestIdentified.vendorSessionId,
+          }
+        : legacyWindow;
+    }
+    if (bestIdentified) {
       return {
-        startMs: best.startMs,
-        endMs: best.endMs,
-        vendorSessionId: best.vendorSessionId,
+        startMs: bestIdentified.startMs,
+        endMs: bestIdentified.endMs,
+        vendorSessionId: bestIdentified.vendorSessionId,
       };
     }
-    const start = enterAt.get(key);
-    const end = exitAt.get(key);
-    return start !== undefined && end !== undefined
-      ? { startMs: start, endMs: end }
-      : undefined;
+    return legacyWindow;
   };
   const issueVendorPrefixes = new Set();
   for (const key of enterAt.keys()) {
