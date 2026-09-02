@@ -296,6 +296,10 @@ infra-vs-code triage above:
   Non-transient — a rerun reproduces it, no code change fixes it. Skip
   `ciWait.rerunPolicy`; post a hold comment naming the block and stop for
   a maintainer.
+- **Sole blocker is an unavailable provider service** (`providerHealth`
+  `unavailable`): park, don't hold, then release the claim -- see
+  [Provider outage park helper](../../docs/idd-helper-scripts.md#provider-outage-park-helper)
+  for the `--park` command and its required flags.
 
 ## Wake-up discipline
 

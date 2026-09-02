@@ -77,6 +77,15 @@ qualifying human decision resolves the hold, a later session removes
 the label and re-claims. A response that leaves the decision open
 does not re-enter.
 
+**Provider-outage park**: release the claim immediately, no 12 h
+heartbeat -- see idd-ci.instructions.md's Hold-and-report failure shapes.
+
+**Parked-change bound** (conditional, only when responding to a known
+provider outage): before claiming a new issue, check
+`node scripts/provider-outage-park.mjs`'s `boundReached`. If `true`, do
+not claim -- route elsewhere or wait instead of manufacturing another
+unmergeable pull request.
+
 ## Roadmap markers
 
 For roadmap markers and their usage rules, see

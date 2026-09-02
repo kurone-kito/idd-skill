@@ -30,7 +30,9 @@ import {
   parseForcedHandoffComment,
   parseLocalValidationEvidenceComment,
   parseProviderOutageDeclarationComment,
+  parseProviderOutageParkComment,
   renderLocalValidationEvidenceComment,
+  renderProviderOutageParkComment,
 } from '../src/scripts/protocol-helpers.mts';
 import { applyResolveReviewThread } from '../src/scripts/resolve-review-thread.mts';
 import { evaluateQuietWindow } from '../src/scripts/stalled-session-quiet-check.mts';
@@ -236,6 +238,12 @@ const SCHEMA_OUTPUT_COVERAGE: CoverageEntry[] = [
       'parseProviderOutageDeclarationComment (marker-helpers.mts, re-exported by protocol-helpers.mts)',
   },
   {
+    schema: 'provider-outage-park.schema.json',
+    status: 'covered',
+    builder:
+      'parseProviderOutageParkComment (marker-helpers.mts, re-exported by protocol-helpers.mts)',
+  },
+  {
     schema: 'local-validation-evidence.schema.json',
     status: 'covered',
     builder:
@@ -416,6 +424,21 @@ test('provider-outage-declaration: parseProviderOutageDeclarationComment output 
     parsed,
     loadJson('schemas/provider-outage-declaration.schema.json'),
   );
+});
+
+test('provider-outage-park: parseProviderOutageParkComment output validates against schema', () => {
+  const body = renderProviderOutageParkComment({
+    actor: 'claude-29738796',
+    issueNumber: 2321,
+    service: 'advisory-review',
+    headSha: 'a'.repeat(40),
+    claimId: 'f22dd6db-83f8-4e92-aaa9-23db47d10650',
+    parkedAt: '2026-09-02T00:00:00Z',
+    blockers: ['advisory-wait'],
+  });
+  const parsed = parseProviderOutageParkComment(body, '2026-09-02T00:00:05Z');
+  assert.ok(parsed !== null, 'parseProviderOutageParkComment returned null');
+  assertRoundtrip(parsed, loadJson('schemas/provider-outage-park.schema.json'));
 });
 
 test('local-validation-evidence: parseLocalValidationEvidenceComment output validates against schema', () => {

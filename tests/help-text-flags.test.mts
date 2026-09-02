@@ -195,6 +195,7 @@ const COVERED_HELPERS = [
   'pre-merge-readiness',
   'provider-health',
   'provider-outage-declaration',
+  'provider-outage-park',
   'rerun-advisory-convergence',
   'resolve-review-thread',
   'resume-claim-routing',

@@ -517,9 +517,14 @@
           "type": "string",
           "pattern": "^(?=.*[1-9])P(?=\\d|T\\d)(?:\\d+D)?(?:T(?=\\d)(?:\\d+H)?(?:\\d+M)?(?:\\d+S)?)?$",
           "description": "Maximum ISO 8601 duration a single outage-relief declaration stays valid before it must be renewed. Optional; defaults to `PT24H` — never open-ended."
+        },
+        "maxParkedChanges": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Bound on how many pull requests may be parked at once for an unavailable provider service (#2321). Once reached, sessions stop claiming new issues rather than manufacturing more unmergeable pull requests. Optional; defaults to `10`."
         }
       },
-      "description": "Container for the repository-scoped outage-relief declaration policy (`declarationTarget`, `maxValidity`). Optional; omitting it keeps the declaration path disabled."
+      "description": "Container for the repository-scoped outage-relief declaration policy (`declarationTarget`, `maxValidity`, `maxParkedChanges`). Optional; omitting it keeps the declaration path disabled and the park bound at its default."
     },
     "localValidationEvidence": {
       "type": "object",

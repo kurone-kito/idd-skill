@@ -1,0 +1,63 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://kurone-kito.github.io/idd-skill/schemas/provider-outage-park.schema.json",
+  "title": "IDD Provider Outage Park Marker Payload",
+  "description": "Structured payload parsed from an idd-provider-outage-park comment posted on a parked pull request. Never a merge-readiness or CI-gate result: parking never resolves a thread, satisfies a gate, or merges.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "actor",
+    "issueNumber",
+    "service",
+    "headSha",
+    "claimId",
+    "parkedAt",
+    "blockers",
+    "createdAt"
+  ],
+  "properties": {
+    "actor": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^\\S+$",
+      "description": "Agent id of the session that parked this pull request, as embedded in the marker."
+    },
+    "issueNumber": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "The originating issue whose claim was released on entry; a later resume re-claims this issue rather than re-parsing the pull request body's closing keyword."
+    },
+    "service": {
+      "type": "string",
+      "minLength": 1,
+      "description": "The providerHealth service this pull request was parked for (e.g. advisory-review, ci-actions)."
+    },
+    "headSha": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$",
+      "description": "The pull request's HEAD commit SHA at the moment it was parked."
+    },
+    "claimId": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^\\S+$",
+      "description": "The active claim id on the originating issue at park time."
+    },
+    "parkedAt": {
+      "type": "string",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}Z$",
+      "description": "UTC timestamp the pull request was parked. The only timestamp safe to select or sort on -- never the comment's own createdAt, which degrades to \"none\" on an unreadable read."
+    },
+    "blockers": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 },
+      "minItems": 1,
+      "description": "The pre-merge-readiness blocker-gate names that justified parking, each mapping unambiguously to the unavailable service. Never a claim that any merge-readiness gate itself passed."
+    },
+    "createdAt": {
+      "type": "string",
+      "pattern": "^(none|\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?Z)$",
+      "description": "The GitHub-assigned created_at of the comment carrying this marker, or \"none\" when unavailable. Diagnostic only."
+    }
+  }
+}
