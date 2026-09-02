@@ -378,6 +378,14 @@ Ask these checks:
 1. When an issue reuses an existing identifier or field name, confirm the
    specified value matches that name's established semantics in the
    codebase — do not overload a name with a new shape or source.
+   **Remedy**: mint a new, distinctly named field instead of overloading
+   the existing one. Worked example: a candidate issue's acceptance
+   criterion reads "set `retryAttempts` to the elapsed wait time in
+   milliseconds" — `retryAttempts` already means a whole-pass apply
+   attempt _count_ in `audit-pr-cleanup.mts`'s `CleanupAuditReport`, so
+   reusing it for a duration overloads an established name with an
+   incompatible shape. Fix: mint a new field instead, e.g.
+   `retryWaitMs`, and leave `retryAttempts` untouched.
 2. Flag values that are mutable at runtime — specify a live read at the
    point of use rather than a one-time capture at construction.
 3. When an issue proposes to **delete, replace, or "align to upstream"**
