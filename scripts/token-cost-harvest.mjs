@@ -1089,11 +1089,22 @@ export function buildCompletedIssueWindows(eventWindowsAll, vendor) {
     }
     // #2424: a non-cleanup window whose vendorSessionId is known and
     // differs from cleanup's own belongs to a different attempt --
-    // exclude it outright, before either check below runs. Undefined on
-    // either side means "unidentified"; those windows are unaffected and
-    // still flow through the pre-#2424 checks.
+    // exclude it outright, before either check below runs. This is
+    // deliberately ASYMMETRIC, not "undefined on either side means
+    // unidentified, treat as compatible" (Codex review finding round 3,
+    // PR #2430: that symmetric form let an UNIDENTIFIED cleanup --
+    // e.g. a fresh retry that legitimately won readEventWindows' own
+    // recency comparison over a stale identified completion -- absorb
+    // ANY identified stage window unconditionally, including one that
+    // provably belongs to a DIFFERENT, earlier attempt). A window's own
+    // identity, once present, is real evidence of a distinct attempt --
+    // `vendorSessionId` is derived once per Claude Code process
+    // lifetime, so an identified stage and an unidentified cleanup can
+    // never legitimately be the SAME attempt. The only "no contradicting
+    // evidence" case is when the WINDOW itself lacks an identity
+    // (historical data, or a stage that predates this field even though
+    // cleanup itself is a fresh, identified completion).
     const idCompatible = (window) =>
-      cleanup.vendorSessionId === undefined ||
       window.vendorSessionId === undefined ||
       window.vendorSessionId === cleanup.vendorSessionId;
     const candidateStages = [...stages].filter(

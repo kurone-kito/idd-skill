@@ -767,6 +767,32 @@ test('buildCompletedIssueWindows: an unidentified non-cleanup window is unaffect
   assert.equal(windows[0].vendorSessionId, 'attempt-A');
 });
 
+test('buildCompletedIssueWindows: an IDENTIFIED non-cleanup window from a stale attempt is excluded when cleanup itself is UNIDENTIFIED (Codex review finding round 3, PR #2430, #2424)', () => {
+  // The reverse of the case above, and NOT symmetric: cleanup belongs to
+  // a fresh, unidentified retry (it legitimately won readEventWindows'
+  // own recency comparison over a stale identified completion). 'work'
+  // is a STALE, identified window from an EARLIER, different attempt.
+  // vendorSessionId is derived once per Claude Code process lifetime, so
+  // an identified stage and an unidentified cleanup can never
+  // legitimately be the same attempt -- 'work' must be excluded, not
+  // treated as compatible just because cleanup itself lacks an identity.
+  const all = new Map<string, StageEventWindow>([
+    [
+      '511:claude:work',
+      stageWindow('2026-01-01T00:00:01Z', '2026-01-01T00:00:02Z', 'attempt-A'),
+    ],
+    [
+      '511:claude:cleanup',
+      stageWindow('2026-01-01T00:10:00Z', '2026-01-01T00:10:05Z'),
+    ],
+  ]);
+  const windows = buildCompletedIssueWindows(all, 'claude');
+  assert.equal(windows.length, 1);
+  assert.equal(windows[0].startMs, ms('2026-01-01T00:10:00Z'));
+  assert.equal(windows[0].endMs, ms('2026-01-01T00:10:05Z'));
+  assert.equal('vendorSessionId' in windows[0], false);
+});
+
 test("scanClaudeVendorSessions: a completed cleanup window does not absorb a later retry's activity", () => {
   const sandbox = mkdtempSync(join(tmpdir(), 'idd-token-cost-harvest-ew-'));
   writeFileSync(
