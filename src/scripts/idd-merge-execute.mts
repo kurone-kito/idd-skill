@@ -13,6 +13,9 @@
 // `gh pr merge` issued under `--apply` once every F3 gate holds and the
 // head + claim re-validate immediately before the merge.
 
+import { execFileSync } from 'node:child_process';
+
+import { GH_TEXT_LOOP_OPTIONS, ghText } from './gh-exec.mts';
 import { deriveGhHttpStatus, ghErrorText } from './gh-http-status.mts';
 import { type IddConfig, loadIddConfig } from './idd-config.mts';
 import { normalizePolicyConfig } from './policy-helpers.mts';
@@ -78,6 +81,16 @@ export interface IddMergeExecuteVerdict {
    * eligible for the fallback.
    */
   adminFallbackUsed: boolean;
+  /**
+   * #2453: non-fatal advisory. Set only when the invoking process is
+   * standing on the PR's own branch (its local git branch equals the PR's
+   * `headRefName`) AND its local HEAD differs from `prHeadSha` -- the
+   * signature of an unpushed commit about to be silently left behind by
+   * this merge. `null` whenever the check cannot run (no git repo,
+   * different/detached branch, an unreadable local or remote read) or
+   * finds no divergence. Never gates `ready` or blocks the merge.
+   */
+  localHeadDrift: { localHeadSha: string; remoteHeadSha: string } | null;
 }
 
 /** Parsed CLI arguments mirroring pre-merge-readiness, plus `--apply`. */
@@ -220,6 +233,24 @@ export interface MergeExecuteDeps {
     repoRef: string | null,
     headSha: string,
   ) => string;
+  /**
+   * #2453: best-effort local git state of the process invoking this run.
+   * Must never throw -- swallow any failure (not a git repo, detached
+   * HEAD, `git` unavailable, etc.) into `{ branch: null, headSha: null }`,
+   * since this feeds only the advisory `localHeadDrift` check and must
+   * never block a merge run from a context with no relevant local git
+   * state (e.g. CI, or a maintainer running the CLI from an unrelated
+   * directory).
+   */
+  getLocalHeadState: () => { branch: string | null; headSha: string | null };
+  /**
+   * #2453: fetch the PR's own head branch name (`headRefName`), scoped to
+   * `repoRef` (`<owner>/<repo>`) when set, else the current-directory
+   * repo -- same scoping convention as `fetchHeadSha`. Used only to decide
+   * whether the invoking process is literally standing on the branch
+   * being merged, for the advisory `localHeadDrift` check.
+   */
+  fetchHeadRefName: (prNumber: number, repoRef: string | null) => string;
 }
 
 /** `resolveOwnerRepoFromRef`'s split of a `<owner>/<repo>` `repoRef`, or the
@@ -360,6 +391,42 @@ const defaultDeps: MergeExecuteDeps = {
       ? resolveRemoteSoloCodeownerAdminFallbackMode(prNumber, repoRef, headSha)
       : normalizePolicyConfig(loadIddConfig()).mergeGate
           .soloCodeownerAdminFallback,
+  getLocalHeadState: () => {
+    try {
+      const branch = execFileSync(
+        'git',
+        ['rev-parse', '--abbrev-ref', 'HEAD'],
+        {
+          encoding: 'utf8',
+          stdio: ['ignore', 'pipe', 'ignore'],
+        },
+      ).trim();
+      const headSha = execFileSync('git', ['rev-parse', 'HEAD'], {
+        encoding: 'utf8',
+        stdio: ['ignore', 'pipe', 'ignore'],
+      }).trim();
+      return { branch: branch || null, headSha: headSha || null };
+    } catch {
+      return { branch: null, headSha: null };
+    }
+  },
+  fetchHeadRefName: (prNumber, repoRef) => {
+    const { owner, repo } = resolveOwnerRepoFromRef(repoRef);
+    return ghText(
+      [
+        'pr',
+        'view',
+        String(prNumber),
+        '-R',
+        `${owner}/${repo}`,
+        '--json',
+        'headRefName',
+        '--jq',
+        '.headRefName',
+      ],
+      GH_TEXT_LOOP_OPTIONS,
+    ).trim();
+  },
 };
 
 /**
@@ -408,7 +475,31 @@ export function runMergeExecute(
     merged: false,
     mergeResult: '',
     adminFallbackUsed: false,
+    localHeadDrift: null,
   };
+
+  // #2453: best-effort, advisory-only local-head-drift check. Never lets a
+  // misbehaving dep (or an unrelated local git/gh failure) affect `ready`,
+  // `blockers`, or the merge decision below.
+  try {
+    const localHeadState = deps.getLocalHeadState();
+    if (localHeadState.branch && localHeadState.headSha) {
+      const prHeadRefName = deps.fetchHeadRefName(args.prNumber, args.repoRef);
+      if (
+        prHeadRefName &&
+        prHeadRefName === localHeadState.branch &&
+        localHeadState.headSha !== prHeadSha
+      ) {
+        verdict.localHeadDrift = {
+          localHeadSha: localHeadState.headSha,
+          remoteHeadSha: prHeadSha,
+        };
+      }
+    }
+  } catch {
+    // Advisory only (#2453): a local git or `gh` failure here must never
+    // block or crash an otherwise-successful merge run.
+  }
 
   if (!args.apply) {
     // Dry-run: read-only. Never merge.
@@ -775,12 +866,27 @@ function printHelp(): void {
   when the fresh branch-currency evidence says an up-to-date head is not
   required. Unreadable or unsafe live state aborts the retry.
   The verdict's adminFallbackUsed field records whether this path fired.
+
+  Local-head-drift warning (#2453): when the invoking worktree's local
+  git branch matches this PR's own branch but its local HEAD differs from
+  the head about to merge, the verdict's localHeadDrift field is set and
+  a warning is printed on stderr -- a non-fatal signal an unpushed commit
+  may be about to be left behind. Never blocks the merge; a silent no-op
+  from any other directory, branch, or local read failure.
 `);
 }
 
 // CLI: print the verdict as JSON and exit with the gate/merge status.
 if (import.meta.main) {
   const { verdict, exitCode } = runMergeExecute(process.argv.slice(2));
+  if (verdict.localHeadDrift) {
+    // #2453: surface this prominently on stderr too -- an agent running
+    // --apply interactively should actually notice it, not just find it
+    // buried in the JSON verdict.
+    process.stderr.write(
+      `⚠ local HEAD drift: this worktree's local HEAD (${verdict.localHeadDrift.localHeadSha}) differs from PR #${verdict.prNumber}'s head about to merge (${verdict.localHeadDrift.remoteHeadSha}) -- an unpushed commit may be about to be left behind.\n`,
+    );
+  }
   process.stdout.write(`${JSON.stringify(verdict, null, 2)}\n`);
   process.exit(exitCode);
 }
