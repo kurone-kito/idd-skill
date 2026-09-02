@@ -687,6 +687,26 @@ function isOrdinaryHyphenatedCompoundVerb(
   }
   let cursor = matchIndex - 1;
   while (cursor > 0 && /[\w-]/.test(rawSource[cursor - 1] ?? '')) {
+    // A double hyphen with no surrounding space directly preceded by a word character
+    // ("time--skip") is prose punctuation -- a typewriter-style em/en dash
+    // used as a clause separator -- not a compound-word joiner or a
+    // flag-prefix hyphen chain (#2407 review round 7, Codex). A *real*
+    // em/en dash character here was already detected before this change:
+    // it fails the leading-hyphen guard clause above outright, since it
+    // is not the ASCII '-' that clause checks for. This keeps the ASCII
+    // typewriter substitute behaving the same way. Checking
+    // `rawSource[cursor]` (not `rawSource[cursor - 1]`) for the first
+    // hyphen of the pair matters: an ordinary single-hyphen compound like
+    // "evidence-skip" also has a hyphen one step further back, and
+    // conflating the two would wrongly stop the walk on every compound
+    // joiner, not just a genuine double-hyphen separator.
+    if (
+      rawSource[cursor] === '-' &&
+      rawSource[cursor - 1] === '-' &&
+      /\w/.test(rawSource[cursor - 2] ?? '')
+    ) {
+      break;
+    }
     cursor -= 1;
   }
   if (!/\w/.test(rawSource[cursor] ?? '')) {
