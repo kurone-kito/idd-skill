@@ -1057,6 +1057,16 @@ Interpretation rules:
   marker body.
 - `check` may be an exact selector or a glob pattern, matching the
   `ciGate.externalChecks.*[].selector` plus `matchMode` contract.
+- `check:` and `reason:` hold single whitespace-free tokens in the raw
+  marker body: the authoring helper percent-encodes the check selector
+  and reason text with `encodeURIComponent` when writing the marker,
+  and decodes them back via `decodeURIComponent` on read (falling back
+  to an empty string -- which fails closed -- on a decode error). A
+  hand-written value containing a space or another character outside
+  the `check:\S+`/`reason:\S+` shape parses as malformed with no
+  automatic warning or reply unless percent-encoded first (a space
+  becomes `%20`); prefer the authoring helper below over hand-writing
+  the marker so this encoding is applied automatically.
 - Missing or unparseable body fields, unknown selectors, expired
   comments, wrong HEAD, wrong claim, or untrusted authors must fail
   closed.
