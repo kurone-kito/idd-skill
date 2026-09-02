@@ -865,6 +865,29 @@ function eventWindowsForIssue(all, issueNumber, vendor) {
  *   folded into the union and permanently frozen under the stable
  *   `#ew<issueNumber>` id as if the (unfinished) retry were the
  *   completed loop.
+ * - A later attempt whose own `--enter` (or `--exit`) call for some
+ *   non-`cleanup` stage silently fails (`token-cost-event.mjs` is
+ *   deliberately fail-open) can leave that stage's pairing mixing one
+ *   attempt's enter with an EARLIER, unrelated attempt's exit, which
+ *   `readEventWindows` reports as reversed (`startMs > endMs`) once the
+ *   later attempt's own timestamp is newer than the stale one it paired
+ *   with. Excluding such a window from the union (as `startMs < endMs`
+ *   already does above) is not enough on its own: `startMs` still
+ *   silently degrades to the stable `cleanup`-only window instead of
+ *   surfacing the contamination. A reversed non-`cleanup` stage window
+ *   whose own `startMs` falls at or before the completed run's own
+ *   `cleanup.endMs` is treated as direct evidence that this issue's
+ *   event history is corrupted for THIS harvest, so the whole issue is
+ *   skipped rather than emitted with a silently narrowed window (no
+ *   sample beats a wrong one). A reversed window entirely past
+ *   `cleanup.endMs` is ordinary mid-retry noise from a later, distinct
+ *   attempt and does not block emission of the already-completed window.
+ *   The remaining case -- a stage whose stale, EARLIER-attempt pairing
+ *   happens to still be internally valid (non-reversed), e.g. because
+ *   BOTH of the later attempt's own enter/exit calls for that stage
+ *   failed -- is mechanically indistinguishable from a genuine early
+ *   start without an attempt/session identity on `TokenCostEvent`
+ *   itself; tracked as a follow-up (#2424) rather than solved here.
  */
 export function buildCompletedIssueWindows(eventWindowsAll, vendor) {
   const stagesByIssue = new Map();
@@ -885,6 +908,15 @@ export function buildCompletedIssueWindows(eventWindowsAll, vendor) {
   for (const [issueNumber, stages] of stagesByIssue) {
     const cleanup = stages.get('cleanup');
     if (!cleanup || cleanup.startMs >= cleanup.endMs) {
+      continue;
+    }
+    const hasContaminatedStage = [...stages].some(
+      ([stageId, window]) =>
+        stageId !== 'cleanup' &&
+        window.startMs >= window.endMs &&
+        window.startMs <= cleanup.endMs,
+    );
+    if (hasContaminatedStage) {
       continue;
     }
     let startMs = cleanup.startMs;

@@ -571,6 +571,51 @@ test('buildCompletedIssueWindows: a valid, closed cleanup pair caps the window e
   assert.equal(windows[0].startMs, ms('2026-01-01T00:55:00Z'));
 });
 
+test('buildCompletedIssueWindows: a reversed non-cleanup stage window overlapping the completed run is treated as contamination, not silently narrowed (Codex review finding round 3, #2423)', () => {
+  // A later attempt's OWN `work` enter posts (00:58), but its `work` exit
+  // fails to post (token-cost-event.mjs is deliberately fail-open) --
+  // readEventWindows still pairs that enter with an EARLIER, unrelated
+  // attempt's stale exit (00:30), producing a reversed window whose own
+  // startMs falls at or before this run's cleanup.endMs. That is direct
+  // evidence the issue's event history is corrupted for this harvest, so
+  // the whole issue must be skipped rather than emitted with a
+  // cleanup-only window that silently hides the contamination.
+  const all = new Map<string, StageEventWindow>([
+    [
+      '501:claude:work',
+      stageWindow('2026-01-01T00:58:00Z', '2026-01-01T00:30:00Z'),
+    ],
+    [
+      '501:claude:cleanup',
+      stageWindow('2026-01-01T00:55:00Z', '2026-01-01T01:00:00Z'),
+    ],
+  ]);
+  const windows = buildCompletedIssueWindows(all, 'claude');
+  assert.deepEqual(windows, []);
+});
+
+test('buildCompletedIssueWindows: a reversed non-cleanup stage window entirely PAST the completed run is ordinary retry noise, not contamination (Codex review finding round 3, #2423)', () => {
+  // Same reversed-pairing shape as above, but this time both ends of the
+  // reversed window fall AFTER the completed run's own cleanup.endMs --
+  // ordinary mid-retry noise from a later, distinct attempt that has not
+  // yet reached its own valid cleanup. It must not block emission of the
+  // already-completed window.
+  const all = new Map<string, StageEventWindow>([
+    [
+      '501:claude:work',
+      stageWindow('2026-01-01T02:00:00Z', '2026-01-01T01:30:00Z'),
+    ],
+    [
+      '501:claude:cleanup',
+      stageWindow('2026-01-01T00:55:00Z', '2026-01-01T01:00:00Z'),
+    ],
+  ]);
+  const windows = buildCompletedIssueWindows(all, 'claude');
+  assert.equal(windows.length, 1);
+  assert.equal(windows[0].startMs, ms('2026-01-01T00:55:00Z'));
+  assert.equal(windows[0].endMs, ms('2026-01-01T01:00:00Z'));
+});
+
 test("scanClaudeVendorSessions: a completed cleanup window does not absorb a later retry's activity", () => {
   const sandbox = mkdtempSync(join(tmpdir(), 'idd-token-cost-harvest-ew-'));
   writeFileSync(
