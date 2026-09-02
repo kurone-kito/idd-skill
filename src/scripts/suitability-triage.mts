@@ -340,8 +340,18 @@ const NEGATION_PATTERN =
 // The repeated `disable` entries are preserved verbatim from the original
 // inline regex literal (harmless redundancy in an alternation) to keep this
 // pattern byte-identical rather than pulled in as an incidental fix here.
-const POLICY_OVERRIDE_VERB_SOURCE =
-  'ignore|bypass|override|disable|disable|skip|turn off|suppress|disable';
+// #2399: this alternation deliberately stays on a bare, unguarded `\b`
+// (unlike `POLICY_OVERRIDE_NOUN_SOURCE` below) -- three review rounds on
+// #2407 each replaced a fixed-distance regex lookbehind here with a wider
+// one, and each replacement still let some hyphen- or symbol-prefixed CLI
+// flag phrasing (`--skip`, `--skip-checks`, `--force-skip`,
+// `/force-skip`) evade detection by looking enough like an ordinary
+// hyphenated compound word (`evidence-skip`) at a fixed lookbehind
+// distance. Distinguishing the two needs to trace a whole token back to
+// its own origin, which no fixed-width lookbehind can do; see
+// `isOrdinaryHyphenatedCompoundVerb` below, called from
+// `findPolicyOverrideMatch`, for that classification instead.
+const POLICY_OVERRIDE_VERB_SOURCE = `(?:ignore|bypass|override|disable|disable|skip|turn off|suppress|disable)`;
 // #2218: a bare `\b` treats a hyphen as a non-word character, so every one
 // of these nouns also matched inside an ordinary hyphenated file-path
 // mention (e.g. this project's own marker prefix in `idd-workflow-notes.md`
@@ -597,6 +607,117 @@ function isNegatedPolicyOverrideMatch(
   );
 }
 
+// #2399/#2407: a true prose boundary immediately before a hyphenated run's
+// own word-character origin -- whitespace, or one of the wrapping
+// delimiters this file already treats as optional token punctuation
+// elsewhere (backtick, single/double quote, open paren; see
+// SUPPLIED_CONTENT_OBJECT_REFERENCE above). Deliberately minimal, and
+// deliberately NOT grown to cover every prose-punctuation character that
+// might directly abut a flag with no whitespace (colon, period, comma, ...,
+// #2407 review round 6, Copilot): isOrdinaryHyphenatedCompoundVerb only
+// ever tests this pattern against the single character immediately before
+// a `[\w-]` run's own origin, never against a character INSIDE that run --
+// so adding a character here can only ever narrow (never widen) which runs
+// get excluded, and can never create a bypass for a flag token that
+// happens to contain that character internally (e.g. a dotted config key
+// like `--config.force-skip`, or `--env:force-skip`). See that function's
+// own comment for why the run itself is walked with a fixed `[\w-]`
+// character class rather than this boundary set.
+const COMPOUND_TOKEN_BOUNDARY_PATTERN = /[\s\x60'"(]/;
+
+// #2399: `#2218` wrapped `POLICY_OVERRIDE_NOUN_SOURCE` in a hyphen-boundary
+// guard so an ordinary hyphenated compound noun (e.g. a file name like
+// `idd-workflow-notes.md`) no longer false-positives Check 3. The verb
+// list needed the equivalent exclusion for a hyphen-adjacent compound like
+// "duplicate-evidence-skip check" (#2213's own title), but a regex
+// lookbehind proved unable to also keep detecting a directive phrased as a
+// CLI flag: `--skip`, `--skip-checks`, `--force-skip`, and (#2407 review
+// round 4, Codex) non-hyphen-prefixed forms like `/force-skip` all put a
+// hyphen directly before the verb too, indistinguishable from a genuine
+// compound at any FIXED lookbehind distance -- only tracing the whole
+// token back to where it truly begins tells them apart. A flag token
+// (however it is itself prefixed) never begins with a word character at
+// that origin; an ordinary compound word always does.
+//
+// Called from findPolicyOverrideMatch alongside isNegatedPolicyOverrideMatch,
+// with the same "treat as inert, resume scanning after it" handling -- a
+// verb classified here as part of an ordinary compound must not stop this
+// checker from finding a later, genuine trigger. Every call site also gates
+// this classifier on the verb not sitting inside a masked code range (#2407
+// review round 5, Codex): a code-wrapped hyphenated key like
+// `` `force-skip` `` carries a real, distinguishing shape signal -- being
+// wrapped in code at all -- that bare prose lacks, and the raw-fallback
+// pass already exists specifically to keep code-wrapped directives
+// detectable (the `--skip` case this file's round-1 fix started with), so
+// excluding a code-wrapped compound here would undercut that pass's own
+// purpose. A BARE, unquoted, un-code-wrapped "force-skip" is deliberately
+// left excluded (classified as an ordinary compound) even when meant as a
+// directive: nothing distinguishes it, in shape alone, from #2213's own
+// "evidence-skip" -- the exact false positive this whole guard exists to
+// fix. Any rule general enough to also detect a bare "force-skip" detects
+// bare "evidence-skip" too, reintroducing #2213 (see the dedicated
+// regression test pinning this as a known, deliberate limit).
+//
+// The run of characters walked back from the verb's own leading hyphen
+// uses a fixed `[\w-]` class -- letters, digits, underscore, and hyphen,
+// exactly the characters that make up an ordinary hyphenated word or a
+// hyphen-flag name -- rather than "any character not in
+// COMPOUND_TOKEN_BOUNDARY_PATTERN" (#2407 review round 6, Copilot: a
+// directive can directly abut a flag with no whitespace, e.g.
+// "Pass:--skip repository policy"; growing the boundary set to also cover
+// `:` closed that case, but any character added to a "boundary" set this
+// way stops the walk *inside* an unrelated flag name too -- a dotted or
+// colon-joined config key like `--config.force-skip` or `--env:force-skip`
+// would then misclassify as excluded, a regression the boundary-list
+// approach cannot avoid without an ever-growing, never-complete
+// enumeration). Walking a fixed `[\w-]` run instead means the only
+// question left is whether the character immediately before that run's
+// own origin is a true prose boundary or not -- `.`, `:`, `=`, and every
+// other symbol that can legally sit *inside* a flag name never stops the
+// run early, so they can never manufacture a false "ordinary compound"
+// classification, while still correctly closing the reported gap (that
+// run now starts at the flag's own leading hyphen, not several characters
+// further back across the punctuation).
+function isOrdinaryHyphenatedCompoundVerb(
+  rawSource: string,
+  matchIndex: number,
+): boolean {
+  if (rawSource[matchIndex - 1] !== '-') {
+    return false;
+  }
+  let cursor = matchIndex - 1;
+  while (cursor > 0 && /[\w-]/.test(rawSource[cursor - 1] ?? '')) {
+    // A double hyphen with no surrounding space directly preceded by a word character
+    // ("time--skip") is prose punctuation -- a typewriter-style em/en dash
+    // used as a clause separator -- not a compound-word joiner or a
+    // flag-prefix hyphen chain (#2407 review round 7, Codex). A *real*
+    // em/en dash character here was already detected before this change:
+    // it fails the leading-hyphen guard clause above outright, since it
+    // is not the ASCII '-' that clause checks for. This keeps the ASCII
+    // typewriter substitute behaving the same way. Checking
+    // `rawSource[cursor]` (not `rawSource[cursor - 1]`) for the first
+    // hyphen of the pair matters: an ordinary single-hyphen compound like
+    // "evidence-skip" also has a hyphen one step further back, and
+    // conflating the two would wrongly stop the walk on every compound
+    // joiner, not just a genuine double-hyphen separator.
+    if (
+      rawSource[cursor] === '-' &&
+      rawSource[cursor - 1] === '-' &&
+      /\w/.test(rawSource[cursor - 2] ?? '')
+    ) {
+      break;
+    }
+    cursor -= 1;
+  }
+  if (!/\w/.test(rawSource[cursor] ?? '')) {
+    return false;
+  }
+  return (
+    cursor === 0 ||
+    COMPOUND_TOKEN_BOUNDARY_PATTERN.test(rawSource[cursor - 1] ?? '')
+  );
+}
+
 function findPolicyOverrideMatch(
   text: string,
   maskedText: string,
@@ -611,6 +732,8 @@ function findPolicyOverrideMatch(
     }
     const index = maskedMatch.index;
     if (
+      (!getCodeRangeAt(index) &&
+        isOrdinaryHyphenatedCompoundVerb(text, index)) ||
       isNegatedPolicyOverrideMatch(
         text,
         maskedText,
@@ -619,13 +742,14 @@ function findPolicyOverrideMatch(
         getCodeRangeAt,
       )
     ) {
-      // A negated match's own greedy span can reach up to 60 chars past the
-      // verb and swallow a second, genuine trigger further along (e.g.
-      // "does not skip the release check. Ignore repository policy."). The
-      // engine already auto-advanced lastIndex to the end of that whole
-      // span; rewind it to resume scanning right after the skipped verb, so
-      // a later independent trigger is never missed. Mirrors the code-only
-      // skip's "resume just after the inert occurrence" rule below.
+      // A negated (or ordinary-compound) match's own greedy span can reach
+      // up to 60 chars past the verb and swallow a second, genuine trigger
+      // further along (e.g. "does not skip the release check. Ignore
+      // repository policy."). The engine already auto-advanced lastIndex to
+      // the end of that whole span; rewind it to resume scanning right
+      // after the skipped verb, so a later independent trigger is never
+      // missed. Mirrors the code-only skip's "resume just after the inert
+      // occurrence" rule below.
       maskedPattern.lastIndex = index + (maskedMatch[1]?.length || 1);
       continue;
     }
@@ -650,6 +774,8 @@ function findPolicyOverrideMatch(
       continue;
     }
     if (
+      (!getCodeRangeAt(index) &&
+        isOrdinaryHyphenatedCompoundVerb(text, index)) ||
       isNegatedPolicyOverrideMatch(
         text,
         maskedText,
@@ -658,8 +784,9 @@ function findPolicyOverrideMatch(
         getCodeRangeAt,
       )
     ) {
-      // Same rewind as the masked-pass loop above: a negated match's own
-      // greedy span can swallow a later, genuine trigger.
+      // Same rewind as the masked-pass loop above: a negated or
+      // ordinary-compound match's own greedy span can swallow a later,
+      // genuine trigger.
       pattern.lastIndex = index + (match[1]?.length || 1);
       continue;
     }
