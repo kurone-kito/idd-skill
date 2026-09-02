@@ -35,6 +35,15 @@ import {
 } from './provider-health.mts';
 
 /**
+ * Strip the fractional-second component `Date#toISOString()` always emits,
+ * matching this repository's second-precision operational-marker
+ * convention (`renderProviderOutageParkComment` rejects anything else).
+ */
+export function toSecondPrecisionIso(date: Date): string {
+  return date.toISOString().replace(/\.\d{3}Z$/, 'Z');
+}
+
+/**
  * pre-merge-readiness blocker-`gate` names that are *unambiguously* about
  * one provider-health service's availability -- never a gate that can also
  * fire for an unrelated reason. `review-currency` and `disposition-evidence`
@@ -219,7 +228,7 @@ function collectRawParkMarkers(
   let openPrs: GhOpenPullRequest[];
   try {
     const payload = ghApiJson(
-      `repos/${owner}/${repo}/pulls?state=open&per_page=${sampleSize}`,
+      `repos/${owner}/${repo}/pulls?state=open&sort=updated&direction=desc&per_page=${sampleSize}`,
     );
     if (!Array.isArray(payload)) {
       throw new Error('malformed open pull request list response');
@@ -285,7 +294,7 @@ export function buildParkedChangeReport(
   boundReached: boolean;
 } {
   const config = options.config ?? loadIddConfig();
-  const now = options.now ?? new Date().toISOString();
+  const now = options.now ?? toSecondPrecisionIso(new Date());
   const { actors: trustedMarkerActors } = resolveTrustedMarkerActors({
     envValue: process.env.IDD_TRUSTED_MARKER_ACTORS,
     config: config as { trustedMarkerActors?: unknown } | null,
@@ -369,7 +378,12 @@ export function runParkPullRequest(options: {
   }
   const service = options.service as ProviderHealthService;
   const config = options.config ?? loadIddConfig();
-  const now = options.now ?? new Date().toISOString();
+  // renderProviderOutageParkComment requires a second-precision `parkedAt`
+  // (marker-helpers.mts's normalizeSecondPrecisionIsoTimestamp rejects
+  // fractional seconds outright) -- Date#toISOString() always includes
+  // milliseconds, so the default `now` must be truncated here or every
+  // ordinary --park --apply call (no --now override) throws.
+  const now = options.now ?? toSecondPrecisionIso(new Date());
 
   const report = buildProviderHealthReport(options.owner, options.repo, {
     config,

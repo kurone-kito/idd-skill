@@ -10,8 +10,35 @@ import {
   PARK_ELIGIBLE_BLOCKER_GATES,
   type RawParkMarker,
   resolveParkEligibility,
+  toSecondPrecisionIso,
 } from '../src/scripts/provider-outage-park.mts';
 import { loadJson, validate } from '../src/scripts/validate-schemas.mts';
+
+// ---------------------------------------------------------------------------
+// toSecondPrecisionIso -- Copilot review finding (PR #2421): the default
+// `now` in runParkPullRequest/buildParkedChangeReport must never carry
+// fractional seconds, or renderProviderOutageParkComment's strict
+// second-precision check throws on every ordinary --park --apply call.
+// ---------------------------------------------------------------------------
+
+test('toSecondPrecisionIso: strips the fractional-second component Date#toISOString() always emits', () => {
+  const withMillis = new Date('2026-09-02T00:00:00.123Z');
+  assert.equal(toSecondPrecisionIso(withMillis), '2026-09-02T00:00:00Z');
+});
+
+test('toSecondPrecisionIso output is accepted by renderProviderOutageParkComment (regression for PR #2421 review finding)', () => {
+  const now = toSecondPrecisionIso(new Date('2026-09-02T00:00:00.999Z'));
+  assert.doesNotThrow(() =>
+    renderProviderOutageParkComment({
+      actor: 'claude-29738796',
+      issueNumber: 2321,
+      service: 'advisory-review',
+      headSha: 'a'.repeat(40),
+      claimId: 'claim-1',
+      parkedAt: now,
+    }),
+  );
+});
 
 // ---------------------------------------------------------------------------
 // resolveParkEligibility (#2321) -- the fail-closed gate
@@ -236,6 +263,22 @@ test('committed provider-outage-park fixture validates against its schema', () =
 // ---------------------------------------------------------------------------
 // Never a merge-readiness/CI-gate result, never thread/gate/merge mutation
 // ---------------------------------------------------------------------------
+
+test('provider-outage-park.mts never generates a raw new Date().toISOString() default (regression for PR #2421 review finding)', () => {
+  const source = readFileSync('src/scripts/provider-outage-park.mts', 'utf8');
+  assert.ok(
+    !source.includes('new Date().toISOString()'),
+    'every default `now` must go through toSecondPrecisionIso, never a raw millisecond-precision Date#toISOString()',
+  );
+});
+
+test('provider-outage-park.mts sorts the open pull request sample by most-recently-updated (regression for PR #2421 review finding)', () => {
+  const source = readFileSync('src/scripts/provider-outage-park.mts', 'utf8');
+  assert.ok(
+    source.includes('sort=updated&direction=desc'),
+    'the open pull request list read must sort by updated/desc to match the "most-recently-updated" contract its own docstring claims',
+  );
+});
 
 test('provider-outage-park.mts never imports thread-resolution, merge-execution, or pre-merge-readiness mutation modules', () => {
   const source = readFileSync('src/scripts/provider-outage-park.mts', 'utf8');

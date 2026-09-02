@@ -297,9 +297,9 @@ infra-vs-code triage above:
   `ciWait.rerunPolicy`; post a hold comment naming the block and stop for
   a maintainer.
 - **Sole blocker is an unavailable provider service** (`providerHealth`
-  `unavailable`): park, don't hold -- `node scripts/provider-outage-park.mjs
-  --park --apply`, then release the claim. See
-  [Provider outage park helper](../../docs/idd-helper-scripts.md#provider-outage-park-helper).
+  `unavailable`): park, don't hold, then release the claim -- see
+  [Provider outage park helper](../../docs/idd-helper-scripts.md#provider-outage-park-helper)
+  for the `--park` command and its required flags.
 
 ## Wake-up discipline
 
