@@ -1,12 +1,12 @@
 {
   "schemaVersion": 1,
-  "generatedAt": "2026-09-01T21:58:57.901Z",
+  "generatedAt": "2026-09-02T01:03:09.101Z",
   "minPublishableSamples": 10,
   "minPublishableVendors": 2,
   "publishable": false,
   "sampleCount": 0,
   "vendors": [],
-  "asOf": "2026-09-01",
+  "asOf": "2026-09-02",
   "totalUsage": {
     "inputUncached": {
       "p25": 0,
