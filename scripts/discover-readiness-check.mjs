@@ -216,6 +216,8 @@ export async function evaluateDiscoverReadiness(issueNumbers, options) {
         // No body is available for a not-found / inaccessible issue, so the
         // score is "no score" and the issue is never flagged below floor.
         ...suitabilitySignal(''),
+        // No label data available either.
+        isRoadmap: false,
       });
       continue;
     }
@@ -225,6 +227,7 @@ export async function evaluateDiscoverReadiness(issueNumbers, options) {
         title: issue.title,
         reasons: ['issue_not_open'],
         ...suitabilitySignal(issue.body),
+        isRoadmap: issue.labels.has(roadmapLabelName),
       });
       continue;
     }
@@ -318,11 +321,13 @@ export async function evaluateDiscoverReadiness(issueNumbers, options) {
       }
     }
     const signal = suitabilitySignal(issue.body);
+    const isRoadmap = labels.has(roadmapLabelName);
     if (reasons.size === 0) {
       ready.push({
         number: issue.number,
         title: issue.title,
         ...signal,
+        isRoadmap,
       });
       continue;
     }
@@ -331,6 +336,7 @@ export async function evaluateDiscoverReadiness(issueNumbers, options) {
       title: issue.title,
       reasons: [...reasons].sort(),
       ...signal,
+      isRoadmap,
     });
   }
   const filteredByReason = countReasons(filteredOut);
@@ -550,8 +556,8 @@ function printHelp() {
 
 Output schema (JSON mode):
   {
-    "ready": [{ "number": 123, "title": "...", "autopilotSuitability": 4, "belowFloor": false }],
-    "filteredOut": [{ "number": 124, "title": "...", "reasons": ["..."], "autopilotSuitability": null, "belowFloor": false }],
+    "ready": [{ "number": 123, "title": "...", "autopilotSuitability": 4, "belowFloor": false, "isRoadmap": false }],
+    "filteredOut": [{ "number": 124, "title": "...", "reasons": ["..."], "autopilotSuitability": null, "belowFloor": false, "isRoadmap": false }],
     "unresolvable": [{ "issueNumber": 124, "kind": "...", "reference": "...", "reason": "..." }],
     "warnings": [{ "issueNumber": 124, "message": "Warning: ..." }],
     "summary": { "total": 2, "readyCount": 1, "filteredCount": 1, "unresolvableCount": 0, "filteredByReason": { "...": 1 } }
@@ -559,7 +565,7 @@ Output schema (JSON mode):
 
 Output schema (--swarm-floor mode):
   {
-    "eligible": [{ "number": 123, "title": "...", "autopilotSuitability": 4, "belowFloor": false }],
+    "eligible": [{ "number": 123, "title": "...", "autopilotSuitability": 4, "belowFloor": false, "isRoadmap": false }],
     "eligible_count": 1,
     "total": 7
   }
@@ -681,16 +687,18 @@ function countReasons(filteredOut) {
   }
   return counts;
 }
-function renderCsv(summary) {
-  const lines = ['number,title,status,reasons,suitability,belowFloor'];
+export function renderCsv(summary) {
+  const lines = [
+    'number,title,status,reasons,suitability,belowFloor,isRoadmap',
+  ];
   for (const item of summary.ready) {
     lines.push(
-      `${item.number},${escapeCsv(item.title)},ready,,${formatScore(item.autopilotSuitability)},${item.belowFloor}`,
+      `${item.number},${escapeCsv(item.title)},ready,,${formatScore(item.autopilotSuitability)},${item.belowFloor},${item.isRoadmap}`,
     );
   }
   for (const item of summary.filteredOut) {
     lines.push(
-      `${item.number},${escapeCsv(item.title)},filtered,${escapeCsv(item.reasons.join(';'))},${formatScore(item.autopilotSuitability)},${item.belowFloor}`,
+      `${item.number},${escapeCsv(item.title)},filtered,${escapeCsv(item.reasons.join(';'))},${formatScore(item.autopilotSuitability)},${item.belowFloor},${item.isRoadmap}`,
     );
   }
   return `${lines.join('\n')}\n`;
