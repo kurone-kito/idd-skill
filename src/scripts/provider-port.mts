@@ -36,6 +36,7 @@
 // addition -- traversal-only, not a general async surface.
 
 import type {
+  ProviderCapabilityDeclaration,
   ProviderError,
   ProviderRepositoryLocator,
 } from './provider-contract.mts';
@@ -68,11 +69,18 @@ export interface ProviderWorkItem {
   updatedAt?: string;
 }
 
-/** One issue-comments-API comment (issue or PR -- same endpoint on GitHub). */
+/** One issue-comments-API comment (issue or PR -- same endpoint on GitHub).
+ * `updatedAt` (#2267) is additive: REST returns it on every response
+ * regardless of field selection, so surfacing it widens this existing
+ * shared shape rather than adding a competing method -- every #2266
+ * consumer that ignores it is unaffected. `review-activity-snapshot.mts`
+ * and `pre-merge-readiness.mts`'s disposition-evidence comment
+ * normalization need it for their most-recent-activity computation. */
 export interface ProviderComment {
   id: number;
   body: string;
   createdAt: string;
+  updatedAt: string;
   authorLogin: string;
 }
 
@@ -143,6 +151,190 @@ export interface ProviderRequiredCheck {
   name: string;
   state: string;
   completedAt: string | null;
+}
+
+// --- #2267: change-request/review/check/merge extension. -----------------
+//
+// The types and methods below extend this same surface for the broader
+// migration named in #2267's own doc comment on `ProviderPort` above. Each
+// method exists for one call shape already live in one of the nine named
+// PR-facing helpers (`advisory-convergence.mts`, `advisory-wait-state.mts`,
+// `review-activity-snapshot.mts`, `resolve-review-thread.mts`,
+// `ci-wait-policy.mts`/`ci-wait-state.mts`, `pre-merge-readiness.mts`,
+// `idd-merge-execute.mts`, `merged-pr-feedback-sweep.mts`) -- never unified
+// across a field-selection, pagination, or failure-semantics delta, per the
+// file-header rule above.
+
+/** Result of a governance-style read that discriminates a masked `404`
+ * (the response can't tell "genuinely nothing configured" from "the token
+ * can't read this") from a real value, so the domain layer keeps deciding
+ * how to treat the absence -- mirrors `getCollaboratorPermission`'s
+ * existing "raw classified result, caller maps its own outcome" precedent.
+ * Any non-404 failure still throws; this type only carries the 404 case. */
+export type ProviderGovernanceReadOutcome<T> =
+  | { outcome: 'ok'; value: T }
+  | { outcome: 'not-found' };
+
+/** Backs {@link ProviderPort.getChangeRequestHeadShaAndAuthor}. */
+export interface ProviderChangeRequestHeadShaAndAuthor {
+  headSha: string;
+  authorLogin: string;
+}
+
+/** Backs {@link ProviderPort.getChangeRequestConvergenceView}. `closingIssuesReferences` is a raw passthrough (shape not inspected by this port). */
+export interface ProviderChangeRequestConvergenceView {
+  headSha: string;
+  headRefName: string;
+  authorLogin: string;
+  url: string;
+  closingIssuesReferences: unknown;
+}
+
+/** Backs {@link ProviderPort.getChangeRequestReadinessSnapshot} -- the
+ * richest single `pr view` call in the codebase (deliberately avoids a
+ * second `pr checks` round trip, #1483). `statusCheckRollup` and
+ * `closingIssuesReferences` are raw passthroughs. */
+export interface ProviderChangeRequestReadinessSnapshot {
+  headSha: string;
+  baseRefName: string;
+  url: string;
+  authorLogin: string;
+  reviewDecision: string | null;
+  statusCheckRollup: unknown;
+  mergeable: string;
+  mergeStateStatus: string;
+  closingIssuesReferences: unknown;
+}
+
+/** Backs {@link ProviderPort.getChangeRequestBranchAndChecks}. `statusCheckRollup` is a raw passthrough. */
+export interface ProviderChangeRequestBranchAndChecks {
+  headSha: string;
+  baseRefName: string;
+  statusCheckRollup: unknown;
+}
+
+/** Backs {@link ProviderPort.listMergedChangeRequests}. */
+export interface ProviderMergedChangeRequestSummary {
+  number: number;
+  mergedAt: string;
+}
+
+/** Backs {@link ProviderPort.getMergedChangeRequestMeta}. */
+export interface ProviderMergedChangeRequestMeta {
+  number: number;
+  merged: boolean;
+  mergedAt: string | null;
+  mergeCommitOid: string | null;
+}
+
+/** One reply-target comment inside a review thread, as
+ * {@link ProviderPort.listChangeRequestReviewThreadsWithComments} and
+ * {@link ProviderPort.listChangeRequestReviewThreadsExtended} return it. */
+export interface ProviderReviewThreadComment {
+  body: string;
+  url?: string;
+  createdAt: string;
+  updatedAt: string;
+  authorLogin: string;
+  /** The comment's parent review node id, when the query selects it (disposition-evidence matching). */
+  pullRequestReviewId?: string | null;
+}
+
+/** Backs {@link ProviderPort.listChangeRequestReviewThreadsWithComments} --
+ * shared by `review-activity-snapshot.mts` and `pre-merge-readiness.mts`
+ * (byte-identical GraphQL query in both). Distinct from the minimal
+ * {@link ProviderPort.listChangeRequestReviewThreads} (`{isResolved}[]`
+ * only, #2266): this one also needs each thread's comment bodies/authors
+ * for disposition-evidence matching. */
+export interface ProviderReviewThreadWithComments {
+  isResolved: boolean | null;
+  comments: ProviderReviewThreadComment[];
+}
+
+/** Backs {@link ProviderPort.listChangeRequestReviewThreadsExtended} --
+ * `merged-pr-feedback-sweep.mts`'s own distinct query (selects `path`,
+ * absent from the shared query above). */
+export interface ProviderReviewThreadExtended {
+  isResolved: boolean | null;
+  path: string | null;
+  comments: ProviderReviewThreadComment[];
+}
+
+/** Backs {@link ProviderPort.listChangeRequestReviewThreadCommentIds} --
+ * `resolve-review-thread.mts`'s own distinct, leaner query (only the
+ * GraphQL thread node id and each comment's REST-numeric `databaseId`,
+ * needed to target a reply/resolution, not the thread's content). */
+export interface ProviderReviewThreadCommentIds {
+  threadId: string;
+  isResolved: boolean | null;
+  commentDatabaseIds: number[];
+}
+
+/** Backs {@link ProviderPort.listChangeRequestGraphqlComments}. */
+export interface ProviderGraphqlComment {
+  body: string;
+  url: string;
+  createdAt: string;
+  updatedAt: string;
+  authorLogin: string;
+}
+
+/** Backs {@link ProviderPort.listChangeRequestGraphqlReviews}. */
+export interface ProviderGraphqlReview {
+  body: string;
+  url: string;
+  state: string;
+  submittedAt: string | null;
+  authorLogin: string;
+}
+
+/** One review node as {@link ProviderPort.getChangeRequestReviewsWithHeadCommitDate}
+ * returns it -- distinct field set from {@link ProviderGraphqlReview} (no
+ * `url`/`state`; adds the review's own node `id`, `authorTypename`, and
+ * `commentCount`), matching `review-clause.mts`'s own Clause-1 evidence
+ * shape. */
+export interface ProviderReviewClauseNode {
+  id: string;
+  authorLogin: string;
+  authorTypename: string | null;
+  submittedAt: string | null;
+  commitId: string | null;
+  commentCount: number | null;
+  body: string | null;
+}
+
+/** Backs {@link ProviderPort.getChangeRequestReviewsWithHeadCommitDate}. */
+export interface ProviderReviewsWithHeadCommitDate {
+  reviews: ProviderReviewClauseNode[];
+  headCommittedAt: string;
+}
+
+/** Backs {@link ProviderPort.getChangeRequestAuthor}. */
+export interface ProviderChangeRequestAuthor {
+  login: string;
+  typename: string | null;
+}
+
+/** One review-thread comment as
+ * {@link ProviderPort.listChangeRequestReviewThreadsWithAuthorType} returns
+ * it -- like {@link ProviderReviewThreadComment} but also selects
+ * `author.__typename` (`advisory-convergence.mts`'s own distinct query;
+ * neither `listChangeRequestReviewThreadsWithComments` nor
+ * `listChangeRequestReviewThreadsExtended` select this field). */
+export interface ProviderReviewThreadCommentWithAuthorType {
+  body: string;
+  createdAt: string;
+  updatedAt: string;
+  authorLogin: string;
+  authorTypename: string | null;
+  pullRequestReviewId: string | null;
+}
+
+/** Backs {@link ProviderPort.listChangeRequestReviewThreadsWithAuthorType}. */
+export interface ProviderReviewThreadWithAuthorType {
+  id: string;
+  isResolved: boolean | null;
+  comments: ProviderReviewThreadCommentWithAuthorType[];
 }
 
 /**
@@ -458,4 +650,407 @@ export interface ProviderPort {
     fields: string[];
     limit: number;
   }): unknown[];
+
+  // --- #2267 additions below. -------------------------------------------
+
+  /** repository-identity. `gh api repos/{owner}/{repo} --jq
+   * .default_branch`, `null` on any failure -- delegates to `gh-exec.mts`'s
+   * existing shared `readGithubRepoDefaultBranch` (#2272), already reused
+   * by `pre-merge-readiness.mts`, `ci-wait-state.mts`, and
+   * `idd-merge-execute.mts` today. */
+  getRepositoryDefaultBranch(owner: string, repo: string): string | null;
+
+  /**
+   * repository-identity. Never throws; matches `resolveViewerLoginSafe`'s
+   * never-throw contract but for `gh api app --jq '.slug // .app_slug //
+   * empty'` -- a distinct query, not a variant of it.
+   */
+  resolveViewerAppSlugSafe(): { appSlug: string; unavailable: boolean };
+
+  /**
+   * repository-identity. Same query/never-throw contract as
+   * {@link resolveViewerLoginSafe}, but `advisory-convergence.mts`'s own
+   * call varies its subprocess stdio by `GITHUB_ACTIONS` (piped/silent in
+   * CI, inherited/visible locally) so a human watching a local run still
+   * sees the underlying `gh` stderr -- not a query difference, but not
+   * "never output-changing" either (a local run's visible stderr changes),
+   * so it gets its own method rather than folding into the existing one
+   * (whose doc comment pins exact-options-match for its own consumer).
+   */
+  resolveViewerLoginSafeQuiet(): {
+    viewerLogin: string;
+    viewerLoginUnavailable: boolean;
+  };
+
+  /**
+   * repository-identity, read. `contents/{path}?ref=` GET, full response
+   * object; 404 (masked-403-per-GitHub's-docs) tolerated as `null` at the
+   * transport level -- `pre-merge-readiness.mts`'s CODEOWNERS fallback
+   * chain probes several candidate paths and expects a clean `null` to try
+   * the next one. Distinct from {@link getRepositoryFileContentAtRef}
+   * below: different content-negotiation path (query-string `ref`, no
+   * `--jq` narrowing) and a different repo-scoping caller (this one is
+   * always the port's own ambient repo via explicit owner/repo, matching
+   * every other two-arg repo method here).
+   */
+  getRepositoryContentAtRef(
+    owner: string,
+    repo: string,
+    path: string,
+    ref: string,
+  ): unknown | null;
+
+  /**
+   * repository-identity, read. `contents/{path}` GET via `--field ref=`
+   * (not a query string) narrowed to `.content` (base64), scoped by an
+   * explicit `repoRef` (`<owner>/<repo>`) that `idd-merge-execute.mts`'s
+   * own `--owner`/`--repo` collector flags can point at a DIFFERENT repo
+   * than the port's own ambient locator -- the one genuinely cross-repo
+   * call in this migration. `not-found` on a 404; any other failure
+   * throws (the caller's pre-migration `deriveGhHttpStatus` re-check on a
+   * thrown error is replaced by this explicit outcome instead of trying to
+   * preserve that pattern across the port boundary).
+   */
+  getRepositoryFileContentAtRef(
+    repoRef: string,
+    path: string,
+    ref: string,
+  ): ProviderGovernanceReadOutcome<string>;
+
+  /**
+   * permissions. `orgs/{org}/teams/{slug}/memberships/{login}` `--jq
+   * .state`, never throws (matches
+   * `resolveViewerClassicBypassTeamSlugs`'s existing fail-open '' default).
+   */
+  getTeamMembershipStateSafe(
+    org: string,
+    teamSlug: string,
+    login: string,
+  ): string;
+
+  /**
+   * change-requests. `pr view --json headRefOid,author` -- the distinct
+   * two-field shape `review-activity-snapshot.mts` uses (throws on any
+   * failure, no 404-to-null mapping, matching that file's pre-migration
+   * no-try/catch call).
+   */
+  getChangeRequestHeadShaAndAuthor(
+    number: number,
+  ): ProviderChangeRequestHeadShaAndAuthor;
+
+  /**
+   * change-requests. `pr view --json
+   * headRefOid,headRefName,closingIssuesReferences,author,url` -- the
+   * distinct five-field shape `advisory-convergence.mts` uses.
+   */
+  getChangeRequestConvergenceView(
+    number: number,
+  ): ProviderChangeRequestConvergenceView;
+
+  /**
+   * change-requests. `pr view --json
+   * headRefOid,baseRefName,url,author,reviewDecision,statusCheckRollup,
+   * mergeable,mergeStateStatus,closingIssuesReferences` -- the distinct
+   * nine-field shape `pre-merge-readiness.mts` uses (deliberately folds
+   * check status into this one call rather than a second `pr checks`
+   * round trip, #1483).
+   */
+  getChangeRequestReadinessSnapshot(
+    number: number,
+  ): ProviderChangeRequestReadinessSnapshot;
+
+  /**
+   * change-requests. `pr view --json headRefOid,baseRefName,
+   * statusCheckRollup` -- the distinct three-field shape `ci-wait-state.mts`
+   * uses.
+   */
+  getChangeRequestBranchAndChecks(
+    number: number,
+  ): ProviderChangeRequestBranchAndChecks;
+
+  /**
+   * change-requests. `pr view --json headRefOid --jq .headRefOid` narrowed
+   * further with `--jq .head.ref`-equivalent branch-name extraction (REST
+   * `.head.ref`, NOT `.headRefOid`) -- `resolve-review-thread.mts`'s own
+   * distinct call, not interchangeable with
+   * {@link ProviderPort.getChangeRequestHeadSha} (sha, not branch name).
+   */
+  getChangeRequestHeadRef(number: number): string;
+
+  /**
+   * change-requests. `pr list --state merged --json number,mergedAt
+   * [--search merged:>=date]` -- distinct from
+   * {@link ProviderPort.listOpenChangeRequests} (open-only, different
+   * fields). `sinceDate` (`YYYY-MM-DD` or `null`) maps to the optional
+   * `--search` filter `merged-pr-feedback-sweep.mts` applies.
+   */
+  listMergedChangeRequests(
+    limit: number,
+    sinceDate: string | null,
+  ): ProviderMergedChangeRequestSummary[];
+
+  /**
+   * change-requests. GraphQL `pullRequest(number){number merged mergedAt
+   * mergeCommit{oid}}` -- `null` when the PR is not (yet) merged, matching
+   * `merged-pr-feedback-sweep.mts`'s existing `pr.merged` guard.
+   */
+  getMergedChangeRequestMeta(
+    number: number,
+  ): ProviderMergedChangeRequestMeta | null;
+
+  /**
+   * change-requests, write. REST POST
+   * `pulls/{pr}/comments/{commentId}/replies`, JSON stdin body -- distinct
+   * from {@link ProviderPort.postWorkItemComment} (issues-comments API, a
+   * different endpoint); this one replies under a specific review comment.
+   */
+  postReviewCommentReply(
+    number: number,
+    commentId: number,
+    body: string,
+  ): { id: number };
+
+  /**
+   * change-requests, write. GraphQL mutation `resolveReviewThread(input:
+   * {threadId})`; throws unless the response confirms `isResolved ===
+   * true` (matches `resolve-review-thread.mts`'s existing verification).
+   */
+  resolveChangeRequestReviewThread(threadId: string): void;
+
+  /** change-requests, cross-repo. `pr view -R {owner}/{repo} --json
+   * headRefOid --jq .headRefOid`, throws on any failure -- the explicit-
+   * repo sibling of {@link ProviderPort.getChangeRequestHeadSha} that
+   * `idd-merge-execute.mts`'s own `--owner`/`--repo` collector flags need
+   * (see {@link getRepositoryFileContentAtRef} for why this file alone
+   * gets cross-repo methods). */
+  getChangeRequestHeadShaAtRepo(
+    owner: string,
+    repo: string,
+    number: number,
+  ): string;
+
+  /** change-requests, cross-repo. `pr view -R {owner}/{repo} --json
+   * mergeable,mergeStateStatus`, `null` on failure -- the explicit-repo
+   * sibling of {@link ProviderPort.getChangeRequest}. */
+  getChangeRequestAtRepo(
+    owner: string,
+    repo: string,
+    number: number,
+  ): ProviderChangeRequestState | null;
+
+  /** change-requests, cross-repo, write. `pr merge -R {owner}/{repo}
+   * --merge --match-head-commit {headSha}`. */
+  mergeChangeRequestAtRepo(
+    owner: string,
+    repo: string,
+    number: number,
+    headSha: string,
+  ): string;
+
+  /** change-requests, cross-repo, write. Same as
+   * {@link mergeChangeRequestAtRepo} plus `--admin` -- a separate method
+   * per the port's one-op-per-call-shape rule (no flag parameter). */
+  mergeChangeRequestAdminAtRepo(
+    owner: string,
+    repo: string,
+    number: number,
+    headSha: string,
+  ): string;
+
+  /**
+   * change-requests. `pr checks --json name,state,completedAt` WITHOUT
+   * `--required` -- every check, not just the required subset
+   * {@link ProviderPort.listRequiredChecks} returns. Same two recoveries as
+   * that method (routine non-zero exit on no-checks-configured or still-
+   * pending/failing checks).
+   */
+  listChangeRequestChecks(number: number): ProviderRequiredCheck[];
+
+  /**
+   * change-requests. REST unpaginated `pulls/{pr}/requested_reviewers`,
+   * flattened to logins.
+   */
+  getChangeRequestRequestedReviewerLogins(number: number): string[];
+
+  /**
+   * change-requests. GraphQL `reviewRequests(first:100){nodes{
+   * requestedReviewer{...on Bot/User/Mannequin{login}}}}` -- distinct
+   * transport/shape from
+   * {@link getChangeRequestRequestedReviewerLogins} above; `null` on ANY
+   * failure (matches the existing try/catch, never throws).
+   */
+  getChangeRequestRequestedReviewerLoginsGraphql(
+    number: number,
+  ): string[] | null;
+
+  /** change-requests. REST paginated `pulls/{pr}/files`, flattened to `.filename`. */
+  listChangeRequestChangedFiles(number: number): string[];
+
+  /** change-requests. REST paginated `pulls/{pr}/commits`, raw passthrough. */
+  listChangeRequestCommits(number: number): unknown[];
+
+  /**
+   * reviews-and-threads. Full-walk paginated GraphQL `reviewThreads` with
+   * nested comment bodies/authors/timestamps -- see
+   * {@link ProviderReviewThreadWithComments}'s doc comment for why this is
+   * distinct from the minimal {@link listChangeRequestReviewThreads}.
+   * Shared by `review-activity-snapshot.mts` and `pre-merge-readiness.mts`
+   * (byte-identical query in both today).
+   */
+  listChangeRequestReviewThreadsWithComments(
+    number: number,
+  ): ProviderReviewThreadWithComments[];
+
+  /**
+   * reviews-and-threads. `merged-pr-feedback-sweep.mts`'s own distinct
+   * full-walk paginated GraphQL `reviewThreads` query (selects `path`,
+   * which the shared query above does not) -- see
+   * {@link ProviderReviewThreadExtended}.
+   */
+  listChangeRequestReviewThreadsExtended(
+    number: number,
+  ): ProviderReviewThreadExtended[];
+
+  /**
+   * reviews-and-threads. `resolve-review-thread.mts`'s own distinct,
+   * leaner full-walk paginated GraphQL `reviewThreads` query (thread node
+   * id plus each comment's REST-numeric `databaseId` only, no body/author)
+   * -- see {@link ProviderReviewThreadCommentIds}.
+   */
+  listChangeRequestReviewThreadCommentIds(
+    number: number,
+  ): ProviderReviewThreadCommentIds[];
+
+  /**
+   * reviews-and-threads. Full-walk paginated GraphQL `comments(first:100)`
+   * -- distinct transport/shape from
+   * {@link ProviderPort.listWorkItemComments} (REST, different fields);
+   * `merged-pr-feedback-sweep.mts`'s own query.
+   */
+  listChangeRequestGraphqlComments(number: number): ProviderGraphqlComment[];
+
+  /**
+   * reviews-and-threads. Full-walk paginated GraphQL `reviews(first:100)`
+   * -- distinct transport/shape from {@link ProviderPort.listReviews}
+   * (REST, different fields); `merged-pr-feedback-sweep.mts`'s own query.
+   */
+  listChangeRequestGraphqlReviews(number: number): ProviderGraphqlReview[];
+
+  /**
+   * branch-protection. `rules/branches/{ref}` -- see
+   * {@link ProviderGovernanceReadOutcome}'s doc comment for the masked-404
+   * rationale shared with {@link getBranchProtection} below (both
+   * endpoints document only 200/404 per GitHub's REST reference, never
+   * 403, per #1377's citations).
+   */
+  listBranchRules(
+    owner: string,
+    repo: string,
+    ref: string,
+  ): ProviderGovernanceReadOutcome<unknown[]>;
+
+  /** branch-protection. `branches/{ref}/protection` -- see {@link listBranchRules}. */
+  getBranchProtection(
+    owner: string,
+    repo: string,
+    ref: string,
+  ): ProviderGovernanceReadOutcome<unknown>;
+
+  /**
+   * branch-protection. Ruleset detail read at an ALREADY-RESOLVED absolute
+   * API path (`repos/{owner}/{repo}/rulesets/{id}`, `orgs/{org}/rulesets/{id}`,
+   * or `enterprises/{enterprise}/rulesets/{id}`) -- `pre-merge-readiness.mts`'s
+   * `fetchBranchRulesets` resolves which scope applies itself (via
+   * `resolveRulesetDetailPath`, protocol-helpers.mts) before fetching, so
+   * this method takes the resolved path rather than an owner/repo/id triple
+   * it would have to re-derive scope from. GitHub's reference documents only
+   * 200/404/500 for this endpoint (no 403), the same masked-404 posture as
+   * {@link listBranchRules}.
+   */
+  getRepositoryRulesetDetail(
+    path: string,
+  ): ProviderGovernanceReadOutcome<unknown>;
+
+  /** checks. `actions/runs/{runId}` single-run read, raw passthrough.
+   * `runId` is `string | number` (not just `number`): a GitHub Actions run
+   * id can exceed `Number.MAX_SAFE_INTEGER`, so a caller holding the id as
+   * a string must be able to pass it through without a lossy `Number()`
+   * round-trip (#2267 regression, caught by
+   * `ci-wait-policy.test.mts`'s "preserves a run id above
+   * Number.MAX_SAFE_INTEGER exactly" case). */
+  getWorkflowRun(owner: string, repo: string, runId: string | number): unknown;
+
+  /** checks. `gh run list --workflow {name} --limit N --json
+   * databaseId,conclusion,status,createdAt` -- distinct `gh run list`
+   * shape, not a `gh api` call. */
+  listWorkflowRuns(
+    owner: string,
+    repo: string,
+    workflowName: string,
+    limit: number,
+  ): {
+    /** `string`, not `number`: a `databaseId` above
+     * `Number.MAX_SAFE_INTEGER` loses precision through `Number()` --
+     * `ci-wait-policy.mts`'s sibling-exclusion compares this against a
+     * string-valued `--run-id`, so a rounded id could wrongly stop
+     * matching the current run (Codex review, PR #2429; matches
+     * {@link getWorkflowRun}'s `runId` parameter, kept `string | number`
+     * for the same reason). */
+    id: string;
+    conclusion: string | null;
+    status: string;
+    createdAt: string;
+  }[];
+
+  /**
+   * change-requests. GraphQL `pullRequest(number){author{login __typename}}`
+   * -- `advisory-convergence.mts`'s own minimal author-only query (its
+   * `fetchPrAuthor`), distinct from every other author-carrying method here
+   * (none else select `__typename`). `null` when the PR/author is absent.
+   */
+  getChangeRequestAuthor(number: number): ProviderChangeRequestAuthor | null;
+
+  /**
+   * reviews-and-threads. Same full-walk two-level pagination as
+   * {@link listChangeRequestReviewThreadsWithComments}, but
+   * `advisory-convergence.mts`'s own query also selects `author.__typename`
+   * -- see {@link ProviderReviewThreadCommentWithAuthorType}.
+   */
+  listChangeRequestReviewThreadsWithAuthorType(
+    number: number,
+  ): ProviderReviewThreadWithAuthorType[];
+
+  /**
+   * reviews-and-threads. Paginated GraphQL `reviews(first:100)` plus a
+   * once-per-call `commits(last:1){nodes{commit{committedDate}}}` sibling
+   * field -- `review-clause.mts`'s own distinct query (shared by
+   * `advisory-convergence.mts`, `pre-merge-readiness.mts`, and the
+   * out-of-scope `rerun-advisory-convergence.mts` today), not unifiable
+   * with {@link listChangeRequestGraphqlReviews} (different field set, no
+   * head-commit-date sibling).
+   */
+  getChangeRequestReviewsWithHeadCommitDate(
+    number: number,
+  ): ProviderReviewsWithHeadCommitDate;
+
+  /** merge, write. `pr merge --merge --match-head-commit {headSha}` on the
+   * port's own ambient repo. */
+  mergeChangeRequest(number: number, headSha: string): string;
+
+  /** merge, write. Same as {@link mergeChangeRequest} plus `--admin` --
+   * separate method per the port's one-op-per-call-shape rule. */
+  mergeChangeRequestAdmin(number: number, headSha: string): string;
+
+  /**
+   * capability declarations. Static list of what this adapter supports per
+   * `provider-contract.mts` capability group -- no network call, no
+   * per-repository variance. A caller feeds each declaration through
+   * {@link evaluateProviderCapabilityOutcome} to decide `ok` / `fail_closed`
+   * / `not_applicable` for that group. The GitHub adapter reports every
+   * group supported; a future non-GitHub adapter without an equivalent
+   * advisory reviewer would report `advisory-review` unsupported so
+   * `advisory-convergence.mts` can resolve it `not_applicable` instead of
+   * fail-closing (#2267 AC4).
+   */
+  listCapabilityDeclarations(): ProviderCapabilityDeclaration[];
 }

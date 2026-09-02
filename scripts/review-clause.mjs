@@ -14,19 +14,19 @@
 // from here too -- this file has no behavior of its own beyond what both
 // callers already relied on before the extraction.
 //
-// Kept deliberately small (only depends on `gh-exec.mts`'s shared
-// `ghGraphql`, `protocol-helpers.mts`'s shared `isCopilotReviewerLogin`,
-// and -- as of #1880 -- `markdown-code.mts`'s shared
-// `stripMarkdownCodeRegions`) so a read-only, low-dependency caller like
-// `rerun-advisory-convergence.mts` can import it without also pulling in
-// `advisory-convergence.mts`'s full claim/waiver/disposition machinery --
-// see that file's own module-header "Reuse map" comment. The first two
-// dependencies are already reused directly by `rerun-advisory-convergence.mts`
-// itself today; `markdown-code.mts` has no imports of its own, so this adds
-// no heavy dependency surface to that caller either.
-import { ghGraphql } from './gh-exec.mjs';
+// Kept deliberately small (only depends on `provider-adapter-github.mts`'s
+// shared GitHub port adapter -- #2267, replacing the direct `ghGraphql`
+// call this file used before -- `protocol-helpers.mts`'s shared
+// `isCopilotReviewerLogin`, and -- as of #1880 -- `markdown-code.mts`'s
+// shared `stripMarkdownCodeRegions`) so a read-only, low-dependency caller
+// like `rerun-advisory-convergence.mts` can import it without also pulling
+// in `advisory-convergence.mts`'s full claim/waiver/disposition machinery
+// -- see that file's own module-header "Reuse map" comment. `markdown-
+// code.mts` has no imports of its own, so this adds no heavy dependency
+// surface to that caller either.
 import { stripMarkdownCodeRegions } from './markdown-code.mjs';
 import { isCopilotReviewerLogin } from './protocol-helpers.mjs';
+import { createGithubProviderAdapter } from './provider-adapter-github.mjs';
 
 /** Matches GitHub Copilot's `<summary>Suppressed comments (N)</summary>`
  * heading, case-insensitively -- the only structured signal a suppressed
@@ -159,63 +159,36 @@ export function resolveLatestCopilotReviewClause(
 }
 /**
  * Fetch every PR review (paginated) plus the current HEAD commit's
- * `committedDate`, via the same GraphQL query `advisory-convergence.mts`'s
- * own Clause 1 evidence collection has always used.
+ * `committedDate`, via {@link ProviderPort.getChangeRequestReviewsWithHeadCommitDate}
+ * (#2267) -- the same GraphQL query `advisory-convergence.mts`'s own
+ * Clause 1 evidence collection has always used, now routed through the
+ * GitHub provider adapter instead of a direct `ghGraphql` call. Extended
+ * additively with an optional trailing `port` (defaults to
+ * `createGithubProviderAdapter(owner, repo)`): every existing caller
+ * (this file's own out-of-scope `rerun-advisory-convergence.mts`,
+ * `pre-merge-readiness.mts`, `advisory-convergence.mts`) still calls this
+ * with the unchanged 3-arg `(owner, repo, prNumber)` shape, so the
+ * injection is invisible to them -- it exists so a caller that already
+ * holds its own fake-backed `ProviderPort` (e.g. a test driving
+ * `pre-merge-readiness.mts`'s `collectPreMergeReadiness` end to end) can
+ * pass it through instead of this function constructing its own live
+ * adapter.
  */
-export function fetchReviewsAndHeadCommit(owner, repo, prNumber) {
-  const nodes = [];
-  let headCommittedAt = '';
-  let cursor = null;
-  // Paginate `reviews`: a PR with more than one page of reviews would
-  // otherwise silently evaluate Clause 1 against only the first 100,
-  // potentially missing a later, dirty, current-HEAD review (see PR #1343
-  // review). `commits(last: 1)` is fetched once, on the first page, since
-  // it never changes across pages.
-  while (true) {
-    const payload = ghGraphql(
-      `
-        query($owner: String!, $repo: String!, $number: Int!, $cursor: String) {
-          repository(owner: $owner, name: $repo) {
-            pullRequest(number: $number) {
-              reviews(first: 100, after: $cursor) {
-                pageInfo { hasNextPage endCursor }
-                nodes {
-                  id
-                  commit { oid }
-                  submittedAt
-                  author { login __typename }
-                  comments { totalCount }
-                  body
-                }
-              }
-              commits(last: 1) {
-                nodes { commit { committedDate } }
-              }
-            }
-          }
-        }`,
-      { owner, repo, number: prNumber, cursor },
-    );
-    const pullRequest = payload?.data?.repository?.pullRequest;
-    nodes.push(...(pullRequest?.reviews?.nodes ?? []));
-    if (!headCommittedAt) {
-      headCommittedAt = String(
-        pullRequest?.commits?.nodes?.[0]?.commit?.committedDate ?? '',
-      );
-    }
-    if (!pullRequest?.reviews?.pageInfo?.hasNextPage) break;
-    if (!pullRequest.reviews.pageInfo.endCursor) {
-      throw new Error('review pagination payload is missing endCursor');
-    }
-    cursor = pullRequest.reviews.pageInfo.endCursor;
-  }
+export function fetchReviewsAndHeadCommit(
+  owner,
+  repo,
+  prNumber,
+  port = createGithubProviderAdapter(owner, repo),
+) {
+  const { reviews: nodes, headCommittedAt } =
+    port.getChangeRequestReviewsWithHeadCommitDate(prNumber);
   const reviews = nodes.map((node) => ({
-    id: node.id ?? null,
-    author: node.author ?? null,
-    submittedAt: node.submittedAt ?? null,
-    commitId: node.commit?.oid ?? null,
-    itemCount: node.comments?.totalCount ?? null,
-    body: node.body ?? null,
+    id: node.id || null,
+    author: { login: node.authorLogin, __typename: node.authorTypename },
+    submittedAt: node.submittedAt,
+    commitId: node.commitId,
+    itemCount: node.commentCount,
+    body: node.body,
   }));
   return { reviews, headCommittedAt };
 }

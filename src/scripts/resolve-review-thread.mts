@@ -22,7 +22,6 @@ import {
   readForcedHandoffAuthorityPolicy,
   readForcedHandoffMode,
 } from './collaborator-permission.mts';
-import { DEFAULT_GH_PAGINATED_TIMEOUT_MS, ghText } from './gh-exec.mts';
 import { loadIddConfig } from './idd-config.mts';
 import { appendReviewReplyStamp } from './marker-helpers.mts';
 import {
@@ -31,6 +30,14 @@ import {
   type ParsedClaimMarker,
   resolveActiveClaimForWriteGate,
 } from './protocol-helpers.mts';
+import {
+  createGithubProviderAdapter,
+  resolveCurrentGithubRepository,
+} from './provider-adapter-github.mts';
+import type {
+  ProviderPort,
+  ProviderReviewThreadCommentIds,
+} from './provider-port.mts';
 
 /** A comment-id page within a review thread's `comments` connection. */
 interface ThreadCommentsConnection {
@@ -283,45 +290,6 @@ thread in one invocation (E13). Dry-run by default; --apply mutates.
 `;
 
 /**
- * Fetch a paginated list endpoint as an array. `gh api --paginate` concatenates
- * one JSON array per page; `--jq '.[]'` flattens each page to one JSON value per
- * line (NDJSON), which we parse line-by-line (mirrors the sibling helpers).
- */
-function ghJsonPaginated(args: string[]): unknown[] {
-  const out = ghText([...args, '--paginate', '--jq', '.[]'], {
-    timeout: DEFAULT_GH_PAGINATED_TIMEOUT_MS,
-  });
-  return out
-    .split('\n')
-    .map((line) => line.trim())
-    .filter((line) => line !== '')
-    .map((line) => JSON.parse(line) as unknown);
-}
-
-function ghGraphql(
-  query: string,
-  variables: Record<string, string | number | null | undefined>,
-): unknown {
-  const args = ['api', 'graphql', '-f', `query=${query}`];
-  for (const [key, value] of Object.entries(variables)) {
-    if (value === null || value === undefined) {
-      continue;
-    }
-    if (typeof value === 'number') {
-      args.push('-F', `${key}=${value}`);
-      continue;
-    }
-    args.push('-f', `${key}=${value}`);
-  }
-  return JSON.parse(ghText(args) || '{}');
-}
-
-interface ReviewThreadsConnectionPayload {
-  pageInfo?: { hasNextPage?: boolean; endCursor?: string | null } | null;
-  nodes?: ReviewThreadNode[] | null;
-}
-
-/**
  * Throw when a GraphQL response carries top-level `errors`, so a bad
  * PR/repo/auth or any server-side GraphQL failure fails fast with a clear
  * message instead of being silently read as an empty result (which would
@@ -342,167 +310,21 @@ export function assertNoGraphqlErrors(payload: unknown, context: string): void {
 }
 
 /**
- * Fetch every review thread of a PR (paginated), each with its node id,
- * resolution state, and member comment database ids — enough to map a REST
- * comment id to its owning thread. Both the threads connection **and** each
- * thread's nested comments connection are paginated to completion, so a target
- * comment buried past the first 100 replies in a deep thread still resolves.
+ * Map {@link ProviderPort.listChangeRequestReviewThreadCommentIds}'s flat
+ * `commentDatabaseIds` shape onto this file's existing, independently-tested
+ * {@link ReviewThreadNode}/{@link findThreadForComment} contract, rather than
+ * changing that pure function's signature.
  */
-function fetchReviewThreads(
-  owner: string,
-  repo: string,
-  prNumber: number,
+function toReviewThreadNodes(
+  threads: ProviderReviewThreadCommentIds[],
 ): ReviewThreadNode[] {
-  const nodes: ReviewThreadNode[] = [];
-  let cursor: string | null | undefined = null;
-  while (true) {
-    const payload = ghGraphql(
-      `query($owner: String!, $repo: String!, $number: Int!, $cursor: String) {
-        repository(owner: $owner, name: $repo) {
-          pullRequest(number: $number) {
-            reviewThreads(first: 100, after: $cursor) {
-              pageInfo { hasNextPage endCursor }
-              nodes {
-                id
-                isResolved
-                comments(first: 100) {
-                  pageInfo { hasNextPage endCursor }
-                  nodes { databaseId }
-                }
-              }
-            }
-          }
-        }
-      }`,
-      { owner, repo, number: prNumber, cursor },
-    );
-    assertNoGraphqlErrors(payload, 'review thread lookup');
-    const reviewThreads = (
-      payload as {
-        data?: {
-          repository?: {
-            pullRequest?: {
-              reviewThreads?: ReviewThreadsConnectionPayload | null;
-            } | null;
-          } | null;
-        } | null;
-      }
-    )?.data?.repository?.pullRequest?.reviewThreads;
-    for (const thread of reviewThreads?.nodes ?? []) {
-      if (thread.comments?.pageInfo?.hasNextPage) {
-        if (!thread.id || !thread.comments.pageInfo.endCursor) {
-          throw new Error(
-            'review thread comment pagination payload is missing id or endCursor',
-          );
-        }
-        thread.comments.nodes = [
-          ...(thread.comments.nodes ?? []),
-          ...fetchThreadCommentIds(
-            thread.id,
-            thread.comments.pageInfo.endCursor,
-          ),
-        ];
-        thread.comments.pageInfo.hasNextPage = false;
-      }
-    }
-    nodes.push(...(reviewThreads?.nodes ?? []));
-    if (!reviewThreads?.pageInfo?.hasNextPage) {
-      break;
-    }
-    if (!reviewThreads.pageInfo.endCursor) {
-      throw new Error('review thread pagination payload is missing endCursor');
-    }
-    cursor = reviewThreads.pageInfo.endCursor;
-  }
-  return nodes;
-}
-
-/**
- * Page the remaining comment-id nodes of one review thread, starting after
- * `afterCursor`, until the connection is exhausted. Mirrors the sibling
- * snapshot helper's nested-comment pagination.
- */
-function fetchThreadCommentIds(
-  threadId: string,
-  afterCursor: string,
-): { databaseId?: number | null }[] {
-  const nodes: { databaseId?: number | null }[] = [];
-  let cursor: string | null | undefined = afterCursor;
-  while (cursor) {
-    const payload = ghGraphql(
-      `query($id: ID!, $cursor: String) {
-        node(id: $id) {
-          ... on PullRequestReviewThread {
-            comments(first: 100, after: $cursor) {
-              pageInfo { hasNextPage endCursor }
-              nodes { databaseId }
-            }
-          }
-        }
-      }`,
-      { id: threadId, cursor },
-    );
-    assertNoGraphqlErrors(payload, 'review thread comment pagination');
-    const comments = (
-      payload as {
-        data?: { node?: { comments?: ThreadCommentsConnection | null } | null };
-      }
-    )?.data?.node?.comments;
-    nodes.push(...(comments?.nodes ?? []));
-    if (comments?.pageInfo?.hasNextPage && !comments.pageInfo.endCursor) {
-      throw new Error('thread comment pagination payload is missing endCursor');
-    }
-    cursor = comments?.pageInfo?.hasNextPage
-      ? comments.pageInfo.endCursor
-      : null;
-  }
-  return nodes;
-}
-
-/** Post a reply to the review thread that owns `commentId` (REST). */
-function postReply(
-  owner: string,
-  repo: string,
-  pr: number,
-  commentId: number,
-  body: string,
-): { id: number } {
-  // JSON `--input -` is required: the reply-identity stamp is an HTML
-  // comment after the visible disposition, so `-f body=` can drop or
-  // truncate the multiline body.
-  return JSON.parse(
-    ghText(
-      [
-        'api',
-        '--method',
-        'POST',
-        `repos/${owner}/${repo}/pulls/${pr}/comments/${commentId}/replies`,
-        '--input',
-        '-',
-      ],
-      { input: JSON.stringify({ body }) },
-    ),
-  ) as { id: number };
-}
-
-/** Resolve a review thread by its GraphQL node id, confirming the result. */
-function resolveThread(threadId: string): void {
-  const payload = ghGraphql(
-    `mutation($threadId: ID!) {
-      resolveReviewThread(input: { threadId: $threadId }) {
-        thread { id isResolved }
-      }
-    }`,
-    { threadId },
-  ) as {
-    data?: { resolveReviewThread?: { thread?: { isResolved?: unknown } } };
-  };
-  assertNoGraphqlErrors(payload, 'resolveReviewThread');
-  if (payload?.data?.resolveReviewThread?.thread?.isResolved !== true) {
-    throw new Error(
-      'resolveReviewThread returned without confirming thread.isResolved',
-    );
-  }
+  return threads.map((thread) => ({
+    id: thread.threadId,
+    isResolved: Boolean(thread.isResolved),
+    comments: {
+      nodes: thread.commentDatabaseIds.map((databaseId) => ({ databaseId })),
+    },
+  }));
 }
 
 /** Forced-handoff revalidation inputs, resolved once per CLI invocation. */
@@ -527,22 +349,18 @@ interface ForcedHandoffGateOptions {
  * is that branch.
  */
 function activeOwnedClaim(
-  owner: string,
-  repo: string,
+  port: ProviderPort,
   issue: number,
   agentId: string,
   claimId: string,
   isTrustedAuthor: (login: string) => boolean,
   forcedHandoffOptions: ForcedHandoffGateOptions,
 ): ParsedClaimMarker | null {
-  const comments = ghJsonPaginated([
-    'api',
-    `repos/${owner}/${repo}/issues/${issue}/comments`,
-  ]) as { body?: string; created_at?: string; user?: { login?: string } }[];
+  const comments = port.listWorkItemComments(issue);
   const events = comments.map((comment) => ({
-    body: comment.body ?? '',
-    createdAt: comment.created_at ?? '',
-    author: { login: comment.user?.login ?? '' },
+    body: comment.body,
+    createdAt: comment.createdAt,
+    author: { login: comment.authorLogin },
   }));
   const active = resolveActiveClaimForWriteGate(events, {
     isTrustedAuthor,
@@ -614,14 +432,14 @@ if (import.meta.main) {
         typeof markerPrefixRaw === 'string' ? markerPrefixRaw : undefined,
       )
     : '';
-  const owner =
-    args.owner ||
-    ghText(['repo', 'view', '--json', 'owner', '--jq', '.owner.login']);
-  const repo =
-    args.repo || ghText(['repo', 'view', '--json', 'name', '--jq', '.name']);
+  const currentRepo =
+    args.owner && args.repo ? null : resolveCurrentGithubRepository();
+  const owner = args.owner || currentRepo?.owner || '';
+  const repo = args.repo || currentRepo?.repo || '';
+  const port = createGithubProviderAdapter(owner, repo);
 
   const match = findThreadForComment(
-    fetchReviewThreads(owner, repo, pr),
+    toReviewThreadNodes(port.listChangeRequestReviewThreadCommentIds(pr)),
     commentId,
   );
 
@@ -662,16 +480,11 @@ if (import.meta.main) {
   // Bind the mutation to the claimed PR: the active claim's branch must be the
   // PR's head branch, so a valid claim on the issue cannot be used to reply to
   // and resolve a thread on some other PR passed as --pr.
-  const prHeadRef = ghText([
-    'api',
-    `repos/${owner}/${repo}/pulls/${pr}`,
-    '--jq',
-    '.head.ref',
-  ]);
+  const prHeadRef = port.getChangeRequestHeadRef(pr);
 
   // --apply: default the trusted claim authors to this gh login so the
   // revalidation recognizes the session's own claim markers.
-  const viewerLogin = ghText(['api', 'user', '--jq', '.login']).toLowerCase();
+  const viewerLogin = port.resolveViewerLogin().toLowerCase();
   const trustedAuthors = new Set(
     (args.trustedMarkerLogins.length > 0
       ? args.trustedMarkerLogins
@@ -713,8 +526,7 @@ if (import.meta.main) {
     const result = applyResolveReviewThread({
       assertClaim: () => {
         const active = activeOwnedClaim(
-          owner,
-          repo,
+          port,
           args.claimIssue as number,
           args.agentId,
           args.claimId,
@@ -733,11 +545,16 @@ if (import.meta.main) {
         }
       },
       postReply: () => {
-        const posted = postReply(owner, repo, pr, rootCommentId, stampedBody);
+        const posted = port.postReviewCommentReply(
+          pr,
+          rootCommentId,
+          stampedBody,
+        );
         postedReplyId = posted.id;
         return posted;
       },
-      resolveThread: () => resolveThread(match.threadId),
+      resolveThread: () =>
+        port.resolveChangeRequestReviewThread(match.threadId),
     });
     report.status = 'applied';
     report.replyId = result.replyId;

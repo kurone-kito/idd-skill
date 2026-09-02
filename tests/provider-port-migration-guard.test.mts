@@ -14,8 +14,11 @@ import { fileURLToPath } from 'node:url';
 const REPO_ROOT = fileURLToPath(new URL('..', import.meta.url));
 
 /** Files migrated so far. Append the next filename here as each of #2266's
- * 11 target files moves onto the provider port -- do not add a name until
- * its migration commit lands, and never remove one once migrated. */
+ * 11 target files (and, from #2267 on, its own ten PR-facing target files
+ * -- the issue body names nine bullets, but one, `ci-wait-*.mts`, is a
+ * glob covering two files: `ci-wait-policy.mts` and `ci-wait-state.mts`)
+ * moves onto the provider port -- do not add a name until its migration
+ * commit lands, and never remove one once migrated. */
 const MIGRATED_HELPERS: readonly string[] = [
   'collaborator-permission.mts',
   'discover-viability-gate.mts',
@@ -28,6 +31,17 @@ const MIGRATED_HELPERS: readonly string[] = [
   'resume-route-selection.mts',
   'idd-roadmap-audit-execute.mts',
   'discover-roadmap-graph.mts',
+  // #2267 additions below.
+  'review-clause.mts',
+  'review-activity-snapshot.mts',
+  'resolve-review-thread.mts',
+  'idd-merge-execute.mts',
+  'merged-pr-feedback-sweep.mts',
+  'advisory-wait-state.mts',
+  'ci-wait-policy.mts',
+  'ci-wait-state.mts',
+  'pre-merge-readiness.mts',
+  'advisory-convergence.mts',
 ];
 
 const DIRECT_GH_PATTERNS: { pattern: RegExp; description: string }[] = [

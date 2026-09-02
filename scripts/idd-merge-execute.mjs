@@ -12,12 +12,15 @@
 // reports the bound merge command; the ONLY mutation anywhere is the
 // `gh pr merge` issued under `--apply` once every F3 gate holds and the
 // head + claim re-validate immediately before the merge.
-import { ghText } from './gh-exec.mjs';
 import { deriveGhHttpStatus, ghErrorText } from './gh-http-status.mjs';
 import { loadIddConfig } from './idd-config.mjs';
 import { normalizePolicyConfig } from './policy-helpers.mjs';
 import { collectPreMergeReadiness } from './pre-merge-readiness.mjs';
 import { computePreMergeReadinessBlockers } from './protocol-helpers.mjs';
+import {
+  createGithubProviderAdapter,
+  resolveCurrentGithubRepository,
+} from './provider-adapter-github.mjs';
 
 /**
  * GitHub's exact `gh pr merge` failure text for the solo-CODEOWNER
@@ -105,10 +108,26 @@ export function isSafeSoloCodeownerAdminMergeState(
         branchCurrency.requiresUpToDateHead === false))
   );
 }
-// Prepend `-R <repoRef>` to a `gh` argument array only when a repo scope is
-// set; otherwise pass the args verbatim (current-directory repo).
-function scopedGhArgs(repoRef, args) {
-  return repoRef ? ['-R', repoRef, ...args] : args;
+/** `resolveOwnerRepoFromRef`'s split of a `<owner>/<repo>` `repoRef`, or the
+ * current-directory repo (`gh repo view`) when `repoRef` is `null`. Fails
+ * fast on a malformed shape (missing, empty, or extra `/`-separated
+ * segments) rather than silently treating `owner/repo/extra` as
+ * `owner`/`repo` -- every current caller only ever passes the value this
+ * file's own `parseArgs` synthesizes as `${owner}/${repo}` from two
+ * already-parsed flags, but this function has no way to enforce that at
+ * the type level, so it validates its own input instead of trusting it. */
+function resolveOwnerRepoFromRef(repoRef) {
+  if (repoRef) {
+    const segments = repoRef.split('/');
+    const [owner, repo] = segments;
+    if (segments.length !== 2 || !owner || !repo) {
+      throw new Error(
+        `resolveOwnerRepoFromRef: expected "<owner>/<repo>", got "${repoRef}"`,
+      );
+    }
+    return { owner, repo };
+  }
+  return resolveCurrentGithubRepository();
 }
 /**
  * Decode and classify a remote `.github/idd/config.json` read into the
@@ -136,19 +155,22 @@ export function resolveRemoteSoloCodeownerAdminFallbackMode(
   prNumber,
   repoRef,
   headSha,
-  fetchEncodedConfig = (scopedRepoRef, ref) =>
-    ghText(
-      scopedGhArgs(scopedRepoRef, [
-        'api',
-        `repos/${scopedRepoRef}/contents/.github/idd/config.json`,
-        '--method',
-        'GET',
-        '--field',
-        `ref=${ref}`,
-        '--jq',
-        '.content',
-      ]),
-    ),
+  fetchEncodedConfig = (scopedRepoRef, ref) => {
+    const outcome = createGithubProviderAdapter(
+      '',
+      '',
+    ).getRepositoryFileContentAtRef(
+      scopedRepoRef,
+      '.github/idd/config.json',
+      ref,
+    );
+    if (outcome.outcome === 'not-found') {
+      const notFound = new Error('Not Found (HTTP 404)');
+      notFound.stderr = 'Not Found (HTTP 404)';
+      throw notFound;
+    }
+    return outcome.value;
+  },
 ) {
   let config;
   try {
@@ -171,56 +193,43 @@ export function resolveRemoteSoloCodeownerAdminFallbackMode(
 }
 const defaultDeps = {
   collect: (passthrough) => collectPreMergeReadiness(passthrough),
-  fetchHeadSha: (prNumber, repoRef) =>
-    ghText(
-      scopedGhArgs(repoRef, [
-        'pr',
-        'view',
-        String(prNumber),
-        '--json',
-        'headRefOid',
-        '--jq',
-        '.headRefOid',
-      ]),
-    ),
-  fetchMergeState: (prNumber, repoRef) =>
-    JSON.parse(
-      ghText(
-        scopedGhArgs(repoRef, [
-          'pr',
-          'view',
-          String(prNumber),
-          '--json',
-          'mergeable,mergeStateStatus',
-          '--jq',
-          '.',
-        ]),
-      ),
-    ),
-  mergePr: (prNumber, headSha, repoRef) =>
-    ghText(
-      scopedGhArgs(repoRef, [
-        'pr',
-        'merge',
-        String(prNumber),
-        // Always a merge commit — never squash/rebase. Bind to the head.
-        '--merge',
-        '--match-head-commit',
-        headSha,
-      ]),
-    ),
-  mergePrAdmin: (prNumber, headSha, repoRef) =>
-    ghText(
-      scopedGhArgs(repoRef, [
-        'pr',
-        'merge',
-        String(prNumber),
-        '--merge',
-        '--match-head-commit',
-        headSha,
-        '--admin',
-      ]),
-    ),
+  fetchHeadSha: (prNumber, repoRef) => {
+    const { owner, repo } = resolveOwnerRepoFromRef(repoRef);
+    return createGithubProviderAdapter(
+      owner,
+      repo,
+    ).getChangeRequestHeadShaAtRepo(owner, repo, prNumber);
+  },
+  fetchMergeState: (prNumber, repoRef) => {
+    const { owner, repo } = resolveOwnerRepoFromRef(repoRef);
+    const state = createGithubProviderAdapter(
+      owner,
+      repo,
+    ).getChangeRequestAtRepo(owner, repo, prNumber);
+    if (!state) {
+      throw new Error(
+        `fetchMergeState: PR #${prNumber} not found${repoRef ? ` in ${repoRef}` : ''}`,
+      );
+    }
+    return state;
+  },
+  mergePr: (prNumber, headSha, repoRef) => {
+    const { owner, repo } = resolveOwnerRepoFromRef(repoRef);
+    // Always a merge commit — never squash/rebase. Bind to the head.
+    return createGithubProviderAdapter(owner, repo).mergeChangeRequestAtRepo(
+      owner,
+      repo,
+      prNumber,
+      headSha,
+    );
+  },
+  mergePrAdmin: (prNumber, headSha, repoRef) => {
+    const { owner, repo } = resolveOwnerRepoFromRef(repoRef);
+    return createGithubProviderAdapter(
+      owner,
+      repo,
+    ).mergeChangeRequestAdminAtRepo(owner, repo, prNumber, headSha);
+  },
   resolveSoloCodeownerAdminFallbackMode: (prNumber, repoRef, headSha) =>
     repoRef
       ? resolveRemoteSoloCodeownerAdminFallbackMode(prNumber, repoRef, headSha)

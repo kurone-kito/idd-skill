@@ -113,13 +113,6 @@ import {
   normalizeAuthorityEvidence,
   resolveCollaboratorAuthority,
 } from './external-check-waiver.mjs';
-import {
-  GH_TEXT_LOOP_OPTIONS,
-  ghApiJson,
-  ghGraphql,
-  ghText,
-  safeGhText,
-} from './gh-exec.mjs';
 import { loadIddConfig } from './idd-config.mjs';
 import { isValidIsoTimestamp, parseClaimComment } from './marker-helpers.mjs';
 import {
@@ -139,6 +132,11 @@ import {
   summarizeDispositionEvidenceForGate,
   summarizeExternalCheckWaivers,
 } from './protocol-helpers.mjs';
+import {
+  createGithubProviderAdapter,
+  resolveCurrentGithubRepository,
+} from './provider-adapter-github.mjs';
+import { evaluateProviderCapabilityOutcome } from './provider-contract.mjs';
 import {
   evaluateProviderOutageRelief,
   resolveProviderOutageDeclaration,
@@ -1500,15 +1498,15 @@ export function runAdvisoryConvergenceWithPoll(
 }
 // --- Production I/O: fetch PR/review/thread/comment evidence via `gh` ----
 /**
- * `gh` options for the viewer-login probe (`gh api user`).
+ * `gh` stdio policy for the viewer-login probe (`gh api user`).
  *
  * Under GitHub Actions the workflow token is a GitHub App installation token
  * with no authenticated user, so `gh api user` always returns 403 ("Resource
  * not accessible by integration"). That is expected and harmless here:
- * {@link safeGhText} swallows it and `viewerLogin === ''` is the correct value
- * in CI (there is no runner "self" whose markers should be trusted). Only the
- * inherited stderr leaks the confusing 403 line into the run log, so under
- * Actions we capture that run's stderr (`stdio` pipe) to keep the log clean.
+ * `viewerLogin === ''` is the correct value in CI (there is no runner "self"
+ * whose markers should be trusted). Only the inherited stderr leaks the
+ * confusing 403 line into the run log, so under Actions we capture that
+ * run's stderr (`stdio` pipe) to keep the log clean.
  *
  * Outside Actions (a local/interactive run) the probe normally succeeds; if it
  * genuinely fails we deliberately **inherit** stderr so the failure stays
@@ -1519,8 +1517,14 @@ export function runAdvisoryConvergenceWithPoll(
  * `execFileSync`'s default: that default already writes the child's stderr to
  * the parent (so a bare call would leak the 403), but relying on it is
  * non-obvious. `pipe` captures stderr (silent); `inherit` forwards it to the
- * parent (visible). stdin is `ignore` on both, matching `GH_TEXT_LOOP_OPTIONS`'
- * stdin-safety.
+ * parent (visible). stdin is `ignore` on both.
+ *
+ * #2267: this exact policy now lives inside
+ * `ProviderPort.resolveViewerLoginSafeQuiet`'s GitHub adapter implementation
+ * (`provider-adapter-github.mts`), which `collectFromGitHub` below calls
+ * instead of invoking `gh` directly. Kept here, unused in production, only
+ * because it is directly unit-tested pure logic (no `gh` invocation of its
+ * own) documenting the policy the adapter mirrors.
  */
 export function viewerProbeGhOptions(env = process.env) {
   return {
@@ -1530,17 +1534,28 @@ export function viewerProbeGhOptions(env = process.env) {
         : ['ignore', 'pipe', 'inherit'],
   };
 }
-function collectFromGitHub(args) {
-  const owner =
-    args.owner ||
-    ghText(['repo', 'view', '--json', 'owner', '--jq', '.owner.login']);
-  const repo =
-    args.repo || ghText(['repo', 'view', '--json', 'name', '--jq', '.name']);
-  const repoRef = `${owner}/${repo}`;
-  const viewerLogin = safeGhText(
-    ['api', 'user', '--jq', '.login'],
-    viewerProbeGhOptions(),
-  ).toLowerCase();
+/**
+ * `createPort` is injectable (defaults to the real GitHub adapter) so a test
+ * can drive this collection entry end to end against
+ * `createFakeProviderAdapter` fixtures instead of a live `gh` process
+ * (#2267 AC4's "unit tests exercise the PR-facing state machine with a fake
+ * provider" -- see the exported `collectFromGitHub` used directly by
+ * `advisory-convergence-fake-provider.test.mts`). `defaultDeps.collect`
+ * (this file's own production wiring for `runAdvisoryConvergence`) never
+ * passes a second argument, so it keeps using the real adapter unchanged.
+ */
+export function collectFromGitHub(
+  args,
+  createPort = createGithubProviderAdapter,
+) {
+  const currentRepo =
+    args.owner && args.repo ? null : resolveCurrentGithubRepository();
+  const owner = args.owner || currentRepo?.owner || '';
+  const repo = args.repo || currentRepo?.repo || '';
+  const port = createPort(owner, repo);
+  const viewerLogin = port
+    .resolveViewerLoginSafeQuiet()
+    .viewerLogin.toLowerCase();
   const rawConfig = loadIddConfig();
   const { actors: configuredTrustedActors } = resolveTrustedMarkerActors({
     flagValue: args.trustedMarkerLogins,
@@ -1552,30 +1567,18 @@ function collectFromGitHub(args) {
     envValue: process.env.IDD_ADVISORY_BOT_LOGINS,
     config: rawConfig,
   });
-  const pr = JSON.parse(
-    ghText([
-      'pr',
-      'view',
-      String(args.prNumber),
-      '-R',
-      repoRef,
-      '--json',
-      'headRefOid,headRefName,closingIssuesReferences,author,url',
-    ]),
-  );
-  const prHeadSha = String(pr.headRefOid ?? '').toLowerCase();
-  const prHeadRefName = String(pr.headRefName ?? '').trim();
-  const prAuthorLogin = String(pr.author?.login ?? '').toLowerCase();
-  const prUrl = String(pr.url ?? '');
+  const view = port.getChangeRequestConvergenceView(Number(args.prNumber));
+  const prHeadSha = view.headSha.toLowerCase();
+  const prHeadRefName = view.headRefName.trim();
+  const prAuthorLogin = view.authorLogin.toLowerCase();
+  const prUrl = view.url;
+  const closingIssuesReferences = view.closingIssuesReferences;
   // Fetched here (ahead of `trustedMarkerLogins` below) so a collaborator's
   // marker-shaped PR comment can be detected before that set is used to
   // resolve `claimEvents` -- see `resolveTrustedCollaboratorMarkerLogins`.
-  const comments = ghApiJson(
-    `repos/${owner}/${repo}/issues/${args.prNumber}/comments`,
-    {
-      paginate: true,
-    },
-  );
+  const comments = port
+    .listWorkItemComments(Number(args.prNumber))
+    .map(toIssueCommentPayload);
   // #1344: collaborator-marker trust, matching `pre-merge-readiness.mts`'s
   // `readCollaboratorTrustEnabled` exactly, except reusing the already-
   // loaded `rawConfig` instead of a second `.github/idd/config.json` read
@@ -1589,8 +1592,9 @@ function collectFromGitHub(args) {
     owner,
     repo,
     Number(args.prNumber),
+    port,
   );
-  const threads = fetchReviewThreads(owner, repo, Number(args.prNumber));
+  const threads = fetchReviewThreads(port, Number(args.prNumber));
   // #1347: fetch every claim-issue candidate's raw comments (pure I/O)
   // BEFORE computing `trustedMarkerLogins`, so collaborator-marker trust
   // can be resolved from ALL candidates' comments -- not just whichever
@@ -1602,10 +1606,9 @@ function collectFromGitHub(args) {
   // claim data before that trust is ever computed. See
   // `pickResolvingClaimEvents`'s doc comment for the full history.
   const claimCandidates = fetchClaimEventCandidates(
-    owner,
-    repo,
+    port,
     args.claimIssueNumber,
-    pr.closingIssuesReferences,
+    closingIssuesReferences,
   );
   // Deliberately NOT unioned with `advisoryBotLogins` here (unlike some
   // other locally-collected sets in this file that scope broader trust for
@@ -1633,7 +1636,7 @@ function collectFromGitHub(args) {
     viewerLogin,
     ...configuredTrustedActors,
     ...(collaboratorTrustEnabled
-      ? resolveTrustedCollaboratorMarkerLogins(owner, repo, [
+      ? resolveTrustedCollaboratorMarkerLogins(port, [
           ...comments,
           ...claimCandidates.flat(),
         ])
@@ -1691,10 +1694,9 @@ function collectFromGitHub(args) {
     policy?.providerOutage?.declarationTarget;
   if (outageDeclarationTargetIssue) {
     try {
-      const declarationComments = ghApiJson(
-        `repos/${owner}/${repo}/issues/${outageDeclarationTargetIssue}/comments`,
-        { paginate: true },
-      );
+      const declarationComments = port
+        .listWorkItemComments(outageDeclarationTargetIssue)
+        .map(toIssueCommentPayload);
       const authorityOf = (actorLogin) =>
         normalizeAuthorityEvidence(
           resolveCollaboratorAuthority({ owner, repo, actor: actorLogin }),
@@ -1733,10 +1735,7 @@ function collectFromGitHub(args) {
   let prFirstCommitAt = null;
   if (forcedHandoffEnabled) {
     try {
-      const prCommits = ghApiJson(
-        `repos/${owner}/${repo}/pulls/${args.prNumber}/commits`,
-        { paginate: true },
-      );
+      const prCommits = port.listChangeRequestCommits(Number(args.prNumber));
       prFirstCommitAt = resolvePrFirstCommitAt(prCommits);
     } catch {
       prFirstCommitAt = null;
@@ -1766,15 +1765,32 @@ function collectFromGitHub(args) {
   // treats only exact human-required / no-advisory as skip, so an
   // invalid string still keeps today's Copilot / primaryBotLogin
   // applicability.
-  const reviewPolicy =
-    typeof rawConfig?.reviewPolicy === 'string'
+  //
+  // #2267: a provider that declares its `advisory-review` capability
+  // unsupported (a non-GitHub adapter with no equivalent advisory
+  // reviewer) coerces this gate to the same `'no-advisory'` skip a
+  // repository can already opt into by config -- reusing the #2137-tested
+  // skip path instead of adding a second one, and inert for GitHub, whose
+  // adapter always declares every capability supported (see
+  // `listCapabilityDeclarations`).
+  const advisoryReviewDeclaration = port
+    .listCapabilityDeclarations()
+    .find((declaration) => declaration.group === 'advisory-review');
+  const advisoryReviewUnsupported = Boolean(
+    advisoryReviewDeclaration &&
+      evaluateProviderCapabilityOutcome(advisoryReviewDeclaration) ===
+        'not_applicable',
+  );
+  const reviewPolicy = advisoryReviewUnsupported
+    ? 'no-advisory'
+    : typeof rawConfig?.reviewPolicy === 'string'
       ? rawConfig.reviewPolicy
       : undefined;
   let prAuthorIsBot = false;
   if (exemptBotAuthoredPrs && convergenceScope === 'all-prs') {
     try {
       prAuthorIsBot =
-        fetchPrAuthor(owner, repo, Number(args.prNumber))?.__typename === 'Bot';
+        fetchPrAuthor(port, Number(args.prNumber))?.__typename === 'Bot';
     } catch {
       prAuthorIsBot = false;
     }
@@ -1844,17 +1860,11 @@ function collectFromGitHub(args) {
  * same normalization for the identical reason; mirrored here rather than
  * imported since it is not exported.
  */
-function fetchClaimComments(owner, repo, issueNumber) {
-  const raw = ghApiJson(
-    `repos/${owner}/${repo}/issues/${issueNumber}/comments`,
-    {
-      paginate: true,
-    },
-  );
-  return raw.map((comment) => ({
-    body: comment.body ?? '',
-    createdAt: comment.createdAt ?? comment.created_at ?? '',
-    author: { login: comment.author?.login ?? comment.user?.login ?? '' },
+function fetchClaimComments(port, issueNumber) {
+  return port.listWorkItemComments(issueNumber).map((comment) => ({
+    body: comment.body,
+    createdAt: comment.createdAt,
+    author: { login: comment.authorLogin },
   }));
 }
 /**
@@ -1874,9 +1884,9 @@ function fetchClaimComments(owner, repo, issueNumber) {
  * place, discarding the real claim data before that trust is ever folded
  * in.
  */
-function fetchClaimEventCandidates(owner, repo, explicitIssueNumber, refs) {
+function fetchClaimEventCandidates(port, explicitIssueNumber, refs) {
   if (explicitIssueNumber) {
-    return [fetchClaimComments(owner, repo, explicitIssueNumber)];
+    return [fetchClaimComments(port, explicitIssueNumber)];
   }
   const candidateNumbers = [
     ...new Set(
@@ -1884,7 +1894,7 @@ function fetchClaimEventCandidates(owner, repo, explicitIssueNumber, refs) {
     ),
   ];
   return candidateNumbers.map((issueNumber) =>
-    fetchClaimComments(owner, repo, issueNumber),
+    fetchClaimComments(port, issueNumber),
   );
 }
 /** Candidate claim-issue comment streams whose *active claim* actually
@@ -2070,11 +2080,7 @@ export function resolveClaimEvidence(
  * when `markerTrust.allowCollaboratorMarkers` / `IDD_TRUST_COLLABORATOR_MARKERS`
  * is enabled -- a no-op repository never pays for these lookups.
  */
-function resolveTrustedCollaboratorMarkerLogins(
-  owner,
-  repo,
-  commentLikeEvents,
-) {
+function resolveTrustedCollaboratorMarkerLogins(port, commentLikeEvents) {
   const markerAuthors = [
     ...new Set(
       commentLikeEvents
@@ -2086,15 +2092,8 @@ function resolveTrustedCollaboratorMarkerLogins(
     ),
   ];
   return markerAuthors.filter((login) => {
-    const permission = safeGhText(
-      [
-        'api',
-        `repos/${owner}/${repo}/collaborators/${encodeURIComponent(login)}/permission`,
-        '--jq',
-        '.permission',
-      ],
-      GH_TEXT_LOOP_OPTIONS,
-    ).toLowerCase();
+    const result = port.getCollaboratorPermission(login);
+    const permission = result.outcome === 'found' ? result.permission : '';
     return (
       permission === 'admin' ||
       permission === 'maintain' ||
@@ -2102,17 +2101,29 @@ function resolveTrustedCollaboratorMarkerLogins(
     );
   });
 }
-// `ghGraphql` now lives in `gh-exec.mts` (imported above) and
-// `fetchReviewsAndHeadCommit` (+ its local `RawReviewNode` shape) now
-// lives in `review-clause.mts` (imported above) -- both used here
-// unchanged. The other two `ghGraphql(...)` call sites in this file
-// (`fetchReviewThreads` and the claim-candidate fetch below) keep calling
-// the same function via the new import.
-/** #1906: fetch the PR's own author `login`/`__typename` via a small
- * dedicated GraphQL query -- the REST-shaped `gh pr view --json author`
- * fetch in `collectFromGitHub` only returns `login`, no type
- * discriminator. Deliberately its own minimal round trip rather than
- * folded into `fetchReviewThreads` below or `fetchReviewsAndHeadCommit`
+/**
+ * Map a `ProviderPort.listWorkItemComments` result back onto the REST
+ * `issues/{n}/comments` shape this file's `resolveTrustedCollaboratorMarkerLogins`
+ * (and `inputs.comments`, consumed by `summarizeDispositionEvidenceForGate`)
+ * already expect -- mirrors `pre-merge-readiness.mts`'s own shim of the same
+ * name for the identical reason (keeps every downstream consumer
+ * byte-identical instead of reshaping it for the port's flat `authorLogin`
+ * field).
+ */
+function toIssueCommentPayload(comment) {
+  return {
+    id: comment.id,
+    body: comment.body,
+    author: { login: comment.authorLogin },
+    createdAt: comment.createdAt,
+    updatedAt: comment.updatedAt,
+  };
+}
+/** #1906: fetch the PR's own author `login`/`__typename` via
+ * {@link ProviderPort.getChangeRequestAuthor} -- the REST-shaped `pr view
+ * --json author` fetch in `collectFromGitHub` only returns `login`, no type
+ * discriminator. Deliberately its own minimal round trip rather than folded
+ * into `fetchReviewThreads` below or `fetchReviewsAndHeadCommit`
  * (review-clause.mts): both of those are narrowly-scoped Copilot-review
  * evidence collectors, the latter shared verbatim with
  * `rerun-advisory-convergence.mts`, and widening either with an unrelated
@@ -2120,111 +2131,41 @@ function resolveTrustedCollaboratorMarkerLogins(
  * `collectFromGitHub` only when the opt-in `exemptBotAuthoredPrs` policy
  * is enabled (see the call site), so a repository that never sets the
  * flag never pays for this extra request. */
-function fetchPrAuthor(owner, repo, prNumber) {
-  const payload = ghGraphql(
-    `
-      query($owner: String!, $repo: String!, $number: Int!) {
-        repository(owner: $owner, name: $repo) {
-          pullRequest(number: $number) {
-            author { login __typename }
-          }
-        }
-      }`,
-    { owner, repo, number: prNumber },
-  );
-  return payload?.data?.repository?.pullRequest?.author ?? null;
+function fetchPrAuthor(port, prNumber) {
+  const author = port.getChangeRequestAuthor(prNumber);
+  return author ? { login: author.login, __typename: author.typename } : null;
 }
-function fetchReviewThreads(owner, repo, prNumber) {
-  const nodes = [];
-  let cursor = null;
-  while (true) {
-    const payload = ghGraphql(
-      `
-        query($owner: String!, $repo: String!, $number: Int!, $cursor: String) {
-          repository(owner: $owner, name: $repo) {
-            pullRequest(number: $number) {
-              reviewThreads(first: 100, after: $cursor) {
-                pageInfo { hasNextPage endCursor }
-                nodes {
-                  id
-                  isResolved
-                  comments(first: 100) {
-                    pageInfo { hasNextPage endCursor }
-                    nodes {
-                      body
-                      createdAt
-                      updatedAt
-                      author { login __typename }
-                      pullRequestReview { id }
-                    }
-                  }
-                }
-              }
-            }
-          }
-        }`,
-      { owner, repo, number: prNumber, cursor },
-    );
-    const reviewThreads = payload?.data?.repository?.pullRequest?.reviewThreads;
-    for (const thread of reviewThreads?.nodes ?? []) {
-      if (thread.comments?.pageInfo?.hasNextPage) {
-        if (!thread.id || !thread.comments.pageInfo.endCursor) {
-          throw new Error(
-            'review thread pagination payload is missing id or endCursor',
-          );
-        }
-        thread.comments.nodes.push(
-          ...fetchThreadCommentPages(
-            thread.id,
-            thread.comments.pageInfo.endCursor,
-          ),
-        );
-        thread.comments.pageInfo.hasNextPage = false;
-      }
-    }
-    nodes.push(...(reviewThreads?.nodes ?? []));
-    if (!reviewThreads?.pageInfo?.hasNextPage) break;
-    if (!reviewThreads.pageInfo.endCursor) {
-      throw new Error('review thread pagination payload is missing endCursor');
-    }
-    cursor = reviewThreads.pageInfo.endCursor;
-  }
-  return nodes;
+/** Map a `ProviderPort.listChangeRequestReviewThreadsWithAuthorType` node
+ * back onto this file's own `ReviewThreadPayload` shape (the
+ * `{comments: {pageInfo, nodes}}` wrapper `classifyCopilotAuthoredThreadIds`
+ * / `classifyThreadIdsForReview` / `summarizeDispositionEvidenceForGate`
+ * already expect and are directly tested against) -- same shim strategy as
+ * {@link toIssueCommentPayload}. `pageInfo.hasNextPage` is always `false`:
+ * the port's `fetchReviewThreadsGeneric` already fully paginates every
+ * thread's comments before returning. */
+function toReviewThreadPayload(node) {
+  return {
+    id: node.id,
+    isResolved: node.isResolved,
+    comments: {
+      pageInfo: { hasNextPage: false },
+      nodes: node.comments.map((comment) => ({
+        body: comment.body,
+        createdAt: comment.createdAt,
+        updatedAt: comment.updatedAt,
+        author: {
+          login: comment.authorLogin,
+          __typename: comment.authorTypename,
+        },
+        pullRequestReview: { id: comment.pullRequestReviewId },
+      })),
+    },
+  };
 }
-function fetchThreadCommentPages(threadId, afterCursor) {
-  const nodes = [];
-  let cursor = afterCursor;
-  while (cursor) {
-    const payload = ghGraphql(
-      `
-        query($id: ID!, $cursor: String) {
-          node(id: $id) {
-            ... on PullRequestReviewThread {
-              comments(first: 100, after: $cursor) {
-                pageInfo { hasNextPage endCursor }
-                nodes {
-                  body
-                  createdAt
-                  updatedAt
-                  author { login __typename }
-                  pullRequestReview { id }
-                }
-              }
-            }
-          }
-        }`,
-      { id: threadId, cursor },
-    );
-    const comments = payload?.data?.node?.comments;
-    nodes.push(...(comments?.nodes ?? []));
-    if (comments?.pageInfo?.hasNextPage && !comments.pageInfo.endCursor) {
-      throw new Error('thread comment pagination payload is missing endCursor');
-    }
-    cursor = comments?.pageInfo?.hasNextPage
-      ? comments.pageInfo.endCursor
-      : null;
-  }
-  return nodes;
+function fetchReviewThreads(port, prNumber) {
+  return port
+    .listChangeRequestReviewThreadsWithAuthorType(prNumber)
+    .map(toReviewThreadPayload);
 }
 /**
  * Structured next-action catalog for a non-ready verdict (#2143).

@@ -39,6 +39,14 @@ export const PROVIDER_CAPABILITY_GROUPS = [
   'permissions',
   'branch-protection',
   'merge',
+  /**
+   * #2267: bot/advisory review interpretation (e.g. Copilot's own review
+   * body), distinct from `reviews-and-threads`'s required unresolved-thread
+   * safety gate -- a provider without an equivalent advisory reviewer
+   * resolves this `not_applicable` (optional) while `reviews-and-threads`
+   * stays required.
+   */
+  'advisory-review',
 ];
 /**
  * Whether a capability group is a required safety gate (unsupported must

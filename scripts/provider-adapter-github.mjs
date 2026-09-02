@@ -16,10 +16,26 @@ import {
   resolveViewerLogin as ghExecResolveViewerLogin,
   ghText,
   ghTextAsync,
+  readGithubRepoDefaultBranch,
+  resolveGhApiHostname,
   withBoundedRetry,
 } from './gh-exec.mjs';
 import { deriveGhHttpStatus } from './gh-http-status.mjs';
+import { PROVIDER_CAPABILITY_GROUPS } from './provider-contract.mjs';
 
+/**
+ * `--hostname` args to splice into a hand-built `['api', 'graphql', ...]`
+ * array right after `'graphql'`, matching `gh-exec.mts`'s `ghGraphql`/
+ * `ghApiJson` (#1962) -- this file's raw GraphQL call sites build their own
+ * args (see `fetchReviewThreadsGeneric`'s doc comment for why: a tight-loop
+ * stdin hazard, #1396) rather than routing through that shared helper, so
+ * each site must resolve the GHES host itself instead of always defaulting
+ * to github.com (Copilot review, PR #2429).
+ */
+function graphqlHostnameArgs() {
+  const hostname = resolveGhApiHostname();
+  return hostname ? ['--hostname', hostname] : [];
+}
 function statusToCategory(status) {
   if (status === 401) return 'authentication';
   if (status === 403) return 'authorization';
@@ -50,6 +66,186 @@ function toProviderError(error) {
   wrapped.category = statusToCategory(status);
   wrapped.cause = error;
   return wrapped;
+}
+/**
+ * #2267: throw when a GraphQL response carries top-level `errors`, so a bad
+ * PR/repo/auth or any server-side GraphQL failure fails fast with a clear
+ * message instead of being silently read as an empty result -- ported
+ * verbatim from `resolve-review-thread.mts`'s pre-migration
+ * `assertNoGraphqlErrors` (its own review-thread queries relied on this;
+ * every other GraphQL-backed port method here shares the same choke point
+ * now via {@link fetchReviewThreadsGeneric}'s `runQuery`).
+ */
+function assertNoGraphqlErrors(payload, context) {
+  const errors = payload?.errors;
+  if (Array.isArray(errors) && errors.length > 0) {
+    throw new Error(
+      `${context} failed: ${errors
+        .map((entry) => String(entry.message ?? ''))
+        .filter(Boolean)
+        .join('; ')
+        .slice(0, 200)}`,
+    );
+  }
+}
+/** #2267: {@link GithubProviderAdapterDeps.ghText}, swallowing any failure
+ * and returning `''` instead -- the injectable-`deps` equivalent of
+ * `gh-exec.mts`'s own module-level `safeGhText`, needed here so a unit test
+ * can still assert the exact command shape of a never-throw method without
+ * spawning a real `gh` process. */
+function safeGhTextLocal(deps, args, options = {}) {
+  try {
+    return deps.ghText(args, options);
+  } catch {
+    return '';
+  }
+}
+/** #2267: run a governance-style read (branch rules, branch protection,
+ * ruleset detail), discriminating a masked `404` (see
+ * {@link ProviderGovernanceReadOutcome}'s doc comment) from a real value.
+ * Any non-404 failure rethrows unchanged. */
+function fetchGovernanceOutcome(fetchJson) {
+  try {
+    return { outcome: 'ok', value: fetchJson() };
+  } catch (error) {
+    if (deriveGhHttpStatus(error) === 404) {
+      return { outcome: 'not-found' };
+    }
+    throw error;
+  }
+}
+/**
+ * #2267: shared full-walk pagination for the three distinct
+ * `reviewThreads` queries this migration needs
+ * ({@link ProviderPort.listChangeRequestReviewThreadsWithComments},
+ * {@link ProviderPort.listChangeRequestReviewThreadsExtended},
+ * {@link ProviderPort.listChangeRequestReviewThreadCommentIds}) --
+ * `commentFieldsFragment` selects each method's own distinct comment field
+ * set (see each port method's doc comment for why they stay separate
+ * types); this helper only shares the two-level pagination walk (outer
+ * `reviewThreads` cursor, inner per-thread `comments` cursor via a
+ * `node(id)` continuation query), which is identical machinery across all
+ * three. Always requests the thread `id` internally (continuation needs
+ * it) even for a caller whose own return shape omits it. Throws on a page
+ * that reports `hasNextPage` without an `endCursor`, at either level --
+ * preserves `resolve-review-thread.mts`'s and
+ * `pre-merge-readiness.mts`'s existing fail-fast-on-malformed-page
+ * behavior (a malformed payload would otherwise silently undercount
+ * threads or comments).
+ */
+function fetchReviewThreadsGeneric(
+  deps,
+  owner,
+  repo,
+  number,
+  commentFieldsFragment,
+) {
+  const outerQuery = `query($owner:String!,$repo:String!,$number:Int!,$cursor:String){
+  repository(owner:$owner,name:$repo){
+    pullRequest(number:$number){
+      reviewThreads(first:100,after:$cursor){
+        nodes {
+          id
+          isResolved
+          path
+          comments(first:100) {
+            nodes { ${commentFieldsFragment} }
+            pageInfo { hasNextPage endCursor }
+          }
+        }
+        pageInfo { hasNextPage endCursor }
+      }
+    }
+  }
+}`;
+  const continuationQuery = `query($id:ID!,$cursor:String){
+  node(id:$id){
+    ... on PullRequestReviewThread{
+      comments(first:100,after:$cursor){
+        nodes { ${commentFieldsFragment} }
+        pageInfo { hasNextPage endCursor }
+      }
+    }
+  }
+}`;
+  function runQuery(apiArgs) {
+    const parsed = JSON.parse(deps.ghText(apiArgs, GH_TEXT_LOOP_OPTIONS));
+    assertNoGraphqlErrors(parsed, 'review thread lookup');
+    return parsed;
+  }
+  function walkThreadComments(threadId, firstPageNodes, firstPageInfo) {
+    const comments = [...firstPageNodes];
+    let pageInfo = firstPageInfo;
+    while (pageInfo?.hasNextPage) {
+      if (!pageInfo.endCursor) {
+        throw new Error(
+          `fetchReviewThreadsGeneric: comment page reported hasNextPage without endCursor for thread ${threadId}`,
+        );
+      }
+      const parsed = runQuery([
+        'api',
+        'graphql',
+        ...graphqlHostnameArgs(),
+        '-f',
+        `query=${continuationQuery}`,
+        '-f',
+        `id=${threadId}`,
+        '-f',
+        `cursor=${pageInfo.endCursor}`,
+      ]);
+      const nextComments = parsed.data?.node?.comments;
+      comments.push(...(nextComments?.nodes ?? []));
+      pageInfo = nextComments?.pageInfo;
+    }
+    return comments;
+  }
+  const threads = [];
+  let cursor = null;
+  while (true) {
+    const apiArgs = [
+      'api',
+      'graphql',
+      ...graphqlHostnameArgs(),
+      '-f',
+      `query=${outerQuery}`,
+      '-f',
+      `owner=${owner}`,
+      '-f',
+      `repo=${repo}`,
+      '-F',
+      `number=${number}`,
+    ];
+    if (cursor) {
+      apiArgs.push('-f', `cursor=${cursor}`);
+    }
+    const parsed = runQuery(apiArgs);
+    const connection = parsed.data?.repository?.pullRequest?.reviewThreads;
+    for (const node of connection?.nodes ?? []) {
+      const threadId = String(node.id ?? '');
+      threads.push({
+        id: threadId,
+        isResolved:
+          typeof node.isResolved === 'boolean' ? node.isResolved : null,
+        path: node.path == null ? null : String(node.path),
+        comments: walkThreadComments(
+          threadId,
+          node.comments?.nodes ?? [],
+          node.comments?.pageInfo,
+        ),
+      });
+    }
+    const pageInfo = connection?.pageInfo;
+    if (!pageInfo?.hasNextPage) {
+      break;
+    }
+    if (!pageInfo.endCursor) {
+      throw new Error(
+        `fetchReviewThreadsGeneric: thread page reported hasNextPage without endCursor for PR #${number}`,
+      );
+    }
+    cursor = pageInfo.endCursor;
+  }
+  return threads;
 }
 // The traversal-only helpers below (through wrapTraversalGhFailure) back
 // getWorkItemForTraversalAsync only -- a verbatim port of
@@ -429,6 +625,7 @@ export function createGithubProviderAdapter(owner, repo, deps = DEFAULT_DEPS) {
         id: Number(row.id),
         body: String(row.body ?? ''),
         createdAt: String(row.created_at ?? ''),
+        updatedAt: String(row.updated_at ?? row.created_at ?? ''),
         authorLogin: String(row.user?.login ?? ''),
       }));
     },
@@ -805,6 +1002,852 @@ export function createGithubProviderAdapter(owner, repo, deps = DEFAULT_DEPS) {
       const raw = deps.ghText(args, GH_TEXT_LOOP_OPTIONS).trim();
       const parsed = raw && raw !== 'null' ? JSON.parse(raw) : [];
       return Array.isArray(parsed) ? parsed : [];
+    },
+    // --- #2267 additions below. -------------------------------------------
+    getRepositoryDefaultBranch(defaultBranchOwner, defaultBranchRepo) {
+      return readGithubRepoDefaultBranch(defaultBranchOwner, defaultBranchRepo);
+    },
+    resolveViewerAppSlugSafe() {
+      const raw = safeGhTextLocal(
+        deps,
+        ['api', 'app', '--jq', '.slug // .app_slug // empty'],
+        GH_TEXT_LOOP_OPTIONS,
+      ).trim();
+      return raw
+        ? { appSlug: raw, unavailable: false }
+        : { appSlug: '', unavailable: true };
+    },
+    resolveViewerLoginSafeQuiet() {
+      // #2267: mirrors resolveViewerLoginSafe's query/never-throw contract,
+      // but with advisory-convergence.mts's own env-conditional stdio (CI
+      // stays silent/piped; a local run's stderr stays visible to the
+      // operator watching it) -- see this method's doc comment in
+      // provider-port.mts for why it is not folded into the existing one.
+      const stdio = process.env.GITHUB_ACTIONS
+        ? ['ignore', 'pipe', 'pipe']
+        : ['ignore', 'pipe', 'inherit'];
+      try {
+        const raw = deps.ghText(['api', 'user', '--jq', '.login'], { stdio });
+        const normalized = raw.trim().toLowerCase();
+        if (!normalized) {
+          return { viewerLogin: '', viewerLoginUnavailable: true };
+        }
+        return { viewerLogin: normalized, viewerLoginUnavailable: false };
+      } catch {
+        return { viewerLogin: '', viewerLoginUnavailable: true };
+      }
+    },
+    getRepositoryContentAtRef(contentOwner, contentRepo, path, ref) {
+      try {
+        return deps.ghApiJson(
+          `repos/${contentOwner}/${contentRepo}/contents/${path}?ref=${encodeURIComponent(ref)}`,
+        );
+      } catch (error) {
+        if (deriveGhHttpStatus(error) === 404) {
+          return null;
+        }
+        throw error;
+      }
+    },
+    getRepositoryFileContentAtRef(repoRef, path, ref) {
+      try {
+        const content = deps.ghText([
+          'api',
+          `repos/${repoRef}/contents/${path}`,
+          '--method',
+          'GET',
+          '--field',
+          `ref=${ref}`,
+          '--jq',
+          '.content',
+        ]);
+        return { outcome: 'ok', value: content };
+      } catch (error) {
+        if (deriveGhHttpStatus(error) === 404) {
+          return { outcome: 'not-found' };
+        }
+        throw error;
+      }
+    },
+    getTeamMembershipStateSafe(org, teamSlug, login) {
+      return safeGhTextLocal(
+        deps,
+        [
+          'api',
+          `orgs/${org}/teams/${teamSlug}/memberships/${encodeURIComponent(login)}`,
+          '--jq',
+          '.state',
+        ],
+        GH_TEXT_LOOP_OPTIONS,
+      ).trim();
+    },
+    getChangeRequestHeadShaAndAuthor(number) {
+      const raw = deps.ghText([
+        'pr',
+        'view',
+        String(number),
+        '-R',
+        `${owner}/${repo}`,
+        '--json',
+        'headRefOid,author',
+      ]);
+      const parsed = JSON.parse(raw);
+      return {
+        headSha: String(parsed.headRefOid ?? ''),
+        authorLogin: String(parsed.author?.login ?? ''),
+      };
+    },
+    getChangeRequestConvergenceView(number) {
+      const raw = deps.ghText([
+        'pr',
+        'view',
+        String(number),
+        '-R',
+        `${owner}/${repo}`,
+        '--json',
+        'headRefOid,headRefName,closingIssuesReferences,author,url',
+      ]);
+      const parsed = JSON.parse(raw);
+      return {
+        headSha: String(parsed.headRefOid ?? ''),
+        headRefName: String(parsed.headRefName ?? ''),
+        authorLogin: String(parsed.author?.login ?? ''),
+        url: String(parsed.url ?? ''),
+        closingIssuesReferences: parsed.closingIssuesReferences,
+      };
+    },
+    getChangeRequestReadinessSnapshot(number) {
+      const raw = deps.ghText([
+        'pr',
+        'view',
+        String(number),
+        '-R',
+        `${owner}/${repo}`,
+        '--json',
+        'headRefOid,baseRefName,url,author,reviewDecision,statusCheckRollup,mergeable,mergeStateStatus,closingIssuesReferences',
+      ]);
+      const parsed = JSON.parse(raw);
+      return {
+        headSha: String(parsed.headRefOid ?? ''),
+        baseRefName: String(parsed.baseRefName ?? ''),
+        url: String(parsed.url ?? ''),
+        authorLogin: String(parsed.author?.login ?? ''),
+        reviewDecision:
+          parsed.reviewDecision == null ? null : String(parsed.reviewDecision),
+        statusCheckRollup: parsed.statusCheckRollup,
+        mergeable: String(parsed.mergeable ?? ''),
+        mergeStateStatus: String(parsed.mergeStateStatus ?? ''),
+        closingIssuesReferences: parsed.closingIssuesReferences,
+      };
+    },
+    getChangeRequestBranchAndChecks(number) {
+      const raw = deps.ghText([
+        'pr',
+        'view',
+        String(number),
+        '-R',
+        `${owner}/${repo}`,
+        '--json',
+        'headRefOid,baseRefName,statusCheckRollup',
+      ]);
+      const parsed = JSON.parse(raw);
+      return {
+        headSha: String(parsed.headRefOid ?? ''),
+        baseRefName: String(parsed.baseRefName ?? ''),
+        statusCheckRollup: parsed.statusCheckRollup,
+      };
+    },
+    getChangeRequestHeadRef(number) {
+      return deps.ghText([
+        'api',
+        `${repoPath}/pulls/${number}`,
+        '--jq',
+        '.head.ref',
+      ]);
+    },
+    listMergedChangeRequests(limit, sinceDate) {
+      const args = [
+        'pr',
+        'list',
+        '-R',
+        `${owner}/${repo}`,
+        '--state',
+        'merged',
+        '--limit',
+        String(limit),
+        '--json',
+        'number,mergedAt',
+      ];
+      if (sinceDate) {
+        args.push('--search', `merged:>=${sinceDate}`);
+      }
+      const raw = deps.ghText(args, GH_TEXT_LOOP_OPTIONS);
+      const rows = JSON.parse(raw || '[]');
+      return rows.map((row) => ({
+        number: Number(row.number),
+        mergedAt: String(row.mergedAt ?? ''),
+      }));
+    },
+    getMergedChangeRequestMeta(number) {
+      const query = `query($owner:String!,$repo:String!,$number:Int!){
+  repository(owner:$owner,name:$repo){
+    pullRequest(number:$number){ number merged mergedAt mergeCommit{oid} }
+  }
+}`;
+      const apiArgs = [
+        'api',
+        'graphql',
+        ...graphqlHostnameArgs(),
+        '-f',
+        `query=${query}`,
+        '-f',
+        `owner=${owner}`,
+        '-f',
+        `repo=${repo}`,
+        '-F',
+        `number=${number}`,
+      ];
+      const raw = JSON.parse(deps.ghText(apiArgs, GH_TEXT_LOOP_OPTIONS));
+      assertNoGraphqlErrors(raw, 'getMergedChangeRequestMeta');
+      const parsed = raw;
+      const pr = parsed.data?.repository?.pullRequest;
+      if (pr?.merged !== true) {
+        return null;
+      }
+      return {
+        number: Number(pr.number ?? number),
+        merged: true,
+        mergedAt: pr.mergedAt == null ? null : String(pr.mergedAt),
+        mergeCommitOid:
+          pr.mergeCommit?.oid == null ? null : String(pr.mergeCommit.oid),
+      };
+    },
+    listChangeRequestChecks(number) {
+      // #2267: matches review-activity-snapshot.mts's pre-migration
+      // `ghJson(..., { allowStatuses: [1, 8] })` exactly -- an exit-code
+      // allowlist requiring stdout to actually look like JSON, not a
+      // stderr-content match. `gh pr checks` (no `--required`) exits 1 or 8
+      // while checks are pending/failing or reporting a mixed state, a
+      // routine outcome for this ALL-checks call -- but an allowed exit
+      // status with genuinely empty/non-JSON stdout (a different failure
+      // wearing the same exit code) still rethrows, unlike
+      // {@link listRequiredChecks}'s stricter `--required` recovery, which
+      // matches on stderr content instead.
+      const args = [
+        'pr',
+        'checks',
+        String(number),
+        '--repo',
+        `${owner}/${repo}`,
+        '--json',
+        'name,state,completedAt',
+      ];
+      let raw;
+      try {
+        raw = deps.ghText(args, GH_TEXT_LOOP_OPTIONS);
+      } catch (error) {
+        const status = Number(error?.status ?? -1);
+        const stdout = String(error?.stdout ?? '');
+        if (![1, 8].includes(status) || !/^\s*[[{]/.test(stdout)) {
+          throw error;
+        }
+        raw = stdout;
+      }
+      const rows = JSON.parse(raw || '[]');
+      return rows.map((row) => ({
+        name: String(row.name ?? ''),
+        state: String(row.state ?? ''),
+        completedAt: row.completedAt ? String(row.completedAt) : null,
+      }));
+    },
+    getChangeRequestRequestedReviewerLogins(number) {
+      const result = deps.ghApiJson(
+        `${repoPath}/pulls/${number}/requested_reviewers`,
+      );
+      return (result.users ?? []).map((user) => String(user.login ?? ''));
+    },
+    getChangeRequestRequestedReviewerLoginsGraphql(number) {
+      try {
+        const query = `query($owner:String!,$repo:String!,$number:Int!){
+  repository(owner:$owner,name:$repo){
+    pullRequest(number:$number){
+      reviewRequests(first:100){
+        nodes { requestedReviewer { ...on Bot{login} ...on User{login} ...on Mannequin{login} } }
+      }
+    }
+  }
+}`;
+        const apiArgs = [
+          'api',
+          'graphql',
+          ...graphqlHostnameArgs(),
+          '-f',
+          `query=${query}`,
+          '-f',
+          `owner=${owner}`,
+          '-f',
+          `repo=${repo}`,
+          '-F',
+          `number=${number}`,
+        ];
+        const parsed = JSON.parse(deps.ghText(apiArgs, GH_TEXT_LOOP_OPTIONS));
+        const nodes =
+          parsed.data?.repository?.pullRequest?.reviewRequests?.nodes ?? [];
+        return nodes
+          .map((node) => node.requestedReviewer?.login)
+          .filter((login) => typeof login === 'string');
+      } catch {
+        return null;
+      }
+    },
+    listChangeRequestChangedFiles(number) {
+      const rows = deps.ghApiJson(`${repoPath}/pulls/${number}/files`, {
+        paginate: true,
+      });
+      return rows.map((row) => String(row.filename ?? ''));
+    },
+    listChangeRequestCommits(number) {
+      return deps.ghApiJson(`${repoPath}/pulls/${number}/commits`, {
+        paginate: true,
+      });
+    },
+    listChangeRequestReviewThreadsWithComments(number) {
+      const nodes = fetchReviewThreadsGeneric(
+        deps,
+        owner,
+        repo,
+        number,
+        'body createdAt updatedAt author { login } pullRequestReview { id }',
+      );
+      return nodes.map((node) => ({
+        isResolved: node.isResolved,
+        comments: node.comments.map((comment) => ({
+          body: String(comment.body ?? ''),
+          createdAt: String(comment.createdAt ?? ''),
+          updatedAt: String(comment.updatedAt ?? ''),
+          authorLogin: String(comment.author?.login ?? ''),
+          pullRequestReviewId:
+            comment.pullRequestReview?.id == null
+              ? null
+              : String(comment.pullRequestReview.id),
+        })),
+      }));
+    },
+    listChangeRequestReviewThreadsExtended(number) {
+      const nodes = fetchReviewThreadsGeneric(
+        deps,
+        owner,
+        repo,
+        number,
+        'body url createdAt updatedAt author { login }',
+      );
+      return nodes.map((node) => ({
+        isResolved: node.isResolved,
+        path: node.path,
+        comments: node.comments.map((comment) => ({
+          body: String(comment.body ?? ''),
+          url: comment.url == null ? undefined : String(comment.url),
+          createdAt: String(comment.createdAt ?? ''),
+          updatedAt: String(comment.updatedAt ?? ''),
+          authorLogin: String(comment.author?.login ?? ''),
+        })),
+      }));
+    },
+    listChangeRequestReviewThreadCommentIds(number) {
+      const nodes = fetchReviewThreadsGeneric(
+        deps,
+        owner,
+        repo,
+        number,
+        'databaseId',
+      );
+      return nodes.map((node) => ({
+        threadId: node.id,
+        isResolved: node.isResolved,
+        commentDatabaseIds: node.comments
+          .map((comment) => comment.databaseId)
+          .filter((id) => typeof id === 'number'),
+      }));
+    },
+    listChangeRequestGraphqlComments(number) {
+      const query = `query($owner:String!,$repo:String!,$number:Int!,$cursor:String){
+  repository(owner:$owner,name:$repo){
+    pullRequest(number:$number){
+      comments(first:100,after:$cursor){
+        nodes { body url createdAt updatedAt author { login } }
+        pageInfo { hasNextPage endCursor }
+      }
+    }
+  }
+}`;
+      const out = [];
+      let cursor = null;
+      while (true) {
+        const apiArgs = [
+          'api',
+          'graphql',
+          ...graphqlHostnameArgs(),
+          '-f',
+          `query=${query}`,
+          '-f',
+          `owner=${owner}`,
+          '-f',
+          `repo=${repo}`,
+          '-F',
+          `number=${number}`,
+        ];
+        if (cursor) {
+          apiArgs.push('-f', `cursor=${cursor}`);
+        }
+        const rawComments = JSON.parse(
+          deps.ghText(apiArgs, GH_TEXT_LOOP_OPTIONS),
+        );
+        assertNoGraphqlErrors(rawComments, 'listChangeRequestGraphqlComments');
+        const parsed = rawComments;
+        // Fail fast on a missing pullRequest node or connection, matching
+        // merged-pr-feedback-sweep.mts's pre-migration fetchAllNodes
+        // (Codex review, PR #2429): an absent node/connection is otherwise
+        // read as zero comments, making a PR look "clean" -- the silent
+        // false negative this check exists to prevent.
+        const pullRequest = parsed.data?.repository?.pullRequest;
+        if (pullRequest == null) {
+          throw new Error(
+            `listChangeRequestGraphqlComments: PR #${number} returned no pullRequest node`,
+          );
+        }
+        const connection = pullRequest.comments;
+        if (connection == null) {
+          throw new Error(
+            `listChangeRequestGraphqlComments: PR #${number} returned a null comments connection`,
+          );
+        }
+        for (const node of connection.nodes ?? []) {
+          out.push({
+            body: String(node.body ?? ''),
+            url: String(node.url ?? ''),
+            createdAt: String(node.createdAt ?? ''),
+            updatedAt: String(node.updatedAt ?? ''),
+            authorLogin: String(node.author?.login ?? ''),
+          });
+        }
+        const pageInfo = connection.pageInfo;
+        if (!pageInfo?.hasNextPage) {
+          break;
+        }
+        if (!pageInfo.endCursor) {
+          throw new Error(
+            `listChangeRequestGraphqlComments: page reported hasNextPage without endCursor for PR #${number}`,
+          );
+        }
+        cursor = pageInfo.endCursor;
+      }
+      return out;
+    },
+    listChangeRequestGraphqlReviews(number) {
+      const query = `query($owner:String!,$repo:String!,$number:Int!,$cursor:String){
+  repository(owner:$owner,name:$repo){
+    pullRequest(number:$number){
+      reviews(first:100,after:$cursor){
+        nodes { body url state submittedAt author { login } }
+        pageInfo { hasNextPage endCursor }
+      }
+    }
+  }
+}`;
+      const out = [];
+      let cursor = null;
+      while (true) {
+        const apiArgs = [
+          'api',
+          'graphql',
+          ...graphqlHostnameArgs(),
+          '-f',
+          `query=${query}`,
+          '-f',
+          `owner=${owner}`,
+          '-f',
+          `repo=${repo}`,
+          '-F',
+          `number=${number}`,
+        ];
+        if (cursor) {
+          apiArgs.push('-f', `cursor=${cursor}`);
+        }
+        const rawReviews = JSON.parse(
+          deps.ghText(apiArgs, GH_TEXT_LOOP_OPTIONS),
+        );
+        assertNoGraphqlErrors(rawReviews, 'listChangeRequestGraphqlReviews');
+        const parsed = rawReviews;
+        // Fail fast on a missing pullRequest node or connection, matching
+        // merged-pr-feedback-sweep.mts's pre-migration fetchAllNodes
+        // (Codex review, PR #2429) -- see listChangeRequestGraphqlComments's
+        // identical check above for the full rationale.
+        const pullRequest = parsed.data?.repository?.pullRequest;
+        if (pullRequest == null) {
+          throw new Error(
+            `listChangeRequestGraphqlReviews: PR #${number} returned no pullRequest node`,
+          );
+        }
+        const connection = pullRequest.reviews;
+        if (connection == null) {
+          throw new Error(
+            `listChangeRequestGraphqlReviews: PR #${number} returned a null reviews connection`,
+          );
+        }
+        for (const node of connection.nodes ?? []) {
+          out.push({
+            body: String(node.body ?? ''),
+            url: String(node.url ?? ''),
+            state: String(node.state ?? ''),
+            submittedAt:
+              node.submittedAt == null ? null : String(node.submittedAt),
+            authorLogin: String(node.author?.login ?? ''),
+          });
+        }
+        const pageInfo = connection.pageInfo;
+        if (!pageInfo?.hasNextPage) {
+          break;
+        }
+        if (!pageInfo.endCursor) {
+          throw new Error(
+            `listChangeRequestGraphqlReviews: page reported hasNextPage without endCursor for PR #${number}`,
+          );
+        }
+        cursor = pageInfo.endCursor;
+      }
+      return out;
+    },
+    listBranchRules(rulesOwner, rulesRepo, ref) {
+      return fetchGovernanceOutcome(() =>
+        deps.ghApiJson(
+          `repos/${rulesOwner}/${rulesRepo}/rules/branches/${encodeURIComponent(ref)}`,
+          { paginate: true },
+        ),
+      );
+    },
+    getBranchProtection(protectionOwner, protectionRepo, ref) {
+      return fetchGovernanceOutcome(() =>
+        deps.ghApiJson(
+          `repos/${protectionOwner}/${protectionRepo}/branches/${encodeURIComponent(ref)}/protection`,
+        ),
+      );
+    },
+    getRepositoryRulesetDetail(path) {
+      return fetchGovernanceOutcome(() =>
+        deps.ghApiJson(path, {
+          extraArgs: ['-H', 'Accept: application/vnd.github+json'],
+        }),
+      );
+    },
+    getWorkflowRun(runOwner, runRepo, runId) {
+      const raw = deps.ghText(
+        ['api', `repos/${runOwner}/${runRepo}/actions/runs/${runId}`],
+        GH_TEXT_LOOP_TIMEOUT_OPTIONS,
+      );
+      return JSON.parse(raw.trim() || '{}');
+    },
+    listWorkflowRuns(runsOwner, runsRepo, workflowName, limit) {
+      const raw = deps.ghText(
+        [
+          'run',
+          'list',
+          '--repo',
+          `${runsOwner}/${runsRepo}`,
+          '--workflow',
+          workflowName,
+          '--limit',
+          String(limit),
+          '--json',
+          'databaseId,conclusion,status,createdAt',
+        ],
+        GH_TEXT_LOOP_OPTIONS,
+      );
+      const rows = JSON.parse(raw || '[]');
+      return rows.map((row) => ({
+        // String(...), not Number(...): preserves a databaseId above
+        // Number.MAX_SAFE_INTEGER exactly (Codex review, PR #2429).
+        id: String(row.databaseId ?? ''),
+        conclusion: row.conclusion == null ? null : String(row.conclusion),
+        status: String(row.status ?? ''),
+        createdAt: String(row.createdAt ?? ''),
+      }));
+    },
+    getChangeRequestHeadShaAtRepo(atRepoOwner, atRepoRepo, number) {
+      return deps.ghText([
+        'pr',
+        'view',
+        String(number),
+        '-R',
+        `${atRepoOwner}/${atRepoRepo}`,
+        '--json',
+        'headRefOid',
+        '--jq',
+        '.headRefOid',
+      ]);
+    },
+    getChangeRequestAtRepo(atRepoOwner, atRepoRepo, number) {
+      try {
+        const raw = deps.ghText(
+          [
+            'pr',
+            'view',
+            String(number),
+            '-R',
+            `${atRepoOwner}/${atRepoRepo}`,
+            '--json',
+            'mergeable,mergeStateStatus',
+          ],
+          GH_TEXT_LOOP_OPTIONS,
+        );
+        const parsed = JSON.parse(raw);
+        return {
+          mergeable: String(parsed.mergeable ?? ''),
+          mergeStateStatus: String(parsed.mergeStateStatus ?? ''),
+        };
+      } catch (error) {
+        if (deriveGhHttpStatus(error) === 404) {
+          return null;
+        }
+        throw error;
+      }
+    },
+    mergeChangeRequestAtRepo(mergeOwner, mergeRepo, number, headSha) {
+      return deps.ghText([
+        'pr',
+        'merge',
+        String(number),
+        '-R',
+        `${mergeOwner}/${mergeRepo}`,
+        '--merge',
+        '--match-head-commit',
+        headSha,
+      ]);
+    },
+    mergeChangeRequestAdminAtRepo(mergeOwner, mergeRepo, number, headSha) {
+      return deps.ghText([
+        'pr',
+        'merge',
+        String(number),
+        '-R',
+        `${mergeOwner}/${mergeRepo}`,
+        '--merge',
+        '--match-head-commit',
+        headSha,
+        '--admin',
+      ]);
+    },
+    getChangeRequestAuthor(number) {
+      const query = `
+        query($owner: String!, $repo: String!, $number: Int!) {
+          repository(owner: $owner, name: $repo) {
+            pullRequest(number: $number) {
+              author { login __typename }
+            }
+          }
+        }`;
+      const apiArgs = [
+        'api',
+        'graphql',
+        ...graphqlHostnameArgs(),
+        '-f',
+        `query=${query}`,
+        '-f',
+        `owner=${owner}`,
+        '-f',
+        `repo=${repo}`,
+        '-F',
+        `number=${number}`,
+      ];
+      const rawAuthor = JSON.parse(deps.ghText(apiArgs, GH_TEXT_LOOP_OPTIONS));
+      assertNoGraphqlErrors(rawAuthor, 'getChangeRequestAuthor');
+      const parsed = rawAuthor;
+      const author = parsed.data?.repository?.pullRequest?.author;
+      if (!author) {
+        return null;
+      }
+      return {
+        login: String(author.login ?? ''),
+        typename: author.__typename == null ? null : String(author.__typename),
+      };
+    },
+    listChangeRequestReviewThreadsWithAuthorType(number) {
+      const nodes = fetchReviewThreadsGeneric(
+        deps,
+        owner,
+        repo,
+        number,
+        'body createdAt updatedAt author { login __typename } pullRequestReview { id }',
+      );
+      return nodes.map((node) => ({
+        id: node.id,
+        isResolved: node.isResolved,
+        comments: node.comments.map((comment) => ({
+          body: String(comment.body ?? ''),
+          createdAt: String(comment.createdAt ?? ''),
+          updatedAt: String(comment.updatedAt ?? ''),
+          authorLogin: String(comment.author?.login ?? ''),
+          authorTypename:
+            comment.author?.__typename == null
+              ? null
+              : String(comment.author.__typename),
+          pullRequestReviewId:
+            comment.pullRequestReview?.id == null
+              ? null
+              : String(comment.pullRequestReview.id),
+        })),
+      }));
+    },
+    getChangeRequestReviewsWithHeadCommitDate(number) {
+      const query = `
+        query($owner: String!, $repo: String!, $number: Int!, $cursor: String) {
+          repository(owner: $owner, name: $repo) {
+            pullRequest(number: $number) {
+              reviews(first: 100, after: $cursor) {
+                pageInfo { hasNextPage endCursor }
+                nodes {
+                  id
+                  commit { oid }
+                  submittedAt
+                  author { login __typename }
+                  comments { totalCount }
+                  body
+                }
+              }
+              commits(last: 1) {
+                nodes { commit { committedDate } }
+              }
+            }
+          }
+        }`;
+      const nodes = [];
+      let headCommittedAt = '';
+      let cursor = null;
+      while (true) {
+        const apiArgs = [
+          'api',
+          'graphql',
+          ...graphqlHostnameArgs(),
+          '-f',
+          `query=${query}`,
+          '-f',
+          `owner=${owner}`,
+          '-f',
+          `repo=${repo}`,
+          '-F',
+          `number=${number}`,
+        ];
+        if (cursor) {
+          apiArgs.push('-f', `cursor=${cursor}`);
+        }
+        const raw = JSON.parse(deps.ghText(apiArgs, GH_TEXT_LOOP_OPTIONS));
+        assertNoGraphqlErrors(raw, 'getChangeRequestReviewsWithHeadCommitDate');
+        const parsed = raw;
+        const pullRequest = parsed.data?.repository?.pullRequest;
+        nodes.push(...(pullRequest?.reviews?.nodes ?? []));
+        if (!headCommittedAt) {
+          headCommittedAt = String(
+            pullRequest?.commits?.nodes?.[0]?.commit?.committedDate ?? '',
+          );
+        }
+        const pageInfo = pullRequest?.reviews?.pageInfo;
+        if (!pageInfo?.hasNextPage) {
+          break;
+        }
+        if (!pageInfo.endCursor) {
+          throw new Error(
+            `getChangeRequestReviewsWithHeadCommitDate: review page reported hasNextPage without endCursor for PR #${number}`,
+          );
+        }
+        cursor = pageInfo.endCursor;
+      }
+      return {
+        reviews: nodes.map((node) => ({
+          id: String(node.id ?? ''),
+          authorLogin: String(node.author?.login ?? ''),
+          authorTypename:
+            node.author?.__typename == null
+              ? null
+              : String(node.author.__typename),
+          submittedAt:
+            node.submittedAt == null ? null : String(node.submittedAt),
+          commitId: node.commit?.oid == null ? null : String(node.commit.oid),
+          commentCount:
+            typeof node.comments?.totalCount === 'number'
+              ? node.comments.totalCount
+              : null,
+          body: node.body == null ? null : String(node.body),
+        })),
+        headCommittedAt,
+      };
+    },
+    mergeChangeRequest(number, headSha) {
+      return deps.ghText([
+        'pr',
+        'merge',
+        String(number),
+        '-R',
+        `${owner}/${repo}`,
+        '--merge',
+        '--match-head-commit',
+        headSha,
+      ]);
+    },
+    mergeChangeRequestAdmin(number, headSha) {
+      return deps.ghText([
+        'pr',
+        'merge',
+        String(number),
+        '-R',
+        `${owner}/${repo}`,
+        '--merge',
+        '--match-head-commit',
+        headSha,
+        '--admin',
+      ]);
+    },
+    postReviewCommentReply(number, commentId, body) {
+      const out = deps.ghText(
+        [
+          'api',
+          '--method',
+          'POST',
+          `${repoPath}/pulls/${number}/comments/${commentId}/replies`,
+          '--input',
+          '-',
+        ],
+        { input: JSON.stringify({ body }) },
+      );
+      const parsed = JSON.parse(out);
+      return { id: parsed.id };
+    },
+    resolveChangeRequestReviewThread(threadId) {
+      const mutation = `mutation($threadId:ID!){
+  resolveReviewThread(input:{threadId:$threadId}){ thread { isResolved } }
+}`;
+      const apiArgs = [
+        'api',
+        'graphql',
+        ...graphqlHostnameArgs(),
+        '-f',
+        `query=${mutation}`,
+        '-f',
+        `threadId=${threadId}`,
+      ];
+      const raw = JSON.parse(deps.ghText(apiArgs, GH_TEXT_LOOP_OPTIONS));
+      assertNoGraphqlErrors(raw, 'resolveReviewThread');
+      const parsed = raw;
+      if (parsed.data?.resolveReviewThread?.thread?.isResolved !== true) {
+        throw new Error(
+          `resolveChangeRequestReviewThread: GitHub did not confirm thread ${threadId} as resolved`,
+        );
+      }
+    },
+    listCapabilityDeclarations() {
+      return PROVIDER_CAPABILITY_GROUPS.map((group) => ({
+        group,
+        requirement: group === 'advisory-review' ? 'optional' : 'required',
+        supported: true,
+      }));
     },
   };
 }

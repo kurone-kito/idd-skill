@@ -326,6 +326,7 @@ test('toClaimComment maps ProviderComment.authorLogin into the author field reso
     id: 1,
     body: '<!-- claimed-by: agent-x claim-abc supersedes: none 2026-06-25T00:00:00Z branch: issue/1-x -->',
     createdAt: '2026-06-25T00:00:00Z',
+    updatedAt: '2026-06-25T00:00:00Z',
     authorLogin: 'kurone-kito',
   };
   const mapped = toClaimComment(comment);

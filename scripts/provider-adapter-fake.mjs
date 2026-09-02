@@ -9,6 +9,7 @@
 // authenticated `gh` process. Every method reads/writes the fixture object
 // passed to `createFakeProviderAdapter`; nothing here spawns a subprocess
 // or makes a network call.
+import { PROVIDER_CAPABILITY_GROUPS } from './provider-contract.mjs';
 export function createFakeProviderAdapter(fixture) {
   fixture.postedComments ??= [];
   fixture.closedWorkItems ??= [];
@@ -118,6 +119,7 @@ export function createFakeProviderAdapter(fixture) {
         id,
         body,
         createdAt: new Date(0).toISOString(),
+        updatedAt: new Date(0).toISOString(),
         authorLogin: fixture.viewerLogin ?? 'fake-actor',
       };
       fixture.comments ??= {};
@@ -169,6 +171,293 @@ export function createFakeProviderAdapter(fixture) {
     },
     searchOpenWorkItems() {
       return fixture.searchResults ?? [];
+    },
+    // --- #2267 additions below. -------------------------------------------
+    getRepositoryDefaultBranch(_defaultBranchOwner, _defaultBranchRepo) {
+      // Accepts owner/repo to match the port's declared arity (Copilot
+      // review, PR #2429: an unaccepted parameter is silently hidden by
+      // structural typing) -- unused because every fixture in this file
+      // represents a single ambient repo, and this method's one real call
+      // site (pre-merge-readiness.mts) always passes that same repo back.
+      return fixture.repositoryDefaultBranch ?? null;
+    },
+    resolveViewerAppSlugSafe() {
+      // Mirrors the GitHub adapter's own raw.trim() on the CLI output,
+      // for the same reason as resolveViewerLoginSafeQuiet's normalization
+      // above.
+      const trimmed = fixture.viewerAppSlug?.trim() ?? '';
+      if (fixture.viewerAppSlugUnavailable || !trimmed) {
+        return { appSlug: '', unavailable: true };
+      }
+      return { appSlug: trimmed, unavailable: false };
+    },
+    resolveViewerLoginSafeQuiet() {
+      // Mirrors the GitHub adapter's own trim().toLowerCase() normalization
+      // (Copilot review, PR #2429) so a fixture login differing only in
+      // case/whitespace does not diverge fake-provider tests from
+      // production behavior.
+      const normalized = fixture.viewerLogin?.trim().toLowerCase() ?? '';
+      if (fixture.viewerLoginUnavailable || !normalized) {
+        return { viewerLogin: '', viewerLoginUnavailable: true };
+      }
+      return { viewerLogin: normalized, viewerLoginUnavailable: false };
+    },
+    getRepositoryContentAtRef(contentOwner, contentRepo, path, ref) {
+      const key = `${contentOwner}/${contentRepo}/${path}@${ref}`;
+      return fixture.repositoryContentAtRef?.[key] ?? null;
+    },
+    getRepositoryFileContentAtRef(repoRef, path, ref) {
+      const key = `${repoRef}/${path}@${ref}`;
+      const value = fixture.repositoryFileContentAtRef?.[key];
+      return value === undefined
+        ? { outcome: 'not-found' }
+        : { outcome: 'ok', value };
+    },
+    getTeamMembershipStateSafe(org, teamSlug, login) {
+      const key = `${org}/${teamSlug}/${login}`;
+      return fixture.teamMembershipStates?.[key] ?? '';
+    },
+    getChangeRequestHeadShaAndAuthor(number) {
+      const value = fixture.changeRequestHeadShaAndAuthor?.[number];
+      if (!value) {
+        throw new Error(
+          `fake provider: no headSha/author fixture for PR ${number}`,
+        );
+      }
+      return value;
+    },
+    getChangeRequestConvergenceView(number) {
+      const value = fixture.changeRequestConvergenceViews?.[number];
+      if (!value) {
+        throw new Error(
+          `fake provider: no convergence-view fixture for PR ${number}`,
+        );
+      }
+      return value;
+    },
+    getChangeRequestReadinessSnapshot(number) {
+      const value = fixture.changeRequestReadinessSnapshots?.[number];
+      if (!value) {
+        throw new Error(
+          `fake provider: no readiness-snapshot fixture for PR ${number}`,
+        );
+      }
+      return value;
+    },
+    getChangeRequestBranchAndChecks(number) {
+      const value = fixture.changeRequestBranchAndChecks?.[number];
+      if (!value) {
+        throw new Error(
+          `fake provider: no branch-and-checks fixture for PR ${number}`,
+        );
+      }
+      return value;
+    },
+    getChangeRequestHeadRef(number) {
+      const value = fixture.changeRequestHeadRefs?.[number];
+      if (value === undefined) {
+        throw new Error(`fake provider: no head-ref fixture for PR ${number}`);
+      }
+      return value;
+    },
+    listMergedChangeRequests(limit, sinceDate) {
+      // Honors both parameters the GitHub adapter's `gh pr list --limit
+      // --search merged:>=date` call applies (Copilot review, PR #2429),
+      // so a collection-wiring test cannot pass on unrealistic behavior --
+      // more rows than requested, or an unfiltered date range.
+      const rows = fixture.mergedChangeRequests ?? [];
+      const filtered = sinceDate
+        ? rows.filter((row) => row.mergedAt >= sinceDate)
+        : rows;
+      return filtered.slice(0, limit);
+    },
+    getMergedChangeRequestMeta(number) {
+      return fixture.mergedChangeRequestMeta?.[number] ?? null;
+    },
+    listChangeRequestChecks(number) {
+      return fixture.allChecks?.[number] ?? [];
+    },
+    getChangeRequestRequestedReviewerLogins(number) {
+      return fixture.requestedReviewerLogins?.[number] ?? [];
+    },
+    getChangeRequestRequestedReviewerLoginsGraphql(number) {
+      return fixture.requestedReviewerLoginsGraphql?.[number] ?? null;
+    },
+    listChangeRequestChangedFiles(number) {
+      return fixture.changedFiles?.[number] ?? [];
+    },
+    listChangeRequestCommits(number) {
+      return fixture.changeRequestCommits?.[number] ?? [];
+    },
+    listChangeRequestReviewThreadsWithComments(number) {
+      return fixture.reviewThreadsWithComments?.[number] ?? [];
+    },
+    listChangeRequestReviewThreadsExtended(number) {
+      return fixture.reviewThreadsExtended?.[number] ?? [];
+    },
+    listChangeRequestReviewThreadCommentIds(number) {
+      return fixture.reviewThreadCommentIds?.[number] ?? [];
+    },
+    listChangeRequestGraphqlComments(number) {
+      return fixture.changeRequestGraphqlComments?.[number] ?? [];
+    },
+    listChangeRequestGraphqlReviews(number) {
+      return fixture.changeRequestGraphqlReviews?.[number] ?? [];
+    },
+    listBranchRules(rulesOwner, rulesRepo, ref) {
+      const key = `${rulesOwner}/${rulesRepo}/${ref}`;
+      const value = fixture.branchRules?.[key];
+      return value === undefined
+        ? { outcome: 'not-found' }
+        : { outcome: 'ok', value };
+    },
+    getBranchProtection(protectionOwner, protectionRepo, ref) {
+      const key = `${protectionOwner}/${protectionRepo}/${ref}`;
+      const value = fixture.branchProtection?.[key];
+      return value === undefined
+        ? { outcome: 'not-found' }
+        : { outcome: 'ok', value };
+    },
+    getRepositoryRulesetDetail(path) {
+      const value = fixture.rulesetDetails?.[path];
+      return value === undefined
+        ? { outcome: 'not-found' }
+        : { outcome: 'ok', value };
+    },
+    getWorkflowRun(runOwner, runRepo, runId) {
+      // Throws on a missing fixture, matching the GitHub adapter's own
+      // no-catch `deps.ghText` call (Copilot review, PR #2429) -- a fake
+      // adapter returning null here can both mask a missing fixture and
+      // produce a confusing downstream TypeError instead of failing
+      // closed like production.
+      const key = `${runOwner}/${runRepo}/${runId}`;
+      const value = fixture.workflowRuns?.[key];
+      if (value === undefined) {
+        throw new Error(`fake provider: no workflow-run fixture for ${key}`);
+      }
+      return value;
+    },
+    listWorkflowRuns(runsOwner, runsRepo, workflowName, limit) {
+      // Honors `limit`, matching the GitHub adapter's own `gh run list
+      // --limit N` call (Copilot review, PR #2429) -- an ignored limit let
+      // a collection-wiring test pass against an unrealistically large
+      // sibling sweep.
+      const key = `${runsOwner}/${runsRepo}/${workflowName}`;
+      return (fixture.workflowRunLists?.[key] ?? []).slice(0, limit);
+    },
+    getChangeRequestHeadShaAtRepo(atRepoOwner, atRepoRepo, number) {
+      const key = `${atRepoOwner}/${atRepoRepo}/${number}`;
+      const sha = fixture.changeRequestHeadShasAtRepo?.[key];
+      if (sha === undefined) {
+        throw new Error(
+          `fake provider: no cross-repo head SHA fixture for ${key}`,
+        );
+      }
+      return sha;
+    },
+    getChangeRequestAtRepo(atRepoOwner, atRepoRepo, number) {
+      const key = `${atRepoOwner}/${atRepoRepo}/${number}`;
+      return fixture.changeRequestsAtRepo?.[key] ?? null;
+    },
+    mergeChangeRequestAtRepo(mergeOwner, mergeRepo, number, headSha) {
+      fixture.mergedChangeRequestCalls ??= [];
+      fixture.mergedChangeRequestCalls.push({
+        owner: mergeOwner,
+        repo: mergeRepo,
+        number,
+        headSha,
+        admin: false,
+      });
+      return `fake merge commit for ${mergeOwner}/${mergeRepo}#${number}`;
+    },
+    mergeChangeRequestAdminAtRepo(mergeOwner, mergeRepo, number, headSha) {
+      fixture.mergedChangeRequestCalls ??= [];
+      fixture.mergedChangeRequestCalls.push({
+        owner: mergeOwner,
+        repo: mergeRepo,
+        number,
+        headSha,
+        admin: true,
+      });
+      return `fake admin merge commit for ${mergeOwner}/${mergeRepo}#${number}`;
+    },
+    mergeChangeRequest(number, headSha) {
+      const locator = fixture.locator ?? {
+        provider: 'github',
+        owner: 'fake-owner',
+        name: 'fake-repo',
+      };
+      fixture.mergedChangeRequestCalls ??= [];
+      fixture.mergedChangeRequestCalls.push({
+        owner: locator.owner,
+        repo: locator.name,
+        number,
+        headSha,
+        admin: false,
+      });
+      return `fake merge commit for ${locator.owner}/${locator.name}#${number}`;
+    },
+    mergeChangeRequestAdmin(number, headSha) {
+      const locator = fixture.locator ?? {
+        provider: 'github',
+        owner: 'fake-owner',
+        name: 'fake-repo',
+      };
+      fixture.mergedChangeRequestCalls ??= [];
+      fixture.mergedChangeRequestCalls.push({
+        owner: locator.owner,
+        repo: locator.name,
+        number,
+        headSha,
+        admin: true,
+      });
+      return `fake admin merge commit for ${locator.owner}/${locator.name}#${number}`;
+    },
+    postReviewCommentReply(number, commentId, body) {
+      fixture.postedReviewCommentReplies ??= [];
+      fixture.postedReviewCommentReplies.push({ number, commentId, body });
+      const id = fixture.nextReviewCommentReplyId ?? 1;
+      fixture.nextReviewCommentReplyId = id + 1;
+      return { id };
+    },
+    getChangeRequestAuthor(number) {
+      return fixture.changeRequestAuthors?.[number] ?? null;
+    },
+    listChangeRequestReviewThreadsWithAuthorType(number) {
+      return fixture.reviewThreadsWithAuthorType?.[number] ?? [];
+    },
+    getChangeRequestReviewsWithHeadCommitDate(number) {
+      // Throws on a missing fixture, matching the GitHub adapter's own
+      // no-catch GraphQL call and this file's sibling PR-view methods
+      // (Copilot review, PR #2429) -- review-clause.mts's own caller has
+      // no try/catch around this call, so a silent empty default here
+      // would hide a missing fixture instead of failing closed.
+      const value = fixture.reviewsWithHeadCommitDate?.[number];
+      if (!value) {
+        throw new Error(
+          `fake provider: no reviews/head-commit-date fixture for PR ${number}`,
+        );
+      }
+      return value;
+    },
+    resolveChangeRequestReviewThread(threadId) {
+      if (fixture.unresolvableReviewThreadIds?.has(threadId)) {
+        throw new Error(
+          `fake provider: GitHub did not confirm thread ${threadId} as resolved`,
+        );
+      }
+      fixture.resolvedReviewThreadIds ??= [];
+      fixture.resolvedReviewThreadIds.push(threadId);
+    },
+    listCapabilityDeclarations() {
+      return (
+        fixture.capabilityDeclarations ??
+        PROVIDER_CAPABILITY_GROUPS.map((group) => ({
+          group,
+          requirement: group === 'advisory-review' ? 'optional' : 'required',
+          supported: true,
+        }))
+      );
     },
   };
 }

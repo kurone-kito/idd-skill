@@ -41,7 +41,7 @@ test('PROVIDER_IDS names github, gitlab, and bitbucket; isProviderId is a matchi
   assert.equal(isProviderId(undefined), false);
 });
 
-test('PROVIDER_CAPABILITY_GROUPS names the ten groups from the design record', () => {
+test('PROVIDER_CAPABILITY_GROUPS names the eleven groups from the design record', () => {
   assert.deepEqual(PROVIDER_CAPABILITY_GROUPS, [
     'repository-identity',
     'work-items',
@@ -53,6 +53,9 @@ test('PROVIDER_CAPABILITY_GROUPS names the ten groups from the design record', (
     'permissions',
     'branch-protection',
     'merge',
+    // #2267: bot/advisory review interpretation, distinct from
+    // reviews-and-threads's required unresolved-thread safety gate.
+    'advisory-review',
   ]);
 });
 

@@ -29,13 +29,6 @@ import {
   normalizeAuthorityEvidence,
   resolveCollaboratorAuthority,
 } from './external-check-waiver.mts';
-import {
-  DEFAULT_GH_PAGINATED_TIMEOUT_MS,
-  GH_TEXT_LOOP_OPTIONS,
-  ghText,
-  readGithubRepoDefaultBranch,
-  safeGhText,
-} from './gh-exec.mts';
 import { deriveGhHttpStatus } from './gh-http-status.mts';
 import { loadIddConfig } from './idd-config.mts';
 import {
@@ -55,7 +48,6 @@ import {
   deriveIddAgentLogins,
   normalizeTrustedMarkerLogins,
   operationalMarkerPrefix,
-  parsePaginatedGhNdjson,
   resolveAdvisoryBotLogins,
   resolveCodeownersForFiles,
   resolvePrFirstCommitAt,
@@ -64,9 +56,18 @@ import {
   selectCodeownersText,
 } from './protocol-helpers.mts';
 import {
+  createGithubProviderAdapter,
+  resolveCurrentGithubRepository,
+} from './provider-adapter-github.mts';
+import {
   evaluateProviderOutageRelief,
   resolveProviderOutageDeclaration,
 } from './provider-outage-declaration.mts';
+import type {
+  ProviderComment,
+  ProviderPort,
+  ProviderReviewThreadWithComments,
+} from './provider-port.mts';
 import {
   fetchReviewsAndHeadCommit,
   resolveLatestCopilotReviewClause,
@@ -288,38 +289,6 @@ interface BranchProtectionPayload {
   } | null;
 }
 
-/** GraphQL pagination cursor block. */
-interface PageInfoPayload {
-  hasNextPage?: boolean | null;
-  endCursor?: string | null;
-}
-
-/** Review-thread reply node (GraphQL `reviewThreads` comment). */
-interface ThreadCommentPayload {
-  body?: string | null;
-  createdAt?: string | null;
-  updatedAt?: string | null;
-  author?: GhAuthorPayload | null;
-  pullRequestReview?: { id?: string | null } | null;
-}
-
-/** Review thread (GraphQL `reviewThreads` node). */
-interface ReviewThreadPayload {
-  id?: string | null;
-  isResolved?: boolean | null;
-  reviewerReopenedAt?: string | null;
-  comments?: {
-    pageInfo?: PageInfoPayload | null;
-    nodes: ThreadCommentPayload[];
-  } | null;
-}
-
-/** GraphQL `reviewThreads` connection payload. */
-interface ReviewThreadsConnectionPayload {
-  pageInfo?: PageInfoPayload | null;
-  nodes?: ReviewThreadPayload[] | null;
-}
-
 /** gh subprocess failure-tolerance options. */
 interface RunGhOptions {
   allowStatuses?: number[];
@@ -391,8 +360,21 @@ export type PreMergeReadinessReport = ReturnType<
  * `idd-merge-execute` helper so the F2/F3 gate logic is collected from
  * exactly one place (no duplicated gh plumbing or gate evaluation).
  */
+/**
+ * `createPort` is injectable (defaults to the real GitHub adapter) so a test
+ * can drive this collection entry end to end against
+ * `createFakeProviderAdapter` fixtures instead of a live `gh` process
+ * (#2267 AC4's "unit tests exercise the PR-facing state machine with a fake
+ * provider" -- see `pre-merge-readiness-collection-smoke.test.mts`). Neither
+ * production caller (this file's own CLI entry, `idd-merge-execute.mts`)
+ * passes a second argument, so both keep using the real adapter unchanged.
+ */
 export function collectPreMergeReadiness(
   argv: string[],
+  createPort: (
+    owner: string,
+    repo: string,
+  ) => ProviderPort = createGithubProviderAdapter,
 ): PreMergeReadinessReport {
   const args = parseArgs(argv);
   // --help used to exit from inside the parseArgs token loop; relocated
@@ -410,27 +392,13 @@ export function collectPreMergeReadiness(
     throw new Error('missing required --claim-issue <number> argument');
   }
 
-  const owner =
-    args.owner ||
-    ghText(
-      ['repo', 'view', '--json', 'owner', '--jq', '.owner.login'],
-      GH_TEXT_LOOP_OPTIONS,
-    );
-  const repo =
-    args.repo ||
-    ghText(
-      ['repo', 'view', '--json', 'name', '--jq', '.name'],
-      GH_TEXT_LOOP_OPTIONS,
-    );
-  const repoRef = `${owner}/${repo}`;
-  const viewerLogin = safeGhText(
-    ['api', 'user', '--jq', '.login'],
-    GH_TEXT_LOOP_OPTIONS,
-  ).toLowerCase();
-  const viewerAppSlug = safeGhText(
-    ['api', 'app', '--jq', '.slug // .app_slug // empty'],
-    GH_TEXT_LOOP_OPTIONS,
-  ).toLowerCase();
+  const currentRepo =
+    args.owner && args.repo ? null : resolveCurrentGithubRepository();
+  const owner = args.owner || currentRepo?.owner || '';
+  const repo = args.repo || currentRepo?.repo || '';
+  const port = createPort(owner, repo);
+  const viewerLogin = port.resolveViewerLoginSafe().viewerLogin;
+  const viewerAppSlug = port.resolveViewerAppSlugSafe().appSlug.toLowerCase();
   const iddConfig = loadIddConfig();
   const { actors: configuredTrustedActors, source: trustedMarkerActorsSource } =
     resolveTrustedMarkerActors({
@@ -445,41 +413,21 @@ export function collectPreMergeReadiness(
       config: iddConfig,
     });
 
-  const pr = ghJson([
-    'pr',
-    'view',
-    String(args.prNumber),
-    '-R',
-    repoRef,
-    '--json',
-    // #1513: `mergeable,mergeStateStatus` added to this existing call (no
-    // new network round-trip) so the branch-currency gate below can pair a
-    // live `BEHIND` state with the up-to-date-head requirement resolved
-    // from `branchRules`/`branchProtection`.
-    'headRefOid,baseRefName,url,author,reviewDecision,statusCheckRollup,mergeable,mergeStateStatus,closingIssuesReferences',
-    '--jq',
-    '.',
-  ]) as {
-    headRefOid?: unknown;
-    baseRefName?: unknown;
-    url?: unknown;
-    author?: { login?: unknown } | null;
-    reviewDecision?: unknown;
-    statusCheckRollup?: StatusCheckRollupPayload[] | null;
-    mergeable?: unknown;
-    mergeStateStatus?: unknown;
-    closingIssuesReferences?: unknown;
-  };
-  const prHeadSha = String(pr.headRefOid ?? '');
-  const baseRefName = String(pr.baseRefName ?? '');
-  const prUrl = String(pr.url ?? '');
-  const prAuthorLogin = String(pr.author?.login ?? '').toLowerCase();
-  const reviewDecision = String(pr.reviewDecision ?? '');
-  const mergeable = String(pr.mergeable ?? '');
-  const mergeStateStatus = String(pr.mergeStateStatus ?? '');
+  // #1513: `mergeable`/`mergeStateStatus` are part of this same richest
+  // single `pr view` call (no extra network round-trip) so the branch-
+  // currency gate below can pair a live `BEHIND` state with the up-to-date-
+  // head requirement resolved from `branchRules`/`branchProtection`.
+  const snapshot = port.getChangeRequestReadinessSnapshot(args.prNumber);
+  const prHeadSha = snapshot.headSha;
+  const baseRefName = snapshot.baseRefName;
+  const prUrl = snapshot.url;
+  const prAuthorLogin = snapshot.authorLogin.toLowerCase();
+  const reviewDecision = snapshot.reviewDecision ?? '';
+  const mergeable = snapshot.mergeable;
+  const mergeStateStatus = snapshot.mergeStateStatus;
   if (args.claimless) {
-    const closingRefs = Array.isArray(pr.closingIssuesReferences)
-      ? pr.closingIssuesReferences
+    const closingRefs = Array.isArray(snapshot.closingIssuesReferences)
+      ? snapshot.closingIssuesReferences
       : [];
     if (closingRefs.length > 0) {
       throw new Error(
@@ -494,7 +442,7 @@ export function collectPreMergeReadiness(
   const developmentBranchInspection = inspectDevelopmentBranch(iddConfig);
   const liveDefaultBranch =
     developmentBranchInspection.status === 'absent'
-      ? readGithubRepoDefaultBranch(owner, repo)
+      ? port.getRepositoryDefaultBranch(owner, repo)
       : null;
   const developmentBranchTarget = {
     ...resolveEffectiveDevelopmentBranch(iddConfig, liveDefaultBranch),
@@ -502,7 +450,7 @@ export function collectPreMergeReadiness(
   };
   const encodedBaseRefName = encodeURIComponent(baseRefName);
 
-  // #1483: sourced from the same `gh pr view` call above (the
+  // #1483: sourced from the same `pr view` snapshot above (the
   // `statusCheckRollup` field), not a separate `gh pr checks` call --
   // `statusCheckRollup`'s GraphQL union already tags each entry with a
   // real producer identity (`__typename`: `CheckRun` vs. `StatusContext`,
@@ -512,15 +460,17 @@ export function collectPreMergeReadiness(
   // successive calls a few seconds apart returned different check-run
   // counts for the same PR), so this is the single source of truth for
   // both the check identity and its dedup discriminator.
-  const checks = (pr.statusCheckRollup ?? []).map(
-    normalizeStatusCheckRollupEntry,
-  );
+  const checks = (
+    (snapshot.statusCheckRollup as StatusCheckRollupPayload[] | null) ?? []
+  ).map(normalizeStatusCheckRollupEntry);
   const trustEmptyProtectionReads = readTrustEmptyProtectionReads();
   const branchRulesRead = fetchGovernanceJson<BranchRulePayload[]>(
     `repos/${owner}/${repo}/rules/branches/${encodedBaseRefName}`,
     true,
     trustEmptyProtectionReads,
     [],
+    () =>
+      unwrapGovernanceOutcome(port.listBranchRules(owner, repo, baseRefName)),
   );
   const branchRules = branchRulesRead.value;
   const branchRulesetsRead = fetchBranchRulesets(
@@ -528,6 +478,11 @@ export function collectPreMergeReadiness(
     repo,
     branchRules,
     trustEmptyProtectionReads,
+    (path) =>
+      unwrapGovernanceOutcome(port.getRepositoryRulesetDetail(path)) as Record<
+        string,
+        unknown
+      >,
   );
   const branchRulesets = branchRulesetsRead.value;
   const branchProtectionRead = fetchGovernanceJson<BranchProtectionPayload>(
@@ -535,6 +490,10 @@ export function collectPreMergeReadiness(
     false,
     trustEmptyProtectionReads,
     {},
+    () =>
+      unwrapGovernanceOutcome(
+        port.getBranchProtection(owner, repo, baseRefName),
+      ),
   );
   const branchProtection = branchProtectionRead.value;
   // #1377: a masked-403-as-404 on either read means the required-check set
@@ -551,38 +510,30 @@ export function collectPreMergeReadiness(
   // `branchProtection`) -- so it is threaded separately rather than folded
   // into `protectionReadsUnreadable`.
   const branchRulesetsUnreadable = branchRulesetsRead.unreadable;
-  const reviews = ghApiJson(
-    `repos/${owner}/${repo}/pulls/${args.prNumber}/reviews`,
-    true,
-  ) as ReviewPayload[];
-  const requestedReviewers = ghApiJson(
-    `repos/${owner}/${repo}/pulls/${args.prNumber}/requested_reviewers`,
-    false,
-  ) as { users?: GhAuthorPayload[] | null };
-  const timelineEvents = ghApiJson(
-    `repos/${owner}/${repo}/issues/${args.prNumber}/timeline`,
-    true,
-    ['-H', 'Accept: application/vnd.github+json'],
+  const reviews = port.listReviews(args.prNumber) as ReviewPayload[];
+  const requestedReviewerLogins = port.getChangeRequestRequestedReviewerLogins(
+    args.prNumber,
+  );
+  const timelineEvents = port.getWorkItemTimeline(
+    args.prNumber,
   ) as TimelineEventPayload[];
-  const comments = ghApiJson(
-    `repos/${owner}/${repo}/issues/${args.prNumber}/comments`,
-    true,
-  ) as IssueCommentPayload[];
+  const comments = port
+    .listWorkItemComments(args.prNumber)
+    .map(toIssueCommentPayload);
   const claimComments = args.claimless
     ? []
-    : (ghApiJson(
-        `repos/${owner}/${repo}/issues/${args.claimIssueNumber}/comments`,
-        true,
-      ) as IssueCommentPayload[]);
-  const threads = fetchReviewThreads(owner, repo, args.prNumber);
-  const changedFiles = (
-    ghApiJson(`repos/${owner}/${repo}/pulls/${args.prNumber}/files`, true) as {
-      filename?: unknown;
-    }[]
-  )
-    .map((file) => String(file.filename ?? ''))
+    : port
+        // Non-null: the earlier `!args.claimless && !args.claimIssueNumber`
+        // guard already rejected this branch with a missing claim issue.
+        .listWorkItemComments(args.claimIssueNumber as number)
+        .map(toIssueCommentPayload);
+  const threads = port.listChangeRequestReviewThreadsWithComments(
+    args.prNumber,
+  );
+  const changedFiles = port
+    .listChangeRequestChangedFiles(args.prNumber)
     .filter(Boolean);
-  const codeownersText = fetchCodeownersText(owner, repo, baseRefName);
+  const codeownersText = fetchCodeownersText(port, owner, repo, baseRefName);
   const {
     eligible: eligibleCodeownerUserLogins,
     unreadable: eligibleCodeownerUserLoginsUnreadable,
@@ -592,6 +543,7 @@ export function collectPreMergeReadiness(
     resolveCodeownersForFiles(codeownersText, changedFiles).codeownerUserLogins,
   );
   const viewerTeamSlugs = resolveViewerClassicBypassTeamSlugs(
+    port,
     owner,
     viewerLogin,
     branchProtection,
@@ -602,7 +554,7 @@ export function collectPreMergeReadiness(
     viewerLogin,
     ...configuredTrustedActors,
     ...(collaboratorTrustEnabled
-      ? resolveTrustedCollaboratorMarkerLogins(owner, repo, [
+      ? resolveTrustedCollaboratorMarkerLogins(port, [
           ...comments,
           ...claimComments,
         ])
@@ -631,9 +583,8 @@ export function collectPreMergeReadiness(
   let prFirstCommitAt: string | null = null;
   if (forcedHandoffEnabled) {
     try {
-      const prCommits = ghApiJson(
-        `repos/${owner}/${repo}/pulls/${args.prNumber}/commits`,
-        true,
+      const prCommits = port.listChangeRequestCommits(
+        args.prNumber,
       ) as PrCommitPayload[];
       prFirstCommitAt = resolvePrFirstCommitAt(prCommits);
     } catch {
@@ -665,7 +616,7 @@ export function collectPreMergeReadiness(
   const {
     reviews: advisoryConvergenceReviews,
     headCommittedAt: advisoryConvergenceHeadCommittedAt,
-  } = fetchReviewsAndHeadCommit(owner, repo, args.prNumber);
+  } = fetchReviewsAndHeadCommit(owner, repo, args.prNumber, port);
   const advisoryConvergenceDeadlineMinutes =
     readAdvisoryConvergenceDeadlineMinutes();
   const secondaryQuietWindowMinutes = readAdvisorySecondaryQuietWindowMinutes();
@@ -725,6 +676,7 @@ export function collectPreMergeReadiness(
   const copilotUnavailable = copilotRecovery.state === 'COPILOT_UNAVAILABLE';
   const advisoryConvergenceOutageRelief =
     resolveAdvisoryConvergenceOutageRelief({
+      port,
       owner,
       repo,
       copilotUnavailable,
@@ -744,7 +696,7 @@ export function collectPreMergeReadiness(
       branchProtection,
       protectionReadsUnreadable,
       branchRulesetsUnreadable,
-      requestedReviewers: requestedReviewers.users ?? [],
+      requestedReviewers: requestedReviewerLogins,
       timelineEvents,
       claimEvents: claimComments.map(normalizeClaimComment),
       changedFiles,
@@ -1003,6 +955,26 @@ function printHelp(): void {
  * field-mapping drift (e.g. `user.login` -> `author.login`) would surface
  * only in production.
  */
+/**
+ * Map a `ProviderPort.listWorkItemComments` result back onto the REST
+ * `issues/{n}/comments` shape this file's `normalizeComment`/
+ * `normalizeClaimComment`/`resolveTrustedCollaboratorMarkerLogins`/
+ * `deriveIddAgentLogins` call already expect -- keeps every one of those
+ * unchanged rather than reshaping them for the port's flat `authorLogin`
+ * field, which `provider-outage-declaration.mts`'s own `CommentLike` (fed
+ * the same shim output for `resolveAdvisoryConvergenceOutageRelief`'s
+ * declaration comments) does not recognize either.
+ */
+function toIssueCommentPayload(comment: ProviderComment): IssueCommentPayload {
+  return {
+    id: comment.id,
+    body: comment.body,
+    created_at: comment.createdAt,
+    updated_at: comment.updatedAt,
+    user: { login: comment.authorLogin },
+  };
+}
+
 export function normalizeComment(comment: IssueCommentPayload) {
   return {
     id: String(comment.id ?? ''),
@@ -1045,38 +1017,36 @@ export function normalizeReview(review: ReviewPayload) {
 }
 
 /**
- * Normalize a raw GraphQL `reviewThreads` node into the summarizer-shape
- * `ThreadLike`. Exported for direct unit testing (#1708), see
- * {@link normalizeComment}'s doc comment.
+ * Normalize a `ProviderPort.listChangeRequestReviewThreadsWithComments`
+ * node into the summarizer-shape `ThreadLike`. Exported for direct unit
+ * testing (#1708), see {@link normalizeComment}'s doc comment. `id` and
+ * `reviewerReopenedAt` are omitted (both `ThreadLike` fields are optional):
+ * the pre-migration GraphQL query never selected `reviewerReopenedAt` at
+ * all (`inferReviewerReopenedAt` always returned `''`), and the outer
+ * thread `id` fed only `ThreadLike`'s own optional diagnostic fields, not
+ * any gating decision -- `review-activity-snapshot.mts`'s own
+ * `normalizeThread` already dropped both for the identical shared
+ * GraphQL query, reviewed and merged without incident.
  */
-export function normalizeThread(thread: ReviewThreadPayload) {
+export function normalizeThread(thread: ProviderReviewThreadWithComments) {
   return {
-    id: thread.id,
     isResolved: Boolean(thread.isResolved),
     updatedAt: '',
-    reviewerReopenedAt: inferReviewerReopenedAt(thread),
     comments: {
-      pageInfo: {
-        hasNextPage: Boolean(thread.comments?.pageInfo?.hasNextPage),
-      },
-      nodes: (thread.comments?.nodes ?? []).map((comment) => ({
-        author: { login: comment.author?.login ?? '' },
-        body: comment.body ?? '',
-        createdAt: comment.createdAt ?? '',
-        updatedAt: comment.updatedAt ?? comment.createdAt ?? '',
-        pullRequestReview: { id: comment.pullRequestReview?.id ?? null },
+      pageInfo: { hasNextPage: false },
+      nodes: thread.comments.map((comment) => ({
+        author: { login: comment.authorLogin },
+        body: comment.body,
+        createdAt: comment.createdAt,
+        updatedAt: comment.updatedAt || comment.createdAt,
+        pullRequestReview: { id: comment.pullRequestReviewId ?? null },
       })),
     },
   };
 }
 
-function inferReviewerReopenedAt(thread: ReviewThreadPayload): string {
-  return thread.reviewerReopenedAt ?? '';
-}
-
 function resolveTrustedCollaboratorMarkerLogins(
-  owner: string,
-  repo: string,
+  port: ProviderPort,
   comments: IssueCommentPayload[],
 ): string[] {
   const markerAuthors = [
@@ -1091,16 +1061,8 @@ function resolveTrustedCollaboratorMarkerLogins(
   ];
 
   return markerAuthors.filter((login) => {
-    const permission = safeGhText(
-      [
-        'api',
-        `repos/${owner}/${repo}/collaborators/${encodeURIComponent(login)}/permission`,
-        '--jq',
-        '.permission',
-      ],
-      GH_TEXT_LOOP_OPTIONS,
-    ).toLowerCase();
-
+    const result = port.getCollaboratorPermission(login);
+    const permission = result.outcome === 'found' ? result.permission : '';
     return (
       permission === 'admin' ||
       permission === 'maintain' ||
@@ -1132,24 +1094,32 @@ export interface EligibleCodeownerResolution {
 /**
  * Exported for direct unit testing (matching this file's established
  * `fetchBranchRulesets`/`fetchGovernanceJson` injectable-fetch pattern) --
- * `fetchPermission` defaults to the real live `gh api .../permission` call
- * and is overridden in tests to simulate a 404 vs. a transient failure
- * without mocking `execFileSync`.
+ * `fetchPermission` defaults to the real `ProviderPort.getCollaboratorPermission`
+ * read and is overridden in tests to simulate a 404 vs. a transient failure
+ * without a live adapter. The default maps the port's never-throwing
+ * `{outcome}` result back onto this function's own throw-based contract
+ * (a synthetic `(HTTP 404)` error on `not-collaborator`, matching
+ * `idd-merge-execute.mts`'s `resolveRemoteSoloCodeownerAdminFallbackMode`
+ * default) so the `catch` block below -- and its existing tests -- stay
+ * byte-identical.
  */
 export function resolveEligibleCodeownerUserLogins(
   owner: string,
   repo: string,
   logins: unknown[],
-  fetchPermission: (login: string) => string = (login) =>
-    ghText(
-      [
-        'api',
-        `repos/${owner}/${repo}/collaborators/${encodeURIComponent(login)}/permission`,
-        '--jq',
-        '.permission',
-      ],
-      GH_TEXT_LOOP_OPTIONS,
-    ),
+  fetchPermission: (login: string) => string = (login) => {
+    const result = createGithubProviderAdapter(
+      owner,
+      repo,
+    ).getCollaboratorPermission(login);
+    if (result.outcome === 'not-collaborator') {
+      throwSyntheticGhNotFound();
+    }
+    if (result.outcome === 'error') {
+      throw new Error(result.error.message);
+    }
+    return result.permission;
+  },
 ): EligibleCodeownerResolution {
   let unreadable = false;
   const eligible = normalizeTrustedMarkerLogins(logins).filter((login) => {
@@ -1179,16 +1149,14 @@ export function resolveEligibleCodeownerUserLogins(
   return { eligible, unreadable };
 }
 
-function fetchCodeownersText(owner: string, repo: string, ref: string): string {
+function fetchCodeownersText(
+  port: ProviderPort,
+  owner: string,
+  repo: string,
+  ref: string,
+): string {
   const payloads = ['.github/CODEOWNERS', 'CODEOWNERS', 'docs/CODEOWNERS'].map(
-    (path) => {
-      return ghApiJson(
-        `repos/${owner}/${repo}/contents/${path}?ref=${encodeURIComponent(ref)}`,
-        false,
-        [],
-        { allowHttpStatuses: [404] },
-      );
-    },
+    (path) => port.getRepositoryContentAtRef(owner, repo, path, ref),
   );
   return selectCodeownersText(payloads);
 }
@@ -1231,18 +1199,25 @@ function fetchCodeownersText(owner: string, repo: string, ref: string): string {
  * the empty/skipped result the gate expects.
  *
  * `fetchRulesetDetail` is injectable for tests; production uses the default
- * `gh api` call.
+ * `ProviderPort.getRepositoryRulesetDetail` read, mapped back onto this
+ * function's throw-based contract the same way
+ * {@link resolveEligibleCodeownerUserLogins}'s default does.
  */
 export function fetchBranchRulesets(
   owner: string,
   repo: string,
   branchRules: BranchRulePayload[],
   trustEmptyReads = false,
-  fetchRulesetDetail: (path: string) => Record<string, unknown> = (path) =>
-    ghApiJson(path, false, [
-      '-H',
-      'Accept: application/vnd.github+json',
-    ]) as Record<string, unknown>,
+  fetchRulesetDetail: (path: string) => Record<string, unknown> = (path) => {
+    const outcome = createGithubProviderAdapter(
+      owner,
+      repo,
+    ).getRepositoryRulesetDetail(path);
+    if (outcome.outcome === 'not-found') {
+      throwSyntheticGhNotFound();
+    }
+    return outcome.value as Record<string, unknown>;
+  },
 ): GovernanceReadResult<Record<string, unknown>[]> {
   const rulesetPaths: string[] = [];
   const seenPaths = new Set<string>();
@@ -1279,6 +1254,7 @@ export function fetchBranchRulesets(
 }
 
 function resolveViewerClassicBypassTeamSlugs(
+  port: ProviderPort,
   owner: string,
   viewerLogin: string,
   branchProtection: BranchProtectionPayload,
@@ -1302,17 +1278,9 @@ function resolveViewerClassicBypassTeamSlugs(
         extractTeamOrgFromHtmlUrl(team?.html_url) ??
         owner,
     ).trim();
-    const state = safeGhText(
-      [
-        'api',
-        `orgs/${encodeURIComponent(org)}/teams/${encodeURIComponent(slug)}/memberships/${encodeURIComponent(
-          viewerLogin,
-        )}`,
-        '--jq',
-        '.state',
-      ],
-      GH_TEXT_LOOP_OPTIONS,
-    ).toLowerCase();
+    const state = port
+      .getTeamMembershipStateSafe(org, slug, viewerLogin)
+      .toLowerCase();
     if (state === 'active') {
       viewerTeams.add(slug);
     }
@@ -1325,199 +1293,50 @@ function extractTeamOrgFromHtmlUrl(htmlUrl: unknown): string {
   return match?.[1] ?? '';
 }
 
-function fetchReviewThreads(
-  owner: string,
-  repo: string,
-  prNumber: number,
-): ReviewThreadPayload[] {
-  const nodes: ReviewThreadPayload[] = [];
-  let cursor: string | null | undefined = null;
-
-  while (true) {
-    const payload = ghGraphql(
-      `
-        query($owner: String!, $repo: String!, $number: Int!, $cursor: String) {
-          repository(owner: $owner, name: $repo) {
-            pullRequest(number: $number) {
-              reviewThreads(first: 100, after: $cursor) {
-                pageInfo { hasNextPage endCursor }
-                nodes {
-                  id
-                  isResolved
-                  comments(first: 100) {
-                    pageInfo { hasNextPage endCursor }
-                    nodes {
-                      body
-                      createdAt
-                      updatedAt
-                      author { login }
-                      pullRequestReview { id }
-                    }
-                  }
-                }
-              }
-            }
-          }
-        }`,
-      {
-        owner,
-        repo,
-        number: Number.parseInt(String(prNumber), 10),
-        cursor,
-      },
-    ) as {
-      data?: {
-        repository?: {
-          pullRequest?: {
-            reviewThreads?: ReviewThreadsConnectionPayload | null;
-          } | null;
-        } | null;
-      } | null;
-    };
-
-    const reviewThreads = payload?.data?.repository?.pullRequest?.reviewThreads;
-    for (const thread of reviewThreads?.nodes ?? []) {
-      if (thread.comments?.pageInfo?.hasNextPage) {
-        // hasNextPage with a missing thread id or cursor is a malformed
-        // payload; fail fast with a clear message instead of a confusing
-        // GraphQL error or a silently truncated thread.
-        if (!thread.id || !thread.comments.pageInfo.endCursor) {
-          throw new Error(
-            'review thread pagination payload is missing id or endCursor',
-          );
-        }
-        thread.comments.nodes.push(
-          ...fetchThreadCommentPages(
-            thread.id,
-            thread.comments.pageInfo.endCursor,
-          ),
-        );
-        thread.comments.pageInfo.hasNextPage = false;
-      }
-    }
-    nodes.push(...(reviewThreads?.nodes ?? []));
-
-    if (!reviewThreads?.pageInfo?.hasNextPage) {
-      break;
-    }
-    // hasNextPage with a missing cursor would re-fetch the first page
-    // forever; fail fast on the malformed payload instead.
-    if (!reviewThreads.pageInfo.endCursor) {
-      throw new Error('review thread pagination payload is missing endCursor');
-    }
-    cursor = reviewThreads.pageInfo.endCursor;
-  }
-
-  return nodes;
+/**
+ * Synthesize the same `(HTTP 404)`-in-`stderr` error shape a thrown `gh`
+ * failure would have carried, so a caller's existing `deriveGhHttpStatus(error)
+ * === 404` classification (unchanged by this migration) still recognizes a
+ * port `{outcome:'not-found'}`/`{outcome:'not-collaborator'}` result --
+ * mirrors `idd-merge-execute.mts`'s `resolveRemoteSoloCodeownerAdminFallbackMode`
+ * default.
+ */
+function throwSyntheticGhNotFound(): never {
+  const notFound = new Error('Not Found (HTTP 404)') as Error & {
+    stderr?: string;
+  };
+  notFound.stderr = 'Not Found (HTTP 404)';
+  throw notFound;
 }
 
-function fetchThreadCommentPages(
-  threadId: string,
-  afterCursor: string,
-): ThreadCommentPayload[] {
-  const nodes: ThreadCommentPayload[] = [];
-  let cursor: string | null | undefined = afterCursor;
-
-  while (cursor) {
-    const payload = ghGraphql(
-      `
-        query($id: ID!, $cursor: String) {
-          node(id: $id) {
-            ... on PullRequestReviewThread {
-              comments(first: 100, after: $cursor) {
-                pageInfo { hasNextPage endCursor }
-                nodes {
-                  body
-                  createdAt
-                  updatedAt
-                  author { login }
-                  pullRequestReview { id }
-                }
-              }
-            }
-          }
-        }`,
-      { id: threadId, cursor },
-    ) as {
-      data?: {
-        node?: {
-          comments?: {
-            pageInfo?: PageInfoPayload | null;
-            nodes?: ThreadCommentPayload[] | null;
-          } | null;
-        } | null;
-      } | null;
-    };
-
-    const comments = payload?.data?.node?.comments;
-    nodes.push(...(comments?.nodes ?? []));
-    if (comments?.pageInfo?.hasNextPage && !comments.pageInfo.endCursor) {
-      throw new Error('thread comment pagination payload is missing endCursor');
-    }
-    cursor = comments?.pageInfo?.hasNextPage
-      ? comments.pageInfo.endCursor
-      : null;
+/** Unwrap a `ProviderGovernanceReadOutcome`, throwing the same synthetic
+ * 404 {@link throwSyntheticGhNotFound} does on `not-found` so a caller
+ * passing this as `fetchGovernanceJson`'s `fetchJson` thunk preserves that
+ * function's existing `deriveGhHttpStatus(error) === 404` catch. */
+function unwrapGovernanceOutcome<T>(
+  outcome: { outcome: 'ok'; value: T } | { outcome: 'not-found' },
+): T {
+  if (outcome.outcome === 'not-found') {
+    throwSyntheticGhNotFound();
   }
-
-  return nodes;
-}
-
-function ghGraphql(
-  query: string,
-  variables: Record<string, string | number | null | undefined>,
-): unknown {
-  const args = ['api', 'graphql', '-f', `query=${query}`];
-  for (const [key, value] of Object.entries(variables)) {
-    if (value === null || value === undefined) {
-      continue;
-    }
-    if (typeof value === 'number') {
-      args.push('-F', `${key}=${value}`);
-      continue;
-    }
-    args.push('-f', `${key}=${value}`);
-  }
-  return JSON.parse(runGh(args).trim() || '{}');
-}
-
-function ghJson(args: string[], options: RunGhOptions = {}): unknown {
-  return JSON.parse(runGh(args, options).trim() || '[]');
-}
-
-function ghApiJson(
-  path: string,
-  paginate = false,
-  extraArgs: string[] = [],
-  options: RunGhOptions = {},
-): unknown {
-  const args = ['api', path, ...extraArgs];
-  if (paginate) {
-    // gh api with --paginate and --jq '.[]' emits one JSON object per line.
-    // --slurp landed in gh v2.48.0, but Ubuntu 24.04 LTS ships gh v2.45.0
-    // via apt, so keep the NDJSON-compatible form here.
-    args.push('--paginate', '--jq', '.[]');
-  }
-  const raw = runGh(args, options).trim();
-  if (!raw) {
-    return paginate ? [] : {};
-  }
-  if (paginate) {
-    return parsePaginatedGhNdjson(raw);
-  }
-  return JSON.parse(raw);
+  return outcome.value;
 }
 
 /**
  * Decide how a thrown `gh` failure is tolerated, returning the string result to
- * use or `undefined` when the caller must re-throw.
+ * use or `undefined` when the caller must re-throw. No longer called by this
+ * file's own collection path (#2267 routed every call site onto the provider
+ * port, which classifies its own failures), but kept -- pure, no `gh`
+ * invocation of its own -- for `idd-doctor.mts`'s own `fetchGhApiJsonAt`
+ * (an independent, un-migrated `gh api` caller) and its direct tests below.
  *
  * - `allowHttpStatuses` matches the HTTP status derived from the gh error via
- *   the shared `deriveGhHttpStatus` (the same extractor `fetchBranchRulesets`
- *   uses) and yields an **empty** string. `gh api` writes the JSON error body to
- *   stdout on a non-2xx response (a 404 prints `{"message":"Not Found",…}`), so
- *   returning that body would make `ghApiJson` parse the error object instead of
- *   `{}` / `[]`. An allowed status never carries useful data, so the empty
- *   result lets `ghApiJson` resolve it to an empty object / array.
+ *   the shared `deriveGhHttpStatus` and yields an **empty** string. `gh api`
+ *   writes the JSON error body to stdout on a non-2xx response (a 404 prints
+ *   `{"message":"Not Found",…}`), so returning that body would make the
+ *   caller parse the error object instead of `{}` / `[]`. An allowed status
+ *   never carries useful data, so the empty result resolves cleanly to an
+ *   empty object / array instead.
  * - `allowStatuses` matches the process exit code and returns stdout **only**
  *   when the body is genuinely the wanted JSON (`gh` commands that exit non-zero
  *   yet still print the data, e.g. the checks rollup).
@@ -1548,23 +1367,6 @@ export function resolveToleratedGhFailure(
     }
   }
   return undefined;
-}
-
-function runGh(args: string[], options: RunGhOptions = {}): string {
-  try {
-    return ghText(args, {
-      ...GH_TEXT_LOOP_OPTIONS,
-      ...(args.includes('--paginate')
-        ? { timeout: DEFAULT_GH_PAGINATED_TIMEOUT_MS }
-        : {}),
-    });
-  } catch (error) {
-    const tolerated = resolveToleratedGhFailure(error, options);
-    if (tolerated !== undefined) {
-      return tolerated;
-    }
-    throw error;
-  }
 }
 
 function splitCsv(value: unknown): string[] {
@@ -1694,12 +1496,14 @@ export function resolveDeclarationActiveSince(
 // pre-declaration run left it at while this gate reports covered,
 // reproducing #2021's "ready but merge blocked" class one layer deeper.
 function resolveAdvisoryConvergenceOutageRelief({
+  port,
   owner,
   repo,
   copilotUnavailable,
   waivableCheckSelectors,
   now,
 }: {
+  port: ProviderPort;
   owner: string;
   repo: string;
   copilotUnavailable: boolean;
@@ -1716,10 +1520,9 @@ function resolveAdvisoryConvergenceOutageRelief({
     }
     const targetIssue = policy.providerOutage.declarationTarget;
     if (!targetIssue) return notRelieved;
-    const declarationComments = ghApiJson(
-      `repos/${owner}/${repo}/issues/${targetIssue}/comments`,
-      true,
-    ) as IssueCommentPayload[];
+    const declarationComments = port
+      .listWorkItemComments(targetIssue)
+      .map(toIssueCommentPayload);
     const authorityOf = (actorLogin: string): AuthorityEvidence =>
       normalizeAuthorityEvidence(
         resolveCollaboratorAuthority({ owner, repo, actor: actorLogin }),
@@ -1830,15 +1633,23 @@ interface GovernanceReadResult<T> {
  * permission error.
  *
  * `fetchJson` is injectable for tests (mirrors `fetchBranchRulesets`'s
- * `fetchRulesetDetail` parameter); production uses the default `gh api` call.
+ * `fetchRulesetDetail` parameter). No generic default transport: unlike
+ * `fetchBranchRulesets`/`resolveEligibleCodeownerUserLogins`, this helper
+ * has no owner/repo/ref of its own to construct a port-backed read from --
+ * every real caller (this file's own two governance reads, plus
+ * `idd-doctor.mts`'s independent `fetchGhApiJsonAt`-backed caller) already
+ * passes an explicit `fetchJson`.
  */
 export function fetchGovernanceJson<T>(
   path: string,
   paginate: boolean,
   trustEmptyReads: boolean,
   emptyValue: T,
-  fetchJson: (path: string, paginate: boolean) => unknown = (p, pg) =>
-    ghApiJson(p, pg, []),
+  fetchJson: (path: string, paginate: boolean) => unknown = () => {
+    throw new Error(
+      'fetchGovernanceJson: no default transport; pass an explicit fetchJson',
+    );
+  },
 ): GovernanceReadResult<T> {
   try {
     return { value: fetchJson(path, paginate) as T, unreadable: false };

@@ -5,15 +5,17 @@
 // source named above by `pnpm run build`. Edit the .mts source, never the
 // generated .mjs. See docs/typescript-sources.md.
 import { parseCliArgs } from './cli-args.mjs';
-import { DEFAULT_GH_PAGINATED_TIMEOUT_MS, ghText } from './gh-exec.mjs';
 import { loadIddConfig } from './idd-config.mjs';
 import {
   buildActivitySnapshotSummary,
-  parsePaginatedGhNdjson,
   resolveAdvisoryBotLogins,
   resolveTrustedMarkerActors,
   summarizeDispositionEvidenceForGate,
 } from './protocol-helpers.mjs';
+import {
+  createGithubProviderAdapter,
+  resolveCurrentGithubRepository,
+} from './provider-adapter-github.mjs';
 
 // Flag-spec keys stay the dashed literal on purpose (never bare keys like
 // `pr:`): tests/flag-name-matrix.test.mts scans this file's *compiled*
@@ -51,12 +53,11 @@ function main() {
   if (!args.prNumber) {
     throw new Error('missing required --pr <number> argument');
   }
-  const owner =
-    args.owner ||
-    ghText(['repo', 'view', '--json', 'owner', '--jq', '.owner.login']);
-  const repo =
-    args.repo || ghText(['repo', 'view', '--json', 'name', '--jq', '.name']);
-  const repoRef = `${owner}/${repo}`;
+  const currentRepo =
+    args.owner && args.repo ? null : resolveCurrentGithubRepository();
+  const owner = args.owner || currentRepo?.owner || '';
+  const repo = args.repo || currentRepo?.repo || '';
+  const port = createGithubProviderAdapter(owner, repo);
   const iddConfig = loadIddConfig();
   const { actors: trustedMarkerLogins, source: trustedMarkerActorsSource } =
     resolveTrustedMarkerActors({
@@ -70,53 +71,23 @@ function main() {
       envValue: process.env.IDD_ADVISORY_BOT_LOGINS,
       config: iddConfig,
     });
-  // #1833: also reads `author.login` (not just `headRefOid`) in this same
-  // call -- `summarizeDispositionEvidenceForGate` below needs the PR
-  // author's login to exclude the author's own comments/thread replies from
-  // "missing disposition" (they never require one), the same way
-  // `buildPreMergeReadinessSummary`'s own call to that function does.
-  // `ghJson`'s empty-response fallback is `'[]'` (array-shaped, tuned for
-  // the paginated `checks` call above); on this object-shaped `pr view`
-  // call an empty response would leave `headRefOid`/`author` both
-  // undefined, so `headSha` below becomes `''` and
-  // `watermarkFieldsFromSnapshot` (post-idd-marker.mts) throws "missing a
-  // usable headSha" downstream -- fail-closed, not a silent bad watermark.
-  const prView = ghJson([
-    'pr',
-    'view',
-    String(args.prNumber),
-    '-R',
-    repoRef,
-    '--json',
-    'headRefOid,author',
-  ]);
-  const headSha = String(prView.headRefOid ?? '');
-  const prAuthorLogin = String(prView.author?.login ?? '')
-    .trim()
-    .toLowerCase();
-  const checks = ghJson(
-    [
-      'pr',
-      'checks',
-      String(args.prNumber),
-      '-R',
-      repoRef,
-      '--json',
-      'name,state,completedAt',
-      '--jq',
-      '.',
-    ],
-    { allowStatuses: [1, 8] },
+  // #1833: also reads the PR author's login (not just headSha) --
+  // `summarizeDispositionEvidenceForGate` below needs it to exclude the
+  // author's own comments/thread replies from "missing disposition" (they
+  // never require one), the same way `buildPreMergeReadinessSummary`'s own
+  // call to that function does. A missing/unresolvable head SHA fails
+  // closed downstream (`watermarkFieldsFromSnapshot` in post-idd-marker.mts
+  // throws "missing a usable headSha"), not a silent bad watermark.
+  const { headSha: rawHeadSha, authorLogin: rawAuthorLogin } =
+    port.getChangeRequestHeadShaAndAuthor(args.prNumber);
+  const headSha = rawHeadSha;
+  const prAuthorLogin = rawAuthorLogin.trim().toLowerCase();
+  const checks = port.listChangeRequestChecks(args.prNumber);
+  const reviews = port.listReviews(args.prNumber);
+  const comments = port.listWorkItemComments(args.prNumber);
+  const threads = port.listChangeRequestReviewThreadsWithComments(
+    args.prNumber,
   );
-  const reviews = ghApiJson(
-    `repos/${owner}/${repo}/pulls/${args.prNumber}/reviews`,
-    true,
-  );
-  const comments = ghApiJson(
-    `repos/${owner}/${repo}/issues/${args.prNumber}/comments`,
-    true,
-  );
-  const threads = fetchReviewThreads(owner, repo, args.prNumber);
   const normalizedComments = comments.map(normalizeComment);
   const normalizedThreads = threads.map(normalizeThread);
   const summary = buildActivitySnapshotSummary(
@@ -219,10 +190,10 @@ function printHelp() {
 }
 function normalizeComment(comment) {
   return {
-    author: { login: comment.user?.login ?? '' },
-    body: comment.body ?? '',
-    createdAt: comment.created_at ?? '',
-    updatedAt: comment.updated_at ?? comment.created_at ?? '',
+    author: { login: comment.authorLogin },
+    body: comment.body,
+    createdAt: comment.createdAt,
+    updatedAt: comment.updatedAt || comment.createdAt,
   };
 }
 function normalizeReview(review) {
@@ -236,189 +207,17 @@ function normalizeReview(review) {
 }
 function normalizeThread(thread) {
   return {
-    id: thread.id,
     isResolved: Boolean(thread.isResolved),
     updatedAt: '',
     comments: {
-      pageInfo: {
-        hasNextPage: Boolean(thread.comments?.pageInfo?.hasNextPage),
-      },
-      nodes: (thread.comments?.nodes ?? []).map((comment) => ({
-        author: { login: comment.author?.login ?? '' },
-        body: comment.body ?? '',
-        createdAt: comment.createdAt ?? '',
-        updatedAt: comment.updatedAt ?? comment.createdAt ?? '',
-        pullRequestReview: { id: comment.pullRequestReview?.id ?? null },
+      pageInfo: { hasNextPage: false },
+      nodes: thread.comments.map((comment) => ({
+        author: { login: comment.authorLogin },
+        body: comment.body,
+        createdAt: comment.createdAt,
+        updatedAt: comment.updatedAt || comment.createdAt,
+        pullRequestReview: { id: comment.pullRequestReviewId ?? null },
       })),
     },
   };
-}
-function fetchReviewThreads(owner, repo, prNumber) {
-  const nodes = [];
-  let cursor = null;
-  while (true) {
-    const payload = ghGraphql(
-      `
-        query($owner: String!, $repo: String!, $number: Int!, $cursor: String) {
-          repository(owner: $owner, name: $repo) {
-            pullRequest(number: $number) {
-              reviewThreads(first: 100, after: $cursor) {
-                pageInfo { hasNextPage endCursor }
-                nodes {
-                  id
-                  isResolved
-                  comments(first: 100) {
-                    pageInfo { hasNextPage endCursor }
-                    nodes {
-                      body
-                      createdAt
-                      updatedAt
-                      author { login }
-                      pullRequestReview { id }
-                    }
-                  }
-                }
-              }
-            }
-          }
-        }`,
-      {
-        owner,
-        repo,
-        number: Number.parseInt(String(prNumber), 10),
-        cursor,
-      },
-    );
-    const reviewThreads = payload?.data?.repository?.pullRequest?.reviewThreads;
-    for (const thread of reviewThreads?.nodes ?? []) {
-      if (thread.comments?.pageInfo?.hasNextPage) {
-        // hasNextPage with a missing thread id or cursor is a malformed
-        // payload; fail fast with a clear message instead of a confusing
-        // GraphQL error or a silently truncated thread.
-        if (!thread.id || !thread.comments.pageInfo.endCursor) {
-          throw new Error(
-            'review thread pagination payload is missing id or endCursor',
-          );
-        }
-        thread.comments.nodes.push(
-          ...fetchThreadCommentPages(
-            thread.id,
-            thread.comments.pageInfo.endCursor,
-          ),
-        );
-        thread.comments.pageInfo.hasNextPage = false;
-      }
-    }
-    nodes.push(...(reviewThreads?.nodes ?? []));
-    if (!reviewThreads?.pageInfo?.hasNextPage) {
-      break;
-    }
-    // hasNextPage with a missing cursor would re-fetch the first page
-    // forever; fail fast on the malformed payload instead.
-    if (!reviewThreads.pageInfo.endCursor) {
-      throw new Error('review thread pagination payload is missing endCursor');
-    }
-    cursor = reviewThreads.pageInfo.endCursor;
-  }
-  return nodes;
-}
-function fetchThreadCommentPages(threadId, afterCursor) {
-  const nodes = [];
-  let cursor = afterCursor;
-  while (cursor) {
-    const payload = ghGraphql(
-      `
-        query($id: ID!, $cursor: String) {
-          node(id: $id) {
-            ... on PullRequestReviewThread {
-              comments(first: 100, after: $cursor) {
-                pageInfo { hasNextPage endCursor }
-                nodes {
-                  body
-                  createdAt
-                  updatedAt
-                  author { login }
-                  pullRequestReview { id }
-                }
-              }
-            }
-          }
-        }`,
-      { id: threadId, cursor },
-    );
-    const comments = payload?.data?.node?.comments;
-    nodes.push(...(comments?.nodes ?? []));
-    if (comments?.pageInfo?.hasNextPage && !comments.pageInfo.endCursor) {
-      throw new Error('thread comment pagination payload is missing endCursor');
-    }
-    cursor = comments?.pageInfo?.hasNextPage
-      ? comments.pageInfo.endCursor
-      : null;
-  }
-  return nodes;
-}
-function ghGraphql(query, variables) {
-  const args = ['api', 'graphql', '-f', `query=${query}`];
-  for (const [key, value] of Object.entries(variables)) {
-    if (value === null || value === undefined) {
-      continue;
-    }
-    if (typeof value === 'number') {
-      args.push('-F', `${key}=${value}`);
-      continue;
-    }
-    args.push('-f', `${key}=${value}`);
-  }
-  return JSON.parse(runGh(args).trim() || '{}');
-}
-function ghJson(args, options = {}) {
-  return JSON.parse(runGh(args, options).trim() || '[]');
-}
-function ghApiJson(path, paginate = false, fields = null) {
-  const args = ['api', path];
-  if (fields) {
-    for (const [key, value] of Object.entries(fields)) {
-      args.push(
-        '-f',
-        `${key}=${typeof value === 'string' ? value : JSON.stringify(value)}`,
-      );
-    }
-  }
-  // #1692: `--jq '.[]'` (not a bare `--paginate`) makes gh emit one JSON
-  // value per line, guaranteed newline-separated, for every element across
-  // every page -- without it, `--paginate` alone concatenates each page's
-  // whole-array response with no separator on gh 2.45.0 (this repo's
-  // documented compatibility floor), which broke a naive split('\n') on
-  // multi-page output. Matches the NDJSON convention `gh-exec.mts`'s
-  // shared `ghApiJson` already uses.
-  if (paginate) {
-    args.push('--paginate', '--jq', '.[]');
-  }
-  const raw = runGh(args).trim();
-  if (!raw) {
-    return [];
-  }
-  if (paginate) {
-    return parsePaginatedGhNdjson(raw);
-  }
-  return JSON.parse(raw);
-}
-function runGh(args, options = {}) {
-  try {
-    return ghText(
-      args,
-      args.includes('--paginate')
-        ? { timeout: DEFAULT_GH_PAGINATED_TIMEOUT_MS }
-        : {},
-    );
-  } catch (error) {
-    const status = Number(error?.status ?? -1);
-    if ((options.allowStatuses ?? []).includes(status)) {
-      const stdout = String(error?.stdout ?? '');
-      if (/^\s*[[{]/.test(stdout)) {
-        return stdout;
-      }
-    }
-    throw error;
-  }
 }
