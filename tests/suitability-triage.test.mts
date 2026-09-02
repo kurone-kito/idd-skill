@@ -2646,6 +2646,16 @@ test('autonomy still fails a marker whose enclosing parens straddle a paragraph 
   assert.equal(result.pass, false);
 });
 
+test('autonomy still fails a marker whose enclosing parens straddle a whitespace-only blank line -- #2508 (Copilot)', () => {
+  const result = checkAutonomy({
+    issue: {
+      ...BASE_ISSUE,
+      body: `${BASE_ISSUE.body}\nSome context (see below.\n \nThe rollout plan is undecided, blocking this work) until resolved.`,
+    },
+  } as Context);
+  assert.equal(result.pass, false);
+});
+
 test('autonomy still fails both original fixed templates unchanged -- #2219 (no regression)', () => {
   const requiresResult = checkAutonomy({
     issue: {

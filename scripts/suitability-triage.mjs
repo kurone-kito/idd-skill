@@ -390,6 +390,11 @@ function isNegatedNearby(body, matchText, matchIndex, windowChars) {
     NEGATION_PATTERN.test(contextBefore) || NEGATION_PATTERN.test(contextAfter)
   );
 }
+// A Markdown paragraph break: two newlines with only horizontal
+// whitespace (spaces/tabs) between them -- a blank line still counts
+// as a break even when it carries trailing whitespace (Copilot review,
+// #2508).
+const PARAGRAPH_BREAK_PATTERN = /\n[ \t]*\n/;
 /**
  * True when the UNRESOLVED_CHOICE_PATTERN match at `matchIndex` sits
  * inside a parenthetical that also contains a comma -- e.g.
@@ -398,11 +403,11 @@ function isNegatedNearby(body, matchText, matchIndex, windowChars) {
  * already-existing vocabulary rather than a claim about this issue's
  * own open next step (#2508). A parenthetical with no comma (e.g.
  * "(not yet decided which)") still counts as a genuine unresolved
- * marker and is not excluded. A blank line (paragraph break) inside the
- * span means the "(" and ")" belong to unrelated parentheticals in
- * different paragraphs, not one enclosing span -- rejected -- but a
- * single soft-wrapped newline inside one hand-wrapped Markdown
- * paragraph does not end the span.
+ * marker and is not excluded. A paragraph break inside the span means
+ * the "(" and ")" belong to unrelated parentheticals in different
+ * paragraphs, not one enclosing span -- rejected -- but a single
+ * soft-wrapped newline inside one hand-wrapped Markdown paragraph does
+ * not end the span.
  */
 function isEnumeratedParentheticalEntry(body, matchIndex, matchLength) {
   const openIndex = body.lastIndexOf('(', matchIndex);
@@ -410,7 +415,7 @@ function isEnumeratedParentheticalEntry(body, matchIndex, matchLength) {
     return false;
   }
   const before = body.slice(openIndex + 1, matchIndex);
-  if (before.includes(')') || before.includes('\n\n')) {
+  if (before.includes(')') || PARAGRAPH_BREAK_PATTERN.test(before)) {
     return false;
   }
   const closeIndex = body.indexOf(')', matchIndex + matchLength);
@@ -418,7 +423,7 @@ function isEnumeratedParentheticalEntry(body, matchIndex, matchLength) {
     return false;
   }
   const after = body.slice(matchIndex + matchLength, closeIndex);
-  if (after.includes('(') || after.includes('\n\n')) {
+  if (after.includes('(') || PARAGRAPH_BREAK_PATTERN.test(after)) {
     return false;
   }
   return before.includes(',') || after.includes(',');
