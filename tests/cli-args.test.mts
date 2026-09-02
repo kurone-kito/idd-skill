@@ -7,6 +7,7 @@ import {
   parseCanonicalIntegerOrThrow,
   parseCliArgs,
   requireFlag,
+  stripLeadingArgumentSeparator,
 } from '../src/scripts/cli-args.mts';
 
 const SAMPLE_SPEC = {
@@ -264,6 +265,32 @@ test('parseCliArgs: a -- appearing anywhere other than index 0 keeps its current
   // -- this must stay unchanged by the leading-only strip above.
   const { values } = parseCliArgs(['--pr', '7', '--'], SAMPLE_SPEC);
   assert.equal(values.pr, '7');
+});
+
+// --- stripLeadingArgumentSeparator (#2465) -----------------------------------
+// The five custom parsers excluded from the parseCliArgs wrapper above (see
+// post-idd-marker.mts, emit-marker.mts, discover-orphan-filter.mts,
+// discover-roadmap-graph.mts, idd-onboard.mts) each call this directly, so
+// it needs its own direct coverage independent of parseCliArgs's tests.
+
+test('stripLeadingArgumentSeparator: strips exactly one leading --', () => {
+  assert.deepEqual(stripLeadingArgumentSeparator(['--', '--help']), ['--help']);
+});
+
+test('stripLeadingArgumentSeparator: is a no-op when there is no leading --', () => {
+  const argv = ['--pr', '7'];
+  assert.deepEqual(stripLeadingArgumentSeparator(argv), argv);
+});
+
+test('stripLeadingArgumentSeparator: a doubled leading -- -- still throws (the strip never repeats)', () => {
+  assert.throws(() => stripLeadingArgumentSeparator(['--', '--', '--help']), {
+    message: 'unknown argument: --',
+  });
+});
+
+test('stripLeadingArgumentSeparator: a -- appearing anywhere other than index 0 is left untouched', () => {
+  const argv = ['--pr', '7', '--'];
+  assert.deepEqual(stripLeadingArgumentSeparator(argv), argv);
 });
 
 // --- parseCanonicalIntegerOrThrow / parseCanonicalIntegerOrNull -------------

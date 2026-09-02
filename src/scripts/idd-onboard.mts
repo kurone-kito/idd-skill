@@ -53,6 +53,7 @@ import {
 } from 'node:fs';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 
+import { stripLeadingArgumentSeparator } from './cli-args.mts';
 import { safeGhText } from './gh-exec.mts';
 import {
   collectHelperRuntimeEvidence,
@@ -2641,7 +2642,11 @@ interface ParsedArgs {
 // -- the accepted flag set is built from a runtime table, not a fixed spec
 // declared in source. A static cli-args.mts spec object cannot represent a
 // flag set that is only known once that table is read.
-function parseArgs(argv: string[]): ParsedArgs {
+function parseArgs(rawArgv: string[]): ParsedArgs {
+  // #1921/#2465: strip a pnpm-forwarded leading `--` the same way the
+  // shared cli-args.mts wrapper does -- this parser is excluded from that
+  // wrapper (see the comment above) so it must call the strip directly.
+  const argv = stripLeadingArgumentSeparator(rawArgv);
   const parsed: ParsedArgs = {
     substitute: false,
     importMode: false,

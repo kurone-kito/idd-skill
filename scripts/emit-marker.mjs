@@ -10,7 +10,7 @@
 // ready-to-post body string to stdout and performs NO network write; the
 // agent posts it via the documented HTTP path. The render logic lives in
 // protocol-helpers; this is the thin CLI surface.
-import { requireFlag } from './cli-args.mjs';
+import { requireFlag, stripLeadingArgumentSeparator } from './cli-args.mjs';
 import {
   renderClaimedByMarker,
   renderReviewBaselineMarker,
@@ -85,7 +85,11 @@ function runCli() {
 // named in its static spec, and `strict: false` would instead coerce every
 // unrecognized flag to `true` -- neither matches this file's "accept
 // whatever field this marker type needs" contract.
-function parseArgs(argv) {
+function parseArgs(rawArgv) {
+  // #1921/#2465: strip a pnpm-forwarded leading `--` the same way the
+  // shared cli-args.mts wrapper does -- this parser is excluded from that
+  // wrapper (see the comment above) so it must call the strip directly.
+  const argv = stripLeadingArgumentSeparator(rawArgv);
   const parsed = { type: '', help: false };
   for (let index = 0; index < argv.length; index += 1) {
     const token = argv[index];
