@@ -305,7 +305,9 @@ infra-vs-code triage above:
 
 This advisory, tool-agnostic note keeps the **wait itself cheap**: the
 dominant cost is each re-invocation's context re-read (worse past the
-prompt-cache TTL), not the idle time.
+prompt-cache TTL), not the idle time. It applies to a session pushing a
+commit and waiting on CI or bot review outside a formal IDD claim too
+(`#2464`) — nothing below depends on being mid-phase.
 
 **Portability**: under supervisor/worker topologies, a background
 wait's completion notification often reaches only the supervisor, so
