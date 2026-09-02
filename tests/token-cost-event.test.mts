@@ -26,13 +26,27 @@ function tempDir(): string {
   return mkdtempSync(join(tmpdir(), 'idd-token-cost-event-test-'));
 }
 
-function runCli(args: readonly string[]): {
+// Stripped from the spawned child's inherited env by default so a CLI
+// test's assertions stay deterministic regardless of whether the real
+// host process (this very test run included) happens to have
+// CLAUDE_CODE_SESSION_ID set. A test exercising the stamping behavior
+// itself passes it back in via runCli's own envOverrides.
+function stripVendorSessionEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const { CLAUDE_CODE_SESSION_ID: _omit, ...rest } = env;
+  return rest;
+}
+
+function runCli(
+  args: readonly string[],
+  envOverrides: NodeJS.ProcessEnv = {},
+): {
   status: number;
   stdout: string;
   stderr: string;
 } {
   const result = spawnSync(process.execPath, [CLI_PATH, ...args], {
     encoding: 'utf8',
+    env: { ...stripVendorSessionEnv(process.env), ...envOverrides },
   });
   return {
     status: result.status ?? -1,
@@ -82,6 +96,7 @@ test('buildEvent builds a schema-shaped enter event', () => {
   const event = buildEvent(
     { stage: 'discover', enter: true, exit: false, vendor: 'claude' },
     NOW,
+    {},
   );
   assert.deepEqual(event, {
     schemaVersion: 1,
@@ -96,6 +111,7 @@ test('buildEvent builds a schema-shaped exit event with an issue number', () => 
   const event = buildEvent(
     { stage: 'work', enter: false, exit: true, vendor: 'codex', issue: '2293' },
     NOW,
+    {},
   );
   assert.deepEqual(event, {
     schemaVersion: 1,
@@ -162,6 +178,46 @@ test('buildEvent throws on a non-positive --issue', () => {
 });
 
 // ---------------------------------------------------------------------------
+// buildEvent -- vendorSessionId auto-derive (#2424)
+// ---------------------------------------------------------------------------
+
+test('buildEvent stamps vendorSessionId from CLAUDE_CODE_SESSION_ID for vendor claude', () => {
+  const event = buildEvent(
+    { stage: 'work', enter: true, vendor: 'claude' },
+    NOW,
+    { CLAUDE_CODE_SESSION_ID: 'sess-abc123' },
+  );
+  assert.equal(event.vendorSessionId, 'sess-abc123');
+});
+
+test('buildEvent leaves vendorSessionId unset for vendor claude when CLAUDE_CODE_SESSION_ID is unset', () => {
+  const event = buildEvent(
+    { stage: 'work', enter: true, vendor: 'claude' },
+    NOW,
+    {},
+  );
+  assert.equal('vendorSessionId' in event, false);
+});
+
+test('buildEvent leaves vendorSessionId unset for a vendor with no known session env var', () => {
+  const event = buildEvent(
+    { stage: 'work', enter: true, vendor: 'grok' },
+    NOW,
+    { CLAUDE_CODE_SESSION_ID: 'sess-abc123' },
+  );
+  assert.equal('vendorSessionId' in event, false);
+});
+
+test('buildEvent rejects a path-like CLAUDE_CODE_SESSION_ID value rather than stamping it', () => {
+  const event = buildEvent(
+    { stage: 'work', enter: true, vendor: 'claude' },
+    NOW,
+    { CLAUDE_CODE_SESSION_ID: '/etc/passwd' },
+  );
+  assert.equal('vendorSessionId' in event, false);
+});
+
+// ---------------------------------------------------------------------------
 // writeEvent
 // ---------------------------------------------------------------------------
 
@@ -172,6 +228,7 @@ test('writeEvent appends one schema-valid JSONL line, creating the parent direct
     const event = buildEvent(
       { stage: 'claim', enter: true, vendor: 'grok' },
       NOW,
+      {},
     );
     writeEvent(event, outPath);
     const lines = readFileSync(outPath, 'utf8').trim().split('\n');
@@ -187,11 +244,11 @@ test('writeEvent appends without truncating an existing file', () => {
   try {
     const outPath = join(dir, 'events.jsonl');
     writeEvent(
-      buildEvent({ stage: 'claim', enter: true, vendor: 'grok' }, NOW),
+      buildEvent({ stage: 'claim', enter: true, vendor: 'grok' }, NOW, {}),
       outPath,
     );
     writeEvent(
-      buildEvent({ stage: 'claim', exit: true, vendor: 'grok' }, NOW),
+      buildEvent({ stage: 'claim', exit: true, vendor: 'grok' }, NOW, {}),
       outPath,
     );
     const lines = readFileSync(outPath, 'utf8').trim().split('\n');
@@ -208,6 +265,7 @@ test('writeEvent throws for a stageId the schema does not enumerate', () => {
     const event = buildEvent(
       { stage: 'bogus-stage', enter: true, vendor: 'claude' },
       NOW,
+      {},
     );
     assert.throws(() => writeEvent(event, outPath), /fails schema validation/);
   } finally {
@@ -222,6 +280,7 @@ test('writeEvent throws for a vendor the schema does not enumerate', () => {
     const event = buildEvent(
       { stage: 'discover', enter: true, vendor: 'bogus-vendor' },
       NOW,
+      {},
     );
     assert.throws(() => writeEvent(event, outPath), /fails schema validation/);
   } finally {
@@ -377,6 +436,57 @@ test('CLI --claim-id is accepted but not persisted in the written event', () => 
     const written = JSON.parse(readFileSync(outPath, 'utf8').trim());
     assert.equal('claimId' in written, false);
     assert.equal('claim-id' in written, false);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('CLI stamps vendorSessionId from an inherited CLAUDE_CODE_SESSION_ID for --vendor claude', () => {
+  const dir = tempDir();
+  try {
+    const outPath = join(dir, 'events.jsonl');
+    const result = runCli(
+      [
+        '--stage',
+        'work',
+        '--enter',
+        '--vendor',
+        'claude',
+        '--out',
+        outPath,
+        '--now',
+        NOW.toISOString(),
+        '--strict',
+      ],
+      { CLAUDE_CODE_SESSION_ID: 'sess-cli-test' },
+    );
+    assert.equal(result.status, 0, result.stderr);
+    const written = JSON.parse(readFileSync(outPath, 'utf8').trim());
+    assert.equal(written.vendorSessionId, 'sess-cli-test');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('CLI omits vendorSessionId by default (no CLAUDE_CODE_SESSION_ID inherited)', () => {
+  const dir = tempDir();
+  try {
+    const outPath = join(dir, 'events.jsonl');
+    const result = runCli([
+      '--stage',
+      'work',
+      '--enter',
+      '--vendor',
+      'claude',
+      '--out',
+      outPath,
+      '--now',
+      NOW.toISOString(),
+      '--strict',
+    ]);
+    assert.equal(result.status, 0, result.stderr);
+    const written = JSON.parse(readFileSync(outPath, 'utf8').trim());
+    assert.equal('vendorSessionId' in written, false);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

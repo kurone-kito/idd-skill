@@ -63,6 +63,18 @@ and appends `kind: "issue-loop"` / `kind: "session"` records to
 sibling `events.jsonl` path (`--events` to override), those timestamps
 win over the marker-join reconstruction for the stages they cover.
 
+`token-cost-event.mjs` also auto-derives each event's `vendorSessionId`
+from a vendor-specific env var -- `$CLAUDE_CODE_SESSION_ID` for
+`--vendor claude`, no equivalent known yet for `grok`/`codex` -- with no
+flag needed. When two attempts for the same issue leave events in
+`events.jsonl` (a retry, a fail-open dropped call), an identified
+attempt's own `enter`/`exit` pair is never mixed with a different
+attempt's, and a same-issue match across more than one project log file
+resolves to whichever file's own session id matches, instead of being
+skipped. An event with no identity (all historical data, and any vendor
+with no known session-id source) still joins exactly as before this
+field existed.
+
 `node scripts/token-cost-report.mjs`:
 
 - `--in <samples.jsonl> [--in <samples.jsonl> ...] --apply` aggregates

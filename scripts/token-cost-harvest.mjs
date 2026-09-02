@@ -35,6 +35,7 @@ import {
   claudeAdapter,
   defaultClaudeProjectDir,
   extractRecordTimestampMs,
+  extractSessionId,
   parseClaudeProjectLines,
   segmentRecordsByCwd,
 } from './token-cost-adapter-claude.mjs';
@@ -763,7 +764,32 @@ function isTokenCostVendor(value) {
 function eventKey(issueNumber, vendor, stageId) {
   return `${issueNumber}:${vendor}:${stageId}`;
 }
-/** Reads a --events JSONL file into per-(issueNumber, vendor, stageId) enter/exit window overrides. A missing file is not an error -- returns an empty map. */
+function isNonEmptyString(value) {
+  return typeof value === 'string' && value.length > 0;
+}
+/**
+ * Reads a --events JSONL file into per-(issueNumber, vendor, stageId)
+ * enter/exit window overrides. A missing file is not an error -- returns
+ * an empty map.
+ *
+ * #2424: `TokenCostEvent.vendorSessionId`, when present on BOTH the enter
+ * and the exit an event carries, scopes pairing to that one attempt --
+ * two attempts for the same (issueNumber, vendor, stageId) key no longer
+ * silently pair one's `--enter` with the other's stale `--exit`. Per
+ * (issueNumber, vendor) group, `cleanup`'s own window is resolved first
+ * (latest VALID -- `startMs < endMs` -- pairing among identified
+ * attempts, falling back to the identity-agnostic latest-wins pairing
+ * this function used before #2424 when no identified attempt has a valid
+ * pair). Every other stage then prefers the candidate sharing `cleanup`'s
+ * own winning `vendorSessionId`; only when no such candidate exists does
+ * it fall back to the same latest-valid-among-identified-attempts rule,
+ * and finally to the identity-agnostic pairing. An event with no
+ * `vendorSessionId` (all historical data, and any vendor with no known
+ * session-id source) never populates an attempt bucket, so a bareKey
+ * whose events are entirely unidentified resolves via the untouched
+ * identity-agnostic path -- byte-identical to this function's pre-#2424
+ * behavior.
+ */
 export function readEventWindows(path) {
   const result = new Map();
   if (!existsSync(path)) {
@@ -771,6 +797,10 @@ export function readEventWindows(path) {
   }
   const enterAt = new Map();
   const exitAt = new Map();
+  // bareKey -> vendorSessionId -> latest timestamp. Only populated for
+  // events that carry a non-empty vendorSessionId.
+  const enterAtByAttempt = new Map();
+  const exitAtByAttempt = new Map();
   const text = readFileSync(path, 'utf8');
   for (const rawLine of text.split('\n')) {
     const line = rawLine.trim();
@@ -801,16 +831,93 @@ export function readEventWindows(path) {
       continue;
     }
     const key = eventKey(event.issueNumber, event.vendor, event.stageId);
+    const vendorSessionId = isNonEmptyString(event.vendorSessionId)
+      ? event.vendorSessionId
+      : undefined;
     if (event.event === 'enter') {
       enterAt.set(key, atMs);
+      if (vendorSessionId !== undefined) {
+        const byAttempt = enterAtByAttempt.get(key) ?? new Map();
+        byAttempt.set(vendorSessionId, atMs);
+        enterAtByAttempt.set(key, byAttempt);
+      }
     } else {
       exitAt.set(key, atMs);
+      if (vendorSessionId !== undefined) {
+        const byAttempt = exitAtByAttempt.get(key) ?? new Map();
+        byAttempt.set(vendorSessionId, atMs);
+        exitAtByAttempt.set(key, byAttempt);
+      }
     }
   }
-  for (const [key, start] of enterAt) {
+  const attemptCandidates = (key) => {
+    const enters = enterAtByAttempt.get(key);
+    const exits = exitAtByAttempt.get(key);
+    if (!enters || !exits) {
+      return [];
+    }
+    const candidates = [];
+    for (const [vendorSessionId, startMs] of enters) {
+      const endMs = exits.get(vendorSessionId);
+      if (endMs !== undefined) {
+        candidates.push({ vendorSessionId, startMs, endMs });
+      }
+    }
+    return candidates;
+  };
+  const resolveWindow = (key, preferredVendorSessionId) => {
+    const candidates = attemptCandidates(key);
+    if (preferredVendorSessionId !== undefined) {
+      const preferred = candidates.find(
+        (candidate) => candidate.vendorSessionId === preferredVendorSessionId,
+      );
+      if (preferred) {
+        return {
+          startMs: preferred.startMs,
+          endMs: preferred.endMs,
+          vendorSessionId: preferred.vendorSessionId,
+        };
+      }
+    }
+    const valid = candidates.filter(
+      (candidate) => candidate.startMs < candidate.endMs,
+    );
+    if (valid.length > 0) {
+      const best = valid.reduce((a, b) => (b.endMs > a.endMs ? b : a));
+      return {
+        startMs: best.startMs,
+        endMs: best.endMs,
+        vendorSessionId: best.vendorSessionId,
+      };
+    }
+    const start = enterAt.get(key);
     const end = exitAt.get(key);
-    if (end !== undefined) {
-      result.set(key, { startMs: start, endMs: end });
+    return start !== undefined && end !== undefined
+      ? { startMs: start, endMs: end }
+      : undefined;
+  };
+  const issueVendorPrefixes = new Set();
+  for (const key of enterAt.keys()) {
+    issueVendorPrefixes.add(key.slice(0, key.lastIndexOf(':')));
+  }
+  for (const key of exitAt.keys()) {
+    issueVendorPrefixes.add(key.slice(0, key.lastIndexOf(':')));
+  }
+  for (const prefix of issueVendorPrefixes) {
+    const cleanupKey = `${prefix}:cleanup`;
+    const cleanupWindow = resolveWindow(cleanupKey, undefined);
+    if (cleanupWindow) {
+      result.set(cleanupKey, cleanupWindow);
+    }
+    for (const stageId of TOKEN_COST_STAGE_IDS) {
+      if (stageId === 'cleanup') {
+        continue;
+      }
+      const key = `${prefix}:${stageId}`;
+      const window = resolveWindow(key, cleanupWindow?.vendorSessionId);
+      if (window) {
+        result.set(key, window);
+      }
     }
   }
   return result;
@@ -886,8 +993,19 @@ function eventWindowsForIssue(all, issueNumber, vendor) {
  *   happens to still be internally valid (non-reversed), e.g. because
  *   BOTH of the later attempt's own enter/exit calls for that stage
  *   failed -- is mechanically indistinguishable from a genuine early
- *   start without an attempt/session identity on `TokenCostEvent`
- *   itself; tracked as a follow-up (#2424) rather than solved here.
+ *   start WITHOUT an attempt/session identity on the underlying events.
+ *   #2424 closes this: `readEventWindows` now tags a window with the
+ *   `vendorSessionId` its enter/exit pair shared (when both events
+ *   carried one), and this function excludes a non-`cleanup` stage from
+ *   BOTH the widening loop and the contamination check above whenever
+ *   its own `vendorSessionId` is known and differs from the winning
+ *   `cleanup` window's own -- before either of those checks even runs,
+ *   so a mismatched attempt's window can neither poison the widened
+ *   `startMs` nor trigger a whole-issue skip on a different attempt's
+ *   behalf. A window with no identity on either side (historical data,
+ *   non-Claude vendors, or an issue whose loop straddles this feature's
+ *   own deployment) is unaffected: identity-compatible windows still
+ *   flow through the pre-#2424 checks exactly as before.
  */
 export function buildCompletedIssueWindows(eventWindowsAll, vendor) {
   const stagesByIssue = new Map();
@@ -910,7 +1028,19 @@ export function buildCompletedIssueWindows(eventWindowsAll, vendor) {
     if (!cleanup || cleanup.startMs >= cleanup.endMs) {
       continue;
     }
-    const hasContaminatedStage = [...stages].some(
+    // #2424: a non-cleanup window whose vendorSessionId is known and
+    // differs from cleanup's own belongs to a different attempt --
+    // exclude it outright, before either check below runs. Undefined on
+    // either side means "unidentified"; those windows are unaffected and
+    // still flow through the pre-#2424 checks.
+    const idCompatible = (window) =>
+      cleanup.vendorSessionId === undefined ||
+      window.vendorSessionId === undefined ||
+      window.vendorSessionId === cleanup.vendorSessionId;
+    const candidateStages = [...stages].filter(
+      ([stageId, window]) => stageId === 'cleanup' || idCompatible(window),
+    );
+    const hasContaminatedStage = candidateStages.some(
       ([stageId, window]) =>
         stageId !== 'cleanup' &&
         window.startMs >= window.endMs &&
@@ -920,12 +1050,19 @@ export function buildCompletedIssueWindows(eventWindowsAll, vendor) {
       continue;
     }
     let startMs = cleanup.startMs;
-    for (const window of stages.values()) {
+    for (const [, window] of candidateStages) {
       if (window.startMs <= cleanup.endMs && window.endMs <= cleanup.endMs) {
         startMs = Math.min(startMs, window.startMs);
       }
     }
-    out.push({ issueNumber, startMs, endMs: cleanup.endMs });
+    out.push({
+      issueNumber,
+      startMs,
+      endMs: cleanup.endMs,
+      ...(cleanup.vendorSessionId !== undefined
+        ? { vendorSessionId: cleanup.vendorSessionId }
+        : {}),
+    });
   }
   return out;
 }
@@ -1051,11 +1188,20 @@ function rangesOverlap(a, b) {
  * `#ew<issueNumber>` id, permanently -- exactly the class of bug the
  * original #2418 guard exists to prevent (see the test locking this in:
  * "two DIFFERENT project log files both matching the same issue window
- * are BOTH dropped"). This still classifies each multi-file skip as
- * disjoint-or-overlapping (visible in stderr) for diagnostic value, but
- * both classifications skip -- unchanged from #2418's original behavior.
- * Resolving the cross-file case for real needs session/attempt identity
- * on the underlying events (#2424), not a timestamp heuristic.
+ * are BOTH dropped"). Multi-file skips are still classified as
+ * disjoint-or-overlapping (visible in stderr) for diagnostic value.
+ *
+ * #2424: a `CompletedIssueWindow`'s own `vendorSessionId` (from its
+ * winning `cleanup` event, when identified) is matched against each
+ * candidate file's own `extractSessionId()` -- the SAME value a project
+ * JSONL file's own records carry throughout (stable per file, matches
+ * the file's basename). Exactly one candidate file matching resolves the
+ * issue to that file deterministically, no timestamp heuristic involved;
+ * the others are silently NOT harvested (they belong to a different,
+ * concurrent attempt for the same issue number). Zero or more than one
+ * match -- including every case where the window carries no identity at
+ * all, i.e. every issue whose loop predates this field -- falls back to
+ * the #2425 classify-and-skip behavior unchanged.
  */
 export function scanClaudeVendorSessions(
   projectDir,
@@ -1189,6 +1335,27 @@ export function scanClaudeVendorSessions(
         fileCandidates[0].records,
       );
       continue;
+    }
+    // #2424: resolve by attempt identity before falling back to
+    // classify-and-skip. `extractSessionId` reads each candidate's own
+    // records (a subset of one file), which carry the same sessionId as
+    // the rest of that file.
+    const windowVendorSessionId = completedIssueWindows.find(
+      (window) => window.issueNumber === issueNumber,
+    )?.vendorSessionId;
+    if (windowVendorSessionId !== undefined) {
+      const matching = fileCandidates.filter(
+        (candidate) =>
+          extractSessionId(candidate.records) === windowVendorSessionId,
+      );
+      if (matching.length === 1) {
+        harvestEventWindowCandidate(
+          issueNumber,
+          matching[0].fileBasename,
+          matching[0].records,
+        );
+        continue;
+      }
     }
     const ranges = fileCandidates.map((candidate) =>
       computeRecordTimeRange(candidate.records, extractRecordTimestampMs),

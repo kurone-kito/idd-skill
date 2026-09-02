@@ -172,7 +172,9 @@ export function parseClaudeProjectLines(text: string): unknown[] {
 }
 
 /** The first non-empty top-level `sessionId` across `records`, in file order -- stable per project JSONL file (it matches the file's own basename). */
-function extractSessionId(records: readonly unknown[]): string | undefined {
+export function extractSessionId(
+  records: readonly unknown[],
+): string | undefined {
   for (const record of records) {
     const sessionId = isPlainObject(record)
       ? getStringField(record, 'sessionId')

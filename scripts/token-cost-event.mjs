@@ -45,6 +45,35 @@ export function resolveOutPath(explicitOut, env = process.env) {
     env.XDG_STATE_HOME || join(env.HOME || homedir(), '.local', 'state');
   return join(stateHome, DEFAULT_OUT_RELATIVE);
 }
+// Vendor session env vars this helper knows how to auto-derive
+// `vendorSessionId` from (#2424). Claude-only for now: `$CLAUDE_CODE_SESSION_ID`
+// is a verified real env var whose value matches the session's own
+// `~/.claude/projects/<encoded-cwd>/<id>.jsonl` basename exactly (the same
+// value `extractSessionId()` reads back out of that file's own records in
+// token-cost-adapter-claude.mts). Codex/Grok have no verified equivalent
+// yet -- add a row here once one is confirmed, rather than guessing.
+const VENDOR_SESSION_ID_ENV_VAR = {
+  claude: 'CLAUDE_CODE_SESSION_ID',
+};
+/**
+ * Reads the env var mapped to `vendor` (if any) and returns its value,
+ * unless it is empty or looks like a filesystem path (`/` or `\` --
+ * schemas/token-cost-event.schema.json's own `vendorSessionId` description
+ * says "Never a filesystem path"; this stamping step is what has to honor
+ * that, since the schema's own type is a bare `["string", "null"]` with no
+ * format the validator enforces).
+ */
+function deriveVendorSessionId(vendor, env) {
+  const envVar = VENDOR_SESSION_ID_ENV_VAR[vendor];
+  if (!envVar) {
+    return undefined;
+  }
+  const value = env[envVar];
+  if (!value || value.includes('/') || value.includes('\\')) {
+    return undefined;
+  }
+  return value;
+}
 /**
  * Build one {@link TokenCostEvent} from parsed CLI values and the current
  * time. Throws a plain, human-readable message on any malformed input --
@@ -55,7 +84,7 @@ export function resolveOutPath(explicitOut, env = process.env) {
  * single source of truth for both, so an enum drift between this helper
  * and the schema can never leave one checked and the other not.
  */
-export function buildEvent(values, now) {
+export function buildEvent(values, now, env = process.env) {
   const enter = values.enter === true;
   const exit = values.exit === true;
   if (enter === exit) {
@@ -76,6 +105,10 @@ export function buildEvent(values, now) {
     at: now.toISOString(),
     vendor: vendor,
   };
+  const vendorSessionId = deriveVendorSessionId(vendor, env);
+  if (vendorSessionId !== undefined) {
+    event.vendorSessionId = vendorSessionId;
+  }
   const issueRaw = values.issue;
   if (issueRaw !== undefined) {
     if (typeof issueRaw !== 'string') {
@@ -145,6 +178,10 @@ function printHelp() {
                      fail-open warning-and-exit-0 behavior.
   --now <ISO8601>    Override the current time (tests only).
   --help, -h         Show this help.
+
+For --vendor claude, vendorSessionId is auto-derived from
+$CLAUDE_CODE_SESSION_ID when set -- no flag needed. No equivalent env var
+is known yet for grok or codex.
 
 Fail-open by default: a bad flag, a schema-invalid event, or an
 unwritable --out path prints a stderr warning and exits 0, so a
