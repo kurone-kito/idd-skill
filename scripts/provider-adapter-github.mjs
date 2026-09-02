@@ -110,20 +110,23 @@ const POST_WORK_ITEM_COMMENT_BASE_DELAY_MS = 200;
  * risks posting the same marker twice when a failure is ambiguous (the
  * write landed server-side, but the client never saw a successful
  * response; observed live as a one-off transient failure whose very next
- * unrelated API call succeeded). Before every retry, re-read recent
- * comments for an exact-body match: found means the prior attempt actually
- * landed, so return that comment instead of posting again; not found means
- * the prior attempt genuinely failed, so back off and retry the POST. This
- * scan is best-effort only (a transient read failure here must never block
- * the retry it is meant to protect) and only ever runs on the error path,
- * never the common single-attempt success path.
+ * unrelated API call succeeded). Before every retry, re-read the full
+ * (paginated) comment history for an exact-body match: found means the
+ * prior attempt actually landed, so return that comment instead of posting
+ * again; not found means the prior attempt genuinely failed, so back off
+ * and retry the POST. This scan is best-effort only (a transient read
+ * failure here must never block the retry it is meant to protect) and only
+ * ever runs on the error path, never the common single-attempt success
+ * path. Requests the maximum page size (Copilot review, #2504) to bound
+ * pagination overhead on a heavily-commented issue/PR.
  */
 function findRecentExactBodyMatch(deps, repoPath, number, body) {
   let rows;
   try {
-    rows = deps.ghApiJson(`${repoPath}/issues/${number}/comments`, {
-      paginate: true,
-    });
+    rows = deps.ghApiJson(
+      `${repoPath}/issues/${number}/comments?per_page=100`,
+      { paginate: true },
+    );
   } catch {
     return null;
   }
