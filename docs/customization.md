@@ -1103,13 +1103,14 @@ The recommended contract is secure by default:
 **When is opting out a structural no-op?** In a single-author repository
 where every issue author already satisfies the current
 `maintainerApprovalActorPolicy`, the issue-author self-authorization
-signal below is satisfied whenever permission resolution succeeds (the
-A3.5 outage fallback covers only `OWNER`/`MEMBER` `author_association`
-values, so a permission-API outage can still fail closed for a
-self-authorizing author outside those two associations, e.g. an
-invited `COLLABORATOR`) -- so the gate does not change which candidates
-are startable in the common case, and opting out carries no practical
-risk there. Re-enable the gate (or simply omit
+signal below is satisfied whenever the collaborator permission API
+resolves successfully (A3.5's outage fallback, used only when that API
+is unavailable, covers only `OWNER`/`MEMBER` `author_association`
+values, so an outage can still fail closed for a self-authorizing
+author outside those two associations, e.g. an outside `COLLABORATOR`
+with existing repository access) -- so the gate does not change which
+candidates are startable in the common case, and opting out carries no
+practical risk there. Re-enable the gate (or simply omit
 `skipIssueAuthorApprovalGate`) if the repository ever becomes
 multi-author, since a non-maintainer author no longer self-authorizes
 and the gate starts mattering again.
