@@ -1564,7 +1564,9 @@ export function createGithubProviderAdapter(
         '-F',
         `number=${number}`,
       ];
-      const parsed = JSON.parse(deps.ghText(apiArgs, GH_TEXT_LOOP_OPTIONS)) as {
+      const raw = JSON.parse(deps.ghText(apiArgs, GH_TEXT_LOOP_OPTIONS));
+      assertNoGraphqlErrors(raw, 'getMergedChangeRequestMeta');
+      const parsed = raw as {
         data?: {
           repository?: {
             pullRequest?: {
@@ -1800,9 +1802,11 @@ export function createGithubProviderAdapter(
         if (cursor) {
           apiArgs.push('-f', `cursor=${cursor}`);
         }
-        const parsed = JSON.parse(
+        const rawComments = JSON.parse(
           deps.ghText(apiArgs, GH_TEXT_LOOP_OPTIONS),
-        ) as {
+        );
+        assertNoGraphqlErrors(rawComments, 'listChangeRequestGraphqlComments');
+        const parsed = rawComments as {
           data?: {
             repository?: {
               pullRequest?: {
@@ -1876,9 +1880,11 @@ export function createGithubProviderAdapter(
         if (cursor) {
           apiArgs.push('-f', `cursor=${cursor}`);
         }
-        const parsed = JSON.parse(
+        const rawReviews = JSON.parse(
           deps.ghText(apiArgs, GH_TEXT_LOOP_OPTIONS),
-        ) as {
+        );
+        assertNoGraphqlErrors(rawReviews, 'listChangeRequestGraphqlReviews');
+        const parsed = rawReviews as {
           data?: {
             repository?: {
               pullRequest?: {
@@ -2121,7 +2127,9 @@ export function createGithubProviderAdapter(
         '-F',
         `number=${number}`,
       ];
-      const parsed = JSON.parse(deps.ghText(apiArgs, GH_TEXT_LOOP_OPTIONS)) as {
+      const rawAuthor = JSON.parse(deps.ghText(apiArgs, GH_TEXT_LOOP_OPTIONS));
+      assertNoGraphqlErrors(rawAuthor, 'getChangeRequestAuthor');
+      const parsed = rawAuthor as {
         data?: {
           repository?: {
             pullRequest?: {

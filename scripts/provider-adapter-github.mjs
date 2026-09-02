@@ -1189,7 +1189,9 @@ export function createGithubProviderAdapter(owner, repo, deps = DEFAULT_DEPS) {
         '-F',
         `number=${number}`,
       ];
-      const parsed = JSON.parse(deps.ghText(apiArgs, GH_TEXT_LOOP_OPTIONS));
+      const raw = JSON.parse(deps.ghText(apiArgs, GH_TEXT_LOOP_OPTIONS));
+      assertNoGraphqlErrors(raw, 'getMergedChangeRequestMeta');
+      const parsed = raw;
       const pr = parsed.data?.repository?.pullRequest;
       if (pr?.merged !== true) {
         return null;
@@ -1377,7 +1379,11 @@ export function createGithubProviderAdapter(owner, repo, deps = DEFAULT_DEPS) {
         if (cursor) {
           apiArgs.push('-f', `cursor=${cursor}`);
         }
-        const parsed = JSON.parse(deps.ghText(apiArgs, GH_TEXT_LOOP_OPTIONS));
+        const rawComments = JSON.parse(
+          deps.ghText(apiArgs, GH_TEXT_LOOP_OPTIONS),
+        );
+        assertNoGraphqlErrors(rawComments, 'listChangeRequestGraphqlComments');
+        const parsed = rawComments;
         const connection = parsed.data?.repository?.pullRequest?.comments;
         for (const node of connection?.nodes ?? []) {
           out.push({
@@ -1430,7 +1436,11 @@ export function createGithubProviderAdapter(owner, repo, deps = DEFAULT_DEPS) {
         if (cursor) {
           apiArgs.push('-f', `cursor=${cursor}`);
         }
-        const parsed = JSON.parse(deps.ghText(apiArgs, GH_TEXT_LOOP_OPTIONS));
+        const rawReviews = JSON.parse(
+          deps.ghText(apiArgs, GH_TEXT_LOOP_OPTIONS),
+        );
+        assertNoGraphqlErrors(rawReviews, 'listChangeRequestGraphqlReviews');
+        const parsed = rawReviews;
         const connection = parsed.data?.repository?.pullRequest?.reviews;
         for (const node of connection?.nodes ?? []) {
           out.push({
@@ -1594,7 +1604,9 @@ export function createGithubProviderAdapter(owner, repo, deps = DEFAULT_DEPS) {
         '-F',
         `number=${number}`,
       ];
-      const parsed = JSON.parse(deps.ghText(apiArgs, GH_TEXT_LOOP_OPTIONS));
+      const rawAuthor = JSON.parse(deps.ghText(apiArgs, GH_TEXT_LOOP_OPTIONS));
+      assertNoGraphqlErrors(rawAuthor, 'getChangeRequestAuthor');
+      const parsed = rawAuthor;
       const author = parsed.data?.repository?.pullRequest?.author;
       if (!author) {
         return null;

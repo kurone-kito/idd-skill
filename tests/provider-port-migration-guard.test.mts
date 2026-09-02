@@ -34,6 +34,7 @@ const MIGRATED_HELPERS: readonly string[] = [
   'review-activity-snapshot.mts',
   'resolve-review-thread.mts',
   'idd-merge-execute.mts',
+  'merged-pr-feedback-sweep.mts',
 ];
 
 const DIRECT_GH_PATTERNS: { pattern: RegExp; description: string }[] = [

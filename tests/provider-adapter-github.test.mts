@@ -1395,3 +1395,38 @@ test('listChangeRequestReviewThreadsWithAuthorType selects author.__typename, di
   ]);
   assert.match(capturedQuery ?? '', /author \{ login __typename \}/);
 });
+
+test('listMergedChangeRequests builds the merged pr-list args, with and without a sinceDate search filter', () => {
+  let capturedArgs: string[] | undefined;
+  const port = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({
+      ghText: (args) => {
+        capturedArgs = args;
+        return JSON.stringify([
+          { number: 5, mergedAt: '2026-01-01T00:00:00Z' },
+        ]);
+      },
+    }),
+  );
+  assert.deepEqual(port.listMergedChangeRequests(50, null), [
+    { number: 5, mergedAt: '2026-01-01T00:00:00Z' },
+  ]);
+  assert.deepEqual(capturedArgs, [
+    'pr',
+    'list',
+    '-R',
+    'o/r',
+    '--state',
+    'merged',
+    '--limit',
+    '50',
+    '--json',
+    'number,mergedAt',
+  ]);
+
+  port.listMergedChangeRequests(50, '2026-01-01');
+  assert.ok(capturedArgs?.includes('--search'));
+  assert.ok(capturedArgs?.includes('merged:>=2026-01-01'));
+});

@@ -15,7 +15,6 @@
 // This is the recurring counterpart of the one-time audit in #910 and the
 // chosen recovery path from #909 (advisory-wait stays Copilot-only).
 import { parseCliArgs } from './cli-args.mts';
-import { ghText } from './gh-exec.mts';
 import { loadIddConfig } from './idd-config.mts';
 import {
   advisoryBotIdentityToken,
@@ -30,6 +29,11 @@ import {
   resolveAdvisoryBotLogins,
   resolveTrustedMarkerActors,
 } from './protocol-helpers.mts';
+import {
+  createGithubProviderAdapter,
+  resolveCurrentGithubRepository,
+} from './provider-adapter-github.mts';
+import type { ProviderPort } from './provider-port.mts';
 
 // ---------------------------------------------------------------------------
 // Types (the pure function's input/output — exported for tests)
@@ -671,184 +675,60 @@ function resolveSinceDate(args: SweepArgs): string | null {
     .iso;
 }
 
-function runGh(args: string[]): string {
-  return ghText(args);
-}
-
-function ghGraphql(
-  query: string,
-  variables: Record<string, string | number | null | undefined>,
-): unknown {
-  const args = ['api', 'graphql', '-f', `query=${query}`];
-  for (const [key, value] of Object.entries(variables)) {
-    if (value === null || value === undefined) {
-      continue;
-    }
-    args.push(typeof value === 'number' ? '-F' : '-f', `${key}=${value}`);
-  }
-  const result = JSON.parse(runGh(args).trim() || '{}') as {
-    errors?: { message?: string | null }[] | null;
-  };
-  // A GraphQL call can return HTTP 200 with a top-level `errors` array and
-  // null `data`. Fail fast instead of treating it as empty data, which would
-  // be a silent false negative (a PR appearing "clean" because no nodes came
-  // back).
-  if (Array.isArray(result.errors) && result.errors.length > 0) {
-    const messages = result.errors
-      .map((entry) => entry?.message ?? 'unknown')
-      .join('; ');
-    throw new Error(`GraphQL query returned errors: ${messages}`);
-  }
-  return result;
-}
-
 interface MergedPrListItem {
   number: number;
   mergedAt?: string | null;
 }
 
 function listMergedPrNumbers(
-  repoRef: string,
+  port: ProviderPort,
   sinceDate: string | null,
   limit: number,
 ): MergedPrListItem[] {
-  const args = [
-    'pr',
-    'list',
-    '-R',
-    repoRef,
-    '--state',
-    'merged',
-    '--json',
-    'number,mergedAt',
-    '--limit',
-    String(limit),
-  ];
-  if (sinceDate) {
-    args.push('--search', `merged:>=${sinceDate}`);
-  }
-  const raw = runGh(args).trim();
-  const items = raw ? (JSON.parse(raw) as MergedPrListItem[]) : [];
-  return items;
-}
-
-interface Connection<T> {
-  pageInfo?: { hasNextPage?: boolean | null; endCursor?: string | null } | null;
-  nodes?: T[] | null;
-}
-
-// Page a single `pullRequest` connection to completion so large PRs cannot
-// silently truncate at 100 items (which would hide unresolved threads or a
-// later disposition comment and produce a false negative). Per-thread reply
-// pagination is intentionally left at first:100 — a thread with 100+ replies
-// is pathological and only affects the advisory `dispositioned` flag, not
-// whether the thread surfaces.
-function fetchAllNodes<T>(
-  owner: string,
-  repo: string,
-  number: number,
-  field: string,
-  nodeFields: string,
-): T[] {
-  const out: T[] = [];
-  let after: string | null = null;
-  for (;;) {
-    const query = `query($owner:String!,$repo:String!,$number:Int!,$after:String){
-      repository(owner:$owner,name:$repo){ pullRequest(number:$number){
-        ${field}(first:100,after:$after){ pageInfo{ hasNextPage endCursor } nodes{ ${nodeFields} } }
-      } }
-    }`;
-    const result = ghGraphql(query, { owner, repo, number, after }) as {
-      data?: {
-        repository?: {
-          pullRequest?: Record<string, Connection<T> | null> | null;
-        } | null;
-      } | null;
-    };
-    // Fail fast on a missing pullRequest node or connection: an absent node
-    // (e.g. a transient/permission anomaly) would otherwise be read as zero
-    // nodes, making a PR look "clean" — the silent false negative this
-    // helper's fail-fast posture exists to prevent.
-    const pr = result?.data?.repository?.pullRequest;
-    if (pr == null) {
-      throw new Error(
-        `pagination for ${field} on PR #${number} returned no pullRequest node`,
-      );
-    }
-    const conn = pr[field];
-    if (conn == null) {
-      throw new Error(
-        `pagination for ${field} on PR #${number} returned a null connection`,
-      );
-    }
-    out.push(...(conn.nodes ?? []));
-    if (!conn.pageInfo?.hasNextPage) {
-      break;
-    }
-    // Fail fast rather than silently truncate: a missing cursor on a
-    // has-next-page response would reintroduce the false negative this
-    // pagination exists to prevent.
-    if (!conn.pageInfo.endCursor) {
-      throw new Error(
-        `pagination for ${field} on PR #${number} reported hasNextPage with no endCursor`,
-      );
-    }
-    after = conn.pageInfo.endCursor;
-  }
-  return out;
+  return port.listMergedChangeRequests(limit, sinceDate);
 }
 
 function fetchMergedPr(
-  owner: string,
-  repo: string,
+  port: ProviderPort,
   number: number,
 ): MergedPrInput | null {
-  const metaQuery = `query($owner:String!,$repo:String!,$number:Int!){
-    repository(owner:$owner,name:$repo){ pullRequest(number:$number){
-      number merged mergedAt mergeCommit{ oid }
-    } }
-  }`;
-  const meta = ghGraphql(metaQuery, { owner, repo, number }) as {
-    data?: {
-      repository?: {
-        pullRequest?: {
-          number?: number;
-          merged?: boolean | null;
-          mergedAt?: string | null;
-          mergeCommit?: { oid?: string | null } | null;
-        } | null;
-      } | null;
-    } | null;
-  };
-  const pr = meta?.data?.repository?.pullRequest;
-  if (!pr?.merged) {
+  const meta = port.getMergedChangeRequestMeta(number);
+  if (!meta?.merged) {
     return null;
   }
   return {
-    number: pr.number ?? number,
-    mergedAt: pr.mergedAt ?? null,
-    mergeCommit: pr.mergeCommit?.oid ?? null,
-    comments: fetchAllNodes<SweepCommentInput>(
-      owner,
-      repo,
-      number,
-      'comments',
-      'body url createdAt updatedAt author{ login }',
-    ),
-    reviews: fetchAllNodes<SweepReviewInput>(
-      owner,
-      repo,
-      number,
-      'reviews',
-      'body url state submittedAt author{ login }',
-    ),
-    threads: fetchAllNodes<SweepThreadInput>(
-      owner,
-      repo,
-      number,
-      'reviewThreads',
-      'isResolved path comments(first:100){ nodes{ body url createdAt updatedAt author{ login } } }',
-    ),
+    number: meta.number,
+    mergedAt: meta.mergedAt,
+    mergeCommit: meta.mergeCommitOid,
+    comments: port.listChangeRequestGraphqlComments(number).map((comment) => ({
+      body: comment.body,
+      url: comment.url,
+      createdAt: comment.createdAt,
+      updatedAt: comment.updatedAt,
+      author: { login: comment.authorLogin },
+    })),
+    reviews: port.listChangeRequestGraphqlReviews(number).map((review) => ({
+      body: review.body,
+      url: review.url,
+      state: review.state,
+      submittedAt: review.submittedAt,
+      author: { login: review.authorLogin },
+    })),
+    threads: port
+      .listChangeRequestReviewThreadsExtended(number)
+      .map((thread) => ({
+        isResolved: thread.isResolved,
+        path: thread.path,
+        comments: {
+          nodes: thread.comments.map((comment) => ({
+            body: comment.body,
+            url: comment.url ?? null,
+            createdAt: comment.createdAt,
+            updatedAt: comment.updatedAt,
+            author: { login: comment.authorLogin },
+          })),
+        },
+      })),
   };
 }
 
@@ -858,13 +738,11 @@ function main(): void {
     printHelp();
     process.exit(0);
   }
-  const owner =
-    args.owner ||
-    runGh(['repo', 'view', '--json', 'owner', '--jq', '.owner.login']).trim();
-  const repo =
-    args.repo ||
-    runGh(['repo', 'view', '--json', 'name', '--jq', '.name']).trim();
-  const repoRef = `${owner}/${repo}`;
+  const currentRepo =
+    args.owner && args.repo ? null : resolveCurrentGithubRepository();
+  const owner = args.owner || currentRepo?.owner || '';
+  const repo = args.repo || currentRepo?.repo || '';
+  const port = createGithubProviderAdapter(owner, repo);
   const iddConfig = loadIddConfig();
 
   const { actors: trustedMarkerActors } = resolveTrustedMarkerActors({
@@ -899,11 +777,11 @@ function main(): void {
   const sinceDate = usingExplicitPrs ? null : resolveSinceDate(args);
   const targets = usingExplicitPrs
     ? args.prNumbers.map((number) => ({ number }))
-    : listMergedPrNumbers(repoRef, sinceDate, args.limit);
+    : listMergedPrNumbers(port, sinceDate, args.limit);
 
   const prs: MergedPrInput[] = [];
   for (const target of targets) {
-    const pr = fetchMergedPr(owner, repo, target.number);
+    const pr = fetchMergedPr(port, target.number);
     if (pr) {
       prs.push(pr);
     }
