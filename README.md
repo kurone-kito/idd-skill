@@ -102,7 +102,10 @@ path, including the optional IDD doctor validation.
 The full loop needs `git`, an authenticated `gh` CLI (or an equivalent
 GitHub MCP integration), `jq`, a REST client such as `curl`, and
 optionally Node.js for the helper scripts (see
-[Tooling boundary](docs/customization.md#tooling-boundary)). Review
+[Tooling boundary](docs/customization.md#tooling-boundary)) --
+GitHub is IDD's only implemented provider today; see
+[Provider Portability](docs/customization.md#provider-portability)
+for the staged, provider-neutral adapter boundary. Review
 [Permissions and threat model](docs/permissions.md) before granting
 credentials to unattended or merge-capable agents, and record a merge
 policy in [Customizing IDD](docs/customization.md).
