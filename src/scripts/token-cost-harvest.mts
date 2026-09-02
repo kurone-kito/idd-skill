@@ -1041,19 +1041,31 @@ export interface CompletedIssueWindow {
 }
 
 /**
- * Builds one overall window per issue number that has a CLOSED `cleanup`
- * stage event window (both `--enter` and `--exit` posted) for `vendor`.
- * The `cleanup` requirement is deliberate: an in-progress issue-loop's
- * mid-flight harvest would otherwise permanently freeze that issue's
- * sample at partial usage the first time it is harvested -- the
- * `#ew<issueNumber>` `vendorSessionId` suffix this fallback produces
- * (see `token-cost-adapter-claude.mts`) is stable, so `vendorSessionKey`
- * dedup would silently skip every later, fuller harvest as "already
- * present." Gating on a closed `cleanup` window matches roadmap #2296's
- * locked "one *completed* issue-loop" unit, at the cost of never
- * harvesting an issue whose loop was abandoned before reaching cleanup
- * (deferred rather than wrong, not a data-loss concern: `events.jsonl`
- * is append-only, so a later harvest picks it up if cleanup ever runs).
+ * Builds one overall window per issue number that has a CLOSED, VALID
+ * `cleanup` stage event window (both `--enter` and `--exit` posted, with
+ * `startMs < endMs`) for `vendor`. The `cleanup` requirement is
+ * deliberate: an in-progress issue-loop's mid-flight harvest would
+ * otherwise permanently freeze that issue's sample at partial usage the
+ * first time it is harvested -- the `#ew<issueNumber>` `vendorSessionId`
+ * suffix this fallback produces (see `token-cost-adapter-claude.mts`) is
+ * stable, so `vendorSessionKey` dedup would silently skip every later,
+ * fuller harvest as "already present." Gating on a closed `cleanup`
+ * window matches roadmap #2296's locked "one *completed* issue-loop"
+ * unit, at the cost of never harvesting an issue whose loop was
+ * abandoned before reaching cleanup (deferred rather than wrong, not a
+ * data-loss concern: `events.jsonl` is append-only, so a later harvest
+ * picks it up if cleanup ever runs).
+ *
+ * `startMs < endMs` guards against `readEventWindows`'s own pairing: it
+ * pairs the LATEST `--enter` seen for a (issue, vendor, stage) key with
+ * the LATEST `--exit`, across the whole append-only file, with no
+ * knowledge of which attempt either belongs to. A completed run followed
+ * by a re-attempt that enters `cleanup` again but never exits pairs that
+ * new, still-open enter with the FIRST attempt's stale exit, producing a
+ * reversed window (`startMs > endMs`) -- without this guard, its mere
+ * presence would still count as "closed" and the new, unfinished
+ * attempt's partial usage would be harvested and permanently frozen
+ * under the stable `#ew<issueNumber>` id.
  */
 export function buildCompletedIssueWindows(
   eventWindowsAll: ReadonlyMap<string, StageEventWindow>,
@@ -1079,7 +1091,8 @@ export function buildCompletedIssueWindows(
         : window.startMs,
       endMs: existing ? Math.max(existing.endMs, window.endMs) : window.endMs,
       hasClosedCleanup:
-        (existing?.hasClosedCleanup ?? false) || stageId === 'cleanup',
+        (existing?.hasClosedCleanup ?? false) ||
+        (stageId === 'cleanup' && window.startMs < window.endMs),
     });
   }
   const out: CompletedIssueWindow[] = [];
@@ -1203,6 +1216,15 @@ export function scanClaudeVendorSessions(
     .filter((entry) => entry.isFile())
     .map((entry) => join(entry.parentPath, entry.name))
     .sort();
+  // Event windows carry no file/session identity (issueNumber + vendor
+  // only), so a candidate is collected per FILE here and only actually
+  // harvested after every file has been scanned -- see the cross-file
+  // ambiguity guard below.
+  const eventWindowCandidates: {
+    fileBasename: string;
+    issueNumber: number;
+    records: unknown[];
+  }[] = [];
   for (const file of files) {
     let records: unknown[];
     try {
@@ -1251,23 +1273,55 @@ export function scanClaudeVendorSessions(
         extractRecordTimestampMs,
       );
       for (const [issueNumber, groupRecords] of eventWindowGroups) {
-        try {
-          const eventWindowResult = claudeAdapter.harvest({
-            records: groupRecords,
-            fileBasename,
-            issueNumberOverride: issueNumber,
-          } satisfies ClaudeHarvestInput);
-          out.push({
-            vendor: 'claude',
-            adapterResult: eventWindowResult,
-            timeline: extractClaudeUsageTimeline(groupRecords),
-          });
-        } catch (error) {
-          process.stderr.write(
-            `token-cost-harvest: skipping ${file} event-window issue #${issueNumber}: ${(error as Error).message}\n`,
-          );
-        }
+        eventWindowCandidates.push({
+          fileBasename,
+          issueNumber,
+          records: groupRecords,
+        });
       }
+    }
+  }
+
+  // Cross-file ambiguity guard: event windows carry no session identity,
+  // so two DIFFERENT project log files -- e.g. an unrelated concurrent
+  // session whose own unattributed activity happens to fall inside this
+  // issue's completed window purely by wall-clock coincidence -- can both
+  // independently match the same issue. Emitting both would not just
+  // misattribute the stray file's usage; buildSample's markAmbiguousOverlaps
+  // would then also flag the LEGITIMATE sample as ambiguous (outcome:
+  // unknown), discarding the real measurement too. Emitting for NEITHER
+  // file when more than one contributes to the same issue is strictly
+  // safer than emitting a contaminated pair.
+  const fileCountByIssue = new Map<number, Set<string>>();
+  for (const candidate of eventWindowCandidates) {
+    const filesForIssue =
+      fileCountByIssue.get(candidate.issueNumber) ?? new Set();
+    filesForIssue.add(candidate.fileBasename);
+    fileCountByIssue.set(candidate.issueNumber, filesForIssue);
+  }
+  for (const candidate of eventWindowCandidates) {
+    const contributingFiles = fileCountByIssue.get(candidate.issueNumber);
+    if ((contributingFiles?.size ?? 0) > 1) {
+      process.stderr.write(
+        `token-cost-harvest: skipping event-window issue #${candidate.issueNumber}: matched by more than one project log file (${[...(contributingFiles ?? [])].join(', ')})\n`,
+      );
+      continue;
+    }
+    try {
+      const eventWindowResult = claudeAdapter.harvest({
+        records: candidate.records,
+        fileBasename: candidate.fileBasename,
+        issueNumberOverride: candidate.issueNumber,
+      } satisfies ClaudeHarvestInput);
+      out.push({
+        vendor: 'claude',
+        adapterResult: eventWindowResult,
+        timeline: extractClaudeUsageTimeline(candidate.records),
+      });
+    } catch (error) {
+      process.stderr.write(
+        `token-cost-harvest: skipping event-window issue #${candidate.issueNumber}: ${(error as Error).message}\n`,
+      );
     }
   }
   return out;

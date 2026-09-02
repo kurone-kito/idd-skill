@@ -494,6 +494,86 @@ test('scanClaudeVendorSessions: an OPEN event window (no cleanup exit yet) never
   assert.equal(sessions[0].adapterResult.joinHints, undefined);
 });
 
+test("buildCompletedIssueWindows: a REVERSED cleanup window (a re-attempt's enter paired with a stale earlier exit) is not treated as closed (Codex review finding, #2423)", () => {
+  const all = new Map<string, StageEventWindow>([
+    // A completed first attempt's cleanup enter/exit...
+    // ...then a second attempt re-enters cleanup later than the first
+    // attempt's own exit. readEventWindows pairs the LATEST enter with
+    // the LATEST exit regardless of attempt, producing a reversed
+    // window here (startMs > endMs).
+    [
+      '501:claude:cleanup',
+      {
+        startMs: ms('2026-01-01T02:00:00Z'),
+        endMs: ms('2026-01-01T01:00:00Z'),
+      },
+    ],
+  ]);
+  const windows = buildCompletedIssueWindows(all, 'claude');
+  assert.deepEqual(windows, []);
+});
+
+test('scanClaudeVendorSessions: a reversed cleanup window never produces an event-window sample', () => {
+  const sandbox = mkdtempSync(join(tmpdir(), 'idd-token-cost-harvest-ew-'));
+  writeFileSync(
+    join(sandbox, 'session-ew-reversed.jsonl'),
+    '{"type":"assistant","timestamp":"2026-01-01T01:30:00.000Z","sessionId":"sess-ew-reversed-0001","cwd":"/repo","message":{"model":"m","usage":{"input_tokens":1,"cache_read_input_tokens":0,"cache_creation_input_tokens":0,"output_tokens":1}}}\n',
+  );
+  const eventWindowsAll = new Map<string, StageEventWindow>([
+    [
+      '501:claude:cleanup',
+      {
+        startMs: ms('2026-01-01T02:00:00Z'),
+        endMs: ms('2026-01-01T01:00:00Z'),
+      },
+    ],
+  ]);
+
+  const sessions = scanClaudeVendorSessions(sandbox, eventWindowsAll);
+
+  assert.equal(sessions.length, 1);
+  assert.equal(sessions[0].adapterResult.joinHints, undefined);
+});
+
+test('scanClaudeVendorSessions: two DIFFERENT project log files both matching the same issue window are BOTH dropped (cross-file ambiguity guard, Codex review finding, #2423)', () => {
+  const sandbox = mkdtempSync(join(tmpdir(), 'idd-token-cost-harvest-ew-'));
+  writeFileSync(
+    join(sandbox, 'session-ew-fileA.jsonl'),
+    '{"type":"assistant","timestamp":"2026-01-01T00:20:00.000Z","sessionId":"sess-ew-fileA-0001","cwd":"/repo","message":{"model":"m","usage":{"input_tokens":1,"cache_read_input_tokens":0,"cache_creation_input_tokens":0,"output_tokens":1}}}\n',
+  );
+  writeFileSync(
+    join(sandbox, 'session-ew-fileB.jsonl'),
+    // An unrelated concurrent session whose own unattributed activity
+    // happens to fall inside the SAME wall-clock window purely by
+    // coincidence.
+    '{"type":"assistant","timestamp":"2026-01-01T00:21:00.000Z","sessionId":"sess-ew-fileB-0001","cwd":"/repo","message":{"model":"m","usage":{"input_tokens":5,"cache_read_input_tokens":0,"cache_creation_input_tokens":0,"output_tokens":5}}}\n',
+  );
+  const eventWindowsAll = new Map<string, StageEventWindow>([
+    [
+      '501:claude:work',
+      stageWindow('2026-01-01T00:10:00Z', '2026-01-01T00:25:00Z'),
+    ],
+    [
+      '501:claude:cleanup',
+      stageWindow('2026-01-01T00:26:00Z', '2026-01-01T00:30:00Z'),
+    ],
+  ]);
+
+  const sessions = scanClaudeVendorSessions(sandbox, eventWindowsAll);
+  const ewSamples = sessions.filter((s) =>
+    s.adapterResult.sample.vendorSessionId.includes('#ew'),
+  );
+
+  // Neither file's activity is attributed to issue 501 -- emitting one
+  // (or both) would risk crediting an unrelated session's usage to this
+  // issue, and would also make markAmbiguousOverlaps flag any genuine
+  // future sample as ambiguous too. Both files' own plain base samples
+  // are still produced normally.
+  assert.equal(ewSamples.length, 0);
+  assert.equal(sessions.length, 2);
+  assert.ok(sessions.every((s) => s.adapterResult.joinHints === undefined));
+});
+
 test('scanClaudeVendorSessions: an event window is ignored when the segment already has a cwd-inferred issueNumber', () => {
   const sandbox = mkdtempSync(join(tmpdir(), 'idd-token-cost-harvest-ew-'));
   writeFileSync(
