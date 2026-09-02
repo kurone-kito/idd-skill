@@ -446,6 +446,6 @@ confirmed condition above. Delegate polling mechanics to
   asynchronous review exists for this HEAD SHA at all. This is an
   expected, self-resolving timing race, not a code-caused failure and
   not the review-disposition state above — request a review if one
-  is not already outstanding, wait for Copilot's review to land, then
-  rerun via `rerun-advisory-convergence.mjs` (see
+  is not already outstanding, wait for Copilot's review to land for the
+  current HEAD SHA, then rerun via `rerun-advisory-convergence.mjs` (see
   `idd-ci.instructions.md` §Rerun mechanics) and resume D4.
