@@ -45,6 +45,12 @@ export function createFakeProviderAdapter(fixture) {
       };
     },
     getWorkItem(number) {
+      const errorFixture = fixture.workItemErrors?.[number];
+      if (errorFixture) {
+        const providerError = new Error(errorFixture.message);
+        providerError.category = errorFixture.category;
+        throw providerError;
+      }
       const item = fixture.workItems?.[number];
       if (!item) {
         return null;
