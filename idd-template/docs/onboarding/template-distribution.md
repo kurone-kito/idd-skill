@@ -202,7 +202,8 @@ Review bots (Copilot/CodeRabbit/etc.) read both a vendored `.mts`
 source file and its generated `.mjs` build output independently,
 producing duplicate findings for the same defect. The `idd-skill`
 source repository solves this for itself with a `.gitattributes`
-stanza marking every vendored `scripts/*.mjs`/`bin/**/*.mjs` file
+stanza marking every vendored `scripts/` file individually (plus a
+`bin/**/*.mjs` glob for the `bin/` shim directory)
 `linguist-generated=true` (see the root `.gitattributes`) — but
 `idd-template/` ships no `.gitattributes` file, since an adopter's own
 `.gitattributes` (if any) is theirs to own, and the import mechanism
