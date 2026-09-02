@@ -163,3 +163,61 @@ test('listMergedChangeRequests honors both limit and sinceDate, matching the Git
     [2, 3],
   );
 });
+
+// getWorkflowRun / listWorkflowRuns / getRepositoryDefaultBranch /
+// getChangeRequestReviewsWithHeadCommitDate (Copilot review, PR #2429,
+// rounds 2-3): the same fail-open-instead-of-throw and ignored-parameter
+// gaps, caught by sweeping every #2267-added method against the GitHub
+// adapter and port declarations before pushing a third round.
+test('getWorkflowRun throws on a missing fixture, matching the GitHub adapter', () => {
+  const port = createFakeProviderAdapter({
+    workflowRuns: { 'o/r/123': { id: 123 } },
+  });
+  assert.deepEqual(port.getWorkflowRun('o', 'r', 123), { id: 123 });
+  assert.throws(() => port.getWorkflowRun('o', 'r', 456), /no workflow-run/);
+});
+
+test('listWorkflowRuns honors limit, matching the GitHub adapter', () => {
+  const port = createFakeProviderAdapter({
+    workflowRunLists: {
+      'o/r/CI': [
+        { id: 1, conclusion: 'success', status: 'completed', createdAt: '' },
+        { id: 2, conclusion: 'success', status: 'completed', createdAt: '' },
+        { id: 3, conclusion: 'success', status: 'completed', createdAt: '' },
+      ],
+    },
+  });
+  assert.deepEqual(
+    port.listWorkflowRuns('o', 'r', 'CI', 2).map((run) => run.id),
+    [1, 2],
+  );
+});
+
+test('getRepositoryDefaultBranch accepts owner/repo, matching the port arity', () => {
+  const port = createFakeProviderAdapter({ repositoryDefaultBranch: 'main' });
+  assert.equal(port.getRepositoryDefaultBranch('o', 'r'), 'main');
+});
+
+test('getChangeRequestReviewsWithHeadCommitDate throws on a missing fixture, matching the GitHub adapter', () => {
+  const port = createFakeProviderAdapter({
+    reviewsWithHeadCommitDate: {
+      42: { reviews: [], headCommittedAt: '2026-07-31T23:00:00Z' },
+    },
+  });
+  assert.deepEqual(port.getChangeRequestReviewsWithHeadCommitDate(42), {
+    reviews: [],
+    headCommittedAt: '2026-07-31T23:00:00Z',
+  });
+  assert.throws(
+    () => port.getChangeRequestReviewsWithHeadCommitDate(43),
+    /no reviews\/head-commit-date/,
+  );
+});
+
+test('resolveViewerAppSlugSafe trims a fixture app slug, matching the GitHub adapter', () => {
+  const port = createFakeProviderAdapter({ viewerAppSlug: '  my-app  ' });
+  assert.deepEqual(port.resolveViewerAppSlugSafe(), {
+    appSlug: 'my-app',
+    unavailable: false,
+  });
+});

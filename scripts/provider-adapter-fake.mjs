@@ -173,14 +173,23 @@ export function createFakeProviderAdapter(fixture) {
       return fixture.searchResults ?? [];
     },
     // --- #2267 additions below. -------------------------------------------
-    getRepositoryDefaultBranch() {
+    getRepositoryDefaultBranch(_defaultBranchOwner, _defaultBranchRepo) {
+      // Accepts owner/repo to match the port's declared arity (Copilot
+      // review, PR #2429: an unaccepted parameter is silently hidden by
+      // structural typing) -- unused because every fixture in this file
+      // represents a single ambient repo, and this method's one real call
+      // site (pre-merge-readiness.mts) always passes that same repo back.
       return fixture.repositoryDefaultBranch ?? null;
     },
     resolveViewerAppSlugSafe() {
-      if (fixture.viewerAppSlugUnavailable || !fixture.viewerAppSlug) {
+      // Mirrors the GitHub adapter's own raw.trim() on the CLI output,
+      // for the same reason as resolveViewerLoginSafeQuiet's normalization
+      // above.
+      const trimmed = fixture.viewerAppSlug?.trim() ?? '';
+      if (fixture.viewerAppSlugUnavailable || !trimmed) {
         return { appSlug: '', unavailable: true };
       }
-      return { appSlug: fixture.viewerAppSlug, unavailable: false };
+      return { appSlug: trimmed, unavailable: false };
     },
     resolveViewerLoginSafeQuiet() {
       // Mirrors the GitHub adapter's own trim().toLowerCase() normalization
@@ -316,12 +325,25 @@ export function createFakeProviderAdapter(fixture) {
         : { outcome: 'ok', value };
     },
     getWorkflowRun(runOwner, runRepo, runId) {
+      // Throws on a missing fixture, matching the GitHub adapter's own
+      // no-catch `deps.ghText` call (Copilot review, PR #2429) -- a fake
+      // adapter returning null here can both mask a missing fixture and
+      // produce a confusing downstream TypeError instead of failing
+      // closed like production.
       const key = `${runOwner}/${runRepo}/${runId}`;
-      return fixture.workflowRuns?.[key] ?? null;
+      const value = fixture.workflowRuns?.[key];
+      if (value === undefined) {
+        throw new Error(`fake provider: no workflow-run fixture for ${key}`);
+      }
+      return value;
     },
-    listWorkflowRuns(runsOwner, runsRepo, workflowName) {
+    listWorkflowRuns(runsOwner, runsRepo, workflowName, limit) {
+      // Honors `limit`, matching the GitHub adapter's own `gh run list
+      // --limit N` call (Copilot review, PR #2429) -- an ignored limit let
+      // a collection-wiring test pass against an unrealistically large
+      // sibling sweep.
       const key = `${runsOwner}/${runsRepo}/${workflowName}`;
-      return fixture.workflowRunLists?.[key] ?? [];
+      return (fixture.workflowRunLists?.[key] ?? []).slice(0, limit);
     },
     getChangeRequestHeadShaAtRepo(atRepoOwner, atRepoRepo, number) {
       const key = `${atRepoOwner}/${atRepoRepo}/${number}`;
@@ -405,12 +427,18 @@ export function createFakeProviderAdapter(fixture) {
       return fixture.reviewThreadsWithAuthorType?.[number] ?? [];
     },
     getChangeRequestReviewsWithHeadCommitDate(number) {
-      return (
-        fixture.reviewsWithHeadCommitDate?.[number] ?? {
-          reviews: [],
-          headCommittedAt: '',
-        }
-      );
+      // Throws on a missing fixture, matching the GitHub adapter's own
+      // no-catch GraphQL call and this file's sibling PR-view methods
+      // (Copilot review, PR #2429) -- review-clause.mts's own caller has
+      // no try/catch around this call, so a silent empty default here
+      // would hide a missing fixture instead of failing closed.
+      const value = fixture.reviewsWithHeadCommitDate?.[number];
+      if (!value) {
+        throw new Error(
+          `fake provider: no reviews/head-commit-date fixture for PR ${number}`,
+        );
+      }
+      return value;
     },
     resolveChangeRequestReviewThread(threadId) {
       if (fixture.unresolvableReviewThreadIds?.has(threadId)) {
