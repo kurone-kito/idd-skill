@@ -43,6 +43,19 @@
 // records; `claudeAdapter.harvest()` itself is unchanged in shape (still
 // one call in, one `TokenCostAdapterResult` out) and stays exactly as
 // valid for a single-segment (the common, unchanged case) as before.
+//
+// #2418: #2404's cwd-segmentation only helps when a session's `cwd`
+// actually varies mid-file. On a workstation where every session is
+// launched once from the primary worktree and moves between issue
+// worktrees only via in-conversation `cd` (never a fresh Claude Code
+// launch), `cwd` never varies at all, so #2404's fix is never exercised.
+// `ClaudeHarvestInput.issueNumberOverride` lets a caller (the
+// harvester's event-window fallback in `token-cost-harvest.mts`, which
+// this module has no events.jsonl access to implement itself) supply the
+// issue number directly, bypassing cwd-inference for that call. This
+// module stays cwd-only otherwise; `scanClaudeSessions` below never sets
+// `issueNumberOverride` (it has no events.jsonl input to derive one
+// from) and keeps its documented cwd-only contract.
 
 import { globSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
@@ -83,9 +96,22 @@ export interface ClaudeHarvestInput {
    * colliding on the file's own shared `sessionId`. Leave undefined for a
    * whole-file / single-segment harvest: the common case (a file that
    * never changes `cwd`) keeps its pre-existing `vendorSessionId` exactly
-   * as before, with no suffix at all.
+   * as before, with no suffix at all. Ignored when `issueNumberOverride`
+   * is set (mutually exclusive call patterns -- see below).
    */
   segmentIndex?: number;
+  /**
+   * #2418: supplies the issue number directly, bypassing this adapter's
+   * own cwd-based inference, for a caller (the harvester's event-window
+   * fallback) that has already determined `records` belongs to this issue
+   * by correlating their own timestamps against `token-cost-event.mjs`
+   * enter/exit windows rather than any `cwd` field. Takes priority over
+   * cwd-inference when present. Also switches the `vendorSessionId` suffix
+   * scheme to `#ew<issueNumber>` (self-describing, and collision-safe
+   * against the numeric `#<segmentIndex>` scheme above) since these two
+   * fallback paths are never combined on the same harvest() call.
+   */
+  issueNumberOverride?: number;
 }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
@@ -200,10 +226,15 @@ function deriveFallbackSessionId(
 function deriveVendorSessionId(
   base: string | undefined,
   segmentIndex: number | undefined,
+  eventWindowIssueNumber: number | undefined,
 ): string | undefined {
-  return base === undefined || segmentIndex === undefined
-    ? base
-    : `${base}#${segmentIndex}`;
+  if (base === undefined) {
+    return undefined;
+  }
+  if (eventWindowIssueNumber !== undefined) {
+    return `${base}#ew${eventWindowIssueNumber}`;
+  }
+  return segmentIndex === undefined ? base : `${base}#${segmentIndex}`;
 }
 
 /** The first non-empty top-level `cwd` across `records`, in file order. */
@@ -280,6 +311,21 @@ function toValidTimestamp(value: unknown): string | undefined {
     return undefined;
   }
   return Number.isFinite(Date.parse(value)) ? value : undefined;
+}
+
+/**
+ * One record's own `timestamp` field, parsed to epoch milliseconds, or
+ * undefined when absent/invalid. Exported for the harvester's
+ * event-window fallback (#2418), which needs each record's own timestamp
+ * independent of any `cwd` field to determine which issue's event window
+ * (if any) that record falls inside.
+ */
+export function extractRecordTimestampMs(record: unknown): number | undefined {
+  if (!isPlainObject(record)) {
+    return undefined;
+  }
+  const valid = toValidTimestamp(record.timestamp);
+  return valid === undefined ? undefined : Date.parse(valid);
 }
 
 /** First and last valid record `timestamp` fields, in file order. Undefined when no record has one. */
@@ -393,17 +439,28 @@ function asClaudeHarvestInput(input: unknown): ClaudeHarvestInput {
     typeof input.fileBasename === 'string' ? input.fileBasename : undefined;
   const segmentIndex =
     typeof input.segmentIndex === 'number' ? input.segmentIndex : undefined;
-  return { records: input.records, fileBasename, segmentIndex };
+  const issueNumberOverride =
+    typeof input.issueNumberOverride === 'number'
+      ? input.issueNumberOverride
+      : undefined;
+  return {
+    records: input.records,
+    fileBasename,
+    segmentIndex,
+    issueNumberOverride,
+  };
 }
 
 /** Claude Code vendor adapter. `input` must satisfy {@link ClaudeHarvestInput}. */
 export const claudeAdapter: TokenCostVendorAdapter = {
   harvest(input: unknown): TokenCostAdapterResult {
-    const { records, fileBasename, segmentIndex } = asClaudeHarvestInput(input);
+    const { records, fileBasename, segmentIndex, issueNumberOverride } =
+      asClaudeHarvestInput(input);
 
     const vendorSessionId = deriveVendorSessionId(
       extractSessionId(records) ?? deriveFallbackSessionId(fileBasename),
       segmentIndex,
+      issueNumberOverride,
     );
     if (!vendorSessionId) {
       throw new Error(
@@ -419,9 +476,9 @@ export const claudeAdapter: TokenCostVendorAdapter = {
     }
 
     const cwd = extractCwd(records);
-    const issueNumber = cwd
-      ? inferIssueNumberFromBasename(basename(cwd))
-      : undefined;
+    const issueNumber =
+      issueNumberOverride ??
+      (cwd ? inferIssueNumberFromBasename(basename(cwd)) : undefined);
 
     const sample: TokenCostSessionSample = {
       schemaVersion: 1,

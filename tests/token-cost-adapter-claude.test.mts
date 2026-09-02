@@ -9,6 +9,7 @@ import {
   defaultClaudeProjectDir,
   defaultClaudeProjectsRoot,
   encodeClaudeProjectDirName,
+  extractRecordTimestampMs,
   parseClaudeProjectLines,
   scanClaudeSessions,
   segmentRecordsByCwd,
@@ -113,6 +114,105 @@ test('a worktree cwd with an issue number yields joinHints.issueNumber, never a 
   assert.doesNotMatch(JSON.stringify(sample), /ghq|\/home\/|issue\/4242/);
 });
 
+test('issueNumberOverride supplies joinHints.issueNumber even when cwd-inference would fail -- #2418', () => {
+  const { sample, joinHints } = claudeAdapter.harvest({
+    records: [
+      {
+        type: 'assistant',
+        timestamp: '2026-01-01T00:00:00Z',
+        sessionId: 'sess-ew-0001',
+        cwd: '/repo',
+        message: {
+          model: 'm',
+          usage: {
+            input_tokens: 1,
+            cache_read_input_tokens: 0,
+            cache_creation_input_tokens: 0,
+            output_tokens: 1,
+          },
+        },
+      },
+    ],
+    issueNumberOverride: 501,
+  });
+  assert.deepEqual(joinHints, { issueNumber: 501 });
+  assert.equal(sample.vendorSessionId, 'sess-ew-0001#ew501');
+});
+
+test('issueNumberOverride takes priority over a real cwd-inferable issue number', () => {
+  const { joinHints, sample } = claudeAdapter.harvest({
+    records: [
+      {
+        type: 'assistant',
+        timestamp: '2026-01-01T00:00:00Z',
+        sessionId: 'sess-ew-0002',
+        cwd: '/repo.issue-4242-x',
+        message: {
+          model: 'm',
+          usage: {
+            input_tokens: 1,
+            cache_read_input_tokens: 0,
+            cache_creation_input_tokens: 0,
+            output_tokens: 1,
+          },
+        },
+      },
+    ],
+    issueNumberOverride: 999,
+  });
+  assert.deepEqual(joinHints, { issueNumber: 999 });
+  assert.equal(sample.vendorSessionId, 'sess-ew-0002#ew999');
+});
+
+test('segmentIndex is ignored (not appended) when issueNumberOverride is also present', () => {
+  const { sample } = claudeAdapter.harvest({
+    records: [
+      {
+        type: 'assistant',
+        timestamp: '2026-01-01T00:00:00Z',
+        sessionId: 'sess-ew-0003',
+        cwd: '/repo',
+        message: {
+          model: 'm',
+          usage: {
+            input_tokens: 1,
+            cache_read_input_tokens: 0,
+            cache_creation_input_tokens: 0,
+            output_tokens: 1,
+          },
+        },
+      },
+    ],
+    segmentIndex: 7,
+    issueNumberOverride: 501,
+  });
+  assert.equal(sample.vendorSessionId, 'sess-ew-0003#ew501');
+});
+
+test('no issueNumberOverride and no cwd: behavior is unchanged from before #2418', () => {
+  const { joinHints, sample } = claudeAdapter.harvest({
+    records: [
+      {
+        type: 'assistant',
+        timestamp: '2026-01-01T00:00:00Z',
+        sessionId: 'sess-plain-0001',
+        cwd: '/repo',
+        message: {
+          model: 'm',
+          usage: {
+            input_tokens: 1,
+            cache_read_input_tokens: 0,
+            cache_creation_input_tokens: 0,
+            output_tokens: 1,
+          },
+        },
+      },
+    ],
+  });
+  assert.equal(joinHints, undefined);
+  assert.equal(sample.vendorSessionId, 'sess-plain-0001');
+});
+
 test('adapter output never carries a leaked secret, prompt text, or absolute path from raw records', () => {
   const { sample } = harvestFixture('session-sensitive-fields.jsonl');
   const serialized = JSON.stringify(sample);
@@ -194,6 +294,24 @@ test('scanClaudeSessions on an empty directory returns no results', () => {
   );
   mkdirSync(sandbox, { recursive: true });
   assert.deepEqual(scanClaudeSessions({ projectDir: sandbox }), []);
+});
+
+test("extractRecordTimestampMs: reads a record's own valid timestamp -- #2418", () => {
+  assert.equal(
+    extractRecordTimestampMs({ timestamp: '2026-01-01T00:00:00Z' }),
+    Date.parse('2026-01-01T00:00:00Z'),
+  );
+});
+
+test('extractRecordTimestampMs: undefined for a missing, malformed, or non-string timestamp', () => {
+  assert.equal(extractRecordTimestampMs({}), undefined);
+  assert.equal(
+    extractRecordTimestampMs({ timestamp: 'not-a-date' }),
+    undefined,
+  );
+  assert.equal(extractRecordTimestampMs({ timestamp: 12345 }), undefined);
+  assert.equal(extractRecordTimestampMs('not an object'), undefined);
+  assert.equal(extractRecordTimestampMs(null), undefined);
 });
 
 test('harvest rejects an input that is not { records: unknown[] }', () => {

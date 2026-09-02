@@ -34,6 +34,7 @@ import {
 import {
   claudeAdapter,
   defaultClaudeProjectDir,
+  extractRecordTimestampMs,
   parseClaudeProjectLines,
   segmentRecordsByCwd,
 } from './token-cost-adapter-claude.mjs';
@@ -825,6 +826,91 @@ function eventWindowsForIssue(all, issueNumber, vendor) {
   return out;
 }
 /**
+ * Builds one overall window per issue number that has a CLOSED `cleanup`
+ * stage event window (both `--enter` and `--exit` posted) for `vendor`.
+ * The `cleanup` requirement is deliberate: an in-progress issue-loop's
+ * mid-flight harvest would otherwise permanently freeze that issue's
+ * sample at partial usage the first time it is harvested -- the
+ * `#ew<issueNumber>` `vendorSessionId` suffix this fallback produces
+ * (see `token-cost-adapter-claude.mts`) is stable, so `vendorSessionKey`
+ * dedup would silently skip every later, fuller harvest as "already
+ * present." Gating on a closed `cleanup` window matches roadmap #2296's
+ * locked "one *completed* issue-loop" unit, at the cost of never
+ * harvesting an issue whose loop was abandoned before reaching cleanup
+ * (deferred rather than wrong, not a data-loss concern: `events.jsonl`
+ * is append-only, so a later harvest picks it up if cleanup ever runs).
+ */
+export function buildCompletedIssueWindows(eventWindowsAll, vendor) {
+  const byIssue = new Map();
+  for (const [key, window] of eventWindowsAll) {
+    const [issueNumberRaw, keyVendor, stageId] = key.split(':');
+    if (keyVendor !== vendor) {
+      continue;
+    }
+    const issueNumber = Number(issueNumberRaw);
+    if (!Number.isInteger(issueNumber)) {
+      continue;
+    }
+    const existing = byIssue.get(issueNumber);
+    byIssue.set(issueNumber, {
+      startMs: existing
+        ? Math.min(existing.startMs, window.startMs)
+        : window.startMs,
+      endMs: existing ? Math.max(existing.endMs, window.endMs) : window.endMs,
+      hasClosedCleanup:
+        (existing?.hasClosedCleanup ?? false) || stageId === 'cleanup',
+    });
+  }
+  const out = [];
+  for (const [issueNumber, entry] of byIssue) {
+    if (entry.hasClosedCleanup) {
+      out.push({
+        issueNumber,
+        startMs: entry.startMs,
+        endMs: entry.endMs,
+      });
+    }
+  }
+  return out;
+}
+/**
+ * Partitions `records` by which single `CompletedIssueWindow` (if any)
+ * each record's own timestamp falls inside, via `getTimestampMs`. A
+ * record with no valid timestamp, or one whose timestamp falls inside
+ * zero or more than one window, is left out of every group rather than
+ * guessed: concurrent sessions append to one shared, HOME-keyed
+ * `events.jsonl`, so two different issues' windows can genuinely overlap
+ * in wall-clock, and "exactly one match" is the only safe attribution.
+ * Preserves each group's original file-order relative to itself.
+ */
+export function segmentRecordsByEventWindow(
+  records,
+  issueWindows,
+  getTimestampMs,
+) {
+  const groups = new Map();
+  for (const record of records) {
+    const atMs = getTimestampMs(record);
+    if (atMs === undefined) {
+      continue;
+    }
+    const matches = issueWindows.filter(
+      (window) => atMs >= window.startMs && atMs <= window.endMs,
+    );
+    if (matches.length !== 1) {
+      continue;
+    }
+    const issueNumber = matches[0].issueNumber;
+    const group = groups.get(issueNumber);
+    if (group) {
+      group.push(record);
+    } else {
+      groups.set(issueNumber, [record]);
+    }
+  }
+  return groups;
+}
+/**
  * #2404: a long-lived session's project JSONL file is not necessarily one
  * cwd for its whole lifetime -- `segmentRecordsByCwd` (see
  * token-cost-adapter-claude.mts) splits it into contiguous per-cwd runs
@@ -835,12 +921,38 @@ function eventWindowsForIssue(all, issueNumber, vendor) {
  * records (not the whole file's), matching `claudeAdapter.harvest()`'s own
  * per-segment scoping -- otherwise a segment's stage-usage allocation
  * would double-count usage from its sibling segments.
+ *
+ * #2418: #2404 only helps a session whose `cwd` actually varies mid-file.
+ * On a workstation where every session is launched once from the primary
+ * worktree and reaches other worktrees only via in-conversation `cd`
+ * (never a fresh Claude Code launch), `cwd` never varies at all, so
+ * #2404's segmentation is never exercised and #2404 alone still produces
+ * zero issue-loop samples. For a cwd-segment whose OWN cwd-inference
+ * already failed (`joinHints.issueNumber === undefined`), this
+ * additionally partitions that segment's records by event window
+ * (`segmentRecordsByEventWindow`, gated to CLOSED `cleanup` windows only
+ * -- see `buildCompletedIssueWindows`) and calls `claudeAdapter.harvest()`
+ * once more per matched issue, via `issueNumberOverride`. This is
+ * additive, not a replacement: the segment's own plain cwd-only sample
+ * (`kind: 'session'` when cwd-inference fails) is still produced exactly
+ * as before, so nothing already working regresses. `aggregateSnapshot`
+ * (`token-cost-report.mts`) only ever counts `kind: 'issue-loop'` samples
+ * toward the published snapshot, so a `session`-kind sample coexisting
+ * with event-window-derived `issue-loop` samples drawn from the same
+ * underlying records cannot double-count anything published.
  */
-export function scanClaudeVendorSessions(projectDir) {
+export function scanClaudeVendorSessions(
+  projectDir,
+  eventWindowsAll = new Map(),
+) {
   const out = [];
   if (!existsSync(projectDir)) {
     return out;
   }
+  const completedIssueWindows = buildCompletedIssueWindows(
+    eventWindowsAll,
+    'claude',
+  );
   const files = globSync('*.jsonl', { cwd: projectDir, withFileTypes: true })
     .filter((entry) => entry.isFile())
     .map((entry) => join(entry.parentPath, entry.name))
@@ -858,8 +970,9 @@ export function scanClaudeVendorSessions(projectDir) {
     const fileBasename = basename(file);
     const segments = segmentRecordsByCwd(records);
     segments.forEach((segment, index) => {
+      let adapterResult;
       try {
-        const adapterResult = claudeAdapter.harvest({
+        adapterResult = claudeAdapter.harvest({
           records: segment.records,
           fileBasename,
           // Suffix only when the file actually produced more than one
@@ -868,15 +981,44 @@ export function scanClaudeVendorSessions(projectDir) {
           // against samples already harvested before this change.
           segmentIndex: segments.length > 1 ? index : undefined,
         });
-        out.push({
-          vendor: 'claude',
-          adapterResult,
-          timeline: extractClaudeUsageTimeline(segment.records),
-        });
       } catch (error) {
         process.stderr.write(
           `token-cost-harvest: skipping ${file} segment ${index}: ${error.message}\n`,
         );
+        return;
+      }
+      out.push({
+        vendor: 'claude',
+        adapterResult,
+        timeline: extractClaudeUsageTimeline(segment.records),
+      });
+      if (
+        adapterResult.joinHints?.issueNumber === undefined &&
+        completedIssueWindows.length > 0
+      ) {
+        const eventWindowGroups = segmentRecordsByEventWindow(
+          segment.records,
+          completedIssueWindows,
+          extractRecordTimestampMs,
+        );
+        for (const [issueNumber, groupRecords] of eventWindowGroups) {
+          try {
+            const eventWindowResult = claudeAdapter.harvest({
+              records: groupRecords,
+              fileBasename,
+              issueNumberOverride: issueNumber,
+            });
+            out.push({
+              vendor: 'claude',
+              adapterResult: eventWindowResult,
+              timeline: extractClaudeUsageTimeline(groupRecords),
+            });
+          } catch (error) {
+            process.stderr.write(
+              `token-cost-harvest: skipping ${file} segment ${index} event-window issue #${issueNumber}: ${error.message}\n`,
+            );
+          }
+        }
       }
     });
   }
@@ -1110,7 +1252,7 @@ function runCli(argv) {
   );
   const eventWindows = readEventWindows(eventsPath);
   const sessions = [
-    ...scanClaudeVendorSessions(defaultClaudeProjectDir()),
+    ...scanClaudeVendorSessions(defaultClaudeProjectDir(), eventWindows),
     ...scanCodexVendorSessions(defaultCodexSessionsDir()),
     ...scanGrokVendorSessions(defaultGrokSessionsDir()),
   ];
