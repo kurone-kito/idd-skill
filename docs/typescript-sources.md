@@ -87,16 +87,16 @@ independently re-deriving already-settled tradeoffs. This applies
 generally, not only to locks.
 
 Worked example: issue #2223 asked for a new clone-scoped lock for
-concurrent worktree lifecycle operations, naming `claim-lock.mts` in
+concurrent worktree lifecycle operations, naming `src/scripts/claim-lock.mts` in
 its own body as either the extension target or the natural sibling
-for a new module. The implementation (PR #2389, `clone-lock.mts`)
+for a new module. The implementation (PR #2389, `src/scripts/clone-lock.mts`)
 designed its own staleness and recovery logic from scratch instead,
 and needed several further review rounds to arrive — independently,
 through review-driven trial and error — at conclusions
-`claim-lock.mts`'s own comments already state as settled: prefer a
+`src/scripts/claim-lock.mts`'s own comments already state as settled: prefer a
 stronger external authority over ad hoc local recovery when one is
 available, and a local process-liveness check can be defeated by a
-process-lifecycle mismatch (in `clone-lock.mts`'s case, a wrapper
+process-lifecycle mismatch (in `src/scripts/clone-lock.mts`'s case, a wrapper
 process dying while the child command it spawned kept running).
 
 ## Build and verification
