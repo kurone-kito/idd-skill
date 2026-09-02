@@ -566,7 +566,10 @@ test('#2453 localHeadDrift stays null and never throws when getLocalHeadState it
     },
   });
 
-  assert.doesNotThrow(() => runMergeExecute([...BASE_ARGS, '--apply'], deps));
+  // A throw here fails the test on its own (uncaught exception) -- no
+  // separate assert.doesNotThrow needed, and calling runMergeExecute only
+  // once avoids a second, redundant --apply merge attempt against the
+  // same deps (Copilot review, PR #2496).
   const { verdict, exitCode } = runMergeExecute(
     [...BASE_ARGS, '--apply'],
     deps,
