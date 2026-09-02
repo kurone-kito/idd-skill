@@ -873,6 +873,11 @@ export const SCAN_EXCLUDED_PATHS = new Set([
   'docs/onboarding/placeholders.md',
   'docs/customization.md',
   'docs/onboarding/policy-decisions.md',
+  // #2489: same type: reference / literal-token-display pattern as the
+  // three above, found during a sweep of docs/onboarding/*.md for
+  // anything else missed by #1924's original list.
+  'docs/onboarding/agent-entry-and-verification.md',
+  'docs/onboarding/project-tuning.md',
 ]);
 
 /** Token occurrences found in one scanned file. */
@@ -3135,7 +3140,9 @@ idd-template/docs/onboarding/placeholders.md defines a derivation;
 explicit flags override; --trusted-marker-actor is always explicit) and
 rewrites the files. Skips the placeholder-reference meta-docs
 (docs/onboarding/placeholders.md, docs/customization.md,
-docs/onboarding/policy-decisions.md), which document the tokens rather
+docs/onboarding/policy-decisions.md,
+docs/onboarding/agent-entry-and-verification.md,
+docs/onboarding/project-tuning.md), which document the tokens rather
 than consume them and stay literal on purpose. Prints a JSON verdict
 with the per-file, per-placeholder plan, blocking residue (unresolved
 onboarding placeholders), informational unknown {{...}} tokens, and the
