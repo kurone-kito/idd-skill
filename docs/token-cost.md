@@ -114,6 +114,13 @@ mismatched/contaminated one in the meantime.
   `#2294`'s implementation notes), and the fix belongs to a separate,
   deliberate byte-budget decision rather than this reporter's own
   scope.
+- `--apply` is also cwd-sensitive, the same way `token-cost-harvest.mjs`
+  is above: it refuses to run while the current branch is the
+  repository's default branch, since a stray `--apply` left dirty on
+  the shared primary worktree's `main` can block every concurrent
+  session's next B1 `git merge --ff-only` worktree creation (`#2452`).
+  Pass `--allow-default-branch` for an intentional maintainer run from
+  the primary worktree; `--apply` from an issue worktree is unaffected.
 
 A snapshot is `publishable` only once it has at least 10 issue-loop
 samples across at least 2 distinct vendors. Below that gate, the

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
@@ -16,6 +16,7 @@ import {
   renderReadmeRegionEn,
   renderReadmeRegionJa,
   replaceMarkedRegion,
+  resolveDefaultBranchGuard,
 } from '../src/scripts/token-cost-report.mts';
 
 const REPO_ROOT = fileURLToPath(new URL('..', import.meta.url));
@@ -445,5 +446,185 @@ test('CLI: --now rejects an invalid timestamp with a clean usage error, not a ra
       assert.doesNotMatch(e.stderr, /RangeError|Invalid time value/);
     }
     assert.ok(threw, 'expected the CLI to exit non-zero');
+  });
+});
+
+test('resolveDefaultBranchGuard blocks --apply on the default branch without an override (#2452)', () => {
+  const result = resolveDefaultBranchGuard(false, {
+    getCurrentBranch: () => 'main',
+    getDefaultBranch: () => 'main',
+  });
+  assert.deepEqual(result, {
+    blocked: true,
+    currentBranch: 'main',
+    defaultBranch: 'main',
+  });
+});
+
+test('resolveDefaultBranchGuard --allow-default-branch bypasses the block on the default branch (#2452)', () => {
+  const result = resolveDefaultBranchGuard(true, {
+    getCurrentBranch: () => 'main',
+    getDefaultBranch: () => 'main',
+  });
+  assert.equal(result.blocked, false);
+});
+
+test('resolveDefaultBranchGuard passes through unaffected on a non-default branch (#2452)', () => {
+  const withoutOverride = resolveDefaultBranchGuard(false, {
+    getCurrentBranch: () => 'issue/2452-fix-token-cost-refuse-apply-on',
+    getDefaultBranch: () => 'main',
+  });
+  assert.equal(withoutOverride.blocked, false);
+
+  const withOverride = resolveDefaultBranchGuard(true, {
+    getCurrentBranch: () => 'issue/2452-fix-token-cost-refuse-apply-on',
+    getDefaultBranch: () => 'main',
+  });
+  assert.equal(withOverride.blocked, false);
+});
+
+test('resolveDefaultBranchGuard real getDefaultBranch falls back to "main" when origin/HEAD is unset locally (#2452)', () => {
+  const originalCwd = process.cwd();
+  const sandbox = mkdtempSync(join(tmpdir(), 'idd-token-cost-report-git-'));
+  process.chdir(sandbox);
+  try {
+    execFileSync('git', ['init', '-b', 'main', '-q']);
+    // No `origin` remote configured at all, matching a clone that never
+    // ran `git remote set-head origin -a` -- `git symbolic-ref --short
+    // refs/remotes/origin/HEAD` fails, and the real getDefaultBranch must
+    // fall back to the fixed 'main' rather than throwing.
+    execFileSync(
+      'git',
+      [
+        '-c',
+        'commit.gpgsign=false',
+        '-c',
+        'user.email=test@example.com',
+        '-c',
+        'user.name=test',
+        'commit',
+        '--allow-empty',
+        '-q',
+        '-m',
+        'init',
+      ],
+      { stdio: 'pipe' },
+    );
+    // Real deps (no injected stub): exercises both the git subprocess
+    // calls and the fallback branch together.
+    const result = resolveDefaultBranchGuard(false);
+    assert.equal(result.currentBranch, 'main');
+    assert.equal(result.defaultBranch, 'main');
+    assert.equal(result.blocked, true);
+  } finally {
+    process.chdir(originalCwd);
+  }
+});
+
+/** Initializes a throwaway git repo on `branch` with one empty commit and
+ * runs `fn` with it as `process.cwd()`, restoring the original cwd after --
+ * lets a CLI-level test drive the real `getCurrentBranch`/`getDefaultBranch`
+ * git subprocess calls end to end (#2452). */
+function withGitSandboxCwd(branch: string, fn: () => void): void {
+  const originalCwd = process.cwd();
+  const sandbox = mkdtempSync(join(tmpdir(), 'idd-token-cost-report-cli-git-'));
+  process.chdir(sandbox);
+  try {
+    execFileSync('git', ['init', '-b', branch, '-q']);
+    execFileSync(
+      'git',
+      [
+        '-c',
+        'commit.gpgsign=false',
+        '-c',
+        'user.email=test@example.com',
+        '-c',
+        'user.name=test',
+        'commit',
+        '--allow-empty',
+        '-q',
+        '-m',
+        'init',
+      ],
+      { stdio: 'pipe' },
+    );
+    fn();
+  } finally {
+    process.chdir(originalCwd);
+  }
+}
+
+test('CLI: --apply refuses on the default branch without --allow-default-branch, before any write (#2452)', () => {
+  withGitSandboxCwd('main', () => {
+    let threw = false;
+    try {
+      execFileSync(
+        process.execPath,
+        [join(REPO_ROOT, 'scripts/token-cost-report.mjs'), '--apply'],
+        { encoding: 'utf8', stdio: 'pipe' },
+      );
+    } catch (error) {
+      threw = true;
+      const e = error as { status: number; stderr: string };
+      assert.equal(e.status, 2);
+      assert.match(
+        e.stderr,
+        /refusing to run on the repository's default branch "main".*Pass --allow-default-branch to override/s,
+      );
+    }
+    assert.ok(threw, 'expected the CLI to exit non-zero');
+    assert.equal(
+      existsSync('docs/token-cost-snapshot.json'),
+      false,
+      'the default-branch guard must fire before any write',
+    );
+  });
+});
+
+test('CLI: --apply --allow-default-branch bypasses the guard on the default branch (#2452)', () => {
+  withGitSandboxCwd('main', () => {
+    // No --in supplied: the guard must pass through, so the run fails on
+    // the pre-existing, already-covered "requires at least one --in"
+    // error instead of the branch-refusal message -- proving the override
+    // actually reached past the guard rather than short-circuiting it.
+    assert.throws(
+      () =>
+        execFileSync(
+          process.execPath,
+          [
+            join(REPO_ROOT, 'scripts/token-cost-report.mjs'),
+            '--apply',
+            '--allow-default-branch',
+          ],
+          { encoding: 'utf8', stdio: 'pipe' },
+        ),
+      (error: unknown) => {
+        const e = error as { status: number; stderr: string };
+        assert.equal(e.status, 2);
+        assert.match(e.stderr, /--apply requires at least one --in/);
+        assert.doesNotMatch(e.stderr, /refusing to run on the repository/);
+        return true;
+      },
+    );
+  });
+});
+
+test('CLI: --apply passes through unaffected on a non-default branch (#2452)', () => {
+  withGitSandboxCwd('issue/2452-fix-token-cost-refuse-apply-on', () => {
+    assert.throws(
+      () =>
+        execFileSync(
+          process.execPath,
+          [join(REPO_ROOT, 'scripts/token-cost-report.mjs'), '--apply'],
+          { encoding: 'utf8', stdio: 'pipe' },
+        ),
+      (error: unknown) => {
+        const e = error as { status: number; stderr: string };
+        assert.equal(e.status, 2);
+        assert.match(e.stderr, /--apply requires at least one --in/);
+        assert.doesNotMatch(e.stderr, /refusing to run on the repository/);
+        return true;
+      },
+    );
   });
 });

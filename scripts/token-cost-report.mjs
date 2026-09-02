@@ -14,6 +14,7 @@
 // HELPER_COMMANDS: this is a maintainer/CI-only dogfood tool, never an
 // adopter-facing helper (see SOURCE_REPO_INTERNAL_ENTRY_PATHS in
 // tests/helper-invocation-profile.test.mts).
+import { execFileSync } from 'node:child_process';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { parseCliArgs } from './cli-args.mjs';
 import {
@@ -419,6 +420,47 @@ export function replaceMarkedRegion(
   const after = text.slice(endIndex);
   return `${before}\n\n${innerContent}\n\n${after}`;
 }
+const defaultBranchGuardDeps = {
+  getCurrentBranch: () =>
+    execFileSync('git', ['rev-parse', '--abbrev-ref', 'HEAD'], {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+    }).trim(),
+  getDefaultBranch: () => {
+    try {
+      return execFileSync(
+        'git',
+        ['symbolic-ref', '--short', 'refs/remotes/origin/HEAD'],
+        { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] },
+      )
+        .trim()
+        .replace(/^origin\//, '');
+    } catch {
+      return 'main';
+    }
+  },
+};
+/**
+ * #2452: refuse `--apply` on the repository's default branch unless
+ * `--allow-default-branch` was passed. Running the aggregator from the
+ * shared PRIMARY worktree while it happens to be checked out on the
+ * default branch leaves dirty, uncommitted output sitting there, which can
+ * block every concurrent session's next B1 `git merge --ff-only` worktree
+ * creation (a footgun already hit once during #2439). The caller must run
+ * this before any write.
+ */
+export function resolveDefaultBranchGuard(
+  allowOverride,
+  deps = defaultBranchGuardDeps,
+) {
+  const currentBranch = deps.getCurrentBranch();
+  const defaultBranch = deps.getDefaultBranch();
+  return {
+    blocked: !allowOverride && currentBranch === defaultBranch,
+    currentBranch,
+    defaultBranch,
+  };
+}
 // ---------------------------------------------------------------------------
 // Apply / check
 // ---------------------------------------------------------------------------
@@ -503,6 +545,7 @@ const TOKEN_COST_REPORT_FLAG_SPEC = {
   '--snapshot': { type: 'string', default: DEFAULT_SNAPSHOT_PATH },
   '--apply': { type: 'boolean', default: false },
   '--check': { type: 'boolean', default: false },
+  '--allow-default-branch': { type: 'boolean', default: false },
   '--now': { type: 'string', default: '' },
   '--help': { type: 'boolean', short: 'h' },
 };
@@ -517,7 +560,12 @@ function printHelp() {
   --snapshot <path>   Snapshot artifact path (default: ${DEFAULT_SNAPSHOT_PATH}).
   --apply             Aggregate --in samples, write the snapshot, and
                       refresh the README.md / README.ja.md / docs/token-cost.md
-                      marked regions.
+                      marked regions. Refused when the current branch is
+                      the repository's default branch; pass
+                      --allow-default-branch to proceed anyway.
+  --allow-default-branch  Allow --apply to run while the current branch is
+                          the repository's default branch (refused by
+                          default -- see docs/token-cost.md).
   --check             Verify the committed snapshot's regions have not
                       drifted from README.md / README.ja.md / docs/token-cost.md.
                       Exits non-zero on drift. Does not read --in.
@@ -552,6 +600,13 @@ if (import.meta.main) {
     }
   }
   if (apply) {
+    const guard = resolveDefaultBranchGuard(values['allow-default-branch']);
+    if (guard.blocked) {
+      process.stderr.write(
+        `token-cost-report --apply: refusing to run on the repository's default branch "${guard.defaultBranch}" (current branch: "${guard.currentBranch}"). Pass --allow-default-branch to override.\n`,
+      );
+      process.exit(2);
+    }
     const inPaths = values.in ?? [];
     if (inPaths.length === 0) {
       process.stderr.write(
