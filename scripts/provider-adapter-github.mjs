@@ -52,6 +52,27 @@ function toProviderError(error) {
   wrapped.cause = error;
   return wrapped;
 }
+/**
+ * #2267: throw when a GraphQL response carries top-level `errors`, so a bad
+ * PR/repo/auth or any server-side GraphQL failure fails fast with a clear
+ * message instead of being silently read as an empty result -- ported
+ * verbatim from `resolve-review-thread.mts`'s pre-migration
+ * `assertNoGraphqlErrors` (its own review-thread queries relied on this;
+ * every other GraphQL-backed port method here shares the same choke point
+ * now via {@link fetchReviewThreadsGeneric}'s `runQuery`).
+ */
+function assertNoGraphqlErrors(payload, context) {
+  const errors = payload?.errors;
+  if (Array.isArray(errors) && errors.length > 0) {
+    throw new Error(
+      `${context} failed: ${errors
+        .map((entry) => String(entry.message ?? ''))
+        .filter(Boolean)
+        .join('; ')
+        .slice(0, 200)}`,
+    );
+  }
+}
 /** #2267: {@link GithubProviderAdapterDeps.ghText}, swallowing any failure
  * and returning `''` instead -- the injectable-`deps` equivalent of
  * `gh-exec.mts`'s own module-level `safeGhText`, needed here so a unit test
@@ -133,7 +154,9 @@ function fetchReviewThreadsGeneric(
   }
 }`;
   function runQuery(apiArgs) {
-    return JSON.parse(deps.ghText(apiArgs, GH_TEXT_LOOP_OPTIONS));
+    const parsed = JSON.parse(deps.ghText(apiArgs, GH_TEXT_LOOP_OPTIONS));
+    assertNoGraphqlErrors(parsed, 'review thread lookup');
+    return parsed;
   }
   function walkThreadComments(threadId, firstPageNodes, firstPageInfo) {
     const comments = [...firstPageNodes];
@@ -1740,7 +1763,9 @@ export function createGithubProviderAdapter(owner, repo, deps = DEFAULT_DEPS) {
         '-f',
         `threadId=${threadId}`,
       ];
-      const parsed = JSON.parse(deps.ghText(apiArgs, GH_TEXT_LOOP_OPTIONS));
+      const raw = JSON.parse(deps.ghText(apiArgs, GH_TEXT_LOOP_OPTIONS));
+      assertNoGraphqlErrors(raw, 'resolveReviewThread');
+      const parsed = raw;
       if (parsed.data?.resolveReviewThread?.thread?.isResolved !== true) {
         throw new Error(
           `resolveChangeRequestReviewThread: GitHub did not confirm thread ${threadId} as resolved`,

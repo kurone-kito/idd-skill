@@ -108,6 +108,29 @@ function toProviderError(error: unknown): Error & ProviderError {
   return wrapped;
 }
 
+/**
+ * #2267: throw when a GraphQL response carries top-level `errors`, so a bad
+ * PR/repo/auth or any server-side GraphQL failure fails fast with a clear
+ * message instead of being silently read as an empty result -- ported
+ * verbatim from `resolve-review-thread.mts`'s pre-migration
+ * `assertNoGraphqlErrors` (its own review-thread queries relied on this;
+ * every other GraphQL-backed port method here shares the same choke point
+ * now via {@link fetchReviewThreadsGeneric}'s `runQuery`).
+ */
+function assertNoGraphqlErrors(payload: unknown, context: string): void {
+  const errors = (payload as { errors?: { message?: unknown }[] } | null)
+    ?.errors;
+  if (Array.isArray(errors) && errors.length > 0) {
+    throw new Error(
+      `${context} failed: ${errors
+        .map((entry) => String(entry.message ?? ''))
+        .filter(Boolean)
+        .join('; ')
+        .slice(0, 200)}`,
+    );
+  }
+}
+
 /** #2267: {@link GithubProviderAdapterDeps.ghText}, swallowing any failure
  * and returning `''` instead -- the injectable-`deps` equivalent of
  * `gh-exec.mts`'s own module-level `safeGhText`, needed here so a unit test
@@ -226,7 +249,9 @@ function fetchReviewThreadsGeneric(
   }
 }`;
   function runQuery(apiArgs: string[]): unknown {
-    return JSON.parse(deps.ghText(apiArgs, GH_TEXT_LOOP_OPTIONS));
+    const parsed = JSON.parse(deps.ghText(apiArgs, GH_TEXT_LOOP_OPTIONS));
+    assertNoGraphqlErrors(parsed, 'review thread lookup');
+    return parsed;
   }
   function walkThreadComments(
     threadId: string,
@@ -2313,7 +2338,9 @@ export function createGithubProviderAdapter(
         '-f',
         `threadId=${threadId}`,
       ];
-      const parsed = JSON.parse(deps.ghText(apiArgs, GH_TEXT_LOOP_OPTIONS)) as {
+      const raw = JSON.parse(deps.ghText(apiArgs, GH_TEXT_LOOP_OPTIONS));
+      assertNoGraphqlErrors(raw, 'resolveReviewThread');
+      const parsed = raw as {
         data?: { resolveReviewThread?: { thread?: { isResolved?: unknown } } };
       };
       if (parsed.data?.resolveReviewThread?.thread?.isResolved !== true) {

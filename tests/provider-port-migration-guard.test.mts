@@ -32,6 +32,7 @@ const MIGRATED_HELPERS: readonly string[] = [
   // #2267 additions below.
   'review-clause.mts',
   'review-activity-snapshot.mts',
+  'resolve-review-thread.mts',
 ];
 
 const DIRECT_GH_PATTERNS: { pattern: RegExp; description: string }[] = [
