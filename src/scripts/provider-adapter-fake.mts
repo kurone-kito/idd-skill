@@ -13,6 +13,8 @@
 import {
   PROVIDER_CAPABILITY_GROUPS,
   type ProviderCapabilityDeclaration,
+  type ProviderError,
+  type ProviderErrorCategory,
   type ProviderRepositoryLocator,
 } from './provider-contract.mts';
 import type {
@@ -50,6 +52,24 @@ export interface FakeProviderFixture {
   viewerLogin?: string;
   viewerLoginUnavailable?: boolean;
   workItems?: Record<number, ProviderWorkItem>;
+  /** Backs a thrown `ProviderError` from {@link ProviderPort.getWorkItem} --
+   * its one documented throw-on-non-404-failure contract, mirroring the
+   * real GitHub adapter's category-classified wrap of a non-404 gh
+   * failure. Keyed by issue number and checked before `workItems`, so a
+   * test can simulate an authentication/authorization/conflict/
+   * unavailable/unknown failure without a live gh process (#2268 AC1);
+   * `not-found` stays expressed the existing way, by omitting the number
+   * from both this and `workItems` -- `Exclude`d from the category type
+   * (not just documented) so a fixture cannot contradict getWorkItem's
+   * null-for-not-found contract at the type level (CodeRabbit review,
+   * #2436). */
+  workItemErrors?: Record<
+    number,
+    {
+      category: Exclude<ProviderErrorCategory, 'not-found'>;
+      message: string;
+    }
+  >;
   timelines?: Record<number, ProviderTimelineEvent[]>;
   comments?: Record<number, ProviderComment[]>;
   closingPullRequestPages?: Record<number, ProviderClosingPullRequestsPage[]>;
@@ -274,6 +294,13 @@ export function createFakeProviderAdapter(
     },
 
     getWorkItem(number: number): ProviderWorkItem | null {
+      const errorFixture = fixture.workItemErrors?.[number];
+      if (errorFixture) {
+        const providerError = new Error(errorFixture.message) as Error &
+          ProviderError;
+        providerError.category = errorFixture.category;
+        throw providerError;
+      }
       const item = fixture.workItems?.[number];
       if (!item) {
         return null;

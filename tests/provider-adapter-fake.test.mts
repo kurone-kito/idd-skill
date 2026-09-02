@@ -236,3 +236,97 @@ test('resolveViewerAppSlugSafe trims a fixture app slug, matching the GitHub ada
     unavailable: false,
   });
 });
+
+// #2268 additions below.
+//
+// getWorkItem is the port's one method documented to throw a categorized
+// ProviderError on a non-404 failure (provider-port.mts's own doc comment
+// pins discover-viability-gate.mts's fail-closed routing -- an uncaught
+// propagation, not a swallow -- as the contract). Before workItemErrors
+// existed, the fake adapter could express only the null/not-found branch of
+// that contract; a test exercising the authentication/authorization/
+// conflict/unavailable path had no way to drive it without a live gh
+// process. not-found and unsupported-capability/not_applicable are already
+// covered elsewhere (the two 'outcome: not-found' cases above,
+// tests/advisory-convergence-fake-provider.test.mts's capabilityDeclarations
+// override) -- this fills the remaining AC1 gap (#2268).
+
+test('getWorkItem throws a categorized ProviderError for a fixture-injected authentication failure', () => {
+  const port = createFakeProviderAdapter({
+    workItemErrors: {
+      1: { category: 'authentication', message: 'gh: not authenticated' },
+    },
+  });
+  assert.throws(
+    () => port.getWorkItem(1),
+    (error: unknown) =>
+      error instanceof Error &&
+      (error as Error & { category?: string }).category === 'authentication' &&
+      error.message === 'gh: not authenticated',
+  );
+});
+
+test('getWorkItem throws a categorized ProviderError for a fixture-injected authorization (permission) failure', () => {
+  const port = createFakeProviderAdapter({
+    workItemErrors: {
+      4: { category: 'authorization', message: 'gh: 403 forbidden' },
+    },
+  });
+  assert.throws(
+    () => port.getWorkItem(4),
+    (error: unknown) =>
+      error instanceof Error &&
+      (error as Error & { category?: string }).category === 'authorization',
+  );
+});
+
+test('getWorkItem throws a categorized ProviderError for a fixture-injected conflict', () => {
+  const port = createFakeProviderAdapter({
+    workItemErrors: {
+      2: { category: 'conflict', message: 'gh: 409 conflict' },
+    },
+  });
+  assert.throws(
+    () => port.getWorkItem(2),
+    (error: unknown) =>
+      error instanceof Error &&
+      (error as Error & { category?: string }).category === 'conflict',
+  );
+});
+
+test('getWorkItem throws a categorized ProviderError for a fixture-injected transient/unavailable failure', () => {
+  const port = createFakeProviderAdapter({
+    workItemErrors: {
+      3: { category: 'unavailable', message: 'gh: 503 service unavailable' },
+    },
+  });
+  assert.throws(
+    () => port.getWorkItem(3),
+    (error: unknown) =>
+      error instanceof Error &&
+      (error as Error & { category?: string }).category === 'unavailable',
+  );
+});
+
+test('getWorkItem still returns null for a plain not-found number, unaffected by workItemErrors', () => {
+  const port = createFakeProviderAdapter({
+    workItemErrors: { 1: { category: 'conflict', message: 'x' } },
+  });
+  assert.equal(port.getWorkItem(999), null);
+});
+
+test('getWorkItem checks workItemErrors before workItems when a number appears in both', () => {
+  const port = createFakeProviderAdapter({
+    workItems: { 1: { number: 1, title: 'x', body: '', state: 'open' } },
+    workItemErrors: {
+      1: { category: 'unknown', message: 'fixture author error' },
+    },
+  });
+  assert.throws(
+    () => port.getWorkItem(1),
+    (error: unknown) =>
+      error instanceof Error &&
+      (error as Error & { category?: string }).category === 'unknown' &&
+      error.message === 'fixture author error',
+  );
+});

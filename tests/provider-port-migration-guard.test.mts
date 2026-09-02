@@ -50,8 +50,15 @@ const DIRECT_GH_PATTERNS: { pattern: RegExp; description: string }[] = [
     description: 'direct execFileSync("gh", ...) invocation',
   },
   {
-    pattern: /from ['"]\.\/gh-exec\.mts['"]/,
-    description: 'import from the gh-exec.mts transport primitive',
+    // Matches both the `.mts` source's own import and the generated
+    // `.mjs` counterpart's `from './gh-exec.mjs'` (#2268) -- a guard that
+    // only recognized the source extension would stay vacuous against a
+    // regression introduced solely in committed generated output.
+    // `\.mjs?` (optional trailing 's') matches only '.mj'/'.mjs', never
+    // '.mts' -- an explicit two-way alternation is required (Copilot +
+    // CodeRabbit review, #2436).
+    pattern: /from ['"]\.\/gh-exec\.(?:mts|mjs)['"]/,
+    description: 'import from the gh-exec transport primitive',
   },
   {
     // ghTextAsync checked before ghText -- \bghText\s*\( alone does not
@@ -69,6 +76,14 @@ function readSource(relativePath: string): string {
   return readFileSync(`${REPO_ROOT}/src/scripts/${relativePath}`, 'utf8');
 }
 
+/** `.mts` -> generated `.mjs` counterpart under `scripts/` (#2268) --
+ * `pnpm run build` commits this file 1:1 per source, so every migrated
+ * helper has one. */
+function readGeneratedOutput(sourceFilename: string): string {
+  const generatedFilename = sourceFilename.replace(/\.mts$/, '.mjs');
+  return readFileSync(`${REPO_ROOT}/scripts/${generatedFilename}`, 'utf8');
+}
+
 test('migrated helpers no longer construct gh/GitHub calls directly', () => {
   for (const filename of MIGRATED_HELPERS) {
     const source = readSource(filename);
@@ -82,12 +97,35 @@ test('migrated helpers no longer construct gh/GitHub calls directly', () => {
   }
 });
 
+test('migrated helpers: committed generated output no longer constructs gh/GitHub calls directly (#2268)', () => {
+  for (const filename of MIGRATED_HELPERS) {
+    const generated = readGeneratedOutput(filename);
+    for (const { pattern, description } of DIRECT_GH_PATTERNS) {
+      assert.doesNotMatch(
+        generated,
+        pattern,
+        `${filename.replace(/\.mts$/, '.mjs')} regained ${description} in committed generated output`,
+      );
+    }
+  }
+});
+
 test('the direct-gh pattern set catches a bare ghTextAsync() call (CodeRabbit review, #2400)', () => {
   const { pattern } = DIRECT_GH_PATTERNS.find((entry) =>
     entry.description.includes('ghTextAsync'),
   ) as { pattern: RegExp };
   assert.match('await ghTextAsync(args)', pattern);
   assert.match('ghTextAsync (args)', pattern);
+});
+
+test('the gh-exec import pattern matches both .mts and .mjs, and only those (Copilot + CodeRabbit review, #2436)', () => {
+  const { pattern } = DIRECT_GH_PATTERNS.find((entry) =>
+    entry.description.includes('gh-exec'),
+  ) as { pattern: RegExp };
+  assert.match("from './gh-exec.mts'", pattern);
+  assert.match("from './gh-exec.mjs'", pattern);
+  assert.doesNotMatch("from './gh-exec.mj'", pattern);
+  assert.doesNotMatch("from './gh-exec.ts'", pattern);
 });
 
 test('the adapter modules themselves are exempt and still exist', () => {
