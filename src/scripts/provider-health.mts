@@ -20,9 +20,14 @@
 // #2327 (PR #2346, `evaluateStaleRequestRecoveryAction` in
 // advisory-wait-state.mts) already owns the "requested-but-never-
 // registered" predicate's timing/budget logic. This module's
-// `advisory-review` evidence collector cites that same observable
-// (absence of a `review_requested` timeline event after a request that
-// returned success) rather than re-deriving a separate timing rule.
+// `advisory-review` evidence collector reuses that same
+// `advisoryWait.settledWindowMinutes` grace period rather than
+// re-deriving a separate timing rule: a trusted `advisory-wait:`
+// request marker with neither a subsequent `review_requested` timeline
+// event nor a submitted review from the primary bot, anchored to the
+// marker's own embedded requested-at timestamp, is 'failure' evidence
+// only once that window has elapsed -- an unregistered request still
+// inside it contributes no observation yet.
 
 import {
   DEFAULT_ADVISORY_PRIMARY_BOT_LOGIN,
@@ -63,9 +68,11 @@ export interface ProviderHealthObservation {
   /**
    * 'failure': provider-level failure evidence for this PR (never an
    * ordinary code-caused failure -- the read layer only emits 'failure'
-   * for the documented service-level signatures: absence of a
-   * `review_requested` event after a successful request, or a workflow
-   * run whose every job fails near-instantly with no steps executed).
+   * for the documented service-level signatures: a trusted advisory-wait
+   * request marker with neither a subsequent `review_requested` timeline
+   * event nor a submitted review from the primary bot, once the
+   * settling-window grace period has elapsed; or a workflow run whose
+   * every job fails near-instantly with no steps executed).
    * 'success': the provider worked normally for this PR within the
    * sampled window.
    */

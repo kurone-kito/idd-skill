@@ -1125,11 +1125,14 @@ Interpretation rules:
 - Emits a `healthy | degraded | unavailable | unknown` verdict for each
   of two services, `advisory-review` and `ci-actions`, aggregated from
   already-observable per-pull-request evidence:
-  - `advisory-review`: absence of a `review_requested` timeline event
-    after a request that returned success -- the same
-    "failed-to-register" observable `evaluateStaleRequestRecoveryAction`
-    (#2327, `advisory-wait-state.mts`) already reads for a single pull
-    request, here read across several.
+  - `advisory-review`: a trusted `advisory-wait:` request marker with
+    neither a subsequent `review_requested` timeline event nor a
+    submitted review from the primary bot, anchored to the marker's own
+    embedded requested-at timestamp and gated by the same
+    `advisoryWait.settledWindowMinutes` grace period
+    `evaluateStaleRequestRecoveryAction` (#2327, `advisory-wait-state.mts`)
+    already applies for a single pull request -- reused here, read
+    across several, rather than re-derived.
   - `ci-actions`: a completed workflow run whose every job executed zero
     steps -- the documented account-level Actions billing/spend-limit
     block shape (the run starts but no steps run, unlike an ordinary
