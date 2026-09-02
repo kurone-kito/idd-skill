@@ -109,11 +109,23 @@ export function isSafeSoloCodeownerAdminMergeState(
   );
 }
 /** `resolveOwnerRepoFromRef`'s split of a `<owner>/<repo>` `repoRef`, or the
- * current-directory repo (`gh repo view`) when `repoRef` is `null`. */
+ * current-directory repo (`gh repo view`) when `repoRef` is `null`. Fails
+ * fast on a malformed shape (missing, empty, or extra `/`-separated
+ * segments) rather than silently treating `owner/repo/extra` as
+ * `owner`/`repo` -- every current caller only ever passes the value this
+ * file's own `parseArgs` synthesizes as `${owner}/${repo}` from two
+ * already-parsed flags, but this function has no way to enforce that at
+ * the type level, so it validates its own input instead of trusting it. */
 function resolveOwnerRepoFromRef(repoRef) {
   if (repoRef) {
-    const [owner, repo] = repoRef.split('/');
-    return { owner: owner ?? '', repo: repo ?? '' };
+    const segments = repoRef.split('/');
+    const [owner, repo] = segments;
+    if (segments.length !== 2 || !owner || !repo) {
+      throw new Error(
+        `resolveOwnerRepoFromRef: expected "<owner>/<repo>", got "${repoRef}"`,
+      );
+    }
+    return { owner, repo };
   }
   return resolveCurrentGithubRepository();
 }
