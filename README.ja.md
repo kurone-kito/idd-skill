@@ -102,7 +102,11 @@ CI、選択したマージポリシー、後片づけまでループを進めま
 ループを最後まで実行するには、`git`、認証済みの `gh` CLI(または同等の
 GitHub MCP 連携)、`jq`、`curl` などの REST クライアント、そして helper
 スクリプトを使う場合は Node.js が必要です(詳細は
-[Tooling boundary](docs/customization.md#tooling-boundary))。無人または
+[Tooling boundary](docs/customization.md#tooling-boundary))。GitHub は
+現時点で IDD が実装している唯一のプロバイダーです。段階的でプロバイダー
+非依存のアダプター境界については
+[Provider Portability](docs/customization.md#provider-portability) を
+参照してください。無人または
 マージ可能なエージェントへ認証情報を渡す前に
 [Permissions and threat model](docs/permissions.md) を確認し、
 マージポリシーを [Customizing IDD](docs/customization.md) で 1 つ選んで

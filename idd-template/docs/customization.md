@@ -757,13 +757,13 @@ the `Project commands` table in
 The following policy matrix defines the tooling requirements and
 fallback order for repositories adopting IDD:
 
-| Context                                  | Requirement         | Fallback order                                                                                           |
-| ---------------------------------------- | ------------------- | -------------------------------------------------------------------------------------------------------- |
-| `git`, `gh`, `jq`, `curl`                | **Required**        | No fallback; IDD cannot run without these                                                                |
-| `install-deps` command                   | Project-dependent   | Use project's native package manager; `true` as no-op when no install step is needed                     |
-| Validate commands (`fix-validate`, etc.) | Project-dependent   | Use project tooling; `true` as no-op                                                                     |
-| Node.js / `npx`                          | Optional            | 1. Existing project Node.js tooling; 2. `npx` when available; 3. `true` when unavailable or not relevant |
-| pnpm                                     | Not required by IDD | Only needed when the adopter's project itself uses pnpm                                                  |
+| Context                                  | Requirement                         | Fallback order                                                                                           |
+| ---------------------------------------- | ----------------------------------- | -------------------------------------------------------------------------------------------------------- |
+| `git`, `gh`, `jq`, `curl`                | **Required for the GitHub adapter** | No fallback for GitHub; IDD's only implemented provider today needs these                                |
+| `install-deps` command                   | Project-dependent                   | Use project's native package manager; `true` as no-op when no install step is needed                     |
+| Validate commands (`fix-validate`, etc.) | Project-dependent                   | Use project tooling; `true` as no-op                                                                     |
+| Node.js / `npx`                          | Optional                            | 1. Existing project Node.js tooling; 2. `npx` when available; 3. `true` when unavailable or not relevant |
+| pnpm                                     | Not required by IDD                 | Only needed when the adopter's project itself uses pnpm                                                  |
 
 Decision points:
 
@@ -775,6 +775,29 @@ Decision points:
   Node.js project's script runner; (2) use bare `npx <tool>` when
   `npx` is available; (3) replace with `true` when `npx` is unavailable
   or the check is not relevant to the project.
+
+## Provider Portability
+
+GitHub is IDD's only implemented and fully exercised provider today,
+and `git`/`gh`/`jq`/`curl` above name the GitHub adapter's own
+requirements, not a permanent IDD-wide constraint. Internally, IDD
+defines a provider-neutral adapter boundary -- capability groups
+(work items, comments and labels, claims, change requests, reviews and
+threads, checks, permissions, branch protection, merge) each declared
+`required` or `optional`, with normalized outcomes
+(`ok`/`fail_closed`/`not_applicable`) and error categories independent
+of any one platform's status codes. A required capability an adapter
+does not support fails closed rather than silently passing; an
+optional advisory capability may resolve `not_applicable` instead.
+
+This is a staged foundation, not a shipped multi-provider release:
+GitLab SaaS is the first future adapter target, Bitbucket Cloud
+follows as its own capability check, and self-managed/Data Center
+variants each need their own verification before being claimed
+supported. Copilot review convergence stays a separate, GitHub-specific
+concern -- a future adapter's `advisory-review` capability group can
+resolve `not_applicable` on a provider with no equivalent bot reviewer
+without weakening any required gate.
 
 ## Reusable pnpm boundary guard workflow
 
