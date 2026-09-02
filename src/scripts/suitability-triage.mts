@@ -405,6 +405,70 @@ const POLICY_OVERRIDE_NOUN_PATTERN = new RegExp(
   `\\b(${POLICY_OVERRIDE_NOUN_SOURCE})\\b`,
   'i',
 );
+// #2468: the pattern's `[\s\S]{0,60}` window has no concept of a Markdown
+// heading boundary, so a verb ending one line -- most commonly this
+// repository's issue title, given the near-universal repeated-title-as-H1
+// body convention -- can pair with a noun that is only the leading word of
+// an unrelated heading starting immediately after. The heading is a
+// structural label, not a continuation of the verb's own sentence.
+// Excluding a heading-adjacent noun this way, rather than special-casing
+// only the title/body boundary, also covers a later `##` subheading whose
+// own leading noun coincidentally follows a verb from the end of the prior
+// paragraph. A genuine directive that does not cross a heading line is
+// unaffected -- including one deliberately split across the title/body
+// boundary with no heading in between (see the dedicated regression test
+// pinning this as distinct from "never match across the title/body split
+// at all"). CommonMark/GFM (what GitHub renders issue bodies with) also
+// allows a 1-3 space indent before the `#` run and still treats the line
+// as an ATX heading (#2468 critique finding 2), so the leading-space class
+// is optional-bounded rather than requiring the `#` at column 0.
+const HEADING_LINE_BOUNDARY_PATTERN = /\n {0,3}#{1,6}[ \t]/;
+
+/**
+ * True when `nounStart` (start of the matched noun) falls on the same
+ * physical line as ANY Markdown ATX heading marker (`\n {0,3}#{1,6}[\t ]`)
+ * that starts somewhere between `verbEnd` (end of the matched verb) and
+ * `nounStart` -- i.e. the noun is itself part of an unrelated heading's own
+ * text, not prose several lines further into the body (#2468 critique
+ * finding 1: a heading merely *appearing* in the gap, with the noun landing
+ * on a later, ordinary prose line, must not suppress a genuine directive).
+ * Checks every heading found in the gap, not only the first (#2468 critique
+ * round 2: a first heading whose own line does not reach the noun must not
+ * short-circuit a second heading further along whose line does). `scanSource`
+ * must always be `maskedText` -- both `findGenuineNounMatch` call sites in
+ * `findPolicyOverrideMatch` pass it here even in the raw-fallback loop
+ * (which otherwise scans raw `text`), so a heading marker inside a masked
+ * code region -- already replaced with spaces -- cannot itself manufacture
+ * a boundary (#2468 critique finding 1's code-comment-as-heading bypass).
+ */
+function matchCrossesHeadingBoundary(
+  scanSource: string,
+  verbEnd: number,
+  nounStart: number,
+): boolean {
+  if (nounStart <= verbEnd) {
+    return false;
+  }
+  const gap = scanSource.slice(verbEnd, nounStart);
+  const headingPattern = new RegExp(HEADING_LINE_BOUNDARY_PATTERN.source, 'g');
+  let headingMatch: RegExpExecArray | null;
+  while (true) {
+    headingMatch = headingPattern.exec(gap);
+    if (headingMatch === null) {
+      return false;
+    }
+    const headingLineStart = verbEnd + headingMatch.index + 1;
+    const nextNewline = scanSource.indexOf('\n', headingLineStart);
+    const headingLineEnd = nextNewline === -1 ? scanSource.length : nextNewline;
+    if (nounStart <= headingLineEnd) {
+      return true;
+    }
+    if (headingPattern.lastIndex === headingMatch.index) {
+      headingPattern.lastIndex += 1;
+    }
+  }
+}
+
 // #2219: broadens checkAutonomy's coordination-language matcher beyond its two
 // original fixed templates (requires .../stakeholder ... sign-off) to catch
 // equally natural phrasings for the same unresolved human-coordination
@@ -543,6 +607,7 @@ function findNegationWithinTwoWordsAfter(
     getCodeRangeAt,
     Infinity,
     false,
+    null,
   );
   const firstNoun = genuineNoun ? genuineNoun.relativeIndex : Infinity;
 
@@ -677,6 +742,22 @@ function isNegatedPolicyOverrideMatch(
 //   farthest candidate. Re-picking the nearest one instead would silently
 //   shrink the reported evidence span whenever an earlier valid noun sits
 //   before the one the pattern itself would have chosen.
+// #2468: `headingBoundary`, when passed, is `findPolicyOverrideMatch`'s two
+// call sites opting a candidate noun into the same heading-crossing
+// exclusion `matchCrossesHeadingBoundary` applies elsewhere -- checked
+// per-candidate here (not once against the pattern's own raw capture)
+// so a heading-excluded farthest candidate correctly falls back to a
+// nearer genuine one instead of the whole verb occurrence being dropped.
+// `findNegationWithinTwoWordsAfter`'s unrelated negation-boundary use
+// passes no `headingBoundary` (`null`), since a heading crossing has no
+// bearing on where that scan should stop. Always checked against
+// `headingBoundary.maskedText`, never `searchText`/`rawSource` directly
+// -- `searchText` is raw `text` in the raw-fallback call, and a
+// heading-shaped line inside a masked code region must not forge a
+// boundary (see `matchCrossesHeadingBoundary`'s own doc comment).
+// `maskedText` and `text` are position-preserving, so `absoluteIndex`
+// (computed against whichever `searchText` this call scans) locates the
+// same character in either.
 function findGenuineNounMatch(
   searchText: string,
   afterStart: number,
@@ -684,6 +765,7 @@ function findGenuineNounMatch(
   getCodeRangeAt: (start: number) => { start: number; end: number } | null,
   maxChars: number,
   preferFarthest: boolean,
+  headingBoundary: { maskedText: string; verbEnd: number } | null,
 ): { relativeIndex: number; length: number } | null {
   const substring = searchText.slice(afterStart);
   const nounRegex = new RegExp(POLICY_OVERRIDE_NOUN_PATTERN.source, 'gi');
@@ -704,8 +786,16 @@ function findGenuineNounMatch(
     // stays detectable even though the same bare, un-code-wrapped text in
     // prose is a deliberately accepted ordinary-compound exclusion.
     if (
-      getCodeRangeAt(absoluteIndex) ||
-      !isOrdinaryHyphenatedCompoundToken(rawSource, absoluteIndex)
+      (getCodeRangeAt(absoluteIndex) ||
+        !isOrdinaryHyphenatedCompoundToken(rawSource, absoluteIndex)) &&
+      !(
+        headingBoundary &&
+        matchCrossesHeadingBoundary(
+          headingBoundary.maskedText,
+          headingBoundary.verbEnd,
+          absoluteIndex,
+        )
+      )
     ) {
       const candidate = {
         relativeIndex: nounMatch.index,
@@ -855,9 +945,10 @@ function findPolicyOverrideMatch(
   // directive through. Both passes below use the combined pattern only as
   // a cheap "is there any noun candidate in range at all" filter, then
   // independently re-pick the actual accepted noun via
-  // findGenuineNounMatch (farthest-first, skipping excluded candidates --
-  // same selection direction the pattern's own backtracking already used)
-  // rather than trusting the pattern's own capture.
+  // findGenuineNounMatch (farthest-first, skipping excluded candidates,
+  // including one whose position crosses a heading boundary from the verb
+  // -- #2468 -- same selection direction the pattern's own backtracking
+  // already used) rather than trusting the pattern's own capture.
   const maskedPattern = new RegExp(POLICY_OVERRIDE_PATTERN.source, 'gi');
   let maskedMatch: RegExpExecArray | null;
   while (true) {
@@ -896,6 +987,7 @@ function findPolicyOverrideMatch(
       getCodeRangeAt,
       POLICY_OVERRIDE_WINDOW_CHARS,
       true,
+      { maskedText, verbEnd: index + verb.length },
     );
     if (genuineNoun === null) {
       // Every noun candidate in this verb's window is an excluded ordinary
@@ -950,6 +1042,7 @@ function findPolicyOverrideMatch(
       getCodeRangeAt,
       POLICY_OVERRIDE_WINDOW_CHARS,
       true,
+      { maskedText, verbEnd: index + verb.length },
     );
     if (genuineNoun === null) {
       pattern.lastIndex = index + (verb.length || 1);
