@@ -126,6 +126,12 @@ other GitHub side effect, confirm all of the following:
 6. Do not use step 5 to bypass a serious issue: unresolved High or
    Medium findings stay blockers until fixed or explicitly redirected
    by a maintainer.
+7. Heuristic: several rounds (3-4) each finding something genuinely
+   new in the same area (not a repeat) may mean one structural fix
+   converges faster than another patch. If that fix itself keeps
+   drawing new findings, prefer simplifying/removing the mechanism
+   over a second redesign -- only once confirmed non-required by the
+   acceptance criteria.
 
 ## E11 — Resolve conflicts with main
 
