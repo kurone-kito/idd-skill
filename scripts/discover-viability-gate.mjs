@@ -41,7 +41,7 @@ const BROAD_SCOPE_PATTERN =
 // 1. Avoidance-cue: the match is the disfavored option in a "rather than X"
 //    / "prefer Y over X" construction (#2401, #2413).
 const AVOIDANCE_CUE_PATTERN =
-  /\b(rather than|instead of|avoid|prefer|over a)\b/i;
+  /\b(rather than|instead of|avoid|prefer|over a)\b/gi;
 const AVOIDANCE_CUE_WINDOW = 80;
 // A comma continues the SAME clause the cue governs only when immediately
 // followed by a degree/comparative adverb ("a second, more elaborate
@@ -202,18 +202,36 @@ function isInsideCodeSpan(corpus, index) {
 function isGovernedByAvoidanceCue(corpus, matchIndex) {
   const windowStart = Math.max(0, matchIndex - AVOIDANCE_CUE_WINDOW);
   const window = corpus.slice(windowStart, matchIndex);
-  const cueMatch = AVOIDANCE_CUE_PATTERN.exec(window);
-  if (!cueMatch) {
-    return false;
+  // A single "find the first cue" check misses a real governing cue when an
+  // EARLIER, unrelated cue also sits in the window but is itself cut off by
+  // a hard clause break: "Avoid regressions. But rather than redesign the
+  // schema, ..." -- "avoid" is broken from the match by the period, but
+  // "rather than" right before "redesign" governs it cleanly. Check every
+  // cue in the window; the match is governed if any of them reach it with
+  // no break in between.
+  for (const cueMatch of window.matchAll(AVOIDANCE_CUE_PATTERN)) {
+    const linkText = window.slice(cueMatch.index + cueMatch[0].length);
+    if (HARD_CLAUSE_BREAK_PATTERN.test(linkText)) {
+      continue;
+    }
+    if (CLAUSE_CONTINUATION_COMMA_PATTERN.test(linkText)) {
+      continue;
+    }
+    return true;
   }
-  const linkText = window.slice(cueMatch.index + cueMatch[0].length);
-  if (HARD_CLAUSE_BREAK_PATTERN.test(linkText)) {
-    return false;
-  }
-  return !CLAUSE_CONTINUATION_COMMA_PATTERN.test(linkText);
+  return false;
 }
 function isFollowedByContentNoun(corpus, matchEnd) {
-  const tail = corpus.slice(matchEnd, matchEnd + CONTENT_NOUN_LOOKAHEAD_CHARS);
+  // The lookahead must stop at the first sentence/clause boundary: without
+  // it, "... redesign the public interface. Guidance: ..." would let an
+  // unrelated NEW sentence's "Guidance:" suppress a genuinely broad-scope
+  // match in the PRECEDING sentence.
+  const rawTail = corpus.slice(
+    matchEnd,
+    matchEnd + CONTENT_NOUN_LOOKAHEAD_CHARS,
+  );
+  const breakMatch = HARD_CLAUSE_BREAK_PATTERN.exec(rawTail);
+  const tail = breakMatch ? rawTail.slice(0, breakMatch.index) : rawTail;
   const tokens = tail.match(WORD_TOKEN_PATTERN) ?? [];
   return tokens
     .slice(0, CONTENT_NOUN_LOOKAHEAD_TOKENS)

@@ -221,6 +221,41 @@ test('still fails limited scope when a content-noun word sits near a genuinely b
   assert.ok(result.failedCriteria.includes('limited_scope'));
 });
 
+test('passes limited scope when an earlier, broken cue would shadow a later cue that directly governs the match (Copilot review finding, #2422)', () => {
+  // The window contains TWO avoidance cues: "avoid" is cut off from the
+  // match by a hard clause break (the period before "But"), while "rather
+  // than" sits directly before "redesign" with nothing in between. Only
+  // checking the first-found cue would miss the second, governing one.
+  const result = evaluateA4Viability({
+    number: 25,
+    title: 'simplify the mechanism',
+    body:
+      'Attempt to avoid regressions. But rather than redesign the schema, ' +
+      'we chose a simpler patch. Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, true);
+  assert.deepEqual(result.failedCriteria, []);
+});
+
+test('still fails limited scope when a content noun starts a new sentence after a genuinely broad-scope description (Copilot review finding, #2422)', () => {
+  // "Guidance:" opens an unrelated new sentence; it must not reach back
+  // across the sentence boundary and suppress the broad-scope match in the
+  // preceding sentence.
+  const result = evaluateA4Viability({
+    number: 26,
+    title: 'redesign the public interface',
+    body:
+      'This issue will redesign the public interface. Guidance: see the ' +
+      'design doc. Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('limited_scope'));
+});
+
 test('renderCsv quotes titles containing commas and quotes', () => {
   const csv = renderCsv({
     viable: [{ number: 10, title: 'fix parser, escape "quotes" too' }],
