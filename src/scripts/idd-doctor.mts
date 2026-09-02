@@ -1934,14 +1934,23 @@ export interface WorktreeGuardActivationInput {
  * `source` command loads the shared `_idd-worktree-guard.sh` helper. Matching
  * the sourcing line (not a bare mention) means a hook that only names the
  * helper in a comment — e.g. a leftover doc line after the source was removed —
- * correctly reads as inert rather than wired. Pure (no I/O) so the
- * wired/unwired classification can be unit-tested directly. A non-string
- * (absent/unreadable hook) is treated as not wiring the guard.
+ * correctly reads as inert rather than wired. The trailing `(?![.\w-])`
+ * boundary rejects a disabled/backed-up filename that merely starts with
+ * `_idd-worktree-guard.sh` (e.g. `_idd-worktree-guard.sh.disabled`,
+ * `_idd-worktree-guard.sh.bak`) — those are not the active guard file,
+ * regardless of the sourcing syntax around them (idd-skill#2476) — while
+ * still matching the CRLF-converted case (a `\r` right after `.sh` is not
+ * excluded, so `hookHasCrlfLineEndings` below stays the sole signal for
+ * that failure mode, unchanged from before this fix). Pure (no I/O) so
+ * the wired/unwired classification can be unit-tested directly. A
+ * non-string (absent/unreadable hook) is treated as not wiring the guard.
  */
 export function hookWiresWorktreeGuard(content: unknown): boolean {
   return (
     typeof content === 'string' &&
-    /^[ \t]*(?:\.|source)[ \t]+[^\n]*_idd-worktree-guard\.sh/m.test(content)
+    /^[ \t]*(?:\.|source)[ \t]+[^\n]*_idd-worktree-guard\.sh(?![.\w-])/m.test(
+      content,
+    )
   );
 }
 

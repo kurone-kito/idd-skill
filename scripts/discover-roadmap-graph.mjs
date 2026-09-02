@@ -1390,11 +1390,27 @@ export function extractTaskListReferences(body) {
   // stripMarkdownCodeRegions preserves the line count, so the masked and raw
   // lines share an index and evidence stays the raw line for any surviving edge
   // (e.g. one that shares a line with unrelated inline code).
+  //
+  // Two forms recognized, tried in order (idd-skill#2476): a bare `#123`
+  // or a markdown link whose TEXT is `#123` (e.g. `- [ ] [#123](url)`,
+  // the `[`/`]`/`(...)` around the number all optional); falling back to
+  // a markdown link with arbitrary link text whose URL targets
+  // `.../issues/123` or `.../pull/123` (e.g.
+  // `- [ ] [some text](https://.../issues/123)`) -- inlined per-call
+  // (not hoisted to a module-level const) because this file's CLI entry
+  // point (`if (import.meta.main)`) sits near the top of the file and
+  // can reach this function during synchronous module evaluation, before
+  // a later top-level const would have initialized (TDZ).
+  const bareOrLinkTextRe =
+    /^\s*-\s*\[(?: |x|X)\]\s+\[?#(\d+)\b\]?(?:\([^)\n]*\))?/u;
+  const linkUrlRe =
+    /^\s*-\s*\[(?: |x|X)\]\s+\[[^\]\n]*\]\([^)\n]*\/(?:issues|pull)\/(\d+)(?:[/?#][^)\n]*)?\)/u;
   const rawBody = String(body ?? '');
   const rawLines = rawBody.split(/\r?\n/u);
   const maskedLines = stripMarkdownCodeRegions(rawBody).split(/\r?\n/u);
   return maskedLines.flatMap((maskedLine, index) => {
-    const match = maskedLine.match(/^\s*-\s*\[(?: |x|X)\]\s+#(\d+)\b/u);
+    const match =
+      maskedLine.match(bareOrLinkTextRe) ?? maskedLine.match(linkUrlRe);
     if (!match) {
       return [];
     }

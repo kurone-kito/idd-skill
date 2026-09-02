@@ -858,6 +858,24 @@ test('hookWiresWorktreeGuard still matches a CRLF-converted sourcing line (regre
   );
 });
 
+test('hookWiresWorktreeGuard rejects a disabled/backed-up guard filename (#2476)', () => {
+  // `_idd-worktree-guard.sh.disabled` / `.bak` are not the active guard
+  // file -- the prior unbounded regex matched the `.sh` prefix and
+  // misreported the guard as wired even though it is not.
+  assert.equal(
+    hookWiresWorktreeGuard(
+      '#!/bin/sh\n. "$(dirname "$0")/_idd-worktree-guard.sh.disabled"\n',
+    ),
+    false,
+  );
+  assert.equal(
+    hookWiresWorktreeGuard(
+      '#!/bin/sh\n. "$(dirname "$0")/_idd-worktree-guard.sh.bak"\n',
+    ),
+    false,
+  );
+});
+
 test('hookHasCrlfLineEndings detects a CRLF line ending', () => {
   assert.equal(hookHasCrlfLineEndings('#!/bin/sh\r\necho hi\r\n'), true);
 });

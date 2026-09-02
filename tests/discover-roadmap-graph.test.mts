@@ -290,6 +290,30 @@ test('extractTaskListReferences accepts uppercase checked items', () => {
   ]);
 });
 
+test('extractTaskListReferences accepts a link-text reference, e.g. [#123](url) (#2476)', () => {
+  const line =
+    '- [ ] [#123](https://github.com/kurone-kito/idd-skill/issues/123) — do the thing';
+  assert.deepEqual(extractTaskListReferences(line), [
+    { target: 123, relationship: 'task-list', evidence: line },
+  ]);
+});
+
+test('extractTaskListReferences accepts a bare markdown link to the issue, e.g. [some text](.../issues/456) (#2476)', () => {
+  const line =
+    '- [ ] [implement the webhook handler](https://github.com/kurone-kito/idd-skill/issues/456)';
+  assert.deepEqual(extractTaskListReferences(line), [
+    { target: 456, relationship: 'task-list', evidence: line },
+  ]);
+});
+
+test('extractTaskListReferences accepts a link to a pull request too (#2476)', () => {
+  const line =
+    '- [ ] [followed-up in #789](https://github.com/kurone-kito/idd-skill/pull/789)';
+  assert.deepEqual(extractTaskListReferences(line), [
+    { target: 789, relationship: 'task-list', evidence: line },
+  ]);
+});
+
 test('extractKeywordReferences ignores cross-repository references but keeps same-repo qualified refs', () => {
   const body = `
 Refs other/repo#301, #302
