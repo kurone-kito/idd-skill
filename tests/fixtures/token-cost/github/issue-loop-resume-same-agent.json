@@ -7,16 +7,22 @@
             {
               "body": "<!-- claimed-by: claude-a cid-a1 supersedes: none 2026-01-01T00:00:00Z branch: issue/9004-test -->\n\n_claude-a: issue claim — IDD automation marker. Do not edit._",
               "createdAt": "2026-01-01T00:00:00Z",
-              "author": { "login": "claude-a" }
+              "author": {
+                "login": "claude-a"
+              }
             },
             {
               "body": "<!-- claimed-by: claude-a cid-a2 supersedes: cid-a1 2026-01-01T00:15:00Z branch: issue/9004-test -->\n\n_claude-a: issue claim — IDD automation marker. Do not edit._",
               "createdAt": "2026-01-01T00:15:00Z",
-              "author": { "login": "claude-a" }
+              "author": {
+                "login": "claude-a"
+              }
             }
           ]
         },
-        "timelineItems": { "nodes": [] }
+        "closedByPullRequestsReferences": {
+          "nodes": []
+        }
       }
     }
   }

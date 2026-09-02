@@ -16,19 +16,14 @@
             }
           ]
         },
-        "timelineItems": {
+        "closedByPullRequestsReferences": {
           "nodes": [
             {
-              "__typename": "ConnectedEvent",
-              "subject": {
-                "__typename": "PullRequest",
-                "number": 9101,
-                "state": "MERGED",
-                "headRefName": "issue/9001-test",
-                "createdAt": "2026-01-01T00:10:00Z",
-                "mergedAt": "2026-01-01T00:30:00Z",
-                "reviews": { "nodes": [{ "submittedAt": "2026-01-01T00:22:00Z" }] }
-              }
+              "number": 9101,
+              "headRefName": "issue/9001-test",
+              "createdAt": "2026-01-01T00:10:00Z",
+              "mergedAt": "2026-01-01T00:30:00Z",
+              "reviews": { "nodes": [{ "submittedAt": "2026-01-01T00:22:00Z" }] }
             }
           ]
         }

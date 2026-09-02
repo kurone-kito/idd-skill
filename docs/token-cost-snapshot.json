@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "generatedAt": "2026-09-02T07:29:00.865Z",
+  "generatedAt": "2026-09-02T07:50:54.454Z",
   "minPublishableSamples": 10,
   "minPublishableVendors": 2,
   "publishable": false,
@@ -71,24 +71,144 @@
       "id": "work",
       "usage": {
         "inputUncached": {
-          "p25": 1620,
-          "p50": 1620,
-          "p75": 1620
+          "p25": 522,
+          "p50": 522,
+          "p75": 522
         },
         "cacheRead": {
-          "p25": 234682427,
-          "p50": 234682427,
-          "p75": 234682427
+          "p25": 64751695,
+          "p50": 64751695,
+          "p75": 64751695
         },
         "cacheCreation": {
-          "p25": 1993701,
-          "p50": 1993701,
-          "p75": 1993701
+          "p25": 525614,
+          "p50": 525614,
+          "p75": 525614
         },
         "output": {
-          "p25": 684956,
-          "p50": 684956,
-          "p75": 684956
+          "p25": 344270,
+          "p50": 344270,
+          "p75": 344270
+        },
+        "reasoning": {
+          "p25": 0,
+          "p50": 0,
+          "p75": 0
+        }
+      }
+    },
+    {
+      "id": "submit-pr",
+      "usage": {
+        "inputUncached": {
+          "p25": 24,
+          "p50": 24,
+          "p75": 24
+        },
+        "cacheRead": {
+          "p25": 3874649,
+          "p50": 3874649,
+          "p75": 3874649
+        },
+        "cacheCreation": {
+          "p25": 10198,
+          "p50": 10198,
+          "p75": 10198
+        },
+        "output": {
+          "p25": 4591,
+          "p50": 4591,
+          "p75": 4591
+        },
+        "reasoning": {
+          "p25": 0,
+          "p50": 0,
+          "p75": 0
+        }
+      }
+    },
+    {
+      "id": "review",
+      "usage": {
+        "inputUncached": {
+          "p25": 70,
+          "p50": 70,
+          "p75": 70
+        },
+        "cacheRead": {
+          "p25": 11070993,
+          "p50": 11070993,
+          "p75": 11070993
+        },
+        "cacheCreation": {
+          "p25": 593528,
+          "p50": 593528,
+          "p75": 593528
+        },
+        "output": {
+          "p25": 13129,
+          "p50": 13129,
+          "p75": 13129
+        },
+        "reasoning": {
+          "p25": 0,
+          "p50": 0,
+          "p75": 0
+        }
+      }
+    },
+    {
+      "id": "merge",
+      "usage": {
+        "inputUncached": {
+          "p25": 10,
+          "p50": 10,
+          "p75": 10
+        },
+        "cacheRead": {
+          "p25": 1058534,
+          "p50": 1058534,
+          "p75": 1058534
+        },
+        "cacheCreation": {
+          "p25": 1426,
+          "p50": 1426,
+          "p75": 1426
+        },
+        "output": {
+          "p25": 1264,
+          "p50": 1264,
+          "p75": 1264
+        },
+        "reasoning": {
+          "p25": 0,
+          "p50": 0,
+          "p75": 0
+        }
+      }
+    },
+    {
+      "id": "cleanup",
+      "usage": {
+        "inputUncached": {
+          "p25": 76,
+          "p50": 76,
+          "p75": 76
+        },
+        "cacheRead": {
+          "p25": 8559197,
+          "p50": 8559197,
+          "p75": 8559197
+        },
+        "cacheCreation": {
+          "p25": 42211,
+          "p50": 42211,
+          "p75": 42211
+        },
+        "output": {
+          "p25": 10310,
+          "p50": 10310,
+          "p75": 10310
         },
         "reasoning": {
           "p25": 0,
@@ -106,20 +226,20 @@
   "cacheHitRatio": 0.9916889300478313,
   "successRateByModel": {
     "claude-sonnet-5": {
-      "merged": 0,
+      "merged": 1,
       "aborted": 0,
-      "unclaimed": 1,
+      "unclaimed": 0,
       "humanHandoff": 0,
-      "rate": 0
+      "rate": 1
     }
   },
   "successRateByVendor": {
     "claude": {
-      "merged": 0,
+      "merged": 1,
       "aborted": 0,
-      "unclaimed": 1,
+      "unclaimed": 0,
       "humanHandoff": 0,
-      "rate": 0
+      "rate": 1
     }
   }
 }
