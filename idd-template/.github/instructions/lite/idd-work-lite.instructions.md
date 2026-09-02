@@ -157,18 +157,25 @@ addendum resolves it.
 7. Run `fix-validate` before each commit.
 8. Keep commits atomic.
 9. If `fix-validate` changes files, stage and commit them before continuing.
-10. If validation fails in files this diff did not touch, suspect baseline
+10. Verify a commit actually landed before trusting a subsequent push: a
+    `commit-msg` hook (for example commitlint's body-max-line-length) can
+    silently reject a commit with a long single-line body, and the
+    following push then reports "Everything up-to-date" as if nothing
+    were wrong. Prefer `git commit ... -F <file>` with a pre-wrapped body,
+    and compare `git rev-parse HEAD` before/after (or check the reported
+    commit hash) before treating a push as confirmation.
+11. If validation fails in files this diff did not touch, suspect baseline
     drift or a stale install before blaming the change; verify with a fresh
     `install-deps` run in a clean worktree or a fresh-vs-stale
     `node_modules` comparison before assuming the failure traces to this diff.
-11. If a test this diff did not touch fails once locally but passes in
+12. If a test this diff did not touch fails once locally but passes in
     isolation while hosted CI is green, trust the hosted result and stop
     chasing it as a regression. This does not waive the `fix-validate` /
     `pre-push-validate` requirements.
-12. When consolidating a wrapper function used at multiple call sites into one
+13. When consolidating a wrapper function used at multiple call sites into one
     shared function, check whether any call site's old delegate path added
     options or behavior the shared function does not replicate.
-13. If B3 or C must stop for a hold, post the hold reason, update the digest,
+14. If B3 or C must stop for a hold, post the hold reason, update the digest,
     and stop.
 
 **Unplanned follow-up work**: If B–C reveals a separate follow-up, do not call
