@@ -12,6 +12,7 @@
 
 import type { ProviderRepositoryLocator } from './provider-contract.mts';
 import type {
+  ProviderChangeRequestAuthor,
   ProviderChangeRequestBranchAndChecks,
   ProviderChangeRequestConvergenceView,
   ProviderChangeRequestHeadShaAndAuthor,
@@ -33,6 +34,7 @@ import type {
   ProviderReviewsWithHeadCommitDate,
   ProviderReviewThreadCommentIds,
   ProviderReviewThreadExtended,
+  ProviderReviewThreadWithAuthorType,
   ProviderReviewThreadWithComments,
   ProviderTimelineEvent,
   ProviderTraversalIssueLookup,
@@ -207,6 +209,13 @@ export interface FakeProviderFixture {
   unresolvableReviewThreadIds?: Set<string>;
   /** Backs {@link ProviderPort.getChangeRequestReviewsWithHeadCommitDate}. */
   reviewsWithHeadCommitDate?: Record<number, ProviderReviewsWithHeadCommitDate>;
+  /** Backs {@link ProviderPort.getChangeRequestAuthor}; absent key means `null`. */
+  changeRequestAuthors?: Record<number, ProviderChangeRequestAuthor>;
+  /** Backs {@link ProviderPort.listChangeRequestReviewThreadsWithAuthorType}. */
+  reviewThreadsWithAuthorType?: Record<
+    number,
+    ProviderReviewThreadWithAuthorType[]
+  >;
 }
 
 export function createFakeProviderAdapter(
@@ -747,6 +756,16 @@ export function createFakeProviderAdapter(
       const id = fixture.nextReviewCommentReplyId ?? 1;
       fixture.nextReviewCommentReplyId = id + 1;
       return { id };
+    },
+
+    getChangeRequestAuthor(number: number): ProviderChangeRequestAuthor | null {
+      return fixture.changeRequestAuthors?.[number] ?? null;
+    },
+
+    listChangeRequestReviewThreadsWithAuthorType(
+      number: number,
+    ): ProviderReviewThreadWithAuthorType[] {
+      return fixture.reviewThreadsWithAuthorType?.[number] ?? [];
     },
 
     getChangeRequestReviewsWithHeadCommitDate(

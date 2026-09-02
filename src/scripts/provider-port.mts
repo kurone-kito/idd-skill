@@ -301,6 +301,34 @@ export interface ProviderReviewsWithHeadCommitDate {
   headCommittedAt: string;
 }
 
+/** Backs {@link ProviderPort.getChangeRequestAuthor}. */
+export interface ProviderChangeRequestAuthor {
+  login: string;
+  typename: string | null;
+}
+
+/** One review-thread comment as
+ * {@link ProviderPort.listChangeRequestReviewThreadsWithAuthorType} returns
+ * it -- like {@link ProviderReviewThreadComment} but also selects
+ * `author.__typename` (`advisory-convergence.mts`'s own distinct query;
+ * neither `listChangeRequestReviewThreadsWithComments` nor
+ * `listChangeRequestReviewThreadsExtended` select this field). */
+export interface ProviderReviewThreadCommentWithAuthorType {
+  body: string;
+  createdAt: string;
+  updatedAt: string;
+  authorLogin: string;
+  authorTypename: string | null;
+  pullRequestReviewId: string | null;
+}
+
+/** Backs {@link ProviderPort.listChangeRequestReviewThreadsWithAuthorType}. */
+export interface ProviderReviewThreadWithAuthorType {
+  id: string;
+  isResolved: boolean | null;
+  comments: ProviderReviewThreadCommentWithAuthorType[];
+}
+
 /**
  * Provider port: the operation surface `discover-*.mts`, `claim-approval-
  * gate.mts`, `post-idd-marker.mts`, `resume-claim-routing.mts`,
@@ -948,6 +976,24 @@ export interface ProviderPort {
     status: string;
     createdAt: string;
   }[];
+
+  /**
+   * change-requests. GraphQL `pullRequest(number){author{login __typename}}`
+   * -- `advisory-convergence.mts`'s own minimal author-only query (its
+   * `fetchPrAuthor`), distinct from every other author-carrying method here
+   * (none else select `__typename`). `null` when the PR/author is absent.
+   */
+  getChangeRequestAuthor(number: number): ProviderChangeRequestAuthor | null;
+
+  /**
+   * reviews-and-threads. Same full-walk two-level pagination as
+   * {@link listChangeRequestReviewThreadsWithComments}, but
+   * `advisory-convergence.mts`'s own query also selects `author.__typename`
+   * -- see {@link ProviderReviewThreadCommentWithAuthorType}.
+   */
+  listChangeRequestReviewThreadsWithAuthorType(
+    number: number,
+  ): ProviderReviewThreadWithAuthorType[];
 
   /**
    * reviews-and-threads. Paginated GraphQL `reviews(first:100)` plus a

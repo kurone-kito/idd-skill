@@ -1302,3 +1302,96 @@ test('getChangeRequestReviewsWithHeadCommitDate paginates reviews and fetches he
   });
   assert.equal(call, 2);
 });
+
+test('getChangeRequestAuthor maps login/__typename, and null when absent', () => {
+  const port = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({
+      ghText: () =>
+        JSON.stringify({
+          data: {
+            repository: {
+              pullRequest: { author: { login: 'octocat', __typename: 'User' } },
+            },
+          },
+        }),
+    }),
+  );
+  assert.deepEqual(port.getChangeRequestAuthor(7), {
+    login: 'octocat',
+    typename: 'User',
+  });
+
+  const absentPort = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({
+      ghText: () =>
+        JSON.stringify({ data: { repository: { pullRequest: {} } } }),
+    }),
+  );
+  assert.equal(absentPort.getChangeRequestAuthor(7), null);
+});
+
+test('listChangeRequestReviewThreadsWithAuthorType selects author.__typename, distinct from listChangeRequestReviewThreadsWithComments', () => {
+  const singlePage = JSON.stringify({
+    data: {
+      repository: {
+        pullRequest: {
+          reviewThreads: {
+            nodes: [
+              {
+                id: 't1',
+                isResolved: false,
+                comments: {
+                  nodes: [
+                    {
+                      body: 'hi',
+                      createdAt: '2026-01-01T00:00:00Z',
+                      updatedAt: '2026-01-01T00:00:00Z',
+                      author: { login: 'copilot', __typename: 'Bot' },
+                      pullRequestReview: { id: 'PRR_1' },
+                    },
+                  ],
+                  pageInfo: { hasNextPage: false, endCursor: null },
+                },
+              },
+            ],
+            pageInfo: { hasNextPage: false, endCursor: null },
+          },
+        },
+      },
+    },
+  });
+  let capturedQuery: string | undefined;
+  const port = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({
+      ghText: (args) => {
+        capturedQuery = args.find((arg) =>
+          arg.startsWith('query=query($owner'),
+        );
+        return singlePage;
+      },
+    }),
+  );
+  assert.deepEqual(port.listChangeRequestReviewThreadsWithAuthorType(7), [
+    {
+      id: 't1',
+      isResolved: false,
+      comments: [
+        {
+          body: 'hi',
+          createdAt: '2026-01-01T00:00:00Z',
+          updatedAt: '2026-01-01T00:00:00Z',
+          authorLogin: 'copilot',
+          authorTypename: 'Bot',
+          pullRequestReviewId: 'PRR_1',
+        },
+      ],
+    },
+  ]);
+  assert.match(capturedQuery ?? '', /author \{ login __typename \}/);
+});

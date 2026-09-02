@@ -387,6 +387,12 @@ export function createFakeProviderAdapter(fixture) {
       fixture.nextReviewCommentReplyId = id + 1;
       return { id };
     },
+    getChangeRequestAuthor(number) {
+      return fixture.changeRequestAuthors?.[number] ?? null;
+    },
+    listChangeRequestReviewThreadsWithAuthorType(number) {
+      return fixture.reviewThreadsWithAuthorType?.[number] ?? [];
+    },
     getChangeRequestReviewsWithHeadCommitDate(number) {
       return (
         fixture.reviewsWithHeadCommitDate?.[number] ?? {

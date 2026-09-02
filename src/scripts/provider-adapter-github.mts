@@ -28,6 +28,7 @@ import type {
   ProviderRepositoryLocator,
 } from './provider-contract.mts';
 import type {
+  ProviderChangeRequestAuthor,
   ProviderChangeRequestBranchAndChecks,
   ProviderChangeRequestConvergenceView,
   ProviderChangeRequestHeadShaAndAuthor,
@@ -49,6 +50,7 @@ import type {
   ProviderReviewsWithHeadCommitDate,
   ProviderReviewThreadCommentIds,
   ProviderReviewThreadExtended,
+  ProviderReviewThreadWithAuthorType,
   ProviderReviewThreadWithComments,
   ProviderTimelineEvent,
   ProviderTraversalIssueLookup,
@@ -148,7 +150,7 @@ interface RawThreadCommentNode {
   url?: unknown;
   createdAt?: unknown;
   updatedAt?: unknown;
-  author?: { login?: unknown } | null;
+  author?: { login?: unknown; __typename?: unknown } | null;
   pullRequestReview?: { id?: unknown } | null;
   databaseId?: unknown;
 }
@@ -2062,6 +2064,76 @@ export function createGithubProviderAdapter(
         headSha,
         '--admin',
       ]);
+    },
+
+    getChangeRequestAuthor(number: number): ProviderChangeRequestAuthor | null {
+      const query = `
+        query($owner: String!, $repo: String!, $number: Int!) {
+          repository(owner: $owner, name: $repo) {
+            pullRequest(number: $number) {
+              author { login __typename }
+            }
+          }
+        }`;
+      const apiArgs = [
+        'api',
+        'graphql',
+        '-f',
+        `query=${query}`,
+        '-f',
+        `owner=${owner}`,
+        '-f',
+        `repo=${repo}`,
+        '-F',
+        `number=${number}`,
+      ];
+      const parsed = JSON.parse(deps.ghText(apiArgs, GH_TEXT_LOOP_OPTIONS)) as {
+        data?: {
+          repository?: {
+            pullRequest?: {
+              author?: { login?: unknown; __typename?: unknown } | null;
+            } | null;
+          } | null;
+        } | null;
+      };
+      const author = parsed.data?.repository?.pullRequest?.author;
+      if (!author) {
+        return null;
+      }
+      return {
+        login: String(author.login ?? ''),
+        typename: author.__typename == null ? null : String(author.__typename),
+      };
+    },
+
+    listChangeRequestReviewThreadsWithAuthorType(
+      number: number,
+    ): ProviderReviewThreadWithAuthorType[] {
+      const nodes = fetchReviewThreadsGeneric(
+        deps,
+        owner,
+        repo,
+        number,
+        'body createdAt updatedAt author { login __typename } pullRequestReview { id }',
+      );
+      return nodes.map((node) => ({
+        id: node.id,
+        isResolved: node.isResolved,
+        comments: node.comments.map((comment) => ({
+          body: String(comment.body ?? ''),
+          createdAt: String(comment.createdAt ?? ''),
+          updatedAt: String(comment.updatedAt ?? ''),
+          authorLogin: String(comment.author?.login ?? ''),
+          authorTypename:
+            comment.author?.__typename == null
+              ? null
+              : String(comment.author.__typename),
+          pullRequestReviewId:
+            comment.pullRequestReview?.id == null
+              ? null
+              : String(comment.pullRequestReview.id),
+        })),
+      }));
     },
 
     getChangeRequestReviewsWithHeadCommitDate(
