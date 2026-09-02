@@ -541,6 +541,20 @@ export function collectPreMergeReadiness(
     owner,
     repo,
     resolveCodeownersForFiles(codeownersText, changedFiles).codeownerUserLogins,
+    // Reuses the collector's own injected port instead of the default's
+    // fresh createGithubProviderAdapter(owner, repo) -- otherwise a
+    // fake/non-GitHub-provider caller with a matching CODEOWNER user
+    // unexpectedly spawns a live gh process (Codex review, PR #2429).
+    (login) => {
+      const result = port.getCollaboratorPermission(login);
+      if (result.outcome === 'not-collaborator') {
+        throwSyntheticGhNotFound();
+      }
+      if (result.outcome === 'error') {
+        throw new Error(result.error.message);
+      }
+      return result.permission;
+    },
   );
   const viewerTeamSlugs = resolveViewerClassicBypassTeamSlugs(
     port,

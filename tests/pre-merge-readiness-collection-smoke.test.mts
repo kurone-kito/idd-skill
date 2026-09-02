@@ -825,3 +825,88 @@ test('collectPreMergeReadiness against a fake provider: a required check reporti
     rmSync(cwdRoot, { recursive: true, force: true });
   }
 });
+
+test('collectPreMergeReadiness against a fake provider: a matching CODEOWNER resolves via the injected port, not a fresh live adapter (Codex review, PR #2429)', () => {
+  // resolveEligibleCodeownerUserLogins's default fetchPermission
+  // constructed its own createGithubProviderAdapter(owner, repo) instead
+  // of reusing this collector's own injected port -- invisible to every
+  // other fake-provider test in this file because none of them exercise a
+  // changed file that actually matches a CODEOWNERS rule. Strips `gh` from
+  // PATH so a live-adapter fallback resolves to getCollaboratorPermission's
+  // own {outcome:'error'} catch-all (a spawn ENOENT has no HTTP status),
+  // which resolveEligibleCodeownerUserLogins classifies as `unreadable`
+  // (excluded, not rethrown -- so a bare doesNotThrow would not catch the
+  // regression) -- assert codeownerEligibilityUnreadable stays false
+  // instead, which only holds when the fixture's own 'write' permission was
+  // actually read.
+  const cwdRoot = mkdtempSync(join(tmpdir(), 'idd-pre-merge-fake-codeowner-'));
+  const originalCwd = process.cwd();
+  const originalPath = process.env.PATH;
+  try {
+    process.chdir(cwdRoot);
+    process.env.PATH = '';
+
+    const codeownersContent = Buffer.from('* @reviewer-user\n', 'utf8')
+      .toString('base64')
+      .replace(/=+$/, '');
+    const port = createFakeProviderAdapter({
+      changeRequestReadinessSnapshots: {
+        42: {
+          headSha: 'a'.repeat(40),
+          baseRefName: 'main',
+          url: 'https://github.com/o/r/pull/42',
+          authorLogin: 'author-user',
+          reviewDecision: null,
+          statusCheckRollup: [],
+          mergeable: 'MERGEABLE',
+          mergeStateStatus: 'CLEAN',
+          closingIssuesReferences: [],
+        },
+      },
+      branchRules: { 'o/r/main': [] },
+      branchProtection: { 'o/r/main': {} },
+      reviewThreadsWithComments: { 42: [] },
+      reviewsWithHeadCommitDate: {
+        42: { reviews: [], headCommittedAt: '2026-07-31T23:00:00Z' },
+      },
+      repositoryContentAtRef: {
+        'o/r/.github/CODEOWNERS@main': { content: codeownersContent },
+      },
+      changedFiles: { 42: ['src/index.ts'] },
+      collaboratorPermissions: {
+        'reviewer-user': {
+          outcome: 'found',
+          permission: 'write',
+          roleName: 'write',
+        },
+      },
+    });
+
+    const report = collectPreMergeReadiness(
+      [
+        '--pr',
+        '42',
+        '--claimless',
+        '--owner',
+        'o',
+        '--repo',
+        'r',
+        '--now',
+        '2026-08-01T00:00:00Z',
+      ],
+      () => port,
+    );
+    const reviewerStates = report.reviewerStates as {
+      codeownerSelfApproval: { codeownerEligibilityUnreadable: boolean };
+    };
+    assert.equal(
+      reviewerStates.codeownerSelfApproval.codeownerEligibilityUnreadable,
+      false,
+      'expected the fixture-provided write permission to resolve cleanly via the injected port',
+    );
+  } finally {
+    process.env.PATH = originalPath;
+    process.chdir(originalCwd);
+    rmSync(cwdRoot, { recursive: true, force: true });
+  }
+});
