@@ -374,6 +374,69 @@ const POLICY_OVERRIDE_NOUN_PATTERN = new RegExp(
   `\\b(${POLICY_OVERRIDE_NOUN_SOURCE})\\b`,
   'i',
 );
+// #2468: the pattern's `[\s\S]{0,60}` window has no concept of a Markdown
+// heading boundary, so a verb ending one line -- most commonly this
+// repository's issue title, given the near-universal repeated-title-as-H1
+// body convention -- can pair with a noun that is only the leading word of
+// an unrelated heading starting immediately after. The heading is a
+// structural label, not a continuation of the verb's own sentence.
+// Excluding a heading-adjacent noun this way, rather than special-casing
+// only the title/body boundary, also covers a later `##` subheading whose
+// own leading noun coincidentally follows a verb from the end of the prior
+// paragraph. A genuine directive that does not cross a heading line is
+// unaffected -- including one deliberately split across the title/body
+// boundary with no heading in between (see the dedicated regression test
+// pinning this as distinct from "never match across the title/body split
+// at all"). CommonMark/GFM (what GitHub renders issue bodies with) also
+// allows a 1-3 space indent before the `#` run and still treats the line
+// as an ATX heading (#2468 critique finding 2), so the leading-space class
+// is optional-bounded rather than requiring the `#` at column 0.
+const HEADING_LINE_BOUNDARY_PATTERN = /\n {0,3}#{1,6}[ \t]/;
+
+/**
+ * True when `nounStart` (start of the matched noun) falls on the same
+ * physical line as ANY Markdown ATX heading marker (`\n {0,3}#{1,6}[\t ]`)
+ * that starts somewhere between `verbEnd` (end of the matched verb) and
+ * `nounStart` -- i.e. the noun is itself part of an unrelated heading's own
+ * text, not prose several lines further into the body (#2468 critique
+ * finding 1: a heading merely *appearing* in the gap, with the noun landing
+ * on a later, ordinary prose line, must not suppress a genuine directive).
+ * Checks every heading found in the gap, not only the first (#2468 critique
+ * round 2: a first heading whose own line does not reach the noun must not
+ * short-circuit a second heading further along whose line does). `scanSource`
+ * must be the SAME text (masked or raw) the caller ran POLICY_OVERRIDE_PATTERN
+ * against, so a heading marker inside a masked code region -- already
+ * replaced with spaces -- cannot itself manufacture a boundary (#2468
+ * critique finding 1's code-comment-as-heading bypass).
+ */
+function matchCrossesHeadingBoundary(
+  scanSource: string,
+  verbEnd: number,
+  nounStart: number,
+): boolean {
+  if (nounStart <= verbEnd) {
+    return false;
+  }
+  const gap = scanSource.slice(verbEnd, nounStart);
+  const headingPattern = new RegExp(HEADING_LINE_BOUNDARY_PATTERN.source, 'g');
+  let headingMatch: RegExpExecArray | null;
+  while (true) {
+    headingMatch = headingPattern.exec(gap);
+    if (headingMatch === null) {
+      return false;
+    }
+    const headingLineStart = verbEnd + headingMatch.index + 1;
+    const nextNewline = scanSource.indexOf('\n', headingLineStart);
+    const headingLineEnd = nextNewline === -1 ? scanSource.length : nextNewline;
+    if (nounStart <= headingLineEnd) {
+      return true;
+    }
+    if (headingPattern.lastIndex === headingMatch.index) {
+      headingPattern.lastIndex += 1;
+    }
+  }
+}
+
 // #2219: broadens checkAutonomy's coordination-language matcher beyond its two
 // original fixed templates (requires .../stakeholder ... sign-off) to catch
 // equally natural phrasings for the same unresolved human-coordination
@@ -723,7 +786,7 @@ function findPolicyOverrideMatch(
   maskedText: string,
   getCodeRangeAt: (start: number) => { start: number; end: number } | null,
 ): { index: number; text: string } | null {
-  const maskedPattern = new RegExp(POLICY_OVERRIDE_PATTERN.source, 'gi');
+  const maskedPattern = new RegExp(POLICY_OVERRIDE_PATTERN.source, 'gid');
   let maskedMatch: RegExpExecArray | null;
   while (true) {
     maskedMatch = maskedPattern.exec(maskedText);
@@ -731,6 +794,11 @@ function findPolicyOverrideMatch(
       break;
     }
     const index = maskedMatch.index;
+    const maskedIndices = (
+      maskedMatch as RegExpExecArray & { indices?: RegExpIndicesArray }
+    ).indices;
+    const verbEnd = maskedIndices?.[1]?.[1] ?? index;
+    const nounStart = maskedIndices?.[2]?.[0] ?? index + maskedMatch[0].length;
     if (
       (!getCodeRangeAt(index) &&
         isOrdinaryHyphenatedCompoundVerb(text, index)) ||
@@ -740,7 +808,8 @@ function findPolicyOverrideMatch(
         index,
         maskedMatch[1] ?? '',
         getCodeRangeAt,
-      )
+      ) ||
+      matchCrossesHeadingBoundary(maskedText, verbEnd, nounStart)
     ) {
       // A negated (or ordinary-compound) match's own greedy span can reach
       // up to 60 chars past the verb and swallow a second, genuine trigger
@@ -762,7 +831,7 @@ function findPolicyOverrideMatch(
   // A real directive may wrap one of its tokens in inline code. The masked
   // pass intentionally removes that token, so inspect raw matches as a
   // fallback and retain only matches that are not wholly inside code.
-  const pattern = new RegExp(POLICY_OVERRIDE_PATTERN.source, 'gi');
+  const pattern = new RegExp(POLICY_OVERRIDE_PATTERN.source, 'gid');
   let match: RegExpExecArray | null;
   while (true) {
     match = pattern.exec(text);
@@ -773,6 +842,11 @@ function findPolicyOverrideMatch(
     if (index < 0) {
       continue;
     }
+    const rawIndices = (
+      match as RegExpExecArray & { indices?: RegExpIndicesArray }
+    ).indices;
+    const verbEnd = rawIndices?.[1]?.[1] ?? index;
+    const nounStart = rawIndices?.[2]?.[0] ?? index + match[0].length;
     if (
       (!getCodeRangeAt(index) &&
         isOrdinaryHyphenatedCompoundVerb(text, index)) ||
@@ -782,7 +856,8 @@ function findPolicyOverrideMatch(
         index,
         match[1] ?? '',
         getCodeRangeAt,
-      )
+      ) ||
+      matchCrossesHeadingBoundary(maskedText, verbEnd, nounStart)
     ) {
       // Same rewind as the masked-pass loop above: a negated or
       // ordinary-compound match's own greedy span can swallow a later,
