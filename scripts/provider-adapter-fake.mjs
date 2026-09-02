@@ -9,6 +9,7 @@
 // authenticated `gh` process. Every method reads/writes the fixture object
 // passed to `createFakeProviderAdapter`; nothing here spawns a subprocess
 // or makes a network call.
+import { PROVIDER_CAPABILITY_GROUPS } from './provider-contract.mjs';
 export function createFakeProviderAdapter(fixture) {
   fixture.postedComments ??= [];
   fixture.closedWorkItems ??= [];
@@ -410,6 +411,16 @@ export function createFakeProviderAdapter(fixture) {
       }
       fixture.resolvedReviewThreadIds ??= [];
       fixture.resolvedReviewThreadIds.push(threadId);
+    },
+    listCapabilityDeclarations() {
+      return (
+        fixture.capabilityDeclarations ??
+        PROVIDER_CAPABILITY_GROUPS.map((group) => ({
+          group,
+          requirement: group === 'advisory-review' ? 'optional' : 'required',
+          supported: true,
+        }))
+      );
     },
   };
 }

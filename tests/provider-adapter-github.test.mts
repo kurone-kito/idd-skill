@@ -1449,3 +1449,28 @@ test('getWorkflowRun preserves a string runId above Number.MAX_SAFE_INTEGER exac
     `expected the exact run id in the path, got: ${capturedArgs?.join(' ')}`,
   );
 });
+
+test('listCapabilityDeclarations reports every provider-contract group supported, no network call', () => {
+  const port = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({
+      ghText: () => {
+        throw new Error('listCapabilityDeclarations must not call gh');
+      },
+    }),
+  );
+  const declarations = port.listCapabilityDeclarations();
+  assert.equal(declarations.length, 11);
+  assert.ok(
+    declarations.every((declaration) => declaration.supported === true),
+  );
+  const advisoryReview = declarations.find(
+    (declaration) => declaration.group === 'advisory-review',
+  );
+  assert.equal(advisoryReview?.requirement, 'optional');
+  const changeRequests = declarations.find(
+    (declaration) => declaration.group === 'change-requests',
+  );
+  assert.equal(changeRequests?.requirement, 'required');
+});

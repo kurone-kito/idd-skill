@@ -10,7 +10,11 @@
 // passed to `createFakeProviderAdapter`; nothing here spawns a subprocess
 // or makes a network call.
 
-import type { ProviderRepositoryLocator } from './provider-contract.mts';
+import {
+  PROVIDER_CAPABILITY_GROUPS,
+  type ProviderCapabilityDeclaration,
+  type ProviderRepositoryLocator,
+} from './provider-contract.mts';
 import type {
   ProviderChangeRequestAuthor,
   ProviderChangeRequestBranchAndChecks,
@@ -216,6 +220,12 @@ export interface FakeProviderFixture {
     number,
     ProviderReviewThreadWithAuthorType[]
   >;
+  /** Backs {@link ProviderPort.listCapabilityDeclarations}. Defaults to
+   * every capability group `supported: true` (the GitHub adapter's own
+   * posture) so a test only overrides the one group it's exercising, e.g.
+   * an `advisory-review: { supported: false }` override to simulate a
+   * non-GitHub provider without an advisory reviewer. */
+  capabilityDeclarations?: ProviderCapabilityDeclaration[];
 }
 
 export function createFakeProviderAdapter(
@@ -792,6 +802,17 @@ export function createFakeProviderAdapter(
       }
       fixture.resolvedReviewThreadIds ??= [];
       fixture.resolvedReviewThreadIds.push(threadId);
+    },
+
+    listCapabilityDeclarations(): ProviderCapabilityDeclaration[] {
+      return (
+        fixture.capabilityDeclarations ??
+        PROVIDER_CAPABILITY_GROUPS.map((group) => ({
+          group,
+          requirement: group === 'advisory-review' ? 'optional' : 'required',
+          supported: true,
+        }))
+      );
     },
   };
 }

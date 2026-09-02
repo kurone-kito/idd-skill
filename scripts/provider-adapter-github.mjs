@@ -20,6 +20,7 @@ import {
   withBoundedRetry,
 } from './gh-exec.mjs';
 import { deriveGhHttpStatus } from './gh-http-status.mjs';
+import { PROVIDER_CAPABILITY_GROUPS } from './provider-contract.mjs';
 
 function statusToCategory(status) {
   if (status === 401) return 'authentication';
@@ -1783,6 +1784,13 @@ export function createGithubProviderAdapter(owner, repo, deps = DEFAULT_DEPS) {
           `resolveChangeRequestReviewThread: GitHub did not confirm thread ${threadId} as resolved`,
         );
       }
+    },
+    listCapabilityDeclarations() {
+      return PROVIDER_CAPABILITY_GROUPS.map((group) => ({
+        group,
+        requirement: group === 'advisory-review' ? 'optional' : 'required',
+        supported: true,
+      }));
     },
   };
 }

@@ -36,6 +36,7 @@
 // addition -- traversal-only, not a general async surface.
 
 import type {
+  ProviderCapabilityDeclaration,
   ProviderError,
   ProviderRepositoryLocator,
 } from './provider-contract.mts';
@@ -1028,4 +1029,17 @@ export interface ProviderPort {
   /** merge, write. Same as {@link mergeChangeRequest} plus `--admin` --
    * separate method per the port's one-op-per-call-shape rule. */
   mergeChangeRequestAdmin(number: number, headSha: string): string;
+
+  /**
+   * capability declarations. Static list of what this adapter supports per
+   * `provider-contract.mts` capability group -- no network call, no
+   * per-repository variance. A caller feeds each declaration through
+   * {@link evaluateProviderCapabilityOutcome} to decide `ok` / `fail_closed`
+   * / `not_applicable` for that group. The GitHub adapter reports every
+   * group supported; a future non-GitHub adapter without an equivalent
+   * advisory reviewer would report `advisory-review` unsupported so
+   * `advisory-convergence.mts` can resolve it `not_applicable` instead of
+   * fail-closing (#2267 AC4).
+   */
+  listCapabilityDeclarations(): ProviderCapabilityDeclaration[];
 }

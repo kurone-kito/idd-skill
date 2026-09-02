@@ -107,3 +107,27 @@ test('resolveChangeRequestReviewThread throws for a thread id in unresolvableRev
   port.resolveChangeRequestReviewThread('T_ok');
   assert.deepEqual(fixture.resolvedReviewThreadIds, ['T_ok']);
 });
+
+test('listCapabilityDeclarations defaults to every group supported, matching the GitHub adapter posture', () => {
+  const port = createFakeProviderAdapter({});
+  const declarations = port.listCapabilityDeclarations();
+  assert.equal(declarations.length, 11);
+  assert.ok(
+    declarations.every((declaration) => declaration.supported === true),
+  );
+  const advisoryReview = declarations.find(
+    (declaration) => declaration.group === 'advisory-review',
+  );
+  assert.equal(advisoryReview?.requirement, 'optional');
+});
+
+test('listCapabilityDeclarations honors a fixture override simulating a provider without advisory review', () => {
+  const port = createFakeProviderAdapter({
+    capabilityDeclarations: [
+      { group: 'advisory-review', requirement: 'optional', supported: false },
+    ],
+  });
+  assert.deepEqual(port.listCapabilityDeclarations(), [
+    { group: 'advisory-review', requirement: 'optional', supported: false },
+  ]);
+});

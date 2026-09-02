@@ -22,10 +22,12 @@ import {
   withBoundedRetry,
 } from './gh-exec.mts';
 import { deriveGhHttpStatus } from './gh-http-status.mts';
-import type {
-  ProviderError,
-  ProviderErrorCategory,
-  ProviderRepositoryLocator,
+import {
+  PROVIDER_CAPABILITY_GROUPS,
+  type ProviderCapabilityDeclaration,
+  type ProviderError,
+  type ProviderErrorCategory,
+  type ProviderRepositoryLocator,
 } from './provider-contract.mts';
 import type {
   ProviderChangeRequestAuthor,
@@ -2360,6 +2362,14 @@ export function createGithubProviderAdapter(
           `resolveChangeRequestReviewThread: GitHub did not confirm thread ${threadId} as resolved`,
         );
       }
+    },
+
+    listCapabilityDeclarations(): ProviderCapabilityDeclaration[] {
+      return PROVIDER_CAPABILITY_GROUPS.map((group) => ({
+        group,
+        requirement: group === 'advisory-review' ? 'optional' : 'required',
+        supported: true,
+      }));
     },
   };
 }
