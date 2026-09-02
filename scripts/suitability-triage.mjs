@@ -163,9 +163,13 @@ const SUBJECTIVE_GATE_PATTERN =
 // checkable. Each verb word below carries an explicit `-s|-ed/-d|-ing`
 // suffix group instead of the bare form; `objective`/`measurable`/
 // `deterministic` stay bare since they are adjectives, not conjugated as
-// verbs in this context.
+// verbs in this context. `include`/`require` end in a silent `e` that
+// standard English orthography drops before `-ing` ("including" /
+// "requiring", not "includeing" / "requireing" -- caught in PR review),
+// so their stem omits the trailing `e` and the `e[sd]?|ing` group is
+// mandatory rather than optional.
 const OUTCOME_SIGNAL_PATTERN =
-  /\b(pass(?:e[sd]|ing)?|fail(?:s|ed|ing)?|result(?:s|ed|ing)?|output(?:s|ted|ting)?|contain(?:s|ed|ing)?|include(?:s|d|ing)?|present(?:s|ed|ing)?|require(?:s|d|ing)?|objective|measurable|deterministic)\b/i;
+  /\b(pass(?:e[sd]|ing)?|fail(?:s|ed|ing)?|result(?:s|ed|ing)?|output(?:s|ted|ting)?|contain(?:s|ed|ing)?|includ(?:e[sd]?|ing)|present(?:s|ed|ing)?|requir(?:e[sd]?|ing)|objective|measurable|deterministic)\b/i;
 // Whole-body proximity variant of the subjective-approval check, built from
 // the same two pattern sources above (not hand-duplicated) so the
 // hyphen-boundary fix (#2205) applies to both the per-line and whole-body

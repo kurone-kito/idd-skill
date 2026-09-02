@@ -2522,6 +2522,22 @@ test('verifiability recognizes inflected outcome-signal verb forms (#2501)', () 
   assert.equal(result.pass, true);
 });
 
+test('verifiability recognizes the "including"/"requiring" gerund spellings (#2501 review)', () => {
+  // `include`/`require` drop their trailing `e` before `-ing` in standard
+  // English spelling -- a naive word+"ing" suffix group would only match
+  // the misspellings "includeing"/"requireing", never the real words.
+  const result = checkVerifiability({
+    issue: {
+      ...BASE_ISSUE,
+      body: `## Acceptance Criteria
+- the response body, including the new header, matches the fixture
+- the build step, requiring no network access, completes offline
+`,
+    },
+  } as Context);
+  assert.equal(result.pass, true);
+});
+
 test('verifiability still fails a bullet list with no outcome-signal word at all', () => {
   // A checklist that names no outcome-signal word (inflected or bare) must
   // still fail -- the widened pattern must not become unconditionally true.
