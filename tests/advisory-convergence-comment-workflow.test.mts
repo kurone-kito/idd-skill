@@ -43,6 +43,11 @@ test('required advisory-convergence workflows no longer trigger on review commen
       /pull_request_review_comment/,
       `${path} on: must not include pull_request_review_comment`,
     );
+    assert.doesNotMatch(
+      onBlock,
+      /issue_comment/,
+      `${path} on: must not include issue_comment`,
+    );
     assert.match(onBlock, /pull_request:/);
     assert.match(onBlock, /pull_request_review:/);
   }
@@ -64,6 +69,50 @@ test('comment-refresh workflows are non-required and use a different job id', ()
       text,
       /cancel-in-progress:\s*false/,
       `${path} must not cancel an in-flight IDD refresh`,
+    );
+  }
+});
+
+// #2411: IDD's own operational markers (post-idd-marker.mjs,
+// disposition-non-review-notices.mjs) post through the issues-comments
+// API (issue_comment events), not the review-comment API -- the
+// comment-refresh workflows need this trigger too, plus a guard so a
+// comment on a plain issue (not a PR) is a no-op.
+test('comment-refresh workflows also trigger on issue_comment and guard non-PR issues', () => {
+  for (const path of COMMENT_PATHS) {
+    const text = readWorkflow(path);
+    assert.match(
+      text,
+      /issue_comment:/,
+      `${path} on: must include issue_comment`,
+    );
+    assert.match(
+      text,
+      /github\.event_name\s*!=\s*'issue_comment'\s*\|\|\s*github\.event\.issue\.pull_request\s*!=\s*null/,
+      `${path} must skip a plain-issue issue_comment event`,
+    );
+    // Scope this assertion to the "Rerun required HEAD check" step's own
+    // env block -- the concurrency.group expression coincidentally shares
+    // the same `pull_request.number || issue.number` substring, so a
+    // whole-file match would still pass even if the step's own PR_NUMBER
+    // assignment regressed back to the pull_request-only form.
+    const rerunStepIndex = text.indexOf('- name: Rerun required HEAD check');
+    assert.notEqual(
+      rerunStepIndex,
+      -1,
+      `${path} must have a "Rerun required HEAD check" step`,
+    );
+    const prNumberAssignment = text
+      .slice(rerunStepIndex)
+      .match(/PR_NUMBER:\s*\$\{\{\s*([^}]+)\}\}/);
+    assert.ok(
+      prNumberAssignment,
+      `${path} Rerun required HEAD check step must assign PR_NUMBER`,
+    );
+    assert.match(
+      prNumberAssignment[1],
+      /github\.event\.pull_request\.number\s*\|\|\s*github\.event\.issue\.number/,
+      `${path} PR_NUMBER must resolve from either event shape`,
     );
   }
 });
