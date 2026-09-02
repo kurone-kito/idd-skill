@@ -280,6 +280,27 @@ export interface ProviderGraphqlReview {
   authorLogin: string;
 }
 
+/** One review node as {@link ProviderPort.getChangeRequestReviewsWithHeadCommitDate}
+ * returns it -- distinct field set from {@link ProviderGraphqlReview} (no
+ * `url`/`state`; adds the review's own node `id`, `authorTypename`, and
+ * `commentCount`), matching `review-clause.mts`'s own Clause-1 evidence
+ * shape. */
+export interface ProviderReviewClauseNode {
+  id: string;
+  authorLogin: string;
+  authorTypename: string | null;
+  submittedAt: string | null;
+  commitId: string | null;
+  commentCount: number | null;
+  body: string | null;
+}
+
+/** Backs {@link ProviderPort.getChangeRequestReviewsWithHeadCommitDate}. */
+export interface ProviderReviewsWithHeadCommitDate {
+  reviews: ProviderReviewClauseNode[];
+  headCommittedAt: string;
+}
+
 /**
  * Provider port: the operation surface `discover-*.mts`, `claim-approval-
  * gate.mts`, `post-idd-marker.mts`, `resume-claim-routing.mts`,
@@ -927,6 +948,19 @@ export interface ProviderPort {
     status: string;
     createdAt: string;
   }[];
+
+  /**
+   * reviews-and-threads. Paginated GraphQL `reviews(first:100)` plus a
+   * once-per-call `commits(last:1){nodes{commit{committedDate}}}` sibling
+   * field -- `review-clause.mts`'s own distinct query (shared by
+   * `advisory-convergence.mts`, `pre-merge-readiness.mts`, and the
+   * out-of-scope `rerun-advisory-convergence.mts` today), not unifiable
+   * with {@link listChangeRequestGraphqlReviews} (different field set, no
+   * head-commit-date sibling).
+   */
+  getChangeRequestReviewsWithHeadCommitDate(
+    number: number,
+  ): ProviderReviewsWithHeadCommitDate;
 
   /** merge, write. `pr merge --merge --match-head-commit {headSha}` on the
    * port's own ambient repo. */

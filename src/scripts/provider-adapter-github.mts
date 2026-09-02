@@ -46,6 +46,7 @@ import type {
   ProviderPort,
   ProviderPostedComment,
   ProviderRequiredCheck,
+  ProviderReviewsWithHeadCommitDate,
   ProviderReviewThreadCommentIds,
   ProviderReviewThreadExtended,
   ProviderReviewThreadWithComments,
@@ -2061,6 +2062,115 @@ export function createGithubProviderAdapter(
         headSha,
         '--admin',
       ]);
+    },
+
+    getChangeRequestReviewsWithHeadCommitDate(
+      number: number,
+    ): ProviderReviewsWithHeadCommitDate {
+      const query = `
+        query($owner: String!, $repo: String!, $number: Int!, $cursor: String) {
+          repository(owner: $owner, name: $repo) {
+            pullRequest(number: $number) {
+              reviews(first: 100, after: $cursor) {
+                pageInfo { hasNextPage endCursor }
+                nodes {
+                  id
+                  commit { oid }
+                  submittedAt
+                  author { login __typename }
+                  comments { totalCount }
+                  body
+                }
+              }
+              commits(last: 1) {
+                nodes { commit { committedDate } }
+              }
+            }
+          }
+        }`;
+      const nodes: {
+        id?: unknown;
+        commit?: { oid?: unknown } | null;
+        submittedAt?: unknown;
+        author?: { login?: unknown; __typename?: unknown } | null;
+        comments?: { totalCount?: unknown } | null;
+        body?: unknown;
+      }[] = [];
+      let headCommittedAt = '';
+      let cursor: string | null = null;
+      while (true) {
+        const apiArgs = [
+          'api',
+          'graphql',
+          '-f',
+          `query=${query}`,
+          '-f',
+          `owner=${owner}`,
+          '-f',
+          `repo=${repo}`,
+          '-F',
+          `number=${number}`,
+        ];
+        if (cursor) {
+          apiArgs.push('-f', `cursor=${cursor}`);
+        }
+        const parsed = JSON.parse(
+          deps.ghText(apiArgs, GH_TEXT_LOOP_OPTIONS),
+        ) as {
+          data?: {
+            repository?: {
+              pullRequest?: {
+                reviews?: {
+                  pageInfo?: {
+                    hasNextPage?: boolean;
+                    endCursor?: string | null;
+                  };
+                  nodes?: typeof nodes;
+                } | null;
+                commits?: {
+                  nodes?: { commit?: { committedDate?: unknown } | null }[];
+                } | null;
+              } | null;
+            } | null;
+          };
+        };
+        const pullRequest = parsed.data?.repository?.pullRequest;
+        nodes.push(...(pullRequest?.reviews?.nodes ?? []));
+        if (!headCommittedAt) {
+          headCommittedAt = String(
+            pullRequest?.commits?.nodes?.[0]?.commit?.committedDate ?? '',
+          );
+        }
+        const pageInfo = pullRequest?.reviews?.pageInfo;
+        if (!pageInfo?.hasNextPage) {
+          break;
+        }
+        if (!pageInfo.endCursor) {
+          throw new Error(
+            `getChangeRequestReviewsWithHeadCommitDate: review page reported hasNextPage without endCursor for PR #${number}`,
+          );
+        }
+        cursor = pageInfo.endCursor;
+      }
+      return {
+        reviews: nodes.map((node) => ({
+          id: String(node.id ?? ''),
+          authorLogin: String(node.author?.login ?? ''),
+          authorTypename:
+            node.author?.__typename == null
+              ? null
+              : String(node.author.__typename),
+          submittedAt:
+            node.submittedAt == null ? null : String(node.submittedAt),
+          commitId: node.commit?.oid == null ? null : String(node.commit.oid),
+          commentCount:
+            typeof node.comments?.totalCount === 'number'
+              ? node.comments.totalCount
+              : null,
+          body: node.body == null ? null : String(node.body),
+        })),
+        headCommittedAt,
+      };
     },
 
     mergeChangeRequest(number: number, headSha: string): string {

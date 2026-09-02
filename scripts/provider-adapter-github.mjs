@@ -1542,6 +1542,86 @@ export function createGithubProviderAdapter(owner, repo, deps = DEFAULT_DEPS) {
         '--admin',
       ]);
     },
+    getChangeRequestReviewsWithHeadCommitDate(number) {
+      const query = `
+        query($owner: String!, $repo: String!, $number: Int!, $cursor: String) {
+          repository(owner: $owner, name: $repo) {
+            pullRequest(number: $number) {
+              reviews(first: 100, after: $cursor) {
+                pageInfo { hasNextPage endCursor }
+                nodes {
+                  id
+                  commit { oid }
+                  submittedAt
+                  author { login __typename }
+                  comments { totalCount }
+                  body
+                }
+              }
+              commits(last: 1) {
+                nodes { commit { committedDate } }
+              }
+            }
+          }
+        }`;
+      const nodes = [];
+      let headCommittedAt = '';
+      let cursor = null;
+      while (true) {
+        const apiArgs = [
+          'api',
+          'graphql',
+          '-f',
+          `query=${query}`,
+          '-f',
+          `owner=${owner}`,
+          '-f',
+          `repo=${repo}`,
+          '-F',
+          `number=${number}`,
+        ];
+        if (cursor) {
+          apiArgs.push('-f', `cursor=${cursor}`);
+        }
+        const parsed = JSON.parse(deps.ghText(apiArgs, GH_TEXT_LOOP_OPTIONS));
+        const pullRequest = parsed.data?.repository?.pullRequest;
+        nodes.push(...(pullRequest?.reviews?.nodes ?? []));
+        if (!headCommittedAt) {
+          headCommittedAt = String(
+            pullRequest?.commits?.nodes?.[0]?.commit?.committedDate ?? '',
+          );
+        }
+        const pageInfo = pullRequest?.reviews?.pageInfo;
+        if (!pageInfo?.hasNextPage) {
+          break;
+        }
+        if (!pageInfo.endCursor) {
+          throw new Error(
+            `getChangeRequestReviewsWithHeadCommitDate: review page reported hasNextPage without endCursor for PR #${number}`,
+          );
+        }
+        cursor = pageInfo.endCursor;
+      }
+      return {
+        reviews: nodes.map((node) => ({
+          id: String(node.id ?? ''),
+          authorLogin: String(node.author?.login ?? ''),
+          authorTypename:
+            node.author?.__typename == null
+              ? null
+              : String(node.author.__typename),
+          submittedAt:
+            node.submittedAt == null ? null : String(node.submittedAt),
+          commitId: node.commit?.oid == null ? null : String(node.commit.oid),
+          commentCount:
+            typeof node.comments?.totalCount === 'number'
+              ? node.comments.totalCount
+              : null,
+          body: node.body == null ? null : String(node.body),
+        })),
+        headCommittedAt,
+      };
+    },
     mergeChangeRequest(number, headSha) {
       return deps.ghText([
         'pr',

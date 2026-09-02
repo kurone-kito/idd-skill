@@ -1212,3 +1212,93 @@ test('getChangeRequestReadinessSnapshot maps all nine fields from a single pr vi
     ),
   );
 });
+
+test('getChangeRequestReviewsWithHeadCommitDate paginates reviews and fetches headCommittedAt once', () => {
+  const pages = [
+    JSON.stringify({
+      data: {
+        repository: {
+          pullRequest: {
+            reviews: {
+              pageInfo: { hasNextPage: true, endCursor: 'cursor-1' },
+              nodes: [
+                {
+                  id: 'PRR_1',
+                  commit: { oid: 'deadbeef' },
+                  submittedAt: '2026-01-01T00:00:00Z',
+                  author: { login: 'copilot', __typename: 'Bot' },
+                  comments: { totalCount: 2 },
+                  body: 'first page review',
+                },
+              ],
+            },
+            commits: {
+              nodes: [{ commit: { committedDate: '2026-01-01T00:00:00Z' } }],
+            },
+          },
+        },
+      },
+    }),
+    JSON.stringify({
+      data: {
+        repository: {
+          pullRequest: {
+            reviews: {
+              pageInfo: { hasNextPage: false, endCursor: null },
+              nodes: [
+                {
+                  id: 'PRR_2',
+                  commit: { oid: 'deadbeef' },
+                  submittedAt: '2026-01-02T00:00:00Z',
+                  author: { login: 'copilot', __typename: 'Bot' },
+                  comments: { totalCount: 0 },
+                  body: null,
+                },
+              ],
+            },
+            // Deliberately omitted on the second page -- headCommittedAt
+            // must be captured once, from the first page, not overwritten
+            // (or blanked) by a later page that lacks it.
+            commits: { nodes: [] },
+          },
+        },
+      },
+    }),
+  ];
+  let call = 0;
+  const port = createGithubProviderAdapter(
+    'kurone-kito',
+    'idd-skill',
+    fakeDeps({
+      ghText: () => {
+        const page = pages[call];
+        call += 1;
+        return page;
+      },
+    }),
+  );
+  assert.deepEqual(port.getChangeRequestReviewsWithHeadCommitDate(7), {
+    reviews: [
+      {
+        id: 'PRR_1',
+        authorLogin: 'copilot',
+        authorTypename: 'Bot',
+        submittedAt: '2026-01-01T00:00:00Z',
+        commitId: 'deadbeef',
+        commentCount: 2,
+        body: 'first page review',
+      },
+      {
+        id: 'PRR_2',
+        authorLogin: 'copilot',
+        authorTypename: 'Bot',
+        submittedAt: '2026-01-02T00:00:00Z',
+        commitId: 'deadbeef',
+        commentCount: 0,
+        body: null,
+      },
+    ],
+    headCommittedAt: '2026-01-01T00:00:00Z',
+  });
+  assert.equal(call, 2);
+});

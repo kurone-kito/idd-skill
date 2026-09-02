@@ -30,6 +30,7 @@ import type {
   ProviderPort,
   ProviderPostedComment,
   ProviderRequiredCheck,
+  ProviderReviewsWithHeadCommitDate,
   ProviderReviewThreadCommentIds,
   ProviderReviewThreadExtended,
   ProviderReviewThreadWithComments,
@@ -204,6 +205,8 @@ export interface FakeProviderFixture {
   /** Thread ids in this set fail {@link ProviderPort.resolveChangeRequestReviewThread}
    * (simulates GitHub not confirming `isResolved`). */
   unresolvableReviewThreadIds?: Set<string>;
+  /** Backs {@link ProviderPort.getChangeRequestReviewsWithHeadCommitDate}. */
+  reviewsWithHeadCommitDate?: Record<number, ProviderReviewsWithHeadCommitDate>;
 }
 
 export function createFakeProviderAdapter(
@@ -744,6 +747,17 @@ export function createFakeProviderAdapter(
       const id = fixture.nextReviewCommentReplyId ?? 1;
       fixture.nextReviewCommentReplyId = id + 1;
       return { id };
+    },
+
+    getChangeRequestReviewsWithHeadCommitDate(
+      number: number,
+    ): ProviderReviewsWithHeadCommitDate {
+      return (
+        fixture.reviewsWithHeadCommitDate?.[number] ?? {
+          reviews: [],
+          headCommittedAt: '',
+        }
+      );
     },
 
     resolveChangeRequestReviewThread(threadId: string): void {

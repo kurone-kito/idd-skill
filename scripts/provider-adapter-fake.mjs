@@ -387,6 +387,14 @@ export function createFakeProviderAdapter(fixture) {
       fixture.nextReviewCommentReplyId = id + 1;
       return { id };
     },
+    getChangeRequestReviewsWithHeadCommitDate(number) {
+      return (
+        fixture.reviewsWithHeadCommitDate?.[number] ?? {
+          reviews: [],
+          headCommittedAt: '',
+        }
+      );
+    },
     resolveChangeRequestReviewThread(threadId) {
       if (fixture.unresolvableReviewThreadIds?.has(threadId)) {
         throw new Error(
