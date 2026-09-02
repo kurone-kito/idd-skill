@@ -72,11 +72,14 @@ interface ThreadCommentNode extends MinimizableNode {
 }
 
 /** Review-thread node from the reviewThreads connection. */
-interface ReviewThreadNode {
+export interface ReviewThreadNode {
   id?: string | null;
   isResolved?: boolean | null;
   comments?: {
-    pageInfo?: { hasNextPage?: boolean | null } | null;
+    pageInfo?: {
+      hasNextPage?: boolean | null;
+      endCursor?: string | null;
+    } | null;
     nodes?: ThreadCommentNode[] | null;
   } | null;
 }
@@ -243,6 +246,29 @@ const DEFAULT_APPLY_RETRY_MAX_ATTEMPTS = 3;
 /** Base backoff (ms) before each rescan; linear-ish with jitter, matching
  * {@link withBoundedRetry}'s formula in gh-exec.mts. */
 const DEFAULT_APPLY_RETRY_BACKOFF_MS = 200;
+
+const REVIEW_THREAD_COMMENT_FIELDS = `
+  id
+  url
+  body
+  createdAt
+  isMinimized
+  minimizedReason
+  viewerCanMinimize
+  author{login}
+  pullRequestReview{id}
+`;
+
+// #2478: a thread with more than 100 comments needs its own continuation
+// query -- `node(id)` re-entry is the only way to page an inner connection
+// past its first page, since the outer reviewThreads cursor only advances
+// between threads. 50 pages (5,000 comments) is far beyond any real review
+// thread; hitting it leaves `pageInfo.hasNextPage: true` on the returned
+// node exactly as an un-paginated first page would, so the existing
+// truncated-data skip in evaluateReviewComment (thread.comments.pageInfo.
+// hasNextPage) still fires rather than misreporting a capped thread as
+// complete.
+const MAX_REVIEW_THREAD_COMMENT_PAGES = 50;
 
 if (import.meta.main) {
   await main();
@@ -1282,7 +1308,10 @@ function fetchReviews(
   );
 }
 
-function fetchReviewThreads(
+// Exported for tests/audit-pr-cleanup.test.mts (#2478): the only way to
+// exercise the >100-comment inner-pagination walk without spawning the full
+// CLI and stubbing every gh call `buildReport` needs.
+export function fetchReviewThreads(
   owner: string,
   repo: string,
   number: number,
@@ -1296,18 +1325,8 @@ function fetchReviewThreads(
             id
             isResolved
             comments(first:100){
-              pageInfo{hasNextPage}
-              nodes{
-                id
-                url
-                body
-                createdAt
-                isMinimized
-                minimizedReason
-                viewerCanMinimize
-                author{login}
-                pullRequestReview{id}
-              }
+              pageInfo{hasNextPage endCursor}
+              nodes{${REVIEW_THREAD_COMMENT_FIELDS}}
             }
           }
           pageInfo{hasNextPage endCursor}
@@ -1315,7 +1334,7 @@ function fetchReviewThreads(
       }
     }
   }`;
-  return fetchConnection(
+  const threads = fetchConnection(
     query,
     { owner, repo, number },
     (data) => {
@@ -1331,6 +1350,87 @@ function fetchReviewThreads(
     },
     options,
   );
+  for (const thread of threads) {
+    if (thread.id && thread.comments?.pageInfo?.hasNextPage) {
+      thread.comments = fetchRemainingThreadComments(
+        thread.id,
+        thread.comments,
+        options,
+      );
+    }
+  }
+  return threads;
+}
+
+function fetchRemainingThreadComments(
+  threadId: string,
+  firstPage: NonNullable<ReviewThreadNode['comments']>,
+  options: GraphqlCallOptions,
+): NonNullable<ReviewThreadNode['comments']> {
+  const query = `query($id:ID!,$after:String){
+    node(id:$id){
+      ... on PullRequestReviewThread{
+        comments(first:100,after:$after){
+          pageInfo{hasNextPage endCursor}
+          nodes{${REVIEW_THREAD_COMMENT_FIELDS}}
+        }
+      }
+    }
+  }`;
+  const nodes = [...(firstPage.nodes ?? [])];
+  let pageInfo = firstPage.pageInfo;
+  let pagesFetched = 1;
+  while (pageInfo?.hasNextPage) {
+    if (pagesFetched >= MAX_REVIEW_THREAD_COMMENT_PAGES) {
+      break;
+    }
+    if (!pageInfo.endCursor) {
+      // Mirrors fetchReviewThreadsGeneric's same guard in
+      // provider-adapter-github.mts: fail loudly on a contract-violating
+      // hasNextPage:true-with-no-endCursor page rather than silently
+      // re-requesting page 1 (ghGraphql drops a null `after` variable),
+      // which could otherwise "self-heal" into duplicate comment nodes.
+      handleGraphqlFailure(
+        `GraphQL thread-comment continuation: hasNextPage without endCursor for thread ${threadId}`,
+        options,
+      );
+    }
+    const result = ghGraphql(
+      query,
+      { id: threadId, after: pageInfo.endCursor },
+      options,
+    ) as {
+      data?: {
+        node?: {
+          comments?: {
+            pageInfo?: {
+              hasNextPage?: boolean | null;
+              endCursor?: string | null;
+            } | null;
+            nodes?: ThreadCommentNode[] | null;
+          } | null;
+        } | null;
+      };
+      errors?: GraphqlErrorEntry[] | null;
+    };
+    if (result.errors?.length) {
+      handleGraphqlFailure(
+        `GraphQL thread-comment continuation failed: ${formatGraphqlErrors(result.errors)}; thread=${threadId}`,
+        options,
+      );
+    }
+    const nextComments = result.data?.node?.comments;
+    if (!nextComments) {
+      handleGraphqlFailure(
+        `GraphQL thread-comment continuation returned no comments; thread=${threadId}`,
+        options,
+      );
+    }
+    nodes.push(...(nextComments.nodes ?? []));
+    pageInfo = nextComments.pageInfo;
+    pagesFetched += 1;
+  }
+  return { pageInfo: pageInfo ?? null, nodes };
 }
 
 function fetchConnection<TNode>(
