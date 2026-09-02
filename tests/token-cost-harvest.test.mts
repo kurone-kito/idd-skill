@@ -25,6 +25,7 @@ import {
   resolveIssueLoopContext,
   resolveTrustedMarkerLogins,
   type StageEventWindow,
+  scanClaudeVendorSessions,
   type VendorSession,
   vendorSessionKey,
 } from '../src/scripts/token-cost-harvest.mts';
@@ -133,6 +134,52 @@ test('extractClaudeUsageTimeline sums per-message deltas, sorted by timestamp', 
     output: 5,
     reasoning: 0,
   });
+});
+
+test("scanClaudeVendorSessions scopes each cwd segment's timeline to just that segment's records -- #2404", () => {
+  const sandbox = mkdtempSync(join(tmpdir(), 'idd-token-cost-harvest-test-'));
+  writeFileSync(
+    join(sandbox, 'session-multi.jsonl'),
+    // Mirrors tests/fixtures/token-cost/claude/session-multi-cwd-segments.jsonl:
+    // segment 0 (primary repo, one assistant usage), segment 1
+    // (issue/4343-* worktree, two assistant usages), segment 2 (back to
+    // the primary repo, one assistant usage).
+    `${[
+      '{"type":"user","timestamp":"2026-08-25T09:00:00.000Z","sessionId":"sess-multi-0001","cwd":"/repo"}',
+      '{"type":"assistant","timestamp":"2026-08-25T09:00:05.000Z","sessionId":"sess-multi-0001","cwd":"/repo","message":{"model":"m","usage":{"input_tokens":10,"cache_read_input_tokens":50,"cache_creation_input_tokens":0,"output_tokens":2}}}',
+      '{"type":"assistant","timestamp":"2026-08-25T09:05:00.000Z","sessionId":"sess-multi-0001","cwd":"/repo.issue-4343-x","message":{"model":"m","usage":{"input_tokens":7,"cache_read_input_tokens":30,"cache_creation_input_tokens":5,"output_tokens":3}}}',
+      '{"type":"assistant","timestamp":"2026-08-25T09:06:00.000Z","sessionId":"sess-multi-0001","cwd":"/repo.issue-4343-x","message":{"model":"m","usage":{"input_tokens":2,"cache_read_input_tokens":5,"cache_creation_input_tokens":0,"output_tokens":1}}}',
+      '{"type":"assistant","timestamp":"2026-08-25T09:10:00.000Z","sessionId":"sess-multi-0001","cwd":"/repo","message":{"model":"m","usage":{"input_tokens":4,"cache_read_input_tokens":10,"cache_creation_input_tokens":0,"output_tokens":1}}}',
+    ].join('\n')}\n`,
+  );
+
+  const sessions = scanClaudeVendorSessions(sandbox);
+
+  assert.equal(sessions.length, 3);
+  const byId = new Map(
+    sessions.map((s) => [s.adapterResult.sample.vendorSessionId, s]),
+  );
+  const primary0 = byId.get('sess-multi-0001#0');
+  const issueSeg = byId.get('sess-multi-0001#1');
+  const primary2 = byId.get('sess-multi-0001#2');
+
+  // The issue segment's timeline holds only its own two points -- not the
+  // whole file's four assistant messages.
+  assert.equal(issueSeg?.timeline.points.length, 2);
+  assert.equal(
+    issueSeg?.timeline.points[0].atMs,
+    ms('2026-08-25T09:05:00.000Z'),
+  );
+  assert.equal(
+    issueSeg?.timeline.points[1].atMs,
+    ms('2026-08-25T09:06:00.000Z'),
+  );
+  assert.deepEqual(issueSeg?.adapterResult.joinHints, { issueNumber: 4343 });
+
+  assert.equal(primary0?.timeline.points.length, 1);
+  assert.equal(primary0?.adapterResult.joinHints, undefined);
+  assert.equal(primary2?.timeline.points.length, 1);
+  assert.equal(primary2?.adapterResult.joinHints, undefined);
 });
 
 test('extractCodexUsageTimeline prefers cumulative total_token_usage when any record has one', () => {

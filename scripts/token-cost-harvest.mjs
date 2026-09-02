@@ -35,6 +35,7 @@ import {
   claudeAdapter,
   defaultClaudeProjectDir,
   parseClaudeProjectLines,
+  segmentRecordsByCwd,
 } from './token-cost-adapter-claude.mjs';
 import {
   codexAdapter,
@@ -823,7 +824,19 @@ function eventWindowsForIssue(all, issueNumber, vendor) {
   }
   return out;
 }
-function scanClaudeVendorSessions(projectDir) {
+/**
+ * #2404: a long-lived session's project JSONL file is not necessarily one
+ * cwd for its whole lifetime -- `segmentRecordsByCwd` (see
+ * token-cost-adapter-claude.mts) splits it into contiguous per-cwd runs
+ * first, and this scans one `VendorSession` per segment instead of one per
+ * file, so a session that moves across several `issue/<n>-*` worktrees
+ * still produces a correctly-scoped, correctly-joined sample per worktree.
+ * `extractClaudeUsageTimeline` is called with just the segment's own
+ * records (not the whole file's), matching `claudeAdapter.harvest()`'s own
+ * per-segment scoping -- otherwise a segment's stage-usage allocation
+ * would double-count usage from its sibling segments.
+ */
+export function scanClaudeVendorSessions(projectDir) {
   const out = [];
   if (!existsSync(projectDir)) {
     return out;
@@ -833,22 +846,39 @@ function scanClaudeVendorSessions(projectDir) {
     .map((entry) => join(entry.parentPath, entry.name))
     .sort();
   for (const file of files) {
+    let records;
     try {
-      const records = parseClaudeProjectLines(readFileSync(file, 'utf8'));
-      const adapterResult = claudeAdapter.harvest({
-        records,
-        fileBasename: basename(file),
-      });
-      out.push({
-        vendor: 'claude',
-        adapterResult,
-        timeline: extractClaudeUsageTimeline(records),
-      });
+      records = parseClaudeProjectLines(readFileSync(file, 'utf8'));
     } catch (error) {
       process.stderr.write(
         `token-cost-harvest: skipping ${file}: ${error.message}\n`,
       );
+      continue;
     }
+    const fileBasename = basename(file);
+    const segments = segmentRecordsByCwd(records);
+    segments.forEach((segment, index) => {
+      try {
+        const adapterResult = claudeAdapter.harvest({
+          records: segment.records,
+          fileBasename,
+          // Suffix only when the file actually produced more than one
+          // segment, so a single-cwd file (the common case) keeps its
+          // pre-existing vendorSessionId (no suffix) and stays deduplicated
+          // against samples already harvested before this change.
+          segmentIndex: segments.length > 1 ? index : undefined,
+        });
+        out.push({
+          vendor: 'claude',
+          adapterResult,
+          timeline: extractClaudeUsageTimeline(segment.records),
+        });
+      } catch (error) {
+        process.stderr.write(
+          `token-cost-harvest: skipping ${file} segment ${index}: ${error.message}\n`,
+        );
+      }
+    });
   }
   return out;
 }

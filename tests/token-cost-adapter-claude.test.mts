@@ -11,6 +11,7 @@ import {
   encodeClaudeProjectDirName,
   parseClaudeProjectLines,
   scanClaudeSessions,
+  segmentRecordsByCwd,
 } from '../src/scripts/token-cost-adapter-claude.mts';
 import { loadJson, validate } from '../src/scripts/validate-schemas.mts';
 
@@ -225,6 +226,140 @@ test('harvest fails closed when no record has a valid timestamp', () => {
       }),
     /timestamp/,
   );
+});
+
+test('segmentRecordsByCwd groups records into one segment per contiguous cwd -- #2404', () => {
+  const records = readFixtureRecords('session-multi-cwd-segments.jsonl');
+  const segments = segmentRecordsByCwd(records);
+  assert.equal(segments.length, 3);
+  assert.equal(
+    segments[0].cwd,
+    '/home/testuser/ghq/github.com/kurone-kito/idd-skill',
+  );
+  assert.equal(segments[0].records.length, 2);
+  assert.equal(
+    segments[1].cwd,
+    '/home/testuser/ghq/github.com/kurone-kito/idd-skill.issue-4343-some-feature',
+  );
+  assert.equal(segments[1].records.length, 2);
+  assert.equal(
+    segments[2].cwd,
+    '/home/testuser/ghq/github.com/kurone-kito/idd-skill',
+  );
+  assert.equal(segments[2].records.length, 1);
+});
+
+test('segmentRecordsByCwd returns exactly one segment for a single-cwd file, matching the pre-existing whole-file grouping -- #2404', () => {
+  const records = readFixtureRecords('session-basic.jsonl');
+  const segments = segmentRecordsByCwd(records);
+  assert.equal(segments.length, 1);
+  assert.equal(segments[0].records.length, records.length);
+});
+
+test('segmentRecordsByCwd keeps a cwd-less record in whichever segment is currently open -- #2404', () => {
+  const records = [
+    { type: 'user', cwd: '/repo/a' },
+    { type: 'system', subtype: 'turn_duration' }, // no cwd field at all
+    { type: 'assistant', cwd: '/repo/a' },
+    { type: 'assistant', cwd: '/repo/b' },
+  ];
+  const segments = segmentRecordsByCwd(records);
+  assert.equal(segments.length, 2);
+  assert.equal(segments[0].cwd, '/repo/a');
+  assert.equal(segments[0].records.length, 3);
+  assert.equal(segments[1].cwd, '/repo/b');
+  assert.equal(segments[1].records.length, 1);
+});
+
+test('scanClaudeSessions splits a multi-cwd file into one correctly-scoped sample per worktree segment -- #2404', () => {
+  const sandbox = mkdtempSync(
+    join(tmpdir(), 'idd-token-cost-adapter-claude-test-'),
+  );
+  writeFileSync(
+    join(sandbox, 'session-multi.jsonl'),
+    readFileSync(join(FIXTURE_DIR, 'session-multi-cwd-segments.jsonl'), 'utf8'),
+  );
+
+  const results = scanClaudeSessions({ projectDir: sandbox });
+
+  assert.equal(results.length, 3);
+  // Segments from the same file get distinct, deterministic
+  // vendorSessionIds so they never collide under the harvester's
+  // (vendor, vendorSessionId) dedup key.
+  const ids = results.map((r) => r.sample.vendorSessionId).sort();
+  assert.deepEqual(ids, [
+    'sess-claude-multi-cwd-0001#0',
+    'sess-claude-multi-cwd-0001#1',
+    'sess-claude-multi-cwd-0001#2',
+  ]);
+
+  const byId = new Map(results.map((r) => [r.sample.vendorSessionId, r]));
+  const primarySegment0 = byId.get('sess-claude-multi-cwd-0001#0');
+  const issueSegment = byId.get('sess-claude-multi-cwd-0001#1');
+  const primarySegment2 = byId.get('sess-claude-multi-cwd-0001#2');
+
+  // The primary-repo segments never resolve an issue number.
+  assert.equal(primarySegment0?.joinHints, undefined);
+  assert.equal(primarySegment2?.joinHints, undefined);
+  assert.deepEqual(primarySegment0?.sample.usage, {
+    inputUncached: 10,
+    cacheRead: 50,
+    cacheCreation: 0,
+    output: 2,
+    reasoning: 0,
+  });
+  assert.equal(primarySegment0?.sample.startedAt, '2026-08-25T09:00:00.000Z');
+  assert.equal(primarySegment0?.sample.endedAt, '2026-08-25T09:00:05.000Z');
+
+  // Only the issue/4343-* worktree segment resolves an issue number, and
+  // its usage/timestamps are scoped to just its own two records -- not
+  // the whole file's five.
+  assert.deepEqual(issueSegment?.joinHints, { issueNumber: 4343 });
+  assert.deepEqual(issueSegment?.sample.usage, {
+    inputUncached: 9,
+    cacheRead: 35,
+    cacheCreation: 5,
+    output: 4,
+    reasoning: 0,
+  });
+  assert.equal(issueSegment?.sample.startedAt, '2026-08-25T09:05:00.000Z');
+  assert.equal(issueSegment?.sample.endedAt, '2026-08-25T09:06:00.000Z');
+  assert.doesNotMatch(
+    JSON.stringify(issueSegment?.sample),
+    /ghq|\/home\/|issue\/4343/,
+  );
+
+  assert.equal(primarySegment2?.joinHints, undefined);
+  assert.deepEqual(primarySegment2?.sample.usage, {
+    inputUncached: 4,
+    cacheRead: 10,
+    cacheCreation: 0,
+    output: 1,
+    reasoning: 0,
+  });
+
+  // A segment-suffixed vendorSessionId ("...#1") is still a schema-valid
+  // sample -- the schema only requires a non-empty string, no pattern
+  // restriction.
+  const schema = loadJson('schemas/token-cost-sample.schema.json');
+  assert.deepEqual(validate(primarySegment0?.sample, schema), []);
+  assert.deepEqual(validate(issueSegment?.sample, schema), []);
+  assert.deepEqual(validate(primarySegment2?.sample, schema), []);
+});
+
+test("scanClaudeSessions leaves a single-cwd file's vendorSessionId without a suffix, unchanged from before #2404", () => {
+  const sandbox = mkdtempSync(
+    join(tmpdir(), 'idd-token-cost-adapter-claude-test-'),
+  );
+  writeFileSync(
+    join(sandbox, 'session-a.jsonl'),
+    readFileSync(join(FIXTURE_DIR, 'session-basic.jsonl'), 'utf8'),
+  );
+
+  const results = scanClaudeSessions({ projectDir: sandbox });
+
+  assert.equal(results.length, 1);
+  assert.equal(results[0].sample.vendorSessionId, 'sess-claude-basic-0001');
 });
 
 test('harvest fails closed when no vendorSessionId is derivable', () => {
