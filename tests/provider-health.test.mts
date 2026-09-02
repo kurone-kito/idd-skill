@@ -424,6 +424,41 @@ test('deriveAdvisoryReviewObservation: a marker older than the sampling window c
   assert.equal(result, null);
 });
 
+test('deriveAdvisoryReviewObservation: an unparsable postedAt on an earlier marker never blocks a later valid marker', () => {
+  const comments = [
+    {
+      // Malformed postedAt -- must not "stick" as latest and block the
+      // genuinely later, valid marker below (NaN comparisons are always
+      // false, so a naive `> 0` selection would never replace it and the
+      // registration check would wrongly anchor to THIS request instead).
+      body: 'advisory-wait: agent-x 0123456789abcdef0123456789abcdef01234567 2026-09-01T00:00:00Z',
+      created_at: 'not-a-timestamp',
+      user: { login: 'idd-bot' },
+    },
+    {
+      // The genuinely latest request -- registered by neither path below.
+      body: 'advisory-wait: agent-x 0123456789abcdef0123456789abcdef01234567 2026-09-01T12:00:00Z',
+      created_at: '2026-09-01T12:00:00Z',
+      user: { login: 'idd-bot' },
+    },
+  ];
+  const timeline = [
+    // Registers the FIRST (bogus-latest) marker's request, not the
+    // second's -- a stuck `latest` would misread this as 'success'.
+    {
+      event: 'review_requested',
+      created_at: '2026-09-01T06:00:00Z',
+      requested_reviewer: { login: 'copilot-pull-request-reviewer[bot]' },
+    },
+  ];
+  const result = deriveAdvisoryReviewObservation(1, comments, timeline, [], {
+    ...BASE_DERIVE_OPTIONS,
+    now: '2026-09-01T12:30:00Z',
+    settledWindowMs: 10 * 60_000,
+  });
+  assert.deepEqual(result, { prNumber: 1, outcome: 'failure' });
+});
+
 test('deriveAdvisoryReviewObservation: an unparsable marker postedAt fails closed under a configured sampling window', () => {
   const result = deriveAdvisoryReviewObservation(
     1,

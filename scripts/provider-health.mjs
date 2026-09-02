@@ -216,7 +216,10 @@ function latestTrustedAdvisoryWaitRequest(comments, trustedMarkerLogins) {
     );
     if (requestedAt === null) continue;
     const postedAt = String(comment?.created_at ?? '');
-    if (postedAt === '') continue;
+    // An unparsable postedAt must never become `latest` -- otherwise every
+    // later comparison is `NaN > 0` (always false) and the bogus marker
+    // "sticks" forever, blocking every genuinely later valid marker.
+    if (postedAt === '' || Number.isNaN(Date.parse(postedAt))) continue;
     if (
       latest === null ||
       compareIsoTimestamps(postedAt, latest.postedAt) > 0
