@@ -1959,15 +1959,12 @@ export function createGithubProviderAdapter(
     },
 
     getRepositoryRulesetDetail(
-      rulesetOwner: string,
-      rulesetRepo: string,
-      rulesetId: number | string,
+      path: string,
     ): ProviderGovernanceReadOutcome<unknown> {
       return fetchGovernanceOutcome(() =>
-        deps.ghApiJson(
-          `repos/${rulesetOwner}/${rulesetRepo}/rulesets/${rulesetId}`,
-          { extraArgs: ['-H', 'Accept: application/vnd.github+json'] },
-        ),
+        deps.ghApiJson(path, {
+          extraArgs: ['-H', 'Accept: application/vnd.github+json'],
+        }),
       );
     },
 

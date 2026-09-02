@@ -957,14 +957,18 @@ export interface ProviderPort {
   ): ProviderGovernanceReadOutcome<unknown>;
 
   /**
-   * branch-protection. `repos/rulesets/{rulesetId}` detail read -- GitHub's
-   * reference documents only 200/404/500 for this endpoint (no 403), the
-   * same masked-404 posture as {@link listBranchRules}.
+   * branch-protection. Ruleset detail read at an ALREADY-RESOLVED absolute
+   * API path (`repos/{owner}/{repo}/rulesets/{id}`, `orgs/{org}/rulesets/{id}`,
+   * or `enterprises/{enterprise}/rulesets/{id}`) -- `pre-merge-readiness.mts`'s
+   * `fetchBranchRulesets` resolves which scope applies itself (via
+   * `resolveRulesetDetailPath`, protocol-helpers.mts) before fetching, so
+   * this method takes the resolved path rather than an owner/repo/id triple
+   * it would have to re-derive scope from. GitHub's reference documents only
+   * 200/404/500 for this endpoint (no 403), the same masked-404 posture as
+   * {@link listBranchRules}.
    */
   getRepositoryRulesetDetail(
-    owner: string,
-    repo: string,
-    rulesetId: number | string,
+    path: string,
   ): ProviderGovernanceReadOutcome<unknown>;
 
   /** checks. `actions/runs/{runId}` single-run read, raw passthrough.

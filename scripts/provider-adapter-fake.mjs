@@ -299,9 +299,8 @@ export function createFakeProviderAdapter(fixture) {
         ? { outcome: 'not-found' }
         : { outcome: 'ok', value };
     },
-    getRepositoryRulesetDetail(rulesetOwner, rulesetRepo, rulesetId) {
-      const key = `${rulesetOwner}/${rulesetRepo}/${rulesetId}`;
-      const value = fixture.rulesetDetails?.[key];
+    getRepositoryRulesetDetail(path) {
+      const value = fixture.rulesetDetails?.[path];
       return value === undefined
         ? { outcome: 'not-found' }
         : { outcome: 'ok', value };

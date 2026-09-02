@@ -168,8 +168,8 @@ export interface FakeProviderFixture {
   /** Backs {@link ProviderPort.getBranchProtection}, keyed by `${owner}/${repo}/${ref}`;
    * absent key means `{outcome:'not-found'}`. */
   branchProtection?: Record<string, unknown>;
-  /** Backs {@link ProviderPort.getRepositoryRulesetDetail}, keyed by
-   * `${owner}/${repo}/${rulesetId}`; absent key means `{outcome:'not-found'}`. */
+  /** Backs {@link ProviderPort.getRepositoryRulesetDetail}, keyed by the
+   * resolved absolute path passed in; absent key means `{outcome:'not-found'}`. */
   rulesetDetails?: Record<string, unknown>;
   /** Backs {@link ProviderPort.getWorkflowRun}, keyed by `${owner}/${repo}/${runId}`. */
   workflowRuns?: Record<string, unknown>;
@@ -635,12 +635,9 @@ export function createFakeProviderAdapter(
     },
 
     getRepositoryRulesetDetail(
-      rulesetOwner: string,
-      rulesetRepo: string,
-      rulesetId: number | string,
+      path: string,
     ): ProviderGovernanceReadOutcome<unknown> {
-      const key = `${rulesetOwner}/${rulesetRepo}/${rulesetId}`;
-      const value = fixture.rulesetDetails?.[key];
+      const value = fixture.rulesetDetails?.[path];
       return value === undefined
         ? { outcome: 'not-found' }
         : { outcome: 'ok', value };

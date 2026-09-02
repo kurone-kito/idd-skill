@@ -1481,12 +1481,11 @@ export function createGithubProviderAdapter(owner, repo, deps = DEFAULT_DEPS) {
         ),
       );
     },
-    getRepositoryRulesetDetail(rulesetOwner, rulesetRepo, rulesetId) {
+    getRepositoryRulesetDetail(path) {
       return fetchGovernanceOutcome(() =>
-        deps.ghApiJson(
-          `repos/${rulesetOwner}/${rulesetRepo}/rulesets/${rulesetId}`,
-          { extraArgs: ['-H', 'Accept: application/vnd.github+json'] },
-        ),
+        deps.ghApiJson(path, {
+          extraArgs: ['-H', 'Accept: application/vnd.github+json'],
+        }),
       );
     },
     getWorkflowRun(runOwner, runRepo, runId) {
