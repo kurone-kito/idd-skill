@@ -1250,10 +1250,10 @@ export const MALFORMED_DISPOSITION_PREFIX_HINT =
 // indication a reply was ever posted. Never consumed by any routing decision
 // -- see the `hint` field's own doc comment on `DispositionEvidenceSummary`.
 export const EDITED_AFTER_DISPOSITION_HINT =
-  'comment was correctly dispositioned, then the bot live-edited this same ' +
-  'comment id afterward into a non-review notice -- the disposition now ' +
-  'predates the edit and no longer counts; post a fresh disposition reply ' +
-  'in the non-review-notice shape';
+  'comment may have already been dispositioned before the bot live-edited ' +
+  'this same comment id into a non-review notice -- if so, that disposition ' +
+  'now predates the edit and no longer counts; post a fresh disposition ' +
+  'reply in the non-review-notice shape';
 // #1122 CodeRabbit summary-walkthrough auto-disposition classifiers.
 //
 // The CodeRabbit summary walkthrough is a regular comment whose body starts with
