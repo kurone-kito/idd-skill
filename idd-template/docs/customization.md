@@ -1100,6 +1100,20 @@ The recommended contract is secure by default:
 - Omitting `skipIssueAuthorApprovalGate` or setting it to `false` keeps
   the gate enabled.
 
+**When is opting out a structural no-op?** In a single-author repository
+where every issue author already satisfies the current
+`maintainerApprovalActorPolicy`, the issue-author self-authorization
+signal below is satisfied whenever permission resolution succeeds (the
+A3.5 outage fallback covers only `OWNER`/`MEMBER` `author_association`
+values, so a permission-API outage can still fail closed for a
+self-authorizing author outside those two associations, e.g. an
+invited `COLLABORATOR`) -- so the gate does not change which candidates
+are startable in the common case, and opting out carries no practical
+risk there. Re-enable the gate (or simply omit
+`skipIssueAuthorApprovalGate`) if the repository ever becomes
+multi-author, since a non-maintainer author no longer self-authorizes
+and the gate starts mattering again.
+
 When the gate is enabled, an issue author is self-authorizing only when
 that author satisfies the repository's `maintainer-approval-actors`
 policy. GitHub organization `MEMBER` association alone is not enough,
