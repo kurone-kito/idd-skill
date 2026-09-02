@@ -30,11 +30,12 @@ const CRITERIA = [
 const BROAD_SCOPE_PATTERN =
   /\b(cross-cutting|cross cutting|across (?:many|multiple)|multiple subsystems?|repository-wide|entire repo|public interface|redesign|architecture|global refactor|large refactor)\b/gi;
 // A broad-scope word inside a phrase describing something other than this
-// issue's own diff footprint should not count (#2417): a worked example of
-// what NOT to do, a citation of another issue's already-resolved heuristic,
-// or a mention of the documentation/guidance content itself. Two exclusion
-// shapes cover the observed false positives, matched per-occurrence rather
-// than once for the whole corpus (a genuinely broad issue usually trips the
+// issue's own diff footprint should not count (#2417, #2446): a worked
+// example of what NOT to do, a citation of another issue's already-resolved
+// heuristic, a mention of the documentation/guidance content itself, or a
+// bare description of an already-staged foundation. Three exclusion shapes
+// cover the observed false positives, matched per-occurrence rather than
+// once for the whole corpus (a genuinely broad issue usually trips the
 // pattern more than once, so excluding one occurrence still leaves the rest
 // to fail the gate).
 //
@@ -62,6 +63,17 @@ const CONTENT_NOUN_PATTERN =
 const CONTENT_NOUN_LOOKAHEAD_CHARS = 60;
 const CONTENT_NOUN_LOOKAHEAD_TOKENS = 3;
 const WORD_TOKEN_PATTERN = /[A-Za-z][\w-]*/g;
+// 3. Preparatory-state: the match is the subject of a stative clause
+//    describing an EXISTING staged foundation ("the architecture is being
+//    prepared for additional providers" -- #2446), not this issue's own
+//    proposed action. Distinct from an action-verb clause on the same word
+//    ("architecture is redesigned across many subsystems" must still fail):
+//    only a "being/already prepared|staged|planned|designed|built|readied
+//    for" construction right after the match counts, never a bare "is
+//    <verb>" alone.
+const PREPARATORY_STATE_LOOKAHEAD_CHARS = 40;
+const PREPARATORY_STATE_PATTERN =
+  /^\s+(?:is|are|was|were)\s+(?:already\s+|currently\s+)?(?:being\s+)?(?:prepared|staged|planned|designed|built|readied)\s+for\b/i;
 const NARROW_SCOPE_PATTERN =
   /\b(single module|single file|few files|targeted|small fix|localized|narrow scope)\b/i;
 const OBJECTIVE_VERIFICATION_PATTERN =
@@ -237,11 +249,19 @@ function isFollowedByContentNoun(corpus, matchEnd) {
     .slice(0, CONTENT_NOUN_LOOKAHEAD_TOKENS)
     .some((token) => CONTENT_NOUN_PATTERN.test(token));
 }
+function isFollowedByPreparatoryState(corpus, matchEnd) {
+  const tail = corpus.slice(
+    matchEnd,
+    matchEnd + PREPARATORY_STATE_LOOKAHEAD_CHARS,
+  );
+  return PREPARATORY_STATE_PATTERN.test(tail);
+}
 /**
- * Finds the first BROAD_SCOPE_PATTERN occurrence that survives both
- * exclusion checks (#2417): a match inside a code span, governed by an
- * avoidance cue, or followed by a content noun does not describe this
- * issue's own diff footprint and is skipped.
+ * Finds the first BROAD_SCOPE_PATTERN occurrence that survives every
+ * exclusion check (#2417, #2446): a match inside a code span, governed by
+ * an avoidance cue, followed by a content noun, or followed by a
+ * preparatory-state clause does not describe this issue's own diff
+ * footprint and is skipped.
  */
 function findUnexcludedBroadScopeMatch(corpus) {
   for (const match of corpus.matchAll(BROAD_SCOPE_PATTERN)) {
@@ -250,7 +270,8 @@ function findUnexcludedBroadScopeMatch(corpus) {
     if (
       isInsideCodeSpan(corpus, index) ||
       isGovernedByAvoidanceCue(corpus, index) ||
-      isFollowedByContentNoun(corpus, end)
+      isFollowedByContentNoun(corpus, end) ||
+      isFollowedByPreparatoryState(corpus, end)
     ) {
       continue;
     }
