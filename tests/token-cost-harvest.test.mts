@@ -535,6 +535,122 @@ test('scanClaudeVendorSessions: a reversed cleanup window never produces an even
   assert.equal(sessions[0].adapterResult.joinHints, undefined);
 });
 
+test('buildCompletedIssueWindows: a valid, closed cleanup pair caps the window even when a LATER retry stage extends past it (Codex review finding round 2, #2423)', () => {
+  // Issue 501 completed once: cleanup enter@00:55, exit@01:00 (valid).
+  // A re-attempt later did a fresh `work` enter/exit (02:00-02:30) that
+  // has NOT yet reached its own cleanup -- the original cleanup pair is
+  // untouched (still valid), but the retry's work window must not widen
+  // the completed span past the original cleanup's own exit.
+  const all = new Map<string, StageEventWindow>([
+    [
+      '501:claude:work',
+      stageWindow('2026-01-01T00:00:00Z', '2026-01-01T00:30:00Z'),
+    ],
+    [
+      '501:claude:cleanup',
+      stageWindow('2026-01-01T00:55:00Z', '2026-01-01T01:00:00Z'),
+    ],
+    // Careful: eventKey is `${issueNumber}:${vendor}:${stageId}`, one
+    // entry per stageId -- a real retry would overwrite the SAME 'work'
+    // key via readEventWindows' own latest-wins pairing. Modeling that
+    // directly: 'work' now reflects the RETRY's later window, not the
+    // original run's.
+  ]);
+  all.set(
+    '501:claude:work',
+    stageWindow('2026-01-01T02:00:00Z', '2026-01-01T02:30:00Z'),
+  );
+  const windows = buildCompletedIssueWindows(all, 'claude');
+  assert.equal(windows.length, 1);
+  // endMs stays at cleanup's own exit, never extended by the retry's
+  // later work window.
+  assert.equal(windows[0].endMs, ms('2026-01-01T01:00:00Z'));
+  // startMs is NOT widened back to the retry's work window either (it
+  // falls after cleanup's endMs, so it doesn't qualify) -- it stays
+  // anchored at cleanup's own start.
+  assert.equal(windows[0].startMs, ms('2026-01-01T00:55:00Z'));
+});
+
+test("scanClaudeVendorSessions: a completed cleanup window does not absorb a later retry's activity", () => {
+  const sandbox = mkdtempSync(join(tmpdir(), 'idd-token-cost-harvest-ew-'));
+  writeFileSync(
+    join(sandbox, 'session-ew-retry.jsonl'),
+    `${[
+      // Inside the original completed window (00:55-01:00).
+      '{"type":"assistant","timestamp":"2026-01-01T00:57:00.000Z","sessionId":"sess-ew-retry-0001","cwd":"/repo","message":{"model":"m","usage":{"input_tokens":1,"cache_read_input_tokens":0,"cache_creation_input_tokens":0,"output_tokens":1}}}',
+      // During the later, still-in-progress retry -- must NOT be folded
+      // into issue 501's completed sample.
+      '{"type":"assistant","timestamp":"2026-01-01T02:15:00.000Z","sessionId":"sess-ew-retry-0001","cwd":"/repo","message":{"model":"m","usage":{"input_tokens":99,"cache_read_input_tokens":0,"cache_creation_input_tokens":0,"output_tokens":99}}}',
+    ].join('\n')}\n`,
+  );
+  const eventWindowsAll = new Map<string, StageEventWindow>([
+    [
+      '501:claude:cleanup',
+      stageWindow('2026-01-01T00:55:00Z', '2026-01-01T01:00:00Z'),
+    ],
+    [
+      '501:claude:work',
+      stageWindow('2026-01-01T02:00:00Z', '2026-01-01T02:30:00Z'),
+    ],
+  ]);
+
+  const sessions = scanClaudeVendorSessions(sandbox, eventWindowsAll);
+  const ewSample = sessions.find((s) =>
+    s.adapterResult.sample.vendorSessionId.includes('#ew'),
+  );
+
+  assert.ok(ewSample);
+  assert.equal(ewSample.timeline.points.length, 1);
+  assert.equal(
+    ewSample.timeline.points[0].atMs,
+    ms('2026-01-01T00:57:00.000Z'),
+  );
+});
+
+test('scanClaudeVendorSessions: the event-window fallback is skipped for the whole file when ANY segment already resolved a cwd-inferred issue number (Copilot review finding round 2, #2423)', () => {
+  const sandbox = mkdtempSync(join(tmpdir(), 'idd-token-cost-harvest-ew-'));
+  writeFileSync(
+    join(sandbox, 'session-ew-mixed.jsonl'),
+    `${[
+      // Segment 0: a real worktree cwd -- resolves issue 4242 via cwd.
+      '{"type":"assistant","timestamp":"2026-01-01T00:00:00.000Z","sessionId":"sess-ew-mixed-0001","cwd":"/repo.issue-4242-x","message":{"model":"m","usage":{"input_tokens":1,"cache_read_input_tokens":0,"cache_creation_input_tokens":0,"output_tokens":1}}}',
+      // Segment 1: an ordinary subdirectory -- cwd-inference fails, but
+      // its own timestamp happens to fall inside issue 501's completed
+      // window purely by coincidence.
+      '{"type":"assistant","timestamp":"2026-01-01T00:20:00.000Z","sessionId":"sess-ew-mixed-0001","cwd":"/repo/some/subdir","message":{"model":"m","usage":{"input_tokens":1,"cache_read_input_tokens":0,"cache_creation_input_tokens":0,"output_tokens":1}}}',
+    ].join('\n')}\n`,
+  );
+  const eventWindowsAll = new Map<string, StageEventWindow>([
+    [
+      '501:claude:work',
+      stageWindow('2026-01-01T00:10:00Z', '2026-01-01T00:25:00Z'),
+    ],
+    [
+      '501:claude:cleanup',
+      stageWindow('2026-01-01T00:26:00Z', '2026-01-01T00:30:00Z'),
+    ],
+  ]);
+
+  const sessions = scanClaudeVendorSessions(sandbox, eventWindowsAll);
+  const ewSamples = sessions.filter((s) =>
+    s.adapterResult.sample.vendorSessionId.includes('#ew'),
+  );
+
+  // No event-window sample at all -- the file already produced a real,
+  // cwd-attributed issue-loop sample (4242) from segment 0.
+  assert.equal(ewSamples.length, 0);
+  const byId = new Map(
+    sessions.map((s) => [s.adapterResult.sample.vendorSessionId, s]),
+  );
+  assert.deepEqual(byId.get('sess-ew-mixed-0001#0')?.adapterResult.joinHints, {
+    issueNumber: 4242,
+  });
+  assert.equal(
+    byId.get('sess-ew-mixed-0001#1')?.adapterResult.joinHints,
+    undefined,
+  );
+});
+
 test('scanClaudeVendorSessions: two DIFFERENT project log files both matching the same issue window are BOTH dropped (cross-file ambiguity guard, Codex review finding, #2423)', () => {
   const sandbox = mkdtempSync(join(tmpdir(), 'idd-token-cost-harvest-ew-'));
   writeFileSync(

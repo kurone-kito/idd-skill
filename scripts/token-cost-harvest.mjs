@@ -841,19 +841,33 @@ function eventWindowsForIssue(all, issueNumber, vendor) {
  * data-loss concern: `events.jsonl` is append-only, so a later harvest
  * picks it up if cleanup ever runs).
  *
- * `startMs < endMs` guards against `readEventWindows`'s own pairing: it
- * pairs the LATEST `--enter` seen for a (issue, vendor, stage) key with
- * the LATEST `--exit`, across the whole append-only file, with no
- * knowledge of which attempt either belongs to. A completed run followed
- * by a re-attempt that enters `cleanup` again but never exits pairs that
- * new, still-open enter with the FIRST attempt's stale exit, producing a
- * reversed window (`startMs > endMs`) -- without this guard, its mere
- * presence would still count as "closed" and the new, unfinished
- * attempt's partial usage would be harvested and permanently frozen
- * under the stable `#ew<issueNumber>` id.
+ * The window's `endMs` is ALWAYS the valid cleanup window's own `endMs`
+ * -- never a max across every stage -- and a stage only widens `startMs`
+ * when its OWN window (both ends) falls at or before that cleanup exit.
+ * This guards against `readEventWindows`'s own pairing: it pairs the
+ * LATEST `--enter` seen for a (issue, vendor, stage) key with the LATEST
+ * `--exit`, across the whole append-only file, with no knowledge of
+ * which attempt either belongs to.
+ *
+ * - A completed run followed by a re-attempt that enters `cleanup` again
+ *   but never exits pairs that new, still-open enter with the FIRST
+ *   attempt's stale exit, producing a reversed window (`startMs >
+ *   endMs`) -- `startMs < endMs` rejects this outright, so the mere
+ *   presence of a `cleanup` key is never enough on its own.
+ * - A completed run followed by a re-attempt that has NOT yet re-entered
+ *   `cleanup` at all leaves the original, still-valid cleanup pair
+ *   untouched, but the re-attempt's OTHER stage events (e.g. a fresh
+ *   `work` enter/exit) land in `eventWindowsAll` too, with timestamps
+ *   AFTER the original cleanup's own exit. Capping `endMs` at cleanup's
+ *   own exit, and excluding any stage window that extends past it from
+ *   widening `startMs`, keeps that later, still-in-progress activity out
+ *   of the completed window -- without this, its partial usage would be
+ *   folded into the union and permanently frozen under the stable
+ *   `#ew<issueNumber>` id as if the (unfinished) retry were the
+ *   completed loop.
  */
 export function buildCompletedIssueWindows(eventWindowsAll, vendor) {
-  const byIssue = new Map();
+  const stagesByIssue = new Map();
   for (const [key, window] of eventWindowsAll) {
     const [issueNumberRaw, keyVendor, stageId] = key.split(':');
     if (keyVendor !== vendor) {
@@ -863,26 +877,23 @@ export function buildCompletedIssueWindows(eventWindowsAll, vendor) {
     if (!Number.isInteger(issueNumber)) {
       continue;
     }
-    const existing = byIssue.get(issueNumber);
-    byIssue.set(issueNumber, {
-      startMs: existing
-        ? Math.min(existing.startMs, window.startMs)
-        : window.startMs,
-      endMs: existing ? Math.max(existing.endMs, window.endMs) : window.endMs,
-      hasClosedCleanup:
-        (existing?.hasClosedCleanup ?? false) ||
-        (stageId === 'cleanup' && window.startMs < window.endMs),
-    });
+    const stages = stagesByIssue.get(issueNumber) ?? new Map();
+    stages.set(stageId, window);
+    stagesByIssue.set(issueNumber, stages);
   }
   const out = [];
-  for (const [issueNumber, entry] of byIssue) {
-    if (entry.hasClosedCleanup) {
-      out.push({
-        issueNumber,
-        startMs: entry.startMs,
-        endMs: entry.endMs,
-      });
+  for (const [issueNumber, stages] of stagesByIssue) {
+    const cleanup = stages.get('cleanup');
+    if (!cleanup || cleanup.startMs >= cleanup.endMs) {
+      continue;
     }
+    let startMs = cleanup.startMs;
+    for (const window of stages.values()) {
+      if (window.startMs <= cleanup.endMs && window.endMs <= cleanup.endMs) {
+        startMs = Math.min(startMs, window.startMs);
+      }
+    }
+    out.push({ issueNumber, startMs, endMs: cleanup.endMs });
   }
   return out;
 }
@@ -1001,6 +1012,7 @@ export function scanClaudeVendorSessions(
     const fileBasename = basename(file);
     const segments = segmentRecordsByCwd(records);
     const unattributedRecords = [];
+    let anySegmentHadCwdIssueNumber = false;
     segments.forEach((segment, index) => {
       let adapterResult;
       try {
@@ -1026,9 +1038,25 @@ export function scanClaudeVendorSessions(
       });
       if (adapterResult.joinHints?.issueNumber === undefined) {
         unattributedRecords.push(...segment.records);
+      } else {
+        anySegmentHadCwdIssueNumber = true;
       }
     });
-    if (unattributedRecords.length > 0 && completedIssueWindows.length > 0) {
+    // Only fall back to event-window attribution when NO segment in this
+    // file resolved a cwd-inferred issue number. Otherwise a segment
+    // whose cwd merely isn't issue-shaped (an ordinary subdirectory, not
+    // a worktree move) but whose records still happen to fall inside a
+    // DIFFERENT segment's already cwd-attributed issue window would
+    // produce a second, independent issue-loop sample for that same
+    // issue -- splitting one completed loop's usage across two samples
+    // that markAmbiguousOverlaps has no reason to catch (their time
+    // ranges don't overlap; they're just both attributed to the same
+    // issue).
+    if (
+      !anySegmentHadCwdIssueNumber &&
+      unattributedRecords.length > 0 &&
+      completedIssueWindows.length > 0
+    ) {
       const eventWindowGroups = segmentRecordsByEventWindow(
         unattributedRecords,
         completedIssueWindows,
