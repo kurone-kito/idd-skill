@@ -199,8 +199,7 @@ issue (different slug variants).
    ```
 
    Match `branch refs/heads/issue/<number>-…`; for `detached`, resolve
-   its rebase sequencer `head-name` (see
-   `src/scripts/idd-roadmap-audit-execute.mts`).
+   its rebase sequencer `head-name` before ruling it out.
 
 2. **Remote branch scan** (scoped Refs API, not repo-wide):
    Query the Refs API with the issue-number prefix only, to stay within
