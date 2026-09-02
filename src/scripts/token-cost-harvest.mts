@@ -1200,6 +1200,34 @@ export interface VendorSession {
   timeline: UsageTimeline;
 }
 
+interface RecordTimeRange {
+  minMs: number;
+  maxMs: number;
+}
+
+function computeRecordTimeRange(
+  records: readonly unknown[],
+  getTimestampMs: (record: unknown) => number | undefined,
+): RecordTimeRange | undefined {
+  let minMs: number | undefined;
+  let maxMs: number | undefined;
+  for (const record of records) {
+    const atMs = getTimestampMs(record);
+    if (atMs === undefined) {
+      continue;
+    }
+    minMs = minMs === undefined ? atMs : Math.min(minMs, atMs);
+    maxMs = maxMs === undefined ? atMs : Math.max(maxMs, atMs);
+  }
+  return minMs === undefined || maxMs === undefined
+    ? undefined
+    : { minMs, maxMs };
+}
+
+function rangesOverlap(a: RecordTimeRange, b: RecordTimeRange): boolean {
+  return a.minMs <= b.maxMs && b.minMs <= a.maxMs;
+}
+
 /**
  * #2404: a long-lived session's project JSONL file is not necessarily one
  * cwd for its whole lifetime -- `segmentRecordsByCwd` (see
@@ -1239,6 +1267,35 @@ export interface VendorSession {
  * suffix from more than one segment and push a duplicate-keyed
  * `VendorSession` within a single harvest run, which the append-side
  * dedup (keyed only against samples from PRIOR runs) cannot catch.
+ *
+ * #2425: event windows carry no session/file identity, so the SAME issue
+ * number's unattributed candidates can come from more than one project
+ * log file. #2418 skips the issue entirely whenever more than one file
+ * contributes, on the theory that this is a rare, genuinely-concurrent
+ * overlap. #2419 measured this on a real workstation and found it is the
+ * DOMINANT case, not the rare one (10 of 12 completed issue-loops), which
+ * initially suggested a MERGE (rather than skip) of file candidates whose
+ * matched-record time ranges are provably disjoint -- a sequential
+ * continuation, not concurrency.
+ *
+ * That merge was investigated and explicitly REJECTED after implementing
+ * it: checked directly against real file timestamps, and the actual
+ * multi-file matches on this workstation are genuinely CONCURRENT,
+ * overlapping activity (two files both spanning the same ~24h range,
+ * both still being appended to) -- not a sequential split, so the merge
+ * recovers nothing real. Worse, a range-disjointness check is a weak
+ * discriminator for SPARSE candidates: a single stray record from an
+ * unrelated concurrent session can never "overlap" anything by
+ * definition, so a naive disjoint-range merge would misattribute that
+ * unrelated file's usage into this issue's sample under the stable
+ * `#ew<issueNumber>` id, permanently -- exactly the class of bug the
+ * original #2418 guard exists to prevent (see the test locking this in:
+ * "two DIFFERENT project log files both matching the same issue window
+ * are BOTH dropped"). This still classifies each multi-file skip as
+ * disjoint-or-overlapping (visible in stderr) for diagnostic value, but
+ * both classifications skip -- unchanged from #2418's original behavior.
+ * Resolving the cross-file case for real needs session/attempt identity
+ * on the underlying events (#2424), not a timestamp heuristic.
  */
 export function scanClaudeVendorSessions(
   projectDir: string,
@@ -1339,47 +1396,75 @@ export function scanClaudeVendorSessions(
     }
   }
 
-  // Cross-file ambiguity guard: event windows carry no session identity,
-  // so two DIFFERENT project log files -- e.g. an unrelated concurrent
-  // session whose own unattributed activity happens to fall inside this
-  // issue's completed window purely by wall-clock coincidence -- can both
-  // independently match the same issue. Emitting both would not just
-  // misattribute the stray file's usage; buildSample's markAmbiguousOverlaps
-  // would then also flag the LEGITIMATE sample as ambiguous (outcome:
-  // unknown), discarding the real measurement too. Emitting for NEITHER
-  // file when more than one contributes to the same issue is strictly
-  // safer than emitting a contaminated pair.
-  const fileCountByIssue = new Map<number, Set<string>>();
-  for (const candidate of eventWindowCandidates) {
-    const filesForIssue =
-      fileCountByIssue.get(candidate.issueNumber) ?? new Set();
-    filesForIssue.add(candidate.fileBasename);
-    fileCountByIssue.set(candidate.issueNumber, filesForIssue);
-  }
-  for (const candidate of eventWindowCandidates) {
-    const contributingFiles = fileCountByIssue.get(candidate.issueNumber);
-    if ((contributingFiles?.size ?? 0) > 1) {
-      process.stderr.write(
-        `token-cost-harvest: skipping event-window issue #${candidate.issueNumber}: matched by more than one project log file (${[...(contributingFiles ?? [])].join(', ')})\n`,
-      );
-      continue;
-    }
+  const harvestEventWindowCandidate = (
+    issueNumber: number,
+    fileBasename: string,
+    records: unknown[],
+  ): void => {
     try {
       const eventWindowResult = claudeAdapter.harvest({
-        records: candidate.records,
-        fileBasename: candidate.fileBasename,
-        issueNumberOverride: candidate.issueNumber,
+        records,
+        fileBasename,
+        issueNumberOverride: issueNumber,
       } satisfies ClaudeHarvestInput);
       out.push({
         vendor: 'claude',
         adapterResult: eventWindowResult,
-        timeline: extractClaudeUsageTimeline(candidate.records),
+        timeline: extractClaudeUsageTimeline(records),
       });
     } catch (error) {
       process.stderr.write(
-        `token-cost-harvest: skipping event-window issue #${candidate.issueNumber}: ${(error as Error).message}\n`,
+        `token-cost-harvest: skipping event-window issue #${issueNumber}: ${(error as Error).message}\n`,
       );
     }
+  };
+
+  // Cross-file resolution: event windows carry no session/file identity,
+  // so more than one project log file can independently match the same
+  // issue. Two distinct producers of that shape need different handling
+  // -- see the #2425 rationale on this function's own docstring above.
+  const candidatesByIssue = new Map<
+    number,
+    { fileBasename: string; records: unknown[] }[]
+  >();
+  for (const candidate of eventWindowCandidates) {
+    const list = candidatesByIssue.get(candidate.issueNumber) ?? [];
+    list.push({
+      fileBasename: candidate.fileBasename,
+      records: candidate.records,
+    });
+    candidatesByIssue.set(candidate.issueNumber, list);
+  }
+  for (const [issueNumber, fileCandidates] of candidatesByIssue) {
+    if (fileCandidates.length === 1) {
+      harvestEventWindowCandidate(
+        issueNumber,
+        fileCandidates[0].fileBasename,
+        fileCandidates[0].records,
+      );
+      continue;
+    }
+    const ranges = fileCandidates.map((candidate) =>
+      computeRecordTimeRange(candidate.records, extractRecordTimestampMs),
+    );
+    const fileNames = fileCandidates.map((candidate) => candidate.fileBasename);
+    const anyOverlap = ranges.some((a, i) =>
+      ranges.some(
+        (b, j) =>
+          i < j && a !== undefined && b !== undefined && rangesOverlap(a, b),
+      ),
+    );
+    // Classify-only: both shapes still skip (see the #2425 rationale on
+    // this function's own docstring above for why a disjoint-range merge
+    // was investigated and rejected). The distinction is diagnostic only
+    // -- it tells a maintainer reading stderr which residual gap this
+    // instance is, without changing behavior for either.
+    const classification = anyOverlap
+      ? 'overlapping activity ranges'
+      : 'disjoint activity ranges -- resolvable once events carry session identity, #2424';
+    process.stderr.write(
+      `token-cost-harvest: skipping event-window issue #${issueNumber}: matched by more than one project log file (${classification}: ${fileNames.join(', ')})\n`,
+    );
   }
   return out;
 }
