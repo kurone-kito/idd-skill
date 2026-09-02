@@ -90,6 +90,11 @@ function depsFor(
       return 'Merged PR (admin).';
     },
     resolveSoloCodeownerAdminFallbackMode: () => 'auto-admin-retry',
+    // #2453: safe no-op defaults so every pre-existing test (none of which
+    // exercise the local-head-drift advisory) sees no local git state and
+    // therefore no warning.
+    getLocalHeadState: () => ({ branch: null, headSha: null }),
+    fetchHeadRefName: () => '',
     ...overrides,
   };
   return { deps, calls };
@@ -490,6 +495,126 @@ test('--apply merges a ready PR bound to the validated head', () => {
   assert.equal(verdict.ready, true);
   assert.equal(verdict.merged, true);
   assert.deepEqual(calls.merged, [`994:${HEAD}`]);
+  assert.equal(exitCode, 0);
+});
+
+test('#2453 localHeadDrift stays null when the local branch matches the PR head branch and the local HEAD matches prHeadSha', () => {
+  const { deps } = depsFor(readyReport(), {
+    getLocalHeadState: () => ({
+      branch: 'issue/994-fix-thing',
+      headSha: HEAD,
+    }),
+    fetchHeadRefName: () => 'issue/994-fix-thing',
+  });
+  const { verdict } = runMergeExecute([...BASE_ARGS, '--apply'], deps);
+
+  assert.equal(verdict.localHeadDrift, null);
+  assert.equal(verdict.merged, true);
+});
+
+test('#2453 localHeadDrift warns when the local branch matches the PR head branch but local HEAD differs from prHeadSha', () => {
+  const { deps } = depsFor(readyReport(), {
+    getLocalHeadState: () => ({
+      branch: 'issue/994-fix-thing',
+      headSha: DRIFTED,
+    }),
+    fetchHeadRefName: () => 'issue/994-fix-thing',
+  });
+  const { verdict, exitCode } = runMergeExecute(
+    [...BASE_ARGS, '--apply'],
+    deps,
+  );
+
+  assert.deepEqual(verdict.localHeadDrift, {
+    localHeadSha: DRIFTED,
+    remoteHeadSha: HEAD,
+  });
+  // Advisory only: never blocks the merge.
+  assert.equal(verdict.merged, true);
+  assert.equal(exitCode, 0);
+});
+
+test('#2453 localHeadDrift stays null when the local branch differs from the PR head branch, even with a different SHA', () => {
+  const { deps } = depsFor(readyReport(), {
+    getLocalHeadState: () => ({
+      branch: 'main',
+      headSha: DRIFTED,
+    }),
+    fetchHeadRefName: () => 'issue/994-fix-thing',
+  });
+  const { verdict } = runMergeExecute([...BASE_ARGS, '--apply'], deps);
+
+  assert.equal(verdict.localHeadDrift, null);
+});
+
+test('#2453 localHeadDrift stays null when getLocalHeadState reports no local branch/HEAD (not a git repo)', () => {
+  const { deps } = depsFor(readyReport(), {
+    getLocalHeadState: () => ({ branch: null, headSha: null }),
+    fetchHeadRefName: () => {
+      throw new Error('must not be called without local branch/HEAD');
+    },
+  });
+  const { verdict } = runMergeExecute([...BASE_ARGS, '--apply'], deps);
+
+  assert.equal(verdict.localHeadDrift, null);
+});
+
+test('#2453 localHeadDrift stays null and never throws when getLocalHeadState itself misbehaves and throws', () => {
+  const { deps } = depsFor(readyReport(), {
+    getLocalHeadState: () => {
+      throw new Error('simulated local git failure');
+    },
+  });
+
+  // A throw here fails the test on its own (uncaught exception) -- no
+  // separate assert.doesNotThrow needed, and calling runMergeExecute only
+  // once avoids a second, redundant --apply merge attempt against the
+  // same deps (Copilot review, PR #2496).
+  const { verdict, exitCode } = runMergeExecute(
+    [...BASE_ARGS, '--apply'],
+    deps,
+  );
+  assert.equal(verdict.localHeadDrift, null);
+  assert.equal(verdict.merged, true);
+  assert.equal(exitCode, 0);
+});
+
+test('#2453 localHeadDrift stays null and never throws when fetchHeadRefName itself misbehaves and throws', () => {
+  const { deps } = depsFor(readyReport(), {
+    getLocalHeadState: () => ({
+      branch: 'issue/994-fix-thing',
+      headSha: DRIFTED,
+    }),
+    fetchHeadRefName: () => {
+      throw new Error('simulated gh failure');
+    },
+  });
+
+  const { verdict, exitCode } = runMergeExecute(
+    [...BASE_ARGS, '--apply'],
+    deps,
+  );
+  assert.equal(verdict.localHeadDrift, null);
+  assert.equal(verdict.merged, true);
+  assert.equal(exitCode, 0);
+});
+
+test('#2453 localHeadDrift is also computed in dry-run, without affecting readiness', () => {
+  const { deps } = depsFor(readyReport(), {
+    getLocalHeadState: () => ({
+      branch: 'issue/994-fix-thing',
+      headSha: DRIFTED,
+    }),
+    fetchHeadRefName: () => 'issue/994-fix-thing',
+  });
+  const { verdict, exitCode } = runMergeExecute(BASE_ARGS, deps);
+
+  assert.equal(verdict.mode, 'dry-run');
+  assert.equal(verdict.ready, true);
+  assert.deepEqual(verdict.localHeadDrift, {
+    localHeadSha: DRIFTED,
+    remoteHeadSha: HEAD,
+  });
   assert.equal(exitCode, 0);
 });
 

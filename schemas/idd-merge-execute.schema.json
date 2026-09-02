@@ -15,7 +15,8 @@
     "mergeCommand",
     "merged",
     "mergeResult",
-    "adminFallbackUsed"
+    "adminFallbackUsed",
+    "localHeadDrift"
   ],
   "properties": {
     "protocolVersion": {
@@ -81,6 +82,24 @@
     "adminFallbackUsed": {
       "type": "boolean",
       "description": "#1521: true only when the plain merge command failed with the self-CODEOWNER \"base branch policy prohibits the merge\" error and this run retried with --admin (successfully or not). False for every other path, including a successful plain merge and a merge failure not eligible for the fallback."
+    },
+    "localHeadDrift": {
+      "type": ["object", "null"],
+      "description": "#2453: non-fatal advisory. Set only when the invoking process's local git branch equals the PR's own headRefName AND its local HEAD differs from prHeadSha -- the signature of an unpushed commit about to be silently left behind. Null whenever the check cannot run or finds no divergence. Never gates ready or blocks the merge.",
+      "required": ["localHeadSha", "remoteHeadSha"],
+      "properties": {
+        "localHeadSha": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{40}$",
+          "description": "Local HEAD SHA read from the invoking worktree."
+        },
+        "remoteHeadSha": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{40}$",
+          "description": "PR head SHA about to be merged (same value as prHeadSha)."
+        }
+      },
+      "additionalProperties": false
     }
   },
   "additionalProperties": false
