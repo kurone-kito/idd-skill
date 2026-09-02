@@ -11,6 +11,7 @@ words:
   - desync
   - desynced
   - idd
+  - includ
   - isort
   - Kiro
   - kurone
@@ -20,6 +21,7 @@ words:
   - pytest
   - pyproject
   - qwen
+  - requir
   - TOCTOU
   - tsfile
   - undispositioned
