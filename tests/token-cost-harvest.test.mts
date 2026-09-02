@@ -139,6 +139,32 @@ test('extractClaudeUsageTimeline sums per-message deltas, sorted by timestamp', 
   });
 });
 
+test('scanClaudeVendorSessions warns (not silently returns []) when projectDir does not exist -- #2439', (t) => {
+  const stderrWrite = t.mock.method(process.stderr, 'write', () => true);
+  const missingDir = join(
+    mkdtempSync(join(tmpdir(), 'idd-token-cost-harvest-missing-')),
+    'does-not-exist',
+  );
+
+  const sessions = scanClaudeVendorSessions(missingDir);
+
+  assert.deepEqual(sessions, []);
+  const warnings = stderrWrite.mock.calls
+    .map((call) => call.arguments[0])
+    .filter(
+      (message): message is string =>
+        typeof message === 'string' &&
+        message.includes('Claude project directory'),
+    );
+  assert.equal(warnings.length, 1);
+  assert.match(
+    warnings[0],
+    new RegExp(missingDir.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')),
+  );
+  assert.match(warnings[0], /does not exist/);
+  assert.match(warnings[0], /primary worktree/);
+});
+
 test("scanClaudeVendorSessions scopes each cwd segment's timeline to just that segment's records -- #2404", () => {
   const sandbox = mkdtempSync(join(tmpdir(), 'idd-token-cost-harvest-test-'));
   writeFileSync(

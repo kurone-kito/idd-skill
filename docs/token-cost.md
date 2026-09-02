@@ -63,6 +63,17 @@ and appends `kind: "issue-loop"` / `kind: "session"` records to
 sibling `events.jsonl` path (`--events` to override), those timestamps
 win over the marker-join reconstruction for the stages they cover.
 
+`node scripts/token-cost-harvest.mjs` must be run from the **primary
+worktree**, not an issue worktree, for its Claude-vendor scan to see
+real data: Claude Code stores each project's session logs under
+`~/.claude/projects/<encoded cwd>`, encoded from whichever cwd the
+session actually launched with -- not from `--repo` or any other flag.
+An issue worktree (`<repo>.issue/<n>-*`) lives at a different path
+than the primary worktree and so has no matching, populated project
+directory of its own; running the harvest CLI from one now prints a
+warning naming the missing directory instead of silently reporting a
+misleading zero-sample result (`#2439`).
+
 `token-cost-event.mjs` also auto-derives each event's `vendorSessionId`
 from a vendor-specific env var -- `$CLAUDE_CODE_SESSION_ID` for
 `--vendor claude`, no equivalent known yet for `grok`/`codex` -- with no
@@ -113,6 +124,6 @@ number is ever invented to fill the gap.
 
 <!-- token-cost-docs:start -->
 
-Not yet publishable, n=0.
+Not yet publishable, n=1.
 
 <!-- token-cost-docs:end -->
