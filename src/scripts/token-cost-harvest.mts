@@ -1103,6 +1103,10 @@ export function buildCompletedIssueWindows(
  * guessed: concurrent sessions append to one shared, HOME-keyed
  * `events.jsonl`, so two different issues' windows can genuinely overlap
  * in wall-clock, and "exactly one match" is the only safe attribution.
+ * Windows are half-open (`[startMs, endMs)`, matching `computeStageWindows`'s
+ * own convention) so a record at the exact instant one issue's window ends
+ * and an adjacent issue's window begins matches only the later window,
+ * rather than being wrongly treated as ambiguous between the two.
  * Preserves each group's original file-order relative to itself.
  */
 export function segmentRecordsByEventWindow(
@@ -1117,7 +1121,7 @@ export function segmentRecordsByEventWindow(
       continue;
     }
     const matches = issueWindows.filter(
-      (window) => atMs >= window.startMs && atMs <= window.endMs,
+      (window) => atMs >= window.startMs && atMs < window.endMs,
     );
     if (matches.length !== 1) {
       continue;
@@ -1160,19 +1164,28 @@ export interface VendorSession {
  * worktree and reaches other worktrees only via in-conversation `cd`
  * (never a fresh Claude Code launch), `cwd` never varies at all, so
  * #2404's segmentation is never exercised and #2404 alone still produces
- * zero issue-loop samples. For a cwd-segment whose OWN cwd-inference
- * already failed (`joinHints.issueNumber === undefined`), this
- * additionally partitions that segment's records by event window
+ * zero issue-loop samples. This additionally partitions by event window
  * (`segmentRecordsByEventWindow`, gated to CLOSED `cleanup` windows only
  * -- see `buildCompletedIssueWindows`) and calls `claudeAdapter.harvest()`
  * once more per matched issue, via `issueNumberOverride`. This is
- * additive, not a replacement: the segment's own plain cwd-only sample
- * (`kind: 'session'` when cwd-inference fails) is still produced exactly
- * as before, so nothing already working regresses. `aggregateSnapshot`
- * (`token-cost-report.mts`) only ever counts `kind: 'issue-loop'` samples
- * toward the published snapshot, so a `session`-kind sample coexisting
- * with event-window-derived `issue-loop` samples drawn from the same
- * underlying records cannot double-count anything published.
+ * additive, not a replacement: every cwd-segment's own plain cwd-only
+ * sample (`kind: 'session'` when cwd-inference fails) is still produced
+ * exactly as before, so nothing already working regresses.
+ * `aggregateSnapshot` (`token-cost-report.mts`) only ever counts
+ * `kind: 'issue-loop'` samples toward the published snapshot, so a
+ * `session`-kind sample coexisting with event-window-derived
+ * `issue-loop` samples drawn from the same underlying records cannot
+ * double-count anything published.
+ *
+ * Event-window partitioning runs ONCE per FILE, across every cwd-segment
+ * whose own cwd-inference failed, not once per segment. A file whose
+ * `cwd` changes to some non-`issue/<n>-*` value more than once (any
+ * ordinary directory switch, not just a worktree move) would otherwise
+ * split those records across separate cwd-segments; partitioning
+ * per-segment would independently re-derive the SAME `#ew<issueNumber>`
+ * suffix from more than one segment and push a duplicate-keyed
+ * `VendorSession` within a single harvest run, which the append-side
+ * dedup (keyed only against samples from PRIOR runs) cannot catch.
  */
 export function scanClaudeVendorSessions(
   projectDir: string,
@@ -1202,6 +1215,7 @@ export function scanClaudeVendorSessions(
     }
     const fileBasename = basename(file);
     const segments = segmentRecordsByCwd(records);
+    const unattributedRecords: unknown[] = [];
     segments.forEach((segment, index) => {
       let adapterResult: TokenCostAdapterResult;
       try {
@@ -1225,36 +1239,36 @@ export function scanClaudeVendorSessions(
         adapterResult,
         timeline: extractClaudeUsageTimeline(segment.records),
       });
-
-      if (
-        adapterResult.joinHints?.issueNumber === undefined &&
-        completedIssueWindows.length > 0
-      ) {
-        const eventWindowGroups = segmentRecordsByEventWindow(
-          segment.records,
-          completedIssueWindows,
-          extractRecordTimestampMs,
-        );
-        for (const [issueNumber, groupRecords] of eventWindowGroups) {
-          try {
-            const eventWindowResult = claudeAdapter.harvest({
-              records: groupRecords,
-              fileBasename,
-              issueNumberOverride: issueNumber,
-            } satisfies ClaudeHarvestInput);
-            out.push({
-              vendor: 'claude',
-              adapterResult: eventWindowResult,
-              timeline: extractClaudeUsageTimeline(groupRecords),
-            });
-          } catch (error) {
-            process.stderr.write(
-              `token-cost-harvest: skipping ${file} segment ${index} event-window issue #${issueNumber}: ${(error as Error).message}\n`,
-            );
-          }
-        }
+      if (adapterResult.joinHints?.issueNumber === undefined) {
+        unattributedRecords.push(...segment.records);
       }
     });
+
+    if (unattributedRecords.length > 0 && completedIssueWindows.length > 0) {
+      const eventWindowGroups = segmentRecordsByEventWindow(
+        unattributedRecords,
+        completedIssueWindows,
+        extractRecordTimestampMs,
+      );
+      for (const [issueNumber, groupRecords] of eventWindowGroups) {
+        try {
+          const eventWindowResult = claudeAdapter.harvest({
+            records: groupRecords,
+            fileBasename,
+            issueNumberOverride: issueNumber,
+          } satisfies ClaudeHarvestInput);
+          out.push({
+            vendor: 'claude',
+            adapterResult: eventWindowResult,
+            timeline: extractClaudeUsageTimeline(groupRecords),
+          });
+        } catch (error) {
+          process.stderr.write(
+            `token-cost-harvest: skipping ${file} event-window issue #${issueNumber}: ${(error as Error).message}\n`,
+          );
+        }
+      }
+    }
   }
   return out;
 }

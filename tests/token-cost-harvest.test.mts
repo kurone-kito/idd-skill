@@ -310,6 +310,30 @@ test('segmentRecordsByEventWindow: drops a record matching MORE than one window 
   assert.equal(groups.size, 0);
 });
 
+test('segmentRecordsByEventWindow: a record at the exact instant one window ends and an adjacent one begins matches only the later window (half-open interval, Copilot review finding, #2423)', () => {
+  const windows: CompletedIssueWindow[] = [
+    {
+      issueNumber: 501,
+      startMs: ms('2026-01-01T00:00:00Z'),
+      endMs: ms('2026-01-01T01:00:00Z'),
+    },
+    {
+      issueNumber: 502,
+      startMs: ms('2026-01-01T01:00:00Z'),
+      endMs: ms('2026-01-01T02:00:00Z'),
+    },
+  ];
+  const records = [{ id: 'boundary', timestamp: '2026-01-01T01:00:00Z' }];
+  const groups = segmentRecordsByEventWindow(records, windows, (r) =>
+    Date.parse((r as { timestamp: string }).timestamp),
+  );
+  assert.deepEqual(
+    (groups.get(502) as { id: string }[]).map((r) => r.id),
+    ['boundary'],
+  );
+  assert.equal(groups.has(501), false);
+});
+
 test('scanClaudeVendorSessions: a CLOSED event window supplies issueNumber when cwd-inference fails', () => {
   const sandbox = mkdtempSync(join(tmpdir(), 'idd-token-cost-harvest-ew-'));
   writeFileSync(
@@ -403,6 +427,46 @@ test('scanClaudeVendorSessions: two CLOSED event windows in one file produce two
   assert.deepEqual(byId.get('sess-ew2-0001#ew502')?.adapterResult.joinHints, {
     issueNumber: 502,
   });
+});
+
+test('scanClaudeVendorSessions: two DIFFERENT cwd-segments in one file that both fall in the SAME issue window produce exactly one #ew sample, not a duplicate-keyed pair (Copilot review finding, #2423)', () => {
+  const sandbox = mkdtempSync(join(tmpdir(), 'idd-token-cost-harvest-ew-'));
+  writeFileSync(
+    join(sandbox, 'session-ew-multiseg.jsonl'),
+    `${[
+      // Segment 0: cwd "/repo" -- cwd-inference fails.
+      '{"type":"assistant","timestamp":"2026-01-01T00:15:00.000Z","sessionId":"sess-ew-ms-0001","cwd":"/repo","message":{"model":"m","usage":{"input_tokens":1,"cache_read_input_tokens":0,"cache_creation_input_tokens":0,"output_tokens":1}}}',
+      // Segment 1: cwd changes to an ordinary, non-issue-shaped directory
+      // (a ordinary "cd", not a worktree move) -- cwd-inference also
+      // fails here, and this record ALSO falls in issue 501's window.
+      '{"type":"assistant","timestamp":"2026-01-01T00:20:00.000Z","sessionId":"sess-ew-ms-0001","cwd":"/repo/some/subdir","message":{"model":"m","usage":{"input_tokens":2,"cache_read_input_tokens":0,"cache_creation_input_tokens":0,"output_tokens":2}}}',
+    ].join('\n')}\n`,
+  );
+  const eventWindowsAll = new Map<string, StageEventWindow>([
+    [
+      '501:claude:work',
+      stageWindow('2026-01-01T00:10:00Z', '2026-01-01T00:25:00Z'),
+    ],
+    [
+      '501:claude:cleanup',
+      stageWindow('2026-01-01T00:26:00Z', '2026-01-01T00:30:00Z'),
+    ],
+  ]);
+
+  const sessions = scanClaudeVendorSessions(sandbox, eventWindowsAll);
+  const ewSamples = sessions.filter((s) =>
+    s.adapterResult.sample.vendorSessionId.includes('#ew'),
+  );
+
+  // Exactly one #ew501 sample, combining both segments' matching records --
+  // not two duplicate-keyed ones (the bug: partitioning per-segment would
+  // independently re-derive the same #ew501 suffix from each segment).
+  assert.equal(ewSamples.length, 1);
+  assert.equal(
+    ewSamples[0].adapterResult.sample.vendorSessionId,
+    'sess-ew-ms-0001#ew501',
+  );
+  assert.equal(ewSamples[0].timeline.points.length, 2);
 });
 
 test('scanClaudeVendorSessions: an OPEN event window (no cleanup exit yet) never produces an event-window sample', () => {

@@ -240,11 +240,11 @@ function toValidTimestamp(value) {
  * (if any) that record falls inside.
  */
 export function extractRecordTimestampMs(record) {
-  if (!isPlainObject(record)) {
+  if (!isPlainObject(record) || typeof record.timestamp !== 'string') {
     return undefined;
   }
-  const valid = toValidTimestamp(record.timestamp);
-  return valid === undefined ? undefined : Date.parse(valid);
+  const atMs = Date.parse(record.timestamp);
+  return Number.isFinite(atMs) ? atMs : undefined;
 }
 /** First and last valid record `timestamp` fields, in file order. Undefined when no record has one. */
 function extractTimestamps(records) {
