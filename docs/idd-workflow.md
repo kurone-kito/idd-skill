@@ -388,7 +388,7 @@ standard file the same way a standard-tier session would.
 
 ## ReviewItems_snapshot lifecycle
 
-`ReviewItems_snapshot` is a session-local ordered set, scoped to the
+`ReviewItems_snapshot` is a session-local collection, scoped to the
 current claim, created from E1's activity-universe fetch — not a
 literally immutable value a later session may reuse as-is.
 
