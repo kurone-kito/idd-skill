@@ -193,7 +193,7 @@ export function extractSessionId(
  * `redactTokenCostRecord()` would later strip to `undefined`, silently
  * producing a schema-invalid sample instead of failing closed.
  */
-function deriveFallbackSessionId(
+export function deriveFallbackSessionId(
   fileBasename: string | undefined,
 ): string | undefined {
   if (!fileBasename) {

@@ -1011,6 +1011,51 @@ test("scanClaudeVendorSessions: a cross-file match is resolved (not skipped) whe
   assert.equal(sessions.length, 3);
 });
 
+test("scanClaudeVendorSessions: a cross-file match resolves via the SAME basename fallback claudeAdapter.harvest() uses, when the winning file's own records carry no top-level sessionId (Copilot review finding, PR #2430, #2424)", () => {
+  const sandbox = mkdtempSync(join(tmpdir(), 'idd-token-cost-harvest-ew-'));
+  // No top-level "sessionId" field on this file's records -- extractSessionId()
+  // alone returns undefined here; only the basename fallback recovers the
+  // real id ($CLAUDE_CODE_SESSION_ID matches a session log's own basename).
+  writeFileSync(
+    join(sandbox, 'session-ew-idH.jsonl'),
+    '{"type":"assistant","timestamp":"2026-01-01T00:20:00.000Z","cwd":"/repo","message":{"model":"m","usage":{"input_tokens":1,"cache_read_input_tokens":0,"cache_creation_input_tokens":0,"output_tokens":1}}}\n',
+  );
+  writeFileSync(
+    join(sandbox, 'session-ew-idI.jsonl'),
+    '{"type":"assistant","timestamp":"2026-01-01T00:21:00.000Z","sessionId":"sess-ew-idI-0001","cwd":"/repo","message":{"model":"m","usage":{"input_tokens":5,"cache_read_input_tokens":0,"cache_creation_input_tokens":0,"output_tokens":5}}}\n',
+  );
+  const eventWindowsAll = new Map<string, StageEventWindow>([
+    [
+      '501:claude:work',
+      stageWindow(
+        '2026-01-01T00:10:00Z',
+        '2026-01-01T00:25:00Z',
+        'session-ew-idH',
+      ),
+    ],
+    [
+      '501:claude:cleanup',
+      stageWindow(
+        '2026-01-01T00:26:00Z',
+        '2026-01-01T00:30:00Z',
+        'session-ew-idH',
+      ),
+    ],
+  ]);
+
+  const sessions = scanClaudeVendorSessions(sandbox, eventWindowsAll);
+  const ewSamples = sessions.filter((s) =>
+    s.adapterResult.sample.vendorSessionId.includes('#ew'),
+  );
+
+  assert.equal(ewSamples.length, 1);
+  assert.equal(
+    ewSamples[0].adapterResult.sample.vendorSessionId,
+    'session-ew-idH#ew501',
+  );
+  assert.equal(sessions.length, 3);
+});
+
 test("scanClaudeVendorSessions: falls back to classify-and-skip when no candidate file's sessionId matches the window's vendorSessionId (#2424)", () => {
   const sandbox = mkdtempSync(join(tmpdir(), 'idd-token-cost-harvest-ew-'));
   writeFileSync(

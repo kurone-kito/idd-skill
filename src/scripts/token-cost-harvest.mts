@@ -37,6 +37,7 @@ import {
   type ClaudeHarvestInput,
   claudeAdapter,
   defaultClaudeProjectDir,
+  deriveFallbackSessionId,
   extractRecordTimestampMs,
   extractSessionId,
   parseClaudeProjectLines,
@@ -1713,24 +1714,39 @@ export function scanClaudeVendorSessions(
     });
     candidatesByIssue.set(candidate.issueNumber, list);
   }
+  const vendorSessionIdByIssue = new Map<number, string | undefined>();
+  for (const window of completedIssueWindows) {
+    if (!vendorSessionIdByIssue.has(window.issueNumber)) {
+      vendorSessionIdByIssue.set(window.issueNumber, window.vendorSessionId);
+    }
+  }
+  // #2424/Copilot review (PR #2430): a candidate's own session id must
+  // fall back to its file basename exactly like `claudeAdapter.harvest()`
+  // itself does -- `extractSessionId()` alone returns `undefined` for a
+  // record shape lacking a top-level `sessionId` field (already
+  // fixture-covered for the adapter's own vendorSessionId derivation),
+  // which would otherwise never match a defined `windowVendorSessionId`
+  // even when the file is genuinely the right one.
+  const resolveCandidateSessionId = (candidate: {
+    fileBasename: string;
+    records: unknown[];
+  }): string | undefined =>
+    extractSessionId(candidate.records) ??
+    deriveFallbackSessionId(candidate.fileBasename);
   for (const [issueNumber, fileCandidates] of candidatesByIssue) {
     // #2424: resolve by attempt identity before falling back to
     // classify-and-skip (or, for a single candidate, unconditional
-    // harvest). `extractSessionId` reads each candidate's own records (a
-    // subset of one file), which carry the same sessionId as the rest of
-    // that file. This also gates the length-1 case: a sole candidate is
+    // harvest). This also gates the length-1 case: a sole candidate is
     // NOT automatically the right one when the window has an identity a
     // file provably fails to match -- e.g. this loop's own event window
     // whose own session file got excluded upstream (a cwd-inferred
     // segment already claimed it), leaving only an unrelated concurrent
     // session's file as candidate.
-    const windowVendorSessionId = completedIssueWindows.find(
-      (window) => window.issueNumber === issueNumber,
-    )?.vendorSessionId;
+    const windowVendorSessionId = vendorSessionIdByIssue.get(issueNumber);
     if (windowVendorSessionId !== undefined) {
       const matching = fileCandidates.filter(
         (candidate) =>
-          extractSessionId(candidate.records) === windowVendorSessionId,
+          resolveCandidateSessionId(candidate) === windowVendorSessionId,
       );
       if (matching.length === 1) {
         harvestEventWindowCandidate(
