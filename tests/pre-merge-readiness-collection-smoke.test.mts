@@ -737,3 +737,91 @@ test('collectPreMergeReadiness against a fake provider: unreadable CI governance
     rmSync(cwdRoot, { recursive: true, force: true });
   }
 });
+
+test('collectPreMergeReadiness against a fake provider: a required check reporting FAILURE blocks readiness, with readable governance and no gh process spawned', () => {
+  // Complements the "unreadable CI governance" fake-provider test above
+  // (#2267 AC4 review): that test's protectionReadsUnreadable: true short-
+  // circuits the CI gate before any individual check's conclusion is ever
+  // classified, so it cannot exercise summarizeRequiredChecks's own
+  // pending/failing-check path. This test instead supplies a readable
+  // branchRules fixture naming "lint" as required, then reports a
+  // COMPLETED/FAILURE check-run for it -- classifyCiChecks
+  // (protocol-helpers.mts) buckets that as status: 'failed', which is
+  // distinct from the unreadable-governance case's own generic "not all
+  // passing" cause.
+  const cwdRoot = mkdtempSync(join(tmpdir(), 'idd-pre-merge-fake-ci-failed-'));
+  const originalCwd = process.cwd();
+  try {
+    process.chdir(cwdRoot);
+
+    const port = createFakeProviderAdapter({
+      changeRequestReadinessSnapshots: {
+        42: {
+          headSha: 'a'.repeat(40),
+          baseRefName: 'main',
+          url: 'https://github.com/o/r/pull/42',
+          authorLogin: 'author-user',
+          reviewDecision: null,
+          statusCheckRollup: [
+            {
+              __typename: 'CheckRun',
+              name: 'lint',
+              status: 'COMPLETED',
+              conclusion: 'FAILURE',
+              completedAt: '2026-08-01T00:00:00Z',
+              workflowName: 'CI',
+            },
+          ],
+          mergeable: 'MERGEABLE',
+          mergeStateStatus: 'CLEAN',
+          closingIssuesReferences: [],
+        },
+      },
+      branchRules: {
+        'o/r/main': [
+          {
+            type: 'required_status_checks',
+            parameters: { required_status_checks: [{ context: 'lint' }] },
+          },
+        ],
+      },
+      branchProtection: { 'o/r/main': {} },
+      reviewThreadsWithComments: { 42: [] },
+      reviewsWithHeadCommitDate: {
+        42: { reviews: [], headCommittedAt: '2026-07-31T23:00:00Z' },
+      },
+    });
+
+    const report = collectPreMergeReadiness(
+      [
+        '--pr',
+        '42',
+        '--claimless',
+        '--owner',
+        'o',
+        '--repo',
+        'r',
+        '--now',
+        '2026-08-01T00:00:00Z',
+      ],
+      () => port,
+    );
+
+    const ciReport = report.ci as {
+      protectionReadsUnreadable: boolean;
+      status: string;
+      requiredChecksPassing: boolean;
+    };
+    assert.equal(ciReport.protectionReadsUnreadable, false);
+    assert.equal(ciReport.status, 'failed');
+    assert.equal(ciReport.requiredChecksPassing, false);
+    const blockers = report.blockers as { gate: string }[];
+    assert.ok(
+      blockers.some((blocker) => blocker.gate === 'ci'),
+      `expected a "ci" blocker, got: ${JSON.stringify(blockers)}`,
+    );
+  } finally {
+    process.chdir(originalCwd);
+    rmSync(cwdRoot, { recursive: true, force: true });
+  }
+});
