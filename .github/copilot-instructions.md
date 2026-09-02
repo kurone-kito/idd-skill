@@ -156,8 +156,17 @@ add this call to `idd-template/` or `.github/instructions/` phase files,
 which distribute to adopters with no token-cost data to record.
 
 When running the IDD loop in this repository, call
-`node scripts/token-cost-event.mjs --stage <id> --enter --vendor <v>`
+
+```sh
+node scripts/token-cost-event.mjs --stage <id> --enter --vendor <v> --issue <n>
+```
+
 when a listed stage starts, and the same with `--exit` when it ends.
+Include `--issue <n>` on every call from `claim` onward, once an issue
+is claimed — omit it only for `discover`, which precedes any claim. A
+call with no `--issue` is unusable for per-issue attribution (#2418):
+the harvester can only join it back to an issue when the number is
+recorded on the event itself.
 `schemas/token-cost-event.schema.json`'s `vendor` enum (`grok`, `claude`,
 `codex`) has no value for GitHub Copilot yet — skip this call rather
 than pass a mismatched vendor; a wrong tag would corrupt the shared
