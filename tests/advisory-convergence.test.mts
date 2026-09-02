@@ -4553,28 +4553,34 @@ test('writeAdvisoryConvergenceCliOutput writes guidance before JSON (#2142)', ()
 
 test('retryTransientGhFailure retries a status-less (transport-level) failure, then succeeds (#2459)', () => {
   let calls = 0;
-  const result = retryTransientGhFailure(() => {
-    calls += 1;
-    if (calls < 2) {
-      throw new Error('unexpected end of JSON input');
-    }
-    return 'ok';
-  });
+  const result = retryTransientGhFailure(
+    () => {
+      calls += 1;
+      if (calls < 2) {
+        throw new Error('unexpected end of JSON input');
+      }
+      return 'ok';
+    },
+    { sleep: () => undefined },
+  );
   assert.equal(result, 'ok');
   assert.equal(calls, 2);
 });
 
 test('retryTransientGhFailure retries a 5xx failure, then succeeds (#2459)', () => {
   let calls = 0;
-  const result = retryTransientGhFailure(() => {
-    calls += 1;
-    if (calls < 2) {
-      throw Object.assign(new Error('gh: Service Unavailable (HTTP 503)'), {
-        stderr: 'gh: Service Unavailable (HTTP 503)',
-      });
-    }
-    return 'ok';
-  });
+  const result = retryTransientGhFailure(
+    () => {
+      calls += 1;
+      if (calls < 2) {
+        throw Object.assign(new Error('gh: Service Unavailable (HTTP 503)'), {
+          stderr: 'gh: Service Unavailable (HTTP 503)',
+        });
+      }
+      return 'ok';
+    },
+    { sleep: () => undefined },
+  );
   assert.equal(result, 'ok');
   assert.equal(calls, 2);
 });
@@ -4600,11 +4606,14 @@ test('retryTransientGhFailure exhausts bounded attempts and rethrows the final e
   let lastError: Error | undefined;
   let caught: unknown;
   try {
-    retryTransientGhFailure(() => {
-      calls += 1;
-      lastError = new Error(`persistent transport failure ${calls}`);
-      throw lastError;
-    });
+    retryTransientGhFailure(
+      () => {
+        calls += 1;
+        lastError = new Error(`persistent transport failure ${calls}`);
+        throw lastError;
+      },
+      { sleep: () => undefined },
+    );
     assert.fail('expected retryTransientGhFailure to throw');
   } catch (error) {
     caught = error;

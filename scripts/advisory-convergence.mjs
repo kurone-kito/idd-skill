@@ -1561,8 +1561,13 @@ const RETRY_TRANSIENT_GH_FAILURE_BASE_DELAY_MS = 200;
  * across the codebase, so converting them (and this file's own synchronous call
  * chain) to `async` to use the Promise-based `withBoundedRetry` would
  * cascade well beyond this caller's scope.
+ *
+ * `deps.sleep` defaults to the real, blocking `sleepSync` (production
+ * behavior); a test exercising a retry path injects a no-op to avoid a
+ * real wall-clock delay per attempt (Copilot review, PR #2502).
  */
-export function retryTransientGhFailure(task) {
+export function retryTransientGhFailure(task, deps = {}) {
+  const sleep = deps.sleep ?? sleepSync;
   for (let attempt = 1; ; attempt += 1) {
     try {
       return task();
@@ -1572,7 +1577,7 @@ export function retryTransientGhFailure(task) {
       if (attempt >= RETRY_TRANSIENT_GH_FAILURE_ATTEMPTS || !retryable) {
         throw error;
       }
-      sleepSync(
+      sleep(
         RETRY_TRANSIENT_GH_FAILURE_BASE_DELAY_MS * attempt +
           Math.random() * RETRY_TRANSIENT_GH_FAILURE_BASE_DELAY_MS,
       );
