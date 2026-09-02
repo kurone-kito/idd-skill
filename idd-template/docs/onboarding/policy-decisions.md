@@ -354,6 +354,37 @@ state, but repository-level safeguards such as force-push prevention
 and required reviews still come from GitHub branch protection, not
 from IDD.
 
+### Path-scoped domain guidance reach
+
+Ask this question during onboarding: does any repository-specific
+domain guidance the repository relies on for review quality — a note
+that a directory or file extension does not follow the language's
+standard idiom, for example "these `.cs` files are UdonSharp, not
+standard C#" — actually reach **every** configured advisory bot the
+merge gate depends on, or does it live only in one bot's own config
+file (for example CodeRabbit's `path_instructions` in
+`.coderabbit.yaml`)?
+
+**Why this matters under this repository's own merge policy.** Under
+the distributed `copilot-advisory` review policy combined with
+`fully_autonomous_merge`, the primary advisory bot's review is a real,
+autonomous merge gate — not merely informational. A secondary bot
+knowing the domain constraint does not help if the primary, gating bot
+never sees it: that bot stays strictly less informed than the
+repository's own docs, free to raise standard-language-idiomatic
+suggestions an executing agent might then implement into code the
+domain cannot actually compile.
+
+**Field evidence**: a fresh onboarding session hit exactly this shape
+(`kurone-kito/vrchat-world-template`, a Unity/UdonSharp repository with
+no `package.json`) — domain guidance configured only in the secondary
+bot's config file left the primary gating bot uninformed.
+
+If the answer is no, either duplicate the guidance into a form the
+primary bot reads (for example, a repository instructions file the
+primary bot's own product supports) or document the gap so it is not
+silently relied upon.
+
 ## Related default policies to confirm
 
 The onboarding entry point should also confirm whether the repository

@@ -506,6 +506,14 @@ require explicit operator confirmation:
     pull requests — proposed from the repository's live GitHub default
     branch, verified against the configured remote before recording;
     absent resolves the live default branch
+16. path-scoped domain guidance reach: does any repository-specific
+    domain guidance the repository relies on (for example, "these `.cs`
+    files are UdonSharp, not standard C#") reach every configured
+    advisory bot the merge gate depends on, not only whichever bot owns
+    the config file the guidance happens to be written in? Under
+    `copilot-advisory` combined with `fully_autonomous_merge`, the
+    primary bot's review is an autonomous merge gate, so domain
+    guidance it never sees cannot inform that gate.
 
 Use
 [Onboarding Reference — Policy Decisions](docs/onboarding/policy-decisions.md)
