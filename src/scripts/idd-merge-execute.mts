@@ -15,7 +15,6 @@
 
 import { execFileSync } from 'node:child_process';
 
-import { GH_TEXT_LOOP_OPTIONS, ghText } from './gh-exec.mts';
 import { deriveGhHttpStatus, ghErrorText } from './gh-http-status.mts';
 import { type IddConfig, loadIddConfig } from './idd-config.mts';
 import { normalizePolicyConfig } from './policy-helpers.mts';
@@ -412,20 +411,10 @@ const defaultDeps: MergeExecuteDeps = {
   },
   fetchHeadRefName: (prNumber, repoRef) => {
     const { owner, repo } = resolveOwnerRepoFromRef(repoRef);
-    return ghText(
-      [
-        'pr',
-        'view',
-        String(prNumber),
-        '-R',
-        `${owner}/${repo}`,
-        '--json',
-        'headRefName',
-        '--jq',
-        '.headRefName',
-      ],
-      GH_TEXT_LOOP_OPTIONS,
-    ).trim();
+    return createGithubProviderAdapter(
+      owner,
+      repo,
+    ).getChangeRequestHeadRefNameAtRepo(owner, repo, prNumber);
   },
 };
 

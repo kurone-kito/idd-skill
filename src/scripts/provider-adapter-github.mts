@@ -2092,6 +2092,24 @@ export function createGithubProviderAdapter(
       ]);
     },
 
+    getChangeRequestHeadRefNameAtRepo(
+      atRepoOwner: string,
+      atRepoRepo: string,
+      number: number,
+    ): string {
+      return deps.ghText([
+        'pr',
+        'view',
+        String(number),
+        '-R',
+        `${atRepoOwner}/${atRepoRepo}`,
+        '--json',
+        'headRefName',
+        '--jq',
+        '.headRefName',
+      ]);
+    },
+
     getChangeRequestAtRepo(
       atRepoOwner: string,
       atRepoRepo: string,

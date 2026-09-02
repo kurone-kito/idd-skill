@@ -610,6 +610,8 @@ test('idd-merge-execute: runMergeExecute output validates against schema', () =>
     mergePr: () => 'Merged PR.',
     mergePrAdmin: () => 'Merged PR (admin).',
     resolveSoloCodeownerAdminFallbackMode: () => 'auto-admin-retry',
+    getLocalHeadState: () => ({ branch: null, headSha: null }),
+    fetchHeadRefName: () => '',
   };
   const { verdict } = runMergeExecute(
     ['--pr', '994', '--claim-issue', '309', '--claim-id', 'c-1'],

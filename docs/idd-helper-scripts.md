@@ -2195,6 +2195,16 @@ reflexively as any other CLI option.
   does not match this exact shape — a different error, an ineligible
   topology, or the opt-in `hold-and-report` policy — falls through
   unchanged to the pre-#1521 hold-and-report path.
+- **Local-head-drift warning (#2453).** In both dry-run and `--apply`,
+  the helper best-effort reads the invoking process's local git branch
+  and HEAD. When that local branch equals the PR's own `headRefName`
+  and the local HEAD differs from `prHeadSha`, the verdict's
+  `localHeadDrift` field is set to `{ localHeadSha, remoteHeadSha }` and
+  a warning is also printed on stderr — the signature of an unpushed
+  commit about to be silently left behind. It is advisory only: `null`
+  whenever the check cannot run (no git repo, a different or detached
+  branch, or an unreadable local/remote read) or finds no divergence,
+  and it never gates `ready` or blocks the merge.
 - Fail closed: if helper execution fails, output is invalid JSON,
   required fields are missing, or helper evidence conflicts with live
   GitHub state, discard helper output and run the manual F3 gate +

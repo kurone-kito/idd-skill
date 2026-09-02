@@ -1585,6 +1585,19 @@ export function createGithubProviderAdapter(owner, repo, deps = DEFAULT_DEPS) {
         '.headRefOid',
       ]);
     },
+    getChangeRequestHeadRefNameAtRepo(atRepoOwner, atRepoRepo, number) {
+      return deps.ghText([
+        'pr',
+        'view',
+        String(number),
+        '-R',
+        `${atRepoOwner}/${atRepoRepo}`,
+        '--json',
+        'headRefName',
+        '--jq',
+        '.headRefName',
+      ]);
+    },
     getChangeRequestAtRepo(atRepoOwner, atRepoRepo, number) {
       try {
         const raw = deps.ghText(

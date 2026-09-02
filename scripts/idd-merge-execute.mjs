@@ -13,7 +13,6 @@
 // `gh pr merge` issued under `--apply` once every F3 gate holds and the
 // head + claim re-validate immediately before the merge.
 import { execFileSync } from 'node:child_process';
-import { GH_TEXT_LOOP_OPTIONS, ghText } from './gh-exec.mjs';
 import { deriveGhHttpStatus, ghErrorText } from './gh-http-status.mjs';
 import { loadIddConfig } from './idd-config.mjs';
 import { normalizePolicyConfig } from './policy-helpers.mjs';
@@ -258,20 +257,10 @@ const defaultDeps = {
   },
   fetchHeadRefName: (prNumber, repoRef) => {
     const { owner, repo } = resolveOwnerRepoFromRef(repoRef);
-    return ghText(
-      [
-        'pr',
-        'view',
-        String(prNumber),
-        '-R',
-        `${owner}/${repo}`,
-        '--json',
-        'headRefName',
-        '--jq',
-        '.headRefName',
-      ],
-      GH_TEXT_LOOP_OPTIONS,
-    ).trim();
+    return createGithubProviderAdapter(
+      owner,
+      repo,
+    ).getChangeRequestHeadRefNameAtRepo(owner, repo, prNumber);
   },
 };
 /**

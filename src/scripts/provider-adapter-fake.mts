@@ -209,6 +209,10 @@ export interface FakeProviderFixture {
    * `${owner}/${repo}/${number}`; an absent key throws (matches the adapter's
    * own no-catch, throw-on-failure contract). */
   changeRequestHeadShasAtRepo?: Record<string, string>;
+  /** Backs {@link ProviderPort.getChangeRequestHeadRefNameAtRepo}, keyed by
+   * `${owner}/${repo}/${number}`; an absent key throws (matches the adapter's
+   * own no-catch, throw-on-failure contract). */
+  changeRequestHeadRefNamesAtRepo?: Record<string, string>;
   /** Backs {@link ProviderPort.getChangeRequestAtRepo}, keyed by
    * `${owner}/${repo}/${number}`. */
   changeRequestsAtRepo?: Record<string, ProviderChangeRequestState>;
@@ -747,6 +751,21 @@ export function createFakeProviderAdapter(
         );
       }
       return sha;
+    },
+
+    getChangeRequestHeadRefNameAtRepo(
+      atRepoOwner: string,
+      atRepoRepo: string,
+      number: number,
+    ): string {
+      const key = `${atRepoOwner}/${atRepoRepo}/${number}`;
+      const headRefName = fixture.changeRequestHeadRefNamesAtRepo?.[key];
+      if (headRefName === undefined) {
+        throw new Error(
+          `fake provider: no cross-repo head ref name fixture for ${key}`,
+        );
+      }
+      return headRefName;
     },
 
     getChangeRequestAtRepo(

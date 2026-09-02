@@ -407,6 +407,7 @@ export const iddMergeExecuteKeys = [
   'merged',
   'mergeResult',
   'adminFallbackUsed',
+  'localHeadDrift',
 ] as const satisfies readonly (keyof IddMergeExecuteVerdict)[];
 
 export const iddRoadmapAuditExecuteKeys = [
@@ -1025,6 +1026,7 @@ const iddMergeExecuteFixture = {
   merged: false,
   mergeResult: '',
   adminFallbackUsed: false,
+  localHeadDrift: null,
 } satisfies IddMergeExecuteVerdict;
 
 const iddRoadmapAuditExecuteFixture = {

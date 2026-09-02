@@ -361,6 +361,16 @@ export function createFakeProviderAdapter(fixture) {
       }
       return sha;
     },
+    getChangeRequestHeadRefNameAtRepo(atRepoOwner, atRepoRepo, number) {
+      const key = `${atRepoOwner}/${atRepoRepo}/${number}`;
+      const headRefName = fixture.changeRequestHeadRefNamesAtRepo?.[key];
+      if (headRefName === undefined) {
+        throw new Error(
+          `fake provider: no cross-repo head ref name fixture for ${key}`,
+        );
+      }
+      return headRefName;
+    },
     getChangeRequestAtRepo(atRepoOwner, atRepoRepo, number) {
       const key = `${atRepoOwner}/${atRepoRepo}/${number}`;
       return fixture.changeRequestsAtRepo?.[key] ?? null;

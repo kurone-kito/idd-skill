@@ -14,5 +14,6 @@
   "mergeCommand": "gh pr merge 994 --merge --match-head-commit 0123456789abcdef0123456789abcdef01234567",
   "merged": false,
   "mergeResult": "",
-  "adminFallbackUsed": false
+  "adminFallbackUsed": false,
+  "localHeadDrift": null
 }

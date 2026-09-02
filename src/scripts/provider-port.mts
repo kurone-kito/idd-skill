@@ -830,6 +830,17 @@ export interface ProviderPort {
   ): string;
 
   /** change-requests, cross-repo. `pr view -R {owner}/{repo} --json
+   * headRefName --jq .headRefName`, throws on any failure -- used by
+   * `idd-merge-execute.mts`'s local-head-drift advisory (#2453) to learn
+   * the PR's own branch name, with the same cross-repo scope as
+   * {@link ProviderPort.getChangeRequestHeadShaAtRepo}. */
+  getChangeRequestHeadRefNameAtRepo(
+    owner: string,
+    repo: string,
+    number: number,
+  ): string;
+
+  /** change-requests, cross-repo. `pr view -R {owner}/{repo} --json
    * mergeable,mergeStateStatus`, `null` on failure -- the explicit-repo
    * sibling of {@link ProviderPort.getChangeRequest}. */
   getChangeRequestAtRepo(
