@@ -185,6 +185,7 @@ export interface ParsedProviderOutagePark {
   headSha: string;
   claimId: string;
   parkedAt: string;
+  blockers: string[];
   createdAt: string;
 }
 
@@ -420,7 +421,7 @@ const OPERATIONAL_MARKER_ENTRIES: OperationalMarker[] = [
   {
     label: '<!-- idd-provider-outage-park:',
     pattern:
-      /^<!--\s*idd-provider-outage-park:\s+\S+\s+issue:\d+\s+service:\S+\s+head:[0-9a-f]{40}\s+claim:\S+\s+parked:\S+\s*-->[\s\S]*$/i,
+      /^<!--\s*idd-provider-outage-park:\s+\S+\s+issue:\d+\s+service:\S+\s+head:[0-9a-f]{40}\s+claim:\S+\s+parked:\S+\s+blockers:\S+\s*-->[\s\S]*$/i,
     startPattern: /^<!--\s*idd-provider-outage-park:/i,
   },
   {
@@ -1083,6 +1084,12 @@ export function parseProviderOutageAdvancedComment(
  * comment-token-safe field grammar as the sibling outage markers rather than
  * hard-restricting to an enum here -- the caller validates `service` against
  * `PROVIDER_HEALTH_SERVICES` (provider-health.mts) before rendering.
+ * `blockers` is the caller's own `pre-merge-readiness` blocker-gate names
+ * that justified eligibility (the issue's own acceptance criteria requires
+ * naming "the service and the blocking evidence") -- each entry is
+ * percent-encoded individually before joining with a raw `,`, matching
+ * {@link renderLocalValidationEvidenceComment}'s `covers` field exactly, so
+ * a gate name containing a literal comma still round-trips.
  */
 export function renderProviderOutageParkComment(payload: {
   actor?: unknown;
@@ -1091,6 +1098,7 @@ export function renderProviderOutageParkComment(payload: {
   headSha?: unknown;
   claimId?: unknown;
   parkedAt?: unknown;
+  blockers?: unknown;
 }): string {
   const actor = normalizeNonWhitespaceToken(payload?.actor);
   const issueNumber = normalizePositiveIntegerToken(payload?.issueNumber);
@@ -1098,21 +1106,30 @@ export function renderProviderOutageParkComment(payload: {
   const headSha = normalizeNonWhitespaceToken(payload?.headSha).toLowerCase();
   const claimId = normalizeNonWhitespaceToken(payload?.claimId);
   const parkedAt = normalizeSecondPrecisionIsoTimestamp(payload?.parkedAt);
+  const blockersList = (
+    Array.isArray(payload?.blockers) ? payload.blockers : []
+  )
+    .map((entry) => String(entry ?? '').trim())
+    .filter(Boolean);
   if (
     !actor ||
     issueNumber === null ||
     !service ||
     !/^[0-9a-f]{40}$/.test(headSha) ||
     !claimId ||
-    !parkedAt
+    !parkedAt ||
+    blockersList.length === 0
   ) {
     throw new Error('invalid provider outage park payload');
   }
   const encodedService = encodeExternalCheckWaiverField(service);
+  const encodedBlockers = blockersList
+    .map((entry) => encodeExternalCheckWaiverField(entry))
+    .join(',');
   return [
-    `<!-- idd-provider-outage-park: ${actor} issue:${issueNumber} service:${encodedService} head:${headSha} claim:${claimId} parked:${parkedAt} -->`,
+    `<!-- idd-provider-outage-park: ${actor} issue:${issueNumber} service:${encodedService} head:${headSha} claim:${claimId} parked:${parkedAt} blockers:${encodedBlockers} -->`,
     '',
-    `_${actor}: pull request parked -- \`${service}\` unavailable, issue #${issueNumber}'s claim released -- IDD automation marker. Do not edit._`,
+    `_${actor}: pull request parked -- \`${service}\` unavailable (blockers: ${blockersList.join(', ')}), issue #${issueNumber}'s claim released -- IDD automation marker. Do not edit._`,
   ].join('\n');
 }
 
@@ -1124,7 +1141,7 @@ export function parseProviderOutageParkComment(
     .trimEnd()
     .match(
       new RegExp(
-        `^<!--\\s*idd-provider-outage-park:\\s+(\\S+)\\s+issue:(\\d+)\\s+service:(\\S+)\\s+head:([0-9a-f]{40})\\s+claim:(\\S+)\\s+parked:(\\S+)\\s*-->${OPTIONAL_IDD_VISIBLE_NOTE_PATTERN}$`,
+        `^<!--\\s*idd-provider-outage-park:\\s+(\\S+)\\s+issue:(\\d+)\\s+service:(\\S+)\\s+head:([0-9a-f]{40})\\s+claim:(\\S+)\\s+parked:(\\S+)\\s+blockers:(\\S+)\\s*-->${OPTIONAL_IDD_VISIBLE_NOTE_PATTERN}$`,
         'i',
       ),
     );
@@ -1138,7 +1155,24 @@ export function parseProviderOutageParkComment(
   );
   const claimId = normalizeNonWhitespaceToken(match[5]);
   const parkedAt = normalizeSecondPrecisionIsoTimestamp(match[6]);
-  if (!actor || issueNumber === null || !service || !claimId || !parkedAt) {
+  // Split on the raw `,` separator BEFORE decoding each entry -- the render
+  // side percent-encodes every entry individually, so a literal comma can
+  // only appear here as a join separator, never inside an entry's own
+  // encoded form (same invariant as parseLocalValidationEvidenceComment).
+  const blockers = match[7]
+    .split(',')
+    .map((entry) =>
+      normalizeExternalCheckWaiverField(decodeExternalCheckWaiverField(entry)),
+    )
+    .filter(Boolean);
+  if (
+    !actor ||
+    issueNumber === null ||
+    !service ||
+    !claimId ||
+    !parkedAt ||
+    blockers.length === 0
+  ) {
     return null;
   }
   return {
@@ -1148,6 +1182,7 @@ export function parseProviderOutageParkComment(
     headSha: match[4].toLowerCase(),
     claimId,
     parkedAt,
+    blockers,
     createdAt: isValidIsoTimestamp(createdAt) ? createdAt : 'none',
   };
 }

@@ -12,6 +12,7 @@
     "headSha",
     "claimId",
     "parkedAt",
+    "blockers",
     "createdAt"
   ],
   "properties": {
@@ -46,6 +47,12 @@
       "type": "string",
       "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}Z$",
       "description": "UTC timestamp the pull request was parked. The only timestamp safe to select or sort on -- never the comment's own createdAt, which degrades to \"none\" on an unreadable read."
+    },
+    "blockers": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 },
+      "minItems": 1,
+      "description": "The pre-merge-readiness blocker-gate names that justified parking, each mapping unambiguously to the unavailable service. Never a claim that any merge-readiness gate itself passed."
     },
     "createdAt": {
       "type": "string",

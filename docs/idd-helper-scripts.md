@@ -1237,7 +1237,11 @@ Interpretation rules:
     only once that verdict is `healthy`). Sorted by `parkedAt` then pull
     request number for deterministic re-entry order. Reports `count` and
     `boundReached` against `providerOutage.maxParkedChanges` (default
-    `10`) as information only -- this mode never blocks a park.
+    `10`) as information only -- this mode never blocks a park. The open
+    pull request read is bounded (default 50, most-recently-updated
+    first); `sampleTruncated` is `true` when more open pull requests may
+    exist beyond that sample, and `boundReached` fails closed to `true`
+    in that case regardless of the sampled `count`.
   - `--park`: fetches the pull request's live head SHA, re-checks the
     named service's live `provider-health` verdict is `unavailable`, and
     requires every entry in `--blockers` (the caller's own fresh
@@ -1245,10 +1249,11 @@ Interpretation rules:
     `advisory-review` only for `advisory-wait` /
     `copilot-terminal-unavailable`; `ci-actions` only for `ci` /
     `discarded-required-check-siblings`. Any other blocker, or an empty
-    `--blockers`, refuses to park. `--apply` posts the marker to the
-    pull request; releasing the originating issue's claim is a separate,
-    existing step the caller takes afterward (`unclaimed-by`), not
-    performed by this command.
+    `--blockers`, refuses to park. `--apply` posts the marker (naming the
+    service and the full `--blockers` list, per the issue's own
+    acceptance criteria) to the pull request; releasing the originating
+    issue's claim is a separate, existing step the caller takes
+    afterward (`unclaimed-by`), not performed by this command.
 - Same claim-gating contract as `post-idd-marker.mjs`: this command
   performs no claim/state gating itself -- the calling phase runs its
   own claim-revalidation gate before `--apply`.

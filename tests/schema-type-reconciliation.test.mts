@@ -268,6 +268,7 @@ interface PolicyConfigFile {
   providerOutage?: {
     declarationTarget?: number;
     maxValidity?: string;
+    maxParkedChanges?: number;
   };
   localValidationEvidence?: {
     maxAge?: string;
@@ -373,6 +374,7 @@ export const providerOutageParkKeys = [
   'headSha',
   'claimId',
   'parkedAt',
+  'blockers',
   'createdAt',
 ] as const satisfies readonly (keyof ParsedProviderOutagePark)[];
 
@@ -918,6 +920,7 @@ const providerOutageParkFixture = {
   headSha: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
   claimId: 'f22dd6db-83f8-4e92-aaa9-23db47d10650',
   parkedAt: '2026-09-02T00:00:00Z',
+  blockers: ['advisory-wait'],
   createdAt: '2026-09-02T00:00:05Z',
 } satisfies ParsedProviderOutagePark;
 
@@ -1225,7 +1228,11 @@ const policyConfigFixture = {
     needsDecisionLabelName: 'status:needs-decision',
   },
   mergeGate: { soloCodeownerAdminFallback: 'auto-admin-retry' },
-  providerOutage: { declarationTarget: 1234, maxValidity: 'PT24H' },
+  providerOutage: {
+    declarationTarget: 1234,
+    maxValidity: 'PT24H',
+    maxParkedChanges: 10,
+  },
 } satisfies PolicyConfigFile;
 
 const preMergeReadinessFixture = {

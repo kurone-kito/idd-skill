@@ -434,6 +434,7 @@ test('provider-outage-park: parseProviderOutageParkComment output validates agai
     headSha: 'a'.repeat(40),
     claimId: 'f22dd6db-83f8-4e92-aaa9-23db47d10650',
     parkedAt: '2026-09-02T00:00:00Z',
+    blockers: ['advisory-wait'],
   });
   const parsed = parseProviderOutageParkComment(body, '2026-09-02T00:00:05Z');
   assert.ok(parsed !== null, 'parseProviderOutageParkComment returned null');

@@ -7,6 +7,7 @@ import {
 } from '../src/scripts/protocol-helpers.mts';
 import {
   buildParkedChangeList,
+  computeBoundReached,
   PARK_ELIGIBLE_BLOCKER_GATES,
   type RawParkMarker,
   resolveParkEligibility,
@@ -36,8 +37,28 @@ test('toSecondPrecisionIso output is accepted by renderProviderOutageParkComment
       headSha: 'a'.repeat(40),
       claimId: 'claim-1',
       parkedAt: now,
+      blockers: ['advisory-wait'],
     }),
   );
+});
+
+// ---------------------------------------------------------------------------
+// computeBoundReached -- Codex/CodeRabbit review finding (PR #2421): a
+// sampled open-PR read must never let an undercounted `count` read as
+// "still under the limit".
+// ---------------------------------------------------------------------------
+
+test('computeBoundReached: below the limit and not truncated is not reached', () => {
+  assert.equal(computeBoundReached(3, 10, false), false);
+});
+
+test('computeBoundReached: at or above the limit is reached regardless of truncation', () => {
+  assert.equal(computeBoundReached(10, 10, false), true);
+  assert.equal(computeBoundReached(15, 10, false), true);
+});
+
+test('computeBoundReached: a truncated sample fails closed to reached even when the sampled count is low', () => {
+  assert.equal(computeBoundReached(1, 10, true), true);
 });
 
 // ---------------------------------------------------------------------------
@@ -129,6 +150,7 @@ function rawMarker(
     headSha: 'a'.repeat(40),
     claimId: 'claim-1',
     parkedAt: '2026-09-02T00:00:00Z',
+    blockers: ['advisory-wait'],
     createdAt: 'none',
     ...overrides,
   };
@@ -211,6 +233,7 @@ test('renderProviderOutageParkComment / parseProviderOutageParkComment round-tri
     headSha: 'b'.repeat(40),
     claimId: 'f22dd6db-83f8-4e92-aaa9-23db47d10650',
     parkedAt: '2026-09-02T00:00:00Z',
+    blockers: ['advisory-wait', 'copilot-terminal-unavailable'],
   });
   const parsed = parseProviderOutageParkComment(body, '2026-09-02T00:00:05Z');
   assert.deepEqual(parsed, {
@@ -220,6 +243,7 @@ test('renderProviderOutageParkComment / parseProviderOutageParkComment round-tri
     headSha: 'b'.repeat(40),
     claimId: 'f22dd6db-83f8-4e92-aaa9-23db47d10650',
     parkedAt: '2026-09-02T00:00:00Z',
+    blockers: ['advisory-wait', 'copilot-terminal-unavailable'],
     createdAt: '2026-09-02T00:00:05Z',
   });
 });
@@ -233,6 +257,21 @@ test('renderProviderOutageParkComment: rejects a malformed payload', () => {
       headSha: 'not-40-hex',
       claimId: 'claim-1',
       parkedAt: '2026-09-02T00:00:00Z',
+      blockers: ['advisory-wait'],
+    }),
+  );
+});
+
+test('renderProviderOutageParkComment: rejects an empty blockers list (the issue AC requires naming the blocking evidence)', () => {
+  assert.throws(() =>
+    renderProviderOutageParkComment({
+      actor: 'claude-29738796',
+      issueNumber: 2321,
+      service: 'advisory-review',
+      headSha: 'a'.repeat(40),
+      claimId: 'claim-1',
+      parkedAt: '2026-09-02T00:00:00Z',
+      blockers: [],
     }),
   );
 });

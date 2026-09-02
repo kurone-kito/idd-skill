@@ -38,6 +38,15 @@ export function toSecondPrecisionIso(date) {
   return date.toISOString().replace(/\.\d{3}Z$/, 'Z');
 }
 /**
+ * Fails closed to `true` when the open-pull-request sample was truncated
+ * (more may exist beyond `sampleSize`), regardless of the sampled `count` --
+ * an undercounted bound must never read as "still under the limit"
+ * (Codex/CodeRabbit review, PR #2421).
+ */
+export function computeBoundReached(count, maxParkedChanges, sampleTruncated) {
+  return sampleTruncated || count >= maxParkedChanges;
+}
+/**
  * pre-merge-readiness blocker-`gate` names that are *unambiguously* about
  * one provider-health service's availability -- never a gate that can also
  * fire for an unrelated reason. `review-currency` and `disposition-evidence`
@@ -104,6 +113,7 @@ export function buildParkedChangeList(rawMarkers, verdictsByService) {
       claimId: marker.claimId,
       parkedAt: marker.parkedAt,
       actor: marker.actor,
+      blockers: marker.blockers,
       verdict,
       resumable: verdict === 'healthy',
     };
@@ -149,7 +159,11 @@ function latestTrustedParkMarker(comments, trustedMarkerLogins) {
  * the `sampleSize` most-recently-updated open pull requests (default `50`,
  * same default `provider-health.mts` uses) so a repository with many open
  * pull requests never produces an unbounded fan-out of per-pull-request
- * comment reads.
+ * comment reads. `sampleTruncated` is true when the live open-PR count may
+ * exceed `sampleSize` (the fetched page came back full) -- an older parked
+ * pull request outside this sample would otherwise silently understate
+ * `count`/`boundReached` (Codex/CodeRabbit review, PR #2421); the caller
+ * must treat that case as bound-reached rather than trust an undercount.
  */
 function collectRawParkMarkers(owner, repo, options) {
   const sampleSize = options.sampleSize ?? 50;
@@ -195,7 +209,7 @@ function collectRawParkMarkers(owner, repo, options) {
       rawMarkers.push({ prNumber: pr.number, marker });
     }
   }
-  return rawMarkers;
+  return { rawMarkers, sampleTruncated: openPrs.length >= sampleSize };
 }
 /**
  * Read-only list mode (#2321): every open pull request carrying a trusted
@@ -203,7 +217,10 @@ function collectRawParkMarkers(owner, repo, options) {
  * `provider-health` verdict. `count`/`boundReached` against the configured
  * `providerOutage.maxParkedChanges` are information only -- this function
  * enforces nothing; the bound stops new issue CLAIMS (an instruction-level
- * rule), never the parking of an already-stuck pull request.
+ * rule), never the parking of an already-stuck pull request. When the open
+ * pull request read is truncated (more may exist beyond `sampleSize`),
+ * `boundReached` fails closed to `true` regardless of the sampled `count` --
+ * an undercounted bound must never read as "still under the limit".
  */
 export function buildParkedChangeReport(owner, repo, options = {}) {
   const config = options.config ?? loadIddConfig();
@@ -217,7 +234,7 @@ export function buildParkedChangeReport(owner, repo, options = {}) {
   );
   const maxParkedChanges =
     normalizePolicyConfig(config).providerOutage.maxParkedChanges;
-  const rawMarkers = collectRawParkMarkers(owner, repo, {
+  const { rawMarkers, sampleTruncated } = collectRawParkMarkers(owner, repo, {
     sampleSize: options.sampleSize,
     trustedMarkerLogins,
   });
@@ -242,7 +259,8 @@ export function buildParkedChangeReport(owner, repo, options = {}) {
     entries,
     count,
     maxParkedChanges,
-    boundReached: count >= maxParkedChanges,
+    boundReached: computeBoundReached(count, maxParkedChanges, sampleTruncated),
+    sampleTruncated,
   };
 }
 /**
@@ -311,6 +329,7 @@ export function runParkPullRequest(options) {
     headSha,
     claimId: options.claimId,
     parkedAt: now,
+    blockers: options.blockers,
   });
   let posted = false;
   if (options.apply) {
