@@ -183,13 +183,15 @@ export function createFakeProviderAdapter(fixture) {
       return { appSlug: fixture.viewerAppSlug, unavailable: false };
     },
     resolveViewerLoginSafeQuiet() {
-      if (fixture.viewerLoginUnavailable || !fixture.viewerLogin) {
+      // Mirrors the GitHub adapter's own trim().toLowerCase() normalization
+      // (Copilot review, PR #2429) so a fixture login differing only in
+      // case/whitespace does not diverge fake-provider tests from
+      // production behavior.
+      const normalized = fixture.viewerLogin?.trim().toLowerCase() ?? '';
+      if (fixture.viewerLoginUnavailable || !normalized) {
         return { viewerLogin: '', viewerLoginUnavailable: true };
       }
-      return {
-        viewerLogin: fixture.viewerLogin,
-        viewerLoginUnavailable: false,
-      };
+      return { viewerLogin: normalized, viewerLoginUnavailable: false };
     },
     getRepositoryContentAtRef(contentOwner, contentRepo, path, ref) {
       const key = `${contentOwner}/${contentRepo}/${path}@${ref}`;
@@ -249,8 +251,16 @@ export function createFakeProviderAdapter(fixture) {
       }
       return value;
     },
-    listMergedChangeRequests() {
-      return fixture.mergedChangeRequests ?? [];
+    listMergedChangeRequests(limit, sinceDate) {
+      // Honors both parameters the GitHub adapter's `gh pr list --limit
+      // --search merged:>=date` call applies (Copilot review, PR #2429),
+      // so a collection-wiring test cannot pass on unrealistic behavior --
+      // more rows than requested, or an unfiltered date range.
+      const rows = fixture.mergedChangeRequests ?? [];
+      const filtered = sinceDate
+        ? rows.filter((row) => row.mergedAt >= sinceDate)
+        : rows;
+      return filtered.slice(0, limit);
     },
     getMergedChangeRequestMeta(number) {
       return fixture.mergedChangeRequestMeta?.[number] ?? null;

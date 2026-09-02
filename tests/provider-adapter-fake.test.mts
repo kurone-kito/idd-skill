@@ -131,3 +131,35 @@ test('listCapabilityDeclarations honors a fixture override simulating a provider
     { group: 'advisory-review', requirement: 'optional', supported: false },
   ]);
 });
+
+// resolveViewerLoginSafeQuiet / listMergedChangeRequests (Copilot review,
+// PR #2429): both diverged from the GitHub adapter's own behavior in code
+// the fake adapter's own suite otherwise never exercised, which could let
+// a collection-wiring test pass against unrealistic fake-provider output.
+test('resolveViewerLoginSafeQuiet normalizes a fixture login, matching the GitHub adapter', () => {
+  const port = createFakeProviderAdapter({
+    viewerLogin: '  Some-User  ',
+  });
+  assert.deepEqual(port.resolveViewerLoginSafeQuiet(), {
+    viewerLogin: 'some-user',
+    viewerLoginUnavailable: false,
+  });
+});
+
+test('listMergedChangeRequests honors both limit and sinceDate, matching the GitHub adapter', () => {
+  const port = createFakeProviderAdapter({
+    mergedChangeRequests: [
+      { number: 1, mergedAt: '2026-01-01T00:00:00Z' },
+      { number: 2, mergedAt: '2026-02-01T00:00:00Z' },
+      { number: 3, mergedAt: '2026-03-01T00:00:00Z' },
+    ],
+  });
+  assert.deepEqual(
+    port.listMergedChangeRequests(2, null).map((row) => row.number),
+    [1, 2],
+  );
+  assert.deepEqual(
+    port.listMergedChangeRequests(10, '2026-02-01').map((row) => row.number),
+    [2, 3],
+  );
+});
