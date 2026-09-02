@@ -220,6 +220,77 @@ test('dependency parsers ignore code-fenced examples and stay on one line', () =
   assert.deepEqual(extractBlockedByIssueNumbers(indentedFakeFence), [123]);
 });
 
+test('extractBlockedByIssueNumbers captures a GitHub-wrapped "Blocked by" list (#2441)', () => {
+  // The exact wrapped-body shape reproduced live against issue #2341: a long
+  // comma-separated list GitHub line-wraps once it exceeds one line in the
+  // raw body. Every reference, including the ones past the wrap, must be
+  // captured -- a same-line-only scan silently lost the last 6 of 13 here.
+  const wrappedBody =
+    'Blocked by #2319, #2320, #2321, #2322, #2323, #2326, #2327,\n' +
+    '#2329, #2333, #2335, #2337, #2338, #2339';
+  assert.deepEqual(
+    extractBlockedByIssueNumbers(wrappedBody),
+    [
+      2319, 2320, 2321, 2322, 2323, 2326, 2327, 2329, 2333, 2335, 2337, 2338,
+      2339,
+    ],
+  );
+
+  // A three-line wrap keeps sweeping in every continuation line, not just
+  // the first one after the keyword line.
+  assert.deepEqual(
+    extractBlockedByIssueNumbers('Blocked by #1, #2,\n#3, #4,\n#5, #6'),
+    [1, 2, 3, 4, 5, 6],
+  );
+});
+
+test('extractDependencyIssueNumbers captures a GitHub-wrapped "Depends on" list (#2441)', () => {
+  assert.deepEqual(
+    extractDependencyIssueNumbers('Depends on #100, #200, #300,\n#400, #500'),
+    [100, 200, 300, 400, 500],
+  );
+});
+
+test('the wrapped-list continuation scan excludes anything past a genuine list boundary (#2441)', () => {
+  // A blank line ends the list -- the ref on the far side is unrelated prose,
+  // not a continuation of the same "Blocked by" declaration.
+  assert.deepEqual(
+    extractBlockedByIssueNumbers('Blocked by #100\n\n#200 is unrelated'),
+    [100],
+  );
+
+  // A new paragraph of prose that happens to mention a reference is not a
+  // bare continuation line and must not be swept in.
+  assert.deepEqual(
+    extractBlockedByIssueNumbers(
+      'Blocked by #100\nThis relates to #200 somehow.',
+    ),
+    [100],
+  );
+
+  // A continuation line that mixes a reference with other prose is excluded
+  // in full -- not partially read for the leading reference alone.
+  assert.deepEqual(
+    extractBlockedByIssueNumbers(
+      'Blocked by #100\n#200 and see other/repo#20 too',
+    ),
+    [100],
+  );
+
+  // A heading immediately after the keyword line is not a continuation.
+  assert.deepEqual(
+    extractBlockedByIssueNumbers('Blocked by #100\n## Proposed change'),
+    [100],
+  );
+
+  // A cross-repo-only reference on the continuation line is not a bare
+  // local `#N` list and must not be swept in.
+  assert.deepEqual(
+    extractBlockedByIssueNumbers('Blocked by #100\nother/repo#20'),
+    [100],
+  );
+});
+
 test('extractBlockedByRoadmapMarkers honors a configured marker prefix', () => {
   const body = `
 <!-- idd-skill-blocked-by: default-prefixed -->

@@ -563,7 +563,13 @@ function extractKeywordLineRefs(body: string, keyword: string): number[] {
   );
   const numbers: number[] = [];
   for (const lineMatch of body.matchAll(linePattern)) {
-    numbers.push(...consumeDependencyRefList(lineMatch[1]));
+    numbers.push(...consumeDependencyRefList(lineMatch[1]).numbers);
+    numbers.push(
+      ...consumeContinuationRefLines(
+        body,
+        (lineMatch.index ?? 0) + lineMatch[0].length,
+      ),
+    );
   }
   return numbers;
 }
@@ -576,9 +582,15 @@ function extractKeywordLineRefs(body: string, keyword: string): number[] {
  * (`(see other/repo#20)`) are excluded instead of being mis-read as local
  * blockers. This mirrors the separator-bounded reference parsing in
  * `discover-roadmap-graph.mts`, extended to also accept a plain-whitespace
- * separator so the space-separated multi-ref form is captured too.
+ * separator so the space-separated multi-ref form is captured too. Returns
+ * the parsed numbers alongside whatever text was not consumed, so a caller
+ * (e.g. {@link consumeContinuationRefLines}) can tell a line that is
+ * *entirely* a ref list apart from one that only starts with one.
  */
-function consumeDependencyRefList(segment: string): number[] {
+function consumeDependencyRefList(segment: string): {
+  numbers: number[];
+  remaining: string;
+} {
   const numbers: number[] = [];
   let remaining = segment;
   while (remaining) {
@@ -595,6 +607,43 @@ function consumeDependencyRefList(segment: string): number[] {
       break;
     }
     remaining = remaining.slice(separatorMatch[0].length);
+  }
+  return { numbers, remaining };
+}
+
+/**
+ * #2441: GitHub line-wraps a long, comma-separated "Blocked by"/"Depends on"
+ * list once it exceeds one line in the raw issue body, so a same-line-only
+ * scan silently loses every reference past the wrap. Starting right after
+ * the keyword line (`afterIndex`, the position of the newline that ends it,
+ * or end-of-body), consume zero or more immediately-following lines that
+ * are *entirely* a dependency-ref list -- each candidate line is parsed with
+ * {@link consumeDependencyRefList} and only swept in when nothing is left
+ * over, so a line starting a new paragraph, or mixing a reference with
+ * other prose, is excluded (matching the single-line prose exclusion this
+ * extends). Stops at the first blank line or non-continuation line.
+ */
+function consumeContinuationRefLines(
+  body: string,
+  afterIndex: number,
+): number[] {
+  const numbers: number[] = [];
+  let cursor = afterIndex;
+  while (body[cursor] === '\n') {
+    const lineStart = cursor + 1;
+    const nextNewline = body.indexOf('\n', lineStart);
+    const lineEnd = nextNewline === -1 ? body.length : nextNewline;
+    const trimmed = body.slice(lineStart, lineEnd).trim();
+    if (!trimmed) {
+      break;
+    }
+    const { numbers: lineNumbers, remaining } =
+      consumeDependencyRefList(trimmed);
+    if (lineNumbers.length === 0 || remaining.trim().length > 0) {
+      break;
+    }
+    numbers.push(...lineNumbers);
+    cursor = lineEnd;
   }
   return numbers;
 }
