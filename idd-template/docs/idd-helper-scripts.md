@@ -1220,7 +1220,8 @@ Interpretation rules:
   --service <name> --blockers <name1,name2> --claim-id <id> --agent-id
   <id>] [--apply]`
 - Published bin: `idd-provider-outage-park`
-- Stable contract:
+- Stable contract (the posted `idd-provider-outage-park` marker payload,
+  not the list-mode stdout shape below):
   [`provider-outage-park.schema.json`][provider-outage-park-schema]
 - Purpose (#2321): every current route for an unavailable external
   service ends in a hold, which keeps the claim live until
