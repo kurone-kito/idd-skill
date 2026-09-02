@@ -543,15 +543,16 @@ export function fetchIssueLoopGithubContext(
       comments.push({ body, createdAt, login });
     }
   }
-  // closedByPullRequestsReferences already scopes to PRs that actually
-  // closed THIS issue -- via the keyword this repository's own IDD
-  // workflow exclusively uses ("Closes #N"), or a manual Development-panel
-  // link -- so no branch-name guard is needed here (#2439's predecessor,
-  // ConnectedEvent/DisconnectedEvent, only recorded manual links, which
-  // this repository's automated PRs never produce; see #2444). Normally
-  // exactly one PR closes a given issue in this repository's workflow;
-  // the earliest-createdAt tie-break below is defensive for the rare case
-  // of more than one.
+  // closedByPullRequestsReferences already scopes to PRs GitHub recorded
+  // as actually CLOSING this issue (the "Closes #N" keyword this
+  // repository's own IDD workflow exclusively uses), so no branch-name
+  // guard is needed here. This field's predecessor,
+  // ConnectedEvent/DisconnectedEvent, only recorded a manual
+  // Development-panel LINK -- which merely connects a PR to an issue
+  // without closing it -- so it never matched this repository's automated
+  // keyword-closed PRs at all (#2444). Normally exactly one PR closes a
+  // given issue in this repository's workflow; the earliest-createdAt
+  // tie-break below is defensive for the rare case of more than one.
   const prNodes = Array.isArray(issue?.closedByPullRequestsReferences?.nodes)
     ? issue.closedByPullRequestsReferences.nodes
     : [];
