@@ -45,7 +45,7 @@ LAST_COPILOT_COMMIT=$(
 )
 
 COPILOT_PENDING=$(gh api "repos/${OWNER}/${REPO}/pulls/{pr-number}/requested_reviewers" \
-  --jq '.users | any(.login == "Copilot" or .login == "copilot-pull-request-reviewer" or .login == "copilot-pull-request-reviewer[bot]")')
+  --jq '.users | any((.login // "" | ascii_downcase) as $l | $l == "copilot" or $l == "copilot-pull-request-reviewer" or $l == "copilot-pull-request-reviewer[bot]")')
 # Observed once: requested_reviewers can lag a successful re-request
 # or empty on submit, so false is not idle proof.
 # LAST_COPILOT_COMMIT == PR_HEAD_SHA remains the SATISFIED signal.
@@ -61,11 +61,10 @@ COPILOT_PENDING_COVERS_HEAD=$(
              and ((.value.sha // .value.commit_id // "") == $sha)))
            | last | .key // null) as $head_index
         | (map(select(.value.event == "review_requested"
-             and (((.value.requested_reviewer.login // "") == "Copilot")
-                  or ((.value.requested_reviewer.login // "")
-                      == "copilot-pull-request-reviewer")
-                  or ((.value.requested_reviewer.login // "")
-                      == "copilot-pull-request-reviewer[bot]"))))
+             and (((.value.requested_reviewer.login // "" | ascii_downcase) as $l
+                  | $l == "copilot"
+                  or $l == "copilot-pull-request-reviewer"
+                  or $l == "copilot-pull-request-reviewer[bot]"))))
            | last | .key // null) as $request_index
         | ($head_index != null and $request_index != null and
            $request_index > $head_index)
