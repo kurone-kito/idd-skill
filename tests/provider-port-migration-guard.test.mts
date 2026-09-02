@@ -14,9 +14,11 @@ import { fileURLToPath } from 'node:url';
 const REPO_ROOT = fileURLToPath(new URL('..', import.meta.url));
 
 /** Files migrated so far. Append the next filename here as each of #2266's
- * 11 target files (and, from #2267 on, its own nine PR-facing target
- * files) moves onto the provider port -- do not add a name until its
- * migration commit lands, and never remove one once migrated. */
+ * 11 target files (and, from #2267 on, its own ten PR-facing target files
+ * -- the issue body names nine bullets, but one, `ci-wait-*.mts`, is a
+ * glob covering two files: `ci-wait-policy.mts` and `ci-wait-state.mts`)
+ * moves onto the provider port -- do not add a name until its migration
+ * commit lands, and never remove one once migrated. */
 const MIGRATED_HELPERS: readonly string[] = [
   'collaborator-permission.mts',
   'discover-viability-gate.mts',
