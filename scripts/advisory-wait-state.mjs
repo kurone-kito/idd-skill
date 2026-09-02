@@ -14,12 +14,6 @@ import {
   readAdvisoryWaitPolicy,
 } from './advisory-wait-policy.mjs';
 import { parseCliArgs } from './cli-args.mjs';
-import {
-  DEFAULT_GH_PAGINATED_TIMEOUT_MS,
-  ghGraphql,
-  ghText,
-  safeGhText,
-} from './gh-exec.mjs';
 import { loadIddConfig } from './idd-config.mjs';
 import {
   buildAdvisoryWaitSummary,
@@ -30,9 +24,12 @@ import {
   isValidIsoTimestamp,
   normalizeTrustedMarkerLogins,
   parseAdvisoryRecoveryComment,
-  parsePaginatedGhNdjson,
   resolveTrustedMarkerActors,
 } from './protocol-helpers.mjs';
+import {
+  createGithubProviderAdapter,
+  resolveCurrentGithubRepository,
+} from './provider-adapter-github.mjs';
 
 const COPILOT_RECOVERY_REASONS = {
   activeClaimNotProvided: 'active-claim-not-provided',
@@ -401,52 +398,25 @@ function main() {
   if (!args.prNumber) {
     throw new Error('missing required --pr <number> argument');
   }
-  const owner =
-    args.owner ||
-    ghText(['repo', 'view', '--json', 'owner', '--jq', '.owner.login']);
-  const repo =
-    args.repo || ghText(['repo', 'view', '--json', 'name', '--jq', '.name']);
-  const repoRef = `${owner}/${repo}`;
-  const viewerLogin = safeGhText([
-    'api',
-    'user',
-    '--jq',
-    '.login',
-  ]).toLowerCase();
+  const currentRepo =
+    args.owner && args.repo ? null : resolveCurrentGithubRepository();
+  const owner = args.owner || currentRepo?.owner || '';
+  const repo = args.repo || currentRepo?.repo || '';
+  const port = createGithubProviderAdapter(owner, repo);
+  const viewerLogin = port.resolveViewerLoginSafe().viewerLogin;
   const { actors: configuredTrustedActors, source: trustedMarkerActorsSource } =
     resolveTrustedMarkerActors({
       flagValue: args.trustedMarkerLogins,
       envValue: process.env.IDD_TRUSTED_MARKER_ACTORS,
       config: loadIddConfig(),
     });
-  const prHeadSha = ghText([
-    'pr',
-    'view',
-    String(args.prNumber),
-    '-R',
-    repoRef,
-    '--json',
-    'headRefOid',
-    '--jq',
-    '.headRefOid',
-  ]);
-  const reviews = ghApiJson(
-    `repos/${owner}/${repo}/pulls/${args.prNumber}/reviews`,
-    true,
-  );
-  const requestedReviewers = ghApiJson(
-    `repos/${owner}/${repo}/pulls/${args.prNumber}/requested_reviewers`,
-    false,
-  );
-  const timelineEvents = ghApiJson(
-    `repos/${owner}/${repo}/issues/${args.prNumber}/timeline`,
-    true,
-    ['-H', 'Accept: application/vnd.github+json'],
-  );
-  const comments = ghApiJson(
-    `repos/${owner}/${repo}/issues/${args.prNumber}/comments`,
-    true,
-  );
+  const prHeadSha = port.getChangeRequestHeadSha(args.prNumber);
+  const reviews = port.listReviews(args.prNumber);
+  const restRequestedReviewers = port
+    .getChangeRequestRequestedReviewerLogins(args.prNumber)
+    .map((login) => ({ login }));
+  const timelineEvents = port.getWorkItemTimeline(args.prNumber);
+  const comments = port.listWorkItemComments(args.prNumber);
   const collaboratorTrustEnabled = isTruthy(
     process.env.IDD_TRUST_COLLABORATOR_MARKERS,
   );
@@ -454,7 +424,7 @@ function main() {
     viewerLogin,
     ...configuredTrustedActors,
     ...(collaboratorTrustEnabled
-      ? resolveTrustedCollaboratorMarkerLogins(owner, repo, comments)
+      ? resolveTrustedCollaboratorMarkerLogins(port, comments)
       : []),
   ]);
   const advisoryWaitPolicy = readAdvisoryWaitPolicy();
@@ -465,7 +435,6 @@ function main() {
   // resolveCopilotPending's own precedence (protocol-helpers.mts) so this
   // pre-check and the pure function it feeds never disagree on when a
   // GraphQL fallback is actually needed.
-  const restRequestedReviewers = requestedReviewers.users ?? [];
   const restCopilotPending = isCopilotPending(
     restRequestedReviewers,
     primaryBotLogin,
@@ -482,7 +451,7 @@ function main() {
       copilotPendingCoversHeadForGraphqlGate &&
       lastCopilotCommitForGraphqlGate !== prHeadSha
     )
-      ? fetchGraphqlRequestedReviewerLogins(owner, repo, args.prNumber)
+      ? port.getChangeRequestRequestedReviewerLoginsGraphql(args.prNumber)
       : null;
   const summary = buildAdvisoryWaitSummary(
     {
@@ -596,27 +565,24 @@ fails closed to NOT_TERMINAL with reason: active-claim-not-provided.
 }
 function normalizeComment(comment) {
   return {
-    author: { login: comment.user?.login ?? '' },
-    body: comment.body ?? '',
-    createdAt: comment.created_at ?? '',
+    author: { login: comment.authorLogin },
+    body: comment.body,
+    createdAt: comment.createdAt,
   };
 }
-function resolveTrustedCollaboratorMarkerLogins(owner, repo, comments) {
+function resolveTrustedCollaboratorMarkerLogins(port, comments) {
   const advisoryAuthors = [
     ...new Set(
       comments
-        .filter((comment) => advisoryMarkerComment(comment.body ?? ''))
-        .map((comment) => comment.user?.login ?? '')
+        .filter((comment) => advisoryMarkerComment(comment.body))
+        .map((comment) => comment.authorLogin)
         .filter(Boolean),
     ),
   ];
   return advisoryAuthors.filter((login) => {
-    const permission = safeGhText([
-      'api',
-      `repos/${owner}/${repo}/collaborators/${encodeURIComponent(login)}/permission`,
-      '--jq',
-      '.permission',
-    ]).toLowerCase();
+    const outcome = port.getCollaboratorPermission(login);
+    const permission =
+      outcome.outcome === 'found' ? outcome.permission.toLowerCase() : '';
     return (
       permission === 'admin' ||
       permission === 'maintain' ||
@@ -635,63 +601,4 @@ export function advisoryMarkerComment(body) {
 }
 function isTruthy(value) {
   return /^(1|true|yes)$/i.test(String(value ?? '').trim());
-}
-function ghApiJson(path, paginate = false, extraArgs = []) {
-  const args = ['api', path, ...extraArgs];
-  if (paginate) {
-    // gh api with --paginate and --jq '.[]' emits one JSON object per line.
-    // --slurp landed in gh v2.48.0, but Ubuntu 24.04 LTS ships gh v2.45.0
-    // via apt, so keep the NDJSON-compatible form here.
-    args.splice(1, 0, '--paginate', '--jq', '.[]');
-    return parsePaginatedGhNdjson(
-      ghText(args, { timeout: DEFAULT_GH_PAGINATED_TIMEOUT_MS }),
-    );
-  }
-  return JSON.parse(ghText(args));
-}
-/**
- * #2167: REST `requested_reviewers` can report empty even when Copilot
- * review is still genuinely outstanding -- see `resolveCopilotPending`'s
- * doc comment in protocol-helpers.mts for the observed incident this
- * fixes. `main()` below calls this only when REST and already-fetched
- * timeline evidence are both inconclusive, so this optional GraphQL call
- * is skipped whenever a cheaper signal already resolves pending state.
- *
- * Returns the requested-reviewer login list on success, or `null` on any
- * failure (network error, non-2xx response, unparsable payload) so the
- * caller falls back to the REST-derived result rather than assuming
- * pending -- a GraphQL 4xx must never read as "pending".
- */
-function fetchGraphqlRequestedReviewerLogins(owner, repo, prNumber) {
-  try {
-    const query = `
-      query($owner: String!, $repo: String!, $number: Int!) {
-        repository(owner: $owner, name: $repo) {
-          pullRequest(number: $number) {
-            reviewRequests(first: 100) {
-              nodes {
-                requestedReviewer {
-                  ... on Bot { login }
-                  ... on User { login }
-                  ... on Mannequin { login }
-                }
-              }
-            }
-          }
-        }
-      }
-    `;
-    const payload = ghGraphql(query, {
-      owner,
-      repo,
-      number: prNumber,
-    });
-    const nodes =
-      payload.data?.repository?.pullRequest?.reviewRequests?.nodes ?? [];
-    return nodes
-      .map((node) => String(node?.requestedReviewer?.login ?? ''))
-      .filter((login) => login !== '');
-  } catch {
-    return null;
-  }
 }
