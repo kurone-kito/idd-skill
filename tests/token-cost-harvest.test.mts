@@ -735,7 +735,8 @@ test('scanClaudeVendorSessions: two DIFFERENT project log files both matching th
   assert.ok(sessions.every((s) => s.adapterResult.joinHints === undefined));
 });
 
-test('scanClaudeVendorSessions: two DIFFERENT project log files matching the same issue window with DISJOINT (non-overlapping) activity ranges are STILL both dropped, not merged (#2425 -- merge investigated and rejected, see docstring)', () => {
+test('scanClaudeVendorSessions: two DIFFERENT project log files matching the same issue window with DISJOINT (non-overlapping) activity ranges are STILL both dropped, not merged (#2425 -- merge investigated and rejected, see docstring)', (t) => {
+  const stderrWrite = t.mock.method(process.stderr, 'write', () => true);
   const sandbox = mkdtempSync(join(tmpdir(), 'idd-token-cost-harvest-ew-'));
   writeFileSync(
     join(sandbox, 'session-ew-disjointA.jsonl'),
@@ -772,6 +773,17 @@ test('scanClaudeVendorSessions: two DIFFERENT project log files matching the sam
   assert.equal(ewSamples.length, 0);
   assert.equal(sessions.length, 2);
   assert.ok(sessions.every((s) => s.adapterResult.joinHints === undefined));
+
+  const skipMessages = stderrWrite.mock.calls
+    .map((call) => call.arguments[0])
+    .filter(
+      (message): message is string =>
+        typeof message === 'string' &&
+        message.includes('skipping event-window issue #502'),
+    );
+  assert.equal(skipMessages.length, 1);
+  assert.match(skipMessages[0], /disjoint activity ranges/);
+  assert.match(skipMessages[0], /#2424/);
 });
 
 test('scanClaudeVendorSessions: an event window is ignored when the segment already has a cwd-inferred issueNumber', () => {
