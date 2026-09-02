@@ -34,6 +34,7 @@ import {
 import {
   claudeAdapter,
   defaultClaudeProjectDir,
+  extractRecordTimestampMs,
   parseClaudeProjectLines,
   segmentRecordsByCwd,
 } from './token-cost-adapter-claude.mjs';
@@ -825,6 +826,151 @@ function eventWindowsForIssue(all, issueNumber, vendor) {
   return out;
 }
 /**
+ * Builds one overall window per issue number that has a CLOSED, VALID
+ * `cleanup` stage event window (both `--enter` and `--exit` posted, with
+ * `startMs < endMs`) for `vendor`. The `cleanup` requirement is
+ * deliberate: an in-progress issue-loop's mid-flight harvest would
+ * otherwise permanently freeze that issue's sample at partial usage the
+ * first time it is harvested -- the `#ew<issueNumber>` `vendorSessionId`
+ * suffix this fallback produces (see `token-cost-adapter-claude.mts`) is
+ * stable, so `vendorSessionKey` dedup would silently skip every later,
+ * fuller harvest as "already present." Gating on a closed `cleanup`
+ * window matches roadmap #2296's locked "one *completed* issue-loop"
+ * unit, at the cost of never harvesting an issue whose loop was
+ * abandoned before reaching cleanup (deferred rather than wrong, not a
+ * data-loss concern: `events.jsonl` is append-only, so a later harvest
+ * picks it up if cleanup ever runs).
+ *
+ * The window's `endMs` is ALWAYS the valid cleanup window's own `endMs`
+ * -- never a max across every stage -- and a stage only widens `startMs`
+ * when its OWN window (both ends) falls at or before that cleanup exit.
+ * This guards against `readEventWindows`'s own pairing: it pairs the
+ * LATEST `--enter` seen for a (issue, vendor, stage) key with the LATEST
+ * `--exit`, across the whole append-only file, with no knowledge of
+ * which attempt either belongs to.
+ *
+ * - A completed run followed by a re-attempt that enters `cleanup` again
+ *   but never exits pairs that new, still-open enter with the FIRST
+ *   attempt's stale exit, producing a reversed window (`startMs >
+ *   endMs`) -- `startMs < endMs` rejects this outright, so the mere
+ *   presence of a `cleanup` key is never enough on its own.
+ * - A completed run followed by a re-attempt that has NOT yet re-entered
+ *   `cleanup` at all leaves the original, still-valid cleanup pair
+ *   untouched, but the re-attempt's OTHER stage events (e.g. a fresh
+ *   `work` enter/exit) land in `eventWindowsAll` too, with timestamps
+ *   AFTER the original cleanup's own exit. Capping `endMs` at cleanup's
+ *   own exit, and excluding any stage window that extends past it from
+ *   widening `startMs`, keeps that later, still-in-progress activity out
+ *   of the completed window -- without this, its partial usage would be
+ *   folded into the union and permanently frozen under the stable
+ *   `#ew<issueNumber>` id as if the (unfinished) retry were the
+ *   completed loop.
+ * - A later attempt whose own `--enter` (or `--exit`) call for some
+ *   non-`cleanup` stage silently fails (`token-cost-event.mjs` is
+ *   deliberately fail-open) can leave that stage's pairing mixing one
+ *   attempt's enter with an EARLIER, unrelated attempt's exit, which
+ *   `readEventWindows` reports as reversed (`startMs > endMs`) once the
+ *   later attempt's own timestamp is newer than the stale one it paired
+ *   with. Excluding such a window from the union (as `startMs < endMs`
+ *   already does above) is not enough on its own: `startMs` still
+ *   silently degrades to the stable `cleanup`-only window instead of
+ *   surfacing the contamination. A reversed non-`cleanup` stage window
+ *   whose own `startMs` falls at or before the completed run's own
+ *   `cleanup.endMs` is treated as direct evidence that this issue's
+ *   event history is corrupted for THIS harvest, so the whole issue is
+ *   skipped rather than emitted with a silently narrowed window (no
+ *   sample beats a wrong one). A reversed window entirely past
+ *   `cleanup.endMs` is ordinary mid-retry noise from a later, distinct
+ *   attempt and does not block emission of the already-completed window.
+ *   The remaining case -- a stage whose stale, EARLIER-attempt pairing
+ *   happens to still be internally valid (non-reversed), e.g. because
+ *   BOTH of the later attempt's own enter/exit calls for that stage
+ *   failed -- is mechanically indistinguishable from a genuine early
+ *   start without an attempt/session identity on `TokenCostEvent`
+ *   itself; tracked as a follow-up (#2424) rather than solved here.
+ */
+export function buildCompletedIssueWindows(eventWindowsAll, vendor) {
+  const stagesByIssue = new Map();
+  for (const [key, window] of eventWindowsAll) {
+    const [issueNumberRaw, keyVendor, stageId] = key.split(':');
+    if (keyVendor !== vendor) {
+      continue;
+    }
+    const issueNumber = Number(issueNumberRaw);
+    if (!Number.isInteger(issueNumber)) {
+      continue;
+    }
+    const stages = stagesByIssue.get(issueNumber) ?? new Map();
+    stages.set(stageId, window);
+    stagesByIssue.set(issueNumber, stages);
+  }
+  const out = [];
+  for (const [issueNumber, stages] of stagesByIssue) {
+    const cleanup = stages.get('cleanup');
+    if (!cleanup || cleanup.startMs >= cleanup.endMs) {
+      continue;
+    }
+    const hasContaminatedStage = [...stages].some(
+      ([stageId, window]) =>
+        stageId !== 'cleanup' &&
+        window.startMs >= window.endMs &&
+        window.startMs <= cleanup.endMs,
+    );
+    if (hasContaminatedStage) {
+      continue;
+    }
+    let startMs = cleanup.startMs;
+    for (const window of stages.values()) {
+      if (window.startMs <= cleanup.endMs && window.endMs <= cleanup.endMs) {
+        startMs = Math.min(startMs, window.startMs);
+      }
+    }
+    out.push({ issueNumber, startMs, endMs: cleanup.endMs });
+  }
+  return out;
+}
+/**
+ * Partitions `records` by which single `CompletedIssueWindow` (if any)
+ * each record's own timestamp falls inside, via `getTimestampMs`. A
+ * record with no valid timestamp, or one whose timestamp falls inside
+ * zero or more than one window, is left out of every group rather than
+ * guessed: concurrent sessions append to one shared, HOME-keyed
+ * `events.jsonl`, so two different issues' windows can genuinely overlap
+ * in wall-clock, and "exactly one match" is the only safe attribution.
+ * Windows are half-open (`[startMs, endMs)`, matching `computeStageWindows`'s
+ * own convention) so a record at the exact instant one issue's window ends
+ * and an adjacent issue's window begins matches only the later window,
+ * rather than being wrongly treated as ambiguous between the two.
+ * Preserves each group's original file-order relative to itself.
+ */
+export function segmentRecordsByEventWindow(
+  records,
+  issueWindows,
+  getTimestampMs,
+) {
+  const groups = new Map();
+  for (const record of records) {
+    const atMs = getTimestampMs(record);
+    if (atMs === undefined) {
+      continue;
+    }
+    const matches = issueWindows.filter(
+      (window) => atMs >= window.startMs && atMs < window.endMs,
+    );
+    if (matches.length !== 1) {
+      continue;
+    }
+    const issueNumber = matches[0].issueNumber;
+    const group = groups.get(issueNumber);
+    if (group) {
+      group.push(record);
+    } else {
+      groups.set(issueNumber, [record]);
+    }
+  }
+  return groups;
+}
+/**
  * #2404: a long-lived session's project JSONL file is not necessarily one
  * cwd for its whole lifetime -- `segmentRecordsByCwd` (see
  * token-cost-adapter-claude.mts) splits it into contiguous per-cwd runs
@@ -835,16 +981,56 @@ function eventWindowsForIssue(all, issueNumber, vendor) {
  * records (not the whole file's), matching `claudeAdapter.harvest()`'s own
  * per-segment scoping -- otherwise a segment's stage-usage allocation
  * would double-count usage from its sibling segments.
+ *
+ * #2418: #2404 only helps a session whose `cwd` actually varies mid-file.
+ * On a workstation where every session is launched once from the primary
+ * worktree and reaches other worktrees only via in-conversation `cd`
+ * (never a fresh Claude Code launch), `cwd` never varies at all, so
+ * #2404's segmentation is never exercised and #2404 alone still produces
+ * zero issue-loop samples. This additionally partitions by event window
+ * (`segmentRecordsByEventWindow`, gated to CLOSED `cleanup` windows only
+ * -- see `buildCompletedIssueWindows`) and calls `claudeAdapter.harvest()`
+ * once more per matched issue, via `issueNumberOverride`. This is
+ * additive, not a replacement: every cwd-segment's own plain cwd-only
+ * sample (`kind: 'session'` when cwd-inference fails) is still produced
+ * exactly as before, so nothing already working regresses.
+ * `aggregateSnapshot` (`token-cost-report.mts`) only ever counts
+ * `kind: 'issue-loop'` samples toward the published snapshot, so a
+ * `session`-kind sample coexisting with event-window-derived
+ * `issue-loop` samples drawn from the same underlying records cannot
+ * double-count anything published.
+ *
+ * Event-window partitioning runs ONCE per FILE, across every cwd-segment
+ * whose own cwd-inference failed, not once per segment. A file whose
+ * `cwd` changes to some non-`issue/<n>-*` value more than once (any
+ * ordinary directory switch, not just a worktree move) would otherwise
+ * split those records across separate cwd-segments; partitioning
+ * per-segment would independently re-derive the SAME `#ew<issueNumber>`
+ * suffix from more than one segment and push a duplicate-keyed
+ * `VendorSession` within a single harvest run, which the append-side
+ * dedup (keyed only against samples from PRIOR runs) cannot catch.
  */
-export function scanClaudeVendorSessions(projectDir) {
+export function scanClaudeVendorSessions(
+  projectDir,
+  eventWindowsAll = new Map(),
+) {
   const out = [];
   if (!existsSync(projectDir)) {
     return out;
   }
+  const completedIssueWindows = buildCompletedIssueWindows(
+    eventWindowsAll,
+    'claude',
+  );
   const files = globSync('*.jsonl', { cwd: projectDir, withFileTypes: true })
     .filter((entry) => entry.isFile())
     .map((entry) => join(entry.parentPath, entry.name))
     .sort();
+  // Event windows carry no file/session identity (issueNumber + vendor
+  // only), so a candidate is collected per FILE here and only actually
+  // harvested after every file has been scanned -- see the cross-file
+  // ambiguity guard below.
+  const eventWindowCandidates = [];
   for (const file of files) {
     let records;
     try {
@@ -857,9 +1043,12 @@ export function scanClaudeVendorSessions(projectDir) {
     }
     const fileBasename = basename(file);
     const segments = segmentRecordsByCwd(records);
+    const unattributedRecords = [];
+    let anySegmentHadCwdIssueNumber = false;
     segments.forEach((segment, index) => {
+      let adapterResult;
       try {
-        const adapterResult = claudeAdapter.harvest({
+        adapterResult = claudeAdapter.harvest({
           records: segment.records,
           fileBasename,
           // Suffix only when the file actually produced more than one
@@ -868,17 +1057,93 @@ export function scanClaudeVendorSessions(projectDir) {
           // against samples already harvested before this change.
           segmentIndex: segments.length > 1 ? index : undefined,
         });
-        out.push({
-          vendor: 'claude',
-          adapterResult,
-          timeline: extractClaudeUsageTimeline(segment.records),
-        });
       } catch (error) {
         process.stderr.write(
           `token-cost-harvest: skipping ${file} segment ${index}: ${error.message}\n`,
         );
+        return;
+      }
+      out.push({
+        vendor: 'claude',
+        adapterResult,
+        timeline: extractClaudeUsageTimeline(segment.records),
+      });
+      if (adapterResult.joinHints?.issueNumber === undefined) {
+        unattributedRecords.push(...segment.records);
+      } else {
+        anySegmentHadCwdIssueNumber = true;
       }
     });
+    // Only fall back to event-window attribution when NO segment in this
+    // file resolved a cwd-inferred issue number. Otherwise a segment
+    // whose cwd merely isn't issue-shaped (an ordinary subdirectory, not
+    // a worktree move) but whose records still happen to fall inside a
+    // DIFFERENT segment's already cwd-attributed issue window would
+    // produce a second, independent issue-loop sample for that same
+    // issue -- splitting one completed loop's usage across two samples
+    // that markAmbiguousOverlaps has no reason to catch (their time
+    // ranges don't overlap; they're just both attributed to the same
+    // issue).
+    if (
+      !anySegmentHadCwdIssueNumber &&
+      unattributedRecords.length > 0 &&
+      completedIssueWindows.length > 0
+    ) {
+      const eventWindowGroups = segmentRecordsByEventWindow(
+        unattributedRecords,
+        completedIssueWindows,
+        extractRecordTimestampMs,
+      );
+      for (const [issueNumber, groupRecords] of eventWindowGroups) {
+        eventWindowCandidates.push({
+          fileBasename,
+          issueNumber,
+          records: groupRecords,
+        });
+      }
+    }
+  }
+  // Cross-file ambiguity guard: event windows carry no session identity,
+  // so two DIFFERENT project log files -- e.g. an unrelated concurrent
+  // session whose own unattributed activity happens to fall inside this
+  // issue's completed window purely by wall-clock coincidence -- can both
+  // independently match the same issue. Emitting both would not just
+  // misattribute the stray file's usage; buildSample's markAmbiguousOverlaps
+  // would then also flag the LEGITIMATE sample as ambiguous (outcome:
+  // unknown), discarding the real measurement too. Emitting for NEITHER
+  // file when more than one contributes to the same issue is strictly
+  // safer than emitting a contaminated pair.
+  const fileCountByIssue = new Map();
+  for (const candidate of eventWindowCandidates) {
+    const filesForIssue =
+      fileCountByIssue.get(candidate.issueNumber) ?? new Set();
+    filesForIssue.add(candidate.fileBasename);
+    fileCountByIssue.set(candidate.issueNumber, filesForIssue);
+  }
+  for (const candidate of eventWindowCandidates) {
+    const contributingFiles = fileCountByIssue.get(candidate.issueNumber);
+    if ((contributingFiles?.size ?? 0) > 1) {
+      process.stderr.write(
+        `token-cost-harvest: skipping event-window issue #${candidate.issueNumber}: matched by more than one project log file (${[...(contributingFiles ?? [])].join(', ')})\n`,
+      );
+      continue;
+    }
+    try {
+      const eventWindowResult = claudeAdapter.harvest({
+        records: candidate.records,
+        fileBasename: candidate.fileBasename,
+        issueNumberOverride: candidate.issueNumber,
+      });
+      out.push({
+        vendor: 'claude',
+        adapterResult: eventWindowResult,
+        timeline: extractClaudeUsageTimeline(candidate.records),
+      });
+    } catch (error) {
+      process.stderr.write(
+        `token-cost-harvest: skipping event-window issue #${candidate.issueNumber}: ${error.message}\n`,
+      );
+    }
   }
   return out;
 }
@@ -1110,7 +1375,7 @@ function runCli(argv) {
   );
   const eventWindows = readEventWindows(eventsPath);
   const sessions = [
-    ...scanClaudeVendorSessions(defaultClaudeProjectDir()),
+    ...scanClaudeVendorSessions(defaultClaudeProjectDir(), eventWindows),
     ...scanCodexVendorSessions(defaultCodexSessionsDir()),
     ...scanGrokVendorSessions(defaultGrokSessionsDir()),
   ];

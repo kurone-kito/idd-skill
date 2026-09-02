@@ -127,11 +127,19 @@ add this call to `idd-template/` or `.github/instructions/` phase files,
 which distribute to adopters with no token-cost data to record.
 
 When Claude runs the IDD loop in this repository, call
-`node scripts/token-cost-event.mjs --stage <id> --enter --vendor claude`
+
+```sh
+node scripts/token-cost-event.mjs --stage <id> --enter --vendor claude --issue <n>
+```
+
 when a listed stage starts, and the same with `--exit` when it ends.
-Stage ids: `discover`, `claim`, `work`, `submit-pr`, `review`, `merge`,
-`cleanup`. Ignore any failure from this command — it must never block or
-slow the IDD loop.
+Include `--issue <n>` on every call from `claim` onward, once an issue
+is claimed — omit it only for `discover`, which precedes any claim. A
+call with no `--issue` is unusable for per-issue attribution (#2418):
+the harvester can only join it back to an issue when the number is
+recorded on the event itself. Stage ids: `discover`, `claim`, `work`,
+`submit-pr`, `review`, `merge`, `cleanup`. Ignore any failure from this
+command — it must never block or slow the IDD loop.
 
 ## Issue-authoring skill (dogfooded)
 

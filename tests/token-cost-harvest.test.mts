@@ -10,7 +10,9 @@ import type {
 } from '../src/scripts/token-cost-core.mts';
 import {
   allocateStageUsage,
+  buildCompletedIssueWindows,
   buildSample,
+  type CompletedIssueWindow,
   computeStageWindows,
   deriveOutcome,
   extractClaudeUsageTimeline,
@@ -26,6 +28,7 @@ import {
   resolveTrustedMarkerLogins,
   type StageEventWindow,
   scanClaudeVendorSessions,
+  segmentRecordsByEventWindow,
   type VendorSession,
   vendorSessionKey,
 } from '../src/scripts/token-cost-harvest.mts';
@@ -180,6 +183,583 @@ test("scanClaudeVendorSessions scopes each cwd segment's timeline to just that s
   assert.equal(primary0?.adapterResult.joinHints, undefined);
   assert.equal(primary2?.timeline.points.length, 1);
   assert.equal(primary2?.adapterResult.joinHints, undefined);
+});
+
+// --- #2418: event-window issue-number fallback -----------------------------
+
+function stageWindow(startIso: string, endIso: string): StageEventWindow {
+  return { startMs: ms(startIso), endMs: ms(endIso) };
+}
+
+test('buildCompletedIssueWindows: builds an overall window only for an issue with a CLOSED cleanup stage', () => {
+  const all = new Map<string, StageEventWindow>([
+    [
+      '501:claude:work',
+      stageWindow('2026-01-01T00:00:00Z', '2026-01-01T00:30:00Z'),
+    ],
+    [
+      '501:claude:cleanup',
+      stageWindow('2026-01-01T00:55:00Z', '2026-01-01T01:00:00Z'),
+    ],
+    // issue 502 never closed its cleanup stage -- excluded even though it
+    // has other stage windows.
+    [
+      '502:claude:work',
+      stageWindow('2026-01-02T00:00:00Z', '2026-01-02T00:30:00Z'),
+    ],
+  ]);
+  const windows = buildCompletedIssueWindows(all, 'claude');
+  assert.deepEqual(windows, [
+    {
+      issueNumber: 501,
+      startMs: ms('2026-01-01T00:00:00Z'),
+      endMs: ms('2026-01-01T01:00:00Z'),
+    },
+  ]);
+});
+
+test('buildCompletedIssueWindows: filters by vendor', () => {
+  const all = new Map<string, StageEventWindow>([
+    [
+      '501:claude:cleanup',
+      stageWindow('2026-01-01T00:00:00Z', '2026-01-01T00:10:00Z'),
+    ],
+    [
+      '501:codex:cleanup',
+      stageWindow('2026-01-01T02:00:00Z', '2026-01-01T02:10:00Z'),
+    ],
+  ]);
+  const claudeWindows = buildCompletedIssueWindows(all, 'claude');
+  assert.equal(claudeWindows.length, 1);
+  assert.equal(claudeWindows[0].startMs, ms('2026-01-01T00:00:00Z'));
+  const codexWindows = buildCompletedIssueWindows(all, 'codex');
+  assert.equal(codexWindows.length, 1);
+  assert.equal(codexWindows[0].startMs, ms('2026-01-01T02:00:00Z'));
+});
+
+test('segmentRecordsByEventWindow: groups records by the single window each timestamp falls inside', () => {
+  const windows: CompletedIssueWindow[] = [
+    {
+      issueNumber: 501,
+      startMs: ms('2026-01-01T00:00:00Z'),
+      endMs: ms('2026-01-01T01:00:00Z'),
+    },
+    {
+      issueNumber: 502,
+      startMs: ms('2026-01-02T00:00:00Z'),
+      endMs: ms('2026-01-02T01:00:00Z'),
+    },
+  ];
+  const records = [
+    { id: 'a', timestamp: '2026-01-01T00:10:00Z' },
+    { id: 'b', timestamp: '2026-01-02T00:10:00Z' },
+    { id: 'c', timestamp: '2026-01-01T00:20:00Z' },
+  ];
+  const groups = segmentRecordsByEventWindow(records, windows, (r) =>
+    Date.parse((r as { timestamp: string }).timestamp),
+  );
+  assert.deepEqual(
+    (groups.get(501) as { id: string }[]).map((r) => r.id),
+    ['a', 'c'],
+  );
+  assert.deepEqual(
+    (groups.get(502) as { id: string }[]).map((r) => r.id),
+    ['b'],
+  );
+});
+
+test('segmentRecordsByEventWindow: drops a record with no timestamp, and one matching zero windows', () => {
+  const windows: CompletedIssueWindow[] = [
+    {
+      issueNumber: 501,
+      startMs: ms('2026-01-01T00:00:00Z'),
+      endMs: ms('2026-01-01T01:00:00Z'),
+    },
+  ];
+  const records = [
+    { id: 'no-ts' },
+    { id: 'outside', timestamp: '2026-03-01T00:00:00Z' },
+  ];
+  const groups = segmentRecordsByEventWindow(records, windows, (r) =>
+    typeof (r as { timestamp?: string }).timestamp === 'string'
+      ? Date.parse((r as { timestamp: string }).timestamp)
+      : undefined,
+  );
+  assert.equal(groups.size, 0);
+});
+
+test('segmentRecordsByEventWindow: drops a record matching MORE than one window (concurrent-session overlap)', () => {
+  // Two different issues' windows genuinely overlap in wall-clock -- two
+  // concurrent sessions writing to the same shared events.jsonl.
+  const windows: CompletedIssueWindow[] = [
+    {
+      issueNumber: 501,
+      startMs: ms('2026-01-01T00:00:00Z'),
+      endMs: ms('2026-01-01T02:00:00Z'),
+    },
+    {
+      issueNumber: 502,
+      startMs: ms('2026-01-01T01:00:00Z'),
+      endMs: ms('2026-01-01T03:00:00Z'),
+    },
+  ];
+  const records = [{ id: 'ambiguous', timestamp: '2026-01-01T01:30:00Z' }];
+  const groups = segmentRecordsByEventWindow(records, windows, (r) =>
+    Date.parse((r as { timestamp: string }).timestamp),
+  );
+  assert.equal(groups.size, 0);
+});
+
+test('segmentRecordsByEventWindow: a record at the exact instant one window ends and an adjacent one begins matches only the later window (half-open interval, Copilot review finding, #2423)', () => {
+  const windows: CompletedIssueWindow[] = [
+    {
+      issueNumber: 501,
+      startMs: ms('2026-01-01T00:00:00Z'),
+      endMs: ms('2026-01-01T01:00:00Z'),
+    },
+    {
+      issueNumber: 502,
+      startMs: ms('2026-01-01T01:00:00Z'),
+      endMs: ms('2026-01-01T02:00:00Z'),
+    },
+  ];
+  const records = [{ id: 'boundary', timestamp: '2026-01-01T01:00:00Z' }];
+  const groups = segmentRecordsByEventWindow(records, windows, (r) =>
+    Date.parse((r as { timestamp: string }).timestamp),
+  );
+  assert.deepEqual(
+    (groups.get(502) as { id: string }[]).map((r) => r.id),
+    ['boundary'],
+  );
+  assert.equal(groups.has(501), false);
+});
+
+test('scanClaudeVendorSessions: a CLOSED event window supplies issueNumber when cwd-inference fails', () => {
+  const sandbox = mkdtempSync(join(tmpdir(), 'idd-token-cost-harvest-ew-'));
+  writeFileSync(
+    join(sandbox, 'session-ew.jsonl'),
+    `${[
+      // Before the window -- stays unattributed, only counted in the base
+      // session-kind sample.
+      '{"type":"assistant","timestamp":"2026-01-01T00:00:00.000Z","sessionId":"sess-ew-0001","cwd":"/repo","message":{"model":"m","usage":{"input_tokens":1,"cache_read_input_tokens":0,"cache_creation_input_tokens":0,"output_tokens":1}}}',
+      // Inside issue 501's closed window.
+      '{"type":"assistant","timestamp":"2026-01-01T00:20:00.000Z","sessionId":"sess-ew-0001","cwd":"/repo","message":{"model":"m","usage":{"input_tokens":10,"cache_read_input_tokens":0,"cache_creation_input_tokens":0,"output_tokens":5}}}',
+    ].join('\n')}\n`,
+  );
+  const eventWindowsAll = new Map<string, StageEventWindow>([
+    [
+      '501:claude:work',
+      stageWindow('2026-01-01T00:10:00Z', '2026-01-01T00:25:00Z'),
+    ],
+    [
+      '501:claude:cleanup',
+      stageWindow('2026-01-01T00:26:00Z', '2026-01-01T00:30:00Z'),
+    ],
+  ]);
+
+  const sessions = scanClaudeVendorSessions(sandbox, eventWindowsAll);
+
+  assert.equal(sessions.length, 2);
+  const byId = new Map(
+    sessions.map((s) => [s.adapterResult.sample.vendorSessionId, s]),
+  );
+  const base = byId.get('sess-ew-0001');
+  const eventWindowSample = byId.get('sess-ew-0001#ew501');
+
+  assert.equal(base?.adapterResult.joinHints, undefined);
+  assert.equal(base?.timeline.points.length, 2);
+
+  assert.deepEqual(eventWindowSample?.adapterResult.joinHints, {
+    issueNumber: 501,
+  });
+  assert.equal(eventWindowSample?.timeline.points.length, 1);
+  assert.equal(
+    eventWindowSample?.timeline.points[0].atMs,
+    ms('2026-01-01T00:20:00.000Z'),
+  );
+
+  // Deterministic: re-running against the same inputs produces the same
+  // vendorSessionId, so the harvester's own dedup (readExistingVendorSessionKeys)
+  // treats a second run as already-present rather than a new sample.
+  const rerun = scanClaudeVendorSessions(sandbox, eventWindowsAll);
+  assert.deepEqual(
+    rerun.map((s) => s.adapterResult.sample.vendorSessionId).sort(),
+    sessions.map((s) => s.adapterResult.sample.vendorSessionId).sort(),
+  );
+});
+
+test('scanClaudeVendorSessions: two CLOSED event windows in one file produce two distinct #ew samples', () => {
+  const sandbox = mkdtempSync(join(tmpdir(), 'idd-token-cost-harvest-ew-'));
+  writeFileSync(
+    join(sandbox, 'session-ew2.jsonl'),
+    `${[
+      '{"type":"assistant","timestamp":"2026-01-01T00:20:00.000Z","sessionId":"sess-ew2-0001","cwd":"/repo","message":{"model":"m","usage":{"input_tokens":1,"cache_read_input_tokens":0,"cache_creation_input_tokens":0,"output_tokens":1}}}',
+      '{"type":"assistant","timestamp":"2026-01-02T00:20:00.000Z","sessionId":"sess-ew2-0001","cwd":"/repo","message":{"model":"m","usage":{"input_tokens":2,"cache_read_input_tokens":0,"cache_creation_input_tokens":0,"output_tokens":2}}}',
+    ].join('\n')}\n`,
+  );
+  const eventWindowsAll = new Map<string, StageEventWindow>([
+    [
+      '501:claude:work',
+      stageWindow('2026-01-01T00:10:00Z', '2026-01-01T00:25:00Z'),
+    ],
+    [
+      '501:claude:cleanup',
+      stageWindow('2026-01-01T00:26:00Z', '2026-01-01T00:30:00Z'),
+    ],
+    [
+      '502:claude:work',
+      stageWindow('2026-01-02T00:10:00Z', '2026-01-02T00:25:00Z'),
+    ],
+    [
+      '502:claude:cleanup',
+      stageWindow('2026-01-02T00:26:00Z', '2026-01-02T00:30:00Z'),
+    ],
+  ]);
+
+  const sessions = scanClaudeVendorSessions(sandbox, eventWindowsAll);
+  const byId = new Map(
+    sessions.map((s) => [s.adapterResult.sample.vendorSessionId, s]),
+  );
+
+  assert.deepEqual(byId.get('sess-ew2-0001#ew501')?.adapterResult.joinHints, {
+    issueNumber: 501,
+  });
+  assert.deepEqual(byId.get('sess-ew2-0001#ew502')?.adapterResult.joinHints, {
+    issueNumber: 502,
+  });
+});
+
+test('scanClaudeVendorSessions: two DIFFERENT cwd-segments in one file that both fall in the SAME issue window produce exactly one #ew sample, not a duplicate-keyed pair (Copilot review finding, #2423)', () => {
+  const sandbox = mkdtempSync(join(tmpdir(), 'idd-token-cost-harvest-ew-'));
+  writeFileSync(
+    join(sandbox, 'session-ew-multiseg.jsonl'),
+    `${[
+      // Segment 0: cwd "/repo" -- cwd-inference fails.
+      '{"type":"assistant","timestamp":"2026-01-01T00:15:00.000Z","sessionId":"sess-ew-ms-0001","cwd":"/repo","message":{"model":"m","usage":{"input_tokens":1,"cache_read_input_tokens":0,"cache_creation_input_tokens":0,"output_tokens":1}}}',
+      // Segment 1: cwd changes to an ordinary, non-issue-shaped directory
+      // (a ordinary "cd", not a worktree move) -- cwd-inference also
+      // fails here, and this record ALSO falls in issue 501's window.
+      '{"type":"assistant","timestamp":"2026-01-01T00:20:00.000Z","sessionId":"sess-ew-ms-0001","cwd":"/repo/some/subdir","message":{"model":"m","usage":{"input_tokens":2,"cache_read_input_tokens":0,"cache_creation_input_tokens":0,"output_tokens":2}}}',
+    ].join('\n')}\n`,
+  );
+  const eventWindowsAll = new Map<string, StageEventWindow>([
+    [
+      '501:claude:work',
+      stageWindow('2026-01-01T00:10:00Z', '2026-01-01T00:25:00Z'),
+    ],
+    [
+      '501:claude:cleanup',
+      stageWindow('2026-01-01T00:26:00Z', '2026-01-01T00:30:00Z'),
+    ],
+  ]);
+
+  const sessions = scanClaudeVendorSessions(sandbox, eventWindowsAll);
+  const ewSamples = sessions.filter((s) =>
+    s.adapterResult.sample.vendorSessionId.includes('#ew'),
+  );
+
+  // Exactly one #ew501 sample, combining both segments' matching records --
+  // not two duplicate-keyed ones (the bug: partitioning per-segment would
+  // independently re-derive the same #ew501 suffix from each segment).
+  assert.equal(ewSamples.length, 1);
+  assert.equal(
+    ewSamples[0].adapterResult.sample.vendorSessionId,
+    'sess-ew-ms-0001#ew501',
+  );
+  assert.equal(ewSamples[0].timeline.points.length, 2);
+});
+
+test('scanClaudeVendorSessions: an OPEN event window (no cleanup exit yet) never produces an event-window sample', () => {
+  const sandbox = mkdtempSync(join(tmpdir(), 'idd-token-cost-harvest-ew-'));
+  writeFileSync(
+    join(sandbox, 'session-ew-open.jsonl'),
+    '{"type":"assistant","timestamp":"2026-01-01T00:20:00.000Z","sessionId":"sess-ew-open-0001","cwd":"/repo","message":{"model":"m","usage":{"input_tokens":1,"cache_read_input_tokens":0,"cache_creation_input_tokens":0,"output_tokens":1}}}\n',
+  );
+  // work is closed, but cleanup only has an enter -- the loop is still
+  // in-flight from this agent's perspective.
+  const eventWindowsAll = new Map<string, StageEventWindow>([
+    [
+      '501:claude:work',
+      stageWindow('2026-01-01T00:10:00Z', '2026-01-01T00:25:00Z'),
+    ],
+  ]);
+
+  const sessions = scanClaudeVendorSessions(sandbox, eventWindowsAll);
+
+  assert.equal(sessions.length, 1);
+  assert.equal(
+    sessions[0].adapterResult.sample.vendorSessionId,
+    'sess-ew-open-0001',
+  );
+  assert.equal(sessions[0].adapterResult.joinHints, undefined);
+});
+
+test("buildCompletedIssueWindows: a REVERSED cleanup window (a re-attempt's enter paired with a stale earlier exit) is not treated as closed (Codex review finding, #2423)", () => {
+  const all = new Map<string, StageEventWindow>([
+    // A completed first attempt's cleanup enter/exit...
+    // ...then a second attempt re-enters cleanup later than the first
+    // attempt's own exit. readEventWindows pairs the LATEST enter with
+    // the LATEST exit regardless of attempt, producing a reversed
+    // window here (startMs > endMs).
+    [
+      '501:claude:cleanup',
+      {
+        startMs: ms('2026-01-01T02:00:00Z'),
+        endMs: ms('2026-01-01T01:00:00Z'),
+      },
+    ],
+  ]);
+  const windows = buildCompletedIssueWindows(all, 'claude');
+  assert.deepEqual(windows, []);
+});
+
+test('scanClaudeVendorSessions: a reversed cleanup window never produces an event-window sample', () => {
+  const sandbox = mkdtempSync(join(tmpdir(), 'idd-token-cost-harvest-ew-'));
+  writeFileSync(
+    join(sandbox, 'session-ew-reversed.jsonl'),
+    '{"type":"assistant","timestamp":"2026-01-01T01:30:00.000Z","sessionId":"sess-ew-reversed-0001","cwd":"/repo","message":{"model":"m","usage":{"input_tokens":1,"cache_read_input_tokens":0,"cache_creation_input_tokens":0,"output_tokens":1}}}\n',
+  );
+  const eventWindowsAll = new Map<string, StageEventWindow>([
+    [
+      '501:claude:cleanup',
+      {
+        startMs: ms('2026-01-01T02:00:00Z'),
+        endMs: ms('2026-01-01T01:00:00Z'),
+      },
+    ],
+  ]);
+
+  const sessions = scanClaudeVendorSessions(sandbox, eventWindowsAll);
+
+  assert.equal(sessions.length, 1);
+  assert.equal(sessions[0].adapterResult.joinHints, undefined);
+});
+
+test('buildCompletedIssueWindows: a valid, closed cleanup pair caps the window even when a LATER retry stage extends past it (Codex review finding round 2, #2423)', () => {
+  // Issue 501 completed once: cleanup enter@00:55, exit@01:00 (valid).
+  // A re-attempt later did a fresh `work` enter/exit (02:00-02:30) that
+  // has NOT yet reached its own cleanup -- the original cleanup pair is
+  // untouched (still valid), but the retry's work window must not widen
+  // the completed span past the original cleanup's own exit.
+  const all = new Map<string, StageEventWindow>([
+    [
+      '501:claude:work',
+      stageWindow('2026-01-01T00:00:00Z', '2026-01-01T00:30:00Z'),
+    ],
+    [
+      '501:claude:cleanup',
+      stageWindow('2026-01-01T00:55:00Z', '2026-01-01T01:00:00Z'),
+    ],
+    // Careful: eventKey is `${issueNumber}:${vendor}:${stageId}`, one
+    // entry per stageId -- a real retry would overwrite the SAME 'work'
+    // key via readEventWindows' own latest-wins pairing. Modeling that
+    // directly: 'work' now reflects the RETRY's later window, not the
+    // original run's.
+  ]);
+  all.set(
+    '501:claude:work',
+    stageWindow('2026-01-01T02:00:00Z', '2026-01-01T02:30:00Z'),
+  );
+  const windows = buildCompletedIssueWindows(all, 'claude');
+  assert.equal(windows.length, 1);
+  // endMs stays at cleanup's own exit, never extended by the retry's
+  // later work window.
+  assert.equal(windows[0].endMs, ms('2026-01-01T01:00:00Z'));
+  // startMs is NOT widened back to the retry's work window either (it
+  // falls after cleanup's endMs, so it doesn't qualify) -- it stays
+  // anchored at cleanup's own start.
+  assert.equal(windows[0].startMs, ms('2026-01-01T00:55:00Z'));
+});
+
+test('buildCompletedIssueWindows: a reversed non-cleanup stage window overlapping the completed run is treated as contamination, not silently narrowed (Codex review finding round 3, #2423)', () => {
+  // A later attempt's OWN `work` enter posts (00:58), but its `work` exit
+  // fails to post (token-cost-event.mjs is deliberately fail-open) --
+  // readEventWindows still pairs that enter with an EARLIER, unrelated
+  // attempt's stale exit (00:30), producing a reversed window whose own
+  // startMs falls at or before this run's cleanup.endMs. That is direct
+  // evidence the issue's event history is corrupted for this harvest, so
+  // the whole issue must be skipped rather than emitted with a
+  // cleanup-only window that silently hides the contamination.
+  const all = new Map<string, StageEventWindow>([
+    [
+      '501:claude:work',
+      stageWindow('2026-01-01T00:58:00Z', '2026-01-01T00:30:00Z'),
+    ],
+    [
+      '501:claude:cleanup',
+      stageWindow('2026-01-01T00:55:00Z', '2026-01-01T01:00:00Z'),
+    ],
+  ]);
+  const windows = buildCompletedIssueWindows(all, 'claude');
+  assert.deepEqual(windows, []);
+});
+
+test('buildCompletedIssueWindows: a reversed non-cleanup stage window entirely PAST the completed run is ordinary retry noise, not contamination (Codex review finding round 3, #2423)', () => {
+  // Same reversed-pairing shape as above, but this time both ends of the
+  // reversed window fall AFTER the completed run's own cleanup.endMs --
+  // ordinary mid-retry noise from a later, distinct attempt that has not
+  // yet reached its own valid cleanup. It must not block emission of the
+  // already-completed window.
+  const all = new Map<string, StageEventWindow>([
+    [
+      '501:claude:work',
+      stageWindow('2026-01-01T02:00:00Z', '2026-01-01T01:30:00Z'),
+    ],
+    [
+      '501:claude:cleanup',
+      stageWindow('2026-01-01T00:55:00Z', '2026-01-01T01:00:00Z'),
+    ],
+  ]);
+  const windows = buildCompletedIssueWindows(all, 'claude');
+  assert.equal(windows.length, 1);
+  assert.equal(windows[0].startMs, ms('2026-01-01T00:55:00Z'));
+  assert.equal(windows[0].endMs, ms('2026-01-01T01:00:00Z'));
+});
+
+test("scanClaudeVendorSessions: a completed cleanup window does not absorb a later retry's activity", () => {
+  const sandbox = mkdtempSync(join(tmpdir(), 'idd-token-cost-harvest-ew-'));
+  writeFileSync(
+    join(sandbox, 'session-ew-retry.jsonl'),
+    `${[
+      // Inside the original completed window (00:55-01:00).
+      '{"type":"assistant","timestamp":"2026-01-01T00:57:00.000Z","sessionId":"sess-ew-retry-0001","cwd":"/repo","message":{"model":"m","usage":{"input_tokens":1,"cache_read_input_tokens":0,"cache_creation_input_tokens":0,"output_tokens":1}}}',
+      // During the later, still-in-progress retry -- must NOT be folded
+      // into issue 501's completed sample.
+      '{"type":"assistant","timestamp":"2026-01-01T02:15:00.000Z","sessionId":"sess-ew-retry-0001","cwd":"/repo","message":{"model":"m","usage":{"input_tokens":99,"cache_read_input_tokens":0,"cache_creation_input_tokens":0,"output_tokens":99}}}',
+    ].join('\n')}\n`,
+  );
+  const eventWindowsAll = new Map<string, StageEventWindow>([
+    [
+      '501:claude:cleanup',
+      stageWindow('2026-01-01T00:55:00Z', '2026-01-01T01:00:00Z'),
+    ],
+    [
+      '501:claude:work',
+      stageWindow('2026-01-01T02:00:00Z', '2026-01-01T02:30:00Z'),
+    ],
+  ]);
+
+  const sessions = scanClaudeVendorSessions(sandbox, eventWindowsAll);
+  const ewSample = sessions.find((s) =>
+    s.adapterResult.sample.vendorSessionId.includes('#ew'),
+  );
+
+  assert.ok(ewSample);
+  assert.equal(ewSample.timeline.points.length, 1);
+  assert.equal(
+    ewSample.timeline.points[0].atMs,
+    ms('2026-01-01T00:57:00.000Z'),
+  );
+});
+
+test('scanClaudeVendorSessions: the event-window fallback is skipped for the whole file when ANY segment already resolved a cwd-inferred issue number (Copilot review finding round 2, #2423)', () => {
+  const sandbox = mkdtempSync(join(tmpdir(), 'idd-token-cost-harvest-ew-'));
+  writeFileSync(
+    join(sandbox, 'session-ew-mixed.jsonl'),
+    `${[
+      // Segment 0: a real worktree cwd -- resolves issue 4242 via cwd.
+      '{"type":"assistant","timestamp":"2026-01-01T00:00:00.000Z","sessionId":"sess-ew-mixed-0001","cwd":"/repo.issue-4242-x","message":{"model":"m","usage":{"input_tokens":1,"cache_read_input_tokens":0,"cache_creation_input_tokens":0,"output_tokens":1}}}',
+      // Segment 1: an ordinary subdirectory -- cwd-inference fails, but
+      // its own timestamp happens to fall inside issue 501's completed
+      // window purely by coincidence.
+      '{"type":"assistant","timestamp":"2026-01-01T00:20:00.000Z","sessionId":"sess-ew-mixed-0001","cwd":"/repo/some/subdir","message":{"model":"m","usage":{"input_tokens":1,"cache_read_input_tokens":0,"cache_creation_input_tokens":0,"output_tokens":1}}}',
+    ].join('\n')}\n`,
+  );
+  const eventWindowsAll = new Map<string, StageEventWindow>([
+    [
+      '501:claude:work',
+      stageWindow('2026-01-01T00:10:00Z', '2026-01-01T00:25:00Z'),
+    ],
+    [
+      '501:claude:cleanup',
+      stageWindow('2026-01-01T00:26:00Z', '2026-01-01T00:30:00Z'),
+    ],
+  ]);
+
+  const sessions = scanClaudeVendorSessions(sandbox, eventWindowsAll);
+  const ewSamples = sessions.filter((s) =>
+    s.adapterResult.sample.vendorSessionId.includes('#ew'),
+  );
+
+  // No event-window sample at all -- the file already produced a real,
+  // cwd-attributed issue-loop sample (4242) from segment 0.
+  assert.equal(ewSamples.length, 0);
+  const byId = new Map(
+    sessions.map((s) => [s.adapterResult.sample.vendorSessionId, s]),
+  );
+  assert.deepEqual(byId.get('sess-ew-mixed-0001#0')?.adapterResult.joinHints, {
+    issueNumber: 4242,
+  });
+  assert.equal(
+    byId.get('sess-ew-mixed-0001#1')?.adapterResult.joinHints,
+    undefined,
+  );
+});
+
+test('scanClaudeVendorSessions: two DIFFERENT project log files both matching the same issue window are BOTH dropped (cross-file ambiguity guard, Codex review finding, #2423)', () => {
+  const sandbox = mkdtempSync(join(tmpdir(), 'idd-token-cost-harvest-ew-'));
+  writeFileSync(
+    join(sandbox, 'session-ew-fileA.jsonl'),
+    '{"type":"assistant","timestamp":"2026-01-01T00:20:00.000Z","sessionId":"sess-ew-fileA-0001","cwd":"/repo","message":{"model":"m","usage":{"input_tokens":1,"cache_read_input_tokens":0,"cache_creation_input_tokens":0,"output_tokens":1}}}\n',
+  );
+  writeFileSync(
+    join(sandbox, 'session-ew-fileB.jsonl'),
+    // An unrelated concurrent session whose own unattributed activity
+    // happens to fall inside the SAME wall-clock window purely by
+    // coincidence.
+    '{"type":"assistant","timestamp":"2026-01-01T00:21:00.000Z","sessionId":"sess-ew-fileB-0001","cwd":"/repo","message":{"model":"m","usage":{"input_tokens":5,"cache_read_input_tokens":0,"cache_creation_input_tokens":0,"output_tokens":5}}}\n',
+  );
+  const eventWindowsAll = new Map<string, StageEventWindow>([
+    [
+      '501:claude:work',
+      stageWindow('2026-01-01T00:10:00Z', '2026-01-01T00:25:00Z'),
+    ],
+    [
+      '501:claude:cleanup',
+      stageWindow('2026-01-01T00:26:00Z', '2026-01-01T00:30:00Z'),
+    ],
+  ]);
+
+  const sessions = scanClaudeVendorSessions(sandbox, eventWindowsAll);
+  const ewSamples = sessions.filter((s) =>
+    s.adapterResult.sample.vendorSessionId.includes('#ew'),
+  );
+
+  // Neither file's activity is attributed to issue 501 -- emitting one
+  // (or both) would risk crediting an unrelated session's usage to this
+  // issue, and would also make markAmbiguousOverlaps flag any genuine
+  // future sample as ambiguous too. Both files' own plain base samples
+  // are still produced normally.
+  assert.equal(ewSamples.length, 0);
+  assert.equal(sessions.length, 2);
+  assert.ok(sessions.every((s) => s.adapterResult.joinHints === undefined));
+});
+
+test('scanClaudeVendorSessions: an event window is ignored when the segment already has a cwd-inferred issueNumber', () => {
+  const sandbox = mkdtempSync(join(tmpdir(), 'idd-token-cost-harvest-ew-'));
+  writeFileSync(
+    join(sandbox, 'session-ew-cwd.jsonl'),
+    '{"type":"assistant","timestamp":"2026-01-01T00:20:00.000Z","sessionId":"sess-ew-cwd-0001","cwd":"/repo.issue-777-x","message":{"model":"m","usage":{"input_tokens":1,"cache_read_input_tokens":0,"cache_creation_input_tokens":0,"output_tokens":1}}}\n',
+  );
+  // A closed window exists for a DIFFERENT issue at this same timestamp --
+  // must not override the already-successful cwd inference (777), and
+  // must not additionally emit an event-window sample for 501 either,
+  // since the fallback only runs when cwd-inference itself failed.
+  const eventWindowsAll = new Map<string, StageEventWindow>([
+    [
+      '501:claude:work',
+      stageWindow('2026-01-01T00:10:00Z', '2026-01-01T00:25:00Z'),
+    ],
+    [
+      '501:claude:cleanup',
+      stageWindow('2026-01-01T00:26:00Z', '2026-01-01T00:30:00Z'),
+    ],
+  ]);
+
+  const sessions = scanClaudeVendorSessions(sandbox, eventWindowsAll);
+
+  assert.equal(sessions.length, 1);
+  assert.deepEqual(sessions[0].adapterResult.joinHints, { issueNumber: 777 });
 });
 
 test('extractCodexUsageTimeline prefers cumulative total_token_usage when any record has one', () => {
