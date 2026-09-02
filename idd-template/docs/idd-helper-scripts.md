@@ -526,7 +526,13 @@ A4 Step 2 de-prioritization order. Evidence-only: it claims nothing.
 - **Behavior boundary**: evidence-only and heuristic. `## Candidate files` are
   advisory cues, not an exhaustive manifest, so the overlap signal must stay a
   soft A4 Step 2 tie-breaker — never a claim gate. The written discover
-  instructions remain authoritative.
+  instructions remain authoritative. A candidate whose issue body carries no
+  `## Candidate files` section is a structural no-op for this check —
+  `candidateFiles` comes back `[]` and `overlapFlag` comes back `false`
+  regardless of real file contention, not a signal that no contention exists
+  (`#2462`); the
+  `issue-authoring` skill's roadmap-child contract requires the section for
+  exactly this reason.
 
 The exported template remains portable without a `scripts/` directory.
 Adopters can copy the helper separately when they want the same

@@ -200,6 +200,7 @@ Child issue:
 - `## Background`
 - `## Proposed change`
 - `## Acceptance criteria`
+- `## Candidate files`
 - optional dependency line or sequential roadmap marker when needed
 - an autopilot-suitability footer at the end of the body
 
@@ -425,6 +426,10 @@ and dispatches known event types.
 - Handler validates the webhook secret sourced from CI `STRIPE_WEBHOOK_SECRET`.
 - Tests use the Stripe test-mode fixture and pass without manual setup.
 - `pnpm test` and `pnpm run lint` pass in CI.
+
+## Candidate files
+
+- `src/routes/webhooks/stripe.ts`
 ```
 
 The autonomous issue is fully verifiable in CI once the credential
@@ -479,6 +484,10 @@ Add a "Human-dependency isolation examples" section to
 - Examples warn against hiding credentials or product decisions in a
   ready issue.
 - `pnpm run lint:minimum` passes.
+
+## Candidate files
+
+- `skills/issue-authoring/references/draft-patterns.md`
 ```
 
 The website publication decision stays separate. It is not in the
