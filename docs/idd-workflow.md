@@ -392,16 +392,16 @@ standard file the same way a standard-tier session would.
 current claim, created from E1's activity-universe fetch — not a
 literally immutable value a later session may reuse as-is.
 
-| Phase  | Operation                                                                                                   | State     |
-| ------ | ----------------------------------------------------------------------------------------------------------- | --------- |
-| E1     | Fetch threads/reviews/comments, exclude trusted operational markers, and freeze the current item universe   | created   |
-| E2     | Run critique pass and append newly found findings to the same snapshot scope                                | extended  |
-| E3     | Evaluate empty/non-empty routing based on the frozen snapshot plus E2 findings                              | evaluated |
-| E4-E8  | Classify, score, disposition, and verify each snapshot item (PATH A/PATH B) without redefining the snapshot | triaged   |
-| E9-E11 | Fix Accepted PATH A items, validate with a critique pass, and resolve conflicts with `{development-branch}` | actioned  |
-| E12    | Lint, test, and push the commit(s) addressing the actioned items                                            | committed |
-| E13    | Reply to each snapshot item with its disposition and resolve its thread                                     | replied   |
-| E15    | CI resolves for the pushed commit(s) and the loop returns to E1, ending this snapshot's role for the round  | complete  |
+| Phase   | Operation                                                                                                   | State     |
+| ------- | ----------------------------------------------------------------------------------------------------------- | --------- |
+| E1      | Fetch threads/reviews/comments, exclude trusted operational markers, and freeze the current item universe   | created   |
+| E2      | Run critique pass and append newly found findings to the same snapshot scope                                | extended  |
+| E3      | Evaluate empty/non-empty routing based on the frozen snapshot plus E2 findings                              | evaluated |
+| E4-E8   | Classify, score, disposition, and verify each snapshot item (PATH A/PATH B) without redefining the snapshot | triaged   |
+| E9-E11  | Fix Accepted PATH A items, validate with a critique pass, and resolve conflicts with `{development-branch}` | actioned  |
+| E12     | Lint, test, and push the commit(s) addressing the actioned items                                            | committed |
+| E13-E14 | Reply to each snapshot item with its disposition, resolve its thread, and request re-review                 | replied   |
+| E15     | CI resolves for the pushed commit(s) and the loop returns to E1, ending this snapshot's role for the round  | complete  |
 
 The name intentionally emphasizes snapshot semantics: E1-E3 builds and
 gates on a time-locked view, E4-E8 triages that view, and E9-E15 drives
