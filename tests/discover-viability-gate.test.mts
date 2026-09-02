@@ -256,6 +256,59 @@ test('still fails limited scope when a content noun starts a new sentence after 
   assert.ok(result.failedCriteria.includes('limited_scope'));
 });
 
+// --- #2446: limited_scope false positive on a bare topic-describing
+// sentence, no avoidance-cue or content-noun nearby ---------------------
+
+test('passes limited scope when a broad-scope word is the subject of a preparatory-state clause (#2446 shape)', () => {
+  const result = evaluateA4Viability({
+    number: 27,
+    title: 'document staged non-GitHub adoption',
+    body:
+      'GitHub is the only implemented provider today, while the ' +
+      'architecture is being prepared for additional providers. ' +
+      'Single docs-only change. Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, true);
+  assert.deepEqual(result.failedCriteria, []);
+});
+
+test('still fails limited scope when the same word is the subject of an action-verb clause, not a preparatory-state one', () => {
+  // Adversarial case: "architecture is being prepared for" must exclude,
+  // but "architecture is redesigned across" -- an actual broad action, not
+  // an existing staged foundation -- must still fail.
+  const result = evaluateA4Viability({
+    number: 28,
+    title: 'redesign the architecture',
+    body:
+      'The architecture is redesigned across many subsystems. ' +
+      'Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('limited_scope'));
+});
+
+test('still fails limited scope when a preparatory-state clause coexists with a genuinely broad-scope diff description', () => {
+  // Adversarial case: the preparatory-state exclusion on one occurrence
+  // must not suppress a second, independent broad-scope signal in the same
+  // corpus.
+  const result = evaluateA4Viability({
+    number: 29,
+    title: 'redesign the schema while noting staged architecture work',
+    body:
+      'The architecture is being prepared for additional providers, but ' +
+      'this issue itself redesigns the schema across multiple ' +
+      'subsystems. Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('limited_scope'));
+});
+
 test('renderCsv quotes titles containing commas and quotes', () => {
   const csv = renderCsv({
     viable: [{ number: 10, title: 'fix parser, escape "quotes" too' }],
