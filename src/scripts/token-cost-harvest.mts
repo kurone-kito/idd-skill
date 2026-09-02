@@ -1126,11 +1126,19 @@ export function readEventWindows(path: string): Map<string, StageEventWindow> {
     // mix A's enter with B's exit into a window that looks internally
     // valid but spans two attempts, permanently corrupting attribution
     // if it wins the recency comparison below. legacyWindow is only
-    // trustworthy when its own latest enter and latest exit share the
+    // considered when its own latest enter and latest exit share the
     // SAME owner (both unidentified, or the same identified attempt --
     // the latter is always redundant with a `bestIdentified` candidate,
     // since an identified event updates both the bucketed AND the
-    // unconditional maps together).
+    // unconditional maps together). "Both unidentified" is a necessary
+    // check, not a sufficient one: it cannot distinguish one genuine
+    // unidentified attempt's own clean pair from two DIFFERENT
+    // unidentified attempts whose latest enter and exit happen to line
+    // up (e.g. concurrent sessions C and D, neither stamped, C's enter
+    // and D's exit both being the bareKey's own latest). That residual
+    // is byte-identical to the pairing ambiguity this whole function
+    // pre-#2424 could never resolve either -- identity adds no signal
+    // when neither side carries one.
     const legacyOwnersMatch = enterAtOwner.get(key) === exitAtOwner.get(key);
     const legacyWindow =
       legacyOwnersMatch &&
@@ -1341,6 +1349,20 @@ export function buildCompletedIssueWindows(
     // evidence" case is when the WINDOW itself lacks an identity
     // (historical data, or a stage that predates this field even though
     // cleanup itself is a fresh, identified completion).
+    //
+    // Two residuals stay unreachable from event identity alone, both
+    // pre-answered rather than fixed:
+    // - identified cleanup + unidentified stage from a genuinely
+    //   DIFFERENT attempt is indistinguishable from the deploy-straddling
+    //   case above: no event-level signal separates "the stage predates
+    //   this field" from "the stage belongs to an unrelated attempt that
+    //   never got identified." Treated as compatible; the ambiguity
+    //   self-resolves once every event postdates this feature's rollout.
+    // - when BOTH the winning cleanup and a stage window are unidentified
+    //   (owners undefined on both sides), this check proves nothing about
+    //   whether they're the same real attempt or two different
+    //   unidentified ones -- byte-identical to the pre-#2424 residual;
+    //   identity cannot see it either way.
     const idCompatible = (window: StageEventWindow): boolean =>
       window.vendorSessionId === undefined ||
       window.vendorSessionId === cleanup.vendorSessionId;
