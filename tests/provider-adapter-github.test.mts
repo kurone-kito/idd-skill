@@ -1450,6 +1450,26 @@ test('getWorkflowRun preserves a string runId above Number.MAX_SAFE_INTEGER exac
   );
 });
 
+test('listWorkflowRuns preserves a databaseId above Number.MAX_SAFE_INTEGER exactly (Codex review, PR #2429)', () => {
+  const port = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({
+      ghText: () =>
+        JSON.stringify([
+          {
+            databaseId: '9007199254740993',
+            conclusion: 'success',
+            status: 'completed',
+            createdAt: '2026-01-01T00:00:00Z',
+          },
+        ]),
+    }),
+  );
+  const runs = port.listWorkflowRuns('o', 'r', 'CI', 10);
+  assert.equal(runs[0]?.id, '9007199254740993');
+});
+
 test('listCapabilityDeclarations reports every provider-contract group supported, no network call', () => {
   const port = createGithubProviderAdapter(
     'o',
@@ -1473,4 +1493,212 @@ test('listCapabilityDeclarations reports every provider-contract group supported
     (declaration) => declaration.group === 'change-requests',
   );
   assert.equal(changeRequests?.requirement, 'required');
+});
+
+// ---------------------------------------------------------------------------
+// GHES `--hostname` on raw `gh api graphql` calls (Codex review, PR #2429):
+// gh-exec.mts's shared ghGraphql/ghApiJson helpers resolve the correct GHES
+// host (#1962), but this file's paginated GraphQL methods build their own
+// `gh api graphql` args by hand (a tight-loop stdin hazard, #1396) rather
+// than routing through that shared helper -- several of #2267's methods
+// replaced an old call path that DID resolve the host this way
+// (advisory-convergence.mts's fetchPrAuthor/fetchReviewThreads,
+// review-clause.mts's fetchReviewsAndHeadCommit, advisory-wait-state.mts's
+// requested-reviewer query all imported gh-exec.mts's ghGraphql), so
+// omitting `--hostname` here was a genuine regression for a GHES adopter.
+// ---------------------------------------------------------------------------
+
+function withGhHostEnv(
+  overrides: { GH_HOST?: string; GITHUB_SERVER_URL?: string },
+  run: () => void,
+): void {
+  const originalGhHost = process.env.GH_HOST;
+  const originalServerUrl = process.env.GITHUB_SERVER_URL;
+  if (overrides.GH_HOST === undefined) {
+    delete process.env.GH_HOST;
+  } else {
+    process.env.GH_HOST = overrides.GH_HOST;
+  }
+  if (overrides.GITHUB_SERVER_URL === undefined) {
+    delete process.env.GITHUB_SERVER_URL;
+  } else {
+    process.env.GITHUB_SERVER_URL = overrides.GITHUB_SERVER_URL;
+  }
+  try {
+    run();
+  } finally {
+    if (originalGhHost === undefined) {
+      delete process.env.GH_HOST;
+    } else {
+      process.env.GH_HOST = originalGhHost;
+    }
+    if (originalServerUrl === undefined) {
+      delete process.env.GITHUB_SERVER_URL;
+    } else {
+      process.env.GITHUB_SERVER_URL = originalServerUrl;
+    }
+  }
+}
+
+test('getChangeRequestAuthor targets the resolved GHES host on a raw gh api graphql call', () => {
+  withGhHostEnv({ GITHUB_SERVER_URL: 'https://ghes.example.com' }, () => {
+    let capturedArgs: string[] | undefined;
+    const port = createGithubProviderAdapter(
+      'o',
+      'r',
+      fakeDeps({
+        ghText: (args) => {
+          capturedArgs = args;
+          return JSON.stringify({ data: { repository: { pullRequest: {} } } });
+        },
+      }),
+    );
+    port.getChangeRequestAuthor(7);
+    const hostnameIndex = capturedArgs?.indexOf('--hostname') ?? -1;
+    assert.ok(
+      hostnameIndex >= 0,
+      `expected --hostname in args, got: ${capturedArgs?.join(' ')}`,
+    );
+    assert.equal(capturedArgs?.[hostnameIndex + 1], 'ghes.example.com');
+  });
+});
+
+test('getChangeRequestAuthor omits --hostname for github.com (no regression on the common case)', () => {
+  withGhHostEnv({ GITHUB_SERVER_URL: 'https://github.com' }, () => {
+    let capturedArgs: string[] | undefined;
+    const port = createGithubProviderAdapter(
+      'o',
+      'r',
+      fakeDeps({
+        ghText: (args) => {
+          capturedArgs = args;
+          return JSON.stringify({ data: { repository: { pullRequest: {} } } });
+        },
+      }),
+    );
+    port.getChangeRequestAuthor(7);
+    assert.ok(!capturedArgs?.includes('--hostname'));
+  });
+});
+
+test('getChangeRequestReviewsWithHeadCommitDate throws on a GraphQL errors payload instead of treating it as no evidence (CodeRabbit review, PR #2429)', () => {
+  const port = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({
+      ghText: () =>
+        JSON.stringify({ errors: [{ message: 'boom' }], data: null }),
+    }),
+  );
+  assert.throws(
+    () => port.getChangeRequestReviewsWithHeadCommitDate(7),
+    /boom/,
+  );
+});
+
+// listChangeRequestGraphqlComments / listChangeRequestGraphqlReviews
+// (Codex review, PR #2429): a missing pullRequest node or connection must
+// fail fast rather than silently read as zero comments/reviews, matching
+// merged-pr-feedback-sweep.mts's pre-migration fetchAllNodes -- otherwise a
+// transient/permission anomaly makes a PR look "clean" instead of failing
+// loudly.
+test('listChangeRequestGraphqlComments returns nodes on a normal payload', () => {
+  const port = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({
+      ghText: () =>
+        JSON.stringify({
+          data: {
+            repository: {
+              pullRequest: {
+                comments: {
+                  nodes: [
+                    {
+                      body: 'hi',
+                      url: 'https://example.invalid',
+                      createdAt: '2026-01-01T00:00:00Z',
+                      updatedAt: '2026-01-01T00:00:00Z',
+                      author: { login: 'octocat' },
+                    },
+                  ],
+                  pageInfo: { hasNextPage: false, endCursor: null },
+                },
+              },
+            },
+          },
+        }),
+    }),
+  );
+  assert.deepEqual(port.listChangeRequestGraphqlComments(7), [
+    {
+      body: 'hi',
+      url: 'https://example.invalid',
+      createdAt: '2026-01-01T00:00:00Z',
+      updatedAt: '2026-01-01T00:00:00Z',
+      authorLogin: 'octocat',
+    },
+  ]);
+});
+
+test('listChangeRequestGraphqlComments throws on a missing pullRequest node', () => {
+  const port = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({
+      ghText: () => JSON.stringify({ data: { repository: {} } }),
+    }),
+  );
+  assert.throws(
+    () => port.listChangeRequestGraphqlComments(7),
+    /no pullRequest node/,
+  );
+});
+
+test('listChangeRequestGraphqlComments throws on a null comments connection', () => {
+  const port = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({
+      ghText: () =>
+        JSON.stringify({
+          data: { repository: { pullRequest: { comments: null } } },
+        }),
+    }),
+  );
+  assert.throws(
+    () => port.listChangeRequestGraphqlComments(7),
+    /null comments connection/,
+  );
+});
+
+test('listChangeRequestGraphqlReviews throws on a missing pullRequest node', () => {
+  const port = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({
+      ghText: () => JSON.stringify({ data: { repository: {} } }),
+    }),
+  );
+  assert.throws(
+    () => port.listChangeRequestGraphqlReviews(7),
+    /no pullRequest node/,
+  );
+});
+
+test('listChangeRequestGraphqlReviews throws on a null reviews connection', () => {
+  const port = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({
+      ghText: () =>
+        JSON.stringify({
+          data: { repository: { pullRequest: { reviews: null } } },
+        }),
+    }),
+  );
+  assert.throws(
+    () => port.listChangeRequestGraphqlReviews(7),
+    /null reviews connection/,
+  );
 });

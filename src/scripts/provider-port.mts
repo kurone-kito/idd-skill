@@ -989,7 +989,14 @@ export interface ProviderPort {
     workflowName: string,
     limit: number,
   ): {
-    id: number;
+    /** `string`, not `number`: a `databaseId` above
+     * `Number.MAX_SAFE_INTEGER` loses precision through `Number()` --
+     * `ci-wait-policy.mts`'s sibling-exclusion compares this against a
+     * string-valued `--run-id`, so a rounded id could wrongly stop
+     * matching the current run (Codex review, PR #2429; matches
+     * {@link getWorkflowRun}'s `runId` parameter, kept `string | number`
+     * for the same reason). */
+    id: string;
     conclusion: string | null;
     status: string;
     createdAt: string;

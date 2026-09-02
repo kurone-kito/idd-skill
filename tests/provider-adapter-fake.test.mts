@@ -181,15 +181,30 @@ test('listWorkflowRuns honors limit, matching the GitHub adapter', () => {
   const port = createFakeProviderAdapter({
     workflowRunLists: {
       'o/r/CI': [
-        { id: 1, conclusion: 'success', status: 'completed', createdAt: '' },
-        { id: 2, conclusion: 'success', status: 'completed', createdAt: '' },
-        { id: 3, conclusion: 'success', status: 'completed', createdAt: '' },
+        {
+          id: '1',
+          conclusion: 'success',
+          status: 'completed',
+          createdAt: '',
+        },
+        {
+          id: '2',
+          conclusion: 'success',
+          status: 'completed',
+          createdAt: '',
+        },
+        {
+          id: '3',
+          conclusion: 'success',
+          status: 'completed',
+          createdAt: '',
+        },
       ],
     },
   });
   assert.deepEqual(
     port.listWorkflowRuns('o', 'r', 'CI', 2).map((run) => run.id),
-    [1, 2],
+    ['1', '2'],
   );
 });
 

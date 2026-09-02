@@ -179,7 +179,7 @@ export interface FakeProviderFixture {
   workflowRunLists?: Record<
     string,
     {
-      id: number;
+      id: string;
       conclusion: string | null;
       status: string;
       createdAt: string;
@@ -694,7 +694,7 @@ export function createFakeProviderAdapter(
       workflowName: string,
       limit: number,
     ): {
-      id: number;
+      id: string;
       conclusion: string | null;
       status: string;
       createdAt: string;

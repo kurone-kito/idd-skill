@@ -19,6 +19,7 @@ import {
   ghText,
   ghTextAsync,
   readGithubRepoDefaultBranch,
+  resolveGhApiHostname,
   withBoundedRetry,
 } from './gh-exec.mts';
 import { deriveGhHttpStatus } from './gh-http-status.mts';
@@ -58,6 +59,20 @@ import type {
   ProviderTraversalIssueLookup,
   ProviderWorkItem,
 } from './provider-port.mts';
+
+/**
+ * `--hostname` args to splice into a hand-built `['api', 'graphql', ...]`
+ * array right after `'graphql'`, matching `gh-exec.mts`'s `ghGraphql`/
+ * `ghApiJson` (#1962) -- this file's raw GraphQL call sites build their own
+ * args (see `fetchReviewThreadsGeneric`'s doc comment for why: a tight-loop
+ * stdin hazard, #1396) rather than routing through that shared helper, so
+ * each site must resolve the GHES host itself instead of always defaulting
+ * to github.com (Copilot review, PR #2429).
+ */
+function graphqlHostnameArgs(): string[] {
+  const hostname = resolveGhApiHostname();
+  return hostname ? ['--hostname', hostname] : [];
+}
 
 /** Raw REST issue-payload fields this adapter reads, GitHub-shaped. */
 interface RawIssue {
@@ -271,6 +286,7 @@ function fetchReviewThreadsGeneric(
       const parsed = runQuery([
         'api',
         'graphql',
+        ...graphqlHostnameArgs(),
         '-f',
         `query=${continuationQuery}`,
         '-f',
@@ -299,6 +315,7 @@ function fetchReviewThreadsGeneric(
     const apiArgs = [
       'api',
       'graphql',
+      ...graphqlHostnameArgs(),
       '-f',
       `query=${outerQuery}`,
       '-f',
@@ -1557,6 +1574,7 @@ export function createGithubProviderAdapter(
       const apiArgs = [
         'api',
         'graphql',
+        ...graphqlHostnameArgs(),
         '-f',
         `query=${query}`,
         '-f',
@@ -1663,6 +1681,7 @@ export function createGithubProviderAdapter(
         const apiArgs = [
           'api',
           'graphql',
+          ...graphqlHostnameArgs(),
           '-f',
           `query=${query}`,
           '-f',
@@ -1792,6 +1811,7 @@ export function createGithubProviderAdapter(
         const apiArgs = [
           'api',
           'graphql',
+          ...graphqlHostnameArgs(),
           '-f',
           `query=${query}`,
           '-f',
@@ -1829,8 +1849,24 @@ export function createGithubProviderAdapter(
             } | null;
           };
         };
-        const connection = parsed.data?.repository?.pullRequest?.comments;
-        for (const node of connection?.nodes ?? []) {
+        // Fail fast on a missing pullRequest node or connection, matching
+        // merged-pr-feedback-sweep.mts's pre-migration fetchAllNodes
+        // (Codex review, PR #2429): an absent node/connection is otherwise
+        // read as zero comments, making a PR look "clean" -- the silent
+        // false negative this check exists to prevent.
+        const pullRequest = parsed.data?.repository?.pullRequest;
+        if (pullRequest == null) {
+          throw new Error(
+            `listChangeRequestGraphqlComments: PR #${number} returned no pullRequest node`,
+          );
+        }
+        const connection = pullRequest.comments;
+        if (connection == null) {
+          throw new Error(
+            `listChangeRequestGraphqlComments: PR #${number} returned a null comments connection`,
+          );
+        }
+        for (const node of connection.nodes ?? []) {
           out.push({
             body: String(node.body ?? ''),
             url: String(node.url ?? ''),
@@ -1839,7 +1875,7 @@ export function createGithubProviderAdapter(
             authorLogin: String(node.author?.login ?? ''),
           });
         }
-        const pageInfo = connection?.pageInfo;
+        const pageInfo = connection.pageInfo;
         if (!pageInfo?.hasNextPage) {
           break;
         }
@@ -1870,6 +1906,7 @@ export function createGithubProviderAdapter(
         const apiArgs = [
           'api',
           'graphql',
+          ...graphqlHostnameArgs(),
           '-f',
           `query=${query}`,
           '-f',
@@ -1907,8 +1944,23 @@ export function createGithubProviderAdapter(
             } | null;
           };
         };
-        const connection = parsed.data?.repository?.pullRequest?.reviews;
-        for (const node of connection?.nodes ?? []) {
+        // Fail fast on a missing pullRequest node or connection, matching
+        // merged-pr-feedback-sweep.mts's pre-migration fetchAllNodes
+        // (Codex review, PR #2429) -- see listChangeRequestGraphqlComments's
+        // identical check above for the full rationale.
+        const pullRequest = parsed.data?.repository?.pullRequest;
+        if (pullRequest == null) {
+          throw new Error(
+            `listChangeRequestGraphqlReviews: PR #${number} returned no pullRequest node`,
+          );
+        }
+        const connection = pullRequest.reviews;
+        if (connection == null) {
+          throw new Error(
+            `listChangeRequestGraphqlReviews: PR #${number} returned a null reviews connection`,
+          );
+        }
+        for (const node of connection.nodes ?? []) {
           out.push({
             body: String(node.body ?? ''),
             url: String(node.url ?? ''),
@@ -1918,7 +1970,7 @@ export function createGithubProviderAdapter(
             authorLogin: String(node.author?.login ?? ''),
           });
         }
-        const pageInfo = connection?.pageInfo;
+        const pageInfo = connection.pageInfo;
         if (!pageInfo?.hasNextPage) {
           break;
         }
@@ -1986,7 +2038,7 @@ export function createGithubProviderAdapter(
       workflowName: string,
       limit: number,
     ): {
-      id: number;
+      id: string;
       conclusion: string | null;
       status: string;
       createdAt: string;
@@ -2013,7 +2065,9 @@ export function createGithubProviderAdapter(
         createdAt?: unknown;
       }[];
       return rows.map((row) => ({
-        id: Number(row.databaseId),
+        // String(...), not Number(...): preserves a databaseId above
+        // Number.MAX_SAFE_INTEGER exactly (Codex review, PR #2429).
+        id: String(row.databaseId ?? ''),
         conclusion: row.conclusion == null ? null : String(row.conclusion),
         status: String(row.status ?? ''),
         createdAt: String(row.createdAt ?? ''),
@@ -2121,6 +2175,7 @@ export function createGithubProviderAdapter(
       const apiArgs = [
         'api',
         'graphql',
+        ...graphqlHostnameArgs(),
         '-f',
         `query=${query}`,
         '-f',
@@ -2219,6 +2274,7 @@ export function createGithubProviderAdapter(
         const apiArgs = [
           'api',
           'graphql',
+          ...graphqlHostnameArgs(),
           '-f',
           `query=${query}`,
           '-f',
@@ -2231,9 +2287,9 @@ export function createGithubProviderAdapter(
         if (cursor) {
           apiArgs.push('-f', `cursor=${cursor}`);
         }
-        const parsed = JSON.parse(
-          deps.ghText(apiArgs, GH_TEXT_LOOP_OPTIONS),
-        ) as {
+        const raw = JSON.parse(deps.ghText(apiArgs, GH_TEXT_LOOP_OPTIONS));
+        assertNoGraphqlErrors(raw, 'getChangeRequestReviewsWithHeadCommitDate');
+        const parsed = raw as {
           data?: {
             repository?: {
               pullRequest?: {
@@ -2344,6 +2400,7 @@ export function createGithubProviderAdapter(
       const apiArgs = [
         'api',
         'graphql',
+        ...graphqlHostnameArgs(),
         '-f',
         `query=${mutation}`,
         '-f',
