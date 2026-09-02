@@ -15,6 +15,7 @@ import {
   isInaccessibleIssueLookupError,
   parseArgs,
   parseSwarmFloorArg,
+  renderCsv,
   summarizeSwarmFloorEligibility,
 } from '../src/scripts/discover-readiness-check.mts';
 import { createFakeProviderAdapter } from '../src/scripts/provider-adapter-fake.mts';
@@ -508,6 +509,7 @@ test('open roadmap dependencies are ignored as parent epics', async () => {
       title: 'candidate',
       autopilotSuitability: null,
       belowFloor: false,
+      isRoadmap: false,
     },
   ]);
 });
@@ -624,6 +626,7 @@ test('treats inaccessible target issue as unresolvable', async () => {
       reasons: ['issue_inaccessible'],
       autopilotSuitability: null,
       belowFloor: false,
+      isRoadmap: false,
     },
   ]);
   assert.deepEqual(summary.unresolvable, [
@@ -750,6 +753,7 @@ test('surfaces autopilot-suitability score and below-floor flag without changing
       title: 'scored above floor',
       autopilotSuitability: 4,
       belowFloor: false,
+      isRoadmap: false,
     },
   );
   assert.deepEqual(
@@ -759,6 +763,7 @@ test('surfaces autopilot-suitability score and below-floor flag without changing
       title: 'scored below floor',
       autopilotSuitability: 2,
       belowFloor: true,
+      isRoadmap: false,
     },
   );
   assert.deepEqual(
@@ -768,6 +773,7 @@ test('surfaces autopilot-suitability score and below-floor flag without changing
       title: 'unscored',
       autopilotSuitability: null,
       belowFloor: false,
+      isRoadmap: false,
     },
   );
 });
@@ -792,6 +798,7 @@ test('surfaces the suitability signal on filtered-out issues too', async () => {
       reasons: ['label:status:needs-decision'],
       autopilotSuitability: 5,
       belowFloor: false,
+      isRoadmap: false,
     },
   ]);
 });
@@ -854,6 +861,7 @@ test('surfaces the suitability signal on a not-open scored issue', async () => {
       reasons: ['issue_not_open'],
       autopilotSuitability: 3,
       belowFloor: false,
+      isRoadmap: false,
     },
   ]);
 });
@@ -897,8 +905,132 @@ test('forces a neutral signal when the suitability kill switch is off', async ()
       title: 'below floor but kill switch off',
       autopilotSuitability: null,
       belowFloor: false,
+      isRoadmap: false,
     },
   ]);
+});
+
+// --- #2450: flag roadmap-labeled candidates -------------------------------
+
+test('flags a roadmap-labeled ready issue with isRoadmap: true', async () => {
+  const summary = await evaluateDiscoverReadiness([1601], {
+    loadIssue: async () => ({
+      number: 1601,
+      title: 'roadmap child work',
+      state: 'OPEN',
+      body: 'no dependencies',
+      labels: [{ name: 'roadmap' }],
+    }),
+    findRoadmapsByMarker: async () => [],
+  });
+
+  assert.deepEqual(summary.ready, [
+    {
+      number: 1601,
+      title: 'roadmap child work',
+      autopilotSuitability: null,
+      belowFloor: false,
+      isRoadmap: true,
+    },
+  ]);
+});
+
+test('does not flag a non-roadmap ready issue', async () => {
+  const summary = await evaluateDiscoverReadiness([1602], {
+    loadIssue: async () => ({
+      number: 1602,
+      title: 'ordinary task',
+      state: 'OPEN',
+      body: '',
+      labels: [{ name: 'enhancement' }],
+    }),
+    findRoadmapsByMarker: async () => [],
+  });
+
+  assert.equal(summary.ready[0]?.isRoadmap, false);
+});
+
+test('isRoadmap uses only the configured label, not the title heuristic isParentEpicIssue also applies', async () => {
+  const summary = await evaluateDiscoverReadiness([1603], {
+    loadIssue: async () => ({
+      // Title starts with "roadmap" (the isParentEpicIssue title heuristic)
+      // but carries no roadmap label -- isRoadmap must stay false since it
+      // is scoped to label membership only, per the issue's own AC.
+      number: 1603,
+      title: 'roadmap-adjacent cleanup',
+      state: 'OPEN',
+      body: '',
+      labels: [],
+    }),
+    findRoadmapsByMarker: async () => [],
+  });
+
+  assert.equal(summary.ready[0]?.isRoadmap, false);
+});
+
+test('isRoadmap never affects belowFloor filtering or ready/filteredOut classification', async () => {
+  const summary = await evaluateDiscoverReadiness([1604], {
+    autopilotSuitabilityFloor: 4,
+    loadIssue: async () => ({
+      number: 1604,
+      title: 'scored-below-floor roadmap issue',
+      state: 'OPEN',
+      body: '<!-- idd-skill-autopilot-suitability: 2 -->',
+      labels: [{ name: 'roadmap' }],
+    }),
+    findRoadmapsByMarker: async () => [],
+  });
+
+  assert.equal(summary.ready.length, 1);
+  assert.equal(summary.ready[0]?.isRoadmap, true);
+  assert.equal(summary.ready[0]?.belowFloor, true);
+
+  const eligibility = summarizeSwarmFloorEligibility(summary);
+  assert.equal(eligibility.eligible.length, 0);
+});
+
+test('renderCsv includes the isRoadmap column for ready and filtered rows', () => {
+  const csv = renderCsv({
+    ready: [
+      {
+        number: 10,
+        title: 'roadmap ready',
+        autopilotSuitability: null,
+        belowFloor: false,
+        isRoadmap: true,
+      },
+    ],
+    filteredOut: [
+      {
+        number: 20,
+        title: 'blocked',
+        reasons: ['label:status:needs-decision'],
+        autopilotSuitability: null,
+        belowFloor: false,
+        isRoadmap: false,
+      },
+    ],
+    unresolvable: [],
+    warnings: [],
+    summary: {
+      total: 2,
+      readyCount: 1,
+      filteredCount: 1,
+      unresolvableCount: 0,
+      filteredByReason: { 'label:status:needs-decision': 1 },
+    },
+  });
+
+  const lines = csv.trim().split('\n');
+  assert.equal(
+    lines[0],
+    'number,title,status,reasons,suitability,belowFloor,isRoadmap',
+  );
+  assert.equal(lines[1], '10,roadmap ready,ready,,,false,true');
+  assert.equal(
+    lines[2],
+    '20,blocked,filtered,label:status:needs-decision,,false,false',
+  );
 });
 
 test('summarizeSwarmFloorEligibility keeps ready issues at or above the floor', () => {
@@ -911,13 +1043,21 @@ test('summarizeSwarmFloorEligibility keeps ready issues at or above the floor', 
         title: 'above',
         autopilotSuitability: 5,
         belowFloor: false,
+        isRoadmap: false,
       },
-      { number: 20, title: 'below', autopilotSuitability: 2, belowFloor: true },
+      {
+        number: 20,
+        title: 'below',
+        autopilotSuitability: 2,
+        belowFloor: true,
+        isRoadmap: false,
+      },
       {
         number: 30,
         title: 'no score',
         autopilotSuitability: null,
         belowFloor: false,
+        isRoadmap: true,
       },
     ],
     filteredOut: [],
@@ -939,12 +1079,14 @@ test('summarizeSwarmFloorEligibility keeps ready issues at or above the floor', 
         title: 'above',
         autopilotSuitability: 5,
         belowFloor: false,
+        isRoadmap: false,
       },
       {
         number: 30,
         title: 'no score',
         autopilotSuitability: null,
         belowFloor: false,
+        isRoadmap: true,
       },
     ],
     eligible_count: 2,

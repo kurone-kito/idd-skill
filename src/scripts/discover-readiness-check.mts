@@ -67,14 +67,29 @@ export interface ReadinessSuitabilitySignal {
   belowFloor: boolean;
 }
 
+/**
+ * Whether this issue carries the configured `labels.roadmapLabelName`
+ * (#2450) -- label membership only, not `isParentEpicIssue`'s additional
+ * title-startswith-"roadmap" heuristic, since this flag exists to surface
+ * authored roadmap-label intent, not the broader A2 dependency-exemption
+ * signal.
+ */
+interface ReadinessRoadmapSignal {
+  isRoadmap: boolean;
+}
+
 /** One issue that passed every readiness filter. */
-export interface ReadinessReadyIssue extends ReadinessSuitabilitySignal {
+export interface ReadinessReadyIssue
+  extends ReadinessSuitabilitySignal,
+    ReadinessRoadmapSignal {
   number: number;
   title: string;
 }
 
 /** One issue removed by a readiness filter, with the failed reasons. */
-export interface ReadinessFilteredIssue extends ReadinessSuitabilitySignal {
+export interface ReadinessFilteredIssue
+  extends ReadinessSuitabilitySignal,
+    ReadinessRoadmapSignal {
   number: number;
   title: string;
   reasons: string[];
@@ -337,6 +352,8 @@ export async function evaluateDiscoverReadiness(
         // No body is available for a not-found / inaccessible issue, so the
         // score is "no score" and the issue is never flagged below floor.
         ...suitabilitySignal(''),
+        // No label data available either.
+        isRoadmap: false,
       });
       continue;
     }
@@ -346,6 +363,7 @@ export async function evaluateDiscoverReadiness(
         title: issue.title,
         reasons: ['issue_not_open'],
         ...suitabilitySignal(issue.body),
+        isRoadmap: issue.labels.has(roadmapLabelName),
       });
       continue;
     }
@@ -444,11 +462,13 @@ export async function evaluateDiscoverReadiness(
     }
 
     const signal = suitabilitySignal(issue.body);
+    const isRoadmap = labels.has(roadmapLabelName);
     if (reasons.size === 0) {
       ready.push({
         number: issue.number,
         title: issue.title,
         ...signal,
+        isRoadmap,
       });
       continue;
     }
@@ -458,6 +478,7 @@ export async function evaluateDiscoverReadiness(
       title: issue.title,
       reasons: [...reasons].sort(),
       ...signal,
+      isRoadmap,
     });
   }
 
@@ -699,8 +720,8 @@ function printHelp() {
 
 Output schema (JSON mode):
   {
-    "ready": [{ "number": 123, "title": "...", "autopilotSuitability": 4, "belowFloor": false }],
-    "filteredOut": [{ "number": 124, "title": "...", "reasons": ["..."], "autopilotSuitability": null, "belowFloor": false }],
+    "ready": [{ "number": 123, "title": "...", "autopilotSuitability": 4, "belowFloor": false, "isRoadmap": false }],
+    "filteredOut": [{ "number": 124, "title": "...", "reasons": ["..."], "autopilotSuitability": null, "belowFloor": false, "isRoadmap": false }],
     "unresolvable": [{ "issueNumber": 124, "kind": "...", "reference": "...", "reason": "..." }],
     "warnings": [{ "issueNumber": 124, "message": "Warning: ..." }],
     "summary": { "total": 2, "readyCount": 1, "filteredCount": 1, "unresolvableCount": 0, "filteredByReason": { "...": 1 } }
@@ -708,7 +729,7 @@ Output schema (JSON mode):
 
 Output schema (--swarm-floor mode):
   {
-    "eligible": [{ "number": 123, "title": "...", "autopilotSuitability": 4, "belowFloor": false }],
+    "eligible": [{ "number": 123, "title": "...", "autopilotSuitability": 4, "belowFloor": false, "isRoadmap": false }],
     "eligible_count": 1,
     "total": 7
   }
@@ -864,16 +885,18 @@ function countReasons(
   return counts;
 }
 
-function renderCsv(summary: ReadinessSummary): string {
-  const lines = ['number,title,status,reasons,suitability,belowFloor'];
+export function renderCsv(summary: ReadinessSummary): string {
+  const lines = [
+    'number,title,status,reasons,suitability,belowFloor,isRoadmap',
+  ];
   for (const item of summary.ready) {
     lines.push(
-      `${item.number},${escapeCsv(item.title)},ready,,${formatScore(item.autopilotSuitability)},${item.belowFloor}`,
+      `${item.number},${escapeCsv(item.title)},ready,,${formatScore(item.autopilotSuitability)},${item.belowFloor},${item.isRoadmap}`,
     );
   }
   for (const item of summary.filteredOut) {
     lines.push(
-      `${item.number},${escapeCsv(item.title)},filtered,${escapeCsv(item.reasons.join(';'))},${formatScore(item.autopilotSuitability)},${item.belowFloor}`,
+      `${item.number},${escapeCsv(item.title)},filtered,${escapeCsv(item.reasons.join(';'))},${formatScore(item.autopilotSuitability)},${item.belowFloor},${item.isRoadmap}`,
     );
   }
   return `${lines.join('\n')}\n`;
