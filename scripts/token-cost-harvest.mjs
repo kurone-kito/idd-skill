@@ -1323,6 +1323,15 @@ export function scanClaudeVendorSessions(
 ) {
   const out = [];
   if (!existsSync(projectDir)) {
+    // Unlike Codex/Grok's session directories, this one is cwd-encoded
+    // (#2439): a missing directory here usually means the CLI was
+    // invoked from an issue worktree rather than the primary worktree
+    // Claude Code actually launched the session from, not a genuine
+    // "no sessions yet" case -- silently returning [] made that gap
+    // indistinguishable from a real empty result (#2426).
+    process.stderr.write(
+      `token-cost-harvest: Claude project directory ${projectDir} does not exist -- this CLI's Claude scan is cwd-sensitive; re-run from the workstation's primary worktree (the cwd Claude Code sessions actually launch from), not an issue-specific worktree.\n`,
+    );
     return out;
   }
   const completedIssueWindows = buildCompletedIssueWindows(
