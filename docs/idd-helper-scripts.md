@@ -528,8 +528,9 @@ A4 Step 2 de-prioritization order. Evidence-only: it claims nothing.
   soft A4 Step 2 tie-breaker — never a claim gate. The written discover
   instructions remain authoritative. A candidate whose issue body carries no
   `## Candidate files` section is a structural no-op for this check —
-  `candidateFiles`/`overlapFlag` come back empty/false regardless of real file
-  contention, not a signal that no contention exists (`#2462`); the
+  `candidateFiles` comes back `[]` and `overlapFlag` comes back `false`
+  regardless of real file contention, not a signal that no contention exists
+  (`#2462`); the
   `issue-authoring` skill's roadmap-child contract requires the section for
   exactly this reason.
 

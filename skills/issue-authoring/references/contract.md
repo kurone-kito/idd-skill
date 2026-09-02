@@ -607,11 +607,14 @@ Validation expectations:
 
 ### Candidate files format
 
-The optional `## Candidate files` section is not free-form prose: the
+The `## Candidate files` section is not free-form prose: the
 `discover-shared-file-overlap` evidence helper parses it as machine input
 for the A4 Step 2 high-contention shared-file check (see
 [High-contention shared-file overlap](https://github.com/kurone-kito/idd-skill/blob/main/docs/policy-constants.md#high-contention-shared-files)).
 Populate it accurately rather than as a loose reading aid for humans.
+Optional for an orphan or roadmap issue; required for a
+[child issue under a roadmap](#child-issue-under-a-roadmap) (see
+[Required draft content](#required-draft-content) below).
 
 - List each candidate file path inside backticks, one path (or one
   bullet) per line — for example `` - `src/scripts/idd-onboard.mts` ``.
