@@ -191,15 +191,16 @@ Before posting a claim, also run this **scoped branch pattern check**
 — fast-path collision detection for parallel sessions on the same
 issue (different slug variants).
 
-1. **Local worktree scan**: use porcelain, not a name grep — a detached
-   worktree has none (#2225):
+1. **Local worktree scan**: porcelain, not a name grep — detached has
+   none (#2225):
 
    ```sh
    git worktree list --porcelain -z
    ```
 
    Match `branch refs/heads/issue/<number>-…`; for `detached`, resolve
-   its rebase sequencer `head-name` before ruling it out.
+   `head-name` under `git -C <worktree> rev-parse --git-path
+   rebase-merge`/`rebase-apply` first.
 
 2. **Remote branch scan** (scoped Refs API, not repo-wide):
    Query the Refs API with the issue-number prefix only, to stay within
