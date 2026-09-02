@@ -905,7 +905,11 @@ test('collectPreMergeReadiness against a fake provider: a matching CODEOWNER res
       'expected the fixture-provided write permission to resolve cleanly via the injected port',
     );
   } finally {
-    process.env.PATH = originalPath;
+    if (originalPath === undefined) {
+      delete process.env.PATH;
+    } else {
+      process.env.PATH = originalPath;
+    }
     process.chdir(originalCwd);
     rmSync(cwdRoot, { recursive: true, force: true });
   }
