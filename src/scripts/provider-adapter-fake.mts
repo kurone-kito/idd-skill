@@ -12,15 +12,27 @@
 
 import type { ProviderRepositoryLocator } from './provider-contract.mts';
 import type {
+  ProviderChangeRequestBranchAndChecks,
+  ProviderChangeRequestConvergenceView,
+  ProviderChangeRequestHeadShaAndAuthor,
+  ProviderChangeRequestReadinessSnapshot,
   ProviderChangeRequestState,
   ProviderChangeRequestSummary,
   ProviderClosingPullRequestsPage,
   ProviderCollaboratorPermissionResult,
   ProviderComment,
   ProviderConnectedPrEvent,
+  ProviderGovernanceReadOutcome,
+  ProviderGraphqlComment,
+  ProviderGraphqlReview,
+  ProviderMergedChangeRequestMeta,
+  ProviderMergedChangeRequestSummary,
   ProviderPort,
   ProviderPostedComment,
   ProviderRequiredCheck,
+  ProviderReviewThreadCommentIds,
+  ProviderReviewThreadExtended,
+  ProviderReviewThreadWithComments,
   ProviderTimelineEvent,
   ProviderTraversalIssueLookup,
   ProviderWorkItem,
@@ -77,6 +89,121 @@ export interface FakeProviderFixture {
   traversalComments?: Record<number, unknown[]>;
   /** Backs {@link ProviderPort.searchOpenWorkItems}. */
   searchResults?: unknown[];
+
+  // --- #2267 additions below. -------------------------------------------
+
+  /** Backs {@link ProviderPort.getRepositoryDefaultBranch}. */
+  repositoryDefaultBranch?: string | null;
+  /** Backs {@link ProviderPort.resolveViewerAppSlugSafe}. */
+  viewerAppSlug?: string;
+  viewerAppSlugUnavailable?: boolean;
+  /** Backs {@link ProviderPort.getRepositoryContentAtRef}, keyed by
+   * `${owner}/${repo}/${path}@${ref}`; absent key means `null` (404). */
+  repositoryContentAtRef?: Record<string, unknown>;
+  /** Backs {@link ProviderPort.getRepositoryFileContentAtRef}, keyed by
+   * `${repoRef}/${path}@${ref}`; absent key means `not-found`. */
+  repositoryFileContentAtRef?: Record<string, string>;
+  /** Backs {@link ProviderPort.getTeamMembershipStateSafe}, keyed by
+   * `${org}/${teamSlug}/${login}`; absent key means `''`. */
+  teamMembershipStates?: Record<string, string>;
+  /** Backs {@link ProviderPort.getChangeRequestHeadShaAndAuthor}. */
+  changeRequestHeadShaAndAuthor?: Record<
+    number,
+    ProviderChangeRequestHeadShaAndAuthor
+  >;
+  /** Backs {@link ProviderPort.getChangeRequestConvergenceView}. */
+  changeRequestConvergenceViews?: Record<
+    number,
+    ProviderChangeRequestConvergenceView
+  >;
+  /** Backs {@link ProviderPort.getChangeRequestReadinessSnapshot}. */
+  changeRequestReadinessSnapshots?: Record<
+    number,
+    ProviderChangeRequestReadinessSnapshot
+  >;
+  /** Backs {@link ProviderPort.getChangeRequestBranchAndChecks}. */
+  changeRequestBranchAndChecks?: Record<
+    number,
+    ProviderChangeRequestBranchAndChecks
+  >;
+  /** Backs {@link ProviderPort.getChangeRequestHeadRef}. */
+  changeRequestHeadRefs?: Record<number, string>;
+  /** Backs {@link ProviderPort.listMergedChangeRequests}. */
+  mergedChangeRequests?: ProviderMergedChangeRequestSummary[];
+  /** Backs {@link ProviderPort.getMergedChangeRequestMeta}; absent key means `null`. */
+  mergedChangeRequestMeta?: Record<number, ProviderMergedChangeRequestMeta>;
+  /** Backs {@link ProviderPort.listChangeRequestChecks} (ALL checks, not just required). */
+  allChecks?: Record<number, ProviderRequiredCheck[]>;
+  /** Backs {@link ProviderPort.getChangeRequestRequestedReviewerLogins}. */
+  requestedReviewerLogins?: Record<number, string[]>;
+  /** Backs {@link ProviderPort.getChangeRequestRequestedReviewerLoginsGraphql}; absent key means `null`. */
+  requestedReviewerLoginsGraphql?: Record<number, string[]>;
+  /** Backs {@link ProviderPort.listChangeRequestChangedFiles}. */
+  changedFiles?: Record<number, string[]>;
+  /** Backs {@link ProviderPort.listChangeRequestCommits}. */
+  changeRequestCommits?: Record<number, unknown[]>;
+  /** Backs {@link ProviderPort.listChangeRequestReviewThreadsWithComments}. */
+  reviewThreadsWithComments?: Record<
+    number,
+    ProviderReviewThreadWithComments[]
+  >;
+  /** Backs {@link ProviderPort.listChangeRequestReviewThreadsExtended}. */
+  reviewThreadsExtended?: Record<number, ProviderReviewThreadExtended[]>;
+  /** Backs {@link ProviderPort.listChangeRequestReviewThreadCommentIds}. */
+  reviewThreadCommentIds?: Record<number, ProviderReviewThreadCommentIds[]>;
+  /** Backs {@link ProviderPort.listChangeRequestGraphqlComments}. */
+  changeRequestGraphqlComments?: Record<number, ProviderGraphqlComment[]>;
+  /** Backs {@link ProviderPort.listChangeRequestGraphqlReviews}. */
+  changeRequestGraphqlReviews?: Record<number, ProviderGraphqlReview[]>;
+  /** Backs {@link ProviderPort.listBranchRules}, keyed by `${owner}/${repo}/${ref}`;
+   * absent key means `{outcome:'not-found'}`. */
+  branchRules?: Record<string, unknown[]>;
+  /** Backs {@link ProviderPort.getBranchProtection}, keyed by `${owner}/${repo}/${ref}`;
+   * absent key means `{outcome:'not-found'}`. */
+  branchProtection?: Record<string, unknown>;
+  /** Backs {@link ProviderPort.getRepositoryRulesetDetail}, keyed by
+   * `${owner}/${repo}/${rulesetId}`; absent key means `{outcome:'not-found'}`. */
+  rulesetDetails?: Record<string, unknown>;
+  /** Backs {@link ProviderPort.getWorkflowRun}, keyed by `${owner}/${repo}/${runId}`. */
+  workflowRuns?: Record<string, unknown>;
+  /** Backs {@link ProviderPort.listWorkflowRuns}, keyed by `${owner}/${repo}/${workflowName}`. */
+  workflowRunLists?: Record<
+    string,
+    {
+      id: number;
+      conclusion: string | null;
+      status: string;
+      createdAt: string;
+    }[]
+  >;
+  /** Backs {@link ProviderPort.getChangeRequestHeadShaAtRepo}, keyed by
+   * `${owner}/${repo}/${number}`; an absent key throws (matches the adapter's
+   * own no-catch, throw-on-failure contract). */
+  changeRequestHeadShasAtRepo?: Record<string, string>;
+  /** Backs {@link ProviderPort.getChangeRequestAtRepo}, keyed by
+   * `${owner}/${repo}/${number}`. */
+  changeRequestsAtRepo?: Record<string, ProviderChangeRequestState>;
+  /** Every merge call (ambient or cross-repo, admin or not) is appended
+   * here, in call order. */
+  mergedChangeRequestCalls?: {
+    owner: string;
+    repo: string;
+    number: number;
+    headSha: string;
+    admin: boolean;
+  }[];
+  /** Every posted review-comment reply is appended here, in call order. */
+  postedReviewCommentReplies?: {
+    number: number;
+    commentId: number;
+    body: string;
+  }[];
+  nextReviewCommentReplyId?: number;
+  /** Every resolved review-thread id is appended here, in call order. */
+  resolvedReviewThreadIds?: string[];
+  /** Thread ids in this set fail {@link ProviderPort.resolveChangeRequestReviewThread}
+   * (simulates GitHub not confirming `isResolved`). */
+  unresolvableReviewThreadIds?: Set<string>;
 }
 
 export function createFakeProviderAdapter(
@@ -287,6 +414,346 @@ export function createFakeProviderAdapter(
 
     searchOpenWorkItems(): unknown[] {
       return fixture.searchResults ?? [];
+    },
+
+    // --- #2267 additions below. -------------------------------------------
+
+    getRepositoryDefaultBranch(): string | null {
+      return fixture.repositoryDefaultBranch ?? null;
+    },
+
+    resolveViewerAppSlugSafe(): { appSlug: string; unavailable: boolean } {
+      if (fixture.viewerAppSlugUnavailable || !fixture.viewerAppSlug) {
+        return { appSlug: '', unavailable: true };
+      }
+      return { appSlug: fixture.viewerAppSlug, unavailable: false };
+    },
+
+    resolveViewerLoginSafeQuiet(): {
+      viewerLogin: string;
+      viewerLoginUnavailable: boolean;
+    } {
+      if (fixture.viewerLoginUnavailable || !fixture.viewerLogin) {
+        return { viewerLogin: '', viewerLoginUnavailable: true };
+      }
+      return {
+        viewerLogin: fixture.viewerLogin,
+        viewerLoginUnavailable: false,
+      };
+    },
+
+    getRepositoryContentAtRef(
+      contentOwner: string,
+      contentRepo: string,
+      path: string,
+      ref: string,
+    ): unknown | null {
+      const key = `${contentOwner}/${contentRepo}/${path}@${ref}`;
+      return fixture.repositoryContentAtRef?.[key] ?? null;
+    },
+
+    getRepositoryFileContentAtRef(
+      repoRef: string,
+      path: string,
+      ref: string,
+    ): ProviderGovernanceReadOutcome<string> {
+      const key = `${repoRef}/${path}@${ref}`;
+      const value = fixture.repositoryFileContentAtRef?.[key];
+      return value === undefined
+        ? { outcome: 'not-found' }
+        : { outcome: 'ok', value };
+    },
+
+    getTeamMembershipStateSafe(
+      org: string,
+      teamSlug: string,
+      login: string,
+    ): string {
+      const key = `${org}/${teamSlug}/${login}`;
+      return fixture.teamMembershipStates?.[key] ?? '';
+    },
+
+    getChangeRequestHeadShaAndAuthor(
+      number: number,
+    ): ProviderChangeRequestHeadShaAndAuthor {
+      const value = fixture.changeRequestHeadShaAndAuthor?.[number];
+      if (!value) {
+        throw new Error(
+          `fake provider: no headSha/author fixture for PR ${number}`,
+        );
+      }
+      return value;
+    },
+
+    getChangeRequestConvergenceView(
+      number: number,
+    ): ProviderChangeRequestConvergenceView {
+      const value = fixture.changeRequestConvergenceViews?.[number];
+      if (!value) {
+        throw new Error(
+          `fake provider: no convergence-view fixture for PR ${number}`,
+        );
+      }
+      return value;
+    },
+
+    getChangeRequestReadinessSnapshot(
+      number: number,
+    ): ProviderChangeRequestReadinessSnapshot {
+      const value = fixture.changeRequestReadinessSnapshots?.[number];
+      if (!value) {
+        throw new Error(
+          `fake provider: no readiness-snapshot fixture for PR ${number}`,
+        );
+      }
+      return value;
+    },
+
+    getChangeRequestBranchAndChecks(
+      number: number,
+    ): ProviderChangeRequestBranchAndChecks {
+      const value = fixture.changeRequestBranchAndChecks?.[number];
+      if (!value) {
+        throw new Error(
+          `fake provider: no branch-and-checks fixture for PR ${number}`,
+        );
+      }
+      return value;
+    },
+
+    getChangeRequestHeadRef(number: number): string {
+      const value = fixture.changeRequestHeadRefs?.[number];
+      if (value === undefined) {
+        throw new Error(`fake provider: no head-ref fixture for PR ${number}`);
+      }
+      return value;
+    },
+
+    listMergedChangeRequests(): ProviderMergedChangeRequestSummary[] {
+      return fixture.mergedChangeRequests ?? [];
+    },
+
+    getMergedChangeRequestMeta(
+      number: number,
+    ): ProviderMergedChangeRequestMeta | null {
+      return fixture.mergedChangeRequestMeta?.[number] ?? null;
+    },
+
+    listChangeRequestChecks(number: number): ProviderRequiredCheck[] {
+      return fixture.allChecks?.[number] ?? [];
+    },
+
+    getChangeRequestRequestedReviewerLogins(number: number): string[] {
+      return fixture.requestedReviewerLogins?.[number] ?? [];
+    },
+
+    getChangeRequestRequestedReviewerLoginsGraphql(
+      number: number,
+    ): string[] | null {
+      return fixture.requestedReviewerLoginsGraphql?.[number] ?? null;
+    },
+
+    listChangeRequestChangedFiles(number: number): string[] {
+      return fixture.changedFiles?.[number] ?? [];
+    },
+
+    listChangeRequestCommits(number: number): unknown[] {
+      return fixture.changeRequestCommits?.[number] ?? [];
+    },
+
+    listChangeRequestReviewThreadsWithComments(
+      number: number,
+    ): ProviderReviewThreadWithComments[] {
+      return fixture.reviewThreadsWithComments?.[number] ?? [];
+    },
+
+    listChangeRequestReviewThreadsExtended(
+      number: number,
+    ): ProviderReviewThreadExtended[] {
+      return fixture.reviewThreadsExtended?.[number] ?? [];
+    },
+
+    listChangeRequestReviewThreadCommentIds(
+      number: number,
+    ): ProviderReviewThreadCommentIds[] {
+      return fixture.reviewThreadCommentIds?.[number] ?? [];
+    },
+
+    listChangeRequestGraphqlComments(number: number): ProviderGraphqlComment[] {
+      return fixture.changeRequestGraphqlComments?.[number] ?? [];
+    },
+
+    listChangeRequestGraphqlReviews(number: number): ProviderGraphqlReview[] {
+      return fixture.changeRequestGraphqlReviews?.[number] ?? [];
+    },
+
+    listBranchRules(
+      rulesOwner: string,
+      rulesRepo: string,
+      ref: string,
+    ): ProviderGovernanceReadOutcome<unknown[]> {
+      const key = `${rulesOwner}/${rulesRepo}/${ref}`;
+      const value = fixture.branchRules?.[key];
+      return value === undefined
+        ? { outcome: 'not-found' }
+        : { outcome: 'ok', value };
+    },
+
+    getBranchProtection(
+      protectionOwner: string,
+      protectionRepo: string,
+      ref: string,
+    ): ProviderGovernanceReadOutcome<unknown> {
+      const key = `${protectionOwner}/${protectionRepo}/${ref}`;
+      const value = fixture.branchProtection?.[key];
+      return value === undefined
+        ? { outcome: 'not-found' }
+        : { outcome: 'ok', value };
+    },
+
+    getRepositoryRulesetDetail(
+      rulesetOwner: string,
+      rulesetRepo: string,
+      rulesetId: number | string,
+    ): ProviderGovernanceReadOutcome<unknown> {
+      const key = `${rulesetOwner}/${rulesetRepo}/${rulesetId}`;
+      const value = fixture.rulesetDetails?.[key];
+      return value === undefined
+        ? { outcome: 'not-found' }
+        : { outcome: 'ok', value };
+    },
+
+    getWorkflowRun(runOwner: string, runRepo: string, runId: number): unknown {
+      const key = `${runOwner}/${runRepo}/${runId}`;
+      return fixture.workflowRuns?.[key] ?? null;
+    },
+
+    listWorkflowRuns(
+      runsOwner: string,
+      runsRepo: string,
+      workflowName: string,
+    ): {
+      id: number;
+      conclusion: string | null;
+      status: string;
+      createdAt: string;
+    }[] {
+      const key = `${runsOwner}/${runsRepo}/${workflowName}`;
+      return fixture.workflowRunLists?.[key] ?? [];
+    },
+
+    getChangeRequestHeadShaAtRepo(
+      atRepoOwner: string,
+      atRepoRepo: string,
+      number: number,
+    ): string {
+      const key = `${atRepoOwner}/${atRepoRepo}/${number}`;
+      const sha = fixture.changeRequestHeadShasAtRepo?.[key];
+      if (sha === undefined) {
+        throw new Error(
+          `fake provider: no cross-repo head SHA fixture for ${key}`,
+        );
+      }
+      return sha;
+    },
+
+    getChangeRequestAtRepo(
+      atRepoOwner: string,
+      atRepoRepo: string,
+      number: number,
+    ): ProviderChangeRequestState | null {
+      const key = `${atRepoOwner}/${atRepoRepo}/${number}`;
+      return fixture.changeRequestsAtRepo?.[key] ?? null;
+    },
+
+    mergeChangeRequestAtRepo(
+      mergeOwner: string,
+      mergeRepo: string,
+      number: number,
+      headSha: string,
+    ): string {
+      fixture.mergedChangeRequestCalls ??= [];
+      fixture.mergedChangeRequestCalls.push({
+        owner: mergeOwner,
+        repo: mergeRepo,
+        number,
+        headSha,
+        admin: false,
+      });
+      return `fake merge commit for ${mergeOwner}/${mergeRepo}#${number}`;
+    },
+
+    mergeChangeRequestAdminAtRepo(
+      mergeOwner: string,
+      mergeRepo: string,
+      number: number,
+      headSha: string,
+    ): string {
+      fixture.mergedChangeRequestCalls ??= [];
+      fixture.mergedChangeRequestCalls.push({
+        owner: mergeOwner,
+        repo: mergeRepo,
+        number,
+        headSha,
+        admin: true,
+      });
+      return `fake admin merge commit for ${mergeOwner}/${mergeRepo}#${number}`;
+    },
+
+    mergeChangeRequest(number: number, headSha: string): string {
+      const locator = fixture.locator ?? {
+        provider: 'github' as const,
+        owner: 'fake-owner',
+        name: 'fake-repo',
+      };
+      fixture.mergedChangeRequestCalls ??= [];
+      fixture.mergedChangeRequestCalls.push({
+        owner: locator.owner,
+        repo: locator.name,
+        number,
+        headSha,
+        admin: false,
+      });
+      return `fake merge commit for ${locator.owner}/${locator.name}#${number}`;
+    },
+
+    mergeChangeRequestAdmin(number: number, headSha: string): string {
+      const locator = fixture.locator ?? {
+        provider: 'github' as const,
+        owner: 'fake-owner',
+        name: 'fake-repo',
+      };
+      fixture.mergedChangeRequestCalls ??= [];
+      fixture.mergedChangeRequestCalls.push({
+        owner: locator.owner,
+        repo: locator.name,
+        number,
+        headSha,
+        admin: true,
+      });
+      return `fake admin merge commit for ${locator.owner}/${locator.name}#${number}`;
+    },
+
+    postReviewCommentReply(
+      number: number,
+      commentId: number,
+      body: string,
+    ): { id: number } {
+      fixture.postedReviewCommentReplies ??= [];
+      fixture.postedReviewCommentReplies.push({ number, commentId, body });
+      const id = fixture.nextReviewCommentReplyId ?? 1;
+      fixture.nextReviewCommentReplyId = id + 1;
+      return { id };
+    },
+
+    resolveChangeRequestReviewThread(threadId: string): void {
+      if (fixture.unresolvableReviewThreadIds?.has(threadId)) {
+        throw new Error(
+          `fake provider: GitHub did not confirm thread ${threadId} as resolved`,
+        );
+      }
+      fixture.resolvedReviewThreadIds ??= [];
+      fixture.resolvedReviewThreadIds.push(threadId);
     },
   };
 }

@@ -64,3 +64,46 @@ test('closeWorkItem stores lowercase state, matching the fixture convention', ()
   port.closeWorkItem(1, 'done');
   assert.equal(workItems[1].state, 'closed');
 });
+
+// #2267 additions below.
+
+test('listBranchRules and getBranchProtection default to not-found for an absent fixture key', () => {
+  const port = createFakeProviderAdapter({});
+  assert.deepEqual(port.listBranchRules('o', 'r', 'main'), {
+    outcome: 'not-found',
+  });
+  assert.deepEqual(port.getBranchProtection('o', 'r', 'main'), {
+    outcome: 'not-found',
+  });
+});
+
+test('mergeChangeRequest and mergeChangeRequestAtRepo record distinct owner/repo/admin flags', () => {
+  const fixture: Parameters<typeof createFakeProviderAdapter>[0] = {
+    locator: { provider: 'github', owner: 'ambient', name: 'repo' },
+  };
+  const port = createFakeProviderAdapter(fixture);
+  port.mergeChangeRequest(1, 'sha1');
+  port.mergeChangeRequestAdmin(2, 'sha2');
+  port.mergeChangeRequestAtRepo('other', 'repo2', 3, 'sha3');
+  assert.deepEqual(fixture.mergedChangeRequestCalls, [
+    {
+      owner: 'ambient',
+      repo: 'repo',
+      number: 1,
+      headSha: 'sha1',
+      admin: false,
+    },
+    { owner: 'ambient', repo: 'repo', number: 2, headSha: 'sha2', admin: true },
+    { owner: 'other', repo: 'repo2', number: 3, headSha: 'sha3', admin: false },
+  ]);
+});
+
+test('resolveChangeRequestReviewThread throws for a thread id in unresolvableReviewThreadIds, otherwise records it', () => {
+  const fixture: Parameters<typeof createFakeProviderAdapter>[0] = {
+    unresolvableReviewThreadIds: new Set(['T_stuck']),
+  };
+  const port = createFakeProviderAdapter(fixture);
+  assert.throws(() => port.resolveChangeRequestReviewThread('T_stuck'));
+  port.resolveChangeRequestReviewThread('T_ok');
+  assert.deepEqual(fixture.resolvedReviewThreadIds, ['T_ok']);
+});

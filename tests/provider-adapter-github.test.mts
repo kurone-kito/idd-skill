@@ -743,3 +743,472 @@ test('searchOpenWorkItems builds the body-marker-search args', () => {
     'idd-skill-roadmap-id',
   ]);
 });
+
+// ---------------------------------------------------------------------------
+// #2267 additions below.
+// ---------------------------------------------------------------------------
+
+test('listChangeRequestReviewThreadCommentIds walks outer thread pages AND inner per-thread comment continuation', () => {
+  const outerPages = [
+    JSON.stringify({
+      data: {
+        repository: {
+          pullRequest: {
+            reviewThreads: {
+              nodes: [
+                {
+                  id: 'thread-1',
+                  isResolved: false,
+                  comments: {
+                    nodes: [{ databaseId: 101 }],
+                    pageInfo: { hasNextPage: true, endCursor: 'c-101' },
+                  },
+                },
+              ],
+              pageInfo: { hasNextPage: true, endCursor: 'outer-1' },
+            },
+          },
+        },
+      },
+    }),
+    JSON.stringify({
+      data: {
+        repository: {
+          pullRequest: {
+            reviewThreads: {
+              nodes: [
+                {
+                  id: 'thread-2',
+                  isResolved: true,
+                  comments: {
+                    nodes: [{ databaseId: 201 }],
+                    pageInfo: { hasNextPage: false, endCursor: null },
+                  },
+                },
+              ],
+              pageInfo: { hasNextPage: false, endCursor: null },
+            },
+          },
+        },
+      },
+    }),
+  ];
+  const continuationPage = JSON.stringify({
+    data: {
+      node: {
+        comments: {
+          nodes: [{ databaseId: 102 }],
+          pageInfo: { hasNextPage: false, endCursor: null },
+        },
+      },
+    },
+  });
+  const calls: string[][] = [];
+  let outerCall = 0;
+  const port = createGithubProviderAdapter(
+    'kurone-kito',
+    'idd-skill',
+    fakeDeps({
+      ghText: (args) => {
+        calls.push(args);
+        if (args.some((arg) => arg.startsWith('query=query($id:ID!'))) {
+          return continuationPage;
+        }
+        const page = outerPages[outerCall];
+        outerCall += 1;
+        return page;
+      },
+    }),
+  );
+  assert.deepEqual(port.listChangeRequestReviewThreadCommentIds(7), [
+    { threadId: 'thread-1', isResolved: false, commentDatabaseIds: [101, 102] },
+    { threadId: 'thread-2', isResolved: true, commentDatabaseIds: [201] },
+  ]);
+  // Call order: outer page 1 (thread-1) -> thread-1's comment continuation
+  // (issued immediately while processing that node, before the outer loop
+  // moves on) -> outer page 2 (thread-2).
+  assert.equal(calls.length, 3);
+  assert.ok(calls[1].some((arg) => arg === 'id=thread-1'));
+  assert.ok(calls[1].some((arg) => arg === 'cursor=c-101'));
+});
+
+test('listChangeRequestReviewThreadsWithComments and listChangeRequestReviewThreadsExtended select distinct comment fragments', () => {
+  const capturedQueries: string[] = [];
+  const singlePage = JSON.stringify({
+    data: {
+      repository: {
+        pullRequest: {
+          reviewThreads: {
+            nodes: [
+              {
+                id: 't1',
+                isResolved: true,
+                path: 'src/foo.mts',
+                comments: {
+                  nodes: [
+                    {
+                      body: 'hello',
+                      url: 'https://example.invalid/c/1',
+                      createdAt: '2026-01-01T00:00:00Z',
+                      updatedAt: '2026-01-01T00:00:00Z',
+                      author: { login: 'reviewer' },
+                      pullRequestReview: { id: 'PRR_1' },
+                    },
+                  ],
+                  pageInfo: { hasNextPage: false, endCursor: null },
+                },
+              },
+            ],
+            pageInfo: { hasNextPage: false, endCursor: null },
+          },
+        },
+      },
+    },
+  });
+  const port = createGithubProviderAdapter(
+    'kurone-kito',
+    'idd-skill',
+    fakeDeps({
+      ghText: (args) => {
+        const queryArg = args.find((arg) =>
+          arg.startsWith('query=query($owner'),
+        );
+        if (queryArg) capturedQueries.push(queryArg);
+        return singlePage;
+      },
+    }),
+  );
+  assert.deepEqual(port.listChangeRequestReviewThreadsWithComments(7), [
+    {
+      isResolved: true,
+      comments: [
+        {
+          body: 'hello',
+          createdAt: '2026-01-01T00:00:00Z',
+          updatedAt: '2026-01-01T00:00:00Z',
+          authorLogin: 'reviewer',
+          pullRequestReviewId: 'PRR_1',
+        },
+      ],
+    },
+  ]);
+  assert.deepEqual(port.listChangeRequestReviewThreadsExtended(7), [
+    {
+      isResolved: true,
+      path: 'src/foo.mts',
+      comments: [
+        {
+          body: 'hello',
+          url: 'https://example.invalid/c/1',
+          createdAt: '2026-01-01T00:00:00Z',
+          updatedAt: '2026-01-01T00:00:00Z',
+          authorLogin: 'reviewer',
+        },
+      ],
+    },
+  ]);
+  assert.equal(capturedQueries.length, 2);
+  assert.notEqual(capturedQueries[0], capturedQueries[1]);
+  assert.match(capturedQueries[0], /pullRequestReview \{ id \}/);
+  assert.doesNotMatch(capturedQueries[1], /pullRequestReview/);
+});
+
+test('listBranchRules resolves not-found on a 404 and rethrows any other failure', () => {
+  const notFoundPort = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({
+      ghApiJson: () => {
+        const error = new Error('HTTP 404') as Error & { stderr?: string };
+        error.stderr = 'gh: Not Found (HTTP 404)';
+        throw error;
+      },
+    }),
+  );
+  assert.deepEqual(notFoundPort.listBranchRules('o', 'r', 'main'), {
+    outcome: 'not-found',
+  });
+
+  const failurePort = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({
+      ghApiJson: () => {
+        const error = new Error('boom') as Error & { stderr?: string };
+        error.stderr = 'gh: Forbidden (HTTP 403)';
+        throw error;
+      },
+    }),
+  );
+  assert.throws(() => failurePort.listBranchRules('o', 'r', 'main'), /boom/);
+});
+
+test('getBranchProtection resolves ok with the raw payload on success', () => {
+  const port = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({
+      ghApiJson: () => ({ required_status_checks: null }),
+    }),
+  );
+  assert.deepEqual(port.getBranchProtection('o', 'r', 'main'), {
+    outcome: 'ok',
+    value: { required_status_checks: null },
+  });
+});
+
+test('getRepositoryFileContentAtRef resolves not-found on a 404 and ok with the raw content otherwise', () => {
+  const port = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({
+      ghText: () => 'YmFzZTY0',
+    }),
+  );
+  assert.deepEqual(
+    port.getRepositoryFileContentAtRef(
+      'other-owner/other-repo',
+      '.github/idd/config.json',
+      'deadbeef',
+    ),
+    { outcome: 'ok', value: 'YmFzZTY0' },
+  );
+
+  const notFoundPort = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({
+      ghText: () => {
+        const error = new Error('HTTP 404') as Error & { stderr?: string };
+        error.stderr = 'gh: Not Found (HTTP 404)';
+        throw error;
+      },
+    }),
+  );
+  assert.deepEqual(
+    notFoundPort.getRepositoryFileContentAtRef('o/r', 'x', 'y'),
+    { outcome: 'not-found' },
+  );
+});
+
+test('getMergedChangeRequestMeta returns null when the PR is not merged, and the parsed meta when it is', () => {
+  const notMergedPort = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({
+      ghText: () =>
+        JSON.stringify({
+          data: { repository: { pullRequest: { merged: false } } },
+        }),
+    }),
+  );
+  assert.equal(notMergedPort.getMergedChangeRequestMeta(9), null);
+
+  const mergedPort = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({
+      ghText: () =>
+        JSON.stringify({
+          data: {
+            repository: {
+              pullRequest: {
+                number: 9,
+                merged: true,
+                mergedAt: '2026-01-01T00:00:00Z',
+                mergeCommit: { oid: 'deadbeef' },
+              },
+            },
+          },
+        }),
+    }),
+  );
+  assert.deepEqual(mergedPort.getMergedChangeRequestMeta(9), {
+    number: 9,
+    merged: true,
+    mergedAt: '2026-01-01T00:00:00Z',
+    mergeCommitOid: 'deadbeef',
+  });
+});
+
+test('postReviewCommentReply POSTs to the PR-scoped comment-reply endpoint (regression guard: the PR number segment was dropped in an earlier draft)', () => {
+  let capturedArgs: string[] | undefined;
+  const port = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({
+      ghText: (args) => {
+        capturedArgs = args;
+        return JSON.stringify({ id: 555 });
+      },
+    }),
+  );
+  const result = port.postReviewCommentReply(42, 99, '**Accepted** -- done.');
+  assert.deepEqual(result, { id: 555 });
+  assert.ok(
+    capturedArgs?.includes('repos/o/r/pulls/42/comments/99/replies'),
+    `expected the PR number (42) in the reply path, got: ${capturedArgs?.join(' ')}`,
+  );
+});
+
+test('resolveChangeRequestReviewThread throws unless GitHub confirms isResolved', () => {
+  const okPort = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({
+      ghText: () =>
+        JSON.stringify({
+          data: { resolveReviewThread: { thread: { isResolved: true } } },
+        }),
+    }),
+  );
+  assert.doesNotThrow(() => okPort.resolveChangeRequestReviewThread('T_1'));
+
+  const unconfirmedPort = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({
+      ghText: () =>
+        JSON.stringify({
+          data: { resolveReviewThread: { thread: { isResolved: false } } },
+        }),
+    }),
+  );
+  assert.throws(
+    () => unconfirmedPort.resolveChangeRequestReviewThread('T_1'),
+    /did not confirm/,
+  );
+});
+
+test('mergeChangeRequest and mergeChangeRequestAdmin build distinct arg shapes (--admin only on the admin variant)', () => {
+  let capturedArgs: string[] | undefined;
+  const port = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({
+      ghText: (args) => {
+        capturedArgs = args;
+        return 'merged';
+      },
+    }),
+  );
+  port.mergeChangeRequest(42, 'deadbeef');
+  assert.deepEqual(capturedArgs, [
+    'pr',
+    'merge',
+    '42',
+    '-R',
+    'o/r',
+    '--merge',
+    '--match-head-commit',
+    'deadbeef',
+  ]);
+  port.mergeChangeRequestAdmin(42, 'deadbeef');
+  assert.deepEqual(capturedArgs, [
+    'pr',
+    'merge',
+    '42',
+    '-R',
+    'o/r',
+    '--merge',
+    '--match-head-commit',
+    'deadbeef',
+    '--admin',
+  ]);
+});
+
+test('mergeChangeRequestAtRepo targets an explicit owner/repo distinct from the port locator', () => {
+  let capturedArgs: string[] | undefined;
+  const port = createGithubProviderAdapter(
+    'ambient-owner',
+    'ambient-repo',
+    fakeDeps({
+      ghText: (args) => {
+        capturedArgs = args;
+        return 'merged';
+      },
+    }),
+  );
+  port.mergeChangeRequestAtRepo('other-owner', 'other-repo', 42, 'deadbeef');
+  assert.deepEqual(capturedArgs, [
+    'pr',
+    'merge',
+    '42',
+    '-R',
+    'other-owner/other-repo',
+    '--merge',
+    '--match-head-commit',
+    'deadbeef',
+  ]);
+});
+
+test('listChangeRequestChecks omits --required, unlike listRequiredChecks', () => {
+  let capturedArgs: string[] | undefined;
+  const port = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({
+      ghText: (args) => {
+        capturedArgs = args;
+        return '[]';
+      },
+    }),
+  );
+  port.listChangeRequestChecks(7);
+  assert.ok(capturedArgs);
+  assert.ok(!capturedArgs?.includes('--required'));
+});
+
+test('getChangeRequestRequestedReviewerLoginsGraphql never throws, returning null on any failure', () => {
+  const port = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({
+      ghText: () => {
+        throw new Error('boom');
+      },
+    }),
+  );
+  assert.equal(port.getChangeRequestRequestedReviewerLoginsGraphql(7), null);
+});
+
+test('getChangeRequestReadinessSnapshot maps all nine fields from a single pr view call', () => {
+  let capturedArgs: string[] | undefined;
+  const port = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({
+      ghText: (args) => {
+        capturedArgs = args;
+        return JSON.stringify({
+          headRefOid: 'deadbeef',
+          baseRefName: 'main',
+          url: 'https://example.invalid/pull/7',
+          author: { login: 'contributor' },
+          reviewDecision: 'APPROVED',
+          statusCheckRollup: [{ name: 'ci', state: 'SUCCESS' }],
+          mergeable: 'MERGEABLE',
+          mergeStateStatus: 'CLEAN',
+          closingIssuesReferences: { nodes: [] },
+        });
+      },
+    }),
+  );
+  assert.deepEqual(port.getChangeRequestReadinessSnapshot(7), {
+    headSha: 'deadbeef',
+    baseRefName: 'main',
+    url: 'https://example.invalid/pull/7',
+    authorLogin: 'contributor',
+    reviewDecision: 'APPROVED',
+    statusCheckRollup: [{ name: 'ci', state: 'SUCCESS' }],
+    mergeable: 'MERGEABLE',
+    mergeStateStatus: 'CLEAN',
+    closingIssuesReferences: { nodes: [] },
+  });
+  assert.ok(capturedArgs?.includes('-R'));
+  assert.ok(
+    capturedArgs?.includes(
+      'headRefOid,baseRefName,url,author,reviewDecision,statusCheckRollup,mergeable,mergeStateStatus,closingIssuesReferences',
+    ),
+  );
+});
