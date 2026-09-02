@@ -13,11 +13,13 @@ import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
 import {
+  collectPreMergeReadiness,
   normalizeClaimComment,
   normalizeComment,
   normalizeReview,
   normalizeThread,
 } from '../src/scripts/pre-merge-readiness.mts';
+import { createFakeProviderAdapter } from '../src/scripts/provider-adapter-fake.mts';
 
 const REPO_ROOT = fileURLToPath(new URL('../', import.meta.url));
 
@@ -625,4 +627,113 @@ test('pre-merge-readiness.mjs CLI: blocked scenario (one unresolved review threa
     blockers.some((blocker) => blocker.gate === 'unresolved-threads'),
     `expected an "unresolved-threads" blocker, got: ${JSON.stringify(blockers)}`,
   );
+});
+
+// ---------------------------------------------------------------------------
+// Fake-provider collection wiring (#2267 AC4: "unit tests exercise the
+// PR-facing state machine with a fake provider ... without network access").
+// The stub-gh CLI tests above already exercise the real, built .mjs process
+// end to end; this test instead drives collectPreMergeReadiness IN-PROCESS
+// against createFakeProviderAdapter -- proving createPort's injection seam
+// actually wires every port call this file makes through to a fake, with
+// zero gh subprocess and zero live network access. Deliberately narrow (one
+// blocked scenario covering the two AC4-named conditions this file's own
+// state machine can produce: an unreadable CI/branch-governance read and an
+// unresolved review thread) -- the pure summarizer's exhaustive gate matrix
+// is already covered by buildPreMergeReadinessSummary's own direct unit
+// tests above in tests/pre-merge-readiness.test.mts.
+// ---------------------------------------------------------------------------
+
+test('collectPreMergeReadiness against a fake provider: unreadable CI governance + an unresolved thread block, with no gh process spawned', () => {
+  const cwdRoot = mkdtempSync(join(tmpdir(), 'idd-pre-merge-fake-provider-'));
+  const originalCwd = process.cwd();
+  try {
+    // Hermetic: an unpatched cwd would read THIS repo's own live
+    // .github/idd/config.json (mergePolicy: fully_autonomous_merge, etc.)
+    // during collection, since collectPreMergeReadiness resolves every
+    // policy read relative to process.cwd(), not this script's location
+    // (same rationale as runPreMergeReadinessSmoke's empty cwdRoot above).
+    process.chdir(cwdRoot);
+
+    const port = createFakeProviderAdapter({
+      changeRequestReadinessSnapshots: {
+        42: {
+          headSha: 'a'.repeat(40),
+          baseRefName: 'main',
+          url: 'https://github.com/o/r/pull/42',
+          authorLogin: 'author-user',
+          reviewDecision: null,
+          statusCheckRollup: [
+            {
+              __typename: 'CheckRun',
+              name: 'lint',
+              status: 'COMPLETED',
+              conclusion: 'SUCCESS',
+              completedAt: '2026-08-01T00:00:00Z',
+              workflowName: 'CI',
+            },
+          ],
+          mergeable: 'MERGEABLE',
+          mergeStateStatus: 'CLEAN',
+          closingIssuesReferences: [],
+        },
+      },
+      // listBranchRules/getBranchProtection deliberately absent -- the fake
+      // resolves both to {outcome:'not-found'}, which fetchGovernanceJson
+      // (trustEmptyProtectionReads defaults to false with no config.json)
+      // classifies as unreadable, producing a real "ci" blocker without
+      // needing to replicate a required-check-mismatch fixture.
+      reviewThreadsWithComments: {
+        42: [
+          {
+            isResolved: false,
+            comments: [
+              {
+                body: 'please address this',
+                createdAt: '2026-07-31T09:00:00Z',
+                updatedAt: '2026-07-31T09:00:00Z',
+                authorLogin: 'reviewer-user',
+                pullRequestReviewId: null,
+              },
+            ],
+          },
+        ],
+      },
+      reviewsWithHeadCommitDate: {
+        42: { reviews: [], headCommittedAt: '2026-07-31T23:00:00Z' },
+      },
+    });
+
+    const report = collectPreMergeReadiness(
+      [
+        '--pr',
+        '42',
+        '--claimless',
+        '--owner',
+        'o',
+        '--repo',
+        'r',
+        '--now',
+        '2026-08-01T00:00:00Z',
+      ],
+      () => port,
+    );
+
+    const ciReport = report.ci as { protectionReadsUnreadable: boolean };
+    assert.equal(ciReport.protectionReadsUnreadable, true);
+    const threadsReport = report.threads as { unresolvedCount: number };
+    assert.equal(threadsReport.unresolvedCount, 1);
+    const blockers = report.blockers as { gate: string }[];
+    assert.ok(
+      blockers.some((blocker) => blocker.gate === 'ci'),
+      `expected a "ci" blocker, got: ${JSON.stringify(blockers)}`,
+    );
+    assert.ok(
+      blockers.some((blocker) => blocker.gate === 'unresolved-threads'),
+      `expected an "unresolved-threads" blocker, got: ${JSON.stringify(blockers)}`,
+    );
+  } finally {
+    process.chdir(originalCwd);
+    rmSync(cwdRoot, { recursive: true, force: true });
+  }
 });

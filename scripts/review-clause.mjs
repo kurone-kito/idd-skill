@@ -162,16 +162,26 @@ export function resolveLatestCopilotReviewClause(
  * `committedDate`, via {@link ProviderPort.getChangeRequestReviewsWithHeadCommitDate}
  * (#2267) -- the same GraphQL query `advisory-convergence.mts`'s own
  * Clause 1 evidence collection has always used, now routed through the
- * GitHub provider adapter instead of a direct `ghGraphql` call. Keeps its
- * pre-migration `(owner, repo, prNumber)` signature unchanged: the
- * out-of-scope `rerun-advisory-convergence.mts` caller (see this file's
- * module header) also relies on this exact call shape.
+ * GitHub provider adapter instead of a direct `ghGraphql` call. Extended
+ * additively with an optional trailing `port` (defaults to
+ * `createGithubProviderAdapter(owner, repo)`): every existing caller
+ * (this file's own out-of-scope `rerun-advisory-convergence.mts`,
+ * `pre-merge-readiness.mts`, `advisory-convergence.mts`) still calls this
+ * with the unchanged 3-arg `(owner, repo, prNumber)` shape, so the
+ * injection is invisible to them -- it exists so a caller that already
+ * holds its own fake-backed `ProviderPort` (e.g. a test driving
+ * `pre-merge-readiness.mts`'s `collectPreMergeReadiness` end to end) can
+ * pass it through instead of this function constructing its own live
+ * adapter.
  */
-export function fetchReviewsAndHeadCommit(owner, repo, prNumber) {
-  const { reviews: nodes, headCommittedAt } = createGithubProviderAdapter(
-    owner,
-    repo,
-  ).getChangeRequestReviewsWithHeadCommitDate(prNumber);
+export function fetchReviewsAndHeadCommit(
+  owner,
+  repo,
+  prNumber,
+  port = createGithubProviderAdapter(owner, repo),
+) {
+  const { reviews: nodes, headCommittedAt } =
+    port.getChangeRequestReviewsWithHeadCommitDate(prNumber);
   const reviews = nodes.map((node) => ({
     id: node.id || null,
     author: { login: node.authorLogin, __typename: node.authorTypename },

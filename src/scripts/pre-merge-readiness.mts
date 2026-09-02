@@ -616,7 +616,7 @@ export function collectPreMergeReadiness(
   const {
     reviews: advisoryConvergenceReviews,
     headCommittedAt: advisoryConvergenceHeadCommittedAt,
-  } = fetchReviewsAndHeadCommit(owner, repo, args.prNumber);
+  } = fetchReviewsAndHeadCommit(owner, repo, args.prNumber, port);
   const advisoryConvergenceDeadlineMinutes =
     readAdvisoryConvergenceDeadlineMinutes();
   const secondaryQuietWindowMinutes = readAdvisorySecondaryQuietWindowMinutes();
