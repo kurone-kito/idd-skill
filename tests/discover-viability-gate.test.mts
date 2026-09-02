@@ -135,6 +135,127 @@ test('fails limited scope when a broad cue accompanies a narrow cue', () => {
   assert.ok(result.failedCriteria.includes('limited_scope'));
 });
 
+// --- #2417: limited_scope false positives on topic words, not the diff's
+// own footprint --------------------------------------------------------
+
+test('passes limited scope when a broad-scope word is the rejected option in a "rather than" clause (#2401 shape)', () => {
+  const result = evaluateA4Viability({
+    number: 20,
+    title: 'add fail-closed recovery guidance',
+    body:
+      'Replace the open-ended escalation cue with a simpler fail-closed ' +
+      'behavior plus actionable manual-recovery guidance -- rather than ' +
+      'attempting a second, more elaborate structural redesign. Keep the ' +
+      'same non-binding, heuristic framing. Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, true);
+  assert.deepEqual(result.failedCriteria, []);
+});
+
+test('passes limited scope when a broad-scope word modifies documentation content, not the diff (#2402 shape)', () => {
+  const result = evaluateA4Viability({
+    number: 21,
+    title: 'add a pointer doc for helper-authoring guidance',
+    body:
+      '`docs/typescript-sources.md` (or another location already ' +
+      "established as this repository's home for cross-cutting " +
+      'helper-authoring guidance) states that a new helper sharing its ' +
+      'problem shape should reuse the existing pattern. Single-file ' +
+      'change. Verification: add unit tests and keep lint green.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, true);
+  assert.deepEqual(result.failedCriteria, []);
+});
+
+test('passes limited scope when a broad-scope word is the rejected option in a "prefer X over Y" clause (#2413 shape)', () => {
+  const result = evaluateA4Viability({
+    number: 22,
+    title: 'simplify the fragile mechanism instead of a second attempt',
+    body:
+      "If the structural fix itself doesn't converge, prefer " +
+      'simplifying/removing the fragile mechanism over a second redesign, ' +
+      'but only once removal is confirmed non-required. Verification: ' +
+      'add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, true);
+  assert.deepEqual(result.failedCriteria, []);
+});
+
+test('still fails limited scope when a cue precedes the rejected option but a genuinely broad change follows in the same sentence', () => {
+  // Adversarial case: an avoidance cue must not extend its reach across a
+  // clause boundary and exclude a broad-scope word that describes what
+  // this issue's own change actually does.
+  const result = evaluateA4Viability({
+    number: 23,
+    title: 'redesign the public interface',
+    body:
+      'Instead of a targeted fix, do a full redesign of the public ' +
+      'interface. Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('limited_scope'));
+});
+
+test('still fails limited scope when a content-noun word sits near a genuinely broad-scope diff description', () => {
+  // Adversarial case: "guidance" coincidentally following "cross-cutting"
+  // must not suppress a second, independent broad-scope signal in the same
+  // corpus ("across multiple subsystems").
+  const result = evaluateA4Viability({
+    number: 24,
+    title: 'redesign the cross-cutting authentication guidance module',
+    body:
+      'This issue redesigns the module across multiple subsystems. ' +
+      'Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('limited_scope'));
+});
+
+test('passes limited scope when an earlier, broken cue would shadow a later cue that directly governs the match (Copilot review finding, #2422)', () => {
+  // The window contains TWO avoidance cues: "avoid" is cut off from the
+  // match by a hard clause break (the period before "But"), while "rather
+  // than" sits directly before "redesign" with nothing in between. Only
+  // checking the first-found cue would miss the second, governing one.
+  const result = evaluateA4Viability({
+    number: 25,
+    title: 'simplify the mechanism',
+    body:
+      'Attempt to avoid regressions. But rather than redesign the schema, ' +
+      'we chose a simpler patch. Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, true);
+  assert.deepEqual(result.failedCriteria, []);
+});
+
+test('still fails limited scope when a content noun starts a new sentence after a genuinely broad-scope description (Copilot review finding, #2422)', () => {
+  // "Guidance:" opens an unrelated new sentence; it must not reach back
+  // across the sentence boundary and suppress the broad-scope match in the
+  // preceding sentence.
+  const result = evaluateA4Viability({
+    number: 26,
+    title: 'redesign the public interface',
+    body:
+      'This issue will redesign the public interface. Guidance: see the ' +
+      'design doc. Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('limited_scope'));
+});
+
 test('renderCsv quotes titles containing commas and quotes', () => {
   const csv = renderCsv({
     viable: [{ number: 10, title: 'fix parser, escape "quotes" too' }],

@@ -28,7 +28,40 @@ const CRITERIA = [
   },
 ];
 const BROAD_SCOPE_PATTERN =
-  /\b(cross-cutting|cross cutting|across (?:many|multiple)|multiple subsystems?|repository-wide|entire repo|public interface|redesign|architecture|global refactor|large refactor)\b/i;
+  /\b(cross-cutting|cross cutting|across (?:many|multiple)|multiple subsystems?|repository-wide|entire repo|public interface|redesign|architecture|global refactor|large refactor)\b/gi;
+// A broad-scope word inside a phrase describing something other than this
+// issue's own diff footprint should not count (#2417): a worked example of
+// what NOT to do, a citation of another issue's already-resolved heuristic,
+// or a mention of the documentation/guidance content itself. Two exclusion
+// shapes cover the observed false positives, matched per-occurrence rather
+// than once for the whole corpus (a genuinely broad issue usually trips the
+// pattern more than once, so excluding one occurrence still leaves the rest
+// to fail the gate).
+//
+// 1. Avoidance-cue: the match is the disfavored option in a "rather than X"
+//    / "prefer Y over X" construction (#2401, #2413).
+const AVOIDANCE_CUE_PATTERN =
+  /\b(rather than|instead of|avoid|prefer|over a)\b/gi;
+const AVOIDANCE_CUE_WINDOW = 80;
+// A comma continues the SAME clause the cue governs only when immediately
+// followed by a degree/comparative adverb ("a second, more elaborate
+// redesign" -- #2401); any other comma, or a period/semicolon/em-dash,
+// starts a new clause and cuts the cue's reach short ("Instead of a
+// targeted fix, do a full redesign" -- "do" starts a fresh, un-governed
+// proposal that must still fail the gate).
+const CLAUSE_CONTINUATION_COMMA_PATTERN =
+  /,\s+(?!more\b|less\b|even\b|particularly\b|especially\b|slightly\b|somewhat\b)/;
+const HARD_CLAUSE_BREAK_PATTERN = /[.;—]|--/;
+// 2. Content-noun: the match modifies a noun naming prose/documentation
+//    content itself ("cross-cutting ... guidance" -- #2402), not this
+//    issue's own change. The noun can sit a token or two past the match
+//    (an intervening modifier), so this walks forward through the next
+//    few word tokens rather than anchoring immediately after the match.
+const CONTENT_NOUN_PATTERN =
+  /^(guidance|documentation|docs|heuristic|advice|note|policy|text|wording)$/i;
+const CONTENT_NOUN_LOOKAHEAD_CHARS = 60;
+const CONTENT_NOUN_LOOKAHEAD_TOKENS = 3;
+const WORD_TOKEN_PATTERN = /[A-Za-z][\w-]*/g;
 const NARROW_SCOPE_PATTERN =
   /\b(single module|single file|few files|targeted|small fix|localized|narrow scope)\b/i;
 const OBJECTIVE_VERIFICATION_PATTERN =
@@ -157,16 +190,85 @@ export function evaluateA4Viability(issue) {
     criteria,
   };
 }
+function isInsideCodeSpan(corpus, index) {
+  let backtickCount = 0;
+  for (let i = 0; i < index; i += 1) {
+    if (corpus[i] === '`') {
+      backtickCount += 1;
+    }
+  }
+  return backtickCount % 2 === 1;
+}
+function isGovernedByAvoidanceCue(corpus, matchIndex) {
+  const windowStart = Math.max(0, matchIndex - AVOIDANCE_CUE_WINDOW);
+  const window = corpus.slice(windowStart, matchIndex);
+  // A single "find the first cue" check misses a real governing cue when an
+  // EARLIER, unrelated cue also sits in the window but is itself cut off by
+  // a hard clause break: "Avoid regressions. But rather than redesign the
+  // schema, ..." -- "avoid" is broken from the match by the period, but
+  // "rather than" right before "redesign" governs it cleanly. Check every
+  // cue in the window; the match is governed if any of them reach it with
+  // no break in between.
+  for (const cueMatch of window.matchAll(AVOIDANCE_CUE_PATTERN)) {
+    const linkText = window.slice(cueMatch.index + cueMatch[0].length);
+    if (HARD_CLAUSE_BREAK_PATTERN.test(linkText)) {
+      continue;
+    }
+    if (CLAUSE_CONTINUATION_COMMA_PATTERN.test(linkText)) {
+      continue;
+    }
+    return true;
+  }
+  return false;
+}
+function isFollowedByContentNoun(corpus, matchEnd) {
+  // The lookahead must stop at the first sentence/clause boundary: without
+  // it, "... redesign the public interface. Guidance: ..." would let an
+  // unrelated NEW sentence's "Guidance:" suppress a genuinely broad-scope
+  // match in the PRECEDING sentence.
+  const rawTail = corpus.slice(
+    matchEnd,
+    matchEnd + CONTENT_NOUN_LOOKAHEAD_CHARS,
+  );
+  const breakMatch = HARD_CLAUSE_BREAK_PATTERN.exec(rawTail);
+  const tail = breakMatch ? rawTail.slice(0, breakMatch.index) : rawTail;
+  const tokens = tail.match(WORD_TOKEN_PATTERN) ?? [];
+  return tokens
+    .slice(0, CONTENT_NOUN_LOOKAHEAD_TOKENS)
+    .some((token) => CONTENT_NOUN_PATTERN.test(token));
+}
+/**
+ * Finds the first BROAD_SCOPE_PATTERN occurrence that survives both
+ * exclusion checks (#2417): a match inside a code span, governed by an
+ * avoidance cue, or followed by a content noun does not describe this
+ * issue's own diff footprint and is skipped.
+ */
+function findUnexcludedBroadScopeMatch(corpus) {
+  for (const match of corpus.matchAll(BROAD_SCOPE_PATTERN)) {
+    const index = match.index;
+    const end = index + match[0].length;
+    if (
+      isInsideCodeSpan(corpus, index) ||
+      isGovernedByAvoidanceCue(corpus, index) ||
+      isFollowedByContentNoun(corpus, end)
+    ) {
+      continue;
+    }
+    return match[0];
+  }
+  return null;
+}
 export function evaluateLimitedScope(issue) {
   const corpus = `${issue.title}\n${issue.body}`;
   // Test the broad-scope signal first: a broad/A4-fail cue must fail the
   // gate even when a narrow cue is also present (e.g. "single module change
   // that redesigns a public interface"). Returning narrow-pass first would
   // let that wording bypass the gate.
-  if (BROAD_SCOPE_PATTERN.test(corpus)) {
+  const broadScopeMatch = findUnexcludedBroadScopeMatch(corpus);
+  if (broadScopeMatch !== null) {
     return {
       pass: false,
-      evidence: 'Broad or cross-cutting scope signal detected.',
+      evidence: `Broad or cross-cutting scope signal detected: "${broadScopeMatch}".`,
     };
   }
   if (NARROW_SCOPE_PATTERN.test(corpus)) {
