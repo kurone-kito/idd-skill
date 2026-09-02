@@ -196,6 +196,40 @@ under `pnpm run lint`'s full test suite (`node --test`), which
 `audit-docs.mjs --check` can still break `idd-onboard.mjs`. This needs a
 maintainer decision, not a mechanical file-list edit.
 
+## `.gitattributes` linguist-generated convention (`vendored-node`)
+
+Review bots (Copilot/CodeRabbit/etc.) read both a vendored `.mts`
+source file and its generated `.mjs` build output independently,
+producing duplicate findings for the same defect. The `idd-skill`
+source repository solves this for itself with a `.gitattributes`
+stanza marking every vendored `scripts/*.mjs`/`bin/**/*.mjs` file
+`linguist-generated=true` (see the root `.gitattributes`) — but
+`idd-template/` ships no `.gitattributes` file, since an adopter's own
+`.gitattributes` (if any) is theirs to own, and the import mechanism
+above has no safe way to merge into a file the adopter may already
+maintain (`resolveImportFiles`'s `new`/`unchanged`/`overwrite`/
+`blocked-non-file` classification would treat a pre-existing
+`.gitattributes` as a blocked overwrite, or silently clobber one with
+`--force`).
+
+Adopters who vendor the `vendored-node` helper bundle should instead
+add an equivalent stanza to their own `.gitattributes` by hand, listing
+each vendored generated file individually rather than a bare
+`scripts/*.mjs` glob — a target repository's `scripts/` directory may
+also contain hand-written `.mjs` files that must not be mis-marked as
+generated:
+
+```gitattributes
+# Generated from TypeScript sources by `pnpm run build`; see
+# https://github.com/kurone-kito/idd-skill/blob/main/docs/typescript-sources.md
+scripts/advisory-convergence.mjs linguist-generated=true
+scripts/claim-approval-gate.mjs linguist-generated=true
+# ... one line per vendored helper file actually present in this repo
+```
+
+`idd-template/ONBOARDING.md`'s vendored-node profile guidance links
+here.
+
 ## Remote fetch examples
 
 These `gh api` and `curl` loops intentionally list every canonical
