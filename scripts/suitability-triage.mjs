@@ -155,8 +155,17 @@ const SUBJECTIVE_SUBJECT_PATTERN =
   /(?<![\w-])(maintainer|stakeholder|human|opinion|judgment|judgement|ux|feel)(?![\w-])/i;
 const SUBJECTIVE_GATE_PATTERN =
   /(?<![\w-])(approval|sign-?off|decision|preference)(?![\w-])/i;
+// #2501: a bare `\b` on each word's dictionary form never matches an
+// ordinary inflected form ("passes", "included", "requires", "failing",
+// "presented", "resulted") -- an Acceptance Criteria bullet written with
+// any of those verb forms produced a false `does not provide objective
+// verification signals` failure despite being concretely, objectively
+// checkable. Each verb word below carries an explicit `-s|-ed/-d|-ing`
+// suffix group instead of the bare form; `objective`/`measurable`/
+// `deterministic` stay bare since they are adjectives, not conjugated as
+// verbs in this context.
 const OUTCOME_SIGNAL_PATTERN =
-  /\b(pass|fail|result|output|contains|include|present|required|objective|measurable|deterministic)\b/i;
+  /\b(pass(?:e[sd]|ing)?|fail(?:s|ed|ing)?|result(?:s|ed|ing)?|output(?:s|ted|ting)?|contain(?:s|ed|ing)?|include(?:s|d|ing)?|present(?:s|ed|ing)?|require(?:s|d|ing)?|objective|measurable|deterministic)\b/i;
 // Whole-body proximity variant of the subjective-approval check, built from
 // the same two pattern sources above (not hand-duplicated) so the
 // hyphen-boundary fix (#2205) applies to both the per-line and whole-body

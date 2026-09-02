@@ -2499,6 +2499,44 @@ test('verifiability accepts objective acceptance criteria without test keywords'
   assert.equal(result.pass, true);
 });
 
+test('verifiability recognizes inflected outcome-signal verb forms (#2501)', () => {
+  // Each bullet uses an ordinary inflected form -- not the bare dictionary
+  // word `OUTCOME_SIGNAL_PATTERN` previously required -- of a listed verb.
+  // Deliberately avoids both `hasVerificationChannel`'s own trigger words
+  // (test/verification/validate/lint/ci) and every bare dictionary form
+  // already in the pre-#2501 pattern, so this only passes when the widened
+  // suffix groups themselves match -- confirmed to fail pre-fix.
+  const result = checkVerifiability({
+    issue: {
+      ...BASE_ISSUE,
+      body: `## Acceptance Criteria
+- the exit code passes through unchanged from the subprocess
+- the changelog entry is included in the release notes
+- the new flag requires no additional configuration
+- the previously failing code path now behaves correctly
+- the corrected value is presented to the caller unchanged
+- the migration run resulted in the expected row count
+`,
+    },
+  } as Context);
+  assert.equal(result.pass, true);
+});
+
+test('verifiability still fails a bullet list with no outcome-signal word at all', () => {
+  // A checklist that names no outcome-signal word (inflected or bare) must
+  // still fail -- the widened pattern must not become unconditionally true.
+  const result = checkVerifiability({
+    issue: {
+      ...BASE_ISSUE,
+      body: `## Acceptance Criteria
+- the helper reads the configuration file
+- the helper writes a log entry
+`,
+    },
+  } as Context);
+  assert.equal(result.pass, false);
+});
+
 test('coherence allows TODO mentions when the issue is otherwise concrete', () => {
   const result = checkCoherence({
     issue: {
