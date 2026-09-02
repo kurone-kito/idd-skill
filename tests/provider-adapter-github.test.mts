@@ -1836,3 +1836,25 @@ test('postWorkItemComment throws the last error once retries are exhausted with 
     /persistent: HTTP 500/,
   );
 });
+
+test('postWorkItemComment always throws a real Error, even when the underlying failure is a non-Error value (Copilot review, #2504)', () => {
+  const port = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({
+      // Deliberately simulating a non-Error throw (e.g. from a misbehaving
+      // dependency) to verify the retry loop's own Error-wrapping fallback.
+      ghText: () => {
+        throw 'persistent: not an Error instance';
+      },
+      ghApiJson: () => [],
+    }),
+  );
+  assert.throws(
+    () => port.postWorkItemComment(9, 'marker body'),
+    (error: unknown) =>
+      error instanceof Error &&
+      /all 3 attempts failed/.test(error.message) &&
+      /persistent: not an Error instance/.test(error.message),
+  );
+});

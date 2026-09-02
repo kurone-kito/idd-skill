@@ -222,7 +222,14 @@ function postWorkItemCommentWithRetry(deps, repoPath, number, body) {
       lastError = error;
     }
   }
-  throw lastError;
+  // Copilot review, #2504: `lastError` is `unknown` -- a non-`Error` thrown
+  // by `deps.ghText`/`JSON.parse` (a string, `undefined`, ...) would make
+  // downstream handling/logging inconsistent. Always throw a real `Error`.
+  throw lastError instanceof Error
+    ? lastError
+    : new Error(
+        `postWorkItemComment: all ${POST_WORK_ITEM_COMMENT_TOTAL_ATTEMPTS} attempts failed for ${repoPath}/issues/${number}: ${String(lastError)}`,
+      );
 }
 /** #2267: {@link GithubProviderAdapterDeps.ghText}, swallowing any failure
  * and returning `''` instead -- the injectable-`deps` equivalent of
