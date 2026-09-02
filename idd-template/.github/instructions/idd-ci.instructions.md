@@ -149,6 +149,23 @@ that set instead of re-deriving it.
    <profile-selected-ci-wait-state-command> --pr {pr-number}
    ```
 
+   **Label-gated or other opt-in gate surfacing as a job step, not a
+   check.** `gh pr checks` (and `ci-wait-state`) lists jobs/checks, not
+   the steps inside them. An opt-in heavy CI gate wired to run as a
+   step inside an already-present job — rather than its own discrete
+   check — never appears as a new entry there; only the parent job
+   does, and only once, regardless of whether the gated step ran. Do
+   not conclude such a gate is not-running or already-done solely
+   because `gh pr checks` shows no new check for it; confirm it
+   actually executed by inspecting the job's own steps instead:
+
+   ```sh
+   gh run view {run-id} --json jobs
+   ```
+
+   and read the target job's `steps[]` for the gate's step name and
+   conclusion.
+
 2. Normalize check states:
    - treat `skipped`, `neutral`, and `not_applicable` as pass-equivalent
    - treat `pending`, `requested`, `waiting`, `queued`,
