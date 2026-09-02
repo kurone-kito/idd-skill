@@ -523,6 +523,45 @@ function isNegatedNearby(
     NEGATION_PATTERN.test(contextBefore) || NEGATION_PATTERN.test(contextAfter)
   );
 }
+/**
+ * True when the UNRESOLVED_CHOICE_PATTERN match at `matchIndex` sits
+ * inside a parenthetical that also contains a comma -- e.g.
+ * "(undecided, waits-on-person/credential, order-dependency,
+ * not-yet-ready)" -- evidence the match names one entry in a fixed,
+ * already-existing vocabulary rather than a claim about this issue's
+ * own open next step (#2508). A parenthetical with no comma (e.g.
+ * "(not yet decided which)") still counts as a genuine unresolved
+ * marker and is not excluded. A blank line (paragraph break) inside the
+ * span means the "(" and ")" belong to unrelated parentheticals in
+ * different paragraphs, not one enclosing span -- rejected -- but a
+ * single soft-wrapped newline inside one hand-wrapped Markdown
+ * paragraph does not end the span.
+ */
+function isEnumeratedParentheticalEntry(
+  body: string,
+  matchIndex: number,
+  matchLength: number,
+): boolean {
+  const openIndex = body.lastIndexOf('(', matchIndex);
+  if (openIndex === -1) {
+    return false;
+  }
+  const before = body.slice(openIndex + 1, matchIndex);
+  if (before.includes(')') || before.includes('\n\n')) {
+    return false;
+  }
+
+  const closeIndex = body.indexOf(')', matchIndex + matchLength);
+  if (closeIndex === -1) {
+    return false;
+  }
+  const after = body.slice(matchIndex + matchLength, closeIndex);
+  if (after.includes('(') || after.includes('\n\n')) {
+    return false;
+  }
+
+  return before.includes(',') || after.includes(',');
+}
 const ACCEPTANCE_CRITERIA_PATTERN = /^#+\s*Acceptance\s+Criteria\s*$/im;
 // A heading line such as "## Decision (resolved 2026-06-27)" records that a
 // human has already ruled on the issue's open question (see Check 7). The
@@ -1674,6 +1713,11 @@ export function checkAutonomy(context: Context): CheckOutcome {
       ) {
         continue;
       }
+      if (
+        isEnumeratedParentheticalEntry(body, markerIndex, markerText.length)
+      ) {
+        continue;
+      }
 
       const markerEnd = markerIndex + markerText.length;
       const isNearOrInsideEitherOr = eitherOrMatches.some((eitherOr) => {
@@ -1739,6 +1783,9 @@ export function checkAutonomy(context: Context): CheckOutcome {
     const markerText = marker[0] ?? '';
     const markerIndex = marker.index ?? 0;
     if (isNegatedNearby(body, markerText, markerIndex, NEGATION_WINDOW_CHARS)) {
+      continue;
+    }
+    if (isEnumeratedParentheticalEntry(body, markerIndex, markerText.length)) {
       continue;
     }
 

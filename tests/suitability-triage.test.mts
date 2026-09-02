@@ -2606,6 +2606,46 @@ test('autonomy ignores a negated unresolved-choice phrasing -- #2219', () => {
   assert.equal(result.pass, true);
 });
 
+test('autonomy passes a marker word used as one entry in a comma-separated parenthetical list of fixed terms -- #2508 (#2482 exact shape)', () => {
+  const result = checkAutonomy({
+    issue: {
+      ...BASE_ISSUE,
+      body: `${BASE_ISSUE.body}\nAdd a compact table covering all four intents (undecided, waits-on-person/credential, order-dependency, not-yet-ready) so authors stop inventing ad hoc markers.`,
+    },
+  } as Context);
+  assert.equal(result.pass, true);
+});
+
+test('autonomy passes a marker word inside a two-item mapping parenthetical (single comma) -- #2508 (#2482 exact shape)', () => {
+  const result = checkAutonomy({
+    issue: {
+      ...BASE_ISSUE,
+      body: `${BASE_ISSUE.body}\ndraft-patterns.md documents two of four cases (undecided ->\n\`needs-decision\`, waits-on-person/credential ->\n\`blocked-by-human\`) in prose.`,
+    },
+  } as Context);
+  assert.equal(result.pass, true);
+});
+
+test('autonomy still fails a marker inside a parenthetical with no comma -- #2508 (no loss of existing coverage)', () => {
+  const result = checkAutonomy({
+    issue: {
+      ...BASE_ISSUE,
+      body: `${BASE_ISSUE.body}\nThe backend choice (still undecided) blocks this from proceeding.`,
+    },
+  } as Context);
+  assert.equal(result.pass, false);
+});
+
+test('autonomy still fails a marker whose enclosing parens straddle a paragraph break -- #2508 (no over-suppression)', () => {
+  const result = checkAutonomy({
+    issue: {
+      ...BASE_ISSUE,
+      body: `${BASE_ISSUE.body}\nSome context (see below.\n\nThe rollout plan is undecided, blocking this work) until resolved.`,
+    },
+  } as Context);
+  assert.equal(result.pass, false);
+});
+
 test('autonomy still fails both original fixed templates unchanged -- #2219 (no regression)', () => {
   const requiresResult = checkAutonomy({
     issue: {
