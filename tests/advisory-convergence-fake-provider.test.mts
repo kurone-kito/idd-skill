@@ -137,3 +137,60 @@ test('collectFromGitHub threads a Copilot-authored unresolved thread through lis
     assert.equal(thread.comments?.nodes[0]?.author?.__typename, 'Bot');
   });
 });
+
+test('collectFromGitHub retries one transient getChangeRequestConvergenceView failure, then succeeds (#2459)', () => {
+  withHermeticCwd(() => {
+    const realPort = createFakeProviderAdapter(baseFixture());
+    let calls = 0;
+    const flakyPort = {
+      ...realPort,
+      getChangeRequestConvergenceView(number: number) {
+        calls += 1;
+        if (calls === 1) {
+          throw new Error('connection reset by peer');
+        }
+        return realPort.getChangeRequestConvergenceView(number);
+      },
+    };
+
+    const { inputs } = collectFromGitHub(
+      parseArgs(['--pr', String(PR_NUMBER), '--owner', 'o', '--repo', 'r']),
+      () => flakyPort,
+    );
+
+    // Retried past the transient failure instead of crashing the whole
+    // collection: the second (real) call succeeded, and its data made it
+    // all the way into the returned inputs.
+    assert.equal(calls, 2);
+    assert.equal(inputs.prHeadSha, 'a'.repeat(40));
+  });
+});
+
+test('collectFromGitHub does not retry a definitive 404 from getChangeRequestConvergenceView (#2459)', () => {
+  withHermeticCwd(() => {
+    const realPort = createFakeProviderAdapter(baseFixture());
+    let calls = 0;
+    const notFound = Object.assign(new Error('gh: Not Found (HTTP 404)'), {
+      stderr: 'gh: Not Found (HTTP 404)',
+    });
+    const missingPort = {
+      ...realPort,
+      getChangeRequestConvergenceView(_number: number) {
+        calls += 1;
+        throw notFound;
+      },
+    };
+
+    assert.throws(
+      () =>
+        collectFromGitHub(
+          parseArgs(['--pr', String(PR_NUMBER), '--owner', 'o', '--repo', 'r']),
+          () => missingPort,
+        ),
+      notFound,
+    );
+    // A permanent 404 rethrows on the first attempt -- no wasted retry
+    // budget on a failure a retry cannot fix.
+    assert.equal(calls, 1);
+  });
+});

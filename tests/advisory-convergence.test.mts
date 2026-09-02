@@ -28,6 +28,7 @@ import {
   pickResolvingClaimEvents,
   readCopilotReviewPollPolicy,
   resolveClaimEvidence,
+  retryTransientGhFailure,
   reviewPolicyNotApplicableReason,
   runAdvisoryConvergence,
   runAdvisoryConvergenceWithPoll,
@@ -4548,4 +4549,68 @@ test('writeAdvisoryConvergenceCliOutput writes guidance before JSON (#2142)', ()
     env: { GITHUB_ACTIONS: 'true' },
   });
   assert.equal(reportErr, '');
+});
+
+test('retryTransientGhFailure retries a status-less (transport-level) failure, then succeeds (#2459)', () => {
+  let calls = 0;
+  const result = retryTransientGhFailure(() => {
+    calls += 1;
+    if (calls < 2) {
+      throw new Error('unexpected end of JSON input');
+    }
+    return 'ok';
+  });
+  assert.equal(result, 'ok');
+  assert.equal(calls, 2);
+});
+
+test('retryTransientGhFailure retries a 5xx failure, then succeeds (#2459)', () => {
+  let calls = 0;
+  const result = retryTransientGhFailure(() => {
+    calls += 1;
+    if (calls < 2) {
+      throw Object.assign(new Error('gh: Service Unavailable (HTTP 503)'), {
+        stderr: 'gh: Service Unavailable (HTTP 503)',
+      });
+    }
+    return 'ok';
+  });
+  assert.equal(result, 'ok');
+  assert.equal(calls, 2);
+});
+
+test('retryTransientGhFailure rethrows a definitive 4xx immediately, without retrying (#2459)', () => {
+  let calls = 0;
+  const notFound = Object.assign(new Error('gh: Not Found (HTTP 404)'), {
+    stderr: 'gh: Not Found (HTTP 404)',
+  });
+  assert.throws(
+    () =>
+      retryTransientGhFailure(() => {
+        calls += 1;
+        throw notFound;
+      }),
+    notFound,
+  );
+  assert.equal(calls, 1);
+});
+
+test('retryTransientGhFailure exhausts bounded attempts and rethrows the final error unchanged (#2459)', () => {
+  let calls = 0;
+  let lastError: Error | undefined;
+  let caught: unknown;
+  try {
+    retryTransientGhFailure(() => {
+      calls += 1;
+      lastError = new Error(`persistent transport failure ${calls}`);
+      throw lastError;
+    });
+    assert.fail('expected retryTransientGhFailure to throw');
+  } catch (error) {
+    caught = error;
+  }
+  // Bounded to 3 attempts total, and the rethrown error is the exact same
+  // instance the final attempt threw (fail-closed, never re-wrapped).
+  assert.equal(calls, 3);
+  assert.equal(caught, lastError);
 });

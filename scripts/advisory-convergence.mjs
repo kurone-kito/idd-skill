@@ -113,6 +113,7 @@ import {
   normalizeAuthorityEvidence,
   resolveCollaboratorAuthority,
 } from './external-check-waiver.mjs';
+import { deriveGhHttpStatus } from './gh-http-status.mjs';
 import { loadIddConfig } from './idd-config.mjs';
 import { isValidIsoTimestamp, parseClaimComment } from './marker-helpers.mjs';
 import {
@@ -1534,6 +1535,50 @@ export function viewerProbeGhOptions(env = process.env) {
         : ['ignore', 'pipe', 'inherit'],
   };
 }
+/** Total attempts (including the first) for {@link retryTransientGhFailure}. */
+const RETRY_TRANSIENT_GH_FAILURE_ATTEMPTS = 3;
+/** Base delay (ms) for {@link retryTransientGhFailure}'s backoff + jitter. */
+const RETRY_TRANSIENT_GH_FAILURE_BASE_DELAY_MS = 200;
+/**
+ * #2459: `collectFromGitHub`'s hot-path single-shot `gh` calls threw
+ * unretried on any failure, so a several-second runner network blip
+ * crashed the whole required `idd-advisory-convergence` CI job instead of
+ * self-healing, burning a full `ciWait.rerunPolicy` rerun-once budget
+ * entry on pure infrastructure noise. Retry only a genuinely transient
+ * failure: no parsed HTTP status (a transport-level blip with no server
+ * response -- e.g. the truncated captured stdout `#1394` already
+ * documents under heavy concurrent load) or a 5xx. A definitive 4xx
+ * (not-found, forbidden, unauthorized, etc.) is a permanent rejection a
+ * retry cannot fix, so it rethrows immediately instead of wasting the
+ * attempt budget.
+ *
+ * Deliberately self-contained (reuses this file's own `sleepSync`, does
+ * NOT import `gh-exec.mts`'s async `withBoundedRetry`): this file is
+ * already migrated onto `provider-port.mts`
+ * (`provider-port-migration-guard.test.mts`), which forbids regaining a
+ * direct `gh-exec.mts` import; several of the wrapped port methods below
+ * are also called, unretried, by many other synchronous callers across
+ * the codebase, so converting them (and this file's own synchronous call
+ * chain) to `async` to use the Promise-based `withBoundedRetry` would
+ * cascade well beyond this caller's scope.
+ */
+export function retryTransientGhFailure(task) {
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      return task();
+    } catch (error) {
+      const status = deriveGhHttpStatus(error);
+      const retryable = status === null || status >= 500;
+      if (attempt >= RETRY_TRANSIENT_GH_FAILURE_ATTEMPTS || !retryable) {
+        throw error;
+      }
+      sleepSync(
+        RETRY_TRANSIENT_GH_FAILURE_BASE_DELAY_MS * attempt +
+          Math.random() * RETRY_TRANSIENT_GH_FAILURE_BASE_DELAY_MS,
+      );
+    }
+  }
+}
 /**
  * `createPort` is injectable (defaults to the real GitHub adapter) so a test
  * can drive this collection entry end to end against
@@ -1567,7 +1612,9 @@ export function collectFromGitHub(
     envValue: process.env.IDD_ADVISORY_BOT_LOGINS,
     config: rawConfig,
   });
-  const view = port.getChangeRequestConvergenceView(Number(args.prNumber));
+  const view = retryTransientGhFailure(() =>
+    port.getChangeRequestConvergenceView(Number(args.prNumber)),
+  );
   const prHeadSha = view.headSha.toLowerCase();
   const prHeadRefName = view.headRefName.trim();
   const prAuthorLogin = view.authorLogin.toLowerCase();
@@ -1576,9 +1623,9 @@ export function collectFromGitHub(
   // Fetched here (ahead of `trustedMarkerLogins` below) so a collaborator's
   // marker-shaped PR comment can be detected before that set is used to
   // resolve `claimEvents` -- see `resolveTrustedCollaboratorMarkerLogins`.
-  const comments = port
-    .listWorkItemComments(Number(args.prNumber))
-    .map(toIssueCommentPayload);
+  const comments = retryTransientGhFailure(() =>
+    port.listWorkItemComments(Number(args.prNumber)),
+  ).map(toIssueCommentPayload);
   // #1344: collaborator-marker trust, matching `pre-merge-readiness.mts`'s
   // `readCollaboratorTrustEnabled` exactly, except reusing the already-
   // loaded `rawConfig` instead of a second `.github/idd/config.json` read
@@ -1694,9 +1741,9 @@ export function collectFromGitHub(
     policy?.providerOutage?.declarationTarget;
   if (outageDeclarationTargetIssue) {
     try {
-      const declarationComments = port
-        .listWorkItemComments(outageDeclarationTargetIssue)
-        .map(toIssueCommentPayload);
+      const declarationComments = retryTransientGhFailure(() =>
+        port.listWorkItemComments(outageDeclarationTargetIssue),
+      ).map(toIssueCommentPayload);
       const authorityOf = (actorLogin) =>
         normalizeAuthorityEvidence(
           resolveCollaboratorAuthority({ owner, repo, actor: actorLogin }),
@@ -1735,7 +1782,9 @@ export function collectFromGitHub(
   let prFirstCommitAt = null;
   if (forcedHandoffEnabled) {
     try {
-      const prCommits = port.listChangeRequestCommits(Number(args.prNumber));
+      const prCommits = retryTransientGhFailure(() =>
+        port.listChangeRequestCommits(Number(args.prNumber)),
+      );
       prFirstCommitAt = resolvePrFirstCommitAt(prCommits);
     } catch {
       prFirstCommitAt = null;
@@ -2092,7 +2141,9 @@ function resolveTrustedCollaboratorMarkerLogins(port, commentLikeEvents) {
     ),
   ];
   return markerAuthors.filter((login) => {
-    const result = port.getCollaboratorPermission(login);
+    const result = retryTransientGhFailure(() =>
+      port.getCollaboratorPermission(login),
+    );
     const permission = result.outcome === 'found' ? result.permission : '';
     return (
       permission === 'admin' ||
@@ -2132,7 +2183,9 @@ function toIssueCommentPayload(comment) {
  * is enabled (see the call site), so a repository that never sets the
  * flag never pays for this extra request. */
 function fetchPrAuthor(port, prNumber) {
-  const author = port.getChangeRequestAuthor(prNumber);
+  const author = retryTransientGhFailure(() =>
+    port.getChangeRequestAuthor(prNumber),
+  );
   return author ? { login: author.login, __typename: author.typename } : null;
 }
 /** Map a `ProviderPort.listChangeRequestReviewThreadsWithAuthorType` node
