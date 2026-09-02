@@ -29,6 +29,20 @@
 // carry it through as a join hint, and the sample record itself must
 // never hold a branch string (privacy) -- so this adapter leaves it
 // alone entirely rather than inventing a new interface field for it.
+//
+// #2404: a long-lived interactive session that works across many issues
+// and worktrees within one continuous conversation records a different
+// `cwd` on different stretches of the SAME project JSONL file -- the
+// file's `cwd` is not a per-file constant, only per-stretch. Reading only
+// the first `cwd` found (the original `extractCwd` behavior) can never
+// produce an issue-loop sample for any later worktree, no matter how much
+// real per-issue work happens there. `scanClaudeSessions` below now
+// segments each file's records into contiguous cwd-stable runs
+// (`segmentRecordsByCwd`) and calls `claudeAdapter.harvest()` once per
+// segment, scoping usage/timestamp extraction to just that segment's
+// records; `claudeAdapter.harvest()` itself is unchanged in shape (still
+// one call in, one `TokenCostAdapterResult` out) and stays exactly as
+// valid for a single-segment (the common, unchanged case) as before.
 
 import { globSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
@@ -61,6 +75,17 @@ export interface ClaudeHarvestInput {
   records: readonly unknown[];
   /** Project JSONL filename basename only -- never a directory path. */
   fileBasename?: string;
+  /**
+   * Disambiguates multiple harvest() calls whose `records` all come from
+   * the SAME underlying project JSONL file -- one call per contiguous cwd
+   * segment (see `segmentRecordsByCwd` / `scanClaudeSessions`) -- so each
+   * segment's sample gets a distinct, stable `vendorSessionId` instead of
+   * colliding on the file's own shared `sessionId`. Leave undefined for a
+   * whole-file / single-segment harvest: the common case (a file that
+   * never changes `cwd`) keeps its pre-existing `vendorSessionId` exactly
+   * as before, with no suffix at all.
+   */
+  segmentIndex?: number;
 }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
@@ -150,6 +175,37 @@ function deriveFallbackSessionId(
   return stripped.length > 0 ? stripped : undefined;
 }
 
+/**
+ * Appends `segmentIndex` to `base` (`#2404`) so multiple harvest() calls
+ * against records from the SAME project JSONL file -- one call per cwd
+ * segment -- get distinct `vendorSessionId`s instead of colliding on the
+ * file's own shared `sessionId`. `segmentIndex === undefined` (the
+ * single-segment / whole-file case) returns `base` completely unchanged,
+ * so a file that never changes `cwd` keeps its pre-existing
+ * `vendorSessionId` and stays deduplicated against samples already
+ * harvested before this change.
+ *
+ * Known, deliberate one-time migration edge: a live session already
+ * harvested once as single-segment (its `base` id, with no suffix, recorded in
+ * `samples.jsonl`) that later `cd`s into a worktree becomes multi-segment
+ * on its next harvest; that segment's usage re-enters under `base#0`
+ * while the earlier whole-file snapshot under the bare `base` remains, so
+ * the overlapping usage is counted twice across those two runs. Leaving
+ * segment 0 without a suffix instead would only move the same double-count onto
+ * segments 1+ the first time an already-harvested single-segment file
+ * gains a second segment -- unavoidable without content-hashing each
+ * segment, and out of scope here since it is a one-time transition, not a
+ * steady-state gap.
+ */
+function deriveVendorSessionId(
+  base: string | undefined,
+  segmentIndex: number | undefined,
+): string | undefined {
+  return base === undefined || segmentIndex === undefined
+    ? base
+    : `${base}#${segmentIndex}`;
+}
+
 /** The first non-empty top-level `cwd` across `records`, in file order. */
 function extractCwd(records: readonly unknown[]): string | undefined {
   for (const record of records) {
@@ -161,6 +217,50 @@ function extractCwd(records: readonly unknown[]): string | undefined {
     }
   }
   return undefined;
+}
+
+/** One contiguous run of `records` (in file order) that shares the same `cwd`. `cwd` is `undefined` only when no record in the run carries one at all. */
+export interface ClaudeCwdSegment {
+  cwd: string | undefined;
+  records: unknown[];
+}
+
+/**
+ * Splits `records` into contiguous segments wherever the recorded `cwd`
+ * changes (`#2404`), in file order. A record that carries no `cwd` field
+ * joins whichever segment is currently open rather than forcing a split --
+ * only a genuine change to a NEW non-empty `cwd` value starts a new
+ * segment. A file that never changes `cwd` (the common case), or never
+ * records one at all, still produces exactly one segment covering every
+ * record -- byte-for-byte the same grouping `extractCwd`'s old
+ * whole-file "first cwd found" behavior implied, so scanClaudeSessions
+ * can special-case a single segment to skip vendorSessionId suffixing.
+ */
+export function segmentRecordsByCwd(
+  records: readonly unknown[],
+): ClaudeCwdSegment[] {
+  const segments: ClaudeCwdSegment[] = [];
+  let currentCwd: string | undefined;
+  let haveCwd = false;
+  let currentRecords: unknown[] = [];
+  for (const record of records) {
+    const cwd = isPlainObject(record)
+      ? getStringField(record, 'cwd')
+      : undefined;
+    if (cwd !== undefined) {
+      if (haveCwd && cwd !== currentCwd) {
+        segments.push({ cwd: currentCwd, records: currentRecords });
+        currentRecords = [];
+      }
+      currentCwd = cwd;
+      haveCwd = true;
+    }
+    currentRecords.push(record);
+  }
+  if (currentRecords.length > 0) {
+    segments.push({ cwd: currentCwd, records: currentRecords });
+  }
+  return segments;
 }
 
 /** Most recently reported `message.model` string across every record, or undefined when none exists. */
@@ -291,16 +391,20 @@ function asClaudeHarvestInput(input: unknown): ClaudeHarvestInput {
   }
   const fileBasename =
     typeof input.fileBasename === 'string' ? input.fileBasename : undefined;
-  return { records: input.records, fileBasename };
+  const segmentIndex =
+    typeof input.segmentIndex === 'number' ? input.segmentIndex : undefined;
+  return { records: input.records, fileBasename, segmentIndex };
 }
 
 /** Claude Code vendor adapter. `input` must satisfy {@link ClaudeHarvestInput}. */
 export const claudeAdapter: TokenCostVendorAdapter = {
   harvest(input: unknown): TokenCostAdapterResult {
-    const { records, fileBasename } = asClaudeHarvestInput(input);
+    const { records, fileBasename, segmentIndex } = asClaudeHarvestInput(input);
 
-    const vendorSessionId =
-      extractSessionId(records) ?? deriveFallbackSessionId(fileBasename);
+    const vendorSessionId = deriveVendorSessionId(
+      extractSessionId(records) ?? deriveFallbackSessionId(fileBasename),
+      segmentIndex,
+    );
     if (!vendorSessionId) {
       throw new Error(
         'token-cost-adapter-claude: unable to determine a vendorSessionId',
@@ -365,9 +469,17 @@ export interface ScanClaudeSessionsOptions {
 
 /**
  * Scan `projectDir` (default `~/.claude/projects/<encoded-cwd>`) for
- * `*.jsonl` files and harvest each into a {@link TokenCostAdapterResult}.
- * Unlike the Codex rollout tree, Claude Code already scopes one directory
- * per project cwd, so no additional idd-skill-cwd filter is needed here.
+ * `*.jsonl` files and harvest each into zero or more
+ * {@link TokenCostAdapterResult}s. Unlike the Codex rollout tree, Claude
+ * Code already scopes one directory per project cwd, so no additional
+ * idd-skill-cwd filter is needed here.
+ *
+ * A file's records are first split into contiguous cwd segments
+ * (`#2404`, `segmentRecordsByCwd`) -- one `harvest()` call per segment, so
+ * a long-lived session that moves across several `issue/<n>-*` worktrees
+ * within one continuous conversation still produces a correctly-scoped
+ * sample per worktree, not just one sample pinned to whichever cwd the
+ * file happened to record first.
  */
 export function scanClaudeSessions(
   options?: ScanClaudeSessionsOptions,
@@ -383,21 +495,36 @@ export function scanClaudeSessions(
 
   const results: TokenCostAdapterResult[] = [];
   for (const file of files) {
-    // Read, parse, and harvest all live inside one try: a live Claude Code
-    // session can still be writing (or an unrelated process can delete) a
-    // project JSONL file between globSync and this line, so readFileSync
-    // itself can throw (ENOENT/EACCES), not only harvest() on malformed
-    // content -- either failure must skip just this one file, never abort
-    // the whole scan.
+    // A live Claude Code session can still be writing (or an unrelated
+    // process can delete) a project JSONL file between globSync and this
+    // line, so readFileSync itself can throw (ENOENT/EACCES) -- that
+    // failure must skip just this one file, never abort the whole scan.
+    let records: unknown[];
     try {
-      const records = parseClaudeProjectLines(readFileSync(file, 'utf8'));
-      results.push(
-        claudeAdapter.harvest({
-          records,
-          fileBasename: basename(file),
-        } satisfies ClaudeHarvestInput),
-      );
-    } catch {}
+      records = parseClaudeProjectLines(readFileSync(file, 'utf8'));
+    } catch {
+      continue;
+    }
+    const fileBasename = basename(file);
+    const segments = segmentRecordsByCwd(records);
+    segments.forEach((segment, index) => {
+      // Each segment's harvest() call is its own try: one malformed or
+      // timestamp-less segment (e.g. a stretch with no valid timestamp)
+      // must not discard its sibling segments from the same file.
+      try {
+        results.push(
+          claudeAdapter.harvest({
+            records: segment.records,
+            fileBasename,
+            // Suffix only when a file actually produced more than one
+            // segment -- the common single-segment case keeps its
+            // pre-existing vendorSessionId (no suffix) so already-harvested
+            // samples stay deduplicated against this change.
+            segmentIndex: segments.length > 1 ? index : undefined,
+          } satisfies ClaudeHarvestInput),
+        );
+      } catch {}
+    });
   }
   return results;
 }
