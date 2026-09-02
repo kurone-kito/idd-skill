@@ -757,13 +757,14 @@ the `Project commands` table in
 The following policy matrix defines the tooling requirements and
 fallback order for repositories adopting IDD:
 
-| Context                                  | Requirement                         | Fallback order                                                                                           |
-| ---------------------------------------- | ----------------------------------- | -------------------------------------------------------------------------------------------------------- |
-| `git`, `gh`, `jq`, `curl`                | **Required for the GitHub adapter** | No fallback for GitHub; IDD's only implemented provider today needs these                                |
-| `install-deps` command                   | Project-dependent                   | Use project's native package manager; `true` as no-op when no install step is needed                     |
-| Validate commands (`fix-validate`, etc.) | Project-dependent                   | Use project tooling; `true` as no-op                                                                     |
-| Node.js / `npx`                          | Optional                            | 1. Existing project Node.js tooling; 2. `npx` when available; 3. `true` when unavailable or not relevant |
-| pnpm                                     | Not required by IDD                 | Only needed when the adopter's project itself uses pnpm                                                  |
+| Context                                  | Requirement                         | Fallback order                                                                                                |
+| ---------------------------------------- | ----------------------------------- | ------------------------------------------------------------------------------------------------------------- |
+| `git`                                    | **Required**                        | No fallback; IDD-wide, independent of provider (`git worktree`/`fetch`/`merge` run outside the provider port) |
+| `gh`, `jq`, `curl`                       | **Required for the GitHub adapter** | No fallback for GitHub; IDD's only implemented provider today needs these                                     |
+| `install-deps` command                   | Project-dependent                   | Use project's native package manager; `true` as no-op when no install step is needed                          |
+| Validate commands (`fix-validate`, etc.) | Project-dependent                   | Use project tooling; `true` as no-op                                                                          |
+| Node.js / `npx`                          | Optional                            | 1. Existing project Node.js tooling; 2. `npx` when available; 3. `true` when unavailable or not relevant      |
+| pnpm                                     | Not required by IDD                 | Only needed when the adopter's project itself uses pnpm                                                       |
 
 Decision points:
 
@@ -779,12 +780,13 @@ Decision points:
 ## Provider Portability
 
 GitHub is IDD's only implemented and fully exercised provider today,
-and `git`/`gh`/`jq`/`curl` above name the GitHub adapter's own
-requirements, not a permanent IDD-wide constraint. Internally, IDD
-defines a provider-neutral adapter boundary -- capability groups
-(work items, comments and labels, claims, change requests, reviews and
-threads, checks, permissions, branch protection, merge) each declared
-`required` or `optional`, with normalized outcomes
+and `gh`/`jq`/`curl` above name the GitHub adapter's own requirements,
+not a permanent IDD-wide constraint (`git` itself stays required
+IDD-wide regardless of provider). Internally, IDD defines a
+provider-neutral adapter boundary -- capability groups (repository
+identity, work items, comments and labels, claims, change requests,
+reviews and threads, checks, permissions, branch protection, merge)
+each declared `required` or `optional`, with normalized outcomes
 (`ok`/`fail_closed`/`not_applicable`) and error categories independent
 of any one platform's status codes. A required capability an adapter
 does not support fails closed rather than silently passing; an
