@@ -401,6 +401,16 @@ const HELPER_COMMANDS = [
     contractPaths: ['schemas/pre-merge-readiness.schema.json'],
   },
   {
+    id: 'provider-health',
+    scriptName: 'idd:provider-health',
+    binName: 'idd-provider-health',
+    entryPath: 'scripts/provider-health.mjs',
+    vendoredCommand: 'node scripts/provider-health.mjs',
+    description:
+      'Read-only, cross-pull-request healthy/degraded/unavailable/unknown verdict for advisory-review and ci-actions.',
+    contractPaths: ['schemas/provider-health.schema.json'],
+  },
+  {
     id: 'provider-outage-declaration',
     scriptName: 'idd:provider-outage-declaration',
     binName: 'idd-provider-outage-declaration',

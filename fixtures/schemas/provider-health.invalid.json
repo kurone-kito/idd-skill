@@ -1,0 +1,22 @@
+{
+  "protocolVersion": "1",
+  "now": "2026-09-01T00:00:00Z",
+  "services": {
+    "advisory-review": {
+      "service": "advisory-review",
+      "verdict": "down",
+      "reason": "failure-below-corroboration-threshold",
+      "distinctFailingPrCount": 1,
+      "distinctSuccessPrCount": 0,
+      "minCorroboratingPrs": 2
+    },
+    "ci-actions": {
+      "service": "ci-actions",
+      "verdict": "healthy",
+      "reason": "all-healthy",
+      "distinctFailingPrCount": 0,
+      "distinctSuccessPrCount": 3,
+      "minCorroboratingPrs": 2
+    }
+  }
+}

@@ -879,6 +879,10 @@ test('policy normalization provides default-safe values and supports aliases', (
     localValidationEvidence: {
       maxAge: 'PT4H',
     },
+    providerHealth: {
+      minCorroboratingPrs: 2,
+      samplingWindow: 'PT24H',
+    },
   });
 
   const defaultPolicy = normalizePolicyConfig(null);
@@ -1056,6 +1060,10 @@ test('policy normalization provides default-safe values and supports aliases', (
       },
       localValidationEvidence: {
         maxAge: 'PT4H',
+      },
+      providerHealth: {
+        minCorroboratingPrs: 2,
+        samplingWindow: 'PT24H',
       },
     },
   );

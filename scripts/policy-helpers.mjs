@@ -328,6 +328,12 @@ export const POLICY_DEFAULTS = Object.freeze({
   localValidationEvidence: Object.freeze({
     maxAge: 'PT4H',
   }),
+  // Added in #2319. `minCorroboratingPrs: 2` means a single pull request's
+  // failure burst always caps at `degraded`, never `unavailable`.
+  providerHealth: Object.freeze({
+    minCorroboratingPrs: 2,
+    samplingWindow: 'PT24H',
+  }),
 });
 export function parseProjectCommandRows(text) {
   const commands = new Map();
@@ -473,6 +479,26 @@ export function normalizePolicyConfig(config) {
     maxAge: parsePositiveDuration(
       c?.localValidationEvidence?.maxAge,
       POLICY_DEFAULTS.localValidationEvidence.maxAge,
+    ),
+  };
+  // #2319: read-only classifier tuning, never a gate. `minCorroboratingPrs`
+  // floors at 2 unconditionally -- the issue's own invariant ("a single
+  // pull request's failure burst can never resolve stronger than degraded")
+  // must hold regardless of configuration, so a configured `1` (or any
+  // value `parsePositiveInteger` would otherwise accept) falls back to the
+  // default rather than silently disabling the corroboration requirement.
+  const rawMinCorroboratingPrs = parsePositiveInteger(
+    c?.providerHealth?.minCorroboratingPrs,
+    POLICY_DEFAULTS.providerHealth.minCorroboratingPrs,
+  );
+  const providerHealth = {
+    minCorroboratingPrs:
+      rawMinCorroboratingPrs >= 2
+        ? rawMinCorroboratingPrs
+        : POLICY_DEFAULTS.providerHealth.minCorroboratingPrs,
+    samplingWindow: parsePositiveDuration(
+      c?.providerHealth?.samplingWindow,
+      POLICY_DEFAULTS.providerHealth.samplingWindow,
     ),
   };
   // #2271: own-property-omitted on both 'absent' and 'invalid' -- mirrors
@@ -708,6 +734,7 @@ export function normalizePolicyConfig(config) {
     },
     providerOutage,
     localValidationEvidence,
+    providerHealth,
   };
 }
 export function resolveCollaboratorMarkerTrust(config, envValue = '') {

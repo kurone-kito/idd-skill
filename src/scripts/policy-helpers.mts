@@ -51,6 +51,16 @@ interface LocalValidationEvidencePolicy {
   maxAge: string;
 }
 
+/**
+ * `#2319`: the read-only provider-health classifier's corroboration
+ * threshold and sampling window. Never a gate -- no field this policy
+ * controls is, or is consumed as, a merge-readiness or CI-gate result.
+ */
+interface ProviderHealthPolicy {
+  minCorroboratingPrs: number;
+  samplingWindow: string;
+}
+
 /** How one policy document presents `critiqueLoop.delegate`. */
 export type CritiqueLoopDelegateLayerStatus =
   | 'absent'
@@ -365,6 +375,7 @@ interface RawConfig {
   mergeGate?: { soloCodeownerAdminFallback?: unknown };
   providerOutage?: { declarationTarget?: unknown; maxValidity?: unknown };
   localValidationEvidence?: { maxAge?: unknown };
+  providerHealth?: { minCorroboratingPrs?: unknown; samplingWindow?: unknown };
   developmentBranch?: unknown;
   provider?: unknown;
 }
@@ -563,6 +574,12 @@ export const POLICY_DEFAULTS = Object.freeze({
   localValidationEvidence: Object.freeze({
     maxAge: 'PT4H',
   }) as Readonly<LocalValidationEvidencePolicy>,
+  // Added in #2319. `minCorroboratingPrs: 2` means a single pull request's
+  // failure burst always caps at `degraded`, never `unavailable`.
+  providerHealth: Object.freeze({
+    minCorroboratingPrs: 2,
+    samplingWindow: 'PT24H',
+  }) as Readonly<ProviderHealthPolicy>,
 });
 
 export function parseProjectCommandRows(text: string): Map<string, string> {
@@ -728,6 +745,26 @@ export function normalizePolicyConfig(config: unknown) {
     maxAge: parsePositiveDuration(
       c?.localValidationEvidence?.maxAge,
       POLICY_DEFAULTS.localValidationEvidence.maxAge,
+    ),
+  };
+  // #2319: read-only classifier tuning, never a gate. `minCorroboratingPrs`
+  // floors at 2 unconditionally -- the issue's own invariant ("a single
+  // pull request's failure burst can never resolve stronger than degraded")
+  // must hold regardless of configuration, so a configured `1` (or any
+  // value `parsePositiveInteger` would otherwise accept) falls back to the
+  // default rather than silently disabling the corroboration requirement.
+  const rawMinCorroboratingPrs = parsePositiveInteger(
+    c?.providerHealth?.minCorroboratingPrs,
+    POLICY_DEFAULTS.providerHealth.minCorroboratingPrs,
+  );
+  const providerHealth: ProviderHealthPolicy = {
+    minCorroboratingPrs:
+      rawMinCorroboratingPrs >= 2
+        ? rawMinCorroboratingPrs
+        : POLICY_DEFAULTS.providerHealth.minCorroboratingPrs,
+    samplingWindow: parsePositiveDuration(
+      c?.providerHealth?.samplingWindow,
+      POLICY_DEFAULTS.providerHealth.samplingWindow,
     ),
   };
   // #2271: own-property-omitted on both 'absent' and 'invalid' -- mirrors
@@ -964,6 +1001,7 @@ export function normalizePolicyConfig(config: unknown) {
     },
     providerOutage,
     localValidationEvidence,
+    providerHealth,
   };
 }
 

@@ -1047,3 +1047,44 @@ test('resolveEffectiveProvider: an unknown provider value fails closed, never si
   );
   assert.equal(resolveEffectiveProvider({ provider: 42 }).status, 'invalid');
 });
+
+test('providerHealth defaults to minCorroboratingPrs 2 and samplingWindow PT24H when unconfigured (#2319)', () => {
+  assert.equal(POLICY_DEFAULTS.providerHealth.minCorroboratingPrs, 2);
+  assert.equal(POLICY_DEFAULTS.providerHealth.samplingWindow, 'PT24H');
+  assert.deepEqual(normalizePolicyConfig({}).providerHealth, {
+    minCorroboratingPrs: 2,
+    samplingWindow: 'PT24H',
+  });
+});
+
+test('providerHealth accepts a configured minCorroboratingPrs and samplingWindow override (#2319)', () => {
+  assert.deepEqual(
+    normalizePolicyConfig({
+      providerHealth: { minCorroboratingPrs: 5, samplingWindow: 'PT6H' },
+    }).providerHealth,
+    { minCorroboratingPrs: 5, samplingWindow: 'PT6H' },
+  );
+});
+
+test('providerHealth.minCorroboratingPrs rejects an invalid value deterministically, falling back to the default (#2319)', () => {
+  for (const invalid of [0, 1, -1, 1.5, '2', null, [2]]) {
+    assert.equal(
+      normalizePolicyConfig({
+        providerHealth: { minCorroboratingPrs: invalid },
+      }).providerHealth.minCorroboratingPrs,
+      2,
+      `expected minCorroboratingPrs ${JSON.stringify(invalid)} to fail safe to the default`,
+    );
+  }
+});
+
+test('providerHealth.samplingWindow rejects an invalid duration deterministically, falling back to the default (#2319)', () => {
+  for (const invalid of ['not-a-duration', 'P0D', 42, null]) {
+    assert.equal(
+      normalizePolicyConfig({ providerHealth: { samplingWindow: invalid } })
+        .providerHealth.samplingWindow,
+      'PT24H',
+      `expected samplingWindow ${JSON.stringify(invalid)} to fail safe to the default`,
+    );
+  }
+});

@@ -193,6 +193,7 @@ const COVERED_HELPERS = [
   'merged-pr-feedback-sweep',
   'phase-id-resolver',
   'pre-merge-readiness',
+  'provider-health',
   'provider-outage-declaration',
   'rerun-advisory-convergence',
   'resolve-review-thread',

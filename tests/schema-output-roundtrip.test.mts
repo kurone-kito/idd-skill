@@ -219,6 +219,17 @@ const SCHEMA_OUTPUT_COVERAGE: CoverageEntry[] = [
     builder: 'buildPreMergeReadinessSummary (protocol-helpers.mts)',
   },
   {
+    schema: 'provider-health.schema.json',
+    status: 'uncovered',
+    reason:
+      'buildProviderHealthReport (provider-health.mts) assembles the full ' +
+      'envelope but calls collectAdvisoryReviewEvidence/' +
+      'collectCiActionsEvidence internally (live gh network reads); the ' +
+      'pure per-service builder classifyProviderHealth is exercised ' +
+      "directly against the schema by tests/provider-health.test.mts's " +
+      'own fixture-driven tests instead.',
+  },
+  {
     schema: 'provider-outage-declaration.schema.json',
     status: 'covered',
     builder:

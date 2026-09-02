@@ -1,6 +1,12 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { chmodSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  chmodSync,
+  mkdirSync,
+  mkdtempSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
@@ -339,6 +345,7 @@ process.exit(1);
 
 function runPreMergeReadinessSmoke(
   threadResolved: boolean,
+  options: { configJson?: string } = {},
 ): Record<string, unknown> {
   const tempRoot = mkdtempSync(join(tmpdir(), 'idd-pre-merge-readiness-cli-'));
   const cwdRoot = mkdtempSync(join(tmpdir(), 'idd-pre-merge-readiness-cwd-'));
@@ -346,6 +353,12 @@ function runPreMergeReadinessSmoke(
     const ghPath = join(tempRoot, 'gh');
     writeFileSync(ghPath, buildStubGhScript(threadResolved));
     chmodSync(ghPath, 0o755);
+
+    if (options.configJson !== undefined) {
+      const configDir = join(cwdRoot, '.github', 'idd');
+      mkdirSync(configDir, { recursive: true });
+      writeFileSync(join(configDir, 'config.json'), options.configJson);
+    }
 
     const output = execFileSync(
       process.execPath,
@@ -447,6 +460,37 @@ test('pre-merge-readiness.mjs CLI: clean scenario collects and normalizes raw gh
     precondition.headCommittedAt,
     REVIEWS_AND_HEAD_COMMIT_COMMITTED_DATE,
   );
+});
+
+// #2319's isolation acceptance criterion: the read-only provider-health
+// classifier's `providerHealth` policy object must change no existing
+// merge-readiness output. Runs the identical clean-scenario stub twice --
+// once with no config.json (the baseline every other test in this file
+// already exercises), once with a config.json that both satisfies the
+// policy schema's required fields and configures a non-default
+// `providerHealth` value -- and asserts the parsed reports are byte-
+// identical, since `pre-merge-readiness.mts` never reads this key.
+test('pre-merge-readiness.mjs CLI: a configured providerHealth policy changes no existing output field (#2319 isolation)', () => {
+  const baseline = runPreMergeReadinessSmoke(true);
+  const withProviderHealth = runPreMergeReadinessSmoke(true, {
+    configJson: JSON.stringify({
+      iddVersion: '1.0.0',
+      markerPrefix: 'idd-skill',
+      mergePolicy: 'fully_autonomous_merge',
+      reviewPolicy: 'copilot-advisory',
+      threadResolutionPolicy: 'fast-agent-resolve',
+      claimTiming: { staleAge: 'PT24H', heartbeatInterval: 'PT12H' },
+      trustedMarkerActors: [],
+      commands: {
+        'install-deps': 'true',
+        'fix-validate': 'npx dprint fmt',
+        'pre-push-validate': 'npx dprint check',
+        'post-fix-validate': 'npx dprint fmt && npx markdownlint-cli2',
+      },
+      providerHealth: { minCorroboratingPrs: 5, samplingWindow: 'PT6H' },
+    }),
+  });
+  assert.deepEqual(withProviderHealth, baseline);
 });
 
 test('pre-merge-readiness.mjs CLI: --claimless on an empty-references PR skips claim fetch (#2017)', () => {

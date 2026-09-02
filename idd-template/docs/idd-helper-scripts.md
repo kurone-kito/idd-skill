@@ -1106,6 +1106,51 @@ Interpretation rules:
   - in solo-maintainer repositories, this helper-generated comment is
     the authorization path; a normal PR approval is not equivalent
 
+### Provider health helper
+
+- Command: `node scripts/provider-health.mjs [--owner <owner>] [--repo <repo>]`
+- Published bin: `idd-provider-health`
+- Stable contract:
+  [`provider-health.schema.json`][provider-health-schema]
+- Purpose (#2319): IDD already observes advisory-review and Actions
+  degradation, but only one pull request at a time, in three
+  unconnected places (an advisory bot's rate-limit/quota comment
+  classified as a non-review notice, the Actions billing/spend-limit
+  block CI shape, and `advisory-wait-state.mts`'s own per-pull-request
+  terminal state). Nothing aggregates those signals across pull
+  requests, so a session cannot distinguish "this pull request is
+  stuck" from "the service is down for everything". This read-only
+  classifier supplies the shared, cross-pull-request verdict other
+  tracks may read.
+- Emits a `healthy | degraded | unavailable | unknown` verdict for each
+  of two services, `advisory-review` and `ci-actions`, aggregated from
+  already-observable per-pull-request evidence:
+  - `advisory-review`: a trusted `advisory-wait:` request marker with
+    neither a subsequent `review_requested` timeline event nor a
+    submitted review from the primary bot, anchored to the marker's own
+    embedded requested-at timestamp and gated by the same
+    `advisoryWait.settledWindowMinutes` grace period
+    `evaluateStaleRequestRecoveryAction` (#2327, `advisory-wait-state.mts`)
+    already applies for a single pull request -- reused here, read
+    across several, rather than re-derived.
+  - `ci-actions`: a completed workflow run whose every job executed zero
+    steps -- the documented account-level Actions billing/spend-limit
+    block shape (the run starts but no steps run, unlike an ordinary
+    step failure); an ordinary code-caused failure contributes no
+    evidence either way.
+- Corroboration is counted over **distinct pull-request identities**,
+  never observation count, per the configured
+  `providerHealth.minCorroboratingPrs` (default `2`): a single pull
+  request's failure burst always caps at `degraded`, never
+  `unavailable`. `unknown` is the floor for every insufficient,
+  contradictory, or unreadable evidence path -- never `unavailable`.
+- Read-only by construction: emits no marker, mutates no issue, pull
+  request, or check, and exposes no field named or shaped as a
+  merge-readiness or CI-gate result. Nothing in this repository's F2/F3
+  merge gate or `idd-advisory-convergence` check consumes this helper's
+  output -- see the provider outage declaration helper below for the
+  decoupling this implies for `providerOutage`.
+
 ### Provider outage declaration helper
 
 - Command:
@@ -2978,5 +3023,6 @@ replace the written decision tables.
 [local-validation-evidence-schema]: https://kurone-kito.github.io/idd-skill/schemas/local-validation-evidence.schema.json
 [post-idd-marker-schema]: https://kurone-kito.github.io/idd-skill/schemas/post-idd-marker.schema.json
 [pre-merge-readiness-schema]: https://kurone-kito.github.io/idd-skill/schemas/pre-merge-readiness.schema.json
+[provider-health-schema]: https://kurone-kito.github.io/idd-skill/schemas/provider-health.schema.json
 [provider-outage-declaration-schema]: https://kurone-kito.github.io/idd-skill/schemas/provider-outage-declaration.schema.json
 [resolve-review-thread-schema]: https://kurone-kito.github.io/idd-skill/schemas/resolve-review-thread.schema.json
