@@ -439,3 +439,13 @@ confirmed condition above. Delegate polling mechanics to
   routing table's "PR open, CI running, reviews exist" row. This does
   not relax the merge gate — the check stays required, and F2
   re-verifies it independently before merge.
+- **`idd-advisory-convergence` is the sole non-pass required check, and
+  its own verdict reports `pending: true`** (e.g. "Copilot has not
+  reviewed this pull request yet") → the literal opposite boolean value
+  from the carve-out above: the check evaluated before Copilot's
+  asynchronous review exists for this HEAD SHA at all. This is an
+  expected, self-resolving timing race, not a code-caused failure and
+  not the review-disposition state above — request a review if one
+  is not already outstanding, wait for Copilot's review to land, then
+  rerun via `rerun-advisory-convergence.mjs` (see
+  `idd-ci.instructions.md` §Rerun mechanics) and resume D4.
