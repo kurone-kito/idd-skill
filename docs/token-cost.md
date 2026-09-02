@@ -71,9 +71,13 @@ flag needed. When two attempts for the same issue leave events in
 attempt's own `enter`/`exit` pair is never mixed with a different
 attempt's, and a same-issue match across more than one project log file
 resolves to whichever file's own session id matches, instead of being
-skipped. An event with no identity (all historical data, and any vendor
-with no known session-id source) still joins exactly as before this
-field existed.
+skipped. Legacy (identity-agnostic) joining still applies exactly as
+before this field existed, but only when the relevant events are
+themselves unidentified (all historical data, and any vendor with no
+known session-id source) -- once identified events are present, an
+identified stage is never treated as compatible with a differently- or
+un-identified completion, so a stale or unrelated attempt can't be
+silently absorbed.
 
 `node scripts/token-cost-report.mjs`:
 
