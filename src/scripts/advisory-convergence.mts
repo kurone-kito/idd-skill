@@ -2116,8 +2116,8 @@ const RETRY_TRANSIENT_GH_FAILURE_ATTEMPTS = 3;
 const RETRY_TRANSIENT_GH_FAILURE_BASE_DELAY_MS = 200;
 
 /**
- * #2459: `collectFromGitHub`'s hot-path single-shot `gh` calls threw
- * unretried on any failure, so a several-second runner network blip
+ * #2459: `collectFromGitHub`'s hot-path single-shot `gh` calls threw with
+ * no retry on any failure, so a several-second runner network blip
  * crashed the whole required `idd-advisory-convergence` CI job instead of
  * self-healing, burning a full `ciWait.rerunPolicy` rerun-once budget
  * entry on pure infrastructure noise. Retry only a genuinely transient
@@ -2133,8 +2133,8 @@ const RETRY_TRANSIENT_GH_FAILURE_BASE_DELAY_MS = 200;
  * already migrated onto `provider-port.mts`
  * (`provider-port-migration-guard.test.mts`), which forbids regaining a
  * direct `gh-exec.mts` import; several of the wrapped port methods below
- * are also called, unretried, by many other synchronous callers across
- * the codebase, so converting them (and this file's own synchronous call
+ * are also called, with no retry, by many other synchronous callers
+ * across the codebase, so converting them (and this file's own synchronous call
  * chain) to `async` to use the Promise-based `withBoundedRetry` would
  * cascade well beyond this caller's scope.
  */
