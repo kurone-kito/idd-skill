@@ -1118,7 +1118,7 @@ test('evaluateDiscoverReadiness runs end to end against a fake provider, no gh p
           number: 2003,
           title: 'fake roadmap',
           state: 'open',
-          body: '',
+          body: '<!-- idd-skill-roadmap-id: roadmap-fake -->',
           labels: [{ name: 'roadmap' }],
         },
       },
@@ -1126,10 +1126,16 @@ test('evaluateDiscoverReadiness runs end to end against a fake provider, no gh p
 
     const summary = await evaluateDiscoverReadiness([2001, 2002], {
       loadIssue: async (number) => port.getWorkItem(number),
+      // Filters by the actual marker in each item's body, not by a fixed
+      // issue number -- a marker-blind filter would let this test pass
+      // even if the caller searched for the wrong marker (CodeRabbit
+      // review, #2436).
       findRoadmapsByMarker: async (marker) =>
         port
           .searchWorkItems(`in:body "<!-- idd-skill-roadmap-id: ${marker} -->"`)
-          .filter((item) => item.number === 2003),
+          .filter((item) =>
+            item.body.includes(`<!-- idd-skill-roadmap-id: ${marker} -->`),
+          ),
     });
 
     assert.deepEqual(

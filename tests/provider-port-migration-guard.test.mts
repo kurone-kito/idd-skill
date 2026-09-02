@@ -54,7 +54,10 @@ const DIRECT_GH_PATTERNS: { pattern: RegExp; description: string }[] = [
     // `.mjs` counterpart's `from './gh-exec.mjs'` (#2268) -- a guard that
     // only recognized the source extension would stay vacuous against a
     // regression introduced solely in committed generated output.
-    pattern: /from ['"]\.\/gh-exec\.mjs?['"]/,
+    // `\.mjs?` (optional trailing 's') matches only '.mj'/'.mjs', never
+    // '.mts' -- an explicit two-way alternation is required (Copilot +
+    // CodeRabbit review, #2436).
+    pattern: /from ['"]\.\/gh-exec\.(?:mts|mjs)['"]/,
     description: 'import from the gh-exec transport primitive',
   },
   {
@@ -113,6 +116,16 @@ test('the direct-gh pattern set catches a bare ghTextAsync() call (CodeRabbit re
   ) as { pattern: RegExp };
   assert.match('await ghTextAsync(args)', pattern);
   assert.match('ghTextAsync (args)', pattern);
+});
+
+test('the gh-exec import pattern matches both .mts and .mjs, and only those (Copilot + CodeRabbit review, #2436)', () => {
+  const { pattern } = DIRECT_GH_PATTERNS.find((entry) =>
+    entry.description.includes('gh-exec'),
+  ) as { pattern: RegExp };
+  assert.match("from './gh-exec.mts'", pattern);
+  assert.match("from './gh-exec.mjs'", pattern);
+  assert.doesNotMatch("from './gh-exec.mj'", pattern);
+  assert.doesNotMatch("from './gh-exec.ts'", pattern);
 });
 
 test('the adapter modules themselves are exempt and still exist', () => {

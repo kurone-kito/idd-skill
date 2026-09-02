@@ -322,5 +322,11 @@ test('getWorkItem checks workItemErrors before workItems when a number appears i
       1: { category: 'unknown', message: 'fixture author error' },
     },
   });
-  assert.throws(() => port.getWorkItem(1), /fixture author error/);
+  assert.throws(
+    () => port.getWorkItem(1),
+    (error: unknown) =>
+      error instanceof Error &&
+      (error as Error & { category?: string }).category === 'unknown' &&
+      error.message === 'fixture author error',
+  );
 });

@@ -59,10 +59,16 @@ export interface FakeProviderFixture {
    * test can simulate an authentication/authorization/conflict/
    * unavailable/unknown failure without a live gh process (#2268 AC1);
    * `not-found` stays expressed the existing way, by omitting the number
-   * from both this and `workItems`. */
+   * from both this and `workItems` -- `Exclude`d from the category type
+   * (not just documented) so a fixture cannot contradict getWorkItem's
+   * null-for-not-found contract at the type level (CodeRabbit review,
+   * #2436). */
   workItemErrors?: Record<
     number,
-    { category: ProviderErrorCategory; message: string }
+    {
+      category: Exclude<ProviderErrorCategory, 'not-found'>;
+      message: string;
+    }
   >;
   timelines?: Record<number, ProviderTimelineEvent[]>;
   comments?: Record<number, ProviderComment[]>;
