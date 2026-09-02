@@ -452,12 +452,25 @@ export function unsafeTextReason(body) {
   }
   return null;
 }
+// #2473: Copilot's PR-level review object reports a `[bot]`-suffixed slug
+// login (`copilot-pull-request-reviewer[bot]`), but its inline
+// review-comment replies report a bare, capitalized display-name login
+// (`Copilot`, normalized here to `copilot`) with no suffix. The former
+// prefix check (`normalized.startsWith('copilot-pull-request-reviewer')`)
+// never matched that bare form, so a caller filtering comments by
+// `isKnownReviewBot` silently treated a genuine Copilot reply as unknown.
+// Delegating to `isCopilotReviewerLogin` (the #1686 exact-set matcher,
+// already reused by the advisory-wait pending-coverage path) recognizes
+// all three genuine login forms via `EXACT_COPILOT_REVIEWER_LOGINS`,
+// including the bare `copilot` form, and narrows the old unbounded prefix
+// match to that exact set -- closing the #1686 lookalike-username gap
+// here too as a side effect of reuse, not a separately-designed change.
 export function isKnownReviewBot(login) {
   const normalized = login.toLowerCase();
-  return (
-    REVIEW_BOT_LOGINS.has(normalized) ||
-    normalized.startsWith('copilot-pull-request-reviewer')
-  );
+  // `isCopilotReviewerLogin` also trims `login`, unlike the plain
+  // `.toLowerCase()` above -- a benign widening (a GitHub API `login` field
+  // never carries surrounding whitespace) rather than a deliberate choice.
+  return REVIEW_BOT_LOGINS.has(normalized) || isCopilotReviewerLogin(login);
 }
 export function isCodeRabbitLogin(login) {
   const normalized = login.toLowerCase();
