@@ -528,19 +528,43 @@ function isNegatedNearby(
 // as a break even when it carries trailing whitespace (Copilot review,
 // #2508).
 const PARAGRAPH_BREAK_PATTERN = /\n[ \t]*\n/;
+// A decoration typical of a compact label/mapping entry (a hyphenated
+// or slash-joined slug, an "->" mapping arrow, or a code span) rather
+// than ordinary prose (#2508, Copilot review round 2).
+const LABEL_ENTRY_DECORATION_PATTERN = /[-/`]/;
+/**
+ * True when `segment` (one comma-delimited entry from a parenthetical,
+ * excluding the marker's own entry) reads as a compact label name --
+ * either a single whitespace-free token, or decorated with a hyphen,
+ * slash, arrow, or backtick -- rather than an ordinary multi-word
+ * phrase. Used by isEnumeratedParentheticalEntry to require every
+ * *other* entry in the list to look like fixed vocabulary before
+ * excluding the marker: a genuine aside such as "(still undecided,
+ * blocking this work)" has an ordinary-prose other entry ("blocking
+ * this work") and must not be excluded.
+ */
+function looksLikeLabelEntry(segment: string): boolean {
+  const trimmed = segment.trim();
+  if (trimmed.length === 0) {
+    return false;
+  }
+  return LABEL_ENTRY_DECORATION_PATTERN.test(trimmed) || !/\s/.test(trimmed);
+}
 /**
  * True when the UNRESOLVED_CHOICE_PATTERN match at `matchIndex` sits
- * inside a parenthetical that also contains a comma -- e.g.
+ * inside a parenthetical enumerating a fixed vocabulary -- e.g.
  * "(undecided, waits-on-person/credential, order-dependency,
- * not-yet-ready)" -- evidence the match names one entry in a fixed,
- * already-existing vocabulary rather than a claim about this issue's
- * own open next step (#2508). A parenthetical with no comma (e.g.
- * "(not yet decided which)") still counts as a genuine unresolved
- * marker and is not excluded. A paragraph break inside the span means
- * the "(" and ")" belong to unrelated parentheticals in different
- * paragraphs, not one enclosing span -- rejected -- but a single
- * soft-wrapped newline inside one hand-wrapped Markdown paragraph does
- * not end the span.
+ * not-yet-ready)" -- evidence the match names one entry in that
+ * vocabulary rather than a claim about this issue's own open next step
+ * (#2508). Every comma-delimited entry other than the marker's own
+ * must look like a compact label name (looksLikeLabelEntry); a
+ * parenthetical with no comma, or one whose other entries read as
+ * ordinary prose (e.g. "(still undecided, blocking this work)"), still
+ * counts as a genuine unresolved marker and is not excluded. A
+ * paragraph break inside the span means the "(" and ")" belong to
+ * unrelated parentheticals in different paragraphs, not one enclosing
+ * span -- rejected -- but a single soft-wrapped newline inside one
+ * hand-wrapped Markdown paragraph does not end the span.
  */
 function isEnumeratedParentheticalEntry(
   body: string,
@@ -564,8 +588,14 @@ function isEnumeratedParentheticalEntry(
   if (after.includes('(') || PARAGRAPH_BREAK_PATTERN.test(after)) {
     return false;
   }
+  if (!before.includes(',') && !after.includes(',')) {
+    return false;
+  }
 
-  return before.includes(',') || after.includes(',');
+  const beforeEntries = before.split(',').slice(0, -1);
+  const afterEntries = after.split(',').slice(1);
+  const otherEntries = [...beforeEntries, ...afterEntries];
+  return otherEntries.length > 0 && otherEntries.every(looksLikeLabelEntry);
 }
 const ACCEPTANCE_CRITERIA_PATTERN = /^#+\s*Acceptance\s+Criteria\s*$/im;
 // A heading line such as "## Decision (resolved 2026-06-27)" records that a

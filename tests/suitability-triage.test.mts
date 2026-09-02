@@ -2656,6 +2656,16 @@ test('autonomy still fails a marker whose enclosing parens straddle a whitespace
   assert.equal(result.pass, false);
 });
 
+test('autonomy still fails a genuine comma-bearing unresolved-choice aside whose other entry is ordinary prose -- #2508 (Copilot round 2)', () => {
+  const result = checkAutonomy({
+    issue: {
+      ...BASE_ISSUE,
+      body: `${BASE_ISSUE.body}\nThe rollout plan (still undecided, blocking this work) needs a decision.`,
+    },
+  } as Context);
+  assert.equal(result.pass, false);
+});
+
 test('autonomy still fails both original fixed templates unchanged -- #2219 (no regression)', () => {
   const requiresResult = checkAutonomy({
     issue: {
