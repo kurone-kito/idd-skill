@@ -1,4 +1,7 @@
 import assert from 'node:assert/strict';
+import { chmodSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { test } from 'node:test';
 
 import type {
@@ -7,6 +10,7 @@ import type {
 } from '../src/scripts/audit-pr-cleanup.mts';
 import {
   assertBatchApplyClaimScope,
+  fetchReviewThreads,
   parsePrNumbers,
 } from '../src/scripts/audit-pr-cleanup.mts';
 
@@ -497,5 +501,182 @@ test('assertBatchApplyClaimScope: --pr with --apply and no --skip-claim-check is
 test('assertBatchApplyClaimScope: dry-run (no --apply) is never gated', () => {
   assert.doesNotThrow(() =>
     assertBatchApplyClaimScope(cleanupArgs({ prs: '1,2' })),
+  );
+});
+
+// #2478: fetchReviewThreads's inner per-thread comment pagination. Stubs
+// `gh` on PATH (same technique as tests/gh-pagination-parsing-smoke.test.mts)
+// rather than spawning the full CLI, since exercising this one internal
+// function directly avoids stubbing every other gh call `buildReport` needs.
+// The outer `reviewThreads` query and the per-thread `node(id)` continuation
+// query are distinguished by their distinct variable names (`owner=`/`id=`)
+// rather than by reproducing the exact query text, which would be brittle
+// to unrelated formatting changes.
+
+function makeThreadComment(id: string): Record<string, unknown> {
+  return {
+    id,
+    url: `https://example.com/${id}`,
+    body: 'x',
+    createdAt: '2026-01-01T00:00:00Z',
+    isMinimized: false,
+    minimizedReason: null,
+    viewerCanMinimize: true,
+    author: { login: 'a' },
+    pullRequestReview: null,
+  };
+}
+
+function writeFakeGh(
+  dir: string,
+  outerResponse: string,
+  continuationResponse: string,
+): void {
+  const ghPath = join(dir, 'gh');
+  const script = `#!/usr/bin/env node
+const args = process.argv.slice(2);
+if (args[0] === 'api' && args[1] === 'graphql') {
+  if (args.some((a) => a.startsWith('owner='))) {
+    process.stdout.write(${JSON.stringify(outerResponse)});
+    process.exit(0);
+  }
+  if (args.some((a) => a.startsWith('id='))) {
+    process.stdout.write(${JSON.stringify(continuationResponse)});
+    process.exit(0);
+  }
+}
+process.stderr.write('unexpected gh invocation: ' + args.join(' ') + '\\n');
+process.exit(1);
+`;
+  writeFileSync(ghPath, script);
+  chmodSync(ghPath, 0o755);
+}
+
+function withFakeGh<T>(
+  outerResponse: string,
+  continuationResponse: string,
+  run: () => T,
+): T {
+  const tempRoot = mkdtempSync(join(tmpdir(), 'idd-audit-pr-cleanup-fake-gh-'));
+  const originalPath = process.env.PATH;
+  try {
+    writeFakeGh(tempRoot, outerResponse, continuationResponse);
+    process.env.PATH = `${tempRoot}:${originalPath ?? ''}`;
+    return run();
+  } finally {
+    process.env.PATH = originalPath;
+    rmSync(tempRoot, { recursive: true, force: true });
+  }
+}
+
+function outerThreadResponse(
+  firstPageNodes: Record<string, unknown>[],
+  firstPageHasNextPage: boolean,
+  firstPageEndCursor: string | null,
+): string {
+  return JSON.stringify({
+    data: {
+      repository: {
+        pullRequest: {
+          reviewThreads: {
+            pageInfo: { hasNextPage: false, endCursor: null },
+            nodes: [
+              {
+                id: 'THREAD1',
+                isResolved: false,
+                comments: {
+                  pageInfo: {
+                    hasNextPage: firstPageHasNextPage,
+                    endCursor: firstPageEndCursor,
+                  },
+                  nodes: firstPageNodes,
+                },
+              },
+            ],
+          },
+        },
+      },
+    },
+  });
+}
+
+test('fetchReviewThreads paginates past a review thread first 100 comments (#2478)', () => {
+  const firstPageNodes = Array.from({ length: 100 }, (_, i) =>
+    makeThreadComment(`c${i}`),
+  );
+  const outerResponse = outerThreadResponse(firstPageNodes, true, 'CURSOR1');
+  const continuationResponse = JSON.stringify({
+    data: {
+      node: {
+        comments: {
+          pageInfo: { hasNextPage: false, endCursor: null },
+          nodes: [makeThreadComment('c100')],
+        },
+      },
+    },
+  });
+
+  const threads = withFakeGh(outerResponse, continuationResponse, () =>
+    fetchReviewThreads('o', 'r', 1),
+  );
+
+  assert.equal(threads.length, 1);
+  assert.equal(threads[0].comments?.nodes?.length, 101);
+  assert.equal(threads[0].comments?.pageInfo?.hasNextPage, false);
+});
+
+test('fetchReviewThreads stops at the page-count safety cap and still reports hasNextPage:true (#2478)', () => {
+  const firstPageNodes = Array.from({ length: 100 }, (_, i) =>
+    makeThreadComment(`c${i}`),
+  );
+  const outerResponse = outerThreadResponse(firstPageNodes, true, 'CURSOR1');
+  // Pathological: every continuation call reports another page still
+  // pending, simulating a runaway/misbehaving API response. The safety cap
+  // must still terminate the walk and leave hasNextPage:true so the
+  // existing truncated-data skip in evaluateReviewComment keeps firing
+  // instead of misreporting a capped thread as complete.
+  const continuationResponse = JSON.stringify({
+    data: {
+      node: {
+        comments: {
+          pageInfo: { hasNextPage: true, endCursor: 'CURSOR-NEXT' },
+          nodes: [makeThreadComment('extra')],
+        },
+      },
+    },
+  });
+
+  const threads = withFakeGh(outerResponse, continuationResponse, () =>
+    fetchReviewThreads('o', 'r', 1),
+  );
+
+  assert.equal(threads.length, 1);
+  // 1 initial 100-comment page + 49 continuation pages, each contributing
+  // one more comment -- capped at MAX_REVIEW_THREAD_COMMENT_PAGES (50)
+  // total pages fetched for this thread.
+  assert.equal(threads[0].comments?.nodes?.length, 100 + 49);
+  assert.equal(threads[0].comments?.pageInfo?.hasNextPage, true);
+});
+
+test('fetchReviewThreads fails loudly on hasNextPage:true with a missing endCursor (#2478 review)', () => {
+  const firstPageNodes = Array.from({ length: 100 }, (_, i) =>
+    makeThreadComment(`c${i}`),
+  );
+  // A contract-violating page: hasNextPage:true but no endCursor to
+  // continue from. Must throw rather than silently re-requesting page 1
+  // (ghGraphql drops a null `after` variable), which could otherwise
+  // "self-heal" into duplicate comment nodes the downstream
+  // truncated-data skip would not catch.
+  const outerResponse = outerThreadResponse(firstPageNodes, true, null);
+  // Never reached -- an unexpected continuation call would fail loudly via
+  // the fake gh's own unmatched-invocation path instead of returning this.
+  const continuationResponse = JSON.stringify({});
+
+  assert.throws(
+    () =>
+      withFakeGh(outerResponse, continuationResponse, () =>
+        fetchReviewThreads('o', 'r', 1, { throwOnError: true }),
+      ),
+    /hasNextPage without endCursor/,
   );
 });
