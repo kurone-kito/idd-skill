@@ -495,6 +495,19 @@ function revalidateImmediatelyBeforeMerge(
 // instead coerce every unrecognized flag to `true` -- neither matches this
 // file's "collect and forward whatever the collector itself accepts"
 // contract.
+//
+// #2465: unlike the other five custom parsers excluded from the shared
+// wrapper, this one needs no explicit `stripLeadingArgumentSeparator` call
+// of its own. A pnpm-forwarded leading `--` matches none of the named
+// flags below, so it falls through to the generic `startsWith('--')`
+// passthrough branch and is pushed into `passthrough` verbatim, at
+// position 0. That array is forwarded in-process to
+// `collectPreMergeReadiness` (`deps.collect`), whose own `parseArgs` goes
+// through `parseCliArgs` -- the shared wrapper this file itself is
+// excluded from -- which strips the leading `--` there instead. This
+// immunity is deliberate, not incidental: it depends on the collector
+// always being invoked through `parseCliArgs`, so re-verify this comment
+// (or add an explicit strip here too) if that call path ever changes.
 function parseArgs(argv) {
   const parsed = {
     prNumber: null,

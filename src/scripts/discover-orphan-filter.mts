@@ -15,6 +15,7 @@ import {
   parseAutopilotSuitability,
   rankAndRouteBySuitability,
 } from './autopilot-suitability.mts';
+import { stripLeadingArgumentSeparator } from './cli-args.mts';
 import {
   extractBlockedByIssueNumbers,
   extractDependencyIssueNumbers,
@@ -622,7 +623,11 @@ async function runCli() {
 // not itself look like another flag. `util.parseArgs` cannot express this:
 // a `string`-type option always requires exactly one value and a
 // `boolean`-type option never takes one; there is no in-between mode.
-function parseArgs(argv: string[]): ParsedArgs {
+function parseArgs(rawArgv: string[]): ParsedArgs {
+  // #1921/#2465: strip a pnpm-forwarded leading `--` the same way the
+  // shared cli-args.mts wrapper does -- this parser is excluded from that
+  // wrapper (see the comment above) so it must call the strip directly.
+  const argv = stripLeadingArgumentSeparator(rawArgv);
   const parsed: ParsedArgs = {
     owner: '',
     repo: '',

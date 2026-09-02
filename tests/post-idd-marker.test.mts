@@ -634,6 +634,41 @@ test('parseArgs reads structural flags, the positional number, and renderer fiel
   });
 });
 
+test('parseArgs strips a pnpm-forwarded leading -- (#2465), parsing identically to the bare form', () => {
+  // This parser is excluded from the shared cli-args.mts parseCliArgs
+  // wrapper (see the comment above its declaration), so it must call
+  // stripLeadingArgumentSeparator directly rather than inheriting the
+  // wrapper's own #1921 stripping.
+  const withSeparator = parseArgs([
+    '--',
+    '--type',
+    'claim',
+    '--target',
+    'issue',
+    '1047',
+    '--agent-id',
+    'claude-417b737f',
+    '--claim-id',
+    'c3009f22b5f6',
+    '--branch',
+    'issue/1047-foo',
+  ]);
+  const bare = parseArgs([
+    '--type',
+    'claim',
+    '--target',
+    'issue',
+    '1047',
+    '--agent-id',
+    'claude-417b737f',
+    '--claim-id',
+    'c3009f22b5f6',
+    '--branch',
+    'issue/1047-foo',
+  ]);
+  assert.deepEqual(withSeparator, bare);
+});
+
 test('parseArgs rejects a second positional, non-numeric, and suffixed numbers', () => {
   assert.throws(() => parseArgs(['1047', '2048']), /unexpected positional/);
   assert.throws(() => parseArgs(['not-a-number']), /invalid issue\/PR number/);

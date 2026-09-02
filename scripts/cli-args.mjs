@@ -359,6 +359,30 @@ function isShapedMessage(message) {
   );
 }
 /**
+ * Strip a single leading `--` end-of-options marker pnpm forwards through a
+ * `pnpm run <script> -- <flags>` alias without consuming it first (#1921),
+ * so a pnpm-forwarded invocation parses the same as the equivalent bare
+ * form. `parseCliArgs` applies this internally; a hand-rolled parser
+ * excluded from that wrapper (#2465) must call this directly on its own
+ * `argv` before parsing, since it never goes through `parseCliArgs` at all.
+ * Scope is deliberately one token at position 0 only; a `--` anywhere else
+ * in argv keeps its current behavior unchanged.
+ *
+ * A second literal `--` immediately after the stripped one (i.e. argv
+ * started `--`, `--`, ...) must still be a hard error, not silently
+ * swallowed -- without this guard, stripping once would leave a lone
+ * trailing `--` for a caller's own parser to consume as an end-of-options
+ * marker with zero positionals, a new silent-success hole. The strip above
+ * never repeats -- this is a single explicit check, not a loop.
+ */
+export function stripLeadingArgumentSeparator(argv) {
+  const args = argv[0] === '--' ? argv.slice(1) : argv;
+  if (args[0] === '--') {
+    throw new Error(`${UNKNOWN_ARGUMENT_PREFIX}--`);
+  }
+  return args;
+}
+/**
  * Parse `argv` against a declarative flag spec, using `util.parseArgs`
  * under `strict: true` / `allowPositionals: false`. Throws an `Error`
  * shaped in this repository's existing idiom (never Node's native
@@ -375,28 +399,11 @@ export function parseCliArgs(argv, spec) {
     }
     nodeOptions[dashedKey.slice(2)] = flagSpec;
   }
-  // #1921: pnpm forwards a literal `--` through a `pnpm run <script> --
-  // <flags>` alias without stripping it first (unlike `npm run`, which
-  // consumes its own separator before the script ever sees argv). Node's
-  // `util.parseArgs` treats that leading `--` as the conventional
-  // end-of-options marker, so every flag after it gets rejected as an
-  // unexpected positional under `allowPositionals: false` -- strip
-  // exactly one leading `--` here so a pnpm-forwarded invocation parses
-  // the same as the equivalent bare form. Scope is deliberately one
-  // token at position 0 only; a `--` anywhere else in argv keeps its
-  // current behavior unchanged.
-  const args = argv[0] === '--' ? argv.slice(1) : argv;
-  // A second literal `--` immediately after the stripped one (i.e. argv
-  // started `--`, `--`, ...) must still be a hard error, not silently
-  // swallowed. Without this guard, stripping once would leave a lone
-  // trailing `--` for Node to consume as its own terminator with zero
-  // positionals -- a NEW silent-success hole `parseCliArgs(['--', '--'],
-  // spec)` does not have today (it currently throws `unknown argument:
-  // --`, since the second `--` becomes a rejected positional). The strip
-  // above never repeats -- this is a single explicit check, not a loop.
-  if (args[0] === '--') {
-    throw new Error(`${UNKNOWN_ARGUMENT_PREFIX}--`);
-  }
+  // #1921: Node's `util.parseArgs` treats a pnpm-forwarded leading `--` as
+  // the conventional end-of-options marker, rejecting every flag after it
+  // as an unexpected positional under `allowPositionals: false` -- see
+  // stripLeadingArgumentSeparator's own doc comment for the full rationale.
+  const args = stripLeadingArgumentSeparator(argv);
   let parsed;
   try {
     parsed = nodeParseArgs({

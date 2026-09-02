@@ -20,7 +20,7 @@
 import { execFileSync } from 'node:child_process';
 import { resolve } from 'node:path';
 
-import { requireFlag } from './cli-args.mts';
+import { requireFlag, stripLeadingArgumentSeparator } from './cli-args.mts';
 import {
   renderActivationNonceMarker,
   renderAdvisoryRerollMarker,
@@ -396,7 +396,11 @@ function parsePositiveIntToken(token: string, label: string): number {
 // `strict: false` would instead coerce every unrecognized flag to `true`
 // -- neither matches this file's "accept whatever fields this marker type
 // needs" contract.
-export function parseArgs(argv: string[]): CliArgs {
+export function parseArgs(rawArgv: string[]): CliArgs {
+  // #1921/#2465: strip a pnpm-forwarded leading `--` the same way the
+  // shared cli-args.mts wrapper does -- this parser is excluded from that
+  // wrapper (see the comment above) so it must call the strip directly.
+  const argv = stripLeadingArgumentSeparator(rawArgv);
   const args: CliArgs = {
     type: '',
     target: '',
