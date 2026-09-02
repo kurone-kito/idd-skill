@@ -1759,6 +1759,30 @@ test('postWorkItemComment returns the existing comment instead of double-posting
   assert.equal(ghTextCalls, 1);
 });
 
+test('postWorkItemComment: a malformed row (e.g. null) in the dedupe scan never aborts the retry (Copilot review, #2504)', () => {
+  let ghTextCalls = 0;
+  const port = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({
+      ghText: () => {
+        ghTextCalls += 1;
+        if (ghTextCalls === 1) {
+          throw new Error('transient: HTTP 401');
+        }
+        return JSON.stringify({ id: 42, html_url: 'https://example/42' });
+      },
+      // A stray `null` entry must not throw out of the best-effort dedupe
+      // scan and abort the whole retry -- it should be skipped like any
+      // other non-matching row, falling through to a genuine retry.
+      ghApiJson: () => [null, { id: 7, body: 'other comment' }],
+    }),
+  );
+  const result = port.postWorkItemComment(9, 'marker body');
+  assert.deepEqual(result, { id: 42, htmlUrl: 'https://example/42' });
+  assert.equal(ghTextCalls, 2);
+});
+
 test('postWorkItemComment throws on a malformed successful response instead of returning a bad result', () => {
   const port = createGithubProviderAdapter(
     'o',

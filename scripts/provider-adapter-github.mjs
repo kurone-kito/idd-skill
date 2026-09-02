@@ -121,33 +121,42 @@ const POST_WORK_ITEM_COMMENT_BASE_DELAY_MS = 200;
  * pagination overhead on a heavily-commented issue/PR.
  */
 function findRecentExactBodyMatch(deps, repoPath, number, body) {
-  let rows;
+  // The whole read-and-scan is wrapped in one try/catch, not just the
+  // `ghApiJson` call: a malformed row (e.g. a stray `null` entry) thrown
+  // from the loop body below must fail this best-effort scan the same
+  // way a transport failure does, never abort the retry it exists to
+  // protect (Copilot review, #2504).
   try {
-    rows = deps.ghApiJson(
+    const rows = deps.ghApiJson(
       `${repoPath}/issues/${number}/comments?per_page=100`,
       { paginate: true },
     );
+    let newest = null;
+    for (const row of rows) {
+      if (row === null || typeof row !== 'object') {
+        continue;
+      }
+      if (String(row.body ?? '') !== body) {
+        continue;
+      }
+      const id = Number(row.id);
+      const htmlUrl = String(row.html_url ?? '');
+      // Same shape requirement as the fresh-POST path below -- a match
+      // with no usable id/html_url is not a usable result, so keep
+      // scanning instead of returning a comment the caller couldn't
+      // act on.
+      if (!Number.isInteger(id) || id <= 0 || htmlUrl === '') {
+        continue;
+      }
+      // Comments come back in ascending creation order; keep the last
+      // (most recent) exact-body match in the unlikely event more than
+      // one exists.
+      newest = { id, htmlUrl };
+    }
+    return newest;
   } catch {
     return null;
   }
-  let newest = null;
-  for (const row of rows) {
-    if (String(row.body ?? '') !== body) {
-      continue;
-    }
-    const id = Number(row.id);
-    const htmlUrl = String(row.html_url ?? '');
-    // Same shape requirement as the fresh-POST path below -- a match with
-    // no usable id/html_url is not a usable result, so keep scanning
-    // instead of returning a comment the caller couldn't act on.
-    if (!Number.isInteger(id) || id <= 0 || htmlUrl === '') {
-      continue;
-    }
-    // Comments come back in ascending creation order; keep the last (most
-    // recent) exact-body match in the unlikely event more than one exists.
-    newest = { id, htmlUrl };
-  }
-  return newest;
 }
 /**
  * #2460: POST a work-item (issue/PR) comment with a bounded retry against
