@@ -1,15 +1,24 @@
-# Non-required companion to idd-advisory-convergence.yml (#2136).
+# Non-required companion to idd-advisory-convergence.yml (#2136, #2411).
 #
-# Human review-thread chatter must not create or cancel the required
-# `idd-advisory-convergence` check-run. This workflow has a different
-# name, job id, and concurrency group so it cannot overwrite that SHA
-# verdict or cancel an in-flight required run.
+# Human review-thread and regular-comment chatter must not create or
+# cancel the required `idd-advisory-convergence` check-run. This
+# workflow has a different name, job id, and concurrency group so it
+# cannot overwrite that SHA verdict or cancel an in-flight required run.
 #
 # When the comment is IDD-originated (reply-identity stamp, disposition
 # prefix, or an operational marker the required check already honors),
 # it reuses `rerun-advisory-convergence.mjs --apply` to refresh the
 # existing pull_request-family required run for the current HEAD SHA.
 # It never asserts `ready` itself.
+#
+# Two trigger families land here (#2411): `pull_request_review_comment`
+# (inline review-thread comments) and `issue_comment` (regular PR
+# comments -- where post-idd-marker.mjs and
+# disposition-non-review-notices.mjs actually post every marker/
+# disposition type, since both use the issues-comments API).
+# `issue_comment` also fires for a comment on a plain issue, not only a
+# PR; the job-level `if:` below skips those (`github.event.issue.pull_request`
+# is only present when the commented-on issue is a PR).
 #
 # Job id is deliberately NOT `idd-advisory-convergence`.
 #
@@ -31,10 +40,12 @@ concurrency:
   # Do not cancel: a later human LGTM must not abort an in-flight
   # IDD-originated refresh before it reruns the required check (#2136).
   cancel-in-progress: false
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.event.issue.number }}
 on:
   pull_request_review_comment:
     types: [created, edited, deleted]
+  issue_comment:
+    types: [created]
 permissions:
   contents: read
   issues: read
@@ -47,6 +58,7 @@ jobs:
   refresh-if-idd-originated:
     runs-on: ${{ vars.CI_RUNNER_LABEL || 'ubuntu-slim' }}
     timeout-minutes: 10
+    if: github.event_name != 'issue_comment' || github.event.issue.pull_request != null
     steps:
       - uses: actions/checkout@v4
         with:
@@ -218,7 +230,10 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           GH_ENTERPRISE_TOKEN: ${{ github.token }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
+          # pull_request_review_comment carries the PR number at
+          # github.event.pull_request.number; issue_comment (#2411)
+          # carries it at github.event.issue.number instead.
+          PR_NUMBER: ${{ github.event.pull_request.number || github.event.issue.number }}
           PROFILE: ${{ steps.profile.outputs.profile }}
           PACKAGE_SPEC: ${{ steps.profile.outputs.package-spec }}
           MANAGER: ${{ steps.manager.outputs.manager }}

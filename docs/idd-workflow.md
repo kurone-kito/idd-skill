@@ -19,6 +19,14 @@ Use it when you need to answer three questions quickly:
 - When does the workflow rely on GitHub Copilot review state rather than
   on my local CLI?
 
+This guide's `.github/` distribution, tooling, and Copilot-advisory
+review steps describe today's only implemented provider, GitHub. IDD
+defines a provider-neutral adapter boundary internally as a staged
+foundation for future non-GitHub adapters; see
+[Provider Portability](customization.md#provider-portability) for the
+capability-group model and staged rollout order. Nothing below assumes
+that boundary is exercised by a shipped adapter yet.
+
 ## Start sequence
 
 If you arrived here from your agent's entry file, pick up at step 2. If

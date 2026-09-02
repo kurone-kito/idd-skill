@@ -113,7 +113,10 @@ IDD is a multi-agent GitHub automation workflow. Agents work through a
 pipeline of phases (Discover → Claim → Work → PR Submit → CI Wait →
 Review Triage → Review Fix → Merge → Loop) driven by GitHub Issues.
 The instruction files in `.github/instructions/` encode every rule for
-every phase.
+every phase. GitHub is IDD's only implemented provider today; see
+[Provider Portability](docs/customization.md#provider-portability)
+for the staged, provider-neutral adapter boundary this onboarding path
+does not depend on.
 
 Important: the distributed default workflow is cross-agent for
 execution, but its later PR phases still include a GitHub Copilot
