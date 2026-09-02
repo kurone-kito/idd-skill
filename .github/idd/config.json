@@ -33,7 +33,9 @@
   "orphanFirstPolicy": "none",
   "advisoryWait": {
     "convergenceScope": "idd-claimed",
-    "convergenceDeadline": "PT9H"
+    "convergenceDeadline": "PT9H",
+    "secondaryBotLogin": "coderabbitai[bot]",
+    "secondaryQuietWindow": "PT1H"
   },
   "discover": {
     "selectionDesync": "session-offset"

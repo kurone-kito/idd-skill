@@ -109,6 +109,17 @@ own interaction model rather than following product terms literally.
   distributed `idd-template/` default (`PT24H`) to fit this
   repository's more autonomous, higher-concurrency dogfooding setup
   (Refs #1465, #2076).
+- **Secondary-bot quiet window**: This source repository also records
+  `advisoryWait.secondaryBotLogin: "coderabbitai[bot]"` and
+  `advisoryWait.secondaryQuietWindow: "PT1H"` as a local IDD dogfooding
+  opt-in (applies only to `kurone-kito/idd-skill`), waiting one hour
+  after E-phase convergence conditions are first observed before
+  pre-merge readiness treats review as settled. This repository
+  dogfoods CodeRabbit alongside Copilot and has twice hit CodeRabbit
+  rate-limiting during a PR's review cycle, each time working around
+  it with an ad hoc one-hour wait before merging; this config turns
+  that informal practice into a proper `pre-merge-readiness` blocker
+  (Refs #2335, #2410).
 
 ## For IDD work
 
