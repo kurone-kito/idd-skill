@@ -424,6 +424,23 @@ test('deriveAdvisoryReviewObservation: a marker older than the sampling window c
   assert.equal(result, null);
 });
 
+test('deriveAdvisoryReviewObservation: an unparsable marker postedAt fails closed under a configured sampling window', () => {
+  const result = deriveAdvisoryReviewObservation(
+    1,
+    [
+      {
+        body: 'advisory-wait: agent-x 0123456789abcdef0123456789abcdef01234567 2026-08-31T12:00:00Z',
+        created_at: 'not-a-timestamp',
+        user: { login: 'idd-bot' },
+      },
+    ],
+    [],
+    [],
+    { ...BASE_DERIVE_OPTIONS, cutoffIso: '2026-08-31T00:00:00Z' },
+  );
+  assert.equal(result, null);
+});
+
 test('deriveCiActionsObservation: every job zero-steps is failure evidence', () => {
   const result = deriveCiActionsObservation(
     { conclusion: 'failure', pull_requests: [{ number: 7 }] },
@@ -440,6 +457,15 @@ test('deriveCiActionsObservation: a run older than the sampling window contribut
       updated_at: '2026-08-01T00:00:00Z',
       pull_requests: [{ number: 7 }],
     },
+    null,
+    { cutoffIso: '2026-08-31T00:00:00Z' },
+  );
+  assert.equal(result, null);
+});
+
+test('deriveCiActionsObservation: a missing updated_at fails closed under a configured sampling window', () => {
+  const result = deriveCiActionsObservation(
+    { conclusion: 'success', pull_requests: [{ number: 7 }] },
     null,
     { cutoffIso: '2026-08-31T00:00:00Z' },
   );

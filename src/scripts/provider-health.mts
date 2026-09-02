@@ -383,11 +383,12 @@ export function deriveAdvisoryReviewObservation(
     options.trustedMarkerLogins,
   );
   if (request === null) return null;
-  if (
-    options.cutoffIso !== null &&
-    compareIsoTimestamps(request.postedAt, options.cutoffIso) < 0
-  ) {
-    return null;
+  if (options.cutoffIso !== null) {
+    const cmp = compareIsoTimestamps(request.postedAt, options.cutoffIso);
+    // An unparsable postedAt compares as NaN, which fails every ordering
+    // check including `< 0` -- without this explicit NaN check that would
+    // silently bypass the cutoff instead of failing closed (skip).
+    if (Number.isNaN(cmp) || cmp < 0) return null;
   }
 
   const registeredByTimeline = timeline.some((event) => {
@@ -561,6 +562,22 @@ export function collectAdvisoryReviewEvidence(
 }
 
 /**
+ * True when `updatedAt` falls outside a configured sampling window --
+ * including when it is missing or unparsable, which must fail closed
+ * (excluded) rather than silently bypassing the cutoff and reading as
+ * always-in-window.
+ */
+function isOutsideSamplingWindow(
+  updatedAt: unknown,
+  cutoffIso: string | null,
+): boolean {
+  if (cutoffIso === null) return false;
+  if (typeof updatedAt !== 'string') return true;
+  const cmp = compareIsoTimestamps(updatedAt, cutoffIso);
+  return Number.isNaN(cmp) || cmp < 0;
+}
+
+/**
  * Pure decision for one workflow run's `ci-actions` evidence. `jobs` is
  * `null` when the caller never fetched the jobs endpoint (only failing runs
  * need it); kept separate from the network layer for the same fixture-
@@ -573,11 +590,7 @@ export function deriveCiActionsObservation(
 ): ProviderHealthObservation | null {
   const prNumber = run.pull_requests?.[0]?.number;
   if (typeof prNumber !== 'number') return null;
-  if (
-    options.cutoffIso !== null &&
-    typeof run.updated_at === 'string' &&
-    compareIsoTimestamps(run.updated_at, options.cutoffIso) < 0
-  ) {
+  if (isOutsideSamplingWindow(run.updated_at, options.cutoffIso)) {
     return null;
   }
 
@@ -661,11 +674,7 @@ export function collectCiActionsEvidence(
     // same cutoff) -- check it before the jobs fetch, not after, so a
     // quiet-repository report with mostly-expired runs doesn't spend a
     // jobs-endpoint call per run just to discard the result.
-    if (
-      cutoffIso !== null &&
-      typeof run.updated_at === 'string' &&
-      compareIsoTimestamps(run.updated_at, cutoffIso) < 0
-    ) {
+    if (isOutsideSamplingWindow(run.updated_at, cutoffIso)) {
       continue;
     }
 
