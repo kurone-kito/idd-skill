@@ -403,6 +403,94 @@ function isNegatedNearby(body, matchText, matchIndex, windowChars) {
     NEGATION_PATTERN.test(contextBefore) || NEGATION_PATTERN.test(contextAfter)
   );
 }
+// A Markdown paragraph break: two newlines with only horizontal
+// whitespace (spaces/tabs) between them -- a blank line still counts
+// as a break even when it carries trailing whitespace (Copilot review,
+// #2508).
+const PARAGRAPH_BREAK_PATTERN = /\n[ \t]*\n/;
+// A decoration typical of a compact label/mapping entry -- a
+// hyphenated or slash-joined slug, an "->" mapping arrow, or a code
+// span -- rather than ordinary prose (#2508). Matched only after
+// collapsing "a -> b" whitespace in looksLikeLabelEntry, so this must
+// find decoration in what is otherwise a single whitespace-free token,
+// not merely somewhere inside a multi-word phrase (Copilot/CodeRabbit
+// review round 3: a lone hyphen used as prose punctuation, e.g.
+// "blocking this work - resolve later", or a plain dictionary word
+// with no decoration at all, e.g. "unfortunately", must not qualify).
+const LABEL_ENTRY_DECORATION_PATTERN = /[-/`]/;
+// An "a -> b" mapping arrow with any surrounding whitespace (including
+// a hand-wrapped newline), collapsed to a bare "->" before the
+// whitespace check below so a wrapped mapping still counts as one
+// compact token.
+const LABEL_ENTRY_ARROW_PATTERN = /\s*->\s*/g;
+/**
+ * True when `segment` (one comma-delimited entry from a parenthetical,
+ * excluding the marker's own entry) reads as a compact label name or
+ * label-to-label mapping -- e.g. "not-yet-ready" or
+ * "undecided -> `needs-decision`" -- rather than an ordinary multi-word
+ * phrase. After collapsing "->" mapping whitespace, the *entire* entry
+ * must contain no remaining whitespace and must carry a hyphen, slash,
+ * or backtick; a plain word with none of those (e.g. "unfortunately")
+ * or a multi-word phrase that merely contains a hyphen somewhere (e.g.
+ * "blocking this work - resolve later") does not qualify. Used by
+ * isEnumeratedParentheticalEntry to require every *other* entry in the
+ * list to look like fixed vocabulary before excluding the marker: a
+ * genuine aside such as "(still undecided, blocking this work)" has an
+ * ordinary-prose other entry ("blocking this work") and must not be
+ * excluded.
+ */
+function looksLikeLabelEntry(segment) {
+  const trimmed = segment.trim();
+  if (trimmed.length === 0) {
+    return false;
+  }
+  const collapsed = trimmed.replace(LABEL_ENTRY_ARROW_PATTERN, '->');
+  if (/\s/.test(collapsed)) {
+    return false;
+  }
+  return LABEL_ENTRY_DECORATION_PATTERN.test(collapsed);
+}
+/**
+ * True when the UNRESOLVED_CHOICE_PATTERN match at `matchIndex` sits
+ * inside a parenthetical enumerating a fixed vocabulary -- e.g.
+ * "(undecided, waits-on-person/credential, order-dependency,
+ * not-yet-ready)" -- evidence the match names one entry in that
+ * vocabulary rather than a claim about this issue's own open next step
+ * (#2508). Every comma-delimited entry other than the marker's own
+ * must look like a compact label name (looksLikeLabelEntry); a
+ * parenthetical with no comma, or one whose other entries read as
+ * ordinary prose (e.g. "(still undecided, blocking this work)"), still
+ * counts as a genuine unresolved marker and is not excluded. A
+ * paragraph break inside the span means the "(" and ")" belong to
+ * unrelated parentheticals in different paragraphs, not one enclosing
+ * span -- rejected -- but a single soft-wrapped newline inside one
+ * hand-wrapped Markdown paragraph does not end the span.
+ */
+function isEnumeratedParentheticalEntry(body, matchIndex, matchLength) {
+  const openIndex = body.lastIndexOf('(', matchIndex);
+  if (openIndex === -1) {
+    return false;
+  }
+  const before = body.slice(openIndex + 1, matchIndex);
+  if (before.includes(')') || PARAGRAPH_BREAK_PATTERN.test(before)) {
+    return false;
+  }
+  const closeIndex = body.indexOf(')', matchIndex + matchLength);
+  if (closeIndex === -1) {
+    return false;
+  }
+  const after = body.slice(matchIndex + matchLength, closeIndex);
+  if (after.includes('(') || PARAGRAPH_BREAK_PATTERN.test(after)) {
+    return false;
+  }
+  if (!before.includes(',') && !after.includes(',')) {
+    return false;
+  }
+  const beforeEntries = before.split(',').slice(0, -1);
+  const afterEntries = after.split(',').slice(1);
+  const otherEntries = [...beforeEntries, ...afterEntries];
+  return otherEntries.length > 0 && otherEntries.every(looksLikeLabelEntry);
+}
 const ACCEPTANCE_CRITERIA_PATTERN = /^#+\s*Acceptance\s+Criteria\s*$/im;
 // A heading line such as "## Decision (resolved 2026-06-27)" records that a
 // human has already ruled on the issue's open question (see Check 7). The
@@ -1495,6 +1583,11 @@ export function checkAutonomy(context) {
       ) {
         continue;
       }
+      if (
+        isEnumeratedParentheticalEntry(body, markerIndex, markerText.length)
+      ) {
+        continue;
+      }
       const markerEnd = markerIndex + markerText.length;
       const isNearOrInsideEitherOr = eitherOrMatches.some((eitherOr) => {
         const eitherOrText = eitherOr[0] ?? '';
@@ -1553,6 +1646,9 @@ export function checkAutonomy(context) {
     const markerText = marker[0] ?? '';
     const markerIndex = marker.index ?? 0;
     if (isNegatedNearby(body, markerText, markerIndex, NEGATION_WINDOW_CHARS)) {
+      continue;
+    }
+    if (isEnumeratedParentheticalEntry(body, markerIndex, markerText.length)) {
       continue;
     }
     return {
