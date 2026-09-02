@@ -22,16 +22,17 @@
 //   read time, so a caller polling in a loop can detect the branch moving
 //   out from under an in-flight wait.
 import { parseCliArgs } from './cli-args.mjs';
-import { DEFAULT_GH_PAGINATED_TIMEOUT_MS, ghText } from './gh-exec.mjs';
-import { deriveGhHttpStatus } from './gh-http-status.mjs';
 import { loadIddConfig } from './idd-config.mjs';
 import { normalizePolicyConfig } from './policy-helpers.mjs';
 import {
   CI_FAILURE_CONCLUSION_STATES,
-  parsePaginatedGhNdjson,
   selectLatestCheckInstance,
   summarizeBranchReviewRequirements,
 } from './protocol-helpers.mjs';
+import {
+  createGithubProviderAdapter,
+  resolveCurrentGithubRepository,
+} from './provider-adapter-github.mjs';
 
 // Interpretation table this bucketing is based on: idd-ci.instructions.md's
 // "Interpretation" section. Keep these three sets in sync with that table's
@@ -108,32 +109,29 @@ function main() {
     // invalid value as absent.
     throw new Error('missing or invalid --pr <number> argument');
   }
-  const owner =
-    args.owner ||
-    ghText(['repo', 'view', '--json', 'owner', '--jq', '.owner.login']);
-  const repo =
-    args.repo || ghText(['repo', 'view', '--json', 'name', '--jq', '.name']);
-  const repoRef = `${owner}/${repo}`;
-  const pr = JSON.parse(
-    ghText([
-      'pr',
-      'view',
-      String(args.prNumber),
-      '-R',
-      repoRef,
-      '--json',
-      'headRefOid,baseRefName,statusCheckRollup',
-    ]),
+  const currentRepo =
+    args.owner && args.repo ? null : resolveCurrentGithubRepository();
+  const owner = args.owner || currentRepo?.owner || '';
+  const repo = args.repo || currentRepo?.repo || '';
+  const port = createGithubProviderAdapter(owner, repo);
+  const pr = port.getChangeRequestBranchAndChecks(args.prNumber);
+  // Raw (unencoded) branch name: listBranchRules/getBranchProtection do
+  // their own encodeURIComponent internally, matching pre-merge-readiness's
+  // and #2267's other listBranchRules/getBranchProtection callers -- passing
+  // an already-encoded ref here would double-encode it.
+  const baseRefName = String(pr.baseRefName ?? '');
+  const branchRulesOutcome = port.listBranchRules(owner, repo, baseRefName);
+  const branchRules =
+    branchRulesOutcome.outcome === 'ok' ? branchRulesOutcome.value : [];
+  const branchProtectionOutcome = port.getBranchProtection(
+    owner,
+    repo,
+    baseRefName,
   );
-  const encodedBaseRefName = encodeURIComponent(String(pr.baseRefName ?? ''));
-  const branchRules = ghApiJsonOr404Empty(
-    `repos/${owner}/${repo}/rules/branches/${encodedBaseRefName}`,
-    true,
-  );
-  const branchProtection = ghApiJsonOr404Empty(
-    `repos/${owner}/${repo}/branches/${encodedBaseRefName}/protection`,
-    false,
-  );
+  const branchProtection =
+    branchProtectionOutcome.outcome === 'ok'
+      ? branchProtectionOutcome.value
+      : {};
   const branchReviewRequirements = summarizeBranchReviewRequirements(
     branchRules,
     branchProtection,
@@ -145,7 +143,7 @@ function main() {
       .trustSourcePinnedRequiredChecks === true;
   const summary = buildCiWaitStateSummary(
     {
-      headRefOid: pr.headRefOid ?? '',
+      headRefOid: pr.headSha,
       statusCheckRollup: pr.statusCheckRollup ?? [],
     },
     {
@@ -482,44 +480,6 @@ export function parseArgs(argv) {
     repo: values.repo,
     help,
   };
-}
-/**
- * `gh api <path>`, tolerating a genuine 404 (unprotected branch / no active
- * rules) as an empty result. `gh` exits 1 for every HTTP error alike, so the
- * real status is derived from the error text via the shared
- * {@link deriveGhHttpStatus} rather than the useless process exit code —
- * the same discrimination `pre-merge-readiness.mts` and the A3/A4 discovery
- * helpers already rely on. Any other status (403, rate limit, transient
- * failure) propagates so this snapshot fails closed instead of silently
- * treating an auth/network failure as "no required checks configured".
- */
-function ghApiJsonOr404Empty(path, paginate) {
-  // `--jq '.[]'` (NDJSON, one array element per line) is the repo-standard
-  // paginate form — see gh-exec.mts and protocol-helpers.mts's
-  // parsePaginatedGhNdjson, reused here rather than hand-rolling a second
-  // parser. Unlike `--jq '.'`, it does not depend on gh's jq implementation
-  // staying compact-per-page; `--slurp` (a single JSON array) landed in gh
-  // v2.48.0, but Ubuntu 24.04 LTS ships gh v2.45.0 via apt, so NDJSON stays
-  // the compatible default.
-  const args = paginate
-    ? ['api', path, '--paginate', '--jq', '.[]']
-    : ['api', path];
-  try {
-    const raw = ghText(
-      args,
-      paginate ? { timeout: DEFAULT_GH_PAGINATED_TIMEOUT_MS } : {},
-    );
-    if (!paginate) {
-      const trimmed = raw.trim();
-      return trimmed ? JSON.parse(trimmed) : {};
-    }
-    return parsePaginatedGhNdjson(raw);
-  } catch (error) {
-    if (deriveGhHttpStatus(error) === 404) {
-      return paginate ? [] : {};
-    }
-    throw error;
-  }
 }
 function printHelp() {
   process.stdout.write(`Usage:
