@@ -77,7 +77,16 @@ themselves unidentified (all historical data, and any vendor with no
 known session-id source) -- once identified events are present, an
 identified stage is never treated as compatible with a differently- or
 un-identified completion, so a stale or unrelated attempt can't be
-silently absorbed.
+silently absorbed. One accepted tradeoff from this: when a single issue
+loop legitimately spans multiple Claude sessions (a handoff or resume,
+Refs Scope above), the event-window fallback currently only harvests
+that loop's usage from the session that posted `cleanup` -- an earlier
+session's own identified stage windows are excluded rather than folded
+in, since a session-id mismatch cannot be told apart from a genuinely
+unrelated, abandoned attempt at the event level. Full multi-session
+aggregation for this path is tracked separately (Refs #2432); the
+harvested sample stays an undercount rather than risking a
+mismatched/contaminated one in the meantime.
 
 `node scripts/token-cost-report.mjs`:
 

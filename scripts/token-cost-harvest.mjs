@@ -1126,6 +1126,27 @@ export function buildCompletedIssueWindows(eventWindowsAll, vendor) {
     //   whether they're the same real attempt or two different
     //   unidentified ones -- byte-identical to the pre-#2424 residual;
     //   identity cannot see it either way.
+    //
+    // A third, accepted tradeoff (Codex review finding round 5, PR #2430,
+    // #2424): a `vendorSessionId` mismatch proves a different PROCESS, not
+    // a different ATTEMPT -- docs/token-cost.md's own Scope explicitly
+    // allows one issue loop to span multiple Claude sessions via a
+    // handoff or resume. This check has no way to tell that legitimate
+    // case apart from a genuinely unrelated, abandoned earlier attempt,
+    // so it excludes both alike. Widening the window to include the
+    // earlier session's own stage would not by itself recover its usage
+    // either: `scanClaudeVendorSessions` harvests one session log file
+    // per completed window, so an earlier handoff session's records live
+    // in a file this resolution never selects -- a widened-but-single-
+    // file harvest would misrepresent its own coverage (bounds spanning
+    // both sessions, records covering only one), which is worse than
+    // today's narrower-but-honest one. Merging records across a
+    // confirmed handoff's files needs a positive-evidence rule this
+    // event stream alone can't supply; tracked separately (#2432) rather
+    // than attempted here. Until then this is a documented undercount,
+    // not a bug: recoverable once #2432 ships, unlike the permanent
+    // contamination a wrong inclusion would freeze under a stable
+    // `#ew<issueNumber>` sample id.
     const idCompatible = (window) =>
       window.vendorSessionId === undefined ||
       window.vendorSessionId === cleanup.vendorSessionId;
