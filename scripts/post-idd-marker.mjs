@@ -414,11 +414,12 @@ its claim-revalidation gate before --apply, as the manual POST path it replaces.
   --repo <repo>        repo name (default: gh repo view)
   -h, --help           show this help
 
-Per-type field flags:
-  claim              --agent-id --claim-id --supersedes --timestamp --branch
+Per-type field flags (a flag in [brackets] is optional; every other flag
+listed is required for that type):
+  claim              --agent-id --claim-id [--supersedes] --timestamp --branch
   unclaim            --agent-id --claim-id --timestamp
   activation-nonce   --agent-id --claim-id --nonce --timestamp
-  watermark          --agent-id --claim-id --head-sha --max-activity-at --total-item-count --ci-completed-at
+  watermark          --agent-id --claim-id --head-sha [--max-activity-at] --total-item-count [--ci-completed-at]
                      (or --agent-id --claim-id --from-pr <n> [--expected-head-sha <sha>])
   baseline           --agent-id --claim-id --sha
   advisory           --agent-id --head-sha --timestamp

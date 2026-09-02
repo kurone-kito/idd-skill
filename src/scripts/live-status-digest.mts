@@ -827,14 +827,14 @@ function printUsage(): void {
 Options:
   --dry-run                         compute the create/update/noop action (default)
   --apply                           create or update the single current digest
-  --phase <text>                    digest Phase field
-  --claim <text>                    digest Claim field
-  --branch <text>                   digest Branch field
+  --phase <text>                    digest Phase field (required)
+  --claim <text>                    digest Claim field (required)
+  --branch <text>                   digest Branch field (required)
   --last-checked <timestamp>        digest Last checked field (default: current UTC)
-  --open-blockers <text>            digest Open blockers field
-  --next-action <text>              digest Next action field
-  --authoritative-by <text>         digest Authoritative by field
-  --claim-issue <number>            issue whose active claim protects apply mode
+  --open-blockers <text>            digest Open blockers field (required)
+  --next-action <text>              digest Next action field (required)
+  --authoritative-by <text>         digest Authoritative by field (required)
+  --claim-issue <number>            issue whose active claim protects apply mode (required for apply mode)
   --claim-id <id>                   active claim id required for apply mode
   --agent-id <id>                   optionally require this claim agent id
   --skip-claim-check                explicit maintainer override for apply mode
