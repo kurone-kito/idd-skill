@@ -310,9 +310,9 @@ A `commit-msg` hook (for example commitlint's body-max-line-length) can
 silently reject a commit with a long single-line body, so no commit is
 created — but the following `git push` then reports "Everything
 up-to-date", which reads as a normal no-op rather than the actual
-failure. Prefer `git commit ... -F <file>` with a pre-wrapped body over
-a long single-line `-m` message to avoid tripping the hook in the first
-place, and confirm the commit landed (compare `git rev-parse HEAD`
+failure. Prefer `git commit -F <file>` with a pre-wrapped body file
+over a long single-line `-m` message to avoid tripping the hook in the
+first place, and confirm the commit landed (compare `git rev-parse HEAD`
 before/after, or check the commit hash the commit command reports)
 before treating a subsequent push as confirmation the change landed.
 

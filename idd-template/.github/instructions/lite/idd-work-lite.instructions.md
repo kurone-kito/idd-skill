@@ -161,9 +161,9 @@ addendum resolves it.
     `commit-msg` hook (for example commitlint's body-max-line-length) can
     silently reject a commit with a long single-line body, and the
     following push then reports "Everything up-to-date" as if nothing
-    were wrong. Prefer `git commit ... -F <file>` with a pre-wrapped body,
-    and compare `git rev-parse HEAD` before/after (or check the reported
-    commit hash) before treating a push as confirmation.
+    were wrong. Prefer `git commit -F <file>` with a pre-wrapped body
+    file, and compare `git rev-parse HEAD` before/after (or check the
+    reported commit hash) before treating a push as confirmation.
 11. If validation fails in files this diff did not touch, suspect baseline
     drift or a stale install before blaming the change; verify with a fresh
     `install-deps` run in a clean worktree or a fresh-vs-stale
