@@ -171,6 +171,24 @@ export interface ParsedProviderOutageAdvancement {
 }
 
 /**
+ * Parsed `<!-- idd-provider-outage-park: ... -->` marker (#2321): posted on
+ * the parked pull request itself (unlike the declaration-target-scoped
+ * markers above) when its sole blocker is a `providerHealth` verdict of
+ * `unavailable` for `service`. `issueNumber` names the originating issue
+ * whose claim was released on entry, so a later resume re-claims the right
+ * target without re-parsing the pull request body's closing keyword.
+ */
+export interface ParsedProviderOutagePark {
+  actor: string;
+  issueNumber: number;
+  service: string;
+  headSha: string;
+  claimId: string;
+  parkedAt: string;
+  createdAt: string;
+}
+
+/**
  * Parsed `<!-- idd-local-validation-evidence: ... -->` marker (#2323): a
  * HEAD-pinned record that a configured local command set (typically
  * `pre-push-validate`) ran against this exact commit and produced
@@ -400,6 +418,12 @@ const OPERATIONAL_MARKER_ENTRIES: OperationalMarker[] = [
     startPattern: /^<!--\s*idd-provider-outage-advanced:/i,
   },
   {
+    label: '<!-- idd-provider-outage-park:',
+    pattern:
+      /^<!--\s*idd-provider-outage-park:\s+\S+\s+issue:\d+\s+service:\S+\s+head:[0-9a-f]{40}\s+claim:\S+\s+parked:\S+\s*-->[\s\S]*$/i,
+    startPattern: /^<!--\s*idd-provider-outage-park:/i,
+  },
+  {
     label: '<!-- idd-local-validation-evidence:',
     pattern:
       /^<!--\s*idd-local-validation-evidence:\s+\S+\s+head:[0-9a-f]{40}\s+commands:\S+\s+covers:\S+\s+outcome:(?:pass|fail)\s*-->[\s\S]*$/i,
@@ -436,6 +460,7 @@ export const IDD_AGENT_DERIVED_MARKERS: ReadonlySet<string> = new Set([
   'advisory-reroll:',
   'review-ack:',
   'copilot-unavailable:',
+  '<!-- idd-provider-outage-park:',
 ]);
 
 // ---------------------------------------------------------------------------
@@ -1047,6 +1072,82 @@ export function parseProviderOutageAdvancedComment(
     prNumber,
     headSha: match[3].toLowerCase(),
     declaredAt,
+    createdAt: isValidIsoTimestamp(createdAt) ? createdAt : 'none',
+  };
+}
+
+/**
+ * Render a `<!-- idd-provider-outage-park: ... -->` marker (#2321). Posted
+ * to the parked pull request by the holding session before it releases the
+ * originating issue's claim. `service` reuses the same percent-encoded,
+ * comment-token-safe field grammar as the sibling outage markers rather than
+ * hard-restricting to an enum here -- the caller validates `service` against
+ * `PROVIDER_HEALTH_SERVICES` (provider-health.mts) before rendering.
+ */
+export function renderProviderOutageParkComment(payload: {
+  actor?: unknown;
+  issueNumber?: unknown;
+  service?: unknown;
+  headSha?: unknown;
+  claimId?: unknown;
+  parkedAt?: unknown;
+}): string {
+  const actor = normalizeNonWhitespaceToken(payload?.actor);
+  const issueNumber = normalizePositiveIntegerToken(payload?.issueNumber);
+  const service = normalizeExternalCheckWaiverField(payload?.service);
+  const headSha = normalizeNonWhitespaceToken(payload?.headSha).toLowerCase();
+  const claimId = normalizeNonWhitespaceToken(payload?.claimId);
+  const parkedAt = normalizeSecondPrecisionIsoTimestamp(payload?.parkedAt);
+  if (
+    !actor ||
+    issueNumber === null ||
+    !service ||
+    !/^[0-9a-f]{40}$/.test(headSha) ||
+    !claimId ||
+    !parkedAt
+  ) {
+    throw new Error('invalid provider outage park payload');
+  }
+  const encodedService = encodeExternalCheckWaiverField(service);
+  return [
+    `<!-- idd-provider-outage-park: ${actor} issue:${issueNumber} service:${encodedService} head:${headSha} claim:${claimId} parked:${parkedAt} -->`,
+    '',
+    `_${actor}: pull request parked -- \`${service}\` unavailable, issue #${issueNumber}'s claim released -- IDD automation marker. Do not edit._`,
+  ].join('\n');
+}
+
+export function parseProviderOutageParkComment(
+  body: string,
+  createdAt: string,
+): ParsedProviderOutagePark | null {
+  const match = body
+    .trimEnd()
+    .match(
+      new RegExp(
+        `^<!--\\s*idd-provider-outage-park:\\s+(\\S+)\\s+issue:(\\d+)\\s+service:(\\S+)\\s+head:([0-9a-f]{40})\\s+claim:(\\S+)\\s+parked:(\\S+)\\s*-->${OPTIONAL_IDD_VISIBLE_NOTE_PATTERN}$`,
+        'i',
+      ),
+    );
+  if (!match) {
+    return null;
+  }
+  const actor = normalizeNonWhitespaceToken(match[1]);
+  const issueNumber = normalizePositiveIntegerToken(match[2]);
+  const service = normalizeExternalCheckWaiverField(
+    decodeExternalCheckWaiverField(match[3]),
+  );
+  const claimId = normalizeNonWhitespaceToken(match[5]);
+  const parkedAt = normalizeSecondPrecisionIsoTimestamp(match[6]);
+  if (!actor || issueNumber === null || !service || !claimId || !parkedAt) {
+    return null;
+  }
+  return {
+    actor,
+    issueNumber,
+    service,
+    headSha: match[4].toLowerCase(),
+    claimId,
+    parkedAt,
     createdAt: isValidIsoTimestamp(createdAt) ? createdAt : 'none',
   };
 }

@@ -321,6 +321,10 @@ export const POLICY_DEFAULTS = Object.freeze({
   // object carries no `declarationTarget` key at all until configured.
   providerOutage: Object.freeze({
     maxValidity: 'PT24H',
+    // Added in #2321. Once this many pull requests are parked, sessions
+    // stop claiming new issues rather than manufacturing more unmergeable
+    // pull requests during a sustained outage.
+    maxParkedChanges: 10,
   }),
   // Added in #2323. Deliberately shorter than providerOutage.maxValidity
   // (PT24H): a local validation run only stays representative of the
@@ -466,6 +470,12 @@ export function normalizePolicyConfig(config) {
     maxValidity: parsePositiveDuration(
       c?.providerOutage?.maxValidity,
       POLICY_DEFAULTS.providerOutage.maxValidity,
+    ),
+    // #2321: an invalid or absent value falls back to the documented
+    // default deterministically -- see parsePositiveInteger above.
+    maxParkedChanges: parsePositiveInteger(
+      c?.providerOutage?.maxParkedChanges,
+      POLICY_DEFAULTS.providerOutage.maxParkedChanges,
     ),
   };
   if (

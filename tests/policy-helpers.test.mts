@@ -361,6 +361,27 @@ test('providerOutage.maxValidity defaults to PT24H and accepts a configured over
   );
 });
 
+test('providerOutage.maxParkedChanges defaults to 10 and accepts a configured override (#2321)', () => {
+  assert.equal(POLICY_DEFAULTS.providerOutage.maxParkedChanges, 10);
+  assert.equal(normalizePolicyConfig({}).providerOutage.maxParkedChanges, 10);
+  assert.equal(
+    normalizePolicyConfig({ providerOutage: { maxParkedChanges: 3 } })
+      .providerOutage.maxParkedChanges,
+    3,
+  );
+});
+
+test('providerOutage.maxParkedChanges rejects an invalid value deterministically, falling back to the default (#2321)', () => {
+  for (const invalid of [0, -1, 1.5, 'ten', null, undefined]) {
+    assert.equal(
+      normalizePolicyConfig({ providerOutage: { maxParkedChanges: invalid } })
+        .providerOutage.maxParkedChanges,
+      10,
+      `expected maxParkedChanges ${JSON.stringify(invalid)} to fail safe to the default`,
+    );
+  }
+});
+
 test('critiqueLoop.delegate resolves to undefined when absent (#2199)', () => {
   assert.equal(normalizePolicyConfig({}).critiqueLoop.delegate, undefined);
 });

@@ -77,6 +77,9 @@ qualifying human decision resolves the hold, a later session removes
 the label and re-claims. A response that leaves the decision open
 does not re-enter.
 
+**Provider-outage park**: release the claim immediately, no 12 h
+heartbeat -- see idd-ci.instructions.md's Hold-and-report failure shapes.
+
 ## Roadmap markers
 
 For roadmap markers and their usage rules, see

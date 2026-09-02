@@ -505,6 +505,16 @@ const HELPER_COMMANDS: HelperCommand[] = [
     contractPaths: ['schemas/provider-outage-declaration.schema.json'],
   },
   {
+    id: 'provider-outage-park',
+    scriptName: 'idd:provider-outage-park',
+    binName: 'idd-provider-outage-park',
+    entryPath: 'scripts/provider-outage-park.mjs',
+    vendoredCommand: 'node scripts/provider-outage-park.mjs',
+    description:
+      'Read-only list of parked pull requests, or (--park) post a park marker for one blocked solely by an unavailable provider service.',
+    contractPaths: ['schemas/provider-outage-park.schema.json'],
+  },
+  {
     id: 'rerun-advisory-convergence',
     scriptName: 'idd:rerun-advisory-convergence',
     binName: 'idd-rerun-advisory-convergence',

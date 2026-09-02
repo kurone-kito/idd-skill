@@ -1,0 +1,9 @@
+{
+  "actor": "claude-29738796",
+  "issueNumber": 2321,
+  "service": "advisory-review",
+  "headSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "claimId": "f22dd6db-83f8-4e92-aaa9-23db47d10650",
+  "parkedAt": "2026-09-02T00:00:00Z",
+  "createdAt": "2026-09-02T00:00:05Z"
+}

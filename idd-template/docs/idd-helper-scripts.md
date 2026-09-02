@@ -1213,6 +1213,48 @@ Interpretation rules:
   idd-advisory-convergence`) for either gate to honor it; a declaration
   for any other service name relieves nothing here.
 
+### Provider outage park helper
+
+- Command:
+  `node scripts/provider-outage-park.mjs [--park --pr <n> --issue <n>
+  --service <name> --blockers <name1,name2> --claim-id <id> --agent-id
+  <id>] [--apply]`
+- Published bin: `idd-provider-outage-park`
+- Stable contract:
+  [`provider-outage-park.schema.json`][provider-outage-park-schema]
+- Purpose (#2321): every current route for an unavailable external
+  service ends in a hold, which keeps the claim live until
+  `claimTiming.staleAge` elapses -- the session can neither continue nor
+  pick up different work, and the outage keeps producing more pull
+  requests stuck the same way. Parking releases the claim immediately
+  instead, at no cost to any quality gate: it never resolves a thread,
+  satisfies a gate, or merges.
+- Modes:
+  - default (list, read-only): lists every open pull request carrying a
+    trusted `idd-provider-outage-park` marker, each with its parked
+    service's current `provider-health` verdict and `resumable` (true
+    only once that verdict is `healthy`). Sorted by `parkedAt` then pull
+    request number for deterministic re-entry order. Reports `count` and
+    `boundReached` against `providerOutage.maxParkedChanges` (default
+    `10`) as information only -- this mode never blocks a park.
+  - `--park`: fetches the pull request's live head SHA, re-checks the
+    named service's live `provider-health` verdict is `unavailable`, and
+    requires every entry in `--blockers` (the caller's own fresh
+    `pre-merge-readiness` blocker-gate names) to map to that service --
+    `advisory-review` only for `advisory-wait` /
+    `copilot-terminal-unavailable`; `ci-actions` only for `ci` /
+    `discarded-required-check-siblings`. Any other blocker, or an empty
+    `--blockers`, refuses to park. `--apply` posts the marker to the
+    pull request; releasing the originating issue's claim is a separate,
+    existing step the caller takes afterward (`unclaimed-by`), not
+    performed by this command.
+- Same claim-gating contract as `post-idd-marker.mjs`: this command
+  performs no claim/state gating itself -- the calling phase runs its
+  own claim-revalidation gate before `--apply`.
+- Read-only by construction in list mode: exposes no field named or
+  shaped as a merge-readiness or CI-gate result, mirroring the
+  provider-health helper above.
+
 ### Local validation evidence helper
 
 - Command:
@@ -3025,4 +3067,5 @@ replace the written decision tables.
 [pre-merge-readiness-schema]: https://kurone-kito.github.io/idd-skill/schemas/pre-merge-readiness.schema.json
 [provider-health-schema]: https://kurone-kito.github.io/idd-skill/schemas/provider-health.schema.json
 [provider-outage-declaration-schema]: https://kurone-kito.github.io/idd-skill/schemas/provider-outage-declaration.schema.json
+[provider-outage-park-schema]: https://kurone-kito.github.io/idd-skill/schemas/provider-outage-park.schema.json
 [resolve-review-thread-schema]: https://kurone-kito.github.io/idd-skill/schemas/resolve-review-thread.schema.json

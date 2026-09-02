@@ -52,6 +52,7 @@
     "idd-pre-merge-readiness": "./bin/idd-pre-merge-readiness.mjs",
     "idd-provider-health": "./bin/idd-provider-health.mjs",
     "idd-provider-outage-declaration": "./bin/idd-provider-outage-declaration.mjs",
+    "idd-provider-outage-park": "./bin/idd-provider-outage-park.mjs",
     "idd-rerun-advisory-convergence": "./bin/idd-rerun-advisory-convergence.mjs",
     "idd-resolve-review-thread": "./bin/idd-resolve-review-thread.mjs",
     "idd-resume-claim-routing": "./bin/idd-resume-claim-routing.mjs",

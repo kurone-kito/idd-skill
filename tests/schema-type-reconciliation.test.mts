@@ -22,6 +22,7 @@ import type {
   ParsedForcedHandoffMarker,
   ParsedLocalValidationEvidence,
   ParsedProviderOutageDeclaration,
+  ParsedProviderOutagePark,
 } from '../src/scripts/protocol-helpers.mts';
 import type { ProviderHealthReport } from '../src/scripts/provider-health.mts';
 import type { ResolveReviewThreadReport } from '../src/scripts/resolve-review-thread.mts';
@@ -364,6 +365,16 @@ export const providerOutageDeclarationKeys = [
   'expiresAt',
   'createdAt',
 ] as const satisfies readonly (keyof ParsedProviderOutageDeclaration)[];
+
+export const providerOutageParkKeys = [
+  'actor',
+  'issueNumber',
+  'service',
+  'headSha',
+  'claimId',
+  'parkedAt',
+  'createdAt',
+] as const satisfies readonly (keyof ParsedProviderOutagePark)[];
 
 export const localValidationEvidenceKeys = [
   'actor',
@@ -899,6 +910,16 @@ const providerOutageDeclarationFixture = {
   expiresAt: '2026-09-02T05:00:00Z',
   createdAt: '2026-09-01T05:00:01Z',
 } satisfies ParsedProviderOutageDeclaration;
+
+const providerOutageParkFixture = {
+  actor: 'claude-29738796',
+  issueNumber: 2321,
+  service: 'advisory-review',
+  headSha: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+  claimId: 'f22dd6db-83f8-4e92-aaa9-23db47d10650',
+  parkedAt: '2026-09-02T00:00:00Z',
+  createdAt: '2026-09-02T00:00:05Z',
+} satisfies ParsedProviderOutagePark;
 
 const localValidationEvidenceFixture = {
   actor: 'kurone-kito',
@@ -1573,6 +1594,13 @@ const SCHEMA_TYPE_MAP: readonly SchemaTypeMapping[] = [
     owningModule: 'src/scripts/protocol-helpers.mts',
     keys: providerOutageDeclarationKeys,
     fixture: providerOutageDeclarationFixture,
+  },
+  {
+    schemaFile: 'provider-outage-park.schema.json',
+    exportedType: 'ParsedProviderOutagePark',
+    owningModule: 'src/scripts/protocol-helpers.mts',
+    keys: providerOutageParkKeys,
+    fixture: providerOutageParkFixture,
   },
   {
     schemaFile: 'local-validation-evidence.schema.json',

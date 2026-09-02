@@ -36,6 +36,8 @@ const SAMPLE_NAMES = [
   'parseProviderOutageDeclarationComment',
   'renderProviderOutageAdvancedComment',
   'parseProviderOutageAdvancedComment',
+  'renderProviderOutageParkComment',
+  'parseProviderOutageParkComment',
   'parseReviewWatermarkComment',
   'operationalMarkerPrefix',
   'operationalMarkerPrefixByStart',
