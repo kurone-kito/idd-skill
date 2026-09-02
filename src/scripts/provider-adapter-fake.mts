@@ -636,7 +636,11 @@ export function createFakeProviderAdapter(
         : { outcome: 'ok', value };
     },
 
-    getWorkflowRun(runOwner: string, runRepo: string, runId: number): unknown {
+    getWorkflowRun(
+      runOwner: string,
+      runRepo: string,
+      runId: string | number,
+    ): unknown {
       const key = `${runOwner}/${runRepo}/${runId}`;
       return fixture.workflowRuns?.[key] ?? null;
     },

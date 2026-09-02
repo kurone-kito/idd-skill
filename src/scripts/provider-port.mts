@@ -966,8 +966,14 @@ export interface ProviderPort {
     rulesetId: number | string,
   ): ProviderGovernanceReadOutcome<unknown>;
 
-  /** checks. `actions/runs/{runId}` single-run read, raw passthrough. */
-  getWorkflowRun(owner: string, repo: string, runId: number): unknown;
+  /** checks. `actions/runs/{runId}` single-run read, raw passthrough.
+   * `runId` is `string | number` (not just `number`): a GitHub Actions run
+   * id can exceed `Number.MAX_SAFE_INTEGER`, so a caller holding the id as
+   * a string must be able to pass it through without a lossy `Number()`
+   * round-trip (#2267 regression, caught by
+   * `ci-wait-policy.test.mts`'s "preserves a run id above
+   * Number.MAX_SAFE_INTEGER exactly" case). */
+  getWorkflowRun(owner: string, repo: string, runId: string | number): unknown;
 
   /** checks. `gh run list --workflow {name} --limit N --json
    * databaseId,conclusion,status,createdAt` -- distinct `gh run list`

@@ -36,6 +36,7 @@ const MIGRATED_HELPERS: readonly string[] = [
   'idd-merge-execute.mts',
   'merged-pr-feedback-sweep.mts',
   'advisory-wait-state.mts',
+  'ci-wait-policy.mts',
 ];
 
 const DIRECT_GH_PATTERNS: { pattern: RegExp; description: string }[] = [

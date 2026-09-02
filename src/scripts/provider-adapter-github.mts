@@ -1969,7 +1969,11 @@ export function createGithubProviderAdapter(
       );
     },
 
-    getWorkflowRun(runOwner: string, runRepo: string, runId: number): unknown {
+    getWorkflowRun(
+      runOwner: string,
+      runRepo: string,
+      runId: string | number,
+    ): unknown {
       const raw = deps.ghText(
         ['api', `repos/${runOwner}/${runRepo}/actions/runs/${runId}`],
         GH_TEXT_LOOP_TIMEOUT_OPTIONS,

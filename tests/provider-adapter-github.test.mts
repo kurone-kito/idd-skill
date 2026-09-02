@@ -1430,3 +1430,22 @@ test('listMergedChangeRequests builds the merged pr-list args, with and without 
   assert.ok(capturedArgs?.includes('--search'));
   assert.ok(capturedArgs?.includes('merged:>=2026-01-01'));
 });
+
+test('getWorkflowRun preserves a string runId above Number.MAX_SAFE_INTEGER exactly (regression guard)', () => {
+  let capturedArgs: string[] | undefined;
+  const port = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({
+      ghText: (args) => {
+        capturedArgs = args;
+        return '{}';
+      },
+    }),
+  );
+  port.getWorkflowRun('o', 'r', '9007199254740993');
+  assert.ok(
+    capturedArgs?.includes('repos/o/r/actions/runs/9007199254740993'),
+    `expected the exact run id in the path, got: ${capturedArgs?.join(' ')}`,
+  );
+});

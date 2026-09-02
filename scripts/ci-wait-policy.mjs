@@ -7,7 +7,10 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { parseCanonicalIntegerOrThrow, parseCliArgs } from './cli-args.mjs';
-import { GH_TEXT_LOOP_TIMEOUT_OPTIONS, ghText } from './gh-exec.mjs';
+import {
+  createGithubProviderAdapter,
+  resolveCurrentGithubRepository,
+} from './provider-adapter-github.mjs';
 import { loadJson, validateConfigSection } from './validate-schemas.mjs';
 
 const DEFAULT_RUNNING_TIMEOUT = 'PT30M';
@@ -267,8 +270,9 @@ export function deriveRerunCountFromRunAttempt(runAttempt) {
 /**
  * Fetch the live Actions run `runId` (`GET
  * repos/{owner}/{repo}/actions/runs/{run_id}`) and derive its rerun count
- * via {@link deriveRerunCountFromRunAttempt}. Reuses the same
- * `ghText`/`GH_TEXT_LOOP_TIMEOUT_OPTIONS` timeout-guarded pattern
+ * via {@link deriveRerunCountFromRunAttempt}. Routed through
+ * provider-port.mts's `getWorkflowRun` (#2267), which reuses the same
+ * timeout-guarded `GH_TEXT_LOOP_TIMEOUT_OPTIONS` pattern
  * `rerun-advisory-convergence.mts`'s `collectFromGitHub` already uses for
  * the identical per-run `run_attempt` lookup, so a stalled or
  * unexpectedly-interactive `gh` call here fails closed within a bounded
@@ -280,11 +284,11 @@ export function fetchRerunCountFromRunId(owner, repo, runId) {
   );
 }
 export function fetchWorkflowRun(owner, repo, runId) {
-  const raw = ghText(
-    ['api', `repos/${owner}/${repo}/actions/runs/${runId}`],
-    GH_TEXT_LOOP_TIMEOUT_OPTIONS,
+  return createGithubProviderAdapter(owner, repo).getWorkflowRun(
+    owner,
+    repo,
+    runId,
   );
-  return JSON.parse(raw);
 }
 export function siblingSweepQuery(workflowName) {
   return `gh run list --workflow=${JSON.stringify(workflowName)} --limit ${String(SIBLING_SWEEP_LIMIT)}`;
@@ -300,31 +304,12 @@ function normalizeRerunPolicy(value) {
   return RERUN_POLICIES.has(text) ? text : DEFAULT_RERUN_POLICY;
 }
 function fetchSiblingWorkflowRuns(owner, repo, workflowName) {
-  const raw = ghText(
-    [
-      'run',
-      'list',
-      '--repo',
-      `${owner}/${repo}`,
-      '--workflow',
-      workflowName,
-      '--limit',
-      String(SIBLING_SWEEP_LIMIT),
-      '--json',
-      'databaseId,conclusion,status,createdAt',
-    ],
-    GH_TEXT_LOOP_TIMEOUT_OPTIONS,
+  return createGithubProviderAdapter(owner, repo).listWorkflowRuns(
+    owner,
+    repo,
+    workflowName,
+    SIBLING_SWEEP_LIMIT,
   );
-  const rows = JSON.parse(raw);
-  if (!Array.isArray(rows)) {
-    return [];
-  }
-  return rows.map((row) => ({
-    id: String(row.databaseId ?? ''),
-    conclusion: row.conclusion == null ? null : String(row.conclusion),
-    status: row.status == null ? null : String(row.status),
-    createdAt: row.createdAt == null ? null : String(row.createdAt),
-  }));
 }
 function runCli() {
   const args = parseArgs(process.argv.slice(2));
@@ -349,18 +334,10 @@ function runCli() {
     // pass; regression-guarded by the "resolves owner/repo INSIDE the
     // fallback" CLI test below).
     try {
-      const owner =
-        args.owner ||
-        ghText(
-          ['repo', 'view', '--json', 'owner', '--jq', '.owner.login'],
-          GH_TEXT_LOOP_TIMEOUT_OPTIONS,
-        );
-      const repo =
-        args.repo ||
-        ghText(
-          ['repo', 'view', '--json', 'name', '--jq', '.name'],
-          GH_TEXT_LOOP_TIMEOUT_OPTIONS,
-        );
+      const currentRepo =
+        args.owner && args.repo ? null : resolveCurrentGithubRepository();
+      const owner = args.owner || currentRepo?.owner || '';
+      const repo = args.repo || currentRepo?.repo || '';
       const run = fetchWorkflowRun(owner, repo, args.runId);
       rerunCount = deriveRerunCountFromRunAttempt(run.run_attempt);
       output.rerunCountSource = 'run-id';
