@@ -104,6 +104,34 @@ test('surfaces an unresolved reviewer thread with no disposition', () => {
   assert.equal(result.summary.unresolvedThreadCount, 1);
 });
 
+// #2473: Copilot's inline review-comment replies report a bare, capitalized
+// display-name login (`Copilot`) rather than the `[bot]`-suffixed slug login
+// (`copilot-pull-request-reviewer[bot]`) its top-level review carries.
+// `isKnownReviewBot` previously recognized only the slug form, so a thread
+// whose sole comment came from this bare form was misclassified as a
+// non-advisory-bot (human) thread.
+test('recognizes a review-comment reply carrying the bare "Copilot" display-name login as an advisory bot', () => {
+  const prs: MergedPrInput[] = [
+    {
+      number: 3,
+      threads: [
+        buildCommentThread(false, [
+          {
+            login: 'Copilot',
+            body: 'This branch is unreachable.',
+            createdAt: '2026-06-09T00:00:00Z',
+          },
+        ]),
+      ],
+    },
+  ];
+  const result = buildMergedPrFeedbackSweep(prs, OPTIONS);
+  assert.equal(result.prs.length, 1);
+  assert.equal(result.prs[0].unresolvedThreads.length, 1);
+  assert.equal(result.prs[0].unresolvedThreads[0].author, 'copilot');
+  assert.equal(result.prs[0].unresolvedThreads[0].advisoryBot, true);
+});
+
 test('excludes a resolved thread', () => {
   const prs: MergedPrInput[] = [
     {
