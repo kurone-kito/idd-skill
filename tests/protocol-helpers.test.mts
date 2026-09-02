@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import {
   buildActivitySnapshotSummary,
+  EDITED_AFTER_DISPOSITION_HINT,
   MALFORMED_DISPOSITION_PREFIX_HINT,
   summarizeDispositionEvidenceForGate,
 } from '../src/scripts/protocol-helpers.mts';
@@ -702,5 +703,161 @@ test('disposition evidence does not hint a still-missing human comment from a re
 
   assert.equal(summary.missingRegularCommentCount, 1);
   assert.equal(summary.missingRegularComments[0].authorLogin, 'reviewer-b');
+  assert.equal(summary.missingRegularComments[0].hint, undefined);
+});
+
+// #2491: a correctly-phrased disposition (`**Accepted**`) that genuinely
+// postdated the comment at reply time, but the bot then live-edited that
+// same comment id afterward into a non-review notice -- bumping its
+// `updatedAt` past the disposition's own timestamp. Neither #1833's
+// wrong-phrase hint nor #2249's malformed-prefix hint applies (the
+// disposition was never mis-phrased), so this must be the only source of
+// a hint here.
+test('disposition evidence hints at an edited-after-disposition notice when the bot live-edits a dispositioned comment', () => {
+  const summary = summarizeDispositionEvidenceForGate(
+    {
+      comments: [
+        {
+          id: 1,
+          createdAt: '2026-05-12T00:00:00Z',
+          // Edited by the bot after the disposition below -- bumps
+          // activityAt (updatedAt) past the disposition's own timestamp,
+          // and the CURRENT body is now a non-review notice.
+          updatedAt: '2026-05-12T02:00:00Z',
+          body: 'You have reached your Codex usage limits for code reviews.',
+          author: { login: 'chatgpt-codex-connector[bot]' },
+        },
+        {
+          id: 2,
+          createdAt: '2026-05-12T01:00:00Z',
+          // Well-formed and genuinely postdated the comment's original
+          // review-finding content at reply time.
+          body: '**Accepted** — looks correct.',
+          author: { login: 'idd-bot' },
+        },
+      ],
+      threads: [],
+    },
+    {
+      iddAgentLogins: ['idd-bot'],
+      advisoryBotLogins: ['chatgpt-codex-connector[bot]'],
+    },
+  );
+
+  // Existing pass/fail routing is unchanged -- only the diagnostic is added.
+  assert.equal(summary.route, 'return-to-e1');
+  assert.equal(summary.reason, 'missing-disposition-evidence');
+  assert.equal(summary.missingRegularCommentCount, 1);
+  assert.equal(
+    summary.missingRegularComments[0].hint,
+    EDITED_AFTER_DISPOSITION_HINT,
+  );
+});
+
+// The disposition must predate the comment's CURRENT activityAt, not just
+// its createdAt -- a disposition posted AFTER the bot's edit (i.e. one that
+// already satisfies the general 1:1 pairing) must not also spuriously carry
+// this hint; the comment should not even be missing in that case.
+test('disposition evidence does not hint edited-after-disposition when the disposition already postdates the edit', () => {
+  const summary = summarizeDispositionEvidenceForGate(
+    {
+      comments: [
+        {
+          id: 1,
+          createdAt: '2026-05-12T00:00:00Z',
+          updatedAt: '2026-05-12T01:00:00Z',
+          body: 'You have reached your Codex usage limits for code reviews.',
+          author: { login: 'chatgpt-codex-connector[bot]' },
+        },
+        {
+          id: 2,
+          createdAt: '2026-05-12T02:00:00Z',
+          body: '**Accepted** — looks correct.',
+          author: { login: 'idd-bot' },
+        },
+      ],
+      threads: [],
+    },
+    {
+      iddAgentLogins: ['idd-bot'],
+      advisoryBotLogins: ['chatgpt-codex-connector[bot]'],
+    },
+  );
+
+  assert.equal(summary.missingRegularCommentCount, 0);
+});
+
+// A comment genuinely edited after a disposition (timing bound satisfied,
+// same as the positive scenario) but whose CURRENT body is NOT a non-review
+// notice must not pick up the hint -- `isAdvisoryNonReviewNotice` gates it
+// to the exact scenario it diagnoses. Unlike the disjoint-timestamp fixture
+// used elsewhere in this file, T0 < T1 <= T2 here so the timing bound alone
+// is satisfied and cannot itself explain a missing hint -- only the
+// notice-body gate can (#2491 critique finding 1: a prior version of this
+// test used a disposition that predated the comment's own createdAt, which
+// left the timing bound doing the suppressing instead).
+test('disposition evidence does not hint edited-after-disposition when the current body is not a notice', () => {
+  const summary = summarizeDispositionEvidenceForGate(
+    {
+      comments: [
+        {
+          id: 1,
+          createdAt: '2026-05-12T00:00:00Z',
+          // Edited after the disposition below, same as the positive
+          // scenario -- but into ordinary follow-up prose, not a notice.
+          updatedAt: '2026-05-12T02:00:00Z',
+          body: 'Never mind, I found the actual line myself.',
+          author: { login: 'chatgpt-codex-connector[bot]' },
+        },
+        {
+          id: 2,
+          createdAt: '2026-05-12T01:00:00Z',
+          body: '**Accepted** — looks correct.',
+          author: { login: 'idd-bot' },
+        },
+      ],
+      threads: [],
+    },
+    {
+      iddAgentLogins: ['idd-bot'],
+      advisoryBotLogins: ['chatgpt-codex-connector[bot]'],
+    },
+  );
+
+  assert.equal(summary.missingRegularCommentCount, 1);
+  assert.equal(summary.missingRegularComments[0].hint, undefined);
+});
+
+// Same timing shape as the positive scenario (T0 < T1 <= T2, current body
+// IS a notice), but the comment's author is not a configured advisory bot
+// login -- `isGateAdvisoryBotLogin` gates the hint to a genuine advisory-bot
+// notice, not any comment that happens to contain rate-limit-shaped prose.
+test('disposition evidence does not hint edited-after-disposition when the author is not a configured advisory bot', () => {
+  const summary = summarizeDispositionEvidenceForGate(
+    {
+      comments: [
+        {
+          id: 1,
+          createdAt: '2026-05-12T00:00:00Z',
+          updatedAt: '2026-05-12T02:00:00Z',
+          body: 'You have reached your Codex usage limits for code reviews.',
+          author: { login: 'a-human' },
+        },
+        {
+          id: 2,
+          createdAt: '2026-05-12T01:00:00Z',
+          body: '**Accepted** — looks correct.',
+          author: { login: 'idd-bot' },
+        },
+      ],
+      threads: [],
+    },
+    {
+      iddAgentLogins: ['idd-bot'],
+      advisoryBotLogins: ['chatgpt-codex-connector[bot]'],
+    },
+  );
+
+  assert.equal(summary.missingRegularCommentCount, 1);
   assert.equal(summary.missingRegularComments[0].hint, undefined);
 });

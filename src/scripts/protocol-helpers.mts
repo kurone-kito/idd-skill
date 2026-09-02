@@ -1984,6 +1984,20 @@ export const MALFORMED_DISPOSITION_PREFIX_HINT =
   'optionally followed by one of . ! : before the closing **) -- a plain ' +
   '"Accepted" / "Rejected" without the bold markdown is not recognized';
 
+// #2491 diagnostic-only hint text, single-sourced like the two hints above:
+// unlike those (a MIS-PHRASED disposition attempt), this fires when a
+// correctly-phrased disposition already exists but the bot later live-edited
+// the SAME comment id in place into a non-review notice, bumping its
+// `updatedAt` past the disposition's own timestamp -- so the disposition no
+// longer postdates the comment and the comment re-appears as missing with no
+// indication a reply was ever posted. Never consumed by any routing decision
+// -- see the `hint` field's own doc comment on `DispositionEvidenceSummary`.
+export const EDITED_AFTER_DISPOSITION_HINT =
+  'comment may have already been dispositioned before the bot live-edited ' +
+  'this same comment id into a non-review notice -- if so, that disposition ' +
+  'now predates the edit and no longer counts; post a fresh disposition ' +
+  'reply in the non-review-notice shape';
+
 // #1122 CodeRabbit summary-walkthrough auto-disposition classifiers.
 //
 // The CodeRabbit summary walkthrough is a regular comment whose body starts with
@@ -4284,6 +4298,38 @@ export function summarizeDispositionEvidenceForGate(
         (disposition) =>
           compareIsoTimestamps(disposition.activityAt, comment.createdAt) > 0,
       );
+    // #2491: neither hint above fires when the existing disposition reply
+    // was itself well-formed and correctly timed -- both look for a
+    // MIS-PHRASED attempt, and this is not one. Instead the bot live-edited
+    // this same comment id in place into a non-review notice afterward,
+    // bumping its `activityAt` past the disposition's own timestamp: the
+    // disposition `<= comment.activityAt` bound is exactly the complement of
+    // the general 1:1 pairing's own success condition above
+    // (`candidate.activityAt > comment.activityAt`), so a disposition
+    // satisfying it is exactly one that FAILS that pairing. Like the two
+    // hints above, this is a plausible-timing heuristic, not a proven
+    // causal link to this specific comment -- `dispositionComments.some`
+    // matches any well-formed disposition in the window, including one a
+    // human/agent posted for a different comment entirely or one already
+    // consumed elsewhere via `usedReplyIndexes`; a false-positive hint here
+    // is a diagnostic inaccuracy at worst, never a routing change. The
+    // `> comment.createdAt` lower bound (mirroring the two hints above)
+    // additionally requires the disposition to postdate the comment's
+    // original appearance. Gated on `isGateAdvisoryBotLogin` +
+    // `isAdvisoryNonReviewNotice`, mirroring `isNoticeComment` above: only a
+    // comment whose CURRENT body is itself a non-review notice from a
+    // configured advisory bot fits the scenario the issue describes.
+    const hasEditedAfterDispositionAttempt =
+      !hasWrongPhraseAttempt &&
+      !hasMalformedPrefixAttempt &&
+      isGateAdvisoryBotLogin(comment.authorLogin, advisoryBotLogins) &&
+      isAdvisoryNonReviewNotice(comment.body) &&
+      dispositionComments.some(
+        (disposition) =>
+          compareIsoTimestamps(disposition.activityAt, comment.activityAt) <=
+            0 &&
+          compareIsoTimestamps(disposition.activityAt, comment.createdAt) > 0,
+      );
     return {
       id: comment.id || `comment-${comment.sortedIndex + 1}`,
       authorLogin: comment.authorLogin || 'unknown',
@@ -4293,7 +4339,9 @@ export function summarizeDispositionEvidenceForGate(
         ? { hint: NON_REVIEW_NOTICE_DISPOSITION_HINT }
         : hasMalformedPrefixAttempt
           ? { hint: MALFORMED_DISPOSITION_PREFIX_HINT }
-          : {}),
+          : hasEditedAfterDispositionAttempt
+            ? { hint: EDITED_AFTER_DISPOSITION_HINT }
+            : {}),
     };
   });
 
