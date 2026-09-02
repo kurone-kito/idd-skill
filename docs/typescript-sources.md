@@ -77,6 +77,28 @@ collapses their diffs in review. This is distinct from
 `linguist-vendored`, which denotes third-party code and is reserved for
 adopter repositories that vendor the bundle.
 
+### Read the closest existing helper first
+
+Before drafting a new helper whose problem shares its shape with an
+existing one in `src/scripts/` — another mutual-exclusion or locking
+primitive, another marker parser, and so on — read that existing
+helper's own header and design-rationale comments first, rather than
+independently re-deriving already-settled tradeoffs. This applies
+generally, not only to locks.
+
+Worked example: issue #2223 asked for a new clone-scoped lock for
+concurrent worktree lifecycle operations, naming `src/scripts/claim-lock.mts` in
+its own body as either the extension target or the natural sibling
+for a new module. The implementation (PR #2389, `src/scripts/clone-lock.mts`)
+designed its own staleness and recovery logic from scratch instead,
+and needed several further review rounds to arrive — independently,
+through review-driven trial and error — at conclusions
+`src/scripts/claim-lock.mts`'s own comments already state as settled: prefer a
+stronger external authority over ad hoc local recovery when one is
+available, and a local process-liveness check can be defeated by a
+process-lifecycle mismatch (in `src/scripts/clone-lock.mts`'s case, a wrapper
+process dying while the child command it spawned kept running).
+
 ## Build and verification
 
 | Command                | Purpose                                                                                                                                                                                                          |
