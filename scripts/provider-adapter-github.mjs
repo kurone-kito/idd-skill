@@ -88,6 +88,149 @@ function assertNoGraphqlErrors(payload, context) {
     );
   }
 }
+/**
+ * #2460: synchronous bounded sleep via `Atomics.wait` on a throwaway
+ * `SharedArrayBuffer` -- the same technique `advisory-convergence.mts`,
+ * `clone-lock.mts`, and `rerun-advisory-convergence.mts` each already
+ * duplicate locally rather than switching to `async`/`await` (the existing
+ * `withBoundedRetry` in `gh-exec.mts` is `Promise`-returning and would force
+ * every synchronous caller of {@link ProviderPort.postWorkItemComment} --
+ * and the whole `ProviderPort` interface -- to become async for one retry
+ * loop). Duplicated here as this one-line function, mirroring that same
+ * established precedent, rather than adding new cross-file coupling.
+ */
+function sleepSync(ms) {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+const POST_WORK_ITEM_COMMENT_TOTAL_ATTEMPTS = 3;
+const POST_WORK_ITEM_COMMENT_BASE_DELAY_MS = 200;
+/**
+ * #2460: the issues-comments POST endpoint is not idempotent -- each
+ * successful call creates a new comment -- so a bare retry-on-any-failure
+ * risks posting the same marker twice when a failure is ambiguous (the
+ * write landed server-side, but the client never saw a successful
+ * response; observed live as a one-off transient failure whose very next
+ * unrelated API call succeeded). Before every retry, re-read the full
+ * (paginated) comment history for an exact-body match: found means the
+ * prior attempt actually landed, so return that comment instead of posting
+ * again; not found means the prior attempt genuinely failed, so back off
+ * and retry the POST. This scan is best-effort only (a transient read
+ * failure here must never block the retry it is meant to protect) and only
+ * ever runs on the error path, never the common single-attempt success
+ * path. Requests the maximum page size (Copilot review, #2504) to bound
+ * pagination overhead on a heavily-commented issue/PR.
+ */
+function findRecentExactBodyMatch(deps, repoPath, number, body) {
+  // The whole read-and-scan is wrapped in one try/catch, not just the
+  // `ghApiJson` call: a malformed row (e.g. a stray `null` entry) thrown
+  // from the loop body below must fail this best-effort scan the same
+  // way a transport failure does, never abort the retry it exists to
+  // protect (Copilot review, #2504).
+  try {
+    const rows = deps.ghApiJson(
+      `${repoPath}/issues/${number}/comments?per_page=100`,
+      { paginate: true },
+    );
+    let newest = null;
+    for (const row of rows) {
+      if (row === null || typeof row !== 'object') {
+        continue;
+      }
+      if (String(row.body ?? '') !== body) {
+        continue;
+      }
+      const id = Number(row.id);
+      const htmlUrl = String(row.html_url ?? '');
+      // Same shape requirement as the fresh-POST path below -- a match
+      // with no usable id/html_url is not a usable result, so keep
+      // scanning instead of returning a comment the caller couldn't
+      // act on.
+      if (!Number.isInteger(id) || id <= 0 || htmlUrl === '') {
+        continue;
+      }
+      // Comments come back in ascending creation order; keep the last
+      // (most recent) exact-body match in the unlikely event more than
+      // one exists.
+      newest = { id, htmlUrl };
+    }
+    return newest;
+  } catch {
+    return null;
+  }
+}
+/**
+ * #2460 (Copilot review, #2504): a malformed-but-200 POST response is a
+ * shape bug, not a transport blip -- retrying it is unlikely to help, and
+ * doing so anyway risks a double-post if the best-effort dedupe read
+ * ({@link findRecentExactBodyMatch}) itself fails. A dedicated error class
+ * lets {@link postWorkItemCommentWithRetry}'s catch block recognize this
+ * case and fail fast instead of consuming the remaining bounded attempts.
+ */
+class MalformedPostWorkItemCommentResponseError extends Error {}
+/**
+ * #2460: POST a work-item (issue/PR) comment with a bounded retry against
+ * transient `gh` failures, guarding against the resulting duplicate-post
+ * risk via {@link findRecentExactBodyMatch}, and validating the response
+ * shape before treating the marker as posted (catches a 200-with-
+ * malformed-body edge case a bare retry would not -- see
+ * {@link MalformedPostWorkItemCommentResponseError} for why that specific
+ * case fails fast rather than retrying).
+ */
+function postWorkItemCommentWithRetry(deps, repoPath, number, body) {
+  const sleep = deps.sleepSync ?? sleepSync;
+  let lastError;
+  for (
+    let attempt = 1;
+    attempt <= POST_WORK_ITEM_COMMENT_TOTAL_ATTEMPTS;
+    attempt += 1
+  ) {
+    if (attempt > 1) {
+      const existing = findRecentExactBodyMatch(deps, repoPath, number, body);
+      if (existing) {
+        return existing;
+      }
+      sleep(
+        POST_WORK_ITEM_COMMENT_BASE_DELAY_MS * (attempt - 1) +
+          Math.random() * POST_WORK_ITEM_COMMENT_BASE_DELAY_MS,
+      );
+    }
+    try {
+      const out = deps.ghText(
+        [
+          'api',
+          '--method',
+          'POST',
+          `${repoPath}/issues/${number}/comments`,
+          '--input',
+          '-',
+        ],
+        { input: JSON.stringify({ body }) },
+      );
+      const parsed = JSON.parse(out);
+      const id = Number(parsed.id);
+      const htmlUrl = String(parsed.html_url ?? '');
+      if (!Number.isInteger(id) || id <= 0 || htmlUrl === '') {
+        throw new MalformedPostWorkItemCommentResponseError(
+          `postWorkItemComment: malformed POST response for ${repoPath}/issues/${number} (missing id/html_url)`,
+        );
+      }
+      return { id, htmlUrl };
+    } catch (error) {
+      if (error instanceof MalformedPostWorkItemCommentResponseError) {
+        throw error;
+      }
+      lastError = error;
+    }
+  }
+  // Copilot review, #2504: `lastError` is `unknown` -- a non-`Error` thrown
+  // by `deps.ghText`/`JSON.parse` (a string, `undefined`, ...) would make
+  // downstream handling/logging inconsistent. Always throw a real `Error`.
+  throw lastError instanceof Error
+    ? lastError
+    : new Error(
+        `postWorkItemComment: all ${POST_WORK_ITEM_COMMENT_TOTAL_ATTEMPTS} attempts failed for ${repoPath}/issues/${number}: ${String(lastError)}`,
+      );
+}
 /** #2267: {@link GithubProviderAdapterDeps.ghText}, swallowing any failure
  * and returning `''` instead -- the injectable-`deps` equivalent of
  * `gh-exec.mts`'s own module-level `safeGhText`, needed here so a unit test
@@ -316,6 +459,7 @@ const DEFAULT_DEPS = {
   ghApiJson,
   resolveViewerLogin: ghExecResolveViewerLogin,
   ghTextAsync,
+  sleepSync,
 };
 /**
  * GitHub implementation of {@link ProviderPort}. `owner`/`repo` are resolved
@@ -630,19 +774,7 @@ export function createGithubProviderAdapter(owner, repo, deps = DEFAULT_DEPS) {
       }));
     },
     postWorkItemComment(number, body) {
-      const out = deps.ghText(
-        [
-          'api',
-          '--method',
-          'POST',
-          `${repoPath}/issues/${number}/comments`,
-          '--input',
-          '-',
-        ],
-        { input: JSON.stringify({ body }) },
-      );
-      const parsed = JSON.parse(out);
-      return { id: parsed.id, htmlUrl: parsed.html_url };
+      return postWorkItemCommentWithRetry(deps, repoPath, number, body);
     },
     getCollaboratorPermission(login) {
       const normalized = login.trim().toLowerCase();

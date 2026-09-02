@@ -22,6 +22,10 @@ function fakeDeps(
     ghTextAsync: () => {
       throw new Error('ghTextAsync not stubbed for this test');
     },
+    // No-op by default so a test exercising postWorkItemComment's retry
+    // path (#2460) never actually sleeps; override per-test to assert on
+    // invocation count/delay when that matters.
+    sleepSync: () => {},
     ...overrides,
   } as GithubProviderAdapterDeps;
 }
@@ -1700,5 +1704,157 @@ test('listChangeRequestGraphqlReviews throws on a null reviews connection', () =
   assert.throws(
     () => port.listChangeRequestGraphqlReviews(7),
     /null reviews connection/,
+  );
+});
+
+// --- postWorkItemComment retry / verification (#2460) -----------------------
+
+test('postWorkItemComment retries once after a transient failure and returns the second attempt', () => {
+  let ghTextCalls = 0;
+  const port = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({
+      ghText: () => {
+        ghTextCalls += 1;
+        if (ghTextCalls === 1) {
+          throw new Error('transient: HTTP 401');
+        }
+        return JSON.stringify({ id: 42, html_url: 'https://example/42' });
+      },
+      // No matching comment exists yet -- the prior attempt genuinely
+      // failed, so the retry-then-dedupe-check path must fall through to
+      // a fresh POST rather than returning a false match.
+      ghApiJson: () => [],
+    }),
+  );
+  const result = port.postWorkItemComment(9, 'marker body');
+  assert.deepEqual(result, { id: 42, htmlUrl: 'https://example/42' });
+  assert.equal(ghTextCalls, 2);
+});
+
+test('postWorkItemComment returns the existing comment instead of double-posting when a retry finds an exact-body match', () => {
+  let ghTextCalls = 0;
+  const port = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({
+      ghText: () => {
+        ghTextCalls += 1;
+        throw new Error('ambiguous: ETIMEDOUT');
+      },
+      // The first attempt's failure was ambiguous: the write actually
+      // landed server-side. The re-read must find it and short-circuit
+      // instead of posting a duplicate.
+      ghApiJson: () => [
+        { id: 7, body: 'other comment', html_url: 'https://example/7' },
+        { id: 8, body: 'marker body', html_url: 'https://example/8' },
+      ],
+    }),
+  );
+  const result = port.postWorkItemComment(9, 'marker body');
+  assert.deepEqual(result, { id: 8, htmlUrl: 'https://example/8' });
+  // Only the original attempt ran -- the dedupe match short-circuited
+  // before a second POST.
+  assert.equal(ghTextCalls, 1);
+});
+
+test('postWorkItemComment: a malformed row (e.g. null) in the dedupe scan never aborts the retry (Copilot review, #2504)', () => {
+  let ghTextCalls = 0;
+  const port = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({
+      ghText: () => {
+        ghTextCalls += 1;
+        if (ghTextCalls === 1) {
+          throw new Error('transient: HTTP 401');
+        }
+        return JSON.stringify({ id: 42, html_url: 'https://example/42' });
+      },
+      // A stray `null` entry must not throw out of the best-effort dedupe
+      // scan and abort the whole retry -- it should be skipped like any
+      // other non-matching row, falling through to a genuine retry.
+      ghApiJson: () => [null, { id: 7, body: 'other comment' }],
+    }),
+  );
+  const result = port.postWorkItemComment(9, 'marker body');
+  assert.deepEqual(result, { id: 42, htmlUrl: 'https://example/42' });
+  assert.equal(ghTextCalls, 2);
+});
+
+test('postWorkItemComment throws on a malformed successful response instead of returning a bad result', () => {
+  const port = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({
+      ghText: () => JSON.stringify({ html_url: 'https://example/1' }), // missing id
+    }),
+  );
+  assert.throws(
+    () => port.postWorkItemComment(9, 'marker body'),
+    /malformed POST response/,
+  );
+});
+
+test('postWorkItemComment does not retry a malformed successful response (Copilot review, #2504)', () => {
+  // Unlike a transport failure, a malformed-but-200 response is a shape
+  // bug -- retrying it is unlikely to help and would risk a double-post
+  // if the best-effort dedupe read itself fails. It must fail fast
+  // instead of consuming the remaining bounded attempts.
+  let ghTextCalls = 0;
+  const port = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({
+      ghText: () => {
+        ghTextCalls += 1;
+        return JSON.stringify({ html_url: 'https://example/1' }); // missing id, every call
+      },
+    }),
+  );
+  assert.throws(
+    () => port.postWorkItemComment(9, 'marker body'),
+    /malformed POST response/,
+  );
+  assert.equal(ghTextCalls, 1);
+});
+
+test('postWorkItemComment throws the last error once retries are exhausted with no matching comment ever found', () => {
+  const port = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({
+      ghText: () => {
+        throw new Error('persistent: HTTP 500');
+      },
+      ghApiJson: () => [],
+    }),
+  );
+  assert.throws(
+    () => port.postWorkItemComment(9, 'marker body'),
+    /persistent: HTTP 500/,
+  );
+});
+
+test('postWorkItemComment always throws a real Error, even when the underlying failure is a non-Error value (Copilot review, #2504)', () => {
+  const port = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({
+      // Deliberately simulating a non-Error throw (e.g. from a misbehaving
+      // dependency) to verify the retry loop's own Error-wrapping fallback.
+      ghText: () => {
+        throw 'persistent: not an Error instance';
+      },
+      ghApiJson: () => [],
+    }),
+  );
+  assert.throws(
+    () => port.postWorkItemComment(9, 'marker body'),
+    (error: unknown) =>
+      error instanceof Error &&
+      /all 3 attempts failed/.test(error.message) &&
+      /persistent: not an Error instance/.test(error.message),
   );
 });
