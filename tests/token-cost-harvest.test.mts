@@ -2111,7 +2111,7 @@ test("resolveTrustedMarkerLogins: falls back to this repository's own configured
 // GitHub join (stubbed gh, no network) + AC1 end-to-end
 // ---------------------------------------------------------------------------
 
-test('fetchIssueLoopGithubContext resolves the earliest live-connected same-branch PR', () => {
+test('fetchIssueLoopGithubContext resolves the earliest PR that closed the issue via closedByPullRequestsReferences (#2444)', () => {
   const fixture = readJson(
     'tests/fixtures/token-cost/github/issue-loop-merged.json',
   );
@@ -2126,6 +2126,42 @@ test('fetchIssueLoopGithubContext resolves the earliest live-connected same-bran
     // This is the PR's own first submitted review only -- resolveIssueLoopContext
     // (tested below) additionally folds in the earlier review-watermark comment.
     assert.equal(result.firstReviewAtMs, ms('2026-01-01T00:22:00Z'));
+  } finally {
+    restore();
+  }
+});
+
+test('fetchIssueLoopGithubContext resolves prMergedAtMs even when the closing PR is on an unconventionally-named branch (#2444: closedByPullRequestsReferences scopes by CLOSING relationship, not branch-name pattern)', () => {
+  const fixture = readJson(
+    'tests/fixtures/token-cost/github/issue-loop-merged.json',
+  );
+  const patched = JSON.parse(JSON.stringify(fixture));
+  patched.data.repository.issue.closedByPullRequestsReferences.nodes[0].headRefName =
+    'hotfix/unrelated-branch-name';
+  const restore = stubGhReturningJson(patched);
+  try {
+    const result = fetchIssueLoopGithubContext('acme', 'repo', 9001, [
+      'claude-test',
+    ]);
+    assert.equal(result.prNumber, 9101);
+    assert.equal(result.prMergedAtMs, ms('2026-01-01T00:30:00Z'));
+    assert.equal(result.prHeadRefName, 'hotfix/unrelated-branch-name');
+  } finally {
+    restore();
+  }
+});
+
+test('fetchIssueLoopGithubContext resolves prMergedAtMs: null when the issue has no closing PR (#2444)', () => {
+  const fixture = readJson(
+    'tests/fixtures/token-cost/github/issue-loop-unclaimed.json',
+  );
+  const restore = stubGhReturningJson(fixture);
+  try {
+    const result = fetchIssueLoopGithubContext('acme', 'repo', 9002, [
+      'claude-test',
+    ]);
+    assert.equal(result.prNumber, null);
+    assert.equal(result.prMergedAtMs, null);
   } finally {
     restore();
   }

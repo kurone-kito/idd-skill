@@ -503,20 +503,16 @@ query($owner:String!,$repo:String!,$number:Int!){
   repository(owner:$owner,name:$repo){
     issue(number:$number){
       comments(first:100){nodes{body createdAt author{login}}}
-      timelineItems(last:100,itemTypes:[CONNECTED_EVENT,DISCONNECTED_EVENT]){
+      closedByPullRequestsReferences(first:10){
         nodes{
-          __typename
-          ... on ConnectedEvent{subject{__typename ... on PullRequest{
-            number state headRefName createdAt mergedAt
-            reviews(first:1){nodes{submittedAt}}
-          }}}
-          ... on DisconnectedEvent{subject{__typename ... on PullRequest{number}}}
+          number headRefName createdAt mergedAt
+          reviews(first:1){nodes{submittedAt}}
         }
       }
     }
   }
 }`;
-/** Fetches issue comments plus the earliest live-connected same-branch PR (with its first review + merge timestamp) via one batched GraphQL query. */
+/** Fetches issue comments plus the earliest PR that closed this issue (with its first review + merge timestamp) via one batched GraphQL query. */
 export function fetchIssueLoopGithubContext(
   owner,
   repo,
@@ -547,42 +543,25 @@ export function fetchIssueLoopGithubContext(
       comments.push({ body, createdAt, login });
     }
   }
-  const timelineNodes = Array.isArray(issue?.timelineItems?.nodes)
-    ? issue.timelineItems.nodes
+  // closedByPullRequestsReferences already scopes to PRs that actually
+  // closed THIS issue -- via the keyword this repository's own IDD
+  // workflow exclusively uses ("Closes #N"), or a manual Development-panel
+  // link -- so no branch-name guard is needed here (#2439's predecessor,
+  // ConnectedEvent/DisconnectedEvent, only recorded manual links, which
+  // this repository's automated PRs never produce; see #2444). Normally
+  // exactly one PR closes a given issue in this repository's workflow;
+  // the earliest-createdAt tie-break below is defensive for the rare case
+  // of more than one.
+  const prNodes = Array.isArray(issue?.closedByPullRequestsReferences?.nodes)
+    ? issue.closedByPullRequestsReferences.nodes
     : [];
-  const connected = new Map();
-  const disconnected = new Set();
-  for (const node of timelineNodes) {
-    if (!isPlainObject(node)) {
-      continue;
-    }
-    const subject = isPlainObject(node.subject) ? node.subject : undefined;
-    const prNumber =
-      subject && typeof subject.number === 'number'
-        ? subject.number
-        : undefined;
-    if (prNumber === undefined) {
-      continue;
-    }
-    if (node.__typename === 'ConnectedEvent') {
-      connected.set(prNumber, subject);
-      disconnected.delete(prNumber);
-    } else if (node.__typename === 'DisconnectedEvent') {
-      disconnected.add(prNumber);
-    }
-  }
   let chosen = null;
   let chosenNumber = null;
-  for (const [prNumber, subject] of connected) {
-    if (disconnected.has(prNumber)) {
+  for (const node of prNodes) {
+    if (!isPlainObject(node) || typeof node.number !== 'number') {
       continue;
     }
-    const headRefName =
-      typeof subject.headRefName === 'string' ? subject.headRefName : '';
-    if (!headRefName.startsWith(`issue/${issueNumber}-`)) {
-      continue;
-    }
-    const createdAtMs = toValidTimestampMs(subject.createdAt);
+    const createdAtMs = toValidTimestampMs(node.createdAt);
     if (createdAtMs === undefined) {
       continue;
     }
@@ -590,8 +569,8 @@ export function fetchIssueLoopGithubContext(
       ? (toValidTimestampMs(chosen.createdAt) ?? Infinity)
       : Infinity;
     if (createdAtMs < chosenCreatedAtMs) {
-      chosen = subject;
-      chosenNumber = prNumber;
+      chosen = node;
+      chosenNumber = node.number;
     }
   }
   if (!chosen) {
