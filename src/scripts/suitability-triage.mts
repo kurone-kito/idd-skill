@@ -435,10 +435,11 @@ const HEADING_LINE_BOUNDARY_PATTERN = /\n {0,3}#{1,6}[ \t]/;
  * Checks every heading found in the gap, not only the first (#2468 critique
  * round 2: a first heading whose own line does not reach the noun must not
  * short-circuit a second heading further along whose line does). `scanSource`
- * must be the SAME text (masked or raw) the caller ran POLICY_OVERRIDE_PATTERN
- * against, so a heading marker inside a masked code region -- already
- * replaced with spaces -- cannot itself manufacture a boundary (#2468
- * critique finding 1's code-comment-as-heading bypass).
+ * must always be `maskedText` -- both `findGenuineNounMatch` call sites in
+ * `findPolicyOverrideMatch` pass it here even in the raw-fallback loop
+ * (which otherwise scans raw `text`), so a heading marker inside a masked
+ * code region -- already replaced with spaces -- cannot itself manufacture
+ * a boundary (#2468 critique finding 1's code-comment-as-heading bypass).
  */
 function matchCrossesHeadingBoundary(
   scanSource: string,
