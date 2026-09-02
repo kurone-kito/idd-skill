@@ -687,6 +687,8 @@ Validation expectations:
 - `## Background`
 - `## Proposed change`
 - `## Acceptance criteria`
+- `## Candidate files` (see
+  [Candidate files format](#candidate-files-format) above)
 - optional dependency line or sequential roadmap marker when needed
 - an autopilot-suitability footer at the end of the body (visible
   line + `<!-- <marker-prefix>-autopilot-suitability: N -->` marker)
@@ -699,6 +701,10 @@ Validation expectations:
 
 - the issue is referenced from its parent roadmap task list
 - acceptance criteria are locally verifiable
+- `## Candidate files` lists the files the child is expected to touch,
+  so the A4 Step 2 high-contention shared-file check
+  (`discover-shared-file-overlap`) can actually engage instead of
+  silently no-opping for lack of input
 - any dependency marker is resolvable, intentionally chosen, and
   justified
 - the issue can be claimed independently without absorbing sibling work

@@ -200,6 +200,7 @@ Child issue:
 - `## Background`
 - `## Proposed change`
 - `## Acceptance criteria`
+- `## Candidate files`
 - optional dependency line or sequential roadmap marker when needed
 - an autopilot-suitability footer at the end of the body
 
