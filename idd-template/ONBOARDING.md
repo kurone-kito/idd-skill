@@ -995,12 +995,21 @@ cross-agent entry path and phase routing.
 Before starting IDD work, open
 `.github/instructions/idd-overview-core.instructions.md`. Open the routed
 phase file manually when the current step changes.
+
+Doing ad-hoc engineering outside a formal IDD claim (a direct fix, a PR,
+a review reply)? The "Wake-up discipline" section of
+`.github/instructions/idd-ci.instructions.md` (no self-polling while
+waiting on CI or bot review) still applies — open it whenever a commit
+you pushed is waiting on either.
 ```
 
 - point to `docs/idd-workflow.md` as the cross-agent entry path
 - open `.github/instructions/idd-overview-core.instructions.md` before
   starting IDD work
 - manually open the routed phase file when the current step changes
+- give ad-hoc engineering (no formal claim) an on-ramp to
+  `idd-ci.instructions.md`'s Wake-up discipline section, since it has no
+  other trigger to load a phase file (`#2464`)
 
 Apply this section to `CLAUDE.md`, `AGENTS.md`, and `GEMINI.md`,
 adapting the surrounding wording to each tool while preserving the same
