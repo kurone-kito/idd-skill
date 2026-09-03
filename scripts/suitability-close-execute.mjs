@@ -27,6 +27,10 @@ import {
   isClaimStaleByAge,
   parseClaimStaleAgeMs,
 } from './discover-roadmap-graph.mjs';
+import {
+  DEFAULT_BUNDLE_IDS,
+  DEFAULT_MANIFEST_PATH,
+} from './discover-shared-file-overlap.mjs';
 import { loadPolicyConfig } from './idd-config.mjs';
 import {
   renderUnclaimedByMarker,
@@ -41,8 +45,6 @@ import { collectHighConfidenceDuplicateEvidence } from './suitability-triage.mjs
 import { evaluateHighConfidenceDuplicate } from './supersession-detection.mjs';
 
 const DEFAULT_CLAIM_STALE_AGE_MS = 24 * 60 * 60 * 1000;
-const DEFAULT_MANIFEST_PATH = 'audit/sync-manifest.json';
-const DEFAULT_BUNDLE_IDS = ['bundle-review', 'bundle-merge'];
 /**
  * Branch pattern for a suitability-close coordination claim on issue
  * `issueNumber`: a logical coordination name (no worktree), mirroring A1.5's
@@ -180,12 +182,17 @@ export function normalizeApplyNow(raw) {
 }
 /**
  * Evaluate (dry-run) and, when ready and `--apply` is set, execute the
- * `#1485` gated close. Dry-run performs NO mutation. `--apply` re-validates
- * the coordination claim and re-collects evidence immediately before
- * mutating -- both must still hold at that instant, not merely at some
- * earlier check -- then posts the evidence-bound close comment, closes the
- * issue, and releases the claim, in that order. Fails closed (no mutation)
- * on a lost/stale/non-owned claim or a no-longer-eligible fresh evaluation.
+ * `#1485` gated close. Dry-run performs NO mutation. `--apply` validates the
+ * coordination claim FIRST (cheap: one comment fetch) before re-collecting
+ * evidence (up to ~50 sequential `gh pr view` calls in the worst case) --
+ * an already-lost/stale/non-owned claim can never mutate regardless of what
+ * evidence collection would find, so checking it first avoids burning API
+ * calls for no benefit. Re-validates the claim a second time immediately
+ * before the actual close mutation (the comment POST is itself a network
+ * round-trip another session's takeover could race during), then posts the
+ * evidence-bound close comment, closes the issue, and releases the claim,
+ * in that order. Fails closed (no mutation) on a lost/stale/non-owned claim
+ * at either check, or a no-longer-eligible fresh evaluation.
  */
 export function runSuitabilityCloseExecute(args, deps) {
   // Copilot review finding on PR #2558: `runCli` validates `args.issue !==
@@ -226,9 +233,9 @@ export function runSuitabilityCloseExecute(args, deps) {
       result: `issue #${issueNumber} not found or inaccessible`,
     };
   }
-  const checkOutcome = deps.collectEvidence(issue);
-  const eligibility = evaluateSuitabilityCloseEligibility(checkOutcome);
   if (!args.apply) {
+    const checkOutcome = deps.collectEvidence(issue);
+    const eligibility = evaluateSuitabilityCloseEligibility(checkOutcome);
     return {
       protocolVersion: '1',
       mode: 'dry-run',
@@ -243,7 +250,9 @@ export function runSuitabilityCloseExecute(args, deps) {
         : 'no high-confidence signal; not ready to close',
     };
   }
-  if (!eligibility.eligible) {
+  const rawNow = deps.now();
+  const nowIso = normalizeApplyNow(rawNow);
+  if (nowIso === null) {
     return {
       protocolVersion: '1',
       mode: 'apply',
@@ -253,25 +262,16 @@ export function runSuitabilityCloseExecute(args, deps) {
       evidence: null,
       claim: null,
       closed: false,
-      result:
-        'no high-confidence signal on this fresh re-evaluation; no mutation',
-    };
-  }
-  const rawNow = deps.now();
-  const nowIso = normalizeApplyNow(rawNow);
-  if (nowIso === null) {
-    return {
-      protocolVersion: '1',
-      mode: 'apply',
-      issueNumber,
-      ready: true,
-      eligible: true,
-      evidence: eligibility.evidence,
-      claim: null,
-      closed: false,
       result: `deps.now() returned an unparseable timestamp (${rawNow}); no mutation`,
     };
   }
+  // Copilot review finding on PR #2558 (suppressed comment): check claim
+  // ownership BEFORE collectEvidence -- an already-lost/stale/non-owned
+  // claim means --apply can never mutate regardless of what evidence
+  // collection finds, so running it first only burns gh API calls (up to
+  // ~50 sequential PR fetches in the worst case) for no benefit. Matches
+  // the docstring's own "re-validate... then re-collect evidence
+  // immediately before mutating" contract order.
   const claim = evaluateSuitabilityCloseClaim(
     deps.loadIssueComments(issueNumber),
     {
@@ -288,12 +288,28 @@ export function runSuitabilityCloseExecute(args, deps) {
       protocolVersion: '1',
       mode: 'apply',
       issueNumber,
-      ready: true,
-      eligible: true,
-      evidence: eligibility.evidence,
+      ready: false,
+      eligible: false,
+      evidence: null,
       claim,
       closed: false,
       result: `coordination claim not owned (${claim.reason}); no mutation`,
+    };
+  }
+  const checkOutcome = deps.collectEvidence(issue);
+  const eligibility = evaluateSuitabilityCloseEligibility(checkOutcome);
+  if (!eligibility.eligible) {
+    return {
+      protocolVersion: '1',
+      mode: 'apply',
+      issueNumber,
+      ready: false,
+      eligible: false,
+      evidence: null,
+      claim,
+      closed: false,
+      result:
+        'no high-confidence signal on this fresh re-evaluation; no mutation',
     };
   }
   const evidence = eligibility.evidence;
@@ -436,7 +452,12 @@ function createProductionDeps(args) {
       port.postWorkItemComment(issueNumber, body);
     },
     closeIssue: (issueNumber) => {
-      port.closeWorkItem(issueNumber, 'not_planned');
+      // Copilot review finding on PR #2558: 'not_planned' reads as "won't
+      // fix", but this path fires only when the work is ALREADY shipped
+      // (a merged closing PR, or a merged PR that already changed the
+      // candidate's own files) -- 'completed' matches that semantics and
+      // idd-roadmap-audit-execute.mts's own closeReason convention.
+      port.closeWorkItem(issueNumber, 'completed');
     },
     releaseClaim: (issueNumber, fields) => {
       port.postWorkItemComment(issueNumber, renderUnclaimedByMarker(fields));

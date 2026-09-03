@@ -358,6 +358,18 @@ test('--apply fails closed (no mutation) when the coordination claim is not owne
   assert.deepEqual(calls.released, []);
 });
 
+test('--apply checks claim ownership BEFORE collecting evidence, so a lost claim never burns the evidence-collection API calls (Copilot review, PR #2558)', () => {
+  const { deps } = makeDeps({ claimComments: [] });
+  let collectEvidenceCalls = 0;
+  deps.collectEvidence = () => {
+    collectEvidenceCalls += 1;
+    return HIGH_CONFIDENCE_OUTCOME;
+  };
+  const verdict = runSuitabilityCloseExecute(baseArgs({ apply: true }), deps);
+  assert.equal(verdict.closed, false);
+  assert.equal(collectEvidenceCalls, 0);
+});
+
 test('--apply fails closed (no mutation) when the active claim is a normal issue/* implementation claim', () => {
   const { deps, calls } = makeDeps({
     claimComments: [claimComment({ branch: `issue/${ISSUE}-some-task` })],

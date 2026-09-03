@@ -238,7 +238,7 @@ report-and-stop path unchanged):
 
    ```sh
    node scripts/suitability-close-execute.mjs --issue <number> \
-     --claim-id <id> --agent-id <id> --apply
+     --claim-id <claim-id> --agent-id <agent-id> --apply
    ```
 
    It re-collects the same mechanical evidence, posts the
