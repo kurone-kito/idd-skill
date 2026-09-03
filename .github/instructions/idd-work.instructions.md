@@ -205,6 +205,11 @@ not continue to B2 from the primary worktree. Repair by removing the
 misplaced branch (after confirming no work is lost) and recreating the
 sibling worktree through the Worktree creation steps above.
 
+If WorkTrunk reports its `Cannot change directory — shell integration
+installed but not active` diagnostic, re-verify the current working
+directory on every later command — see
+[rationale](../../docs/idd-design-rationale.md#worktrunk-cwd-caveat).
+
 ## B2 — Create and refine plan
 
 ### B2.0 — Supersession re-check (before planning)
