@@ -328,6 +328,11 @@ if (args[0] === 'api' && String(args[1]).startsWith('repos/o/r/issues/900/timeli
   process.stdout.write('[]');
   process.exit(0);
 }
+// #2243 triage-verdict marker scan: gh api repos/o/r/issues/900/comments --paginate --jq .[]
+if (args[0] === 'api' && args[1] === 'repos/o/r/issues/900/comments') {
+  process.stdout.write('[]');
+  process.exit(0);
+}
 process.stderr.write('unexpected gh invocation: ' + args.join(' ') + '\\n');
 process.exit(1);
 `,
