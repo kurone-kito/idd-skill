@@ -492,7 +492,7 @@ const RECOVERY_REFRESH_CAVEAT =
 // instance with no passing sibling) keeps today's manual-decision
 // behavior unchanged.
 const LIVE_COVERAGE_RECOVERY_CAVEAT =
-  "Per idd-ci.instructions.md Rerun mechanics (#2549): each instance below was previously withheld by its own exhausted rerun-once budget, but its live-coverage-recovery classification (#1806) combined with an already-PASSING sibling instance for this check proves the rollup is otherwise resolved -- rerunning it here is bounded cleanup of a redundant stale sibling, not a second automated rerun-budget grant. Every other rerun-budget-held instance keeps today's manual-decision behavior unchanged.";
+  "Per docs/idd-helper-scripts.md (#2549): each instance below was previously withheld by its own exhausted rerun-once budget, but its live-coverage-recovery classification (#1806) combined with an already-PASSING sibling instance for this check proves the rollup is otherwise resolved -- rerunning it here is bounded cleanup of a redundant stale sibling, not a second automated rerun-budget grant. Every other rerun-budget-held instance keeps today's manual-decision behavior unchanged.";
 
 /** Pure inputs to {@link computeRerunPlan} (already fetched; this function
  * performs no I/O). */
