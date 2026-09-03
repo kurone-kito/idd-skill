@@ -228,6 +228,17 @@ const PLAN_CAVEAT =
 // the technical gating condition, which holds regardless (#1752).
 const RECOVERY_REFRESH_CAVEAT =
   'At least one check-run is bot-gated-skip and at least one already-PASSING non-bot pull_request-family instance exists for this SHA. Per idd-ci.instructions.md Rerun mechanics, rerunning that already-passing instance (not the bot-gated one) is the documented way to force a fresh non-bot-triggered evaluation and clear a required-check rollup pinned to the stale bot-gated state -- the instance itself does not need to change its outcome.';
+// #2549: each entry below was previously withheld from `plan` by its own
+// exhausted rerun-once budget, but its live-coverage-recovery
+// classification (#1806) combined with an already-PASSING sibling
+// instance for this check proves the rollup is otherwise resolved --
+// rerunning it here is bounded cleanup of a redundant stale sibling, not a
+// second automated rerun-budget grant. Every OTHER rerun-budget-held
+// instance (including the waiver-rebind case, and a live-coverage-recovery
+// instance with no passing sibling) keeps today's manual-decision
+// behavior unchanged.
+const LIVE_COVERAGE_RECOVERY_CAVEAT =
+  "Per docs/idd-helper-scripts.md (#2549): each instance below was previously withheld by its own exhausted rerun-once budget, but its live-coverage-recovery classification (#1806) combined with an already-PASSING sibling instance for this check proves the rollup is otherwise resolved -- rerunning it here is bounded cleanup of a redundant stale sibling, not a second automated rerun-budget grant. Every other rerun-budget-held instance keeps today's manual-decision behavior unchanged.";
 /**
  * Compute the deterministic rerun-plan verdict from already-fetched and
  * already-enriched check-run instances. Pure (no I/O), so it is directly
@@ -298,6 +309,64 @@ export function computeRerunPlan(input, options) {
       eligibleDecisions.get(instance.checkRunId)?.action === 'rerun',
   );
   const plan = buildOrderedPlan(reRunningEligibleInstances, owner, repo);
+  // #2549: narrow, separately-bounded exception to rule 1 below --
+  // documented in full on {@link RerunAdvisoryConvergencePlan.liveCoverageRecoveryPlan}.
+  // ALL four conditions gate this promotion; failing any one leaves the
+  // instance held exactly as before #2549 (rule 1 still applies to it):
+  //   1. `rerunPolicy === 'rerun-once'` -- a `"hold"` policy withholds this
+  //      exception too, like every other rerun.
+  //   2. `instance.isLiveCoverageRecovery === true` -- the EXACT #1806
+  //      reclassification (classifyInstance step 7's second return), never
+  //      any other rerun-budget-held cause (e.g. the waiver-rebind case).
+  //   3. `decision.reason === 'rerun-budget-exhausted'` -- a CONFIRMED spent
+  //      budget. `'run-attempt-unknown'` (an unconfirmed one) does not
+  //      qualify: this exception only cleans up a proven-redundant sibling,
+  //      never guesses one is safe.
+  //   4. A sibling instance (same check, i.e. elsewhere in `instances`) is
+  //      already `classification === 'pass'` -- proof the rollup is
+  //      otherwise already resolved, so THIS instance's own outcome no
+  //      longer decides it. Any triggering actor counts (including a bot):
+  //      rollup-resolution does not care who triggered the passing sibling
+  //      -- unlike `selectRecoveryRefreshCandidates`, which excludes a
+  //      bot-triggered passing instance for a DIFFERENT reason (that
+  //      mechanism specifically needs a fresh NON-bot-triggered
+  //      evaluation; this one only needs proof the rollup is settled).
+  const liveCoverageRecoveryHeldInstances =
+    rerunPolicy === 'rerun-once'
+      ? eligibleInstances.filter((instance) => {
+          if (instance.isLiveCoverageRecovery !== true) return false;
+          const decision = eligibleDecisions.get(instance.checkRunId);
+          if (
+            decision?.action !== 'hold' ||
+            decision.reason !== 'rerun-budget-exhausted'
+          ) {
+            return false;
+          }
+          return instances.some(
+            (other) =>
+              other.checkRunId !== instance.checkRunId &&
+              other.classification === 'pass',
+          );
+        })
+      : [];
+  const liveCoverageRecoveryHeldCheckRunIds = new Set(
+    liveCoverageRecoveryHeldInstances.map((instance) => instance.checkRunId),
+  );
+  const liveCoverageRecoveryPlan = buildOrderedPlan(
+    liveCoverageRecoveryHeldInstances,
+    owner,
+    repo,
+  ).map((command) => ({
+    ...command,
+    originalHoldReason: command.checkRunIds
+      .map((checkRunId) => {
+        const source = liveCoverageRecoveryHeldInstances.find(
+          (instance) => instance.checkRunId === checkRunId,
+        );
+        return `check-run ${checkRunId} was withheld as rerun-budget-exhausted; ${source?.reason ?? 'live-coverage recovery (#1806)'}`;
+      })
+      .join('; '),
+  }));
   const recoveryRefreshCandidates = selectRecoveryRefreshCandidates(
     instances,
     classifyOptions,
@@ -334,20 +403,34 @@ export function computeRerunPlan(input, options) {
   // (classified `rerun-eligible` instead of `awaiting-fresh-review` --
   // see `classifyInstance`'s awaiting-fresh-review step) enters `eligibleInstances`
   // like any other rerun-eligible instance. If ITS OWN `runAttempt` already
-  // exhausted the rerun-once budget, rule 1 above applies to it exactly the
-  // same way it already applies to any other budget-held eligible instance:
+  // exhausted the rerun-once budget, rule 1 above applies to it the same
+  // way it already applies to any other budget-held eligible instance:
   // `anyEligibleHeld` becomes `true` and `recoveryRefreshPlan` is withheld
   // for the WHOLE rollup, even when a separate, still-genuinely-stuck
   // `bot-gated-skip` sibling exists. This is not a #1806-specific carve-out
   // -- #1806 only widens which instances CAN reach `eligibleInstances` in
   // the first place; rule 1's own boundary (a human must look at a
   // budget-exhausted eligible instance rather than have the tool silently
-  // route around it via a different instance's rerun) applies uniformly
-  // once an instance is there, regardless of how it got classified
-  // `rerun-eligible`. See the "budget-exhausted recovered instance" test.
+  // route around it via a different instance's rerun) applies once an
+  // instance is there, regardless of how it got classified
+  // `rerun-eligible` -- UNLESS the narrow #2549 exception immediately
+  // below promotes it. See the "run-attempt-unknown live-coverage
+  // instance still suppresses recoveryRefreshPlan" test for the case
+  // this rule still governs post-#2549.
+  //
+  // #2549 exception: an instance already promoted into
+  // `liveCoverageRecoveryPlan` above is excluded from this check -- it is
+  // being HANDLED (its own narrow, separately-bounded rerun is queued),
+  // not silently held, so it must not suppress `recoveryRefreshPlan` for
+  // the rest of the rollup. A live-coverage-recovery instance that failed
+  // the promotion's passing-sibling precondition is NOT in
+  // `liveCoverageRecoveryHeldCheckRunIds` and therefore still counts here
+  // exactly as before #2549 -- this exclusion narrows only for the exact
+  // instances #2549 actually reruns, never wider.
   const anyEligibleHeld = eligibleInstances.some(
     (instance) =>
-      eligibleDecisions.get(instance.checkRunId)?.action !== 'rerun',
+      eligibleDecisions.get(instance.checkRunId)?.action !== 'rerun' &&
+      !liveCoverageRecoveryHeldCheckRunIds.has(instance.checkRunId),
   );
   const everyReRunningEligibleIsBotTriggered = reRunningEligibleInstances.every(
     (instance) => isBotTriggered(instance, classifyOptions),
@@ -372,8 +455,14 @@ export function computeRerunPlan(input, options) {
         repo,
       )
     : [];
-  const heldEligibleCount = [...eligibleDecisions.values()].filter(
-    (decision) => decision.action === 'hold',
+  // #2549: an instance promoted into `liveCoverageRecoveryPlan` is being
+  // handled (a bounded rerun is queued for it), not withheld -- excluded
+  // here so `rerunPolicyHoldNotice` never claims a maintainer must
+  // manually decide about an instance the plan is already acting on.
+  const heldEligibleCount = [...eligibleDecisions.entries()].filter(
+    ([checkRunId, decision]) =>
+      decision.action === 'hold' &&
+      !liveCoverageRecoveryHeldCheckRunIds.has(checkRunId),
   ).length;
   const heldRefreshCount = [...refreshDecisions.values()].filter(
     (decision) => decision.action === 'hold',
@@ -386,9 +475,13 @@ export function computeRerunPlan(input, options) {
   // so the notice never claims a budget is "already used" when it was
   // actually just never confirmed.
   const allHeldReasons = new Set(
-    [...eligibleDecisions.values(), ...refreshDecisions.values()]
-      .filter((decision) => decision.action === 'hold')
-      .map((decision) => decision.reason),
+    [...eligibleDecisions.entries(), ...refreshDecisions.entries()]
+      .filter(
+        ([checkRunId, decision]) =>
+          decision.action === 'hold' &&
+          !liveCoverageRecoveryHeldCheckRunIds.has(checkRunId),
+      )
+      .map(([, decision]) => decision.reason),
   );
   const rerunPolicyHoldNotice =
     totalHeldCount === 0
@@ -399,9 +492,10 @@ export function computeRerunPlan(input, options) {
   const budgetHeldCheckRunIds = new Set(
     [...eligibleDecisions.entries(), ...refreshDecisions.entries()]
       .filter(
-        ([, decision]) =>
-          decision.reason === 'rerun-budget-exhausted' ||
-          decision.reason === 'run-attempt-unknown',
+        ([checkRunId, decision]) =>
+          (decision.reason === 'rerun-budget-exhausted' ||
+            decision.reason === 'run-attempt-unknown') &&
+          !liveCoverageRecoveryHeldCheckRunIds.has(checkRunId),
       )
       .map(([checkRunId]) => checkRunId),
   );
@@ -442,6 +536,9 @@ export function computeRerunPlan(input, options) {
     recoveryRefreshPlan,
     recoveryRefreshCaveat:
       recoveryRefreshPlan.length > 0 ? RECOVERY_REFRESH_CAVEAT : '',
+    liveCoverageRecoveryPlan,
+    liveCoverageRecoveryCaveat:
+      liveCoverageRecoveryPlan.length > 0 ? LIVE_COVERAGE_RECOVERY_CAVEAT : '',
     rerunPolicy,
     rerunPolicyHoldNotice,
   };
@@ -685,6 +782,7 @@ function classifyInstance(instance, options) {
       ...instance,
       classification: 'rerun-eligible',
       reason: `advisory-convergence verdict historically reported "${matched}", but a live check now confirms the current HEAD is covered by a fresh review; the historical hold is stale -- safe to rerun (live-coverage recovery, #1806)`,
+      isLiveCoverageRecovery: true,
     };
   }
   // 8. Non-pass, terminal, resolved, pull_request-family -- safe to rerun.
@@ -1225,6 +1323,20 @@ export function buildRerunPlanTextSections(plan) {
       ].join('\n'),
     );
   }
+  if (plan.liveCoverageRecoveryPlan.length > 0) {
+    sections.push(
+      [
+        'Live-coverage-recovery cleanup available (#2549) -- bounded rerun of budget-held sibling(s) now provably redundant; run after the sections above:',
+        ...plan.liveCoverageRecoveryPlan.map((entry, index) =>
+          entry.originalHoldReason
+            ? `  ${index + 1}. ${entry.command}\n     originally held: ${entry.originalHoldReason}`
+            : `  ${index + 1}. ${entry.command}`,
+        ),
+        '',
+        plan.liveCoverageRecoveryCaveat,
+      ].join('\n'),
+    );
+  }
   return sections;
 }
 function printHelp() {
@@ -1254,9 +1366,21 @@ exactly as "planCaveat" already documents. Prefers the recovery-refresh
 plan first when one exists, matching idd-ci.instructions.md's documented
 recovery order. After each rerun, the plan is recomputed from fresh
 evidence and the loop stops early as soon as it resolves (no
-rerun-eligible or recovery-refresh instance remains) instead of running
-the rest of the original plan. A final summary of what ran and whether
-the target state resolved is printed to stderr.
+rerun-eligible, recovery-refresh, or live-coverage-recovery instance
+remains) instead of running the rest of the original plan. A final
+summary of what ran and whether the target state resolved is printed to
+stderr.
+
+One narrow, bounded exception to "never rerun-budget-held" (#2549): an
+instance held ONLY because its own rerun-once budget is exhausted, whose
+classification is specifically the #1806 live-coverage-recovery case, and
+for which a sibling instance for the same check already shows "pass" --
+proof the rollup is otherwise already resolved -- is rerun as bounded
+cleanup of that redundant stale sibling, after the plan and
+recovery-refresh sections above. Every other rerun-budget-held instance
+(including the waiver-rebind case) still requires a maintainer's manual
+decision, unchanged. Stays within the same rerun budget documented below
+-- this is not a second or unbounded loop.
 
 --owner and --repo must be given together (to inspect a PR outside the
 current checkout) or omitted together (to auto-detect the current
@@ -1323,25 +1447,41 @@ const MAX_APPLY_RERUNS = 20;
  * Prefers `recoveryRefreshPlan`'s next entry over `plan`'s whenever both
  * are non-empty, matching {@link describeRecoveryRefreshHeader}'s
  * documented recovery order (try the recovery-refresh rerun first; only
- * fall back to the sequential plan if it does not clear the rollup).
+ * fall back to the sequential plan if it does not clear the rollup); a
+ * `liveCoverageRecoveryPlan` (#2549) entry is only picked once BOTH of
+ * those are exhausted -- it is bounded cleanup of an already-provably-
+ * redundant sibling, never a substitute for either mechanism above.
  * `bot-gated-skip`, `awaiting-fresh-review`, and rerun-budget-held
- * instances are never candidates here: neither `plan` nor
- * `recoveryRefreshPlan` ever contains them (see {@link computeRerunPlan}),
- * so this loop cannot reach them regardless of `deps.recomputePlan`'s
- * output (#1775 keeps uncovered-HEAD failures out of both plans).
+ * instances are never candidates here (except the narrow #2549 subset
+ * promoted into `liveCoverageRecoveryPlan`): neither `plan` nor
+ * `recoveryRefreshPlan` ever contains any other one of them (see {@link
+ * computeRerunPlan}), so this loop cannot reach them regardless of
+ * `deps.recomputePlan`'s output (#1775 keeps uncovered-HEAD failures out
+ * of both plans).
  */
 export function applyRerunPlan(initialPlan, deps) {
   const executed = [];
   let plan = initialPlan;
   for (let attempt = 0; attempt < MAX_APPLY_RERUNS; attempt += 1) {
     const fromRefresh = plan.recoveryRefreshPlan[0];
-    const next = fromRefresh ?? plan.plan[0];
+    const fromPlan = plan.plan[0];
+    const fromLiveCoverageRecovery = plan.liveCoverageRecoveryPlan[0];
+    const next = fromRefresh ?? fromPlan ?? fromLiveCoverageRecovery;
     if (!next) {
       return { executed, finalPlan: plan, resolved: true };
     }
-    const section = fromRefresh ? 'recoveryRefreshPlan' : 'plan';
+    const section = fromRefresh
+      ? 'recoveryRefreshPlan'
+      : fromPlan
+        ? 'plan'
+        : 'liveCoverageRecoveryPlan';
     deps.rerunAndWait(next);
-    executed.push({ runId: next.runId, command: next.command, section });
+    executed.push({
+      runId: next.runId,
+      command: next.command,
+      section,
+      originalHoldReason: next.originalHoldReason,
+    });
     plan = deps.recomputePlan();
   }
   return { executed, finalPlan: plan, resolved: false };
@@ -1357,6 +1497,9 @@ export function formatApplySummary(result) {
   const lines = [`--apply: executed ${result.executed.length} rerun(s).`];
   for (const [index, entry] of result.executed.entries()) {
     lines.push(`  ${index + 1}. [${entry.section}] ${entry.command}`);
+    if (entry.originalHoldReason) {
+      lines.push(`     originally held: ${entry.originalHoldReason}`);
+    }
   }
   lines.push(
     result.resolved
@@ -2019,6 +2162,7 @@ if (import.meta.main) {
     } else if (
       plan.plan.length === 0 &&
       plan.recoveryRefreshPlan.length === 0 &&
+      plan.liveCoverageRecoveryPlan.length === 0 &&
       !plan.rerunPolicyHoldNotice
     ) {
       // Genuinely nothing to report at all.
