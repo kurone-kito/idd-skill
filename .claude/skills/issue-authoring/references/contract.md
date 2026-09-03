@@ -266,11 +266,11 @@ resolves the same way.
 **Same-shape follow-up chains.** A different case from both checks
 above: an issue whose own acceptance criteria explicitly ask for a
 follow-up issue with the same acceptance criteria when the round does
-not fully complete (a "retry again" pattern, e.g. an iterative
+not fully complete (a "retry again" pattern, e.g., an iterative
 measurement or convergence task). Before drafting such a
 same-shape successor, state what measurable forward progress the
 just-completed round achieved — a changed metric, a narrowed diagnosis,
-a newly tested hypothesis, a newly-discovered and now-fixed blocker.
+a newly-tested hypothesis, a newly-discovered and now-fixed blocker.
 When the round produced no such signal (the same result, the same
 diagnosis, no new information beyond the predecessor), route to
 `needs-decision` (or an equivalent hold) instead of authoring another
