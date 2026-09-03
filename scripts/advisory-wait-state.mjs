@@ -539,12 +539,12 @@ function main() {
     },
   );
   // #2554: skipped entirely when no `advisoryWait.providerOutage.
-  // terminalWindow` override is configured -- resolveEffectiveAdvisoryTerm-
-  // inalWindowMinutes returns the base window regardless of
-  // declarationActive in that case, so the live outage-declaration fetch
-  // would be pure overhead for a repository that never configured this
-  // feature (matching pre-merge-readiness.mts's own skip-when-unconfigured
-  // guard). Schema-validated first, matching pre-merge-readiness.mts's and
+  // terminalWindow` override is configured. With no override, the
+  // effective-window resolver below returns the base window regardless of
+  // declarationActive, so the live outage-declaration fetch would be pure
+  // overhead for a repository that never configured this feature
+  // (matching pre-merge-readiness.mts's own skip-when-unconfigured guard).
+  // Schema-validated first, matching pre-merge-readiness.mts's and
   // advisory-convergence.mts's own validate-or-default gate: an
   // `advisoryWait` section invalid for an unrelated reason must fall back
   // to every distributed default, not just this one key.
