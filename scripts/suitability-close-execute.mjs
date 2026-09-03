@@ -134,14 +134,22 @@ export function evaluateSuitabilityCloseEligibility(checkOutcome) {
 /** Render the evidence-bound closing comment. `evidence` is always the
  * machine-derivable string `evaluateHighConfidenceDuplicate` itself already
  * produces (PR number(s) and/or overlapping file path(s)) -- this renderer
- * adds no prose evidence of its own. */
+ * adds no prose evidence of its own.
+ *
+ * Copilot review finding on PR #2558: `runSuitabilityCloseExecute` posts
+ * this comment BEFORE calling `closeIssue` (evidence-first, matching
+ * `idd-roadmap-audit-execute.mts`'s own evidence-then-close order), so the
+ * wording below deliberately describes the close as in-progress rather
+ * than already complete -- a `closeIssue` failure after this comment posts
+ * must never leave a false "already closed" claim on an issue that is
+ * still open. */
 export function buildSuitabilityCloseComment(evidence) {
   return [
     'A4.5 high-confidence duplicate/superseded close',
     '',
     evidence,
     '',
-    '_This candidate was closed autonomously under the `#1485` gated',
+    '_Closing this candidate autonomously under the `#1485` gated',
     'pre-claim close path: a strong mechanical signal only (closing-PR',
     'reference, same-`## Candidate files` overlap, or an exact',
     'branch-name match), never the weak title/declaration heuristic. If',
@@ -159,6 +167,25 @@ export function buildSuitabilityCloseComment(evidence) {
  * on a lost/stale/non-owned claim or a no-longer-eligible fresh evaluation.
  */
 export function runSuitabilityCloseExecute(args, deps) {
+  // Copilot review finding on PR #2558: `runCli` validates `args.issue !==
+  // null` before ever constructing `args`, but that guard lives outside
+  // this exported function -- a direct caller (bypassing `runCli`) could
+  // still pass `issue: null`. Re-check here instead of trusting the `as
+  // number` cast, so a direct call degrades to a clean not-found verdict
+  // rather than an unsafe null flowing into `deps.getIssue`.
+  if (args.issue === null || !Number.isInteger(args.issue)) {
+    return {
+      protocolVersion: '1',
+      mode: args.apply ? 'apply' : 'dry-run',
+      issueNumber: Number.NaN,
+      ready: false,
+      eligible: false,
+      evidence: null,
+      claim: null,
+      closed: false,
+      result: '--issue is required and must be a positive integer',
+    };
+  }
   const issueNumber = args.issue;
   const issue = deps.getIssue(issueNumber);
   if (!issue) {

@@ -353,3 +353,17 @@ test('a missing issue reports a not-found result without mutating', () => {
   assert.match(verdict.result, /not found or inaccessible/);
   assert.deepEqual(calls.closed, []);
 });
+
+test('a direct call bypassing runCli with issue: null degrades to a clean not-ready verdict, never an unsafe cast (Copilot review, PR #2558)', () => {
+  const { deps, calls } = makeDeps();
+  const verdict = runSuitabilityCloseExecute(
+    baseArgs({ issue: null, apply: true }),
+    deps,
+  );
+  assert.equal(verdict.ready, false);
+  assert.equal(verdict.closed, false);
+  assert.match(verdict.result, /--issue is required/);
+  assert.deepEqual(calls.closed, []);
+  assert.deepEqual(calls.comments, []);
+  assert.deepEqual(calls.released, []);
+});

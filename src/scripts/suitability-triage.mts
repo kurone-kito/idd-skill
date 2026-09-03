@@ -2072,9 +2072,13 @@ export function resolveInputMode(
  * evidence" (that would mask a genuinely broken collector as a clean pass),
  * and never discarding a sibling signal that already collected cleanly.
  * `gh`/API fetch failures in any block are always recorded here; a
- * manifest-unavailable same-candidate-files skip is a distinct, deliberate
- * degradation documented on `loadHighContentionFiles` itself, not a fetch
- * failure, so it is not added to this list. This is also why a failure here
+ * manifest-unavailable same-candidate-files skip (documented on
+ * `loadHighContentionFiles` itself) is a distinct, deliberate degradation
+ * rather than a genuine fetch failure, but it still pushes its own
+ * `collectionWarnings` entry below -- Check 4 must degrade to exact-title-only
+ * for this case exactly as it does for a real `gh`/API failure (Copilot
+ * review finding on PR #2558: an earlier version of this comment claimed
+ * the opposite). This is also why a failure here
  * never throws out to the caller -- this tier is an optional enhancement
  * layered onto Check 4, and Check 4's own documented Edge Case ("Timeout on
  * duplicate detection... fall back to exact title match only") already
