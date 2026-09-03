@@ -2010,15 +2010,31 @@ to post it is the consuming track's job.
   `runAttempt` already exhausted the `"rerun-once"` budget, withholds the
   corresponding plan entries with an explanatory `rerunPolicyHoldNotice`
   instead of silently omitting them
+- Also reports a `liveCoverageRecoveryPlan` (kurone-kito/idd-skill#2549):
+  a narrow, separately-bounded exception for an instance that is
+  BOTH the live-coverage-recovery case above AND itself
+  `rerun-budget-held` (its own `runAttempt` already exhausted the
+  `"rerun-once"` budget) AND has a sibling instance for the same check
+  that already classifies `pass` -- proof the rollup is otherwise
+  already resolved, so rerunning this one is bounded cleanup of a
+  redundant stale sibling on an already-covered HEAD, never a second
+  automated rerun-budget grant. Every other `rerun-budget-held`
+  instance (including the waiver-rebind case below) keeps the
+  unconditional withholding unchanged; each promoted instance's
+  original hold reason is named both in the plan document
+  (`originalHoldReason`) and in the `--apply` summary
 - Without `--apply`, it never calls `gh run rerun` (or any other mutating
   command) itself. Pass `--apply` (#1766) to execute the printed plan:
-  it reruns each rerun-eligible instance in order (recovery-refresh first
-  when one applies), waits for each to reach a genuinely new completed
-  attempt (polled via the actions/runs API, not `gh run watch`, to avoid
-  racing a just-issued rerun's stale pre-rerun status) before starting
-  the next, and stops early once the recomputed plan is fully resolved --
+  it reruns each rerun-eligible instance in order (recovery-refresh
+  first, then the sequential plan, then `liveCoverageRecoveryPlan`
+  last), waits for each to reach a genuinely new completed attempt
+  (polled via the actions/runs API, not `gh run watch`, to avoid racing
+  a just-issued rerun's stale pre-rerun status) before starting the
+  next, and stops early once the recomputed plan is fully resolved --
   a `bot-gated-skip`, `awaiting-fresh-review`, or rerun-budget-held
-  instance is never rerun
+  instance is never rerun outside the narrow `liveCoverageRecoveryPlan`
+  exception just above, and the same `MAX_APPLY_RERUNS` safety bound
+  covers all three plan sections together, not a second loop
 - `--check-name <name>` (#1935) overrides the check-run name searched for
   and reported, defaulting to `idd-advisory-convergence` when omitted
   (byte-identical output to before this flag existed). Use it when the
@@ -2038,7 +2054,12 @@ to post it is the consuming track's job.
 instance (see above) -- that withholding is correct and load-bearing
 on its own, and this section does not change it: the script keeps
 withholding these instances from its own plan, and gains no
-`--override-budget` flag or equivalent. A specific combination sits
+`--override-budget` flag or equivalent. `liveCoverageRecoveryPlan`
+above (#2549) is a separate, much narrower automated exception (a
+live-coverage-recovered instance with an already-passing sibling
+proving the rollup is otherwise resolved) -- it does not apply to the
+waiver-rebind case below, which still requires this manual procedure.
+A specific combination sits
 outside what the withholding alone can resolve: an
 `idd-advisory-convergence` instance already went `rerun-budget-held`
 from a genuinely-failed attempt, and only afterward does a maintainer

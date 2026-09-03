@@ -1054,7 +1054,18 @@ test('does not offer a recovery-refresh plan when a genuine rerun-eligible insta
 // instance came from the #1806 recovery path rather than an ordinary
 // terminal failure. This locks in that the widened classification path does
 // not accidentally create a second, looser rule.
-test('#1806: a budget-exhausted live-coverage-recovered instance still suppresses recovery-refresh (rule 1 applies uniformly)', () => {
+// Pre-#2549, this exact fixture (a budget-exhausted #1806-recovered
+// instance coexisting with a bot-gated sibling AND an already-passing
+// sibling) pinned that rule 1 suppresses recoveryRefreshPlan uniformly,
+// with no exception. #2549 narrowly changes precisely this combination:
+// the SAME passing sibling that makes recoveryRefreshPlan's own
+// precondition true also proves the rollup is otherwise already resolved,
+// so `recovered` is promoted into `liveCoverageRecoveryPlan` instead of
+// staying a silent hold -- and, promoted, it no longer suppresses
+// recoveryRefreshPlan for the separate `gated` problem either. See the
+// "run-attempt-unknown" and "no passing sibling" tests below for the
+// cases rule 1 still governs unchanged.
+test('#2549: a budget-exhausted live-coverage-recovered instance with a passing sibling promotes to liveCoverageRecoveryPlan and stops suppressing recovery-refresh', () => {
   const plan = computeRerunPlan(
     baseInput({
       instances: [
@@ -1080,16 +1091,287 @@ test('#1806: a budget-exhausted live-coverage-recovered instance still suppresse
     }),
     baseOptions({ headCoverageSatisfied: true }),
   );
-  // The recovered instance itself is classified rerun-eligible...
   const recovered = plan.instances.find((i) => i.checkRunId === 'recovered');
   assert.equal(recovered?.classification, 'rerun-eligible');
-  // ...but its own budget-exhaustion withholds it from `plan`...
-  assert.equal(recovered?.rerunBudgetHeld, true);
+  assert.equal(recovered?.isLiveCoverageRecovery, true);
+  // No longer reported as budget-held: it is being handled via
+  // liveCoverageRecoveryPlan, not silently withheld.
+  assert.equal(recovered?.rerunBudgetHeld, false);
   assert.equal(plan.plan.length, 0);
-  // ...and, per rule 1, that held-but-eligible instance suppresses
-  // recoveryRefreshPlan for the whole rollup, same as the pre-#1806 case.
+  assert.deepEqual(
+    plan.liveCoverageRecoveryPlan.map((entry) => entry.runId),
+    ['7003'],
+  );
+  assert.match(
+    plan.liveCoverageRecoveryPlan[0]?.originalHoldReason ?? '',
+    /rerun-budget-exhausted/,
+  );
+  assert.match(
+    plan.liveCoverageRecoveryPlan[0]?.originalHoldReason ?? '',
+    /recovered/,
+  );
+  assert.notEqual(plan.liveCoverageRecoveryCaveat, '');
+  // The `recovered` promotion no longer suppresses recoveryRefreshPlan --
+  // the separate `gated`/`passing` pairing still qualifies for it.
+  assert.deepEqual(
+    plan.recoveryRefreshPlan.map((entry) => entry.runId),
+    ['7002'],
+  );
+  assert.equal(plan.rerunPolicyHoldNotice, '');
+});
+
+// The non-vacuous regression guard for rule 1 post-#2549: an unconfirmed
+// budget ('run-attempt-unknown', `runAttempt: null`) is NOT a spent one,
+// so it must not qualify for the #2549 promotion even though every other
+// precondition (live-coverage-recovery classification, a passing sibling,
+// a bot-gated sibling, rerunPolicy rerun-once) is met -- rule 1 still
+// suppresses recoveryRefreshPlan here exactly as before #2549.
+test('#2549: a run-attempt-unknown live-coverage-recovered instance is NOT promoted and still suppresses recovery-refresh', () => {
+  const plan = computeRerunPlan(
+    baseInput({
+      instances: [
+        baseInstance({
+          checkRunId: 'gated',
+          runId: '7001',
+          conclusion: 'action_required',
+        }),
+        baseInstance({
+          checkRunId: 'passing',
+          runId: '7002',
+          conclusion: 'success',
+          startedAt: '2026-07-16T11:00:00Z',
+        }),
+        baseInstance({
+          checkRunId: 'recovered',
+          runId: '7003',
+          conclusion: 'failure',
+          runAttempt: null,
+          verdictReasons: [UNCOVERED_HEAD_HISTORICAL_REASON],
+        }),
+      ],
+    }),
+    baseOptions({ headCoverageSatisfied: true }),
+  );
+  const recovered = plan.instances.find((i) => i.checkRunId === 'recovered');
+  assert.equal(recovered?.isLiveCoverageRecovery, true);
+  assert.equal(recovered?.rerunBudgetHeld, true);
+  assert.deepEqual(plan.liveCoverageRecoveryPlan, []);
   assert.deepEqual(plan.recoveryRefreshPlan, []);
   assert.notEqual(plan.rerunPolicyHoldNotice, '');
+});
+
+// A live-coverage-recovered instance with NO passing sibling anywhere in
+// the batch never satisfies the #2549 promotion's "rollup otherwise
+// resolved" precondition, regardless of `anyEligibleHeld` -- it stays
+// held exactly as before #2549.
+test('#2549: a budget-exhausted live-coverage-recovered instance with no passing sibling is NOT promoted', () => {
+  const plan = computeRerunPlan(
+    baseInput({
+      instances: [
+        baseInstance({
+          checkRunId: 'recovered',
+          runId: '7003',
+          conclusion: 'failure',
+          runAttempt: 2,
+          verdictReasons: [UNCOVERED_HEAD_HISTORICAL_REASON],
+        }),
+      ],
+    }),
+    baseOptions({ headCoverageSatisfied: true }),
+  );
+  const recovered = plan.instances.find((i) => i.checkRunId === 'recovered');
+  assert.equal(recovered?.isLiveCoverageRecovery, true);
+  assert.equal(recovered?.rerunBudgetHeld, true);
+  assert.deepEqual(plan.liveCoverageRecoveryPlan, []);
+  assert.notEqual(plan.rerunPolicyHoldNotice, '');
+});
+
+// A repository that opted out of ALL automatic reruns (`ciWait.rerunPolicy:
+// "hold"`) must not get the #2549 exception either -- every other
+// rerun-budget-held path already withholds under "hold", and this one
+// must too.
+test('#2549: rerunPolicy "hold" withholds the live-coverage-recovery promotion too', () => {
+  const plan = computeRerunPlan(
+    baseInput({
+      instances: [
+        baseInstance({
+          checkRunId: 'passing',
+          runId: '7002',
+          conclusion: 'success',
+        }),
+        baseInstance({
+          checkRunId: 'recovered',
+          runId: '7003',
+          conclusion: 'failure',
+          runAttempt: 2,
+          verdictReasons: [UNCOVERED_HEAD_HISTORICAL_REASON],
+        }),
+      ],
+    }),
+    baseOptions({ headCoverageSatisfied: true, rerunPolicy: 'hold' }),
+  );
+  assert.deepEqual(plan.liveCoverageRecoveryPlan, []);
+  assert.equal(plan.rerunPolicy, 'hold');
+});
+
+// An ordinary rerun-eligible instance whose budget is exhausted, but
+// which was NEVER reclassified via #1806 live-coverage recovery (e.g. the
+// waiver-rebind case, or simply a plain non-passing conclusion that used
+// its rerun already) is a wholly different `rerun-budget-held` cause and
+// must keep today's manual-decision behavior unchanged -- the #2549
+// exception is scoped exactly to the live-coverage-recovery
+// classification, never wider.
+test('#2549: an ordinary (non-live-coverage-recovery) budget-exhausted instance is NOT promoted, even with a passing sibling', () => {
+  const plan = computeRerunPlan(
+    baseInput({
+      instances: [
+        baseInstance({
+          checkRunId: 'passing',
+          runId: '7002',
+          conclusion: 'success',
+        }),
+        baseInstance({
+          checkRunId: 'ordinary-held',
+          runId: '7003',
+          conclusion: 'failure',
+          runAttempt: 2,
+        }),
+      ],
+    }),
+    baseOptions(),
+  );
+  const ordinaryHeld = plan.instances.find(
+    (i) => i.checkRunId === 'ordinary-held',
+  );
+  assert.equal(ordinaryHeld?.classification, 'rerun-eligible');
+  assert.equal(ordinaryHeld?.isLiveCoverageRecovery, undefined);
+  assert.equal(ordinaryHeld?.rerunBudgetHeld, true);
+  assert.deepEqual(plan.liveCoverageRecoveryPlan, []);
+  assert.notEqual(plan.rerunPolicyHoldNotice, '');
+});
+
+test('#2549: applyRerunPlan executes a liveCoverageRecoveryPlan entry only after plan and recoveryRefreshPlan are exhausted, carrying originalHoldReason', () => {
+  const initialPlan = computeRerunPlan(
+    baseInput({
+      instances: [
+        baseInstance({
+          checkRunId: 'gated',
+          runId: '7001',
+          conclusion: 'action_required',
+        }),
+        baseInstance({
+          checkRunId: 'passing',
+          runId: '7002',
+          conclusion: 'success',
+        }),
+        baseInstance({
+          checkRunId: 'recovered',
+          runId: '7003',
+          conclusion: 'failure',
+          runAttempt: 2,
+          verdictReasons: [UNCOVERED_HEAD_HISTORICAL_REASON],
+        }),
+      ],
+    }),
+    baseOptions({ headCoverageSatisfied: true }),
+  );
+  assert.deepEqual(initialPlan.plan, []);
+  assert.equal(initialPlan.recoveryRefreshPlan.length, 1);
+  assert.equal(initialPlan.liveCoverageRecoveryPlan.length, 1);
+
+  const resolvedPlan = computeRerunPlan(
+    baseInput({ instances: [] }),
+    baseOptions({ headCoverageSatisfied: true }),
+  );
+  const rerunAndWaitCalls: string[] = [];
+  const recomputeQueue = [
+    // After rerunning the recovery-refresh entry, still nothing left in
+    // `plan`, but the live-coverage-recovery entry is still outstanding.
+    { ...initialPlan, plan: [], recoveryRefreshPlan: [] },
+    // After rerunning the liveCoverageRecoveryPlan entry, everything
+    // resolves.
+    resolvedPlan,
+  ];
+  const result = applyRerunPlan(initialPlan, {
+    rerunAndWait: (command) => {
+      rerunAndWaitCalls.push(command.runId);
+    },
+    recomputePlan: () => recomputeQueue.shift() ?? resolvedPlan,
+  });
+
+  assert.deepEqual(rerunAndWaitCalls, ['7002', '7003']);
+  assert.deepEqual(
+    result.executed.map((entry) => entry.section),
+    ['recoveryRefreshPlan', 'liveCoverageRecoveryPlan'],
+  );
+  const liveCoverageEntry = result.executed.find(
+    (entry) => entry.section === 'liveCoverageRecoveryPlan',
+  );
+  assert.match(liveCoverageEntry?.originalHoldReason ?? '', /recovered/);
+  assert.equal(result.resolved, true);
+  assert.match(formatApplySummary(result), /originally held/);
+});
+
+// Issue #2549 acceptance criterion: MAX_APPLY_RERUNS still bounds the
+// total reruns in one --apply call even when MULTIPLE
+// live-coverage-recovery-held siblings exist and qualify for promotion --
+// this is not a second, larger, or unbounded loop layered on top of the
+// existing safety bound.
+test('#2549: MAX_APPLY_RERUNS still bounds a run with multiple liveCoverageRecoveryPlan siblings', () => {
+  const instances = [
+    baseInstance({
+      checkRunId: 'passing',
+      runId: '9000',
+      conclusion: 'success',
+    }),
+    baseInstance({
+      checkRunId: 'recovered-a',
+      runId: '9001',
+      conclusion: 'failure',
+      runAttempt: 2,
+      verdictReasons: [UNCOVERED_HEAD_HISTORICAL_REASON],
+    }),
+    baseInstance({
+      checkRunId: 'recovered-b',
+      runId: '9002',
+      conclusion: 'failure',
+      runAttempt: 2,
+      verdictReasons: [UNCOVERED_HEAD_HISTORICAL_REASON],
+    }),
+    baseInstance({
+      checkRunId: 'recovered-c',
+      runId: '9003',
+      conclusion: 'failure',
+      runAttempt: 2,
+      verdictReasons: [UNCOVERED_HEAD_HISTORICAL_REASON],
+    }),
+  ];
+  const initialPlan = computeRerunPlan(
+    baseInput({ instances }),
+    baseOptions({ headCoverageSatisfied: true }),
+  );
+  assert.equal(initialPlan.liveCoverageRecoveryPlan.length, 3);
+
+  let calls = 0;
+  // recomputePlan always hands back the SAME never-resolving plan, so
+  // the loop cannot terminate early via `resolved` -- only
+  // MAX_APPLY_RERUNS itself can stop it, exactly as the pre-existing
+  // "stops after its safety bound" test exercises for `plan`.
+  const result = applyRerunPlan(initialPlan, {
+    rerunAndWait: () => {
+      calls += 1;
+    },
+    recomputePlan: () => initialPlan,
+  });
+
+  assert.equal(result.resolved, false);
+  assert.equal(calls, 20);
+  assert.equal(result.executed.length, 20);
+  assert.ok(
+    result.executed.every(
+      (entry) => entry.section === 'liveCoverageRecoveryPlan',
+    ),
+  );
 });
 
 // Regression (#1745 Codex review on this same PR, P2): a bot-triggered
