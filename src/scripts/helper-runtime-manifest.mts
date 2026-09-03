@@ -606,6 +606,15 @@ const HELPER_COMMANDS: HelperCommand[] = [
     contractPaths: ['schemas/stalled-session-quiet-check.schema.json'],
   },
   {
+    id: 'suitability-close-execute',
+    scriptName: 'idd:suitability-close-execute',
+    binName: 'idd-suitability-close-execute',
+    entryPath: 'scripts/suitability-close-execute.mjs',
+    vendoredCommand: 'node scripts/suitability-close-execute.mjs',
+    description:
+      'Evaluate the #1485 gated A4.5 high-confidence duplicate/superseded close (dry-run) and, with --apply, post the evidence comment, close the issue, and release the suitability-close coordination claim.',
+  },
+  {
     id: 'suitability-triage',
     scriptName: 'idd:suitability-triage',
     binName: 'idd-suitability-triage',

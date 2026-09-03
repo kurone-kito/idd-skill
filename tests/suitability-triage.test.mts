@@ -3494,16 +3494,21 @@ test('loadHighContentionFiles: an unreadable manifest path returns null', () => 
 // a regression with no other test coverage. Mirrors this repo's own
 // established "cover the call site, not just the extracted helper" pattern
 // (see idd-skill#1810's resolveClaimEvidence structural pin in
-// tests/advisory-convergence.test.mts).
+// tests/advisory-convergence.test.mts). #1485 moved the actual
+// loadHighContentionFiles(manifestPath, bundleIds) call into
+// collectHighConfidenceDuplicateEvidence (so suitability-close-execute.mts
+// can reuse it); this pin now covers runCli's call into that function
+// instead, which is the new place args.manifest / args.bundles could
+// silently stop being forwarded.
 
-test('runCli forwards args.manifest / args.bundles into loadHighContentionFiles (wiring check)', () => {
+test('runCli forwards args.manifest / args.bundles into collectHighConfidenceDuplicateEvidence (wiring check)', () => {
   const source = readFileSync(
     new URL('../src/scripts/suitability-triage.mts', import.meta.url),
     'utf8',
   );
   assert.match(
     source,
-    /loadHighContentionFiles\(\s*args\.manifest,\s*args\.bundles\s*\?\?\s*DEFAULT_BUNDLE_IDS,?\s*\)/,
+    /collectHighConfidenceDuplicateEvidence\(\s*owner,\s*repo,\s*repoRef,\s*issue,\s*args\.manifest,\s*args\.bundles\s*\?\?\s*DEFAULT_BUNDLE_IDS,?\s*\)/,
   );
 });
 

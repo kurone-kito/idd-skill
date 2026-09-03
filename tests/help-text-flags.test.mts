@@ -205,6 +205,7 @@ const COVERED_HELPERS = [
   'review-disposition-verify',
   'select-desynced-index',
   'stalled-session-quiet-check',
+  'suitability-close-execute',
   'suitability-triage',
   'verify-install-deps',
   'verify-workshop-integrity',

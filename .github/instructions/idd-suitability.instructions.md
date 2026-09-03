@@ -115,8 +115,13 @@ collection failure follows the "Timeout on duplicate detection" Edge
 Case below.
 
 Same **detect-only** boundary as the rest of A4.5 (label + comment
-only). The acceptance-criteria-hold-on-`main` bullet is deferred to
-the gated-close follow-up.
+only), except a `tier: 'high-confidence'` hit — never the weak
+heuristic — which the high-confidence coordination-close in
+[Mutation Policy](#mutation-policy-and-coordination-rule) below
+(`#1485`) may additionally close. The acceptance-criteria-hold-on-
+`main` signal from `#1484`'s original proposal remains unimplemented
+and authorizes no close on its own; only the mechanical signals
+`evaluateHighConfidenceDuplicate` actually evaluates do.
 
 `suitability-triage.mjs` evaluates both signals as part of Check 4.
 
@@ -189,8 +194,9 @@ A5 is never reached for a candidate that fails any check, labeled or not.
   must never masquerade as an implementation claim); linking related
   issues as context (e.g., "Related to #NNN which addresses similar
   work") without treating them as confirmed duplicates.
-- **Prohibited**: implementation claim comments or claim markers,
-  branches or worktrees, other operational markers (review-watermark,
+- **Prohibited** (except the high-confidence coordination-close
+  below): implementation claim comments or claim markers, branches or
+  worktrees, other operational markers (review-watermark,
   review-baseline, etc.), unilateral issue closes, roadmap
   structure/relationship edits, and any label other than the optional
   `triage:{outcome}` label above.
@@ -214,6 +220,38 @@ comment-history read, applying the same staleness rule as every other
 evidentiary marker in this workflow: a rejection whose comment predates
 the issue's own latest substantive (title/body) edit is stale and never
 suppresses a genuinely improved issue.
+
+### High-confidence coordination-close (#1485)
+
+On a Check 4 `tier: 'high-confidence'` hit only — never the weak
+heuristic — for a discovery-path candidate (A2/A3 roadmap traversal or
+A0-O orphan-first; never an A0-T explicit target, which keeps its
+report-and-stop path unchanged):
+
+1. Post a no-worktree coordination claim on the candidate, structurally
+   identical to A1.5's roadmap-audit claim
+   (`idd-roadmap-audit.instructions.md`) but with
+   `branch: suitability-close/<number>-<slug>` — outside the
+   `issue/*`/`roadmap-audit/*` scope the core cwd-vs-claim gate checks
+   (`idd-overview-core.instructions.md`), so no worktree is needed.
+2. Re-validate that claim, then run (add `--apply` to mutate; omit it
+   to dry-run first):
+
+   ```sh
+   node scripts/suitability-close-execute.mjs --issue <number> \
+     --claim-id <claim-id> --agent-id <agent-id> --apply
+   ```
+
+   It re-collects the same mechanical evidence, posts the
+   evidence-bound closing comment (the accepted human-notification
+   mechanism — no separate step), closes the issue, and releases the
+   claim, or fails closed on a lost/stale/non-owned claim or a
+   no-longer-eligible re-evaluation.
+3. Drop the closed candidate from Candidates and continue the Decision
+   Flow loop.
+
+A close here is reopenable; a wrong close is an accepted, recoverable
+risk, not a blocker on the gate above.
 
 ## Decision Flow
 
