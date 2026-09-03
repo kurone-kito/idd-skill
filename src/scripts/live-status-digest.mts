@@ -834,7 +834,7 @@ Options:
   --open-blockers <text>            digest Open blockers field (required)
   --next-action <text>              digest Next action field (required)
   --authoritative-by <text>         digest Authoritative by field (required)
-  --claim-issue <number>            issue whose active claim protects apply mode (required for apply mode)
+  --claim-issue <number>            issue carrying the active claim, required for apply mode
   --claim-id <id>                   active claim id required for apply mode
   --agent-id <id>                   optionally require this claim agent id
   --skip-claim-check                explicit maintainer override for apply mode

@@ -498,7 +498,7 @@ its claim-revalidation gate before --apply, as the manual POST path it replaces.
   --repo <repo>        repo name (default: gh repo view)
   -h, --help           show this help
 
-Per-type field flags (a flag in [brackets] is optional; every other flag
+Per-type field flags (flags in [brackets] are optional; every other flag
 listed is required for that type):
   claim              --agent-id --claim-id [--supersedes] --timestamp --branch
   unclaim            --agent-id --claim-id --timestamp
