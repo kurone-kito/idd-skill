@@ -260,7 +260,11 @@ export function runSuitabilityCloseExecute(
   // still pass `issue: null`. Re-check here instead of trusting the `as
   // number` cast, so a direct call degrades to a clean not-found verdict
   // rather than an unsafe null flowing into `deps.getIssue`.
-  if (args.issue === null || !Number.isInteger(args.issue)) {
+  // Copilot review finding on PR #2558: Number.isInteger(-1) is true, so
+  // the earlier null + integer-ness guard alone still let a negative
+  // issue number through to deps.getIssue. Require positive, matching the
+  // error message's own "must be a positive integer" contract.
+  if (args.issue === null || !Number.isInteger(args.issue) || args.issue <= 0) {
     return {
       protocolVersion: '1',
       mode: args.apply ? 'apply' : 'dry-run',

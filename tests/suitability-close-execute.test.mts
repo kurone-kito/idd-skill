@@ -391,6 +391,18 @@ test('a direct call bypassing runCli with issue: null degrades to a clean not-re
   assert.deepEqual(calls.released, []);
 });
 
+test('a direct call with a negative issue number is also rejected, not just null (Copilot review, PR #2558)', () => {
+  const { deps, calls } = makeDeps();
+  const verdict = runSuitabilityCloseExecute(
+    baseArgs({ issue: -1, apply: true }),
+    deps,
+  );
+  assert.equal(verdict.ready, false);
+  assert.equal(verdict.closed, false);
+  assert.match(verdict.result, /--issue is required/);
+  assert.deepEqual(calls.closed, []);
+});
+
 // ---------------------------------------------------------------------------
 // parseArgs (pure)
 // ---------------------------------------------------------------------------
