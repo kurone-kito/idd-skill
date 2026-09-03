@@ -428,6 +428,31 @@ canonical source, for the same root cause. Checking
 `audit/sync-manifest.json`'s `syncPairs` for a matching `target` entry
 closes that gap and catches this before any work is lost.
 
+### C1 — Search sibling code for the same defect shape before closing
+
+A bug fix scoped to the single reported call site can leave the
+identical defect shape unpatched elsewhere in the same file, or in an
+independently-maintained sibling implementation of the same logic.
+`#1471` fixed a stale-multi-instance-rollup defect in
+`classifyCiChecks` (`protocol-helpers.mts`); a follow-up C1 pass on
+that same PR separately found the identical shape in
+`ci-wait-state.mts`'s independently-maintained equivalent, filed as
+`#1478` -- outside the original issue's own acceptance criteria.
+`#2475` (a shared, loop-wide `consumedDispositionIndexes` `Set` in
+`matchTrustedAdvisoryStickyDispositions`, `protocol-helpers.mts`, that
+let only the alphabetically-first named bot be credited when a single
+disposition reply named several) repeated the pattern in the same
+file: the reported bug and its initial fix covered only that one
+function, and a separate critique pass -- run to verify the fix, not
+to search for new work -- found the identical shape unpatched in a
+second, structurally separate loop (the `#1018` notice carry-forward
+path, the more common of the two code paths in practice). When a bug's
+root cause is a reusable defect shape rather than a one-off typo,
+search the rest of the containing file -- and any
+independently-maintained sibling implementation of the same logic --
+for the same shape before treating the fix, or a C1 critique of it, as
+complete (observed 2026-09-03, `#2552`).
+
 ## Review triage
 
 ### Merge-main livelock under fast-moving `main`

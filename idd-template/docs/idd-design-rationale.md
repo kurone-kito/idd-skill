@@ -427,6 +427,29 @@ mistaken for hand-editable prose. Checking the sync tool's own
 manifest for a matching target entry closes that gap for `docs/**.md`
 files, at the cost of one extra lookup.
 
+### C1 — Search sibling code for the same defect shape before closing
+
+A bug fix scoped to the single reported call site can leave the
+identical defect shape unpatched elsewhere in the same file, or in an
+independently-maintained sibling implementation of the same logic.
+`kurone-kito/idd-skill#1471` fixed a stale-multi-instance-rollup
+defect in one file; a follow-up C1 pass on that same PR separately
+found the identical shape in an independently-maintained equivalent
+file, filed as `kurone-kito/idd-skill#1478` -- outside the original
+issue's own acceptance criteria. `kurone-kito/idd-skill#2475` (a
+shared, loop-wide de-duplication `Set` that let only the
+alphabetically-first named actor be credited when a single reply
+named several) repeated the pattern in the same file: the reported bug
+and its initial fix covered only one function, and a separate critique
+pass -- run to verify the fix, not to search for new work -- found the
+identical shape unpatched in a second, structurally separate loop
+elsewhere in that file. When a bug's root cause is a reusable defect
+shape rather than a one-off typo, search the rest of the containing
+file -- and any independently-maintained sibling implementation of the
+same logic -- for the same shape before treating the fix, or a C1
+critique of it, as complete (observed 2026-09-03,
+kurone-kito/idd-skill#2552).
+
 ## Review triage
 
 ### Merge-main livelock under fast-moving `main`
