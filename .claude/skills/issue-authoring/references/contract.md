@@ -263,6 +263,23 @@ after claim — this scan only adds an earlier, pre-publish checkpoint.
 A fast enough race can still surface even after B2.0; when it does, it
 resolves the same way.
 
+**Same-shape follow-up chains.** A different case from both checks
+above: an issue whose own acceptance criteria explicitly ask for a
+follow-up issue with the same acceptance shape when the round does not
+fully complete (a "retry again with the same criteria" pattern, e.g. an
+iterative measurement or convergence task). Before drafting such a
+same-shape successor, state what measurable forward progress the
+just-completed round achieved — a changed metric, a narrowed diagnosis,
+a newly tested hypothesis, a newly-discovered and now-fixed blocker.
+When the round produced no such signal (the same result, the same
+diagnosis, no new information beyond the predecessor), route to
+`needs-decision` (or an equivalent hold) instead of authoring another
+identical-shape issue, and record why the chain paused so a later
+session or human can see the reasoning. This is a sibling check, not a
+replacement: the checks above guard against an accidental duplicate;
+this guards against a correct-but-repeated pattern continuing past the
+point it stops being useful.
+
 ## Output chooser
 
 Choose the smallest safe output shape:
