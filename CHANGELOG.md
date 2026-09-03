@@ -14,8 +14,37 @@ discipline and has no tag.
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-09-04
+
+Outage-resilience release: sustain the IDD loop while the Copilot
+advisory review is rate-limited, plus orphan hardening that keeps
+review quality sound without the primary advisory bot.
+
 ### Added
 
+- Provider-health classification that distinguishes advisory-review
+  and GitHub Actions service degradation from a real CI or review
+  failure, so the loop can park, reroute, or wait instead of treating
+  an outage as a code defect.
+- Outage-scoped advisory relief declaration: a repository-level
+  declaration that removes the per-pull-request waiver-authoring cost
+  during a declared provider outage, without bypassing the
+  per-pull-request terminal advisory-unavailable state.
+- Outage-park: park and reroute work that is blocked only by an
+  unavailable service, then resume when the service recovers.
+- Local validation evidence that a session can record when GitHub
+  Actions is unavailable, so merge-readiness is not solely hosted-CI
+  dependent during an outage.
+- Advisory-wait terminal state when a review request never registers,
+  plus a configurable Copilot-review poll ceiling so a hung request
+  cannot block forever.
+- Opt-in secondary-bot quiet window before advisory convergence,
+  later conditioned on whether that bot has already posted a genuine
+  current-HEAD review, and handling for a secondary bot that declines
+  to review.
+- The advisory-convergence comment workflow also refreshes the
+  required HEAD check when an IDD-originated regular PR comment
+  lands, not only on inline review-thread replies.
 - `critiqueLoop.delegate.mode` gains `on-success` and `never`,
   completing the answer to "when does the per-agent critique pass also
   run": always (`combined`), only on delegate failure (`fallback`, the
@@ -24,7 +53,31 @@ discipline and has no tag.
   means _findings exist_ rather than _the tool broke_. Under the two
   new values a failed delegate can leave C1 with no findings, so C1
   records a fail-closed hold instead of a clean zero-issues verdict.
-  Both existing values keep their current name and meaning.
+  Both existing values keep their current name and meaning. A
+  user-global delegate default can now be inherited, the critique
+  lenses reach lite and configured-delegate passes, and lite helpers
+  can read the effective critique-delegate resolution.
+- Clone-scoped lock that serializes `git fetch`, `git worktree add`,
+  and `git worktree remove` against a shared primary clone under
+  concurrent sessions.
+- Configured `developmentBranch` as a first-class branch-flow setting:
+  onboarding, helpers, and workflows target that branch instead of
+  hard-coding `main`.
+- Provider-adapter contract and staged non-GitHub adoption docs as a
+  foundation for future adapters (GitHub remains the only shipped
+  provider), including a CODEOWNERS port for the adapter path.
+- Discover: an explicit non-blocking reference form alongside
+  `Blocked by`; milestone-scope ranking; a prose
+  runtime/production-observation precondition filter; a
+  machine-readable A4.5 triage-verdict skip for previously rejected
+  candidates; autonomous close of high-confidence duplicates; and
+  `--swarm-floor` readiness for "is any startable work left?".
+- Structured onboarding hearing with a hear-propose-apply TTY flow,
+  transcript apply, Linguist `generated=true` for imported instruction
+  files, and a thinner default onboarding path.
+- Issue-authoring now actually emits the `## Candidate files` section
+  on roadmap-child drafts so Discover's shared-file overlap check has
+  something to parse.
 
 ### Changed
 
@@ -34,6 +87,51 @@ discipline and has no tag.
   merge authority to a worker session — both now stop at the F2.5
   handoff gate for a human maintainer. A repository that already
   recorded `fully_autonomous_merge` explicitly is unaffected.
+  `idd-doctor` now warns when `fully_autonomous_merge` is recorded
+  without `mergePolicyAck`.
+- Context-ceiling budget raised from 126,000 to 196,000 bytes
+  (`maxBundleLimitBytes` and the bundles sitting against the previous
+  ceiling).
+- GitHub Actions consumption cut for the shipped workflows, with an
+  adopter billing-exposure note.
+- Both advisory-wait waiver clocks are per-HEAD and restart on every
+  push; waiting is only viable after review has converged on the
+  current HEAD.
+- Template apply is profile-conditional and no longer ships a literal
+  helper-runtime profile value.
+- D2 change-class scoping extended so a docs-only or generated-mirror
+  change is classified before the heavier pre-push command set.
+- `audit-pr-cleanup` can process multiple PRs in one invocation.
+- Extensive instruction, policy-constants, helper-contract, and
+  issue-authoring documentation precision: gist-feedback instruction
+  gaps, WorkTrunk cwd-after-create diagnostic, grooming pass, hold-
+  state and branch-state taxonomies, external-signal entry, F4
+  `unclaimed-by` requirement, B3 retroactive-disclosure as a repair
+  path, and related docs-only work.
+
+### Fixed
+
+- Advisory-convergence stops reruns that cannot change the verdict,
+  treats bot check-run status as liveness-only, and refuses a waiver
+  the gate cannot honor yet.
+- Suitability-triage: trust-safety narrowing, autonomy-check
+  broadening, policy-override handling, proximity gate, and
+  outcome-signal inflections.
+- Claim A5(e) branch-collision detection, marker-parsing residual
+  cases, `post-idd-marker` post-write verification, CLI required-flag
+  marking, and leading `--` stripping on custom flags.
+- Discover viability-gate limited-scope / bare-topic false positives,
+  and `Blocked by` references that wrap across a line.
+- F4 cleanup reorder, post-merge duplicate-evidence skip, `idd-doctor`
+  GHES-host support and toolchain-residue narrowing, and B1
+  WorkTrunk cwd self-check after create.
+- `pre-merge-readiness` resolves every policy gate from a trusted
+  ref rather than the PR worktree's own possibly-edited config.
+- Helper and template edge cases: split `--owner`/`--repo` on five
+  scripts, template shell resolvers ignoring a full-path helper
+  runtime, `workflow_dispatch` getting its own concurrency group, a
+  B3 generated-from banner check, and a warning for self-regenerating
+  follow-up chains.
 
 ## [0.7.0] - 2026-08-20
 
