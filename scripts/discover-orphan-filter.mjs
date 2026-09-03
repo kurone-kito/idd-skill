@@ -55,6 +55,7 @@ const NEGATION_CUE_WINDOW = 40;
 const NEGATION_HARD_BREAK_PATTERN = /[.;\n]|--|—/g;
 const OPEN_QUOTE_CHARS = new Set(['"', "'", '“', '‘']);
 const CLOSE_QUOTE_CHARS = new Set(['"', "'", '”', '’']);
+const TRAILING_QUOTE_PUNCTUATION_PATTERN = /^[.,!?;:]*/;
 if (import.meta.main) {
   await runCli();
 }
@@ -71,9 +72,13 @@ export function extractBlockedByReferences(body) {
 }
 // A negation ("does not need to be confirmed in production") within the
 // same clause turns the match into the opposite of a precondition -- scoped
-// to the nearest hard clause break so a negation cue from an earlier,
-// unrelated sentence cannot suppress a genuine match (mirrors
-// `AVOIDANCE_CUE_WINDOW`'s clause-scoping in `discover-viability-gate.mts`).
+// to the nearest hard clause break so a negation cue from an earlier (or,
+// for the after-match check, a later) unrelated sentence cannot suppress a
+// genuine match (mirrors `AVOIDANCE_CUE_WINDOW`'s clause-scoping in
+// `discover-viability-gate.mts`). A same-clause negation can follow the
+// matched phrase too ("Runtime observation is not required before
+// starting", #2529 review) -- both directions share the same cue list and
+// window.
 function hasNegationCueBefore(text, matchIndex) {
   const windowStart = Math.max(0, matchIndex - NEGATION_CUE_WINDOW);
   const window = text.slice(windowStart, matchIndex);
@@ -84,12 +89,26 @@ function hasNegationCueBefore(text, matchIndex) {
     : window;
   return NEGATION_CUE_PATTERN.test(scoped);
 }
+function hasNegationCueAfter(text, matchEnd) {
+  const windowEnd = Math.min(text.length, matchEnd + NEGATION_CUE_WINDOW);
+  const window = text.slice(matchEnd, windowEnd);
+  const breaks = [...window.matchAll(NEGATION_HARD_BREAK_PATTERN)];
+  const firstBreak = breaks[0];
+  const scoped = firstBreak ? window.slice(0, firstBreak.index) : window;
+  return NEGATION_CUE_PATTERN.test(scoped);
+}
 // A phrase quoted as a term being discussed (e.g. this function's own
 // motivating issue, which names the trigger phrases inside straight double
 // quotes) is meta-discussion, not an asserted precondition on THIS issue.
+// Sentence punctuation routinely sits INSIDE the closing quote ("observed
+// live." -- #2529 review), so the close side tolerates a short run of
+// punctuation between the match and the quote character; the open side
+// stays exact-adjacent, matching every observed real-world shape.
 function isQuotedMatch(text, start, end) {
   const before = text[start - 1];
-  const after = text[end];
+  const afterSlice = text.slice(end, end + 4);
+  const punctuation = TRAILING_QUOTE_PUNCTUATION_PATTERN.exec(afterSlice);
+  const after = afterSlice[punctuation?.[0]?.length ?? 0];
   return (
     before !== undefined &&
     after !== undefined &&
@@ -112,7 +131,8 @@ export function detectRuntimeObservationPrecondition(body) {
       const end = match.index + match[0].length;
       if (
         !isQuotedMatch(stripped, match.index, end) &&
-        !hasNegationCueBefore(stripped, match.index)
+        !hasNegationCueBefore(stripped, match.index) &&
+        !hasNegationCueAfter(stripped, end)
       ) {
         return true;
       }

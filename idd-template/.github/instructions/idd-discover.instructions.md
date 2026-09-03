@@ -348,10 +348,10 @@ From A2, keep only issues that satisfy **all** of the following:
   blocked if that issue is open, if no issue matches (fail-safe — a
   migration integrity problem such as a typo, deleted issue, or
   incomplete migration), or if any matching issue is open.
-- No external human coordination or prose-only runtime/production-
-  observation precondition ("confirmed in production", "observed
-  live", "runtime-observation", #2467) required to start; otherwise
-  keep scanning
+- No external human coordination or prose-only
+  runtime/production-observation precondition ("confirmed in
+  production", "observed live", "runtime-observation"; issue #2467)
+  required to start; otherwise keep scanning
 
 **When A2 finds zero candidates, or zero issues survive A3 filtering**,
 apply this decision tree — do not silently expand scope:

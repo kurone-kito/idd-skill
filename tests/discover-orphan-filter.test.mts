@@ -1186,6 +1186,42 @@ test('classifyIssue does not trip runtime-observation prose inside a code region
   assert.equal(inline.reason, 'orphan');
 });
 
+test('classifyIssue does not trip runtime-observation prose quoted with trailing sentence punctuation inside the quotes (#2529 review)', () => {
+  const result = classifyIssue(
+    {
+      number: 107,
+      title: 't',
+      state: 'OPEN',
+      labels: [],
+      body:
+        'No match exists for "confirmed in production." or "observed ' +
+        'live." or "runtime-observation." anywhere in the docs.',
+    },
+    {
+      issueStateByNumber: new Map(),
+      fetchIssueStateByNumber: () => 'UNRESOLVABLE',
+    },
+  );
+  assert.equal(result.reason, 'orphan');
+});
+
+test('classifyIssue does not trip runtime-observation prose negated after the matched phrase (#2529 review)', () => {
+  const result = classifyIssue(
+    {
+      number: 108,
+      title: 't',
+      state: 'OPEN',
+      labels: [],
+      body: 'Runtime observation is not required before starting this issue.',
+    },
+    {
+      issueStateByNumber: new Map(),
+      fetchIssueStateByNumber: () => 'UNRESOLVABLE',
+    },
+  );
+  assert.equal(result.reason, 'orphan');
+});
+
 test('filterOrphanIssues buckets a runtime-observation precondition under filtered.runtime_observation_precondition (#2467)', async () => {
   const issues = [
     {
