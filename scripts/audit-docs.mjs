@@ -22,11 +22,16 @@ import {
   collectTypeSuppressionViolations,
   globFiles,
   isBannerScopedInstructionTarget,
+  parseGeneratedFromBannerSource,
   renderOkfIndexMarkdownTable,
   resolveGeneratedBlockFiles,
   stripGeneratedFromBanner,
   uniqueSorted,
 } from './consistency-helpers.mjs';
+import {
+  collectDocumentedHelperInvocationFlags,
+  collectHelperFlagDriftViolations,
+} from './helper-flag-drift.mjs';
 import { collectMarkdownLinkAuditViolations } from './markdown-link-audit.mjs';
 
 const root = process.cwd();
@@ -86,6 +91,7 @@ checkTypeSuppressionBudgets(manifest.typeSuppressionBudgets ?? null);
 checkOkfBundles(manifest.okfBundles ?? null);
 checkMarkdownLinkAudit(manifest.markdownLinkAudit ?? null);
 checkConfigInstructionDrift();
+checkHelperFlagDrift();
 checkGeneratedSourcePairs();
 checkEnginesRangeMirrors();
 checkBinExecutableMode();
@@ -620,6 +626,67 @@ function checkConfigInstructionDrift() {
       `${pair.configPath} matches ${pair.overviewPath} command and scope defaults`,
     );
   }
+}
+// Instructions-vs-implementation flag drift (#2477): every fenced
+// `node scripts/<helper>.mjs --flag ...` worked example across the doc
+// corpus must still name a flag the helper's own `--help` output accepts.
+// Helper probing (spawning `--help`) happens here, kept out of the pure
+// collector in helper-flag-drift.mts so it stays unit-testable without a
+// child process. Results are cached per helper since the same helper is
+// typically invoked in many worked examples across the corpus.
+function checkHelperFlagDrift() {
+  const globs = [
+    'docs/**/*.md',
+    'idd-template/**/*.md',
+    '.github/instructions/**/*.md',
+  ];
+  const files = uniqueSorted(
+    globs.flatMap((glob) => globFiles(glob, repoFiles)),
+  ).map((path) => {
+    const text = readText(path);
+    // A generated sync-pair mirror (e.g. .github/instructions/*.md, a
+    // byte-identical copy of its idd-template/ source) carries its own
+    // "idd-generated-from" banner naming that source. uniqueSorted's
+    // lexicographic order scans `.github/instructions/**` before
+    // `idd-template/**`, so without this remap a drift violation would
+    // routinely cite the generated mirror -- editing it is a no-op, since
+    // the next `sync-docs.mjs --apply` overwrites it from the real
+    // source. Attribute the finding to the canonical source instead.
+    const canonicalSource = parseGeneratedFromBannerSource(text);
+    return { path: canonicalSource ?? path, text };
+  });
+  const documented = collectDocumentedHelperInvocationFlags(files);
+  const probeCache = new Map();
+  const probe = (helperPath) => {
+    const cached = probeCache.get(helperPath);
+    if (cached) {
+      return cached;
+    }
+    const exists = repoFiles.includes(helperPath);
+    let output = '';
+    if (exists) {
+      try {
+        output = execFileSync('node', [helperPath, '--help'], {
+          cwd: root,
+          encoding: 'utf8',
+          stdio: ['ignore', 'pipe', 'pipe'],
+        });
+      } catch (error) {
+        // A helper that rejects `--help` (unknown-flag fallback, an
+        // interactive-only tool erroring immediately, ...) still often
+        // prints its usage text before exiting non-zero -- capture
+        // stdout/stderr from the failure rather than treating a non-zero
+        // exit as "no output". execFileSync attaches these to the thrown
+        // error when `encoding` is set.
+        const failure = error;
+        output = `${failure.stdout ?? ''}${failure.stderr ?? ''}`;
+      }
+    }
+    const result = { exists, output };
+    probeCache.set(helperPath, result);
+    return result;
+  };
+  errors.push(...collectHelperFlagDriftViolations(documented, probe));
 }
 function checkEnginesRangeMirrors() {
   // Only applies when this repository's own known mirror set is actually
