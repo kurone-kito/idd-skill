@@ -1907,3 +1907,27 @@ test('--expected-head-sha is rejected without --from-pr (before any gh call)', (
     /--expected-head-sha is only valid together with --from-pr/,
   );
 });
+
+test('--help marks every REQUIRED_FIELDS_BY_TYPE field as required and every deliberately-optional field as bracketed (#2492)', () => {
+  const output = execFileSync(
+    process.execPath,
+    [join(REPO_ROOT, 'scripts/post-idd-marker.mjs'), '--help'],
+    { encoding: 'utf8' },
+  );
+  assert.match(
+    output,
+    /flags in \[brackets\] are optional; every other flag\s*\n\s*listed is required for that type/,
+  );
+  // claim: --supersedes is deliberately optional (renderer-defaulted).
+  assert.match(
+    output,
+    /claim\s+--agent-id --claim-id \[--supersedes] --timestamp --branch/,
+  );
+  // watermark: --max-activity-at / --ci-completed-at are deliberately
+  // optional (renderer-defaulted); --agent-id / --claim-id / --head-sha /
+  // --total-item-count stay unbracketed (required).
+  assert.match(
+    output,
+    /watermark\s+--agent-id --claim-id --head-sha \[--max-activity-at] --total-item-count \[--ci-completed-at]/,
+  );
+});

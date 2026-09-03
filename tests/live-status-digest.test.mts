@@ -1,5 +1,8 @@
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
+import { join } from 'node:path';
 import { test } from 'node:test';
+import { fileURLToPath } from 'node:url';
 // Importing the CLI module directly is only possible now that its top-level
 // statements are guarded behind `import.meta.main`; previously the import
 // parsed process.argv and called process.exit, aborting the test process.
@@ -519,4 +522,32 @@ test('issue-target mode (no expectedLinkedPrs) honors the handoff unconditionall
   );
   assert.equal(summary.activeClaimPresent, true);
   assert.equal(summary.activeClaim?.claimId, PR_TARGET_NEW_CLAIM_ID);
+});
+
+const REPO_ROOT = fileURLToPath(new URL('..', import.meta.url));
+
+test('--help marks every unconditionally-required digest field as required (#2492)', () => {
+  const output = execFileSync(
+    process.execPath,
+    [join(REPO_ROOT, 'scripts/live-status-digest.mjs'), '--help'],
+    { encoding: 'utf8' },
+  );
+  for (const flag of [
+    '--phase <text>',
+    '--claim <text>',
+    '--branch <text>',
+    '--open-blockers <text>',
+    '--next-action <text>',
+    '--authoritative-by <text>',
+  ]) {
+    const line = output
+      .split('\n')
+      .find((candidate) => candidate.includes(flag));
+    assert.ok(line, `--help is missing a line for ${flag}`);
+    assert.match(line, /\(required\)$/);
+  }
+  assert.match(
+    output,
+    /--claim-issue <number>\s+issue carrying the active claim, required for apply mode/,
+  );
 });
