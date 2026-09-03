@@ -28,12 +28,13 @@ Every helper below falls into one of two contract classes:
   where noted); the default invocation always prints what it would do
   without acting.
 
-Per-helper bullets state only what doesn't already follow from its
-class — an additional confirmation step, a narrower evidence scope, an
-unusual flag name — not a restatement of the class itself. Whenever a
-helper cannot complete autonomously, its own bullet documents the
-fallback path beside the helper's invocation, not in this preamble,
-since the fallback differs per helper.
+Going forward, a per-helper bullet should state only what doesn't
+already follow from its class — an additional confirmation step, a
+narrower evidence scope, an unusual flag name — not a restatement of
+the class itself; existing bullets are not retrofitted by this
+preamble. Whenever a helper cannot complete autonomously, its own
+bullet documents the fallback path beside the helper's invocation, not
+in this preamble, since the fallback differs per helper.
 
 **Discover & Claim Phase Helpers (Phase 1):**
 
