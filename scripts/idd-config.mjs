@@ -32,6 +32,8 @@
 // residual up knowingly.
 import { readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
+import { GH_TEXT_LOOP_TIMEOUT_OPTIONS, ghText } from './gh-exec.mjs';
+import { deriveGhHttpStatus } from './gh-http-status.mjs';
 import {
   inspectCritiqueLoopDelegateLayer,
   resolveEffectiveCritiqueLoopDelegate,
@@ -53,6 +55,95 @@ export function loadIddConfig() {
 }
 /** Default `.github/idd/config.json` path, relative to the process cwd. */
 export const DEFAULT_POLICY_CONFIG_PATH = '.github/idd/config.json';
+/**
+ * Build the `gh api` argv that reads `.github/idd/config.json` for
+ * `owner/repo` **at `ref`** via the Contents API, narrowed to `.content`
+ * (base64). `--method GET` is required alongside the `-f ref=...` field:
+ * `gh api` defaults to POST as soon as any `-f` value is present, and the
+ * Contents API only accepts GET -- an unqualified `-f ref=...` here 404s on
+ * every call (confirmed empirically), which {@link loadTrustedIddConfig}'s
+ * own catch block would otherwise silently treat as "config genuinely
+ * absent, use defaults" instead of surfacing the real problem.
+ */
+export function buildIddConfigContentsArgs(owner, repo, ref) {
+  return [
+    'api',
+    `repos/${owner}/${repo}/contents/.github/idd/config.json`,
+    '--method',
+    'GET',
+    '-f',
+    `ref=${ref}`,
+    '--jq',
+    '.content',
+  ];
+}
+/**
+ * Fetch and parse `.github/idd/config.json` for `owner/repo` **at a trusted
+ * `ref`** -- a repository's default branch, or a PR's base branch -- via
+ * the Contents API, instead of a local worktree read. Generalized from
+ * `rerun-advisory-convergence.mts`'s original `loadRemoteIddConfig` (#1434)
+ * so every caller that needs this trust boundary (that file's bot-identity
+ * diagnosis, and `pre-merge-readiness.mts`'s policy-gate resolution, #2373)
+ * shares one fetch-and-classify implementation instead of near-identical
+ * copies.
+ *
+ * `ref` must be a value the PR under evaluation cannot itself steer --
+ * never a PR's own `headSha`, never a local working-tree read. A PR that
+ * could edit the ref this function reads from could edit its own
+ * `.github/idd/config.json` to disguise a bot-triggered run as non-bot, loosen
+ * `ciWait.rerunPolicy`, widen `trustedMarkerActors`, or otherwise weaken any
+ * policy-driven gate that resolves through this function.
+ *
+ * Returns `null` -- falls back to the same documented defaults
+ * {@link loadIddConfig} does for a missing local file -- **only** on a
+ * confirmed 404 (`ref` genuinely has no config committed). Any other
+ * failure -- a permission error, a transient Contents API failure, or
+ * malformed content -- means this function cannot confirm whether `ref`
+ * configures a non-default policy, so silently substituting defaults could
+ * misclassify what the trusted ref actually governs. That ambiguity throws
+ * instead of guessing, rather than proceeding on unconfirmed policy.
+ *
+ * `fetchEncodedConfig` is injectable (default: a real `gh api` call via
+ * {@link ghText}) so a caller like `collectPreMergeReadiness` can pass a
+ * fake in tests without spawning a `gh` process, mirroring
+ * `idd-merge-execute.mts`'s `resolveRemoteSoloCodeownerAdminFallbackMode`.
+ */
+export function loadTrustedIddConfig(
+  owner,
+  repo,
+  ref,
+  fetchEncodedConfig = (fetchOwner, fetchRepo, fetchRef) =>
+    ghText(
+      buildIddConfigContentsArgs(fetchOwner, fetchRepo, fetchRef),
+      GH_TEXT_LOOP_TIMEOUT_OPTIONS,
+    ),
+) {
+  try {
+    const encoded = fetchEncodedConfig(owner, repo, ref);
+    const decoded = Buffer.from(encoded.replace(/\n/g, ''), 'base64').toString(
+      'utf8',
+    );
+    const parsed = JSON.parse(decoded);
+    // A syntactically-valid top-level scalar/array/`null` (`JSON.parse('null')`
+    // succeeds) would otherwise masquerade as this function's own "absent"
+    // sentinel -- the same fail-open gap #1776 fixed for loadPolicyConfig's
+    // local-file read, reopened here via a trusted-ref fetch instead.
+    if (!isPlainObject(parsed)) {
+      throw new Error(
+        `expected a JSON object at the top level, got ${describeJsonValueKind(parsed)}`,
+      );
+    }
+    return parsed;
+  } catch (error) {
+    if (deriveGhHttpStatus(error) === 404) {
+      return null;
+    }
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(
+      `cannot confirm .github/idd/config.json for ${owner}/${repo}@${ref}: this trusted-ref read requires the file to be readable or genuinely absent (404) at this ref, not merely unreadable -- ${message}`,
+    );
+  }
+}
 /**
  * Read and parse a policy config file for the nine `--policy`/`--config`
  * aware helpers (#1721), converging the read-and-parse failure semantics

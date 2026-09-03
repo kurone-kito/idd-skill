@@ -145,16 +145,20 @@ test('normalizeThread maps a ProviderPort review-thread node, including nested c
 // that differ in exactly one field (a review thread's `isResolved`), so a
 // normalizer or collection-wiring regression changes the final verdict.
 //
-// Run with `cwd: <empty temp dir>` (not REPO_ROOT): every policy read in
-// `collectPreMergeReadiness` (`loadIddConfig`, `readForcedHandoffMode`,
-// `readCollaboratorTrustEnabled`, etc.) resolves `.github/idd/config.json`
-// relative to `process.cwd()`, not the script's own location. An empty cwd
-// makes every one of those reads fail closed to schema defaults, which
-// keeps this fixture hermetic (independent of this repository's own live
-// config) and -- since `forcedHandoff.mode` defaults to `disabled` and
-// `collaboratorTrust` defaults to off -- skips the two gh calls that are
-// conditional on those policies, keeping the stub's call inventory to
-// exactly what a default-policy adopter repository would trigger.
+// Run with `cwd: <empty temp dir>` (not REPO_ROOT): every policy-driven
+// gate in `collectPreMergeReadiness` (#2373) resolves `.github/idd/
+// config.json` via a trusted-ref `gh api contents` read (the stub's own
+// `contents/.github/idd/config.json` handler below), never a local
+// worktree file -- an empty `cwd` merely keeps this fixture from
+// accidentally picking up a stray local file, it plays no role in config
+// resolution itself now. The stub's `contents/` catch-all 404s that read
+// by default (schema defaults, same "absent" fail-closed contract as a
+// missing local file used to have), which keeps this fixture hermetic
+// (independent of this repository's own live config) and -- since
+// `forcedHandoff.mode` defaults to `disabled` and `collaboratorTrust`
+// defaults to off -- skips the two gh calls that are conditional on those
+// policies, keeping the stub's call inventory to exactly what a
+// default-policy adopter repository would trigger.
 // ---------------------------------------------------------------------------
 
 const OWNER = 'o';
@@ -191,6 +195,7 @@ function buildStubGhScript(
   options: {
     closingIssuesReferences?: unknown[];
     failOnClaimComments?: boolean;
+    configJson?: string;
   } = {},
 ): string {
   const prView = {
@@ -334,6 +339,11 @@ if (a(0) === 'api' && a(1) === '${`repos/${REPO_REF}/issues/${CLAIM_ISSUE}/comme
 if (a(0) === 'api' && a(1) === 'graphql' && args.join(' ').includes('reviewThreads')) out(${JSON.stringify(JSON.stringify(reviewThreadsPayload))});
 if (a(0) === 'api' && a(1) === 'graphql' && args.join(' ').includes('committedDate')) out(${JSON.stringify(JSON.stringify(reviewsAndHeadCommitPayload))});
 if (a(0) === 'api' && a(1) === '${`repos/${REPO_REF}/pulls/${PR_NUMBER}/files`}') out(${JSON.stringify(ndjson(changedFiles))});
+${
+  options.configJson !== undefined
+    ? `if (a(0) === 'api' && a(1) === '${`repos/${REPO_REF}/contents/.github/idd/config.json`}') out(${JSON.stringify(Buffer.from(options.configJson, 'utf8').toString('base64'))});`
+    : ''
+}
 if (a(0) === 'api' && String(a(1)).startsWith('${`repos/${REPO_REF}/contents/`}')) notFound();
 process.stderr.write('unexpected gh invocation: ' + args.join(' ') + '\\n');
 process.exit(1);
@@ -348,14 +358,16 @@ function runPreMergeReadinessSmoke(
   const cwdRoot = mkdtempSync(join(tmpdir(), 'idd-pre-merge-readiness-cwd-'));
   try {
     const ghPath = join(tempRoot, 'gh');
-    writeFileSync(ghPath, buildStubGhScript(threadResolved));
+    // #2373: `configJson` is served from the stub's own
+    // `contents/.github/idd/config.json` GET response, not a local
+    // `cwdRoot` file -- `collectPreMergeReadiness` now resolves every
+    // policy-driven gate from a trusted-ref Contents API read, never the
+    // PR worktree's own copy.
+    writeFileSync(
+      ghPath,
+      buildStubGhScript(threadResolved, { configJson: options.configJson }),
+    );
     chmodSync(ghPath, 0o755);
-
-    if (options.configJson !== undefined) {
-      const configDir = join(cwdRoot, '.github', 'idd');
-      mkdirSync(configDir, { recursive: true });
-      writeFileSync(join(configDir, 'config.json'), options.configJson);
-    }
 
     const output = execFileSync(
       process.execPath,
@@ -717,6 +729,11 @@ test('collectPreMergeReadiness against a fake provider: unreadable CI governance
         '2026-08-01T00:00:00Z',
       ],
       () => port,
+      // #2373: this file's own "no gh process spawned" contract now also
+      // covers the trusted-ref config read -- stub it to "absent, use
+      // defaults" instead of letting the default loadTrustedIddConfig
+      // spawn a real gh process.
+      () => null,
     );
 
     const ciReport = report.ci as { protectionReadsUnreadable: boolean };
@@ -805,6 +822,9 @@ test('collectPreMergeReadiness against a fake provider: a required check reporti
         '2026-08-01T00:00:00Z',
       ],
       () => port,
+      // #2373: see the sibling "unreadable CI governance" test above for
+      // why this stub is needed to keep "no gh process spawned" true.
+      () => null,
     );
 
     const ciReport = report.ci as {
@@ -895,6 +915,13 @@ test('collectPreMergeReadiness against a fake provider: a matching CODEOWNER res
         '2026-08-01T00:00:00Z',
       ],
       () => port,
+      // #2373: this test strips PATH to force a live-adapter `gh` spawn
+      // to fail (for the CODEOWNER-permission assertion below); without
+      // this stub, the default `loadTrustedIddConfig` would ALSO attempt
+      // a real `gh` spawn for its own config read and throw before
+      // reaching the assertion under test. No fixture cares about config
+      // content here, so this always resolves to "absent, use defaults".
+      () => null,
     );
     const reviewerStates = report.reviewerStates as {
       codeownerSelfApproval: { codeownerEligibilityUnreadable: boolean };
@@ -916,6 +943,172 @@ test('collectPreMergeReadiness against a fake provider: a matching CODEOWNER res
 });
 
 // ---------------------------------------------------------------------------
+// #2373: collectPreMergeReadiness resolves every policy-driven gate from a
+// TRUSTED ref, never the PR branch's own worktree copy of
+// `.github/idd/config.json`. These four tests cover the issue's own
+// acceptance criteria end to end, via the `loadTrustedConfig` seam
+// (collectPreMergeReadiness's 3rd param) rather than a real `gh` process.
+// ---------------------------------------------------------------------------
+
+function buildMinimalFakePort(
+  overrides: {
+    baseRefName?: string;
+    repositoryDefaultBranch?: string | null;
+  } = {},
+) {
+  return createFakeProviderAdapter({
+    changeRequestReadinessSnapshots: {
+      42: {
+        headSha: 'a'.repeat(40),
+        baseRefName: overrides.baseRefName ?? 'main',
+        url: 'https://github.com/o/r/pull/42',
+        authorLogin: 'author-user',
+        reviewDecision: null,
+        statusCheckRollup: [],
+        mergeable: 'MERGEABLE',
+        mergeStateStatus: 'CLEAN',
+        closingIssuesReferences: [],
+      },
+    },
+    branchRules: { 'o/r/main': [] },
+    branchProtection: { 'o/r/main': {} },
+    reviewThreadsWithComments: { 42: [] },
+    reviewsWithHeadCommitDate: {
+      42: { reviews: [], headCommittedAt: '2026-07-31T23:00:00Z' },
+    },
+    repositoryDefaultBranch: overrides.repositoryDefaultBranch ?? 'main',
+  });
+}
+
+function withSandboxCwd<T>(run: () => T): T {
+  const cwdRoot = mkdtempSync(join(tmpdir(), 'idd-pre-merge-trusted-ref-'));
+  const originalCwd = process.cwd();
+  try {
+    process.chdir(cwdRoot);
+    return run();
+  } finally {
+    process.chdir(originalCwd);
+    rmSync(cwdRoot, { recursive: true, force: true });
+  }
+}
+
+test('collectPreMergeReadiness: a PR-branch-local .github/idd/config.json edit does not change developmentBranchTarget (or any other gate) -- only the injected trusted-ref config does', () => {
+  withSandboxCwd(() => {
+    const configDir = join(process.cwd(), '.github', 'idd');
+    mkdirSync(configDir, { recursive: true });
+    // Simulates the PR branch's own worktree copy, edited to widen its own
+    // developmentBranch check against itself -- this must have zero effect.
+    writeFileSync(
+      join(configDir, 'config.json'),
+      JSON.stringify({ developmentBranch: 'attacker-controlled-branch' }),
+    );
+
+    const port = buildMinimalFakePort();
+    const report = collectPreMergeReadiness(
+      [
+        '--pr',
+        '42',
+        '--claimless',
+        '--owner',
+        'o',
+        '--repo',
+        'r',
+        '--now',
+        '2026-08-01T00:00:00Z',
+      ],
+      () => port,
+      () => ({ developmentBranch: 'trusted-dev-branch' }),
+    );
+
+    const developmentBranchTarget = report.developmentBranchTarget as {
+      status: string;
+      branch?: string;
+    };
+    assert.equal(developmentBranchTarget.status, 'configured');
+    assert.equal(developmentBranchTarget.branch, 'trusted-dev-branch');
+  });
+});
+
+test('collectPreMergeReadiness: a confirmed 404 at the trusted ref falls back to documented defaults (developmentBranchTarget resolves to the live default branch)', () => {
+  const port = buildMinimalFakePort({ repositoryDefaultBranch: 'main' });
+  const report = collectPreMergeReadiness(
+    [
+      '--pr',
+      '42',
+      '--claimless',
+      '--owner',
+      'o',
+      '--repo',
+      'r',
+      '--now',
+      '2026-08-01T00:00:00Z',
+    ],
+    () => port,
+    // null == the same "confirmed absent" outcome loadTrustedIddConfig
+    // returns on a real 404.
+    () => null,
+  );
+  const developmentBranchTarget = report.developmentBranchTarget as {
+    status: string;
+    branch?: string;
+  };
+  assert.equal(developmentBranchTarget.status, 'default');
+  assert.equal(developmentBranchTarget.branch, 'main');
+});
+
+test('collectPreMergeReadiness: a non-404 trusted-ref fetch failure aborts the whole readiness collection instead of silently defaulting', () => {
+  const port = buildMinimalFakePort();
+  assert.throws(
+    () =>
+      collectPreMergeReadiness(
+        [
+          '--pr',
+          '42',
+          '--claimless',
+          '--owner',
+          'o',
+          '--repo',
+          'r',
+          '--now',
+          '2026-08-01T00:00:00Z',
+        ],
+        () => port,
+        () => {
+          throw new Error('transient Contents API failure');
+        },
+      ),
+    /transient Contents API failure/,
+  );
+});
+
+test('collectPreMergeReadiness: an empty baseRefName falls back to the repository live default branch as the trusted config ref', () => {
+  const port = buildMinimalFakePort({
+    baseRefName: '',
+    repositoryDefaultBranch: 'trunk',
+  });
+  const seenRefs: string[] = [];
+  collectPreMergeReadiness(
+    [
+      '--pr',
+      '42',
+      '--claimless',
+      '--owner',
+      'o',
+      '--repo',
+      'r',
+      '--now',
+      '2026-08-01T00:00:00Z',
+    ],
+    () => port,
+    (_owner, _repo, ref) => {
+      seenRefs.push(ref);
+      return null;
+    },
+  );
+  assert.deepEqual(seenRefs, ['trunk']);
+});
+
+// ---------------------------------------------------------------------------
 // #2544: secondaryQuietWindow settled-buffer end-to-end wiring. Proves
 // collectPreMergeReadiness's own readAdvisorySecondaryBotLogin() call
 // (pre-merge-readiness.mts) actually reaches buildPreMergeReadinessSummary
@@ -934,17 +1127,15 @@ function runSecondaryQuietWindowFixture(
   const originalCwd = process.cwd();
   try {
     process.chdir(cwdRoot);
-    const configDir = join(cwdRoot, '.github', 'idd');
-    mkdirSync(configDir, { recursive: true });
-    writeFileSync(
-      join(configDir, 'config.json'),
-      JSON.stringify({
-        advisoryWait: {
-          secondaryBotLogin: 'coderabbitai[bot]',
-          secondaryQuietWindow: 'PT1H',
-        },
-      }),
-    );
+    // #2373: fed via the injected loadTrustedConfig param below, not a
+    // local .github/idd/config.json write -- collectPreMergeReadiness no
+    // longer reads the PR worktree's own copy of this file.
+    const trustedConfig = {
+      advisoryWait: {
+        secondaryBotLogin: 'coderabbitai[bot]',
+        secondaryQuietWindow: 'PT1H',
+      },
+    };
 
     const port = createFakeProviderAdapter({
       changeRequestReadinessSnapshots: {
@@ -991,6 +1182,7 @@ function runSecondaryQuietWindowFixture(
         now,
       ],
       () => port,
+      () => trustedConfig,
     );
     return report.secondaryQuietWindow as {
       elapsed: boolean;

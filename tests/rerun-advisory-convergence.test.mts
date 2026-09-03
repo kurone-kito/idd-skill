@@ -4,7 +4,6 @@ import { test } from 'node:test';
 import {
   applyRerunPlan,
   buildCheckRunsForRefArgs,
-  buildIddConfigContentsArgs,
   buildRerunPlanTextSections,
   buildRunViewLogArgs,
   computeRerunPlan,
@@ -1961,46 +1960,9 @@ test('buildCheckRunsForRefArgs places --method immediately before GET (gh api re
   assert.equal(args[methodIndex + 1], 'GET');
 });
 
-// --- buildIddConfigContentsArgs (regression: #1434 review, Codex P2) ----
-//
-// This pure args-builder accepts whatever `ref` its caller passes; the
-// production caller (`collectFromGitHub`, via `loadRemoteIddConfig`)
-// pins it to `resolveDefaultBranch(owner, repo)` -- the repository's
-// TRUSTED default branch, matching the `idd-advisory-convergence`
-// workflow's own trusted checkout -- never the PR's own head SHA. Fetching
-// without pinning `ref` at all reads whichever ref `gh` defaults to,
-// which could as easily be the PR-authored config as the trusted one;
-// pinning to the PR's own head specifically would let a PR redefine its
-// own primaryBotLogin / advisoryBotLogins / ciWait.rerunPolicy to
-// influence its own classification and rerun recommendations (see
-// loadRemoteIddConfig's own doc comment for the full rationale). Same
-// `--method GET` hazard as buildCheckRunsForRefArgs above: `gh api`
-// defaults to POST as soon as any `-f` value is present, and the
-// Contents API only accepts GET -- confirmed empirically that an
-// unqualified `-f ref=...` 404s on every call, which loadRemoteIddConfig's
-// own catch block would otherwise silently treat as "config genuinely
-// absent, use defaults".
-
-test('buildIddConfigContentsArgs includes --method GET and pins -f ref to the given ref value', () => {
-  const args = buildIddConfigContentsArgs('kurone-kito', 'idd-skill', HEAD);
-  assert.deepEqual(args, [
-    'api',
-    'repos/kurone-kito/idd-skill/contents/.github/idd/config.json',
-    '--method',
-    'GET',
-    '-f',
-    `ref=${HEAD}`,
-    '--jq',
-    '.content',
-  ]);
-});
-
-test('buildIddConfigContentsArgs places --method immediately before GET (gh api requires the value to follow its flag)', () => {
-  const args = buildIddConfigContentsArgs('o', 'r', HEAD);
-  const methodIndex = args.indexOf('--method');
-  assert.notEqual(methodIndex, -1);
-  assert.equal(args[methodIndex + 1], 'GET');
-});
+// buildIddConfigContentsArgs now lives in idd-config.mts (#2373, shared
+// with pre-merge-readiness.mts) -- its own tests moved to
+// tests/idd-config.test.mts alongside it.
 
 // --- sanitizeRemoteConfig (regression: Codex P2, #1434 review) ----------
 //
