@@ -130,8 +130,9 @@ export function extractFencedBlocks(text: string): string[][] {
 }
 
 /**
- * Extract every line that falls inside a triple-backtick fenced code block
- * in `text`, across every block, in document order.
+ * Extract every line that falls inside a backtick-fenced code block in
+ * `text` (three or more backticks, see `extractFencedBlocks`), across
+ * every block, in document order.
  */
 export function extractFencedLines(text: string): string[] {
   return extractFencedBlocks(text).flat();

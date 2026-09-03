@@ -22,6 +22,7 @@ import {
   collectTypeSuppressionViolations,
   globFiles,
   isBannerScopedInstructionTarget,
+  parseGeneratedFromBannerSource,
   renderOkfIndexMarkdownTable,
   resolveGeneratedBlockFiles,
   stripGeneratedFromBanner,
@@ -641,7 +642,19 @@ function checkHelperFlagDrift() {
   ];
   const files = uniqueSorted(
     globs.flatMap((glob) => globFiles(glob, repoFiles)),
-  ).map((path) => ({ path, text: readText(path) }));
+  ).map((path) => {
+    const text = readText(path);
+    // A generated sync-pair mirror (e.g. .github/instructions/*.md, a
+    // byte-identical copy of its idd-template/ source) carries its own
+    // "idd-generated-from" banner naming that source. uniqueSorted's
+    // lexicographic order scans `.github/instructions/**` before
+    // `idd-template/**`, so without this remap a drift violation would
+    // routinely cite the generated mirror -- editing it is a no-op, since
+    // the next `sync-docs.mjs --apply` overwrites it from the real
+    // source. Attribute the finding to the canonical source instead.
+    const canonicalSource = parseGeneratedFromBannerSource(text);
+    return { path: canonicalSource ?? path, text };
+  });
   const documented = collectDocumentedHelperInvocationFlags(files);
   const probeCache = new Map();
   const probe = (helperPath) => {
