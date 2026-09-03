@@ -336,6 +336,18 @@ pre-push-validate requirements above. Otherwise treat it as a real
 failure and fix it. See
 [rationale](../../docs/idd-design-rationale.md#b3--local-test-flakiness-under-concurrent-load-hosted-ci-is-authoritative).
 
+**Editing a docs/instructions file**: before editing any `docs/**.md`
+or `.github/instructions/**.md` file, check whether it is a generated
+mirror. A `.github/instructions/**.instructions.md` file carries an
+`idd-generated-from` banner at its top when it is one -- the banner
+itself names the canonical source and the resync command. A
+`docs/**.md` file never carries that banner even when it is a mirror;
+check `audit/sync-manifest.json`'s `syncPairs` for an entry whose
+`target` matches the file path instead. Either signal means edit the
+named canonical `source` and run its resync command there -- an edit
+to the mirror itself is silently discarded on the next sync. See
+[rationale](../../docs/idd-design-rationale.md#b3--edit-the-canonical-source-of-a-generated-docsinstructions-file-not-its-mirror).
+
 If B3 or C must stop for a hold, use the shared Hold / suspend rules in
 `idd-overview-appendix.instructions.md` and update the issue digest with the
 blocking condition before stopping. Do not use the digest as the only
