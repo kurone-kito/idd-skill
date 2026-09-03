@@ -59,6 +59,73 @@ test('extractFencedBlocks keeps each fence as its own array of lines', () => {
   ]);
 });
 
+test('extractFencedBlocks treats a shorter nested backtick run as content, not a delimiter', () => {
+  // The real idd-template/docs/onboarding/issue-mediated-bootstrap.md
+  // shape: a four-backtick fence wraps an illustrative issue-body
+  // template that itself shows a genuine three-backtick `sh` worked
+  // example. A length-agnostic toggle would treat the inner ```sh/```
+  // pair as closing and reopening the outer fence, scrambling everything
+  // after it and skipping the worked example entirely.
+  const text = [
+    '````markdown',
+    'Some prose.',
+    '```sh',
+    'node scripts/idd-onboard.mjs --import --source "$CLONE_DIR"',
+    '```',
+    'More prose after the inner fence, still inside the outer one.',
+    '````',
+    'Real prose outside every fence.',
+  ].join('\n');
+
+  assert.deepEqual(extractFencedBlocks(text), [
+    [
+      'Some prose.',
+      '```sh',
+      'node scripts/idd-onboard.mjs --import --source "$CLONE_DIR"',
+      '```',
+      'More prose after the inner fence, still inside the outer one.',
+    ],
+  ]);
+});
+
+test('collectDocumentedHelperInvocationFlags finds a worked example nested inside a longer outer fence', () => {
+  const documented = collectDocumentedHelperInvocationFlags([
+    {
+      path: 'idd-template/docs/onboarding/issue-mediated-bootstrap.md',
+      text: [
+        '````markdown',
+        'Some prose.',
+        '```sh',
+        'node scripts/idd-onboard.mjs --import \\',
+        '  --source "$CLONE_DIR" --target "$TARGET_REPO"',
+        '```',
+        'More prose.',
+        '````',
+      ].join('\n'),
+    },
+  ]);
+
+  assert.deepEqual(documented, [
+    {
+      helperPath: 'scripts/idd-onboard.mjs',
+      flags: [
+        {
+          flag: '--import',
+          docPath: 'idd-template/docs/onboarding/issue-mediated-bootstrap.md',
+        },
+        {
+          flag: '--source',
+          docPath: 'idd-template/docs/onboarding/issue-mediated-bootstrap.md',
+        },
+        {
+          flag: '--target',
+          docPath: 'idd-template/docs/onboarding/issue-mediated-bootstrap.md',
+        },
+      ],
+    },
+  ]);
+});
+
 // --- extractFlagTokens ---------------------------------------------------
 
 test('extractFlagTokens finds every distinct --flag token in free text', () => {

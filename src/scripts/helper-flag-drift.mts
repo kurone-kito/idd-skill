@@ -66,31 +66,55 @@ const FLAG_TOKEN_PATTERN = /--[a-z][a-z0-9-]*/g;
 // skipped rather than mistaken for a real worked example.
 const NODE_INVOCATION_LINE_PATTERN = /\bnode\s+(scripts\/[\w./-]+\.mjs)\b(.*)$/;
 
+const FENCE_OPEN_PATTERN = /^\s*(`{3,})/;
+const FENCE_CLOSE_ONLY_PATTERN = /^\s*(`{3,})\s*$/;
+
 /**
- * Extract every triple-backtick fenced code block in `text` as its own
- * array of lines (fence delimiter lines excluded), preserving block
- * boundaries so a shell line-continuation join never bridges two
- * unrelated fences. An unterminated trailing fence still counts, matching
- * the same permissive toggle `extractHeadingSlugs` in
- * markdown-link-audit.mts already accepts elsewhere in this audit.
+ * Extract every backtick-fenced code block in `text` as its own array of
+ * lines (fence delimiter lines excluded), preserving block boundaries so a
+ * shell line-continuation join never bridges two unrelated fences.
+ *
+ * Fence length is tracked per CommonMark: a fence opened with N backticks
+ * is closed only by a later line consisting of nothing but M >= N
+ * backticks (optional surrounding whitespace); anything shorter, or
+ * carrying extra content, is literal fence *content*. This matters
+ * concretely in this corpus -- some onboarding templates wrap an
+ * illustrative issue body in a four-backtick fence that itself contains a
+ * genuine ` ```sh ` worked example (e.g.
+ * `idd-template/docs/onboarding/issue-mediated-bootstrap.md`). A
+ * length-agnostic toggle (as `extractHeadingSlugs` in
+ * markdown-link-audit.mts deliberately accepts, since a missed heading
+ * there only widens tolerance) would treat the inner ` ```sh `/` ``` `
+ * pair as closing and reopening the outer fence, both scrambling
+ * everything after it and skipping that worked example entirely -- a
+ * false negative this checker's whole purpose is to avoid. Tilde fences
+ * are out of scope, matching the same precedent: none appear anywhere in
+ * the corpus scanned here.
  */
 export function extractFencedBlocks(text: string): string[][] {
   const blocks: string[][] = [];
   let current: string[] | null = null;
+  let fenceLength = 0;
+
   for (const line of text.split(/\r?\n/)) {
-    if (/^\s*```/.test(line)) {
-      if (current) {
-        blocks.push(current);
-        current = null;
-      } else {
+    if (current === null) {
+      const openMatch = FENCE_OPEN_PATTERN.exec(line);
+      if (openMatch) {
         current = [];
+        fenceLength = openMatch[1].length;
       }
       continue;
     }
-    if (current) {
-      current.push(line);
+
+    const closeMatch = FENCE_CLOSE_ONLY_PATTERN.exec(line);
+    if (closeMatch && closeMatch[1].length >= fenceLength) {
+      blocks.push(current);
+      current = null;
+      continue;
     }
+    current.push(line);
   }
+
   if (current) {
     blocks.push(current);
   }
