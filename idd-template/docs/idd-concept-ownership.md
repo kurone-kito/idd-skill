@@ -87,8 +87,8 @@ matrix's general "who mutates" column above.
 | `review-watermark` / `review-baseline` / `advisory-wait:` / `advisory-wait-recovery:` / `advisory-reroll:` markers | Superseded / minimized as `OUTDATED` | Worker session, after a newer valid marker of the same kind exists for the same claim or HEAD |
 | Claim-marker chain (`claimed-by`/`unclaimed-by`/heartbeat) | Superseded / minimized as `OUTDATED` | Worker session, but **only** the prior claim-id's chain after a verified `supersedes: <prior-id>` takeover — a same-claim heartbeat chain must never be hidden; it is the active-claim audit trail |
 | External-check waiver | Expired, or consumed | Worker session, rerunning the waived check so it reflects the waiver; expiry itself is a time-driven transition (`expiresAt`) that needs no actor |
-| Blocked-by-human label | Removed | Human maintainer only, after resolving the underlying blocker |
-| Needs-decision label | Removed | A later worker session, once a qualifying human decision resolves the hold (`idd-overview-appendix.instructions.md`'s Needs-decision claim-release paragraph); a response that leaves the decision open does not qualify |
+| `status:blocked-by-human` label | Removed | Human maintainer only, after resolving the underlying blocker |
+| `status:needs-decision` label | Removed | A later worker session, once a qualifying human decision resolves the hold (`idd-overview-appendix.instructions.md`'s Needs-decision claim-release paragraph); a response that leaves the decision open does not qualify |
 <!-- dprint-ignore-end -->
 
 No advisory bot ever takes any concept to a terminal state: advisory
