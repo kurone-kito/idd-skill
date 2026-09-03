@@ -238,3 +238,23 @@ test('computeSecondaryAdvisoryReviewSettlement: unconfigured secondaryBotLogin -
   );
   assert.deepEqual(result, { settled: false, settledAt: null });
 });
+
+test('computeSecondaryAdvisoryReviewSettlement: matches REST-raw comments (user.login/created_at/updated_at), not just the normalized shape (Copilot review, #2546)', () => {
+  const result = computeSecondaryAdvisoryReviewSettlement(
+    [
+      {
+        user: { login: 'coderabbitai[bot]' },
+        body: CODERABBIT_SUMMARY,
+        created_at: '2026-09-02T12:05:00Z',
+      },
+    ],
+    {
+      secondaryBotLogin: 'coderabbitai[bot]',
+      headCommittedAt: HEAD_COMMITTED_AT,
+    },
+  );
+  assert.deepEqual(result, {
+    settled: true,
+    settledAt: '2026-09-02T12:05:00Z',
+  });
+});

@@ -2127,6 +2127,13 @@ export function dispositionNamesAdvisoryBot(
 // `classifyRegularBotComment`) already operates purely on top-level PR
 // comments -- `ReviewLike` carries no `body` field in this codebase's
 // model, so a PR review object can never carry the marker text this needs.
+//
+// Falls back to `user.login`/`created_at`/`updated_at` alongside
+// `author.login`/`createdAt`/`updatedAt`, matching every other
+// `CommentLike` reader in this file (Copilot review, #2546): a caller that
+// ever passes REST-raw comments straight through, without the CLI layer's
+// own `normalizeComment` pass, must not silently fail-closed here just
+// because it used the other field-name form.
 export function computeSecondaryAdvisoryReviewSettlement(
   comments: CommentLike[],
   {
@@ -2143,13 +2150,15 @@ export function computeSecondaryAdvisoryReviewSettlement(
   const matches = comments
     .filter(
       (comment) =>
-        advisoryBotIdentityToken(comment.author?.login ?? '') === token,
+        advisoryBotIdentityToken(
+          comment.author?.login ?? comment.user?.login ?? '',
+        ) === token,
     )
     .map((comment) => ({
       body: comment.body ?? '',
       at: effectiveRegularCommentActivityAt({
-        updatedAt: comment.updatedAt,
-        createdAt: String(comment.createdAt ?? ''),
+        updatedAt: comment.updatedAt ?? comment.updated_at,
+        createdAt: String(comment.createdAt ?? comment.created_at ?? ''),
       }),
     }))
     .filter(
