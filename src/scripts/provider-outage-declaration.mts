@@ -30,6 +30,7 @@ import {
   resolveCollaboratorAuthority,
 } from './external-check-waiver.mts';
 import {
+  combineOwnerRepoFlags,
   DEFAULT_GH_PAGINATED_TIMEOUT_MS,
   ghText,
   safeGhText,
@@ -408,6 +409,7 @@ interface ProviderOutageDeclarationArgs {
   targetIssue: number;
   actor: string;
   repo: string;
+  owner: string;
   apply: boolean;
   yes: boolean;
   format: string;
@@ -426,6 +428,7 @@ const PROVIDER_OUTAGE_DECLARATION_FLAG_SPEC = {
   '--target-issue': { type: 'string', default: '' },
   '--actor': { type: 'string', default: '' },
   '--repo': { type: 'string', default: '' },
+  '--owner': { type: 'string', default: '' },
   '--apply': { type: 'boolean', default: false },
   '--yes': { type: 'boolean', default: false },
   '--format': { type: 'string', default: 'json' },
@@ -485,7 +488,12 @@ export function parseArgs(argv: string[]): ProviderOutageDeclarationArgs {
             '--target-issue',
           ),
     actor: (values.actor as string).trim(),
-    repo: (values.repo as string).trim(),
+    repo:
+      combineOwnerRepoFlags({
+        owner: (values.owner as string).trim(),
+        repo: (values.repo as string).trim(),
+      }) ?? '',
+    owner: (values.owner as string).trim(),
     apply: values.apply as boolean,
     yes: values.yes as boolean,
     format,
@@ -896,7 +904,11 @@ Options:
   --head-sha <40-hex>                pull request HEAD SHA (--record-advanced)
   --target-issue <number>           override providerOutage.declarationTarget
   --actor <login>                   override the GitHub actor used for authority evaluation
-  --repo <owner/name>               repository override
+  --repo <owner/name>               repository override, combined form
+  --owner <owner>                   repository override, split form (use
+                                     with --repo <name>, the bare
+                                     repository name -- not both --owner
+                                     and a combined --repo together)
   --apply                           post the canonical marker comment after validation
   --yes                             skip the interactive apply confirmation
   --format <json|text>              output format (default: json)

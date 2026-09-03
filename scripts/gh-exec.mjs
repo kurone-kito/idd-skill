@@ -198,6 +198,54 @@ export function resolveGhApiHostname(env = process.env) {
   return host && host !== 'github.com' ? host : undefined;
 }
 /**
+ * #2454: the majority of `src/scripts/*.mts` accept a split `--owner
+ * <owner> --repo <name>` pair; five scripts (`audit-pr-cleanup.mts`,
+ * `live-status-digest.mts`, `token-cost-harvest.mts`,
+ * `local-validation-evidence.mts`, `provider-outage-declaration.mts`)
+ * instead accept only a combined `--repo <owner>/<name>`. Rewriting the
+ * majority onto the combined form (or vice versa) is out of scope; this
+ * helper lets the five minority scripts accept EITHER form while
+ * changing nothing else about their own resolution pipeline: it folds a
+ * split pair into the single combined string each script's own existing
+ * parser (or default-repo fallback) already consumes, so a caller only
+ * has to route its `--owner`/`--repo` flags through this function once,
+ * immediately after `parseCliArgs`, and every downstream line is
+ * unchanged.
+ *
+ * - Neither flag given → returns `args.repo` unchanged (`undefined` or
+ *   the caller's own empty-string default), so the caller's existing
+ *   default-repo resolution (a `gh repo view` fallback, or a hard
+ *   "--repo is required" error, depending on the script) still runs
+ *   exactly as before.
+ * - Only `--repo` given → returned unchanged, whether it is already the
+ *   combined `owner/name` form (the pre-existing, still-supported case)
+ *   or some other value the caller's own parser will accept or reject.
+ * - Only `--owner` given → combined with `--repo` (which must be the
+ *   bare name, no `/`) into `owner/name`. Throws when `--repo` is
+ *   missing (an owner alone cannot resolve a repository) or already
+ *   contains a `/` (mixing both forms is ambiguous, not a genuine
+ *   split-form name) — a specific, actionable error instead of letting
+ *   a double-prefixed value reach `gh api` and 404 downstream.
+ */
+export function combineOwnerRepoFlags(args) {
+  if (!args.owner) {
+    return args.repo;
+  }
+  if (args.repo?.includes('/')) {
+    throw new Error(
+      `--owner and a combined --repo "${args.repo}" conflict -- pass ` +
+        'either --repo <owner>/<name> alone or --owner <owner> --repo ' +
+        '<name>, not both forms together',
+    );
+  }
+  if (!args.repo) {
+    throw new Error(
+      '--owner requires --repo <name> (the bare repository name)',
+    );
+  }
+  return `${args.owner}/${args.repo}`;
+}
+/**
  * Run `gh api <path>` and parse its output as JSON, optionally paginating
  * (NDJSON-compatible) and/or tolerating specific failure statuses.
  *

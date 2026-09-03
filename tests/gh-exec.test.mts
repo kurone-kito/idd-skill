@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { test } from 'node:test';
 
 import {
+  combineOwnerRepoFlags,
   DEFAULT_GH_PAGINATED_TIMEOUT_MS,
   DEFAULT_GH_TIMEOUT_MS,
   GH_TEXT_LOOP_OPTIONS,
@@ -889,4 +890,60 @@ process.exit(1);
   } finally {
     restore();
   }
+});
+
+// #2454: combineOwnerRepoFlags lets the five combined-only scripts also
+// accept the majority's split --owner/--repo form without changing their
+// own downstream parser/default-resolution pipeline -- it only folds a
+// split pair into the single combined string that pipeline already
+// consumes unchanged.
+test('combineOwnerRepoFlags: neither flag given returns repo unchanged (undefined)', () => {
+  assert.equal(combineOwnerRepoFlags({}), undefined);
+});
+
+test('combineOwnerRepoFlags: neither flag given returns repo unchanged (empty-string default)', () => {
+  // Mirrors token-cost-harvest.mts / local-validation-evidence.mts /
+  // provider-outage-declaration.mts's own `{ type: 'string', default: '' }`
+  // CLI spec -- their existing "neither given" behavior (a required-flag
+  // error, or a gh-view fallback) must see this same empty string.
+  assert.equal(combineOwnerRepoFlags({ repo: '' }), '');
+});
+
+test('combineOwnerRepoFlags: combined form (--repo owner/name alone) is returned unchanged', () => {
+  assert.equal(
+    combineOwnerRepoFlags({ repo: 'kurone-kito/idd-skill' }),
+    'kurone-kito/idd-skill',
+  );
+});
+
+test('combineOwnerRepoFlags: split form (--owner + bare --repo) combines into owner/name', () => {
+  assert.equal(
+    combineOwnerRepoFlags({ owner: 'kurone-kito', repo: 'idd-skill' }),
+    'kurone-kito/idd-skill',
+  );
+});
+
+test('combineOwnerRepoFlags: --owner with a slash-containing --repo throws a specific conflict error', () => {
+  assert.throws(
+    () =>
+      combineOwnerRepoFlags({
+        owner: 'kurone-kito',
+        repo: 'kurone-kito/idd-skill',
+      }),
+    /--owner and a combined --repo "kurone-kito\/idd-skill" conflict/,
+  );
+});
+
+test('combineOwnerRepoFlags: --owner without --repo throws (an owner alone cannot resolve a repository)', () => {
+  assert.throws(
+    () => combineOwnerRepoFlags({ owner: 'kurone-kito' }),
+    /--owner requires --repo <name>/,
+  );
+});
+
+test('combineOwnerRepoFlags: --owner with an empty-string --repo throws the same missing-repo error', () => {
+  assert.throws(
+    () => combineOwnerRepoFlags({ owner: 'kurone-kito', repo: '' }),
+    /--owner requires --repo <name>/,
+  );
 });

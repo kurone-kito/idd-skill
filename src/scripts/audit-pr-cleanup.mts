@@ -16,7 +16,7 @@ import {
   readForcedHandoffAuthorityPolicy,
   readForcedHandoffMode,
 } from './collaborator-permission.mts';
-import { ghText } from './gh-exec.mts';
+import { combineOwnerRepoFlags, ghText } from './gh-exec.mts';
 import { resolveCollaboratorMarkerTrust } from './policy-helpers.mts';
 import type { ClaimValidationSummary } from './protocol-helpers.mts';
 import {
@@ -195,6 +195,7 @@ export interface CleanupArgs {
   pr?: string;
   prs?: string;
   repo?: string;
+  owner?: string;
   dryRun?: boolean;
   apply?: boolean;
   claimIssue?: string;
@@ -222,6 +223,7 @@ const AUDIT_PR_CLEANUP_FLAG_SPEC = {
   '--pr': { type: 'string' },
   '--prs': { type: 'string' },
   '--repo': { type: 'string' },
+  '--owner': { type: 'string' },
   '--dry-run': { type: 'boolean', default: false },
   '--apply': { type: 'boolean', default: false },
   '--format': { type: 'string', default: 'json' },
@@ -313,7 +315,12 @@ async function main(): Promise<void> {
 
   assertBatchApplyClaimScope(args);
 
-  const repository = args.repo ?? detectRepository();
+  let repository: string;
+  try {
+    repository = combineOwnerRepoFlags(args) ?? detectRepository();
+  } catch (error) {
+    fail((error as Error).message);
+  }
   const [owner, repo] = parseRepository(repository);
 
   const prNumbers = parsePrNumbers(args);
@@ -1985,6 +1992,7 @@ function parseArgs(argv: string[]): CleanupArgs {
   const pr = requireNonEmpty(values.pr as string | undefined, '--pr');
   const prs = requireNonEmpty(values.prs as string | undefined, '--prs');
   const repo = requireNonEmpty(values.repo as string | undefined, '--repo');
+  const owner = requireNonEmpty(values.owner as string | undefined, '--owner');
   const format = requireNonEmpty(values.format as string, '--format') as string;
   if (!['json', 'table'].includes(format)) {
     fail('--format must be json or table');
@@ -2008,6 +2016,7 @@ function parseArgs(argv: string[]): CleanupArgs {
     pr,
     prs,
     repo,
+    owner,
     dryRun: values['dry-run'] as boolean,
     apply: values.apply as boolean,
     claimIssue,
@@ -2039,7 +2048,11 @@ Options:
   --claim-id <id>                   active claim id required for apply mode
   --agent-id <id>                   optionally require this claim agent id
   --skip-claim-check                explicit maintainer override for apply mode
-  --repo <owner/name>               repository override
+  --repo <owner/name>               repository override, combined form
+  --owner <owner>                   repository override, split form (use
+                                     with --repo <name>, the bare
+                                     repository name -- not both --owner
+                                     and a combined --repo together)
   --format <json|table>             output format (default: json)
   --help                            show this help
 
