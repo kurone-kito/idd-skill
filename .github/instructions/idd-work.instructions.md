@@ -212,18 +212,18 @@ directory on every later command — see
 
 ### Already inside a host-isolated worktree
 
-If this agent's own execution environment is already a host-isolated
-worktree from the harness or orchestrator, the "primary worktree"
-concept above does not apply — there is no separate worktree to manage
-or return to. Skip Worktree creation; run **install-deps** and verify
+If this agent's own environment is already a host-isolated worktree
+from the harness or orchestrator, "primary worktree" above does not
+apply: there is no separate worktree to manage or return to. Skip
+Worktree creation; run **install-deps** and verify
 `git rev-parse --abbrev-ref HEAD` returns the claimed
 `issue/<number>-<slug>` branch as the substitute for the B1
-self-check.
+self-check. On a mismatch, post a hold note and stop for the harness
+or orchestrator — never remove or recreate this checkout.
 
 At F4, skip the primary-worktree fetch/switch/merge and `git worktree
-remove` steps — this session cannot remove its own checkout. Let the
-harness reclaim it instead, and still complete every other F4 step
-(issue close, digest, comment cleanup).
+remove` steps; let the harness reclaim it and finish the rest (issue
+close, digest, comment cleanup).
 
 ## B2 — Create and refine plan
 
