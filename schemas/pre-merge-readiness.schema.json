@@ -1528,7 +1528,7 @@
         "elapsedMinutes": {
           "type": ["integer", "null"],
           "minimum": 0,
-          "description": "Whole minutes elapsed from anchorAt to now, or null when the window is off, anchorAt is invalid/absent, or now failed to parse."
+          "description": "Whole minutes elapsed from anchorAt to now, or null when the window is off, declined is true (anchorAt is the literal 'declined', not a timestamp), anchorAt is otherwise invalid/absent, or now failed to parse."
         },
         "elapsed": {
           "type": "boolean",

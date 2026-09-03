@@ -2136,8 +2136,9 @@ export function dispositionNamesAdvisoryBot(
 // Only the single latest matching comment is examined -- a notice posted
 // BEFORE a later genuine comment (rate-limited, then recovered) reports
 // `settled: true`, not `declined`, while a notice posted AFTER the latest
-// genuine comment (mid-retry) reports `declined: true`, purely as a side
-// effect of always picking the latest.
+// genuine comment reports `declined: true` as a fresh, terminal decline
+// for this HEAD -- not "might still produce another review" -- purely as
+// a side effect of always picking the latest.
 //
 // Deliberately reuses `comments` only, not `reviews`: this file's existing
 // notice-vs-genuine classification for the secondary bot

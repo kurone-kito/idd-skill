@@ -200,7 +200,7 @@ test('computeSecondaryAdvisoryReviewSettlement: genuine review BEFORE HEAD (stal
   });
 });
 
-test('computeSecondaryAdvisoryReviewSettlement: notice AFTER the latest genuine review -> declined (mid-retry)', () => {
+test('computeSecondaryAdvisoryReviewSettlement: notice AFTER the latest genuine review -> declined (fresh decline, not a still-pending retry)', () => {
   const result = computeSecondaryAdvisoryReviewSettlement(
     [
       comment('coderabbitai[bot]', CODERABBIT_SUMMARY, '2026-09-02T12:05:00Z'),
