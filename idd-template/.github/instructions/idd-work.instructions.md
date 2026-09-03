@@ -201,7 +201,8 @@ misplaced branch (after confirming no work is lost) and recreating the
 sibling worktree through the Worktree creation steps above.
 
 If WorkTrunk reports its `shell integration installed but not active`
-diagnostic, re-verify cwd on every later command — see
+diagnostic, re-verify the current working directory on every later
+command — see
 [rationale](../../docs/idd-design-rationale.md#worktrunk-cwd-caveat).
 
 ## B2 — Create and refine plan
