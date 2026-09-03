@@ -3716,6 +3716,97 @@ test('disposition evidence carries a re-posted CodeRabbit rate-limit notice forw
   assert.equal(summary.blockingCount, 0);
 });
 
+// #2475 — a single trusted disposition reply that names TWO different advisory
+// bots in one span (against convention, but structurally valid per
+// `dispositionNamesAdvisoryBot`'s own "still matches each of them" contract)
+// must credit BOTH bots' notices, not just the alphabetically-first bot login.
+// Regression for a reported bug where `matchTrustedAdvisoryStickyDispositions`
+// shared one `consumedDispositionIndexes` set across every bot login, so the
+// second bot's notice was left stranded once the shared disposition was
+// consumed while matching the first (alphabetically-first) bot it processed.
+test('disposition evidence credits both bots when one trusted reply names both by login', () => {
+  const summary = summarizeDispositionEvidenceForGate(
+    {
+      comments: [
+        {
+          id: 1,
+          createdAt: '2026-05-12T00:00:00Z',
+          body: 'You have reached your Codex usage limits for code reviews.',
+          author: { login: 'chatgpt-codex-connector[bot]' },
+        },
+        {
+          id: 2,
+          createdAt: '2026-05-12T00:00:10Z',
+          body: '<!-- This is an auto-generated comment: summarize by coderabbit.ai -->\n<!-- This is an auto-generated comment: rate limited by coderabbit.ai -->\n\n> [!WARNING]\n> ## Review limit reached\n>\n> `@kurone-kito`, we could not start this review because the limit was reached.',
+          author: { login: 'coderabbitai[bot]' },
+        },
+        {
+          id: 3,
+          createdAt: '2026-05-12T00:00:30Z',
+          body: '**Rejected** — chatgpt-codex-connector[bot] and coderabbitai[bot] did not review HEAD abc1234 (rate limited); this is not a completed review',
+          author: { login: 'trusted-second-session' },
+        },
+      ],
+      threads: [],
+    },
+    {
+      advisoryBotLogins: ['chatgpt-codex-connector[bot]', 'coderabbitai[bot]'],
+      trustedMarkerLogins: ['trusted-second-session'],
+    },
+  );
+
+  assert.equal(summary.route, 'proceed');
+  assert.equal(summary.blockingCount, 0);
+  assert.equal(summary.missingRegularCommentCount, 0);
+  assert.deepEqual(summary.missingRegularComments, []);
+});
+
+// #2475 — the same multi-bot-naming bug also existed in the separate #1018
+// notice carry-forward loop (the ordinary IDD-agent-authored disposition
+// path, more common in practice than the trusted-machine-disposition path
+// above): a single IDD-agent reply naming two configured bots must carry
+// both bots' notices forward, not just the alphabetically-first bot. Uses a
+// CodeRabbit notice body WITHOUT the `summarize by coderabbit.ai` marker
+// (only the `rate limited by coderabbit.ai` one) to avoid a separate,
+// unrelated carry-forward path (`classifyRegularBotComment`'s
+// summary-marker recognition) that would otherwise mask this bug.
+test('disposition evidence carries both notices forward when one agent reply names both bots', () => {
+  const summary = summarizeDispositionEvidenceForGate(
+    {
+      comments: [
+        {
+          id: 1,
+          createdAt: '2026-05-12T00:00:00Z',
+          body: 'You have reached your Codex usage limits for code reviews.',
+          author: { login: 'chatgpt-codex-connector[bot]' },
+        },
+        {
+          id: 2,
+          createdAt: '2026-05-12T00:00:10Z',
+          body: '<!-- This is an auto-generated comment: rate limited by coderabbit.ai -->\n\n> [!WARNING]\n> ## Review limit reached\n>\n> `@kurone-kito`, we could not start this review because the limit was reached.',
+          author: { login: 'coderabbitai[bot]' },
+        },
+        {
+          id: 3,
+          createdAt: '2026-05-12T00:00:30Z',
+          body: '**Rejected** — chatgpt-codex-connector[bot] and coderabbitai[bot] did not review HEAD abc1234 (rate limited); this is not a completed review',
+          author: { login: 'idd-bot' },
+        },
+      ],
+      threads: [],
+    },
+    {
+      iddAgentLogins: ['idd-bot'],
+      advisoryBotLogins: ['chatgpt-codex-connector[bot]', 'coderabbitai[bot]'],
+    },
+  );
+
+  assert.equal(summary.route, 'proceed');
+  assert.equal(summary.blockingCount, 0);
+  assert.equal(summary.missingRegularCommentCount, 0);
+  assert.deepEqual(summary.missingRegularComments, []);
+});
+
 // No regression: when the bot later replaces the notice with a real review of
 // the current HEAD, the carry-forward does not fire and a fresh disposition is
 // still required.
