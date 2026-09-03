@@ -440,10 +440,10 @@ confirmed condition above. Delegate polling mechanics to
   the waiver (a pre-existing F2/F3 concern this branch leaves unchanged;
   see `idd-pre-merge.instructions.md`'s External-check waivers). A
   waiver is effective only once `deadline.passed` is true or
-  `terminal.state` reaches `COPILOT_UNAVAILABLE` (check both top-level
-  fields in the same run's output); posted earlier, it is valid but
-  inert — mechanically the same as no waiver until then. Absent a
-  waiver, or with one still inert, exit CI-wait and proceed directly to
+  `terminal.state` reaches `COPILOT_UNAVAILABLE` (check both fields in
+  the same run's output); posted earlier, it is valid but inert —
+  mechanically the same as no waiver until then. Absent a waiver, or
+  with one still inert, exit CI-wait and proceed directly to
   `idd-review-snapshot.instructions.md` (E1) instead, matching the phase
   routing table's "PR open, CI running, reviews exist" row. This does
   not relax the merge gate — the check stays required, and F2
