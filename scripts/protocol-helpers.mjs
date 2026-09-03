@@ -1350,6 +1350,73 @@ export function dispositionNamesAdvisoryBot(
   }
   return span.toLowerCase().includes(token);
 }
+// #2544: true when the configured secondary advisory bot has already
+// posted a genuine (non-notice) comment for the CURRENT HEAD -- i.e. the
+// `secondaryQuietWindow` gate's original #2335 "might still be mid-review"
+// concern no longer applies to this specific HEAD, only the narrower
+// "second/later finding" risk #2335 was also chartered to protect
+// (`buildSecondaryQuietWindowStatus`'s settled-buffer branch,
+// advisory-wait-policy.mts).
+//
+// Every ambiguity resolves to `settled: false` -- the same fail-closed
+// direction #2335 already relies on: no comment from the bot at or after
+// `headCommittedAt`, an unparseable `headCommittedAt`/unconfigured
+// `secondaryBotLogin`, or the LATEST such comment being a rate-limit /
+// skip-review notice (`isAdvisoryNonReviewNotice`), all report
+// `settled: false`. Only the single latest matching comment is examined --
+// a notice posted BEFORE a later genuine comment (rate-limited, then
+// recovered) does not defeat settlement, while a notice posted AFTER the
+// latest genuine comment (mid-retry) does, purely as a side effect of
+// always picking the latest.
+//
+// Deliberately reuses `comments` only, not `reviews`: this file's existing
+// notice-vs-genuine classification for the secondary bot
+// (`isAdvisoryNonReviewNotice`, `isReviewSummaryComment`,
+// `classifyRegularBotComment`) already operates purely on top-level PR
+// comments -- `ReviewLike` carries no `body` field in this codebase's
+// model, so a PR review object can never carry the marker text this needs.
+//
+// Falls back to `user.login`/`created_at`/`updated_at` alongside
+// `author.login`/`createdAt`/`updatedAt`, matching every other
+// `CommentLike` reader in this file (Copilot review, #2546): a caller that
+// ever passes REST-raw comments straight through, without the CLI layer's
+// own `normalizeComment` pass, must not silently fail-closed here just
+// because it used the other field-name form.
+export function computeSecondaryAdvisoryReviewSettlement(
+  comments,
+  { secondaryBotLogin, headCommittedAt },
+) {
+  const token = advisoryBotIdentityToken(secondaryBotLogin);
+  const headAt = String(headCommittedAt ?? '');
+  if (!token || !isValidIsoTimestamp(headAt)) {
+    return { settled: false, settledAt: null };
+  }
+  const matches = comments
+    .filter(
+      (comment) =>
+        advisoryBotIdentityToken(
+          comment.author?.login ?? comment.user?.login ?? '',
+        ) === token,
+    )
+    .map((comment) => ({
+      body: comment.body ?? '',
+      at: effectiveRegularCommentActivityAt({
+        updatedAt: comment.updatedAt ?? comment.updated_at,
+        createdAt: String(comment.createdAt ?? comment.created_at ?? ''),
+      }),
+    }))
+    .filter(
+      (entry) =>
+        isValidIsoTimestamp(entry.at) &&
+        compareIsoTimestamps(entry.at, headAt) >= 0,
+    )
+    .sort((left, right) => compareIsoTimestamps(left.at, right.at));
+  const latest = matches[matches.length - 1];
+  if (!latest || isAdvisoryNonReviewNotice(latest.body)) {
+    return { settled: false, settledAt: null };
+  }
+  return { settled: true, settledAt: latest.at };
+}
 // #1182 Match trusted machine advisory dispositions to the advisory-bot stickies
 // they address, so a disposition posted by a trusted-marker actor who is NOT a
 // resolved IDD agent (e.g. a second trusted session) is honored without being
@@ -5461,14 +5528,33 @@ export function buildPreMergeReadinessSummary(
       dispositionAuthorLogins: iddAgentLogins,
     },
   );
+  // #2544: whether the configured secondary bot has already posted a
+  // genuine (non-notice) comment for the CURRENT HEAD -- reuses
+  // `options.advisoryConvergenceHeadCommittedAt` (the HEAD commit's own
+  // `committedDate`, already resolved by the caller for the unrelated
+  // advisory-convergence-deadline precondition below) rather than a second
+  // fetch, since it is exactly "when did this HEAD land" either way.
+  const secondaryBotLogin = String(options.secondaryBotLogin ?? '')
+    .trim()
+    .toLowerCase();
+  const secondaryReviewSettlement = secondaryBotLogin
+    ? computeSecondaryAdvisoryReviewSettlement(comments, {
+        secondaryBotLogin,
+        headCommittedAt: options.advisoryConvergenceHeadCommittedAt,
+      })
+    : { settled: false, settledAt: null };
   // #2335: stateless secondary-quiet-window gate, anchored on the same
   // non-ack-only activity ceiling `liveSnapshot.effective` already computes
   // for the review-currency ack-only carve-out below -- see
   // `buildSecondaryQuietWindowStatus`'s own doc comment for why this anchor
   // needs no separate persisted "convergence first observed" timestamp.
+  // #2544: `secondaryBotSettledAt` shortens the required wait to a settled
+  // buffer once that evidence exists; see `computeSecondaryAdvisoryReviewSettlement`
+  // above for how it is derived.
   const secondaryQuietWindow = buildSecondaryQuietWindowStatus({
     minutes: options.secondaryQuietWindowMinutes,
     effectiveMaxActivityUpdatedAt: liveSnapshot.effective?.maxActivityUpdatedAt,
+    secondaryBotSettledAt: secondaryReviewSettlement.settledAt,
     now,
   });
   const isTrustedWatermarkAuthor = (login) =>

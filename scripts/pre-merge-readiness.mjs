@@ -10,6 +10,7 @@ import {
   readAdvisoryConvergenceDeadlineMinutes,
   readAdvisoryPrimaryBotLogin,
   readAdvisoryRecoveryCycleCap,
+  readAdvisorySecondaryBotLogin,
   readAdvisorySecondaryQuietWindowMinutes,
   readAdvisoryTerminalWindowMinutes,
   readAdvisoryWaitPolicy,
@@ -434,6 +435,7 @@ export function collectPreMergeReadiness(
   const advisoryConvergenceDeadlineMinutes =
     readAdvisoryConvergenceDeadlineMinutes();
   const secondaryQuietWindowMinutes = readAdvisorySecondaryQuietWindowMinutes();
+  const secondaryBotLogin = readAdvisorySecondaryBotLogin();
   // #1570: precompute the `#1572` terminal Copilot-unavailability verdict
   // here (the CLI/orchestration layer) rather than inside
   // `buildPreMergeReadinessSummary` (protocol-helpers.mts), which cannot
@@ -555,6 +557,7 @@ export function collectPreMergeReadiness(
       advisoryConvergenceHeadCommittedAt,
       advisoryConvergenceDeadlineMinutes,
       secondaryQuietWindowMinutes,
+      secondaryBotLogin,
       waivableCheckSelectors,
       externalCheckWaiverMaxValidity,
       externalCheckWaiverMode,

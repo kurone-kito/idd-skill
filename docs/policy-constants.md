@@ -241,7 +241,12 @@ computes, so it needs no separately persisted timestamp: a genuinely
 unresolved item keeps the anchor fresh, and a disposition reply, a
 watermark, or a courtesy bot ack never reopens it. Distinct from
 `settledWindow`, which bounds the PRIMARY bot's own pending state, not a
-late secondary-bot arrival.
+late secondary-bot arrival. **#2544**: once the secondary bot has already
+posted a genuine (non-notice) review for the current HEAD, the gate no
+longer requires the full configured duration -- only a short, fixed
+confirmation buffer applies from that review's own timestamp, so the wait
+stays a fallback for a genuinely unreviewed HEAD rather than a fixed tax on
+every merge.
 `advisoryWait.exemptBotAuthoredPrs` (#1906) is an opt-in, off-by-default
 flag effective only under `advisoryWait.convergenceScope: "all-prs"`. When
 `true`, a PR whose author resolves to a GitHub Bot-typed account AND has no
