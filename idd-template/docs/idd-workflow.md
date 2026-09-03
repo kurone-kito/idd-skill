@@ -837,6 +837,11 @@ helper-generated comment is the auditable authorization surface because
 self-approval cannot express the required claim, head, check, and expiry
 proof.
 
+A waiver posted before its own effectiveness precondition is met is
+valid but inert until then; see
+[`idd-pr-submit.instructions.md`'s D4](../.github/instructions/idd-pr-submit.instructions.md)
+for the mechanical check.
+
 ## Optional helper scripts
 
 The idd-skill source repository that ships this template currently includes the

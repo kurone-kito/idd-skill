@@ -246,7 +246,9 @@ nonce was recorded for the active claim.
   threads, unreplied comments, required reviews, disposition evidence,
   or claim ownership. Non-empty `waiverEvidence.wrongHead`, `wrongClaim`,
   `unauthorized`, `expired`, or `malformed` are suspicious context, never
-  valid permissions.
+  valid permissions. A waiver posted before its own effectiveness
+  precondition is met is valid but inert until then — see
+  `idd-pr-submit.instructions.md`'s D4 for the mechanical check.
 
   **Local validation evidence** (#2323): `pre-merge-readiness`'s
   `localValidationEvidence` field reports whether HEAD-pinned local
