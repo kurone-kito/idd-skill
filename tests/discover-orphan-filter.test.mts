@@ -1078,6 +1078,136 @@ test('filterOrphanIssues keeps a closed Depends-on reference as an orphan candid
   assert.equal(result.orphans[0].reason, 'blocked_references_closed');
 });
 
+test('classifyIssue routes runtime/production-observation prose to runtime_observation_precondition (#2467)', () => {
+  const cases = [
+    'Do this only after the prior fix has merged and is confirmed to take effect in production.',
+    'Start once the previous change has been observed live for a day.',
+    'This requires runtime-observation of the fix before starting the next issue.',
+    'This requires runtime observation of the fix before starting the next issue.',
+  ];
+
+  for (const body of cases) {
+    const result = classifyIssue(
+      { number: 100, title: 't', state: 'OPEN', labels: [], body },
+      {
+        issueStateByNumber: new Map(),
+        fetchIssueStateByNumber: () => 'UNRESOLVABLE',
+      },
+    );
+    assert.equal(result.reason, 'runtime_observation_precondition', body);
+  }
+});
+
+test('classifyIssue keeps a runtime-observation precondition blocking even once every numbered reference has closed (#2467)', () => {
+  const result = classifyIssue(
+    {
+      number: 101,
+      title: 't',
+      state: 'OPEN',
+      labels: [],
+      body: 'Blocked by #94. Also confirm this is observed live before starting.',
+    },
+    {
+      issueStateByNumber: new Map([[94, 'CLOSED']]),
+      fetchIssueStateByNumber: () => 'UNRESOLVABLE',
+    },
+  );
+  assert.equal(result.reason, 'runtime_observation_precondition');
+});
+
+test("classifyIssue does not trip runtime-observation prose quoted as a term, matching this feature's own motivating issue (#2467)", () => {
+  const result = classifyIssue(
+    {
+      number: 102,
+      title: 't',
+      state: 'OPEN',
+      labels: [],
+      body:
+        'No match exists for "confirm(ed) in production" / "observed live" / ' +
+        '"runtime-observation" or any prose-blocker-class concept anywhere ' +
+        'in idd-discover.instructions.md or docs/*.md.',
+    },
+    {
+      issueStateByNumber: new Map(),
+      fetchIssueStateByNumber: () => 'UNRESOLVABLE',
+    },
+  );
+  assert.equal(result.reason, 'orphan');
+});
+
+test('classifyIssue does not trip runtime-observation prose negated in the same clause (#2467)', () => {
+  const result = classifyIssue(
+    {
+      number: 103,
+      title: 't',
+      state: 'OPEN',
+      labels: [],
+      body:
+        'This can start immediately; it does not need to be confirmed in ' +
+        'production first.',
+    },
+    {
+      issueStateByNumber: new Map(),
+      fetchIssueStateByNumber: () => 'UNRESOLVABLE',
+    },
+  );
+  assert.equal(result.reason, 'orphan');
+});
+
+test('classifyIssue does not trip runtime-observation prose inside a code region (#2467)', () => {
+  const fenced = classifyIssue(
+    {
+      number: 104,
+      title: 't',
+      state: 'OPEN',
+      labels: [],
+      body: 'See the example:\n\n```\nconfirmed in production\n```\n',
+    },
+    {
+      issueStateByNumber: new Map(),
+      fetchIssueStateByNumber: () => 'UNRESOLVABLE',
+    },
+  );
+  assert.equal(fenced.reason, 'orphan');
+
+  const inline = classifyIssue(
+    {
+      number: 105,
+      title: 't',
+      state: 'OPEN',
+      labels: [],
+      body: 'The trigger phrase is `confirmed in production` in our docs.',
+    },
+    {
+      issueStateByNumber: new Map(),
+      fetchIssueStateByNumber: () => 'UNRESOLVABLE',
+    },
+  );
+  assert.equal(inline.reason, 'orphan');
+});
+
+test('filterOrphanIssues buckets a runtime-observation precondition under filtered.runtime_observation_precondition (#2467)', async () => {
+  const issues = [
+    {
+      number: 106,
+      title: 'gated follow-up',
+      state: 'OPEN',
+      labels: [],
+      body: 'Start only after the fix is confirmed in production.',
+      url: 'https://example.com/106',
+    },
+  ];
+
+  const result = await filterOrphanIssues(issues, {
+    issueStateByNumber: new Map(),
+    fetchIssueStateByNumber: () => 'UNRESOLVABLE',
+  });
+
+  assert.equal(result.orphans.length, 0);
+  assert.equal(result.filtered.runtime_observation_precondition.length, 1);
+  assert.equal(result.filtered.runtime_observation_precondition[0].number, 106);
+});
+
 // #1721: discover-orphan-filter was one of three helpers that silently
 // swallowed every --policy load failure into `{}` (fail-open), including
 // an explicitly-supplied path. It now routes through idd-config.mts's

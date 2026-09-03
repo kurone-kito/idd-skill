@@ -26,6 +26,7 @@ import {
 } from './discover-roadmap-graph.mjs';
 import { effortOrdinal, parseEffort } from './effort.mjs';
 import { loadPolicyConfig } from './idd-config.mjs';
+import { stripMarkdownCodeRegions } from './markdown-code.mjs';
 import { createMarkerRegex } from './marker-regex.mjs';
 import { normalizePolicyConfig, POLICY_DEFAULTS } from './policy-helpers.mjs';
 import {
@@ -34,6 +35,26 @@ import {
 } from './provider-adapter-github.mjs';
 
 const DEFAULT_MARKER_PREFIX = 'idd-skill';
+// A runtime/production-observation precondition (#2467) carries no
+// issue-number reference, so neither the marker checks above nor the
+// numbered-reference resolution below ever see it -- a follow-up gated by
+// "confirmed in production" / "observed live" / "runtime-observation" reads
+// as a plain orphan once its linked code dependency merges. Kept narrow
+// (three phrasings plus tense variants) rather than a broad "wait/deploy"
+// vocabulary: a false positive here permanently exiles a startable issue
+// from the discover pool, while a false negative only preserves today's
+// behavior.
+const RUNTIME_OBSERVATION_PATTERNS = [
+  /\bconfirm(?:ed|ing)?\s+(?:to\s+take\s+effect\s+)?in\s+production\b/gi,
+  /\bobserv(?:ed|ing)?\s+live\b/gi,
+  /\bruntime[- ]observation\b/gi,
+];
+const NEGATION_CUE_PATTERN =
+  /\b(?:not|never|without|isn't|is not|doesn't|does not|don't|do not|won't|will not|no need|needn't)\b/i;
+const NEGATION_CUE_WINDOW = 40;
+const NEGATION_HARD_BREAK_PATTERN = /[.;\n]|--|—/g;
+const OPEN_QUOTE_CHARS = new Set(['"', "'", '“', '‘']);
+const CLOSE_QUOTE_CHARS = new Set(['"', "'", '”', '’']);
 if (import.meta.main) {
   await runCli();
 }
@@ -47,6 +68,58 @@ if (import.meta.main) {
  */
 export function extractBlockedByReferences(body) {
   return extractBlockedByIssueNumbers(String(body ?? ''));
+}
+// A negation ("does not need to be confirmed in production") within the
+// same clause turns the match into the opposite of a precondition -- scoped
+// to the nearest hard clause break so a negation cue from an earlier,
+// unrelated sentence cannot suppress a genuine match (mirrors
+// `AVOIDANCE_CUE_WINDOW`'s clause-scoping in `discover-viability-gate.mts`).
+function hasNegationCueBefore(text, matchIndex) {
+  const windowStart = Math.max(0, matchIndex - NEGATION_CUE_WINDOW);
+  const window = text.slice(windowStart, matchIndex);
+  const breaks = [...window.matchAll(NEGATION_HARD_BREAK_PATTERN)];
+  const lastBreak = breaks.at(-1);
+  const scoped = lastBreak
+    ? window.slice(lastBreak.index + lastBreak[0].length)
+    : window;
+  return NEGATION_CUE_PATTERN.test(scoped);
+}
+// A phrase quoted as a term being discussed (e.g. this function's own
+// motivating issue, which names the trigger phrases inside straight double
+// quotes) is meta-discussion, not an asserted precondition on THIS issue.
+function isQuotedMatch(text, start, end) {
+  const before = text[start - 1];
+  const after = text[end];
+  return (
+    before !== undefined &&
+    after !== undefined &&
+    OPEN_QUOTE_CHARS.has(before) &&
+    CLOSE_QUOTE_CHARS.has(after)
+  );
+}
+/**
+ * Detect prose naming a runtime/production-observation precondition
+ * (#2467) anywhere in `body`, outside of code regions. Returns `true` on
+ * the first match that is neither quoted nor negated -- callers only need a
+ * boolean gate, not the matched span.
+ */
+export function detectRuntimeObservationPrecondition(body) {
+  const stripped = stripMarkdownCodeRegions(String(body ?? ''));
+  for (const pattern of RUNTIME_OBSERVATION_PATTERNS) {
+    pattern.lastIndex = 0;
+    let match = pattern.exec(stripped);
+    while (match) {
+      const end = match.index + match[0].length;
+      if (
+        !isQuotedMatch(stripped, match.index, end) &&
+        !hasNegationCueBefore(stripped, match.index)
+      ) {
+        return true;
+      }
+      match = pattern.exec(stripped);
+    }
+  }
+  return false;
 }
 export function getOrphanFirstPolicy(config) {
   if (!config || typeof config !== 'object') {
@@ -101,6 +174,13 @@ export function classifyIssue(issue, options) {
       reason: 'authoring_label',
       details: authoringLabelName,
     };
+  }
+  // Runs regardless of blockedRefs/dependencyRefs state (#2467): a
+  // production-observation precondition has no issue-number reference to
+  // resolve, so it must still hold even when every numbered reference below
+  // is absent or already closed.
+  if (detectRuntimeObservationPrecondition(body)) {
+    return { orphan: false, reason: 'runtime_observation_precondition' };
   }
   // Two independent reference families, matching A3's own dependency check
   // in `discover-readiness-check.mts` (#1536): visible `Blocked by #NNN`
@@ -203,6 +283,7 @@ export async function filterOrphanIssues(issues, options = {}) {
     blocked_by_marker: [],
     blocked_label: [],
     authoring_label: [],
+    runtime_observation_precondition: [],
     blocked_by_open_reference: [],
     open_dependency_reference: [],
     unresolvable_reference: [],
@@ -519,6 +600,7 @@ Output schema:
     "blocked_by_marker": [...],
     "blocked_label": [...],
     "authoring_label": [...],
+    "runtime_observation_precondition": [...],
     "blocked_by_open_reference": [...],
     "open_dependency_reference": [...],
     "unresolvable_reference": [...]
@@ -527,6 +609,12 @@ Output schema:
   "warnings": [{"issueNumber": 1, "message": "Warning: ..."}],
   "counts": {"scanned": 0, "orphans": 0, "routed_to_human": 0, "filtered": {...}, "unresolvable": 0}
 }
+
+"filtered.runtime_observation_precondition" (#2467) excludes an issue whose
+body names a runtime/production-observation precondition in prose --
+"confirmed in production", "observed live", "runtime-observation" -- with no
+issue-number reference to resolve, so it stays excluded even once every
+numbered "Blocked by"/"Depends on" reference is closed.
 
 "filtered.open_dependency_reference" (#1536) mirrors A3's own dependency
 check in discover-readiness-check.mjs: a candidate whose body contains an
