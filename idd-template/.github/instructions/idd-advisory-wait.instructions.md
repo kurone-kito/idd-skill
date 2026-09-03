@@ -112,7 +112,8 @@ continuing to retry the same recovery cycle.
 
 Orthogonal to the table above: changes no `outcome`/`f3Outcome` or
 route, never satisfies the primary gate, posts no `advisory-wait`
-marker. Full trigger condition (`secondaryRequestNeeded`/`CAP_EXHAUSTED`/
+marker. Check status alone never confirms review of current HEAD.
+Full trigger condition (`secondaryRequestNeeded`/`CAP_EXHAUSTED`/
 stalled `SATISFIED`) and request procedure:
 `idd-review-fix.instructions.md`'s E14 step 5.
 
