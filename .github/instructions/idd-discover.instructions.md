@@ -69,15 +69,12 @@ that issue only:
 2. If the target issue carries the configured authoring label, report
    `Issue #N is currently being authored`, run the stale-authoring
    warning check above, and stop without claiming.
-3. Apply A3's readiness bullets to the target — no configured
-   blocked-by-human/needs-decision label, no open blocking dependent
-   issue (visible `Blocked by #NNN` or hidden
-   `idd-skill-blocked-by` marker, both resolved the
-   same way A3 resolves them), no external human coordination required
-   — plus one target-only check: no active, non-stale claim from a
-   trusted marker actor exists on the target, other than a claim this
-   session already recorded and verified (A4 Step 1.5 rules); a hit
-   reports "already claimed", same as A5.
+3. Apply A3's readiness bullets to the target (the same blocked-by,
+   human-coordination, and runtime-observation checks, resolved the
+   same way) — plus one target-only check: no active, non-stale claim
+   from a trusted marker actor exists on the target, other than a
+   claim this session already recorded and verified (A4 Step 1.5
+   rules); a hit reports "already claimed", same as A5.
 4. Run the normal A4 viability gate against the target only.
 5. Apply the **A3.5** issue-author approval gate against the target.
    If A3.5 classifies it as not startable, report that the gate
@@ -356,8 +353,10 @@ From A2, keep only issues that satisfy **all** of the following:
   blocked if that issue is open, if no issue matches (fail-safe — a
   migration integrity problem such as a typo, deleted issue, or
   incomplete migration), or if any matching issue is open.
-- No external human coordination required to start; otherwise keep
-  scanning
+- No external human coordination or prose-only
+  runtime/production-observation precondition ("confirmed in
+  production", "observed live", "runtime-observation"; issue #2467)
+  required to start; otherwise keep scanning
 
 **When A2 finds zero candidates, or zero issues survive A3 filtering**,
 apply this decision tree — do not silently expand scope:
