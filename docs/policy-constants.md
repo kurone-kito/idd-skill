@@ -261,14 +261,14 @@ supplement](../.github/instructions/idd-advisory-wait.instructions.md#secondary-
 Today `primaryBotLogin` and `secondaryBotLogin` both assume the same
 re-trigger mechanism -- a `--add-reviewer` request that appears on the
 PR timeline (E14/AW3), per the requestable-reviewer constraint above.
-A bot whose re-trigger is instead a comment command (e.g. `@bot
-review`) or another non-timeline mechanism has no supported
+A bot whose re-trigger is instead a comment command (e.g.
+`@bot review`) or another non-timeline mechanism has no supported
 re-trigger path today. A future `advisoryWait.reReviewTrigger`-style
-per-bot-class config (e.g. `requestedReviewers | comment:@handle |
-none`) would let a gate pick the correct mechanism per bot instead of
-assuming the timeline-request shape for every bot; this is a
-documented direction only, not an implemented schema key or helper
-behavior (#2466).
+per-bot-class config -- for example a
+`requestedReviewers|comment:@handle|none` enum -- would let a gate
+pick the correct mechanism per bot instead of assuming the
+timeline-request shape for every bot; this is a documented direction
+only, not an implemented schema key or helper behavior (#2466).
 
 | Policy default                                   | Distributed value                                                                                                                                                                                                                                                                                                                                            | Owning surface                                                                                                                                                                                                       | Onboarding expectation                                                                                                                                                                                                                                                                                                                                                          |
 | ------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
