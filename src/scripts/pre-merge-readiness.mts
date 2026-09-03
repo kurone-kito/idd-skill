@@ -13,8 +13,9 @@ import {
   resolveAdvisoryRecoveryCycleCap,
   resolveAdvisorySecondaryBotLogin,
   resolveAdvisorySecondaryQuietWindowMinutes,
-  resolveAdvisoryTerminalWindowMinutes,
   resolveAdvisoryWaitPolicy,
+  resolveEffectiveAdvisoryTerminalWindowMinutes,
+  resolveProviderOutageTerminalWindowMinutes,
 } from './advisory-wait-policy.mts';
 import { buildCopilotRecoverySummary } from './advisory-wait-state.mts';
 import { parseCliArgs } from './cli-args.mts';
@@ -723,6 +724,39 @@ export function collectPreMergeReadiness(
     prHeadSha,
     primaryBotLogin,
   ).commitId;
+  // #2554: shortens the terminal-unavailability window below to
+  // `advisoryWait.providerOutage.terminalWindow` only while an active
+  // repository-scoped outage declaration covers the SAME
+  // `idd-advisory-convergence` selector that
+  // `resolveAdvisoryConvergenceOutageRelief` (further below) independently
+  // re-resolves for its own waiver-relief purpose. A second, independent
+  // fetch here -- rather than sharing that function's result -- matches
+  // this file's own established tolerance for independent per-consumer
+  // evidence collection (see `lastCopilotCommit`'s doc comment above:
+  // "tolerable by construction ... any disagreement fails closed"). Fails
+  // closed to `false` on ANY error, exactly like
+  // `resolveAdvisoryConvergenceOutageRelief`: a transient fetch failure
+  // must never shorten the terminal-unavailability window this gates.
+  //
+  // Skipped entirely when no override is configured (Copilot review, PR
+  // #2564 round 3): `resolveEffectiveAdvisoryTerminalWindowMinutes` returns
+  // the base window regardless of `declarationActive` when
+  // `advisoryWait.providerOutage.terminalWindow` is unset, so the live
+  // fetch would be pure overhead -- and an avoidable failure/rate-limit
+  // surface -- on every readiness run for a repository that never
+  // configured this feature.
+  const providerOutageTerminalWindowOverrideMinutes =
+    resolveProviderOutageTerminalWindowMinutes(advisoryWaitConfig);
+  const outageDeclarationActiveForTerminalWindow =
+    providerOutageTerminalWindowOverrideMinutes !== null
+      ? resolveOutageDeclarationActiveForConvergenceSelector({
+          port,
+          owner,
+          repo,
+          iddConfig,
+          now,
+        })
+      : false;
   const copilotRecovery = buildCopilotRecoverySummary(
     { comments: normalizedComments, prHeadSha, lastCopilotCommit },
     {
@@ -731,8 +765,10 @@ export function collectPreMergeReadiness(
       claimId: args.expectedClaimId,
       agentId: args.expectedAgentId,
       recoveryCycleCap: resolveAdvisoryRecoveryCycleCap(advisoryWaitConfig),
-      terminalWindowMinutes:
-        resolveAdvisoryTerminalWindowMinutes(advisoryWaitConfig),
+      terminalWindowMinutes: resolveEffectiveAdvisoryTerminalWindowMinutes({
+        config: advisoryWaitConfig,
+        declarationActive: outageDeclarationActiveForTerminalWindow,
+      }),
     },
   );
   const copilotUnavailable = copilotRecovery.state === 'COPILOT_UNAVAILABLE';
@@ -1514,6 +1550,57 @@ export function resolveDeclarationActiveSince(
 // #2353: resolve whether a repository-scoped `providerOutage.
 // declarationTarget` declaration relieves the `idd-advisory-convergence`
 // selector for this pull request -- the SAME selector
+// #2554: resolve whether a repository-scoped `providerOutage.
+// declarationTarget` declaration is active for the `idd-advisory-convergence`
+// selector, used ONLY to gate the declaration-scoped terminal-window
+// override (`resolveEffectiveAdvisoryTerminalWindowMinutes`'s
+// `declarationActive` input, above). Deliberately independent of
+// `resolveAdvisoryConvergenceOutageRelief` below rather than sharing its
+// result: this file already tolerates independent per-consumer evidence
+// collection (see `lastCopilotCommit`'s doc comment further up). Fails
+// closed to `false` on ANY error (unset target, unreadable/unparseable
+// comments, authority-lookup failure) -- a transient fetch failure must
+// never shorten the terminal-unavailability window this gates.
+function resolveOutageDeclarationActiveForConvergenceSelector({
+  port,
+  owner,
+  repo,
+  iddConfig,
+  now,
+}: {
+  port: ProviderPort;
+  owner: string;
+  repo: string;
+  iddConfig: IddConfig | null;
+  now: string;
+}): boolean {
+  try {
+    const policy = normalizePolicyConfig(iddConfig);
+    const targetIssue = policy.providerOutage.declarationTarget;
+    if (!targetIssue) return false;
+    const declarationComments = port
+      .listWorkItemComments(targetIssue)
+      .map(toIssueCommentPayload);
+    const authorityOf = (actorLogin: string): AuthorityEvidence =>
+      normalizeAuthorityEvidence(
+        resolveCollaboratorAuthority({ owner, repo, actor: actorLogin }),
+        actorLogin,
+        owner,
+        policy.ciGate.externalCheckWaivers.authorityPolicy,
+      );
+    return resolveProviderOutageDeclaration({
+      declarationTargetConfigured: true,
+      comments: declarationComments,
+      service: DEFAULT_ADVISORY_CONVERGENCE_CHECK_SELECTOR,
+      policy,
+      authorityOf,
+      now: new Date(now),
+    }).active;
+  } catch {
+    return false;
+  }
+}
+
 // `advisory-convergence.mts`'s own gate relieves via its own,
 // independently-fetched declaration (see that file's `collectFromGitHub`).
 // Fails closed to `{ relieved: false, since: '' }` on ANY error (unset

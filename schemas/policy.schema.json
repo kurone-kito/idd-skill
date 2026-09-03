@@ -373,6 +373,18 @@
           "type": "string",
           "pattern": "^P(?=(?:\\d+D|T\\d+[HM]))(?=.*(?:[1-9]\\d*[DHM]))(?:\\d+D)?(?:T(?=\\d+[HM])(?:\\d+H)?(?:\\d+M)?)?$",
           "description": "Whole-minute ISO 8601 duration to wait, after the E-phase convergence conditions (no unresolved item, every disposition recorded) are first observed, before the pre-merge readiness verdict treats the review as settled (#2335) -- covers a slower secondary advisory bot (`secondaryBotLogin`) landing a finding after the primary bot's review already converged. Optional; off (unchanged behavior) when omitted -- like every other key in this section, there is no explicit off-literal value to set. Distinct from `settledWindow`, which bounds the PRIMARY bot's own pending state, not a late secondary-bot arrival."
+        },
+        "providerOutage": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "terminalWindow": {
+              "type": "string",
+              "pattern": "^P(?=(?:\\d+D|T\\d+[HM]))(?=.*(?:[1-9]\\d*[DHM]))(?:\\d+D)?(?:T(?=\\d+[HM])(?:\\d+H)?(?:\\d+M)?)?$",
+              "description": "Declaration-scoped override for `terminalWindow` (#2554), used only while a currently-valid outage declaration (top-level `providerOutage.declarationTarget`) is active for the idd-advisory-convergence service; otherwise the unconditional `terminalWindow` value applies unchanged. Clamped to never exceed `terminalWindow` itself, so a configured value longer than the base window has no effect -- this is a shortening mechanism only, and only during a declared outage."
+            }
+          },
+          "description": "Declaration-scoped `advisoryWait` timing overrides (#2554), applied only while an active outage declaration (top-level `providerOutage`) covers the idd-advisory-convergence service. Optional; omitting it keeps `terminalWindow` unconditional."
         }
       },
       "description": "Container for Copilot/primary-bot advisory review timing, caps, and bot identity. Optional; omitting any nested key keeps that key's own distributed default."

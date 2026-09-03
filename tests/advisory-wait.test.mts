@@ -22,6 +22,8 @@ import {
   resolveAdvisorySecondaryQuietWindowMinutes,
   resolveAdvisoryTerminalWindowMinutes,
   resolveAdvisoryWaitPolicy,
+  resolveEffectiveAdvisoryTerminalWindowMinutes,
+  resolveProviderOutageTerminalWindowMinutes,
 } from '../src/scripts/advisory-wait-policy.mts';
 import {
   buildAdvisoryWaitSummary,
@@ -1383,6 +1385,129 @@ test('readAdvisoryTerminalWindowMinutes applies a schema-valid override and is s
   assert.equal(
     readAdvisoryTerminalWindowMinutes(join(root, 'missing.json')),
     DEFAULT_ADVISORY_TERMINAL_WINDOW_MINUTES,
+  );
+});
+
+// #2554: declaration-scoped `advisoryWait.providerOutage.terminalWindow`
+// override, applied only while a currently-valid outage declaration is
+// active.
+
+test('resolveProviderOutageTerminalWindowMinutes returns null when unset, unparseable, or non-positive', () => {
+  assert.equal(resolveProviderOutageTerminalWindowMinutes({}), null);
+  assert.equal(resolveProviderOutageTerminalWindowMinutes(), null);
+  assert.equal(resolveProviderOutageTerminalWindowMinutes(null), null);
+  assert.equal(
+    resolveProviderOutageTerminalWindowMinutes({
+      advisoryWait: { providerOutage: {} },
+    }),
+    null,
+  );
+  assert.equal(
+    resolveProviderOutageTerminalWindowMinutes({
+      advisoryWait: { providerOutage: { terminalWindow: 'not-a-duration' } },
+    }),
+    null,
+  );
+  assert.equal(
+    resolveProviderOutageTerminalWindowMinutes({
+      advisoryWait: { providerOutage: { terminalWindow: 'PT0H' } },
+    }),
+    null,
+  );
+});
+
+test('resolveProviderOutageTerminalWindowMinutes accepts an explicit ISO8601 duration', () => {
+  assert.equal(
+    resolveProviderOutageTerminalWindowMinutes({
+      advisoryWait: { providerOutage: { terminalWindow: 'PT2H' } },
+    }),
+    2 * 60,
+  );
+});
+
+test('resolveEffectiveAdvisoryTerminalWindowMinutes: no declaration active is byte-identical to resolveAdvisoryTerminalWindowMinutes', () => {
+  const configs = [
+    {},
+    { advisoryWait: { terminalWindow: 'PT6H' } },
+    {
+      advisoryWait: {
+        terminalWindow: 'PT6H',
+        providerOutage: { terminalWindow: 'PT1H' },
+      },
+    },
+  ];
+  for (const config of configs) {
+    assert.equal(
+      resolveEffectiveAdvisoryTerminalWindowMinutes({
+        config,
+        declarationActive: false,
+      }),
+      resolveAdvisoryTerminalWindowMinutes(config),
+    );
+    // Also true when `declarationActive` is omitted entirely (default false).
+    assert.equal(
+      resolveEffectiveAdvisoryTerminalWindowMinutes({ config }),
+      resolveAdvisoryTerminalWindowMinutes(config),
+    );
+  }
+});
+
+test('resolveEffectiveAdvisoryTerminalWindowMinutes: active declaration with a shorter configured override applies the shorter value', () => {
+  const config = {
+    advisoryWait: {
+      terminalWindow: 'PT12H',
+      providerOutage: { terminalWindow: 'PT1H' },
+    },
+  };
+  assert.equal(
+    resolveEffectiveAdvisoryTerminalWindowMinutes({
+      config,
+      declarationActive: true,
+    }),
+    60,
+  );
+});
+
+test('resolveEffectiveAdvisoryTerminalWindowMinutes: active declaration with no configured override is unchanged', () => {
+  const config = { advisoryWait: { terminalWindow: 'PT12H' } };
+  assert.equal(
+    resolveEffectiveAdvisoryTerminalWindowMinutes({
+      config,
+      declarationActive: true,
+    }),
+    12 * 60,
+  );
+});
+
+test('resolveEffectiveAdvisoryTerminalWindowMinutes: a configured override LONGER than the base window is clamped, never widening it', () => {
+  const config = {
+    advisoryWait: {
+      terminalWindow: 'PT1H',
+      providerOutage: { terminalWindow: 'PT12H' },
+    },
+  };
+  assert.equal(
+    resolveEffectiveAdvisoryTerminalWindowMinutes({
+      config,
+      declarationActive: true,
+    }),
+    60,
+  );
+});
+
+test('resolveEffectiveAdvisoryTerminalWindowMinutes: an invalid configured override falls back to the base window even while active', () => {
+  const config = {
+    advisoryWait: {
+      terminalWindow: 'PT12H',
+      providerOutage: { terminalWindow: 'not-a-duration' },
+    },
+  };
+  assert.equal(
+    resolveEffectiveAdvisoryTerminalWindowMinutes({
+      config,
+      declarationActive: true,
+    }),
+    12 * 60,
   );
 });
 

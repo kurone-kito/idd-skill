@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
@@ -8,6 +8,7 @@ import {
   collectFromGitHub,
   parseArgs,
 } from '../src/scripts/advisory-convergence.mts';
+import { DEFAULT_ADVISORY_TERMINAL_WINDOW_MINUTES } from '../src/scripts/advisory-wait-policy.mts';
 import { createFakeProviderAdapter } from '../src/scripts/provider-adapter-fake.mts';
 
 // ---------------------------------------------------------------------------
@@ -192,5 +193,38 @@ test('collectFromGitHub does not retry a definitive 404 from getChangeRequestCon
     // A permanent 404 rethrows on the first attempt -- no wasted retry
     // budget on a failure a retry cannot fix.
     assert.equal(calls, 1);
+  });
+});
+
+test('collectFromGitHub falls back to the default terminal window when advisoryWait is schema-invalid for an UNRELATED reason (#2554, Copilot review PR #2564 round 3)', () => {
+  withHermeticCwd(() => {
+    mkdirSync(join('.github', 'idd'), { recursive: true });
+    // `terminalWindow` itself is a syntactically valid duration string, but
+    // the unknown `notARealKey` field violates the advisoryWait section's
+    // `additionalProperties: false` schema, which must invalidate the WHOLE
+    // section per this file's `readAdvisoryTerminalWindowMinutes()`-style
+    // validate-or-default contract. Before #2554's fix, `terminalWindow`
+    // fed straight into the pure resolveEffectiveAdvisoryTerminalWindow-
+    // Minutes with no such gate, so this syntactically-valid-looking value
+    // leaked through as 120 instead of falling back to the 720 default the
+    // section's own invalidity should have forced.
+    writeFileSync(
+      join('.github', 'idd', 'config.json'),
+      JSON.stringify({
+        advisoryWait: { terminalWindow: 'PT2H', notARealKey: 'x' },
+      }),
+      'utf8',
+    );
+    const port = createFakeProviderAdapter(baseFixture());
+
+    const { options } = collectFromGitHub(
+      parseArgs(['--pr', String(PR_NUMBER), '--owner', 'o', '--repo', 'r']),
+      () => port,
+    );
+
+    assert.equal(
+      options.terminalWindowMinutes,
+      DEFAULT_ADVISORY_TERMINAL_WINDOW_MINUTES,
+    );
   });
 });
