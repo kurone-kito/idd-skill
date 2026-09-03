@@ -201,6 +201,26 @@ A5 is never reached for a candidate that fails any check, labeled or not.
   structure/relationship edits, and any label other than the optional
   `triage:{outcome}` label above.
 
+**Machine-readable outcome marker (kurone-kito/idd-skill#2243).** For a
+rejection whose outcome is `unclear`, `duplicate`, `out-of-scope`, or
+`invalid` — the four outcomes with no dedicated label — append a hidden
+HTML-comment marker to the same rejection comment, mirroring the
+`<!-- idd-skill-autopilot-suitability: N -->` authoring
+convention:
+
+```markdown
+<!-- idd-skill-triage-verdict: <outcome> -->
+```
+
+Never emit this marker for `needs-decision` or `blocked-by-human`: those
+two already carry a stable label and need no second signal. Discover's own
+candidate-selection pass (`idd-discover.instructions.md`) reads this
+marker to skip a previously-rejected candidate without a full manual
+comment-history read, applying the same staleness rule as every other
+evidentiary marker in this workflow: a rejection whose comment predates
+the issue's own latest substantive (title/body) edit is stale and never
+suppresses a genuinely improved issue.
+
 ### High-confidence coordination-close (#1485)
 
 On a Check 4 `tier: 'high-confidence'` hit only — never the weak

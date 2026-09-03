@@ -19,6 +19,7 @@ import {
   summarizeSwarmFloorEligibility,
 } from '../src/scripts/discover-readiness-check.mts';
 import { createFakeProviderAdapter } from '../src/scripts/provider-adapter-fake.mts';
+import { SUITABILITY_REJECTION_PREFIX } from '../src/scripts/supersession-detection.mts';
 
 const REPO_ROOT = fileURLToPath(new URL('..', import.meta.url));
 
@@ -1370,4 +1371,192 @@ test('evaluateDiscoverReadiness runs end to end against a fake provider, no gh p
       process.env.PATH = originalPath;
     }
   }
+});
+
+// ---------------------------------------------------------------------------
+// #2243: triage-verdict marker exclusion (fetchCommentsByIssueNumber /
+// fetchTimelineByIssueNumber / trustedMarkerLogins), covering the four
+// acceptance-criteria scenarios: marker present and current (excluded, with
+// a `triage_verdict:<outcome>` reason), marker present but stale relative to
+// a later body edit (ready), no marker / never-triaged (ready), and an
+// untrusted/forged marker comment (ready -- same #1887 trust boundary).
+// ---------------------------------------------------------------------------
+
+function triageVerdictReadinessIssue(overrides: Record<string, unknown> = {}) {
+  return {
+    number: 1901,
+    title: 'candidate 1901',
+    state: 'OPEN',
+    body: '',
+    labels: [],
+    createdAt: '2026-08-01T00:00:00Z',
+    ...overrides,
+  };
+}
+
+function triageVerdictReadinessRejectionComment(
+  outcome: string,
+  createdAt: string,
+  { author = 'kurone-kito' } = {},
+) {
+  return {
+    body: `${SUITABILITY_REJECTION_PREFIX} — Check 2 (Coherence): reason.\n\n<!-- idd-skill-triage-verdict: ${outcome} -->`,
+    created_at: createdAt,
+    user: { login: author },
+  };
+}
+
+test('without trustedMarkerLogins, the comments fetcher is never invoked and the candidate stays ready (byte-stable default)', async () => {
+  const issue = triageVerdictReadinessIssue();
+  let called = false;
+  const summary = await evaluateDiscoverReadiness([1901], {
+    loadIssue: async () => issue,
+    findRoadmapsByMarker: async () => [],
+    // A real spy fetcher is supplied, but trustedMarkerLogins is omitted --
+    // if the guard were broken, `called` would flip to true below.
+    fetchCommentsByIssueNumber: () => {
+      called = true;
+      return [];
+    },
+  });
+  assert.equal(called, false);
+  assert.equal(summary.ready.length, 1);
+  assert.equal(summary.filteredOut.length, 0);
+});
+
+test('a current trusted triage-verdict marker excludes the otherwise-ready candidate', async () => {
+  const issue = triageVerdictReadinessIssue();
+  const summary = await evaluateDiscoverReadiness([1901], {
+    loadIssue: async () => issue,
+    findRoadmapsByMarker: async () => [],
+    fetchCommentsByIssueNumber: () => [
+      triageVerdictReadinessRejectionComment(
+        'duplicate',
+        '2026-08-10T00:00:00Z',
+      ),
+    ],
+    fetchTimelineByIssueNumber: () => [],
+    trustedMarkerLogins: ['kurone-kito'],
+  });
+  assert.equal(summary.ready.length, 0);
+  assert.deepEqual(summary.filteredOut[0]?.reasons, [
+    'triage_verdict:duplicate',
+  ]);
+});
+
+test('a stale marker (issue edited after the rejection) leaves the candidate ready', async () => {
+  const issue = triageVerdictReadinessIssue({
+    createdAt: '2026-08-01T00:00:00Z',
+  });
+  const summary = await evaluateDiscoverReadiness([1901], {
+    loadIssue: async () => issue,
+    findRoadmapsByMarker: async () => [],
+    fetchCommentsByIssueNumber: () => [
+      triageVerdictReadinessRejectionComment(
+        'duplicate',
+        '2026-08-05T00:00:00Z',
+      ),
+    ],
+    // A body edit landed AFTER the rejection comment -- the marker is stale.
+    fetchTimelineByIssueNumber: () => [
+      {
+        event: 'edited',
+        created_at: '2026-08-12T00:00:00Z',
+        changes: { body: {} },
+      },
+    ],
+    trustedMarkerLogins: ['kurone-kito'],
+  });
+  assert.equal(summary.ready.length, 1);
+  assert.equal(summary.filteredOut.length, 0);
+});
+
+test('no marker (never-triaged) leaves the candidate ready', async () => {
+  const issue = triageVerdictReadinessIssue();
+  const summary = await evaluateDiscoverReadiness([1901], {
+    loadIssue: async () => issue,
+    findRoadmapsByMarker: async () => [],
+    fetchCommentsByIssueNumber: () => [],
+    fetchTimelineByIssueNumber: () => [],
+    trustedMarkerLogins: ['kurone-kito'],
+  });
+  assert.equal(summary.ready.length, 1);
+  assert.equal(summary.filteredOut.length, 0);
+});
+
+test("an untrusted actor's marker-bearing comment leaves the candidate ready (#1887 trust boundary)", async () => {
+  const issue = triageVerdictReadinessIssue();
+  const summary = await evaluateDiscoverReadiness([1901], {
+    loadIssue: async () => issue,
+    findRoadmapsByMarker: async () => [],
+    fetchCommentsByIssueNumber: () => [
+      triageVerdictReadinessRejectionComment(
+        'duplicate',
+        '2026-08-10T00:00:00Z',
+        {
+          author: 'random-untrusted-user',
+        },
+      ),
+    ],
+    fetchTimelineByIssueNumber: () => [],
+    trustedMarkerLogins: ['kurone-kito'],
+  });
+  assert.equal(summary.ready.length, 1);
+  assert.equal(summary.filteredOut.length, 0);
+});
+
+test('a candidate already filtered for another reason never triggers the comments fetch', async () => {
+  const issue = triageVerdictReadinessIssue({
+    labels: [{ name: 'status:blocked-by-human' }],
+  });
+  let called = false;
+  const summary = await evaluateDiscoverReadiness([1901], {
+    loadIssue: async () => issue,
+    findRoadmapsByMarker: async () => [],
+    fetchCommentsByIssueNumber: () => {
+      called = true;
+      return [];
+    },
+    fetchTimelineByIssueNumber: () => [],
+    trustedMarkerLogins: ['kurone-kito'],
+  });
+  assert.equal(called, false);
+  assert.deepEqual(summary.filteredOut[0]?.reasons, [
+    'label:status:blocked-by-human',
+  ]);
+});
+
+test('a throwing comments fetcher fails open: the candidate stays ready (CodeRabbit review, PR #2557)', async () => {
+  const issue = triageVerdictReadinessIssue();
+  const summary = await evaluateDiscoverReadiness([1901], {
+    loadIssue: async () => issue,
+    findRoadmapsByMarker: async () => [],
+    fetchCommentsByIssueNumber: () => {
+      throw new Error('transient GitHub API failure');
+    },
+    fetchTimelineByIssueNumber: () => [],
+    trustedMarkerLogins: ['kurone-kito'],
+  });
+  assert.equal(summary.ready.length, 1);
+  assert.equal(summary.filteredOut.length, 0);
+});
+
+test('a throwing timeline fetcher fails open: the candidate stays ready (CodeRabbit review, PR #2557)', async () => {
+  const issue = triageVerdictReadinessIssue();
+  const summary = await evaluateDiscoverReadiness([1901], {
+    loadIssue: async () => issue,
+    findRoadmapsByMarker: async () => [],
+    fetchCommentsByIssueNumber: () => [
+      triageVerdictReadinessRejectionComment(
+        'duplicate',
+        '2026-08-10T00:00:00Z',
+      ),
+    ],
+    fetchTimelineByIssueNumber: () => {
+      throw new Error('transient GitHub API failure');
+    },
+    trustedMarkerLogins: ['kurone-kito'],
+  });
+  assert.equal(summary.ready.length, 1);
+  assert.equal(summary.filteredOut.length, 0);
 });

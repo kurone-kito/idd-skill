@@ -32,11 +32,18 @@ import { loadPolicyConfig } from './idd-config.mts';
 import { stripMarkdownCodeRegions } from './markdown-code.mts';
 import { createMarkerRegex } from './marker-regex.mts';
 import { normalizePolicyConfig, POLICY_DEFAULTS } from './policy-helpers.mts';
+import { resolveTrustedMarkerActors } from './protocol-helpers.mts';
 import {
   createGithubProviderAdapter,
   resolveCurrentGithubRepository,
 } from './provider-adapter-github.mts';
 import type { ProviderPort } from './provider-port.mts';
+import {
+  findTrustedSuitabilityRejection,
+  isSuitabilityTriageVerdictCurrent,
+  resolveLatestSubstantiveIssueEditAt,
+  type SuitabilityRejectionComment,
+} from './supersession-detection.mts';
 
 const DEFAULT_MARKER_PREFIX = 'idd-skill';
 
@@ -71,7 +78,8 @@ export type OrphanFilteredReason =
   | 'runtime_observation_precondition'
   | 'blocked_by_open_reference'
   | 'open_dependency_reference'
-  | 'unresolvable_reference';
+  | 'unresolvable_reference'
+  | 'triage_verdict_rejected';
 
 /** Classification verdict for one issue in the orphan filter. */
 export type OrphanClassification =
@@ -106,6 +114,10 @@ interface OrphanIssueInput {
   body?: unknown;
   url?: unknown;
   milestone?: unknown;
+  /** GitHub `created_at` (#2243): the staleness-check fallback anchor
+   * consumed by {@link resolveLatestSubstantiveIssueEditAt} when the
+   * candidate has never been substantively edited. */
+  createdAt?: unknown;
 }
 
 interface ClassifyIssueOptions {
@@ -148,6 +160,29 @@ interface FilterOrphanIssuesOptions {
    * byte-stable.
    */
   claimState?: ClaimStateResolution;
+  /**
+   * #2243 triage-verdict exclusion (default-on, unlike `claimState` above):
+   * fetches each surviving candidate's comments to look for a still-current
+   * trusted `A4.5 suitability gate rejection` marker. Only actually runs
+   * when BOTH this and {@link trustedMarkerLogins} are supplied and
+   * non-empty -- the CLI wiring always supplies both, so the live default
+   * output does carry this check; a caller (including this file's own
+   * tests) that omits either gets the prior byte-stable shape with no
+   * extra fetch, matching this module's existing fail-safe direction (a
+   * missing evidence source never skips a candidate, it just leaves the
+   * candidate unfiltered by this specific check).
+   */
+  fetchCommentsByIssueNumber?: (
+    issueNumber: number,
+  ) => SuitabilityRejectionComment[];
+  /** #2243: per-candidate timeline fetch for the staleness anchor
+   * ({@link resolveLatestSubstantiveIssueEditAt}). Defaults to "no events"
+   * when omitted, which only widens the staleness window (never narrows
+   * it), so an absent fetcher cannot itself cause a wrongful skip. */
+  fetchTimelineByIssueNumber?: (issueNumber: number) => unknown[];
+  /** #2243: trust-actor allowlist for the triage-verdict marker scan, same
+   * semantics as `idd-claim.instructions.md`'s trusted marker actors. */
+  trustedMarkerLogins?: string[];
 }
 
 interface FilteredIssueEntry {
@@ -488,6 +523,7 @@ export async function filterOrphanIssues(
     blocked_by_open_reference: [],
     open_dependency_reference: [],
     unresolvable_reference: [],
+    triage_verdict_rejected: [],
   };
   const orphans: OrphanCandidate[] = [];
   const unresolvable: {
@@ -512,6 +548,11 @@ export async function filterOrphanIssues(
           { title: candidate.title, labels: candidate.labels },
         ] as const,
     ),
+  );
+  // #2243 staleness anchor lookup: each candidate's own createdAt, used as
+  // the resolveLatestSubstantiveIssueEditAt fallback below.
+  const issueCreatedAtByNumber = new Map(
+    issues.map((candidate) => [candidate.number, candidate.createdAt] as const),
   );
 
   for (const issue of issues) {
@@ -584,6 +625,77 @@ export async function filterOrphanIssues(
       url: issue.url ?? '',
     };
     filtered[result.reason].push(entry);
+  }
+
+  // #2243: exclude a candidate whose most recent trusted `A4.5
+  // suitability gate rejection` comment carries a still-current
+  // `<!-- {prefix}-triage-verdict: <outcome> -->` marker for one of the
+  // four non-label outcomes (unclear/duplicate/out-of-scope/invalid).
+  // Survivors-only: runs after every free (body/label) filter above has
+  // already narrowed the candidate set, so this is at most one
+  // comments-plus-timeline fetch pair per surviving candidate, never per
+  // scanned issue. Default-on for the live CLI (see
+  // `FilterOrphanIssuesOptions.fetchCommentsByIssueNumber`'s doc comment)
+  // but a no-op here when either input is absent, keeping this file's
+  // existing tests and any other caller byte-stable by default.
+  if (
+    typeof options.fetchCommentsByIssueNumber === 'function' &&
+    Array.isArray(options.trustedMarkerLogins) &&
+    options.trustedMarkerLogins.length > 0
+  ) {
+    const fetchComments = options.fetchCommentsByIssueNumber;
+    const fetchTimeline =
+      typeof options.fetchTimelineByIssueNumber === 'function'
+        ? options.fetchTimelineByIssueNumber
+        : () => [];
+    const trustedMarkerLogins = options.trustedMarkerLogins;
+    const markerPrefix =
+      typeof options.markerPrefix === 'string'
+        ? options.markerPrefix
+        : undefined;
+    const survivors: typeof orphans = [];
+    for (const orphan of orphans) {
+      // CodeRabbit review, PR #2557: mirror resolveIssueLabelEvents's own
+      // fail-open contract for a per-candidate opportunistic fetch -- a
+      // transient GitHub API failure here must not abort the whole
+      // default-on discover pass; it degrades to "no evidence" (same as an
+      // absent marker) and the candidate stays selectable.
+      let record: ReturnType<typeof findTrustedSuitabilityRejection> = null;
+      try {
+        record = findTrustedSuitabilityRejection(
+          fetchComments(orphan.number),
+          trustedMarkerLogins,
+          markerPrefix,
+        );
+      } catch {
+        record = null;
+      }
+      let editedAt: string | null = null;
+      if (record?.markerOutcome) {
+        try {
+          editedAt = resolveLatestSubstantiveIssueEditAt(
+            issueCreatedAtByNumber.get(orphan.number),
+            fetchTimeline(orphan.number),
+          );
+        } catch {
+          editedAt = null;
+        }
+      }
+      if (record && isSuitabilityTriageVerdictCurrent(record, editedAt)) {
+        filtered.triage_verdict_rejected.push({
+          number: orphan.number,
+          title: orphan.title,
+          state: orphan.state,
+          reason: 'triage_verdict_rejected',
+          details: record.markerOutcome,
+          url: orphan.url,
+        });
+        continue;
+      }
+      survivors.push(orphan);
+    }
+    orphans.length = 0;
+    orphans.push(...survivors);
   }
 
   // Opt-in (#1395): annotate each orphan candidate with active-claim
@@ -689,12 +801,27 @@ async function runCli() {
       )
     : undefined;
 
+  // #2243: always resolved (unlike claimState above) -- the triage-verdict
+  // exclusion is default-on, not an opt-in flag. An empty resolution (no
+  // flag/env/config trusted actors configured) makes the check a no-op via
+  // filterOrphanIssues's own trustedMarkerLogins-empty guard, matching
+  // every other trusted-marker consumer's fail-safe default.
+  const { actors: trustedMarkerLogins } = resolveTrustedMarkerActors({
+    envValue: process.env.IDD_TRUSTED_MARKER_ACTORS ?? '',
+    config: { trustedMarkerActors: policy.trustedMarkerActors },
+  });
+
   const result = await filterOrphanIssues(openIssues, {
     issueStateByNumber: openStateByNumber,
     fetchIssueStateByNumber: (issueNumber) =>
       fetchIssueState(port, issueNumber),
     fetchLabelEventsByIssueNumber: (issueNumber) =>
       fetchIssueLabelEvents(port, issueNumber),
+    fetchCommentsByIssueNumber: (issueNumber) =>
+      fetchIssueCommentsForTriageVerdict(port, issueNumber),
+    fetchTimelineByIssueNumber: (issueNumber) =>
+      port.getWorkItemTimeline(issueNumber),
+    trustedMarkerLogins,
     markerPrefix: policy.markerPrefix,
     authoringLabelName: policy.authoringLabelName,
     authoringStaleAgeMs: policy.authoringStaleAgeMs,
@@ -832,7 +959,8 @@ Output schema:
     "runtime_observation_precondition": [...],
     "blocked_by_open_reference": [...],
     "open_dependency_reference": [...],
-    "unresolvable_reference": [...]
+    "unresolvable_reference": [...],
+    "triage_verdict_rejected": [...]
   },
   "unresolvable": [{"issue": 1, "reference": 2, "reason": "issue-not-found-or-inaccessible"}],
   "warnings": [{"issueNumber": 1, "message": "Warning: ..."}],
@@ -863,6 +991,23 @@ first; equal scores tie-break by lowest issue number). With --autopilot
 (default 3) are moved to routed_to_human; without it (attended runs) they
 stay in orphans, ranked last. A missing or out-of-range score is treated
 as no score: the issue stays in orphans and is never routed out.
+
+"filtered.triage_verdict_rejected" (#2243, default-on, not opt-in) excludes
+a candidate whose most recent trusted "A4.5 suitability gate rejection"
+comment carries a still-current
+"<!-- {markerPrefix}-triage-verdict: <outcome> -->" marker for one of the
+four non-label outcomes (unclear/duplicate/out-of-scope/invalid); each
+filtered entry's "details" field is that outcome string.
+"needs-decision"/"blocked-by-human" never emit this marker -- those already
+carry a stable label. Only runs for a candidate every cheaper (label/body)
+filter above has already let through (one comments-plus-timeline fetch pair
+per surviving candidate, never per scanned issue), and requires trusted
+marker actors to be configured (env/flag/repo config); with none
+configured, this check is a no-op and makes no extra GitHub API call.
+Staleness-checked (fail-closed toward NOT excluding): the marker only
+excludes when the rejection comment is at or after the issue's latest
+substantive (title/body) edit, so an issue legitimately improved after
+being rejected stays selectable.
 
 --with-claim-state (opt-in) annotates each candidate in "orphans" and
 "routed_to_human" with active-claim eligibility, exactly mirroring
@@ -953,6 +1098,7 @@ function normalizeIssue(issue: {
   url?: unknown;
   html_url?: unknown;
   milestone?: unknown;
+  createdAt?: unknown;
 }) {
   return {
     number: Number.parseInt(String(issue.number), 10),
@@ -963,6 +1109,7 @@ function normalizeIssue(issue: {
     body: issue.body ?? '',
     url: issue.url ?? issue.html_url ?? '',
     milestone: issue.milestone,
+    createdAt: issue.createdAt,
   };
 }
 
@@ -1042,6 +1189,25 @@ function fetchIssueLabelEvents(port: ProviderPort, issueNumber: number) {
     .filter((event) => (event as { event?: unknown }).event === 'labeled');
 }
 
+/**
+ * #2243: adapts {@link ProviderPort.listWorkItemComments}'s camelCase
+ * `ProviderComment` shape to the raw-REST-shaped
+ * `SuitabilityRejectionComment` `findTrustedSuitabilityRejection` expects
+ * (mirroring `suitability-triage.mts`'s own direct `gh api` comment fetch).
+ * `html_url` is intentionally omitted -- this file never reads the
+ * resulting record's `url` field, only `markerOutcome`/`createdAt`.
+ */
+function fetchIssueCommentsForTriageVerdict(
+  port: ProviderPort,
+  issueNumber: number,
+): SuitabilityRejectionComment[] {
+  return port.listWorkItemComments(issueNumber).map((comment) => ({
+    body: comment.body,
+    created_at: comment.createdAt,
+    user: { login: comment.authorLogin },
+  }));
+}
+
 function normalizeMarkerPrefix(prefix: unknown): string {
   if (typeof prefix !== 'string' || prefix.length === 0) {
     return DEFAULT_MARKER_PREFIX;
@@ -1095,6 +1261,7 @@ function fetchOpenIssues(
       url: item.url,
       html_url: item.htmlUrl,
       milestone: item.milestone,
+      createdAt: item.createdAt,
     }),
   );
 }

@@ -544,6 +544,14 @@ export function createGithubProviderAdapter(owner, repo, deps = DEFAULT_DEPS) {
           htmlUrl:
             row.html_url === undefined ? undefined : String(row.html_url),
           milestone: row.milestone,
+          // #2243 (Copilot review, PR #2557): populate createdAt like
+          // getWorkItem() above already does -- discover-orphan-filter.mts's
+          // triage-verdict staleness anchor reads this field straight off
+          // the bulk listOpenWorkItems() result (no secondary per-issue
+          // fetch), so an absent value here silently made that exclusion
+          // never fire for a never-edited issue in real runs.
+          createdAt:
+            row.created_at === undefined ? undefined : String(row.created_at),
         }));
     },
     searchWorkItems(query) {

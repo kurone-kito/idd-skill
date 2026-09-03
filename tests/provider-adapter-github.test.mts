@@ -106,6 +106,36 @@ test('searchWorkItems preserves REST raw lowercase state, like listOpenWorkItems
 });
 
 // ---------------------------------------------------------------------------
+// listOpenWorkItems createdAt (#2243, Copilot review on PR #2557):
+// getWorkItem already mapped REST's created_at into ProviderWorkItem's
+// createdAt field, but listOpenWorkItems's own row mapping omitted it --
+// discover-orphan-filter.mts's triage-verdict staleness anchor reads
+// createdAt straight off this bulk result (no secondary per-issue fetch),
+// so the gap silently made that exclusion never fire for a never-edited
+// issue in real runs, while every test using a hand-built fixture (bypassing
+// this REST-shape mapping) stayed green.
+// ---------------------------------------------------------------------------
+
+test('listOpenWorkItems maps REST created_at into createdAt, like getWorkItem', () => {
+  const port = createGithubProviderAdapter(
+    'kurone-kito',
+    'idd-skill',
+    fakeDeps({
+      ghApiJson: () => [
+        {
+          number: 900,
+          title: 'issue 900',
+          state: 'open',
+          created_at: '2026-08-01T00:00:00Z',
+        },
+      ],
+    }),
+  );
+  const [item] = port.listOpenWorkItems();
+  assert.equal(item.createdAt, '2026-08-01T00:00:00Z');
+});
+
+// ---------------------------------------------------------------------------
 // listRequiredChecks (#2266): the pre-migration ghJson/
 // recoverJsonFromGhFailure recovery this method replaces, verified through
 // the injectable deps seam (both recoveries have zero coverage otherwise --
