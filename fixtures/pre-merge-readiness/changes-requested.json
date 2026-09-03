@@ -142,7 +142,8 @@
       "anchorAt": "2026-05-11T23:55:00Z",
       "elapsedMinutes": null,
       "elapsed": true,
-      "remainingMinutes": 0
+      "remainingMinutes": 0,
+      "declined": false
     },
     "threads": {
       "unresolvedCount": 0,

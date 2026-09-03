@@ -1020,7 +1020,11 @@ test('collectPreMergeReadiness: secondaryQuietWindow settles quickly once CodeRa
   assert.equal(status.elapsed, true);
 });
 
-test('collectPreMergeReadiness: secondaryQuietWindow still blocks for the full window when CodeRabbit has only posted a rate-limit notice (#2335 protection preserved)', () => {
+// #2547: a rate-limit notice for the current HEAD is a definitive decline,
+// not "still might be mid-review" -- the wait is skipped entirely (zero
+// remaining minutes), unlike the pre-#2547 behavior this test used to
+// assert (full window, `elapsed: false`, `remainingMinutes: 56`).
+test('collectPreMergeReadiness: secondaryQuietWindow skips the wait entirely once CodeRabbit has posted a rate-limit notice for HEAD (#2547 decline, not #2335 mid-review)', () => {
   const status = runSecondaryQuietWindowFixture(
     [
       {
@@ -1033,8 +1037,8 @@ test('collectPreMergeReadiness: secondaryQuietWindow still blocks for the full w
     ],
     '2026-07-31T23:06:00Z',
   );
-  assert.equal(status.elapsed, false);
-  assert.equal(status.remainingMinutes, 56);
+  assert.equal(status.elapsed, true);
+  assert.equal(status.remainingMinutes, 0);
 });
 
 test('collectPreMergeReadiness: secondaryQuietWindow still blocks for the full window when CodeRabbit has said nothing, even though other PR activity exists', () => {

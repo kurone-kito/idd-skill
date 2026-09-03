@@ -1510,7 +1510,8 @@
         "anchorAt",
         "elapsedMinutes",
         "elapsed",
-        "remainingMinutes"
+        "remainingMinutes",
+        "declined"
       ],
       "additionalProperties": false,
       "properties": {
@@ -1521,22 +1522,26 @@
         },
         "anchorAt": {
           "type": "string",
-          "pattern": "^(none|\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?Z)$",
-          "description": "ISO timestamp of the last substantive (non-ack-only) activity this window anchors on, or the literal 'none' when no such activity exists. Still the real timestamp (not 'none') when minutes is 0 but a valid activity timestamp exists."
+          "pattern": "^(none|declined|\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?Z)$",
+          "description": "ISO timestamp of the last substantive (non-ack-only) activity this window anchors on, the literal 'none' when no such activity exists, or the literal 'declined' when the #2547 secondaryBotDeclined short-circuit fired. Still the real timestamp (not 'none') when minutes is 0 but a valid activity timestamp exists."
         },
         "elapsedMinutes": {
           "type": ["integer", "null"],
           "minimum": 0,
-          "description": "Whole minutes elapsed from anchorAt to now, or null when the window is off, anchorAt is invalid/absent, or now failed to parse."
+          "description": "Whole minutes elapsed from anchorAt to now, or null when the window is off, declined is true (anchorAt is the literal 'declined', not a timestamp), anchorAt is otherwise invalid/absent, or now failed to parse."
         },
         "elapsed": {
           "type": "boolean",
-          "description": "True when the configured window has elapsed since anchorAt -- always true when minutes is 0 (off) or anchorAt is unavailable."
+          "description": "True when the configured window has elapsed since anchorAt -- always true when minutes is 0 (off), anchorAt is unavailable, or declined is true."
         },
         "remainingMinutes": {
           "type": ["integer", "null"],
           "minimum": 0,
-          "description": "Whole minutes remaining until the window elapses. 0 when the window is off (minutes is 0) or anchorAt is invalid/absent; otherwise null only when elapsedMinutes itself is null (now failed to parse)."
+          "description": "Whole minutes remaining until the window elapses. 0 when the window is off (minutes is 0), declined is true, or anchorAt is invalid/absent; otherwise null only when elapsedMinutes itself is null (now failed to parse)."
+        },
+        "declined": {
+          "type": "boolean",
+          "description": "#2547: true when the configured secondary advisory bot has definitively declined (a rate-limit / skip-review notice, with no later genuine comment) to review the CURRENT HEAD -- the wait is skipped entirely (elapsed: true, remainingMinutes: 0) rather than requiring the full configured window."
         }
       }
     },

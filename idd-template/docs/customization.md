@@ -392,7 +392,14 @@ PRIMARY bot's own pending state, not a late secondary-bot arrival. **#2544**:
 once the secondary bot has already posted a genuine review for the current
 HEAD, only a short fixed confirmation buffer applies from that review's own
 timestamp instead of the full configured duration -- a HEAD the bot has not
-yet reviewed still waits the full period unchanged.
+yet reviewed still waits the full period unchanged. **#2547**: a rate-limit
+/ skip-review notice for the current HEAD, with no later genuine comment,
+is a third outcome distinct from `#2544`'s pending/settled split -- a
+definitive decline, not "might still be reviewing" -- and skips the wait
+entirely (no buffer, no remaining window). A repository need not configure
+anything extra for this: it applies automatically whenever
+`advisoryWait.secondaryQuietWindow` and `advisoryWait.secondaryBotLogin`
+are both set.
 
 `advisoryWait.capExhaustedRoute` is intentionally fail-closed. The
 default `phase-specific` behavior keeps the current E14 skip / F2-F3

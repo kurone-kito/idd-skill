@@ -1350,24 +1350,43 @@ export function dispositionNamesAdvisoryBot(
   }
   return span.toLowerCase().includes(token);
 }
-// #2544: true when the configured secondary advisory bot has already
-// posted a genuine (non-notice) comment for the CURRENT HEAD -- i.e. the
-// `secondaryQuietWindow` gate's original #2335 "might still be mid-review"
-// concern no longer applies to this specific HEAD, only the narrower
-// "second/later finding" risk #2335 was also chartered to protect
-// (`buildSecondaryQuietWindowStatus`'s settled-buffer branch,
-// advisory-wait-policy.mts).
+// #2544/#2547: classifies the configured secondary advisory bot's current
+// standing for the CURRENT HEAD into exactly one of three outcomes --
+// still pending, definitively declined, or genuinely settled -- so
+// `buildSecondaryQuietWindowStatus` can give each its own wait treatment
+// (full window / zero-wait / short settled buffer respectively) instead of
+// #2544's original two-way `settled: boolean` collapsing "no evidence yet"
+// and "the bot already, conclusively, declined this exact commit" into the
+// same slow path.
 //
-// Every ambiguity resolves to `settled: false` -- the same fail-closed
-// direction #2335 already relies on: no comment from the bot at or after
-// `headCommittedAt`, an unparseable `headCommittedAt`/unconfigured
-// `secondaryBotLogin`, or the LATEST such comment being a rate-limit /
-// skip-review notice (`isAdvisoryNonReviewNotice`), all report
-// `settled: false`. Only the single latest matching comment is examined --
-// a notice posted BEFORE a later genuine comment (rate-limited, then
-// recovered) does not defeat settlement, while a notice posted AFTER the
-// latest genuine comment (mid-retry) does, purely as a side effect of
-// always picking the latest.
+// - `settled: true` -- the LATEST matching comment for this HEAD is a
+//   genuine (non-notice) comment: #2335's "might still be mid-review"
+//   concern no longer applies, only the narrower "second/later finding"
+//   risk `buildSecondaryQuietWindowStatus`'s settled-buffer branch still
+//   protects against.
+// - `declined: true` -- the LATEST matching comment for this HEAD is a
+//   rate-limit / skip-review notice (`isAdvisoryNonReviewNotice`). #2547's
+//   live investigation (`gh api .../commits/{sha}/statuses` across several
+//   PRs' head commits, corroborated by hours of subsequent silence on the
+//   oldest sampled PR) found every sampled rate-limit decline reaches its
+//   terminal commit-status entry within ~6-16 seconds of being queued and
+//   is never observed to change afterward, even 15+ hours later -- so a
+//   notice for the CURRENT HEAD is itself sufficient, corroborating
+//   commit-status data is not required to treat it as definitive. (An
+//   implementer's judgment call the issue explicitly left open: a notice
+//   with no separately-fetched corroborating commit status still reports
+//   `declined: true` here, not the ambiguous/pending case.)
+// - Neither `settled` nor `declined` -- still pending: no comment from the
+//   bot at or after `headCommittedAt` at all, or an unparseable
+//   `headCommittedAt`/unconfigured `secondaryBotLogin`. #2335's original
+//   full-window protection is unchanged for this case.
+//
+// Only the single latest matching comment is examined -- a notice posted
+// BEFORE a later genuine comment (rate-limited, then recovered) reports
+// `settled: true`, not `declined`, while a notice posted AFTER the latest
+// genuine comment reports `declined: true` as a fresh, terminal decline
+// for this HEAD -- not "might still produce another review" -- purely as
+// a side effect of always picking the latest.
 //
 // Deliberately reuses `comments` only, not `reviews`: this file's existing
 // notice-vs-genuine classification for the secondary bot
@@ -1389,7 +1408,7 @@ export function computeSecondaryAdvisoryReviewSettlement(
   const token = advisoryBotIdentityToken(secondaryBotLogin);
   const headAt = String(headCommittedAt ?? '');
   if (!token || !isValidIsoTimestamp(headAt)) {
-    return { settled: false, settledAt: null };
+    return { settled: false, settledAt: null, declined: false };
   }
   const matches = comments
     .filter(
@@ -1412,10 +1431,13 @@ export function computeSecondaryAdvisoryReviewSettlement(
     )
     .sort((left, right) => compareIsoTimestamps(left.at, right.at));
   const latest = matches[matches.length - 1];
-  if (!latest || isAdvisoryNonReviewNotice(latest.body)) {
-    return { settled: false, settledAt: null };
+  if (!latest) {
+    return { settled: false, settledAt: null, declined: false };
   }
-  return { settled: true, settledAt: latest.at };
+  if (isAdvisoryNonReviewNotice(latest.body)) {
+    return { settled: false, settledAt: null, declined: true };
+  }
+  return { settled: true, settledAt: latest.at, declined: false };
 }
 // #1182 Match trusted machine advisory dispositions to the advisory-bot stickies
 // they address, so a disposition posted by a trusted-marker actor who is NOT a
@@ -5542,19 +5564,22 @@ export function buildPreMergeReadinessSummary(
         secondaryBotLogin,
         headCommittedAt: options.advisoryConvergenceHeadCommittedAt,
       })
-    : { settled: false, settledAt: null };
+    : { settled: false, settledAt: null, declined: false };
   // #2335: stateless secondary-quiet-window gate, anchored on the same
   // non-ack-only activity ceiling `liveSnapshot.effective` already computes
   // for the review-currency ack-only carve-out below -- see
   // `buildSecondaryQuietWindowStatus`'s own doc comment for why this anchor
   // needs no separate persisted "convergence first observed" timestamp.
   // #2544: `secondaryBotSettledAt` shortens the required wait to a settled
-  // buffer once that evidence exists; see `computeSecondaryAdvisoryReviewSettlement`
-  // above for how it is derived.
+  // buffer once that evidence exists. #2547: `secondaryBotDeclined` skips
+  // the wait entirely once the bot has definitively declined this exact
+  // HEAD; see `computeSecondaryAdvisoryReviewSettlement` above for how
+  // both are derived.
   const secondaryQuietWindow = buildSecondaryQuietWindowStatus({
     minutes: options.secondaryQuietWindowMinutes,
     effectiveMaxActivityUpdatedAt: liveSnapshot.effective?.maxActivityUpdatedAt,
     secondaryBotSettledAt: secondaryReviewSettlement.settledAt,
+    secondaryBotDeclined: secondaryReviewSettlement.declined,
     now,
   });
   const isTrustedWatermarkAuthor = (login) =>

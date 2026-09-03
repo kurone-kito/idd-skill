@@ -1280,6 +1280,7 @@ const preMergeReadinessFixture = {
     elapsedMinutes: null,
     elapsed: true,
     remainingMinutes: 0,
+    declined: false,
   },
   threads: {
     unresolvedCount: 1,

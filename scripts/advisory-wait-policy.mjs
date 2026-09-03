@@ -425,6 +425,7 @@ function computeQuietWindowElapsed({ minutes, anchorAt, now }) {
     elapsedMinutes,
     elapsed,
     remainingMinutes,
+    declined: false,
   };
 }
 /**
@@ -461,6 +462,19 @@ function computeQuietWindowElapsed({ minutes, anchorAt, now }) {
  * invalid (the pre-#2544 default for every existing caller) falls through
  * to the unchanged, unsettled path -- byte-identical behavior.
  *
+ * #2547: `secondaryBotDeclined: true` skips the wait entirely (`elapsed:
+ * true`, same as the off/no-anchor branches below) once the secondary bot
+ * has definitively declined to review this exact HEAD (a rate-limit /
+ * skip-review notice, no genuine comment after it) -- #2335's "might still
+ * be mid-review" protection has nothing left to protect once the bot has
+ * already, conclusively, said it will not review this commit. Checked
+ * immediately after the `minutes <= 0` short-circuit and before
+ * `secondaryBotSettledAt`, since the two flags are mutually exclusive by
+ * construction (`computeSecondaryAdvisoryReviewSettlement` never reports
+ * both `settled` and `declined` true for the same call) -- the ordering
+ * only matters for which unconditional-pass branch a reader sees, not for
+ * any behavioral overlap.
+ *
  * A zero/absent `minutes` (the off/unset default) or a missing/invalid
  * anchor (nothing to anchor on yet) reports `elapsed: true` unconditionally
  * -- this gate must never itself block when unconfigured, and must never
@@ -479,6 +493,7 @@ export function buildSecondaryQuietWindowStatus({
   minutes,
   effectiveMaxActivityUpdatedAt,
   secondaryBotSettledAt,
+  secondaryBotDeclined,
   now,
 }) {
   const resolvedMinutes =
@@ -494,6 +509,17 @@ export function buildSecondaryQuietWindowStatus({
       elapsedMinutes: null,
       elapsed: true,
       remainingMinutes: 0,
+      declined: false,
+    };
+  }
+  if (secondaryBotDeclined === true) {
+    return {
+      minutes: resolvedMinutes,
+      anchorAt: 'declined',
+      elapsedMinutes: null,
+      elapsed: true,
+      remainingMinutes: 0,
+      declined: true,
     };
   }
   const settledAtRaw = String(secondaryBotSettledAt ?? '');
@@ -514,6 +540,7 @@ export function buildSecondaryQuietWindowStatus({
       elapsedMinutes: null,
       elapsed: true,
       remainingMinutes: 0,
+      declined: false,
     };
   }
   return computeQuietWindowElapsed({

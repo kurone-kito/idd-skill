@@ -246,7 +246,17 @@ posted a genuine (non-notice) review for the current HEAD, the gate no
 longer requires the full configured duration -- only a short, fixed
 confirmation buffer applies from that review's own timestamp, so the wait
 stays a fallback for a genuinely unreviewed HEAD rather than a fixed tax on
-every merge.
+every merge. **#2547**: a rate-limit / skip-review notice for the current
+HEAD, with no later genuine comment, is a third, distinct outcome from
+`#2544`'s two-way pending/settled split -- a definitive decline, not
+"might still be reviewing." The gate skips the wait entirely for it
+(no buffer, no remaining window) rather than treating it the same as
+still-pending silence, since nothing further can arrive from the bot for
+that exact commit. Live investigation across several PRs' head commits
+(commit-status history reaching its terminal entry within seconds of
+being queued, never observed to change afterward even 15+ hours later)
+found the notice comment alone sufficient; no separate commit-status
+corroboration is required.
 `advisoryWait.exemptBotAuthoredPrs` (#1906) is an opt-in, off-by-default
 flag effective only under `advisoryWait.convergenceScope: "all-prs"`. When
 `true`, a PR whose author resolves to a GitHub Bot-typed account AND has no
