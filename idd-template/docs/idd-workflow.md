@@ -462,6 +462,34 @@ enumeration, but it still applies targeted readiness checks, the A4
 viability gate, and the A4.5 suitability gate before the normal A5 claim
 safety checks.
 
+## External-signal entry path
+
+The Discover -> Claim -> Work loop above only reads issues already
+present in your tracker. A repository fed by an external signal source
+(error tracker, alert, support intake) needs a distinct on-ramp into
+issue-authoring before that loop ever sees anything.
+
+1. **Triage** (optional, agent-local): classify the incoming signal and
+   dedupe it against existing open issues or roadmap nodes before
+   drafting anything new. IDD does not define this stage's tooling — a
+   webhook receiver, a scheduled poll, or a manual review are all
+   equally valid, repository- or agent-specific integrations.
+2. **Hand off to issue-authoring**: once a signal survives triage as a
+   genuinely new, actionable item, feed its content to the
+   `issue-authoring` companion the same way a human-authored idea
+   would be if your repository has installed one (see
+   [Artifact taxonomy and ownership](#artifact-taxonomy-and-ownership)
+   above). The companion produces a normal, schema-conformant IDD
+   issue.
+3. **Rejoin the normal loop**: the produced issue is claimable by
+   Discover like any other issue — nothing about its external origin is
+   visible to A0-A5.
+
+Because the triage stage is optional and agent-local, an issue produced
+this way must never cite the triage tooling itself as a completion
+dependency: its acceptance criteria stay implementable by any agent,
+including one lacking that specific integration.
+
 ## Issue-author approval contract
 
 Repositories may also keep a secure-by-default issue-author approval
