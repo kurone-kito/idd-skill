@@ -358,3 +358,83 @@ test('buildSecondaryQuietWindowStatus floors a non-integer minutes so remainingM
   assert.equal(status.remainingMinutes, 1);
   assert.ok(Number.isInteger(status.remainingMinutes));
 });
+
+// #2544: secondaryBotSettledAt settled-buffer branch.
+
+test('buildSecondaryQuietWindowStatus uses the short settled buffer, not the full window, once secondaryBotSettledAt is valid', () => {
+  const status = buildSecondaryQuietWindowStatus({
+    minutes: 60,
+    // Far in the past, so the unsettled path (anchored here) would still be
+    // well within its 60-minute window -- proving the settled anchor below
+    // is what the gate actually used, not this one.
+    effectiveMaxActivityUpdatedAt: '2026-08-30T20:00:00Z',
+    secondaryBotSettledAt: '2026-08-30T22:00:00Z',
+    now: '2026-08-30T22:04:00Z',
+  });
+  assert.equal(status.anchorAt, '2026-08-30T22:00:00Z');
+  assert.equal(status.minutes, 5);
+  assert.equal(status.elapsedMinutes, 4);
+  assert.equal(status.elapsed, false);
+  assert.equal(status.remainingMinutes, 1);
+});
+
+test('buildSecondaryQuietWindowStatus reports elapsed once the settled buffer itself has passed', () => {
+  const status = buildSecondaryQuietWindowStatus({
+    minutes: 60,
+    effectiveMaxActivityUpdatedAt: '2026-08-30T20:00:00Z',
+    secondaryBotSettledAt: '2026-08-30T22:00:00Z',
+    now: '2026-08-30T22:05:00Z',
+  });
+  assert.equal(status.elapsed, true);
+  assert.equal(status.elapsedMinutes, 5);
+  assert.equal(status.remainingMinutes, 0);
+});
+
+test('buildSecondaryQuietWindowStatus never waits longer than the configured minutes even once settled', () => {
+  // Configured window (2 min) is shorter than the settled buffer (5 min) --
+  // settlement must not make the wait LONGER than what was explicitly asked
+  // for.
+  const status = buildSecondaryQuietWindowStatus({
+    minutes: 2,
+    effectiveMaxActivityUpdatedAt: '2026-08-30T20:00:00Z',
+    secondaryBotSettledAt: '2026-08-30T22:00:00Z',
+    now: '2026-08-30T22:02:00Z',
+  });
+  assert.equal(status.minutes, 2);
+  assert.equal(status.elapsed, true);
+  assert.equal(status.remainingMinutes, 0);
+});
+
+test('buildSecondaryQuietWindowStatus falls through to the unsettled path when secondaryBotSettledAt is absent or invalid', () => {
+  for (const settledAt of [undefined, null, '', 'not-a-timestamp']) {
+    const status = buildSecondaryQuietWindowStatus({
+      minutes: 15,
+      effectiveMaxActivityUpdatedAt: '2026-08-30T22:00:00Z',
+      secondaryBotSettledAt: settledAt,
+      now: '2026-08-30T22:10:00Z',
+    });
+    assert.equal(status.anchorAt, '2026-08-30T22:00:00Z');
+    assert.equal(status.minutes, 15);
+    assert.equal(status.elapsedMinutes, 10);
+    assert.equal(status.elapsed, false);
+    assert.equal(status.remainingMinutes, 5);
+  }
+});
+
+test('buildSecondaryQuietWindowStatus stays elapsed:true at minutes:0 regardless of secondaryBotSettledAt (byte-identical off default)', () => {
+  const withSettledAt = buildSecondaryQuietWindowStatus({
+    minutes: 0,
+    effectiveMaxActivityUpdatedAt: '2026-08-30T22:00:00Z',
+    secondaryBotSettledAt: '2026-08-30T22:03:00Z',
+    now: '2026-08-30T22:03:30Z',
+  });
+  const withoutSettledAt = buildSecondaryQuietWindowStatus({
+    minutes: 0,
+    effectiveMaxActivityUpdatedAt: '2026-08-30T22:00:00Z',
+    now: '2026-08-30T22:03:30Z',
+  });
+  assert.deepEqual(withSettledAt, withoutSettledAt);
+  assert.equal(withSettledAt.elapsed, true);
+  assert.equal(withSettledAt.remainingMinutes, 0);
+  assert.equal(withSettledAt.anchorAt, '2026-08-30T22:00:00Z');
+});

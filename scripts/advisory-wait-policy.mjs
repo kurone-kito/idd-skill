@@ -390,6 +390,43 @@ export function resolveAdvisorySecondaryQuietWindowMinutes(config = {}) {
     DEFAULT_ADVISORY_SECONDARY_QUIET_WINDOW_MINUTES,
   );
 }
+// #2544: once the secondary bot has posted a genuine (non-notice) review
+// for the current HEAD, #2335's "might still be mid-review" risk no longer
+// applies -- only a short confirmation buffer remains, anchored on the
+// bot's OWN settlement signal rather than the full window anchored on
+// general PR activity (which unrelated later activity could otherwise keep
+// re-extending). #2330's own motivating evidence (a second finding landing
+// 34s and 2m after a zero-unresolved snapshot) sets the buffer floor; 5
+// minutes gives comfortable margin above the largest observed value while
+// staying far short of the full configured window.
+const SECONDARY_QUIET_WINDOW_SETTLED_BUFFER_MINUTES = 5;
+/**
+ * Shared elapsed/remaining-minutes arithmetic for a quiet-window anchor.
+ * Extracted so `buildSecondaryQuietWindowStatus`'s unsettled path (anchored
+ * on `effectiveMaxActivityUpdatedAt`) and its #2544 settled-buffer path
+ * (anchored on `secondaryBotSettledAt`) compute identically and cannot
+ * drift apart.
+ */
+function computeQuietWindowElapsed({ minutes, anchorAt, now }) {
+  const nowMs = Date.parse(now);
+  const anchorMs = Date.parse(anchorAt);
+  const elapsedMinutes =
+    Number.isFinite(nowMs) && Number.isFinite(anchorMs)
+      ? nowMs < anchorMs
+        ? 0
+        : Math.floor((nowMs - anchorMs) / 60000)
+      : null;
+  const elapsed = elapsedMinutes !== null && elapsedMinutes >= minutes;
+  const remainingMinutes =
+    elapsedMinutes !== null ? Math.max(0, minutes - elapsedMinutes) : null;
+  return {
+    minutes,
+    anchorAt,
+    elapsedMinutes,
+    elapsed,
+    remainingMinutes,
+  };
+}
 /**
  * Build the `advisoryWait.secondaryQuietWindow` gate status (#2335): once
  * the E-phase convergence conditions are already met -- no unresolved
@@ -415,21 +452,33 @@ export function resolveAdvisorySecondaryQuietWindowMinutes(config = {}) {
  * since that anchor" already equals "elapsed since convergence was reached"
  * without a second, independently-drifting timestamp to persist.
  *
+ * #2544: `secondaryBotSettledAt` -- when it is a valid ISO timestamp --
+ * switches the gate to the shorter settled buffer above, anchored on that
+ * timestamp instead of `effectiveMaxActivityUpdatedAt`. The buffer never
+ * exceeds the operator's own configured `minutes` (via `Math.min`), so a
+ * repository that configures a window shorter than the buffer is never
+ * kept waiting longer than what it explicitly asked for. Omitted or
+ * invalid (the pre-#2544 default for every existing caller) falls through
+ * to the unchanged, unsettled path -- byte-identical behavior.
+ *
  * A zero/absent `minutes` (the off/unset default) or a missing/invalid
  * anchor (nothing to anchor on yet) reports `elapsed: true` unconditionally
  * -- this gate must never itself block when unconfigured, and must never
- * block on the absence of any activity to measure. A positive but
- * non-integer `minutes` is floored -- the config-sourced path
- * (`resolveAdvisorySecondaryQuietWindowMinutes`) never produces one (every
- * ISO-duration unit it accepts converts to a whole number of minutes), but
- * this function's own `minutes` parameter is untyped, and a fractional
- * value would otherwise leak into `elapsedMinutes`/`remainingMinutes` as
- * non-integers, contradicting the whole-minute contract those fields keep
- * elsewhere in this report.
+ * block on the absence of any activity to measure. The `minutes <= 0`
+ * short-circuit is checked BEFORE `secondaryBotSettledAt` is ever
+ * consulted, so the off default stays unconditional regardless of
+ * settlement evidence. A positive but non-integer `minutes` is floored --
+ * the config-sourced path (`resolveAdvisorySecondaryQuietWindowMinutes`)
+ * never produces one (every ISO-duration unit it accepts converts to a
+ * whole number of minutes), but this function's own `minutes` parameter is
+ * untyped, and a fractional value would otherwise leak into
+ * `elapsedMinutes`/`remainingMinutes` as non-integers, contradicting the
+ * whole-minute contract those fields keep elsewhere in this report.
  */
 export function buildSecondaryQuietWindowStatus({
   minutes,
   effectiveMaxActivityUpdatedAt,
+  secondaryBotSettledAt,
   now,
 }) {
   const resolvedMinutes =
@@ -438,7 +487,7 @@ export function buildSecondaryQuietWindowStatus({
       : 0;
   const anchorAtRaw = String(effectiveMaxActivityUpdatedAt ?? '');
   const anchorValid = isValidIsoTimestamp(anchorAtRaw);
-  if (resolvedMinutes <= 0 || !anchorValid) {
+  if (resolvedMinutes <= 0) {
     return {
       minutes: resolvedMinutes,
       anchorAt: anchorValid ? anchorAtRaw : 'none',
@@ -447,26 +496,31 @@ export function buildSecondaryQuietWindowStatus({
       remainingMinutes: 0,
     };
   }
-  const nowMs = Date.parse(now);
-  const anchorMs = Date.parse(anchorAtRaw);
-  const elapsedMinutes =
-    Number.isFinite(nowMs) && Number.isFinite(anchorMs)
-      ? nowMs < anchorMs
-        ? 0
-        : Math.floor((nowMs - anchorMs) / 60000)
-      : null;
-  const elapsed = elapsedMinutes !== null && elapsedMinutes >= resolvedMinutes;
-  const remainingMinutes =
-    elapsedMinutes !== null
-      ? Math.max(0, resolvedMinutes - elapsedMinutes)
-      : null;
-  return {
+  const settledAtRaw = String(secondaryBotSettledAt ?? '');
+  if (isValidIsoTimestamp(settledAtRaw)) {
+    return computeQuietWindowElapsed({
+      minutes: Math.min(
+        resolvedMinutes,
+        SECONDARY_QUIET_WINDOW_SETTLED_BUFFER_MINUTES,
+      ),
+      anchorAt: settledAtRaw,
+      now,
+    });
+  }
+  if (!anchorValid) {
+    return {
+      minutes: resolvedMinutes,
+      anchorAt: 'none',
+      elapsedMinutes: null,
+      elapsed: true,
+      remainingMinutes: 0,
+    };
+  }
+  return computeQuietWindowElapsed({
     minutes: resolvedMinutes,
     anchorAt: anchorAtRaw,
-    elapsedMinutes,
-    elapsed,
-    remainingMinutes,
-  };
+    now,
+  });
 }
 export function normalizeAdvisoryWaitRuntimeOptions(options = {}) {
   const o = options ?? {};

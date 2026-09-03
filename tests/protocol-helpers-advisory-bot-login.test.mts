@@ -1,10 +1,21 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import {
+  computeSecondaryAdvisoryReviewSettlement,
   isConfiguredAdvisoryBotLogin,
   isGateAdvisoryBotLogin,
   normalizeTrustedMarkerLogins,
 } from '../src/scripts/protocol-helpers.mts';
+
+const CODERABBIT_NOTICE =
+  '<!-- This is an auto-generated comment: rate limited by coderabbit.ai -->\n> ## Review limit reached';
+const CODERABBIT_SUMMARY =
+  '<!-- This is an auto-generated comment: summarize by coderabbit.ai -->\n## Walkthrough\nSome walkthrough text.';
+const HEAD_COMMITTED_AT = '2026-09-02T12:00:00Z';
+
+function comment(login: string, body: string, createdAt: string) {
+  return { author: { login }, body, createdAt };
+}
 
 // Build the advisory-bot set exactly as the gate callers do, so the test
 // exercises the real construction path rather than a hand-rolled Set.
@@ -119,4 +130,111 @@ test('isConfiguredAdvisoryBotLogin rejects unconfigured and empty logins', () =>
   assert.equal(isConfiguredAdvisoryBotLogin(undefined, config), false);
   // A bare `[bot]` reduces to an empty token and must not match.
   assert.equal(isConfiguredAdvisoryBotLogin('[bot]', config), false);
+});
+
+test('computeSecondaryAdvisoryReviewSettlement: no matching comments -> not settled', () => {
+  const result = computeSecondaryAdvisoryReviewSettlement([], {
+    secondaryBotLogin: 'coderabbitai[bot]',
+    headCommittedAt: HEAD_COMMITTED_AT,
+  });
+  assert.deepEqual(result, { settled: false, settledAt: null });
+});
+
+test('computeSecondaryAdvisoryReviewSettlement: only a rate-limit notice at HEAD -> not settled', () => {
+  const result = computeSecondaryAdvisoryReviewSettlement(
+    [comment('coderabbitai[bot]', CODERABBIT_NOTICE, '2026-09-02T12:05:00Z')],
+    {
+      secondaryBotLogin: 'coderabbitai[bot]',
+      headCommittedAt: HEAD_COMMITTED_AT,
+    },
+  );
+  assert.deepEqual(result, { settled: false, settledAt: null });
+});
+
+test('computeSecondaryAdvisoryReviewSettlement: genuine review at/after HEAD -> settled', () => {
+  const result = computeSecondaryAdvisoryReviewSettlement(
+    [comment('coderabbitai[bot]', CODERABBIT_SUMMARY, '2026-09-02T12:05:00Z')],
+    {
+      secondaryBotLogin: 'coderabbitai[bot]',
+      headCommittedAt: HEAD_COMMITTED_AT,
+    },
+  );
+  assert.deepEqual(result, {
+    settled: true,
+    settledAt: '2026-09-02T12:05:00Z',
+  });
+});
+
+test('computeSecondaryAdvisoryReviewSettlement: genuine review BEFORE HEAD (stale prior HEAD) -> not settled', () => {
+  const result = computeSecondaryAdvisoryReviewSettlement(
+    [comment('coderabbitai[bot]', CODERABBIT_SUMMARY, '2026-09-02T11:00:00Z')],
+    {
+      secondaryBotLogin: 'coderabbitai[bot]',
+      headCommittedAt: HEAD_COMMITTED_AT,
+    },
+  );
+  assert.deepEqual(result, { settled: false, settledAt: null });
+});
+
+test('computeSecondaryAdvisoryReviewSettlement: notice AFTER the latest genuine review -> not settled (mid-retry)', () => {
+  const result = computeSecondaryAdvisoryReviewSettlement(
+    [
+      comment('coderabbitai[bot]', CODERABBIT_SUMMARY, '2026-09-02T12:05:00Z'),
+      comment('coderabbitai[bot]', CODERABBIT_NOTICE, '2026-09-02T12:10:00Z'),
+    ],
+    {
+      secondaryBotLogin: 'coderabbitai[bot]',
+      headCommittedAt: HEAD_COMMITTED_AT,
+    },
+  );
+  assert.deepEqual(result, { settled: false, settledAt: null });
+});
+
+test('computeSecondaryAdvisoryReviewSettlement: notice BEFORE a later genuine review -> settled (rate-limited, then recovered)', () => {
+  const result = computeSecondaryAdvisoryReviewSettlement(
+    [
+      comment('coderabbitai[bot]', CODERABBIT_NOTICE, '2026-09-02T12:05:00Z'),
+      comment('coderabbitai[bot]', CODERABBIT_SUMMARY, '2026-09-02T12:10:00Z'),
+    ],
+    {
+      secondaryBotLogin: 'coderabbitai[bot]',
+      headCommittedAt: HEAD_COMMITTED_AT,
+    },
+  );
+  assert.deepEqual(result, {
+    settled: true,
+    settledAt: '2026-09-02T12:10:00Z',
+  });
+});
+
+test('computeSecondaryAdvisoryReviewSettlement: matches across the [bot]-suffix mismatch (#2473)', () => {
+  // GraphQL strips the [bot] suffix (author login reported as `coderabbitai`)
+  // while the configured login stores the REST-shaped `coderabbitai[bot]`.
+  const result = computeSecondaryAdvisoryReviewSettlement(
+    [comment('coderabbitai', CODERABBIT_SUMMARY, '2026-09-02T12:05:00Z')],
+    {
+      secondaryBotLogin: 'coderabbitai[bot]',
+      headCommittedAt: HEAD_COMMITTED_AT,
+    },
+  );
+  assert.deepEqual(result, {
+    settled: true,
+    settledAt: '2026-09-02T12:05:00Z',
+  });
+});
+
+test('computeSecondaryAdvisoryReviewSettlement: unparseable headCommittedAt -> not settled', () => {
+  const result = computeSecondaryAdvisoryReviewSettlement(
+    [comment('coderabbitai[bot]', CODERABBIT_SUMMARY, '2026-09-02T12:05:00Z')],
+    { secondaryBotLogin: 'coderabbitai[bot]', headCommittedAt: null },
+  );
+  assert.deepEqual(result, { settled: false, settledAt: null });
+});
+
+test('computeSecondaryAdvisoryReviewSettlement: unconfigured secondaryBotLogin -> not settled', () => {
+  const result = computeSecondaryAdvisoryReviewSettlement(
+    [comment('coderabbitai[bot]', CODERABBIT_SUMMARY, '2026-09-02T12:05:00Z')],
+    { secondaryBotLogin: '', headCommittedAt: HEAD_COMMITTED_AT },
+  );
+  assert.deepEqual(result, { settled: false, settledAt: null });
 });

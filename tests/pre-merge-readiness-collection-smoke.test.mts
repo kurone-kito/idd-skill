@@ -914,3 +914,140 @@ test('collectPreMergeReadiness against a fake provider: a matching CODEOWNER res
     rmSync(cwdRoot, { recursive: true, force: true });
   }
 });
+
+// ---------------------------------------------------------------------------
+// #2544: secondaryQuietWindow settled-buffer end-to-end wiring. Proves
+// collectPreMergeReadiness's own readAdvisorySecondaryBotLogin() call
+// (pre-merge-readiness.mts) actually reaches buildPreMergeReadinessSummary
+// and computeSecondaryAdvisoryReviewSettlement (protocol-helpers.mts), not
+// just the unit-level buildSecondaryQuietWindowStatus tests in
+// tests/advisory-wait-policy.test.mts.
+// ---------------------------------------------------------------------------
+
+function runSecondaryQuietWindowFixture(
+  comments: Array<{ body: string; createdAt: string; authorLogin: string }>,
+  now: string,
+): { elapsed: boolean; remainingMinutes: number | null } {
+  const cwdRoot = mkdtempSync(
+    join(tmpdir(), 'idd-pre-merge-secondary-quiet-window-'),
+  );
+  const originalCwd = process.cwd();
+  try {
+    process.chdir(cwdRoot);
+    const configDir = join(cwdRoot, '.github', 'idd');
+    mkdirSync(configDir, { recursive: true });
+    writeFileSync(
+      join(configDir, 'config.json'),
+      JSON.stringify({
+        advisoryWait: {
+          secondaryBotLogin: 'coderabbitai[bot]',
+          secondaryQuietWindow: 'PT1H',
+        },
+      }),
+    );
+
+    const port = createFakeProviderAdapter({
+      changeRequestReadinessSnapshots: {
+        42: {
+          headSha: 'a'.repeat(40),
+          baseRefName: 'main',
+          url: 'https://github.com/o/r/pull/42',
+          authorLogin: 'author-user',
+          reviewDecision: null,
+          statusCheckRollup: [],
+          mergeable: 'MERGEABLE',
+          mergeStateStatus: 'CLEAN',
+          closingIssuesReferences: [],
+        },
+      },
+      branchRules: { 'o/r/main': [] },
+      branchProtection: { 'o/r/main': {} },
+      reviewThreadsWithComments: { 42: [] },
+      reviewsWithHeadCommitDate: {
+        42: { reviews: [], headCommittedAt: '2026-07-31T23:00:00Z' },
+      },
+      changedFiles: { 42: [] },
+      comments: {
+        42: comments.map((entry, index) => ({
+          id: index + 1,
+          body: entry.body,
+          createdAt: entry.createdAt,
+          updatedAt: entry.createdAt,
+          authorLogin: entry.authorLogin,
+        })),
+      },
+    });
+
+    const report = collectPreMergeReadiness(
+      [
+        '--pr',
+        '42',
+        '--claimless',
+        '--owner',
+        'o',
+        '--repo',
+        'r',
+        '--now',
+        now,
+      ],
+      () => port,
+    );
+    return report.secondaryQuietWindow as {
+      elapsed: boolean;
+      remainingMinutes: number | null;
+    };
+  } finally {
+    process.chdir(originalCwd);
+    rmSync(cwdRoot, { recursive: true, force: true });
+  }
+}
+
+test('collectPreMergeReadiness: secondaryQuietWindow settles quickly once CodeRabbit posts a genuine review for HEAD, well before the configured 1h window would elapse', () => {
+  const status = runSecondaryQuietWindowFixture(
+    [
+      {
+        body:
+          '<!-- This is an auto-generated comment: summarize by coderabbit.ai -->\n' +
+          '## Walkthrough\nSome walkthrough text.',
+        createdAt: '2026-07-31T23:02:00Z',
+        authorLogin: 'coderabbitai[bot]',
+      },
+    ],
+    // 5 minutes after the review -- exactly the #2544 settled buffer, but
+    // nowhere near the configured PT1H window.
+    '2026-07-31T23:07:00Z',
+  );
+  assert.equal(status.elapsed, true);
+});
+
+test('collectPreMergeReadiness: secondaryQuietWindow still blocks for the full window when CodeRabbit has only posted a rate-limit notice (#2335 protection preserved)', () => {
+  const status = runSecondaryQuietWindowFixture(
+    [
+      {
+        body:
+          '<!-- This is an auto-generated comment: rate limited by coderabbit.ai -->\n' +
+          '> ## Review limit reached',
+        createdAt: '2026-07-31T23:02:00Z',
+        authorLogin: 'coderabbitai[bot]',
+      },
+    ],
+    '2026-07-31T23:06:00Z',
+  );
+  assert.equal(status.elapsed, false);
+  assert.equal(status.remainingMinutes, 56);
+});
+
+test('collectPreMergeReadiness: secondaryQuietWindow still blocks for the full window when CodeRabbit has said nothing, even though other PR activity exists', () => {
+  const status = runSecondaryQuietWindowFixture(
+    [
+      {
+        body: 'looks good to me',
+        createdAt: '2026-07-31T23:02:00Z',
+        authorLogin: 'human-reviewer',
+      },
+    ],
+    '2026-07-31T23:06:00Z',
+  );
+  assert.equal(status.elapsed, false);
+  assert.equal(status.remainingMinutes, 56);
+});
