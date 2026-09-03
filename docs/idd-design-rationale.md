@@ -341,6 +341,11 @@ self-check gives no signal to keep re-verifying the working directory after
 this diagnostic appears, even though the "working directory persists between
 commands" assumption can silently stop holding from that point on (#2332).
 
+**What to do**: once this diagnostic appears, treat the working directory
+as unverified for every later command in the session — confirm it (e.g.
+`pwd`) before trusting a command that depends on the current directory,
+rather than assuming it still matches the last-known worktree.
+
 ### B2.1 — Premise verification (decision-transcription issues)
 
 Field evidence showed a worker asked to transcribe a maintainer's
