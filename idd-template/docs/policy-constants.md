@@ -191,8 +191,10 @@ The current policy schema and helper runtime now support
 `advisoryWait.exemptBotAuthoredPrs`.
 Omitted keys keep the distributed defaults below. The duration keys
 (`pendingWindow`, `settledWindow`, `pollInterval`, `convergenceDeadline`,
-`terminalWindow`, `providerOutage.terminalWindow`, `secondaryQuietWindow`)
-accept positive whole-minute ISO 8601 durations only.
+`terminalWindow`, `providerOutage.terminalWindow` (fully qualified:
+`advisoryWait.providerOutage.terminalWindow` -- not the top-level
+`providerOutage` block), `secondaryQuietWindow`) accept positive
+whole-minute ISO 8601 durations only.
 `advisoryWait.recoveryCycleCap` / `advisoryWait.terminalWindow` (#1572)
 define the terminal Copilot stall-recovery **state contract**, accounted
 independently of `requestCap` and `sameHeadRerollCap`: see
