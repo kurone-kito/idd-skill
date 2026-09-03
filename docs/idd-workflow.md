@@ -524,6 +524,64 @@ for labels, comment-and-stop defaults, and close boundaries:
 - configured ready-label approval ownership is separate from trusted
   marker actor authority for operational claim/review markers.
 
+## Grooming pass for rejected and below-floor issues (optional)
+
+A4.5 rejections and below-floor autopilot-suitability scores
+accumulate into a backlog that ordinary Discover never revisits on its
+own. An optional, human-initiated **Groom** phase lets an operator
+batch-review that backlog and clear entries whose blocker has become
+answerable. This is distinct from durably recording a rejection so it
+does not silently resurface (a separate concern already tracked as
+issue #2243) -- grooming is about _reversing_ a rejection later, once
+circumstances change.
+
+**Classify before spending operator time.** Sort each candidate into
+one of three buckets:
+
+- **execution-blocked** -- no operator input helps; only further agent
+  work can resolve it. Leave these for Discover/Claim to pick up
+  normally once unblocked.
+- **decision-blocked** -- a genuine human call is required (a product
+  tradeoff, an ambiguous acceptance criterion, an already-recorded
+  policy choice). A bounded question set can resolve these.
+- **fact-blocked** -- the rejection cited a fact (a dependency, a
+  blocking issue) that may no longer hold.
+
+**Re-check facts before drafting a question.** For a fact-blocked
+candidate, check whether any issue or PR the original rejection cited
+as a blocker has since closed or merged -- a cached readiness snapshot
+can be stale, and a closed blocker is a "free" suitability lever that
+costs nothing to re-apply.
+
+**Never override a deliberate decision.** When the original rejection
+recorded a genuinely deliberate empirical or product decision (not
+merely an unanswered question), grooming must never resolve it
+unilaterally. Offer "keep the existing decision" as one of the
+operator's own answer choices instead.
+
+**Explain before asking.** Give the operator the background and
+tradeoffs behind each question before asking it, rather than bundling
+several unrelated technical topics into one dense batch.
+
+**Apply the operator's answers back onto the issue**: update the score
+footer, remove or update the `triage:{outcome}` label, revise
+acceptance criteria to reflect the decision, and record the decision in
+a comment. The next ordinary Discover pass then picks the issue up
+normally -- grooming itself never claims or works the issue (see
+[Mutation Policy and Coordination Rule](../.github/instructions/idd-suitability.instructions.md#mutation-policy-and-coordination-rule)).
+
+**Worked example.** An issue was rejected `needs-decision` at score
+`2/5` because its acceptance criteria read "add caching, or document
+why caching is unsafe here" -- an unresolved subjective call under
+A4.5's escape-hatch guidance. Grooming classifies it decision-blocked,
+explains the caching-correctness-vs-simplicity tradeoff, and asks the
+operator to choose between TTL-based expiry and explicit
+invalidation-on-write. After the operator picks TTL-based expiry, the
+acceptance criteria are rewritten to "cache reads for up to 60 seconds
+via TTL-based expiry; no explicit invalidation path is required", the
+score footer is raised to `4/5`, and the `triage:needs-decision` label
+is removed with a comment recording the decision and its rationale.
+
 ## Roadmap completion audits
 
 Discover owns roadmap-level state. After it finds an open roadmap, it
