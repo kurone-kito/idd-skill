@@ -6,12 +6,28 @@ import { platform } from 'node:process';
 import { test } from 'node:test';
 
 import {
+  buildIddConfigContentsArgs,
   loadIddConfig,
   loadPolicyConfig,
+  loadTrustedIddConfig,
   loadUserGlobalPolicyDocument,
   resolveEffectiveCritiqueLoopDelegateFromEnv,
   resolveUserGlobalConfigPath,
 } from '../src/scripts/idd-config.mts';
+
+const HEAD = '1111111111111111111111111111111111111111';
+
+function toEncodedConfig(config: unknown): string {
+  return Buffer.from(JSON.stringify(config), 'utf8').toString('base64');
+}
+
+function syntheticNotFoundError(): Error & { stderr?: string } {
+  const notFound = new Error('Not Found (HTTP 404)') as Error & {
+    stderr?: string;
+  };
+  notFound.stderr = 'Not Found (HTTP 404)';
+  return notFound;
+}
 
 // Every scenario runs inside its own freshly `mkdtempSync`-created sandbox
 // (never the real repo cwd), mirroring the sandboxing already used by
@@ -505,4 +521,118 @@ test('resolveEffectiveCritiqueLoopDelegateFromEnv fails closed on a malformed re
     source: 'repository-local',
     reason: 'invalid-repository-local-delegate',
   });
+});
+
+// --- buildIddConfigContentsArgs (regression: #1434 review, Codex P2; moved
+// from tests/rerun-advisory-convergence.test.mts by #2373) --------------
+//
+// This pure args-builder accepts whatever `ref` its caller passes. Both
+// current production callers pin `ref` to a TRUSTED value the PR under
+// evaluation cannot itself steer -- `rerun-advisory-convergence.mts` pins
+// it to the repository's default branch, `pre-merge-readiness.mts` (#2373)
+// pins it to the PR's base branch (falling back to the default branch) --
+// never the PR's own head SHA; see loadTrustedIddConfig's own doc comment
+// for the full rationale. `--method GET` is required alongside `-f
+// ref=...`: `gh api` defaults to POST as soon as any `-f` value is
+// present, and the Contents API only accepts GET -- confirmed empirically
+// that an unqualified `-f ref=...` 404s on every call, which
+// loadTrustedIddConfig's own catch block would otherwise silently treat as
+// "config genuinely absent, use defaults".
+
+test('buildIddConfigContentsArgs includes --method GET and pins -f ref to the given ref value', () => {
+  const args = buildIddConfigContentsArgs('kurone-kito', 'idd-skill', HEAD);
+  assert.deepEqual(args, [
+    'api',
+    'repos/kurone-kito/idd-skill/contents/.github/idd/config.json',
+    '--method',
+    'GET',
+    '-f',
+    `ref=${HEAD}`,
+    '--jq',
+    '.content',
+  ]);
+});
+
+test('buildIddConfigContentsArgs places --method immediately before GET (gh api requires the value to follow its flag)', () => {
+  const args = buildIddConfigContentsArgs('o', 'r', HEAD);
+  const methodIndex = args.indexOf('--method');
+  assert.notEqual(methodIndex, -1);
+  assert.equal(args[methodIndex + 1], 'GET');
+});
+
+// --- loadTrustedIddConfig (#2373) ---------------------------------------
+
+test('loadTrustedIddConfig decodes and parses a fetched base64 config', () => {
+  const config = loadTrustedIddConfig('kurone-kito', 'idd-skill', 'main', () =>
+    toEncodedConfig({ claimTiming: { staleAge: 'PT48H' } }),
+  );
+  assert.deepEqual(config, { claimTiming: { staleAge: 'PT48H' } });
+});
+
+test('loadTrustedIddConfig passes owner/repo/ref through to the injected fetch', () => {
+  const seen: { owner: string; repo: string; ref: string }[] = [];
+  loadTrustedIddConfig('o', 'r', 'feature-branch', (owner, repo, ref) => {
+    seen.push({ owner, repo, ref });
+    return toEncodedConfig({});
+  });
+  assert.deepEqual(seen, [{ owner: 'o', repo: 'r', ref: 'feature-branch' }]);
+});
+
+test('loadTrustedIddConfig returns null on a confirmed 404 (config absent at ref)', () => {
+  const config = loadTrustedIddConfig('o', 'r', 'main', () => {
+    throw syntheticNotFoundError();
+  });
+  assert.equal(config, null);
+});
+
+test('loadTrustedIddConfig rethrows (fail-closed) on a non-404 failure', () => {
+  assert.throws(
+    () =>
+      loadTrustedIddConfig('o', 'r', 'main', () => {
+        throw new Error('network timeout');
+      }),
+    /cannot confirm \.github\/idd\/config\.json for o\/r@main/,
+  );
+});
+
+test('loadTrustedIddConfig rethrows on malformed (non-JSON) fetched content', () => {
+  assert.throws(
+    () =>
+      loadTrustedIddConfig('o', 'r', 'main', () =>
+        Buffer.from('not json', 'utf8').toString('base64'),
+      ),
+    /cannot confirm \.github\/idd\/config\.json for o\/r@main/,
+  );
+});
+
+// Regression: mirrors loadPolicyConfig's own #1776 fix (JSON.parse('null')
+// succeeds without throwing, so a syntactically-valid top-level scalar/
+// array/null would otherwise masquerade as this function's own "absent"
+// (404) sentinel).
+
+test('loadTrustedIddConfig rethrows on a top-level JSON null instead of treating it as absent', () => {
+  assert.throws(
+    () => loadTrustedIddConfig('o', 'r', 'main', () => toEncodedConfig(null)),
+    /cannot confirm \.github\/idd\/config\.json for o\/r@main: .*expected a JSON object at the top level, got null/,
+  );
+});
+
+test('loadTrustedIddConfig rethrows on a top-level JSON array', () => {
+  assert.throws(
+    () => loadTrustedIddConfig('o', 'r', 'main', () => toEncodedConfig([])),
+    /expected a JSON object at the top level, got an array/,
+  );
+});
+
+// #2373 acceptance criterion: "an empty-but-fetched .content rethrows
+// rather than silently falling back to a permissive default" -- decoding
+// an empty string yields an empty JSON document, which JSON.parse rejects
+// (SyntaxError, no HTTP status text), so this already falls into the
+// non-404 rethrow path; this test names that criterion explicitly.
+
+test('loadTrustedIddConfig rethrows when the fetch returns empty content', () => {
+  assert.throws(
+    () => loadTrustedIddConfig('o', 'r', 'main', () => ''),
+    /cannot confirm \.github\/idd\/config\.json for o\/r@main/,
+  );
 });

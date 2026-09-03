@@ -75,6 +75,21 @@ export const ADVISORY_CAP_EXHAUSTED_ROUTES = new Set([
 ]);
 const POLICY_SCHEMA = loadJson('schemas/policy.schema.json');
 
+/**
+ * True when `config`'s `advisoryWait` section passes {@link POLICY_SCHEMA}
+ * validation (or the section is absent) -- the same gate every `read*`
+ * wrapper below applies to a freshly-parsed file before calling its
+ * `resolve*` sibling. Exported so a caller that already holds a parsed
+ * config from a source other than a local file (`pre-merge-readiness.mts`'s
+ * trusted-ref read, #2373) can apply the identical validate-or-default rule
+ * instead of duplicating this schema check.
+ */
+export function advisoryWaitSectionIsValid(config: unknown): boolean {
+  return (
+    validateConfigSection(config, POLICY_SCHEMA, 'advisoryWait').length === 0
+  );
+}
+
 interface AdvisoryWaitPolicy {
   requestCap: number;
   pendingWindowMinutes: number;

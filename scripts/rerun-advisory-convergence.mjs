@@ -134,7 +134,7 @@ import {
 } from './ci-wait-policy.mjs';
 import { parseCanonicalIntegerOrNull, parseCliArgs } from './cli-args.mjs';
 import { GH_TEXT_LOOP_TIMEOUT_OPTIONS, ghText } from './gh-exec.mjs';
-import { deriveGhHttpStatus } from './gh-http-status.mjs';
+import { loadTrustedIddConfig } from './idd-config.mjs';
 import { isValidIsoTimestamp } from './marker-helpers.mjs';
 import {
   advisoryBotIdentityToken,
@@ -1481,10 +1481,11 @@ function fetchCheckRunsForRef(owner, repo, ref, checkName) {
   return parsePaginatedGhNdjson(raw);
 }
 /**
- * Fetch and parse `.github/idd/config.json` for `owner/repo` **at `ref`**
- * via the Contents API. Used unconditionally -- both a same-repo and a
- * true cross-repository invocation -- rather than a local `readFileSync`
- * fallback for the same-repo case (`loadIddConfig`, idd-config.mts).
+ * `.github/idd/config.json` for `owner/repo` **at `ref`**, fetched via
+ * {@link loadTrustedIddConfig} (idd-config.mts) -- generalized there from
+ * this file's original private implementation (#1434) so
+ * `pre-merge-readiness.mts` shares the same fetch-and-classify contract
+ * instead of a second, near-identical `gh api contents` call (#2373).
  *
  * `ref` must be the repository's TRUSTED default branch (see
  * {@link resolveDefaultBranch}), never `prHeadSha` and never a local
@@ -1502,60 +1503,8 @@ function fetchCheckRunsForRef(owner, repo, ref, checkName) {
  * actually governed those runs (#1434 review, Codex P2, second
  * occurrence -- reverts this file's own prior "always prHeadSha" fix,
  * which solved the "unpinned ref" bug but pinned the wrong ref).
- *
- * `--method GET` is required alongside the `-f ref=...` field, for the
- * same reason `buildCheckRunsForRefArgs` above needs it: `gh api` defaults
- * to POST as soon as any `-f` value is present, and the Contents API only
- * accepts GET -- an unqualified `-f ref=...` here would 404 on every call
- * (confirmed empirically), which this function's own catch block would
- * silently treat as "config genuinely absent, use defaults" instead of
- * surfacing the real problem.
- *
- * Returns `null` -- falls back to documented defaults, same as a missing
- * local file -- **only** on a confirmed 404 (`ref` genuinely has no
- * config committed, the same "absent" state `loadIddConfig` treats as
- * "use defaults" locally). Any other failure -- a permission error, a
- * transient Contents API failure, or malformed content -- means this
- * helper cannot confirm whether `ref` configures a non-default bot
- * identity, so silently substituting defaults could misclassify a
- * bot-triggered run there as rerun-eligible. Per this repo's own
- * fail-closed default (`idd-overview-core.instructions.md`), that
- * ambiguity throws instead of guessing, rejecting the diagnosis outright
- * rather than proceeding on unconfirmed bot identity (#1434 review, Codex
- * P2).
  */
-export function buildIddConfigContentsArgs(owner, repo, ref) {
-  return [
-    'api',
-    `repos/${owner}/${repo}/contents/.github/idd/config.json`,
-    '--method',
-    'GET',
-    '-f',
-    `ref=${ref}`,
-    '--jq',
-    '.content',
-  ];
-}
-function loadRemoteIddConfig(owner, repo, ref) {
-  try {
-    const encoded = ghText(
-      buildIddConfigContentsArgs(owner, repo, ref),
-      GH_TEXT_LOOP_TIMEOUT_OPTIONS,
-    );
-    const decoded = Buffer.from(encoded.replace(/\n/g, ''), 'base64').toString(
-      'utf8',
-    );
-    return JSON.parse(decoded);
-  } catch (error) {
-    if (deriveGhHttpStatus(error) === 404) {
-      return null;
-    }
-    const message = error instanceof Error ? error.message : String(error);
-    throw new Error(
-      `cannot confirm .github/idd/config.json for ${owner}/${repo}@${ref}: bot-identity resolution for this diagnosis requires this file to be readable or genuinely absent (404) at this ref, not merely unreadable -- ${message}`,
-    );
-  }
-}
+const loadRemoteIddConfig = loadTrustedIddConfig;
 /**
  * Resolve `owner/repo`'s default branch via the Repository API -- the
  * `ref` {@link loadRemoteIddConfig} must read `.github/idd/config.json`

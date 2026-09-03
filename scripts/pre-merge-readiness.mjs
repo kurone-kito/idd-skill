@@ -4,30 +4,26 @@
 // The scripts/pre-merge-readiness.mjs copy is generated from the .mts
 // source named above by `pnpm run build`. Edit the .mts source, never the
 // generated .mjs. See docs/typescript-sources.md.
-import { readFileSync } from 'node:fs';
 import {
+  advisoryWaitSectionIsValid,
   DEFAULT_ADVISORY_CONVERGENCE_CHECK_SELECTOR,
-  readAdvisoryConvergenceDeadlineMinutes,
-  readAdvisoryPrimaryBotLogin,
-  readAdvisoryRecoveryCycleCap,
-  readAdvisorySecondaryBotLogin,
-  readAdvisorySecondaryQuietWindowMinutes,
-  readAdvisoryTerminalWindowMinutes,
-  readAdvisoryWaitPolicy,
+  resolveAdvisoryConvergenceDeadlineMinutes,
+  resolveAdvisoryPrimaryBotLogin,
+  resolveAdvisoryRecoveryCycleCap,
+  resolveAdvisorySecondaryBotLogin,
+  resolveAdvisorySecondaryQuietWindowMinutes,
+  resolveAdvisoryTerminalWindowMinutes,
+  resolveAdvisoryWaitPolicy,
 } from './advisory-wait-policy.mjs';
 import { buildCopilotRecoverySummary } from './advisory-wait-state.mjs';
 import { parseCliArgs } from './cli-args.mjs';
-import {
-  isAuthorizedForcedHandoffActor,
-  readForcedHandoffAuthorityPolicy,
-  readForcedHandoffMode,
-} from './collaborator-permission.mjs';
+import { isAuthorizedForcedHandoffActor } from './collaborator-permission.mjs';
 import {
   normalizeAuthorityEvidence,
   resolveCollaboratorAuthority,
 } from './external-check-waiver.mjs';
 import { deriveGhHttpStatus } from './gh-http-status.mjs';
-import { loadIddConfig } from './idd-config.mjs';
+import { loadTrustedIddConfig } from './idd-config.mjs';
 import {
   inspectDevelopmentBranch,
   normalizePolicyConfig,
@@ -189,6 +185,7 @@ const PRE_MERGE_READINESS_FLAG_SPEC = {
 export function collectPreMergeReadiness(
   argv,
   createPort = createGithubProviderAdapter,
+  loadTrustedConfig = loadTrustedIddConfig,
 ) {
   const args = parseArgs(argv);
   // --help used to exit from inside the parseArgs token loop; relocated
@@ -212,19 +209,6 @@ export function collectPreMergeReadiness(
   const port = createPort(owner, repo);
   const viewerLogin = port.resolveViewerLoginSafe().viewerLogin;
   const viewerAppSlug = port.resolveViewerAppSlugSafe().appSlug.toLowerCase();
-  const iddConfig = loadIddConfig();
-  const { actors: configuredTrustedActors, source: trustedMarkerActorsSource } =
-    resolveTrustedMarkerActors({
-      flagValue: args.trustedMarkerLogins,
-      envValue: process.env.IDD_TRUSTED_MARKER_ACTORS,
-      config: iddConfig,
-    });
-  const { logins: advisoryBotLogins, source: advisoryBotLoginsSource } =
-    resolveAdvisoryBotLogins({
-      flagValue: args.advisoryBotLogins,
-      envValue: process.env.IDD_ADVISORY_BOT_LOGINS,
-      config: iddConfig,
-    });
   // #1513: `mergeable`/`mergeStateStatus` are part of this same richest
   // single `pr view` call (no extra network round-trip) so the branch-
   // currency gate below can pair a live `BEHIND` state with the up-to-date-
@@ -247,10 +231,60 @@ export function collectPreMergeReadiness(
       );
     }
   }
+  // #2373: EVERY config-driven gate below resolves `.github/idd/config.json`
+  // from this ONE trusted-ref read, never a local worktree read -- the F3
+  // merge-gate helper normally runs from the claimed PR's own worktree
+  // (B1 creates it from the PR's branch), so a local read would return the
+  // PR branch's own possibly-edited copy of its policy file, letting a PR
+  // widen its own trustedMarkerActors, loosen a ciGate setting, or disguise
+  // its developmentBranchTarget check against itself. `baseRefName` -- the
+  // PR's base branch -- is the trust boundary; when a PR context cannot
+  // supply one (defensive only, `--pr` is required so this is normally
+  // non-empty), this falls back to the repository's live default branch,
+  // matching `developmentBranchTarget`'s own `liveDefaultBranch` fallback
+  // below. `--pr <number>` is a required argument on every path, including
+  // `--claimless` (checked above) -- confirmed no call site of this file
+  // (nor `idd-doctor.mts`, whose own `readTrustEmptyProtectionReads` is a
+  // distinct, root-scoped local reader unrelated to this one) invokes
+  // `collectPreMergeReadiness` without `--pr`, so this fallback is
+  // defensive-only, not a documented "no PR at all" entry point.
+  const trustedConfigRef =
+    baseRefName || port.getRepositoryDefaultBranch(owner, repo);
+  if (!trustedConfigRef) {
+    throw new Error(
+      `cannot resolve a trusted ref for .github/idd/config.json: PR #${args.prNumber} has no baseRefName and the repository's live default branch could not be determined`,
+    );
+  }
+  const iddConfig = loadTrustedConfig(owner, repo, trustedConfigRef);
+  // Schema-validated once here, matching every `advisoryWait.*` resolver's
+  // own individual `read*` wrapper (advisory-wait-policy.mts) validating
+  // before it resolves -- an invalid `advisoryWait` section falls back to
+  // schema defaults for the WHOLE section rather than leaving a malformed
+  // field to whichever resolver reads it next.
+  const advisoryWaitConfig = advisoryWaitSectionIsValid(iddConfig)
+    ? iddConfig
+    : {};
+  const { actors: configuredTrustedActors, source: trustedMarkerActorsSource } =
+    resolveTrustedMarkerActors({
+      flagValue: args.trustedMarkerLogins,
+      envValue: process.env.IDD_TRUSTED_MARKER_ACTORS,
+      config: iddConfig,
+    });
+  const { logins: advisoryBotLogins, source: advisoryBotLoginsSource } =
+    resolveAdvisoryBotLogins({
+      flagValue: args.advisoryBotLogins,
+      envValue: process.env.IDD_ADVISORY_BOT_LOGINS,
+      config: iddConfig,
+    });
   // #2272: fail-closed development-branch invariant. Only reads the live
   // repository default branch when the policy is silent (`'absent'`) --
   // a configured or malformed value never needs it, so a repo with an
-  // explicit `developmentBranch` never pays this extra `gh api` call.
+  // explicit `developmentBranch` never pays this extra `gh api` call. Kept
+  // as its own lazy `getRepositoryDefaultBranch` call rather than reusing
+  // `trustedConfigRef` above: that value is eagerly resolved for every PR
+  // (`baseRefName` is normally non-empty), so merging the two would pay
+  // this call unconditionally instead of only on the rare-in-practice
+  // policy-silent path.
   const developmentBranchInspection = inspectDevelopmentBranch(iddConfig);
   const liveDefaultBranch =
     developmentBranchInspection.status === 'absent'
@@ -274,7 +308,7 @@ export function collectPreMergeReadiness(
   const checks = (snapshot.statusCheckRollup ?? []).map(
     normalizeStatusCheckRollupEntry,
   );
-  const trustEmptyProtectionReads = readTrustEmptyProtectionReads();
+  const trustEmptyProtectionReads = readTrustEmptyProtectionReads(iddConfig);
   const branchRulesRead = fetchGovernanceJson(
     `repos/${owner}/${repo}/rules/branches/${encodedBaseRefName}`,
     true,
@@ -367,7 +401,7 @@ export function collectPreMergeReadiness(
     viewerLogin,
     branchProtection,
   );
-  const collaboratorTrustEnabled = readCollaboratorTrustEnabled();
+  const collaboratorTrustEnabled = readCollaboratorTrustEnabled(iddConfig);
   const trustedMarkerLogins = normalizeTrustedMarkerLogins([
     viewerLogin,
     ...configuredTrustedActors,
@@ -384,10 +418,11 @@ export function collectPreMergeReadiness(
     trustedMarkerLogins,
     operationalComments: [...comments, ...claimComments],
   });
-  const advisoryWaitPolicy = readAdvisoryWaitPolicy();
-  const primaryBotLogin = readAdvisoryPrimaryBotLogin();
-  const forcedHandoffAuthorityPolicy = readForcedHandoffAuthorityPolicy();
-  const forcedHandoffEnabled = readForcedHandoffMode() === 'human-gated';
+  const advisoryWaitPolicy = resolveAdvisoryWaitPolicy(advisoryWaitConfig);
+  const primaryBotLogin = resolveAdvisoryPrimaryBotLogin(advisoryWaitConfig);
+  const forcedHandoffPolicy = normalizePolicyConfig(iddConfig).forcedHandoff;
+  const forcedHandoffAuthorityPolicy = forcedHandoffPolicy.authorityPolicy;
+  const forcedHandoffEnabled = forcedHandoffPolicy.mode === 'human-gated';
   // The PR's first-commit time backs the Part B forced-handoff rule (#1058):
   // a legitimate issue-only handoff that predates the PR is honored even
   // against a PR-backed claim. This allowance is applied on the merge side
@@ -408,11 +443,13 @@ export function collectPreMergeReadiness(
     }
   }
   const forcedHandoffPermissionCache = new Map();
-  const waivableCheckSelectors = readWaivableCheckSelectors();
-  const externalCheckWaiverMaxValidity = readExternalCheckWaiverMaxValidity();
-  const externalCheckWaiverMode = readExternalCheckWaiverMode();
-  const trustSourcePinnedRequiredChecks = readTrustSourcePinnedRequiredChecks();
-  const staleAgeMs = readClaimStaleAgeMs();
+  const waivableCheckSelectors = readWaivableCheckSelectors(iddConfig);
+  const externalCheckWaiverMaxValidity =
+    readExternalCheckWaiverMaxValidity(iddConfig);
+  const externalCheckWaiverMode = readExternalCheckWaiverMode(iddConfig);
+  const trustSourcePinnedRequiredChecks =
+    readTrustSourcePinnedRequiredChecks(iddConfig);
+  const staleAgeMs = readClaimStaleAgeMs(iddConfig);
   const now = args.now || new Date().toISOString().replace('.000Z', 'Z');
   const normalizedComments = comments.map(normalizeComment);
   const normalizedReviews = reviews.map(normalizeReview);
@@ -433,9 +470,11 @@ export function collectPreMergeReadiness(
     headCommittedAt: advisoryConvergenceHeadCommittedAt,
   } = fetchReviewsAndHeadCommit(owner, repo, args.prNumber, port);
   const advisoryConvergenceDeadlineMinutes =
-    readAdvisoryConvergenceDeadlineMinutes();
-  const secondaryQuietWindowMinutes = readAdvisorySecondaryQuietWindowMinutes();
-  const secondaryBotLogin = readAdvisorySecondaryBotLogin();
+    resolveAdvisoryConvergenceDeadlineMinutes(advisoryWaitConfig);
+  const secondaryQuietWindowMinutes =
+    resolveAdvisorySecondaryQuietWindowMinutes(advisoryWaitConfig);
+  const secondaryBotLogin =
+    resolveAdvisorySecondaryBotLogin(advisoryWaitConfig);
   // #1570: precompute the `#1572` terminal Copilot-unavailability verdict
   // here (the CLI/orchestration layer) rather than inside
   // `buildPreMergeReadinessSummary` (protocol-helpers.mts), which cannot
@@ -484,8 +523,9 @@ export function collectPreMergeReadiness(
       trustedMarkerLogins,
       claimId: args.expectedClaimId,
       agentId: args.expectedAgentId,
-      recoveryCycleCap: readAdvisoryRecoveryCycleCap(),
-      terminalWindowMinutes: readAdvisoryTerminalWindowMinutes(),
+      recoveryCycleCap: resolveAdvisoryRecoveryCycleCap(advisoryWaitConfig),
+      terminalWindowMinutes:
+        resolveAdvisoryTerminalWindowMinutes(advisoryWaitConfig),
     },
   );
   const copilotUnavailable = copilotRecovery.state === 'COPILOT_UNAVAILABLE';
@@ -494,6 +534,7 @@ export function collectPreMergeReadiness(
       port,
       owner,
       repo,
+      iddConfig,
       copilotUnavailable,
       waivableCheckSelectors,
       now,
@@ -1115,64 +1156,44 @@ function splitCsv(value) {
     .map((token) => token.trim())
     .filter(Boolean);
 }
-function isTruthy(value) {
-  return /^(1|true|yes)$/i.test(String(value ?? '').trim());
-}
-function readCollaboratorTrustEnabled() {
-  try {
-    return resolveCollaboratorMarkerTrust(
-      JSON.parse(readFileSync('.github/idd/config.json', 'utf8')),
-      process.env.IDD_TRUST_COLLABORATOR_MARKERS,
-    );
-  } catch {
-    // Fall through to env-var fallback.
-  }
-  return isTruthy(process.env.IDD_TRUST_COLLABORATOR_MARKERS);
+// #2373: takes the already-resolved trusted-ref config (see
+// `collectPreMergeReadiness`'s own `iddConfig` resolution) instead of
+// reading `.github/idd/config.json` locally -- `normalizePolicyConfig`/
+// `resolveCollaboratorMarkerTrust` already treat `null` (and a malformed
+// shape within a valid object) as "unconfigured", so no try/catch is
+// needed here now that the fetch itself owns the fail-closed contract.
+function readCollaboratorTrustEnabled(iddConfig) {
+  return resolveCollaboratorMarkerTrust(
+    iddConfig,
+    process.env.IDD_TRUST_COLLABORATOR_MARKERS,
+  );
 }
 // Configured waivable external-check selectors (`ciGate.externalChecks.
 // waivable`). The F2 gate only lets a valid waiver fold a check into
-// `requiredChecksPassing` when that check sits on this surface; an absent or
-// unreadable config yields an empty list (nothing waivable).
-function readWaivableCheckSelectors() {
-  try {
-    return [
-      ...normalizePolicyConfig(
-        JSON.parse(readFileSync('.github/idd/config.json', 'utf8')),
-      ).ciGate.externalChecks.waivable,
-    ];
-  } catch {
-    return [];
-  }
+// `requiredChecksPassing` when that check sits on this surface; an absent
+// config yields an empty list (nothing waivable).
+function readWaivableCheckSelectors(iddConfig) {
+  return [...normalizePolicyConfig(iddConfig).ciGate.externalChecks.waivable];
 }
 // Configured external-check waiver validity window (`ciGate.
 // externalCheckWaivers.maxValidity`). The consume side re-enforces it so a
 // waiver whose `expiresAt - createdAt` outlives the policy window cannot count
-// as valid. `normalizePolicyConfig` already defaults this to `PT24H`; an absent
-// or unreadable config falls back to the same authoring default.
-function readExternalCheckWaiverMaxValidity() {
-  try {
-    return normalizePolicyConfig(
-      JSON.parse(readFileSync('.github/idd/config.json', 'utf8')),
-    ).ciGate.externalCheckWaivers.maxValidity;
-  } catch {
-    return 'PT24H';
-  }
+// as valid. `normalizePolicyConfig` already defaults this to `PT24H`; an
+// absent config falls back to the same authoring default.
+function readExternalCheckWaiverMaxValidity(iddConfig) {
+  return normalizePolicyConfig(iddConfig).ciGate.externalCheckWaivers
+    .maxValidity;
 }
 // Configured external-check waiver mode (`ciGate.externalCheckWaivers.mode`,
 // #2046). `mode` gates the WHOLE waiver mechanism independent of the
-// `waivable` selector list -- an absent or unreadable config falls back to
+// `waivable` selector list -- an absent config falls back to
 // `normalizePolicyConfig`'s own schema default (`disabled`), the fail-closed
-// choice: an unreadable config can never make this check wrongly report an
-// otherwise-valid waiver as covered when the real required check would not
-// honor it, mirroring `advisory-convergence.mts`'s own fail-closed guard.
-function readExternalCheckWaiverMode() {
-  try {
-    return normalizePolicyConfig(
-      JSON.parse(readFileSync('.github/idd/config.json', 'utf8')),
-    ).ciGate.externalCheckWaivers.mode;
-  } catch {
-    return 'disabled';
-  }
+// choice: an unconfigured repository can never make this check wrongly
+// report an otherwise-valid waiver as covered when the real required check
+// would not honor it, mirroring `advisory-convergence.mts`'s own
+// fail-closed guard.
+function readExternalCheckWaiverMode(iddConfig) {
+  return normalizePolicyConfig(iddConfig).ciGate.externalCheckWaivers.mode;
 }
 // #2353 (Codex review on PR #2370, second follow-up): a declaration's own
 // `startedAt` is generated before the `--declare --apply` interactive
@@ -1227,15 +1248,14 @@ function resolveAdvisoryConvergenceOutageRelief({
   port,
   owner,
   repo,
+  iddConfig,
   copilotUnavailable,
   waivableCheckSelectors,
   now,
 }) {
   const notRelieved = { relieved: false, since: '' };
   try {
-    const policy = normalizePolicyConfig(
-      JSON.parse(readFileSync('.github/idd/config.json', 'utf8')),
-    );
+    const policy = normalizePolicyConfig(iddConfig);
     if (policy.ciGate.externalCheckWaivers.mode !== 'maintainer-authorized') {
       return notRelieved;
     }
@@ -1283,28 +1303,25 @@ function resolveAdvisoryConvergenceOutageRelief({
 }
 // Configured claim-staleness window (`claimTiming.staleAge`, #1310), parsed
 // to milliseconds so the write-gate claim resolver honors it instead of the
-// hardcoded 24h `isStaleAt` default. Reuses the shared `loadIddConfig`
-// loader (already imported by this file) instead of a per-helper
-// `readFileSync + JSON.parse` copy; `loadIddConfig` already fails safe to
-// `null` and `normalizePolicyConfig(null)` already defaults to `PT24H`, so
-// no separate try/catch is needed here. An absent, unreadable, or
-// unparseable config falls back to the shared `DEFAULT_STALE_AGE_MS`
-// (protocol-helpers.mts) rather than a second local 24h literal, so
-// behavior is unchanged for repos on the default and there is exactly one
-// hardcoded-24h source of truth.
-function readClaimStaleAgeMs() {
-  const staleAge = normalizePolicyConfig(loadIddConfig()).claimTiming.staleAge;
+// hardcoded 24h `isStaleAt` default. Takes the caller's already-resolved
+// trusted-ref config (#2373) instead of its own `.github/idd/config.json`
+// read; `normalizePolicyConfig(null)` already defaults to `PT24H`, so no
+// try/catch is needed here. An absent or unparseable value falls back to
+// the shared `DEFAULT_STALE_AGE_MS` (protocol-helpers.mts) rather than a
+// second local 24h literal, so behavior is unchanged for repos on the
+// default and there is exactly one hardcoded-24h source of truth.
+function readClaimStaleAgeMs(iddConfig) {
+  const staleAge = normalizePolicyConfig(iddConfig).claimTiming.staleAge;
   return parseIsoDurationToMs(staleAge) ?? DEFAULT_STALE_AGE_MS;
 }
 // Configured governance-read trust opt-in (`ciGate.trustEmptyProtectionReads`,
-// #1377). Reuses the shared `loadIddConfig` loader (already imported by this
-// file); an absent, unreadable, or unparseable config fails safe to the
-// `false` default via `normalizePolicyConfig(null)`, matching
-// `readClaimStaleAgeMs`'s pattern above.
-function readTrustEmptyProtectionReads() {
+// #1377). Takes the caller's already-resolved trusted-ref config (#2373);
+// an absent or unparseable config fails safe to the `false` default via
+// `normalizePolicyConfig(null)`, matching `readClaimStaleAgeMs`'s pattern
+// above.
+function readTrustEmptyProtectionReads(iddConfig) {
   return (
-    normalizePolicyConfig(loadIddConfig()).ciGate.trustEmptyProtectionReads ===
-    true
+    normalizePolicyConfig(iddConfig).ciGate.trustEmptyProtectionReads === true
   );
 }
 // Configured source-pinned required-check trust opt-in
@@ -1312,10 +1329,10 @@ function readTrustEmptyProtectionReads() {
 // `readTrustEmptyProtectionReads` above; see `summarizeRequiredChecks`'s
 // (protocol-helpers.mts) doc comment on the option of the same name for the
 // full rationale.
-function readTrustSourcePinnedRequiredChecks() {
+function readTrustSourcePinnedRequiredChecks(iddConfig) {
   return (
-    normalizePolicyConfig(loadIddConfig()).ciGate
-      .trustSourcePinnedRequiredChecks === true
+    normalizePolicyConfig(iddConfig).ciGate.trustSourcePinnedRequiredChecks ===
+    true
   );
 }
 /**
