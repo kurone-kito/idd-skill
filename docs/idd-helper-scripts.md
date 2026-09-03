@@ -11,6 +11,74 @@ This document records the current decision on optional helper scripts for
 the IDD workflow. It exists so future reviews can reference the trade-off
 directly instead of re-evaluating the same suggestion from scratch.
 
+## Flag-name and field-name conventions
+
+Several helpers require a specific flag name that does not match
+instinct, and throw rather than defaulting to a same-named flag from a
+different helper. `--issue` is the sharpest trap: it is a genuine,
+functioning flag on several other helpers -- required outright on
+`forced-handoff-marker.mjs` and `claim-approval-gate.mjs`, and
+required as one of a small set of mutually exclusive input flags on
+`discover-viability-gate.mjs` (or `--issues`) and
+`suitability-triage.mjs` (or `--body-file` / `--stdin`) -- which primes
+the instinct to reach for it elsewhere. But the claim-revalidation flag
+on most mutation-capable helpers is named `--claim-issue` instead, and
+requiredness varies by helper:
+
+- **Unconditionally required** (modulo an explicit opt-out):
+  `pre-merge-readiness.mjs` throws without `--claim-issue` unless
+  `--claimless` is passed.
+- **Required only under `--apply`, with an explicit opt-out**:
+  `audit-pr-cleanup.mjs` and `live-status-digest.mjs` both accept
+  `--skip-claim-check` in place of `--claim-issue`/`--claim-id`.
+- **Required only under `--apply`, with no opt-out**:
+  `disposition-non-review-notices.mjs` and `resolve-review-thread.mjs`.
+  None of these four ever need the flag outside `--apply`.
+- **Optional, with auto-discovery when omitted**:
+  `advisory-convergence.mjs` (falls back to the PR's closing-issue
+  references) and `idd-roadmap-audit-execute.mjs` (the flag, when
+  given, is only cross-checked against `--roadmap`; the apply-mode
+  identity flag there is `--claim-id`, not `--claim-issue`).
+
+`live-status-digest.mjs` is the one helper where `--issue` and
+`--claim-issue` coexist as genuinely different flags: `--issue` is the
+digest's own target (mutually exclusive with `--pr`), and
+`--claim-issue` is the separate claim-revalidation flag -- the two are
+not interchangeable there either. (`idd-merge-execute.mjs` forwards
+any flag it does not recognize verbatim to `pre-merge-readiness.mjs`,
+so `--claim-issue` reaches it transitively even though it declares no
+such flag of its own.)
+
+No single top-level decision/verdict field name is consistent across
+the evidence-collector family. This reflects organic accretion across
+many independently authored helpers rather than a recorded design
+decision, and no normalization is currently planned. Read each
+helper's own `--help` output or its documented JSON shape rather than
+assuming a field name carries over -- a name that looks like a field in
+the source (a type or local-variable name) is not necessarily one of
+the printed object's own top-level keys. Representative examples:
+`advisory-convergence.mjs` and `pre-merge-readiness.mjs` both return a
+top-level `ready` boolean (the latter alongside `blockers`);
+`idd-roadmap-audit-execute.mjs` also returns `ready`;
+`discover-readiness-check.mjs` returns `ready` in its default
+per-issue mode, but a structurally different `{eligible,
+eligible_count, total}` shape under `--swarm-floor`;
+`discover-viability-gate.mjs` returns `viable` and `discarded` (not
+`passed` -- that name exists only on an internal per-issue helper,
+never copied into the printed output); `suitability-triage.mjs`
+returns `passed` for its live `--issue` invocation, but its offline
+`--body-file`/`--stdin` mode intentionally carries no aggregate
+`passed` value at all; `claim-approval-gate.mjs` returns `approved`.
+The mutation-style helpers overlap rather than cleanly splitting on
+one field: `audit-pr-cleanup.mjs` exposes both `mode`
+(`dry-run`/`apply`) and `status` (a seven-value vocabulary: `clean`,
+`needs-apply`, `permission-blocked`, `rescan-failed`, `failed`,
+`incomplete`, `applied`); `disposition-non-review-notices.mjs` prints
+no `status` key at all in its default dry-run mode, and only
+`applied`/`failed` under `--apply`; `resolve-review-thread.mjs`
+returns `mode` (`dry-run`/`apply`) alongside its own separate
+`status?` (`applied`/`failed`).
+
 ## Decision
 
 In the idd-skill source repository, the following optional helpers were adopted:
