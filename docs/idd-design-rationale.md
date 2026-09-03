@@ -404,6 +404,30 @@ adopters scale out concurrent sessions (#1391). Hosted CI governs when
 it disagrees with a local outcome for the same commit; that does not
 waive the fix-validate / pre-push-validate requirements themselves.
 
+### B3 — Edit the canonical source of a generated docs/instructions file, not its mirror
+
+This repository generates several `docs/**.md` and
+`.github/instructions/**.md` files from an `idd-template/` canonical
+source via `sync-docs.mjs`. Editing the generated mirror directly is
+silently discarded on the next `sync-docs.mjs --apply` run, since the
+mirror and its canonical source are often byte-identical or
+near-identical, giving no visual cue at a glance. Only a
+`.github/instructions/**.instructions.md` mirror carries an
+`idd-generated-from` banner at its top -- a `docs/**.md` mirror never
+does, so checking for the banner alone misses exactly this file class.
+Both real occurrences in this repository were `docs/**.md` files
+(`docs/idd-helper-scripts.md` and `docs/policy-constants.md`, both
+caught pre-commit via `git status` plus a manual
+`audit/sync-manifest.json` lookup, never merged but each costing a
+revert-and-redo cycle -- observed 2026-09-03, `#2548`), and a
+structurally identical bug independently surfaced the same session
+inside a brand-new `audit-docs.mjs` checker (observed 2026-09-03,
+`#2477`): its file-attribution logic
+initially cited the generated mirror in a drift finding instead of the
+canonical source, for the same root cause. Checking
+`audit/sync-manifest.json`'s `syncPairs` for a matching `target` entry
+closes that gap and catches this before any work is lost.
+
 ## Review triage
 
 ### Merge-main livelock under fast-moving `main`

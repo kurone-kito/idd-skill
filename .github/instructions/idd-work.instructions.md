@@ -341,6 +341,27 @@ pre-push-validate requirements above. Otherwise treat it as a real
 failure and fix it. See
 [rationale](../../docs/idd-design-rationale.md#b3--local-test-flakiness-under-concurrent-load-hosted-ci-is-authoritative).
 
+**Editing a docs/instructions file**: before editing any `docs/**.md`
+or `.github/instructions/**.md` file, check whether it is a generated
+mirror. A `.github/instructions/**.instructions.md` file carries an
+`idd-generated-from` banner at its top when it is one -- the banner
+itself names the canonical source and the resync command, valid only
+for an `exact`/`concreted`-style pair. A `docs/**.md` file may not
+carry that banner even when it is a mirror; check this repository's
+sync manifest (for example `audit/sync-manifest.json` in the
+`idd-skill` source repository, or your own repository's equivalent
+config) for an entry naming this file as a mirror target instead, and
+follow that entry's own mode contract. An `exact`/`concreted`-style
+entry auto-regenerates the mirror from its named canonical source when
+the resync command runs -- edit only that source, never the mirror
+directly, or the edit is silently discarded on the next sync. Any
+other mode (for example one that only requires certain text or
+patterns to be present, with no single canonical source to
+auto-regenerate from) follows its own stated contract instead --
+consult the manifest entry itself rather than assuming auto-regenerate
+applies. See
+[rationale](../../docs/idd-design-rationale.md#b3--edit-the-canonical-source-of-a-generated-docsinstructions-file-not-its-mirror).
+
 If B3 or C must stop for a hold, use the shared Hold / suspend rules in
 `idd-overview-appendix.instructions.md` and update the issue digest with the
 blocking condition before stopping. Do not use the digest as the only

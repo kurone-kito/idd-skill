@@ -407,6 +407,26 @@ concurrent sessions (kurone-kito/idd-skill#1391). Hosted CI governs
 when it disagrees with a local outcome for the same commit; that does
 not waive the fix-validate / pre-push-validate requirements themselves.
 
+### B3 — Edit the canonical source of a generated docs/instructions file, not its mirror
+
+An adopter repository that generates some of its own `docs/**.md` or
+`.github/instructions/**.md` files from a canonical source (via a
+sync-docs-style tool) can lose a fix silently: an agent edits the
+generated mirror directly, the change looks correct locally, but the
+next sync run regenerates the mirror from its canonical source and
+discards the edit without any error -- a real incident cost a
+revert-and-redo cycle before the guidance below existed
+(kurone-kito/idd-skill#2548). The mistake is easy to make because the
+mirror and its canonical source are often byte-identical or
+near-identical, giving no visual cue at a glance. Only a
+`.github/instructions/**.instructions.md` mirror is guaranteed to
+carry a visible `idd-generated-from` banner at its top; a `docs/**.md`
+mirror may not, depending on the sync tool's own behavior, so the
+banner check alone can miss exactly the file class most likely to be
+mistaken for hand-editable prose. Checking the sync tool's own
+manifest for a matching target entry closes that gap for `docs/**.md`
+files, at the cost of one extra lookup.
+
 ## Review triage
 
 ### Merge-main livelock under fast-moving `main`
