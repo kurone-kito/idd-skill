@@ -726,16 +726,16 @@ export function collectPreMergeReadiness(
   // #2554: shortens the terminal-unavailability window below to
   // `advisoryWait.providerOutage.terminalWindow` only while an active
   // repository-scoped outage declaration covers the SAME
-  // `idd-advisory-convergence` selector `resolveAdvisoryConvergenceOutage-
-  // Relief` (further below) independently re-resolves for its own waiver-
-  // relief purpose. A second, independent fetch here -- rather than sharing
-  // that function's result -- matches this file's own established tolerance
-  // for independent per-consumer evidence collection (see
-  // `lastCopilotCommit`'s doc comment above: "tolerable by construction ...
-  // any disagreement fails closed"). Fails closed to `false` on ANY error,
-  // exactly like `resolveAdvisoryConvergenceOutageRelief`: a transient fetch
-  // failure must never shorten the terminal-unavailability window this
-  // gates.
+  // `idd-advisory-convergence` selector that
+  // `resolveAdvisoryConvergenceOutageRelief` (further below) independently
+  // re-resolves for its own waiver-relief purpose. A second, independent
+  // fetch here -- rather than sharing that function's result -- matches
+  // this file's own established tolerance for independent per-consumer
+  // evidence collection (see `lastCopilotCommit`'s doc comment above:
+  // "tolerable by construction ... any disagreement fails closed"). Fails
+  // closed to `false` on ANY error, exactly like
+  // `resolveAdvisoryConvergenceOutageRelief`: a transient fetch failure
+  // must never shorten the terminal-unavailability window this gates.
   const outageDeclarationActiveForTerminalWindow =
     resolveOutageDeclarationActiveForConvergenceSelector({
       port,

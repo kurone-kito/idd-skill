@@ -563,8 +563,10 @@ above:
 This override applies only while `resolveProviderOutageDeclaration`
 confirms a currently-valid declaration is active for the
 `idd-advisory-convergence` selector; otherwise `advisoryWait.terminalWindow`
-applies unconditionally, unchanged. `advisoryWait.recoveryCycleCap` is
-never affected by this override.
+applies unconditionally, unchanged. It is clamped to never exceed
+`advisoryWait.terminalWindow` itself, so a value configured longer than the
+base window has no effect — this is a shortening mechanism only.
+`advisoryWait.recoveryCycleCap` is never affected by this override.
 
 ## Phase ID Compatibility Contract
 

@@ -385,9 +385,14 @@ export function resolveProviderOutageTerminalWindowMinutes(config = {}) {
  * Resolve the EFFECTIVE terminal-unavailability window (#2554, in minutes):
  * the unconditional {@link resolveAdvisoryTerminalWindowMinutes} value,
  * unless `declarationActive` is true AND
- * `advisoryWait.providerOutage.terminalWindow` is configured, in which case
- * the declaration-scoped value applies instead. `recoveryCycleCap` is
- * unaffected -- this override is scoped to the terminal window alone.
+ * `advisoryWait.providerOutage.terminalWindow` is configured to something
+ * SHORTER, in which case the declaration-scoped value applies instead.
+ * Clamped with `Math.min` rather than substituted outright (Copilot review,
+ * PR #2564): this is a shortening mechanism only -- see this module's own
+ * "#2554: declaration-scoped terminal-window override" doc comments above --
+ * so a misconfigured override longer than the base window must never widen
+ * it during a declared outage. `recoveryCycleCap` is unaffected -- this
+ * override is scoped to the terminal window alone.
  *
  * `declarationActive` is caller-supplied rather than recomputed here: proving
  * it needs live `resolveProviderOutageDeclaration` (provider-outage-
@@ -405,7 +410,7 @@ export function resolveEffectiveAdvisoryTerminalWindowMinutes({
   const base = resolveAdvisoryTerminalWindowMinutes(config);
   if (!declarationActive) return base;
   const override = resolveProviderOutageTerminalWindowMinutes(config);
-  return override !== null ? override : base;
+  return override !== null ? Math.min(base, override) : base;
 }
 /**
  * Read the OPTIONAL `advisoryWait.secondaryQuietWindow` (#2335) from a policy

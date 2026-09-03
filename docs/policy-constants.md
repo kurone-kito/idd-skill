@@ -208,7 +208,10 @@ only while a currently-valid outage declaration (top-level
 terminal-window tail a pull request otherwise carries after every review-fix
 push during a sustained outage. Outside an active declaration it has no
 effect at all, and `advisoryWait.recoveryCycleCap` is never affected by it.
-Omitted, unparseable, or non-positive keeps `terminalWindow` unconditional.
+Clamped to never exceed `terminalWindow` itself, so a configured value
+longer than the base window has no effect -- this is a shortening
+mechanism only. Omitted, unparseable, or non-positive keeps `terminalWindow`
+unconditional.
 `advisoryWait.sameHeadRerollCap` bounds the AW6 same-HEAD advisory
 reroll carve-out (#1465 / #1511, see
 [Helper scripts](idd-helper-scripts.md#bounded-same-head-advisory-reroll-aw6-1511)):

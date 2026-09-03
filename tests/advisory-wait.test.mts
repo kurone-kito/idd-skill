@@ -1479,6 +1479,22 @@ test('resolveEffectiveAdvisoryTerminalWindowMinutes: active declaration with no 
   );
 });
 
+test('resolveEffectiveAdvisoryTerminalWindowMinutes: a configured override LONGER than the base window is clamped, never widening it', () => {
+  const config = {
+    advisoryWait: {
+      terminalWindow: 'PT1H',
+      providerOutage: { terminalWindow: 'PT12H' },
+    },
+  };
+  assert.equal(
+    resolveEffectiveAdvisoryTerminalWindowMinutes({
+      config,
+      declarationActive: true,
+    }),
+    60,
+  );
+});
+
 test('resolveEffectiveAdvisoryTerminalWindowMinutes: an invalid configured override falls back to the base window even while active', () => {
   const config = {
     advisoryWait: {
