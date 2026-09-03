@@ -15,6 +15,27 @@ directly instead of re-evaluating the same suggestion from scratch.
 
 In the idd-skill source repository, the following optional helpers were adopted:
 
+### Helper contract classes
+
+Every helper below falls into one of two contract classes:
+
+- **Evidence collectors** — read-only. They never post comments, resolve
+  review threads, merge, or close anything; they emit machine-readable
+  evidence (usually JSON) for the calling phase to interpret.
+- **Dry-run-by-default authoring helpers** — capable of mutating GitHub
+  state (posting a comment, resolving a thread, merging, closing), but
+  only under an explicit `--apply` flag (plus interactive confirmation
+  where noted); the default invocation always prints what it would do
+  without acting.
+
+Going forward, a per-helper bullet should state only what doesn't
+already follow from its class — an additional confirmation step, a
+narrower evidence scope, an unusual flag name — not a restatement of
+the class itself; existing bullets are not retrofitted by this
+preamble. Whenever a helper cannot complete autonomously, its own
+bullet documents the fallback path beside the helper's invocation, not
+in this preamble, since the fallback differs per helper.
+
 **Discover & Claim Phase Helpers (Phase 1):**
 
 - `scripts/discover-orphan-filter.mjs` for A0-O orphan issue detection and
