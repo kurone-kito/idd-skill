@@ -329,18 +329,17 @@ worktrees still need no manual cleanup (#1237).
 
 An adopter session, using WorkTrunk's automation-safe invocation (`wt
 switch --create ... -x true`), observed a `Cannot change directory —
-shell integration installed but not active` diagnostic that did not
-fail the command. From that point onward, the agent harness's own tool
-output repeatedly reported the shell's working directory as reverted to
-the primary worktree root, even immediately after a command that had
-run correctly in the sibling worktree. Attribution between the
-harness's own cwd tracking and WorkTrunk's shell-integration hook could
-not be isolated (no control-group session was available), so this
-stays a documented structural gap in B1's guidance, not a claim against
-either component: the one-time B1 self-check gives no signal to keep
-re-verifying cwd after this diagnostic appears, even though the
-"working directory persists between commands" assumption can silently
-stop holding from that point on (#2332).
+shell integration installed but not active` diagnostic that did not fail
+the command. From that point onward, the agent harness's own tool output
+repeatedly reported the shell's working directory as reverted to the primary
+worktree root, even immediately after a command that had run correctly in the
+sibling worktree. Attribution between the harness's own working-directory
+tracking and WorkTrunk's shell-integration hook could not be isolated (no
+control-group session was available), so this stays a documented structural
+gap in B1's guidance, not a claim against either component: the one-time B1
+self-check gives no signal to keep re-verifying the working directory after
+this diagnostic appears, even though the "working directory persists between
+commands" assumption can silently stop holding from that point on (#2332).
 
 ### B2.1 — Premise verification (decision-transcription issues)
 
