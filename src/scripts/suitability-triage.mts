@@ -1952,19 +1952,28 @@ export function checkVerifiability(context: Context): CheckOutcome {
     };
   }
   const hasSubjectiveApproval = ((): boolean => {
-    const paragraphSpans = getParagraphSpans(body);
+    // Normalized once so every offset computed below (line-split cursor,
+    // paragraph spans, proximity match index) shares the same 1-char line
+    // separator -- a raw `\r\n` body otherwise drifts the running
+    // `lineOffset` cursor by 1 byte per CRLF line, eventually pointing
+    // `isFramedAsDescriptive` at the wrong paragraph (#2531 review).
+    const normalizedBody = body.replace(/\r\n/g, '\n');
+    const paragraphSpans = getParagraphSpans(normalizedBody);
     const isFramedAsDescriptive = (offset: number): boolean => {
       const span =
         paragraphSpans.find(
           (candidate) => offset >= candidate.start && offset <= candidate.end,
         ) ?? paragraphSpans[paragraphSpans.length - 1];
       return FRAMING_VERB_PATTERN.test(
-        body.slice(span?.start ?? 0, span?.end ?? body.length),
+        normalizedBody.slice(
+          span?.start ?? 0,
+          span?.end ?? normalizedBody.length,
+        ),
       );
     };
 
     let lineOffset = 0;
-    for (const line of body.split(/\r?\n/)) {
+    for (const line of normalizedBody.split('\n')) {
       if (
         SUBJECTIVE_SUBJECT_PATTERN.test(line) &&
         SUBJECTIVE_GATE_PATTERN.test(line) &&
@@ -1979,12 +1988,12 @@ export function checkVerifiability(context: Context): CheckOutcome {
       SUBJECTIVE_PROXIMITY_PATTERN.source,
       'gi',
     );
-    let proximityMatch = proximityPattern.exec(body);
+    let proximityMatch = proximityPattern.exec(normalizedBody);
     while (proximityMatch) {
       if (!isFramedAsDescriptive(proximityMatch.index)) {
         return true;
       }
-      proximityMatch = proximityPattern.exec(body);
+      proximityMatch = proximityPattern.exec(normalizedBody);
     }
 
     return false;
