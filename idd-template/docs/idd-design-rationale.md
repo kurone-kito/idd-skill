@@ -447,7 +447,8 @@ elsewhere in that file. When a bug's root cause is a reusable defect
 shape rather than a one-off typo, search the rest of the containing
 file -- and any independently-maintained sibling implementation of the
 same logic -- for the same shape before treating the fix, or a C1
-critique of it, as complete (kurone-kito/idd-skill#2552).
+critique of it, as complete (observed 2026-09-03,
+kurone-kito/idd-skill#2552).
 
 ## Review triage
 
