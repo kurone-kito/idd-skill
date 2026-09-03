@@ -543,6 +543,29 @@ decoupled from any provider-health classifier verdict: an absent or
 [`docs/idd-helper-scripts.md`](idd-helper-scripts.md#provider-outage-declaration-helper)
 for the helper contract.
 
+A repository that also wants to shorten the 12h
+`advisoryWait.terminalWindow` (#1572) specifically while an outage
+declaration is active may additionally record
+`advisoryWait.providerOutage.terminalWindow` (#2554) — note this key
+nests under `advisoryWait`, not the top-level `providerOutage` block
+above:
+
+```json
+{
+  "advisoryWait": {
+    "providerOutage": {
+      "terminalWindow": "PT2H"
+    }
+  }
+}
+```
+
+This override applies only while `resolveProviderOutageDeclaration`
+confirms a currently-valid declaration is active for the
+`idd-advisory-convergence` selector; otherwise `advisoryWait.terminalWindow`
+applies unconditionally, unchanged. `advisoryWait.recoveryCycleCap` is
+never affected by this override.
+
 ## Phase ID Compatibility Contract
 
 Treat phase IDs as a compatibility surface, not as presentation text.

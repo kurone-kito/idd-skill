@@ -186,12 +186,13 @@ The current policy schema and helper runtime now support
 `advisoryWait.primaryBotLogin`, `advisoryWait.secondaryBotLogin`,
 `advisoryWait.convergenceDeadline`, `advisoryWait.sameHeadRerollCap`,
 `advisoryWait.recoveryCycleCap`, `advisoryWait.terminalWindow`,
+`advisoryWait.providerOutage.terminalWindow`,
 `advisoryWait.secondaryQuietWindow`, `advisoryWait.convergenceScope`, and
 `advisoryWait.exemptBotAuthoredPrs`.
 Omitted keys keep the distributed defaults below. The duration keys
 (`pendingWindow`, `settledWindow`, `pollInterval`, `convergenceDeadline`,
-`terminalWindow`, `secondaryQuietWindow`) accept positive whole-minute
-ISO 8601 durations only.
+`terminalWindow`, `providerOutage.terminalWindow`, `secondaryQuietWindow`)
+accept positive whole-minute ISO 8601 durations only.
 `advisoryWait.recoveryCycleCap` / `advisoryWait.terminalWindow` (#1572)
 define the terminal Copilot stall-recovery **state contract**, accounted
 independently of `requestCap` and `sameHeadRerollCap`: see
@@ -199,6 +200,15 @@ independently of `requestCap` and `sameHeadRerollCap`: see
 for the full contract (markers, clock anchoring, fail-closed rules, and
 the non-bypass invariant). No caller currently posts a
 `COPILOT_UNAVAILABLE` determination into a merge-gate decision yet.
+`advisoryWait.providerOutage.terminalWindow` (#2554) is a declaration-scoped
+override for `advisoryWait.terminalWindow`: it shortens the terminal window
+only while a currently-valid outage declaration (top-level
+`providerOutage.declarationTarget`, below) is active for the
+`idd-advisory-convergence` selector, cutting the recovery-cycle-plus-
+terminal-window tail a pull request otherwise carries after every review-fix
+push during a sustained outage. Outside an active declaration it has no
+effect at all, and `advisoryWait.recoveryCycleCap` is never affected by it.
+Omitted, unparseable, or non-positive keeps `terminalWindow` unconditional.
 `advisoryWait.sameHeadRerollCap` bounds the AW6 same-HEAD advisory
 reroll carve-out (#1465 / #1511, see
 [Helper scripts](idd-helper-scripts.md#bounded-same-head-advisory-reroll-aw6-1511)):
@@ -406,13 +416,14 @@ below, which names an unrelated CI/Actions-service outage-relief policy.
 
 ## Provider Outage Declaration Defaults
 
-| Policy default                                          | Distributed value                                                                                                    | Owning surface                                                                                                                | Onboarding expectation                                                                                                                                                                                              |
-| ------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Declaration target (`providerOutage.declarationTarget`) | Omitted; the declaration path is disabled entirely                                                                   | [Customizing IDD](customization.md) and [`docs/idd-helper-scripts.md`](idd-helper-scripts.md)                                 | Set only to an issue this repository's IDD automation controls; the declaration path stays off until an issue number is configured, so no repository file has to change while an outage is in progress.             |
-| Declaration max validity (`providerOutage.maxValidity`) | `PT24H`                                                                                                              | [Customizing IDD](customization.md) and [`docs/idd-helper-scripts.md`](idd-helper-scripts.md)                                 | Keep declarations finite and short-lived, same rationale as `ciGate.externalCheckWaivers.maxValidity`; renew with a fresh declaration after expiry rather than a long-lived blanket exception.                      |
-| Declaration authority                                   | Reuses `ciGate.externalCheckWaivers.authorityPolicy`                                                                 | [Permissions](permissions.md), [Customizing IDD](customization.md), and [`docs/idd-helper-scripts.md`](idd-helper-scripts.md) | A single trust path for both the per-pull-request waiver and the repository-scoped declaration; do not configure a separate authority source for the declaration.                                                   |
-| Declaration relief scope                                | Exactly `ciGate.externalChecks.waivable`; never CI conclusions, branch freshness, claim state, or unresolved threads | [Merge](../.github/instructions/idd-merge.instructions.md), [`docs/idd-helper-scripts.md`](idd-helper-scripts.md)             | An active declaration is eligibility only; the pull request's own terminal advisory-unavailable state must still hold independently before anything is relieved.                                                    |
-| Parked-change bound (`providerOutage.maxParkedChanges`) | `10`                                                                                                                 | [`docs/idd-helper-scripts.md`](idd-helper-scripts.md)                                                                         | Once this many pull requests are parked, sessions stop claiming new issues rather than manufacturing more unmergeable pull requests; raise only if this repository's outage backlog genuinely needs a wider buffer. |
+| Policy default                                                                                    | Distributed value                                                                                                    | Owning surface                                                                                                                | Onboarding expectation                                                                                                                                                                                              |
+| ------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Declaration target (`providerOutage.declarationTarget`)                                           | Omitted; the declaration path is disabled entirely                                                                   | [Customizing IDD](customization.md) and [`docs/idd-helper-scripts.md`](idd-helper-scripts.md)                                 | Set only to an issue this repository's IDD automation controls; the declaration path stays off until an issue number is configured, so no repository file has to change while an outage is in progress.             |
+| Declaration max validity (`providerOutage.maxValidity`)                                           | `PT24H`                                                                                                              | [Customizing IDD](customization.md) and [`docs/idd-helper-scripts.md`](idd-helper-scripts.md)                                 | Keep declarations finite and short-lived, same rationale as `ciGate.externalCheckWaivers.maxValidity`; renew with a fresh declaration after expiry rather than a long-lived blanket exception.                      |
+| Declaration authority                                                                             | Reuses `ciGate.externalCheckWaivers.authorityPolicy`                                                                 | [Permissions](permissions.md), [Customizing IDD](customization.md), and [`docs/idd-helper-scripts.md`](idd-helper-scripts.md) | A single trust path for both the per-pull-request waiver and the repository-scoped declaration; do not configure a separate authority source for the declaration.                                                   |
+| Declaration relief scope                                                                          | Exactly `ciGate.externalChecks.waivable`; never CI conclusions, branch freshness, claim state, or unresolved threads | [Merge](../.github/instructions/idd-merge.instructions.md), [`docs/idd-helper-scripts.md`](idd-helper-scripts.md)             | An active declaration is eligibility only; the pull request's own terminal advisory-unavailable state must still hold independently before anything is relieved.                                                    |
+| Declaration-scoped terminal-window override (`advisoryWait.providerOutage.terminalWindow`, #2554) | Unset; `advisoryWait.terminalWindow` applies unconditionally                                                         | [Customizing IDD](customization.md) and [`docs/idd-helper-scripts.md`](idd-helper-scripts.md)                                 | Nested under `advisoryWait`, not `providerOutage` — set only if this repository wants a shorter terminal-unavailability window specifically while a declaration is active; leaves `recoveryCycleCap` untouched.     |
+| Parked-change bound (`providerOutage.maxParkedChanges`)                                           | `10`                                                                                                                 | [`docs/idd-helper-scripts.md`](idd-helper-scripts.md)                                                                         | Once this many pull requests are parked, sessions stop claiming new issues rather than manufacturing more unmergeable pull requests; raise only if this repository's outage backlog genuinely needs a wider buffer. |
 
 ## Local Validation Evidence Defaults
 

@@ -366,6 +366,48 @@ export function resolveAdvisoryTerminalWindowMinutes(config = {}) {
   );
 }
 /**
+ * Resolve the OPTIONAL `advisoryWait.providerOutage.terminalWindow` override
+ * (#2554, in minutes) from a parsed policy object. Returns `null` -- not a
+ * fallback default -- when unset, unparseable, or non-positive: "not
+ * configured" here means "no override applies" (the caller falls through to
+ * the unconditional {@link resolveAdvisoryTerminalWindowMinutes} value), not
+ * "apply the same value the base resolver would produce anyway."
+ */
+export function resolveProviderOutageTerminalWindowMinutes(config = {}) {
+  const advisoryWait = config?.advisoryWait ?? {};
+  const providerOutage = advisoryWait.providerOutage ?? {};
+  const milliseconds = parseConfiguredDurationToMs(
+    providerOutage.terminalWindow,
+  );
+  return milliseconds && milliseconds > 0 ? milliseconds / 60000 : null;
+}
+/**
+ * Resolve the EFFECTIVE terminal-unavailability window (#2554, in minutes):
+ * the unconditional {@link resolveAdvisoryTerminalWindowMinutes} value,
+ * unless `declarationActive` is true AND
+ * `advisoryWait.providerOutage.terminalWindow` is configured, in which case
+ * the declaration-scoped value applies instead. `recoveryCycleCap` is
+ * unaffected -- this override is scoped to the terminal window alone.
+ *
+ * `declarationActive` is caller-supplied rather than recomputed here: proving
+ * it needs live `resolveProviderOutageDeclaration` (provider-outage-
+ * declaration.mts) evidence (declaration-target comments, actor authority,
+ * `now`), none of which this otherwise-pure resolver has access to. A caller
+ * that cannot prove a currently-valid declaration must pass `false`, which
+ * fails closed to the unconditional base value -- matching every other
+ * resolver in this module's "ambiguous input never widens behavior"
+ * contract.
+ */
+export function resolveEffectiveAdvisoryTerminalWindowMinutes({
+  config = {},
+  declarationActive = false,
+} = {}) {
+  const base = resolveAdvisoryTerminalWindowMinutes(config);
+  if (!declarationActive) return base;
+  const override = resolveProviderOutageTerminalWindowMinutes(config);
+  return override !== null ? override : base;
+}
+/**
  * Read the OPTIONAL `advisoryWait.secondaryQuietWindow` (#2335) from a policy
  * file, failing closed to the off (unset) default when the file is missing,
  * unreadable, or schema-invalid.

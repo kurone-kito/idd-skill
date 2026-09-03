@@ -103,8 +103,8 @@ import {
   readAdvisoryPrimaryBotLogin,
   readAdvisoryRecoveryCycleCap,
   readAdvisorySameHeadRerollCap,
-  readAdvisoryTerminalWindowMinutes,
   readAdvisoryWaitPolicy,
+  resolveEffectiveAdvisoryTerminalWindowMinutes,
 } from './advisory-wait-policy.mjs';
 import { buildCopilotRecoverySummary } from './advisory-wait-state.mjs';
 import { parseCanonicalIntegerOrNull, parseCliArgs } from './cli-args.mjs';
@@ -1718,7 +1718,6 @@ export function collectFromGitHub(
   // `AdvisoryWaitPolicy` shape above for the same reason `sameHeadRerollCap`
   // is (see advisory-wait-policy.mts's own doc comments on each resolver).
   const recoveryCycleCap = readAdvisoryRecoveryCycleCap();
-  const terminalWindowMinutes = readAdvisoryTerminalWindowMinutes();
   // No manual cast: `normalizePolicyConfig`'s inferred return type already
   // carries `ciGate.externalCheckWaivers.{mode,maxValidity}` precisely (see
   // `external-check-waiver.mts`'s `NormalizedPolicy` alias for the same
@@ -1740,7 +1739,10 @@ export function collectFromGitHub(
   // "Sustained outage" note). Fails closed to inactive on ANY error (unset
   // target, unreadable/unparseable comments, authority-lookup failure),
   // matching `prFirstCommitAt` below: a transient fetch failure must never
-  // widen what this gate accepts.
+  // widen what this gate accepts. Resolved BEFORE `terminalWindowMinutes`
+  // (#2554): the SAME `.active` verdict now also gates the declaration-
+  // scoped terminal-window override below, not just `outageRelief` further
+  // down.
   let outageDeclarationActive = false;
   const outageDeclarationTargetIssue =
     policy?.providerOutage?.declarationTarget;
@@ -1768,6 +1770,16 @@ export function collectFromGitHub(
       outageDeclarationActive = false;
     }
   }
+  // #2554: shortens to `advisoryWait.providerOutage.terminalWindow` only
+  // while `outageDeclarationActive` (just above) holds for THIS gate's own
+  // selector; otherwise falls through to the unconditional
+  // `advisoryWait.terminalWindow` value, byte-identical to before this
+  // change. `recoveryCycleCap` above is deliberately untouched -- the issue
+  // scopes this override to the terminal-window duration alone.
+  const terminalWindowMinutes = resolveEffectiveAdvisoryTerminalWindowMinutes({
+    config: rawConfig,
+    declarationActive: outageDeclarationActive,
+  });
   // #1344: forced-handoff-aware claim resolution, matching
   // `pre-merge-readiness.mts` exactly, except reading `forcedHandoff.mode`/
   // `authorityPolicy` off the already-loaded/normalized `policy` above
