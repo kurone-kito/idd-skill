@@ -42,6 +42,14 @@ export interface DocumentedHelperFlag {
 /** Every `--flag` token documented across the corpus for one helper. */
 export interface DocumentedHelperFlags {
   helperPath: string;
+  /**
+   * The doc file the helper's invocation was first seen in, independent of
+   * whether that invocation (or any other) carried any `--flag` at all
+   * (e.g. a bare `node scripts/idd-doctor.mjs`) -- `flags` alone cannot
+   * supply this for a helper with zero documented flags, and a
+   * missing-helper violation still needs a real file to point at.
+   */
+  firstSeenDocPath: string;
   flags: DocumentedHelperFlag[];
 }
 
@@ -173,7 +181,10 @@ function joinLineContinuations(block: readonly string[]): string[] {
 export function collectDocumentedHelperInvocationFlags(
   sources: readonly HelperFlagDriftSource[],
 ): DocumentedHelperFlags[] {
-  const byHelper = new Map<string, Map<string, string>>();
+  const byHelper = new Map<
+    string,
+    { firstSeenDocPath: string; flags: Map<string, string> }
+  >();
 
   for (const source of sources) {
     for (const block of extractFencedBlocks(source.text)) {
@@ -192,14 +203,14 @@ export function collectDocumentedHelperInvocationFlags(
           continue;
         }
         const argsText = match[2];
-        let flagsForHelper = byHelper.get(helperPath);
-        if (!flagsForHelper) {
-          flagsForHelper = new Map();
-          byHelper.set(helperPath, flagsForHelper);
+        let entry = byHelper.get(helperPath);
+        if (!entry) {
+          entry = { firstSeenDocPath: source.path, flags: new Map() };
+          byHelper.set(helperPath, entry);
         }
         for (const flagMatch of argsText.matchAll(FLAG_TOKEN_PATTERN)) {
-          if (!flagsForHelper.has(flagMatch[0])) {
-            flagsForHelper.set(flagMatch[0], source.path);
+          if (!entry.flags.has(flagMatch[0])) {
+            entry.flags.set(flagMatch[0], source.path);
           }
         }
       }
@@ -207,9 +218,10 @@ export function collectDocumentedHelperInvocationFlags(
   }
 
   return [...byHelper.entries()]
-    .map(([helperPath, flags]) => ({
+    .map(([helperPath, entry]) => ({
       helperPath,
-      flags: [...flags.entries()]
+      firstSeenDocPath: entry.firstSeenDocPath,
+      flags: [...entry.flags.entries()]
         .map(([flag, docPath]) => ({ flag, docPath }))
         .sort((left, right) => left.flag.localeCompare(right.flag)),
     }))
@@ -233,9 +245,8 @@ export function collectHelperFlagDriftViolations(
   for (const entry of documented) {
     const result = probe(entry.helperPath);
     if (!result.exists) {
-      const firstDocPath = entry.flags[0]?.docPath ?? '(unknown doc)';
       violations.push(
-        `${firstDocPath}: documents \`node ${entry.helperPath}\`, but ${entry.helperPath} does not exist in the repository`,
+        `${entry.firstSeenDocPath}: documents \`node ${entry.helperPath}\`, but ${entry.helperPath} does not exist in the repository`,
       );
       continue;
     }

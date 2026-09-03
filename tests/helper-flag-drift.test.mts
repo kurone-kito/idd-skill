@@ -108,6 +108,8 @@ test('collectDocumentedHelperInvocationFlags finds a worked example nested insid
   assert.deepEqual(documented, [
     {
       helperPath: 'scripts/idd-onboard.mjs',
+      firstSeenDocPath:
+        'idd-template/docs/onboarding/issue-mediated-bootstrap.md',
       flags: [
         {
           flag: '--import',
@@ -159,6 +161,7 @@ test('collectDocumentedHelperInvocationFlags extracts flags from a fenced worked
   assert.deepEqual(documented, [
     {
       helperPath: 'scripts/post-idd-marker.mjs',
+      firstSeenDocPath: 'docs/example.md',
       flags: [
         { flag: '--apply', docPath: 'docs/example.md' },
         { flag: '--type', docPath: 'docs/example.md' },
@@ -189,6 +192,26 @@ test('collectDocumentedHelperInvocationFlags ignores a placeholder helper name',
     },
   ]);
   assert.deepEqual(documented, []);
+});
+
+test('collectDocumentedHelperInvocationFlags records firstSeenDocPath even for an invocation with zero flags', () => {
+  // The docs/getting-started.md #2477 case: `node scripts/idd-doctor.mjs`
+  // with no flags at all. `flags` alone cannot supply a doc path for a
+  // missing-helper violation when the array is empty.
+  const documented = collectDocumentedHelperInvocationFlags([
+    {
+      path: 'docs/getting-started.md',
+      text: ['```sh', 'node scripts/idd-doctor.mjs', '```'].join('\n'),
+    },
+  ]);
+
+  assert.deepEqual(documented, [
+    {
+      helperPath: 'scripts/idd-doctor.mjs',
+      firstSeenDocPath: 'docs/getting-started.md',
+      flags: [],
+    },
+  ]);
 });
 
 test('collectDocumentedHelperInvocationFlags skips a path-traversal example', () => {
@@ -226,6 +249,7 @@ test('collectDocumentedHelperInvocationFlags joins a shell line-continuation and
   assert.deepEqual(documented, [
     {
       helperPath: 'scripts/post-idd-marker.mjs',
+      firstSeenDocPath: 'docs/example.md',
       flags: [
         { flag: '--agent-id', docPath: 'docs/example.md' },
         { flag: '--apply', docPath: 'docs/example.md' },
@@ -259,6 +283,7 @@ test('collectDocumentedHelperInvocationFlags does not bridge a continuation acro
   assert.deepEqual(documented, [
     {
       helperPath: 'scripts/example.mjs',
+      firstSeenDocPath: 'docs/example.md',
       flags: [{ flag: '--apply', docPath: 'docs/example.md' }],
     },
   ]);
@@ -283,6 +308,7 @@ test('collectDocumentedHelperInvocationFlags merges flags for the same helper ac
   assert.deepEqual(documented, [
     {
       helperPath: 'scripts/example.mjs',
+      firstSeenDocPath: 'docs/a.md',
       flags: [
         { flag: '--apply', docPath: 'docs/a.md' },
         { flag: '--claim-issue', docPath: 'docs/b.md' },
@@ -298,6 +324,7 @@ test('collectHelperFlagDriftViolations flags a documented flag missing from --he
     [
       {
         helperPath: 'scripts/example.mjs',
+        firstSeenDocPath: 'docs/a.md',
         flags: [
           { flag: '--apply', docPath: 'docs/a.md' },
           { flag: '--renamed-flag', docPath: 'docs/a.md' },
@@ -317,6 +344,7 @@ test('collectHelperFlagDriftViolations reports no violations when every document
     [
       {
         helperPath: 'scripts/example.mjs',
+        firstSeenDocPath: 'docs/a.md',
         flags: [{ flag: '--apply', docPath: 'docs/a.md' }],
       },
     ],
@@ -330,6 +358,7 @@ test('collectHelperFlagDriftViolations flags a documented helper that no longer 
     [
       {
         helperPath: 'scripts/renamed-away.mjs',
+        firstSeenDocPath: 'docs/a.md',
         flags: [{ flag: '--apply', docPath: 'docs/a.md' }],
       },
     ],
@@ -341,6 +370,26 @@ test('collectHelperFlagDriftViolations flags a documented helper that no longer 
   ]);
 });
 
+test('collectHelperFlagDriftViolations reports the real doc path for a missing helper invoked with zero flags', () => {
+  // The exact #2477 review finding: entry.flags[0]?.docPath degraded to
+  // "(unknown doc)" when the documented invocation carried no flags at
+  // all -- firstSeenDocPath must supply a real location regardless.
+  const violations = collectHelperFlagDriftViolations(
+    [
+      {
+        helperPath: 'scripts/renamed-away.mjs',
+        firstSeenDocPath: 'docs/getting-started.md',
+        flags: [],
+      },
+    ],
+    () => ({ exists: false, output: '' }),
+  );
+
+  assert.deepEqual(violations, [
+    'docs/getting-started.md: documents `node scripts/renamed-away.mjs`, but scripts/renamed-away.mjs does not exist in the repository',
+  ]);
+});
+
 test('collectHelperFlagDriftViolations skips a helper whose --help output has no recognizable flags', () => {
   // An interactive-only helper (e.g. force-handoff.mjs) errors immediately
   // on --help with no flag-shaped output at all -- treated as unverifiable
@@ -349,6 +398,7 @@ test('collectHelperFlagDriftViolations skips a helper whose --help output has no
     [
       {
         helperPath: 'scripts/interactive-only.mjs',
+        firstSeenDocPath: 'docs/a.md',
         flags: [{ flag: '--apply', docPath: 'docs/a.md' }],
       },
     ],

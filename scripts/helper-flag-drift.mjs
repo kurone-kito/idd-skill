@@ -127,23 +127,24 @@ export function collectDocumentedHelperInvocationFlags(sources) {
           continue;
         }
         const argsText = match[2];
-        let flagsForHelper = byHelper.get(helperPath);
-        if (!flagsForHelper) {
-          flagsForHelper = new Map();
-          byHelper.set(helperPath, flagsForHelper);
+        let entry = byHelper.get(helperPath);
+        if (!entry) {
+          entry = { firstSeenDocPath: source.path, flags: new Map() };
+          byHelper.set(helperPath, entry);
         }
         for (const flagMatch of argsText.matchAll(FLAG_TOKEN_PATTERN)) {
-          if (!flagsForHelper.has(flagMatch[0])) {
-            flagsForHelper.set(flagMatch[0], source.path);
+          if (!entry.flags.has(flagMatch[0])) {
+            entry.flags.set(flagMatch[0], source.path);
           }
         }
       }
     }
   }
   return [...byHelper.entries()]
-    .map(([helperPath, flags]) => ({
+    .map(([helperPath, entry]) => ({
       helperPath,
-      flags: [...flags.entries()]
+      firstSeenDocPath: entry.firstSeenDocPath,
+      flags: [...entry.flags.entries()]
         .map(([flag, docPath]) => ({ flag, docPath }))
         .sort((left, right) => left.flag.localeCompare(right.flag)),
     }))
@@ -162,9 +163,8 @@ export function collectHelperFlagDriftViolations(documented, probe) {
   for (const entry of documented) {
     const result = probe(entry.helperPath);
     if (!result.exists) {
-      const firstDocPath = entry.flags[0]?.docPath ?? '(unknown doc)';
       violations.push(
-        `${firstDocPath}: documents \`node ${entry.helperPath}\`, but ${entry.helperPath} does not exist in the repository`,
+        `${entry.firstSeenDocPath}: documents \`node ${entry.helperPath}\`, but ${entry.helperPath} does not exist in the repository`,
       );
       continue;
     }
