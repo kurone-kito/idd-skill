@@ -929,6 +929,12 @@ The adopted helper boundaries are intentionally narrow:
   (dry-run); add `--apply --claim-issue <n> --claim-id <id>` to post.
   Pass `--advisory-bot-logins` / `--trusted-marker-logins` to override the
   defaults.
+- A rate-limit/usage-limit notice this helper dispositions can coexist
+  with a passing GitHub _check_ from the same bot -- the check is a
+  liveness signal only, not confirmation of a genuine review against
+  current HEAD;
+  see [re-trigger guidance](policy-constants.md#advisory-review-defaults)
+  (#2466).
 - Detects advisory-bot regular comments that the single-sourced
   `isAdvisoryNonReviewNotice` classifier (`protocol-helpers`) recognizes
   (rate-limit / usage-limit), and emits / posts the canonical
