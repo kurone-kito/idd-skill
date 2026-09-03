@@ -521,19 +521,35 @@ export async function evaluateDiscoverReadiness(
     // a candidate every cheaper (label/body) check above has already let
     // through, never per scanned issue.
     if (reasons.size === 0 && triageVerdictCheckEnabled) {
-      const record = findTrustedSuitabilityRejection(
-        fetchCommentsByIssueNumber(issue.number),
-        trustedMarkerLogins,
-        resolvedMarkerPrefix,
-      );
-      const editedAt = record?.markerOutcome
-        ? resolveLatestSubstantiveIssueEditAt(
+      // CodeRabbit review, PR #2557: mirror this file's own fail-open
+      // contract for optional per-candidate lookups (e.g.
+      // resolveLabelEvents in discover-orphan-filter.mts) -- a transient
+      // GitHub API failure here must not abort the whole default-on
+      // readiness pass; it degrades to "no evidence" and the candidate
+      // stays selectable.
+      let record: ReturnType<typeof findTrustedSuitabilityRejection> = null;
+      try {
+        record = findTrustedSuitabilityRejection(
+          fetchCommentsByIssueNumber(issue.number),
+          trustedMarkerLogins,
+          resolvedMarkerPrefix,
+        );
+      } catch {
+        record = null;
+      }
+      let editedAt: string | null = null;
+      if (record?.markerOutcome) {
+        try {
+          editedAt = resolveLatestSubstantiveIssueEditAt(
             issue.createdAt,
             typeof fetchTimelineByIssueNumber === 'function'
               ? fetchTimelineByIssueNumber(issue.number)
               : [],
-          )
-        : null;
+          );
+        } catch {
+          editedAt = null;
+        }
+      }
       if (record && isSuitabilityTriageVerdictCurrent(record, editedAt)) {
         reasons.add(`triage_verdict:${record.markerOutcome}`);
       }

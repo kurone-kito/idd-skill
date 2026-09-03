@@ -1525,3 +1525,38 @@ test('a candidate already filtered for another reason never triggers the comment
     'label:status:blocked-by-human',
   ]);
 });
+
+test('a throwing comments fetcher fails open: the candidate stays ready (CodeRabbit review, PR #2557)', async () => {
+  const issue = triageVerdictReadinessIssue();
+  const summary = await evaluateDiscoverReadiness([1901], {
+    loadIssue: async () => issue,
+    findRoadmapsByMarker: async () => [],
+    fetchCommentsByIssueNumber: () => {
+      throw new Error('transient GitHub API failure');
+    },
+    fetchTimelineByIssueNumber: () => [],
+    trustedMarkerLogins: ['kurone-kito'],
+  });
+  assert.equal(summary.ready.length, 1);
+  assert.equal(summary.filteredOut.length, 0);
+});
+
+test('a throwing timeline fetcher fails open: the candidate stays ready (CodeRabbit review, PR #2557)', async () => {
+  const issue = triageVerdictReadinessIssue();
+  const summary = await evaluateDiscoverReadiness([1901], {
+    loadIssue: async () => issue,
+    findRoadmapsByMarker: async () => [],
+    fetchCommentsByIssueNumber: () => [
+      triageVerdictReadinessRejectionComment(
+        'duplicate',
+        '2026-08-10T00:00:00Z',
+      ),
+    ],
+    fetchTimelineByIssueNumber: () => {
+      throw new Error('transient GitHub API failure');
+    },
+    trustedMarkerLogins: ['kurone-kito'],
+  });
+  assert.equal(summary.ready.length, 1);
+  assert.equal(summary.filteredOut.length, 0);
+});

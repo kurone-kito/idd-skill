@@ -1431,3 +1431,35 @@ test("an untrusted actor's marker-bearing comment does not exclude the candidate
   assert.equal(result.orphans.length, 1);
   assert.equal(result.filtered.triage_verdict_rejected.length, 0);
 });
+
+test('a throwing comments fetcher fails open: the candidate stays selectable (CodeRabbit review, PR #2557)', async () => {
+  const issues = [triageVerdictIssue()];
+  const result = await filterOrphanIssues(issues, {
+    issueStateByNumber: new Map(),
+    fetchIssueStateByNumber: () => 'UNRESOLVABLE',
+    fetchCommentsByIssueNumber: () => {
+      throw new Error('transient GitHub API failure');
+    },
+    fetchTimelineByIssueNumber: () => [],
+    trustedMarkerLogins: ['kurone-kito'],
+  });
+  assert.equal(result.orphans.length, 1);
+  assert.equal(result.filtered.triage_verdict_rejected.length, 0);
+});
+
+test('a throwing timeline fetcher fails open: the candidate stays selectable (CodeRabbit review, PR #2557)', async () => {
+  const issues = [triageVerdictIssue()];
+  const result = await filterOrphanIssues(issues, {
+    issueStateByNumber: new Map(),
+    fetchIssueStateByNumber: () => 'UNRESOLVABLE',
+    fetchCommentsByIssueNumber: () => [
+      triageVerdictRejectionComment('duplicate', '2026-08-10T00:00:00Z'),
+    ],
+    fetchTimelineByIssueNumber: () => {
+      throw new Error('transient GitHub API failure');
+    },
+    trustedMarkerLogins: ['kurone-kito'],
+  });
+  assert.equal(result.orphans.length, 1);
+  assert.equal(result.filtered.triage_verdict_rejected.length, 0);
+});

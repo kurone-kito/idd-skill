@@ -432,17 +432,32 @@ export async function filterOrphanIssues(issues, options = {}) {
         : undefined;
     const survivors = [];
     for (const orphan of orphans) {
-      const record = findTrustedSuitabilityRejection(
-        fetchComments(orphan.number),
-        trustedMarkerLogins,
-        markerPrefix,
-      );
-      const editedAt = record?.markerOutcome
-        ? resolveLatestSubstantiveIssueEditAt(
+      // CodeRabbit review, PR #2557: mirror resolveIssueLabelEvents's own
+      // fail-open contract for a per-candidate opportunistic fetch -- a
+      // transient GitHub API failure here must not abort the whole
+      // default-on discover pass; it degrades to "no evidence" (same as an
+      // absent marker) and the candidate stays selectable.
+      let record = null;
+      try {
+        record = findTrustedSuitabilityRejection(
+          fetchComments(orphan.number),
+          trustedMarkerLogins,
+          markerPrefix,
+        );
+      } catch {
+        record = null;
+      }
+      let editedAt = null;
+      if (record?.markerOutcome) {
+        try {
+          editedAt = resolveLatestSubstantiveIssueEditAt(
             issueCreatedAtByNumber.get(orphan.number),
             fetchTimeline(orphan.number),
-          )
-        : null;
+          );
+        } catch {
+          editedAt = null;
+        }
+      }
       if (record && isSuitabilityTriageVerdictCurrent(record, editedAt)) {
         filtered.triage_verdict_rejected.push({
           number: orphan.number,
