@@ -477,3 +477,27 @@ test('--apply fails closed (no mutation at all) when deps.now() returns an unpar
   assert.deepEqual(calls.comments, []);
   assert.deepEqual(calls.released, []);
 });
+
+test('parseArgs requires --owner and --repo together, not exactly one (Copilot review, PR #2558)', () => {
+  assert.throws(
+    () => parseArgs(['--issue', '2222', '--owner', 'kurone-kito']),
+    /--owner and --repo must be provided together/,
+  );
+  assert.throws(
+    () => parseArgs(['--issue', '2222', '--repo', 'idd-skill']),
+    /--owner and --repo must be provided together/,
+  );
+  // Neither: fine (falls back to the current-directory repo).
+  assert.doesNotThrow(() => parseArgs(['--issue', '2222']));
+  // Both: fine.
+  const args = parseArgs([
+    '--issue',
+    '2222',
+    '--owner',
+    'kurone-kito',
+    '--repo',
+    'idd-skill',
+  ]);
+  assert.equal(args.owner, 'kurone-kito');
+  assert.equal(args.repo, 'idd-skill');
+});

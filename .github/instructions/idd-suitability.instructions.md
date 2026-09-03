@@ -234,14 +234,18 @@ report-and-stop path unchanged):
    `branch: suitability-close/<number>-<slug>` — outside the
    `issue/*`/`roadmap-audit/*` scope the core cwd-vs-claim gate checks
    (`idd-overview-core.instructions.md`), so no worktree is needed.
-2. Re-validate that claim, then run `node
-   scripts/suitability-close-execute.mjs --issue <number> --claim-id
-   <id> --agent-id <id> --apply` (dry-run without `--apply`). It
-   re-collects the same mechanical evidence, posts the evidence-bound
-   closing comment (the accepted human-notification mechanism — no
-   separate step), closes the issue, and releases the claim, or fails
-   closed on a lost/stale/non-owned claim or a no-longer-eligible
-   re-evaluation.
+2. Re-validate that claim, then run (dry-run without `--apply`):
+
+   ```sh
+   node scripts/suitability-close-execute.mjs --issue <number> \
+     --claim-id <id> --agent-id <id> --apply
+   ```
+
+   It re-collects the same mechanical evidence, posts the
+   evidence-bound closing comment (the accepted human-notification
+   mechanism — no separate step), closes the issue, and releases the
+   claim, or fails closed on a lost/stale/non-owned claim or a
+   no-longer-eligible re-evaluation.
 3. Drop the closed candidate from Candidates and continue the Decision
    Flow loop.
 

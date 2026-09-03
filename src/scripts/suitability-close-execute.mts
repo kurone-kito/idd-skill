@@ -591,13 +591,26 @@ export function parseArgs(argv: string[]): SuitabilityCloseExecuteArgs {
   const parsedIssue =
     issueRaw !== undefined && /^\d+$/.test(issueRaw) ? Number(issueRaw) : null;
   const issue = parsedIssue !== null && parsedIssue > 0 ? parsedIssue : null;
+  const owner = ((values.owner as string | undefined) ?? '').trim();
+  const repo = ((values.repo as string | undefined) ?? '').trim();
+  // Copilot review finding on PR #2558: exactly one of --owner/--repo would
+  // mix a caller-supplied repo with resolveCurrentGithubRepository()'s
+  // current-directory repo in createProductionDeps, potentially targeting
+  // the wrong repository for issue lookup/close. Mirrors
+  // idd-roadmap-audit-execute.mts's own --owner/--repo pairing guard:
+  // require both or neither.
+  if ((owner === '') !== (repo === '')) {
+    throw new Error(
+      'suitability-close-execute: --owner and --repo must be provided together or not at all',
+    );
+  }
   return {
     issue,
     apply: Boolean(values.apply),
     claimId: ((values['claim-id'] as string | undefined) ?? '').trim(),
     agentId: ((values['agent-id'] as string | undefined) ?? '').trim(),
-    owner: ((values.owner as string | undefined) ?? '').trim(),
-    repo: ((values.repo as string | undefined) ?? '').trim(),
+    owner,
+    repo,
     policy: ((values.policy as string | undefined) ?? '').trim(),
     now: ((values.now as string | undefined) ?? '').trim(),
     help: Boolean(help),

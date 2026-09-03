@@ -471,13 +471,26 @@ export function parseArgs(argv) {
   const parsedIssue =
     issueRaw !== undefined && /^\d+$/.test(issueRaw) ? Number(issueRaw) : null;
   const issue = parsedIssue !== null && parsedIssue > 0 ? parsedIssue : null;
+  const owner = (values.owner ?? '').trim();
+  const repo = (values.repo ?? '').trim();
+  // Copilot review finding on PR #2558: exactly one of --owner/--repo would
+  // mix a caller-supplied repo with resolveCurrentGithubRepository()'s
+  // current-directory repo in createProductionDeps, potentially targeting
+  // the wrong repository for issue lookup/close. Mirrors
+  // idd-roadmap-audit-execute.mts's own --owner/--repo pairing guard:
+  // require both or neither.
+  if ((owner === '') !== (repo === '')) {
+    throw new Error(
+      'suitability-close-execute: --owner and --repo must be provided together or not at all',
+    );
+  }
   return {
     issue,
     apply: Boolean(values.apply),
     claimId: (values['claim-id'] ?? '').trim(),
     agentId: (values['agent-id'] ?? '').trim(),
-    owner: (values.owner ?? '').trim(),
-    repo: (values.repo ?? '').trim(),
+    owner,
+    repo,
     policy: (values.policy ?? '').trim(),
     now: (values.now ?? '').trim(),
     help: Boolean(help),
