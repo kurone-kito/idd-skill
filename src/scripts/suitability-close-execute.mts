@@ -351,6 +351,40 @@ export function runSuitabilityCloseExecute(
 
   const evidence = eligibility.evidence as string;
   deps.postCloseComment(issueNumber, buildSuitabilityCloseComment(evidence));
+
+  // Copilot review finding on PR #2558 (suppressed comment): the claim was
+  // validated once, above, before posting the comment -- but the comment
+  // POST is itself a network round-trip another session's takeover could
+  // race during. Re-validate immediately before the actual close mutation,
+  // mirroring idd-roadmap-audit-execute.mts's own re-validate-before-close
+  // pattern, so a claim lost in the comment->close gap aborts the close
+  // (the claim's rightful new owner still sees the evidence comment, but
+  // this session never closes an issue it no longer owns).
+  const finalClaim = evaluateSuitabilityCloseClaim(
+    deps.loadIssueComments(issueNumber),
+    {
+      issueNumber,
+      expectedClaimId: args.claimId,
+      expectedAgentId: args.agentId,
+      isTrustedAuthor: deps.isTrustedAuthor,
+      nowIso: deps.now(),
+      staleAgeMs: deps.staleAgeMs,
+    },
+  );
+  if (!finalClaim.owned) {
+    return {
+      protocolVersion: '1',
+      mode: 'apply',
+      issueNumber,
+      ready: true,
+      eligible: true,
+      evidence,
+      claim: finalClaim,
+      closed: false,
+      result: `coordination claim lost between the comment and the close (${finalClaim.reason}); issue left open`,
+    };
+  }
+
   deps.closeIssue(issueNumber);
   deps.releaseClaim(issueNumber, {
     agentId: args.agentId,
@@ -365,7 +399,7 @@ export function runSuitabilityCloseExecute(
     ready: true,
     eligible: true,
     evidence,
-    claim,
+    claim: finalClaim,
     closed: true,
     result: 'closed: high-confidence duplicate/superseded, evidence posted',
   };
@@ -505,14 +539,18 @@ const SUITABILITY_CLOSE_EXECUTE_FLAG_SPEC = {
   '--help': { type: 'boolean', short: 'h' },
 } as const;
 
-function parseArgs(argv: string[]): SuitabilityCloseExecuteArgs {
+export function parseArgs(argv: string[]): SuitabilityCloseExecuteArgs {
   const { values, help } = parseCliArgs(
     argv,
     SUITABILITY_CLOSE_EXECUTE_FLAG_SPEC,
   );
+  // Copilot review finding on PR #2558 (suppressed comment): /^\d+$/ alone
+  // accepts "0", which would then attempt to load/close issue #0. Require a
+  // genuinely positive integer, matching runCli's own --issue validation.
   const issueRaw = values.issue as string | undefined;
-  const issue =
+  const parsedIssue =
     issueRaw !== undefined && /^\d+$/.test(issueRaw) ? Number(issueRaw) : null;
+  const issue = parsedIssue !== null && parsedIssue > 0 ? parsedIssue : null;
   return {
     issue,
     apply: Boolean(values.apply),

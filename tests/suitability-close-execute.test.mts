@@ -6,6 +6,7 @@ import {
   buildSuitabilityCloseComment,
   evaluateSuitabilityCloseClaim,
   evaluateSuitabilityCloseEligibility,
+  parseArgs,
   runSuitabilityCloseExecute,
   type SuitabilityCloseExecuteArgs,
   type SuitabilityCloseExecuteDeps,
@@ -314,6 +315,28 @@ test('--apply closes, posts the evidence-bound comment, and releases the claim w
   ]);
 });
 
+test('--apply re-validates the claim immediately before closeIssue and aborts the close (not the comment) if it was lost in that gap (Copilot review, PR #2558)', () => {
+  const { deps, calls } = makeDeps();
+  let loadCount = 0;
+  deps.loadIssueComments = () => {
+    loadCount += 1;
+    // First call (before posting the comment): owned. Second call (the
+    // final re-validation immediately before closeIssue): taken over.
+    return loadCount === 1 ? [claimComment()] : [];
+  };
+  const verdict = runSuitabilityCloseExecute(baseArgs({ apply: true }), deps);
+  assert.equal(loadCount, 2);
+  assert.equal(verdict.closed, false);
+  assert.equal(verdict.claim?.owned, false);
+  assert.equal(verdict.claim?.reason, 'missing-active-claim');
+  assert.match(verdict.result, /comment and the close/);
+  // The evidence comment was already posted (informing whoever now owns
+  // the claim), but the close and release never ran.
+  assert.equal(calls.comments.length, 1);
+  assert.deepEqual(calls.closed, []);
+  assert.deepEqual(calls.released, []);
+});
+
 test('--apply fails closed (no mutation) when the fresh re-evaluation no longer finds a signal', () => {
   const { deps, calls } = makeDeps({ checkOutcome: null });
   const verdict = runSuitabilityCloseExecute(baseArgs({ apply: true }), deps);
@@ -366,4 +389,15 @@ test('a direct call bypassing runCli with issue: null degrades to a clean not-re
   assert.deepEqual(calls.closed, []);
   assert.deepEqual(calls.comments, []);
   assert.deepEqual(calls.released, []);
+});
+
+// ---------------------------------------------------------------------------
+// parseArgs (pure)
+// ---------------------------------------------------------------------------
+
+test('parseArgs rejects "0" for --issue, not just non-digit input (Copilot review, PR #2558)', () => {
+  assert.equal(parseArgs(['--issue', '0']).issue, null);
+  assert.equal(parseArgs(['--issue', 'abc']).issue, null);
+  assert.equal(parseArgs(['--issue', '-1']).issue, null);
+  assert.equal(parseArgs(['--issue', '2222']).issue, 2222);
 });
