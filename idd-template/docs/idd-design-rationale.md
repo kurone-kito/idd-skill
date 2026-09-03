@@ -414,9 +414,11 @@ An adopter repository that generates some of its own `docs/**.md` or
 sync-docs-style tool) can lose a fix silently: an agent edits the
 generated mirror directly, the change looks correct locally, but the
 next sync run regenerates the mirror from its canonical source and
-discards the edit without any error. The mistake is easy to make
-because the mirror and its canonical source are often byte-identical
-or near-identical, giving no visual cue at a glance. Only a
+discards the edit without any error -- a real incident cost a
+revert-and-redo cycle before the guidance below existed
+(kurone-kito/idd-skill#2548). The mistake is easy to make because the
+mirror and its canonical source are often byte-identical or
+near-identical, giving no visual cue at a glance. Only a
 `.github/instructions/**.instructions.md` mirror carries a visible
 `idd-generated-from` banner at its top; a `docs/**.md` mirror does not,
 so the banner check alone misses exactly the file class most likely to

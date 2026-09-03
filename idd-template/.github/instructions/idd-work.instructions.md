@@ -340,12 +340,16 @@ failure and fix it. See
 or `.github/instructions/**.md` file, check whether it is a generated
 mirror. A `.github/instructions/**.instructions.md` file carries an
 `idd-generated-from` banner at its top when it is one -- the banner
-itself names the canonical source and the resync command. A
-`docs/**.md` file never carries that banner even when it is a mirror;
-check `audit/sync-manifest.json`'s `syncPairs` for an entry whose
-`target` matches the file path instead. Either signal means edit the
-named canonical `source` and run its resync command there -- an edit
-to the mirror itself is silently discarded on the next sync. See
+itself names the canonical source and the resync command, valid only
+for `exact`/`concreted` pairs. A `docs/**.md` file never carries that
+banner even when it is a mirror; check `audit/sync-manifest.json`'s
+`syncPairs` for an entry whose `target` matches the file path instead,
+and read its `mode`. For `exact`/`concreted`, edit only the named
+canonical `source` and run its resync command -- an edit to the mirror
+itself is silently discarded on the next sync. For `structure`/
+`contains`, the sync tool does not auto-regenerate the mirror at all;
+edit both the canonical `source` and the mirror by hand, keeping only
+the structural elements the manifest requires in sync. See
 [rationale](../../docs/idd-design-rationale.md#b3--edit-the-canonical-source-of-a-generated-docsinstructions-file-not-its-mirror).
 
 If B3 or C must stop for a hold, use the shared Hold / suspend rules in

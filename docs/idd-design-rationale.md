@@ -418,10 +418,11 @@ does, so checking for the banner alone misses exactly this file class.
 Both real occurrences in this repository were `docs/**.md` files
 (`docs/idd-helper-scripts.md` and `docs/policy-constants.md`, both
 caught pre-commit via `git status` plus a manual
-`sync-manifest.json` lookup, in one 2026-09-03 session, never merged
-but each costing a revert-and-redo cycle), and a structurally identical
-bug independently surfaced the same session inside a brand-new
-`audit-docs.mjs` checker (`#2477`): its file-attribution logic
+`audit/sync-manifest.json` lookup, never merged but each costing a
+revert-and-redo cycle -- observed 2026-09-03, `#2548`), and a
+structurally identical bug independently surfaced the same session
+inside a brand-new `audit-docs.mjs` checker (observed 2026-09-03,
+`#2477`): its file-attribution logic
 initially cited the generated mirror in a drift finding instead of the
 canonical source, for the same root cause. Checking
 `audit/sync-manifest.json`'s `syncPairs` for a matching `target` entry
