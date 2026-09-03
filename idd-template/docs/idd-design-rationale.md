@@ -752,3 +752,33 @@ in the instruction text remains acceptable in place of that link when
 no paired entry exists — both forms fit inside the tight
 instruction-bundle budget that motivates the exemption; neither is
 required.
+
+### Trace a documented output field to its print/return call site, not a type or variable name
+
+While drafting kurone-kito/idd-skill#2474's documentation of
+field-name variance across that repository's evidence-collector helper
+scripts, an initial pass made several confident, specific claims about
+which top-level JSON keys a given helper actually returns. A
+fact-checking pass found that roughly half of those claims were wrong
+— not because the underlying behavior was misunderstood, but because a
+TypeScript **type name** or an internal **local variable name** had
+been mistaken for an actual printed/returned field. For example,
+`advisory-convergence.mts`'s printed object was described as returning
+a `verdict` field: `verdict` is only the local variable name holding
+the whole printed document (the `AdvisoryConvergenceVerdict` type),
+never a key nested inside it. `discover-viability-gate.mts` was
+described as returning a `passed` field: `passed` exists only on an
+internal per-issue helper result and is never copied into the printed
+top-level object. A second, independent verification pass, re-tracing
+every claim to the file's actual `JSON.stringify(...)` /
+`process.stdout.write(...)` call site rather than to the nearest
+plausible-looking name, caught and corrected every instance before the
+documentation merged (observed 2026-09-03,
+kurone-kito/idd-skill#2474).
+
+When documenting what a script or function actually returns or
+prints, trace every claimed field name to its literal
+`JSON.stringify(...)` / `process.stdout.write(...)` / `return` call
+site in the current source — never infer it from a type name, an
+interface field, or a local variable name that merely looks like it
+could be the same thing.
