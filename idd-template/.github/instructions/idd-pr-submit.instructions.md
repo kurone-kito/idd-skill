@@ -43,7 +43,7 @@ synchronization itself runs through `idd-review-triage.instructions.md`'s
 E-phase branch-sync check (`Esync`), which uses the
 `branch-conflict-state` helper when helper runtime is enabled (a
 `gh pr view` fallback otherwise), and `idd-resume.instructions.md`
-already routes a content-conflicting branch there on restart.
+already routes a content-conflict branch there on restart.
 
 If D1 itself reveals content conflicts before the first push, resolve
 them and continue the rebase. After completing the rebase, if any files
