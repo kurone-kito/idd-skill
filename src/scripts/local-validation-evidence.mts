@@ -29,6 +29,7 @@ import {
   resolveCollaboratorAuthority,
 } from './external-check-waiver.mts';
 import {
+  combineOwnerRepoFlags,
   DEFAULT_GH_PAGINATED_TIMEOUT_MS,
   ghText,
   safeGhText,
@@ -314,6 +315,7 @@ interface LocalValidationEvidenceArgs {
   targetIssue: number;
   actor: string;
   repo: string;
+  owner: string;
   apply: boolean;
   format: string;
   help: boolean;
@@ -331,6 +333,7 @@ const LOCAL_VALIDATION_EVIDENCE_FLAG_SPEC = {
   '--target-issue': { type: 'string', default: '' },
   '--actor': { type: 'string', default: '' },
   '--repo': { type: 'string', default: '' },
+  '--owner': { type: 'string', default: '' },
   '--apply': { type: 'boolean', default: false },
   '--format': { type: 'string', default: 'json' },
   '--help': { type: 'boolean', short: 'h' },
@@ -384,7 +387,12 @@ export function parseArgs(argv: string[]): LocalValidationEvidenceArgs {
             '--target-issue',
           ),
     actor: (values.actor as string).trim(),
-    repo: (values.repo as string).trim(),
+    repo:
+      combineOwnerRepoFlags({
+        owner: (values.owner as string).trim(),
+        repo: (values.repo as string).trim(),
+      }) ?? '',
+    owner: (values.owner as string).trim(),
     apply: values.apply as boolean,
     format,
     help,
@@ -646,7 +654,11 @@ Options:
   --service <name>                   outage-declaration service to require active (default: ci-actions)
   --target-issue <number>           override providerOutage.declarationTarget
   --actor <login>                   override the GitHub actor used for --record
-  --repo <owner/name>               repository override
+  --repo <owner/name>               repository override, combined form
+  --owner <owner>                   repository override, split form (use
+                                     with --repo <name>, the bare
+                                     repository name -- not both --owner
+                                     and a combined --repo together)
   --apply                           post the canonical marker comment after validation (--record)
   --format <json|text>              output format (default: json)
   --help                            show this message

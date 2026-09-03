@@ -15,6 +15,7 @@ import {
   readForcedHandoffMode,
 } from './collaborator-permission.mts';
 import {
+  combineOwnerRepoFlags,
   DEFAULT_GH_PAGINATED_TIMEOUT_MS,
   ghApiJson,
   ghText,
@@ -55,6 +56,7 @@ interface LiveStatusDigestArgs {
   issue?: string;
   pr?: string;
   repo?: string;
+  owner?: string;
   dryRun?: boolean;
   apply?: boolean;
   phase?: string;
@@ -80,6 +82,7 @@ const LIVE_STATUS_DIGEST_FLAG_SPEC = {
   '--issue': { type: 'string' },
   '--pr': { type: 'string' },
   '--repo': { type: 'string' },
+  '--owner': { type: 'string' },
   '--dry-run': { type: 'boolean', default: false },
   '--apply': { type: 'boolean', default: false },
   '--phase': { type: 'string' },
@@ -182,7 +185,12 @@ function main(): void {
     );
   }
 
-  const repository = args.repo ?? detectRepository();
+  let repository: string;
+  try {
+    repository = combineOwnerRepoFlags(args) ?? detectRepository();
+  } catch (error) {
+    fail((error as Error).message);
+  }
   const [owner, repo] = parseRepository(repository);
   const targetType = args.issue ? 'issue' : 'pr';
   const targetNumber = parsePositiveInteger(
@@ -755,6 +763,7 @@ function parseArgs(argv: string[]): LiveStatusDigestArgs {
     issue: requireNonEmpty(values.issue as string | undefined, '--issue'),
     pr: requireNonEmpty(values.pr as string | undefined, '--pr'),
     repo: requireNonEmpty(values.repo as string | undefined, '--repo'),
+    owner: requireNonEmpty(values.owner as string | undefined, '--owner'),
     dryRun: values['dry-run'] as boolean,
     apply: values.apply as boolean,
     phase: requireNonEmpty(values.phase as string | undefined, '--phase'),
@@ -838,7 +847,11 @@ Options:
   --claim-id <id>                   active claim id required for apply mode
   --agent-id <id>                   optionally require this claim agent id
   --skip-claim-check                explicit maintainer override for apply mode
-  --repo <owner/name>               repository override
+  --repo <owner/name>               repository override, combined form
+  --owner <owner>                   repository override, split form (use
+                                     with --repo <name>, the bare
+                                     repository name -- not both --owner
+                                     and a combined --repo together)
   --format <json|table>             output format (default: json)
   --include-body                    include the rendered body in JSON reports
   --help                            show this help

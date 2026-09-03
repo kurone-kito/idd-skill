@@ -26,7 +26,7 @@ import { homedir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 
 import { parseCliArgs } from './cli-args.mts';
-import { ghGraphql } from './gh-exec.mts';
+import { combineOwnerRepoFlags, ghGraphql } from './gh-exec.mts';
 import {
   parseClaimComment,
   parseForcedHandoffComment,
@@ -1922,6 +1922,7 @@ function defaultStateDir(): string {
 // module header for the full invariant.
 const TOKEN_COST_HARVEST_FLAG_SPEC = {
   '--repo': { type: 'string', default: '' },
+  '--owner': { type: 'string', default: '' },
   '--out': { type: 'string', default: '' },
   '--events': { type: 'string', default: '' },
   '--dry-run': { type: 'boolean', default: false },
@@ -1932,8 +1933,16 @@ const TOKEN_COST_HARVEST_FLAG_SPEC = {
 function printHelp(): void {
   process.stdout.write(`Usage:
   node scripts/token-cost-harvest.mjs --repo <owner>/<repo> [--out <path>] [--events <path>] [--dry-run]
+  node scripts/token-cost-harvest.mjs --owner <owner> --repo <repo> [--out <path>] [--events <path>] [--dry-run]
 
-  --repo <owner>/<repo>         Repository to join harvested sessions against. Required.
+  --repo <owner>/<repo>         Repository to join harvested sessions against.
+                                Required: either the combined <owner>/<repo>
+                                form alone, or the bare <repo> name paired
+                                with --owner.
+  --owner <owner>               Repository owner, split form (pair with
+                                --repo <repo>, the bare repository name --
+                                not both --owner and a combined --repo
+                                together).
   --out <path>                 Output samples JSONL path (default:
                                 ${defaultStateDir()}/samples.jsonl).
   --events <path>               Phase-event JSONL path (default:
@@ -2014,7 +2023,18 @@ function runCli(argv: string[]): void {
     printHelp();
     return;
   }
-  const repoFlag = values.repo as string;
+  let repoFlag: string;
+  try {
+    repoFlag =
+      combineOwnerRepoFlags({
+        owner: values.owner as string,
+        repo: values.repo as string,
+      }) ?? '';
+  } catch (error) {
+    process.stderr.write(`${(error as Error).message}\n`);
+    process.exitCode = 2;
+    return;
+  }
   const parsedRepo = parseRepoFlag(repoFlag);
   if (!parsedRepo) {
     process.stderr.write(

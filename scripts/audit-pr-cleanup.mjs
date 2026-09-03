@@ -13,7 +13,7 @@ import {
   readForcedHandoffAuthorityPolicy,
   readForcedHandoffMode,
 } from './collaborator-permission.mjs';
-import { ghText } from './gh-exec.mjs';
+import { combineOwnerRepoFlags, ghText } from './gh-exec.mjs';
 import { resolveCollaboratorMarkerTrust } from './policy-helpers.mjs';
 import {
   classifyRegularBotComment,
@@ -38,6 +38,7 @@ const AUDIT_PR_CLEANUP_FLAG_SPEC = {
   '--pr': { type: 'string' },
   '--prs': { type: 'string' },
   '--repo': { type: 'string' },
+  '--owner': { type: 'string' },
   '--dry-run': { type: 'boolean', default: false },
   '--apply': { type: 'boolean', default: false },
   '--format': { type: 'string', default: 'json' },
@@ -112,7 +113,12 @@ async function main() {
     );
   }
   assertBatchApplyClaimScope(args);
-  const repository = args.repo ?? detectRepository();
+  let repository;
+  try {
+    repository = combineOwnerRepoFlags(args) ?? detectRepository();
+  } catch (error) {
+    fail(error.message);
+  }
   const [owner, repo] = parseRepository(repository);
   const prNumbers = parsePrNumbers(args);
   if (args.claimIssue) {
@@ -1458,6 +1464,7 @@ function parseArgs(argv) {
   const pr = requireNonEmpty(values.pr, '--pr');
   const prs = requireNonEmpty(values.prs, '--prs');
   const repo = requireNonEmpty(values.repo, '--repo');
+  const owner = requireNonEmpty(values.owner, '--owner');
   const format = requireNonEmpty(values.format, '--format');
   if (!['json', 'table'].includes(format)) {
     fail('--format must be json or table');
@@ -1471,6 +1478,7 @@ function parseArgs(argv) {
     pr,
     prs,
     repo,
+    owner,
     dryRun: values['dry-run'],
     apply: values.apply,
     claimIssue,
@@ -1500,7 +1508,11 @@ Options:
   --claim-id <id>                   active claim id required for apply mode
   --agent-id <id>                   optionally require this claim agent id
   --skip-claim-check                explicit maintainer override for apply mode
-  --repo <owner/name>               repository override
+  --repo <owner/name>               repository override, combined form
+  --owner <owner>                   repository override, split form (use
+                                     with --repo <name>, the bare
+                                     repository name -- not both --owner
+                                     and a combined --repo together)
   --format <json|table>             output format (default: json)
   --help                            show this help
 
