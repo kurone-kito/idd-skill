@@ -503,6 +503,150 @@ const CODERABBIT_SKIP_REVIEW_MARKER_RE = new RegExp(
   escapeRegExp(CODERABBIT_SKIP_REVIEW_MARKER),
   'i',
 );
+// Matches the two section headings this older CodeRabbit format nests
+// per-file findings under (kurone-kito/idd-skill#2197, kurone-kito/idd-skill#2559): a review whose finding has no
+// threaded comment of its own. A newer-format review ("Actionable comments
+// posted: N", individually threaded) never emits either heading, so this
+// gate alone already satisfies the "newer format stays unaffected"
+// acceptance criterion.
+const CODERABBIT_EMBEDDED_SECTION_HEADING_RE =
+  /<summary>(?:🧹 Nitpick comments|⚠️ Outside diff range comments) \(\d+\)<\/summary>/g;
+// A per-file grouping inside one of the sections above: `<summary>{file}
+// (N)</summary>`. Accepts an extensionless, separator-less filename (e.g.
+// `Dockerfile`, `Makefile`, `LICENSE`) -- an earlier version required a
+// `.` extension or `/` separator to avoid matching an unrelated
+// `<summary>` heading that also carries a parenthesized count, e.g. the
+// review's own "📒 Files selected for processing (N)" section, but that
+// also dropped every finding for a real extensionless file (Copilot
+// review, PR #2563). The real defense against that unrelated heading is
+// {@link CODERABBIT_EMBEDDED_SECTION_END_RE} bounding the section's own
+// span below, not this pattern.
+const CODERABBIT_EMBEDDED_FILE_HEADING_RE =
+  /<summary>([^<]+?) \(\d+\)<\/summary>/g;
+// Marks the natural end of a Nitpick/Outside-diff section's own content in
+// every review body sampled for #2197/#2559: CodeRabbit always follows the
+// per-file findings with this footer before any unrelated section (e.g.
+// "ℹ️ Review info" > "📒 Files selected for processing"). Bounding the
+// section span here -- not just at the next same-kind section heading --
+// keeps the relaxed file-heading pattern above from matching a later,
+// unrelated `<summary>{text} (N)</summary>` several sections down (Copilot
+// review, PR #2563).
+const CODERABBIT_EMBEDDED_SECTION_END_RE =
+  /<summary>🤖 Prompt for all review comments with AI agents<\/summary>/;
+// One finding's header line inside a file grouping: a backtick-quoted line
+// or line range, a colon, then 1-3 pipe-separated italic metadata segments
+// (category, severity, effort -- CodeRabbit does not document this shape
+// itself; it is inferred from every review body sampled for #2197/#2559).
+// Deliberately confined to same-line whitespace (`[ \t]`, never `\s`, which
+// includes newlines) in both the per-segment content and the separator
+// between segments: an earlier `\s`-based version could absorb an entirely
+// separate later `_italic_` phrase from the finding's own prose into this
+// same metadata capture once a blank line intervened, corrupting the
+// severity/title boundary (Copilot review, PR #2563).
+const CODERABBIT_EMBEDDED_FINDING_HEADER_RE =
+  /`(\d+(?:-\d+)?)`:[ \t]*((?:_[^_\n]*_[ \t]*\|?[ \t]*)+)/g;
+// No `\b` before/after the word: each segment is markdown-italic-wrapped
+// (`_..._`), and `_` is itself a `\w` character, so a trailing `\b` would
+// never match immediately before the closing underscore.
+const CODERABBIT_SEVERITY_WORD_RE = /(Trivial|Minor|Major|Critical)/i;
+/** Bold title line (`**...**`) directly introducing a finding's prose. */
+const CODERABBIT_EMBEDDED_FINDING_TITLE_RE = /\*\*(.+?)\*\*/;
+/**
+ * Extract each finding embedded in a CodeRabbit review body's older
+ * "🧹 Nitpick comments" / "⚠️ Outside diff range comments" collapsible
+ * format (#2197, #2559) -- a specific, file/line-cited finding that this
+ * format never gives its own threaded review comment, unlike CodeRabbit's
+ * newer per-comment format. Returns `[]` when `body` carries neither
+ * section heading (including every newer-format review) or is not a
+ * string.
+ *
+ * Best-effort, not a full HTML/Markdown parser: scoped to one section at a
+ * time by heading-to-next-heading text slicing, then one file grouping at a
+ * time the same way, then one finding header line at a time within that
+ * slice. A finding whose bold title cannot be found before the next
+ * boundary still contributes an entry with `description: ''` rather than
+ * being silently dropped -- an uncovered finding this parser cannot
+ * describe is still an uncovered finding.
+ */
+export function extractCodeRabbitEmbeddedFindings(body) {
+  if (typeof body !== 'string' || body.length === 0) {
+    return [];
+  }
+  const sectionHeadings = [
+    ...body.matchAll(CODERABBIT_EMBEDDED_SECTION_HEADING_RE),
+  ];
+  if (sectionHeadings.length === 0) {
+    return [];
+  }
+  const findings = [];
+  for (let i = 0; i < sectionHeadings.length; i += 1) {
+    const start = sectionHeadings[i].index + sectionHeadings[i][0].length;
+    const nextSectionStart = sectionHeadings[i + 1]?.index ?? body.length;
+    const footerMatch = body
+      .slice(start, nextSectionStart)
+      .match(CODERABBIT_EMBEDDED_SECTION_END_RE);
+    const end =
+      footerMatch?.index !== undefined
+        ? start + footerMatch.index
+        : nextSectionStart;
+    findings.push(
+      ...extractCodeRabbitEmbeddedFindingsFromSection(body.slice(start, end)),
+    );
+  }
+  return findings;
+}
+function extractCodeRabbitEmbeddedFindingsFromSection(section) {
+  const fileHeadings = [
+    ...section.matchAll(CODERABBIT_EMBEDDED_FILE_HEADING_RE),
+  ];
+  const findings = [];
+  for (let i = 0; i < fileHeadings.length; i += 1) {
+    const file = fileHeadings[i][1].trim();
+    const start = fileHeadings[i].index + fileHeadings[i][0].length;
+    const end = fileHeadings[i + 1]?.index ?? section.length;
+    const zone = section.slice(start, end);
+    // Collected up front (not iterated via a live matchAll) so each
+    // finding's own title search below can be bounded by the NEXT
+    // finding's header position -- searching the zone's unbounded
+    // remainder let a finding with no bold title of its own "steal" a
+    // later finding's title instead of reporting an empty description
+    // (Copilot review, PR #2563).
+    const headers = [...zone.matchAll(CODERABBIT_EMBEDDED_FINDING_HEADER_RE)];
+    for (let j = 0; j < headers.length; j += 1) {
+      const header = headers[j];
+      const lineRange = header[1];
+      const severityMatch = header[2].match(CODERABBIT_SEVERITY_WORD_RE);
+      const contentStart = header.index + header[0].length;
+      const contentEnd = headers[j + 1]?.index ?? zone.length;
+      const findingContent = zone.slice(contentStart, contentEnd);
+      const titleMatch = findingContent.match(
+        CODERABBIT_EMBEDDED_FINDING_TITLE_RE,
+      );
+      findings.push({
+        file,
+        lineRange,
+        severity: severityMatch ? severityMatch[0] : null,
+        description: titleMatch ? titleMatch[1].trim() : '',
+      });
+    }
+  }
+  return findings;
+}
+/**
+ * Compare {@link extractCodeRabbitEmbeddedFindings}'s count for `body`
+ * against `threadedCommentCount` -- the number of `coderabbitai[bot]`
+ * threaded review comments already present for this review/PR -- so a
+ * caller gets the uncovered-finding gap (#2559) without re-deriving the
+ * comparison. Never negative: a review whose threaded comments already
+ * meet or exceed its embedded-finding count reports `0`.
+ */
+export function countUncoveredCodeRabbitEmbeddedFindings(
+  body,
+  threadedCommentCount,
+) {
+  const embeddedFindingCount = extractCodeRabbitEmbeddedFindings(body).length;
+  return Math.max(0, embeddedFindingCount - threadedCommentCount);
+}
 export function classifyRegularBotComment(
   comment,
   comments,

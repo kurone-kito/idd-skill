@@ -497,6 +497,38 @@ Primary advisory bot procedure at the now-stable HEAD whenever the last
 non-empty snapshot this episode zeroed out on a completed-review PATH B
 disposition, before proceeding to F1.
 
+### An advisory bot's embedded-but-unthreaded findings: mirror the detection scope, not the gate scope
+
+A review bot can embed a specific, file/line-cited finding inside its
+review body's prose (an older collapsible-section format, e.g.
+CodeRabbit's "Nitpick comments" / "Outside diff range comments") with
+**no** corresponding threaded review comment of its own (observed
+2026-09-03, kurone-kito/idd-skill#2197's live sweep,
+kurone-kito/idd-skill#2559).
+Because E1 Step 3's "Review bodies" rule only pulls a review into
+`ReviewItems_snapshot` when its state is `CHANGES_REQUESTED`, and this
+bot-review-state pattern reports `COMMENTED` instead, the whole review
+body — not just the embedded finding — was invisible to E1, and E4-E8
+never Accepted or Rejected it.
+
+This is the same class of gap Copilot's `suppressedCount` handling
+already closes (kurone-kito/idd-skill#1880,
+`advisory-convergence.mts`): a finding that exists in a bot's review
+but has no GitHub thread of its own. For a non-gating PATH B advisory
+bot, mirror kurone-kito/idd-skill#1880's _detection pattern_ (parse
+the embedded findings, compare against threaded-comment count) but
+not its _gate-enforcement scope_: an uncovered finding becomes an
+ordinary PATH B
+`ReviewItems_snapshot` entry, not a new merge-blocking check.
+
+One sharp regex edge worth recording: matching a severity word like
+"Trivial" against a markdown-italic-wrapped segment (`_Trivial_`) with
+`\bTrivial\b` never matches — regex `\b` treats `_` as a word
+character, so there is no boundary between the closing `_` and the
+preceding letter. Drop the trailing `\b` rather than trying to work
+around it with lookarounds, when the surrounding text is already
+narrowly scoped enough that the ambiguity risk is negligible.
+
 ## Advisory wait
 
 ### AW3-S vs AW3-R: why two recovery paths
