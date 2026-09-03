@@ -477,7 +477,7 @@ issue-authoring before that loop ever sees anything.
 2. **Hand off to issue-authoring**: once a signal survives triage as a
    genuinely new, actionable item, feed its content to the
    `issue-authoring` companion the same way a human-authored idea
-   would be, if your repository has installed one (see
+   would be if your repository has installed one (see
    [Artifact taxonomy and ownership](#artifact-taxonomy-and-ownership)
    above). The companion produces a normal, schema-conformant IDD
    issue.
