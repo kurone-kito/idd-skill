@@ -2828,6 +2828,73 @@ test('verifiability still fails a freestanding subjective sign-off spanning line
   assert.equal(result.pass, false);
 });
 
+test("verifiability passes background prose reporting on another document's existing behavior across a hard wrap (#2472, #2512)", () => {
+  // Check 7 false-positive that now passes: this reproduces #2472's exact
+  // body shape -- a Background paragraph reporting what ANOTHER file
+  // already says, with the subject/gate words landing on a different
+  // physical (hard-wrapped) line than the reporting verb "says", within
+  // the same paragraph/sentence.
+  const result = checkVerifiability({
+    issue: {
+      ...BASE_ISSUE,
+      body: `## Background
+
+One doc states the label is removed by a human maintainer only, while
+the other file's claim-release paragraph says a later worker session
+removes the label once a human decision resolves the hold.
+
+## Acceptance Criteria
+- [ ] the two docs agree on who removes the label
+- [ ] tests pass
+`,
+    },
+  } as Context);
+  assert.equal(result.pass, true);
+});
+
+test('verifiability still fails a genuine subjective gate even when an unrelated paragraph reports on another document (#2512)', () => {
+  // The framing-verb exemption is scoped to the paragraph that contains
+  // BOTH the reporting verb and the subject/gate match -- an unrelated
+  // paragraph using "documents" elsewhere in the body must not exempt a
+  // genuine completion-gated-on-approval paragraph that has no reporting
+  // verb of its own.
+  const result = checkVerifiability({
+    issue: {
+      ...BASE_ISSUE,
+      body: `## Background
+
+The appendix file documents the existing claim-release rule in detail.
+
+## Acceptance Criteria
+- [ ] tests pass
+- [ ] final sign-off from the maintainer confirms the UX feels right
+`,
+    },
+  } as Context);
+  assert.equal(result.pass, false);
+});
+
+test('verifiability still fails a genuine subjective gate in a CRLF body (#2531 review)', () => {
+  // A CRLF body's line separator is 2 chars, not 1. The per-line offset
+  // cursor previously assumed 1 char per split(\r?\n) line, undercounting
+  // by 1 byte per CRLF line -- with enough preceding lines, the drifted
+  // offset lands back inside an EARLIER paragraph's span, wrongly exempting
+  // a genuine gate as "framed as descriptive" by that earlier paragraph's
+  // unrelated reporting verb. Reproduced verbatim: pre-fix this returned
+  // pass:true.
+  const result = checkVerifiability({
+    issue: {
+      ...BASE_ISSUE,
+      body:
+        'The docs page documents this.\r\nIt also documents that.\r\n' +
+        'More prose documents things.\r\n\r\n' +
+        'A human decision is required before shipping this feature.\r\n\r\n' +
+        '## Acceptance Criteria\r\n- [ ] tests pass\r\n',
+    },
+  } as Context);
+  assert.equal(result.pass, false);
+});
+
 test('repository fit fails when external system access is required', () => {
   const result = checkRepositoryFit({
     issue: {
