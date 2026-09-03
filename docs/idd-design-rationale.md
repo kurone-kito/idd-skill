@@ -500,6 +500,49 @@ running E14's Primary advisory bot procedure at the now-stable HEAD
 whenever the last non-empty snapshot this episode zeroed out on a
 completed-review PATH B disposition, before proceeding to F1.
 
+### An advisory bot's embedded-but-unthreaded findings: mirror the detection scope, not the gate scope
+
+`#2197`'s live 30-day sweep (337 merged PRs) found a `coderabbitai[bot]`
+review in the older "🧹 Nitpick comments" / "⚠️ Outside diff range
+comments" collapsible-body format can carry a specific, file/line-cited
+finding with **zero** corresponding threaded review comment — e.g. PR
+`#1897` review `4863787336` (zero threaded comments on that PR at
+all) and PR `#1871` review `4860403155` (a Major finding, only
+unrelated Copilot threads present). E1 Step 3's "Review bodies" rule
+only pulls
+a review into `ReviewItems_snapshot` when its state is
+`CHANGES_REQUESTED`; every sampled review here was `COMMENTED`
+(CodeRabbit's own state for a nitpick/outside-diff finding), so the
+whole review body — not just the embedded finding — was invisible to
+E1, and E4-E8 never Accepted or Rejected it (#2559).
+
+This is CodeRabbit's analogue of Copilot's already-solved
+`suppressedCount` gap (#1880, `advisory-convergence.mts`): a finding
+that exists in a bot's review but has no GitHub thread of its own.
+Unlike Copilot's, CodeRabbit is a non-gating PATH B advisory bot here
+— the fix mirrors #1880's _detection pattern_ (parse the embedded
+findings, compare against threaded-comment count) but not its
+_gate-enforcement scope_: an uncovered finding becomes an ordinary
+PATH B `ReviewItems_snapshot` entry, not a new merge-blocking check.
+
+`extractCodeRabbitEmbeddedFindings` / `countUncoveredCodeRabbitEmbeddedFindings`
+(`protocol-helpers.mts`) do the parsing: scoped section-by-section
+(heading to next heading), then file-grouping by file-grouping, then
+finding-header-line by finding-header-line — not a full HTML/Markdown
+parser, since CodeRabbit's own nested `<details>` structure has no
+documented grammar to parse against. One sharp edge found while
+building the severity-word regex: `\bTrivial\b` never matches inside
+`_Trivial_` (CodeRabbit wraps each metadata segment in markdown
+italics) — regex `\b` treats `_` as a word character, so there is no
+boundary between the closing `_` and the preceding letter. Dropping
+the trailing `\b` (there is no real ambiguity risk in this
+already-scoped metadata segment) fixed it.
+
+Newer-format CodeRabbit reviews (`Actionable comments posted: N`,
+individually threaded) carry neither collapsible-section heading, so
+this parser naturally returns no findings for them — no separate
+format-detection branch needed.
+
 ## Advisory wait
 
 ### AW3-S vs AW3-R: why two recovery paths
