@@ -112,14 +112,20 @@ terms literally.
 - **Secondary-bot quiet window**: This source repository also records
   `advisoryWait.secondaryBotLogin: "coderabbitai[bot]"` and
   `advisoryWait.secondaryQuietWindow: "PT1H"` as a local IDD dogfooding
-  opt-in (applies only to `kurone-kito/idd-skill`), waiting one hour
-  after E-phase convergence conditions are first observed before
+  opt-in (applies only to `kurone-kito/idd-skill`), waiting up to one
+  hour after E-phase convergence conditions are first observed before
   pre-merge readiness treats review as settled. This repository
   dogfoods CodeRabbit alongside Copilot and has twice hit CodeRabbit
   rate-limiting during a PR's review cycle, each time working around
   it with an ad hoc one-hour wait before merging; this config turns
   that informal practice into a proper `pre-merge-readiness` blocker
-  (Refs #2335, #2410).
+  (Refs #2335, #2410). As of #2544, the wait is conditioned on live
+  review evidence rather than unconditional: once CodeRabbit has
+  already posted a genuine (non-rate-limited) review for the current
+  HEAD, only a short fixed confirmation buffer applies instead of the
+  full hour -- a HEAD CodeRabbit has not yet reviewed still waits the
+  full configured window unchanged, keeping the wait a fallback for
+  genuine secondary-bot degradation rather than a tax on every merge.
 
 ## For IDD work
 

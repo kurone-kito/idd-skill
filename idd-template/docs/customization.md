@@ -388,7 +388,11 @@ currency gate already computes (`ackOnlyPostDisposition`), so it needs no
 extra persisted state: an unresolved item keeps the anchor fresh, and a
 disposition reply, a watermark, or a courtesy bot acknowledgement never
 reopens it. Distinct from `advisoryWait.settledWindow`, which bounds the
-PRIMARY bot's own pending state, not a late secondary-bot arrival.
+PRIMARY bot's own pending state, not a late secondary-bot arrival. **#2544**:
+once the secondary bot has already posted a genuine review for the current
+HEAD, only a short fixed confirmation buffer applies from that review's own
+timestamp instead of the full configured duration -- a HEAD the bot has not
+yet reviewed still waits the full period unchanged.
 
 `advisoryWait.capExhaustedRoute` is intentionally fail-closed. The
 default `phase-specific` behavior keeps the current E14 skip / F2-F3
