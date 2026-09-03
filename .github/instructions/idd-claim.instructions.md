@@ -187,17 +187,20 @@ No remote branch with that name may exist, unless it matches the
 `branch` field in an inheritable claim comment or trusted
 forced-handoff evidence as defined in (d) above.
 
-Before posting a claim, also perform a **scoped issue-wide branch
-pattern check** — the fast-path collision detection that catches
-parallel-session concurrency on the same issue (different slug
-variants) before a new claim comment is posted.
+Before posting a claim, also run this **scoped branch pattern check**
+— fast-path collision detection for parallel sessions on the same
+issue (different slug variants).
 
-1. **Local worktree scan**: Check whether any local worktree matches the
-   pattern `issue/<number>-*`:
+1. **Local worktree scan**: porcelain, not a name grep — detached has
+   none (#2225):
 
    ```sh
-   git worktree list | grep "issue/<number>-"
+   git worktree list --porcelain -z
    ```
+
+   Match `branch refs/heads/issue/<number>-…`; for `detached`, resolve
+   `head-name` under `git -C <worktree> rev-parse --git-path
+   rebase-merge`/`rebase-apply` first.
 
 2. **Remote branch scan** (scoped Refs API, not repo-wide):
    Query the Refs API with the issue-number prefix only, to stay within
@@ -209,10 +212,9 @@ variants) before a new claim comment is posted.
    ```
 
    The Refs API returns fully-qualified `refs/heads/issue/<number>-…`
-   refs; `sub("^refs/heads/"; "")` strips that prefix so each result
-   compares directly against the short `issue/<number>-…` form stored in a
-   claim `branch` field — otherwise an inheritable or active-claim branch
-   reads as non-corresponding and trips a false reroute or hold below.
+   refs; `sub("^refs/heads/"; "")` strips that prefix so results compare
+   directly against a claim's `branch` field — otherwise an inheritable
+   branch reads as non-corresponding and trips a false hold below.
 
 3. **Collision action tree**:
 
