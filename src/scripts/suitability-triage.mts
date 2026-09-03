@@ -2051,6 +2051,130 @@ export function resolveInputMode(
   return args.bodyFile !== undefined || args.stdin ? 'local' : 'issue';
 }
 
+/**
+ * #1485: `runCli`'s own Check 4 high-confidence evidence-collection block,
+ * extracted (pure move, no behavior change) so `suitability-close-execute.mts`
+ * can reuse the identical fetch orchestration instead of duplicating it --
+ * `#1485`'s own acceptance criteria require the mechanical check to be
+ * "reused, not duplicated." Assumes the caller has already confirmed Checks
+ * 1-3 pass for this candidate (as `runCli`'s own `shouldCollectEvidence` gate
+ * does; `suitability-close-execute.mts` only ever runs after A4.5's Decision
+ * Flow has already reached Check 4 for the same reason) -- this function
+ * itself applies no such gate and always collects.
+ *
+ * The three mechanical signals (closedByPullRequestsReferences, the
+ * branch-name-exact-match lookup, and the same-candidate-files merged-PR
+ * scan) are collected in separate try/catch blocks: an earlier version
+ * wrapped the first two in one block, so a failure collecting the second
+ * signal discarded an already-successful first signal too. Each block's own
+ * failure is recorded independently in `collectionWarnings` and degrades
+ * only that one signal to empty/absent -- never silently reported as "no
+ * evidence" (that would mask a genuinely broken collector as a clean pass),
+ * and never discarding a sibling signal that already collected cleanly.
+ * `gh`/API fetch failures in any block are always recorded here; a
+ * manifest-unavailable same-candidate-files skip is a distinct, deliberate
+ * degradation documented on `loadHighContentionFiles` itself, not a fetch
+ * failure, so it is not added to this list. This is also why a failure here
+ * never throws out to the caller -- this tier is an optional enhancement
+ * layered onto Check 4, and Check 4's own documented Edge Case ("Timeout on
+ * duplicate detection... fall back to exact title match only") already
+ * anticipates exactly this degradation.
+ */
+export function collectHighConfidenceDuplicateEvidence(
+  owner: string,
+  repo: string,
+  repoRef: string,
+  issue: { number: number; title: string; body: string; createdAt: string },
+  manifestPath: string,
+  bundleIds: string[],
+): {
+  highConfidenceDuplicate: HighConfidenceDuplicateInput;
+  collectionWarnings: string[];
+} {
+  const collectionWarnings: string[] = [];
+  let closedByMergedPrNumbers: number[] = [];
+  let candidateFiles: string[] = [];
+  let highContentionFiles: string[] = [];
+  let mergedPrs: HighConfidenceMergedPr[] = [];
+  let branchNameMergedPr: { number: number; mergedAt: string } | null = null;
+
+  try {
+    closedByMergedPrNumbers = fetchClosedByMergedPrNumbers(
+      owner,
+      repo,
+      issue.number,
+    );
+  } catch (error) {
+    collectionWarnings.push(
+      `closedByPullRequestsReferences: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+
+  try {
+    branchNameMergedPr = fetchMergedPrByBranchName(
+      repoRef,
+      computeBranchName(issue.number, issue.title),
+      owner,
+    );
+  } catch (error) {
+    collectionWarnings.push(
+      `branch-name merged-PR lookup: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+
+  try {
+    candidateFiles = parseCandidateFiles(issue.body);
+    const resolvedHighContentionFiles =
+      candidateFiles.length > 0
+        ? loadHighContentionFiles(manifestPath, bundleIds)
+        : null;
+    const shouldScanMergedPrs =
+      candidateFiles.length > 0 &&
+      resolvedHighContentionFiles !== null &&
+      issue.createdAt.length > 0;
+    highContentionFiles = resolvedHighContentionFiles ?? [];
+    if (candidateFiles.length > 0 && resolvedHighContentionFiles === null) {
+      collectionWarnings.push(
+        'same-candidate-files scan: high-contention manifest unavailable, skipping the scan',
+      );
+    }
+    if (shouldScanMergedPrs) {
+      const scanResult = fetchMergedPrFileOverlapEvidence(
+        repoRef,
+        issue.createdAt,
+        candidateFiles,
+        highContentionFiles,
+        issue.number,
+      );
+      mergedPrs = scanResult.mergedPrs;
+      if (scanResult.truncatedByDeadline) {
+        collectionWarnings.push(
+          'same-candidate-files scan: truncated by MERGED_PR_SCAN_DEADLINE_MS before scanning every merged PR in the window',
+        );
+      }
+    } else {
+      mergedPrs = [];
+    }
+  } catch (error) {
+    collectionWarnings.push(
+      `same-candidate-files scan: ${error instanceof Error ? error.message : String(error)}`,
+    );
+    candidateFiles = [];
+    mergedPrs = [];
+  }
+
+  return {
+    highConfidenceDuplicate: {
+      closedByMergedPrNumbers,
+      candidateFiles,
+      highContentionFiles,
+      mergedPrs,
+      branchNameMergedPr,
+    },
+    collectionWarnings,
+  };
+}
+
 function runCli(): void {
   const args = parseArgs(process.argv.slice(2));
   if (args.help) {
@@ -2155,132 +2279,34 @@ function runCli(): void {
     checkCoherence(preEvidenceContext).pass &&
     checkTrustSafety(preEvidenceContext).pass;
 
-  // #1484: high-confidence Check 4 tier evidence. The two mechanical signals
-  // (closedByPullRequestsReferences, and the same-candidate-files merged-PR
-  // scan) are collected in two SEPARATE try/catch blocks (CodeRabbit review
-  // finding on this PR): an earlier version wrapped both in one block, so a
-  // failure collecting the second signal discarded an already-successful
-  // first signal too. Each block's own failure is recorded independently in
-  // `collectionWarnings` and degrades only that one signal to empty/absent
-  // -- never silently reported as "no evidence" (that would mask a
-  // genuinely broken collector as a clean pass), and never discarding a
-  // sibling signal that already collected cleanly. `gh`/API fetch failures
-  // in either block are always recorded here; a manifest-unavailable
-  // same-candidate-files skip is a distinct, deliberate degradation
-  // documented on `loadHighContentionFiles` itself, not a fetch failure, so
-  // it is not added to this list (Copilot review finding on this PR: an
-  // earlier comment overclaimed that every degradation path surfaces here).
-  // This is also why an uncaught failure no longer aborts the entire
-  // 7-check evaluation (Codex review finding on this PR) -- this tier is an
-  // optional enhancement layered onto Check 4, and Check 4's own documented
-  // Edge Case ("Timeout on duplicate detection... fall back to exact title
-  // match only") already anticipates exactly this degradation. Both blocks
-  // below run only when `shouldCollectEvidence` is true (#1815) -- when it
-  // is false, Check 4 is never reached anyway, so `collectionWarnings`
-  // correctly stays empty (this is a deliberate skip, not a collection
-  // failure).
-  const collectionWarnings: string[] = [];
-  let closedByMergedPrNumbers: number[] = [];
-  let candidateFiles: string[] = [];
-  let highContentionFiles: string[] = [];
-  let mergedPrs: HighConfidenceMergedPr[] = [];
-  let branchNameMergedPr: { number: number; mergedAt: string } | null = null;
+  // #1484: high-confidence Check 4 tier evidence, collected by
+  // `collectHighConfidenceDuplicateEvidence` below only when
+  // `shouldCollectEvidence` is true (#1815) -- when it is false, Check 4 is
+  // never reached anyway, so `collectionWarnings` correctly stays empty
+  // (this is a deliberate skip, not a collection failure). See that
+  // function's own doc comment for the per-signal try/catch and
+  // degradation rationale.
+  let collectionWarnings: string[] = [];
+  let highConfidenceDuplicate: SuitabilityOptions['highConfidenceDuplicate'] = {
+    closedByMergedPrNumbers: [],
+    candidateFiles: [],
+    highContentionFiles: [],
+    mergedPrs: [],
+    branchNameMergedPr: null,
+  };
 
   if (shouldCollectEvidence) {
-    try {
-      closedByMergedPrNumbers = fetchClosedByMergedPrNumbers(
-        owner,
-        repo,
-        args.issue,
-      );
-    } catch (error) {
-      collectionWarnings.push(
-        `closedByPullRequestsReferences: ${error instanceof Error ? error.message : String(error)}`,
-      );
-    }
-
-    // #2313, Signal 3: a separate try/catch (same pattern as the two blocks
-    // above/below) so a failure here degrades only this one signal, never
-    // discarding a sibling signal that already collected cleanly.
-    try {
-      branchNameMergedPr = fetchMergedPrByBranchName(
-        repoRef,
-        computeBranchName(issue.number, issue.title),
-        owner,
-      );
-    } catch (error) {
-      collectionWarnings.push(
-        `branch-name merged-PR lookup: ${error instanceof Error ? error.message : String(error)}`,
-      );
-    }
-
-    try {
-      candidateFiles = parseCandidateFiles(issue.body);
-      // Only resolve the high-contention exclusion set (a file read + JSON
-      // parse) when there is a '## Candidate files' section to check it
-      // against -- most issues have none, and the result would otherwise be
-      // discarded.
-      const resolvedHighContentionFiles =
-        candidateFiles.length > 0
-          ? loadHighContentionFiles(
-              args.manifest,
-              args.bundles ?? DEFAULT_BUNDLE_IDS,
-            )
-          : null;
-      const shouldScanMergedPrs =
-        candidateFiles.length > 0 &&
-        resolvedHighContentionFiles !== null &&
-        issue.createdAt.length > 0;
-      highContentionFiles = resolvedHighContentionFiles ?? [];
-      if (candidateFiles.length > 0 && resolvedHighContentionFiles === null) {
-        // Codex P2 review finding: an unreadable/missing high-contention
-        // manifest silently skipped the same-candidate-files scan without
-        // recording a warning -- but from Check 4's perspective this is the
-        // same class of "high-confidence evidence could not be collected" as
-        // a genuine gh/API failure, and must degrade the same way (exact
-        // title match only), not let the full weak heuristic run.
-        collectionWarnings.push(
-          'same-candidate-files scan: high-contention manifest unavailable, skipping the scan',
-        );
-      }
-      if (shouldScanMergedPrs) {
-        const scanResult = fetchMergedPrFileOverlapEvidence(
-          repoRef,
-          issue.createdAt,
-          candidateFiles,
-          highContentionFiles,
-          issue.number,
-        );
-        mergedPrs = scanResult.mergedPrs;
-        if (scanResult.truncatedByDeadline) {
-          // Codex P2 review finding: a deadline-truncated scan returns
-          // normally (not a throw), so it must record its own warning here --
-          // otherwise Check 4 would run the full weak heuristic on
-          // incomplete evidence instead of degrading to exact-title-only.
-          collectionWarnings.push(
-            'same-candidate-files scan: truncated by MERGED_PR_SCAN_DEADLINE_MS before scanning every merged PR in the window',
-          );
-        }
-      } else {
-        mergedPrs = [];
-      }
-    } catch (error) {
-      collectionWarnings.push(
-        `same-candidate-files scan: ${error instanceof Error ? error.message : String(error)}`,
-      );
-      candidateFiles = [];
-      mergedPrs = [];
-    }
+    const evidence = collectHighConfidenceDuplicateEvidence(
+      owner,
+      repo,
+      repoRef,
+      issue,
+      args.manifest,
+      args.bundles ?? DEFAULT_BUNDLE_IDS,
+    );
+    highConfidenceDuplicate = evidence.highConfidenceDuplicate;
+    collectionWarnings = evidence.collectionWarnings;
   }
-
-  const highConfidenceDuplicate: SuitabilityOptions['highConfidenceDuplicate'] =
-    {
-      closedByMergedPrNumbers,
-      candidateFiles,
-      highContentionFiles,
-      mergedPrs,
-      branchNameMergedPr,
-    };
 
   const result = evaluateSuitability(issue, {
     repository: { owner, repo },
@@ -2962,7 +2988,7 @@ function fetchIssueComments(
  * remaining work would still show its old merged closing PR and get
  * misclassified as a completed duplicate (Codex review finding on this PR).
  */
-function fetchClosedByMergedPrNumbers(
+export function fetchClosedByMergedPrNumbers(
   owner: string,
   repo: string,
   issueNumber: number,
@@ -3019,7 +3045,7 @@ function fetchClosedByMergedPrNumbers(
  * directly, matching the rest of this file's "never trust the shape of a
  * `gh` JSON response" convention.
  */
-function fetchMergedPrByBranchName(
+export function fetchMergedPrByBranchName(
   repoRef: string,
   branchName: string,
   owner: string,
