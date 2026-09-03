@@ -15,6 +15,7 @@ import {
   resolveAdvisorySecondaryQuietWindowMinutes,
   resolveAdvisoryWaitPolicy,
   resolveEffectiveAdvisoryTerminalWindowMinutes,
+  resolveProviderOutageTerminalWindowMinutes,
 } from './advisory-wait-policy.mts';
 import { buildCopilotRecoverySummary } from './advisory-wait-state.mts';
 import { parseCliArgs } from './cli-args.mts';
@@ -736,14 +737,26 @@ export function collectPreMergeReadiness(
   // closed to `false` on ANY error, exactly like
   // `resolveAdvisoryConvergenceOutageRelief`: a transient fetch failure
   // must never shorten the terminal-unavailability window this gates.
+  //
+  // Skipped entirely when no override is configured (Copilot review, PR
+  // #2564 round 3): `resolveEffectiveAdvisoryTerminalWindowMinutes` returns
+  // the base window regardless of `declarationActive` when
+  // `advisoryWait.providerOutage.terminalWindow` is unset, so the live
+  // fetch would be pure overhead -- and an avoidable failure/rate-limit
+  // surface -- on every readiness run for a repository that never
+  // configured this feature.
+  const providerOutageTerminalWindowOverrideMinutes =
+    resolveProviderOutageTerminalWindowMinutes(advisoryWaitConfig);
   const outageDeclarationActiveForTerminalWindow =
-    resolveOutageDeclarationActiveForConvergenceSelector({
-      port,
-      owner,
-      repo,
-      iddConfig,
-      now,
-    });
+    providerOutageTerminalWindowOverrideMinutes !== null
+      ? resolveOutageDeclarationActiveForConvergenceSelector({
+          port,
+          owner,
+          repo,
+          iddConfig,
+          now,
+        })
+      : false;
   const copilotRecovery = buildCopilotRecoverySummary(
     { comments: normalizedComments, prHeadSha, lastCopilotCommit },
     {

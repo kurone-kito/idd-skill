@@ -92,6 +92,7 @@
 // actual win is narrower than "never needs a rerun again."
 import { readFileSync } from 'node:fs';
 import {
+  advisoryWaitSectionIsValid,
   DEFAULT_ADVISORY_CONVERGENCE_CHECK_SELECTOR,
   DEFAULT_ADVISORY_CONVERGENCE_DEADLINE_MINUTES,
   DEFAULT_ADVISORY_PENDING_WINDOW_MINUTES,
@@ -1776,8 +1777,22 @@ export function collectFromGitHub(
   // `advisoryWait.terminalWindow` value, byte-identical to before this
   // change. `recoveryCycleCap` above is deliberately untouched -- the issue
   // scopes this override to the terminal-window duration alone.
+  //
+  // Schema-validated first (Copilot review, PR #2564 round 3): the prior
+  // `readAdvisoryTerminalWindowMinutes()` call re-read
+  // `.github/idd/config.json` itself and failed closed to the default
+  // whenever the `advisoryWait` section was schema-invalid for ANY reason.
+  // Passing `rawConfig` straight to the pure resolver would silently drop
+  // that validation -- an unrelated invalid key elsewhere in `advisoryWait`
+  // could then let a stale `terminalWindow` value through instead of
+  // falling back, exactly the same validate-before-resolve gate
+  // `pre-merge-readiness.mts`'s own `advisoryWaitConfig` variable already
+  // applies.
+  const validatedAdvisoryWaitConfig = advisoryWaitSectionIsValid(rawConfig)
+    ? rawConfig
+    : {};
   const terminalWindowMinutes = resolveEffectiveAdvisoryTerminalWindowMinutes({
-    config: rawConfig,
+    config: validatedAdvisoryWaitConfig,
     declarationActive: outageDeclarationActive,
   });
   // #1344: forced-handoff-aware claim resolution, matching
