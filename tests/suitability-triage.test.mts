@@ -2828,6 +2828,52 @@ test('verifiability still fails a freestanding subjective sign-off spanning line
   assert.equal(result.pass, false);
 });
 
+test("verifiability passes background prose reporting on another document's existing behavior across a hard wrap (#2472, #2512)", () => {
+  // Check 7 false-positive that now passes: this reproduces #2472's exact
+  // body shape -- a Background paragraph reporting what ANOTHER file
+  // already says, with the subject/gate words landing on a different
+  // physical (hard-wrapped) line than the reporting verb "says", within
+  // the same paragraph/sentence.
+  const result = checkVerifiability({
+    issue: {
+      ...BASE_ISSUE,
+      body: `## Background
+
+One doc states the label is removed by a human maintainer only, while
+the other file's claim-release paragraph says a later worker session
+removes the label once a human decision resolves the hold.
+
+## Acceptance Criteria
+- [ ] the two docs agree on who removes the label
+- [ ] tests pass
+`,
+    },
+  } as Context);
+  assert.equal(result.pass, true);
+});
+
+test('verifiability still fails a genuine subjective gate even when an unrelated paragraph reports on another document (#2512)', () => {
+  // The framing-verb exemption is scoped to the paragraph that contains
+  // BOTH the reporting verb and the subject/gate match -- an unrelated
+  // paragraph using "documents" elsewhere in the body must not exempt a
+  // genuine completion-gated-on-approval paragraph that has no reporting
+  // verb of its own.
+  const result = checkVerifiability({
+    issue: {
+      ...BASE_ISSUE,
+      body: `## Background
+
+The appendix file documents the existing claim-release rule in detail.
+
+## Acceptance Criteria
+- [ ] tests pass
+- [ ] final sign-off from the maintainer confirms the UX feels right
+`,
+    },
+  } as Context);
+  assert.equal(result.pass, false);
+});
+
 test('repository fit fails when external system access is required', () => {
   const result = checkRepositoryFit({
     issue: {

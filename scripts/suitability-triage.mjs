@@ -178,6 +178,35 @@ const SUBJECTIVE_PROXIMITY_PATTERN = new RegExp(
   `${SUBJECTIVE_GATE_PATTERN.source}[\\s\\S]{0,80}${SUBJECTIVE_SUBJECT_PATTERN.source}`,
   'i',
 );
+// #2512: a match landing in a paragraph that also reports on another
+// document's or process's existing behavior ("...paragraph SAYS a later
+// worker session removes the label once a human decision resolves the
+// hold" -- #2472's exact shape) uses the subject/gate vocabulary as the
+// OBJECT of that report, not as a claim that THIS issue's own completion
+// needs anyone's say-so. GitHub issue bodies are hard-wrapped, so the
+// reporting verb and the subject/gate words routinely land on different
+// physical lines of the same sentence -- a paragraph (blank-line
+// delimited), not a raw split(\n) line, is the unit that must see both
+// (the same "line wrap is not a boundary, blank line is" shape as
+// `sliceUnsafeDirectiveWindow`'s Check 3 window). Exempting the whole
+// paragraph, not a tighter window around the verb, is a soft trade-off
+// matching this check's existing resolved-decision heuristic below: a
+// false negative (an unrelated reporting verb elsewhere in a long
+// paragraph) is accepted in exchange for not re-deriving sentence
+// boundaries.
+const FRAMING_VERB_PATTERN =
+  /\b(documents?|describes?|says?|states?|explains?|reports?)\b/i;
+/** Blank-line-delimited paragraph offsets within `body`. */
+function getParagraphSpans(body) {
+  const spans = [];
+  let cursor = 0;
+  for (const boundary of body.matchAll(/\r?\n[ \t]*(?:\r?\n)+/g)) {
+    spans.push({ start: cursor, end: boundary.index });
+    cursor = boundary.index + boundary[0].length;
+  }
+  spans.push({ start: cursor, end: body.length });
+  return spans;
+}
 // Check 3 precision: an unsafe execution directive tells the agent to act on
 // *supplied / untrusted* content, not any command verb that merely lands near
 // the ordinary determiner "this". Match the strong untrusted-origin signals, or
@@ -1707,14 +1736,39 @@ export function checkVerifiability(context) {
     };
   }
   const hasSubjectiveApproval = (() => {
-    const lines = body.split(/\r?\n/);
-    return (
-      lines.some(
-        (line) =>
-          SUBJECTIVE_SUBJECT_PATTERN.test(line) &&
-          SUBJECTIVE_GATE_PATTERN.test(line),
-      ) || SUBJECTIVE_PROXIMITY_PATTERN.test(body)
+    const paragraphSpans = getParagraphSpans(body);
+    const isFramedAsDescriptive = (offset) => {
+      const span =
+        paragraphSpans.find(
+          (candidate) => offset >= candidate.start && offset <= candidate.end,
+        ) ?? paragraphSpans[paragraphSpans.length - 1];
+      return FRAMING_VERB_PATTERN.test(
+        body.slice(span?.start ?? 0, span?.end ?? body.length),
+      );
+    };
+    let lineOffset = 0;
+    for (const line of body.split(/\r?\n/)) {
+      if (
+        SUBJECTIVE_SUBJECT_PATTERN.test(line) &&
+        SUBJECTIVE_GATE_PATTERN.test(line) &&
+        !isFramedAsDescriptive(lineOffset)
+      ) {
+        return true;
+      }
+      lineOffset += line.length + 1;
+    }
+    const proximityPattern = new RegExp(
+      SUBJECTIVE_PROXIMITY_PATTERN.source,
+      'gi',
     );
+    let proximityMatch = proximityPattern.exec(body);
+    while (proximityMatch) {
+      if (!isFramedAsDescriptive(proximityMatch.index)) {
+        return true;
+      }
+      proximityMatch = proximityPattern.exec(body);
+    }
+    return false;
   })();
   // A body that carries BOTH a resolved-decision marker (a
   // "## Decision (resolved …)" section) AND a concrete, objectively-verifiable
