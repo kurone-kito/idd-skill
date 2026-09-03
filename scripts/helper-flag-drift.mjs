@@ -13,24 +13,41 @@ const FLAG_TOKEN_PATTERN = /--[a-z][a-z0-9-]*/g;
 // skipped rather than mistaken for a real worked example.
 const NODE_INVOCATION_LINE_PATTERN = /\bnode\s+(scripts\/[\w./-]+\.mjs)\b(.*)$/;
 /**
- * Extract every line that falls inside a triple-backtick fenced code block
- * in `text`. Line-based and only recognizes triple-backtick fences,
- * matching the same approximation `extractHeadingSlugs` in
+ * Extract every triple-backtick fenced code block in `text` as its own
+ * array of lines (fence delimiter lines excluded), preserving block
+ * boundaries so a shell line-continuation join never bridges two
+ * unrelated fences. An unterminated trailing fence still counts, matching
+ * the same permissive toggle `extractHeadingSlugs` in
  * markdown-link-audit.mts already accepts elsewhere in this audit.
  */
-export function extractFencedLines(text) {
-  const lines = [];
-  let inFence = false;
+export function extractFencedBlocks(text) {
+  const blocks = [];
+  let current = null;
   for (const line of text.split(/\r?\n/)) {
     if (/^\s*```/.test(line)) {
-      inFence = !inFence;
+      if (current) {
+        blocks.push(current);
+        current = null;
+      } else {
+        current = [];
+      }
       continue;
     }
-    if (inFence) {
-      lines.push(line);
+    if (current) {
+      current.push(line);
     }
   }
-  return lines;
+  if (current) {
+    blocks.push(current);
+  }
+  return blocks;
+}
+/**
+ * Extract every line that falls inside a triple-backtick fenced code block
+ * in `text`, across every block, in document order.
+ */
+export function extractFencedLines(text) {
+  return extractFencedBlocks(text).flat();
 }
 /** Every distinct `--flag` token appearing anywhere in `text`. */
 export function extractFlagTokens(text) {
@@ -39,37 +56,66 @@ export function extractFlagTokens(text) {
   );
 }
 /**
+ * Join a trailing `\` shell line-continuation within one fenced block into
+ * a single logical line, so a worked example wrapped across several lines
+ * (common throughout this repo's instructions) is read as one command
+ * instead of losing every flag after the first wrapped line.
+ */
+function joinLineContinuations(block) {
+  const logicalLines = [];
+  let buffer = '';
+  for (const rawLine of block) {
+    const trimmedEnd = rawLine.replace(/\s+$/, '');
+    if (trimmedEnd.endsWith('\\')) {
+      buffer += `${trimmedEnd.slice(0, -1)} `;
+      continue;
+    }
+    buffer += rawLine;
+    logicalLines.push(buffer);
+    buffer = '';
+  }
+  if (buffer) {
+    // A trailing continuation with no following line -- keep whatever was
+    // accumulated rather than silently dropping it.
+    logicalLines.push(buffer);
+  }
+  return logicalLines;
+}
+/**
  * Scan every source for fenced `node scripts/<helper>.mjs ...` invocation
- * lines and collect the distinct `--flag` tokens documented per helper,
- * each paired with the first doc file it was seen in (first-seen only --
- * this drives an actionable error message, not exhaustive provenance).
+ * lines (continuation-joined, see `joinLineContinuations`) and collect the
+ * distinct `--flag` tokens documented per helper, each paired with the
+ * first doc file it was seen in (first-seen only -- this drives an
+ * actionable error message, not exhaustive provenance).
  */
 export function collectDocumentedHelperInvocationFlags(sources) {
   const byHelper = new Map();
   for (const source of sources) {
-    for (const line of extractFencedLines(source.text)) {
-      const match = NODE_INVOCATION_LINE_PATTERN.exec(line);
-      if (!match) {
-        continue;
-      }
-      const helperPath = match[1];
-      // A path-alias / traversal segment (`scripts/../bin/x.mjs`) is never
-      // a genuine worked example -- docs/permissions.md deliberately shows
-      // one to illustrate a Bash-permission prefix-matching gap. Skip it
-      // rather than resolve and flag a path nobody intends to invoke this
-      // way.
-      if (helperPath.includes('..')) {
-        continue;
-      }
-      const argsText = match[2];
-      let flagsForHelper = byHelper.get(helperPath);
-      if (!flagsForHelper) {
-        flagsForHelper = new Map();
-        byHelper.set(helperPath, flagsForHelper);
-      }
-      for (const flagMatch of argsText.matchAll(FLAG_TOKEN_PATTERN)) {
-        if (!flagsForHelper.has(flagMatch[0])) {
-          flagsForHelper.set(flagMatch[0], source.path);
+    for (const block of extractFencedBlocks(source.text)) {
+      for (const line of joinLineContinuations(block)) {
+        const match = NODE_INVOCATION_LINE_PATTERN.exec(line);
+        if (!match) {
+          continue;
+        }
+        const helperPath = match[1];
+        // A path-alias / traversal segment (`scripts/../bin/x.mjs`) is
+        // never a genuine worked example -- docs/permissions.md
+        // deliberately shows one to illustrate a Bash-permission
+        // prefix-matching gap. Skip it rather than resolve and flag a
+        // path nobody intends to invoke this way.
+        if (helperPath.includes('..')) {
+          continue;
+        }
+        const argsText = match[2];
+        let flagsForHelper = byHelper.get(helperPath);
+        if (!flagsForHelper) {
+          flagsForHelper = new Map();
+          byHelper.set(helperPath, flagsForHelper);
+        }
+        for (const flagMatch of argsText.matchAll(FLAG_TOKEN_PATTERN)) {
+          if (!flagsForHelper.has(flagMatch[0])) {
+            flagsForHelper.set(flagMatch[0], source.path);
+          }
         }
       }
     }

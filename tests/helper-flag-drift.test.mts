@@ -4,6 +4,7 @@ import { test } from 'node:test';
 import {
   collectDocumentedHelperInvocationFlags,
   collectHelperFlagDriftViolations,
+  extractFencedBlocks,
   extractFencedLines,
   extractFlagTokens,
 } from '../src/scripts/helper-flag-drift.mts';
@@ -36,6 +37,26 @@ test('extractFencedLines handles multiple fences and an unterminated one', () =>
   ].join('\n');
 
   assert.deepEqual(extractFencedLines(text), ['line-a', 'line-b']);
+});
+
+// --- extractFencedBlocks --------------------------------------------------
+
+test('extractFencedBlocks keeps each fence as its own array of lines', () => {
+  const text = [
+    '```sh',
+    'line-a',
+    'line-b',
+    '```',
+    'prose',
+    '```text',
+    'line-c',
+    '```',
+  ].join('\n');
+
+  assert.deepEqual(extractFencedBlocks(text), [
+    ['line-a', 'line-b'],
+    ['line-c'],
+  ]);
 });
 
 // --- extractFlagTokens ---------------------------------------------------
@@ -117,6 +138,63 @@ test('collectDocumentedHelperInvocationFlags skips a path-traversal example', ()
     },
   ]);
   assert.deepEqual(documented, []);
+});
+
+test('collectDocumentedHelperInvocationFlags joins a shell line-continuation and extracts flags from the continuation lines', () => {
+  // The common worked-example style throughout this repo's instructions:
+  // a long invocation wrapped across several lines with a trailing `\`.
+  const documented = collectDocumentedHelperInvocationFlags([
+    {
+      path: 'docs/example.md',
+      text: [
+        '```sh',
+        'node scripts/post-idd-marker.mjs --type watermark \\',
+        '  --agent-id <id> --claim-id <claim-id> \\',
+        '  --from-pr <pr-number> --apply',
+        '```',
+      ].join('\n'),
+    },
+  ]);
+
+  assert.deepEqual(documented, [
+    {
+      helperPath: 'scripts/post-idd-marker.mjs',
+      flags: [
+        { flag: '--agent-id', docPath: 'docs/example.md' },
+        { flag: '--apply', docPath: 'docs/example.md' },
+        { flag: '--claim-id', docPath: 'docs/example.md' },
+        { flag: '--from-pr', docPath: 'docs/example.md' },
+        { flag: '--type', docPath: 'docs/example.md' },
+      ],
+    },
+  ]);
+});
+
+test('collectDocumentedHelperInvocationFlags does not bridge a continuation across two separate fences', () => {
+  const documented = collectDocumentedHelperInvocationFlags([
+    {
+      path: 'docs/example.md',
+      text: [
+        '```sh',
+        'node scripts/example.mjs --apply \\',
+        '```',
+        'unrelated prose',
+        '```sh',
+        '--should-not-attach',
+        '```',
+      ].join('\n'),
+    },
+  ]);
+
+  // The trailing `\` has no following line within its own fence, so it is
+  // kept as-is (no crash, no cross-fence join) and the unrelated second
+  // fence's line never matches the invocation pattern on its own.
+  assert.deepEqual(documented, [
+    {
+      helperPath: 'scripts/example.mjs',
+      flags: [{ flag: '--apply', docPath: 'docs/example.md' }],
+    },
+  ]);
 });
 
 test('collectDocumentedHelperInvocationFlags merges flags for the same helper across files, keeping first-seen doc provenance', () => {
