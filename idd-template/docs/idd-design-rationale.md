@@ -419,10 +419,11 @@ revert-and-redo cycle before the guidance below existed
 (kurone-kito/idd-skill#2548). The mistake is easy to make because the
 mirror and its canonical source are often byte-identical or
 near-identical, giving no visual cue at a glance. Only a
-`.github/instructions/**.instructions.md` mirror carries a visible
-`idd-generated-from` banner at its top; a `docs/**.md` mirror does not,
-so the banner check alone misses exactly the file class most likely to
-be mistaken for hand-editable prose. Checking the sync tool's own
+`.github/instructions/**.instructions.md` mirror is guaranteed to
+carry a visible `idd-generated-from` banner at its top; a `docs/**.md`
+mirror may not, depending on the sync tool's own behavior, so the
+banner check alone can miss exactly the file class most likely to be
+mistaken for hand-editable prose. Checking the sync tool's own
 manifest for a matching target entry closes that gap for `docs/**.md`
 files, at the cost of one extra lookup.
 

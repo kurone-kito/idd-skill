@@ -346,15 +346,20 @@ or `.github/instructions/**.md` file, check whether it is a generated
 mirror. A `.github/instructions/**.instructions.md` file carries an
 `idd-generated-from` banner at its top when it is one -- the banner
 itself names the canonical source and the resync command, valid only
-for `exact`/`concreted` pairs. A `docs/**.md` file never carries that
-banner even when it is a mirror; check `audit/sync-manifest.json`'s
-`syncPairs` for an entry whose `target` matches the file path instead,
-and read its `mode`. For `exact`/`concreted`, edit only the named
-canonical `source` and run its resync command -- an edit to the mirror
-itself is silently discarded on the next sync. For `structure`/
-`contains`, the sync tool does not auto-regenerate the mirror at all;
-edit both the canonical `source` and the mirror by hand, keeping only
-the structural elements the manifest requires in sync. See
+for an `exact`/`concreted`-style pair. A `docs/**.md` file may not
+carry that banner even when it is a mirror; check this repository's
+sync manifest (for example `audit/sync-manifest.json` in the
+`idd-skill` source repository, or your own repository's equivalent
+config) for an entry naming this file as a mirror target instead, and
+follow that entry's own mode contract. An `exact`/`concreted`-style
+entry auto-regenerates the mirror from its named canonical source when
+the resync command runs -- edit only that source, never the mirror
+directly, or the edit is silently discarded on the next sync. Any
+other mode (for example one that only requires certain text or
+patterns to be present, with no single canonical source to
+auto-regenerate from) follows its own stated contract instead --
+consult the manifest entry itself rather than assuming auto-regenerate
+applies. See
 [rationale](../../docs/idd-design-rationale.md#b3--edit-the-canonical-source-of-a-generated-docsinstructions-file-not-its-mirror).
 
 If B3 or C must stop for a hold, use the shared Hold / suspend rules in
