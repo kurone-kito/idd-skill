@@ -18,10 +18,16 @@ import { loadPolicyConfig } from './idd-config.mjs';
 import { stripMarkdownCodeRegions } from './markdown-code.mjs';
 import { escapeRegex } from './marker-regex.mjs';
 import { normalizePolicyConfig, POLICY_DEFAULTS } from './policy-helpers.mjs';
+import { resolveTrustedMarkerActors } from './protocol-helpers.mjs';
 import {
   createGithubProviderAdapter,
   resolveCurrentGithubRepository,
 } from './provider-adapter-github.mjs';
+import {
+  findTrustedSuitabilityRejection,
+  isSuitabilityTriageVerdictCurrent,
+  resolveLatestSubstantiveIssueEditAt,
+} from './supersession-detection.mjs';
 
 const DEFAULT_MARKER_PREFIX = 'idd-skill';
 // Leading-anchor source shared by the `Blocked by` / `Depends on` line parsers.
@@ -91,9 +97,20 @@ if (import.meta.main) {
     args.swarmFloor === null
       ? args.issueNumbers
       : listOpenIssueNumbers(owner, repo);
+  // #2243: resolved unconditionally (not opt-in) -- the triage-verdict
+  // exclusion is default-on. An empty resolution (no flag/env/config
+  // trusted actors configured) makes the check a no-op via
+  // evaluateDiscoverReadiness's own trustedMarkerLogins-empty guard.
+  const { actors: trustedMarkerLogins } = resolveTrustedMarkerActors({
+    envValue: process.env.IDD_TRUSTED_MARKER_ACTORS ?? '',
+    config: policyConfig,
+  });
   const summary = await evaluateDiscoverReadiness(issueNumbers, {
     includeUnresolvable: args.includeUnresolvable,
     loadIssue: buildIssueLoader(owner, repo),
+    fetchCommentsByIssueNumber: buildIssueCommentsLoader(owner, repo),
+    fetchTimelineByIssueNumber: buildIssueTimelineLoader(owner, repo),
+    trustedMarkerLogins,
     // `--swarm-floor` output never surfaces the stale-authoring warning, so
     // skip the per-issue timeline fetch this loader runs — over a whole-repo
     // sweep that is one extra paginated API call per open issue. The
@@ -140,7 +157,14 @@ export async function evaluateDiscoverReadiness(issueNumbers, options) {
     autopilotSuitabilityFloor,
     autopilotSuitabilityEnabled,
     now = new Date(),
+    fetchCommentsByIssueNumber,
+    fetchTimelineByIssueNumber,
+    trustedMarkerLogins,
   } = options ?? {};
+  const triageVerdictCheckEnabled =
+    typeof fetchCommentsByIssueNumber === 'function' &&
+    Array.isArray(trustedMarkerLogins) &&
+    trustedMarkerLogins.length > 0;
   // Route the three label-name options through normalizePolicyConfig rather
   // than a bare destructure default (which only applies on `undefined`), so
   // an invalid or empty-string input also falls back to POLICY_DEFAULTS
@@ -318,6 +342,32 @@ export async function evaluateDiscoverReadiness(issueNumbers, options) {
       }
       if (markerMatches.some((candidate) => candidate.state === 'OPEN')) {
         reasons.add(`blocked_by_open_roadmap_marker:${marker}`);
+      }
+    }
+    // #2243: exclude an otherwise-ready candidate whose most recent
+    // trusted `A4.5 suitability gate rejection` comment carries a
+    // still-current `<!-- {prefix}-triage-verdict: <outcome> -->` marker
+    // for one of the four non-label outcomes. Gated on
+    // `reasons.size === 0` so far -- this is the one check in the loop
+    // that needs a live comments-plus-timeline fetch, so it only runs for
+    // a candidate every cheaper (label/body) check above has already let
+    // through, never per scanned issue.
+    if (reasons.size === 0 && triageVerdictCheckEnabled) {
+      const record = findTrustedSuitabilityRejection(
+        fetchCommentsByIssueNumber(issue.number),
+        trustedMarkerLogins,
+        resolvedMarkerPrefix,
+      );
+      const editedAt = record?.markerOutcome
+        ? resolveLatestSubstantiveIssueEditAt(
+            issue.createdAt,
+            typeof fetchTimelineByIssueNumber === 'function'
+              ? fetchTimelineByIssueNumber(issue.number)
+              : [],
+          )
+        : null;
+      if (record && isSuitabilityTriageVerdictCurrent(record, editedAt)) {
+        reasons.add(`triage_verdict:${record.markerOutcome}`);
       }
     }
     const signal = suitabilitySignal(issue.body);
@@ -596,6 +646,20 @@ function printHelp() {
   rather than a silent coercion. A "no score" issue is never below floor,
   matching discovery ranking.
 
+  #2243 triage-verdict exclusion (default-on, not opt-in): for a candidate
+  every cheaper (label/body) check already lets through, this makes one
+  comments-plus-timeline GitHub API call to look for a still-current
+  trusted "A4.5 suitability gate rejection" comment carrying a
+  "<!-- {markerPrefix}-triage-verdict: <outcome> -->" marker for one of the
+  four non-label outcomes (unclear/duplicate/out-of-scope/invalid). A match
+  excludes the candidate with reasons: ["triage_verdict:<outcome>"].
+  "needs-decision"/"blocked-by-human" never emit this marker -- those
+  already carry a stable label. Requires trusted marker actors to be
+  configured (env/flag/repo config); with none configured, this check is a
+  no-op and makes no extra GitHub API call. Staleness-checked (fail-closed
+  toward NOT excluding): the marker only excludes when the rejection
+  comment is at or after the issue's latest substantive (title/body) edit.
+
 Output schema (JSON mode):
   {
     "ready": [{ "number": 123, "title": "...", "autopilotSuitability": 4, "belowFloor": false, "isRoadmap": false }],
@@ -633,6 +697,7 @@ function normalizeIssue(issue) {
     labels: normalizeLabels(issue.labels),
     labelEvents: Array.isArray(issue.labelEvents) ? issue.labelEvents : [],
     url: String(issue.url ?? ''),
+    createdAt: String(issue.createdAt ?? ''),
   };
 }
 function normalizeLabels(labelsInput) {
@@ -785,6 +850,30 @@ function fetchIssueLabelEvents(port, issueNumber) {
   return port
     .getWorkItemTimeline(issueNumber)
     .filter((event) => event.event === 'labeled');
+}
+/** #2243: full raw timeline (unfiltered), for
+ * {@link resolveLatestSubstantiveIssueEditAt}'s `edited`-event scan. */
+function buildIssueTimelineLoader(owner, repo) {
+  const port = createGithubProviderAdapter(owner, repo);
+  return (issueNumber) => port.getWorkItemTimeline(issueNumber);
+}
+/**
+ * #2243: adapts {@link ProviderPort.listWorkItemComments}'s camelCase
+ * `ProviderComment` shape to the raw-REST-shaped
+ * `SuitabilityRejectionComment` `findTrustedSuitabilityRejection` expects
+ * (mirroring `discover-orphan-filter.mts`'s identical adapter and
+ * `suitability-triage.mts`'s own direct `gh api` comment fetch).
+ * `html_url` is intentionally omitted -- this file never reads the
+ * resulting record's `url` field, only `markerOutcome`/`createdAt`.
+ */
+function buildIssueCommentsLoader(owner, repo) {
+  const port = createGithubProviderAdapter(owner, repo);
+  return (issueNumber) =>
+    port.listWorkItemComments(issueNumber).map((comment) => ({
+      body: comment.body,
+      created_at: comment.createdAt,
+      user: { login: comment.authorLogin },
+    }));
 }
 export function buildRoadmapMarkerSearchQuery(
   owner,

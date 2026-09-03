@@ -9,8 +9,11 @@ import {
   evaluateHighConfidenceDuplicate,
   findCandidateFileOverlap,
   findTrustedSuitabilityRejection,
+  isSuitabilityTriageVerdictCurrent,
+  parseSuitabilityTriageVerdictMarker,
   prReferencesIssue,
   resolveCandidateFileSet,
+  resolveLatestSubstantiveIssueEditAt,
   SUITABILITY_REJECTION_PREFIX,
   type SuitabilityRejectionComment,
 } from '../src/scripts/supersession-detection.mts';
@@ -1077,4 +1080,206 @@ test('findTrustedSuitabilityRejection: an unparseable created_at is skipped rath
     ['kurone-kito'],
   );
   assert.equal(result?.createdAt, '2026-08-05T03:55:11Z');
+});
+
+// --- #2243: parseSuitabilityTriageVerdictMarker -----------------------------
+
+test('parseSuitabilityTriageVerdictMarker: a well-formed marker is detected', () => {
+  const result = parseSuitabilityTriageVerdictMarker(
+    'some prose\n<!-- idd-skill-triage-verdict: duplicate -->\nmore prose',
+  );
+  assert.deepEqual(result, {
+    present: true,
+    outcome: 'duplicate',
+    malformed: false,
+  });
+});
+
+test('parseSuitabilityTriageVerdictMarker: no marker returns present:false, outcome:null (never-triaged case)', () => {
+  const result = parseSuitabilityTriageVerdictMarker('plain prose, no marker');
+  assert.deepEqual(result, { present: false, outcome: null, malformed: false });
+});
+
+test('parseSuitabilityTriageVerdictMarker: an out-of-whitelist token (e.g. a label outcome) is malformed, never a synthesized outcome', () => {
+  const result = parseSuitabilityTriageVerdictMarker(
+    '<!-- idd-skill-triage-verdict: needs-decision -->',
+  );
+  assert.deepEqual(result, { present: true, outcome: null, malformed: true });
+});
+
+test('parseSuitabilityTriageVerdictMarker: two disagreeing markers are malformed', () => {
+  const result = parseSuitabilityTriageVerdictMarker(
+    '<!-- idd-skill-triage-verdict: unclear -->\n<!-- idd-skill-triage-verdict: invalid -->',
+  );
+  assert.equal(result.malformed, true);
+  assert.equal(result.outcome, null);
+});
+
+test('parseSuitabilityTriageVerdictMarker: two agreeing markers are not malformed', () => {
+  const result = parseSuitabilityTriageVerdictMarker(
+    '<!-- idd-skill-triage-verdict: unclear -->\n<!-- idd-skill-triage-verdict: unclear -->',
+  );
+  assert.deepEqual(result, {
+    present: true,
+    outcome: 'unclear',
+    malformed: false,
+  });
+});
+
+test('parseSuitabilityTriageVerdictMarker: a marker merely quoted in a code span is never treated as live (#1614, #1121 precedent)', () => {
+  const result = parseSuitabilityTriageVerdictMarker(
+    'The convention looks like `<!-- idd-skill-triage-verdict: duplicate -->`.',
+  );
+  assert.deepEqual(result, { present: false, outcome: null, malformed: false });
+});
+
+test('parseSuitabilityTriageVerdictMarker: a namespaced adopter marker prefix is honored', () => {
+  const result = parseSuitabilityTriageVerdictMarker(
+    '<!-- acme-triage-verdict: invalid -->',
+    'acme',
+  );
+  assert.deepEqual(result, {
+    present: true,
+    outcome: 'invalid',
+    malformed: false,
+  });
+});
+
+test('parseSuitabilityTriageVerdictMarker: token comparison is case-insensitive', () => {
+  const result = parseSuitabilityTriageVerdictMarker(
+    '<!-- idd-skill-triage-verdict: OUT-OF-SCOPE -->',
+  );
+  assert.equal(result.outcome, 'out-of-scope');
+});
+
+// --- #2243: findTrustedSuitabilityRejection markerOutcome -------------------
+
+test("findTrustedSuitabilityRejection: markerOutcome surfaces a trusted comment's current triage-verdict marker", () => {
+  const result = findTrustedSuitabilityRejection(
+    [
+      makeRejectionComment({
+        body: `${SUITABILITY_REJECTION_PREFIX} — Check 2 (Coherence): reason.\n\n<!-- idd-skill-triage-verdict: unclear -->`,
+      }),
+    ],
+    ['kurone-kito'],
+  );
+  assert.equal(result?.markerOutcome, 'unclear');
+});
+
+test('findTrustedSuitabilityRejection: markerOutcome is null when the rejection comment carries no marker (never-triaged-marker case)', () => {
+  const result = findTrustedSuitabilityRejection(
+    [makeRejectionComment()],
+    ['kurone-kito'],
+  );
+  assert.equal(result?.markerOutcome, null);
+});
+
+test("findTrustedSuitabilityRejection: an untrusted actor's marker-bearing comment is not surfaced at all (same #1887 trust boundary)", () => {
+  const result = findTrustedSuitabilityRejection(
+    [
+      makeRejectionComment({
+        body: `${SUITABILITY_REJECTION_PREFIX} — Check 2 (Coherence): reason.\n\n<!-- idd-skill-triage-verdict: unclear -->`,
+        user: { login: 'random-untrusted-user' },
+      }),
+    ],
+    ['kurone-kito'],
+  );
+  assert.equal(result, null);
+});
+
+// --- #2243: resolveLatestSubstantiveIssueEditAt -----------------------------
+
+test("resolveLatestSubstantiveIssueEditAt: falls back to the issue's own createdAt with no edit events", () => {
+  assert.equal(
+    resolveLatestSubstantiveIssueEditAt('2026-08-01T00:00:00Z', []),
+    '2026-08-01T00:00:00Z',
+  );
+});
+
+test('resolveLatestSubstantiveIssueEditAt: a later body edit wins over createdAt', () => {
+  const result = resolveLatestSubstantiveIssueEditAt('2026-08-01T00:00:00Z', [
+    {
+      event: 'edited',
+      created_at: '2026-08-10T00:00:00Z',
+      changes: { body: {} },
+    },
+  ]);
+  assert.equal(result, '2026-08-10T00:00:00Z');
+});
+
+test('resolveLatestSubstantiveIssueEditAt: a title edit counts too', () => {
+  const result = resolveLatestSubstantiveIssueEditAt('2026-08-01T00:00:00Z', [
+    {
+      event: 'edited',
+      created_at: '2026-08-10T00:00:00Z',
+      changes: { title: {} },
+    },
+  ]);
+  assert.equal(result, '2026-08-10T00:00:00Z');
+});
+
+test('resolveLatestSubstantiveIssueEditAt: a non-body/title event (e.g. labeled) is ignored', () => {
+  const result = resolveLatestSubstantiveIssueEditAt('2026-08-01T00:00:00Z', [
+    { event: 'labeled', created_at: '2026-08-10T00:00:00Z' },
+  ]);
+  assert.equal(result, '2026-08-01T00:00:00Z');
+});
+
+test('resolveLatestSubstantiveIssueEditAt: an unparseable timestamp never wins', () => {
+  const result = resolveLatestSubstantiveIssueEditAt('2026-08-01T00:00:00Z', [
+    { event: 'edited', created_at: 'not-a-date', changes: { body: {} } },
+  ]);
+  assert.equal(result, '2026-08-01T00:00:00Z');
+});
+
+test('resolveLatestSubstantiveIssueEditAt: null when neither createdAt nor any qualifying event is parseable', () => {
+  assert.equal(resolveLatestSubstantiveIssueEditAt(null, []), null);
+});
+
+// --- #2243: isSuitabilityTriageVerdictCurrent (staleness) -------------------
+// The four acceptance-criteria scenarios from #2243: marker present and
+// current (skip), marker present but stale relative to a later body edit
+// (do not skip), no marker / never-triaged (do not skip), and an
+// untrusted/forged marker comment (do not skip -- covered above by
+// findTrustedSuitabilityRejection returning null entirely, so it never
+// reaches this staleness check).
+
+test('isSuitabilityTriageVerdictCurrent: a marker at/after the latest substantive edit is current (skip)', () => {
+  const current = isSuitabilityTriageVerdictCurrent(
+    { createdAt: '2026-08-10T00:00:00Z', markerOutcome: 'unclear' },
+    '2026-08-05T00:00:00Z',
+  );
+  assert.equal(current, true);
+});
+
+test('isSuitabilityTriageVerdictCurrent: a marker strictly before a later substantive edit is stale (do not skip)', () => {
+  const current = isSuitabilityTriageVerdictCurrent(
+    { createdAt: '2026-08-05T00:00:00Z', markerOutcome: 'unclear' },
+    '2026-08-10T00:00:00Z',
+  );
+  assert.equal(current, false);
+});
+
+test('isSuitabilityTriageVerdictCurrent: no marker outcome is never current, regardless of timestamps (never-triaged case)', () => {
+  const current = isSuitabilityTriageVerdictCurrent(
+    { createdAt: '2026-08-10T00:00:00Z', markerOutcome: null },
+    '2026-08-05T00:00:00Z',
+  );
+  assert.equal(current, false);
+});
+
+test('isSuitabilityTriageVerdictCurrent: an unknown staleness anchor (null) fails closed toward NOT excluding the candidate', () => {
+  const current = isSuitabilityTriageVerdictCurrent(
+    { createdAt: '2026-08-10T00:00:00Z', markerOutcome: 'unclear' },
+    null,
+  );
+  assert.equal(current, false);
+});
+
+test('isSuitabilityTriageVerdictCurrent: an unparseable rejection createdAt fails closed toward NOT excluding the candidate', () => {
+  const current = isSuitabilityTriageVerdictCurrent(
+    { createdAt: 'not-a-date', markerOutcome: 'unclear' },
+    '2026-08-05T00:00:00Z',
+  );
+  assert.equal(current, false);
 });

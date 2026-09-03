@@ -24,6 +24,12 @@
 // part of the extraction.
 
 import { normalizeContentionPath } from './discover-shared-file-overlap.mts';
+import { stripMarkdownCodeRegions } from './markdown-code.mts';
+import { escapeRegex } from './marker-regex.mts';
+
+/** Default `{prefix}` for every marker this module parses, matching
+ * `autopilot-suitability.mts`'s own default. */
+const DEFAULT_MARKER_PREFIX = 'idd-skill';
 
 /** Upper bound on the #1484 bounded merged-PR scan (mirrors B2.0's own
  * documented `gh pr list --limit 50`). */
@@ -289,6 +295,157 @@ const SUITABILITY_REJECTION_OUTCOME_PATTERN =
   /outcome:\s*(unclear|needs-decision|blocked-by-human|duplicate|out-of-scope|invalid)\b/i;
 const SUITABILITY_REJECTION_CHECK_PATTERN = /Check\s+\d+\s*\([^)]+\)/i;
 
+/** The four A4.5 outcomes with no dedicated label (#2243): the only values
+ * `<!-- {prefix}-triage-verdict: <outcome> -->` may declare.
+ * `needs-decision`/`blocked-by-human` are deliberately excluded -- those
+ * two already carry a stable label and never emit this marker. */
+export const SUITABILITY_TRIAGE_VERDICT_OUTCOMES = [
+  'unclear',
+  'duplicate',
+  'out-of-scope',
+  'invalid',
+] as const;
+
+export type SuitabilityTriageVerdictOutcome =
+  (typeof SUITABILITY_TRIAGE_VERDICT_OUTCOMES)[number];
+
+function isSuitabilityTriageVerdictOutcome(
+  value: string,
+): value is SuitabilityTriageVerdictOutcome {
+  return (SUITABILITY_TRIAGE_VERDICT_OUTCOMES as readonly string[]).includes(
+    value,
+  );
+}
+
+/**
+ * Canonical parser for the authored `<!-- {prefix}-triage-verdict:
+ * <outcome> -->` marker (#2243), mirroring
+ * `autopilot-suitability.mts`'s `parseAutopilotSuitabilityMarker` shape and
+ * fail-safe rules: `present` is false only when no marker appears at all;
+ * `outcome` is the single coherent token when it is one of
+ * {@link SUITABILITY_TRIAGE_VERDICT_OUTCOMES}, or `null` (fail-safe = "no
+ * marker") when the marker is absent, carries an unrecognized token, or
+ * repeats with disagreeing values; `malformed` is true only when a marker
+ * is present but does not resolve to a coherent outcome.
+ *
+ * `body` is masked with {@link stripMarkdownCodeRegions} first so a marker
+ * merely *quoted* in prose (for example, an issue or comment explaining
+ * this marker's own syntax in a code span, as #2243's own body does)
+ * cannot be mistaken for a live one (#1614, #1121 precedent).
+ */
+export function parseSuitabilityTriageVerdictMarker(
+  body: unknown,
+  markerPrefix: string = DEFAULT_MARKER_PREFIX,
+): {
+  present: boolean;
+  outcome: SuitabilityTriageVerdictOutcome | null;
+  malformed: boolean;
+} {
+  const prefix =
+    typeof markerPrefix === 'string' && markerPrefix.length > 0
+      ? markerPrefix
+      : DEFAULT_MARKER_PREFIX;
+  const regex = new RegExp(
+    `<!--\\s*${escapeRegex(prefix)}-triage-verdict:\\s*([^\\s>]+)\\s*-->`,
+    'gi',
+  );
+  const text = stripMarkdownCodeRegions(String(body ?? ''));
+  let present = false;
+  let outcome: SuitabilityTriageVerdictOutcome | null = null;
+  let match = regex.exec(text);
+  while (match) {
+    present = true;
+    const raw = (match[1] ?? '').toLowerCase();
+    if (
+      !isSuitabilityTriageVerdictOutcome(raw) ||
+      (outcome !== null && raw !== outcome)
+    ) {
+      return { present: true, outcome: null, malformed: true };
+    }
+    outcome = raw;
+    match = regex.exec(text);
+  }
+  return { present, outcome, malformed: false };
+}
+
+/**
+ * Staleness anchor for a suitability-rejection marker (#2243): the latest
+ * GitHub `created_at` among the issue's own creation and every timeline
+ * `edited` event that changed the title or body. Mirrors
+ * `claim-approval-gate.mts`'s private `resolveLatestSubstantiveEditAt` --
+ * duplicated rather than imported to keep this module's dependency-light,
+ * I/O-free kernel contract intact (see the file header). Returns `null`
+ * only when neither `issueCreatedAt` nor any qualifying event yields a
+ * parseable timestamp -- callers must treat that as "unknown", never as
+ * "always stale" or "never stale".
+ */
+export function resolveLatestSubstantiveIssueEditAt(
+  issueCreatedAt: unknown,
+  timelineEvents: unknown,
+): string | null {
+  const candidates: string[] = [];
+  if (typeof issueCreatedAt === 'string' && issueCreatedAt) {
+    candidates.push(issueCreatedAt);
+  }
+  if (Array.isArray(timelineEvents)) {
+    for (const raw of timelineEvents) {
+      const event = (raw ?? {}) as {
+        event?: unknown;
+        created_at?: unknown;
+        changes?: { title?: unknown; body?: unknown } | null;
+      };
+      if (String(event.event ?? '') !== 'edited') {
+        continue;
+      }
+      if (!event.changes?.title && !event.changes?.body) {
+        continue;
+      }
+      if (typeof event.created_at === 'string' && event.created_at) {
+        candidates.push(event.created_at);
+      }
+    }
+  }
+  let latest: string | null = null;
+  let latestTimestamp = Number.NEGATIVE_INFINITY;
+  for (const candidate of candidates) {
+    const timestamp = Date.parse(candidate);
+    if (!Number.isFinite(timestamp) || timestamp < latestTimestamp) {
+      continue;
+    }
+    latestTimestamp = timestamp;
+    latest = candidate;
+  }
+  return latest;
+}
+
+/**
+ * Whether a trusted rejection record's marker outcome (#2243) is still
+ * current enough to exclude a candidate from Discover's selection pass:
+ * `true` only when the marker resolved to one of
+ * {@link SUITABILITY_TRIAGE_VERDICT_OUTCOMES} AND the rejection comment's
+ * own `createdAt` is at or after `latestSubstantiveEditAt` -- an issue
+ * legitimately improved after being rejected must not stay excluded by a
+ * now-stale marker. `latestSubstantiveEditAt: null` (unknown anchor) fails
+ * closed toward NOT excluding the candidate, matching this module's
+ * existing fail-safe direction: a wrongly-kept candidate still reaches
+ * A4.5, which re-derives its own verdict; a wrongly-skipped one is
+ * silently lost.
+ */
+export function isSuitabilityTriageVerdictCurrent(
+  record: Pick<SuitabilityRejectionRecord, 'createdAt' | 'markerOutcome'>,
+  latestSubstantiveEditAt: string | null,
+): boolean {
+  if (!record.markerOutcome || !latestSubstantiveEditAt) {
+    return false;
+  }
+  const rejectionTimestamp = Date.parse(record.createdAt);
+  const editTimestamp = Date.parse(latestSubstantiveEditAt);
+  if (!Number.isFinite(rejectionTimestamp) || !Number.isFinite(editTimestamp)) {
+    return false;
+  }
+  return rejectionTimestamp >= editTimestamp;
+}
+
 /**
  * One GitHub REST issue-comment entry, as consumed by
  * {@link findTrustedSuitabilityRejection}. Loosely typed (every field
@@ -323,6 +480,14 @@ export interface SuitabilityRejectionRecord {
   /** Best-effort `Check N (<Name>)` excerpt parsed from the comment body's
    * own headline convention; `null` when absent. */
   check: string | null;
+  /** Outcome declared by the comment's `<!-- {prefix}-triage-verdict:
+   * <outcome> -->` marker (#2243), or `null` when absent, malformed, or
+   * outside {@link SUITABILITY_TRIAGE_VERDICT_OUTCOMES}. Distinct from
+   * {@link outcome} above: this is the stable, machine-parseable marker
+   * signal Discover's candidate-selection pass consumes; `outcome` is the
+   * older, best-effort prose-derived signal `#1887` surfaces for a
+   * re-running `suitability-triage.mjs` only. */
+  markerOutcome: SuitabilityTriageVerdictOutcome | null;
 }
 
 /**
@@ -354,6 +519,7 @@ export interface SuitabilityRejectionRecord {
 export function findTrustedSuitabilityRejection(
   comments: SuitabilityRejectionComment[] | null | undefined,
   trustedMarkerLogins: string[] | null | undefined,
+  markerPrefix: string = DEFAULT_MARKER_PREFIX,
 ): SuitabilityRejectionRecord | null {
   const trusted = new Set(
     (trustedMarkerLogins ?? [])
@@ -391,6 +557,10 @@ export function findTrustedSuitabilityRejection(
     latestTimestamp = timestamp;
     const outcomeMatch = SUITABILITY_REJECTION_OUTCOME_PATTERN.exec(body);
     const checkMatch = SUITABILITY_REJECTION_CHECK_PATTERN.exec(body);
+    const markerDetection = parseSuitabilityTriageVerdictMarker(
+      body,
+      markerPrefix,
+    );
     latest = {
       author,
       createdAt,
@@ -403,6 +573,7 @@ export function findTrustedSuitabilityRejection(
       // downstream string comparison brittle. Normalize before returning.
       outcome: outcomeMatch ? (outcomeMatch[1]?.toLowerCase() ?? null) : null,
       check: checkMatch ? checkMatch[0] : null,
+      markerOutcome: markerDetection.malformed ? null : markerDetection.outcome,
     };
   }
   return latest;

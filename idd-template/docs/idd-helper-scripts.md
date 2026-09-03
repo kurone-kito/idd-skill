@@ -112,7 +112,14 @@ in this preamble, since the fallback differs per helper.
   with opt-in `--with-claim-state` / `--current-claim-id` active-claim
   annotation parity with `discover-roadmap-graph`'s flag of the same name
   (referenced in
-  [kurone-kito/idd-skill#1395](https://github.com/kurone-kito/idd-skill/issues/1395))
+  [kurone-kito/idd-skill#1395](https://github.com/kurone-kito/idd-skill/issues/1395)).
+  Default-on (not opt-in): excludes a candidate whose most recent trusted
+  `A4.5 suitability gate rejection` comment carries a still-current
+  `<!-- {prefix}-triage-verdict: <outcome> -->` marker for one of the four
+  non-label outcomes, bucketed under `filtered.triage_verdict_rejected`
+  (referenced in
+  [kurone-kito/idd-skill#2243](https://github.com/kurone-kito/idd-skill/issues/2243);
+  see its `--help` for the fetch-scope and staleness details)
 - `scripts/discover-roadmap-graph.mjs` for A1.5/A2 recursive roadmap graph
   enumeration and classification
 - `scripts/idd-roadmap-audit-execute.mjs` for the A1.5 roadmap-completion
@@ -128,7 +135,12 @@ in this preamble, since the fallback differs per helper.
   [kurone-kito/idd-skill#1071](https://github.com/kurone-kito/idd-skill/issues/1071))
 - `scripts/discover-readiness-check.mjs` for A3 readiness criterion
   evaluation (referenced in
-  [kurone-kito/idd-skill#391](https://github.com/kurone-kito/idd-skill/issues/391))
+  [kurone-kito/idd-skill#391](https://github.com/kurone-kito/idd-skill/issues/391)).
+  Default-on (not opt-in): the same triage-verdict marker exclusion as
+  `discover-orphan-filter.mjs` above, surfaced as a
+  `triage_verdict:<outcome>` entry in `filteredOut[].reasons` (referenced
+  in
+  [kurone-kito/idd-skill#2243](https://github.com/kurone-kito/idd-skill/issues/2243))
 - `scripts/discover-viability-gate.mjs` for A4 viability gate evaluation
   across limited scope, clear verification, and autonomous completion
   criteria (referenced in
@@ -541,6 +553,12 @@ node scripts/discover-readiness-check.mjs --swarm-floor <N>
 - **Boundary**: read-only and advisory — selecting the next issue still runs
   the A3/A4/A4.5/A5 gates. Optional flags: `--owner` / `--repo` / `--policy`
   / `--now`.
+- **kurone-kito/idd-skill#2243 triage-verdict cost note**: the default-on
+  triage-verdict exclusion (see the `discover-readiness-check.mjs` bullet
+  above) runs for every candidate every cheaper check already lets
+  through, so a full repo-wide `--swarm-floor` sweep makes one extra
+  comments-plus-timeline API call pair per otherwise-ready candidate, not
+  just per swept issue.
 
 ### Discover Viability Gate Contract
 

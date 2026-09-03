@@ -12,6 +12,7 @@ import {
   filterOrphanIssues,
   getOrphanFirstPolicy,
 } from '../src/scripts/discover-orphan-filter.mts';
+import { SUITABILITY_REJECTION_PREFIX } from '../src/scripts/supersession-detection.mts';
 
 const REPO_ROOT = fileURLToPath(new URL('..', import.meta.url));
 
@@ -1304,4 +1305,124 @@ test('CLI path fails when the default-path config exists but is malformed (not s
       ),
     /failed to load policy from .*config\.json/,
   );
+});
+
+// ---------------------------------------------------------------------------
+// #2243: triage-verdict marker exclusion (fetchCommentsByIssueNumber /
+// fetchTimelineByIssueNumber / trustedMarkerLogins), covering the four
+// acceptance-criteria scenarios: marker present and current (skip), marker
+// present but stale relative to a later body edit (do not skip), no marker
+// / never-triaged (do not skip), and an untrusted/forged marker comment (do not
+// skip -- same #1887 trust boundary).
+// ---------------------------------------------------------------------------
+
+function triageVerdictIssue(overrides: Record<string, unknown> = {}) {
+  return {
+    number: 901,
+    title: 'candidate 901',
+    state: 'OPEN',
+    labels: [],
+    body: '',
+    createdAt: '2026-08-01T00:00:00Z',
+    ...overrides,
+  };
+}
+
+function triageVerdictRejectionComment(
+  outcome: string,
+  createdAt: string,
+  { author = 'kurone-kito' } = {},
+) {
+  return {
+    body: `${SUITABILITY_REJECTION_PREFIX} — Check 2 (Coherence): reason.\n\n<!-- idd-skill-triage-verdict: ${outcome} -->`,
+    created_at: createdAt,
+    user: { login: author },
+  };
+}
+
+test('without fetchCommentsByIssueNumber/trustedMarkerLogins, no comment fetch happens and nothing is excluded (byte-stable default)', async () => {
+  const issues = [triageVerdictIssue()];
+  const called = false;
+  const result = await filterOrphanIssues(issues, {
+    issueStateByNumber: new Map(),
+    fetchIssueStateByNumber: () => 'UNRESOLVABLE',
+    fetchCommentsByIssueNumber: undefined,
+    trustedMarkerLogins: undefined,
+  });
+  assert.equal(called, false);
+  assert.equal(result.orphans.length, 1);
+  assert.equal(result.filtered.triage_verdict_rejected.length, 0);
+});
+
+test('a current trusted triage-verdict marker excludes the candidate', async () => {
+  const issues = [triageVerdictIssue()];
+  const result = await filterOrphanIssues(issues, {
+    issueStateByNumber: new Map(),
+    fetchIssueStateByNumber: () => 'UNRESOLVABLE',
+    fetchCommentsByIssueNumber: (issueNumber) =>
+      issueNumber === 901
+        ? [triageVerdictRejectionComment('duplicate', '2026-08-10T00:00:00Z')]
+        : [],
+    fetchTimelineByIssueNumber: () => [],
+    trustedMarkerLogins: ['kurone-kito'],
+  });
+  assert.equal(result.orphans.length, 0);
+  assert.equal(result.filtered.triage_verdict_rejected.length, 1);
+  assert.equal(result.filtered.triage_verdict_rejected[0]?.number, 901);
+  assert.equal(
+    result.filtered.triage_verdict_rejected[0]?.details,
+    'duplicate',
+  );
+});
+
+test('a stale marker (issue edited after the rejection) does not exclude the candidate', async () => {
+  const issues = [triageVerdictIssue({ createdAt: '2026-08-01T00:00:00Z' })];
+  const result = await filterOrphanIssues(issues, {
+    issueStateByNumber: new Map(),
+    fetchIssueStateByNumber: () => 'UNRESOLVABLE',
+    fetchCommentsByIssueNumber: () => [
+      triageVerdictRejectionComment('duplicate', '2026-08-05T00:00:00Z'),
+    ],
+    // A body edit landed AFTER the rejection comment -- the marker is stale.
+    fetchTimelineByIssueNumber: () => [
+      {
+        event: 'edited',
+        created_at: '2026-08-12T00:00:00Z',
+        changes: { body: {} },
+      },
+    ],
+    trustedMarkerLogins: ['kurone-kito'],
+  });
+  assert.equal(result.orphans.length, 1);
+  assert.equal(result.filtered.triage_verdict_rejected.length, 0);
+});
+
+test('no marker (never-triaged) does not exclude the candidate', async () => {
+  const issues = [triageVerdictIssue()];
+  const result = await filterOrphanIssues(issues, {
+    issueStateByNumber: new Map(),
+    fetchIssueStateByNumber: () => 'UNRESOLVABLE',
+    fetchCommentsByIssueNumber: () => [],
+    fetchTimelineByIssueNumber: () => [],
+    trustedMarkerLogins: ['kurone-kito'],
+  });
+  assert.equal(result.orphans.length, 1);
+  assert.equal(result.filtered.triage_verdict_rejected.length, 0);
+});
+
+test("an untrusted actor's marker-bearing comment does not exclude the candidate (#1887 trust boundary)", async () => {
+  const issues = [triageVerdictIssue()];
+  const result = await filterOrphanIssues(issues, {
+    issueStateByNumber: new Map(),
+    fetchIssueStateByNumber: () => 'UNRESOLVABLE',
+    fetchCommentsByIssueNumber: () => [
+      triageVerdictRejectionComment('duplicate', '2026-08-10T00:00:00Z', {
+        author: 'random-untrusted-user',
+      }),
+    ],
+    fetchTimelineByIssueNumber: () => [],
+    trustedMarkerLogins: ['kurone-kito'],
+  });
+  assert.equal(result.orphans.length, 1);
+  assert.equal(result.filtered.triage_verdict_rejected.length, 0);
 });
