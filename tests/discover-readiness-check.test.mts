@@ -1406,12 +1406,20 @@ function triageVerdictReadinessRejectionComment(
   };
 }
 
-test('without fetchCommentsByIssueNumber/trustedMarkerLogins, no comment fetch happens and the candidate stays ready (byte-stable default)', async () => {
+test('without trustedMarkerLogins, the comments fetcher is never invoked and the candidate stays ready (byte-stable default)', async () => {
   const issue = triageVerdictReadinessIssue();
+  let called = false;
   const summary = await evaluateDiscoverReadiness([1901], {
     loadIssue: async () => issue,
     findRoadmapsByMarker: async () => [],
+    // A real spy fetcher is supplied, but trustedMarkerLogins is omitted --
+    // if the guard were broken, `called` would flip to true below.
+    fetchCommentsByIssueNumber: () => {
+      called = true;
+      return [];
+    },
   });
+  assert.equal(called, false);
   assert.equal(summary.ready.length, 1);
   assert.equal(summary.filteredOut.length, 0);
 });

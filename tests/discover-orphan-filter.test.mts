@@ -1340,13 +1340,18 @@ function triageVerdictRejectionComment(
   };
 }
 
-test('without fetchCommentsByIssueNumber/trustedMarkerLogins, no comment fetch happens and nothing is excluded (byte-stable default)', async () => {
+test('without trustedMarkerLogins, the comments fetcher is never invoked and nothing is excluded (byte-stable default)', async () => {
   const issues = [triageVerdictIssue()];
-  const called = false;
+  let called = false;
   const result = await filterOrphanIssues(issues, {
     issueStateByNumber: new Map(),
     fetchIssueStateByNumber: () => 'UNRESOLVABLE',
-    fetchCommentsByIssueNumber: undefined,
+    // A real spy fetcher is supplied, but trustedMarkerLogins is omitted --
+    // if the guard were broken, `called` would flip to true below.
+    fetchCommentsByIssueNumber: () => {
+      called = true;
+      return [];
+    },
     trustedMarkerLogins: undefined,
   });
   assert.equal(called, false);
