@@ -261,3 +261,14 @@ tradeoff, classify as `needs-decision` rather than PASS.
 
 After A4.5 passes, proceed to `idd-claim.instructions.md`; for rejected
 candidates follow the Failure Outcomes section above.
+
+## Optional: grooming a rejected/below-floor backlog
+
+A4.5 decides only at claim time; it never revisits a past rejection.
+An optional, human-initiated Groom phase for periodically
+batch-reviewing the rejected/below-floor backlog -- classifying each
+candidate execution-blocked / decision-blocked / fact-blocked,
+re-checking whether a cited blocker has since closed, and applying the
+operator's answers back onto the issue rather than resolving a
+deliberate decision unilaterally -- is documented in
+[the IDD workflow guide](../../docs/idd-workflow.md#grooming-pass-for-rejected-and-below-floor-issues-optional).
