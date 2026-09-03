@@ -1386,7 +1386,6 @@ function matchTrustedAdvisoryStickyDispositions(
   iddAgentLogins,
 ) {
   const dispositionedStickyIndexes = new Set();
-  const consumedDispositionIndexes = new Set();
   const trustedDispositions = comments.filter(
     (comment) =>
       trustedMarkerLogins.has(comment.authorLogin) &&
@@ -1425,9 +1424,16 @@ function matchTrustedAdvisoryStickyDispositions(
       list.push(comment);
       stickiesByBot.set(comment.authorLogin, list);
     }
-    // Sort bot logins so a disposition naming more than one configured bot is
-    // consumed deterministically (by the lexicographically-first bot only).
+    // Sort bot logins for deterministic iteration order only. Consumption is
+    // tracked per bot login (`consumedDispositionIndexes` below, reset on
+    // each iteration of this loop) rather than shared across bots: a single
+    // disposition naming several configured bots (`dispositionNamesAdvisoryBot`
+    // matches each one it names) must be able to clear one sticky per bot it
+    // names, not just the first bot processed. #2475 -- a shared,
+    // loop-wide consumption set previously let only the alphabetically-first
+    // named bot's sticky be credited, stranding the others.
     for (const botLogin of [...stickiesByBot.keys()].sort()) {
+      const consumedDispositionIndexes = new Set();
       const stickies = [...(stickiesByBot.get(botLogin) ?? [])].sort(
         byActivityThenIndex,
       );
@@ -3172,15 +3178,24 @@ export function summarizeDispositionEvidenceForGate(
     list.push(notice);
     noticesByAuthor.set(notice.authorLogin, list);
   }
-  // Sort the bot logins so disposition consumption is deterministic when a single
-  // disposition body could name more than one configured bot (it is consumed by
-  // the lexicographically-first matching author only).
+  // Sort the bot logins for deterministic iteration order only. Each
+  // author's own `matchingDispositions` is computed independently from the
+  // full `noticeDispositions` pool -- never filtered by another author's
+  // carry -- so a single disposition naming several configured bots
+  // (`dispositionNamesAdvisoryBot` matches each one it names) can carry
+  // forward one notice per bot it names, not just the alphabetically-first
+  // bot processed (#2475). `matchingDispositions.length` still bounds
+  // `carry` per author, so this author's own notices are never
+  // over-credited from a single matching disposition.
+  // `consumedNoticeDispositionIndexes` still accumulates the union of every
+  // disposition consumed across every author -- read again below to
+  // exclude those same comments from the separate generic 1:1 pool, so a
+  // disposition that already carried a notice forward can never also clear
+  // an unrelated regular comment there.
   for (const authorLogin of [...noticesByAuthor.keys()].sort()) {
     const notices = noticesByAuthor.get(authorLogin) ?? [];
-    const matchingDispositions = noticeDispositions.filter(
-      (disposition) =>
-        !consumedNoticeDispositionIndexes.has(disposition.sortedIndex) &&
-        dispositionNamesAdvisoryBot(disposition.body, authorLogin),
+    const matchingDispositions = noticeDispositions.filter((disposition) =>
+      dispositionNamesAdvisoryBot(disposition.body, authorLogin),
     );
     const carry = Math.min(notices.length, matchingDispositions.length);
     for (let index = 0; index < carry; index += 1) {
