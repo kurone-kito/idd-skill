@@ -544,11 +544,11 @@ decoupled from any provider-health classifier verdict: an absent or
 for the helper contract.
 
 A repository that also wants to shorten the 12h
-`advisoryWait.terminalWindow` (#1572) specifically while an outage
-declaration is active may additionally record
-`advisoryWait.providerOutage.terminalWindow` (#2554) — note this key
-nests under `advisoryWait`, not the top-level `providerOutage` block
-above:
+`advisoryWait.terminalWindow` (kurone-kito/idd-skill#1572) specifically
+while an outage declaration is active may additionally record
+`advisoryWait.providerOutage.terminalWindow`
+(kurone-kito/idd-skill#2554) — note this key nests under `advisoryWait`,
+not the top-level `providerOutage` block above:
 
 ```json
 {
