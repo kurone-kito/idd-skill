@@ -502,10 +502,11 @@ completed-review PATH B disposition, before proceeding to F1.
 
 ### An advisory bot's embedded-but-unthreaded findings: mirror the detection scope, not the gate scope
 
-`#2197`'s live 30-day sweep (337 merged PRs) found a `coderabbitai[bot]`
-review in the older "🧹 Nitpick comments" / "⚠️ Outside diff range
-comments" collapsible-body format can carry a specific, file/line-cited
-finding with **zero** corresponding threaded review comment — e.g. PR
+`#2197`'s live 30-day sweep (337 merged PRs, observed 2026-09-03) found
+a `coderabbitai[bot]` review in the older "🧹 Nitpick comments" /
+"⚠️ Outside diff range comments" collapsible-body format can carry a
+specific, file/line-cited finding with **zero** corresponding threaded
+review comment — e.g. PR
 `#1897` review `4863787336` (zero threaded comments on that PR at
 all) and PR `#1871` review `4860403155` (a Major finding, only
 unrelated Copilot threads present). E1 Step 3's "Review bodies" rule

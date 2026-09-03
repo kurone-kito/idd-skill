@@ -183,6 +183,61 @@ prose
   ]);
 });
 
+// Regression (Copilot review, PR #2563): an extensionless, separator-less
+// filename (Dockerfile, Makefile, LICENSE, ...) must not be dropped, and
+// the later, unrelated "📒 Files selected for processing (N)" heading
+// (which the relaxed file-heading pattern could otherwise also match)
+// must stay excluded once the section's own footer bounds the scan.
+test('extractCodeRabbitEmbeddedFindings: an extensionless filename (Dockerfile) is not dropped, and the later "Files selected for processing" heading is not mistaken for a file grouping', () => {
+  const body = `
+<details>
+<summary>🧹 Nitpick comments (1)</summary><blockquote>
+
+<details>
+<summary>Dockerfile (1)</summary><blockquote>
+
+\`5\`: _cat_ | _eff_
+
+**A finding in the Dockerfile.**
+
+<!-- cr-comment:v1:aaa -->
+
+</blockquote></details>
+
+</blockquote></details>
+
+<details>
+<summary>🤖 Prompt for all review comments with AI agents</summary>
+
+\`\`\`
+Nitpick comments in Dockerfile.
+\`\`\`
+
+</details>
+
+<details>
+<summary>ℹ️ Review info</summary>
+
+<details>
+<summary>📒 Files selected for processing (2)</summary>
+
+* Dockerfile
+* src/other.mts
+
+</details>
+
+</details>
+`;
+  assert.deepEqual(extractCodeRabbitEmbeddedFindings(body), [
+    {
+      file: 'Dockerfile',
+      lineRange: '5',
+      severity: null,
+      description: 'A finding in the Dockerfile.',
+    },
+  ]);
+});
+
 test('extractCodeRabbitEmbeddedFindings: returns [] for a non-string body', () => {
   assert.deepEqual(extractCodeRabbitEmbeddedFindings(null), []);
   assert.deepEqual(extractCodeRabbitEmbeddedFindings(undefined), []);

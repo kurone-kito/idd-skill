@@ -502,8 +502,9 @@ disposition, before proceeding to F1.
 A review bot can embed a specific, file/line-cited finding inside its
 review body's prose (an older collapsible-section format, e.g.
 CodeRabbit's "Nitpick comments" / "Outside diff range comments") with
-**no** corresponding threaded review comment of its own
-(kurone-kito/idd-skill#2197's live sweep, kurone-kito/idd-skill#2559).
+**no** corresponding threaded review comment of its own (observed
+2026-09-03, kurone-kito/idd-skill#2197's live sweep,
+kurone-kito/idd-skill#2559).
 Because E1 Step 3's "Review bodies" rule only pulls a review into
 `ReviewItems_snapshot` when its state is `CHANGES_REQUESTED`, and this
 bot-review-state pattern reports `COMMENTED` instead, the whole review

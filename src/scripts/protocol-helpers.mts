@@ -1141,12 +1141,28 @@ const CODERABBIT_EMBEDDED_SECTION_HEADING_RE =
   /<summary>(?:🧹 Nitpick comments|⚠️ Outside diff range comments) \(\d+\)<\/summary>/g;
 
 // A per-file grouping inside one of the sections above: `<summary>{file}
-// (N)</summary>`, where `file` is required to look like a real path (a `.`
-// extension or a `/` separator) so this never matches an unrelated
-// `<summary>` heading that also carries a parenthesized count -- e.g. the
-// review's own "📒 Files selected for processing (N)" section.
+// (N)</summary>`. Accepts an extensionless, separator-less filename (e.g.
+// `Dockerfile`, `Makefile`, `LICENSE`) -- an earlier version required a
+// `.` extension or `/` separator to avoid matching an unrelated
+// `<summary>` heading that also carries a parenthesized count, e.g. the
+// review's own "📒 Files selected for processing (N)" section, but that
+// also dropped every finding for a real extensionless file (Copilot
+// review, PR #2563). The real defense against that unrelated heading is
+// {@link CODERABBIT_EMBEDDED_SECTION_END_RE} bounding the section's own
+// span below, not this pattern.
 const CODERABBIT_EMBEDDED_FILE_HEADING_RE =
-  /<summary>([^<]*[./][^<]*?) \(\d+\)<\/summary>/g;
+  /<summary>([^<]+?) \(\d+\)<\/summary>/g;
+
+// Marks the natural end of a Nitpick/Outside-diff section's own content in
+// every review body sampled for #2197/#2559: CodeRabbit always follows the
+// per-file findings with this footer before any unrelated section (e.g.
+// "ℹ️ Review info" > "📒 Files selected for processing"). Bounding the
+// section span here -- not just at the next same-kind section heading --
+// keeps the relaxed file-heading pattern above from matching a later,
+// unrelated `<summary>{text} (N)</summary>` several sections down (Copilot
+// review, PR #2563).
+const CODERABBIT_EMBEDDED_SECTION_END_RE =
+  /<summary>🤖 Prompt for all review comments with AI agents<\/summary>/;
 
 // One finding's header line inside a file grouping: a backtick-quoted line
 // or line range, a colon, then 1-3 pipe-separated italic metadata segments
@@ -1201,7 +1217,14 @@ export function extractCodeRabbitEmbeddedFindings(
   const findings: CodeRabbitEmbeddedFinding[] = [];
   for (let i = 0; i < sectionHeadings.length; i += 1) {
     const start = sectionHeadings[i].index + sectionHeadings[i][0].length;
-    const end = sectionHeadings[i + 1]?.index ?? body.length;
+    const nextSectionStart = sectionHeadings[i + 1]?.index ?? body.length;
+    const footerMatch = body
+      .slice(start, nextSectionStart)
+      .match(CODERABBIT_EMBEDDED_SECTION_END_RE);
+    const end =
+      footerMatch?.index !== undefined
+        ? start + footerMatch.index
+        : nextSectionStart;
     findings.push(
       ...extractCodeRabbitEmbeddedFindingsFromSection(body.slice(start, end)),
     );
