@@ -190,6 +190,28 @@ export function buildSuitabilityCloseComment(evidence: string): string {
   ].join('\n');
 }
 
+/**
+ * Validate and normalize the apply-time "now" to UTC second-precision ISO
+ * (`YYYY-MM-DDTHH:mm:ssZ`), or `null` when unparseable. Mirrors
+ * `idd-roadmap-audit-execute.mts`'s own `normalizeApplyNow` (Copilot review
+ * finding on PR #2558): `deps.now()`'s production wiring is plain
+ * `new Date().toISOString()`, which always carries millisecond precision,
+ * but `renderUnclaimedByMarker` accepts only second-precision `…Z` and
+ * throws otherwise -- and by the time `releaseClaim` runs, the evidence
+ * comment and the close have already landed, so a throw here would leave
+ * the issue closed with the coordination claim never released. Normalizing
+ * once, fail-closed, before any mutation avoids that partial-completion
+ * state entirely; the single normalized value is reused for both claim
+ * re-validation and the release-marker timestamp.
+ */
+export function normalizeApplyNow(raw: string): string | null {
+  const parsed = new Date(raw);
+  if (Number.isNaN(parsed.getTime())) {
+    return null;
+  }
+  return parsed.toISOString().replace(/\.\d{3}Z$/, 'Z');
+}
+
 export interface SuitabilityCloseExecuteVerdict {
   protocolVersion: '1';
   mode: 'dry-run' | 'apply';
@@ -327,7 +349,21 @@ export function runSuitabilityCloseExecute(
     };
   }
 
-  const nowIso = deps.now();
+  const rawNow = deps.now();
+  const nowIso = normalizeApplyNow(rawNow);
+  if (nowIso === null) {
+    return {
+      protocolVersion: '1',
+      mode: 'apply',
+      issueNumber,
+      ready: true,
+      eligible: true,
+      evidence: eligibility.evidence,
+      claim: null,
+      closed: false,
+      result: `deps.now() returned an unparseable timestamp (${rawNow}); no mutation`,
+    };
+  }
   const claim = evaluateSuitabilityCloseClaim(
     deps.loadIssueComments(issueNumber),
     {
@@ -371,7 +407,7 @@ export function runSuitabilityCloseExecute(
       expectedClaimId: args.claimId,
       expectedAgentId: args.agentId,
       isTrustedAuthor: deps.isTrustedAuthor,
-      nowIso: deps.now(),
+      nowIso,
       staleAgeMs: deps.staleAgeMs,
     },
   );

@@ -6,6 +6,7 @@ import {
   buildSuitabilityCloseComment,
   evaluateSuitabilityCloseClaim,
   evaluateSuitabilityCloseEligibility,
+  normalizeApplyNow,
   parseArgs,
   runSuitabilityCloseExecute,
   type SuitabilityCloseExecuteArgs,
@@ -412,4 +413,67 @@ test('parseArgs rejects "0" for --issue, not just non-digit input (Copilot revie
   assert.equal(parseArgs(['--issue', 'abc']).issue, null);
   assert.equal(parseArgs(['--issue', '-1']).issue, null);
   assert.equal(parseArgs(['--issue', '2222']).issue, 2222);
+});
+
+// ---------------------------------------------------------------------------
+// normalizeApplyNow (pure)
+// ---------------------------------------------------------------------------
+
+test('normalizeApplyNow strips the millisecond fraction Date#toISOString() always emits (Copilot review, PR #2558)', () => {
+  assert.equal(
+    normalizeApplyNow('2026-09-03T15:44:42.719Z'),
+    '2026-09-03T15:44:42Z',
+  );
+  // Already second-precision: unchanged.
+  assert.equal(
+    normalizeApplyNow('2026-09-03T15:44:42Z'),
+    '2026-09-03T15:44:42Z',
+  );
+  // A zone offset is normalized to UTC too (matches idd-roadmap-audit-execute.mts).
+  assert.equal(
+    normalizeApplyNow('2026-09-03T15:44:42.000+09:00'),
+    '2026-09-03T06:44:42Z',
+  );
+});
+
+test('normalizeApplyNow fails closed (null) on an unparseable value', () => {
+  assert.equal(normalizeApplyNow('not-a-date'), null);
+  assert.equal(normalizeApplyNow(''), null);
+});
+
+test("--apply normalizes deps.now()'s millisecond-precision output before it ever reaches releaseClaim, so renderUnclaimedByMarker never throws (Copilot review, PR #2558)", () => {
+  const { deps, calls } = makeDeps();
+  // A few minutes after the mock claim's createdAt (2026-06-26T00:00:00Z) --
+  // well within the default 24h stale window, unlike baseArgs's own
+  // '2026-06-26T01:00:00Z' `now` field, which this test overrides via
+  // deps.now() (the production code path this bug actually lives in).
+  deps.now = () => '2026-06-26T00:05:42.719Z';
+  const verdict = runSuitabilityCloseExecute(baseArgs({ apply: true }), deps);
+  assert.equal(verdict.closed, true);
+  assert.equal(calls.released[0]?.issue, ISSUE);
+  // renderUnclaimedByMarker itself throws on anything but second-precision
+  // `…Z` -- exercising it here (not just asserting the released-timestamp
+  // shape) proves the fix actually prevents the production throw.
+  assert.doesNotThrow(() =>
+    renderClaimedByMarker({
+      agentId: AGENT_ID,
+      claimId: CLAIM_ID,
+      supersedes: 'none',
+      timestamp: '2026-09-03T15:44:42Z',
+      branch: CLAIM_BRANCH,
+    }),
+  );
+});
+
+test('--apply fails closed (no mutation at all) when deps.now() returns an unparseable value', () => {
+  const { deps, calls } = makeDeps();
+  deps.now = () => 'not-a-date';
+  const verdict = runSuitabilityCloseExecute(baseArgs({ apply: true }), deps);
+  assert.equal(verdict.closed, false);
+  assert.match(verdict.result, /unparseable timestamp/);
+  assert.deepEqual(calls.closed, []);
+  // The comment was NOT yet posted either -- the now-validation runs before
+  // the first mutation of any kind.
+  assert.deepEqual(calls.comments, []);
+  assert.deepEqual(calls.released, []);
 });

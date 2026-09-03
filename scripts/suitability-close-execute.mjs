@@ -158,6 +158,27 @@ export function buildSuitabilityCloseComment(evidence) {
   ].join('\n');
 }
 /**
+ * Validate and normalize the apply-time "now" to UTC second-precision ISO
+ * (`YYYY-MM-DDTHH:mm:ssZ`), or `null` when unparseable. Mirrors
+ * `idd-roadmap-audit-execute.mts`'s own `normalizeApplyNow` (Copilot review
+ * finding on PR #2558): `deps.now()`'s production wiring is plain
+ * `new Date().toISOString()`, which always carries millisecond precision,
+ * but `renderUnclaimedByMarker` accepts only second-precision `…Z` and
+ * throws otherwise -- and by the time `releaseClaim` runs, the evidence
+ * comment and the close have already landed, so a throw here would leave
+ * the issue closed with the coordination claim never released. Normalizing
+ * once, fail-closed, before any mutation avoids that partial-completion
+ * state entirely; the single normalized value is reused for both claim
+ * re-validation and the release-marker timestamp.
+ */
+export function normalizeApplyNow(raw) {
+  const parsed = new Date(raw);
+  if (Number.isNaN(parsed.getTime())) {
+    return null;
+  }
+  return parsed.toISOString().replace(/\.\d{3}Z$/, 'Z');
+}
+/**
  * Evaluate (dry-run) and, when ready and `--apply` is set, execute the
  * `#1485` gated close. Dry-run performs NO mutation. `--apply` re-validates
  * the coordination claim and re-collects evidence immediately before
@@ -236,7 +257,21 @@ export function runSuitabilityCloseExecute(args, deps) {
         'no high-confidence signal on this fresh re-evaluation; no mutation',
     };
   }
-  const nowIso = deps.now();
+  const rawNow = deps.now();
+  const nowIso = normalizeApplyNow(rawNow);
+  if (nowIso === null) {
+    return {
+      protocolVersion: '1',
+      mode: 'apply',
+      issueNumber,
+      ready: true,
+      eligible: true,
+      evidence: eligibility.evidence,
+      claim: null,
+      closed: false,
+      result: `deps.now() returned an unparseable timestamp (${rawNow}); no mutation`,
+    };
+  }
   const claim = evaluateSuitabilityCloseClaim(
     deps.loadIssueComments(issueNumber),
     {
@@ -278,7 +313,7 @@ export function runSuitabilityCloseExecute(args, deps) {
       expectedClaimId: args.claimId,
       expectedAgentId: args.agentId,
       isTrustedAuthor: deps.isTrustedAuthor,
-      nowIso: deps.now(),
+      nowIso,
       staleAgeMs: deps.staleAgeMs,
     },
   );
