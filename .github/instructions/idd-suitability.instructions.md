@@ -234,7 +234,8 @@ report-and-stop path unchanged):
    `branch: suitability-close/<number>-<slug>` — outside the
    `issue/*`/`roadmap-audit/*` scope the core cwd-vs-claim gate checks
    (`idd-overview-core.instructions.md`), so no worktree is needed.
-2. Re-validate that claim, then run (dry-run without `--apply`):
+2. Re-validate that claim, then run (add `--apply` to mutate; omit it
+   to dry-run first):
 
    ```sh
    node scripts/suitability-close-execute.mjs --issue <number> \

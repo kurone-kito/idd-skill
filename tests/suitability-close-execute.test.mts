@@ -1,7 +1,10 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { renderClaimedByMarker } from '../src/scripts/protocol-helpers.mts';
+import {
+  renderClaimedByMarker,
+  renderUnclaimedByMarker,
+} from '../src/scripts/protocol-helpers.mts';
 import {
   buildSuitabilityCloseComment,
   evaluateSuitabilityCloseClaim,
@@ -239,7 +242,16 @@ function makeDeps(
   const calls = {
     closed: [] as number[],
     comments: [] as { issue: number; body: string }[],
-    released: [] as { issue: number; agentId: string; claimId: string }[],
+    // Copilot review finding on PR #2558: the mock previously dropped
+    // `timestamp`, so no test could actually assert on the
+    // normalized-to-second-precision value runSuitabilityCloseExecute
+    // forwards to releaseClaim -- capture it too.
+    released: [] as {
+      issue: number;
+      agentId: string;
+      claimId: string;
+      timestamp: string;
+    }[],
   };
   const deps: SuitabilityCloseExecuteDeps = {
     getIssue: () => ISSUE_SHAPE,
@@ -257,12 +269,13 @@ function makeDeps(
     },
     releaseClaim: (
       issueNumber: number,
-      fields: { agentId: string; claimId: string },
+      fields: { agentId: string; claimId: string; timestamp: string },
     ) => {
       calls.released.push({
         issue: issueNumber,
         agentId: fields.agentId,
         claimId: fields.claimId,
+        timestamp: fields.timestamp,
       });
     },
     now: () => '2026-06-26T01:00:00Z',
@@ -312,7 +325,12 @@ test('--apply closes, posts the evidence-bound comment, and releases the claim w
   assert.equal(calls.comments[0]?.issue, ISSUE);
   assert.match(calls.comments[0]?.body ?? '', /High-confidence duplicate/);
   assert.deepEqual(calls.released, [
-    { issue: ISSUE, agentId: AGENT_ID, claimId: CLAIM_ID },
+    {
+      issue: ISSUE,
+      agentId: AGENT_ID,
+      claimId: CLAIM_ID,
+      timestamp: '2026-06-26T01:00:00Z',
+    },
   ]);
 });
 
@@ -463,16 +481,18 @@ test("--apply normalizes deps.now()'s millisecond-precision output before it eve
   const verdict = runSuitabilityCloseExecute(baseArgs({ apply: true }), deps);
   assert.equal(verdict.closed, true);
   assert.equal(calls.released[0]?.issue, ISSUE);
-  // renderUnclaimedByMarker itself throws on anything but second-precision
-  // `…Z` -- exercising it here (not just asserting the released-timestamp
-  // shape) proves the fix actually prevents the production throw.
+  // Copilot review finding on PR #2558: assert on the timestamp that
+  // ACTUALLY flowed into releaseClaim (not a hard-coded literal), then feed
+  // that exact value through the real renderUnclaimedByMarker -- which
+  // throws on anything but second-precision `…Z` -- so this test proves the
+  // fix on the real code path, not merely that some second-precision string
+  // happens not to throw.
+  assert.equal(calls.released[0]?.timestamp, '2026-06-26T00:05:42Z');
   assert.doesNotThrow(() =>
-    renderClaimedByMarker({
-      agentId: AGENT_ID,
-      claimId: CLAIM_ID,
-      supersedes: 'none',
-      timestamp: '2026-09-03T15:44:42Z',
-      branch: CLAIM_BRANCH,
+    renderUnclaimedByMarker({
+      agentId: calls.released[0]?.agentId,
+      claimId: calls.released[0]?.claimId,
+      timestamp: calls.released[0]?.timestamp,
     }),
   );
 });
