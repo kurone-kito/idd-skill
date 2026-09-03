@@ -438,3 +438,85 @@ test('buildSecondaryQuietWindowStatus stays elapsed:true at minutes:0 regardless
   assert.equal(withSettledAt.remainingMinutes, 0);
   assert.equal(withSettledAt.anchorAt, '2026-08-30T22:00:00Z');
 });
+
+// #2547: `secondaryBotDeclined: true` skips the wait entirely -- the bot
+// has already, definitively, declined to review this exact HEAD, so
+// #2335's "might still be mid-review" protection has nothing left to wait
+// for.
+test('buildSecondaryQuietWindowStatus reports elapsed unconditionally when secondaryBotDeclined is true, even with a fresh activity anchor', () => {
+  const status = buildSecondaryQuietWindowStatus({
+    minutes: 60,
+    effectiveMaxActivityUpdatedAt: '2026-08-30T22:00:00Z',
+    secondaryBotDeclined: true,
+    now: '2026-08-30T22:00:30Z',
+  });
+  assert.equal(status.elapsed, true);
+  assert.equal(status.remainingMinutes, 0);
+  assert.equal(status.declined, true);
+});
+
+test('buildSecondaryQuietWindowStatus still requires the full window when secondaryBotDeclined is absent (still pending, #2335 protection preserved)', () => {
+  const status = buildSecondaryQuietWindowStatus({
+    minutes: 60,
+    effectiveMaxActivityUpdatedAt: '2026-08-30T22:00:00Z',
+    now: '2026-08-30T22:00:30Z',
+  });
+  assert.equal(status.elapsed, false);
+  assert.equal(status.declined, false);
+});
+
+test('buildSecondaryQuietWindowStatus reports declined:false on every non-declined path (settled buffer, off, no-anchor, unsettled)', () => {
+  assert.equal(
+    buildSecondaryQuietWindowStatus({
+      minutes: 60,
+      effectiveMaxActivityUpdatedAt: '2026-08-30T22:00:00Z',
+      secondaryBotSettledAt: '2026-08-30T22:03:00Z',
+      now: '2026-08-30T22:03:30Z',
+    }).declined,
+    false,
+  );
+  assert.equal(
+    buildSecondaryQuietWindowStatus({
+      minutes: 0,
+      now: '2026-08-30T22:03:30Z',
+    }).declined,
+    false,
+  );
+  assert.equal(
+    buildSecondaryQuietWindowStatus({
+      minutes: 60,
+      now: '2026-08-30T22:03:30Z',
+    }).declined,
+    false,
+  );
+});
+
+test('buildSecondaryQuietWindowStatus: secondaryBotDeclined false is treated the same as absent (still the full window)', () => {
+  const declinedFalse = buildSecondaryQuietWindowStatus({
+    minutes: 60,
+    effectiveMaxActivityUpdatedAt: '2026-08-30T22:00:00Z',
+    secondaryBotDeclined: false,
+    now: '2026-08-30T22:00:30Z',
+  });
+  const declinedAbsent = buildSecondaryQuietWindowStatus({
+    minutes: 60,
+    effectiveMaxActivityUpdatedAt: '2026-08-30T22:00:00Z',
+    now: '2026-08-30T22:00:30Z',
+  });
+  assert.deepEqual(declinedFalse, declinedAbsent);
+});
+
+test('buildSecondaryQuietWindowStatus: minutes<=0 stays unconditional even when secondaryBotDeclined is true (off default wins)', () => {
+  const withDeclined = buildSecondaryQuietWindowStatus({
+    minutes: 0,
+    effectiveMaxActivityUpdatedAt: '2026-08-30T22:00:00Z',
+    secondaryBotDeclined: true,
+    now: '2026-08-30T22:00:30Z',
+  });
+  const withoutDeclined = buildSecondaryQuietWindowStatus({
+    minutes: 0,
+    effectiveMaxActivityUpdatedAt: '2026-08-30T22:00:00Z',
+    now: '2026-08-30T22:00:30Z',
+  });
+  assert.deepEqual(withDeclined, withoutDeclined);
+});

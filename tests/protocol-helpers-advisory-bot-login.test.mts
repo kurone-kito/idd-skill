@@ -132,15 +132,30 @@ test('isConfiguredAdvisoryBotLogin rejects unconfigured and empty logins', () =>
   assert.equal(isConfiguredAdvisoryBotLogin('[bot]', config), false);
 });
 
-test('computeSecondaryAdvisoryReviewSettlement: no matching comments -> not settled', () => {
+test('computeSecondaryAdvisoryReviewSettlement: no matching comments -> not settled, not declined (still pending)', () => {
   const result = computeSecondaryAdvisoryReviewSettlement([], {
     secondaryBotLogin: 'coderabbitai[bot]',
     headCommittedAt: HEAD_COMMITTED_AT,
   });
-  assert.deepEqual(result, { settled: false, settledAt: null });
+  assert.deepEqual(result, {
+    settled: false,
+    settledAt: null,
+    declined: false,
+  });
 });
 
-test('computeSecondaryAdvisoryReviewSettlement: only a rate-limit notice at HEAD -> not settled', () => {
+// #2547: a rate-limit/skip-review notice for the CURRENT HEAD is itself
+// sufficient to report `declined: true` -- this function only ever sees
+// `comments`, never a separately-fetched commit-status entry, so it cannot
+// distinguish "notice with a corroborating rate-limited commit status"
+// from "notice alone, no status checked" -- both inputs are identical from
+// here. This is a deliberate implementer's-judgment call the issue left
+// open: #2547's live investigation (`gh api .../commits/{sha}/statuses`
+// across several PRs, corroborated by 15+ hours of subsequent silence on
+// the oldest sampled PR) found the notice comment alone was already 100%
+// reliable as a terminal signal, so no additional corroboration is
+// required before treating it as definitive.
+test('computeSecondaryAdvisoryReviewSettlement: only a rate-limit notice at HEAD -> declined (#2547, no corroborating commit status checked)', () => {
   const result = computeSecondaryAdvisoryReviewSettlement(
     [comment('coderabbitai[bot]', CODERABBIT_NOTICE, '2026-09-02T12:05:00Z')],
     {
@@ -148,10 +163,14 @@ test('computeSecondaryAdvisoryReviewSettlement: only a rate-limit notice at HEAD
       headCommittedAt: HEAD_COMMITTED_AT,
     },
   );
-  assert.deepEqual(result, { settled: false, settledAt: null });
+  assert.deepEqual(result, {
+    settled: false,
+    settledAt: null,
+    declined: true,
+  });
 });
 
-test('computeSecondaryAdvisoryReviewSettlement: genuine review at/after HEAD -> settled', () => {
+test('computeSecondaryAdvisoryReviewSettlement: genuine review at/after HEAD -> settled, not declined', () => {
   const result = computeSecondaryAdvisoryReviewSettlement(
     [comment('coderabbitai[bot]', CODERABBIT_SUMMARY, '2026-09-02T12:05:00Z')],
     {
@@ -162,10 +181,11 @@ test('computeSecondaryAdvisoryReviewSettlement: genuine review at/after HEAD -> 
   assert.deepEqual(result, {
     settled: true,
     settledAt: '2026-09-02T12:05:00Z',
+    declined: false,
   });
 });
 
-test('computeSecondaryAdvisoryReviewSettlement: genuine review BEFORE HEAD (stale prior HEAD) -> not settled', () => {
+test('computeSecondaryAdvisoryReviewSettlement: genuine review BEFORE HEAD (stale prior HEAD) -> not settled, not declined (still pending)', () => {
   const result = computeSecondaryAdvisoryReviewSettlement(
     [comment('coderabbitai[bot]', CODERABBIT_SUMMARY, '2026-09-02T11:00:00Z')],
     {
@@ -173,10 +193,14 @@ test('computeSecondaryAdvisoryReviewSettlement: genuine review BEFORE HEAD (stal
       headCommittedAt: HEAD_COMMITTED_AT,
     },
   );
-  assert.deepEqual(result, { settled: false, settledAt: null });
+  assert.deepEqual(result, {
+    settled: false,
+    settledAt: null,
+    declined: false,
+  });
 });
 
-test('computeSecondaryAdvisoryReviewSettlement: notice AFTER the latest genuine review -> not settled (mid-retry)', () => {
+test('computeSecondaryAdvisoryReviewSettlement: notice AFTER the latest genuine review -> declined (mid-retry)', () => {
   const result = computeSecondaryAdvisoryReviewSettlement(
     [
       comment('coderabbitai[bot]', CODERABBIT_SUMMARY, '2026-09-02T12:05:00Z'),
@@ -187,7 +211,11 @@ test('computeSecondaryAdvisoryReviewSettlement: notice AFTER the latest genuine 
       headCommittedAt: HEAD_COMMITTED_AT,
     },
   );
-  assert.deepEqual(result, { settled: false, settledAt: null });
+  assert.deepEqual(result, {
+    settled: false,
+    settledAt: null,
+    declined: true,
+  });
 });
 
 test('computeSecondaryAdvisoryReviewSettlement: notice BEFORE a later genuine review -> settled (rate-limited, then recovered)', () => {
@@ -204,6 +232,7 @@ test('computeSecondaryAdvisoryReviewSettlement: notice BEFORE a later genuine re
   assert.deepEqual(result, {
     settled: true,
     settledAt: '2026-09-02T12:10:00Z',
+    declined: false,
   });
 });
 
@@ -220,23 +249,32 @@ test('computeSecondaryAdvisoryReviewSettlement: matches across the [bot]-suffix 
   assert.deepEqual(result, {
     settled: true,
     settledAt: '2026-09-02T12:05:00Z',
+    declined: false,
   });
 });
 
-test('computeSecondaryAdvisoryReviewSettlement: unparseable headCommittedAt -> not settled', () => {
+test('computeSecondaryAdvisoryReviewSettlement: unparseable headCommittedAt -> not settled, not declined', () => {
   const result = computeSecondaryAdvisoryReviewSettlement(
     [comment('coderabbitai[bot]', CODERABBIT_SUMMARY, '2026-09-02T12:05:00Z')],
     { secondaryBotLogin: 'coderabbitai[bot]', headCommittedAt: null },
   );
-  assert.deepEqual(result, { settled: false, settledAt: null });
+  assert.deepEqual(result, {
+    settled: false,
+    settledAt: null,
+    declined: false,
+  });
 });
 
-test('computeSecondaryAdvisoryReviewSettlement: unconfigured secondaryBotLogin -> not settled', () => {
+test('computeSecondaryAdvisoryReviewSettlement: unconfigured secondaryBotLogin -> not settled, not declined', () => {
   const result = computeSecondaryAdvisoryReviewSettlement(
     [comment('coderabbitai[bot]', CODERABBIT_SUMMARY, '2026-09-02T12:05:00Z')],
     { secondaryBotLogin: '', headCommittedAt: HEAD_COMMITTED_AT },
   );
-  assert.deepEqual(result, { settled: false, settledAt: null });
+  assert.deepEqual(result, {
+    settled: false,
+    settledAt: null,
+    declined: false,
+  });
 });
 
 test('computeSecondaryAdvisoryReviewSettlement: matches REST-raw comments (user.login/created_at/updated_at), not just the normalized shape (Copilot review, #2546)', () => {
@@ -256,5 +294,6 @@ test('computeSecondaryAdvisoryReviewSettlement: matches REST-raw comments (user.
   assert.deepEqual(result, {
     settled: true,
     settledAt: '2026-09-02T12:05:00Z',
+    declined: false,
   });
 });
