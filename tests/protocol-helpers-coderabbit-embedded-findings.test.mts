@@ -212,6 +212,81 @@ no bold title here, just prose
   ]);
 });
 
+// Regression (Copilot review, PR #2563): when a title-less finding is
+// followed by another finding that DOES have a bold title, the title-less
+// finding must report an empty description of its own -- not "steal" the
+// later finding's title by an unbounded search into the rest of the zone.
+test("extractCodeRabbitEmbeddedFindings: a title-less finding does not steal a later finding's bold title in the same file grouping", () => {
+  const body = `
+<details>
+<summary>🧹 Nitpick comments (2)</summary><blockquote>
+
+<details>
+<summary>src/a.mts (2)</summary><blockquote>
+
+\`10\`: _cat_ | _eff_
+
+no bold title for this first finding
+
+<!-- cr-comment:v1:aaa -->
+
+\`20\`: _cat_ | _eff_
+
+**Second finding title.**
+
+more prose
+
+<!-- cr-comment:v1:bbb -->
+
+</blockquote></details>
+
+</blockquote></details>
+`;
+  assert.deepEqual(extractCodeRabbitEmbeddedFindings(body), [
+    { file: 'src/a.mts', lineRange: '10', severity: null, description: '' },
+    {
+      file: 'src/a.mts',
+      lineRange: '20',
+      severity: null,
+      description: 'Second finding title.',
+    },
+  ]);
+});
+
+// Regression (Copilot review, PR #2563): a metadata line's own italic
+// segments must not absorb a later, separate `_italic_` phrase from the
+// finding's prose once a blank line intervenes -- that would corrupt the
+// severity/title boundary by treating unrelated prose as more metadata.
+test('extractCodeRabbitEmbeddedFindings: a later italic phrase in the finding prose is not absorbed into the metadata segment', () => {
+  const body = `
+<details>
+<summary>🧹 Nitpick comments (1)</summary><blockquote>
+
+<details>
+<summary>src/b.mts (1)</summary><blockquote>
+
+\`10\`: _cat_ | _🔵 Trivial_
+
+_Emphasized lead-in prose._ Then the real description follows.
+
+**Real Title Here.**
+
+<!-- cr-comment:v1:ccc -->
+
+</blockquote></details>
+
+</blockquote></details>
+`;
+  assert.deepEqual(extractCodeRabbitEmbeddedFindings(body), [
+    {
+      file: 'src/b.mts',
+      lineRange: '10',
+      severity: 'Trivial',
+      description: 'Real Title Here.',
+    },
+  ]);
+});
+
 // --- countUncoveredCodeRabbitEmbeddedFindings ---------------------------
 
 test('countUncoveredCodeRabbitEmbeddedFindings: PR #1897 -- 1 embedded finding, 0 threaded comments -> 1 uncovered', () => {

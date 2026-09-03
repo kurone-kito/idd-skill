@@ -1152,8 +1152,14 @@ const CODERABBIT_EMBEDDED_FILE_HEADING_RE =
 // or line range, a colon, then 1-3 pipe-separated italic metadata segments
 // (category, severity, effort -- CodeRabbit does not document this shape
 // itself; it is inferred from every review body sampled for #2197/#2559).
+// Deliberately confined to same-line whitespace (`[ \t]`, never `\s`, which
+// includes newlines) in both the per-segment content and the separator
+// between segments: an earlier `\s`-based version could absorb an entirely
+// separate later `_italic_` phrase from the finding's own prose into this
+// same metadata capture once a blank line intervened, corrupting the
+// severity/title boundary (Copilot review, PR #2563).
 const CODERABBIT_EMBEDDED_FINDING_HEADER_RE =
-  /`(\d+(?:-\d+)?)`:\s*((?:_[^_]*_\s*\|?\s*)+)/g;
+  /`(\d+(?:-\d+)?)`:[ \t]*((?:_[^_\n]*_[ \t]*\|?[ \t]*)+)/g;
 
 // No `\b` before/after the word: each segment is markdown-italic-wrapped
 // (`_..._`), and `_` is itself a `\w` character, so a trailing `\b` would
@@ -1215,11 +1221,23 @@ function extractCodeRabbitEmbeddedFindingsFromSection(
     const start = fileHeadings[i].index + fileHeadings[i][0].length;
     const end = fileHeadings[i + 1]?.index ?? section.length;
     const zone = section.slice(start, end);
-    for (const header of zone.matchAll(CODERABBIT_EMBEDDED_FINDING_HEADER_RE)) {
+    // Collected up front (not iterated via a live matchAll) so each
+    // finding's own title search below can be bounded by the NEXT
+    // finding's header position -- searching the zone's unbounded
+    // remainder let a finding with no bold title of its own "steal" a
+    // later finding's title instead of reporting an empty description
+    // (Copilot review, PR #2563).
+    const headers = [...zone.matchAll(CODERABBIT_EMBEDDED_FINDING_HEADER_RE)];
+    for (let j = 0; j < headers.length; j += 1) {
+      const header = headers[j];
       const lineRange = header[1];
       const severityMatch = header[2].match(CODERABBIT_SEVERITY_WORD_RE);
-      const rest = zone.slice(header.index + header[0].length);
-      const titleMatch = rest.match(CODERABBIT_EMBEDDED_FINDING_TITLE_RE);
+      const contentStart = header.index + header[0].length;
+      const contentEnd = headers[j + 1]?.index ?? zone.length;
+      const findingContent = zone.slice(contentStart, contentEnd);
+      const titleMatch = findingContent.match(
+        CODERABBIT_EMBEDDED_FINDING_TITLE_RE,
+      );
       findings.push({
         file,
         lineRange,
