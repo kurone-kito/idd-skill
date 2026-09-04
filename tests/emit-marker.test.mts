@@ -156,6 +156,24 @@ test('round-trip: rendered claim and watermark bodies satisfy their own parsers'
   );
 });
 
+test('renderClaimedByMarker truncates a millisecond-precision timestamp instead of rejecting it (#2592)', () => {
+  // A raw Date#toISOString() value -- the idiomatic way to obtain "now" --
+  // always carries millisecond precision, and the claimed-by body/parser
+  // only accept second precision.
+  const claimBody = renderClaimedByMarker({
+    agentId: 'claude-1cab217a',
+    claimId: 'abc123',
+    supersedes: 'none',
+    timestamp: '2026-06-17T09:47:08.219Z',
+    branch: 'issue/901-add-foo',
+  });
+  assert.match(claimBody, /2026-06-17T09:47:08Z/);
+  assert.ok(
+    parseClaimComment(claimBody, '2026-06-17T09:47:08Z'),
+    'truncated claimed-by must still round-trip',
+  );
+});
+
 test('renderers reject payloads that would not round-trip', () => {
   // blank required tokens
   assert.throws(() =>
@@ -166,12 +184,14 @@ test('renderers reject payloads that would not round-trip', () => {
       branch: 'b',
     }),
   );
-  // fractional-second timestamp (claim parser requires second precision)
+  // non-UTC-offset timestamp (#2592: still not a valid ISO8601 UTC value --
+  // a fractional-second `…Z` timestamp is truncated and accepted instead of
+  // rejected as of #2592; see marker-helpers-timestamp.test.mts)
   assert.throws(() =>
     renderClaimedByMarker({
       agentId: 'a',
       claimId: 'c',
-      timestamp: '2026-06-17T09:47:08.123Z',
+      timestamp: '2026-06-17T09:47:08.123+09:00',
       branch: 'b',
     }),
   );

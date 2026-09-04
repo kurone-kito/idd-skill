@@ -92,27 +92,55 @@ test('renderProviderOutageDeclarationComment / parseProviderOutageDeclarationCom
   assert.equal(parsed?.createdAt, '2026-09-01T05:00:01Z');
 });
 
-test('renderProviderOutageDeclarationComment rejects a millisecond-precision timestamp (#2320 review)', () => {
+test('renderProviderOutageDeclarationComment truncates a millisecond-precision timestamp instead of rejecting it (#2592)', () => {
+  const body = renderProviderOutageDeclarationComment({
+    actor: 'kurone-kito',
+    service: 'idd-advisory-convergence',
+    startedAt: '2026-09-01T05:00:00.123Z',
+    expiresAt: '2026-09-02T05:00:00Z',
+  });
+  const parsed = parseProviderOutageDeclarationComment(
+    body,
+    '2026-09-01T05:00:01Z',
+  );
+  assert.equal(parsed?.startedAt, '2026-09-01T05:00:00Z');
+});
+
+test('renderProviderOutageDeclarationComment rejects a non-UTC-offset timestamp', () => {
   assert.throws(
     () =>
       renderProviderOutageDeclarationComment({
         actor: 'kurone-kito',
         service: 'idd-advisory-convergence',
-        startedAt: '2026-09-01T05:00:00.123Z',
+        startedAt: '2026-09-01T05:00:00.123+09:00',
         expiresAt: '2026-09-02T05:00:00Z',
       }),
     /invalid provider outage declaration payload/,
   );
 });
 
-test('renderProviderOutageAdvancedComment rejects a millisecond-precision timestamp (#2320 review)', () => {
+test('renderProviderOutageAdvancedComment truncates a millisecond-precision timestamp instead of rejecting it (#2592)', () => {
+  const body = renderProviderOutageAdvancedComment({
+    actor: 'kurone-kito',
+    prNumber: 2345,
+    headSha: 'a'.repeat(40),
+    declaredAt: '2026-09-01T05:00:00.000Z',
+  });
+  const parsed = parseProviderOutageAdvancedComment(
+    body,
+    '2026-09-01T05:00:01Z',
+  );
+  assert.equal(parsed?.declaredAt, '2026-09-01T05:00:00Z');
+});
+
+test('renderProviderOutageAdvancedComment rejects a non-UTC-offset timestamp', () => {
   assert.throws(
     () =>
       renderProviderOutageAdvancedComment({
         actor: 'kurone-kito',
         prNumber: 2345,
         headSha: 'a'.repeat(40),
-        declaredAt: '2026-09-01T05:00:00.000Z',
+        declaredAt: '2026-09-01T05:00:00.123+09:00',
       }),
     /invalid provider outage advancement payload/,
   );

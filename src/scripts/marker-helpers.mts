@@ -2070,12 +2070,21 @@ function normalizeIsoTimestamp(value: unknown): string {
   return trimmed;
 }
 
-function normalizeSecondPrecisionIsoTimestamp(value: unknown): string {
+export function normalizeSecondPrecisionIsoTimestamp(value: unknown): string {
   const timestamp = normalizeIsoTimestamp(value);
-  if (!timestamp || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/.test(timestamp)) {
+  if (!timestamp) {
     return '';
   }
-  return timestamp;
+  // Truncate a well-formed fractional-second timestamp (e.g. the millisecond
+  // precision `Date#toISOString()` always emits) down to second precision
+  // instead of rejecting it outright -- reusing the same canonical
+  // truncation `toSecondPrecisionIso` already applies for apply-time "now"
+  // values (see the comment below), rather than re-deriving it here.
+  const truncated = toSecondPrecisionIso(new Date(timestamp));
+  if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/.test(truncated)) {
+    return '';
+  }
+  return truncated;
 }
 
 function normalizeContextScope(value: unknown): string {
@@ -2109,9 +2118,11 @@ export function isValidIsoTimestamp(value: unknown): value is string {
 // --- Apply-time "now" normalization (#2568) ---
 //
 // `renderUnclaimedByMarker` and the other operational-marker renderers above
-// accept only second-precision `…Z` timestamps and throw otherwise, but a
-// production `now` (`new Date().toISOString()`) always carries millisecond
-// precision. These two were independently re-implemented four times across
+// accept a second-precision `…Z` timestamp, or a well-formed sub-second `…Z`
+// value truncated down to one (#2592) -- but throw on anything else (an
+// offset form, or an otherwise malformed value). A production `now`
+// (`new Date().toISOString()`) always carries millisecond precision. These
+// two were independently re-implemented four times across
 // `idd-roadmap-audit-execute.mts`, `suitability-close-execute.mts`,
 // `provider-outage-park.mts`, and `provider-outage-declaration.mts` before
 // being consolidated here as the one canonical, tested implementation every
@@ -2132,10 +2143,11 @@ export function toSecondPrecisionIso(date: Date): string {
  * gate a mutation on this value (claim staleness, release markers) must fail
  * closed on `null` BEFORE any mutation: an unparseable value would
  * mis-evaluate staleness (`NaN` comparisons read as not-stale), and an
- * offset / sub-second form (e.g. `…+09:00`) would otherwise reach
- * `renderUnclaimedByMarker` -- which accepts only second-precision `…Z` --
- * and throw AFTER other side effects (an evidence comment, a close) had
- * already landed. Normalizing through `toISOString()` also converts any
+ * offset form (e.g. `…+09:00`) would otherwise reach
+ * `renderUnclaimedByMarker` -- which throws on anything but a (possibly
+ * sub-second, per #2592) `…Z` value -- and throw AFTER other side effects
+ * (an evidence comment, a close) had already landed. Normalizing through
+ * `toISOString()` also converts any
  * zone offset to UTC, so the single normalized value is safe for both the
  * staleness checks and the release marker.
  */
