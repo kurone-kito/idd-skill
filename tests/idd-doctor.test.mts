@@ -4153,10 +4153,13 @@ test('isBranchProtectionUnreadable is true only when both reads are unreadable',
 });
 
 // idd-skill#2587: isRulesetsOnlyTrustGap warns (or, under --strict, errors)
-// when a repository's branch protection is enforced only via GitHub
-// Rulesets and ciGate.trustEmptyProtectionReads is not set -- the F2/F3
-// merge gate still fails closed on the first merge attempt in that case,
-// even though isBranchProtectionUnreadable (above) reports no problem.
+// when the Rulesets read observes at least one enforcing rule while the
+// classic protection read is unreadable and ciGate.trustEmptyProtectionReads
+// is not set -- the F2/F3 merge gate still fails closed on the first merge
+// attempt in that case, even though isBranchProtectionUnreadable (above)
+// reports no problem. A 404 on the classic read can also be
+// permission-masked rather than proof the repository is Rulesets-only;
+// see formatRulesetsOnlyTrustGapWarning's own doc comment for that nuance.
 test('isRulesetsOnlyTrustGap is true for a rulesets-only repository with trust unset', () => {
   assert.equal(
     isRulesetsOnlyTrustGap(
