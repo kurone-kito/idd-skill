@@ -1601,7 +1601,16 @@ test('a real idd-skill source tree imports the full core file set byte-identical
   // which pointed the investigation at the wrong assertion).
   const hookMode = statSync(join(targetRoot, '.githooks', 'pre-commit')).mode;
   if (process.platform === 'win32') {
-    assert.equal(hookMode & 0o111, 0);
+    // Compare against the source's own live execute bits (observed `0` on
+    // this platform per the note above) rather than hardcoding `0`: the
+    // actual contract under test is "target execute bits match source
+    // execute bits", so this still catches a real regression even in an
+    // unusual Windows environment that does surface exec bits (Copilot
+    // review, PR #2583).
+    const sourceMode = statSync(
+      join(REPO_ROOT, '.githooks', 'pre-commit'),
+    ).mode;
+    assert.equal(hookMode & 0o111, sourceMode & 0o111);
     return;
   }
   assert.equal(hookMode & 0o111, 0o111);
