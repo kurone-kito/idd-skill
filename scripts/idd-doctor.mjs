@@ -101,7 +101,7 @@ export function runDoctor({
     report,
   );
   checkWorkshopExampleRepoBackLink(root, { requireGithub }, report);
-  checkGithubReadiness(root, requireGithub, report);
+  checkGithubReadiness(root, requireGithub, strict, report);
   checkAutopilotSuitabilityConsistency(
     root,
     { requireGithub, markerPrefix },
@@ -3138,7 +3138,7 @@ function checkWorkshopExampleRepoBackLink(root, options, report) {
     );
   }
 }
-function checkGithubReadiness(root, requireGithub, report) {
+function checkGithubReadiness(root, requireGithub, strict, report) {
   const repoView = runCommand(
     'gh',
     ['repo', 'view', '--json', 'owner,name,defaultBranchRef,url'],
@@ -3217,6 +3217,18 @@ function checkGithubReadiness(root, requireGithub, report) {
     }
     return;
   }
+  if (isRulesetsOnlyTrustGap(branchRulesRead, branchProtectionRead)) {
+    const message = formatRulesetsOnlyTrustGapWarning(owner, repo, branch);
+    if (strict) {
+      report.errors.push(message);
+    } else {
+      report.warnings.push(message);
+    }
+    // Deliberately falls through to evaluateBranchProtectionFindings below
+    // (unlike the isBranchProtectionUnreadable branch above, which returns):
+    // the Rulesets read still succeeded, so the required-checks and
+    // review-policy findings it powers remain accurate and worth reporting.
+  }
   const findings = evaluateBranchProtectionFindings(
     branchRulesRead.value,
     branchProtectionRead.value,
@@ -3266,6 +3278,80 @@ export function isBranchProtectionUnreadable(
   branchProtectionRead,
 ) {
   return branchRulesRead.unreadable && branchProtectionRead.unreadable;
+}
+/**
+ * Whether `checkGithubReadiness` should warn (or, under `--strict`, error)
+ * that the F2/F3 merge gate will still fail closed on the first merge
+ * attempt despite `idd-doctor` itself reporting clean -- distinct from, and
+ * strictly narrower than, {@link isBranchProtectionUnreadable} above (this
+ * predicate never changes that function's own leniency; idd-skill#2587).
+ *
+ * `true` only when the Rulesets read succeeded with at least one rule AND
+ * the classic read is unreadable:
+ *
+ * - `branchRulesRead.value.length > 0` after a successful
+ *   (`unreadable: false`) `rules/branches/{branch}` read means at least one
+ *   rule is currently **enforcing** on the branch -- GitHub's REST API
+ *   reference for this endpoint states verbatim: "Rules in rulesets with
+ *   'evaluate' or 'disabled' enforcement statuses are not returned." A
+ *   non-empty result therefore never needs a separate enforcement-status
+ *   field (this codebase's `BranchRuleLike` carries none).
+ * - `branchProtectionRead.unreadable` can only be `true` here because
+ *   `checkGithubReadiness` passes the *same* `ciGate.trustEmptyProtectionReads`
+ *   value into both governance reads, and {@link fetchGovernanceJson}
+ *   (`pre-merge-readiness.mts`) sets `unreadable: true` on a read only for a
+ *   genuine `404` when that trust flag is not `true` -- any other thrown
+ *   status re-throws and is caught by `checkGithubReadiness`'s own outer
+ *   `try`/`catch` before this predicate ever runs. So this condition being
+ *   `true` already implies `ciGate.trustEmptyProtectionReads` is not `true`,
+ *   with no separate trust parameter needed.
+ *
+ * Pure and dependency-free, mirroring {@link isBranchProtectionUnreadable}'s
+ * own rationale, so the rulesets-only / both-readable / neither-readable /
+ * no-rulesets-protection matrix is directly testable without mocking `gh`.
+ */
+export function isRulesetsOnlyTrustGap(branchRulesRead, branchProtectionRead) {
+  return (
+    !branchRulesRead.unreadable &&
+    branchRulesRead.value.length > 0 &&
+    branchProtectionRead.unreadable
+  );
+}
+/**
+ * Render {@link isRulesetsOnlyTrustGap}'s warning/error text. Extracted as
+ * its own function so the exact wording -- naming
+ * `ciGate.trustEmptyProtectionReads` and the F2/F3 fail-closed consequence,
+ * per idd-skill#2587's acceptance criteria -- is directly unit-testable
+ * without re-deriving it from a full `checkGithubReadiness` run.
+ *
+ * The endpoint path fragments URL-encode `branch` (matching
+ * `checkGithubReadiness`'s own `encodeURIComponent(branch)` call, since a
+ * branch name can contain `/`) so the printed path reflects the actual API
+ * call; the human-readable `owner/repo:branch` identifier prefix stays
+ * unencoded, matching {@link isBranchProtectionUnreadable}'s own message
+ * convention (Copilot review, idd-skill#2587 PR #2600).
+ *
+ * States the two possible remedies as conditional on cause, rather than
+ * implying `ciGate.trustEmptyProtectionReads` is required "either way" --
+ * when the 404 is permission-masked, fixing the token's permissions makes
+ * the classic read succeed and no trust flag is needed at all; only when
+ * the 404 is genuine (classic protection truly isn't configured) does the
+ * trust flag apply. Blindly setting it over a genuine permission gap would
+ * trust a read that should actually be fixed at the token-scope level
+ * (same tradeoff `fetchGovernanceJson`'s own doc comment describes;
+ * Copilot review, idd-skill#2587 PR #2600).
+ */
+export function formatRulesetsOnlyTrustGapWarning(owner, repo, branch) {
+  const encodedBranch = encodeURIComponent(branch);
+  return (
+    `branch protection on ${owner}/${repo}:${branch}: the classic branches/${encodedBranch}/protection ` +
+    `read returned 404, while the Rulesets read (rules/branches/${encodedBranch}) already confirms at ` +
+    `least one enforcing rule. A 404 here can mean either (1) the token lacks permission to read the ` +
+    `classic endpoint -- fix the token's permissions, the safer remedy, and no config change is ` +
+    `needed, or (2) classic protection genuinely isn't configured (Rulesets-only) -- if so, set ` +
+    `ciGate.trustEmptyProtectionReads: true in .github/idd/config.json. Until whichever cause is ` +
+    `resolved, the F2/F3 merge gate will still fail closed on the first merge attempt`
+  );
 }
 /**
  * Combine a classic `branches/{branch}/protection` read with a GitHub
@@ -3612,7 +3698,7 @@ options:
   --repo-root <path>                       repository root to inspect (default: cwd)
   --json                                   print JSON report
   --require-github                         treat GitHub API check failures as errors
-  --strict                                 treat a primary-worktree implementation-branch HEAD as an error (also enabled by worktreeGuard.enabled in config)
+  --strict                                 treat a primary-worktree implementation-branch HEAD as an error (also enabled by worktreeGuard.enabled in config); also treats a rulesets-only branch-protection trust gap (see ciGate.trustEmptyProtectionReads) as an error instead of a warning
   --cleanup-backlog-window-days <N>        merged-PR window for the cleanup backlog check (default: 14)
   --cleanup-backlog-warn-threshold <N>     backlog count above which the check warns (default: 2)
   --cleanup-backlog-bootstrap-cutoff <YYYY-MM-DD|ISO8601Z> label a flagged merged PR "(bootstrap-era)" in the report when it merged before this UTC date/timestamp, instead of a genuine claim-marker-missing gap (default: none -- every flagged PR reports the same way)

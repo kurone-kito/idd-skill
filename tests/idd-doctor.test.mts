@@ -50,12 +50,14 @@ import {
   formatCleanupBacklogRemediation,
   formatCleanupBacklogScanPreamble,
   formatCleanupBacklogScanProgress,
+  formatRulesetsOnlyTrustGapWarning,
   hookChainsToGithooksScript,
   hookHasCrlfLineEndings,
   hookWiresWorktreeGuard,
   isBranchProtectionUnreadable,
   isGithubBackLinkHost,
   isIddManagedPlaceholderScanPath,
+  isRulesetsOnlyTrustGap,
   parseIsoDurationToHours,
   parseLockfileImporterVersion,
   parsePrimaryWorktreePath,
@@ -4148,6 +4150,105 @@ test('isBranchProtectionUnreadable is true only when both reads are unreadable',
     isBranchProtectionUnreadable({ unreadable: true }, { unreadable: true }),
     true,
   );
+});
+
+// idd-skill#2587: isRulesetsOnlyTrustGap warns (or, under --strict, errors)
+// when the Rulesets read observes at least one enforcing rule while the
+// classic protection read is unreadable and ciGate.trustEmptyProtectionReads
+// is not set -- the F2/F3 merge gate still fails closed on the first merge
+// attempt in that case, even though isBranchProtectionUnreadable (above)
+// reports no problem. A 404 on the classic read can also be
+// permission-masked rather than proof the repository is Rulesets-only;
+// see formatRulesetsOnlyTrustGapWarning's own doc comment for that nuance.
+test('isRulesetsOnlyTrustGap is true when the Rulesets read has an enforcing rule, the classic read is unreadable, and trust is unset', () => {
+  assert.equal(
+    isRulesetsOnlyTrustGap(
+      { value: [{ type: 'required_status_checks' }], unreadable: false },
+      { unreadable: true },
+    ),
+    true,
+  );
+});
+
+test('isRulesetsOnlyTrustGap is false once trust is set, even with an enforcing Rulesets rule present (classic 404 trusted as empty)', () => {
+  // ciGate.trustEmptyProtectionReads: true makes fetchGovernanceJson trust
+  // the classic endpoint's 404 as genuinely empty, so branchProtectionRead
+  // arrives with unreadable: false -- simulated directly here rather than
+  // through a live config read, matching this predicate's pure,
+  // dependency-free contract.
+  assert.equal(
+    isRulesetsOnlyTrustGap(
+      { value: [{ type: 'required_status_checks' }], unreadable: false },
+      { unreadable: false },
+    ),
+    false,
+  );
+});
+
+test('isRulesetsOnlyTrustGap is false for classic-only protection (no enforcing Rulesets rules, classic read succeeds)', () => {
+  assert.equal(
+    isRulesetsOnlyTrustGap(
+      { value: [], unreadable: false },
+      { unreadable: false },
+    ),
+    false,
+  );
+});
+
+test('isRulesetsOnlyTrustGap is false when neither read succeeds (isBranchProtectionUnreadable already covers this case)', () => {
+  assert.equal(
+    isRulesetsOnlyTrustGap(
+      { value: [], unreadable: true },
+      { unreadable: true },
+    ),
+    false,
+  );
+});
+
+test('isRulesetsOnlyTrustGap is false when no Rulesets rule is enforcing on the branch (empty rules array -- covers both "no rulesets configured" and "rulesets exist but none currently enforce")', () => {
+  assert.equal(
+    isRulesetsOnlyTrustGap(
+      { value: [], unreadable: false },
+      { unreadable: true },
+    ),
+    false,
+  );
+});
+
+test('formatRulesetsOnlyTrustGapWarning names ciGate.trustEmptyProtectionReads and the F2/F3 fail-closed consequence', () => {
+  const message = formatRulesetsOnlyTrustGapWarning(
+    'example-owner',
+    'example-repo',
+    'master',
+  );
+  assert.match(message, /ciGate\.trustEmptyProtectionReads/);
+  assert.match(message, /F2\/F3/);
+  assert.match(message, /example-owner\/example-repo:master/);
+});
+
+test('formatRulesetsOnlyTrustGapWarning states the two remedies as conditional on cause, not the trust flag "either way"', () => {
+  const message = formatRulesetsOnlyTrustGapWarning(
+    'example-owner',
+    'example-repo',
+    'master',
+  );
+  assert.match(message, /lacks permission/);
+  assert.match(message, /fix the token's permissions, the safer remedy/);
+  assert.match(message, /no config change is\s+needed/);
+  assert.doesNotMatch(message, /either way/);
+});
+
+test("formatRulesetsOnlyTrustGapWarning URL-encodes the branch name in endpoint path fragments, matching checkGithubReadiness's own encodeURIComponent(branch) call", () => {
+  const message = formatRulesetsOnlyTrustGapWarning(
+    'example-owner',
+    'example-repo',
+    'release/1.0',
+  );
+  assert.match(message, /branches\/release%2F1\.0\/protection/);
+  assert.match(message, /rules\/branches\/release%2F1\.0/);
+  // The human-readable identifier prefix stays unencoded, matching
+  // isBranchProtectionUnreadable's own message convention.
+  assert.match(message, /example-owner\/example-repo:release\/1\.0/);
 });
 
 test('readTrustEmptyProtectionReads is false when .github/idd/config.json is absent, lacks ciGate, or is malformed (idd-skill#2010)', () => {
