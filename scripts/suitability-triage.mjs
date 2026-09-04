@@ -17,6 +17,7 @@ import {
 import { GH_TEXT_LOOP_TIMEOUT_OPTIONS, ghText } from './gh-exec.mjs';
 import { loadPolicyConfig } from './idd-config.mjs';
 import {
+  findFencedCodeRanges,
   findMarkdownCodeRanges,
   getMarkdownCodeRange,
   maskMarkdownCodeRegionsPreservingPositions,
@@ -553,6 +554,18 @@ const ACCEPTANCE_CRITERIA_PATTERN = /^#+\s*Acceptance\s+Criteria\s*$/im;
 // previously-documented "TODO/FIXME" gap being broader than described.
 // Testing the anchored pattern against the raw content directly, rather
 // than a hand-split lead token, closes the whole class at once.
+//
+// Accepted limitation (E2 critique subagent, #2589 round 6): a real
+// identifier that starts with one of these reserved words, has no dotted
+// extension, and is glued directly to structural punctuation -- e.g.
+// "`WIP-tracker/config`" -- is misclassified as a placeholder and the bullet
+// fails, even though it names a concrete path. Widening the pattern to admit
+// this would re-admit "TODO-later" / "TODO/FIXME" (rounds 3-4's fixed gap):
+// both shapes are "placeholder word + one structural delimiter + word",
+// indistinguishable without a real identifier dictionary. A false negative
+// here costs less than reopening a false positive already fixed twice, and
+// the realistic case (a dotted extension) is already rescued by
+// BARE_DOTTED_FILENAME_PATTERN below.
 const PLACEHOLDER_LEAD_PATTERN =
   /^(?:TODO|TBD|N\/A|NA|XXX|FIXME|WIP|PENDING|PLACEHOLDER|NONE|ASAP)(?:[^a-zA-Z0-9]|$)/i;
 const CODE_SPAN_STRUCTURE_PATTERN = /[/._:-]/;
@@ -587,7 +600,16 @@ function extractListItemLines(section) {
     .join('\n');
 }
 function hasSubstantiveBullet(text) {
-  for (const match of text.matchAll(/`([^`]+)`/g)) {
+  // `text` is `extractListItemLines()`'s output: one list-item line per
+  // line, already joined by '\n' from lines that may not be adjacent in the
+  // original section. `[^`]` matching a newline let an unmatched backtick on
+  // one bullet pair across that artificial join with an unmatched backtick
+  // on a later bullet, manufacturing a fake code span from two unrelated
+  // placeholder bullets (e.g. "- [ ] TODO `" + "- [ ] TBD `") -- excluding
+  // `\n` from the span keeps a match within a single line, matching how a
+  // real inline code span can never cross a list item's own block boundary
+  // here (E2 critique subagent, #2589 round 6).
+  for (const match of text.matchAll(/`([^`\n]+)`/g)) {
     const content = (match[1] ?? '').trim();
     if (
       content.length > 0 &&
@@ -1776,13 +1798,31 @@ export function checkVerifiability(context) {
     /\btests?\b|\bverification\b|\bvalidate\b|\blint\b|\bci\b/i.test(body);
   // Check for substantive objective criteria, not just empty headings
   let hasObjectiveCriteria = false;
-  // Check for "Acceptance Criteria" with substantive content after it
-  const acceptanceCriteriaMatch = body.match(ACCEPTANCE_CRITERIA_PATTERN);
+  // Check for "Acceptance Criteria" with substantive content after it. A
+  // fenced code block quoting example Markdown syntax (an illustrative
+  // bullet, or a heading-like line meant only as sample output) must not
+  // leak into this scan either way -- as a fake substantive bullet, or as a
+  // fake section-boundary heading that truncates the section before a real
+  // bullet after the fence. Mask fence content only (not inline code spans,
+  // which hasSubstantiveBullet below still needs) over the whole body before
+  // any slicing, so a fence that opens inside the eventual 500-char window
+  // and closes outside it is still fully masked (E2 critique subagent,
+  // #2589 round 6). Masking preserves character positions, so every offset
+  // computed below stays valid against the original body.
+  const fenceMaskedBody = maskMarkdownCodeRegionsPreservingPositions(
+    body,
+    findFencedCodeRanges(body),
+  );
+  const acceptanceCriteriaMatch = fenceMaskedBody.match(
+    ACCEPTANCE_CRITERIA_PATTERN,
+  );
   if (acceptanceCriteriaMatch) {
     const indexAfter =
       (acceptanceCriteriaMatch.index ?? 0) +
       (acceptanceCriteriaMatch[0]?.length ?? 0);
-    const contentAfter = body.slice(indexAfter, indexAfter + 500).trim();
+    const contentAfter = fenceMaskedBody
+      .slice(indexAfter, indexAfter + 500)
+      .trim();
     // Bound the AC section at the next heading so a trailing sibling
     // section (e.g. this repo's own "## Candidate files" convention, which
     // is itself a bullet list of paths) never leaks substance or an

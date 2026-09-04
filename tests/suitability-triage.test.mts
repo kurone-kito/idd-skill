@@ -2842,6 +2842,85 @@ test('verifiability does not let a trailing "## Candidate files" list leak subst
   assert.equal(result.pass, false);
 });
 
+test('verifiability rejects two placeholder bullets whose unmatched backticks pair across lines (#2589 round 6, E2 critique)', () => {
+  // An E2 critique subagent found that hasSubstantiveBullet's code-span scan
+  // ran over the whole list-item-lines text at once, and `[^`]` also
+  // matches '\n' -- so two unrelated bullets each carrying one *unmatched*
+  // backtick got paired across the '\n' extractListItemLines() joins them
+  // with, manufacturing a fake code span ("- [ ] TBD") that wrongly
+  // satisfied the structure/alnum/non-placeholder check. Neither bullet is
+  // substantive on its own; the match must not cross a line.
+  const result = checkVerifiability({
+    issue: {
+      ...BASE_ISSUE,
+      body: '## Acceptance Criteria\n- [ ] TODO `\n- [ ] TBD `\n',
+    },
+  } as Context);
+  assert.equal(result.pass, false);
+});
+
+test('verifiability does not let a fenced example bullet leak substance into a placeholder AC (#2589 round 6, E2 critique)', () => {
+  // An E2 critique subagent found that the Acceptance Criteria scan had no
+  // fence-awareness: an illustrative bullet inside a fenced example (quoting
+  // Markdown syntax, not a real criterion) was scanned as if it were a real
+  // list item and wrongly supplied substance for a placeholder bullet above
+  // it.
+  const result = checkVerifiability({
+    issue: {
+      ...BASE_ISSUE,
+      body: `## Acceptance Criteria
+- [ ] TODO
+
+Example of the file layout we are discussing:
+\`\`\`
+- \`src/real/path.mts\` exists
+\`\`\`
+`,
+    },
+  } as Context);
+  assert.equal(result.pass, false);
+});
+
+test('verifiability does not let a heading-like line inside a fence truncate the Acceptance Criteria section (#2589 round 6, E2 critique)', () => {
+  // Mirror image of the fence-leak above: a fenced block containing a line
+  // that merely resembles an ATX heading was previously matched by
+  // NEXT_HEADING_PATTERN as a real section boundary, truncating the section
+  // before a genuine substantive bullet that follows the fence.
+  const result = checkVerifiability({
+    issue: {
+      ...BASE_ISSUE,
+      body: `## Acceptance Criteria
+- [ ] Set up the fixture, see example:
+\`\`\`
+## fake heading inside a fence
+\`\`\`
+- [ ] \`src/real.mts\` exists
+`,
+    },
+  } as Context);
+  assert.equal(result.pass, true);
+});
+
+test('verifiability accepted limitation: a placeholder-led identifier glued to punctuation with no dotted rescue still fails (#2589 round 6, E2 critique)', () => {
+  // An E2 critique subagent found that PLACEHOLDER_LEAD_PATTERN's anchored
+  // match rejects a REAL identifier that happens to start with a reserved
+  // word, carries no dotted extension (so BARE_DOTTED_FILENAME_PATTERN
+  // can't rescue it), and is glued directly to structural punctuation --
+  // e.g. "WIP-tracker/config". This is a deliberate accepted trade-off, not
+  // a bug: widening the pattern to admit it would also re-admit
+  // "TODO-later" / "TODO/FIXME" (rounds 3-4's fixed false-positive gap),
+  // which is structurally identical ("placeholder word + one delimiter +
+  // word"). Pinned here so a future round doesn't re-litigate this as a
+  // regression.
+  const result = checkVerifiability({
+    issue: {
+      ...BASE_ISSUE,
+      body: '## Acceptance criteria\n- [ ] `WIP-tracker/config` is updated\n',
+    },
+  } as Context);
+  assert.equal(result.pass, false);
+});
+
 test('coherence allows TODO mentions when the issue is otherwise concrete', () => {
   const result = checkCoherence({
     issue: {

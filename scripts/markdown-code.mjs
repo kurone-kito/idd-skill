@@ -974,7 +974,14 @@ function parseFencedLine(
 function isValidFenceOpener(fence) {
   return fence.marker[0] !== '`' || !fence.info.includes('`');
 }
-function findFencedCodeRanges(text) {
+/**
+ * Fenced code block ranges only (no inline spans, no indented code). Unlike
+ * {@link findMarkdownCodeRanges}, this lets a caller mask example Markdown
+ * syntax inside a fence (a quoted heading or bullet) while leaving inline
+ * code spans intact for a scan that still needs them (e.g. suitability-triage
+ * Check 7's `hasSubstantiveBullet`, #2589).
+ */
+export function findFencedCodeRanges(text) {
   const ranges = [];
   let fence = null;
   const listTracker = createListContentIndentTrackerState();
