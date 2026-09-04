@@ -1530,7 +1530,19 @@ test('applyImportPlan copies new nested files byte-identically and preserves the
   assert.equal(filesChanged, 1);
   const targetHook = join(targetRoot, 'hooks', 'pre-commit');
   assert.equal(readFileSync(targetHook, 'utf8'), '#!/bin/sh\necho hook\n');
-  assert.equal(statSync(targetHook).mode & 0o777, 0o755);
+  // `chmodSync` on native Windows cannot set the granular POSIX mode this
+  // fixture requests (`0o755`): it only toggles the read-only attribute, so
+  // a "writable" request always collapses to `0o666` regardless of which
+  // specific bits were asked for (see the root-cause note on the
+  // `.githooks/pre-commit` copy test below, issue #2577). `applyImportPlan`
+  // still preserves whatever `statSync(source).mode` actually is -- which
+  // is the only thing this test can verify on this platform.
+  const expectedMode =
+    process.platform === 'win32'
+      ? statSync(join(sourceRoot, 'idd-template', 'hooks', 'pre-commit')).mode &
+        0o777
+      : 0o755;
+  assert.equal(statSync(targetHook).mode & 0o777, expectedMode);
 });
 
 test('applyImportPlan skips unchanged files without rewriting them', () => {
@@ -1572,8 +1584,35 @@ test('a real idd-skill source tree imports the full core file set byte-identical
       `byte mismatch: ${entry.targetPath}`,
     );
   }
-  // The pre-commit hook's executable bit must survive the copy.
+  // The pre-commit hook's executable bit must survive the copy -- but only
+  // where the source checkout can carry that bit at all. On native Windows,
+  // `fs.statSync().mode` never reports a POSIX execute bit for a git
+  // checkout in the first place (NTFS has no such bit, and this repo's
+  // common Windows git config `core.fileMode=false` means the index's
+  // recorded 100755 mode is never applied on checkout either), so
+  // `REPO_ROOT`'s own on-disk `.githooks/pre-commit` already has mode
+  // 100666 before `applyImportPlan` ever runs -- there is nothing for
+  // `chmodSync(target, statSync(source).mode)` to preserve, and asserting
+  // `0o111` here would fail regardless of whether the copy step is correct
+  // (issue #2577: this predictable Windows chmod/stat limitation, not a
+  // bug in `applyImportPlan`, is what a prior investigation session
+  // misdiagnosed as `applyImportPlan` returning 0 -- `0o111` in octal is
+  // `73` decimal, matching this fixture's own entry count by coincidence,
+  // which pointed the investigation at the wrong assertion).
   const hookMode = statSync(join(targetRoot, '.githooks', 'pre-commit')).mode;
+  if (process.platform === 'win32') {
+    // Compare against the source's own live execute bits (observed `0` on
+    // this platform per the note above) rather than hardcoding `0`: the
+    // actual contract under test is "target execute bits match source
+    // execute bits", so this still catches a real regression even in an
+    // unusual Windows environment that does surface exec bits (Copilot
+    // review, PR #2583).
+    const sourceMode = statSync(
+      join(REPO_ROOT, '.githooks', 'pre-commit'),
+    ).mode;
+    assert.equal(hookMode & 0o111, sourceMode & 0o111);
+    return;
+  }
   assert.equal(hookMode & 0o111, 0o111);
 });
 
