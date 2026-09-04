@@ -389,7 +389,17 @@ test('scanGrokSessions skips a malformed session that fails to harvest, keeping 
   assert.equal(results[0].sample.vendorSessionId, 'grok-basic-0001');
 });
 
-test('scanGrokSessions skips an unreadable updates.jsonl, keeping the rest', () => {
+// Skipped on Windows (#2580): `chmodSync(file, 0o000)` doesn't block a
+// subsequent `readFileSync` there -- verified empirically, Windows' own
+// read-only attribute (the closest analogue chmodSync can set) blocks
+// writes only, never reads, and an explicit `icacls ... /deny` ACE
+// doesn't block the read either for an administrator-class account
+// (the common case for CI runners too). POSIX/Linux CI stays the
+// authoritative coverage for this POSIX-permission-semantics check,
+// unaffected by this skip.
+test('scanGrokSessions skips an unreadable updates.jsonl, keeping the rest', {
+  skip: process.platform === 'win32',
+}, () => {
   const sandbox = mkdtempSync(
     join(tmpdir(), 'idd-token-cost-adapter-grok-test-'),
   );
