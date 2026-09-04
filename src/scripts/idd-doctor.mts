@@ -3825,12 +3825,15 @@ export function isRulesetsOnlyTrustGap(
  * unencoded, matching {@link isBranchProtectionUnreadable}'s own message
  * convention (Copilot review, idd-skill#2587 PR #2600).
  *
- * Names the token-permission cause as the safer remedy when it applies,
- * rather than implying `ciGate.trustEmptyProtectionReads` is the only fix
- * regardless of cause -- blindly setting that flag over a genuine
- * permission gap would trust a read that should actually be fixed at the
- * token-scope level (same tradeoff `fetchGovernanceJson`'s own doc comment
- * describes).
+ * States the two possible remedies as conditional on cause, rather than
+ * implying `ciGate.trustEmptyProtectionReads` is required "either way" --
+ * when the 404 is permission-masked, fixing the token's permissions makes
+ * the classic read succeed and no trust flag is needed at all; only when
+ * the 404 is genuine (classic protection truly isn't configured) does the
+ * trust flag apply. Blindly setting it over a genuine permission gap would
+ * trust a read that should actually be fixed at the token-scope level
+ * (same tradeoff `fetchGovernanceJson`'s own doc comment describes;
+ * Copilot review, idd-skill#2587 PR #2600).
  */
 export function formatRulesetsOnlyTrustGapWarning(
   owner: string,
@@ -3840,12 +3843,12 @@ export function formatRulesetsOnlyTrustGapWarning(
   const encodedBranch = encodeURIComponent(branch);
   return (
     `branch protection on ${owner}/${repo}:${branch}: the classic branches/${encodedBranch}/protection ` +
-    `read returned 404 (this endpoint also 404s when the token lacks permission to read it, not ` +
-    `only when nothing is configured there -- if that's the cause here, fixing the token's ` +
-    `permissions is the safer remedy) while the Rulesets read (rules/branches/${encodedBranch}) ` +
-    `already confirms at least one enforcing rule; either way, until the cause is resolved the ` +
-    `F2/F3 merge gate will still fail closed on the first merge attempt unless ` +
-    `ciGate.trustEmptyProtectionReads: true is set in .github/idd/config.json`
+    `read returned 404, while the Rulesets read (rules/branches/${encodedBranch}) already confirms at ` +
+    `least one enforcing rule. A 404 here can mean either (1) the token lacks permission to read the ` +
+    `classic endpoint -- fix the token's permissions, the safer remedy, and no config change is ` +
+    `needed, or (2) classic protection genuinely isn't configured (Rulesets-only) -- if so, set ` +
+    `ciGate.trustEmptyProtectionReads: true in .github/idd/config.json. Until whichever cause is ` +
+    `resolved, the F2/F3 merge gate will still fail closed on the first merge attempt`
   );
 }
 

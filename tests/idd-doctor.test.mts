@@ -4226,14 +4226,16 @@ test('formatRulesetsOnlyTrustGapWarning names ciGate.trustEmptyProtectionReads a
   assert.match(message, /example-owner\/example-repo:master/);
 });
 
-test('formatRulesetsOnlyTrustGapWarning names the token-permission cause as the safer remedy, not just the trust flag', () => {
+test('formatRulesetsOnlyTrustGapWarning states the two remedies as conditional on cause, not the trust flag "either way"', () => {
   const message = formatRulesetsOnlyTrustGapWarning(
     'example-owner',
     'example-repo',
     'master',
   );
   assert.match(message, /lacks permission/);
-  assert.match(message, /fixing the token's permissions is the safer remedy/);
+  assert.match(message, /fix the token's permissions, the safer remedy/);
+  assert.match(message, /no config change is\s+needed/);
+  assert.doesNotMatch(message, /either way/);
 });
 
 test("formatRulesetsOnlyTrustGapWarning URL-encodes the branch name in endpoint path fragments, matching checkGithubReadiness's own encodeURIComponent(branch) call", () => {
