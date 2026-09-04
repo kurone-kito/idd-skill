@@ -3332,16 +3332,19 @@ test('the ONBOARDING.md CLI-assisted onboarding section anchors its --import fil
 // Resolve markdownlint-cli2/cspell by their own package.json `bin` entry and
 // run them directly through `process.execPath`, rather than by
 // `spawnSync('.../node_modules/.bin/markdownlint-cli2' | '.../cspell', ...)`.
-// On native Windows, `node_modules/.bin/markdownlint-cli2` and
-// `node_modules/.bin/cspell` are POSIX shell shims; the executable form
-// Windows actually resolves for a bare command is `.CMD` (or `.ps1`) via
-// `PATHEXT`. `spawnSync`/`execFileSync` without `shell: true` never apply
-// `PATHEXT` resolution, so invoking the bare `.bin` path fails with `ENOENT`
-// there even though the shim is genuinely on PATH -- the same root cause
+// `MARKDOWNLINT_BIN`/`CSPELL_BIN` were always absolute paths, not bare
+// commands relying on a PATH search -- but on native Windows,
+// `node_modules/.bin/markdownlint-cli2` and `node_modules/.bin/cspell` are
+// POSIX shell shims with no recognized Windows-executable extension, so
+// Windows still can't launch that exact file. `shell: true` alone fixes
+// it (verified: it makes `cmd.exe` apply its own `PATHEXT`-based extension
+// dispatch to that same absolute path, finding `<name>.CMD`), but
+// `spawnSync`/`execFileSync` without `shell: true` never invoke a shell at
+// all, so no extension dispatch of any kind happens -- the same root cause
 // #2569 fixed for tsc/biome in `src/scripts/build-ts.mts`'s
 // `resolveBinScript`. Resolving the package's real JS entry point and
-// running it through `process.execPath` sidesteps PATH/`PATHEXT` lookup
-// entirely, so it behaves identically on every platform.
+// running it through `process.execPath` sidesteps the shell (and its
+// PATHEXT dispatch) entirely, so it behaves identically on every platform.
 //
 // Unlike `typescript`/`@biomejs/biome`, both `markdownlint-cli2` and
 // `cspell` declare a package.json `exports` map with no `./package.json`
@@ -3349,12 +3352,11 @@ test('the ONBOARDING.md CLI-assisted onboarding section anchors its --import fil
 // (`require.resolve`) throws `ERR_PACKAGE_PATH_NOT_EXPORTED` for either --
 // this reads `node_modules/<packageName>/package.json` directly instead.
 //
-// Returns `undefined` only when `package.json` itself is absent -- the
-// expected bare-node lane case (see the block comment above) where the
-// package genuinely isn't installed. A `package.json` that IS present but
-// has no matching `bin` entry is an unexpected packaging/fixture problem,
-// not a "not installed" state, so that case throws instead of silently
-// returning `undefined` and letting the caller mistake it for a skip.
+// Throws when `package.json` is present but has no matching `bin` entry,
+// or when the `bin` entry points at a script that doesn't actually exist
+// (a partial/corrupted install) -- either is an unexpected packaging/
+// fixture problem, not a "not installed" state, so it should fail loudly
+// here rather than let the caller silently treat it as a skip.
 function resolveBinScript(packageName: string, binName: string): string {
   const packageJsonPath = join(
     REPO_ROOT,
@@ -3371,10 +3373,18 @@ function resolveBinScript(packageName: string, binName: string): string {
       `${packageName}: package.json has no "${binName}" bin entry`,
     );
   }
-  return join(dirname(packageJsonPath), relativePath);
+  const scriptPath = join(dirname(packageJsonPath), relativePath);
+  if (!existsSync(scriptPath)) {
+    throw new Error(
+      `${packageName}: bin entry "${binName}" points at a missing file: ${scriptPath}`,
+    );
+  }
+  return scriptPath;
 }
 
-/** `resolveBinScript`, but `undefined` when the package isn't installed at all. */
+// `resolveBinScript`, but returns `undefined` instead of throwing when
+// `package.json` itself is absent -- the expected bare-node lane case (see
+// the block comment above) where the package genuinely isn't installed.
 function tryResolveBinScript(
   packageName: string,
   binName: string,
@@ -3395,11 +3405,9 @@ const MARKDOWNLINT_BIN = tryResolveBinScript(
   'markdownlint-cli2',
 );
 const CSPELL_BIN = tryResolveBinScript('cspell', 'cspell');
-const LINT_BINARIES_INSTALLED =
-  MARKDOWNLINT_BIN !== undefined && CSPELL_BIN !== undefined;
 
 test('a real import + substitute produces a doc tree that passes the documented markdownlint/cspell commands with full file coverage (idd-skill#1860)', (t) => {
-  if (!LINT_BINARIES_INSTALLED || !MARKDOWNLINT_BIN || !CSPELL_BIN) {
+  if (!MARKDOWNLINT_BIN || !CSPELL_BIN) {
     // Expected on the bare-node lane (lint.yml), which runs this suite with
     // no package-manager install by design -- see the block comment above.
     t.skip('markdownlint-cli2/cspell are not installed in this environment');
