@@ -4171,8 +4171,8 @@ test('isRulesetsOnlyTrustGap is false for a rulesets-only repository once trust 
   // ciGate.trustEmptyProtectionReads: true makes fetchGovernanceJson trust
   // the classic endpoint's 404 as genuinely empty, so branchProtectionRead
   // arrives with unreadable: false -- simulated directly here rather than
-  // through a live config read, matching this predicate's pure, dependency
-  // -free contract.
+  // through a live config read, matching this predicate's pure,
+  // dependency-free contract.
   assert.equal(
     isRulesetsOnlyTrustGap(
       { value: [{ type: 'required_status_checks' }], unreadable: false },
@@ -4182,10 +4182,10 @@ test('isRulesetsOnlyTrustGap is false for a rulesets-only repository once trust 
   );
 });
 
-test('isRulesetsOnlyTrustGap is false when both reads succeed (protection configured via both mechanisms)', () => {
+test('isRulesetsOnlyTrustGap is false for classic-only protection (no enforcing Rulesets rules, classic read succeeds)', () => {
   assert.equal(
     isRulesetsOnlyTrustGap(
-      { value: [{ type: 'required_status_checks' }], unreadable: false },
+      { value: [], unreadable: false },
       { unreadable: false },
     ),
     false,
