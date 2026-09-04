@@ -28,9 +28,46 @@
 // Invoked via `pnpm run build`, so node_modules/.bin (tsc, biome) is on
 // PATH. Uses only node: builtins to stay compatible with the repository's
 // bare-node boundary.
+//
+// tsc/biome are invoked by resolving their package's own `bin` entry and
+// running it directly through `process.execPath`, rather than by
+// `execFileSync('tsc' | 'biome', ...)`. On Windows, node_modules/.bin/tsc
+// and node_modules/.bin/biome are `.CMD`/`.ps1` shims, not directly
+// executable files, and `execFileSync`/`spawnSync` without `shell: true`
+// skip `PATHEXT` resolution, so the plain-name form fails with ENOENT there
+// even though the shim is genuinely on PATH. Adding `shell: true` fixes
+// that, but reintroduces a Windows `cmd.exe` command-line length cap
+// (~8191 characters) that the Biome call below can exceed once the
+// emitted-file list grows — resolving the real JS entry point sidesteps
+// both: no PATH/PATHEXT lookup, and no shell to cap the command line. Every
+// platform's own `.bin` shim (`.CMD` on Windows, the POSIX shebang script
+// elsewhere) ultimately runs the exact same resolved script through node,
+// so this reproduces their behavior identically instead of bypassing it.
 import { execFileSync } from 'node:child_process';
 import { readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
+import { dirname, join } from 'node:path';
 
+const require = createRequire(import.meta.url);
+/**
+ * Resolve an installed package's own `bin` entry to an absolute script
+ * path, bypassing the node_modules/.bin platform shim entirely. See the
+ * file header for why this replaces a plain `execFileSync('tsc' | 'biome', ...)`
+ * call.
+ */
+function resolveBinScript(packageName, binName) {
+  const packageJsonPath = require.resolve(`${packageName}/package.json`);
+  const { bin } = JSON.parse(readFileSync(packageJsonPath, 'utf8'));
+  const relativePath = typeof bin === 'string' ? bin : bin?.[binName];
+  if (!relativePath) {
+    throw new Error(
+      `${packageName}: package.json has no "${binName}" bin entry`,
+    );
+  }
+  return join(dirname(packageJsonPath), relativePath);
+}
+const TSC_BIN = resolveBinScript('typescript', 'tsc');
+const BIOME_BIN = resolveBinScript('@biomejs/biome', 'biome');
 const EMITTED_PREFIX = 'TSFILE: ';
 // The provenance header every emitted artifact carries; a helper with no
 // `.mts` source of its own would not. Kept identical to the
@@ -112,8 +149,8 @@ function syncGitattributes() {
 /** Emit the .mjs artifacts with tsc, then Biome-normalize only the emitted set. */
 function build() {
   const tscOutput = execFileSync(
-    'tsc',
-    ['-p', 'tsconfig.build.json', '--listEmittedFiles'],
+    process.execPath,
+    [TSC_BIN, '-p', 'tsconfig.build.json', '--listEmittedFiles'],
     { encoding: 'utf8' },
   );
   const emittedFiles = tscOutput
@@ -122,9 +159,11 @@ function build() {
     .map((line) => line.slice(EMITTED_PREFIX.length).trim())
     .filter((file) => file.endsWith('.mjs'));
   if (emittedFiles.length > 0) {
-    execFileSync('biome', ['check', '--write', ...emittedFiles], {
-      stdio: 'inherit',
-    });
+    execFileSync(
+      process.execPath,
+      [BIOME_BIN, 'check', '--write', ...emittedFiles],
+      { stdio: 'inherit' },
+    );
   }
 }
 if (import.meta.main) {
