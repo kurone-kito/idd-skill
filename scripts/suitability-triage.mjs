@@ -925,7 +925,7 @@ function isOrdinaryHyphenatedCompoundToken(rawSource, matchIndex) {
 // 60-char window), with nothing nearby actually attempting to change this
 // checker's own behavior.
 //
-// This exclusion targets "idd" only -- the other seven listed nouns
+// This exclusion targets "idd" only -- the other eight listed nouns
 // (repo/repository/policy/workflow/process/check/gate/requirement) are
 // generic enough that this narrative-attributive shape is not the
 // distinguishing false-positive source #2588 reports, and narrowing them
