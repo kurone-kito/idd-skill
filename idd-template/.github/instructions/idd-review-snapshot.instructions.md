@@ -166,6 +166,10 @@ verified on GitHub, minimize every strictly older trusted **same-claim**
 backlog and review-page noise). Find candidate subject IDs (trusted
 same-claim watermarks older than the new one), then call:
 
+`--subject-ids` needs a node id, not a REST id; convert with
+`gh api repos/{owner}/{repo}/issues/comments/{comment_id} -q
+'.node_id'` (other kinds: see `--help`).
+
 ```sh
 node scripts/minimize-superseded-markers.mjs \
   --subject-ids "<id1>,<id2>,..." \

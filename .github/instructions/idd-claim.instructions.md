@@ -490,13 +490,15 @@ no-ops).
 
 ### Hide displaced claim chain on takeover
 
-When the verified new claim was posted with `supersedes: <prior-id>`
-(stale takeover or forced-handoff recovery — **not** legacy migration,
-which always uses `supersedes: none`), minimize the displaced claim's
-marker chain on the issue as `OUTDATED` once this session has recorded
-its own verified `{claim-id}`. Find every trusted `claimed-by` /
-`unclaimed-by` / heartbeat comment whose embedded `{claim-id}` equals
-`<prior-id>` and call:
+When the verified new claim used `supersedes: <prior-id>` (stale
+takeover or forced-handoff recovery — **not** legacy migration, which
+always uses `supersedes: none`), minimize the displaced claim's marker
+chain as `OUTDATED` once this session's own `{claim-id}` is verified.
+Find every trusted `claimed-by`/`unclaimed-by`/heartbeat comment whose
+`{claim-id}` equals `<prior-id>` and call:
+
+`--subject-ids` takes a node id, not a REST id — see the
+[conversion note](idd-review-snapshot.instructions.md).
 
 ```sh
 node scripts/minimize-superseded-markers.mjs \
@@ -508,14 +510,11 @@ node scripts/minimize-superseded-markers.mjs \
 
 Skip this step entirely if:
 
-- the new claim has `supersedes: none` (fresh claim — there is no
-  displaced chain to hide);
-- the takeover claim was not verified (do not hide the prior chain
-  until the successor is observable as the active claim);
-- the candidate set is empty (no trusted markers carry the prior
-  `{claim-id}`);
-- the helper is unavailable. Subsequent F4 cleanup still picks up
-  any missed candidates.
+- `supersedes: none` (fresh claim, no displaced chain to hide);
+- the takeover claim was not yet verified (wait until the successor
+  is the observable active claim);
+- the candidate set is empty (no trusted markers carry `<prior-id>`);
+- the helper is unavailable (F4 cleanup catches missed candidates).
 
 **Do not** hide a same-`{claim-id}` heartbeat chain from a normal
 heartbeat post; heartbeats refresh the stale clock but do not
