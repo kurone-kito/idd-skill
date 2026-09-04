@@ -26,6 +26,14 @@ const execFileAsync = promisify(execFile);
 const REPO_ROOT = fileURLToPath(new URL('../', import.meta.url));
 const CLI_PATH = join(REPO_ROOT, 'scripts/claim-lock.mjs');
 
+// A git-config-file-safe null-device path. `node:os`'s `devNull` is the
+// Win32 device-namespace form (`\\.\nul`) on win32, which Git for Windows
+// cannot open as a GIT_CONFIG_GLOBAL/GIT_CONFIG_SYSTEM value (`fatal:
+// unable to access '//./nul': Invalid argument`); the bare `'NUL'` device
+// name is the form git itself accepts there. POSIX is unaffected -- devNull
+// there is already `/dev/null`. See kurone-kito/idd-skill#2570.
+const GIT_NULL_DEVICE = process.platform === 'win32' ? 'NUL' : devNull;
+
 // Fixture invariant mirrored from tests/worktree-guard-hook.test.mts: fixture
 // git processes must never read the ambient git environment or the
 // developer's config, and must never inherit GIT_DIR/GIT_WORK_TREE from a
@@ -42,8 +50,8 @@ function fixtureEnv(): NodeJS.ProcessEnv {
   delete env.GIT_WORK_TREE;
   delete env.GIT_COMMON_DIR;
   delete env.GIT_OBJECT_DIRECTORY;
-  env.GIT_CONFIG_GLOBAL = devNull;
-  env.GIT_CONFIG_SYSTEM = devNull;
+  env.GIT_CONFIG_GLOBAL = GIT_NULL_DEVICE;
+  env.GIT_CONFIG_SYSTEM = GIT_NULL_DEVICE;
   return env;
 }
 
