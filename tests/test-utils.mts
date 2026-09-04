@@ -49,11 +49,13 @@ const SYNC_DOCS_DEPS = [
  * source run once per invocation of the stub; it sees the real CLI
  * arguments via `process.argv.slice(2)`, the same shape on every platform.
  *
- * POSIX: writes an executable shebang script naming the running
- * `process.execPath` directly (not `#!/usr/bin/env node`) so the stub still
- * resolves its own interpreter when `PATH` is stubbed down to just this
- * temp dir (an originally-unset `PATH`, for example) and no longer has
- * anywhere else to find `node` -- then prepends that temp dir to `PATH`.
+ * POSIX: writes a `#!/bin/sh` wrapper that `exec`s `process.execPath`
+ * (quoted, so a space in that path is safe) against `scriptBody` in its own
+ * file, rather than `#!/usr/bin/env node` (would fail to resolve `node` once
+ * `PATH` is stubbed down to just this temp dir, e.g. an originally-unset
+ * `PATH`) or naming `process.execPath` directly in the shebang line itself
+ * (a shebang's interpreter path splits on the first whitespace with no
+ * quoting support) -- then prepends that temp dir to `PATH`.
  *
  * Windows: a shebang-only extensionless file is never resolved by
  * `execFileSync(name, ...)` without `shell: true` -- verified empirically,
@@ -95,7 +97,24 @@ export function stubExecutable(name: string, scriptBody: string): () => void {
   try {
     if (process.platform !== 'win32') {
       const scriptPath = join(tempRoot, name);
-      writeFileSync(scriptPath, `#!${process.execPath}\n${scriptBody}`);
+      const bodyPath = join(tempRoot, `${name}.body.js`);
+      writeFileSync(bodyPath, scriptBody);
+      // A shebang line splits its interpreter path at the first whitespace
+      // with no quoting support, so naming `process.execPath` there
+      // directly (as an earlier version of this fix did) breaks the moment
+      // that path contains a space -- a real possibility (e.g. an install
+      // directory with a space in its name). `/bin/sh` is a fixed,
+      // space-free path on every POSIX system, and a normal shell command
+      // line, unlike a shebang line, supports standard "$var" quoting, so
+      // exec the real interpreter from there instead of naming it in the
+      // shebang itself. `process.argv` inside `scriptBody` still comes out
+      // as `[execPath, bodyPath, ...args]` -- the same shape `slice(2)`
+      // expects -- since `bodyPath` is what's actually passed to node as
+      // its entry script.
+      writeFileSync(
+        scriptPath,
+        `#!/bin/sh\nexec "${process.execPath}" "${bodyPath}" "$@"\n`,
+      );
       chmodSync(scriptPath, 0o755);
     } else {
       const exePath = join(tempRoot, `${name}.exe`);
