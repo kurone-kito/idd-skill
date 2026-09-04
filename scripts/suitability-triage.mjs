@@ -1124,16 +1124,17 @@ function isNarrativeIddMention(rawSource, matchIndex) {
 // ASCII letters/`_`/`$` plus any Unicode letter (`\p{L}`, e.g.
 // `process.é`) -- real ECMAScript `IdentifierStart` also allows a small set
 // of other Unicode categories (Nl, and the two explicit code points
-// U+2118/U+212E) and a `\uXXXX`/`\u{X...}` escape sequence (e.g.
-// `process.env`, an escaped spelling of `process.env`). Both are
-// deliberately left unhandled here: a hand-typed Unicode escape sequence
-// naming a `process` property has no realistic occurrence in an issue
-// body's prose (unlike `#2399`'s bare `force-skip`, which the resolution
-// there rejected for a *shape ambiguity*, this is rejected for
-// *implausibility* -- pinned by its own regression test below so a later
-// change does not silently "fix" it without deliberate review, the same
-// convention `isOrdinaryHyphenatedCompoundToken`'s own accepted limit
-// follows).
+// U+2118/U+212E) and a `\uXXXX`/`\u{X...}` escape sequence, e.g. writing
+// out `process` then a literal backslash, `u`, and the four hex digits
+// `0065` before `nv` -- an escaped spelling of `process.env`, not that
+// literal text. Both are deliberately left unhandled here: a hand-typed
+// Unicode escape sequence naming a `process` property has no realistic
+// occurrence in an issue body's prose (unlike `#2399`'s bare `force-skip`,
+// which the resolution there rejected for a *shape ambiguity*, this is
+// rejected for *implausibility* -- pinned by its own regression test below
+// so a later change does not silently "fix" it without deliberate review,
+// the same convention `isOrdinaryHyphenatedCompoundToken`'s own accepted
+// limit follows).
 const CODE_IDENTIFIER_PROCESS_TOKEN_LENGTH = 'process'.length;
 const CODE_IDENTIFIER_PROCESS_PROPERTY_ACCESS_PATTERN = /^\.[\p{L}_$]/u;
 function isCodeIdentifierProcessMention(rawSource, matchIndex) {
