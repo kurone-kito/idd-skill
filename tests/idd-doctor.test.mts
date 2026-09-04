@@ -1479,7 +1479,17 @@ test('worktreeGuardWiredAt: a directory merely ending in "_" is not treated as t
 // Review feedback (PR #1969, chatgpt-codex-connector P1): git silently
 // skips a hook file that exists but lacks the executable bit, so an
 // existence-only check is not sufficient evidence that git would invoke it.
-test('worktreeGuardWiredAt: a present but non-executable active hook file reads as unwired', () => {
+//
+// Skipped on Windows (#2580): `worktreeGuardWiredAt` checks executability
+// via `accessSync(path, fsConstants.X_OK)`, and Windows has no POSIX
+// execute-permission bit for `accessSync` to detect the absence of --
+// verified empirically, `chmodSync(f, 0o644)` never makes `X_OK` fail
+// there, so this test's fault precondition can't be constructed on
+// Windows at all. POSIX/Linux CI stays the authoritative coverage for
+// this POSIX-permission-semantics check, unaffected by this skip.
+test('worktreeGuardWiredAt: a present but non-executable active hook file reads as unwired', {
+  skip: process.platform === 'win32',
+}, () => {
   const dir = mkdtempSync(join(tmpdir(), 'idd-guard-chain-non-executable-'));
   try {
     writeFixtureFile(

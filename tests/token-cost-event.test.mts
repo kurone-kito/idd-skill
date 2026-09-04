@@ -348,7 +348,16 @@ test('CLI --strict rejects an unknown --stage and writes nothing', () => {
   }
 });
 
-test('CLI default (non-strict) mode exits 0 with a warning when --out is on a read-only path', () => {
+// Skipped on Windows (#2580): `chmodSync(dir, 0o500)` doesn't block a
+// subsequent `mkdirSync` inside that directory there -- verified
+// empirically, Windows' own read-only attribute on a directory doesn't
+// propagate to block creating files/subdirectories inside it the way a
+// POSIX write-permission removal does. POSIX/Linux CI stays the
+// authoritative coverage for this POSIX-permission-semantics check,
+// unaffected by this skip.
+test('CLI default (non-strict) mode exits 0 with a warning when --out is on a read-only path', {
+  skip: process.platform === 'win32',
+}, () => {
   const dir = tempDir();
   try {
     const readonlyDir = join(dir, 'readonly');
