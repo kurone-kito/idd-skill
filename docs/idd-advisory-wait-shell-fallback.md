@@ -232,6 +232,10 @@ curl -X POST "https://api.github.com/repos/{owner}/{repo}/issues/{pr-number}/com
 
 ## AW3-H
 
+`--subject-ids` needs a GraphQL node id, not a REST numeric id —
+convert first: `gh api repos/{owner}/{repo}/issues/comments/{comment_id}
+-q '.node_id'` (other kinds: pass `--help` to the command below).
+
 ```sh
 # source repo / vendored-node profile:
 node scripts/minimize-superseded-markers.mjs \
