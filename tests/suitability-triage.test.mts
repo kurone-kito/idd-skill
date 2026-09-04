@@ -2581,6 +2581,394 @@ test('verifiability still fails a bullet list with no outcome-signal word at all
   assert.equal(result.pass, false);
 });
 
+test('verifiability accepts a structured AC checklist with no outcome-signal keyword (#2589)', () => {
+  // Check 7's "substantive AC" path used to require an OUTCOME_SIGNAL_PATTERN
+  // keyword even when a genuine, structured checklist was already present --
+  // disagreeing with Check 5, which already accepts the same list as
+  // actionable. A bullet naming a concrete file path (in backticks) now
+  // satisfies the check on its own, with no outcome-signal word anywhere.
+  const result = checkVerifiability({
+    issue: {
+      ...BASE_ISSUE,
+      body: `## Acceptance criteria
+- [ ] \`docs/example.md\`'s pointer section reflects the confirmed owner
+      and storage kind, with the open TODO callout removed.
+- [ ] No confidential grant content appears anywhere in the updated
+      page.
+`,
+    },
+  } as Context);
+  assert.equal(result.pass, true);
+});
+
+test('verifiability still fails an Acceptance Criteria section with only a placeholder bullet (#2589)', () => {
+  // A checklist under the heading naming no path, command, or artifact --
+  // and no outcome-signal keyword -- must still fail; the widened
+  // substantive-bullet path is not a blanket "any list passes" gate.
+  const result = checkVerifiability({
+    issue: {
+      ...BASE_ISSUE,
+      body: `## Acceptance Criteria
+- [ ] TODO
+`,
+    },
+  } as Context);
+  assert.equal(result.pass, false);
+});
+
+test('verifiability rejects a backtick-wrapped placeholder as a substantive bullet (#2589 Copilot review)', () => {
+  // Copilot review on PR #2602: the backtick alternative originally treated
+  // ANY inline-code span as substantive, so a placeholder token wrapped in
+  // backticks -- "- [ ] `TODO`" or "- [ ] `N/A`" -- wrongly passed even
+  // though it names no concrete file, command, or artifact.
+  for (const placeholder of ['TODO', 'N/A', 'TBD', 'tbd']) {
+    const result = checkVerifiability({
+      issue: {
+        ...BASE_ISSUE,
+        body: `## Acceptance criteria\n- [ ] \`${placeholder}\`\n`,
+      },
+    } as Context);
+    assert.equal(
+      result.pass,
+      false,
+      `expected fail for backticked "${placeholder}"`,
+    );
+  }
+});
+
+test('verifiability rejects a backtick-wrapped multi-word placeholder (#2589 Copilot review, round 2)', () => {
+  // A second Copilot pass on the first fix: CODE_SPAN_STRUCTURE_PATTERN
+  // originally counted internal whitespace as a structural signal, so a
+  // multi-word placeholder phrase -- "- [ ] `TODO later`", "- [ ] `TBD
+  // soon`" -- slipped past the placeholder check's single-token exact
+  // match and wrongly passed. Whitespace alone no longer counts.
+  for (const placeholder of ['TODO later', 'TBD soon']) {
+    const result = checkVerifiability({
+      issue: {
+        ...BASE_ISSUE,
+        body: `## Acceptance criteria\n- [ ] \`${placeholder}\`\n`,
+      },
+    } as Context);
+    assert.equal(
+      result.pass,
+      false,
+      `expected fail for backticked "${placeholder}"`,
+    );
+  }
+});
+
+test('verifiability accepts a multi-word command with colon/slash punctuation (#2589 Copilot review, round 2)', () => {
+  // Guards the other direction: a genuine multi-word command still passes
+  // once whitespace is no longer a qualifying signal on its own, as long
+  // as it carries the punctuation a real command/path normally has.
+  const result = checkVerifiability({
+    issue: {
+      ...BASE_ISSUE,
+      body: '## Acceptance criteria\n- [ ] `pnpm run lint:minimum` passes\n',
+    },
+  } as Context);
+  assert.equal(result.pass, true);
+});
+
+test('verifiability rejects a placeholder token glued to trailing punctuation or words (#2589 round 3, pre-submission probe)', () => {
+  // Adversarial self-probe before this fix's third round-trip: a
+  // placeholder whose lead token is followed by a hyphen, colon, or
+  // trailing word (rather than sitting alone, as in round 2's fix) must
+  // still fail -- only the span's structural punctuation should ever
+  // change, never the placeholder classification of its lead token.
+  for (const placeholder of ['TODO-later', 'TODO: fix', 'N/A yet']) {
+    const result = checkVerifiability({
+      issue: {
+        ...BASE_ISSUE,
+        body: `## Acceptance criteria\n- [ ] \`${placeholder}\`\n`,
+      },
+    } as Context);
+    assert.equal(
+      result.pass,
+      false,
+      `expected fail for backticked "${placeholder}"`,
+    );
+  }
+});
+
+test('verifiability still accepts a bare dotted identifier with no leading placeholder word (#2589 round 3)', () => {
+  // True-positive guard for the same lead-token check: an ordinary dotted
+  // identifier/filename with no placeholder lead word must keep passing.
+  const result = checkVerifiability({
+    issue: {
+      ...BASE_ISSUE,
+      body: '## Acceptance criteria\n- [ ] `foo.bar` is updated\n',
+    },
+  } as Context);
+  assert.equal(result.pass, true);
+});
+
+test('verifiability rejects a placeholder glued directly to punctuation with no separator (#2589 round 4, E2 critique)', () => {
+  // An E2 critique subagent caught that round 3's split-on-whitespace/
+  // colon/hyphen lead-token check never split on a period, underscore, or
+  // slash, so a placeholder glued directly to one of those -- with no
+  // separating character at all -- still supplied its own structural
+  // signal while evading the exact-match stoplist: "- [ ] `TODO.`",
+  // "- [ ] `TODO_`", and the previously-documented "TODO/FIXME" gap (shown
+  // here to be broader than described: any slash-glued suffix, not just a
+  // second placeholder word). PLACEHOLDER_LEAD_PATTERN's anchored,
+  // non-alphanumeric-or-end lookahead closes all of these in one rule.
+  for (const placeholder of [
+    'TODO.',
+    'TODO..',
+    'TODO_',
+    'N/A.',
+    'NA.',
+    'TBD.',
+    'FIXME.',
+    'TODO/FIXME',
+    'TODO/details forthcoming',
+  ]) {
+    const result = checkVerifiability({
+      issue: {
+        ...BASE_ISSUE,
+        body: `## Acceptance criteria\n- [ ] \`${placeholder}\`\n`,
+      },
+    } as Context);
+    assert.equal(
+      result.pass,
+      false,
+      `expected fail for backticked "${placeholder}"`,
+    );
+  }
+});
+
+test('verifiability does not mistake a real identifier that merely starts with a placeholder word (#2589 round 4)', () => {
+  // True-positive guard for the anchored pattern: a real path/identifier
+  // whose letters happen to start with a placeholder word, but continue
+  // with more alphanumeric characters rather than ending or hitting
+  // punctuation, must not be misclassified as a placeholder.
+  for (const identifier of [
+    'NASA-report.txt',
+    'nonexistent-file.txt',
+    'WIPExample.md',
+  ]) {
+    const result = checkVerifiability({
+      issue: {
+        ...BASE_ISSUE,
+        body: `## Acceptance criteria\n- [ ] \`${identifier}\` is updated\n`,
+      },
+    } as Context);
+    assert.equal(
+      result.pass,
+      true,
+      `expected pass for backticked "${identifier}"`,
+    );
+  }
+});
+
+test('verifiability rejects a punctuation-only code span as substantive (#2589 round 5, CodeRabbit review)', () => {
+  // CodeRabbit review on PR #2602: CODE_SPAN_STRUCTURE_PATTERN only checks
+  // for the *presence* of a structural delimiter, so a code span
+  // containing nothing but that delimiter -- "- [ ] `-`", "- [ ] `.`" --
+  // wrongly passed even though it names no path, command, or artifact.
+  for (const span of ['-', '.', '/', ':', '_']) {
+    const result = checkVerifiability({
+      issue: {
+        ...BASE_ISSUE,
+        body: `## Acceptance criteria\n- [ ] \`${span}\`\n`,
+      },
+    } as Context);
+    assert.equal(result.pass, false, `expected fail for backticked "${span}"`);
+  }
+});
+
+test('verifiability bounds the Acceptance Criteria section at an indented heading (#2589 round 5, CodeRabbit review)', () => {
+  // CodeRabbit review on PR #2602: CommonMark permits up to three leading
+  // spaces before an ATX heading, so an indented "   ## Candidate files"
+  // sibling section wasn't recognized as a boundary and its paths leaked
+  // substance into a placeholder-only Acceptance Criteria bullet above it.
+  const result = checkVerifiability({
+    issue: {
+      ...BASE_ISSUE,
+      body: `## Acceptance criteria
+- [ ] TODO
+
+   ## Candidate files
+- src/example.mts
+`,
+    },
+  } as Context);
+  assert.equal(result.pass, false);
+});
+
+test('verifiability restricts substance/keyword matching to list-item lines only (#2589 round 5, CodeRabbit review)', () => {
+  // CodeRabbit review on PR #2602: hasSubstantiveBullet (and the
+  // outcome-signal keyword fallback) scanned the whole Acceptance
+  // Criteria section's raw text, not just its list-item lines, so a
+  // placeholder bullet followed by unrelated, non-list prose could
+  // borrow that prose's substantive code span or outcome-signal keyword.
+  const substanceLeak = checkVerifiability({
+    issue: {
+      ...BASE_ISSUE,
+      body: '## Acceptance criteria\n- [ ] TODO\nSee `src/example.mts` for context.\n',
+    },
+  } as Context);
+  assert.equal(substanceLeak.pass, false);
+});
+
+test('verifiability keyword fallback still fails with no Acceptance Criteria section (#2589)', () => {
+  // Unrelated to the AC-heading path above: a body with no AC section at all
+  // still relies solely on hasVerificationChannel / the other keyword
+  // fallbacks, unchanged by the substantive-bullet addition.
+  const result = checkVerifiability({
+    issue: {
+      ...BASE_ISSUE,
+      body: 'Update the onboarding doc with the new steps for new contributors.',
+    },
+  } as Context);
+  assert.equal(result.pass, false);
+});
+
+test('verifiability accepts a bare dotted filename with no backticks or keyword (#2589 review)', () => {
+  // Exercises hasSubstantiveBullet()'s BARE_DOTTED_FILENAME_PATTERN branch
+  // in isolation (every other new test hits it only via a backtick-wrapped
+  // path): a plain, unquoted filename token is substantive on its own.
+  const result = checkVerifiability({
+    issue: {
+      ...BASE_ISSUE,
+      body: `## Acceptance criteria
+- [ ] update the version pin in config.json
+`,
+    },
+  } as Context);
+  assert.equal(result.pass, true);
+});
+
+test('verifiability rejects an ordinary conjunction as a substantive bullet (#2589 review)', () => {
+  // hasSubstantiveBullet() must not treat a bare slash as a path on its
+  // own -- "and/or" has a slash but names no file, command, or artifact.
+  const result = checkVerifiability({
+    issue: {
+      ...BASE_ISSUE,
+      body: `## Acceptance criteria
+- [ ] Update and/or remove the callout
+`,
+    },
+  } as Context);
+  assert.equal(result.pass, false);
+});
+
+test('verifiability does not let a trailing "## Candidate files" list leak substance into a placeholder AC (#2589 review)', () => {
+  // This repo's own issue template puts "## Candidate files" (a bullet list
+  // of paths) directly after "## Acceptance Criteria". Without bounding the
+  // AC section at the next heading, that trailing list's paths would leak
+  // substance into a genuinely placeholder AC bullet above it.
+  const result = checkVerifiability({
+    issue: {
+      ...BASE_ISSUE,
+      body: `## Acceptance criteria
+- [ ] TODO
+
+## Candidate files
+- src/scripts/foo.mts
+`,
+    },
+  } as Context);
+  assert.equal(result.pass, false);
+});
+
+test('verifiability rejects two placeholder bullets whose unmatched backticks pair across lines (#2589 round 6, E2 critique)', () => {
+  // An E2 critique subagent found that hasSubstantiveBullet's code-span scan
+  // ran over the whole list-item-lines text at once, and `[^`]` also
+  // matches '\n' -- so two unrelated bullets each carrying one *unmatched*
+  // backtick got paired across the '\n' extractListItemLines() joins them
+  // with, manufacturing a fake code span ("- [ ] TBD") that wrongly
+  // satisfied the structure/alnum/non-placeholder check. Neither bullet is
+  // substantive on its own; the match must not cross a line.
+  const result = checkVerifiability({
+    issue: {
+      ...BASE_ISSUE,
+      body: '## Acceptance Criteria\n- [ ] TODO `\n- [ ] TBD `\n',
+    },
+  } as Context);
+  assert.equal(result.pass, false);
+});
+
+test('verifiability does not let a fenced example bullet leak substance into a placeholder AC (#2589 round 6, E2 critique)', () => {
+  // An E2 critique subagent found that the Acceptance Criteria scan had no
+  // fence-awareness: an illustrative bullet inside a fenced example (quoting
+  // Markdown syntax, not a real criterion) was scanned as if it were a real
+  // list item and wrongly supplied substance for a placeholder bullet above
+  // it.
+  const result = checkVerifiability({
+    issue: {
+      ...BASE_ISSUE,
+      body: `## Acceptance Criteria
+- [ ] TODO
+
+Example of the file layout we are discussing:
+\`\`\`
+- \`src/real/path.mts\` exists
+\`\`\`
+`,
+    },
+  } as Context);
+  assert.equal(result.pass, false);
+});
+
+test('verifiability does not let a heading-like line inside a fence truncate the Acceptance Criteria section (#2589 round 6, E2 critique)', () => {
+  // Mirror image of the fence-leak above: a fenced block containing a line
+  // that merely resembles an ATX heading was previously matched by
+  // NEXT_HEADING_PATTERN as a real section boundary, truncating the section
+  // before a genuine substantive bullet that follows the fence.
+  const result = checkVerifiability({
+    issue: {
+      ...BASE_ISSUE,
+      body: `## Acceptance Criteria
+- [ ] Set up the fixture, see example:
+\`\`\`
+## fake heading inside a fence
+\`\`\`
+- [ ] \`src/real.mts\` exists
+`,
+    },
+  } as Context);
+  assert.equal(result.pass, true);
+});
+
+test('verifiability accepts an isolated multi-word command with no whole-body verification/outcome keyword (#2589 round 6, E2 critique)', () => {
+  // An E2 critique subagent found that the existing round-2 multi-word
+  // command test ("`pnpm run lint:minimum` passes") is over-determined:
+  // "lint" alone satisfies hasVerificationChannel and "passes" alone
+  // satisfies OUTCOME_SIGNAL_PATTERN against the whole body, so that test
+  // would still pass even if hasSubstantiveBullet's multi-word handling
+  // were broken. This body avoids every hasVerificationChannel and
+  // OUTCOME_SIGNAL_PATTERN word, isolating hasSubstantiveBullet itself.
+  const result = checkVerifiability({
+    issue: {
+      ...BASE_ISSUE,
+      body: '## Acceptance criteria\n- [ ] `pnpm run build:all` is green\n',
+    },
+  } as Context);
+  assert.equal(result.pass, true);
+});
+
+test('verifiability accepted limitation: a placeholder-led identifier glued to punctuation with no dotted rescue still fails (#2589 round 6, E2 critique)', () => {
+  // An E2 critique subagent found that PLACEHOLDER_LEAD_PATTERN's anchored
+  // match rejects a REAL identifier that happens to start with a reserved
+  // word, carries no dotted extension (so BARE_DOTTED_FILENAME_PATTERN
+  // can't rescue it), and is glued directly to structural punctuation --
+  // e.g. "WIP-tracker/config". This is a deliberate accepted trade-off, not
+  // a bug: widening the pattern to admit it would also re-admit
+  // "TODO-later" / "TODO/FIXME" (rounds 3-4's fixed false-positive gap),
+  // which is structurally identical ("placeholder word + one delimiter +
+  // word"). Pinned here so a future round doesn't re-litigate this as a
+  // regression.
+  const result = checkVerifiability({
+    issue: {
+      ...BASE_ISSUE,
+      body: '## Acceptance criteria\n- [ ] `WIP-tracker/config` is updated\n',
+    },
+  } as Context);
+  assert.equal(result.pass, false);
+});
+
 test('coherence allows TODO mentions when the issue is otherwise concrete', () => {
   const result = checkCoherence({
     issue: {

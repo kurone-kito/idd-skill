@@ -17,6 +17,7 @@ import {
 import { GH_TEXT_LOOP_TIMEOUT_OPTIONS, ghText } from './gh-exec.mjs';
 import { loadPolicyConfig } from './idd-config.mjs';
 import {
+  findFencedCodeRanges,
   findMarkdownCodeRanges,
   getMarkdownCodeRange,
   maskMarkdownCodeRegionsPreservingPositions,
@@ -521,6 +522,106 @@ function isEnumeratedParentheticalEntry(body, matchIndex, matchLength) {
   return otherEntries.length > 0 && otherEntries.every(looksLikeLabelEntry);
 }
 const ACCEPTANCE_CRITERIA_PATTERN = /^#+\s*Acceptance\s+Criteria\s*$/im;
+// #2589: a bullet under "## Acceptance Criteria" that names something
+// concrete -- an inline-code span (covers a quoted file path, command, or
+// identifier) or a bare dotted filename -- is substantive on its own,
+// independent of OUTCOME_SIGNAL_PATTERN's closed English vocabulary. Check 5
+// (actionability) already accepts the same checklist as actionable; this
+// keeps Check 7 from re-gating it behind a keyword spot-check the
+// checklist's own content already satisfies. Deliberately has no bare
+// slash-path alternative: `\bfoo\/bar\b` alone also matches an ordinary
+// conjunction like "and/or" or "read/write" with no real path underneath --
+// a real file path in this repo's AC bullets is either backticked or ends
+// in a dotted extension, both already covered below.
+//
+// Copilot review (PR #2602) flagged, across multiple passes, that treating
+// ANY inline-code span as substantive lets a backticked placeholder --
+// "- [ ] `TODO`", "- [ ] `N/A`", "- [ ] `TODO later`" -- wrongly pass. A
+// code span now needs a structural signal of being a real
+// path/command/identifier (a slash, dot, underscore, colon, or hyphen)
+// AND must not merely *lead with* a short, closed placeholder token.
+// PLACEHOLDER_LEAD_PATTERN is anchored at the start and requires the
+// placeholder word to be immediately followed by a non-alphanumeric
+// character or the end of the string, so it matches the bare token
+// ("TODO"), a trailing punctuation glue of any kind ("TODO.", "TODO_",
+// "TODO-later", "TODO: fix", "TODO/FIXME") and a trailing word ("N/A
+// yet"), without matching a real identifier that merely starts with the
+// same letters ("NASA", "nonexistent-file.txt"). An earlier revision
+// tried to reconstruct this via a whitespace/colon/hyphen split of the
+// span's lead token, which covered the punctuation marks it split on but
+// missed a placeholder glued directly to a period, underscore, or slash
+// -- an E2 critique subagent caught "TODO.", "TODO_", and the
+// previously-documented "TODO/FIXME" gap being broader than described.
+// Testing the anchored pattern against the raw content directly, rather
+// than a hand-split lead token, closes the whole class at once.
+//
+// Accepted limitation (E2 critique subagent, #2589 round 6): a real
+// identifier that starts with one of these reserved words, has no dotted
+// extension, and is glued directly to structural punctuation -- e.g.
+// "`WIP-tracker/config`" -- is misclassified as a placeholder and the bullet
+// fails, even though it names a concrete path. Widening the pattern to admit
+// this would re-admit "TODO-later" / "TODO/FIXME" (rounds 3-4's fixed gap):
+// both shapes are "placeholder word + one structural delimiter + word",
+// indistinguishable without a real identifier dictionary. A false negative
+// here costs less than reopening a false positive already fixed twice, and
+// the realistic case (a dotted extension) is already rescued by
+// BARE_DOTTED_FILENAME_PATTERN below.
+const PLACEHOLDER_LEAD_PATTERN =
+  /^(?:TODO|TBD|N\/A|NA|XXX|FIXME|WIP|PENDING|PLACEHOLDER|NONE|ASAP)(?:[^a-zA-Z0-9]|$)/i;
+const CODE_SPAN_STRUCTURE_PATTERN = /[/._:-]/;
+// CodeRabbit review (PR #2602): a code span needs actual alphanumeric
+// content, not just a structural delimiter -- "- [ ] `-`" or "- [ ] `.`"
+// otherwise names nothing while still satisfying
+// CODE_SPAN_STRUCTURE_PATTERN.
+const CODE_SPAN_ALNUM_PATTERN = /[a-zA-Z0-9]/;
+const BARE_DOTTED_FILENAME_PATTERN = /\b[\w-]{2,}\.[a-zA-Z]{1,5}\b/;
+// CodeRabbit review (PR #2602): an ATX heading may carry up to three
+// leading spaces per CommonMark, so the AC-section boundary below must
+// tolerate that indentation or an indented sibling heading (e.g. this
+// repo's own "   ## Candidate files", however it happens to be indented)
+// would not stop the section.
+const NEXT_HEADING_PATTERN = /\n {0,3}#{1,6}\s/;
+// CodeRabbit review (PR #2602): scanning the whole AC section's raw text
+// -- rather than just its list-item lines -- let a placeholder bullet
+// ("- [ ] TODO") followed by unrelated, non-list prose containing a
+// substantive-looking code span or outcome-signal keyword wrongly pass.
+// Only lines that are themselves list-item markers (a wrapped/lazy
+// continuation line is intentionally excluded too, since it cannot be
+// told apart from unrelated trailing prose without full Markdown
+// paragraph parsing) are considered for either check.
+const LIST_ITEM_LINE_PATTERN = /^\s*(?:[-*]|\d+\.)\s+/;
+function looksLikePlaceholder(content) {
+  return PLACEHOLDER_LEAD_PATTERN.test(content);
+}
+function extractListItemLines(section) {
+  return section
+    .split('\n')
+    .filter((line) => LIST_ITEM_LINE_PATTERN.test(line))
+    .join('\n');
+}
+function hasSubstantiveBullet(text) {
+  // `text` is `extractListItemLines()`'s output: one list-item line per
+  // line, already joined by '\n' from lines that may not be adjacent in the
+  // original section. `[^`]` matching a newline let an unmatched backtick on
+  // one bullet pair across that artificial join with an unmatched backtick
+  // on a later bullet, manufacturing a fake code span from two unrelated
+  // placeholder bullets (e.g. "- [ ] TODO `" + "- [ ] TBD `") -- excluding
+  // `\n` from the span keeps a match within a single line, matching how a
+  // real inline code span can never cross a list item's own block boundary
+  // here (E2 critique subagent, #2589 round 6).
+  for (const match of text.matchAll(/`([^`\n]+)`/g)) {
+    const content = (match[1] ?? '').trim();
+    if (
+      content.length > 0 &&
+      CODE_SPAN_STRUCTURE_PATTERN.test(content) &&
+      CODE_SPAN_ALNUM_PATTERN.test(content) &&
+      !looksLikePlaceholder(content)
+    ) {
+      return true;
+    }
+  }
+  return BARE_DOTTED_FILENAME_PATTERN.test(text);
+}
 // A heading line such as "## Decision (resolved 2026-06-27)" records that a
 // human has already ruled on the issue's open question (see Check 7). The
 // negative lookahead rejects only a still-open *phrase* that directly negates
@@ -1767,19 +1868,52 @@ export function checkVerifiability(context) {
     /\btests?\b|\bverification\b|\bvalidate\b|\blint\b|\bci\b/i.test(body);
   // Check for substantive objective criteria, not just empty headings
   let hasObjectiveCriteria = false;
-  // Check for "Acceptance Criteria" with substantive content after it
-  const acceptanceCriteriaMatch = body.match(ACCEPTANCE_CRITERIA_PATTERN);
+  // Check for "Acceptance Criteria" with substantive content after it. A
+  // fenced code block quoting example Markdown syntax (an illustrative
+  // bullet, or a heading-like line meant only as sample output) must not
+  // leak into this scan either way -- as a fake substantive bullet, or as a
+  // fake section-boundary heading that truncates the section before a real
+  // bullet after the fence. Mask fence content only (not inline code spans,
+  // which hasSubstantiveBullet below still needs) over the whole body before
+  // any slicing, so a fence that opens inside the eventual 500-char window
+  // and closes outside it is still fully masked (E2 critique subagent,
+  // #2589 round 6). Masking preserves character positions, so every offset
+  // computed below stays valid against the original body.
+  const fenceMaskedBody = maskMarkdownCodeRegionsPreservingPositions(
+    body,
+    findFencedCodeRanges(body),
+  );
+  const acceptanceCriteriaMatch = fenceMaskedBody.match(
+    ACCEPTANCE_CRITERIA_PATTERN,
+  );
   if (acceptanceCriteriaMatch) {
     const indexAfter =
       (acceptanceCriteriaMatch.index ?? 0) +
       (acceptanceCriteriaMatch[0]?.length ?? 0);
-    const contentAfter = body.slice(indexAfter, indexAfter + 500).trim();
-    // Require either a list (starting with - or *) or numbered content with outcome signals
-    if (/^[-*]\s+/.test(contentAfter) || /^\d+\.\s+/.test(contentAfter)) {
-      const hasOutcomeSignals = OUTCOME_SIGNAL_PATTERN.test(contentAfter);
-      if (hasOutcomeSignals) {
-        hasObjectiveCriteria = true;
-      }
+    const contentAfter = fenceMaskedBody
+      .slice(indexAfter, indexAfter + 500)
+      .trim();
+    // Bound the AC section at the next heading so a trailing sibling
+    // section (e.g. this repo's own "## Candidate files" convention, which
+    // is itself a bullet list of paths) never leaks substance or an
+    // outcome-signal keyword into a genuinely placeholder AC list (#2589).
+    const nextHeadingIndex = contentAfter.search(NEXT_HEADING_PATTERN);
+    const listSection =
+      nextHeadingIndex === -1
+        ? contentAfter
+        : contentAfter.slice(0, nextHeadingIndex);
+    // Require either a list (starting with - or *) or numbered content. A
+    // substantive bullet (hasSubstantiveBullet) satisfies this on its own;
+    // an outcome-signal keyword remains a fallback for a list that names
+    // no concrete file, command, or artifact (#2589). Both checks scan
+    // only the section's own list-item lines, not its full raw text, so a
+    // placeholder bullet followed by unrelated non-list prose can't
+    // borrow that prose's substance or keywords (#2589 CodeRabbit review).
+    if (/^[-*]\s+/.test(listSection) || /^\d+\.\s+/.test(listSection)) {
+      const listItemsOnly = extractListItemLines(listSection);
+      hasObjectiveCriteria =
+        hasSubstantiveBullet(listItemsOnly) ||
+        OUTCOME_SIGNAL_PATTERN.test(listItemsOnly);
     }
   }
   // Alternative: check for numbered steps with outcome signals or checklists
