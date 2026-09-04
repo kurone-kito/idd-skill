@@ -1480,6 +1480,42 @@ test('pre-merge F2 own-agent-comment carve-out covers procedural/status comments
   }
 });
 
+test('pre-merge F2 carves out third-party advisory bot skip-review notices from review-currency staleness (idd-skill#2590)', () => {
+  const preMerge = readFileSync(
+    new URL(
+      '../.github/instructions/idd-pre-merge.instructions.md',
+      import.meta.url,
+    ),
+    'utf8',
+  );
+  const templatePreMerge = readFileSync(
+    new URL(
+      '../idd-template/.github/instructions/idd-pre-merge.instructions.md',
+      import.meta.url,
+    ),
+    'utf8',
+  );
+
+  for (const text of [preMerge, templatePreMerge]) {
+    // \s+ between words tolerates a Markdown reflow (dprint) that moves a
+    // wrap point mid-phrase without changing the semantic content.
+    assert.match(
+      text,
+      /third-party\s+advisory\s+bot's\s+own\s+skip-review\s+or\s+no-action\s+notice/,
+    );
+    // Guards the carve-out's no-finding condition: it only covers a
+    // notice that carries no reviewer finding or actionable content.
+    assert.match(text, /no\s+reviewer\s+finding\s+or\s+actionable\s+content/);
+    // Guards against silently swallowing a mixed-cause trigger: the
+    // refresh-instead sentence must still be gated on "solely".
+    assert.match(text, /triggered\s+solely\s+by\s+that\s+notice/);
+    assert.match(
+      text,
+      /mixed-cause\s+trigger\s+still\s+returns\s+to\s+E1\s+normally/,
+    );
+  }
+});
+
 test('recursive roadmap audit guidance stays aligned across instruction and docs surfaces', () => {
   const audit = readFileSync(ROADMAP_AUDIT_PATH, 'utf8');
   const workflow = readFileSync(WORKFLOW_PATH, 'utf8');
