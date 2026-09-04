@@ -1862,12 +1862,15 @@ test('evaluateLocalCoordinationState resolves a RELATIVE --git-path output again
 
 test('evaluateLocalCoordinationState resolves a RELATIVE --git-path output against a Windows drive-absolute worktree path without corrupting the drive letter or separators (#2576)', () => {
   // A real worktree path always carries a drive letter on native Windows
-  // (unlike the plain `/repo/wt` fixture above), so this specifically
-  // exercises `isGitPathAbsolute`'s drive-letter branch and demonstrates
-  // that `joinGitPath` never re-guesses a drive letter the way
-  // `path.resolve('C:/repo/wt', '.git/rebase-merge')` would if the input
-  // lacked one -- it also never reformats the forward-slash join to
-  // backslash, matching git's own porcelain convention.
+  // (unlike the plain `/repo/wt` fixture above). `resolveGitPath`'s output
+  // here is still RELATIVE (`isGitPathAbsolute` is false for it, same as the
+  // `/repo/wt` case above), so this exercises `joinGitPath`'s
+  // string-concatenation branch with a drive-absolute BASE: it demonstrates
+  // that base is preserved verbatim (no re-guessing a drive letter the way
+  // `path.resolve('C:/repo/wt', '.git/rebase-merge')` would need to if the
+  // base lacked one, and no reformatting to backslash). It does NOT exercise
+  // `isGitPathAbsolute` returning true for a drive-letter path -- see the
+  // next test for that.
   const verdict = evaluateLocalCoordinationState(
     'roadmap-audit/995-slug',
     localInputs({
@@ -1881,6 +1884,37 @@ test('evaluateLocalCoordinationState resolves a RELATIVE --git-path output again
       resolveGitPath: (_worktreePath, name) =>
         name === 'rebase-merge' ? OK('.git/rebase-merge\n') : FAIL('none'),
       pathExists: (path) => path === 'C:/repo/wt/.git/rebase-merge',
+    }),
+  );
+  assert.equal(verdict.presence, 'present-broken');
+  assert.deepEqual(verdict.brokenReasons, ['rebase in progress']);
+});
+
+test('evaluateLocalCoordinationState treats an ABSOLUTE Windows drive-letter --git-path output as already-absolute, without double-joining it onto the worktree path (#2576)', () => {
+  // Real `git rev-parse --git-path` output on native Windows is itself
+  // drive-absolute (confirmed empirically against a real linked worktree:
+  // e.g. `C:/Users/.../primary/.git/worktrees/wt/rebase-merge`) -- this is
+  // the common real-world case, not the relative one above. This exercises
+  // `isGitPathAbsolute`'s `[A-Za-z]:[\\/]` regex branch directly: if it ever
+  // failed to recognize a drive-letter path as absolute, `joinGitPath` would
+  // wrongly concatenate the worktree path onto it (producing something like
+  // `C:/repo/wt/C:/repo/.git/worktrees/wt/rebase-merge`), which `pathExists`
+  // would never find -- silently reporting no rebase in progress.
+  const verdict = evaluateLocalCoordinationState(
+    'roadmap-audit/995-slug',
+    localInputs({
+      listWorktrees: () =>
+        OK(
+          toZ(
+            'worktree C:/repo/wt\nHEAD abc123\nbranch refs/heads/roadmap-audit/995-slug\n',
+          ),
+        ),
+      statusPorcelain: () => OK(''),
+      resolveGitPath: (_worktreePath, name) =>
+        name === 'rebase-merge'
+          ? OK('C:/repo/.git/worktrees/wt/rebase-merge\n')
+          : FAIL('none'),
+      pathExists: (path) => path === 'C:/repo/.git/worktrees/wt/rebase-merge',
     }),
   );
   assert.equal(verdict.presence, 'present-broken');
