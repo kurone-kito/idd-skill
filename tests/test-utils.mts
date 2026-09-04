@@ -49,8 +49,11 @@ const SYNC_DOCS_DEPS = [
  * source run once per invocation of the stub; it sees the real CLI
  * arguments via `process.argv.slice(2)`, the same shape on every platform.
  *
- * POSIX: writes an executable shebang script (`#!/usr/bin/env node`) named
- * `name` and prepends its directory to `PATH`.
+ * POSIX: writes an executable shebang script naming the running
+ * `process.execPath` directly (not `#!/usr/bin/env node`) so the stub still
+ * resolves its own interpreter when `PATH` is stubbed down to just this
+ * temp dir (an originally-unset `PATH`, for example) and no longer has
+ * anywhere else to find `node` -- then prepends that temp dir to `PATH`.
  *
  * Windows: a shebang-only extensionless file is never resolved by
  * `execFileSync(name, ...)` without `shell: true` -- verified empirically,
@@ -92,7 +95,7 @@ export function stubExecutable(name: string, scriptBody: string): () => void {
   try {
     if (process.platform !== 'win32') {
       const scriptPath = join(tempRoot, name);
-      writeFileSync(scriptPath, `#!/usr/bin/env node\n${scriptBody}`);
+      writeFileSync(scriptPath, `#!${process.execPath}\n${scriptBody}`);
       chmodSync(scriptPath, 0o755);
     } else {
       const exePath = join(tempRoot, `${name}.exe`);
