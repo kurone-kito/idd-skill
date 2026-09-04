@@ -529,6 +529,39 @@ test('trust safety still rejects a genuine directive against the review process 
   assert.equal(result.pass, false);
 });
 
+test('trust safety ignores a Unicode-letter JS property access -- #2608 (CodeRabbit)', () => {
+  // CodeRabbit review (PR #2610): the identifier-start character class must
+  // accept a Unicode letter, not only ASCII, since `process.<unicodeLetter>`
+  // is just as unambiguously a JS property-access expression as the ASCII
+  // examples #2608 itself names.
+  const result = checkTrustSafety({
+    issue: {
+      ...BASE_ISSUE,
+      body: `${BASE_ISSUE.body}\nSkip process.é handling when unset.`,
+    },
+    trustSafetyAmbiguous: false,
+  } as Context);
+  assert.equal(result.pass, true);
+});
+
+test('trust safety still fails on a \\uXXXX-escaped property name -- #2608 (documented limit)', () => {
+  // Deliberately accepted limit -- see isCodeIdentifierProcessMention's own
+  // comment: a hand-typed `\uXXXX` escape sequence naming a `process`
+  // property has no realistic occurrence in an issue body's prose, so it is
+  // not recognized as a code identifier and stays detected. Pinned here so
+  // a later change does not silently alter this without deliberate review
+  // (the same convention isOrdinaryHyphenatedCompoundToken's own accepted
+  // limit follows).
+  const result = checkTrustSafety({
+    issue: {
+      ...BASE_ISSUE,
+      body: `${BASE_ISSUE.body}\nSkip process.\\u0065nv handling when unset.`,
+    },
+    trustSafetyAmbiguous: false,
+  } as Context);
+  assert.equal(result.pass, false);
+});
+
 test('trust safety ignores a hyphenated compound noun ending in a policy-override verb -- #2399', () => {
   // #2218 wrapped only POLICY_OVERRIDE_NOUN_SOURCE in the hyphen-boundary
   // guard, leaving POLICY_OVERRIDE_VERB_SOURCE on a bare `\b`. A hyphen
