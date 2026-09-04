@@ -2609,7 +2609,7 @@ test('verifiability rejects a backtick-wrapped multi-word placeholder (#2589 Cop
   // A second Copilot pass on the first fix: CODE_SPAN_STRUCTURE_PATTERN
   // originally counted internal whitespace as a structural signal, so a
   // multi-word placeholder phrase -- "- [ ] `TODO later`", "- [ ] `TBD
-  // soon`" -- slipped past PLACEHOLDER_TOKEN_PATTERN's single-token exact
+  // soon`" -- slipped past the placeholder check's single-token exact
   // match and wrongly passed. Whitespace alone no longer counts.
   for (const placeholder of ['TODO later', 'TBD soon']) {
     const result = checkVerifiability({
