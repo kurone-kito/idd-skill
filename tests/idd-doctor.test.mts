@@ -4214,13 +4214,13 @@ test('isRulesetsOnlyTrustGap is false when the repository has no Rulesets protec
 
 test('formatRulesetsOnlyTrustGapWarning names ciGate.trustEmptyProtectionReads and the F2/F3 fail-closed consequence', () => {
   const message = formatRulesetsOnlyTrustGapWarning(
-    'kurone-kito',
-    'setup.kito',
+    'example-owner',
+    'example-repo',
     'master',
   );
   assert.match(message, /ciGate\.trustEmptyProtectionReads/);
   assert.match(message, /F2\/F3/);
-  assert.match(message, /kurone-kito\/setup\.kito:master/);
+  assert.match(message, /example-owner\/example-repo:master/);
 });
 
 test('readTrustEmptyProtectionReads is false when .github/idd/config.json is absent, lacks ciGate, or is malformed (idd-skill#2010)', () => {
