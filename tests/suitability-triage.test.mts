@@ -2901,6 +2901,23 @@ test('verifiability does not let a heading-like line inside a fence truncate the
   assert.equal(result.pass, true);
 });
 
+test('verifiability accepts an isolated multi-word command with no whole-body verification/outcome keyword (#2589 round 6, E2 critique)', () => {
+  // An E2 critique subagent found that the existing round-2 multi-word
+  // command test ("`pnpm run lint:minimum` passes") is over-determined:
+  // "lint" alone satisfies hasVerificationChannel and "passes" alone
+  // satisfies OUTCOME_SIGNAL_PATTERN against the whole body, so that test
+  // would still pass even if hasSubstantiveBullet's multi-word handling
+  // were broken. This body avoids every hasVerificationChannel and
+  // OUTCOME_SIGNAL_PATTERN word, isolating hasSubstantiveBullet itself.
+  const result = checkVerifiability({
+    issue: {
+      ...BASE_ISSUE,
+      body: '## Acceptance criteria\n- [ ] `pnpm run build:all` is green\n',
+    },
+  } as Context);
+  assert.equal(result.pass, true);
+});
+
 test('verifiability accepted limitation: a placeholder-led identifier glued to punctuation with no dotted rescue still fails (#2589 round 6, E2 critique)', () => {
   // An E2 critique subagent found that PLACEHOLDER_LEAD_PATTERN's anchored
   // match rejects a REAL identifier that happens to start with a reserved
