@@ -267,7 +267,7 @@ enabled and default approval actors to
 | Name | Commands |
 | --- | --- |
 | **fix-validate** | `npx biome check --write && npx dprint fmt "**/*.md" && npx markdownlint-cli2 --fix "**/*.md" && npx markdownlint-cli2 "**/*.md"` |
-| **pre-push-validate** | `npx biome check && npx dprint check "**/*.md" && npx markdownlint-cli2 "**/*.md" && npx cspell lint "**" --no-progress && node scripts/audit-docs.mjs --check && node scripts/audit-code-span-wrap.mjs && node --test tests/agent-entry-mirror-sync.test.mts && pnpm run build:check && node scripts/idd-doctor.mjs` |
+| **pre-push-validate** | `npx biome check && npx dprint check "**/*.md" && npx markdownlint-cli2 "**/*.md" && npx cspell lint "**" --no-progress && node scripts/audit-docs.mjs --check && node scripts/audit-code-span-wrap.mjs && node --test tests/*.test.mts && pnpm run build:check && node scripts/idd-doctor.mjs` |
 | **post-fix-validate** | `npx biome check --write && npx dprint fmt "**/*.md" && npx markdownlint-cli2 --fix "**/*.md" && npx markdownlint-cli2 "**/*.md" && npx cspell lint "**" --no-progress && node scripts/audit-docs.mjs --check && node scripts/audit-code-span-wrap.mjs` |
 | **install-deps** | `node scripts/verify-install-deps.mjs --key-binary node_modules/.bin/tsc --install-command "pnpm install --frozen-lockfile"` |
 | **issue-scope** | `roadmap-first` |
