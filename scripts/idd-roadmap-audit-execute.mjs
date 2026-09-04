@@ -18,11 +18,6 @@
 // work is NEVER closed.
 import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
-import {
-  isAbsolute,
-  join as joinPath,
-  resolve as resolvePath,
-} from 'node:path';
 import { parseCliArgs } from './cli-args.mjs';
 import {
   buildIssueLoader,
@@ -662,6 +657,35 @@ export function findWorktreeEntryForBranch(entries, branchName) {
   return findWorktreeEntriesForBranch(entries, branchName)[0] ?? null;
 }
 /**
+ * True for a POSIX absolute path (`/...`), a Windows drive-absolute path
+ * (`C:/...` or `C:\...`), or a Windows UNC path (`\\server\share`) (#2576).
+ */
+function isGitPathAbsolute(value) {
+  return /^(\/|[A-Za-z]:[\\/]|\\\\)/.test(value);
+}
+/**
+ * Join a git-porcelain-derived worktree path with a (possibly relative)
+ * `git rev-parse --git-path` output, using forward slashes throughout
+ * (#2576). `git worktree list --porcelain` and `git rev-parse --git-path`
+ * both always report forward-slash paths, even on native Windows, so
+ * building the combined path this way — instead of through the platform's
+ * native `path.resolve`/`path.join` (which reformat to backslash and, for a
+ * root-relative but drive-letter-less input, silently guess a drive letter
+ * from `process.cwd()`, corrupting the result) — stays functionally correct
+ * on disk (Windows' filesystem APIs, and Node's `fs` module, accept
+ * forward-slash paths interchangeably with backslash ones) and consistent
+ * with whatever git itself reported for the same location. `relative` may
+ * itself already be absolute (git-path output sometimes is); in that case
+ * it is returned unchanged, `worktreePath` is not consulted at all.
+ */
+function joinGitPath(worktreePath, relative) {
+  if (isGitPathAbsolute(relative)) {
+    return relative;
+  }
+  const base = worktreePath.replace(/[\\/]+$/, '');
+  return `${base}/${relative}`;
+}
+/**
  * True when a rebase sequencer directory exists for `worktreePath` (#2225,
  * AC4), resolved via `git -C <worktreePath> rev-parse --git-path <name>`
  * rather than a hardcoded `.git/rebase-merge` / `.git/rebase-apply` path. A
@@ -680,9 +704,7 @@ function hasInProgressRebase(worktreePath, resolveGitPath, pathExists) {
     if (resolved.length === 0) {
       continue;
     }
-    const absolute = isAbsolute(resolved)
-      ? resolved
-      : resolvePath(worktreePath, resolved);
+    const absolute = joinGitPath(worktreePath, resolved);
     if (pathExists(absolute)) {
       return true;
     }
@@ -710,13 +732,11 @@ function resolveDetachedRebaseBranch(worktreePath, inputs) {
     if (resolved.length === 0) {
       continue;
     }
-    const absolute = isAbsolute(resolved)
-      ? resolved
-      : resolvePath(worktreePath, resolved);
+    const absolute = joinGitPath(worktreePath, resolved);
     if (!inputs.pathExists(absolute)) {
       continue;
     }
-    const headName = inputs.readFile(joinPath(absolute, 'head-name'));
+    const headName = inputs.readFile(joinGitPath(absolute, 'head-name'));
     if (headName && headName.trim().length > 0) {
       return branchNameFromRef(headName.trim());
     }

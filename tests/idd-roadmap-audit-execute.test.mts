@@ -1860,6 +1860,67 @@ test('evaluateLocalCoordinationState resolves a RELATIVE --git-path output again
   assert.deepEqual(verdict.brokenReasons, ['rebase in progress']);
 });
 
+test('evaluateLocalCoordinationState resolves a RELATIVE --git-path output against a Windows drive-absolute worktree path without corrupting the drive letter or separators (#2576)', () => {
+  // A real worktree path always carries a drive letter on native Windows
+  // (unlike the plain `/repo/wt` fixture above). `resolveGitPath`'s output
+  // here is still RELATIVE (`isGitPathAbsolute` is false for it, same as the
+  // `/repo/wt` case above), so this exercises `joinGitPath`'s
+  // string-concatenation branch with a drive-absolute BASE: it demonstrates
+  // that base is preserved verbatim (no re-guessing a drive letter the way
+  // `path.resolve('C:/repo/wt', '.git/rebase-merge')` would need to if the
+  // base lacked one, and no reformatting to backslash). It does NOT exercise
+  // `isGitPathAbsolute` returning true for a drive-letter path -- see the
+  // next test for that.
+  const verdict = evaluateLocalCoordinationState(
+    'roadmap-audit/995-slug',
+    localInputs({
+      listWorktrees: () =>
+        OK(
+          toZ(
+            'worktree C:/repo/wt\nHEAD abc123\nbranch refs/heads/roadmap-audit/995-slug\n',
+          ),
+        ),
+      statusPorcelain: () => OK(''),
+      resolveGitPath: (_worktreePath, name) =>
+        name === 'rebase-merge' ? OK('.git/rebase-merge\n') : FAIL('none'),
+      pathExists: (path) => path === 'C:/repo/wt/.git/rebase-merge',
+    }),
+  );
+  assert.equal(verdict.presence, 'present-broken');
+  assert.deepEqual(verdict.brokenReasons, ['rebase in progress']);
+});
+
+test('evaluateLocalCoordinationState treats an ABSOLUTE Windows drive-letter --git-path output as already-absolute, without double-joining it onto the worktree path (#2576)', () => {
+  // Real `git rev-parse --git-path` output on native Windows is itself
+  // drive-absolute (confirmed empirically against a real linked worktree:
+  // e.g. `C:/Users/.../primary/.git/worktrees/wt/rebase-merge`) -- this is
+  // the common real-world case, not the relative one above. This exercises
+  // `isGitPathAbsolute`'s `[A-Za-z]:[\\/]` regex branch directly: if it ever
+  // failed to recognize a drive-letter path as absolute, `joinGitPath` would
+  // wrongly concatenate the worktree path onto it (producing something like
+  // `C:/repo/wt/C:/repo/.git/worktrees/wt/rebase-merge`), which `pathExists`
+  // would never find -- silently reporting no rebase in progress.
+  const verdict = evaluateLocalCoordinationState(
+    'roadmap-audit/995-slug',
+    localInputs({
+      listWorktrees: () =>
+        OK(
+          toZ(
+            'worktree C:/repo/wt\nHEAD abc123\nbranch refs/heads/roadmap-audit/995-slug\n',
+          ),
+        ),
+      statusPorcelain: () => OK(''),
+      resolveGitPath: (_worktreePath, name) =>
+        name === 'rebase-merge'
+          ? OK('C:/repo/.git/worktrees/wt/rebase-merge\n')
+          : FAIL('none'),
+      pathExists: (path) => path === 'C:/repo/.git/worktrees/wt/rebase-merge',
+    }),
+  );
+  assert.equal(verdict.presence, 'present-broken');
+  assert.deepEqual(verdict.brokenReasons, ['rebase in progress']);
+});
+
 test('evaluateLocalCoordinationState reports locked directly from porcelain without probing status or rebase', () => {
   const calls = { status: 0, gitPath: 0 };
   const verdict = evaluateLocalCoordinationState(
@@ -2091,6 +2152,17 @@ function fixtureGitOut(cwd: string, args: string[]): string {
  */
 const realLocalInputs = createLocalCoordinationInputs;
 
+// `git worktree list --porcelain` always reports forward-slash paths, even
+// on native Windows (#2576), while `mkdtempSync`/`path.join` below compute
+// this test's own "expected" path with the platform's native separator
+// (backslash on win32). Both name the identical filesystem location, so
+// normalize the native-separator side before comparing against a value that
+// came from -- or through -- parsed porcelain output. A no-op on POSIX,
+// where the native separator already matches porcelain's.
+function toGitPorcelainPath(nativePath: string): string {
+  return nativePath.replaceAll('\\', '/');
+}
+
 function setupPrimaryRepo(): string {
   const primary = mkdtempSync(join(tmpdir(), 'idd-roadmap-local-'));
   fixtureGit(primary, ['init', '-b', 'main']);
@@ -2161,7 +2233,10 @@ test('AC3 real fixture: a detached worktree is correctly detected via porcelain 
       '-z',
     ]);
     const entries = parseWorktreeListPorcelain(porcelain);
-    const detachedEntry = entries.find((entry) => entry.path === detached);
+    const detachedPorcelainPath = toGitPorcelainPath(detached);
+    const detachedEntry = entries.find(
+      (entry) => entry.path === detachedPorcelainPath,
+    );
     assert.equal(detachedEntry?.detached, true);
     assert.equal(detachedEntry?.branchRef, null);
 
@@ -2171,7 +2246,7 @@ test('AC3 real fixture: a detached worktree is correctly detected via porcelain 
       'roadmap-audit/995-slug',
       realLocalInputs(primary),
     );
-    assert.deepEqual(verdict.detachedWorktreePaths, [detached]);
+    assert.deepEqual(verdict.detachedWorktreePaths, [detachedPorcelainPath]);
   } finally {
     try {
       fixtureGit(primary, ['worktree', 'remove', '--force', detached]);
@@ -2351,7 +2426,17 @@ test('real fixture: a dirty submodule reports present-broken even under diff.ign
   }
 });
 
-test('real fixture: a worktree path with trailing whitespace is matched correctly, not silently trimmed away (review finding, #2225)', () => {
+test('real fixture: a worktree path with trailing whitespace is matched correctly, not silently trimmed away (review finding, #2225)', {
+  // Windows itself refuses to create a directory whose name ends in a
+  // space (`git worktree add` there fails with "could not create leading
+  // directories ... Invalid argument") -- an OS-level constraint, not a
+  // bug in this repository's code, so this regression cannot be exercised
+  // as a real git fixture on native Windows (#2576). POSIX has no such
+  // restriction and keeps running the real-fixture coverage unchanged.
+  skip:
+    process.platform === 'win32' &&
+    'Windows cannot create a directory with a trailing space in its name',
+}, () => {
   const primary = setupPrimaryRepo();
   // A trailing space in the directory name: `-z`'s exact field boundary
   // preserves it, and the parser must not strip it back off.
@@ -2372,7 +2457,7 @@ test('real fixture: a worktree path with trailing whitespace is matched correctl
       realLocalInputs(primary),
     );
     assert.equal(verdict.presence, 'present-broken');
-    assert.equal(verdict.path, worktree);
+    assert.equal(verdict.path, toGitPorcelainPath(worktree));
     assert.deepEqual(verdict.brokenReasons, ['uncommitted content present']);
   } finally {
     try {
@@ -2454,7 +2539,7 @@ test('real fixture: local git shell-outs ignore ambient GIT_* overrides and neve
         createLocalCoordinationInputs(primary),
       );
       assert.equal(verdict.presence, 'present-clean');
-      assert.equal(verdict.path, worktree);
+      assert.equal(verdict.path, toGitPorcelainPath(worktree));
       assert.equal(verdict.unreadable, false);
     } finally {
       for (const [key, value] of saved) {
