@@ -2585,6 +2585,26 @@ test('verifiability still fails an Acceptance Criteria section with only a place
   assert.equal(result.pass, false);
 });
 
+test('verifiability rejects a backtick-wrapped placeholder as a substantive bullet (#2589 Copilot review)', () => {
+  // Copilot review on PR #2602: the backtick alternative originally treated
+  // ANY inline-code span as substantive, so a placeholder token wrapped in
+  // backticks -- "- [ ] `TODO`" or "- [ ] `N/A`" -- wrongly passed even
+  // though it names no concrete file, command, or artifact.
+  for (const placeholder of ['TODO', 'N/A', 'TBD', 'tbd']) {
+    const result = checkVerifiability({
+      issue: {
+        ...BASE_ISSUE,
+        body: `## Acceptance criteria\n- [ ] \`${placeholder}\`\n`,
+      },
+    } as Context);
+    assert.equal(
+      result.pass,
+      false,
+      `expected fail for backticked "${placeholder}"`,
+    );
+  }
+});
+
 test('verifiability keyword fallback still fails with no Acceptance Criteria section (#2589)', () => {
   // Unrelated to the AC-heading path above: a body with no AC section at all
   // still relies solely on hasVerificationChannel / the other keyword

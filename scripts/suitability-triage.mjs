@@ -532,7 +532,30 @@ const ACCEPTANCE_CRITERIA_PATTERN = /^#+\s*Acceptance\s+Criteria\s*$/im;
 // conjunction like "and/or" or "read/write" with no real path underneath --
 // a real file path in this repo's AC bullets is either backticked or ends
 // in a dotted extension, both already covered below.
-const SUBSTANTIVE_BULLET_PATTERN = /`[^`]+`|\b[\w-]{2,}\.[a-zA-Z]{1,5}\b/;
+//
+// Copilot review (PR #2602) flagged that treating ANY inline-code span as
+// substantive lets a backticked placeholder ("- [ ] `TODO`", "- [ ] `N/A`")
+// wrongly pass. A code span now also needs a structural signal of being a
+// real path/command/identifier (a slash, dot, underscore, hyphen, or
+// internal whitespace) and must not be an exact match against a short,
+// closed placeholder-token list.
+const PLACEHOLDER_TOKEN_PATTERN =
+  /^(?:TODO|TBD|N\/A|NA|XXX|FIXME|WIP|PENDING|PLACEHOLDER|NONE|ASAP)$/i;
+const CODE_SPAN_STRUCTURE_PATTERN = /[/._-]|\s/;
+const BARE_DOTTED_FILENAME_PATTERN = /\b[\w-]{2,}\.[a-zA-Z]{1,5}\b/;
+function hasSubstantiveBullet(text) {
+  for (const match of text.matchAll(/`([^`]+)`/g)) {
+    const content = (match[1] ?? '').trim();
+    if (
+      content.length > 0 &&
+      CODE_SPAN_STRUCTURE_PATTERN.test(content) &&
+      !PLACEHOLDER_TOKEN_PATTERN.test(content)
+    ) {
+      return true;
+    }
+  }
+  return BARE_DOTTED_FILENAME_PATTERN.test(text);
+}
 // A heading line such as "## Decision (resolved 2026-06-27)" records that a
 // human has already ruled on the issue's open question (see Check 7). The
 // negative lookahead rejects only a still-open *phrase* that directly negates
@@ -1726,12 +1749,12 @@ export function checkVerifiability(context) {
         ? contentAfter
         : contentAfter.slice(0, nextHeadingIndex);
     // Require either a list (starting with - or *) or numbered content. A
-    // substantive bullet (SUBSTANTIVE_BULLET_PATTERN) satisfies this on its
-    // own; an outcome-signal keyword remains a fallback for a list that
-    // names no concrete file, command, or artifact (#2589).
+    // substantive bullet (hasSubstantiveBullet) satisfies this on its own;
+    // an outcome-signal keyword remains a fallback for a list that names
+    // no concrete file, command, or artifact (#2589).
     if (/^[-*]\s+/.test(listSection) || /^\d+\.\s+/.test(listSection)) {
       hasObjectiveCriteria =
-        SUBSTANTIVE_BULLET_PATTERN.test(listSection) ||
+        hasSubstantiveBullet(listSection) ||
         OUTCOME_SIGNAL_PATTERN.test(listSection);
     }
   }
