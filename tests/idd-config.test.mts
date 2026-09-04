@@ -244,24 +244,35 @@ test('loadPolicyConfig default path: throws (not silently absent) on a permissio
   });
 });
 
+// `isQualifiedConfigRoot` (src/scripts/idd-config.mts) requires a
+// Windows-native absolute root (a drive letter or a UNC `\\` prefix) on
+// win32, and a POSIX absolute root (leading `/`, not `//`) otherwise --
+// so the accepted XDG/HOME roots below must be platform-native for the
+// tests to actually exercise that acceptance path rather than its
+// rejection path.
+const XDG_CONFIG_HOME_ROOT =
+  platform === 'win32' ? 'C:\\xdg-config' : '/xdg-config';
+const HOME_ROOT =
+  platform === 'win32' ? 'C:\\Users\\operator' : '/home/operator';
+
 test('resolveUserGlobalConfigPath prefers XDG_CONFIG_HOME over HOME (#2257)', () => {
   assert.equal(
     resolveUserGlobalConfigPath({
       env: {
-        XDG_CONFIG_HOME: '/xdg-config',
-        HOME: '/home/operator',
+        XDG_CONFIG_HOME: XDG_CONFIG_HOME_ROOT,
+        HOME: HOME_ROOT,
       },
     }),
-    join('/xdg-config', 'idd-skill', 'config.json'),
+    join(XDG_CONFIG_HOME_ROOT, 'idd-skill', 'config.json'),
   );
 });
 
 test('resolveUserGlobalConfigPath falls back to HOME/.config when XDG_CONFIG_HOME is empty (#2257)', () => {
   assert.equal(
     resolveUserGlobalConfigPath({
-      env: { XDG_CONFIG_HOME: '  ', HOME: '/home/operator' },
+      env: { XDG_CONFIG_HOME: '  ', HOME: HOME_ROOT },
     }),
-    join('/home/operator', '.config', 'idd-skill', 'config.json'),
+    join(HOME_ROOT, '.config', 'idd-skill', 'config.json'),
   );
 });
 
@@ -272,9 +283,9 @@ test('resolveUserGlobalConfigPath does not consult process.env when env is injec
 test('resolveUserGlobalConfigPath ignores a relative XDG_CONFIG_HOME and requires an absolute HOME (#2257)', () => {
   assert.equal(
     resolveUserGlobalConfigPath({
-      env: { XDG_CONFIG_HOME: 'config', HOME: '/home/operator' },
+      env: { XDG_CONFIG_HOME: 'config', HOME: HOME_ROOT },
     }),
-    join('/home/operator', '.config', 'idd-skill', 'config.json'),
+    join(HOME_ROOT, '.config', 'idd-skill', 'config.json'),
   );
   assert.equal(
     resolveUserGlobalConfigPath({
@@ -287,9 +298,9 @@ test('resolveUserGlobalConfigPath ignores a relative XDG_CONFIG_HOME and require
 test('resolveUserGlobalConfigPath rejects a Windows current-drive root such as \\config (#2257)', () => {
   assert.equal(
     resolveUserGlobalConfigPath({
-      env: { XDG_CONFIG_HOME: '\\config', HOME: '/home/operator' },
+      env: { XDG_CONFIG_HOME: '\\config', HOME: HOME_ROOT },
     }),
-    join('/home/operator', '.config', 'idd-skill', 'config.json'),
+    join(HOME_ROOT, '.config', 'idd-skill', 'config.json'),
   );
   assert.equal(
     resolveUserGlobalConfigPath({
