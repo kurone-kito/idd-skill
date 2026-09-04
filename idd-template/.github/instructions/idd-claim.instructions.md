@@ -492,8 +492,8 @@ chain as `OUTDATED` once this session's own `{claim-id}` is verified.
 Find every trusted `claimed-by`/`unclaimed-by`/heartbeat comment whose
 `{claim-id}` equals `<prior-id>` and call:
 
-`--subject-ids` takes a node id, not a REST id — see the
-[conversion note](idd-review-snapshot.instructions.md).
+`--subject-ids` takes a GraphQL node id, not a REST numeric
+id — see the [conversion note](idd-review-snapshot.instructions.md).
 
 ```sh
 node scripts/minimize-superseded-markers.mjs \
