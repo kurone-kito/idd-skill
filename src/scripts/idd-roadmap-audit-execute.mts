@@ -39,6 +39,7 @@ import { loadPolicyConfig } from './idd-config.mts';
 import { normalizePolicyConfig, POLICY_DEFAULTS } from './policy-helpers.mts';
 import type { ClaimValidationSummary } from './protocol-helpers.mts';
 import {
+  normalizeApplyNow,
   renderUnclaimedByMarker,
   resolveTrustedMarkerActors,
   summarizeClaimValidation,
@@ -1601,30 +1602,6 @@ function closedDescendantNumbers(report: RoadmapGraphReport): number[] {
       (node) => node.number !== report.root.number && node.state !== 'OPEN',
     )
     .map((node) => node.number);
-}
-
-/** Truncate any sub-second fraction so an ISO stamp is `YYYY-MM-DDTHH:mm:ssZ`. */
-function toSecondPrecisionIso(iso: string): string {
-  return String(iso).replace(/\.\d+Z$/, 'Z');
-}
-
-/**
- * Validate and normalize the apply-time "now" to UTC second-precision ISO
- * (`YYYY-MM-DDTHH:mm:ssZ`), or `null` when unparseable. The caller fails closed
- * on `null` BEFORE any mutation: an unparseable value would mis-evaluate claim
- * staleness (NaN comparisons read as not-stale), and an offset / sub-second
- * form (e.g. `…+09:00`) would otherwise reach `renderUnclaimedByMarker` — which
- * accepts only `…Z` second-precision — and throw AFTER the comment + close had
- * already landed. Normalizing through `toISOString()` also converts any zone
- * offset to UTC, so the single normalized value is safe for both the staleness
- * checks and the release marker.
- */
-function normalizeApplyNow(raw: string): string | null {
-  const parsed = new Date(raw);
-  if (Number.isNaN(parsed.getTime())) {
-    return null;
-  }
-  return toSecondPrecisionIso(parsed.toISOString());
 }
 
 // ---------------------------------------------------------------------------

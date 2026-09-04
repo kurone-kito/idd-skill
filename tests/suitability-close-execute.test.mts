@@ -9,7 +9,6 @@ import {
   buildSuitabilityCloseComment,
   evaluateSuitabilityCloseClaim,
   evaluateSuitabilityCloseEligibility,
-  normalizeApplyNow,
   parseArgs,
   runSuitabilityCloseExecute,
   type SuitabilityCloseExecuteArgs,
@@ -446,30 +445,11 @@ test('parseArgs rejects "0" for --issue, not just non-digit input (Copilot revie
 });
 
 // ---------------------------------------------------------------------------
-// normalizeApplyNow (pure)
+// normalizeApplyNow -- now the shared implementation in marker-helpers.mts
+// (#2568); see tests/marker-helpers-timestamp.test.mts for direct unit
+// coverage of the pure function. The tests below cover this file's own
+// wiring of it.
 // ---------------------------------------------------------------------------
-
-test('normalizeApplyNow strips the millisecond fraction Date#toISOString() always emits (Copilot review, PR #2558)', () => {
-  assert.equal(
-    normalizeApplyNow('2026-09-03T15:44:42.719Z'),
-    '2026-09-03T15:44:42Z',
-  );
-  // Already second-precision: unchanged.
-  assert.equal(
-    normalizeApplyNow('2026-09-03T15:44:42Z'),
-    '2026-09-03T15:44:42Z',
-  );
-  // A zone offset is normalized to UTC too (matches idd-roadmap-audit-execute.mts).
-  assert.equal(
-    normalizeApplyNow('2026-09-03T15:44:42.000+09:00'),
-    '2026-09-03T06:44:42Z',
-  );
-});
-
-test('normalizeApplyNow fails closed (null) on an unparseable value', () => {
-  assert.equal(normalizeApplyNow('not-a-date'), null);
-  assert.equal(normalizeApplyNow(''), null);
-});
 
 test("--apply normalizes deps.now()'s millisecond-precision output before it ever reaches releaseClaim, so renderUnclaimedByMarker never throws (Copilot review, PR #2558)", () => {
   const { deps, calls } = makeDeps();

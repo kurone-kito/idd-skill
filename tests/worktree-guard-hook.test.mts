@@ -13,6 +13,14 @@ const HOOKS_DIR = join(
   '.githooks',
 );
 
+// A git-config-file-safe null-device path. `node:os`'s `devNull` is the
+// Win32 device-namespace form (`\\.\nul`) on win32, which Git for Windows
+// cannot open as a GIT_CONFIG_GLOBAL/GIT_CONFIG_SYSTEM value (`fatal:
+// unable to access '//./nul': Invalid argument`); the bare `'NUL'` device
+// name is the form git itself accepts there. POSIX is unaffected -- devNull
+// there is already `/dev/null`. See kurone-kito/idd-skill#2570.
+const GIT_NULL_DEVICE = process.platform === 'win32' ? 'NUL' : devNull;
+
 // Fixture invariant: fixture git processes must never read the ambient
 // git environment or the developer's config. Hook runs export GIT_DIR /
 // GIT_INDEX_FILE (so an unsanitized fixture would mutate the HOST
@@ -33,8 +41,8 @@ function fixtureEnv() {
   delete env.GIT_WORK_TREE;
   delete env.GIT_COMMON_DIR;
   delete env.GIT_OBJECT_DIRECTORY;
-  env.GIT_CONFIG_GLOBAL = devNull;
-  env.GIT_CONFIG_SYSTEM = devNull;
+  env.GIT_CONFIG_GLOBAL = GIT_NULL_DEVICE;
+  env.GIT_CONFIG_SYSTEM = GIT_NULL_DEVICE;
   return env;
 }
 

@@ -24,19 +24,12 @@ import {
   parseProviderOutageParkComment,
   renderProviderOutageParkComment,
   resolveTrustedMarkerActors,
+  toSecondPrecisionIso,
 } from './protocol-helpers.mjs';
 import {
   buildProviderHealthReport,
   PROVIDER_HEALTH_SERVICES,
 } from './provider-health.mjs';
-/**
- * Strip the fractional-second component `Date#toISOString()` always emits,
- * matching this repository's second-precision operational-marker
- * convention (`renderProviderOutageParkComment` rejects anything else).
- */
-export function toSecondPrecisionIso(date) {
-  return date.toISOString().replace(/\.\d{3}Z$/, 'Z');
-}
 /**
  * Fails closed to `true` when the open-pull-request sample was truncated
  * (more may exist beyond `sampleSize`), regardless of the sampled `count` --

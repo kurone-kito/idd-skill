@@ -28,9 +28,55 @@
 // Invoked via `pnpm run build`, so node_modules/.bin (tsc, biome) is on
 // PATH. Uses only node: builtins to stay compatible with the repository's
 // bare-node boundary.
+//
+// tsc/biome are invoked by resolving their package's own `bin` entry and
+// running it directly through `process.execPath`, rather than by
+// `execFileSync('tsc' | 'biome', ...)`. On Windows, node_modules/.bin/tsc
+// and node_modules/.bin/biome are `.CMD`/`.ps1` shims, not directly
+// executable files, and `execFileSync`/`spawnSync` without `shell: true`
+// skip `PATHEXT` resolution, so the plain-name form fails with ENOENT there
+// even though the shim is genuinely on PATH. Adding `shell: true` fixes
+// that, but reintroduces a Windows `cmd.exe` command-line length cap
+// (~8191 characters) that the Biome call below can exceed once the
+// emitted-file list grows — resolving the real JS entry point sidesteps
+// both: no PATH/PATHEXT lookup, and no shell to cap the command line. Every
+// platform's own `.bin` shim (`.CMD` on Windows, the POSIX shebang script
+// elsewhere) ultimately runs the exact same resolved script through node,
+// so this reproduces their behavior identically instead of bypassing it.
+//
+// resolveBinScript() below must stay called from inside build(), never at
+// module top-level: tests/build-ts.test.mts imports this module for the
+// dependency-free rewriteGitattributesBlock() below, and lint.yml's
+// toolless bare-node CI lane runs that test with NO package-manager
+// install at all (no node_modules), so merely importing this file must
+// not require `typescript`/`@biomejs/biome` to be resolvable.
 
 import { execFileSync } from 'node:child_process';
 import { readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
+import { dirname, join } from 'node:path';
+
+const require = createRequire(import.meta.url);
+
+/**
+ * Resolve an installed package's own `bin` entry to an absolute script
+ * path, bypassing the node_modules/.bin platform shim entirely. See the
+ * file header for why this replaces a plain `execFileSync('tsc' | 'biome', ...)`
+ * call, and why every call to this function must stay inside build().
+ */
+function resolveBinScript(packageName: string, binName: string): string {
+  const packageJsonPath = require.resolve(`${packageName}/package.json`);
+  const { bin } = JSON.parse(readFileSync(packageJsonPath, 'utf8')) as {
+    bin?: string | Record<string, string>;
+  };
+  const relativePath = typeof bin === 'string' ? bin : bin?.[binName];
+  if (!relativePath) {
+    throw new Error(
+      `${packageName}: package.json has no "${binName}" bin entry`,
+    );
+  }
+  return join(dirname(packageJsonPath), relativePath);
+}
 
 const EMITTED_PREFIX = 'TSFILE: ';
 
@@ -123,8 +169,13 @@ function syncGitattributes(): void {
 /** Emit the .mjs artifacts with tsc, then Biome-normalize only the emitted set. */
 function build(): void {
   const tscOutput: string = execFileSync(
-    'tsc',
-    ['-p', 'tsconfig.build.json', '--listEmittedFiles'],
+    process.execPath,
+    [
+      resolveBinScript('typescript', 'tsc'),
+      '-p',
+      'tsconfig.build.json',
+      '--listEmittedFiles',
+    ],
     { encoding: 'utf8' },
   );
 
@@ -135,9 +186,16 @@ function build(): void {
     .filter((file) => file.endsWith('.mjs'));
 
   if (emittedFiles.length > 0) {
-    execFileSync('biome', ['check', '--write', ...emittedFiles], {
-      stdio: 'inherit',
-    });
+    execFileSync(
+      process.execPath,
+      [
+        resolveBinScript('@biomejs/biome', 'biome'),
+        'check',
+        '--write',
+        ...emittedFiles,
+      ],
+      { stdio: 'inherit' },
+    );
   }
 }
 
