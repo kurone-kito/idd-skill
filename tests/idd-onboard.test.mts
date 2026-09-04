@@ -3345,10 +3345,37 @@ test('the ONBOARDING.md CLI-assisted onboarding section anchors its --import fil
 //
 // Unlike `typescript`/`@biomejs/biome`, both `markdownlint-cli2` and
 // `cspell` declare a package.json `exports` map with no `./package.json`
-// subpath, so `require.resolve(`${packageName}/package.json`)` throws
-// `ERR_PACKAGE_PATH_NOT_EXPORTED` for either -- this reads `node_modules/
-// <packageName>/package.json` directly instead of through `require.resolve`.
-function resolveBinScript(
+// subpath, so resolving that subpath through Node's own package resolver
+// (`require.resolve`) throws `ERR_PACKAGE_PATH_NOT_EXPORTED` for either --
+// this reads `node_modules/<packageName>/package.json` directly instead.
+//
+// Returns `undefined` only when `package.json` itself is absent -- the
+// expected bare-node lane case (see the block comment above) where the
+// package genuinely isn't installed. A `package.json` that IS present but
+// has no matching `bin` entry is an unexpected packaging/fixture problem,
+// not a "not installed" state, so that case throws instead of silently
+// returning `undefined` and letting the caller mistake it for a skip.
+function resolveBinScript(packageName: string, binName: string): string {
+  const packageJsonPath = join(
+    REPO_ROOT,
+    'node_modules',
+    packageName,
+    'package.json',
+  );
+  const { bin } = JSON.parse(readFileSync(packageJsonPath, 'utf8')) as {
+    bin?: string | Record<string, string>;
+  };
+  const relativePath = typeof bin === 'string' ? bin : bin?.[binName];
+  if (relativePath === undefined) {
+    throw new Error(
+      `${packageName}: package.json has no "${binName}" bin entry`,
+    );
+  }
+  return join(dirname(packageJsonPath), relativePath);
+}
+
+/** `resolveBinScript`, but `undefined` when the package isn't installed at all. */
+function tryResolveBinScript(
   packageName: string,
   binName: string,
 ): string | undefined {
@@ -3358,23 +3385,16 @@ function resolveBinScript(
     packageName,
     'package.json',
   );
-  if (!existsSync(packageJsonPath)) {
-    return undefined;
-  }
-  const { bin } = JSON.parse(readFileSync(packageJsonPath, 'utf8')) as {
-    bin?: string | Record<string, string>;
-  };
-  const relativePath = typeof bin === 'string' ? bin : bin?.[binName];
-  return relativePath === undefined
-    ? undefined
-    : join(dirname(packageJsonPath), relativePath);
+  return existsSync(packageJsonPath)
+    ? resolveBinScript(packageName, binName)
+    : undefined;
 }
 
-const MARKDOWNLINT_BIN = resolveBinScript(
+const MARKDOWNLINT_BIN = tryResolveBinScript(
   'markdownlint-cli2',
   'markdownlint-cli2',
 );
-const CSPELL_BIN = resolveBinScript('cspell', 'cspell');
+const CSPELL_BIN = tryResolveBinScript('cspell', 'cspell');
 const LINT_BINARIES_INSTALLED =
   MARKDOWNLINT_BIN !== undefined && CSPELL_BIN !== undefined;
 
