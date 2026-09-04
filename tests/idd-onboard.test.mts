@@ -3329,18 +3329,57 @@ test('the ONBOARDING.md CLI-assisted onboarding section anchors its --import fil
 // binaries it needs are not installed, instead of failing that lane.
 // ---------------------------------------------------------------------------
 
-const MARKDOWNLINT_BIN = join(
-  REPO_ROOT,
-  'node_modules',
-  '.bin',
+// Resolve markdownlint-cli2/cspell by their own package.json `bin` entry and
+// run them directly through `process.execPath`, rather than by
+// `spawnSync('.../node_modules/.bin/markdownlint-cli2' | '.../cspell', ...)`.
+// On native Windows, `node_modules/.bin/markdownlint-cli2` and
+// `node_modules/.bin/cspell` are POSIX shell shims; the executable form
+// Windows actually resolves for a bare command is `.CMD` (or `.ps1`) via
+// `PATHEXT`. `spawnSync`/`execFileSync` without `shell: true` never apply
+// `PATHEXT` resolution, so invoking the bare `.bin` path fails with `ENOENT`
+// there even though the shim is genuinely on PATH -- the same root cause
+// #2569 fixed for tsc/biome in `src/scripts/build-ts.mts`'s
+// `resolveBinScript`. Resolving the package's real JS entry point and
+// running it through `process.execPath` sidesteps PATH/`PATHEXT` lookup
+// entirely, so it behaves identically on every platform.
+//
+// Unlike `typescript`/`@biomejs/biome`, both `markdownlint-cli2` and
+// `cspell` declare a package.json `exports` map with no `./package.json`
+// subpath, so `require.resolve(`${packageName}/package.json`)` throws
+// `ERR_PACKAGE_PATH_NOT_EXPORTED` for either -- this reads `node_modules/
+// <packageName>/package.json` directly instead of through `require.resolve`.
+function resolveBinScript(
+  packageName: string,
+  binName: string,
+): string | undefined {
+  const packageJsonPath = join(
+    REPO_ROOT,
+    'node_modules',
+    packageName,
+    'package.json',
+  );
+  if (!existsSync(packageJsonPath)) {
+    return undefined;
+  }
+  const { bin } = JSON.parse(readFileSync(packageJsonPath, 'utf8')) as {
+    bin?: string | Record<string, string>;
+  };
+  const relativePath = typeof bin === 'string' ? bin : bin?.[binName];
+  return relativePath === undefined
+    ? undefined
+    : join(dirname(packageJsonPath), relativePath);
+}
+
+const MARKDOWNLINT_BIN = resolveBinScript(
+  'markdownlint-cli2',
   'markdownlint-cli2',
 );
-const CSPELL_BIN = join(REPO_ROOT, 'node_modules', '.bin', 'cspell');
+const CSPELL_BIN = resolveBinScript('cspell', 'cspell');
 const LINT_BINARIES_INSTALLED =
-  existsSync(MARKDOWNLINT_BIN) && existsSync(CSPELL_BIN);
+  MARKDOWNLINT_BIN !== undefined && CSPELL_BIN !== undefined;
 
 test('a real import + substitute produces a doc tree that passes the documented markdownlint/cspell commands with full file coverage (idd-skill#1860)', (t) => {
-  if (!LINT_BINARIES_INSTALLED) {
+  if (!LINT_BINARIES_INSTALLED || !MARKDOWNLINT_BIN || !CSPELL_BIN) {
     // Expected on the bare-node lane (lint.yml), which runs this suite with
     // no package-manager install by design -- see the block comment above.
     t.skip('markdownlint-cli2/cspell are not installed in this environment');
@@ -3381,20 +3420,28 @@ test('a real import + substitute produces a doc tree that passes the documented 
   assert.equal(substituted.verdict.written, true);
   assert.deepEqual(substituted.verdict.residue, []);
 
-  const markdownlintResult = spawnSync(MARKDOWNLINT_BIN, ['**/*.md'], {
-    cwd: targetRoot,
-    encoding: 'utf8',
-  });
+  const markdownlintResult = spawnSync(
+    process.execPath,
+    [MARKDOWNLINT_BIN, '**/*.md'],
+    {
+      cwd: targetRoot,
+      encoding: 'utf8',
+    },
+  );
   assert.equal(
     markdownlintResult.status,
     0,
     `markdownlint-cli2 findings against the imported docs:\n${markdownlintResult.stdout}${markdownlintResult.stderr}`,
   );
 
-  const cspellResult = spawnSync(CSPELL_BIN, ['lint', '**', '--no-progress'], {
-    cwd: targetRoot,
-    encoding: 'utf8',
-  });
+  const cspellResult = spawnSync(
+    process.execPath,
+    [CSPELL_BIN, 'lint', '**', '--no-progress'],
+    {
+      cwd: targetRoot,
+      encoding: 'utf8',
+    },
+  );
   assert.equal(
     cspellResult.status,
     0,
