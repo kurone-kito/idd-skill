@@ -50,12 +50,14 @@ import {
   formatCleanupBacklogRemediation,
   formatCleanupBacklogScanPreamble,
   formatCleanupBacklogScanProgress,
+  formatRulesetsOnlyTrustGapWarning,
   hookChainsToGithooksScript,
   hookHasCrlfLineEndings,
   hookWiresWorktreeGuard,
   isBranchProtectionUnreadable,
   isGithubBackLinkHost,
   isIddManagedPlaceholderScanPath,
+  isRulesetsOnlyTrustGap,
   parseIsoDurationToHours,
   parseLockfileImporterVersion,
   parsePrimaryWorktreePath,
@@ -4148,6 +4150,77 @@ test('isBranchProtectionUnreadable is true only when both reads are unreadable',
     isBranchProtectionUnreadable({ unreadable: true }, { unreadable: true }),
     true,
   );
+});
+
+// idd-skill#2587: isRulesetsOnlyTrustGap warns (or, under --strict, errors)
+// when a repository's branch protection is enforced only via GitHub
+// Rulesets and ciGate.trustEmptyProtectionReads is not set -- the F2/F3
+// merge gate still fails closed on the first merge attempt in that case,
+// even though isBranchProtectionUnreadable (above) reports no problem.
+test('isRulesetsOnlyTrustGap is true for a rulesets-only repository with trust unset', () => {
+  assert.equal(
+    isRulesetsOnlyTrustGap(
+      { value: [{ type: 'required_status_checks' }], unreadable: false },
+      { unreadable: true },
+    ),
+    true,
+  );
+});
+
+test('isRulesetsOnlyTrustGap is false for a rulesets-only repository once trust is set (classic 404 trusted as empty)', () => {
+  // ciGate.trustEmptyProtectionReads: true makes fetchGovernanceJson trust
+  // the classic endpoint's 404 as genuinely empty, so branchProtectionRead
+  // arrives with unreadable: false -- simulated directly here rather than
+  // through a live config read, matching this predicate's pure, dependency
+  // -free contract.
+  assert.equal(
+    isRulesetsOnlyTrustGap(
+      { value: [{ type: 'required_status_checks' }], unreadable: false },
+      { unreadable: false },
+    ),
+    false,
+  );
+});
+
+test('isRulesetsOnlyTrustGap is false when both reads succeed (protection configured via both mechanisms)', () => {
+  assert.equal(
+    isRulesetsOnlyTrustGap(
+      { value: [{ type: 'required_status_checks' }], unreadable: false },
+      { unreadable: false },
+    ),
+    false,
+  );
+});
+
+test('isRulesetsOnlyTrustGap is false when neither read succeeds (isBranchProtectionUnreadable already covers this case)', () => {
+  assert.equal(
+    isRulesetsOnlyTrustGap(
+      { value: [], unreadable: true },
+      { unreadable: true },
+    ),
+    false,
+  );
+});
+
+test('isRulesetsOnlyTrustGap is false when the repository has no Rulesets protection at all (empty rules array)', () => {
+  assert.equal(
+    isRulesetsOnlyTrustGap(
+      { value: [], unreadable: false },
+      { unreadable: true },
+    ),
+    false,
+  );
+});
+
+test('formatRulesetsOnlyTrustGapWarning names ciGate.trustEmptyProtectionReads and the F2/F3 fail-closed consequence', () => {
+  const message = formatRulesetsOnlyTrustGapWarning(
+    'kurone-kito',
+    'setup.kito',
+    'master',
+  );
+  assert.match(message, /ciGate\.trustEmptyProtectionReads/);
+  assert.match(message, /F2\/F3/);
+  assert.match(message, /kurone-kito\/setup\.kito:master/);
 });
 
 test('readTrustEmptyProtectionReads is false when .github/idd/config.json is absent, lacks ciGate, or is malformed (idd-skill#2010)', () => {
